@@ -60,13 +60,18 @@ documentation, cleanup, and identifiable ARIES-only commit are complete.
 
 ## M3 — Local Docker sandbox
 
-- [ ] Implement one task container, scoped network, workdir mapping, exec,
+- [x] Implement one task container, scoped network, workdir mapping, exec,
   transfers, logs, labels, positive inspection, and idempotent stop and remove.
-- [ ] Roll back container, network, mounts, and processes after each partial
+- [x] Build and read-only mount the static exec helper; authenticate its exact
+  daemon-issued PID with `SO_PEERCRED`, bound its framed I/O, and positively
+  confirm helper exit and socket absence without trusting stale `ExecInspect`
+  completion state.
+- [x] Roll back container, network, mounts, and processes after each partial
   Start failure with the bounded cleanup policy.
-- [ ] Prove argument safety, cancellation, workdir identity, and zero leftover
-  labeled container, network, mount, or process.
-- [ ] Commit `feat(sandbox): add local docker execution`.
+- [x] Prove argument safety, cancellation, workdir identity, and zero leftover
+  labeled container, network, private runtime, mount, or process.
+- [x] Commit `feat(sandbox): add local docker execution` after independent M3
+  review.
 
 ## M4 — OpenClaw SSH bridge
 

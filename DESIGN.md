@@ -1,6 +1,6 @@
 # ARIES Design
 
-Status: **implemented through M2**. The RALPLAN-DR Architect and sequential
+Status: **implemented through M3**. The RALPLAN-DR Architect and sequential
 Critic approved the source draft without blockers. M0 then confirmed the
 pinned runtime assumptions below; later milestones must return to planning if
 one of these locked contracts changes.
@@ -180,7 +180,7 @@ type AgentHarness interface {
 }
 
 type ToolSandbox interface {
-    Start(context.Context, core.Environment) (Sandbox, error)
+    Start(context.Context, core.SandboxRequest) (Sandbox, error)
 }
 
 type ToolBridge interface {
@@ -189,7 +189,9 @@ type ToolBridge interface {
 }
 ```
 
-`Sandbox` is the returned live capability, not a fifth component role. Helpers
+`SandboxRequest` adds the Runner's stable run ID and task ID to the benchmark's
+environment without putting runner identity into `Environment`. `RunResult`
+records the same run ID. `Sandbox` is the returned live capability, not a fifth component role. Helpers
 stay concrete and package-private. Each component rolls back resources acquired
 by a failed `Start` before returning. Cleanup uses a bounded context derived
 with `context.WithoutCancel`, not the cancelled run context, and joins primary
@@ -270,6 +272,84 @@ the integration-tagged checkout test reads the real ignored pin when present.
 Go's standard library has no TOML decoder. M2 therefore adds only
 `github.com/BurntSushi/toml` v1.4.0 (MIT) for strict typed decoding;
 there is no Harbor runtime dependency.
+
+### M3 local Docker sandbox
+
+`pkg/sandbox/docker` is the sole owner of Docker behavior. Lifecycle and copy
+operations use the Docker CLI through `os/exec` argument slices; exec uses a
+small standard-library client for only the required Docker Engine Unix-socket
+endpoints. There is no host shell, Docker SDK dependency, registration, or
+task-writable control file. `Manager.Start` requires an immutable SHA-256 image
+reference and a validated `SandboxRequest`, creates collision-resistant
+task-data-free names, and applies exact `aries.run` and `aries.task` labels to
+both the network and container. It positively reinspects those labels,
+attachment, workdir, and running state before returning. A network is internal
+when the task disallows external networking. The container receives the
+declared sorted environment and resource flags and runs direct
+`/bin/sleep infinity` under Docker's small init process. `BuildDir` is rejected;
+unsupported storage drivers or GPU runtimes fail rather than being dropped.
+
+`make build` also produces a small static `aries-exec-helper` beside the ARIES
+binary. Start opens that executable without following symlinks, copies it into
+private host staging while checking stable file identity, and mounts the staged
+file read-only at `/opt/aries/bin/aries-exec-helper`. A short private runtime
+directory under the host temporary directory is mounted read-only at
+`/run/aries`; it contains only per-command Unix sockets and is removed and
+positively confirmed absent during rollback or Stop. Start reinspects both
+mount destinations and rejects a writable or missing mount.
+
+Exec calls are serialized per sandbox. For each command ARIES listens on a
+private socket, asks the Engine to start the mounted helper directly as a
+detached non-TTY exec, and uses `ExecInspect` only to obtain the daemon-issued
+exec ID and PID. The host accepts a peer only when Linux `SO_PEERCRED` reports
+that exact PID; wrong peers are closed without receiving input. The helper
+connects before spawning, executes the supplied argv directly, captures stdin
+and separate output streams, waits, and returns a small framed result. The
+socket descriptor is close-on-exec. Input and combined output are each capped
+at 16 MiB; malformed or oversized traffic fails closed. A nonzero command exit
+is a result. After receiving it, ARIES uses Docker `top` to confirm the helper
+PID is absent rather than treating the observed stale `ExecInspect.Running`
+field as a completion oracle. Task commands run as root for the pinned
+Terminal-Bench path; user selection is not an MVP environment field.
+Every return path explicitly closes any helper connection and listener, then
+attempts to unlink the per-exec socket and confirms its absence with `Lstat`.
+Cleanup failures are joined with the functional error and remain post-launch
+failures, so the sandbox performs the same fail-closed restart.
+
+Every failure after exec launch, including cancellation, is a terminal tool
+failure and runs the same fail-closed recovery: a bounded
+`context.WithoutCancel` cleanup stops and restarts the same task container,
+then positively reinspects running state, identity, workdir, mounts, and
+network. This preserves the writable filesystem but deliberately kills and
+invalidates any M4 bridge server; the bridge's later `Stop` must tolerate that
+server already being dead. A failed restart is joined with the original tool
+failure.
+
+Upload opens a regular source with `O_NOFOLLOW`, copies from that already-open
+descriptor into a private stage, and checks stable identity, size, mode,
+timestamps, and bytes copied before Docker sees the stage path. Download copies
+into a private stage, validates a regular no-follow descriptor, and publishes a
+new file beneath the output root by walking directory descriptors with
+`openat`, `O_NOFOLLOW`, and exclusive creation. Hostile path replacement or
+concurrent source mutation fails closed. Stop serializes concurrent callers,
+captures separate stdout and stderr logs under `output_dir/sandboxes`, stops
+and force-removes the container, removes its network and private socket
+runtime, and confirms all three absent. A failed partial Start uses bounded
+non-cancelled rollback. A failed Stop keeps ownership for a later retry;
+completed Stop is idempotent.
+
+The integration test uses the official pinned BusyBox 1.37.0 musl OCI index
+`sha256:222ad6d973c0d198014546a65cd02c5fdedcc172123c5b4c2bf0af636550bd94`.
+It exercises the real daemon, exact identity labels, resource inspection,
+workdir, environment, stdin, separate streams and nonzero status, byte-exact
+transfers, cancellation-driven same-container restart with filesystem
+preservation and process removal, post-restart exec, private logs, concurrent
+Stop, and empty labeled container/network and private-runtime inventories.
+Local Unix-socket tests cover the framed protocol, direct helper execution,
+exact peer-PID authentication, hostile wrong-PID rejection, Engine failures,
+output bounds, cancellation, and positive helper-PID absence. The real
+integration test fails on daemon or cleanup errors; it does not silently skip
+the claim-bearing M3 path.
 
 ## Exact lifecycle and evaluation isolation
 

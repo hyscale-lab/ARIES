@@ -21,7 +21,7 @@ type AgentHarness interface {
 
 // ToolSandbox starts the live environment later inspected by evaluation.
 type ToolSandbox interface {
-	Start(context.Context, core.Environment) (Sandbox, error)
+	Start(context.Context, core.SandboxRequest) (Sandbox, error)
 }
 
 // Sandbox is the live capability returned by ToolSandbox, not a fifth

@@ -15,6 +15,7 @@ const defaultCleanupTimeout = 30 * time.Second
 // Options contains the few experiment-level inputs needed by the Runner.
 type Options struct {
 	Name           string
+	RunID          string
 	OutputDir      string
 	Model          core.ModelConfig
 	CleanupTimeout time.Duration
@@ -28,6 +29,7 @@ type Runner struct {
 	toolSandbox    ToolSandbox
 	bridge         ToolBridge
 	name           string
+	runID          string
 	outputDir      string
 	model          core.ModelConfig
 	cleanupTimeout time.Duration
@@ -48,6 +50,9 @@ func New(benchmark Benchmark, harness AgentHarness, toolSandbox ToolSandbox, bri
 	if bridge == nil {
 		return nil, errors.New("tool bridge is required")
 	}
+	if options.RunID == "" {
+		return nil, errors.New("run ID is required")
+	}
 	if options.CleanupTimeout <= 0 {
 		options.CleanupTimeout = defaultCleanupTimeout
 	}
@@ -60,6 +65,7 @@ func New(benchmark Benchmark, harness AgentHarness, toolSandbox ToolSandbox, bri
 		toolSandbox:    toolSandbox,
 		bridge:         bridge,
 		name:           options.Name,
+		runID:          options.RunID,
 		outputDir:      options.OutputDir,
 		model:          options.Model,
 		cleanupTimeout: options.CleanupTimeout,
@@ -71,7 +77,7 @@ func New(benchmark Benchmark, harness AgentHarness, toolSandbox ToolSandbox, bri
 // later independent task results unless the run context itself is cancelled.
 func (r *Runner) Run(ctx context.Context) (core.RunResult, error) {
 	started := time.Now()
-	result := core.RunResult{Name: r.name}
+	result := core.RunResult{Name: r.name, RunID: r.runID}
 
 	tasks, err := r.benchmark.Tasks(ctx)
 	if err != nil {
@@ -168,7 +174,11 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 	}
 
 	var err error
-	sandbox, err = r.toolSandbox.Start(ctx, task.Environment)
+	sandbox, err = r.toolSandbox.Start(ctx, core.SandboxRequest{
+		RunID:       r.runID,
+		TaskID:      task.ID,
+		Environment: task.Environment,
+	})
 	if err != nil {
 		allErrors = append(allErrors, fmt.Errorf("start sandbox: %w", err))
 		return finish()

@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 
 	"github.com/hyscale-lab/aries/pkg/benchmark/terminalbench"
 	"github.com/hyscale-lab/aries/pkg/config"
+	dockersandbox "github.com/hyscale-lab/aries/pkg/sandbox/docker"
 )
 
 func main() {
@@ -53,7 +55,16 @@ func buildExperiment(cfg config.Config) error {
 	}
 	switch cfg.Sandbox.Type {
 	case "docker":
-		// Wired when the concrete M3 adapter exists.
+		executable, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("locate ARIES executable: %w", err)
+		}
+		if _, err := dockersandbox.New(dockersandbox.Options{
+			OutputDir:      cfg.OutputDir,
+			ExecHelperPath: filepath.Join(filepath.Dir(executable), "aries-exec-helper"),
+		}); err != nil {
+			return fmt.Errorf("construct Docker sandbox: %w", err)
+		}
 	default:
 		return fmt.Errorf("unsupported sandbox type %q", cfg.Sandbox.Type)
 	}
@@ -63,7 +74,7 @@ func buildExperiment(cfg config.Config) error {
 	default:
 		return fmt.Errorf("unsupported bridge type %q", cfg.Bridge.Type)
 	}
-	return errors.New("benchmark is valid, but concrete M3-M5 components are not implemented yet")
+	return errors.New("benchmark and Docker sandbox are valid, but concrete M4-M5 components are not implemented yet")
 }
 
 func setup(ctx context.Context, component string) error {

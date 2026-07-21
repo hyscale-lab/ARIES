@@ -6,6 +6,7 @@ export GOMODCACHE ?= $(CURDIR)/.cache/go-mod
 build:
 	mkdir -p bin
 	go build -o bin/aries ./cmd/aries
+	CGO_ENABLED=0 go build -o bin/aries-exec-helper ./cmd/aries-exec-helper
 
 test:
 	go test ./...
@@ -18,7 +19,9 @@ lint:
 	go vet ./...
 
 integration:
-	go test -tags=integration ./...
+	mkdir -p .cache/integration
+	CGO_ENABLED=0 go build -o .cache/integration/aries-exec-helper ./cmd/aries-exec-helper
+	ARIES_EXEC_HELPER=$(CURDIR)/.cache/integration/aries-exec-helper go test -count=1 -tags=integration ./...
 
 setup-terminalbench:
 	go run ./cmd/aries setup terminalbench2

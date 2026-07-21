@@ -128,13 +128,18 @@ func (f *fakeBenchmark) Evaluate(ctx context.Context, _ core.Task, _ Sandbox) (c
 }
 
 type fakeToolSandbox struct {
+	mu       sync.Mutex
 	log      *callLog
 	startErr error
 	sandbox  *fakeSandbox
+	requests []core.SandboxRequest
 }
 
-func (f *fakeToolSandbox) Start(ctx context.Context, _ core.Environment) (Sandbox, error) {
+func (f *fakeToolSandbox) Start(ctx context.Context, request core.SandboxRequest) (Sandbox, error) {
 	f.log.add("sandbox.start", ctx)
+	f.mu.Lock()
+	f.requests = append(f.requests, request)
+	f.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		f.log.addRollback("sandbox.rollback", ctx)
 		return nil, err
@@ -307,6 +312,7 @@ func newRig(t *testing.T, tasks int) *rig {
 	harness := &fakeHarness{log: log}
 	runner, err := New(benchmark, harness, factory, bridge, Options{
 		Name:           "test",
+		RunID:          "test-run",
 		OutputDir:      "runs",
 		CleanupTimeout: time.Second,
 		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -336,6 +342,15 @@ func TestRunnerSuccessOrdering(t *testing.T) {
 	}
 	if task.Observer.Status != core.StatusNotEnabled {
 		t.Fatalf("observer status = %q", task.Observer.Status)
+	}
+	if result.RunID != "test-run" {
+		t.Fatalf("run ID = %q, want test-run", result.RunID)
+	}
+	rig.factory.mu.Lock()
+	requests := append([]core.SandboxRequest(nil), rig.factory.requests...)
+	rig.factory.mu.Unlock()
+	if len(requests) != 1 || requests[0].RunID != "test-run" || requests[0].TaskID != "a" || !reflect.DeepEqual(requests[0].Environment, rig.benchmark.tasks[0].Environment) {
+		t.Fatalf("sandbox requests = %#v", requests)
 	}
 }
 
@@ -623,5 +638,12 @@ func TestNewRejectsMissingRoles(t *testing.T) {
 				t.Fatal("New() error = nil")
 			}
 		})
+	}
+}
+
+func TestNewRejectsMissingRunID(t *testing.T) {
+	rig := newRig(t, 0)
+	if _, err := New(rig.benchmark, rig.harness, rig.factory, rig.bridge, Options{}); err == nil || !strings.Contains(err.Error(), "run ID") {
+		t.Fatalf("New() error = %v, want missing run ID", err)
 	}
 }

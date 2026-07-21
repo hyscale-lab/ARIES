@@ -22,6 +22,14 @@ type Environment struct {
 	Env          map[string]string `json:"env,omitempty"`
 }
 
+// SandboxRequest carries stable run and task identity separately from the
+// benchmark-defined execution environment.
+type SandboxRequest struct {
+	RunID       string      `json:"run_id"`
+	TaskID      string      `json:"task_id"`
+	Environment Environment `json:"environment"`
+}
+
 // Command is an argument-safe process invocation inside a sandbox.
 type Command struct {
 	Path    string            `json:"path"`
@@ -146,6 +154,7 @@ type RunSummary struct {
 // RunResult contains all task results and their aggregate counts.
 type RunResult struct {
 	Name     string        `json:"name"`
+	RunID    string        `json:"run_id"`
 	Tasks    []TaskResult  `json:"tasks"`
 	Summary  RunSummary    `json:"summary"`
 	Duration time.Duration `json:"duration"`
