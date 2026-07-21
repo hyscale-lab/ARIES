@@ -22,7 +22,7 @@ func TestBuildExperimentUsesExplicitTypeSwitches(t *testing.T) {
 		change  func(*config.Config)
 		wantErr string
 	}{
-		{"known but not wired", func(*config.Config) {}, "M4-M5 components are not implemented"},
+		{"known but not wired", func(*config.Config) {}, "M5 harness is not implemented"},
 		{"benchmark", func(c *config.Config) { c.Benchmark.Type = "other" }, `unsupported benchmark type "other"`},
 		{"harness", func(c *config.Config) { c.Harness.Type = "other" }, `unsupported harness type "other"`},
 		{"sandbox", func(c *config.Config) { c.Sandbox.Type = "other" }, `unsupported sandbox type "other"`},

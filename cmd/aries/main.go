@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/hyscale-lab/aries/pkg/benchmark/terminalbench"
+	"github.com/hyscale-lab/aries/pkg/bridge/openclawssh"
 	"github.com/hyscale-lab/aries/pkg/config"
 	dockersandbox "github.com/hyscale-lab/aries/pkg/sandbox/docker"
 )
@@ -35,6 +36,11 @@ func run(args []string) error {
 }
 
 func buildExperiment(cfg config.Config) error {
+	executable, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate ARIES executable: %w", err)
+	}
+	binDir := filepath.Dir(executable)
 	switch cfg.Benchmark.Type {
 	case "terminalbench2":
 		if _, err := terminalbench.New(terminalbench.Options{
@@ -55,13 +61,9 @@ func buildExperiment(cfg config.Config) error {
 	}
 	switch cfg.Sandbox.Type {
 	case "docker":
-		executable, err := os.Executable()
-		if err != nil {
-			return fmt.Errorf("locate ARIES executable: %w", err)
-		}
 		if _, err := dockersandbox.New(dockersandbox.Options{
 			OutputDir:      cfg.OutputDir,
-			ExecHelperPath: filepath.Join(filepath.Dir(executable), "aries-exec-helper"),
+			ExecHelperPath: filepath.Join(binDir, "aries-exec-helper"),
 		}); err != nil {
 			return fmt.Errorf("construct Docker sandbox: %w", err)
 		}
@@ -70,11 +72,17 @@ func buildExperiment(cfg config.Config) error {
 	}
 	switch cfg.Bridge.Type {
 	case "openclaw-ssh":
-		// Wired when the concrete M4 adapter exists.
+		if _, err := openclawssh.New(openclawssh.Options{
+			OutputDir:  cfg.OutputDir,
+			ClientPath: filepath.Join(binDir, "aries-ssh"),
+			ServerPath: filepath.Join(binDir, "aries-ssh-server"),
+		}); err != nil {
+			return fmt.Errorf("construct OpenClaw SSH bridge: %w", err)
+		}
 	default:
 		return fmt.Errorf("unsupported bridge type %q", cfg.Bridge.Type)
 	}
-	return errors.New("benchmark and Docker sandbox are valid, but concrete M4-M5 components are not implemented yet")
+	return errors.New("benchmark, Docker sandbox, and OpenClaw SSH bridge are valid, but the concrete M5 harness is not implemented yet")
 }
 
 func setup(ctx context.Context, component string) error {

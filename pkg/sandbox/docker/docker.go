@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -267,6 +268,56 @@ func (s *Sandbox) NetworkName() string { return s.networkName }
 
 // Workdir returns the benchmark-declared working directory in the container.
 func (s *Sandbox) Workdir() string { return s.workdir }
+
+// RuntimeDir returns the private host directory mounted read-only at
+// /run/aries. Pair-specific local adapters use it for authenticated Unix
+// control sockets; task processes cannot create files in the directory.
+func (s *Sandbox) RuntimeDir() string { return s.runtimeDir }
+
+// ContainerIPv4 returns the task container address on its scoped network
+// after positively reinspecting the live container and its identity labels.
+func (s *Sandbox) ContainerIPv4(ctx context.Context) (string, error) {
+	inspection, err := inspectContainer(ctx, s.cli, s.containerID)
+	if err != nil {
+		return "", fmt.Errorf("inspect Docker task address: %w", err)
+	}
+	if !inspection.State.Running || inspection.Config.Labels["aries.run"] != s.runID || inspection.Config.Labels["aries.task"] != s.taskID {
+		return "", errors.New("inspect Docker task address: container identity or running state changed")
+	}
+	network, ok := inspection.NetworkSettings.Networks[s.networkName]
+	if !ok || net.ParseIP(network.IPAddress).To4() == nil {
+		return "", fmt.Errorf("inspect Docker task address: network %q has no IPv4 address", s.networkName)
+	}
+	return network.IPAddress, nil
+}
+
+// ProcessPresent reports whether an exact host PID is still part of this
+// container according to the daemon. It is used only to positively revoke a
+// concrete long-lived helper whose PID was authenticated with SO_PEERCRED.
+func (s *Sandbox) ProcessPresent(ctx context.Context, pid int) (bool, error) {
+	if pid <= 0 {
+		return false, errors.New("Docker process PID must be positive")
+	}
+	engine, ok := s.engine.(*engineClient)
+	if !ok {
+		return false, errors.New("Docker process inspection is unavailable")
+	}
+	return engine.containerHasPID(ctx, s.containerID, pid)
+}
+
+// RestartForIsolation performs the Docker adapter's fail-closed restart and
+// positive reinspection. The OpenClaw SSH bridge uses it only when a spawned
+// server cannot be authenticated or stopped through its private control
+// channel.
+func (s *Sandbox) RestartForIsolation(ctx context.Context) error {
+	select {
+	case s.execGate <- struct{}{}:
+		defer func() { <-s.execGate }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return s.restartAfterExecFailure(ctx)
+}
 
 // Exec runs one direct argv through the trusted helper and preserves separate
 // output streams and exit status. A nonzero command exit is a result.
@@ -664,7 +715,9 @@ type containerInspection struct {
 		Labels     map[string]string `json:"Labels"`
 	} `json:"Config"`
 	NetworkSettings struct {
-		Networks map[string]json.RawMessage `json:"Networks"`
+		Networks map[string]struct {
+			IPAddress string `json:"IPAddress"`
+		} `json:"Networks"`
 	} `json:"NetworkSettings"`
 	Mounts []struct {
 		Destination string `json:"Destination"`

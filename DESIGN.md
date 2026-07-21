@@ -1,6 +1,6 @@
 # ARIES Design
 
-Status: **implemented through M3**. The RALPLAN-DR Architect and sequential
+Status: **implemented through M4, pending milestone review and commit**. The RALPLAN-DR Architect and sequential
 Critic approved the source draft without blockers. M0 then confirmed the
 pinned runtime assumptions below; later milestones must return to planning if
 one of these locked contracts changes.
@@ -157,7 +157,8 @@ q(value) := single-quoted value using only the canonical embedded-quote escape
 The server decodes tokens and invokes the decoded argv directly with a bounded
 context; it never passes the raw SSH request to a permissive outer shell. The
 inner `/bin/sh -c script` is the intentional OpenClaw tool execution inside the
-task sandbox. NULs, malformed quoting, invalid or secret environment names,
+task sandbox. NULs, malformed quoting, environment names outside `PATH`,
+`HOME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TERM`, `TMPDIR`, and `TZ`,
 noncanonical encodings, other command heads, and all non-exec SSH requests are
 rejected. Password and keyboard-interactive authentication, PTY, forwarding,
 agent and X11 forwarding, subsystems, and environment requests are disabled.
@@ -269,7 +270,7 @@ the score.
 The M2 tests use fakes, so unit checks require neither Docker nor a model API;
 the integration-tagged checkout test reads the real ignored pin when present.
 
-Go's standard library has no TOML decoder. M2 therefore adds only
+Go's standard library has no TOML decoder. M2 therefore added
 `github.com/BurntSushi/toml` v1.4.0 (MIT) for strict typed decoding;
 there is no Harbor runtime dependency.
 
@@ -350,6 +351,146 @@ exact peer-PID authentication, hostile wrong-PID rejection, Engine failures,
 output bounds, cancellation, and positive helper-PID absence. The real
 integration test fails on daemon or cleanup errors; it does not silently skip
 the claim-bearing M3 path.
+
+### M4 OpenClaw SSH bridge
+
+`pkg/bridge/openclawssh` is the concrete OpenClaw-plus-local-Docker adapter. It
+type-asserts only the Docker metadata and lifecycle evidence it needs; no new
+Runner interface or benchmark field was added. `cmd/aries-ssh` implements the
+exact pinned non-TTY argv, and `cmd/aries-ssh-server` implements workspace
+preparation plus the restricted SSH server. Both helpers are static binaries
+built explicitly by the Makefile. The composition root now constructs this
+bridge through its existing explicit type switch and still stops at the
+not-yet-implemented M5 harness.
+
+The client accepts exactly `-F CONFIG -T -o RequestTTY=no
+openclaw-sandbox REMOTE_COMMAND`. Its config must be the current user's
+mode-0600 `config` beneath a direct mode-0700 `/tmp/openclaw-ssh-*` directory
+and must contain the pinned directives in their exact upstream order and safe
+values. Identity and known-hosts files are current-user mode 0600. The client
+uses one Ed25519 identity, one exact `[task-sandbox]:2222` Ed25519 host key,
+strict verification, a five-second connect deadline, and the pinned keepalive
+interval/count. It carries stdin, separate stdout/stderr, and the remote exit
+status without interpreting the command.
+
+The staged client is mode 0555 so pinned OpenClaw's default `node` user
+(UID/GID 1000) can execute its read-only bind mount. Credential source files
+remain host-private mode 0600 and are not bind-mounted into the harness. The
+M5 harness must initialize a private Docker volume as root, copy config,
+identity, and known-host data into it, set its directory to UID 1000 mode 0700
+and files to UID 1000 mode 0600, then mount the volume read-only. The M4 real
+integration test exercises exactly this contract with the pinned unmodified
+OpenClaw image and no user override.
+
+The server receives no key path or credential bytes in argv, environment, or
+task-writable files. Start uploads the static server, prepares the locked
+workspace, opens a mode-0600 Unix control socket in the Docker adapter's
+private read-only runtime mount, and passes only a random 32-byte token through
+trusted exec stdin. The detached server must return that token and a Linux
+`SO_PEERCRED` PID before the host sends its ephemeral host private key and the
+single authorized client public key over the already-authenticated socket.
+Docker must positively report that exact PID still present immediately before
+the key frame is written; a lost or nonzero spawn response is conservatively
+treated as a possible live server and requires isolation restart.
+Keys remain in memory; the client identity and known-host entry live only in a
+private host artifact directory. The TCP listener binds port 2222 only on the
+task-scoped Docker network.
+
+Only public-key authentication for user `aries`, one `session` channel, and one
+`exec` request per connection are accepted. The server caps concurrent
+connections at eight, applies a five-second pre-authentication handshake
+deadline, and bounds rejected global requests at 96, which exceeds the pinned
+20-minute command timeout's 15-second keepalive requirement. Saturated and
+over-limit connections are closed. Password, keyboard-interactive, PTY, env, shell,
+subsystem, signal, agent/X11, direct/forwarded TCP, global forwarding, and all
+other requests are rejected. The exec decoder accepts only OpenClaw's unique
+canonical single-quote encoding of optional allowlisted `env NAME=VALUE`
+assignments followed by `/bin/sh -c script args...`; malformed, duplicate,
+reserved, secret-bearing, NUL-containing, or noncanonical input fails before a
+process starts. The decoded shell argv is started directly. The server owns
+the child stdin pipe so a finished command cannot deadlock on an SSH input
+copier, kills the process group on timeout, and preserves byte streams and exit
+status.
+
+Workspace preparation is generic to `Sandbox.Workdir()`. It requires a real
+directory and an absent, disjoint workspace root, moves that directory to
+`/aries/openclaw/openclaw-ssh-shared-8198076c/workspace`, and creates an
+absolute symlink at the original path. Start verifies both paths resolve to the
+same directory; failed partial Start restores the original directory. Normal
+Stop deliberately retains the alias for evaluation but re-verifies its exact
+target and inode through the read-only M3 exec helper. The same trusted helper
+removes and confirms absence of the uploaded server without trusting a
+task-modifiable `rm`, `test`, or uploaded executable. Existing ancestors must
+be real directories rather than symlinks, and resolved workdir/root paths are
+proved disjoint before creation and again after the rename. Prepare creates and
+validates the workspace-root parent chain separately, then acquires the root
+leaf with one `mkdir`; `EEXIST` is always treated as foreign and is never
+adopted. Each attempt has a random 32-byte host token supplied to prepare only
+on stdin, never in argv, environment, endpoint data, logs, or results. Before
+the rename, prepare writes that exact token to a fixed no-follow, exclusive,
+mode-0600 marker inside the newly acquired root. Recovery receives the token on
+stdin and validates the marker plus the complete allowed root, runtime,
+workspace, and workdir shape before its first mutation. It reconciles
+root-created, renamed, and aliased interrupted states, while a missing or
+mismatched marker, a pre-existing root, a symlink, or any foreign entry fails
+closed without deleting it. The marker is removed only as final owned-root
+cleanup proceeds.
+
+For the pinned `/aries/openclaw` root, prepare may create the otherwise absent
+`/aries` parent. That parent is container-scoped, contains no credential or
+task data, and is destroyed by `Sandbox.Stop`. Failed-Start recovery
+intentionally does not remove it: the per-attempt proof owns only the atomic
+`openclaw` leaf, while an empty `/aries` could have pre-existed and must not be
+claimed without separate evidence.
+
+This proof covers uncertain transport during bridge preparation, before the
+agent harness starts. The token is deliberately absent from process arguments
+and environment, but prepare necessarily writes it into the task sandbox; the
+pre-harness sandbox image and Docker daemon are therefore trusted at this
+boundary. After a successful Start the harness may be privileged inside its
+own sandbox, so normal bridge Stop never invokes destructive workspace
+recovery: it only verifies and preserves the alias for evaluation. The task
+container's later removal disposes of the marker and workspace root.
+
+Stop closes the authenticated control connection and always performs the M3
+fail-closed restart, even after a graceful server exit, so every SSH-launched
+background descendant is killed before evaluation. Under one fresh bounded
+`context.WithoutCancel` cleanup context it reinspects the restarted sandbox,
+obtains its current IP, proves the exact prior server PID absent, confirms the
+new listener absent, and probes with the retained in-memory signer/host key to
+prove rejection. It then verifies workspace identity, removes the server,
+deletes the control socket and credential directory, and positively checks
+every absence. Stop is concurrent-safe, retryable after failed evidence, and
+idempotent after success; uncertain-spawn rollback uses the same restart rule.
+
+Go's standard library has no SSH implementation. M4 raises the project minimum
+to Go 1.25.0 and pins `golang.org/x/crypto` v0.54.0 (BSD-3-Clause), with only
+its required `golang.org/x/sys` v0.47.0 indirect module in `go.mod`. This avoids
+the SSH flaws fixed in v0.52.0, including
+[GO-2026-5013](https://pkg.go.dev/vuln/GO-2026-5013),
+[GO-2026-5016](https://pkg.go.dev/vuln/GO-2026-5016), and
+[GO-2026-5017](https://pkg.go.dev/vuln/GO-2026-5017), rather than pinning an
+older Go-1.22-compatible but knowingly vulnerable release.
+
+A pinned one-shot `govulncheck` v1.6.0 source scan reports zero reachable or
+imported-package vulnerabilities. It reports one module-only advisory,
+[GO-2026-5932](https://pkg.go.dev/vuln/GO-2026-5932), for the unmaintained
+`golang.org/x/crypto/openpgp` package. ARIES imports only `x/crypto/ssh`, not
+`openpgp`; the scanner confirms there is no package or symbol path to that
+advisory. The scan tool selects its required Go 1.25.12 toolchain without
+changing the project's minimum Go version or module graph.
+
+Unit tests use an in-memory full-duplex connection because the managed unit
+sandbox forbids socket syscalls; production still uses Unix/TCP sockets. The
+real integration test uses the digest-pinned BusyBox task fixture and exact
+pinned OpenClaw image, starts the M3 sandbox, and runs detached client
+containers as OpenClaw's default UID 1000. It proves the initialized private
+volume modes, exact static argv, stdin/stdout/stderr/nonzero status, tar, strict
+host key, wrong key/password denial, cross-network denial, shared inode/bytes,
+actual old-signer rejection after source/volume deletion, gated background
+descendant termination, and empty container/network/volume inventories. Detached commands write a private
+status artifact because this local Docker daemon can retain stale running
+state after its PID exits; no stale daemon state is accepted as completion.
 
 ## Exact lifecycle and evaluation isolation
 

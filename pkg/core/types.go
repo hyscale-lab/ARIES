@@ -56,15 +56,23 @@ type ModelConfig struct {
 	APIKeyEnv string `json:"api_key_env"`
 }
 
-// ToolEndpoint is the bridge endpoint and credential-file contract given to a
-// harness. Credential bytes are never carried in this value.
+// ToolEndpoint is the bridge endpoint and task-local file contract given to a
+// harness. Credential bytes are never carried in this value. Source files stay
+// private on the host: a harness must copy credentials and config into a
+// root-initialized private volume, change ownership to its runtime user, keep
+// mode 0600, and mount that volume read-only. Source paths are not direct
+// container bind mounts.
 type ToolEndpoint struct {
-	Protocol       string `json:"protocol"`
-	Address        string `json:"address"`
-	Username       string `json:"username,omitempty"`
-	ClientCommand  string `json:"client_command,omitempty"`
-	IdentityFile   string `json:"identity_file,omitempty"`
-	KnownHostsFile string `json:"known_hosts_file,omitempty"`
+	Protocol             string `json:"protocol"`
+	Address              string `json:"address"`
+	Username             string `json:"username,omitempty"`
+	Network              string `json:"network,omitempty"`
+	ClientCommand        string `json:"client_command,omitempty"`
+	ClientSourceFile     string `json:"client_source_file,omitempty"`
+	IdentityFile         string `json:"identity_file,omitempty"`
+	IdentitySourceFile   string `json:"identity_source_file,omitempty"`
+	KnownHostsFile       string `json:"known_hosts_file,omitempty"`
+	KnownHostsSourceFile string `json:"known_hosts_source_file,omitempty"`
 }
 
 // HarnessRequest contains task-local runtime inputs supplied before Run.

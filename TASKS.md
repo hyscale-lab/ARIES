@@ -75,20 +75,26 @@ documentation, cleanup, and identifiable ARIES-only commit are complete.
 
 ## M4 — OpenClaw SSH bridge
 
-- [ ] Implement the static helper's exact client argv and pinned config parser;
+- [x] Implement the static helper's exact client argv and pinned config parser;
   reject TTY, unknown or reordered options, forwarding, proxies, subsystems,
-  extra destinations, and unsupported directives.
-- [ ] Implement the server's canonical quoted-argv decoder. Execute decoded argv
+  extra destinations, and unsupported directives. Prove the mode-0555 client
+  and private UID-1000-owned credential/config volume in the pinned image.
+- [x] Implement the server's canonical quoted-argv decoder. Execute decoded argv
   directly; never feed the raw SSH exec string to a fallback shell.
-- [ ] Accept only the task public key and exec channel. Reject password and
-  keyboard-interactive auth, malformed quoting, secret env names, PTY,
+- [x] Accept only the task public key and exec channel. Reject password and
+  keyboard-interactive auth, malformed quoting, non-allowlisted env names, PTY,
   forwarding, agent and X11 forwarding, environment requests, subsystems, and
-  cross-task reachability.
-- [ ] Pre-create the pinned session workspace alias to the real task workdir;
-  prove OpenClaw and evaluator see the same inode and byte delta.
-- [ ] Revoke by terminating listener and process, rejecting old-key reconnect,
-  deleting credentials, and positively checking each condition.
-- [ ] Commit `feat(bridge): connect openclaw over verified ssh`.
+  cross-task reachability; bound connections, handshakes, requests, and
+  cancellation cleanup.
+- [x] Pre-create the pinned session workspace alias to the real task workdir;
+  reject symlinked/overlapping ancestry, ownership-gate cleanup with an
+  atomic root leaf plus a private per-attempt marker, recover every exact
+  partial state, and prove OpenClaw and evaluator see the same inode and byte
+  delta.
+- [x] Revoke by always restarting the sandbox, killing SSH descendants,
+  proving the old PID/listener/signer absent, deleting credentials, and
+  positively checking each condition.
+- [x] Commit `feat(bridge): connect openclaw over verified ssh`.
 
 ## M5 — Pinned unmodified OpenClaw and deterministic model
 
