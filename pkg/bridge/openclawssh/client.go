@@ -87,11 +87,24 @@ func parseClientArguments(args []string) (clientInvocation, error) {
 
 func validateConfigPath(path string) (string, error) {
 	if path == "" || strings.ContainsRune(path, 0) || !filepath.IsAbs(path) || filepath.Clean(path) != path || filepath.Base(path) != "config" {
-		return "", errors.New("SSH config path must be an absolute clean .../openclaw-ssh-*/config path")
+		return "", errors.New("SSH config path must be an absolute clean .../openclaw-sandbox-ssh-*/config path")
 	}
 	directory := filepath.Dir(path)
-	if filepath.Dir(directory) != filepath.Clean(os.TempDir()) || !strings.HasPrefix(filepath.Base(directory), "openclaw-ssh-") || filepath.Base(directory) == "openclaw-ssh-" {
+	root := filepath.Dir(directory)
+	preferredRoot := filepath.Join(filepath.Clean(os.TempDir()), "openclaw")
+	fallbackRoot := filepath.Join(filepath.Clean(os.TempDir()), "openclaw-"+strconv.Itoa(os.Geteuid()))
+	if root != preferredRoot && root != fallbackRoot || !strings.HasPrefix(filepath.Base(directory), "openclaw-sandbox-ssh-") || filepath.Base(directory) == "openclaw-sandbox-ssh-" {
 		return "", errors.New("SSH config parent does not match OpenClaw's private temporary directory")
+	}
+	rootInfo, err := os.Lstat(root)
+	if err != nil {
+		return "", fmt.Errorf("inspect OpenClaw SSH temporary root: %w", err)
+	}
+	if !rootInfo.IsDir() || rootInfo.Mode().Perm() != 0o700 {
+		return "", errors.New("OpenClaw SSH temporary root must be a private mode-0700 directory")
+	}
+	if stat, ok := rootInfo.Sys().(*syscall.Stat_t); !ok || int(stat.Uid) != os.Geteuid() {
+		return "", errors.New("OpenClaw SSH temporary root must be owned by the current user")
 	}
 	info, err := os.Lstat(directory)
 	if err != nil {

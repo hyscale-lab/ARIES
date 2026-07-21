@@ -17,12 +17,15 @@ evaluator. M3 adds the real local Docker task sandbox with scoped networking,
 resources, exec, transfers, logs, positive cleanup, and a real-container test.
 M4 adds the restricted OpenClaw SSH bridge, ephemeral credentials, a pinned
 static client, shared-workspace proof, access revocation, and real-container
-isolation tests. The milestone is pending review and commit.
+isolation tests. M5 adds the pinned upstream OpenClaw harness, private config and
+secret staging, readiness and one-turn execution, redacted artifacts, and a
+real `fix-git` tool-chain test against a strict deterministic fake model. M5 is
+pending review and commit.
 
-The OpenClaw harness lands in M5. Until then the CLI constructs and validates
-the Terminal-Bench, Docker, and SSH bridge components, then deliberately
-reports that the concrete harness is not implemented; it does not substitute
-mocks or an empty implementation.
+The CLI constructs and validates the Terminal-Bench, Docker, SSH bridge, and
+OpenClaw components, then deliberately reports that M6 end-to-end evaluation
+execution is not enabled. It does not substitute mocks or an empty
+implementation.
 
 - [DESIGN.md](DESIGN.md) records component boundaries, lifecycle ordering,
   evaluation isolation, pinned upstream contracts, secret flow, and M0 runtime
@@ -64,11 +67,11 @@ The integration gate requires a reachable local Docker daemon:
 make integration
 ```
 
-`make integration` runs the real M3 container lifecycle and M4 SSH bridge
-sequentially and fails on daemon, isolation, or cleanup errors. It pulls the
-official digest-pinned BusyBox fixture only when missing and requires no model
-API. The M2 real-checkout test skips clearly when the ignored TB2 pin has not
-been set up.
+`make integration` runs the real M3 container lifecycle, M4 SSH bridge, and M5
+OpenClaw `fix-git` tool chain sequentially and fails on daemon, isolation, or
+cleanup errors. It pulls pinned images only when missing and requires no paid
+model API. Set up the ignored TB2 checkout first; the M2 real-checkout test
+skips clearly when it is absent, while the claim-bearing M5 test requires it.
 Fetch the only supported TB2 revision into the ARIES-local cache with:
 
 ```sh
@@ -83,12 +86,12 @@ one strict JSON file:
 ./bin/aries configs/openclaw-tb2-fix-git-deepseek.json
 ```
 
-The example contains the API-key environment variable name only. At M4 this
-command constructs the pinned benchmark, Docker sandbox manager, and OpenClaw
-SSH bridge, then exits with the explicit M5 harness-not-implemented error after
-validation.
+The example contains the API-key environment variable name only. At M5 this
+command constructs the pinned benchmark, Docker sandbox manager, OpenClaw SSH
+bridge, and OpenClaw harness, then exits with the explicit M6-execution-disabled
+error after validation.
 
-## Package shape through M4
+## Package shape through M5
 
 - `cmd/aries` loads one experiment and owns explicit component-type switches.
 - `cmd/aries-exec-helper` builds the static task-local helper used for trusted
@@ -107,6 +110,8 @@ validation.
   removal.
 - `pkg/bridge/openclawssh` owns the OpenClaw-specific SSH endpoint, credentials,
   workspace alias, restricted server, and positive access revocation.
+- `pkg/harness/openclaw` owns pinned OpenClaw config, private credentials,
+  readiness, one agent turn, logs, telemetry, and positive removal.
 
 The Runner positively gates evaluation on successful harness `Stop` and bridge
 `Stop`. An ordinary harness `Run` error is retained but does not suppress the
@@ -158,9 +163,9 @@ remains.
 
 The OpenClaw SSH bridge generates a task-local Ed25519 host key and client key,
 starts a memory-only-key server through an authenticated private control
-socket, and returns the endpoint plus private host-side source paths. M5 must
-copy config and credentials as root into a UID-1000-owned mode-0600 private
-volume and mount it read-only; secret source files are never direct bind
+socket, and returns the endpoint plus private host-side source paths. M5 copies
+config and credentials as root into a UID-1000-owned mode-0600 private volume
+and mounts it read-only; secret source files are never direct bind
 mounts. The mode-0555 static client is a read-only bind mount and accepts one
 exact non-TTY invocation while enforcing
 strict host-key checking. The server admits one public-key user, session
@@ -179,3 +184,74 @@ adopted or removed. SSH support uses
 `golang.org/x/crypto` v0.54.0 (BSD-3-Clause) with `golang.org/x/sys` v0.47.0 as
 its only indirect module; the versions are pinned rather than inherited or
 dynamically selected.
+
+The OpenClaw harness accepts only the digest pinned in `DESIGN.md`. It renders
+one task-local provider and the locked shared SSH backend, but the JSON contains
+only environment-variable references. The model credential and a separate
+random gateway token enter a root-only initializer over stdin, land in a
+private volume as UID-1000 mode-0600 files, and are exported only inside the
+OpenClaw process. They do not enter Docker environment metadata, command
+arguments, the task sandbox, or evaluator input. Successful Stop clears both
+in-memory byte slices after redacted artifact collection and positive container
+and volume removal; a positively completed failed-Start rollback clears them as
+well.
+
+Every Docker resource carries a random attempt label. ARIES retains container
+IDs plus tentative names before issuing creates, retries inspection through a
+bounded proof budget, and acts only when ID plus exact managed, milestone,
+kind, task, and attempt labels prove ownership. A first not-found response is
+retried and only bounded final absence clears tentative state. It never kills or removes a
+foreign name collision. Failed-Start cleanup re-inspects tentative resources;
+it prefers a retained immutable ID and falls back to the name only after ID
+absence. If cleanup still cannot be proven, the Manager retains tentative or proven
+ownership and secret bytes for a later `Stop`. The final harness preserves upstream
+`tini -s --`, runs the private launcher as its command, and receives a bounded
+graceful stop before KILL fallback and positive process/removal proof.
+
+For each harness attempt, `output_dir/harnesses/<id>/` contains:
+
+- `agent.json`: the bounded JSON result from the single agent turn;
+- `agent.stderr`: bounded agent diagnostics;
+- `gateway.log`: bounded gateway output with credentials and authorization
+  lines removed; and
+- `telemetry.index.json`: paths to any retained upstream session/trajectory
+  files beneath `telemetry/`.
+
+All files and directories are private. Stop retains a killed container when
+collection fails so a later retry can recover the artifacts, and it accepts an
+existing artifact only when its bytes match exactly. Harness and evaluator
+outcomes remain separate; M5 does not inject verifier files or calculate a
+score.
+
+The deterministic M5 test uses the real pinned `fix-git` sandbox and upstream
+OpenClaw image with a separate fake OpenAI-compatible container. The fake sees
+only its private evidence directory and task-local network, never the task
+filesystem or Docker socket. It advances only after exact prior tool results,
+discovers the lost commit dynamically, and asks OpenClaw to repair and verify
+the repository through upstream SSH. Each fake has a unique name, retained ID,
+and attempt label; its helper retains tentative create state across inspection
+or cleanup failures, including transient not-found responses, and cleanup
+requires all three to match. After its terminal
+evidence is flushed, Docker must report it stopped with PID zero and exit code
+zero before removal. Host-PID absence is only an intermediate fallback and
+never replaces the final Engine reinspection. Run it directly after the three
+helpers are built:
+
+```sh
+ARIES_EXEC_HELPER=$PWD/bin/aries-exec-helper \
+ARIES_SSH_CLIENT=$PWD/bin/aries-ssh \
+ARIES_SSH_SERVER=$PWD/bin/aries-ssh-server \
+go test -v -count=1 -run '^TestOpenClawHarnessRealFixGitToolChain$' \
+  -tags=integration ./pkg/harness/openclaw
+```
+
+The test writes a redacted model/tool transcript and a before/after
+Git/filesystem delta beneath an exact mode-0700 run directory under the ignored
+`.cache/integration/m5/` root and prints that path in verbose mode. It scans the
+retained tree for non-private modes and the model credential, requires the
+harness and bridge to be gone before direct sandbox verification, and finally
+requires empty ARIES-labeled container, volume, and network inventories.
+
+To add the next benchmark, harness, sandbox, or bridge, implement one concrete
+package against the small interface in `pkg/runner` and add one explicit type
+case in `cmd/aries`. The Runner lifecycle does not change.

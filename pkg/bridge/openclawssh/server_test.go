@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -391,6 +392,34 @@ func TestWorkspaceAliasPreservesIdentityAndRecordsOwnership(t *testing.T) {
 	markerContent, err := os.ReadFile(marker)
 	if err != nil || !bytes.Equal(markerContent, ownerToken) {
 		t.Fatalf("ownership marker content = %x, %v", markerContent, err)
+	}
+}
+
+func TestWorkspacePreparationFallsBackToReverseAliasOnCrossDeviceRename(t *testing.T) {
+	base := t.TempDir()
+	workdir := filepath.Join(base, "task-workdir")
+	workspaceRoot := filepath.Join(base, "openclaw")
+	if err := os.Mkdir(workdir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, "state"), []byte("preserved"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rename := func(string, string) error { return syscall.EXDEV }
+	if err := prepareWorkspaceWithRename(workdir, workspaceRoot, lockedRuntimeID, testWorkspaceOwnerToken(), rename); err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(workspaceRoot, lockedRuntimeID, "workspace")
+	workInfo, err := os.Lstat(workdir)
+	if err != nil || !workInfo.IsDir() || workInfo.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("cross-device workdir = %v, %v", workInfo, err)
+	}
+	workspaceInfo, err := os.Lstat(workspace)
+	if err != nil || workspaceInfo.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("cross-device workspace = %v, %v", workspaceInfo, err)
+	}
+	if err := verifyWorkspaceIdentity(workdir, workspace); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -12,12 +12,7 @@ import (
 )
 
 func TestClientArgumentsRequireExactPinnedOrder(t *testing.T) {
-	t.Parallel()
-	directory, err := os.MkdirTemp("", "openclaw-ssh-unit")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(directory) })
+	directory := testOpenClawSSHDirectory(t)
 	configPath := filepath.Join(directory, "config")
 	remote := encodeCanonicalTokens([]string{remoteShell, "-c", "true"})
 	want := []string{"-F", configPath, "-T", "-o", "RequestTTY=no", lockedHostAlias, remote}
@@ -41,12 +36,7 @@ func TestClientArgumentsRequireExactPinnedOrder(t *testing.T) {
 }
 
 func TestLoadClientConfigRequiresExactContentAndPrivatePaths(t *testing.T) {
-	t.Parallel()
-	directory, err := os.MkdirTemp("", "openclaw-ssh-unit")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(directory) })
+	directory := testOpenClawSSHDirectory(t)
 	path := filepath.Join(directory, "config")
 	content := lockedConfigContent()
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
@@ -127,4 +117,24 @@ func lockedConfigContent() string {
 		"  IdentityFile " + identityContainerPath,
 		"  IdentitiesOnly yes",
 	}, "\n") + "\n"
+}
+
+func testOpenClawSSHDirectory(t *testing.T) string {
+	t.Helper()
+	root := filepath.Join(os.TempDir(), "openclaw")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	directory, err := os.MkdirTemp(root, "openclaw-sandbox-ssh-unit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(directory)
+		_ = os.Remove(root)
+	})
+	return directory
 }

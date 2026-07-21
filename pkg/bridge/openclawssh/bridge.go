@@ -580,7 +580,7 @@ func verifyWorkspaceThroughTrustedHelper(ctx context.Context, sandbox bridgeSand
 	workspace := filepath.Join(workspaceRoot, runtimeID, "workspace")
 	result, err := sandbox.Exec(ctx, core.Command{
 		Path:    trustedExecHelper,
-		Args:    []string{"--verify-alias", sandbox.Workdir(), workspace},
+		Args:    []string{"--verify-workspace", sandbox.Workdir(), workspace},
 		Timeout: 5 * time.Second,
 	})
 	if err != nil || result.ExitCode != 0 {

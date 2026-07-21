@@ -31,6 +31,7 @@ func decodeRemoteCommand(encoded string) (remoteCommand, error) {
 	if tokens[0] == remoteEnv {
 		shellIndex = 1
 		seen := make(map[string]struct{})
+		sawOpenClawShell := false
 		for shellIndex < len(tokens) && tokens[shellIndex] != remoteShell {
 			assignment := tokens[shellIndex]
 			separator := strings.IndexByte(assignment, '=')
@@ -41,13 +42,18 @@ func decodeRemoteCommand(encoded string) (remoteCommand, error) {
 			if !validEnvironmentName(name) {
 				return remoteCommand{}, fmt.Errorf("SSH exec environment name %q is invalid", name)
 			}
-			if !allowedEnvironmentName(name) {
-				return remoteCommand{}, fmt.Errorf("SSH exec environment name %q is not allowed", name)
+			if sawOpenClawShell {
+				return remoteCommand{}, errors.New("SSH exec OPENCLAW_SHELL assignment must be last")
+			}
+			value := assignment[separator+1:]
+			if !allowedEnvironmentAssignment(name, value) {
+				return remoteCommand{}, fmt.Errorf("SSH exec environment assignment %q is not allowed", assignment)
 			}
 			if _, exists := seen[name]; exists {
 				return remoteCommand{}, fmt.Errorf("SSH exec environment name %q is repeated", name)
 			}
 			seen[name] = struct{}{}
+			sawOpenClawShell = name == "OPENCLAW_SHELL"
 			shellIndex++
 		}
 	}
@@ -75,9 +81,9 @@ func decodeCanonicalTokens(encoded string) ([]string, error) {
 				position++
 				continue
 			}
-			if position+3 < len(encoded) && encoded[position] == '\'' && encoded[position+1] == '\\' && encoded[position+2] == '\'' && encoded[position+3] == '\'' {
+			if position+4 < len(encoded) && encoded[position] == '\'' && encoded[position+1] == '"' && encoded[position+2] == '\'' && encoded[position+3] == '"' && encoded[position+4] == '\'' {
 				value.WriteByte('\'')
-				position += 4
+				position += 5
 				continue
 			}
 			position++
@@ -108,7 +114,7 @@ func decodeCanonicalTokens(encoded string) ([]string, error) {
 func encodeCanonicalTokens(tokens []string) string {
 	quoted := make([]string, len(tokens))
 	for index, token := range tokens {
-		quoted[index] = "'" + strings.ReplaceAll(token, "'", "'\\''") + "'"
+		quoted[index] = "'" + strings.ReplaceAll(token, "'", `'"'"'`) + "'"
 	}
 	return strings.Join(quoted, " ")
 }
@@ -123,8 +129,10 @@ func validEnvironmentName(name string) bool {
 	return name != ""
 }
 
-func allowedEnvironmentName(name string) bool {
+func allowedEnvironmentAssignment(name, value string) bool {
 	switch name {
+	case "OPENCLAW_SHELL":
+		return value == "exec"
 	case "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR", "TZ":
 		return true
 	default:

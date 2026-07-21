@@ -98,22 +98,28 @@ documentation, cleanup, and identifiable ARIES-only commit are complete.
 
 ## M5 — Pinned unmodified OpenClaw and deterministic model
 
-- [ ] Render the locked task-local config without API-key values; mount static
+- [x] Render the locked task-local config without API-key values; mount static
   client, identity path, and known-hosts path read-only.
-- [ ] Start the pinned image, await `/readyz`, then run exactly one task turn via
+- [x] Start the pinned image, await `/readyz`, then run exactly one task turn via
   `node openclaw.mjs agent --session-key TASK_SESSION --message INSTRUCTION
   --json --timeout SECONDS`.
-- [ ] Build a strict fake OpenAI-compatible state machine that sees no task
+- [x] Build a strict fake OpenAI-compatible state machine that sees no task
   filesystem or Docker socket, rejects unexpected requests, and returns real
   OpenClaw tool calls only after matching the prior tool result.
-- [ ] State machine: inspect Git status and reflog; inspect the candidate lost
+- [x] State machine: inspect Git status and reflog; inspect the candidate lost
   commit from returned output; merge that dynamic hash into master; verify Git
   state; return a final response. It cannot pre-edit, mount, inject verifier
   data, or bypass OpenClaw.
-- [ ] Persist redacted model transcript, OpenClaw tool call and result transcript,
+- [x] Persist redacted model transcript, OpenClaw tool call and result transcript,
   pre/post filesystem and Git delta, and harness logs.
-- [ ] Positively confirm harness exit, non-running state, and removal; commit
-  `feat(harness): run pinned upstream openclaw`.
+- [x] Preserve upstream `tini`; positively prove nonce/ID ownership, bounded
+  graceful exit with KILL fallback, non-running state, removal, and empty
+  ARIES-labeled container, volume, and network inventories. Retain failed-Start
+  tentative or proven ownership whenever bounded inspection or rollback cannot
+  finish, retry transient not-found responses through the proof window, and
+  reacquire cleanup ownership only after exact attempt-label proof.
+- [x] Commit `feat(harness): run pinned upstream openclaw` after independent M5
+  review.
 
 ## M6 — Independent evaluator and deterministic `fix-git` proof
 

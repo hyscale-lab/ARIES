@@ -88,12 +88,22 @@ func TestTrustedFileOperationsRemoveWithoutFollowingAndVerifyExactAlias(t *testi
 	if err := runTrustedFileOperation([]string{"--verify-alias", alias, target}); err != nil {
 		t.Fatal(err)
 	}
+	if err := runTrustedFileOperation([]string{"--verify-workspace", alias, target}); err != nil {
+		t.Fatal(err)
+	}
 	other := filepath.Join(root, "other")
 	if err := os.Mkdir(other, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := runTrustedFileOperation([]string{"--verify-alias", alias, other}); err == nil {
 		t.Fatal("wrong alias target was accepted")
+	}
+	reverse := filepath.Join(root, "reverse")
+	if err := os.Symlink(target, reverse); err != nil {
+		t.Fatal(err)
+	}
+	if err := runTrustedFileOperation([]string{"--verify-workspace", target, reverse}); err != nil {
+		t.Fatal(err)
 	}
 
 	file := filepath.Join(root, "server")
@@ -119,6 +129,7 @@ func TestTrustedFileOperationsRejectUnsafeShapes(t *testing.T) {
 		{"--remove-file", "/"},
 		{"--remove-file", "relative"},
 		{"--verify-alias", "/one"},
+		{"--verify-workspace", "/one"},
 		{"--unknown", "/one"},
 	} {
 		if err := runTrustedFileOperation(args); err == nil {
@@ -129,7 +140,7 @@ func TestTrustedFileOperationsRejectUnsafeShapes(t *testing.T) {
 
 func TestTrustedWorkspaceRecoveryReconcilesEveryExactPrepareState(t *testing.T) {
 	ownerToken := bytes.Repeat([]byte{0x5a}, workspaceOwnerTokenBytes)
-	for _, state := range []string{"unchanged", "roots-created", "renamed", "aliased"} {
+	for _, state := range []string{"unchanged", "roots-created", "renamed", "aliased", "reverse-aliased"} {
 		t.Run(state, func(t *testing.T) {
 			base := t.TempDir()
 			workdir := filepath.Join(base, "work")
@@ -160,6 +171,11 @@ func TestTrustedWorkspaceRecoveryReconcilesEveryExactPrepareState(t *testing.T) 
 			}
 			if state == "aliased" {
 				if err := os.Symlink(workspace, workdir); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if state == "reverse-aliased" {
+				if err := os.Symlink(workdir, workspace); err != nil {
 					t.Fatal(err)
 				}
 			}

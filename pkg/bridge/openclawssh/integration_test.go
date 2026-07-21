@@ -30,7 +30,9 @@ const (
 	bridgeFixtureImage  = "docker.io/library/busybox:1.37.0-musl@sha256:222ad6d973c0d198014546a65cd02c5fdedcc172123c5b4c2bf0af636550bd94"
 	pinnedOpenClawImage = "ghcr.io/openclaw/openclaw:2026.5.26@sha256:ae7ff536446f1bbb57ea51b9b21097d8f299d30d683dcd72644973bc0522f3b3"
 	openClawUID         = 1000
-	volumeConfigPath    = "/tmp/openclaw-ssh-integration/config"
+	volumeConfigRoot    = "/tmp/openclaw"
+	volumeConfigDir     = volumeConfigRoot + "/openclaw-sandbox-ssh-integration"
+	volumeConfigPath    = volumeConfigDir + "/config"
 )
 
 type dockerResult struct {
@@ -120,7 +122,7 @@ func TestOpenClawSSHBridgeRealIsolationAndWorkspaceIdentity(t *testing.T) {
 			"--mount", "type=bind,src=" + endpoint.ClientSourceFile + ",dst=" + clientContainerPath + ",readonly",
 			"--mount", "type=bind,src=" + stdinPath + ",dst=/tmp/aries-stdin,readonly",
 			"--mount", "type=volume,src=" + volume + ",dst=/run/aries/ssh,readonly",
-			"--mount", "type=volume,src=" + volume + ",dst=/tmp/openclaw-ssh-integration,readonly",
+			"--mount", "type=volume,src=" + volume + ",dst=" + volumeConfigRoot + ",readonly",
 		}
 		if network != "" {
 			args = append(args, "--network", network)
@@ -290,7 +292,7 @@ func (volumes *integrationVolumes) create(t *testing.T, ctx context.Context, suf
 		t.Fatalf("create private SSH material volume: %s", result.stderr)
 	}
 	volumes.names = append(volumes.names, name)
-	initializer := `set -eu; cp /tmp/aries-source-id /target/id_ed25519; cp /tmp/aries-source-known /target/known_hosts; cp /tmp/aries-source-config /target/config; chown 1000:1000 /target /target/id_ed25519 /target/known_hosts /target/config; chmod 0700 /target; chmod 0600 /target/id_ed25519 /target/known_hosts /target/config`
+	initializer := `set -eu; mkdir /target/openclaw-sandbox-ssh-integration; cp /tmp/aries-source-id /target/id_ed25519; cp /tmp/aries-source-known /target/known_hosts; cp /tmp/aries-source-config /target/openclaw-sandbox-ssh-integration/config; chown 1000:1000 /target /target/openclaw-sandbox-ssh-integration /target/id_ed25519 /target/known_hosts /target/openclaw-sandbox-ssh-integration/config; chmod 0700 /target /target/openclaw-sandbox-ssh-integration; chmod 0600 /target/id_ed25519 /target/known_hosts /target/openclaw-sandbox-ssh-integration/config`
 	result = runDetachedIntegrationScript(ctx, "aries-m4-volume-init-"+suffix, []string{
 		"--user", "0:0",
 		"--mount", "type=volume,src=" + name + ",dst=/target",
@@ -301,10 +303,10 @@ func (volumes *integrationVolumes) create(t *testing.T, ctx context.Context, suf
 	if result.exitCode != 0 {
 		t.Fatalf("initialize private SSH material volume as root: %s", result.stderr)
 	}
-	verification := `test "$(id -u)" = "1000" && test "$(stat -c %u:%a /run/aries/ssh)" = "1000:700" && test "$(stat -c %u:%a /run/aries/ssh/id_ed25519)" = "1000:600" && test "$(stat -c %u:%a /run/aries/ssh/known_hosts)" = "1000:600" && test "$(stat -c %u:%a /tmp/openclaw-ssh-integration/config)" = "1000:600" && test -r /run/aries/ssh/id_ed25519 && test ! -w /run/aries/ssh/id_ed25519`
+	verification := `test "$(id -u)" = "1000" && test "$(stat -c %u:%a /run/aries/ssh)" = "1000:700" && test "$(stat -c %u:%a /run/aries/ssh/id_ed25519)" = "1000:600" && test "$(stat -c %u:%a /run/aries/ssh/known_hosts)" = "1000:600" && test "$(stat -c %u:%a /tmp/openclaw)" = "1000:700" && test "$(stat -c %u:%a /tmp/openclaw/openclaw-sandbox-ssh-integration)" = "1000:700" && test "$(stat -c %u:%a /tmp/openclaw/openclaw-sandbox-ssh-integration/config)" = "1000:600" && test -r /run/aries/ssh/id_ed25519 && test ! -w /run/aries/ssh/id_ed25519`
 	result = runDetachedIntegrationScript(ctx, "aries-m4-volume-verify-"+suffix, []string{
 		"--mount", "type=volume,src=" + name + ",dst=/run/aries/ssh,readonly",
-		"--mount", "type=volume,src=" + name + ",dst=/tmp/openclaw-ssh-integration,readonly",
+		"--mount", "type=volume,src=" + name + ",dst=" + volumeConfigRoot + ",readonly",
 	}, verification)
 	if result.exitCode != 0 {
 		t.Fatalf("verify pinned OpenClaw default UID and private volume: %s", result.stderr)

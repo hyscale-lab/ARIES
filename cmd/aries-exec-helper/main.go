@@ -167,6 +167,16 @@ func runTrustedFileOperationWithInput(args []string, input io.Reader) error {
 			return errors.New("trusted alias and target are not the same directory")
 		}
 		return nil
+	case len(args) == 3 && args[0] == "--verify-workspace":
+		workdir, err := cleanAbsolutePath(args[1])
+		if err != nil {
+			return err
+		}
+		workspace, err := cleanAbsolutePath(args[2])
+		if err != nil {
+			return err
+		}
+		return verifyWorkspaceIdentity(workdir, workspace)
 	case len(args) == 4 && args[0] == "--recover-workspace":
 		workdir, err := cleanAbsolutePath(args[1])
 		if err != nil {
@@ -227,6 +237,10 @@ func recoverWorkspace(workdir, workspaceRoot, runtimeID string, ownerToken []byt
 			relinkErr := os.Symlink(workspace, workdir)
 			return errors.Join(fmt.Errorf("restore task workdir from workspace: %w", err), wrapRecoveryError("restore workspace alias after rename failure", relinkErr))
 		}
+	case recoveryReverseAliased:
+		if err := os.Remove(workspace); err != nil {
+			return fmt.Errorf("remove trusted reverse workspace alias: %w", err)
+		}
 	}
 
 	if err := removeExactEmptyDirectory(runtimeRoot); err != nil {
@@ -259,6 +273,7 @@ const (
 	recoveryUnchanged recoveryState = iota
 	recoveryRenamed
 	recoveryAliased
+	recoveryReverseAliased
 )
 
 func inspectOwnedRecoveryState(workdir, workspaceRoot, runtimeID string) (recoveryState, error) {
@@ -286,8 +301,8 @@ func inspectOwnedRecoveryState(workdir, workspaceRoot, runtimeID string) (recove
 			if entry.Name() != "workspace" {
 				return 0, fmt.Errorf("foreign entry %q exists in runtime root", entry.Name())
 			}
-			if entry.Type()&os.ModeSymlink != 0 || !entry.IsDir() {
-				return 0, errors.New("runtime workspace is not one real directory")
+			if entry.Type()&os.ModeSymlink == 0 && !entry.IsDir() {
+				return 0, errors.New("runtime workspace is neither a directory nor a symbolic link")
 			}
 		}
 	}
@@ -316,9 +331,49 @@ func inspectOwnedRecoveryState(workdir, workspaceRoot, runtimeID string) (recove
 			return 0, errors.New("trusted workspace alias does not resolve to the exact workspace")
 		}
 		return recoveryAliased, nil
+	case !workMissing && workInfo.IsDir() && workInfo.Mode()&os.ModeSymlink == 0 && !workspaceMissing && workspaceInfo.Mode()&os.ModeSymlink != 0:
+		target, err := os.Readlink(workspace)
+		if err != nil || target != workdir {
+			return 0, errors.New("trusted reverse workspace alias has an unexpected target")
+		}
+		resolvedWorkspace, err := os.Stat(workspace)
+		if err != nil || !resolvedWorkspace.IsDir() || !os.SameFile(resolvedWorkspace, workInfo) {
+			return 0, errors.New("trusted reverse workspace alias does not resolve to the exact workdir")
+		}
+		return recoveryReverseAliased, nil
 	default:
 		return 0, errors.New("trusted workspace state is ambiguous or foreign")
 	}
+}
+
+func verifyWorkspaceIdentity(workdir, workspace string) error {
+	workInfo, workErr := os.Lstat(workdir)
+	workspaceInfo, workspaceErr := os.Lstat(workspace)
+	if workErr != nil || workspaceErr != nil {
+		return errors.New("trusted workspace identity path is missing")
+	}
+	workLink := workInfo.Mode()&os.ModeSymlink != 0
+	workspaceLink := workspaceInfo.Mode()&os.ModeSymlink != 0
+	if workLink == workspaceLink {
+		return errors.New("trusted workspace identity requires exactly one symbolic link")
+	}
+	alias, target := workdir, workspace
+	if workspaceLink {
+		alias, target = workspace, workdir
+	}
+	linked, err := os.Readlink(alias)
+	if err != nil || linked != target {
+		return errors.New("trusted workspace alias has an unexpected target")
+	}
+	resolvedAlias, err := os.Stat(alias)
+	if err != nil || !resolvedAlias.IsDir() {
+		return errors.New("trusted workspace alias does not resolve to a directory")
+	}
+	resolvedTarget, err := os.Stat(target)
+	if err != nil || !resolvedTarget.IsDir() || !os.SameFile(resolvedAlias, resolvedTarget) {
+		return errors.New("trusted workdir and workspace are not the same directory")
+	}
+	return nil
 }
 
 func readWorkspaceOwnerToken(input io.Reader) ([]byte, error) {

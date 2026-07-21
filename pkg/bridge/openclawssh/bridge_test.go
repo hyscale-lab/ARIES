@@ -194,7 +194,7 @@ func TestBridgeLifecycleReturnsPrivateEndpointAndRevokesConcurrently(t *testing.
 	if sandbox.restarts.Load() != 1 {
 		t.Fatalf("sandbox restarts = %d, want 1", sandbox.restarts.Load())
 	}
-	if got := strings.Join(sandbox.commandModes(), ","); got != "prepare,spawn,--verify-alias,--remove-file" {
+	if got := strings.Join(sandbox.commandModes(), ","); got != "prepare,spawn,--verify-workspace,--remove-file" {
 		t.Fatalf("command modes = %q", got)
 	}
 }

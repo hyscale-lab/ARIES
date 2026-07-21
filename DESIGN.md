@@ -1,6 +1,6 @@
 # ARIES Design
 
-Status: **implemented through M4, pending milestone review and commit**. The RALPLAN-DR Architect and sequential
+Status: **implemented through M5, pending milestone review and commit**. The RALPLAN-DR Architect and sequential
 Critic approved the source draft without blockers. M0 then confirmed the
 pinned runtime assumptions below; later milestones must return to planning if
 one of these locked contracts changes.
@@ -157,10 +157,12 @@ q(value) := single-quoted value using only the canonical embedded-quote escape
 The server decodes tokens and invokes the decoded argv directly with a bounded
 context; it never passes the raw SSH request to a permissive outer shell. The
 inner `/bin/sh -c script` is the intentional OpenClaw tool execution inside the
-task sandbox. NULs, malformed quoting, environment names outside `PATH`,
-`HOME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TERM`, `TMPDIR`, and `TZ`,
-noncanonical encodings, other command heads, and all non-exec SSH requests are
-rejected. Password and keyboard-interactive authentication, PTY, forwarding,
+task sandbox. NULs, malformed quoting, and environment names outside `PATH`,
+`HOME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TERM`, `TMPDIR`, and `TZ` are rejected,
+except for the reserved exact assignment `OPENCLAW_SHELL=exec`. When present,
+that assignment must be final and unique. Noncanonical
+encodings, other command heads, and all non-exec SSH requests are rejected.
+Password and keyboard-interactive authentication, PTY, forwarding,
 agent and X11 forwarding, subsystems, and environment requests are disabled.
 The listener is reachable only on the task-scoped Docker network.
 
@@ -359,15 +361,17 @@ type-asserts only the Docker metadata and lifecycle evidence it needs; no new
 Runner interface or benchmark field was added. `cmd/aries-ssh` implements the
 exact pinned non-TTY argv, and `cmd/aries-ssh-server` implements workspace
 preparation plus the restricted SSH server. Both helpers are static binaries
-built explicitly by the Makefile. The composition root now constructs this
-bridge through its existing explicit type switch and still stops at the
-not-yet-implemented M5 harness.
+built explicitly by the Makefile. The composition root constructs the bridge
+and M5 harness through their existing explicit type switches, then stops before
+M6 Runner execution.
 
 The client accepts exactly `-F CONFIG -T -o RequestTTY=no
 openclaw-sandbox REMOTE_COMMAND`. Its config must be the current user's
-mode-0600 `config` beneath a direct mode-0700 `/tmp/openclaw-ssh-*` directory
-and must contain the pinned directives in their exact upstream order and safe
-values. Identity and known-hosts files are current-user mode 0600. The client
+mode-0600 `config` beneath a direct mode-0700
+`/tmp/openclaw/openclaw-sandbox-ssh-*` directory, or OpenClaw's UID fallback
+root `/tmp/openclaw-UID/openclaw-sandbox-ssh-*`, and must contain the pinned
+directives in their exact upstream order and safe values. Identity and
+known-hosts files are current-user mode 0600. The client
 uses one Ed25519 identity, one exact `[task-sandbox]:2222` Ed25519 host key,
 strict verification, a five-second connect deadline, and the pinned keepalive
 interval/count. It carries stdin, separate stdout/stderr, and the remote exit
@@ -376,11 +380,11 @@ status without interpreting the command.
 The staged client is mode 0555 so pinned OpenClaw's default `node` user
 (UID/GID 1000) can execute its read-only bind mount. Credential source files
 remain host-private mode 0600 and are not bind-mounted into the harness. The
-M5 harness must initialize a private Docker volume as root, copy config,
-identity, and known-host data into it, set its directory to UID 1000 mode 0700
-and files to UID 1000 mode 0600, then mount the volume read-only. The M4 real
-integration test exercises exactly this contract with the pinned unmodified
-OpenClaw image and no user override.
+M5 harness initializes a private Docker volume as root, copies config,
+identity, known-host, and task-local secret data into it, sets its directory to
+UID 1000 mode 0700 and files to UID 1000 mode 0600, then mounts the volume
+read-only. The M4 real integration test exercises the credential half of this
+contract with the pinned unmodified OpenClaw image and no user override.
 
 The server receives no key path or credential bytes in argv, environment, or
 task-writable files. Start uploads the static server, prepares the locked
@@ -405,36 +409,40 @@ over-limit connections are closed. Password, keyboard-interactive, PTY, env, she
 subsystem, signal, agent/X11, direct/forwarded TCP, global forwarding, and all
 other requests are rejected. The exec decoder accepts only OpenClaw's unique
 canonical single-quote encoding of optional allowlisted `env NAME=VALUE`
-assignments followed by `/bin/sh -c script args...`; malformed, duplicate,
-reserved, secret-bearing, NUL-containing, or noncanonical input fails before a
-process starts. The decoded shell argv is started directly. The server owns
+assignments followed by `/bin/sh -c script args...`; the exact reserved
+`OPENCLAW_SHELL=exec` assignment is allowed only once and last. Malformed,
+duplicate, other reserved, secret-bearing, NUL-containing, or noncanonical
+input fails before a process starts. The decoded shell argv is started
+directly. The server owns
 the child stdin pipe so a finished command cannot deadlock on an SSH input
 copier, kills the process group on timeout, and preserves byte streams and exit
 status.
 
 Workspace preparation is generic to `Sandbox.Workdir()`. It requires a real
-directory and an absent, disjoint workspace root, moves that directory to
-`/aries/openclaw/openclaw-ssh-shared-8198076c/workspace`, and creates an
-absolute symlink at the original path. Start verifies both paths resolve to the
-same directory; failed partial Start restores the original directory. Normal
-Stop deliberately retains the alias for evaluation but re-verifies its exact
-target and inode through the read-only M3 exec helper. The same trusted helper
-removes and confirms absence of the uploaded server without trusting a
-task-modifiable `rm`, `test`, or uploaded executable. Existing ancestors must
-be real directories rather than symlinks, and resolved workdir/root paths are
-proved disjoint before creation and again after the rename. Prepare creates and
-validates the workspace-root parent chain separately, then acquires the root
-leaf with one `mkdir`; `EEXIST` is always treated as foreign and is never
+directory and an absent, disjoint workspace root. When the filesystem permits,
+it moves that directory to
+`/aries/openclaw/openclaw-ssh-shared-8198076c/workspace` and creates an
+absolute symlink at the original path. Docker OverlayFS reports `EXDEV` for the
+pinned task workdir because it originates in a lower layer; in that exact case
+the bridge leaves the real workdir in place and creates the reverse absolute
+workspace symlink to it. Start and normal Stop accept only these two proved
+shapes and require both paths to resolve to the same inode. Evaluation
+therefore sees the same writable directory rather than a copy. Failed partial
+Start restores the move-based shape or removes the reverse alias. Normal Stop
+retains the proved alias and re-verifies identity through the read-only M3 exec
+helper. The same trusted helper removes and confirms absence of the uploaded
+server without trusting a task-modifiable `rm`, `test`, or uploaded executable.
+Existing ancestors must be real directories rather than symlinks, and resolved
+workdir/root paths are proved disjoint before creation and after preparation.
+Prepare creates and validates the workspace-root parent chain separately, then
+acquires the root leaf with one `mkdir`; `EEXIST` is always foreign and is never
 adopted. Each attempt has a random 32-byte host token supplied to prepare only
 on stdin, never in argv, environment, endpoint data, logs, or results. Before
-the rename, prepare writes that exact token to a fixed no-follow, exclusive,
-mode-0600 marker inside the newly acquired root. Recovery receives the token on
-stdin and validates the marker plus the complete allowed root, runtime,
-workspace, and workdir shape before its first mutation. It reconciles
-root-created, renamed, and aliased interrupted states, while a missing or
-mismatched marker, a pre-existing root, a symlink, or any foreign entry fails
-closed without deleting it. The marker is removed only as final owned-root
-cleanup proceeds.
+workspace preparation, it writes that exact token to a fixed no-follow,
+exclusive, mode-0600 marker inside the newly acquired root. Recovery receives
+the token on stdin and validates the marker plus the complete allowed root,
+runtime, workspace, and workdir shape before its first mutation. A missing or
+mismatched marker, pre-existing root, symlink, or foreign entry fails closed.
 
 For the pinned `/aries/openclaw` root, prepare may create the otherwise absent
 `/aries` parent. That parent is container-scoped, contains no credential or
@@ -492,6 +500,97 @@ descendant termination, and empty container/network/volume inventories. Detached
 status artifact because this local Docker daemon can retain stale running
 state after its PID exits; no stale daemon state is accepted as completion.
 
+### M5 pinned OpenClaw harness
+
+`pkg/harness/openclaw` owns the pinned upstream container, its task-local
+configuration, one agent turn, and harness artifacts. `New` accepts only the
+digest-qualified M0 image. Each Start has a random attempt nonce on both
+volumes, the root initializer, and the harness. ARIES retains Docker container
+IDs and a tentative name record before issuing every create, then reinspects
+names through a bounded proof budget after every successful or ambiguous
+result. It acquires cleanup ownership only when the immutable ID and exact
+nonce, task, kind, milestone, and managed labels match. Volume names receive
+the same proof. A transient not-found result does not clear tentative state;
+only absence at the end of the bounded proof window may do so. If inspection
+remains unavailable, failed-Start rollback and a
+later `Stop` retain and reinspect its immutable ID when available, falling back
+to its name only when that ID is absent; only exact attempt
+labels promote it to destructive cleanup ownership. A foreign name collision
+is never started, stopped, killed, or removed. Start
+uses a short-lived root initializer to copy the rendered config, SSH material,
+model credential, separate random gateway token, launcher, and run wrapper,
+then changes ownership to UID/GID 1000 with mode-0700 directories and
+mode-0600 private files. The final upstream container runs as its default
+`node` user, has exactly the task network, read-only config and SSH-client
+mounts, writable OpenClaw state, no task bind mount, and no Docker socket.
+ARIES preserves the image's upstream `tini -s --` entrypoint and supplies the
+private launcher plus pinned gateway argv as its command. Inspection rejects
+any different image, user, command, label, network, mount, or model/gateway
+secret in Docker `Config.Env`.
+
+The rendered JSON names one `openai-completions` provider, selects the requested
+model explicitly, and configures the locked shared SSH sandbox. It contains
+only `${API_KEY_ENV}` and `${OPENCLAW_GATEWAY_TOKEN}` references. A private
+launcher reads the two mode-0600 files, exports them only inside the OpenClaw
+process, clears its shell variables, and execs the supplied argv. The gateway
+token is random per harness and distinct from the model credential. Start
+launches the exact upstream gateway command, probes `127.0.0.1:18789/readyz`
+from inside the container, requires HTTP 200, `ready:true`, UID 1000, and the
+exact OS-visible `openclaw` process title before returning.
+
+Run accepts one non-empty instruction exactly once. It executes the exact
+`node openclaw.mjs agent --session-key agent:main:aries-TASK --message
+INSTRUCTION --json --timeout SECONDS` argv through the same private launcher.
+A small wrapper atomically publishes separate stdout, stderr, and numeric exit
+status only after the child finishes. ARIES requires all three files, exit zero,
+top-level OpenClaw status `ok`, and at least one final payload; an embedded
+fallback marker is a harness failure. Cancellation kills the harness before
+returning, and Runner still invokes normal Stop for positive isolation.
+
+Stop is concurrent-safe, idempotent after success, and retryable after partial
+failure. It first verifies the retained ID and nonce, gives upstream `tini` a
+bounded graceful stop, and uses KILL only when graceful termination or process
+proof fails. It then positively proves no process remains, captures bounded
+and secret-redacted gateway logs and available upstream session telemetry, and
+revalidates ownership immediately before removing the container and volumes.
+Every absence is positively inspected. It does not remove a stopped container
+until artifact collection succeeds, so a retry can recover logs. Existing
+artifacts are accepted only when their mode-0600 contents match byte-for-byte;
+a conflicting file fails closed. Failed Start rollback retries within its
+bounded cleanup budget. If positive cleanup remains unavailable, `Manager`
+retains the entire session ownership record and secrets so a later `Stop` can
+finish; it never discards ownership while resources may remain.
+`HarnessResult.LogPaths` names stable `agent.json`, `agent.stderr`,
+`gateway.log`, and `telemetry.index.json` artifacts. The index lists any
+preserved files beneath the private `telemetry/` directory.
+
+The claim-bearing integration test uses the real pinned TB2 `fix-git` task,
+M3 Docker sandbox, M4 SSH bridge, and unmodified pinned OpenClaw image. Its
+separate deterministic model container has a unique name, ID, and attempt
+nonce, only one private evidence bind, and the task network: it has no task
+filesystem and no Docker socket. Its helper also retains tentative state as
+soon as create is issued, retries errors and not-found responses through its
+bounded ownership window, and returns any
+unresolved or owned record when internal cleanup fails so `t.Cleanup` can
+retry. The test never pre-deletes a fixed name and removes the fake only after
+exact ID, name, and label proof. It hashes the
+bearer token, rejects unexpected request structure and tool-result chains, and
+advances only through status/reflog inspection, dynamic lost-commit inspection,
+merge, verification, and a terminal response. After terminal evidence is
+flushed, the host gracefully stops the fake and requires Docker Engine
+reinspection to report `Running=false`, PID zero, and exit code zero. A daemon
+stop failure may use exact prevalidated host-PID absence only as an intermediate
+fallback; stopped-state reinspection remains mandatory. The merge supplies
+identity only on that command and never injects tests. After OpenClaw and the
+bridge stop, the test uses the direct sandbox capability to prove the dynamic
+candidate is an ancestor of `HEAD`, the worktree is clean, state changed, and
+`/tests` plus `/root/tests` are absent. It persists a redacted model/tool
+transcript and before/after Git/filesystem delta in an ignored, private,
+uniquely named `.cache/integration/m5/` run, scans that tree for the model
+credential and non-private modes, stops every component, and requires empty
+ARIES-labeled container, volume, and network inventories. No model API or task
+shortcut is used.
+
 ## Exact lifecycle and evaluation isolation
 
 For each task:
@@ -521,14 +620,20 @@ rollback is owned by the component that partially acquired the resource.
 
 ## DeepSeek secret flow
 
-The experiment stores only `api_key_env: "DEEPSEEK_API_KEY"`. For an explicitly
-requested bounded live run, a host loader reads the user-provided, ignored
-`DEEPSEEK_API.key` once, rejects empty, oversized, NUL-containing, or multiline
-content, removes one terminal newline, and passes the value only as
-`DEEPSEEK_API_KEY` in the OpenClaw harness container runtime environment via the
-Docker API. It never appears in argv, rendered config, another host file, task
-sandbox or evaluator environment, logs, results, telemetry, or tracked content.
-The harness container is positively confirmed removed afterward.
+The experiment stores only `api_key_env: "DEEPSEEK_API_KEY"`. M5 reads the
+named host environment variable, validates its bounded single-line value, and
+copies it through a private stdin tar stream into a task-local UID-1000
+mode-0600 volume file. The rendered config retains only the variable reference;
+the private launcher exports the value inside the OpenClaw process. The value
+never enters Docker `Config.Env`, command arguments, task sandbox or evaluator
+environment, redacted logs, results, telemetry, or tracked content. Terminal
+rollback and successful Stop explicitly zero the host byte slice, and Stop
+positively removes the harness container and private volumes.
+
+M7 will add the explicitly requested host loader that reads the user-provided,
+ignored `DEEPSEEK_API.key` once, rejects empty, oversized, NUL-containing, or
+multiline content, removes one terminal newline, and supplies only the named
+host environment value before constructing the M5 harness request.
 
 A missing or invalid file, failed bounded provider preflight, or unavailable
 provider records a finite skip reason and performs no unbounded retries. Canary,

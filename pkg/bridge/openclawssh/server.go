@@ -498,6 +498,10 @@ func runRemoteProcess(ctx context.Context, remote remoteCommand, workspace strin
 }
 
 func prepareWorkspace(workdir, workspaceRoot, runtimeID string, ownerToken []byte) error {
+	return prepareWorkspaceWithRename(workdir, workspaceRoot, runtimeID, ownerToken, os.Rename)
+}
+
+func prepareWorkspaceWithRename(workdir, workspaceRoot, runtimeID string, ownerToken []byte, rename func(string, string) error) error {
 	workspace, runtimeRoot, err := validateWorkspacePaths(workdir, workspaceRoot, runtimeID)
 	if err != nil {
 		return err
@@ -526,7 +530,15 @@ func prepareWorkspace(workdir, workspaceRoot, runtimeID string, ownerToken []byt
 	if err := os.Mkdir(runtimeRoot, 0o700); err != nil {
 		return fmt.Errorf("create OpenClaw runtime root: %w", err)
 	}
-	if err := os.Rename(workdir, workspace); err != nil {
+	if err := rename(workdir, workspace); errors.Is(err, syscall.EXDEV) {
+		if err := os.Symlink(workdir, workspace); err != nil {
+			return fmt.Errorf("alias cross-device task workdir into OpenClaw runtime: %w", err)
+		}
+		if err := verifyWorkspaceIdentity(workdir, workspace); err != nil {
+			return err
+		}
+		return nil
+	} else if err != nil {
 		return fmt.Errorf("move task workdir into OpenClaw runtime: %w", err)
 	}
 	if err := validateWorkspaceContainment(workdir, workspaceRoot, false); err != nil {
@@ -535,7 +547,7 @@ func prepareWorkspace(workdir, workspaceRoot, runtimeID string, ownerToken []byt
 	if err := os.Symlink(workspace, workdir); err != nil {
 		return fmt.Errorf("alias original task workdir: %w", err)
 	}
-	if err := verifyWorkspaceAlias(workdir, workspace); err != nil {
+	if err := verifyWorkspaceIdentity(workdir, workspace); err != nil {
 		return err
 	}
 	return nil
@@ -696,6 +708,36 @@ func verifyWorkspaceAlias(workdir, workspace string) error {
 	}
 	if !originalInfo.IsDir() || !os.SameFile(originalInfo, workspaceInfo) {
 		return errors.New("original workdir and runtime workspace are not the same directory")
+	}
+	return nil
+}
+
+func verifyWorkspaceIdentity(workdir, workspace string) error {
+	workInfo, workErr := os.Lstat(workdir)
+	workspaceInfo, workspaceErr := os.Lstat(workspace)
+	if workErr != nil || workspaceErr != nil {
+		return errors.New("OpenClaw workspace identity path is missing")
+	}
+	workLink := workInfo.Mode()&os.ModeSymlink != 0
+	workspaceLink := workspaceInfo.Mode()&os.ModeSymlink != 0
+	if workLink == workspaceLink {
+		return errors.New("OpenClaw workspace identity requires exactly one symbolic link")
+	}
+	alias, target := workdir, workspace
+	if workspaceLink {
+		alias, target = workspace, workdir
+	}
+	linked, err := os.Readlink(alias)
+	if err != nil || linked != target {
+		return errors.New("OpenClaw workspace alias has an unexpected target")
+	}
+	resolvedAlias, err := os.Stat(alias)
+	if err != nil || !resolvedAlias.IsDir() {
+		return errors.New("OpenClaw workspace alias does not resolve to a directory")
+	}
+	resolvedTarget, err := os.Stat(target)
+	if err != nil || !resolvedTarget.IsDir() || !os.SameFile(resolvedAlias, resolvedTarget) {
+		return errors.New("OpenClaw and task workspaces are not the same directory")
 	}
 	return nil
 }
