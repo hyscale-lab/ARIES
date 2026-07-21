@@ -1,6 +1,6 @@
 # ARIES Design
 
-Status: **implemented through M1**. The RALPLAN-DR Architect and sequential
+Status: **implemented through M2**. The RALPLAN-DR Architect and sequential
 Critic approved the source draft without blockers. M0 then confirmed the
 pinned runtime assumptions below; later milestones must return to planning if
 one of these locked contracts changes.
@@ -236,6 +236,40 @@ retains no lifecycle state across repeated `Run` calls. It does not claim that
 generic interfaces make `Stop` implementations race-safe or idempotent; those
 are concrete, integration-tested obligations for the Docker sandbox, SSH
 bridge, and OpenClaw harness in M3-M5.
+
+### M2 Terminal-Bench adapter
+
+`pkg/benchmark/terminalbench` supports only `fix-git` at the pinned TB2 commit.
+The setup command creates a shallow detached checkout under the ignored
+`.cache/terminal-bench-2` directory, verifies `HEAD` exactly, is idempotent for
+the correct revision, and refuses to alter an existing wrong revision. The
+runtime adapter repeats that revision check before discovery.
+
+The adapter strictly decodes the real task TOML, rejects unknown keys and the
+execution-critical capabilities not implemented by the MVP, verifies the final
+Dockerfile workdir, and translates the declared image tag to the locked digest.
+Only the stable ID, instruction, and generic environment leave the package.
+Verifier paths, files, timeout, environment, SHA-256 digests, and stable file
+metadata stay in a private table keyed by task ID; solution content is never
+read or exposed. Evaluation reverifies the clean dataset revision and rejects a
+verifier file that became a symlink, nonregular file, replacement, or mutation.
+
+Evaluation uses only the live `runner.Sandbox` capability. It first removes the
+fixed sandbox-owned `/tests` and `/logs/verifier` paths, recreates clean
+directories, then uploads only the two privately enumerated regular files to
+exact destinations. It runs the pinned `/tests/test.sh` command with its own
+timeout and environment and downloads fresh CTRF and authoritative reward
+alongside captured stdout and stderr. Host artifact paths are cleared before
+collection, so stale or symlink-preseeded sandbox state cannot supply a result.
+Reward `1` is success, reward `0` is a valid failed evaluation, and missing or
+malformed reward is an evaluator error. Process exit alone is never treated as
+the score.
+The M2 tests use fakes, so unit checks require neither Docker nor a model API;
+the integration-tagged checkout test reads the real ignored pin when present.
+
+Go's standard library has no TOML decoder. M2 therefore adds only
+`github.com/BurntSushi/toml` v1.4.0 (MIT) for strict typed decoding;
+there is no Harbor runtime dependency.
 
 ## Exact lifecycle and evaluation isolation
 

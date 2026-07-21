@@ -47,15 +47,16 @@ documentation, cleanup, and identifiable ARIES-only commit are complete.
 
 ## M2 — Pinned Terminal-Bench 2 adapter
 
-- [ ] Clone only commit `2fd12b88aafdd04a52c298e3940bcb189f9766d6`
+- [x] Clone only commit `2fd12b88aafdd04a52c298e3940bcb189f9766d6`
   into `.cache/terminal-bench-2` and verify the revision.
-- [ ] Parse the real `fix-git` task into generic `Task` and `Environment`; pin
+- [x] Parse the real `fix-git` task into generic `Task` and `Environment`; pin
   its image digest and reject unsupported execution-critical fields.
-- [ ] Keep verifier, tests, and solution private; inject them only after both
-  isolation gates pass.
-- [ ] Parse verifier output and require successful reward exactly `1`; retain
+- [x] Keep verifier, tests, digests, stable file metadata, and solution private;
+  after both isolation gates pass, clear fixed evaluator paths and inject only
+  revalidated enumerated verifier files.
+- [x] Parse verifier output and require successful reward exactly `1`; retain
   stdout, stderr, CTRF, and reward artifacts.
-- [ ] Commit `feat(terminalbench): load pinned fix-git task`.
+- [x] Commit `feat(terminalbench): load pinned fix-git task`.
 
 ## M3 — Local Docker sandbox
 

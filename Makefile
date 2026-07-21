@@ -1,6 +1,7 @@
-.PHONY: build test test-race lint integration
+.PHONY: build test test-race lint integration setup-terminalbench
 
 export GOCACHE ?= $(CURDIR)/.cache/go-build
+export GOMODCACHE ?= $(CURDIR)/.cache/go-mod
 
 build:
 	mkdir -p bin
@@ -18,3 +19,6 @@ lint:
 
 integration:
 	go test -tags=integration ./...
+
+setup-terminalbench:
+	go run ./cmd/aries setup terminalbench2

@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 
+	"github.com/hyscale-lab/aries/pkg/benchmark/terminalbench"
 	"github.com/hyscale-lab/aries/pkg/config"
 )
 
@@ -17,8 +19,11 @@ func main() {
 }
 
 func run(args []string) error {
+	if len(args) == 2 && args[0] == "setup" {
+		return setup(context.Background(), args[1])
+	}
 	if len(args) != 1 {
-		return errors.New("usage: aries EXPERIMENT.json")
+		return errors.New("usage: aries EXPERIMENT.json | aries setup terminalbench2")
 	}
 	cfg, err := config.Load(args[0])
 	if err != nil {
@@ -30,7 +35,13 @@ func run(args []string) error {
 func buildExperiment(cfg config.Config) error {
 	switch cfg.Benchmark.Type {
 	case "terminalbench2":
-		// Wired when the concrete M2 adapter exists.
+		if _, err := terminalbench.New(terminalbench.Options{
+			Root:      cfg.Benchmark.Root,
+			TaskIDs:   cfg.Benchmark.Tasks,
+			OutputDir: cfg.OutputDir,
+		}); err != nil {
+			return fmt.Errorf("construct terminalbench2 benchmark: %w", err)
+		}
 	default:
 		return fmt.Errorf("unsupported benchmark type %q", cfg.Benchmark.Type)
 	}
@@ -52,5 +63,17 @@ func buildExperiment(cfg config.Config) error {
 	default:
 		return fmt.Errorf("unsupported bridge type %q", cfg.Bridge.Type)
 	}
-	return errors.New("experiment types are valid, but concrete M2-M5 components are not implemented yet")
+	return errors.New("benchmark is valid, but concrete M3-M5 components are not implemented yet")
+}
+
+func setup(ctx context.Context, component string) error {
+	switch component {
+	case "terminalbench2":
+		if err := terminalbench.Setup(ctx, terminalbench.DefaultRoot); err != nil {
+			return fmt.Errorf("setup terminalbench2: %w", err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported setup component %q", component)
+	}
 }
