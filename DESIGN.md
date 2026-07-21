@@ -1,6 +1,6 @@
 # ARIES Design
 
-Status: **accepted M0 baseline**. The RALPLAN-DR Architect and sequential
+Status: **implemented through M1**. The RALPLAN-DR Architect and sequential
 Critic approved the source draft without blockers. M0 then confirmed the
 pinned runtime assumptions below; later milestones must return to planning if
 one of these locked contracts changes.
@@ -207,6 +207,35 @@ starts `monitor.Recorder` before a fresh `Runner.Run`, the recorder discovers
 run-labeled containers without controlling them, and the root stops it after
 Runner cleanup using the same bounded cleanup policy. Observer failure is a
 separate result and never starts, stops, retries, or scores a task.
+
+### M1 implementation refinements
+
+M1 keeps `Sandbox` as the capability returned by `ToolSandbox`, so the Runner
+still substitutes exactly four roles. `ToolEndpoint` carries protocol,
+address, and credential-file paths but never credential bytes. The experiment
+loader has one visible default, `output_dir = "runs"`, rejects unknown fields
+at every struct level, and rejects trailing JSON values. Known component types
+remain explicit switches in `cmd/aries`; the CLI fails clearly until their
+concrete milestone packages exist.
+
+The generic interfaces deliberately use a nil `Stop` error as the component's
+positive termination or revocation confirmation. A concrete M3-M5 `Stop` may
+return nil only after the stronger Docker and SSH checks locked above. If a
+gate fails, the Runner records `blocked_isolation` and never calls `Evaluate`,
+even when a later cleanup retry succeeds. `Start` failures are
+self-rolled back by the component and receive no Runner `Stop` call.
+
+Isolation calls and post-evaluation cleanup each receive a fresh bounded
+context derived with `context.WithoutCancel`; evaluator runtime therefore does
+not consume the sandbox cleanup budget. Stops within one phase share its
+deadline, bounding the phase as a whole. `errors.Join` retains harness,
+isolation, evaluation, and cleanup causes while the result keeps those outcomes
+separate. The M1 observer result is explicitly `not_enabled`; monitoring still
+does not participate in Runner lifecycle control. M1 proves that the Runner
+retains no lifecycle state across repeated `Run` calls. It does not claim that
+generic interfaces make `Stop` implementations race-safe or idempotent; those
+are concrete, integration-tested obligations for the Docker sandbox, SSH
+bridge, and OpenClaw harness in M3-M5.
 
 ## Exact lifecycle and evaluation isolation
 

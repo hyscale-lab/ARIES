@@ -1,0 +1,24 @@
+{
+  "name": "openclaw-tb2-fix-git-deepseek",
+  "benchmark": {
+    "type": "terminalbench2",
+    "root": ".cache/terminal-bench-2",
+    "tasks": ["fix-git"]
+  },
+  "harness": {
+    "type": "openclaw",
+    "image": "ghcr.io/openclaw/openclaw:2026.5.26@sha256:ae7ff536446f1bbb57ea51b9b21097d8f299d30d683dcd72644973bc0522f3b3"
+  },
+  "sandbox": {
+    "type": "docker"
+  },
+  "bridge": {
+    "type": "openclaw-ssh"
+  },
+  "model": {
+    "base_url": "https://api.deepseek.com",
+    "model": "deepseek-v4-flash",
+    "api_key_env": "DEEPSEEK_API_KEY"
+  },
+  "output_dir": "runs"
+}

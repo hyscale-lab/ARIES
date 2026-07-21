@@ -28,20 +28,22 @@ documentation, cleanup, and identifiable ARIES-only commit are complete.
 
 ## M1 — Go skeleton, config, results, and core Runner
 
-- [ ] Initialize `github.com/hyscale-lab/aries`, requested layout, Makefile, and
+- [x] Initialize `github.com/hyscale-lab/aries`, requested layout, Makefile, and
   strict one-file JSON config with explicit switches.
-- [ ] Add direct core data and exactly four main Runner interfaces; keep
+- [x] Add direct core data and exactly four main Runner interfaces; keep
   `Sandbox` a returned capability.
-- [ ] Implement exact task lifecycle and separate harness, isolation,
+- [x] Implement exact task lifecycle and separate harness, isolation,
   evaluation, observer, and cleanup outcomes.
-- [ ] Make every failed `Start` roll back partial acquisition before returning.
+- [x] Make every failed `Start` roll back partial acquisition before returning.
   Use a bounded non-cancelled cleanup context and join primary plus cleanup
   errors while preserving the primary error identity.
-- [ ] Positively verify harness termination and bridge revocation before any
+- [x] Positively verify harness termination and bridge revocation before any
   evaluator injection; otherwise record `blocked_isolation` and clean sandbox.
-- [ ] Unit-test ordering, all failure and cancellation cut points, partial Start,
-  cleanup timeout, joined errors, idempotence, and result aggregation.
-- [ ] Commit `feat(core): add task runner contracts`.
+- [x] Unit-test ordering, real cancellation at every lifecycle cut point,
+  partial Start, cleanup timeout, joined errors, repeated Runner runs, and
+  result aggregation. Race-safe idempotent concrete `Stop` methods remain
+  claim-bearing M3-M5 obligations.
+- [x] Commit `feat(core): add task runner contracts`.
 
 ## M2 — Pinned Terminal-Bench 2 adapter
 

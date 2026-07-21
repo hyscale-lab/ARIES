@@ -33,6 +33,7 @@ go.work.sum
 runs/
 .aries/
 DEEPSEEK_API.key
+/bin/
 
 # Editor/IDE
 # .idea/
