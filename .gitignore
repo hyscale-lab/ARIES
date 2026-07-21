@@ -27,6 +27,13 @@ go.work.sum
 # env file
 .env
 
+# ARIES-local inputs and generated state
+.omx/
+.cache/
+runs/
+.aries/
+DEEPSEEK_API.key
+
 # Editor/IDE
 # .idea/
 # .vscode/
