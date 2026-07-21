@@ -1,6 +1,6 @@
 # ARIES Design
 
-Status: **implemented through M5, pending milestone review and commit**. The RALPLAN-DR Architect and sequential
+Status: **implemented and approved through M6; the M6 commit is pending**. The RALPLAN-DR Architect and sequential
 Critic approved the source draft without blockers. M0 then confirmed the
 pinned runtime assumptions below; later milestones must return to planning if
 one of these locked contracts changes.
@@ -108,7 +108,7 @@ agents: {
   defaults: {
     sandbox: {
       mode: "all",
-      scope: "session",
+      scope: "shared",
       backend: "ssh",
       workspaceAccess: "none",
       ssh: {
@@ -126,7 +126,7 @@ agents: {
 ```
 
 No inline identity or known-host data is rendered. The bridge pre-creates the
-pinned upstream session runtime path and aliases its computed `workspace`
+pinned upstream shared runtime path and aliases its computed `workspace`
 directory to `Task.Environment.Workdir`. OpenClaw therefore edits the same live
 filesystem later inspected by the evaluator without clearing or copying it.
 The harness uses a fixed task session key, and M0 locks the pinned runtime-ID
@@ -362,8 +362,9 @@ Runner interface or benchmark field was added. `cmd/aries-ssh` implements the
 exact pinned non-TTY argv, and `cmd/aries-ssh-server` implements workspace
 preparation plus the restricted SSH server. Both helpers are static binaries
 built explicitly by the Makefile. The composition root constructs the bridge
-and M5 harness through their existing explicit type switches, then stops before
-M6 Runner execution.
+and harness through their existing explicit type switches, then executes the
+full M6 Runner lifecycle, including independent benchmark evaluation after
+positive harness and bridge isolation.
 
 The client accepts exactly `-F CONFIG -T -o RequestTTY=no
 openclaw-sandbox REMOTE_COMMAND`. Its config must be the current user's
@@ -564,32 +565,57 @@ finish; it never discards ownership while resources may remain.
 `gateway.log`, and `telemetry.index.json` artifacts. The index lists any
 preserved files beneath the private `telemetry/` directory.
 
-The claim-bearing integration test uses the real pinned TB2 `fix-git` task,
-M3 Docker sandbox, M4 SSH bridge, and unmodified pinned OpenClaw image. Its
-separate deterministic model container has a unique name, ID, and attempt
-nonce, only one private evidence bind, and the task network: it has no task
-filesystem and no Docker socket. Its helper also retains tentative state as
-soon as create is issued, retries errors and not-found responses through its
-bounded ownership window, and returns any
-unresolved or owned record when internal cleanup fails so `t.Cleanup` can
-retry. The test never pre-deletes a fixed name and removes the fake only after
-exact ID, name, and label proof. It hashes the
-bearer token, rejects unexpected request structure and tool-result chains, and
-advances only through status/reflog inspection, dynamic lost-commit inspection,
-merge, verification, and a terminal response. After terminal evidence is
-flushed, the host gracefully stops the fake and requires Docker Engine
-reinspection to report `Running=false`, PID zero, and exit code zero. A daemon
-stop failure may use exact prevalidated host-PID absence only as an intermediate
-fallback; stopped-state reinspection remains mandatory. The merge supplies
-identity only on that command and never injects tests. After OpenClaw and the
-bridge stop, the test uses the direct sandbox capability to prove the dynamic
-candidate is an ancestor of `HEAD`, the worktree is clean, state changed, and
-`/tests` plus `/root/tests` are absent. It persists a redacted model/tool
-transcript and before/after Git/filesystem delta in an ignored, private,
-uniquely named `.cache/integration/m5/` run, scans that tree for the model
-credential and non-private modes, stops every component, and requires empty
-ARIES-labeled container, volume, and network inventories. No model API or task
-shortcut is used.
+The M5 harness design is now exercised by the single M6 Runner oracle. That
+oracle preserves the real pinned TB2 task, M3 sandbox, M4 bridge, unmodified
+OpenClaw image, and strict deterministic model tool chain. The fake-model
+resource still has a unique name, ID, and attempt nonce, one private evidence
+bind, and only the task network; it has no task filesystem or Docker socket.
+Its bounded ownership proof, exact request/result state machine, dynamic lost
+commit, stopped-state reinspection, and positive removal remain M5 harness
+coverage. The M6 section owns the retained evidence and adds the independent
+evaluator boundary; there is no separate current M5 evidence run.
+
+### M6 independent evaluator and functional oracle
+
+The CLI now constructs the same four concrete Runner roles and executes the
+full lifecycle. Each invocation creates one mode-0700
+`<output_dir>/<run-id>/` directory, using a timestamp plus random suffix, and
+exclusively publishes `run-result.json` there. It prints the same JSON to
+stdout. A Runner error does not erase partial results: ARIES persists and
+prints them when possible, reports the joined error on stderr, and exits
+nonzero. A clean run exits zero. Component construction errors remove an unused
+empty run directory rather than manufacturing a result.
+
+Terminal-Bench evaluation has its own command, timeout, environment, stdout,
+stderr, CTRF, and reward artifacts. It accepts only exact reward bytes `0` or
+`1`, optionally followed by one newline. A successful `fix-git` evaluation
+requires reward `1` plus strict pytest 8.4.1 CTRF with exactly two passed
+records: `test_about_file` and `test_layout_file`. Unknown fields, missing or
+duplicate cases, any other case or status, inconsistent summaries, malformed
+timings, or malformed reward are evaluator failures.
+
+`TestRunnerRealFixGitOracle` is the single deterministic M6 functional oracle.
+It composes the real pinned benchmark, Docker sandbox, SSH bridge, unmodified
+OpenClaw harness, and a strict fake OpenAI-compatible model. Before evaluation
+it positively proves verifier paths and canaries absent at `pre_harness`,
+`pre_run`, `post_run`, and `immediately_pre_evaluate`; proves the fake has no
+task filesystem or Docker socket; stops and removes the harness and fake; and
+revokes the bridge. Only then may the benchmark inject the verifier into the
+still-live sandbox. The test proves the agent-produced Git state directly,
+runs the evaluator, removes the sandbox, and requires empty ARIES container,
+volume, and network inventories. It requires Docker and pinned local images but
+no paid model API.
+
+Each successful oracle creates one ignored private directory at
+`.cache/integration/m6/fix-git-<random>/`. It writes `manifest.json`
+exclusively, changes it to mode 0400, reads it back, and validates schema
+`aries.m6.oracle.v1`. The manifest records exact pins and separated outcomes;
+portable semantic artifact roles and root-relative paths for harness,
+evaluation, and `run_result`; SHA-256 plus byte size for every retained
+artifact; exact verifier reward bytes, cases, and source hashes; observer
+status `not_enabled` with an explicit empty sample list; and explicit empty
+container, volume, and network inventories. The manifest links but does not
+hash itself. M7 may read this oracle but must not mutate it.
 
 ## Exact lifecycle and evaluation isolation
 

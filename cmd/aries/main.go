@@ -1,12 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/hyscale-lab/aries/pkg/benchmark/terminalbench"
 	"github.com/hyscale-lab/aries/pkg/bridge/openclawssh"
@@ -17,6 +23,8 @@ import (
 	dockersandbox "github.com/hyscale-lab/aries/pkg/sandbox/docker"
 )
 
+const runResultName = "run-result.json"
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		slog.Error("aries failed", "error", err)
@@ -25,8 +33,12 @@ func main() {
 }
 
 func run(args []string) error {
+	return runCommand(context.Background(), args, os.Stdout)
+}
+
+func runCommand(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) == 2 && args[0] == "setup" {
-		return setup(context.Background(), args[1])
+		return setup(ctx, args[1])
 	}
 	if len(args) != 1 {
 		return errors.New("usage: aries EXPERIMENT.json | aries setup terminalbench2")
@@ -35,13 +47,29 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := buildExperiment(cfg); err != nil {
+	runID, err := newRunID(time.Now(), rand.Reader)
+	if err != nil {
+		return fmt.Errorf("generate run ID: %w", err)
+	}
+	outputRoot, err := filepath.Abs(filepath.Join(cfg.OutputDir, runID))
+	if err != nil {
+		return fmt.Errorf("resolve run output root: %w", err)
+	}
+	if err := createRunOutputRoot(outputRoot); err != nil {
+		return fmt.Errorf("create private run output root: %w", err)
+	}
+	experiment, err := buildExperiment(cfg, runID, outputRoot)
+	if err != nil {
+		removeErr := os.Remove(outputRoot)
+		if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return errors.Join(err, fmt.Errorf("remove unused run output root: %w", removeErr))
+		}
 		return err
 	}
-	return errors.New("the M5 runtime is valid, but M6 end-to-end evaluation execution is not enabled yet")
+	return executeAndRecord(ctx, experiment.Run, outputRoot, stdout)
 }
 
-func buildExperiment(cfg config.Config) (*runner.Runner, error) {
+func buildExperiment(cfg config.Config, runID, outputRoot string) (*runner.Runner, error) {
 	executable, err := os.Executable()
 	if err != nil {
 		return nil, fmt.Errorf("locate ARIES executable: %w", err)
@@ -53,7 +81,7 @@ func buildExperiment(cfg config.Config) (*runner.Runner, error) {
 		benchmark, err = terminalbench.New(terminalbench.Options{
 			Root:      cfg.Benchmark.Root,
 			TaskIDs:   cfg.Benchmark.Tasks,
-			OutputDir: cfg.OutputDir,
+			OutputDir: outputRoot,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("construct terminalbench2 benchmark: %w", err)
@@ -64,7 +92,7 @@ func buildExperiment(cfg config.Config) (*runner.Runner, error) {
 	var harness runner.AgentHarness
 	switch cfg.Harness.Type {
 	case "openclaw":
-		harness, err = openclawharness.New(openclawharness.Options{Image: cfg.Harness.Image, OutputDir: cfg.OutputDir})
+		harness, err = openclawharness.New(openclawharness.Options{Image: cfg.Harness.Image, OutputDir: outputRoot})
 		if err != nil {
 			return nil, fmt.Errorf("construct OpenClaw harness: %w", err)
 		}
@@ -75,7 +103,7 @@ func buildExperiment(cfg config.Config) (*runner.Runner, error) {
 	switch cfg.Sandbox.Type {
 	case "docker":
 		sandbox, err = dockersandbox.New(dockersandbox.Options{
-			OutputDir:      cfg.OutputDir,
+			OutputDir:      outputRoot,
 			ExecHelperPath: filepath.Join(binDir, "aries-exec-helper"),
 		})
 		if err != nil {
@@ -88,7 +116,7 @@ func buildExperiment(cfg config.Config) (*runner.Runner, error) {
 	switch cfg.Bridge.Type {
 	case "openclaw-ssh":
 		bridge, err = openclawssh.New(openclawssh.Options{
-			OutputDir:  cfg.OutputDir,
+			OutputDir:  outputRoot,
 			ClientPath: filepath.Join(binDir, "aries-ssh"),
 			ServerPath: filepath.Join(binDir, "aries-ssh-server"),
 		})
@@ -99,9 +127,98 @@ func buildExperiment(cfg config.Config) (*runner.Runner, error) {
 		return nil, fmt.Errorf("unsupported bridge type %q", cfg.Bridge.Type)
 	}
 	return runner.New(benchmark, harness, sandbox, bridge, runner.Options{
-		Name: cfg.Name, RunID: "composition-check", OutputDir: cfg.OutputDir,
+		Name: cfg.Name, RunID: runID, OutputDir: outputRoot,
 		Model: core.ModelConfig{BaseURL: cfg.Model.BaseURL, Model: cfg.Model.Model, APIKeyEnv: cfg.Model.APIKeyEnv},
 	})
+}
+
+func newRunID(now time.Time, random io.Reader) (string, error) {
+	var suffix [12]byte
+	if _, err := io.ReadFull(random, suffix[:]); err != nil {
+		return "", err
+	}
+	return now.UTC().Format("20060102T150405.000000000Z") + "-" + hex.EncodeToString(suffix[:]), nil
+}
+
+func createRunOutputRoot(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return os.Mkdir(path, 0o700)
+}
+
+func executeAndRecord(
+	ctx context.Context,
+	execute func(context.Context) (core.RunResult, error),
+	outputRoot string,
+	stdout io.Writer,
+) error {
+	result, runErr := execute(ctx)
+	content, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return errors.Join(runErr, fmt.Errorf("encode run result: %w", err))
+	}
+	content = append(content, '\n')
+
+	persistErr := persistRunResult(filepath.Join(outputRoot, runResultName), content)
+	_, stdoutErr := io.Copy(stdout, bytes.NewReader(content))
+	if persistErr != nil {
+		persistErr = fmt.Errorf("persist run result: %w", persistErr)
+	}
+	if stdoutErr != nil {
+		stdoutErr = fmt.Errorf("write run result to stdout: %w", stdoutErr)
+	}
+	return errors.Join(runErr, persistErr, stdoutErr)
+}
+
+func persistRunResult(path string, content []byte) error {
+	directory := filepath.Dir(path)
+	info, err := os.Lstat(directory)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("run output root is not a directory")
+	}
+	if info.Mode().Perm() != 0o700 {
+		return fmt.Errorf("run output root permissions are %04o; want 0700", info.Mode().Perm())
+	}
+
+	temporary, err := os.CreateTemp(directory, ".result-*.tmp")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer func() {
+		if temporaryPath != "" {
+			_ = os.Remove(temporaryPath)
+		}
+	}()
+
+	if _, err := temporary.Write(content); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := os.Link(temporaryPath, path); err != nil {
+		return err
+	}
+	if err := os.Remove(temporaryPath); err != nil {
+		return err
+	}
+	temporaryPath = ""
+	directoryFile, err := os.Open(directory)
+	if err != nil {
+		return err
+	}
+	defer directoryFile.Close()
+	return directoryFile.Sync()
 }
 
 func setup(ctx context.Context, component string) error {

@@ -5,28 +5,18 @@ package openclaw
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/hyscale-lab/aries/pkg/benchmark/terminalbench"
-	"github.com/hyscale-lab/aries/pkg/bridge/openclawssh"
-	"github.com/hyscale-lab/aries/pkg/core"
-	dockersandbox "github.com/hyscale-lab/aries/pkg/sandbox/docker"
 )
 
 const fakeModelPrefix = "aries-m5-fake-model-"
@@ -114,196 +104,12 @@ func TestFakeModelOwnershipProofRetriesDelayedVisibility(t *testing.T) {
 	}
 }
 
-func TestOpenClawHarnessRealFixGitToolChain(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
-	defer cancel()
-	datasetRoot := filepath.Join(integrationRepoRoot(t), terminalbench.DefaultRoot)
-	t.Setenv("GIT_CONFIG_COUNT", "1")
-	t.Setenv("GIT_CONFIG_KEY_0", "safe.directory")
-	t.Setenv("GIT_CONFIG_VALUE_0", datasetRoot)
-	if result := integrationDocker(ctx, nil, "info"); result.exitCode != 0 {
-		t.Fatalf("Docker daemon is required: %s", result.stderr)
-	}
-	ensureImage(t, ctx, PinnedImage)
-	assertEmptyM5Inventory(t, ctx)
-	repositoryRoot := integrationRepoRoot(t)
-
-	benchmark, err := terminalbench.New(terminalbench.Options{Root: datasetRoot, TaskIDs: []string{"fix-git"}, OutputDir: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	tasks, err := benchmark.Tasks(ctx)
-	if err != nil || len(tasks) != 1 {
-		t.Fatalf("load pinned fix-git task = %d, %v", len(tasks), err)
-	}
-	task := tasks[0]
-	outputDir := newM5EvidenceDir(t, repositoryRoot)
-	t.Logf("M5 evidence directory: %s", outputDir)
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	sandboxManager, err := dockersandbox.New(dockersandbox.Options{
-		OutputDir: outputDir, ExecHelperPath: requiredHelper(t, "ARIES_EXEC_HELPER"), CleanupTimeout: 30 * time.Second, Logger: logger,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	live, err := sandboxManager.Start(ctx, core.SandboxRequest{RunID: "m5-integration", TaskID: task.ID, Environment: task.Environment})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sandbox := live.(*dockersandbox.Sandbox)
-	bridge, err := openclawssh.New(openclawssh.Options{
-		OutputDir: outputDir, ClientPath: requiredHelper(t, "ARIES_SSH_CLIENT"), ServerPath: requiredHelper(t, "ARIES_SSH_SERVER"),
-		CleanupTimeout: 30 * time.Second, Logger: logger,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	harness, err := New(Options{Image: PinnedImage, OutputDir: outputDir, CleanupTimeout: 30 * time.Second, StartTimeout: 60 * time.Second, AgentTimeout: 3 * time.Minute, Logger: logger})
-	if err != nil {
-		t.Fatal(err)
-	}
-	bridgeStarted, harnessStarted, fakeStarted := false, false, false
-	var fakeModel fakeModelResource
-	t.Cleanup(func() {
-		if harnessStarted {
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 45*time.Second)
-			if err := harness.Stop(cleanupCtx); err != nil {
-				t.Errorf("harness cleanup: %v", err)
-			}
-			cleanupCancel()
-		}
-		if fakeStarted {
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 45*time.Second)
-			if err := removeOwnedFakeModel(cleanupCtx, &fakeModel); err != nil {
-				t.Errorf("fake model cleanup: %v", err)
-			}
-			cleanupCancel()
-		}
-		if bridgeStarted {
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 45*time.Second)
-			if err := bridge.Stop(cleanupCtx); err != nil {
-				t.Errorf("bridge cleanup: %v", err)
-			}
-			cleanupCancel()
-		}
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 45*time.Second)
-		if err := sandbox.Stop(cleanupCtx); err != nil {
-			t.Errorf("sandbox cleanup: %v", err)
-		}
-		assertEmptyM5Inventory(t, cleanupCtx)
-		cleanupCancel()
-	})
-
-	before := sandboxSnapshot(t, ctx, sandbox)
-	endpoint, err := bridge.Start(ctx, sandbox)
-	if err != nil {
-		t.Fatal(err)
-	}
-	bridgeStarted = true
-	apiKey := make([]byte, 24)
-	if _, err := rand.Read(apiKey); err != nil {
-		t.Fatal(err)
-	}
-	apiKeyText := hex.EncodeToString(apiKey)
-	clear(apiKey)
-	apiKeyHash := sha256.Sum256([]byte(apiKeyText))
-	fakeEvidenceDir := filepath.Join(outputDir, "fake-model-evidence")
-	if err := ensurePrivateDirectory(fakeEvidenceDir); err != nil {
-		t.Fatal(err)
-	}
-	fakeStarted = true
-	fakeModel, err = startFakeModel(ctx, endpoint.Network, hex.EncodeToString(apiKeyHash[:]), fakeEvidenceDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("ARIES_M5_FAKE_KEY", apiKeyText)
-	request := core.HarnessRequest{
-		TaskID: task.ID, Endpoint: endpoint, OutputDir: outputDir,
-		Model: core.ModelConfig{BaseURL: "http://fake-model:8080/v1", Model: "aries-deterministic", APIKeyEnv: "ARIES_M5_FAKE_KEY"},
-	}
-	if err := harness.Start(ctx, request); err != nil {
-		t.Fatal(err)
-	}
-	harnessStarted = true
-	result, err := harness.Run(ctx, task.Instruction)
-	if err != nil || result.Status != core.StatusSucceeded || !strings.Contains(result.FinalResponse, "Recovered lost commit") {
-		evidence, stopErr := stopFakeModelAndReadEvidence(ctx, fakeEvidenceDir, &fakeModel)
-		if stopErr == nil {
-			fakeStarted = false
-		}
-		t.Fatalf("OpenClaw result = %#v, %v; fake transcript=%q status=%#v; stop=%v", result, err, evidence.Transcript, evidence.Status, stopErr)
-	}
-	if err := harness.Stop(ctx); err != nil {
-		t.Fatal(err)
-	}
-	harnessStarted = false
-	if err := bridge.Stop(ctx); err != nil {
-		t.Fatal(err)
-	}
-	bridgeStarted = false
-
-	evidence, err := stopFakeModelAndReadEvidence(ctx, fakeEvidenceDir, &fakeModel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fakeStarted = false
-	if evidence.Status.Terminal != "complete" || evidence.Status.Step != 5 {
-		t.Fatalf("fake model terminal status = %#v", evidence.Status)
-	}
-	if bytes.Contains(evidence.Transcript, []byte(apiKeyText)) {
-		t.Fatal("fake model persisted the bearer credential")
-	}
-	candidate := candidateFromTranscript(t, evidence.Transcript)
-	after := sandboxSnapshot(t, ctx, sandbox)
-	verification, err := sandbox.Exec(ctx, core.Command{
-		Path: "/bin/sh", Args: []string{"-c", `git merge-base --is-ancestor "$1" HEAD && test -z "$(git status --porcelain)" && test ! -e /tests && test ! -e /root/tests && git log --oneline -5`, "ariesverify", candidate},
-	})
-	if err != nil || verification.ExitCode != 0 {
-		t.Fatalf("direct fix-git verification = %#v, %v", verification, err)
-	}
-	if before.Head == after.Head || !strings.Contains(after.Log, candidate[:12]) {
-		t.Fatalf("Git state did not advance to candidate %s: before %#v after %#v", candidate, before, after)
-	}
-
-	evidenceDir := filepath.Join(outputDir, "m5-integration")
-	if err := os.MkdirAll(evidenceDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	transcript := redactBytes(evidence.Transcript, []byte(apiKeyText))
-	if err := os.WriteFile(filepath.Join(evidenceDir, "model-tool-transcript.jsonl"), transcript, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	delta, _ := json.MarshalIndent(map[string]any{"candidate": candidate, "before": before, "after": after, "direct_verification": verification.Stdout}, "", "  ")
-	if err := os.WriteFile(filepath.Join(evidenceDir, "git-filesystem-delta.json"), delta, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := sandbox.Stop(ctx); err != nil {
-		t.Fatal(err)
-	}
-	assertPrivateSecretFreeTree(t, outputDir, apiKeyText)
-	assertEmptyM5Inventory(t, ctx)
-}
-
 type gitSnapshot struct {
 	Head   string `json:"head"`
 	Status string `json:"status"`
 	Reflog string `json:"reflog"`
 	Log    string `json:"log"`
 	Files  string `json:"files"`
-}
-
-func sandboxSnapshot(t *testing.T, ctx context.Context, sandbox *dockersandbox.Sandbox) gitSnapshot {
-	t.Helper()
-	command := `printf '%s\n' ARIES_HEAD; git rev-parse HEAD; printf '%s\n' ARIES_STATUS; git status --short --branch; printf '%s\n' ARIES_REFLOG; git reflog --all --format='%H %gs' -20; printf '%s\n' ARIES_LOG; git log --oneline -10; printf '%s\n' ARIES_FILES; find . -maxdepth 2 -type f -printf '%P %s\n' | sort`
-	result, err := sandbox.Exec(ctx, core.Command{Path: "/bin/sh", Args: []string{"-c", command}})
-	if err != nil || result.ExitCode != 0 {
-		t.Fatalf("snapshot task sandbox = %#v, %v", result, err)
-	}
-	sections := splitEvidence(result.Stdout)
-	return gitSnapshot{
-		Head: strings.TrimSpace(sections["ARIES_HEAD"]), Status: sections["ARIES_STATUS"], Reflog: sections["ARIES_REFLOG"],
-		Log: sections["ARIES_LOG"], Files: sections["ARIES_FILES"],
-	}
 }
 
 func splitEvidence(content string) map[string]string {
@@ -756,6 +562,7 @@ function chain(body,id,command){
 }
 function sse(res,message,finish,onFlushed){
   const id="aries-chat-"+step;
+  record({event:"response",step,finish,has_tool_calls:Array.isArray(message.tool_calls),has_content:typeof message.content==="string"});
   res.writeHead(200,{"content-type":"text/event-stream","cache-control":"no-cache","connection":"close"});
   res.write("data: "+JSON.stringify({id,object:"chat.completion.chunk",created:1,model:"aries-deterministic",choices:[{index:0,delta:message,finish_reason:null}]})+"\n\n");
   res.write("data: "+JSON.stringify({id,object:"chat.completion.chunk",created:1,model:"aries-deterministic",choices:[{index:0,delta:{},finish_reason:finish}]})+"\n\n");
@@ -775,6 +582,7 @@ const server=http.createServer((req,res)=>{
     if(parsed.model!=="aries-deterministic"||parsed.stream!==true)throw new Error("model or stream mismatch");
     const execTool=(parsed.tools||[]).find(x=>x.type==="function"&&x.function&&x.function.name==="exec");
     if(!execTool||!execTool.function.parameters||!JSON.stringify(execTool.function.parameters).includes("command"))throw new Error("exec schema mismatch");
+    record({event:"request",step,model:parsed.model,stream:parsed.stream,message_count:(parsed.messages||[]).length,tool_names:(parsed.tools||[]).map(x=>x.function&&x.function.name||"")});
     if(step===0){call(res,"ariesstatus",statusCommand);step++;return}
     if(step===1){
       const out=chain(parsed,"ariesstatus",statusCommand);
@@ -811,16 +619,6 @@ const server=http.createServer((req,res)=>{
 server.listen(8080,"0.0.0.0",()=>{const tmp=readyPath+".tmp";fs.writeFileSync(tmp,"ready",{encoding:"utf8",mode:0o600});fs.renameSync(tmp,readyPath)});`
 }
 
-func candidateFromTranscript(t *testing.T, content []byte) string {
-	t.Helper()
-	pattern := regexp.MustCompile(`"event":"candidate","hash":"([0-9a-f]{40})"`)
-	match := pattern.FindSubmatch(content)
-	if len(match) != 2 {
-		t.Fatalf("candidate evidence missing from fake transcript: %s", content)
-	}
-	return string(match[1])
-}
-
 func requiredHelper(t *testing.T, name string) string {
 	t.Helper()
 	value := os.Getenv(name)
@@ -850,22 +648,6 @@ func integrationRepoRoot(t *testing.T) string {
 		}
 		current = parent
 	}
-}
-
-func newM5EvidenceDir(t *testing.T, repositoryRoot string) string {
-	t.Helper()
-	root := filepath.Join(repositoryRoot, ".cache", "integration", "m5")
-	if err := ensurePrivateDirectory(root); err != nil {
-		t.Fatal(err)
-	}
-	directory, err := os.MkdirTemp(root, "fix-git-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(directory, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	return directory
 }
 
 func assertPrivateSecretFreeTree(t *testing.T, root, secret string) {
@@ -922,22 +704,5 @@ func ensureImage(t *testing.T, ctx context.Context, image string) {
 	}
 	if result := integrationDocker(ctx, nil, "image", "pull", image); result.exitCode != 0 {
 		t.Fatalf("pull pinned image: %s", result.stderr)
-	}
-}
-
-func assertEmptyM5Inventory(t *testing.T, ctx context.Context) {
-	t.Helper()
-	queries := [][]string{
-		{"container", "ls", "--all", "--quiet", "--filter", "label=aries.milestone=m5"},
-		{"volume", "ls", "--quiet", "--filter", "label=aries.milestone=m5"},
-		{"container", "ls", "--all", "--quiet", "--filter", "label=aries.milestone=m4"},
-		{"container", "ls", "--all", "--quiet", "--filter", "label=aries.milestone=m3"},
-		{"network", "ls", "--quiet", "--filter", "label=aries.milestone=m3"},
-	}
-	for _, query := range queries {
-		result := integrationDocker(ctx, nil, query...)
-		if result.exitCode != 0 || strings.TrimSpace(string(result.stdout)) != "" {
-			t.Fatalf("nonempty Docker inventory %v: exit %d stdout %q stderr %q", query[:2], result.exitCode, result.stdout, result.stderr)
-		}
 	}
 }

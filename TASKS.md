@@ -123,16 +123,16 @@ documentation, cleanup, and identifiable ARIES-only commit are complete.
 
 ## M6 — Independent evaluator and deterministic `fix-git` proof
 
-- [ ] Require confirmed harness termination and bridge revocation, then inject
+- [x] Require confirmed harness termination and bridge revocation, then inject
   the private pinned verifier into the still-live sandbox.
-- [ ] Run evaluator with independent command, timeout, environment, and logs;
+- [x] Run evaluator with independent command, timeout, environment, and logs;
   require reward exactly `1` and both pinned file-hash tests to pass.
-- [ ] Produce one immutable **M6 functional-oracle manifest** linking model and
+- [x] Produce one immutable **M6 functional-oracle manifest** linking model and
   tool transcripts, filesystem delta, verifier output, CTRF, reward, isolation,
   cleanup, and resource inventory, with observer status `not_enabled`.
-- [ ] Prove ordinary harness failure is evaluated only after isolation succeeds;
+- [x] Prove ordinary harness failure is evaluated only after isolation succeeds;
   failed isolation injects nothing and remains a separate outcome.
-- [ ] Commit `feat(eval): verify fix-git independently`; M7 must not mutate the
+- [x] Commit `feat(eval): verify fix-git independently`; M7 must not mutate the
   M6 manifest.
 
 ## M7 — Observer, live-key loader, and monitored release proof

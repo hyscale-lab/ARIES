@@ -188,7 +188,7 @@ func TestEvaluateInjectsTestsOnlyWhenCalledAndRetainsArtifacts(t *testing.T) {
 	benchmark.verifyRevision = false
 	benchmark.details[fixGitID] = details
 	sandbox := &fakeSandbox{preseededPaths: true, preseededSymlinks: true, verifierOutputs: map[string][]byte{
-		filepath.Join(verifierLogPath, "ctrf.json"):  []byte(`{"results":{"summary":{"tests":2}}}`),
+		filepath.Join(verifierLogPath, "ctrf.json"):  []byte(validFixGitCTRF),
 		filepath.Join(verifierLogPath, "reward.txt"): []byte("1\n"),
 	}, commandResult: core.CommandResult{Stdout: "two passed\n", Stderr: "warning\n"}}
 	if len(sandbox.events) != 0 {
@@ -230,10 +230,13 @@ func TestEvaluateInjectsTestsOnlyWhenCalledAndRetainsArtifacts(t *testing.T) {
 	if sandbox.verifierCommand.Path != "/bin/bash" || !reflect.DeepEqual(sandbox.verifierCommand.Args, []string{"/tests/test.sh"}) || sandbox.verifierCommand.Dir != fixGitWorkdir || sandbox.verifierCommand.Timeout != 15*time.Minute {
 		t.Fatalf("verifier command = %#v", sandbox.verifierCommand)
 	}
+	if len(sandbox.verifierCommand.Env) != 0 {
+		t.Fatalf("verifier received unexpected environment: %#v", sandbox.verifierCommand.Env)
+	}
 	if !reflect.DeepEqual(sandbox.commands[0].Args, []string{"-rf", "--", "/tests", "/logs/verifier"}) || !reflect.DeepEqual(sandbox.commands[1].Args, []string{"-p", "--", "/tests", "/logs/verifier"}) {
 		t.Fatalf("reset commands = %#v", sandbox.commands[:2])
 	}
-	for index, want := range []string{"two passed\n", "warning\n", `{"results":{"summary":{"tests":2}}}`, "1\n"} {
+	for index, want := range []string{"two passed\n", "warning\n", validFixGitCTRF, "1\n"} {
 		content, err := os.ReadFile(evaluation.LogPaths[index])
 		if err != nil {
 			t.Fatalf("read artifact %d: %v", index, err)
@@ -271,7 +274,7 @@ func TestEvaluateRewardStates(t *testing.T) {
 			}
 			benchmark.verifyRevision = false
 			benchmark.details[fixGitID] = details
-			downloads := map[string][]byte{filepath.Join(verifierLogPath, "ctrf.json"): []byte("{}")}
+			downloads := map[string][]byte{filepath.Join(verifierLogPath, "ctrf.json"): []byte(validFixGitCTRF)}
 			if test.downloadOK {
 				downloads[filepath.Join(verifierLogPath, "reward.txt")] = test.reward
 			}
@@ -288,6 +291,61 @@ func TestEvaluateRewardStates(t *testing.T) {
 				t.Fatalf("Evaluate() error = %v, want %q", err, test.wantErr)
 			}
 		})
+	}
+}
+
+func TestEvaluateDoesNotAcceptRewardOneWithoutValidCTRF(t *testing.T) {
+	root := writeFixture(t)
+	task, details, err := loadTask(root, fixGitID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	benchmark, err := New(Options{Root: root, TaskIDs: []string{fixGitID}, OutputDir: filepath.Join(t.TempDir(), "runs")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	benchmark.verifyRevision = false
+	benchmark.details[fixGitID] = details
+	sandbox := &fakeSandbox{verifierOutputs: map[string][]byte{
+		filepath.Join(verifierLogPath, "ctrf.json"):  []byte(`{"results":{}}`),
+		filepath.Join(verifierLogPath, "reward.txt"): []byte("1\n"),
+	}}
+
+	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox)
+	if err == nil || !strings.Contains(err.Error(), "validate verifier CTRF") {
+		t.Fatalf("Evaluate() error = %v, want invalid CTRF", err)
+	}
+	if evaluation.Status != core.StatusFailed || evaluation.VerifierStatus != core.StatusFailed {
+		t.Fatalf("Evaluation accepted reward without CTRF proof: %#v", evaluation)
+	}
+}
+
+func TestEvaluateRejectsNonzeroVerifierCommand(t *testing.T) {
+	root := writeFixture(t)
+	task, details, err := loadTask(root, fixGitID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	benchmark, err := New(Options{Root: root, TaskIDs: []string{fixGitID}, OutputDir: filepath.Join(t.TempDir(), "runs")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	benchmark.verifyRevision = false
+	benchmark.details[fixGitID] = details
+	sandbox := &fakeSandbox{
+		commandResult: core.CommandResult{ExitCode: 7},
+		verifierOutputs: map[string][]byte{
+			filepath.Join(verifierLogPath, "ctrf.json"):  []byte(validFixGitCTRF),
+			filepath.Join(verifierLogPath, "reward.txt"): []byte("1\n"),
+		},
+	}
+
+	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox)
+	if err == nil || !strings.Contains(err.Error(), "exit code 7") {
+		t.Fatalf("Evaluate() error = %v, want verifier exit code", err)
+	}
+	if evaluation.Status != core.StatusFailed || evaluation.Reward != 0 {
+		t.Fatalf("Evaluation accepted nonzero verifier command: %#v", evaluation)
 	}
 }
 

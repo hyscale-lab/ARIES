@@ -113,6 +113,9 @@ func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner
 	if commandErr != nil {
 		artifactErrors = append(artifactErrors, fmt.Errorf("run verifier: %w", commandErr))
 	}
+	if commandResult.ExitCode != 0 {
+		artifactErrors = append(artifactErrors, fmt.Errorf("run verifier: exit code %d", commandResult.ExitCode))
+	}
 	if len(artifactErrors) != 0 {
 		return finish(errors.Join(artifactErrors...))
 	}
@@ -123,6 +126,9 @@ func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner
 	}
 	evaluation.Score = reward
 	evaluation.Reward = reward
+	if err := validateCTRFFile(ctrfPath); err != nil {
+		return finish(err)
+	}
 	if reward == 1 {
 		evaluation.Status = core.StatusSucceeded
 		evaluation.VerifierStatus = core.StatusSucceeded

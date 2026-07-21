@@ -1,7 +1,7 @@
 # ARIES
 
-ARIES is a small, human-readable Go benchmark runner under construction. Its
-first complete path will run the pinned Terminal-Bench 2 `fix-git` task through
+ARIES is a small, human-readable Go benchmark runner. Its first working path
+runs the pinned Terminal-Bench 2 `fix-git` task through
 an unmodified upstream OpenClaw container, OpenClaw's SSH sandbox backend, one
 local Docker task sandbox, and an evaluator that runs only after harness access
 has been revoked.
@@ -18,14 +18,11 @@ resources, exec, transfers, logs, positive cleanup, and a real-container test.
 M4 adds the restricted OpenClaw SSH bridge, ephemeral credentials, a pinned
 static client, shared-workspace proof, access revocation, and real-container
 isolation tests. M5 adds the pinned upstream OpenClaw harness, private config and
-secret staging, readiness and one-turn execution, redacted artifacts, and a
-real `fix-git` tool-chain test against a strict deterministic fake model. M5 is
-pending review and commit.
-
-The CLI constructs and validates the Terminal-Bench, Docker, SSH bridge, and
-OpenClaw components, then deliberately reports that M6 end-to-end evaluation
-execution is not enabled. It does not substitute mocks or an empty
-implementation.
+secret staging, readiness and one-turn execution, redacted artifacts, and
+strict deterministic fake-model coverage. M6 preserves that upstream OpenClaw
+tool-chain coverage in the single Runner oracle, independently runs the private
+verifier after positive isolation, and records the reviewed functional proof.
+Monitoring and the optional live DeepSeek proof remain M7 work.
 
 - [DESIGN.md](DESIGN.md) records component boundaries, lifecycle ordering,
   evaluation isolation, pinned upstream contracts, secret flow, and M0 runtime
@@ -47,7 +44,7 @@ credentials/configuration, and `DEEPSEEK_API.key` are ignored. `AGENTS.md` and
 requirements. Secret values must never enter experiment JSON, results,
 evaluator environments, logs, telemetry, or tracked files.
 
-## Current commands
+## Build, set up, configure, and run
 
 Go 1.25.0 or newer is required. `make build` writes `aries` and the three
 static runtime helpers `aries-exec-helper`, `aries-ssh`, and
@@ -67,31 +64,44 @@ The integration gate requires a reachable local Docker daemon:
 make integration
 ```
 
-`make integration` runs the real M3 container lifecycle, M4 SSH bridge, and M5
-OpenClaw `fix-git` tool chain sequentially and fails on daemon, isolation, or
-cleanup errors. It pulls pinned images only when missing and requires no paid
-model API. Set up the ignored TB2 checkout first; the M2 real-checkout test
-skips clearly when it is absent, while the claim-bearing M5 test requires it.
+`make integration` runs the real M3 container lifecycle, M4 SSH bridge, and the
+single M6 deterministic Runner oracle sequentially. The oracle subsumes the M5
+upstream OpenClaw tool-chain coverage and adds independent evaluation. The gate
+fails on daemon, isolation, evaluator, manifest, or cleanup errors, pulls pinned
+images only when missing, and requires no paid model API. Set up the ignored
+TB2 checkout first; the M2 real-checkout test skips clearly when it is absent,
+while the M6 oracle requires it.
 Fetch the only supported TB2 revision into the ARIES-local cache with:
 
 ```sh
-make setup-terminalbench
+./bin/aries setup terminalbench2
 ```
 
 The command is idempotent when the revision is correct and refuses to replace a
-wrong existing checkout. It never creates a sibling repository. The CLI accepts
-one strict JSON file:
+wrong existing checkout. It never creates a sibling repository. Configure the
+run by editing the single strict JSON experiment file; unknown fields are
+rejected and the file contains only the API-key environment variable name.
+The current CLI invocation is:
 
 ```sh
+read -r DEEPSEEK_API_KEY < DEEPSEEK_API.key
+export DEEPSEEK_API_KEY
 ./bin/aries configs/openclaw-tb2-fix-git-deepseek.json
+unset DEEPSEEK_API_KEY
 ```
 
-The example contains the API-key environment variable name only. At M5 this
-command constructs the pinned benchmark, Docker sandbox manager, OpenClaw SSH
-bridge, and OpenClaw harness, then exits with the explicit M6-execution-disabled
-error after validation.
+This is the implemented run path, not the deterministic M6 oracle command. The
+optional paid live DeepSeek validation and the stricter host-file loader remain
+M7 work.
 
-## Package shape through M5
+Each invocation creates a private, unique
+`<output_dir>/<run-id>/` directory and writes `run-result.json` there. The same
+JSON result is written to stdout. A successful run exits zero. If the Runner
+returns a functional error, ARIES still persists and prints the separated
+results when it can, logs the error on stderr, and exits nonzero. Construction
+or persistence failures are also reported on stderr and exit nonzero.
+
+## Package shape through M6
 
 - `cmd/aries` loads one experiment and owns explicit component-type switches.
 - `cmd/aries-exec-helper` builds the static task-local helper used for trusted
@@ -126,7 +136,11 @@ rejects unknown TOML fields and unsupported critical features, pins the task
 image digest, and derives the required workdir from the environment Dockerfile.
 During evaluation it injects only the private tests, runs their command with the
 declared timeout and environment, then retains stdout, stderr, CTRF, and exact
-reward. It has no Harbor dependency and creates no container. TOML parsing
+reward. Reward parsing accepts only exact `0` or `1` bytes, with one optional
+terminal newline. Success requires reward `1` and strict CTRF output from
+pytest 8.4.1 containing exactly the two passed cases `test_about_file` and
+`test_layout_file`, with no failed, skipped, pending, or other cases. It has no
+Harbor dependency and creates no container. TOML parsing
 uses `github.com/BurntSushi/toml` v1.4.0 (MIT), because Go's standard library
 does not parse TOML.
 
@@ -223,34 +237,51 @@ existing artifact only when its bytes match exactly. Harness and evaluator
 outcomes remain separate; M5 does not inject verifier files or calculate a
 score.
 
-The deterministic M5 test uses the real pinned `fix-git` sandbox and upstream
-OpenClaw image with a separate fake OpenAI-compatible container. The fake sees
-only its private evidence directory and task-local network, never the task
-filesystem or Docker socket. It advances only after exact prior tool results,
-discovers the lost commit dynamically, and asks OpenClaw to repair and verify
-the repository through upstream SSH. Each fake has a unique name, retained ID,
-and attempt label; its helper retains tentative create state across inspection
-or cleanup failures, including transient not-found responses, and cleanup
-requires all three to match. After its terminal
-evidence is flushed, Docker must report it stopped with PID zero and exit code
-zero before removal. Host-PID absence is only an intermediate fallback and
-never replaces the final Engine reinspection. Run it directly after the three
-helpers are built:
+The single M6 oracle subsumes the M5 upstream OpenClaw tool-chain proof. It uses
+the real pinned `fix-git` sandbox and upstream image with a separate fake
+OpenAI-compatible container. The fake sees only its private evidence directory
+and task-local network, never the task filesystem or Docker socket. It advances
+only after exact prior tool results, discovers the lost commit dynamically,
+and asks OpenClaw to repair and verify the repository through upstream SSH. Its
+unique name, retained ID, attempt label, terminal stopped-state proof, and
+positive removal preserve the M5 lifecycle guarantees. Run the oracle directly
+after the three helpers are built:
 
 ```sh
 ARIES_EXEC_HELPER=$PWD/bin/aries-exec-helper \
 ARIES_SSH_CLIENT=$PWD/bin/aries-ssh \
 ARIES_SSH_SERVER=$PWD/bin/aries-ssh-server \
-go test -v -count=1 -run '^TestOpenClawHarnessRealFixGitToolChain$' \
+go test -v -count=1 -run '^TestRunnerRealFixGitOracle$' \
   -tags=integration ./pkg/harness/openclaw
 ```
 
-The test writes a redacted model/tool transcript and a before/after
-Git/filesystem delta beneath an exact mode-0700 run directory under the ignored
-`.cache/integration/m5/` root and prints that path in verbose mode. It scans the
-retained tree for non-private modes and the model credential, requires the
-harness and bridge to be gone before direct sandbox verification, and finally
-requires empty ARIES-labeled container, volume, and network inventories.
+`TestRunnerRealFixGitOracle` proves verifier paths absent before and after the
+harness run, then positively removes the OpenClaw harness and fake model and
+revokes the bridge before `Benchmark.Evaluate` can inject verifier files. It
+retains a redacted model/tool protocol, Git/filesystem delta, isolation trace,
+portable Runner result, verifier output, CTRF, exact reward, cleanup evidence,
+and empty final container, volume, and network inventories.
+
+The oracle writes its ignored evidence beneath the private unique directory
+`.cache/integration/m6/fix-git-<random>/`. Its `manifest.json` is created once,
+changed to mode `0400`, and uses schema `aries.m6.oracle.v1`. Read `outcomes`
+first for the separate harness, isolation, evaluation, observer, and cleanup
+states. `outcomes.*.artifacts` use portable semantic roles with root-relative
+paths, while the `run_result` role points to `m6/run-result.json`; `artifacts`
+supplies the SHA-256 and byte size for every retained file. `verifier` records
+exact reward bytes, the two case results, and
+pinned source hashes. `observer.status` is `not_enabled` with an empty sample
+list in M6, and `resource_inventory` must contain three explicit empty lists.
+The manifest is evidence, not input to a later run; M7 must not modify it.
+
+An ordinary harness failure remains distinct from evaluation: when harness
+termination and bridge revocation are both confirmed, the Runner still invokes
+the evaluator against the live sandbox. If either isolation gate cannot be
+confirmed, evaluation is `blocked_isolation`, verifier material is never
+injected, and cleanup continues.
+
+The deterministic integration gate requires no paid API. Live DeepSeek
+evidence is optional and remains an M7 release task.
 
 To add the next benchmark, harness, sandbox, or bridge, implement one concrete
 package against the small interface in `pkg/runner` and add one explicit type
