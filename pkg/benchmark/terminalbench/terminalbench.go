@@ -17,21 +17,16 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/hyscale-lab/aries/pkg/containerimage"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/runner"
 )
 
 const (
-	// Revision is the only Terminal-Bench 2 revision supported by the MVP.
-	Revision = "2fd12b88aafdd04a52c298e3940bcb189f9766d6"
-
 	DefaultRoot = ".cache/terminal-bench-2"
 
-	repositoryURL   = "https://github.com/harbor-framework/terminal-bench-2.git"
 	fixGitID        = "fix-git"
 	fixGitTaskName  = "terminal-bench/fix-git"
-	fixGitImage     = "alexgshaw/fix-git:20251031"
-	fixGitImagePin  = "alexgshaw/fix-git:20251031@sha256:61e431c00c58df652287aadce5457634d9f9330cfdd153ebdf2802df0d540119"
 	fixGitWorkdir   = "/app/personal-site"
 	testsPath       = "/tests"
 	verifierLogPath = "/logs/verifier"
@@ -39,9 +34,11 @@ const (
 
 // Options are the explicit inputs to the pinned Terminal-Bench 2 adapter.
 type Options struct {
-	Root      string
-	TaskIDs   []string
-	OutputDir string
+	Root        string
+	TaskIDs     []string
+	OutputDir   string
+	Revision    string
+	FixGitImage string
 }
 
 // Benchmark discovers the pinned fix-git task and owns its private verifier.
@@ -49,6 +46,9 @@ type Benchmark struct {
 	root           string
 	taskIDs        []string
 	outputDir      string
+	revision       string
+	fixGitImage    string
+	fixGitSource   string
 	verifyRevision bool
 
 	mu      sync.RWMutex
@@ -146,6 +146,13 @@ func New(options Options) (*Benchmark, error) {
 	if strings.TrimSpace(options.OutputDir) == "" {
 		return nil, errors.New("terminalbench output directory is required")
 	}
+	if strings.TrimSpace(options.Revision) == "" {
+		return nil, errors.New("terminalbench revision is required")
+	}
+	fixGitSource, err := containerimage.TaggedSource(options.FixGitImage)
+	if err != nil {
+		return nil, fmt.Errorf("terminalbench fix-git image: %w", err)
+	}
 
 	seen := make(map[string]struct{}, len(options.TaskIDs))
 	for _, id := range options.TaskIDs {
@@ -165,6 +172,9 @@ func New(options Options) (*Benchmark, error) {
 		root:           filepath.Clean(options.Root),
 		taskIDs:        slices.Clone(options.TaskIDs),
 		outputDir:      filepath.Clean(options.OutputDir),
+		revision:       options.Revision,
+		fixGitImage:    options.FixGitImage,
+		fixGitSource:   fixGitSource,
 		verifyRevision: true,
 		details:        make(map[string]taskDetails, len(options.TaskIDs)),
 	}, nil
@@ -172,7 +182,7 @@ func New(options Options) (*Benchmark, error) {
 
 // Tasks loads the selected task directories after verifying the pinned checkout.
 func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
-	if err := VerifyRevision(ctx, b.root); err != nil {
+	if err := VerifyRevision(ctx, b.root, b.revision); err != nil {
 		return nil, err
 	}
 
@@ -182,7 +192,7 @@ func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		task, private, err := loadTask(b.root, id)
+		task, private, err := loadTask(b.root, id, b.fixGitSource, b.fixGitImage)
 		if err != nil {
 			return nil, fmt.Errorf("load terminalbench task %q: %w", id, err)
 		}
@@ -196,7 +206,7 @@ func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
 	return tasks, nil
 }
 
-func loadTask(root, id string) (core.Task, taskDetails, error) {
+func loadTask(root, id, fixGitSource, fixGitImage string) (core.Task, taskDetails, error) {
 	taskDir := filepath.Join(root, id)
 	info, err := os.Stat(taskDir)
 	if err != nil {
@@ -214,7 +224,7 @@ func loadTask(root, id string) (core.Task, taskDetails, error) {
 	if undecoded := meta.Undecoded(); len(undecoded) != 0 {
 		return core.Task{}, taskDetails{}, fmt.Errorf("task.toml contains unsupported field %q", undecoded[0].String())
 	}
-	if err := validateTaskFile(id, parsed); err != nil {
+	if err := validateTaskFile(id, parsed, fixGitSource); err != nil {
 		return core.Task{}, taskDetails{}, err
 	}
 
@@ -250,7 +260,7 @@ func loadTask(root, id string) (core.Task, taskDetails, error) {
 			ID:          id,
 			Instruction: instruction,
 			Environment: core.Environment{
-				Image:        fixGitImagePin,
+				Image:        fixGitImage,
 				Workdir:      workdir,
 				CPU:          parsed.Environment.CPUs,
 				MemoryMB:     parsed.Environment.MemoryMB,
@@ -364,7 +374,7 @@ func fileIdentity(info os.FileInfo) (uint64, uint64, error) {
 	return uint64(stat.Dev), uint64(stat.Ino), nil
 }
 
-func validateTaskFile(id string, parsed taskFile) error {
+func validateTaskFile(id string, parsed taskFile, fixGitSource string) error {
 	if parsed.SchemaVersion != "1.1" {
 		return fmt.Errorf("unsupported task schema_version %q; want %q", parsed.SchemaVersion, "1.1")
 	}
@@ -374,8 +384,8 @@ func validateTaskFile(id string, parsed taskFile) error {
 	if len(parsed.Artifacts) != 0 {
 		return errors.New("task artifacts are unsupported by the MVP")
 	}
-	if parsed.Environment.DockerImage != fixGitImage {
-		return fmt.Errorf("unsupported fix-git docker image %q; want %q", parsed.Environment.DockerImage, fixGitImage)
+	if parsed.Environment.DockerImage != fixGitSource {
+		return fmt.Errorf("unsupported fix-git docker image %q; want %q", parsed.Environment.DockerImage, fixGitSource)
 	}
 	if parsed.Environment.CPUs != 1 || parsed.Environment.MemoryMB != 2048 || parsed.Environment.StorageMB != 10240 || parsed.Environment.GPUs != 0 {
 		return fmt.Errorf("unsupported fix-git resources cpu=%v memory_mb=%d storage_mb=%d gpus=%d", parsed.Environment.CPUs, parsed.Environment.MemoryMB, parsed.Environment.StorageMB, parsed.Environment.GPUs)
@@ -442,15 +452,15 @@ func durationSeconds(seconds float64) time.Duration {
 }
 
 // VerifyRevision confirms that root is the exact detached pinned checkout.
-func VerifyRevision(ctx context.Context, root string) error {
+func VerifyRevision(ctx context.Context, root, revision string) error {
 	cmd := exec.CommandContext(ctx, "git", "-C", root, "rev-parse", "HEAD")
 	output, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("verify terminalbench checkout %q: %w", root, err)
 	}
 	got := strings.TrimSpace(string(output))
-	if got != Revision {
-		return fmt.Errorf("terminalbench checkout %q is revision %q; want pinned %q", root, got, Revision)
+	if got != revision {
+		return fmt.Errorf("terminalbench checkout %q is revision %q; want pinned %q", root, got, revision)
 	}
 	status := exec.CommandContext(ctx, "git", "-C", root, "status", "--porcelain", "--untracked-files=all")
 	output, err = status.Output()

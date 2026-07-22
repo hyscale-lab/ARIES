@@ -35,7 +35,7 @@ func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner
 		return finish(fmt.Errorf("terminalbench task %q was not loaded by Tasks", task.ID))
 	}
 	if b.verifyRevision {
-		if err := VerifyRevision(ctx, b.root); err != nil {
+		if err := VerifyRevision(ctx, b.root, b.revision); err != nil {
 			return finish(fmt.Errorf("reverify terminalbench checkout before evaluation: %w", err))
 		}
 	}

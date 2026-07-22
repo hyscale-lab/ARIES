@@ -11,7 +11,13 @@ import (
 
 // Setup creates an exact shallow detached checkout at root. An existing root
 // is accepted only when it is already at the pinned revision.
-func Setup(ctx context.Context, root string) error {
+func Setup(ctx context.Context, root, repositoryURL, revision string) error {
+	if repositoryURL == "" {
+		return errors.New("terminalbench repository URL is required")
+	}
+	if revision == "" {
+		return errors.New("terminalbench revision is required")
+	}
 	root = filepath.Clean(root)
 	if root == "." || root == string(filepath.Separator) {
 		return fmt.Errorf("unsafe terminalbench setup root %q", root)
@@ -21,7 +27,7 @@ func Setup(ctx context.Context, root string) error {
 		if !info.IsDir() {
 			return fmt.Errorf("terminalbench setup root %q is not a directory", root)
 		}
-		return VerifyRevision(ctx, root)
+		return VerifyRevision(ctx, root, revision)
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("inspect terminalbench setup root %q: %w", root, err)
@@ -40,7 +46,7 @@ func Setup(ctx context.Context, root string) error {
 	commands := [][]string{
 		{"init", "--quiet"},
 		{"remote", "add", "origin", repositoryURL},
-		{"fetch", "--depth=1", "origin", Revision},
+		{"fetch", "--depth=1", "origin", revision},
 		{"checkout", "--quiet", "--detach", "FETCH_HEAD"},
 	}
 	for _, args := range commands {
@@ -48,7 +54,7 @@ func Setup(ctx context.Context, root string) error {
 			return err
 		}
 	}
-	if err := VerifyRevision(ctx, temporary); err != nil {
+	if err := VerifyRevision(ctx, temporary, revision); err != nil {
 		return err
 	}
 	if err := os.Rename(temporary, root); err != nil {

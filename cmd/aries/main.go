@@ -45,14 +45,27 @@ type commandDependencies struct {
 	executablePath  string
 	preflightClient httpDoer
 	preflightSleep  contextSleep
+	prepareProfile  func(context.Context, config.Config) error
 }
 
 func runCommandWithDependencies(ctx context.Context, args []string, stdout io.Writer, dependencies commandDependencies) error {
 	if len(args) == 2 && args[0] == "setup" {
-		return setup(ctx, args[1])
+		cfg, err := config.Load(args[1])
+		if err != nil {
+			return err
+		}
+		prepare := dependencies.prepareProfile
+		if prepare == nil {
+			prepare = prepareProfile
+		}
+		if err := prepare(ctx, cfg); err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(stdout, "profile ready: %s\n", args[1])
+		return err
 	}
 	if len(args) != 1 {
-		return errors.New("usage: aries EXPERIMENT.json | aries setup terminalbench2")
+		return errors.New("usage: aries PROFILE.json | aries setup PROFILE.json")
 	}
 	cfg, err := config.Load(args[0])
 	if err != nil {
@@ -122,9 +135,8 @@ func buildExperiment(
 	switch cfg.Benchmark.Type {
 	case "terminalbench2":
 		benchmark, err = terminalbench.New(terminalbench.Options{
-			Root:      cfg.Benchmark.Root,
-			TaskIDs:   cfg.Benchmark.Tasks,
-			OutputDir: outputRoot,
+			Root: cfg.Benchmark.Root, TaskIDs: cfg.Benchmark.Tasks, OutputDir: outputRoot,
+			Revision: cfg.Versions.TerminalBench2.Revision, FixGitImage: cfg.Versions.TerminalBench2.FixGitImage,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("construct terminalbench2 benchmark: %w", err)
@@ -136,7 +148,7 @@ func buildExperiment(
 	switch cfg.Harness.Type {
 	case "openclaw":
 		harness, err = openclawharness.New(openclawharness.Options{
-			Image: cfg.Harness.Image, OutputDir: outputRoot, APIKeyLookup: apiKeyLookup,
+			Image: cfg.Versions.OpenClaw.Image, OutputDir: outputRoot, APIKeyLookup: apiKeyLookup,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("construct OpenClaw harness: %w", err)
@@ -274,14 +286,41 @@ func persistRunResult(path string, content []byte) error {
 	return directoryFile.Sync()
 }
 
-func setup(ctx context.Context, component string) error {
-	switch component {
-	case "terminalbench2":
-		if err := terminalbench.Setup(ctx, terminalbench.DefaultRoot); err != nil {
-			return fmt.Errorf("setup terminalbench2: %w", err)
-		}
-		return nil
-	default:
-		return fmt.Errorf("unsupported setup component %q", component)
+func prepareProfile(ctx context.Context, cfg config.Config) error {
+	if cfg.Benchmark.Type != "terminalbench2" {
+		return fmt.Errorf("unsupported benchmark type %q", cfg.Benchmark.Type)
 	}
+	if cfg.Harness.Type != "openclaw" {
+		return fmt.Errorf("unsupported harness type %q", cfg.Harness.Type)
+	}
+	if cfg.Sandbox.Type != "docker" {
+		return fmt.Errorf("unsupported sandbox type %q", cfg.Sandbox.Type)
+	}
+	if cfg.Bridge.Type != "openclaw-ssh" {
+		return fmt.Errorf("unsupported bridge type %q", cfg.Bridge.Type)
+	}
+
+	benchmark, err := terminalbench.New(terminalbench.Options{
+		Root: cfg.Benchmark.Root, TaskIDs: cfg.Benchmark.Tasks, OutputDir: cfg.OutputDir,
+		Revision: cfg.Versions.TerminalBench2.Revision, FixGitImage: cfg.Versions.TerminalBench2.FixGitImage,
+	})
+	if err != nil {
+		return fmt.Errorf("validate terminalbench2 profile: %w", err)
+	}
+	if err := terminalbench.Setup(ctx, cfg.Benchmark.Root, cfg.Versions.TerminalBench2.RepositoryURL, cfg.Versions.TerminalBench2.Revision); err != nil {
+		return fmt.Errorf("setup terminalbench2: %w", err)
+	}
+	tasks, err := benchmark.Tasks(ctx)
+	if err != nil {
+		return fmt.Errorf("load terminalbench2 tasks: %w", err)
+	}
+	images := make([]string, 0, len(tasks)+1)
+	images = append(images, cfg.Versions.OpenClaw.Image)
+	for _, task := range tasks {
+		images = append(images, task.Environment.Image)
+	}
+	if err := dockersandbox.PullImages(ctx, images); err != nil {
+		return fmt.Errorf("prepare Docker images: %w", err)
+	}
+	return nil
 }

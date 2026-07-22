@@ -1,17 +1,31 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
 const validConfig = `{
   "name": "test-run",
+	"versions_file": "../configs/versions.json",
   "benchmark": {"type": "terminalbench2", "root": ".cache/tb2", "tasks": ["fix-git"]},
-  "harness": {"type": "openclaw", "image": "example.invalid/openclaw@sha256:abc"},
+	"harness": {"type": "openclaw"},
   "sandbox": {"type": "docker"},
   "bridge": {"type": "openclaw-ssh"},
   "model": {"base_url": "http://127.0.0.1:8080", "model": "fake", "api_key_env": "DEEPSEEK_API_KEY"}
+}`
+
+const validVersions = `{
+  "terminalbench2": {
+    "repository_url": "https://example.invalid/terminal-bench-2.git",
+    "revision": "0123456789abcdef0123456789abcdef01234567",
+	"fix_git_image": "example.invalid/fix-git:fixture@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "openclaw": {
+	"image": "example.invalid/openclaw:1.2.3@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }
 }`
 
 func TestDecodeValidMinimalConfig(t *testing.T) {
@@ -22,8 +36,75 @@ func TestDecodeValidMinimalConfig(t *testing.T) {
 	if cfg.OutputDir != "runs" {
 		t.Fatalf("OutputDir = %q, want runs", cfg.OutputDir)
 	}
-	if cfg.Benchmark.Tasks[0] != "fix-git" || cfg.Model.APIKeyEnv != "DEEPSEEK_API_KEY" {
+	if cfg.VersionsFile != "../configs/versions.json" || cfg.Benchmark.Tasks[0] != "fix-git" || cfg.Model.APIKeyEnv != "DEEPSEEK_API_KEY" {
 		t.Fatalf("unexpected config: %#v", cfg)
+	}
+}
+
+func TestLoadResolvesAndStrictlyLoadsVersionPins(t *testing.T) {
+	root := t.TempDir()
+	profiles := filepath.Join(root, "profiles")
+	configs := filepath.Join(root, "configs")
+	if err := os.MkdirAll(profiles, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(configs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	profilePath := filepath.Join(profiles, "experiment.json")
+	if err := os.WriteFile(profilePath, []byte(validConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configs, "versions.json"), []byte(validVersions), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(profilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Versions.TerminalBench2.Revision != "0123456789abcdef0123456789abcdef01234567" ||
+		cfg.Versions.TerminalBench2.FixGitImage == "" || cfg.Versions.OpenClaw.Image == "" {
+		t.Fatalf("version pins = %#v", cfg.Versions)
+	}
+}
+
+func TestCheckedInDeepSeekProfileLoads(t *testing.T) {
+	path := filepath.Clean(filepath.Join("..", "..", "profiles", "openclaw-tb2-fix-git-deepseek.json"))
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Name != "openclaw-tb2-fix-git-deepseek" || cfg.Versions.TerminalBench2.FixGitImage == "" || cfg.Versions.OpenClaw.Image == "" {
+		t.Fatalf("checked-in profile = %#v", cfg)
+	}
+}
+
+func TestDecodeVersionsRejectsUnknownAndMissingFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr string
+	}{
+		{"valid", validVersions, ""},
+		{"unknown", strings.Replace(validVersions, `"image": "example.invalid/openclaw`, `"future": true, "image": "example.invalid/openclaw`, 1), `unknown field "future"`},
+		{"missing revision", strings.Replace(validVersions, `"revision": "0123456789abcdef0123456789abcdef01234567"`, `"revision": ""`, 1), "terminalbench2.revision is required"},
+		{"mutable image", strings.Replace(validVersions, `example.invalid/openclaw:1.2.3@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`, `example.invalid/openclaw:latest`, 1), "openclaw.image: image must be pinned by digest"},
+		{"malformed image", strings.Replace(validVersions, `example.invalid/openclaw:1.2.3@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`, `not a valid image@@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`, 1), "invalid image reference"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := DecodeVersions(strings.NewReader(test.input))
+			if test.wantErr == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("DecodeVersions() error = %v, want substring %q", err, test.wantErr)
+			}
+		})
 	}
 }
 
@@ -50,8 +131,8 @@ func TestDecodeRejectsInvalidConfig(t *testing.T) {
 		},
 		{
 			name:    "missing required field",
-			input:   strings.Replace(validConfig, `"image": "example.invalid/openclaw@sha256:abc"`, `"image": ""`, 1),
-			wantErr: "harness.image is required",
+			input:   strings.Replace(validConfig, `"versions_file": "../configs/versions.json"`, `"versions_file": ""`, 1),
+			wantErr: "versions_file is required",
 		},
 		{
 			name:    "no task",

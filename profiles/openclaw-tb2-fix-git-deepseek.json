@@ -1,13 +1,13 @@
 {
   "name": "openclaw-tb2-fix-git-deepseek",
+  "versions_file": "../configs/versions.json",
   "benchmark": {
     "type": "terminalbench2",
     "root": ".cache/terminal-bench-2",
     "tasks": ["fix-git"]
   },
   "harness": {
-    "type": "openclaw",
-    "image": "ghcr.io/openclaw/openclaw:2026.5.26@sha256:ae7ff536446f1bbb57ea51b9b21097d8f299d30d683dcd72644973bc0522f3b3"
+    "type": "openclaw"
   },
   "sandbox": {
     "type": "docker"

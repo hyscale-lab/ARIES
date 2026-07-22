@@ -258,6 +258,25 @@ func TestEngineDiscoversOnlyValidatedOwnedContainers(t *testing.T) {
 	}
 }
 
+func TestEngineIgnoresContainerThatStopsBetweenListAndInspect(t *testing.T) {
+	api := newFakeDocker()
+	item := summaryFixture(taskContainerID, "task", "run-1", "fix-git", taskContainerKind)
+	api.listFn = func(context.Context, int) ([]containertypes.Summary, error) {
+		return []containertypes.Summary{item}, nil
+	}
+	api.inspectFn = func(context.Context, string, int) (containertypes.InspectResponse, error) {
+		inspection := inspectionFixture(item)
+		inspection.State.Running = false
+		inspection.State.Status = containertypes.StateExited
+		return inspection, nil
+	}
+
+	containers, err := (&engineClient{api: api}).discover(context.Background(), "run-1", map[string]struct{}{"fix-git": {}})
+	if err != nil || len(containers) != 0 {
+		t.Fatalf("discover stopped container = %+v, %v", containers, err)
+	}
+}
+
 func TestEngineRejectsUntrustedOrChangedContainerIdentity(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -288,6 +307,30 @@ func TestEngineRejectsUntrustedOrChangedContainerIdentity(t *testing.T) {
 				}
 			},
 			message: `label "aries.task" differs`,
+		},
+		{
+			name: "stopped inspect label changed",
+			mutate: func(api *fakeDocker, item *containertypes.Summary) {
+				api.inspectFn = func(context.Context, string, int) (containertypes.InspectResponse, error) {
+					inspection := inspectionFixture(*item)
+					inspection.Config.Labels["aries.task"] = "other-task"
+					inspection.State.Running = false
+					inspection.State.Status = containertypes.StateExited
+					return inspection, nil
+				}
+			},
+			message: `label "aries.task" differs`,
+		},
+		{
+			name: "missing inspect state",
+			mutate: func(api *fakeDocker, item *containertypes.Summary) {
+				api.inspectFn = func(context.Context, string, int) (containertypes.InspectResponse, error) {
+					inspection := inspectionFixture(*item)
+					inspection.State = nil
+					return inspection, nil
+				}
+			},
+			message: "container state is absent",
 		},
 	}
 	for _, test := range tests {
@@ -443,6 +486,33 @@ func TestRecorderContinuesAfterCallerCancellationAndContainerRemoval(t *testing.
 	})
 	reports, err := recorder.Stop(context.Background())
 	if err != nil || reports["fix-git"].Status != core.StatusSucceeded || reports["fix-git"].SampleCount < 4 {
+		t.Fatalf("Stop = %+v, %v", reports, err)
+	}
+}
+
+func TestRecorderKeepsPriorSamplesWhenContainerStopsBetweenListAndInspect(t *testing.T) {
+	api := newFakeDocker()
+	item := summaryFixture(taskContainerID, "task", "run-1", "fix-git", taskContainerKind)
+	api.listFn = func(context.Context, int) ([]containertypes.Summary, error) {
+		return []containertypes.Summary{item}, nil
+	}
+	api.inspectFn = func(_ context.Context, _ string, call int) (containertypes.InspectResponse, error) {
+		inspection := inspectionFixture(item)
+		if call > 1 {
+			inspection.State.Running = false
+			inspection.State.Status = containertypes.StateExited
+		}
+		return inspection, nil
+	}
+	recorder := newTestRecorder(t, api, filepath.Join(t.TempDir(), "run"), time.Hour)
+	if err := recorder.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.sample(context.Background(), 1, time.Now()); err != nil {
+		t.Fatalf("sample stopped container: %v", err)
+	}
+	reports, err := recorder.Stop(context.Background())
+	if err != nil || reports["fix-git"].Status != core.StatusSucceeded || reports["fix-git"].SampleCount != 1 {
 		t.Fatalf("Stop = %+v, %v", reports, err)
 	}
 }

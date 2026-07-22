@@ -150,7 +150,7 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		}
 		if sandboxActive {
 			cleanupUsed = true
-			if err := sandbox.Stop(cleanup); err != nil {
+			if err := r.toolSandbox.Stop(cleanup, sandbox); err != nil {
 				cleanupErrors = append(cleanupErrors, fmt.Errorf("cleanup sandbox: %w", err))
 			} else {
 				sandboxActive = false

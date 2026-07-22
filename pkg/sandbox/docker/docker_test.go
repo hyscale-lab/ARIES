@@ -242,7 +242,7 @@ func (f *fakeClient) CopyFromContainer(context.Context, string, client.CopyFromC
 
 func testEnvironment() core.Environment {
 	return core.Environment{
-		Image: "sha256:" + strings.Repeat("a", 64), Workdir: "/work",
+		Image: "example.invalid/task:fixture@sha256:" + strings.Repeat("a", 64), Workdir: "/work",
 		CPU: 1.5, MemoryMB: 64, StorageMB: 32, GPUs: 1,
 		Env: map[string]string{"ZED": "last", "ALPHA": "first"},
 	}
@@ -263,17 +263,24 @@ func testManager(t *testing.T, fake *fakeClient) *Manager {
 
 func startSandbox(t *testing.T, fake *fakeClient) *Sandbox {
 	t.Helper()
-	live, err := testManager(t, fake).Start(context.Background(), testRequest())
+	_, sandbox := startManagedSandbox(t, fake)
+	return sandbox
+}
+
+func startManagedSandbox(t *testing.T, fake *fakeClient) (*Manager, *Sandbox) {
+	t.Helper()
+	manager := testManager(t, fake)
+	live, err := manager.Start(context.Background(), testRequest())
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	return live.(*Sandbox)
+	return manager, live.(*Sandbox)
 }
 
 func TestStartUsesTypedOptionsAndStopIsIdempotent(t *testing.T) {
 	logs := multiplexed("sandbox stdout", "sandbox stderr")
 	fake := &fakeClient{logs: logs}
-	sandbox := startSandbox(t, fake)
+	manager, sandbox := startManagedSandbox(t, fake)
 	options := fake.containerOpts
 	if options.Name != "aries-task-fixedid" || options.Config.WorkingDir != "/work" {
 		t.Fatalf("container options = %#v", options)
@@ -294,10 +301,10 @@ func TestStartUsesTypedOptionsAndStopIsIdempotent(t *testing.T) {
 	if gateway, err := sandbox.NetworkGateway(context.Background()); err != nil || gateway != "172.30.0.1" {
 		t.Fatalf("NetworkGateway() = %q, %v", gateway, err)
 	}
-	if err := sandbox.Stop(context.Background()); err != nil {
+	if err := manager.Stop(context.Background(), sandbox); err != nil {
 		t.Fatalf("Stop() error = %v", err)
 	}
-	if err := sandbox.Stop(context.Background()); err != nil {
+	if err := manager.Stop(context.Background(), sandbox); err != nil {
 		t.Fatalf("repeated Stop() error = %v", err)
 	}
 	stdout, _ := os.ReadFile(filepath.Join(sandbox.artifactDir, "container.stdout.log"))
@@ -307,6 +314,19 @@ func TestStartUsesTypedOptionsAndStopIsIdempotent(t *testing.T) {
 	}
 	if fake.containerID != "" || fake.networkExists {
 		t.Fatal("Stop left fake resources behind")
+	}
+}
+
+func TestManagerStopRejectsNilAndForeignSandbox(t *testing.T) {
+	owner, sandbox := startManagedSandbox(t, &fakeClient{})
+	t.Cleanup(func() { _ = owner.Stop(context.Background(), sandbox) })
+
+	if err := owner.Stop(context.Background(), nil); err == nil {
+		t.Fatal("Stop accepted a nil sandbox")
+	}
+	other := testManager(t, &fakeClient{})
+	if err := other.Stop(context.Background(), sandbox); err == nil || !strings.Contains(err.Error(), "another manager") {
+		t.Fatalf("Stop foreign sandbox error = %v", err)
 	}
 }
 
@@ -333,7 +353,7 @@ func TestExecStreamsStdinAndSeparatesOutput(t *testing.T) {
 		writeFrame(conn, stdcopy.Stderr, []byte("\x1eARIES_EXEC_EXIT_spoof=99\x1ferr"))
 	}
 	sandbox := startSandbox(t, fake)
-	defer sandbox.Stop(context.Background())
+	defer sandbox.stop(context.Background())
 	result, err := sandbox.Exec(context.Background(), core.Command{
 		Path: "/bin/tool", Args: []string{"arg"}, Dir: "/work", Env: map[string]string{"B": "2", "A": "1"},
 		Stdin: []byte("late\x00stdin"),
@@ -349,7 +369,7 @@ func TestExecStreamsStdinAndSeparatesOutput(t *testing.T) {
 func TestExecAcceptsAriesEnvironment(t *testing.T) {
 	fake := &fakeClient{}
 	sandbox := startSandbox(t, fake)
-	defer sandbox.Stop(context.Background())
+	defer sandbox.stop(context.Background())
 	if _, err := sandbox.Exec(context.Background(), core.Command{Path: "/bin/true", Env: map[string]string{"ARIES_VALID": "value"}}); err != nil {
 		t.Fatalf("Exec() rejected valid ARIES_ environment: %v", err)
 	}
@@ -363,7 +383,7 @@ func TestExecCancellationReturnsTerminationConfirmationFailure(t *testing.T) {
 	fake.attach = func(conn net.Conn) { _, _ = io.Copy(io.Discard, conn) }
 	sandbox := startSandbox(t, fake)
 	sandbox.cleanupTimeout = 60 * time.Millisecond
-	defer sandbox.Stop(context.Background())
+	defer sandbox.stop(context.Background())
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err := sandbox.ExecStream(ctx, core.Command{Path: "/bin/sleep", Args: []string{"60"}}, nil, io.Discard, io.Discard)
@@ -385,7 +405,7 @@ func TestExecCancellationWinsConcurrentCopyErrorAfterConfirmedTermination(t *tes
 		writeFrame(conn, stdcopy.Stdout, []byte("trigger cancellation"))
 	}
 	sandbox := startSandbox(t, fake)
-	defer sandbox.Stop(context.Background())
+	defer sandbox.stop(context.Background())
 	ctx, cancel := context.WithCancel(context.Background())
 	_, err := sandbox.ExecStream(ctx, core.Command{Path: "/bin/sleep", Args: []string{"60"}}, nil,
 		cancelErrorWriter{cancel: cancel, err: copyErr}, io.Discard)
@@ -402,7 +422,7 @@ func TestExecCancellationJoinsConcurrentCopyErrorOnlyWithTerminationFailure(t *t
 	}
 	sandbox := startSandbox(t, fake)
 	sandbox.cleanupTimeout = 60 * time.Millisecond
-	defer sandbox.Stop(context.Background())
+	defer sandbox.stop(context.Background())
 	ctx, cancel := context.WithCancel(context.Background())
 	_, err := sandbox.ExecStream(ctx, core.Command{Path: "/bin/sleep", Args: []string{"60"}}, nil,
 		cancelErrorWriter{cancel: cancel, err: copyErr}, io.Discard)
@@ -418,7 +438,7 @@ func TestExecOrdinaryCopyErrorRetainsCauseAfterTargetedCleanup(t *testing.T) {
 		writeFrame(conn, stdcopy.Stdout, []byte("trigger copy error"))
 	}
 	sandbox := startSandbox(t, fake)
-	defer sandbox.Stop(context.Background())
+	defer sandbox.stop(context.Background())
 	_, err := sandbox.ExecStream(context.Background(), core.Command{Path: "/bin/tool"}, nil,
 		cancelErrorWriter{err: copyErr}, io.Discard)
 	if err != copyErr {
@@ -434,7 +454,7 @@ func TestExecStreamWritesWithoutBufferingResult(t *testing.T) {
 		writeFrame(conn, stdcopy.Stdout, append([]byte("seen:"), input...))
 	}
 	sandbox := startSandbox(t, fake)
-	defer sandbox.Stop(context.Background())
+	defer sandbox.stop(context.Background())
 	var stdout bytes.Buffer
 	result, err := sandbox.ExecStream(context.Background(), core.Command{Path: "/bin/cat"}, strings.NewReader("late"), &stdout, io.Discard)
 	if err != nil || stdout.String() != "seen:late" || result.Stdout != "" || result.ExitCode != 0 {
@@ -448,7 +468,7 @@ func TestExecStreamReturnsWhileSSHStdinRemainsOpen(t *testing.T) {
 		writeFrame(conn, stdcopy.Stdout, []byte("complete"))
 	}
 	sandbox := startSandbox(t, fake)
-	defer sandbox.Stop(context.Background())
+	defer sandbox.stop(context.Background())
 	pipeReader, pipeWriter := io.Pipe()
 	stdinEnded := make(chan struct{})
 	stdin := &observedReader{reader: pipeReader, done: stdinEnded}
@@ -482,7 +502,7 @@ func TestExecStreamReturnsWhileSSHStdinRemainsOpen(t *testing.T) {
 func TestUploadAndDownloadUseDockerArchives(t *testing.T) {
 	fake := &fakeClient{}
 	sandbox := startSandbox(t, fake)
-	defer sandbox.Stop(context.Background())
+	defer sandbox.stop(context.Background())
 	source := filepath.Join(t.TempDir(), "source.bin")
 	if err := os.WriteFile(source, []byte("upload"), 0o600); err != nil {
 		t.Fatal(err)

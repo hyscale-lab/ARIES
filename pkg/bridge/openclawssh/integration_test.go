@@ -43,7 +43,7 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 	t.Cleanup(func() {
 		cleanup, done := context.WithTimeout(context.Background(), 20*time.Second)
 		defer done()
-		if err := sandbox.Stop(cleanup); err != nil {
+		if err := sandboxes.Stop(cleanup, live); err != nil {
 			t.Errorf("sandbox cleanup: %v", err)
 		}
 	})

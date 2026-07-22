@@ -1,4 +1,6 @@
-.PHONY: build test test-race lint integration setup-terminalbench
+.PHONY: build test test-race lint integration setup
+
+PROFILE ?= profiles/openclaw-tb2-fix-git-deepseek.json
 
 export GOCACHE ?= $(CURDIR)/.cache/go-build
 export GOMODCACHE ?= $(CURDIR)/.cache/go-mod
@@ -23,5 +25,5 @@ integration:
 	CGO_ENABLED=0 go build -o .cache/integration/aries-ssh ./cmd/aries-ssh
 	ARIES_SSH_CLIENT=$(CURDIR)/.cache/integration/aries-ssh go test -p=1 -count=1 -tags=integration ./...
 
-setup-terminalbench:
-	go run ./cmd/aries setup terminalbench2
+setup: build
+	./bin/aries setup $(PROFILE)

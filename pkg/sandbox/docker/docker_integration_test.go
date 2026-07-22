@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
+	"github.com/hyscale-lab/aries/pkg/containerimage"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/moby/moby/client"
 )
@@ -52,7 +53,7 @@ func TestDockerSandboxRealLifecycle(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 	sandbox := live.(*Sandbox)
-	t.Cleanup(func() { _ = sandbox.Stop(context.Background()) })
+	t.Cleanup(func() { _ = manager.Stop(context.Background(), live) })
 
 	inspection, err := api.ContainerInspect(ctx, sandbox.ContainerID(), client.ContainerInspectOptions{})
 	if err != nil || inspection.Container.State == nil || !inspection.Container.State.Running {
@@ -102,7 +103,7 @@ func TestDockerSandboxRealLifecycle(t *testing.T) {
 	errorsByCaller := make(chan error, callers)
 	for range callers {
 		wait.Add(1)
-		go func() { defer wait.Done(); errorsByCaller <- sandbox.Stop(ctx) }()
+		go func() { defer wait.Done(); errorsByCaller <- manager.Stop(ctx, live) }()
 	}
 	wait.Wait()
 	close(errorsByCaller)
@@ -151,7 +152,7 @@ func TestExecCancellationKillsOnlyItsProcessGroup(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 	sandbox := live.(*Sandbox)
-	t.Cleanup(func() { _ = sandbox.Stop(context.Background()) })
+	t.Cleanup(func() { _ = manager.Stop(context.Background(), live) })
 
 	before, err := api.ContainerInspect(ctx, sandbox.ContainerID(), client.ContainerInspectOptions{})
 	if err != nil {
@@ -185,7 +186,7 @@ func TestExecCancellationKillsOnlyItsProcessGroup(t *testing.T) {
 	canceledPID := strings.TrimSpace(execForTest(t, ctx, sandbox, core.Command{Path: "/bin/cat", Args: []string{"/work/canceled.pid"}}).Stdout)
 	assertExec(t, ctx, sandbox, core.Command{Path: "/bin/sh", Args: []string{"-c", "test ! -d /proc/$1", "aries-check", canceledPID}}, 0, "", "")
 
-	if err := sandbox.Stop(ctx); err != nil {
+	if err := manager.Stop(ctx, live); err != nil {
 		t.Fatalf("Stop() error = %v", err)
 	}
 	if _, err := api.ContainerInspect(ctx, sandbox.ContainerID(), client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
@@ -229,7 +230,7 @@ func assertExec(t *testing.T, ctx context.Context, sandbox *Sandbox, command cor
 }
 
 func TestFixtureReferenceIsImmutable(t *testing.T) {
-	if err := validateImmutableImage(fixtureImage); err != nil {
+	if err := containerimage.Validate(fixtureImage); err != nil {
 		t.Fatalf("fixture image is not immutable: %v", err)
 	}
 }

@@ -19,17 +19,33 @@ import (
 	"github.com/hyscale-lab/aries/pkg/benchmark/terminalbench"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
-	openclawharness "github.com/hyscale-lab/aries/pkg/harness/openclaw"
 )
+
+const (
+	testFixGitImage   = "example.invalid/fix-git:fixture@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	testOpenClawImage = "example.invalid/openclaw:fixture@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+)
+
+func testVersions() config.Versions {
+	return config.Versions{
+		TerminalBench2: config.TerminalBench2Versions{
+			RepositoryURL: "https://example.invalid/terminal-bench-2.git",
+			Revision:      "cccccccccccccccccccccccccccccccccccccccc",
+			FixGitImage:   testFixGitImage,
+		},
+		OpenClaw: config.OpenClawVersions{Image: testOpenClawImage},
+	}
+}
 
 func TestBuildExperimentUsesExplicitTypeSwitches(t *testing.T) {
 	valid := config.Config{
 		Benchmark: config.BenchmarkConfig{Type: "terminalbench2", Root: terminalbench.DefaultRoot, Tasks: []string{"fix-git"}},
-		Harness:   config.HarnessConfig{Type: "openclaw", Image: "ghcr.io/openclaw/openclaw:2026.5.26@sha256:ae7ff536446f1bbb57ea51b9b21097d8f299d30d683dcd72644973bc0522f3b3"},
+		Harness:   config.HarnessConfig{Type: "openclaw"},
 		Sandbox:   config.SandboxConfig{Type: "docker"},
 		Bridge:    config.BridgeConfig{Type: "openclaw-ssh"},
 		Model:     config.ModelConfig{BaseURL: "https://api.deepseek.com", Model: "deepseek-v4-flash", APIKeyEnv: "DEEPSEEK_API_KEY"},
 		OutputDir: t.TempDir(),
+		Versions:  testVersions(),
 	}
 
 	tests := []struct {
@@ -188,10 +204,51 @@ func TestExecuteAndRecordPersistsResultWhenRunFails(t *testing.T) {
 	}
 }
 
-func TestRunRejectsUnknownSetupComponent(t *testing.T) {
-	err := run([]string{"setup", "other"})
-	if err == nil || !strings.Contains(err.Error(), `unsupported setup component "other"`) {
-		t.Fatalf("run() error = %v", err)
+func TestRunSetupLoadsProfileAndUsesInjectedPreparation(t *testing.T) {
+	profile := writeCommandConfig(t, filepath.Join(t.TempDir(), "runs"))
+	called := false
+	var stdout bytes.Buffer
+	err := runCommandWithDependencies(context.Background(), []string{"setup", profile}, &stdout, commandDependencies{
+		prepareProfile: func(_ context.Context, cfg config.Config) error {
+			called = true
+			if cfg.Versions.OpenClaw.Image != testOpenClawImage || cfg.Benchmark.Tasks[0] != "fix-git" {
+				t.Fatalf("loaded setup profile = %#v", cfg)
+			}
+			return nil
+		},
+	})
+	if err != nil || !called || !strings.Contains(stdout.String(), "profile ready:") {
+		t.Fatalf("setup error=%v called=%v stdout=%q", err, called, stdout.String())
+	}
+}
+
+func TestPrepareProfileRejectsUnknownComponentsBeforeSetup(t *testing.T) {
+	valid := config.Config{
+		Benchmark: config.BenchmarkConfig{Type: "terminalbench2", Root: filepath.Join(t.TempDir(), "missing"), Tasks: []string{"fix-git"}},
+		Harness:   config.HarnessConfig{Type: "openclaw"}, Sandbox: config.SandboxConfig{Type: "docker"},
+		Bridge: config.BridgeConfig{Type: "openclaw-ssh"}, OutputDir: "runs", Versions: testVersions(),
+	}
+	for _, test := range []struct {
+		name    string
+		change  func(*config.Config)
+		wantErr string
+	}{
+		{"benchmark", func(cfg *config.Config) { cfg.Benchmark.Type = "other" }, `unsupported benchmark type "other"`},
+		{"harness", func(cfg *config.Config) { cfg.Harness.Type = "other" }, `unsupported harness type "other"`},
+		{"sandbox", func(cfg *config.Config) { cfg.Sandbox.Type = "other" }, `unsupported sandbox type "other"`},
+		{"bridge", func(cfg *config.Config) { cfg.Bridge.Type = "other" }, `unsupported bridge type "other"`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := valid
+			test.change(&cfg)
+			err := prepareProfile(context.Background(), cfg)
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("prepareProfile() error = %v, want %q", err, test.wantErr)
+			}
+			if _, statErr := os.Stat(cfg.Benchmark.Root); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("setup touched benchmark root: %v", statErr)
+			}
+		})
 	}
 }
 
@@ -362,16 +419,25 @@ func restoreWorkingDirectory(t *testing.T, directory string) {
 
 func writeCommandConfig(t *testing.T, outputDir string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "experiment.json")
+	directory := t.TempDir()
+	path := filepath.Join(directory, "experiment.json")
+	versions, err := json.Marshal(testVersions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "versions.json"), append(versions, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	content := fmt.Sprintf(`{
   "name":"test-live-validation",
+	"versions_file":"versions.json",
   "benchmark":{"type":"terminalbench2","root":".cache/terminal-bench-2","tasks":["fix-git"]},
-  "harness":{"type":"openclaw","image":%q},
+	"harness":{"type":"openclaw"},
   "sandbox":{"type":"docker"},
   "bridge":{"type":"openclaw-ssh"},
   "model":{"base_url":"https://api.deepseek.com","model":"deepseek-v4-flash","api_key_env":"DEEPSEEK_API_KEY"},
   "output_dir":%q
-}`, openclawharness.PinnedImage, outputDir)
+}`, outputDir)
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}

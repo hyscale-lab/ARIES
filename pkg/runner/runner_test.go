@@ -128,11 +128,14 @@ func (f *fakeBenchmark) Evaluate(ctx context.Context, _ core.Task, _ Sandbox) (c
 }
 
 type fakeToolSandbox struct {
-	mu       sync.Mutex
-	log      *callLog
-	startErr error
-	sandbox  *fakeSandbox
-	requests []core.SandboxRequest
+	mu         sync.Mutex
+	log        *callLog
+	startErr   error
+	stopErrors []error
+	stopWait   bool
+	stops      int
+	sandbox    *fakeSandbox
+	requests   []core.SandboxRequest
 }
 
 func (f *fakeToolSandbox) Start(ctx context.Context, request core.SandboxRequest) (Sandbox, error) {
@@ -151,23 +154,7 @@ func (f *fakeToolSandbox) Start(ctx context.Context, request core.SandboxRequest
 	return f.sandbox, nil
 }
 
-type fakeSandbox struct {
-	mu         sync.Mutex
-	log        *callLog
-	stopErrors []error
-	stopWait   bool
-	stops      int
-}
-
-func (f *fakeSandbox) Exec(context.Context, core.Command) (core.CommandResult, error) {
-	return core.CommandResult{}, nil
-}
-
-func (f *fakeSandbox) Upload(context.Context, string, string) error { return nil }
-
-func (f *fakeSandbox) Download(context.Context, string, string) error { return nil }
-
-func (f *fakeSandbox) Stop(ctx context.Context) error {
+func (f *fakeToolSandbox) Stop(ctx context.Context, _ Sandbox) error {
 	f.log.add("sandbox.stop", ctx)
 	if err := ctx.Err(); err != nil {
 		return err
@@ -184,11 +171,22 @@ func (f *fakeSandbox) Stop(ctx context.Context) error {
 	return err
 }
 
-func (f *fakeSandbox) stopCount() int {
+func (f *fakeToolSandbox) stopCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.stops
 }
+
+type fakeSandbox struct {
+}
+
+func (f *fakeSandbox) Exec(context.Context, core.Command) (core.CommandResult, error) {
+	return core.CommandResult{}, nil
+}
+
+func (f *fakeSandbox) Upload(context.Context, string, string) error { return nil }
+
+func (f *fakeSandbox) Download(context.Context, string, string) error { return nil }
 
 type fakeBridge struct {
 	mu         sync.Mutex
@@ -296,7 +294,6 @@ func indexedError(errs []error, index int) error {
 type rig struct {
 	log       *callLog
 	benchmark *fakeBenchmark
-	sandbox   *fakeSandbox
 	factory   *fakeToolSandbox
 	bridge    *fakeBridge
 	harness   *fakeHarness
@@ -310,7 +307,7 @@ func newRig(t *testing.T, tasks int) *rig {
 	for i := range taskList {
 		taskList[i] = core.Task{ID: string(rune('a' + i)), Instruction: "do work", Environment: core.Environment{Image: "fixture", Workdir: "/work"}}
 	}
-	sandbox := &fakeSandbox{log: log}
+	sandbox := &fakeSandbox{}
 	benchmark := &fakeBenchmark{log: log, tasks: taskList, evaluation: core.Evaluation{Reward: 1}}
 	factory := &fakeToolSandbox{log: log, sandbox: sandbox}
 	bridge := &fakeBridge{log: log}
@@ -325,7 +322,7 @@ func newRig(t *testing.T, tasks int) *rig {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	return &rig{log: log, benchmark: benchmark, sandbox: sandbox, factory: factory, bridge: bridge, harness: harness, runner: runner}
+	return &rig{log: log, benchmark: benchmark, factory: factory, bridge: bridge, harness: harness, runner: runner}
 }
 
 func TestRunnerSuccessOrdering(t *testing.T) {
@@ -413,7 +410,7 @@ func TestRunnerFailuresAtEveryCall(t *testing.T) {
 			wantCalls: []string{"benchmark.tasks", "sandbox.start", "bridge.start", "harness.start", "harness.run", "harness.stop", "bridge.stop", "benchmark.evaluate", "sandbox.stop"}, wantEval: core.StatusFailed,
 		},
 		{
-			name: "sandbox stop", configure: func(r *rig, err error) { r.sandbox.stopErrors = []error{err} }, wantTasks: 1,
+			name: "sandbox stop", configure: func(r *rig, err error) { r.factory.stopErrors = []error{err} }, wantTasks: 1,
 			wantCalls: []string{"benchmark.tasks", "sandbox.start", "bridge.start", "harness.start", "harness.run", "harness.stop", "bridge.stop", "benchmark.evaluate", "sandbox.stop"}, wantEval: core.StatusSucceeded,
 		},
 	}
@@ -542,7 +539,7 @@ func assertBoundedLiveContext(t *testing.T, log *callLog, name string) {
 func TestRunnerCleanupTimeoutJoinsPrimaryError(t *testing.T) {
 	rig := newRig(t, 1)
 	rig.harness.runErrors = []error{errInjected}
-	rig.sandbox.stopWait = true
+	rig.factory.stopWait = true
 	rig.runner.cleanupTimeout = 10 * time.Millisecond
 
 	result, err := rig.runner.Run(context.Background())
@@ -627,8 +624,8 @@ func TestRunnerEvaluatesAfterHarnessStartFailureIsIsolated(t *testing.T) {
 	if got := rig.log.snapshot(); !reflect.DeepEqual(got, wantCalls) {
 		t.Fatalf("calls = %v, want %v", got, wantCalls)
 	}
-	if rig.harness.stopCount() != 1 || rig.bridge.stopCount() != 1 || rig.sandbox.stopCount() != 1 {
-		t.Fatalf("stop counts harness=%d bridge=%d sandbox=%d, want one each", rig.harness.stopCount(), rig.bridge.stopCount(), rig.sandbox.stopCount())
+	if rig.harness.stopCount() != 1 || rig.bridge.stopCount() != 1 || rig.factory.stopCount() != 1 {
+		t.Fatalf("stop counts harness=%d bridge=%d sandbox=%d, want one each", rig.harness.stopCount(), rig.bridge.stopCount(), rig.factory.stopCount())
 	}
 }
 
@@ -658,8 +655,8 @@ func TestRunnerBlocksEvaluationWhenFailedHarnessStartCannotBeStopped(t *testing.
 			t.Fatalf("unexpected call after failed harness start/isolation: %s", call)
 		}
 	}
-	if rig.bridge.stopCount() != 1 || rig.sandbox.stopCount() != 1 {
-		t.Fatalf("successful cleanup repeated: bridge=%d sandbox=%d, want one each", rig.bridge.stopCount(), rig.sandbox.stopCount())
+	if rig.bridge.stopCount() != 1 || rig.factory.stopCount() != 1 {
+		t.Fatalf("successful cleanup repeated: bridge=%d sandbox=%d, want one each", rig.bridge.stopCount(), rig.factory.stopCount())
 	}
 }
 
@@ -695,8 +692,8 @@ func TestRunnerHasNoLifecycleStateBetweenRuns(t *testing.T) {
 			t.Fatalf("Run() iteration %d error = %v", i, err)
 		}
 	}
-	if rig.harness.stopCount() != 2 || rig.bridge.stopCount() != 2 || rig.sandbox.stopCount() != 2 {
-		t.Fatalf("stop counts harness=%d bridge=%d sandbox=%d, want two each", rig.harness.stopCount(), rig.bridge.stopCount(), rig.sandbox.stopCount())
+	if rig.harness.stopCount() != 2 || rig.bridge.stopCount() != 2 || rig.factory.stopCount() != 2 {
+		t.Fatalf("stop counts harness=%d bridge=%d sandbox=%d, want two each", rig.harness.stopCount(), rig.bridge.stopCount(), rig.factory.stopCount())
 	}
 }
 

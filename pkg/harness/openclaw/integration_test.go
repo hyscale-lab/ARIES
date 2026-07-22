@@ -21,6 +21,7 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/hyscale-lab/aries/pkg/benchmark/terminalbench"
 	"github.com/hyscale-lab/aries/pkg/bridge/openclawssh"
+	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/monitor"
 	"github.com/hyscale-lab/aries/pkg/runner"
@@ -40,6 +41,7 @@ type modelBridge struct {
 	api   *client.Client
 	runID string
 	key   string
+	image string
 	id    string
 }
 
@@ -52,7 +54,7 @@ func (bridge *modelBridge) Start(ctx context.Context, sandbox runner.Sandbox) (c
 	created, err := bridge.api.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name: "aries-fake-model-" + bridge.runID,
 		Config: &container.Config{
-			Image: PinnedImage, Entrypoint: []string{"node"},
+			Image: bridge.image, Entrypoint: []string{"node"},
 			Cmd:    []string{"-e", deterministicModelScript(), hex.EncodeToString(digest[:])},
 			Labels: map[string]string{"aries.managed": "true", "aries.kind": "fake-model", "aries.run": bridge.runID},
 		},
@@ -101,8 +103,16 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 		t.Fatalf("Docker daemon is required: %v", err)
 	}
 	root := repositoryRoot(t)
+	versions, err := config.LoadVersions(filepath.Join(root, "configs", "versions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	datasetRoot := filepath.Join(root, terminalbench.DefaultRoot)
-	benchmark, err := terminalbench.New(terminalbench.Options{Root: datasetRoot, TaskIDs: []string{"fix-git"}, OutputDir: t.TempDir()})
+	benchmarkOptions := terminalbench.Options{
+		Root: datasetRoot, TaskIDs: []string{"fix-git"}, OutputDir: t.TempDir(),
+		Revision: versions.TerminalBench2.Revision, FixGitImage: versions.TerminalBench2.FixGitImage,
+	}
+	benchmark, err := terminalbench.New(benchmarkOptions)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +120,7 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 	if err != nil || len(tasks) != 1 {
 		t.Fatalf("load fix-git = %#v, %v", tasks, err)
 	}
-	ensureSDKImage(t, ctx, api, PinnedImage)
+	ensureSDKImage(t, ctx, api, versions.OpenClaw.Image)
 	ensureSDKImage(t, ctx, api, tasks[0].Environment.Image)
 
 	outputDir := t.TempDir()
@@ -126,12 +136,13 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bridge := &modelBridge{inner: sshBridge, api: api, runID: runID, key: key}
-	harness, err := New(Options{OutputDir: outputDir, CleanupTimeout: 30 * time.Second, StartTimeout: 60 * time.Second, AgentTimeout: 3 * time.Minute, Logger: logger})
+	bridge := &modelBridge{inner: sshBridge, api: api, runID: runID, key: key, image: versions.OpenClaw.Image}
+	harness, err := New(Options{Image: versions.OpenClaw.Image, OutputDir: outputDir, CleanupTimeout: 30 * time.Second, StartTimeout: 60 * time.Second, AgentTimeout: 3 * time.Minute, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}
-	benchmark, err = terminalbench.New(terminalbench.Options{Root: datasetRoot, TaskIDs: []string{"fix-git"}, OutputDir: outputDir})
+	benchmarkOptions.OutputDir = outputDir
+	benchmark, err = terminalbench.New(benchmarkOptions)
 	if err != nil {
 		t.Fatal(err)
 	}

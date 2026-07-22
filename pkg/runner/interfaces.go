@@ -19,9 +19,11 @@ type AgentHarness interface {
 	Stop(context.Context) error
 }
 
-// ToolSandbox starts the live environment later inspected by evaluation.
+// ToolSandbox owns the lifecycle of the live environment later inspected by
+// evaluation.
 type ToolSandbox interface {
 	Start(context.Context, core.SandboxRequest) (Sandbox, error)
+	Stop(context.Context, Sandbox) error
 }
 
 // Sandbox is the live capability returned by ToolSandbox, not a fifth
@@ -30,7 +32,6 @@ type Sandbox interface {
 	Exec(context.Context, core.Command) (core.CommandResult, error)
 	Upload(context.Context, string, string) error
 	Download(context.Context, string, string) error
-	Stop(context.Context) error
 }
 
 // ToolBridge grants and then positively revokes harness access to a sandbox.

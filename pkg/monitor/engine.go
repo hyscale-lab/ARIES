@@ -127,7 +127,9 @@ func (engine *engineClient) discover(ctx context.Context, runID string, tasks ma
 		if err != nil {
 			return nil, fmt.Errorf("inspect monitored Docker container %s: %w", summary.ID, err)
 		}
-		if err := validateInspection(inspection.Container, summary.ID, name, summary.Labels, runID); err != nil {
+		if err := validateInspection(inspection.Container, summary.ID, name, summary.Labels, runID); errors.Is(err, errContainerGone) {
+			continue
+		} else if err != nil {
 			return nil, fmt.Errorf("validate monitored Docker container %s: %w", summary.ID, err)
 		}
 
@@ -164,9 +166,6 @@ func validateInspection(
 	if inspection.ID != id || inspection.Name != "/"+name {
 		return errors.New("identity differs from the container list record")
 	}
-	if inspection.State == nil || !inspection.State.Running || inspection.State.Status != containertypes.StateRunning {
-		return errors.New("container is not running")
-	}
 	if inspection.Config == nil {
 		return errors.New("container configuration is absent")
 	}
@@ -177,6 +176,12 @@ func validateInspection(
 		if inspection.Config.Labels[key] != labels[key] {
 			return fmt.Errorf("label %q differs from the container list record", key)
 		}
+	}
+	if inspection.State == nil {
+		return errors.New("container state is absent")
+	}
+	if !inspection.State.Running || inspection.State.Status != containertypes.StateRunning {
+		return errContainerGone
 	}
 	return nil
 }

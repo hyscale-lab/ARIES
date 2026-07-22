@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
+	"github.com/hyscale-lab/aries/pkg/containerimage"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/runner"
 	"github.com/moby/moby/api/pkg/stdcopy"
@@ -29,7 +30,6 @@ import (
 )
 
 const (
-	PinnedImage           = "ghcr.io/openclaw/openclaw:2026.5.26@sha256:ae7ff536446f1bbb57ea51b9b21097d8f299d30d683dcd72644973bc0522f3b3"
 	defaultDockerSocket   = "/var/run/docker.sock"
 	defaultCleanupTimeout = 30 * time.Second
 	defaultStartTimeout   = 45 * time.Second
@@ -117,11 +117,8 @@ var _ runner.AgentHarness = (*Manager)(nil)
 
 // New constructs a harness without contacting Docker.
 func New(options Options) (*Manager, error) {
-	if options.Image == "" {
-		options.Image = PinnedImage
-	}
-	if options.Image != PinnedImage {
-		return nil, fmt.Errorf("OpenClaw image must equal the pinned digest %q", PinnedImage)
+	if err := containerimage.Validate(options.Image); err != nil {
+		return nil, fmt.Errorf("OpenClaw image: %w", err)
 	}
 	if strings.TrimSpace(options.OutputDir) == "" {
 		return nil, errors.New("OpenClaw output directory is required")

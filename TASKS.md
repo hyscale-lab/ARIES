@@ -1,5 +1,25 @@
 # ARIES Tasks
 
+## R2 — Lifecycle ownership, version files, and runnable documentation
+
+- [x] Put sandbox shutdown on `ToolSandbox` while keeping the returned
+  `Sandbox` limited to exec and file transfer capabilities.
+- [x] Move upstream revision and image pins into strict
+  `configs/versions.json`; require concrete packages to receive them through
+  constructors without hardcoded fallbacks.
+- [x] Move the runnable experiment into `profiles/` without adding inheritance
+  or merging.
+- [x] Make `aries setup PROFILE.json` prepare the exact dataset checkout and
+  required images through the Moby SDK.
+- [x] Add `docs/quick-start.md` and `docs/design.md`, and document why the
+  SSH-to-Docker-exec bridge cannot be only a raw relay.
+- [x] Treat a trusted container that exits between monitor list and inspect as
+  a normal lifecycle race while preserving strict identity and label checks.
+- [x] Pass the complete release checks, obtain review approval, run the
+  checked-in setup path, and complete a live DeepSeek run with reward `1`, 17
+  completed bridge tool records, successful monitoring, and no leaked Docker
+  resources. R2 is ready to commit.
+
 ## R1 — Docker SDK, host SSH bridge, and simplification
 
 User review identified three issues in the first implementation: Docker access
@@ -58,7 +78,7 @@ R1 is complete only when the last item is checked with fresh evidence.
 
 ### M1 — Core Runner and configuration
 
-- [x] Initialize the small `cmd` plus `pkg` Go layout and strict one-file JSON
+- [x] Initialize the small `cmd` plus `pkg` Go layout and strict JSON
   configuration with explicit component switches.
 - [x] Define direct core data and exactly four main interfaces in `pkg/runner`.
 - [x] Implement ordered lifecycle, reverse cleanup, cancellation, isolation

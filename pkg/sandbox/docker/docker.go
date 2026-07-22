@@ -21,6 +21,7 @@ import (
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
+	"github.com/hyscale-lab/aries/pkg/containerimage"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/runner"
 	"github.com/moby/moby/api/pkg/stdcopy"
@@ -88,6 +89,7 @@ type Manager struct {
 
 // Sandbox is a live Docker task environment.
 type Sandbox struct {
+	owner          *Manager
 	client         dockerClient
 	containerID    string
 	containerName  string
@@ -163,6 +165,7 @@ func (m *Manager) Start(ctx context.Context, request core.SandboxRequest) (runne
 		return nil, fmt.Errorf("generate docker sandbox ID: %w", err)
 	}
 	sandbox := &Sandbox{
+		owner:          m,
 		client:         m.client,
 		containerName:  "aries-task-" + id,
 		networkName:    "aries-net-" + id,
@@ -203,6 +206,21 @@ func (m *Manager) Start(ctx context.Context, request core.SandboxRequest) (runne
 	}
 	m.logger.InfoContext(ctx, "docker task sandbox started", "container", sandbox.containerName, "network", sandbox.networkName)
 	return sandbox, nil
+}
+
+// Stop releases a sandbox created by this manager.
+func (m *Manager) Stop(ctx context.Context, live runner.Sandbox) error {
+	if live == nil {
+		return errors.New("stop Docker sandbox: sandbox is required")
+	}
+	sandbox, ok := live.(*Sandbox)
+	if !ok || sandbox == nil {
+		return fmt.Errorf("stop Docker sandbox: unsupported sandbox type %T", live)
+	}
+	if sandbox.owner != m {
+		return errors.New("stop Docker sandbox: sandbox belongs to another manager")
+	}
+	return sandbox.stop(ctx)
 }
 
 func ownershipLabels(request core.SandboxRequest, kind string) map[string]string {
@@ -846,9 +864,9 @@ func (s *Sandbox) Download(ctx context.Context, source, destination string) erro
 	return nil
 }
 
-// Stop records logs and removes the task container and network. Concurrent and
+// stop records logs and removes the task container and network. Concurrent and
 // repeated calls are safe; failed removals can be retried.
-func (s *Sandbox) Stop(ctx context.Context) error {
+func (s *Sandbox) stop(ctx context.Context) error {
 	s.mu.Lock()
 	if s.stopped {
 		s.mu.Unlock()
@@ -984,7 +1002,7 @@ func dockerEnvironment(values map[string]string) []string {
 }
 
 func validateEnvironment(environment core.Environment) error {
-	if err := validateImmutableImage(environment.Image); err != nil {
+	if err := containerimage.Validate(environment.Image); err != nil {
 		return fmt.Errorf("invalid docker sandbox image: %w", err)
 	}
 	if environment.BuildDir != "" {
@@ -1041,25 +1059,6 @@ func validateCommand(command core.Command) error {
 		if !validEnvName(key) || strings.ContainsRune(value, 0) {
 			return fmt.Errorf("invalid command environment %q", key)
 		}
-	}
-	return nil
-}
-
-func validateImmutableImage(image string) error {
-	if strings.ContainsRune(image, 0) || strings.TrimSpace(image) != image || image == "" {
-		return errors.New("image reference is empty, padded, or contains NUL")
-	}
-	digest := ""
-	if strings.HasPrefix(image, "sha256:") {
-		digest = strings.TrimPrefix(image, "sha256:")
-	} else if marker := strings.LastIndex(image, "@sha256:"); marker >= 0 {
-		digest = image[marker+len("@sha256:"):]
-	}
-	if len(digest) != 64 {
-		return errors.New("image must use a full immutable sha256 digest")
-	}
-	if _, err := hex.DecodeString(digest); err != nil {
-		return errors.New("image sha256 digest is malformed")
 	}
 	return nil
 }

@@ -33,7 +33,6 @@ type contractSandbox struct {
 	acceptTools  bool
 	preparations []core.Command
 	toolCommands []core.Command
-	stopCalls    int
 	result       core.CommandResult
 }
 
@@ -67,15 +66,9 @@ func (sandbox *contractSandbox) ExecStream(ctx context.Context, command core.Com
 
 func (*contractSandbox) Upload(context.Context, string, string) error   { return nil }
 func (*contractSandbox) Download(context.Context, string, string) error { return nil }
-func (sandbox *contractSandbox) Stop(context.Context) error {
-	sandbox.mu.Lock()
-	defer sandbox.mu.Unlock()
-	sandbox.stopCalls++
-	return nil
-}
-func (*contractSandbox) ContainerID() string   { return "sandbox-container-id" }
-func (*contractSandbox) ContainerName() string { return "sandbox-container-name" }
-func (*contractSandbox) NetworkName() string   { return "sandbox-network-name" }
+func (*contractSandbox) ContainerID() string                            { return "sandbox-container-id" }
+func (*contractSandbox) ContainerName() string                          { return "sandbox-container-name" }
+func (*contractSandbox) NetworkName() string                            { return "sandbox-network-name" }
 func (*contractSandbox) NetworkGateway(context.Context) (string, error) {
 	return "127.0.0.1", nil
 }
@@ -89,10 +82,10 @@ func (sandbox *contractSandbox) enableToolCalls() {
 	sandbox.mu.Unlock()
 }
 
-func (sandbox *contractSandbox) snapshot() ([]core.Command, int) {
+func (sandbox *contractSandbox) snapshot() []core.Command {
 	sandbox.mu.Lock()
 	defer sandbox.mu.Unlock()
-	return append([]core.Command(nil), sandbox.toolCommands...), sandbox.stopCalls
+	return append([]core.Command(nil), sandbox.toolCommands...)
 }
 
 func TestManagerProxiesSSHExecToSandboxAndRetainsRedactedToolLog(t *testing.T) {
@@ -139,7 +132,7 @@ func TestManagerProxiesSSHExecToSandboxAndRetainsRedactedToolLog(t *testing.T) {
 		t.Fatalf("SSH streams = stdout %q stderr %q", stdout.String(), stderr.String())
 	}
 
-	commands, _ := sandbox.snapshot()
+	commands := sandbox.snapshot()
 	if len(commands) != 1 {
 		t.Fatalf("sandbox tool Exec calls = %d, want exactly one: %#v", len(commands), commands)
 	}
@@ -151,10 +144,6 @@ func TestManagerProxiesSSHExecToSandboxAndRetainsRedactedToolLog(t *testing.T) {
 
 	if err := manager.Stop(ctx); err != nil {
 		t.Fatal(err)
-	}
-	_, stopCalls := sandbox.snapshot()
-	if stopCalls != 0 {
-		t.Fatalf("bridge stopped the sandbox %d times", stopCalls)
 	}
 	if client, err := ssh.Dial("tcp", endpoint.Address, configuration); err == nil {
 		_ = client.Close()
@@ -217,12 +206,9 @@ func TestManagerRejectsMalformedSSHExecWithoutSandboxExecution(t *testing.T) {
 	if err := manager.Stop(ctx); err != nil {
 		t.Fatal(err)
 	}
-	commands, stopCalls := sandbox.snapshot()
+	commands := sandbox.snapshot()
 	if len(commands) != 0 {
 		t.Fatalf("malformed SSH exec reached sandbox: %#v", commands)
-	}
-	if stopCalls != 0 {
-		t.Fatalf("bridge stopped the sandbox %d times", stopCalls)
 	}
 	records, content := readToolCallRecords(t, outputDir)
 	if len(records) != 1 {

@@ -23,6 +23,8 @@ import (
 	"github.com/moby/moby/client"
 )
 
+const testOpenClawImage = "example.invalid/openclaw:fixture@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+
 type fakeDocker struct {
 	mu               sync.Mutex
 	created          client.ContainerCreateOptions
@@ -258,7 +260,7 @@ func writeMux(writer io.Writer, stream stdcopy.StdType, content []byte) error {
 func newTestManager(t *testing.T, fake *fakeDocker, secret []byte) *Manager {
 	t.Helper()
 	manager, err := New(Options{
-		OutputDir: t.TempDir(), StartTimeout: time.Second, AgentTimeout: time.Second,
+		Image: testOpenClawImage, OutputDir: t.TempDir(), StartTimeout: time.Second, AgentTimeout: time.Second,
 		APIKeyLookup: func(string) ([]byte, bool) { return secret, true },
 	})
 	if err != nil {
@@ -267,6 +269,14 @@ func newTestManager(t *testing.T, fake *fakeDocker, secret []byte) *Manager {
 	manager.client = fake
 	manager.newID = func() (string, error) { return "attempt", nil }
 	return manager
+}
+
+func TestNewRequiresImmutableConfiguredImage(t *testing.T) {
+	for _, image := range []string{"", "example.invalid/openclaw:latest", "example.invalid/openclaw@sha256:short"} {
+		if _, err := New(Options{Image: image, OutputDir: t.TempDir()}); err == nil || !strings.Contains(err.Error(), "OpenClaw image") {
+			t.Fatalf("New(%q) error = %v", image, err)
+		}
+	}
 }
 
 func endpointFiles(t *testing.T) core.ToolEndpoint {
