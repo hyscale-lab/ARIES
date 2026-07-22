@@ -5,12 +5,10 @@ import (
 	"context"
 	"errors"
 	"io"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,351 +16,397 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-type fakeBridgeSandbox struct {
-	runtimeDir           string
-	workdir              string
-	commands             []core.Command
-	mu                   sync.Mutex
-	process              atomic.Bool
-	restarts             atomic.Int32
-	prepareErr           error
-	prepareExit          int
-	recoveryErr          error
-	recoverContextActive atomic.Bool
-	processErr           error
-}
-
-func newFakeBridgeSandbox(t *testing.T) *fakeBridgeSandbox {
-	t.Helper()
-	sandbox := &fakeBridgeSandbox{runtimeDir: t.TempDir(), workdir: "/work"}
-	return sandbox
-}
-
-func (sandbox *fakeBridgeSandbox) Exec(ctx context.Context, command core.Command) (core.CommandResult, error) {
-	command.Args = append([]string(nil), command.Args...)
-	command.Stdin = append([]byte(nil), command.Stdin...)
+func TestManagerPreparesPinnedWorkspaceAndRollsItBackAfterPartialStart(t *testing.T) {
+	sandbox := &contractSandbox{}
+	manager := newContractManager(t, t.TempDir())
+	endpoint, err := manager.Start(context.Background(), sandbox)
+	if err != nil {
+		t.Fatal(err)
+	}
 	sandbox.mu.Lock()
-	sandbox.commands = append(sandbox.commands, command)
+	preparations := append([]core.Command(nil), sandbox.preparations...)
 	sandbox.mu.Unlock()
-	if command.Path == serverContainerPath && len(command.Args) > 0 && command.Args[0] == "spawn" {
-		sandbox.process.Store(true)
+	if len(preparations) != 2 || preparations[0].Path != remoteShell || !containsArgument(preparations[0].Args, openClawWorkspace) || !containsArgument(preparations[0].Args, sandbox.Workdir()) {
+		t.Fatalf("workspace preparation calls = %#v", preparations)
 	}
-	if command.Path == serverContainerPath && len(command.Args) > 0 && command.Args[0] == "prepare" && sandbox.prepareErr != nil {
-		return core.CommandResult{ExitCode: -1}, sandbox.prepareErr
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatal(err)
 	}
-	if command.Path == serverContainerPath && len(command.Args) > 0 && command.Args[0] == "prepare" && sandbox.prepareExit != 0 {
-		return core.CommandResult{ExitCode: sandbox.prepareExit}, nil
+	if _, err := os.Stat(endpoint.LogPaths[0]); err != nil {
+		t.Fatalf("tool log was not retained: %v", err)
 	}
-	if command.Path == trustedExecHelper && len(command.Args) > 0 && command.Args[0] == "--recover-workspace" && ctx.Err() == nil {
-		sandbox.recoverContextActive.Store(true)
-		if sandbox.recoveryErr != nil {
-			return core.CommandResult{ExitCode: 125}, sandbox.recoveryErr
+
+	badClient := filepath.Join(t.TempDir(), "not-executable")
+	if err := os.WriteFile(badClient, []byte("fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	broken, err := New(Options{OutputDir: t.TempDir(), ClientPath: badClient})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedSandbox := &contractSandbox{}
+	if _, err := broken.Start(context.Background(), failedSandbox); err == nil {
+		t.Fatal("partial Start unexpectedly succeeded")
+	}
+	failedSandbox.mu.Lock()
+	failedPreparations := append([]core.Command(nil), failedSandbox.preparations...)
+	failedSandbox.mu.Unlock()
+	if len(failedPreparations) != 2 || !containsArgument(failedPreparations[1].Args, workspaceRollbackScript) {
+		t.Fatalf("workspace rollback calls = %#v", failedPreparations)
+	}
+}
+
+type releaseFailSandbox struct {
+	contractSandbox
+	err error
+}
+
+func (sandbox *releaseFailSandbox) Exec(ctx context.Context, command core.Command) (core.CommandResult, error) {
+	result, err := sandbox.contractSandbox.Exec(ctx, command)
+	if containsArgument(command.Args, workspaceReleaseScript) {
+		return core.CommandResult{ExitCode: -1}, sandbox.err
+	}
+	return result, err
+}
+
+func TestWorkspaceOwnershipReleaseFailureRollsBackStart(t *testing.T) {
+	want := errors.New("release failed")
+	sandbox := &releaseFailSandbox{err: want}
+	manager := newContractManager(t, t.TempDir())
+	if _, err := manager.Start(context.Background(), sandbox); !errors.Is(err, want) {
+		t.Fatalf("Start() error = %v, want release failure", err)
+	}
+	sandbox.mu.Lock()
+	preparations := append([]core.Command(nil), sandbox.preparations...)
+	sandbox.mu.Unlock()
+	if len(preparations) != 3 || !containsArgument(preparations[2].Args, workspaceRollbackScript) {
+		t.Fatalf("release failure did not trigger workspace rollback: %#v", preparations)
+	}
+}
+
+func TestManagerAnswersOnlyOpenSSHKeepalives(t *testing.T) {
+	manager := newContractManager(t, t.TempDir())
+	sandbox := &contractSandbox{}
+	endpoint, err := manager.Start(context.Background(), sandbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := ssh.Dial("tcp", endpoint.Address, bridgeClientConfig(t, endpoint))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, _, err := client.SendRequest("keepalive@openssh.com", true, nil); err != nil || !ok {
+		t.Fatalf("keepalive reply = ok %v err %v", ok, err)
+	}
+	if ok, _, err := client.SendRequest("unknown@aries", true, nil); err != nil || ok {
+		t.Fatalf("unknown reply = ok %v err %v", ok, err)
+	}
+	_ = client.Close()
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type cancelingSandbox struct {
+	contractSandbox
+	started  chan struct{}
+	canceled chan struct{}
+	once     sync.Once
+}
+
+func (sandbox *cancelingSandbox) ExecStream(ctx context.Context, _ core.Command, _ io.Reader, _, _ io.Writer) (core.CommandResult, error) {
+	sandbox.once.Do(func() { close(sandbox.started) })
+	<-ctx.Done()
+	close(sandbox.canceled)
+	return core.CommandResult{ExitCode: -1}, ctx.Err()
+}
+
+func TestClosingSSHConnectionCancelsItsDockerExec(t *testing.T) {
+	manager := newContractManager(t, t.TempDir())
+	sandbox := &cancelingSandbox{started: make(chan struct{}), canceled: make(chan struct{})}
+	endpoint, err := manager.Start(context.Background(), sandbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := ssh.Dial("tcp", endpoint.Address, bridgeClientConfig(t, endpoint))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sandbox.enableToolCalls()
+	remote := encodeCanonicalTokens([]string{remoteShell, "-c", "sleep forever"})
+	if err := session.Start(remote); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-sandbox.started:
+	case <-time.After(time.Second):
+		t.Fatal("sandbox exec did not start")
+	}
+	_ = client.Close()
+	select {
+	case <-sandbox.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("sandbox exec context survived SSH connection close")
+	}
+	stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := manager.Stop(stopCtx); err != nil {
+		t.Fatalf("Stop() treated confirmed cancellation as failed revocation: %v", err)
+	}
+}
+
+type failingToolSandbox struct {
+	contractSandbox
+	err error
+}
+
+func (sandbox *failingToolSandbox) ExecStream(context.Context, core.Command, io.Reader, io.Writer, io.Writer) (core.CommandResult, error) {
+	return core.CommandResult{ExitCode: -1}, sandbox.err
+}
+
+func TestStopIgnoresPriorOrdinaryToolExecutionFailure(t *testing.T) {
+	outputDir := t.TempDir()
+	manager := newContractManager(t, outputDir)
+	sandbox := &failingToolSandbox{err: errors.New("ordinary Docker exec transport failure")}
+	endpoint, err := manager.Start(context.Background(), sandbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := ssh.Dial("tcp", endpoint.Address, bridgeClientConfig(t, endpoint))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := client.NewSession()
+	if err != nil {
+		_ = client.Close()
+		t.Fatal(err)
+	}
+	sandbox.enableToolCalls()
+	err = session.Run(encodeCanonicalTokens([]string{remoteShell, "-c", "true"}))
+	_ = client.Close()
+	var exitError *ssh.ExitError
+	if !errors.As(err, &exitError) || exitError.ExitStatus() != 255 {
+		t.Fatalf("SSH Run() error = %v, want exit 255", err)
+	}
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop() was poisoned by an ordinary tool failure: %v", err)
+	}
+	records, _ := readToolCallRecords(t, outputDir)
+	if len(records) != 1 {
+		t.Fatalf("tool log records = %d, want one", len(records))
+	}
+	assertLogString(t, records[0], "status", "failed")
+}
+
+type terminationFailSandbox struct {
+	cancelingSandbox
+	terminationErr error
+}
+
+func (sandbox *terminationFailSandbox) ExecStream(ctx context.Context, _ core.Command, _ io.Reader, _, _ io.Writer) (core.CommandResult, error) {
+	sandbox.once.Do(func() { close(sandbox.started) })
+	<-ctx.Done()
+	close(sandbox.canceled)
+	return core.CommandResult{ExitCode: -1}, errors.Join(ctx.Err(), sandbox.terminationErr)
+}
+
+func TestStopFailsWhenCancellationCannotConfirmTargetedTermination(t *testing.T) {
+	outputDir := t.TempDir()
+	manager := newContractManager(t, outputDir)
+	terminationErr := errors.New("targeted termination was not confirmed")
+	sandbox := &terminationFailSandbox{
+		cancelingSandbox: cancelingSandbox{started: make(chan struct{}), canceled: make(chan struct{})},
+		terminationErr:   terminationErr,
+	}
+	endpoint, err := manager.Start(context.Background(), sandbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := ssh.Dial("tcp", endpoint.Address, bridgeClientConfig(t, endpoint))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const stdinSecret = "revocation-stdin-secret"
+	const envSecret = "revocation-env-secret"
+	session.Stdin = strings.NewReader(stdinSecret)
+	sandbox.enableToolCalls()
+	remote := encodeCanonicalTokens([]string{remoteEnv, "ARIES_SECRET=" + envSecret, remoteShell, "-c", "cat", "openclaw-sandbox-fs"})
+	if err := session.Start(remote); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-sandbox.started:
+	case <-time.After(time.Second):
+		t.Fatal("sandbox exec did not start")
+	}
+	stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	stopErr := manager.Stop(stopCtx)
+	_ = client.Close()
+	if !errors.Is(stopErr, context.Canceled) || !errors.Is(stopErr, terminationErr) {
+		t.Fatalf("Stop() error = %v, want cancellation joined with termination failure", stopErr)
+	}
+	records, content := readToolCallRecords(t, outputDir)
+	if len(records) != 1 {
+		t.Fatalf("tool log records = %d, want one: %s", len(records), content)
+	}
+	assertLogString(t, records[0], "status", "canceled")
+	for _, secret := range []string{stdinSecret, envSecret} {
+		if bytes.Contains(content, []byte(secret)) {
+			t.Fatalf("tool log contains secret %q: %s", secret, content)
 		}
 	}
-	return core.CommandResult{ExitCode: 0}, nil
 }
 
-func (sandbox *fakeBridgeSandbox) Upload(context.Context, string, string) error   { return nil }
-func (sandbox *fakeBridgeSandbox) Download(context.Context, string, string) error { return nil }
-func (sandbox *fakeBridgeSandbox) Stop(context.Context) error                     { return nil }
-func (sandbox *fakeBridgeSandbox) NetworkName() string                            { return "aries-net-test" }
-func (sandbox *fakeBridgeSandbox) Workdir() string                                { return sandbox.workdir }
-func (sandbox *fakeBridgeSandbox) RuntimeDir() string                             { return sandbox.runtimeDir }
-func (sandbox *fakeBridgeSandbox) ContainerIPv4(context.Context) (string, error) {
-	return "127.0.0.1", nil
-}
-func (sandbox *fakeBridgeSandbox) ProcessPresent(context.Context, int) (bool, error) {
-	return sandbox.process.Load(), sandbox.processErr
-}
-func (sandbox *fakeBridgeSandbox) RestartForIsolation(context.Context) error {
-	sandbox.restarts.Add(1)
-	sandbox.process.Store(false)
-	return nil
+type cancellationBlindSandbox struct {
+	cancelingSandbox
+	err error
 }
 
-func (sandbox *fakeBridgeSandbox) commandModes() []string {
-	sandbox.mu.Lock()
-	defer sandbox.mu.Unlock()
-	modes := make([]string, 0, len(sandbox.commands))
-	for _, command := range sandbox.commands {
-		if command.Path == serverContainerPath && len(command.Args) > 0 {
-			modes = append(modes, command.Args[0])
-		} else if command.Path == trustedExecHelper && len(command.Args) > 0 {
-			modes = append(modes, command.Args[0])
-		} else {
-			modes = append(modes, filepath.Base(command.Path))
-		}
+func (sandbox *cancellationBlindSandbox) ExecStream(ctx context.Context, _ core.Command, _ io.Reader, _, _ io.Writer) (core.CommandResult, error) {
+	sandbox.once.Do(func() { close(sandbox.started) })
+	<-ctx.Done()
+	close(sandbox.canceled)
+	return core.CommandResult{ExitCode: -1}, sandbox.err
+}
+
+func TestStopFailsClosedWhenCanceledSandboxOmitsCancellationCause(t *testing.T) {
+	manager := newContractManager(t, t.TempDir())
+	transportErr := errors.New("attach ended without termination confirmation")
+	sandbox := &cancellationBlindSandbox{
+		cancelingSandbox: cancelingSandbox{started: make(chan struct{}), canceled: make(chan struct{})},
+		err:              transportErr,
 	}
-	return modes
+	endpoint, err := manager.Start(context.Background(), sandbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := ssh.Dial("tcp", endpoint.Address, bridgeClientConfig(t, endpoint))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sandbox.enableToolCalls()
+	if err := session.Start(encodeCanonicalTokens([]string{remoteShell, "-c", "sleep forever"})); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-sandbox.started:
+	case <-time.After(time.Second):
+		t.Fatal("sandbox exec did not start")
+	}
+	stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	stopErr := manager.Stop(stopCtx)
+	_ = client.Close()
+	if !errors.Is(stopErr, context.Canceled) || !errors.Is(stopErr, transportErr) {
+		t.Fatalf("Stop() error = %v, want cancellation joined with ambiguous sandbox error", stopErr)
+	}
 }
 
-func (sandbox *fakeBridgeSandbox) commandsSnapshot() []core.Command {
-	sandbox.mu.Lock()
-	defer sandbox.mu.Unlock()
-	return append([]core.Command(nil), sandbox.commands...)
-}
+func TestByteCounterTracksConcurrentPipeTraffic(t *testing.T) {
+	const chunks = 128
+	payload := bytes.Repeat([]byte("late-stream-content"), 32)
+	want := int64(chunks * len(payload))
 
-func testManager(t *testing.T, sandbox *fakeBridgeSandbox) *Manager {
-	t.Helper()
-	helperDir := t.TempDir()
-	client := filepath.Join(helperDir, "aries-ssh")
-	server := filepath.Join(helperDir, "aries-ssh-server")
-	for _, path := range []string{client, server} {
-		if err := os.WriteFile(path, []byte("static-helper"), 0o700); err != nil {
+	readPipe, writePipe := io.Pipe()
+	readCounter := &byteCounter{reader: readPipe}
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(io.Discard, readCounter)
+		readDone <- err
+	}()
+	stopReadPolling := pollCounter(readCounter)
+	for range chunks {
+		if _, err := writePipe.Write(payload); err != nil {
 			t.Fatal(err)
 		}
 	}
-	manager, err := New(Options{
-		OutputDir: t.TempDir(), ClientPath: client, ServerPath: server,
-		CleanupTimeout: 3 * time.Second,
-	})
-	if err != nil {
+	if err := writePipe.Close(); err != nil {
 		t.Fatal(err)
 	}
-	manager.newID = func() (string, error) { return "fixedid", nil }
-	manager.probe = func(context.Context, string, ssh.Signer, ssh.PublicKey) error { return nil }
-	manager.waitListener = func(context.Context, string) error { return nil }
-	manager.oldKeyRejected = func(context.Context, *bridgeSession) error { return nil }
-	manager.startServer = func(ctx context.Context, generic bridgeSandbox, _, controlContainer, workspace string, token, _, _ []byte) (io.Closer, int, bool, error) {
-		result, err := generic.Exec(ctx, core.Command{
-			Path: serverContainerPath,
-			Args: []string{"spawn", "--control", controlContainer, "--listen", net.JoinHostPort("0.0.0.0", "2222"), "--workspace", workspace},
-			Dir:  workspace, Stdin: token, Timeout: 10 * time.Second,
-		})
-		if err != nil || result.ExitCode != 0 {
-			return nil, 0, false, commandFailure("spawn OpenClaw SSH server", result, err)
-		}
-		host, server := net.Pipe()
-		go func() {
-			defer server.Close()
-			var one [1]byte
-			_, _ = server.Read(one[:])
-			sandbox.process.Store(false)
-		}()
-		return host, 12345, true, nil
-	}
-	return manager
-}
-
-func TestBridgeLifecycleReturnsPrivateEndpointAndRevokesConcurrently(t *testing.T) {
-	sandbox := newFakeBridgeSandbox(t)
-	manager := testManager(t, sandbox)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	endpoint, err := manager.Start(ctx, sandbox)
-	if err != nil {
+	if err := <-readDone; err != nil {
 		t.Fatal(err)
 	}
-	if endpoint.Address != "task-sandbox:2222" || endpoint.Network != "aries-net-test" || endpoint.ClientCommand != clientContainerPath || endpoint.IdentityFile != identityContainerPath {
-		t.Fatalf("endpoint = %#v", endpoint)
+	stopReadPolling()
+	if got := readCounter.count(); got != want {
+		t.Fatalf("read count = %d, want %d", got, want)
 	}
-	for path, mode := range map[string]os.FileMode{
-		endpoint.ClientSourceFile: 0o555, endpoint.IdentitySourceFile: 0o600, endpoint.KnownHostsSourceFile: 0o600,
-	} {
-		info, err := os.Stat(path)
-		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != mode {
-			t.Fatalf("artifact %q = %v, %v", path, info, err)
+
+	readPipe, writePipe = io.Pipe()
+	writeCounter := &byteCounter{writer: writePipe}
+	drainDone := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(io.Discard, readPipe)
+		drainDone <- err
+	}()
+	stopWritePolling := pollCounter(writeCounter)
+	for range chunks {
+		if _, err := writeCounter.Write(payload); err != nil {
+			t.Fatal(err)
 		}
 	}
-	artifactDir := filepath.Dir(endpoint.IdentitySourceFile)
-	const callers = 6
-	errorsByCaller := make(chan error, callers)
-	var wait sync.WaitGroup
-	for range callers {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
-			errorsByCaller <- manager.Stop(ctx)
-		}()
-	}
-	wait.Wait()
-	close(errorsByCaller)
-	for stopErr := range errorsByCaller {
-		if stopErr != nil {
-			t.Fatalf("Stop() error = %v", stopErr)
-		}
-	}
-	if err := manager.Stop(ctx); err != nil {
-		t.Fatalf("repeated Stop() error = %v", err)
-	}
-	if _, err := os.Lstat(artifactDir); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("credential artifact remains: %v", err)
-	}
-	if sandbox.process.Load() {
-		t.Fatal("fake SSH server remains after Stop")
-	}
-	if sandbox.restarts.Load() != 1 {
-		t.Fatalf("sandbox restarts = %d, want 1", sandbox.restarts.Load())
-	}
-	if got := strings.Join(sandbox.commandModes(), ","); got != "prepare,spawn,--verify-workspace,--remove-file" {
-		t.Fatalf("command modes = %q", got)
-	}
-}
-
-func TestBridgeStartFailureRollsBackServerWorkspaceAndCredentials(t *testing.T) {
-	sandbox := newFakeBridgeSandbox(t)
-	manager := testManager(t, sandbox)
-	probeFailure := errors.New("probe failed")
-	manager.probe = func(context.Context, string, ssh.Signer, ssh.PublicKey) error { return probeFailure }
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_, err := manager.Start(ctx, sandbox)
-	if !errors.Is(err, probeFailure) {
-		t.Fatalf("Start() error = %v", err)
-	}
-	if sandbox.process.Load() {
-		t.Fatal("server survived failed Start")
-	}
-	if got := strings.Join(sandbox.commandModes(), ","); got != "prepare,spawn,--recover-workspace,--remove-file" {
-		t.Fatalf("rollback command modes = %q", got)
-	}
-	if sandbox.restarts.Load() != 1 {
-		t.Fatalf("rollback restarts = %d, want 1", sandbox.restarts.Load())
-	}
-	if _, err := os.Lstat(filepath.Join(manager.outputDir, "bridges", "fixedid")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("failed Start credentials remain: %v", err)
-	}
-}
-
-func TestBridgeStopCannotSucceedWithoutListenerAndOldKeyEvidence(t *testing.T) {
-	sandbox := newFakeBridgeSandbox(t)
-	manager := testManager(t, sandbox)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if _, err := manager.Start(ctx, sandbox); err != nil {
+	if err := writePipe.Close(); err != nil {
 		t.Fatal(err)
 	}
-	evidenceFailure := errors.New("listener evidence failed")
-	manager.waitListener = func(context.Context, string) error { return evidenceFailure }
-	if err := manager.Stop(ctx); !errors.Is(err, evidenceFailure) {
-		t.Fatalf("Stop() error = %v", err)
+	if err := <-drainDone; err != nil {
+		t.Fatal(err)
 	}
-	manager.waitListener = func(context.Context, string) error { return nil }
-	manager.oldKeyRejected = func(context.Context, *bridgeSession) error { return nil }
-	if err := manager.Stop(ctx); err != nil {
-		t.Fatalf("retry Stop() error = %v", err)
+	stopWritePolling()
+	if got := writeCounter.count(); got != want {
+		t.Fatalf("write count = %d, want %d", got, want)
 	}
 }
 
-func TestBridgePrepareLostResponseAndCancellationAlwaysUseTrustedRecovery(t *testing.T) {
-	for _, injected := range []error{errors.New("lost prepare response"), context.Canceled} {
-		sandbox := newFakeBridgeSandbox(t)
-		sandbox.prepareErr = injected
-		manager := testManager(t, sandbox)
-		ctx, cancel := context.WithCancel(context.Background())
-		if errors.Is(injected, context.Canceled) {
-			cancel()
-		} else {
-			defer cancel()
-		}
-		_, err := manager.Start(ctx, sandbox)
-		if !errors.Is(err, injected) {
-			t.Fatalf("Start() error = %v, want %v", err, injected)
-		}
-		if !sandbox.recoverContextActive.Load() {
-			t.Fatal("trusted workspace recovery did not receive a fresh live context")
-		}
-		if sandbox.restarts.Load() != 0 {
-			t.Fatalf("prepare-only failure restarted sandbox %d times", sandbox.restarts.Load())
-		}
-		if got := strings.Join(sandbox.commandModes(), ","); got != "prepare,--recover-workspace,--remove-file" {
-			t.Fatalf("prepare rollback modes = %q", got)
-		}
-		commands := sandbox.commandsSnapshot()
-		if len(commands) < 2 || len(commands[0].Stdin) != workspaceOwnerTokenBytes || !bytes.Equal(commands[0].Stdin, commands[1].Stdin) {
-			t.Fatalf("prepare/recovery ownership proof mismatch: %#v", commands)
-		}
-		for _, command := range commands[:2] {
-			if bytes.Contains([]byte(strings.Join(command.Args, "\x00")), commands[0].Stdin) {
-				t.Fatal("workspace ownership token leaked into command arguments")
+func pollCounter(counter *byteCounter) func() {
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_ = counter.count()
 			}
 		}
+	}()
+	return func() {
+		close(stop)
+		<-done
 	}
 }
 
-func TestBridgeForeignWorkspaceRootFailsClosedDuringUncertainPrepare(t *testing.T) {
-	sandbox := newFakeBridgeSandbox(t)
-	sandbox.prepareExit = workspaceRootExistsExit
-	sandbox.recoveryErr = errors.New("workspace ownership marker missing")
-	manager := testManager(t, sandbox)
-	_, err := manager.Start(context.Background(), sandbox)
-	if err == nil || !errors.Is(err, sandbox.recoveryErr) || !strings.Contains(err.Error(), "prepare OpenClaw SSH workspace") {
-		t.Fatalf("Start() error = %v", err)
-	}
-	if got := strings.Join(sandbox.commandModes(), ","); got != "prepare,--recover-workspace,--remove-file" {
-		t.Fatalf("foreign-root failure operations = %q", got)
-	}
-	if !sandbox.recoverContextActive.Load() {
-		t.Fatal("uncertain prepare did not attempt proof-gated recovery")
+func TestOperationClassUsesOnlyKnownOpenClawLabels(t *testing.T) {
+	for label, want := range map[string]string{
+		"openclaw-sandbox-upload": "workspace_upload",
+		"openclaw-sandbox-fs":     "fs",
+		"untrusted-label":         "exec",
+	} {
+		command := core.Command{Path: remoteShell, Args: []string{"-c", "true", label}}
+		if got := operationClass(command); got != want {
+			t.Fatalf("operationClass(%q) = %q, want %q", label, got, want)
+		}
 	}
 }
 
-func TestBridgeLostPrepareResponseFailsClosedWhenOwnershipProofCannotBeValidated(t *testing.T) {
-	sandbox := newFakeBridgeSandbox(t)
-	sandbox.prepareErr = errors.New("lost prepare response")
-	sandbox.recoveryErr = errors.New("workspace ownership marker mismatch")
-	manager := testManager(t, sandbox)
-	_, err := manager.Start(context.Background(), sandbox)
-	if err == nil || !errors.Is(err, sandbox.prepareErr) || !errors.Is(err, sandbox.recoveryErr) {
-		t.Fatalf("Start() error = %v", err)
+func containsArgument(arguments []string, value string) bool {
+	for _, argument := range arguments {
+		if argument == value || strings.Contains(argument, value) {
+			return true
+		}
 	}
-	if got := strings.Join(sandbox.commandModes(), ","); got != "prepare,--recover-workspace,--remove-file" {
-		t.Fatalf("lost-response operations = %q", got)
-	}
-	if !sandbox.recoverContextActive.Load() {
-		t.Fatal("lost prepare response did not attempt proof-gated recovery")
-	}
-}
-
-func TestBridgeUncertainSpawnAlwaysRestartsWithFreshContext(t *testing.T) {
-	sandbox := newFakeBridgeSandbox(t)
-	manager := testManager(t, sandbox)
-	spawnFailure := errors.New("spawn response lost")
-	manager.startServer = func(context.Context, bridgeSandbox, string, string, string, []byte, []byte, []byte) (io.Closer, int, bool, error) {
-		return nil, 0, false, spawnFailure
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	_, err := manager.Start(ctx, sandbox)
-	if !errors.Is(err, spawnFailure) {
-		t.Fatalf("Start() error = %v", err)
-	}
-	if sandbox.restarts.Load() != 1 {
-		t.Fatalf("uncertain spawn restarts = %d, want 1", sandbox.restarts.Load())
-	}
-	if !sandbox.recoverContextActive.Load() {
-		t.Fatal("uncertain spawn rollback did not use fresh cleanup context")
-	}
-}
-
-func TestBridgeStopIgnoresExpiredGracefulContextOnlyWithinCleanupBound(t *testing.T) {
-	sandbox := newFakeBridgeSandbox(t)
-	manager := testManager(t, sandbox)
-	if _, err := manager.Start(context.Background(), sandbox); err != nil {
-		t.Fatal(err)
-	}
-	canceled, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := manager.Stop(canceled); err != nil {
-		t.Fatal(err)
-	}
-	if sandbox.restarts.Load() != 1 {
-		t.Fatalf("Stop restarts = %d, want 1", sandbox.restarts.Load())
-	}
-}
-
-func TestKeyBootstrapRequiresAuthenticatedPIDStillPresent(t *testing.T) {
-	sandbox := newFakeBridgeSandbox(t)
-	sandbox.process.Store(false)
-	if err := requireProcessPresent(context.Background(), sandbox, 1234); err == nil {
-		t.Fatal("missing authenticated PID was accepted before key bootstrap")
-	}
-	sandbox.process.Store(true)
-	if err := requireProcessPresent(context.Background(), sandbox, 1234); err != nil {
-		t.Fatal(err)
-	}
-	sandbox.processErr = errors.New("inspection failed")
-	if err := requireProcessPresent(context.Background(), sandbox, 1234); !errors.Is(err, sandbox.processErr) {
-		t.Fatalf("ProcessPresent error = %v", err)
-	}
+	return false
 }

@@ -46,7 +46,7 @@ func decodeRemoteCommand(encoded string) (remoteCommand, error) {
 				return remoteCommand{}, errors.New("SSH exec OPENCLAW_SHELL assignment must be last")
 			}
 			value := assignment[separator+1:]
-			if !allowedEnvironmentAssignment(name, value) {
+			if name == "OPENCLAW_SHELL" && value != "exec" {
 				return remoteCommand{}, fmt.Errorf("SSH exec environment assignment %q is not allowed", assignment)
 			}
 			if _, exists := seen[name]; exists {
@@ -127,15 +127,4 @@ func validEnvironmentName(name string) bool {
 		return false
 	}
 	return name != ""
-}
-
-func allowedEnvironmentAssignment(name, value string) bool {
-	switch name {
-	case "OPENCLAW_SHELL":
-		return value == "exec"
-	case "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR", "TZ":
-		return true
-	default:
-		return false
-	}
 }

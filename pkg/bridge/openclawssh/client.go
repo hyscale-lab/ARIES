@@ -19,13 +19,10 @@ import (
 
 const (
 	clientContainerPath     = "/opt/aries/bin/aries-ssh"
-	serverContainerPath     = "/opt/aries/bin/aries-ssh-server"
 	identityContainerPath   = "/run/aries/ssh/id_ed25519"
 	knownHostsContainerPath = "/run/aries/ssh/known_hosts"
 	lockedHostAlias         = "openclaw-sandbox"
-	lockedHostName          = "task-sandbox"
 	lockedUsername          = "aries"
-	lockedPort              = 2222
 	lockedConnectTimeout    = 5 * time.Second
 	lockedKeepalive         = 15 * time.Second
 	maxClientFile           = 64 << 10
@@ -37,11 +34,8 @@ type clientInvocation struct {
 }
 
 type clientConfig struct {
-	hostName       string
-	port           int
-	user           string
-	identityFile   string
-	knownHostsFile string
+	hostName string
+	port     int
 }
 
 // ClientMain implements only the exact non-TTY OpenSSH argv used by the
@@ -73,7 +67,7 @@ func parseClientArguments(args []string) (clientInvocation, error) {
 	if args[0] != "-F" || args[2] != "-T" || args[3] != "-o" || args[4] != "RequestTTY=no" || args[5] != lockedHostAlias {
 		return clientInvocation{}, errors.New("arguments do not match the locked OpenClaw non-TTY order")
 	}
-	if _, err := validateConfigPath(args[1]); err != nil {
+	if err := validateConfigPath(args[1]); err != nil {
 		return clientInvocation{}, err
 	}
 	if strings.ContainsRune(args[6], 0) {
@@ -85,52 +79,69 @@ func parseClientArguments(args []string) (clientInvocation, error) {
 	return clientInvocation{configPath: args[1], remote: args[6]}, nil
 }
 
-func validateConfigPath(path string) (string, error) {
+func validateConfigPath(path string) error {
 	if path == "" || strings.ContainsRune(path, 0) || !filepath.IsAbs(path) || filepath.Clean(path) != path || filepath.Base(path) != "config" {
-		return "", errors.New("SSH config path must be an absolute clean .../openclaw-sandbox-ssh-*/config path")
+		return errors.New("SSH config path must be an absolute clean .../openclaw-sandbox-ssh-*/config path")
 	}
 	directory := filepath.Dir(path)
 	root := filepath.Dir(directory)
 	preferredRoot := filepath.Join(filepath.Clean(os.TempDir()), "openclaw")
 	fallbackRoot := filepath.Join(filepath.Clean(os.TempDir()), "openclaw-"+strconv.Itoa(os.Geteuid()))
 	if root != preferredRoot && root != fallbackRoot || !strings.HasPrefix(filepath.Base(directory), "openclaw-sandbox-ssh-") || filepath.Base(directory) == "openclaw-sandbox-ssh-" {
-		return "", errors.New("SSH config parent does not match OpenClaw's private temporary directory")
+		return errors.New("SSH config parent does not match OpenClaw's private temporary directory")
 	}
 	rootInfo, err := os.Lstat(root)
 	if err != nil {
-		return "", fmt.Errorf("inspect OpenClaw SSH temporary root: %w", err)
+		return fmt.Errorf("inspect OpenClaw SSH temporary root: %w", err)
 	}
 	if !rootInfo.IsDir() || rootInfo.Mode().Perm() != 0o700 {
-		return "", errors.New("OpenClaw SSH temporary root must be a private mode-0700 directory")
+		return errors.New("OpenClaw SSH temporary root must be a private mode-0700 directory")
 	}
 	if stat, ok := rootInfo.Sys().(*syscall.Stat_t); !ok || int(stat.Uid) != os.Geteuid() {
-		return "", errors.New("OpenClaw SSH temporary root must be owned by the current user")
+		return errors.New("OpenClaw SSH temporary root must be owned by the current user")
 	}
 	info, err := os.Lstat(directory)
 	if err != nil {
-		return "", fmt.Errorf("inspect SSH config directory: %w", err)
+		return fmt.Errorf("inspect SSH config directory: %w", err)
 	}
 	if !info.IsDir() || info.Mode().Perm() != 0o700 {
-		return "", errors.New("SSH config directory must be a private mode-0700 directory")
+		return errors.New("SSH config directory must be a private mode-0700 directory")
 	}
 	if stat, ok := info.Sys().(*syscall.Stat_t); !ok || int(stat.Uid) != os.Geteuid() {
-		return "", errors.New("SSH config directory must be owned by the current user")
+		return errors.New("SSH config directory must be owned by the current user")
 	}
-	return path, nil
+	return nil
 }
 
 func loadClientConfig(path string) (clientConfig, error) {
-	if _, err := validateConfigPath(path); err != nil {
+	if err := validateConfigPath(path); err != nil {
 		return clientConfig{}, err
 	}
 	content, err := readSecureRegularFile(path, 0o600, maxClientFile)
 	if err != nil {
 		return clientConfig{}, fmt.Errorf("read SSH config: %w", err)
 	}
+	lines := strings.Split(strings.TrimSuffix(string(content), "\n"), "\n")
+	if !strings.HasSuffix(string(content), "\n") || len(lines) != 13 {
+		return clientConfig{}, errors.New("SSH config does not exactly match the pinned directive count")
+	}
+	const hostPrefix = "  HostName "
+	const portPrefix = "  Port "
+	if !strings.HasPrefix(lines[1], hostPrefix) || !strings.HasPrefix(lines[2], portPrefix) {
+		return clientConfig{}, errors.New("SSH config does not contain HostName and Port in the pinned order")
+	}
+	hostName := strings.TrimPrefix(lines[1], hostPrefix)
+	if parsed := net.ParseIP(hostName); parsed == nil || parsed.To4() == nil || parsed.To4().String() != hostName || strings.ContainsAny(hostName, " \t\r\n") {
+		return clientConfig{}, errors.New("SSH HostName must be one IPv4 task-network gateway")
+	}
+	port, err := strconv.Atoi(strings.TrimPrefix(lines[2], portPrefix))
+	if err != nil || port < 1 || port > 65535 {
+		return clientConfig{}, errors.New("SSH Port must be between 1 and 65535")
+	}
 	want := []string{
 		"Host " + lockedHostAlias,
-		"  HostName " + lockedHostName,
-		"  Port " + strconv.Itoa(lockedPort),
+		"  HostName " + hostName,
+		"  Port " + strconv.Itoa(port),
 		"  BatchMode yes",
 		"  ConnectTimeout 5",
 		"  ServerAliveInterval 15",
@@ -145,17 +156,11 @@ func loadClientConfig(path string) (clientConfig, error) {
 	if string(content) != strings.Join(want, "\n")+"\n" {
 		return clientConfig{}, errors.New("SSH config does not exactly match the pinned OpenClaw directive order and values")
 	}
-	return clientConfig{
-		hostName:       lockedHostName,
-		port:           lockedPort,
-		user:           lockedUsername,
-		identityFile:   identityContainerPath,
-		knownHostsFile: knownHostsContainerPath,
-	}, nil
+	return clientConfig{hostName: hostName, port: port}, nil
 }
 
 func runSSHClient(ctx context.Context, configuration clientConfig, remote string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
-	identity, err := readSecureRegularFile(configuration.identityFile, 0o600, maxClientFile)
+	identity, err := readSecureRegularFile(identityContainerPath, 0o600, maxClientFile)
 	if err != nil {
 		return 255, fmt.Errorf("read SSH identity: %w", err)
 	}
@@ -163,11 +168,11 @@ func runSSHClient(ctx context.Context, configuration clientConfig, remote string
 	if err != nil {
 		return 255, errors.New("parse SSH identity")
 	}
-	knownHosts, err := readSecureRegularFile(configuration.knownHostsFile, 0o600, maxClientFile)
+	knownHosts, err := readSecureRegularFile(knownHostsContainerPath, 0o600, maxClientFile)
 	if err != nil {
 		return 255, fmt.Errorf("read SSH known-hosts file: %w", err)
 	}
-	hostKey, err := parseLockedKnownHost(knownHosts)
+	hostKey, err := parseLockedKnownHost(knownHosts, configuration.hostName, configuration.port)
 	if err != nil {
 		return 255, err
 	}
@@ -180,7 +185,7 @@ func runSSHClient(ctx context.Context, configuration clientConfig, remote string
 	defer connection.Close()
 	_ = connection.SetDeadline(time.Now().Add(lockedConnectTimeout))
 	clientConfiguration := &ssh.ClientConfig{
-		User: configuration.user,
+		User: lockedUsername,
 		Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
 		HostKeyCallback: func(host string, remoteAddress net.Addr, presented ssh.PublicKey) error {
 			if host != address || !bytes.Equal(presented.Marshal(), hostKey.Marshal()) {
@@ -248,12 +253,12 @@ func startKeepalive(client *ssh.Client) func() {
 	return func() { close(done) }
 }
 
-func parseLockedKnownHost(content []byte) (ssh.PublicKey, error) {
+func parseLockedKnownHost(content []byte, host string, port int) (ssh.PublicKey, error) {
 	line := strings.TrimSuffix(string(content), "\n")
 	if line == string(content) || strings.Contains(line, "\n") {
 		return nil, errors.New("known-hosts file must contain exactly one newline-terminated entry")
 	}
-	prefix := "[" + lockedHostName + "]:" + strconv.Itoa(lockedPort) + " "
+	prefix := "[" + host + "]:" + strconv.Itoa(port) + " "
 	if !strings.HasPrefix(line, prefix) {
 		return nil, errors.New("known-hosts entry does not match the locked host and port")
 	}

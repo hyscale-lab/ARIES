@@ -1,14 +1,18 @@
 package docker
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
 	"log/slog"
+	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,90 +20,231 @@ import (
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 )
 
-var (
-	errCommand = errors.New("command failed")
-	errCleanup = errors.New("cleanup failed")
-)
+type fakeNotFound struct{ kind string }
 
-type recordedCall struct {
-	stdin []byte
-	args  []string
+func (e fakeNotFound) Error() string { return e.kind + " not found" }
+func (fakeNotFound) NotFound()       {}
+
+type observedReader struct {
+	reader io.Reader
+	done   chan struct{}
+	once   sync.Once
 }
 
-type response func(context.Context, recordedCall) (commandResult, error)
-
-type fakeCommandRunner struct {
-	mu        sync.Mutex
-	responses []response
-	calls     []recordedCall
+type cancelErrorWriter struct {
+	cancel context.CancelFunc
+	err    error
 }
 
-func (f *fakeCommandRunner) Run(ctx context.Context, stdin []byte, args ...string) (commandResult, error) {
-	call := recordedCall{stdin: slices.Clone(stdin), args: slices.Clone(args)}
-	f.mu.Lock()
-	index := len(f.calls)
-	f.calls = append(f.calls, call)
-	if index >= len(f.responses) {
-		f.mu.Unlock()
-		return commandResult{exitCode: -1}, errors.New("unexpected fake Docker call")
+func (w cancelErrorWriter) Write([]byte) (int, error) {
+	if w.cancel != nil {
+		w.cancel()
 	}
-	respond := f.responses[index]
-	f.mu.Unlock()
-	return respond(ctx, call)
+	return 0, w.err
 }
 
-func (f *fakeCommandRunner) snapshot() []recordedCall {
+func (r *observedReader) Read(content []byte) (int, error) {
+	n, err := r.reader.Read(content)
+	if err != nil {
+		r.once.Do(func() { close(r.done) })
+	}
+	return n, err
+}
+
+type fakeClient struct {
+	mu sync.Mutex
+
+	networkName    string
+	networkOptions client.NetworkCreateOptions
+	networkExists  bool
+	containerOpts  client.ContainerCreateOptions
+	containerID    string
+	containerLive  bool
+	createErr      error
+	execOptions    client.ExecCreateOptions
+	execExit       int
+	execRunning    bool
+	controlExit    int
+	controlErr     error
+	leaveExecAlive bool
+	execCreates    int
+	attach         func(net.Conn)
+	logs           []byte
+	upload         client.CopyToContainerOptions
+	uploadBytes    []byte
+	download       client.CopyFromContainerResult
+}
+
+func (f *fakeClient) NetworkCreate(_ context.Context, name string, options client.NetworkCreateOptions) (client.NetworkCreateResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]recordedCall(nil), f.calls...)
+	f.networkName, f.networkOptions, f.networkExists = name, options, true
+	return client.NetworkCreateResult{ID: "network-id"}, nil
 }
 
-func result(stdout, stderr string, exitCode int, err error) response {
-	return func(context.Context, recordedCall) (commandResult, error) {
-		return commandResult{stdout: []byte(stdout), stderr: []byte(stderr), exitCode: exitCode}, err
+func (f *fakeClient) NetworkInspect(context.Context, string, client.NetworkInspectOptions) (client.NetworkInspectResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.networkExists {
+		return client.NetworkInspectResult{}, fakeNotFound{"network"}
 	}
+	return client.NetworkInspectResult{Network: network.Inspect{Network: network.Network{
+		Name: f.networkName, Labels: f.networkOptions.Labels,
+		IPAM: network.IPAM{Config: []network.IPAMConfig{{Gateway: netip.MustParseAddr("172.30.0.1")}}},
+	}}}, nil
 }
 
-func successfulInspection(running bool) string {
-	return `[{"State":{"Running":` + strconv.FormatBool(running) + `},"Config":{"WorkingDir":"/work","Labels":{"aries.managed":"true","aries.run":"run-1","aries.task":"task-1"}},"NetworkSettings":{"Networks":{"aries-net-fixedid":{}}},"Mounts":[{"Destination":"/opt/aries/bin/aries-exec-helper","RW":false},{"Destination":"/run/aries","RW":false}]}]`
+func (f *fakeClient) NetworkRemove(context.Context, string, client.NetworkRemoveOptions) (client.NetworkRemoveResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.networkExists = false
+	return client.NetworkRemoveResult{}, nil
 }
 
-func successfulNetworkInspection() string {
-	return `[{"Labels":{"aries.managed":"true","aries.run":"run-1","aries.task":"task-1"}}]`
-}
-
-func successfulStartResponses() []response {
-	return []response{
-		result("network-id\n", "", 0, nil),
-		result("container-id\n", "", 0, nil),
-		result("container-id\n", "", 0, nil),
-		result(successfulInspection(true), "", 0, nil),
-		result(successfulNetworkInspection(), "", 0, nil),
+func (f *fakeClient) ContainerCreate(_ context.Context, options client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.containerOpts = options
+	if f.createErr != nil {
+		return client.ContainerCreateResult{}, f.createErr
 	}
+	f.containerID = "container-id"
+	return client.ContainerCreateResult{ID: f.containerID}, nil
 }
 
-func successfulStopResponses(stdout, stderr string) []response {
-	return []response{
-		result(stdout, stderr, 0, nil),
-		result("container-id\n", "", 0, nil),
-		result("container-id\n", "", 0, nil),
-		result("", "Error: No such container: container-id\n", 1, errCommand),
-		result("network-id\n", "", 0, nil),
-		result("", "Error: No such network: aries-net-fixedid\n", 1, errCommand),
+func (f *fakeClient) ContainerStart(context.Context, string, client.ContainerStartOptions) (client.ContainerStartResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.containerLive = true
+	return client.ContainerStartResult{}, nil
+}
+
+func (f *fakeClient) ContainerInspect(context.Context, string, client.ContainerInspectOptions) (client.ContainerInspectResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.containerID == "" {
+		return client.ContainerInspectResult{}, fakeNotFound{"container"}
 	}
+	config := f.containerOpts.Config
+	if config == nil {
+		config = &container.Config{}
+	}
+	return client.ContainerInspectResult{Container: container.InspectResponse{
+		ID: f.containerID, State: &container.State{Running: f.containerLive}, Config: config,
+		NetworkSettings: &container.NetworkSettings{Networks: map[string]*network.EndpointSettings{f.networkName: {}}},
+	}}, nil
+}
+
+func (f *fakeClient) ContainerTop(context.Context, string, client.ContainerTopOptions) (client.ContainerTopResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	processes := [][]string{}
+	if f.execRunning {
+		processes = append(processes, []string{"100", "1", "100"}, []string{"101", "100", "101"})
+	}
+	return client.ContainerTopResult{Titles: []string{"PID", "PPID", "PGID"}, Processes: processes}, nil
+}
+
+func (f *fakeClient) ContainerLogs(context.Context, string, client.ContainerLogsOptions) (client.ContainerLogsResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return io.NopCloser(bytes.NewReader(f.logs)), nil
+}
+
+func (f *fakeClient) ContainerStop(context.Context, string, client.ContainerStopOptions) (client.ContainerStopResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.containerLive = false
+	return client.ContainerStopResult{}, nil
+}
+
+func (f *fakeClient) ContainerRemove(context.Context, string, client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.containerID = ""
+	return client.ContainerRemoveResult{}, nil
+}
+
+func (f *fakeClient) ExecCreate(_ context.Context, _ string, options client.ExecCreateOptions) (client.ExecCreateResult, error) {
+	f.mu.Lock()
+	f.execCreates++
+	if len(options.Cmd) > 2 && options.Cmd[2] == cancelExecShell {
+		f.mu.Unlock()
+		return client.ExecCreateResult{ID: "control-id"}, nil
+	}
+	f.execOptions = options
+	f.execRunning = f.execRunning || f.leaveExecAlive
+	f.mu.Unlock()
+	return client.ExecCreateResult{ID: "exec-id"}, nil
+}
+
+func (f *fakeClient) ExecAttach(context.Context, string, client.ExecAttachOptions) (client.ExecAttachResult, error) {
+	clientConn, daemonConn := net.Pipe()
+	f.mu.Lock()
+	handler := f.attach
+	f.mu.Unlock()
+	go func() {
+		defer daemonConn.Close()
+		if handler != nil {
+			handler(daemonConn)
+		}
+		f.mu.Lock()
+		token, exitCode := f.execOptions.Cmd[5], f.execExit
+		f.mu.Unlock()
+		writeFrame(daemonConn, stdcopy.Stderr, []byte("\x1eARIES_EXEC_EXIT_"+token+"="+strconv.Itoa(exitCode)+"\x1f"))
+	}()
+	return client.ExecAttachResult{HijackedResponse: client.NewHijackedResponse(clientConn, "application/vnd.docker.multiplexed-stream")}, nil
+}
+
+func (f *fakeClient) ExecStart(context.Context, string, client.ExecStartOptions) (client.ExecStartResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.controlErr != nil {
+		return client.ExecStartResult{}, f.controlErr
+	}
+	if f.controlExit == 0 && !f.leaveExecAlive {
+		f.execRunning = false
+	}
+	return client.ExecStartResult{}, nil
+}
+
+func (f *fakeClient) ExecInspect(_ context.Context, execID string, _ client.ExecInspectOptions) (client.ExecInspectResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if execID == "control-id" {
+		return client.ExecInspectResult{ID: execID, ContainerID: f.containerID, ExitCode: f.controlExit}, nil
+	}
+	return client.ExecInspectResult{ID: execID, ContainerID: f.containerID, Running: f.execRunning, ExitCode: f.execExit, PID: 100}, nil
+}
+
+func (f *fakeClient) CopyToContainer(_ context.Context, _ string, options client.CopyToContainerOptions) (client.CopyToContainerResult, error) {
+	content, err := io.ReadAll(options.Content)
+	if err != nil {
+		return client.CopyToContainerResult{}, err
+	}
+	f.mu.Lock()
+	f.upload, f.uploadBytes = options, content
+	f.mu.Unlock()
+	return client.CopyToContainerResult{}, nil
+}
+
+func (f *fakeClient) CopyFromContainer(context.Context, string, client.CopyFromContainerOptions) (client.CopyFromContainerResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.download, nil
 }
 
 func testEnvironment() core.Environment {
 	return core.Environment{
-		Image:        "sha256:" + strings.Repeat("a", 64),
-		Workdir:      "/work",
-		CPU:          1.5,
-		MemoryMB:     64,
-		StorageMB:    32,
-		AllowNetwork: false,
-		Env:          map[string]string{"ZED": "last", "ALPHA": "first"},
+		Image: "sha256:" + strings.Repeat("a", 64), Workdir: "/work",
+		CPU: 1.5, MemoryMB: 64, StorageMB: 32, GPUs: 1,
+		Env: map[string]string{"ZED": "last", "ALPHA": "first"},
 	}
 }
 
@@ -107,569 +252,323 @@ func testRequest() core.SandboxRequest {
 	return core.SandboxRequest{RunID: "run-1", TaskID: "task-1", Environment: testEnvironment()}
 }
 
-func testManager(t *testing.T, responses ...response) (*Manager, *fakeCommandRunner) {
+func testManager(t *testing.T, fake *fakeClient) *Manager {
 	t.Helper()
-	fake := &fakeCommandRunner{responses: responses}
-	helperPath := filepath.Join(t.TempDir(), "aries-exec-helper")
-	if err := os.WriteFile(helperPath, []byte("test helper"), 0o700); err != nil {
-		t.Fatal(err)
+	return &Manager{
+		client: fake, outputDir: t.TempDir(), cleanupTimeout: time.Second,
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		newID:  func() (string, error) { return "fixedid", nil },
 	}
-	manager := &Manager{
-		cli:            fake,
-		outputDir:      t.TempDir(),
-		cleanupTimeout: 100 * time.Millisecond,
-		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
-		helperPath:     helperPath,
-		newID:          func() (string, error) { return "fixedid", nil },
-		engine:         &fakeEngine{},
-	}
-	return manager, fake
 }
 
-func TestStartAppliesExactIdentityAndResourceArguments(t *testing.T) {
-	responses := append(successfulStartResponses(), successfulStopResponses("sandbox stdout", "sandbox stderr")...)
-	manager, fake := testManager(t, responses...)
-	live, err := manager.Start(context.Background(), testRequest())
+func startSandbox(t *testing.T, fake *fakeClient) *Sandbox {
+	t.Helper()
+	live, err := testManager(t, fake).Start(context.Background(), testRequest())
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	sandbox := live.(*Sandbox)
-	runtimeDir := sandbox.runtimeDir
-	stagedHelper, err := os.Stat(filepath.Join(sandbox.artifactDir, "helper", "aries-exec-helper"))
-	if err != nil || !stagedHelper.Mode().IsRegular() || stagedHelper.Mode().Perm() != 0o555 {
-		t.Fatalf("staged exec helper = %v, %v", stagedHelper, err)
+	return live.(*Sandbox)
+}
+
+func TestStartUsesTypedOptionsAndStopIsIdempotent(t *testing.T) {
+	logs := multiplexed("sandbox stdout", "sandbox stderr")
+	fake := &fakeClient{logs: logs}
+	sandbox := startSandbox(t, fake)
+	options := fake.containerOpts
+	if options.Name != "aries-task-fixedid" || options.Config.WorkingDir != "/work" {
+		t.Fatalf("container options = %#v", options)
 	}
-	calls := fake.snapshot()
-	for _, labels := range [][]string{
-		{"--label", "aries.run=run-1"},
-		{"--label", "aries.task=task-1"},
-		{"--label", "aries.milestone=m3"},
-	} {
-		if !containsSequence(calls[0].args, labels) || !containsSequence(calls[1].args, labels) {
-			t.Fatalf("identity labels %v missing from network/container calls: %#v %#v", labels, calls[0].args, calls[1].args)
-		}
+	if !reflect.DeepEqual(options.Config.Env, []string{"ALPHA=first", "ZED=last"}) {
+		t.Fatalf("environment = %#v", options.Config.Env)
 	}
-	for _, sequence := range [][]string{
-		{"--cpus", "1.5"}, {"--memory", "64m"}, {"--storage-opt", "size=32m"},
-		{"--env", "ALPHA=first"}, {"--env", "ZED=last"},
-		{"--entrypoint", "/bin/sleep", testEnvironment().Image, "infinity"},
-	} {
-		if !containsSequence(calls[1].args, sequence) {
-			t.Fatalf("container create args %#v do not contain %#v", calls[1].args, sequence)
-		}
+	resources := options.HostConfig.Resources
+	if resources.NanoCPUs != 1_500_000_000 || resources.Memory != 64<<20 || options.HostConfig.StorageOpt["size"] != "32m" {
+		t.Fatalf("resources = %#v", options.HostConfig)
 	}
-	createArgs := strings.Join(calls[1].args, "\n")
-	for _, destination := range []string{"dst=" + helperContainerPath + ",readonly", "dst=" + socketContainerDir + ",readonly"} {
-		if !strings.Contains(createArgs, destination) {
-			t.Fatalf("container create args do not contain read-only mount %q: %#v", destination, calls[1].args)
-		}
+	if len(resources.DeviceRequests) != 1 || resources.DeviceRequests[0].Count != 1 {
+		t.Fatalf("GPU request = %#v", resources.DeviceRequests)
 	}
-	if slices.Contains(calls[1].args, "-c") {
-		t.Fatalf("keepalive invokes a shell: %#v", calls[1].args)
+	if !fake.networkOptions.Internal || fake.networkOptions.Labels["aries.kind"] != "task-network" || options.Config.Labels["aries.kind"] != "task-container" {
+		t.Fatalf("network/container labels = %#v / %#v", fake.networkOptions, options.Config.Labels)
 	}
-	if sandbox.runID != "run-1" || sandbox.taskID != "task-1" {
-		t.Fatalf("sandbox identity = %q/%q", sandbox.runID, sandbox.taskID)
+	if gateway, err := sandbox.NetworkGateway(context.Background()); err != nil || gateway != "172.30.0.1" {
+		t.Fatalf("NetworkGateway() = %q, %v", gateway, err)
 	}
 	if err := sandbox.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop() error = %v", err)
 	}
-	if _, err := os.Lstat(runtimeDir); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("private exec runtime still exists: %v", err)
-	}
 	if err := sandbox.Stop(context.Background()); err != nil {
 		t.Fatalf("repeated Stop() error = %v", err)
 	}
-	if got := len(fake.snapshot()); got != len(responses) {
-		t.Fatalf("Docker calls = %d, want %d", got, len(responses))
+	stdout, _ := os.ReadFile(filepath.Join(sandbox.artifactDir, "container.stdout.log"))
+	stderr, _ := os.ReadFile(filepath.Join(sandbox.artifactDir, "container.stderr.log"))
+	if string(stdout) != "sandbox stdout" || string(stderr) != "sandbox stderr" {
+		t.Fatalf("logs = %q / %q", stdout, stderr)
 	}
-	for _, name := range []string{"container.stdout.log", "container.stderr.log"} {
-		info, err := os.Stat(filepath.Join(sandbox.artifactDir, name))
-		if err != nil || info.Mode().Perm() != 0o600 {
-			t.Fatalf("log %q = %v, %v", name, info, err)
+	if fake.containerID != "" || fake.networkExists {
+		t.Fatal("Stop left fake resources behind")
+	}
+}
+
+func TestStartRollsBackNetworkOnContainerFailure(t *testing.T) {
+	want := errors.New("create failed")
+	fake := &fakeClient{createErr: want}
+	_, err := testManager(t, fake).Start(context.Background(), testRequest())
+	if !errors.Is(err, want) {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if fake.networkExists {
+		t.Fatal("failed Start left network behind")
+	}
+}
+
+func TestExecStreamsStdinAndSeparatesOutput(t *testing.T) {
+	fake := &fakeClient{execExit: 7}
+	fake.attach = func(conn net.Conn) {
+		input := make([]byte, len("late\x00stdin"))
+		if _, err := io.ReadFull(conn, input); err != nil || string(input) != "late\x00stdin" {
+			return
 		}
+		writeFrame(conn, stdcopy.Stdout, []byte("out"))
+		writeFrame(conn, stdcopy.Stderr, []byte("\x1eARIES_EXEC_EXIT_spoof=99\x1ferr"))
+	}
+	sandbox := startSandbox(t, fake)
+	defer sandbox.Stop(context.Background())
+	result, err := sandbox.Exec(context.Background(), core.Command{
+		Path: "/bin/tool", Args: []string{"arg"}, Dir: "/work", Env: map[string]string{"B": "2", "A": "1"},
+		Stdin: []byte("late\x00stdin"),
+	})
+	if err != nil || result.ExitCode != 7 || result.Stdout != "out" || result.Stderr != "\x1eARIES_EXEC_EXIT_spoof=99\x1ferr" || result.Duration <= 0 {
+		t.Fatalf("Exec() = %#v, %v", result, err)
+	}
+	if len(fake.execOptions.Cmd) != 8 || fake.execOptions.Cmd[2] != execShell || !strings.HasPrefix(fake.execOptions.Cmd[4], execStatePrefix) || !reflect.DeepEqual(fake.execOptions.Cmd[6:], []string{"/bin/tool", "arg"}) || !reflect.DeepEqual(fake.execOptions.Env, []string{"A=1", "B=2"}) {
+		t.Fatalf("exec options = %#v", fake.execOptions)
 	}
 }
 
-func TestStartRejectsUnsafeIdentityBeforeDocker(t *testing.T) {
-	manager, fake := testManager(t)
-	for _, request := range []core.SandboxRequest{
-		{RunID: "", TaskID: "task-1", Environment: testEnvironment()},
-		{RunID: "run/escape", TaskID: "task-1", Environment: testEnvironment()},
-		{RunID: "run-1", TaskID: "../task", Environment: testEnvironment()},
-	} {
-		if _, err := manager.Start(context.Background(), request); err == nil {
-			t.Fatalf("Start(%#v) accepted unsafe identity", request)
-		}
+func TestExecAcceptsAriesEnvironment(t *testing.T) {
+	fake := &fakeClient{}
+	sandbox := startSandbox(t, fake)
+	defer sandbox.Stop(context.Background())
+	if _, err := sandbox.Exec(context.Background(), core.Command{Path: "/bin/true", Env: map[string]string{"ARIES_VALID": "value"}}); err != nil {
+		t.Fatalf("Exec() rejected valid ARIES_ environment: %v", err)
 	}
-	if len(fake.snapshot()) != 0 {
-		t.Fatal("unsafe identity reached Docker")
+	if !reflect.DeepEqual(fake.execOptions.Env, []string{"ARIES_VALID=value"}) {
+		t.Fatalf("exec environment = %#v", fake.execOptions.Env)
 	}
 }
 
-func TestStartRejectsUntrustedExecHelperBeforeDocker(t *testing.T) {
-	for _, test := range []struct {
-		name  string
-		setup func(*testing.T) string
-	}{
-		{"missing", func(t *testing.T) string { return filepath.Join(t.TempDir(), "missing") }},
-		{"not executable", func(t *testing.T) string {
-			path := filepath.Join(t.TempDir(), "helper")
-			if err := os.WriteFile(path, []byte("helper"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			return path
-		}},
-		{"symlink", func(t *testing.T) string {
-			directory := t.TempDir()
-			target := filepath.Join(directory, "target")
-			link := filepath.Join(directory, "helper")
-			if err := os.WriteFile(target, []byte("helper"), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Symlink(target, link); err != nil {
-				t.Fatal(err)
-			}
-			return link
-		}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			manager, fake := testManager(t)
-			manager.helperPath = test.setup(t)
-			if _, err := manager.Start(context.Background(), testRequest()); err == nil || !strings.Contains(err.Error(), "exec helper") {
-				t.Fatalf("Start() error = %v", err)
-			}
-			if len(fake.snapshot()) != 0 {
-				t.Fatal("untrusted helper reached Docker")
-			}
-		})
+func TestExecCancellationReturnsTerminationConfirmationFailure(t *testing.T) {
+	fake := &fakeClient{execRunning: true, leaveExecAlive: true}
+	fake.attach = func(conn net.Conn) { _, _ = io.Copy(io.Discard, conn) }
+	sandbox := startSandbox(t, fake)
+	sandbox.cleanupTimeout = 60 * time.Millisecond
+	defer sandbox.Stop(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := sandbox.ExecStream(ctx, core.Command{Path: "/bin/sleep", Args: []string{"60"}}, nil, io.Discard, io.Discard)
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "confirm terminated Docker exec process-group exit") {
+		t.Fatalf("ExecStream() error = %v", err)
+	}
+	fake.mu.Lock()
+	execCreates := fake.execCreates
+	fake.mu.Unlock()
+	if execCreates != 2 {
+		t.Fatalf("exec create count = %d, want command plus targeted termination helper", execCreates)
 	}
 }
 
-func TestStartRollsBackEveryPartialAcquisition(t *testing.T) {
-	tests := []struct {
-		name      string
-		responses []response
-		wantCalls int
-	}{
-		{"network", []response{
-			result("", "create failed", 1, errCommand),
-			result("", "No such network", 1, errCommand), result("", "No such network", 1, errCommand),
-		}, 3},
-		{"create", []response{
-			result("network", "", 0, nil), result("", "create failed", 1, errCommand),
-			result("container", "", 0, nil), result("", "No such container", 1, errCommand),
-			result("network", "", 0, nil), result("", "No such network", 1, errCommand),
-		}, 6},
-		{"start", []response{
-			result("network", "", 0, nil), result("container", "", 0, nil), result("", "start failed", 1, errCommand),
-			result("container", "", 0, nil), result("", "No such container", 1, errCommand),
-			result("network", "", 0, nil), result("", "No such network", 1, errCommand),
-		}, 7},
-		{"container inspect", []response{
-			result("network", "", 0, nil), result("container", "", 0, nil), result("container", "", 0, nil), result("", "inspect failed", 1, errCommand),
-			result("container", "", 0, nil), result("container", "", 0, nil), result("", "No such container", 1, errCommand),
-			result("network", "", 0, nil), result("", "No such network", 1, errCommand),
-		}, 9},
-		{"network inspect", []response{
-			result("network", "", 0, nil), result("container", "", 0, nil), result("container", "", 0, nil), result(successfulInspection(true), "", 0, nil), result("", "network inspect failed", 1, errCommand),
-			result("container", "", 0, nil), result("container", "", 0, nil), result("", "No such container", 1, errCommand),
-			result("network", "", 0, nil), result("", "No such network", 1, errCommand),
-		}, 10},
+func TestExecCancellationWinsConcurrentCopyErrorAfterConfirmedTermination(t *testing.T) {
+	copyErr := errors.New("attach copy failed")
+	fake := &fakeClient{execRunning: true}
+	fake.attach = func(conn net.Conn) {
+		writeFrame(conn, stdcopy.Stdout, []byte("trigger cancellation"))
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			manager, fake := testManager(t, test.responses...)
-			_, err := manager.Start(context.Background(), testRequest())
-			if !errors.Is(err, errCommand) {
-				t.Fatalf("Start() error = %v, want primary cause", err)
-			}
-			if got := len(fake.snapshot()); got != test.wantCalls {
-				t.Fatalf("calls = %d, want %d: %#v", got, test.wantCalls, fake.snapshot())
-			}
-		})
+	sandbox := startSandbox(t, fake)
+	defer sandbox.Stop(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	_, err := sandbox.ExecStream(ctx, core.Command{Path: "/bin/sleep", Args: []string{"60"}}, nil,
+		cancelErrorWriter{cancel: cancel, err: copyErr}, io.Discard)
+	if err != context.Canceled {
+		t.Fatalf("ExecStream() error = %v, want exact context cancellation", err)
 	}
 }
 
-type engineResponse struct {
-	result   core.CommandResult
-	launched bool
-	err      error
-	wait     <-chan struct{}
-	entered  chan<- struct{}
-}
-
-type fakeEngine struct {
-	mu        sync.Mutex
-	responses []engineResponse
-	commands  []core.Command
-}
-
-func (f *fakeEngine) Exec(ctx context.Context, _, _ string, command core.Command) (core.CommandResult, bool, error) {
-	f.mu.Lock()
-	index := len(f.commands)
-	f.commands = append(f.commands, command)
-	response := engineResponse{result: core.CommandResult{ExitCode: 0}}
-	if index < len(f.responses) {
-		response = f.responses[index]
+func TestExecCancellationJoinsConcurrentCopyErrorOnlyWithTerminationFailure(t *testing.T) {
+	copyErr := errors.New("attach copy failed")
+	fake := &fakeClient{execRunning: true, leaveExecAlive: true}
+	fake.attach = func(conn net.Conn) {
+		writeFrame(conn, stdcopy.Stdout, []byte("trigger cancellation"))
 	}
-	f.mu.Unlock()
-	if response.entered != nil {
-		response.entered <- struct{}{}
-	}
-	if response.wait != nil {
-		select {
-		case <-response.wait:
-		case <-ctx.Done():
-			return core.CommandResult{ExitCode: -1}, true, ctx.Err()
-		}
-	}
-	return response.result, response.launched, response.err
-}
-
-func (f *fakeEngine) count() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return len(f.commands)
-}
-
-func testExecSandbox(t *testing.T, engine execEngine, responses ...response) (*Sandbox, *fakeCommandRunner) {
-	t.Helper()
-	cli := &fakeCommandRunner{responses: responses}
-	return &Sandbox{
-		cli:            cli,
-		containerID:    "container-id",
-		networkName:    "aries-net-fixedid",
-		workdir:        "/work",
-		artifactDir:    t.TempDir(),
-		runtimeDir:     t.TempDir(),
-		outputDir:      t.TempDir(),
-		cleanupTimeout: time.Second,
-		runID:          "run-1",
-		taskID:         "task-1",
-		engine:         engine,
-		execGate:       make(chan struct{}, 1),
-	}, cli
-}
-
-func TestExecUsesDaemonResultAndRestartIsFailClosed(t *testing.T) {
-	engine := &fakeEngine{responses: []engineResponse{
-		{result: core.CommandResult{ExitCode: 7, Stdout: "out", Stderr: "err"}, launched: true},
-		{result: core.CommandResult{ExitCode: -1}, launched: true, err: context.DeadlineExceeded},
-		{result: core.CommandResult{ExitCode: 0, Stdout: "after"}, launched: true},
-	}}
-	restartResponses := []response{
-		result("container", "", 0, nil),
-		result(successfulInspection(false), "", 0, nil),
-		result("container", "", 0, nil),
-		result(successfulInspection(true), "", 0, nil),
-		result(successfulNetworkInspection(), "", 0, nil),
-	}
-	sandbox, cli := testExecSandbox(t, engine, restartResponses...)
-	first, err := sandbox.Exec(context.Background(), core.Command{Path: "/bin/false"})
-	if err != nil || first.ExitCode != 7 || first.Stdout != "out" || first.Stderr != "err" {
-		t.Fatalf("first Exec() = %#v, %v", first, err)
-	}
-	_, err = sandbox.Exec(context.Background(), core.Command{Path: "/bin/sleep", Args: []string{"10"}})
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("failed Exec() error = %v", err)
-	}
-	third, err := sandbox.Exec(context.Background(), core.Command{Path: "/bin/true"})
-	if err != nil || third.Stdout != "after" {
-		t.Fatalf("post-restart Exec() = %#v, %v", third, err)
-	}
-	for _, call := range cli.snapshot() {
-		joined := strings.Join(call.args, " ")
-		if strings.Contains(joined, " exec ") || strings.Contains(joined, "/tmp/.aries-exec") || strings.Contains(joined, " kill ") {
-			t.Fatalf("exec cleanup exposed a cross-exec kill surface: %q", joined)
-		}
-	}
-	want := [][]string{
-		{"container", "stop", "--time", "1", "container-id"},
-		{"container", "inspect", "container-id"},
-		{"container", "start", "container-id"},
-		{"container", "inspect", "container-id"},
-		{"network", "inspect", "aries-net-fixedid"},
-	}
-	calls := cli.snapshot()
-	for index := range want {
-		if !reflect.DeepEqual(calls[index].args, want[index]) {
-			t.Fatalf("restart call %d = %#v, want %#v", index, calls[index].args, want[index])
-		}
+	sandbox := startSandbox(t, fake)
+	sandbox.cleanupTimeout = 60 * time.Millisecond
+	defer sandbox.Stop(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	_, err := sandbox.ExecStream(ctx, core.Command{Path: "/bin/sleep", Args: []string{"60"}}, nil,
+		cancelErrorWriter{cancel: cancel, err: copyErr}, io.Discard)
+	if !errors.Is(err, context.Canceled) || errors.Is(err, copyErr) || !strings.Contains(err.Error(), "confirm terminated Docker exec process-group exit") {
+		t.Fatalf("ExecStream() error = %v, want cancellation joined only with termination failure", err)
 	}
 }
 
-func TestExecJoinsRestartFailureWithToolFailure(t *testing.T) {
-	engineFailure := errors.New("exec helper transport failed")
-	engine := &fakeEngine{responses: []engineResponse{{
-		result:   core.CommandResult{ExitCode: -1},
-		launched: true,
-		err:      engineFailure,
-	}}}
-	sandbox, _ := testExecSandbox(t, engine,
-		result("container", "", 0, nil),
-		result(successfulInspection(false), "", 0, nil),
-		result("", "start failed", 1, errCleanup),
-	)
-	_, err := sandbox.Exec(context.Background(), core.Command{Path: "/bin/true"})
-	if !errors.Is(err, engineFailure) || !errors.Is(err, errCleanup) {
-		t.Fatalf("Exec() error = %v, want engine and restart failures", err)
+func TestExecOrdinaryCopyErrorRetainsCauseAfterTargetedCleanup(t *testing.T) {
+	copyErr := errors.New("attach copy failed before cancellation")
+	fake := &fakeClient{execRunning: true}
+	fake.attach = func(conn net.Conn) {
+		writeFrame(conn, stdcopy.Stdout, []byte("trigger copy error"))
+	}
+	sandbox := startSandbox(t, fake)
+	defer sandbox.Stop(context.Background())
+	_, err := sandbox.ExecStream(context.Background(), core.Command{Path: "/bin/tool"}, nil,
+		cancelErrorWriter{err: copyErr}, io.Discard)
+	if err != copyErr {
+		t.Fatalf("ExecStream() error = %v, want exact ordinary copy error", err)
 	}
 }
 
-func TestExecRestartRejectsMissingOrWritableHelperMount(t *testing.T) {
-	for _, test := range []struct {
-		name       string
-		inspection string
-	}{
-		{
-			name:       "socket missing",
-			inspection: strings.Replace(successfulInspection(true), `,{"Destination":"/run/aries","RW":false}`, "", 1),
-		},
-		{
-			name:       "socket writable",
-			inspection: strings.Replace(successfulInspection(true), `"Destination":"/run/aries","RW":false`, `"Destination":"/run/aries","RW":true`, 1),
-		},
-		{
-			name:       "helper missing",
-			inspection: strings.Replace(successfulInspection(true), `{"Destination":"/opt/aries/bin/aries-exec-helper","RW":false},`, "", 1),
-		},
-		{
-			name:       "helper writable",
-			inspection: strings.Replace(successfulInspection(true), `"Destination":"/opt/aries/bin/aries-exec-helper","RW":false`, `"Destination":"/opt/aries/bin/aries-exec-helper","RW":true`, 1),
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			engineFailure := errors.New("exec helper transport failed")
-			engine := &fakeEngine{responses: []engineResponse{{
-				result:   core.CommandResult{ExitCode: -1},
-				launched: true,
-				err:      engineFailure,
-			}}}
-			sandbox, _ := testExecSandbox(t, engine,
-				result("container", "", 0, nil),
-				result(successfulInspection(false), "", 0, nil),
-				result("container", "", 0, nil),
-				result(test.inspection, "", 0, nil),
-			)
-			_, err := sandbox.Exec(context.Background(), core.Command{Path: "/bin/true"})
-			if !errors.Is(err, engineFailure) || !strings.Contains(err.Error(), "trusted helper mounts") {
-				t.Fatalf("Exec() error = %v", err)
-			}
-		})
+func TestExecStreamWritesWithoutBufferingResult(t *testing.T) {
+	fake := &fakeClient{}
+	fake.attach = func(conn net.Conn) {
+		input := make([]byte, 4)
+		_, _ = io.ReadFull(conn, input)
+		writeFrame(conn, stdcopy.Stdout, append([]byte("seen:"), input...))
+	}
+	sandbox := startSandbox(t, fake)
+	defer sandbox.Stop(context.Background())
+	var stdout bytes.Buffer
+	result, err := sandbox.ExecStream(context.Background(), core.Command{Path: "/bin/cat"}, strings.NewReader("late"), &stdout, io.Discard)
+	if err != nil || stdout.String() != "seen:late" || result.Stdout != "" || result.ExitCode != 0 {
+		t.Fatalf("ExecStream() = %#v, stdout=%q, error=%v", result, stdout.String(), err)
 	}
 }
 
-func TestExecSerializesConcurrentCommands(t *testing.T) {
-	entered := make(chan struct{}, 1)
-	release := make(chan struct{})
-	engine := &fakeEngine{responses: []engineResponse{{launched: true, wait: release, entered: entered}}}
-	sandbox, _ := testExecSandbox(t, engine)
-	firstDone := make(chan error, 1)
+func TestExecStreamReturnsWhileSSHStdinRemainsOpen(t *testing.T) {
+	fake := &fakeClient{}
+	fake.attach = func(conn net.Conn) {
+		writeFrame(conn, stdcopy.Stdout, []byte("complete"))
+	}
+	sandbox := startSandbox(t, fake)
+	defer sandbox.Stop(context.Background())
+	pipeReader, pipeWriter := io.Pipe()
+	stdinEnded := make(chan struct{})
+	stdin := &observedReader{reader: pipeReader, done: stdinEnded}
+	type outcome struct {
+		result core.CommandResult
+		err    error
+	}
+	finished := make(chan outcome, 1)
 	go func() {
-		_, err := sandbox.Exec(context.Background(), core.Command{Path: "/bin/sleep", Args: []string{"1"}})
-		firstDone <- err
+		var stdout bytes.Buffer
+		result, err := sandbox.ExecStream(context.Background(), core.Command{Path: "/bin/true"}, stdin, &stdout, io.Discard)
+		result.Stdout = stdout.String()
+		finished <- outcome{result: result, err: err}
 	}()
-	<-entered
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-	if _, err := sandbox.Exec(ctx, core.Command{Path: "/bin/true"}); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("concurrent Exec() error = %v, want deadline", err)
+	select {
+	case got := <-finished:
+		if got.err != nil || got.result.ExitCode != 0 || got.result.Stdout != "complete" {
+			t.Fatalf("ExecStream() = %#v, %v", got.result, got.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ExecStream waited for SSH stdin EOF after process exit")
 	}
-	close(release)
-	if err := <-firstDone; err != nil {
-		t.Fatalf("first Exec() error = %v", err)
-	}
-	if engine.count() != 1 {
-		t.Fatalf("engine calls = %d, want one serialized call", engine.count())
+	_ = pipeWriter.Close()
+	select {
+	case <-stdinEnded:
+	case <-time.After(time.Second):
+		t.Fatal("stdin copier did not finish when the SSH session closed")
 	}
 }
 
-func TestUploadUsesPrivateStageInsteadOfCallerPath(t *testing.T) {
-	artifactDir := t.TempDir()
-	outputDir := t.TempDir()
-	source := filepath.Join(t.TempDir(), "source")
-	if err := os.WriteFile(source, []byte("trusted"), 0o600); err != nil {
+func TestUploadAndDownloadUseDockerArchives(t *testing.T) {
+	fake := &fakeClient{}
+	sandbox := startSandbox(t, fake)
+	defer sandbox.Stop(context.Background())
+	source := filepath.Join(t.TempDir(), "source.bin")
+	if err := os.WriteFile(source, []byte("upload"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	var staged []byte
-	cli := &fakeCommandRunner{responses: []response{func(_ context.Context, call recordedCall) (commandResult, error) {
-		if call.args[2] == source {
-			return commandResult{}, errors.New("Docker cp consumed caller-controlled source path")
-		}
-		var err error
-		staged, err = os.ReadFile(call.args[2])
-		return commandResult{exitCode: 0}, err
-	}}}
-	sandbox := &Sandbox{cli: cli, containerID: "container", artifactDir: artifactDir, outputDir: outputDir}
-	if err := sandbox.Upload(context.Background(), source, "/tests/test.sh"); err != nil {
+	if err := sandbox.Upload(context.Background(), source, "/work/destination.bin"); err != nil {
 		t.Fatalf("Upload() error = %v", err)
 	}
-	if string(staged) != "trusted" {
-		t.Fatalf("staged bytes = %q, want trusted", staged)
+	header, content := readArchive(t, fake.uploadBytes)
+	if fake.upload.DestinationPath != "/work" || header.Name != "destination.bin" || string(content) != "upload" {
+		t.Fatalf("upload archive = path %q, header %#v, content %q", fake.upload.DestinationPath, header, content)
 	}
-	if len(cli.snapshot()) != 1 {
-		t.Fatalf("Docker calls = %d, want one", len(cli.snapshot()))
-	}
-}
 
-func TestUploadRejectsPathSwapThatChangesOpenedMetadata(t *testing.T) {
-	sourceDir := t.TempDir()
-	source := filepath.Join(sourceDir, "source")
-	backup := filepath.Join(sourceDir, "original")
-	attacker := filepath.Join(sourceDir, "attacker")
-	if err := os.WriteFile(source, []byte("trusted"), 0o600); err != nil {
-		t.Fatal(err)
+	downloadArchive := archiveFile(t, "source.bin", []byte("download"))
+	fake.download = client.CopyFromContainerResult{
+		Content: io.NopCloser(bytes.NewReader(downloadArchive)),
+		Stat:    container.PathStat{Name: "source.bin", Size: 8, Mode: 0o600},
 	}
-	if err := os.WriteFile(attacker, []byte("attacker"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cli := &fakeCommandRunner{}
-	sandbox := &Sandbox{cli: cli, containerID: "container", artifactDir: t.TempDir(), outputDir: t.TempDir()}
-	sandbox.testHooks.afterUploadOpen = func() {
-		if err := os.Rename(source, backup); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chmod(backup, 0o640); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Symlink(attacker, source); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := sandbox.Upload(context.Background(), source, "/tests/test.sh"); err == nil || !strings.Contains(err.Error(), "changed while being staged") {
-		t.Fatalf("Upload() error = %v", err)
-	}
-	if len(cli.snapshot()) != 0 {
-		t.Fatal("Docker cp ran after opened source metadata changed")
-	}
-	content, err := os.ReadFile(source)
-	if err != nil || string(content) != "attacker" {
-		t.Fatalf("replacement path content = %q, %v", content, err)
-	}
-}
-
-func TestUploadRejectsOpenedFileMutation(t *testing.T) {
-	source := filepath.Join(t.TempDir(), "source")
-	if err := os.WriteFile(source, []byte("trusted"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cli := &fakeCommandRunner{}
-	sandbox := &Sandbox{cli: cli, containerID: "container", artifactDir: t.TempDir(), outputDir: t.TempDir()}
-	sandbox.testHooks.afterUploadOpen = func() {
-		if err := os.WriteFile(source, []byte("attacker"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := sandbox.Upload(context.Background(), source, "/tests/test.sh"); err == nil || !strings.Contains(err.Error(), "changed while being staged") {
-		t.Fatalf("Upload() error = %v", err)
-	}
-	if len(cli.snapshot()) != 0 {
-		t.Fatal("mutated source reached Docker cp")
-	}
-}
-
-func TestDownloadPublishesPrivateRegularFile(t *testing.T) {
-	outputDir := t.TempDir()
-	artifactDir := filepath.Join(outputDir, "sandboxes", "id")
-	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	want := []byte{0, 1, 2, 255}
-	cli := &fakeCommandRunner{responses: []response{func(_ context.Context, call recordedCall) (commandResult, error) {
-		return commandResult{exitCode: 0}, os.WriteFile(call.args[3], want, 0o640)
-	}}}
-	sandbox := &Sandbox{cli: cli, containerID: "container", artifactDir: artifactDir, outputDir: outputDir}
-	destination := filepath.Join(outputDir, "evaluation", "reward.bin")
-	if err := sandbox.Download(context.Background(), "/logs/reward.bin", destination); err != nil {
+	destination := filepath.Join(sandbox.outputDir, "evaluation", "result.bin")
+	if err := sandbox.Download(context.Background(), "/work/source.bin", destination); err != nil {
 		t.Fatalf("Download() error = %v", err)
 	}
-	got, err := os.ReadFile(destination)
-	if err != nil || !slices.Equal(got, want) {
-		t.Fatalf("downloaded bytes = %v, %v", got, err)
+	downloaded, err := os.ReadFile(destination)
+	if err != nil || string(downloaded) != "download" {
+		t.Fatalf("download = %q, %v", downloaded, err)
 	}
-	info, err := os.Stat(destination)
-	if err != nil || info.Mode().Perm() != 0o640 {
-		t.Fatalf("downloaded mode = %v, %v", info, err)
-	}
-}
-
-func TestDownloadRejectsParentAndFinalSymlinkSwaps(t *testing.T) {
-	for _, finalSymlink := range []bool{false, true} {
-		t.Run(map[bool]string{false: "parent", true: "final"}[finalSymlink], func(t *testing.T) {
-			outputDir := t.TempDir()
-			artifactDir := filepath.Join(outputDir, "sandboxes", "id")
-			if err := os.MkdirAll(artifactDir, 0o700); err != nil {
-				t.Fatal(err)
-			}
-			outside := t.TempDir()
-			destination := filepath.Join(outputDir, "evaluation", "reward.txt")
-			if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			if finalSymlink {
-				if err := os.Symlink(filepath.Join(outside, "escaped"), destination); err != nil {
-					t.Fatal(err)
-				}
-			}
-			cli := &fakeCommandRunner{responses: []response{func(_ context.Context, call recordedCall) (commandResult, error) {
-				return commandResult{exitCode: 0}, os.WriteFile(call.args[3], []byte("1\n"), 0o600)
-			}}}
-			sandbox := &Sandbox{cli: cli, containerID: "container", artifactDir: artifactDir, outputDir: outputDir}
-			if !finalSymlink {
-				sandbox.testHooks.beforeDownloadWalk = func() {
-					parent := filepath.Dir(destination)
-					if err := os.Rename(parent, parent+"-real"); err != nil {
-						t.Fatal(err)
-					}
-					if err := os.Symlink(outside, parent); err != nil {
-						t.Fatal(err)
-					}
-				}
-			}
-			if err := sandbox.Download(context.Background(), "/logs/reward.txt", destination); err == nil {
-				t.Fatal("Download() accepted a hostile symlink swap")
-			}
-			if _, err := os.Stat(filepath.Join(outside, "reward.txt")); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("parent swap escaped output root: %v", err)
-			}
-			if _, err := os.Stat(filepath.Join(outside, "escaped")); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("final symlink was followed: %v", err)
-			}
-		})
+	if err := sandbox.Download(context.Background(), "/work/source.bin", filepath.Join(sandbox.outputDir, "..", "escape")); err == nil {
+		t.Fatal("Download accepted destination outside output root")
 	}
 }
 
-func TestStopIsConcurrentAndIdempotent(t *testing.T) {
-	responses := append(successfulStartResponses(), successfulStopResponses("", "")...)
-	manager, fake := testManager(t, responses...)
-	live, err := manager.Start(context.Background(), testRequest())
+func TestValidationRejectsUnsafeInputsBeforeDocker(t *testing.T) {
+	fake := &fakeClient{}
+	manager := testManager(t, fake)
+	request := testRequest()
+	request.RunID = "../escape"
+	if _, err := manager.Start(context.Background(), request); err == nil {
+		t.Fatal("Start accepted unsafe identity")
+	}
+	request = testRequest()
+	request.Environment.Image = "busybox:latest"
+	if _, err := manager.Start(context.Background(), request); err == nil {
+		t.Fatal("Start accepted mutable image")
+	}
+}
+
+func multiplexed(stdout, stderr string) []byte {
+	var result bytes.Buffer
+	writeFrame(&result, stdcopy.Stdout, []byte(stdout))
+	writeFrame(&result, stdcopy.Stderr, []byte(stderr))
+	return result.Bytes()
+}
+
+func writeFrame(writer io.Writer, stream stdcopy.StdType, payload []byte) {
+	header := make([]byte, 8)
+	header[0] = byte(stream)
+	binary.BigEndian.PutUint32(header[4:], uint32(len(payload)))
+	_, _ = writer.Write(header)
+	_, _ = writer.Write(payload)
+}
+
+func archiveFile(t *testing.T, name string, content []byte) []byte {
+	t.Helper()
+	var result bytes.Buffer
+	writer := tar.NewWriter(&result)
+	if err := writer.WriteHeader(&tar.Header{Name: name, Size: int64(len(content)), Mode: 0o600}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return result.Bytes()
+}
+
+func readArchive(t *testing.T, content []byte) (*tar.Header, []byte) {
+	t.Helper()
+	reader := tar.NewReader(bytes.NewReader(content))
+	header, err := reader.Next()
 	if err != nil {
 		t.Fatal(err)
 	}
-	sandbox := live.(*Sandbox)
-	const callers = 8
-	results := make(chan error, callers)
-	for range callers {
-		go func() { results <- sandbox.Stop(context.Background()) }()
-	}
-	for range callers {
-		if err := <-results; err != nil {
-			t.Fatalf("concurrent Stop() error = %v", err)
-		}
-	}
-	if err := sandbox.Stop(context.Background()); err != nil {
+	payload, err := io.ReadAll(reader)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if got := len(fake.snapshot()); got != len(responses) {
-		t.Fatalf("calls = %d, want %d", got, len(responses))
-	}
-}
-
-func containsSequence(values, sequence []string) bool {
-	for index := 0; index+len(sequence) <= len(values); index++ {
-		if slices.Equal(values[index:index+len(sequence)], sequence) {
-			return true
-		}
-	}
-	return false
+	return header, payload
 }

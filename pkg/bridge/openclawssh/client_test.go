@@ -5,10 +5,16 @@ import (
 	"crypto/rand"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"golang.org/x/crypto/ssh"
+)
+
+const (
+	lockedHostName = "127.0.0.1"
+	lockedPort     = 2222
 )
 
 func TestClientArgumentsRequireExactPinnedOrder(t *testing.T) {
@@ -46,7 +52,7 @@ func TestLoadClientConfigRequiresExactContentAndPrivatePaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if configuration.hostName != lockedHostName || configuration.port != lockedPort || configuration.identityFile != identityContainerPath {
+	if configuration.hostName != lockedHostName || configuration.port != lockedPort {
 		t.Fatalf("configuration = %#v", configuration)
 	}
 
@@ -75,6 +81,23 @@ func TestLoadClientConfigRequiresExactContentAndPrivatePaths(t *testing.T) {
 	}
 }
 
+func TestLoadClientConfigAcceptsDynamicGatewayAndPort(t *testing.T) {
+	directory := testOpenClawSSHDirectory(t)
+	path := filepath.Join(directory, "config")
+	content := strings.ReplaceAll(lockedConfigContent(), "HostName "+lockedHostName, "HostName 172.23.0.1")
+	content = strings.ReplaceAll(content, "Port "+strconv.Itoa(lockedPort), "Port 49152")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configuration, err := loadClientConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configuration.hostName != "172.23.0.1" || configuration.port != 49152 {
+		t.Fatalf("configuration = %#v", configuration)
+	}
+}
+
 func TestKnownHostsRequiresExactHostAndEd25519Key(t *testing.T) {
 	t.Parallel()
 	public, _, err := ed25519.GenerateKey(rand.Reader)
@@ -86,7 +109,7 @@ func TestKnownHostsRequiresExactHostAndEd25519Key(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := []byte("[" + lockedHostName + "]:" + "2222 " + string(ssh.MarshalAuthorizedKey(key)))
-	if _, err := parseLockedKnownHost(content); err != nil {
+	if _, err := parseLockedKnownHost(content, lockedHostName, lockedPort); err != nil {
 		t.Fatal(err)
 	}
 	for _, invalid := range [][]byte{
@@ -95,7 +118,7 @@ func TestKnownHostsRequiresExactHostAndEd25519Key(t *testing.T) {
 		[]byte(strings.Replace(string(content), "2222", "22", 1)),
 		[]byte(strings.TrimSuffix(string(content), "\n") + " comment\n"),
 	} {
-		if _, err := parseLockedKnownHost(invalid); err == nil {
+		if _, err := parseLockedKnownHost(invalid, lockedHostName, lockedPort); err == nil {
 			t.Errorf("known-hosts bytes %q unexpectedly accepted", invalid)
 		}
 	}

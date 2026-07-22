@@ -195,6 +195,7 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		return finish()
 	}
 	bridgeActive = true
+	result.ToolLogPaths = append([]string(nil), endpoint.LogPaths...)
 
 	err = r.harness.Start(ctx, core.HarnessRequest{
 		RunID:     r.runID,
@@ -203,24 +204,26 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		Model:     r.model,
 		OutputDir: r.outputDir,
 	})
+	// Start may fail after allocating task-local resources. Stop is idempotent,
+	// so every Start attempt must be followed by a positive stop confirmation
+	// before the evaluator can inspect the sandbox.
+	harnessActive = true
 	if err != nil {
 		result.Harness.Status = failureStatus(err)
 		result.Harness.Error = err.Error()
 		allErrors = append(allErrors, fmt.Errorf("start harness: %w", err))
-		return finish()
-	}
-	harnessActive = true
-
-	harnessResult, runErr := r.harness.Run(ctx, task.Instruction)
-	result.Harness = harnessResult
-	if runErr == nil {
-		if result.Harness.Status == "" {
-			result.Harness.Status = core.StatusSucceeded
-		}
 	} else {
-		result.Harness.Status = failureStatus(runErr)
-		result.Harness.Error = runErr.Error()
-		allErrors = append(allErrors, fmt.Errorf("run harness: %w", runErr))
+		harnessResult, runErr := r.harness.Run(ctx, task.Instruction)
+		result.Harness = harnessResult
+		if runErr == nil {
+			if result.Harness.Status == "" {
+				result.Harness.Status = core.StatusSucceeded
+			}
+		} else {
+			result.Harness.Status = failureStatus(runErr)
+			result.Harness.Error = runErr.Error()
+			allErrors = append(allErrors, fmt.Errorf("run harness: %w", runErr))
+		}
 	}
 
 	isolationErrors := make([]error, 0, 2)

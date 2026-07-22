@@ -11,6 +11,7 @@ func TestCanonicalRemoteCommandGrammar(t *testing.T) {
 		{remoteShell, "-c", "pwd"},
 		{remoteShell, "-c", "printf '%s' \"$1\"", "shell-name", "a'b", ""},
 		{remoteEnv, "LANG=C", "TERM=dumb", remoteShell, "-c", "cat"},
+		{remoteEnv, "TEST_VALUE=arbitrary", remoteShell, "-c", "cat"},
 		{remoteEnv, "LANG=C", "OPENCLAW_SHELL=exec", remoteShell, "-c", "cat"},
 	}
 	for _, tokens := range valid {
@@ -35,13 +36,6 @@ func TestRemoteCommandRejectsAnythingOutsidePinnedGrammar(t *testing.T) {
 		"'/bin/sh' '-lc' 'true'",
 		"'/bin/sh' '-c' ''",
 		"'env' 'BAD-NAME=value' '/bin/sh' '-c' 'true'",
-		"'env' 'DEEPSEEK_API_KEY=value' '/bin/sh' '-c' 'true'",
-		"'env' 'SERVICE_TOKEN=value' '/bin/sh' '-c' 'true'",
-		"'env' 'GITHUB_PAT=value' '/bin/sh' '-c' 'true'",
-		"'env' 'CI_JOB_JWT=value' '/bin/sh' '-c' 'true'",
-		"'env' 'TEST_VALUE=value' '/bin/sh' '-c' 'true'",
-		"'env' 'ARIES_CONTROL=value' '/bin/sh' '-c' 'true'",
-		"'env' 'OPENCLAW_GATEWAY_TOKEN=value' '/bin/sh' '-c' 'true'",
 		"'env' 'OPENCLAW_SHELL=host' '/bin/sh' '-c' 'true'",
 		"'env' 'OPENCLAW_SHELL=exec' 'OPENCLAW_SHELL=exec' '/bin/sh' '-c' 'true'",
 		"'env' 'OPENCLAW_SHELL=exec' 'LANG=C' '/bin/sh' '-c' 'true'",

@@ -208,7 +208,7 @@ func (f *fakeBridge) Start(ctx context.Context, _ Sandbox) (core.ToolEndpoint, e
 		f.log.addRollback("bridge.rollback", ctx)
 		return core.ToolEndpoint{}, f.startErr
 	}
-	return core.ToolEndpoint{Protocol: "fake", Address: "task"}, nil
+	return core.ToolEndpoint{Protocol: "fake", Address: "task", LogPaths: []string{"/runs/tool-calls.jsonl"}}, nil
 }
 
 func (f *fakeBridge) Stop(ctx context.Context) error {
@@ -348,6 +348,9 @@ func TestRunnerSuccessOrdering(t *testing.T) {
 	if task.Observer.Status != core.StatusNotEnabled {
 		t.Fatalf("observer status = %q", task.Observer.Status)
 	}
+	if !reflect.DeepEqual(task.ToolLogPaths, []string{"/runs/tool-calls.jsonl"}) {
+		t.Fatalf("tool log paths = %q", task.ToolLogPaths)
+	}
 	if task.Observer.Duration != 0 || task.Observer.SampleCount != 0 || len(task.Observer.LogPaths) != 0 {
 		t.Fatalf("disabled observer recorded data: %#v", task.Observer)
 	}
@@ -391,7 +394,7 @@ func TestRunnerFailuresAtEveryCall(t *testing.T) {
 		},
 		{
 			name: "harness start", configure: func(r *rig, err error) { r.harness.startErr = err }, wantTasks: 1,
-			wantCalls: []string{"benchmark.tasks", "sandbox.start", "bridge.start", "harness.start", "harness.rollback", "bridge.stop", "sandbox.stop"}, wantEval: core.StatusNotRun, rollback: "harness.rollback",
+			wantCalls: []string{"benchmark.tasks", "sandbox.start", "bridge.start", "harness.start", "harness.rollback", "harness.stop", "bridge.stop", "benchmark.evaluate", "sandbox.stop"}, wantEval: core.StatusSucceeded, rollback: "harness.rollback",
 		},
 		{
 			name: "harness run", configure: func(r *rig, err error) { r.harness.runErrors = []error{err} }, wantTasks: 1,
@@ -455,7 +458,7 @@ func TestRunnerCancellationAtEveryLifecycleCutPoint(t *testing.T) {
 		{"tasks", "benchmark.tasks", []string{"benchmark.tasks"}, 0, "", ""},
 		{"sandbox start", "sandbox.start", []string{"benchmark.tasks", "sandbox.start", "sandbox.rollback"}, 1, core.StatusNotRun, "sandbox.rollback"},
 		{"bridge start", "bridge.start", []string{"benchmark.tasks", "sandbox.start", "bridge.start", "bridge.rollback", "sandbox.stop"}, 1, core.StatusNotRun, "bridge.rollback"},
-		{"harness start", "harness.start", []string{"benchmark.tasks", "sandbox.start", "bridge.start", "harness.start", "harness.rollback", "bridge.stop", "sandbox.stop"}, 1, core.StatusNotRun, "harness.rollback"},
+		{"harness start", "harness.start", []string{"benchmark.tasks", "sandbox.start", "bridge.start", "harness.start", "harness.rollback", "harness.stop", "bridge.stop", "benchmark.evaluate", "sandbox.stop"}, 1, core.StatusCanceled, "harness.rollback"},
 		{"harness run", "harness.run", fullCalls, 1, core.StatusCanceled, ""},
 		{"harness stop", "harness.stop", fullCalls, 1, core.StatusCanceled, ""},
 		{"bridge stop", "bridge.stop", fullCalls, 1, core.StatusCanceled, ""},
@@ -592,6 +595,71 @@ func TestRunnerIsolationFailureNeverEvaluatesEvenAfterCleanupRetry(t *testing.T)
 				}
 			}
 		})
+	}
+}
+
+func TestRunnerEvaluatesAfterHarnessStartFailureIsIsolated(t *testing.T) {
+	rig := newRig(t, 1)
+	startErr := errors.New("harness start failed")
+	rig.harness.startErr = startErr
+
+	result, err := rig.runner.Run(context.Background())
+	if !errors.Is(err, startErr) {
+		t.Fatalf("Run() error = %v, want harness start failure", err)
+	}
+	if len(result.Tasks) != 1 {
+		t.Fatalf("task count = %d, want one", len(result.Tasks))
+	}
+	task := result.Tasks[0]
+	if task.Harness.Status != core.StatusFailed || task.Harness.Error != startErr.Error() {
+		t.Fatalf("harness result = %#v, want retained start failure", task.Harness)
+	}
+	if task.Isolation.Status != core.StatusConfirmed || !task.Isolation.HarnessStopped || !task.Isolation.BridgeRevoked {
+		t.Fatalf("isolation = %#v, want both gates confirmed", task.Isolation)
+	}
+	if task.Evaluation.Status != core.StatusSucceeded || task.Evaluation.Reward != 1 {
+		t.Fatalf("evaluation = %#v, want independent successful evaluation", task.Evaluation)
+	}
+	wantCalls := []string{
+		"benchmark.tasks", "sandbox.start", "bridge.start", "harness.start", "harness.rollback",
+		"harness.stop", "bridge.stop", "benchmark.evaluate", "sandbox.stop",
+	}
+	if got := rig.log.snapshot(); !reflect.DeepEqual(got, wantCalls) {
+		t.Fatalf("calls = %v, want %v", got, wantCalls)
+	}
+	if rig.harness.stopCount() != 1 || rig.bridge.stopCount() != 1 || rig.sandbox.stopCount() != 1 {
+		t.Fatalf("stop counts harness=%d bridge=%d sandbox=%d, want one each", rig.harness.stopCount(), rig.bridge.stopCount(), rig.sandbox.stopCount())
+	}
+}
+
+func TestRunnerBlocksEvaluationWhenFailedHarnessStartCannotBeStopped(t *testing.T) {
+	rig := newRig(t, 1)
+	startErr := errors.New("harness start failed")
+	stopErr := errors.New("harness stop failed")
+	rig.harness.startErr = startErr
+	rig.harness.stopErrors = []error{stopErr, nil}
+
+	result, err := rig.runner.Run(context.Background())
+	if !errors.Is(err, startErr) || !errors.Is(err, stopErr) {
+		t.Fatalf("Run() error = %v, want joined start and stop failures", err)
+	}
+	task := result.Tasks[0]
+	if task.Harness.Status != core.StatusFailed || task.Harness.Error != startErr.Error() {
+		t.Fatalf("harness result = %#v, want retained start failure", task.Harness)
+	}
+	if task.Isolation.Status != core.StatusBlockedIsolation || task.Isolation.HarnessStopped || !task.Isolation.BridgeRevoked {
+		t.Fatalf("isolation = %#v, want failed harness gate and revoked bridge", task.Isolation)
+	}
+	if task.Evaluation.Status != core.StatusBlockedIsolation {
+		t.Fatalf("evaluation = %#v, want blocked", task.Evaluation)
+	}
+	for _, call := range rig.log.snapshot() {
+		if call == "harness.run" || call == "benchmark.evaluate" {
+			t.Fatalf("unexpected call after failed harness start/isolation: %s", call)
+		}
+	}
+	if rig.bridge.stopCount() != 1 || rig.sandbox.stopCount() != 1 {
+		t.Fatalf("successful cleanup repeated: bridge=%d sandbox=%d, want one each", rig.bridge.stopCount(), rig.sandbox.stopCount())
 	}
 }
 

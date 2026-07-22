@@ -13,37 +13,47 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/containerd/errdefs"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/runner"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 )
 
 const (
 	PinnedImage           = "ghcr.io/openclaw/openclaw:2026.5.26@sha256:ae7ff536446f1bbb57ea51b9b21097d8f299d30d683dcd72644973bc0522f3b3"
+	defaultDockerSocket   = "/var/run/docker.sock"
 	defaultCleanupTimeout = 30 * time.Second
 	defaultStartTimeout   = 45 * time.Second
 	defaultAgentTimeout   = 20 * time.Minute
-	gracefulStopSeconds   = 5
+	maxDockerOutput       = 16 << 20
 	maxAPIKeyBytes        = 16 << 10
-	managedLabel          = "aries.managed=true"
-	milestoneLabel        = "aries.milestone=m5"
+	gracefulStopSeconds   = 5
+	execTrailerKeep       = 256
 )
 
-var (
-	upstreamEntrypoint = []string{"tini", "-s", "--"}
-	gatewayCommand     = []string{"node", "openclaw.mjs", "gateway", "--bind", "loopback", "--port", "18789"}
-)
+const execShell = `token=$1
+shift
+"$@"
+status=$?
+printf '\036ARIES_OPENCLAW_EXIT_%s=%s\037' "$token" "$status" >&2
+exit "$status"`
 
+var gatewayCommand = []string{"node", "openclaw.mjs", "gateway", "--bind", "loopback", "--port", "18789"}
+
+// Options are the host-local inputs to one upstream OpenClaw container.
 type Options struct {
-	Image        string
-	OutputDir    string
-	DockerBinary string
-	// APIKeyLookup returns a fresh secret buffer that Start clears after copying.
+	Image          string
+	OutputDir      string
+	DockerSocket   string
 	APIKeyLookup   func(string) ([]byte, bool)
 	CleanupTimeout time.Duration
 	StartTimeout   time.Duration
@@ -51,8 +61,26 @@ type Options struct {
 	Logger         *slog.Logger
 }
 
+// dockerClient is the small official Engine SDK surface used by the harness.
+// Tests replace it with a typed fake; production uses *client.Client directly.
+type dockerClient interface {
+	ContainerCreate(context.Context, client.ContainerCreateOptions) (client.ContainerCreateResult, error)
+	CopyToContainer(context.Context, string, client.CopyToContainerOptions) (client.CopyToContainerResult, error)
+	ContainerStart(context.Context, string, client.ContainerStartOptions) (client.ContainerStartResult, error)
+	ContainerInspect(context.Context, string, client.ContainerInspectOptions) (client.ContainerInspectResult, error)
+	ContainerTop(context.Context, string, client.ContainerTopOptions) (client.ContainerTopResult, error)
+	ExecCreate(context.Context, string, client.ExecCreateOptions) (client.ExecCreateResult, error)
+	ExecAttach(context.Context, string, client.ExecAttachOptions) (client.ExecAttachResult, error)
+	ExecInspect(context.Context, string, client.ExecInspectOptions) (client.ExecInspectResult, error)
+	ContainerLogs(context.Context, string, client.ContainerLogsOptions) (client.ContainerLogsResult, error)
+	CopyFromContainer(context.Context, string, client.CopyFromContainerOptions) (client.CopyFromContainerResult, error)
+	ContainerStop(context.Context, string, client.ContainerStopOptions) (client.ContainerStopResult, error)
+	ContainerKill(context.Context, string, client.ContainerKillOptions) (client.ContainerKillResult, error)
+	ContainerRemove(context.Context, string, client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
+}
+
 type Manager struct {
-	cli            commandRunner
+	client         dockerClient
 	image          string
 	outputDir      string
 	cleanupTimeout time.Duration
@@ -70,36 +98,24 @@ type Manager struct {
 }
 
 type session struct {
-	runID              string
-	taskID             string
-	safeTaskID         string
-	attemptID          string
-	containerName      string
-	containerID        string
-	containerTentative bool
-	containerOwned     bool
-	configVolume       string
-	configTentative    bool
-	configOwned        bool
-	stateVolume        string
-	stateTentative     bool
-	stateOwned         bool
-	initContainer      string
-	initContainerID    string
-	initTentative      bool
-	initOwned          bool
-	artifactDir        string
-	endpoint           core.ToolEndpoint
-	model              core.ModelConfig
-	apiKey             []byte
-	gatewayToken       []byte
-	runAttempted       bool
-	runResultDir       string
-	logPaths           []string
+	runID         string
+	taskID        string
+	safeTaskID    string
+	attemptID     string
+	containerName string
+	containerID   string
+	artifactDir   string
+	endpoint      core.ToolEndpoint
+	model         core.ModelConfig
+	apiKey        []byte
+	gatewayToken  []byte
+	runAttempted  bool
+	logPaths      []string
 }
 
 var _ runner.AgentHarness = (*Manager)(nil)
 
+// New constructs a harness without contacting Docker.
 func New(options Options) (*Manager, error) {
 	if options.Image == "" {
 		options.Image = PinnedImage
@@ -117,11 +133,16 @@ func New(options Options) (*Manager, error) {
 	if err := ensurePrivateDirectory(outputDir); err != nil {
 		return nil, fmt.Errorf("prepare OpenClaw output directory: %w", err)
 	}
-	if options.DockerBinary == "" {
-		options.DockerBinary = defaultDockerBinary
+	if options.DockerSocket == "" {
+		options.DockerSocket = defaultDockerSocket
 	}
-	if strings.ContainsRune(options.DockerBinary, 0) {
-		return nil, errors.New("OpenClaw Docker binary contains NUL")
+	host := options.DockerSocket
+	if !strings.Contains(host, "://") {
+		host = "unix://" + host
+	}
+	api, err := client.New(client.WithHost(host), client.WithUserAgent("aries-openclaw/1"))
+	if err != nil {
+		return nil, fmt.Errorf("create Docker client: %w", err)
 	}
 	if options.CleanupTimeout <= 0 {
 		options.CleanupTimeout = defaultCleanupTimeout
@@ -139,9 +160,10 @@ func New(options Options) (*Manager, error) {
 		options.APIKeyLookup = environmentAPIKeyLookup
 	}
 	return &Manager{
-		cli: execRunner{binary: options.DockerBinary}, image: options.Image, outputDir: outputDir,
-		cleanupTimeout: options.CleanupTimeout, startTimeout: options.StartTimeout, agentTimeout: options.AgentTimeout,
-		logger: options.Logger, apiKeyLookup: options.APIKeyLookup, newID: randomID,
+		client: api, image: options.Image, outputDir: outputDir,
+		cleanupTimeout: options.CleanupTimeout, startTimeout: options.StartTimeout,
+		agentTimeout: options.AgentTimeout, logger: options.Logger,
+		apiKeyLookup: options.APIKeyLookup, newID: randomID,
 	}, nil
 }
 
@@ -161,18 +183,13 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	if err != nil {
 		return err
 	}
-	clientBytes, err := readStablePrivateFile(request.Endpoint.ClientSourceFile, 0o555)
-	if err != nil {
-		return fmt.Errorf("validate OpenClaw SSH client source: %w", err)
-	}
-	clear(clientBytes)
-	apiKeyValue, ok := manager.apiKeyLookup(request.Model.APIKeyEnv)
+	apiKeySource, ok := manager.apiKeyLookup(request.Model.APIKeyEnv)
 	if !ok {
-		clear(apiKeyValue)
+		clear(apiKeySource)
 		return fmt.Errorf("OpenClaw API-key environment %q is not set", request.Model.APIKeyEnv)
 	}
-	apiKey := bytes.Clone(apiKeyValue)
-	clear(apiKeyValue)
+	apiKey := bytes.Clone(apiKeySource)
+	clear(apiKeySource)
 	if err := validateAPIKey(apiKey); err != nil {
 		clear(apiKey)
 		return err
@@ -193,45 +210,64 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	}
 	active := &session{
 		runID: request.RunID, taskID: request.TaskID, safeTaskID: safeTaskID(request.TaskID), attemptID: id,
+		containerName: "aries-openclaw-" + id, artifactDir: filepath.Join(manager.outputDir, "harnesses", id),
 		endpoint: request.Endpoint, model: request.Model, apiKey: apiKey, gatewayToken: gatewayToken,
-		containerName: "aries-openclaw-" + id, configVolume: "aries-openclaw-config-" + id,
-		stateVolume: "aries-openclaw-state-" + id, initContainer: "aries-openclaw-init-" + id,
-		artifactDir: filepath.Join(manager.outputDir, "harnesses", id), runResultDir: stateContainerPath + "/.aries/run",
-	}
-	active.logPaths = []string{
-		filepath.Join(active.artifactDir, "gateway.log"),
-		filepath.Join(active.artifactDir, "telemetry.index.json"),
 	}
 	fail := func(primary error) error {
-		cleanupErr := manager.rollbackStart(ctx, active)
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), manager.cleanupTimeout)
+		cleanupErr := manager.stopSession(cleanupCtx, active)
+		cancel()
 		if cleanupErr != nil {
 			manager.active = active
 			manager.stopErr = cleanupErr
 			return errors.Join(primary, fmt.Errorf("rollback partial OpenClaw harness: %w", cleanupErr))
 		}
+		_ = os.RemoveAll(active.artifactDir)
 		return primary
 	}
 	if err := ensurePrivateDirectory(active.artifactDir); err != nil {
 		return fail(fmt.Errorf("create OpenClaw artifact directory: %w", err))
 	}
-	if err := manager.createVolume(ctx, active, active.configVolume, "config", &active.configTentative, &active.configOwned); err != nil {
+	archive, err := manager.runtimeArchive(active, configuration)
+	if err != nil {
 		return fail(err)
 	}
-	if err := manager.createVolume(ctx, active, active.stateVolume, "state", &active.stateTentative, &active.stateOwned); err != nil {
+	defer clear(archive)
+	created, err := manager.client.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name: active.containerName,
+		Config: &container.Config{
+			Image: manager.image,
+			Env:   []string{"OPENCLAW_CONFIG_PATH=" + configContainerPath},
+			Cmd:   append([]string{launcherPath}, gatewayCommand...),
+			Labels: map[string]string{
+				"aries.managed": "true", "aries.kind": "openclaw-harness",
+				"aries.run": active.runID, "aries.task": active.safeTaskID, "aries.attempt": active.attemptID,
+			},
+		},
+		HostConfig: &container.HostConfig{NetworkMode: container.NetworkMode(active.endpoint.Network)},
+	})
+	if err != nil {
+		return fail(fmt.Errorf("create OpenClaw container: %w", err))
+	}
+	active.containerID = created.ID
+	if strings.TrimSpace(active.containerID) == "" {
+		return fail(errors.New("Docker returned an empty OpenClaw container ID"))
+	}
+	if _, err := manager.client.CopyToContainer(ctx, active.containerID, client.CopyToContainerOptions{
+		DestinationPath: "/", Content: bytes.NewReader(archive), CopyUIDGID: true,
+	}); err != nil {
+		return fail(fmt.Errorf("copy private OpenClaw runtime: %w", err))
+	}
+	if err := manager.validateContainer(ctx, active); err != nil {
 		return fail(err)
 	}
-	if err := manager.initializeVolumes(ctx, active, configuration); err != nil {
-		return fail(err)
-	}
-	if err := manager.createHarnessContainer(ctx, active); err != nil {
-		return fail(err)
-	}
-	if _, err := runDockerChecked(ctx, manager.cli, active.apiKey, nil, "container", "start", active.containerID); err != nil {
-		return fail(fmt.Errorf("start OpenClaw gateway container: %w", err))
+	if _, err := manager.client.ContainerStart(ctx, active.containerID, client.ContainerStartOptions{}); err != nil {
+		return fail(fmt.Errorf("start OpenClaw container: %w", err))
 	}
 	readyCtx, cancel := context.WithTimeout(ctx, manager.startTimeout)
-	defer cancel()
-	if err := manager.waitReady(readyCtx, active); err != nil {
+	err = manager.waitReady(readyCtx, active)
+	cancel()
+	if err != nil {
 		return fail(err)
 	}
 	manager.active = active
@@ -252,51 +288,48 @@ func (manager *Manager) Run(ctx context.Context, instruction string) (core.Harne
 		manager.mu.Unlock()
 		return core.HarnessResult{Status: core.StatusFailed}, errors.New("OpenClaw harness accepts exactly one task instruction")
 	}
-	if strings.ContainsRune(instruction, 0) || strings.TrimSpace(instruction) == "" {
+	if strings.TrimSpace(instruction) == "" || strings.ContainsRune(instruction, 0) {
 		manager.mu.Unlock()
 		return core.HarnessResult{Status: core.StatusFailed}, errors.New("OpenClaw task instruction is invalid")
 	}
 	active.runAttempted = true
 	manager.mu.Unlock()
 
-	timeoutSeconds := max(1, int(manager.agentTimeout/time.Second))
-	agentCommand := buildAgentCommand(active, instruction, timeoutSeconds)
-	if _, err := runDockerChecked(ctx, manager.cli, active.apiKey, nil, append([]string{"container", "exec", "--detach", active.containerID}, agentCommand...)...); err != nil {
-		return manager.failedResult(active, started, nil, nil, err)
+	timeoutSeconds := max(1, int((manager.agentTimeout+time.Second-1)/time.Second))
+	command := buildAgentCommand(active, instruction, timeoutSeconds)
+	runCtx, cancel := context.WithTimeout(ctx, manager.agentTimeout)
+	result, err := manager.execAttached(runCtx, active.containerID, command, "/app")
+	cancel()
+	stdout := redactSession(result.stdout, active)
+	stderr := redactSession(result.stderr, active)
+	paths, writeErr := manager.writeRunArtifacts(active, stdout, stderr)
+	active.logPaths = appendUnique(active.logPaths, paths...)
+	err = errors.Join(err, writeErr)
+	var response string
+	if err == nil && result.exitCode != 0 {
+		err = fmt.Errorf("OpenClaw agent exited %d", result.exitCode)
 	}
-	status, stdout, stderr, err := manager.waitAgent(ctx, active)
+	if err == nil {
+		response, err = parseAgentResult(stdout, stderr)
+	}
+	artifactCtx, artifactCancel := context.WithTimeout(context.WithoutCancel(ctx), manager.cleanupTimeout)
+	artifactErr := manager.collectArtifacts(artifactCtx, active)
+	artifactCancel()
+	err = errors.Join(err, artifactErr)
 	if err != nil {
-		if ctx.Err() != nil {
-			cleanupCtx, cancel := context.WithTimeout(context.Background(), manager.cleanupTimeout)
-			_ = manager.terminateHarness(cleanupCtx, active)
-			cancel()
-		}
-		return manager.failedResult(active, started, stdout, stderr, err)
+		return failedHarnessResult(active, started, err), err
 	}
-	stdout = redactSession(stdout, active)
-	stderr = redactSession(stderr, active)
-	logPaths, writeErr := manager.writeRunArtifacts(active, stdout, stderr)
-	active.logPaths = appendUnique(active.logPaths, logPaths...)
-	if writeErr != nil {
-		return manager.failedResult(active, started, stdout, stderr, writeErr)
-	}
-	if status != 0 {
-		return core.HarnessResult{Status: core.StatusFailed, Duration: time.Since(started), LogPaths: append([]string(nil), active.logPaths...), Error: fmt.Sprintf("OpenClaw agent exited %d", status)}, fmt.Errorf("OpenClaw agent exited %d", status)
-	}
-	response, err := parseAgentResult(stdout, stderr)
-	if err != nil {
-		return core.HarnessResult{Status: core.StatusFailed, Duration: time.Since(started), LogPaths: append([]string(nil), active.logPaths...), Error: err.Error()}, err
-	}
-	return core.HarnessResult{Status: core.StatusSucceeded, FinalResponse: response, Duration: time.Since(started), LogPaths: append([]string(nil), active.logPaths...)}, nil
+	return core.HarnessResult{
+		Status: core.StatusSucceeded, FinalResponse: response, Duration: time.Since(started),
+		LogPaths: append([]string(nil), active.logPaths...),
+	}, nil
 }
 
 func buildAgentCommand(active *session, instruction string, timeoutSeconds int) []string {
 	command := []string{
-		launcherPath, agentWrapperPath, active.runResultDir,
-		"node", "openclaw.mjs", "agent",
+		launcherPath, "node", "openclaw.mjs", "agent",
 		"--session-key", "agent:main:aries-" + active.safeTaskID,
-		"--message", instruction,
-		"--json", "--timeout", strconv.Itoa(timeoutSeconds),
+		"--message", instruction, "--json", "--timeout", fmt.Sprint(timeoutSeconds),
 	}
 	if disablesThinking(active.model) {
 		command = append(command, "--thinking", "off")
@@ -305,10 +338,7 @@ func buildAgentCommand(active *session, instruction string, timeoutSeconds int) 
 }
 
 func disablesThinking(model core.ModelConfig) bool {
-	if model.BaseURL != "https://api.deepseek.com" {
-		return false
-	}
-	return model.Model == "deepseek-v4-flash" || model.Model == "deepseek-v4-pro"
+	return model.BaseURL == "https://api.deepseek.com" && (model.Model == "deepseek-v4-flash" || model.Model == "deepseek-v4-pro")
 }
 
 func (manager *Manager) Stop(ctx context.Context) error {
@@ -338,13 +368,13 @@ func (manager *Manager) Stop(ctx context.Context) error {
 	manager.mu.Unlock()
 
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), manager.cleanupTimeout)
-	err := manager.stopSession(cleanupCtx, active, true)
+	err := manager.stopSession(cleanupCtx, active)
 	cancel()
 
 	manager.mu.Lock()
 	manager.stopErr = err
 	manager.stopping = false
-	if err == nil {
+	if active == nil || active.containerID == "" {
 		manager.active = nil
 	}
 	close(done)
@@ -352,728 +382,307 @@ func (manager *Manager) Stop(ctx context.Context) error {
 	return err
 }
 
-type ownershipState uint8
-
-const (
-	ownershipUnknown ownershipState = iota
-	ownershipAbsent
-	ownershipOwned
-	ownershipForeign
-)
-
-func (manager *Manager) createVolume(ctx context.Context, active *session, name, kind string, tentative, owned *bool) error {
-	args := []string{
-		"volume", "create", "--label", managedLabel, "--label", milestoneLabel,
-		"--label", "aries.kind=openclaw-" + kind, "--label", "aries.task=" + active.safeTaskID,
-		"--label", "aries.run=" + active.runID, "--label", "aries.attempt=" + active.attemptID, name,
-	}
-	*tentative = true
-	result, commandErr := manager.cli.Run(ctx, nil, args...)
-	_, createErr := checkedDockerResult(ctx, result, commandErr, active.apiKey, args...)
-	proofCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), manager.cleanupTimeout)
-	defer cancel()
-	state, proofErr := manager.awaitVolumeOwnership(proofCtx, active, name, kind)
-	manager.applyVolumeOwnership(state, tentative, owned)
-	if createErr != nil {
-		return fmt.Errorf("create OpenClaw %s volume: %w", kind, errors.Join(createErr, proofErr))
-	}
-	if proofErr != nil {
-		return fmt.Errorf("prove ownership of OpenClaw %s volume: %w", kind, proofErr)
-	}
-	if state == ownershipAbsent {
-		return fmt.Errorf("prove ownership of OpenClaw %s volume: volume is absent after create", kind)
-	}
-	return nil
+type execResult struct {
+	stdout   []byte
+	stderr   []byte
+	exitCode int
 }
 
-func (manager *Manager) awaitVolumeOwnership(ctx context.Context, active *session, name, kind string) (ownershipState, error) {
-	ticker := time.NewTicker(25 * time.Millisecond)
-	defer ticker.Stop()
-	lastState := ownershipUnknown
-	var lastErr error
-	for {
-		if ctx.Err() != nil {
-			if lastState == ownershipAbsent {
-				return ownershipAbsent, nil
-			}
-			return ownershipUnknown, errors.Join(lastErr, ctx.Err())
-		}
-		inspection, exists, err := inspectVolume(ctx, manager.cli, active.apiKey, name)
-		if err == nil && !exists {
-			lastState = ownershipAbsent
-			lastErr = nil
-		} else if err == nil {
-			if err := validateVolumeOwnership(inspection, active, name, kind); err != nil {
-				return ownershipForeign, err
-			}
-			return ownershipOwned, nil
-		} else {
-			lastState = ownershipUnknown
-			lastErr = err
-		}
-		select {
-		case <-ctx.Done():
-			if lastState == ownershipAbsent {
-				return ownershipAbsent, nil
-			}
-			return ownershipUnknown, errors.Join(lastErr, ctx.Err())
-		case <-ticker.C:
-		}
-	}
-}
-
-func (*Manager) applyVolumeOwnership(state ownershipState, tentative, owned *bool) {
-	switch state {
-	case ownershipOwned:
-		*tentative = false
-		*owned = true
-	case ownershipAbsent, ownershipForeign:
-		*tentative = false
-		*owned = false
-	}
-}
-
-func validateVolumeOwnership(inspection volumeInspection, active *session, name, kind string) error {
-	if inspection.Name != name || inspection.Labels["aries.managed"] != "true" ||
-		inspection.Labels["aries.milestone"] != "m5" || inspection.Labels["aries.kind"] != "openclaw-"+kind ||
-		inspection.Labels["aries.task"] != active.safeTaskID || inspection.Labels["aries.run"] != active.runID || inspection.Labels["aries.attempt"] != active.attemptID {
-		return fmt.Errorf("volume %q is not owned by OpenClaw attempt %q", name, active.attemptID)
-	}
-	return nil
-}
-
-func (manager *Manager) createOwnedContainer(ctx context.Context, active *session, name, kind string, args []string, id *string, tentative, owned *bool) error {
-	*tentative = true
-	result, commandErr := manager.cli.Run(ctx, nil, args...)
-	_, createErr := checkedDockerResult(ctx, result, commandErr, active.apiKey, args...)
-	createdID := strings.TrimSpace(string(result.stdout))
-	if createdID != "" {
-		*id = createdID
-	}
-	proofCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), manager.cleanupTimeout)
-	defer cancel()
-	state, inspection, proofErr := manager.awaitContainerOwnership(proofCtx, active, name, kind)
-	manager.applyContainerOwnership(state, inspection, id, tentative, owned)
-	if state == ownershipOwned && createdID != "" && createdID != inspection.ID {
-		proofErr = errors.Join(proofErr, fmt.Errorf("Docker create returned container ID %q, inspected %q", createdID, inspection.ID))
-	}
-	if createErr != nil {
-		return errors.Join(createErr, proofErr)
-	}
-	if proofErr != nil {
-		return proofErr
-	}
-	if state == ownershipAbsent {
-		return errors.New("container is absent after create")
-	}
-	return nil
-}
-
-func (manager *Manager) awaitContainerOwnership(ctx context.Context, active *session, name, kind string) (ownershipState, containerInspection, error) {
-	return manager.awaitContainerOwnershipReferences(ctx, active, []string{name}, kind)
-}
-
-func (manager *Manager) awaitContainerOwnershipReferences(ctx context.Context, active *session, references []string, kind string) (ownershipState, containerInspection, error) {
-	ticker := time.NewTicker(25 * time.Millisecond)
-	defer ticker.Stop()
-	lastState := ownershipUnknown
-	var lastErr error
-	for {
-		if ctx.Err() != nil {
-			if lastState == ownershipAbsent {
-				return ownershipAbsent, containerInspection{}, nil
-			}
-			return ownershipUnknown, containerInspection{}, errors.Join(lastErr, ctx.Err())
-		}
-		state, inspection, err := manager.inspectContainerOwnershipReferences(ctx, active, references, kind)
-		if state == ownershipOwned || state == ownershipForeign {
-			return state, inspection, err
-		}
-		lastState = state
-		lastErr = err
-		select {
-		case <-ctx.Done():
-			if lastState == ownershipAbsent {
-				return ownershipAbsent, containerInspection{}, nil
-			}
-			return ownershipUnknown, containerInspection{}, errors.Join(lastErr, ctx.Err())
-		case <-ticker.C:
-		}
-	}
-}
-
-func (manager *Manager) inspectContainerOwnershipReferences(ctx context.Context, active *session, references []string, kind string) (ownershipState, containerInspection, error) {
-	var errs []error
-	for _, reference := range references {
-		inspection, exists, err := inspectContainerMaybe(ctx, manager.cli, active.apiKey, reference)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("inspect container %q: %w", reference, err))
-			continue
-		}
-		if !exists {
-			continue
-		}
-		if err := validateContainerOwnership(inspection, active, kind); err != nil {
-			return ownershipForeign, inspection, err
-		}
-		return ownershipOwned, inspection, nil
-	}
-	if len(errs) != 0 {
-		return ownershipUnknown, containerInspection{}, errors.Join(errs...)
-	}
-	return ownershipAbsent, containerInspection{}, nil
-}
-
-func (*Manager) applyContainerOwnership(state ownershipState, inspection containerInspection, id *string, tentative, owned *bool) {
-	switch state {
-	case ownershipOwned:
-		*id = inspection.ID
-		*tentative = false
-		*owned = true
-	case ownershipAbsent, ownershipForeign:
-		*id = ""
-		*tentative = false
-		*owned = false
-	}
-}
-
-func validateContainerOwnership(inspection containerInspection, active *session, kind string) error {
-	if inspection.ID == "" || inspection.Config.Labels["aries.managed"] != "true" ||
-		inspection.Config.Labels["aries.milestone"] != "m5" || inspection.Config.Labels["aries.kind"] != kind ||
-		inspection.Config.Labels["aries.task"] != active.safeTaskID || inspection.Config.Labels["aries.run"] != active.runID || inspection.Config.Labels["aries.attempt"] != active.attemptID {
-		return fmt.Errorf("container is not owned by OpenClaw attempt %q as %q", active.attemptID, kind)
-	}
-	return nil
-}
-
-func (manager *Manager) proveContainerOwnership(ctx context.Context, active *session, id, kind string) (bool, error) {
-	if id == "" {
-		return false, errors.New("owned OpenClaw container has no retained ID")
-	}
-	inspection, exists, err := inspectContainerMaybe(ctx, manager.cli, active.apiKey, id)
-	if err != nil || !exists {
-		return exists, err
-	}
-	if inspection.ID != id {
-		return true, fmt.Errorf("OpenClaw container identity changed from %q to %q", id, inspection.ID)
-	}
-	if err := validateContainerOwnership(inspection, active, kind); err != nil {
-		return true, err
-	}
-	return true, nil
-}
-
-func (manager *Manager) removeOwnedContainer(ctx context.Context, active *session, id, kind string) error {
-	exists, err := manager.proveContainerOwnership(ctx, active, id, kind)
+func (manager *Manager) execAttached(ctx context.Context, containerID string, command []string, workdir string) (execResult, error) {
+	token, err := randomID()
 	if err != nil {
-		return err
+		return execResult{exitCode: -1}, fmt.Errorf("generate OpenClaw exec token: %w", err)
 	}
-	if !exists {
-		return nil
-	}
-	result, removeErr := manager.cli.Run(ctx, nil, "container", "rm", "--force", id)
-	if removeErr != nil && !resourceMissing(result.stderr, "container") {
-		return fmt.Errorf("remove owned OpenClaw container: %s", strings.TrimSpace(string(redactSession(result.stderr, active))))
-	}
-	absent, err := containerAbsent(ctx, manager.cli, active.apiKey, id)
-	if err != nil {
-		return err
-	}
-	if !absent {
-		return errors.New("owned OpenClaw container remains after removal")
-	}
-	return nil
-}
-
-func (manager *Manager) initializeVolumes(ctx context.Context, active *session, configuration []byte) error {
-	initializer := `set -eu
-mkdir -p /run/aries/ssh /home/node/.openclaw/.aries
-cp /tmp/aries-stage/openclaw.json /run/aries/openclaw.json
-cp /tmp/aries-stage/model.key /run/aries/model.key
-cp /tmp/aries-stage/gateway.key /run/aries/gateway.key
-cp /tmp/aries-stage/launch /run/aries/launch
-cp /tmp/aries-stage/run-agent /run/aries/run-agent
-cp /tmp/aries-stage/id_ed25519 /run/aries/ssh/id_ed25519
-cp /tmp/aries-stage/known_hosts /run/aries/ssh/known_hosts
-cp /tmp/aries-stage/ssh-config /run/aries/ssh/config
-chown -R 1000:1000 /run/aries /home/node/.openclaw
-chmod 0700 /run/aries /run/aries/ssh /home/node/.openclaw /home/node/.openclaw/.aries
-chmod 0600 /run/aries/openclaw.json /run/aries/model.key /run/aries/gateway.key /run/aries/ssh/id_ed25519 /run/aries/ssh/known_hosts /run/aries/ssh/config
-chmod 0555 /run/aries/launch /run/aries/run-agent
-sync
-printf ok >/tmp/aries-init-status.tmp
-mv /tmp/aries-init-status.tmp /tmp/aries-init-status`
-	args := []string{
-		"container", "create", "--name", active.initContainer,
-		"--label", managedLabel, "--label", milestoneLabel, "--label", "aries.kind=openclaw-initializer", "--label", "aries.task=" + active.safeTaskID,
-		"--label", "aries.run=" + active.runID, "--label", "aries.attempt=" + active.attemptID,
-		"--network", "none", "--user", "0:0",
-		"--mount", "type=volume,src=" + active.configVolume + ",dst=/run/aries",
-		"--mount", "type=volume,src=" + active.stateVolume + ",dst=/home/node/.openclaw",
-		"--entrypoint", "/bin/sh", manager.image, "-c", initializer,
-	}
-	if err := manager.createOwnedContainer(ctx, active, active.initContainer, "openclaw-initializer", args, &active.initContainerID, &active.initTentative, &active.initOwned); err != nil {
-		return fmt.Errorf("create OpenClaw volume initializer: %w", err)
-	}
-	identity, err := readStablePrivateFile(active.endpoint.IdentitySourceFile, 0o600)
-	if err != nil {
-		return fmt.Errorf("read OpenClaw SSH identity source: %w", err)
-	}
-	defer clear(identity)
-	knownHosts, err := readStablePrivateFile(active.endpoint.KnownHostsSourceFile, 0o600)
-	if err != nil {
-		return fmt.Errorf("read OpenClaw known-hosts source: %w", err)
-	}
-	sshConfiguration := []byte("Host openclaw-sandbox\n  HostName task-sandbox\n  Port 2222\n  BatchMode yes\n  ConnectTimeout 5\n  ServerAliveInterval 15\n  ServerAliveCountMax 3\n  StrictHostKeyChecking yes\n  UpdateHostKeys no\n  User aries\n  UserKnownHostsFile /run/aries/ssh/known_hosts\n  IdentityFile /run/aries/ssh/id_ed25519\n  IdentitiesOnly yes\n")
-	archive, err := stageArchive(map[string]stagedFile{
-		"openclaw.json": {content: configuration, mode: 0o600},
-		"model.key":     {content: active.apiKey, mode: 0o600},
-		"gateway.key":   {content: active.gatewayToken, mode: 0o600},
-		"launch":        {content: launcherScript(active.model.APIKeyEnv), mode: 0o555},
-		"run-agent":     {content: agentWrapperScript(), mode: 0o555},
-		"id_ed25519":    {content: identity, mode: 0o600},
-		"known_hosts":   {content: knownHosts, mode: 0o600},
-		"ssh-config":    {content: sshConfiguration, mode: 0o600},
+	wrapped := append([]string{"/bin/sh", "-c", execShell, "aries-openclaw-exec", token}, command...)
+	created, err := manager.client.ExecCreate(ctx, containerID, client.ExecCreateOptions{
+		AttachStdout: true, AttachStderr: true, Cmd: wrapped, WorkingDir: workdir,
 	})
 	if err != nil {
-		return err
+		return execResult{exitCode: -1}, fmt.Errorf("create OpenClaw exec: %w", err)
 	}
-	defer clear(archive)
-	if _, err := runDockerChecked(ctx, manager.cli, active.apiKey, archive, "container", "cp", "-", active.initContainerID+":/tmp"); err != nil {
-		return fmt.Errorf("copy private OpenClaw runtime material into initializer: %w", err)
-	}
-	if _, err := runDockerChecked(ctx, manager.cli, active.apiKey, nil, "container", "start", active.initContainerID); err != nil {
-		return fmt.Errorf("start OpenClaw volume initializer: %w", err)
-	}
-	if err := manager.waitForExactFile(ctx, active, active.initContainerID, "/tmp/aries-init-status", []byte("ok")); err != nil {
-		return fmt.Errorf("wait for OpenClaw volume initializer: %w", err)
-	}
-	if err := manager.removeOwnedContainer(ctx, active, active.initContainerID, "openclaw-initializer"); err != nil {
-		return fmt.Errorf("remove OpenClaw volume initializer: %w", err)
-	}
-	active.initOwned = false
-	active.initTentative = false
-	active.initContainerID = ""
-	return nil
-}
-
-func (manager *Manager) createHarnessContainer(ctx context.Context, active *session) error {
-	args := []string{
-		"container", "create", "--name", active.containerName,
-		"--label", managedLabel, "--label", milestoneLabel, "--label", "aries.kind=openclaw-harness", "--label", "aries.task=" + active.safeTaskID,
-		"--label", "aries.run=" + active.runID, "--label", "aries.attempt=" + active.attemptID,
-		"--network", active.endpoint.Network,
-		"--env", "OPENCLAW_CONFIG_PATH=" + configContainerPath,
-		"--mount", "type=volume,src=" + active.configVolume + ",dst=/run/aries,readonly",
-		"--mount", "type=volume,src=" + active.stateVolume + ",dst=" + stateContainerPath,
-		"--mount", "type=bind,src=" + active.endpoint.ClientSourceFile + ",dst=" + active.endpoint.ClientCommand + ",readonly",
-		manager.image, launcherPath,
-	}
-	args = append(args, gatewayCommand...)
-	if err := manager.createOwnedContainer(ctx, active, active.containerName, "openclaw-harness", args, &active.containerID, &active.containerTentative, &active.containerOwned); err != nil {
-		return fmt.Errorf("create OpenClaw gateway container: %w", err)
-	}
-	inspection, err := inspectContainer(ctx, manager.cli, active.apiKey, active.containerID)
+	attached, err := manager.client.ExecAttach(ctx, created.ID, client.ExecAttachOptions{})
 	if err != nil {
-		return err
+		return execResult{exitCode: -1}, fmt.Errorf("attach OpenClaw exec: %w", err)
 	}
-	if err := validateContainerInspection(inspection, active); err != nil {
-		return err
+	defer attached.Close()
+	_ = attached.CloseWrite()
+	var stdout, stderr limitedBuffer
+	stdout.limit, stderr.limit = maxDockerOutput, maxDockerOutput
+	trailer := newExecTrailer(&stderr, token)
+	copyDone := make(chan error, 1)
+	go func() {
+		_, err := stdcopy.StdCopy(&stdout, trailer, attached.Reader)
+		copyDone <- err
+	}()
+	inspectDone := make(chan client.ExecInspectResult, 1)
+	inspectErr := make(chan error, 1)
+	inspectCtx, cancelInspect := context.WithCancel(ctx)
+	defer cancelInspect()
+	go func() {
+		inspection, err := manager.waitExec(inspectCtx, containerID, created.ID)
+		if err != nil {
+			inspectErr <- err
+			return
+		}
+		inspectDone <- inspection
+	}()
+	var copyErr error
+	streamDone := false
+	finished := false
+	for !finished {
+		select {
+		case <-ctx.Done():
+			attached.Close()
+			if !streamDone {
+				<-copyDone
+			}
+			return execResult{stdout: stdout.Bytes(), stderr: stderr.Bytes(), exitCode: -1}, ctx.Err()
+		case err := <-inspectErr:
+			attached.Close()
+			if !streamDone {
+				<-copyDone
+			}
+			return execResult{stdout: stdout.Bytes(), stderr: stderr.Bytes(), exitCode: -1}, err
+		case <-inspectDone:
+			finished = true
+		case <-trailer.done:
+			finished = true
+		case copyErr = <-copyDone:
+			streamDone = true
+		}
 	}
-	return nil
+	cancelInspect()
+	if !streamDone {
+		// The random trailer is emitted after the child and is the final stderr
+		// record. Drain any buffered frames briefly; Docker 29 may never send EOF
+		// until the hijacked connection is closed by the caller.
+		select {
+		case copyErr = <-copyDone:
+			streamDone = true
+		case <-time.After(200 * time.Millisecond):
+			attached.Close()
+			<-copyDone
+			streamDone = true
+			copyErr = nil
+		}
+	}
+	if copyErr != nil {
+		return execResult{stdout: stdout.Bytes(), stderr: stderr.Bytes(), exitCode: -1}, fmt.Errorf("read OpenClaw exec: %w", copyErr)
+	}
+	if stdout.exceeded || stderr.exceeded {
+		return execResult{stdout: stdout.Bytes(), stderr: stderr.Bytes(), exitCode: -1}, errors.New("OpenClaw exec output exceeded its bound")
+	}
+	exitCode, err := trailer.Finish()
+	if err != nil {
+		return execResult{stdout: stdout.Bytes(), stderr: stderr.Bytes(), exitCode: -1}, err
+	}
+	return execResult{stdout: stdout.Bytes(), stderr: stderr.Bytes(), exitCode: exitCode}, nil
 }
 
-func validateContainerInspection(inspection containerInspection, active *session) error {
-	if inspection.Config.Image != PinnedImage || inspection.Config.User != "node" {
-		return fmt.Errorf("OpenClaw container image/user = %q/%q, want pinned image/default node", inspection.Config.Image, inspection.Config.User)
-	}
-	wantedCommand := append([]string{launcherPath}, gatewayCommand...)
-	if !equalStrings(inspection.Config.Entrypoint, upstreamEntrypoint) || !equalStrings(inspection.Config.Cmd, wantedCommand) {
-		return errors.New("OpenClaw container entrypoint or gateway argv differs from the pinned direct command")
-	}
-	for _, environment := range inspection.Config.Env {
-		if strings.HasPrefix(environment, active.model.APIKeyEnv+"=") || strings.HasPrefix(environment, gatewayTokenEnv+"=") ||
-			strings.Contains(environment, string(active.apiKey)) || strings.Contains(environment, string(active.gatewayToken)) {
-			return errors.New("OpenClaw secret entered Docker Config.Env")
+func (manager *Manager) waitExec(ctx context.Context, containerID, execID string) (client.ExecInspectResult, error) {
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		inspection, err := manager.client.ExecInspect(ctx, execID, client.ExecInspectOptions{})
+		if err != nil {
+			return client.ExecInspectResult{}, fmt.Errorf("inspect OpenClaw exec: %w", err)
+		}
+		if !inspection.Running {
+			return inspection, nil
+		}
+		if inspection.PID > 0 {
+			present, err := manager.containerHasPID(ctx, containerID, inspection.PID)
+			if err != nil {
+				return client.ExecInspectResult{}, fmt.Errorf("inspect OpenClaw exec process: %w", err)
+			}
+			if !present {
+				return inspection, nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return client.ExecInspectResult{}, ctx.Err()
+		case <-ticker.C:
 		}
 	}
-	if inspection.ID != active.containerID || inspection.Config.Labels["aries.managed"] != "true" || inspection.Config.Labels["aries.milestone"] != "m5" || inspection.Config.Labels["aries.task"] != active.safeTaskID || inspection.Config.Labels["aries.run"] != active.runID || inspection.Config.Labels["aries.attempt"] != active.attemptID {
-		return errors.New("OpenClaw container labels do not match the task")
+}
+
+func (manager *Manager) containerHasPID(ctx context.Context, containerID string, pid int) (bool, error) {
+	top, err := manager.client.ContainerTop(ctx, containerID, client.ContainerTopOptions{Arguments: []string{"-eo", "pid"}})
+	if err != nil {
+		return false, err
 	}
-	if len(inspection.NetworkSettings.Networks) != 1 {
-		return errors.New("OpenClaw container is not attached to exactly one task network")
-	}
-	if _, ok := inspection.NetworkSettings.Networks[active.endpoint.Network]; !ok {
-		return errors.New("OpenClaw container is not attached to the bridge network")
-	}
-	wanted := map[string]bool{"/run/aries": false, stateContainerPath: true, active.endpoint.ClientCommand: false}
-	for _, mount := range inspection.Mounts {
-		writable, ok := wanted[mount.Destination]
-		if !ok || mount.RW != writable || mount.Destination == "/var/run/docker.sock" {
-			return fmt.Errorf("unexpected OpenClaw mount %q", mount.Destination)
+	column := -1
+	for index, title := range top.Titles {
+		if strings.EqualFold(title, "PID") {
+			column = index
+			break
 		}
-		delete(wanted, mount.Destination)
 	}
-	if len(wanted) != 0 {
-		return errors.New("OpenClaw container is missing a required mount")
+	if column < 0 {
+		return false, errors.New("Docker top response has no PID column")
 	}
-	return nil
+	want := strconv.Itoa(pid)
+	for _, process := range top.Processes {
+		if column < len(process) && process[column] == want {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+type execTrailer struct {
+	destination io.Writer
+	prefix      []byte
+	buffer      bytes.Buffer
+	done        chan struct{}
+	once        sync.Once
+}
+
+func newExecTrailer(destination io.Writer, token string) *execTrailer {
+	return &execTrailer{destination: destination, prefix: []byte("\x1eARIES_OPENCLAW_EXIT_" + token + "="), done: make(chan struct{})}
+}
+
+func (trailer *execTrailer) Write(content []byte) (int, error) {
+	written, _ := trailer.buffer.Write(content)
+	buffered := trailer.buffer.Bytes()
+	if len(buffered) > 0 && buffered[len(buffered)-1] == '\x1f' && bytes.LastIndex(buffered[:len(buffered)-1], trailer.prefix) >= 0 {
+		trailer.once.Do(func() { close(trailer.done) })
+	}
+	if excess := trailer.buffer.Len() - execTrailerKeep; excess > 0 {
+		chunk := trailer.buffer.Next(excess)
+		n, err := trailer.destination.Write(chunk)
+		if err != nil {
+			return 0, err
+		}
+		if n != len(chunk) {
+			return 0, io.ErrShortWrite
+		}
+	}
+	return written, nil
+}
+
+func (trailer *execTrailer) Finish() (int, error) {
+	content := trailer.buffer.Bytes()
+	if len(content) == 0 || content[len(content)-1] != '\x1f' {
+		return -1, errors.New("OpenClaw exec output is missing its exit trailer")
+	}
+	start := bytes.LastIndex(content[:len(content)-1], trailer.prefix)
+	if start < 0 {
+		return -1, errors.New("OpenClaw exec output has an invalid exit trailer")
+	}
+	exitCode, err := strconv.Atoi(string(content[start+len(trailer.prefix) : len(content)-1]))
+	if err != nil || exitCode < 0 || exitCode > 255 {
+		return -1, errors.New("OpenClaw exec output has an invalid exit code")
+	}
+	if _, err := trailer.destination.Write(content[:start]); err != nil {
+		return -1, fmt.Errorf("write OpenClaw exec stderr: %w", err)
+	}
+	return exitCode, nil
+}
+
+type limitedBuffer struct {
+	bytes.Buffer
+	limit    int
+	exceeded bool
+}
+
+func (buffer *limitedBuffer) Write(content []byte) (int, error) {
+	consumed := len(content)
+	remaining := buffer.limit - buffer.Len()
+	if len(content) > remaining {
+		content = content[:max(0, remaining)]
+		buffer.exceeded = true
+	}
+	_, err := buffer.Buffer.Write(content)
+	return consumed, err
 }
 
 func (manager *Manager) waitReady(ctx context.Context, active *session) error {
-	statusPath := stateContainerPath + "/.aries/ready"
-	script := `const fs=require("fs"),http=require("http");const out=process.argv[1];const req=http.get({host:"127.0.0.1",port:18789,path:"/readyz",timeout:1500},res=>{let b="";res.setEncoding("utf8");res.on("data",c=>b+=c);res.on("end",()=>{try{const j=JSON.parse(b);if(res.statusCode===200&&j.ready===true&&process.getuid()===1000){const t=out+".tmp";fs.writeFileSync(t,JSON.stringify({status:res.statusCode,ready:j.ready,uid:process.getuid()}),{mode:0o600});fs.renameSync(t,out)}}catch{}})});req.on("timeout",()=>req.destroy());req.on("error",()=>{});`
+	const probe = `const http=require("http");const r=http.get({host:"127.0.0.1",port:18789,path:"/readyz",timeout:1000},s=>{let b="";s.on("data",c=>b+=c);s.on("end",()=>{try{const j=JSON.parse(b);process.exit(s.statusCode===200&&j.ready===true&&process.getuid()===1000?0:1)}catch{process.exit(1)}})});r.on("timeout",()=>r.destroy());r.on("error",()=>process.exit(1));`
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		_, _ = manager.cli.Run(ctx, nil, "container", "exec", "--detach", active.containerID, launcherPath, "node", "-e", script, statusPath)
-		content, found, err := copyContainerFile(ctx, manager.cli, active.apiKey, active.containerID, statusPath)
-		if err != nil {
-			return err
-		}
-		if found {
-			var ready struct {
-				Status int  `json:"status"`
-				Ready  bool `json:"ready"`
-				UID    int  `json:"uid"`
-			}
-			if err := json.Unmarshal(content, &ready); err != nil || ready.Status != 200 || !ready.Ready || ready.UID != 1000 {
-				return errors.New("OpenClaw readiness evidence is invalid")
-			}
-			processes, err := containerProcesses(ctx, manager.cli, active.apiKey, active.containerID)
-			if err != nil {
-				return err
-			}
-			if !containsExactProcess(processes, "openclaw") {
-				return fmt.Errorf("OpenClaw gateway process is absent after readiness: %q", processes)
-			}
+		probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		result, err := manager.execAttached(probeCtx, active.containerID, []string{"node", "-e", probe}, "/app")
+		cancel()
+		if err == nil && result.exitCode == 0 {
 			return nil
 		}
-		processes, err := containerProcesses(ctx, manager.cli, active.apiKey, active.containerID)
-		if err != nil {
-			return err
+		inspection, inspectErr := manager.client.ContainerInspect(ctx, active.containerID, client.ContainerInspectOptions{})
+		if inspectErr != nil {
+			return fmt.Errorf("inspect OpenClaw readiness: %w", inspectErr)
 		}
-		if len(processes) == 0 {
+		if inspection.Container.State == nil || !inspection.Container.State.Running {
 			return errors.New("OpenClaw gateway exited before readiness")
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("await exact OpenClaw readiness: %w", ctx.Err())
+			return fmt.Errorf("await OpenClaw readiness: %w", ctx.Err())
 		case <-ticker.C:
 		}
 	}
 }
 
-func (manager *Manager) waitAgent(ctx context.Context, active *session) (int, []byte, []byte, error) {
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	statusPath := active.runResultDir + "/status"
-	for {
-		statusBytes, found, err := copyContainerFile(ctx, manager.cli, active.apiKey, active.containerID, statusPath)
-		if err != nil {
-			return -1, nil, nil, err
-		}
-		if found {
-			status, err := strconv.Atoi(strings.TrimSpace(string(statusBytes)))
-			if err != nil {
-				return -1, nil, nil, errors.New("OpenClaw agent status file is invalid")
-			}
-			stdout, stdoutFound, stdoutErr := copyContainerFile(ctx, manager.cli, active.apiKey, active.containerID, active.runResultDir+"/stdout")
-			stderr, stderrFound, stderrErr := copyContainerFile(ctx, manager.cli, active.apiKey, active.containerID, active.runResultDir+"/stderr")
-			if err := errors.Join(stdoutErr, stderrErr); err != nil {
-				return -1, nil, nil, err
-			}
-			if !stdoutFound || !stderrFound {
-				return -1, nil, nil, errors.New("OpenClaw agent status appeared before complete output artifacts")
-			}
-			return status, stdout, stderr, nil
-		}
-		select {
-		case <-ctx.Done():
-			return -1, nil, nil, ctx.Err()
-		case <-ticker.C:
-		}
-	}
-}
-
-func (manager *Manager) waitForExactFile(ctx context.Context, active *session, container, path string, expected []byte) error {
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		content, found, err := copyContainerFile(ctx, manager.cli, active.apiKey, container, path)
-		if err != nil {
-			return err
-		}
-		if found {
-			if !bytes.Equal(content, expected) {
-				return errors.New("detached OpenClaw status file has unexpected content")
-			}
-			return nil
-		}
-		processes, err := containerProcesses(ctx, manager.cli, active.apiKey, container)
-		if err != nil {
-			return err
-		}
-		if len(processes) == 0 {
-			return errors.New("detached OpenClaw initializer exited without success status")
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
-	}
-}
-
-func (manager *Manager) stopSession(ctx context.Context, active *session, collect bool) error {
-	if active == nil {
-		return nil
-	}
-	if err := manager.resolveTentativeResources(ctx, active); err != nil {
-		return err
-	}
-	var errs []error
-	if active.containerOwned {
-		if err := manager.terminateHarness(ctx, active); err != nil {
-			return err
-		}
-		artifactsCollected := true
-		if collect {
-			if err := manager.collectArtifacts(ctx, active); err != nil {
-				errs = append(errs, err)
-				artifactsCollected = false
-			}
-		}
-		if !artifactsCollected {
-			return errors.Join(errs...)
-		}
-		if err := manager.removeOwnedContainer(ctx, active, active.containerID, "openclaw-harness"); err != nil {
-			errs = append(errs, fmt.Errorf("remove OpenClaw harness: %w", err))
-		} else {
-			active.containerOwned = false
-			active.containerID = ""
-		}
-	}
-	if active.initOwned {
-		if err := manager.removeOwnedContainer(ctx, active, active.initContainerID, "openclaw-initializer"); err != nil {
-			errs = append(errs, fmt.Errorf("remove OpenClaw initializer: %w", err))
-		} else {
-			active.initOwned = false
-			active.initContainerID = ""
-		}
-	}
-	if !active.containerOwned && !active.initOwned {
-		volumes := []struct {
-			name  string
-			kind  string
-			owned *bool
-		}{
-			{name: active.stateVolume, kind: "state", owned: &active.stateOwned},
-			{name: active.configVolume, kind: "config", owned: &active.configOwned},
-		}
-		for _, volume := range volumes {
-			if !*volume.owned {
-				continue
-			}
-			inspection, exists, inspectErr := inspectVolume(ctx, manager.cli, active.apiKey, volume.name)
-			if inspectErr != nil {
-				errs = append(errs, inspectErr)
-				continue
-			}
-			if !exists {
-				*volume.owned = false
-				continue
-			}
-			if err := validateVolumeOwnership(inspection, active, volume.name, volume.kind); err != nil {
-				errs = append(errs, err)
-				continue
-			}
-			removeResult, removeErr := manager.cli.Run(ctx, nil, "volume", "rm", volume.name)
-			if removeErr != nil && !resourceMissing(removeResult.stderr, "volume") {
-				errs = append(errs, fmt.Errorf("remove OpenClaw volume %q: %s", volume.name, strings.TrimSpace(string(redactSession(removeResult.stderr, active)))))
-				continue
-			}
-			absent, err := volumeAbsent(ctx, manager.cli, active.apiKey, volume.name)
-			if err != nil || !absent {
-				if err == nil {
-					err = errors.New("volume remains")
-				}
-				errs = append(errs, fmt.Errorf("confirm OpenClaw volume %q removal: %w", volume.name, err))
-				continue
-			}
-			*volume.owned = false
-		}
-	}
-	if len(errs) == 0 {
-		clearSessionSecrets(active)
-	}
-	return errors.Join(errs...)
-}
-
-func (manager *Manager) resolveTentativeResources(ctx context.Context, active *session) error {
-	var errs []error
-	containers := []struct {
-		name      string
-		kind      string
-		id        *string
-		tentative *bool
-		owned     *bool
-	}{
-		{name: active.containerName, kind: "openclaw-harness", id: &active.containerID, tentative: &active.containerTentative, owned: &active.containerOwned},
-		{name: active.initContainer, kind: "openclaw-initializer", id: &active.initContainerID, tentative: &active.initTentative, owned: &active.initOwned},
-	}
-	for _, container := range containers {
-		if !*container.tentative {
-			continue
-		}
-		state, inspection, err := manager.awaitTentativeContainerOwnership(ctx, active, container.name, *container.id, container.kind)
-		manager.applyContainerOwnership(state, inspection, container.id, container.tentative, container.owned)
-		if state == ownershipUnknown {
-			errs = append(errs, fmt.Errorf("resolve tentative %s container %q: %w", container.kind, container.name, err))
-		}
-	}
-	volumes := []struct {
-		name      string
-		kind      string
-		tentative *bool
-		owned     *bool
-	}{
-		{name: active.stateVolume, kind: "state", tentative: &active.stateTentative, owned: &active.stateOwned},
-		{name: active.configVolume, kind: "config", tentative: &active.configTentative, owned: &active.configOwned},
-	}
-	for _, volume := range volumes {
-		if !*volume.tentative {
-			continue
-		}
-		state, err := manager.awaitVolumeOwnership(ctx, active, volume.name, volume.kind)
-		manager.applyVolumeOwnership(state, volume.tentative, volume.owned)
-		if state == ownershipUnknown {
-			errs = append(errs, fmt.Errorf("resolve tentative OpenClaw %s volume %q: %w", volume.kind, volume.name, err))
-		}
-	}
-	return errors.Join(errs...)
-}
-
-func (manager *Manager) awaitTentativeContainerOwnership(ctx context.Context, active *session, name, retainedID, kind string) (ownershipState, containerInspection, error) {
-	references := []string{name}
-	if retainedID != "" {
-		references = []string{retainedID, name}
-	}
-	return manager.awaitContainerOwnershipReferences(ctx, active, references, kind)
-}
-
-func (manager *Manager) rollbackStart(ctx context.Context, active *session) error {
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), manager.cleanupTimeout)
-	defer cancel()
-	ticker := time.NewTicker(25 * time.Millisecond)
-	defer ticker.Stop()
-	var lastErr error
-	for {
-		lastErr = manager.stopSession(cleanupCtx, active, false)
-		if lastErr == nil {
-			return nil
-		}
-		select {
-		case <-cleanupCtx.Done():
-			return errors.Join(lastErr, cleanupCtx.Err())
-		case <-ticker.C:
-		}
-	}
-}
-
-func (manager *Manager) terminateHarness(ctx context.Context, active *session) error {
-	exists, err := manager.proveContainerOwnership(ctx, active, active.containerID, "openclaw-harness")
-	if err != nil || !exists {
-		return err
-	}
-	stopResult, stopErr := manager.cli.Run(ctx, nil, "container", "stop", "--time", strconv.Itoa(gracefulStopSeconds), active.containerID)
-	stopFailed := stopErr != nil && !resourceMissing(stopResult.stderr, "container") && !strings.Contains(strings.ToLower(string(stopResult.stderr)), "not running")
-	processes, processErr := containerProcesses(ctx, manager.cli, active.apiKey, active.containerID)
-	if !stopFailed && processErr == nil && len(processes) == 0 {
-		return nil
-	}
-	killResult, killErr := manager.cli.Run(ctx, nil, "container", "kill", "--signal", "KILL", active.containerID)
-	if killErr != nil && !resourceMissing(killResult.stderr, "container") && !strings.Contains(strings.ToLower(string(killResult.stderr)), "not running") {
-		return errors.Join(
-			fmt.Errorf("gracefully stop OpenClaw harness: %s", strings.TrimSpace(string(redactSession(stopResult.stderr, active)))),
-			fmt.Errorf("kill OpenClaw harness: %s", strings.TrimSpace(string(redactSession(killResult.stderr, active)))),
-		)
-	}
-	processes, err = containerProcesses(ctx, manager.cli, active.apiKey, active.containerID)
+func (manager *Manager) validateContainer(ctx context.Context, active *session) error {
+	inspection, err := manager.client.ContainerInspect(ctx, active.containerID, client.ContainerInspectOptions{})
 	if err != nil {
-		return err
+		return fmt.Errorf("inspect OpenClaw container: %w", err)
 	}
-	if len(processes) != 0 {
-		return errors.New("OpenClaw processes remain after graceful-stop and KILL fallback")
+	containerInfo := inspection.Container
+	if containerInfo.ID != active.containerID || containerInfo.Config == nil || containerInfo.HostConfig == nil {
+		return errors.New("OpenClaw container inspection is incomplete")
+	}
+	configuration := containerInfo.Config
+	if configuration.Image != manager.image || !equalStrings(configuration.Cmd, append([]string{launcherPath}, gatewayCommand...)) {
+		return errors.New("OpenClaw image or gateway command differs from the pinned direct configuration")
+	}
+	if configuration.Labels["aries.managed"] != "true" || configuration.Labels["aries.kind"] != "openclaw-harness" ||
+		configuration.Labels["aries.run"] != active.runID || configuration.Labels["aries.task"] != active.safeTaskID || configuration.Labels["aries.attempt"] != active.attemptID {
+		return errors.New("OpenClaw container labels do not match the task")
+	}
+	for _, value := range append(append([]string(nil), configuration.Env...), configuration.Cmd...) {
+		if strings.Contains(value, string(active.apiKey)) || strings.Contains(value, string(active.gatewayToken)) {
+			return errors.New("OpenClaw secret entered Docker configuration")
+		}
+	}
+	for _, value := range configuration.Labels {
+		if strings.Contains(value, string(active.apiKey)) || strings.Contains(value, string(active.gatewayToken)) {
+			return errors.New("OpenClaw secret entered Docker labels")
+		}
+	}
+	if string(containerInfo.HostConfig.NetworkMode) != active.endpoint.Network || len(containerInfo.Mounts) != 0 {
+		return errors.New("OpenClaw container must use only the task network and no mounts")
 	}
 	return nil
 }
 
-func (manager *Manager) collectArtifacts(ctx context.Context, active *session) error {
-	var errs []error
-	logs, err := manager.cli.Run(ctx, nil, "container", "logs", active.containerID)
-	if err != nil && !strings.Contains(strings.ToLower(string(logs.stderr)), "not running") {
-		errs = append(errs, fmt.Errorf("collect OpenClaw gateway logs: %s", strings.TrimSpace(string(redactBytes(logs.stderr, active.apiKey)))))
-	} else {
-		content := allowGatewayLogs(append(append([]byte(nil), logs.stdout...), logs.stderr...), active.apiKey, active.gatewayToken)
-		path := filepath.Join(active.artifactDir, "gateway.log")
-		if writeErr := writeArtifact(path, content); writeErr != nil {
-			errs = append(errs, writeErr)
-		} else {
-			active.logPaths = appendUnique(active.logPaths, path)
-		}
+func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([]byte, error) {
+	clientBytes, err := readStablePrivateFile(active.endpoint.ClientSourceFile, 0o555)
+	if err != nil {
+		return nil, fmt.Errorf("read OpenClaw SSH client: %w", err)
 	}
-	archive, found, archiveErr := copyContainerArchive(ctx, manager.cli, active.apiKey, active.containerID, stateContainerPath+"/agents/main/sessions")
-	if archiveErr != nil {
-		errs = append(errs, archiveErr)
-	} else if found {
-		paths, err := extractTelemetry(active.artifactDir, archive, active.apiKey, active.gatewayToken)
-		if err != nil {
-			errs = append(errs, err)
-		} else {
-			active.logPaths = appendUnique(active.logPaths, paths...)
-		}
+	defer clear(clientBytes)
+	identity, err := readStablePrivateFile(active.endpoint.IdentitySourceFile, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("read OpenClaw SSH identity: %w", err)
 	}
-	if len(errs) == 0 {
-		index, err := json.MarshalIndent(struct {
-			Paths []string `json:"paths"`
-		}{Paths: telemetryRelativePaths(active.artifactDir, active.logPaths)}, "", "  ")
-		if err != nil {
-			errs = append(errs, fmt.Errorf("encode OpenClaw telemetry index: %w", err))
-		} else {
-			index = append(index, '\n')
-			if err := writeArtifact(filepath.Join(active.artifactDir, "telemetry.index.json"), index); err != nil {
-				errs = append(errs, err)
-			}
-		}
+	defer clear(identity)
+	knownHosts, err := readStablePrivateFile(active.endpoint.KnownHostsSourceFile, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("read OpenClaw known-hosts: %w", err)
 	}
-	return errors.Join(errs...)
-}
-
-func (manager *Manager) writeRunArtifacts(active *session, stdout, stderr []byte) ([]string, error) {
-	paths := []string{filepath.Join(active.artifactDir, "agent.json"), filepath.Join(active.artifactDir, "agent.stderr")}
-	if err := writeArtifact(paths[0], stdout); err != nil {
-		return nil, err
+	defer clear(knownHosts)
+	files := map[string]stagedFile{
+		"run/aries/openclaw.json":   {content: configuration, mode: 0o600},
+		"run/aries/model.key":       {content: active.apiKey, mode: 0o600},
+		"run/aries/gateway.key":     {content: active.gatewayToken, mode: 0o600},
+		"run/aries/launch":          {content: launcherScript(active.model.APIKeyEnv), mode: 0o555},
+		"run/aries/ssh/id_ed25519":  {content: identity, mode: 0o600},
+		"run/aries/ssh/known_hosts": {content: knownHosts, mode: 0o600},
+		"opt/aries/bin/aries-ssh":   {content: clientBytes, mode: 0o555},
 	}
-	if err := writeArtifact(paths[1], stderr); err != nil {
-		return nil, err
-	}
-	return paths, nil
-}
-
-func (manager *Manager) failedResult(active *session, started time.Time, stdout, stderr []byte, err error) (core.HarnessResult, error) {
-	stdout = redactSession(stdout, active)
-	stderr = redactSession(stderr, active)
-	paths, writeErr := manager.writeRunArtifacts(active, stdout, stderr)
-	active.logPaths = appendUnique(active.logPaths, paths...)
-	if writeErr != nil {
-		err = errors.Join(err, writeErr)
-	}
-	status := core.StatusFailed
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		status = core.StatusCanceled
-	}
-	return core.HarnessResult{Status: status, Duration: time.Since(started), LogPaths: append([]string(nil), active.logPaths...), Error: err.Error()}, err
+	return stageArchive(files)
 }
 
 type stagedFile struct {
@@ -1084,15 +693,27 @@ type stagedFile struct {
 func stageArchive(files map[string]stagedFile) ([]byte, error) {
 	var output bytes.Buffer
 	writer := tar.NewWriter(&output)
-	if err := writer.WriteHeader(&tar.Header{Name: "aries-stage", Typeflag: tar.TypeDir, Mode: 0o700, Uid: 0, Gid: 0}); err != nil {
-		return nil, err
-	}
-	for _, name := range []string{"openclaw.json", "model.key", "gateway.key", "launch", "run-agent", "id_ed25519", "known_hosts", "ssh-config"} {
-		file, ok := files[name]
-		if !ok {
-			return nil, fmt.Errorf("missing staged OpenClaw file %q", name)
+	directories := []string{"run/aries", "run/aries/ssh", "opt/aries", "opt/aries/bin", "home/node/.openclaw", "home/node/.openclaw/.aries"}
+	for _, name := range directories {
+		mode := int64(0o755)
+		if strings.HasPrefix(name, "run/aries") || strings.HasPrefix(name, "home/node/.openclaw") {
+			mode = 0o700
 		}
-		header := &tar.Header{Name: "aries-stage/" + name, Typeflag: tar.TypeReg, Mode: file.mode, Size: int64(len(file.content)), Uid: 0, Gid: 0}
+		if err := writer.WriteHeader(&tar.Header{Name: name, Typeflag: tar.TypeDir, Mode: mode, Uid: 1000, Gid: 1000}); err != nil {
+			return nil, err
+		}
+	}
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		file := files[name]
+		if name == "" || filepath.IsAbs(name) || filepath.Clean(name) != name || strings.HasPrefix(name, "../") {
+			return nil, fmt.Errorf("invalid staged OpenClaw path %q", name)
+		}
+		header := &tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: file.mode, Size: int64(len(file.content)), Uid: 1000, Gid: 1000}
 		if err := writer.WriteHeader(header); err != nil {
 			return nil, err
 		}
@@ -1104,6 +725,137 @@ func stageArchive(files map[string]stagedFile) ([]byte, error) {
 		return nil, err
 	}
 	return output.Bytes(), nil
+}
+
+func (manager *Manager) stopSession(ctx context.Context, active *session) error {
+	if active == nil {
+		return nil
+	}
+	if active.containerID == "" {
+		clearSessionSecrets(active)
+		return nil
+	}
+	var errs []error
+	inspection, inspectErr := manager.client.ContainerInspect(ctx, active.containerID, client.ContainerInspectOptions{})
+	if errdefs.IsNotFound(inspectErr) {
+		active.containerID = ""
+		clearSessionSecrets(active)
+		return nil
+	}
+	if inspectErr != nil {
+		errs = append(errs, fmt.Errorf("inspect OpenClaw before stop: %w", inspectErr))
+	}
+	shouldStop := inspectErr != nil || inspection.Container.State == nil || inspection.Container.State.Running
+	if shouldStop {
+		timeout := gracefulStopSeconds
+		if _, err := manager.client.ContainerStop(ctx, active.containerID, client.ContainerStopOptions{Timeout: &timeout}); err != nil && !errdefs.IsNotFound(err) {
+			errs = append(errs, fmt.Errorf("stop OpenClaw container: %w", err))
+		}
+		inspection, inspectErr = manager.client.ContainerInspect(ctx, active.containerID, client.ContainerInspectOptions{})
+		if inspectErr != nil && !errdefs.IsNotFound(inspectErr) {
+			errs = append(errs, fmt.Errorf("inspect OpenClaw after stop: %w", inspectErr))
+		}
+		if !errdefs.IsNotFound(inspectErr) && (inspectErr != nil || inspection.Container.State == nil || inspection.Container.State.Running) {
+			if _, err := manager.client.ContainerKill(ctx, active.containerID, client.ContainerKillOptions{Signal: "KILL"}); err != nil && !errdefs.IsNotFound(err) {
+				errs = append(errs, fmt.Errorf("kill OpenClaw container: %w", err))
+			}
+		}
+	}
+	if _, err := manager.client.ContainerRemove(ctx, active.containerID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !errdefs.IsNotFound(err) {
+		errs = append(errs, fmt.Errorf("remove OpenClaw container: %w", err))
+	}
+	if _, err := manager.client.ContainerInspect(ctx, active.containerID, client.ContainerInspectOptions{}); err == nil {
+		errs = append(errs, errors.New("OpenClaw container remains after removal"))
+		return errors.Join(errs...)
+	} else if !errdefs.IsNotFound(err) {
+		errs = append(errs, fmt.Errorf("verify OpenClaw removal: %w", err))
+		return errors.Join(errs...)
+	}
+	active.containerID = ""
+	clearSessionSecrets(active)
+	if warning := errors.Join(errs...); warning != nil {
+		manager.logger.WarnContext(ctx, "OpenClaw cleanup recovered after lifecycle errors", "task_id", active.taskID, "error", warning)
+	}
+	return nil
+}
+
+func (manager *Manager) collectArtifacts(ctx context.Context, active *session) error {
+	var errs []error
+	logs, err := manager.client.ContainerLogs(ctx, active.containerID, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true})
+	if err != nil {
+		errs = append(errs, fmt.Errorf("collect OpenClaw gateway logs: %w", err))
+	} else {
+		var stdout, stderr limitedBuffer
+		stdout.limit, stderr.limit = maxDockerOutput, maxDockerOutput
+		_, copyErr := stdcopy.StdCopy(&stdout, &stderr, logs)
+		closeErr := logs.Close()
+		if copyErr != nil || closeErr != nil || stdout.exceeded || stderr.exceeded {
+			errs = append(errs, errors.Join(copyErr, closeErr, errors.New("OpenClaw gateway logs exceeded their bound")))
+		} else {
+			content := allowGatewayLogs(append(stdout.Bytes(), stderr.Bytes()...), active.apiKey, active.gatewayToken)
+			path := filepath.Join(active.artifactDir, "gateway.log")
+			if err := writeArtifact(path, content); err != nil {
+				errs = append(errs, err)
+			} else {
+				active.logPaths = appendUnique(active.logPaths, path)
+			}
+		}
+	}
+	telemetryPaths, telemetryErr := manager.collectTelemetry(ctx, active)
+	if telemetryErr != nil {
+		errs = append(errs, telemetryErr)
+	} else {
+		active.logPaths = appendUnique(active.logPaths, telemetryPaths...)
+	}
+	index, err := json.MarshalIndent(struct {
+		Paths []string `json:"paths"`
+	}{Paths: telemetryRelativePaths(active.artifactDir, active.logPaths)}, "", "  ")
+	if err == nil {
+		index = append(index, '\n')
+		path := filepath.Join(active.artifactDir, "telemetry.index.json")
+		err = writeArtifact(path, index)
+		if err == nil {
+			active.logPaths = appendUnique(active.logPaths, path)
+		}
+	}
+	if err != nil {
+		errs = append(errs, fmt.Errorf("write OpenClaw telemetry index: %w", err))
+	}
+	return errors.Join(errs...)
+}
+
+func (manager *Manager) collectTelemetry(ctx context.Context, active *session) ([]string, error) {
+	result, err := manager.client.CopyFromContainer(ctx, active.containerID, client.CopyFromContainerOptions{SourcePath: stateContainerPath + "/agents/main/sessions"})
+	if err != nil {
+		if missingContainerPath(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("collect OpenClaw telemetry: %w", err)
+	}
+	defer result.Content.Close()
+	archive, err := io.ReadAll(io.LimitReader(result.Content, maxDockerOutput+1))
+	if err != nil || len(archive) > maxDockerOutput {
+		return nil, errors.New("OpenClaw telemetry archive exceeded its bound")
+	}
+	return extractTelemetry(active.artifactDir, archive, active.apiKey, active.gatewayToken)
+}
+
+func missingContainerPath(err error) bool {
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "could not find") || strings.Contains(message, "no such file") || strings.Contains(message, "not found")
+}
+
+func (manager *Manager) writeRunArtifacts(active *session, stdout, stderr []byte) ([]string, error) {
+	paths := []string{filepath.Join(active.artifactDir, "agent.json"), filepath.Join(active.artifactDir, "agent.stderr")}
+	return paths, errors.Join(writeArtifact(paths[0], stdout), writeArtifact(paths[1], stderr))
+}
+
+func failedHarnessResult(active *session, started time.Time, err error) core.HarnessResult {
+	status := core.StatusFailed
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		status = core.StatusCanceled
+	}
+	return core.HarnessResult{Status: status, Duration: time.Since(started), LogPaths: append([]string(nil), active.logPaths...), Error: err.Error()}
 }
 
 func readStablePrivateFile(path string, mode os.FileMode) ([]byte, error) {
@@ -1142,12 +894,9 @@ func extractTelemetry(artifactDir string, archive []byte, secrets ...[]byte) ([]
 		if err != nil {
 			return paths, err
 		}
-		name, ok := cleanArchivePath(header.Name)
-		if !ok || header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA || header.Size < 0 || header.Size > maxDockerOutput {
-			continue
-		}
-		base := filepath.Base(name)
-		if base != "sessions.json" && !strings.HasSuffix(base, ".jsonl") && !strings.Contains(strings.ToLower(base), "trajectory") {
+		base := filepath.Base(filepath.Clean(header.Name))
+		if (header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA) || header.Size < 0 || header.Size > maxDockerOutput ||
+			(base != "sessions.json" && !strings.HasSuffix(base, ".jsonl") && !strings.Contains(strings.ToLower(base), "trajectory")) {
 			continue
 		}
 		content, err := io.ReadAll(io.LimitReader(reader, header.Size+1))
@@ -1168,10 +917,8 @@ func allowGatewayLogs(content []byte, secrets ...[]byte) []byte {
 	lines := bytes.Split(content, []byte("\n"))
 	var output bytes.Buffer
 	for _, line := range lines {
-		if len(line) > 4096 || bytes.ContainsRune(line, 0) {
-			continue
-		}
-		if bytes.Contains(bytes.ToLower(line), []byte("authorization:")) || bytes.Contains(bytes.ToLower(line), []byte("bearer ")) {
+		lower := bytes.ToLower(line)
+		if len(line) > 4096 || bytes.ContainsRune(line, 0) || bytes.Contains(lower, []byte("authorization:")) || bytes.Contains(lower, []byte("bearer ")) {
 			continue
 		}
 		output.Write(line)
@@ -1189,18 +936,16 @@ func writeArtifact(path string, content []byte) error {
 	}
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		if errors.Is(err, os.ErrExist) {
-			existing, readErr := readStablePrivateFile(path, 0o600)
-			if readErr != nil {
-				return fmt.Errorf("verify existing artifact %q: %w", path, readErr)
-			}
-			defer clear(existing)
-			if bytes.Equal(existing, content) {
-				return nil
-			}
-			return fmt.Errorf("artifact %q already exists with different content", path)
+		if !errors.Is(err, os.ErrExist) {
+			return err
 		}
-		return err
+		existing, readErr := readStablePrivateFile(path, 0o600)
+		if readErr == nil && bytes.Equal(existing, content) {
+			clear(existing)
+			return nil
+		}
+		clear(existing)
+		return fmt.Errorf("artifact %q already exists with different content", path)
 	}
 	if _, err := file.Write(content); err != nil {
 		file.Close()
@@ -1230,23 +975,15 @@ func appendUnique(paths []string, additions ...string) []string {
 	return paths
 }
 
-func clearSessionSecrets(active *session) {
-	clear(active.apiKey)
-	active.apiKey = nil
-	clear(active.gatewayToken)
-	active.gatewayToken = nil
-}
-
 func telemetryRelativePaths(artifactDir string, paths []string) []string {
-	telemetryDir := filepath.Join(artifactDir, "telemetry") + string(filepath.Separator)
-	relative := make([]string, 0)
+	prefix := filepath.Join(artifactDir, "telemetry") + string(filepath.Separator)
+	var relative []string
 	for _, path := range paths {
-		if !strings.HasPrefix(path, telemetryDir) {
-			continue
-		}
-		name, err := filepath.Rel(artifactDir, path)
-		if err == nil {
-			relative = append(relative, filepath.ToSlash(name))
+		if strings.HasPrefix(path, prefix) {
+			name, err := filepath.Rel(artifactDir, path)
+			if err == nil {
+				relative = append(relative, filepath.ToSlash(name))
+			}
 		}
 	}
 	return relative
@@ -1282,10 +1019,7 @@ func validateAPIKey(value []byte) error {
 
 func environmentAPIKeyLookup(name string) ([]byte, bool) {
 	value, ok := os.LookupEnv(name)
-	if !ok {
-		return nil, false
-	}
-	return []byte(value), true
+	return []byte(value), ok
 }
 
 func validateRunID(value string) error {
@@ -1359,20 +1093,13 @@ func equalStrings(left, right []string) bool {
 	return true
 }
 
-func containsExactProcess(processes []string, command string) bool {
-	for _, process := range processes {
-		if process == command {
-			return true
-		}
-	}
-	return false
+func clearSessionSecrets(active *session) {
+	clear(active.apiKey)
+	active.apiKey = nil
+	clear(active.gatewayToken)
+	active.gatewayToken = nil
 }
 
 func redactSession(content []byte, active *session) []byte {
 	return redactSecrets(content, active.apiKey, active.gatewayToken)
-}
-
-func resourceMissing(stderr []byte, kind string) bool {
-	message := strings.ToLower(string(stderr))
-	return strings.Contains(message, "no such "+kind) || strings.Contains(message, kind+" not found")
 }

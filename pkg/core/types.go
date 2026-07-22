@@ -57,22 +57,21 @@ type ModelConfig struct {
 }
 
 // ToolEndpoint is the bridge endpoint and task-local file contract given to a
-// harness. Credential bytes are never carried in this value. Source files stay
-// private on the host: a harness must copy credentials and config into a
-// root-initialized private volume, change ownership to its runtime user, keep
-// mode 0600, and mount that volume read-only. Source paths are not direct
-// container bind mounts.
+// harness. Credential bytes are never carried in this value. The harness stages
+// the source files into its container before start; source paths are not bind
+// mounts and are removed when the bridge is revoked.
 type ToolEndpoint struct {
-	Protocol             string `json:"protocol"`
-	Address              string `json:"address"`
-	Username             string `json:"username,omitempty"`
-	Network              string `json:"network,omitempty"`
-	ClientCommand        string `json:"client_command,omitempty"`
-	ClientSourceFile     string `json:"client_source_file,omitempty"`
-	IdentityFile         string `json:"identity_file,omitempty"`
-	IdentitySourceFile   string `json:"identity_source_file,omitempty"`
-	KnownHostsFile       string `json:"known_hosts_file,omitempty"`
-	KnownHostsSourceFile string `json:"known_hosts_source_file,omitempty"`
+	Protocol             string   `json:"protocol"`
+	Address              string   `json:"address"`
+	Username             string   `json:"username,omitempty"`
+	Network              string   `json:"network,omitempty"`
+	ClientCommand        string   `json:"client_command,omitempty"`
+	ClientSourceFile     string   `json:"client_source_file,omitempty"`
+	IdentityFile         string   `json:"identity_file,omitempty"`
+	IdentitySourceFile   string   `json:"identity_source_file,omitempty"`
+	KnownHostsFile       string   `json:"known_hosts_file,omitempty"`
+	KnownHostsSourceFile string   `json:"known_hosts_source_file,omitempty"`
+	LogPaths             []string `json:"log_paths,omitempty"`
 }
 
 // HarnessRequest contains task-local runtime inputs supplied before Run.
@@ -141,13 +140,14 @@ type CleanupResult struct {
 
 // TaskResult preserves each outcome even when several operations fail.
 type TaskResult struct {
-	TaskID     string          `json:"task_id"`
-	Harness    HarnessResult   `json:"harness"`
-	Isolation  IsolationResult `json:"isolation"`
-	Evaluation Evaluation      `json:"evaluation"`
-	Observer   ObserverResult  `json:"observer"`
-	Cleanup    CleanupResult   `json:"cleanup"`
-	Duration   time.Duration   `json:"duration"`
+	TaskID       string          `json:"task_id"`
+	ToolLogPaths []string        `json:"tool_log_paths,omitempty"`
+	Harness      HarnessResult   `json:"harness"`
+	Isolation    IsolationResult `json:"isolation"`
+	Evaluation   Evaluation      `json:"evaluation"`
+	Observer     ObserverResult  `json:"observer"`
+	Cleanup      CleanupResult   `json:"cleanup"`
+	Duration     time.Duration   `json:"duration"`
 }
 
 // RunSummary is a direct count of task outcomes.

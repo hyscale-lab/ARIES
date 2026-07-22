@@ -19,7 +19,6 @@ const (
 	defaultSampleInterval    = time.Second
 	defaultRequestTimeout    = 5 * time.Second
 	defaultStopTimeout       = 10 * time.Second
-	defaultMaxResponseBytes  = int64(1 << 20)
 	defaultMaxSamplesPerTask = 172800
 	defaultMaxFileBytes      = int64(128 << 20)
 	maxIdentityLength        = 128
@@ -35,7 +34,6 @@ type Options struct {
 	Interval          time.Duration
 	RequestTimeout    time.Duration
 	StopTimeout       time.Duration
-	MaxResponseBytes  int64
 	MaxSamplesPerTask int
 	MaxFileBytes      int64
 	Logger            *slog.Logger
@@ -144,12 +142,6 @@ func New(options Options) (*Recorder, error) {
 	if options.StopTimeout <= 0 {
 		return nil, errors.New("monitor stop timeout must be positive")
 	}
-	if options.MaxResponseBytes == 0 {
-		options.MaxResponseBytes = defaultMaxResponseBytes
-	}
-	if options.MaxResponseBytes < 1024 || options.MaxResponseBytes > 16<<20 {
-		return nil, errors.New("monitor response byte bound must be between 1024 and 16777216")
-	}
 	if options.MaxSamplesPerTask == 0 {
 		options.MaxSamplesPerTask = defaultMaxSamplesPerTask
 	}
@@ -165,6 +157,10 @@ func New(options Options) (*Recorder, error) {
 	if options.Logger == nil {
 		options.Logger = slog.Default()
 	}
+	engine, err := newEngineClient(dockerSocket)
+	if err != nil {
+		return nil, fmt.Errorf("initialize Docker client: %w", err)
+	}
 	return &Recorder{
 		runID:             options.RunID,
 		taskIDs:           tasks,
@@ -176,7 +172,7 @@ func New(options Options) (*Recorder, error) {
 		maxSamplesPerTask: options.MaxSamplesPerTask,
 		maxFileBytes:      options.MaxFileBytes,
 		logger:            options.Logger,
-		engine:            newEngineClient(dockerSocket, options.MaxResponseBytes),
+		engine:            engine,
 		artifactOps:       defaultArtifactOperations(),
 		now:               time.Now,
 		writeIndex:        writeIndexExact,

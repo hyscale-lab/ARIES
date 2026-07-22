@@ -148,8 +148,7 @@ func buildExperiment(
 	switch cfg.Sandbox.Type {
 	case "docker":
 		sandbox, err = dockersandbox.New(dockersandbox.Options{
-			OutputDir:      outputRoot,
-			ExecHelperPath: filepath.Join(binDir, "aries-exec-helper"),
+			OutputDir: outputRoot,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("construct Docker sandbox: %w", err)
@@ -163,7 +162,6 @@ func buildExperiment(
 		bridge, err = openclawssh.New(openclawssh.Options{
 			OutputDir:  outputRoot,
 			ClientPath: filepath.Join(binDir, "aries-ssh"),
-			ServerPath: filepath.Join(binDir, "aries-ssh-server"),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("construct OpenClaw SSH bridge: %w", err)

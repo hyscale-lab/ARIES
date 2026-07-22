@@ -1,109 +1,113 @@
 package docker
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"math"
-	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/runner"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 )
 
 const (
-	defaultDockerBinary   = "docker"
-	defaultExecHelperPath = "bin/aries-exec-helper"
+	defaultDockerSocket   = "/var/run/docker.sock"
 	defaultCleanupTimeout = 30 * time.Second
-	stopTimeoutSeconds    = 5
-
-	managedLabel   = "aries.managed=true"
-	milestoneLabel = "aries.milestone=m3"
-	networkAlias   = "task-sandbox"
+	maxExecInput          = 16 << 20
+	maxExecOutput         = 16 << 20
+	networkAlias          = "task-sandbox"
+	execPollInterval      = 20 * time.Millisecond
+	execDrainTimeout      = 200 * time.Millisecond
+	execTrailerKeep       = 128
+	execStatePrefix       = "/tmp/.aries-exec-"
+	execShell             = `state=$1; token=$2; shift 2; umask 077; trap 'rm -f "$state" "$state.tmp"' EXIT; exec 3<&0; setsid "$@" <&3 & pid=$!; printf '%s\n' "$pid" >"$state.tmp" || exit 125; mv "$state.tmp" "$state" || exit 125; wait "$pid"; status=$?; rm -f "$state" "$state.tmp"; trap - EXIT; printf '\036ARIES_EXEC_EXIT_%s=%d\037' "$token" "$status" >&2; exit "$status"`
+	cancelExecShell       = `state=$1; attempts=0; while [ ! -r "$state" ]; do attempts=$((attempts+1)); [ "$attempts" -ge 200 ] && exit 70; sleep 0.01; done; IFS= read -r pgid <"$state" || exit 71; case "$pgid" in ''|*[!0-9]*|0|1) exit 71;; esac; kill -TERM "-$pgid" 2>/dev/null || :; sleep 0.2; kill -KILL "-$pgid" 2>/dev/null || :; rm -f "$state"; exit 0`
 )
-
-// Options are the explicit host-local inputs to the Docker sandbox manager.
-type Options struct {
-	OutputDir      string
-	DockerBinary   string
-	DockerSocket   string
-	ExecHelperPath string
-	CleanupTimeout time.Duration
-	Logger         *slog.Logger
-}
-
-// Manager starts one isolated Docker container and network per task.
-type Manager struct {
-	cli            commandRunner
-	outputDir      string
-	cleanupTimeout time.Duration
-	logger         *slog.Logger
-	helperPath     string
-	newID          func() (string, error)
-	engine         execEngine
-}
-
-// Sandbox is a live Docker task environment.
-type Sandbox struct {
-	cli            commandRunner
-	containerID    string
-	containerName  string
-	networkName    string
-	workdir        string
-	artifactDir    string
-	runtimeDir     string
-	outputDir      string
-	cleanupTimeout time.Duration
-	runID          string
-	taskID         string
-	engine         execEngine
-	execGate       chan struct{}
-	testHooks      transferTestHooks
-
-	mu             sync.Mutex
-	containerOwned bool
-	containerRun   bool
-	networkOwned   bool
-	runtimeOwned   bool
-	stopped        bool
-	stopping       bool
-	stopDone       chan struct{}
-	stopErr        error
-}
-
-type commandResult struct {
-	stdout   []byte
-	stderr   []byte
-	exitCode int
-}
-
-type commandRunner interface {
-	Run(context.Context, []byte, ...string) (commandResult, error)
-}
-
-type execRunner struct {
-	binary string
-	socket string
-}
 
 var (
 	_ runner.ToolSandbox = (*Manager)(nil)
 	_ runner.Sandbox     = (*Sandbox)(nil)
 )
+
+// Options are the host-local inputs to the Docker sandbox manager.
+type Options struct {
+	OutputDir      string
+	DockerSocket   string
+	CleanupTimeout time.Duration
+	Logger         *slog.Logger
+}
+
+// dockerClient is the small Engine surface used by this package. The official
+// client implements it directly; tests use a compact fake.
+type dockerClient interface {
+	NetworkCreate(context.Context, string, client.NetworkCreateOptions) (client.NetworkCreateResult, error)
+	NetworkInspect(context.Context, string, client.NetworkInspectOptions) (client.NetworkInspectResult, error)
+	NetworkRemove(context.Context, string, client.NetworkRemoveOptions) (client.NetworkRemoveResult, error)
+	ContainerCreate(context.Context, client.ContainerCreateOptions) (client.ContainerCreateResult, error)
+	ContainerStart(context.Context, string, client.ContainerStartOptions) (client.ContainerStartResult, error)
+	ContainerInspect(context.Context, string, client.ContainerInspectOptions) (client.ContainerInspectResult, error)
+	ContainerTop(context.Context, string, client.ContainerTopOptions) (client.ContainerTopResult, error)
+	ContainerLogs(context.Context, string, client.ContainerLogsOptions) (client.ContainerLogsResult, error)
+	ContainerStop(context.Context, string, client.ContainerStopOptions) (client.ContainerStopResult, error)
+	ContainerRemove(context.Context, string, client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
+	ExecCreate(context.Context, string, client.ExecCreateOptions) (client.ExecCreateResult, error)
+	ExecAttach(context.Context, string, client.ExecAttachOptions) (client.ExecAttachResult, error)
+	ExecStart(context.Context, string, client.ExecStartOptions) (client.ExecStartResult, error)
+	ExecInspect(context.Context, string, client.ExecInspectOptions) (client.ExecInspectResult, error)
+	CopyToContainer(context.Context, string, client.CopyToContainerOptions) (client.CopyToContainerResult, error)
+	CopyFromContainer(context.Context, string, client.CopyFromContainerOptions) (client.CopyFromContainerResult, error)
+}
+
+// Manager starts one isolated Docker container and network per task.
+type Manager struct {
+	client         dockerClient
+	outputDir      string
+	cleanupTimeout time.Duration
+	logger         *slog.Logger
+	newID          func() (string, error)
+}
+
+// Sandbox is a live Docker task environment.
+type Sandbox struct {
+	client         dockerClient
+	containerID    string
+	containerName  string
+	networkName    string
+	workdir        string
+	artifactDir    string
+	outputDir      string
+	cleanupTimeout time.Duration
+	runID          string
+	taskID         string
+	execMu         sync.Mutex
+
+	mu             sync.Mutex
+	containerOwned bool
+	networkOwned   bool
+	stopped        bool
+	stopping       bool
+	stopDone       chan struct{}
+	stopErr        error
+}
 
 // New constructs a Docker manager without contacting the daemon.
 func New(options Options) (*Manager, error) {
@@ -114,21 +118,19 @@ func New(options Options) (*Manager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve docker sandbox output directory: %w", err)
 	}
-	if options.DockerBinary == "" {
-		options.DockerBinary = defaultDockerBinary
+	if err := os.MkdirAll(outputDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create docker sandbox output directory: %w", err)
 	}
 	if options.DockerSocket == "" {
 		options.DockerSocket = defaultDockerSocket
 	}
-	if options.ExecHelperPath == "" {
-		options.ExecHelperPath = defaultExecHelperPath
+	host := options.DockerSocket
+	if !strings.Contains(host, "://") {
+		host = "unix://" + host
 	}
-	helperPath, err := filepath.Abs(options.ExecHelperPath)
+	api, err := client.New(client.WithHost(host), client.WithUserAgent("aries-sandbox/1"))
 	if err != nil {
-		return nil, fmt.Errorf("resolve Docker exec helper: %w", err)
-	}
-	if strings.ContainsRune(options.DockerBinary, 0) {
-		return nil, errors.New("docker binary contains NUL")
+		return nil, fmt.Errorf("create Docker client: %w", err)
 	}
 	if options.CleanupTimeout <= 0 {
 		options.CleanupTimeout = defaultCleanupTimeout
@@ -137,18 +139,15 @@ func New(options Options) (*Manager, error) {
 		options.Logger = slog.Default()
 	}
 	return &Manager{
-		cli:            execRunner{binary: options.DockerBinary, socket: options.DockerSocket},
+		client:         api,
 		outputDir:      outputDir,
 		cleanupTimeout: options.CleanupTimeout,
 		logger:         options.Logger,
-		helperPath:     helperPath,
 		newID:          randomID,
-		engine:         newEngineClient(options.DockerSocket),
 	}, nil
 }
 
-// Start creates and positively inspects one running task container. Any failed
-// partial acquisition is rolled back before Start returns.
+// Start creates and positively inspects one task container and network.
 func (m *Manager) Start(ctx context.Context, request core.SandboxRequest) (runner.Sandbox, error) {
 	if err := validateIdentity("run", request.RunID); err != nil {
 		return nil, err
@@ -156,178 +155,205 @@ func (m *Manager) Start(ctx context.Context, request core.SandboxRequest) (runne
 	if err := validateIdentity("task", request.TaskID); err != nil {
 		return nil, err
 	}
-	environment := request.Environment
-	if err := validateEnvironment(environment); err != nil {
+	if err := validateEnvironment(request.Environment); err != nil {
 		return nil, err
 	}
 	id, err := m.newID()
 	if err != nil {
 		return nil, fmt.Errorf("generate docker sandbox ID: %w", err)
 	}
-	containerName := "aries-task-" + id
-	networkName := "aries-net-" + id
-	artifactDir := filepath.Join(m.outputDir, "sandboxes", id)
-	if err := ensureDirectory(artifactDir); err != nil {
-		return nil, fmt.Errorf("create docker sandbox artifact directory: %w", err)
-	}
-	helperPath, err := stageExecHelper(m.helperPath, artifactDir)
-	if err != nil {
-		return nil, fmt.Errorf("stage Docker exec helper: %w", err)
-	}
-	runtimeDir, err := os.MkdirTemp("", "aries-exec-"+id+"-")
-	if err != nil {
-		return nil, fmt.Errorf("create private Docker exec runtime: %w", err)
-	}
-
 	sandbox := &Sandbox{
-		cli:            m.cli,
-		containerName:  containerName,
-		networkName:    networkName,
-		workdir:        environment.Workdir,
-		artifactDir:    artifactDir,
-		runtimeDir:     runtimeDir,
+		client:         m.client,
+		containerName:  "aries-task-" + id,
+		networkName:    "aries-net-" + id,
+		workdir:        request.Environment.Workdir,
+		artifactDir:    filepath.Join(m.outputDir, "sandboxes", id),
 		outputDir:      m.outputDir,
 		cleanupTimeout: m.cleanupTimeout,
 		runID:          request.RunID,
 		taskID:         request.TaskID,
-		engine:         m.engine,
-		execGate:       make(chan struct{}, 1),
-		runtimeOwned:   true,
+	}
+	if err := os.MkdirAll(sandbox.artifactDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create docker sandbox artifact directory: %w", err)
 	}
 
-	networkArgs := []string{
-		"network", "create",
-		"--label", managedLabel,
-		"--label", milestoneLabel,
-		"--label", "aries.kind=task-network",
-		"--label", "aries.run=" + request.RunID,
-		"--label", "aries.task=" + request.TaskID,
+	networkLabels := ownershipLabels(request, "task-network")
+	if _, err := m.client.NetworkCreate(ctx, sandbox.networkName, client.NetworkCreateOptions{
+		Internal: !request.Environment.AllowNetwork,
+		Labels:   networkLabels,
+	}); err != nil {
+		return nil, fmt.Errorf("create docker task network: %w", err)
 	}
-	if !environment.AllowNetwork {
-		networkArgs = append(networkArgs, "--internal")
-	}
-	networkArgs = append(networkArgs, networkName)
 	sandbox.networkOwned = true
-	if _, err := runChecked(ctx, m.cli, nil, networkArgs...); err != nil {
-		return nil, sandbox.rollbackStart(ctx, fmt.Errorf("create docker task network: %w", err))
-	}
 
-	sandbox.containerID = containerName
-	sandbox.containerOwned = true
-	createResult, err := runChecked(ctx, m.cli, nil, containerCreateArgs(request, containerName, networkName, helperPath, runtimeDir)...)
+	created, err := m.client.ContainerCreate(ctx, containerOptions(request, sandbox, ownershipLabels(request, "task-container")))
 	if err != nil {
 		return nil, sandbox.rollbackStart(ctx, fmt.Errorf("create docker task container: %w", err))
 	}
-	sandbox.containerID = strings.TrimSpace(string(createResult.stdout))
-	if sandbox.containerID == "" {
+	if strings.TrimSpace(created.ID) == "" {
 		return nil, sandbox.rollbackStart(ctx, errors.New("create docker task container: Docker returned an empty container ID"))
 	}
-	if _, err := runChecked(ctx, m.cli, nil, "container", "start", sandbox.containerID); err != nil {
+	sandbox.containerID = created.ID
+	sandbox.containerOwned = true
+	if _, err := m.client.ContainerStart(ctx, sandbox.containerID, client.ContainerStartOptions{}); err != nil {
 		return nil, sandbox.rollbackStart(ctx, fmt.Errorf("start docker task container: %w", err))
 	}
-	sandbox.containerRun = true
-	inspection, err := inspectContainer(ctx, m.cli, sandbox.containerID)
-	if err != nil {
-		return nil, sandbox.rollbackStart(ctx, fmt.Errorf("inspect started docker task container: %w", err))
+	if err := sandbox.verifyLive(ctx); err != nil {
+		return nil, sandbox.rollbackStart(ctx, err)
 	}
-	if !inspection.State.Running {
-		return nil, sandbox.rollbackStart(ctx, errors.New("inspect started docker task container: container is not running"))
-	}
-	if inspection.Config.WorkingDir != environment.Workdir {
-		return nil, sandbox.rollbackStart(ctx, fmt.Errorf("inspect started docker task container: workdir %q, want %q", inspection.Config.WorkingDir, environment.Workdir))
-	}
-	if _, ok := inspection.NetworkSettings.Networks[networkName]; !ok {
-		return nil, sandbox.rollbackStart(ctx, fmt.Errorf("inspect started docker task container: network %q is not attached", networkName))
-	}
-	if inspection.Config.Labels["aries.run"] != request.RunID || inspection.Config.Labels["aries.task"] != request.TaskID || inspection.Config.Labels["aries.managed"] != "true" {
-		return nil, sandbox.rollbackStart(ctx, errors.New("inspect started docker task container: ARIES ownership labels do not match"))
-	}
-	if !inspection.hasReadonlyMount(helperContainerPath) || !inspection.hasReadonlyMount(socketContainerDir) {
-		return nil, sandbox.rollbackStart(ctx, errors.New("inspect started docker task container: trusted helper mounts do not match"))
-	}
-	networkInspection, err := inspectNetwork(ctx, m.cli, networkName)
-	if err != nil {
-		return nil, sandbox.rollbackStart(ctx, fmt.Errorf("inspect started docker task network: %w", err))
-	}
-	if networkInspection.Labels["aries.run"] != request.RunID || networkInspection.Labels["aries.task"] != request.TaskID || networkInspection.Labels["aries.managed"] != "true" {
-		return nil, sandbox.rollbackStart(ctx, errors.New("inspect started docker task network: ARIES ownership labels do not match"))
-	}
-
-	m.logger.InfoContext(ctx, "docker task sandbox started", "container", containerName, "network", networkName)
+	m.logger.InfoContext(ctx, "docker task sandbox started", "container", sandbox.containerName, "network", sandbox.networkName)
 	return sandbox, nil
+}
+
+func ownershipLabels(request core.SandboxRequest, kind string) map[string]string {
+	return map[string]string{
+		"aries.managed": "true",
+		"aries.kind":    kind,
+		"aries.run":     request.RunID,
+		"aries.task":    request.TaskID,
+	}
+}
+
+func containerOptions(request core.SandboxRequest, sandbox *Sandbox, labels map[string]string) client.ContainerCreateOptions {
+	environment := request.Environment
+	resources := container.Resources{
+		NanoCPUs: int64(environment.CPU * 1e9),
+		Memory:   int64(environment.MemoryMB) << 20,
+	}
+	if environment.GPUs > 0 {
+		resources.DeviceRequests = []container.DeviceRequest{{
+			Driver: "nvidia", Count: environment.GPUs, Capabilities: [][]string{{"gpu"}},
+		}}
+	}
+	host := &container.HostConfig{
+		NetworkMode: container.NetworkMode(sandbox.networkName),
+		Resources:   resources,
+		Init:        boolPointer(true),
+	}
+	if environment.StorageMB > 0 {
+		host.StorageOpt = map[string]string{"size": fmt.Sprintf("%dm", environment.StorageMB)}
+	}
+	return client.ContainerCreateOptions{
+		Name: sandbox.containerName,
+		Config: &container.Config{
+			Image: environment.Image, WorkingDir: environment.Workdir, Env: dockerEnvironment(environment.Env),
+			Entrypoint: []string{"/bin/sleep"}, Cmd: []string{"infinity"}, Labels: labels,
+		},
+		HostConfig: host,
+		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{
+			sandbox.networkName: {Aliases: []string{networkAlias}},
+		}},
+	}
+}
+
+func boolPointer(value bool) *bool { return &value }
+
+func (s *Sandbox) verifyLive(ctx context.Context) error {
+	inspection, err := s.client.ContainerInspect(ctx, s.containerID, client.ContainerInspectOptions{})
+	if err != nil {
+		return fmt.Errorf("inspect started docker task container: %w", err)
+	}
+	c := inspection.Container
+	if c.State == nil || !c.State.Running {
+		return errors.New("inspect started docker task container: container is not running")
+	}
+	if c.Config == nil || c.Config.WorkingDir != s.workdir || !sameIdentity(c.Config.Labels, s.runID, s.taskID) {
+		return errors.New("inspect started docker task container: identity or workdir does not match")
+	}
+	if c.NetworkSettings == nil || c.NetworkSettings.Networks[s.networkName] == nil {
+		return fmt.Errorf("inspect started docker task container: network %q is not attached", s.networkName)
+	}
+	inspectedNetwork, err := s.client.NetworkInspect(ctx, s.networkName, client.NetworkInspectOptions{})
+	if err != nil {
+		return fmt.Errorf("inspect started docker task network: %w", err)
+	}
+	if !sameIdentity(inspectedNetwork.Network.Labels, s.runID, s.taskID) {
+		return errors.New("inspect started docker task network: identity labels do not match")
+	}
+	return nil
+}
+
+func sameIdentity(labels map[string]string, runID, taskID string) bool {
+	return labels["aries.managed"] == "true" && labels["aries.run"] == runID && labels["aries.task"] == taskID
 }
 
 // ContainerID returns the immutable Docker container identifier.
 func (s *Sandbox) ContainerID() string { return s.containerID }
 
-// ContainerName returns the generated, task-data-free Docker name.
+// ContainerName returns the generated task container name.
 func (s *Sandbox) ContainerName() string { return s.containerName }
 
-// NetworkName returns the task-scoped network used by the future SSH bridge.
+// NetworkName returns the task-scoped Docker network.
 func (s *Sandbox) NetworkName() string { return s.networkName }
 
-// Workdir returns the benchmark-declared working directory in the container.
+// Workdir returns the benchmark-declared container working directory.
 func (s *Sandbox) Workdir() string { return s.workdir }
 
-// RuntimeDir returns the private host directory mounted read-only at
-// /run/aries. Pair-specific local adapters use it for authenticated Unix
-// control sockets; task processes cannot create files in the directory.
-func (s *Sandbox) RuntimeDir() string { return s.runtimeDir }
+// RunID returns the owning experiment run identity for bridge tool logs.
+func (s *Sandbox) RunID() string { return s.runID }
 
-// ContainerIPv4 returns the task container address on its scoped network
-// after positively reinspecting the live container and its identity labels.
-func (s *Sandbox) ContainerIPv4(ctx context.Context) (string, error) {
-	inspection, err := inspectContainer(ctx, s.cli, s.containerID)
+// TaskID returns the owning benchmark task identity for bridge tool logs.
+func (s *Sandbox) TaskID() string { return s.taskID }
+
+// NetworkGateway returns the IPv4 gateway of the task-scoped network.
+func (s *Sandbox) NetworkGateway(ctx context.Context) (string, error) {
+	result, err := s.client.NetworkInspect(ctx, s.networkName, client.NetworkInspectOptions{})
 	if err != nil {
-		return "", fmt.Errorf("inspect Docker task address: %w", err)
+		return "", fmt.Errorf("inspect Docker task network gateway: %w", err)
 	}
-	if !inspection.State.Running || inspection.Config.Labels["aries.run"] != s.runID || inspection.Config.Labels["aries.task"] != s.taskID {
-		return "", errors.New("inspect Docker task address: container identity or running state changed")
+	if !sameIdentity(result.Network.Labels, s.runID, s.taskID) {
+		return "", errors.New("inspect Docker task network gateway: identity labels do not match")
 	}
-	network, ok := inspection.NetworkSettings.Networks[s.networkName]
-	if !ok || net.ParseIP(network.IPAddress).To4() == nil {
-		return "", fmt.Errorf("inspect Docker task address: network %q has no IPv4 address", s.networkName)
+	for _, config := range result.Network.IPAM.Config {
+		if config.Gateway.Is4() {
+			return config.Gateway.String(), nil
+		}
 	}
-	return network.IPAddress, nil
+	return "", errors.New("inspect Docker task network gateway: no IPv4 gateway")
 }
 
-// ProcessPresent reports whether an exact host PID is still part of this
-// container according to the daemon. It is used only to positively revoke a
-// concrete long-lived helper whose PID was authenticated with SO_PEERCRED.
-func (s *Sandbox) ProcessPresent(ctx context.Context, pid int) (bool, error) {
-	if pid <= 0 {
-		return false, errors.New("Docker process PID must be positive")
-	}
-	engine, ok := s.engine.(*engineClient)
-	if !ok {
-		return false, errors.New("Docker process inspection is unavailable")
-	}
-	return engine.containerHasPID(ctx, s.containerID, pid)
-}
-
-// RestartForIsolation performs the Docker adapter's fail-closed restart and
-// positive reinspection. The OpenClaw SSH bridge uses it only when a spawned
-// server cannot be authenticated or stopped through its private control
-// channel.
-func (s *Sandbox) RestartForIsolation(ctx context.Context) error {
-	select {
-	case s.execGate <- struct{}{}:
-		defer func() { <-s.execGate }()
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-	return s.restartAfterExecFailure(ctx)
-}
-
-// Exec runs one direct argv through the trusted helper and preserves separate
-// output streams and exit status. A nonzero command exit is a result.
+// Exec runs one argv directly through Docker's typed exec API. Nonzero exits
+// are returned as results, not transport errors.
 func (s *Sandbox) Exec(ctx context.Context, command core.Command) (core.CommandResult, error) {
 	started := time.Now()
+	if len(command.Stdin) > maxExecInput {
+		return core.CommandResult{ExitCode: -1, Duration: time.Since(started)}, fmt.Errorf("Docker exec stdin exceeds %d bytes", maxExecInput)
+	}
+	var stdout, stderr bytes.Buffer
+	var stdin io.Reader
+	if len(command.Stdin) > 0 {
+		stdin = bytes.NewReader(command.Stdin)
+	}
+	result, err := s.ExecStream(ctx, command, stdin,
+		&limitedWriter{writer: &stdout, limit: maxExecOutput},
+		&limitedWriter{writer: &stderr, limit: maxExecOutput},
+	)
+	result.Stdout = stdout.String()
+	result.Stderr = stderr.String()
+	return result, err
+}
+
+// ExecStream is the bridge-facing streaming form of Exec. It starts reading
+// output while stdin is still arriving, so interactive SSH commands cannot
+// deadlock on full pipes.
+func (s *Sandbox) ExecStream(ctx context.Context, command core.Command, stdin io.Reader, stdout, stderr io.Writer) (core.CommandResult, error) {
+	started := time.Now()
+	failure := func() core.CommandResult { return core.CommandResult{ExitCode: -1, Duration: time.Since(started)} }
 	if err := validateCommand(command); err != nil {
-		return core.CommandResult{ExitCode: -1, Duration: time.Since(started)}, err
+		return failure(), err
 	}
 	if command.Dir == "" {
 		command.Dir = s.workdir
+	}
+	attachInput := stdin != nil
+	if !attachInput {
+		stdin = bytes.NewReader(nil)
+	}
+	if stdout == nil {
+		stdout = io.Discard
+	}
+	if stderr == nil {
+		stderr = io.Discard
 	}
 	execCtx := ctx
 	cancel := func() {}
@@ -336,90 +362,492 @@ func (s *Sandbox) Exec(ctx context.Context, command core.Command) (core.CommandR
 	}
 	defer cancel()
 
-	select {
-	case s.execGate <- struct{}{}:
-		defer func() { <-s.execGate }()
-	case <-execCtx.Done():
-		return core.CommandResult{ExitCode: -1, Duration: time.Since(started)}, execCtx.Err()
+	s.execMu.Lock()
+	defer s.execMu.Unlock()
+	token, err := randomID()
+	if err != nil {
+		return failure(), fmt.Errorf("generate Docker exec exit token: %w", err)
+	}
+	statePath := execStatePrefix + token
+	created, err := s.client.ExecCreate(execCtx, s.containerID, client.ExecCreateOptions{
+		AttachStdin: attachInput, AttachStdout: true, AttachStderr: true,
+		Cmd: wrappedCommand(statePath, token, command),
+		Env: dockerEnvironment(command.Env), WorkingDir: command.Dir,
+	})
+	if err != nil {
+		return failure(), fmt.Errorf("create Docker exec: %w", err)
+	}
+	attached, err := s.client.ExecAttach(execCtx, created.ID, client.ExecAttachOptions{})
+	if err != nil {
+		return failure(), fmt.Errorf("attach Docker exec: %w", err)
+	}
+	defer attached.Close()
+
+	readDone := make(chan struct{})
+	go func() {
+		select {
+		case <-execCtx.Done():
+			attached.Close()
+		case <-readDone:
+		}
+	}()
+	var closeWrite sync.Once
+	closeDockerInput := func() { closeWrite.Do(func() { _ = attached.CloseWrite() }) }
+	writeDone := make(chan error, 1)
+	go func() {
+		limited := io.LimitReader(stdin, maxExecInput+1)
+		written, writeErr := io.Copy(attached.Conn, limited)
+		if writeErr == nil && written > maxExecInput {
+			writeErr = fmt.Errorf("Docker exec stdin exceeds %d bytes", maxExecInput)
+		}
+		closeDockerInput()
+		writeDone <- writeErr
+	}()
+
+	copyDone := make(chan error, 1)
+	exitTrailer := newExitTrailer(&limitedWriter{writer: stderr, limit: maxExecOutput}, token)
+	go func() {
+		_, copyErr := stdcopy.StdCopy(
+			&limitedWriter{writer: stdout, limit: maxExecOutput},
+			exitTrailer,
+			attached.Reader,
+		)
+		copyDone <- copyErr
+	}()
+	exitDone := make(chan error, 1)
+	go func() { exitDone <- s.waitForExecExit(execCtx, created.ID) }()
+	var stopRead sync.Once
+	stopReading := func() {
+		stopRead.Do(func() {
+			close(readDone)
+			attached.Close()
+		})
+	}
+	abort := func(cause error) (core.CommandResult, error) {
+		stopReading()
+		// Closing the attach can make a stream-copy error race with cancellation.
+		// Cancellation owns the result once it is observable: the caller needs to
+		// know whether targeted termination was confirmed, not which attach error
+		// happened to win the select.
+		contextErr := execCtx.Err()
+		terminateCtx, terminateCancel := context.WithTimeout(context.WithoutCancel(execCtx), s.cleanupTimeout)
+		defer terminateCancel()
+		terminateErr := s.terminateExec(terminateCtx, created.ID, statePath)
+		if contextErr != nil {
+			if terminateErr == nil {
+				return failure(), contextErr
+			}
+			return failure(), errors.Join(contextErr, terminateErr)
+		}
+		if terminateErr == nil {
+			return failure(), cause
+		}
+		return failure(), errors.Join(cause, terminateErr)
 	}
 
-	result, launched, err := s.engine.Exec(execCtx, s.containerID, s.runtimeDir, command)
-	if err == nil || !launched {
-		return result, err
+	copyFinished := false
+	var copyErr error
+	var observedErr error
+	waiting := true
+	for waiting {
+		select {
+		case <-execCtx.Done():
+			return abort(execCtx.Err())
+		case err := <-copyDone:
+			copyFinished, copyErr = true, err
+			if err != nil {
+				return abort(err)
+			}
+		case observedErr = <-exitDone:
+			waiting = false
+		}
 	}
-	cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(execCtx), s.cleanupTimeout)
-	defer cleanupCancel()
-	restartErr := s.restartAfterExecFailure(cleanupCtx)
-	if restartErr != nil {
-		restartErr = fmt.Errorf("restart Docker task container after exec failure: %w", restartErr)
+	if observedErr != nil {
+		return abort(observedErr)
 	}
-	return result, errors.Join(err, restartErr)
+	closeDockerInput()
+	forcedClose := false
+	if !copyFinished {
+		select {
+		case copyErr = <-copyDone:
+			copyFinished = true
+		case <-time.After(execDrainTimeout):
+			forcedClose = true
+			attached.Close()
+			copyErr = <-copyDone
+			copyFinished = true
+		}
+	}
+	stopReading()
+	if copyErr != nil && !forcedClose {
+		return abort(copyErr)
+	}
+	select {
+	case writeErr := <-writeDone:
+		if writeErr != nil && !forcedClose {
+			return abort(writeErr)
+		}
+	default:
+	}
+	exitCode, err := exitTrailer.Finish()
+	if err != nil {
+		return abort(err)
+	}
+	return core.CommandResult{
+		ExitCode: exitCode,
+		Duration: time.Since(started),
+	}, nil
 }
 
-func (s *Sandbox) restartAfterExecFailure(ctx context.Context) error {
-	_, stopErr := runChecked(ctx, s.cli, nil, "container", "stop", "--time", "1", s.containerID)
-	inspection, inspectErr := inspectContainer(ctx, s.cli, s.containerID)
-	if inspectErr != nil {
-		return errors.Join(stopErr, fmt.Errorf("inspect stopped Docker task container: %w", inspectErr))
+func wrappedCommand(statePath, token string, command core.Command) []string {
+	arguments := []string{"/bin/sh", "-c", execShell, "aries-exec", statePath, token, command.Path}
+	return append(arguments, command.Args...)
+}
+
+type exitTrailerWriter struct {
+	destination io.Writer
+	prefix      []byte
+	buffer      bytes.Buffer
+}
+
+func newExitTrailer(destination io.Writer, token string) *exitTrailerWriter {
+	return &exitTrailerWriter{
+		destination: destination,
+		prefix:      []byte("\x1eARIES_EXEC_EXIT_" + token + "="),
 	}
-	if inspection.State.Running {
-		_, killErr := runChecked(ctx, s.cli, nil, "container", "kill", s.containerID)
-		inspection, inspectErr = inspectContainer(ctx, s.cli, s.containerID)
-		if inspectErr != nil {
-			return errors.Join(stopErr, killErr, fmt.Errorf("inspect killed Docker task container: %w", inspectErr))
+}
+
+func (w *exitTrailerWriter) Write(content []byte) (int, error) {
+	written, _ := w.buffer.Write(content)
+	if excess := w.buffer.Len() - execTrailerKeep; excess > 0 {
+		chunk := w.buffer.Next(excess)
+		if n, err := w.destination.Write(chunk); err != nil {
+			return 0, err
+		} else if n != len(chunk) {
+			return 0, io.ErrShortWrite
 		}
-		if inspection.State.Running {
-			return errors.Join(stopErr, killErr, errors.New("Docker task container remained running after stop and kill"))
+	}
+	return written, nil
+}
+
+func (w *exitTrailerWriter) Finish() (int, error) {
+	content := w.buffer.Bytes()
+	if len(content) == 0 || content[len(content)-1] != '\x1f' {
+		return -1, errors.New("Docker exec output is missing its exit trailer")
+	}
+	start := bytes.LastIndex(content[:len(content)-1], w.prefix)
+	if start < 0 {
+		return -1, errors.New("Docker exec output has an invalid exit trailer")
+	}
+	codeBytes := content[start+len(w.prefix) : len(content)-1]
+	exitCode, err := strconv.Atoi(string(codeBytes))
+	if err != nil || exitCode < 0 || exitCode > 255 {
+		return -1, errors.New("Docker exec output has an invalid exit code")
+	}
+	if _, err := w.destination.Write(content[:start]); err != nil {
+		return -1, fmt.Errorf("write Docker exec stderr: %w", err)
+	}
+	return exitCode, nil
+}
+
+func (s *Sandbox) waitForExecExit(ctx context.Context, execID string) error {
+	ticker := time.NewTicker(execPollInterval)
+	defer ticker.Stop()
+	for {
+		inspection, err := s.client.ExecInspect(ctx, execID, client.ExecInspectOptions{})
+		if err != nil {
+			return fmt.Errorf("inspect running Docker exec: %w", err)
+		}
+		if !inspection.Running {
+			return nil
+		}
+		if inspection.PID > 0 {
+			present, err := s.containerHasPID(ctx, inspection.PID)
+			if err != nil {
+				return fmt.Errorf("inspect Docker exec process: %w", err)
+			}
+			if !present {
+				// Docker 29 can keep ExecInspect.Running true until a hijacked
+				// attach is closed even after the process has exited.
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
 		}
 	}
-	if _, err := runChecked(ctx, s.cli, nil, "container", "start", s.containerID); err != nil {
-		return fmt.Errorf("restart Docker task container: %w", err)
-	}
-	inspection, err := inspectContainer(ctx, s.cli, s.containerID)
+}
+
+func (s *Sandbox) containerHasPID(ctx context.Context, pid int) (bool, error) {
+	top, err := s.client.ContainerTop(ctx, s.containerID, client.ContainerTopOptions{Arguments: []string{"-eo", "pid"}})
 	if err != nil {
-		return fmt.Errorf("inspect restarted Docker task container: %w", err)
+		return false, err
 	}
-	if !inspection.State.Running {
-		return errors.New("inspect restarted Docker task container: container is not running")
+	pidColumn := -1
+	for index, title := range top.Titles {
+		if strings.EqualFold(title, "PID") {
+			pidColumn = index
+			break
+		}
 	}
-	if inspection.Config.WorkingDir != s.workdir ||
-		inspection.Config.Labels["aries.run"] != s.runID ||
-		inspection.Config.Labels["aries.task"] != s.taskID ||
-		inspection.Config.Labels["aries.managed"] != "true" {
-		return errors.New("inspect restarted Docker task container: identity or workdir changed")
+	if pidColumn < 0 {
+		return false, errors.New("Docker top response has no PID column")
 	}
-	if !inspection.hasReadonlyMount(helperContainerPath) || !inspection.hasReadonlyMount(socketContainerDir) {
-		return errors.New("inspect restarted Docker task container: trusted helper mounts do not match")
+	want := strconv.Itoa(pid)
+	for _, process := range top.Processes {
+		if pidColumn < len(process) && process[pidColumn] == want {
+			return true, nil
+		}
 	}
-	if _, ok := inspection.NetworkSettings.Networks[s.networkName]; !ok {
-		return fmt.Errorf("inspect restarted Docker task container: network %q is not attached", s.networkName)
-	}
-	network, err := inspectNetwork(ctx, s.cli, s.networkName)
+	return false, nil
+}
+
+func (s *Sandbox) terminateExec(ctx context.Context, execID, statePath string) error {
+	inspection, err := s.client.ExecInspect(ctx, execID, client.ExecInspectOptions{})
 	if err != nil {
-		return fmt.Errorf("inspect restarted Docker task network: %w", err)
+		return fmt.Errorf("inspect Docker exec before termination: %w", err)
 	}
-	if network.Labels["aries.run"] != s.runID || network.Labels["aries.task"] != s.taskID || network.Labels["aries.managed"] != "true" {
-		return errors.New("inspect restarted Docker task network: identity labels changed")
+	if !inspection.Running {
+		return nil
+	}
+	if inspection.PID <= 0 {
+		return errors.New("inspect Docker exec before termination: running exec has no PID")
+	}
+	processGroup, present, err := s.findExecProcessGroup(ctx, inspection.PID)
+	if err != nil {
+		return fmt.Errorf("locate Docker exec process group: %w", err)
+	}
+	if !present {
+		return nil
+	}
+	created, err := s.client.ExecCreate(ctx, s.containerID, client.ExecCreateOptions{
+		Cmd: []string{"/bin/sh", "-c", cancelExecShell, "aries-cancel", statePath},
+	})
+	if err != nil {
+		return fmt.Errorf("create Docker exec termination helper: %w", err)
+	}
+	if _, err := s.client.ExecStart(ctx, created.ID, client.ExecStartOptions{Detach: true}); err != nil {
+		return fmt.Errorf("start Docker exec termination helper: %w", err)
+	}
+	helper, err := s.client.ExecInspect(ctx, created.ID, client.ExecInspectOptions{})
+	if err != nil {
+		return fmt.Errorf("inspect Docker exec termination helper: %w", err)
+	}
+	if helper.Running && helper.PID <= 0 {
+		return errors.New("inspect Docker exec termination helper: running helper has no PID")
+	}
+	if err := s.waitForProcessAbsence(ctx, inspection.PID, processGroup, helper.PID); err != nil {
+		return fmt.Errorf("confirm terminated Docker exec process-group exit: %w", err)
 	}
 	return nil
 }
 
-// Upload copies one regular host file to one unambiguous absolute container
-// path without a host shell.
+func (s *Sandbox) findExecProcessGroup(ctx context.Context, wrapperPID int) (int, bool, error) {
+	ticker := time.NewTicker(execPollInterval)
+	defer ticker.Stop()
+	for {
+		table, err := s.processTable(ctx)
+		if err != nil {
+			return 0, false, err
+		}
+		if !table.hasPID(wrapperPID) {
+			return 0, false, nil
+		}
+		for _, process := range table.processes {
+			if process.ppid == wrapperPID && process.pgid > 1 {
+				return process.pgid, true, nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return 0, false, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *Sandbox) waitForProcessAbsence(ctx context.Context, wrapperPID, processGroup, helperPID int) error {
+	ticker := time.NewTicker(execPollInterval)
+	defer ticker.Stop()
+	for {
+		table, err := s.processTable(ctx)
+		if err != nil {
+			return err
+		}
+		if !table.hasPID(wrapperPID) && !table.hasGroup(processGroup) && (helperPID <= 0 || !table.hasPID(helperPID)) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+type containerProcess struct {
+	pid  int
+	ppid int
+	pgid int
+}
+
+type processTable struct{ processes []containerProcess }
+
+func (s *Sandbox) processTable(ctx context.Context) (processTable, error) {
+	top, err := s.client.ContainerTop(ctx, s.containerID, client.ContainerTopOptions{Arguments: []string{"-eo", "pid,ppid,pgid"}})
+	if err != nil {
+		return processTable{}, err
+	}
+	columns := map[string]int{}
+	for index, title := range top.Titles {
+		columns[strings.ToUpper(title)] = index
+	}
+	for _, name := range []string{"PID", "PPID", "PGID"} {
+		if _, ok := columns[name]; !ok {
+			return processTable{}, fmt.Errorf("Docker top response has no %s column", name)
+		}
+	}
+	result := processTable{processes: make([]containerProcess, 0, len(top.Processes))}
+	for _, row := range top.Processes {
+		if columns["PID"] >= len(row) || columns["PPID"] >= len(row) || columns["PGID"] >= len(row) {
+			return processTable{}, errors.New("Docker top response contains a short process row")
+		}
+		pid, pidErr := strconv.Atoi(row[columns["PID"]])
+		ppid, ppidErr := strconv.Atoi(row[columns["PPID"]])
+		pgid, pgidErr := strconv.Atoi(row[columns["PGID"]])
+		if pidErr != nil || ppidErr != nil || pgidErr != nil {
+			return processTable{}, errors.New("Docker top response contains a nonnumeric process identity")
+		}
+		result.processes = append(result.processes, containerProcess{pid: pid, ppid: ppid, pgid: pgid})
+	}
+	return result, nil
+}
+
+func (t processTable) hasPID(pid int) bool {
+	return slices.ContainsFunc(t.processes, func(process containerProcess) bool { return process.pid == pid })
+}
+
+func (t processTable) hasGroup(pgid int) bool {
+	return slices.ContainsFunc(t.processes, func(process containerProcess) bool { return process.pgid == pgid })
+}
+
+func intPointer(value int) *int { return &value }
+
+type limitedWriter struct {
+	writer io.Writer
+	wrote  int
+	limit  int
+}
+
+func (w *limitedWriter) Write(content []byte) (int, error) {
+	if len(content) > w.limit-w.wrote {
+		return 0, fmt.Errorf("Docker exec output exceeds %d bytes", w.limit)
+	}
+	written, err := w.writer.Write(content)
+	w.wrote += written
+	return written, err
+}
+
+// Upload copies one regular host file to an absolute container path.
 func (s *Sandbox) Upload(ctx context.Context, source, destination string) error {
-	return s.uploadFile(ctx, source, destination)
+	destination, err := cleanContainerPath(destination)
+	if err != nil {
+		return fmt.Errorf("invalid Docker upload destination: %w", err)
+	}
+	info, err := os.Lstat(source)
+	if err != nil {
+		return fmt.Errorf("stat Docker upload source: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("Docker upload source must be a regular file")
+	}
+	file, err := os.Open(source)
+	if err != nil {
+		return fmt.Errorf("open Docker upload source: %w", err)
+	}
+	defer file.Close()
+	var archive bytes.Buffer
+	writer := tar.NewWriter(&archive)
+	if err := writer.WriteHeader(&tar.Header{Name: filepath.Base(destination), Mode: int64(info.Mode().Perm()), Size: info.Size(), ModTime: info.ModTime()}); err != nil {
+		return fmt.Errorf("archive Docker upload: %w", err)
+	}
+	if _, err := io.Copy(writer, file); err != nil {
+		return fmt.Errorf("archive Docker upload: %w", err)
+	}
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("close Docker upload archive: %w", err)
+	}
+	_, err = s.client.CopyToContainer(ctx, s.containerID, client.CopyToContainerOptions{
+		DestinationPath: filepath.Dir(destination), Content: bytes.NewReader(archive.Bytes()),
+	})
+	if err != nil {
+		return fmt.Errorf("upload file to Docker task container: %w", err)
+	}
+	return nil
 }
 
-// Download copies one absolute container file through private staging and
-// publishes it beneath the configured output directory without following
-// caller-controlled symbolic links.
+// Download copies one regular container file beneath the configured output directory.
 func (s *Sandbox) Download(ctx context.Context, source, destination string) error {
-	return s.downloadFile(ctx, source, destination)
+	source, err := cleanContainerPath(source)
+	if err != nil {
+		return fmt.Errorf("invalid Docker download source: %w", err)
+	}
+	destination, err = outputPath(s.outputDir, destination)
+	if err != nil {
+		return err
+	}
+	result, err := s.client.CopyFromContainer(ctx, s.containerID, client.CopyFromContainerOptions{SourcePath: source})
+	if err != nil {
+		return fmt.Errorf("download file from Docker task container: %w", err)
+	}
+	defer result.Content.Close()
+	if !result.Stat.Mode.IsRegular() {
+		return errors.New("Docker download source must be a regular file")
+	}
+	reader := tar.NewReader(result.Content)
+	var header *tar.Header
+	for {
+		header, err = reader.Next()
+		if err == nil && header.FileInfo().Mode().IsRegular() {
+			break
+		}
+		if errors.Is(err, io.EOF) {
+			return errors.New("Docker download archive contains no regular file")
+		}
+		if err != nil {
+			return fmt.Errorf("read Docker download archive: %w", err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
+		return fmt.Errorf("create Docker download directory: %w", err)
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(destination), ".aries-download-*")
+	if err != nil {
+		return fmt.Errorf("create Docker download destination: %w", err)
+	}
+	temporaryName := temporary.Name()
+	defer os.Remove(temporaryName)
+	if _, err := io.CopyN(temporary, reader, header.Size); err != nil {
+		temporary.Close()
+		return fmt.Errorf("write Docker download: %w", err)
+	}
+	if err := temporary.Chmod(0o600); err != nil {
+		temporary.Close()
+		return fmt.Errorf("secure Docker download: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close Docker download: %w", err)
+	}
+	if err := os.Rename(temporaryName, destination); err != nil {
+		return fmt.Errorf("publish Docker download: %w", err)
+	}
+	return nil
 }
 
-// Stop records logs, stops and removes the container, removes its network, and
-// positively verifies absence. Concurrent callers share one attempt; a later
-// call can retry resources whose removal was not confirmed.
+// Stop records logs and removes the task container and network. Concurrent and
+// repeated calls are safe; failed removals can be retried.
 func (s *Sandbox) Stop(ctx context.Context) error {
 	s.mu.Lock()
 	if s.stopped {
@@ -445,11 +873,10 @@ func (s *Sandbox) Stop(ctx context.Context) error {
 	s.mu.Unlock()
 
 	err := s.stopOnce(ctx, true)
-
 	s.mu.Lock()
 	s.stopErr = err
 	s.stopping = false
-	s.stopped = !s.containerOwned && !s.networkOwned && !s.runtimeOwned
+	s.stopped = !s.containerOwned && !s.networkOwned
 	close(done)
 	s.mu.Unlock()
 	return err
@@ -457,76 +884,46 @@ func (s *Sandbox) Stop(ctx context.Context) error {
 
 func (s *Sandbox) stopOnce(ctx context.Context, collectLogs bool) error {
 	s.mu.Lock()
-	containerOwned := s.containerOwned
-	containerRun := s.containerRun
-	networkOwned := s.networkOwned
-	runtimeOwned := s.runtimeOwned
+	containerOwned, networkOwned := s.containerOwned, s.networkOwned
 	s.mu.Unlock()
-
 	var errs []error
 	if containerOwned {
 		if collectLogs {
-			if err := s.collectLogs(ctx); err != nil {
-				errs = append(errs, err)
-			}
+			errs = append(errs, s.collectLogs(ctx))
 		}
-		if containerRun {
-			if _, err := runChecked(ctx, s.cli, nil, "container", "stop", "--time", strconv.Itoa(stopTimeoutSeconds), s.containerID); err != nil && !isNotFoundError(err) {
-				errs = append(errs, fmt.Errorf("stop docker task container: %w", err))
-			} else {
-				s.mu.Lock()
-				s.containerRun = false
-				s.mu.Unlock()
-			}
+		_, err := s.client.ContainerStop(ctx, s.containerID, client.ContainerStopOptions{Timeout: intPointer(5)})
+		if err != nil && !cerrdefs.IsNotFound(err) {
+			errs = append(errs, fmt.Errorf("stop docker task container: %w", err))
 		}
-		if _, err := runChecked(ctx, s.cli, nil, "container", "rm", "--force", s.containerID); err != nil && !isNotFoundError(err) {
+		_, err = s.client.ContainerRemove(ctx, s.containerID, client.ContainerRemoveOptions{Force: true})
+		if err != nil && !cerrdefs.IsNotFound(err) {
 			errs = append(errs, fmt.Errorf("remove docker task container: %w", err))
 		}
-		absent, err := containerAbsent(ctx, s.cli, s.containerID)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("confirm docker task container absence: %w", err))
-		} else if !absent {
-			errs = append(errs, errors.New("confirm docker task container absence: container still exists"))
-		} else {
+		_, err = s.client.ContainerInspect(ctx, s.containerID, client.ContainerInspectOptions{})
+		if cerrdefs.IsNotFound(err) {
 			s.mu.Lock()
 			s.containerOwned = false
-			s.containerRun = false
 			s.mu.Unlock()
+		} else if err == nil {
+			errs = append(errs, errors.New("confirm docker task container absence: container still exists"))
+		} else {
+			errs = append(errs, fmt.Errorf("confirm docker task container absence: %w", err))
 		}
 	}
-
 	if networkOwned {
-		if _, err := runChecked(ctx, s.cli, nil, "network", "rm", s.networkName); err != nil && !isNotFoundError(err) {
+		_, err := s.client.NetworkRemove(ctx, s.networkName, client.NetworkRemoveOptions{})
+		if err != nil && !cerrdefs.IsNotFound(err) {
 			errs = append(errs, fmt.Errorf("remove docker task network: %w", err))
 		}
-		absent, err := networkAbsent(ctx, s.cli, s.networkName)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("confirm docker task network absence: %w", err))
-		} else if !absent {
-			errs = append(errs, errors.New("confirm docker task network absence: network still exists"))
-		} else {
+		_, err = s.client.NetworkInspect(ctx, s.networkName, client.NetworkInspectOptions{})
+		if cerrdefs.IsNotFound(err) {
 			s.mu.Lock()
 			s.networkOwned = false
 			s.mu.Unlock()
-		}
-	}
-
-	s.mu.Lock()
-	containerOwned = s.containerOwned
-	s.mu.Unlock()
-	if runtimeOwned && !containerOwned {
-		if err := os.RemoveAll(s.runtimeDir); err != nil {
-			errs = append(errs, fmt.Errorf("remove private Docker exec runtime: %w", err))
-		} else if _, err := os.Lstat(s.runtimeDir); !errors.Is(err, os.ErrNotExist) {
-			if err == nil {
-				errs = append(errs, errors.New("confirm private Docker exec runtime absence: path still exists"))
-			} else {
-				errs = append(errs, fmt.Errorf("confirm private Docker exec runtime absence: %w", err))
-			}
+		} else if err == nil {
+			errs = append(errs, errors.New("confirm docker task network absence: network still exists"))
 		} else {
-			s.mu.Lock()
-			s.runtimeOwned = false
-			s.mu.Unlock()
+			errs = append(errs, fmt.Errorf("confirm docker task network absence: %w", err))
 		}
 	}
 	return errors.Join(errs...)
@@ -535,62 +932,55 @@ func (s *Sandbox) stopOnce(ctx context.Context, collectLogs bool) error {
 func (s *Sandbox) rollbackStart(ctx context.Context, primary error) error {
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.cleanupTimeout)
 	defer cancel()
-	cleanupErr := s.stopOnce(cleanupCtx, false)
-	if cleanupErr == nil {
-		return primary
+	if cleanupErr := s.stopOnce(cleanupCtx, false); cleanupErr != nil {
+		return errors.Join(primary, fmt.Errorf("rollback partial docker sandbox: %w", cleanupErr))
 	}
-	return errors.Join(primary, fmt.Errorf("rollback partial docker sandbox: %w", cleanupErr))
+	return primary
 }
 
 func (s *Sandbox) collectLogs(ctx context.Context) error {
-	result, commandErr := s.cli.Run(ctx, nil, "container", "logs", s.containerID)
-	var errs []error
-	if commandErr != nil && !isNotFoundResult(result) {
-		errs = append(errs, fmt.Errorf("collect docker task container logs: %w", commandErr))
+	stdout, err := os.OpenFile(filepath.Join(s.artifactDir, "container.stdout.log"), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("create docker task stdout log: %w", err)
 	}
-	if err := writePrivateFile(filepath.Join(s.artifactDir, "container.stdout.log"), result.stdout); err != nil {
-		errs = append(errs, fmt.Errorf("write docker task stdout log: %w", err))
+	defer stdout.Close()
+	stderr, err := os.OpenFile(filepath.Join(s.artifactDir, "container.stderr.log"), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("create docker task stderr log: %w", err)
 	}
-	if err := writePrivateFile(filepath.Join(s.artifactDir, "container.stderr.log"), result.stderr); err != nil {
-		errs = append(errs, fmt.Errorf("write docker task stderr log: %w", err))
+	defer stderr.Close()
+	stream, err := s.client.ContainerLogs(ctx, s.containerID, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true})
+	if err != nil {
+		if cerrdefs.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("collect docker task container logs: %w", err)
 	}
-	return errors.Join(errs...)
+	defer stream.Close()
+	if _, err := stdcopy.StdCopy(stdout, stderr, stream); err != nil {
+		return fmt.Errorf("demultiplex docker task container logs: %w", err)
+	}
+	return nil
 }
 
-func containerCreateArgs(request core.SandboxRequest, containerName, networkName, helperPath, runtimeDir string) []string {
-	environment := request.Environment
-	args := []string{
-		"container", "create",
-		"--name", containerName,
-		"--label", managedLabel,
-		"--label", milestoneLabel,
-		"--label", "aries.kind=task-container",
-		"--label", "aries.run=" + request.RunID,
-		"--label", "aries.task=" + request.TaskID,
-		"--network", networkName,
-		"--network-alias", networkAlias,
-		"--workdir", environment.Workdir,
-		"--init",
-		"--mount", "type=bind,src=" + helperPath + ",dst=" + helperContainerPath + ",readonly",
-		"--mount", "type=bind,src=" + runtimeDir + ",dst=" + socketContainerDir + ",readonly",
+func outputPath(root, destination string) (string, error) {
+	absolute, err := filepath.Abs(destination)
+	if err != nil {
+		return "", fmt.Errorf("resolve Docker download destination: %w", err)
 	}
-	if environment.CPU > 0 {
-		args = append(args, "--cpus", strconv.FormatFloat(environment.CPU, 'f', -1, 64))
+	relative, err := filepath.Rel(root, absolute)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", errors.New("Docker download destination is outside the configured output directory")
 	}
-	if environment.MemoryMB > 0 {
-		args = append(args, "--memory", strconv.Itoa(environment.MemoryMB)+"m")
+	return absolute, nil
+}
+
+func dockerEnvironment(values map[string]string) []string {
+	result := make([]string, 0, len(values))
+	for _, key := range slices.Sorted(maps.Keys(values)) {
+		result = append(result, key+"="+values[key])
 	}
-	if environment.StorageMB > 0 {
-		args = append(args, "--storage-opt", "size="+strconv.Itoa(environment.StorageMB)+"m")
-	}
-	if environment.GPUs > 0 {
-		args = append(args, "--gpus", strconv.Itoa(environment.GPUs))
-	}
-	for _, key := range sortedKeys(environment.Env) {
-		args = append(args, "--env", key+"="+environment.Env[key])
-	}
-	args = append(args, "--entrypoint", "/bin/sleep", environment.Image, "infinity")
-	return args
+	return result
 }
 
 func validateEnvironment(environment core.Environment) error {
@@ -610,11 +1000,8 @@ func validateEnvironment(environment core.Environment) error {
 		return errors.New("docker sandbox memory, storage, and GPU counts must be nonnegative")
 	}
 	for key, value := range environment.Env {
-		if !validEnvName(key) {
-			return fmt.Errorf("invalid docker sandbox environment name %q", key)
-		}
-		if strings.ContainsRune(value, 0) {
-			return fmt.Errorf("docker sandbox environment %q contains NUL", key)
+		if !validEnvName(key) || strings.ContainsRune(value, 0) {
+			return fmt.Errorf("invalid docker sandbox environment %q", key)
 		}
 	}
 	return nil
@@ -654,9 +1041,6 @@ func validateCommand(command core.Command) error {
 		if !validEnvName(key) || strings.ContainsRune(value, 0) {
 			return fmt.Errorf("invalid command environment %q", key)
 		}
-		if strings.HasPrefix(key, "ARIES_") {
-			return fmt.Errorf("command environment %q uses the reserved ARIES_ prefix", key)
-		}
 	}
 	return nil
 }
@@ -691,150 +1075,6 @@ func cleanContainerPath(path string) (string, error) {
 	return clean, nil
 }
 
-func inspectContainer(ctx context.Context, cli commandRunner, id string) (containerInspection, error) {
-	result, err := runChecked(ctx, cli, nil, "container", "inspect", id)
-	if err != nil {
-		return containerInspection{}, err
-	}
-	var inspections []containerInspection
-	if err := json.Unmarshal(result.stdout, &inspections); err != nil {
-		return containerInspection{}, fmt.Errorf("decode Docker inspection: %w", err)
-	}
-	if len(inspections) != 1 {
-		return containerInspection{}, fmt.Errorf("Docker inspection returned %d records", len(inspections))
-	}
-	return inspections[0], nil
-}
-
-type containerInspection struct {
-	State struct {
-		Running bool `json:"Running"`
-	} `json:"State"`
-	Config struct {
-		WorkingDir string            `json:"WorkingDir"`
-		Labels     map[string]string `json:"Labels"`
-	} `json:"Config"`
-	NetworkSettings struct {
-		Networks map[string]struct {
-			IPAddress string `json:"IPAddress"`
-		} `json:"Networks"`
-	} `json:"NetworkSettings"`
-	Mounts []struct {
-		Destination string `json:"Destination"`
-		RW          bool   `json:"RW"`
-	} `json:"Mounts"`
-}
-
-func (inspection containerInspection) hasReadonlyMount(destination string) bool {
-	for _, mount := range inspection.Mounts {
-		if mount.Destination == destination && !mount.RW {
-			return true
-		}
-	}
-	return false
-}
-
-type networkInspection struct {
-	Labels map[string]string `json:"Labels"`
-}
-
-func inspectNetwork(ctx context.Context, cli commandRunner, name string) (networkInspection, error) {
-	result, err := runChecked(ctx, cli, nil, "network", "inspect", name)
-	if err != nil {
-		return networkInspection{}, err
-	}
-	var inspections []networkInspection
-	if err := json.Unmarshal(result.stdout, &inspections); err != nil {
-		return networkInspection{}, fmt.Errorf("decode Docker network inspection: %w", err)
-	}
-	if len(inspections) != 1 {
-		return networkInspection{}, fmt.Errorf("Docker network inspection returned %d records", len(inspections))
-	}
-	return inspections[0], nil
-}
-
-func containerAbsent(ctx context.Context, cli commandRunner, id string) (bool, error) {
-	result, err := cli.Run(ctx, nil, "container", "inspect", id)
-	if err == nil {
-		return false, nil
-	}
-	if isNotFoundResult(result) {
-		return true, nil
-	}
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return false, ctxErr
-	}
-	return false, fmt.Errorf("docker container inspect failed: %w: %s", err, compactStderr(result.stderr))
-}
-
-func networkAbsent(ctx context.Context, cli commandRunner, name string) (bool, error) {
-	result, err := cli.Run(ctx, nil, "network", "inspect", name)
-	if err == nil {
-		return false, nil
-	}
-	if isNotFoundResult(result) {
-		return true, nil
-	}
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return false, ctxErr
-	}
-	return false, fmt.Errorf("docker network inspect failed: %w: %s", err, compactStderr(result.stderr))
-}
-
-func runChecked(ctx context.Context, cli commandRunner, stdin []byte, args ...string) (commandResult, error) {
-	result, err := cli.Run(ctx, stdin, args...)
-	if err == nil {
-		return result, nil
-	}
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return result, ctxErr
-	}
-	return result, fmt.Errorf("docker %s: %w: %s", strings.Join(commandSummary(args), " "), err, compactStderr(result.stderr))
-}
-
-func (r execRunner) Run(ctx context.Context, stdin []byte, args ...string) (commandResult, error) {
-	socket := r.socket
-	if socket == "" {
-		socket = defaultDockerSocket
-	}
-	dockerArgs := append([]string{"--host", "unix://" + socket}, args...)
-	command := exec.CommandContext(ctx, r.binary, dockerArgs...)
-	if stdin != nil {
-		command.Stdin = bytes.NewReader(stdin)
-	}
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	command.Stdout = &stdout
-	command.Stderr = &stderr
-	err := command.Run()
-	exitCode := 0
-	if err != nil {
-		exitCode = -1
-		var exitError *exec.ExitError
-		if errors.As(err, &exitError) {
-			exitCode = exitError.ExitCode()
-		}
-	}
-	return commandResult{stdout: stdout.Bytes(), stderr: stderr.Bytes(), exitCode: exitCode}, err
-}
-
-func randomID() (string, error) {
-	var random [8]byte
-	if _, err := rand.Read(random[:]); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(random[:]), nil
-}
-
-func sortedKeys(values map[string]string) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
 func validEnvName(value string) bool {
 	for index, r := range value {
 		if r == '_' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || index > 0 && r >= '0' && r <= '9' {
@@ -845,100 +1085,10 @@ func validEnvName(value string) bool {
 	return value != ""
 }
 
-func ensureDirectory(path string) error {
-	if err := os.MkdirAll(path, 0o700); err != nil {
-		return err
-	}
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return err
-	}
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return err
-	}
-	if resolved != abs {
-		return errors.New("directory path contains a symbolic link")
-	}
-	return nil
-}
-
-func stageExecHelper(source, artifactDir string) (string, error) {
-	sourceFile, before, err := openRegularNoFollow(source)
-	if err != nil {
+func randomID() (string, error) {
+	var value [8]byte
+	if _, err := rand.Read(value[:]); err != nil {
 		return "", err
 	}
-	defer sourceFile.Close()
-	if before.Mode().Perm()&0o111 == 0 {
-		return "", errors.New("Docker exec helper is not executable")
-	}
-	helperDir := filepath.Join(artifactDir, "helper")
-	if err := ensureDirectory(helperDir); err != nil {
-		return "", err
-	}
-	helperPath := filepath.Join(helperDir, "aries-exec-helper")
-	staged, err := os.OpenFile(helperPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o555)
-	if err != nil {
-		return "", err
-	}
-	remove := true
-	defer func() {
-		_ = staged.Close()
-		if remove {
-			_ = os.Remove(helperPath)
-		}
-	}()
-	copied, err := io.Copy(staged, sourceFile)
-	if err != nil {
-		return "", err
-	}
-	after, err := sourceFile.Stat()
-	if err != nil {
-		return "", err
-	}
-	if !stableFile(before, after, copied) {
-		return "", errors.New("Docker exec helper changed while being staged")
-	}
-	if err := staged.Sync(); err != nil {
-		return "", err
-	}
-	if err := staged.Close(); err != nil {
-		return "", err
-	}
-	remove = false
-	return helperPath, nil
-}
-
-func writePrivateFile(path string, content []byte) error {
-	if err := ensureDirectory(filepath.Dir(path)); err != nil {
-		return err
-	}
-	return os.WriteFile(path, content, 0o600)
-}
-
-func isNotFoundResult(result commandResult) bool {
-	message := strings.ToLower(string(result.stderr))
-	return strings.Contains(message, "no such object") ||
-		strings.Contains(message, "no such container") ||
-		strings.Contains(message, "no such network") ||
-		strings.Contains(message, "not found")
-}
-
-func isNotFoundError(err error) bool {
-	return err != nil && strings.Contains(strings.ToLower(err.Error()), "no such")
-}
-
-func compactStderr(stderr []byte) string {
-	message := strings.TrimSpace(string(stderr))
-	if len(message) > 512 {
-		message = message[:512] + "..."
-	}
-	return message
-}
-
-func commandSummary(args []string) []string {
-	if len(args) <= 3 {
-		return args
-	}
-	return args[:3]
+	return hex.EncodeToString(value[:]), nil
 }

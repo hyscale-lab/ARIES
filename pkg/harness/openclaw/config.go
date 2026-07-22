@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -20,7 +21,6 @@ const (
 	launcherPath        = "/run/aries/launch"
 	agentWrapperPath    = "/run/aries/run-agent"
 	stateContainerPath  = "/home/node/.openclaw"
-	clientConfigPath    = "/run/aries/ssh/config"
 	workspaceRoot       = "/aries/openclaw"
 )
 
@@ -157,8 +157,12 @@ func validateModel(model core.ModelConfig) error {
 }
 
 func validateEndpoint(endpoint core.ToolEndpoint) error {
-	if endpoint.Protocol != "ssh" || endpoint.Address != "task-sandbox:2222" || endpoint.Username != "aries" || strings.TrimSpace(endpoint.Network) == "" {
-		return errors.New("OpenClaw requires the exact task-local SSH endpoint")
+	if endpoint.Protocol != "ssh" || endpoint.Username != "aries" || strings.TrimSpace(endpoint.Network) == "" {
+		return errors.New("OpenClaw requires a task-local SSH endpoint")
+	}
+	host, port, err := net.SplitHostPort(endpoint.Address)
+	if err != nil || net.ParseIP(host) == nil || port == "" {
+		return errors.New("OpenClaw SSH address must be an IP host and port")
 	}
 	paths := map[string]string{
 		"client command": endpoint.ClientCommand, "client source": endpoint.ClientSourceFile,
@@ -188,24 +192,4 @@ func validEnvironmentName(value string) bool {
 
 func launcherScript(apiKeyEnv string) []byte {
 	return []byte("#!/bin/sh\nset -eu\nmodel_key=$(cat " + modelKeyPath + ")\ngateway_key=$(cat " + gatewayKeyPath + ")\nexport " + apiKeyEnv + "=\"$model_key\"\nexport " + gatewayTokenEnv + "=\"$gateway_key\"\nunset model_key gateway_key\nexec \"$@\"\n")
-}
-
-func agentWrapperScript() []byte {
-	return []byte(`#!/bin/sh
-set -u
-result_dir=$1
-shift
-mkdir -p "$result_dir"
-"$@" >"$result_dir/stdout.tmp" 2>"$result_dir/stderr.tmp" &
-pid=$!
-printf '%s' "$pid" >"$result_dir/pid.tmp"
-mv "$result_dir/pid.tmp" "$result_dir/pid"
-wait "$pid"
-status=$?
-mv "$result_dir/stdout.tmp" "$result_dir/stdout"
-mv "$result_dir/stderr.tmp" "$result_dir/stderr"
-printf '%s' "$status" >"$result_dir/status.tmp"
-mv "$result_dir/status.tmp" "$result_dir/status"
-exit "$status"
-`)
 }

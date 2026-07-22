@@ -11,7 +11,7 @@ import (
 
 func testEndpoint() core.ToolEndpoint {
 	return core.ToolEndpoint{
-		Protocol: "ssh", Address: "task-sandbox:2222", Username: "aries", Network: "aries-net-test",
+		Protocol: "ssh", Address: "172.22.0.1:39425", Username: "aries", Network: "aries-net-test",
 		ClientCommand: "/opt/aries/bin/aries-ssh", ClientSourceFile: "/host/aries-ssh",
 		IdentityFile: "/run/aries/ssh/id_ed25519", IdentitySourceFile: "/host/id_ed25519",
 		KnownHostsFile: "/run/aries/ssh/known_hosts", KnownHostsSourceFile: "/host/known_hosts",
@@ -45,7 +45,7 @@ func TestRenderConfigLocksProviderSharedSSHAndPlaceholder(t *testing.T) {
 	if configuration.Agents.Defaults.Model.Primary != "aries/deterministic-model" || sandbox.Mode != "all" || sandbox.Scope != "shared" || sandbox.Backend != "ssh" || sandbox.WorkspaceAccess != "none" {
 		t.Fatalf("agent config = %#v", configuration.Agents.Defaults)
 	}
-	if sandbox.SSH.Target != "aries@task-sandbox:2222" || sandbox.SSH.Command != "/opt/aries/bin/aries-ssh" || sandbox.SSH.WorkspaceRoot != workspaceRoot || !sandbox.SSH.StrictHostKeyChecking || sandbox.SSH.UpdateHostKeys {
+	if sandbox.SSH.Target != "aries@172.22.0.1:39425" || sandbox.SSH.Command != "/opt/aries/bin/aries-ssh" || sandbox.SSH.WorkspaceRoot != workspaceRoot || !sandbox.SSH.StrictHostKeyChecking || sandbox.SSH.UpdateHostKeys {
 		t.Fatalf("SSH config = %#v", sandbox.SSH)
 	}
 }
@@ -57,6 +57,7 @@ func TestRenderConfigRejectsInvalidInputs(t *testing.T) {
 		"key env":  func(model *core.ModelConfig, _ *core.ToolEndpoint) { model.APIKeyEnv = "bad-name" },
 		"protocol": func(_ *core.ModelConfig, endpoint *core.ToolEndpoint) { endpoint.Protocol = "http" },
 		"network":  func(_ *core.ModelConfig, endpoint *core.ToolEndpoint) { endpoint.Network = "" },
+		"address":  func(_ *core.ModelConfig, endpoint *core.ToolEndpoint) { endpoint.Address = "task-sandbox:2222" },
 		"identity": func(_ *core.ModelConfig, endpoint *core.ToolEndpoint) { endpoint.IdentityFile = "/wrong" },
 	} {
 		t.Run(name, func(t *testing.T) {

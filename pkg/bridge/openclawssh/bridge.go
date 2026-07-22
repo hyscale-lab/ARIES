@@ -5,21 +5,23 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/subtle"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
-	"strconv"
+	"slices"
 	"strings"
 	"sync"
-	"syscall"
+	"sync/atomic"
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/core"
@@ -28,39 +30,52 @@ import (
 )
 
 const (
-	defaultClientPath    = "bin/aries-ssh"
-	defaultServerPath    = "bin/aries-ssh-server"
-	defaultBridgeCleanup = 20 * time.Second
-	controlContainerDir  = "/run/aries"
-	trustedExecHelper    = "/opt/aries/bin/aries-exec-helper"
-	maxControlPeers      = 32
+	defaultClientPath      = "bin/aries-ssh"
+	defaultBridgeCleanup   = 20 * time.Second
+	openClawWorkspace      = "/aries/openclaw/openclaw-ssh-shared-8198076c/workspace"
+	workspacePrepareScript = `set -eu
+target=$1
+workdir=$2
+owner=$3
+if [ "$target" = "$workdir" ]; then
+  exit 0
+elif [ -L "$target" ]; then
+  [ "$(readlink "$target")" = "$workdir" ]
+elif [ -e "$target" ]; then
+  exit 73
+else
+  mkdir -p "$(dirname "$target")"
+  (set -C; : > "$owner")
+  ln -s "$workdir" "$target"
+fi`
+	workspaceRollbackScript = `set -eu
+target=$1
+workdir=$2
+owner=$3
+if [ -f "$owner" ] && [ -L "$target" ] && [ "$(readlink "$target")" = "$workdir" ]; then
+  rm "$target"
+fi
+rm -f "$owner"`
+	workspaceReleaseScript = `set -eu
+rm -f "$1"`
 )
 
-// Options are the explicit host-local inputs to the OpenClaw SSH bridge.
+// Options are the host-local inputs to one OpenClaw SSH bridge.
 type Options struct {
 	OutputDir      string
 	ClientPath     string
-	ServerPath     string
-	WorkspaceRoot  string
-	RuntimeID      string
 	CleanupTimeout time.Duration
 	Logger         *slog.Logger
 }
 
-// Manager grants one task-local OpenClaw SSH endpoint at a time.
+// Manager exposes one SSH endpoint at a time and proxies its exec requests to
+// the exact Docker sandbox passed to Start.
 type Manager struct {
 	outputDir      string
 	clientPath     string
-	serverPath     string
-	workspaceRoot  string
-	runtimeID      string
 	cleanupTimeout time.Duration
 	logger         *slog.Logger
 	newID          func() (string, error)
-	probe          func(context.Context, string, ssh.Signer, ssh.PublicKey) error
-	waitListener   func(context.Context, string) error
-	oldKeyRejected func(context.Context, *bridgeSession) error
-	startServer    func(context.Context, bridgeSandbox, string, string, string, []byte, []byte, []byte) (io.Closer, int, bool, error)
 
 	mu       sync.Mutex
 	active   *bridgeSession
@@ -71,36 +86,87 @@ type Manager struct {
 
 type bridgeSandbox interface {
 	runner.Sandbox
+	ContainerID() string
+	ContainerName() string
 	NetworkName() string
+	NetworkGateway(context.Context) (string, error)
+	RunID() string
+	TaskID() string
 	Workdir() string
-	RuntimeDir() string
-	ContainerIPv4(context.Context) (string, error)
-	ProcessPresent(context.Context, int) (bool, error)
-	RestartForIsolation(context.Context) error
+	ExecStream(context.Context, core.Command, io.Reader, io.Writer, io.Writer) (core.CommandResult, error)
 }
 
 type bridgeSession struct {
-	sandbox              bridgeSandbox
-	artifactDir          string
-	clientSource         string
-	identitySource       string
-	knownSource          string
-	controlHost          string
-	control              io.Closer
-	serverPID            int
-	containerIP          string
-	clientSigner         ssh.Signer
-	hostKey              ssh.PublicKey
-	prepared             bool
-	prepareAttempted     bool
-	workspaceOwnerToken  []byte
-	serverUploaded       bool
-	serverSpawnAttempted bool
+	sandbox        bridgeSandbox
+	listener       net.Listener
+	configuration  *ssh.ServerConfig
+	cancel         context.CancelFunc
+	artifactDir    string
+	clientSource   string
+	identitySource string
+	knownSource    string
+	toolLogPath    string
+	toolLog        *os.File
+	workspaceOwner string
+	logger         *slog.Logger
+
+	mu            sync.Mutex
+	connections   map[net.Conn]struct{}
+	sequence      uint64
+	logMu         sync.Mutex
+	logErr        error
+	closeLogErr   error
+	revocationMu  sync.Mutex
+	revocationErr error
+	wait          sync.WaitGroup
+	revokeOnce    sync.Once
+	closeLogOnce  sync.Once
 }
+
+type toolCallRecord struct {
+	Sequence       uint64   `json:"sequence"`
+	Timestamp      string   `json:"timestamp"`
+	ContainerID    string   `json:"container_id"`
+	ContainerName  string   `json:"container_name"`
+	OperationClass string   `json:"operation_class"`
+	Path           string   `json:"path,omitempty"`
+	Workdir        string   `json:"workdir,omitempty"`
+	Environment    []string `json:"env_names,omitempty"`
+	CommandHash    string   `json:"command_hash"`
+	CommandPreview string   `json:"command_preview,omitempty"`
+	StdinBytes     int64    `json:"stdin_bytes"`
+	StdoutBytes    int64    `json:"stdout_bytes"`
+	StderrBytes    int64    `json:"stderr_bytes"`
+	ExitCode       int      `json:"exit_code"`
+	DurationMS     int64    `json:"duration_ms"`
+	Status         string   `json:"status"`
+	Error          string   `json:"error,omitempty"`
+	RunID          string   `json:"run_id,omitempty"`
+	TaskID         string   `json:"task_id,omitempty"`
+}
+
+type byteCounter struct {
+	reader io.Reader
+	writer io.Writer
+	n      atomic.Int64
+}
+
+func (counter *byteCounter) Read(content []byte) (int, error) {
+	n, err := counter.reader.Read(content)
+	counter.n.Add(int64(n))
+	return n, err
+}
+
+func (counter *byteCounter) Write(content []byte) (int, error) {
+	n, err := counter.writer.Write(content)
+	counter.n.Add(int64(n))
+	return n, err
+}
+
+func (counter *byteCounter) count() int64 { return counter.n.Load() }
 
 var _ runner.ToolBridge = (*Manager)(nil)
 
-// New constructs an OpenClaw SSH bridge without starting a process.
 func New(options Options) (*Manager, error) {
 	if strings.TrimSpace(options.OutputDir) == "" {
 		return nil, errors.New("OpenClaw SSH output directory is required")
@@ -115,25 +181,9 @@ func New(options Options) (*Manager, error) {
 	if options.ClientPath == "" {
 		options.ClientPath = defaultClientPath
 	}
-	if options.ServerPath == "" {
-		options.ServerPath = defaultServerPath
-	}
 	clientPath, err := filepath.Abs(options.ClientPath)
 	if err != nil {
 		return nil, fmt.Errorf("resolve OpenClaw SSH client helper: %w", err)
-	}
-	serverPath, err := filepath.Abs(options.ServerPath)
-	if err != nil {
-		return nil, fmt.Errorf("resolve OpenClaw SSH server helper: %w", err)
-	}
-	if options.WorkspaceRoot == "" {
-		options.WorkspaceRoot = defaultWorkspaceRoot
-	}
-	if options.RuntimeID == "" {
-		options.RuntimeID = lockedRuntimeID
-	}
-	if _, _, err := validateWorkspacePaths("/temporary-workdir", options.WorkspaceRoot, options.RuntimeID); err != nil {
-		return nil, fmt.Errorf("validate OpenClaw SSH workspace settings: %w", err)
 	}
 	if options.CleanupTimeout <= 0 {
 		options.CleanupTimeout = defaultBridgeCleanup
@@ -142,480 +192,529 @@ func New(options Options) (*Manager, error) {
 		options.Logger = slog.Default()
 	}
 	return &Manager{
-		outputDir:      outputDir,
-		clientPath:     clientPath,
-		serverPath:     serverPath,
-		workspaceRoot:  options.WorkspaceRoot,
-		runtimeID:      options.RuntimeID,
-		cleanupTimeout: options.CleanupTimeout,
-		logger:         options.Logger,
-		newID:          randomBridgeID,
-		probe:          probeSSH,
-		waitListener:   waitListenerAbsent,
-		oldKeyRejected: requireOldKeyRejected,
-		startServer:    startManagedServer,
+		outputDir: outputDir, clientPath: clientPath,
+		cleanupTimeout: options.CleanupTimeout, logger: options.Logger,
+		newID: randomBridgeID,
 	}, nil
 }
 
-// Start deploys a task-local server, prepares the pinned OpenClaw workspace,
-// and returns only file paths and endpoint metadata. A failed partial Start
-// rolls itself back under a fresh bounded context.
-func (m *Manager) Start(ctx context.Context, generic runner.Sandbox) (core.ToolEndpoint, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.active != nil || m.stopping {
+func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core.ToolEndpoint, error) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.active != nil || manager.stopping {
 		return core.ToolEndpoint{}, errors.New("OpenClaw SSH bridge is already active")
 	}
 	sandbox, ok := generic.(bridgeSandbox)
 	if !ok {
 		return core.ToolEndpoint{}, errors.New("OpenClaw SSH bridge requires the local Docker sandbox capability")
 	}
-	id, err := m.newID()
+	gateway, err := sandbox.NetworkGateway(ctx)
+	if err != nil {
+		return core.ToolEndpoint{}, fmt.Errorf("resolve task network gateway: %w", err)
+	}
+	id, err := manager.newID()
 	if err != nil {
 		return core.ToolEndpoint{}, fmt.Errorf("generate OpenClaw SSH bridge ID: %w", err)
 	}
-	session := &bridgeSession{sandbox: sandbox}
+	session := &bridgeSession{sandbox: sandbox, connections: make(map[net.Conn]struct{}), logger: manager.logger}
+	session.artifactDir = filepath.Join(manager.outputDir, "bridges", id)
+	session.workspaceOwner = openClawWorkspace + ".aries-owner-" + id
 	fail := func(primary error) (core.ToolEndpoint, error) {
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), m.cleanupTimeout)
+		session.revoke()
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), manager.cleanupTimeout)
 		defer cancel()
-		cleanupErr := m.rollbackStart(cleanupCtx, session)
-		if cleanupErr != nil {
-			return core.ToolEndpoint{}, errors.Join(primary, fmt.Errorf("rollback partial OpenClaw SSH bridge: %w", cleanupErr))
-		}
-		return core.ToolEndpoint{}, primary
+		waitErr := session.waitFor(cleanupCtx)
+		workspaceErr := rollbackWorkspace(cleanupCtx, session)
+		logErr := session.closeLog()
+		cleanupErr := os.RemoveAll(session.artifactDir)
+		return core.ToolEndpoint{}, errors.Join(primary, waitErr, workspaceErr, logErr, cleanupErr)
 	}
-
-	session.artifactDir = filepath.Join(m.outputDir, "bridges", id)
+	if err := prepareWorkspace(ctx, session); err != nil {
+		return fail(err)
+	}
 	if err := ensurePrivateDirectory(session.artifactDir); err != nil {
 		return fail(fmt.Errorf("create private OpenClaw SSH artifact directory: %w", err))
 	}
 	session.clientSource = filepath.Join(session.artifactDir, "aries-ssh")
-	if err := stageExecutable(m.clientPath, session.clientSource); err != nil {
+	if err := stageExecutable(manager.clientPath, session.clientSource); err != nil {
 		return fail(fmt.Errorf("stage OpenClaw SSH client: %w", err))
 	}
-	hostPrivate, identityPrivate, hostPublic, clientSigner, authorized, err := generateSessionKeys()
+	hostSigner, clientPEM, authorized, err := generateSessionKeys()
 	if err != nil {
 		return fail(err)
 	}
-	session.clientSigner = clientSigner
-	session.hostKey = hostPublic
 	session.identitySource = filepath.Join(session.artifactDir, "id_ed25519")
 	session.knownSource = filepath.Join(session.artifactDir, "known_hosts")
-	if err := writeExclusivePrivate(session.identitySource, identityPrivate); err != nil {
+	session.toolLogPath = filepath.Join(session.artifactDir, "tool-calls.jsonl")
+	if err := writeExclusivePrivate(session.identitySource, clientPEM); err != nil {
 		return fail(fmt.Errorf("write OpenClaw SSH identity: %w", err))
 	}
-	knownLine := fmt.Sprintf("[%s]:%d %s", lockedHostName, lockedPort, ssh.MarshalAuthorizedKey(hostPublic))
+	listener, err := net.Listen("tcp4", net.JoinHostPort(gateway, "0"))
+	if err != nil {
+		return fail(fmt.Errorf("listen on task network gateway: %w", err))
+	}
+	session.listener = listener
+	host, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		return fail(fmt.Errorf("parse OpenClaw SSH listener address: %w", err))
+	}
+	knownLine := fmt.Sprintf("[%s]:%s %s", host, port, ssh.MarshalAuthorizedKey(hostSigner.PublicKey()))
 	if err := writeExclusivePrivate(session.knownSource, []byte(knownLine)); err != nil {
 		return fail(fmt.Errorf("write OpenClaw SSH known-hosts file: %w", err))
 	}
-	if err := sandbox.Upload(ctx, m.serverPath, serverContainerPath); err != nil {
-		return fail(fmt.Errorf("upload OpenClaw SSH server: %w", err))
-	}
-	session.serverUploaded = true
-	session.workspaceOwnerToken = make([]byte, workspaceOwnerTokenBytes)
-	if _, err := rand.Read(session.workspaceOwnerToken); err != nil {
-		return fail(fmt.Errorf("generate workspace ownership token: %w", err))
-	}
-	workspace := filepath.Join(m.workspaceRoot, m.runtimeID, "workspace")
-	prepare := core.Command{
-		Path: serverContainerPath,
-		Args: []string{"prepare", "--workdir", sandbox.Workdir(), "--workspace-root", m.workspaceRoot, "--runtime-id", m.runtimeID},
-		Dir:  sandbox.Workdir(), Stdin: session.workspaceOwnerToken, Timeout: 10 * time.Second,
-	}
-	session.prepareAttempted = true
-	result, err := sandbox.Exec(ctx, prepare)
-	if err != nil || result.ExitCode != 0 {
-		return fail(commandFailure("prepare OpenClaw SSH workspace", result, err))
-	}
-	session.prepared = true
-
-	controlName := "ssh-" + id + ".sock"
-	session.controlHost = filepath.Join(sandbox.RuntimeDir(), controlName)
-	if err := os.Remove(session.controlHost); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fail(fmt.Errorf("remove stale OpenClaw SSH control socket: %w", err))
-	}
-	token := make([]byte, controlTokenBytes)
-	if _, err := rand.Read(token); err != nil {
-		return fail(fmt.Errorf("generate OpenClaw SSH control token: %w", err))
-	}
-	controlContainer := filepath.Join(controlContainerDir, controlName)
-	readyCtx, readyCancel := context.WithTimeout(ctx, 10*time.Second)
-	defer readyCancel()
-	session.serverSpawnAttempted = true
-	control, pid, spawned, err := m.startServer(readyCtx, sandbox, session.controlHost, controlContainer, workspace, token, hostPrivate, authorized)
-	session.serverSpawnAttempted = session.serverSpawnAttempted || spawned
+	session.toolLog, err = os.OpenFile(session.toolLogPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
+		return fail(fmt.Errorf("create OpenClaw SSH tool log: %w", err))
+	}
+	serveCtx, cancel := context.WithCancel(context.Background())
+	session.cancel = cancel
+	configuration := newServerConfig(hostSigner, authorized)
+	session.configuration = configuration
+	session.wait.Add(1)
+	go session.serve(serveCtx, manager.logger)
+	if err := releaseWorkspaceOwner(ctx, session); err != nil {
 		return fail(err)
 	}
-	session.control = control
-	session.serverPID = pid
-	containerIP, err := sandbox.ContainerIPv4(readyCtx)
-	if err != nil {
-		return fail(err)
-	}
-	session.containerIP = containerIP
-	if err := m.probe(readyCtx, containerIP, clientSigner, hostPublic); err != nil {
-		return fail(fmt.Errorf("probe OpenClaw SSH endpoint: %w", err))
-	}
 
-	m.active = session
-	m.stopErr = nil
-	m.logger.InfoContext(ctx, "OpenClaw SSH bridge started", "address", lockedHostName+":"+strconv.Itoa(lockedPort), "network", sandbox.NetworkName())
+	manager.active = session
+	manager.stopErr = nil
+	address := net.JoinHostPort(host, port)
+	network := sandbox.NetworkName()
+	manager.logger.InfoContext(ctx, "OpenClaw SSH bridge started", "address", address, "network", network, "container", sandbox.ContainerName())
 	return core.ToolEndpoint{
-		Protocol:             "ssh",
-		Address:              net.JoinHostPort(lockedHostName, strconv.Itoa(lockedPort)),
-		Username:             lockedUsername,
-		Network:              sandbox.NetworkName(),
-		ClientCommand:        clientContainerPath,
-		ClientSourceFile:     session.clientSource,
-		IdentityFile:         identityContainerPath,
-		IdentitySourceFile:   session.identitySource,
-		KnownHostsFile:       knownHostsContainerPath,
-		KnownHostsSourceFile: session.knownSource,
+		Protocol: "ssh", Address: address, Username: lockedUsername, Network: network,
+		ClientCommand: clientContainerPath, ClientSourceFile: session.clientSource,
+		IdentityFile: identityContainerPath, IdentitySourceFile: session.identitySource,
+		KnownHostsFile: knownHostsContainerPath, KnownHostsSourceFile: session.knownSource,
+		LogPaths: []string{session.toolLogPath},
 	}, nil
 }
 
-func startManagedServer(ctx context.Context, sandbox bridgeSandbox, controlHost, controlContainer, workspace string, token, hostPrivate, authorized []byte) (io.Closer, int, bool, error) {
-	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: controlHost, Net: "unix"})
-	if err != nil {
-		return nil, 0, false, fmt.Errorf("listen for OpenClaw SSH control: %w", err)
+func newServerConfig(hostSigner ssh.Signer, authorized ssh.PublicKey) *ssh.ServerConfig {
+	configuration := &ssh.ServerConfig{
+		MaxAuthTries: 3,
+		PublicKeyCallback: func(metadata ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+			if metadata.User() != lockedUsername || !bytes.Equal(key.Marshal(), authorized.Marshal()) {
+				return nil, errors.New("public key rejected")
+			}
+			return &ssh.Permissions{}, nil
+		},
 	}
-	defer listener.Close()
-	if err := os.Chmod(controlHost, 0o600); err != nil {
-		return nil, 0, false, fmt.Errorf("protect OpenClaw SSH control socket: %w", err)
-	}
-	spawn := core.Command{
-		Path: serverContainerPath,
-		Args: []string{"spawn", "--control", controlContainer, "--listen", net.JoinHostPort("0.0.0.0", strconv.Itoa(lockedPort)), "--workspace", workspace},
-		Dir:  workspace, Stdin: token, Timeout: 10 * time.Second,
-	}
-	spawnResult, err := sandbox.Exec(ctx, spawn)
-	if err != nil || spawnResult.ExitCode != 0 {
-		return nil, 0, true, commandFailure("spawn OpenClaw SSH server", spawnResult, err)
-	}
-	control, pid, err := acceptControl(ctx, listener, token)
-	if err != nil {
-		return nil, 0, true, fmt.Errorf("authenticate OpenClaw SSH server control: %w", err)
-	}
-	if err := requireProcessPresent(ctx, sandbox, pid); err != nil {
-		_ = control.Close()
-		return nil, pid, true, err
-	}
-	bootstrap := controlBootstrap{
-		HostPrivateKey: hostPrivate,
-		AuthorizedKey:  authorized,
-		Username:       lockedUsername,
-		Listen:         net.JoinHostPort("0.0.0.0", strconv.Itoa(lockedPort)),
-		Workspace:      workspace,
-	}
-	if err := writeControlFrame(control, bootstrap); err != nil {
-		_ = control.Close()
-		return nil, pid, true, fmt.Errorf("bootstrap OpenClaw SSH server: %w", err)
-	}
-	var ready controlReady
-	if err := readControlFrame(control, &ready); err != nil {
-		_ = control.Close()
-		return nil, pid, true, fmt.Errorf("wait for OpenClaw SSH server readiness: %w", err)
-	}
-	if ready.Address != net.JoinHostPort("0.0.0.0", strconv.Itoa(lockedPort)) {
-		_ = control.Close()
-		return nil, pid, true, fmt.Errorf("OpenClaw SSH server reported unexpected address %q", ready.Address)
-	}
-	_ = control.SetDeadline(time.Time{})
-	return control, pid, true, nil
+	configuration.AddHostKey(hostSigner)
+	return configuration
 }
 
-func requireProcessPresent(ctx context.Context, sandbox bridgeSandbox, pid int) error {
-	present, err := sandbox.ProcessPresent(ctx, pid)
-	if err != nil {
-		return fmt.Errorf("confirm authenticated OpenClaw SSH server PID before bootstrap: %w", err)
+func (session *bridgeSession) serve(ctx context.Context, logger *slog.Logger) {
+	defer session.wait.Done()
+	for {
+		connection, err := session.listener.Accept()
+		if err != nil {
+			if ctx.Err() == nil && !errors.Is(err, net.ErrClosed) {
+				logger.Warn("OpenClaw SSH accept failed", "error", err)
+			}
+			return
+		}
+		session.mu.Lock()
+		session.connections[connection] = struct{}{}
+		session.mu.Unlock()
+		session.wait.Add(1)
+		go session.handleConnection(ctx, connection)
 	}
-	if !present {
-		return errors.New("authenticated OpenClaw SSH server PID disappeared before bootstrap")
-	}
-	return nil
 }
 
-// Stop positively revokes the listener and exact authenticated server PID,
-// rejects the old key, removes the deployed server and deletes all credentials.
-// Concurrent callers share one attempt; a later call retries a failed attempt.
-func (m *Manager) Stop(ctx context.Context) error {
-	m.mu.Lock()
-	if m.active == nil && !m.stopping {
-		err := m.stopErr
-		m.mu.Unlock()
+func (session *bridgeSession) handleConnection(ctx context.Context, connection net.Conn) {
+	defer session.wait.Done()
+	defer func() {
+		_ = connection.Close()
+		session.mu.Lock()
+		delete(session.connections, connection)
+		session.mu.Unlock()
+	}()
+	_ = connection.SetDeadline(time.Now().Add(lockedConnectTimeout))
+	server, channels, requests, err := ssh.NewServerConn(connection, session.configuration)
+	if err != nil {
+		return
+	}
+	defer server.Close()
+	_ = connection.SetDeadline(time.Time{})
+	connectionCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		_ = server.Wait()
+		cancel()
+	}()
+	go serveGlobalRequests(requests)
+	for incoming := range channels {
+		if incoming.ChannelType() != "session" || len(incoming.ExtraData()) != 0 {
+			_ = incoming.Reject(ssh.UnknownChannelType, "only session channels are supported")
+			continue
+		}
+		channel, channelRequests, err := incoming.Accept()
+		if err != nil {
+			continue
+		}
+		session.wait.Add(1)
+		go func() {
+			defer session.wait.Done()
+			defer channel.Close()
+			session.handleSession(connectionCtx, channel, channelRequests)
+		}()
+	}
+}
+
+func serveGlobalRequests(requests <-chan *ssh.Request) {
+	for request := range requests {
+		accepted := request.Type == "keepalive@openssh.com" && len(request.Payload) == 0
+		if request.WantReply {
+			_ = request.Reply(accepted, nil)
+		}
+	}
+}
+
+func (session *bridgeSession) handleSession(ctx context.Context, channel ssh.Channel, requests <-chan *ssh.Request) {
+	for request := range requests {
+		if request.Type != "exec" || !request.WantReply {
+			if request.WantReply {
+				_ = request.Reply(false, nil)
+			}
+			session.logRejected(request.Payload)
+			return
+		}
+		var payload struct{ Command string }
+		if err := ssh.Unmarshal(request.Payload, &payload); err != nil {
+			_ = request.Reply(false, nil)
+			session.logRejected(request.Payload)
+			return
+		}
+		command, err := decodeRemoteCommand(payload.Command)
+		if err != nil {
+			_ = request.Reply(false, nil)
+			session.logRejected([]byte(payload.Command))
+			return
+		}
+		if err := request.Reply(true, nil); err != nil {
+			return
+		}
+		exitCode := session.execute(ctx, channel, payload.Command, command)
+		_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{uint32(exitCode)}))
+		return
+	}
+}
+
+func (session *bridgeSession) execute(ctx context.Context, channel ssh.Channel, encoded string, remote remoteCommand) int {
+	started := time.Now()
+	command := remote.command(session.sandbox.Workdir())
+	stdin := &byteCounter{reader: channel}
+	stdout := &byteCounter{writer: channel}
+	stderr := &byteCounter{writer: channel.Stderr()}
+	result, err := session.sandbox.ExecStream(ctx, command, stdin, stdout, stderr)
+	if contextErr := ctx.Err(); contextErr != nil && !hasCancellationCause(err) {
+		// A sandbox error returned after revocation is ambiguous unless it carries
+		// the cancellation cause. Preserve both so Stop fails closed rather than
+		// silently treating an unconfirmed tool termination as an earlier error.
+		if err == nil {
+			err = contextErr
+		} else {
+			err = errors.Join(contextErr, err)
+		}
+	}
+	exitCode := result.ExitCode
+	status, message := "completed", ""
+	if err != nil {
+		session.recordRevocationError(err)
+		exitCode = 255
+		status, message = "failed", "sandbox execution failed"
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			status, message = "canceled", "session canceled"
+		}
+	}
+	if exitCode < 0 || exitCode > 255 {
+		exitCode = 255
+	}
+	session.writeRecord(toolCallRecord{
+		ContainerID: session.sandbox.ContainerID(), ContainerName: session.sandbox.ContainerName(),
+		OperationClass: operationClass(command), Path: command.Path, Workdir: command.Dir,
+		Environment: slices.Sorted(maps.Keys(command.Env)), CommandHash: commandHash(encoded), CommandPreview: safePreview(command),
+		StdinBytes: stdin.count(), StdoutBytes: stdout.count(), StderrBytes: stderr.count(),
+		ExitCode: exitCode, DurationMS: time.Since(started).Milliseconds(), Status: status, Error: message,
+	})
+	return exitCode
+}
+
+func (session *bridgeSession) logRejected(payload []byte) {
+	session.writeRecord(toolCallRecord{
+		ContainerID: session.sandbox.ContainerID(), ContainerName: session.sandbox.ContainerName(),
+		OperationClass: "exec", CommandHash: commandHash(string(payload)),
+		Status: "rejected", Error: "invalid remote command",
+	})
+}
+
+func (session *bridgeSession) writeRecord(record toolCallRecord) {
+	session.logMu.Lock()
+	defer session.logMu.Unlock()
+	session.sequence++
+	record.Sequence = session.sequence
+	record.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
+	record.RunID = session.sandbox.RunID()
+	record.TaskID = session.sandbox.TaskID()
+	content, err := json.Marshal(record)
+	if err == nil {
+		_, err = session.toolLog.Write(append(content, '\n'))
+	}
+	if err == nil {
+		err = session.toolLog.Sync()
+	}
+	if err != nil {
+		session.logErr = errors.Join(session.logErr, err)
+		session.logger.Error("write OpenClaw SSH tool log", "error", err)
+	}
+}
+
+func (manager *Manager) Stop(ctx context.Context) error {
+	manager.mu.Lock()
+	if manager.active == nil && !manager.stopping {
+		err := manager.stopErr
+		manager.mu.Unlock()
 		return err
 	}
-	if m.stopping {
-		done := m.stopDone
-		m.mu.Unlock()
+	if manager.stopping {
+		done := manager.stopDone
+		manager.mu.Unlock()
 		select {
 		case <-done:
-			m.mu.Lock()
-			err := m.stopErr
-			m.mu.Unlock()
+			manager.mu.Lock()
+			err := manager.stopErr
+			manager.mu.Unlock()
 			return err
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 	}
-	session := m.active
-	m.stopping = true
-	m.stopDone = make(chan struct{})
-	done := m.stopDone
-	m.mu.Unlock()
+	session := manager.active
+	manager.stopping = true
+	manager.stopDone = make(chan struct{})
+	done := manager.stopDone
+	manager.mu.Unlock()
 
-	cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), m.cleanupTimeout)
-	err := m.stopSession(cleanupCtx, session, false)
-	cleanupCancel()
-
-	m.mu.Lock()
-	m.stopErr = err
-	m.stopping = false
+	session.revoke()
+	err := session.waitFor(ctx)
 	if err == nil {
-		m.active = nil
+		err = errors.Join(
+			session.revocationError(),
+			session.closeLog(),
+			removeIfPresent(session.clientSource),
+			removeIfPresent(session.identitySource),
+			removeIfPresent(session.knownSource),
+		)
+	}
+	manager.mu.Lock()
+	manager.stopErr = err
+	manager.stopping = false
+	if err == nil {
+		manager.active = nil
 	}
 	close(done)
-	m.mu.Unlock()
+	manager.mu.Unlock()
 	return err
 }
 
-func (m *Manager) rollbackStart(ctx context.Context, session *bridgeSession) error {
-	return m.stopSession(ctx, session, true)
+func (session *bridgeSession) recordRevocationError(err error) {
+	if !hasCancellationCause(err) {
+		return
+	}
+	session.revocationMu.Lock()
+	session.revocationErr = errors.Join(session.revocationErr, err)
+	session.revocationMu.Unlock()
 }
 
-func (m *Manager) stopSession(ctx context.Context, session *bridgeSession, restore bool) error {
-	if session == nil {
+func (session *bridgeSession) revocationError() error {
+	session.revocationMu.Lock()
+	defer session.revocationMu.Unlock()
+	if isPureCancellation(session.revocationErr) {
 		return nil
 	}
-	var errs []error
-	if session.control != nil {
-		if err := session.control.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-			errs = append(errs, fmt.Errorf("close OpenClaw SSH control: %w", err))
-		}
-		session.control = nil
-	}
-	if session.serverSpawnAttempted {
-		if err := session.sandbox.RestartForIsolation(ctx); err != nil {
-			errs = append(errs, fmt.Errorf("restart task sandbox to revoke every SSH descendant: %w", err))
-		}
-		currentIP, err := session.sandbox.ContainerIPv4(ctx)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("inspect restarted task sandbox address: %w", err))
-		} else {
-			session.containerIP = currentIP
-		}
-		if session.serverPID > 0 {
-			present, err := session.sandbox.ProcessPresent(ctx, session.serverPID)
-			if err != nil {
-				errs = append(errs, fmt.Errorf("confirm prior OpenClaw SSH server PID absent after restart: %w", err))
-			} else if present {
-				errs = append(errs, errors.New("prior OpenClaw SSH server PID remains after restart"))
-			}
-		}
-		if session.containerIP != "" {
-			if err := m.waitListener(ctx, session.containerIP); err != nil {
-				errs = append(errs, err)
-			}
-			if err := m.oldKeyRejected(ctx, session); err != nil {
-				errs = append(errs, err)
-			}
-		}
-	}
-	if !restore && session.prepared {
-		if err := verifyWorkspaceThroughTrustedHelper(ctx, session.sandbox, m.workspaceRoot, m.runtimeID); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	if restore && session.prepareAttempted {
-		result, err := session.sandbox.Exec(ctx, core.Command{
-			Path:    trustedExecHelper,
-			Args:    []string{"--recover-workspace", session.sandbox.Workdir(), m.workspaceRoot, m.runtimeID},
-			Stdin:   session.workspaceOwnerToken,
-			Timeout: 10 * time.Second,
-		})
-		if err != nil || result.ExitCode != 0 {
-			errs = append(errs, commandFailure("reconcile task workdir after bridge Start failure", result, err))
-		} else {
-			session.prepared = false
-			session.prepareAttempted = false
-			clear(session.workspaceOwnerToken)
-			session.workspaceOwnerToken = nil
-		}
-	}
-	if session.serverUploaded {
-		if err := removeServerBinary(ctx, session.sandbox); err != nil {
-			errs = append(errs, err)
-		} else {
-			session.serverUploaded = false
-		}
-	}
-	if session.controlHost != "" {
-		if err := os.Remove(session.controlHost); err != nil && !errors.Is(err, os.ErrNotExist) {
-			errs = append(errs, fmt.Errorf("remove OpenClaw SSH control socket: %w", err))
-		}
-		if _, err := os.Lstat(session.controlHost); err == nil {
-			errs = append(errs, errors.New("confirm OpenClaw SSH control socket absence: path remains"))
-		} else if !errors.Is(err, os.ErrNotExist) {
-			errs = append(errs, fmt.Errorf("confirm OpenClaw SSH control socket absence: %w", err))
-		}
-	}
-	if session.artifactDir != "" {
-		if err := os.RemoveAll(session.artifactDir); err != nil {
-			errs = append(errs, fmt.Errorf("delete OpenClaw SSH credentials: %w", err))
-		}
-		if _, err := os.Lstat(session.artifactDir); err == nil {
-			errs = append(errs, errors.New("confirm OpenClaw SSH credential deletion: artifact directory remains"))
-		} else if !errors.Is(err, os.ErrNotExist) {
-			errs = append(errs, fmt.Errorf("confirm OpenClaw SSH credential deletion: %w", err))
-		}
-	}
-	return errors.Join(errs...)
+	return session.revocationErr
 }
 
-func acceptControl(ctx context.Context, listener *net.UnixListener, token []byte) (*net.UnixConn, int, error) {
-	for rejected := 0; rejected <= maxControlPeers; rejected++ {
-		deadline := time.Now().Add(100 * time.Millisecond)
-		if remaining, ok := ctx.Deadline(); ok && remaining.Before(deadline) {
-			deadline = remaining
-		}
-		if err := listener.SetDeadline(deadline); err != nil {
-			return nil, 0, err
-		}
-		connection, err := listener.AcceptUnix()
-		if err != nil {
-			var netError net.Error
-			if errors.As(err, &netError) && netError.Timeout() {
-				if ctx.Err() != nil {
-					return nil, 0, ctx.Err()
-				}
-				continue
-			}
-			return nil, 0, err
-		}
-		_ = connection.SetDeadline(time.Now().Add(time.Second))
-		pid, peerErr := unixPeerPID(connection)
-		var hello controlHello
-		frameErr := readControlFrame(connection, &hello)
-		if peerErr == nil && frameErr == nil && pid > 0 && hello.Magic == controlMagic && len(hello.Token) == len(token) && subtle.ConstantTimeCompare(hello.Token, token) == 1 {
-			return connection, pid, nil
-		}
-		_ = connection.Close()
-	}
-	return nil, 0, fmt.Errorf("more than %d control peers failed authentication", maxControlPeers)
+func hasCancellationCause(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
-func probeSSH(ctx context.Context, host string, signer ssh.Signer, hostKey ssh.PublicKey) error {
-	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	address := net.JoinHostPort(host, strconv.Itoa(lockedPort))
-	dialer := net.Dialer{}
-	connection, err := dialer.DialContext(probeCtx, "tcp", address)
-	if err != nil {
-		return err
+func isPureCancellation(err error) bool {
+	if err == nil {
+		return false
 	}
-	defer connection.Close()
-	_ = connection.SetDeadline(time.Now().Add(2 * time.Second))
-	configuration := &ssh.ClientConfig{
-		User:              lockedUsername,
-		Auth:              []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyAlgorithms: []string{ssh.KeyAlgoED25519},
-	}
-	configuration.HostKeyCallback = func(_ string, _ net.Addr, presented ssh.PublicKey) error {
-		if !bytes.Equal(presented.Marshal(), hostKey.Marshal()) {
-			return errors.New("host key mismatch")
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
 		}
+		for _, child := range children {
+			if !isPureCancellation(child) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return isPureCancellation(wrapped.Unwrap())
+	}
+	return err == context.Canceled || err == context.DeadlineExceeded
+}
+
+func (session *bridgeSession) revoke() {
+	session.revokeOnce.Do(func() {
+		if session.cancel != nil {
+			session.cancel()
+		}
+		if session.listener != nil {
+			_ = session.listener.Close()
+		}
+		session.mu.Lock()
+		for connection := range session.connections {
+			_ = connection.Close()
+		}
+		session.mu.Unlock()
+	})
+}
+
+func (session *bridgeSession) waitFor(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() { session.wait.Wait(); close(done) }()
+	select {
+	case <-done:
 		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	clientConnection, channels, requests, err := ssh.NewClientConn(connection, address, configuration)
-	if err != nil {
-		return err
-	}
-	client := ssh.NewClient(clientConnection, channels, requests)
-	defer client.Close()
-	session, err := client.NewSession()
-	if err != nil {
-		return err
-	}
-	defer session.Close()
-	return session.Run(encodeCanonicalTokens([]string{remoteShell, "-c", "true"}))
 }
 
-func requireOldKeyRejected(ctx context.Context, session *bridgeSession) error {
-	probeCtx, cancel := context.WithTimeout(ctx, time.Second)
-	defer cancel()
-	if err := probeSSH(probeCtx, session.containerIP, session.clientSigner, session.hostKey); err == nil {
-		return errors.New("old OpenClaw SSH key still connects after bridge Stop")
-	}
-	return nil
-}
-
-func waitListenerAbsent(ctx context.Context, host string) error {
-	address := net.JoinHostPort(host, strconv.Itoa(lockedPort))
-	ticker := time.NewTicker(20 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		connection, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
-		if err != nil {
-			return nil
+func (session *bridgeSession) closeLog() error {
+	session.closeLogOnce.Do(func() {
+		session.logMu.Lock()
+		defer session.logMu.Unlock()
+		if session.toolLog != nil {
+			session.closeLogErr = session.toolLog.Close()
 		}
-		_ = connection.Close()
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("confirm OpenClaw SSH listener absence: %w", ctx.Err())
-		case <-ticker.C:
+	})
+	return errors.Join(session.logErr, session.closeLogErr)
+}
+
+func (remote remoteCommand) command(workdir string) core.Command {
+	index := 0
+	environment := make(map[string]string)
+	if remote.argv[0] == remoteEnv {
+		index++
+		for remote.argv[index] != remoteShell {
+			name, value, _ := strings.Cut(remote.argv[index], "=")
+			environment[name] = value
+			index++
 		}
 	}
+	if len(environment) == 0 {
+		environment = nil
+	}
+	return core.Command{Path: remote.argv[index], Args: append([]string(nil), remote.argv[index+1:]...), Dir: workdir, Env: environment}
 }
 
-func removeServerBinary(ctx context.Context, sandbox bridgeSandbox) error {
-	result, err := sandbox.Exec(ctx, core.Command{Path: trustedExecHelper, Args: []string{"--remove-file", serverContainerPath}, Timeout: 5 * time.Second})
+func commandHash(command string) string {
+	sum := sha256.Sum256([]byte(command))
+	return hex.EncodeToString(sum[:])
+}
+
+func safePreview(command core.Command) string {
+	if command.Path == remoteShell && len(command.Args) >= 2 && command.Args[0] == "-c" {
+		return fmt.Sprintf("/bin/sh -c <script:%d bytes>", len(command.Args[1]))
+	}
+	return filepath.Base(command.Path)
+}
+
+func operationClass(command core.Command) string {
+	if command.Path != remoteShell || len(command.Args) < 3 || command.Args[0] != "-c" {
+		return "exec"
+	}
+	switch command.Args[2] {
+	case "openclaw-sandbox-upload":
+		return "workspace_upload"
+	case "openclaw-sandbox-fs":
+		return "fs"
+	default:
+		return "exec"
+	}
+}
+
+func prepareWorkspace(ctx context.Context, session *bridgeSession) error {
+	result, err := session.sandbox.Exec(ctx, workspaceCommand(
+		workspacePrepareScript, session.sandbox.Workdir(), session.workspaceOwner,
+	))
 	if err != nil || result.ExitCode != 0 {
-		return commandFailure("remove and confirm OpenClaw SSH server deletion", result, err)
+		return commandFailure("prepare OpenClaw workspace alias", result, err)
 	}
 	return nil
 }
 
-func verifyWorkspaceThroughTrustedHelper(ctx context.Context, sandbox bridgeSandbox, workspaceRoot, runtimeID string) error {
-	workspace := filepath.Join(workspaceRoot, runtimeID, "workspace")
-	result, err := sandbox.Exec(ctx, core.Command{
-		Path:    trustedExecHelper,
-		Args:    []string{"--verify-workspace", sandbox.Workdir(), workspace},
-		Timeout: 5 * time.Second,
+func rollbackWorkspace(ctx context.Context, session *bridgeSession) error {
+	if session == nil || session.workspaceOwner == "" {
+		return nil
+	}
+	result, err := session.sandbox.Exec(ctx, workspaceCommand(
+		workspaceRollbackScript, session.sandbox.Workdir(), session.workspaceOwner,
+	))
+	if err != nil || result.ExitCode != 0 {
+		return commandFailure("roll back OpenClaw workspace alias", result, err)
+	}
+	return nil
+}
+
+func releaseWorkspaceOwner(ctx context.Context, session *bridgeSession) error {
+	result, err := session.sandbox.Exec(ctx, core.Command{
+		Path: remoteShell,
+		Args: []string{"-c", workspaceReleaseScript, "aries-workspace", session.workspaceOwner},
+		Dir:  session.sandbox.Workdir(),
 	})
 	if err != nil || result.ExitCode != 0 {
-		return commandFailure("verify evaluator and OpenClaw workspace identity", result, err)
+		return commandFailure("release OpenClaw workspace ownership marker", result, err)
 	}
 	return nil
 }
 
-func generateSessionKeys() ([]byte, []byte, ssh.PublicKey, ssh.Signer, []byte, error) {
+func workspaceCommand(script, workdir, owner string) core.Command {
+	return core.Command{
+		Path: remoteShell,
+		Args: []string{"-c", script, "aries-workspace", openClawWorkspace, workdir, owner},
+		Dir:  workdir,
+	}
+}
+
+func commandFailure(operation string, result core.CommandResult, err error) error {
+	if err != nil {
+		return fmt.Errorf("%s: %w", operation, err)
+	}
+	return fmt.Errorf("%s: exit %d: %s", operation, result.ExitCode, strings.TrimSpace(result.Stderr))
+}
+
+func generateSessionKeys() (ssh.Signer, []byte, ssh.PublicKey, error) {
 	_, hostPrivate, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		return nil, nil, nil, nil, nil, fmt.Errorf("generate SSH host key: %w", err)
+		return nil, nil, nil, fmt.Errorf("generate SSH host key: %w", err)
 	}
 	hostSigner, err := ssh.NewSignerFromKey(hostPrivate)
 	if err != nil {
-		return nil, nil, nil, nil, nil, fmt.Errorf("create SSH host signer: %w", err)
+		return nil, nil, nil, fmt.Errorf("create SSH host signer: %w", err)
 	}
 	_, clientPrivate, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		return nil, nil, nil, nil, nil, fmt.Errorf("generate SSH client key: %w", err)
+		return nil, nil, nil, fmt.Errorf("generate SSH client key: %w", err)
 	}
 	clientSigner, err := ssh.NewSignerFromKey(clientPrivate)
 	if err != nil {
-		return nil, nil, nil, nil, nil, fmt.Errorf("create SSH client signer: %w", err)
+		return nil, nil, nil, fmt.Errorf("create SSH client signer: %w", err)
 	}
-	hostDER, err := x509.MarshalPKCS8PrivateKey(hostPrivate)
-	if err != nil {
-		return nil, nil, nil, nil, nil, fmt.Errorf("marshal SSH host key: %w", err)
-	}
-	hostPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: hostDER})
 	clientPEM, err := marshalEd25519PrivateKey(clientPrivate)
 	if err != nil {
-		return nil, nil, nil, nil, nil, fmt.Errorf("marshal SSH client key: %w", err)
+		return nil, nil, nil, fmt.Errorf("marshal SSH client key: %w", err)
 	}
-	return hostPEM, clientPEM, hostSigner.PublicKey(), clientSigner, ssh.MarshalAuthorizedKey(clientSigner.PublicKey()), nil
+	return hostSigner, clientPEM, clientSigner.PublicKey(), nil
 }
 
 func marshalEd25519PrivateKey(private ed25519.PrivateKey) ([]byte, error) {
@@ -627,63 +726,43 @@ func marshalEd25519PrivateKey(private ed25519.PrivateKey) ([]byte, error) {
 }
 
 func stageExecutable(source, destination string) error {
-	fd, err := syscall.Open(source, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
-	if err != nil {
-		return err
-	}
-	input := os.NewFile(uintptr(fd), source)
-	defer input.Close()
-	before, err := input.Stat()
+	before, err := os.Lstat(source)
 	if err != nil {
 		return err
 	}
 	if !before.Mode().IsRegular() || before.Mode().Perm()&0o111 == 0 {
 		return errors.New("helper source must be a regular executable")
 	}
-	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o555)
+	content, err := os.ReadFile(source)
 	if err != nil {
 		return err
 	}
-	remove := true
-	defer func() {
-		output.Close()
-		if remove {
-			_ = os.Remove(destination)
-		}
-	}()
-	copied, err := io.Copy(output, input)
+	after, err := os.Lstat(source)
 	if err != nil {
 		return err
 	}
-	after, err := input.Stat()
-	if err != nil {
-		return err
-	}
-	if !os.SameFile(before, after) || before.Size() != copied || after.Size() != copied || before.Mode() != after.Mode() || !before.ModTime().Equal(after.ModTime()) {
+	if !os.SameFile(before, after) || before.Size() != int64(len(content)) || before.Mode() != after.Mode() || !before.ModTime().Equal(after.ModTime()) {
 		return errors.New("helper source changed while being staged")
 	}
-	if err := output.Sync(); err != nil {
-		return err
-	}
-	if err := output.Close(); err != nil {
-		return err
-	}
-	remove = false
-	return nil
+	return writeExclusive(destination, content, 0o555)
 }
 
 func writeExclusivePrivate(path string, content []byte) error {
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	return writeExclusive(path, content, 0o600)
+}
+
+func writeExclusive(path string, content []byte, mode os.FileMode) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 	if err != nil {
 		return err
 	}
 	if _, err := file.Write(content); err != nil {
-		file.Close()
+		_ = file.Close()
 		_ = os.Remove(path)
 		return err
 	}
 	if err := file.Sync(); err != nil {
-		file.Close()
+		_ = file.Close()
 		_ = os.Remove(path)
 		return err
 	}
@@ -716,13 +795,9 @@ func randomBridgeID() (string, error) {
 	return hex.EncodeToString(content[:]), nil
 }
 
-func commandFailure(operation string, result core.CommandResult, err error) error {
-	message := fmt.Sprintf("%s: exit %d", operation, result.ExitCode)
-	if stderr := strings.TrimSpace(result.Stderr); stderr != "" {
-		message += ": " + stderr
+func removeIfPresent(path string) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
-	if err != nil {
-		return fmt.Errorf("%s: %w", message, err)
-	}
-	return errors.New(message)
+	return nil
 }
