@@ -120,7 +120,7 @@ func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint) ([]byte, e
 		Agents: agentsConfig{Defaults: agentDefaults{
 			Model: primaryModel{Primary: "aries/" + model.Model},
 			Sandbox: sandboxConfig{
-				Mode: "all", Scope: "shared", Backend: "ssh", WorkspaceAccess: "none",
+				Mode: "all", Scope: "shared", Backend: "ssh", WorkspaceAccess: "rw",
 				SSH: sshConfig{
 					Target: endpoint.Username + "@" + endpoint.Address, Command: endpoint.ClientCommand,
 					WorkspaceRoot: workspaceRoot, StrictHostKeyChecking: true, UpdateHostKeys: false,

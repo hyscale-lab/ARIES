@@ -17,22 +17,23 @@ import (
 const (
 	artifactDirectoryMode = 0o700
 	artifactFileMode      = 0o600
-	indexSchemaVersion    = 1
+	indexSchemaVersion    = 2
 	maxCoverageEntries    = 32
 )
 
 // ResourceSample is one bounded resource observation written to resources.jsonl.
 type ResourceSample struct {
-	Sequence         uint64  `json:"sequence"`
-	Second           uint64  `json:"second"`
-	Time             string  `json:"time"`
-	TaskID           string  `json:"task_id"`
-	Component        string  `json:"component"`
-	ContainerID      string  `json:"container_id"`
-	ContainerName    string  `json:"container_name"`
-	CPUPercent       float64 `json:"cpu_percent"`
-	MemoryBytes      uint64  `json:"memory_bytes"`
-	MemoryLimitBytes uint64  `json:"memory_limit_bytes"`
+	Sequence            uint64  `json:"sequence"`
+	Second              uint64  `json:"second"`
+	Time                string  `json:"time"`
+	TaskID              string  `json:"task_id"`
+	Component           string  `json:"component"`
+	RuntimeID           string  `json:"runtime_id"`
+	RuntimeName         string  `json:"runtime_name"`
+	CPUUsageNanoseconds uint64  `json:"cpu_usage_nanoseconds"`
+	CPUPercent          float64 `json:"cpu_percent"`
+	MemoryUsageBytes    uint64  `json:"memory_usage_bytes"`
+	MemoryLimitBytes    uint64  `json:"memory_limit_bytes"`
 }
 
 // Index is the bounded summary written beside a task's resource samples.
@@ -53,12 +54,12 @@ type Index struct {
 
 // ComponentCoverage records which concrete container IDs contributed samples.
 type ComponentCoverage struct {
-	Component     string `json:"component"`
-	ContainerID   string `json:"container_id"`
-	ContainerName string `json:"container_name"`
-	SampleCount   uint64 `json:"sample_count"`
-	FirstSecond   uint64 `json:"first_second"`
-	LastSecond    uint64 `json:"last_second"`
+	Component   string `json:"component"`
+	RuntimeID   string `json:"runtime_id"`
+	RuntimeName string `json:"runtime_name"`
+	SampleCount uint64 `json:"sample_count"`
+	FirstSecond uint64 `json:"first_second"`
+	LastSecond  uint64 `json:"last_second"`
 }
 
 type taskArtifact struct {
@@ -106,28 +107,23 @@ func prepareArtifacts(outputDir string, taskIDs []string, operations artifactOpe
 	if err := os.MkdirAll(outputDir, artifactDirectoryMode); err != nil {
 		return nil, "", false, fmt.Errorf("create monitor output directory: %w", err)
 	}
-	monitorRoot := filepath.Join(outputDir, "monitor")
-	rootCreated := false
-	if err := os.Mkdir(monitorRoot, artifactDirectoryMode); err != nil {
-		if !errors.Is(err, os.ErrExist) {
-			return nil, "", false, fmt.Errorf("create monitor artifact root: %w", err)
-		}
-		if err := validatePrivateDirectory(monitorRoot); err != nil {
-			return nil, "", false, err
-		}
-	} else {
-		rootCreated = true
-	}
 	artifacts := make(map[string]*taskArtifact, len(taskIDs))
 	rollback := func(cause error) (map[string]*taskArtifact, string, bool, error) {
-		cleanupErr := removePartialArtifacts(artifacts, monitorRoot, rootCreated, operations)
+		cleanupErr := removePartialArtifacts(artifacts, "", false, operations)
 		if cleanupErr != nil {
 			cause = errors.Join(cause, fmt.Errorf("roll back partial monitor artifact preparation: %w", cleanupErr))
 		}
 		return nil, "", false, cause
 	}
 	for _, taskID := range taskIDs {
-		directory := filepath.Join(monitorRoot, taskID)
+		taskRoot := filepath.Join(outputDir, taskID)
+		if err := os.MkdirAll(taskRoot, artifactDirectoryMode); err != nil {
+			return rollback(fmt.Errorf("create monitor task root for %s: %w", taskID, err))
+		}
+		if err := validatePrivateDirectory(taskRoot); err != nil {
+			return rollback(err)
+		}
+		directory := filepath.Join(taskRoot, "monitor")
 		if err := os.Mkdir(directory, artifactDirectoryMode); err != nil {
 			return rollback(fmt.Errorf("create monitor task directory for %s: %w", taskID, err))
 		}
@@ -145,7 +141,7 @@ func prepareArtifacts(outputDir string, taskIDs []string, operations artifactOpe
 		}
 		artifact.resources = file
 	}
-	return artifacts, monitorRoot, rootCreated, nil
+	return artifacts, "", false, nil
 }
 
 func (artifact *taskArtifact) appendSample(sample ResourceSample, maxSamples int, maxFileBytes int64) error {
@@ -155,7 +151,7 @@ func (artifact *taskArtifact) appendSample(sample ResourceSample, maxSamples int
 	if artifact.sequence >= uint64(maxSamples) {
 		return fmt.Errorf("monitor sample count exceeds %d", maxSamples)
 	}
-	coverageKey := sample.Component + "\x00" + sample.ContainerID
+	coverageKey := sample.Component + "\x00" + sample.RuntimeID
 	coverage, ok := artifact.coverage[coverageKey]
 	if !ok && len(artifact.coverage) >= maxCoverageEntries {
 		return fmt.Errorf("monitor component coverage exceeds %d entries", maxCoverageEntries)
@@ -176,10 +172,10 @@ func (artifact *taskArtifact) appendSample(sample ResourceSample, maxSamples int
 	artifact.bytesWritten += int64(len(content))
 	if !ok {
 		coverage = &ComponentCoverage{
-			Component:     sample.Component,
-			ContainerID:   sample.ContainerID,
-			ContainerName: sample.ContainerName,
-			FirstSecond:   sample.Second,
+			Component:   sample.Component,
+			RuntimeID:   sample.RuntimeID,
+			RuntimeName: sample.RuntimeName,
+			FirstSecond: sample.Second,
 		}
 		artifact.coverage[coverageKey] = coverage
 	}
@@ -219,7 +215,7 @@ func (artifact *taskArtifact) componentCoverage() []ComponentCoverage {
 		if coverage[i].Component != coverage[j].Component {
 			return coverage[i].Component < coverage[j].Component
 		}
-		return coverage[i].ContainerID < coverage[j].ContainerID
+		return coverage[i].RuntimeID < coverage[j].RuntimeID
 	})
 	return coverage
 }

@@ -3,10 +3,11 @@
 package docker
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,10 +18,105 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/hyscale-lab/aries/pkg/containerimage"
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/monitor"
 	"github.com/moby/moby/client"
+	"github.com/sirupsen/logrus"
 )
 
 const fixtureImage = "docker.io/library/busybox:1.37.0-musl@sha256:222ad6d973c0d198014546a65cd02c5fdedcc172123c5b4c2bf0af636550bd94"
+
+func TestDockerResourceMonitorRecordsBusyCPU(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	api, err := client.New(client.FromEnv, client.WithUserAgent("aries-resource-integration-test/1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.Ping(ctx, client.PingOptions{}); err != nil {
+		t.Fatalf("Docker daemon is required for integration tests: %v", err)
+	}
+	ensureFixtureImage(t, ctx, api)
+
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
+	outputDir := t.TempDir()
+	manager, err := New(Options{OutputDir: outputDir, CleanupTimeout: 10 * time.Second, Logger: logger})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const runID, taskID = "resource-integration", "busy-task"
+	source, err := NewResourceSource(ResourceOptions{RunID: runID, TaskIDs: []string{taskID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder, err := monitor.New(monitor.Options{
+		RunID: runID, TaskIDs: []string{taskID}, OutputDir: outputDir, Source: source,
+		Interval: 250 * time.Millisecond, RequestTimeout: 2 * time.Second, StopTimeout: 5 * time.Second, Logger: logger,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	live, err := manager.Start(ctx, core.SandboxRequest{
+		RunID: runID, TaskID: taskID,
+		Environment: core.Environment{Image: fixtureImage, Workdir: "/work", CPU: 1, MemoryMB: 32, StorageMB: 64},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Stop(context.Background(), live) })
+	sandbox := live.(*Sandbox)
+	execDone := make(chan error, 1)
+	go func() {
+		_, err := sandbox.Exec(ctx, core.Command{Path: "/bin/sh", Args: []string{"-c", "while :; do :; done"}, Timeout: 2 * time.Second})
+		execDone <- err
+	}()
+	time.Sleep(1500 * time.Millisecond)
+	reports, monitorErr := recorder.Stop(ctx)
+	if monitorErr != nil {
+		t.Fatal(monitorErr)
+	}
+	if err := <-execDone; !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("busy exec error = %v", err)
+	}
+	if err := manager.Stop(ctx, live); err != nil {
+		t.Fatal(err)
+	}
+	report := reports[taskID]
+	file, err := os.Open(report.LogPaths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	positive := false
+	var previous uint64
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		var sample monitor.ResourceSample
+		if err := json.Unmarshal(scanner.Bytes(), &sample); err != nil {
+			t.Fatal(err)
+		}
+		if sample.Component != "sandbox" {
+			continue
+		}
+		if sample.CPUUsageNanoseconds < previous {
+			t.Fatalf("CPU counter decreased: %d < %d", sample.CPUUsageNanoseconds, previous)
+		}
+		previous = sample.CPUUsageNanoseconds
+		positive = positive || sample.CPUPercent > 0
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !positive {
+		t.Fatalf("busy container produced no positive CPU sample in %s", report.LogPaths[0])
+	}
+	if _, err := api.ContainerInspect(ctx, sandbox.ContainerID(), client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
+		t.Fatalf("resource test container remains: %v", err)
+	}
+}
 
 func TestDockerSandboxRealLifecycle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -37,7 +133,7 @@ func TestDockerSandboxRealLifecycle(t *testing.T) {
 	outputDir := t.TempDir()
 	manager, err := New(Options{
 		OutputDir: outputDir, CleanupTimeout: 20 * time.Second,
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger: logrus.New(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -139,7 +235,7 @@ func TestExecCancellationKillsOnlyItsProcessGroup(t *testing.T) {
 
 	manager, err := New(Options{
 		OutputDir: t.TempDir(), CleanupTimeout: 8 * time.Second,
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger: logrus.New(),
 	})
 	if err != nil {
 		t.Fatal(err)

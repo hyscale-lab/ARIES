@@ -6,8 +6,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
-	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -17,6 +15,7 @@ import (
 
 	"github.com/hyscale-lab/aries/pkg/core"
 	dockersandbox "github.com/hyscale-lab/aries/pkg/sandbox/docker"
+	"github.com/sirupsen/logrus"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 )
@@ -27,7 +26,7 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	outputDir := t.TempDir()
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := logrus.New()
 	sandboxes, err := dockersandbox.New(dockersandbox.Options{OutputDir: outputDir, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
@@ -112,15 +111,22 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 		t.Fatalf("retained tool log = %v, %v", info, err)
 	}
 	content, err := os.ReadFile(endpoint.LogPaths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, evidence := range []string{
 		`"run_id":"bridge-integration"`, `"task_id":"same-state"`,
 		`"operation_class":"exec"`, `"exit_code":7`, `"status":"completed"`,
+		`"stdin":"streamed-input"`, `"stdin_encoding":"utf-8"`,
+		`"command":"cd /aries/openclaw/`,
 	} {
 		if !bytes.Contains(content, []byte(evidence)) {
 			t.Fatalf("tool log lacks %s: %s", evidence, content)
 		}
 	}
-	if err != nil || bytes.Contains(content, []byte("streamed-input")) || bytes.Contains(content, []byte("tool-stderr")) {
-		t.Fatalf("tool log is missing or unredacted: %s, %v", content, err)
+	for _, forbidden := range []string{`"stdout":`, `"stderr":`} {
+		if bytes.Contains(content, []byte(forbidden)) {
+			t.Fatalf("tool log retained command output field %s: %s", forbidden, content)
+		}
 	}
 }

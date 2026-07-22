@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -64,7 +62,7 @@ func TestBuildExperimentUsesExplicitTypeSwitches(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			cfg := valid
 			test.change(&cfg)
-			experiment, err := buildExperiment(cfg, "test-run", cfg.OutputDir, nil)
+			experiment, err := buildExperiment(cfg, "test-run", cfg.OutputDir, nil, nil)
 			if test.wantErr == "" {
 				if err != nil || experiment == nil || experiment.Runner == nil || experiment.Recorder == nil {
 					t.Fatalf("buildExperiment() = %v, %v", experiment, err)
@@ -78,23 +76,21 @@ func TestBuildExperimentUsesExplicitTypeSwitches(t *testing.T) {
 	}
 }
 
-func TestNewRunIDIsUniqueAndSafe(t *testing.T) {
+func TestNewRunIDContainsTaskNameAndIsSafe(t *testing.T) {
 	now := time.Date(2026, 7, 21, 2, 3, 4, 5, time.FixedZone("other", 3*60*60))
-	wantPattern := regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$`)
-	seen := make(map[string]struct{}, 128)
-	random := &counterReader{}
-	for range 128 {
-		id, err := newRunID(now, random)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !wantPattern.MatchString(id) || strings.ContainsAny(id, `/\\`) {
-			t.Fatalf("unsafe run ID %q", id)
-		}
-		if _, duplicate := seen[id]; duplicate {
-			t.Fatalf("duplicate run ID %q", id)
-		}
-		seen[id] = struct{}{}
+	id, err := newRunID(now, []string{"fix-git"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "20260720T230304.000000005Z-fix-git" || strings.ContainsAny(id, `/\\`) {
+		t.Fatalf("run ID = %q", id)
+	}
+	multiple, err := newRunID(now, []string{"fix-git", "other-task"})
+	if err != nil || !strings.HasSuffix(multiple, "-fix-git-and-1-more") {
+		t.Fatalf("multi-task run ID = %q, %v", multiple, err)
+	}
+	if _, err := newRunID(now, []string{"../escape"}); err == nil {
+		t.Fatal("unsafe task name entered the run directory")
 	}
 }
 
@@ -138,6 +134,38 @@ func TestCreateAndPersistRunResultUsesPrivateNoReplaceFiles(t *testing.T) {
 	}
 	if len(entries) != 1 || entries[0].Name() != runResultName {
 		t.Fatalf("atomic temporary file leaked: %v", entries)
+	}
+}
+
+func TestAttachRunLogWritesPrivateStructuredRecords(t *testing.T) {
+	outputRoot := filepath.Join(t.TempDir(), "run")
+	if err := createRunOutputRoot(outputRoot); err != nil {
+		t.Fatal(err)
+	}
+	logger := newLogger()
+	logger.SetOutput(io.Discard)
+	detach, err := attachRunLog(logger, outputRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger.WithField("task_id", "fix-git").Info("test record")
+	if err := detach(); err != nil {
+		t.Fatal(err)
+	}
+	logger.WithField("task_id", "after-close").Info("not retained")
+	path := filepath.Join(outputRoot, "aries.log")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(content, []byte(`"level":"info"`)) || !bytes.Contains(content, []byte(`"task_id":"fix-git"`)) {
+		t.Fatalf("run log = %s", content)
+	}
+	if bytes.Contains(content, []byte("after-close")) {
+		t.Fatalf("detached logger still writes to run log: %s", content)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("run log mode = %v, %v", info, err)
 	}
 }
 
@@ -272,6 +300,14 @@ func TestRunCommandUsesFixedLocalKeyAndPersistsSanitizedLoaderFailure(t *testing
 	validation := readOnlyLiveValidation(t, runs)
 	if validation.Status != liveValidationFailed || validation.Category != liveValidationCredentialInvalid || validation.Attempts != 0 {
 		t.Fatalf("validation = %+v", validation)
+	}
+	entries, err := os.ReadDir(runs)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("run entries = %v, %v", entries, err)
+	}
+	runLog, err := os.ReadFile(filepath.Join(runs, entries[0].Name(), "aries.log"))
+	if err != nil || !bytes.Contains(runLog, []byte(`"msg":"experiment run finished with errors"`)) {
+		t.Fatalf("failure was not finalized in aries.log: %s, %v", runLog, err)
 	}
 }
 
@@ -479,15 +515,4 @@ func createTestAriesRepository(t *testing.T) (string, string) {
 		t.Fatal(err)
 	}
 	return root, executable
-}
-
-type counterReader struct {
-	next uint64
-}
-
-func (reader *counterReader) Read(content []byte) (int, error) {
-	clear(content)
-	binary.BigEndian.PutUint64(content[len(content)-8:], reader.next)
-	reader.next++
-	return len(content), nil
 }

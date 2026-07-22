@@ -350,6 +350,17 @@ func TestHarnessUsesOneSDKContainerAndDirectPrivateArchive(t *testing.T) {
 			t.Fatalf("artifact %q: %v", path, err)
 		}
 	}
+	configPath := filepath.Join(manager.outputDir, "fix-git", "harness", "openclaw.json")
+	configArtifact, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("retained OpenClaw config: %v", err)
+	}
+	if string(configArtifact) != string(files["run/aries/openclaw.json"].content) || bytes.Contains(configArtifact, []byte("model-secret")) {
+		t.Fatal("retained OpenClaw config differs from the staged placeholder-only config")
+	}
+	if info, err := os.Stat(configPath); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("retained OpenClaw config mode = %v, %v", info, err)
+	}
 }
 
 func TestStartFailureRemovesOnlyContainerAndClearsSecret(t *testing.T) {

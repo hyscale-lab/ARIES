@@ -2,12 +2,10 @@ package monitor
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -17,441 +15,113 @@ import (
 	"testing"
 	"time"
 
-	"github.com/containerd/errdefs"
-	containertypes "github.com/moby/moby/api/types/container"
-	"github.com/moby/moby/client"
-
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/sirupsen/logrus"
 )
 
-const (
-	taskContainerID = "1111111111111111111111111111111111111111111111111111111111111111"
-	harnessID       = "2222222222222222222222222222222222222222222222222222222222222222"
-	initializerID   = "3333333333333333333333333333333333333333333333333333333333333333"
-	foreignID       = "4444444444444444444444444444444444444444444444444444444444444444"
-)
-
-type fakeDocker struct {
-	mu sync.Mutex
-
-	listCalls    int
-	inspectCalls int
-	statsCalls   int
-	closeCalls   int
-	statsByID    map[string]int
-	lastListed   map[string]containertypes.Summary
-
-	listOptions  []client.ContainerListOptions
-	statsOptions []client.ContainerStatsOptions
-
-	listFn    func(context.Context, int) ([]containertypes.Summary, error)
-	inspectFn func(context.Context, string, int) (containertypes.InspectResponse, error)
-	statsFn   func(context.Context, string, int, int) (containertypes.StatsResponse, error)
+type fakeSource struct {
+	mu       sync.Mutex
+	calls    int
+	closes   int
+	sample   func(context.Context, int) ([]core.ResourceReading, error)
+	closeErr error
 }
 
-func newFakeDocker() *fakeDocker {
-	return &fakeDocker{
-		statsByID:  make(map[string]int),
-		lastListed: make(map[string]containertypes.Summary),
-		listFn: func(context.Context, int) ([]containertypes.Summary, error) {
-			return nil, nil
-		},
-		statsFn: func(context.Context, string, int, int) (containertypes.StatsResponse, error) {
-			return statsFixture(300, 100, 2000, 1000, 2, 4096, 8192), nil
-		},
+func (source *fakeSource) Sample(ctx context.Context) ([]core.ResourceReading, error) {
+	source.mu.Lock()
+	source.calls++
+	call := source.calls
+	callback := source.sample
+	source.mu.Unlock()
+	if callback == nil {
+		return nil, nil
+	}
+	return callback(ctx, call)
+}
+
+func (source *fakeSource) Close() error {
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	source.closes++
+	return source.closeErr
+}
+
+func (source *fakeSource) counts() (int, int) {
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	return source.calls, source.closes
+}
+
+func testReading(component, id string, observed time.Time, cpu uint64) core.ResourceReading {
+	return core.ResourceReading{
+		TaskID: "fix-git", Component: component, RuntimeID: id, RuntimeName: "aries-" + component,
+		ObservedAt: observed, CPUUsageNanoseconds: cpu,
+		MemoryUsageBytes: 4096, MemoryLimitBytes: 8192,
 	}
 }
 
-func (fake *fakeDocker) ContainerList(ctx context.Context, options client.ContainerListOptions) (client.ContainerListResult, error) {
-	fake.mu.Lock()
-	fake.listCalls++
-	call := fake.listCalls
-	fake.listOptions = append(fake.listOptions, options)
-	callback := fake.listFn
-	fake.mu.Unlock()
-
-	items, err := callback(ctx, call)
-	if err == nil {
-		fake.mu.Lock()
-		for _, item := range items {
-			fake.lastListed[item.ID] = item
-		}
-		fake.mu.Unlock()
-	}
-	return client.ContainerListResult{Items: items}, err
-}
-
-func (fake *fakeDocker) ContainerInspect(ctx context.Context, id string, _ client.ContainerInspectOptions) (client.ContainerInspectResult, error) {
-	fake.mu.Lock()
-	fake.inspectCalls++
-	call := fake.inspectCalls
-	callback := fake.inspectFn
-	summary, ok := fake.lastListed[id]
-	fake.mu.Unlock()
-
-	var inspection containertypes.InspectResponse
-	var err error
-	if callback != nil {
-		inspection, err = callback(ctx, id, call)
-	} else if !ok {
-		err = errdefs.ErrNotFound
-	} else {
-		inspection = inspectionFixture(summary)
-	}
-	return client.ContainerInspectResult{Container: inspection}, err
-}
-
-func (fake *fakeDocker) ContainerStats(ctx context.Context, id string, options client.ContainerStatsOptions) (client.ContainerStatsResult, error) {
-	fake.mu.Lock()
-	fake.statsCalls++
-	fake.statsByID[id]++
-	call := fake.statsCalls
-	idCall := fake.statsByID[id]
-	fake.statsOptions = append(fake.statsOptions, options)
-	callback := fake.statsFn
-	fake.mu.Unlock()
-
-	document, err := callback(ctx, id, call, idCall)
-	if err != nil {
-		return client.ContainerStatsResult{}, err
-	}
-	content, err := json.Marshal(document)
-	if err != nil {
-		return client.ContainerStatsResult{}, err
-	}
-	return client.ContainerStatsResult{Body: io.NopCloser(bytes.NewReader(content))}, nil
-}
-
-func (fake *fakeDocker) Close() error {
-	fake.mu.Lock()
-	fake.closeCalls++
-	fake.mu.Unlock()
-	return nil
-}
-
-func (fake *fakeDocker) counts() (lists, inspections, stats, closes int) {
-	fake.mu.Lock()
-	defer fake.mu.Unlock()
-	return fake.listCalls, fake.inspectCalls, fake.statsCalls, fake.closeCalls
-}
-
-func (fake *fakeDocker) options() ([]client.ContainerListOptions, []client.ContainerStatsOptions) {
-	fake.mu.Lock()
-	defer fake.mu.Unlock()
-	return append([]client.ContainerListOptions(nil), fake.listOptions...), append([]client.ContainerStatsOptions(nil), fake.statsOptions...)
-}
-
-type fakeRecorderClock struct {
-	mu  sync.Mutex
-	now time.Time
-}
-
-func newFakeRecorderClock() *fakeRecorderClock {
-	return &fakeRecorderClock{now: time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)}
-}
-
-func (clock *fakeRecorderClock) Now() time.Time {
-	clock.mu.Lock()
-	defer clock.mu.Unlock()
-	return clock.now
-}
-
-func (clock *fakeRecorderClock) Advance(duration time.Duration) {
-	clock.mu.Lock()
-	clock.now = clock.now.Add(duration)
-	clock.mu.Unlock()
-}
-
-func summaryFixture(id, name, runID, taskID, kind string) containertypes.Summary {
-	return containertypes.Summary{
-		ID: id, Names: []string{"/" + name}, State: containertypes.StateRunning,
-		Labels: map[string]string{
-			"aries.managed": managedLabelValue,
-			"aries.run":     runID,
-			"aries.task":    taskID,
-			"aries.kind":    kind,
-		},
-	}
-}
-
-func inspectionFixture(summary containertypes.Summary) containertypes.InspectResponse {
-	return containertypes.InspectResponse{
-		ID: summary.ID, Name: summary.Names[0],
-		State:  &containertypes.State{Status: containertypes.StateRunning, Running: true},
-		Config: &containertypes.Config{Labels: cloneLabels(summary.Labels)},
-	}
-}
-
-func cloneLabels(labels map[string]string) map[string]string {
-	clone := make(map[string]string, len(labels))
-	for key, value := range labels {
-		clone[key] = value
-	}
-	return clone
-}
-
-func listedFixtures(runID string, includeForeign bool) []containertypes.Summary {
-	items := []containertypes.Summary{
-		summaryFixture(taskContainerID, "aries-task", runID, "fix-git", taskContainerKind),
-		summaryFixture(harnessID, "aries-openclaw", runID, "fix-git", harnessKind),
-		summaryFixture(initializerID, "aries-init", runID, "fix-git", "openclaw-initializer"),
-	}
-	if includeForeign {
-		items = append(items, summaryFixture(foreignID, "aries-foreign", runID, "other-task", taskContainerKind))
-	}
-	return items
-}
-
-func statsFixture(total, preTotal, system, preSystem uint64, online uint32, usage, limit uint64) containertypes.StatsResponse {
-	return containertypes.StatsResponse{
-		CPUStats: containertypes.CPUStats{
-			CPUUsage:    containertypes.CPUUsage{TotalUsage: total, PercpuUsage: []uint64{1, 1}},
-			SystemUsage: system,
-			OnlineCPUs:  online,
-		},
-		PreCPUStats: containertypes.CPUStats{
-			CPUUsage:    containertypes.CPUUsage{TotalUsage: preTotal, PercpuUsage: []uint64{1, 1}},
-			SystemUsage: preSystem,
-			OnlineCPUs:  online,
-		},
-		MemoryStats: containertypes.MemoryStats{Usage: usage, Limit: limit},
-	}
-}
-
-func newTestRecorder(t *testing.T, api *fakeDocker, outputDir string, interval time.Duration) *Recorder {
+func newTestRecorder(t *testing.T, source ResourceSource, outputDir string, interval time.Duration) *Recorder {
 	t.Helper()
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
 	recorder, err := New(Options{
-		RunID: "run-1", TaskIDs: []string{"fix-git"}, OutputDir: outputDir,
-		DockerSocket: filepath.Join(outputDir, "unused-docker.sock"), Interval: interval,
-		RequestTimeout: 200 * time.Millisecond, StopTimeout: time.Second,
-		MaxSamplesPerTask: 1000, MaxFileBytes: 1 << 20,
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		RunID: "run-1", TaskIDs: []string{"fix-git"}, OutputDir: outputDir, Source: source,
+		Interval: interval, RequestTimeout: 200 * time.Millisecond, StopTimeout: time.Second,
+		MaxSamplesPerTask: 1000, MaxFileBytes: 1 << 20, Logger: logger,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	recorder.engine = &engineClient{api: api}
 	return recorder
 }
 
-func TestEngineDiscoversOnlyValidatedOwnedContainers(t *testing.T) {
-	api := newFakeDocker()
-	api.listFn = func(context.Context, int) ([]containertypes.Summary, error) {
-		return listedFixtures("run-1", true), nil
-	}
-	engine := &engineClient{api: api}
-	containers, err := engine.discover(context.Background(), "run-1", map[string]struct{}{"fix-git": {}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(containers) != 2 || containers[0].ID != harnessID || containers[1].ID != taskContainerID {
-		t.Fatalf("containers = %+v", containers)
-	}
-	lists, inspections, _, _ := api.counts()
-	if lists != 1 || inspections != 2 {
-		t.Fatalf("calls = list %d, inspect %d", lists, inspections)
-	}
-	listOptions, _ := api.options()
-	wantFilters := make(client.Filters).Add("label", "aries.managed=true", "aries.run=run-1")
-	if len(listOptions) != 1 || listOptions[0].All || !reflect.DeepEqual(listOptions[0].Filters, wantFilters) {
-		t.Fatalf("list options = %+v", listOptions)
-	}
-}
-
-func TestEngineIgnoresContainerThatStopsBetweenListAndInspect(t *testing.T) {
-	api := newFakeDocker()
-	item := summaryFixture(taskContainerID, "task", "run-1", "fix-git", taskContainerKind)
-	api.listFn = func(context.Context, int) ([]containertypes.Summary, error) {
-		return []containertypes.Summary{item}, nil
-	}
-	api.inspectFn = func(context.Context, string, int) (containertypes.InspectResponse, error) {
-		inspection := inspectionFixture(item)
-		inspection.State.Running = false
-		inspection.State.Status = containertypes.StateExited
-		return inspection, nil
-	}
-
-	containers, err := (&engineClient{api: api}).discover(context.Background(), "run-1", map[string]struct{}{"fix-git": {}})
-	if err != nil || len(containers) != 0 {
-		t.Fatalf("discover stopped container = %+v, %v", containers, err)
-	}
-}
-
-func TestEngineRejectsUntrustedOrChangedContainerIdentity(t *testing.T) {
-	tests := []struct {
-		name    string
-		mutate  func(*fakeDocker, *containertypes.Summary)
-		message string
-	}{
-		{
-			name: "wrong ownership",
-			mutate: func(_ *fakeDocker, item *containertypes.Summary) {
-				item.Labels["aries.run"] = "other-run"
-			},
-			message: "wrong ARIES ownership labels",
-		},
-		{
-			name: "invalid name",
-			mutate: func(_ *fakeDocker, item *containertypes.Summary) {
-				item.Names = []string{"not-absolute"}
-			},
-			message: "invalid identity",
-		},
-		{
-			name: "inspect label changed",
-			mutate: func(api *fakeDocker, item *containertypes.Summary) {
-				api.inspectFn = func(context.Context, string, int) (containertypes.InspectResponse, error) {
-					inspection := inspectionFixture(*item)
-					inspection.Config.Labels["aries.task"] = "other-task"
-					return inspection, nil
-				}
-			},
-			message: `label "aries.task" differs`,
-		},
-		{
-			name: "stopped inspect label changed",
-			mutate: func(api *fakeDocker, item *containertypes.Summary) {
-				api.inspectFn = func(context.Context, string, int) (containertypes.InspectResponse, error) {
-					inspection := inspectionFixture(*item)
-					inspection.Config.Labels["aries.task"] = "other-task"
-					inspection.State.Running = false
-					inspection.State.Status = containertypes.StateExited
-					return inspection, nil
-				}
-			},
-			message: `label "aries.task" differs`,
-		},
-		{
-			name: "missing inspect state",
-			mutate: func(api *fakeDocker, item *containertypes.Summary) {
-				api.inspectFn = func(context.Context, string, int) (containertypes.InspectResponse, error) {
-					inspection := inspectionFixture(*item)
-					inspection.State = nil
-					return inspection, nil
-				}
-			},
-			message: "container state is absent",
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			api := newFakeDocker()
-			item := summaryFixture(taskContainerID, "task", "run-1", "fix-git", taskContainerKind)
-			test.mutate(api, &item)
-			api.listFn = func(context.Context, int) ([]containertypes.Summary, error) {
-				return []containertypes.Summary{item}, nil
-			}
-			_, err := (&engineClient{api: api}).discover(context.Background(), "run-1", map[string]struct{}{"fix-git": {}})
-			if err == nil || !strings.Contains(err.Error(), test.message) {
-				t.Fatalf("discover error = %v", err)
-			}
-		})
-	}
-}
-
-func TestEngineSamplesWithOneShotDockerStats(t *testing.T) {
-	api := newFakeDocker()
-	engine := &engineClient{api: api}
-	listed := listedContainer{
-		ID: taskContainerID, Name: "task",
-		Labels: map[string]string{"aries.task": "fix-git", "aries.kind": taskContainerKind},
-	}
-	sample, err := engine.stats(context.Background(), listed)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if sample.cpu != 40 || sample.memory != 4096 || sample.memLimit != 8192 || sample.name != "task" {
-		t.Fatalf("sample = %+v", sample)
-	}
-	_, options := api.options()
-	if len(options) != 1 || options[0].Stream || options[0].IncludePreviousSample {
-		t.Fatalf("stats options = %+v", options)
-	}
-	api.statsFn = func(context.Context, string, int, int) (containertypes.StatsResponse, error) {
-		return containertypes.StatsResponse{}, errdefs.ErrNotFound
-	}
-	if _, err := engine.stats(context.Background(), listed); !errors.Is(err, errContainerGone) {
-		t.Fatalf("gone error = %v", err)
-	}
-}
-
-func TestValidateStats(t *testing.T) {
-	tests := []struct {
-		name    string
-		stats   containertypes.StatsResponse
-		cpu     float64
-		memory  uint64
-		limit   uint64
-		message string
-	}{
-		{name: "delta", stats: statsFixture(300, 100, 2000, 1000, 2, 4, 8), cpu: 40, memory: 4, limit: 8},
-		{name: "no baseline", stats: statsFixture(300, 0, 2000, 0, 2, 4, 8), memory: 4, limit: 8},
-		{name: "per CPU fallback", stats: statsFixture(300, 0, 2000, 0, 0, 4, 8), memory: 4, limit: 8},
-		{name: "no CPUs", stats: containertypes.StatsResponse{}, message: "online CPU count 0"},
-		{name: "counters decreased", stats: statsFixture(100, 300, 1000, 2000, 2, 4, 8), message: "CPU counters decreased"},
-		{name: "missing system delta", stats: statsFixture(300, 100, 1000, 1000, 2, 4, 8), message: "no system delta"},
-		{name: "memory bound", stats: statsFixture(300, 0, 2000, 0, 2, maxMemoryBytes+1, 8), message: "memory measurement exceeds"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			cpu, memory, limit, err := validateStats(test.stats)
-			if test.message != "" {
-				if err == nil || !strings.Contains(err.Error(), test.message) {
-					t.Fatalf("validateStats error = %v", err)
-				}
-				return
-			}
-			if err != nil || cpu != test.cpu || memory != test.memory || limit != test.limit {
-				t.Fatalf("validateStats = %v, %d/%d, %v", cpu, memory, limit, err)
-			}
-		})
-	}
-}
-
-func TestRecorderSamplesOwnedComponentsAndWritesPrivateArtifacts(t *testing.T) {
-	api := newFakeDocker()
-	api.listFn = func(context.Context, int) ([]containertypes.Summary, error) {
-		return listedFixtures("run-1", true), nil
-	}
+func TestRecorderDerivesCPUAndWritesPortablePrivateArtifacts(t *testing.T) {
+	started := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
+	source := &fakeSource{sample: func(_ context.Context, call int) ([]core.ResourceReading, error) {
+		observed := started.Add(time.Duration(call-1) * time.Second)
+		return []core.ResourceReading{
+			testReading("sandbox", "sandbox-id", observed, uint64(call-1)*500_000_000),
+			testReading("harness", "harness-id", observed, uint64(call-1)*250_000_000),
+		}, nil
+	}}
 	outputDir := filepath.Join(t.TempDir(), "run")
-	recorder := newTestRecorder(t, api, outputDir, 15*time.Millisecond)
+	recorder := newTestRecorder(t, source, outputDir, 10*time.Millisecond)
 	if err := recorder.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, time.Second, func() bool {
-		lists, _, _, _ := api.counts()
-		return lists >= 3
-	})
+	waitFor(t, time.Second, func() bool { calls, _ := source.counts(); return calls >= 3 })
 	reports, err := recorder.Stop(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	report := reports["fix-git"]
-	if report.Status != core.StatusSucceeded || report.Error != "" || report.SampleCount < 4 || report.Duration <= 0 {
+	if report.Status != core.StatusSucceeded || report.SampleCount < 6 || len(report.LogPaths) != 2 {
 		t.Fatalf("report = %+v", report)
 	}
-	samples := readSamplesStrict(t, report.LogPaths[0])
-	if len(samples) != report.SampleCount {
-		t.Fatalf("samples = %d, report = %d", len(samples), report.SampleCount)
+	if filepath.Dir(report.LogPaths[0]) != filepath.Join(outputDir, "fix-git", "monitor") {
+		t.Fatalf("resource path = %s", report.LogPaths[0])
 	}
-	components := map[string]int{}
+	samples := readSamplesStrict(t, report.LogPaths[0])
+	seenPositive := map[string]bool{}
 	for index, sample := range samples {
-		if sample.Sequence != uint64(index) || sample.TaskID != "fix-git" || sample.CPUPercent != 40 || sample.MemoryBytes != 4096 || sample.MemoryLimitBytes != 8192 {
+		if sample.Sequence != uint64(index) || sample.TaskID != "fix-git" || sample.RuntimeID == "" || sample.RuntimeName == "" || sample.MemoryUsageBytes != 4096 || sample.MemoryLimitBytes != 8192 {
 			t.Fatalf("sample[%d] = %+v", index, sample)
 		}
-		components[sample.Component]++
+		if sample.CPUPercent > 0 {
+			seenPositive[sample.Component] = true
+		}
 	}
-	if components[taskContainerKind] == 0 || components[harnessKind] == 0 || len(components) != 2 {
-		t.Fatalf("components = %#v", components)
+	if !seenPositive["sandbox"] || !seenPositive["harness"] {
+		t.Fatalf("positive CPU components = %#v", seenPositive)
 	}
 	index := readIndexStrict(t, report.LogPaths[1])
-	if index.Status != core.StatusSucceeded || index.SampleCount != uint64(len(samples)) || len(index.Components) != 2 {
+	if index.SchemaVersion != 2 || index.SampleCount != uint64(len(samples)) || len(index.Components) != 2 {
 		t.Fatalf("index = %+v", index)
 	}
 	for _, path := range append([]string{filepath.Dir(report.LogPaths[0])}, report.LogPaths...) {
-		info, statErr := os.Stat(path)
-		if statErr != nil {
-			t.Fatal(statErr)
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
 		}
 		want := os.FileMode(0o600)
 		if info.IsDir() {
@@ -463,106 +133,93 @@ func TestRecorderSamplesOwnedComponentsAndWritesPrivateArtifacts(t *testing.T) {
 	}
 }
 
-func TestRecorderContinuesAfterCallerCancellationAndContainerRemoval(t *testing.T) {
-	api := newFakeDocker()
-	api.listFn = func(context.Context, int) ([]containertypes.Summary, error) {
-		return listedFixtures("run-1", false), nil
+func TestRecorderCPUBaselinesHandleIdleDisappearAndRejectRegression(t *testing.T) {
+	t0 := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
+	source := &fakeSource{}
+	recorder := newTestRecorder(t, source, filepath.Join(t.TempDir(), "run"), time.Hour)
+	source.sample = func(context.Context, int) ([]core.ResourceReading, error) {
+		return []core.ResourceReading{testReading("sandbox", "runtime", t0, 0)}, nil
 	}
-	api.statsFn = func(_ context.Context, id string, _, idCall int) (containertypes.StatsResponse, error) {
-		if id == harnessID && idCall > 1 {
-			return containertypes.StatsResponse{}, errdefs.ErrNotFound
-		}
-		return statsFixture(200, 100, 1500, 1000, 1, 1024, 2048), nil
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	recorder := newTestRecorder(t, api, filepath.Join(t.TempDir(), "run"), 10*time.Millisecond)
-	if err := recorder.Start(ctx); err != nil {
-		t.Fatal(err)
-	}
-	cancel()
-	waitFor(t, time.Second, func() bool {
-		lists, _, _, _ := api.counts()
-		return lists >= 4
-	})
-	reports, err := recorder.Stop(context.Background())
-	if err != nil || reports["fix-git"].Status != core.StatusSucceeded || reports["fix-git"].SampleCount < 4 {
-		t.Fatalf("Stop = %+v, %v", reports, err)
-	}
-}
-
-func TestRecorderKeepsPriorSamplesWhenContainerStopsBetweenListAndInspect(t *testing.T) {
-	api := newFakeDocker()
-	item := summaryFixture(taskContainerID, "task", "run-1", "fix-git", taskContainerKind)
-	api.listFn = func(context.Context, int) ([]containertypes.Summary, error) {
-		return []containertypes.Summary{item}, nil
-	}
-	api.inspectFn = func(_ context.Context, _ string, call int) (containertypes.InspectResponse, error) {
-		inspection := inspectionFixture(item)
-		if call > 1 {
-			inspection.State.Running = false
-			inspection.State.Status = containertypes.StateExited
-		}
-		return inspection, nil
-	}
-	recorder := newTestRecorder(t, api, filepath.Join(t.TempDir(), "run"), time.Hour)
 	if err := recorder.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := recorder.sample(context.Background(), 1, time.Now()); err != nil {
-		t.Fatalf("sample stopped container: %v", err)
+	source.sample = func(context.Context, int) ([]core.ResourceReading, error) {
+		return []core.ResourceReading{testReading("sandbox", "runtime", t0.Add(time.Second), 500_000_000)}, nil
 	}
-	reports, err := recorder.Stop(context.Background())
-	if err != nil || reports["fix-git"].Status != core.StatusSucceeded || reports["fix-git"].SampleCount != 1 {
-		t.Fatalf("Stop = %+v, %v", reports, err)
-	}
-}
-
-func TestRecorderBoundsTransientStatsValidation(t *testing.T) {
-	api := newFakeDocker()
-	listed := true
-	api.listFn = func(context.Context, int) ([]containertypes.Summary, error) {
-		if !listed {
-			return nil, nil
-		}
-		return []containertypes.Summary{summaryFixture(taskContainerID, "task", "run-1", "fix-git", taskContainerKind)}, nil
-	}
-	api.statsFn = func(_ context.Context, _ string, _, idCall int) (containertypes.StatsResponse, error) {
-		if idCall == 1 {
-			return statsFixture(200, 100, 2000, 1000, 1, 100, 200), nil
-		}
-		return containertypes.StatsResponse{}, nil
-	}
-	recorder := newTestRecorder(t, api, filepath.Join(t.TempDir(), "run"), time.Hour)
-	clock := newFakeRecorderClock()
-	recorder.now = clock.Now
-	if err := recorder.Start(context.Background()); err != nil {
+	if err := recorder.sample(context.Background(), 1, t0.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	if err := recorder.sample(context.Background(), 1, clock.Now()); err != nil {
+	source.sample = func(context.Context, int) ([]core.ResourceReading, error) { return nil, nil }
+	if err := recorder.sample(context.Background(), 2, t0.Add(2*time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	clock.Advance(transientValidationGrace)
-	if err := recorder.sample(context.Background(), 2, clock.Now()); err == nil || !strings.Contains(err.Error(), "online CPU count 0") {
-		t.Fatalf("expired validation = %v", err)
+	source.sample = func(context.Context, int) ([]core.ResourceReading, error) {
+		return []core.ResourceReading{testReading("sandbox", "runtime", t0.Add(3*time.Second), 900_000_000)}, nil
 	}
-	listed = false
+	if err := recorder.sample(context.Background(), 3, t0.Add(3*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	source.sample = func(context.Context, int) ([]core.ResourceReading, error) {
+		return []core.ResourceReading{testReading("sandbox", "runtime", t0.Add(4*time.Second), 800_000_000)}, nil
+	}
+	if err := recorder.sample(context.Background(), 4, t0.Add(4*time.Second)); err == nil || !strings.Contains(err.Error(), "CPU counter decreased") {
+		t.Fatalf("regression error = %v", err)
+	}
 	if _, err := recorder.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	samples := readSamplesStrict(t, filepath.Join(recorder.outputDir, "fix-git", "monitor", "resources.jsonl"))
+	if len(samples) != 3 || samples[0].CPUPercent != 0 || samples[1].CPUPercent != 50 || samples[2].CPUPercent != 0 {
+		t.Fatalf("CPU samples = %+v", samples)
+	}
 }
 
-func TestRecorderReportsBackgroundStatsFailure(t *testing.T) {
-	api := newFakeDocker()
-	api.listFn = func(context.Context, int) ([]containertypes.Summary, error) {
-		return []containertypes.Summary{summaryFixture(taskContainerID, "task", "run-1", "fix-git", taskContainerKind)}, nil
+func TestRecorderScopesCPUBaselinesByTask(t *testing.T) {
+	t0 := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
+	source := &fakeSource{sample: func(_ context.Context, call int) ([]core.ResourceReading, error) {
+		observed := t0.Add(time.Duration(call-1) * time.Second)
+		first := testReading("sandbox", "shared-runtime", observed, uint64(call-1)*500_000_000)
+		first.TaskID = "task-a"
+		second := testReading("sandbox", "shared-runtime", observed, uint64(call-1)*250_000_000)
+		second.TaskID = "task-b"
+		return []core.ResourceReading{first, second}, nil
+	}}
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
+	recorder, err := New(Options{
+		RunID: "run-1", TaskIDs: []string{"task-a", "task-b"}, OutputDir: filepath.Join(t.TempDir(), "run"),
+		Source: source, Interval: time.Hour, RequestTimeout: time.Second, StopTimeout: time.Second,
+		MaxSamplesPerTask: 10, MaxFileBytes: 1 << 20, Logger: logger,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	api.statsFn = func(_ context.Context, _ string, _, idCall int) (containertypes.StatsResponse, error) {
-		if idCall > 1 {
-			return containertypes.StatsResponse{}, errors.New("stats unavailable")
+	if err := recorder.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.sample(context.Background(), 1, t0.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recorder.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for task, want := range map[string]float64{"task-a": 50, "task-b": 25} {
+		samples := readSamplesStrict(t, filepath.Join(recorder.outputDir, task, "monitor", "resources.jsonl"))
+		if len(samples) != 2 || samples[1].CPUPercent != want {
+			t.Fatalf("%s CPU samples = %+v, want second percentage %v", task, samples, want)
 		}
-		return statsFixture(200, 100, 2000, 1000, 1, 100, 200), nil
 	}
-	recorder := newTestRecorder(t, api, filepath.Join(t.TempDir(), "run"), 10*time.Millisecond)
+}
+
+func TestRecorderReportsBackgroundSourceFailure(t *testing.T) {
+	t0 := time.Now().UTC()
+	source := &fakeSource{sample: func(_ context.Context, call int) ([]core.ResourceReading, error) {
+		if call > 1 {
+			return nil, errors.New("resource source unavailable")
+		}
+		return []core.ResourceReading{testReading("sandbox", "runtime", t0, 1)}, nil
+	}}
+	recorder := newTestRecorder(t, source, filepath.Join(t.TempDir(), "run"), 5*time.Millisecond)
 	if err := recorder.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -575,40 +232,32 @@ func TestRecorderReportsBackgroundStatsFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	report := reports["fix-git"]
-	if report.Status != core.StatusFailed || !strings.Contains(report.Error, "stats unavailable") || report.SampleCount != 1 {
+	if report := reports["fix-git"]; report.Status != core.StatusFailed || !strings.Contains(report.Error, "resource source unavailable") || report.SampleCount != 1 {
 		t.Fatalf("report = %+v", report)
 	}
 }
 
 func TestRecorderFailedStartRollsBackAndCanRetry(t *testing.T) {
-	api := newFakeDocker()
-	api.listFn = func(context.Context, int) ([]containertypes.Summary, error) {
-		return []containertypes.Summary{summaryFixture(taskContainerID, "task", "run-1", "fix-git", taskContainerKind)}, nil
-	}
 	var fail atomic.Bool
 	fail.Store(true)
-	api.statsFn = func(context.Context, string, int, int) (containertypes.StatsResponse, error) {
+	t0 := time.Now().UTC()
+	source := &fakeSource{sample: func(context.Context, int) ([]core.ResourceReading, error) {
 		if fail.Load() {
-			return containertypes.StatsResponse{}, errors.New("stats broken")
+			return nil, errors.New("source broken")
 		}
-		return statsFixture(200, 100, 2000, 1000, 1, 100, 200), nil
-	}
+		return []core.ResourceReading{testReading("sandbox", "runtime", t0, 1)}, nil
+	}}
 	outputDir := filepath.Join(t.TempDir(), "run")
-	recorder := newTestRecorder(t, api, outputDir, time.Hour)
-	if err := recorder.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "stats broken") {
+	recorder := newTestRecorder(t, source, outputDir, time.Hour)
+	if err := recorder.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "source broken") {
 		t.Fatalf("Start error = %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(outputDir, "monitor", "fix-git")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("partial task directory remains: %v", err)
-	}
-	_, _, _, closes := api.counts()
-	if closes != 1 {
-		t.Fatalf("close calls after failed Start = %d", closes)
+	if _, err := os.Stat(filepath.Join(outputDir, "fix-git", "monitor")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("partial monitor directory remains: %v", err)
 	}
 	fail.Store(false)
 	if err := recorder.Start(context.Background()); err != nil {
-		t.Fatalf("retry Start: %v", err)
+		t.Fatal(err)
 	}
 	if _, err := recorder.Stop(context.Background()); err != nil {
 		t.Fatal(err)
@@ -616,33 +265,27 @@ func TestRecorderFailedStartRollsBackAndCanRetry(t *testing.T) {
 }
 
 func TestRecorderConcurrentStopCachesIndependentReports(t *testing.T) {
-	api := newFakeDocker()
-	api.listFn = func(context.Context, int) ([]containertypes.Summary, error) { return nil, nil }
-	recorder := newTestRecorder(t, api, filepath.Join(t.TempDir(), "run"), time.Hour)
+	source := &fakeSource{}
+	recorder := newTestRecorder(t, source, filepath.Join(t.TempDir(), "run"), time.Hour)
 	if err := recorder.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	const callers = 8
 	results := make(chan map[string]core.ObserverResult, callers)
-	errs := make(chan error, callers)
 	var group sync.WaitGroup
 	for range callers {
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			reports, err := recorder.Stop(context.Background())
-			results <- reports
-			errs <- err
+			result, err := recorder.Stop(context.Background())
+			if err != nil {
+				t.Errorf("Stop: %v", err)
+			}
+			results <- result
 		}()
 	}
 	group.Wait()
 	close(results)
-	close(errs)
-	for err := range errs {
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
 	var first map[string]core.ObserverResult
 	for result := range results {
 		if first == nil {
@@ -657,120 +300,13 @@ func TestRecorderConcurrentStopCachesIndependentReports(t *testing.T) {
 	first["fix-git"] = mutated
 	again, err := recorder.Stop(context.Background())
 	if err != nil || !reflect.DeepEqual(want, again) {
-		t.Fatalf("cached Stop = %+v, %v; want %+v", again, err, want)
+		t.Fatalf("cached Stop = %+v, %v", again, err)
 	}
-}
-
-func TestTimedOutStopWaiterDoesNotOrphanSampler(t *testing.T) {
-	api := newFakeDocker()
-	api.listFn = func(context.Context, int) ([]containertypes.Summary, error) {
-		return []containertypes.Summary{summaryFixture(taskContainerID, "task", "run-1", "fix-git", taskContainerKind)}, nil
-	}
-	entered := make(chan struct{})
-	var once sync.Once
-	api.statsFn = func(ctx context.Context, _ string, _, idCall int) (containertypes.StatsResponse, error) {
-		if idCall > 1 {
-			once.Do(func() { close(entered) })
-			<-ctx.Done()
-			return containertypes.StatsResponse{}, ctx.Err()
-		}
-		return statsFixture(200, 100, 2000, 1000, 1, 100, 200), nil
-	}
-	recorder := newTestRecorder(t, api, filepath.Join(t.TempDir(), "run"), 10*time.Millisecond)
-	originalWriteIndex := recorder.writeIndex
-	finalizeEntered := make(chan struct{})
-	releaseFinalize := make(chan struct{})
-	recorder.writeIndex = func(path string, index Index) error {
-		close(finalizeEntered)
-		<-releaseFinalize
-		return originalWriteIndex(path, index)
-	}
-	if err := recorder.Start(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-entered:
-	case <-time.After(time.Second):
-		t.Fatal("background stats request did not start")
-	}
-	waiter, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-	if _, err := recorder.Stop(waiter); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("timed-out waiter = %v", err)
-	}
-	select {
-	case <-finalizeEntered:
-	default:
-		t.Fatal("Stop did not continue to finalization")
-	}
-	close(releaseFinalize)
-	reports, err := recorder.Stop(context.Background())
-	if err != nil || reports["fix-git"].Status != core.StatusSucceeded {
-		t.Fatalf("Stop = %+v, %v", reports, err)
-	}
-	select {
-	case <-recorder.sampleDone:
-	default:
-		t.Fatal("sampler was orphaned")
-	}
-}
-
-func TestRecorderRetriesFinalization(t *testing.T) {
-	t.Run("index", func(t *testing.T) {
-		api := newFakeDocker()
-		recorder := newTestRecorder(t, api, filepath.Join(t.TempDir(), "run"), time.Hour)
-		original := recorder.writeIndex
-		var calls atomic.Int32
-		recorder.writeIndex = func(path string, index Index) error {
-			if calls.Add(1) == 1 {
-				return errors.New("injected index failure")
-			}
-			return original(path, index)
-		}
-		if err := recorder.Start(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := recorder.Stop(context.Background()); err == nil || !strings.Contains(err.Error(), "injected index failure") {
-			t.Fatalf("first Stop = %v", err)
-		}
-		if _, err := recorder.Stop(context.Background()); err != nil {
-			t.Fatalf("retry Stop = %v", err)
-		}
-	})
-	t.Run("artifact close", func(t *testing.T) {
-		api := newFakeDocker()
-		recorder := newTestRecorder(t, api, filepath.Join(t.TempDir(), "run"), time.Hour)
-		failure := errors.New("injected close failure")
-		var calls atomic.Int32
-		recorder.artifactOps.closeFile = func(file *os.File) error {
-			calls.Add(1)
-			if err := file.Close(); err != nil {
-				return err
-			}
-			return failure
-		}
-		if err := recorder.Start(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := recorder.Stop(context.Background()); !errors.Is(err, failure) {
-			t.Fatalf("first Stop = %v", err)
-		}
-		if _, err := recorder.Stop(context.Background()); err != nil {
-			t.Fatalf("retry Stop = %v", err)
-		}
-		if calls.Load() != 1 {
-			t.Fatalf("close calls = %d", calls.Load())
-		}
-	})
 }
 
 func TestPrepareArtifactsJoinsRollbackFailures(t *testing.T) {
 	outputDir := filepath.Join(t.TempDir(), "run")
-	monitorRoot := filepath.Join(outputDir, "monitor")
-	if err := os.MkdirAll(filepath.Join(monitorRoot, "task-b"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(monitorRoot, 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(outputDir, "task-b", "monitor"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	closeFailure := errors.New("close failure")
@@ -784,7 +320,7 @@ func TestPrepareArtifactsJoinsRollbackFailures(t *testing.T) {
 	}
 	operations.remove = func(path string) error {
 		err := os.Remove(path)
-		if strings.HasSuffix(path, filepath.Join("task-a", "resources.jsonl")) && err == nil {
+		if strings.HasSuffix(path, filepath.Join("task-a", "monitor", "resources.jsonl")) && err == nil {
 			return removeFailure
 		}
 		return err
@@ -795,17 +331,17 @@ func TestPrepareArtifactsJoinsRollbackFailures(t *testing.T) {
 	}
 }
 
-func TestNewRejectsUnsafeAndUnboundedConfiguration(t *testing.T) {
-	base := Options{RunID: "run-1", TaskIDs: []string{"fix-git"}, OutputDir: t.TempDir()}
+func TestNewRejectsUnsafeAndIncompleteConfiguration(t *testing.T) {
+	base := Options{RunID: "run-1", TaskIDs: []string{"fix-git"}, OutputDir: t.TempDir(), Source: &fakeSource{}}
 	cases := []struct {
-		name    string
-		mutate  func(*Options)
-		message string
+		name, message string
+		mutate        func(*Options)
 	}{
-		{name: "run path", mutate: func(options *Options) { options.RunID = "../run" }, message: "unsafe character"},
-		{name: "task path", mutate: func(options *Options) { options.TaskIDs = []string{"task/one"} }, message: "unsafe character"},
-		{name: "duplicate", mutate: func(options *Options) { options.TaskIDs = []string{"fix-git", "fix-git"} }, message: "repeated"},
-		{name: "samples", mutate: func(options *Options) { options.MaxSamplesPerTask = -1 }, message: "sample bound"},
+		{name: "run path", message: "unsafe character", mutate: func(options *Options) { options.RunID = "../run" }},
+		{name: "task path", message: "unsafe character", mutate: func(options *Options) { options.TaskIDs = []string{"task/one"} }},
+		{name: "duplicate", message: "repeated", mutate: func(options *Options) { options.TaskIDs = []string{"fix-git", "fix-git"} }},
+		{name: "source", message: "resource source", mutate: func(options *Options) { options.Source = nil }},
+		{name: "samples", message: "sample bound", mutate: func(options *Options) { options.MaxSamplesPerTask = -1 }},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -826,8 +362,8 @@ func readSamplesStrict(t *testing.T, path string) []ResourceSample {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	scanner := bufio.NewScanner(file)
 	var samples []ResourceSample
+	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		decoder := json.NewDecoder(strings.NewReader(scanner.Text()))
 		decoder.DisallowUnknownFields()

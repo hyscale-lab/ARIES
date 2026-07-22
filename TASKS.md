@@ -1,5 +1,23 @@
 # ARIES Tasks
 
+## R3 — Resource accuracy and replayable artifacts
+
+- [x] Keep Docker Stats instead of adding cAdvisor; move Docker collection into
+  the sandbox package behind monitor's runtime-neutral `ResourceSource`.
+- [x] Derive CPU percentages from cumulative counters across samples, publish
+  schema-v2 runtime fields, and add a real busy-container assertion.
+- [x] Retain exact bridge argv, shell command, stdin encoding/content, duration,
+  byte counts, and outcomes; do not fabricate OpenClaw tool-call IDs that never
+  cross SSH.
+- [x] Retain the placeholder-only rendered `openclaw.json`, use upstream
+  read-write SSH workspace access, and eliminate the gateway write failure.
+- [x] Use task-readable run/component paths and structured Logrus console plus
+  private run-file logging.
+- [x] Require Go 1.26.5 and document cross-harness bridge alternatives without
+  implementing speculative adapters.
+- [x] Pass build, unit, race, lint, integration, deterministic OpenClaw E2E,
+  review, and adversarial QA with fresh evidence and no resource leaks.
+
 ## R2 — Lifecycle ownership, version files, and runnable documentation
 
 - [x] Put sandbox shutdown on `ToolSandbox` while keeping the returned
@@ -45,11 +63,12 @@ four Runner component boundaries or the independent evaluator.
   typed Moby detached termination plus `ContainerTop` absence proof without
   stopping, restarting, or recreating the sandbox, and propagate confirmation
   failure so the Runner blocks evaluation.
-- [x] Alias OpenClaw's pinned shared workspace path to the benchmark workdir so
-  agent tools and evaluation observe the same live container filesystem.
-- [x] Retain private `bridges/<attempt>/tool-calls.jsonl` after bridge shutdown,
-  expose it in `TaskResult`, and record redacted command metadata, byte counts,
-  timing, exit code, and outcome without content or secret values.
+- [x] Alias OpenClaw's pinned shared workspace path for shell commands and map
+  native filesystem roots bidirectionally so agent tools and evaluation observe
+  the same live container filesystem.
+- [x] Retain private `<task>/bridge/tool-calls.jsonl` after bridge shutdown,
+  expose it in `TaskResult`, and record replayable command/stdin inputs, byte
+  counts, timing, exit code, and outcome without model credentials.
 - [x] Add a fake-executor bridge contract test, a real Docker bridge mutation
   test, and a deterministic pinned-OpenClaw E2E assertion requiring completed
   bridge tool records, monitor samples for both container kinds, and reward `1`.
@@ -103,7 +122,7 @@ R1 is complete only when the last item is checked with fresh evidence.
 - [x] Implement the pinned `aries-ssh` client contract, ephemeral credentials,
   strict host verification, canonical command decoding, and cancellable sessions.
 - [x] Proxy SSH exec to the same Docker sandbox, map the shared workspace,
-  revoke without restarting the sandbox, and retain redacted tool evidence.
+  revoke without restarting the sandbox, and retain tool evidence.
 
 ### M5 — Upstream OpenClaw harness
 

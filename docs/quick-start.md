@@ -6,7 +6,8 @@ Run every command from the repository root.
 ## 1. Prerequisites
 
 - Linux with a running local Docker Engine and access to `/var/run/docker.sock`.
-- Go 1.25.12 or newer, Git, and Make.
+- Go 1.26.5, Git, and Make. Go's toolchain selection can download 1.26.5 when
+  an older Go launcher is installed.
 - Network access to GitHub, GHCR, Docker Hub, and `https://api.deepseek.com`.
 - A DeepSeek API key with access to the model named in the profile.
 
@@ -74,7 +75,9 @@ run_dir="$(ls -1dt runs/* | head -1)"
 cat "$run_dir/live-validation.json"
 cat "$run_dir/run-result.json"
 cat "$run_dir/fix-git/evaluation/reward.txt"
-cat "$run_dir"/bridges/*/tool-calls.jsonl
+cat "$run_dir/fix-git/bridge/tool-calls.jsonl"
+cat "$run_dir/fix-git/harness/openclaw.json"
+cat "$run_dir/aries.log"
 ```
 
 A successful `fix-git` run has:
@@ -85,9 +88,12 @@ A successful `fix-git` run has:
 - reward `1`; and
 - completed tool calls in `tool-calls.jsonl`.
 
-The run directory also contains OpenClaw logs and telemetry when available,
-Docker sandbox logs, one-second CPU and memory samples, verifier stdout/stderr,
-and CTRF output.
+The run directory name contains `fix-git`, and task artifacts are grouped under
+`fix-git/{harness,bridge,sandbox,monitor,evaluation}`. It contains the exact
+placeholder-only rendered OpenClaw config, OpenClaw logs and telemetry when
+available, replayable SSH tool inputs, Docker sandbox logs, one-second CPU and
+memory samples, verifier stdout/stderr, and CTRF output. `aries.log` is the
+structured Logrus run log.
 
 ## Troubleshooting
 

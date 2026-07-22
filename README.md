@@ -44,7 +44,9 @@ benchmark uploads verifier files. Harness failure and evaluation outcome remain
 separate.
 
 See [docs/design.md](docs/design.md) for lifecycle, isolation, bridge, Moby SDK,
-monitoring, secrets, and extension decisions.
+monitoring, secrets, and extension decisions. See
+[docs/bridge-alternatives.md](docs/bridge-alternatives.md) for why future
+harnesses should not be forced through one universal transport.
 
 ## Configuration
 
@@ -63,10 +65,15 @@ API-key values never belong in either file.
 - `pkg/core`: shared task, environment, command, endpoint, and result data.
 - `pkg/runner`: the four interfaces and ordered lifecycle.
 - `pkg/benchmark/terminalbench`: `fix-git` discovery and independent verifier.
-- `pkg/sandbox/docker`: Moby-backed container, exec, transfer, and cleanup.
+- `pkg/sandbox/docker`: Moby-backed container, exec, transfer, cleanup, and raw
+  cumulative resource collection.
 - `pkg/bridge/openclawssh`: authenticated SSH-to-Docker-exec adaptation.
 - `pkg/harness/openclaw`: upstream OpenClaw container and generated config.
-- `pkg/monitor`: observer-only CPU and memory sampling.
+- `pkg/monitor`: deployment-neutral resource rates and artifact recording.
+
+Every run writes structured Logrus output to stderr and private `aries.log`.
+Task artifacts use readable paths such as
+`runs/<timestamp>-fix-git/fix-git/bridge/tool-calls.jsonl`.
 
 ## Validation
 

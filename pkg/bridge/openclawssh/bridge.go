@@ -7,13 +7,13 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"maps"
 	"net"
 	"os"
@@ -23,15 +23,19 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/runner"
+	"github.com/sirupsen/logrus"
 	"golang.org/x/crypto/ssh"
 )
 
 const (
 	defaultClientPath      = "bin/aries-ssh"
 	defaultBridgeCleanup   = 20 * time.Second
+	maxRecordedInputBytes  = 16 << 20
+	maxToolLogBytes        = 256 << 20
 	openClawWorkspace      = "/aries/openclaw/openclaw-ssh-shared-8198076c/workspace"
 	workspacePrepareScript = `set -eu
 target=$1
@@ -65,7 +69,7 @@ type Options struct {
 	OutputDir      string
 	ClientPath     string
 	CleanupTimeout time.Duration
-	Logger         *slog.Logger
+	Logger         *logrus.Logger
 }
 
 // Manager exposes one SSH endpoint at a time and proxies its exec requests to
@@ -74,7 +78,7 @@ type Manager struct {
 	outputDir      string
 	clientPath     string
 	cleanupTimeout time.Duration
-	logger         *slog.Logger
+	logger         *logrus.Logger
 	newID          func() (string, error)
 
 	mu       sync.Mutex
@@ -108,13 +112,14 @@ type bridgeSession struct {
 	toolLogPath    string
 	toolLog        *os.File
 	workspaceOwner string
-	logger         *slog.Logger
+	logger         *logrus.Logger
 
 	mu            sync.Mutex
 	connections   map[net.Conn]struct{}
 	sequence      uint64
 	logMu         sync.Mutex
 	logErr        error
+	logBytes      int64
 	closeLogErr   error
 	revocationMu  sync.Mutex
 	revocationErr error
@@ -133,7 +138,10 @@ type toolCallRecord struct {
 	Workdir        string   `json:"workdir,omitempty"`
 	Environment    []string `json:"env_names,omitempty"`
 	CommandHash    string   `json:"command_hash"`
-	CommandPreview string   `json:"command_preview,omitempty"`
+	Command        string   `json:"command,omitempty"`
+	Argv           []string `json:"argv,omitempty"`
+	Stdin          string   `json:"stdin"`
+	StdinEncoding  string   `json:"stdin_encoding"`
 	StdinBytes     int64    `json:"stdin_bytes"`
 	StdoutBytes    int64    `json:"stdout_bytes"`
 	StderrBytes    int64    `json:"stderr_bytes"`
@@ -165,6 +173,40 @@ func (counter *byteCounter) Write(content []byte) (int, error) {
 
 func (counter *byteCounter) count() int64 { return counter.n.Load() }
 
+type recordedInput struct {
+	reader io.Reader
+	mu     sync.Mutex
+	n      int64
+	data   bytes.Buffer
+}
+
+func (input *recordedInput) Read(content []byte) (int, error) {
+	n, err := input.reader.Read(content)
+	if n > 0 {
+		input.mu.Lock()
+		remaining := maxRecordedInputBytes - input.data.Len()
+		accepted := min(n, max(remaining, 0))
+		_, _ = input.data.Write(content[:accepted])
+		input.n += int64(accepted)
+		input.mu.Unlock()
+		if accepted != n {
+			return accepted, fmt.Errorf("OpenClaw SSH stdin exceeds %d bytes", maxRecordedInputBytes)
+		}
+	}
+	return n, err
+}
+
+func (input *recordedInput) record() (int64, string, string) {
+	input.mu.Lock()
+	count := input.n
+	content := bytes.Clone(input.data.Bytes())
+	input.mu.Unlock()
+	if utf8.Valid(content) {
+		return count, string(content), "utf-8"
+	}
+	return count, base64.StdEncoding.EncodeToString(content), "base64"
+}
+
 var _ runner.ToolBridge = (*Manager)(nil)
 
 func New(options Options) (*Manager, error) {
@@ -189,7 +231,7 @@ func New(options Options) (*Manager, error) {
 		options.CleanupTimeout = defaultBridgeCleanup
 	}
 	if options.Logger == nil {
-		options.Logger = slog.Default()
+		options.Logger = logrus.StandardLogger()
 	}
 	return &Manager{
 		outputDir: outputDir, clientPath: clientPath,
@@ -217,7 +259,7 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 		return core.ToolEndpoint{}, fmt.Errorf("generate OpenClaw SSH bridge ID: %w", err)
 	}
 	session := &bridgeSession{sandbox: sandbox, connections: make(map[net.Conn]struct{}), logger: manager.logger}
-	session.artifactDir = filepath.Join(manager.outputDir, "bridges", id)
+	session.artifactDir = filepath.Join(manager.outputDir, sandbox.TaskID(), "bridge")
 	session.workspaceOwner = openClawWorkspace + ".aries-owner-" + id
 	fail := func(primary error) (core.ToolEndpoint, error) {
 		session.revoke()
@@ -280,7 +322,7 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 	manager.stopErr = nil
 	address := net.JoinHostPort(host, port)
 	network := sandbox.NetworkName()
-	manager.logger.InfoContext(ctx, "OpenClaw SSH bridge started", "address", address, "network", network, "container", sandbox.ContainerName())
+	manager.logger.WithContext(ctx).WithFields(logrus.Fields{"address": address, "network": network, "container": sandbox.ContainerName()}).Info("OpenClaw SSH bridge started")
 	return core.ToolEndpoint{
 		Protocol: "ssh", Address: address, Username: lockedUsername, Network: network,
 		ClientCommand: clientContainerPath, ClientSourceFile: session.clientSource,
@@ -304,13 +346,13 @@ func newServerConfig(hostSigner ssh.Signer, authorized ssh.PublicKey) *ssh.Serve
 	return configuration
 }
 
-func (session *bridgeSession) serve(ctx context.Context, logger *slog.Logger) {
+func (session *bridgeSession) serve(ctx context.Context, logger *logrus.Logger) {
 	defer session.wait.Done()
 	for {
 		connection, err := session.listener.Accept()
 		if err != nil {
 			if ctx.Err() == nil && !errors.Is(err, net.ErrClosed) {
-				logger.Warn("OpenClaw SSH accept failed", "error", err)
+				logger.WithError(err).Warn("OpenClaw SSH accept failed")
 			}
 			return
 		}
@@ -404,10 +446,20 @@ func (session *bridgeSession) handleSession(ctx context.Context, channel ssh.Cha
 func (session *bridgeSession) execute(ctx context.Context, channel ssh.Channel, encoded string, remote remoteCommand) int {
 	started := time.Now()
 	command := remote.command(session.sandbox.Workdir())
-	stdin := &byteCounter{reader: channel}
+	command = mapFilesystemWorkspace(command, session.sandbox.Workdir())
+	stdin := &recordedInput{reader: channel}
 	stdout := &byteCounter{writer: channel}
 	stderr := &byteCounter{writer: channel.Stderr()}
-	result, err := session.sandbox.ExecStream(ctx, command, stdin, stdout, stderr)
+	execStdout := io.Writer(stdout)
+	var pathOutput bytes.Buffer
+	if filesystemPathProbe(command) {
+		execStdout = &pathOutput
+	}
+	result, err := session.sandbox.ExecStream(ctx, command, stdin, execStdout, stderr)
+	if pathOutput.Len() > 0 {
+		_, writeErr := stdout.Write(virtualizeFilesystemPath(pathOutput.Bytes(), session.sandbox.Workdir()))
+		err = errors.Join(err, writeErr)
+	}
 	if contextErr := ctx.Err(); contextErr != nil && !hasCancellationCause(err) {
 		// A sandbox error returned after revocation is ambiguous unless it carries
 		// the cancellation cause. Preserve both so Stop fails closed rather than
@@ -431,27 +483,96 @@ func (session *bridgeSession) execute(ctx context.Context, channel ssh.Channel, 
 	if exitCode < 0 || exitCode > 255 {
 		exitCode = 255
 	}
+	stdinBytes, stdinContent, stdinEncoding := stdin.record()
 	session.writeRecord(toolCallRecord{
 		ContainerID: session.sandbox.ContainerID(), ContainerName: session.sandbox.ContainerName(),
 		OperationClass: operationClass(command), Path: command.Path, Workdir: command.Dir,
-		Environment: slices.Sorted(maps.Keys(command.Env)), CommandHash: commandHash(encoded), CommandPreview: safePreview(command),
-		StdinBytes: stdin.count(), StdoutBytes: stdout.count(), StderrBytes: stderr.count(),
+		Environment: slices.Sorted(maps.Keys(command.Env)), CommandHash: commandHash(encoded),
+		Command: replayDisplayCommand(command), Argv: append([]string{command.Path}, command.Args...),
+		Stdin: stdinContent, StdinEncoding: stdinEncoding,
+		StdinBytes: stdinBytes, StdoutBytes: stdout.count(), StderrBytes: stderr.count(),
 		ExitCode: exitCode, DurationMS: time.Since(started).Milliseconds(), Status: status, Error: message,
 	})
 	return exitCode
+}
+
+func replayDisplayCommand(command core.Command) string {
+	if operationClass(command) != "exec" {
+		return ""
+	}
+	return shellCommand(command)
+}
+
+func mapFilesystemWorkspace(command core.Command, workdir string) core.Command {
+	if operationClass(command) != "fs" {
+		return command
+	}
+	command.Args = append([]string(nil), command.Args...)
+	for index, argument := range command.Args {
+		if mapped, ok := replacePathRoot(argument, openClawWorkspace, workdir); ok {
+			command.Args[index] = mapped
+		}
+	}
+	return command
+}
+
+func filesystemPathProbe(command core.Command) bool {
+	if operationClass(command) != "fs" || len(command.Args) < 4 {
+		return false
+	}
+	switch command.Args[3] {
+	case "write", "read", "mkdirp", "remove", "rename":
+		return false
+	default:
+		return true
+	}
+}
+
+func virtualizeFilesystemPath(content []byte, workdir string) []byte {
+	value := string(content)
+	line := strings.TrimSuffix(value, "\n")
+	if mapped, ok := replacePathRoot(line, workdir, openClawWorkspace); ok {
+		return []byte(mapped + strings.TrimPrefix(value, line))
+	}
+	return content
+}
+
+func replacePathRoot(value, from, to string) (string, bool) {
+	from = strings.TrimSuffix(from, "/")
+	to = strings.TrimSuffix(to, "/")
+	if from == "" {
+		from = "/"
+	}
+	if to == "" {
+		to = "/"
+	}
+	if value == from {
+		return to, true
+	}
+	if from == "/" && strings.HasPrefix(value, "/") {
+		return strings.TrimSuffix(to, "/") + value, true
+	}
+	if strings.HasPrefix(value, from+"/") {
+		return strings.TrimSuffix(to, "/") + strings.TrimPrefix(value, from), true
+	}
+	return value, false
 }
 
 func (session *bridgeSession) logRejected(payload []byte) {
 	session.writeRecord(toolCallRecord{
 		ContainerID: session.sandbox.ContainerID(), ContainerName: session.sandbox.ContainerName(),
 		OperationClass: "exec", CommandHash: commandHash(string(payload)),
-		Status: "rejected", Error: "invalid remote command",
+		StdinEncoding: "utf-8",
+		Status:        "rejected", Error: "invalid remote command",
 	})
 }
 
 func (session *bridgeSession) writeRecord(record toolCallRecord) {
 	session.logMu.Lock()
 	defer session.logMu.Unlock()
+	if session.logErr != nil {
+		return
+	}
 	session.sequence++
 	record.Sequence = session.sequence
 	record.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
@@ -459,14 +580,24 @@ func (session *bridgeSession) writeRecord(record toolCallRecord) {
 	record.TaskID = session.sandbox.TaskID()
 	content, err := json.Marshal(record)
 	if err == nil {
-		_, err = session.toolLog.Write(append(content, '\n'))
+		content = append(content, '\n')
+		if int64(len(content)) > maxToolLogBytes-session.logBytes {
+			err = fmt.Errorf("OpenClaw SSH tool log exceeds %d bytes", maxToolLogBytes)
+		} else {
+			var written int
+			written, err = session.toolLog.Write(content)
+			session.logBytes += int64(written)
+			if err == nil && written != len(content) {
+				err = io.ErrShortWrite
+			}
+		}
 	}
 	if err == nil {
 		err = session.toolLog.Sync()
 	}
 	if err != nil {
 		session.logErr = errors.Join(session.logErr, err)
-		session.logger.Error("write OpenClaw SSH tool log", "error", err)
+		session.logger.WithError(err).Error("write OpenClaw SSH tool log")
 	}
 }
 
@@ -622,11 +753,11 @@ func commandHash(command string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func safePreview(command core.Command) string {
+func shellCommand(command core.Command) string {
 	if command.Path == remoteShell && len(command.Args) >= 2 && command.Args[0] == "-c" {
-		return fmt.Sprintf("/bin/sh -c <script:%d bytes>", len(command.Args[1]))
+		return command.Args[1]
 	}
-	return filepath.Base(command.Path)
+	return command.Path
 }
 
 func operationClass(command core.Command) string {

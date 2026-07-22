@@ -88,7 +88,7 @@ func (sandbox *contractSandbox) snapshot() []core.Command {
 	return append([]core.Command(nil), sandbox.toolCommands...)
 }
 
-func TestManagerProxiesSSHExecToSandboxAndRetainsRedactedToolLog(t *testing.T) {
+func TestManagerProxiesSSHExecToSandboxAndRetainsReplayableToolLog(t *testing.T) {
 	outputDir := t.TempDir()
 	manager := newContractManager(t, outputDir)
 	sandbox := &contractSandbox{result: core.CommandResult{
@@ -105,6 +105,9 @@ func TestManagerProxiesSSHExecToSandboxAndRetainsRedactedToolLog(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertDynamicLoopbackEndpoint(t, endpoint)
+	if len(endpoint.LogPaths) != 1 || endpoint.LogPaths[0] != filepath.Join(outputDir, "contract-task", "bridge", "tool-calls.jsonl") {
+		t.Fatalf("tool log path = %q", endpoint.LogPaths)
+	}
 	configuration := bridgeClientConfig(t, endpoint)
 	sandbox.enableToolCalls()
 
@@ -163,6 +166,12 @@ func TestManagerProxiesSSHExecToSandboxAndRetainsRedactedToolLog(t *testing.T) {
 	assertLogString(t, record, "container_name", sandbox.ContainerName())
 	assertLogString(t, record, "path", remoteShell)
 	assertLogString(t, record, "workdir", sandbox.Workdir())
+	assertLogString(t, record, "command", "ignored-by-fake")
+	assertLogString(t, record, "stdin", contractStdin)
+	assertLogString(t, record, "stdin_encoding", "utf-8")
+	if argv, ok := record["argv"].([]any); !ok || len(argv) != 3 || argv[0] != remoteShell || argv[1] != "-c" || argv[2] != "ignored-by-fake" {
+		t.Fatalf("argv = %#v", record["argv"])
+	}
 	assertLogNumber(t, record, "exit_code", 42)
 	assertLogNumber(t, record, "stdin_bytes", len(contractStdin))
 	assertLogNumber(t, record, "stdout_bytes", len(contractStdout))
@@ -170,7 +179,7 @@ func TestManagerProxiesSSHExecToSandboxAndRetainsRedactedToolLog(t *testing.T) {
 	if _, ok := record["duration_ms"].(float64); !ok {
 		t.Fatalf("duration_ms missing or not numeric: %#v", record)
 	}
-	for _, secret := range []string{contractStdin, contractStdout, contractStderr, contractEnv} {
+	for _, secret := range []string{contractStdout, contractStderr, contractEnv} {
 		if bytes.Contains(content, []byte(secret)) {
 			t.Fatalf("tool log contains secret %q: %s", secret, content)
 		}

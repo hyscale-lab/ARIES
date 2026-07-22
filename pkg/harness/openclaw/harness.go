@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -27,6 +26,7 @@ import (
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
+	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -58,7 +58,7 @@ type Options struct {
 	CleanupTimeout time.Duration
 	StartTimeout   time.Duration
 	AgentTimeout   time.Duration
-	Logger         *slog.Logger
+	Logger         *logrus.Logger
 }
 
 // dockerClient is the small official Engine SDK surface used by the harness.
@@ -86,7 +86,7 @@ type Manager struct {
 	cleanupTimeout time.Duration
 	startTimeout   time.Duration
 	agentTimeout   time.Duration
-	logger         *slog.Logger
+	logger         *logrus.Logger
 	apiKeyLookup   func(string) ([]byte, bool)
 	newID          func() (string, error)
 
@@ -151,7 +151,7 @@ func New(options Options) (*Manager, error) {
 		options.AgentTimeout = defaultAgentTimeout
 	}
 	if options.Logger == nil {
-		options.Logger = slog.Default()
+		options.Logger = logrus.StandardLogger()
 	}
 	if options.APIKeyLookup == nil {
 		options.APIKeyLookup = environmentAPIKeyLookup
@@ -207,7 +207,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	}
 	active := &session{
 		runID: request.RunID, taskID: request.TaskID, safeTaskID: safeTaskID(request.TaskID), attemptID: id,
-		containerName: "aries-openclaw-" + id, artifactDir: filepath.Join(manager.outputDir, "harnesses", id),
+		containerName: "aries-openclaw-" + id, artifactDir: filepath.Join(manager.outputDir, safeTaskID(request.TaskID), "harness"),
 		endpoint: request.Endpoint, model: request.Model, apiKey: apiKey, gatewayToken: gatewayToken,
 	}
 	fail := func(primary error) error {
@@ -225,6 +225,11 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	if err := ensurePrivateDirectory(active.artifactDir); err != nil {
 		return fail(fmt.Errorf("create OpenClaw artifact directory: %w", err))
 	}
+	configArtifact := filepath.Join(active.artifactDir, "openclaw.json")
+	if err := writeArtifact(configArtifact, configuration); err != nil {
+		return fail(fmt.Errorf("retain rendered OpenClaw config: %w", err))
+	}
+	active.logPaths = appendUnique(active.logPaths, configArtifact)
 	archive, err := manager.runtimeArchive(active, configuration)
 	if err != nil {
 		return fail(err)
@@ -238,7 +243,8 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 			Cmd:   append([]string{launcherPath}, gatewayCommand...),
 			Labels: map[string]string{
 				"aries.managed": "true", "aries.kind": "openclaw-harness",
-				"aries.run": active.runID, "aries.task": active.safeTaskID, "aries.attempt": active.attemptID,
+				"aries.component": "harness",
+				"aries.run":       active.runID, "aries.task": active.safeTaskID, "aries.attempt": active.attemptID,
 			},
 		},
 		HostConfig: &container.HostConfig{NetworkMode: container.NetworkMode(active.endpoint.Network)},
@@ -269,7 +275,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	}
 	manager.active = active
 	manager.stopErr = nil
-	manager.logger.InfoContext(ctx, "OpenClaw harness started", "task_id", active.taskID, "container", active.containerName)
+	manager.logger.WithContext(ctx).WithFields(logrus.Fields{"task_id": active.taskID, "container": active.containerName}).Info("OpenClaw harness started")
 	return nil
 }
 
@@ -634,7 +640,7 @@ func (manager *Manager) validateContainer(ctx context.Context, active *session) 
 	if configuration.Image != manager.image || !equalStrings(configuration.Cmd, append([]string{launcherPath}, gatewayCommand...)) {
 		return errors.New("OpenClaw image or gateway command differs from the pinned direct configuration")
 	}
-	if configuration.Labels["aries.managed"] != "true" || configuration.Labels["aries.kind"] != "openclaw-harness" ||
+	if configuration.Labels["aries.managed"] != "true" || configuration.Labels["aries.kind"] != "openclaw-harness" || configuration.Labels["aries.component"] != "harness" ||
 		configuration.Labels["aries.run"] != active.runID || configuration.Labels["aries.task"] != active.safeTaskID || configuration.Labels["aries.attempt"] != active.attemptID {
 		return errors.New("OpenClaw container labels do not match the task")
 	}
@@ -771,7 +777,7 @@ func (manager *Manager) stopSession(ctx context.Context, active *session) error 
 	active.containerID = ""
 	clearSessionSecrets(active)
 	if warning := errors.Join(errs...); warning != nil {
-		manager.logger.WarnContext(ctx, "OpenClaw cleanup recovered after lifecycle errors", "task_id", active.taskID, "error", warning)
+		manager.logger.WithContext(ctx).WithField("task_id", active.taskID).WithError(warning).Warn("OpenClaw cleanup recovered after lifecycle errors")
 	}
 	return nil
 }
@@ -843,7 +849,7 @@ func missingContainerPath(err error) bool {
 }
 
 func (manager *Manager) writeRunArtifacts(active *session, stdout, stderr []byte) ([]string, error) {
-	paths := []string{filepath.Join(active.artifactDir, "agent.json"), filepath.Join(active.artifactDir, "agent.stderr")}
+	paths := []string{filepath.Join(active.artifactDir, "agent-result.json"), filepath.Join(active.artifactDir, "agent.stderr.log")}
 	return paths, errors.Join(writeArtifact(paths[0], stdout), writeArtifact(paths[1], stderr))
 }
 

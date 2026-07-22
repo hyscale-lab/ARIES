@@ -3,8 +3,7 @@ package runner
 import (
 	"context"
 	"errors"
-	"io"
-	"log/slog"
+	"github.com/sirupsen/logrus"
 	"reflect"
 	"strings"
 	"sync"
@@ -317,7 +316,7 @@ func newRig(t *testing.T, tasks int) *rig {
 		RunID:          "test-run",
 		OutputDir:      "runs",
 		CleanupTimeout: time.Second,
-		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:         logrus.New(),
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)

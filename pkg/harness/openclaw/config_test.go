@@ -42,7 +42,7 @@ func TestRenderConfigLocksProviderSharedSSHAndPlaceholder(t *testing.T) {
 	if configuration.Gateway.Auth.Mode != "token" || configuration.Gateway.Auth.Token != "${OPENCLAW_GATEWAY_TOKEN}" || configuration.Gateway.Remote.Token != "${OPENCLAW_GATEWAY_TOKEN}" {
 		t.Fatalf("gateway config = %#v", configuration.Gateway)
 	}
-	if configuration.Agents.Defaults.Model.Primary != "aries/deterministic-model" || sandbox.Mode != "all" || sandbox.Scope != "shared" || sandbox.Backend != "ssh" || sandbox.WorkspaceAccess != "none" {
+	if configuration.Agents.Defaults.Model.Primary != "aries/deterministic-model" || sandbox.Mode != "all" || sandbox.Scope != "shared" || sandbox.Backend != "ssh" || sandbox.WorkspaceAccess != "rw" {
 		t.Fatalf("agent config = %#v", configuration.Agents.Defaults)
 	}
 	if sandbox.SSH.Target != "aries@172.22.0.1:39425" || sandbox.SSH.Command != "/opt/aries/bin/aries-ssh" || sandbox.SSH.WorkspaceRoot != workspaceRoot || !sandbox.SSH.StrictHostKeyChecking || sandbox.SSH.UpdateHostKeys {

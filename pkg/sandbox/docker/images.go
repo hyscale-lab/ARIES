@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/hyscale-lab/aries/pkg/containerimage"
 	"github.com/moby/moby/client"
+	"github.com/sirupsen/logrus"
 )
 
 type imageClient interface {
@@ -41,7 +41,7 @@ func pullImages(ctx context.Context, api imageClient, images []string) error {
 			return fmt.Errorf("inspect Docker image %q: %w", image, err)
 		}
 
-		slog.InfoContext(ctx, "pulling Docker image", "image", image)
+		logrus.WithContext(ctx).WithField("image", image).Info("pulling Docker image")
 		pull, err := api.ImagePull(ctx, image, client.ImagePullOptions{})
 		if err != nil {
 			return fmt.Errorf("pull Docker image %q: %w", image, err)

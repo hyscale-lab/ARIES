@@ -369,6 +369,82 @@ func TestByteCounterTracksConcurrentPipeTraffic(t *testing.T) {
 	}
 }
 
+func TestRecordedInputUsesLosslessEncoding(t *testing.T) {
+	for _, test := range []struct {
+		name, want, encoding string
+		content              []byte
+	}{
+		{name: "utf8", content: []byte("actual stdin\n"), want: "actual stdin\n", encoding: "utf-8"},
+		{name: "binary", content: []byte{0, 0xff}, want: "AP8=", encoding: "base64"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := &recordedInput{reader: bytes.NewReader(test.content)}
+			if _, err := io.Copy(io.Discard, input); err != nil {
+				t.Fatal(err)
+			}
+			count, content, encoding := input.record()
+			if count != int64(len(test.content)) || content != test.want || encoding != test.encoding {
+				t.Fatalf("record = %d %q %q", count, content, encoding)
+			}
+		})
+	}
+	t.Run("bounded", func(t *testing.T) {
+		input := &recordedInput{reader: io.LimitReader(zeroReader{}, maxRecordedInputBytes+1)}
+		if _, err := io.Copy(io.Discard, input); err == nil || !strings.Contains(err.Error(), "stdin exceeds") {
+			t.Fatalf("oversized stdin error = %v", err)
+		}
+		count, content, encoding := input.record()
+		if count != maxRecordedInputBytes || len(content) != maxRecordedInputBytes || encoding != "utf-8" {
+			t.Fatalf("bounded record = count %d content %d encoding %q", count, len(content), encoding)
+		}
+	})
+}
+
+func TestRecordedInputSnapshotsCountAndContentTogether(t *testing.T) {
+	input := &recordedInput{reader: &singleByteReader{remaining: 1 << 16}}
+	done := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(io.Discard, input)
+		done <- err
+	}()
+	for {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+			count, content, encoding := input.record()
+			if encoding != "utf-8" || count != int64(len(content)) {
+				t.Fatalf("final snapshot = count %d content %d encoding %q", count, len(content), encoding)
+			}
+			return
+		default:
+			count, content, encoding := input.record()
+			if encoding != "utf-8" || count != int64(len(content)) {
+				t.Fatalf("inconsistent snapshot = count %d content %d encoding %q", count, len(content), encoding)
+			}
+		}
+	}
+}
+
+type singleByteReader struct{ remaining int }
+
+func (reader *singleByteReader) Read(content []byte) (int, error) {
+	if reader.remaining == 0 {
+		return 0, io.EOF
+	}
+	content[0] = 'x'
+	reader.remaining--
+	return 1, nil
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(content []byte) (int, error) {
+	clear(content)
+	return len(content), nil
+}
+
 func pollCounter(counter *byteCounter) func() {
 	stop := make(chan struct{})
 	done := make(chan struct{})
@@ -399,6 +475,47 @@ func TestOperationClassUsesOnlyKnownOpenClawLabels(t *testing.T) {
 		if got := operationClass(command); got != want {
 			t.Fatalf("operationClass(%q) = %q, want %q", label, got, want)
 		}
+	}
+}
+
+func TestReplayDisplayCommandOmitsDuplicatedInternalScript(t *testing.T) {
+	execCommand := core.Command{Path: remoteShell, Args: []string{"-c", "git status"}}
+	if got := replayDisplayCommand(execCommand); got != "git status" {
+		t.Fatalf("exec display command = %q", got)
+	}
+	filesystemCommand := core.Command{Path: remoteShell, Args: []string{"-c", "large helper", "openclaw-sandbox-fs", "read"}}
+	if got := replayDisplayCommand(filesystemCommand); got != "" {
+		t.Fatalf("filesystem display command duplicated argv: %q", got)
+	}
+}
+
+func TestFilesystemWorkspaceMapsToSandboxWorkdir(t *testing.T) {
+	command := core.Command{
+		Path: remoteShell,
+		Args: []string{"-c", "ignored", "openclaw-sandbox-fs", "write", openClawWorkspace, "parent", "file"},
+		Dir:  "/work",
+	}
+	mapped := mapFilesystemWorkspace(command, "/work")
+	if mapped.Args[4] != "/work" {
+		t.Fatalf("mapped root = %q, want /work", mapped.Args[4])
+	}
+	if command.Args[4] != openClawWorkspace {
+		t.Fatalf("mapping mutated source command: %#v", command.Args)
+	}
+	child := core.Command{Path: remoteShell, Args: []string{"-c", "ignored", "openclaw-sandbox-fs", openClawWorkspace + "/child", "0"}}
+	if got := mapFilesystemWorkspace(child, "/work"); got.Args[3] != "/work/child" {
+		t.Fatalf("mapped child = %q, want /work/child", got.Args[3])
+	}
+	if !filesystemPathProbe(child) {
+		t.Fatal("canonical path request was not recognized as a filesystem probe")
+	}
+	if got := string(virtualizeFilesystemPath([]byte("/work/child\n"), "/work")); got != openClawWorkspace+"/child\n" {
+		t.Fatalf("virtual path = %q", got)
+	}
+
+	execCommand := core.Command{Path: remoteShell, Args: []string{"-c", "cd " + openClawWorkspace}, Dir: "/work"}
+	if got := mapFilesystemWorkspace(execCommand, "/work"); got.Args[1] != execCommand.Args[1] {
+		t.Fatalf("ordinary shell command was rewritten: %#v", got.Args)
 	}
 }
 

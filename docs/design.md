@@ -107,10 +107,11 @@ A harness failure does not suppress evaluation when both gates succeed.
 
 ## Docker SDK boundary
 
-The sandbox, harness, and monitor use the official split Moby Go client and API
-modules. Each package declares a private interface containing only the typed
-methods it uses; production supplies `*client.Client`, while unit tests supply
-small typed fakes.
+The sandbox, harness, and Docker resource source use the official split Moby Go
+client and API modules. Each package declares a private interface containing
+only the typed methods it uses; production supplies `*client.Client`, while
+unit tests supply small typed fakes. The generic monitor package does not
+import Docker.
 
 `pkg/containerimage` uses the distribution/OCI reference packages to validate
 the immutable named image format shared by config, benchmark, harness, and
@@ -188,9 +189,14 @@ OpenClaw's pinned shared runtime path is:
 ```
 
 Before listening, the bridge creates a guarded symlink from that path to
-`Task.Environment.Workdir`. Partial start rolls back only an alias owned by that
-attempt. Once start succeeds, the alias remains in the task container until the
-sandbox is removed, so harness tools and evaluation share one live filesystem.
+`Task.Environment.Workdir` for ordinary shell commands. OpenClaw's native
+filesystem helper deliberately refuses to follow symlinks, so the bridge also
+maps its explicit filesystem root arguments to the real workdir and maps
+canonical-path replies back to OpenClaw's virtual path. The mapping is limited
+to the pinned `openclaw-sandbox-fs` command shape; arbitrary shell text is not
+rewritten. Partial start rolls back only an alias owned by that attempt. Once
+start succeeds, the alias remains until the sandbox is removed, so native
+read/write/edit tools, shell commands, and evaluation share one live filesystem.
 
 Bridge Stop closes the listener and active connections, waits for handlers,
 closes the log, and deletes staged client credential sources. It never changes
@@ -209,7 +215,7 @@ verification, reject unsupported channels and command shapes, translate
 OpenClaw's canonical shell tokens into argument slices, preserve separate
 stdin/stdout/stderr and exact exit status, cancel only the disconnected tool
 process group, revoke every session before evaluation, map OpenClaw's fixed
-workspace, and retain a redacted tool log.
+workspace, and retain a replayable tool log.
 
 Putting `sshd` inside the task would add another process and credential
 lifecycle to the evaluator's sandbox. Giving OpenClaw the Docker socket would
@@ -218,24 +224,39 @@ second implementation. These pair-specific responsibilities therefore remain
 concrete and package-private. Further simplification must preserve the same
 isolation, streaming, cancellation, and evidence guarantees.
 
+Compatibility tradeoffs for OpenClaw, Hermes, and OpenHands are recorded in
+[bridge-alternatives.md](bridge-alternatives.md).
+
 ## Tool-call evidence
 
-Each bridge attempt creates private:
+Each task creates private:
 
 ```text
-bridges/<attempt>/tool-calls.jsonl
+<task>/bridge/tool-calls.jsonl
 ```
 
 The log is retained after bridge shutdown and exposed in
 `TaskResult.ToolLogPaths`. Accepted and rejected requests record sequence,
-time, run/task/container identity, operation class, safe path/workdir metadata,
-environment names, a command hash, bounded safe preview, byte counts, duration,
-exit code, and outcome.
+time, run/task/runtime identity, operation class, path/workdir metadata,
+environment names, a command hash, the exact argument vector and shell command,
+exact stdin (UTF-8 or base64 for binary data), byte counts, duration, exit code,
+and outcome. The separate human-readable shell-command field is omitted for
+OpenClaw's large internal filesystem helpers because their exact script already
+exists in the argument vector. Environment values and stdout/stderr content are
+not retained.
 
-The streaming byte counters use atomic updates so concurrently copied stdin,
-stdout, and stderr produce race-free final counts. The log never stores raw
-stream content, credentials, environment values, or raw shell scripts. A log
-write or close failure is a bridge failure rather than silent evidence loss.
+The streaming counters use atomic updates so concurrently copied stdin, stdout,
+and stderr produce race-free final counts. Tool inputs are intentionally stored
+in the private mode-0600 artifact for deterministic replay; model credentials
+are never sent to the sandbox or recorded. A log write or close failure is a
+bridge failure rather than silent evidence loss. Exact stdin is capped at 16
+MiB per call and the task tool log at 256 MiB; exceeding either bound fails the
+bridge instead of silently truncating replay evidence.
+
+OpenClaw model tool-call IDs are not sent over SSH: the pinned exec backend
+drops the internal ID before it constructs the SSH command. ARIES therefore
+does not invent an unreliable ID from timing, ordering, or command hashes. The
+trajectory remains the authoritative source for model-level IDs.
 
 ## OpenClaw harness
 
@@ -246,8 +267,10 @@ identity, known hosts, and required state directories with explicit ownership
 and modes.
 
 The generated config selects the remote OpenAI-compatible model and OpenClaw's
-upstream SSH backend with shared scope, no workspace copy, strict host checking,
-and the bridge's dynamic address. API-key bytes are provided through a private
+upstream SSH backend with shared scope, read-write remote workspace access,
+strict host checking, and the bridge's dynamic address. The exact rendered
+placeholder-only `openclaw.json` is retained under `<task>/harness/`, and the
+same bytes are copied into the container. API-key bytes are provided through a private
 runtime file and do not appear in Docker environment metadata, labels, command
 arguments, configuration artifacts, or results.
 
@@ -273,24 +296,49 @@ evaluator error.
 
 ## Monitoring and results
 
-`pkg/monitor.Recorder` is composed outside the Runner. It discovers only
-running containers with the exact run/task ownership labels and the supported
-sandbox or harness kind. Once per second it uses read-only Moby list, inspect,
-and non-streaming stats calls to write bounded CPU and memory samples.
+`pkg/monitor.Recorder` is composed outside the Runner. `ResourceSource` is the
+small interface it consumes. `pkg/sandbox/docker` implements that interface by
+discovering only running containers with the exact run/task ownership labels
+and generic `aries.component=sandbox|harness` label, then reading cumulative
+CPU and memory counters through the Moby SDK. Concrete `aries.kind` labels are
+retained for identity validation, not component selection. The composition
+root chooses the resource source in the same explicit sandbox switch that
+chooses lifecycle execution. Future deployment packages can implement the same
+interface without changing the recorder or JSON schema.
 
-A container may exit between a running list snapshot and inspection while the
+The recorder derives CPU percentage from successive cumulative CPU and wall
+clock readings. The first reading for each runtime is a zero-percent baseline;
+later readings reflect real deltas. This fixes the old all-zero behavior caused
+by requesting one-shot Docker stats without a previous sample. Samples use
+schema version 2 with generic runtime identity, cumulative CPU nanoseconds,
+derived CPU percentage, and memory usage/limit.
+
+A container may exit between a running list snapshot, inspection, and stats while the
 Runner performs cleanup. After identity and ownership validation, monitoring
 treats that transition like disappearance and retains earlier samples; malformed
 identity, labels, state, stats, or Docker errors still fail the observer report.
+
+ARIES keeps Docker Stats rather than adding cAdvisor for the local MVP. cAdvisor
+would require another privileged, broadly mounted, long-lived service while
+the Engine already exposes the required counters. cAdvisor remains a sensible
+future choice for shared node/Kubernetes Prometheus monitoring, not for one
+local task sandbox and harness.
 
 Monitoring never controls lifecycle or scoring. Observer start, sampling, or
 stop failure is reported separately and does not replace harness, evaluation,
 or cleanup outcomes.
 
-Each run has a private unique output directory. Results preserve separate
+Each run has a private output directory named with its task, for example
+`20260722T133727.613764127Z-fix-git`. Artifacts are grouped under
+`fix-git/{harness,bridge,sandbox,monitor,evaluation}` rather than opaque attempt
+directories. Results preserve separate
 harness, isolation, evaluation, observer, and cleanup records. Component log
 paths point to retained bridge, OpenClaw, sandbox, monitor, and verifier
-artifacts. Secrets are excluded from all of them.
+artifacts. A private `aries.log` contains structured Logrus lifecycle records.
+Model and gateway credentials are excluded from artifacts. Replay logs
+intentionally retain task commands and stdin, which may themselves be
+sensitive; run directories are therefore private and replay artifacts use mode
+`0600`.
 
 ## Configuration and secrets
 
@@ -335,7 +383,7 @@ integration tests that prove:
 
 - typed Moby lifecycle, streaming exec, transfer, and cleanup;
 - SSH authentication, host verification, stream and exit propagation,
-  cancellation, revocation, and retained redacted tool logs;
+  cancellation, revocation, and retained replayable tool logs;
 - a bridge mutation is visible through the evaluator's sandbox capability;
 - real pinned OpenClaw emits tool records through the host bridge;
 - OpenClaw stops and bridge access is revoked before verifier injection;

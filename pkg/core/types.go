@@ -48,6 +48,20 @@ type CommandResult struct {
 	Duration time.Duration `json:"duration"`
 }
 
+// ResourceReading is one runtime-neutral cumulative resource observation.
+// Concrete deployment packages collect these readings; monitor derives rates
+// and writes the shared artifact schema.
+type ResourceReading struct {
+	TaskID              string
+	Component           string
+	RuntimeID           string
+	RuntimeName         string
+	ObservedAt          time.Time
+	CPUUsageNanoseconds uint64
+	MemoryUsageBytes    uint64
+	MemoryLimitBytes    uint64
+}
+
 // ModelConfig identifies a remote OpenAI-compatible model without containing
 // an API-key value.
 type ModelConfig struct {

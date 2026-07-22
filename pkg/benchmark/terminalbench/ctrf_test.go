@@ -22,6 +22,7 @@ const validFixGitCTRF = `{
       {
         "name": "test_outputs.py::test_about_file",
         "status": "passed",
+		"raw_status": "passed",
         "duration": 0.1,
         "start": 1720000000.0,
         "stop": 1720000000.5,

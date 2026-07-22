@@ -3,15 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/benchmark/terminalbench"
@@ -22,19 +20,25 @@ import (
 	"github.com/hyscale-lab/aries/pkg/monitor"
 	"github.com/hyscale-lab/aries/pkg/runner"
 	dockersandbox "github.com/hyscale-lab/aries/pkg/sandbox/docker"
+	"github.com/sirupsen/logrus"
 )
 
 const runResultName = "run-result.json"
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
-		slog.Error("aries failed", "error", err)
+	logger := newLogger()
+	if err := runWithLogger(os.Args[1:], logger); err != nil {
+		logger.WithError(err).Error("aries failed")
 		os.Exit(1)
 	}
 }
 
 func run(args []string) error {
-	return runCommand(context.Background(), args, os.Stdout)
+	return runWithLogger(args, newLogger())
+}
+
+func runWithLogger(args []string, logger *logrus.Logger) error {
+	return runCommandWithDependencies(context.Background(), args, os.Stdout, commandDependencies{logger: logger})
 }
 
 func runCommand(ctx context.Context, args []string, stdout io.Writer) error {
@@ -46,9 +50,14 @@ type commandDependencies struct {
 	preflightClient httpDoer
 	preflightSleep  contextSleep
 	prepareProfile  func(context.Context, config.Config) error
+	logger          *logrus.Logger
 }
 
-func runCommandWithDependencies(ctx context.Context, args []string, stdout io.Writer, dependencies commandDependencies) error {
+func runCommandWithDependencies(ctx context.Context, args []string, stdout io.Writer, dependencies commandDependencies) (returnErr error) {
+	logger := dependencies.logger
+	if logger == nil {
+		logger = newLogger()
+	}
 	if len(args) == 2 && args[0] == "setup" {
 		cfg, err := config.Load(args[1])
 		if err != nil {
@@ -71,7 +80,7 @@ func runCommandWithDependencies(ctx context.Context, args []string, stdout io.Wr
 	if err != nil {
 		return err
 	}
-	runID, err := newRunID(time.Now(), rand.Reader)
+	runID, err := newRunID(time.Now(), cfg.Benchmark.Tasks)
 	if err != nil {
 		return fmt.Errorf("generate run ID: %w", err)
 	}
@@ -82,6 +91,22 @@ func runCommandWithDependencies(ctx context.Context, args []string, stdout io.Wr
 	if err := createRunOutputRoot(outputRoot); err != nil {
 		return fmt.Errorf("create private run output root: %w", err)
 	}
+	detachRunLog, err := attachRunLog(logger, outputRoot)
+	if err != nil {
+		return err
+	}
+	runEntry := logger.WithFields(logrus.Fields{"run_id": runID, "profile": cfg.Name, "output_dir": outputRoot})
+	runEntry.Info("experiment run started")
+	defer func() {
+		if returnErr != nil {
+			runEntry.WithError(returnErr).Error("experiment run finished with errors")
+		} else {
+			runEntry.Info("experiment run finished")
+		}
+		if closeErr := detachRunLog(); closeErr != nil {
+			returnErr = errors.Join(returnErr, fmt.Errorf("close run log: %w", closeErr))
+		}
+	}()
 	var apiKeys *apiKeySource
 	exists := false
 	if isOfficialDeepSeek(cfg.Model) {
@@ -114,7 +139,7 @@ func runCommandWithDependencies(ctx context.Context, args []string, stdout io.Wr
 		return errors.Join(preflightErr, persistErr)
 	}
 
-	experiment, err := buildExperiment(cfg, runID, outputRoot, harnessLookup)
+	experiment, err := buildExperiment(cfg, runID, outputRoot, harnessLookup, logger)
 	if err != nil {
 		return err
 	}
@@ -125,7 +150,11 @@ func buildExperiment(
 	cfg config.Config,
 	runID, outputRoot string,
 	apiKeyLookup func(string) ([]byte, bool),
+	logger *logrus.Logger,
 ) (*experiment, error) {
+	if logger == nil {
+		logger = logrus.StandardLogger()
+	}
 	executable, err := os.Executable()
 	if err != nil {
 		return nil, fmt.Errorf("locate ARIES executable: %w", err)
@@ -148,7 +177,7 @@ func buildExperiment(
 	switch cfg.Harness.Type {
 	case "openclaw":
 		harness, err = openclawharness.New(openclawharness.Options{
-			Image: cfg.Versions.OpenClaw.Image, OutputDir: outputRoot, APIKeyLookup: apiKeyLookup,
+			Image: cfg.Versions.OpenClaw.Image, OutputDir: outputRoot, APIKeyLookup: apiKeyLookup, Logger: logger,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("construct OpenClaw harness: %w", err)
@@ -157,13 +186,20 @@ func buildExperiment(
 		return nil, fmt.Errorf("unsupported harness type %q", cfg.Harness.Type)
 	}
 	var sandbox runner.ToolSandbox
+	var resourceSource monitor.ResourceSource
 	switch cfg.Sandbox.Type {
 	case "docker":
 		sandbox, err = dockersandbox.New(dockersandbox.Options{
-			OutputDir: outputRoot,
+			OutputDir: outputRoot, Logger: logger,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("construct Docker sandbox: %w", err)
+		}
+		resourceSource, err = dockersandbox.NewResourceSource(dockersandbox.ResourceOptions{
+			RunID: runID, TaskIDs: cfg.Benchmark.Tasks,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("construct Docker resource source: %w", err)
 		}
 	default:
 		return nil, fmt.Errorf("unsupported sandbox type %q", cfg.Sandbox.Type)
@@ -174,6 +210,7 @@ func buildExperiment(
 		bridge, err = openclawssh.New(openclawssh.Options{
 			OutputDir:  outputRoot,
 			ClientPath: filepath.Join(binDir, "aries-ssh"),
+			Logger:     logger,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("construct OpenClaw SSH bridge: %w", err)
@@ -183,26 +220,63 @@ func buildExperiment(
 	}
 	benchmarkRunner, err := runner.New(benchmark, harness, sandbox, bridge, runner.Options{
 		Name: cfg.Name, RunID: runID, OutputDir: outputRoot,
-		Model: core.ModelConfig{BaseURL: cfg.Model.BaseURL, Model: cfg.Model.Model, APIKeyEnv: cfg.Model.APIKeyEnv},
+		Model:  core.ModelConfig{BaseURL: cfg.Model.BaseURL, Model: cfg.Model.Model, APIKeyEnv: cfg.Model.APIKeyEnv},
+		Logger: logger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("construct runner: %w", err)
 	}
 	recorder, err := monitor.New(monitor.Options{
-		RunID: runID, TaskIDs: cfg.Benchmark.Tasks, OutputDir: outputRoot,
+		RunID: runID, TaskIDs: cfg.Benchmark.Tasks, OutputDir: outputRoot, Source: resourceSource, Logger: logger,
 	})
 	if err != nil {
+		_ = resourceSource.Close()
 		return nil, fmt.Errorf("construct monitor: %w", err)
 	}
 	return &experiment{Runner: benchmarkRunner, Recorder: recorder}, nil
 }
 
-func newRunID(now time.Time, random io.Reader) (string, error) {
-	var suffix [12]byte
-	if _, err := io.ReadFull(random, suffix[:]); err != nil {
-		return "", err
+func newRunID(now time.Time, taskIDs []string) (string, error) {
+	if len(taskIDs) == 0 || strings.TrimSpace(taskIDs[0]) == "" {
+		return "", errors.New("run ID requires at least one task name")
 	}
-	return now.UTC().Format("20060102T150405.000000000Z") + "-" + hex.EncodeToString(suffix[:]), nil
+	task := taskIDs[0]
+	if len(task) > 80 {
+		return "", errors.New("run ID task name exceeds 80 bytes")
+	}
+	for index, character := range task {
+		allowed := character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' ||
+			character >= '0' && character <= '9' || character == '-' || character == '_' || character == '.'
+		if !allowed || index == 0 && (character == '-' || character == '.') {
+			return "", fmt.Errorf("run ID task name %q contains an unsafe character", task)
+		}
+	}
+	if len(taskIDs) > 1 {
+		task += fmt.Sprintf("-and-%d-more", len(taskIDs)-1)
+	}
+	return now.UTC().Format("20060102T150405.000000000Z") + "-" + task, nil
+}
+
+func newLogger() *logrus.Logger {
+	logger := logrus.New()
+	logger.SetOutput(os.Stderr)
+	logger.SetLevel(logrus.InfoLevel)
+	logger.SetFormatter(&logrus.JSONFormatter{TimestampFormat: time.RFC3339Nano})
+	return logger
+}
+
+func attachRunLog(logger *logrus.Logger, outputRoot string) (func() error, error) {
+	path := filepath.Join(outputRoot, "aries.log")
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("create run log: %w", err)
+	}
+	original := logger.Out
+	logger.SetOutput(io.MultiWriter(original, file))
+	return func() error {
+		logger.SetOutput(original)
+		return file.Close()
+	}, nil
 }
 
 func createRunOutputRoot(path string) error {

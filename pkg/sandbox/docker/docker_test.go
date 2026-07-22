@@ -6,8 +6,8 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"github.com/sirupsen/logrus"
 	"io"
-	"log/slog"
 	"net"
 	"net/netip"
 	"os"
@@ -256,7 +256,7 @@ func testManager(t *testing.T, fake *fakeClient) *Manager {
 	t.Helper()
 	return &Manager{
 		client: fake, outputDir: t.TempDir(), cleanupTimeout: time.Second,
-		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		logger: logrus.New(),
 		newID:  func() (string, error) { return "fixedid", nil },
 	}
 }
@@ -281,6 +281,9 @@ func TestStartUsesTypedOptionsAndStopIsIdempotent(t *testing.T) {
 	logs := multiplexed("sandbox stdout", "sandbox stderr")
 	fake := &fakeClient{logs: logs}
 	manager, sandbox := startManagedSandbox(t, fake)
+	if sandbox.artifactDir != filepath.Join(manager.outputDir, "task-1", "sandbox") {
+		t.Fatalf("artifact directory = %q", sandbox.artifactDir)
+	}
 	options := fake.containerOpts
 	if options.Name != "aries-task-fixedid" || options.Config.WorkingDir != "/work" {
 		t.Fatalf("container options = %#v", options)
@@ -295,7 +298,7 @@ func TestStartUsesTypedOptionsAndStopIsIdempotent(t *testing.T) {
 	if len(resources.DeviceRequests) != 1 || resources.DeviceRequests[0].Count != 1 {
 		t.Fatalf("GPU request = %#v", resources.DeviceRequests)
 	}
-	if !fake.networkOptions.Internal || fake.networkOptions.Labels["aries.kind"] != "task-network" || options.Config.Labels["aries.kind"] != "task-container" {
+	if !fake.networkOptions.Internal || fake.networkOptions.Labels["aries.kind"] != "task-network" || options.Config.Labels["aries.kind"] != "task-container" || options.Config.Labels["aries.component"] != "sandbox" {
 		t.Fatalf("network/container labels = %#v / %#v", fake.networkOptions, options.Config.Labels)
 	}
 	if gateway, err := sandbox.NetworkGateway(context.Background()); err != nil || gateway != "172.30.0.1" {

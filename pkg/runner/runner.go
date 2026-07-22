@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/sirupsen/logrus"
 )
 
 const defaultCleanupTimeout = 30 * time.Second
@@ -19,7 +19,7 @@ type Options struct {
 	OutputDir      string
 	Model          core.ModelConfig
 	CleanupTimeout time.Duration
-	Logger         *slog.Logger
+	Logger         *logrus.Logger
 }
 
 // Runner composes exactly the benchmark, harness, sandbox, and bridge roles.
@@ -33,7 +33,7 @@ type Runner struct {
 	outputDir      string
 	model          core.ModelConfig
 	cleanupTimeout time.Duration
-	logger         *slog.Logger
+	logger         *logrus.Logger
 }
 
 // New constructs a Runner explicitly and rejects missing roles.
@@ -57,7 +57,7 @@ func New(benchmark Benchmark, harness AgentHarness, toolSandbox ToolSandbox, bri
 		options.CleanupTimeout = defaultCleanupTimeout
 	}
 	if options.Logger == nil {
-		options.Logger = slog.Default()
+		options.Logger = logrus.StandardLogger()
 	}
 	return &Runner{
 		benchmark:      benchmark,
@@ -106,7 +106,7 @@ func (r *Runner) Run(ctx context.Context) (core.RunResult, error) {
 func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, error) {
 	started := time.Now()
 	result := newTaskResult(task.ID)
-	r.logger.InfoContext(ctx, "task started", "task_id", task.ID)
+	r.logger.WithContext(ctx).WithField("task_id", task.ID).Info("task started")
 
 	var (
 		sandbox       Sandbox
@@ -169,7 +169,10 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 			allErrors = append(allErrors, fmt.Errorf("run context: %w", runContextErr))
 		}
 		result.Duration = time.Since(started)
-		r.logger.InfoContext(context.WithoutCancel(ctx), "task finished", "task_id", task.ID, "harness_status", result.Harness.Status, "evaluation_status", result.Evaluation.Status, "cleanup_status", result.Cleanup.Status)
+		r.logger.WithContext(context.WithoutCancel(ctx)).WithFields(logrus.Fields{
+			"task_id": task.ID, "harness_status": result.Harness.Status,
+			"evaluation_status": result.Evaluation.Status, "cleanup_status": result.Cleanup.Status,
+		}).Info("task finished")
 		return result, errors.Join(allErrors...)
 	}
 

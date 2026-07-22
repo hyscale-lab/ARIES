@@ -10,8 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,6 +27,7 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
+	"github.com/sirupsen/logrus"
 )
 
 const integrationAPIKeyEnv = "ARIES_OPENCLAW_INTEGRATION_KEY"
@@ -127,7 +126,7 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 	runID := "openclaw-sdk-fix-git"
 	key := "deterministic-integration-key"
 	t.Setenv(integrationAPIKeyEnv, key)
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := logrus.New()
 	sandbox, err := dockersandbox.New(dockersandbox.Options{OutputDir: outputDir, CleanupTimeout: 30 * time.Second, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
@@ -146,9 +145,13 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	resourceSource, err := dockersandbox.NewResourceSource(dockersandbox.ResourceOptions{RunID: runID, TaskIDs: []string{"fix-git"}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	resourceMonitor, err := monitor.New(monitor.Options{
 		RunID: runID, TaskIDs: []string{"fix-git"}, OutputDir: outputDir,
-		Interval: time.Second, StopTimeout: 20 * time.Second, Logger: logger,
+		Interval: time.Second, StopTimeout: 20 * time.Second, Source: resourceSource, Logger: logger,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -175,6 +178,7 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 	reports, monitorErr := resourceMonitor.Stop(monitorCtx)
 	monitorCancel()
 	if err != nil {
+		logFailedRunArtifacts(t, result)
 		t.Fatalf("Runner = %#v, %v", result, err)
 	}
 	if monitorErr != nil {
@@ -200,11 +204,30 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 	if err != nil || bytes.Count(toolCalls, []byte(`"status":"completed"`)) < 4 {
 		t.Fatalf("bridge tool calls = %q, %v", toolCalls, err)
 	}
+	if !bytes.Contains(toolCalls, []byte(`"operation_class":"fs"`)) || !bytes.Contains(toolCalls, []byte(`"stdin_encoding":"utf-8"`)) {
+		t.Fatalf("native OpenClaw write did not reach the replayable SSH bridge log: %s", toolCalls)
+	}
 	if !strings.Contains(task.Harness.FinalResponse, "Recovered lost commit") {
 		t.Fatalf("final response = %q", task.Harness.FinalResponse)
 	}
 	assertNoRunResources(t, ctx, api, runID)
 	assertSecretAbsent(t, outputDir, key)
+}
+
+func logFailedRunArtifacts(t *testing.T, result core.RunResult) {
+	t.Helper()
+	if len(result.Tasks) == 0 {
+		return
+	}
+	paths := append([]string{}, result.Tasks[0].Harness.LogPaths...)
+	paths = append(paths, result.Tasks[0].ToolLogPaths...)
+	paths = append(paths, result.Tasks[0].Evaluation.LogPaths...)
+	for _, path := range paths {
+		content, err := os.ReadFile(path)
+		if err == nil {
+			t.Logf("failed run artifact %s:\n%s", path, content[:min(len(content), 32<<10)])
+		}
+	}
 }
 
 func assertResourceCoverage(t *testing.T, report core.ObserverResult, runID, taskID string) {
@@ -234,7 +257,7 @@ func assertResourceCoverage(t *testing.T, report core.ObserverResult, runID, tas
 	for _, component := range index.Components {
 		coverage[component.Component] += component.SampleCount
 	}
-	if coverage["task-container"] == 0 || coverage["openclaw-harness"] == 0 {
+	if coverage["sandbox"] == 0 || coverage["harness"] == 0 {
 		t.Fatalf("monitor coverage = %#v", coverage)
 	}
 }
@@ -322,16 +345,17 @@ func deterministicModelScript() string {
 	return `const http=require("http"),crypto=require("crypto");
 const expected=process.argv[1];let step=0,candidate="",previous={};
 function text(content){return typeof content==="string"?content:Array.isArray(content)?content.map(x=>x&&x.text||"").join("\n"):JSON.stringify(content)}
-function prior(body,id,command){const ms=body.messages||[],a=[...ms].reverse().find(m=>m.role==="assistant"&&Array.isArray(m.tool_calls)),r=[...ms].reverse().find(m=>m.role==="tool");if(!a||!r||a.tool_calls[0].id!==id||r.tool_call_id!==id)throw Error("tool chain mismatch");if(JSON.parse(a.tool_calls[0].function.arguments).command!==command)throw Error("command mismatch");return text(r.content)}
+function prior(body,id,name,args){const ms=body.messages||[],a=[...ms].reverse().find(m=>m.role==="assistant"&&Array.isArray(m.tool_calls)),r=[...ms].reverse().find(m=>m.role==="tool");if(!a||!r||a.tool_calls[0].id!==id||r.tool_call_id!==id)throw Error("tool chain mismatch");if(a.tool_calls[0].function.name!==name||JSON.stringify(JSON.parse(a.tool_calls[0].function.arguments))!==JSON.stringify(args))throw Error("tool mismatch");return text(r.content)}
 function stream(res,delta,finish){const id="aries-"+step;res.writeHead(200,{"content-type":"text/event-stream","cache-control":"no-cache","connection":"close"});res.write("data: "+JSON.stringify({id,object:"chat.completion.chunk",created:1,model:"aries-deterministic",choices:[{index:0,delta,finish_reason:null}]})+"\n\n");res.write("data: "+JSON.stringify({id,object:"chat.completion.chunk",created:1,model:"aries-deterministic",choices:[{index:0,delta:{},finish_reason:finish}]})+"\n\n");res.end("data: [DONE]\n\n")}
-function call(res,id,command){previous={id,command};stream(res,{role:"assistant",tool_calls:[{index:0,id,type:"function",function:{name:"exec",arguments:JSON.stringify({command})}}]},"tool_calls")}
-const status="printf '%s\\n' ARIES_STATUS; git status --short --branch; printf '%s\\n' ARIES_HEAD; git rev-parse HEAD; printf '%s\\n' ARIES_REFLOG; git reflog --all --format='%H %gs' -20";
+function call(res,id,name,args){previous={id,name,args};stream(res,{role:"assistant",tool_calls:[{index:0,id,type:"function",function:{name,arguments:JSON.stringify(args)}}]},"tool_calls")}
+const status="rm -f .aries-bridge-probe; printf '%s\\n' ARIES_STATUS; git status --short --branch; printf '%s\\n' ARIES_HEAD; git rev-parse HEAD; printf '%s\\n' ARIES_REFLOG; git reflog --all --format='%H %gs' -20";
 http.createServer((req,res)=>{let raw="";req.on("data",c=>raw+=c);req.on("end",()=>{try{if(req.method!=="POST"||req.url!=="/v1/chat/completions")throw Error("route");const bearer=(req.headers.authorization||"").replace(/^Bearer /,"");if(crypto.createHash("sha256").update(bearer).digest("hex")!==expected)throw Error("auth");const body=JSON.parse(raw);if(body.model!=="aries-deterministic"||body.stream!==true)throw Error("request");
-if(step===0){step++;return call(res,"status",status)}
-const out=prior(body,previous.id,previous.command);
-if(step===1){const head=(out.match(/ARIES_HEAD\s+([0-9a-f]{40})/)||[])[1],hashes=[...out.matchAll(/\b[0-9a-f]{40}\b/g)].map(x=>x[0]);candidate=hashes.find(x=>x!==head)||"";if(!candidate)throw Error("candidate");step++;return call(res,"inspect","git show --format=fuller --stat "+candidate+" && git branch --contains "+candidate)}
-if(step===2){if(!out.includes(candidate.slice(0,7)))throw Error("inspect");step++;return call(res,"merge","git checkout master && git -c user.name='ARIES Benchmark' -c user.email='aries@example.invalid' merge -X theirs --no-edit "+candidate)}
-if(step===3){if(!/fast-forward|merge made|already up.to.date/i.test(out))throw Error("merge");step++;return call(res,"verify","git merge-base --is-ancestor "+candidate+" HEAD && test -z \"$(git status --porcelain)\" && git status --short --branch && git log --oneline -5")}
-if(step===4){if(!out.includes(candidate.slice(0,7))||!out.includes("master"))throw Error("verify");step++;return stream(res,{role:"assistant",content:"Recovered lost commit "+candidate+" and verified a clean master branch."},"stop")}
+if(step===0){step++;return call(res,"write-probe","write",{path:".aries-bridge-probe",content:"bridge write reached sandbox\n"})}
+if(step===1){step++;return call(res,"status","exec",{command:status})}
+const out=prior(body,previous.id,previous.name,previous.args);
+if(step===2){const head=(out.match(/ARIES_HEAD\s+([0-9a-f]{40})/)||[])[1],hashes=[...out.matchAll(/\b[0-9a-f]{40}\b/g)].map(x=>x[0]);candidate=hashes.find(x=>x!==head)||"";if(!candidate)throw Error("candidate");step++;return call(res,"inspect","exec",{command:"git show --format=fuller --stat "+candidate+" && git branch --contains "+candidate})}
+if(step===3){if(!out.includes(candidate.slice(0,7)))throw Error("inspect");step++;return call(res,"merge","exec",{command:"git checkout master && git -c user.name='ARIES Benchmark' -c user.email='aries@example.invalid' merge -X theirs --no-edit "+candidate})}
+if(step===4){if(!/fast-forward|merge made|already up.to.date/i.test(out))throw Error("merge");step++;return call(res,"verify","exec",{command:"git merge-base --is-ancestor "+candidate+" HEAD && test -z \"$(git status --porcelain)\" && git status --short --branch && git log --oneline -5"})}
+if(step===5){if(!out.includes(candidate.slice(0,7))||!out.includes("master"))throw Error("verify");step++;return stream(res,{role:"assistant",content:"Recovered lost commit "+candidate+" and verified a clean master branch."},"stop")}
 throw Error("extra request")}catch(error){res.writeHead(400,{"content-type":"application/json"});res.end(JSON.stringify({error:{message:error.message}}))}})}).listen(8080,"0.0.0.0");`
 }

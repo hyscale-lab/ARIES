@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"maps"
 	"math"
 	"os"
@@ -28,6 +27,7 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
+	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -54,7 +54,7 @@ type Options struct {
 	OutputDir      string
 	DockerSocket   string
 	CleanupTimeout time.Duration
-	Logger         *slog.Logger
+	Logger         *logrus.Logger
 }
 
 // dockerClient is the small Engine surface used by this package. The official
@@ -83,7 +83,7 @@ type Manager struct {
 	client         dockerClient
 	outputDir      string
 	cleanupTimeout time.Duration
-	logger         *slog.Logger
+	logger         *logrus.Logger
 	newID          func() (string, error)
 }
 
@@ -138,7 +138,7 @@ func New(options Options) (*Manager, error) {
 		options.CleanupTimeout = defaultCleanupTimeout
 	}
 	if options.Logger == nil {
-		options.Logger = slog.Default()
+		options.Logger = logrus.StandardLogger()
 	}
 	return &Manager{
 		client:         api,
@@ -170,7 +170,7 @@ func (m *Manager) Start(ctx context.Context, request core.SandboxRequest) (runne
 		containerName:  "aries-task-" + id,
 		networkName:    "aries-net-" + id,
 		workdir:        request.Environment.Workdir,
-		artifactDir:    filepath.Join(m.outputDir, "sandboxes", id),
+		artifactDir:    filepath.Join(m.outputDir, request.TaskID, "sandbox"),
 		outputDir:      m.outputDir,
 		cleanupTimeout: m.cleanupTimeout,
 		runID:          request.RunID,
@@ -204,7 +204,7 @@ func (m *Manager) Start(ctx context.Context, request core.SandboxRequest) (runne
 	if err := sandbox.verifyLive(ctx); err != nil {
 		return nil, sandbox.rollbackStart(ctx, err)
 	}
-	m.logger.InfoContext(ctx, "docker task sandbox started", "container", sandbox.containerName, "network", sandbox.networkName)
+	m.logger.WithContext(ctx).WithFields(logrus.Fields{"container": sandbox.containerName, "network": sandbox.networkName}).Info("docker task sandbox started")
 	return sandbox, nil
 }
 
@@ -224,12 +224,16 @@ func (m *Manager) Stop(ctx context.Context, live runner.Sandbox) error {
 }
 
 func ownershipLabels(request core.SandboxRequest, kind string) map[string]string {
-	return map[string]string{
+	labels := map[string]string{
 		"aries.managed": "true",
 		"aries.kind":    kind,
 		"aries.run":     request.RunID,
 		"aries.task":    request.TaskID,
 	}
+	if kind == "task-container" {
+		labels["aries.component"] = "sandbox"
+	}
+	return labels
 }
 
 func containerOptions(request core.SandboxRequest, sandbox *Sandbox, labels map[string]string) client.ContainerCreateOptions {

@@ -44,13 +44,16 @@ type ctrfSummary struct {
 }
 
 type ctrfTest struct {
-	Name     string   `json:"name"`
-	Status   string   `json:"status"`
-	Duration *float64 `json:"duration"`
-	Start    *float64 `json:"start"`
-	Stop     *float64 `json:"stop"`
-	Retries  *int     `json:"retries"`
-	FilePath string   `json:"file_path"`
+	Name      string   `json:"name"`
+	Status    string   `json:"status"`
+	RawStatus string   `json:"raw_status"`
+	Trace     string   `json:"trace"`
+	Message   string   `json:"message"`
+	Duration  *float64 `json:"duration"`
+	Start     *float64 `json:"start"`
+	Stop      *float64 `json:"stop"`
+	Retries   *int     `json:"retries"`
+	FilePath  string   `json:"file_path"`
 }
 
 func validateCTRFFile(filePath string) error {

@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
+	"math"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -12,17 +12,18 @@ import (
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/sirupsen/logrus"
 )
 
 const (
-	defaultDockerSocket      = "/var/run/docker.sock"
 	defaultSampleInterval    = time.Second
 	defaultRequestTimeout    = 5 * time.Second
 	defaultStopTimeout       = 10 * time.Second
 	defaultMaxSamplesPerTask = 172800
 	defaultMaxFileBytes      = int64(128 << 20)
 	maxIdentityLength        = 128
-	transientValidationGrace = 20 * time.Second
+	maxMemoryBytes           = uint64(1 << 60)
+	maxCPUPercent            = float64(1_000_000)
 )
 
 // Options are the explicit inputs to one run-scoped Recorder.
@@ -30,13 +31,13 @@ type Options struct {
 	RunID             string
 	TaskIDs           []string
 	OutputDir         string
-	DockerSocket      string
 	Interval          time.Duration
 	RequestTimeout    time.Duration
 	StopTimeout       time.Duration
 	MaxSamplesPerTask int
 	MaxFileBytes      int64
-	Logger            *slog.Logger
+	Source            ResourceSource
+	Logger            *logrus.Logger
 }
 
 // Recorder observes ARIES-owned task and harness containers without controlling them.
@@ -50,8 +51,8 @@ type Recorder struct {
 	stopTimeout       time.Duration
 	maxSamplesPerTask int
 	maxFileBytes      int64
-	logger            *slog.Logger
-	engine            *engineClient
+	logger            *logrus.Logger
+	source            ResourceSource
 	artifactOps       artifactOperations
 	now               func() time.Time
 	writeIndex        func(string, Index) error
@@ -69,7 +70,7 @@ type Recorder struct {
 	stopAttempt   *stopAttempt
 	completed     bool
 	reports       map[string]core.ObserverResult
-	sampleStates  map[string]containerSampleState
+	baselines     map[string]cpuBaseline
 }
 
 type stopAttempt struct {
@@ -79,15 +80,9 @@ type stopAttempt struct {
 	err      error
 }
 
-type containerSampleState struct {
-	hasValidSample bool
-	invalidSince   time.Time
-	validationErr  error
-}
-
-type pendingValidation struct {
-	containerID string
-	err         error
+type cpuBaseline struct {
+	usage uint64
+	time  time.Time
 }
 
 // New validates configuration without contacting Docker or creating artifacts.
@@ -117,12 +112,8 @@ func New(options Options) (*Recorder, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve monitor output directory: %w", err)
 	}
-	if options.DockerSocket == "" {
-		options.DockerSocket = defaultDockerSocket
-	}
-	dockerSocket, err := filepath.Abs(options.DockerSocket)
-	if err != nil {
-		return nil, fmt.Errorf("resolve Docker socket: %w", err)
+	if options.Source == nil {
+		return nil, errors.New("monitor resource source is required")
 	}
 	if options.Interval == 0 {
 		options.Interval = defaultSampleInterval
@@ -155,11 +146,7 @@ func New(options Options) (*Recorder, error) {
 		return nil, errors.New("monitor file byte bound must be between 4096 and 1073741824")
 	}
 	if options.Logger == nil {
-		options.Logger = slog.Default()
-	}
-	engine, err := newEngineClient(dockerSocket)
-	if err != nil {
-		return nil, fmt.Errorf("initialize Docker client: %w", err)
+		options.Logger = logrus.StandardLogger()
 	}
 	return &Recorder{
 		runID:             options.RunID,
@@ -172,11 +159,11 @@ func New(options Options) (*Recorder, error) {
 		maxSamplesPerTask: options.MaxSamplesPerTask,
 		maxFileBytes:      options.MaxFileBytes,
 		logger:            options.Logger,
-		engine:            engine,
+		source:            options.Source,
 		artifactOps:       defaultArtifactOperations(),
 		now:               time.Now,
 		writeIndex:        writeIndexExact,
-		sampleStates:      make(map[string]containerSampleState),
+		baselines:         make(map[string]cpuBaseline),
 	}, nil
 }
 
@@ -200,7 +187,7 @@ func (recorder *Recorder) Start(ctx context.Context) error {
 
 	artifacts, monitorRoot, rootCreated, err := prepareArtifacts(recorder.outputDir, recorder.taskIDs, recorder.artifactOps)
 	if err != nil {
-		recorder.engine.closeIdleConnections()
+		_ = recorder.source.Close()
 		recorder.finishFailedStart()
 		return err
 	}
@@ -211,12 +198,12 @@ func (recorder *Recorder) Start(ctx context.Context) error {
 	recorder.mu.Unlock()
 
 	startFailure := func(cause error) error {
-		recorder.engine.closeIdleConnections()
+		_ = recorder.source.Close()
 		rollbackErr := removePartialArtifacts(artifacts, monitorRoot, rootCreated, recorder.artifactOps)
 		recorder.mu.Lock()
 		recorder.artifacts = nil
 		recorder.startTime = time.Time{}
-		recorder.sampleStates = make(map[string]containerSampleState)
+		recorder.baselines = make(map[string]cpuBaseline)
 		recorder.starting = false
 		recorder.mu.Unlock()
 		if rollbackErr != nil {
@@ -240,7 +227,7 @@ func (recorder *Recorder) Start(ctx context.Context) error {
 	recorder.started = true
 	recorder.mu.Unlock()
 	go recorder.sampleLoop(sampleContext, done)
-	recorder.logger.InfoContext(base, "resource monitoring started", "run", recorder.runID, "tasks", len(recorder.taskIDs))
+	recorder.logger.WithContext(base).WithFields(logrus.Fields{"run": recorder.runID, "tasks": len(recorder.taskIDs)}).Info("resource monitoring started")
 	return nil
 }
 
@@ -278,140 +265,99 @@ func (recorder *Recorder) sampleLoop(ctx context.Context, done chan struct{}) {
 
 func (recorder *Recorder) sample(ctx context.Context, second uint64, sampleTime time.Time) error {
 	requestCtx, cancel := requestContext(ctx, recorder.requestTimeout)
-	containers, err := recorder.engine.discover(requestCtx, recorder.runID, recorder.taskSet)
+	readings, err := recorder.source.Sample(requestCtx)
 	cancel()
 	if err != nil {
 		return err
 	}
-	recorder.reconcileSampleStates(containers)
-	for _, container := range containers {
-		requestCtx, cancel = requestContext(ctx, recorder.requestTimeout)
-		measurement, sampleErr := recorder.engine.stats(requestCtx, container)
-		cancel()
-		if errors.Is(sampleErr, errContainerGone) {
-			recorder.clearSampleState(container.ID)
-			continue
+	sort.Slice(readings, func(i, j int) bool {
+		if readings[i].TaskID != readings[j].TaskID {
+			return readings[i].TaskID < readings[j].TaskID
 		}
-		if sampleErr != nil {
-			var validationFailure *statsValidationError
-			if errors.As(sampleErr, &validationFailure) && recorder.deferTransientValidation(container.ID, sampleErr) {
-				continue
-			}
-			return sampleErr
+		if readings[i].Component != readings[j].Component {
+			return readings[i].Component < readings[j].Component
 		}
-		artifact := recorder.artifacts[measurement.taskID]
+		return readings[i].RuntimeID < readings[j].RuntimeID
+	})
+	present := make(map[string]struct{}, len(readings))
+	for _, reading := range readings {
+		if reading.ObservedAt.IsZero() {
+			reading.ObservedAt = sampleTime
+		}
+		if err := recorder.validateReading(reading); err != nil {
+			return err
+		}
+		key := reading.TaskID + "\x00" + reading.Component + "\x00" + reading.RuntimeID
+		present[key] = struct{}{}
+		cpuPercent, err := recorder.cpuPercent(key, reading)
+		if err != nil {
+			return err
+		}
+		artifact := recorder.artifacts[reading.TaskID]
 		if artifact == nil {
-			return fmt.Errorf("sampled unexpected task %q", measurement.taskID)
+			return fmt.Errorf("sampled unexpected task %q", reading.TaskID)
 		}
 		sample := ResourceSample{
-			Second:           second,
-			Time:             formatArtifactTime(sampleTime),
-			TaskID:           measurement.taskID,
-			Component:        measurement.kind,
-			ContainerID:      measurement.id,
-			ContainerName:    measurement.name,
-			CPUPercent:       measurement.cpu,
-			MemoryBytes:      measurement.memory,
-			MemoryLimitBytes: measurement.memLimit,
+			Second: second, Time: formatArtifactTime(reading.ObservedAt), TaskID: reading.TaskID,
+			Component: reading.Component, RuntimeID: reading.RuntimeID, RuntimeName: reading.RuntimeName,
+			CPUUsageNanoseconds: reading.CPUUsageNanoseconds, CPUPercent: cpuPercent,
+			MemoryUsageBytes: reading.MemoryUsageBytes, MemoryLimitBytes: reading.MemoryLimitBytes,
 		}
 		if err := artifact.appendSample(sample, recorder.maxSamplesPerTask, recorder.maxFileBytes); err != nil {
-			return fmt.Errorf("record monitor sample for task %s: %w", measurement.taskID, err)
+			return fmt.Errorf("record monitor sample for task %s: %w", reading.TaskID, err)
 		}
-		recorder.recordValidSample(container.ID)
+	}
+	recorder.dropMissingBaselines(present)
+	return nil
+}
+
+func (recorder *Recorder) validateReading(reading core.ResourceReading) error {
+	if _, ok := recorder.taskSet[reading.TaskID]; !ok {
+		return fmt.Errorf("sampled unexpected task %q", reading.TaskID)
+	}
+	if err := validateIdentity("component", reading.Component); err != nil {
+		return err
+	}
+	if err := validateIdentity("runtime", reading.RuntimeID); err != nil {
+		return err
+	}
+	if strings.TrimSpace(reading.RuntimeName) == "" || strings.ContainsAny(reading.RuntimeName, "\x00\r\n") {
+		return errors.New("monitor runtime name is invalid")
+	}
+	if reading.MemoryUsageBytes > maxMemoryBytes || reading.MemoryLimitBytes > maxMemoryBytes {
+		return errors.New("monitor memory measurement exceeds the bound")
 	}
 	return nil
 }
 
-func (recorder *Recorder) reconcileSampleStates(containers []listedContainer) {
-	present := make(map[string]struct{}, len(containers))
-	for _, container := range containers {
-		present[container.ID] = struct{}{}
+func (recorder *Recorder) cpuPercent(key string, reading core.ResourceReading) (float64, error) {
+	previous, ok := recorder.baselines[key]
+	if !ok {
+		recorder.baselines[key] = cpuBaseline{usage: reading.CPUUsageNanoseconds, time: reading.ObservedAt}
+		return 0, nil
 	}
-	recorder.mu.Lock()
-	defer recorder.mu.Unlock()
-	for containerID := range recorder.sampleStates {
-		if _, ok := present[containerID]; !ok {
-			delete(recorder.sampleStates, containerID)
+	if !reading.ObservedAt.After(previous.time) {
+		return 0, fmt.Errorf("monitor runtime %s observation time did not advance", reading.RuntimeID)
+	}
+	if reading.CPUUsageNanoseconds < previous.usage {
+		return 0, fmt.Errorf("monitor runtime %s CPU counter decreased", reading.RuntimeID)
+	}
+	deltaCPU := reading.CPUUsageNanoseconds - previous.usage
+	deltaWall := reading.ObservedAt.Sub(previous.time)
+	percent := float64(deltaCPU) / float64(deltaWall) * 100
+	if math.IsNaN(percent) || math.IsInf(percent, 0) || percent < 0 || percent > maxCPUPercent {
+		return 0, fmt.Errorf("monitor runtime %s CPU percentage %v is invalid", reading.RuntimeID, percent)
+	}
+	recorder.baselines[key] = cpuBaseline{usage: reading.CPUUsageNanoseconds, time: reading.ObservedAt}
+	return percent, nil
+}
+
+func (recorder *Recorder) dropMissingBaselines(present map[string]struct{}) {
+	for key := range recorder.baselines {
+		if _, ok := present[key]; !ok {
+			delete(recorder.baselines, key)
 		}
 	}
-}
-
-func (recorder *Recorder) recordValidSample(containerID string) {
-	recorder.mu.Lock()
-	state := recorder.sampleStates[containerID]
-	state.hasValidSample = true
-	state.invalidSince = time.Time{}
-	state.validationErr = nil
-	recorder.sampleStates[containerID] = state
-	recorder.mu.Unlock()
-}
-
-func (recorder *Recorder) deferTransientValidation(containerID string, validationErr error) bool {
-	recorder.mu.Lock()
-	defer recorder.mu.Unlock()
-	state := recorder.sampleStates[containerID]
-	if !state.hasValidSample {
-		return false
-	}
-	now := recorder.now()
-	if state.invalidSince.IsZero() {
-		state.invalidSince = now
-		state.validationErr = validationErr
-		recorder.sampleStates[containerID] = state
-		return true
-	}
-	elapsed := now.Sub(state.invalidSince)
-	return elapsed >= 0 && elapsed < transientValidationGrace
-}
-
-func (recorder *Recorder) clearSampleState(containerID string) {
-	recorder.mu.Lock()
-	delete(recorder.sampleStates, containerID)
-	recorder.mu.Unlock()
-}
-
-func (recorder *Recorder) pendingValidations() []pendingValidation {
-	recorder.mu.Lock()
-	defer recorder.mu.Unlock()
-	pending := make([]pendingValidation, 0, len(recorder.sampleStates))
-	for containerID, state := range recorder.sampleStates {
-		if !state.invalidSince.IsZero() && state.validationErr != nil {
-			pending = append(pending, pendingValidation{containerID: containerID, err: state.validationErr})
-		}
-	}
-	sort.Slice(pending, func(i, j int) bool { return pending[i].containerID < pending[j].containerID })
-	return pending
-}
-
-func (recorder *Recorder) reconcilePendingValidations() error {
-	pending := recorder.pendingValidations()
-	if len(pending) == 0 {
-		return nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), recorder.requestTimeout)
-	containers, err := recorder.engine.discover(ctx, recorder.runID, recorder.taskSet)
-	cancel()
-	if err != nil {
-		failures := make([]error, 0, len(pending)+1)
-		for _, validation := range pending {
-			failures = append(failures, validation.err)
-		}
-		failures = append(failures, fmt.Errorf("reconcile pending monitor validation: %w", err))
-		return errors.Join(failures...)
-	}
-	present := make(map[string]struct{}, len(containers))
-	for _, container := range containers {
-		present[container.ID] = struct{}{}
-	}
-	var failures []error
-	for _, validation := range pending {
-		if _, ok := present[validation.containerID]; ok {
-			failures = append(failures, validation.err)
-			continue
-		}
-		recorder.clearSampleState(validation.containerID)
-	}
-	return errors.Join(failures...)
 }
 
 // Stop stops sampling independently of the caller's cancellation, finalizes
@@ -422,7 +368,7 @@ func (recorder *Recorder) Stop(ctx context.Context) (map[string]core.ObserverRes
 		starting := recorder.starting
 		recorder.mu.Unlock()
 		if !starting {
-			recorder.engine.closeIdleConnections()
+			_ = recorder.source.Close()
 		}
 		return nil, errors.New("monitor recorder is not started")
 	}
@@ -449,7 +395,10 @@ func (recorder *Recorder) Stop(ctx context.Context) (map[string]core.ObserverRes
 
 func (recorder *Recorder) finishStop(attempt *stopAttempt) {
 	complete := func(reports map[string]core.ObserverResult, err error, completed bool) {
-		recorder.engine.closeIdleConnections()
+		if closeErr := recorder.source.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close monitor resource source: %w", closeErr))
+			completed = false
+		}
 		recorder.completeAttempt(attempt, reports, err, completed)
 	}
 	recorder.mu.Lock()
@@ -457,7 +406,6 @@ func (recorder *Recorder) finishStop(attempt *stopAttempt) {
 	done := recorder.sampleDone
 	recorder.mu.Unlock()
 	cancel()
-	recorder.engine.closeIdleConnections()
 	timer := time.NewTimer(recorder.stopTimeout)
 	defer timer.Stop()
 	select {
@@ -466,11 +414,6 @@ func (recorder *Recorder) finishStop(attempt *stopAttempt) {
 		complete(nil, errors.New("monitor sampler did not stop before its timeout"), false)
 		return
 	}
-	if err := recorder.reconcilePendingValidations(); err != nil {
-		complete(nil, err, false)
-		return
-	}
-
 	recorder.mu.Lock()
 	if recorder.stopTime.IsZero() {
 		recorder.stopTime = recorder.now().UTC()
@@ -533,7 +476,7 @@ func (recorder *Recorder) finishStop(attempt *stopAttempt) {
 		}
 	}
 	complete(reports, nil, true)
-	recorder.logger.Info("resource monitoring stopped", "run", recorder.runID, "status", status)
+	recorder.logger.WithFields(logrus.Fields{"run": recorder.runID, "status": status}).Info("resource monitoring stopped")
 }
 
 func (recorder *Recorder) completeAttempt(attempt *stopAttempt, reports map[string]core.ObserverResult, err error, completed bool) {
@@ -544,7 +487,7 @@ func (recorder *Recorder) completeAttempt(attempt *stopAttempt, reports map[stri
 	if completed {
 		recorder.completed = true
 		recorder.reports = cloneReports(reports)
-		recorder.sampleStates = nil
+		recorder.baselines = nil
 	}
 	recorder.mu.Unlock()
 	close(attempt.done)
@@ -574,4 +517,11 @@ func validateIdentity(kind, value string) error {
 		}
 	}
 	return nil
+}
+
+func requestContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if deadline, ok := parent.Deadline(); ok && time.Until(deadline) <= timeout {
+		return context.WithCancel(parent)
+	}
+	return context.WithTimeout(parent, timeout)
 }
