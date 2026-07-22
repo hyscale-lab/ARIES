@@ -77,6 +77,7 @@ type ToolEndpoint struct {
 
 // HarnessRequest contains task-local runtime inputs supplied before Run.
 type HarnessRequest struct {
+	RunID     string       `json:"run_id"`
 	TaskID    string       `json:"task_id"`
 	Endpoint  ToolEndpoint `json:"tool_endpoint"`
 	Model     ModelConfig  `json:"model"`
@@ -123,11 +124,13 @@ type Evaluation struct {
 	Error          string        `json:"error,omitempty"`
 }
 
-// ObserverResult remains not_enabled until the concrete M7 observer is
-// composed outside the Runner.
+// ObserverResult records observer-only evidence composed outside the Runner.
 type ObserverResult struct {
-	Status string `json:"status"`
-	Error  string `json:"error,omitempty"`
+	Status      string        `json:"status"`
+	Duration    time.Duration `json:"duration"`
+	SampleCount int           `json:"sample_count"`
+	LogPaths    []string      `json:"log_paths,omitempty"`
+	Error       string        `json:"error,omitempty"`
 }
 
 // CleanupResult is separate from functional and evaluation outcomes.

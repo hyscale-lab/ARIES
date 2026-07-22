@@ -1,8 +1,8 @@
 # ARIES Design
 
-Status: **implemented and approved through M6; the M6 commit is pending**. The RALPLAN-DR Architect and sequential
-Critic approved the source draft without blockers. M0 then confirmed the
-pinned runtime assumptions below; later milestones must return to planning if
+Status: **MVP implemented and verified through M7.** The RALPLAN-DR Architect
+and sequential Critic approved the design without blockers. M0 then confirmed
+the pinned runtime assumptions below; later changes must return to planning if
 one of these locked contracts changes.
 
 ## Goal and workspace boundaries
@@ -206,12 +206,18 @@ Docker owns Docker; the bridge owns SSH; OpenClaw owns harness config and run;
 `cmd/aries` owns explicit construction. Benchmark and harness do not import one
 another.
 
-Monitoring is a concrete observer, not a fifth Runner role. M6 runs with no
-observer and records observer status `not_enabled`. In M7 the composition root
-starts `monitor.Recorder` before a fresh `Runner.Run`, the recorder discovers
-run-labeled containers without controlling them, and the root stops it after
-Runner cleanup using the same bounded cleanup policy. Observer failure is a
-separate result and never starts, stops, retries, or scores a task.
+Monitoring is a concrete observer, not a fifth Runner role. M6 ran with no
+observer and recorded `not_enabled`. In M7 the composition root starts
+`monitor.Recorder` before `Runner.Run` and stops it after Runner cleanup with a
+fresh bounded context derived from `context.WithoutCancel`. The recorder uses
+only Docker Engine `GET` requests: a container list filtered by exact
+`aries.managed=true` and `aries.run`, followed by one-shot stats for positively
+revalidated `task-container` and `openclaw-harness` records. Production sampling
+is once per second. Each task gets bounded private `resources.jsonl` samples and
+an `index.json` summary. The monitor never controls lifecycle or scoring;
+partial Start is rolled back, teardown disappearance is normal, and any Start,
+sampling, or Stop failure remains a separate observer result while the Runner
+and evaluator continue.
 
 ### M1 implementation refinements
 
@@ -472,9 +478,10 @@ deletes the control socket and credential directory, and positively checks
 every absence. Stop is concurrent-safe, retryable after failed evidence, and
 idempotent after success; uncertain-spawn rollback uses the same restart rule.
 
-Go's standard library has no SSH implementation. M4 raises the project minimum
-to Go 1.25.0 and pins `golang.org/x/crypto` v0.54.0 (BSD-3-Clause), with only
-its required `golang.org/x/sys` v0.47.0 indirect module in `go.mod`. This avoids
+Go's standard library has no SSH implementation. The repository minimum is Go
+1.25.12. `golang.org/x/crypto` remains pinned at v0.54.0 (BSD-3-Clause), with
+only its required `golang.org/x/sys` v0.47.0 indirect module in `go.mod`. This
+avoids
 the SSH flaws fixed in v0.52.0, including
 [GO-2026-5013](https://pkg.go.dev/vuln/GO-2026-5013),
 [GO-2026-5016](https://pkg.go.dev/vuln/GO-2026-5016), and
@@ -486,8 +493,8 @@ imported-package vulnerabilities. It reports one module-only advisory,
 [GO-2026-5932](https://pkg.go.dev/vuln/GO-2026-5932), for the unmaintained
 `golang.org/x/crypto/openpgp` package. ARIES imports only `x/crypto/ssh`, not
 `openpgp`; the scanner confirms there is no package or symbol path to that
-advisory. The scan tool selects its required Go 1.25.12 toolchain without
-changing the project's minimum Go version or module graph.
+advisory. The scan runs under the module-selected Go 1.25.12 toolchain without
+changing the module graph.
 
 Unit tests use an in-memory full-duplex connection because the managed unit
 sandbox forbids socket syscalls; production still uses Unix/TCP sockets. The
@@ -542,6 +549,11 @@ exact OS-visible `openclaw` process title before returning.
 Run accepts one non-empty instruction exactly once. It executes the exact
 `node openclaw.mjs agent --session-key agent:main:aries-TASK --message
 INSTRUCTION --json --timeout SECONDS` argv through the same private launcher.
+A request for the exact official DeepSeek URL with model `deepseek-v4-flash`
+or `deepseek-v4-pro` additionally appends request-scoped `--thinking off`;
+deterministic and other endpoints retain the locked argv. Harness resources
+also carry the Runner's exact `aries.run` label, so the observer can identify
+them without coupling to OpenClaw internals.
 A small wrapper atomically publishes separate stdout, stderr, and numeric exit
 status only after the child finishes. ARIES requires all three files, exit zero,
 top-level OpenClaw status `ok`, and at least one final payload; an embedded
@@ -583,8 +595,9 @@ full lifecycle. Each invocation creates one mode-0700
 exclusively publishes `run-result.json` there. It prints the same JSON to
 stdout. A Runner error does not erase partial results: ARIES persists and
 prints them when possible, reports the joined error on stderr, and exits
-nonzero. A clean run exits zero. Component construction errors remove an unused
-empty run directory rather than manufacturing a result.
+nonzero. A clean run exits zero. Provider preflight always publishes its
+sanitized `live-validation.json`; construction failures return without
+manufacturing a Runner result.
 
 Terminal-Bench evaluation has its own command, timeout, environment, stdout,
 stderr, CTRF, and reward artifacts. It accepts only exact reward bytes `0` or
@@ -594,8 +607,9 @@ records: `test_about_file` and `test_layout_file`. Unknown fields, missing or
 duplicate cases, any other case or status, inconsistent summaries, malformed
 timings, or malformed reward are evaluator failures.
 
-`TestRunnerRealFixGitOracle` is the single deterministic M6 functional oracle.
-It composes the real pinned benchmark, Docker sandbox, SSH bridge, unmodified
+The retained M6 evidence was produced by the single deterministic functional
+oracle that M7 later evolved into `TestRunnerRealFixGitMonitoredRelease`. It
+composes the real pinned benchmark, Docker sandbox, SSH bridge, unmodified
 OpenClaw harness, and a strict fake OpenAI-compatible model. Before evaluation
 it positively proves verifier paths and canaries absent at `pre_harness`,
 `pre_run`, `post_run`, and `immediately_pre_evaluate`; proves the fake has no
@@ -617,9 +631,42 @@ status `not_enabled` with an explicit empty sample list; and explicit empty
 container, volume, and network inventories. The manifest links but does not
 hash itself. M7 may read this oracle but must not mutate it.
 
+### M7 observer and monitored release proof
+
+`TestRunnerRealFixGitMonitoredRelease` evolves the single full deterministic
+integration path rather than adding another paid or redundant oracle. It starts
+the concrete recorder before the real Runner and stops it only after Runner
+cleanup. OpenClaw still owns its agent result, stderr, gateway log, upstream
+telemetry index, and available session and trajectory files; Docker still owns
+the sandbox stdout and stderr; Terminal-Bench still owns verifier artifacts.
+The monitor adds only read-only resource observations and does not duplicate or
+follow component logs.
+
+Each successful run writes a separate ignored private directory at
+`.cache/integration/m7/fix-git-<random>/`. Its exclusively created mode-0400
+`manifest.json` uses schema `aries.m7.monitored.v1`, portable root-relative
+semantic roles, and SHA-256 plus byte size for every retained artifact. It
+records the separate harness, isolation, evaluation, observer, and cleanup
+outcomes; exact pins, verifier sources, reward bytes, and cases; monitor index
+and samples; live-validation disposition; M6 before/after preservation
+metadata; and explicit final Docker inventories.
+
+The final fresh local proof produced reward `1`, passed exactly
+`test_about_file` and `test_layout_file`, retained 27 hashed artifacts, and
+recorded 73 samples at the exact one-second interval. Coverage includes both
+the task sandbox and OpenClaw container with shared sampled seconds. Final
+container, volume, and network inventories were empty. Ordinary integration
+snapshots and preserves zero or more ignored local M6 manifests, so a clean
+checkout has no historical-artifact prerequisite. Setting
+`ARIES_REQUIRE_CANONICAL_M6=1` turns on the final-release audit that requires the
+expected retained canonical M6 hash. This workspace used that opt-in and proved
+the canonical manifest byte-identical. Ignored `.cache` evidence is a local
+release proof, not shipped runtime state.
+
 ## Exact lifecycle and evaluation isolation
 
-For each task:
+The composition root may start the observer before the Runner and stop it after
+Runner cleanup, but observation does not alter the following per-task sequence:
 
 1. obtain the task;
 2. start the sandbox;
@@ -646,40 +693,54 @@ rollback is owned by the component that partially acquired the resource.
 
 ## DeepSeek secret flow
 
-The experiment stores only `api_key_env: "DEEPSEEK_API_KEY"`. M5 reads the
-named host environment variable, validates its bounded single-line value, and
-copies it through a private stdin tar stream into a task-local UID-1000
-mode-0600 volume file. The rendered config retains only the variable reference;
-the private launcher exports the value inside the OpenClaw process. The value
-never enters Docker `Config.Env`, command arguments, task sandbox or evaluator
-environment, redacted logs, results, telemetry, or tracked content. Terminal
-rollback and successful Stop explicitly zero the host byte slice, and Stop
-positively removes the harness container and private volumes.
+The experiment stores only `api_key_env: "DEEPSEEK_API_KEY"`. For the exact
+official DeepSeek URL and supported V4 model IDs, `cmd/aries` first anchors the
+key location to the trusted repository layout: the executable must be the
+regular non-symlinked `bin/aries`, the parent must contain the expected bounded
+`go.mod`, and the repository root itself must not be a symlink. The fixed
+ignored root file `DEEPSEEK_API.key` wins when present. The loader uses
+`O_NOFOLLOW`, requires a current-user-owned regular mode-0600 file, verifies
+stable device, inode, size, and modification time before and after its bounded
+read, accepts at most 16 KiB with one optional terminal LF, and rejects empty,
+NUL, CR, or remaining LF content. Only when the fixed file is absent does the
+named environment variable provide the credential.
 
-M7 will add the explicitly requested host loader that reads the user-provided,
-ignored `DEEPSEEK_API.key` once, rejects empty, oversized, NUL-containing, or
-multiline content, removes one terminal newline, and supplies only the named
-host environment value before constructing the M5 harness request.
+Lookups return fresh byte clones. The harness copies the credential through a
+private stdin tar stream into a task-local UID-1000 mode-0600 volume file. The
+rendered config retains only the variable reference; the private launcher
+exports the value inside OpenClaw. Source and request buffers are explicitly
+cleared. The value never enters Docker `Config.Env`, command arguments, task
+or evaluator environments, logs, results, telemetry, digests, or tracked
+content. Terminal rollback and successful Stop clear retained host bytes and
+positively remove the harness container and private volumes.
 
-A missing or invalid file, failed bounded provider preflight, or unavailable
-provider records a finite skip reason and performs no unbounded retries. Canary,
-redaction, exact-byte scans, and tracked-file checks are release gates.
+Before any Docker or Runner component construction, official DeepSeek runs make
+an authenticated, redirect-disabled `GET https://api.deepseek.com/models` with
+a ten-second attempt timeout and 64 KiB response cap. The response must contain
+the exact requested `deepseek-v4-flash` or `deepseek-v4-pro` ID. ARIES makes at
+most two attempts and retries only transport errors or HTTP 500/503, after a
+two-second delay. `live-validation.json` records only a typed sanitized status,
+category, provider, endpoint, model, and attempt count. A failed preflight
+starts no Docker, harness, Runner, or paid model turn.
+
+One optional live validation recorded `model_confirmed` in one attempt, reward
+`1`, 103 one-second samples, confirmed isolation and cleanup, and empty final
+ARIES resource inventories; it supplements but does not replace the
+deterministic monitored release oracle.
 
 ## Evidence and repository completion contract
 
 M6 writes an immutable **functional-oracle manifest** for its deterministic
-reward-`1` run, with observer status `not_enabled` and no samples. M7 never
-mutates it. After monitoring exists, M7 performs a fresh deterministic reward-`1`
-run and writes a separate immutable **monitored release manifest** containing
-observer samples and outcome.
+reward-`1` run, with observer status `not_enabled` and no samples. M7 reads but
+does not mutate it. M7 writes a separate immutable **monitored release
+manifest** for a fresh deterministic reward-`1` run, with one-second samples
+and a separate observer outcome. Both are ignored local evidence.
 
-Before the reviewed M7 commit, all build, test, integration, scan, manifest,
-README, DESIGN, and TASKS writes finish. README documents setup, exact run
-commands, artifact interpretation, architecture, and adding one concrete
-component package plus one explicit constructor switch. All TASKS boxes close
-and the complete diff is reviewed before that commit. After M7 commit, only
-read-only Git and inventory verification runs; no document, checkbox, manifest,
-scan output, or project artifact is changed.
+The completed M7 release includes build, unit, race, lint, integration,
+security-scan, manifest, documentation, and cleanup evidence. README documents
+setup, clean-checkout integration, the opt-in canonical-M6 audit, production
+execution, artifact interpretation, architecture, and the explicit extension
+path. Post-release verification is read-only.
 
 ## ADR-001 summary
 

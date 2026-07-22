@@ -232,6 +232,7 @@ func (f *fakeBridge) stopCount() int {
 type fakeHarness struct {
 	mu         sync.Mutex
 	log        *callLog
+	requests   []core.HarnessRequest
 	startErr   error
 	runErrors  []error
 	stopErrors []error
@@ -239,16 +240,20 @@ type fakeHarness struct {
 	stops      int
 }
 
-func (f *fakeHarness) Start(ctx context.Context, _ core.HarnessRequest) error {
+func (f *fakeHarness) Start(ctx context.Context, request core.HarnessRequest) error {
 	f.log.add("harness.start", ctx)
 	if err := ctx.Err(); err != nil {
 		f.log.addRollback("harness.rollback", ctx)
 		return err
 	}
-	if f.startErr != nil {
+	f.mu.Lock()
+	f.requests = append(f.requests, request)
+	startErr := f.startErr
+	f.mu.Unlock()
+	if startErr != nil {
 		f.log.addRollback("harness.rollback", ctx)
 	}
-	return f.startErr
+	return startErr
 }
 
 func (f *fakeHarness) Run(ctx context.Context, _ string) (core.HarnessResult, error) {
@@ -343,6 +348,9 @@ func TestRunnerSuccessOrdering(t *testing.T) {
 	if task.Observer.Status != core.StatusNotEnabled {
 		t.Fatalf("observer status = %q", task.Observer.Status)
 	}
+	if task.Observer.Duration != 0 || task.Observer.SampleCount != 0 || len(task.Observer.LogPaths) != 0 {
+		t.Fatalf("disabled observer recorded data: %#v", task.Observer)
+	}
 	if result.RunID != "test-run" {
 		t.Fatalf("run ID = %q, want test-run", result.RunID)
 	}
@@ -351,6 +359,12 @@ func TestRunnerSuccessOrdering(t *testing.T) {
 	rig.factory.mu.Unlock()
 	if len(requests) != 1 || requests[0].RunID != "test-run" || requests[0].TaskID != "a" || !reflect.DeepEqual(requests[0].Environment, rig.benchmark.tasks[0].Environment) {
 		t.Fatalf("sandbox requests = %#v", requests)
+	}
+	rig.harness.mu.Lock()
+	harnessRequests := append([]core.HarnessRequest(nil), rig.harness.requests...)
+	rig.harness.mu.Unlock()
+	if len(harnessRequests) != 1 || harnessRequests[0].RunID != "test-run" || harnessRequests[0].TaskID != "a" || harnessRequests[0].OutputDir != "runs" {
+		t.Fatalf("harness requests = %#v", harnessRequests)
 	}
 }
 

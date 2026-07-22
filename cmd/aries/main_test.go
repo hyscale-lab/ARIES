@@ -6,6 +6,9 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -16,6 +19,7 @@ import (
 	"github.com/hyscale-lab/aries/pkg/benchmark/terminalbench"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
+	openclawharness "github.com/hyscale-lab/aries/pkg/harness/openclaw"
 )
 
 func TestBuildExperimentUsesExplicitTypeSwitches(t *testing.T) {
@@ -44,9 +48,9 @@ func TestBuildExperimentUsesExplicitTypeSwitches(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			cfg := valid
 			test.change(&cfg)
-			experiment, err := buildExperiment(cfg, "test-run", cfg.OutputDir)
+			experiment, err := buildExperiment(cfg, "test-run", cfg.OutputDir, nil)
 			if test.wantErr == "" {
-				if err != nil || experiment == nil {
+				if err != nil || experiment == nil || experiment.Runner == nil || experiment.Recorder == nil {
 					t.Fatalf("buildExperiment() = %v, %v", experiment, err)
 				}
 				return
@@ -189,6 +193,226 @@ func TestRunRejectsUnknownSetupComponent(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), `unsupported setup component "other"`) {
 		t.Fatalf("run() error = %v", err)
 	}
+}
+
+func TestRunCommandUsesFixedLocalKeyAndPersistsSanitizedLoaderFailure(t *testing.T) {
+	repositoryRoot, executablePath := createTestAriesRepository(t)
+	secret := "synthetic-command-key"
+	keyPath := filepath.Join(repositoryRoot, localAPIKeyFile)
+	if err := os.WriteFile(keyPath, []byte(secret), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(keyPath, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	runs := filepath.Join(t.TempDir(), "runs")
+	configPath := writeCommandConfig(t, runs)
+	var stdout bytes.Buffer
+	err := runCommandWithDependencies(context.Background(), []string{configPath}, &stdout, commandDependencies{executablePath: executablePath})
+	if err == nil || strings.Contains(err.Error(), secret) || stdout.Len() != 0 {
+		t.Fatalf("runCommand() error=%v stdout=%q", err, stdout.String())
+	}
+	validation := readOnlyLiveValidation(t, runs)
+	if validation.Status != liveValidationFailed || validation.Category != liveValidationCredentialInvalid || validation.Attempts != 0 {
+		t.Fatalf("validation = %+v", validation)
+	}
+}
+
+func TestRunCommandFallsBackToEnvironmentWithoutMutatingIt(t *testing.T) {
+	_, executablePath := createTestAriesRepository(t)
+	launchDirectory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(launchDirectory, localAPIKeyFile), []byte("synthetic-cwd-key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restoreWorkingDirectory(t, launchDirectory)
+	value := "synthetic-environment-key\ninvalid"
+	t.Setenv(deepSeekAPIKey, value)
+	runs := filepath.Join(t.TempDir(), "runs")
+	configPath := writeCommandConfig(t, runs)
+	doer := &preflightDoer{t: t}
+	err := runCommandWithDependencies(context.Background(), []string{configPath}, io.Discard, commandDependencies{
+		executablePath: executablePath, preflightClient: doer,
+	})
+	if err == nil || strings.Contains(err.Error(), value) {
+		t.Fatalf("runCommand() error = %v", err)
+	}
+	if doer.requests != 0 {
+		t.Fatalf("preflight made %d requests instead of rejecting the environment fallback", doer.requests)
+	}
+	if got := os.Getenv(deepSeekAPIKey); got != value {
+		t.Fatalf("environment value changed: %q", got)
+	}
+	validation := readOnlyLiveValidation(t, runs)
+	if validation.Status != liveValidationFailed || validation.Category != liveValidationCredentialInvalid || validation.Attempts != 0 {
+		t.Fatalf("validation = %+v", validation)
+	}
+}
+
+func TestRunCommandSelectsAnchoredRepositoryKeyAndIgnoresLaunchCWD(t *testing.T) {
+	repositoryRoot, executablePath := createTestAriesRepository(t)
+	anchoredKey := "synthetic-anchored-key"
+	if err := os.WriteFile(filepath.Join(repositoryRoot, localAPIKeyFile), []byte(anchoredKey), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	launchDirectory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(launchDirectory, localAPIKeyFile), []byte("synthetic-cwd-key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restoreWorkingDirectory(t, launchDirectory)
+	runs := filepath.Join(t.TempDir(), "runs")
+	configPath := writeCommandConfig(t, runs)
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content = bytes.Replace(content, []byte(`"type":"terminalbench2"`), []byte(`"type":"unsupported"`), 1)
+	if err := os.WriteFile(configPath, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	doer := &preflightDoer{t: t, replies: []preflightReply{{
+		status: http.StatusOK, body: `{"data":[{"id":"deepseek-v4-flash"}]}`,
+	}}}
+	err = runCommandWithDependencies(context.Background(), []string{configPath}, io.Discard, commandDependencies{
+		executablePath: executablePath, preflightClient: doer,
+		preflightSleep: func(context.Context, time.Duration) error { return nil },
+	})
+	if err == nil || !strings.Contains(err.Error(), `unsupported benchmark type "unsupported"`) {
+		t.Fatalf("runCommand() error = %v", err)
+	}
+	if len(doer.authorizations) != 1 || doer.authorizations[0] != "Bearer "+anchoredKey {
+		t.Fatalf("preflight authorization selected the wrong source: %q", doer.authorizations)
+	}
+	validation := readOnlyLiveValidation(t, runs)
+	if validation.Status != liveValidationSucceeded || validation.Category != liveValidationConfirmed || validation.Attempts != 1 {
+		t.Fatalf("validation = %+v", validation)
+	}
+}
+
+func TestRunCommandFailsClosedWhenRepositoryRootIsUntrusted(t *testing.T) {
+	launchDirectory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(launchDirectory, localAPIKeyFile), []byte("synthetic-cwd-key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restoreWorkingDirectory(t, launchDirectory)
+	untrustedExecutable := filepath.Join(t.TempDir(), ariesExecutableName)
+	if err := os.WriteFile(untrustedExecutable, []byte("synthetic executable"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runs := filepath.Join(t.TempDir(), "runs")
+	configPath := writeCommandConfig(t, runs)
+	doer := &preflightDoer{t: t}
+	err := runCommandWithDependencies(context.Background(), []string{configPath}, io.Discard, commandDependencies{
+		executablePath: untrustedExecutable, preflightClient: doer,
+	})
+	if err == nil || !strings.Contains(err.Error(), "resolve ARIES repository root") || doer.requests != 0 {
+		t.Fatalf("runCommand() error=%v requests=%d", err, doer.requests)
+	}
+	validation := readOnlyLiveValidation(t, runs)
+	if validation.Status != liveValidationFailed || validation.Category != liveValidationConfigurationInvalid || validation.Attempts != 0 {
+		t.Fatalf("validation = %+v", validation)
+	}
+}
+
+func TestRunCommandLeavesNonDeepSeekOnExistingEnvironmentPath(t *testing.T) {
+	root := t.TempDir()
+	restoreWorkingDirectory(t, root)
+	if err := os.WriteFile(localAPIKeyFile, []byte("invalid-local-file"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(localAPIKeyFile, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	configPath := writeCommandConfig(t, filepath.Join(root, "runs"))
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content = bytes.Replace(content, []byte(`"type":"terminalbench2"`), []byte(`"type":"unsupported"`), 1)
+	content = bytes.Replace(content, []byte(`"base_url":"https://api.deepseek.com"`), []byte(`"base_url":"http://fake-model.invalid/v1"`), 1)
+	content = bytes.Replace(content, []byte(`"model":"deepseek-v4-flash"`), []byte(`"model":"deterministic"`), 1)
+	content = bytes.Replace(content, []byte(`"api_key_env":"DEEPSEEK_API_KEY"`), []byte(`"api_key_env":"ARIES_FAKE_KEY"`), 1)
+	if err := os.WriteFile(configPath, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err = runCommand(context.Background(), []string{configPath}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), `unsupported benchmark type "unsupported"`) {
+		t.Fatalf("runCommand() error = %v", err)
+	}
+	validation := readOnlyLiveValidation(t, filepath.Join(root, "runs"))
+	if validation.Status != liveValidationNotRequested || validation.Category != liveValidationSkipped || validation.Attempts != 0 {
+		t.Fatalf("validation = %+v", validation)
+	}
+}
+
+func restoreWorkingDirectory(t *testing.T, directory string) {
+	t.Helper()
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(directory); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(previous); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	})
+}
+
+func writeCommandConfig(t *testing.T, outputDir string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "experiment.json")
+	content := fmt.Sprintf(`{
+  "name":"test-live-validation",
+  "benchmark":{"type":"terminalbench2","root":".cache/terminal-bench-2","tasks":["fix-git"]},
+  "harness":{"type":"openclaw","image":%q},
+  "sandbox":{"type":"docker"},
+  "bridge":{"type":"openclaw-ssh"},
+  "model":{"base_url":"https://api.deepseek.com","model":"deepseek-v4-flash","api_key_env":"DEEPSEEK_API_KEY"},
+  "output_dir":%q
+}`, openclawharness.PinnedImage, outputDir)
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func readOnlyLiveValidation(t *testing.T, runs string) liveValidation {
+	t.Helper()
+	entries, err := os.ReadDir(runs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || !entries[0].IsDir() {
+		t.Fatalf("run entries = %v", entries)
+	}
+	content, err := os.ReadFile(filepath.Join(runs, entries[0].Name(), liveValidationName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var validation liveValidation
+	if err := json.Unmarshal(content, &validation); err != nil {
+		t.Fatal(err)
+	}
+	return validation
+}
+
+func createTestAriesRepository(t *testing.T) (string, string) {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte(ariesModuleLine+"\n\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(root, "bin")
+	if err := os.Mkdir(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	executable := filepath.Join(bin, ariesExecutableName)
+	if err := os.WriteFile(executable, []byte("synthetic executable"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return root, executable
 }
 
 type counterReader struct {

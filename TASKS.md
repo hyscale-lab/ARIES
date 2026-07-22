@@ -137,35 +137,42 @@ documentation, cleanup, and identifiable ARIES-only commit are complete.
 
 ## M7 — Observer, live-key loader, and monitored release proof
 
-- [ ] Start concrete `monitor.Recorder` before `Runner.Run` and stop it after
+- [x] Start concrete `monitor.Recorder` before `Runner.Run` and stop it after
   Runner cleanup with the bounded cleanup context. It observes run labels and
   never controls lifecycle or scoring.
-- [ ] Record OpenClaw and sandbox logs, one-second CPU and memory samples, and
-  available upstream trajectory; test observer partial Start, failure, and Stop.
-- [ ] Implement the host key loader from ignored `DEEPSEEK_API.key` to only
-  `DEEPSEEK_API_KEY` in the OpenClaw runtime environment. Reject invalid content,
-  place no value in argv or files, and remove the harness container afterward.
-- [ ] Run a fresh deterministic reward-`1` E2E with monitoring and write a
+- [x] Record existing OpenClaw and sandbox logs, one-second CPU and memory
+  samples for both containers, and available upstream trajectory; test observer
+  partial Start, sampling failure, and retryable Stop without lifecycle control.
+- [x] Implement the fixed ignored `DEEPSEEK_API.key` loader anchored to the
+  trusted repository `bin/aries` layout. Require current ownership, mode 0600,
+  no symlink, stable metadata, and bounded single-line bytes; use the named
+  environment fallback only when the file is absent, and never expose the value
+  in config, argv, Docker metadata, logs, results, task, or evaluator.
+- [x] Authenticate and bound the official DeepSeek `/models` preflight before
+  Docker construction, retry only transport/500/503 once after two seconds,
+  require the exact official model, and disable thinking only for exact official
+  DeepSeek V4 requests.
+- [x] Run a fresh deterministic reward-`1` E2E with monitoring and write a
   separate immutable **M7 monitored release manifest** with observer samples and
-  outcome. Do not amend the M6 functional-oracle manifest.
-- [ ] Run canary, redaction, exact-byte, tracked-file, task-sandbox, config, log,
-  result, telemetry, temp-tree, and empty-resource scans. Record a finite bounded
-  skip reason or at most one live DeepSeek case; live evidence remains optional.
-- [ ] Update README with setup, exact run commands, artifact interpretation,
+  outcome. The fresh proof passed both exact verifier cases with reward `1`, 73
+  one-second samples covering both container kinds with shared seconds, 27
+  hashed artifacts, and no resource leaks. Ordinary integration preserves zero
+  or more ignored M6 manifests; the final workspace audit used
+  `ARIES_REQUIRE_CANONICAL_M6=1` and preserved the expected canonical hash.
+- [x] Pass canary, redaction, exact-byte, tracked-file, task-sandbox, config,
+  log, result, telemetry, temp-tree, and empty-resource scans.
+- [x] Record optional live DeepSeek evidence with one confirmed preflight,
+  reward `1`, 103 one-second samples, confirmed isolation and cleanup, and no
+  final ARIES Docker resource.
+- [x] Update README with setup, exact run commands, artifact interpretation,
   architecture, and the one-package plus one-explicit-switch extension path.
-- [ ] Before the reviewed M7 commit, freshly pass `make build`, `make test`,
+- [x] Freshly pass `make build`, `make test`,
   `make test-race`, `make lint`, and `make integration`; update DESIGN and README,
-  close every MVP checkbox in TASKS, and review the complete diff. These are the
-  last write-producing actions.
+  close every MVP checkbox in TASKS, and review the complete diff.
 
-After all M7 boxes are closed and the diff is approved, create the reviewed
-commit `feat(monitor): record verified task artifacts`. The committed TASKS file
-already contains the closed boxes; no post-commit checkbox edit is allowed.
+## Read-only release verification
 
-## Post-M7 read-only release verification
-
-After the M7 commit, run only read-only checks and report them in the
-session or console without filesystem writes:
+The final release audit also confirms:
 
 - `git status --porcelain` is empty;
 - `git ls-files` contains no `.omx`, cache, run, temp config, key, or

@@ -19,6 +19,7 @@ import (
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
 	openclawharness "github.com/hyscale-lab/aries/pkg/harness/openclaw"
+	"github.com/hyscale-lab/aries/pkg/monitor"
 	"github.com/hyscale-lab/aries/pkg/runner"
 	dockersandbox "github.com/hyscale-lab/aries/pkg/sandbox/docker"
 )
@@ -37,6 +38,16 @@ func run(args []string) error {
 }
 
 func runCommand(ctx context.Context, args []string, stdout io.Writer) error {
+	return runCommandWithDependencies(ctx, args, stdout, commandDependencies{})
+}
+
+type commandDependencies struct {
+	executablePath  string
+	preflightClient httpDoer
+	preflightSleep  contextSleep
+}
+
+func runCommandWithDependencies(ctx context.Context, args []string, stdout io.Writer, dependencies commandDependencies) error {
 	if len(args) == 2 && args[0] == "setup" {
 		return setup(ctx, args[1])
 	}
@@ -58,18 +69,50 @@ func runCommand(ctx context.Context, args []string, stdout io.Writer) error {
 	if err := createRunOutputRoot(outputRoot); err != nil {
 		return fmt.Errorf("create private run output root: %w", err)
 	}
-	experiment, err := buildExperiment(cfg, runID, outputRoot)
-	if err != nil {
-		removeErr := os.Remove(outputRoot)
-		if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			return errors.Join(err, fmt.Errorf("remove unused run output root: %w", removeErr))
+	var apiKeys *apiKeySource
+	exists := false
+	if isOfficialDeepSeek(cfg.Model) {
+		repositoryRoot, rootErr := ariesRepositoryRoot(dependencies.executablePath)
+		if rootErr != nil {
+			validation := failedLiveValidation(cfg.Model, liveValidationConfigurationInvalid, 0)
+			persistErr := persistLiveValidation(outputRoot, validation)
+			return errors.Join(fmt.Errorf("resolve ARIES repository root: %w", rootErr), persistErr)
 		}
+		apiKeys, exists, err = loadLocalAPIKeySource(filepath.Join(repositoryRoot, localAPIKeyFile))
+		if err != nil {
+			validation := failedLiveValidation(cfg.Model, liveValidationCredentialInvalid, 0)
+			persistErr := persistLiveValidation(outputRoot, validation)
+			return errors.Join(fmt.Errorf("load local API key: %w", err), persistErr)
+		}
+		if exists {
+			defer apiKeys.Clear()
+		}
+	}
+
+	preflightLookup := environmentAPIKeyLookup
+	var harnessLookup func(string) ([]byte, bool)
+	if exists {
+		preflightLookup = apiKeys.Lookup
+		harnessLookup = apiKeys.Lookup
+	}
+	validation, preflightErr := validateLiveModel(ctx, cfg.Model, preflightLookup, dependencies.preflightClient, dependencies.preflightSleep)
+	persistErr := persistLiveValidation(outputRoot, validation)
+	if preflightErr != nil || persistErr != nil {
+		return errors.Join(preflightErr, persistErr)
+	}
+
+	experiment, err := buildExperiment(cfg, runID, outputRoot, harnessLookup)
+	if err != nil {
 		return err
 	}
 	return executeAndRecord(ctx, experiment.Run, outputRoot, stdout)
 }
 
-func buildExperiment(cfg config.Config, runID, outputRoot string) (*runner.Runner, error) {
+func buildExperiment(
+	cfg config.Config,
+	runID, outputRoot string,
+	apiKeyLookup func(string) ([]byte, bool),
+) (*experiment, error) {
 	executable, err := os.Executable()
 	if err != nil {
 		return nil, fmt.Errorf("locate ARIES executable: %w", err)
@@ -92,7 +135,9 @@ func buildExperiment(cfg config.Config, runID, outputRoot string) (*runner.Runne
 	var harness runner.AgentHarness
 	switch cfg.Harness.Type {
 	case "openclaw":
-		harness, err = openclawharness.New(openclawharness.Options{Image: cfg.Harness.Image, OutputDir: outputRoot})
+		harness, err = openclawharness.New(openclawharness.Options{
+			Image: cfg.Harness.Image, OutputDir: outputRoot, APIKeyLookup: apiKeyLookup,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("construct OpenClaw harness: %w", err)
 		}
@@ -126,10 +171,20 @@ func buildExperiment(cfg config.Config, runID, outputRoot string) (*runner.Runne
 	default:
 		return nil, fmt.Errorf("unsupported bridge type %q", cfg.Bridge.Type)
 	}
-	return runner.New(benchmark, harness, sandbox, bridge, runner.Options{
+	benchmarkRunner, err := runner.New(benchmark, harness, sandbox, bridge, runner.Options{
 		Name: cfg.Name, RunID: runID, OutputDir: outputRoot,
 		Model: core.ModelConfig{BaseURL: cfg.Model.BaseURL, Model: cfg.Model.Model, APIKeyEnv: cfg.Model.APIKeyEnv},
 	})
+	if err != nil {
+		return nil, fmt.Errorf("construct runner: %w", err)
+	}
+	recorder, err := monitor.New(monitor.Options{
+		RunID: runID, TaskIDs: cfg.Benchmark.Tasks, OutputDir: outputRoot,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("construct monitor: %w", err)
+	}
+	return &experiment{Runner: benchmarkRunner, Recorder: recorder}, nil
 }
 
 func newRunID(now time.Time, random io.Reader) (string, error) {

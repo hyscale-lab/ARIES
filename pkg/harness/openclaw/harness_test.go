@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -51,6 +52,10 @@ type fakeDocker struct {
 	foreignHarness            bool
 	foreignInitializer        bool
 	foreignConfig             bool
+	containerRunLabel         string
+	omitContainerRunLabel     bool
+	volumeRunLabel            string
+	omitVolumeRunLabel        bool
 }
 
 func newFakeDocker(secret []byte) *fakeDocker {
@@ -75,6 +80,11 @@ func (fake *fakeDocker) Run(_ context.Context, stdin []byte, args ...string) (co
 		labels := commandLabels(args)
 		if fake.foreignConfig && strings.Contains(name, "-config-") {
 			labels["aries.attempt"] = "foreign-attempt"
+		}
+		if fake.omitVolumeRunLabel {
+			delete(labels, "aries.run")
+		} else if fake.volumeRunLabel != "" {
+			labels["aries.run"] = fake.volumeRunLabel
 		}
 		fake.volumeLabels[name] = labels
 		return commandResult{stdout: []byte(name + "\n")}, nil
@@ -158,7 +168,7 @@ func (fake *fakeDocker) Run(_ context.Context, stdin []byte, args ...string) (co
 			kind = "openclaw-initializer"
 		}
 		foreign := fake.foreignHarness && kind == "openclaw-harness" || fake.foreignInitializer && kind == "openclaw-initializer"
-		inspection := []containerInspection{fakeInspection(id, kind, foreign)}
+		inspection := []containerInspection{fakeInspection(id, kind, foreign, fake.containerRunLabel, fake.omitContainerRunLabel)}
 		content, _ := json.Marshal(inspection)
 		return commandResult{stdout: content}, nil
 	case len(args) >= 3 && args[0] == "container" && args[1] == "top":
@@ -220,12 +230,17 @@ func (fake *fakeDocker) Run(_ context.Context, stdin []byte, args ...string) (co
 	}
 }
 
-func fakeInspection(id, kind string, foreign bool) containerInspection {
+func fakeInspection(id, kind string, foreign bool, runLabel string, omitRunLabel bool) containerInspection {
 	var inspection containerInspection
 	inspection.ID = id
 	inspection.Config.Image = PinnedImage
 	inspection.Config.Labels = map[string]string{
-		"aries.managed": "true", "aries.milestone": "m5", "aries.task": "fix-git", "aries.kind": kind, "aries.attempt": "fixedid",
+		"aries.managed": "true", "aries.milestone": "m5", "aries.task": "fix-git", "aries.run": "test-run", "aries.kind": kind, "aries.attempt": "fixedid",
+	}
+	if omitRunLabel {
+		delete(inspection.Config.Labels, "aries.run")
+	} else if runLabel != "" {
+		inspection.Config.Labels["aries.run"] = runLabel
 	}
 	if foreign {
 		inspection.Config.Labels["aries.attempt"] = "foreign-attempt"
@@ -286,17 +301,17 @@ func tarSingleFile(name string, content []byte) []byte {
 
 func newTestManager(t *testing.T, fake *fakeDocker) (*Manager, core.HarnessRequest) {
 	t.Helper()
-	manager, err := New(Options{Image: PinnedImage, OutputDir: t.TempDir(), CleanupTimeout: 2 * time.Second, StartTimeout: time.Second, AgentTimeout: time.Minute})
+	lookup := func(name string) ([]byte, bool) {
+		if name != "ARIES_FAKE_API_KEY" {
+			t.Fatalf("lookup environment = %q", name)
+		}
+		return bytes.Clone(fake.secret), true
+	}
+	manager, err := New(Options{Image: PinnedImage, OutputDir: t.TempDir(), APIKeyLookup: lookup, CleanupTimeout: 2 * time.Second, StartTimeout: time.Second, AgentTimeout: time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}
 	manager.cli = fake
-	manager.lookupEnv = func(name string) (string, bool) {
-		if name != "ARIES_FAKE_API_KEY" {
-			t.Fatalf("lookup environment = %q", name)
-		}
-		return string(fake.secret), true
-	}
 	manager.newID = func() (string, error) { return "fixedid", nil }
 	dir := t.TempDir()
 	client := filepath.Join(dir, "aries-ssh")
@@ -318,7 +333,7 @@ func newTestManager(t *testing.T, fake *fakeDocker) (*Manager, core.HarnessReque
 	endpoint.ClientSourceFile = client
 	endpoint.IdentitySourceFile = identity
 	endpoint.KnownHostsSourceFile = knownHosts
-	return manager, core.HarnessRequest{TaskID: "fix-git", Endpoint: endpoint, Model: testModel(), OutputDir: manager.outputDir}
+	return manager, core.HarnessRequest{RunID: "test-run", TaskID: "fix-git", Endpoint: endpoint, Model: testModel(), OutputDir: manager.outputDir}
 }
 
 func TestHarnessLifecycleUsesPrivateStageExactArgvAndRedactedArtifacts(t *testing.T) {
@@ -364,6 +379,14 @@ func TestHarnessLifecycleUsesPrivateStageExactArgvAndRedactedArtifacts(t *testin
 		}
 		if bytes.Contains([]byte(joined), secret) {
 			t.Fatal("secret entered Docker command arguments")
+		}
+		if len(command) >= 2 && (command[0] == "volume" && command[1] == "create" || command[0] == "container" && command[1] == "create") {
+			if got := commandLabels(command)["aries.run"]; got != "test-run" {
+				t.Fatalf("resource create run label = %q, want test-run: %q", got, command)
+			}
+		}
+		if strings.Contains(joined, "\x00--thinking\x00") {
+			t.Fatal("fake-model agent argv changed with a thinking flag")
 		}
 		if strings.Contains(joined, "container\x00create\x00--name\x00aries-openclaw-fixedid") {
 			if strings.Contains(joined, "\x00--entrypoint\x00") {
@@ -556,7 +579,7 @@ func TestStopSessionRetriesDelayedTentativeVisibilityBeforeCleanup(t *testing.T)
 			manager, _ := newTestManager(t, fake)
 			manager.cleanupTimeout = 250 * time.Millisecond
 			active := &session{
-				taskID: "fix-git", safeTaskID: "fix-git", attemptID: "fixedid",
+				runID: "test-run", taskID: "fix-git", safeTaskID: "fix-git", attemptID: "fixedid",
 				containerName: "aries-openclaw-fixedid", containerID: "harness-container-id", containerTentative: true,
 				apiKey: []byte("dummy-secret"), gatewayToken: []byte("gateway-secret"),
 			}
@@ -711,6 +734,28 @@ func TestForeignNameCollisionsAreNeverRemoved(t *testing.T) {
 			t.Fatal("foreign config-volume collision was removed")
 		}
 	})
+
+	for name, configure := range map[string]func(*fakeDocker){
+		"initializer missing run label": func(fake *fakeDocker) { fake.omitContainerRunLabel = true },
+		"initializer wrong run label":   func(fake *fakeDocker) { fake.containerRunLabel = "other-run" },
+		"volume missing run label":      func(fake *fakeDocker) { fake.omitVolumeRunLabel = true },
+		"volume wrong run label":        func(fake *fakeDocker) { fake.volumeRunLabel = "other-run" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake := newFakeDocker([]byte("dummy-secret"))
+			configure(fake)
+			manager, request := newTestManager(t, fake)
+			if err := manager.Start(context.Background(), request); err == nil || !strings.Contains(err.Error(), "not owned") {
+				t.Fatalf("foreign run label Start() error = %v", err)
+			}
+			if strings.HasPrefix(name, "initializer") && fake.removedContainers["initializer-container-id"] {
+				t.Fatal("initializer with a foreign or missing run label was removed")
+			}
+			if strings.HasPrefix(name, "volume") && fake.removedVolumes["aries-openclaw-config-fixedid"] {
+				t.Fatal("volume with a foreign or missing run label was removed")
+			}
+		})
+	}
 }
 
 func TestHarnessGracefulStopUsesKillOnlyAsFallback(t *testing.T) {
@@ -773,6 +818,56 @@ func TestStopRefusesOwnershipDriftBeforeDestructiveCommands(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+
+	for name, configure := range map[string]func(*fakeDocker){
+		"container missing run label": func(fake *fakeDocker) { fake.omitContainerRunLabel = true },
+		"container wrong run label":   func(fake *fakeDocker) { fake.containerRunLabel = "other-run" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake := newFakeDocker([]byte("dummy-secret"))
+			manager, request := newTestManager(t, fake)
+			if err := manager.Start(context.Background(), request); err != nil {
+				t.Fatal(err)
+			}
+			configure(fake)
+			if err := manager.Stop(context.Background()); err == nil {
+				t.Fatal("container run-label drift was ignored")
+			}
+			if fake.stopped || fake.killed || fake.removedContainers["harness-container-id"] {
+				t.Fatal("destructive command targeted a container after run-label drift")
+			}
+			fake.omitContainerRunLabel = false
+			fake.containerRunLabel = ""
+			if err := manager.Stop(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+
+	for name, mutate := range map[string]func(map[string]string){
+		"volume missing run label": func(labels map[string]string) { delete(labels, "aries.run") },
+		"volume wrong run label":   func(labels map[string]string) { labels["aries.run"] = "other-run" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake := newFakeDocker([]byte("dummy-secret"))
+			manager, request := newTestManager(t, fake)
+			if err := manager.Start(context.Background(), request); err != nil {
+				t.Fatal(err)
+			}
+			labels := fake.volumeLabels["aries-openclaw-state-fixedid"]
+			mutate(labels)
+			if err := manager.Stop(context.Background()); err == nil {
+				t.Fatal("volume run-label drift was ignored")
+			}
+			if fake.removedVolumes["aries-openclaw-state-fixedid"] {
+				t.Fatal("destructive command targeted a volume after run-label drift")
+			}
+			labels["aries.run"] = "test-run"
+			if err := manager.Stop(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 }
 
 func TestHarnessRejectsMissingInvalidAndLeakedKeys(t *testing.T) {
@@ -780,7 +875,7 @@ func TestHarnessRejectsMissingInvalidAndLeakedKeys(t *testing.T) {
 		key     string
 		present bool
 	}{
-		"missing":   {present: false},
+		"missing":   {key: "discard-me", present: false},
 		"empty":     {key: "", present: true},
 		"newline":   {key: "secret\n", present: true},
 		"nul":       {key: "secret\x00", present: true},
@@ -789,9 +884,108 @@ func TestHarnessRejectsMissingInvalidAndLeakedKeys(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			fake := newFakeDocker([]byte("dummy"))
 			manager, request := newTestManager(t, fake)
-			manager.lookupEnv = func(string) (string, bool) { return test.key, test.present }
+			returned := []byte(test.key)
+			manager.apiKeyLookup = func(string) ([]byte, bool) { return returned, test.present }
 			if err := manager.Start(context.Background(), request); err == nil {
 				t.Fatal("invalid key was accepted")
+			}
+			if !bytes.Equal(returned, make([]byte, len(returned))) {
+				t.Fatal("lookup secret buffer was not cleared")
+			}
+		})
+	}
+}
+
+func TestAPIKeyLookupIsCopiedAndBothBuffersAreCleared(t *testing.T) {
+	secret := []byte("callback-secret")
+	fake := newFakeDocker(bytes.Clone(secret))
+	manager, request := newTestManager(t, fake)
+	returned := bytes.Clone(secret)
+	manager.apiKeyLookup = func(name string) ([]byte, bool) {
+		if name != request.Model.APIKeyEnv {
+			t.Fatalf("lookup name = %q, want %q", name, request.Model.APIKeyEnv)
+		}
+		return returned, true
+	}
+	if err := manager.Start(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(returned, make([]byte, len(returned))) {
+		t.Fatal("callback buffer was not cleared after Start copied it")
+	}
+	active := manager.active
+	activeKey := active.apiKey
+	if !bytes.Equal(activeKey, secret) {
+		t.Fatal("session did not retain an independent API-key copy")
+	}
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(activeKey, make([]byte, len(activeKey))) {
+		t.Fatal("session API-key buffer was not cleared after cleanup")
+	}
+}
+
+func TestEnvironmentAPIKeyLookupReturnsFreshBytes(t *testing.T) {
+	t.Setenv("ARIES_TEST_API_KEY", "environment-secret")
+	first, ok := environmentAPIKeyLookup("ARIES_TEST_API_KEY")
+	if !ok {
+		t.Fatal("default API-key lookup missed an existing value")
+	}
+	second, ok := environmentAPIKeyLookup("ARIES_TEST_API_KEY")
+	if !ok {
+		t.Fatal("default API-key lookup missed a repeated value")
+	}
+	clear(first)
+	if string(second) != "environment-secret" || os.Getenv("ARIES_TEST_API_KEY") != "environment-secret" {
+		t.Fatal("default API-key lookup did not return fresh bytes")
+	}
+	clear(second)
+}
+
+func TestHarnessRejectsInvalidRunIDBeforeDocker(t *testing.T) {
+	for _, runID := range []string{"", ".hidden", "run/escape", strings.Repeat("x", 129)} {
+		t.Run(strconv.Quote(runID), func(t *testing.T) {
+			fake := newFakeDocker([]byte("dummy-secret"))
+			manager, request := newTestManager(t, fake)
+			request.RunID = runID
+			if err := manager.Start(context.Background(), request); err == nil || !strings.Contains(err.Error(), "run ID") {
+				t.Fatalf("Start() error = %v, want invalid run ID", err)
+			}
+			if len(fake.commands) != 0 {
+				t.Fatalf("invalid run ID reached Docker: %q", fake.commands)
+			}
+		})
+	}
+}
+
+func TestBuildAgentCommandDisablesThinkingOnlyForExactDeepSeekModels(t *testing.T) {
+	base := core.ModelConfig{BaseURL: "http://fake-model:8080/v1", Model: "deterministic-model"}
+	tests := []struct {
+		name     string
+		model    core.ModelConfig
+		thinking bool
+	}{
+		{name: "fake unchanged", model: base},
+		{name: "flash", model: core.ModelConfig{BaseURL: "https://api.deepseek.com", Model: "deepseek-v4-flash"}, thinking: true},
+		{name: "pro", model: core.ModelConfig{BaseURL: "https://api.deepseek.com", Model: "deepseek-v4-pro"}, thinking: true},
+		{name: "other model", model: core.ModelConfig{BaseURL: "https://api.deepseek.com", Model: "deepseek-chat"}},
+		{name: "nonexact URL", model: core.ModelConfig{BaseURL: "https://api.deepseek.com/", Model: "deepseek-v4-flash"}},
+	}
+	baseCommand := []string{
+		launcherPath, agentWrapperPath, stateContainerPath + "/.aries/run",
+		"node", "openclaw.mjs", "agent", "--session-key", "agent:main:aries-fix-git",
+		"--message", "repair", "--json", "--timeout", "60",
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			active := &session{safeTaskID: "fix-git", runResultDir: stateContainerPath + "/.aries/run", model: test.model}
+			want := append([]string(nil), baseCommand...)
+			if test.thinking {
+				want = append(want, "--thinking", "off")
+			}
+			if got := buildAgentCommand(active, "repair", 60); !reflect.DeepEqual(got, want) {
+				t.Fatalf("buildAgentCommand() = %q, want %q", got, want)
 			}
 		})
 	}

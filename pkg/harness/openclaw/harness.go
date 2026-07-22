@@ -40,9 +40,11 @@ var (
 )
 
 type Options struct {
-	Image          string
-	OutputDir      string
-	DockerBinary   string
+	Image        string
+	OutputDir    string
+	DockerBinary string
+	// APIKeyLookup returns a fresh secret buffer that Start clears after copying.
+	APIKeyLookup   func(string) ([]byte, bool)
 	CleanupTimeout time.Duration
 	StartTimeout   time.Duration
 	AgentTimeout   time.Duration
@@ -57,7 +59,7 @@ type Manager struct {
 	startTimeout   time.Duration
 	agentTimeout   time.Duration
 	logger         *slog.Logger
-	lookupEnv      func(string) (string, bool)
+	apiKeyLookup   func(string) ([]byte, bool)
 	newID          func() (string, error)
 
 	mu       sync.Mutex
@@ -68,6 +70,7 @@ type Manager struct {
 }
 
 type session struct {
+	runID              string
 	taskID             string
 	safeTaskID         string
 	attemptID          string
@@ -132,10 +135,13 @@ func New(options Options) (*Manager, error) {
 	if options.Logger == nil {
 		options.Logger = slog.Default()
 	}
+	if options.APIKeyLookup == nil {
+		options.APIKeyLookup = environmentAPIKeyLookup
+	}
 	return &Manager{
 		cli: execRunner{binary: options.DockerBinary}, image: options.Image, outputDir: outputDir,
 		cleanupTimeout: options.CleanupTimeout, startTimeout: options.StartTimeout, agentTimeout: options.AgentTimeout,
-		logger: options.Logger, lookupEnv: os.LookupEnv, newID: randomID,
+		logger: options.Logger, apiKeyLookup: options.APIKeyLookup, newID: randomID,
 	}, nil
 }
 
@@ -144,6 +150,9 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	defer manager.mu.Unlock()
 	if manager.active != nil || manager.stopping {
 		return errors.New("OpenClaw harness is already active")
+	}
+	if err := validateRunID(request.RunID); err != nil {
+		return err
 	}
 	if err := validateTaskID(request.TaskID); err != nil {
 		return err
@@ -157,11 +166,13 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		return fmt.Errorf("validate OpenClaw SSH client source: %w", err)
 	}
 	clear(clientBytes)
-	apiKeyValue, ok := manager.lookupEnv(request.Model.APIKeyEnv)
+	apiKeyValue, ok := manager.apiKeyLookup(request.Model.APIKeyEnv)
 	if !ok {
+		clear(apiKeyValue)
 		return fmt.Errorf("OpenClaw API-key environment %q is not set", request.Model.APIKeyEnv)
 	}
-	apiKey := []byte(apiKeyValue)
+	apiKey := bytes.Clone(apiKeyValue)
+	clear(apiKeyValue)
 	if err := validateAPIKey(apiKey); err != nil {
 		clear(apiKey)
 		return err
@@ -181,7 +192,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		return fmt.Errorf("generate OpenClaw gateway token: %w", err)
 	}
 	active := &session{
-		taskID: request.TaskID, safeTaskID: safeTaskID(request.TaskID), attemptID: id,
+		runID: request.RunID, taskID: request.TaskID, safeTaskID: safeTaskID(request.TaskID), attemptID: id,
 		endpoint: request.Endpoint, model: request.Model, apiKey: apiKey, gatewayToken: gatewayToken,
 		containerName: "aries-openclaw-" + id, configVolume: "aries-openclaw-config-" + id,
 		stateVolume: "aries-openclaw-state-" + id, initContainer: "aries-openclaw-init-" + id,
@@ -249,13 +260,7 @@ func (manager *Manager) Run(ctx context.Context, instruction string) (core.Harne
 	manager.mu.Unlock()
 
 	timeoutSeconds := max(1, int(manager.agentTimeout/time.Second))
-	agentCommand := []string{
-		launcherPath, agentWrapperPath, active.runResultDir,
-		"node", "openclaw.mjs", "agent",
-		"--session-key", "agent:main:aries-" + active.safeTaskID,
-		"--message", instruction,
-		"--json", "--timeout", strconv.Itoa(timeoutSeconds),
-	}
+	agentCommand := buildAgentCommand(active, instruction, timeoutSeconds)
 	if _, err := runDockerChecked(ctx, manager.cli, active.apiKey, nil, append([]string{"container", "exec", "--detach", active.containerID}, agentCommand...)...); err != nil {
 		return manager.failedResult(active, started, nil, nil, err)
 	}
@@ -283,6 +288,27 @@ func (manager *Manager) Run(ctx context.Context, instruction string) (core.Harne
 		return core.HarnessResult{Status: core.StatusFailed, Duration: time.Since(started), LogPaths: append([]string(nil), active.logPaths...), Error: err.Error()}, err
 	}
 	return core.HarnessResult{Status: core.StatusSucceeded, FinalResponse: response, Duration: time.Since(started), LogPaths: append([]string(nil), active.logPaths...)}, nil
+}
+
+func buildAgentCommand(active *session, instruction string, timeoutSeconds int) []string {
+	command := []string{
+		launcherPath, agentWrapperPath, active.runResultDir,
+		"node", "openclaw.mjs", "agent",
+		"--session-key", "agent:main:aries-" + active.safeTaskID,
+		"--message", instruction,
+		"--json", "--timeout", strconv.Itoa(timeoutSeconds),
+	}
+	if disablesThinking(active.model) {
+		command = append(command, "--thinking", "off")
+	}
+	return command
+}
+
+func disablesThinking(model core.ModelConfig) bool {
+	if model.BaseURL != "https://api.deepseek.com" {
+		return false
+	}
+	return model.Model == "deepseek-v4-flash" || model.Model == "deepseek-v4-pro"
 }
 
 func (manager *Manager) Stop(ctx context.Context) error {
@@ -339,7 +365,7 @@ func (manager *Manager) createVolume(ctx context.Context, active *session, name,
 	args := []string{
 		"volume", "create", "--label", managedLabel, "--label", milestoneLabel,
 		"--label", "aries.kind=openclaw-" + kind, "--label", "aries.task=" + active.safeTaskID,
-		"--label", "aries.attempt=" + active.attemptID, name,
+		"--label", "aries.run=" + active.runID, "--label", "aries.attempt=" + active.attemptID, name,
 	}
 	*tentative = true
 	result, commandErr := manager.cli.Run(ctx, nil, args...)
@@ -410,7 +436,7 @@ func (*Manager) applyVolumeOwnership(state ownershipState, tentative, owned *boo
 func validateVolumeOwnership(inspection volumeInspection, active *session, name, kind string) error {
 	if inspection.Name != name || inspection.Labels["aries.managed"] != "true" ||
 		inspection.Labels["aries.milestone"] != "m5" || inspection.Labels["aries.kind"] != "openclaw-"+kind ||
-		inspection.Labels["aries.task"] != active.safeTaskID || inspection.Labels["aries.attempt"] != active.attemptID {
+		inspection.Labels["aries.task"] != active.safeTaskID || inspection.Labels["aries.run"] != active.runID || inspection.Labels["aries.attempt"] != active.attemptID {
 		return fmt.Errorf("volume %q is not owned by OpenClaw attempt %q", name, active.attemptID)
 	}
 	return nil
@@ -514,7 +540,7 @@ func (*Manager) applyContainerOwnership(state ownershipState, inspection contain
 func validateContainerOwnership(inspection containerInspection, active *session, kind string) error {
 	if inspection.ID == "" || inspection.Config.Labels["aries.managed"] != "true" ||
 		inspection.Config.Labels["aries.milestone"] != "m5" || inspection.Config.Labels["aries.kind"] != kind ||
-		inspection.Config.Labels["aries.task"] != active.safeTaskID || inspection.Config.Labels["aries.attempt"] != active.attemptID {
+		inspection.Config.Labels["aries.task"] != active.safeTaskID || inspection.Config.Labels["aries.run"] != active.runID || inspection.Config.Labels["aries.attempt"] != active.attemptID {
 		return fmt.Errorf("container is not owned by OpenClaw attempt %q as %q", active.attemptID, kind)
 	}
 	return nil
@@ -580,7 +606,7 @@ mv /tmp/aries-init-status.tmp /tmp/aries-init-status`
 	args := []string{
 		"container", "create", "--name", active.initContainer,
 		"--label", managedLabel, "--label", milestoneLabel, "--label", "aries.kind=openclaw-initializer", "--label", "aries.task=" + active.safeTaskID,
-		"--label", "aries.attempt=" + active.attemptID,
+		"--label", "aries.run=" + active.runID, "--label", "aries.attempt=" + active.attemptID,
 		"--network", "none", "--user", "0:0",
 		"--mount", "type=volume,src=" + active.configVolume + ",dst=/run/aries",
 		"--mount", "type=volume,src=" + active.stateVolume + ",dst=/home/node/.openclaw",
@@ -635,7 +661,7 @@ func (manager *Manager) createHarnessContainer(ctx context.Context, active *sess
 	args := []string{
 		"container", "create", "--name", active.containerName,
 		"--label", managedLabel, "--label", milestoneLabel, "--label", "aries.kind=openclaw-harness", "--label", "aries.task=" + active.safeTaskID,
-		"--label", "aries.attempt=" + active.attemptID,
+		"--label", "aries.run=" + active.runID, "--label", "aries.attempt=" + active.attemptID,
 		"--network", active.endpoint.Network,
 		"--env", "OPENCLAW_CONFIG_PATH=" + configContainerPath,
 		"--mount", "type=volume,src=" + active.configVolume + ",dst=/run/aries,readonly",
@@ -671,7 +697,7 @@ func validateContainerInspection(inspection containerInspection, active *session
 			return errors.New("OpenClaw secret entered Docker Config.Env")
 		}
 	}
-	if inspection.ID != active.containerID || inspection.Config.Labels["aries.managed"] != "true" || inspection.Config.Labels["aries.milestone"] != "m5" || inspection.Config.Labels["aries.task"] != active.safeTaskID || inspection.Config.Labels["aries.attempt"] != active.attemptID {
+	if inspection.ID != active.containerID || inspection.Config.Labels["aries.managed"] != "true" || inspection.Config.Labels["aries.milestone"] != "m5" || inspection.Config.Labels["aries.task"] != active.safeTaskID || inspection.Config.Labels["aries.run"] != active.runID || inspection.Config.Labels["aries.attempt"] != active.attemptID {
 		return errors.New("OpenClaw container labels do not match the task")
 	}
 	if len(inspection.NetworkSettings.Networks) != 1 {
@@ -1250,6 +1276,27 @@ func validateAPIKey(value []byte) error {
 	}
 	if bytes.ContainsAny(value, "\x00\r\n") {
 		return errors.New("OpenClaw API key contains NUL or a line break")
+	}
+	return nil
+}
+
+func environmentAPIKeyLookup(name string) ([]byte, bool) {
+	value, ok := os.LookupEnv(name)
+	if !ok {
+		return nil, false
+	}
+	return []byte(value), true
+}
+
+func validateRunID(value string) error {
+	if value == "" || len(value) > 128 {
+		return errors.New("OpenClaw run ID must contain 1 to 128 safe characters")
+	}
+	for index, character := range value {
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || index > 0 && (character == '-' || character == '_' || character == '.') {
+			continue
+		}
+		return errors.New("OpenClaw run ID contains an unsafe character")
 	}
 	return nil
 }
