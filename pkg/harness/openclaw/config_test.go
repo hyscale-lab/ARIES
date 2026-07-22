@@ -70,6 +70,14 @@ func TestRenderConfigRejectsInvalidInputs(t *testing.T) {
 	}
 }
 
+func TestRenderConfigAcceptsLowercaseEnvironmentName(t *testing.T) {
+	model := testModel()
+	model.APIKeyEnv = "aries_fake_api_key"
+	if _, err := renderConfig(model, testEndpoint()); err != nil {
+		t.Fatalf("renderConfig() rejected a valid environment name: %v", err)
+	}
+}
+
 func TestLauncherUsesFileSecretAndDirectExec(t *testing.T) {
 	script := string(launcherScript("ARIES_FAKE_API_KEY"))
 	for _, required := range []string{"model_key=$(cat /run/aries/model.key)", "gateway_key=$(cat /run/aries/gateway.key)", "export ARIES_FAKE_API_KEY=\"$model_key\"", "export OPENCLAW_GATEWAY_TOKEN=\"$gateway_key\"", "exec \"$@\""} {

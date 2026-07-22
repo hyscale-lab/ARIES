@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/hyscale-lab/aries/pkg/containerimage"
@@ -61,9 +63,9 @@ type Versions struct {
 }
 
 type TerminalBench2Versions struct {
-	RepositoryURL string `json:"repository_url"`
-	Revision      string `json:"revision"`
-	FixGitImage   string `json:"fix_git_image"`
+	RepositoryURL string            `json:"repository_url"`
+	Revision      string            `json:"revision"`
+	Images        map[string]string `json:"images"`
 }
 
 type OpenClawVersions struct {
@@ -203,7 +205,6 @@ func (c Versions) validate() error {
 	}{
 		{"terminalbench2.repository_url", c.TerminalBench2.RepositoryURL},
 		{"terminalbench2.revision", c.TerminalBench2.Revision},
-		{"terminalbench2.fix_git_image", c.TerminalBench2.FixGitImage},
 		{"openclaw.image", c.OpenClaw.Image},
 	}
 	for _, check := range checks {
@@ -221,16 +222,27 @@ func (c Versions) validate() error {
 	if !isHex(c.TerminalBench2.Revision, 40) {
 		return errors.New("terminalbench2.revision must be a 40-character Git revision")
 	}
-	for _, image := range []struct {
-		name  string
-		value string
-	}{
-		{"terminalbench2.fix_git_image", c.TerminalBench2.FixGitImage},
-		{"openclaw.image", c.OpenClaw.Image},
-	} {
-		if err := containerimage.Validate(image.value); err != nil {
-			return fmt.Errorf("%s: %w", image.name, err)
+	if len(c.TerminalBench2.Images) == 0 {
+		return errors.New("terminalbench2.images must contain at least one image pin")
+	}
+	for _, source := range slices.Sorted(maps.Keys(c.TerminalBench2.Images)) {
+		pin := c.TerminalBench2.Images[source]
+		if strings.TrimSpace(source) == "" {
+			return errors.New("terminalbench2.images contains an empty source")
 		}
+		if err := containerimage.Validate(pin); err != nil {
+			return fmt.Errorf("terminalbench2.images[%q]: %w", source, err)
+		}
+		pinnedSource, err := containerimage.TaggedSource(pin)
+		if err != nil {
+			return fmt.Errorf("terminalbench2.images[%q]: %w", source, err)
+		}
+		if pinnedSource != source {
+			return fmt.Errorf("terminalbench2.images[%q] pin source %q does not match source", source, pinnedSource)
+		}
+	}
+	if err := containerimage.Validate(c.OpenClaw.Image); err != nil {
+		return fmt.Errorf("openclaw.image: %w", err)
 	}
 	return nil
 }
@@ -245,7 +257,7 @@ func isHex(value string, characters int) bool {
 
 func validEnvName(value string) bool {
 	for i, r := range value {
-		if r == '_' || r >= 'A' && r <= 'Z' || i > 0 && r >= '0' && r <= '9' {
+		if r == '_' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || i > 0 && r >= '0' && r <= '9' {
 			continue
 		}
 		return false

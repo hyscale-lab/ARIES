@@ -182,7 +182,7 @@ func validateEndpoint(endpoint core.ToolEndpoint) error {
 
 func validEnvironmentName(value string) bool {
 	for index, r := range value {
-		if r == '_' || r >= 'A' && r <= 'Z' || index > 0 && r >= '0' && r <= '9' {
+		if r == '_' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || index > 0 && r >= '0' && r <= '9' {
 			continue
 		}
 		return false

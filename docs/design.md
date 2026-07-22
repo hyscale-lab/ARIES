@@ -6,14 +6,15 @@ architecture.
 ## Goal
 
 ARIES is a small, readable Go benchmark runner. Its first supported path runs
-the pinned Terminal-Bench 2 `fix-git` task with an unmodified upstream OpenClaw
-container, a remote OpenAI-compatible model, one local Docker task sandbox, and
-an independent evaluator.
+any selected task from the pinned Terminal-Bench 2 revision with an unmodified
+upstream OpenClaw container, a remote OpenAI-compatible model, one local Docker
+task sandbox, and an independent evaluator.
 
-The implementation is intentionally narrow. It supports only the task and
-upstream behavior required by this path. Kubernetes, additional benchmarks,
-additional harnesses, and additional bridge combinations are future concrete
-implementations, not framework code in the MVP.
+The implementation is intentionally narrow. It supports the task schema and
+upstream behavior present in that pinned revision rather than claiming general
+Harbor or future Terminal-Bench compatibility. Kubernetes, additional
+benchmarks, additional harnesses, and additional bridge combinations are
+future concrete implementations, not framework code in the MVP.
 
 ## Workspace boundary
 
@@ -40,7 +41,7 @@ benchmark or harness packages.
 | Component | Pin |
 | --- | --- |
 | Terminal-Bench 2 | `2fd12b88aafdd04a52c298e3940bcb189f9766d6` |
-| `fix-git` image | `alexgshaw/fix-git:20251031@sha256:61e431c00c58df652287aadce5457634d9f9330cfdd153ebdf2802df0d540119` |
+| Task images | one source-to-digest entry for each task in the pinned revision |
 | OpenClaw | tag `v2026.5.26`, commit `10ad3aa16068baa84a1bd9ac4f7d42ae725cedb7` |
 | OpenClaw image | `ghcr.io/openclaw/openclaw:2026.5.26@sha256:ae7ff536446f1bbb57ea51b9b21097d8f299d30d683dcd72644973bc0522f3b3` |
 | Moby client | `github.com/moby/moby/client v0.5.0` |
@@ -49,9 +50,9 @@ benchmark or harness packages.
 
 Primary compatibility evidence remains the pinned upstream source:
 
-- Terminal-Bench task [configuration](https://github.com/harbor-framework/terminal-bench-2/blob/2fd12b88aafdd04a52c298e3940bcb189f9766d6/fix-git/task.toml),
-  [instruction](https://github.com/harbor-framework/terminal-bench-2/blob/2fd12b88aafdd04a52c298e3940bcb189f9766d6/fix-git/instruction.md),
-  and [verifier](https://github.com/harbor-framework/terminal-bench-2/blob/2fd12b88aafdd04a52c298e3940bcb189f9766d6/fix-git/tests/test.sh).
+- Terminal-Bench task [tree](https://github.com/harbor-framework/terminal-bench-2/tree/2fd12b88aafdd04a52c298e3940bcb189f9766d6)
+  and its `task.toml`, `instruction.md`, environment Dockerfile, and private
+  `tests/` conventions.
 - OpenClaw SSH [configuration schema](https://github.com/openclaw/openclaw/blob/10ad3aa16068baa84a1bd9ac4f7d42ae725cedb7/src/config/types.sandbox.ts#L102-L124),
   [client invocation](https://github.com/openclaw/openclaw/blob/10ad3aa16068baa84a1bd9ac4f7d42ae725cedb7/src/agents/sandbox/ssh.ts#L479-L579),
   and [workspace behavior](https://github.com/openclaw/openclaw/blob/10ad3aa16068baa84a1bd9ac4f7d42ae725cedb7/src/agents/sandbox/ssh-backend.ts#L114-L177).
@@ -281,18 +282,22 @@ container and confirms the owned resource is absent.
 
 ## Terminal-Bench evaluation
 
-`pkg/benchmark/terminalbench` owns the pinned checkout, strict task parsing,
+`pkg/benchmark/terminalbench` owns the pinned checkout, selected-task parsing,
 private verifier metadata, test injection, verifier execution, CTRF validation,
 and reward parsing. The generic `Task` contains no Terminal-Bench-specific
-fields.
+fields. A profile supplies an ordered list of task directory names; the adapter
+loads the instruction, resources, final Dockerfile workdir, agent timeout, and
+complete recursive verifier tree for each selected task. The immutable image
+catalog covers every task in the pinned revision.
 
-The adapter verifies the dataset revision and verifier file identity before
-use. Verifier content is not exposed through `Task` or mounted for the harness.
-Only after isolation succeeds does evaluation clear fixed verifier paths,
-upload the enumerated files, run the verifier with its own timeout and
-environment, and collect stdout, stderr, CTRF, and reward. Reward `1` is
-success; reward `0` is a valid failed task; missing or malformed reward is an
-evaluator error.
+The adapter verifies that the dataset is the exact clean pinned revision before
+discovery and evaluation. Verifier content is not exposed through `Task` or
+mounted for the harness. Only after isolation succeeds does evaluation clear
+fixed verifier paths, upload the captured verifier tree, run `tests/test.sh`
+with its own timeout and environment, and collect stdout, stderr, CTRF, and
+reward. CTRF validation checks its structural counts and statuses without
+hard-coding task-specific test names or counts. Reward `1` is success; reward
+`0` is a valid failed task; missing or malformed reward is an evaluator error.
 
 ## Monitoring and results
 
@@ -313,10 +318,11 @@ by requesting one-shot Docker stats without a previous sample. Samples use
 schema version 2 with generic runtime identity, cumulative CPU nanoseconds,
 derived CPU percentage, and memory usage/limit.
 
-A container may exit between a running list snapshot, inspection, and stats while the
-Runner performs cleanup. After identity and ownership validation, monitoring
-treats that transition like disappearance and retains earlier samples; malformed
-identity, labels, state, stats, or Docker errors still fail the observer report.
+A container may exit between a running list snapshot, inspection, and stats
+while the Runner performs cleanup. After identity and ownership validation,
+monitoring treats that transition like disappearance and retains earlier
+samples; malformed identity, labels, state, stats, or Docker errors still fail
+the observer report.
 
 ARIES keeps Docker Stats rather than adding cAdvisor for the local MVP. cAdvisor
 would require another privileged, broadly mounted, long-lived service while
@@ -342,24 +348,25 @@ sensitive; run directories are therefore private and replay artifacts use mode
 
 ## Configuration and secrets
 
-The runnable experiment is the strict JSON profile
-[`profiles/openclaw-tb2-fix-git-deepseek.json`](../profiles/openclaw-tb2-fix-git-deepseek.json).
-It references the strict JSON version file relative to its own location.
+Runnable experiments are strict JSON profiles. The checked-in examples select
+[`fix-git`](../profiles/openclaw-tb2-fix-git-deepseek.json) and a
+[heterogeneous five-task subset](../profiles/openclaw-tb2-five-deepseek.json).
+Each references the strict JSON version file relative to its own location.
 Unknown fields and trailing values are rejected in both documents. This is a
 fixed reference, not profile inheritance or configuration merging. The visible
 default is `output_dir = "runs"`; component type selection uses explicit
 switches.
 
 `aries setup PROFILE.json` verifies or creates the configured Terminal-Bench
-checkout and pulls the configured immutable images through the Moby SDK. Normal
-runs never silently change datasets or pull images.
+checkout and pulls OpenClaw plus the selected tasks' immutable images through
+the Moby SDK. Normal runs never silently change datasets or pull images.
 
 API-key values never belong in JSON. For the official DeepSeek configuration,
 the repository-root ignored `DEEPSEEK_API.key` is accepted only as a regular,
-current-user-owned mode-0600 file with bounded stable contents. The configured
-environment variable is the fallback when that file is absent. Official
-DeepSeek runs perform a bounded authenticated model preflight before Docker
-resource construction.
+current-user-owned file with owner read access, no group/world permissions, and
+bounded contents. The configured environment variable is the fallback when the
+local file is unavailable. Official DeepSeek runs perform a bounded
+authenticated model preflight before Docker resource construction.
 
 The executable procedure is maintained in
 [`docs/quick-start.md`](quick-start.md).
@@ -371,10 +378,11 @@ one explicit constructor switch. It must not require edits throughout the
 Runner. A pair-specific bridge may require a narrow concrete sandbox capability,
 but that dependency remains inside the bridge package.
 
-The MVP does not provide Kubernetes, a generic platform layer, arbitrary
-Terminal-Bench compatibility, reusable SSH infrastructure, plugins, config
-merging, abstract factories, or speculative implementations. New abstractions
-require a current substitution need in the Runner, not a hypothetical future.
+The MVP does not provide Kubernetes, a generic platform layer, future-version
+Terminal-Bench or complete Harbor compatibility, reusable SSH infrastructure,
+plugins, config merging, abstract factories, or speculative implementations.
+New abstractions require a current substitution need in the Runner, not a
+hypothetical future.
 
 ## Validation contract
 
@@ -387,6 +395,8 @@ integration tests that prove:
 - a bridge mutation is visible through the evaluator's sandbox capability;
 - real pinned OpenClaw emits tool records through the host bridge;
 - OpenClaw stops and bridge access is revoked before verifier injection;
+- the heterogeneous five-task subset loads in requested order and every task in
+  the pinned revision maps through the same generic benchmark boundary;
 - deterministic `fix-git` evaluation returns reward `1`;
 - the deterministic end-to-end test records at least one monitor sample for
   both the `task-container` and `openclaw-harness` kinds; and

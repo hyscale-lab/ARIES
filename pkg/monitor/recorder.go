@@ -185,7 +185,7 @@ func (recorder *Recorder) Start(ctx context.Context) error {
 	recorder.starting = true
 	recorder.mu.Unlock()
 
-	artifacts, monitorRoot, rootCreated, err := prepareArtifacts(recorder.outputDir, recorder.taskIDs, recorder.artifactOps)
+	artifacts, err := prepareArtifacts(recorder.outputDir, recorder.taskIDs, recorder.artifactOps)
 	if err != nil {
 		_ = recorder.source.Close()
 		recorder.finishFailedStart()
@@ -199,7 +199,7 @@ func (recorder *Recorder) Start(ctx context.Context) error {
 
 	startFailure := func(cause error) error {
 		_ = recorder.source.Close()
-		rollbackErr := removePartialArtifacts(artifacts, monitorRoot, rootCreated, recorder.artifactOps)
+		rollbackErr := removePartialArtifacts(artifacts, recorder.artifactOps)
 		recorder.mu.Lock()
 		recorder.artifacts = nil
 		recorder.startTime = time.Time{}

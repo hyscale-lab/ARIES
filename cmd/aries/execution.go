@@ -47,13 +47,15 @@ func runObserved(
 		case startErr != nil:
 			task.Observer = failedObserverResult(fmt.Sprintf("start observer: %v", startErr))
 		case reports[task.TaskID].Status != "":
-			task.Observer = cloneObserverResult(reports[task.TaskID])
+			task.Observer = reports[task.TaskID]
+			task.Observer.LogPaths = append([]string(nil), task.Observer.LogPaths...)
 			if stopErr != nil {
 				task.Observer.Status = core.StatusFailed
-				task.Observer.Error = errors.Join(
-					observerResultError(task.Observer.Error),
-					fmt.Errorf("stop observer: %w", stopErr),
-				).Error()
+				stopMessage := fmt.Errorf("stop observer: %w", stopErr)
+				if task.Observer.Error != "" {
+					stopMessage = errors.Join(errors.New(task.Observer.Error), stopMessage)
+				}
+				task.Observer.Error = stopMessage.Error()
 			}
 		default:
 			missingErr := fmt.Errorf("observer report missing for task %q", task.TaskID)
@@ -77,16 +79,4 @@ func runObserved(
 
 func failedObserverResult(message string) core.ObserverResult {
 	return core.ObserverResult{Status: core.StatusFailed, Error: message}
-}
-
-func cloneObserverResult(result core.ObserverResult) core.ObserverResult {
-	result.LogPaths = append([]string(nil), result.LogPaths...)
-	return result
-}
-
-func observerResultError(message string) error {
-	if message == "" {
-		return nil
-	}
-	return errors.New(message)
 }

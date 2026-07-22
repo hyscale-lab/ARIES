@@ -1,5 +1,44 @@
 # ARIES Tasks
 
+## R4 — Repository cleanup and generic Terminal-Bench 2
+
+Cleanup plan, in regression-first order:
+
+1. [x] Lock current lifecycle, `fix-git`, secret handling, monitoring, and
+   evaluation behavior; add dataset-backed tests for a heterogeneous five-task
+   selection, recursive verifier trees, generic CTRF results, and all tasks in
+   the pinned Terminal-Bench 2 revision.
+2. [x] Delete linker-confirmed dead command wrappers, unreachable monitor
+   artifact state, speculative `Environment.BuildDir`, redundant verifier
+   snapshot machinery, obsolete prompt provenance, and empty source folders.
+3. [x] Remove validations that reject legitimate inputs without protecting a
+   runtime boundary: fix-git-only task values, descriptive TOML additions,
+   exact CTRF test names/counts, executable-layout checks, exact `0600` secret
+   mode, and uppercase-only environment names.
+4. [x] Keep grounded fail-safe behavior that positively confirms container,
+   process, bridge, or network cleanup. Replace the masking optional-telemetry
+   string match with typed Docker not-found classification.
+5. [x] Replace the single fix-git image pin with a data-only source-to-digest
+   catalog covering the pinned dataset; keep task selection opaque and ordered
+   in Go code.
+6. [x] Load generic task resources, workdir, instruction, timeout, and complete
+   private `tests/` tree; pass the task timeout through Runner to the harness;
+   keep solutions private and evaluation independent.
+7. [x] Add a checked-in five-task profile covering alternate workdirs,
+   resources, timeout shapes, optional metadata, and nested verifier files.
+8. [x] Run build, unit, race, lint, dataset, Docker integration, deterministic
+   OpenClaw E2E, review, and adversarial QA; update documentation and commit a
+   clean tree with no managed resources.
+
+Fallback inventory:
+
+- OpenClaw and Docker cleanup recovery is a grounded fail-safe because absence
+  is positively confirmed and error evidence is retained; keep it.
+- The bridge's two accepted OpenClaw temporary-root layouts are a narrow
+  compatibility path; keep it and add the missing regression case.
+- Optional telemetry's broad `"not found"` error match is masking fallback
+  slop; replace it before other cleanup passes.
+
 ## R3 — Resource accuracy and replayable artifacts
 
 - [x] Keep Docker Stats instead of adding cAdvisor; move Docker collection into
@@ -36,7 +75,7 @@
 - [x] Pass the complete release checks, obtain review approval, run the
   checked-in setup path, and complete a live DeepSeek run with reward `1`, 17
   completed bridge tool records, successful monitoring, and no leaked Docker
-  resources. R2 is ready to commit.
+  resources.
 
 ## R1 — Docker SDK, host SSH bridge, and simplification
 
@@ -80,9 +119,7 @@ four Runner component boundaries or the independent evaluator.
   and isolation/cleanup confirmed; report no reachable or imported
   `govulncheck` vulnerability; obtain independent code-review approval,
   architect clearance, and a 20/20 UltraQA cancellation cycle with an empty
-  Docker inventory. R1 is ready to commit.
-
-R1 is complete only when the last item is checked with fresh evidence.
+  Docker inventory.
 
 ## MVP baseline — completed before R1
 

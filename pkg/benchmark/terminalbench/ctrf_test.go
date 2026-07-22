@@ -1,9 +1,28 @@
 package terminalbench
 
 import (
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func validateCTRF(reader io.Reader) error {
+	_, err := readCTRF(reader)
+	return err
+}
+
+func TestValidateCTRFFileRejectsRewardOneWithoutTests(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ctrf.json")
+	content := `{"results":{"summary":{"tests":0,"passed":0,"failed":0,"skipped":0,"pending":0,"other":0},"tests":[]}}`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateCTRFFile(path, 1); err == nil || !strings.Contains(err.Error(), "reward is 1") {
+		t.Fatalf("validateCTRFFile() error = %v, want reward-1 proof failure", err)
+	}
+}
 
 const validFixGitCTRF = `{
   "results": {
@@ -42,35 +61,119 @@ const validFixGitCTRF = `{
   }
 }`
 
+const validParameterizedCTRF = `{
+  "results": {
+    "tool": {"name": "pytest", "version": "8.4.1"},
+    "summary": {
+      "tests": 3,
+      "passed": 3,
+      "failed": 0,
+      "skipped": 0,
+      "pending": 0,
+      "other": 0,
+      "start": 1720000000.0,
+      "stop": 1720000002.0
+    },
+    "tests": [
+      {
+        "name": "test_outputs.py::test_arbitrary[case-a]",
+        "status": "passed",
+        "duration": 0.1,
+        "start": 1720000000.0,
+        "stop": 1720000000.5,
+        "retries": 0,
+        "file_path": "../../tests/test_outputs.py"
+      },
+      {
+        "name": "test_outputs.py::test_arbitrary[case-b]",
+        "status": "passed",
+        "duration": 0.1,
+        "start": 1720000000.5,
+        "stop": 1720000001.0,
+        "retries": 0,
+        "file_path": "../../tests/test_outputs.py"
+      },
+      {
+        "name": "test_outputs.py::test_unrelated_name",
+        "status": "passed",
+        "duration": 0.1,
+        "start": 1720000001.0,
+        "stop": 1720000002.0,
+        "retries": 0,
+        "file_path": "../../tests/test_outputs.py"
+      }
+    ]
+  }
+}`
+
+const validRewardZeroCTRF = `{
+  "results": {
+    "tool": {"name": "pytest", "version": "8.4.1"},
+    "summary": {
+      "tests": 2,
+      "passed": 1,
+      "failed": 1,
+      "skipped": 0,
+      "pending": 0,
+      "other": 0,
+      "start": 1720000000.0,
+      "stop": 1720000001.0
+    },
+    "tests": [
+      {
+        "name": "test_outputs.py::test_passes",
+        "status": "passed",
+        "duration": 0.1,
+        "start": 1720000000.0,
+        "stop": 1720000000.5,
+        "retries": 0,
+        "file_path": "../../tests/test_outputs.py"
+      },
+      {
+        "name": "test_outputs.py::test_legitimate_failure",
+        "status": "failed",
+        "duration": 0.1,
+        "start": 1720000000.5,
+        "stop": 1720000001.0,
+        "retries": 0,
+        "file_path": "../../tests/test_outputs.py"
+      }
+    ]
+  }
+}`
+
 func TestValidateFixGitCTRFAcceptsPinnedResult(t *testing.T) {
 	if err := validateCTRF(strings.NewReader(validFixGitCTRF)); err != nil {
 		t.Fatalf("validateCTRF() error = %v", err)
 	}
 }
 
-func TestValidateFixGitCTRFRejectsInvalidPinnedResult(t *testing.T) {
+func TestValidateGenericCTRFAcceptsArbitraryParameterizedTestSet(t *testing.T) {
+	for _, report := range []string{
+		validParameterizedCTRF,
+		validRewardZeroCTRF,
+		strings.Replace(validFixGitCTRF, `"version": "8.4.1"`, `"version": "future", "future": true`, 1),
+		strings.Replace(validFixGitCTRF, `        "retries": 0,
+`, ``, 1),
+	} {
+		if err := validateCTRF(strings.NewReader(report)); err != nil {
+			t.Fatalf("validateCTRF() rejected a consistent generic report: %v", err)
+		}
+	}
+}
+
+func TestValidateGenericCTRFRejectsInconsistentResult(t *testing.T) {
 	tests := []struct {
 		name    string
 		content string
 		wantErr string
 	}{
-		{"unknown field", strings.Replace(validFixGitCTRF, `"version": "8.4.1"`, `"version": "8.4.1", "future": true`, 1), "unknown field"},
 		{"trailing value", validFixGitCTRF + `{}`, "multiple JSON values"},
-		{"wrong tool", strings.Replace(validFixGitCTRF, `"name": "pytest"`, `"name": "other"`, 1), "unexpected CTRF tool"},
-		{"missing summary field", strings.Replace(validFixGitCTRF, `"other": 0,`, ``, 1), "missing a required"},
-		{"wrong total", strings.Replace(validFixGitCTRF, `"tests": 2,`, `"tests": 3,`, 1), "want exactly"},
-		{"failure count", strings.Replace(validFixGitCTRF, `"failed": 0,`, `"failed": 1,`, 1), "want exactly"},
-		{"skip count", strings.Replace(validFixGitCTRF, `"skipped": 0,`, `"skipped": 1,`, 1), "want exactly"},
-		{"pending count", strings.Replace(validFixGitCTRF, `"pending": 0,`, `"pending": 1,`, 1), "want exactly"},
-		{"other count", strings.Replace(validFixGitCTRF, `"other": 0,`, `"other": 1,`, 1), "want exactly"},
-		{"failed test", strings.Replace(validFixGitCTRF, `"status": "passed"`, `"status": "failed"`, 1), "want passed"},
-		{"duplicate test", strings.Replace(validFixGitCTRF, `test_layout_file`, `test_about_file`, 1), "duplicate"},
-		{"unexpected test", strings.Replace(validFixGitCTRF, `test_layout_file`, `test_other_file`, 1), "unexpected"},
-		{"parameterized test", strings.Replace(validFixGitCTRF, `test_about_file"`, `test_about_file[case]"`, 1), "invalid"},
-		{"wrong source", strings.Replace(validFixGitCTRF, `test_outputs.py::test_about_file`, `other.py::test_about_file`, 1), "invalid"},
-		{"missing retry", strings.Replace(validFixGitCTRF, `        "retries": 0,
-`, ``, 1), "retry count"},
-		{"wrong file", strings.Replace(validFixGitCTRF, `../../tests/test_outputs.py`, `../../tests/other.py`, 1), "unexpected file path"},
+		{"missing summary field", strings.Replace(validFixGitCTRF, `"other": 0,`, ``, 1), "missing a required count"},
+		{"record total mismatch", strings.Replace(validFixGitCTRF, `"tests": 2,`, `"tests": 3,`, 1), "contains 2 test records"},
+		{"summary counts mismatch", strings.Replace(validFixGitCTRF, `"failed": 0,`, `"failed": 1,`, 1), "do not add up"},
+		{"record status mismatch", strings.Replace(validFixGitCTRF, `"status": "passed"`, `"status": "failed"`, 1), "records contain"},
+		{"unsupported status", strings.Replace(validFixGitCTRF, `"status": "passed"`, `"status": "unknown"`, 1), "unsupported status"},
 	}
 
 	for _, test := range tests {

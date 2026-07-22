@@ -4,15 +4,15 @@ import "time"
 
 // Task is the benchmark-independent description of one unit of work.
 type Task struct {
-	ID          string      `json:"id"`
-	Instruction string      `json:"instruction"`
-	Environment Environment `json:"environment"`
+	ID          string        `json:"id"`
+	Instruction string        `json:"instruction"`
+	Timeout     time.Duration `json:"timeout,omitempty"`
+	Environment Environment   `json:"environment"`
 }
 
 // Environment describes the task sandbox requested by a benchmark.
 type Environment struct {
 	Image        string            `json:"image"`
-	BuildDir     string            `json:"build_dir,omitempty"`
 	Workdir      string            `json:"workdir"`
 	CPU          float64           `json:"cpu,omitempty"`
 	MemoryMB     int               `json:"memory_mb,omitempty"`
@@ -90,11 +90,12 @@ type ToolEndpoint struct {
 
 // HarnessRequest contains task-local runtime inputs supplied before Run.
 type HarnessRequest struct {
-	RunID     string       `json:"run_id"`
-	TaskID    string       `json:"task_id"`
-	Endpoint  ToolEndpoint `json:"tool_endpoint"`
-	Model     ModelConfig  `json:"model"`
-	OutputDir string       `json:"output_dir"`
+	RunID     string        `json:"run_id"`
+	TaskID    string        `json:"task_id"`
+	Endpoint  ToolEndpoint  `json:"tool_endpoint"`
+	Model     ModelConfig   `json:"model"`
+	Timeout   time.Duration `json:"timeout,omitempty"`
+	OutputDir string        `json:"output_dir"`
 }
 
 const (

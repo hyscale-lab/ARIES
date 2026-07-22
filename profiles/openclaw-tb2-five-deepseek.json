@@ -1,0 +1,30 @@
+{
+  "name": "openclaw-tb2-five-deepseek",
+  "versions_file": "../configs/versions.json",
+  "benchmark": {
+    "type": "terminalbench2",
+    "root": ".cache/terminal-bench-2",
+    "tasks": [
+      "fix-git",
+      "prove-plus-comm",
+      "overfull-hbox",
+      "rstan-to-pystan",
+      "schemelike-metacircular-eval"
+    ]
+  },
+  "harness": {
+    "type": "openclaw"
+  },
+  "sandbox": {
+    "type": "docker"
+  },
+  "bridge": {
+    "type": "openclaw-ssh"
+  },
+  "model": {
+    "base_url": "https://api.deepseek.com",
+    "model": "deepseek-v4-flash",
+    "api_key_env": "DEEPSEEK_API_KEY"
+  },
+  "output_dir": "runs"
+}

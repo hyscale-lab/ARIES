@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/core"
@@ -34,15 +37,8 @@ func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner
 	if !ok {
 		return finish(fmt.Errorf("terminalbench task %q was not loaded by Tasks", task.ID))
 	}
-	if b.verifyRevision {
-		if err := VerifyRevision(ctx, b.root, b.revision); err != nil {
-			return finish(fmt.Errorf("reverify terminalbench checkout before evaluation: %w", err))
-		}
-	}
-	for _, file := range details.verifierFiles {
-		if err := validateVerifierFile(file); err != nil {
-			return finish(fmt.Errorf("validate verifier file %q: %w", file.name, err))
-		}
+	if err := VerifyRevision(ctx, b.root, b.revision); err != nil {
+		return finish(fmt.Errorf("reverify terminalbench checkout before evaluation: %w", err))
 	}
 
 	artifactDir := filepath.Join(b.outputDir, task.ID, "evaluation")
@@ -70,9 +66,20 @@ func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner
 	if resetResult.ExitCode != 0 {
 		return finish(fmt.Errorf("remove stale verifier paths: exit code %d", resetResult.ExitCode))
 	}
+	directories := []string{testsPath, verifierLogPath}
+	seenDirectories := map[string]struct{}{testsPath: {}, verifierLogPath: {}}
+	for _, file := range details.verifierFiles {
+		for directory := path.Dir(file.destination); directory != testsPath; directory = path.Dir(directory) {
+			if _, seen := seenDirectories[directory]; !seen {
+				seenDirectories[directory] = struct{}{}
+				directories = append(directories, directory)
+			}
+		}
+	}
+	slices.Sort(directories[2:])
 	createResult, err := sandbox.Exec(ctx, core.Command{
 		Path: "/bin/mkdir",
-		Args: []string{"-p", "--", testsPath, verifierLogPath},
+		Args: append([]string{"-p", "--"}, directories...),
 	})
 	if err != nil {
 		return finish(fmt.Errorf("create clean verifier directories: %w", err))
@@ -81,9 +88,6 @@ func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner
 		return finish(fmt.Errorf("create clean verifier directories: exit code %d", createResult.ExitCode))
 	}
 	for _, file := range details.verifierFiles {
-		if err := validateVerifierFile(file); err != nil {
-			return finish(fmt.Errorf("revalidate verifier file %q immediately before upload: %w", file.name, err))
-		}
 		if err := sandbox.Upload(ctx, file.source, file.destination); err != nil {
 			return finish(fmt.Errorf("inject private verifier file %q: %w", file.name, err))
 		}
@@ -126,7 +130,7 @@ func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner
 	}
 	evaluation.Score = reward
 	evaluation.Reward = reward
-	if err := validateCTRFFile(ctrfPath); err != nil {
+	if err := validateCTRFFile(ctrfPath, reward); err != nil {
 		return finish(err)
 	}
 	if reward == 1 {
@@ -142,12 +146,12 @@ func parseRewardFile(path string) (float64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("read verifier reward: %w", err)
 	}
-	switch string(content) {
-	case "1", "1\n":
+	switch strings.TrimSpace(string(content)) {
+	case "1":
 		return 1, nil
-	case "0", "0\n":
+	case "0":
 		return 0, nil
 	default:
-		return 0, fmt.Errorf("malformed verifier reward in %q: expected exactly 1 or 0", path)
+		return 0, fmt.Errorf("malformed verifier reward in %q: expected 1 or 0", path)
 	}
 }

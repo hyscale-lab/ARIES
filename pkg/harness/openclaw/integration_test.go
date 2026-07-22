@@ -109,7 +109,7 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 	datasetRoot := filepath.Join(root, terminalbench.DefaultRoot)
 	benchmarkOptions := terminalbench.Options{
 		Root: datasetRoot, TaskIDs: []string{"fix-git"}, OutputDir: t.TempDir(),
-		Revision: versions.TerminalBench2.Revision, FixGitImage: versions.TerminalBench2.FixGitImage,
+		Revision: versions.TerminalBench2.Revision, Images: versions.TerminalBench2.Images,
 	}
 	benchmark, err := terminalbench.New(benchmarkOptions)
 	if err != nil {

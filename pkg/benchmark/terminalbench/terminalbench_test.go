@@ -2,13 +2,13 @@ package terminalbench
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +17,8 @@ import (
 )
 
 const (
+	fixGitID           = "fix-git"
+	fixGitWorkdir      = "/app/personal-site"
 	fixtureImageSource = "example.invalid/fix-git:fixture"
 	fixtureImagePin    = fixtureImageSource + "@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	fixtureRevision    = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -67,17 +69,26 @@ mcp_servers = []
 
 const fixtureInstruction = "I just made some changes to my personal site and checked out master, but now I can't find those changes. Please help me find them and merge them into master.\n"
 
+const (
+	arbitraryTaskID      = "arbitrary-task"
+	arbitraryTaskName    = "terminal-bench/arbitrary-task"
+	arbitraryImage       = "example.invalid/arbitrary-task:fixture"
+	arbitraryImagePin    = arbitraryImage + "@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	arbitraryWorkdir     = "/workspace/arbitrary"
+	arbitraryInstruction = "Complete this arbitrary pinned Terminal-Bench task without seeing its verifier.\n"
+)
+
 func testOptions(root string, taskIDs []string, outputDir string) Options {
 	return Options{
 		Root: root, TaskIDs: taskIDs, OutputDir: outputDir,
-		Revision: fixtureRevision, FixGitImage: fixtureImagePin,
+		Revision: fixtureGitRevision(root), Images: imagePins(fixtureImageSource, fixtureImagePin),
 	}
 }
 
 func TestLoadFixGitMapsGenericTaskAndKeepsVerifierPrivate(t *testing.T) {
 	root := writeFixture(t)
 
-	task, details, err := loadTask(root, fixGitID, fixtureImageSource, fixtureImagePin)
+	task, details, err := loadTask(root, fixGitID, imagePins(fixtureImageSource, fixtureImagePin))
 	if err != nil {
 		t.Fatalf("loadTask() error = %v", err)
 	}
@@ -96,7 +107,7 @@ func TestLoadFixGitMapsGenericTaskAndKeepsVerifierPrivate(t *testing.T) {
 	if !reflect.DeepEqual(task.Environment, wantEnvironment) {
 		t.Fatalf("Environment = %#v, want %#v", task.Environment, wantEnvironment)
 	}
-	if details.timeout != 15*time.Minute {
+	if task.Timeout != 15*time.Minute || details.timeout != 15*time.Minute {
 		t.Fatalf("verifier timeout = %s, want 15m", details.timeout)
 	}
 	if len(details.verifierFiles) != 2 {
@@ -104,7 +115,7 @@ func TestLoadFixGitMapsGenericTaskAndKeepsVerifierPrivate(t *testing.T) {
 	}
 	for index, want := range []string{"test.sh", "test_outputs.py"} {
 		file := details.verifierFiles[index]
-		if file.name != want || file.destination != filepath.Join(testsPath, want) || file.digest == [sha256.Size]byte{} {
+		if file.name != want || file.destination != filepath.Join(testsPath, want) {
 			t.Fatalf("private verifier file %d = %#v", index, file)
 		}
 	}
@@ -120,12 +131,173 @@ func TestLoadFixGitMapsGenericTaskAndKeepsVerifierPrivate(t *testing.T) {
 	}
 }
 
+func TestLoadArbitraryTaskMapsGenericFieldsWithoutTaskSpecificRules(t *testing.T) {
+	root := writeArbitraryFixture(t)
+
+	task, details, err := loadTask(root, arbitraryTaskID, imagePins(arbitraryImage, arbitraryImagePin))
+	if err != nil {
+		t.Fatalf("loadTask() error = %v", err)
+	}
+	if task.ID != arbitraryTaskID || task.Instruction != strings.TrimSpace(arbitraryInstruction) {
+		t.Fatalf("task identity/instruction = %#v", task)
+	}
+	wantEnvironment := core.Environment{
+		Image:        arbitraryImagePin,
+		Workdir:      arbitraryWorkdir,
+		CPU:          2,
+		MemoryMB:     4096,
+		StorageMB:    20480,
+		GPUs:         0,
+		AllowNetwork: true,
+		Env:          map[string]string{"TASK_MODE": "arbitrary"},
+	}
+	if !reflect.DeepEqual(task.Environment, wantEnvironment) {
+		t.Fatalf("Environment = %#v, want %#v", task.Environment, wantEnvironment)
+	}
+	if task.Timeout != 750*time.Second || details.timeout != 6*time.Minute || details.workdir != arbitraryWorkdir || !reflect.DeepEqual(details.verifierEnv, map[string]string{"CHECK_MODE": "strict"}) {
+		t.Fatalf("private details = %#v", details)
+	}
+}
+
+func TestRecursiveVerifierTreeStaysPrivateUntilEvaluate(t *testing.T) {
+	root := writeArbitraryFixture(t)
+	task, details, err := loadTask(root, arbitraryTaskID, imagePins(arbitraryImage, arbitraryImagePin))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	encoded, err := json.Marshal(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, private := range []string{"test.sh", "test_outputs.py", "nested-helper.py", "payload.bin", "solve.sh"} {
+		if strings.Contains(string(encoded), private) {
+			t.Fatalf("generic task exposes private verifier or solution file %q: %s", private, encoded)
+		}
+	}
+
+	benchmark := &Benchmark{
+		root: root, revision: fixtureGitRevision(root), outputDir: filepath.Join(t.TempDir(), "runs"),
+		details: map[string]taskDetails{arbitraryTaskID: details},
+	}
+	sandbox := &fakeSandbox{verifierOutputs: map[string][]byte{
+		filepath.Join(verifierLogPath, "ctrf.json"):  []byte(validFixGitCTRF),
+		filepath.Join(verifierLogPath, "reward.txt"): []byte("1\n"),
+	}}
+	if len(sandbox.events) != 0 {
+		t.Fatal("private verifier material appeared before Evaluate")
+	}
+
+	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox)
+	if err != nil {
+		t.Fatalf("Evaluate() error = %v", err)
+	}
+	if evaluation.Status != core.StatusSucceeded {
+		t.Fatalf("Evaluation = %#v", evaluation)
+	}
+	if !reflect.DeepEqual(sandbox.verifierCommand.Env, map[string]string{"CHECK_MODE": "strict"}) {
+		t.Fatalf("verifier environment = %#v", sandbox.verifierCommand.Env)
+	}
+	wantDestinations := []string{
+		"/tests/nested/nested-helper.py",
+		"/tests/nested/payload.bin",
+		"/tests/test.sh",
+		"/tests/test_outputs.py",
+	}
+	gotDestinations := append([]string(nil), sandbox.uploadDestinations...)
+	sort.Strings(gotDestinations)
+	if !reflect.DeepEqual(gotDestinations, wantDestinations) {
+		t.Fatalf("uploaded verifier destinations = %v, want %v", gotDestinations, wantDestinations)
+	}
+	for _, source := range sandbox.uploadSources {
+		if strings.Contains(source, string(filepath.Separator)+"solution"+string(filepath.Separator)) {
+			t.Fatalf("solution file uploaded as verifier: %q", source)
+		}
+	}
+}
+
+func TestTaskParserIgnoresUnknownMetadataButRejectsUnknownEnvironmentField(t *testing.T) {
+	t.Run("descriptive metadata", func(t *testing.T) {
+		root := writeArbitraryFixture(t)
+		path := filepath.Join(root, arbitraryTaskID, "task.toml")
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		content = []byte(strings.Replace(string(content), `category = "software-engineering"`, "category = \"software-engineering\"\nfuture_descriptive_label = \"accepted\"", 1))
+		if err := os.WriteFile(path, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := loadTask(root, arbitraryTaskID, imagePins(arbitraryImage, arbitraryImagePin)); err != nil {
+			t.Fatalf("harmless metadata extension was rejected: %v", err)
+		}
+	})
+
+	t.Run("execution environment", func(t *testing.T) {
+		root := writeArbitraryFixture(t)
+		path := filepath.Join(root, arbitraryTaskID, "task.toml")
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		content = []byte(strings.Replace(string(content), "mcp_servers = []", "mcp_servers = []\nprivileged = true", 1))
+		if err := os.WriteFile(path, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, _, err = loadTask(root, arbitraryTaskID, imagePins(arbitraryImage, arbitraryImagePin))
+		if err == nil || !strings.Contains(err.Error(), "environment.privileged") {
+			t.Fatalf("loadTask() error = %v, want unsupported environment.privileged", err)
+		}
+	})
+}
+
+func TestLoadTaskRejectsMissingOrMismatchedImagePin(t *testing.T) {
+	root := writeArbitraryFixture(t)
+	if _, _, err := loadTask(root, arbitraryTaskID, nil); err == nil || !strings.Contains(err.Error(), "no immutable image pin") {
+		t.Fatalf("missing image pin error = %v", err)
+	}
+	wrongPin := "example.invalid/other:fixture@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	if _, _, err := loadTask(root, arbitraryTaskID, imagePins(arbitraryImage, wrongPin)); err == nil || !strings.Contains(err.Error(), "want \""+arbitraryImage+"\"") {
+		t.Fatalf("mismatched image pin error = %v", err)
+	}
+}
+
+func TestLoadTaskRejectsInvalidExecutionValues(t *testing.T) {
+	tests := []struct {
+		name        string
+		oldValue    string
+		newValue    string
+		wantMessage string
+	}{
+		{"agent timeout", "timeout_sec = 750.0", "timeout_sec = 0.0", "agent.timeout_sec"},
+		{"verifier timeout", "timeout_sec = 360.0", "timeout_sec = 0.0", "verifier.timeout_sec"},
+		{"cpu", "cpus = 2", "cpus = 0", "environment.cpus"},
+		{"memory", "memory_mb = 4096", "memory_mb = 0", "invalid environment resources"},
+		{"environment variable", "TASK_MODE = \"arbitrary\"", "BAD-NAME = \"arbitrary\"", "environment.env"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := writeArbitraryFixture(t)
+			filePath := filepath.Join(root, arbitraryTaskID, "task.toml")
+			content, err := os.ReadFile(filePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, filePath, strings.Replace(string(content), test.oldValue, test.newValue, 1))
+			_, _, err = loadTask(root, arbitraryTaskID, imagePins(arbitraryImage, arbitraryImagePin))
+			if err == nil || !strings.Contains(err.Error(), test.wantMessage) {
+				t.Fatalf("loadTask() error = %v, want %q", err, test.wantMessage)
+			}
+		})
+	}
+}
+
 func TestLoadFixGitRejectsUnsupportedExecutionCriticalField(t *testing.T) {
 	root := writeFixture(t)
 	path := filepath.Join(root, fixGitID, "task.toml")
 	writeFile(t, path, fixtureTaskTOML+"\n[environment.extra]\nprivileged = true\n")
 
-	_, _, err := loadTask(root, fixGitID, fixtureImageSource, fixtureImagePin)
+	_, _, err := loadTask(root, fixGitID, imagePins(fixtureImageSource, fixtureImagePin))
 	if err == nil || !strings.Contains(err.Error(), "unsupported field") || !strings.Contains(err.Error(), "environment.extra") {
 		t.Fatalf("loadTask() error = %v, want unsupported environment.extra", err)
 	}
@@ -137,7 +309,7 @@ func TestLoadFixGitRejectsUnsupportedCriticalValue(t *testing.T) {
 	content := strings.Replace(fixtureTaskTOML, "mcp_servers = []", `mcp_servers = ["server"]`, 1)
 	writeFile(t, path, content)
 
-	_, _, err := loadTask(root, fixGitID, fixtureImageSource, fixtureImagePin)
+	_, _, err := loadTask(root, fixGitID, imagePins(fixtureImageSource, fixtureImagePin))
 	if err == nil || !strings.Contains(err.Error(), "mcp_servers") {
 		t.Fatalf("loadTask() error = %v, want unsupported mcp_servers", err)
 	}
@@ -153,7 +325,6 @@ func TestLoadFixGitMissingFiles(t *testing.T) {
 		{"instruction", "instruction.md", "instruction.md"},
 		{"dockerfile", filepath.Join("environment", "Dockerfile"), "Dockerfile"},
 		{"test script", filepath.Join("tests", "test.sh"), "test.sh"},
-		{"test source", filepath.Join("tests", "test_outputs.py"), "test_outputs.py"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -161,7 +332,7 @@ func TestLoadFixGitMissingFiles(t *testing.T) {
 			if err := os.Remove(filepath.Join(root, fixGitID, test.path)); err != nil {
 				t.Fatal(err)
 			}
-			_, _, err := loadTask(root, fixGitID, fixtureImageSource, fixtureImagePin)
+			_, _, err := loadTask(root, fixGitID, imagePins(fixtureImageSource, fixtureImagePin))
 			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
 				t.Fatalf("loadTask() error = %v, want %q", err, test.wantErr)
 			}
@@ -169,14 +340,15 @@ func TestLoadFixGitMissingFiles(t *testing.T) {
 	}
 }
 
-func TestNewRejectsUnsupportedAndDuplicateTasks(t *testing.T) {
+func TestNewRejectsUnsafeAndDuplicateTasks(t *testing.T) {
 	for _, test := range []struct {
 		name string
 		ids  []string
 		want string
 	}{
-		{"unsupported", []string{"other"}, "unsupported"},
 		{"traversal", []string{"../fix-git"}, "invalid"},
+		{"space", []string{"bad task"}, "invalid"},
+		{"control character", []string{"bad\ntask"}, "invalid"},
 		{"duplicate", []string{fixGitID, fixGitID}, "duplicate"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -190,7 +362,7 @@ func TestNewRejectsUnsupportedAndDuplicateTasks(t *testing.T) {
 
 func TestEvaluateInjectsTestsOnlyWhenCalledAndRetainsArtifacts(t *testing.T) {
 	root := writeFixture(t)
-	task, details, err := loadTask(root, fixGitID, fixtureImageSource, fixtureImagePin)
+	task, details, err := loadTask(root, fixGitID, imagePins(fixtureImageSource, fixtureImagePin))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +370,6 @@ func TestEvaluateInjectsTestsOnlyWhenCalledAndRetainsArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	benchmark.verifyRevision = false
 	benchmark.details[fixGitID] = details
 	sandbox := &fakeSandbox{preseededPaths: true, preseededSymlinks: true, verifierOutputs: map[string][]byte{
 		filepath.Join(verifierLogPath, "ctrf.json"):  []byte(validFixGitCTRF),
@@ -270,14 +441,15 @@ func TestEvaluateRewardStates(t *testing.T) {
 		wantErr    string
 	}{
 		{"one", []byte("1\n"), true, core.StatusSucceeded, 1, ""},
+		{"surrounding whitespace", []byte(" 1\n\n"), true, core.StatusSucceeded, 1, ""},
 		{"zero", []byte("0\n"), true, core.StatusFailed, 0, ""},
 		{"missing", nil, false, core.StatusFailed, 0, "download verifier reward"},
-		{"malformed", []byte(" 1\n"), true, core.StatusFailed, 0, "malformed verifier reward"},
+		{"malformed", []byte("2\n"), true, core.StatusFailed, 0, "malformed verifier reward"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			root := writeFixture(t)
-			task, details, err := loadTask(root, fixGitID, fixtureImageSource, fixtureImagePin)
+			task, details, err := loadTask(root, fixGitID, imagePins(fixtureImageSource, fixtureImagePin))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -285,7 +457,6 @@ func TestEvaluateRewardStates(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			benchmark.verifyRevision = false
 			benchmark.details[fixGitID] = details
 			downloads := map[string][]byte{filepath.Join(verifierLogPath, "ctrf.json"): []byte(validFixGitCTRF)}
 			if test.downloadOK {
@@ -307,9 +478,9 @@ func TestEvaluateRewardStates(t *testing.T) {
 	}
 }
 
-func TestEvaluateDoesNotAcceptRewardOneWithoutValidCTRF(t *testing.T) {
+func TestEvaluateAcceptsLegitimateRewardZeroFailedReport(t *testing.T) {
 	root := writeFixture(t)
-	task, details, err := loadTask(root, fixGitID, fixtureImageSource, fixtureImagePin)
+	task, details, err := loadTask(root, fixGitID, imagePins(fixtureImageSource, fixtureImagePin))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,25 +488,51 @@ func TestEvaluateDoesNotAcceptRewardOneWithoutValidCTRF(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	benchmark.verifyRevision = false
 	benchmark.details[fixGitID] = details
 	sandbox := &fakeSandbox{verifierOutputs: map[string][]byte{
-		filepath.Join(verifierLogPath, "ctrf.json"):  []byte(`{"results":{}}`),
-		filepath.Join(verifierLogPath, "reward.txt"): []byte("1\n"),
+		filepath.Join(verifierLogPath, "ctrf.json"):  []byte(validRewardZeroCTRF),
+		filepath.Join(verifierLogPath, "reward.txt"): []byte("0\n"),
 	}}
 
 	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox)
-	if err == nil || !strings.Contains(err.Error(), "validate verifier CTRF") {
-		t.Fatalf("Evaluate() error = %v, want invalid CTRF", err)
+	if err != nil {
+		t.Fatalf("Evaluate() rejected a legitimate reward-0 verifier report: %v", err)
 	}
-	if evaluation.Status != core.StatusFailed || evaluation.VerifierStatus != core.StatusFailed {
-		t.Fatalf("Evaluation accepted reward without CTRF proof: %#v", evaluation)
+	if evaluation.Status != core.StatusFailed || evaluation.VerifierStatus != core.StatusFailed || evaluation.Reward != 0 || evaluation.Score != 0 {
+		t.Fatalf("Evaluation = %#v, want a valid failed outcome", evaluation)
+	}
+}
+
+func TestEvaluateDoesNotAcceptRewardOneWithoutValidCTRF(t *testing.T) {
+	for _, report := range []string{`{"results":{}}`, validRewardZeroCTRF} {
+		root := writeFixture(t)
+		task, details, err := loadTask(root, fixGitID, imagePins(fixtureImageSource, fixtureImagePin))
+		if err != nil {
+			t.Fatal(err)
+		}
+		benchmark, err := New(testOptions(root, []string{fixGitID}, filepath.Join(t.TempDir(), "runs")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		benchmark.details[fixGitID] = details
+		sandbox := &fakeSandbox{verifierOutputs: map[string][]byte{
+			filepath.Join(verifierLogPath, "ctrf.json"):  []byte(report),
+			filepath.Join(verifierLogPath, "reward.txt"): []byte("1\n"),
+		}}
+
+		evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox)
+		if err == nil || !strings.Contains(err.Error(), "validate verifier CTRF") {
+			t.Fatalf("Evaluate() error = %v, want invalid CTRF", err)
+		}
+		if evaluation.Status != core.StatusFailed || evaluation.VerifierStatus != core.StatusFailed {
+			t.Fatalf("Evaluation accepted reward without CTRF proof: %#v", evaluation)
+		}
 	}
 }
 
 func TestEvaluateRejectsNonzeroVerifierCommand(t *testing.T) {
 	root := writeFixture(t)
-	task, details, err := loadTask(root, fixGitID, fixtureImageSource, fixtureImagePin)
+	task, details, err := loadTask(root, fixGitID, imagePins(fixtureImageSource, fixtureImagePin))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +540,6 @@ func TestEvaluateRejectsNonzeroVerifierCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	benchmark.verifyRevision = false
 	benchmark.details[fixGitID] = details
 	sandbox := &fakeSandbox{
 		commandResult: core.CommandResult{ExitCode: 7},
@@ -368,7 +564,7 @@ func TestEvaluateRejectsChangedVerifierFiles(t *testing.T) {
 		change func(*testing.T, string)
 		want   string
 	}{
-		{"mutated", func(t *testing.T, path string) { writeFile(t, path, "changed\n") }, "metadata changed"},
+		{"mutated", func(t *testing.T, path string) { writeFile(t, path, "changed\n") }, "local changes"},
 		{"symlink", func(t *testing.T, path string) {
 			if err := os.Remove(path); err != nil {
 				t.Fatal(err)
@@ -376,7 +572,7 @@ func TestEvaluateRejectsChangedVerifierFiles(t *testing.T) {
 			if err := os.Symlink("test_outputs.py", path); err != nil {
 				t.Fatal(err)
 			}
-		}, "symlink"},
+		}, "local changes"},
 		{"replacement", func(t *testing.T, path string) {
 			content, err := os.ReadFile(path)
 			if err != nil {
@@ -388,12 +584,12 @@ func TestEvaluateRejectsChangedVerifierFiles(t *testing.T) {
 			if err := os.WriteFile(path, content, 0o600); err != nil {
 				t.Fatal(err)
 			}
-		}, "metadata changed"},
+		}, "local changes"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			root := writeFixture(t)
-			task, details, err := loadTask(root, fixGitID, fixtureImageSource, fixtureImagePin)
+			task, details, err := loadTask(root, fixGitID, imagePins(fixtureImageSource, fixtureImagePin))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -401,7 +597,6 @@ func TestEvaluateRejectsChangedVerifierFiles(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			benchmark.verifyRevision = false
 			benchmark.details[fixGitID] = details
 			test.change(t, details.verifierFiles[0].source)
 			sandbox := &fakeSandbox{}
@@ -419,7 +614,7 @@ func TestEvaluateRejectsChangedVerifierFiles(t *testing.T) {
 
 func TestEvaluateDoesNotAcceptStaleSandboxOrHostReward(t *testing.T) {
 	root := writeFixture(t)
-	task, details, err := loadTask(root, fixGitID, fixtureImageSource, fixtureImagePin)
+	task, details, err := loadTask(root, fixGitID, imagePins(fixtureImageSource, fixtureImagePin))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,7 +623,6 @@ func TestEvaluateDoesNotAcceptStaleSandboxOrHostReward(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	benchmark.verifyRevision = false
 	benchmark.details[fixGitID] = details
 	artifactDir := filepath.Join(outputDir, fixGitID, "evaluation")
 	writeFile(t, filepath.Join(artifactDir, "reward.txt"), "1\n")
@@ -493,6 +687,42 @@ func TestSetupRejectsWrongExistingRevisionWithoutReplacingIt(t *testing.T) {
 	}
 }
 
+func writeArbitraryFixture(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	taskDir := filepath.Join(root, arbitraryTaskID)
+	content := fixtureTaskTOML
+	for _, replacement := range []struct{ old, new string }{
+		{"terminal-bench/fix-git", arbitraryTaskName},
+		{fixtureImageSource, arbitraryImage},
+		{"[verifier]\ntimeout_sec = 900.0", "[verifier]\ntimeout_sec = 360.0"},
+		{"[agent]\ntimeout_sec = 900.0", "[agent]\ntimeout_sec = 750.0"},
+		{"cpus = 1", "cpus = 2"},
+		{"memory_mb = 2048", "memory_mb = 4096"},
+		{"storage_mb = 10240", "storage_mb = 20480"},
+		{"[verifier.env]", "[verifier.env]\nCHECK_MODE = \"strict\""},
+		{"[environment.env]", "[environment.env]\nTASK_MODE = \"arbitrary\""},
+	} {
+		content = strings.Replace(content, replacement.old, replacement.new, 1)
+	}
+	writeFile(t, filepath.Join(taskDir, "task.toml"), content)
+	writeFile(t, filepath.Join(taskDir, "instruction.md"), arbitraryInstruction)
+	writeFile(t, filepath.Join(taskDir, "environment", "Dockerfile"), "FROM python:3.13-slim-bookworm\nWORKDIR "+arbitraryWorkdir+"\n")
+	writeFile(t, filepath.Join(taskDir, "tests", "test.sh"), "#!/bin/bash\n")
+	writeFile(t, filepath.Join(taskDir, "tests", "test_outputs.py"), "def test_output(): pass\n")
+	writeFile(t, filepath.Join(taskDir, "tests", "nested", "nested-helper.py"), "HELPER = True\n")
+	payloadPath := filepath.Join(taskDir, "tests", "nested", "payload.bin")
+	if err := os.MkdirAll(filepath.Dir(payloadPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(payloadPath, []byte{0x00, 0xff, 0x01, 0x7f}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(taskDir, "solution", "solve.sh"), "#!/bin/bash\n")
+	commitFixture(t, root)
+	return root
+}
+
 func writeFixture(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -503,7 +733,35 @@ func writeFixture(t *testing.T) string {
 	writeFile(t, filepath.Join(taskDir, "tests", "test.sh"), "#!/bin/bash\n")
 	writeFile(t, filepath.Join(taskDir, "tests", "test_outputs.py"), "def test_output(): pass\n")
 	writeFile(t, filepath.Join(taskDir, "solution", "solve.sh"), "#!/bin/bash\n")
+	commitFixture(t, root)
 	return root
+}
+
+func commitFixture(t *testing.T, root string) {
+	t.Helper()
+	commands := [][]string{
+		{"init", "--quiet"},
+		{"add", "."},
+		{"-c", "user.name=ARIES Test", "-c", "user.email=aries@example.invalid", "commit", "--quiet", "-m", "fixture"},
+	}
+	for _, arguments := range commands {
+		command := exec.Command("git", append([]string{"-C", root}, arguments...)...)
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", arguments, err, output)
+		}
+	}
+}
+
+func fixtureGitRevision(root string) string {
+	output, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
+	if err != nil {
+		return fixtureRevision
+	}
+	return strings.TrimSpace(string(output))
+}
+
+func imagePins(source, pin string) map[string]string {
+	return map[string]string{source: pin}
 }
 
 func writeFile(t *testing.T, path, content string) {

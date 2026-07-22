@@ -13,14 +13,16 @@ func TestLoadLocalAPIKeySourceAcceptsBoundedSingleLineAndOneTerminalLF(t *testin
 		name    string
 		content []byte
 		want    []byte
+		mode    os.FileMode
 	}{
-		{name: "plain", content: []byte("synthetic-test-key"), want: []byte("synthetic-test-key")},
-		{name: "terminal LF", content: []byte("synthetic-test-key\n"), want: []byte("synthetic-test-key")},
-		{name: "maximum", content: bytes.Repeat([]byte{'x'}, maxAPIKeyBytes), want: bytes.Repeat([]byte{'x'}, maxAPIKeyBytes)},
-		{name: "maximum plus LF", content: append(bytes.Repeat([]byte{'x'}, maxAPIKeyBytes), '\n'), want: bytes.Repeat([]byte{'x'}, maxAPIKeyBytes)},
+		{name: "read write", content: []byte("synthetic-test-key"), want: []byte("synthetic-test-key"), mode: 0o600},
+		{name: "read only", content: []byte("synthetic-test-key"), want: []byte("synthetic-test-key"), mode: 0o400},
+		{name: "terminal LF", content: []byte("synthetic-test-key\n"), want: []byte("synthetic-test-key"), mode: 0o600},
+		{name: "maximum", content: bytes.Repeat([]byte{'x'}, maxAPIKeyBytes), want: bytes.Repeat([]byte{'x'}, maxAPIKeyBytes), mode: 0o600},
+		{name: "maximum plus LF", content: append(bytes.Repeat([]byte{'x'}, maxAPIKeyBytes), '\n'), want: bytes.Repeat([]byte{'x'}, maxAPIKeyBytes), mode: 0o600},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			path := writePrivateKey(t, test.content, 0o600)
+			path := writePrivateKey(t, test.content, test.mode)
 			source, exists, err := loadLocalAPIKeySource(path)
 			if err != nil || !exists || source == nil {
 				t.Fatalf("loadLocalAPIKeySource() = %v, %v, %v", source, exists, err)
@@ -123,20 +125,27 @@ func TestAPIKeySourceIsExactClonedClearedAndDoesNotChangeEnvironment(t *testing.
 	clear(second)
 }
 
-func TestValidateKeyFileRequiresCurrentUserRegular0600BoundedFile(t *testing.T) {
-	valid := keyFileIdentity{uid: uint32(os.Geteuid()), mode: 0o600, size: 1}
-	if err := validateKeyFile(valid); err != nil {
-		t.Fatal(err)
+func TestValidateKeyFileRequiresCurrentUserOwnerOnlyRegularFile(t *testing.T) {
+	for _, mode := range []os.FileMode{0o400, 0o600} {
+		path := writePrivateKey(t, []byte("synthetic-secret"), mode)
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := validateKeyFile(info); err != nil {
+			t.Fatalf("validateKeyFile(mode %04o): %v", mode, err)
+		}
 	}
-	wrongOwner := valid
-	wrongOwner.uid++
-	if err := validateKeyFile(wrongOwner); err == nil {
-		t.Fatal("wrong owner accepted")
-	}
-	nonregular := valid
-	nonregular.mode = os.ModeDir | 0o600
-	if err := validateKeyFile(nonregular); err == nil {
-		t.Fatal("non-regular file accepted")
+
+	for _, mode := range []os.FileMode{0o440, 0o404, 0o640} {
+		path := writePrivateKey(t, []byte("synthetic-secret"), mode)
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := validateKeyFile(info); err == nil {
+			t.Fatalf("validateKeyFile accepted mode %04o", mode)
+		}
 	}
 }
 

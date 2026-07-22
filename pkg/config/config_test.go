@@ -21,7 +21,9 @@ const validVersions = `{
   "terminalbench2": {
     "repository_url": "https://example.invalid/terminal-bench-2.git",
     "revision": "0123456789abcdef0123456789abcdef01234567",
-	"fix_git_image": "example.invalid/fix-git:fixture@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	"images": {
+	  "example.invalid/fix-git:fixture": "example.invalid/fix-git:fixture@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	}
   },
   "openclaw": {
 	"image": "example.invalid/openclaw:1.2.3@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -64,7 +66,7 @@ func TestLoadResolvesAndStrictlyLoadsVersionPins(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.Versions.TerminalBench2.Revision != "0123456789abcdef0123456789abcdef01234567" ||
-		cfg.Versions.TerminalBench2.FixGitImage == "" || cfg.Versions.OpenClaw.Image == "" {
+		len(cfg.Versions.TerminalBench2.Images) != 1 || cfg.Versions.OpenClaw.Image == "" {
 		t.Fatalf("version pins = %#v", cfg.Versions)
 	}
 }
@@ -75,8 +77,20 @@ func TestCheckedInDeepSeekProfileLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Name != "openclaw-tb2-fix-git-deepseek" || cfg.Versions.TerminalBench2.FixGitImage == "" || cfg.Versions.OpenClaw.Image == "" {
+	if cfg.Name != "openclaw-tb2-fix-git-deepseek" || len(cfg.Versions.TerminalBench2.Images) != 89 || cfg.Versions.OpenClaw.Image == "" {
 		t.Fatalf("checked-in profile = %#v", cfg)
+	}
+}
+
+func TestCheckedInFiveTaskProfileLoadsInOrder(t *testing.T) {
+	path := filepath.Clean(filepath.Join("..", "..", "profiles", "openclaw-tb2-five-deepseek.json"))
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"fix-git", "prove-plus-comm", "overfull-hbox", "rstan-to-pystan", "schemelike-metacircular-eval"}
+	if strings.Join(cfg.Benchmark.Tasks, ",") != strings.Join(want, ",") || len(cfg.Versions.TerminalBench2.Images) != 89 {
+		t.Fatalf("checked-in five-task profile = %#v", cfg)
 	}
 }
 
@@ -89,6 +103,9 @@ func TestDecodeVersionsRejectsUnknownAndMissingFields(t *testing.T) {
 		{"valid", validVersions, ""},
 		{"unknown", strings.Replace(validVersions, `"image": "example.invalid/openclaw`, `"future": true, "image": "example.invalid/openclaw`, 1), `unknown field "future"`},
 		{"missing revision", strings.Replace(validVersions, `"revision": "0123456789abcdef0123456789abcdef01234567"`, `"revision": ""`, 1), "terminalbench2.revision is required"},
+		{"missing task images", strings.Replace(validVersions, `"example.invalid/fix-git:fixture": "example.invalid/fix-git:fixture@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"`, ``, 1), "terminalbench2.images must contain"},
+		{"mutable task image", strings.Replace(validVersions, `example.invalid/fix-git:fixture@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`, `example.invalid/fix-git:latest`, 1), "terminalbench2.images"},
+		{"mismatched task image", strings.Replace(validVersions, `example.invalid/fix-git:fixture@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`, `example.invalid/other:fixture@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`, 1), "does not match source"},
 		{"mutable image", strings.Replace(validVersions, `example.invalid/openclaw:1.2.3@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`, `example.invalid/openclaw:latest`, 1), "openclaw.image: image must be pinned by digest"},
 		{"malformed image", strings.Replace(validVersions, `example.invalid/openclaw:1.2.3@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`, `not a valid image@@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`, 1), "invalid image reference"},
 	}
@@ -163,5 +180,12 @@ func TestDecodeRejectsInvalidConfig(t *testing.T) {
 				t.Fatalf("Decode() error = %v, want substring %q", err, test.wantErr)
 			}
 		})
+	}
+}
+
+func TestDecodeAcceptsLowercaseAPIKeyEnvironmentName(t *testing.T) {
+	input := strings.Replace(validConfig, "DEEPSEEK_API_KEY", "deepseek_api_key", 1)
+	if _, err := Decode(strings.NewReader(input)); err != nil {
+		t.Fatalf("Decode() rejected a valid environment name: %v", err)
 	}
 }

@@ -107,6 +107,7 @@ type session struct {
 	artifactDir   string
 	endpoint      core.ToolEndpoint
 	model         core.ModelConfig
+	agentTimeout  time.Duration
 	apiKey        []byte
 	gatewayToken  []byte
 	runAttempted  bool
@@ -176,6 +177,13 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	if err := validateTaskID(request.TaskID); err != nil {
 		return err
 	}
+	if request.Timeout < 0 {
+		return errors.New("OpenClaw task timeout must not be negative")
+	}
+	agentTimeout := request.Timeout
+	if agentTimeout == 0 {
+		agentTimeout = manager.agentTimeout
+	}
 	configuration, err := renderConfig(request.Model, request.Endpoint)
 	if err != nil {
 		return err
@@ -208,7 +216,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	active := &session{
 		runID: request.RunID, taskID: request.TaskID, safeTaskID: safeTaskID(request.TaskID), attemptID: id,
 		containerName: "aries-openclaw-" + id, artifactDir: filepath.Join(manager.outputDir, safeTaskID(request.TaskID), "harness"),
-		endpoint: request.Endpoint, model: request.Model, apiKey: apiKey, gatewayToken: gatewayToken,
+		endpoint: request.Endpoint, model: request.Model, agentTimeout: agentTimeout, apiKey: apiKey, gatewayToken: gatewayToken,
 	}
 	fail := func(primary error) error {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), manager.cleanupTimeout)
@@ -298,9 +306,9 @@ func (manager *Manager) Run(ctx context.Context, instruction string) (core.Harne
 	active.runAttempted = true
 	manager.mu.Unlock()
 
-	timeoutSeconds := max(1, int((manager.agentTimeout+time.Second-1)/time.Second))
+	timeoutSeconds := max(1, int((active.agentTimeout+time.Second-1)/time.Second))
 	command := buildAgentCommand(active, instruction, timeoutSeconds)
-	runCtx, cancel := context.WithTimeout(ctx, manager.agentTimeout)
+	runCtx, cancel := context.WithTimeout(ctx, active.agentTimeout)
 	result, err := manager.execAttached(runCtx, active.containerID, command, "/app")
 	cancel()
 	stdout := redactSession(result.stdout, active)
@@ -830,7 +838,7 @@ func (manager *Manager) collectArtifacts(ctx context.Context, active *session) e
 func (manager *Manager) collectTelemetry(ctx context.Context, active *session) ([]string, error) {
 	result, err := manager.client.CopyFromContainer(ctx, active.containerID, client.CopyFromContainerOptions{SourcePath: stateContainerPath + "/agents/main/sessions"})
 	if err != nil {
-		if missingContainerPath(err) {
+		if errdefs.IsNotFound(err) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("collect OpenClaw telemetry: %w", err)
@@ -841,11 +849,6 @@ func (manager *Manager) collectTelemetry(ctx context.Context, active *session) (
 		return nil, errors.New("OpenClaw telemetry archive exceeded its bound")
 	}
 	return extractTelemetry(active.artifactDir, archive, active.apiKey, active.gatewayToken)
-}
-
-func missingContainerPath(err error) bool {
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "could not find") || strings.Contains(message, "no such file") || strings.Contains(message, "not found")
 }
 
 func (manager *Manager) writeRunArtifacts(active *session, stdout, stderr []byte) ([]string, error) {

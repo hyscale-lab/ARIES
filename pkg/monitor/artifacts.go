@@ -100,20 +100,20 @@ func (operations artifactOperations) removePath(path string) error {
 	return operations.remove(path)
 }
 
-func prepareArtifacts(outputDir string, taskIDs []string, operations artifactOperations) (map[string]*taskArtifact, string, bool, error) {
+func prepareArtifacts(outputDir string, taskIDs []string, operations artifactOperations) (map[string]*taskArtifact, error) {
 	if err := rejectExistingSymlinks(outputDir); err != nil {
-		return nil, "", false, err
+		return nil, err
 	}
 	if err := os.MkdirAll(outputDir, artifactDirectoryMode); err != nil {
-		return nil, "", false, fmt.Errorf("create monitor output directory: %w", err)
+		return nil, fmt.Errorf("create monitor output directory: %w", err)
 	}
 	artifacts := make(map[string]*taskArtifact, len(taskIDs))
-	rollback := func(cause error) (map[string]*taskArtifact, string, bool, error) {
-		cleanupErr := removePartialArtifacts(artifacts, "", false, operations)
+	rollback := func(cause error) (map[string]*taskArtifact, error) {
+		cleanupErr := removePartialArtifacts(artifacts, operations)
 		if cleanupErr != nil {
 			cause = errors.Join(cause, fmt.Errorf("roll back partial monitor artifact preparation: %w", cleanupErr))
 		}
-		return nil, "", false, cause
+		return nil, cause
 	}
 	for _, taskID := range taskIDs {
 		taskRoot := filepath.Join(outputDir, taskID)
@@ -141,7 +141,7 @@ func prepareArtifacts(outputDir string, taskIDs []string, operations artifactOpe
 		}
 		artifact.resources = file
 	}
-	return artifacts, "", false, nil
+	return artifacts, nil
 }
 
 func (artifact *taskArtifact) appendSample(sample ResourceSample, maxSamples int, maxFileBytes int64) error {
@@ -335,7 +335,7 @@ func rejectExistingSymlinks(path string) error {
 	return nil
 }
 
-func removePartialArtifacts(artifacts map[string]*taskArtifact, monitorRoot string, rootCreated bool, operations artifactOperations) error {
+func removePartialArtifacts(artifacts map[string]*taskArtifact, operations artifactOperations) error {
 	var failures []error
 	for _, artifact := range artifacts {
 		if artifact.resources != nil {
@@ -350,11 +350,6 @@ func removePartialArtifacts(artifacts map[string]*taskArtifact, monitorRoot stri
 			failures = append(failures, err)
 		}
 		if err := operations.removePath(artifact.directory); err != nil && !errors.Is(err, os.ErrNotExist) {
-			failures = append(failures, err)
-		}
-	}
-	if rootCreated {
-		if err := operations.removePath(monitorRoot); err != nil && !errors.Is(err, os.ErrNotExist) {
 			failures = append(failures, err)
 		}
 	}

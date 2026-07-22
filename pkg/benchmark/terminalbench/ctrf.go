@@ -1,162 +1,121 @@
 package terminalbench
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
-	"path"
-	"strings"
 )
 
-const maxCTRFBytes = 1 << 20
-
-var fixGitTests = map[string]struct{}{
-	"test_about_file":  {},
-	"test_layout_file": {},
-}
+const maxCTRFBytes = 16 << 20
 
 type ctrfReport struct {
-	Results ctrfResults `json:"results"`
+	Results *ctrfResults `json:"results"`
 }
 
 type ctrfResults struct {
-	Tool    ctrfTool    `json:"tool"`
-	Summary ctrfSummary `json:"summary"`
-	Tests   []ctrfTest  `json:"tests"`
-}
-
-type ctrfTool struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
+	Summary *ctrfSummary `json:"summary"`
+	Tests   []ctrfTest   `json:"tests"`
 }
 
 type ctrfSummary struct {
-	Tests   *int     `json:"tests"`
-	Passed  *int     `json:"passed"`
-	Failed  *int     `json:"failed"`
-	Skipped *int     `json:"skipped"`
-	Pending *int     `json:"pending"`
-	Other   *int     `json:"other"`
-	Start   *float64 `json:"start"`
-	Stop    *float64 `json:"stop"`
+	Tests   *int `json:"tests"`
+	Passed  *int `json:"passed"`
+	Failed  *int `json:"failed"`
+	Skipped *int `json:"skipped"`
+	Pending *int `json:"pending"`
+	Other   *int `json:"other"`
 }
 
 type ctrfTest struct {
-	Name      string   `json:"name"`
-	Status    string   `json:"status"`
-	RawStatus string   `json:"raw_status"`
-	Trace     string   `json:"trace"`
-	Message   string   `json:"message"`
-	Duration  *float64 `json:"duration"`
-	Start     *float64 `json:"start"`
-	Stop      *float64 `json:"stop"`
-	Retries   *int     `json:"retries"`
-	FilePath  string   `json:"file_path"`
+	Status string `json:"status"`
 }
 
-func validateCTRFFile(filePath string) error {
+func validateCTRFFile(filePath string, reward float64) error {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return fmt.Errorf("open verifier CTRF: %w", err)
 	}
 	defer file.Close()
-
-	limited := io.LimitReader(file, maxCTRFBytes+1)
-	content, err := io.ReadAll(limited)
+	summary, err := readCTRF(file)
 	if err != nil {
-		return fmt.Errorf("read verifier CTRF: %w", err)
-	}
-	if len(content) > maxCTRFBytes {
-		return fmt.Errorf("verifier CTRF exceeds %d bytes", maxCTRFBytes)
-	}
-	if err := validateCTRF(strings.NewReader(string(content))); err != nil {
 		return fmt.Errorf("validate verifier CTRF: %w", err)
+	}
+	if reward == 1 && (*summary.Tests == 0 || *summary.Passed != *summary.Tests) {
+		return fmt.Errorf("validate verifier CTRF: reward is 1 but only %d of %d tests passed", *summary.Passed, *summary.Tests)
 	}
 	return nil
 }
 
-func validateCTRF(reader io.Reader) error {
-	decoder := json.NewDecoder(reader)
-	decoder.DisallowUnknownFields()
+func readCTRF(reader io.Reader) (ctrfSummary, error) {
+	content, err := io.ReadAll(io.LimitReader(reader, maxCTRFBytes+1))
+	if err != nil {
+		return ctrfSummary{}, fmt.Errorf("read CTRF: %w", err)
+	}
+	if len(content) > maxCTRFBytes {
+		return ctrfSummary{}, fmt.Errorf("CTRF exceeds %d bytes", maxCTRFBytes)
+	}
+	return validateCTRFContent(content)
+}
 
+func validateCTRFContent(content []byte) (ctrfSummary, error) {
+	decoder := json.NewDecoder(bytes.NewReader(content))
 	var report ctrfReport
 	if err := decoder.Decode(&report); err != nil {
-		return fmt.Errorf("decode pinned pytest-json-ctrf output: %w", err)
+		return ctrfSummary{}, fmt.Errorf("decode CTRF output: %w", err)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		if err == nil {
-			return errors.New("pinned pytest-json-ctrf output contains multiple JSON values")
+			return ctrfSummary{}, errors.New("CTRF output contains multiple JSON values")
 		}
-		return fmt.Errorf("read trailing pinned pytest-json-ctrf output: %w", err)
+		return ctrfSummary{}, fmt.Errorf("read trailing CTRF output: %w", err)
+	}
+	if report.Results == nil || report.Results.Summary == nil {
+		return ctrfSummary{}, errors.New("CTRF output is missing results.summary")
+	}
+	if err := validateCTRFSummary(*report.Results.Summary, report.Results.Tests); err != nil {
+		return ctrfSummary{}, err
+	}
+	return *report.Results.Summary, nil
+}
+
+func validateCTRFSummary(summary ctrfSummary, tests []ctrfTest) error {
+	counts := []*int{summary.Tests, summary.Passed, summary.Failed, summary.Skipped, summary.Pending, summary.Other}
+	for _, count := range counts {
+		if count == nil {
+			return errors.New("CTRF summary is missing a required count")
+		}
+		if *count < 0 {
+			return errors.New("CTRF summary contains a negative count")
+		}
+	}
+	if *summary.Tests != len(tests) {
+		return fmt.Errorf("CTRF summary reports %d tests but contains %d test records", *summary.Tests, len(tests))
+	}
+	if *summary.Passed+*summary.Failed+*summary.Skipped+*summary.Pending+*summary.Other != *summary.Tests {
+		return errors.New("CTRF summary status counts do not add up to tests")
 	}
 
-	if report.Results.Tool.Name != "pytest" || report.Results.Tool.Version != "8.4.1" {
-		return fmt.Errorf("unexpected CTRF tool %q version %q; want pytest 8.4.1", report.Results.Tool.Name, report.Results.Tool.Version)
-	}
-	if err := validateCTRFSummary(report.Results.Summary); err != nil {
-		return err
-	}
-	if len(report.Results.Tests) != len(fixGitTests) {
-		return fmt.Errorf("CTRF contains %d test records; want exactly %d", len(report.Results.Tests), len(fixGitTests))
-	}
-
-	seen := make(map[string]struct{}, len(report.Results.Tests))
-	for _, test := range report.Results.Tests {
-		name, err := fixGitTestName(test.Name)
-		if err != nil {
-			return err
-		}
-		if _, ok := fixGitTests[name]; !ok {
-			return fmt.Errorf("CTRF contains unexpected fix-git test %q", name)
-		}
-		if _, duplicate := seen[name]; duplicate {
-			return fmt.Errorf("CTRF contains duplicate fix-git test %q", name)
-		}
-		seen[name] = struct{}{}
-		if test.Status != "passed" {
-			return fmt.Errorf("CTRF test %q has status %q; want passed", name, test.Status)
-		}
-		if test.Duration == nil || *test.Duration < 0 || test.Start == nil || *test.Start <= 0 || test.Stop == nil || *test.Stop < *test.Start {
-			return fmt.Errorf("CTRF test %q has invalid timing fields", name)
-		}
-		if test.Retries == nil || *test.Retries != 0 {
-			return fmt.Errorf("CTRF test %q has invalid retry count", name)
-		}
-		if path.Base(test.FilePath) != "test_outputs.py" {
-			return fmt.Errorf("CTRF test %q has unexpected file path %q", name, test.FilePath)
+	actual := map[string]int{}
+	for index, test := range tests {
+		switch test.Status {
+		case "passed", "failed", "skipped", "pending", "other":
+			actual[test.Status]++
+		default:
+			return fmt.Errorf("CTRF test record %d has unsupported status %q", index, test.Status)
 		}
 	}
-	for name := range fixGitTests {
-		if _, ok := seen[name]; !ok {
-			return fmt.Errorf("CTRF is missing fix-git test %q", name)
+	expected := map[string]int{
+		"passed": *summary.Passed, "failed": *summary.Failed, "skipped": *summary.Skipped,
+		"pending": *summary.Pending, "other": *summary.Other,
+	}
+	for status, count := range expected {
+		if actual[status] != count {
+			return fmt.Errorf("CTRF summary reports %d %s tests but records contain %d", count, status, actual[status])
 		}
 	}
 	return nil
-}
-
-func validateCTRFSummary(summary ctrfSummary) error {
-	if summary.Tests == nil || summary.Passed == nil || summary.Failed == nil || summary.Skipped == nil || summary.Pending == nil || summary.Other == nil || summary.Start == nil || summary.Stop == nil {
-		return errors.New("CTRF summary is missing a required pinned field")
-	}
-	if *summary.Tests != 2 || *summary.Passed != 2 || *summary.Failed != 0 || *summary.Skipped != 0 || *summary.Pending != 0 || *summary.Other != 0 {
-		return fmt.Errorf(
-			"CTRF summary is tests=%d passed=%d failed=%d skipped=%d pending=%d other=%d; want exactly 2/2/0/0/0/0",
-			*summary.Tests, *summary.Passed, *summary.Failed, *summary.Skipped, *summary.Pending, *summary.Other,
-		)
-	}
-	if *summary.Start <= 0 || *summary.Stop < *summary.Start {
-		return errors.New("CTRF summary has invalid start or stop time")
-	}
-	return nil
-}
-
-func fixGitTestName(nodeID string) (string, error) {
-	parts := strings.Split(nodeID, "::")
-	if len(parts) != 2 || path.Base(parts[0]) != "test_outputs.py" || parts[1] == "" || strings.Contains(parts[1], "[") {
-		return "", fmt.Errorf("invalid fix-git CTRF test node ID %q", nodeID)
-	}
-	return parts[1], nil
 }

@@ -1009,9 +1009,6 @@ func validateEnvironment(environment core.Environment) error {
 	if err := containerimage.Validate(environment.Image); err != nil {
 		return fmt.Errorf("invalid docker sandbox image: %w", err)
 	}
-	if environment.BuildDir != "" {
-		return errors.New("docker sandbox BuildDir is unsupported by the MVP; supply a pinned image")
-	}
 	if _, err := cleanContainerPath(environment.Workdir); err != nil {
 		return fmt.Errorf("invalid docker sandbox workdir: %w", err)
 	}

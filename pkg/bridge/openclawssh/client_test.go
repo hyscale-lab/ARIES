@@ -98,6 +98,29 @@ func TestLoadClientConfigAcceptsDynamicGatewayAndPort(t *testing.T) {
 	}
 }
 
+func TestClientArgumentsAcceptOpenClawUserTemporaryRoot(t *testing.T) {
+	root := filepath.Join(os.TempDir(), "openclaw-"+strconv.Itoa(os.Geteuid()))
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	directory, err := os.MkdirTemp(root, "openclaw-sandbox-ssh-unit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(directory)
+		_ = os.Remove(root)
+	})
+	remote := encodeCanonicalTokens([]string{remoteShell, "-c", "true"})
+	args := []string{"-F", filepath.Join(directory, "config"), "-T", "-o", "RequestTTY=no", lockedHostAlias, remote}
+	if _, err := parseClientArguments(args); err != nil {
+		t.Fatalf("OpenClaw user temporary root rejected: %v", err)
+	}
+}
+
 func TestKnownHostsRequiresExactHostAndEd25519Key(t *testing.T) {
 	t.Parallel()
 	public, _, err := ed25519.GenerateKey(rand.Reader)

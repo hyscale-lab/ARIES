@@ -3,7 +3,7 @@ package runner
 import (
 	"context"
 	"errors"
-	"github.com/sirupsen/logrus"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/sirupsen/logrus"
 )
 
 var errInjected = errors.New("injected failure")
@@ -227,14 +228,15 @@ func (f *fakeBridge) stopCount() int {
 }
 
 type fakeHarness struct {
-	mu         sync.Mutex
-	log        *callLog
-	requests   []core.HarnessRequest
-	startErr   error
-	runErrors  []error
-	stopErrors []error
-	runs       int
-	stops      int
+	mu           sync.Mutex
+	log          *callLog
+	requests     []core.HarnessRequest
+	startErr     error
+	runErrors    []error
+	stopErrors   []error
+	runs         int
+	stops        int
+	instructions []string
 }
 
 func (f *fakeHarness) Start(ctx context.Context, request core.HarnessRequest) error {
@@ -253,12 +255,13 @@ func (f *fakeHarness) Start(ctx context.Context, request core.HarnessRequest) er
 	return startErr
 }
 
-func (f *fakeHarness) Run(ctx context.Context, _ string) (core.HarnessResult, error) {
+func (f *fakeHarness) Run(ctx context.Context, instruction string) (core.HarnessResult, error) {
 	f.log.add("harness.run", ctx)
 	if err := ctx.Err(); err != nil {
 		return core.HarnessResult{}, err
 	}
 	f.mu.Lock()
+	f.instructions = append(f.instructions, instruction)
 	err := indexedError(f.runErrors, f.runs)
 	f.runs++
 	f.mu.Unlock()
@@ -304,7 +307,7 @@ func newRig(t *testing.T, tasks int) *rig {
 	log := newCallLog()
 	taskList := make([]core.Task, tasks)
 	for i := range taskList {
-		taskList[i] = core.Task{ID: string(rune('a' + i)), Instruction: "do work", Environment: core.Environment{Image: "fixture", Workdir: "/work"}}
+		taskList[i] = core.Task{ID: string(rune('a' + i)), Instruction: fmt.Sprintf("do work %d", i), Timeout: 37 * time.Minute, Environment: core.Environment{Image: "fixture", Workdir: "/work"}}
 	}
 	sandbox := &fakeSandbox{}
 	benchmark := &fakeBenchmark{log: log, tasks: taskList, evaluation: core.Evaluation{Reward: 1}}
@@ -362,8 +365,30 @@ func TestRunnerSuccessOrdering(t *testing.T) {
 	rig.harness.mu.Lock()
 	harnessRequests := append([]core.HarnessRequest(nil), rig.harness.requests...)
 	rig.harness.mu.Unlock()
-	if len(harnessRequests) != 1 || harnessRequests[0].RunID != "test-run" || harnessRequests[0].TaskID != "a" || harnessRequests[0].OutputDir != "runs" {
+	if len(harnessRequests) != 1 || harnessRequests[0].RunID != "test-run" || harnessRequests[0].TaskID != "a" || harnessRequests[0].OutputDir != "runs" || harnessRequests[0].Timeout != 37*time.Minute {
 		t.Fatalf("harness requests = %#v", harnessRequests)
+	}
+}
+
+func TestRunnerExecutesBenchmarkTasksInReturnedOrder(t *testing.T) {
+	rig := newRig(t, 5)
+	result, err := rig.runner.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Tasks) != 5 || rig.factory.stopCount() != 5 || rig.bridge.stopCount() != 5 || rig.harness.stopCount() != 5 {
+		t.Fatalf("multi-task lifecycle result=%d sandbox_stops=%d bridge_stops=%d harness_stops=%d", len(result.Tasks), rig.factory.stopCount(), rig.bridge.stopCount(), rig.harness.stopCount())
+	}
+	rig.factory.mu.Lock()
+	requests := append([]core.SandboxRequest(nil), rig.factory.requests...)
+	rig.factory.mu.Unlock()
+	rig.harness.mu.Lock()
+	instructions := append([]string(nil), rig.harness.instructions...)
+	rig.harness.mu.Unlock()
+	for index := range rig.benchmark.tasks {
+		if result.Tasks[index].TaskID != rig.benchmark.tasks[index].ID || requests[index].TaskID != rig.benchmark.tasks[index].ID || instructions[index] != rig.benchmark.tasks[index].Instruction {
+			t.Fatalf("task %d order mismatch: result=%q request=%q instruction=%q", index, result.Tasks[index].TaskID, requests[index].TaskID, instructions[index])
+		}
 	}
 }
 

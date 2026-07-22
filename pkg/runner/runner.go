@@ -205,6 +205,7 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		TaskID:    task.ID,
 		Endpoint:  endpoint,
 		Model:     r.model,
+		Timeout:   task.Timeout,
 		OutputDir: r.outputDir,
 	})
 	// Start may fail after allocating task-local resources. Stop is idempotent,

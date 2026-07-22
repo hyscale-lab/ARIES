@@ -29,7 +29,7 @@ func testVersions() config.Versions {
 		TerminalBench2: config.TerminalBench2Versions{
 			RepositoryURL: "https://example.invalid/terminal-bench-2.git",
 			Revision:      "cccccccccccccccccccccccccccccccccccccccc",
-			FixGitImage:   testFixGitImage,
+			Images:        map[string]string{"example.invalid/fix-git:fixture": testFixGitImage},
 		},
 		OpenClaw: config.OpenClawVersions{Image: testOpenClawImage},
 	}
@@ -381,27 +381,42 @@ func TestRunCommandSelectsAnchoredRepositoryKeyAndIgnoresLaunchCWD(t *testing.T)
 	}
 }
 
-func TestRunCommandFailsClosedWhenRepositoryRootIsUntrusted(t *testing.T) {
+func TestRunCommandUsesEnvironmentOutsideRepositoryLayout(t *testing.T) {
 	launchDirectory := t.TempDir()
 	if err := os.WriteFile(filepath.Join(launchDirectory, localAPIKeyFile), []byte("synthetic-cwd-key"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	restoreWorkingDirectory(t, launchDirectory)
+	environmentKey := "synthetic-environment-key"
+	t.Setenv(deepSeekAPIKey, environmentKey)
 	untrustedExecutable := filepath.Join(t.TempDir(), ariesExecutableName)
 	if err := os.WriteFile(untrustedExecutable, []byte("synthetic executable"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	runs := filepath.Join(t.TempDir(), "runs")
 	configPath := writeCommandConfig(t, runs)
-	doer := &preflightDoer{t: t}
-	err := runCommandWithDependencies(context.Background(), []string{configPath}, io.Discard, commandDependencies{
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content = bytes.Replace(content, []byte(`"type":"terminalbench2"`), []byte(`"type":"unsupported"`), 1)
+	if err := os.WriteFile(configPath, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	doer := &preflightDoer{t: t, replies: []preflightReply{{
+		status: http.StatusOK, body: `{"data":[{"id":"deepseek-v4-flash"}]}`,
+	}}}
+	err = runCommandWithDependencies(context.Background(), []string{configPath}, io.Discard, commandDependencies{
 		executablePath: untrustedExecutable, preflightClient: doer,
 	})
-	if err == nil || !strings.Contains(err.Error(), "resolve ARIES repository root") || doer.requests != 0 {
+	if err == nil || !strings.Contains(err.Error(), `unsupported benchmark type "unsupported"`) || doer.requests != 1 {
 		t.Fatalf("runCommand() error=%v requests=%d", err, doer.requests)
 	}
+	if len(doer.authorizations) != 1 || doer.authorizations[0] != "Bearer "+environmentKey {
+		t.Fatalf("preflight authorization selected the wrong source: %q", doer.authorizations)
+	}
 	validation := readOnlyLiveValidation(t, runs)
-	if validation.Status != liveValidationFailed || validation.Category != liveValidationConfigurationInvalid || validation.Attempts != 0 {
+	if validation.Status != liveValidationSucceeded || validation.Category != liveValidationConfirmed || validation.Attempts != 1 {
 		t.Fatalf("validation = %+v", validation)
 	}
 }
@@ -427,7 +442,7 @@ func TestRunCommandLeavesNonDeepSeekOnExistingEnvironmentPath(t *testing.T) {
 	if err := os.WriteFile(configPath, content, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err = runCommand(context.Background(), []string{configPath}, io.Discard)
+	err = runCommandWithDependencies(context.Background(), []string{configPath}, io.Discard, commandDependencies{})
 	if err == nil || !strings.Contains(err.Error(), `unsupported benchmark type "unsupported"`) {
 		t.Fatalf("runCommand() error = %v", err)
 	}
@@ -503,9 +518,6 @@ func readOnlyLiveValidation(t *testing.T, runs string) liveValidation {
 func createTestAriesRepository(t *testing.T) (string, string) {
 	t.Helper()
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte(ariesModuleLine+"\n\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	bin := filepath.Join(root, "bin")
 	if err := os.Mkdir(bin, 0o700); err != nil {
 		t.Fatal(err)

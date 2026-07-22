@@ -37,6 +37,7 @@ type fakeDocker struct {
 	removed          bool
 	copyToErr        error
 	containerLogsErr error
+	copyFromErr      error
 	inspectErr       error
 	stopErr          error
 	killErr          error
@@ -194,6 +195,9 @@ func (fake *fakeDocker) ContainerLogs(context.Context, string, client.ContainerL
 }
 
 func (fake *fakeDocker) CopyFromContainer(context.Context, string, client.CopyFromContainerOptions) (client.CopyFromContainerResult, error) {
+	if fake.copyFromErr != nil {
+		return client.CopyFromContainerResult{}, fake.copyFromErr
+	}
 	var archive bytes.Buffer
 	writer := tar.NewWriter(&archive)
 	content := []byte("{\"event\":\"tool\"}\n")
@@ -201,6 +205,22 @@ func (fake *fakeDocker) CopyFromContainer(context.Context, string, client.CopyFr
 	_, _ = writer.Write(content)
 	_ = writer.Close()
 	return client.CopyFromContainerResult{Content: io.NopCloser(bytes.NewReader(archive.Bytes()))}, nil
+}
+
+func TestCollectTelemetryIgnoresOnlyTypedMissingPath(t *testing.T) {
+	fake := newFakeDocker()
+	manager := newTestManager(t, fake, []byte("model-secret"))
+	active := &session{containerID: "openclaw-id", artifactDir: t.TempDir()}
+
+	fake.copyFromErr = fmt.Errorf("session path absent: %w", errdefs.ErrNotFound)
+	if paths, err := manager.collectTelemetry(context.Background(), active); err != nil || len(paths) != 0 {
+		t.Fatalf("typed missing telemetry = %v, %v", paths, err)
+	}
+
+	fake.copyFromErr = errors.New("daemon not found while unavailable")
+	if _, err := manager.collectTelemetry(context.Background(), active); err == nil || !strings.Contains(err.Error(), "daemon not found") {
+		t.Fatalf("untyped daemon failure was masked: %v", err)
+	}
 }
 
 func (fake *fakeDocker) ContainerStop(context.Context, string, client.ContainerStopOptions) (client.ContainerStopResult, error) {
@@ -304,7 +324,7 @@ func TestHarnessUsesOneSDKContainerAndDirectPrivateArchive(t *testing.T) {
 	fake.keepAttachOpen = true
 	secret := []byte("model-secret")
 	manager := newTestManager(t, fake, secret)
-	request := core.HarnessRequest{RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
+	request := core.HarnessRequest{RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(), Timeout: 37 * time.Second}
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -323,6 +343,18 @@ func TestHarnessUsesOneSDKContainerAndDirectPrivateArchive(t *testing.T) {
 	}
 	if fake.created.Name != "aries-openclaw-attempt" || len(fake.created.Config.Cmd) == 0 || len(fake.created.HostConfig.Mounts) != 0 || len(fake.created.HostConfig.Binds) != 0 {
 		t.Fatalf("container create = %#v", fake.created)
+	}
+	fake.mu.Lock()
+	var agentCommand string
+	for _, exec := range fake.execs {
+		joined := strings.Join(exec.Cmd, " ")
+		if strings.Contains(joined, " openclaw.mjs agent ") {
+			agentCommand = joined
+		}
+	}
+	fake.mu.Unlock()
+	if !strings.Contains(agentCommand, " --timeout 37") {
+		t.Fatalf("task timeout was not passed to OpenClaw: %q", agentCommand)
 	}
 	serialized := strings.Join(append(append([]string{}, fake.created.Config.Env...), fake.created.Config.Cmd...), "\n")
 	for _, value := range fake.created.Config.Labels {

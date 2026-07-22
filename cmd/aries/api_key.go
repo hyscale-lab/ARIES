@@ -21,28 +21,18 @@ type apiKeySource struct {
 	value []byte
 }
 
-type keyFileIdentity struct {
-	device   uint64
-	inode    uint64
-	uid      uint32
-	size     int64
-	mode     os.FileMode
-	modified int64
-}
-
 func loadLocalAPIKeySource(path string) (*apiKeySource, bool, error) {
-	before, err := os.Lstat(path)
+	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, false, nil
 	}
 	if err != nil {
 		return nil, false, fmt.Errorf("inspect %s: %w", localAPIKeyFile, err)
 	}
-	beforeIdentity, err := keyIdentity(before)
-	if err != nil {
-		return nil, false, err
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, false, fmt.Errorf("%s must not be a symbolic link", localAPIKeyFile)
 	}
-	if err := validateKeyFile(beforeIdentity); err != nil {
+	if err := validateKeyFile(info); err != nil {
 		return nil, false, err
 	}
 
@@ -57,19 +47,12 @@ func loadLocalAPIKeySource(path string) (*apiKeySource, bool, error) {
 	}
 	defer file.Close()
 
-	opened, err := file.Stat()
+	info, err = file.Stat()
 	if err != nil {
 		return nil, false, fmt.Errorf("inspect opened %s: %w", localAPIKeyFile, err)
 	}
-	openedIdentity, err := keyIdentity(opened)
-	if err != nil {
+	if err := validateKeyFile(info); err != nil {
 		return nil, false, err
-	}
-	if err := validateKeyFile(openedIdentity); err != nil {
-		return nil, false, err
-	}
-	if beforeIdentity != openedIdentity {
-		return nil, false, fmt.Errorf("%s changed while it was opened", localAPIKeyFile)
 	}
 
 	content, err := io.ReadAll(io.LimitReader(file, maxAPIKeyBytes+2))
@@ -87,26 +70,7 @@ func loadLocalAPIKeySource(path string) (*apiKeySource, bool, error) {
 		return nil, false, fmt.Errorf("%s exceeds the 16 KiB key bound", localAPIKeyFile)
 	}
 
-	openedAfter, err := file.Stat()
-	if err != nil {
-		return nil, false, fmt.Errorf("reinspect opened %s: %w", localAPIKeyFile, err)
-	}
-	pathAfter, err := os.Lstat(path)
-	if err != nil {
-		return nil, false, fmt.Errorf("reinspect %s: %w", localAPIKeyFile, err)
-	}
-	openedAfterIdentity, err := keyIdentity(openedAfter)
-	if err != nil {
-		return nil, false, err
-	}
-	pathAfterIdentity, err := keyIdentity(pathAfter)
-	if err != nil {
-		return nil, false, err
-	}
-	if beforeIdentity != openedAfterIdentity || beforeIdentity != pathAfterIdentity {
-		return nil, false, fmt.Errorf("%s identity, size, or modification time changed while it was read", localAPIKeyFile)
-	}
-	if int64(len(content)) != beforeIdentity.size {
+	if int64(len(content)) != info.Size() {
 		return nil, false, fmt.Errorf("%s size changed while it was read", localAPIKeyFile)
 	}
 
@@ -128,28 +92,21 @@ func loadLocalAPIKeySource(path string) (*apiKeySource, bool, error) {
 	return &apiKeySource{value: content}, true, nil
 }
 
-func keyIdentity(info os.FileInfo) (keyFileIdentity, error) {
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		return keyFileIdentity{}, fmt.Errorf("%s has unsupported file metadata", localAPIKeyFile)
-	}
-	return keyFileIdentity{
-		device: uint64(stat.Dev), inode: uint64(stat.Ino), uid: stat.Uid,
-		size: info.Size(), mode: info.Mode(), modified: info.ModTime().UnixNano(),
-	}, nil
-}
-
-func validateKeyFile(identity keyFileIdentity) error {
-	if !identity.mode.IsRegular() {
+func validateKeyFile(info os.FileInfo) error {
+	if !info.Mode().IsRegular() {
 		return fmt.Errorf("%s must be a regular file", localAPIKeyFile)
 	}
-	if identity.mode.Perm() != 0o600 {
-		return fmt.Errorf("%s permissions are %04o; want 0600", localAPIKeyFile, identity.mode.Perm())
+	if info.Mode().Perm()&0o077 != 0 || info.Mode().Perm()&0o400 == 0 {
+		return fmt.Errorf("%s permissions are %04o; require owner read access and no group or world permissions", localAPIKeyFile, info.Mode().Perm())
 	}
-	if identity.uid != uint32(os.Geteuid()) {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("%s has unsupported file metadata", localAPIKeyFile)
+	}
+	if stat.Uid != uint32(os.Geteuid()) {
 		return fmt.Errorf("%s must be owned by the current user", localAPIKeyFile)
 	}
-	if identity.size < 0 || identity.size > maxAPIKeyBytes+1 {
+	if info.Size() < 0 || info.Size() > maxAPIKeyBytes+1 {
 		return fmt.Errorf("%s exceeds the 16 KiB key bound", localAPIKeyFile)
 	}
 	return nil

@@ -27,22 +27,10 @@ const runResultName = "run-result.json"
 
 func main() {
 	logger := newLogger()
-	if err := runWithLogger(os.Args[1:], logger); err != nil {
+	if err := runCommandWithDependencies(context.Background(), os.Args[1:], os.Stdout, commandDependencies{logger: logger}); err != nil {
 		logger.WithError(err).Error("aries failed")
 		os.Exit(1)
 	}
-}
-
-func run(args []string) error {
-	return runWithLogger(args, newLogger())
-}
-
-func runWithLogger(args []string, logger *logrus.Logger) error {
-	return runCommandWithDependencies(context.Background(), args, os.Stdout, commandDependencies{logger: logger})
-}
-
-func runCommand(ctx context.Context, args []string, stdout io.Writer) error {
-	return runCommandWithDependencies(ctx, args, stdout, commandDependencies{})
 }
 
 type commandDependencies struct {
@@ -110,20 +98,16 @@ func runCommandWithDependencies(ctx context.Context, args []string, stdout io.Wr
 	var apiKeys *apiKeySource
 	exists := false
 	if isOfficialDeepSeek(cfg.Model) {
-		repositoryRoot, rootErr := ariesRepositoryRoot(dependencies.executablePath)
-		if rootErr != nil {
-			validation := failedLiveValidation(cfg.Model, liveValidationConfigurationInvalid, 0)
-			persistErr := persistLiveValidation(outputRoot, validation)
-			return errors.Join(fmt.Errorf("resolve ARIES repository root: %w", rootErr), persistErr)
-		}
-		apiKeys, exists, err = loadLocalAPIKeySource(filepath.Join(repositoryRoot, localAPIKeyFile))
-		if err != nil {
-			validation := failedLiveValidation(cfg.Model, liveValidationCredentialInvalid, 0)
-			persistErr := persistLiveValidation(outputRoot, validation)
-			return errors.Join(fmt.Errorf("load local API key: %w", err), persistErr)
-		}
-		if exists {
-			defer apiKeys.Clear()
+		if keyPath, anchored := repositoryAPIKeyPath(dependencies.executablePath); anchored {
+			apiKeys, exists, err = loadLocalAPIKeySource(keyPath)
+			if err != nil {
+				validation := failedLiveValidation(cfg.Model, liveValidationCredentialInvalid, 0)
+				persistErr := persistLiveValidation(outputRoot, validation)
+				return errors.Join(fmt.Errorf("load local API key: %w", err), persistErr)
+			}
+			if exists {
+				defer apiKeys.Clear()
+			}
 		}
 	}
 
@@ -165,7 +149,7 @@ func buildExperiment(
 	case "terminalbench2":
 		benchmark, err = terminalbench.New(terminalbench.Options{
 			Root: cfg.Benchmark.Root, TaskIDs: cfg.Benchmark.Tasks, OutputDir: outputRoot,
-			Revision: cfg.Versions.TerminalBench2.Revision, FixGitImage: cfg.Versions.TerminalBench2.FixGitImage,
+			Revision: cfg.Versions.TerminalBench2.Revision, Images: cfg.Versions.TerminalBench2.Images,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("construct terminalbench2 benchmark: %w", err)
@@ -376,7 +360,7 @@ func prepareProfile(ctx context.Context, cfg config.Config) error {
 
 	benchmark, err := terminalbench.New(terminalbench.Options{
 		Root: cfg.Benchmark.Root, TaskIDs: cfg.Benchmark.Tasks, OutputDir: cfg.OutputDir,
-		Revision: cfg.Versions.TerminalBench2.Revision, FixGitImage: cfg.Versions.TerminalBench2.FixGitImage,
+		Revision: cfg.Versions.TerminalBench2.Revision, Images: cfg.Versions.TerminalBench2.Images,
 	})
 	if err != nil {
 		return fmt.Errorf("validate terminalbench2 profile: %w", err)

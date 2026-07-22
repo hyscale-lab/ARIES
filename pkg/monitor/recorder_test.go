@@ -325,7 +325,7 @@ func TestPrepareArtifactsJoinsRollbackFailures(t *testing.T) {
 		}
 		return err
 	}
-	_, _, _, err := prepareArtifacts(outputDir, []string{"task-a", "task-b"}, operations)
+	_, err := prepareArtifacts(outputDir, []string{"task-a", "task-b"}, operations)
 	if err == nil || !errors.Is(err, closeFailure) || !errors.Is(err, removeFailure) {
 		t.Fatalf("prepareArtifacts error = %v", err)
 	}

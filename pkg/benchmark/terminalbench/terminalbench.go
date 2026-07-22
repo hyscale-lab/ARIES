@@ -3,17 +3,16 @@ package terminalbench
 import (
 	"bufio"
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
-	"io"
+	"math"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -25,31 +24,28 @@ import (
 const (
 	DefaultRoot = ".cache/terminal-bench-2"
 
-	fixGitID        = "fix-git"
-	fixGitTaskName  = "terminal-bench/fix-git"
-	fixGitWorkdir   = "/app/personal-site"
 	testsPath       = "/tests"
 	verifierLogPath = "/logs/verifier"
 )
 
-// Options are the explicit inputs to the pinned Terminal-Bench 2 adapter.
+// Options selects tasks from one pinned Terminal-Bench 2 checkout. Images maps
+// each task.toml source image to the immutable image used for execution.
 type Options struct {
-	Root        string
-	TaskIDs     []string
-	OutputDir   string
-	Revision    string
-	FixGitImage string
+	Root      string
+	TaskIDs   []string
+	OutputDir string
+	Revision  string
+	Images    map[string]string
 }
 
-// Benchmark discovers the pinned fix-git task and owns its private verifier.
+// Benchmark discovers selected Terminal-Bench tasks and retains their private
+// verifier trees until evaluation.
 type Benchmark struct {
-	root           string
-	taskIDs        []string
-	outputDir      string
-	revision       string
-	fixGitImage    string
-	fixGitSource   string
-	verifyRevision bool
+	root      string
+	taskIDs   []string
+	outputDir string
+	revision  string
+	images    map[string]string
 
 	mu      sync.RWMutex
 	details map[string]taskDetails
@@ -66,45 +62,21 @@ type verifierFile struct {
 	name        string
 	source      string
 	destination string
-	size        int64
-	mode        os.FileMode
-	modTime     time.Time
-	device      uint64
-	inode       uint64
-	digest      [sha256.Size]byte
 }
 
 type taskFile struct {
 	SchemaVersion string          `toml:"schema_version"`
 	Artifacts     []string        `toml:"artifacts"`
 	Task          taskSection     `toml:"task"`
-	Metadata      metadataSection `toml:"metadata"`
+	Metadata      toml.Primitive  `toml:"metadata"`
 	Verifier      verifierSection `toml:"verifier"`
 	Agent         agentSection    `toml:"agent"`
 	Environment   environmentFile `toml:"environment"`
-	Solution      solutionSection `toml:"solution"`
+	Solution      toml.Primitive  `toml:"solution"`
 }
 
 type taskSection struct {
-	Name        string   `toml:"name"`
-	Description string   `toml:"description"`
-	Keywords    []string `toml:"keywords"`
-	Authors     []author `toml:"authors"`
-}
-
-type author struct {
-	Name  string `toml:"name"`
-	Email string `toml:"email"`
-}
-
-type metadataSection struct {
-	AuthorName            string   `toml:"author_name"`
-	AuthorEmail           string   `toml:"author_email"`
-	Difficulty            string   `toml:"difficulty"`
-	Category              string   `toml:"category"`
-	Tags                  []string `toml:"tags"`
-	ExpertTimeEstimateMin float64  `toml:"expert_time_estimate_min"`
-	JuniorTimeEstimateMin float64  `toml:"junior_time_estimate_min"`
+	Name string `toml:"name"`
 }
 
 type verifierSection struct {
@@ -128,14 +100,8 @@ type environmentFile struct {
 	Env                 map[string]string `toml:"env"`
 }
 
-type solutionSection struct {
-	Env map[string]string `toml:"env"`
-}
-
 var _ runner.Benchmark = (*Benchmark)(nil)
 
-// New constructs the narrow MVP adapter. Tasks verifies the dataset revision
-// before reading task data.
 func New(options Options) (*Benchmark, error) {
 	if strings.TrimSpace(options.Root) == "" {
 		return nil, errors.New("terminalbench root is required")
@@ -149,38 +115,36 @@ func New(options Options) (*Benchmark, error) {
 	if strings.TrimSpace(options.Revision) == "" {
 		return nil, errors.New("terminalbench revision is required")
 	}
-	fixGitSource, err := containerimage.TaggedSource(options.FixGitImage)
-	if err != nil {
-		return nil, fmt.Errorf("terminalbench fix-git image: %w", err)
-	}
 
 	seen := make(map[string]struct{}, len(options.TaskIDs))
 	for _, id := range options.TaskIDs {
-		if id != filepath.Base(id) || id == "." || strings.TrimSpace(id) == "" {
+		if !safeTaskID(id) {
 			return nil, fmt.Errorf("invalid terminalbench task ID %q", id)
 		}
-		if id != fixGitID {
-			return nil, fmt.Errorf("terminalbench task %q is unsupported by the MVP; only %q is pinned", id, fixGitID)
-		}
-		if _, ok := seen[id]; ok {
+		if _, duplicate := seen[id]; duplicate {
 			return nil, fmt.Errorf("duplicate terminalbench task ID %q", id)
 		}
 		seen[id] = struct{}{}
 	}
 
+	images := make(map[string]string, len(options.Images))
+	for source, pin := range options.Images {
+		if err := validateImagePin(source, pin); err != nil {
+			return nil, err
+		}
+		images[source] = pin
+	}
+
 	return &Benchmark{
-		root:           filepath.Clean(options.Root),
-		taskIDs:        slices.Clone(options.TaskIDs),
-		outputDir:      filepath.Clean(options.OutputDir),
-		revision:       options.Revision,
-		fixGitImage:    options.FixGitImage,
-		fixGitSource:   fixGitSource,
-		verifyRevision: true,
-		details:        make(map[string]taskDetails, len(options.TaskIDs)),
+		root:      filepath.Clean(options.Root),
+		taskIDs:   slices.Clone(options.TaskIDs),
+		outputDir: filepath.Clean(options.OutputDir),
+		revision:  options.Revision,
+		images:    images,
+		details:   make(map[string]taskDetails, len(options.TaskIDs)),
 	}, nil
 }
 
-// Tasks loads the selected task directories after verifying the pinned checkout.
 func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
 	if err := VerifyRevision(ctx, b.root, b.revision); err != nil {
 		return nil, err
@@ -192,7 +156,7 @@ func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		task, private, err := loadTask(b.root, id, b.fixGitSource, b.fixGitImage)
+		task, private, err := loadTask(b.root, id, b.images)
 		if err != nil {
 			return nil, fmt.Errorf("load terminalbench task %q: %w", id, err)
 		}
@@ -206,7 +170,7 @@ func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
 	return tasks, nil
 }
 
-func loadTask(root, id, fixGitSource, fixGitImage string) (core.Task, taskDetails, error) {
+func loadTask(root, id string, images map[string]string) (core.Task, taskDetails, error) {
 	taskDir := filepath.Join(root, id)
 	info, err := os.Stat(taskDir)
 	if err != nil {
@@ -221,10 +185,11 @@ func loadTask(root, id, fixGitSource, fixGitImage string) (core.Task, taskDetail
 	if err != nil {
 		return core.Task{}, taskDetails{}, fmt.Errorf("parse task.toml: %w", err)
 	}
-	if undecoded := meta.Undecoded(); len(undecoded) != 0 {
-		return core.Task{}, taskDetails{}, fmt.Errorf("task.toml contains unsupported field %q", undecoded[0].String())
+	if err := rejectUnknownExecutionFields(meta); err != nil {
+		return core.Task{}, taskDetails{}, err
 	}
-	if err := validateTaskFile(id, parsed, fixGitSource); err != nil {
+	image, err := validateTaskFile(id, parsed, images)
+	if err != nil {
 		return core.Task{}, taskDetails{}, err
 	}
 
@@ -241,33 +206,25 @@ func loadTask(root, id, fixGitSource, fixGitImage string) (core.Task, taskDetail
 	if err != nil {
 		return core.Task{}, taskDetails{}, err
 	}
-	if workdir != fixGitWorkdir {
-		return core.Task{}, taskDetails{}, fmt.Errorf("unsupported fix-git workdir %q; want %q", workdir, fixGitWorkdir)
+	verifierFiles, err := captureVerifierTree(filepath.Join(taskDir, "tests"))
+	if err != nil {
+		return core.Task{}, taskDetails{}, err
 	}
 
-	testsDir := filepath.Join(taskDir, "tests")
-	verifierFiles := make([]verifierFile, 0, 2)
-	for _, name := range []string{"test.sh", "test_outputs.py"} {
-		file, err := captureVerifierFile(filepath.Join(testsDir, name), filepath.Join(testsPath, name))
-		if err != nil {
-			return core.Task{}, taskDetails{}, fmt.Errorf("capture verifier file %q: %w", name, err)
-		}
-		verifierFiles = append(verifierFiles, file)
-	}
-
-	env := cloneMap(parsed.Environment.Env)
+	agentTimeout := durationSeconds(parsed.Agent.TimeoutSeconds)
 	return core.Task{
 			ID:          id,
 			Instruction: instruction,
+			Timeout:     agentTimeout,
 			Environment: core.Environment{
-				Image:        fixGitImage,
+				Image:        image,
 				Workdir:      workdir,
 				CPU:          parsed.Environment.CPUs,
 				MemoryMB:     parsed.Environment.MemoryMB,
 				StorageMB:    parsed.Environment.StorageMB,
 				GPUs:         parsed.Environment.GPUs,
 				AllowNetwork: parsed.Environment.AllowInternet,
-				Env:          env,
+				Env:          cloneMap(parsed.Environment.Env),
 			},
 		}, taskDetails{
 			verifierFiles: verifierFiles,
@@ -277,143 +234,136 @@ func loadTask(root, id, fixGitSource, fixGitImage string) (core.Task, taskDetail
 		}, nil
 }
 
-func captureVerifierFile(source, destination string) (verifierFile, error) {
-	info, file, err := openRegularFile(source)
-	if err != nil {
-		return verifierFile{}, err
-	}
-	defer file.Close()
-
-	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return verifierFile{}, fmt.Errorf("hash verifier file: %w", err)
-	}
-	device, inode, err := fileIdentity(info)
-	if err != nil {
-		return verifierFile{}, err
-	}
-	var digest [sha256.Size]byte
-	copy(digest[:], hash.Sum(nil))
-	return verifierFile{
-		name:        filepath.Base(source),
-		source:      source,
-		destination: destination,
-		size:        info.Size(),
-		mode:        info.Mode(),
-		modTime:     info.ModTime(),
-		device:      device,
-		inode:       inode,
-		digest:      digest,
-	}, nil
-}
-
-func validateVerifierFile(expected verifierFile) error {
-	info, file, err := openRegularFile(expected.source)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	device, inode, err := fileIdentity(info)
-	if err != nil {
-		return err
-	}
-	if info.Size() != expected.size || info.Mode() != expected.mode || !info.ModTime().Equal(expected.modTime) || device != expected.device || inode != expected.inode {
-		return errors.New("verifier file metadata changed after task discovery")
-	}
-	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return fmt.Errorf("hash verifier file: %w", err)
-	}
-	if !slices.Equal(hash.Sum(nil), expected.digest[:]) {
-		return errors.New("verifier file content changed after task discovery")
+func rejectUnknownExecutionFields(meta toml.MetaData) error {
+	for _, key := range meta.Undecoded() {
+		parts := key.String()
+		top := parts
+		if index := strings.IndexByte(parts, '.'); index >= 0 {
+			top = parts[:index]
+		}
+		switch top {
+		case "task", "metadata", "solution":
+			continue
+		default:
+			return fmt.Errorf("task.toml contains unsupported field %q", parts)
+		}
 	}
 	return nil
 }
 
-func openRegularFile(path string) (os.FileInfo, *os.File, error) {
-	before, err := os.Lstat(path)
-	if err != nil {
-		return nil, nil, fmt.Errorf("inspect verifier file: %w", err)
-	}
-	if before.Mode()&os.ModeSymlink != 0 {
-		return nil, nil, errors.New("verifier file is a symlink")
-	}
-	if !before.Mode().IsRegular() {
-		return nil, nil, errors.New("verifier file is not regular")
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, nil, fmt.Errorf("open verifier file: %w", err)
-	}
-	after, err := file.Stat()
-	if err != nil {
-		file.Close()
-		return nil, nil, fmt.Errorf("stat open verifier file: %w", err)
-	}
-	if !os.SameFile(before, after) || !after.Mode().IsRegular() {
-		file.Close()
-		return nil, nil, errors.New("verifier file changed while opening")
-	}
-	current, err := os.Lstat(path)
-	if err != nil {
-		file.Close()
-		return nil, nil, fmt.Errorf("reinspect verifier file: %w", err)
-	}
-	if current.Mode()&os.ModeSymlink != 0 || !os.SameFile(after, current) {
-		file.Close()
-		return nil, nil, errors.New("verifier file changed while opening")
-	}
-	return after, file, nil
-}
-
-func fileIdentity(info os.FileInfo) (uint64, uint64, error) {
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		return 0, 0, errors.New("verifier file identity is unavailable")
-	}
-	return uint64(stat.Dev), uint64(stat.Ino), nil
-}
-
-func validateTaskFile(id string, parsed taskFile, fixGitSource string) error {
+func validateTaskFile(id string, parsed taskFile, images map[string]string) (string, error) {
 	if parsed.SchemaVersion != "1.1" {
-		return fmt.Errorf("unsupported task schema_version %q; want %q", parsed.SchemaVersion, "1.1")
+		return "", fmt.Errorf("unsupported task schema_version %q; want %q", parsed.SchemaVersion, "1.1")
 	}
-	if id != fixGitID || parsed.Task.Name != fixGitTaskName {
-		return fmt.Errorf("unsupported task identity directory=%q name=%q", id, parsed.Task.Name)
+	if parsed.Task.Name != "terminal-bench/"+id {
+		return "", fmt.Errorf("terminalbench task identity directory=%q name=%q does not match", id, parsed.Task.Name)
 	}
 	if len(parsed.Artifacts) != 0 {
-		return errors.New("task artifacts are unsupported by the MVP")
-	}
-	if parsed.Environment.DockerImage != fixGitSource {
-		return fmt.Errorf("unsupported fix-git docker image %q; want %q", parsed.Environment.DockerImage, fixGitSource)
-	}
-	if parsed.Environment.CPUs != 1 || parsed.Environment.MemoryMB != 2048 || parsed.Environment.StorageMB != 10240 || parsed.Environment.GPUs != 0 {
-		return fmt.Errorf("unsupported fix-git resources cpu=%v memory_mb=%d storage_mb=%d gpus=%d", parsed.Environment.CPUs, parsed.Environment.MemoryMB, parsed.Environment.StorageMB, parsed.Environment.GPUs)
-	}
-	if parsed.Environment.BuildTimeoutSeconds != 600 || parsed.Agent.TimeoutSeconds != 900 || parsed.Verifier.TimeoutSeconds != 900 {
-		return fmt.Errorf("unsupported fix-git timeouts build=%v agent=%v verifier=%v", parsed.Environment.BuildTimeoutSeconds, parsed.Agent.TimeoutSeconds, parsed.Verifier.TimeoutSeconds)
-	}
-	if !parsed.Environment.AllowInternet {
-		return errors.New("fix-git requires environment.allow_internet = true")
+		return "", errors.New("task artifacts are unsupported")
 	}
 	if len(parsed.Environment.MCPServers) != 0 {
-		return errors.New("environment.mcp_servers is unsupported by the MVP")
+		return "", errors.New("environment.mcp_servers is unsupported")
 	}
-	if len(parsed.Solution.Env) != 0 {
-		return errors.New("solution.env is unsupported by the MVP")
+	if !finiteDurationSeconds(parsed.Environment.BuildTimeoutSeconds) {
+		return "", errors.New("environment.build_timeout_sec must be finite and positive")
+	}
+	if !finiteDurationSeconds(parsed.Agent.TimeoutSeconds) {
+		return "", errors.New("agent.timeout_sec must be finite and positive")
+	}
+	if !finiteDurationSeconds(parsed.Verifier.TimeoutSeconds) {
+		return "", errors.New("verifier.timeout_sec must be finite and positive")
+	}
+	if !finitePositive(parsed.Environment.CPUs) {
+		return "", errors.New("environment.cpus must be finite and positive")
+	}
+	if parsed.Environment.MemoryMB <= 0 || parsed.Environment.StorageMB <= 0 || parsed.Environment.GPUs < 0 {
+		return "", fmt.Errorf("invalid environment resources memory_mb=%d storage_mb=%d gpus=%d", parsed.Environment.MemoryMB, parsed.Environment.StorageMB, parsed.Environment.GPUs)
+	}
+	if err := validateEnvironmentMap("environment.env", parsed.Environment.Env); err != nil {
+		return "", err
+	}
+	if err := validateEnvironmentMap("verifier.env", parsed.Verifier.Env); err != nil {
+		return "", err
+	}
+
+	source := strings.TrimSpace(parsed.Environment.DockerImage)
+	if source == "" {
+		return "", errors.New("environment.docker_image is required")
+	}
+	pin, ok := images[source]
+	if !ok {
+		return "", fmt.Errorf("no immutable image pin configured for %q", source)
+	}
+	if err := validateImagePin(source, pin); err != nil {
+		return "", err
+	}
+	return pin, nil
+}
+
+func validateImagePin(source, pin string) error {
+	if strings.TrimSpace(source) == "" {
+		return errors.New("terminalbench image source is required")
+	}
+	tagged, err := containerimage.TaggedSource(pin)
+	if err != nil {
+		return fmt.Errorf("terminalbench image pin for %q: %w", source, err)
+	}
+	if tagged != source {
+		return fmt.Errorf("terminalbench image pin %q has source %q; want %q", pin, tagged, source)
 	}
 	return nil
 }
 
-func finalWorkdir(path string) (string, error) {
-	f, err := os.Open(path)
+func captureVerifierTree(root string) ([]verifierFile, error) {
+	var files []verifierFile
+	foundScript := false
+	err := filepath.WalkDir(root, func(source string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("verifier path %q is not a regular file", source)
+		}
+		relative, err := filepath.Rel(root, source)
+		if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("resolve verifier path %q", source)
+		}
+		containerRelative := filepath.ToSlash(relative)
+		if containerRelative == "test.sh" {
+			foundScript = true
+		}
+		files = append(files, verifierFile{
+			name:        containerRelative,
+			source:      source,
+			destination: path.Join(testsPath, containerRelative),
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("capture verifier tree: %w", err)
+	}
+	if !foundScript {
+		return nil, errors.New("capture verifier tree: tests/test.sh is required")
+	}
+	return files, nil
+}
+
+func finalWorkdir(filePath string) (string, error) {
+	file, err := os.Open(filePath)
 	if err != nil {
 		return "", fmt.Errorf("open environment/Dockerfile: %w", err)
 	}
-	defer f.Close()
+	defer file.Close()
 
 	var workdir string
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -421,10 +371,10 @@ func finalWorkdir(path string) (string, error) {
 		}
 		fields := strings.Fields(line)
 		if len(fields) > 0 && strings.EqualFold(fields[0], "WORKDIR") {
-			if len(fields) != 2 || !filepath.IsAbs(fields[1]) || strings.ContainsAny(fields[1], "$\\") {
+			if len(fields) != 2 || !path.IsAbs(fields[1]) || strings.ContainsAny(fields[1], "$\\") {
 				return "", fmt.Errorf("unsupported WORKDIR directive %q", line)
 			}
-			workdir = filepath.Clean(fields[1])
+			workdir = path.Clean(fields[1])
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -447,11 +397,51 @@ func cloneMap(source map[string]string) map[string]string {
 	return clone
 }
 
-func durationSeconds(seconds float64) time.Duration {
-	return time.Duration(seconds) * time.Second
+func finitePositive(value float64) bool {
+	return value > 0 && !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
-// VerifyRevision confirms that root is the exact detached pinned checkout.
+func finiteDurationSeconds(value float64) bool {
+	return finitePositive(value) && value <= float64(math.MaxInt64)/float64(time.Second)
+}
+
+func durationSeconds(seconds float64) time.Duration {
+	return time.Duration(seconds * float64(time.Second))
+}
+
+func validateEnvironmentMap(name string, values map[string]string) error {
+	for key, value := range values {
+		if !validEnvironmentName(key) || strings.ContainsRune(value, 0) {
+			return fmt.Errorf("%s contains invalid variable %q", name, key)
+		}
+	}
+	return nil
+}
+
+func validEnvironmentName(value string) bool {
+	for index, character := range value {
+		if character == '_' || character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z' || index > 0 && character >= '0' && character <= '9' {
+			continue
+		}
+		return false
+	}
+	return value != ""
+}
+
+func safeTaskID(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
+	}
+	for index, character := range id {
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || index > 0 && (character == '-' || character == '_' || character == '.') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// VerifyRevision confirms that root is the exact clean pinned checkout.
 func VerifyRevision(ctx context.Context, root, revision string) error {
 	cmd := exec.CommandContext(ctx, "git", "-C", root, "rev-parse", "HEAD")
 	output, err := cmd.Output()
