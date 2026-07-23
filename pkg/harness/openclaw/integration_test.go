@@ -204,8 +204,8 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 	if err != nil || bytes.Count(toolCalls, []byte(`"status":"completed"`)) < 4 {
 		t.Fatalf("bridge tool calls = %q, %v", toolCalls, err)
 	}
-	if !bytes.Contains(toolCalls, []byte(`"operation_class":"fs"`)) || !bytes.Contains(toolCalls, []byte(`"stdin_encoding":"utf-8"`)) {
-		t.Fatalf("native OpenClaw write did not reach the replayable SSH bridge log: %s", toolCalls)
+	if !bytes.Contains(toolCalls, []byte(`"operation_class":"exec"`)) || !bytes.Contains(toolCalls, []byte(`"stdin_encoding":"utf-8"`)) {
+		t.Fatalf("OpenClaw exec did not reach the replayable SSH bridge log: %s", toolCalls)
 	}
 	if !strings.Contains(task.Harness.FinalResponse, "Recovered lost commit") {
 		t.Fatalf("final response = %q", task.Harness.FinalResponse)
@@ -349,8 +349,8 @@ function prior(body,id,name,args){const ms=body.messages||[],a=[...ms].reverse()
 function stream(res,delta,finish){const id="aries-"+step;res.writeHead(200,{"content-type":"text/event-stream","cache-control":"no-cache","connection":"close"});res.write("data: "+JSON.stringify({id,object:"chat.completion.chunk",created:1,model:"aries-deterministic",choices:[{index:0,delta,finish_reason:null}]})+"\n\n");res.write("data: "+JSON.stringify({id,object:"chat.completion.chunk",created:1,model:"aries-deterministic",choices:[{index:0,delta:{},finish_reason:finish}]})+"\n\n");res.end("data: [DONE]\n\n")}
 function call(res,id,name,args){previous={id,name,args};stream(res,{role:"assistant",tool_calls:[{index:0,id,type:"function",function:{name,arguments:JSON.stringify(args)}}]},"tool_calls")}
 const status="rm -f .aries-bridge-probe; printf '%s\\n' ARIES_STATUS; git status --short --branch; printf '%s\\n' ARIES_HEAD; git rev-parse HEAD; printf '%s\\n' ARIES_REFLOG; git reflog --all --format='%H %gs' -20";
-http.createServer((req,res)=>{let raw="";req.on("data",c=>raw+=c);req.on("end",()=>{try{if(req.method!=="POST"||req.url!=="/v1/chat/completions")throw Error("route");const bearer=(req.headers.authorization||"").replace(/^Bearer /,"");if(crypto.createHash("sha256").update(bearer).digest("hex")!==expected)throw Error("auth");const body=JSON.parse(raw);if(body.model!=="aries-deterministic"||body.stream!==true)throw Error("request");
-if(step===0){step++;return call(res,"write-probe","write",{path:".aries-bridge-probe",content:"bridge write reached sandbox\n"})}
+http.createServer((req,res)=>{let raw="";req.on("data",c=>raw+=c);req.on("end",()=>{try{if(req.method!=="POST"||req.url!=="/v1/chat/completions")throw Error("route");const bearer=(req.headers.authorization||"").replace(/^Bearer /,"");if(crypto.createHash("sha256").update(bearer).digest("hex")!==expected)throw Error("auth");const body=JSON.parse(raw);if(body.model!=="aries-deterministic"||body.stream!==true)throw Error("request");const tools=(body.tools||[]).map(x=>x&&x.function&&x.function.name);if(!tools.includes("exec")||["read","write","edit","apply_patch"].some(x=>tools.includes(x)))throw Error("tool policy");
+if(step===0){step++;return call(res,"write-probe","exec",{command:"printf 'bridge write reached sandbox\\n' > .aries-bridge-probe"})}
 if(step===1){step++;return call(res,"status","exec",{command:status})}
 const out=prior(body,previous.id,previous.name,previous.args);
 if(step===2){const head=(out.match(/ARIES_HEAD\s+([0-9a-f]{40})/)||[])[1],hashes=[...out.matchAll(/\b[0-9a-f]{40}\b/g)].map(x=>x[0]);candidate=hashes.find(x=>x!==head)||"";if(!candidate)throw Error("candidate");step++;return call(res,"inspect","exec",{command:"git show --format=fuller --stat "+candidate+" && git branch --contains "+candidate})}

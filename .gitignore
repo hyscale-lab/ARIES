@@ -29,6 +29,7 @@ go.work.sum
 
 # ARIES-local inputs and generated state
 .omx/
+.codex/
 .cache/
 runs/
 .aries/

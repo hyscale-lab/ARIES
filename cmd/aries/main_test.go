@@ -76,21 +76,11 @@ func TestBuildExperimentUsesExplicitTypeSwitches(t *testing.T) {
 	}
 }
 
-func TestNewRunIDContainsTaskNameAndIsSafe(t *testing.T) {
+func TestNewRunIDContainsExperimentNameAndIsSafe(t *testing.T) {
 	now := time.Date(2026, 7, 21, 2, 3, 4, 5, time.FixedZone("other", 3*60*60))
-	id, err := newRunID(now, []string{"fix-git"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if id != "20260720T230304.000000005Z-fix-git" || strings.ContainsAny(id, `/\\`) {
+	id := newRunID(now, "openclaw-tb2-five-deepseek")
+	if id != "20260720T230304.000000005Z-openclaw-tb2-five-deepseek" || strings.ContainsAny(id, `/\\`) {
 		t.Fatalf("run ID = %q", id)
-	}
-	multiple, err := newRunID(now, []string{"fix-git", "other-task"})
-	if err != nil || !strings.HasSuffix(multiple, "-fix-git-and-1-more") {
-		t.Fatalf("multi-task run ID = %q, %v", multiple, err)
-	}
-	if _, err := newRunID(now, []string{"../escape"}); err == nil {
-		t.Fatal("unsafe task name entered the run directory")
 	}
 }
 

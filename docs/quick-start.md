@@ -100,7 +100,7 @@ then evaluates the same still-running sandbox.
 For the one-task profile:
 
 ```sh
-run_dir="$(ls -1dt runs/* | head -1)"
+run_dir="$(ls -1dt runs/*-openclaw-tb2-fix-git-deepseek | head -1)"
 cat "$run_dir/live-validation.json"
 cat "$run_dir/run-result.json"
 cat "$run_dir/fix-git/evaluation/reward.txt"
@@ -113,6 +113,7 @@ For a multi-task profile, `run-result.json` contains one result per task and
 each task has its own readable directory:
 
 ```sh
+run_dir="$(ls -1dt runs/*-openclaw-tb2-five-deepseek | head -1)"
 find "$run_dir" -maxdepth 2 -type d | sort
 find "$run_dir" -path '*/evaluation/reward.txt' -print -exec cat {} \;
 ```

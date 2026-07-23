@@ -446,20 +446,10 @@ func (session *bridgeSession) handleSession(ctx context.Context, channel ssh.Cha
 func (session *bridgeSession) execute(ctx context.Context, channel ssh.Channel, encoded string, remote remoteCommand) int {
 	started := time.Now()
 	command := remote.command(session.sandbox.Workdir())
-	command = mapFilesystemWorkspace(command, session.sandbox.Workdir())
 	stdin := &recordedInput{reader: channel}
 	stdout := &byteCounter{writer: channel}
 	stderr := &byteCounter{writer: channel.Stderr()}
-	execStdout := io.Writer(stdout)
-	var pathOutput bytes.Buffer
-	if filesystemPathProbe(command) {
-		execStdout = &pathOutput
-	}
-	result, err := session.sandbox.ExecStream(ctx, command, stdin, execStdout, stderr)
-	if pathOutput.Len() > 0 {
-		_, writeErr := stdout.Write(virtualizeFilesystemPath(pathOutput.Bytes(), session.sandbox.Workdir()))
-		err = errors.Join(err, writeErr)
-	}
+	result, err := session.sandbox.ExecStream(ctx, command, stdin, stdout, stderr)
 	if contextErr := ctx.Err(); contextErr != nil && !hasCancellationCause(err) {
 		// A sandbox error returned after revocation is ambiguous unless it carries
 		// the cancellation cause. Preserve both so Stop fails closed rather than
@@ -501,61 +491,6 @@ func replayDisplayCommand(command core.Command) string {
 		return ""
 	}
 	return shellCommand(command)
-}
-
-func mapFilesystemWorkspace(command core.Command, workdir string) core.Command {
-	if operationClass(command) != "fs" {
-		return command
-	}
-	command.Args = append([]string(nil), command.Args...)
-	for index, argument := range command.Args {
-		if mapped, ok := replacePathRoot(argument, openClawWorkspace, workdir); ok {
-			command.Args[index] = mapped
-		}
-	}
-	return command
-}
-
-func filesystemPathProbe(command core.Command) bool {
-	if operationClass(command) != "fs" || len(command.Args) < 4 {
-		return false
-	}
-	switch command.Args[3] {
-	case "write", "read", "mkdirp", "remove", "rename":
-		return false
-	default:
-		return true
-	}
-}
-
-func virtualizeFilesystemPath(content []byte, workdir string) []byte {
-	value := string(content)
-	line := strings.TrimSuffix(value, "\n")
-	if mapped, ok := replacePathRoot(line, workdir, openClawWorkspace); ok {
-		return []byte(mapped + strings.TrimPrefix(value, line))
-	}
-	return content
-}
-
-func replacePathRoot(value, from, to string) (string, bool) {
-	from = strings.TrimSuffix(from, "/")
-	to = strings.TrimSuffix(to, "/")
-	if from == "" {
-		from = "/"
-	}
-	if to == "" {
-		to = "/"
-	}
-	if value == from {
-		return to, true
-	}
-	if from == "/" && strings.HasPrefix(value, "/") {
-		return strings.TrimSuffix(to, "/") + value, true
-	}
-	if strings.HasPrefix(value, from+"/") {
-		return strings.TrimSuffix(to, "/") + strings.TrimPrefix(value, from), true
-	}
-	return value, false
 }
 
 func (session *bridgeSession) logRejected(payload []byte) {
@@ -767,8 +702,6 @@ func operationClass(command core.Command) string {
 	switch command.Args[2] {
 	case "openclaw-sandbox-upload":
 		return "workspace_upload"
-	case "openclaw-sandbox-fs":
-		return "fs"
 	default:
 		return "exec"
 	}

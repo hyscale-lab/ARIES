@@ -100,7 +100,6 @@ type Sandbox struct {
 	cleanupTimeout time.Duration
 	runID          string
 	taskID         string
-	execMu         sync.Mutex
 
 	mu             sync.Mutex
 	containerOwned bool
@@ -384,8 +383,6 @@ func (s *Sandbox) ExecStream(ctx context.Context, command core.Command, stdin io
 	}
 	defer cancel()
 
-	s.execMu.Lock()
-	defer s.execMu.Unlock()
 	token, err := randomID()
 	if err != nil {
 		return failure(), fmt.Errorf("generate Docker exec exit token: %w", err)

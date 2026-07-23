@@ -1,5 +1,24 @@
 # ARIES Tasks
 
+## R5 — Live five-task reliability
+
+- [x] Diagnose the five-task live run without treating reward `0` as an ARIES
+  failure: `overfull-hbox` had bridge calls delayed up to 104 seconds and timed
+  out, while `schemelike-metacircular-eval` accumulated 114–315 second calls
+  before OpenClaw's 772-second stuck-session recovery triggered a takeover.
+- [x] Remove sandbox-wide Docker exec serialization while retaining the
+  existing token-correlated exit trailer and positive Docker process check.
+- [x] Add a real concurrent SSH regression proving eight parallel tool calls,
+  confirmed revocation of four active calls, and evaluator access to the
+  unchanged live sandbox.
+- [x] Disable OpenClaw native filesystem tools for arbitrary Terminal-Bench
+  images that do not provide the helper's undeclared `python3` dependency;
+  keep unmodified upstream OpenClaw and shell access through SSH exec.
+- [x] Derive the run directory from the experiment profile name rather than the
+  first task and task count.
+- [x] Replace the stale research-oriented `AGENTS.md` with the current ARIES
+  engineering, boundary, lifecycle, and verification contract.
+
 ## R4 — Repository cleanup and generic Terminal-Bench 2
 
 Cleanup plan, in regression-first order:
@@ -102,9 +121,10 @@ four Runner component boundaries or the independent evaluator.
   typed Moby detached termination plus `ContainerTop` absence proof without
   stopping, restarting, or recreating the sandbox, and propagate confirmation
   failure so the Runner blocks evaluation.
-- [x] Alias OpenClaw's pinned shared workspace path for shell commands and map
-  native filesystem roots bidirectionally so agent tools and evaluation observe
-  the same live container filesystem.
+- [x] Alias OpenClaw's pinned shared workspace path for shell commands so agent
+  tools and evaluation observe the same live container filesystem; disable the
+  upstream Python-dependent filesystem helpers instead of translating a second
+  protocol.
 - [x] Retain private `<task>/bridge/tool-calls.jsonl` after bridge shutdown,
   expose it in `TaskResult`, and record replayable command/stdin inputs, byte
   counts, timing, exit code, and outcome without model credentials.

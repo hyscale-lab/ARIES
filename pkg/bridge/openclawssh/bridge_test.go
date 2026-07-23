@@ -468,7 +468,7 @@ func pollCounter(counter *byteCounter) func() {
 func TestOperationClassUsesOnlyKnownOpenClawLabels(t *testing.T) {
 	for label, want := range map[string]string{
 		"openclaw-sandbox-upload": "workspace_upload",
-		"openclaw-sandbox-fs":     "fs",
+		"openclaw-sandbox-fs":     "exec",
 		"untrusted-label":         "exec",
 	} {
 		command := core.Command{Path: remoteShell, Args: []string{"-c", "true", label}}
@@ -478,44 +478,14 @@ func TestOperationClassUsesOnlyKnownOpenClawLabels(t *testing.T) {
 	}
 }
 
-func TestReplayDisplayCommandOmitsDuplicatedInternalScript(t *testing.T) {
+func TestReplayDisplayCommandOmitsDuplicatedUploadScript(t *testing.T) {
 	execCommand := core.Command{Path: remoteShell, Args: []string{"-c", "git status"}}
 	if got := replayDisplayCommand(execCommand); got != "git status" {
 		t.Fatalf("exec display command = %q", got)
 	}
-	filesystemCommand := core.Command{Path: remoteShell, Args: []string{"-c", "large helper", "openclaw-sandbox-fs", "read"}}
-	if got := replayDisplayCommand(filesystemCommand); got != "" {
-		t.Fatalf("filesystem display command duplicated argv: %q", got)
-	}
-}
-
-func TestFilesystemWorkspaceMapsToSandboxWorkdir(t *testing.T) {
-	command := core.Command{
-		Path: remoteShell,
-		Args: []string{"-c", "ignored", "openclaw-sandbox-fs", "write", openClawWorkspace, "parent", "file"},
-		Dir:  "/work",
-	}
-	mapped := mapFilesystemWorkspace(command, "/work")
-	if mapped.Args[4] != "/work" {
-		t.Fatalf("mapped root = %q, want /work", mapped.Args[4])
-	}
-	if command.Args[4] != openClawWorkspace {
-		t.Fatalf("mapping mutated source command: %#v", command.Args)
-	}
-	child := core.Command{Path: remoteShell, Args: []string{"-c", "ignored", "openclaw-sandbox-fs", openClawWorkspace + "/child", "0"}}
-	if got := mapFilesystemWorkspace(child, "/work"); got.Args[3] != "/work/child" {
-		t.Fatalf("mapped child = %q, want /work/child", got.Args[3])
-	}
-	if !filesystemPathProbe(child) {
-		t.Fatal("canonical path request was not recognized as a filesystem probe")
-	}
-	if got := string(virtualizeFilesystemPath([]byte("/work/child\n"), "/work")); got != openClawWorkspace+"/child\n" {
-		t.Fatalf("virtual path = %q", got)
-	}
-
-	execCommand := core.Command{Path: remoteShell, Args: []string{"-c", "cd " + openClawWorkspace}, Dir: "/work"}
-	if got := mapFilesystemWorkspace(execCommand, "/work"); got.Args[1] != execCommand.Args[1] {
-		t.Fatalf("ordinary shell command was rewritten: %#v", got.Args)
+	uploadCommand := core.Command{Path: remoteShell, Args: []string{"-c", "large helper", "openclaw-sandbox-upload"}}
+	if got := replayDisplayCommand(uploadCommand); got != "" {
+		t.Fatalf("upload display command duplicated argv: %q", got)
 	}
 }
 

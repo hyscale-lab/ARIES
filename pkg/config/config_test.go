@@ -152,6 +152,16 @@ func TestDecodeRejectsInvalidConfig(t *testing.T) {
 			wantErr: "versions_file is required",
 		},
 		{
+			name:    "unsafe experiment name",
+			input:   strings.Replace(validConfig, `"name": "test-run"`, `"name": "../escape"`, 1),
+			wantErr: "name must contain only",
+		},
+		{
+			name:    "overlong experiment name",
+			input:   strings.Replace(validConfig, `"name": "test-run"`, `"name": "`+strings.Repeat("a", 81)+`"`, 1),
+			wantErr: "name must not exceed 80 bytes",
+		},
+		{
 			name:    "no task",
 			input:   strings.Replace(validConfig, `["fix-git"]`, `[]`, 1),
 			wantErr: "benchmark.tasks must contain",

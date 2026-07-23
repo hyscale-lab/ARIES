@@ -6,10 +6,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -47,37 +49,12 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 		}
 	})
 
-	clientHelper := filepath.Join(t.TempDir(), "aries-ssh")
-	if err := os.WriteFile(clientHelper, []byte("integration fixture"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	bridge, err := New(Options{OutputDir: outputDir, ClientPath: clientHelper, Logger: logger})
-	if err != nil {
-		t.Fatal(err)
-	}
+	bridge := newIntegrationBridge(t, outputDir, logger)
 	endpoint, err := bridge.Start(ctx, sandbox)
 	if err != nil {
 		t.Fatal(err)
 	}
-	identity, err := os.ReadFile(endpoint.IdentitySourceFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := ssh.ParsePrivateKey(identity)
-	if err != nil {
-		t.Fatal(err)
-	}
-	hostKey, err := knownhosts.New(endpoint.KnownHostsSourceFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	client, err := ssh.Dial("tcp", endpoint.Address, &ssh.ClientConfig{
-		User: endpoint.Username, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: hostKey, HostKeyAlgorithms: []string{ssh.KeyAlgoED25519}, Timeout: 5 * time.Second,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	client := dialIntegrationBridge(t, endpoint)
 	session, err := client.NewSession()
 	if err != nil {
 		t.Fatal(err)
@@ -129,4 +106,156 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 			t.Fatalf("tool log retained command output field %s: %s", forbidden, content)
 		}
 	}
+}
+
+func TestBridgeRunsConcurrentCallsWithoutAConvoy(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	outputDir := t.TempDir()
+	logger := logrus.New()
+	logger.SetOutput(bytes.NewBuffer(nil))
+	sandboxes, err := dockersandbox.New(dockersandbox.Options{OutputDir: outputDir, Logger: logger})
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := sandboxes.Start(ctx, core.SandboxRequest{
+		RunID: "bridge-concurrent", TaskID: "concurrent-calls",
+		Environment: core.Environment{Image: bridgeFixtureImage, Workdir: "/work", MemoryMB: 64},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanup, done := context.WithTimeout(context.Background(), 20*time.Second)
+		defer done()
+		if err := sandboxes.Stop(cleanup, live); err != nil {
+			t.Errorf("sandbox cleanup: %v", err)
+		}
+	})
+
+	bridge := newIntegrationBridge(t, outputDir, logger)
+	endpoint, err := bridge.Start(ctx, live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanup, done := context.WithTimeout(context.Background(), 20*time.Second)
+		defer done()
+		if err := bridge.Stop(cleanup); err != nil {
+			t.Errorf("bridge cleanup: %v", err)
+		}
+	})
+	client := dialIntegrationBridge(t, endpoint)
+	defer client.Close()
+
+	const calls = 8
+	start := make(chan struct{})
+	errorsByCall := make(chan error, calls)
+	var wait sync.WaitGroup
+	started := time.Now()
+	for index := range calls {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			session, sessionErr := client.NewSession()
+			if sessionErr != nil {
+				errorsByCall <- sessionErr
+				return
+			}
+			defer session.Close()
+			path := fmt.Sprintf("%s/file-%02d", openClawWorkspace, index)
+			remote := encodeCanonicalTokens([]string{remoteShell, "-c", `sleep 1; if [ -e "$1" ]; then printf "1\n"; else printf "0\n"; fi`, "aries-concurrency", path})
+			output, sessionErr := session.Output(remote)
+			if sessionErr == nil && string(output) != "0\n" {
+				sessionErr = fmt.Errorf("unexpected probe output %q", output)
+			}
+			errorsByCall <- sessionErr
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(errorsByCall)
+	for callErr := range errorsByCall {
+		if callErr != nil {
+			t.Fatal(callErr)
+		}
+	}
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("%d concurrent calls formed a %s convoy", calls, elapsed)
+	}
+
+	const activeCalls = 4
+	activeSessions := make([]*ssh.Session, 0, activeCalls)
+	for index := range activeCalls {
+		session, sessionErr := client.NewSession()
+		if sessionErr != nil {
+			t.Fatal(sessionErr)
+		}
+		activeSessions = append(activeSessions, session)
+		command := fmt.Sprintf("printf '%%s ' \"$$\" > /work/active-%d.pid; awk '{print $22}' /proc/$$/stat >> /work/active-%d.pid; sleep 60", index, index)
+		if sessionErr := session.Start(encodeCanonicalTokens([]string{remoteShell, "-c", command})); sessionErr != nil {
+			t.Fatal(sessionErr)
+		}
+	}
+	sandbox := live.(*dockersandbox.Sandbox)
+	ready, err := sandbox.Exec(ctx, core.Command{
+		Path: "/bin/sh", Args: []string{"-c", "attempt=0; until test -f /work/active-0.pid && test -f /work/active-1.pid && test -f /work/active-2.pid && test -f /work/active-3.pid; do attempt=$((attempt+1)); [ \"$attempt\" -lt 100 ] || exit 1; sleep 0.02; done"},
+	})
+	if err != nil || ready.ExitCode != 0 {
+		t.Fatalf("concurrent calls did not all start: %#v, %v", ready, err)
+	}
+	stopping := time.Now()
+	if err := bridge.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(stopping); elapsed > 8*time.Second {
+		t.Fatalf("bridge revocation waited %s for concurrent calls", elapsed)
+	}
+	for _, session := range activeSessions {
+		_ = session.Close()
+	}
+	postRevocation, err := sandbox.Exec(ctx, core.Command{
+		Path: "/bin/sh", Args: []string{"-c", "failed=0; for file in /work/active-*.pid; do read -r pid started < \"$file\"; if test -r \"/proc/$pid/stat\" && test \"$(awk '{print $22}' \"/proc/$pid/stat\")\" = \"$started\"; then printf 'live %s pid=%s command=' \"$file\" \"$pid\"; tr '\\0' ' ' < \"/proc/$pid/cmdline\"; printf '\\n'; failed=1; fi; done; test \"$failed\" -eq 0 || exit 1; printf evaluator > /work/after-bridge"},
+	})
+	if err != nil || postRevocation.ExitCode != 0 {
+		t.Fatalf("sandbox was not usable for evaluation after revocation: %#v, %v", postRevocation, err)
+	}
+}
+
+func newIntegrationBridge(t *testing.T, outputDir string, logger *logrus.Logger) *Manager {
+	t.Helper()
+	clientHelper := filepath.Join(t.TempDir(), "aries-ssh")
+	if err := os.WriteFile(clientHelper, []byte("integration fixture"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	bridge, err := New(Options{OutputDir: outputDir, ClientPath: clientHelper, Logger: logger})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bridge
+}
+
+func dialIntegrationBridge(t *testing.T, endpoint core.ToolEndpoint) *ssh.Client {
+	t.Helper()
+	identity, err := os.ReadFile(endpoint.IdentitySourceFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.ParsePrivateKey(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostKey, err := knownhosts.New(endpoint.KnownHostsSourceFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := ssh.Dial("tcp", endpoint.Address, &ssh.ClientConfig{
+		User: endpoint.Username, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		HostKeyCallback: hostKey, HostKeyAlgorithms: []string{ssh.KeyAlgoED25519}, Timeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
 }

@@ -48,6 +48,9 @@ func TestRenderConfigLocksProviderSharedSSHAndPlaceholder(t *testing.T) {
 	if sandbox.SSH.Target != "aries@172.22.0.1:39425" || sandbox.SSH.Command != "/opt/aries/bin/aries-ssh" || sandbox.SSH.WorkspaceRoot != workspaceRoot || !sandbox.SSH.StrictHostKeyChecking || sandbox.SSH.UpdateHostKeys {
 		t.Fatalf("SSH config = %#v", sandbox.SSH)
 	}
+	if got := strings.Join(configuration.Tools.Deny, ","); got != "read,write,edit,apply_patch" {
+		t.Fatalf("tool deny list = %q", got)
+	}
 }
 
 func TestRenderConfigRejectsInvalidInputs(t *testing.T) {

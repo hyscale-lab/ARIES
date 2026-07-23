@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/benchmark/terminalbench"
@@ -68,10 +67,7 @@ func runCommandWithDependencies(ctx context.Context, args []string, stdout io.Wr
 	if err != nil {
 		return err
 	}
-	runID, err := newRunID(time.Now(), cfg.Benchmark.Tasks)
-	if err != nil {
-		return fmt.Errorf("generate run ID: %w", err)
-	}
+	runID := newRunID(time.Now(), cfg.Name)
 	outputRoot, err := filepath.Abs(filepath.Join(cfg.OutputDir, runID))
 	if err != nil {
 		return fmt.Errorf("resolve run output root: %w", err)
@@ -220,25 +216,8 @@ func buildExperiment(
 	return &experiment{Runner: benchmarkRunner, Recorder: recorder}, nil
 }
 
-func newRunID(now time.Time, taskIDs []string) (string, error) {
-	if len(taskIDs) == 0 || strings.TrimSpace(taskIDs[0]) == "" {
-		return "", errors.New("run ID requires at least one task name")
-	}
-	task := taskIDs[0]
-	if len(task) > 80 {
-		return "", errors.New("run ID task name exceeds 80 bytes")
-	}
-	for index, character := range task {
-		allowed := character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' ||
-			character >= '0' && character <= '9' || character == '-' || character == '_' || character == '.'
-		if !allowed || index == 0 && (character == '-' || character == '.') {
-			return "", fmt.Errorf("run ID task name %q contains an unsafe character", task)
-		}
-	}
-	if len(taskIDs) > 1 {
-		task += fmt.Sprintf("-and-%d-more", len(taskIDs)-1)
-	}
-	return now.UTC().Format("20060102T150405.000000000Z") + "-" + task, nil
+func newRunID(now time.Time, experimentName string) string {
+	return now.UTC().Format("20060102T150405.000000000Z") + "-" + experimentName
 }
 
 func newLogger() *logrus.Logger {

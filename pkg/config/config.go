@@ -176,6 +176,9 @@ func (c Config) validate() error {
 			return fmt.Errorf("%s is required", check.name)
 		}
 	}
+	if err := validateExperimentName(c.Name); err != nil {
+		return err
+	}
 	if len(c.Benchmark.Tasks) == 0 {
 		return errors.New("benchmark.tasks must contain at least one task ID")
 	}
@@ -194,6 +197,20 @@ func (c Config) validate() error {
 	}
 	if !validEnvName(c.Model.APIKeyEnv) {
 		return errors.New("model.api_key_env must be an environment variable name")
+	}
+	return nil
+}
+
+func validateExperimentName(name string) error {
+	if len(name) > 80 {
+		return errors.New("name must not exceed 80 bytes")
+	}
+	for index, character := range name {
+		allowed := character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' ||
+			character >= '0' && character <= '9' || character == '-' || character == '_' || character == '.'
+		if !allowed || index == 0 && (character == '-' || character == '.') {
+			return errors.New("name must contain only ASCII letters, digits, dashes, underscores, or dots and must not begin with a dash or dot")
+		}
 	}
 	return nil
 }

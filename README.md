@@ -78,7 +78,7 @@ either file.
 
 Every run writes structured Logrus output to stderr and private `aries.log`.
 Task artifacts use readable paths such as
-`runs/<timestamp>-fix-git/fix-git/bridge/tool-calls.jsonl`.
+`runs/<timestamp>-openclaw-tb2-five-deepseek/fix-git/bridge/tool-calls.jsonl`.
 
 ## Validation
 

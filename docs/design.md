@@ -190,14 +190,13 @@ OpenClaw's pinned shared runtime path is:
 ```
 
 Before listening, the bridge creates a guarded symlink from that path to
-`Task.Environment.Workdir` for ordinary shell commands. OpenClaw's native
-filesystem helper deliberately refuses to follow symlinks, so the bridge also
-maps its explicit filesystem root arguments to the real workdir and maps
-canonical-path replies back to OpenClaw's virtual path. The mapping is limited
-to the pinned `openclaw-sandbox-fs` command shape; arbitrary shell text is not
-rewritten. Partial start rolls back only an alias owned by that attempt. Once
-start succeeds, the alias remains until the sandbox is removed, so native
-read/write/edit tools, shell commands, and evaluation share one live filesystem.
+`Task.Environment.Workdir` for shell commands. The harness disables OpenClaw's
+native filesystem tools because their upstream helper requires `python3`,
+which Terminal-Bench images are not required to provide. All task mutation
+therefore uses the `exec` tool; the bridge does not rewrite a second filesystem
+protocol. Partial start rolls back only an alias owned by that attempt. Once
+start succeeds, the alias remains until the sandbox is removed, so shell
+commands and evaluation share one live filesystem.
 
 Bridge Stop closes the listener and active connections, waits for handlers,
 closes the log, and deletes staged client credential sources. It never changes
@@ -241,10 +240,10 @@ The log is retained after bridge shutdown and exposed in
 time, run/task/runtime identity, operation class, path/workdir metadata,
 environment names, a command hash, the exact argument vector and shell command,
 exact stdin (UTF-8 or base64 for binary data), byte counts, duration, exit code,
-and outcome. The separate human-readable shell-command field is omitted for
-OpenClaw's large internal filesystem helpers because their exact script already
-exists in the argument vector. Environment values and stdout/stderr content are
-not retained.
+and outcome. The separate human-readable shell-command field is omitted only
+for OpenClaw's internal `workspace_upload` helper because its exact script
+already exists in the argument vector. Environment values and stdout/stderr
+content are not retained.
 
 The streaming counters use atomic updates so concurrently copied stdin, stdout,
 and stderr produce race-free final counts. Tool inputs are intentionally stored
@@ -334,8 +333,8 @@ Monitoring never controls lifecycle or scoring. Observer start, sampling, or
 stop failure is reported separately and does not replace harness, evaluation,
 or cleanup outcomes.
 
-Each run has a private output directory named with its task, for example
-`20260722T133727.613764127Z-fix-git`. Artifacts are grouped under
+Each run has a private output directory named with its experiment profile, for
+example `20260722T133727.613764127Z-openclaw-tb2-five-deepseek`. Artifacts are grouped under
 `fix-git/{harness,bridge,sandbox,monitor,evaluation}` rather than opaque attempt
 directories. Results preserve separate
 harness, isolation, evaluation, observer, and cleanup records. Component log
@@ -345,6 +344,26 @@ Model and gateway credentials are excluded from artifacts. Replay logs
 intentionally retain task commands and stdin, which may themselves be
 sensitive; run directories are therefore private and replay artifacts use mode
 `0600`.
+
+The bridge accepts concurrent SSH sessions and maps each session to an
+independent Docker exec; the sandbox does not serialize unrelated sessions. A
+token-correlated exit trailer carries the command status, while `ExecInspect`
+or PID absence confirms completion. Bridge shutdown cancels and positively
+confirms every active process group before evaluation.
+
+This concurrency is required by OpenClaw, which can issue several tool calls
+from one turn. A five-task run exposed an earlier sandbox-wide exec mutex:
+`overfull-hbox` calls waited as long as 104 seconds, and
+`schemelike-metacircular-eval` calls formed a 114–315 second queue. OpenClaw's
+772-second stuck-session recovery then aborted the latter run and reported
+`EmbeddedAttemptSessionTakeoverError`; the takeover was a consequence of the
+queue, not an independent session-key collision.
+
+The pinned OpenClaw SSH filesystem helper expects `python3` in the remote
+image, but Terminal-Bench images do not promise that runtime. The rendered
+harness config therefore disables OpenClaw's `read`, `write`, `edit`, and
+`apply_patch` tools and leaves `exec` available against the same sandbox
+workspace. ARIES does not install packages or mutate benchmark images.
 
 ## Configuration and secrets
 
