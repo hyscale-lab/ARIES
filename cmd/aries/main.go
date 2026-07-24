@@ -202,6 +202,10 @@ func buildExperiment(
 		Name: cfg.Name, RunID: runID, OutputDir: outputRoot,
 		Model:  core.ModelConfig{BaseURL: cfg.Model.BaseURL, Model: cfg.Model.Model, APIKeyEnv: cfg.Model.APIKeyEnv},
 		Logger: logger,
+		TaskOverrides: runner.TaskOverrides{
+			CPU: cfg.Overrides.Task.CPU, MemoryMB: cfg.Overrides.Task.MemoryMB,
+			AgentTimeout: cfg.Overrides.Task.AgentTimeout,
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("construct runner: %w", err)

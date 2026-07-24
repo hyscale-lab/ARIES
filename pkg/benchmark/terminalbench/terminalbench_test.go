@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +17,91 @@ import (
 
 	"github.com/hyscale-lab/aries/pkg/core"
 )
+
+func TestPrepareSandboxRemovesThenProvesVerifierPathsAbsent(t *testing.T) {
+	benchmark := &Benchmark{details: map[string]taskDetails{"task": {}}}
+	sandbox := &prepareSandboxFake{}
+	if err := benchmark.PrepareSandbox(context.Background(), core.Task{ID: "task"}, sandbox); err != nil {
+		t.Fatal(err)
+	}
+	if len(sandbox.commands) != 2 {
+		t.Fatalf("commands = %#v", sandbox.commands)
+	}
+	remove := sandbox.commands[0]
+	if remove.Path != "/bin/rm" || !reflect.DeepEqual(remove.Args, []string{"-rf", "--", testsPath, verifierLogPath}) {
+		t.Fatalf("remove command = %#v", remove)
+	}
+	probe := sandbox.commands[1]
+	if probe.Path != "/bin/sh" || len(probe.Args) != 5 || probe.Args[0] != "-c" || !strings.Contains(probe.Args[1], `! -e "$path"`) || !strings.Contains(probe.Args[1], `! -L "$path"`) || !reflect.DeepEqual(probe.Args[3:], []string{testsPath, verifierLogPath}) {
+		t.Fatalf("absence probe = %#v", probe)
+	}
+	if sandbox.uploads != 0 {
+		t.Fatalf("preparation uploaded %d files", sandbox.uploads)
+	}
+}
+
+func TestPrepareSandboxFailsClosed(t *testing.T) {
+	benchmark := &Benchmark{details: map[string]taskDetails{"task": {}}}
+	if err := benchmark.PrepareSandbox(context.Background(), core.Task{ID: "task"}, nil); err == nil {
+		t.Fatal("nil sandbox accepted")
+	}
+	if err := benchmark.PrepareSandbox(context.Background(), core.Task{ID: "missing"}, &prepareSandboxFake{}); err == nil {
+		t.Fatal("unloaded task accepted")
+	}
+	for name, sandbox := range map[string]*prepareSandboxFake{
+		"remove error":   {errors: []error{errors.New("remove")}},
+		"remove nonzero": {results: []core.CommandResult{{ExitCode: 2}}},
+		"probe error":    {errors: []error{nil, errors.New("probe")}},
+		"dangling link":  {results: []core.CommandResult{{}, {ExitCode: 1}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := benchmark.PrepareSandbox(context.Background(), core.Task{ID: "task"}, sandbox); err == nil {
+				t.Fatal("expected failure")
+			}
+			if sandbox.uploads != 0 {
+				t.Fatal("preparation uploaded verifier files")
+			}
+		})
+	}
+}
+
+func TestCheckedDurationSecondsUsesScaledResultBound(t *testing.T) {
+	threshold := math.Exp2(63) / float64(time.Second)
+	for _, seconds := range []float64{threshold, math.Nextafter(threshold, math.Inf(1)), math.Inf(1), math.NaN(), 0, -1} {
+		if _, err := checkedDurationSeconds(seconds); err == nil {
+			t.Fatalf("accepted seconds %g", seconds)
+		}
+	}
+	below := math.Nextafter(threshold, 0)
+	if below*float64(time.Second) >= math.Exp2(63) {
+		t.Fatal("test threshold premise failed")
+	}
+	if got, err := checkedDurationSeconds(below); err != nil || got <= 0 {
+		t.Fatalf("checkedDurationSeconds(%g) = %v, %v", below, got, err)
+	}
+	for _, field := range []string{"agent", "verifier"} {
+		t.Run(field, func(t *testing.T) {
+			root := writeArbitraryFixture(t)
+			file := filepath.Join(root, arbitraryTaskID, "task.toml")
+			content, err := os.ReadFile(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			old := "[" + field + "]\ntimeout_sec = "
+			start := strings.Index(string(content), old)
+			if start < 0 {
+				t.Fatalf("missing %s timeout", field)
+			}
+			start += len(old)
+			end := strings.IndexByte(string(content)[start:], '\n')
+			replaced := string(content[:start]) + fmt.Sprintf("%g", threshold) + string(content[start+end:])
+			writeFile(t, file, replaced)
+			if _, _, err := loadTask(root, arbitraryTaskID, imagePins(arbitraryImage, arbitraryImagePin)); err == nil || !strings.Contains(err.Error(), field+".timeout_sec") {
+				t.Fatalf("loadTask error = %v", err)
+			}
+		})
+	}
+}
 
 const (
 	fixGitID           = "fix-git"
@@ -788,6 +875,34 @@ type fakeSandbox struct {
 	preseededSymlinks  bool
 	cleanupComplete    bool
 }
+
+type prepareSandboxFake struct {
+	commands []core.Command
+	results  []core.CommandResult
+	errors   []error
+	uploads  int
+}
+
+func (s *prepareSandboxFake) Exec(_ context.Context, command core.Command) (core.CommandResult, error) {
+	index := len(s.commands)
+	s.commands = append(s.commands, command)
+	var result core.CommandResult
+	if index < len(s.results) {
+		result = s.results[index]
+	}
+	var err error
+	if index < len(s.errors) {
+		err = s.errors[index]
+	}
+	return result, err
+}
+
+func (s *prepareSandboxFake) Upload(context.Context, string, string) error {
+	s.uploads++
+	return nil
+}
+
+func (*prepareSandboxFake) Download(context.Context, string, string) error { return nil }
 
 func (s *fakeSandbox) Exec(_ context.Context, command core.Command) (core.CommandResult, error) {
 	s.events = append(s.events, "exec:"+command.Path)

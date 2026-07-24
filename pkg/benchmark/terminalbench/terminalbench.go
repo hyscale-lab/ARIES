@@ -170,6 +170,38 @@ func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
 	return tasks, nil
 }
 
+// PrepareSandbox removes verifier paths and separately proves that neither a
+// filesystem entry nor a dangling symlink remains before bridge access exists.
+func (b *Benchmark) PrepareSandbox(ctx context.Context, task core.Task, sandbox runner.Sandbox) error {
+	if sandbox == nil {
+		return errors.New("terminalbench preparation requires a live sandbox")
+	}
+	b.mu.RLock()
+	_, loaded := b.details[task.ID]
+	b.mu.RUnlock()
+	if !loaded {
+		return fmt.Errorf("terminalbench task %q was not loaded by Tasks", task.ID)
+	}
+	removed, err := sandbox.Exec(ctx, core.Command{Path: "/bin/rm", Args: []string{"-rf", "--", testsPath, verifierLogPath}})
+	if err != nil {
+		return fmt.Errorf("remove verifier paths before harness: %w", err)
+	}
+	if removed.ExitCode != 0 {
+		return fmt.Errorf("remove verifier paths before harness: exit code %d", removed.ExitCode)
+	}
+	const absencePredicate = `for path do [ ! -e "$path" ] && [ ! -L "$path" ] || exit 1; done`
+	probed, err := sandbox.Exec(ctx, core.Command{
+		Path: "/bin/sh", Args: []string{"-c", absencePredicate, "aries-verifier-absence", testsPath, verifierLogPath},
+	})
+	if err != nil {
+		return fmt.Errorf("confirm verifier paths absent before harness: %w", err)
+	}
+	if probed.ExitCode != 0 {
+		return fmt.Errorf("confirm verifier paths absent before harness: exit code %d", probed.ExitCode)
+	}
+	return nil
+}
+
 func loadTask(root, id string, images map[string]string) (core.Task, taskDetails, error) {
 	taskDir := filepath.Join(root, id)
 	info, err := os.Stat(taskDir)
@@ -211,7 +243,14 @@ func loadTask(root, id string, images map[string]string) (core.Task, taskDetails
 		return core.Task{}, taskDetails{}, err
 	}
 
-	agentTimeout := durationSeconds(parsed.Agent.TimeoutSeconds)
+	agentTimeout, err := checkedDurationSeconds(parsed.Agent.TimeoutSeconds)
+	if err != nil {
+		return core.Task{}, taskDetails{}, fmt.Errorf("agent.timeout_sec: %w", err)
+	}
+	verifierTimeout, err := checkedDurationSeconds(parsed.Verifier.TimeoutSeconds)
+	if err != nil {
+		return core.Task{}, taskDetails{}, fmt.Errorf("verifier.timeout_sec: %w", err)
+	}
 	return core.Task{
 			ID:          id,
 			Instruction: instruction,
@@ -228,7 +267,7 @@ func loadTask(root, id string, images map[string]string) (core.Task, taskDetails
 			},
 		}, taskDetails{
 			verifierFiles: verifierFiles,
-			timeout:       durationSeconds(parsed.Verifier.TimeoutSeconds),
+			timeout:       verifierTimeout,
 			verifierEnv:   cloneMap(parsed.Verifier.Env),
 			workdir:       workdir,
 		}, nil
@@ -402,11 +441,14 @@ func finitePositive(value float64) bool {
 }
 
 func finiteDurationSeconds(value float64) bool {
-	return finitePositive(value) && value <= float64(math.MaxInt64)/float64(time.Second)
+	return finitePositive(value) && value*float64(time.Second) < math.Exp2(63)
 }
 
-func durationSeconds(seconds float64) time.Duration {
-	return time.Duration(seconds * float64(time.Second))
+func checkedDurationSeconds(seconds float64) (time.Duration, error) {
+	if !finiteDurationSeconds(seconds) {
+		return 0, errors.New("must be finite, positive, and convert to nanoseconds below 2^63")
+	}
+	return time.Duration(seconds * float64(time.Second)), nil
 }
 
 func validateEnvironmentMap(name string, values map[string]string) error {

@@ -80,6 +80,7 @@ type Manager struct {
 	cleanupTimeout time.Duration
 	logger         *logrus.Logger
 	newID          func() (string, error)
+	openAudit      func(string) (*auditFile, error)
 
 	mu       sync.Mutex
 	active   *bridgeSession
@@ -110,22 +111,19 @@ type bridgeSession struct {
 	identitySource string
 	knownSource    string
 	toolLogPath    string
-	toolLog        *os.File
+	rawLogPath     string
+	audit          *auditWriter
 	workspaceOwner string
-	logger         *logrus.Logger
+	partialStart   bool
+	rollbackAlias  bool
+	replyRequest   func(*ssh.Request, bool) error
 
 	mu            sync.Mutex
 	connections   map[net.Conn]struct{}
-	sequence      uint64
-	logMu         sync.Mutex
-	logErr        error
-	logBytes      int64
-	closeLogErr   error
 	revocationMu  sync.Mutex
 	revocationErr error
 	wait          sync.WaitGroup
 	revokeOnce    sync.Once
-	closeLogOnce  sync.Once
 }
 
 type toolCallRecord struct {
@@ -151,6 +149,59 @@ type toolCallRecord struct {
 	Error          string   `json:"error,omitempty"`
 	RunID          string   `json:"run_id,omitempty"`
 	TaskID         string   `json:"task_id,omitempty"`
+	RequestType    string   `json:"request_type"`
+	WantReply      bool     `json:"want_reply"`
+}
+
+type rawSSHRecord struct {
+	Sequence      uint64  `json:"sequence"`
+	Timestamp     string  `json:"timestamp"`
+	RequestType   string  `json:"request_type"`
+	WantReply     bool    `json:"want_reply"`
+	PayloadBase64 string  `json:"payload_base64"`
+	PayloadBytes  int64   `json:"payload_bytes"`
+	Stdin         *string `json:"stdin,omitempty"`
+	StdinBase64   *string `json:"stdin_base64,omitempty"`
+	StdinEncoding string  `json:"stdin_encoding"`
+	StdinBytes    int64   `json:"stdin_bytes"`
+	Status        string  `json:"status"`
+	RunID         string  `json:"run_id"`
+	TaskID        string  `json:"task_id"`
+	ContainerID   string  `json:"container_id"`
+}
+
+type requestAudit struct {
+	requestType   string
+	wantReply     bool
+	payload       []byte
+	remoteCommand string
+}
+
+type auditFile struct {
+	write func([]byte) (int, error)
+	sync  func() error
+	close func() error
+}
+
+type auditEntry struct {
+	structured []byte
+	raw        []byte
+}
+
+type auditWriter struct {
+	structured *auditFile
+	raw        *auditFile
+
+	mu       sync.Mutex
+	pending  []auditEntry
+	sequence uint64
+	bytes    int64
+	sealed   bool
+	err      error
+	wake     chan struct{}
+	done     chan struct{}
+	marshal  func(any) ([]byte, error)
+	now      func() time.Time
 }
 
 type byteCounter struct {
@@ -174,10 +225,11 @@ func (counter *byteCounter) Write(content []byte) (int, error) {
 func (counter *byteCounter) count() int64 { return counter.n.Load() }
 
 type recordedInput struct {
-	reader io.Reader
-	mu     sync.Mutex
-	n      int64
-	data   bytes.Buffer
+	reader   io.Reader
+	mu       sync.Mutex
+	n        int64
+	data     bytes.Buffer
+	overflow bool
 }
 
 func (input *recordedInput) Read(content []byte) (int, error) {
@@ -185,26 +237,200 @@ func (input *recordedInput) Read(content []byte) (int, error) {
 	if n > 0 {
 		input.mu.Lock()
 		remaining := maxRecordedInputBytes - input.data.Len()
-		accepted := min(n, max(remaining, 0))
-		_, _ = input.data.Write(content[:accepted])
-		input.n += int64(accepted)
-		input.mu.Unlock()
-		if accepted != n {
-			return accepted, fmt.Errorf("OpenClaw SSH stdin exceeds %d bytes", maxRecordedInputBytes)
+		if n > remaining {
+			input.n += int64(n)
+			input.data.Reset()
+			input.overflow = true
+			input.mu.Unlock()
+			return n, fmt.Errorf("OpenClaw SSH stdin exceeds %d bytes", maxRecordedInputBytes)
 		}
+		_, _ = input.data.Write(content[:n])
+		input.n += int64(n)
+		input.mu.Unlock()
 	}
 	return n, err
 }
 
-func (input *recordedInput) record() (int64, string, string) {
+func (input *recordedInput) record() (int64, string, string, bool) {
 	input.mu.Lock()
 	count := input.n
 	content := bytes.Clone(input.data.Bytes())
+	overflow := input.overflow
 	input.mu.Unlock()
 	if utf8.Valid(content) {
-		return count, string(content), "utf-8"
+		return count, string(content), "utf-8", overflow
 	}
-	return count, base64.StdEncoding.EncodeToString(content), "base64"
+	return count, base64.StdEncoding.EncodeToString(content), "base64", overflow
+}
+
+func openAuditFile(path string) (*auditFile, error) {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	return &auditFile{write: file.Write, sync: file.Sync, close: file.Close}, nil
+}
+
+func newAuditWriter(structured, raw *auditFile) *auditWriter {
+	writer := &auditWriter{
+		structured: structured, raw: raw,
+		wake: make(chan struct{}, 1), done: make(chan struct{}),
+		marshal: json.Marshal, now: time.Now,
+	}
+	go writer.run()
+	return writer
+}
+
+func (writer *auditWriter) enqueue(structured toolCallRecord, raw rawSSHRecord) {
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+	if writer.err != nil {
+		return
+	}
+	if writer.sealed {
+		writer.latchLocked(errors.New("enqueue OpenClaw SSH audit after seal"))
+		return
+	}
+	sequence := writer.sequence + 1
+	timestamp := writer.now().UTC().Format(time.RFC3339Nano)
+	structured.Sequence, structured.Timestamp = sequence, timestamp
+	raw.Sequence, raw.Timestamp = sequence, timestamp
+	structuredLine, err := writer.marshal(structured)
+	if err != nil {
+		writer.latchLocked(fmt.Errorf("marshal structured SSH audit: %w", err))
+		return
+	}
+	rawLine, err := writer.marshal(raw)
+	if err != nil {
+		writer.latchLocked(fmt.Errorf("marshal raw SSH audit: %w", err))
+		return
+	}
+	structuredLine = append(structuredLine, '\n')
+	rawLine = append(rawLine, '\n')
+	charge := int64(len(structuredLine) + len(rawLine))
+	if charge > maxToolLogBytes-writer.bytes {
+		writer.latchLocked(fmt.Errorf("OpenClaw SSH combined audit exceeds %d bytes", maxToolLogBytes))
+		return
+	}
+	writer.sequence = sequence
+	writer.bytes += charge
+	writer.pending = append(writer.pending, auditEntry{
+		structured: structuredLine, raw: rawLine,
+	})
+	writer.signal()
+}
+
+func (writer *auditWriter) signal() {
+	select {
+	case writer.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (writer *auditWriter) latchLocked(err error) {
+	writer.err = errors.Join(writer.err, err)
+}
+
+func (writer *auditWriter) latch(err error) {
+	writer.mu.Lock()
+	writer.latchLocked(err)
+	writer.mu.Unlock()
+}
+
+func (writer *auditWriter) run() {
+	defer close(writer.done)
+	for {
+		<-writer.wake
+		for {
+			writer.mu.Lock()
+			if len(writer.pending) == 0 {
+				sealed := writer.sealed
+				writer.mu.Unlock()
+				if sealed {
+					writer.finish()
+					return
+				}
+				break
+			}
+			entry := writer.pending[0]
+			writer.pending[0] = auditEntry{}
+			writer.pending = writer.pending[1:]
+			writer.mu.Unlock()
+			writer.persist(entry)
+		}
+	}
+}
+
+func (writer *auditWriter) persist(entry auditEntry) {
+	writer.persistLine(writer.structured, entry.structured, "structured write")
+	writer.persistLine(writer.raw, entry.raw, "raw write")
+	writer.persistSync(writer.structured, "structured sync")
+	writer.persistSync(writer.raw, "raw sync")
+}
+
+func (writer *auditWriter) persistLine(file *auditFile, line []byte, operation string) {
+	written, err := file.write(line)
+	if err == nil && written != len(line) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		writer.mu.Lock()
+		writer.latchLocked(fmt.Errorf("%s: %w", operation, err))
+		writer.mu.Unlock()
+	}
+}
+
+func (writer *auditWriter) persistSync(file *auditFile, operation string) {
+	if err := file.sync(); err != nil {
+		writer.mu.Lock()
+		writer.latchLocked(fmt.Errorf("%s: %w", operation, err))
+		writer.mu.Unlock()
+	}
+}
+
+func (writer *auditWriter) finish() {
+	writer.persistSync(writer.structured, "final structured sync")
+	writer.persistSync(writer.raw, "final raw sync")
+	for _, item := range []struct {
+		name string
+		file *auditFile
+	}{{"structured close", writer.structured}, {"raw close", writer.raw}} {
+		if err := item.file.close(); err != nil {
+			writer.mu.Lock()
+			writer.latchLocked(fmt.Errorf("%s: %w", item.name, err))
+			writer.mu.Unlock()
+		}
+	}
+}
+
+func (writer *auditWriter) sealAndWait(ctx context.Context) error {
+	if writer == nil {
+		return nil
+	}
+	writer.mu.Lock()
+	writer.sealed = true
+	writer.signal()
+	writer.mu.Unlock()
+	select {
+	case <-writer.done:
+		writer.mu.Lock()
+		defer writer.mu.Unlock()
+		return writer.err
+	case <-ctx.Done():
+		return fmt.Errorf("drain OpenClaw SSH audit: %w", ctx.Err())
+	}
+}
+
+func (writer *auditWriter) finished() bool {
+	if writer == nil {
+		return true
+	}
+	select {
+	case <-writer.done:
+		return true
+	default:
+		return false
+	}
 }
 
 var _ runner.ToolBridge = (*Manager)(nil)
@@ -236,7 +462,7 @@ func New(options Options) (*Manager, error) {
 	return &Manager{
 		outputDir: outputDir, clientPath: clientPath,
 		cleanupTimeout: options.CleanupTimeout, logger: options.Logger,
-		newID: randomBridgeID,
+		newID: randomBridgeID, openAudit: openAuditFile,
 	}, nil
 }
 
@@ -258,22 +484,32 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 	if err != nil {
 		return core.ToolEndpoint{}, fmt.Errorf("generate OpenClaw SSH bridge ID: %w", err)
 	}
-	session := &bridgeSession{sandbox: sandbox, connections: make(map[net.Conn]struct{}), logger: manager.logger}
+	session := &bridgeSession{
+		sandbox: sandbox, connections: make(map[net.Conn]struct{}),
+		replyRequest: func(request *ssh.Request, accepted bool) error { return request.Reply(accepted, nil) },
+	}
 	session.artifactDir = filepath.Join(manager.outputDir, sandbox.TaskID(), "bridge")
 	session.workspaceOwner = openClawWorkspace + ".aries-owner-" + id
 	fail := func(primary error) (core.ToolEndpoint, error) {
+		session.partialStart = true
 		session.revoke()
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), manager.cleanupTimeout)
 		defer cancel()
 		waitErr := session.waitFor(cleanupCtx)
-		workspaceErr := rollbackWorkspace(cleanupCtx, session)
-		logErr := session.closeLog()
-		cleanupErr := os.RemoveAll(session.artifactDir)
-		return core.ToolEndpoint{}, errors.Join(primary, waitErr, workspaceErr, logErr, cleanupErr)
+		if waitErr != nil {
+			manager.active = session
+			return core.ToolEndpoint{}, errors.Join(primary, waitErr)
+		}
+		cleanupErr := session.finalize(cleanupCtx)
+		if cleanupErr != nil {
+			manager.active = session
+		}
+		return core.ToolEndpoint{}, errors.Join(primary, cleanupErr)
 	}
 	if err := prepareWorkspace(ctx, session); err != nil {
 		return fail(err)
 	}
+	session.rollbackAlias = true
 	if err := ensurePrivateDirectory(session.artifactDir); err != nil {
 		return fail(fmt.Errorf("create private OpenClaw SSH artifact directory: %w", err))
 	}
@@ -288,6 +524,7 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 	session.identitySource = filepath.Join(session.artifactDir, "id_ed25519")
 	session.knownSource = filepath.Join(session.artifactDir, "known_hosts")
 	session.toolLogPath = filepath.Join(session.artifactDir, "tool-calls.jsonl")
+	session.rawLogPath = filepath.Join(session.artifactDir, "ssh_raw.log")
 	if err := writeExclusivePrivate(session.identitySource, clientPEM); err != nil {
 		return fail(fmt.Errorf("write OpenClaw SSH identity: %w", err))
 	}
@@ -304,10 +541,15 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 	if err := writeExclusivePrivate(session.knownSource, []byte(knownLine)); err != nil {
 		return fail(fmt.Errorf("write OpenClaw SSH known-hosts file: %w", err))
 	}
-	session.toolLog, err = os.OpenFile(session.toolLogPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	structured, err := manager.openAudit(session.toolLogPath)
 	if err != nil {
 		return fail(fmt.Errorf("create OpenClaw SSH tool log: %w", err))
 	}
+	raw, err := manager.openAudit(session.rawLogPath)
+	if err != nil {
+		return fail(errors.Join(fmt.Errorf("create OpenClaw SSH raw log: %w", err), structured.close()))
+	}
+	session.audit = newAuditWriter(structured, raw)
 	serveCtx, cancel := context.WithCancel(context.Background())
 	session.cancel = cancel
 	configuration := newServerConfig(hostSigner, authorized)
@@ -317,6 +559,7 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 	if err := releaseWorkspaceOwner(ctx, session); err != nil {
 		return fail(err)
 	}
+	session.rollbackAlias = false
 
 	manager.active = session
 	manager.stopErr = nil
@@ -328,7 +571,7 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 		ClientCommand: clientContainerPath, ClientSourceFile: session.clientSource,
 		IdentityFile: identityContainerPath, IdentitySourceFile: session.identitySource,
 		KnownHostsFile: knownHostsContainerPath, KnownHostsSourceFile: session.knownSource,
-		LogPaths: []string{session.toolLogPath},
+		LogPaths: []string{session.toolLogPath, session.rawLogPath},
 	}, nil
 }
 
@@ -415,35 +658,45 @@ func serveGlobalRequests(requests <-chan *ssh.Request) {
 
 func (session *bridgeSession) handleSession(ctx context.Context, channel ssh.Channel, requests <-chan *ssh.Request) {
 	for request := range requests {
+		audit := requestAudit{requestType: request.Type, wantReply: request.WantReply, payload: bytes.Clone(request.Payload)}
 		if request.Type != "exec" || !request.WantReply {
 			if request.WantReply {
-				_ = request.Reply(false, nil)
+				_ = session.reply(request, false)
 			}
-			session.logRejected(request.Payload)
+			session.logRejected(audit)
 			return
 		}
 		var payload struct{ Command string }
 		if err := ssh.Unmarshal(request.Payload, &payload); err != nil {
-			_ = request.Reply(false, nil)
-			session.logRejected(request.Payload)
+			_ = session.reply(request, false)
+			session.logRejected(audit)
 			return
 		}
+		audit.remoteCommand = payload.Command
 		command, err := decodeRemoteCommand(payload.Command)
 		if err != nil {
-			_ = request.Reply(false, nil)
-			session.logRejected([]byte(payload.Command))
+			_ = session.reply(request, false)
+			session.logRejected(audit)
 			return
 		}
-		if err := request.Reply(true, nil); err != nil {
+		if err := session.reply(request, true); err != nil {
+			session.logRequestFailure(audit, "failed", "SSH accept reply failed")
 			return
 		}
-		exitCode := session.execute(ctx, channel, payload.Command, command)
+		exitCode := session.execute(ctx, channel, payload.Command, command, audit)
 		_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{uint32(exitCode)}))
 		return
 	}
 }
 
-func (session *bridgeSession) execute(ctx context.Context, channel ssh.Channel, encoded string, remote remoteCommand) int {
+func (session *bridgeSession) reply(request *ssh.Request, accepted bool) error {
+	if session.replyRequest != nil {
+		return session.replyRequest(request, accepted)
+	}
+	return request.Reply(accepted, nil)
+}
+
+func (session *bridgeSession) execute(ctx context.Context, channel ssh.Channel, encoded string, remote remoteCommand, audit requestAudit) int {
 	started := time.Now()
 	command := remote.command(session.sandbox.Workdir())
 	stdin := &recordedInput{reader: channel}
@@ -473,7 +726,11 @@ func (session *bridgeSession) execute(ctx context.Context, channel ssh.Channel, 
 	if exitCode < 0 || exitCode > 255 {
 		exitCode = 255
 	}
-	stdinBytes, stdinContent, stdinEncoding := stdin.record()
+	stdinBytes, stdinContent, stdinEncoding, stdinOverflow := stdin.record()
+	if stdinOverflow {
+		session.audit.latch(fmt.Errorf("retain OpenClaw SSH stdin: input exceeds %d bytes", maxRecordedInputBytes))
+		return exitCode
+	}
 	session.writeRecord(toolCallRecord{
 		ContainerID: session.sandbox.ContainerID(), ContainerName: session.sandbox.ContainerName(),
 		OperationClass: operationClass(command), Path: command.Path, Workdir: command.Dir,
@@ -482,7 +739,8 @@ func (session *bridgeSession) execute(ctx context.Context, channel ssh.Channel, 
 		Stdin: stdinContent, StdinEncoding: stdinEncoding,
 		StdinBytes: stdinBytes, StdoutBytes: stdout.count(), StderrBytes: stderr.count(),
 		ExitCode: exitCode, DurationMS: time.Since(started).Milliseconds(), Status: status, Error: message,
-	})
+		RequestType: audit.requestType, WantReply: audit.wantReply,
+	}, rawRecord(audit, stdinBytes, stdinContent, stdinEncoding, status))
 	return exitCode
 }
 
@@ -493,47 +751,41 @@ func replayDisplayCommand(command core.Command) string {
 	return shellCommand(command)
 }
 
-func (session *bridgeSession) logRejected(payload []byte) {
-	session.writeRecord(toolCallRecord{
-		ContainerID: session.sandbox.ContainerID(), ContainerName: session.sandbox.ContainerName(),
-		OperationClass: "exec", CommandHash: commandHash(string(payload)),
-		StdinEncoding: "utf-8",
-		Status:        "rejected", Error: "invalid remote command",
-	})
+func (session *bridgeSession) logRejected(audit requestAudit) {
+	session.logRequestFailure(audit, "rejected", "invalid remote command")
 }
 
-func (session *bridgeSession) writeRecord(record toolCallRecord) {
-	session.logMu.Lock()
-	defer session.logMu.Unlock()
-	if session.logErr != nil {
-		return
+func (session *bridgeSession) logRequestFailure(audit requestAudit, status, message string) {
+	session.writeRecord(toolCallRecord{
+		ContainerID: session.sandbox.ContainerID(), ContainerName: session.sandbox.ContainerName(),
+		OperationClass: "exec", CommandHash: commandHash(audit.remoteCommand),
+		StdinEncoding: "utf-8",
+		Status:        status, Error: message,
+		RequestType: audit.requestType, WantReply: audit.wantReply,
+	}, rawRecord(audit, 0, "", "utf-8", status))
+}
+
+func rawRecord(audit requestAudit, stdinBytes int64, stdin, stdinEncoding, status string) rawSSHRecord {
+	record := rawSSHRecord{
+		RequestType: audit.requestType, WantReply: audit.wantReply,
+		PayloadBase64: base64.StdEncoding.EncodeToString(audit.payload), PayloadBytes: int64(len(audit.payload)),
+		StdinEncoding: stdinEncoding, StdinBytes: stdinBytes, Status: status,
 	}
-	session.sequence++
-	record.Sequence = session.sequence
-	record.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
+	if stdinEncoding == "base64" {
+		record.StdinBase64 = &stdin
+	} else {
+		record.Stdin = &stdin
+	}
+	return record
+}
+
+func (session *bridgeSession) writeRecord(record toolCallRecord, raw rawSSHRecord) {
 	record.RunID = session.sandbox.RunID()
 	record.TaskID = session.sandbox.TaskID()
-	content, err := json.Marshal(record)
-	if err == nil {
-		content = append(content, '\n')
-		if int64(len(content)) > maxToolLogBytes-session.logBytes {
-			err = fmt.Errorf("OpenClaw SSH tool log exceeds %d bytes", maxToolLogBytes)
-		} else {
-			var written int
-			written, err = session.toolLog.Write(content)
-			session.logBytes += int64(written)
-			if err == nil && written != len(content) {
-				err = io.ErrShortWrite
-			}
-		}
-	}
-	if err == nil {
-		err = session.toolLog.Sync()
-	}
-	if err != nil {
-		session.logErr = errors.Join(session.logErr, err)
-		session.logger.WithError(err).Error("write OpenClaw SSH tool log")
-	}
+	raw.RunID = session.sandbox.RunID()
+	raw.TaskID = session.sandbox.TaskID()
+	raw.ContainerID = session.sandbox.ContainerID()
+	session.audit.enqueue(record, raw)
 }
 
 func (manager *Manager) Stop(ctx context.Context) error {
@@ -565,13 +817,7 @@ func (manager *Manager) Stop(ctx context.Context) error {
 	session.revoke()
 	err := session.waitFor(ctx)
 	if err == nil {
-		err = errors.Join(
-			session.revocationError(),
-			session.closeLog(),
-			removeIfPresent(session.clientSource),
-			removeIfPresent(session.identitySource),
-			removeIfPresent(session.knownSource),
-		)
+		err = session.finalize(ctx)
 	}
 	manager.mu.Lock()
 	manager.stopErr = err
@@ -582,6 +828,30 @@ func (manager *Manager) Stop(ctx context.Context) error {
 	close(done)
 	manager.mu.Unlock()
 	return err
+}
+
+func (session *bridgeSession) finalize(ctx context.Context) error {
+	auditErr := session.closeAudit(ctx)
+	if session.audit != nil && !session.audit.finished() {
+		return auditErr
+	}
+	var workspaceErr error
+	if session.rollbackAlias {
+		workspaceErr = rollbackWorkspace(ctx, session)
+		if workspaceErr == nil {
+			session.rollbackAlias = false
+		}
+	}
+	cleanupErr := errors.Join(
+		session.revocationError(), auditErr, workspaceErr,
+		removeIfPresent(session.clientSource),
+		removeIfPresent(session.identitySource),
+		removeIfPresent(session.knownSource),
+	)
+	if session.partialStart && cleanupErr == nil {
+		cleanupErr = os.RemoveAll(session.artifactDir)
+	}
+	return cleanupErr
 }
 
 func (session *bridgeSession) recordRevocationError(err error) {
@@ -655,15 +925,11 @@ func (session *bridgeSession) waitFor(ctx context.Context) error {
 	}
 }
 
-func (session *bridgeSession) closeLog() error {
-	session.closeLogOnce.Do(func() {
-		session.logMu.Lock()
-		defer session.logMu.Unlock()
-		if session.toolLog != nil {
-			session.closeLogErr = session.toolLog.Close()
-		}
-	})
-	return errors.Join(session.logErr, session.closeLogErr)
+func (session *bridgeSession) closeAudit(ctx context.Context) error {
+	if session.audit == nil {
+		return nil
+	}
+	return session.audit.sealAndWait(ctx)
 }
 
 func (remote remoteCommand) command(workdir string) core.Command {

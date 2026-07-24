@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/core"
@@ -20,6 +21,14 @@ type Options struct {
 	Model          core.ModelConfig
 	CleanupTimeout time.Duration
 	Logger         *logrus.Logger
+	TaskOverrides  TaskOverrides
+}
+
+// TaskOverrides contains sparse runtime changes already validated by composition.
+type TaskOverrides struct {
+	CPU          *float64
+	MemoryMB     *int
+	AgentTimeout *time.Duration
 }
 
 // Runner composes exactly the benchmark, harness, sandbox, and bridge roles.
@@ -34,6 +43,7 @@ type Runner struct {
 	model          core.ModelConfig
 	cleanupTimeout time.Duration
 	logger         *logrus.Logger
+	taskOverrides  TaskOverrides
 }
 
 // New constructs a Runner explicitly and rejects missing roles.
@@ -70,6 +80,7 @@ func New(benchmark Benchmark, harness AgentHarness, toolSandbox ToolSandbox, bri
 		model:          options.Model,
 		cleanupTimeout: options.CleanupTimeout,
 		logger:         options.Logger,
+		taskOverrides:  cloneTaskOverrides(options.TaskOverrides),
 	}, nil
 }
 
@@ -104,6 +115,7 @@ func (r *Runner) Run(ctx context.Context) (core.RunResult, error) {
 }
 
 func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, error) {
+	task, harnessCPU, harnessMemory := effectiveTask(task, r.taskOverrides)
 	started := time.Now()
 	result := newTaskResult(task.ID)
 	r.logger.WithContext(ctx).WithField("task_id", task.ID).Info("task started")
@@ -191,13 +203,20 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		return finish()
 	}
 	sandboxActive = true
+	if err := r.benchmark.PrepareSandbox(ctx, task, sandbox); err != nil {
+		allErrors = append(allErrors, fmt.Errorf("prepare sandbox: %w", err))
+		return finish()
+	}
 
 	endpoint, err := r.bridge.Start(ctx, sandbox)
+	// Start may fail after allocating task-local resources or after its internal
+	// rollback fails. Stop is idempotent, so every Start attempt must be followed
+	// by a positive revocation confirmation before sandbox cleanup.
+	bridgeActive = true
 	if err != nil {
 		allErrors = append(allErrors, fmt.Errorf("start bridge: %w", err))
 		return finish()
 	}
-	bridgeActive = true
 	result.ToolLogPaths = append([]string(nil), endpoint.LogPaths...)
 
 	err = r.harness.Start(ctx, core.HarnessRequest{
@@ -206,6 +225,8 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		Endpoint:  endpoint,
 		Model:     r.model,
 		Timeout:   task.Timeout,
+		CPU:       harnessCPU,
+		MemoryMB:  harnessMemory,
 		OutputDir: r.outputDir,
 	})
 	// Start may fail after allocating task-local resources. Stop is idempotent,
@@ -270,6 +291,44 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 	}
 
 	return finish()
+}
+
+func cloneTaskOverrides(overrides TaskOverrides) TaskOverrides {
+	cloned := TaskOverrides{}
+	if overrides.CPU != nil {
+		value := *overrides.CPU
+		cloned.CPU = &value
+	}
+	if overrides.MemoryMB != nil {
+		value := *overrides.MemoryMB
+		cloned.MemoryMB = &value
+	}
+	if overrides.AgentTimeout != nil {
+		value := *overrides.AgentTimeout
+		cloned.AgentTimeout = &value
+	}
+	return cloned
+}
+
+func effectiveTask(original core.Task, overrides TaskOverrides) (core.Task, *float64, *int) {
+	task := original
+	task.Environment.Env = maps.Clone(original.Environment.Env)
+	var harnessCPU *float64
+	if overrides.CPU != nil {
+		value := *overrides.CPU
+		task.Environment.CPU = value
+		harnessCPU = &value
+	}
+	var harnessMemory *int
+	if overrides.MemoryMB != nil {
+		value := *overrides.MemoryMB
+		task.Environment.MemoryMB = value
+		harnessMemory = &value
+	}
+	if overrides.AgentTimeout != nil {
+		task.Timeout = *overrides.AgentTimeout
+	}
+	return task, harnessCPU, harnessMemory
 }
 
 func newTaskResult(taskID string) core.TaskResult {

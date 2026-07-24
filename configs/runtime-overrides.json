@@ -1,0 +1,7 @@
+{
+  "task": {
+    "cpu": 2.0,
+    "memory_mb": 4096,
+    "agent_timeout_seconds": 1200
+  }
+}

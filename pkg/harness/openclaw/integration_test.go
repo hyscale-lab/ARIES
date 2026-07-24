@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -44,7 +45,45 @@ type modelBridge struct {
 	id    string
 }
 
+// preloadedSandboxManager proves the benchmark preparation boundary against a
+// real image that already contains attacker-controlled verifier paths.
+type preloadedSandboxManager struct {
+	inner runner.ToolSandbox
+}
+
+func (manager *preloadedSandboxManager) Start(ctx context.Context, request core.SandboxRequest) (runner.Sandbox, error) {
+	sandbox, err := manager.inner.Start(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	seeded, seedErr := sandbox.Exec(ctx, core.Command{
+		Path: "/bin/sh",
+		Args: []string{"-c", `mkdir -p /tests /logs/verifier && printf poison-test > /tests/test.sh && printf poison-reward > /logs/verifier/reward.txt`},
+	})
+	if seedErr == nil && seeded.ExitCode != 0 {
+		seedErr = fmt.Errorf("preload verifier poison: exit code %d", seeded.ExitCode)
+	}
+	if seedErr != nil {
+		return nil, errors.Join(seedErr, manager.inner.Stop(context.WithoutCancel(ctx), sandbox))
+	}
+	return sandbox, nil
+}
+
+func (manager *preloadedSandboxManager) Stop(ctx context.Context, sandbox runner.Sandbox) error {
+	return manager.inner.Stop(ctx, sandbox)
+}
+
 func (bridge *modelBridge) Start(ctx context.Context, sandbox runner.Sandbox) (core.ToolEndpoint, error) {
+	absence, err := sandbox.Exec(ctx, core.Command{
+		Path: "/bin/sh",
+		Args: []string{"-c", `for path do [ ! -e "$path" ] && [ ! -L "$path" ] || exit 1; done`, "aries-pre-agent-absence", "/tests", "/logs/verifier"},
+	})
+	if err != nil {
+		return core.ToolEndpoint{}, fmt.Errorf("confirm verifier paths absent before bridge start: %w", err)
+	}
+	if absence.ExitCode != 0 {
+		return core.ToolEndpoint{}, fmt.Errorf("verifier paths visible before bridge start: exit code %d", absence.ExitCode)
+	}
 	endpoint, err := bridge.inner.Start(ctx, sandbox)
 	if err != nil {
 		return core.ToolEndpoint{}, err
@@ -156,7 +195,8 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	composed, err := runner.New(benchmark, harness, sandbox, bridge, runner.Options{
+	preloadedSandbox := &preloadedSandboxManager{inner: sandbox}
+	composed, err := runner.New(benchmark, harness, preloadedSandbox, bridge, runner.Options{
 		Name: "openclaw-tb2-fix-git-deterministic", RunID: runID, OutputDir: outputDir,
 		Model:          core.ModelConfig{BaseURL: "http://fake-model:8080/v1", Model: "aries-deterministic", APIKeyEnv: integrationAPIKeyEnv},
 		CleanupTimeout: 45 * time.Second, Logger: logger,
@@ -197,8 +237,18 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 		task.Isolation.Status != core.StatusConfirmed || !task.Isolation.HarnessStopped || !task.Isolation.BridgeRevoked || task.Cleanup.Status != core.StatusSucceeded {
 		t.Fatalf("separate outcomes = %#v", task)
 	}
-	if len(task.ToolLogPaths) != 1 {
-		t.Fatalf("tool logs = %q", task.ToolLogPaths)
+	wantToolLogs := []string{
+		filepath.Join(outputDir, "fix-git", "bridge", "tool-calls.jsonl"),
+		filepath.Join(outputDir, "fix-git", "bridge", "ssh_raw.log"),
+	}
+	if !slices.Equal(task.ToolLogPaths, wantToolLogs) {
+		t.Fatalf("tool logs = %q, want %q", task.ToolLogPaths, wantToolLogs)
+	}
+	for _, path := range task.ToolLogPaths {
+		info, err := os.Stat(path)
+		if err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("bridge artifact %q = %v, %v", path, info, err)
+		}
 	}
 	toolCalls, err := os.ReadFile(task.ToolLogPaths[0])
 	if err != nil || bytes.Count(toolCalls, []byte(`"status":"completed"`)) < 4 {
@@ -206,6 +256,17 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 	}
 	if !bytes.Contains(toolCalls, []byte(`"operation_class":"exec"`)) || !bytes.Contains(toolCalls, []byte(`"stdin_encoding":"utf-8"`)) {
 		t.Fatalf("OpenClaw exec did not reach the replayable SSH bridge log: %s", toolCalls)
+	}
+	rawCalls, err := os.ReadFile(task.ToolLogPaths[1])
+	if err != nil || bytes.Count(rawCalls, []byte(`"status":"completed"`)) < 4 || !bytes.Contains(rawCalls, []byte(`"payload_base64":`)) || !bytes.Contains(rawCalls, []byte(`"stdin":`)) || !bytes.Contains(rawCalls, []byte(`"stdin_encoding":"utf-8"`)) {
+		t.Fatalf("raw bridge audit = %q, %v", rawCalls, err)
+	}
+	for _, forbidden := range [][]byte{
+		[]byte(`"remote_command":`), []byte(`"env":`), []byte(`"stdout":`), []byte(`"stderr":`), []byte(key),
+	} {
+		if bytes.Contains(rawCalls, forbidden) {
+			t.Fatalf("raw bridge audit contains prohibited value/field %q", forbidden)
+		}
 	}
 	if !strings.Contains(task.Harness.FinalResponse, "Recovered lost commit") {
 		t.Fatalf("final response = %q", task.Harness.FinalResponse)

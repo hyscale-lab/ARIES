@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -49,7 +50,53 @@ type fakeDocker struct {
 	stopCalls        int
 	killCalls        int
 	removeCalls      int
+	createCalls      int
 }
+
+func TestHarnessAppliesOnlyPresentCheckedResources(t *testing.T) {
+	fake := newFakeDocker()
+	manager := newTestManager(t, fake, []byte("model-secret"))
+	cpu, memory := 2.5, 1536
+	request := core.HarnessRequest{RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(), CPU: &cpu, MemoryMB: &memory}
+	if err := manager.Start(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if got := fake.created.HostConfig.Resources; got.NanoCPUs != 2_500_000_000 || got.Memory != 1536<<20 {
+		t.Fatalf("resources = %#v", got)
+	}
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHarnessRejectsInvalidResourcesBeforeContainerCreate(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		set  func(*core.HarnessRequest)
+		want string
+	}{
+		{"cpu", func(request *core.HarnessRequest) { request.CPU = floatPointer(math.Exp2(63) / 1e9) }, "OpenClaw CPU must be finite, positive, and convert to NanoCPUs below 2^63"},
+		{"memory", func(request *core.HarnessRequest) { request.MemoryMB = intPointer(int(math.MaxInt64>>20) + 1) }, fmt.Sprintf("OpenClaw memory must be positive and no greater than %d MiB", int64(math.MaxInt64)>>20)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fake := newFakeDocker()
+			manager := newTestManager(t, fake, []byte("model-secret"))
+			request := core.HarnessRequest{
+				RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(),
+			}
+			test.set(&request)
+			if err := manager.Start(context.Background(), request); err == nil || err.Error() != test.want {
+				t.Fatalf("Start() error = %v, want exactly %q", err, test.want)
+			}
+			if fake.createCalls != 0 {
+				t.Fatalf("ContainerCreate calls = %d, want zero", fake.createCalls)
+			}
+		})
+	}
+}
+
+func floatPointer(value float64) *float64 { return &value }
+func intPointer(value int) *int           { return &value }
 
 func newFakeDocker() *fakeDocker {
 	return &fakeDocker{
@@ -61,6 +108,7 @@ func newFakeDocker() *fakeDocker {
 func (fake *fakeDocker) ContainerCreate(_ context.Context, options client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
+	fake.createCalls++
 	fake.created = options
 	fake.container = container.InspectResponse{
 		ID: "openclaw-id", Config: options.Config, HostConfig: options.HostConfig,

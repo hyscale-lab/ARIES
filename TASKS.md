@@ -1,5 +1,22 @@
 # ARIES Tasks
 
+## R6 — Runtime isolation, sparse overrides, and raw SSH audit
+
+- [x] Add optional dedicated strict-JSON runtime overrides with checked sparse
+  CPU, memory, and agent-timeout conversion; retain an inactive one-task profile
+  and apply the five-task profile's present resources to both containers.
+- [x] Inject ARIES-owned task-container timezone and noninteractive environment
+  values without adding environment values to lifecycle metadata.
+- [x] Add benchmark-owned pre-harness removal and positive absence proof for
+  verifier paths, with fresh pinned-checkout reverification and post-revocation
+  verifier injection.
+- [x] Retain correlated structured and exact-wire raw SSH evidence through one
+  asynchronous, combined-budget, fail-closed writer.
+- [x] Pass focused configuration, Runner, Docker, OpenClaw, Terminal-Bench, and
+  non-listener bridge unit/race tests plus formatting and diff checks.
+- [x] Complete privileged loopback SSH, Docker integration, full release, leak,
+  and secret scans before the release commit.
+
 ## R5 — Live five-task reliability
 
 - [x] Diagnose the five-task live run without treating reward `0` as an ARIES

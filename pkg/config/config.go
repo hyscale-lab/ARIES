@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/hyscale-lab/aries/pkg/containerimage"
 )
@@ -21,15 +23,30 @@ const defaultOutputDir = "runs"
 // Config is one explicit experiment profile. It has no inheritance, templates,
 // merging, or secret values.
 type Config struct {
-	Name         string          `json:"name"`
-	VersionsFile string          `json:"versions_file"`
-	Benchmark    BenchmarkConfig `json:"benchmark"`
-	Harness      HarnessConfig   `json:"harness"`
-	Sandbox      SandboxConfig   `json:"sandbox"`
-	Bridge       BridgeConfig    `json:"bridge"`
-	Model        ModelConfig     `json:"model"`
-	OutputDir    string          `json:"output_dir"`
-	Versions     Versions        `json:"-"`
+	Name          string           `json:"name"`
+	VersionsFile  string           `json:"versions_file"`
+	OverridesFile string           `json:"overrides_file,omitempty"`
+	Benchmark     BenchmarkConfig  `json:"benchmark"`
+	Harness       HarnessConfig    `json:"harness"`
+	Sandbox       SandboxConfig    `json:"sandbox"`
+	Bridge        BridgeConfig     `json:"bridge"`
+	Model         ModelConfig      `json:"model"`
+	OutputDir     string           `json:"output_dir"`
+	Versions      Versions         `json:"-"`
+	Overrides     RuntimeOverrides `json:"-"`
+}
+
+// RuntimeOverrides contains sparse, explicitly present runtime changes.
+type RuntimeOverrides struct {
+	Task TaskOverrides `json:"task,omitempty"`
+}
+
+// TaskOverrides changes only the task resource named by each present field.
+type TaskOverrides struct {
+	CPU                 *float64       `json:"cpu,omitempty"`
+	MemoryMB            *int           `json:"memory_mb,omitempty"`
+	AgentTimeoutSeconds *float64       `json:"agent_timeout_seconds,omitempty"`
+	AgentTimeout        *time.Duration `json:"-"`
 }
 
 type BenchmarkConfig struct {
@@ -93,7 +110,57 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("load version pins: %w", err)
 	}
 	cfg.Versions = versions
+	if cfg.OverridesFile != "" {
+		overridesPath := cfg.OverridesFile
+		if !filepath.IsAbs(overridesPath) {
+			overridesPath = filepath.Join(filepath.Dir(path), overridesPath)
+		}
+		overrides, err := LoadRuntimeOverrides(overridesPath)
+		if err != nil {
+			return Config{}, fmt.Errorf("load runtime overrides: %w", err)
+		}
+		cfg.Overrides = overrides
+	}
 	return cfg, nil
+}
+
+// LoadRuntimeOverrides reads one dedicated strict runtime override document.
+func LoadRuntimeOverrides(path string) (RuntimeOverrides, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return RuntimeOverrides{}, fmt.Errorf("open runtime overrides %q: %w", path, err)
+	}
+	defer f.Close()
+	var overrides RuntimeOverrides
+	if err := decodeStrictJSON(f, &overrides, "runtime overrides"); err != nil {
+		return RuntimeOverrides{}, fmt.Errorf("decode runtime overrides %q: %w", path, err)
+	}
+	if err := overrides.validate(); err != nil {
+		return RuntimeOverrides{}, err
+	}
+	return overrides, nil
+}
+
+func (o *RuntimeOverrides) validate() error {
+	task := &o.Task
+	if task.CPU != nil {
+		scaled := *task.CPU * 1e9
+		if *task.CPU <= 0 || math.IsNaN(*task.CPU) || math.IsInf(*task.CPU, 0) || scaled >= math.Exp2(63) {
+			return errors.New("task.cpu must be finite, positive, and convert to NanoCPUs below 2^63")
+		}
+	}
+	if task.MemoryMB != nil && (*task.MemoryMB <= 0 || int64(*task.MemoryMB) > math.MaxInt64>>20) {
+		return fmt.Errorf("task.memory_mb must be positive and no greater than %d", int64(math.MaxInt64)>>20)
+	}
+	if task.AgentTimeoutSeconds != nil {
+		scaled := *task.AgentTimeoutSeconds * float64(time.Second)
+		if *task.AgentTimeoutSeconds <= 0 || math.IsNaN(*task.AgentTimeoutSeconds) || math.IsInf(*task.AgentTimeoutSeconds, 0) || scaled >= math.Exp2(63) {
+			return errors.New("task.agent_timeout_seconds must be finite, positive, and convert to nanoseconds below 2^63")
+		}
+		duration := time.Duration(scaled)
+		task.AgentTimeout = &duration
+	}
+	return nil
 }
 
 // Decode rejects unknown fields and trailing JSON values.

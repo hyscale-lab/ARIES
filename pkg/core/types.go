@@ -95,6 +95,8 @@ type HarnessRequest struct {
 	Endpoint  ToolEndpoint  `json:"tool_endpoint"`
 	Model     ModelConfig   `json:"model"`
 	Timeout   time.Duration `json:"timeout,omitempty"`
+	CPU       *float64      `json:"cpu,omitempty"`
+	MemoryMB  *int          `json:"memory_mb,omitempty"`
 	OutputDir string        `json:"output_dir"`
 }
 

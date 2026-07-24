@@ -257,7 +257,7 @@ func containerOptions(request core.SandboxRequest, sandbox *Sandbox, labels map[
 	return client.ContainerCreateOptions{
 		Name: sandbox.containerName,
 		Config: &container.Config{
-			Image: environment.Image, WorkingDir: environment.Workdir, Env: dockerEnvironment(environment.Env),
+			Image: environment.Image, WorkingDir: environment.Workdir, Env: taskDockerEnvironment(environment.Env),
 			Entrypoint: []string{"/bin/sleep"}, Cmd: []string{"infinity"}, Labels: labels,
 		},
 		HostConfig: host,
@@ -1002,6 +1002,20 @@ func dockerEnvironment(values map[string]string) []string {
 	return result
 }
 
+func taskDockerEnvironment(values map[string]string) []string {
+	owned := maps.Clone(values)
+	if owned == nil {
+		owned = make(map[string]string, 2)
+	}
+	timezone := os.Getenv("TZ")
+	if timezone == "" {
+		timezone = "UTC"
+	}
+	owned["TZ"] = timezone
+	owned["DEBIAN_FRONTEND"] = "noninteractive"
+	return dockerEnvironment(owned)
+}
+
 func validateEnvironment(environment core.Environment) error {
 	if err := containerimage.Validate(environment.Image); err != nil {
 		return fmt.Errorf("invalid docker sandbox image: %w", err)
@@ -1009,10 +1023,10 @@ func validateEnvironment(environment core.Environment) error {
 	if _, err := cleanContainerPath(environment.Workdir); err != nil {
 		return fmt.Errorf("invalid docker sandbox workdir: %w", err)
 	}
-	if environment.CPU < 0 || math.IsNaN(environment.CPU) || math.IsInf(environment.CPU, 0) {
-		return errors.New("docker sandbox CPU must be finite and nonnegative")
+	if environment.CPU < 0 || math.IsNaN(environment.CPU) || math.IsInf(environment.CPU, 0) || environment.CPU*1e9 >= math.Exp2(63) {
+		return errors.New("docker sandbox CPU must be finite, nonnegative, and convert to NanoCPUs below 2^63")
 	}
-	if environment.MemoryMB < 0 || environment.StorageMB < 0 || environment.GPUs < 0 {
+	if environment.MemoryMB < 0 || int64(environment.MemoryMB) > math.MaxInt64>>20 || environment.StorageMB < 0 || environment.GPUs < 0 {
 		return errors.New("docker sandbox memory, storage, and GPU counts must be nonnegative")
 	}
 	for key, value := range environment.Env {

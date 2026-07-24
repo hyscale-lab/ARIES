@@ -3,6 +3,7 @@ package openclawssh
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -105,7 +106,11 @@ func TestManagerProxiesSSHExecToSandboxAndRetainsReplayableToolLog(t *testing.T)
 		t.Fatal(err)
 	}
 	assertDynamicLoopbackEndpoint(t, endpoint)
-	if len(endpoint.LogPaths) != 1 || endpoint.LogPaths[0] != filepath.Join(outputDir, "contract-task", "bridge", "tool-calls.jsonl") {
+	wantLogPaths := []string{
+		filepath.Join(outputDir, "contract-task", "bridge", "tool-calls.jsonl"),
+		filepath.Join(outputDir, "contract-task", "bridge", "ssh_raw.log"),
+	}
+	if !reflect.DeepEqual(endpoint.LogPaths, wantLogPaths) {
 		t.Fatalf("tool log path = %q", endpoint.LogPaths)
 	}
 	configuration := bridgeClientConfig(t, endpoint)
@@ -184,6 +189,27 @@ func TestManagerProxiesSSHExecToSandboxAndRetainsReplayableToolLog(t *testing.T)
 			t.Fatalf("tool log contains secret %q: %s", secret, content)
 		}
 	}
+	rawRecords, rawContent := readJSONLRecords(t, endpoint.LogPaths[1])
+	if len(rawRecords) != 1 {
+		t.Fatalf("raw records = %d: %s", len(rawRecords), rawContent)
+	}
+	assertLogNumber(t, rawRecords[0], "sequence", 1)
+	assertLogString(t, rawRecords[0], "request_type", "exec")
+	payload, err := base64.StdEncoding.DecodeString(rawRecords[0]["payload_base64"].(string))
+	if err != nil || !bytes.Equal(payload, ssh.Marshal(struct{ Command string }{encoded})) {
+		t.Fatalf("raw payload = %x, %v", payload, err)
+	}
+	assertLogString(t, rawRecords[0], "stdin", contractStdin)
+	assertLogString(t, rawRecords[0], "stdin_encoding", "utf-8")
+	if _, ok := rawRecords[0]["stdin_base64"]; ok {
+		t.Fatalf("UTF-8 raw stdin also has base64 duplicate: %#v", rawRecords[0])
+	}
+	assertRawRecordHasOnlyExactWireFields(t, rawRecords[0])
+	for _, duplicated := range []string{encoded, contractEnv, contractStdout, contractStderr} {
+		if bytes.Contains(rawContent, []byte(duplicated)) {
+			t.Fatalf("raw auxiliary metadata duplicates wire/output value %q: %s", duplicated, rawContent)
+		}
+	}
 }
 
 func TestManagerRejectsMalformedSSHExecWithoutSandboxExecution(t *testing.T) {
@@ -231,6 +257,22 @@ func TestManagerRejectsMalformedSSHExecWithoutSandboxExecution(t *testing.T) {
 	}
 	if bytes.Contains(content, []byte(malformed)) {
 		t.Fatalf("rejection log contains raw malformed command: %s", content)
+	}
+	rawRecords, _ := readJSONLRecords(t, endpoint.LogPaths[1])
+	if len(rawRecords) != 1 {
+		t.Fatalf("raw rejection records = %#v", rawRecords)
+	}
+	assertLogString(t, rawRecords[0], "status", "rejected")
+	assertLogNumber(t, rawRecords[0], "stdin_bytes", 0)
+	payload, err := base64.StdEncoding.DecodeString(rawRecords[0]["payload_base64"].(string))
+	if err != nil || !bytes.Equal(payload, ssh.Marshal(struct{ Command string }{malformed})) {
+		t.Fatalf("raw rejection payload = %x, %v", payload, err)
+	}
+	assertLogString(t, rawRecords[0], "stdin", "")
+	assertLogString(t, rawRecords[0], "stdin_encoding", "utf-8")
+	assertRawRecordHasOnlyExactWireFields(t, rawRecords[0])
+	if rawContent, err := os.ReadFile(endpoint.LogPaths[1]); err != nil || bytes.Contains(rawContent, []byte(malformed)) {
+		t.Fatalf("raw rejection auxiliary metadata duplicates command: %v: %s", err, rawContent)
 	}
 }
 
@@ -294,12 +336,17 @@ func readToolCallRecords(t *testing.T, outputDir string) ([]map[string]any, []by
 	if err != nil || len(matches) != 1 {
 		t.Fatalf("find retained tool-calls.jsonl: matches=%v err=%v", matches, err)
 	}
-	content, err := os.ReadFile(matches[0])
+	return readJSONLRecords(t, matches[0])
+}
+
+func readJSONLRecords(t *testing.T, path string) ([]map[string]any, []byte) {
+	t.Helper()
+	content, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info, err := os.Stat(matches[0]); err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("tool-calls.jsonl mode = %v, %v", info, err)
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("JSONL mode = %v, %v", info, err)
 	}
 	var records []map[string]any
 	for _, line := range bytes.Split(bytes.TrimSpace(content), []byte{'\n'}) {
@@ -331,5 +378,19 @@ func assertLogNumber(t *testing.T, record map[string]any, key string, want int) 
 	t.Helper()
 	if got, ok := record[key].(float64); !ok || int(got) != want {
 		t.Fatalf("log %s = %#v, want %d in %#v", key, record[key], want, record)
+	}
+}
+
+func assertRawRecordHasOnlyExactWireFields(t *testing.T, record map[string]any) {
+	t.Helper()
+	allowed := map[string]struct{}{
+		"sequence": {}, "timestamp": {}, "request_type": {}, "want_reply": {},
+		"payload_base64": {}, "payload_bytes": {}, "stdin": {}, "stdin_base64": {}, "stdin_encoding": {}, "stdin_bytes": {}, "status": {},
+		"run_id": {}, "task_id": {}, "container_id": {},
+	}
+	for key := range record {
+		if _, ok := allowed[key]; !ok {
+			t.Fatalf("raw record has prohibited auxiliary field %q: %#v", key, record)
+		}
 	}
 }

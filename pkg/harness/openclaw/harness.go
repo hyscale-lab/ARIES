@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -180,6 +181,10 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	if request.Timeout < 0 {
 		return errors.New("OpenClaw task timeout must not be negative")
 	}
+	resources, err := harnessResources(request)
+	if err != nil {
+		return err
+	}
 	agentTimeout := request.Timeout
 	if agentTimeout == 0 {
 		agentTimeout = manager.agentTimeout
@@ -255,7 +260,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 				"aries.run":       active.runID, "aries.task": active.safeTaskID, "aries.attempt": active.attemptID,
 			},
 		},
-		HostConfig: &container.HostConfig{NetworkMode: container.NetworkMode(active.endpoint.Network)},
+		HostConfig: &container.HostConfig{NetworkMode: container.NetworkMode(active.endpoint.Network), Resources: resources},
 	})
 	if err != nil {
 		return fail(fmt.Errorf("create OpenClaw container: %w", err))
@@ -285,6 +290,24 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	manager.stopErr = nil
 	manager.logger.WithContext(ctx).WithFields(logrus.Fields{"task_id": active.taskID, "container": active.containerName}).Info("OpenClaw harness started")
 	return nil
+}
+
+func harnessResources(request core.HarnessRequest) (container.Resources, error) {
+	var resources container.Resources
+	if request.CPU != nil {
+		scaled := *request.CPU * 1e9
+		if *request.CPU <= 0 || math.IsNaN(*request.CPU) || math.IsInf(*request.CPU, 0) || scaled >= math.Exp2(63) {
+			return container.Resources{}, errors.New("OpenClaw CPU must be finite, positive, and convert to NanoCPUs below 2^63")
+		}
+		resources.NanoCPUs = int64(scaled)
+	}
+	if request.MemoryMB != nil {
+		if *request.MemoryMB <= 0 || int64(*request.MemoryMB) > math.MaxInt64>>20 {
+			return container.Resources{}, fmt.Errorf("OpenClaw memory must be positive and no greater than %d MiB", int64(math.MaxInt64)>>20)
+		}
+		resources.Memory = int64(*request.MemoryMB) << 20
+	}
+	return resources, nil
 }
 
 func (manager *Manager) Run(ctx context.Context, instruction string) (core.HarnessResult, error) {

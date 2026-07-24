@@ -119,6 +119,7 @@ func TestDockerResourceMonitorRecordsBusyCPU(t *testing.T) {
 }
 
 func TestDockerSandboxRealLifecycle(t *testing.T) {
+	t.Setenv("TZ", "America/Los_Angeles")
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	api, err := client.New(client.FromEnv, client.WithUserAgent("aries-sandbox-integration-test/1"))
@@ -142,7 +143,9 @@ func TestDockerSandboxRealLifecycle(t *testing.T) {
 		RunID: "integration-run", TaskID: "integration-task",
 		Environment: core.Environment{
 			Image: fixtureImage, Workdir: "/work", CPU: 0.5, MemoryMB: 32,
-			StorageMB: 64, Env: map[string]string{"TASK_ENV": "task-value"},
+			StorageMB: 64, Env: map[string]string{
+				"TASK_ENV": "task-value", "TZ": "task-zone", "DEBIAN_FRONTEND": "dialog",
+			},
 		},
 	})
 	if err != nil {
@@ -157,6 +160,16 @@ func TestDockerSandboxRealLifecycle(t *testing.T) {
 	}
 	if inspection.Container.Config.WorkingDir != "/work" || inspection.Container.HostConfig.NanoCPUs != 500_000_000 || inspection.Container.HostConfig.Memory != 32<<20 {
 		t.Fatalf("container configuration = %#v / %#v", inspection.Container.Config, inspection.Container.HostConfig)
+	}
+	containerEnv := make(map[string]string, len(inspection.Container.Config.Env))
+	for _, entry := range inspection.Container.Config.Env {
+		key, value, found := strings.Cut(entry, "=")
+		if found {
+			containerEnv[key] = value
+		}
+	}
+	if containerEnv["TZ"] != "America/Los_Angeles" || containerEnv["DEBIAN_FRONTEND"] != "noninteractive" || containerEnv["TASK_ENV"] != "task-value" {
+		t.Fatalf("container environment = %#v, want ARIES precedence and unrelated task value", containerEnv)
 	}
 	networkInspection, err := api.NetworkInspect(ctx, sandbox.NetworkName(), client.NetworkInspectOptions{})
 	if err != nil || !networkInspection.Network.Internal || networkInspection.Network.Labels["aries.task"] != "integration-task" {
@@ -219,6 +232,36 @@ func TestDockerSandboxRealLifecycle(t *testing.T) {
 			t.Fatalf("log %q = %v, %v", name, info, err)
 		}
 	}
+
+	t.Setenv("TZ", "")
+	fallbackLive, err := manager.Start(ctx, core.SandboxRequest{
+		RunID: "integration-run", TaskID: "timezone-fallback",
+		Environment: core.Environment{Image: fixtureImage, Workdir: "/work", CPU: 0.5, MemoryMB: 32, StorageMB: 64},
+	})
+	if err != nil {
+		t.Fatalf("fallback Start() error = %v", err)
+	}
+	fallback := fallbackLive.(*Sandbox)
+	t.Cleanup(func() { _ = manager.Stop(context.Background(), fallbackLive) })
+	fallbackInspection, err := api.ContainerInspect(ctx, fallback.ContainerID(), client.ContainerInspectOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsEnvironment(fallbackInspection.Container.Config.Env, "TZ=UTC") || !containsEnvironment(fallbackInspection.Container.Config.Env, "DEBIAN_FRONTEND=noninteractive") {
+		t.Fatalf("fallback container environment = %#v", fallbackInspection.Container.Config.Env)
+	}
+	if err := manager.Stop(ctx, fallbackLive); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func containsEnvironment(environment []string, want string) bool {
+	for _, entry := range environment {
+		if entry == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestExecCancellationKillsOnlyItsProcessGroup(t *testing.T) {

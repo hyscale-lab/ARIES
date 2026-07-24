@@ -1,6 +1,7 @@
 {
   "name": "openclaw-tb2-five-deepseek",
   "versions_file": "../configs/versions.json",
+  "overrides_file": "../configs/runtime-overrides.json",
   "benchmark": {
     "type": "terminalbench2",
     "root": ".cache/terminal-bench-2",

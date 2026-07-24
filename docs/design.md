@@ -65,7 +65,8 @@ A pin change requires rechecking these contracts before implementation changes.
 
 The four substitutable roles are defined where the Runner consumes them:
 
-- `Benchmark`: task discovery and independent evaluation.
+- `Benchmark`: task discovery, pre-harness sandbox preparation, and independent
+  evaluation.
 - `AgentHarness`: harness start, one instruction, and stop.
 - `ToolSandbox`: creation and removal of a live task environment.
 - `ToolBridge`: temporary harness access to that environment.
@@ -91,20 +92,26 @@ For every task, the Runner performs this order:
 
 1. obtain the task from the benchmark;
 2. start one Docker sandbox from its generic environment;
-3. start the SSH bridge for that exact sandbox;
-4. start OpenClaw with the endpoint and model configuration;
-5. send the instruction and wait for completion or timeout;
-6. stop OpenClaw;
-7. stop the bridge and revoke all harness access;
-8. evaluate the still-running sandbox;
-9. collect separate outcomes and logs; and
-10. stop and remove the sandbox.
+3. ask the benchmark to sanitize and positively prepare that live sandbox;
+4. start the SSH bridge for that exact sandbox;
+5. start OpenClaw with the endpoint and model configuration;
+6. send the instruction and wait for completion or timeout;
+7. stop OpenClaw;
+8. stop the bridge and revoke all harness access;
+9. evaluate the still-running sandbox;
+10. collect separate outcomes and logs; and
+11. stop and remove the sandbox.
 
 Cleanup runs in reverse acquisition order with a fresh bounded context after
 error or cancellation. `Stop` methods are idempotent. A successful harness
 `Stop` and bridge `Stop` are positive isolation gates; if either fails,
 evaluation is marked `blocked_isolation` and verifier files are not uploaded.
 A harness failure does not suppress evaluation when both gates succeed.
+
+Every task container receives `DEBIAN_FRONTEND=noninteractive`. Its `TZ` is
+the nonempty ARIES process `TZ`, or `UTC` when unset or empty. These ARIES-owned
+values replace conflicting benchmark entries; other task environment values
+are preserved and remain absent from lifecycle logs, labels, and results.
 
 ## Docker SDK boundary
 
@@ -233,9 +240,10 @@ Each task creates private:
 
 ```text
 <task>/bridge/tool-calls.jsonl
+<task>/bridge/ssh_raw.log
 ```
 
-The log is retained after bridge shutdown and exposed in
+Both logs are retained after bridge shutdown and exposed in
 `TaskResult.ToolLogPaths`. Accepted and rejected requests record sequence,
 time, run/task/runtime identity, operation class, path/workdir metadata,
 environment names, a command hash, the exact argument vector and shell command,
@@ -243,15 +251,24 @@ exact stdin (UTF-8 or base64 for binary data), byte counts, duration, exit code,
 and outcome. The separate human-readable shell-command field is omitted only
 for OpenClaw's internal `workspace_upload` helper because its exact script
 already exists in the argument vector. Environment values and stdout/stderr
-content are not retained.
+content are not retained in the structured log. The sensitive raw log retains
+the exact SSH request payload in `payload_base64` and exact consumed stdin in
+mutually exclusive `stdin` (`stdin_encoding: "utf-8"`) fields when valid UTF-8
+or `stdin_base64` (`stdin_encoding: "base64"`) fields otherwise, with safe identity, request type, reply
+intent, byte counts, status, and correlation metadata. It does not duplicate
+decoded commands, environment values, or stdout/stderr. The exact payload/stdin fields
+may contain values supplied on the SSH wire and must remain private; ARIES
+model/API credentials and SSH private-key bytes never enter this wire path.
 
 The streaming counters use atomic updates so concurrently copied stdin, stdout,
 and stderr produce race-free final counts. Tool inputs are intentionally stored
-in the private mode-0600 artifact for deterministic replay; model credentials
-are never sent to the sandbox or recorded. A log write or close failure is a
-bridge failure rather than silent evidence loss. Exact stdin is capped at 16
-MiB per call and the task tool log at 256 MiB; exceeding either bound fails the
-bridge instead of silently truncating replay evidence.
+in private mode-0600 artifacts for deterministic replay; model credentials are
+never sent to the sandbox or recorded. A single task-local writer goroutine
+owns writes, syncs, and closes for both files, while handlers only enqueue
+immutable serialized pairs. Their actual newline-terminated combined size is
+admitted atomically against one 256 MiB task budget; exact stdin is capped at
+16 MiB per call. Overflow, enqueue, write, short-write, sync, drain, or close
+failure makes bridge `Stop` fail rather than silently losing evidence.
 
 OpenClaw model tool-call IDs are not sent over SSH: the pinned exec backend
 drops the internal ID before it constructs the SSH command. ARIES therefore
@@ -274,6 +291,12 @@ same bytes are copied into the container. API-key bytes are provided through a p
 runtime file and do not appear in Docker environment metadata, labels, command
 arguments, configuration artifacts, or results.
 
+CPU and memory limits are absent from the harness unless the corresponding
+runtime override field is present. A present resource override uses the same
+checked Moby value for task and harness containers. An agent-timeout override
+changes only the OpenClaw command timeout and matching task context deadline;
+verifier, startup, observer, and cleanup timeouts retain their own values.
+
 The harness waits for readiness, sends one task instruction through the pinned
 agent command, captures the final response, and collects gateway logs, agent
 stdout/stderr, and available upstream telemetry. Stop removes the OpenClaw
@@ -290,9 +313,12 @@ complete recursive verifier tree for each selected task. The immutable image
 catalog covers every task in the pinned revision.
 
 The adapter verifies that the dataset is the exact clean pinned revision before
-discovery and evaluation. Verifier content is not exposed through `Task` or
-mounted for the harness. Only after isolation succeeds does evaluation clear
-fixed verifier paths, upload the captured verifier tree, run `tests/test.sh`
+discovery and again immediately before evaluation. Before bridge construction,
+benchmark preparation removes `/tests` and `/logs/verifier` and separately
+proves that neither an entry nor dangling symlink remains. Verifier content is
+not exposed through `Task` or mounted for the harness. Only after isolation
+succeeds does evaluation clear those paths again, upload the verifier tree from
+the freshly reverified pinned checkout, run `tests/test.sh`
 with its own timeout and environment, and collect stdout, stderr, CTRF, and
 reward. CTRF validation checks its structural counts and statuses without
 hard-coding task-specific test names or counts. Reward `1` is success; reward
@@ -371,10 +397,21 @@ Runnable experiments are strict JSON profiles. The checked-in examples select
 [`fix-git`](../profiles/openclaw-tb2-fix-git-deepseek.json) and a
 [heterogeneous five-task subset](../profiles/openclaw-tb2-five-deepseek.json).
 Each references the strict JSON version file relative to its own location.
-Unknown fields and trailing values are rejected in both documents. This is a
-fixed reference, not profile inheritance or configuration merging. The visible
+The five-task example also references the dedicated strict JSON
+`configs/runtime-overrides.json`; the one-task example omits it to demonstrate
+inactive compatibility. Unknown fields and trailing values are rejected in
+profiles and referenced documents. This is a fixed reference, not profile
+inheritance or configuration merging. The visible
 default is `output_dir = "runs"`; component type selection uses explicit
 switches.
+
+Runtime overrides are sparse. With no `overrides_file`, the task sandbox keeps
+Terminal-Bench CPU, memory, and agent timeout values while the OpenClaw harness
+remains unlimited. Within a referenced override, omitted CPU or memory keeps
+the benchmark sandbox value and leaves that harness dimension unlimited;
+present CPU or memory applies identically to both containers. A present
+`agent_timeout_seconds` changes only the agent task deadline. All conversions
+are checked before Moby or duration conversion.
 
 `aries setup PROFILE.json` verifies or creates the configured Terminal-Bench
 checkout and pulls OpenClaw plus the selected tasks' immutable images through

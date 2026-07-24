@@ -1,11 +1,56 @@
 package config
 
 import (
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestLoadRuntimeOverridesStrictSparseAndChecked(t *testing.T) {
+	root := t.TempDir()
+	write := func(name, content string) string {
+		path := filepath.Join(root, name)
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	valid := write("valid.json", `{"task":{"cpu":2.5,"memory_mb":4096,"agent_timeout_seconds":12.5}}`)
+	overrides, err := LoadRuntimeOverrides(valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overrides.Task.CPU == nil || *overrides.Task.CPU != 2.5 || overrides.Task.MemoryMB == nil || *overrides.Task.MemoryMB != 4096 || overrides.Task.AgentTimeout == nil || *overrides.Task.AgentTimeout != 12500_000_000 {
+		t.Fatalf("overrides = %#v", overrides)
+	}
+	for name, content := range map[string]string{
+		"unknown": `{"task":{"future":1}}`, "trailing": `{} {}`, "zero-cpu": `{"task":{"cpu":0}}`,
+		"large-memory": `{"task":{"memory_mb":8796093022208}}`, "zero-timeout": `{"task":{"agent_timeout_seconds":0}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := LoadRuntimeOverrides(write(name+".json", content)); err == nil {
+				t.Fatal("expected error")
+			}
+		})
+	}
+	threshold := math.Exp2(63) / 1e9
+	for _, cpu := range []float64{threshold, math.Nextafter(threshold, math.Inf(1))} {
+		path := write("cpu-threshold.json", fmt.Sprintf(`{"task":{"cpu":%g}}`, cpu))
+		if _, err := LoadRuntimeOverrides(path); err == nil {
+			t.Fatalf("accepted CPU %g", cpu)
+		}
+	}
+	below := math.Nextafter(threshold, 0)
+	if below*1e9 >= math.Exp2(63) {
+		t.Fatal("test threshold premise failed")
+	}
+	if _, err := LoadRuntimeOverrides(write("cpu-below.json", fmt.Sprintf(`{"task":{"cpu":%g}}`, below))); err != nil {
+		t.Fatal(err)
+	}
+}
 
 const validConfig = `{
   "name": "test-run",

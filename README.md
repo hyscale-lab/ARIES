@@ -55,12 +55,22 @@ harnesses should not be forced through one universal transport.
   subset.
 - `configs/versions.json` contains the pinned dataset revision, immutable image
   pins for every task in that revision, and the OpenClaw image pin.
+- `configs/runtime-overrides.json` is the dedicated strict-JSON CPU, memory,
+  and agent-timeout override used by the five-task example. The one-task
+  profile intentionally omits `overrides_file` and retains inactive behavior.
 
 To choose another subset, copy a profile and replace `benchmark.tasks` with
 task directory names from the pinned checkout. Task order is preserved. Both
 configuration files use strict JSON decoding; there is no inheritance,
 merging, plugin registry, or factory framework. API-key values never belong in
 either file.
+
+Override fields are individually optional. A present CPU or memory value
+limits both the task and OpenClaw containers; an omitted value leaves the task
+at its benchmark setting and the matching harness dimension unlimited. A
+present timeout changes only the agent deadline. Task containers always receive
+ARIES-owned `DEBIAN_FRONTEND=noninteractive` and host-process `TZ`, falling back
+to `UTC`.
 
 ## Packages
 
@@ -79,6 +89,11 @@ either file.
 Every run writes structured Logrus output to stderr and private `aries.log`.
 Task artifacts use readable paths such as
 `runs/<timestamp>-openclaw-tb2-five-deepseek/fix-git/bridge/tool-calls.jsonl`.
+Each task also retains `bridge/ssh_raw.log`, a mode-0600 sensitive audit whose
+`payload_base64` is the exact SSH request payload and whose stdin is either
+`stdin` with `stdin_encoding: "utf-8"` when valid UTF-8 or `stdin_base64` with
+`stdin_encoding: "base64"` otherwise. Treat it as private run evidence; it may contain
+values supplied by the tool caller.
 
 ## Validation
 

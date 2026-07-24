@@ -42,6 +42,15 @@ or verifies the pinned Terminal-Bench checkout at `.cache/terminal-bench-2`,
 and pulls only OpenClaw plus the selected task images through the Docker Go SDK.
 It is safe to run again and refuses to replace a checkout at another revision.
 
+The five-task profile additionally references
+`configs/runtime-overrides.json` relative to the profile. That dedicated
+strict-JSON file applies its present CPU and memory values to both task and
+OpenClaw containers and changes only the agent timeout. Omitted fields retain
+the benchmark sandbox value and leave the matching harness resource unlimited.
+The one-task profile has no `overrides_file`, demonstrating inactive
+compatibility. Profiles and override files reject unknown fields and trailing
+JSON; there is no YAML or merge/inheritance layer.
+
 The Make equivalent accepts either profile:
 
 ```sh
@@ -105,6 +114,7 @@ cat "$run_dir/live-validation.json"
 cat "$run_dir/run-result.json"
 cat "$run_dir/fix-git/evaluation/reward.txt"
 cat "$run_dir/fix-git/bridge/tool-calls.jsonl"
+cat "$run_dir/fix-git/bridge/ssh_raw.log"
 cat "$run_dir/fix-git/harness/openclaw.json"
 cat "$run_dir/aries.log"
 ```
@@ -125,6 +135,16 @@ A successful task has:
   outcomes in `run-result.json`;
 - reward `1`; and
 - completed tool calls in `bridge/tool-calls.jsonl`.
+
+`bridge/ssh_raw.log` is an unconditional mode-0600 sensitive audit containing
+the lossless SSH request payload in `payload_base64` and consumed stdin in
+mutually exclusive `stdin`/UTF-8 fields when valid UTF-8 or
+`stdin_base64`/base64 fields otherwise. It may contain
+exact wire-supplied values; keep the run
+directory private and do not publish this artifact without review. Its
+auxiliary metadata does not duplicate decoded commands or environment values.
+Structured lifecycle logs and `tool-calls.jsonl` continue to omit environment
+values and stdout/stderr bodies.
 
 Each task directory contains the exact placeholder-only rendered
 `harness/openclaw.json`, OpenClaw logs and telemetry when available, replayable

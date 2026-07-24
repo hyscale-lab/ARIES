@@ -5,11 +5,14 @@ package openclawssh
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -29,6 +32,9 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 	defer cancel()
 	outputDir := t.TempDir()
 	logger := logrus.New()
+	if err := dockersandbox.PullImages(ctx, []string{bridgeFixtureImage}); err != nil {
+		t.Fatalf("prepare pinned bridge fixture image: %v", err)
+	}
 	sandboxes, err := dockersandbox.New(dockersandbox.Options{OutputDir: outputDir, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
@@ -83,9 +89,18 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 		_ = connection.Close()
 		t.Fatal("bridge listener still accepts connections after Stop")
 	}
-	info, err := os.Stat(endpoint.LogPaths[0])
-	if err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("retained tool log = %v, %v", info, err)
+	wantLogPaths := []string{
+		filepath.Join(outputDir, "same-state", "bridge", "tool-calls.jsonl"),
+		filepath.Join(outputDir, "same-state", "bridge", "ssh_raw.log"),
+	}
+	if !slices.Equal(endpoint.LogPaths, wantLogPaths) {
+		t.Fatalf("log paths = %q, want %q", endpoint.LogPaths, wantLogPaths)
+	}
+	for _, path := range endpoint.LogPaths {
+		info, err := os.Stat(path)
+		if err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("retained bridge log %q = %v, %v", path, info, err)
+		}
 	}
 	content, err := os.ReadFile(endpoint.LogPaths[0])
 	if err != nil {
@@ -106,6 +121,25 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 			t.Fatalf("tool log retained command output field %s: %s", forbidden, content)
 		}
 	}
+	raw := readIntegrationJSONL(t, endpoint.LogPaths[1])
+	if len(raw) != 1 {
+		t.Fatalf("raw record count = %d", len(raw))
+	}
+	assertRawRecordHasOnlyExactWireFields(t, raw[0])
+	payload, err := base64.StdEncoding.DecodeString(raw[0]["payload_base64"].(string))
+	if err != nil || !bytes.Equal(payload, ssh.Marshal(struct{ Command string }{remote})) {
+		t.Fatalf("raw payload = %x, %v", payload, err)
+	}
+	if raw[0]["stdin"] != "streamed-input" || raw[0]["stdin_encoding"] != "utf-8" {
+		t.Fatalf("raw stdin = %#v", raw[0])
+	}
+	if _, ok := raw[0]["stdin_base64"]; ok {
+		t.Fatalf("UTF-8 stdin also has base64 duplicate: %#v", raw[0])
+	}
+	rawContent, err := os.ReadFile(endpoint.LogPaths[1])
+	if err != nil || bytes.Contains(rawContent, []byte("tool-stderr")) {
+		t.Fatalf("raw auxiliary leakage: %v: %s", err, rawContent)
+	}
 }
 
 func TestBridgeRunsConcurrentCallsWithoutAConvoy(t *testing.T) {
@@ -114,6 +148,9 @@ func TestBridgeRunsConcurrentCallsWithoutAConvoy(t *testing.T) {
 	outputDir := t.TempDir()
 	logger := logrus.New()
 	logger.SetOutput(bytes.NewBuffer(nil))
+	if err := dockersandbox.PullImages(ctx, []string{bridgeFixtureImage}); err != nil {
+		t.Fatalf("prepare pinned bridge fixture image: %v", err)
+	}
 	sandboxes, err := dockersandbox.New(dockersandbox.Options{OutputDir: outputDir, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
@@ -221,6 +258,48 @@ func TestBridgeRunsConcurrentCallsWithoutAConvoy(t *testing.T) {
 	if err != nil || postRevocation.ExitCode != 0 {
 		t.Fatalf("sandbox was not usable for evaluation after revocation: %#v, %v", postRevocation, err)
 	}
+	structured := readIntegrationJSONL(t, endpoint.LogPaths[0])
+	raw := readIntegrationJSONL(t, endpoint.LogPaths[1])
+	if len(structured) != len(raw) || len(raw) < calls+activeCalls {
+		t.Fatalf("correlated audit counts = %d/%d", len(structured), len(raw))
+	}
+	commands := make(map[string]struct{}, len(raw))
+	for index := range raw {
+		wantSequence := float64(index + 1)
+		if structured[index]["sequence"] != wantSequence || raw[index]["sequence"] != wantSequence {
+			t.Fatalf("sequence %d = %#v/%#v", index, structured[index]["sequence"], raw[index]["sequence"])
+		}
+		assertRawRecordHasOnlyExactWireFields(t, raw[index])
+		payload, err := base64.StdEncoding.DecodeString(raw[index]["payload_base64"].(string))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded struct{ Command string }
+		if err := ssh.Unmarshal(payload, &decoded); err != nil {
+			t.Fatalf("decode raw payload %d: %v", index, err)
+		}
+		commands[decoded.Command] = struct{}{}
+	}
+	if len(commands) < calls+activeCalls {
+		t.Fatalf("raw audit lost unique concurrent commands: %d", len(commands))
+	}
+}
+
+func readIntegrationJSONL(t *testing.T, path string) []map[string]any {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var records []map[string]any
+	for _, line := range bytes.Split(bytes.TrimSpace(content), []byte{'\n'}) {
+		var record map[string]any
+		if err := json.Unmarshal(line, &record); err != nil {
+			t.Fatalf("decode %q: %v", path, err)
+		}
+		records = append(records, record)
+	}
+	return records
 }
 
 func newIntegrationBridge(t *testing.T, outputDir string, logger *logrus.Logger) *Manager {

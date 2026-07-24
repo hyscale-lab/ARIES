@@ -9,6 +9,7 @@ import (
 // Benchmark owns task discovery and evaluation.
 type Benchmark interface {
 	Tasks(context.Context) ([]core.Task, error)
+	PrepareSandbox(context.Context, core.Task, Sandbox) error
 	Evaluate(context.Context, core.Task, Sandbox) (core.Evaluation, error)
 }
 

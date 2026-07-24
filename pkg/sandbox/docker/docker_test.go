@@ -8,6 +8,7 @@ import (
 	"errors"
 	"github.com/sirupsen/logrus"
 	"io"
+	"math"
 	"net"
 	"net/netip"
 	"os"
@@ -278,6 +279,7 @@ func startManagedSandbox(t *testing.T, fake *fakeClient) (*Manager, *Sandbox) {
 }
 
 func TestStartUsesTypedOptionsAndStopIsIdempotent(t *testing.T) {
+	t.Setenv("TZ", "")
 	logs := multiplexed("sandbox stdout", "sandbox stderr")
 	fake := &fakeClient{logs: logs}
 	manager, sandbox := startManagedSandbox(t, fake)
@@ -288,7 +290,7 @@ func TestStartUsesTypedOptionsAndStopIsIdempotent(t *testing.T) {
 	if options.Name != "aries-task-fixedid" || options.Config.WorkingDir != "/work" {
 		t.Fatalf("container options = %#v", options)
 	}
-	if !reflect.DeepEqual(options.Config.Env, []string{"ALPHA=first", "ZED=last"}) {
+	if !reflect.DeepEqual(options.Config.Env, []string{"ALPHA=first", "DEBIAN_FRONTEND=noninteractive", "TZ=UTC", "ZED=last"}) {
 		t.Fatalf("environment = %#v", options.Config.Env)
 	}
 	resources := options.HostConfig.Resources
@@ -317,6 +319,34 @@ func TestStartUsesTypedOptionsAndStopIsIdempotent(t *testing.T) {
 	}
 	if fake.containerID != "" || fake.networkExists {
 		t.Fatal("Stop left fake resources behind")
+	}
+}
+
+func TestTaskEnvironmentUsesHostTimezoneAndAriesPrecedence(t *testing.T) {
+	t.Setenv("TZ", "America/Los_Angeles")
+	request := testRequest()
+	request.Environment.Env = map[string]string{"TZ": "task-zone", "DEBIAN_FRONTEND": "dialog", "KEEP": "exact"}
+	fake := &fakeClient{}
+	manager := testManager(t, fake)
+	if _, err := manager.Start(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"DEBIAN_FRONTEND=noninteractive", "KEEP=exact", "TZ=America/Los_Angeles"}
+	if !reflect.DeepEqual(fake.containerOpts.Config.Env, want) {
+		t.Fatalf("environment = %#v, want %#v", fake.containerOpts.Config.Env, want)
+	}
+}
+
+func TestValidateEnvironmentRejectsResourceConversionOverflow(t *testing.T) {
+	environment := testEnvironment()
+	environment.CPU = math.Exp2(63) / 1e9
+	if err := validateEnvironment(environment); err == nil {
+		t.Fatal("accepted overflowing CPU")
+	}
+	environment = testEnvironment()
+	environment.MemoryMB = int(math.MaxInt64>>20) + 1
+	if err := validateEnvironment(environment); err == nil {
+		t.Fatal("accepted overflowing memory")
 	}
 }
 
