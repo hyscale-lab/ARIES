@@ -29,7 +29,6 @@ go.work.sum
 
 # ARIES-local inputs and generated state
 .omx/
-.codex/
 .cache/
 runs/
 .aries/
@@ -39,3 +38,11 @@ DEEPSEEK_API.key
 # Editor/IDE
 # .idea/
 # .vscode/
+.codex/*
+!.codex/agents/
+!.codex/agents/**
+!.codex/skills/
+!.codex/skills/**
+.codex/skills/.system/**
+!.codex/prompts/
+!.codex/prompts/**
