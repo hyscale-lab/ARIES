@@ -191,20 +191,30 @@ with syntactically valid shell names are accepted, including upstream
 SSH connection cancels its Docker exec context and triggers the targeted
 termination confirmation described above.
 
-OpenClaw's pinned shared runtime path is:
+OpenClaw's pinned SSH backend uses this protocol-only workspace:
 
 ```text
 /aries/openclaw/openclaw-ssh-shared-8198076c/workspace
 ```
 
-Before listening, the bridge creates a guarded symlink from that path to
-`Task.Environment.Workdir` for shell commands. The harness disables OpenClaw's
-native filesystem tools because their upstream helper requires `python3`,
-which Terminal-Bench images are not required to provide. All task mutation
-therefore uses the `exec` tool; the bridge does not rewrite a second filesystem
-protocol. Partial start rolls back only an alias owned by that attempt. Once
-start succeeds, the alias remains until the sandbox is removed, so shell
-commands and evaluation share one live filesystem.
+The path is never created in the task container. The bridge recognizes only
+the pinned OpenClaw control-command and generated-tool shapes, maps the exact
+virtual workspace and HOME to `Task.Environment.Workdir`, and rejects
+unresolved or ambiguous namespace occurrences. Its bounded scanner preserves
+token boundaries and descendant suffixes; when the workdir is `/`, a descendant
+maps to `/name`, never `//name`. Transport cleanup controls are classified
+before translation and cannot remove the benchmark workdir. The harness
+disables OpenClaw's native filesystem tools because their upstream helper
+requires `python3`, which Terminal-Bench images are not required to provide.
+All task mutation therefore uses the `exec` tool.
+
+The Terminal-Bench adapter derives `Task.Environment.Workdir` from the final
+stage of each selected task's `environment/Dockerfile`. It resolves safe
+absolute and relative `WORKDIR` instructions and falls back to `/` when the
+file or a deterministic safe value is absent. This replaces the former shared
+workspace symlink and its ownership/rollback lifecycle. The exact translation
+contract and alternatives are documented in
+[bridge-alternatives.md](bridge-alternatives.md).
 
 Bridge Stop closes the listener and active connections, waits for handlers,
 closes the log, and deletes staged client credential sources. It never changes
@@ -222,8 +232,8 @@ however. The bridge must terminate ephemeral SSH authentication and host
 verification, reject unsupported channels and command shapes, translate
 OpenClaw's canonical shell tokens into argument slices, preserve separate
 stdin/stdout/stderr and exact exit status, cancel only the disconnected tool
-process group, revoke every session before evaluation, map OpenClaw's fixed
-workspace, and retain a replayable tool log.
+process group, revoke every session before evaluation, virtualize OpenClaw's
+pinned workspace without a filesystem alias, and retain a replayable tool log.
 
 Putting `sshd` inside the task would add another process and credential
 lifecycle to the evaluator's sandbox. Giving OpenClaw the Docker socket would
@@ -232,7 +242,8 @@ second implementation. These pair-specific responsibilities therefore remain
 concrete and package-private. Further simplification must preserve the same
 isolation, streaming, cancellation, and evidence guarantees.
 
-Compatibility tradeoffs for OpenClaw, Hermes, and OpenHands are recorded in
+The complete current bridge flow and compatibility tradeoffs for OpenClaw,
+Hermes, and OpenHands are recorded in
 [bridge-alternatives.md](bridge-alternatives.md).
 
 ## Tool-call evidence
@@ -248,14 +259,15 @@ Both logs are retained after bridge shutdown and exposed in
 `TaskResult.ToolLogPaths`. `tool-calls.jsonl` contains one valid JSON object per
 line. Its structured accepted and rejected records include sequence, time,
 run/task/runtime identity, operation class, path/workdir metadata, environment
-names, a command hash, the exact argument vector and shell command, exact stdin
-(UTF-8 or base64 for binary data), byte counts, duration, exit code, and
-outcome. Printable Unicode and HTML characters are emitted literally; quotes,
-backslashes, newlines, and controls retain the escaping required by JSON. The
-separate human-readable shell-command field is omitted only for OpenClaw's
-internal `workspace_upload` helper because its exact script already exists in
-the argument vector. Environment values and stdout/stderr content are not
-retained in the structured log.
+names, nonsecret mapped `workspace_home`, a command hash, the exact argument
+vector and shell command, exact stdin (UTF-8 or base64 for binary data), byte
+counts, duration, exit code, and outcome. Workspace-virtualized records describe
+the translated command that reached the sandbox. Printable Unicode and HTML
+characters are emitted literally; quotes, backslashes, newlines, and controls
+retain the escaping required by JSON. The separate human-readable shell-command
+field is omitted only for OpenClaw's internal `workspace_upload` helper because
+its exact script already exists in the argument vector. Environment values and
+stdout/stderr content are not retained in the structured log.
 
 `ssh_raw.log` is plain text, not JSON or a base64 field catalog. Every call is
 framed by full-line `--- ARIES SSH CALL BEGIN ---` and
@@ -266,9 +278,10 @@ lines record `sequence`, `timestamp`, `request_type`, `want_reply`, `status`,
 LF, CR, and tab render as `\\`, `\n`, `\r`, and `\t`; every other control or
 invalid UTF-8 byte renders as uppercase `\xNN`. This representation is
 human-readable, unambiguous, and lossless, including for malformed or rejected
-request payloads. Raw payload and stdin may contain values supplied on the SSH
-wire and must remain private; ARIES model/API credentials and SSH private-key
-bytes never enter this wire path.
+request payloads. It retains the original wire command and virtual HOME rather
+than the translated execution form. Raw payload and stdin may contain values
+supplied on the SSH wire and must remain private; ARIES model/API credentials
+and SSH private-key bytes never enter this wire path.
 
 The streaming counters use atomic updates so concurrently copied stdin, stdout,
 and stderr produce race-free final counts. Tool inputs are intentionally stored

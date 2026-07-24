@@ -15,6 +15,30 @@ type remoteCommand struct {
 	argv []string
 }
 
+func (remote remoteCommand) shellIndex() int {
+	if remote.argv[0] != remoteEnv {
+		return 0
+	}
+	for index := 1; index < len(remote.argv); index++ {
+		if remote.argv[index] == remoteShell {
+			return index
+		}
+	}
+	return -1
+}
+
+func (remote remoteCommand) hasExactAssignment(name, value string) bool {
+	if remote.argv[0] != remoteEnv {
+		return false
+	}
+	for index := 1; index < remote.shellIndex(); index++ {
+		if remote.argv[index] == name+"="+value {
+			return true
+		}
+	}
+	return false
+}
+
 func decodeRemoteCommand(encoded string) (remoteCommand, error) {
 	if encoded == "" || strings.ContainsRune(encoded, 0) {
 		return remoteCommand{}, errors.New("SSH exec command is empty or contains NUL")

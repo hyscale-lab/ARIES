@@ -364,32 +364,110 @@ func captureVerifierTree(root string) ([]verifierFile, error) {
 func finalWorkdir(filePath string) (string, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return "/", nil
+		}
 		return "", fmt.Errorf("open environment/Dockerfile: %w", err)
 	}
 	defer file.Close()
 
-	var workdir string
+	workdir := "/"
+	var logicalLine strings.Builder
+	continuing := false
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		fields := strings.Fields(line)
-		if len(fields) > 0 && strings.EqualFold(fields[0], "WORKDIR") {
-			if len(fields) != 2 || !path.IsAbs(fields[1]) || strings.ContainsAny(fields[1], "$\\") {
-				return "", fmt.Errorf("unsupported WORKDIR directive %q", line)
-			}
-			workdir = path.Clean(fields[1])
+
+		continued := strings.HasSuffix(line, "\\")
+		if continued {
+			line = strings.TrimSpace(strings.TrimSuffix(line, "\\"))
+		}
+		if logicalLine.Len() > 0 && line != "" {
+			logicalLine.WriteByte(' ')
+		}
+		logicalLine.WriteString(line)
+		if continued {
+			continuing = true
+			continue
+		}
+
+		continuing = false
+		var valid bool
+		workdir, valid = applyDockerfileWorkdir(logicalLine.String(), workdir)
+		logicalLine.Reset()
+		if !valid {
+			return "/", nil
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return "", fmt.Errorf("read environment/Dockerfile: %w", err)
 	}
-	if workdir == "" {
-		return "", errors.New("environment/Dockerfile has no WORKDIR")
+	if continuing || logicalLine.Len() != 0 {
+		return "/", nil
 	}
 	return workdir, nil
+}
+
+func applyDockerfileWorkdir(line, workdir string) (string, bool) {
+	fields := strings.Fields(line)
+	if len(fields) == 0 || strings.ContainsRune(line, 0) {
+		return workdir, false
+	}
+	switch {
+	case strings.EqualFold(fields[0], "FROM"):
+		if !validFromDirective(fields[1:]) {
+			return workdir, false
+		}
+		return "/", true
+	case strings.EqualFold(fields[0], "WORKDIR"):
+		if len(fields) != 2 {
+			return workdir, false
+		}
+		candidate := fields[1]
+		if !path.IsAbs(candidate) {
+			candidate = path.Join(workdir, candidate)
+		}
+		candidate = path.Clean(candidate)
+		if !shellNeutralWorkdir(candidate) {
+			return workdir, false
+		}
+		return candidate, true
+	default:
+		return workdir, true
+	}
+}
+
+func validFromDirective(arguments []string) bool {
+	if len(arguments) > 0 && strings.HasPrefix(arguments[0], "--platform=") && len(arguments[0]) > len("--platform=") {
+		arguments = arguments[1:]
+	}
+	return len(arguments) == 1 && arguments[0] != "" ||
+		len(arguments) == 3 && arguments[0] != "" && strings.EqualFold(arguments[1], "AS") && arguments[2] != ""
+}
+
+func shellNeutralWorkdir(value string) bool {
+	if value == "/" {
+		return true
+	}
+	if !strings.HasPrefix(value, "/") {
+		return false
+	}
+	for _, segment := range strings.Split(value[1:], "/") {
+		if segment == "" {
+			return false
+		}
+		for _, character := range segment {
+			if character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z' ||
+				character >= '0' && character <= '9' || character == '.' || character == '_' || character == '-' {
+				continue
+			}
+			return false
+		}
+	}
+	return true
 }
 
 func cloneMap(source map[string]string) map[string]string {

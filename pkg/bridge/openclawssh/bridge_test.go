@@ -381,7 +381,11 @@ func TestOversizedStdinEmitsNoPartialPairAndFailsAudit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if exit := session.execute(context.Background(), channel, encoded, remote, requestAudit{requestType: "exec", wantReply: true, payload: ssh.Marshal(struct{ Command string }{encoded})}); exit != 255 {
+	prepared, err := prepareRemoteCommand(remote, sandbox.Workdir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exit := session.execute(context.Background(), channel, prepared, requestAudit{requestType: "exec", wantReply: true, payload: ssh.Marshal(struct{ Command string }{encoded})}); exit != 255 {
 		t.Fatalf("exit = %d", exit)
 	}
 	session.connections = make(map[net.Conn]struct{})
@@ -563,7 +567,7 @@ func unescapeRawValue(t *testing.T, value string) []byte {
 	return output
 }
 
-func TestManagerPreparesPinnedWorkspaceAndRollsItBackAfterPartialStart(t *testing.T) {
+func TestManagerStartNeverCreatesAWorkspaceAlias(t *testing.T) {
 	sandbox := &contractSandbox{}
 	manager := newContractManager(t, t.TempDir())
 	endpoint, err := manager.Start(context.Background(), sandbox)
@@ -573,8 +577,8 @@ func TestManagerPreparesPinnedWorkspaceAndRollsItBackAfterPartialStart(t *testin
 	sandbox.mu.Lock()
 	preparations := append([]core.Command(nil), sandbox.preparations...)
 	sandbox.mu.Unlock()
-	if len(preparations) != 2 || preparations[0].Path != remoteShell || !containsArgument(preparations[0].Args, openClawWorkspace) || !containsArgument(preparations[0].Args, sandbox.Workdir()) {
-		t.Fatalf("workspace preparation calls = %#v", preparations)
+	if len(preparations) != 0 {
+		t.Fatalf("bridge start executed sandbox preparation commands: %#v", preparations)
 	}
 	if err := manager.Stop(context.Background()); err != nil {
 		t.Fatal(err)
@@ -598,85 +602,59 @@ func TestManagerPreparesPinnedWorkspaceAndRollsItBackAfterPartialStart(t *testin
 	failedSandbox.mu.Lock()
 	failedPreparations := append([]core.Command(nil), failedSandbox.preparations...)
 	failedSandbox.mu.Unlock()
-	if len(failedPreparations) != 2 || !containsArgument(failedPreparations[1].Args, workspaceRollbackScript) {
-		t.Fatalf("workspace rollback calls = %#v", failedPreparations)
+	if len(failedPreparations) != 0 {
+		t.Fatalf("partial start executed workspace cleanup commands: %#v", failedPreparations)
 	}
 }
 
-type releaseFailSandbox struct {
-	contractSandbox
-	err error
-}
-
-func (sandbox *releaseFailSandbox) Exec(ctx context.Context, command core.Command) (core.CommandResult, error) {
-	result, err := sandbox.contractSandbox.Exec(ctx, command)
-	if containsArgument(command.Args, workspaceReleaseScript) {
-		return core.CommandResult{ExitCode: -1}, sandbox.err
+func TestLatePartialStartCleansListenerCredentialsAndAuditWithoutAliasBranches(t *testing.T) {
+	outputDir := t.TempDir()
+	manager := newContractManager(t, outputDir)
+	sandbox := &contractSandbox{}
+	want := errors.New("injected late start failure")
+	var address, artifactDir string
+	var retainedPaths []string
+	manager.afterStart = func(session *bridgeSession) error {
+		if session.listener == nil || session.audit == nil {
+			t.Fatal("late start hook ran before listener and audit allocation")
+		}
+		address = session.listener.Addr().String()
+		artifactDir = session.artifactDir
+		retainedPaths = []string{
+			session.clientSource,
+			session.identitySource,
+			session.knownSource,
+			session.toolLogPath,
+			session.rawLogPath,
+		}
+		return want
 	}
-	return result, err
-}
-
-func TestWorkspaceOwnershipReleaseFailureRollsBackStart(t *testing.T) {
-	want := errors.New("release failed")
-	sandbox := &releaseFailSandbox{err: want}
-	manager := newContractManager(t, t.TempDir())
 	if _, err := manager.Start(context.Background(), sandbox); !errors.Is(err, want) {
-		t.Fatalf("Start() error = %v, want release failure", err)
+		t.Fatalf("Start() error = %v, want %v", err, want)
+	}
+	if connection, err := net.DialTimeout("tcp", address, 100*time.Millisecond); err == nil {
+		_ = connection.Close()
+		t.Fatal("late partial-start listener still accepts connections")
+	}
+	for _, path := range retainedPaths {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("partial-start credential/audit path remains %q: %v", path, err)
+		}
+	}
+	if _, err := os.Lstat(artifactDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("partial-start artifact directory remains: %v", err)
+	}
+	manager.mu.Lock()
+	active := manager.active
+	manager.mu.Unlock()
+	if active != nil {
+		t.Fatal("successfully cleaned partial session was retained as active")
 	}
 	sandbox.mu.Lock()
 	preparations := append([]core.Command(nil), sandbox.preparations...)
 	sandbox.mu.Unlock()
-	if len(preparations) != 3 || !containsArgument(preparations[2].Args, workspaceRollbackScript) {
-		t.Fatalf("release failure did not trigger workspace rollback: %#v", preparations)
-	}
-}
-
-func TestPartialStartAuditDrainTimeoutRetainsArtifactsForStopRetry(t *testing.T) {
-	outputDir := t.TempDir()
-	manager := newContractManager(t, outputDir)
-	manager.cleanupTimeout = 10 * time.Millisecond
-	started := make(chan struct{})
-	release := make(chan struct{})
-	var opened int
-	var once sync.Once
-	manager.openAudit = func(path string) (*auditFile, error) {
-		file, err := openAuditFile(path)
-		if err != nil {
-			return nil, err
-		}
-		if opened == 0 {
-			originalSync := file.sync
-			file.sync = func() error {
-				once.Do(func() { close(started) })
-				<-release
-				return originalSync()
-			}
-		}
-		opened++
-		return file, nil
-	}
-	sandbox := &releaseFailSandbox{err: errors.New("release failed")}
-	_, err := manager.Start(context.Background(), sandbox)
-	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Start() error = %v", err)
-	}
-	<-started
-	artifactDir := filepath.Join(outputDir, sandbox.TaskID(), "bridge")
-	if _, err := os.Stat(filepath.Join(artifactDir, "ssh_raw.log")); err != nil {
-		t.Fatalf("raw audit removed after drain timeout: %v", err)
-	}
-	manager.mu.Lock()
-	retained := manager.active != nil
-	manager.mu.Unlock()
-	if !retained {
-		t.Fatal("partial session was not retained for Stop retry")
-	}
-	close(release)
-	if err := manager.Stop(context.Background()); err != nil {
-		t.Fatalf("Stop() retry = %v", err)
-	}
-	if _, err := os.Stat(artifactDir); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("partial artifact directory remains after retry: %v", err)
+	if len(preparations) != 0 {
+		t.Fatalf("partial-start cleanup executed alias commands: %#v", preparations)
 	}
 }
 
@@ -1083,13 +1061,4 @@ func TestReplayDisplayCommandOmitsDuplicatedUploadScript(t *testing.T) {
 	if got := replayDisplayCommand(uploadCommand); got != "" {
 		t.Fatalf("upload display command duplicated argv: %q", got)
 	}
-}
-
-func containsArgument(arguments []string, value string) bool {
-	for _, argument := range arguments {
-		if argument == value || strings.Contains(argument, value) {
-			return true
-		}
-	}
-	return false
 }

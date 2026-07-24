@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -59,6 +60,7 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertFormerAliasAbsent(t, ctx, sandbox, "after bridge start")
 	client := dialIntegrationBridge(t, endpoint)
 	session, err := client.NewSession()
 	if err != nil {
@@ -67,12 +69,15 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	session.Stdin = strings.NewReader("streamed-input")
 	session.Stdout, session.Stderr = &stdout, &stderr
-	remote := encodeCanonicalTokens([]string{remoteShell, "-c", "cd " + openClawWorkspace + "; cat > bridge-state; cat bridge-state; printf tool-stderr >&2; exit 7"})
+	remote := encodeCanonicalTokens(generatedArgv("cd " + virtualWorkspace + "; cat > " + virtualWorkspace + "/bridge-state; cat " + virtualWorkspace + "/bridge-state; printf tool-stderr >&2; exit 7"))
 	err = session.Run(remote)
 	_ = client.Close()
 	var exitError *ssh.ExitError
 	if !errors.As(err, &exitError) || exitError.ExitStatus() != 7 || stdout.String() != "streamed-input" || stderr.String() != "tool-stderr" {
-		t.Fatalf("SSH exec = err %v stdout %q stderr %q", err, stdout.String(), stderr.String())
+		_ = bridge.Stop(ctx)
+		structured, _ := os.ReadFile(endpoint.LogPaths[0])
+		raw, _ := os.ReadFile(endpoint.LogPaths[1])
+		t.Fatalf("SSH exec = err %v stdout %q stderr %q\nstructured:\n%s\nraw:\n%s", err, stdout.String(), stderr.String(), structured, raw)
 	}
 	direct, err := sandbox.Exec(ctx, core.Command{Path: "/bin/cat", Args: []string{"/work/bridge-state"}})
 	if err != nil || direct.ExitCode != 0 || direct.Stdout != "streamed-input" {
@@ -81,6 +86,7 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 	if err := bridge.Stop(ctx); err != nil {
 		t.Fatal(err)
 	}
+	assertFormerAliasAbsent(t, ctx, sandbox, "after bridge revocation")
 	if _, err := os.Stat(endpoint.IdentitySourceFile); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("identity remains after Stop: %v", err)
 	}
@@ -109,7 +115,8 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 		`"run_id":"bridge-integration"`, `"task_id":"same-state"`,
 		`"operation_class":"exec"`, `"exit_code":7`, `"status":"completed"`,
 		`"stdin":"streamed-input"`, `"stdin_encoding":"utf-8"`,
-		`"command":"cd /aries/openclaw/`,
+		`"command":"cd /work; cat > /work/bridge-state; cat /work/bridge-state; printf tool-stderr >&2; exit 7"`,
+		`"workspace_home":"/work"`,
 	} {
 		if !bytes.Contains(content, []byte(evidence)) {
 			t.Fatalf("tool log lacks %s: %s", evidence, content)
@@ -135,8 +142,77 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 	if string(unescapeRawValue(t, raw[0]["stdin"])) != "streamed-input" {
 		t.Fatalf("raw stdin = %#v", raw[0])
 	}
-	if bytes.Contains(rawContent, []byte("tool-stderr")) {
-		t.Fatalf("raw auxiliary leakage: %s", rawContent)
+	for _, forbidden := range [][]byte{[]byte("stdout="), []byte("stderr=")} {
+		if bytes.Contains(rawContent, forbidden) {
+			t.Fatalf("raw auxiliary field leakage %q: %s", forbidden, rawContent)
+		}
+	}
+}
+
+func TestBridgeMapsVirtualWorkspaceToContainerRootWithoutAlias(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	outputDir := t.TempDir()
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
+	if err := dockersandbox.PullImages(ctx, []string{bridgeFixtureImage}); err != nil {
+		t.Fatalf("prepare pinned bridge fixture image: %v", err)
+	}
+	sandboxes, err := dockersandbox.New(dockersandbox.Options{OutputDir: outputDir, Logger: logger})
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := sandboxes.Start(ctx, core.SandboxRequest{
+		RunID: "bridge-root-integration", TaskID: "root-state",
+		Environment: core.Environment{Image: bridgeFixtureImage, Workdir: "/", MemoryMB: 64},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sandbox := live.(*dockersandbox.Sandbox)
+	t.Cleanup(func() {
+		cleanup, done := context.WithTimeout(context.Background(), 20*time.Second)
+		defer done()
+		if err := sandboxes.Stop(cleanup, live); err != nil {
+			t.Errorf("sandbox cleanup: %v", err)
+		}
+	})
+
+	bridge := newIntegrationBridge(t, outputDir, logger)
+	endpoint, err := bridge.Start(ctx, sandbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFormerAliasAbsent(t, ctx, sandbox, "in root-workdir sandbox after bridge start")
+	client := dialIntegrationBridge(t, endpoint)
+	session, err := client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := encodeCanonicalTokens(generatedArgv("printf root-state >" + virtualWorkspace + "/aries-root-mutation; cat " + virtualWorkspace + "/aries-root-mutation"))
+	output, err := session.Output(remote)
+	_ = client.Close()
+	if err != nil || string(output) != "root-state" {
+		t.Fatalf("root virtualized command = %q, %v", output, err)
+	}
+	if err := bridge.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertFormerAliasAbsent(t, ctx, sandbox, "in root-workdir sandbox after bridge revocation")
+	if connection, err := net.DialTimeout("tcp", endpoint.Address, 200*time.Millisecond); err == nil {
+		_ = connection.Close()
+		t.Fatal("revoked root-workdir bridge still accepts connections")
+	}
+	evaluated, err := sandbox.Exec(ctx, core.Command{Path: "/bin/cat", Args: []string{"/aries-root-mutation"}, Dir: "/"})
+	if err != nil || evaluated.ExitCode != 0 || evaluated.Stdout != "root-state" {
+		t.Fatalf("root evaluator read = %#v, %v", evaluated, err)
+	}
+	structured, err := os.ReadFile(endpoint.LogPaths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(structured, []byte(`"workspace_home":"/"`)) || !bytes.Contains(structured, []byte(`> /aries-root-mutation`)) && !bytes.Contains(structured, []byte(`>/aries-root-mutation`)) || bytes.Contains(structured, []byte("//aries-root-mutation")) {
+		t.Fatalf("root-safe structured evidence = %s", structured)
 	}
 }
 
@@ -199,7 +275,7 @@ func TestBridgeRunsConcurrentCallsWithoutAConvoy(t *testing.T) {
 				return
 			}
 			defer session.Close()
-			path := fmt.Sprintf("%s/file-%02d", openClawWorkspace, index)
+			path := fmt.Sprintf("%s/file-%02d", virtualWorkspace, index)
 			remote := encodeCanonicalTokens([]string{remoteShell, "-c", `sleep 1; if [ -e "$1" ]; then printf "1\n"; else printf "0\n"; fi`, "aries-concurrency", path})
 			output, sessionErr := session.Output(remote)
 			if sessionErr == nil && string(output) != "0\n" {
@@ -280,6 +356,18 @@ func TestBridgeRunsConcurrentCallsWithoutAConvoy(t *testing.T) {
 	}
 	if len(commands) < calls+activeCalls {
 		t.Fatalf("raw audit lost unique concurrent commands: %d", len(commands))
+	}
+}
+
+func assertFormerAliasAbsent(t *testing.T, ctx context.Context, sandbox *dockersandbox.Sandbox, stage string) {
+	t.Helper()
+	result, err := sandbox.Exec(ctx, core.Command{
+		Path: remoteShell,
+		Args: []string{"-c", `test ! -e "$1" && test ! -L "$1"`, "aries-no-workspace-alias", virtualWorkspace},
+		Dir:  sandbox.Workdir(),
+	})
+	if err != nil || result.ExitCode != 0 {
+		t.Fatalf("former alias exists %s: %#v, %v", stage, result, err)
 	}
 }
 

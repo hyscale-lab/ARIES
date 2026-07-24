@@ -350,6 +350,68 @@ func TestValidateEnvironmentRejectsResourceConversionOverflow(t *testing.T) {
 	}
 }
 
+func TestRootAcceptedOnlyAsWorkdir(t *testing.T) {
+	environment := testEnvironment()
+	environment.Workdir = "/"
+	if err := validateEnvironment(environment); err != nil {
+		t.Fatalf("validateEnvironment(root workdir): %v", err)
+	}
+
+	request := testRequest()
+	request.Environment.Workdir = "/"
+	fake := &fakeClient{}
+	manager := testManager(t, fake)
+	sandbox, err := manager.Start(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Stop(context.Background(), sandbox) })
+	if fake.containerOpts.Config.WorkingDir != "/" {
+		t.Fatalf("Docker WorkingDir = %q, want root", fake.containerOpts.Config.WorkingDir)
+	}
+
+	if _, err := sandbox.Exec(context.Background(), core.Command{Path: "/bin/true", Dir: "/"}); err != nil {
+		t.Fatalf("Exec(root workdir): %v", err)
+	}
+	if fake.execOptions.WorkingDir != "/" {
+		t.Fatalf("Docker exec WorkingDir = %q, want root", fake.execOptions.WorkingDir)
+	}
+	for _, command := range []core.Command{
+		{Path: "/bin/true", Dir: "relative"},
+		{Path: "/bin/true", Dir: "/unclean/.."},
+		{Path: "/bin/true", Dir: "/bad\x00dir"},
+	} {
+		if err := validateCommand(command); err == nil {
+			t.Fatalf("validateCommand(%#v) unexpectedly succeeded", command)
+		}
+	}
+	if err := validateCommand(core.Command{Path: "/", Dir: "/work"}); err == nil {
+		t.Fatal("validateCommand accepted root executable path")
+	}
+
+	for _, value := range []string{"", "relative", "/unclean/..", "/bad\x00dir"} {
+		environment := testEnvironment()
+		environment.Workdir = value
+		if err := validateEnvironment(environment); err == nil {
+			t.Fatalf("validateEnvironment accepted workdir %q", value)
+		}
+	}
+}
+
+func TestTransferPathsStillRejectRoot(t *testing.T) {
+	sandbox := &Sandbox{client: &fakeClient{}, outputDir: t.TempDir()}
+	source := filepath.Join(t.TempDir(), "source")
+	if err := os.WriteFile(source, []byte("content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := sandbox.Upload(context.Background(), source, "/"); err == nil {
+		t.Fatal("Upload accepted root destination")
+	}
+	if err := sandbox.Download(context.Background(), "/", filepath.Join(sandbox.outputDir, "result")); err == nil {
+		t.Fatal("Download accepted root source")
+	}
+}
+
 func TestManagerStopRejectsNilAndForeignSandbox(t *testing.T) {
 	owner, sandbox := startManagedSandbox(t, &fakeClient{})
 	t.Cleanup(func() { _ = owner.Stop(context.Background(), sandbox) })

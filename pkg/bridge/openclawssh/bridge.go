@@ -33,36 +33,10 @@ import (
 )
 
 const (
-	defaultClientPath      = "bin/aries-ssh"
-	defaultBridgeCleanup   = 20 * time.Second
-	maxRecordedInputBytes  = 16 << 20
-	maxToolLogBytes        = 256 << 20
-	openClawWorkspace      = "/aries/openclaw/openclaw-ssh-shared-8198076c/workspace"
-	workspacePrepareScript = `set -eu
-target=$1
-workdir=$2
-owner=$3
-if [ "$target" = "$workdir" ]; then
-  exit 0
-elif [ -L "$target" ]; then
-  [ "$(readlink "$target")" = "$workdir" ]
-elif [ -e "$target" ]; then
-  exit 73
-else
-  mkdir -p "$(dirname "$target")"
-  (set -C; : > "$owner")
-  ln -s "$workdir" "$target"
-fi`
-	workspaceRollbackScript = `set -eu
-target=$1
-workdir=$2
-owner=$3
-if [ -f "$owner" ] && [ -L "$target" ] && [ "$(readlink "$target")" = "$workdir" ]; then
-  rm "$target"
-fi
-rm -f "$owner"`
-	workspaceReleaseScript = `set -eu
-rm -f "$1"`
+	defaultClientPath     = "bin/aries-ssh"
+	defaultBridgeCleanup  = 20 * time.Second
+	maxRecordedInputBytes = 16 << 20
+	maxToolLogBytes       = 256 << 20
 )
 
 // Options are the host-local inputs to one OpenClaw SSH bridge.
@@ -80,8 +54,8 @@ type Manager struct {
 	clientPath     string
 	cleanupTimeout time.Duration
 	logger         *logrus.Logger
-	newID          func() (string, error)
 	openAudit      func(string) (*auditFile, error)
+	afterStart     func(*bridgeSession) error
 
 	mu       sync.Mutex
 	active   *bridgeSession
@@ -114,9 +88,7 @@ type bridgeSession struct {
 	toolLogPath    string
 	rawLogPath     string
 	audit          *auditWriter
-	workspaceOwner string
 	partialStart   bool
-	rollbackAlias  bool
 	replyRequest   func(*ssh.Request, bool) error
 
 	mu            sync.Mutex
@@ -135,6 +107,7 @@ type toolCallRecord struct {
 	OperationClass string   `json:"operation_class"`
 	Path           string   `json:"path,omitempty"`
 	Workdir        string   `json:"workdir,omitempty"`
+	WorkspaceHome  string   `json:"workspace_home,omitempty"`
 	Environment    []string `json:"env_names,omitempty"`
 	CommandHash    string   `json:"command_hash"`
 	Command        string   `json:"command,omitempty"`
@@ -546,7 +519,7 @@ func New(options Options) (*Manager, error) {
 	return &Manager{
 		outputDir: outputDir, clientPath: clientPath,
 		cleanupTimeout: options.CleanupTimeout, logger: options.Logger,
-		newID: randomBridgeID, openAudit: openAuditFile,
+		openAudit: openAuditFile,
 	}, nil
 }
 
@@ -564,16 +537,11 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 	if err != nil {
 		return core.ToolEndpoint{}, fmt.Errorf("resolve task network gateway: %w", err)
 	}
-	id, err := manager.newID()
-	if err != nil {
-		return core.ToolEndpoint{}, fmt.Errorf("generate OpenClaw SSH bridge ID: %w", err)
-	}
 	session := &bridgeSession{
 		sandbox: sandbox, connections: make(map[net.Conn]struct{}),
 		replyRequest: func(request *ssh.Request, accepted bool) error { return request.Reply(accepted, nil) },
 	}
 	session.artifactDir = filepath.Join(manager.outputDir, sandbox.TaskID(), "bridge")
-	session.workspaceOwner = openClawWorkspace + ".aries-owner-" + id
 	fail := func(primary error) (core.ToolEndpoint, error) {
 		session.partialStart = true
 		session.revoke()
@@ -590,10 +558,6 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 		}
 		return core.ToolEndpoint{}, errors.Join(primary, cleanupErr)
 	}
-	if err := prepareWorkspace(ctx, session); err != nil {
-		return fail(err)
-	}
-	session.rollbackAlias = true
 	if err := ensurePrivateDirectory(session.artifactDir); err != nil {
 		return fail(fmt.Errorf("create private OpenClaw SSH artifact directory: %w", err))
 	}
@@ -640,11 +604,11 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 	session.configuration = configuration
 	session.wait.Add(1)
 	go session.serve(serveCtx, manager.logger)
-	if err := releaseWorkspaceOwner(ctx, session); err != nil {
-		return fail(err)
+	if manager.afterStart != nil {
+		if err := manager.afterStart(session); err != nil {
+			return fail(err)
+		}
 	}
-	session.rollbackAlias = false
-
 	manager.active = session
 	manager.stopErr = nil
 	address := net.JoinHostPort(host, port)
@@ -763,11 +727,17 @@ func (session *bridgeSession) handleSession(ctx context.Context, channel ssh.Cha
 			session.logRejected(audit)
 			return
 		}
+		prepared, err := prepareRemoteCommand(command, session.sandbox.Workdir())
+		if err != nil {
+			_ = session.reply(request, false)
+			session.logRejected(audit)
+			return
+		}
 		if err := session.reply(request, true); err != nil {
 			session.logRequestFailure(audit, "failed", "SSH accept reply failed")
 			return
 		}
-		exitCode := session.execute(ctx, channel, payload.Command, command, audit)
+		exitCode := session.execute(ctx, channel, prepared, audit)
 		_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{uint32(exitCode)}))
 		return
 	}
@@ -780,13 +750,19 @@ func (session *bridgeSession) reply(request *ssh.Request, accepted bool) error {
 	return request.Reply(accepted, nil)
 }
 
-func (session *bridgeSession) execute(ctx context.Context, channel ssh.Channel, encoded string, remote remoteCommand, audit requestAudit) int {
+func (session *bridgeSession) execute(ctx context.Context, channel ssh.Channel, prepared preparedRemoteCommand, audit requestAudit) int {
 	started := time.Now()
-	command := remote.command(session.sandbox.Workdir())
+	command := prepared.command
 	stdin := &recordedInput{reader: channel}
 	stdout := &byteCounter{writer: channel}
 	stderr := &byteCounter{writer: channel.Stderr()}
-	result, err := session.sandbox.ExecStream(ctx, command, stdin, stdout, stderr)
+	result := core.CommandResult{}
+	var err error
+	if !prepared.suppressed {
+		result, err = session.sandbox.ExecStream(ctx, command, stdin, stdout, stderr)
+	} else {
+		_, err = io.Copy(io.Discard, stdin)
+	}
 	if contextErr := ctx.Err(); contextErr != nil && !hasCancellationCause(err) {
 		// A sandbox error returned after revocation is ambiguous unless it carries
 		// the cancellation cause. Preserve both so Stop fails closed rather than
@@ -817,8 +793,8 @@ func (session *bridgeSession) execute(ctx context.Context, channel ssh.Channel, 
 	}
 	session.writeRecord(toolCallRecord{
 		ContainerID: session.sandbox.ContainerID(), ContainerName: session.sandbox.ContainerName(),
-		OperationClass: operationClass(command), Path: command.Path, Workdir: command.Dir,
-		Environment: slices.Sorted(maps.Keys(command.Env)), CommandHash: commandHash(encoded),
+		OperationClass: operationClass(command), Path: command.Path, Workdir: command.Dir, WorkspaceHome: prepared.workspaceHome,
+		Environment: slices.Sorted(maps.Keys(command.Env)), CommandHash: commandHash(prepared.encoded),
 		Command: replayDisplayCommand(command), Argv: append([]string{command.Path}, command.Args...),
 		Stdin: stdinContent, StdinEncoding: stdinEncoding,
 		StdinBytes: stdinBytes, StdoutBytes: stdout.count(), StderrBytes: stderr.count(),
@@ -913,15 +889,8 @@ func (session *bridgeSession) finalize(ctx context.Context) error {
 	if session.audit != nil && !session.audit.finished() {
 		return auditErr
 	}
-	var workspaceErr error
-	if session.rollbackAlias {
-		workspaceErr = rollbackWorkspace(ctx, session)
-		if workspaceErr == nil {
-			session.rollbackAlias = false
-		}
-	}
 	cleanupErr := errors.Join(
-		session.revocationError(), auditErr, workspaceErr,
+		session.revocationError(), auditErr,
 		removeIfPresent(session.clientSource),
 		removeIfPresent(session.identitySource),
 		removeIfPresent(session.knownSource),
@@ -1051,56 +1020,6 @@ func operationClass(command core.Command) string {
 	}
 }
 
-func prepareWorkspace(ctx context.Context, session *bridgeSession) error {
-	result, err := session.sandbox.Exec(ctx, workspaceCommand(
-		workspacePrepareScript, session.sandbox.Workdir(), session.workspaceOwner,
-	))
-	if err != nil || result.ExitCode != 0 {
-		return commandFailure("prepare OpenClaw workspace alias", result, err)
-	}
-	return nil
-}
-
-func rollbackWorkspace(ctx context.Context, session *bridgeSession) error {
-	if session == nil || session.workspaceOwner == "" {
-		return nil
-	}
-	result, err := session.sandbox.Exec(ctx, workspaceCommand(
-		workspaceRollbackScript, session.sandbox.Workdir(), session.workspaceOwner,
-	))
-	if err != nil || result.ExitCode != 0 {
-		return commandFailure("roll back OpenClaw workspace alias", result, err)
-	}
-	return nil
-}
-
-func releaseWorkspaceOwner(ctx context.Context, session *bridgeSession) error {
-	result, err := session.sandbox.Exec(ctx, core.Command{
-		Path: remoteShell,
-		Args: []string{"-c", workspaceReleaseScript, "aries-workspace", session.workspaceOwner},
-		Dir:  session.sandbox.Workdir(),
-	})
-	if err != nil || result.ExitCode != 0 {
-		return commandFailure("release OpenClaw workspace ownership marker", result, err)
-	}
-	return nil
-}
-
-func workspaceCommand(script, workdir, owner string) core.Command {
-	return core.Command{
-		Path: remoteShell,
-		Args: []string{"-c", script, "aries-workspace", openClawWorkspace, workdir, owner},
-		Dir:  workdir,
-	}
-}
-
-func commandFailure(operation string, result core.CommandResult, err error) error {
-	if err != nil {
-		return fmt.Errorf("%s: %w", operation, err)
-	}
-	return fmt.Errorf("%s: exit %d: %s", operation, result.ExitCode, strings.TrimSpace(result.Stderr))
-}
-
 func generateSessionKeys() (ssh.Signer, []byte, ssh.PublicKey, error) {
 	_, hostPrivate, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -1193,14 +1112,6 @@ func ensurePrivateDirectory(path string) error {
 		return errors.New("directory path contains a symbolic link")
 	}
 	return os.Chmod(path, 0o700)
-}
-
-func randomBridgeID() (string, error) {
-	var content [8]byte
-	if _, err := rand.Read(content[:]); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(content[:]), nil
 }
 
 func removeIfPresent(path string) error {

@@ -255,6 +255,50 @@ func TestDockerSandboxRealLifecycle(t *testing.T) {
 	}
 }
 
+func TestDockerSandboxRootWorkdirLifecycle(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	api, err := client.New(client.FromEnv, client.WithUserAgent("aries-root-workdir-integration-test/1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.Ping(ctx, client.PingOptions{}); err != nil {
+		t.Fatalf("Docker daemon is required for integration tests: %v", err)
+	}
+	ensureFixtureImage(t, ctx, api)
+
+	manager, err := New(Options{OutputDir: t.TempDir(), CleanupTimeout: 20 * time.Second, Logger: logrus.New()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := manager.Start(ctx, core.SandboxRequest{
+		RunID: "root-workdir-integration", TaskID: "root-task",
+		Environment: core.Environment{Image: fixtureImage, Workdir: "/", CPU: 0.5, MemoryMB: 32, StorageMB: 64},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sandbox := live.(*Sandbox)
+	t.Cleanup(func() { _ = manager.Stop(context.Background(), live) })
+
+	assertExec(t, ctx, sandbox, core.Command{Path: "/bin/pwd", Dir: "/"}, 0, "/\n", "")
+	const descendant = "/aries-root-workdir-descendant"
+	assertExec(t, ctx, sandbox, core.Command{
+		Path: "/bin/sh", Dir: "/", Args: []string{"-c", "printf root-workdir > \"$1\"", "aries-root-workdir", descendant},
+	}, 0, "", "")
+	assertExec(t, ctx, sandbox, core.Command{Path: "/bin/cat", Dir: "/", Args: []string{descendant}}, 0, "root-workdir", "")
+
+	if err := manager.Stop(ctx, live); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.ContainerInspect(ctx, sandbox.ContainerID(), client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
+		t.Fatalf("root-workdir container remains after Stop: %v", err)
+	}
+	if _, err := api.NetworkInspect(ctx, sandbox.NetworkName(), client.NetworkInspectOptions{}); !errdefs.IsNotFound(err) {
+		t.Fatalf("root-workdir network remains after Stop: %v", err)
+	}
+}
+
 func containsEnvironment(environment []string, want string) bool {
 	for _, entry := range environment {
 		if entry == want {

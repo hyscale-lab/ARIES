@@ -32,18 +32,22 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-const integrationAPIKeyEnv = "ARIES_OPENCLAW_INTEGRATION_KEY"
+const (
+	integrationAPIKeyEnv    = "ARIES_OPENCLAW_INTEGRATION_KEY"
+	formerOpenClawWorkspace = "/aries/openclaw/openclaw-ssh-shared-8198076c/workspace"
+)
 
 // modelBridge starts the deterministic model on the task network after the
 // real SSH bridge has made that network available. Runner ordering then stops
 // OpenClaw before this bridge removes the model and revokes SSH.
 type modelBridge struct {
-	inner *openclawssh.Manager
-	api   *client.Client
-	runID string
-	key   string
-	image string
-	id    string
+	inner   *openclawssh.Manager
+	api     *client.Client
+	runID   string
+	key     string
+	image   string
+	id      string
+	sandbox runner.Sandbox
 }
 
 // preloadedSandboxManager proves the benchmark preparation boundary against a
@@ -89,6 +93,10 @@ func (bridge *modelBridge) Start(ctx context.Context, sandbox runner.Sandbox) (c
 	if err != nil {
 		return core.ToolEndpoint{}, err
 	}
+	if err := confirmFormerWorkspaceAliasAbsent(ctx, sandbox); err != nil {
+		return core.ToolEndpoint{}, errors.Join(err, bridge.inner.Stop(context.WithoutCancel(ctx)))
+	}
+	bridge.sandbox = sandbox
 	digest := sha256.Sum256([]byte(bridge.key))
 	created, err := bridge.api.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name: "aries-fake-model-" + bridge.runID,
@@ -114,7 +122,53 @@ func (bridge *modelBridge) Start(ctx context.Context, sandbox runner.Sandbox) (c
 }
 
 func (bridge *modelBridge) Stop(ctx context.Context) error {
-	return errors.Join(bridge.removeModel(ctx), bridge.inner.Stop(ctx))
+	modelErr := bridge.removeModel(ctx)
+	bridgeErr := bridge.inner.Stop(ctx)
+	var absenceErr error
+	if bridgeErr == nil && bridge.sandbox != nil {
+		absenceErr = confirmFormerWorkspaceAliasAbsent(ctx, bridge.sandbox)
+		if absenceErr == nil {
+			bridge.sandbox = nil
+		}
+	}
+	return errors.Join(modelErr, bridgeErr, absenceErr)
+}
+
+func confirmFormerWorkspaceAliasAbsent(ctx context.Context, sandbox runner.Sandbox) error {
+	result, err := sandbox.Exec(ctx, core.Command{
+		Path: "/bin/sh",
+		Args: []string{"-c", `test ! -e "$1" && test ! -L "$1"`, "aries-no-workspace-alias", formerOpenClawWorkspace},
+	})
+	if err != nil {
+		return fmt.Errorf("confirm former OpenClaw workspace alias absent: %w", err)
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("former OpenClaw workspace alias exists: exit code %d", result.ExitCode)
+	}
+	return nil
+}
+
+type mutationCheckingBenchmark struct {
+	inner runner.Benchmark
+}
+
+func (benchmark mutationCheckingBenchmark) Tasks(ctx context.Context) ([]core.Task, error) {
+	return benchmark.inner.Tasks(ctx)
+}
+
+func (benchmark mutationCheckingBenchmark) PrepareSandbox(ctx context.Context, task core.Task, sandbox runner.Sandbox) error {
+	return benchmark.inner.PrepareSandbox(ctx, task, sandbox)
+}
+
+func (benchmark mutationCheckingBenchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner.Sandbox) (core.Evaluation, error) {
+	mutation, err := sandbox.Exec(ctx, core.Command{Path: "/bin/cat", Args: []string{".git/aries-bridge-probe"}, Dir: task.Environment.Workdir})
+	if err != nil {
+		return core.Evaluation{}, fmt.Errorf("observe bridge mutation during evaluation: %w", err)
+	}
+	if mutation.ExitCode != 0 || mutation.Stdout != "bridge write reached sandbox\n" {
+		return core.Evaluation{}, fmt.Errorf("bridge mutation missing during evaluation: exit %d output %q", mutation.ExitCode, mutation.Stdout)
+	}
+	return benchmark.inner.Evaluate(ctx, task, sandbox)
 }
 
 func (bridge *modelBridge) removeModel(ctx context.Context) error {
@@ -197,7 +251,7 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 		t.Fatal(err)
 	}
 	preloadedSandbox := &preloadedSandboxManager{inner: sandbox}
-	composed, err := runner.New(benchmark, harness, preloadedSandbox, bridge, runner.Options{
+	composed, err := runner.New(mutationCheckingBenchmark{inner: benchmark}, harness, preloadedSandbox, bridge, runner.Options{
 		Name: "openclaw-tb2-fix-git-deterministic", RunID: runID, OutputDir: outputDir,
 		Model:          core.ModelConfig{BaseURL: "http://fake-model:8080/v1", Model: "aries-deterministic", APIKeyEnv: integrationAPIKeyEnv},
 		CleanupTimeout: 45 * time.Second, Logger: logger,
@@ -257,6 +311,9 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 	}
 	if !bytes.Contains(toolCalls, []byte(`"operation_class":"exec"`)) || !bytes.Contains(toolCalls, []byte(`"stdin_encoding":"utf-8"`)) {
 		t.Fatalf("OpenClaw exec did not reach the replayable SSH bridge log: %s", toolCalls)
+	}
+	if !bytes.Contains(toolCalls, []byte(`"workspace_home":"`)) || !bytes.Contains(toolCalls, []byte(`.git/aries-bridge-probe`)) || bytes.Contains(toolCalls, []byte(`"command":"cd '/aries/openclaw/`)) {
+		t.Fatalf("OpenClaw virtual workspace was not recorded as translated execution: %s", toolCalls)
 	}
 	rawCalls, err := os.ReadFile(task.ToolLogPaths[1])
 	if err != nil {
@@ -468,9 +525,9 @@ function text(content){return typeof content==="string"?content:Array.isArray(co
 function prior(body,id,name,args){const ms=body.messages||[],a=[...ms].reverse().find(m=>m.role==="assistant"&&Array.isArray(m.tool_calls)),r=[...ms].reverse().find(m=>m.role==="tool");if(!a||!r||a.tool_calls[0].id!==id||r.tool_call_id!==id)throw Error("tool chain mismatch");if(a.tool_calls[0].function.name!==name||JSON.stringify(JSON.parse(a.tool_calls[0].function.arguments))!==JSON.stringify(args))throw Error("tool mismatch");return text(r.content)}
 function stream(res,delta,finish){const id="aries-"+step;res.writeHead(200,{"content-type":"text/event-stream","cache-control":"no-cache","connection":"close"});res.write("data: "+JSON.stringify({id,object:"chat.completion.chunk",created:1,model:"aries-deterministic",choices:[{index:0,delta,finish_reason:null}]})+"\n\n");res.write("data: "+JSON.stringify({id,object:"chat.completion.chunk",created:1,model:"aries-deterministic",choices:[{index:0,delta:{},finish_reason:finish}]})+"\n\n");res.end("data: [DONE]\n\n")}
 function call(res,id,name,args){previous={id,name,args};stream(res,{role:"assistant",tool_calls:[{index:0,id,type:"function",function:{name,arguments:JSON.stringify(args)}}]},"tool_calls")}
-const status="rm -f .aries-bridge-probe; printf '%s\\n' ARIES_STATUS; git status --short --branch; printf '%s\\n' ARIES_HEAD; git rev-parse HEAD; printf '%s\\n' ARIES_REFLOG; git reflog --all --format='%H %gs' -20";
+const status="printf '%s\\n' ARIES_STATUS; git status --short --branch; printf '%s\\n' ARIES_HEAD; git rev-parse HEAD; printf '%s\\n' ARIES_REFLOG; git reflog --all --format='%H %gs' -20";
 http.createServer((req,res)=>{let raw="";req.on("data",c=>raw+=c);req.on("end",()=>{try{if(req.method!=="POST"||req.url!=="/v1/chat/completions")throw Error("route");const bearer=(req.headers.authorization||"").replace(/^Bearer /,"");if(crypto.createHash("sha256").update(bearer).digest("hex")!==expected)throw Error("auth");const body=JSON.parse(raw);if(body.model!=="aries-deterministic"||body.stream!==true)throw Error("request");const tools=(body.tools||[]).map(x=>x&&x.function&&x.function.name);if(!tools.includes("exec")||["read","write","edit","apply_patch"].some(x=>tools.includes(x)))throw Error("tool policy");
-if(step===0){step++;return call(res,"write-probe","exec",{command:"printf 'bridge write reached sandbox\\n' > .aries-bridge-probe"})}
+if(step===0){step++;return call(res,"write-probe","exec",{command:"cd /aries/openclaw/openclaw-ssh-shared-8198076c/workspace && printf 'bridge write reached sandbox\\n' > /aries/openclaw/openclaw-ssh-shared-8198076c/workspace/.git/aries-bridge-probe && cat /aries/openclaw/openclaw-ssh-shared-8198076c/workspace/.git/aries-bridge-probe"})}
 if(step===1){step++;return call(res,"status","exec",{command:status})}
 const out=prior(body,previous.id,previous.name,previous.args);
 if(step===2){const head=(out.match(/ARIES_HEAD\s+([0-9a-f]{40})/)||[])[1],hashes=[...out.matchAll(/\b[0-9a-f]{40}\b/g)].map(x=>x[0]);candidate=hashes.find(x=>x!==head)||"";if(!candidate)throw Error("candidate");step++;return call(res,"inspect","exec",{command:"git show --format=fuller --stat "+candidate+" && git branch --contains "+candidate})}

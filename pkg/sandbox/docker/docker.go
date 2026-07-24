@@ -1019,7 +1019,7 @@ func validateEnvironment(environment core.Environment) error {
 	if err := validatePullImage(environment.Image); err != nil {
 		return fmt.Errorf("invalid docker sandbox image: %w", err)
 	}
-	if _, err := cleanContainerPath(environment.Workdir); err != nil {
+	if _, err := cleanContainerWorkdir(environment.Workdir); err != nil {
 		return fmt.Errorf("invalid docker sandbox workdir: %w", err)
 	}
 	if environment.CPU < 0 || math.IsNaN(environment.CPU) || math.IsInf(environment.CPU, 0) || environment.CPU*1e9 >= math.Exp2(63) {
@@ -1054,7 +1054,7 @@ func validateCommand(command core.Command) error {
 		return fmt.Errorf("invalid command path: %w", err)
 	}
 	if command.Dir != "" {
-		if _, err := cleanContainerPath(command.Dir); err != nil {
+		if _, err := cleanContainerWorkdir(command.Dir); err != nil {
 			return fmt.Errorf("invalid command workdir: %w", err)
 		}
 	}
@@ -1075,12 +1075,23 @@ func validateCommand(command core.Command) error {
 }
 
 func cleanContainerPath(path string) (string, error) {
+	clean, err := cleanContainerWorkdir(path)
+	if err != nil {
+		return "", err
+	}
+	if clean == "/" {
+		return "", errors.New("path must not be the container root")
+	}
+	return clean, nil
+}
+
+func cleanContainerWorkdir(path string) (string, error) {
 	if path == "" || strings.ContainsRune(path, 0) || !strings.HasPrefix(path, "/") {
 		return "", errors.New("path must be absolute, nonempty, and NUL-free")
 	}
 	clean := filepath.Clean(path)
-	if clean != path || clean == "/" {
-		return "", errors.New("path must be clean and must not be the container root")
+	if clean != path {
+		return "", errors.New("path must be clean")
 	}
 	return clean, nil
 }

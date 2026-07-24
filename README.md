@@ -39,14 +39,16 @@ OpenClaw container -> SSH -> host ARIES bridge -> Moby ExecStream
 
 OpenClaw never receives the Docker socket. The bridge translates the pinned
 OpenClaw SSH command shape into Docker exec on the exact sandbox later inspected
-by the evaluator. The Runner stops OpenClaw and revokes the bridge before the
-benchmark uploads verifier files. Harness failure and evaluation outcome remain
-separate.
+by the evaluator. Each task's Dockerfile-derived workdir is mapped from
+OpenClaw's virtual workspace without creating a sandbox symlink. The Runner
+stops OpenClaw and revokes the bridge before the benchmark uploads verifier
+files. Harness failure and evaluation outcome remain separate.
 
 See [docs/design.md](docs/design.md) for lifecycle, isolation, bridge, Moby SDK,
 monitoring, secrets, and extension decisions. See
-[docs/bridge-alternatives.md](docs/bridge-alternatives.md) for why future
-harnesses should not be forced through one universal transport.
+[docs/bridge-alternatives.md](docs/bridge-alternatives.md) for the current
+bridge, workspace mapping, isolation guarantees, and why future harnesses
+should not be forced through one universal transport.
 
 ## Configuration
 
