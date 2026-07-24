@@ -16,7 +16,9 @@ type imageClient interface {
 	ImagePull(context.Context, string, client.ImagePullOptions) (client.ImagePullResponse, error)
 }
 
-// PullImages makes each immutable image available in the local Docker Engine.
+// PullImages makes each configured image available in the local Docker Engine.
+// Harness images remain digest pinned, while Terminal-Bench task images are
+// explicit tags read from the pinned task checkout.
 func PullImages(ctx context.Context, images []string) error {
 	api, err := client.New(client.WithHost("unix://"+defaultDockerSocket), client.WithUserAgent("aries-setup/1"))
 	if err != nil {
@@ -32,7 +34,7 @@ func pullImages(ctx context.Context, api imageClient, images []string) error {
 			continue
 		}
 		seen[image] = struct{}{}
-		if err := containerimage.Validate(image); err != nil {
+		if err := validatePullImage(image); err != nil {
 			return fmt.Errorf("prepare Docker image %q: %w", image, err)
 		}
 		if _, err := api.ImageInspect(ctx, image); err == nil {
@@ -56,6 +58,20 @@ func pullImages(ctx context.Context, api imageClient, images []string) error {
 		if _, err := api.ImageInspect(ctx, image); err != nil {
 			return fmt.Errorf("confirm Docker image %q after pull: %w", image, err)
 		}
+	}
+	return nil
+}
+
+func validatePullImage(image string) error {
+	if err := containerimage.Validate(image); err == nil {
+		return nil
+	}
+	tagged, err := containerimage.ValidateTagOnly(image)
+	if err != nil {
+		return err
+	}
+	if tagged != image {
+		return errors.New("image must not contain surrounding whitespace")
 	}
 	return nil
 }

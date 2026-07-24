@@ -23,6 +23,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/hyscale-lab/aries/pkg/core"
@@ -154,20 +155,19 @@ type toolCallRecord struct {
 }
 
 type rawSSHRecord struct {
-	Sequence      uint64  `json:"sequence"`
-	Timestamp     string  `json:"timestamp"`
-	RequestType   string  `json:"request_type"`
-	WantReply     bool    `json:"want_reply"`
-	PayloadBase64 string  `json:"payload_base64"`
-	PayloadBytes  int64   `json:"payload_bytes"`
-	Stdin         *string `json:"stdin,omitempty"`
-	StdinBase64   *string `json:"stdin_base64,omitempty"`
-	StdinEncoding string  `json:"stdin_encoding"`
-	StdinBytes    int64   `json:"stdin_bytes"`
-	Status        string  `json:"status"`
-	RunID         string  `json:"run_id"`
-	TaskID        string  `json:"task_id"`
-	ContainerID   string  `json:"container_id"`
+	Sequence     uint64
+	Timestamp    string
+	RequestType  string
+	WantReply    bool
+	Status       string
+	RunID        string
+	TaskID       string
+	ContainerID  string
+	WireCommand  string
+	Payload      []byte
+	PayloadBytes int64
+	Stdin        []byte
+	StdinBytes   int64
 }
 
 type requestAudit struct {
@@ -192,16 +192,17 @@ type auditWriter struct {
 	structured *auditFile
 	raw        *auditFile
 
-	mu       sync.Mutex
-	pending  []auditEntry
-	sequence uint64
-	bytes    int64
-	sealed   bool
-	err      error
-	wake     chan struct{}
-	done     chan struct{}
-	marshal  func(any) ([]byte, error)
-	now      func() time.Time
+	mu        sync.Mutex
+	pending   []auditEntry
+	sequence  uint64
+	bytes     int64
+	sealed    bool
+	err       error
+	wake      chan struct{}
+	done      chan struct{}
+	marshal   func(any) ([]byte, error)
+	renderRaw func(rawSSHRecord) ([]byte, error)
+	now       func() time.Time
 }
 
 type byteCounter struct {
@@ -251,16 +252,16 @@ func (input *recordedInput) Read(content []byte) (int, error) {
 	return n, err
 }
 
-func (input *recordedInput) record() (int64, string, string, bool) {
+func (input *recordedInput) record() (int64, string, string, []byte, bool) {
 	input.mu.Lock()
 	count := input.n
 	content := bytes.Clone(input.data.Bytes())
 	overflow := input.overflow
 	input.mu.Unlock()
 	if utf8.Valid(content) {
-		return count, string(content), "utf-8", overflow
+		return count, string(content), "utf-8", content, overflow
 	}
-	return count, base64.StdEncoding.EncodeToString(content), "base64", overflow
+	return count, base64.StdEncoding.EncodeToString(content), "base64", content, overflow
 }
 
 func openAuditFile(path string) (*auditFile, error) {
@@ -275,7 +276,7 @@ func newAuditWriter(structured, raw *auditFile) *auditWriter {
 	writer := &auditWriter{
 		structured: structured, raw: raw,
 		wake: make(chan struct{}, 1), done: make(chan struct{}),
-		marshal: json.Marshal, now: time.Now,
+		marshal: marshalJSONLine, renderRaw: renderRawSSHRecord, now: time.Now,
 	}
 	go writer.run()
 	return writer
@@ -300,13 +301,11 @@ func (writer *auditWriter) enqueue(structured toolCallRecord, raw rawSSHRecord) 
 		writer.latchLocked(fmt.Errorf("marshal structured SSH audit: %w", err))
 		return
 	}
-	rawLine, err := writer.marshal(raw)
+	rawLine, err := writer.renderRaw(raw)
 	if err != nil {
-		writer.latchLocked(fmt.Errorf("marshal raw SSH audit: %w", err))
+		writer.latchLocked(fmt.Errorf("render raw SSH audit: %w", err))
 		return
 	}
-	structuredLine = append(structuredLine, '\n')
-	rawLine = append(rawLine, '\n')
 	charge := int64(len(structuredLine) + len(rawLine))
 	if charge > maxToolLogBytes-writer.bytes {
 		writer.latchLocked(fmt.Errorf("OpenClaw SSH combined audit exceeds %d bytes", maxToolLogBytes))
@@ -318,6 +317,91 @@ func (writer *auditWriter) enqueue(structured toolCallRecord, raw rawSSHRecord) 
 		structured: structuredLine, raw: rawLine,
 	})
 	writer.signal()
+}
+
+func marshalJSONLine(value any) ([]byte, error) {
+	var output bytes.Buffer
+	encoder := json.NewEncoder(&output)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return output.Bytes(), nil
+}
+
+func renderRawSSHRecord(record rawSSHRecord) ([]byte, error) {
+	var output bytes.Buffer
+	output.WriteString("--- ARIES SSH CALL BEGIN ---\n")
+	writeRawField(&output, "sequence", fmt.Sprint(record.Sequence))
+	writeRawField(&output, "timestamp", record.Timestamp)
+	writeRawField(&output, "request_type", record.RequestType)
+	writeRawField(&output, "want_reply", fmt.Sprint(record.WantReply))
+	writeRawField(&output, "status", record.Status)
+	writeRawField(&output, "run_id", record.RunID)
+	writeRawField(&output, "task_id", record.TaskID)
+	writeRawField(&output, "container_id", record.ContainerID)
+	writeRawField(&output, "wire_command", record.WireCommand)
+	writeRawField(&output, "payload_bytes", fmt.Sprint(record.PayloadBytes))
+	writeRawBytesField(&output, "payload", record.Payload)
+	writeRawField(&output, "stdin_bytes", fmt.Sprint(record.StdinBytes))
+	writeRawBytesField(&output, "stdin", record.Stdin)
+	output.WriteString("--- ARIES SSH CALL END ---\n")
+	return output.Bytes(), nil
+}
+
+func writeRawField(output *bytes.Buffer, key, value string) {
+	writeRawBytesField(output, key, []byte(value))
+}
+
+func writeRawBytesField(output *bytes.Buffer, key string, value []byte) {
+	output.WriteString(key)
+	output.WriteByte('=')
+	writeEscapedRaw(output, value)
+	output.WriteByte('\n')
+}
+
+func writeEscapedRaw(output *bytes.Buffer, value []byte) {
+	for len(value) > 0 {
+		switch value[0] {
+		case '\\':
+			output.WriteString(`\\`)
+			value = value[1:]
+			continue
+		case '\n':
+			output.WriteString(`\n`)
+			value = value[1:]
+			continue
+		case '\r':
+			output.WriteString(`\r`)
+			value = value[1:]
+			continue
+		case '\t':
+			output.WriteString(`\t`)
+			value = value[1:]
+			continue
+		}
+		runeValue, size := utf8.DecodeRune(value)
+		if runeValue != utf8.RuneError || size > 1 {
+			if unicode.IsPrint(runeValue) {
+				output.Write(value[:size])
+			} else {
+				writeHexEscapes(output, value[:size])
+			}
+			value = value[size:]
+			continue
+		}
+		writeHexEscapes(output, value[:1])
+		value = value[1:]
+	}
+}
+
+func writeHexEscapes(output *bytes.Buffer, value []byte) {
+	const uppercaseHex = "0123456789ABCDEF"
+	for _, item := range value {
+		output.WriteString(`\x`)
+		output.WriteByte(uppercaseHex[item>>4])
+		output.WriteByte(uppercaseHex[item&0x0f])
+	}
 }
 
 func (writer *auditWriter) signal() {
@@ -726,7 +810,7 @@ func (session *bridgeSession) execute(ctx context.Context, channel ssh.Channel, 
 	if exitCode < 0 || exitCode > 255 {
 		exitCode = 255
 	}
-	stdinBytes, stdinContent, stdinEncoding, stdinOverflow := stdin.record()
+	stdinBytes, stdinContent, stdinEncoding, rawStdin, stdinOverflow := stdin.record()
 	if stdinOverflow {
 		session.audit.latch(fmt.Errorf("retain OpenClaw SSH stdin: input exceeds %d bytes", maxRecordedInputBytes))
 		return exitCode
@@ -740,7 +824,7 @@ func (session *bridgeSession) execute(ctx context.Context, channel ssh.Channel, 
 		StdinBytes: stdinBytes, StdoutBytes: stdout.count(), StderrBytes: stderr.count(),
 		ExitCode: exitCode, DurationMS: time.Since(started).Milliseconds(), Status: status, Error: message,
 		RequestType: audit.requestType, WantReply: audit.wantReply,
-	}, rawRecord(audit, stdinBytes, stdinContent, stdinEncoding, status))
+	}, rawRecord(audit, stdinBytes, rawStdin, status))
 	return exitCode
 }
 
@@ -762,21 +846,15 @@ func (session *bridgeSession) logRequestFailure(audit requestAudit, status, mess
 		StdinEncoding: "utf-8",
 		Status:        status, Error: message,
 		RequestType: audit.requestType, WantReply: audit.wantReply,
-	}, rawRecord(audit, 0, "", "utf-8", status))
+	}, rawRecord(audit, 0, nil, status))
 }
 
-func rawRecord(audit requestAudit, stdinBytes int64, stdin, stdinEncoding, status string) rawSSHRecord {
-	record := rawSSHRecord{
+func rawRecord(audit requestAudit, stdinBytes int64, stdin []byte, status string) rawSSHRecord {
+	return rawSSHRecord{
 		RequestType: audit.requestType, WantReply: audit.wantReply,
-		PayloadBase64: base64.StdEncoding.EncodeToString(audit.payload), PayloadBytes: int64(len(audit.payload)),
-		StdinEncoding: stdinEncoding, StdinBytes: stdinBytes, Status: status,
+		WireCommand: audit.remoteCommand, Payload: bytes.Clone(audit.payload), PayloadBytes: int64(len(audit.payload)),
+		Stdin: bytes.Clone(stdin), StdinBytes: stdinBytes, Status: status,
 	}
-	if stdinEncoding == "base64" {
-		record.StdinBase64 = &stdin
-	} else {
-		record.Stdin = &stdin
-	}
-	return record
 }
 
 func (session *bridgeSession) writeRecord(record toolCallRecord, raw rawSSHRecord) {

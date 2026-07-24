@@ -89,12 +89,17 @@ type fakeBenchmark struct {
 	evaluationError error
 	evaluationErrs  []error
 	evaluations     int
+	preparedTasks   []core.Task
+	evaluatedTasks  []core.Task
 	evaluationDelay time.Duration
 	afterTasks      func()
 }
 
-func (f *fakeBenchmark) PrepareSandbox(ctx context.Context, _ core.Task, _ Sandbox) error {
+func (f *fakeBenchmark) PrepareSandbox(ctx context.Context, task core.Task, _ Sandbox) error {
 	f.log.add("benchmark.prepare", ctx)
+	f.mu.Lock()
+	f.preparedTasks = append(f.preparedTasks, task)
+	f.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -112,8 +117,11 @@ func (f *fakeBenchmark) Tasks(ctx context.Context) ([]core.Task, error) {
 	return f.tasks, f.tasksErr
 }
 
-func (f *fakeBenchmark) Evaluate(ctx context.Context, _ core.Task, _ Sandbox) (core.Evaluation, error) {
+func (f *fakeBenchmark) Evaluate(ctx context.Context, task core.Task, _ Sandbox) (core.Evaluation, error) {
 	f.log.add("benchmark.evaluate", ctx)
+	f.mu.Lock()
+	f.evaluatedTasks = append(f.evaluatedTasks, task)
+	f.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return core.Evaluation{}, err
 	}
@@ -401,19 +409,26 @@ func TestRunnerAppliesSparseOverridesWithoutMutatingBenchmarkTask(t *testing.T) 
 	rig.benchmark.tasks[0].Environment.CPU = 1.5
 	rig.benchmark.tasks[0].Environment.MemoryMB = 512
 	rig.benchmark.tasks[0].Environment.Env = originalEnv
-	cpu, timeout := 2.25, 90*time.Second
-	rig.runner.taskOverrides = TaskOverrides{CPU: &cpu, AgentTimeout: &timeout}
+	harnessCPU, sandboxCPU, sandboxMemory, timeout := 1.25, 2.25, 4096, 90*time.Second
+	rig.runner.runtimeOverrides = RuntimeOverrides{
+		HarnessResources:      ResourceOverrides{CPU: &harnessCPU},
+		AgentSandboxResources: ResourceOverrides{CPU: &sandboxCPU, MemoryMB: &sandboxMemory},
+		AgentTimeout:          &timeout,
+	}
 	if _, err := rig.runner.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	request := rig.factory.requests[0]
 	harness := rig.harness.requests[0]
-	if request.Environment.CPU != cpu || request.Environment.MemoryMB != 512 || harness.CPU == nil || *harness.CPU != cpu || harness.MemoryMB != nil || harness.Timeout != timeout {
+	if request.Environment.CPU != sandboxCPU || request.Environment.MemoryMB != sandboxMemory || harness.CPU == nil || *harness.CPU != harnessCPU || harness.MemoryMB != nil || harness.Timeout != timeout {
 		t.Fatalf("sandbox = %#v, harness = %#v", request, harness)
 	}
 	request.Environment.Env["KEEP"] = "changed"
 	if originalEnv["KEEP"] != "value" || rig.benchmark.tasks[0].Environment.CPU != 1.5 || rig.benchmark.tasks[0].Timeout != 37*time.Minute {
 		t.Fatalf("benchmark task mutated: %#v", rig.benchmark.tasks[0])
+	}
+	if !reflect.DeepEqual(rig.benchmark.preparedTasks, rig.benchmark.tasks) || !reflect.DeepEqual(rig.benchmark.evaluatedTasks, rig.benchmark.tasks) {
+		t.Fatalf("benchmark did not receive original task: prepared=%#v evaluated=%#v", rig.benchmark.preparedTasks, rig.benchmark.evaluatedTasks)
 	}
 }
 
@@ -426,6 +441,93 @@ func TestRunnerWithoutOverridesLeavesHarnessResourcesAbsent(t *testing.T) {
 	}
 	if request := rig.harness.requests[0]; request.CPU != nil || request.MemoryMB != nil {
 		t.Fatalf("harness unexpectedly inherited sandbox resources: %#v", request)
+	}
+}
+
+func TestNewClonesRuntimeOverridePointers(t *testing.T) {
+	rig := newRig(t, 0)
+	cpu, memory, timeout := 1.5, 768, 2*time.Minute
+	overrides := RuntimeOverrides{
+		HarnessResources:      ResourceOverrides{CPU: &cpu},
+		AgentSandboxResources: ResourceOverrides{MemoryMB: &memory},
+		AgentTimeout:          &timeout,
+	}
+	created, err := New(rig.benchmark, rig.harness, rig.factory, rig.bridge, Options{RunID: "clone", RuntimeOverrides: overrides})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cpu, memory, timeout = 9, 999, time.Hour
+	if *created.runtimeOverrides.HarnessResources.CPU != 1.5 || *created.runtimeOverrides.AgentSandboxResources.MemoryMB != 768 || *created.runtimeOverrides.AgentTimeout != 2*time.Minute {
+		t.Fatalf("runtime overrides were not cloned: %#v", created.runtimeOverrides)
+	}
+}
+
+func TestEffectiveRuntimeKeepsResourceSidesIndependent(t *testing.T) {
+	harnessCPU, harnessMemory := 1.25, 1024
+	sandboxCPU, sandboxMemory := 3.5, 6144
+	original := core.Task{Timeout: 5 * time.Minute, Environment: core.Environment{CPU: 2, MemoryMB: 2048, Env: map[string]string{"KEEP": "yes"}}}
+	tests := []struct {
+		name              string
+		overrides         RuntimeOverrides
+		wantSandboxCPU    float64
+		wantSandboxMemory int
+		wantHarnessCPU    bool
+		wantHarnessMemory bool
+	}{
+		{name: "neither", wantSandboxCPU: 2, wantSandboxMemory: 2048},
+		{name: "harness only", overrides: RuntimeOverrides{HarnessResources: ResourceOverrides{CPU: &harnessCPU, MemoryMB: &harnessMemory}}, wantSandboxCPU: 2, wantSandboxMemory: 2048, wantHarnessCPU: true, wantHarnessMemory: true},
+		{name: "sandbox only", overrides: RuntimeOverrides{AgentSandboxResources: ResourceOverrides{CPU: &sandboxCPU, MemoryMB: &sandboxMemory}}, wantSandboxCPU: sandboxCPU, wantSandboxMemory: sandboxMemory},
+		{name: "both different", overrides: RuntimeOverrides{HarnessResources: ResourceOverrides{CPU: &harnessCPU, MemoryMB: &harnessMemory}, AgentSandboxResources: ResourceOverrides{CPU: &sandboxCPU, MemoryMB: &sandboxMemory}}, wantSandboxCPU: sandboxCPU, wantSandboxMemory: sandboxMemory, wantHarnessCPU: true, wantHarnessMemory: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			environment, cpu, memory, timeout := effectiveRuntime(original, test.overrides)
+			if environment.CPU != test.wantSandboxCPU || environment.MemoryMB != test.wantSandboxMemory || (cpu != nil) != test.wantHarnessCPU || (memory != nil) != test.wantHarnessMemory || timeout != original.Timeout {
+				t.Fatalf("environment=%#v cpu=%v memory=%v timeout=%v", environment, cpu, memory, timeout)
+			}
+			if cpu != nil && *cpu != harnessCPU {
+				t.Fatalf("harness CPU = %v", *cpu)
+			}
+			if memory != nil && *memory != harnessMemory {
+				t.Fatalf("harness memory = %v", *memory)
+			}
+			environment.Env["KEEP"] = "changed"
+			if original.Environment.Env["KEEP"] != "yes" {
+				t.Fatal("original environment map mutated")
+			}
+		})
+	}
+}
+
+func TestEffectiveRuntimeResourcePresenceMatrix(t *testing.T) {
+	harnessCPU, harnessMemory := 1.25, 1024
+	sandboxCPU, sandboxMemory := 3.5, 6144
+	original := core.Task{Environment: core.Environment{CPU: 2, MemoryMB: 2048}}
+	for mask := 0; mask < 16; mask++ {
+		overrides := RuntimeOverrides{}
+		if mask&1 != 0 {
+			overrides.HarnessResources.CPU = &harnessCPU
+		}
+		if mask&2 != 0 {
+			overrides.HarnessResources.MemoryMB = &harnessMemory
+		}
+		if mask&4 != 0 {
+			overrides.AgentSandboxResources.CPU = &sandboxCPU
+		}
+		if mask&8 != 0 {
+			overrides.AgentSandboxResources.MemoryMB = &sandboxMemory
+		}
+		environment, cpu, memory, _ := effectiveRuntime(original, overrides)
+		wantSandboxCPU, wantSandboxMemory := original.Environment.CPU, original.Environment.MemoryMB
+		if mask&4 != 0 {
+			wantSandboxCPU = sandboxCPU
+		}
+		if mask&8 != 0 {
+			wantSandboxMemory = sandboxMemory
+		}
+		if environment.CPU != wantSandboxCPU || environment.MemoryMB != wantSandboxMemory || (cpu != nil) != (mask&1 != 0) || (memory != nil) != (mask&2 != 0) {
+			t.Fatalf("mask=%04b environment=%#v cpu=%v memory=%v", mask, environment, cpu, memory)
+		}
 	}
 }
 

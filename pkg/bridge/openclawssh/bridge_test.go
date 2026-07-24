@@ -3,18 +3,20 @@ package openclawssh
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/hyscale-lab/aries/pkg/core"
 	"golang.org/x/crypto/ssh"
@@ -33,7 +35,7 @@ func TestAuditWriterPersistsConcurrentGapFreeCorrelatedRecords(t *testing.T) {
 			payload := []byte{0, byte(i), 0xff}
 			writer.enqueue(toolCallRecord{Status: "completed", RequestType: "exec", WantReply: true}, rawRecord(requestAudit{
 				requestType: "exec", wantReply: true, payload: payload, remoteCommand: "command",
-			}, int64(len(payload)), base64.StdEncoding.EncodeToString(payload), "base64", "completed"))
+			}, int64(len(payload)), payload, "completed"))
 		}()
 	}
 	wait.Wait()
@@ -41,65 +43,117 @@ func TestAuditWriterPersistsConcurrentGapFreeCorrelatedRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	structuredRecords := decodeAuditLines(t, structuredBytes.Bytes())
-	rawRecords := decodeAuditLines(t, rawBytes.Bytes())
+	rawRecords := decodeRawAuditRecords(t, rawBytes.Bytes())
 	if len(structuredRecords) != records || len(rawRecords) != records {
 		t.Fatalf("record counts = %d, %d", len(structuredRecords), len(rawRecords))
 	}
 	for index := range records {
-		want := float64(index + 1)
-		if structuredRecords[index]["sequence"] != want || rawRecords[index]["sequence"] != want {
+		want := index + 1
+		if structuredRecords[index]["sequence"] != float64(want) || rawRecords[index]["sequence"] != strconv.Itoa(want) {
 			t.Fatalf("sequence %d = %#v / %#v", index, structuredRecords[index], rawRecords[index])
 		}
-		payload, err := base64.StdEncoding.DecodeString(rawRecords[index]["payload_base64"].(string))
-		if err != nil {
-			t.Fatal(err)
+		payload := unescapeRawValue(t, rawRecords[index]["payload"])
+		stdin := unescapeRawValue(t, rawRecords[index]["stdin"])
+		if !bytes.Equal(stdin, payload) || len(payload) != 3 {
+			t.Fatalf("raw exact bytes %d = payload %x stdin %x", index, payload, stdin)
 		}
-		stdin, err := base64.StdEncoding.DecodeString(rawRecords[index]["stdin_base64"].(string))
-		if err != nil || !bytes.Equal(stdin, payload) || len(payload) != 3 {
-			t.Fatalf("raw exact bytes %d = payload %x stdin %x err %v", index, payload, stdin, err)
+	}
+}
+
+func TestToolCallJSONLDisablesHTMLEscapingButKeepsRequiredEscapes(t *testing.T) {
+	structured, structuredBytes := memoryAuditFile()
+	raw, _ := memoryAuditFile()
+	writer := newAuditWriter(structured, raw)
+	want := "&& <tag> > é 漢字 \"quote\" \\slash\nline\t\x00"
+	writer.enqueue(toolCallRecord{Command: want, Status: "completed"}, rawSSHRecord{})
+	if err := writer.sealAndWait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	content := structuredBytes.Bytes()
+	for _, literal := range [][]byte{[]byte("&&"), []byte("<tag>"), []byte("é"), []byte("漢字")} {
+		if !bytes.Contains(content, literal) {
+			t.Fatalf("structured JSON lacks literal %q: %s", literal, content)
 		}
-		if rawRecords[index]["stdin_encoding"] != "base64" {
-			t.Fatalf("binary stdin encoding = %#v", rawRecords[index])
+	}
+	for _, forbidden := range [][]byte{[]byte(`\u0026`), []byte(`\u003c`), []byte(`\u003e`)} {
+		if bytes.Contains(bytes.ToLower(content), forbidden) {
+			t.Fatalf("structured JSON retained HTML escape %q: %s", forbidden, content)
 		}
-		if _, ok := rawRecords[index]["stdin"]; ok {
-			t.Fatalf("binary stdin also has UTF-8 duplicate: %#v", rawRecords[index])
-		}
-		assertRawRecordHasOnlyExactWireFields(t, rawRecords[index])
+	}
+	records := decodeAuditLines(t, content)
+	if len(records) != 1 || records[0]["command"] != want {
+		t.Fatalf("structured JSON round trip = %#v", records)
+	}
+}
+
+func TestRawAuditUsesDeterministicLosslessHumanReadableGrammar(t *testing.T) {
+	payload := append(ssh.Marshal(struct{ Command string }{"printf 'é && <tag>'"}), 0, 0xff, '\n', '\t', '\\')
+	stdin := []byte("readable é\n--- ARIES SSH CALL END ---\x00\xff")
+	record := rawRecord(requestAudit{requestType: "exec", wantReply: true, payload: payload, remoteCommand: "printf 'é && <tag>'"}, int64(len(stdin)), stdin, "completed")
+	record.Sequence = 7
+	record.Timestamp = "2026-07-24T12:00:00.000000123Z"
+	record.RunID = "run"
+	record.TaskID = "task"
+	record.ContainerID = "container"
+	content, err := renderRawSSHRecord(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed := decodeRawAuditRecords(t, content)
+	if len(parsed) != 1 || parsed[0]["wire_command"] != "printf 'é && <tag>'" {
+		t.Fatalf("raw records = %#v", parsed)
+	}
+	if !bytes.Equal(unescapeRawValue(t, parsed[0]["payload"]), payload) || !bytes.Equal(unescapeRawValue(t, parsed[0]["stdin"]), stdin) {
+		t.Fatalf("raw round trip failed: %s", content)
+	}
+	if parsed[0]["payload_bytes"] != strconv.Itoa(len(payload)) || parsed[0]["stdin_bytes"] != strconv.Itoa(len(stdin)) || !bytes.Contains(content, []byte(`\xFF`)) {
+		t.Fatalf("raw byte counts or uppercase escapes are wrong: %s", content)
+	}
+	if bytes.Contains(content, []byte("base64")) || bytes.Contains(content, []byte{'\x00'}) || bytes.Count(content, []byte("--- ARIES SSH CALL END ---\n")) != 1 {
+		t.Fatalf("raw grammar is ambiguous or contains control bytes: %q", content)
 	}
 }
 
 func TestAuditWriterDoesNotBlockEnqueueOnSlowStorage(t *testing.T) {
-	blocked := make(chan struct{})
-	release := make(chan struct{})
-	var calls atomic.Int32
-	structured := &auditFile{
-		write: func(content []byte) (int, error) {
-			if calls.Add(1) == 1 {
-				close(blocked)
-				<-release
+	for _, slowFile := range []string{"structured", "raw"} {
+		t.Run(slowFile, func(t *testing.T) {
+			blocked := make(chan struct{})
+			release := make(chan struct{})
+			var calls atomic.Int32
+			slow := &auditFile{
+				write: func(content []byte) (int, error) {
+					if calls.Add(1) == 1 {
+						close(blocked)
+						<-release
+					}
+					return len(content), nil
+				}, sync: func() error { return nil }, close: func() error { return nil },
 			}
-			return len(content), nil
-		}, sync: func() error { return nil }, close: func() error { return nil },
-	}
-	raw, _ := memoryAuditFile()
-	writer := newAuditWriter(structured, raw)
-	writer.enqueue(toolCallRecord{Status: "completed"}, rawSSHRecord{Status: "completed"})
-	<-blocked
-	done := make(chan struct{})
-	go func() {
-		for range 100 {
+			fast, _ := memoryAuditFile()
+			structured, raw := slow, fast
+			if slowFile == "raw" {
+				structured, raw = fast, slow
+			}
+			writer := newAuditWriter(structured, raw)
 			writer.enqueue(toolCallRecord{Status: "completed"}, rawSSHRecord{Status: "completed"})
-		}
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("enqueue blocked on storage")
-	}
-	close(release)
-	if err := writer.sealAndWait(context.Background()); err != nil {
-		t.Fatal(err)
+			<-blocked
+			done := make(chan struct{})
+			go func() {
+				for range 100 {
+					writer.enqueue(toolCallRecord{Status: "completed"}, rawSSHRecord{Status: "completed"})
+				}
+				close(done)
+			}()
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("enqueue blocked on storage")
+			}
+			close(release)
+			if err := writer.sealAndWait(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
@@ -212,15 +266,14 @@ func TestAuditWriterExactCombinedBudgetBoundaryAndImmutableEnqueue(t *testing.T)
 	fixed := time.Date(2026, 7, 24, 12, 0, 0, 123, time.UTC)
 	argv := []string{"/bin/sh", "original"}
 	structuredRecord := toolCallRecord{Status: "completed", Argv: argv}
-	binaryStdin := "AgM="
-	rawRecord := rawSSHRecord{Status: "completed", PayloadBase64: "AAE=", PayloadBytes: 2, StdinBase64: &binaryStdin, StdinEncoding: "base64", StdinBytes: 2}
+	rawRecord := rawSSHRecord{Status: "completed", Payload: []byte{0, 1}, PayloadBytes: 2, Stdin: []byte{2, 3}, StdinBytes: 2}
 	structuredCandidate := structuredRecord
 	rawCandidate := rawRecord
 	structuredCandidate.Sequence, rawCandidate.Sequence = 1, 1
 	structuredCandidate.Timestamp, rawCandidate.Timestamp = fixed.Format(time.RFC3339Nano), fixed.Format(time.RFC3339Nano)
-	structuredLine, _ := json.Marshal(structuredCandidate)
-	rawLine, _ := json.Marshal(rawCandidate)
-	charge := int64(len(structuredLine) + 1 + len(rawLine) + 1)
+	structuredLine, _ := marshalJSONLine(structuredCandidate)
+	rawLine, _ := renderRawSSHRecord(rawCandidate)
+	charge := int64(len(structuredLine) + len(rawLine))
 
 	structured, structuredBytes := memoryAuditFile()
 	raw, rawBytes := memoryAuditFile()
@@ -258,6 +311,15 @@ func TestAuditWriterLatchesMarshalAndEnqueueAfterSeal(t *testing.T) {
 	marshalFailure.enqueue(toolCallRecord{Status: "completed"}, rawSSHRecord{Status: "completed"})
 	if err := marshalFailure.sealAndWait(context.Background()); err == nil || !strings.Contains(err.Error(), "marshal") {
 		t.Fatalf("marshal error = %v", err)
+	}
+
+	structured, _ = memoryAuditFile()
+	raw, _ = memoryAuditFile()
+	renderFailure := newAuditWriter(structured, raw)
+	renderFailure.renderRaw = func(rawSSHRecord) ([]byte, error) { return nil, errors.New("render") }
+	renderFailure.enqueue(toolCallRecord{Status: "completed"}, rawSSHRecord{Status: "completed"})
+	if err := renderFailure.sealAndWait(context.Background()); err == nil || !strings.Contains(err.Error(), "render") {
+		t.Fatalf("render error = %v", err)
 	}
 
 	structured, _ = memoryAuditFile()
@@ -350,16 +412,45 @@ func TestAcceptedReplyFailureRetainsExactRequestEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	structuredRecords := decodeAuditLines(t, structuredBytes.Bytes())
-	rawRecords := decodeAuditLines(t, rawBytes.Bytes())
+	rawRecords := decodeRawAuditRecords(t, rawBytes.Bytes())
 	if len(structuredRecords) != 1 || len(rawRecords) != 1 || structuredRecords[0]["status"] != "failed" || rawRecords[0]["status"] != "failed" {
 		t.Fatalf("reply failure records = %#v / %#v", structuredRecords, rawRecords)
 	}
-	decoded, err := base64.StdEncoding.DecodeString(rawRecords[0]["payload_base64"].(string))
-	if err != nil || !bytes.Equal(decoded, payload) {
-		t.Fatalf("reply failure payload = %x, %v", decoded, err)
+	decoded := unescapeRawValue(t, rawRecords[0]["payload"])
+	if !bytes.Equal(decoded, payload) {
+		t.Fatalf("reply failure payload = %x", decoded)
 	}
 	if len(sandbox.snapshot()) != 0 {
 		t.Fatal("reply failure executed sandbox command")
+	}
+}
+
+func TestRawAuditRetainsMalformedRequestPayloadWithEmptyWireCommand(t *testing.T) {
+	structured, structuredBytes := memoryAuditFile()
+	raw, rawBytes := memoryAuditFile()
+	sandbox := &contractSandbox{}
+	session := &bridgeSession{
+		sandbox: sandbox, audit: newAuditWriter(structured, raw),
+		replyRequest: func(*ssh.Request, bool) error { return nil },
+	}
+	payload := []byte{0, 0, 0, 7, 'b', 'a', 'd', 0xff}
+	requests := make(chan *ssh.Request, 1)
+	requests <- &ssh.Request{Type: "exec", WantReply: true, Payload: payload}
+	close(requests)
+	session.handleSession(context.Background(), &stubSSHChannel{}, requests)
+	if err := session.closeAudit(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	structuredRecords := decodeAuditLines(t, structuredBytes.Bytes())
+	rawRecords := decodeRawAuditRecords(t, rawBytes.Bytes())
+	if len(structuredRecords) != 1 || structuredRecords[0]["status"] != "rejected" || len(rawRecords) != 1 {
+		t.Fatalf("malformed records = %#v / %#v", structuredRecords, rawRecords)
+	}
+	if rawRecords[0]["wire_command"] != "" || !bytes.Equal(unescapeRawValue(t, rawRecords[0]["payload"]), payload) {
+		t.Fatalf("malformed raw evidence = %#v", rawRecords[0])
+	}
+	if len(sandbox.snapshot()) != 0 {
+		t.Fatal("malformed SSH payload executed sandbox command")
 	}
 }
 
@@ -393,6 +484,83 @@ func decodeAuditLines(t *testing.T, content []byte) []map[string]any {
 		records = append(records, record)
 	}
 	return records
+}
+
+func decodeRawAuditRecords(t *testing.T, content []byte) []map[string]string {
+	t.Helper()
+	const begin = "--- ARIES SSH CALL BEGIN ---\n"
+	const end = "--- ARIES SSH CALL END ---\n"
+	fields := []string{"sequence", "timestamp", "request_type", "want_reply", "status", "run_id", "task_id", "container_id", "wire_command", "payload_bytes", "payload", "stdin_bytes", "stdin"}
+	var records []map[string]string
+	for len(content) > 0 {
+		if !bytes.HasPrefix(content, []byte(begin)) {
+			t.Fatalf("raw audit missing begin delimiter: %q", content)
+		}
+		content = content[len(begin):]
+		record := make(map[string]string, len(fields))
+		for _, field := range fields {
+			newline := bytes.IndexByte(content, '\n')
+			if newline < 0 {
+				t.Fatalf("raw audit missing %s line ending: %q", field, content)
+			}
+			line := string(content[:newline])
+			prefix := field + "="
+			if !strings.HasPrefix(line, prefix) {
+				t.Fatalf("raw audit field order: got %q want prefix %q", line, prefix)
+			}
+			record[field] = strings.TrimPrefix(line, prefix)
+			content = content[newline+1:]
+		}
+		if !bytes.HasPrefix(content, []byte(end)) {
+			t.Fatalf("raw audit missing end delimiter: %q", content)
+		}
+		content = content[len(end):]
+		records = append(records, record)
+	}
+	return records
+}
+
+func unescapeRawValue(t *testing.T, value string) []byte {
+	t.Helper()
+	var output []byte
+	for index := 0; index < len(value); {
+		if value[index] != '\\' {
+			_, size := utf8.DecodeRuneInString(value[index:])
+			output = append(output, value[index:index+size]...)
+			index += size
+			continue
+		}
+		if index+1 >= len(value) {
+			t.Fatalf("dangling raw escape in %q", value)
+		}
+		switch value[index+1] {
+		case '\\':
+			output = append(output, '\\')
+			index += 2
+		case 'n':
+			output = append(output, '\n')
+			index += 2
+		case 'r':
+			output = append(output, '\r')
+			index += 2
+		case 't':
+			output = append(output, '\t')
+			index += 2
+		case 'x':
+			if index+4 > len(value) {
+				t.Fatalf("short raw hex escape in %q", value)
+			}
+			decoded, err := hex.DecodeString(value[index+2 : index+4])
+			if err != nil {
+				t.Fatalf("invalid raw hex escape in %q: %v", value, err)
+			}
+			output = append(output, decoded[0])
+			index += 4
+		default:
+			t.Fatalf("unknown raw escape in %q", value)
+		}
+	}
+	return output
 }
 
 func TestManagerPreparesPinnedWorkspaceAndRollsItBackAfterPartialStart(t *testing.T) {
@@ -810,8 +978,8 @@ func TestRecordedInputUsesLosslessEncoding(t *testing.T) {
 			if _, err := io.Copy(io.Discard, input); err != nil {
 				t.Fatal(err)
 			}
-			count, content, encoding, overflow := input.record()
-			if count != int64(len(test.content)) || content != test.want || encoding != test.encoding || overflow {
+			count, content, encoding, raw, overflow := input.record()
+			if count != int64(len(test.content)) || content != test.want || encoding != test.encoding || !bytes.Equal(raw, test.content) || overflow {
 				t.Fatalf("record = %d %q %q", count, content, encoding)
 			}
 		})
@@ -821,8 +989,8 @@ func TestRecordedInputUsesLosslessEncoding(t *testing.T) {
 		if _, err := io.Copy(io.Discard, input); err == nil || !strings.Contains(err.Error(), "stdin exceeds") {
 			t.Fatalf("oversized stdin error = %v", err)
 		}
-		count, content, encoding, overflow := input.record()
-		if count <= maxRecordedInputBytes || content != "" || encoding != "utf-8" || !overflow {
+		count, content, encoding, raw, overflow := input.record()
+		if count <= maxRecordedInputBytes || content != "" || encoding != "utf-8" || len(raw) != 0 || !overflow {
 			t.Fatalf("bounded record = count %d content %d encoding %q", count, len(content), encoding)
 		}
 	})
@@ -841,14 +1009,14 @@ func TestRecordedInputSnapshotsCountAndContentTogether(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			count, content, encoding, overflow := input.record()
-			if encoding != "utf-8" || count != int64(len(content)) || overflow {
+			count, content, encoding, raw, overflow := input.record()
+			if encoding != "utf-8" || count != int64(len(content)) || !bytes.Equal(raw, []byte(content)) || overflow {
 				t.Fatalf("final snapshot = count %d content %d encoding %q", count, len(content), encoding)
 			}
 			return
 		default:
-			count, content, encoding, overflow := input.record()
-			if encoding != "utf-8" || count != int64(len(content)) || overflow {
+			count, content, encoding, raw, overflow := input.record()
+			if encoding != "utf-8" || count != int64(len(content)) || !bytes.Equal(raw, []byte(content)) || overflow {
 				t.Fatalf("inconsistent snapshot = count %d content %d encoding %q", count, len(content), encoding)
 			}
 		}

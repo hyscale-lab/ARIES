@@ -28,14 +28,12 @@ const (
 	verifierLogPath = "/logs/verifier"
 )
 
-// Options selects tasks from one pinned Terminal-Bench 2 checkout. Images maps
-// each task.toml source image to the immutable image used for execution.
+// Options selects tasks from one pinned Terminal-Bench 2 checkout.
 type Options struct {
 	Root      string
 	TaskIDs   []string
 	OutputDir string
 	Revision  string
-	Images    map[string]string
 }
 
 // Benchmark discovers selected Terminal-Bench tasks and retains their private
@@ -45,7 +43,6 @@ type Benchmark struct {
 	taskIDs   []string
 	outputDir string
 	revision  string
-	images    map[string]string
 
 	mu      sync.RWMutex
 	details map[string]taskDetails
@@ -127,20 +124,11 @@ func New(options Options) (*Benchmark, error) {
 		seen[id] = struct{}{}
 	}
 
-	images := make(map[string]string, len(options.Images))
-	for source, pin := range options.Images {
-		if err := validateImagePin(source, pin); err != nil {
-			return nil, err
-		}
-		images[source] = pin
-	}
-
 	return &Benchmark{
 		root:      filepath.Clean(options.Root),
 		taskIDs:   slices.Clone(options.TaskIDs),
 		outputDir: filepath.Clean(options.OutputDir),
 		revision:  options.Revision,
-		images:    images,
 		details:   make(map[string]taskDetails, len(options.TaskIDs)),
 	}, nil
 }
@@ -156,7 +144,7 @@ func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		task, private, err := loadTask(b.root, id, b.images)
+		task, private, err := loadTask(b.root, id)
 		if err != nil {
 			return nil, fmt.Errorf("load terminalbench task %q: %w", id, err)
 		}
@@ -202,7 +190,7 @@ func (b *Benchmark) PrepareSandbox(ctx context.Context, task core.Task, sandbox 
 	return nil
 }
 
-func loadTask(root, id string, images map[string]string) (core.Task, taskDetails, error) {
+func loadTask(root, id string) (core.Task, taskDetails, error) {
 	taskDir := filepath.Join(root, id)
 	info, err := os.Stat(taskDir)
 	if err != nil {
@@ -220,7 +208,7 @@ func loadTask(root, id string, images map[string]string) (core.Task, taskDetails
 	if err := rejectUnknownExecutionFields(meta); err != nil {
 		return core.Task{}, taskDetails{}, err
 	}
-	image, err := validateTaskFile(id, parsed, images)
+	image, err := validateTaskFile(id, parsed)
 	if err != nil {
 		return core.Task{}, taskDetails{}, err
 	}
@@ -290,7 +278,7 @@ func rejectUnknownExecutionFields(meta toml.MetaData) error {
 	return nil
 }
 
-func validateTaskFile(id string, parsed taskFile, images map[string]string) (string, error) {
+func validateTaskFile(id string, parsed taskFile) (string, error) {
 	if parsed.SchemaVersion != "1.1" {
 		return "", fmt.Errorf("unsupported task schema_version %q; want %q", parsed.SchemaVersion, "1.1")
 	}
@@ -325,32 +313,11 @@ func validateTaskFile(id string, parsed taskFile, images map[string]string) (str
 		return "", err
 	}
 
-	source := strings.TrimSpace(parsed.Environment.DockerImage)
-	if source == "" {
-		return "", errors.New("environment.docker_image is required")
-	}
-	pin, ok := images[source]
-	if !ok {
-		return "", fmt.Errorf("no immutable image pin configured for %q", source)
-	}
-	if err := validateImagePin(source, pin); err != nil {
-		return "", err
-	}
-	return pin, nil
-}
-
-func validateImagePin(source, pin string) error {
-	if strings.TrimSpace(source) == "" {
-		return errors.New("terminalbench image source is required")
-	}
-	tagged, err := containerimage.TaggedSource(pin)
+	image, err := containerimage.ValidateTagOnly(parsed.Environment.DockerImage)
 	if err != nil {
-		return fmt.Errorf("terminalbench image pin for %q: %w", source, err)
+		return "", fmt.Errorf("environment.docker_image: %w", err)
 	}
-	if tagged != source {
-		return fmt.Errorf("terminalbench image pin %q has source %q; want %q", pin, tagged, source)
-	}
-	return nil
+	return image, nil
 }
 
 func captureVerifierTree(root string) ([]verifierFile, error) {

@@ -145,7 +145,7 @@ func buildExperiment(
 	case "terminalbench2":
 		benchmark, err = terminalbench.New(terminalbench.Options{
 			Root: cfg.Benchmark.Root, TaskIDs: cfg.Benchmark.Tasks, OutputDir: outputRoot,
-			Revision: cfg.Versions.TerminalBench2.Revision, Images: cfg.Versions.TerminalBench2.Images,
+			Revision: cfg.Versions.TerminalBench2.Revision,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("construct terminalbench2 benchmark: %w", err)
@@ -202,9 +202,10 @@ func buildExperiment(
 		Name: cfg.Name, RunID: runID, OutputDir: outputRoot,
 		Model:  core.ModelConfig{BaseURL: cfg.Model.BaseURL, Model: cfg.Model.Model, APIKeyEnv: cfg.Model.APIKeyEnv},
 		Logger: logger,
-		TaskOverrides: runner.TaskOverrides{
-			CPU: cfg.Overrides.Task.CPU, MemoryMB: cfg.Overrides.Task.MemoryMB,
-			AgentTimeout: cfg.Overrides.Task.AgentTimeout,
+		RuntimeOverrides: runner.RuntimeOverrides{
+			HarnessResources:      runner.ResourceOverrides{CPU: cfg.Overrides.HarnessResources.CPU, MemoryMB: cfg.Overrides.HarnessResources.MemoryMB},
+			AgentSandboxResources: runner.ResourceOverrides{CPU: cfg.Overrides.AgentSandboxResources.CPU, MemoryMB: cfg.Overrides.AgentSandboxResources.MemoryMB},
+			AgentTimeout:          cfg.Overrides.AgentTimeout,
 		},
 	})
 	if err != nil {
@@ -343,7 +344,7 @@ func prepareProfile(ctx context.Context, cfg config.Config) error {
 
 	benchmark, err := terminalbench.New(terminalbench.Options{
 		Root: cfg.Benchmark.Root, TaskIDs: cfg.Benchmark.Tasks, OutputDir: cfg.OutputDir,
-		Revision: cfg.Versions.TerminalBench2.Revision, Images: cfg.Versions.TerminalBench2.Images,
+		Revision: cfg.Versions.TerminalBench2.Revision,
 	})
 	if err != nil {
 		return fmt.Errorf("validate terminalbench2 profile: %w", err)

@@ -1,6 +1,7 @@
 {
   "name": "openclaw-tb2-fix-git-deepseek",
   "versions_file": "../configs/versions.json",
+  "overrides_file": "",
   "benchmark": {
     "type": "terminalbench2",
     "root": ".cache/terminal-bench-2",

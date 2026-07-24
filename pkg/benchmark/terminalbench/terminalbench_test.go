@@ -96,7 +96,7 @@ func TestCheckedDurationSecondsUsesScaledResultBound(t *testing.T) {
 			end := strings.IndexByte(string(content)[start:], '\n')
 			replaced := string(content[:start]) + fmt.Sprintf("%g", threshold) + string(content[start+end:])
 			writeFile(t, file, replaced)
-			if _, _, err := loadTask(root, arbitraryTaskID, imagePins(arbitraryImage, arbitraryImagePin)); err == nil || !strings.Contains(err.Error(), field+".timeout_sec") {
+			if _, _, err := loadTask(root, arbitraryTaskID); err == nil || !strings.Contains(err.Error(), field+".timeout_sec") {
 				t.Fatalf("loadTask error = %v", err)
 			}
 		})
@@ -107,7 +107,6 @@ const (
 	fixGitID           = "fix-git"
 	fixGitWorkdir      = "/app/personal-site"
 	fixtureImageSource = "example.invalid/fix-git:fixture"
-	fixtureImagePin    = fixtureImageSource + "@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	fixtureRevision    = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 )
 
@@ -160,7 +159,6 @@ const (
 	arbitraryTaskID      = "arbitrary-task"
 	arbitraryTaskName    = "terminal-bench/arbitrary-task"
 	arbitraryImage       = "example.invalid/arbitrary-task:fixture"
-	arbitraryImagePin    = arbitraryImage + "@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 	arbitraryWorkdir     = "/workspace/arbitrary"
 	arbitraryInstruction = "Complete this arbitrary pinned Terminal-Bench task without seeing its verifier.\n"
 )
@@ -168,14 +166,14 @@ const (
 func testOptions(root string, taskIDs []string, outputDir string) Options {
 	return Options{
 		Root: root, TaskIDs: taskIDs, OutputDir: outputDir,
-		Revision: fixtureGitRevision(root), Images: imagePins(fixtureImageSource, fixtureImagePin),
+		Revision: fixtureGitRevision(root),
 	}
 }
 
 func TestLoadFixGitMapsGenericTaskAndKeepsVerifierPrivate(t *testing.T) {
 	root := writeFixture(t)
 
-	task, details, err := loadTask(root, fixGitID, imagePins(fixtureImageSource, fixtureImagePin))
+	task, details, err := loadTask(root, fixGitID)
 	if err != nil {
 		t.Fatalf("loadTask() error = %v", err)
 	}
@@ -183,7 +181,7 @@ func TestLoadFixGitMapsGenericTaskAndKeepsVerifierPrivate(t *testing.T) {
 		t.Fatalf("task identity/instruction = %#v", task)
 	}
 	wantEnvironment := core.Environment{
-		Image:        fixtureImagePin,
+		Image:        fixtureImageSource,
 		Workdir:      fixGitWorkdir,
 		CPU:          1,
 		MemoryMB:     2048,
@@ -221,7 +219,7 @@ func TestLoadFixGitMapsGenericTaskAndKeepsVerifierPrivate(t *testing.T) {
 func TestLoadArbitraryTaskMapsGenericFieldsWithoutTaskSpecificRules(t *testing.T) {
 	root := writeArbitraryFixture(t)
 
-	task, details, err := loadTask(root, arbitraryTaskID, imagePins(arbitraryImage, arbitraryImagePin))
+	task, details, err := loadTask(root, arbitraryTaskID)
 	if err != nil {
 		t.Fatalf("loadTask() error = %v", err)
 	}
@@ -229,7 +227,7 @@ func TestLoadArbitraryTaskMapsGenericFieldsWithoutTaskSpecificRules(t *testing.T
 		t.Fatalf("task identity/instruction = %#v", task)
 	}
 	wantEnvironment := core.Environment{
-		Image:        arbitraryImagePin,
+		Image:        arbitraryImage,
 		Workdir:      arbitraryWorkdir,
 		CPU:          2,
 		MemoryMB:     4096,
@@ -248,7 +246,7 @@ func TestLoadArbitraryTaskMapsGenericFieldsWithoutTaskSpecificRules(t *testing.T
 
 func TestRecursiveVerifierTreeStaysPrivateUntilEvaluate(t *testing.T) {
 	root := writeArbitraryFixture(t)
-	task, details, err := loadTask(root, arbitraryTaskID, imagePins(arbitraryImage, arbitraryImagePin))
+	task, details, err := loadTask(root, arbitraryTaskID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +313,7 @@ func TestTaskParserIgnoresUnknownMetadataButRejectsUnknownEnvironmentField(t *te
 		if err := os.WriteFile(path, content, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := loadTask(root, arbitraryTaskID, imagePins(arbitraryImage, arbitraryImagePin)); err != nil {
+		if _, _, err := loadTask(root, arbitraryTaskID); err != nil {
 			t.Fatalf("harmless metadata extension was rejected: %v", err)
 		}
 	})
@@ -331,21 +329,71 @@ func TestTaskParserIgnoresUnknownMetadataButRejectsUnknownEnvironmentField(t *te
 		if err := os.WriteFile(path, content, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		_, _, err = loadTask(root, arbitraryTaskID, imagePins(arbitraryImage, arbitraryImagePin))
+		_, _, err = loadTask(root, arbitraryTaskID)
 		if err == nil || !strings.Contains(err.Error(), "environment.privileged") {
 			t.Fatalf("loadTask() error = %v, want unsupported environment.privileged", err)
 		}
 	})
 }
 
-func TestLoadTaskRejectsMissingOrMismatchedImagePin(t *testing.T) {
-	root := writeArbitraryFixture(t)
-	if _, _, err := loadTask(root, arbitraryTaskID, nil); err == nil || !strings.Contains(err.Error(), "no immutable image pin") {
-		t.Fatalf("missing image pin error = %v", err)
+func TestLoadTaskRequiresExplicitTagOnlyImage(t *testing.T) {
+	for _, image := range []string{"", "example.invalid/arbitrary-task", arbitraryImage + "@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "not a valid image"} {
+		t.Run(image, func(t *testing.T) {
+			root := writeArbitraryFixture(t)
+			file := filepath.Join(root, arbitraryTaskID, "task.toml")
+			content, err := os.ReadFile(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, file, strings.Replace(string(content), `docker_image = "`+arbitraryImage+`"`, `docker_image = "`+image+`"`, 1))
+			if _, _, err := loadTask(root, arbitraryTaskID); err == nil || !strings.Contains(err.Error(), "environment.docker_image") {
+				t.Fatalf("loadTask() error = %v", err)
+			}
+		})
 	}
-	wrongPin := "example.invalid/other:fixture@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-	if _, _, err := loadTask(root, arbitraryTaskID, imagePins(arbitraryImage, wrongPin)); err == nil || !strings.Contains(err.Error(), "want \""+arbitraryImage+"\"") {
-		t.Fatalf("mismatched image pin error = %v", err)
+}
+
+func TestLoadTaskTrimsButDoesNotNormalizeTaggedImage(t *testing.T) {
+	root := writeArbitraryFixture(t)
+	file := filepath.Join(root, arbitraryTaskID, "task.toml")
+	content, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const exact = "docker.io/example/org/task:Fixture_1"
+	writeFile(t, file, strings.Replace(string(content), `docker_image = "`+arbitraryImage+`"`, `docker_image = "  `+exact+`  "`, 1))
+	task, _, err := loadTask(root, arbitraryTaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Environment.Image != exact {
+		t.Fatalf("image = %q, want exact trimmed %q", task.Environment.Image, exact)
+	}
+}
+
+func TestLoadTaskReportsMissingDirectoryAndMalformedTOML(t *testing.T) {
+	root := t.TempDir()
+	if _, _, err := loadTask(root, "missing"); err == nil || !strings.Contains(err.Error(), "open task directory") {
+		t.Fatalf("missing task error = %v", err)
+	}
+	taskDir := filepath.Join(root, arbitraryTaskID)
+	writeFile(t, filepath.Join(taskDir, "task.toml"), "[environment\n")
+	if _, _, err := loadTask(root, arbitraryTaskID); err == nil || !strings.Contains(err.Error(), "parse task.toml") {
+		t.Fatalf("malformed task error = %v", err)
+	}
+}
+
+func TestTasksScopesTaskLoadFailureWithTaskID(t *testing.T) {
+	root := writeFixture(t)
+	writeFile(t, filepath.Join(root, fixGitID, "task.toml"), "[environment\n")
+	commitFixture(t, root)
+	benchmark, err := New(testOptions(root, []string{fixGitID}, t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = benchmark.Tasks(context.Background())
+	if err == nil || !strings.Contains(err.Error(), `load terminalbench task "fix-git"`) || !strings.Contains(err.Error(), "parse task.toml") {
+		t.Fatalf("Tasks() error = %v", err)
 	}
 }
 
@@ -371,7 +419,7 @@ func TestLoadTaskRejectsInvalidExecutionValues(t *testing.T) {
 				t.Fatal(err)
 			}
 			writeFile(t, filePath, strings.Replace(string(content), test.oldValue, test.newValue, 1))
-			_, _, err = loadTask(root, arbitraryTaskID, imagePins(arbitraryImage, arbitraryImagePin))
+			_, _, err = loadTask(root, arbitraryTaskID)
 			if err == nil || !strings.Contains(err.Error(), test.wantMessage) {
 				t.Fatalf("loadTask() error = %v, want %q", err, test.wantMessage)
 			}
@@ -384,7 +432,7 @@ func TestLoadFixGitRejectsUnsupportedExecutionCriticalField(t *testing.T) {
 	path := filepath.Join(root, fixGitID, "task.toml")
 	writeFile(t, path, fixtureTaskTOML+"\n[environment.extra]\nprivileged = true\n")
 
-	_, _, err := loadTask(root, fixGitID, imagePins(fixtureImageSource, fixtureImagePin))
+	_, _, err := loadTask(root, fixGitID)
 	if err == nil || !strings.Contains(err.Error(), "unsupported field") || !strings.Contains(err.Error(), "environment.extra") {
 		t.Fatalf("loadTask() error = %v, want unsupported environment.extra", err)
 	}
@@ -396,7 +444,7 @@ func TestLoadFixGitRejectsUnsupportedCriticalValue(t *testing.T) {
 	content := strings.Replace(fixtureTaskTOML, "mcp_servers = []", `mcp_servers = ["server"]`, 1)
 	writeFile(t, path, content)
 
-	_, _, err := loadTask(root, fixGitID, imagePins(fixtureImageSource, fixtureImagePin))
+	_, _, err := loadTask(root, fixGitID)
 	if err == nil || !strings.Contains(err.Error(), "mcp_servers") {
 		t.Fatalf("loadTask() error = %v, want unsupported mcp_servers", err)
 	}
@@ -419,7 +467,7 @@ func TestLoadFixGitMissingFiles(t *testing.T) {
 			if err := os.Remove(filepath.Join(root, fixGitID, test.path)); err != nil {
 				t.Fatal(err)
 			}
-			_, _, err := loadTask(root, fixGitID, imagePins(fixtureImageSource, fixtureImagePin))
+			_, _, err := loadTask(root, fixGitID)
 			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
 				t.Fatalf("loadTask() error = %v, want %q", err, test.wantErr)
 			}
@@ -449,7 +497,7 @@ func TestNewRejectsUnsafeAndDuplicateTasks(t *testing.T) {
 
 func TestEvaluateInjectsTestsOnlyWhenCalledAndRetainsArtifacts(t *testing.T) {
 	root := writeFixture(t)
-	task, details, err := loadTask(root, fixGitID, imagePins(fixtureImageSource, fixtureImagePin))
+	task, details, err := loadTask(root, fixGitID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -536,7 +584,7 @@ func TestEvaluateRewardStates(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			root := writeFixture(t)
-			task, details, err := loadTask(root, fixGitID, imagePins(fixtureImageSource, fixtureImagePin))
+			task, details, err := loadTask(root, fixGitID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -567,7 +615,7 @@ func TestEvaluateRewardStates(t *testing.T) {
 
 func TestEvaluateAcceptsLegitimateRewardZeroFailedReport(t *testing.T) {
 	root := writeFixture(t)
-	task, details, err := loadTask(root, fixGitID, imagePins(fixtureImageSource, fixtureImagePin))
+	task, details, err := loadTask(root, fixGitID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -593,7 +641,7 @@ func TestEvaluateAcceptsLegitimateRewardZeroFailedReport(t *testing.T) {
 func TestEvaluateDoesNotAcceptRewardOneWithoutValidCTRF(t *testing.T) {
 	for _, report := range []string{`{"results":{}}`, validRewardZeroCTRF} {
 		root := writeFixture(t)
-		task, details, err := loadTask(root, fixGitID, imagePins(fixtureImageSource, fixtureImagePin))
+		task, details, err := loadTask(root, fixGitID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -619,7 +667,7 @@ func TestEvaluateDoesNotAcceptRewardOneWithoutValidCTRF(t *testing.T) {
 
 func TestEvaluateRejectsNonzeroVerifierCommand(t *testing.T) {
 	root := writeFixture(t)
-	task, details, err := loadTask(root, fixGitID, imagePins(fixtureImageSource, fixtureImagePin))
+	task, details, err := loadTask(root, fixGitID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -676,7 +724,7 @@ func TestEvaluateRejectsChangedVerifierFiles(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			root := writeFixture(t)
-			task, details, err := loadTask(root, fixGitID, imagePins(fixtureImageSource, fixtureImagePin))
+			task, details, err := loadTask(root, fixGitID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -701,7 +749,7 @@ func TestEvaluateRejectsChangedVerifierFiles(t *testing.T) {
 
 func TestEvaluateDoesNotAcceptStaleSandboxOrHostReward(t *testing.T) {
 	root := writeFixture(t)
-	task, details, err := loadTask(root, fixGitID, imagePins(fixtureImageSource, fixtureImagePin))
+	task, details, err := loadTask(root, fixGitID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -845,10 +893,6 @@ func fixtureGitRevision(root string) string {
 		return fixtureRevision
 	}
 	return strings.TrimSpace(string(output))
-}
-
-func imagePins(source, pin string) map[string]string {
-	return map[string]string{source: pin}
 }
 
 func writeFile(t *testing.T, path, content string) {

@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -18,17 +19,19 @@ func TestLoadRuntimeOverridesStrictSparseAndChecked(t *testing.T) {
 		}
 		return path
 	}
-	valid := write("valid.json", `{"task":{"cpu":2.5,"memory_mb":4096,"agent_timeout_seconds":12.5}}`)
+	valid := write("valid.json", `{"harness_resources":{"cpu":1.25,"memory_mb":1024},"agent_sandbox_resources":{"cpu":2.5,"memory_mb":4096},"agent_timeout_seconds":12.5}`)
 	overrides, err := LoadRuntimeOverrides(valid)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if overrides.Task.CPU == nil || *overrides.Task.CPU != 2.5 || overrides.Task.MemoryMB == nil || *overrides.Task.MemoryMB != 4096 || overrides.Task.AgentTimeout == nil || *overrides.Task.AgentTimeout != 12500_000_000 {
+	if overrides.HarnessResources.CPU == nil || *overrides.HarnessResources.CPU != 1.25 || overrides.AgentSandboxResources.CPU == nil || *overrides.AgentSandboxResources.CPU != 2.5 || overrides.AgentSandboxResources.MemoryMB == nil || *overrides.AgentSandboxResources.MemoryMB != 4096 || overrides.AgentTimeout == nil || *overrides.AgentTimeout != 12500_000_000 {
 		t.Fatalf("overrides = %#v", overrides)
 	}
 	for name, content := range map[string]string{
-		"unknown": `{"task":{"future":1}}`, "trailing": `{} {}`, "zero-cpu": `{"task":{"cpu":0}}`,
-		"large-memory": `{"task":{"memory_mb":8796093022208}}`, "zero-timeout": `{"task":{"agent_timeout_seconds":0}}`,
+		"unknown-top-level": `{"future":1}`, "unknown-nested": `{"harness_resources":{"future":1}}`, "trailing": `{} {}`, "zero-cpu": `{"agent_sandbox_resources":{"cpu":0}}`,
+		"large-memory": `{"harness_resources":{"memory_mb":8796093022208}}`, "zero-timeout": `{"agent_timeout_seconds":0}`,
+		"cpu-overflow": `{"harness_resources":{"cpu":1e999}}`, "timeout-overflow": `{"agent_timeout_seconds":1e999}`,
+		"cpu-nan": `{"harness_resources":{"cpu":NaN}}`, "cpu-infinity": `{"harness_resources":{"cpu":Infinity}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := LoadRuntimeOverrides(write(name+".json", content)); err == nil {
@@ -38,7 +41,7 @@ func TestLoadRuntimeOverridesStrictSparseAndChecked(t *testing.T) {
 	}
 	threshold := math.Exp2(63) / 1e9
 	for _, cpu := range []float64{threshold, math.Nextafter(threshold, math.Inf(1))} {
-		path := write("cpu-threshold.json", fmt.Sprintf(`{"task":{"cpu":%g}}`, cpu))
+		path := write("cpu-threshold.json", fmt.Sprintf(`{"agent_sandbox_resources":{"cpu":%g}}`, cpu))
 		if _, err := LoadRuntimeOverrides(path); err == nil {
 			t.Fatalf("accepted CPU %g", cpu)
 		}
@@ -47,10 +50,63 @@ func TestLoadRuntimeOverridesStrictSparseAndChecked(t *testing.T) {
 	if below*1e9 >= math.Exp2(63) {
 		t.Fatal("test threshold premise failed")
 	}
-	if _, err := LoadRuntimeOverrides(write("cpu-below.json", fmt.Sprintf(`{"task":{"cpu":%g}}`, below))); err != nil {
+	if _, err := LoadRuntimeOverrides(write("cpu-below.json", fmt.Sprintf(`{"agent_sandbox_resources":{"cpu":%g}}`, below))); err != nil {
 		t.Fatal(err)
 	}
 }
+
+func TestLoadNonemptyOverridesFileFailuresIncludeReferencedPath(t *testing.T) {
+	tests := []struct {
+		name       string
+		reference  string
+		content    *string
+		wantDetail string
+	}{
+		{name: "missing", reference: "../configs/missing.json", wantDetail: "open runtime overrides"},
+		{name: "whitespace nonempty", reference: "   ", wantDetail: "open runtime overrides"},
+		{name: "malformed", reference: "../configs/malformed.json", content: stringPointer(`{"harness_resources":`), wantDetail: "decode runtime overrides"},
+		{name: "semantic", reference: "../configs/invalid.json", content: stringPointer(`{"agent_sandbox_resources":{"cpu":0}}`), wantDetail: "agent_sandbox_resources.cpu"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			profiles := filepath.Join(root, "profiles")
+			configs := filepath.Join(root, "configs")
+			if err := os.MkdirAll(profiles, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(configs, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			profile := strings.Replace(validConfig, `"versions_file": "../configs/versions.json",`, `"versions_file": "../configs/versions.json", "overrides_file": `+fmt.Sprintf("%q", test.reference)+`,`, 1)
+			profilePath := filepath.Join(profiles, "experiment.json")
+			if err := os.WriteFile(profilePath, []byte(profile), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(configs, "versions.json"), []byte(validVersions), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			resolved := test.reference
+			if !filepath.IsAbs(resolved) {
+				resolved = filepath.Join(profiles, resolved)
+			}
+			if test.content != nil {
+				if err := os.MkdirAll(filepath.Dir(resolved), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(resolved, []byte(*test.content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err := Load(profilePath)
+			if err == nil || !strings.Contains(err.Error(), test.wantDetail) || !strings.Contains(err.Error(), resolved) {
+				t.Fatalf("Load() error = %v, want detail %q and path %q", err, test.wantDetail, resolved)
+			}
+		})
+	}
+}
+
+func stringPointer(value string) *string { return &value }
 
 const validConfig = `{
   "name": "test-run",
@@ -65,10 +121,7 @@ const validConfig = `{
 const validVersions = `{
   "terminalbench2": {
     "repository_url": "https://example.invalid/terminal-bench-2.git",
-    "revision": "0123456789abcdef0123456789abcdef01234567",
-	"images": {
-	  "example.invalid/fix-git:fixture": "example.invalid/fix-git:fixture@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	}
+	"revision": "0123456789abcdef0123456789abcdef01234567"
   },
   "openclaw": {
 	"image": "example.invalid/openclaw:1.2.3@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -111,8 +164,34 @@ func TestLoadResolvesAndStrictlyLoadsVersionPins(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.Versions.TerminalBench2.Revision != "0123456789abcdef0123456789abcdef01234567" ||
-		len(cfg.Versions.TerminalBench2.Images) != 1 || cfg.Versions.OpenClaw.Image == "" {
+		cfg.Versions.OpenClaw.Image == "" {
 		t.Fatalf("version pins = %#v", cfg.Versions)
+	}
+}
+
+func TestLoadEmptyOverridesFileDisablesOverrides(t *testing.T) {
+	root := t.TempDir()
+	profiles := filepath.Join(root, "profiles")
+	configs := filepath.Join(root, "configs")
+	if err := os.MkdirAll(profiles, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(configs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	profile := strings.Replace(validConfig, `"versions_file": "../configs/versions.json",`, `"versions_file": "../configs/versions.json", "overrides_file": "",`, 1)
+	if err := os.WriteFile(filepath.Join(profiles, "experiment.json"), []byte(profile), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configs, "versions.json"), []byte(validVersions), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(filepath.Join(profiles, "experiment.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OverridesFile != "" || !reflect.DeepEqual(cfg.Overrides, RuntimeOverrides{}) {
+		t.Fatalf("overrides = %#v", cfg.Overrides)
 	}
 }
 
@@ -122,7 +201,7 @@ func TestCheckedInDeepSeekProfileLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Name != "openclaw-tb2-fix-git-deepseek" || len(cfg.Versions.TerminalBench2.Images) != 89 || cfg.Versions.OpenClaw.Image == "" {
+	if cfg.Name != "openclaw-tb2-fix-git-deepseek" || cfg.OverridesFile != "" || cfg.Versions.OpenClaw.Image == "" {
 		t.Fatalf("checked-in profile = %#v", cfg)
 	}
 }
@@ -134,7 +213,7 @@ func TestCheckedInFiveTaskProfileLoadsInOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{"fix-git", "prove-plus-comm", "overfull-hbox", "rstan-to-pystan", "schemelike-metacircular-eval"}
-	if strings.Join(cfg.Benchmark.Tasks, ",") != strings.Join(want, ",") || len(cfg.Versions.TerminalBench2.Images) != 89 {
+	if strings.Join(cfg.Benchmark.Tasks, ",") != strings.Join(want, ",") || cfg.OverridesFile == "" {
 		t.Fatalf("checked-in five-task profile = %#v", cfg)
 	}
 }
@@ -148,9 +227,7 @@ func TestDecodeVersionsRejectsUnknownAndMissingFields(t *testing.T) {
 		{"valid", validVersions, ""},
 		{"unknown", strings.Replace(validVersions, `"image": "example.invalid/openclaw`, `"future": true, "image": "example.invalid/openclaw`, 1), `unknown field "future"`},
 		{"missing revision", strings.Replace(validVersions, `"revision": "0123456789abcdef0123456789abcdef01234567"`, `"revision": ""`, 1), "terminalbench2.revision is required"},
-		{"missing task images", strings.Replace(validVersions, `"example.invalid/fix-git:fixture": "example.invalid/fix-git:fixture@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"`, ``, 1), "terminalbench2.images must contain"},
-		{"mutable task image", strings.Replace(validVersions, `example.invalid/fix-git:fixture@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`, `example.invalid/fix-git:latest`, 1), "terminalbench2.images"},
-		{"mismatched task image", strings.Replace(validVersions, `example.invalid/fix-git:fixture@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`, `example.invalid/other:fixture@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`, 1), "does not match source"},
+		{"old task images rejected", strings.Replace(validVersions, `"revision": "0123456789abcdef0123456789abcdef01234567"`, `"revision": "0123456789abcdef0123456789abcdef01234567", "images": {}`, 1), `unknown field "images"`},
 		{"mutable image", strings.Replace(validVersions, `example.invalid/openclaw:1.2.3@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`, `example.invalid/openclaw:latest`, 1), "openclaw.image: image must be pinned by digest"},
 		{"malformed image", strings.Replace(validVersions, `example.invalid/openclaw:1.2.3@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`, `not a valid image@@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`, 1), "invalid image reference"},
 	}

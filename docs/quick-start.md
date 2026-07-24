@@ -39,17 +39,23 @@ make build
 
 Setup strictly loads the selected profile and `configs/versions.json`, creates
 or verifies the pinned Terminal-Bench checkout at `.cache/terminal-bench-2`,
-and pulls only OpenClaw plus the selected task images through the Docker Go SDK.
-It is safe to run again and refuses to replace a checkout at another revision.
+reads each selected task's explicit Docker image tag from its `task.toml`, and
+pulls only OpenClaw plus those selected images through the Docker Go SDK. The
+Terminal-Bench Git revision and digest-pinned OpenClaw image remain in
+`configs/versions.json`; task image digests are not duplicated there. Setup is
+safe to run again and refuses to replace a checkout at another revision.
 
 The five-task profile additionally references
-`configs/runtime-overrides.json` relative to the profile. That dedicated
-strict-JSON file applies its present CPU and memory values to both task and
-OpenClaw containers and changes only the agent timeout. Omitted fields retain
-the benchmark sandbox value and leave the matching harness resource unlimited.
-The one-task profile has no `overrides_file`, demonstrating inactive
-compatibility. Profiles and override files reject unknown fields and trailing
-JSON; there is no YAML or merge/inheritance layer.
+`configs/runtime-overrides.json` relative to the profile. Its sparse
+`harness_resources` and `agent_sandbox_resources` blocks apply only to their
+respective containers and may specify different CPU and memory limits. An
+omitted harness dimension stays unlimited; an omitted sandbox dimension keeps
+the value in the task's `task.toml`. Neither block inherits from the other.
+The independent `agent_timeout_seconds` field changes only the agent deadline.
+Every checked-in profile explicitly contains `overrides_file`; the one-task
+profile uses `""`, which disables override loading without opening a file.
+Profiles and nonempty referenced override files reject unknown fields and
+trailing JSON; there is no YAML or merge/inheritance layer.
 
 The Make equivalent accepts either profile:
 
@@ -60,8 +66,8 @@ make setup PROFILE=profiles/openclaw-tb2-five-deepseek.json
 
 To run another subset from the pinned revision, copy either profile and replace
 `benchmark.tasks` with the desired task directory names. ARIES preserves the
-listed order. The checked-in immutable image catalog covers every task in that
-revision; no Go code change is required.
+listed order and loads each task's explicit tagged image directly from that
+task's `task.toml`; no version-catalog or Go code change is required.
 
 ## 3. Add the DeepSeek credential
 
@@ -137,14 +143,20 @@ A successful task has:
 - completed tool calls in `bridge/tool-calls.jsonl`.
 
 `bridge/ssh_raw.log` is an unconditional mode-0600 sensitive audit containing
-the lossless SSH request payload in `payload_base64` and consumed stdin in
-mutually exclusive `stdin`/UTF-8 fields when valid UTF-8 or
-`stdin_base64`/base64 fields otherwise. It may contain
-exact wire-supplied values; keep the run
-directory private and do not publish this artifact without review. Its
-auxiliary metadata does not duplicate decoded commands or environment values.
-Structured lifecycle logs and `tool-calls.jsonl` continue to omit environment
-values and stdout/stderr bodies.
+lossless, human-readable text records between full-line
+`--- ARIES SSH CALL BEGIN ---` and `--- ARIES SSH CALL END ---` delimiters.
+Fixed-order `key=value` lines include the decoded wire command when available,
+exact payload and stdin byte counts, and escaped exact payload/stdin. Printable
+UTF-8 appears literally; backslash, newline, carriage return, tab, other
+controls, and invalid UTF-8 use explicit escapes. The file is neither JSON nor
+base64. It may contain exact wire-supplied values; keep the run directory
+private and do not publish this artifact without review.
+
+`bridge/tool-calls.jsonl` remains valid line-delimited JSON. Printable Unicode
+and HTML characters such as `&&`, `<`, and `>` appear literally, while quotes,
+backslashes, newlines, and controls retain required JSON escaping. Structured
+lifecycle logs and tool-call records continue to omit environment values and
+stdout/stderr bodies.
 
 Each task directory contains the exact placeholder-only rendered
 `harness/openclaw.json`, OpenClaw logs and telemetry when available, replayable
@@ -162,8 +174,9 @@ run log.
   world permissions, and one-line formatting of `DEEPSEEK_API.key`.
 - **Model error:** inspect `live-validation.json` for authentication, rate
   limit, connectivity, or missing-model categories.
-- **Unknown task or missing image pin:** choose a task directory from the pinned
-  checkout and keep `configs/versions.json` aligned when upgrading that pin.
+- **Unknown task or invalid task image:** choose a task directory from the
+  pinned checkout and ensure its `task.toml` declares a valid explicit image
+  tag. Digest-bearing or implicit-`latest` task references are rejected.
 - **Terminal-Bench revision mismatch:** move the stale checkout aside, then
   rerun the profile setup command. Setup never deletes it automatically.
 - **SSH timeout:** check host firewall rules and confirm containers can reach

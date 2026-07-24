@@ -575,9 +575,17 @@ func TestValidationRejectsUnsafeInputsBeforeDocker(t *testing.T) {
 		t.Fatal("Start accepted unsafe identity")
 	}
 	request = testRequest()
-	request.Environment.Image = "busybox:latest"
+	request.Environment.Image = "busybox"
 	if _, err := manager.Start(context.Background(), request); err == nil {
-		t.Fatal("Start accepted mutable image")
+		t.Fatal("Start accepted image without an explicit tag or digest")
+	}
+}
+
+func TestValidateEnvironmentAcceptsExplicitTaskTag(t *testing.T) {
+	environment := testRequest().Environment
+	environment.Image = "registry.example:5000/org/task:20251031"
+	if err := validateEnvironment(environment); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -15,35 +15,40 @@ const defaultCleanupTimeout = 30 * time.Second
 
 // Options contains the few experiment-level inputs needed by the Runner.
 type Options struct {
-	Name           string
-	RunID          string
-	OutputDir      string
-	Model          core.ModelConfig
-	CleanupTimeout time.Duration
-	Logger         *logrus.Logger
-	TaskOverrides  TaskOverrides
+	Name             string
+	RunID            string
+	OutputDir        string
+	Model            core.ModelConfig
+	CleanupTimeout   time.Duration
+	Logger           *logrus.Logger
+	RuntimeOverrides RuntimeOverrides
 }
 
-// TaskOverrides contains sparse runtime changes already validated by composition.
-type TaskOverrides struct {
-	CPU          *float64
-	MemoryMB     *int
-	AgentTimeout *time.Duration
+type ResourceOverrides struct {
+	CPU      *float64
+	MemoryMB *int
+}
+
+// RuntimeOverrides contains independent sparse harness and sandbox changes.
+type RuntimeOverrides struct {
+	HarnessResources      ResourceOverrides
+	AgentSandboxResources ResourceOverrides
+	AgentTimeout          *time.Duration
 }
 
 // Runner composes exactly the benchmark, harness, sandbox, and bridge roles.
 type Runner struct {
-	benchmark      Benchmark
-	harness        AgentHarness
-	toolSandbox    ToolSandbox
-	bridge         ToolBridge
-	name           string
-	runID          string
-	outputDir      string
-	model          core.ModelConfig
-	cleanupTimeout time.Duration
-	logger         *logrus.Logger
-	taskOverrides  TaskOverrides
+	benchmark        Benchmark
+	harness          AgentHarness
+	toolSandbox      ToolSandbox
+	bridge           ToolBridge
+	name             string
+	runID            string
+	outputDir        string
+	model            core.ModelConfig
+	cleanupTimeout   time.Duration
+	logger           *logrus.Logger
+	runtimeOverrides RuntimeOverrides
 }
 
 // New constructs a Runner explicitly and rejects missing roles.
@@ -70,17 +75,17 @@ func New(benchmark Benchmark, harness AgentHarness, toolSandbox ToolSandbox, bri
 		options.Logger = logrus.StandardLogger()
 	}
 	return &Runner{
-		benchmark:      benchmark,
-		harness:        harness,
-		toolSandbox:    toolSandbox,
-		bridge:         bridge,
-		name:           options.Name,
-		runID:          options.RunID,
-		outputDir:      options.OutputDir,
-		model:          options.Model,
-		cleanupTimeout: options.CleanupTimeout,
-		logger:         options.Logger,
-		taskOverrides:  cloneTaskOverrides(options.TaskOverrides),
+		benchmark:        benchmark,
+		harness:          harness,
+		toolSandbox:      toolSandbox,
+		bridge:           bridge,
+		name:             options.Name,
+		runID:            options.RunID,
+		outputDir:        options.OutputDir,
+		model:            options.Model,
+		cleanupTimeout:   options.CleanupTimeout,
+		logger:           options.Logger,
+		runtimeOverrides: cloneRuntimeOverrides(options.RuntimeOverrides),
 	}, nil
 }
 
@@ -115,7 +120,8 @@ func (r *Runner) Run(ctx context.Context) (core.RunResult, error) {
 }
 
 func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, error) {
-	task, harnessCPU, harnessMemory := effectiveTask(task, r.taskOverrides)
+	originalTask := task
+	sandboxEnvironment, harnessCPU, harnessMemory, harnessTimeout := effectiveRuntime(task, r.runtimeOverrides)
 	started := time.Now()
 	result := newTaskResult(task.ID)
 	r.logger.WithContext(ctx).WithField("task_id", task.ID).Info("task started")
@@ -192,7 +198,7 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 	sandbox, err = r.toolSandbox.Start(ctx, core.SandboxRequest{
 		RunID:       r.runID,
 		TaskID:      task.ID,
-		Environment: task.Environment,
+		Environment: sandboxEnvironment,
 	})
 	if err != nil {
 		allErrors = append(allErrors, fmt.Errorf("start sandbox: %w", err))
@@ -224,7 +230,7 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		TaskID:    task.ID,
 		Endpoint:  endpoint,
 		Model:     r.model,
-		Timeout:   task.Timeout,
+		Timeout:   harnessTimeout,
 		CPU:       harnessCPU,
 		MemoryMB:  harnessMemory,
 		OutputDir: r.outputDir,
@@ -278,7 +284,7 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 	}
 
 	result.Isolation.Status = core.StatusConfirmed
-	evaluation, evaluationErr := r.benchmark.Evaluate(ctx, task, sandbox)
+	evaluation, evaluationErr := r.benchmark.Evaluate(ctx, originalTask, sandbox)
 	result.Evaluation = evaluation
 	if evaluationErr == nil {
 		if result.Evaluation.Status == "" {
@@ -293,15 +299,10 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 	return finish()
 }
 
-func cloneTaskOverrides(overrides TaskOverrides) TaskOverrides {
-	cloned := TaskOverrides{}
-	if overrides.CPU != nil {
-		value := *overrides.CPU
-		cloned.CPU = &value
-	}
-	if overrides.MemoryMB != nil {
-		value := *overrides.MemoryMB
-		cloned.MemoryMB = &value
+func cloneRuntimeOverrides(overrides RuntimeOverrides) RuntimeOverrides {
+	cloned := RuntimeOverrides{
+		HarnessResources:      cloneResourceOverrides(overrides.HarnessResources),
+		AgentSandboxResources: cloneResourceOverrides(overrides.AgentSandboxResources),
 	}
 	if overrides.AgentTimeout != nil {
 		value := *overrides.AgentTimeout
@@ -310,25 +311,50 @@ func cloneTaskOverrides(overrides TaskOverrides) TaskOverrides {
 	return cloned
 }
 
-func effectiveTask(original core.Task, overrides TaskOverrides) (core.Task, *float64, *int) {
-	task := original
-	task.Environment.Env = maps.Clone(original.Environment.Env)
-	var harnessCPU *float64
-	if overrides.CPU != nil {
-		value := *overrides.CPU
-		task.Environment.CPU = value
-		harnessCPU = &value
+func cloneResourceOverrides(resources ResourceOverrides) ResourceOverrides {
+	cloned := ResourceOverrides{}
+	if resources.CPU != nil {
+		value := *resources.CPU
+		cloned.CPU = &value
 	}
-	var harnessMemory *int
-	if overrides.MemoryMB != nil {
-		value := *overrides.MemoryMB
-		task.Environment.MemoryMB = value
-		harnessMemory = &value
+	if resources.MemoryMB != nil {
+		value := *resources.MemoryMB
+		cloned.MemoryMB = &value
 	}
+	return cloned
+}
+
+func effectiveRuntime(original core.Task, overrides RuntimeOverrides) (core.Environment, *float64, *int, time.Duration) {
+	environment := original.Environment
+	environment.Env = maps.Clone(original.Environment.Env)
+	if overrides.AgentSandboxResources.CPU != nil {
+		environment.CPU = *overrides.AgentSandboxResources.CPU
+	}
+	if overrides.AgentSandboxResources.MemoryMB != nil {
+		environment.MemoryMB = *overrides.AgentSandboxResources.MemoryMB
+	}
+	harnessCPU := cloneFloat(overrides.HarnessResources.CPU)
+	harnessMemory := cloneInt(overrides.HarnessResources.MemoryMB)
+	timeout := original.Timeout
 	if overrides.AgentTimeout != nil {
-		task.Timeout = *overrides.AgentTimeout
+		timeout = *overrides.AgentTimeout
 	}
-	return task, harnessCPU, harnessMemory
+	return environment, harnessCPU, harnessMemory, timeout
+}
+
+func cloneFloat(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+func cloneInt(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func newTaskResult(taskID string) core.TaskResult {

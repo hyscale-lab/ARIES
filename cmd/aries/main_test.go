@@ -20,7 +20,6 @@ import (
 )
 
 const (
-	testFixGitImage   = "example.invalid/fix-git:fixture@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	testOpenClawImage = "example.invalid/openclaw:fixture@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 )
 
@@ -29,7 +28,6 @@ func testVersions() config.Versions {
 		TerminalBench2: config.TerminalBench2Versions{
 			RepositoryURL: "https://example.invalid/terminal-bench-2.git",
 			Revision:      "cccccccccccccccccccccccccccccccccccccccc",
-			Images:        map[string]string{"example.invalid/fix-git:fixture": testFixGitImage},
 		},
 		OpenClaw: config.OpenClawVersions{Image: testOpenClawImage},
 	}

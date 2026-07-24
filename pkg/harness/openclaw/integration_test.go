@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -148,7 +149,7 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 	datasetRoot := filepath.Join(root, terminalbench.DefaultRoot)
 	benchmarkOptions := terminalbench.Options{
 		Root: datasetRoot, TaskIDs: []string{"fix-git"}, OutputDir: t.TempDir(),
-		Revision: versions.TerminalBench2.Revision, Images: versions.TerminalBench2.Images,
+		Revision: versions.TerminalBench2.Revision,
 	}
 	benchmark, err := terminalbench.New(benchmarkOptions)
 	if err != nil {
@@ -258,8 +259,29 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 		t.Fatalf("OpenClaw exec did not reach the replayable SSH bridge log: %s", toolCalls)
 	}
 	rawCalls, err := os.ReadFile(task.ToolLogPaths[1])
-	if err != nil || bytes.Count(rawCalls, []byte(`"status":"completed"`)) < 4 || !bytes.Contains(rawCalls, []byte(`"payload_base64":`)) || !bytes.Contains(rawCalls, []byte(`"stdin":`)) || !bytes.Contains(rawCalls, []byte(`"stdin_encoding":"utf-8"`)) {
+	if err != nil {
 		t.Fatalf("raw bridge audit = %q, %v", rawCalls, err)
+	}
+	rawRecords := parseRawBridgeAudit(t, rawCalls)
+	completed := 0
+	for _, record := range rawRecords {
+		if record["status"] != "completed" {
+			continue
+		}
+		completed++
+		payloadBytes, payloadErr := strconv.Atoi(record["payload_bytes"])
+		stdinBytes, stdinErr := strconv.Atoi(record["stdin_bytes"])
+		if payloadErr != nil || payloadBytes <= 0 || record["payload"] == "" || stdinErr != nil || stdinBytes < 0 {
+			t.Fatalf("completed raw bridge record lacks payload/stdin evidence: %#v", record)
+		}
+	}
+	if completed < 4 {
+		t.Fatalf("completed raw bridge records = %d, want at least 4: %s", completed, rawCalls)
+	}
+	for _, legacy := range [][]byte{[]byte("payload_base64"), []byte("stdin_base64"), []byte("stdin_encoding")} {
+		if bytes.Contains(rawCalls, legacy) {
+			t.Fatalf("raw bridge audit retains legacy field %q: %s", legacy, rawCalls)
+		}
 	}
 	for _, forbidden := range [][]byte{
 		[]byte(`"remote_command":`), []byte(`"env":`), []byte(`"stdout":`), []byte(`"stderr":`), []byte(key),
@@ -273,6 +295,43 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 	}
 	assertNoRunResources(t, ctx, api, runID)
 	assertSecretAbsent(t, outputDir, key)
+}
+
+func parseRawBridgeAudit(t *testing.T, content []byte) []map[string]string {
+	t.Helper()
+	const begin = "--- ARIES SSH CALL BEGIN ---\n"
+	const end = "--- ARIES SSH CALL END ---\n"
+	fields := []string{
+		"sequence", "timestamp", "request_type", "want_reply", "status", "run_id", "task_id",
+		"container_id", "wire_command", "payload_bytes", "payload", "stdin_bytes", "stdin",
+	}
+	var records []map[string]string
+	for len(content) > 0 {
+		if !bytes.HasPrefix(content, []byte(begin)) {
+			t.Fatalf("raw bridge audit missing begin delimiter: %q", content)
+		}
+		content = content[len(begin):]
+		record := make(map[string]string, len(fields))
+		for _, field := range fields {
+			newline := bytes.IndexByte(content, '\n')
+			if newline < 0 {
+				t.Fatalf("raw bridge audit missing %s line ending: %q", field, content)
+			}
+			line := string(content[:newline])
+			prefix := field + "="
+			if !strings.HasPrefix(line, prefix) {
+				t.Fatalf("raw bridge audit field order: got %q, want prefix %q", line, prefix)
+			}
+			record[field] = strings.TrimPrefix(line, prefix)
+			content = content[newline+1:]
+		}
+		if !bytes.HasPrefix(content, []byte(end)) {
+			t.Fatalf("raw bridge audit missing end delimiter: %q", content)
+		}
+		content = content[len(end):]
+		records = append(records, record)
+	}
+	return records
 }
 
 func logFailedRunArtifacts(t *testing.T, result core.RunResult) {

@@ -5,7 +5,6 @@ package openclawssh
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -121,24 +120,23 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 			t.Fatalf("tool log retained command output field %s: %s", forbidden, content)
 		}
 	}
-	raw := readIntegrationJSONL(t, endpoint.LogPaths[1])
+	rawContent, err := os.ReadFile(endpoint.LogPaths[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := decodeRawAuditRecords(t, rawContent)
 	if len(raw) != 1 {
 		t.Fatalf("raw record count = %d", len(raw))
 	}
-	assertRawRecordHasOnlyExactWireFields(t, raw[0])
-	payload, err := base64.StdEncoding.DecodeString(raw[0]["payload_base64"].(string))
-	if err != nil || !bytes.Equal(payload, ssh.Marshal(struct{ Command string }{remote})) {
-		t.Fatalf("raw payload = %x, %v", payload, err)
+	payload := unescapeRawValue(t, raw[0]["payload"])
+	if !bytes.Equal(payload, ssh.Marshal(struct{ Command string }{remote})) {
+		t.Fatalf("raw payload = %x", payload)
 	}
-	if raw[0]["stdin"] != "streamed-input" || raw[0]["stdin_encoding"] != "utf-8" {
+	if string(unescapeRawValue(t, raw[0]["stdin"])) != "streamed-input" {
 		t.Fatalf("raw stdin = %#v", raw[0])
 	}
-	if _, ok := raw[0]["stdin_base64"]; ok {
-		t.Fatalf("UTF-8 stdin also has base64 duplicate: %#v", raw[0])
-	}
-	rawContent, err := os.ReadFile(endpoint.LogPaths[1])
-	if err != nil || bytes.Contains(rawContent, []byte("tool-stderr")) {
-		t.Fatalf("raw auxiliary leakage: %v: %s", err, rawContent)
+	if bytes.Contains(rawContent, []byte("tool-stderr")) {
+		t.Fatalf("raw auxiliary leakage: %s", rawContent)
 	}
 }
 
@@ -259,21 +257,21 @@ func TestBridgeRunsConcurrentCallsWithoutAConvoy(t *testing.T) {
 		t.Fatalf("sandbox was not usable for evaluation after revocation: %#v, %v", postRevocation, err)
 	}
 	structured := readIntegrationJSONL(t, endpoint.LogPaths[0])
-	raw := readIntegrationJSONL(t, endpoint.LogPaths[1])
+	rawContent, err := os.ReadFile(endpoint.LogPaths[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := decodeRawAuditRecords(t, rawContent)
 	if len(structured) != len(raw) || len(raw) < calls+activeCalls {
 		t.Fatalf("correlated audit counts = %d/%d", len(structured), len(raw))
 	}
 	commands := make(map[string]struct{}, len(raw))
 	for index := range raw {
-		wantSequence := float64(index + 1)
-		if structured[index]["sequence"] != wantSequence || raw[index]["sequence"] != wantSequence {
+		wantSequence := index + 1
+		if structured[index]["sequence"] != float64(wantSequence) || raw[index]["sequence"] != fmt.Sprint(wantSequence) {
 			t.Fatalf("sequence %d = %#v/%#v", index, structured[index]["sequence"], raw[index]["sequence"])
 		}
-		assertRawRecordHasOnlyExactWireFields(t, raw[index])
-		payload, err := base64.StdEncoding.DecodeString(raw[index]["payload_base64"].(string))
-		if err != nil {
-			t.Fatal(err)
-		}
+		payload := unescapeRawValue(t, raw[index]["payload"])
 		var decoded struct{ Command string }
 		if err := ssh.Unmarshal(payload, &decoded); err != nil {
 			t.Fatalf("decode raw payload %d: %v", index, err)

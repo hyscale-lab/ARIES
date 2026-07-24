@@ -1,7 +1,11 @@
 {
-  "task": {
+  "harness_resources": {
+    "cpu": 1.0,
+    "memory_mb": 1024
+  },
+  "agent_sandbox_resources": {
     "cpu": 2.0,
-    "memory_mb": 4096,
-    "agent_timeout_seconds": 1200
-  }
+    "memory_mb": 4096
+  },
+  "agent_timeout_seconds": 1200
 }

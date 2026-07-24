@@ -41,7 +41,7 @@ benchmark or harness packages.
 | Component | Pin |
 | --- | --- |
 | Terminal-Bench 2 | `2fd12b88aafdd04a52c298e3940bcb189f9766d6` |
-| Task images | one source-to-digest entry for each task in the pinned revision |
+| Task images | each task's explicit tag from its pinned `task.toml` |
 | OpenClaw | tag `v2026.5.26`, commit `10ad3aa16068baa84a1bd9ac4f7d42ae725cedb7` |
 | OpenClaw image | `ghcr.io/openclaw/openclaw:2026.5.26@sha256:ae7ff536446f1bbb57ea51b9b21097d8f299d30d683dcd72644973bc0522f3b3` |
 | Moby client | `github.com/moby/moby/client v0.5.0` |
@@ -121,10 +121,11 @@ only the typed methods it uses; production supplies `*client.Client`, while
 unit tests supply small typed fakes. The generic monitor package does not
 import Docker.
 
-`pkg/containerimage` uses the distribution/OCI reference packages to validate
-the immutable named image format shared by config, benchmark, harness, and
-sandbox code. This keeps registry syntax and digest parsing out of those four
-components rather than duplicating hand-written string checks.
+`pkg/containerimage` uses the distribution/OCI reference packages for two
+narrow contracts: the OpenClaw image must include a full digest, while each
+Terminal-Bench task image must have an explicitly written tag and no digest.
+This keeps registry syntax parsing out of config, benchmark, harness, and
+sandbox code without conflating the two pinning policies.
 
 The SDK owns API negotiation, typed requests and responses, attach streams,
 archive copy, logs, stats, and resource lifecycle. ARIES does not hard-code an
@@ -132,11 +133,11 @@ Engine API version, implement Unix-socket HTTP, parse Docker CLI output, or
 mount the Docker socket into runtime containers.
 
 The sandbox owns one labeled task network and one labeled task container. It
-validates the immutable image, workdir, environment, resources, ownership
-labels, network attachment, and running state. It provides buffered `Exec` for
-the generic Runner contract and streaming `ExecStream` for the bridge. Upload
-and download use Docker archive copy. Stop captures container logs and removes
-both container and network.
+validates the task's explicit tagged image, workdir, environment, resources,
+ownership labels, network attachment, and running state. It provides buffered
+`Exec` for the generic Runner contract and streaming `ExecStream` for the
+bridge. Upload and download use Docker archive copy. Stop captures container
+logs and removes both container and network.
 
 ### Exec completion and cancellation
 
@@ -244,21 +245,30 @@ Each task creates private:
 ```
 
 Both logs are retained after bridge shutdown and exposed in
-`TaskResult.ToolLogPaths`. Accepted and rejected requests record sequence,
-time, run/task/runtime identity, operation class, path/workdir metadata,
-environment names, a command hash, the exact argument vector and shell command,
-exact stdin (UTF-8 or base64 for binary data), byte counts, duration, exit code,
-and outcome. The separate human-readable shell-command field is omitted only
-for OpenClaw's internal `workspace_upload` helper because its exact script
-already exists in the argument vector. Environment values and stdout/stderr
-content are not retained in the structured log. The sensitive raw log retains
-the exact SSH request payload in `payload_base64` and exact consumed stdin in
-mutually exclusive `stdin` (`stdin_encoding: "utf-8"`) fields when valid UTF-8
-or `stdin_base64` (`stdin_encoding: "base64"`) fields otherwise, with safe identity, request type, reply
-intent, byte counts, status, and correlation metadata. It does not duplicate
-decoded commands, environment values, or stdout/stderr. The exact payload/stdin fields
-may contain values supplied on the SSH wire and must remain private; ARIES
-model/API credentials and SSH private-key bytes never enter this wire path.
+`TaskResult.ToolLogPaths`. `tool-calls.jsonl` contains one valid JSON object per
+line. Its structured accepted and rejected records include sequence, time,
+run/task/runtime identity, operation class, path/workdir metadata, environment
+names, a command hash, the exact argument vector and shell command, exact stdin
+(UTF-8 or base64 for binary data), byte counts, duration, exit code, and
+outcome. Printable Unicode and HTML characters are emitted literally; quotes,
+backslashes, newlines, and controls retain the escaping required by JSON. The
+separate human-readable shell-command field is omitted only for OpenClaw's
+internal `workspace_upload` helper because its exact script already exists in
+the argument vector. Environment values and stdout/stderr content are not
+retained in the structured log.
+
+`ssh_raw.log` is plain text, not JSON or a base64 field catalog. Every call is
+framed by full-line `--- ARIES SSH CALL BEGIN ---` and
+`--- ARIES SSH CALL END ---` delimiters. Between them, fixed-order `key=value`
+lines record `sequence`, `timestamp`, `request_type`, `want_reply`, `status`,
+`run_id`, `task_id`, `container_id`, `wire_command`, `payload_bytes`, `payload`,
+`stdin_bytes`, and `stdin`. Printable valid UTF-8 remains literal. Backslash,
+LF, CR, and tab render as `\\`, `\n`, `\r`, and `\t`; every other control or
+invalid UTF-8 byte renders as uppercase `\xNN`. This representation is
+human-readable, unambiguous, and lossless, including for malformed or rejected
+request payloads. Raw payload and stdin may contain values supplied on the SSH
+wire and must remain private; ARIES model/API credentials and SSH private-key
+bytes never enter this wire path.
 
 The streaming counters use atomic updates so concurrently copied stdin, stdout,
 and stderr produce race-free final counts. Tool inputs are intentionally stored
@@ -292,10 +302,10 @@ runtime file and do not appear in Docker environment metadata, labels, command
 arguments, configuration artifacts, or results.
 
 CPU and memory limits are absent from the harness unless the corresponding
-runtime override field is present. A present resource override uses the same
-checked Moby value for task and harness containers. An agent-timeout override
-changes only the OpenClaw command timeout and matching task context deadline;
-verifier, startup, observer, and cleanup timeouts retain their own values.
+`harness_resources` field is present. Harness limits never inherit from the
+task or `agent_sandbox_resources`. An agent-timeout override changes only the
+OpenClaw command timeout and matching harness run context deadline; verifier,
+startup, observer, and cleanup timeouts retain their own values.
 
 The harness waits for readiness, sends one task instruction through the pinned
 agent command, captures the final response, and collects gateway logs, agent
@@ -308,9 +318,13 @@ container and confirms the owned resource is absent.
 private verifier metadata, test injection, verifier execution, CTRF validation,
 and reward parsing. The generic `Task` contains no Terminal-Bench-specific
 fields. A profile supplies an ordered list of task directory names; the adapter
-loads the instruction, resources, final Dockerfile workdir, agent timeout, and
-complete recursive verifier tree for each selected task. The immutable image
-catalog covers every task in the pinned revision.
+loads the instruction, explicit tagged image, resources, final Dockerfile
+workdir, agent timeout, and complete recursive verifier tree for each selected
+task. The task image comes directly from `environment.docker_image` in the
+pinned task's `task.toml`; it is not repeated in a version catalog. The tag is
+required explicitly, digest-bearing and implicit-`latest` task references are
+rejected, and the validated trimmed spelling is preserved. OpenClaw's separate
+image configuration remains digest-pinned.
 
 The adapter verifies that the dataset is the exact clean pinned revision before
 discovery and again immediately before evaluation. Before bridge construction,
@@ -397,25 +411,32 @@ Runnable experiments are strict JSON profiles. The checked-in examples select
 [`fix-git`](../profiles/openclaw-tb2-fix-git-deepseek.json) and a
 [heterogeneous five-task subset](../profiles/openclaw-tb2-five-deepseek.json).
 Each references the strict JSON version file relative to its own location.
-The five-task example also references the dedicated strict JSON
-`configs/runtime-overrides.json`; the one-task example omits it to demonstrate
-inactive compatibility. Unknown fields and trailing values are rejected in
-profiles and referenced documents. This is a fixed reference, not profile
-inheritance or configuration merging. The visible
+The five-task example references the dedicated strict JSON
+`configs/runtime-overrides.json`; the one-task example explicitly sets
+`overrides_file` to `""`. Every checked-in profile carries the field, and an
+exact empty string disables override loading without any file access. Unknown
+fields and trailing values are rejected in profiles and nonempty referenced
+documents. This is a fixed reference, not profile inheritance or configuration
+merging. The visible
 default is `output_dir = "runs"`; component type selection uses explicit
 switches.
 
-Runtime overrides are sparse. With no `overrides_file`, the task sandbox keeps
-Terminal-Bench CPU, memory, and agent timeout values while the OpenClaw harness
-remains unlimited. Within a referenced override, omitted CPU or memory keeps
-the benchmark sandbox value and leaves that harness dimension unlimited;
-present CPU or memory applies identically to both containers. A present
-`agent_timeout_seconds` changes only the agent task deadline. All conversions
-are checked before Moby or duration conversion.
+Runtime overrides are sparse and non-inheriting. Values under
+`harness_resources` apply only to OpenClaw; omitted harness dimensions remain
+unlimited. Values under `agent_sandbox_resources` apply only to the task
+container; omitted sandbox dimensions retain their Terminal-Bench values. The
+two blocks may differ, and neither supplies absent values to the other. A
+present top-level `agent_timeout_seconds` changes only the agent deadline;
+without it, the benchmark task timeout is used. All conversions are checked
+before Moby or duration conversion. Runtime calculation does not mutate the
+benchmark task: sandbox overrides apply to a cloned environment passed to the
+live sandbox, harness resources and timeout apply only to its request, and
+benchmark preparation and evaluation retain the original task values.
 
 `aries setup PROFILE.json` verifies or creates the configured Terminal-Bench
-checkout and pulls OpenClaw plus the selected tasks' immutable images through
-the Moby SDK. Normal runs never silently change datasets or pull images.
+checkout, reads selected task image tags from each pinned `task.toml`, and
+pulls those images plus digest-pinned OpenClaw through the Moby SDK. Normal runs
+never silently change datasets or pull images.
 
 API-key values never belong in JSON. For the official DeepSeek configuration,
 the repository-root ignored `DEEPSEEK_API.key` is accepted only as a regular,

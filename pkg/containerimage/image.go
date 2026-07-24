@@ -4,6 +4,7 @@ package containerimage
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/distribution/reference"
 	"github.com/opencontainers/go-digest"
@@ -16,21 +17,25 @@ func Validate(value string) error {
 	return err
 }
 
-// TaggedSource returns the familiar tag-only form of an immutable image.
-func TaggedSource(value string) (string, error) {
-	named, err := parse(value)
+// ValidateTagOnly returns the trimmed, explicitly tagged image reference.
+// Unlike Validate, it rejects digest-bearing references and does not normalize
+// or otherwise rewrite the spelling supplied by the task.
+func ValidateTagOnly(value string) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", errors.New("image is required")
+	}
+	named, err := reference.ParseNormalizedNamed(trimmed)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("invalid image reference: %w", err)
 	}
-	tagged, ok := named.(reference.Tagged)
-	if !ok {
-		return "", errors.New("image must include the source tag")
+	if _, ok := named.(reference.Canonical); ok {
+		return "", errors.New("image must be pinned by tag only, not digest")
 	}
-	source, err := reference.WithTag(reference.TrimNamed(named), tagged.Tag())
-	if err != nil {
-		return "", fmt.Errorf("build tagged image source: %w", err)
+	if _, ok := named.(reference.Tagged); !ok {
+		return "", errors.New("image must include an explicit tag")
 	}
-	return reference.FamiliarString(source), nil
+	return trimmed, nil
 }
 
 func parse(value string) (reference.Named, error) {

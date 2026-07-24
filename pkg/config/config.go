@@ -6,12 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"math"
 	"net/url"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -38,15 +36,16 @@ type Config struct {
 
 // RuntimeOverrides contains sparse, explicitly present runtime changes.
 type RuntimeOverrides struct {
-	Task TaskOverrides `json:"task,omitempty"`
+	HarnessResources      ResourceOverrides `json:"harness_resources,omitempty"`
+	AgentSandboxResources ResourceOverrides `json:"agent_sandbox_resources,omitempty"`
+	AgentTimeoutSeconds   *float64          `json:"agent_timeout_seconds,omitempty"`
+	AgentTimeout          *time.Duration    `json:"-"`
 }
 
-// TaskOverrides changes only the task resource named by each present field.
-type TaskOverrides struct {
-	CPU                 *float64       `json:"cpu,omitempty"`
-	MemoryMB            *int           `json:"memory_mb,omitempty"`
-	AgentTimeoutSeconds *float64       `json:"agent_timeout_seconds,omitempty"`
-	AgentTimeout        *time.Duration `json:"-"`
+// ResourceOverrides changes only the named container resource dimensions.
+type ResourceOverrides struct {
+	CPU      *float64 `json:"cpu,omitempty"`
+	MemoryMB *int     `json:"memory_mb,omitempty"`
 }
 
 type BenchmarkConfig struct {
@@ -80,9 +79,8 @@ type Versions struct {
 }
 
 type TerminalBench2Versions struct {
-	RepositoryURL string            `json:"repository_url"`
-	Revision      string            `json:"revision"`
-	Images        map[string]string `json:"images"`
+	RepositoryURL string `json:"repository_url"`
+	Revision      string `json:"revision"`
 }
 
 type OpenClawVersions struct {
@@ -136,29 +134,38 @@ func LoadRuntimeOverrides(path string) (RuntimeOverrides, error) {
 		return RuntimeOverrides{}, fmt.Errorf("decode runtime overrides %q: %w", path, err)
 	}
 	if err := overrides.validate(); err != nil {
-		return RuntimeOverrides{}, err
+		return RuntimeOverrides{}, fmt.Errorf("validate runtime overrides %q: %w", path, err)
 	}
 	return overrides, nil
 }
 
 func (o *RuntimeOverrides) validate() error {
-	task := &o.Task
-	if task.CPU != nil {
-		scaled := *task.CPU * 1e9
-		if *task.CPU <= 0 || math.IsNaN(*task.CPU) || math.IsInf(*task.CPU, 0) || scaled >= math.Exp2(63) {
-			return errors.New("task.cpu must be finite, positive, and convert to NanoCPUs below 2^63")
-		}
+	if err := validateResources("harness_resources", o.HarnessResources); err != nil {
+		return err
 	}
-	if task.MemoryMB != nil && (*task.MemoryMB <= 0 || int64(*task.MemoryMB) > math.MaxInt64>>20) {
-		return fmt.Errorf("task.memory_mb must be positive and no greater than %d", int64(math.MaxInt64)>>20)
+	if err := validateResources("agent_sandbox_resources", o.AgentSandboxResources); err != nil {
+		return err
 	}
-	if task.AgentTimeoutSeconds != nil {
-		scaled := *task.AgentTimeoutSeconds * float64(time.Second)
-		if *task.AgentTimeoutSeconds <= 0 || math.IsNaN(*task.AgentTimeoutSeconds) || math.IsInf(*task.AgentTimeoutSeconds, 0) || scaled >= math.Exp2(63) {
-			return errors.New("task.agent_timeout_seconds must be finite, positive, and convert to nanoseconds below 2^63")
+	if o.AgentTimeoutSeconds != nil {
+		scaled := *o.AgentTimeoutSeconds * float64(time.Second)
+		if *o.AgentTimeoutSeconds <= 0 || math.IsNaN(*o.AgentTimeoutSeconds) || math.IsInf(*o.AgentTimeoutSeconds, 0) || scaled >= math.Exp2(63) {
+			return errors.New("agent_timeout_seconds must be finite, positive, and convert to nanoseconds below 2^63")
 		}
 		duration := time.Duration(scaled)
-		task.AgentTimeout = &duration
+		o.AgentTimeout = &duration
+	}
+	return nil
+}
+
+func validateResources(name string, resources ResourceOverrides) error {
+	if resources.CPU != nil {
+		scaled := *resources.CPU * 1e9
+		if *resources.CPU <= 0 || math.IsNaN(*resources.CPU) || math.IsInf(*resources.CPU, 0) || scaled >= math.Exp2(63) {
+			return fmt.Errorf("%s.cpu must be finite, positive, and convert to NanoCPUs below 2^63", name)
+		}
+	}
+	if resources.MemoryMB != nil && (*resources.MemoryMB <= 0 || int64(*resources.MemoryMB) > math.MaxInt64>>20) {
+		return fmt.Errorf("%s.memory_mb must be positive and no greater than %d", name, int64(math.MaxInt64)>>20)
 	}
 	return nil
 }
@@ -305,25 +312,6 @@ func (c Versions) validate() error {
 	}
 	if !isHex(c.TerminalBench2.Revision, 40) {
 		return errors.New("terminalbench2.revision must be a 40-character Git revision")
-	}
-	if len(c.TerminalBench2.Images) == 0 {
-		return errors.New("terminalbench2.images must contain at least one image pin")
-	}
-	for _, source := range slices.Sorted(maps.Keys(c.TerminalBench2.Images)) {
-		pin := c.TerminalBench2.Images[source]
-		if strings.TrimSpace(source) == "" {
-			return errors.New("terminalbench2.images contains an empty source")
-		}
-		if err := containerimage.Validate(pin); err != nil {
-			return fmt.Errorf("terminalbench2.images[%q]: %w", source, err)
-		}
-		pinnedSource, err := containerimage.TaggedSource(pin)
-		if err != nil {
-			return fmt.Errorf("terminalbench2.images[%q]: %w", source, err)
-		}
-		if pinnedSource != source {
-			return fmt.Errorf("terminalbench2.images[%q] pin source %q does not match source", source, pinnedSource)
-		}
 	}
 	if err := containerimage.Validate(c.OpenClaw.Image); err != nil {
 		return fmt.Errorf("openclaw.image: %w", err)

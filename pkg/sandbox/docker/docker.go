@@ -20,7 +20,6 @@ import (
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/hyscale-lab/aries/pkg/containerimage"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/runner"
 	"github.com/moby/moby/api/pkg/stdcopy"
@@ -1017,7 +1016,7 @@ func taskDockerEnvironment(values map[string]string) []string {
 }
 
 func validateEnvironment(environment core.Environment) error {
-	if err := containerimage.Validate(environment.Image); err != nil {
+	if err := validatePullImage(environment.Image); err != nil {
 		return fmt.Errorf("invalid docker sandbox image: %w", err)
 	}
 	if _, err := cleanContainerPath(environment.Workdir); err != nil {

@@ -10,13 +10,20 @@ sandbox. Terminal-Bench verifier files remain benchmark-private and are
 uploaded only from the freshly reverified pinned checkout after both isolation
 gates succeed.
 
-Profiles may reference one dedicated strict-JSON runtime override file.
-Omitted resources preserve benchmark sandbox values and leave the matching
-harness dimension unlimited; present CPU or memory applies to both containers,
-while an agent timeout changes only its task deadline. Task containers receive
-ARIES-owned timezone and noninteractive values. Each bridge retains structured
-tool records plus sensitive exact-wire `bridge/ssh_raw.log` evidence through a
-bounded asynchronous writer whose failure blocks positive bridge revocation.
+Every checked-in profile explicitly declares `overrides_file`; an empty string
+disables overrides without opening a file. A referenced strict-JSON override
+keeps `harness_resources` and `agent_sandbox_resources` independent: omitted
+harness dimensions stay unlimited, omitted sandbox dimensions retain the
+benchmark values, and neither block inherits from the other. An agent timeout
+changes only the harness run deadline. Task containers receive ARIES-owned
+timezone and noninteractive values.
+
+Terminal-Bench 2 remains pinned by its exact Git revision, while each task's
+explicit Docker image tag is read from that pinned task's `task.toml` rather
+than repeated in `configs/versions.json`. OpenClaw remains digest-pinned. Each
+bridge retains structured JSONL tool records plus sensitive, lossless
+human-readable `bridge/ssh_raw.log` evidence through a bounded asynchronous
+writer whose failure blocks positive bridge revocation.
 
 ## Repository boundary
 

@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/BurntSushi/toml"
 	"github.com/hyscale-lab/aries/pkg/config"
 )
 
@@ -34,7 +33,7 @@ func TestPinnedFixGitCheckout(t *testing.T) {
 	}
 	benchmark, err := New(Options{
 		Root: root, TaskIDs: []string{fixGitID}, OutputDir: t.TempDir(),
-		Revision: versions.TerminalBench2.Revision, Images: versions.TerminalBench2.Images,
+		Revision: versions.TerminalBench2.Revision,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +42,7 @@ func TestPinnedFixGitCheckout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tasks) != 1 || tasks[0].ID != fixGitID || tasks[0].Environment.Image != versions.TerminalBench2.Images["alexgshaw/fix-git:20251031"] {
+	if len(tasks) != 1 || tasks[0].ID != fixGitID || tasks[0].Environment.Image != "alexgshaw/fix-git:20251031" {
 		t.Fatalf("Tasks() = %#v", tasks)
 	}
 }
@@ -75,7 +74,7 @@ func TestPinnedSelectedTasksLoadInRequestedOrder(t *testing.T) {
 
 	benchmark, err := New(Options{
 		Root: root, TaskIDs: selected, OutputDir: t.TempDir(),
-		Revision: versions.TerminalBench2.Revision, Images: versions.TerminalBench2.Images,
+		Revision: versions.TerminalBench2.Revision,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -89,10 +88,10 @@ func TestPinnedSelectedTasksLoadInRequestedOrder(t *testing.T) {
 		id := task.ID
 		loaded = append(loaded, id)
 		details := benchmark.details[id]
-		_, pin := pinnedTaskImage(t, root, versions.TerminalBench2.Images, id)
+		image := pinnedTaskImage(t, root, id)
 		expected := want[id]
-		if task.Environment.Image != pin || task.Environment.Workdir != expected.workdir || task.Environment.CPU != expected.cpu || task.Environment.MemoryMB != expected.memoryMB || task.Environment.StorageMB != 10240 || task.Environment.GPUs != 0 || !task.Environment.AllowNetwork {
-			t.Fatalf("task %q environment = %#v, expected %+v with image %q", id, task.Environment, expected, pin)
+		if task.Environment.Image != image || task.Environment.Workdir != expected.workdir || task.Environment.CPU != expected.cpu || task.Environment.MemoryMB != expected.memoryMB || task.Environment.StorageMB != 10240 || task.Environment.GPUs != 0 || !task.Environment.AllowNetwork {
+			t.Fatalf("task %q environment = %#v, expected %+v with image %q", id, task.Environment, expected, image)
 		}
 		if task.Timeout.String() != expected.agentTimeout || details.timeout.String() != expected.verifyTimeout || len(details.verifierFiles) != expected.verifierFiles {
 			t.Fatalf("task %q private details timeout=%s verifier_files=%d, expected %+v", id, details.timeout, len(details.verifierFiles), expected)
@@ -104,7 +103,7 @@ func TestPinnedSelectedTasksLoadInRequestedOrder(t *testing.T) {
 }
 
 func TestEveryTaskInPinnedDatasetLoadsAtGenericBoundary(t *testing.T) {
-	root, versions := requirePinnedDataset(t)
+	root, _ := requirePinnedDataset(t)
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		t.Fatal(err)
@@ -123,20 +122,16 @@ func TestEveryTaskInPinnedDatasetLoadsAtGenericBoundary(t *testing.T) {
 	if len(taskIDs) == 0 {
 		t.Fatal("pinned Terminal-Bench checkout contains no task directories")
 	}
-	if len(taskIDs) != len(versions.TerminalBench2.Images) {
-		t.Fatalf("pinned dataset has %d tasks but image catalog has %d entries", len(taskIDs), len(versions.TerminalBench2.Images))
-	}
-
 	for _, id := range taskIDs {
-		_, pin := pinnedTaskImage(t, root, versions.TerminalBench2.Images, id)
-		task, details, err := loadTask(root, id, versions.TerminalBench2.Images)
+		image := pinnedTaskImage(t, root, id)
+		task, details, err := loadTask(root, id)
 		if err != nil {
 			t.Fatalf("load pinned task %q at generic boundary: %v", id, err)
 		}
 		if task.ID != id || strings.TrimSpace(task.Instruction) == "" {
 			t.Fatalf("task %q generic identity/instruction = %#v", id, task)
 		}
-		if task.Environment.Image != pin || !filepath.IsAbs(task.Environment.Workdir) || task.Environment.CPU <= 0 || task.Environment.MemoryMB <= 0 || task.Environment.StorageMB <= 0 || task.Environment.GPUs < 0 {
+		if task.Environment.Image != image || !filepath.IsAbs(task.Environment.Workdir) || task.Environment.CPU <= 0 || task.Environment.MemoryMB <= 0 || task.Environment.StorageMB <= 0 || task.Environment.GPUs < 0 {
 			t.Fatalf("task %q invalid generic environment = %#v", id, task.Environment)
 		}
 		wantVerifierFiles := countRegularVerifierFiles(t, filepath.Join(root, id, "tests"))
@@ -168,21 +163,13 @@ func requirePinnedDataset(t *testing.T) (string, config.Versions) {
 	return root, versions
 }
 
-func pinnedTaskImage(t *testing.T, root string, images map[string]string, id string) (string, string) {
+func pinnedTaskImage(t *testing.T, root, id string) string {
 	t.Helper()
-	var parsed taskFile
-	if _, err := toml.DecodeFile(filepath.Join(root, id, "task.toml"), &parsed); err != nil {
+	task, _, err := loadTask(root, id)
+	if err != nil {
 		t.Fatal(err)
 	}
-	source := parsed.Environment.DockerImage
-	if strings.TrimSpace(source) == "" {
-		t.Fatalf("task %q has no environment.docker_image", id)
-	}
-	pin, ok := images[source]
-	if !ok {
-		t.Fatalf("task %q source image %q has no pin", id, source)
-	}
-	return source, pin
+	return task.Environment.Image
 }
 
 func countRegularVerifierFiles(t *testing.T, root string) int {

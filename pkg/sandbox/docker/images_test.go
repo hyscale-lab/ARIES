@@ -75,11 +75,32 @@ func TestPullImagesSkipsPresentAndDeduplicatesPulls(t *testing.T) {
 	}
 }
 
-func TestPullImagesRejectsMutableReferencesBeforeDocker(t *testing.T) {
+func TestPullImagesRejectsImplicitAndMalformedReferencesBeforeDocker(t *testing.T) {
 	fake := &fakeImageClient{}
-	err := pullImages(context.Background(), fake, []string{"example.invalid/image:latest"})
+	err := pullImages(context.Background(), fake, []string{"example.invalid/image"})
 	if err == nil || fake.inspectCalls != 0 || len(fake.pullCalls) != 0 {
 		t.Fatalf("pullImages() error=%v inspect=%d pull=%v", err, fake.inspectCalls, fake.pullCalls)
+	}
+}
+
+func TestPullImagesAcceptsExplicitTaskTag(t *testing.T) {
+	fake := &fakeImageClient{present: true}
+	if err := pullImages(context.Background(), fake, []string{"example.invalid/task:20251031"}); err != nil {
+		t.Fatal(err)
+	}
+	if fake.inspectCalls != 1 || len(fake.pullCalls) != 0 {
+		t.Fatalf("inspect=%d pull=%v", fake.inspectCalls, fake.pullCalls)
+	}
+}
+
+func TestPullImagesAcceptsTaskTagAndHarnessDigestTogether(t *testing.T) {
+	const taskImage = "example.invalid/task:20251031"
+	fake := &fakeImageClient{present: true}
+	if err := pullImages(context.Background(), fake, []string{taskImage, testPullImage}); err != nil {
+		t.Fatal(err)
+	}
+	if fake.inspectCalls != 2 || len(fake.pullCalls) != 0 {
+		t.Fatalf("inspect=%d pull=%v", fake.inspectCalls, fake.pullCalls)
 	}
 }
 
