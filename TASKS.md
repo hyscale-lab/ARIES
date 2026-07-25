@@ -1,5 +1,108 @@
 # ARIES Tasks
 
+## R7 — Whole-repository modularity audit and evidence-gated cleanup
+
+Audit baseline: the tree immediately after `fb92446`.
+
+Reproducible evidence:
+
+- [x] `git ls-files | wc -l` reports 70 tracked paths;
+  `git ls-files '*.go' | wc -l` reports 54 Go files; and `go list ./...`
+  reports 11 packages. `go list -deps ./...` succeeds over 282 dependency
+  packages with no cycle or missing package.
+- [x] The internal-import edge listing from `go list -f` shows the composition
+  root importing the concrete components, while component packages use shared
+  core data, consumed Runner interfaces, and the narrow `containerimage`
+  helper; no concrete role imports another concrete role and no fifth Runner
+  role appears.
+- [x] A production declaration-name inventory followed by `git grep -w`
+  reverse-reference checks covered 387 distinct function, method, type,
+  variable, and constant names. Every name had another tracked-Go occurrence;
+  manual review of interfaces, entry points, tests, and build-tagged files found
+  no demonstrably dead production symbol or file.
+- [x] `go vet ./...` passes. In the restricted execution sandbox,
+  `go test ./...` passed every non-bridge package and failed only nine
+  listener-dependent bridge tests because `listen tcp4 127.0.0.1:0` returned
+  `socket: operation not permitted`; the same command run without that socket
+  restriction passes all packages.
+- [x] `git ls-files | grep -v '\.go$'` reports 16 non-Go paths: seven root
+  contract/build/license/task files, two configs, three docs, two Go module
+  files, and two profiles. Reference and key scans tie the configs and profiles
+  to loaders, tests, and runnable guidance; the docs, Makefile, ignore rules,
+  module metadata, license, and agent contract are intentional repository
+  surfaces rather than orphan cleanup candidates.
+
+Architecture and regression locks:
+
+- [x] Keep `cmd/aries.buildExperiment` as the visible composition root with one
+  explicit type switch per `Benchmark`, `AgentHarness`, `ToolSandbox`, and
+  `ToolBridge`. `TestBuildExperimentUsesExplicitTypeSwitches` locks the supported
+  constructors and role-specific unsupported-type errors.
+- [x] Keep the support checks in `cmd/aries.prepareProfile`.
+  `TestPrepareProfileRejectsUnknownComponentsBeforeSetup` proves the entire
+  setup profile is rejected before clone, task load, or image pull side effects.
+  This deliberate second composition-root touchpoint preserves validation error
+  precedence; it does not couple component selection into the Runner.
+- [x] Keep Runner lifecycle and evaluation gates locked by
+  `TestRunnerSuccessOrdering`,
+  `TestRunnerIsolationFailureNeverEvaluatesEvenAfterCleanupRetry`, and
+  `TestRunnerBlocksEvaluationWhenFailedHarnessStartCannotBeStopped`.
+- [x] Keep bridge and harness credential/revocation checks locked by
+  `TestLatePartialStartCleansListenerCredentialsAndAuditWithoutAliasBranches`,
+  `TestStartFailureRemovesOnlyContainerAndClearsSecret`, and
+  `TestStopFailsUntilContainerAbsenceCanBeConfirmed`.
+- [x] Keep Docker identity and positive-absence checks locked by
+  `TestManagerStopRejectsNilAndForeignSandbox`,
+  `TestStartUsesTypedOptionsAndStopIsIdempotent`, and
+  `TestExecCancellationReturnsTerminationConfirmationFailure`.
+- [x] Keep strict configuration and checked resource conversion locked by
+  `TestDecodeRejectsInvalidConfig`,
+  `TestLoadRuntimeOverridesStrictSparseAndChecked`,
+  `TestValidateEnvironmentRejectsResourceConversionOverflow`, and
+  `TestHarnessRejectsInvalidResourcesBeforeContainerCreate`.
+- [x] Keep verifier secrecy and task/path safety locked by
+  `TestLoadFixGitMapsGenericTaskAndKeepsVerifierPrivate`,
+  `TestRecursiveVerifierTreeStaysPrivateUntilEvaluate`,
+  `TestPrepareSandboxRemovesThenProvesVerifierPathsAbsent`, and
+  `TestNewRejectsUnsafeAndDuplicateTasks`.
+
+Cleanup decision and ordered completion gates:
+
+1. [x] Inventory source, dependencies, symbols, reverse references, non-Go
+   surfaces, and behavior locks before proposing a source edit.
+2. [x] Require focused regression evidence for every deletion or boundary
+   change. No candidate met that threshold, so Task 5 remains a
+   documentation-only audit result with no production or test churn.
+3. [x] Run Task 5 pre-commit audit and diff checks, confirming only this R7
+   record changed and no generic framework, dependency, or cosmetic churn was
+   introduced.
+4. [ ] Create the dedicated third change commit after `c7455eb` and `fb92446`
+   with the truthful message `chore: record whole-repository cleanup audit`.
+5. [ ] After all three change commits exist, run `make build`, `make test`,
+   `make test-race`, `make lint`, and `make integration`; do not count the
+   audit-only vet/unit evidence above as the full release gate.
+6. [ ] Confirm no leaked container, network, process, staged credential, or key;
+   run secret scans; verify the exact three-commit history and clean tree. Record
+   these post-commit facts only in the external Ultragoal ledger/final report,
+   with no fourth bookkeeping commit.
+
+Rejected candidates and rationale:
+
+- Removing an unreferenced-looking production declaration or file was rejected
+  because the whole-repository symbol audit found no demonstrably dead one.
+- Collapsing component construction into registration, factory, plugin, DI, or
+  generic utility machinery was rejected because the four explicit switches
+  already provide the required extension seams with less indirection.
+- Deduplicating `prepareProfile` support checks was rejected because their
+  preflight position prevents side effects and fixes validation error order.
+- Deleting or relaxing validators was rejected where the checks defend runtime
+  isolation, ownership, credentials, resource bounds, lifecycle, or cleanup.
+- Pruning profiles, docs, Make targets, or ignore entries was rejected because
+  the audit tied each item to an intentional user, release, or artifact surface.
+- Formatting-only movement, speculative abstractions, and new dependencies were
+  rejected because they add review risk without evidence of dead code or a
+  modularity defect.
+
 ## R6 — Runtime isolation, sparse overrides, and raw SSH audit
 
 - [x] Add optional dedicated strict-JSON runtime overrides with checked sparse

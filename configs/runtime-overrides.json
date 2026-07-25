@@ -1,11 +1,11 @@
 {
   "harness_resources": {
-    "cpu": 1.0,
-    "memory_mb": 1024
+    "cpu": 2.0,
+    "memory_mb": 2048
   },
   "agent_sandbox_resources": {
-    "cpu": 2.0,
-    "memory_mb": 4096
+    "cpu": 8.0,
+    "memory_mb": 16384
   },
-  "agent_timeout_seconds": 1200
+  "agent_timeout_seconds": 3600
 }

@@ -262,7 +262,7 @@ sandbox.
 ## Alternatives and tradeoffs
 
 | Design | Security and ownership | Workspace and image assumptions | Cancellation, revocation, and evidence | Evaluator visibility | Decision |
-| --- | --- | --- | --- | --- |
+| --- | --- | --- | --- | --- | --- |
 | **Current host SSH-to-Moby bridge** | ARIES owns the task container and ephemeral credentials; the harness receives neither the Docker socket nor verifier data. | Uses OpenClaw's pinned SSH grammar and virtual namespace; derives each task workdir from its Dockerfile. Task images need no SSH daemon or Python helper. | Targets one exec process group, positively revokes sessions, and retains paired wire/executed evidence. | Agent changes occur in the exact still-running container later evaluated; no bridge alias remains. | **Selected for OpenClaw.** |
 | **Install or require `sshd` in every task image** | Moves daemon, user, key, port, and process ownership into the evaluator's sandbox. | Assumes each heterogeneous benchmark image can run and safely configure SSH. | Adds another service to stop and audit; transport logs depend on image configuration. | The evaluator sees daemon and credential setup mutations unrelated to the task. | Rejected. |
 | **Give OpenClaw the Docker socket** | Exposes daemon authority far beyond one task container and lets the harness create, inspect, or remove unrelated resources. | Uses the harness's Docker behavior rather than the exact ARIES sandbox boundary. | ARIES cannot narrowly revoke per-task daemon authority or guarantee equivalent evidence. | The harness could replace or bypass the container intended for evaluation. | Rejected. |
