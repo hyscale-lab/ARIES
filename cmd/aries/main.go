@@ -119,16 +119,33 @@ func runCommandWithDependencies(ctx context.Context, args []string, stdout io.Wr
 		return errors.Join(preflightErr, persistErr)
 	}
 
-	experiment, err := buildExperiment(cfg, runID, outputRoot, harnessLookup, logger)
-	if err != nil {
-		return err
-	}
-	return executeAndRecord(ctx, experiment.Run, outputRoot, stdout)
+	return executeAndRecord(ctx, func(runCtx context.Context) (core.RunResult, error) {
+		return runProfile(runCtx, cfg.Name, runID, cfg.Benchmark.Tasks, cfg.Execution.Concurrency, cfg.Execution.Loop,
+			func(taskCtx context.Context, occurrence taskOccurrence) (core.RunResult, error) {
+				experiment, err := buildTaskExperiment(cfg, runID, outputRoot, occurrence.logicalID, occurrence.executionID, harnessLookup, logger)
+				if err != nil {
+					return core.RunResult{}, err
+				}
+				return experiment.Run(taskCtx)
+			})
+	}, outputRoot, stdout)
 }
 
 func buildExperiment(
 	cfg config.Config,
 	runID, outputRoot string,
+	apiKeyLookup func(string) ([]byte, bool),
+	logger *logrus.Logger,
+) (*experiment, error) {
+	if len(cfg.Benchmark.Tasks) == 0 {
+		return nil, errors.New("benchmark tasks are required")
+	}
+	return buildTaskExperiment(cfg, runID, outputRoot, cfg.Benchmark.Tasks[0], cfg.Benchmark.Tasks[0], apiKeyLookup, logger)
+}
+
+func buildTaskExperiment(
+	cfg config.Config,
+	runID, outputRoot, logicalID, occurrenceID string,
 	apiKeyLookup func(string) ([]byte, bool),
 	logger *logrus.Logger,
 ) (*experiment, error) {
@@ -143,8 +160,12 @@ func buildExperiment(
 	var benchmark runner.Benchmark
 	switch cfg.Benchmark.Type {
 	case "terminalbench2":
+		var executionIDs []string
+		if occurrenceID != logicalID {
+			executionIDs = []string{occurrenceID}
+		}
 		benchmark, err = terminalbench.New(terminalbench.Options{
-			Root: cfg.Benchmark.Root, TaskIDs: cfg.Benchmark.Tasks, OutputDir: outputRoot,
+			Root: cfg.Benchmark.Root, TaskIDs: []string{logicalID}, ExecutionTaskIDs: executionIDs, OutputDir: outputRoot,
 			Revision: cfg.Versions.TerminalBench2.Revision,
 		})
 		if err != nil {
@@ -154,35 +175,39 @@ func buildExperiment(
 		return nil, fmt.Errorf("unsupported benchmark type %q", cfg.Benchmark.Type)
 	}
 	var harness runner.AgentHarness
+	var harnessManager *openclawharness.Manager
 	switch cfg.Harness.Type {
 	case "openclaw":
-		harness, err = openclawharness.New(openclawharness.Options{
+		harnessManager, err = openclawharness.New(openclawharness.Options{
 			Image: cfg.Versions.OpenClaw.Image, OutputDir: outputRoot, APIKeyLookup: apiKeyLookup, Logger: logger,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("construct OpenClaw harness: %w", err)
 		}
+		harness = harnessManager
 	default:
 		return nil, fmt.Errorf("unsupported harness type %q", cfg.Harness.Type)
 	}
 	var sandbox runner.ToolSandbox
+	var sandboxManager *dockersandbox.Manager
 	var resourceSource monitor.ResourceSource
 	switch cfg.Sandbox.Type {
 	case "docker":
-		sandbox, err = dockersandbox.New(dockersandbox.Options{
+		sandboxManager, err = dockersandbox.New(dockersandbox.Options{
 			OutputDir: outputRoot, Logger: logger,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("construct Docker sandbox: %w", err)
+			return nil, errors.Join(fmt.Errorf("construct Docker sandbox: %w", err), closeOccurrenceClients(nil, harnessManager.Close))
 		}
+		sandbox = sandboxManager
 		resourceSource, err = dockersandbox.NewResourceSource(dockersandbox.ResourceOptions{
-			RunID: runID, TaskIDs: cfg.Benchmark.Tasks,
+			RunID: runID, TaskIDs: []string{occurrenceID},
 		})
 		if err != nil {
-			return nil, fmt.Errorf("construct Docker resource source: %w", err)
+			return nil, errors.Join(fmt.Errorf("construct Docker resource source: %w", err), closeOccurrenceClients(sandboxManager.Close, harnessManager.Close))
 		}
 	default:
-		return nil, fmt.Errorf("unsupported sandbox type %q", cfg.Sandbox.Type)
+		return nil, errors.Join(fmt.Errorf("unsupported sandbox type %q", cfg.Sandbox.Type), closeOccurrenceClients(nil, harnessManager.Close))
 	}
 	var bridge runner.ToolBridge
 	switch cfg.Bridge.Type {
@@ -193,10 +218,10 @@ func buildExperiment(
 			Logger:     logger,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("construct OpenClaw SSH bridge: %w", err)
+			return nil, errors.Join(fmt.Errorf("construct OpenClaw SSH bridge: %w", err), resourceSource.Close(), closeOccurrenceClients(sandboxManager.Close, harnessManager.Close))
 		}
 	default:
-		return nil, fmt.Errorf("unsupported bridge type %q", cfg.Bridge.Type)
+		return nil, errors.Join(fmt.Errorf("unsupported bridge type %q", cfg.Bridge.Type), resourceSource.Close(), closeOccurrenceClients(sandboxManager.Close, harnessManager.Close))
 	}
 	benchmarkRunner, err := runner.New(benchmark, harness, sandbox, bridge, runner.Options{
 		Name: cfg.Name, RunID: runID, OutputDir: outputRoot,
@@ -209,16 +234,28 @@ func buildExperiment(
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("construct runner: %w", err)
+		return nil, errors.Join(fmt.Errorf("construct runner: %w", err), resourceSource.Close(), closeOccurrenceClients(sandboxManager.Close, harnessManager.Close))
 	}
 	recorder, err := monitor.New(monitor.Options{
-		RunID: runID, TaskIDs: cfg.Benchmark.Tasks, OutputDir: outputRoot, Source: resourceSource, Logger: logger,
+		RunID: runID, TaskIDs: []string{occurrenceID}, OutputDir: outputRoot, Source: resourceSource, Logger: logger,
 	})
 	if err != nil {
-		_ = resourceSource.Close()
-		return nil, fmt.Errorf("construct monitor: %w", err)
+		return nil, errors.Join(fmt.Errorf("construct monitor: %w", err), resourceSource.Close(), closeOccurrenceClients(sandboxManager.Close, harnessManager.Close))
 	}
-	return &experiment{Runner: benchmarkRunner, Recorder: recorder}, nil
+	return &experiment{Runner: benchmarkRunner, Recorder: recorder, close: func() error {
+		return closeOccurrenceClients(sandboxManager.Close, harnessManager.Close)
+	}}, nil
+}
+
+func closeOccurrenceClients(sandboxClose, harnessClose func() error) error {
+	var errs []error
+	if sandboxClose != nil {
+		errs = append(errs, sandboxClose())
+	}
+	if harnessClose != nil {
+		errs = append(errs, harnessClose())
+	}
+	return errors.Join(errs...)
 }
 
 func newRunID(now time.Time, experimentName string) string {
@@ -342,8 +379,9 @@ func prepareProfile(ctx context.Context, cfg config.Config) error {
 		return fmt.Errorf("unsupported bridge type %q", cfg.Bridge.Type)
 	}
 
+	preparationTasks := uniqueStrings(cfg.Benchmark.Tasks)
 	benchmark, err := terminalbench.New(terminalbench.Options{
-		Root: cfg.Benchmark.Root, TaskIDs: cfg.Benchmark.Tasks, OutputDir: cfg.OutputDir,
+		Root: cfg.Benchmark.Root, TaskIDs: preparationTasks, OutputDir: cfg.OutputDir,
 		Revision: cfg.Versions.TerminalBench2.Revision,
 	})
 	if err != nil {
@@ -365,4 +403,17 @@ func prepareProfile(ctx context.Context, cfg config.Config) error {
 		return fmt.Errorf("prepare Docker images: %w", err)
 	}
 	return nil
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	unique := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		unique = append(unique, value)
+	}
+	return unique
 }

@@ -91,11 +91,26 @@ type Manager struct {
 	apiKeyLookup   func(string) ([]byte, bool)
 	newID          func() (string, error)
 
-	mu       sync.Mutex
-	active   *session
-	stopping bool
-	stopDone chan struct{}
-	stopErr  error
+	mu        sync.Mutex
+	active    *session
+	stopping  bool
+	stopDone  chan struct{}
+	stopErr   error
+	closeOnce sync.Once
+	closeErr  error
+}
+
+// Close releases the manager's Docker SDK transport after lifecycle cleanup.
+func (manager *Manager) Close() error {
+	if manager == nil {
+		return nil
+	}
+	manager.closeOnce.Do(func() {
+		if closer, ok := manager.client.(interface{ Close() error }); ok {
+			manager.closeErr = closer.Close()
+		}
+	})
+	return manager.closeErr
 }
 
 type session struct {
@@ -220,7 +235,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	}
 	active := &session{
 		runID: request.RunID, taskID: request.TaskID, safeTaskID: safeTaskID(request.TaskID), attemptID: id,
-		containerName: "aries-openclaw-" + id, artifactDir: filepath.Join(manager.outputDir, safeTaskID(request.TaskID), "harness"),
+		containerName: "aries-openclaw-" + id, artifactDir: filepath.Join(manager.outputDir, request.TaskID, "harness"),
 		endpoint: request.Endpoint, model: request.Model, agentTimeout: agentTimeout, apiKey: apiKey, gatewayToken: gatewayToken,
 	}
 	fail := func(primary error) error {
@@ -257,7 +272,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 			Labels: map[string]string{
 				"aries.managed": "true", "aries.kind": "openclaw-harness",
 				"aries.component": "harness",
-				"aries.run":       active.runID, "aries.task": active.safeTaskID, "aries.attempt": active.attemptID,
+				"aries.run":       active.runID, "aries.task": active.taskID, "aries.attempt": active.attemptID,
 			},
 		},
 		HostConfig: &container.HostConfig{NetworkMode: container.NetworkMode(active.endpoint.Network), Resources: resources},
@@ -672,7 +687,7 @@ func (manager *Manager) validateContainer(ctx context.Context, active *session) 
 		return errors.New("OpenClaw image or gateway command differs from the pinned direct configuration")
 	}
 	if configuration.Labels["aries.managed"] != "true" || configuration.Labels["aries.kind"] != "openclaw-harness" || configuration.Labels["aries.component"] != "harness" ||
-		configuration.Labels["aries.run"] != active.runID || configuration.Labels["aries.task"] != active.safeTaskID || configuration.Labels["aries.attempt"] != active.attemptID {
+		configuration.Labels["aries.run"] != active.runID || configuration.Labels["aries.task"] != active.taskID || configuration.Labels["aries.attempt"] != active.attemptID {
 		return errors.New("OpenClaw container labels do not match the task")
 	}
 	for _, value := range append(append([]string(nil), configuration.Env...), configuration.Cmd...) {
@@ -1065,7 +1080,13 @@ func validateRunID(value string) error {
 }
 
 func validateTaskID(value string) error {
-	if strings.TrimSpace(value) == "" || len(value) > 128 || strings.ContainsAny(value, "\x00\r\n") {
+	if value == "" || len(value) > 149 {
+		return errors.New("OpenClaw task ID is invalid")
+	}
+	for index, character := range value {
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || index > 0 && (character == '-' || character == '_' || character == '.') {
+			continue
+		}
 		return errors.New("OpenClaw task ID is invalid")
 	}
 	return nil

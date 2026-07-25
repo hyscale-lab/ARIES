@@ -262,6 +262,125 @@ func TestRecorderFailedStartRollsBackAndCanRetry(t *testing.T) {
 	if _, err := recorder.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	if _, closes := source.counts(); closes != 1 {
+		t.Fatalf("source closes = %d", closes)
+	}
+}
+
+func TestRecorderClosesSourceExactlyOnceAndPropagatesCloseError(t *testing.T) {
+	closeFailure := errors.New("close failed")
+	t.Run("canceled before start", func(t *testing.T) {
+		source := &fakeSource{closeErr: closeFailure}
+		recorder := newTestRecorder(t, source, filepath.Join(t.TempDir(), "run"), time.Hour)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err := recorder.Start(ctx)
+		if !errors.Is(err, context.Canceled) || !errors.Is(err, closeFailure) || !strings.Contains(err.Error(), "close monitor resource source") {
+			t.Fatalf("error = %v", err)
+		}
+		if _, closes := source.counts(); closes != 1 {
+			t.Fatalf("closes = %d", closes)
+		}
+	})
+	t.Run("prepare artifacts", func(t *testing.T) {
+		source := &fakeSource{closeErr: closeFailure}
+		output := filepath.Join(t.TempDir(), "run")
+		if err := os.MkdirAll(output, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(output, "fix-git"), []byte("block"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		recorder := newTestRecorder(t, source, output, time.Hour)
+		err := recorder.Start(context.Background())
+		if !errors.Is(err, closeFailure) {
+			t.Fatalf("error = %v", err)
+		}
+		if _, closes := source.counts(); closes != 1 {
+			t.Fatalf("closes = %d", closes)
+		}
+	})
+	t.Run("sample and repeated stop", func(t *testing.T) {
+		sampleFailure := errors.New("sample failed")
+		source := &fakeSource{closeErr: closeFailure, sample: func(context.Context, int) ([]core.ResourceReading, error) { return nil, sampleFailure }}
+		recorder := newTestRecorder(t, source, filepath.Join(t.TempDir(), "run"), time.Hour)
+		err := recorder.Start(context.Background())
+		if !errors.Is(err, sampleFailure) || !errors.Is(err, closeFailure) {
+			t.Fatalf("start error = %v", err)
+		}
+		for range 2 {
+			_, err = recorder.Stop(context.Background())
+			if !errors.Is(err, closeFailure) || !strings.Contains(err.Error(), "not started") {
+				t.Fatalf("stop error = %v", err)
+			}
+		}
+		if _, closes := source.counts(); closes != 1 {
+			t.Fatalf("closes = %d", closes)
+		}
+	})
+	t.Run("canceled after initial sample", func(t *testing.T) {
+		source := &fakeSource{closeErr: closeFailure}
+		ctx, cancel := context.WithCancel(context.Background())
+		source.sample = func(context.Context, int) ([]core.ResourceReading, error) { cancel(); return nil, nil }
+		recorder := newTestRecorder(t, source, filepath.Join(t.TempDir(), "run"), time.Hour)
+		err := recorder.Start(ctx)
+		if !errors.Is(err, context.Canceled) || !errors.Is(err, closeFailure) {
+			t.Fatalf("error = %v", err)
+		}
+		if _, closes := source.counts(); closes != 1 {
+			t.Fatalf("closes = %d", closes)
+		}
+	})
+	t.Run("success and cached stop", func(t *testing.T) {
+		source := &fakeSource{}
+		recorder := newTestRecorder(t, source, filepath.Join(t.TempDir(), "run"), time.Hour)
+		if err := recorder.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		for range 2 {
+			if _, err := recorder.Stop(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, closes := source.counts(); closes != 1 {
+			t.Fatalf("closes = %d", closes)
+		}
+	})
+	t.Run("stop timeout", func(t *testing.T) {
+		source := &fakeSource{closeErr: closeFailure}
+		recorder := newTestRecorder(t, source, filepath.Join(t.TempDir(), "run"), time.Hour)
+		recorder.started = true
+		recorder.sampleCancel = func() {}
+		recorder.sampleDone = make(chan struct{})
+		recorder.stopTimeout = time.Millisecond
+		for range 2 {
+			_, err := recorder.Stop(context.Background())
+			if !errors.Is(err, closeFailure) || !strings.Contains(err.Error(), "did not stop") {
+				t.Fatalf("error = %v", err)
+			}
+		}
+		if _, closes := source.counts(); closes != 1 {
+			t.Fatalf("closes = %d", closes)
+		}
+	})
+	t.Run("stop artifact failure and retry", func(t *testing.T) {
+		source := &fakeSource{}
+		recorder := newTestRecorder(t, source, filepath.Join(t.TempDir(), "run"), time.Hour)
+		if err := recorder.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		writeFailure := errors.New("write failed")
+		recorder.writeIndex = func(string, Index) error { return writeFailure }
+		for range 2 {
+			_, err := recorder.Stop(context.Background())
+			if !errors.Is(err, writeFailure) {
+				t.Fatalf("error = %v", err)
+			}
+		}
+		if _, closes := source.counts(); closes != 1 {
+			t.Fatalf("closes = %d", closes)
+		}
+	})
 }
 
 func TestRecorderConcurrentStopCachesIndependentReports(t *testing.T) {

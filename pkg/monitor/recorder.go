@@ -57,20 +57,22 @@ type Recorder struct {
 	now               func() time.Time
 	writeIndex        func(string, Index) error
 
-	mu            sync.Mutex
-	starting      bool
-	started       bool
-	startTime     time.Time
-	stopTime      time.Time
-	artifacts     map[string]*taskArtifact
-	sampleCancel  context.CancelFunc
-	sampleDone    chan struct{}
-	backgroundErr error
-	filesClosed   bool
-	stopAttempt   *stopAttempt
-	completed     bool
-	reports       map[string]core.ObserverResult
-	baselines     map[string]cpuBaseline
+	mu              sync.Mutex
+	starting        bool
+	started         bool
+	startTime       time.Time
+	stopTime        time.Time
+	artifacts       map[string]*taskArtifact
+	sampleCancel    context.CancelFunc
+	sampleDone      chan struct{}
+	backgroundErr   error
+	filesClosed     bool
+	stopAttempt     *stopAttempt
+	completed       bool
+	reports         map[string]core.ObserverResult
+	baselines       map[string]cpuBaseline
+	sourceCloseOnce sync.Once
+	sourceCloseErr  error
 }
 
 type stopAttempt struct {
@@ -171,7 +173,7 @@ func New(options Options) (*Recorder, error) {
 // a cancellation-isolated sampler. A failed partial start removes its artifacts.
 func (recorder *Recorder) Start(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
-		return err
+		return errors.Join(err, recorder.closeSource())
 	}
 	recorder.mu.Lock()
 	if recorder.started || recorder.starting {
@@ -187,9 +189,8 @@ func (recorder *Recorder) Start(ctx context.Context) error {
 
 	artifacts, err := prepareArtifacts(recorder.outputDir, recorder.taskIDs, recorder.artifactOps)
 	if err != nil {
-		_ = recorder.source.Close()
 		recorder.finishFailedStart()
-		return err
+		return errors.Join(err, recorder.closeSource())
 	}
 	startedAt := recorder.now().UTC()
 	recorder.mu.Lock()
@@ -198,7 +199,6 @@ func (recorder *Recorder) Start(ctx context.Context) error {
 	recorder.mu.Unlock()
 
 	startFailure := func(cause error) error {
-		_ = recorder.source.Close()
 		rollbackErr := removePartialArtifacts(artifacts, recorder.artifactOps)
 		recorder.mu.Lock()
 		recorder.artifacts = nil
@@ -207,9 +207,9 @@ func (recorder *Recorder) Start(ctx context.Context) error {
 		recorder.starting = false
 		recorder.mu.Unlock()
 		if rollbackErr != nil {
-			return errors.Join(cause, fmt.Errorf("roll back partial monitor start: %w", rollbackErr))
+			rollbackErr = fmt.Errorf("roll back partial monitor start: %w", rollbackErr)
 		}
-		return cause
+		return errors.Join(cause, rollbackErr, recorder.closeSource())
 	}
 	if err := recorder.sample(ctx, 0, startedAt); err != nil {
 		return startFailure(err)
@@ -368,7 +368,7 @@ func (recorder *Recorder) Stop(ctx context.Context) (map[string]core.ObserverRes
 		starting := recorder.starting
 		recorder.mu.Unlock()
 		if !starting {
-			_ = recorder.source.Close()
+			return nil, errors.Join(errors.New("monitor recorder is not started"), recorder.closeSource())
 		}
 		return nil, errors.New("monitor recorder is not started")
 	}
@@ -395,8 +395,8 @@ func (recorder *Recorder) Stop(ctx context.Context) (map[string]core.ObserverRes
 
 func (recorder *Recorder) finishStop(attempt *stopAttempt) {
 	complete := func(reports map[string]core.ObserverResult, err error, completed bool) {
-		if closeErr := recorder.source.Close(); closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("close monitor resource source: %w", closeErr))
+		if closeErr := recorder.closeSource(); closeErr != nil {
+			err = errors.Join(err, closeErr)
 			completed = false
 		}
 		recorder.completeAttempt(attempt, reports, err, completed)
@@ -479,6 +479,15 @@ func (recorder *Recorder) finishStop(attempt *stopAttempt) {
 	recorder.logger.WithFields(logrus.Fields{"run": recorder.runID, "status": status}).Info("resource monitoring stopped")
 }
 
+func (recorder *Recorder) closeSource() error {
+	recorder.sourceCloseOnce.Do(func() {
+		if err := recorder.source.Close(); err != nil {
+			recorder.sourceCloseErr = fmt.Errorf("close monitor resource source: %w", err)
+		}
+	})
+	return recorder.sourceCloseErr
+}
+
 func (recorder *Recorder) completeAttempt(attempt *stopAttempt, reports map[string]core.ObserverResult, err error, completed bool) {
 	recorder.mu.Lock()
 	attempt.reports = cloneReports(reports)
@@ -506,8 +515,12 @@ func cloneReports(source map[string]core.ObserverResult) map[string]core.Observe
 }
 
 func validateIdentity(kind, value string) error {
-	if value == "" || len(value) > maxIdentityLength {
-		return fmt.Errorf("monitor %s ID length must be between 1 and %d", kind, maxIdentityLength)
+	limit := maxIdentityLength
+	if kind == "task" {
+		limit = 149
+	}
+	if value == "" || len(value) > limit {
+		return fmt.Errorf("monitor %s ID length must be between 1 and %d", kind, limit)
 	}
 	for index, character := range value {
 		allowed := character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' ||

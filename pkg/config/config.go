@@ -29,9 +29,17 @@ type Config struct {
 	Sandbox       SandboxConfig    `json:"sandbox"`
 	Bridge        BridgeConfig     `json:"bridge"`
 	Model         ModelConfig      `json:"model"`
+	Execution     ExecutionConfig  `json:"execution,omitempty"`
 	OutputDir     string           `json:"output_dir"`
 	Versions      Versions         `json:"-"`
 	Overrides     RuntimeOverrides `json:"-"`
+}
+
+// ExecutionConfig controls bounded occurrence scheduling above the Runner.
+type ExecutionConfig struct {
+	Concurrency  int           `json:"concurrency"`
+	LoopDuration string        `json:"loop_duration,omitempty"`
+	Loop         time.Duration `json:"-"`
 }
 
 // RuntimeOverrides contains sparse, explicitly present runtime changes.
@@ -172,7 +180,7 @@ func validateResources(name string, resources ResourceOverrides) error {
 
 // Decode rejects unknown fields and trailing JSON values.
 func Decode(r io.Reader) (Config, error) {
-	var cfg Config
+	cfg := Config{Execution: ExecutionConfig{Concurrency: 1}}
 	if err := decodeStrictJSON(r, &cfg, "experiment config"); err != nil {
 		return Config{}, err
 	}
@@ -228,7 +236,17 @@ func decodeStrictJSON(r io.Reader, destination any, name string) error {
 	return nil
 }
 
-func (c Config) validate() error {
+func (c *Config) validate() error {
+	if c.Execution.Concurrency <= 0 {
+		return errors.New("execution.concurrency must be positive")
+	}
+	if c.Execution.LoopDuration != "" {
+		loop, err := time.ParseDuration(c.Execution.LoopDuration)
+		if err != nil || loop <= 0 {
+			return errors.New("execution.loop_duration must be a positive Go duration")
+		}
+		c.Execution.Loop = loop
+	}
 	checks := []struct {
 		name  string
 		value string

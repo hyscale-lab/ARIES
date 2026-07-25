@@ -1,5 +1,19 @@
 # ARIES Tasks
 
+## R8 — Concurrent occurrences and bounded loop admission
+
+- [x] Add strict execution configuration with default concurrency one and an
+  optional positive Go-duration loop deadline.
+- [x] Preserve ordered duplicates as weights and aggregate results/errors in
+  deterministic global occurrence order while bounding active work.
+- [x] Compose fresh one-task Runner dependencies per occurrence and use exact
+  occurrence IDs for Terminal-Bench private state, artifacts, labels, monitor
+  selection, and results.
+- [x] Stop loop admissions at the deadline or parent cancellation, then drain
+  admitted lifecycle and cleanup work.
+- [x] Transfer resource-source ownership once to Recorder and close concrete
+  harness/sandbox Moby clients idempotently after lifecycle cleanup.
+
 ## R7 — Whole-repository modularity audit and evidence-gated cleanup
 
 Audit baseline: the tree immediately after `fb92446`.

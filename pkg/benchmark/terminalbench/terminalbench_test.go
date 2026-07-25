@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,6 +38,107 @@ func TestPrepareSandboxRemovesThenProvesVerifierPathsAbsent(t *testing.T) {
 	}
 	if sandbox.uploads != 0 {
 		t.Fatalf("preparation uploaded %d files", sandbox.uploads)
+	}
+}
+
+func TestExecutionTaskIDLoadsLogicalTaskAndKeysPrivateDetails(t *testing.T) {
+	root := writeFixture(t)
+	benchmark, err := New(Options{Root: root, TaskIDs: []string{fixGitID}, ExecutionTaskIDs: []string{"fix-git-001"}, OutputDir: t.TempDir(), Revision: fixtureGitRevision(root)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := benchmark.Tasks(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || tasks[0].ID != "fix-git-001" {
+		t.Fatalf("tasks = %+v", tasks)
+	}
+	if _, ok := benchmark.details["fix-git-001"]; !ok {
+		t.Fatalf("details = %+v", benchmark.details)
+	}
+	if _, ok := benchmark.details[fixGitID]; ok {
+		t.Fatalf("logical ID retained as private key")
+	}
+}
+
+func TestConcurrentOccurrencesEvaluateToDisjointArtifacts(t *testing.T) {
+	root := writeFixture(t)
+	output := filepath.Join(t.TempDir(), "runs")
+	revision := fixtureGitRevision(root)
+	type outcome struct {
+		evaluation core.Evaluation
+		err        error
+	}
+	outcomes := make([]outcome, 2)
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	var group sync.WaitGroup
+	for index, executionID := range []string{"fix-git-001", "fix-git-002"} {
+		benchmark, err := New(Options{Root: root, TaskIDs: []string{fixGitID}, ExecutionTaskIDs: []string{executionID}, OutputDir: output, Revision: revision})
+		if err != nil {
+			t.Fatal(err)
+		}
+		tasks, err := benchmark.Tasks(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		sandbox := &fakeSandbox{verifierOutputs: map[string][]byte{
+			filepath.Join(verifierLogPath, "ctrf.json"):  []byte(validFixGitCTRF),
+			filepath.Join(verifierLogPath, "reward.txt"): []byte("1\n"),
+		}, commandResult: core.CommandResult{Stdout: executionID + "\n"}, verifierStarted: started, verifierRelease: release}
+		group.Add(1)
+		go func(index int) {
+			defer group.Done()
+			outcomes[index].evaluation, outcomes[index].err = benchmark.Evaluate(context.Background(), tasks[0], sandbox)
+		}(index)
+	}
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			close(release)
+			t.Fatal("concurrent evaluators did not overlap at the verifier barrier")
+		}
+	}
+	close(release)
+	group.Wait()
+	for index, outcome := range outcomes {
+		if outcome.err != nil {
+			t.Fatalf("evaluation %d: %v", index, outcome.err)
+		}
+		if len(outcome.evaluation.LogPaths) != 4 {
+			t.Fatalf("paths %d = %v", index, outcome.evaluation.LogPaths)
+		}
+		content, err := os.ReadFile(outcome.evaluation.LogPaths[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := fmt.Sprintf("fix-git-%03d\n", index+1)
+		if string(content) != want {
+			t.Fatalf("stdout %d = %q, want %q", index, content, want)
+		}
+	}
+	for leftIndex, left := range outcomes[0].evaluation.LogPaths {
+		for rightIndex, right := range outcomes[1].evaluation.LogPaths {
+			if left == right {
+				t.Fatalf("shared log path [%d,%d] %q", leftIndex, rightIndex, left)
+			}
+		}
+	}
+}
+
+func TestNewRejectsInvalidExecutionTaskIDs(t *testing.T) {
+	base := Options{Root: "root", TaskIDs: []string{"fix-git"}, OutputDir: "out", Revision: "revision"}
+	for _, ids := range [][]string{{}, {"bad/path"}, {strings.Repeat("a", 150)}, {"same", "same"}} {
+		options := base
+		options.ExecutionTaskIDs = ids
+		if len(ids) == 2 {
+			options.TaskIDs = []string{"a", "b"}
+		}
+		if _, err := New(options); err == nil {
+			t.Fatalf("accepted execution IDs %q", ids)
+		}
 	}
 }
 
@@ -1019,6 +1121,8 @@ type fakeSandbox struct {
 	preseededPaths     bool
 	preseededSymlinks  bool
 	cleanupComplete    bool
+	verifierStarted    chan<- struct{}
+	verifierRelease    <-chan struct{}
 }
 
 type prepareSandboxFake struct {
@@ -1063,6 +1167,12 @@ func (s *fakeSandbox) Exec(_ context.Context, command core.Command) (core.Comman
 			return core.CommandResult{}, errors.New("verifier ran before cleanup")
 		}
 		s.verifierCommand = command
+		if s.verifierStarted != nil {
+			s.verifierStarted <- struct{}{}
+		}
+		if s.verifierRelease != nil {
+			<-s.verifierRelease
+		}
 		s.downloads = cloneBytesMap(s.verifierOutputs)
 		return s.commandResult, s.commandErr
 	}

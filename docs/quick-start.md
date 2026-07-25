@@ -66,7 +66,10 @@ make setup PROFILE=profiles/openclaw-tb2-five-deepseek.json
 
 To run another subset from the pinned revision, copy either profile and replace
 `benchmark.tasks` with the desired task directory names. ARIES preserves the
-listed order and loads each task's explicit tagged image directly from that
+listed order and repeated entries. Set positive `execution.concurrency` to
+bound parallel occurrences. Add a positive Go duration such as `"30m"` as
+`execution.loop_duration` to repeat the list until admissions close; admitted
+work is always drained. ARIES loads each task's explicit tagged image directly from that
 task's `task.toml`; no version-catalog or Go code change is required.
 
 ## 3. Add the DeepSeek credential

@@ -84,6 +84,8 @@ type Manager struct {
 	cleanupTimeout time.Duration
 	logger         *logrus.Logger
 	newID          func() (string, error)
+	closeOnce      sync.Once
+	closeErr       error
 }
 
 // Sandbox is a live Docker task environment.
@@ -107,6 +109,19 @@ type Sandbox struct {
 	stopping       bool
 	stopDone       chan struct{}
 	stopErr        error
+}
+
+// Close releases the manager's Docker SDK transport. Resource cleanup remains Stop's responsibility.
+func (m *Manager) Close() error {
+	if m == nil {
+		return nil
+	}
+	m.closeOnce.Do(func() {
+		if closer, ok := m.client.(interface{ Close() error }); ok {
+			m.closeErr = closer.Close()
+		}
+	})
+	return m.closeErr
 }
 
 // New constructs a Docker manager without contacting the daemon.
@@ -1037,8 +1052,12 @@ func validateEnvironment(environment core.Environment) error {
 }
 
 func validateIdentity(kind, value string) error {
-	if value == "" || len(value) > 128 {
-		return fmt.Errorf("docker sandbox %s ID must contain 1 to 128 characters", kind)
+	limit := 128
+	if kind == "task" {
+		limit = 149
+	}
+	if value == "" || len(value) > limit {
+		return fmt.Errorf("docker sandbox %s ID must contain 1 to %d characters", kind, limit)
 	}
 	for index, character := range value {
 		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || index > 0 && (character == '-' || character == '_' || character == '.') {

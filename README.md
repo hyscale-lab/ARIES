@@ -65,7 +65,11 @@ should not be forced through one universal transport.
   disable overrides.
 
 To choose another subset, copy a profile and replace `benchmark.tasks` with
-task directory names from the pinned checkout. Task order is preserved. Both
+task directory names from the pinned checkout. Task order and repeated entries
+are preserved; repeats act as weights. `execution.concurrency` bounds parallel
+occurrences (default `1`). An optional positive `execution.loop_duration`
+repeats the ordered list until its admission deadline, then drains admitted
+occurrences through evaluation and cleanup. Both
 configuration files use strict JSON decoding; there is no inheritance,
 merging, plugin registry, or factory framework. API-key values never belong in
 either file.

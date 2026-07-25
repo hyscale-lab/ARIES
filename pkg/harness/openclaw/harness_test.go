@@ -51,6 +51,31 @@ type fakeDocker struct {
 	killCalls        int
 	removeCalls      int
 	createCalls      int
+	closeCalls       int
+	closeErr         error
+}
+
+func (fake *fakeDocker) Close() error {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.closeCalls++
+	return fake.closeErr
+}
+
+func TestManagerCloseIsIdempotent(t *testing.T) {
+	closeFailure := errors.New("close failed")
+	fake := newFakeDocker()
+	fake.closeErr = closeFailure
+	manager := &Manager{client: fake}
+	if err := manager.Close(); !errors.Is(err, closeFailure) {
+		t.Fatalf("error = %v", err)
+	}
+	if err := manager.Close(); !errors.Is(err, closeFailure) {
+		t.Fatalf("error = %v", err)
+	}
+	if fake.closeCalls != 1 {
+		t.Fatalf("close calls = %d", fake.closeCalls)
+	}
 }
 
 func TestHarnessAppliesOnlyPresentCheckedResources(t *testing.T) {

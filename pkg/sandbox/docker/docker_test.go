@@ -80,6 +80,30 @@ type fakeClient struct {
 	upload         client.CopyToContainerOptions
 	uploadBytes    []byte
 	download       client.CopyFromContainerResult
+	closeCalls     int
+	closeErr       error
+}
+
+func (f *fakeClient) Close() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.closeCalls++
+	return f.closeErr
+}
+
+func TestManagerCloseIsIdempotent(t *testing.T) {
+	closeFailure := errors.New("close failed")
+	fake := &fakeClient{closeErr: closeFailure}
+	manager := &Manager{client: fake}
+	if err := manager.Close(); !errors.Is(err, closeFailure) {
+		t.Fatalf("error = %v", err)
+	}
+	if err := manager.Close(); !errors.Is(err, closeFailure) {
+		t.Fatalf("error = %v", err)
+	}
+	if fake.closeCalls != 1 {
+		t.Fatalf("close calls = %d", fake.closeCalls)
+	}
 }
 
 func (f *fakeClient) NetworkCreate(_ context.Context, name string, options client.NetworkCreateOptions) (client.NetworkCreateResult, error) {

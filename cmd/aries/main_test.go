@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -65,6 +66,9 @@ func TestBuildExperimentUsesExplicitTypeSwitches(t *testing.T) {
 				if err != nil || experiment == nil || experiment.Runner == nil || experiment.Recorder == nil {
 					t.Fatalf("buildExperiment() = %v, %v", experiment, err)
 				}
+				if err := experiment.close(); err != nil {
+					t.Fatalf("close experiment: %v", err)
+				}
 				return
 			}
 			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
@@ -80,6 +84,101 @@ func TestNewRunIDContainsExperimentNameAndIsSafe(t *testing.T) {
 	if id != "20260720T230304.000000005Z-openclaw-tb2-five-deepseek" || strings.ContainsAny(id, `/\\`) {
 		t.Fatalf("run ID = %q", id)
 	}
+}
+
+func TestUniqueStringsDeduplicatesPreparationWithoutChangingExecutionList(t *testing.T) {
+	tasks := []string{"a", "b", "a", "a", "b"}
+	prepared := uniqueStrings(tasks)
+	if strings.Join(prepared, ",") != "a,b" || strings.Join(tasks, ",") != "a,b,a,a,b" {
+		t.Fatalf("prepared=%v tasks=%v", prepared, tasks)
+	}
+}
+
+func TestCloseOccurrenceClientsRunsReverseConstructionOrderAndJoinsErrors(t *testing.T) {
+	sandboxErr := errors.New("sandbox client close")
+	harnessErr := errors.New("harness client close")
+	var events []string
+	err := closeOccurrenceClients(func() error { events = append(events, "sandbox"); return sandboxErr }, func() error { events = append(events, "harness"); return harnessErr })
+	if !reflect.DeepEqual(events, []string{"sandbox", "harness"}) || !errors.Is(err, sandboxErr) || !errors.Is(err, harnessErr) {
+		t.Fatalf("events=%v error=%v", events, err)
+	}
+	events = nil
+	if err := closeOccurrenceClients(nil, func() error { events = append(events, "harness"); return nil }); err != nil || !reflect.DeepEqual(events, []string{"harness"}) {
+		t.Fatalf("partial events=%v error=%v", events, err)
+	}
+}
+
+func TestBuildTaskExperimentCreatesIsolatedOccurrenceGraph(t *testing.T) {
+	output := t.TempDir()
+	cfg := config.Config{
+		Name: "isolated", Benchmark: config.BenchmarkConfig{Type: "terminalbench2", Root: terminalbench.DefaultRoot, Tasks: []string{"fix-git"}},
+		Harness: config.HarnessConfig{Type: "openclaw"}, Sandbox: config.SandboxConfig{Type: "docker"}, Bridge: config.BridgeConfig{Type: "openclaw-ssh"},
+		Model: config.ModelConfig{BaseURL: "https://api.deepseek.com", Model: "model", APIKeyEnv: "KEY"}, OutputDir: output, Versions: testVersions(),
+	}
+	experiments := make([]*experiment, 2)
+	for index, occurrenceID := range []string{"fix-git-001", "fix-git-002"} {
+		built, err := buildTaskExperiment(cfg, "run", output, "fix-git", occurrenceID, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		experiments[index] = built
+		if got := reflectedStrings(t, built.Recorder, "taskIDs"); !reflect.DeepEqual(got, []string{occurrenceID}) {
+			t.Fatalf("recorder %d task IDs = %v", index, got)
+		}
+	}
+	if experiments[0].Runner == experiments[1].Runner || experiments[0].Recorder == experiments[1].Recorder {
+		t.Fatal("occurrences share Runner or Recorder")
+	}
+	for _, field := range []string{"benchmark", "harness", "toolSandbox", "bridge"} {
+		if reflectedInterfacePointer(t, experiments[0].Runner, field) == reflectedInterfacePointer(t, experiments[1].Runner, field) {
+			t.Fatalf("occurrences share Runner field %s", field)
+		}
+	}
+	for _, built := range experiments {
+		if _, err := built.Recorder.Stop(context.Background()); err == nil || !strings.Contains(err.Error(), "not started") {
+			t.Fatalf("close unstarted recorder: %v", err)
+		}
+		if err := built.close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := built.close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestBuildTaskExperimentUnwindsActualPartialBridgeConstruction(t *testing.T) {
+	cfg := config.Config{
+		Name: "partial", Benchmark: config.BenchmarkConfig{Type: "terminalbench2", Root: terminalbench.DefaultRoot, Tasks: []string{"fix-git"}},
+		Harness: config.HarnessConfig{Type: "openclaw"}, Sandbox: config.SandboxConfig{Type: "docker"}, Bridge: config.BridgeConfig{Type: "unknown"},
+		Model: config.ModelConfig{BaseURL: "https://api.deepseek.com", Model: "model", APIKeyEnv: "KEY"}, OutputDir: t.TempDir(), Versions: testVersions(),
+	}
+	built, err := buildTaskExperiment(cfg, "run", cfg.OutputDir, "fix-git", "fix-git-001", nil, nil)
+	if built != nil || err == nil || err.Error() != `unsupported bridge type "unknown"` {
+		t.Fatalf("build = %v, error = %v", built, err)
+	}
+}
+
+func reflectedInterfacePointer(t *testing.T, owner any, fieldName string) uintptr {
+	t.Helper()
+	field := reflect.ValueOf(owner).Elem().FieldByName(fieldName)
+	if !field.IsValid() || field.Kind() != reflect.Interface || field.IsNil() || field.Elem().Kind() != reflect.Pointer {
+		t.Fatalf("field %s cannot be inspected safely", fieldName)
+	}
+	return field.Elem().Pointer()
+}
+
+func reflectedStrings(t *testing.T, owner any, fieldName string) []string {
+	t.Helper()
+	field := reflect.ValueOf(owner).Elem().FieldByName(fieldName)
+	if !field.IsValid() || field.Kind() != reflect.Slice {
+		t.Fatalf("field %s cannot be inspected safely", fieldName)
+	}
+	values := make([]string, field.Len())
+	for index := range values {
+		values[index] = field.Index(index).String()
+	}
+	return values
 }
 
 func TestCreateAndPersistRunResultUsesPrivateNoReplaceFiles(t *testing.T) {

@@ -76,6 +76,15 @@ a fifth main component. Lifecycle remains on `ToolSandbox`, which stops the
 exact handle it created. Shared task, environment, command, endpoint, and result
 data stays in `pkg/core`.
 
+Concurrency is command-layer orchestration above this unchanged four-role
+Runner. The scheduler constructs a fresh one-task benchmark, harness, sandbox,
+bridge, resource source, recorder, and Runner for every admitted occurrence.
+Ordered duplicates are retained as weights. Occurrences use a run-global
+one-based execution ID (`<logical-id>-001`, minimum width three) for exact
+artifact paths, labels, monitoring, and results. A loop deadline stops new
+admissions and drains existing work; each active recorder independently scans
+run containers before filtering to its occurrence, a bounded-concurrency cost.
+
 ```text
 cmd/aries -> config + runner + concrete constructors
 runner    -> core data + four local interfaces

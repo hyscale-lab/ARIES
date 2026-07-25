@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadRuntimeOverridesStrictSparseAndChecked(t *testing.T) {
@@ -52,6 +53,36 @@ func TestLoadRuntimeOverridesStrictSparseAndChecked(t *testing.T) {
 	}
 	if _, err := LoadRuntimeOverrides(write("cpu-below.json", fmt.Sprintf(`{"agent_sandbox_resources":{"cpu":%g}}`, below))); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDecodeExecutionDefaultsAndValidation(t *testing.T) {
+	base := `{"name":"test","versions_file":"versions.json","benchmark":{"type":"terminalbench2","root":"root","tasks":["fix-git"]},"harness":{"type":"openclaw"},"sandbox":{"type":"docker"},"bridge":{"type":"openclaw-ssh"},"model":{"base_url":"https://example.com","model":"model","api_key_env":"KEY"},"output_dir":"runs"}`
+	cfg, err := Decode(strings.NewReader(base))
+	if err != nil || cfg.Execution.Concurrency != 1 || cfg.Execution.Loop != 0 {
+		t.Fatalf("default execution = %+v, %v", cfg.Execution, err)
+	}
+	for _, test := range []struct {
+		execution string
+		wantLoop  time.Duration
+		wantErr   bool
+	}{
+		{`{"concurrency":5,"loop_duration":"250ms"}`, 250 * time.Millisecond, false},
+		{`{"concurrency":1,"loop_duration":"1h30m"}`, 90 * time.Minute, false},
+		{`{"concurrency":0}`, 0, true},
+		{`{"concurrency":-1}`, 0, true},
+		{`{"concurrency":1,"loop_duration":"0s"}`, 0, true},
+		{`{"concurrency":1,"loop_duration":"bad"}`, 0, true},
+		{`{"concurrency":1,"unknown":true}`, 0, true},
+	} {
+		content := strings.Replace(base, `"output_dir":"runs"`, `"execution":`+test.execution+`,"output_dir":"runs"`, 1)
+		got, err := Decode(strings.NewReader(content))
+		if (err != nil) != test.wantErr {
+			t.Fatalf("execution %s error = %v", test.execution, err)
+		}
+		if err == nil && (got.Execution.Concurrency < 1 || got.Execution.Loop != test.wantLoop) {
+			t.Fatalf("execution %s = %+v", test.execution, got.Execution)
+		}
 	}
 }
 
@@ -201,7 +232,7 @@ func TestCheckedInDeepSeekProfileLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Name != "openclaw-tb2-fix-git-deepseek" || cfg.OverridesFile != "" || cfg.Versions.OpenClaw.Image == "" {
+	if cfg.Name != "openclaw-tb2-fix-git-deepseek" || cfg.OverridesFile != "" || cfg.Versions.OpenClaw.Image == "" || cfg.Execution.Concurrency != 1 || cfg.Execution.Loop != 0 {
 		t.Fatalf("checked-in profile = %#v", cfg)
 	}
 }
@@ -213,7 +244,7 @@ func TestCheckedInFiveTaskProfileLoadsInOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{"fix-git", "prove-plus-comm", "overfull-hbox", "rstan-to-pystan", "schemelike-metacircular-eval"}
-	if strings.Join(cfg.Benchmark.Tasks, ",") != strings.Join(want, ",") || cfg.OverridesFile == "" {
+	if strings.Join(cfg.Benchmark.Tasks, ",") != strings.Join(want, ",") || cfg.OverridesFile == "" || cfg.Execution.Concurrency != 5 || cfg.Execution.Loop != 0 {
 		t.Fatalf("checked-in five-task profile = %#v", cfg)
 	}
 }

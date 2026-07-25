@@ -11,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -30,19 +31,21 @@ const (
 
 // Options selects tasks from one pinned Terminal-Bench 2 checkout.
 type Options struct {
-	Root      string
-	TaskIDs   []string
-	OutputDir string
-	Revision  string
+	Root             string
+	TaskIDs          []string
+	ExecutionTaskIDs []string
+	OutputDir        string
+	Revision         string
 }
 
 // Benchmark discovers selected Terminal-Bench tasks and retains their private
 // verifier trees until evaluation.
 type Benchmark struct {
-	root      string
-	taskIDs   []string
-	outputDir string
-	revision  string
+	root             string
+	taskIDs          []string
+	executionTaskIDs []string
+	outputDir        string
+	revision         string
 
 	mu      sync.RWMutex
 	details map[string]taskDetails
@@ -123,13 +126,31 @@ func New(options Options) (*Benchmark, error) {
 		}
 		seen[id] = struct{}{}
 	}
+	executionIDs := options.ExecutionTaskIDs
+	if executionIDs == nil {
+		executionIDs = options.TaskIDs
+	} else if len(executionIDs) != len(options.TaskIDs) {
+		return nil, errors.New("terminalbench execution task IDs must match task IDs")
+	} else {
+		seen = make(map[string]struct{}, len(executionIDs))
+		for index, id := range executionIDs {
+			if !safeExecutionTaskID(options.TaskIDs[index], id) {
+				return nil, fmt.Errorf("invalid terminalbench execution task ID %q", id)
+			}
+			if _, duplicate := seen[id]; duplicate {
+				return nil, fmt.Errorf("duplicate terminalbench execution task ID %q", id)
+			}
+			seen[id] = struct{}{}
+		}
+	}
 
 	return &Benchmark{
-		root:      filepath.Clean(options.Root),
-		taskIDs:   slices.Clone(options.TaskIDs),
-		outputDir: filepath.Clean(options.OutputDir),
-		revision:  options.Revision,
-		details:   make(map[string]taskDetails, len(options.TaskIDs)),
+		root:             filepath.Clean(options.Root),
+		taskIDs:          slices.Clone(options.TaskIDs),
+		executionTaskIDs: slices.Clone(executionIDs),
+		outputDir:        filepath.Clean(options.OutputDir),
+		revision:         options.Revision,
+		details:          make(map[string]taskDetails, len(options.TaskIDs)),
 	}, nil
 }
 
@@ -140,7 +161,7 @@ func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
 
 	tasks := make([]core.Task, 0, len(b.taskIDs))
 	details := make(map[string]taskDetails, len(b.taskIDs))
-	for _, id := range b.taskIDs {
+	for index, id := range b.taskIDs {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -148,8 +169,10 @@ func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
 		if err != nil {
 			return nil, fmt.Errorf("load terminalbench task %q: %w", id, err)
 		}
+		executionID := b.executionTaskIDs[index]
+		task.ID = executionID
 		tasks = append(tasks, task)
-		details[id] = private
+		details[executionID] = private
 	}
 
 	b.mu.Lock()
@@ -517,6 +540,34 @@ func validEnvironmentName(value string) bool {
 
 func safeTaskID(id string) bool {
 	if id == "" || len(id) > 128 {
+		return false
+	}
+	for index, character := range id {
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || index > 0 && (character == '-' || character == '_' || character == '.') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func safeExecutionTaskID(logicalID, id string) bool {
+	if len(id) > 149 {
+		return false
+	}
+	if !safeIdentity(id) || !strings.HasPrefix(id, logicalID+"-") {
+		return false
+	}
+	suffix := strings.TrimPrefix(id, logicalID+"-")
+	if len(suffix) < 3 {
+		return false
+	}
+	index, err := strconv.ParseUint(suffix, 10, 64)
+	return err == nil && index > 0
+}
+
+func safeIdentity(id string) bool {
+	if id == "" {
 		return false
 	}
 	for index, character := range id {

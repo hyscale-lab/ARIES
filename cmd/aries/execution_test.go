@@ -5,10 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -51,6 +55,163 @@ func TestRunObservedOrdersObserverAroundCompleteRunnerAndAttachesReport(t *testi
 	wantReport.LogPaths[0] = "changed"
 	if result.Tasks[0].Observer.LogPaths[0] == "changed" {
 		t.Fatal("observer paths were not cloned")
+	}
+}
+
+func TestRunProfileConcurrentDuplicatesPreserveDispatchOrder(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan taskOccurrence, 5)
+	var active atomic.Int32
+	var peak atomic.Int32
+	run := func(_ context.Context, occurrence taskOccurrence) (core.RunResult, error) {
+		current := active.Add(1)
+		for current > peak.Load() && !peak.CompareAndSwap(peak.Load(), current) {
+		}
+		started <- occurrence
+		<-release
+		active.Add(-1)
+		return core.RunResult{Tasks: []core.TaskResult{{TaskID: occurrence.executionID}}, Summary: core.RunSummary{Tasks: 1}}, nil
+	}
+	done := make(chan core.RunResult, 1)
+	go func() {
+		result, err := runProfile(context.Background(), "name", "run", []string{"fix-git", "fix-git", "fix-git", "fix-git", "fix-git"}, 5, 0, run)
+		if err != nil {
+			t.Errorf("runProfile: %v", err)
+		}
+		done <- result
+	}()
+	for range 5 {
+		<-started
+	}
+	if peak.Load() != 5 {
+		t.Fatalf("peak = %d", peak.Load())
+	}
+	close(release)
+	result := <-done
+	for index, task := range result.Tasks {
+		want := fmt.Sprintf("fix-git-%03d", index+1)
+		if task.TaskID != want {
+			t.Fatalf("task %d = %q, want %q", index, task.TaskID, want)
+		}
+	}
+}
+
+func TestRunProfileGlobalIDsErrorsAndLimit(t *testing.T) {
+	var active, peak atomic.Int32
+	result, err := runProfile(context.Background(), "name", "run", []string{"a", "b", "a", "b"}, 2, 0,
+		func(_ context.Context, occurrence taskOccurrence) (core.RunResult, error) {
+			current := active.Add(1)
+			defer active.Add(-1)
+			for current > peak.Load() && !peak.CompareAndSwap(peak.Load(), current) {
+			}
+			var err error
+			if occurrence.index == 2 {
+				err = errors.New("failed")
+			}
+			return core.RunResult{Tasks: []core.TaskResult{{TaskID: occurrence.executionID}}, Summary: core.RunSummary{Tasks: 1}}, err
+		})
+	if err == nil || peak.Load() > 2 {
+		t.Fatalf("error=%v peak=%d", err, peak.Load())
+	}
+	want := []string{"a-001", "b-002", "a-003", "b-004"}
+	for i := range want {
+		if result.Tasks[i].TaskID != want[i] {
+			t.Fatalf("tasks = %+v", result.Tasks)
+		}
+	}
+}
+
+func TestRunProfileLoopStopsAdmissionsAndDrains(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan struct{}, 2)
+	done := make(chan core.RunResult, 1)
+	go func() {
+		result, _ := runProfile(context.Background(), "name", "run", []string{"a"}, 2, 25*time.Millisecond,
+			func(_ context.Context, occurrence taskOccurrence) (core.RunResult, error) {
+				started <- struct{}{}
+				<-release
+				return core.RunResult{Tasks: []core.TaskResult{{TaskID: occurrence.executionID}}, Summary: core.RunSummary{Tasks: 1}}, nil
+			})
+		done <- result
+	}()
+	<-started
+	<-started
+	time.Sleep(40 * time.Millisecond)
+	close(release)
+	result := <-done
+	if len(result.Tasks) != 2 {
+		t.Fatalf("admitted %d tasks", len(result.Tasks))
+	}
+}
+
+func TestRunProfileCancellationStopsAdmissionsAndWaitsForActive(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		_, err := runProfile(ctx, "name", "run", []string{"a", "b", "c"}, 1, 0,
+			func(context.Context, taskOccurrence) (core.RunResult, error) {
+				close(started)
+				<-release
+				return core.RunResult{Summary: core.RunSummary{Tasks: 1}}, nil
+			})
+		done <- err
+	}()
+	<-started
+	cancel()
+	select {
+	case <-done:
+		t.Fatal("returned before active occurrence drained")
+	default:
+	}
+	close(release)
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestRunProfileRepeatedOccurrencesCloseEachObservedExperimentOnce(t *testing.T) {
+	var mu sync.Mutex
+	closes := make(map[string]int)
+	result, err := runProfile(context.Background(), "name", "run", []string{"a", "a", "a"}, 3, 0,
+		func(ctx context.Context, occurrence taskOccurrence) (core.RunResult, error) {
+			closeExperiment := func() error { mu.Lock(); closes[occurrence.executionID]++; mu.Unlock(); return nil }
+			observed, runErr := runObserved(ctx,
+				func(context.Context) (core.RunResult, error) {
+					return core.RunResult{Tasks: []core.TaskResult{{TaskID: occurrence.executionID}}, Summary: core.RunSummary{Tasks: 1}}, nil
+				},
+				func(context.Context) error { return nil },
+				func(context.Context) (map[string]core.ObserverResult, error) {
+					return map[string]core.ObserverResult{occurrence.executionID: {Status: core.StatusSucceeded}}, nil
+				},
+				time.Second)
+			return observed, errors.Join(runErr, closeExperiment())
+		})
+	if err != nil || len(result.Tasks) != 3 {
+		t.Fatalf("result=%+v error=%v", result, err)
+	}
+	for _, id := range []string{"a-001", "a-002", "a-003"} {
+		if closes[id] != 1 {
+			t.Fatalf("close count %s = %d", id, closes[id])
+		}
+	}
+}
+
+func TestTaskOccurrenceIdentityBounds(t *testing.T) {
+	index := uint64(999)
+	occurrence, err := nextTaskOccurrence("a", &index)
+	if err != nil || occurrence.executionID != "a-1000" {
+		t.Fatalf("occurrence = %+v, %v", occurrence, err)
+	}
+	logical := strings.Repeat("a", 128)
+	index = math.MaxUint64 - 1
+	occurrence, err = nextTaskOccurrence(logical, &index)
+	if err != nil || len(occurrence.executionID) != 149 {
+		t.Fatalf("max occurrence length = %d, %v", len(occurrence.executionID), err)
+	}
+	if _, err := nextTaskOccurrence(logical, &index); err == nil {
+		t.Fatal("overflow accepted")
 	}
 }
 

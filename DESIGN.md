@@ -18,6 +18,12 @@ benchmark values, and neither block inherits from the other. An agent timeout
 changes only the harness run deadline. Task containers receive ARIES-owned
 timezone and noninteractive values.
 
+The command layer may schedule fresh one-task Runner compositions concurrently.
+Profile order, including duplicate weights, determines admission and result
+order. Each occurrence has an exact global execution ID for directories,
+labels, monitoring, and results. A configured loop duration bounds admissions,
+not cleanup: admitted occurrences always drain through the unchanged lifecycle.
+
 Terminal-Bench 2 remains pinned by its exact Git revision, while each task's
 explicit Docker image tag is read from that pinned task's `task.toml` rather
 than repeated in `configs/versions.json`. OpenClaw remains digest-pinned. Each
