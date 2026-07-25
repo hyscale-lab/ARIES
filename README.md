@@ -53,6 +53,8 @@ should not be forced through one universal transport.
 ## Configuration
 
 - `profiles/openclaw-tb2-fix-git-deepseek.json` is the quickest live example.
+- `profiles/openclaw-tb2-fix-git-sglang.json` targets an already-running local
+  SGLang endpoint; ARIES verifies but does not launch or manage the server.
 - `profiles/openclaw-tb2-five-deepseek.json` selects a heterogeneous five-task
   subset.
 - `configs/versions.json` contains the exact Terminal-Bench 2 Git revision and

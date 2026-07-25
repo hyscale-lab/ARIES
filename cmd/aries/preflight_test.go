@@ -48,6 +48,29 @@ type failingResponseDoer struct {
 	requests int
 }
 
+type sglangPreflightDoer struct {
+	t             *testing.T
+	body          string
+	status        int
+	requests      int
+	authorization string
+	wantURL       string
+}
+
+func (doer *sglangPreflightDoer) Do(request *http.Request) (*http.Response, error) {
+	doer.t.Helper()
+	doer.requests++
+	doer.authorization = request.Header.Get("Authorization")
+	if request.Method != http.MethodGet || request.URL.String() != doer.wantURL {
+		doer.t.Fatalf("request = %s %s", request.Method, request.URL)
+	}
+	status := doer.status
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(doer.body)), Request: request}, nil
+}
+
 func (doer *failingResponseDoer) Do(request *http.Request) (*http.Response, error) {
 	doer.requests++
 	return &http.Response{StatusCode: http.StatusOK, Body: doer.body, Request: request}, nil
@@ -77,7 +100,7 @@ func (doer *preflightDoer) Do(request *http.Request) (*http.Response, error) {
 }
 
 func officialDeepSeekModel() config.ModelConfig {
-	return config.ModelConfig{BaseURL: deepSeekBaseURL, Model: "deepseek-v4-flash", APIKeyEnv: deepSeekAPIKey}
+	return config.ModelConfig{Provider: "deepseek", BaseURL: deepSeekBaseURL, Model: "deepseek-v4-flash", APIKeyEnv: deepSeekAPIKey}
 }
 
 func TestValidateLiveModelConfirmsExactModelAndClearsCredentialBuffer(t *testing.T) {
@@ -231,17 +254,29 @@ func TestValidateLiveModelBoundsAttemptsAndSanitizesTerminalFailures(t *testing.
 	}
 }
 
-func TestValidateLiveModelConfigurationCredentialCancellationAndSkip(t *testing.T) {
-	t.Run("non DeepSeek", func(t *testing.T) {
+func TestValidateLiveModelConfigurationCredentialAndCancellation(t *testing.T) {
+	t.Run("unknown provider", func(t *testing.T) {
 		called := false
 		model := officialDeepSeekModel()
-		model.BaseURL = "http://fake-model.invalid/v1"
+		model.Provider = ""
 		validation, err := validateLiveModel(context.Background(), model, func(string) ([]byte, bool) {
 			called = true
 			return nil, false
 		}, nil, nil)
-		if err != nil || called || validation.Status != liveValidationNotRequested || validation.Category != liveValidationSkipped || validation.Attempts != 0 {
+		if err == nil || called || validation.Status != liveValidationFailed || validation.Category != liveValidationConfigurationInvalid || validation.Attempts != 0 {
 			t.Fatalf("validation=%+v called=%v err=%v", validation, called, err)
+		}
+	})
+	t.Run("sglang", func(t *testing.T) {
+		model := config.ModelConfig{Provider: "sglang", BaseURL: "http://fake.invalid/v1", Model: "local", APIKeyEnv: "SGLANG_API_KEY"}
+		doer := &sglangPreflightDoer{t: t, wantURL: "http://fake.invalid/v1/models", body: `{"data":[{"id":"local"}]}`}
+		validation, err := validateLiveModel(context.Background(), model, func(string) ([]byte, bool) { return []byte("dummy"), true }, doer, nil)
+		if err != nil || validation.Provider != "sglang" || validation.Status != liveValidationSucceeded || validation.Attempts != 1 || doer.authorization != "Bearer dummy" {
+			t.Fatalf("validation=%+v auth=%q error=%v", validation, doer.authorization, err)
+		}
+		encoded, _ := json.Marshal(validation)
+		if bytes.Contains(encoded, []byte("dummy")) {
+			t.Fatal("validation exposed key")
 		}
 	})
 	t.Run("wrong environment", func(t *testing.T) {
@@ -273,21 +308,51 @@ func TestValidateLiveModelConfigurationCredentialCancellationAndSkip(t *testing.
 
 func TestOfficialDeepSeekSelectionIsExact(t *testing.T) {
 	for _, model := range []config.ModelConfig{
-		{BaseURL: deepSeekBaseURL, Model: "deepseek-v4-flash"},
-		{BaseURL: deepSeekBaseURL, Model: "deepseek-v4-pro"},
+		{Provider: "deepseek", BaseURL: deepSeekBaseURL, Model: "deepseek-v4-flash"},
+		{Provider: "deepseek", BaseURL: deepSeekBaseURL, Model: "deepseek-v4-pro"},
 	} {
 		if !isOfficialDeepSeek(model) {
 			t.Fatalf("official model not selected: %+v", model)
 		}
 	}
 	for _, model := range []config.ModelConfig{
-		{BaseURL: deepSeekBaseURL + "/", Model: "deepseek-v4-flash"},
-		{BaseURL: deepSeekBaseURL, Model: "deepseek-v4"},
-		{BaseURL: "http://api.deepseek.com", Model: "deepseek-v4-pro"},
+		{Provider: "deepseek", BaseURL: deepSeekBaseURL + "/", Model: "deepseek-v4-flash"},
+		{Provider: "deepseek", BaseURL: deepSeekBaseURL, Model: "deepseek-v4"},
+		{Provider: "deepseek", BaseURL: "http://api.deepseek.com", Model: "deepseek-v4-pro"},
 	} {
 		if isOfficialDeepSeek(model) {
 			t.Fatalf("near match selected: %+v", model)
 		}
+	}
+}
+
+func TestSGLangPreflightFailsClosedWithSanitizedCategories(t *testing.T) {
+	model := config.ModelConfig{Provider: "sglang", BaseURL: "http://fake.invalid/v1", Model: "local", APIKeyEnv: "SGLANG_API_KEY"}
+	for _, test := range []struct {
+		name     string
+		status   int
+		body     string
+		category liveValidationCategory
+	}{
+		{"missing", 200, `{"data":[{"id":"other"}]}`, liveValidationModelMissing},
+		{"malformed", 200, "body-canary", liveValidationMalformed},
+		{"unauthorized", 401, "body-canary", liveValidationUnauthorized},
+		{"redirect", 302, "body-canary", liveValidationRedirect},
+		{"oversized", 200, strings.Repeat("x", (1<<20)+1), liveValidationResponseTooLarge},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			doer := &sglangPreflightDoer{t: t, wantURL: "http://fake.invalid/v1/models", status: test.status, body: test.body}
+			validation, err := validateLiveModel(context.Background(), model, func(string) ([]byte, bool) { return []byte("key-canary"), true }, doer, nil)
+			if err == nil || validation.Category != test.category || validation.Provider != "sglang" || validation.Attempts != 1 {
+				t.Fatalf("validation=%+v error=%v", validation, err)
+			}
+			encoded, _ := json.Marshal(validation)
+			for _, canary := range []string{"key-canary", "body-canary"} {
+				if strings.Contains(err.Error(), canary) || bytes.Contains(encoded, []byte(canary)) {
+					t.Fatalf("exposed %q", canary)
+				}
+			}
+		})
 	}
 }
 

@@ -57,7 +57,7 @@ func TestLoadRuntimeOverridesStrictSparseAndChecked(t *testing.T) {
 }
 
 func TestDecodeExecutionDefaultsAndValidation(t *testing.T) {
-	base := `{"name":"test","versions_file":"versions.json","benchmark":{"type":"terminalbench2","root":"root","tasks":["fix-git"]},"harness":{"type":"openclaw"},"sandbox":{"type":"docker"},"bridge":{"type":"openclaw-ssh"},"model":{"base_url":"https://example.com","model":"model","api_key_env":"KEY"},"output_dir":"runs"}`
+	base := `{"name":"test","versions_file":"versions.json","benchmark":{"type":"terminalbench2","root":"root","tasks":["fix-git"]},"harness":{"type":"openclaw"},"sandbox":{"type":"docker"},"bridge":{"type":"openclaw-ssh"},"model":{"provider":"deepseek","base_url":"https://example.com","model":"model","api_key_env":"KEY"},"output_dir":"runs"}`
 	cfg, err := Decode(strings.NewReader(base))
 	if err != nil || cfg.Execution.Concurrency != 1 || cfg.Execution.Loop != 0 {
 		t.Fatalf("default execution = %+v, %v", cfg.Execution, err)
@@ -82,6 +82,39 @@ func TestDecodeExecutionDefaultsAndValidation(t *testing.T) {
 		}
 		if err == nil && (got.Execution.Concurrency < 1 || got.Execution.Loop != test.wantLoop) {
 			t.Fatalf("execution %s = %+v", test.execution, got.Execution)
+		}
+	}
+}
+
+func TestDecodeRequiresSupportedModelProvider(t *testing.T) {
+	base := `{"name":"test","versions_file":"versions.json","benchmark":{"type":"terminalbench2","root":"root","tasks":["fix-git"]},"harness":{"type":"openclaw"},"sandbox":{"type":"docker"},"bridge":{"type":"openclaw-ssh"},"model":{"provider":"deepseek","base_url":"https://example.com","model":"model","api_key_env":"KEY"},"output_dir":"runs"}`
+	for _, provider := range []string{"deepseek", "sglang"} {
+		content := strings.Replace(base, `"provider":"deepseek"`, `"provider":"`+provider+`"`, 1)
+		if provider == "sglang" {
+			content = strings.Replace(content, "https://example.com", "https://example.com/v1", 1)
+		}
+		if _, err := Decode(strings.NewReader(content)); err != nil {
+			t.Fatalf("provider %s: %v", provider, err)
+		}
+	}
+	for _, content := range []string{strings.Replace(base, `"provider":"deepseek",`, "", 1), strings.Replace(base, `"provider":"deepseek"`, `"provider":"other"`, 1)} {
+		if _, err := Decode(strings.NewReader(content)); err == nil {
+			t.Fatalf("accepted provider document %s", content)
+		}
+	}
+}
+
+func TestDecodeSGLangBaseURLIsExactAndNormalized(t *testing.T) {
+	base := `{"name":"test","versions_file":"versions.json","benchmark":{"type":"terminalbench2","root":"root","tasks":["fix-git"]},"harness":{"type":"openclaw"},"sandbox":{"type":"docker"},"bridge":{"type":"openclaw-ssh"},"model":{"provider":"sglang","base_url":"BASE","model":"model","api_key_env":"KEY"},"output_dir":"runs"}`
+	valid := strings.Replace(base, "BASE", "https://host:30000/v1/", 1)
+	cfg, err := Decode(strings.NewReader(valid))
+	if err != nil || cfg.Model.BaseURL != "https://host:30000/v1" {
+		t.Fatalf("normalized base URL = %q, %v", cfg.Model.BaseURL, err)
+	}
+	for _, invalid := range []string{"http://host/v1/v1", "http://host/v1?", "http://host/v%31"} {
+		content := strings.Replace(base, "BASE", invalid, 1)
+		if _, err := Decode(strings.NewReader(content)); err == nil {
+			t.Fatalf("accepted SGLang base URL %q", invalid)
 		}
 	}
 }
@@ -146,7 +179,7 @@ const validConfig = `{
 	"harness": {"type": "openclaw"},
   "sandbox": {"type": "docker"},
   "bridge": {"type": "openclaw-ssh"},
-  "model": {"base_url": "http://127.0.0.1:8080", "model": "fake", "api_key_env": "DEEPSEEK_API_KEY"}
+  "model": {"provider": "deepseek", "base_url": "http://127.0.0.1:8080", "model": "fake", "api_key_env": "DEEPSEEK_API_KEY"}
 }`
 
 const validVersions = `{
@@ -246,6 +279,17 @@ func TestCheckedInFiveTaskProfileLoadsInOrder(t *testing.T) {
 	want := []string{"fix-git", "prove-plus-comm", "overfull-hbox", "rstan-to-pystan", "schemelike-metacircular-eval"}
 	if strings.Join(cfg.Benchmark.Tasks, ",") != strings.Join(want, ",") || cfg.OverridesFile == "" || cfg.Execution.Concurrency != 5 || cfg.Execution.Loop != 0 {
 		t.Fatalf("checked-in five-task profile = %#v", cfg)
+	}
+}
+
+func TestCheckedInSGLangProfileLoadsWithoutEndpoint(t *testing.T) {
+	path := filepath.Clean(filepath.Join("..", "..", "profiles", "openclaw-tb2-fix-git-sglang.json"))
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model.Provider != "sglang" || !strings.HasSuffix(cfg.Model.BaseURL, "/v1") || cfg.Model.APIKeyEnv != "SGLANG_API_KEY" {
+		t.Fatalf("profile = %#v", cfg)
 	}
 }
 

@@ -253,7 +253,7 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 	preloadedSandbox := &preloadedSandboxManager{inner: sandbox}
 	composed, err := runner.New(mutationCheckingBenchmark{inner: benchmark}, harness, preloadedSandbox, bridge, runner.Options{
 		Name: "openclaw-tb2-fix-git-deterministic", RunID: runID, OutputDir: outputDir,
-		Model:          core.ModelConfig{BaseURL: "http://fake-model:8080/v1", Model: "aries-deterministic", APIKeyEnv: integrationAPIKeyEnv},
+		Model:          core.ModelConfig{Provider: "deepseek", BaseURL: "http://fake-model:8080/v1", Model: "aries-deterministic", APIKeyEnv: integrationAPIKeyEnv},
 		CleanupTimeout: 45 * time.Second, Logger: logger,
 	})
 	if err != nil {

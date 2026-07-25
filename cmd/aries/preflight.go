@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/config"
+	"github.com/hyscale-lab/aries/pkg/model/sglang"
 )
 
 const (
@@ -62,12 +63,13 @@ type liveValidation struct {
 }
 
 type liveValidationError struct {
+	provider string
 	category liveValidationCategory
 	attempts int
 }
 
 func (err *liveValidationError) Error() string {
-	return fmt.Sprintf("DeepSeek preflight failed: %s after %d attempt(s)", err.category, err.attempts)
+	return fmt.Sprintf("%s preflight failed: %s after %d attempt(s)", err.provider, err.category, err.attempts)
 }
 
 type httpDoer interface {
@@ -83,13 +85,13 @@ func validateLiveModel(
 	client httpDoer,
 	sleep contextSleep,
 ) (liveValidation, error) {
-	if !isOfficialDeepSeek(model) {
-		return liveValidation{
-			SchemaVersion: 1, Status: liveValidationNotRequested, Category: liveValidationSkipped,
-			Provider: "none", BaseURL: model.BaseURL, Model: model.Model,
-		}, nil
-	}
-	if model.APIKeyEnv != deepSeekAPIKey {
+	switch model.Provider {
+	case "deepseek":
+		if !isOfficialDeepSeek(model) || model.APIKeyEnv != deepSeekAPIKey {
+			return liveValidationFailure(model, liveValidationConfigurationInvalid, 0)
+		}
+	case "sglang":
+	default:
 		return liveValidationFailure(model, liveValidationConfigurationInvalid, 0)
 	}
 	if lookup == nil {
@@ -103,6 +105,9 @@ func validateLiveModel(
 	defer clear(key)
 	if len(key) == 0 || len(key) > maxAPIKeyBytes || bytes.ContainsAny(key, "\x00\r\n") {
 		return liveValidationFailure(model, liveValidationCredentialInvalid, 0)
+	}
+	if model.Provider == "sglang" {
+		return validateSGLangModel(ctx, model, key, client)
 	}
 	if client == nil {
 		client = newDeepSeekHTTPClient()
@@ -127,6 +132,64 @@ func validateLiveModel(
 		}
 	}
 	panic("unreachable DeepSeek preflight attempt count")
+}
+
+type doerTransport struct{ doer httpDoer }
+
+func (transport doerTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	return transport.doer.Do(request)
+}
+
+func validateSGLangModel(ctx context.Context, model config.ModelConfig, key []byte, doer httpDoer) (liveValidation, error) {
+	var httpClient *http.Client
+	if doer != nil {
+		httpClient = &http.Client{Timeout: deepSeekRequestTimeout, Transport: doerTransport{doer: doer}}
+	}
+	client, err := sglang.New(model.BaseURL, key, httpClient)
+	if err != nil {
+		return liveValidationFailure(model, liveValidationConfigurationInvalid, 0)
+	}
+	defer client.Close()
+	models, err := client.Models(ctx)
+	if err != nil {
+		category := liveValidationTransport
+		var failure *sglang.Failure
+		switch {
+		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+			category = liveValidationCanceled
+		case errors.As(err, &failure):
+			switch failure.Category {
+			case sglang.CategoryResponseTooLarge:
+				category = liveValidationResponseTooLarge
+			case sglang.CategoryResponseRead:
+				category = liveValidationResponseRead
+			case sglang.CategoryMalformed:
+				category = liveValidationMalformed
+			case sglang.CategoryHTTPStatus:
+				switch failure.StatusCode {
+				case http.StatusUnauthorized:
+					category = liveValidationUnauthorized
+				case http.StatusForbidden:
+					category = liveValidationForbidden
+				case http.StatusTooManyRequests:
+					category = liveValidationRateLimited
+				default:
+					if failure.StatusCode >= 300 && failure.StatusCode < 400 {
+						category = liveValidationRedirect
+					} else {
+						category = liveValidationHTTP
+					}
+				}
+			}
+		}
+		return liveValidationFailure(model, category, 1)
+	}
+	for _, candidate := range models {
+		if candidate == model.Model {
+			return liveValidation{SchemaVersion: 1, Status: liveValidationSucceeded, Category: liveValidationConfirmed, Provider: "sglang", BaseURL: model.BaseURL, Model: model.Model, Attempts: 1}, nil
+		}
+	}
+	return liveValidationFailure(model, liveValidationModelMissing, 1)
 }
 
 func newDeepSeekHTTPClient() *http.Client {
@@ -234,17 +297,17 @@ func sleepWithContext(ctx context.Context, duration time.Duration) error {
 }
 
 func isOfficialDeepSeek(model config.ModelConfig) bool {
-	return model.BaseURL == deepSeekBaseURL && (model.Model == "deepseek-v4-flash" || model.Model == "deepseek-v4-pro")
+	return model.Provider == "deepseek" && model.BaseURL == deepSeekBaseURL && (model.Model == "deepseek-v4-flash" || model.Model == "deepseek-v4-pro")
 }
 
 func liveValidationFailure(model config.ModelConfig, category liveValidationCategory, attempts int) (liveValidation, error) {
-	return failedLiveValidation(model, category, attempts), &liveValidationError{category: category, attempts: attempts}
+	return failedLiveValidation(model, category, attempts), &liveValidationError{provider: model.Provider, category: category, attempts: attempts}
 }
 
 func failedLiveValidation(model config.ModelConfig, category liveValidationCategory, attempts int) liveValidation {
 	return liveValidation{
 		SchemaVersion: 1, Status: liveValidationFailed, Category: category,
-		Provider: "deepseek", BaseURL: model.BaseURL, Model: model.Model, Attempts: attempts,
+		Provider: model.Provider, BaseURL: model.BaseURL, Model: model.Model, Attempts: attempts,
 	}
 }
 

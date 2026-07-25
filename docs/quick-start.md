@@ -93,6 +93,10 @@ installed elsewhere, ARIES reads `DEEPSEEK_API_KEY` from the environment. If a
 repository-local file exists but is invalid, ARIES fails closed rather than
 falling back.
 
+For the SGLang example, point `model.base_url` at an already-running versioned
+`/v1` endpoint and set any non-empty local credential value, such as
+`SGLANG_API_KEY=local`. ARIES does not launch SGLang or manage GPUs.
+
 ## 4. Run the experiment
 
 For the one-task example:

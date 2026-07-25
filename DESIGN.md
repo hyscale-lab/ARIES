@@ -24,6 +24,11 @@ order. Each occurrence has an exact global execution ID for directories,
 labels, monitoring, and results. A configured loop duration bounds admissions,
 not cleanup: admitted occurrences always drain through the unchanged lifecycle.
 
+Model selection is explicit: `deepseek` retains its official bounded preflight,
+while `sglang` targets an already-running versioned `/v1` endpoint and performs
+bounded exact model discovery. Neither provider stores key bytes in profiles or
+artifacts, and ARIES does not launch or manage SGLang infrastructure.
+
 Terminal-Bench 2 remains pinned by its exact Git revision, while each task's
 explicit Docker image tag is read from that pinned task's `task.toml` rather
 than repeated in `configs/versions.json`. OpenClaw remains digest-pinned. Each

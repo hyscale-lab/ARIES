@@ -75,6 +75,7 @@ type BridgeConfig struct {
 }
 
 type ModelConfig struct {
+	Provider  string `json:"provider"`
 	BaseURL   string `json:"base_url"`
 	Model     string `json:"model"`
 	APIKeyEnv string `json:"api_key_env"`
@@ -258,6 +259,7 @@ func (c *Config) validate() error {
 		{"harness.type", c.Harness.Type},
 		{"sandbox.type", c.Sandbox.Type},
 		{"bridge.type", c.Bridge.Type},
+		{"model.provider", c.Model.Provider},
 		{"model.base_url", c.Model.BaseURL},
 		{"model.model", c.Model.Model},
 		{"model.api_key_env", c.Model.APIKeyEnv},
@@ -267,6 +269,9 @@ func (c *Config) validate() error {
 		if strings.TrimSpace(check.value) == "" {
 			return fmt.Errorf("%s is required", check.name)
 		}
+	}
+	if c.Model.Provider != "deepseek" && c.Model.Provider != "sglang" {
+		return errors.New("model.provider must be deepseek or sglang")
 	}
 	if err := validateExperimentName(c.Name); err != nil {
 		return err
@@ -280,17 +285,37 @@ func (c *Config) validate() error {
 		}
 	}
 
-	baseURL, err := url.Parse(c.Model.BaseURL)
-	if err != nil || (baseURL.Scheme != "http" && baseURL.Scheme != "https") || baseURL.Host == "" {
-		return fmt.Errorf("model.base_url must be an absolute HTTP(S) URL")
-	}
-	if baseURL.User != nil || baseURL.RawQuery != "" || baseURL.Fragment != "" {
-		return errors.New("model.base_url must not contain credentials, a query, or a fragment")
+	if c.Model.Provider == "sglang" {
+		normalized, err := normalizeSGLangBaseURL(c.Model.BaseURL)
+		if err != nil {
+			return fmt.Errorf("model.base_url for sglang: %w", err)
+		}
+		c.Model.BaseURL = normalized
+	} else {
+		baseURL, err := url.Parse(c.Model.BaseURL)
+		if err != nil || (baseURL.Scheme != "http" && baseURL.Scheme != "https") || baseURL.Host == "" {
+			return fmt.Errorf("model.base_url must be an absolute HTTP(S) URL")
+		}
+		if baseURL.User != nil || baseURL.RawQuery != "" || baseURL.Fragment != "" {
+			return errors.New("model.base_url must not contain credentials, a query, or a fragment")
+		}
 	}
 	if !validEnvName(c.Model.APIKeyEnv) {
 		return errors.New("model.api_key_env must be an environment variable name")
 	}
 	return nil
+}
+
+func normalizeSGLangBaseURL(baseURL string) (string, error) {
+	parsed, err := url.Parse(baseURL)
+	if err != nil || parsed.Scheme != "http" && parsed.Scheme != "https" || parsed.Host == "" || parsed.Opaque != "" || parsed.User != nil || parsed.RawPath != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || strings.Contains(baseURL, "#") {
+		return "", errors.New("must be an absolute HTTP(S) URL without credentials, escaped path, query, or fragment")
+	}
+	if parsed.Path != "/v1" && parsed.Path != "/v1/" {
+		return "", errors.New("path must be exactly /v1")
+	}
+	parsed.Path = "/v1"
+	return parsed.String(), nil
 }
 
 func validateExperimentName(name string) error {

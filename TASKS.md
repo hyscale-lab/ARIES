@@ -1,5 +1,13 @@
 # ARIES Tasks
 
+## R9 — Endpoint-only SGLang provider
+
+- [x] Require explicit `deepseek` or `sglang` model provider selection.
+- [x] Add a bounded, redirect-rejecting standard-library SGLang Models and
+  non-streaming Chat client with sanitized errors and optional bearer auth.
+- [x] Add provider-aware preflight and OpenClaw rendering without GPU or server
+  lifecycle management, plus a CPU-loadable example profile.
+
 ## R8 — Concurrent occurrences and bounded loop admission
 
 - [x] Add strict execution configuration with default concurrency one and an

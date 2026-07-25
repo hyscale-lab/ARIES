@@ -19,7 +19,7 @@ func testEndpoint() core.ToolEndpoint {
 }
 
 func testModel() core.ModelConfig {
-	return core.ModelConfig{BaseURL: "http://fake-model:8080/v1", Model: "deterministic-model", APIKeyEnv: "ARIES_FAKE_API_KEY"}
+	return core.ModelConfig{Provider: "deepseek", BaseURL: "http://fake-model:8080/v1", Model: "deterministic-model", APIKeyEnv: "ARIES_FAKE_API_KEY"}
 }
 
 func TestRenderConfigLocksProviderSharedSSHAndPlaceholder(t *testing.T) {
@@ -53,8 +53,53 @@ func TestRenderConfigLocksProviderSharedSSHAndPlaceholder(t *testing.T) {
 	}
 }
 
+func TestRenderConfigSelectsSGLangProviderWithoutSerializingKey(t *testing.T) {
+	model := testModel()
+	model.Provider = "sglang"
+	model.APIKeyEnv = "SGLANG_API_KEY"
+	content, err := renderConfig(model, testEndpoint())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var configuration openClawConfig
+	if err := json.Unmarshal(content, &configuration); err != nil {
+		t.Fatal(err)
+	}
+	provider, ok := configuration.Models.Providers["sglang"]
+	if !ok || len(configuration.Models.Providers) != 1 || provider.API != "openai-completions" || provider.APIKey != "${SGLANG_API_KEY}" || configuration.Agents.Defaults.Model.Primary != "sglang/deterministic-model" {
+		t.Fatalf("configuration = %#v", configuration)
+	}
+	if bytes.Contains(content, []byte("dummy-local-key")) {
+		t.Fatalf("serialized key: %s", content)
+	}
+}
+
+func TestRenderConfigNormalizesAndStrictlyValidatesSGLangBaseURL(t *testing.T) {
+	model := testModel()
+	model.Provider = "sglang"
+	model.BaseURL += "/"
+	content, err := renderConfig(model, testEndpoint())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var configuration openClawConfig
+	if err := json.Unmarshal(content, &configuration); err != nil {
+		t.Fatal(err)
+	}
+	if got := configuration.Models.Providers["sglang"].BaseURL; got != testModel().BaseURL {
+		t.Fatalf("normalized base URL = %q", got)
+	}
+	for _, invalid := range []string{"http://host/v1/v1", "http://host/v1?", "http://host/v%31"} {
+		model.BaseURL = invalid
+		if _, err := renderConfig(model, testEndpoint()); err == nil {
+			t.Fatalf("accepted SGLang base URL %q", invalid)
+		}
+	}
+}
+
 func TestRenderConfigRejectsInvalidInputs(t *testing.T) {
 	for name, mutate := range map[string]func(*core.ModelConfig, *core.ToolEndpoint){
+		"provider": func(model *core.ModelConfig, _ *core.ToolEndpoint) { model.Provider = "other" },
 		"base URL": func(model *core.ModelConfig, _ *core.ToolEndpoint) { model.BaseURL = "file:///tmp/model" },
 		"model":    func(model *core.ModelConfig, _ *core.ToolEndpoint) { model.Model = "\n" },
 		"key env":  func(model *core.ModelConfig, _ *core.ToolEndpoint) { model.APIKeyEnv = "bad-name" },

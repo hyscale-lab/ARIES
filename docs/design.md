@@ -467,6 +467,13 @@ bounded contents. The configured environment variable is the fallback when the
 local file is unavailable. Official DeepSeek runs perform a bounded
 authenticated model preflight before Docker resource construction.
 
+`model.provider` is explicit and limited to `deepseek` or `sglang`. SGLang is
+an endpoint-only OpenAI-compatible path: its configured base URL ends in
+`/v1`, preflight performs bounded exact model discovery at `/models`, and
+OpenClaw uses provider ID `sglang` with `openai-completions`. A non-empty dummy
+environment value is sufficient for an unauthenticated local endpoint. ARIES
+does not launch a server or manage GPU resources.
+
 The executable procedure is maintained in
 [`docs/quick-start.md`](quick-start.md).
 

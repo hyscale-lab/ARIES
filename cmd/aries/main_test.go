@@ -40,7 +40,7 @@ func TestBuildExperimentUsesExplicitTypeSwitches(t *testing.T) {
 		Harness:   config.HarnessConfig{Type: "openclaw"},
 		Sandbox:   config.SandboxConfig{Type: "docker"},
 		Bridge:    config.BridgeConfig{Type: "openclaw-ssh"},
-		Model:     config.ModelConfig{BaseURL: "https://api.deepseek.com", Model: "deepseek-v4-flash", APIKeyEnv: "DEEPSEEK_API_KEY"},
+		Model:     config.ModelConfig{Provider: "deepseek", BaseURL: "https://api.deepseek.com", Model: "deepseek-v4-flash", APIKeyEnv: "DEEPSEEK_API_KEY"},
 		OutputDir: t.TempDir(),
 		Versions:  testVersions(),
 	}
@@ -113,7 +113,7 @@ func TestBuildTaskExperimentCreatesIsolatedOccurrenceGraph(t *testing.T) {
 	cfg := config.Config{
 		Name: "isolated", Benchmark: config.BenchmarkConfig{Type: "terminalbench2", Root: terminalbench.DefaultRoot, Tasks: []string{"fix-git"}},
 		Harness: config.HarnessConfig{Type: "openclaw"}, Sandbox: config.SandboxConfig{Type: "docker"}, Bridge: config.BridgeConfig{Type: "openclaw-ssh"},
-		Model: config.ModelConfig{BaseURL: "https://api.deepseek.com", Model: "model", APIKeyEnv: "KEY"}, OutputDir: output, Versions: testVersions(),
+		Model: config.ModelConfig{Provider: "deepseek", BaseURL: "https://api.deepseek.com", Model: "model", APIKeyEnv: "KEY"}, OutputDir: output, Versions: testVersions(),
 	}
 	experiments := make([]*experiment, 2)
 	for index, occurrenceID := range []string{"fix-git-001", "fix-git-002"} {
@@ -151,7 +151,7 @@ func TestBuildTaskExperimentUnwindsActualPartialBridgeConstruction(t *testing.T)
 	cfg := config.Config{
 		Name: "partial", Benchmark: config.BenchmarkConfig{Type: "terminalbench2", Root: terminalbench.DefaultRoot, Tasks: []string{"fix-git"}},
 		Harness: config.HarnessConfig{Type: "openclaw"}, Sandbox: config.SandboxConfig{Type: "docker"}, Bridge: config.BridgeConfig{Type: "unknown"},
-		Model: config.ModelConfig{BaseURL: "https://api.deepseek.com", Model: "model", APIKeyEnv: "KEY"}, OutputDir: t.TempDir(), Versions: testVersions(),
+		Model: config.ModelConfig{Provider: "deepseek", BaseURL: "https://api.deepseek.com", Model: "model", APIKeyEnv: "KEY"}, OutputDir: t.TempDir(), Versions: testVersions(),
 	}
 	built, err := buildTaskExperiment(cfg, "run", cfg.OutputDir, "fix-git", "fix-git-001", nil, nil)
 	if built != nil || err == nil || err.Error() != `unsupported bridge type "unknown"` {
@@ -523,18 +523,21 @@ func TestRunCommandLeavesNonDeepSeekOnExistingEnvironmentPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	content = bytes.Replace(content, []byte(`"type":"terminalbench2"`), []byte(`"type":"unsupported"`), 1)
+	content = bytes.Replace(content, []byte(`"provider":"deepseek"`), []byte(`"provider":"sglang"`), 1)
 	content = bytes.Replace(content, []byte(`"base_url":"https://api.deepseek.com"`), []byte(`"base_url":"http://fake-model.invalid/v1"`), 1)
 	content = bytes.Replace(content, []byte(`"model":"deepseek-v4-flash"`), []byte(`"model":"deterministic"`), 1)
 	content = bytes.Replace(content, []byte(`"api_key_env":"DEEPSEEK_API_KEY"`), []byte(`"api_key_env":"ARIES_FAKE_KEY"`), 1)
 	if err := os.WriteFile(configPath, content, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err = runCommandWithDependencies(context.Background(), []string{configPath}, io.Discard, commandDependencies{})
+	t.Setenv("ARIES_FAKE_KEY", "dummy")
+	doer := &sglangPreflightDoer{t: t, wantURL: "http://fake-model.invalid/v1/models", body: `{"data":[{"id":"deterministic"}]}`}
+	err = runCommandWithDependencies(context.Background(), []string{configPath}, io.Discard, commandDependencies{preflightClient: doer})
 	if err == nil || !strings.Contains(err.Error(), `unsupported benchmark type "unsupported"`) {
 		t.Fatalf("runCommand() error = %v", err)
 	}
 	validation := readOnlyLiveValidation(t, filepath.Join(root, "runs"))
-	if validation.Status != liveValidationNotRequested || validation.Category != liveValidationSkipped || validation.Attempts != 0 {
+	if validation.Status != liveValidationSucceeded || validation.Category != liveValidationConfirmed || validation.Provider != "sglang" || validation.Attempts != 1 {
 		t.Fatalf("validation = %+v", validation)
 	}
 }
@@ -573,7 +576,7 @@ func writeCommandConfig(t *testing.T, outputDir string) string {
 	"harness":{"type":"openclaw"},
   "sandbox":{"type":"docker"},
   "bridge":{"type":"openclaw-ssh"},
-  "model":{"base_url":"https://api.deepseek.com","model":"deepseek-v4-flash","api_key_env":"DEEPSEEK_API_KEY"},
+  "model":{"provider":"deepseek","base_url":"https://api.deepseek.com","model":"deepseek-v4-flash","api_key_env":"DEEPSEEK_API_KEY"},
   "output_dir":%q
 }`, outputDir)
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {

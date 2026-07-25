@@ -65,6 +65,7 @@ type ResourceReading struct {
 // ModelConfig identifies a remote OpenAI-compatible model without containing
 // an API-key value.
 type ModelConfig struct {
+	Provider  string `json:"provider"`
 	BaseURL   string `json:"base_url"`
 	Model     string `json:"model"`
 	APIKeyEnv string `json:"api_key_env"`

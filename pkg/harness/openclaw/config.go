@@ -102,8 +102,15 @@ func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint) ([]byte, e
 	if err := validateModel(model); err != nil {
 		return nil, err
 	}
+	if model.Provider == "sglang" {
+		model.BaseURL, _ = normalizeSGLangBaseURL(model.BaseURL)
+	}
 	if err := validateEndpoint(endpoint); err != nil {
 		return nil, err
+	}
+	providerID := model.Provider
+	if providerID == "deepseek" {
+		providerID = "aries"
 	}
 	configuration := openClawConfig{
 		Gateway: gatewayConfig{
@@ -114,7 +121,7 @@ func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint) ([]byte, e
 		Models: modelsConfig{
 			Mode: "merge",
 			Providers: map[string]providerConfig{
-				"aries": {
+				providerID: {
 					BaseURL: model.BaseURL,
 					APIKey:  "${" + model.APIKeyEnv + "}",
 					API:     "openai-completions",
@@ -123,7 +130,7 @@ func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint) ([]byte, e
 			},
 		},
 		Agents: agentsConfig{Defaults: agentDefaults{
-			Model: primaryModel{Primary: "aries/" + model.Model},
+			Model: primaryModel{Primary: providerID + "/" + model.Model},
 			Sandbox: sandboxConfig{
 				Mode: "all", Scope: "shared", Backend: "ssh", WorkspaceAccess: "rw",
 				SSH: sshConfig{
@@ -149,12 +156,21 @@ func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint) ([]byte, e
 }
 
 func validateModel(model core.ModelConfig) error {
-	parsed, err := url.Parse(model.BaseURL)
-	if err != nil || parsed.Host == "" || parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return errors.New("OpenClaw model base URL must be absolute HTTP(S)")
+	if model.Provider != "deepseek" && model.Provider != "sglang" {
+		return errors.New("OpenClaw model provider must be deepseek or sglang")
 	}
-	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return errors.New("OpenClaw model base URL must not contain credentials, query, or fragment")
+	if model.Provider == "sglang" {
+		if _, err := normalizeSGLangBaseURL(model.BaseURL); err != nil {
+			return fmt.Errorf("OpenClaw SGLang base URL: %w", err)
+		}
+	} else {
+		parsed, err := url.Parse(model.BaseURL)
+		if err != nil || parsed.Host == "" || parsed.Scheme != "http" && parsed.Scheme != "https" {
+			return errors.New("OpenClaw model base URL must be absolute HTTP(S)")
+		}
+		if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return errors.New("OpenClaw model base URL must not contain credentials, query, or fragment")
+		}
 	}
 	if strings.TrimSpace(model.Model) == "" || strings.ContainsAny(model.Model, "\x00\r\n") {
 		return errors.New("OpenClaw model ID is invalid")
@@ -163,6 +179,18 @@ func validateModel(model core.ModelConfig) error {
 		return errors.New("OpenClaw API-key environment name is invalid")
 	}
 	return nil
+}
+
+func normalizeSGLangBaseURL(baseURL string) (string, error) {
+	parsed, err := url.Parse(baseURL)
+	if err != nil || parsed.Scheme != "http" && parsed.Scheme != "https" || parsed.Host == "" || parsed.Opaque != "" || parsed.User != nil || parsed.RawPath != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || strings.Contains(baseURL, "#") {
+		return "", errors.New("must be an absolute HTTP(S) URL without credentials, escaped path, query, or fragment")
+	}
+	if parsed.Path != "/v1" && parsed.Path != "/v1/" {
+		return "", errors.New("path must be exactly /v1")
+	}
+	parsed.Path = "/v1"
+	return parsed.String(), nil
 }
 
 func validateEndpoint(endpoint core.ToolEndpoint) error {
