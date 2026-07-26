@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
@@ -231,10 +230,22 @@ func (input *recordedInput) record() (int64, string, string, []byte, bool) {
 	content := bytes.Clone(input.data.Bytes())
 	overflow := input.overflow
 	input.mu.Unlock()
-	if utf8.Valid(content) {
+	if safeStructuredText(content) {
 		return count, string(content), "utf-8", content, overflow
 	}
-	return count, base64.StdEncoding.EncodeToString(content), "base64", content, overflow
+	return count, fmt.Sprintf("[binary input omitted; %d bytes retained in ssh_raw.log]", count), "binary-omitted", content, overflow
+}
+
+func safeStructuredText(content []byte) bool {
+	if !utf8.Valid(content) {
+		return false
+	}
+	for _, value := range string(content) {
+		if unicode.IsControl(value) && value != '\t' && value != '\n' && value != '\r' {
+			return false
+		}
+	}
+	return true
 }
 
 func openAuditFile(path string) (*auditFile, error) {
@@ -1009,15 +1020,10 @@ func shellCommand(command core.Command) string {
 }
 
 func operationClass(command core.Command) string {
-	if command.Path != remoteShell || len(command.Args) < 3 || command.Args[0] != "-c" {
-		return "exec"
-	}
-	switch command.Args[2] {
-	case "openclaw-sandbox-upload":
+	if command.Path == remoteShell && matchesExactArgv(command.Args, "-c", directoryUploadScript, directoryUploadLabel, virtualSkillsWorkspace, virtualRuntimeRoot) {
 		return "workspace_upload"
-	default:
-		return "exec"
 	}
+	return "exec"
 }
 
 func generateSessionKeys() (ssh.Signer, []byte, ssh.PublicKey, error) {

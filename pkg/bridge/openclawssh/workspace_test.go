@@ -26,13 +26,12 @@ func TestPinnedTransportControlLiterals(t *testing.T) {
 		"probe script": {
 			got: runtimeProbeScript, want: `if [ -d "$1" ]; then printf "1\n"; else printf "0\n"; fi`,
 		},
-		"probe sentinel": {got: runtimeProbeSentinel, want: "openclaw-sandbox-check"},
-		"workspace clear script": {
-			got: workspaceClearScript, want: `mkdir -p -- "$1" && find "$1" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +`,
-		},
-		"workspace clear sentinel": {got: workspaceClearLabel, want: "openclaw-sandbox-clear"},
-		"runtime remove script":    {got: runtimeRemoveScript, want: `rm -rf -- "$1"`},
-		"runtime remove sentinel":  {got: runtimeRemoveLabel, want: "openclaw-sandbox-remove"},
+		"probe sentinel":              {got: runtimeProbeSentinel, want: "openclaw-sandbox-check"},
+		"workdir validation sentinel": {got: workdirValidationLabel, want: "openclaw-validate-workdir"},
+		"directory clear sentinel":    {got: directoryClearLabel, want: "openclaw-sandbox-clear"},
+		"directory upload sentinel":   {got: directoryUploadLabel, want: "openclaw-sandbox-upload"},
+		"runtime remove script":       {got: runtimeRemoveScript, want: `rm -rf -- "$1"`},
+		"runtime remove sentinel":     {got: runtimeRemoveLabel, want: "openclaw-sandbox-remove"},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -40,6 +39,127 @@ func TestPinnedTransportControlLiterals(t *testing.T) {
 				t.Fatalf("pinned literal changed byte-for-byte:\n got %q\nwant %q", test.got, test.want)
 			}
 		})
+	}
+}
+
+func TestPinnedOpenClaw202671ScriptsMatchOfficialSource(t *testing.T) {
+	if workdirValidationScript != `set -e
+target="$1"
+root="$2"
+case "$target" in /*) ;; *) echo "remote directory must be absolute: $target" >&2; exit 1 ;; esac
+case "$root" in /*) ;; *) echo "remote root must be absolute: $root" >&2; exit 1 ;; esac
+target="${target%/}"
+root="${root%/}"
+[ -n "$target" ] || target="/"
+[ -n "$root" ] || root="/"
+if [ "$root" != "/" ]; then
+  case "$target/" in "$root"/*|"$root/") ;; *) echo "remote directory must stay under root: $target" >&2; exit 1 ;; esac
+fi
+for path_to_check in "$target" "$root"; do
+  relative="${path_to_check#/}"
+  while [ -n "$relative" ]; do
+    part="${relative%%/*}"
+    if [ "$part" = "$relative" ]; then relative=""; else relative="${relative#*/}"; fi
+    [ -n "$part" ] || continue
+    case "$part" in "."|"..") echo "unsafe remote directory component: $part" >&2; exit 1 ;; esac
+  done
+done
+if [ -L "$root" ]; then echo "unsafe remote root symlink: $root" >&2; exit 1; fi
+if [ ! -d "$root" ]; then echo "remote root not found: $root" >&2; exit 1; fi
+canonical_root="$(cd "$root" && pwd -P)"
+relative="${target#"$root"}"
+relative="${relative#/}"
+current="$canonical_root"
+while [ -n "$relative" ]; do
+  part="${relative%%/*}"
+  if [ "$part" = "$relative" ]; then relative=""; else relative="${relative#*/}"; fi
+  [ -n "$part" ] || continue
+  if [ "$current" = "/" ]; then next="/$part"; else next="$current/$part"; fi
+  if [ -L "$next" ]; then echo "unsafe remote directory symlink: $next" >&2; exit 1; fi
+  if [ ! -d "$next" ]; then echo "remote directory not found: $next" >&2; exit 1; fi
+  current="$next"
+done
+printf "%s\n" "$current"` {
+		t.Fatal("pinned workdir validation script changed byte-for-byte")
+	}
+	if ensureRemoteDirectoryScript != `set -e
+target="$1"
+root="${2:-$1}"
+case "$target" in /*) ;; *) echo "remote directory must be absolute: $target" >&2; exit 1 ;; esac
+case "$root" in /*) ;; *) echo "remote root must be absolute: $root" >&2; exit 1 ;; esac
+target="${target%/}"
+root="${root%/}"
+[ -n "$target" ] || target="/"
+[ -n "$root" ] || root="/"
+case "$target/" in "$root"/*|"$root/") ;; *) echo "remote directory must stay under root: $target" >&2; exit 1 ;; esac
+for path_to_check in "$target" "$root"; do
+  relative="${path_to_check#/}"
+  while [ -n "$relative" ]; do
+    part="${relative%%/*}"
+    if [ "$part" = "$relative" ]; then relative=""; else relative="${relative#*/}"; fi
+    [ -n "$part" ] || continue
+    case "$part" in "."|"..") echo "unsafe remote directory component: $part" >&2; exit 1 ;; esac
+  done
+done
+if [ -L "$root" ]; then echo "unsafe remote root symlink: $root" >&2; exit 1; fi
+mkdir -p -- "$root"
+canonical_root="$(cd "$root" && pwd -P)"
+relative="${target#"$root"}"
+relative="${relative#/}"
+current="$canonical_root"
+while [ -n "$relative" ]; do
+  part="${relative%%/*}"
+  if [ "$part" = "$relative" ]; then relative=""; else relative="${relative#*/}"; fi
+  [ -n "$part" ] || continue
+  if [ "$current" = "/" ]; then next="/$part"; else next="$current/$part"; fi
+  if [ -L "$next" ]; then echo "unsafe remote directory symlink: $next" >&2; exit 1; fi
+  if [ -e "$next" ]; then
+    if [ ! -d "$next" ]; then echo "unsafe remote directory component: $next" >&2; exit 1; fi
+  else
+    mkdir -- "$next"
+  fi
+  current="$next"
+done` {
+		t.Fatal("pinned ensure-directory script changed byte-for-byte")
+	}
+}
+
+func TestOpenClaw202671WorkdirValidationReturnsVirtualWorkspaceWithoutAlias(t *testing.T) {
+	remote := remoteCommand{argv: []string{remoteShell, "-c", workdirValidationScript, workdirValidationLabel, virtualWorkspace, virtualWorkspace}}
+	plan, err := prepareRemoteCommand(remote, "/app/personal-site")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{remoteShell, "-c", virtualWorkdirResponseScript, workdirValidationLabel, virtualWorkspace}
+	if got := append([]string{plan.command.Path}, plan.command.Args...); !reflect.DeepEqual(got, want) {
+		t.Fatalf("validation argv = %#v, want %#v", got, want)
+	}
+	if plan.command.Dir != "/app/personal-site" || plan.suppressed {
+		t.Fatalf("validation plan = %#v", plan)
+	}
+}
+
+func TestOpenClaw202671SkillsControlsAreDrainedOnlyOnExactArgv(t *testing.T) {
+	skills := virtualWorkspace + "/.openclaw/sandbox-skills"
+	controls := [][]string{
+		{remoteShell, "-c", directoryClearScript, directoryClearLabel, skills, virtualRuntimeRoot},
+		{remoteShell, "-c", directoryUploadScript, directoryUploadLabel, skills, virtualRuntimeRoot},
+	}
+	for _, argv := range controls {
+		plan, err := prepareRemoteCommand(remoteCommand{argv: argv}, "/workspace")
+		if err != nil || !plan.suppressed {
+			t.Fatalf("exact control = %#v, %v", plan, err)
+		}
+		if got := append([]string{plan.command.Path}, plan.command.Args...); !reflect.DeepEqual(got, argv) {
+			t.Fatalf("suppressed control argv = %#v, want %#v", got, argv)
+		}
+	}
+
+	near := append([]string(nil), controls[1]...)
+	near[2] += " "
+	plan, err := prepareRemoteCommand(remoteCommand{argv: near}, "/workspace")
+	if err == nil && plan.suppressed {
+		t.Fatal("near-match upload was suppressed")
 	}
 }
 
@@ -78,46 +198,45 @@ func TestRuntimeProbeSubstitutesOnlyItsExactFinalRootArgument(t *testing.T) {
 
 func TestTransportCleanupControlsAreClassifiedBeforeMapping(t *testing.T) {
 	controls := [][]string{
-		{remoteShell, "-c", workspaceClearScript, workspaceClearLabel, virtualWorkspace},
+		{remoteShell, "-c", directoryClearScript, directoryClearLabel, virtualSkillsWorkspace, virtualRuntimeRoot},
+		{remoteShell, "-c", directoryUploadScript, directoryUploadLabel, virtualSkillsWorkspace, virtualRuntimeRoot},
 		{remoteShell, "-c", runtimeRemoveScript, runtimeRemoveLabel, virtualRuntimeRoot},
 	}
-	for _, argv := range controls {
+	for index, argv := range controls {
 		plan, err := prepareRemoteCommand(remoteCommand{argv: argv}, "/workspace")
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("control %d: %v", index, err)
 		}
 		if !plan.suppressed {
 			t.Fatalf("transport cleanup was not suppressed: %#v", argv)
 		}
 	}
 
-	near := []string{remoteShell, "-c", workspaceClearScript, workspaceClearLabel + "-agent", virtualWorkspace}
+	near := []string{remoteShell, "-c", directoryClearScript, directoryClearLabel + "-agent", virtualSkillsWorkspace, virtualRuntimeRoot}
 	plan, err := prepareRemoteCommand(remoteCommand{argv: near}, "/workspace")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if plan.suppressed {
-		t.Fatal("near-match transport cleanup was suppressed")
+	if err == nil || plan.suppressed {
+		t.Fatalf("near-match transport cleanup = %#v, %v", plan, err)
 	}
 }
 
 func TestTransportCleanupNearMatchesAreNeverSuppressed(t *testing.T) {
 	controls := []struct {
-		name, script, sentinel, path, alternatePath string
+		name, script, sentinel, path, root, alternatePath string
 	}{
-		{name: "workspace clear", script: workspaceClearScript, sentinel: workspaceClearLabel, path: virtualWorkspace, alternatePath: virtualRuntimeRoot},
-		{name: "runtime remove", script: runtimeRemoveScript, sentinel: runtimeRemoveLabel, path: virtualRuntimeRoot, alternatePath: virtualWorkspace},
+		{name: "skills clear", script: directoryClearScript, sentinel: directoryClearLabel, path: virtualSkillsWorkspace, root: virtualRuntimeRoot, alternatePath: virtualWorkspace},
+		{name: "skills upload", script: directoryUploadScript, sentinel: directoryUploadLabel, path: virtualSkillsWorkspace, root: virtualRuntimeRoot, alternatePath: virtualWorkspace},
 	}
 	for _, control := range controls {
 		t.Run(control.name, func(t *testing.T) {
 			nearMatches := map[string][]string{
-				"wrong script":   {remoteShell, "-c", control.script + " ", control.sentinel, control.path},
-				"wrong sentinel": {remoteShell, "-c", control.script, control.sentinel + "-near", control.path},
+				"wrong script":   {remoteShell, "-c", control.script + " ", control.sentinel, control.path, control.root},
+				"wrong sentinel": {remoteShell, "-c", control.script, control.sentinel + "-near", control.path, control.root},
 				"missing path":   {remoteShell, "-c", control.script, control.sentinel},
-				"extra argument": {remoteShell, "-c", control.script, control.sentinel, control.path, "extra"},
-				"wrong order":    {remoteShell, "-c", control.script, control.path, control.sentinel},
-				"wrong path":     {remoteShell, "-c", control.script, control.sentinel, control.alternatePath},
-				"path suffix":    {remoteShell, "-c", control.script, control.sentinel, control.path + "/"},
+				"extra argument": {remoteShell, "-c", control.script, control.sentinel, control.path, control.root, "extra"},
+				"wrong order":    {remoteShell, "-c", control.script, control.path, control.sentinel, control.root},
+				"wrong path":     {remoteShell, "-c", control.script, control.sentinel, control.alternatePath, control.root},
+				"wrong root":     {remoteShell, "-c", control.script, control.sentinel, control.path, virtualWorkspace},
+				"path suffix":    {remoteShell, "-c", control.script, control.sentinel, control.path + "/", control.root},
 			}
 			for name, argv := range nearMatches {
 				t.Run(name, func(t *testing.T) {
@@ -255,7 +374,7 @@ func TestGeneratedOrdinaryMutationMapsButExactTransportCleanupDoesNot(t *testing
 	if mutation.suppressed || mutation.command.Args[1] != "rm -f /workspace/agent-file" {
 		t.Fatalf("ordinary mutation = %#v", mutation)
 	}
-	cleanup, err := prepareRemoteCommand(remoteCommand{argv: []string{remoteShell, "-c", workspaceClearScript, workspaceClearLabel, virtualWorkspace}}, "/workspace")
+	cleanup, err := prepareRemoteCommand(remoteCommand{argv: []string{remoteShell, "-c", directoryClearScript, directoryClearLabel, virtualSkillsWorkspace, virtualRuntimeRoot}}, "/workspace")
 	if err != nil || !cleanup.suppressed {
 		t.Fatalf("transport cleanup = %#v, %v", cleanup, err)
 	}
@@ -307,7 +426,7 @@ func TestSuppressedTransportCleanupNeverExecutesSandbox(t *testing.T) {
 	raw, _ := memoryAuditFile()
 	sandbox := &contractSandbox{acceptTools: true}
 	session := &bridgeSession{sandbox: sandbox, audit: newAuditWriter(structured, raw)}
-	remote := remoteCommand{argv: []string{remoteShell, "-c", workspaceClearScript, workspaceClearLabel, virtualWorkspace}}
+	remote := remoteCommand{argv: []string{remoteShell, "-c", directoryClearScript, directoryClearLabel, virtualSkillsWorkspace, virtualRuntimeRoot}}
 	prepared, err := prepareRemoteCommand(remote, sandbox.Workdir())
 	if err != nil {
 		t.Fatal(err)
@@ -321,6 +440,59 @@ func TestSuppressedTransportCleanupNeverExecutesSandbox(t *testing.T) {
 	}
 	if commands := sandbox.snapshot(); len(commands) != 0 {
 		t.Fatalf("transport cleanup executed sandbox: %#v", commands)
+	}
+}
+
+func TestSuppressedSkillsUploadDrainsInputAndPreservesStructuredClassification(t *testing.T) {
+	structured, structuredBytes := memoryAuditFile()
+	raw, rawBytes := memoryAuditFile()
+	sandbox := &contractSandbox{acceptTools: true}
+	session := &bridgeSession{sandbox: sandbox, audit: newAuditWriter(structured, raw)}
+	remote := remoteCommand{argv: []string{remoteShell, "-c", directoryUploadScript, directoryUploadLabel, virtualSkillsWorkspace, virtualRuntimeRoot}}
+	prepared, err := prepareRemoteCommand(remote, sandbox.Workdir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	channel := &stubSSHChannel{}
+	upload := []byte("tar\x00stream")
+	_, _ = channel.Write(upload)
+	if exit := session.execute(context.Background(), channel, prepared, requestAudit{requestType: "exec", wantReply: true, remoteCommand: encodeCanonicalTokens(remote.argv)}); exit != 0 {
+		t.Fatalf("suppressed upload exit = %d", exit)
+	}
+	if err := session.closeAudit(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if channel.Len() != 0 || len(sandbox.snapshot()) != 0 {
+		t.Fatalf("upload input remaining = %d, commands = %#v", channel.Len(), sandbox.snapshot())
+	}
+	records := decodeAuditLines(t, structuredBytes.Bytes())
+	if len(records) != 1 {
+		t.Fatalf("structured records = %#v", records)
+	}
+	record := records[0]
+	if record["operation_class"] != "workspace_upload" || record["stdin"] != "[binary input omitted; 10 bytes retained in ssh_raw.log]" || record["stdin_encoding"] != "binary-omitted" || record["stdin_bytes"] != float64(len(upload)) {
+		t.Fatalf("upload structured record = %#v", record)
+	}
+	if bytes.Contains(structuredBytes.Bytes(), []byte(`\u0000`)) || bytes.Contains(structuredBytes.Bytes(), []byte{0}) {
+		t.Fatalf("upload structured record retained NUL data: %q", structuredBytes.Bytes())
+	}
+	if bytes.Contains(rawBytes.Bytes(), []byte{0}) || !bytes.Contains(rawBytes.Bytes(), []byte(`stdin=tar\x00stream`)) {
+		t.Fatalf("upload raw record is not escaped replay evidence: %q", rawBytes.Bytes())
+	}
+	if _, found := record["command"]; found {
+		t.Fatalf("upload duplicated helper command: %#v", record["command"])
+	}
+	for _, omitted := range []string{"workspace_home", "env_names", "error"} {
+		if _, found := record[omitted]; found {
+			t.Fatalf("upload retained empty optional field %q: %#v", omitted, record[omitted])
+		}
+	}
+	wantArgv := make([]any, len(remote.argv))
+	for index, value := range remote.argv {
+		wantArgv[index] = value
+	}
+	if !reflect.DeepEqual(record["argv"], wantArgv) {
+		t.Fatalf("upload argv = %#v, want %#v", record["argv"], wantArgv)
 	}
 }
 

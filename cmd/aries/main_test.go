@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	testOpenClawImage = "example.invalid/openclaw:fixture@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	testOpenClawImage = "ghcr.io/openclaw/openclaw:2026.7.1"
 )
 
 func testVersions() config.Versions {

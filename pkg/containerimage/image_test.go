@@ -44,3 +44,30 @@ func TestValidateTagOnlyRejectsUntaggedDigestAndMalformedReferences(t *testing.T
 		}
 	}
 }
+
+func TestValidatePinnedTagOnlyRequiresExactNonLatestTag(t *testing.T) {
+	const image = "ghcr.io/openclaw/openclaw:2026.7.1"
+	if err := ValidatePinnedTagOnly(image); err != nil {
+		t.Fatalf("ValidatePinnedTagOnly(%q): %v", image, err)
+	}
+	for _, invalid := range []string{
+		"",
+		" " + image,
+		image + "\n",
+		"ghcr.io/openclaw/openclaw",
+		"ghcr.io/openclaw/openclaw:latest",
+		validImage,
+		"not a valid image",
+	} {
+		if err := ValidatePinnedTagOnly(invalid); err == nil {
+			t.Fatalf("ValidatePinnedTagOnly(%q) succeeded", invalid)
+		}
+	}
+}
+
+func TestValidateTagOnlyStillTrimsAndAcceptsLatest(t *testing.T) {
+	const image = "example.invalid/task:latest"
+	if got, err := ValidateTagOnly(" \t" + image + "\n"); err != nil || got != image {
+		t.Fatalf("ValidateTagOnly() = %q, %v", got, err)
+	}
+}

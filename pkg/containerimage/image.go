@@ -1,4 +1,4 @@
-// Package containerimage validates immutable container image references.
+// Package containerimage validates container image references.
 package containerimage
 
 import (
@@ -36,6 +36,27 @@ func ValidateTagOnly(value string) (string, error) {
 		return "", errors.New("image must include an explicit tag")
 	}
 	return trimmed, nil
+}
+
+// ValidatePinnedTagOnly requires an exact, explicitly tagged, non-latest image
+// reference. It is intentionally narrower than ValidateTagOnly, whose trimming
+// and tag policy is retained for benchmark task images.
+func ValidatePinnedTagOnly(value string) error {
+	validated, err := ValidateTagOnly(value)
+	if err != nil {
+		return err
+	}
+	if validated != value {
+		return errors.New("image must not contain surrounding whitespace")
+	}
+	named, err := reference.ParseNormalizedNamed(value)
+	if err != nil {
+		return fmt.Errorf("invalid image reference: %w", err)
+	}
+	if named.(reference.Tagged).Tag() == "latest" {
+		return errors.New("image tag must not be latest")
+	}
+	return nil
 }
 
 func parse(value string) (reference.Named, error) {

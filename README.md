@@ -58,9 +58,9 @@ should not be forced through one universal transport.
 - `profiles/openclaw-tb2-five-deepseek.json` selects a heterogeneous five-task
   subset.
 - `configs/versions.json` contains the exact Terminal-Bench 2 Git revision and
-  the digest-pinned OpenClaw image. Each task's explicit image tag comes from
-  its `task.toml` in that pinned checkout; there is no separate task-image
-  catalog.
+  the exact non-`latest` OpenClaw image tag. Each task's explicit image tag
+  comes from its `task.toml` in that pinned checkout; there is no separate
+  task-image catalog.
 - `configs/runtime-overrides.json` is the dedicated strict-JSON resource and
   agent-timeout override used by the five-task example. Every checked-in
   profile declares `overrides_file`; the one-task profile sets it to `""` to
@@ -107,8 +107,10 @@ plain-text audit. It uses delimited, fixed-order `key=value` records: printable
 UTF-8 stays readable, while control and invalid bytes use explicit escapes.
 It is not JSON or base64. `tool-calls.jsonl` remains one JSON object per line
 and writes printable Unicode and HTML characters literally while preserving
-JSON-required escaping. Treat both files as private run evidence; they may
-contain values supplied by the tool caller.
+JSON-required escaping. Printable stdin stays inline; binary or control-bearing
+stdin is represented by a concise omission marker and exact byte count while
+the lossless bytes remain in `ssh_raw.log`. Treat both files as private run
+evidence; they may contain values supplied by the tool caller.
 
 ## Validation
 

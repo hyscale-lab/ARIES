@@ -240,7 +240,11 @@ translated command that was actually executed, including its argument vector,
 workdir, environment names, nonsecret `workspace_home`, command hash, stream
 byte counts, exit status, and outcome. Printable UTF-8 and HTML
 characters remain literal; JSON-required quoting and control escaping remain
-intact. Environment values and stdout/stderr content are not stored there.
+intact. Printable stdin remains inline. Binary or control-bearing stdin uses a
+short `binary-omitted` marker with the authoritative byte count instead of
+expanding opaque bytes into JSON escapes; the lossless bytes remain in
+`ssh_raw.log`. Environment values and stdout/stderr content are not stored
+there.
 
 `ssh_raw.log` is a lossless, human-readable plain-text record of the wire side,
 including the original decoded command, virtual HOME, payload, and stdin. It

@@ -77,7 +77,7 @@ type BridgeConfig struct {
 
 type ModelConfig = core.ModelConfig
 
-// Versions contains the immutable upstream identities shared by profiles.
+// Versions contains the upstream version selections shared by profiles.
 type Versions struct {
 	TerminalBench2 TerminalBench2Versions `json:"terminalbench2"`
 	OpenClaw       OpenClawVersions       `json:"openclaw"`
@@ -205,7 +205,7 @@ func LoadVersions(path string) (Versions, error) {
 	return versions, nil
 }
 
-// DecodeVersions rejects unknown fields and mutable image references.
+// DecodeVersions rejects unknown fields and invalid version selections.
 func DecodeVersions(r io.Reader) (Versions, error) {
 	var versions Versions
 	if err := decodeStrictJSON(r, &versions, "version pins"); err != nil {
@@ -352,7 +352,7 @@ func (c Versions) validate() error {
 	if !isHex(c.TerminalBench2.Revision, 40) {
 		return errors.New("terminalbench2.revision must be a 40-character Git revision")
 	}
-	if err := containerimage.Validate(c.OpenClaw.Image); err != nil {
+	if err := containerimage.ValidatePinnedTagOnly(c.OpenClaw.Image); err != nil {
 		return fmt.Errorf("openclaw.image: %w", err)
 	}
 	return nil

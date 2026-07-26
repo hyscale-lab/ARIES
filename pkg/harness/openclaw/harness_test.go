@@ -24,7 +24,7 @@ import (
 	"github.com/moby/moby/client"
 )
 
-const testOpenClawImage = "example.invalid/openclaw:fixture@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+const testOpenClawImage = "ghcr.io/openclaw/openclaw:2026.7.1"
 
 type fakeDocker struct {
 	mu               sync.Mutex
@@ -364,8 +364,21 @@ func newTestManager(t *testing.T, fake *fakeDocker, secret []byte) *Manager {
 	return manager
 }
 
-func TestNewRequiresImmutableConfiguredImage(t *testing.T) {
-	for _, image := range []string{"", "example.invalid/openclaw:latest", "example.invalid/openclaw@sha256:short"} {
+func TestNewRequiresExactNonLatestTaggedImage(t *testing.T) {
+	if manager, err := New(Options{Image: testOpenClawImage, OutputDir: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	} else if err := manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, image := range []string{
+		"",
+		" " + testOpenClawImage,
+		testOpenClawImage + "\n",
+		"example.invalid/openclaw",
+		"example.invalid/openclaw:latest",
+		"example.invalid/openclaw:fixture@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+		"not a valid image",
+	} {
 		if _, err := New(Options{Image: image, OutputDir: t.TempDir()}); err == nil || !strings.Contains(err.Error(), "OpenClaw image") {
 			t.Fatalf("New(%q) error = %v", image, err)
 		}

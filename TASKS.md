@@ -1,5 +1,24 @@
 # ARIES Tasks
 
+## R13 — OpenClaw 2026.7.1 explicit tag
+
+- [x] Add an exact non-`latest` tag-only OpenClaw image validator without
+  changing the Terminal-Bench task-image policy.
+- [x] Store and launch `ghcr.io/openclaw/openclaw:2026.7.1` exactly, rejecting
+  whitespace, missing tags, digests, malformed references, and `latest` at the
+  configuration and harness boundaries.
+- [x] Update the documented upstream baseline to tag `v2026.7.1`, commit
+  `2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4`, and its SSH compatibility
+  sources.
+- [x] Add regressions for the byte-exact v2026.7.1 workdir-validation,
+  ensure-directory, skills-clear, and tar-upload command vectors. Synthesize
+  the expected virtual cwd without a filesystem alias, drain only exact skills
+  controls, preserve upload evidence, and reject virtual-namespace near matches
+  before they can clear or pollute benchmark contents.
+- [x] Complete the full release matrix, deterministic integration, authorized
+  live DeepSeek compatibility run, retained-log audit, cleanup checks, and
+  final review before release.
+
 ## R12 — Post-concurrency composition cleanup
 
 Cleanup plan, in regression-first order:

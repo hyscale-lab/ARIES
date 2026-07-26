@@ -943,13 +943,14 @@ func TestByteCounterTracksConcurrentPipeTraffic(t *testing.T) {
 	}
 }
 
-func TestRecordedInputUsesLosslessEncoding(t *testing.T) {
+func TestRecordedInputKeepsRawAndUsesSafeStructuredEncoding(t *testing.T) {
 	for _, test := range []struct {
 		name, want, encoding string
 		content              []byte
 	}{
 		{name: "utf8", content: []byte("actual stdin\n"), want: "actual stdin\n", encoding: "utf-8"},
-		{name: "binary", content: []byte{0, 0xff}, want: "AP8=", encoding: "base64"},
+		{name: "binary", content: []byte{0, 0xff}, want: "[binary input omitted; 2 bytes retained in ssh_raw.log]", encoding: "binary-omitted"},
+		{name: "utf8 control", content: []byte("prefix\x00suffix"), want: "[binary input omitted; 13 bytes retained in ssh_raw.log]", encoding: "binary-omitted"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			input := &recordedInput{reader: bytes.NewReader(test.content)}
@@ -1040,14 +1041,25 @@ func pollCounter(counter *byteCounter) func() {
 }
 
 func TestOperationClassUsesOnlyKnownOpenClawLabels(t *testing.T) {
-	for label, want := range map[string]string{
-		"openclaw-sandbox-upload": "workspace_upload",
-		"openclaw-sandbox-fs":     "exec",
-		"untrusted-label":         "exec",
+	for name, test := range map[string]struct {
+		command core.Command
+		want    string
+	}{
+		"exact upload": {
+			command: core.Command{Path: remoteShell, Args: []string{"-c", directoryUploadScript, directoryUploadLabel, virtualSkillsWorkspace, virtualRuntimeRoot}},
+			want:    "workspace_upload",
+		},
+		"upload label on other script": {
+			command: core.Command{Path: remoteShell, Args: []string{"-c", "true", directoryUploadLabel, virtualSkillsWorkspace, virtualRuntimeRoot}},
+			want:    "exec",
+		},
+		"upload near target": {
+			command: core.Command{Path: remoteShell, Args: []string{"-c", directoryUploadScript, directoryUploadLabel, virtualWorkspace, virtualRuntimeRoot}},
+			want:    "exec",
+		},
 	} {
-		command := core.Command{Path: remoteShell, Args: []string{"-c", "true", label}}
-		if got := operationClass(command); got != want {
-			t.Fatalf("operationClass(%q) = %q, want %q", label, got, want)
+		if got := operationClass(test.command); got != test.want {
+			t.Fatalf("operationClass(%q) = %q, want %q", name, got, test.want)
 		}
 	}
 }
@@ -1057,7 +1069,7 @@ func TestReplayDisplayCommandOmitsDuplicatedUploadScript(t *testing.T) {
 	if got := replayDisplayCommand(execCommand); got != "git status" {
 		t.Fatalf("exec display command = %q", got)
 	}
-	uploadCommand := core.Command{Path: remoteShell, Args: []string{"-c", "large helper", "openclaw-sandbox-upload"}}
+	uploadCommand := core.Command{Path: remoteShell, Args: []string{"-c", directoryUploadScript, directoryUploadLabel, virtualSkillsWorkspace, virtualRuntimeRoot}}
 	if got := replayDisplayCommand(uploadCommand); got != "" {
 		t.Fatalf("upload display command duplicated argv: %q", got)
 	}

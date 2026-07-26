@@ -9,13 +9,96 @@ import (
 )
 
 const (
-	virtualRuntimeRoot = "/aries/openclaw/openclaw-ssh-shared-8198076c"
-	virtualWorkspace   = virtualRuntimeRoot + "/workspace"
+	virtualRuntimeRoot     = "/aries/openclaw/openclaw-ssh-shared-8198076c"
+	virtualWorkspace       = virtualRuntimeRoot + "/workspace"
+	virtualSkillsWorkspace = virtualWorkspace + "/.openclaw/sandbox-skills"
 
-	runtimeProbeScript   = `if [ -d "$1" ]; then printf "1\n"; else printf "0\n"; fi`
-	runtimeProbeSentinel = "openclaw-sandbox-check"
-	workspaceClearScript = `mkdir -p -- "$1" && find "$1" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +`
-	workspaceClearLabel  = "openclaw-sandbox-clear"
+	runtimeProbeScript      = `if [ -d "$1" ]; then printf "1\n"; else printf "0\n"; fi`
+	runtimeProbeSentinel    = "openclaw-sandbox-check"
+	workdirValidationScript = `set -e
+target="$1"
+root="$2"
+case "$target" in /*) ;; *) echo "remote directory must be absolute: $target" >&2; exit 1 ;; esac
+case "$root" in /*) ;; *) echo "remote root must be absolute: $root" >&2; exit 1 ;; esac
+target="${target%/}"
+root="${root%/}"
+[ -n "$target" ] || target="/"
+[ -n "$root" ] || root="/"
+if [ "$root" != "/" ]; then
+  case "$target/" in "$root"/*|"$root/") ;; *) echo "remote directory must stay under root: $target" >&2; exit 1 ;; esac
+fi
+for path_to_check in "$target" "$root"; do
+  relative="${path_to_check#/}"
+  while [ -n "$relative" ]; do
+    part="${relative%%/*}"
+    if [ "$part" = "$relative" ]; then relative=""; else relative="${relative#*/}"; fi
+    [ -n "$part" ] || continue
+    case "$part" in "."|"..") echo "unsafe remote directory component: $part" >&2; exit 1 ;; esac
+  done
+done
+if [ -L "$root" ]; then echo "unsafe remote root symlink: $root" >&2; exit 1; fi
+if [ ! -d "$root" ]; then echo "remote root not found: $root" >&2; exit 1; fi
+canonical_root="$(cd "$root" && pwd -P)"
+relative="${target#"$root"}"
+relative="${relative#/}"
+current="$canonical_root"
+while [ -n "$relative" ]; do
+  part="${relative%%/*}"
+  if [ "$part" = "$relative" ]; then relative=""; else relative="${relative#*/}"; fi
+  [ -n "$part" ] || continue
+  if [ "$current" = "/" ]; then next="/$part"; else next="$current/$part"; fi
+  if [ -L "$next" ]; then echo "unsafe remote directory symlink: $next" >&2; exit 1; fi
+  if [ ! -d "$next" ]; then echo "remote directory not found: $next" >&2; exit 1; fi
+  current="$next"
+done
+printf "%s\n" "$current"`
+	workdirValidationLabel       = "openclaw-validate-workdir"
+	virtualWorkdirResponseScript = `printf "%s\n" "$1"`
+
+	ensureRemoteDirectoryScript = `set -e
+target="$1"
+root="${2:-$1}"
+case "$target" in /*) ;; *) echo "remote directory must be absolute: $target" >&2; exit 1 ;; esac
+case "$root" in /*) ;; *) echo "remote root must be absolute: $root" >&2; exit 1 ;; esac
+target="${target%/}"
+root="${root%/}"
+[ -n "$target" ] || target="/"
+[ -n "$root" ] || root="/"
+case "$target/" in "$root"/*|"$root/") ;; *) echo "remote directory must stay under root: $target" >&2; exit 1 ;; esac
+for path_to_check in "$target" "$root"; do
+  relative="${path_to_check#/}"
+  while [ -n "$relative" ]; do
+    part="${relative%%/*}"
+    if [ "$part" = "$relative" ]; then relative=""; else relative="${relative#*/}"; fi
+    [ -n "$part" ] || continue
+    case "$part" in "."|"..") echo "unsafe remote directory component: $part" >&2; exit 1 ;; esac
+  done
+done
+if [ -L "$root" ]; then echo "unsafe remote root symlink: $root" >&2; exit 1; fi
+mkdir -p -- "$root"
+canonical_root="$(cd "$root" && pwd -P)"
+relative="${target#"$root"}"
+relative="${relative#/}"
+current="$canonical_root"
+while [ -n "$relative" ]; do
+  part="${relative%%/*}"
+  if [ "$part" = "$relative" ]; then relative=""; else relative="${relative#*/}"; fi
+  [ -n "$part" ] || continue
+  if [ "$current" = "/" ]; then next="/$part"; else next="$current/$part"; fi
+  if [ -L "$next" ]; then echo "unsafe remote directory symlink: $next" >&2; exit 1; fi
+  if [ -e "$next" ]; then
+    if [ ! -d "$next" ]; then echo "unsafe remote directory component: $next" >&2; exit 1; fi
+  else
+    mkdir -- "$next"
+  fi
+  current="$next"
+done`
+	directoryClearScript = ensureRemoteDirectoryScript + `
+find "$1" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +`
+	directoryClearLabel   = "openclaw-sandbox-clear"
+	directoryUploadScript = ensureRemoteDirectoryScript + `
+tar -xf - -C "$1"`
+	directoryUploadLabel = "openclaw-sandbox-upload"
 	runtimeRemoveScript  = `rm -rf -- "$1"`
 	runtimeRemoveLabel   = "openclaw-sandbox-remove"
 
@@ -38,14 +121,22 @@ func prepareRemoteCommand(remote remoteCommand, workdir string) (preparedRemoteC
 		argv[len(argv)-1] = workdir
 		return preparedFromArgv(argv, workdir, "", false), nil
 	}
-	if matchesExactArgv(remote.argv, remoteShell, "-c", workspaceClearScript, workspaceClearLabel, virtualWorkspace) ||
-		matchesExactArgv(remote.argv, remoteShell, "-c", runtimeRemoveScript, runtimeRemoveLabel, virtualRuntimeRoot) {
-		return preparedFromArgv([]string{remoteShell, "-c", ":"}, workdir, "", true), nil
+	if matchesExactArgv(remote.argv, remoteShell, "-c", workdirValidationScript, workdirValidationLabel, virtualWorkspace, virtualWorkspace) {
+		return preparedFromArgv([]string{remoteShell, "-c", virtualWorkdirResponseScript, workdirValidationLabel, virtualWorkspace}, workdir, "", false), nil
 	}
-
+	if matchesExactArgv(remote.argv, remoteShell, "-c", directoryClearScript, directoryClearLabel, virtualSkillsWorkspace, virtualRuntimeRoot) ||
+		matchesExactArgv(remote.argv, remoteShell, "-c", directoryUploadScript, directoryUploadLabel, virtualSkillsWorkspace, virtualRuntimeRoot) ||
+		matchesExactArgv(remote.argv, remoteShell, "-c", runtimeRemoveScript, runtimeRemoveLabel, virtualRuntimeRoot) {
+		return preparedFromArgv(remote.argv, workdir, "", true), nil
+	}
 	shellIndex := remote.shellIndex()
 	script := remote.argv[shellIndex+2]
 	if !strings.HasPrefix(script, generatedWorkspacePrefix) {
+		for _, token := range remote.argv {
+			if strings.Contains(token, virtualRuntimeRoot) {
+				return preparedRemoteCommand{}, errors.New("OpenClaw SSH command contains an unrecognized virtual namespace control")
+			}
+		}
 		if remote.hasExactAssignment("HOME", virtualWorkspace) {
 			return preparedRemoteCommand{}, errors.New("OpenClaw SSH virtual HOME is outside the generated command shape")
 		}

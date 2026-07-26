@@ -93,13 +93,16 @@ func TestPullImagesAcceptsExplicitTaskTag(t *testing.T) {
 	}
 }
 
-func TestPullImagesAcceptsTaskTagAndHarnessDigestTogether(t *testing.T) {
-	const taskImage = "example.invalid/task:20251031"
+func TestPullImagesAcceptsTaskAndHarnessTagsWithDigestReference(t *testing.T) {
+	const (
+		taskImage    = "example.invalid/task:20251031"
+		harnessImage = "ghcr.io/openclaw/openclaw:2026.7.1"
+	)
 	fake := &fakeImageClient{present: true}
-	if err := pullImages(context.Background(), fake, []string{taskImage, testPullImage}); err != nil {
+	if err := pullImages(context.Background(), fake, []string{taskImage, harnessImage, testPullImage}); err != nil {
 		t.Fatal(err)
 	}
-	if fake.inspectCalls != 2 || len(fake.pullCalls) != 0 {
+	if fake.inspectCalls != 3 || len(fake.pullCalls) != 0 {
 		t.Fatalf("inspect=%d pull=%v", fake.inspectCalls, fake.pullCalls)
 	}
 }

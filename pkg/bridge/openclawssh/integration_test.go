@@ -275,7 +275,7 @@ func TestBridgeRunsConcurrentCallsWithoutAConvoy(t *testing.T) {
 				return
 			}
 			defer session.Close()
-			path := fmt.Sprintf("%s/file-%02d", virtualWorkspace, index)
+			path := fmt.Sprintf("/work/file-%02d", index)
 			remote := encodeCanonicalTokens([]string{remoteShell, "-c", `sleep 1; if [ -e "$1" ]; then printf "1\n"; else printf "0\n"; fi`, "aries-concurrency", path})
 			output, sessionErr := session.Output(remote)
 			if sessionErr == nil && string(output) != "0\n" {

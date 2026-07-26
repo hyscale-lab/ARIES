@@ -188,7 +188,7 @@ const validVersions = `{
 	"revision": "0123456789abcdef0123456789abcdef01234567"
   },
   "openclaw": {
-	"image": "example.invalid/openclaw:1.2.3@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	"image": "ghcr.io/openclaw/openclaw:2026.7.1"
   }
 }`
 
@@ -265,7 +265,7 @@ func TestCheckedInDeepSeekProfileLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Name != "openclaw-tb2-fix-git-deepseek" || cfg.OverridesFile != "" || cfg.Versions.OpenClaw.Image == "" || cfg.Execution.Concurrency != 1 || cfg.Execution.Loop != 0 {
+	if cfg.Name != "openclaw-tb2-fix-git-deepseek" || cfg.OverridesFile != "" || cfg.Versions.OpenClaw.Image != "ghcr.io/openclaw/openclaw:2026.7.1" || cfg.Execution.Concurrency != 1 || cfg.Execution.Loop != 0 {
 		t.Fatalf("checked-in profile = %#v", cfg)
 	}
 }
@@ -300,11 +300,16 @@ func TestDecodeVersionsRejectsUnknownAndMissingFields(t *testing.T) {
 		wantErr string
 	}{
 		{"valid", validVersions, ""},
-		{"unknown", strings.Replace(validVersions, `"image": "example.invalid/openclaw`, `"future": true, "image": "example.invalid/openclaw`, 1), `unknown field "future"`},
+		{"unknown", strings.Replace(validVersions, `"image": "ghcr.io/openclaw`, `"future": true, "image": "ghcr.io/openclaw`, 1), `unknown field "future"`},
 		{"missing revision", strings.Replace(validVersions, `"revision": "0123456789abcdef0123456789abcdef01234567"`, `"revision": ""`, 1), "terminalbench2.revision is required"},
 		{"old task images rejected", strings.Replace(validVersions, `"revision": "0123456789abcdef0123456789abcdef01234567"`, `"revision": "0123456789abcdef0123456789abcdef01234567", "images": {}`, 1), `unknown field "images"`},
-		{"mutable image", strings.Replace(validVersions, `example.invalid/openclaw:1.2.3@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`, `example.invalid/openclaw:latest`, 1), "openclaw.image: image must be pinned by digest"},
-		{"malformed image", strings.Replace(validVersions, `example.invalid/openclaw:1.2.3@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`, `not a valid image@@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`, 1), "invalid image reference"},
+		{"empty image", strings.Replace(validVersions, `ghcr.io/openclaw/openclaw:2026.7.1`, ``, 1), "openclaw.image is required"},
+		{"leading whitespace image", strings.Replace(validVersions, `ghcr.io/openclaw/openclaw:2026.7.1`, ` ghcr.io/openclaw/openclaw:2026.7.1`, 1), "surrounding whitespace"},
+		{"trailing whitespace image", strings.Replace(validVersions, `ghcr.io/openclaw/openclaw:2026.7.1`, `ghcr.io/openclaw/openclaw:2026.7.1 `, 1), "surrounding whitespace"},
+		{"latest image", strings.Replace(validVersions, `ghcr.io/openclaw/openclaw:2026.7.1`, `ghcr.io/openclaw/openclaw:latest`, 1), "image tag must not be latest"},
+		{"untagged image", strings.Replace(validVersions, `ghcr.io/openclaw/openclaw:2026.7.1`, `ghcr.io/openclaw/openclaw`, 1), "image must include an explicit tag"},
+		{"digest image", strings.Replace(validVersions, `ghcr.io/openclaw/openclaw:2026.7.1`, `example.invalid/openclaw:1.2.3@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`, 1), "image must be pinned by tag only, not digest"},
+		{"malformed image", strings.Replace(validVersions, `ghcr.io/openclaw/openclaw:2026.7.1`, `not a valid image`, 1), "invalid image reference"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

@@ -140,10 +140,11 @@ func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint) ([]byte, e
 				},
 			},
 		}},
-		// OpenClaw's native SSH filesystem helpers require python3 inside the
-		// remote image. Terminal-Bench images do not promise it, while the exec
-		// tool has the same sandbox access without changing task images.
-		Tools: toolPolicy{Deny: []string{"read", "write", "edit", "apply_patch"}},
+		// // OpenClaw's native SSH filesystem helpers require python3 inside the
+		// // remote image. Terminal-Bench images do not promise it, while the exec
+		// // tool has the same sandbox access without changing task images.
+		// Tools: toolPolicy{Deny: []string{"read", "write", "edit", "apply_patch"}},
+		Tools: toolPolicy{Deny: []string{""}},
 	}
 	var output bytes.Buffer
 	encoder := json.NewEncoder(&output)

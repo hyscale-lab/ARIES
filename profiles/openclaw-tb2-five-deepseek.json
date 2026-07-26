@@ -3,7 +3,7 @@
   "versions_file": "../configs/versions.json",
   "overrides_file": "../configs/runtime-overrides.json",
   "execution": {
-    "concurrency": 5
+    "concurrency": 2
   },
   "benchmark": {
     "type": "terminalbench2",

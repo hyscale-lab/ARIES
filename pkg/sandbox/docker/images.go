@@ -17,8 +17,8 @@ type imageClient interface {
 }
 
 // PullImages makes each configured image available in the local Docker Engine.
-// Harness images remain digest pinned, while Terminal-Bench task images are
-// explicit tags read from the pinned task checkout.
+// Configured harness and Terminal-Bench task images may use explicit tags;
+// digest-pinned references remain supported by this generic setup boundary.
 func PullImages(ctx context.Context, images []string) error {
 	api, err := client.New(client.WithHost("unix://"+defaultDockerSocket), client.WithUserAgent("aries-setup/1"))
 	if err != nil {

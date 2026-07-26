@@ -41,7 +41,7 @@ Setup strictly loads the selected profile and `configs/versions.json`, creates
 or verifies the pinned Terminal-Bench checkout at `.cache/terminal-bench-2`,
 reads each selected task's explicit Docker image tag from its `task.toml`, and
 pulls only OpenClaw plus those selected images through the Docker Go SDK. The
-Terminal-Bench Git revision and digest-pinned OpenClaw image remain in
+Terminal-Bench Git revision and exact tag-pinned OpenClaw image remain in
 `configs/versions.json`; task image digests are not duplicated there. Setup is
 safe to run again and refuses to replace a checkout at another revision.
 
@@ -161,9 +161,11 @@ private and do not publish this artifact without review.
 
 `bridge/tool-calls.jsonl` remains valid line-delimited JSON. Printable Unicode
 and HTML characters such as `&&`, `<`, and `>` appear literally, while quotes,
-backslashes, newlines, and controls retain required JSON escaping. Structured
-lifecycle logs and tool-call records continue to omit environment values and
-stdout/stderr bodies.
+backslashes, and newlines retain required JSON escaping. Printable stdin stays
+inline; binary or control-bearing stdin is replaced by a concise
+`binary-omitted` marker and exact byte count, with lossless bytes retained only
+in `ssh_raw.log`. Structured lifecycle logs and tool-call records continue to
+omit environment values and stdout/stderr bodies.
 
 Each task directory contains the exact placeholder-only rendered
 `harness/openclaw.json`, OpenClaw logs and telemetry when available, replayable

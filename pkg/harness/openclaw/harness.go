@@ -134,7 +134,7 @@ var _ runner.AgentHarness = (*Manager)(nil)
 
 // New constructs a harness without contacting Docker.
 func New(options Options) (*Manager, error) {
-	if err := containerimage.Validate(options.Image); err != nil {
+	if err := containerimage.ValidatePinnedTagOnly(options.Image); err != nil {
 		return nil, fmt.Errorf("OpenClaw image: %w", err)
 	}
 	if strings.TrimSpace(options.OutputDir) == "" {

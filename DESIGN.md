@@ -31,9 +31,9 @@ artifacts, and ARIES does not launch or manage SGLang infrastructure.
 
 Terminal-Bench 2 remains pinned by its exact Git revision, while each task's
 explicit Docker image tag is read from that pinned task's `task.toml` rather
-than repeated in `configs/versions.json`. OpenClaw remains digest-pinned. Each
-task workdir is derived from its pinned Dockerfile with `/` as the conservative
-fallback. The bridge maps OpenClaw's pinned virtual workspace to that workdir
+than repeated in `configs/versions.json`. OpenClaw uses an exact non-`latest`
+release tag. Each task workdir is derived from its pinned Dockerfile with `/`
+as the conservative fallback. The bridge maps OpenClaw's pinned virtual workspace to that workdir
 without creating a sandbox symlink. It retains structured JSONL tool records
 plus sensitive, lossless human-readable `bridge/ssh_raw.log` evidence through
 a bounded asynchronous writer whose failure blocks positive bridge revocation.

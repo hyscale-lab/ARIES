@@ -42,8 +42,8 @@ benchmark or harness packages.
 | --- | --- |
 | Terminal-Bench 2 | `2fd12b88aafdd04a52c298e3940bcb189f9766d6` |
 | Task images | each task's explicit tag from its pinned `task.toml` |
-| OpenClaw | tag `v2026.5.26`, commit `10ad3aa16068baa84a1bd9ac4f7d42ae725cedb7` |
-| OpenClaw image | `ghcr.io/openclaw/openclaw:2026.5.26@sha256:ae7ff536446f1bbb57ea51b9b21097d8f299d30d683dcd72644973bc0522f3b3` |
+| OpenClaw | tag `v2026.7.1`, commit `2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4` |
+| OpenClaw image | `ghcr.io/openclaw/openclaw:2026.7.1` |
 | Moby client | `github.com/moby/moby/client v0.5.0` |
 | Moby API | `github.com/moby/moby/api v1.55.0` |
 | Initial model | `https://api.deepseek.com`, `deepseek-v4-flash` |
@@ -53,9 +53,10 @@ Primary compatibility evidence remains the pinned upstream source:
 - Terminal-Bench task [tree](https://github.com/harbor-framework/terminal-bench-2/tree/2fd12b88aafdd04a52c298e3940bcb189f9766d6)
   and its `task.toml`, `instruction.md`, environment Dockerfile, and private
   `tests/` conventions.
-- OpenClaw SSH [configuration schema](https://github.com/openclaw/openclaw/blob/10ad3aa16068baa84a1bd9ac4f7d42ae725cedb7/src/config/types.sandbox.ts#L102-L124),
-  [client invocation](https://github.com/openclaw/openclaw/blob/10ad3aa16068baa84a1bd9ac4f7d42ae725cedb7/src/agents/sandbox/ssh.ts#L479-L579),
-  and [workspace behavior](https://github.com/openclaw/openclaw/blob/10ad3aa16068baa84a1bd9ac4f7d42ae725cedb7/src/agents/sandbox/ssh-backend.ts#L114-L177).
+- OpenClaw SSH [configuration schema](https://github.com/openclaw/openclaw/blob/2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4/src/config/types.sandbox.ts#L103-L125),
+  [validated exec and workdir commands](https://github.com/openclaw/openclaw/blob/2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4/src/agents/sandbox/ssh.ts#L279-L362),
+  [directory creation and upload controls](https://github.com/openclaw/openclaw/blob/2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4/src/agents/sandbox/ssh.ts#L739-L796),
+  and [workspace and skills refresh behavior](https://github.com/openclaw/openclaw/blob/2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4/src/agents/sandbox/ssh-backend.ts#L215-L373).
 - Docker's [Go SDK guidance](https://docs.docker.com/reference/api/engine/sdk/)
   and the official split Moby client/API modules.
 
@@ -131,8 +132,9 @@ unit tests supply small typed fakes. The generic monitor package does not
 import Docker.
 
 `pkg/containerimage` uses the distribution/OCI reference packages for two
-narrow contracts: the OpenClaw image must include a full digest, while each
-Terminal-Bench task image must have an explicitly written tag and no digest.
+narrow contracts: the OpenClaw image must be an exact explicitly tagged,
+non-`latest` reference, while each Terminal-Bench task image must have an
+explicitly written tag and no digest.
 This keeps registry syntax parsing out of config, benchmark, harness, and
 sandbox code without conflating the two pinning policies.
 
@@ -207,12 +209,17 @@ OpenClaw's pinned SSH backend uses this protocol-only workspace:
 ```
 
 The path is never created in the task container. The bridge recognizes only
-the pinned OpenClaw control-command and generated-tool shapes, maps the exact
-virtual workspace and HOME to `Task.Environment.Workdir`, and rejects
-unresolved or ambiguous namespace occurrences. Its bounded scanner preserves
+the pinned OpenClaw control-command and generated-tool shapes. For v2026.7.1 it
+answers the exact workdir-validation command with the virtual workspace that
+OpenClaw expects, while executing against `Task.Environment.Workdir`; it drains
+only the exact recurring skills clear and tar-upload controls. Full argument
+vectors, including pinned scripts, labels, target, and root, must match before
+either compatibility rule applies. Unrecognized virtual-namespace controls
+fail closed, so OpenClaw cannot create an alias or clear or upload into the
+benchmark workdir. Ordinary generated commands still map the exact virtual
+workspace and HOME to `Task.Environment.Workdir`. The bounded scanner preserves
 token boundaries and descendant suffixes; when the workdir is `/`, a descendant
-maps to `/name`, never `//name`. Transport cleanup controls are classified
-before translation and cannot remove the benchmark workdir. The harness
+maps to `/name`, never `//name`. The harness
 disables OpenClaw's native filesystem tools because their upstream helper
 requires `python3`, which Terminal-Bench images are not required to provide.
 All task mutation therefore uses the `exec` tool.
@@ -269,11 +276,13 @@ Both logs are retained after bridge shutdown and exposed in
 line. Its structured accepted and rejected records include sequence, time,
 run/task/runtime identity, operation class, path/workdir metadata, environment
 names, nonsecret mapped `workspace_home`, a command hash, the exact argument
-vector and shell command, exact stdin (UTF-8 or base64 for binary data), byte
-counts, duration, exit code, and outcome. Workspace-virtualized records describe
-the translated command that reached the sandbox. Printable Unicode and HTML
-characters are emitted literally; quotes, backslashes, newlines, and controls
-retain the escaping required by JSON. The separate human-readable shell-command
+vector and shell command, printable stdin or a concise binary-omission marker,
+byte counts, duration, exit code, and outcome. Lossless binary stdin remains in
+the private raw audit rather than expanding into JSON control escapes or
+base64. Workspace-virtualized records describe the translated command that
+reached the sandbox. Printable Unicode and HTML characters are emitted
+literally; quotes, backslashes, newlines, and permitted text controls retain the
+escaping required by JSON. The separate human-readable shell-command
 field is omitted only for OpenClaw's internal `workspace_upload` helper because
 its exact script already exists in the argument vector. Environment values and
 stdout/stderr content are not retained in the structured log.
@@ -346,7 +355,7 @@ task. The task image comes directly from `environment.docker_image` in the
 pinned task's `task.toml`; it is not repeated in a version catalog. The tag is
 required explicitly, digest-bearing and implicit-`latest` task references are
 rejected, and the validated trimmed spelling is preserved. OpenClaw's separate
-image configuration remains digest-pinned.
+image configuration requires exact spelling and a non-`latest` release tag.
 
 The adapter verifies that the dataset is the exact clean pinned revision before
 discovery and again immediately before evaluation. Before bridge construction,
@@ -457,7 +466,7 @@ benchmark preparation and evaluation retain the original task values.
 
 `aries setup PROFILE.json` verifies or creates the configured Terminal-Bench
 checkout, reads selected task image tags from each pinned `task.toml`, and
-pulls those images plus digest-pinned OpenClaw through the Moby SDK. Normal runs
+pulls those images plus tag-pinned OpenClaw through the Moby SDK. Normal runs
 never silently change datasets or pull images.
 
 API-key values never belong in JSON. For the official DeepSeek configuration,
