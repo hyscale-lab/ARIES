@@ -34,7 +34,7 @@ func testVersions() config.Versions {
 	}
 }
 
-func TestBuildExperimentUsesExplicitTypeSwitches(t *testing.T) {
+func TestBuildTaskExperimentUsesExplicitTypeSwitches(t *testing.T) {
 	valid := config.Config{
 		Benchmark: config.BenchmarkConfig{Type: "terminalbench2", Root: terminalbench.DefaultRoot, Tasks: []string{"fix-git"}},
 		Harness:   config.HarnessConfig{Type: "openclaw"},
@@ -61,10 +61,10 @@ func TestBuildExperimentUsesExplicitTypeSwitches(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			cfg := valid
 			test.change(&cfg)
-			experiment, err := buildExperiment(cfg, "test-run", cfg.OutputDir, nil, nil)
+			experiment, err := buildTaskExperiment(cfg, "test-run", cfg.OutputDir, "fix-git", "fix-git-001", nil, nil)
 			if test.wantErr == "" {
-				if err != nil || experiment == nil || experiment.Runner == nil || experiment.Recorder == nil {
-					t.Fatalf("buildExperiment() = %v, %v", experiment, err)
+				if err != nil || experiment == nil || experiment.runner == nil || experiment.recorder == nil {
+					t.Fatalf("buildTaskExperiment() = %v, %v", experiment, err)
 				}
 				if err := experiment.close(); err != nil {
 					t.Fatalf("close experiment: %v", err)
@@ -72,7 +72,7 @@ func TestBuildExperimentUsesExplicitTypeSwitches(t *testing.T) {
 				return
 			}
 			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
-				t.Fatalf("buildExperiment() error = %v, want substring %q", err, test.wantErr)
+				t.Fatalf("buildTaskExperiment() error = %v, want substring %q", err, test.wantErr)
 			}
 		})
 	}
@@ -122,20 +122,20 @@ func TestBuildTaskExperimentCreatesIsolatedOccurrenceGraph(t *testing.T) {
 			t.Fatal(err)
 		}
 		experiments[index] = built
-		if got := reflectedStrings(t, built.Recorder, "taskIDs"); !reflect.DeepEqual(got, []string{occurrenceID}) {
+		if got := reflectedStrings(t, built.recorder, "taskIDs"); !reflect.DeepEqual(got, []string{occurrenceID}) {
 			t.Fatalf("recorder %d task IDs = %v", index, got)
 		}
 	}
-	if experiments[0].Runner == experiments[1].Runner || experiments[0].Recorder == experiments[1].Recorder {
+	if experiments[0].runner == experiments[1].runner || experiments[0].recorder == experiments[1].recorder {
 		t.Fatal("occurrences share Runner or Recorder")
 	}
 	for _, field := range []string{"benchmark", "harness", "toolSandbox", "bridge"} {
-		if reflectedInterfacePointer(t, experiments[0].Runner, field) == reflectedInterfacePointer(t, experiments[1].Runner, field) {
+		if reflectedInterfacePointer(t, experiments[0].runner, field) == reflectedInterfacePointer(t, experiments[1].runner, field) {
 			t.Fatalf("occurrences share Runner field %s", field)
 		}
 	}
 	for _, built := range experiments {
-		if _, err := built.Recorder.Stop(context.Background()); err == nil || !strings.Contains(err.Error(), "not started") {
+		if _, err := built.recorder.Stop(context.Background()); err == nil || !strings.Contains(err.Error(), "not started") {
 			t.Fatalf("close unstarted recorder: %v", err)
 		}
 		if err := built.close(); err != nil {

@@ -105,13 +105,16 @@ func TestRunProfileGlobalIDsErrorsAndLimit(t *testing.T) {
 			for current > peak.Load() && !peak.CompareAndSwap(peak.Load(), current) {
 			}
 			var err error
-			if occurrence.index == 2 {
+			if occurrence.executionID == "b-002" {
 				err = errors.New("failed")
 			}
 			return core.RunResult{Tasks: []core.TaskResult{{TaskID: occurrence.executionID}}, Summary: core.RunSummary{Tasks: 1}}, err
 		})
 	if err == nil || peak.Load() > 2 {
 		t.Fatalf("error=%v peak=%d", err, peak.Load())
+	}
+	if !strings.Contains(err.Error(), "task occurrence b-002: failed") {
+		t.Fatalf("error = %v", err)
 	}
 	want := []string{"a-001", "b-002", "a-003", "b-004"}
 	for i := range want {

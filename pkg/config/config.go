@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/containerimage"
+	"github.com/hyscale-lab/aries/pkg/core"
 )
 
 const defaultOutputDir = "runs"
@@ -74,12 +75,7 @@ type BridgeConfig struct {
 	Type string `json:"type"`
 }
 
-type ModelConfig struct {
-	Provider  string `json:"provider"`
-	BaseURL   string `json:"base_url"`
-	Model     string `json:"model"`
-	APIKeyEnv string `json:"api_key_env"`
-}
+type ModelConfig = core.ModelConfig
 
 // Versions contains the immutable upstream identities shared by profiles.
 type Versions struct {

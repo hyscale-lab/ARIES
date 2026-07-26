@@ -1,5 +1,36 @@
 # ARIES Tasks
 
+## R12 — Post-concurrency composition cleanup
+
+Cleanup plan, in regression-first order:
+
+1. [x] Retarget composition coverage to the production
+   `buildTaskExperiment` path and occurrence failure coverage to the stable
+   `b-002` execution identity while retaining occurrence overflow and formatting
+   checks.
+2. [x] Delete the test-only `buildExperiment` wrapper, remove the stored
+   occurrence index, and privatize package-local experiment fields without
+   changing construction, scheduling, lifecycle, cleanup, or isolation behavior.
+3. [x] Make `config.ModelConfig` an alias of the identical shared
+   `core.ModelConfig` and pass it directly into Runner options while preserving
+   strict JSON and credential-field rejection.
+4. [x] Run focused unit, race, vet, formatting, and diff checks, then the full
+   release matrix and leak, process, secret, status, review, architecture, and
+   adversarial-QA gates before the single cleanup commit.
+
+Audit evidence and boundaries:
+
+- `buildExperiment` is referenced only by its same-package composition test;
+  production already constructs each occurrence through `buildTaskExperiment`.
+- `taskOccurrence.index` is read only by a test; production identity and error
+  reporting use the retained global counter and `executionID`.
+- `experiment.Runner` and `experiment.Recorder` are package-local composition
+  details, and `config.ModelConfig` duplicates `core.ModelConfig` field-for-field.
+- Keep the four explicit Runner-role switches, `prepareProfile` validation
+  precedence, lifecycle and isolation gates, verifier secrecy, ownership and
+  cleanup checks, provider behavior, and SGLang handling unchanged. Do not add a
+  registry, factory, plugin, DI layer, shared URL utility, or dependency.
+
 ## R9 — Endpoint-only SGLang provider
 
 - [x] Require explicit `deepseek` or `sglang` model provider selection.
@@ -56,10 +87,11 @@ Reproducible evidence:
 
 Architecture and regression locks:
 
-- [x] Keep `cmd/aries.buildExperiment` as the visible composition root with one
+- [x] Keep `cmd/aries.buildTaskExperiment` as the visible per-occurrence
+  composition root with one
   explicit type switch per `Benchmark`, `AgentHarness`, `ToolSandbox`, and
-  `ToolBridge`. `TestBuildExperimentUsesExplicitTypeSwitches` locks the supported
-  constructors and role-specific unsupported-type errors.
+  `ToolBridge`. `TestBuildTaskExperimentUsesExplicitTypeSwitches` locks the
+  supported constructors and role-specific unsupported-type errors.
 - [x] Keep the support checks in `cmd/aries.prepareProfile`.
   `TestPrepareProfileRejectsUnknownComponentsBeforeSetup` proves the entire
   setup profile is rejected before clone, task load, or image pull side effects.

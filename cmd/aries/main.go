@@ -131,18 +131,6 @@ func runCommandWithDependencies(ctx context.Context, args []string, stdout io.Wr
 	}, outputRoot, stdout)
 }
 
-func buildExperiment(
-	cfg config.Config,
-	runID, outputRoot string,
-	apiKeyLookup func(string) ([]byte, bool),
-	logger *logrus.Logger,
-) (*experiment, error) {
-	if len(cfg.Benchmark.Tasks) == 0 {
-		return nil, errors.New("benchmark tasks are required")
-	}
-	return buildTaskExperiment(cfg, runID, outputRoot, cfg.Benchmark.Tasks[0], cfg.Benchmark.Tasks[0], apiKeyLookup, logger)
-}
-
 func buildTaskExperiment(
 	cfg config.Config,
 	runID, outputRoot, logicalID, occurrenceID string,
@@ -225,7 +213,7 @@ func buildTaskExperiment(
 	}
 	benchmarkRunner, err := runner.New(benchmark, harness, sandbox, bridge, runner.Options{
 		Name: cfg.Name, RunID: runID, OutputDir: outputRoot,
-		Model:  core.ModelConfig{Provider: cfg.Model.Provider, BaseURL: cfg.Model.BaseURL, Model: cfg.Model.Model, APIKeyEnv: cfg.Model.APIKeyEnv},
+		Model:  cfg.Model,
 		Logger: logger,
 		RuntimeOverrides: runner.RuntimeOverrides{
 			HarnessResources:      runner.ResourceOverrides{CPU: cfg.Overrides.HarnessResources.CPU, MemoryMB: cfg.Overrides.HarnessResources.MemoryMB},
@@ -242,7 +230,7 @@ func buildTaskExperiment(
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("construct monitor: %w", err), resourceSource.Close(), closeOccurrenceClients(sandboxManager.Close, harnessManager.Close))
 	}
-	return &experiment{Runner: benchmarkRunner, Recorder: recorder, close: func() error {
+	return &experiment{runner: benchmarkRunner, recorder: recorder, close: func() error {
 		return closeOccurrenceClients(sandboxManager.Close, harnessManager.Close)
 	}}, nil
 }

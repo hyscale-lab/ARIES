@@ -1,0 +1,40 @@
+{
+  "name": "openclaw-tb2-ten-deepseek",
+  "versions_file": "../configs/versions.json",
+  "overrides_file": "../configs/runtime-overrides.json",
+  "execution": {
+    "concurrency": 2
+  },
+  "benchmark": {
+    "type": "terminalbench2",
+    "root": ".cache/terminal-bench-2",
+    "tasks": [
+      "code-from-image",
+      "compile-compcert",
+      "crack-7z-hash",
+      "fix-code-vulnerability",
+      "hf-model-inference",
+      "kv-store-grpc",
+      "overfull-hbox",
+      "circuit-fibsqrt",
+      "protein-assembly",
+      "video-processing"
+    ]
+  },
+  "harness": {
+    "type": "openclaw"
+  },
+  "sandbox": {
+    "type": "docker"
+  },
+  "bridge": {
+    "type": "openclaw-ssh"
+  },
+  "model": {
+    "provider": "deepseek",
+    "base_url": "https://api.deepseek.com",
+    "model": "deepseek-v4-flash",
+    "api_key_env": "DEEPSEEK_API_KEY"
+  },
+  "output_dir": "runs"
+}

@@ -16,13 +16,13 @@ import (
 const observerStopTimeout = 15 * time.Second
 
 type experiment struct {
-	Runner   *runner.Runner
-	Recorder *monitor.Recorder
+	runner   *runner.Runner
+	recorder *monitor.Recorder
 	close    func() error
 }
 
 func (experiment *experiment) Run(ctx context.Context) (core.RunResult, error) {
-	result, err := runObserved(ctx, experiment.Runner.Run, experiment.Recorder.Start, experiment.Recorder.Stop, observerStopTimeout)
+	result, err := runObserved(ctx, experiment.runner.Run, experiment.recorder.Start, experiment.recorder.Stop, observerStopTimeout)
 	if experiment.close != nil {
 		err = errors.Join(err, experiment.close())
 	}
@@ -31,7 +31,6 @@ func (experiment *experiment) Run(ctx context.Context) (core.RunResult, error) {
 
 type taskOccurrence struct {
 	logicalID   string
-	index       uint64
 	executionID string
 }
 
@@ -40,7 +39,7 @@ func nextTaskOccurrence(logicalID string, index *uint64) (taskOccurrence, error)
 		return taskOccurrence{}, errors.New("task occurrence index overflow")
 	}
 	*index++
-	return taskOccurrence{logicalID: logicalID, index: *index, executionID: fmt.Sprintf("%s-%03d", logicalID, *index)}, nil
+	return taskOccurrence{logicalID: logicalID, executionID: fmt.Sprintf("%s-%03d", logicalID, *index)}, nil
 }
 
 type occurrenceRunner func(context.Context, taskOccurrence) (core.RunResult, error)
