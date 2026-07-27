@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/benchmark/terminalbench"
@@ -26,7 +28,9 @@ const runResultName = "run-result.json"
 
 func main() {
 	logger := newLogger()
-	if err := runCommandWithDependencies(context.Background(), os.Args[1:], os.Stdout, commandDependencies{logger: logger}); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := runCommandWithDependencies(ctx, os.Args[1:], os.Stdout, commandDependencies{logger: logger}); err != nil {
 		logger.WithError(err).Error("aries failed")
 		os.Exit(1)
 	}
@@ -37,6 +41,7 @@ type commandDependencies struct {
 	preflightClient httpDoer
 	preflightSleep  contextSleep
 	prepareProfile  func(context.Context, config.Config) error
+	modelRuntime    modelRuntime
 	logger          *logrus.Logger
 }
 
@@ -113,13 +118,60 @@ func runCommandWithDependencies(ctx context.Context, args []string, stdout io.Wr
 		preflightLookup = apiKeys.Lookup
 		harnessLookup = apiKeys.Lookup
 	}
-	validation, preflightErr := validateLiveModel(ctx, cfg.Model, preflightLookup, dependencies.preflightClient, dependencies.preflightSleep)
+	activeModelRuntime := dependencies.modelRuntime
+	if activeModelRuntime == nil {
+		switch cfg.ModelRuntime.Mode {
+		case "external":
+			activeModelRuntime = externalModelRuntime{}
+		case "managed":
+			switch cfg.Model.Provider {
+			case "sglang":
+				activeModelRuntime, err = newSGLangProcessRuntime(sglangProcessOptions{
+					Executable: cfg.ModelRuntime.Executable,
+					ConfigPath: cfg.SGLangPath,
+					OutputDir:  outputRoot,
+				})
+			default:
+				err = fmt.Errorf("unsupported managed model provider %q", cfg.Model.Provider)
+			}
+		default:
+			err = fmt.Errorf("unsupported model runtime mode %q", cfg.ModelRuntime.Mode)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	if err := activeModelRuntime.Start(ctx); err != nil {
+		return fmt.Errorf("start model runtime: %w", err)
+	}
+	if cfg.ModelRuntime.Mode == "managed" {
+		runEntry.Info("managed model runtime started")
+	}
+	stopTimeout := cfg.ModelRuntime.StopTimeout
+	if stopTimeout <= 0 {
+		stopTimeout = time.Second
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), stopTimeout)
+		stopErr := activeModelRuntime.Stop(cleanupCtx)
+		cancel()
+		if stopErr != nil {
+			returnErr = errors.Join(returnErr, fmt.Errorf("stop model runtime: %w", stopErr))
+		} else if cfg.ModelRuntime.Mode == "managed" {
+			runEntry.Info("managed model runtime stopped")
+		}
+	}()
+
+	validation, preflightErr := validateLiveModelForRuntime(
+		ctx, cfg, activeModelRuntime, preflightLookup,
+		dependencies.preflightClient, dependencies.preflightSleep,
+	)
 	persistErr := persistLiveValidation(outputRoot, validation)
 	if preflightErr != nil || persistErr != nil {
 		return errors.Join(preflightErr, persistErr)
 	}
 
-	return executeAndRecord(ctx, func(runCtx context.Context) (core.RunResult, error) {
+	returnErr = executeAndRecord(ctx, func(runCtx context.Context) (core.RunResult, error) {
 		return runProfile(runCtx, cfg.Name, runID, cfg.Benchmark.Tasks, cfg.Execution.Concurrency, cfg.Execution.Loop,
 			func(taskCtx context.Context, occurrence taskOccurrence) (core.RunResult, error) {
 				experiment, err := buildTaskExperiment(cfg, runID, outputRoot, occurrence.logicalID, occurrence.executionID, harnessLookup, logger)
@@ -129,6 +181,7 @@ func runCommandWithDependencies(ctx context.Context, args []string, stdout io.Wr
 				return experiment.Run(taskCtx)
 			})
 	}, outputRoot, stdout)
+	return returnErr
 }
 
 func buildTaskExperiment(

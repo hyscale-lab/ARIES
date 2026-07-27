@@ -23,6 +23,7 @@ const (
 	deepSeekRetryDelay       = 2 * time.Second
 	deepSeekMaxAttempts      = 2
 	deepSeekMaxResponseBytes = 64 << 10
+	managedStartupRetryDelay = time.Second
 )
 
 type liveValidationStatus string
@@ -77,6 +78,44 @@ type httpDoer interface {
 }
 
 type contextSleep func(context.Context, time.Duration) error
+
+func validateLiveModelForRuntime(
+	ctx context.Context,
+	cfg config.Config,
+	runtime modelRuntime,
+	lookup func(string) ([]byte, bool),
+	client httpDoer,
+	sleep contextSleep,
+) (liveValidation, error) {
+	if cfg.ModelRuntime.Mode != "managed" {
+		return validateLiveModel(ctx, cfg.Model, lookup, client, sleep)
+	}
+	if sleep == nil {
+		sleep = sleepWithContext
+	}
+	startupCtx, cancel := context.WithTimeout(ctx, cfg.ModelRuntime.StartupTimeout)
+	defer cancel()
+	for attempts := 1; ; attempts++ {
+		validation, err := validateLiveModel(startupCtx, cfg.Model, lookup, client, sleep)
+		validation.Attempts = attempts
+		if err == nil {
+			return validation, nil
+		}
+		switch validation.Category {
+		case liveValidationTransport, liveValidationServer, liveValidationModelMissing:
+		default:
+			return validation, &liveValidationError{provider: cfg.Model.Provider, category: validation.Category, attempts: attempts}
+		}
+		select {
+		case <-runtime.Done():
+			return liveValidationFailure(cfg.Model, liveValidationServer, attempts)
+		default:
+		}
+		if err := sleep(startupCtx, managedStartupRetryDelay); err != nil {
+			return liveValidationFailure(cfg.Model, liveValidationCanceled, attempts)
+		}
+	}
+}
 
 func validateLiveModel(
 	ctx context.Context,

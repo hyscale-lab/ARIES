@@ -24,20 +24,22 @@ const defaultOutputDir = "runs"
 // Config is one explicit experiment profile. It has no inheritance, templates,
 // merging, or secret values.
 type Config struct {
-	Name          string           `json:"name"`
-	VersionsFile  string           `json:"versions_file"`
-	OverridesFile string           `json:"overrides_file,omitempty"`
-	SGLangFile    string           `json:"sglang_file,omitempty"`
-	Benchmark     BenchmarkConfig  `json:"benchmark"`
-	Harness       HarnessConfig    `json:"harness"`
-	Sandbox       SandboxConfig    `json:"sandbox"`
-	Bridge        BridgeConfig     `json:"bridge"`
-	Model         ModelConfig      `json:"model"`
-	Execution     ExecutionConfig  `json:"execution,omitempty"`
-	OutputDir     string           `json:"output_dir"`
-	Versions      Versions         `json:"-"`
-	Overrides     RuntimeOverrides `json:"-"`
-	SGLang        SGLangConfig     `json:"-"`
+	Name          string             `json:"name"`
+	VersionsFile  string             `json:"versions_file"`
+	OverridesFile string             `json:"overrides_file,omitempty"`
+	SGLangFile    string             `json:"sglang_file,omitempty"`
+	Benchmark     BenchmarkConfig    `json:"benchmark"`
+	Harness       HarnessConfig      `json:"harness"`
+	Sandbox       SandboxConfig      `json:"sandbox"`
+	Bridge        BridgeConfig       `json:"bridge"`
+	Model         ModelConfig        `json:"model"`
+	ModelRuntime  ModelRuntimeConfig `json:"model_runtime,omitempty"`
+	Execution     ExecutionConfig    `json:"execution,omitempty"`
+	OutputDir     string             `json:"output_dir"`
+	Versions      Versions           `json:"-"`
+	Overrides     RuntimeOverrides   `json:"-"`
+	SGLang        SGLangConfig       `json:"-"`
+	SGLangPath    string             `json:"-"`
 }
 
 // ExecutionConfig controls bounded occurrence scheduling above the Runner.
@@ -45,6 +47,15 @@ type ExecutionConfig struct {
 	Concurrency  int           `json:"concurrency"`
 	LoopDuration string        `json:"loop_duration,omitempty"`
 	Loop         time.Duration `json:"-"`
+}
+
+type ModelRuntimeConfig struct {
+	Mode               string        `json:"mode"`
+	Executable         string        `json:"executable,omitempty"`
+	StartupTimeoutText string        `json:"startup_timeout,omitempty"`
+	StopTimeoutText    string        `json:"stop_timeout,omitempty"`
+	StartupTimeout     time.Duration `json:"-"`
+	StopTimeout        time.Duration `json:"-"`
 }
 
 // RuntimeOverrides contains sparse, explicitly present runtime changes.
@@ -154,6 +165,7 @@ func Load(path string) (Config, error) {
 			return Config{}, fmt.Errorf("validate SGLang config %q: %w", sglangPath, err)
 		}
 		cfg.SGLang = sglang
+		cfg.SGLangPath = sglangPath
 	}
 	return cfg, nil
 }
@@ -276,7 +288,7 @@ func validateResources(name string, resources ResourceOverrides) error {
 
 // Decode rejects unknown fields and trailing JSON values.
 func Decode(r io.Reader) (Config, error) {
-	cfg := Config{Execution: ExecutionConfig{Concurrency: 1}}
+	cfg := Config{Execution: ExecutionConfig{Concurrency: 1}, ModelRuntime: ModelRuntimeConfig{Mode: "external"}}
 	if err := decodeStrictJSON(r, &cfg, "experiment config"); err != nil {
 		return Config{}, err
 	}
@@ -368,6 +380,9 @@ func (c *Config) validate() error {
 	if c.Model.Provider != "deepseek" && c.Model.Provider != "sglang" {
 		return errors.New("model.provider must be deepseek or sglang")
 	}
+	if err := c.ModelRuntime.validate(c.Model.Provider, c.SGLangFile); err != nil {
+		return err
+	}
 	if c.SGLangFile != "" && c.Model.Provider != "sglang" {
 		return errors.New("sglang_file requires model.provider sglang")
 	}
@@ -402,6 +417,38 @@ func (c *Config) validate() error {
 		return errors.New("model.api_key_env must be an environment variable name")
 	}
 	return nil
+}
+
+func (c *ModelRuntimeConfig) validate(provider, sglangFile string) error {
+	switch c.Mode {
+	case "external":
+		if c.Executable != "" || c.StartupTimeoutText != "" || c.StopTimeoutText != "" {
+			return errors.New("external model_runtime must not set executable or timeouts")
+		}
+		return nil
+	case "managed":
+		if provider != "sglang" {
+			return errors.New("managed model_runtime currently requires model.provider sglang")
+		}
+		if sglangFile == "" {
+			return errors.New("managed model_runtime requires sglang_file")
+		}
+		if strings.TrimSpace(c.Executable) == "" || strings.ContainsRune(c.Executable, 0) {
+			return errors.New("managed model_runtime.executable is required")
+		}
+		var err error
+		c.StartupTimeout, err = time.ParseDuration(c.StartupTimeoutText)
+		if err != nil || c.StartupTimeout <= 0 {
+			return errors.New("managed model_runtime.startup_timeout must be a positive Go duration")
+		}
+		c.StopTimeout, err = time.ParseDuration(c.StopTimeoutText)
+		if err != nil || c.StopTimeout <= 0 {
+			return errors.New("managed model_runtime.stop_timeout must be a positive Go duration")
+		}
+		return nil
+	default:
+		return errors.New("model_runtime.mode must be external or managed")
+	}
 }
 
 func normalizeSGLangBaseURL(baseURL string) (string, error) {
