@@ -24,12 +24,14 @@ order. Each occurrence has an exact global execution ID for directories,
 labels, monitoring, and results. A configured loop duration bounds admissions,
 not cleanup: admitted occurrences always drain through the unchanged lifecycle.
 
-Model selection is explicit: `deepseek` retains its official bounded preflight,
-while `sglang` performs bounded exact model discovery at a versioned `/v1`
-endpoint. A local SGLang profile references one strict native YAML file whose
+Model selection is explicit through `runtime.backend`: `deepseek` retains its
+official bounded preflight, while `sglang` performs bounded exact model
+discovery at a versioned `/v1` endpoint. A local SGLang profile references one
+strict native YAML file under `runtime.config.file`, whose
 served model and port must match the profile. SGLang may remain external or run
-as one command-owned host process for the run; this lifecycle is not a fifth
-Runner role. Neither provider stores key bytes in profiles or artifacts, and
+as one application-owned host process supplied by an explicit command switch.
+The general runtime lifecycle/health interface is separate from inference and
+is not a fifth Runner role. Neither provider stores key bytes in profiles or artifacts, and
 ARIES does not manage model installation or GPU allocation.
 
 Terminal-Bench 2 remains pinned by its exact Git revision, while each task's

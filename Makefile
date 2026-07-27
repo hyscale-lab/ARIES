@@ -17,7 +17,7 @@ test-race:
 	go test -race ./...
 
 lint:
-	test -z "$$(gofmt -l $$(find cmd pkg -name '*.go' -type f))"
+	test -z "$$(gofmt -l $$(find cmd internal pkg -name '*.go' -type f))"
 	go vet ./...
 
 integration:

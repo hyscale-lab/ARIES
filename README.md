@@ -88,7 +88,12 @@ agent deadline. Task containers always receive ARIES-owned
 
 ## Packages
 
-- `cmd/aries`: explicit composition, setup, model preflight, and result output.
+- `cmd/aries`: CLI grammar, signal handling, final error presentation, and
+  explicit direct-constructor switches.
+- `internal/app`: run/setup orchestration, scheduling, model preflight,
+  monitoring, and private result persistence.
+- `internal/modelruntime/sglang`: strict native configuration plus the managed
+  SGLang process and health lifecycle.
 - `pkg/containerimage`: shared OCI parsing for role-specific tagged and
   digest-pinned image references.
 - `pkg/core`: shared task, environment, command, endpoint, and result data.
@@ -132,9 +137,9 @@ the generic benchmark boundary.
 ## Adding the next component
 
 Add one concrete package implementing the relevant small interface, then add
-one explicit constructor switch in `cmd/aries`. The Runner lifecycle does not
-change. Pair-specific adaptation stays in the bridge package; benchmark and
-harness packages do not import one another.
+one explicit constructor switch in `cmd/aries`. A model runtime implements the
+consumer-owned lifecycle interface in `internal/app`; inference stays a
+separate client/harness concern. The Runner lifecycle does not change.
 
 ## Repository boundary
 

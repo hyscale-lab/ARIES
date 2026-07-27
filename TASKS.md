@@ -1,10 +1,26 @@
 # ARIES Tasks
 
+## R16 — Modular managed model runtimes and normalized profiles
+
+1. [x] Reduce `cmd/aries` to CLI process concerns and explicit constructor
+   switches; move scheduling, preflight, composition, and persistence into
+   `internal/app`.
+2. [x] Define the consumer-owned `ModelRuntime` lifecycle/health interface and
+   implement managed SGLang under `internal/modelruntime/sglang`, keeping
+   inference/model discovery separate.
+3. [x] Replace `sglang_file`, `model_runtime`, `model.provider`, and
+   `model.model` with the clean-break `runtime.backend/mode/config` and
+   `model.id/base_url/api_key_env` schema in every checked-in profile.
+4. [x] Preserve the four Runner roles, positive cleanup, verifier secrecy,
+   exact argv, private runtime logs, and credential handling.
+5. [ ] Complete the separate post-refactor extensibility/dead-code audit in its
+   own commit.
+
 ## R15 — Run-scoped model runtime lifecycle
 
 1. [x] Add strict external/managed model runtime configuration and lock invalid
    provider, executable, timeout, and SGLang-file combinations.
-2. [x] Define one narrow command-owned runtime interface, retain an explicit
+2. [x] Define one narrow runtime interface, retain an explicit
    provider switch, and add a managed SGLang host-process implementation with
    exact argv, private logs, idempotent process-group cleanup, and positive
    absence confirmation.
@@ -14,7 +30,7 @@
 4. [x] Preserve external provider behavior, Runner's four roles, evaluation
    isolation, credential handling, and setup behavior.
 5. [x] Run focused and full release validation, cancellation and leak checks,
-   review the final diff, and leave changes uncommitted until requested.
+   review the final diff, and record the original lifecycle contribution.
 
 ## R14 — Shared local SGLang configuration
 
@@ -25,7 +41,7 @@
   unchanged; do not add server or GPU lifecycle management.
 - [x] Run focused and full release validation, leak and secret checks, and
   review the final diff.
-- [ ] Create one concise commit when requested.
+- [x] Create one concise commit when requested.
 
 ## R13 — OpenClaw 2026.7.1 explicit tag
 

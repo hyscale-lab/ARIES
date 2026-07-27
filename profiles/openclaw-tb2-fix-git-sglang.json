@@ -2,18 +2,36 @@
   "name": "openclaw-tb2-fix-git-sglang",
   "versions_file": "../configs/versions.json",
   "overrides_file": "",
-  "sglang_file": "../configs/sglang/qwen3-8b-local.yaml",
-  "execution": {"concurrency": 1},
-  "benchmark": {"type": "terminalbench2", "root": ".cache/terminal-bench-2", "tasks": ["fix-git"]},
-  "harness": {"type": "openclaw"},
-  "sandbox": {"type": "docker"},
-  "bridge": {"type": "openclaw-ssh"},
-  "model_runtime": {"mode": "external"},
+  "execution": {
+    "concurrency": 1
+  },
+  "benchmark": {
+    "type": "terminalbench2",
+    "root": ".cache/terminal-bench-2",
+    "tasks": [
+      "fix-git"
+    ]
+  },
+  "harness": {
+    "type": "openclaw"
+  },
+  "sandbox": {
+    "type": "docker"
+  },
+  "bridge": {
+    "type": "openclaw-ssh"
+  },
+  "runtime": {
+    "backend": "sglang",
+    "mode": "external",
+    "config": {
+      "file": "../configs/sglang/qwen3-8b-local.yaml"
+    }
+  },
   "model": {
-    "provider": "sglang",
     "base_url": "http://sglang.local:30000/v1",
-    "model": "Qwen/Qwen3-8B",
-    "api_key_env": "SGLANG_API_KEY"
+    "api_key_env": "SGLANG_API_KEY",
+    "id": "Qwen/Qwen3-8B"
   },
   "output_dir": "runs"
 }

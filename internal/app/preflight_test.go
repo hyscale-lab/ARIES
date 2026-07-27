@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"bytes"
@@ -372,39 +372,6 @@ func TestSGLangPreflightFailsClosedWithSanitizedCategories(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestManagedSGLangPreflightRetriesUntilReadyOrProcessExit(t *testing.T) {
-	cfg := config.Config{
-		Model:        config.ModelConfig{Provider: "sglang", BaseURL: "http://fake.invalid/v1", Model: "local", APIKeyEnv: "SGLANG_API_KEY"},
-		ModelRuntime: config.ModelRuntimeConfig{Mode: "managed", StartupTimeout: time.Minute},
-	}
-	lookup := func(string) ([]byte, bool) { return []byte("dummy"), true }
-	t.Run("ready", func(t *testing.T) {
-		doer := &sequenceSGLangDoer{t: t, replies: []preflightReply{
-			{err: errors.New("starting")},
-			{status: http.StatusOK, body: `{"data":[{"id":"local"}]}`},
-		}}
-		validation, err := validateLiveModelForRuntime(
-			context.Background(), cfg, &recordingModelRuntime{}, lookup, doer,
-			func(context.Context, time.Duration) error { return nil },
-		)
-		if err != nil || validation.Status != liveValidationSucceeded || validation.Attempts != 2 {
-			t.Fatalf("validation = %+v, error = %v", validation, err)
-		}
-	})
-	t.Run("process exit", func(t *testing.T) {
-		done := make(chan struct{})
-		close(done)
-		doer := &sequenceSGLangDoer{t: t, replies: []preflightReply{{err: errors.New("starting")}}}
-		validation, err := validateLiveModelForRuntime(
-			context.Background(), cfg, &recordingModelRuntime{done: done}, lookup, doer,
-			func(context.Context, time.Duration) error { return nil },
-		)
-		if err == nil || validation.Category != liveValidationServer || validation.Attempts != 1 {
-			t.Fatalf("validation = %+v, error = %v", validation, err)
-		}
-	})
 }
 
 func TestDeepSeekHTTPClientHasBoundedTimeoutAndRejectsRedirects(t *testing.T) {

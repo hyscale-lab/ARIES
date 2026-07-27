@@ -10,13 +10,11 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/containerimage"
 	"github.com/hyscale-lab/aries/pkg/core"
-	"go.yaml.in/yaml/v3"
 )
 
 const defaultOutputDir = "runs"
@@ -24,22 +22,19 @@ const defaultOutputDir = "runs"
 // Config is one explicit experiment profile. It has no inheritance, templates,
 // merging, or secret values.
 type Config struct {
-	Name          string             `json:"name"`
-	VersionsFile  string             `json:"versions_file"`
-	OverridesFile string             `json:"overrides_file,omitempty"`
-	SGLangFile    string             `json:"sglang_file,omitempty"`
-	Benchmark     BenchmarkConfig    `json:"benchmark"`
-	Harness       HarnessConfig      `json:"harness"`
-	Sandbox       SandboxConfig      `json:"sandbox"`
-	Bridge        BridgeConfig       `json:"bridge"`
-	Model         ModelConfig        `json:"model"`
-	ModelRuntime  ModelRuntimeConfig `json:"model_runtime,omitempty"`
-	Execution     ExecutionConfig    `json:"execution,omitempty"`
-	OutputDir     string             `json:"output_dir"`
-	Versions      Versions           `json:"-"`
-	Overrides     RuntimeOverrides   `json:"-"`
-	SGLang        SGLangConfig       `json:"-"`
-	SGLangPath    string             `json:"-"`
+	Name          string           `json:"name"`
+	VersionsFile  string           `json:"versions_file"`
+	OverridesFile string           `json:"overrides_file,omitempty"`
+	Benchmark     BenchmarkConfig  `json:"benchmark"`
+	Harness       HarnessConfig    `json:"harness"`
+	Sandbox       SandboxConfig    `json:"sandbox"`
+	Bridge        BridgeConfig     `json:"bridge"`
+	Runtime       RuntimeConfig    `json:"runtime"`
+	Model         ProfileModel     `json:"model"`
+	Execution     ExecutionConfig  `json:"execution,omitempty"`
+	OutputDir     string           `json:"output_dir"`
+	Versions      Versions         `json:"-"`
+	Overrides     RuntimeOverrides `json:"-"`
 }
 
 // ExecutionConfig controls bounded occurrence scheduling above the Runner.
@@ -49,13 +44,20 @@ type ExecutionConfig struct {
 	Loop         time.Duration `json:"-"`
 }
 
-type ModelRuntimeConfig struct {
-	Mode               string        `json:"mode"`
+type RuntimeConfig struct {
+	Backend string              `json:"backend"`
+	Mode    string              `json:"mode"`
+	Config  RuntimeConfigValues `json:"config,omitempty"`
+}
+
+type RuntimeConfigValues struct {
+	File               string        `json:"file,omitempty"`
 	Executable         string        `json:"executable,omitempty"`
 	StartupTimeoutText string        `json:"startup_timeout,omitempty"`
 	StopTimeoutText    string        `json:"stop_timeout,omitempty"`
 	StartupTimeout     time.Duration `json:"-"`
 	StopTimeout        time.Duration `json:"-"`
+	ResolvedFile       string        `json:"-"`
 }
 
 // RuntimeOverrides contains sparse, explicitly present runtime changes.
@@ -72,18 +74,15 @@ type ResourceOverrides struct {
 	MemoryMB *int     `json:"memory_mb,omitempty"`
 }
 
-type SGLangConfig struct {
-	ModelPath          string  `yaml:"model-path"`
-	ServedModelName    string  `yaml:"served-model-name"`
-	Host               string  `yaml:"host"`
-	Port               int     `yaml:"port"`
-	Device             string  `yaml:"device"`
-	TensorParallelSize int     `yaml:"tensor-parallel-size"`
-	ContextLength      int     `yaml:"context-length"`
-	MemFractionStatic  float64 `yaml:"mem-fraction-static"`
-	ReasoningParser    string  `yaml:"reasoning-parser"`
-	ToolCallParser     string  `yaml:"tool-call-parser"`
+type ProfileModel struct {
+	ID        string `json:"id"`
+	BaseURL   string `json:"base_url"`
+	APIKeyEnv string `json:"api_key_env"`
 }
+
+// ModelConfig is retained as the internal model-client data shape. Profile
+// JSON uses ProfileModel and converts explicitly through Config.CoreModel.
+type ModelConfig = core.ModelConfig
 
 type BenchmarkConfig struct {
 	Type  string   `json:"type"`
@@ -103,7 +102,9 @@ type BridgeConfig struct {
 	Type string `json:"type"`
 }
 
-type ModelConfig = core.ModelConfig
+func (c Config) CoreModel() core.ModelConfig {
+	return core.ModelConfig{Provider: c.Runtime.Backend, BaseURL: c.Model.BaseURL, Model: c.Model.ID, APIKeyEnv: c.Model.APIKeyEnv}
+}
 
 // Versions contains the upstream version selections shared by profiles.
 type Versions struct {
@@ -152,90 +153,18 @@ func Load(path string) (Config, error) {
 		}
 		cfg.Overrides = overrides
 	}
-	if cfg.SGLangFile != "" {
-		sglangPath := cfg.SGLangFile
-		if !filepath.IsAbs(sglangPath) {
-			sglangPath = filepath.Join(filepath.Dir(path), sglangPath)
+	if cfg.Runtime.Config.File != "" {
+		resolved := cfg.Runtime.Config.File
+		if !filepath.IsAbs(resolved) {
+			resolved = filepath.Join(filepath.Dir(path), resolved)
 		}
-		sglang, err := LoadSGLangConfig(sglangPath)
+		resolved, err = filepath.Abs(resolved)
 		if err != nil {
-			return Config{}, fmt.Errorf("load SGLang config: %w", err)
+			return Config{}, fmt.Errorf("resolve runtime config file: %w", err)
 		}
-		if err := validateSGLangProfile(cfg.Model, sglang); err != nil {
-			return Config{}, fmt.Errorf("validate SGLang config %q: %w", sglangPath, err)
-		}
-		cfg.SGLang = sglang
-		cfg.SGLangPath = sglangPath
+		cfg.Runtime.Config.ResolvedFile = resolved
 	}
 	return cfg, nil
-}
-
-func LoadSGLangConfig(path string) (SGLangConfig, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return SGLangConfig{}, fmt.Errorf("open SGLang config %q: %w", path, err)
-	}
-	defer f.Close()
-	decoder := yaml.NewDecoder(f)
-	decoder.KnownFields(true)
-	var configuration SGLangConfig
-	if err := decoder.Decode(&configuration); err != nil {
-		return SGLangConfig{}, fmt.Errorf("decode SGLang config %q: %w", path, err)
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return SGLangConfig{}, fmt.Errorf("decode SGLang config %q: multiple YAML documents", path)
-		}
-		return SGLangConfig{}, fmt.Errorf("decode SGLang config %q: %w", path, err)
-	}
-	if err := configuration.validate(); err != nil {
-		return SGLangConfig{}, fmt.Errorf("validate SGLang config %q: %w", path, err)
-	}
-	return configuration, nil
-}
-
-func (c SGLangConfig) validate() error {
-	required := []struct {
-		name  string
-		value string
-	}{
-		{"model-path", c.ModelPath},
-		{"served-model-name", c.ServedModelName},
-		{"host", c.Host},
-		{"device", c.Device},
-		{"tool-call-parser", c.ToolCallParser},
-	}
-	for _, field := range required {
-		if strings.TrimSpace(field.value) == "" {
-			return fmt.Errorf("%s is required", field.name)
-		}
-	}
-	if c.Port < 1 || c.Port > 65535 {
-		return errors.New("port must be between 1 and 65535")
-	}
-	if c.TensorParallelSize <= 0 {
-		return errors.New("tensor-parallel-size must be positive")
-	}
-	if c.ContextLength <= 0 {
-		return errors.New("context-length must be positive")
-	}
-	if c.MemFractionStatic <= 0 || c.MemFractionStatic > 1 || math.IsNaN(c.MemFractionStatic) || math.IsInf(c.MemFractionStatic, 0) {
-		return errors.New("mem-fraction-static must be finite, positive, and no greater than 1")
-	}
-	return nil
-}
-
-func validateSGLangProfile(model ModelConfig, configuration SGLangConfig) error {
-	if configuration.ServedModelName != model.Model {
-		return errors.New("served-model-name must equal model.model")
-	}
-	baseURL, _ := url.Parse(model.BaseURL)
-	port, err := strconv.Atoi(baseURL.Port())
-	if err != nil || port != configuration.Port {
-		return errors.New("port must equal the explicit port in model.base_url")
-	}
-	return nil
 }
 
 // LoadRuntimeOverrides reads one dedicated strict runtime override document.
@@ -288,7 +217,7 @@ func validateResources(name string, resources ResourceOverrides) error {
 
 // Decode rejects unknown fields and trailing JSON values.
 func Decode(r io.Reader) (Config, error) {
-	cfg := Config{Execution: ExecutionConfig{Concurrency: 1}, ModelRuntime: ModelRuntimeConfig{Mode: "external"}}
+	cfg := Config{Execution: ExecutionConfig{Concurrency: 1}}
 	if err := decodeStrictJSON(r, &cfg, "experiment config"); err != nil {
 		return Config{}, err
 	}
@@ -366,9 +295,10 @@ func (c *Config) validate() error {
 		{"harness.type", c.Harness.Type},
 		{"sandbox.type", c.Sandbox.Type},
 		{"bridge.type", c.Bridge.Type},
-		{"model.provider", c.Model.Provider},
+		{"runtime.backend", c.Runtime.Backend},
+		{"runtime.mode", c.Runtime.Mode},
 		{"model.base_url", c.Model.BaseURL},
-		{"model.model", c.Model.Model},
+		{"model.id", c.Model.ID},
 		{"model.api_key_env", c.Model.APIKeyEnv},
 		{"output_dir", c.OutputDir},
 	}
@@ -377,14 +307,11 @@ func (c *Config) validate() error {
 			return fmt.Errorf("%s is required", check.name)
 		}
 	}
-	if c.Model.Provider != "deepseek" && c.Model.Provider != "sglang" {
-		return errors.New("model.provider must be deepseek or sglang")
+	if c.Runtime.Backend != "deepseek" && c.Runtime.Backend != "sglang" {
+		return errors.New("runtime.backend must be deepseek or sglang")
 	}
-	if err := c.ModelRuntime.validate(c.Model.Provider, c.SGLangFile); err != nil {
+	if err := c.Runtime.validate(); err != nil {
 		return err
-	}
-	if c.SGLangFile != "" && c.Model.Provider != "sglang" {
-		return errors.New("sglang_file requires model.provider sglang")
 	}
 	if err := validateExperimentName(c.Name); err != nil {
 		return err
@@ -398,7 +325,7 @@ func (c *Config) validate() error {
 		}
 	}
 
-	if c.Model.Provider == "sglang" {
+	if c.Runtime.Backend == "sglang" {
 		normalized, err := normalizeSGLangBaseURL(c.Model.BaseURL)
 		if err != nil {
 			return fmt.Errorf("model.base_url for sglang: %w", err)
@@ -419,35 +346,48 @@ func (c *Config) validate() error {
 	return nil
 }
 
-func (c *ModelRuntimeConfig) validate(provider, sglangFile string) error {
+func (c *RuntimeConfig) validate() error {
+	switch c.Backend {
+	case "deepseek":
+		if c.Mode != "external" {
+			return errors.New("runtime.backend deepseek requires external mode")
+		}
+		if c.Config != (RuntimeConfigValues{}) {
+			return errors.New("external deepseek runtime.config must be empty")
+		}
+		return nil
+	case "sglang":
+	default:
+		return errors.New("runtime.backend must be deepseek or sglang")
+	}
 	switch c.Mode {
 	case "external":
-		if c.Executable != "" || c.StartupTimeoutText != "" || c.StopTimeoutText != "" {
-			return errors.New("external model_runtime must not set executable or timeouts")
+		if strings.TrimSpace(c.Config.File) == "" {
+			return errors.New("external SGLang runtime.config.file is required")
+		}
+		if c.Config.Executable != "" || c.Config.StartupTimeoutText != "" || c.Config.StopTimeoutText != "" {
+			return errors.New("external SGLang runtime.config must not set executable or timeouts")
 		}
 		return nil
 	case "managed":
-		if provider != "sglang" {
-			return errors.New("managed model_runtime currently requires model.provider sglang")
+		if strings.TrimSpace(c.Config.File) == "" {
+			return errors.New("managed SGLang runtime.config.file is required")
 		}
-		if sglangFile == "" {
-			return errors.New("managed model_runtime requires sglang_file")
-		}
-		if strings.TrimSpace(c.Executable) == "" || strings.ContainsRune(c.Executable, 0) {
-			return errors.New("managed model_runtime.executable is required")
+		if strings.TrimSpace(c.Config.Executable) == "" || strings.ContainsRune(c.Config.Executable, 0) {
+			return errors.New("managed SGLang runtime.config.executable is required")
 		}
 		var err error
-		c.StartupTimeout, err = time.ParseDuration(c.StartupTimeoutText)
-		if err != nil || c.StartupTimeout <= 0 {
-			return errors.New("managed model_runtime.startup_timeout must be a positive Go duration")
+		c.Config.StartupTimeout, err = time.ParseDuration(c.Config.StartupTimeoutText)
+		if err != nil || c.Config.StartupTimeout <= 0 {
+			return errors.New("managed SGLang runtime.config.startup_timeout must be a positive Go duration")
 		}
-		c.StopTimeout, err = time.ParseDuration(c.StopTimeoutText)
-		if err != nil || c.StopTimeout <= 0 {
-			return errors.New("managed model_runtime.stop_timeout must be a positive Go duration")
+		c.Config.StopTimeout, err = time.ParseDuration(c.Config.StopTimeoutText)
+		if err != nil || c.Config.StopTimeout <= 0 {
+			return errors.New("managed SGLang runtime.config.stop_timeout must be a positive Go duration")
 		}
 		return nil
 	default:
-		return errors.New("model_runtime.mode must be external or managed")
+		return errors.New("runtime.mode must be external or managed")
 	}
 }
 
