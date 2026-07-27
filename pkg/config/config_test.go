@@ -86,6 +86,38 @@ func TestDecodeExecutionDefaultsAndValidation(t *testing.T) {
 	}
 }
 
+func TestDecodeModelRuntimeDefaultsAndManagedValidation(t *testing.T) {
+	base := `{"name":"test","versions_file":"versions.json","benchmark":{"type":"terminalbench2","root":"root","tasks":["fix-git"]},"harness":{"type":"openclaw"},"sandbox":{"type":"docker"},"bridge":{"type":"openclaw-ssh"},"model":{"provider":"deepseek","base_url":"https://example.com","model":"model","api_key_env":"KEY"},"output_dir":"runs"}`
+	cfg, err := Decode(strings.NewReader(base))
+	if err != nil || cfg.ModelRuntime.Mode != "external" {
+		t.Fatalf("default model runtime = %+v, %v", cfg.ModelRuntime, err)
+	}
+	managed := strings.Replace(base, `"provider":"deepseek","base_url":"https://example.com"`, `"provider":"sglang","base_url":"http://host:30000/v1"`, 1)
+	managed = strings.Replace(managed, `"versions_file":"versions.json",`, `"versions_file":"versions.json","sglang_file":"sglang.yaml","model_runtime":{"mode":"managed","executable":"python3","startup_timeout":"15m","stop_timeout":"1m"},`, 1)
+	cfg, err = Decode(strings.NewReader(managed))
+	if err != nil || cfg.ModelRuntime.Mode != "managed" || cfg.ModelRuntime.StartupTimeout != 15*time.Minute || cfg.ModelRuntime.StopTimeout != time.Minute {
+		t.Fatalf("managed model runtime = %+v, %v", cfg.ModelRuntime, err)
+	}
+	for _, test := range []struct {
+		name    string
+		content string
+	}{
+		{"unknown mode", strings.Replace(managed, `"mode":"managed"`, `"mode":"other"`, 1)},
+		{"managed DeepSeek", strings.Replace(managed, `"provider":"sglang"`, `"provider":"deepseek"`, 1)},
+		{"missing executable", strings.Replace(managed, `"executable":"python3"`, `"executable":""`, 1)},
+		{"missing SGLang file", strings.Replace(managed, `"sglang_file":"sglang.yaml",`, "", 1)},
+		{"bad startup timeout", strings.Replace(managed, `"startup_timeout":"15m"`, `"startup_timeout":"0s"`, 1)},
+		{"bad stop timeout", strings.Replace(managed, `"stop_timeout":"1m"`, `"stop_timeout":"bad"`, 1)},
+		{"external options", strings.Replace(managed, `"mode":"managed"`, `"mode":"external"`, 1)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := Decode(strings.NewReader(test.content)); err == nil {
+				t.Fatal("expected error")
+			}
+		})
+	}
+}
+
 func TestDecodeRequiresSupportedModelProvider(t *testing.T) {
 	base := `{"name":"test","versions_file":"versions.json","benchmark":{"type":"terminalbench2","root":"root","tasks":["fix-git"]},"harness":{"type":"openclaw"},"sandbox":{"type":"docker"},"bridge":{"type":"openclaw-ssh"},"model":{"provider":"deepseek","base_url":"https://example.com","model":"model","api_key_env":"KEY"},"output_dir":"runs"}`
 	for _, provider := range []string{"deepseek", "sglang"} {
@@ -376,7 +408,7 @@ func TestCheckedInFiveTaskProfileLoadsInOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{"fix-git", "prove-plus-comm", "overfull-hbox", "rstan-to-pystan", "schemelike-metacircular-eval"}
-	if strings.Join(cfg.Benchmark.Tasks, ",") != strings.Join(want, ",") || cfg.OverridesFile == "" || cfg.Execution.Concurrency != 5 || cfg.Execution.Loop != 0 {
+	if strings.Join(cfg.Benchmark.Tasks, ",") != strings.Join(want, ",") || cfg.OverridesFile == "" || cfg.Execution.Concurrency != 2 || cfg.Execution.Loop != 0 {
 		t.Fatalf("checked-in five-task profile = %#v", cfg)
 	}
 }
@@ -387,7 +419,7 @@ func TestCheckedInSGLangProfileLoadsWithoutEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Model.Provider != "sglang" || !strings.HasSuffix(cfg.Model.BaseURL, "/v1") || cfg.Model.APIKeyEnv != "SGLANG_API_KEY" || cfg.SGLangFile == "" || cfg.SGLang.ServedModelName != cfg.Model.Model {
+	if cfg.Model.Provider != "sglang" || !strings.HasSuffix(cfg.Model.BaseURL, "/v1") || cfg.Model.APIKeyEnv != "SGLANG_API_KEY" || cfg.SGLangFile == "" || cfg.SGLang.ServedModelName != cfg.Model.Model || cfg.ModelRuntime.Mode != "external" {
 		t.Fatalf("profile = %#v", cfg)
 	}
 }

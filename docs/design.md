@@ -476,16 +476,25 @@ bounded contents. The configured environment variable is the fallback when the
 local file is unavailable. Official DeepSeek runs perform a bounded
 authenticated model preflight before Docker resource construction.
 
-`model.provider` is explicit and limited to `deepseek` or `sglang`. SGLang is
-an endpoint-only OpenAI-compatible path: its configured base URL ends in
-`/v1`, preflight performs bounded exact model discovery at `/models`, and
-OpenClaw uses provider ID `sglang` with `openai-completions`. A non-empty dummy
-environment value is sufficient for an unauthenticated local endpoint. A
-nonempty `sglang_file` references a strict native YAML document relative to the
-profile. Its `served-model-name` and `port` must match the profile model and
-explicit endpoint port. The same YAML may be shared by multiple profiles and
-passed directly to SGLang. ARIES does not launch a server or manage GPU
-resources.
+`model.provider` is explicit and limited to `deepseek` or `sglang`. SGLang uses
+an OpenAI-compatible base URL ending in `/v1`; preflight performs bounded exact
+model discovery at `/models`, and OpenClaw uses provider ID `sglang` with
+`openai-completions`. A non-empty dummy environment value is sufficient for an
+unauthenticated local endpoint. A nonempty `sglang_file` references a strict
+native YAML document relative to the profile. Its `served-model-name` and
+`port` must match the profile model and explicit endpoint port. The same YAML
+may be shared by multiple profiles and passed directly to SGLang.
+
+`model_runtime.mode` defaults to `external`, preserving endpoint-only behavior.
+For `managed` SGLang, the command layer starts one run-scoped host process with
+the configured executable and exact argv
+`-m sglang.launch_server --config YAML`, then retries model preflight within the
+configured startup timeout. The process is shared by all task occurrences and
+is stopped only after admitted work drains. Cleanup uses a fresh bounded
+context, signals the whole process group, and confirms its absence. Logs remain
+private run artifacts. This narrow command-owned lifecycle uses an explicit
+provider switch; it is not a fifth Runner role or a registry. ARIES does not
+install models, allocate GPUs, or configure container-to-host networking.
 
 The executable procedure is maintained in
 [`docs/quick-start.md`](quick-start.md).

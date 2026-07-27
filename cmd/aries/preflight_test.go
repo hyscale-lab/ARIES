@@ -57,6 +57,24 @@ type sglangPreflightDoer struct {
 	wantURL       string
 }
 
+type sequenceSGLangDoer struct {
+	t       *testing.T
+	replies []preflightReply
+}
+
+func (doer *sequenceSGLangDoer) Do(request *http.Request) (*http.Response, error) {
+	doer.t.Helper()
+	if request.Method != http.MethodGet || request.URL.String() != "http://fake.invalid/v1/models" || len(doer.replies) == 0 {
+		doer.t.Fatalf("unexpected request: %s %s", request.Method, request.URL)
+	}
+	reply := doer.replies[0]
+	doer.replies = doer.replies[1:]
+	if reply.err != nil {
+		return nil, reply.err
+	}
+	return &http.Response{StatusCode: reply.status, Body: io.NopCloser(strings.NewReader(reply.body)), Request: request}, nil
+}
+
 func (doer *sglangPreflightDoer) Do(request *http.Request) (*http.Response, error) {
 	doer.t.Helper()
 	doer.requests++
@@ -354,6 +372,39 @@ func TestSGLangPreflightFailsClosedWithSanitizedCategories(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestManagedSGLangPreflightRetriesUntilReadyOrProcessExit(t *testing.T) {
+	cfg := config.Config{
+		Model:        config.ModelConfig{Provider: "sglang", BaseURL: "http://fake.invalid/v1", Model: "local", APIKeyEnv: "SGLANG_API_KEY"},
+		ModelRuntime: config.ModelRuntimeConfig{Mode: "managed", StartupTimeout: time.Minute},
+	}
+	lookup := func(string) ([]byte, bool) { return []byte("dummy"), true }
+	t.Run("ready", func(t *testing.T) {
+		doer := &sequenceSGLangDoer{t: t, replies: []preflightReply{
+			{err: errors.New("starting")},
+			{status: http.StatusOK, body: `{"data":[{"id":"local"}]}`},
+		}}
+		validation, err := validateLiveModelForRuntime(
+			context.Background(), cfg, &recordingModelRuntime{}, lookup, doer,
+			func(context.Context, time.Duration) error { return nil },
+		)
+		if err != nil || validation.Status != liveValidationSucceeded || validation.Attempts != 2 {
+			t.Fatalf("validation = %+v, error = %v", validation, err)
+		}
+	})
+	t.Run("process exit", func(t *testing.T) {
+		done := make(chan struct{})
+		close(done)
+		doer := &sequenceSGLangDoer{t: t, replies: []preflightReply{{err: errors.New("starting")}}}
+		validation, err := validateLiveModelForRuntime(
+			context.Background(), cfg, &recordingModelRuntime{done: done}, lookup, doer,
+			func(context.Context, time.Duration) error { return nil },
+		)
+		if err == nil || validation.Category != liveValidationServer || validation.Attempts != 1 {
+			t.Fatalf("validation = %+v, error = %v", validation, err)
+		}
+	})
 }
 
 func TestDeepSeekHTTPClientHasBoundedTimeoutAndRejectsRedirects(t *testing.T) {

@@ -93,19 +93,38 @@ installed elsewhere, ARIES reads `DEEPSEEK_API_KEY` from the environment. If a
 repository-local file exists but is invalid, ARIES fails closed rather than
 falling back.
 
-For the SGLang example, point `model.base_url` at an already-running versioned
-`/v1` endpoint reachable from both the ARIES host and OpenClaw containers. Its
-`sglang_file` references the reusable native configuration, which can start the
-server directly:
+The SGLang example defaults to an external server. Point `model.base_url` at a
+versioned `/v1` endpoint reachable from both the ARIES host and OpenClaw
+containers. Its `sglang_file` references the reusable native configuration,
+which can start that server directly:
 
 ```sh
 python -m sglang.launch_server \
   --config configs/sglang/qwen3-8b-local.yaml
 ```
 
-Set any non-empty local credential value, such as `SGLANG_API_KEY=local`, for
-an unauthenticated endpoint. ARIES checks that the YAML served model and port
-match the profile, but does not launch SGLang or manage GPUs.
+Set any non-empty credential value that does not occur in the rendered config,
+such as `SGLANG_API_KEY=unused-sglang-token-7f3a`, for an unauthenticated
+endpoint.
+
+To let ARIES own the process for one run, copy the SGLang profile and replace
+its `model_runtime` block with:
+
+```json
+"model_runtime": {
+  "mode": "managed",
+  "executable": "/absolute/path/to/venv/bin/python",
+  "startup_timeout": "15m",
+  "stop_timeout": "1m"
+}
+```
+
+Do not start `sglang.launch_server` separately in this mode. ARIES passes the
+referenced YAML to SGLang, waits for exact model discovery, retains stdout and
+stderr under the private run directory, and stops the process group after all
+admitted tasks drain. The configured endpoint must still be reachable from the
+host and OpenClaw containers. ARIES checks the YAML model and port but does not
+install models, allocate GPUs, or configure that network path.
 
 ## 4. Run the experiment
 

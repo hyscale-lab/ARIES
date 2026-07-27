@@ -8,6 +8,7 @@
   "harness": {"type": "openclaw"},
   "sandbox": {"type": "docker"},
   "bridge": {"type": "openclaw-ssh"},
+  "model_runtime": {"mode": "external"},
   "model": {
     "provider": "sglang",
     "base_url": "http://sglang.local:30000/v1",

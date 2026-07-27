@@ -1,5 +1,32 @@
 # ARIES Tasks
 
+## R15 — Run-scoped model runtime lifecycle
+
+1. [x] Add strict external/managed model runtime configuration and lock invalid
+   provider, executable, timeout, and SGLang-file combinations.
+2. [x] Define one narrow command-owned runtime interface, retain an explicit
+   provider switch, and add a managed SGLang host-process implementation with
+   exact argv, private logs, idempotent process-group cleanup, and positive
+   absence confirmation.
+3. [x] Start the managed runtime before preflight, retry readiness within its
+   startup bound, and stop it after all admitted task lifecycle work drains
+   using a fresh cleanup context.
+4. [x] Preserve external provider behavior, Runner's four roles, evaluation
+   isolation, credential handling, and setup behavior.
+5. [x] Run focused and full release validation, cancellation and leak checks,
+   review the final diff, and leave changes uncommitted until requested.
+
+## R14 — Shared local SGLang configuration
+
+- [x] Add a strict native SGLang YAML loader with focused value validation.
+- [x] Let profiles reference one reusable YAML file and reject mismatched served
+  model names or endpoint ports before setup or runtime side effects.
+- [x] Keep remote SGLang endpoint-only operation and the four Runner roles
+  unchanged; do not add server or GPU lifecycle management.
+- [x] Run focused and full release validation, leak and secret checks, and
+  review the final diff.
+- [ ] Create one concise commit when requested.
+
 ## R13 — OpenClaw 2026.7.1 explicit tag
 
 - [x] Add an exact non-`latest` tag-only OpenClaw image validator without
@@ -18,17 +45,6 @@
 - [x] Complete the full release matrix, deterministic integration, authorized
   live DeepSeek compatibility run, retained-log audit, cleanup checks, and
   final review before release.
-
-## R14 — Shared local SGLang configuration
-
-- [x] Add a strict native SGLang YAML loader with focused value validation.
-- [x] Let profiles reference one reusable YAML file and reject mismatched served
-  model names or endpoint ports before setup or runtime side effects.
-- [x] Keep remote SGLang endpoint-only operation and the four Runner roles
-  unchanged; do not add server or GPU lifecycle management.
-- [x] Run focused and full release validation, leak and secret checks, and
-  review the final diff.
-- [ ] Create one concise commit when requested.
 
 ## R12 — Post-concurrency composition cleanup
 
