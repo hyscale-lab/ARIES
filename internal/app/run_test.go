@@ -124,19 +124,11 @@ func TestSetupPreparesBackendBeforeSideEffects(t *testing.T) {
 		return nil, nil
 	}, PullImages: func(context.Context, []string) error { return nil }}
 	var out bytes.Buffer
-	if err := RunCommand(context.Background(), []string{"setup", profile}, &out, Dependencies{Wiring: wiring}); err != nil {
+	if err := Setup(context.Background(), profile, &out, Dependencies{Wiring: wiring}); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(events, []string{"backend", "setup"}) || !strings.Contains(out.String(), "profile ready") {
 		t.Fatalf("events=%v out=%q", events, out.String())
-	}
-}
-
-func TestRunCommandRejectsInvalidGrammarWithoutUseCase(t *testing.T) {
-	called := false
-	wiring := Wiring{PrepareBackend: func(config.Config, string) (PreparedBackend, error) { called = true; return PreparedBackend{}, nil }}
-	if err := RunCommand(context.Background(), nil, &bytes.Buffer{}, Dependencies{Wiring: wiring}); err == nil || called {
-		t.Fatalf("err=%v called=%t", err, called)
 	}
 }
 

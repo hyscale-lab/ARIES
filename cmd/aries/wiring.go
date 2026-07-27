@@ -73,7 +73,7 @@ func prepareBackend(cfg config.Config, outputDir string) (app.PreparedBackend, e
 		case "external":
 			return app.PreparedBackend{Model: model}, nil
 		case "managed":
-			runtime, err := runtimesglang.New(runtimesglang.Options{Executable: cfg.Runtime.Config.Executable, ConfigPath: cfg.Runtime.Config.ResolvedFile, OutputDir: outputDir, BaseURL: cfg.Model.BaseURL})
+			runtime, err := runtimesglang.New(runtimesglang.Options{Executable: cfg.Runtime.Config.Executable, ConfigPath: cfg.Runtime.Config.ResolvedFile, OutputDir: outputDir, BaseURL: cfg.Model.BaseURL, CredentialEnv: cfg.Model.APIKeyEnv})
 			if err != nil {
 				return app.PreparedBackend{}, err
 			}

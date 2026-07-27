@@ -46,33 +46,37 @@ type Dependencies struct {
 	Wiring          Wiring
 }
 
-func RunCommand(ctx context.Context, args []string, stdout io.Writer, dependencies Dependencies) (returnErr error) {
+func Setup(ctx context.Context, profilePath string, stdout io.Writer, dependencies Dependencies) error {
+	cfg, err := config.Load(profilePath)
+	if err != nil {
+		return err
+	}
+	if err := validateWiredComponents(cfg, dependencies.Wiring); err != nil {
+		return err
+	}
+	if dependencies.Wiring.PrepareBackend == nil {
+		return errors.New("command wiring is incomplete")
+	}
+	if _, err := dependencies.Wiring.PrepareBackend(cfg, cfg.OutputDir); err != nil {
+		return err
+	}
+	if err := prepareProfile(ctx, cfg, dependencies.Wiring); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(stdout, "profile ready: %s\n", profilePath)
+	return err
+}
+
+func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies Dependencies) (returnErr error) {
 	logger := dependencies.Logger
 	if logger == nil {
 		logger = newLogger()
 	}
-	if len(args) == 2 && args[0] == "setup" {
-		cfg, err := config.Load(args[1])
-		if err != nil {
-			return err
-		}
-		if dependencies.Wiring.PrepareBackend == nil {
-			return errors.New("command wiring is incomplete")
-		}
-		if _, err := dependencies.Wiring.PrepareBackend(cfg, cfg.OutputDir); err != nil {
-			return err
-		}
-		if err := prepareProfile(ctx, cfg, dependencies.Wiring); err != nil {
-			return err
-		}
-		_, err = fmt.Fprintf(stdout, "profile ready: %s\n", args[1])
+	cfg, err := config.Load(profilePath)
+	if err != nil {
 		return err
 	}
-	if len(args) != 1 {
-		return errors.New("usage: aries PROFILE.json | aries setup PROFILE.json")
-	}
-	cfg, err := config.Load(args[0])
-	if err != nil {
+	if err := validateWiredComponents(cfg, dependencies.Wiring); err != nil {
 		return err
 	}
 	runID := newRunID(time.Now(), cfg.Name)
@@ -98,7 +102,7 @@ func RunCommand(ctx context.Context, args []string, stdout io.Writer, dependenci
 	runEntry.Info("experiment run started")
 	defer func() {
 		if returnErr != nil {
-			runEntry.WithError(returnErr).Error("experiment run finished with errors")
+			runEntry.WithField("error_category", "run_failed").Error("experiment run finished with errors")
 		} else {
 			runEntry.Info("experiment run finished")
 		}
@@ -122,19 +126,41 @@ func RunCommand(ctx context.Context, args []string, stdout io.Writer, dependenci
 	}
 
 	runtime := prepared.Runtime
+	runtimeEntry := runEntry.WithField("component", "model_runtime")
+	runtimeExitLogged := false
+	logRuntimeExit := func(runtimeErr error) {
+		if runtimeErr == nil {
+			return
+		}
+		if !runtimeExitLogged {
+			runtimeEntry.WithFields(logrus.Fields{"runtime_state": "unexpected_exit", "error_category": "runtime_exit"}).Error("model runtime lifecycle")
+			runtimeExitLogged = true
+		}
+	}
 	if runtime != nil {
 		if err := runtime.Start(ctx); err != nil {
 			return fmt.Errorf("start model runtime: %w", err)
 		}
-		runEntry.Info("model runtime started")
-		defer func() { returnErr = errors.Join(returnErr, stopRuntime(runtime, cfg.Runtime.Config.StopTimeout)) }()
+		runtimeEntry.WithField("runtime_state", "started").Info("model runtime lifecycle")
+		defer func() {
+			stopErr := stopRuntime(runtime, cfg.Runtime.Config.StopTimeout)
+			logRuntimeExit(runtime.Err())
+			if runtimeCleanupFailed(stopErr) {
+				runtimeEntry.WithFields(logrus.Fields{"runtime_state": "stop_failed", "error_category": "runtime_stop"}).Error("model runtime lifecycle")
+			} else {
+				runtimeEntry.WithField("runtime_state", "stopped").Info("model runtime lifecycle")
+			}
+			returnErr = errors.Join(returnErr, stopErr)
+		}()
 		startupCtx, cancel := context.WithTimeout(ctx, cfg.Runtime.Config.StartupTimeout)
 		healthErr := waitForRuntimeHealth(startupCtx, runtime, dependencies.PreflightSleep)
 		cancel()
 		if healthErr != nil {
-			return fmt.Errorf("wait for model runtime health: %w", healthErr)
+			runtimeErr, _ := runtimeExitIfDone(runtime)
+			logRuntimeExit(runtimeErr)
+			return fmt.Errorf("wait for model runtime health: %w", errors.Join(healthErr, runtimeErr))
 		}
-		runEntry.Info("model runtime healthy")
+		runtimeEntry.WithField("runtime_state", "healthy").Info("model runtime lifecycle")
 	}
 
 	preflightCtx, cancelPreflight := context.WithCancel(ctx)
@@ -151,13 +177,10 @@ func RunCommand(ctx context.Context, args []string, stdout io.Writer, dependenci
 	if runtime == nil {
 		preflight = <-preflightDone
 	} else {
-		select {
-		case preflight = <-preflightDone:
-		case <-runtime.Done():
-			cancelPreflight()
-			preflight = <-preflightDone
-			preflight.err = errors.Join(preflight.err, runtime.Err())
-		}
+		var runtimeErr error
+		preflight, runtimeErr = awaitRuntimeCompletion(runtime, preflightDone, cancelPreflight)
+		logRuntimeExit(runtimeErr)
+		preflight.err = errors.Join(preflight.err, runtimeErr)
 	}
 	cancelPreflight()
 	validation, preflightErr := preflight.validation, preflight.err
@@ -184,21 +207,16 @@ func RunCommand(ctx context.Context, args []string, stdout io.Writer, dependenci
 	if runtime == nil {
 		return <-completed
 	}
-	select {
-	case returnErr = <-completed:
-	case <-runtime.Done():
-		cancelRun()
-		returnErr = errors.Join(<-completed, runtime.Err())
-	}
+	var runtimeErr error
+	returnErr, runtimeErr = awaitRuntimeCompletion(runtime, completed, cancelRun)
+	logRuntimeExit(runtimeErr)
+	returnErr = errors.Join(returnErr, runtimeErr)
 	return returnErr
 }
 
 func prepareProfile(ctx context.Context, cfg config.Config, wiring Wiring) error {
-	if wiring.ValidateComponents == nil || wiring.SetupBenchmark == nil || wiring.LoadPreparationTasks == nil || wiring.PullImages == nil {
+	if wiring.SetupBenchmark == nil || wiring.LoadPreparationTasks == nil || wiring.PullImages == nil {
 		return errors.New("setup wiring is incomplete")
-	}
-	if err := wiring.ValidateComponents(cfg); err != nil {
-		return err
 	}
 	if err := wiring.SetupBenchmark(ctx, cfg); err != nil {
 		return err
@@ -212,6 +230,13 @@ func prepareProfile(ctx context.Context, cfg config.Config, wiring Wiring) error
 		images = append(images, task.Environment.Image)
 	}
 	return wiring.PullImages(ctx, images)
+}
+
+func validateWiredComponents(cfg config.Config, wiring Wiring) error {
+	if wiring.ValidateComponents == nil {
+		return errors.New("component validator is required")
+	}
+	return wiring.ValidateComponents(cfg)
 }
 
 func uniqueStrings(values []string) []string {

@@ -63,7 +63,7 @@ func TestInjectedModelRuntimeWrapsPreflightAndRunFailure(t *testing.T) {
 	runtime := &recordingRuntime{events: &events, done: make(chan struct{})}
 	wiring := failingRunWiring(runtime, &events, errors.New("run canary"))
 	doer := &preflightDoer{t: t, replies: []preflightReply{{status: 200, body: `{"data":[{"id":"deepseek-v4-flash"}]}`}}}
-	err := RunCommand(context.Background(), []string{profile}, io.Discard, Dependencies{PreflightClient: doer, PreflightSleep: func(context.Context, time.Duration) error { return nil }, Wiring: wiring})
+	err := Run(context.Background(), profile, io.Discard, Dependencies{PreflightClient: doer, PreflightSleep: func(context.Context, time.Duration) error { return nil }, Wiring: wiring})
 	if err == nil || !strings.Contains(err.Error(), "run canary") {
 		t.Fatalf("err=%v", err)
 	}
@@ -82,7 +82,7 @@ func TestInjectedModelRuntimeStopFailureIsReturned(t *testing.T) {
 	runtime := &recordingRuntime{events: &events, done: make(chan struct{}), stopErr: errors.New("stop canary")}
 	wiring := failingRunWiring(runtime, &events, errors.New("run canary"))
 	doer := &preflightDoer{t: t, replies: []preflightReply{{status: 200, body: `{"data":[{"id":"deepseek-v4-flash"}]}`}}}
-	err := RunCommand(context.Background(), []string{profile}, io.Discard, Dependencies{PreflightClient: doer, Wiring: wiring})
+	err := Run(context.Background(), profile, io.Discard, Dependencies{PreflightClient: doer, Wiring: wiring})
 	if err == nil || !strings.Contains(err.Error(), "run canary") || !strings.Contains(err.Error(), "stop canary") {
 		t.Fatalf("joined err=%v", err)
 	}
@@ -98,7 +98,7 @@ func TestManagedRuntimeLifecycleOrder(t *testing.T) {
 		events = append(events, "preflight")
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"data":[{"id":"deepseek-v4-flash"}]}`))}, nil
 	})
-	err := RunCommand(context.Background(), []string{profile}, io.Discard, Dependencies{PreflightClient: doer, PreflightSleep: func(context.Context, time.Duration) error { return nil }, Wiring: wiring})
+	err := Run(context.Background(), profile, io.Discard, Dependencies{PreflightClient: doer, PreflightSleep: func(context.Context, time.Duration) error { return nil }, Wiring: wiring})
 	if err == nil || !strings.Contains(err.Error(), "run complete canary") {
 		t.Fatalf("err=%v", err)
 	}
@@ -108,12 +108,64 @@ func TestManagedRuntimeLifecycleOrder(t *testing.T) {
 	}
 }
 
+func TestRuntimeLifecycleLogsAreStructuredAndSanitized(t *testing.T) {
+	t.Setenv(deepSeekAPIKey, "synthetic-key")
+	for _, tc := range []struct {
+		name       string
+		unexpected bool
+		stopErr    error
+		wantStates []string
+	}{
+		{name: "unexpected exit then stopped", unexpected: true, stopErr: cleanupClassifiedError{err: errors.New("stop unexpected body canary")}, wantStates: []string{"started", "healthy", "unexpected_exit", "stopped"}},
+		{name: "stop failure", stopErr: errors.New("stop secret body canary"), wantStates: []string{"started", "healthy", "stop_failed"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			profile := writeCommandProfile(t, filepath.Join(t.TempDir(), "runs"))
+			events := []string{}
+			runtime := &recordingRuntime{events: &events, done: make(chan struct{}), err: errors.New("runtime secret body canary"), stopErr: tc.stopErr}
+			wiring := failingRunWiring(runtime, &events, errors.New("run body canary"))
+			if tc.unexpected {
+				wiring.NewBenchmark = func(config.Config, string, string, string) (runner.Benchmark, error) {
+					close(runtime.done)
+					return nil, errors.New("run body canary")
+				}
+			}
+			var logs bytes.Buffer
+			logger := logrus.New()
+			logger.SetOutput(&logs)
+			logger.SetFormatter(&logrus.JSONFormatter{})
+			doer := &preflightDoer{t: t, replies: []preflightReply{{status: 200, body: `{"data":[{"id":"deepseek-v4-flash"}]}`}}}
+			err := Run(context.Background(), profile, io.Discard, Dependencies{Logger: logger, PreflightClient: doer, Wiring: wiring})
+			if err == nil {
+				t.Fatal("expected run error")
+			}
+			content := logs.String()
+			for _, state := range tc.wantStates {
+				if !strings.Contains(content, `"runtime_state":"`+state+`"`) {
+					t.Fatalf("missing state %q in %s", state, content)
+				}
+			}
+			for _, field := range []string{`"run_id":`, `"profile":"test"`, `"backend":"deepseek"`, `"mode":"external"`} {
+				if !strings.Contains(content, field) {
+					t.Fatalf("missing field %s in %s", field, content)
+				}
+			}
+			for _, secret := range []string{"runtime secret body canary", "stop secret body canary", "stop unexpected body canary", "run body canary", "synthetic-key", "Authorization"} {
+				if strings.Contains(content, secret) {
+					t.Fatalf("log leaked %q: %s", secret, content)
+				}
+			}
+		})
+	}
+}
+
 type httpDoerFunc func(*http.Request) (*http.Response, error)
 
 func (f httpDoerFunc) Do(r *http.Request) (*http.Response, error) { return f(r) }
 
 func failingRunWiring(runtime ModelRuntime, events *[]string, runErr error) Wiring {
 	return Wiring{
+		ValidateComponents: func(config.Config) error { return nil },
 		PrepareBackend: func(cfg config.Config, _ string) (PreparedBackend, error) {
 			return PreparedBackend{Model: cfg.CoreModel(), Runtime: runtime}, nil
 		},
@@ -136,10 +188,10 @@ func TestBackendPreparationPrecedesAllEffects(t *testing.T) {
 	runs := filepath.Join(root, "runs")
 	profile := writeCommandProfile(t, runs)
 	called := false
-	wiring := Wiring{PrepareBackend: func(config.Config, string) (PreparedBackend, error) {
+	wiring := Wiring{ValidateComponents: func(config.Config) error { return nil }, PrepareBackend: func(config.Config, string) (PreparedBackend, error) {
 		return PreparedBackend{}, errors.New("prepare canary")
 	}, NewBenchmark: func(config.Config, string, string, string) (runner.Benchmark, error) { called = true; return nil, nil }}
-	err := RunCommand(context.Background(), []string{profile}, io.Discard, Dependencies{Wiring: wiring})
+	err := Run(context.Background(), profile, io.Discard, Dependencies{Wiring: wiring})
 	if err == nil || !strings.Contains(err.Error(), "prepare canary") || called {
 		t.Fatalf("err=%v called=%t", err, called)
 	}
@@ -148,33 +200,71 @@ func TestBackendPreparationPrecedesAllEffects(t *testing.T) {
 	}
 }
 
-func TestPrepareProfileRejectsUnknownComponentsBeforeSetup(t *testing.T) {
-	base := config.Config{Benchmark: config.BenchmarkConfig{Type: "terminalbench2", Tasks: []string{"a"}}, Harness: config.HarnessConfig{Type: "openclaw"}, Sandbox: config.SandboxConfig{Type: "docker"}, Bridge: config.BridgeConfig{Type: "openclaw-ssh"}}
+func TestUnsupportedComponentsAreRejectedImmediatelyOnRunAndSetup(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		change func(*config.Config)
-	}{{"benchmark", func(c *config.Config) { c.Benchmark.Type = "other" }}, {"harness", func(c *config.Config) { c.Harness.Type = "other" }}, {"sandbox", func(c *config.Config) { c.Sandbox.Type = "other" }}, {"bridge", func(c *config.Config) { c.Bridge.Type = "other" }}} {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := base
-			tc.change(&cfg)
-			effects := 0
-			w := Wiring{ValidateComponents: func(c config.Config) error {
-				switch {
-				case c.Benchmark.Type != "terminalbench2":
-					return errors.New("benchmark")
-				case c.Harness.Type != "openclaw":
-					return errors.New("harness")
-				case c.Sandbox.Type != "docker":
-					return errors.New("sandbox")
-				case c.Bridge.Type != "openclaw-ssh":
-					return errors.New("bridge")
+		name string
+		old  string
+		new  string
+	}{
+		{name: "benchmark", old: `"type":"terminalbench2"`, new: `"type":"unsupported-benchmark"`},
+		{name: "harness", old: `"type":"openclaw"`, new: `"type":"unsupported-harness"`},
+		{name: "sandbox", old: `"type":"docker"`, new: `"type":"unsupported-sandbox"`},
+		{name: "bridge", old: `"type":"openclaw-ssh"`, new: `"type":"unsupported-bridge"`},
+	} {
+		for _, useCase := range []struct {
+			name string
+			call func(string, io.Writer, Dependencies) error
+		}{
+			{name: "run", call: func(profile string, stdout io.Writer, dependencies Dependencies) error {
+				return Run(context.Background(), profile, stdout, dependencies)
+			}},
+			{name: "setup", call: func(profile string, stdout io.Writer, dependencies Dependencies) error {
+				return Setup(context.Background(), profile, stdout, dependencies)
+			}},
+		} {
+			t.Run(useCase.name+"/"+tc.name, func(t *testing.T) {
+				output := filepath.Join(t.TempDir(), "runs")
+				profile := writeCommandProfile(t, output)
+				content, err := os.ReadFile(profile)
+				if err != nil {
+					t.Fatal(err)
 				}
-				return nil
-			}, SetupBenchmark: func(context.Context, config.Config) error { effects++; return nil }, LoadPreparationTasks: func(context.Context, config.Config, []string) ([]core.Task, error) { effects++; return nil, nil }, PullImages: func(context.Context, []string) error { effects++; return nil }}
-			if err := prepareProfile(context.Background(), cfg, w); err == nil || effects != 0 {
-				t.Fatalf("err=%v effects=%d", err, effects)
-			}
-		})
+				content = bytes.Replace(content, []byte(tc.old), []byte(tc.new), 1)
+				if err := os.WriteFile(profile, content, 0600); err != nil {
+					t.Fatal(err)
+				}
+				effects := 0
+				wiring := Wiring{
+					ValidateComponents: func(cfg config.Config) error {
+						if cfg.Benchmark.Type != "terminalbench2" || cfg.Harness.Type != "openclaw" || cfg.Sandbox.Type != "docker" || cfg.Bridge.Type != "openclaw-ssh" {
+							return errors.New("unsupported component canary")
+						}
+						return nil
+					},
+					PrepareBackend:       func(config.Config, string) (PreparedBackend, error) { effects++; return PreparedBackend{}, nil },
+					SetupBenchmark:       func(context.Context, config.Config) error { effects++; return nil },
+					LoadPreparationTasks: func(context.Context, config.Config, []string) ([]core.Task, error) { effects++; return nil, nil },
+					PullImages:           func(context.Context, []string) error { effects++; return nil },
+					NewBenchmark:         func(config.Config, string, string, string) (runner.Benchmark, error) { effects++; return nil, nil },
+					NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
+						effects++
+						return HarnessInstance{}, nil
+					},
+					NewSandbox: func(config.Config, string, string, string, *logrus.Logger) (SandboxInstance, error) {
+						effects++
+						return SandboxInstance{}, nil
+					},
+					NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) { effects++; return nil, nil },
+				}
+				err = useCase.call(profile, io.Discard, Dependencies{Wiring: wiring})
+				if err == nil || !strings.Contains(err.Error(), "unsupported component canary") || effects != 0 {
+					t.Fatalf("err=%v effects=%d", err, effects)
+				}
+				if _, err := os.Stat(output); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("output side effect: %v", err)
+				}
+			})
+		}
 	}
 }
 
@@ -208,7 +298,7 @@ type failingWriter struct{ err error }
 
 func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
 
-func TestRunCommandCredentialSourceFallbackAndClearing(t *testing.T) {
+func TestRunCredentialSourceFallbackAndClearing(t *testing.T) {
 	t.Run("anchored", func(t *testing.T) {
 		root, exe := createTestAriesRepository(t)
 		key := "anchored-key"
@@ -239,7 +329,7 @@ func assertCommandAuthorization(t *testing.T, exe, want string) {
 	runtime := &recordingRuntime{events: &events, done: make(chan struct{})}
 	w := failingRunWiring(runtime, &events, errors.New("done"))
 	doer := &preflightDoer{t: t, replies: []preflightReply{{status: 200, body: `{"data":[{"id":"deepseek-v4-flash"}]}`}}}
-	_ = RunCommand(context.Background(), []string{profile}, io.Discard, Dependencies{ExecutablePath: exe, PreflightClient: doer, Wiring: w})
+	_ = Run(context.Background(), profile, io.Discard, Dependencies{ExecutablePath: exe, PreflightClient: doer, Wiring: w})
 	if len(doer.authorizations) != 1 || doer.authorizations[0] != "Bearer "+want {
 		t.Fatalf("authorization=%v", doer.authorizations)
 	}
@@ -287,7 +377,7 @@ func TestRuntimeExitCancelsAndDrainsRun(t *testing.T) {
 	started := make(chan struct{})
 	h := &cancelHarness{started: started, events: &events}
 	constructed := 0
-	wiring := Wiring{PrepareBackend: func(cfg config.Config, _ string) (PreparedBackend, error) {
+	wiring := Wiring{ValidateComponents: func(config.Config) error { return nil }, PrepareBackend: func(cfg config.Config, _ string) (PreparedBackend, error) {
 		return PreparedBackend{Model: cfg.CoreModel(), Runtime: runtime}, nil
 	}, NewBenchmark: func(config.Config, string, string, string) (runner.Benchmark, error) {
 		constructed++
@@ -302,7 +392,7 @@ func TestRuntimeExitCancelsAndDrainsRun(t *testing.T) {
 	doer := &preflightDoer{t: t, replies: []preflightReply{{status: 200, body: `{"data":[{"id":"deepseek-v4-flash"}]}`}}}
 	done := make(chan error, 1)
 	go func() {
-		done <- RunCommand(context.Background(), []string{profile}, io.Discard, Dependencies{PreflightClient: doer, Wiring: wiring})
+		done <- Run(context.Background(), profile, io.Discard, Dependencies{PreflightClient: doer, Wiring: wiring})
 	}()
 	<-started
 	close(runtime.done)

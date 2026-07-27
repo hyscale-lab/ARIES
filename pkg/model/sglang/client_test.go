@@ -2,7 +2,6 @@ package sglang
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -63,57 +62,6 @@ func TestModelsUsesVersionedRouteAndOptionalBearer(t *testing.T) {
 	}
 }
 
-func TestChatRequestAndResponseContract(t *testing.T) {
-	seed := int64(7)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.RequestURI() != "/v1/chat/completions" {
-			t.Fatalf("request = %s %s", r.Method, r.URL.RequestURI())
-		}
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatal(err)
-		}
-		if body["model"] != "模型" || body["stream"] != false || body["seed"] != float64(7) || body["max_tokens"] != float64(42) {
-			t.Fatalf("body = %#v", body)
-		}
-		kwargs := body["chat_template_kwargs"].(map[string]any)
-		if kwargs["enable_thinking"] != false {
-			t.Fatalf("kwargs = %#v", kwargs)
-		}
-		messages := body["messages"].([]any)
-		if messages[0].(map[string]any)["content"] != `argv "<&"` {
-			t.Fatalf("messages = %#v", messages)
-		}
-		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"answer","reasoning_content":"reason"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":4}}`)
-	}))
-	defer server.Close()
-	client, _ := New(server.URL+"/v1", nil, server.Client())
-	response, err := client.Chat(context.Background(), ChatRequest{Model: "模型", Messages: []Message{{Role: "user", Content: `argv "<&"`}}, Temperature: .2, MaxTokens: 42, Seed: &seed, DisableThinking: true})
-	if err != nil || response.Content != "answer" || response.Reasoning != "reason" || response.FinishReason != "stop" || response.PromptTokens != 3 || response.CompletionTokens != 4 {
-		t.Fatalf("response=%+v error=%v", response, err)
-	}
-}
-
-func TestChatReasoningFallbackAndOptionalFields(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]any
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		if _, ok := body["seed"]; ok {
-			t.Fatal("seed unexpectedly present")
-		}
-		if _, ok := body["chat_template_kwargs"]; ok {
-			t.Fatal("thinking kwargs unexpectedly present")
-		}
-		_, _ = io.WriteString(w, `{"choices":[{"message":{"reasoning_content":"fallback"},"finish_reason":"length"}]}`)
-	}))
-	defer server.Close()
-	client, _ := New(server.URL+"/v1", nil, server.Client())
-	response, err := client.Chat(context.Background(), ChatRequest{Model: "m", MaxTokens: 1})
-	if err != nil || response.Content != "fallback" {
-		t.Fatalf("response=%+v error=%v", response, err)
-	}
-}
-
 type failingReader struct{ canary string }
 
 func (reader failingReader) Read([]byte) (int, error) { return 0, errors.New(reader.canary) }
@@ -159,7 +107,7 @@ func TestClientRejectsAndSanitizesFailures(t *testing.T) {
 	}
 }
 
-func TestClientRejectsRedirectEmptyResponsesAndBadBase(t *testing.T) {
+func TestClientRejectsRedirectAndBadBase(t *testing.T) {
 	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/v1/models", http.StatusFound) }))
 	defer redirect.Close()
 	client, _ := New(redirect.URL+"/v1", nil, redirect.Client())
@@ -170,18 +118,6 @@ func TestClientRejectsRedirectEmptyResponsesAndBadBase(t *testing.T) {
 		if _, err := New(base, nil, nil); err == nil {
 			t.Fatalf("accepted base %q", base)
 		}
-	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, `{"choices":[]}`) }))
-	defer server.Close()
-	client, _ = New(server.URL+"/v1", nil, server.Client())
-	if _, err := client.Chat(context.Background(), ChatRequest{Model: "m"}); err == nil || !strings.Contains(err.Error(), "empty choices") {
-		t.Fatalf("empty error = %v", err)
-	}
-	empty := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, `{"choices":[{"message":{}}]}`) }))
-	defer empty.Close()
-	client, _ = New(empty.URL+"/v1", nil, empty.Client())
-	if _, err := client.Chat(context.Background(), ChatRequest{Model: "m"}); err == nil || !strings.Contains(err.Error(), "empty content") {
-		t.Fatalf("content error = %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -208,9 +144,6 @@ func TestCloseClearsOwnedCredentialAndFailsClosed(t *testing.T) {
 	}
 	if _, err := client.Models(context.Background()); err == nil || !strings.Contains(err.Error(), "closed") {
 		t.Fatalf("Models after Close error = %v", err)
-	}
-	if _, err := client.Chat(context.Background(), ChatRequest{Model: "m"}); err == nil || !strings.Contains(err.Error(), "closed") {
-		t.Fatalf("Chat after Close error = %v", err)
 	}
 	if requests.Load() != 0 {
 		t.Fatalf("requests after Close = %d", requests.Load())

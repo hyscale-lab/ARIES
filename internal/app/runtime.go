@@ -32,27 +32,58 @@ func waitForRuntimeHealth(ctx context.Context, runtime ModelRuntime, sleep conte
 	if sleep == nil {
 		sleep = sleepWithContext
 	}
+	retryCtx, cancelRetry := context.WithCancel(ctx)
+	watcherDone := make(chan struct{})
+	go func() {
+		defer close(watcherDone)
+		select {
+		case <-runtime.Done():
+			cancelRetry()
+		case <-retryCtx.Done():
+		}
+	}()
+	defer func() {
+		cancelRetry()
+		<-watcherDone
+	}()
 	for {
-		err := runtime.Health(ctx)
+		if runtimeErr, exited := runtimeExitIfDone(runtime); exited {
+			return runtimeErr
+		}
+		err := runtime.Health(retryCtx)
 		if err == nil {
+			if runtimeErr, exited := runtimeExitIfDone(runtime); exited {
+				return runtimeErr
+			}
 			return nil
+		}
+		if runtimeErr, exited := runtimeExitIfDone(runtime); exited {
+			return runtimeErr
 		}
 		var retryable retryableHealthError
 		if !errors.As(err, &retryable) || !retryable.Retryable() {
 			return err
 		}
-		select {
-		case <-runtime.Done():
-			if runtimeErr := runtime.Err(); runtimeErr != nil {
+		if err := sleep(retryCtx, managedStartupRetryDelay); err != nil {
+			if runtimeErr, exited := runtimeExitIfDone(runtime); exited {
 				return runtimeErr
 			}
-			return errors.New("model runtime exited during startup")
-		default:
-		}
-		if err := sleep(ctx, managedStartupRetryDelay); err != nil {
 			return err
 		}
 	}
+}
+
+type runtimeCleanupError interface {
+	error
+	CleanupFailed() bool
+}
+
+func runtimeCleanupFailed(err error) bool {
+	if err == nil {
+		return false
+	}
+	var classified runtimeCleanupError
+	return !errors.As(err, &classified) || classified.CleanupFailed()
 }
 
 func stopRuntime(runtime ModelRuntime, timeout time.Duration) error {
@@ -65,4 +96,28 @@ func stopRuntime(runtime ModelRuntime, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	return runtime.Stop(ctx)
+}
+
+func runtimeExitIfDone(runtime ModelRuntime) (error, bool) {
+	select {
+	case <-runtime.Done():
+		if err := runtime.Err(); err != nil {
+			return err, true
+		}
+		return errors.New("model runtime exited unexpectedly"), true
+	default:
+		return nil, false
+	}
+}
+
+func awaitRuntimeCompletion[T any](runtime ModelRuntime, completed <-chan T, cancel func()) (T, error) {
+	var result T
+	select {
+	case result = <-completed:
+	case <-runtime.Done():
+		cancel()
+		result = <-completed
+	}
+	runtimeErr, _ := runtimeExitIfDone(runtime)
+	return result, runtimeErr
 }

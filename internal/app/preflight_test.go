@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hyscale-lab/aries/pkg/config"
+	"github.com/hyscale-lab/aries/pkg/core"
 )
 
 type preflightReply struct {
@@ -117,8 +117,8 @@ func (doer *preflightDoer) Do(request *http.Request) (*http.Response, error) {
 	}, nil
 }
 
-func officialDeepSeekModel() config.ModelConfig {
-	return config.ModelConfig{Provider: "deepseek", BaseURL: deepSeekBaseURL, Model: "deepseek-v4-flash", APIKeyEnv: deepSeekAPIKey}
+func officialDeepSeekModel() core.ModelConfig {
+	return core.ModelConfig{Provider: "deepseek", BaseURL: deepSeekBaseURL, Model: "deepseek-v4-flash", APIKeyEnv: deepSeekAPIKey}
 }
 
 func TestValidateLiveModelConfirmsExactModelAndClearsCredentialBuffer(t *testing.T) {
@@ -286,7 +286,7 @@ func TestValidateLiveModelConfigurationCredentialAndCancellation(t *testing.T) {
 		}
 	})
 	t.Run("sglang", func(t *testing.T) {
-		model := config.ModelConfig{Provider: "sglang", BaseURL: "http://fake.invalid/v1", Model: "local", APIKeyEnv: "SGLANG_API_KEY"}
+		model := core.ModelConfig{Provider: "sglang", BaseURL: "http://fake.invalid/v1", Model: "local", APIKeyEnv: "SGLANG_API_KEY"}
 		doer := &sglangPreflightDoer{t: t, wantURL: "http://fake.invalid/v1/models", body: `{"data":[{"id":"local"}]}`}
 		validation, err := validateLiveModel(context.Background(), model, func(string) ([]byte, bool) { return []byte("dummy"), true }, doer, nil)
 		if err != nil || validation.Provider != "sglang" || validation.Status != liveValidationSucceeded || validation.Attempts != 1 || doer.authorization != "Bearer dummy" {
@@ -325,7 +325,7 @@ func TestValidateLiveModelConfigurationCredentialAndCancellation(t *testing.T) {
 }
 
 func TestOfficialDeepSeekSelectionIsExact(t *testing.T) {
-	for _, model := range []config.ModelConfig{
+	for _, model := range []core.ModelConfig{
 		{Provider: "deepseek", BaseURL: deepSeekBaseURL, Model: "deepseek-v4-flash"},
 		{Provider: "deepseek", BaseURL: deepSeekBaseURL, Model: "deepseek-v4-pro"},
 	} {
@@ -333,7 +333,7 @@ func TestOfficialDeepSeekSelectionIsExact(t *testing.T) {
 			t.Fatalf("official model not selected: %+v", model)
 		}
 	}
-	for _, model := range []config.ModelConfig{
+	for _, model := range []core.ModelConfig{
 		{Provider: "deepseek", BaseURL: deepSeekBaseURL + "/", Model: "deepseek-v4-flash"},
 		{Provider: "deepseek", BaseURL: deepSeekBaseURL, Model: "deepseek-v4"},
 		{Provider: "deepseek", BaseURL: "http://api.deepseek.com", Model: "deepseek-v4-pro"},
@@ -345,7 +345,7 @@ func TestOfficialDeepSeekSelectionIsExact(t *testing.T) {
 }
 
 func TestSGLangPreflightFailsClosedWithSanitizedCategories(t *testing.T) {
-	model := config.ModelConfig{Provider: "sglang", BaseURL: "http://fake.invalid/v1", Model: "local", APIKeyEnv: "SGLANG_API_KEY"}
+	model := core.ModelConfig{Provider: "sglang", BaseURL: "http://fake.invalid/v1", Model: "local", APIKeyEnv: "SGLANG_API_KEY"}
 	for _, test := range []struct {
 		name     string
 		status   int
