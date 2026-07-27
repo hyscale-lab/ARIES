@@ -2,6 +2,7 @@
   "name": "openclaw-tb2-five-deepseek",
   "versions_file": "../configs/versions.json",
   "overrides_file": "../configs/runtime-overrides.json",
+  "sglang_file": "",
   "execution": {
     "concurrency": 2
   },

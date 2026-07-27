@@ -10,11 +10,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/containerimage"
 	"github.com/hyscale-lab/aries/pkg/core"
+	"go.yaml.in/yaml/v3"
 )
 
 const defaultOutputDir = "runs"
@@ -25,6 +27,7 @@ type Config struct {
 	Name          string           `json:"name"`
 	VersionsFile  string           `json:"versions_file"`
 	OverridesFile string           `json:"overrides_file,omitempty"`
+	SGLangFile    string           `json:"sglang_file,omitempty"`
 	Benchmark     BenchmarkConfig  `json:"benchmark"`
 	Harness       HarnessConfig    `json:"harness"`
 	Sandbox       SandboxConfig    `json:"sandbox"`
@@ -34,6 +37,7 @@ type Config struct {
 	OutputDir     string           `json:"output_dir"`
 	Versions      Versions         `json:"-"`
 	Overrides     RuntimeOverrides `json:"-"`
+	SGLang        SGLangConfig     `json:"-"`
 }
 
 // ExecutionConfig controls bounded occurrence scheduling above the Runner.
@@ -55,6 +59,19 @@ type RuntimeOverrides struct {
 type ResourceOverrides struct {
 	CPU      *float64 `json:"cpu,omitempty"`
 	MemoryMB *int     `json:"memory_mb,omitempty"`
+}
+
+type SGLangConfig struct {
+	ModelPath          string  `yaml:"model-path"`
+	ServedModelName    string  `yaml:"served-model-name"`
+	Host               string  `yaml:"host"`
+	Port               int     `yaml:"port"`
+	Device             string  `yaml:"device"`
+	TensorParallelSize int     `yaml:"tensor-parallel-size"`
+	ContextLength      int     `yaml:"context-length"`
+	MemFractionStatic  float64 `yaml:"mem-fraction-static"`
+	ReasoningParser    string  `yaml:"reasoning-parser"`
+	ToolCallParser     string  `yaml:"tool-call-parser"`
 }
 
 type BenchmarkConfig struct {
@@ -124,7 +141,89 @@ func Load(path string) (Config, error) {
 		}
 		cfg.Overrides = overrides
 	}
+	if cfg.SGLangFile != "" {
+		sglangPath := cfg.SGLangFile
+		if !filepath.IsAbs(sglangPath) {
+			sglangPath = filepath.Join(filepath.Dir(path), sglangPath)
+		}
+		sglang, err := LoadSGLangConfig(sglangPath)
+		if err != nil {
+			return Config{}, fmt.Errorf("load SGLang config: %w", err)
+		}
+		if err := validateSGLangProfile(cfg.Model, sglang); err != nil {
+			return Config{}, fmt.Errorf("validate SGLang config %q: %w", sglangPath, err)
+		}
+		cfg.SGLang = sglang
+	}
 	return cfg, nil
+}
+
+func LoadSGLangConfig(path string) (SGLangConfig, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return SGLangConfig{}, fmt.Errorf("open SGLang config %q: %w", path, err)
+	}
+	defer f.Close()
+	decoder := yaml.NewDecoder(f)
+	decoder.KnownFields(true)
+	var configuration SGLangConfig
+	if err := decoder.Decode(&configuration); err != nil {
+		return SGLangConfig{}, fmt.Errorf("decode SGLang config %q: %w", path, err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return SGLangConfig{}, fmt.Errorf("decode SGLang config %q: multiple YAML documents", path)
+		}
+		return SGLangConfig{}, fmt.Errorf("decode SGLang config %q: %w", path, err)
+	}
+	if err := configuration.validate(); err != nil {
+		return SGLangConfig{}, fmt.Errorf("validate SGLang config %q: %w", path, err)
+	}
+	return configuration, nil
+}
+
+func (c SGLangConfig) validate() error {
+	required := []struct {
+		name  string
+		value string
+	}{
+		{"model-path", c.ModelPath},
+		{"served-model-name", c.ServedModelName},
+		{"host", c.Host},
+		{"device", c.Device},
+		{"tool-call-parser", c.ToolCallParser},
+	}
+	for _, field := range required {
+		if strings.TrimSpace(field.value) == "" {
+			return fmt.Errorf("%s is required", field.name)
+		}
+	}
+	if c.Port < 1 || c.Port > 65535 {
+		return errors.New("port must be between 1 and 65535")
+	}
+	if c.TensorParallelSize <= 0 {
+		return errors.New("tensor-parallel-size must be positive")
+	}
+	if c.ContextLength <= 0 {
+		return errors.New("context-length must be positive")
+	}
+	if c.MemFractionStatic <= 0 || c.MemFractionStatic > 1 || math.IsNaN(c.MemFractionStatic) || math.IsInf(c.MemFractionStatic, 0) {
+		return errors.New("mem-fraction-static must be finite, positive, and no greater than 1")
+	}
+	return nil
+}
+
+func validateSGLangProfile(model ModelConfig, configuration SGLangConfig) error {
+	if configuration.ServedModelName != model.Model {
+		return errors.New("served-model-name must equal model.model")
+	}
+	baseURL, _ := url.Parse(model.BaseURL)
+	port, err := strconv.Atoi(baseURL.Port())
+	if err != nil || port != configuration.Port {
+		return errors.New("port must equal the explicit port in model.base_url")
+	}
+	return nil
 }
 
 // LoadRuntimeOverrides reads one dedicated strict runtime override document.
@@ -268,6 +367,9 @@ func (c *Config) validate() error {
 	}
 	if c.Model.Provider != "deepseek" && c.Model.Provider != "sglang" {
 		return errors.New("model.provider must be deepseek or sglang")
+	}
+	if c.SGLangFile != "" && c.Model.Provider != "sglang" {
+		return errors.New("sglang_file requires model.provider sglang")
 	}
 	if err := validateExperimentName(c.Name); err != nil {
 		return err

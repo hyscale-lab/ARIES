@@ -170,6 +170,105 @@ func TestLoadNonemptyOverridesFileFailuresIncludeReferencedPath(t *testing.T) {
 	}
 }
 
+func TestLoadSGLangConfigStrictAndChecked(t *testing.T) {
+	root := t.TempDir()
+	write := func(name, content string) string {
+		path := filepath.Join(root, name)
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	valid := `model-path: Qwen/Qwen3-8B
+served-model-name: Qwen/Qwen3-8B
+host: 0.0.0.0
+port: 30000
+device: cuda
+tensor-parallel-size: 1
+context-length: 32768
+mem-fraction-static: 0.85
+reasoning-parser: qwen3
+tool-call-parser: qwen
+`
+	configuration, err := LoadSGLangConfig(write("valid.yaml", valid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configuration.ModelPath != "Qwen/Qwen3-8B" || configuration.ServedModelName != "Qwen/Qwen3-8B" || configuration.Port != 30000 || configuration.ToolCallParser != "qwen" {
+		t.Fatalf("SGLang config = %#v", configuration)
+	}
+	for name, content := range map[string]string{
+		"unknown":       valid + "future-option: true\n",
+		"multiple-docs": valid + "---\nhost: 127.0.0.1\n",
+		"zero-port":     strings.Replace(valid, "port: 30000", "port: 0", 1),
+		"zero-tp":       strings.Replace(valid, "tensor-parallel-size: 1", "tensor-parallel-size: 0", 1),
+		"bad-memory":    strings.Replace(valid, "mem-fraction-static: 0.85", "mem-fraction-static: 1.1", 1),
+		"missing-model": strings.Replace(valid, "model-path: Qwen/Qwen3-8B", "model-path: \"\"", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := LoadSGLangConfig(write(name+".yaml", content)); err == nil {
+				t.Fatal("expected error")
+			}
+		})
+	}
+}
+
+func TestLoadSGLangProfileResolvesAndCrossValidatesConfig(t *testing.T) {
+	root := t.TempDir()
+	profiles := filepath.Join(root, "profiles")
+	configs := filepath.Join(root, "configs")
+	if err := os.MkdirAll(profiles, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(configs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	profile := strings.Replace(validConfig, `"versions_file": "../configs/versions.json",`, `"versions_file": "../configs/versions.json", "sglang_file": "../configs/sglang.yaml",`, 1)
+	profile = strings.Replace(profile, `"provider": "deepseek", "base_url": "http://127.0.0.1:8080", "model": "fake"`, `"provider": "sglang", "base_url": "http://sglang.local:30000/v1", "model": "Qwen/Qwen3-8B"`, 1)
+	profilePath := filepath.Join(profiles, "experiment.json")
+	if err := os.WriteFile(profilePath, []byte(profile), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configs, "versions.json"), []byte(validVersions), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sglangPath := filepath.Join(configs, "sglang.yaml")
+	validSGLang := `model-path: Qwen/Qwen3-8B
+served-model-name: Qwen/Qwen3-8B
+host: 0.0.0.0
+port: 30000
+device: cuda
+tensor-parallel-size: 1
+context-length: 32768
+mem-fraction-static: 0.85
+reasoning-parser: qwen3
+tool-call-parser: qwen
+`
+	if err := os.WriteFile(sglangPath, []byte(validSGLang), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(profilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SGLangFile != "../configs/sglang.yaml" || cfg.SGLang.ServedModelName != cfg.Model.Model {
+		t.Fatalf("profile = %#v", cfg)
+	}
+	for name, content := range map[string]string{
+		"model": strings.Replace(validSGLang, "served-model-name: Qwen/Qwen3-8B", "served-model-name: other", 1),
+		"port":  strings.Replace(validSGLang, "port: 30000", "port: 30001", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := os.WriteFile(sglangPath, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(profilePath); err == nil {
+				t.Fatal("expected error")
+			}
+		})
+	}
+}
+
 func stringPointer(value string) *string { return &value }
 
 const validConfig = `{
@@ -288,7 +387,7 @@ func TestCheckedInSGLangProfileLoadsWithoutEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Model.Provider != "sglang" || !strings.HasSuffix(cfg.Model.BaseURL, "/v1") || cfg.Model.APIKeyEnv != "SGLANG_API_KEY" {
+	if cfg.Model.Provider != "sglang" || !strings.HasSuffix(cfg.Model.BaseURL, "/v1") || cfg.Model.APIKeyEnv != "SGLANG_API_KEY" || cfg.SGLangFile == "" || cfg.SGLang.ServedModelName != cfg.Model.Model {
 		t.Fatalf("profile = %#v", cfg)
 	}
 }
@@ -342,6 +441,11 @@ func TestDecodeRejectsInvalidConfig(t *testing.T) {
 			name:    "secret value field",
 			input:   strings.Replace(validConfig, `"api_key_env": "DEEPSEEK_API_KEY"`, `"api_key_env": "DEEPSEEK_API_KEY", "api_key": "must-not-persist"`, 1),
 			wantErr: `unknown field "api_key"`,
+		},
+		{
+			name:    "SGLang file with DeepSeek",
+			input:   strings.Replace(validConfig, `"versions_file": "../configs/versions.json",`, `"versions_file": "../configs/versions.json", "sglang_file": "sglang.yaml",`, 1),
+			wantErr: "sglang_file requires model.provider sglang",
 		},
 		{
 			name:    "bad type",
