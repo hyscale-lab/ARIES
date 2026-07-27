@@ -1,15 +1,19 @@
-# Quick start: OpenClaw + Terminal-Bench 2 + DeepSeek
+# Quick start: OpenClaw + Terminal-Bench 2
 
 This guide runs a checked-in Terminal-Bench 2 experiment from a clean ARIES
-clone. Run every command from the repository root.
+clone with either DeepSeek or SGLang. Run every command from the repository
+root.
 
 ## 1. Prerequisites
 
 - Linux with a running local Docker Engine and access to `/var/run/docker.sock`.
 - Go 1.26.5, Git, and Make. Go's toolchain selection can download 1.26.5 when
   an older Go launcher is installed.
-- Network access to GitHub, GHCR, Docker Hub, and `https://api.deepseek.com`.
-- A DeepSeek API key with access to the model named in the profile.
+- Network access to GitHub, GHCR, and Docker Hub.
+- For DeepSeek, access to `https://api.deepseek.com` and an API key for the
+  model named in the profile.
+- For SGLang, an installed Python environment containing SGLang, a compatible
+  local model, and enough visible GPU memory.
 
 Verify Docker before continuing:
 
@@ -28,6 +32,13 @@ Use the one-task profile for the quickest first run:
 ```sh
 make build
 ./bin/aries setup profiles/openclaw-tb2-fix-git-deepseek.json
+```
+
+For the equivalent SGLang profile:
+
+```sh
+make build
+./bin/aries setup profiles/openclaw-tb2-fix-git-sglang.json
 ```
 
 To prepare the heterogeneous five-task subset instead:
@@ -55,13 +66,15 @@ The independent `agent_timeout_seconds` field changes only the agent deadline.
 Every checked-in profile explicitly contains `overrides_file`; the one-task
 profile uses `""`, which disables override loading without opening a file.
 Profiles and nonempty referenced override files reject unknown fields and
-trailing JSON; there is no YAML or merge/inheritance layer.
+trailing JSON; there is no profile merge or inheritance layer. SGLang is the
+exception only for its separate native launch configuration, described below.
 
 The Make equivalent accepts either profile:
 
 ```sh
 make setup
 make setup PROFILE=profiles/openclaw-tb2-five-deepseek.json
+make setup PROFILE=profiles/openclaw-tb2-fix-git-sglang.json
 ```
 
 To run another subset from the pinned revision, copy either profile and replace
@@ -72,7 +85,39 @@ bound parallel occurrences. Add a positive Go duration such as `"30m"` as
 work is always drained. ARIES loads each task's explicit tagged image directly from that
 task's `task.toml`; no version-catalog or Go code change is required.
 
-## 3. Add the DeepSeek credential
+## 3. Configure the model backend
+
+`runtime.backend` selects the provider, while `runtime.mode` states whether
+ARIES owns a model-server process. The supported combinations are:
+
+| Backend | Mode | `runtime.config` | Process owner |
+| --- | --- | --- | --- |
+| `deepseek` | `external` | Must be omitted | DeepSeek |
+| `sglang` | `external` | `file` only | User |
+| `sglang` | `managed` | `file`, `executable`, `startup_timeout`, `stop_timeout` | ARIES |
+
+DeepSeek cannot use managed mode. SGLang supports both modes.
+
+### External DeepSeek
+
+The checked-in DeepSeek profile uses:
+
+```json
+{
+  "runtime": {
+    "backend": "deepseek",
+    "mode": "external"
+  },
+  "model": {
+    "base_url": "https://api.deepseek.com",
+    "api_key_env": "DEEPSEEK_API_KEY",
+    "id": "deepseek-v4-flash"
+  }
+}
+```
+
+Do not add a `runtime.config` object for DeepSeek. ARIES performs model
+preflight and configures OpenClaw, but it does not manage the remote service.
 
 The preferred source for `./bin/aries` is the ignored repository-root file
 `DEEPSEEK_API.key`:
@@ -93,42 +138,124 @@ installed elsewhere, ARIES reads `DEEPSEEK_API_KEY` from the environment. If a
 repository-local file exists but is invalid, ARIES fails closed rather than
 falling back.
 
-The SGLang example defaults to an external server. Point `model.base_url` at a
-versioned `/v1` endpoint reachable from both the ARIES host and OpenClaw
-containers. Its `runtime.config.file` references the reusable native configuration,
-which can start that server directly:
+### External SGLang
+
+The checked-in SGLang profile keeps experiment configuration in JSON and
+references the reusable native YAML at
+`configs/sglang/qwen3-8b-local.yaml`. ARIES strictly loads these YAML fields:
+`model-path`, `served-model-name`, `host`, `port`, `device`,
+`tensor-parallel-size`, `context-length`, `mem-fraction-static`,
+`reasoning-parser`, and `tool-call-parser`. Unknown fields, trailing documents,
+invalid values, a `served-model-name` different from `model.id`, or a `port`
+different from the explicit port in `model.base_url` are rejected before the
+run starts.
+
+Copy the profile before changing its endpoint:
 
 ```sh
-python -m sglang.launch_server \
-  --config configs/sglang/qwen3-8b-local.yaml
+cp profiles/openclaw-tb2-fix-git-sglang.json \
+  .cache/openclaw-tb2-fix-git-sglang.json
 ```
 
-Set any non-empty credential value that does not occur in the rendered config,
-such as `SGLANG_API_KEY=unused-sglang-token-7f3a`, for an unauthenticated
-endpoint.
+Replace `model.base_url` in the copy with an HTTP endpoint ending exactly in
+`/v1`. The checked-in `sglang.local` hostname is a placeholder: the configured
+hostname or address must resolve and be reachable from both the ARIES host and
+OpenClaw containers.
 
-To let ARIES own the process for one run, copy the SGLang profile and replace
-its `runtime` block with:
+The checked-in profile uses the following external runtime and model settings:
 
 ```json
-"runtime": {
-  "backend": "sglang",
-  "mode": "managed",
-  "config": {
-    "file": "../configs/sglang/qwen3-8b-local.yaml",
-    "executable": "/absolute/path/to/venv/bin/python",
-    "startup_timeout": "15m",
-    "stop_timeout": "1m"
+{
+  "runtime": {
+    "backend": "sglang",
+    "mode": "external",
+    "config": {
+      "file": "../configs/sglang/qwen3-8b-local.yaml"
+    }
+  },
+  "model": {
+    "base_url": "http://sglang.local:30000/v1",
+    "api_key_env": "SGLANG_API_KEY",
+    "id": "Qwen/Qwen3-8B"
   }
 }
 ```
 
+External SGLang mode accepts only `runtime.config.file`; `executable`,
+`startup_timeout`, and `stop_timeout` are rejected because ARIES does not own
+that process. Start SGLang separately; for example, this exposes GPU0 to the
+server:
+
+```sh
+CUDA_VISIBLE_DEVICES=0 /absolute/path/to/venv/bin/python \
+  -m sglang.launch_server \
+  --config configs/sglang/qwen3-8b-local.yaml
+```
+
+In the shell that runs ARIES, set the environment variable named by
+`model.api_key_env`. An unauthenticated endpoint still needs a nonempty
+placeholder because OpenClaw and model preflight require the configured
+credential:
+
+```sh
+export SGLANG_API_KEY=unused-local-token
+./bin/aries setup .cache/openclaw-tb2-fix-git-sglang.json
+./bin/aries .cache/openclaw-tb2-fix-git-sglang.json
+```
+
+### Managed SGLang
+
+To let ARIES own one SGLang process for the entire profile run, use the
+following runtime and model settings in the copied profile:
+
+```json
+{
+  "runtime": {
+    "backend": "sglang",
+    "mode": "managed",
+    "config": {
+      "file": "../configs/sglang/qwen3-8b-local.yaml",
+      "executable": "/absolute/path/to/venv/bin/python",
+      "startup_timeout": "15m",
+      "stop_timeout": "1m"
+    }
+  },
+  "model": {
+    "base_url": "http://sglang.local:30000/v1",
+    "api_key_env": "SGLANG_API_KEY",
+    "id": "Qwen/Qwen3-8B"
+  }
+}
+```
+
+All four managed `runtime.config` fields are required. `file` is resolved
+relative to the profile, `executable` must identify the Python executable from
+the SGLang environment, and both timeout values must be positive Go durations.
+`model.base_url` must use the YAML port and end exactly in `/v1`;
+`model.id` must equal the YAML `served-model-name`; and `model.api_key_env`
+names the environment variable read by ARIES and rendered into OpenClaw.
+
 Do not start `sglang.launch_server` separately in this mode. ARIES passes the
-referenced YAML to SGLang, waits for `/health` and exact model discovery, retains stdout and
-stderr under the private run directory, and stops the process group after all
-admitted tasks drain. The configured endpoint must still be reachable from the
-host and OpenClaw containers. ARIES checks the YAML model and port but does not
-install models, allocate GPUs, or configure that network path.
+referenced YAML using the exact arguments
+`-m sglang.launch_server --config <file>`, waits up to `startup_timeout` for
+`/health`, and then requires exact model discovery at `/v1/models`. It retains
+the child output in mode-0600 `sglang/stdout.log` and `sglang/stderr.log`, stops
+the process group after all admitted tasks drain, and uses `stop_timeout` as
+the graceful TERM budget before forced cleanup.
+
+The configured credential variable is available to ARIES and OpenClaw but is
+removed from the managed SGLang child's environment. To select GPU0, expose it
+when starting ARIES:
+
+```sh
+export CUDA_VISIBLE_DEVICES=0
+export SGLANG_API_KEY=unused-local-token
+./bin/aries setup .cache/openclaw-tb2-fix-git-sglang.json
+./bin/aries .cache/openclaw-tb2-fix-git-sglang.json
+```
+
+ARIES does not install SGLang or models, choose GPUs, or configure the network
+path shared by the host and containers.
 
 ## 4. Run the experiment
 
@@ -144,6 +271,7 @@ For the five-task subset:
 ./bin/aries profiles/openclaw-tb2-five-deepseek.json
 ```
 
+For SGLang, use the external or managed command from the previous section.
 Keep `bin/aries-ssh` beside `bin/aries`. A live DeepSeek run can incur API
 charges; the five-task profile also takes substantially longer and pulls more
 images. ARIES first performs a bounded model preflight, then runs each task in
@@ -156,13 +284,25 @@ For the one-task profile:
 
 ```sh
 run_dir="$(ls -1dt runs/*-openclaw-tb2-fix-git-deepseek | head -1)"
+task_dir="$(find "$run_dir" -mindepth 1 -maxdepth 1 -type d -name 'fix-git*' | head -1)"
 cat "$run_dir/live-validation.json"
 cat "$run_dir/run-result.json"
-cat "$run_dir/fix-git/evaluation/reward.txt"
-cat "$run_dir/fix-git/bridge/tool-calls.jsonl"
-cat "$run_dir/fix-git/bridge/ssh_raw.log"
-cat "$run_dir/fix-git/harness/openclaw.json"
+cat "$task_dir/evaluation/reward.txt"
+cat "$task_dir/bridge/tool-calls.jsonl"
+cat "$task_dir/bridge/ssh_raw.log"
+cat "$task_dir/harness/openclaw.json"
 cat "$run_dir/aries.log"
+```
+
+For the SGLang example, select its run and inspect the managed runtime logs
+when applicable:
+
+```sh
+run_dir="$(ls -1dt runs/*-openclaw-tb2-fix-git-sglang | head -1)"
+cat "$run_dir/live-validation.json"
+cat "$run_dir/run-result.json"
+cat "$run_dir/aries.log"
+test ! -d "$run_dir/sglang" || ls -l "$run_dir/sglang"
 ```
 
 For a multi-task profile, `run-result.json` contains one result per task and
@@ -216,6 +356,15 @@ run log.
   world permissions, and one-line formatting of `DEEPSEEK_API.key`.
 - **Model error:** inspect `live-validation.json` for authentication, rate
   limit, connectivity, or missing-model categories.
+- **SGLang configuration error:** confirm that the YAML uses only the supported
+  fields and that its served model and port match the profile.
+- **SGLang readiness error:** inspect `sglang/stderr.log`, confirm that
+  `model.base_url` ends in `/v1`, and test `/health` and `/v1/models` from the
+  host. A server reachable only through loopback is not reachable from
+  OpenClaw's container.
+- **Managed SGLang exits early:** confirm that `runtime.config.executable` is
+  the Python executable from the SGLang environment and that the selected GPU
+  has enough free memory.
 - **Unknown task or invalid task image:** choose a task directory from the
   pinned checkout and ensure its `task.toml` declares a valid explicit image
   tag. Digest-bearing or implicit-`latest` task references are rejected.

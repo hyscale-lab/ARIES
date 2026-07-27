@@ -17,9 +17,10 @@ ${EDITOR:-vi} DEEPSEEK_API.key
 ./bin/aries profiles/openclaw-tb2-fix-git-deepseek.json
 ```
 
-The live run uses DeepSeek and can incur API charges. See the complete
-[quick-start guide](docs/quick-start.md) for the five-task profile,
-prerequisites, success checks, artifacts, and troubleshooting.
+The live run uses DeepSeek and can incur API charges. The complete
+[quick-start guide](docs/quick-start.md) also covers external and ARIES-managed
+SGLang, GPU selection, the native YAML boundary, success checks, artifacts, and
+troubleshooting.
 
 ## Architecture
 
@@ -55,8 +56,9 @@ should not be forced through one universal transport.
 - `profiles/openclaw-tb2-fix-git-deepseek.json` is the quickest live example.
 - `profiles/openclaw-tb2-fix-git-sglang.json` uses an external local SGLang
   endpoint by default and references its reusable native YAML configuration
-  under `configs/sglang/`; a copied profile may instead select the managed
-  host-process lifecycle.
+  under `configs/sglang/`; its `sglang.local` endpoint is a placeholder that
+  must be reachable from both the host and OpenClaw containers. A copied
+  profile may instead select the managed host-process lifecycle.
 - `profiles/openclaw-tb2-five-deepseek.json` selects a heterogeneous five-task
   subset.
 - `configs/versions.json` contains the exact Terminal-Bench 2 Git revision and
@@ -73,10 +75,11 @@ task directory names from the pinned checkout. Task order and repeated entries
 are preserved; repeats act as weights. `execution.concurrency` bounds parallel
 occurrences (default `1`). An optional positive `execution.loop_duration`
 repeats the ordered list until its admission deadline, then drains admitted
-occurrences through evaluation and cleanup. Both
-configuration files use strict JSON decoding; there is no inheritance,
-merging, plugin registry, or factory framework. API-key values never belong in
-either file.
+occurrences through evaluation and cleanup. Profile and override files use
+strict JSON decoding; there is no inheritance,
+merging, plugin registry, or factory framework. SGLang launch settings remain
+in a separate strict native YAML file referenced by the profile. API-key values
+never belong in any of these files.
 
 The sparse `harness_resources` and `agent_sandbox_resources` blocks are
 independent. A harness value limits only OpenClaw; an omitted harness dimension
