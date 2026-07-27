@@ -87,14 +87,16 @@ admissions and drains existing work; each active recorder independently scans
 run containers before filtering to its occurrence, a bounded-concurrency cost.
 
 ```text
-cmd/aries -> config + runner + concrete constructors
+cmd/aries -> internal/app + concrete constructors/runtime drivers
+internal/app -> config + runner + injected constructor functions
 runner    -> core data + four local interfaces
 concrete packages -> core data and only the narrow capabilities they consume
 ```
 
 The benchmark and harness do not import one another. The OpenClaw-specific
 Docker adaptation stays in `pkg/bridge/openclawssh`. Explicit switches in
-`cmd/aries` are the only implementation selection mechanism.
+`cmd/aries` is the only implementation selection mechanism. Scheduling,
+preflight, persistence, and run-scoped orchestration live in `internal/app`.
 
 ## Task lifecycle
 
@@ -476,25 +478,28 @@ bounded contents. The configured environment variable is the fallback when the
 local file is unavailable. Official DeepSeek runs perform a bounded
 authenticated model preflight before Docker resource construction.
 
-`model.provider` is explicit and limited to `deepseek` or `sglang`. SGLang uses
+`runtime.backend` is explicit and limited to `deepseek` or `sglang`. SGLang uses
 an OpenAI-compatible base URL ending in `/v1`; preflight performs bounded exact
 model discovery at `/models`, and OpenClaw uses provider ID `sglang` with
 `openai-completions`. A non-empty dummy environment value is sufficient for an
-unauthenticated local endpoint. A nonempty `sglang_file` references a strict
-native YAML document relative to the profile. Its `served-model-name` and
+unauthenticated local endpoint. A nonempty `runtime.config.file` references a
+strict native YAML document relative to the profile. Its `served-model-name` and
 `port` must match the profile model and explicit endpoint port. The same YAML
 may be shared by multiple profiles and passed directly to SGLang.
 
-`model_runtime.mode` defaults to `external`, preserving endpoint-only behavior.
-For `managed` SGLang, the command layer starts one run-scoped host process with
-the configured executable and exact argv
-`-m sglang.launch_server --config YAML`, then retries model preflight within the
-configured startup timeout. The process is shared by all task occurrences and
+`runtime.mode` is required. External mode owns no process. For managed SGLang,
+the internal application layer starts one run-scoped host process supplied by
+the command's explicit backend switch, probes `/health`, and then performs
+exact model discovery. The driver uses the configured executable and exact argv
+`-m sglang.launch_server --config YAML` within the configured startup timeout.
+The process is shared by all task occurrences and
 is stopped only after admitted work drains. Cleanup uses a fresh bounded
 context, signals the whole process group, and confirms its absence. Logs remain
-private run artifacts. This narrow command-owned lifecycle uses an explicit
-provider switch; it is not a fifth Runner role or a registry. ARIES does not
-install models, allocate GPUs, or configure container-to-host networking.
+private run artifacts. Unexpected termination cancels new admission and drains
+already admitted work. The consumer-owned `ModelRuntime` interface contains
+only lifecycle and health; inference remains separate. It is not a fifth
+Runner role or a registry. ARIES does not install models, allocate GPUs, or
+configure container-to-host networking.
 
 The executable procedure is maintained in
 [`docs/quick-start.md`](quick-start.md).

@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"bytes"
@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/hyscale-lab/aries/pkg/config"
+	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/model/sglang"
 )
 
@@ -79,47 +79,9 @@ type httpDoer interface {
 
 type contextSleep func(context.Context, time.Duration) error
 
-func validateLiveModelForRuntime(
-	ctx context.Context,
-	cfg config.Config,
-	runtime modelRuntime,
-	lookup func(string) ([]byte, bool),
-	client httpDoer,
-	sleep contextSleep,
-) (liveValidation, error) {
-	if cfg.ModelRuntime.Mode != "managed" {
-		return validateLiveModel(ctx, cfg.Model, lookup, client, sleep)
-	}
-	if sleep == nil {
-		sleep = sleepWithContext
-	}
-	startupCtx, cancel := context.WithTimeout(ctx, cfg.ModelRuntime.StartupTimeout)
-	defer cancel()
-	for attempts := 1; ; attempts++ {
-		validation, err := validateLiveModel(startupCtx, cfg.Model, lookup, client, sleep)
-		validation.Attempts = attempts
-		if err == nil {
-			return validation, nil
-		}
-		switch validation.Category {
-		case liveValidationTransport, liveValidationServer, liveValidationModelMissing:
-		default:
-			return validation, &liveValidationError{provider: cfg.Model.Provider, category: validation.Category, attempts: attempts}
-		}
-		select {
-		case <-runtime.Done():
-			return liveValidationFailure(cfg.Model, liveValidationServer, attempts)
-		default:
-		}
-		if err := sleep(startupCtx, managedStartupRetryDelay); err != nil {
-			return liveValidationFailure(cfg.Model, liveValidationCanceled, attempts)
-		}
-	}
-}
-
 func validateLiveModel(
 	ctx context.Context,
-	model config.ModelConfig,
+	model core.ModelConfig,
 	lookup func(string) ([]byte, bool),
 	client httpDoer,
 	sleep contextSleep,
@@ -179,7 +141,7 @@ func (transport doerTransport) RoundTrip(request *http.Request) (*http.Response,
 	return transport.doer.Do(request)
 }
 
-func validateSGLangModel(ctx context.Context, model config.ModelConfig, key []byte, doer httpDoer) (liveValidation, error) {
+func validateSGLangModel(ctx context.Context, model core.ModelConfig, key []byte, doer httpDoer) (liveValidation, error) {
 	var httpClient *http.Client
 	if doer != nil {
 		httpClient = &http.Client{Timeout: deepSeekRequestTimeout, Transport: doerTransport{doer: doer}}
@@ -335,15 +297,15 @@ func sleepWithContext(ctx context.Context, duration time.Duration) error {
 	}
 }
 
-func isOfficialDeepSeek(model config.ModelConfig) bool {
+func isOfficialDeepSeek(model core.ModelConfig) bool {
 	return model.Provider == "deepseek" && model.BaseURL == deepSeekBaseURL && (model.Model == "deepseek-v4-flash" || model.Model == "deepseek-v4-pro")
 }
 
-func liveValidationFailure(model config.ModelConfig, category liveValidationCategory, attempts int) (liveValidation, error) {
+func liveValidationFailure(model core.ModelConfig, category liveValidationCategory, attempts int) (liveValidation, error) {
 	return failedLiveValidation(model, category, attempts), &liveValidationError{provider: model.Provider, category: category, attempts: attempts}
 }
 
-func failedLiveValidation(model config.ModelConfig, category liveValidationCategory, attempts int) liveValidation {
+func failedLiveValidation(model core.ModelConfig, category liveValidationCategory, attempts int) liveValidation {
 	return liveValidation{
 		SchemaVersion: 1, Status: liveValidationFailed, Category: category,
 		Provider: model.Provider, BaseURL: model.BaseURL, Model: model.Model, Attempts: attempts,

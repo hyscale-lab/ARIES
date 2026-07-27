@@ -2,7 +2,6 @@
   "name": "openclaw-tb2-five-deepseek",
   "versions_file": "../configs/versions.json",
   "overrides_file": "../configs/runtime-overrides.json",
-  "sglang_file": "",
   "execution": {
     "concurrency": 2
   },
@@ -26,11 +25,14 @@
   "bridge": {
     "type": "openclaw-ssh"
   },
+  "runtime": {
+    "backend": "deepseek",
+    "mode": "external"
+  },
   "model": {
-    "provider": "deepseek",
     "base_url": "https://api.deepseek.com",
-    "model": "deepseek-v4-flash",
-    "api_key_env": "DEEPSEEK_API_KEY"
+    "api_key_env": "DEEPSEEK_API_KEY",
+    "id": "deepseek-v4-flash"
   },
   "output_dir": "runs"
 }

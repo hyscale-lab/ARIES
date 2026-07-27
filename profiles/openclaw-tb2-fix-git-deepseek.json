@@ -2,14 +2,15 @@
   "name": "openclaw-tb2-fix-git-deepseek",
   "versions_file": "../configs/versions.json",
   "overrides_file": "",
-  "sglang_file": "",
   "execution": {
     "concurrency": 1
   },
   "benchmark": {
     "type": "terminalbench2",
     "root": ".cache/terminal-bench-2",
-    "tasks": ["fix-git"]
+    "tasks": [
+      "fix-git"
+    ]
   },
   "harness": {
     "type": "openclaw"
@@ -20,11 +21,14 @@
   "bridge": {
     "type": "openclaw-ssh"
   },
+  "runtime": {
+    "backend": "deepseek",
+    "mode": "external"
+  },
   "model": {
-    "provider": "deepseek",
     "base_url": "https://api.deepseek.com",
-    "model": "deepseek-v4-flash",
-    "api_key_env": "DEEPSEEK_API_KEY"
+    "api_key_env": "DEEPSEEK_API_KEY",
+    "id": "deepseek-v4-flash"
   },
   "output_dir": "runs"
 }
