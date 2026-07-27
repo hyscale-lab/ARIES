@@ -10,6 +10,7 @@ require (
 	github.com/moby/moby/client v0.5.0
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/sirupsen/logrus v1.9.3
+	go.yaml.in/yaml/v3 v3.0.4
 	golang.org/x/crypto v0.54.0
 )
 

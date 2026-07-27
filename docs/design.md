@@ -480,8 +480,12 @@ authenticated model preflight before Docker resource construction.
 an endpoint-only OpenAI-compatible path: its configured base URL ends in
 `/v1`, preflight performs bounded exact model discovery at `/models`, and
 OpenClaw uses provider ID `sglang` with `openai-completions`. A non-empty dummy
-environment value is sufficient for an unauthenticated local endpoint. ARIES
-does not launch a server or manage GPU resources.
+environment value is sufficient for an unauthenticated local endpoint. A
+nonempty `sglang_file` references a strict native YAML document relative to the
+profile. Its `served-model-name` and `port` must match the profile model and
+explicit endpoint port. The same YAML may be shared by multiple profiles and
+passed directly to SGLang. ARIES does not launch a server or manage GPU
+resources.
 
 The executable procedure is maintained in
 [`docs/quick-start.md`](quick-start.md).

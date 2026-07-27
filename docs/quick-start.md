@@ -94,8 +94,18 @@ repository-local file exists but is invalid, ARIES fails closed rather than
 falling back.
 
 For the SGLang example, point `model.base_url` at an already-running versioned
-`/v1` endpoint and set any non-empty local credential value, such as
-`SGLANG_API_KEY=local`. ARIES does not launch SGLang or manage GPUs.
+`/v1` endpoint reachable from both the ARIES host and OpenClaw containers. Its
+`sglang_file` references the reusable native configuration, which can start the
+server directly:
+
+```sh
+python -m sglang.launch_server \
+  --config configs/sglang/qwen3-8b-local.yaml
+```
+
+Set any non-empty local credential value, such as `SGLANG_API_KEY=local`, for
+an unauthenticated endpoint. ARIES checks that the YAML served model and port
+match the profile, but does not launch SGLang or manage GPUs.
 
 ## 4. Run the experiment
 

@@ -2,6 +2,7 @@
   "name": "openclaw-tb2-fix-git-deepseek",
   "versions_file": "../configs/versions.json",
   "overrides_file": "",
+  "sglang_file": "",
   "execution": {
     "concurrency": 1
   },

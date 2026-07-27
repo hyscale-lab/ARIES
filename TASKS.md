@@ -19,6 +19,17 @@
   live DeepSeek compatibility run, retained-log audit, cleanup checks, and
   final review before release.
 
+## R14 — Shared local SGLang configuration
+
+- [x] Add a strict native SGLang YAML loader with focused value validation.
+- [x] Let profiles reference one reusable YAML file and reject mismatched served
+  model names or endpoint ports before setup or runtime side effects.
+- [x] Keep remote SGLang endpoint-only operation and the four Runner roles
+  unchanged; do not add server or GPU lifecycle management.
+- [x] Run focused and full release validation, leak and secret checks, and
+  review the final diff.
+- [ ] Create one concise commit when requested.
+
 ## R12 — Post-concurrency composition cleanup
 
 Cleanup plan, in regression-first order:
