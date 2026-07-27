@@ -494,8 +494,16 @@ exact model discovery. The driver uses the configured executable and exact argv
 `-m sglang.launch_server --config YAML` within the configured startup timeout.
 The process is shared by all task occurrences and
 is stopped only after admitted work drains. Cleanup uses a fresh bounded
-context, signals the whole process group, and confirms its absence. Logs remain
-private run artifacts. Unexpected termination cancels new admission and drains
+context, signals the whole process group, and confirms its absence. The configured
+`stop_timeout` is the graceful TERM budget. If that budget expires, cleanup sends
+KILL and uses one fresh window of at most five additional seconds solely to reap
+the process and positively confirm process-group absence. The model credential
+environment entry is removed from the managed child while all other entries are
+preserved and the executable directory remains first on `PATH`. ARIES structured
+lifecycle logs never record environment values. Private managed-child stdout and
+stderr may contain non-credential environment values that the child itself emits,
+but the exact configured credential entry is removed before the child starts.
+Logs remain private run artifacts. Unexpected termination cancels new admission and drains
 already admitted work. The consumer-owned `ModelRuntime` interface contains
 only lifecycle and health; inference remains separate. It is not a fifth
 Runner role or a registry. ARIES does not install models, allocate GPUs, or

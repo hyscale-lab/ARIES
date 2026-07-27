@@ -80,10 +80,6 @@ type ProfileModel struct {
 	APIKeyEnv string `json:"api_key_env"`
 }
 
-// ModelConfig is retained as the internal model-client data shape. Profile
-// JSON uses ProfileModel and converts explicitly through Config.CoreModel.
-type ModelConfig = core.ModelConfig
-
 type BenchmarkConfig struct {
 	Type  string   `json:"type"`
 	Root  string   `json:"root"`

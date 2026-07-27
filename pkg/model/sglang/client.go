@@ -65,28 +65,6 @@ type Client struct {
 	closed  bool
 }
 
-type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-type ChatRequest struct {
-	Model           string
-	Messages        []Message
-	Temperature     float64
-	MaxTokens       int
-	Seed            *int64
-	DisableThinking bool
-}
-
-type ChatResponse struct {
-	Content          string
-	Reasoning        string
-	FinishReason     string
-	PromptTokens     int
-	CompletionTokens int
-}
-
 func New(baseURL string, apiKey []byte, httpClient *http.Client) (*Client, error) {
 	normalized, err := NormalizeBaseURL(baseURL)
 	if err != nil {
@@ -159,78 +137,6 @@ func (client *Client) Models(ctx context.Context) ([]string, error) {
 		models = append(models, item.ID)
 	}
 	return models, nil
-}
-
-func (client *Client) Chat(ctx context.Context, input ChatRequest) (ChatResponse, error) {
-	authorization, err := client.begin()
-	if err != nil {
-		return ChatResponse{}, err
-	}
-	defer client.active.Done()
-	if strings.TrimSpace(input.Model) == "" {
-		return ChatResponse{}, errors.New("sglang chat: model is required")
-	}
-	payload := struct {
-		Model              string          `json:"model"`
-		Messages           []Message       `json:"messages"`
-		Temperature        float64         `json:"temperature"`
-		MaxTokens          int             `json:"max_tokens"`
-		Stream             bool            `json:"stream"`
-		Seed               *int64          `json:"seed,omitempty"`
-		ChatTemplateKwargs map[string]bool `json:"chat_template_kwargs,omitempty"`
-	}{Model: input.Model, Messages: input.Messages, Temperature: input.Temperature, MaxTokens: input.MaxTokens, Seed: input.Seed}
-	if input.DisableThinking {
-		payload.ChatTemplateKwargs = map[string]bool{"enable_thinking": false}
-	}
-	var encoded bytes.Buffer
-	encoder := json.NewEncoder(&encoded)
-	encoder.SetEscapeHTML(false)
-	if encoder.Encode(payload) != nil {
-		return ChatResponse{}, errors.New("sglang chat: encode request")
-	}
-	request, err := client.request(ctx, http.MethodPost, "/chat/completions", &encoded, authorization)
-	if err != nil {
-		return ChatResponse{}, err
-	}
-	request.Header.Set("Content-Type", "application/json")
-	body, err := client.do(request, "chat")
-	if err != nil {
-		return ChatResponse{}, err
-	}
-	defer clear(body)
-	var response struct {
-		Choices []struct {
-			Message struct {
-				Content          string `json:"content"`
-				Reasoning        string `json:"reasoning"`
-				ReasoningContent string `json:"reasoning_content"`
-			} `json:"message"`
-			FinishReason string `json:"finish_reason"`
-		} `json:"choices"`
-		Usage struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-		} `json:"usage"`
-	}
-	if json.Unmarshal(body, &response) != nil {
-		return ChatResponse{}, errors.New("sglang chat: malformed response")
-	}
-	if len(response.Choices) == 0 {
-		return ChatResponse{}, errors.New("sglang chat: empty choices")
-	}
-	choice := response.Choices[0]
-	reasoning := choice.Message.ReasoningContent
-	if reasoning == "" {
-		reasoning = choice.Message.Reasoning
-	}
-	content := choice.Message.Content
-	if content == "" {
-		content = reasoning
-	}
-	if content == "" {
-		return ChatResponse{}, errors.New("sglang chat: empty content")
-	}
-	return ChatResponse{Content: content, Reasoning: reasoning, FinishReason: choice.FinishReason, PromptTokens: response.Usage.PromptTokens, CompletionTokens: response.Usage.CompletionTokens}, nil
 }
 
 func (client *Client) begin() (string, error) {

@@ -30,11 +30,9 @@ type liveValidationStatus string
 type liveValidationCategory string
 
 const (
-	liveValidationNotRequested liveValidationStatus = "not_requested"
-	liveValidationSucceeded    liveValidationStatus = "succeeded"
-	liveValidationFailed       liveValidationStatus = "failed"
+	liveValidationSucceeded liveValidationStatus = "succeeded"
+	liveValidationFailed    liveValidationStatus = "failed"
 
-	liveValidationSkipped              liveValidationCategory = "not_requested"
 	liveValidationConfirmed            liveValidationCategory = "model_confirmed"
 	liveValidationConfigurationInvalid liveValidationCategory = "configuration_invalid"
 	liveValidationCredentialMissing    liveValidationCategory = "credential_missing"

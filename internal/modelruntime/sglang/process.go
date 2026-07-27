@@ -10,9 +10,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -22,10 +25,11 @@ const (
 )
 
 type Options struct {
-	Executable string
-	ConfigPath string
-	OutputDir  string
-	BaseURL    string
+	Executable    string
+	ConfigPath    string
+	OutputDir     string
+	BaseURL       string
+	CredentialEnv string
 }
 
 type healthError struct {
@@ -42,26 +46,73 @@ func (e *healthError) Error() string {
 }
 func (e *healthError) Retryable() bool { return e.retryable }
 
+type stopAttempt struct {
+	done chan struct{}
+	err  error
+}
+
+type stopError struct {
+	err           error
+	cleanupFailed bool
+}
+
+func (e *stopError) Error() string       { return e.err.Error() }
+func (e *stopError) Unwrap() error       { return e.err }
+func (e *stopError) CleanupFailed() bool { return e.cleanupFailed }
+
+func joinStopErrors(stopProtocolErr, residualKillErr, closeErr, unexpectedErr error) error {
+	err := errors.Join(stopProtocolErr, residualKillErr, closeErr, unexpectedErr)
+	if err == nil {
+		return nil
+	}
+	return &stopError{
+		err:           err,
+		cleanupFailed: stopProtocolErr != nil || residualKillErr != nil || closeErr != nil,
+	}
+}
+
+func (attempt *stopAttempt) wait(ctx context.Context) error {
+	select {
+	case <-attempt.done:
+		return attempt.err
+	default:
+	}
+	select {
+	case <-attempt.done:
+		return attempt.err
+	case <-ctx.Done():
+		select {
+		case <-attempt.done:
+			return attempt.err
+		default:
+			return ctx.Err()
+		}
+	}
+}
+
 type Runtime struct {
 	mu sync.Mutex
 
-	options     Options
-	client      *http.Client
-	probeGroup  func(int) error
-	signalGroup func(int, syscall.Signal) error
-	command     *exec.Cmd
-	stdout      *os.File
-	stderr      *os.File
-	done        chan struct{}
+	options       Options
+	client        *http.Client
+	healthTimeout time.Duration
+	waitCommand   func(*exec.Cmd) error
+	probeGroup    func(int) error
+	signalGroup   func(int, syscall.Signal) error
+	command       *exec.Cmd
+	stdout        *os.File
+	stderr        *os.File
+	done          chan struct{}
 
-	stopping       bool
-	waitErr        error
-	closeErr       error
-	unexpectedErr  error
-	stopAttempt    chan struct{}
-	stopAttemptErr error
-	confirmed      bool
-	confirmedErr   error
+	stopping        bool
+	exitObserved    bool
+	killIssued      bool
+	residualKillErr error
+	closeErr        error
+	unexpectedErr   error
+	stopAttempt     *stopAttempt
+	confirmed       bool
+	confirmedErr    error
 }
 
 func New(options Options) (*Runtime, error) {
@@ -85,17 +136,19 @@ func New(options Options) (*Runtime, error) {
 		return nil, err
 	}
 	return &Runtime{
-		options:     Options{Executable: executable, ConfigPath: configPath, OutputDir: outputDir, BaseURL: healthURL},
-		client:      &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
-		probeGroup:  func(pid int) error { return syscall.Kill(-pid, 0) },
-		signalGroup: func(pid int, signal syscall.Signal) error { return syscall.Kill(-pid, signal) },
-		done:        make(chan struct{}),
+		options:       Options{Executable: executable, ConfigPath: configPath, OutputDir: outputDir, BaseURL: healthURL, CredentialEnv: options.CredentialEnv},
+		client:        &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
+		healthTimeout: healthAttemptMax,
+		waitCommand:   func(command *exec.Cmd) error { return command.Wait() },
+		probeGroup:    func(pid int) error { return syscall.Kill(-pid, 0) },
+		signalGroup:   func(pid int, signal syscall.Signal) error { return syscall.Kill(-pid, signal) },
+		done:          make(chan struct{}),
 	}, nil
 }
 
 func deriveHealthURL(baseURL string) (string, error) {
 	u, err := url.Parse(baseURL)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.Opaque != "" || u.RawPath != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Path != "/v1" {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.Opaque != "" || u.RawPath != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(baseURL, "#") || u.Path != "/v1" {
 		return "", errors.New("SGLang health endpoint configuration is invalid")
 	}
 	u.Path = "/health"
@@ -125,7 +178,7 @@ func (r *Runtime) Start(ctx context.Context) error {
 		return fmt.Errorf("create managed SGLang stderr log: %w", err)
 	}
 	command := exec.Command(r.options.Executable, "-m", "sglang.launch_server", "--config", r.options.ConfigPath)
-	command.Env = append(os.Environ(), "PATH="+filepath.Dir(r.options.Executable)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	command.Env = childEnvironment(os.Environ(), r.options.CredentialEnv, filepath.Dir(r.options.Executable))
 	command.Stdout, command.Stderr = stdout, stderr
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := command.Start(); err != nil {
@@ -140,13 +193,31 @@ func (r *Runtime) wait() {
 	r.mu.Lock()
 	command, stdout, stderr := r.command, r.stdout, r.stderr
 	r.mu.Unlock()
-	waitErr := command.Wait()
+	observeErr := observeProcessExit(command.Process.Pid)
+	r.mu.Lock()
+	intentional := r.stopping
+	r.exitObserved = true
+	if !r.killIssued {
+		err := r.signalGroup(command.Process.Pid, syscall.SIGKILL)
+		if err == nil || errors.Is(err, syscall.ESRCH) {
+			r.killIssued = true
+		} else {
+			r.residualKillErr = fmt.Errorf("kill residual managed SGLang process group: %w", err)
+		}
+	}
+	r.mu.Unlock()
+	waitErr := r.waitCommand(command)
 	closeErr := errors.Join(stdout.Close(), stderr.Close())
 	r.mu.Lock()
-	r.waitErr, r.closeErr = waitErr, closeErr
-	if !r.stopping {
+	if observeErr != nil {
+		closeErr = errors.Join(closeErr, fmt.Errorf("observe managed SGLang exit: %w", observeErr))
+	}
+	r.closeErr = closeErr
+	if !intentional {
 		if waitErr != nil {
 			r.unexpectedErr = fmt.Errorf("managed SGLang exited unexpectedly: %w", waitErr)
+		} else if observeErr != nil {
+			r.unexpectedErr = fmt.Errorf("managed SGLang exit observation failed: %w", observeErr)
 		} else {
 			r.unexpectedErr = errors.New("managed SGLang exited unexpectedly")
 		}
@@ -160,13 +231,13 @@ func (r *Runtime) Err() error            { r.mu.Lock(); defer r.mu.Unlock(); ret
 
 func (r *Runtime) Health(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
-		return &healthError{category: "timeout", retryable: true}
+		return &healthError{category: "timeout"}
 	}
-	deadline := time.Now().Add(healthAttemptMax)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
+	timeout := r.healthTimeout
+	if timeout <= 0 {
+		timeout = healthAttemptMax
 	}
-	attemptCtx, cancel := context.WithDeadline(ctx, deadline)
+	attemptCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(attemptCtx, http.MethodGet, r.options.BaseURL, nil)
 	if err != nil {
@@ -176,6 +247,12 @@ func (r *Runtime) Health(ctx context.Context) error {
 	if err != nil {
 		if resp != nil && resp.Body != nil {
 			_ = resp.Body.Close()
+		}
+		if ctx.Err() != nil {
+			return &healthError{category: "timeout"}
+		}
+		if attemptCtx.Err() != nil {
+			return &healthError{category: "timeout", retryable: true}
 		}
 		return &healthError{category: "transport", retryable: true}
 	}
@@ -187,7 +264,22 @@ func (r *Runtime) Health(ctx context.Context) error {
 	}
 	readBytes, readErr := io.Copy(io.Discard, io.LimitReader(resp.Body, healthBodyMax+1))
 	closeErr := resp.Body.Close()
-	if readErr != nil || closeErr != nil || readBytes > healthBodyMax {
+	if readErr != nil {
+		if ctx.Err() != nil {
+			return &healthError{category: "timeout"}
+		}
+		if attemptCtx.Err() != nil {
+			return &healthError{category: "timeout", retryable: true}
+		}
+		return &healthError{category: "response_read"}
+	}
+	if ctx.Err() != nil {
+		return &healthError{category: "timeout"}
+	}
+	if attemptCtx.Err() != nil {
+		return &healthError{category: "timeout", retryable: true}
+	}
+	if closeErr != nil || readBytes > healthBodyMax {
 		return &healthError{category: "response_read"}
 	}
 	if resp.StatusCode == http.StatusOK {
@@ -203,73 +295,125 @@ func (r *Runtime) Health(ctx context.Context) error {
 }
 
 func (r *Runtime) Stop(ctx context.Context) error {
-	for {
-		r.mu.Lock()
-		if r.confirmed {
-			err := r.confirmedErr
-			r.mu.Unlock()
-			return err
-		}
-		if attempt := r.stopAttempt; attempt != nil {
-			r.mu.Unlock()
-			<-attempt
-			r.mu.Lock()
-			err := r.stopAttemptErr
-			r.mu.Unlock()
-			return err
-		}
-		attempt := make(chan struct{})
-		r.stopAttempt = attempt
-		command := r.command
-		if command == nil {
-			r.confirmed = true
-			r.confirmedErr = nil
-			r.stopAttemptErr = nil
-			r.stopAttempt = nil
-			close(attempt)
-			r.mu.Unlock()
-			return nil
-		}
-		r.stopping = true
-		pid := command.Process.Pid
-		done := isClosed(r.done)
-		r.mu.Unlock()
-
-		err := r.stopAttemptRun(ctx, pid, done)
-		r.mu.Lock()
-		if err == nil {
-			err = errors.Join(r.closeErr, r.unexpectedErr)
-			r.confirmed, r.confirmedErr = true, err
-		}
-		r.stopAttemptErr, r.stopAttempt = err, nil
-		close(attempt)
+	r.mu.Lock()
+	if r.confirmed {
+		err := r.confirmedErr
 		r.mu.Unlock()
 		return err
 	}
+	if attempt := r.stopAttempt; attempt != nil {
+		r.mu.Unlock()
+		return attempt.wait(ctx)
+	}
+	attempt := &stopAttempt{done: make(chan struct{})}
+	r.stopAttempt = attempt
+	command := r.command
+	if command == nil {
+		r.confirmed = true
+		r.confirmedErr = nil
+		attempt.err = nil
+		r.stopAttempt = nil
+		close(attempt.done)
+		r.mu.Unlock()
+		return nil
+	}
+	pid := command.Process.Pid
+	r.mu.Unlock()
+
+	stopProtocolErr := r.stopAttemptRun(ctx, pid)
+	r.mu.Lock()
+	err := joinStopErrors(stopProtocolErr, r.residualKillErr, r.closeErr, r.unexpectedErr)
+	if stopProtocolErr == nil {
+		r.confirmed, r.confirmedErr = true, err
+	}
+	attempt.err, r.stopAttempt = err, nil
+	close(attempt.done)
+	r.mu.Unlock()
+	return err
 }
 
-func (r *Runtime) stopAttemptRun(ctx context.Context, pid int, done bool) error {
-	if !done {
-		if err := r.signalGroup(pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
-			return fmt.Errorf("terminate managed SGLang process group: %w", err)
+func (r *Runtime) stopAttemptRun(ctx context.Context, pid int) error {
+	signaled, err := r.signalOwned(pid, syscall.SIGTERM)
+	if err != nil {
+		return err
+	}
+	if !signaled {
+		if err := waitForDone(ctx, r.done); err != nil {
+			return r.forceCleanup(ctx, pid)
+		}
+		return r.confirmProcessGroupAbsent(ctx, pid)
+	}
+	select {
+	case <-r.done:
+	case <-ctx.Done():
+		return r.forceCleanup(ctx, pid)
+	}
+	return r.confirmProcessGroupAbsent(ctx, pid)
+}
+
+func (r *Runtime) forceCleanup(ctx context.Context, pid int) error {
+	if _, err := r.signalOwned(pid, syscall.SIGKILL); err != nil {
+		return err
+	}
+	confirmationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), forcedProcessWait)
+	defer cancel()
+	if err := waitForDone(confirmationCtx, r.done); err != nil {
+		return errors.New("managed SGLang process did not exit after SIGKILL")
+	}
+	return r.confirmProcessGroupAbsent(confirmationCtx, pid)
+}
+
+func waitForDone(ctx context.Context, done <-chan struct{}) error {
+	select {
+	case <-done:
+		return nil
+	default:
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (r *Runtime) signalOwned(pid int, signal syscall.Signal) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.exitObserved || isClosed(r.done) {
+		return false, nil
+	}
+	r.stopping = true
+	err := r.signalGroup(pid, signal)
+	if signal == syscall.SIGKILL && (err == nil || errors.Is(err, syscall.ESRCH)) {
+		r.killIssued = true
+	}
+	if err != nil && !errors.Is(err, syscall.ESRCH) {
+		if signal == syscall.SIGTERM {
+			return true, fmt.Errorf("terminate managed SGLang process group: %w", err)
+		}
+		return true, fmt.Errorf("kill managed SGLang process group: %w", err)
+	}
+	return true, nil
+}
+
+func (r *Runtime) confirmProcessGroupAbsent(ctx context.Context, pid int) error {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		err := r.probeGroup(pid)
+		if errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("probe managed SGLang process group: %w", err)
 		}
 		select {
-		case <-r.done:
 		case <-ctx.Done():
-			if err := r.signalGroup(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-				return fmt.Errorf("kill managed SGLang process group: %w", err)
-			}
-			select {
-			case <-r.done:
-			case <-time.After(forcedProcessWait):
-				return errors.New("managed SGLang process did not exit after SIGKILL")
-			}
+			return fmt.Errorf("managed SGLang process group absence was not confirmed: %w", ctx.Err())
+		case <-ticker.C:
 		}
 	}
-	if !r.processGroupAbsent(pid) {
-		return errors.New("managed SGLang process group absence was not confirmed")
-	}
-	return nil
 }
 
 func isClosed(ch <-chan struct{}) bool {
@@ -280,23 +424,35 @@ func isClosed(ch <-chan struct{}) bool {
 		return false
 	}
 }
-func (r *Runtime) processGroupAbsent(pid int) bool {
-	deadline := time.NewTimer(forcedProcessWait)
-	defer deadline.Stop()
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
+
+func observeProcessExit(pid int) error {
 	for {
-		err := r.probeGroup(pid)
-		if errors.Is(err, syscall.ESRCH) {
-			return true
+		err := unix.Waitid(unix.P_PID, pid, &unix.Siginfo{}, unix.WEXITED|unix.WNOWAIT, nil)
+		if errors.Is(err, unix.EINTR) {
+			continue
 		}
-		if err != nil {
-			return false
-		}
-		select {
-		case <-deadline.C:
-			return false
-		case <-ticker.C:
-		}
+		return err
 	}
+}
+
+func childEnvironment(environ []string, credentialEnv, executableDir string) []string {
+	filtered := make([]string, 0, len(environ)+1)
+	pathValue := ""
+	for _, entry := range environ {
+		name, value, found := strings.Cut(entry, "=")
+		if credentialEnv != "" && found && name == credentialEnv {
+			continue
+		}
+		if found && name == "PATH" {
+			pathValue = value
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	if credentialEnv == "PATH" || pathValue == "" {
+		pathValue = executableDir
+	} else {
+		pathValue = executableDir + string(os.PathListSeparator) + pathValue
+	}
+	return append(filtered, "PATH="+pathValue)
 }

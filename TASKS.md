@@ -1,5 +1,116 @@
 # ARIES Tasks
 
+## R18 — Managed SGLang shutdown and credential isolation hardening
+
+1. [x] Keep the process-group leader unreaped through a final observer-owned
+   KILL sweep, avoid duplicate KILL after successful escalation, and surface
+   residual cleanup failures alongside protocol, close, and unexpected-exit
+   errors.
+2. [x] Let coalesced stop callers detach on their own cancellation, honor caller
+   contexts during normal reap and absence confirmation, and bound forced reap
+   and confirmation with one fresh five-second context.
+3. [x] Remove the configured credential environment entry from the managed
+   child without removing prefix-neighbor variables or the executable-first
+   PATH contract.
+4. [x] Expand strict native YAML boundary and checked-in configuration coverage,
+   and document the graceful plus forced shutdown budgets.
+
+Cycle-2 review evidence:
+
+- Startup readiness retries now observe runtime exit during the injected retry
+  sleep, publish the runtime's sanitized exit error, join the bounded watcher,
+  and never issue another health request; deterministic and 200-iteration race
+  regressions lock the handoff.
+- SGLang stop results structurally distinguish an unexpected-exit-only result
+  from cleanup, protocol, residual-KILL, and log-close failures without changing
+  the five-method consumer interface. Application lifecycle logs therefore emit
+  `unexpected_exit` plus `stopped` after a naturally exited, positively cleaned
+  managed process while preserving the full joined error.
+- Documentation distinguishes ARIES structured lifecycle logs, which never
+  record environment values, from private child stdout/stderr, which may contain
+  non-credential values emitted by the child; the configured credential is
+  removed from the child environment before start.
+
+## R17 — Post-runtime-refactor modularity audit and dead-code pruning
+
+Cleanup plan, in evidence-first order:
+
+1. [x] Confirm the refactor retains exactly four Runner roles, explicit command
+   switches, the documented `cmd/aries -> internal/app -> pkg/runner` dependency
+   direction, and the required lifecycle/isolation regressions.
+2. [x] Prove every proposed deletion has no production caller, import
+   obligation, or documented current contract; preserve boundary validators
+   that protect configuration, ownership, credentials, isolation, or cleanup.
+3. [x] Delete only the unused `pkg/model/sglang` chat request/response surface
+   and its same-package tests while retaining live model discovery, bounded
+   failure categories, URL handling, credential clearing, and HTTP mechanics.
+4. [x] Run focused unit, race, vet, package-DAG, architecture, lifecycle, and
+   diff checks, then the full release matrix and leak/process/secret checks.
+5. [x] Create this audit and cleanup as a standalone commit after `62d98de`.
+
+Initial audit evidence:
+
+- The only references to exported `Message`, `ChatRequest`, `ChatResponse`, and
+  `Client.Chat` are their declarations/implementation and same-package tests;
+  no production package imports or documentation requires that API.
+- `Client.Models`, `Failure` and its categories, `NormalizeBaseURL`, `New`,
+  `Close`, and the shared request/response mechanics remain used by application
+  preflight and must stay.
+- `pkg/runner` still declares only `Benchmark`, `AgentHarness`, `ToolSandbox`,
+  and `ToolBridge` as substitutable roles. `Sandbox` remains the live capability
+  returned by `ToolSandbox`, not a fifth role.
+- `cmd/aries/wiring.go` retains explicit switches for those four roles and the
+  model backend. Application orchestration remains under `internal/app`; no
+  registration, factory, plugin, reflection, or DI layer is warranted.
+
+Rejected candidates and protected boundaries:
+
+- Do not consolidate explicit switches or introduce a generic deployment or
+  runtime registry; the direct switches are the intended extension seams.
+- Do not remove or relax strict profile/backend, URL, native-runtime,
+  ownership, resource, verifier-secrecy, credential, lifecycle, revocation, or
+  positive-absence validation. Those checks defend runtime boundaries rather
+  than merely rejecting awkward input.
+- Do not prune live SGLang model discovery, failure classification, client
+  credential ownership, URL normalization, or HTTP safety mechanics.
+- Do not perform formatting-only movement, speculative abstraction, or add a
+  dependency; no further modularity defect or dead production surface is
+  evidenced.
+
+Completion evidence:
+
+- Removing the chat surface deleted three exported data types, one exported
+  method, its two dedicated contract tests, chat-only assertions from two
+  shared client tests, and the now-unused test JSON import. No production
+  reference remains.
+- The post-refactor anti-slop pass rejects ambiguous managed-runtime health
+  URLs (including a literal trailing fragment marker), removes dead runtime,
+  preflight, and test state, and directly locks health classification and
+  bounds, coalesced concurrent shutdown, private/exclusive artifacts,
+  partial-start cleanup, and the concrete managed-runtime application
+  lifecycle.
+- The follow-up ownership audit closes the exit-observation/PID-reuse signal
+  window with non-reaping `waitid`, serializes TERM/KILL against observed exit,
+  preserves each coalesced stop attempt's immutable result, distinguishes
+  retryable per-attempt health timeouts from terminal caller cancellation, and
+  removes the unused exported configuration model alias.
+- The final simplification removes redundant exit-intention and observer-hook
+  state, flattens the single-pass stop path, and replaces scheduler-timing
+  assertions with deterministic production-attempt, signal-ownership, and
+  reap barriers.
+- `go list -deps ./...` and `go vet` pass across all 14 packages. The dependency
+  inventory keeps concrete roles separated, with `internal/app` consuming
+  `pkg/runner` and the SGLang model-discovery client while the runtime driver
+  remains independent of application orchestration.
+- Focused unit and race suites pass for `pkg/model/sglang`, `internal/app`,
+  `internal/modelruntime/sglang`, `cmd/aries`, and `pkg/runner`, covering the
+  explicit switches, runtime lifecycle, model preflight, and Runner isolation
+  gates.
+- After clearing the Go test cache, `make build`, `make test`,
+  `make test-race`, `make lint`, and `make integration` all pass. Post-suite
+  inspection finds no ARIES-managed container, network, volume, SGLang process,
+  SSH helper process, staged credential, tracked key, or secret-shaped content.
+
 ## R16 — Modular managed model runtimes and normalized profiles
 
 1. [x] Reduce `cmd/aries` to CLI process concerns and explicit constructor
@@ -13,7 +124,7 @@
    `model.id/base_url/api_key_env` schema in every checked-in profile.
 4. [x] Preserve the four Runner roles, positive cleanup, verifier secrecy,
    exact argv, private runtime logs, and credential handling.
-5. [ ] Complete the separate post-refactor extensibility/dead-code audit in its
+5. [x] Complete the separate post-refactor extensibility/dead-code audit in its
    own commit.
 
 ## R15 — Run-scoped model runtime lifecycle
