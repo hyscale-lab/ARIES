@@ -43,6 +43,23 @@ func TestNormalizedRuntimeSchema(t *testing.T) {
 	}
 }
 
+func TestMonitorGPUIndicesAreExplicitAndUnique(t *testing.T) {
+	withGPUs := strings.Replace(validConfig, `"benchmark":`, `"monitor":{"gpu_indices":[0,2]},"benchmark":`, 1)
+	cfg, err := Decode(strings.NewReader(withGPUs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Monitor.GPUIndices) != 2 || cfg.Monitor.GPUIndices[0] != 0 || cfg.Monitor.GPUIndices[1] != 2 {
+		t.Fatalf("monitor = %#v", cfg.Monitor)
+	}
+	for _, indices := range []string{`[-1]`, `[0,0]`} {
+		input := strings.Replace(validConfig, `"benchmark":`, `"monitor":{"gpu_indices":`+indices+`},"benchmark":`, 1)
+		if _, err := Decode(strings.NewReader(input)); err == nil {
+			t.Fatalf("accepted gpu_indices %s", indices)
+		}
+	}
+}
+
 func TestRejectsLegacyRuntimeFields(t *testing.T) {
 	cases := map[string]string{
 		"sglang_file":    strings.Replace(validConfig, `"versions_file":"../configs/versions.json",`, `"versions_file":"../configs/versions.json","sglang_file":"native.yaml",`, 1),
@@ -186,6 +203,7 @@ func TestDecodeVersionsValidation(t *testing.T) {
 func TestDecodeRejectsInvalidGenericFields(t *testing.T) {
 	cases := []string{
 		strings.Replace(validConfig, `"type":"docker"`, `"type":"docker","future":true`, 1),
+		strings.Replace(validConfig, `"benchmark":`, `"monitor":{"future":true},"benchmark":`, 1),
 		strings.Replace(validConfig, `"tasks":["fix-git"]`, `"tasks":[]`, 1),
 		strings.Replace(validConfig, `"name":"test-run"`, `"name":"../escape"`, 1),
 		strings.Replace(validConfig, "DEEPSEEK_API_KEY", "not-valid", 1),

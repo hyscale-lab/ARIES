@@ -115,7 +115,7 @@ func TestRecorderDerivesCPUAndWritesPortablePrivateArtifacts(t *testing.T) {
 		t.Fatalf("positive CPU components = %#v", seenPositive)
 	}
 	index := readIndexStrict(t, report.LogPaths[1])
-	if index.SchemaVersion != 2 || index.SampleCount != uint64(len(samples)) || len(index.Components) != 2 {
+	if index.SchemaVersion != 3 || index.SampleCount != uint64(len(samples)) || len(index.Components) != 2 {
 		t.Fatalf("index = %+v", index)
 	}
 	for _, path := range append([]string{filepath.Dir(report.LogPaths[0])}, report.LogPaths...) {
@@ -130,6 +130,42 @@ func TestRecorderDerivesCPUAndWritesPortablePrivateArtifacts(t *testing.T) {
 		if info.Mode().Perm() != want {
 			t.Fatalf("mode %s = %o, want %o", path, info.Mode().Perm(), want)
 		}
+	}
+}
+
+func TestRecorderWritesGPUResourceMetrics(t *testing.T) {
+	observed := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	utilization := 87.5
+	memoryUtilization := 41.0
+	power := 312.25
+	temperature := 64.0
+	source := &fakeSource{sample: func(context.Context, int) ([]core.ResourceReading, error) {
+		return []core.ResourceReading{{
+			TaskID: "fix-git", Component: "gpu", RuntimeID: "GPU-abc", RuntimeName: "NVIDIA H100 NVL",
+			ObservedAt: observed, GPU: &core.GPUResourceReading{
+				Index: 0, UUID: "GPU-abc", UtilizationPercent: &utilization,
+				MemoryUtilizationPercent: &memoryUtilization,
+				MemoryUsageBytes:         12 << 30, MemoryTotalBytes: 94 << 30,
+				PowerWatts: &power, TemperatureCelsius: &temperature,
+			},
+		}}, nil
+	}}
+	recorder := newTestRecorder(t, source, filepath.Join(t.TempDir(), "run"), time.Hour)
+	if err := recorder.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	reports, err := recorder.Stop(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	samples := readSamplesStrict(t, reports["fix-git"].LogPaths[0])
+	if len(samples) != 1 || samples[0].GPU == nil {
+		t.Fatalf("samples = %#v", samples)
+	}
+	gpu := samples[0].GPU
+	if gpu.Index != 0 || gpu.UUID != "GPU-abc" || gpu.UtilizationPercent == nil || *gpu.UtilizationPercent != utilization ||
+		gpu.MemoryUsageBytes != 12<<30 || gpu.MemoryTotalBytes != 94<<30 || gpu.PowerWatts == nil || *gpu.PowerWatts != power {
+		t.Fatalf("gpu = %#v", gpu)
 	}
 }
 

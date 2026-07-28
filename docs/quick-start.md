@@ -166,6 +166,9 @@ The checked-in profile uses the following external runtime and model settings:
 
 ```json
 {
+  "monitor": {
+    "gpu_indices": [0]
+  },
   "runtime": {
     "backend": "sglang",
     "mode": "external",
@@ -210,6 +213,9 @@ following runtime and model settings in the copied profile:
 
 ```json
 {
+  "monitor": {
+    "gpu_indices": [0]
+  },
   "runtime": {
     "backend": "sglang",
     "mode": "managed",
@@ -234,6 +240,13 @@ the SGLang environment, and both timeout values must be positive Go durations.
 `model.base_url` must use the YAML port and end exactly in `/v1`;
 `model.id` must equal the YAML `served-model-name`; and `model.api_key_env`
 names the environment variable read by ARIES and rendered into OpenClaw.
+
+`monitor.gpu_indices` is an optional list of unique, non-negative physical GPU
+indices. When present, ARIES requires `nvidia-smi`, samples exactly those host
+devices alongside the task and harness containers, and writes the measurements
+to each occurrence's `monitor/resources.jsonl`. Monitoring does not set
+`CUDA_VISIBLE_DEVICES` or allocate a GPU; configure SGLang to use the same
+devices.
 
 Do not start `sglang.launch_server` separately in this mode. ARIES passes the
 referenced YAML using the exact arguments
@@ -299,9 +312,12 @@ when applicable:
 
 ```sh
 run_dir="$(ls -1dt runs/*-openclaw-tb2-fix-git-sglang | head -1)"
+task_dir="$(find "$run_dir" -mindepth 1 -maxdepth 1 -type d -name 'fix-git*' | head -1)"
 cat "$run_dir/live-validation.json"
 cat "$run_dir/run-result.json"
 cat "$run_dir/aries.log"
+jq 'select(.component == "gpu")' "$task_dir/monitor/resources.jsonl"
+cat "$task_dir/monitor/index.json"
 test ! -d "$run_dir/sglang" || ls -l "$run_dir/sglang"
 ```
 
@@ -365,6 +381,9 @@ run log.
 - **Managed SGLang exits early:** confirm that `runtime.config.executable` is
   the Python executable from the SGLang environment and that the selected GPU
   has enough free memory.
+- **GPU monitor error:** confirm `nvidia-smi` is available and every configured
+  `monitor.gpu_indices` entry exists. GPU indices must be unique and
+  non-negative.
 - **Unknown task or invalid task image:** choose a task directory from the
   pinned checkout and ensure its `task.toml` declares a valid explicit image
   tag. Digest-bearing or implicit-`latest` task references are rejected.

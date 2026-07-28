@@ -14,6 +14,8 @@ import (
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
 	openclawharness "github.com/hyscale-lab/aries/pkg/harness/openclaw"
+	"github.com/hyscale-lab/aries/pkg/monitor"
+	nvidiamonitor "github.com/hyscale-lab/aries/pkg/monitor/nvidia"
 	"github.com/hyscale-lab/aries/pkg/runner"
 	dockersandbox "github.com/hyscale-lab/aries/pkg/sandbox/docker"
 	"github.com/sirupsen/logrus"
@@ -127,10 +129,39 @@ func newSandbox(cfg config.Config, outputRoot, runID, occurrenceID string, logge
 		if err != nil {
 			return app.SandboxInstance{}, errors.Join(fmt.Errorf("construct Docker resource source: %w", err), manager.Close())
 		}
-		return app.SandboxInstance{Sandbox: manager, Resources: source, Close: manager.Close}, nil
+		var resources monitor.ResourceSource = source
+		if len(cfg.Monitor.GPUIndices) != 0 {
+			gpuSource, err := nvidiamonitor.NewSource(nvidiamonitor.Options{TaskID: occurrenceID, GPUIndices: cfg.Monitor.GPUIndices})
+			if err != nil {
+				return app.SandboxInstance{}, errors.Join(fmt.Errorf("construct NVIDIA resource source: %w", err), source.Close(), manager.Close())
+			}
+			resources = &combinedResourceSource{container: source, gpu: gpuSource}
+		}
+		return app.SandboxInstance{Sandbox: manager, Resources: resources, Close: manager.Close}, nil
 	default:
 		return app.SandboxInstance{}, fmt.Errorf("unsupported sandbox type %q", cfg.Sandbox.Type)
 	}
+}
+
+type combinedResourceSource struct {
+	container monitor.ResourceSource
+	gpu       monitor.ResourceSource
+}
+
+func (source *combinedResourceSource) Sample(ctx context.Context) ([]core.ResourceReading, error) {
+	containerReadings, err := source.container.Sample(ctx)
+	if err != nil {
+		return nil, err
+	}
+	gpuReadings, err := source.gpu.Sample(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return append(containerReadings, gpuReadings...), nil
+}
+
+func (source *combinedResourceSource) Close() error {
+	return errors.Join(source.gpu.Close(), source.container.Close())
 }
 
 func newBridge(cfg config.Config, outputRoot string, logger *logrus.Logger) (runner.ToolBridge, error) {

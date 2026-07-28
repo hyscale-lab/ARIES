@@ -32,6 +32,7 @@ type Config struct {
 	Runtime       RuntimeConfig    `json:"runtime"`
 	Model         ProfileModel     `json:"model"`
 	Execution     ExecutionConfig  `json:"execution,omitempty"`
+	Monitor       MonitorConfig    `json:"monitor,omitempty"`
 	OutputDir     string           `json:"output_dir"`
 	Versions      Versions         `json:"-"`
 	Overrides     RuntimeOverrides `json:"-"`
@@ -42,6 +43,10 @@ type ExecutionConfig struct {
 	Concurrency  int           `json:"concurrency"`
 	LoopDuration string        `json:"loop_duration,omitempty"`
 	Loop         time.Duration `json:"-"`
+}
+
+type MonitorConfig struct {
+	GPUIndices []int `json:"gpu_indices,omitempty"`
 }
 
 type RuntimeConfig struct {
@@ -279,6 +284,16 @@ func (c *Config) validate() error {
 			return errors.New("execution.loop_duration must be a positive Go duration")
 		}
 		c.Execution.Loop = loop
+	}
+	seenGPU := make(map[int]struct{}, len(c.Monitor.GPUIndices))
+	for _, index := range c.Monitor.GPUIndices {
+		if index < 0 {
+			return errors.New("monitor.gpu_indices must contain only non-negative indices")
+		}
+		if _, exists := seenGPU[index]; exists {
+			return errors.New("monitor.gpu_indices must not contain duplicates")
+		}
+		seenGPU[index] = struct{}{}
 	}
 	checks := []struct {
 		name  string

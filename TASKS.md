@@ -1,5 +1,27 @@
 # ARIES Tasks
 
+## R19 — Explicit NVIDIA GPU monitoring
+
+1. [x] Reuse the existing occurrence-scoped Recorder lifecycle and
+   `ResourceSource` boundary rather than adding a Runner role or independent
+   telemetry lifecycle.
+2. [x] Add strict optional `monitor.gpu_indices` configuration and select GPU0
+   in the checked-in local SGLang profile.
+3. [x] Query selected devices through bounded exact `nvidia-smi` arguments and
+   retain UUID, utilization, memory, power, and temperature in schema-version-3
+   private monitor artifacts.
+4. [x] Run focused, race, full release, real-GPU sampling, and cleanup checks.
+
+Completion evidence:
+
+- The production NVIDIA source sampled GPU0 on an H100 NVL and returned its
+  stable UUID plus utilization, memory, power, and temperature.
+- The production Recorder retained four real GPU samples in a private
+  schema-version-3 JSONL/index pair with successful observer status.
+- `make build`, `make test`, `make test-race`, `make lint`, and
+  `make integration` pass. The checked-in SGLang profile setup succeeds, and
+  post-suite inspection finds no ARIES-managed container or network.
+
 ## R18 — Managed SGLang shutdown and credential isolation hardening
 
 1. [x] Keep the process-group leader unreaped through a final observer-owned

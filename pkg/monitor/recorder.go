@@ -289,9 +289,13 @@ func (recorder *Recorder) sample(ctx context.Context, second uint64, sampleTime 
 		}
 		key := reading.TaskID + "\x00" + reading.Component + "\x00" + reading.RuntimeID
 		present[key] = struct{}{}
-		cpuPercent, err := recorder.cpuPercent(key, reading)
-		if err != nil {
-			return err
+		cpuPercent := 0.0
+		if reading.GPU == nil {
+			var err error
+			cpuPercent, err = recorder.cpuPercent(key, reading)
+			if err != nil {
+				return err
+			}
 		}
 		artifact := recorder.artifacts[reading.TaskID]
 		if artifact == nil {
@@ -302,6 +306,7 @@ func (recorder *Recorder) sample(ctx context.Context, second uint64, sampleTime 
 			Component: reading.Component, RuntimeID: reading.RuntimeID, RuntimeName: reading.RuntimeName,
 			CPUUsageNanoseconds: reading.CPUUsageNanoseconds, CPUPercent: cpuPercent,
 			MemoryUsageBytes: reading.MemoryUsageBytes, MemoryLimitBytes: reading.MemoryLimitBytes,
+			GPU: reading.GPU,
 		}
 		if err := artifact.appendSample(sample, recorder.maxSamplesPerTask, recorder.maxFileBytes); err != nil {
 			return fmt.Errorf("record monitor sample for task %s: %w", reading.TaskID, err)
@@ -326,6 +331,29 @@ func (recorder *Recorder) validateReading(reading core.ResourceReading) error {
 	}
 	if reading.MemoryUsageBytes > maxMemoryBytes || reading.MemoryLimitBytes > maxMemoryBytes {
 		return errors.New("monitor memory measurement exceeds the bound")
+	}
+	if reading.GPU != nil {
+		if reading.GPU.Index < 0 || reading.GPU.UUID != reading.RuntimeID {
+			return errors.New("monitor GPU identity is invalid")
+		}
+		if reading.GPU.MemoryUsageBytes > maxMemoryBytes || reading.GPU.MemoryTotalBytes > maxMemoryBytes ||
+			reading.GPU.MemoryUsageBytes > reading.GPU.MemoryTotalBytes {
+			return errors.New("monitor GPU memory measurement is invalid")
+		}
+		for name, value := range map[string]*float64{
+			"utilization":        reading.GPU.UtilizationPercent,
+			"memory utilization": reading.GPU.MemoryUtilizationPercent,
+		} {
+			if value != nil && (math.IsNaN(*value) || math.IsInf(*value, 0) || *value < 0 || *value > 100) {
+				return fmt.Errorf("monitor GPU %s is invalid", name)
+			}
+		}
+		if value := reading.GPU.PowerWatts; value != nil && (math.IsNaN(*value) || math.IsInf(*value, 0) || *value < 0) {
+			return errors.New("monitor GPU power is invalid")
+		}
+		if value := reading.GPU.TemperatureCelsius; value != nil && (math.IsNaN(*value) || math.IsInf(*value, 0) || *value < -273.15) {
+			return errors.New("monitor GPU temperature is invalid")
+		}
 	}
 	return nil
 }

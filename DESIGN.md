@@ -23,6 +23,9 @@ Profile order, including duplicate weights, determines admission and result
 order. Each occurrence has an exact global execution ID for directories,
 labels, monitoring, and results. A configured loop duration bounds admissions,
 not cleanup: admitted occurrences always drain through the unchanged lifecycle.
+Optional explicit GPU indices add NVIDIA utilization, memory, power, and
+temperature samples to the same occurrence-scoped monitor artifacts without
+changing GPU allocation or the Runner lifecycle.
 
 Model selection is explicit through `runtime.backend`: `deepseek` retains its
 official bounded preflight, while `sglang` performs bounded exact model

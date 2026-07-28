@@ -48,9 +48,9 @@ type CommandResult struct {
 	Duration time.Duration `json:"duration"`
 }
 
-// ResourceReading is one runtime-neutral cumulative resource observation.
-// Concrete deployment packages collect these readings; monitor derives rates
-// and writes the shared artifact schema.
+// ResourceReading is one runtime-neutral resource observation. CPU usage is
+// cumulative; memory and optional GPU values are gauges. Concrete deployment
+// packages collect readings while monitor derives rates and writes artifacts.
 type ResourceReading struct {
 	TaskID              string
 	Component           string
@@ -60,6 +60,19 @@ type ResourceReading struct {
 	CPUUsageNanoseconds uint64
 	MemoryUsageBytes    uint64
 	MemoryLimitBytes    uint64
+	GPU                 *GPUResourceReading
+}
+
+// GPUResourceReading contains one device-level NVIDIA observation.
+type GPUResourceReading struct {
+	Index                    int      `json:"index"`
+	UUID                     string   `json:"uuid"`
+	UtilizationPercent       *float64 `json:"utilization_percent,omitempty"`
+	MemoryUtilizationPercent *float64 `json:"memory_utilization_percent,omitempty"`
+	MemoryUsageBytes         uint64   `json:"memory_usage_bytes"`
+	MemoryTotalBytes         uint64   `json:"memory_total_bytes"`
+	PowerWatts               *float64 `json:"power_watts,omitempty"`
+	TemperatureCelsius       *float64 `json:"temperature_celsius,omitempty"`
 }
 
 // ModelConfig identifies a remote OpenAI-compatible model without containing

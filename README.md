@@ -69,6 +69,9 @@ should not be forced through one universal transport.
   agent-timeout override used by the five-task example. Every checked-in
   profile declares `overrides_file`; the one-task profile sets it to `""` to
   disable overrides.
+- Optional `monitor.gpu_indices` selects host NVIDIA devices to sample through
+  `nvidia-smi`. The SGLang example selects GPU0. Monitoring records utilization,
+  memory, power, and temperature but does not allocate GPUs.
 
 To choose another subset, copy a profile and replace `benchmark.tasks` with
 task directory names from the pinned checkout. Task order and repeated entries
@@ -107,7 +110,9 @@ agent deadline. Task containers always receive ARIES-owned
   cumulative resource collection.
 - `pkg/bridge/openclawssh`: authenticated SSH-to-Docker-exec adaptation.
 - `pkg/harness/openclaw`: upstream OpenClaw container and generated config.
-- `pkg/monitor`: deployment-neutral resource rates and artifact recording.
+- `pkg/monitor`: deployment-neutral resource rates, source composition, and
+  artifact recording.
+- `pkg/monitor/nvidia`: selected host GPU sampling through `nvidia-smi`.
 
 Every run writes structured Logrus output to stderr and private `aries.log`.
 Task artifacts use readable paths such as

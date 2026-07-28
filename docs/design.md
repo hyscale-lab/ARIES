@@ -379,16 +379,24 @@ discovering only running containers with the exact run/task ownership labels
 and generic `aries.component=sandbox|harness` label, then reading cumulative
 CPU and memory counters through the Moby SDK. Concrete `aries.kind` labels are
 retained for identity validation, not component selection. The composition
-root chooses the resource source in the same explicit sandbox switch that
-chooses lifecycle execution. Future deployment packages can implement the same
-interface without changing the recorder or JSON schema.
+root chooses the Docker source in the same explicit sandbox switch that chooses
+lifecycle execution. When a profile supplies unique non-negative
+`monitor.gpu_indices`, it composes a second source from `pkg/monitor/nvidia`.
+That source invokes `nvidia-smi` with exact arguments for only the selected host
+devices and reports device UUID identity, utilization, memory utilization and
+capacity, power, and temperature. It observes but never allocates GPUs or
+changes `CUDA_VISIBLE_DEVICES`. The generic monitor imports neither Docker nor
+NVIDIA-specific code.
 
 The recorder derives CPU percentage from successive cumulative CPU and wall
 clock readings. The first reading for each runtime is a zero-percent baseline;
 later readings reflect real deltas. This fixes the old all-zero behavior caused
 by requesting one-shot Docker stats without a previous sample. Samples use
-schema version 2 with generic runtime identity, cumulative CPU nanoseconds,
-derived CPU percentage, and memory usage/limit.
+schema version 3 with generic runtime identity, cumulative CPU nanoseconds,
+derived CPU percentage, and memory usage/limit. GPU resource lines use
+component `gpu`, the device UUID as runtime identity, and a nested `gpu` object
+for the selected device metrics. The same private JSONL and bounded index cover
+container and GPU samples.
 
 A container may exit between a running list snapshot, inspection, and stats
 while the Runner performs cleanup. After identity and ownership validation,
@@ -404,7 +412,10 @@ local task sandbox and harness.
 
 Monitoring never controls lifecycle or scoring. Observer start, sampling, or
 stop failure is reported separately and does not replace harness, evaluation,
-or cleanup outcomes.
+or cleanup outcomes. A configured GPU monitor is explicit and fail-closed:
+missing `nvidia-smi` fails source construction, while absent selected devices,
+malformed output, or command failure fails the observer rather than producing
+misleading GPU evidence.
 
 Each run has a private output directory named with its experiment profile, for
 example `20260722T133727.613764127Z-openclaw-tb2-five-deepseek`. Artifacts are grouped under

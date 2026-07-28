@@ -12,28 +12,31 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/hyscale-lab/aries/pkg/core"
 )
 
 const (
 	artifactDirectoryMode = 0o700
 	artifactFileMode      = 0o600
-	indexSchemaVersion    = 2
+	indexSchemaVersion    = 3
 	maxCoverageEntries    = 32
 )
 
 // ResourceSample is one bounded resource observation written to resources.jsonl.
 type ResourceSample struct {
-	Sequence            uint64  `json:"sequence"`
-	Second              uint64  `json:"second"`
-	Time                string  `json:"time"`
-	TaskID              string  `json:"task_id"`
-	Component           string  `json:"component"`
-	RuntimeID           string  `json:"runtime_id"`
-	RuntimeName         string  `json:"runtime_name"`
-	CPUUsageNanoseconds uint64  `json:"cpu_usage_nanoseconds"`
-	CPUPercent          float64 `json:"cpu_percent"`
-	MemoryUsageBytes    uint64  `json:"memory_usage_bytes"`
-	MemoryLimitBytes    uint64  `json:"memory_limit_bytes"`
+	Sequence            uint64                   `json:"sequence"`
+	Second              uint64                   `json:"second"`
+	Time                string                   `json:"time"`
+	TaskID              string                   `json:"task_id"`
+	Component           string                   `json:"component"`
+	RuntimeID           string                   `json:"runtime_id"`
+	RuntimeName         string                   `json:"runtime_name"`
+	CPUUsageNanoseconds uint64                   `json:"cpu_usage_nanoseconds"`
+	CPUPercent          float64                  `json:"cpu_percent"`
+	MemoryUsageBytes    uint64                   `json:"memory_usage_bytes"`
+	MemoryLimitBytes    uint64                   `json:"memory_limit_bytes"`
+	GPU                 *core.GPUResourceReading `json:"gpu,omitempty"`
 }
 
 // Index is the bounded summary written beside a task's resource samples.
@@ -52,7 +55,7 @@ type Index struct {
 	Components           []ComponentCoverage `json:"components"`
 }
 
-// ComponentCoverage records which concrete container IDs contributed samples.
+// ComponentCoverage records which concrete runtime IDs contributed samples.
 type ComponentCoverage struct {
 	Component   string `json:"component"`
 	RuntimeID   string `json:"runtime_id"`

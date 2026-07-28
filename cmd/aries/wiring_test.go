@@ -16,6 +16,7 @@ import (
 	"github.com/hyscale-lab/aries/internal/app"
 	runtimesglang "github.com/hyscale-lab/aries/internal/modelruntime/sglang"
 	"github.com/hyscale-lab/aries/pkg/config"
+	"github.com/hyscale-lab/aries/pkg/core"
 )
 
 func TestDispatchAcceptsOnlyExactCommandGrammar(t *testing.T) {
@@ -175,6 +176,42 @@ func TestManagedSGLangReceivesConfiguredCredentialEnvironmentName(t *testing.T) 
 	if !strings.Contains(string(source), "CredentialEnv: cfg.Model.APIKeyEnv") {
 		t.Fatal("managed SGLang credential environment name is not forwarded")
 	}
+}
+
+func TestCombinedResourceSourceSamplesAndClosesBothSources(t *testing.T) {
+	firstErr := errors.New("first close")
+	secondErr := errors.New("second close")
+	container := &wiringResourceSource{readings: []core.ResourceReading{{RuntimeID: "container"}}, closeErr: firstErr}
+	gpu := &wiringResourceSource{readings: []core.ResourceReading{{RuntimeID: "gpu"}}, closeErr: secondErr}
+	source := &combinedResourceSource{container: container, gpu: gpu}
+	readings, err := source.Sample(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(readings) != 2 || readings[0].RuntimeID != "container" || readings[1].RuntimeID != "gpu" {
+		t.Fatalf("readings = %#v", readings)
+	}
+	if err := source.Close(); !errors.Is(err, firstErr) || !errors.Is(err, secondErr) {
+		t.Fatalf("close error = %v", err)
+	}
+	if container.closes != 1 || gpu.closes != 1 {
+		t.Fatalf("closes = container %d gpu %d", container.closes, gpu.closes)
+	}
+}
+
+type wiringResourceSource struct {
+	readings []core.ResourceReading
+	closeErr error
+	closes   int
+}
+
+func (source *wiringResourceSource) Sample(context.Context) ([]core.ResourceReading, error) {
+	return source.readings, nil
+}
+
+func (source *wiringResourceSource) Close() error {
+	source.closes++
+	return source.closeErr
 }
 
 func TestBackendPreparationRejectsNativeMismatchBeforeArtifacts(t *testing.T) {
