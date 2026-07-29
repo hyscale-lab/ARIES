@@ -176,7 +176,7 @@ func failingRunWiring(runtime ModelRuntime, events *[]string, runErr error) Wiri
 		NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
 			return HarnessInstance{}, nil
 		},
-		NewSandbox: func(config.Config, string, string, string, *logrus.Logger) (SandboxInstance, error) {
+		NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
 			return SandboxInstance{}, nil
 		},
 		NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) { return nil, nil },
@@ -197,6 +197,53 @@ func TestBackendPreparationPrecedesAllEffects(t *testing.T) {
 	}
 	if _, err := os.Stat(runs); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("output created: %v", err)
+	}
+}
+
+func TestRunForwardsFreshPreparedGPUIndicesToEveryOccurrence(t *testing.T) {
+	t.Setenv(deepSeekAPIKey, "synthetic-key")
+	profile := writeCommandProfile(t, filepath.Join(t.TempDir(), "runs"))
+	content, err := os.ReadFile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content = bytes.Replace(content, []byte(`"tasks":["a"]`), []byte(`"tasks":["a","a"]`), 1)
+	if err := os.WriteFile(profile, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	preparedGPUIndices := []int{4, 2}
+	sandboxCalls := 0
+	wiring := Wiring{
+		ValidateComponents: func(config.Config) error { return nil },
+		PrepareBackend: func(cfg config.Config, _ string) (PreparedBackend, error) {
+			return PreparedBackend{Model: cfg.CoreModel(), EffectiveGPUIndices: preparedGPUIndices}, nil
+		},
+		NewBenchmark: func(config.Config, string, string, string) (runner.Benchmark, error) {
+			return &oneTaskBenchmark{}, nil
+		},
+		NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
+			return HarnessInstance{Harness: &stubHarness{}, Close: func() error { return nil }}, nil
+		},
+		NewSandbox: func(_ config.Config, _, _, _ string, gpuIndices []int, _ *logrus.Logger) (SandboxInstance, error) {
+			sandboxCalls++
+			if !reflect.DeepEqual(gpuIndices, []int{4, 2}) {
+				t.Fatalf("sandbox call %d GPU indices = %v", sandboxCalls, gpuIndices)
+			}
+			gpuIndices[0] = 99
+			return SandboxInstance{Sandbox: &managedIntegrationSandbox{}, Resources: &stubResources{}, Close: func() error { return nil }}, nil
+		},
+		NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
+			return &stubBridge{}, nil
+		},
+	}
+	doer := &preflightDoer{t: t, replies: []preflightReply{{status: 200, body: `{"data":[{"id":"deepseek-v4-flash"}]}`}}}
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
+	if err := Run(context.Background(), profile, io.Discard, Dependencies{Logger: logger, PreflightClient: doer, Wiring: wiring}); err == nil || !strings.Contains(err.Error(), "observer report missing") {
+		t.Fatalf("run error = %v", err)
+	}
+	if sandboxCalls != 2 || !reflect.DeepEqual(preparedGPUIndices, []int{4, 2}) {
+		t.Fatalf("sandbox calls = %d, prepared GPU indices = %v", sandboxCalls, preparedGPUIndices)
 	}
 }
 
@@ -250,7 +297,7 @@ func TestUnsupportedComponentsAreRejectedImmediatelyOnRunAndSetup(t *testing.T) 
 						effects++
 						return HarnessInstance{}, nil
 					},
-					NewSandbox: func(config.Config, string, string, string, *logrus.Logger) (SandboxInstance, error) {
+					NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
 						effects++
 						return SandboxInstance{}, nil
 					},
@@ -384,7 +431,7 @@ func TestRuntimeExitCancelsAndDrainsRun(t *testing.T) {
 		return &oneTaskBenchmark{}, nil
 	}, NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
 		return HarnessInstance{Harness: h, Close: func() error { return nil }}, nil
-	}, NewSandbox: func(config.Config, string, string, string, *logrus.Logger) (SandboxInstance, error) {
+	}, NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
 		return SandboxInstance{Sandbox: &cancelSandbox{events: &events}, Resources: &stubResources{}, Close: func() error { return nil }}, nil
 	}, NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
 		return &cancelBridge{events: &events}, nil

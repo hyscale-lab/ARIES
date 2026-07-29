@@ -34,7 +34,7 @@ type Wiring struct {
 	PullImages           func(context.Context, []string) error
 	NewBenchmark         func(config.Config, string, string, string) (runner.Benchmark, error)
 	NewHarness           func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error)
-	NewSandbox           func(config.Config, string, string, string, *logrus.Logger) (SandboxInstance, error)
+	NewSandbox           func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error)
 	NewBridge            func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error)
 }
 
@@ -196,7 +196,7 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 		completed <- executeAndRecord(runCtx, func(executionCtx context.Context) (core.RunResult, error) {
 			return runProfile(executionCtx, cfg.Name, runID, cfg.Benchmark.Tasks, cfg.Execution.Concurrency, cfg.Execution.Loop,
 				func(taskCtx context.Context, occurrence taskOccurrence) (core.RunResult, error) {
-					experiment, err := buildTaskExperiment(cfg, prepared.Model, runID, outputRoot, occurrence.logicalID, occurrence.executionID, harnessLookup, logger, dependencies.Wiring)
+					experiment, err := buildTaskExperiment(cfg, prepared.Model, prepared.EffectiveGPUIndices, runID, outputRoot, occurrence.logicalID, occurrence.executionID, harnessLookup, logger, dependencies.Wiring)
 					if err != nil {
 						return core.RunResult{}, err
 					}
@@ -259,7 +259,7 @@ func resolveOutputRoot(root, runID string) (string, error) {
 	return outputRoot, nil
 }
 
-func buildTaskExperiment(cfg config.Config, model core.ModelConfig, runID, outputRoot, logicalID, occurrenceID string, apiKeyLookup func(string) ([]byte, bool), logger *logrus.Logger, wiring Wiring) (*experiment, error) {
+func buildTaskExperiment(cfg config.Config, model core.ModelConfig, effectiveGPUIndices []int, runID, outputRoot, logicalID, occurrenceID string, apiKeyLookup func(string) ([]byte, bool), logger *logrus.Logger, wiring Wiring) (*experiment, error) {
 	if logger == nil {
 		logger = logrus.StandardLogger()
 	}
@@ -274,7 +274,7 @@ func buildTaskExperiment(cfg config.Config, model core.ModelConfig, runID, outpu
 	if err != nil {
 		return nil, err
 	}
-	sandbox, err := wiring.NewSandbox(cfg, outputRoot, runID, occurrenceID, logger)
+	sandbox, err := wiring.NewSandbox(cfg, outputRoot, runID, occurrenceID, append([]int(nil), effectiveGPUIndices...), logger)
 	if err != nil {
 		return nil, errors.Join(err, closeOccurrenceClients(nil, harness.Close))
 	}

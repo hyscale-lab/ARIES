@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -133,7 +134,7 @@ func TestExternalSGLangPreparationReturnsNilRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if prepared.Runtime != nil || prepared.Model.Provider != "sglang" {
+	if prepared.Runtime != nil || prepared.Model.Provider != "sglang" || len(prepared.EffectiveGPUIndices) != 0 {
 		t.Fatalf("prepared=%#v", prepared)
 	}
 	if _, err := os.Stat(filepath.Join(root, "absent")); !os.IsNotExist(err) {
@@ -164,12 +165,38 @@ func TestPrepareBackendSelectsManagedSGLangRuntime(t *testing.T) {
 	if !ok {
 		t.Fatalf("runtime type = %T", prepared.Runtime)
 	}
-	indices, err := resolveRuntimeGPUIndices(cfg)
-	if err != nil || len(indices) != 1 || indices[0] != 0 {
-		t.Fatalf("GPU indices = %v, error = %v", indices, err)
+	if !reflect.DeepEqual(prepared.EffectiveGPUIndices, []int{0}) {
+		t.Fatalf("GPU indices = %v", prepared.EffectiveGPUIndices)
 	}
 	if _, err := os.Stat(output); !os.IsNotExist(err) {
 		t.Fatalf("preparation created output: %v", err)
+	}
+}
+
+func TestPrepareBackendPreservesExplicitGPUOrderAndOwnership(t *testing.T) {
+	root := t.TempDir()
+	native := filepath.Join(root, "native.yaml")
+	content := strings.Replace(nativeForWiring, "tensor-parallel-size: 1", "tensor-parallel-size: 2", 1)
+	if err := os.WriteFile(native, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	executable := filepath.Join(root, "python")
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{
+		Runtime: config.RuntimeConfig{Backend: "sglang", Mode: "managed", Config: config.RuntimeConfigValues{
+			ResolvedFile: native, Executable: executable, GPUIndices: []int{4, 2},
+		}},
+		Model: config.ProfileModel{ID: "Qwen/Qwen3-8B", BaseURL: "http://host:30000/v1", APIKeyEnv: "KEY"},
+	}
+	prepared, err := prepareBackend(cfg, filepath.Join(root, "output"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Runtime.Config.GPUIndices[0] = 99
+	if !reflect.DeepEqual(prepared.EffectiveGPUIndices, []int{4, 2}) {
+		t.Fatalf("prepared GPU indices = %v", prepared.EffectiveGPUIndices)
 	}
 }
 

@@ -174,7 +174,11 @@ func TestBuildTaskExperimentCreatesFreshFourRoleGraphs(t *testing.T) {
 			h := &stubHarness{}
 			return HarnessInstance{Harness: h, Close: func() error { return nil }}, nil
 		},
-		NewSandbox: func(config.Config, string, string, string, *logrus.Logger) (SandboxInstance, error) {
+		NewSandbox: func(_ config.Config, _, _, _ string, gpuIndices []int, _ *logrus.Logger) (SandboxInstance, error) {
+			if !reflect.DeepEqual(gpuIndices, []int{4, 2}) {
+				t.Fatalf("GPU indices = %v", gpuIndices)
+			}
+			gpuIndices[0] = 99
 			s := &stubToolSandbox{}
 			return SandboxInstance{Sandbox: s, Resources: &stubResources{}, Close: func() error { return nil }}, nil
 		},
@@ -182,16 +186,20 @@ func TestBuildTaskExperimentCreatesFreshFourRoleGraphs(t *testing.T) {
 	}
 	cfg := config.Config{Name: "x"}
 	model := core.ModelConfig{Provider: "deepseek", BaseURL: "https://example.invalid", Model: "m", APIKeyEnv: "KEY"}
-	first, err := buildTaskExperiment(cfg, model, "run", t.TempDir(), "a", "a-001", nil, nil, wiring)
+	preparedGPUIndices := []int{4, 2}
+	first, err := buildTaskExperiment(cfg, model, preparedGPUIndices, "run", t.TempDir(), "a", "a-001", nil, nil, wiring)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := buildTaskExperiment(cfg, model, "run", t.TempDir(), "a", "a-002", nil, nil, wiring)
+	second, err := buildTaskExperiment(cfg, model, preparedGPUIndices, "run", t.TempDir(), "a", "a-002", nil, nil, wiring)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if first.runner == second.runner || first.recorder == second.recorder {
 		t.Fatal("occurrences shared orchestration objects")
+	}
+	if !reflect.DeepEqual(preparedGPUIndices, []int{4, 2}) {
+		t.Fatalf("prepared GPU indices mutated: %v", preparedGPUIndices)
 	}
 	if err := first.close(); err != nil {
 		t.Fatal(err)
@@ -208,14 +216,14 @@ func TestBuildTaskExperimentUnwindsPartialConstruction(t *testing.T) {
 		NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
 			return HarnessInstance{Harness: &stubHarness{}, Close: func() error { events = append(events, "harness"); return errors.New("harness close") }}, nil
 		},
-		NewSandbox: func(config.Config, string, string, string, *logrus.Logger) (SandboxInstance, error) {
+		NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
 			return SandboxInstance{Sandbox: &stubToolSandbox{}, Resources: &stubResources{}, Close: func() error { events = append(events, "sandbox"); return errors.New("sandbox close") }}, nil
 		},
 		NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
 			return nil, errors.New("bridge construct")
 		},
 	}
-	_, err := buildTaskExperiment(config.Config{Name: "x"}, core.ModelConfig{}, "run", t.TempDir(), "a", "a-001", nil, nil, wiring)
+	_, err := buildTaskExperiment(config.Config{Name: "x"}, core.ModelConfig{}, nil, "run", t.TempDir(), "a", "a-001", nil, nil, wiring)
 	if err == nil || !strings.Contains(err.Error(), "bridge construct") || !strings.Contains(err.Error(), "sandbox close") || !strings.Contains(err.Error(), "harness close") {
 		t.Fatalf("err=%v", err)
 	}

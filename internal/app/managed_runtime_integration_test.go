@@ -76,7 +76,7 @@ func TestConcreteManagedRuntimeWrapsPreflightAndTaskLifecycle(t *testing.T) {
 		NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
 			return HarnessInstance{Harness: &stubHarness{}, Close: func() error { return nil }}, nil
 		},
-		NewSandbox: func(config.Config, string, string, string, *logrus.Logger) (SandboxInstance, error) {
+		NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
 			return SandboxInstance{Sandbox: &managedIntegrationSandbox{}, Resources: &stubResources{}, Close: func() error { return nil }}, nil
 		},
 		NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
@@ -168,7 +168,7 @@ func TestConcreteManagedRuntimeNaturalExitLogsStoppedAfterUnexpectedExit(t *test
 		NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
 			return HarnessInstance{Harness: &stubHarness{}, Close: func() error { return nil }}, nil
 		},
-		NewSandbox: func(config.Config, string, string, string, *logrus.Logger) (SandboxInstance, error) {
+		NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
 			return SandboxInstance{Sandbox: &managedIntegrationSandbox{}, Resources: &stubResources{}, Close: func() error { return nil }}, nil
 		},
 		NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {

@@ -1,5 +1,61 @@
 # ARIES Tasks
 
+## R21 — GPU metrics data-flow cleanup
+
+Cleanup plan, based on `8b4930c` and executed regression-first:
+
+1. [x] Lock managed implicit and explicit GPU selection plus defensive slice
+   ownership at backend preparation and occurrence construction.
+2. [x] Carry the effective selection through the existing run-scoped
+   `PreparedBackend` seam and give every occurrence a fresh copy.
+3. [x] Delete per-occurrence native YAML resolution and the ineffective
+   assignment to the by-value profile copy.
+4. [x] Re-audit Runner roles, validation, concrete package boundaries, and
+   cleanup ownership before the standalone cleanup commit.
+
+Audit and protected boundaries:
+
+- `prepareBackend` was the run-scoped owner of native SGLang validation and GPU
+  topology resolution, while `newSandbox` redundantly reopened and resolved the
+  same native file for every occurrence. `PreparedBackend` was the existing
+  narrow seam needed to reuse the result.
+- `pkg/runner` still defines exactly four substitutable roles: `Benchmark`,
+  `AgentHarness`, `ToolSandbox`, and `ToolBridge`. `Sandbox` remains the live
+  capability returned by `ToolSandbox`; monitoring remains Recorder-owned.
+- The cleanup retains explicit command switches and all strict profile,
+  native-runtime topology/index, NVIDIA argv/identity/count/metric, credential,
+  ownership, isolation, revocation, cleanup, and positive-absence validation.
+  No registry, factory, plugin, DI layer, generic deployment abstraction, or
+  dependency was added.
+- `combinedResourceSource` remains live and necessary to preserve the single
+  Recorder source lifecycle while sampling and closing container and GPU
+  sources. No additional production deletion was reference-proven.
+
+Implemented cleanup and pre-commit evidence:
+
+- `PreparedBackend.EffectiveGPUIndices` owns the resolved list. Runtime
+  construction receives a separate copy, and every `NewSandbox` invocation
+  receives a fresh copy. Explicit configured order remains intact for
+  `CUDA_VISIBLE_DEVICES`; the NVIDIA source retains its existing sorted query
+  and output normalization.
+- `resolveRuntimeGPUIndices`, its direct test use, the second native YAML load
+  and topology resolution, and the dead by-value profile assignment are gone.
+  Reference checks find one `LoadNativeConfig` and one `ResolveGPUIndices`, both
+  in backend preparation.
+- Focused application/command, backend, configuration, monitor, and NVIDIA
+  tests pass, including race tests. `git diff --check`, `go vet ./...`,
+  `go list -deps ./...`, explicit-composition tests, the four-role inventory,
+  and the fail-closed concrete-package direct-import graph pass.
+- `make build`, `make test`, `make test-race`, and `make lint` pass. The
+  deterministic integration suite reached its Docker-backed tests but could
+  not access `/var/run/docker.sock` in this worker environment; it failed only
+  with Docker permission-denied errors, so integration and Docker resource
+  absence remain explicit environment gaps rather than claimed passes.
+- Fail-closed host-process, tracked/staged/ignored key-path, and secret-shaped
+  working-diff checks pass. No managed SGLang or `aries-ssh` helper process was
+  found. The pre-commit status contains only the reviewed cleanup and this task
+  record; generated cache/build artifacts remain ignored.
+
 ## R20 — Managed SGLang GPU selection
 
 1. [x] Keep GPU selection inside the managed SGLang runtime configuration.

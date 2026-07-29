@@ -24,8 +24,9 @@ type retryableHealthError interface {
 }
 
 type PreparedBackend struct {
-	Model   core.ModelConfig
-	Runtime ModelRuntime
+	Model               core.ModelConfig
+	Runtime             ModelRuntime
+	EffectiveGPUIndices []int
 }
 
 func waitForRuntimeHealth(ctx context.Context, runtime ModelRuntime, sleep contextSleep) error {

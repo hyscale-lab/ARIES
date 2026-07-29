@@ -80,12 +80,11 @@ func prepareBackend(cfg config.Config, outputDir string) (app.PreparedBackend, e
 			if err != nil {
 				return app.PreparedBackend{}, fmt.Errorf("resolve managed SGLang GPUs: %w", err)
 			}
-			cfg.Runtime.Config.GPUIndices = gpuIndices
-			runtime, err := runtimesglang.New(runtimesglang.Options{Executable: cfg.Runtime.Config.Executable, ConfigPath: cfg.Runtime.Config.ResolvedFile, OutputDir: outputDir, BaseURL: cfg.Model.BaseURL, CredentialEnv: cfg.Model.APIKeyEnv, GPUIndices: cfg.Runtime.Config.GPUIndices})
+			runtime, err := runtimesglang.New(runtimesglang.Options{Executable: cfg.Runtime.Config.Executable, ConfigPath: cfg.Runtime.Config.ResolvedFile, OutputDir: outputDir, BaseURL: cfg.Model.BaseURL, CredentialEnv: cfg.Model.APIKeyEnv, GPUIndices: append([]int(nil), gpuIndices...)})
 			if err != nil {
 				return app.PreparedBackend{}, err
 			}
-			return app.PreparedBackend{Model: model, Runtime: runtime}, nil
+			return app.PreparedBackend{Model: model, Runtime: runtime, EffectiveGPUIndices: append([]int(nil), gpuIndices...)}, nil
 		default:
 			return app.PreparedBackend{}, fmt.Errorf("unsupported SGLang runtime mode %q", cfg.Runtime.Mode)
 		}
@@ -124,7 +123,7 @@ func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byt
 	}
 }
 
-func newSandbox(cfg config.Config, outputRoot, runID, occurrenceID string, logger *logrus.Logger) (app.SandboxInstance, error) {
+func newSandbox(cfg config.Config, outputRoot, runID, occurrenceID string, gpuIndices []int, logger *logrus.Logger) (app.SandboxInstance, error) {
 	switch cfg.Sandbox.Type {
 	case "docker":
 		manager, err := dockersandbox.New(dockersandbox.Options{OutputDir: outputRoot, Logger: logger})
@@ -136,10 +135,6 @@ func newSandbox(cfg config.Config, outputRoot, runID, occurrenceID string, logge
 			return app.SandboxInstance{}, errors.Join(fmt.Errorf("construct Docker resource source: %w", err), manager.Close())
 		}
 		var resources monitor.ResourceSource = source
-		gpuIndices, err := resolveRuntimeGPUIndices(cfg)
-		if err != nil {
-			return app.SandboxInstance{}, errors.Join(err, source.Close(), manager.Close())
-		}
 		if len(gpuIndices) != 0 {
 			gpuSource, err := nvidiamonitor.NewSource(nvidiamonitor.Options{TaskID: occurrenceID, GPUIndices: gpuIndices})
 			if err != nil {
@@ -150,26 +145,6 @@ func newSandbox(cfg config.Config, outputRoot, runID, occurrenceID string, logge
 		return app.SandboxInstance{Sandbox: manager, Resources: resources, Close: manager.Close}, nil
 	default:
 		return app.SandboxInstance{}, fmt.Errorf("unsupported sandbox type %q", cfg.Sandbox.Type)
-	}
-}
-
-func resolveRuntimeGPUIndices(cfg config.Config) ([]int, error) {
-	if cfg.Runtime.Mode != "managed" {
-		return nil, nil
-	}
-	switch cfg.Runtime.Backend {
-	case "sglang":
-		native, err := runtimesglang.LoadNativeConfig(cfg.Runtime.Config.ResolvedFile, cfg.Model.ID, cfg.Model.BaseURL)
-		if err != nil {
-			return nil, err
-		}
-		indices, err := native.ResolveGPUIndices(cfg.Runtime.Config.GPUIndices)
-		if err != nil {
-			return nil, fmt.Errorf("resolve managed SGLang GPUs: %w", err)
-		}
-		return indices, nil
-	default:
-		return nil, nil
 	}
 }
 
