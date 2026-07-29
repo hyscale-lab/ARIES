@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -30,6 +31,7 @@ type Options struct {
 	OutputDir     string
 	BaseURL       string
 	CredentialEnv string
+	GPUIndices    []int
 }
 
 type healthError struct {
@@ -136,7 +138,7 @@ func New(options Options) (*Runtime, error) {
 		return nil, err
 	}
 	return &Runtime{
-		options:       Options{Executable: executable, ConfigPath: configPath, OutputDir: outputDir, BaseURL: healthURL, CredentialEnv: options.CredentialEnv},
+		options:       Options{Executable: executable, ConfigPath: configPath, OutputDir: outputDir, BaseURL: healthURL, CredentialEnv: options.CredentialEnv, GPUIndices: append([]int(nil), options.GPUIndices...)},
 		client:        &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		healthTimeout: healthAttemptMax,
 		waitCommand:   func(command *exec.Cmd) error { return command.Wait() },
@@ -178,7 +180,7 @@ func (r *Runtime) Start(ctx context.Context) error {
 		return fmt.Errorf("create managed SGLang stderr log: %w", err)
 	}
 	command := exec.Command(r.options.Executable, "-m", "sglang.launch_server", "--config", r.options.ConfigPath)
-	command.Env = childEnvironment(os.Environ(), r.options.CredentialEnv, filepath.Dir(r.options.Executable))
+	command.Env = childEnvironment(os.Environ(), r.options.CredentialEnv, filepath.Dir(r.options.Executable), r.options.GPUIndices)
 	command.Stdout, command.Stderr = stdout, stderr
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := command.Start(); err != nil {
@@ -435,8 +437,8 @@ func observeProcessExit(pid int) error {
 	}
 }
 
-func childEnvironment(environ []string, credentialEnv, executableDir string) []string {
-	filtered := make([]string, 0, len(environ)+1)
+func childEnvironment(environ []string, credentialEnv, executableDir string, gpuIndices []int) []string {
+	filtered := make([]string, 0, len(environ)+2)
 	pathValue := ""
 	for _, entry := range environ {
 		name, value, found := strings.Cut(entry, "=")
@@ -447,6 +449,9 @@ func childEnvironment(environ []string, credentialEnv, executableDir string) []s
 			pathValue = value
 			continue
 		}
+		if found && name == "CUDA_VISIBLE_DEVICES" && len(gpuIndices) != 0 {
+			continue
+		}
 		filtered = append(filtered, entry)
 	}
 	if credentialEnv == "PATH" || pathValue == "" {
@@ -454,5 +459,13 @@ func childEnvironment(environ []string, credentialEnv, executableDir string) []s
 	} else {
 		pathValue = executableDir + string(os.PathListSeparator) + pathValue
 	}
-	return append(filtered, "PATH="+pathValue)
+	filtered = append(filtered, "PATH="+pathValue)
+	if len(gpuIndices) != 0 {
+		devices := make([]string, len(gpuIndices))
+		for index, gpu := range gpuIndices {
+			devices[index] = strconv.Itoa(gpu)
+		}
+		filtered = append(filtered, "CUDA_VISIBLE_DEVICES="+strings.Join(devices, ","))
+	}
+	return filtered
 }

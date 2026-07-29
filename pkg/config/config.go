@@ -32,7 +32,6 @@ type Config struct {
 	Runtime       RuntimeConfig    `json:"runtime"`
 	Model         ProfileModel     `json:"model"`
 	Execution     ExecutionConfig  `json:"execution,omitempty"`
-	Monitor       MonitorConfig    `json:"monitor,omitempty"`
 	OutputDir     string           `json:"output_dir"`
 	Versions      Versions         `json:"-"`
 	Overrides     RuntimeOverrides `json:"-"`
@@ -43,10 +42,6 @@ type ExecutionConfig struct {
 	Concurrency  int           `json:"concurrency"`
 	LoopDuration string        `json:"loop_duration,omitempty"`
 	Loop         time.Duration `json:"-"`
-}
-
-type MonitorConfig struct {
-	GPUIndices []int `json:"gpu_indices,omitempty"`
 }
 
 type RuntimeConfig struct {
@@ -63,6 +58,7 @@ type RuntimeConfigValues struct {
 	StartupTimeout     time.Duration `json:"-"`
 	StopTimeout        time.Duration `json:"-"`
 	ResolvedFile       string        `json:"-"`
+	GPUIndices         []int         `json:"gpu_indices,omitempty"`
 }
 
 // RuntimeOverrides contains sparse, explicitly present runtime changes.
@@ -285,16 +281,6 @@ func (c *Config) validate() error {
 		}
 		c.Execution.Loop = loop
 	}
-	seenGPU := make(map[int]struct{}, len(c.Monitor.GPUIndices))
-	for _, index := range c.Monitor.GPUIndices {
-		if index < 0 {
-			return errors.New("monitor.gpu_indices must contain only non-negative indices")
-		}
-		if _, exists := seenGPU[index]; exists {
-			return errors.New("monitor.gpu_indices must not contain duplicates")
-		}
-		seenGPU[index] = struct{}{}
-	}
 	checks := []struct {
 		name  string
 		value string
@@ -363,7 +349,7 @@ func (c *RuntimeConfig) validate() error {
 		if c.Mode != "external" {
 			return errors.New("runtime.backend deepseek requires external mode")
 		}
-		if c.Config != (RuntimeConfigValues{}) {
+		if c.Config.File != "" || c.Config.Executable != "" || c.Config.StartupTimeoutText != "" || c.Config.StopTimeoutText != "" || len(c.Config.GPUIndices) != 0 {
 			return errors.New("external deepseek runtime.config must be empty")
 		}
 		return nil
@@ -376,8 +362,8 @@ func (c *RuntimeConfig) validate() error {
 		if strings.TrimSpace(c.Config.File) == "" {
 			return errors.New("external SGLang runtime.config.file is required")
 		}
-		if c.Config.Executable != "" || c.Config.StartupTimeoutText != "" || c.Config.StopTimeoutText != "" {
-			return errors.New("external SGLang runtime.config must not set executable or timeouts")
+		if c.Config.Executable != "" || c.Config.StartupTimeoutText != "" || c.Config.StopTimeoutText != "" || len(c.Config.GPUIndices) != 0 {
+			return errors.New("external SGLang runtime.config must not set executable, timeouts, or gpu_indices")
 		}
 		return nil
 	case "managed":
@@ -386,6 +372,16 @@ func (c *RuntimeConfig) validate() error {
 		}
 		if strings.TrimSpace(c.Config.Executable) == "" || strings.ContainsRune(c.Config.Executable, 0) {
 			return errors.New("managed SGLang runtime.config.executable is required")
+		}
+		seenGPU := make(map[int]struct{}, len(c.Config.GPUIndices))
+		for _, index := range c.Config.GPUIndices {
+			if index < 0 {
+				return errors.New("managed SGLang runtime.config.gpu_indices must contain only non-negative indices")
+			}
+			if _, exists := seenGPU[index]; exists {
+				return errors.New("managed SGLang runtime.config.gpu_indices must not contain duplicates")
+			}
+			seenGPU[index] = struct{}{}
 		}
 		var err error
 		c.Config.StartupTimeout, err = time.ParseDuration(c.Config.StartupTimeoutText)

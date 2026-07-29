@@ -130,8 +130,8 @@ are preserved and remain absent from lifecycle logs, labels, and results.
 The sandbox, harness, and Docker resource source use the official split Moby Go
 client and API modules. Each package declares a private interface containing
 only the typed methods it uses; production supplies `*client.Client`, while
-unit tests supply small typed fakes. The generic monitor package does not
-import Docker.
+unit tests supply small typed fakes. `pkg/monitor` consumes `ResourceSource`
+values and does not import Docker.
 
 `pkg/containerimage` uses the distribution/OCI reference packages for two
 narrow contracts: the OpenClaw image must be an exact explicitly tagged,
@@ -380,13 +380,12 @@ and generic `aries.component=sandbox|harness` label, then reading cumulative
 CPU and memory counters through the Moby SDK. Concrete `aries.kind` labels are
 retained for identity validation, not component selection. The composition
 root chooses the Docker source in the same explicit sandbox switch that chooses
-lifecycle execution. When a profile supplies unique non-negative
-`monitor.gpu_indices`, it composes a second source from `pkg/monitor/nvidia`.
-That source invokes `nvidia-smi` with exact arguments for only the selected host
-devices and reports device UUID identity, utilization, memory utilization and
-capacity, power, and temperature. It observes but never allocates GPUs or
-changes `CUDA_VISIBLE_DEVICES`. The generic monitor imports neither Docker nor
-NVIDIA-specific code.
+lifecycle execution. When backend-specific resolution selects GPUs for a
+locally managed LLM serving engine, the composition root adds an NVIDIA source
+for those devices. It samples them through `nvidia-smi` and reports identity,
+utilization, memory, power, and temperature. The Docker and NVIDIA readings
+reach `pkg/monitor.Recorder` through one combined `ResourceSource`; the recorder
+only stores readings and contains no serving-engine-specific behavior.
 
 The recorder derives CPU percentage from successive cumulative CPU and wall
 clock readings. The first reading for each runtime is a zero-percent baseline;
@@ -503,7 +502,13 @@ the internal application layer starts one run-scoped host process supplied by
 the command's explicit backend switch, probes `/health`, and then performs
 exact model discovery. The driver uses the configured executable and exact argv
 `-m sglang.launch_server --config YAML` within the configured startup timeout.
-The process is shared by all task occurrences and
+Each backend owns its GPU-topology resolution rules. The current SGLang
+implementation derives the local count from tensor, pipeline, and multi-node
+topology, including the supported DP, attention, and expert parallel modes. An
+omitted `runtime.config.gpu_indices` selects consecutive devices from zero; an
+explicit list must match the derived count. Runtime construction and the
+NVIDIA source apply the same resolution. The process is shared by all task
+occurrences and
 is stopped only after admitted work drains. Cleanup uses a fresh bounded
 context, signals the whole process group, and confirms its absence. The configured
 `stop_timeout` is the graceful TERM budget. If that budget expires, cleanup sends

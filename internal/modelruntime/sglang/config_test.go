@@ -3,6 +3,7 @@ package sglang
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -84,6 +85,78 @@ func TestCheckedInSGLangNativeConfigLoads(t *testing.T) {
 	path := filepath.Join("..", "..", "..", "configs", "sglang", "qwen3-8b-local.yaml")
 	if _, err := LoadNativeConfig(path, "Qwen/Qwen3-8B", "http://127.0.0.1:30000/v1"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSGLangGPUIndicesFollowLocalParallelWorkers(t *testing.T) {
+	content := strings.Replace(nativeConfig, "tensor-parallel-size: 1", `tensor-parallel-size: 4
+pipeline-parallel-size: 2
+data-parallel-size: 2
+enable-dp-attention: true
+expert-parallel-size: 2
+attention-context-parallel-size: 2
+moe-data-parallel-size: 2
+nnodes: 2
+node-rank: 1`, 1)
+	cfg, err := LoadNativeConfig(writeNativeConfig(t, content), "Qwen/Qwen3-8B", "http://host:30000/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	indices, err := cfg.ResolveGPUIndices(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(indices, []int{0, 1, 2, 3}) {
+		t.Fatalf("default indices = %v", indices)
+	}
+	explicit, err := cfg.ResolveGPUIndices([]int{2, 4, 6, 7})
+	if err != nil || !slices.Equal(explicit, []int{2, 4, 6, 7}) {
+		t.Fatalf("explicit=%v err=%v", explicit, err)
+	}
+	if _, err := cfg.ResolveGPUIndices([]int{0, 1}); err == nil {
+		t.Fatal("accepted GPU count mismatch")
+	}
+}
+
+func TestSGLangStandardDataParallelismReplicatesWorkers(t *testing.T) {
+	content := strings.Replace(nativeConfig, "tensor-parallel-size: 1", `tensor-parallel-size: 2
+pipeline-parallel-size: 1
+data-parallel-size: 3`, 1)
+	cfg, err := LoadNativeConfig(writeNativeConfig(t, content), "Qwen/Qwen3-8B", "http://host:30000/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	count, err := cfg.GPUCount()
+	if err != nil || count != 6 {
+		t.Fatalf("count=%d err=%v", count, err)
+	}
+}
+
+func TestSGLangNonCUDADeviceDoesNotSelectNVIDIAGPUs(t *testing.T) {
+	content := strings.Replace(nativeConfig, "device: cuda", "device: cpu", 1)
+	cfg, err := LoadNativeConfig(writeNativeConfig(t, content), "Qwen/Qwen3-8B", "http://host:30000/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	indices, err := cfg.ResolveGPUIndices(nil)
+	if err != nil || indices != nil {
+		t.Fatalf("indices=%v err=%v", indices, err)
+	}
+	if _, err := cfg.ResolveGPUIndices([]int{0}); err == nil {
+		t.Fatal("non-CUDA device accepted gpu_indices")
+	}
+}
+
+func TestSGLangGPUCountRejectsUnsupportedLocalTopology(t *testing.T) {
+	content := strings.Replace(nativeConfig, "tensor-parallel-size: 1", `tensor-parallel-size: 3
+pipeline-parallel-size: 1
+nnodes: 2`, 1)
+	cfg, err := LoadNativeConfig(writeNativeConfig(t, content), "Qwen/Qwen3-8B", "http://host:30000/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.GPUCount(); err == nil {
+		t.Fatal("accepted indivisible multi-node topology")
 	}
 }
 

@@ -513,8 +513,9 @@ func TestChildEnvironmentRemovesOnlyCredentialAndPreservesPathNeighbors(t *testi
 	t.Setenv("ARIES_RUNTIME_KEY", "super-secret")
 	t.Setenv("ARIES_RUNTIME_KEY_SUFFIX", "survives")
 	t.Setenv("PATH", "/usr/bin:/bin")
+	t.Setenv("CUDA_VISIBLE_DEVICES", "7")
 	output := t.TempDir()
-	runtime, err := New(Options{Executable: executable, ConfigPath: "config", OutputDir: output, BaseURL: "http://127.0.0.1:30000/v1", CredentialEnv: "ARIES_RUNTIME_KEY"})
+	runtime, err := New(Options{Executable: executable, ConfigPath: "config", OutputDir: output, BaseURL: "http://127.0.0.1:30000/v1", CredentialEnv: "ARIES_RUNTIME_KEY", GPUIndices: []int{2, 4}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -534,10 +535,16 @@ func TestChildEnvironmentRemovesOnlyCredentialAndPreservesPathNeighbors(t *testi
 	if !strings.Contains(text, wantPath+"\n") {
 		t.Fatalf("environment PATH missing %q in %q", wantPath, text)
 	}
+	if !strings.Contains(text, "CUDA_VISIBLE_DEVICES=2,4\n") {
+		t.Fatalf("environment GPU selection missing in %q", text)
+	}
+	if strings.Contains(text, "CUDA_VISIBLE_DEVICES=7\n") {
+		t.Fatalf("inherited GPU selection survived in %q", text)
+	}
 }
 
 func TestCredentialNamedPathGetsExecutableOnlyPath(t *testing.T) {
-	got := childEnvironment([]string{"PATH=/secret/bin", "PATH_SUFFIX=survives"}, "PATH", "/runtime/bin")
+	got := childEnvironment([]string{"PATH=/secret/bin", "PATH_SUFFIX=survives"}, "PATH", "/runtime/bin", nil)
 	if strings.Join(got, "\n") != "PATH_SUFFIX=survives\nPATH=/runtime/bin" {
 		t.Fatalf("environment=%q", got)
 	}

@@ -43,20 +43,25 @@ func TestNormalizedRuntimeSchema(t *testing.T) {
 	}
 }
 
-func TestMonitorGPUIndicesAreExplicitAndUnique(t *testing.T) {
-	withGPUs := strings.Replace(validConfig, `"benchmark":`, `"monitor":{"gpu_indices":[0,2]},"benchmark":`, 1)
+func TestManagedSGLangGPUIndicesAreOptionalAndUnique(t *testing.T) {
+	managed := strings.Replace(validConfig, `"runtime":{"backend":"deepseek","mode":"external"}`, `"runtime":{"backend":"sglang","mode":"managed","config":{"file":"native.yaml","executable":"python3","startup_timeout":"15m","stop_timeout":"1m","gpu_indices":[0,2]}}`, 1)
+	withGPUs := strings.Replace(managed, `"id":"fake","base_url":"http://127.0.0.1:8080"`, `"id":"Qwen/Qwen3-8B","base_url":"http://host:30000/v1"`, 1)
 	cfg, err := Decode(strings.NewReader(withGPUs))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.Monitor.GPUIndices) != 2 || cfg.Monitor.GPUIndices[0] != 0 || cfg.Monitor.GPUIndices[1] != 2 {
-		t.Fatalf("monitor = %#v", cfg.Monitor)
+	if len(cfg.Runtime.Config.GPUIndices) != 2 || cfg.Runtime.Config.GPUIndices[0] != 0 || cfg.Runtime.Config.GPUIndices[1] != 2 {
+		t.Fatalf("runtime = %#v", cfg.Runtime)
 	}
 	for _, indices := range []string{`[-1]`, `[0,0]`} {
-		input := strings.Replace(validConfig, `"benchmark":`, `"monitor":{"gpu_indices":`+indices+`},"benchmark":`, 1)
+		input := strings.Replace(withGPUs, `[0,2]`, indices, 1)
 		if _, err := Decode(strings.NewReader(input)); err == nil {
 			t.Fatalf("accepted gpu_indices %s", indices)
 		}
+	}
+	external := strings.Replace(withGPUs, `"mode":"managed","config":{"file":"native.yaml","executable":"python3","startup_timeout":"15m","stop_timeout":"1m","gpu_indices":[0,2]}`, `"mode":"external","config":{"file":"native.yaml","gpu_indices":[0,2]}`, 1)
+	if _, err := Decode(strings.NewReader(external)); err == nil {
+		t.Fatal("external SGLang accepted gpu_indices")
 	}
 }
 

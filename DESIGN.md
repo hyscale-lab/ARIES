@@ -23,9 +23,10 @@ Profile order, including duplicate weights, determines admission and result
 order. Each occurrence has an exact global execution ID for directories,
 labels, monitoring, and results. A configured loop duration bounds admissions,
 not cleanup: admitted occurrences always drain through the unchanged lifecycle.
-Optional explicit GPU indices add NVIDIA utilization, memory, power, and
-temperature samples to the same occurrence-scoped monitor artifacts without
-changing GPU allocation or the Runner lifecycle.
+`runtime.config.gpu_indices` is the only explicit GPU selection input.
+Backend-specific resolution supplies the same effective list to runtime
+construction and NVIDIA sampling without changing the Runner or Recorder
+lifecycle. SGLang is the current implementation of this rule.
 
 Model selection is explicit through `runtime.backend`: `deepseek` retains its
 official bounded preflight, while `sglang` performs bounded exact model
@@ -34,8 +35,8 @@ strict native YAML file under `runtime.config.file`, whose
 served model and port must match the profile. SGLang may remain external or run
 as one application-owned host process supplied by an explicit command switch.
 The general runtime lifecycle/health interface is separate from inference and
-is not a fifth Runner role. Neither provider stores key bytes in profiles or artifacts, and
-ARIES does not manage model installation or GPU allocation.
+is not a fifth Runner role. Neither provider stores key bytes in profiles or
+artifacts, and ARIES does not manage model installation.
 
 Terminal-Bench 2 remains pinned by its exact Git revision, while each task's
 explicit Docker image tag is read from that pinned task's `task.toml` rather

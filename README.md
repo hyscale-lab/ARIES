@@ -2,8 +2,8 @@
 
 ARIES is a small Go benchmark runner. It runs any selected task from the pinned
 Terminal-Bench 2 revision with an unmodified upstream OpenClaw container, one
-local Docker task sandbox, OpenClaw's SSH backend, a remote OpenAI-compatible
-model, and an independent evaluator.
+local Docker task sandbox, OpenClaw's SSH backend, an OpenAI-compatible
+model endpoint, and an independent evaluator.
 
 ## Quick start
 
@@ -19,8 +19,8 @@ ${EDITOR:-vi} DEEPSEEK_API.key
 
 The live run uses DeepSeek and can incur API charges. The complete
 [quick-start guide](docs/quick-start.md) also covers external and ARIES-managed
-SGLang, GPU selection, the native YAML boundary, success checks, artifacts, and
-troubleshooting.
+SGLang as the current local serving-engine example, GPU selection, success
+checks, artifacts, and troubleshooting.
 
 ## Architecture
 
@@ -69,9 +69,12 @@ should not be forced through one universal transport.
   agent-timeout override used by the five-task example. Every checked-in
   profile declares `overrides_file`; the one-task profile sets it to `""` to
   disable overrides.
-- Optional `monitor.gpu_indices` selects host NVIDIA devices to sample through
-  `nvidia-smi`. The SGLang example selects GPU0. Monitoring records utilization,
-  memory, power, and temperature but does not allocate GPUs.
+- For a managed local serving engine, ARIES first determines that engine's
+  required local GPU count `N`. If `runtime.config.gpu_indices` is omitted,
+  ARIES uses physical GPUs `[0, ..., N-1]`. A list in the runtime profile
+  overrides that default selection and must contain exactly `N` unique,
+  non-negative indices. Runtime startup and NVIDIA sampling use the resulting
+  list. SGLang currently derives `N` from its native parallel configuration.
 
 To choose another subset, copy a profile and replace `benchmark.tasks` with
 task directory names from the pinned checkout. Task order and repeated entries
@@ -80,9 +83,9 @@ occurrences (default `1`). An optional positive `execution.loop_duration`
 repeats the ordered list until its admission deadline, then drains admitted
 occurrences through evaluation and cleanup. Profile and override files use
 strict JSON decoding; there is no inheritance,
-merging, plugin registry, or factory framework. SGLang launch settings remain
-in a separate strict native YAML file referenced by the profile. API-key values
-never belong in any of these files.
+merging, plugin registry, or factory framework. Serving-engine launch settings
+remain in that engine's native configuration; the current SGLang profile
+references a separate YAML file. API-key values never belong in these files.
 
 The sparse `harness_resources` and `agent_sandbox_resources` blocks are
 independent. A harness value limits only OpenClaw; an omitted harness dimension
@@ -98,8 +101,8 @@ agent deadline. Task containers always receive ARIES-owned
   explicit direct-constructor switches.
 - `internal/app`: run/setup orchestration, scheduling, model preflight,
   monitoring, and private result persistence.
-- `internal/modelruntime/sglang`: strict native configuration plus the managed
-  SGLang process and health lifecycle.
+- `internal/modelruntime/sglang`: the current managed serving-engine
+  implementation, including its native configuration and process lifecycle.
 - `pkg/containerimage`: shared OCI parsing for role-specific tagged and
   digest-pinned image references.
 - `pkg/core`: shared task, environment, command, endpoint, and result data.

@@ -142,13 +142,11 @@ falling back.
 
 The checked-in SGLang profile keeps experiment configuration in JSON and
 references the reusable native YAML at
-`configs/sglang/qwen3-8b-local.yaml`. ARIES strictly loads these YAML fields:
-`model-path`, `served-model-name`, `host`, `port`, `device`,
-`tensor-parallel-size`, `context-length`, `mem-fraction-static`,
-`reasoning-parser`, and `tool-call-parser`. Unknown fields, trailing documents,
-invalid values, a `served-model-name` different from `model.id`, or a `port`
-different from the explicit port in `model.base_url` are rejected before the
-run starts.
+`configs/sglang/qwen3-8b-local.yaml`. SGLang reads this file through its native
+`--config` option. Before launch, ARIES performs a bounded preflight over the
+fields needed to check the served model, endpoint port, and local GPU topology.
+A mismatch with the profile or an invalid GPU topology is rejected before the
+run starts; inference settings remain owned and interpreted by SGLang.
 
 Copy the profile before changing its endpoint:
 
@@ -166,9 +164,6 @@ The checked-in profile uses the following external runtime and model settings:
 
 ```json
 {
-  "monitor": {
-    "gpu_indices": [0]
-  },
   "runtime": {
     "backend": "sglang",
     "mode": "external",
@@ -213,9 +208,6 @@ following runtime and model settings in the copied profile:
 
 ```json
 {
-  "monitor": {
-    "gpu_indices": [0]
-  },
   "runtime": {
     "backend": "sglang",
     "mode": "managed",
@@ -223,7 +215,8 @@ following runtime and model settings in the copied profile:
       "file": "../configs/sglang/qwen3-8b-local.yaml",
       "executable": "/absolute/path/to/venv/bin/python",
       "startup_timeout": "15m",
-      "stop_timeout": "1m"
+      "stop_timeout": "1m",
+      "gpu_indices": [0]
     }
   },
   "model": {
@@ -241,12 +234,16 @@ the SGLang environment, and both timeout values must be positive Go durations.
 `model.id` must equal the YAML `served-model-name`; and `model.api_key_env`
 names the environment variable read by ARIES and rendered into OpenClaw.
 
-`monitor.gpu_indices` is an optional list of unique, non-negative physical GPU
-indices. When present, ARIES requires `nvidia-smi`, samples exactly those host
-devices alongside the task and harness containers, and writes the measurements
-to each occurrence's `monitor/resources.jsonl`. Monitoring does not set
-`CUDA_VISIBLE_DEVICES` or allocate a GPU; configure SGLang to use the same
-devices.
+`runtime.config.gpu_indices` is optional and valid only for managed SGLang.
+For YAML `device: cuda`, ARIES derives the number of local workers from the
+tensor, pipeline, and multi-node topology and selects physical devices
+`[0, ..., N-1]` when the field is omitted.
+Ordinary data parallelism replicates workers; DP attention, expert, MoE data,
+and attention-context parallelism partition the TP workers instead. An
+explicit list must contain exactly `N` unique, non-negative indices. ARIES uses
+the resolved list for both the child's `CUDA_VISIBLE_DEVICES` and NVIDIA
+sampling. An unsupported or inconsistent topology fails before runtime or
+monitor side effects.
 
 Do not start `sglang.launch_server` separately in this mode. ARIES passes the
 referenced YAML using the exact arguments
@@ -257,18 +254,16 @@ the process group after all admitted tasks drain, and uses `stop_timeout` as
 the graceful TERM budget before forced cleanup.
 
 The configured credential variable is available to ARIES and OpenClaw but is
-removed from the managed SGLang child's environment. To select GPU0, expose it
-when starting ARIES:
+removed from the managed SGLang child's environment:
 
 ```sh
-export CUDA_VISIBLE_DEVICES=0
 export SGLANG_API_KEY=unused-local-token
 ./bin/aries setup .cache/openclaw-tb2-fix-git-sglang.json
 ./bin/aries .cache/openclaw-tb2-fix-git-sglang.json
 ```
 
-ARIES does not install SGLang or models, choose GPUs, or configure the network
-path shared by the host and containers.
+ARIES does not install SGLang or models or configure the network path shared by
+the host and containers.
 
 ## 4. Run the experiment
 
@@ -382,7 +377,7 @@ run log.
   the Python executable from the SGLang environment and that the selected GPU
   has enough free memory.
 - **GPU monitor error:** confirm `nvidia-smi` is available and every configured
-  `monitor.gpu_indices` entry exists. GPU indices must be unique and
+  `runtime.config.gpu_indices` entry exists. GPU indices must be unique and
   non-negative.
 - **Unknown task or invalid task image:** choose a task directory from the
   pinned checkout and ensure its `task.toml` declares a valid explicit image

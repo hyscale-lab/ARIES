@@ -160,11 +160,38 @@ func TestPrepareBackendSelectsManagedSGLangRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := prepared.Runtime.(*runtimesglang.Runtime); !ok {
+	_, ok := prepared.Runtime.(*runtimesglang.Runtime)
+	if !ok {
 		t.Fatalf("runtime type = %T", prepared.Runtime)
+	}
+	indices, err := resolveRuntimeGPUIndices(cfg)
+	if err != nil || len(indices) != 1 || indices[0] != 0 {
+		t.Fatalf("GPU indices = %v, error = %v", indices, err)
 	}
 	if _, err := os.Stat(output); !os.IsNotExist(err) {
 		t.Fatalf("preparation created output: %v", err)
+	}
+}
+
+func TestPrepareBackendRejectsManagedSGLangGPUCountMismatch(t *testing.T) {
+	root := t.TempDir()
+	native := filepath.Join(root, "native.yaml")
+	content := strings.Replace(nativeForWiring, "tensor-parallel-size: 1", "tensor-parallel-size: 2", 1)
+	if err := os.WriteFile(native, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	executable := filepath.Join(root, "python")
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{
+		Runtime: config.RuntimeConfig{Backend: "sglang", Mode: "managed", Config: config.RuntimeConfigValues{
+			ResolvedFile: native, Executable: executable, GPUIndices: []int{0},
+		}},
+		Model: config.ProfileModel{ID: "Qwen/Qwen3-8B", BaseURL: "http://host:30000/v1", APIKeyEnv: "KEY"},
+	}
+	if _, err := prepareBackend(cfg, filepath.Join(root, "output")); err == nil || !strings.Contains(err.Error(), "requires 2") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

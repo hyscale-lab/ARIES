@@ -5,11 +5,6 @@
   "execution": {
     "concurrency": 1
   },
-  "monitor": {
-    "gpu_indices": [
-      0
-    ]
-  },
   "benchmark": {
     "type": "terminalbench2",
     "root": ".cache/terminal-bench-2",

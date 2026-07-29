@@ -1,12 +1,20 @@
 # ARIES Tasks
 
+## R20 — Managed SGLang GPU selection
+
+1. [x] Keep GPU selection inside the managed SGLang runtime configuration.
+2. [x] Derive default local device indices from native parallel topology and
+   reject inconsistent explicit selections before side effects.
+3. [x] Share the resolved list between the child `CUDA_VISIBLE_DEVICES` and the
+   NVIDIA resource source without changing generic monitoring.
+
 ## R19 — Explicit NVIDIA GPU monitoring
 
 1. [x] Reuse the existing occurrence-scoped Recorder lifecycle and
    `ResourceSource` boundary rather than adding a Runner role or independent
    telemetry lifecycle.
-2. [x] Add strict optional `monitor.gpu_indices` configuration and select GPU0
-   in the checked-in local SGLang profile.
+2. [x] Add strict explicit host-device selection for the NVIDIA source; R20
+   later moved ownership of that selection to managed SGLang.
 3. [x] Query selected devices through bounded exact `nvidia-smi` arguments and
    retain UUID, utilization, memory, power, and temperature in schema-version-3
    private monitor artifacts.
