@@ -1,4 +1,6 @@
-# Current tool bridge architecture and alternatives
+# Internal tool bridge architecture and alternatives
+
+This internal record preserves implementation history, pinned protocol mechanics, rejected alternatives, and verification evidence for maintainers. The stable public contract is documented in [the ToolBridge guide](../docs/design/bridge.md).
 
 ## Decision
 

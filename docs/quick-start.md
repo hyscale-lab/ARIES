@@ -389,4 +389,6 @@ run log.
 - **Suspected leak:** inspect `docker ps -a --filter label=aries.managed=true`
   and `docker network ls --filter label=aries.managed=true`.
 
-For architecture and security boundaries, see [design.md](design.md).
+For architecture and security boundaries, see [the architecture guide](design.md).
+For the exact implementation matrix and configuration pointers, see
+[supported implementations](supported.md).

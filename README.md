@@ -1,160 +1,103 @@
 # ARIES
 
-ARIES is a small Go benchmark runner. It runs any selected task from the pinned
-Terminal-Bench 2 revision with an unmodified upstream OpenClaw container, one
-local Docker task sandbox, OpenClaw's SSH backend, an OpenAI-compatible
-model endpoint, and an independent evaluator.
+ARIES is a small, readable Go runner for reproducible agent benchmarks. It
+executes tasks concurrently while keeping the agent harness, task sandbox, tool
+access, and independent evaluation under separate ownership.
 
-## Quick start
+The current end-to-end path combines OpenClaw, Terminal-Bench 2, Docker, an
+OpenClaw SSH bridge, and either DeepSeek or SGLang model serving.
 
-From the repository root:
+## Key Features & Capabilities
+
+- **Controlled concurrency.** Profiles select ordered task occurrences and a
+  concurrency bound. Every admitted occurrence receives fresh components and
+  completes evaluation and cleanup.
+- **Fail-closed isolation.** The harness is stopped and tool access is
+  positively revoked before private verifier material is introduced. The live
+  sandbox is evaluated independently and then removed.
+- **Modular runtimes and components.** A Runner composes four small roles:
+  `Benchmark`, `AgentHarness`, `ToolSandbox`, and `ToolBridge`. Implementations
+  are selected through explicit constructors and command switches.
+- **Flexible model serving.** Model services sit outside the four Runner roles.
+  ARIES supports external endpoints and an ARIES-managed SGLang process for the
+  duration of a run.
+- **Private, replayable evidence.** Structured results and component artifacts
+  preserve run evidence while keeping credentials out of profiles, structured
+  logs, Docker metadata, and results.
+
+## Supported Implementations
+
+ARIES currently supports:
+
+| Role or service | Implementation |
+| --- | --- |
+| Agent harness | OpenClaw |
+| Benchmark | Terminal-Bench 2 |
+| Tool sandbox | Docker through the Moby Go SDK |
+| Tool bridge | Harness - Tool Sandbox SSH bridge |
+| Model service | External DeepSeek; external or ARIES-managed SGLang |
+
+See [Supported implementations](docs/supported.md) for status, ownership,
+configuration keys, and checked-in examples.
+
+## Getting Started
+
+ARIES requires Linux, a local Docker Engine, Go, Git, Make, and network access
+to the configured model service and required image registries.
 
 ```sh
 make build
 ./bin/aries setup profiles/openclaw-tb2-fix-git-deepseek.json
-install -m 600 /dev/null DEEPSEEK_API.key
-${EDITOR:-vi} DEEPSEEK_API.key
-./bin/aries profiles/openclaw-tb2-fix-git-deepseek.json
 ```
 
-The live run uses DeepSeek and can incur API charges. The complete
-[quick-start guide](docs/quick-start.md) also covers external and ARIES-managed
-SGLang as the current local serving-engine example, GPU selection, success
-checks, artifacts, and troubleshooting.
+The DeepSeek example requires an API key and can incur charges. Follow the
+[Quick start](docs/quick-start.md) for secure credential setup, the first run,
+SGLang alternatives, result checks, and troubleshooting.
 
-## Architecture
+## Architecture & Design
 
-The Runner consumes four interfaces defined in `pkg/runner`:
+For each task, ARIES loads benchmark data, starts and sanitizes a sandbox,
+grants temporary bridge access, runs and stops the harness, revokes the bridge,
+evaluates the still-running sandbox, and finally removes the sandbox. Harness
+execution and evaluation outcomes remain separate.
 
-1. `Benchmark` discovers tasks and independently evaluates final sandbox state.
-2. `AgentHarness` runs one agent instruction against a model and tool endpoint.
-3. `ToolSandbox` starts and stops the live task environment.
-4. `ToolBridge` grants and then revokes harness access to that environment.
+Read the [Architecture](docs/design.md) for the complete lifecycle, isolation
+gates, concurrency model, and artifact boundaries. Component and extension
+guides cover the [benchmark](docs/design/benchmark.md),
+[agent harness](docs/design/harness.md), [tool sandbox](docs/design/sandbox.md),
+[tool bridge](docs/design/bridge.md), and
+[model runtime platform service](docs/design/runtime.md).
 
-The first concrete tool path is:
+## Roadmap & Research Goals
 
-```text
-OpenClaw container -> SSH -> host ARIES bridge -> Moby ExecStream
-                                             -> task container
+[Aries Roadmap](https://github.com/orgs/hyscale-lab/projects/7)
+
+ARIES is intended to support research on reproducible agent evaluation,
+including task-level concurrency, strict tool isolation, independent scoring,
+and comparisons across explicitly configured agent and model runtimes. Future
+work may add rigorously tested implementations behind the existing component
+boundaries and expand repeatable experiment workflows. These are research
+directions, not claims of currently supported integrations.
+
+## Industry Collaborators
+
+ARIES is built and maintained in collaboration with many industry collaborators:
+Amazon Web Service, Microsoft, AMD Singapore, NCSpeech
+
+## Community, Contributing & Contact
+
+Contributions are welcome through
+[GitHub issues](https://github.com/hyscale-lab/aries/issues) and pull requests.
+Before proposing a component, read the relevant architecture guide and keep the
+four-role Runner lifecycle, explicit construction, isolation gates, and cleanup
+guarantees intact. Questions and design proposals can use the issue tracker so
+the discussion remains available to other users and contributors.
+
+## Citation
 ```
 
-OpenClaw never receives the Docker socket. The bridge translates the pinned
-OpenClaw SSH command shape into Docker exec on the exact sandbox later inspected
-by the evaluator. Each task's Dockerfile-derived workdir is mapped from
-OpenClaw's virtual workspace without creating a sandbox symlink. The Runner
-stops OpenClaw and revokes the bridge before the benchmark uploads verifier
-files. Harness failure and evaluation outcome remain separate.
-
-See [docs/design.md](docs/design.md) for lifecycle, isolation, bridge, Moby SDK,
-monitoring, secrets, and extension decisions. See
-[docs/bridge-alternatives.md](docs/bridge-alternatives.md) for the current
-bridge, workspace mapping, isolation guarantees, and why future harnesses
-should not be forced through one universal transport.
-
-## Configuration
-
-- `profiles/openclaw-tb2-fix-git-deepseek.json` is the quickest live example.
-- `profiles/openclaw-tb2-fix-git-sglang.json` uses an external local SGLang
-  endpoint by default and references its reusable native YAML configuration
-  under `configs/sglang/`; its `sglang.local` endpoint is a placeholder that
-  must be reachable from both the host and OpenClaw containers. A copied
-  profile may instead select the managed host-process lifecycle.
-- `profiles/openclaw-tb2-five-deepseek.json` selects a heterogeneous five-task
-  subset.
-- `configs/versions.json` contains the exact Terminal-Bench 2 Git revision and
-  the exact non-`latest` OpenClaw image tag. Each task's explicit image tag
-  comes from its `task.toml` in that pinned checkout; there is no separate
-  task-image catalog.
-- `configs/runtime-overrides.json` is the dedicated strict-JSON resource and
-  agent-timeout override used by the five-task example. Every checked-in
-  profile declares `overrides_file`; the one-task profile sets it to `""` to
-  disable overrides.
-- For a managed local serving engine, ARIES first determines that engine's
-  required local GPU count `N`. If `runtime.config.gpu_indices` is omitted,
-  ARIES uses physical GPUs `[0, ..., N-1]`. A list in the runtime profile
-  overrides that default selection and must contain exactly `N` unique,
-  non-negative indices. Runtime startup and NVIDIA sampling use the resulting
-  list. SGLang currently derives `N` from its native parallel configuration.
-
-To choose another subset, copy a profile and replace `benchmark.tasks` with
-task directory names from the pinned checkout. Task order and repeated entries
-are preserved; repeats act as weights. `execution.concurrency` bounds parallel
-occurrences (default `1`). An optional positive `execution.loop_duration`
-repeats the ordered list until its admission deadline, then drains admitted
-occurrences through evaluation and cleanup. Profile and override files use
-strict JSON decoding; there is no inheritance,
-merging, plugin registry, or factory framework. Serving-engine launch settings
-remain in that engine's native configuration; the current SGLang profile
-references a separate YAML file. API-key values never belong in these files.
-
-The sparse `harness_resources` and `agent_sandbox_resources` blocks are
-independent. A harness value limits only OpenClaw; an omitted harness dimension
-remains unlimited. A sandbox value limits only the task container; an omitted
-sandbox dimension retains the value from the task's `task.toml`. Values never
-inherit between blocks. A present `agent_timeout_seconds` changes only the
-agent deadline. Task containers always receive ARIES-owned
-`DEBIAN_FRONTEND=noninteractive` and host-process `TZ`, falling back to `UTC`.
-
-## Packages
-
-- `cmd/aries`: CLI grammar, signal handling, final error presentation, and
-  explicit direct-constructor switches.
-- `internal/app`: run/setup orchestration, scheduling, model preflight,
-  monitoring, and private result persistence.
-- `internal/modelruntime/sglang`: the current managed serving-engine
-  implementation, including its native configuration and process lifecycle.
-- `pkg/containerimage`: shared OCI parsing for role-specific tagged and
-  digest-pinned image references.
-- `pkg/core`: shared task, environment, command, endpoint, and result data.
-- `pkg/runner`: the four interfaces and ordered lifecycle.
-- `pkg/benchmark/terminalbench`: selected-task discovery and private verifier
-  execution for the pinned Terminal-Bench 2 revision.
-- `pkg/sandbox/docker`: Moby-backed container, exec, transfer, cleanup, and raw
-  cumulative resource collection.
-- `pkg/bridge/openclawssh`: authenticated SSH-to-Docker-exec adaptation.
-- `pkg/harness/openclaw`: upstream OpenClaw container and generated config.
-- `pkg/monitor`: deployment-neutral resource rates, source composition, and
-  artifact recording.
-- `pkg/monitor/nvidia`: selected host GPU sampling through `nvidia-smi`.
-
-Every run writes structured Logrus output to stderr and private `aries.log`.
-Task artifacts use readable paths such as
-`runs/<timestamp>-openclaw-tb2-five-deepseek/fix-git/bridge/tool-calls.jsonl`.
-Each task also retains `bridge/ssh_raw.log`, a mode-0600 sensitive, lossless
-plain-text audit. It uses delimited, fixed-order `key=value` records: printable
-UTF-8 stays readable, while control and invalid bytes use explicit escapes.
-It is not JSON or base64. `tool-calls.jsonl` remains one JSON object per line
-and writes printable Unicode and HTML characters literally while preserving
-JSON-required escaping. Printable stdin stays inline; binary or control-bearing
-stdin is represented by a concise omission marker and exact byte count while
-the lossless bytes remain in `ssh_raw.log`. Treat both files as private run
-evidence; they may contain values supplied by the tool caller.
-
-## Validation
-
-```sh
-make build
-make test
-make test-race
-make lint
-make integration
 ```
 
-Unit, race, and lint checks require neither Docker nor a paid API. Integration
-uses real local containers and a deterministic fake OpenAI-compatible endpoint.
-It also loads the five-task subset and every task in the pinned dataset through
-the generic benchmark boundary.
+## License
 
-## Adding the next component
-
-Add one concrete package implementing the relevant small interface, then add
-one explicit constructor switch in `cmd/aries`. A model runtime implements the
-consumer-owned lifecycle interface in `internal/app`; inference stays a
-separate client/harness concern. The Runner lifecycle does not change.
-
-## Repository boundary
-
-Only this repository is written or used for Git operations. `invitro` was a
-read-only structural reference and `agent_bench` read-only workflow archaeology.
-The recorded boundary is in [DESIGN.md](DESIGN.md); milestone history is in
-[TASKS.md](TASKS.md).
+The Aries codebase is licensed under MIT License. See the [MIT License](LICENSE) file for details.

@@ -1,0 +1,9 @@
+no_progress = true
+
+exclude = [
+    '^http://localhost(:[0-9]+)?(/|$)',
+    '^http://127\.0\.0\.1(:[0-9]+)?(/|$)',
+    '^http://sglang\.local(:[0-9]+)?(/|$)',
+    '^https://api\.deepseek\.com/?$',
+    'https://github.com/orgs/hyscale-lab/projects/7',
+]

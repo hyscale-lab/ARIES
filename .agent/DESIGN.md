@@ -1,6 +1,10 @@
 # ARIES Design
 
-The maintained architecture document is [docs/design.md](docs/design.md).
+The maintained public architecture document is [docs/design.md](../docs/design.md).
+
+Detailed implementation decisions and rejected tool-bridge designs are retained
+in [BRIDGE-ALTERNATIVES.md](BRIDGE-ALTERNATIVES.md). These internal records
+complement the stable public contract; they do not add another Runner role.
 
 The Runner still composes exactly four substitutable roles. For each task it
 loads benchmark data, starts the sandbox, asks the benchmark to sanitize the
