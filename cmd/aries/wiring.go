@@ -113,7 +113,27 @@ func newBenchmark(cfg config.Config, outputRoot, logicalID, occurrenceID string)
 func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byte, bool), logger *logrus.Logger) (app.HarnessInstance, error) {
 	switch cfg.Harness.Type {
 	case "openclaw":
-		manager, err := openclawharness.New(openclawharness.Options{Image: cfg.Versions.OpenClaw.Image, OutputDir: outputRoot, APIKeyLookup: lookup, Logger: logger})
+		realtime := openclawharness.RealtimeOptions{
+			AgentQuestionTemplate: cfg.Harness.Realtime.AgentQuestionTemplate,
+			TTS: openclawharness.RealtimeTTSOptions{
+				Provider: cfg.Harness.Realtime.TTS.Provider, BaseURL: cfg.Harness.Realtime.TTS.BaseURL,
+				APIKeyEnv: cfg.Harness.Realtime.TTS.APIKeyEnv, Model: cfg.Harness.Realtime.TTS.Model,
+				Voice: cfg.Harness.Realtime.TTS.Voice, Instructions: cfg.Harness.Realtime.TTS.Instructions,
+				Speed: cfg.Harness.Realtime.TTS.Speed, Timeout: cfg.Harness.Realtime.TTS.Timeout,
+			},
+			ChunkDuration:         cfg.Harness.Realtime.ChunkDuration,
+			ListenDuration:        cfg.Harness.Realtime.ListenDuration,
+			QuietDuration:         cfg.Harness.Realtime.QuietDuration,
+			AgentWaitDuration:     cfg.Harness.Realtime.AgentWaitDuration,
+			ToolCallTimeout:       cfg.Harness.Realtime.ToolCallTimeout,
+			TrailingSilenceMillis: cfg.Harness.Realtime.TrailingSilenceMillis,
+			Provider:              cfg.Harness.Realtime.Provider,
+			Model:                 cfg.Harness.Realtime.Model,
+			Voice:                 cfg.Harness.Realtime.Voice,
+			ReasoningEffort:       cfg.Harness.Realtime.ReasoningEffort,
+			IncludeEvents:         cfg.Harness.Realtime.IncludeEvents,
+		}
+		manager, err := openclawharness.New(openclawharness.Options{Image: cfg.Versions.OpenClaw.Image, OutputDir: outputRoot, APIKeyLookup: lookup, Logger: logger, Mode: cfg.Harness.Mode, Realtime: realtime})
 		if err != nil {
 			return app.HarnessInstance{}, fmt.Errorf("construct OpenClaw harness: %w", err)
 		}

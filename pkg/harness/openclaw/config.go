@@ -16,6 +16,7 @@ import (
 const (
 	configContainerPath = "/run/aries/openclaw.json"
 	modelKeyPath        = "/run/aries/model.key"
+	realtimeKeyPath     = "/run/aries/realtime.key"
 	gatewayKeyPath      = "/run/aries/gateway.key"
 	gatewayTokenEnv     = "OPENCLAW_GATEWAY_TOKEN"
 	launcherPath        = "/run/aries/launch"
@@ -227,6 +228,11 @@ func validEnvironmentName(value string) bool {
 	return value != ""
 }
 
-func launcherScript(apiKeyEnv string) []byte {
-	return []byte("#!/bin/sh\nset -eu\nmodel_key=$(cat " + modelKeyPath + ")\ngateway_key=$(cat " + gatewayKeyPath + ")\nexport " + apiKeyEnv + "=\"$model_key\"\nexport " + gatewayTokenEnv + "=\"$gateway_key\"\nunset model_key gateway_key\nexec \"$@\"\n")
+func launcherScript(apiKeyEnv, realtimeAPIKeyEnv string) []byte {
+	script := "#!/bin/sh\nset -eu\nmodel_key=$(cat " + modelKeyPath + ")\ngateway_key=$(cat " + gatewayKeyPath + ")\nexport " + apiKeyEnv + "=\"$model_key\"\nexport " + gatewayTokenEnv + "=\"$gateway_key\"\n"
+	if realtimeAPIKeyEnv != "" {
+		script += "realtime_key=$(cat " + realtimeKeyPath + ")\nexport " + realtimeAPIKeyEnv + "=\"$realtime_key\"\nunset realtime_key\n"
+	}
+	script += "unset model_key gateway_key\nexec \"$@\"\n"
+	return []byte(script)
 }

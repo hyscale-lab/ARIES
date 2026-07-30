@@ -10,6 +10,7 @@ import (
 	"io"
 	"math"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,9 +19,12 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
+	audioinput "github.com/hyscale-lab/aries/pkg/audio"
 	"github.com/hyscale-lab/aries/pkg/core"
+	gatewayclient "github.com/hyscale-lab/aries/pkg/harness/openclaw/gateway"
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
 )
 
@@ -137,7 +141,20 @@ func (fake *fakeDocker) ContainerCreate(_ context.Context, options client.Contai
 	fake.created = options
 	fake.container = container.InspectResponse{
 		ID: "openclaw-id", Config: options.Config, HostConfig: options.HostConfig,
-		State: &container.State{},
+		State:           &container.State{},
+		NetworkSettings: &container.NetworkSettings{Ports: network.PortMap{}},
+	}
+	for port, bindings := range options.HostConfig.PortBindings {
+		copied := append([]network.PortBinding(nil), bindings...)
+		for index := range copied {
+			if copied[index].HostPort == "" {
+				copied[index].HostPort = "38089"
+			}
+			if !copied[index].HostIP.IsValid() {
+				copied[index].HostIP = netip.MustParseAddr("127.0.0.1")
+			}
+		}
+		fake.container.NetworkSettings.Ports[port] = copied
 	}
 	return client.ContainerCreateResult{ID: "openclaw-id"}, nil
 }
@@ -364,6 +381,47 @@ func newTestManager(t *testing.T, fake *fakeDocker, secret []byte) *Manager {
 	return manager
 }
 
+type stubRealtimeGateway struct{}
+
+func (stubRealtimeGateway) Connect(context.Context, gatewayclient.ConnectOptions) (map[string]any, error) {
+	return nil, nil
+}
+
+func (stubRealtimeGateway) Call(context.Context, string, map[string]any) (gatewayclient.Frame, error) {
+	return nil, nil
+}
+
+func (stubRealtimeGateway) RecvEvent(context.Context) (gatewayclient.Frame, error) {
+	return nil, context.Canceled
+}
+
+func (stubRealtimeGateway) Close() error {
+	return nil
+}
+
+type stubRealtimeRunner struct {
+	result gatewayclient.RealtimeResult
+	err    error
+}
+
+func (runner stubRealtimeRunner) Run(context.Context) (gatewayclient.RealtimeResult, error) {
+	return runner.result, runner.err
+}
+
+type stubSpeechSynthesizer struct {
+	request *audioinput.SpeechRequest
+}
+
+func (synthesizer stubSpeechSynthesizer) Synthesize(_ context.Context, request audioinput.SpeechRequest) (audioinput.SpeechResult, error) {
+	*synthesizer.request = request
+	return audioinput.SpeechResult{
+		Audio: testWAVBytes(24000, []byte{0, 0, 1, 0}),
+		Model: "tts-model", Voice: "alloy", Format: "wav", TextSHA256: strings.Repeat("a", 64),
+	}, nil
+}
+
+func (stubSpeechSynthesizer) Close() {}
+
 func TestNewRequiresExactNonLatestTaggedImage(t *testing.T) {
 	if manager, err := New(Options{Image: testOpenClawImage, OutputDir: t.TempDir()}); err != nil {
 		t.Fatal(err)
@@ -452,7 +510,8 @@ func TestHarnessUsesOneSDKContainerAndDirectPrivateArchive(t *testing.T) {
 	files := readArchive(t, fake.archive)
 	for path, mode := range map[string]int64{
 		"run/aries/openclaw.json": 0o600, "run/aries/model.key": 0o600, "run/aries/gateway.key": 0o600,
-		"run/aries/launch": 0o555, "run/aries/ssh/id_ed25519": 0o600, "run/aries/ssh/known_hosts": 0o600,
+		"run/aries/launch": 0o555, "run/aries/gateway-proxy.js": 0o555, "run/aries/realtime-gateway": 0o555,
+		"run/aries/ssh/id_ed25519": 0o600, "run/aries/ssh/known_hosts": 0o600,
 		"opt/aries/bin/aries-ssh": 0o555,
 	} {
 		file, ok := files[path]
@@ -493,6 +552,152 @@ func TestStartFailureRemovesOnlyContainerAndClearsSecret(t *testing.T) {
 	if !bytes.Equal(secret, make([]byte, len(secret))) {
 		t.Fatalf("API lookup buffer was not cleared: %q", secret)
 	}
+}
+
+func TestRealtimeModePublishesGatewayAndRunsRealtimeRunner(t *testing.T) {
+	fake := newFakeDocker()
+	keys := map[string][]byte{"ARIES_FAKE_API_KEY": []byte("model-secret"), "OPENAI_API_KEY": []byte("speech-secret")}
+	manager := newTestManager(t, fake, keys["ARIES_FAKE_API_KEY"])
+	manager.apiKeyLookup = func(name string) ([]byte, bool) {
+		value, ok := keys[name]
+		return append([]byte(nil), value...), ok
+	}
+	manager.mode = ModeRealtime
+	manager.realtime = RealtimeOptions{
+		TTS:            RealtimeTTSOptions{Provider: "openai", APIKeyEnv: "OPENAI_API_KEY", Model: "tts-model", Voice: "alloy"},
+		ChunkDuration:  25 * time.Millisecond,
+		ListenDuration: 50 * time.Millisecond, QuietDuration: time.Millisecond,
+		AgentWaitDuration: 40 * time.Millisecond, ToolCallTimeout: 30 * time.Millisecond,
+		TrailingSilenceMillis: 300, Voice: "alloy", ReasoningEffort: "low", IncludeEvents: true,
+	}
+	var speechRequest audioinput.SpeechRequest
+	manager.newSpeech = func(options audioinput.SpeechClientOptions) (speechSynthesizer, error) {
+		if string(options.APIKey) != "speech-secret" {
+			t.Fatalf("speech key = %q", string(options.APIKey))
+		}
+		return stubSpeechSynthesizer{request: &speechRequest}, nil
+	}
+	var gatewayURL string
+	var gatewayToken []byte
+	manager.newGateway = func(rawURL string, token []byte) (gatewayclient.RealtimeGateway, error) {
+		gatewayURL = rawURL
+		gatewayToken = append([]byte(nil), token...)
+		return &stubRealtimeGateway{}, nil
+	}
+	var runnerOptions gatewayclient.RealtimeRunnerOptions
+	manager.newRealtime = func(_ gatewayclient.RealtimeGateway, options gatewayclient.RealtimeRunnerOptions) (realtimeRunner, error) {
+		runnerOptions = options
+		return stubRealtimeRunner{result: gatewayclient.RealtimeResult{
+			SchemaVersion:       gatewayclient.RealtimeResultSchemaVersion,
+			Transcript:          "heard",
+			OutputText:          "spoken",
+			AgentOutputText:     "final answer",
+			EventCounts:         map[string]int{"chat.final": 1},
+			ConnectAuth:         map[string]any{},
+			Errors:              []string{},
+			Timings:             map[string]any{},
+			AgentRunIDs:         []string{},
+			TranscriptDoneParts: []string{},
+		}}, nil
+	}
+	request := core.HarnessRequest{RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
+	if err := manager.Start(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if !equalStrings(fake.created.Config.Cmd, append([]string{launcherPath}, realtimeGatewayCommand...)) {
+		t.Fatalf("gateway command = %#v", fake.created.Config.Cmd)
+	}
+	if _, ok := fake.created.Config.ExposedPorts[gatewayPort]; !ok {
+		t.Fatalf("exposed ports = %#v", fake.created.Config.ExposedPorts)
+	}
+	bindings := fake.created.HostConfig.PortBindings[gatewayPort]
+	if len(bindings) != 1 || bindings[0].HostIP.String() != "127.0.0.1" {
+		t.Fatalf("port bindings = %#v", bindings)
+	}
+	result, err := manager.Run(context.Background(), "voice task")
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if result.Status != core.StatusSucceeded || result.FinalResponse != "final answer" {
+		t.Fatalf("result = %#v", result)
+	}
+	if gatewayURL != "ws://127.0.0.1:38089" || len(gatewayToken) == 0 {
+		t.Fatalf("gateway URL/token = %q/%d", gatewayURL, len(gatewayToken))
+	}
+	if runnerOptions.OriginalPrompt != "voice task" || runnerOptions.SessionKey != "agent:main:aries-fix-git" ||
+		runnerOptions.ChunkDuration != 25*time.Millisecond || runnerOptions.Voice != "alloy" || runnerOptions.ReasoningEffort != "low" || !runnerOptions.IncludeEvents {
+		t.Fatalf("runner options = %#v", runnerOptions)
+	}
+	if runnerOptions.AudioProvider == nil {
+		t.Fatal("realtime runner did not receive an audio provider")
+	}
+	if speechRequest.Text != "voice task" || speechRequest.Model != "tts-model" || speechRequest.Voice != "alloy" || speechRequest.Format != "wav" {
+		t.Fatalf("speech request = %#v", speechRequest)
+	}
+	audio, err := runnerOptions.AudioProvider(gatewayclient.TalkSessionInfo{InputEncoding: "pcm16", InputSampleRateHz: 24000})
+	if err != nil {
+		t.Fatalf("audio provider returned error: %v", err)
+	}
+	if len(audio.Data) == 0 || audio.Rate != 24000 || audio.Encoding != "pcm16" {
+		t.Fatalf("prepared audio = %#v", audio)
+	}
+	files := readArchive(t, fake.archive)
+	if string(files["run/aries/realtime.key"].content) != "speech-secret" {
+		t.Fatal("realtime key was not staged")
+	}
+	if !strings.Contains(string(files["run/aries/launch"].content), "export OPENAI_API_KEY=\"$realtime_key\"") {
+		t.Fatalf("launcher does not export realtime key: %s", files["run/aries/launch"].content)
+	}
+	serialized := strings.Join(append(append([]string{}, fake.created.Config.Env...), fake.created.Config.Cmd...), "\n")
+	for _, value := range fake.created.Config.Labels {
+		serialized += "\n" + value
+	}
+	if strings.Contains(serialized, "speech-secret") {
+		t.Fatal("realtime secret entered Docker config")
+	}
+	for _, name := range []string{"voice-instruction.txt", "voice-instruction.wav", "voice-instruction.wav.meta.json"} {
+		if _, err := os.Stat(filepath.Join(manager.outputDir, "fix-git", "harness", name)); err != nil {
+			t.Fatalf("missing %s: %v", name, err)
+		}
+	}
+	path := filepath.Join(manager.outputDir, "fix-git", "harness", "realtime-result.json")
+	content, err := os.ReadFile(path)
+	if err != nil || !bytes.Contains(content, []byte(`"agent_output_text": "final answer"`)) {
+		t.Fatalf("realtime result artifact = %s, %v", content, err)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("realtime result artifact mode = %v, %v", info, err)
+	}
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func testWAVBytes(rate int, pcm []byte) []byte {
+	var chunks bytes.Buffer
+	writeChunk := func(id string, payload []byte) {
+		chunks.WriteString(id)
+		_ = binary.Write(&chunks, binary.LittleEndian, uint32(len(payload)))
+		chunks.Write(payload)
+		if len(payload)%2 != 0 {
+			chunks.WriteByte(0)
+		}
+	}
+	var fmtChunk bytes.Buffer
+	_ = binary.Write(&fmtChunk, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&fmtChunk, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&fmtChunk, binary.LittleEndian, uint32(rate))
+	_ = binary.Write(&fmtChunk, binary.LittleEndian, uint32(rate*2))
+	_ = binary.Write(&fmtChunk, binary.LittleEndian, uint16(2))
+	_ = binary.Write(&fmtChunk, binary.LittleEndian, uint16(16))
+	writeChunk("fmt ", fmtChunk.Bytes())
+	writeChunk("data", pcm)
+	var out bytes.Buffer
+	out.WriteString("RIFF")
+	_ = binary.Write(&out, binary.LittleEndian, uint32(4+chunks.Len()))
+	out.WriteString("WAVE")
+	out.Write(chunks.Bytes())
+	return out.Bytes()
 }
 
 func TestArtifactCollectionFailureBelongsToRunNotStop(t *testing.T) {

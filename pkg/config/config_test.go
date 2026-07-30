@@ -28,6 +28,9 @@ func TestNormalizedRuntimeSchema(t *testing.T) {
 	if cfg.Runtime.Backend != "deepseek" || cfg.Runtime.Mode != "external" || cfg.Model.ID != "fake" || cfg.CoreModel().Provider != "deepseek" || cfg.Execution.Concurrency != 1 {
 		t.Fatalf("config = %#v", cfg)
 	}
+	if cfg.Harness.Mode != "agent" {
+		t.Fatalf("harness mode = %q, want agent", cfg.Harness.Mode)
+	}
 	managed := strings.Replace(validConfig, `"runtime":{"backend":"deepseek","mode":"external"}`, `"runtime":{"backend":"sglang","mode":"managed","config":{"file":"native.yaml","executable":"python3","startup_timeout":"15m","stop_timeout":"1m"}}`, 1)
 	managed = strings.Replace(managed, `"id":"fake","base_url":"http://127.0.0.1:8080"`, `"id":"Qwen/Qwen3-8B","base_url":"http://host:30000/v1"`, 1)
 	cfg, err = Decode(strings.NewReader(managed))
@@ -43,25 +46,29 @@ func TestNormalizedRuntimeSchema(t *testing.T) {
 	}
 }
 
-func TestManagedSGLangGPUIndicesAreOptionalAndUnique(t *testing.T) {
-	managed := strings.Replace(validConfig, `"runtime":{"backend":"deepseek","mode":"external"}`, `"runtime":{"backend":"sglang","mode":"managed","config":{"file":"native.yaml","executable":"python3","startup_timeout":"15m","stop_timeout":"1m","gpu_indices":[0,2]}}`, 1)
-	withGPUs := strings.Replace(managed, `"id":"fake","base_url":"http://127.0.0.1:8080"`, `"id":"Qwen/Qwen3-8B","base_url":"http://host:30000/v1"`, 1)
-	cfg, err := Decode(strings.NewReader(withGPUs))
+func TestRealtimeHarnessConfigValidationAndResolution(t *testing.T) {
+	realtime := strings.Replace(validConfig, `"harness":{"type":"openclaw"}`, `"harness":{"type":"openclaw","mode":"realtime","realtime":{"tts":{"provider":"openai","model":"gpt-4o-mini-tts","voice":"alloy","timeout":"2s","speed":1.1},"chunk_duration":"25ms","listen_duration":"3s","quiet_duration":"250ms","agent_wait_duration":"2s","tool_call_timeout":"1s","trailing_silence_ms":300,"voice":"alloy","reasoning_effort":"low","include_events":true}}`, 1)
+	cfg, err := Decode(strings.NewReader(realtime))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.Runtime.Config.GPUIndices) != 2 || cfg.Runtime.Config.GPUIndices[0] != 0 || cfg.Runtime.Config.GPUIndices[1] != 2 {
-		t.Fatalf("runtime = %#v", cfg.Runtime)
+	if cfg.Harness.Mode != "realtime" || cfg.Harness.Realtime.ChunkDuration != 25*time.Millisecond || cfg.Harness.Realtime.ListenDuration != 3*time.Second || cfg.Harness.Realtime.TrailingSilenceMillis != 300 || !cfg.Harness.Realtime.IncludeEvents || cfg.Harness.Realtime.TTS.APIKeyEnv != "OPENAI_API_KEY" || cfg.Harness.Realtime.TTS.Timeout != 2*time.Second {
+		t.Fatalf("harness realtime = %#v", cfg.Harness)
 	}
-	for _, indices := range []string{`[-1]`, `[0,0]`} {
-		input := strings.Replace(withGPUs, `[0,2]`, indices, 1)
-		if _, err := Decode(strings.NewReader(input)); err == nil {
-			t.Fatalf("accepted gpu_indices %s", indices)
-		}
-	}
-	external := strings.Replace(withGPUs, `"mode":"managed","config":{"file":"native.yaml","executable":"python3","startup_timeout":"15m","stop_timeout":"1m","gpu_indices":[0,2]}`, `"mode":"external","config":{"file":"native.yaml","gpu_indices":[0,2]}`, 1)
-	if _, err := Decode(strings.NewReader(external)); err == nil {
-		t.Fatal("external SGLang accepted gpu_indices")
+
+	for name, input := range map[string]string{
+		"bad mode":       strings.Replace(validConfig, `"harness":{"type":"openclaw"}`, `"harness":{"type":"openclaw","mode":"other"}`, 1),
+		"agent realtime": strings.Replace(validConfig, `"harness":{"type":"openclaw"}`, `"harness":{"type":"openclaw","mode":"agent","realtime":{"audio_path":"audio.wav"}}`, 1),
+		"audio path":     strings.Replace(realtime, `"tts":{"provider":"openai","model":"gpt-4o-mini-tts","voice":"alloy","timeout":"2s","speed":1.1}`, `"audio_path":"audio.wav","tts":{"provider":"openai","model":"gpt-4o-mini-tts","voice":"alloy","timeout":"2s","speed":1.1}`, 1),
+		"bad duration":   strings.Replace(realtime, `"chunk_duration":"25ms"`, `"chunk_duration":"0s"`, 1),
+		"bad silence":    strings.Replace(realtime, `"trailing_silence_ms":300`, `"trailing_silence_ms":-1`, 1),
+		"bad tts":        strings.Replace(realtime, `"provider":"openai"`, `"provider":"elevenlabs"`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Decode(strings.NewReader(input)); err == nil {
+				t.Fatal("expected rejection")
+			}
+		})
 	}
 }
 
@@ -152,7 +159,7 @@ func TestCheckedInProfilesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 4 {
+	if len(paths) != 5 {
 		t.Fatalf("profiles=%v", paths)
 	}
 	for _, path := range paths {
@@ -162,6 +169,11 @@ func TestCheckedInProfilesLoad(t *testing.T) {
 		}
 		if cfg.Runtime.Backend == "" || cfg.Runtime.Mode == "" || cfg.Model.ID == "" {
 			t.Fatalf("%s: %#v", path, cfg)
+		}
+		if strings.Contains(path, "realtime") {
+			if cfg.Harness.Mode != "realtime" || cfg.Harness.Realtime.TTS.APIKeyEnv != "OPENAI_API_KEY" || cfg.Harness.Realtime.ChunkDuration != 50*time.Millisecond {
+				t.Fatalf("%s realtime harness: %#v", path, cfg.Harness)
+			}
 		}
 	}
 }

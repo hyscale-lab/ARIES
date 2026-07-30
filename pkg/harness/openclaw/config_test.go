@@ -127,10 +127,19 @@ func TestRenderConfigAcceptsLowercaseEnvironmentName(t *testing.T) {
 }
 
 func TestLauncherUsesFileSecretAndDirectExec(t *testing.T) {
-	script := string(launcherScript("ARIES_FAKE_API_KEY"))
+	script := string(launcherScript("ARIES_FAKE_API_KEY", "OPENAI_API_KEY"))
 	for _, required := range []string{"model_key=$(cat /run/aries/model.key)", "gateway_key=$(cat /run/aries/gateway.key)", "export ARIES_FAKE_API_KEY=\"$model_key\"", "export OPENCLAW_GATEWAY_TOKEN=\"$gateway_key\"", "exec \"$@\""} {
 		if !strings.Contains(script, required) {
 			t.Fatalf("launcher missing %q: %s", required, script)
 		}
+	}
+	for _, required := range []string{"realtime_key=$(cat /run/aries/realtime.key)", "export OPENAI_API_KEY=\"$realtime_key\"", "unset realtime_key"} {
+		if !strings.Contains(script, required) {
+			t.Fatalf("launcher missing realtime export %q: %s", required, script)
+		}
+	}
+	agentScript := string(launcherScript("ARIES_FAKE_API_KEY", ""))
+	if strings.Contains(agentScript, "realtime.key") || strings.Contains(agentScript, "OPENAI_API_KEY") {
+		t.Fatalf("agent launcher exports realtime key: %s", agentScript)
 	}
 }

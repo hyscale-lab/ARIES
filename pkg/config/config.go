@@ -88,7 +88,42 @@ type BenchmarkConfig struct {
 }
 
 type HarnessConfig struct {
-	Type string `json:"type"`
+	Type     string                `json:"type"`
+	Mode     string                `json:"mode,omitempty"`
+	Realtime HarnessRealtimeConfig `json:"realtime,omitempty"`
+}
+
+type HarnessRealtimeConfig struct {
+	AgentQuestionTemplate string            `json:"agent_question_template,omitempty"`
+	TTS                   RealtimeTTSConfig `json:"tts,omitempty"`
+	ChunkDurationText     string            `json:"chunk_duration,omitempty"`
+	ListenDurationText    string            `json:"listen_duration,omitempty"`
+	QuietDurationText     string            `json:"quiet_duration,omitempty"`
+	AgentWaitDurationText string            `json:"agent_wait_duration,omitempty"`
+	ToolCallTimeoutText   string            `json:"tool_call_timeout,omitempty"`
+	TrailingSilenceMillis int               `json:"trailing_silence_ms,omitempty"`
+	Provider              string            `json:"provider,omitempty"`
+	Model                 string            `json:"model,omitempty"`
+	Voice                 string            `json:"voice,omitempty"`
+	ReasoningEffort       string            `json:"reasoning_effort,omitempty"`
+	IncludeEvents         bool              `json:"include_events,omitempty"`
+	ChunkDuration         time.Duration     `json:"-"`
+	ListenDuration        time.Duration     `json:"-"`
+	QuietDuration         time.Duration     `json:"-"`
+	AgentWaitDuration     time.Duration     `json:"-"`
+	ToolCallTimeout       time.Duration     `json:"-"`
+}
+
+type RealtimeTTSConfig struct {
+	Provider     string        `json:"provider,omitempty"`
+	BaseURL      string        `json:"base_url,omitempty"`
+	APIKeyEnv    string        `json:"api_key_env,omitempty"`
+	Model        string        `json:"model,omitempty"`
+	Voice        string        `json:"voice,omitempty"`
+	Instructions string        `json:"instructions,omitempty"`
+	Speed        *float64      `json:"speed,omitempty"`
+	TimeoutText  string        `json:"timeout,omitempty"`
+	Timeout      time.Duration `json:"-"`
 }
 
 type SandboxConfig struct {
@@ -307,6 +342,12 @@ func (c *Config) validate() error {
 	if c.Runtime.Backend != "deepseek" && c.Runtime.Backend != "sglang" {
 		return errors.New("runtime.backend must be deepseek or sglang")
 	}
+	if c.Harness.Mode == "" {
+		c.Harness.Mode = "agent"
+	}
+	if err := c.Harness.validate(); err != nil {
+		return err
+	}
 	if err := c.Runtime.validate(); err != nil {
 		return err
 	}
@@ -341,6 +382,83 @@ func (c *Config) validate() error {
 		return errors.New("model.api_key_env must be an environment variable name")
 	}
 	return nil
+}
+
+func (h *HarnessConfig) validate() error {
+	if h.Mode == "" {
+		h.Mode = "agent"
+	}
+	switch h.Mode {
+	case "agent":
+		if h.Realtime != (HarnessRealtimeConfig{}) {
+			return errors.New("harness.realtime must be empty unless harness.mode is realtime")
+		}
+		return nil
+	case "realtime":
+		if h.Type != "openclaw" {
+			return errors.New("harness.mode realtime requires OpenClaw")
+		}
+		if err := h.Realtime.TTS.validate(); err != nil {
+			return err
+		}
+		if h.Realtime.TrailingSilenceMillis < 0 {
+			return errors.New("harness.realtime.trailing_silence_ms must not be negative")
+		}
+		var err error
+		if h.Realtime.ChunkDuration, err = parseOptionalPositiveDuration("harness.realtime.chunk_duration", h.Realtime.ChunkDurationText); err != nil {
+			return err
+		}
+		if h.Realtime.ListenDuration, err = parseOptionalPositiveDuration("harness.realtime.listen_duration", h.Realtime.ListenDurationText); err != nil {
+			return err
+		}
+		if h.Realtime.QuietDuration, err = parseOptionalPositiveDuration("harness.realtime.quiet_duration", h.Realtime.QuietDurationText); err != nil {
+			return err
+		}
+		if h.Realtime.AgentWaitDuration, err = parseOptionalPositiveDuration("harness.realtime.agent_wait_duration", h.Realtime.AgentWaitDurationText); err != nil {
+			return err
+		}
+		if h.Realtime.ToolCallTimeout, err = parseOptionalPositiveDuration("harness.realtime.tool_call_timeout", h.Realtime.ToolCallTimeoutText); err != nil {
+			return err
+		}
+		return nil
+	default:
+		return errors.New("harness.mode must be agent or realtime")
+	}
+}
+
+func (tts *RealtimeTTSConfig) validate() error {
+	if tts.Provider == "" {
+		tts.Provider = "openai"
+	}
+	if tts.Provider != "openai" {
+		return errors.New("harness.realtime.tts.provider must be openai")
+	}
+	if tts.APIKeyEnv == "" {
+		tts.APIKeyEnv = "OPENAI_API_KEY"
+	}
+	if !validEnvName(tts.APIKeyEnv) {
+		return errors.New("harness.realtime.tts.api_key_env must be an environment variable name")
+	}
+	if strings.ContainsRune(tts.BaseURL, 0) || strings.ContainsRune(tts.Model, 0) || strings.ContainsRune(tts.Voice, 0) || strings.ContainsRune(tts.Instructions, 0) {
+		return errors.New("harness.realtime.tts contains an invalid NUL byte")
+	}
+	if tts.Speed != nil && (*tts.Speed < 0.25 || *tts.Speed > 4 || math.IsNaN(*tts.Speed) || math.IsInf(*tts.Speed, 0)) {
+		return errors.New("harness.realtime.tts.speed must be between 0.25 and 4")
+	}
+	var err error
+	tts.Timeout, err = parseOptionalPositiveDuration("harness.realtime.tts.timeout", tts.TimeoutText)
+	return err
+}
+
+func parseOptionalPositiveDuration(name, value string) (time.Duration, error) {
+	if strings.TrimSpace(value) == "" {
+		return 0, nil
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration <= 0 {
+		return 0, fmt.Errorf("%s must be a positive Go duration", name)
+	}
+	return duration, nil
 }
 
 func (c *RuntimeConfig) validate() error {

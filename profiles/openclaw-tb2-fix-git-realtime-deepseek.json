@@ -1,0 +1,51 @@
+{
+  "name": "openclaw-tb2-fix-git-realtime-deepseek",
+  "versions_file": "../configs/versions.json",
+  "overrides_file": "",
+  "execution": {
+    "concurrency": 1
+  },
+  "benchmark": {
+    "type": "terminalbench2",
+    "root": ".cache/terminal-bench-2",
+    "tasks": [
+      "fix-git"
+    ]
+  },
+  "harness": {
+    "type": "openclaw",
+    "mode": "realtime",
+    "realtime": {
+      "tts": {
+        "provider": "openai",
+        "api_key_env": "OPENAI_API_KEY",
+        "model": "gpt-4o-mini-tts",
+        "voice": "alloy",
+        "timeout": "120s"
+      },
+      "chunk_duration": "50ms",
+      "listen_duration": "180s",
+      "quiet_duration": "8s",
+      "agent_wait_duration": "120s",
+      "tool_call_timeout": "60s",
+      "trailing_silence_ms": 3000,
+      "include_events": true
+    }
+  },
+  "sandbox": {
+    "type": "docker"
+  },
+  "bridge": {
+    "type": "openclaw-ssh"
+  },
+  "runtime": {
+    "backend": "deepseek",
+    "mode": "external"
+  },
+  "model": {
+    "base_url": "https://api.deepseek.com",
+    "api_key_env": "DEEPSEEK_API_KEY",
+    "id": "deepseek-v4-flash"
+  },
+  "output_dir": "runs"
+}
