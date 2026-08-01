@@ -169,6 +169,11 @@ func failingRunWiring(runtime ModelRuntime, events *[]string, runErr error) Wiri
 		PrepareBackend: func(cfg config.Config, _ string) (PreparedBackend, error) {
 			return PreparedBackend{Model: cfg.CoreModel(), Runtime: runtime}, nil
 		},
+		SetupBenchmark: func(context.Context, config.Config) error { return nil },
+		LoadPreparationTasks: func(context.Context, config.Config, []string) ([]core.Task, error) {
+			return nil, nil
+		},
+		PullImages: func(context.Context, []string) error { return nil },
 		NewBenchmark: func(config.Config, string, string, string) (runner.Benchmark, error) {
 			*events = append(*events, "run")
 			return nil, runErr
@@ -218,6 +223,11 @@ func TestRunForwardsFreshPreparedGPUIndicesToEveryOccurrence(t *testing.T) {
 		PrepareBackend: func(cfg config.Config, _ string) (PreparedBackend, error) {
 			return PreparedBackend{Model: cfg.CoreModel(), EffectiveGPUIndices: preparedGPUIndices}, nil
 		},
+		SetupBenchmark: func(context.Context, config.Config) error { return nil },
+		LoadPreparationTasks: func(context.Context, config.Config, []string) ([]core.Task, error) {
+			return nil, nil
+		},
+		PullImages: func(context.Context, []string) error { return nil },
 		NewBenchmark: func(config.Config, string, string, string) (runner.Benchmark, error) {
 			return &oneTaskBenchmark{}, nil
 		},
@@ -426,6 +436,10 @@ func TestRuntimeExitCancelsAndDrainsRun(t *testing.T) {
 	constructed := 0
 	wiring := Wiring{ValidateComponents: func(config.Config) error { return nil }, PrepareBackend: func(cfg config.Config, _ string) (PreparedBackend, error) {
 		return PreparedBackend{Model: cfg.CoreModel(), Runtime: runtime}, nil
+	}, SetupBenchmark: func(context.Context, config.Config) error { return nil }, LoadPreparationTasks: func(context.Context, config.Config, []string) ([]core.Task, error) {
+		return nil, nil
+	}, PullImages: func(context.Context, []string) error {
+		return nil
 	}, NewBenchmark: func(config.Config, string, string, string) (runner.Benchmark, error) {
 		constructed++
 		return &oneTaskBenchmark{}, nil

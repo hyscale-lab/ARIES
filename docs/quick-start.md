@@ -25,36 +25,30 @@ docker info >/dev/null
 ARIES currently validates the host bridge path on native Linux Docker. Docker
 Desktop and rootless networking are not yet supported configurations.
 
-## 2. Choose and prepare a profile
+## 2. Choose a profile
 
-Use the one-task profile for the quickest first run:
-
-```sh
-make build
-./bin/aries setup profiles/openclaw-tb2-fix-git-deepseek.json
-```
-
-For the equivalent SGLang profile:
+Build ARIES once, then choose the one-task DeepSeek profile for the quickest
+first run, the equivalent one-task SGLang profile for local serving, or the
+heterogeneous five-task DeepSeek profile:
 
 ```sh
 make build
-./bin/aries setup profiles/openclaw-tb2-fix-git-sglang.json
 ```
 
-To prepare the heterogeneous five-task subset instead:
+- `profiles/openclaw-tb2-fix-git-deepseek.json`
+- `profiles/openclaw-tb2-fix-git-sglang.json`
+- `profiles/openclaw-tb2-five-deepseek.json`
 
-```sh
-make build
-./bin/aries setup profiles/openclaw-tb2-five-deepseek.json
-```
-
-Setup strictly loads the selected profile and `configs/versions.json`, creates
-or verifies the pinned Terminal-Bench checkout at `.cache/terminal-bench-2`,
-reads each selected task's explicit Docker image tag from its `task.toml`, and
-pulls only OpenClaw plus those selected images through the Docker Go SDK. The
-Terminal-Bench Git revision and exact tag-pinned OpenClaw image remain in
-`configs/versions.json`; task image digests are not duplicated there. Setup is
-safe to run again and refuses to replace a checkout at another revision.
+Running a profile automatically loads `configs/versions.json`, creates or
+verifies the pinned Terminal-Bench checkout at `.cache/terminal-bench-2`, reads
+each selected task's explicit Docker image tag from its `task.toml`, and pulls
+only OpenClaw plus those selected images through the Docker Go SDK. Preparation
+happens before the run directory is created, a managed runtime is started,
+model weights load, an external endpoint is contacted, or task work is
+admitted. The Terminal-Bench Git revision and exact tag-pinned OpenClaw image
+remain in `configs/versions.json`; task image digests are not duplicated there.
+Preparation is safe to repeat and refuses to replace a checkout at another
+revision.
 
 The five-task profile additionally references
 `configs/runtime-overrides.json` relative to the profile. Its sparse
@@ -69,12 +63,22 @@ Profiles and nonempty referenced override files reject unknown fields and
 trailing JSON; there is no profile merge or inheritance layer. SGLang is the
 exception only for its separate native launch configuration, described below.
 
-The Make equivalent accepts either profile:
+For an optional prewarm, `setup` performs only profile/backend validation and
+the same benchmark/image preparation. It does not contact an external model
+service, start managed SGLang, load model weights, create a run directory, or
+admit tasks:
 
 ```sh
 make setup
 make setup PROFILE=profiles/openclaw-tb2-five-deepseek.json
 make setup PROFILE=profiles/openclaw-tb2-fix-git-sglang.json
+```
+
+The normal Make workflow is direct run:
+
+```sh
+make run
+make run PROFILE=profiles/openclaw-tb2-five-deepseek.json
 ```
 
 To run another subset from the pinned revision, copy either profile and replace
@@ -197,7 +201,6 @@ credential:
 
 ```sh
 export SGLANG_API_KEY=unused-local-token
-./bin/aries setup .cache/openclaw-tb2-fix-git-sglang.json
 ./bin/aries .cache/openclaw-tb2-fix-git-sglang.json
 ```
 
@@ -258,7 +261,6 @@ removed from the managed SGLang child's environment:
 
 ```sh
 export SGLANG_API_KEY=unused-local-token
-./bin/aries setup .cache/openclaw-tb2-fix-git-sglang.json
 ./bin/aries .cache/openclaw-tb2-fix-git-sglang.json
 ```
 
@@ -282,9 +284,10 @@ For the five-task subset:
 For SGLang, use the external or managed command from the previous section.
 Keep `bin/aries-ssh` beside `bin/aries`. A live DeepSeek run can incur API
 charges; the five-task profile also takes substantially longer and pulls more
-images. ARIES first performs a bounded model preflight, then runs each task in
-profile order. For each task it stops OpenClaw, revokes SSH access, and only
-then evaluates the same still-running sandbox.
+images. ARIES first ensures the benchmark and images are prepared, then starts
+and checks an owned managed runtime when configured, performs a bounded model
+preflight, and runs each task in profile order. For each task it stops OpenClaw,
+revokes SSH access, and only then evaluates the same still-running sandbox.
 
 ## 5. Check the result
 
@@ -383,7 +386,8 @@ run log.
   pinned checkout and ensure its `task.toml` declares a valid explicit image
   tag. Digest-bearing or implicit-`latest` task references are rejected.
 - **Terminal-Bench revision mismatch:** move the stale checkout aside, then
-  rerun the profile setup command. Setup never deletes it automatically.
+  rerun the profile command (or the optional setup prewarm). ARIES never
+  deletes it automatically.
 - **SSH timeout:** check host firewall rules and confirm containers can reach
   the Docker bridge gateway.
 - **Suspected leak:** inspect `docker ps -a --filter label=aries.managed=true`

@@ -34,6 +34,16 @@ Managed SGLang uses a native YAML file, explicit executable and timeouts, and
 optional GPU indices; ARIES validates model, port, and GPU topology before side
 effects and stops the owned process after admitted tasks drain.
 
+Both direct run and the optional `aries setup PROFILE.json` command share one
+idempotent lightweight preparation path for the pinned benchmark checkout,
+selected task metadata, and exact Docker images. Direct run completes that
+work before creating run artifacts, starting managed SGLang, checking model
+health, or admitting tasks. Setup is prewarm-only: it validates backend
+configuration and prepares those lightweight inputs, but never starts or stops
+a runtime, contacts an external endpoint, installs SGLang, or downloads model
+weights. Managed model loading and health therefore remain live, run-scoped
+states rather than a persisted readiness marker.
+
 Credentials remain runtime inputs rather than JSON values. Managed child logs
 are private, and the configured model credential is removed from the managed
 SGLang child environment. ARIES does not install SGLang, download models, or

@@ -47,8 +47,14 @@ to the configured model service and required image registries.
 
 ```sh
 make build
-./bin/aries setup profiles/openclaw-tb2-fix-git-deepseek.json
+./bin/aries profiles/openclaw-tb2-fix-git-deepseek.json
 ```
+
+Every run idempotently prepares the pinned benchmark checkout and required
+container images before creating run artifacts or contacting the model
+service. `aries setup PROFILE.json` remains available as an optional prewarm;
+it never starts a managed runtime, loads model weights, or contacts an external
+model endpoint.
 
 The DeepSeek example requires an API key and can incur charges. Follow the
 [Quick start](docs/quick-start.md) for secure credential setup, the first run,

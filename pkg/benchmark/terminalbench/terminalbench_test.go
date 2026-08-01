@@ -937,6 +937,89 @@ func TestSetupRejectsWrongExistingRevisionWithoutReplacingIt(t *testing.T) {
 	}
 }
 
+func TestInstallCheckoutConcurrentSameRevisionConverges(t *testing.T) {
+	parent := t.TempDir()
+	source := filepath.Join(parent, "source")
+	if err := os.Mkdir(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func(dir string, args ...string) string {
+		t.Helper()
+		commandArgs := append([]string{"-C", dir}, args...)
+		output, err := exec.Command("git", commandArgs...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+		return strings.TrimSpace(string(output))
+	}
+	run(source, "init", "--quiet")
+	writeFile(t, filepath.Join(source, "fixture"), "ready\n")
+	run(source, "add", "fixture")
+	run(source, "-c", "user.name=ARIES Test", "-c", "user.email=aries@example.invalid", "commit", "--quiet", "-m", "fixture")
+	revision := run(source, "rev-parse", "HEAD")
+
+	temporary := make([]string, 2)
+	for index := range temporary {
+		temporary[index] = filepath.Join(parent, fmt.Sprintf("candidate-%d", index))
+		output, err := exec.Command("git", "clone", "--quiet", source, temporary[index]).CombinedOutput()
+		if err != nil {
+			t.Fatalf("clone candidate %d: %v: %s", index, err, output)
+		}
+		run(temporary[index], "checkout", "--quiet", "--detach", revision)
+	}
+
+	root := filepath.Join(parent, "terminal-bench-2")
+	start := make(chan struct{})
+	errs := make(chan error, len(temporary))
+	var ready sync.WaitGroup
+	ready.Add(len(temporary))
+	for _, candidate := range temporary {
+		candidate := candidate
+		go func() {
+			ready.Done()
+			<-start
+			errs <- installCheckout(context.Background(), candidate, root, revision)
+		}()
+	}
+	ready.Wait()
+	close(start)
+	for range temporary {
+		if err := <-errs; err != nil {
+			t.Fatalf("concurrent install: %v", err)
+		}
+	}
+	if err := VerifyRevision(context.Background(), root, revision); err != nil {
+		t.Fatalf("installed checkout: %v", err)
+	}
+
+	writeFile(t, filepath.Join(source, "fixture"), "different\n")
+	run(source, "add", "fixture")
+	run(source, "-c", "user.name=ARIES Test", "-c", "user.email=aries@example.invalid", "commit", "--quiet", "-m", "different")
+	differentRevision := run(source, "rev-parse", "HEAD")
+	different := filepath.Join(parent, "different-candidate")
+	if output, err := exec.Command("git", "clone", "--quiet", source, different).CombinedOutput(); err != nil {
+		t.Fatalf("clone different candidate: %v: %s", err, output)
+	}
+	run(different, "checkout", "--quiet", "--detach", differentRevision)
+	if err := installCheckout(context.Background(), different, root, differentRevision); err == nil {
+		t.Fatal("different-revision installer claimed the existing checkout")
+	}
+	if err := VerifyRevision(context.Background(), root, revision); err != nil {
+		t.Fatalf("different-revision installer altered winner: %v", err)
+	}
+
+	canceledCandidate := filepath.Join(parent, "canceled-candidate")
+	if output, err := exec.Command("git", "clone", "--quiet", root, canceledCandidate).CombinedOutput(); err != nil {
+		t.Fatalf("clone canceled candidate: %v: %s", err, output)
+	}
+	run(canceledCandidate, "checkout", "--quiet", "--detach", revision)
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := installCheckout(canceled, canceledCandidate, root, revision); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled installer error=%v", err)
+	}
+}
+
 func writeArbitraryFixture(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()

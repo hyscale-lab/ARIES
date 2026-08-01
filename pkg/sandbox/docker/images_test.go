@@ -6,9 +6,11 @@ import (
 	"io"
 	"iter"
 	"reflect"
+	"strings"
 	"testing"
 
 	cerrdefs "github.com/containerd/errdefs"
+	imageapi "github.com/moby/moby/api/types/image"
 	"github.com/moby/moby/api/types/jsonstream"
 	"github.com/moby/moby/client"
 )
@@ -25,9 +27,27 @@ type fakeImageClient struct {
 func (fake *fakeImageClient) ImageInspect(context.Context, string, ...client.ImageInspectOption) (client.ImageInspectResult, error) {
 	fake.inspectCalls++
 	if fake.present {
-		return client.ImageInspectResult{}, nil
+		return client.ImageInspectResult{InspectResponse: imageapi.InspectResponse{ID: "sha256:prepared"}}, nil
 	}
 	return client.ImageInspectResult{}, cerrdefs.ErrNotFound
+}
+
+func TestPullImagesRejectsPresentImageWithoutUsableIdentity(t *testing.T) {
+	fake := &fakeImageClient{present: true}
+	// Override the minimal fake through a dedicated client so success cannot be
+	// inferred from an error-free inspect alone.
+	identityless := identitylessImageClient{fakeImageClient: fake}
+	err := pullImages(context.Background(), identityless, []string{testPullImage})
+	if err == nil || !strings.Contains(err.Error(), "empty image identity") || len(fake.pullCalls) != 0 {
+		t.Fatalf("error=%v pulls=%v", err, fake.pullCalls)
+	}
+}
+
+type identitylessImageClient struct{ *fakeImageClient }
+
+func (fake identitylessImageClient) ImageInspect(context.Context, string, ...client.ImageInspectOption) (client.ImageInspectResult, error) {
+	fake.inspectCalls++
+	return client.ImageInspectResult{}, nil
 }
 
 func (fake *fakeImageClient) ImagePull(_ context.Context, image string, _ client.ImagePullOptions) (client.ImagePullResponse, error) {

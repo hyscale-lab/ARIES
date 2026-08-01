@@ -114,9 +114,11 @@ func TestSetupPreparesBackendBeforeSideEffects(t *testing.T) {
 		t.Fatal(err)
 	}
 	var events []string
+	runtimeEvents := []string{}
+	runtime := &recordingRuntime{events: &runtimeEvents, done: make(chan struct{})}
 	wiring := Wiring{PrepareBackend: func(cfg config.Config, _ string) (PreparedBackend, error) {
 		events = append(events, "backend")
-		return PreparedBackend{Model: cfg.CoreModel()}, nil
+		return PreparedBackend{Model: cfg.CoreModel(), Runtime: runtime}, nil
 	}, ValidateComponents: func(config.Config) error { return nil }, SetupBenchmark: func(context.Context, config.Config) error {
 		events = append(events, "setup")
 		return nil
@@ -129,6 +131,109 @@ func TestSetupPreparesBackendBeforeSideEffects(t *testing.T) {
 	}
 	if !reflect.DeepEqual(events, []string{"backend", "setup"}) || !strings.Contains(out.String(), "profile ready") {
 		t.Fatalf("events=%v out=%q", events, out.String())
+	}
+	if len(runtimeEvents) != 0 {
+		t.Fatalf("setup took runtime ownership: %v", runtimeEvents)
+	}
+}
+
+func TestRunEnsuresPreparationBeforeOutputAndRuntime(t *testing.T) {
+	profile := writeCommandProfile(t, filepath.Join(t.TempDir(), "runs"))
+	cfg, err := config.Load(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []string
+	runtime := &recordingRuntime{events: &events, done: make(chan struct{})}
+	prepareErr := errors.New("image preparation canary")
+	wiring := Wiring{
+		ValidateComponents: func(config.Config) error { return nil },
+		PrepareBackend: func(cfg config.Config, _ string) (PreparedBackend, error) {
+			events = append(events, "backend")
+			return PreparedBackend{Model: cfg.CoreModel(), Runtime: runtime}, nil
+		},
+		SetupBenchmark: func(context.Context, config.Config) error {
+			events = append(events, "benchmark")
+			return nil
+		},
+		LoadPreparationTasks: func(_ context.Context, _ config.Config, taskIDs []string) ([]core.Task, error) {
+			events = append(events, "tasks:"+strings.Join(taskIDs, ","))
+			return []core.Task{{Environment: core.Environment{Image: "task:tag"}}}, nil
+		},
+		PullImages: func(_ context.Context, images []string) error {
+			events = append(events, "images:"+strings.Join(images, ","))
+			return prepareErr
+		},
+	}
+	err = Run(context.Background(), profile, io.Discard, Dependencies{Wiring: wiring})
+	if !errors.Is(err, prepareErr) {
+		t.Fatalf("Run error=%v", err)
+	}
+	want := []string{"backend", "benchmark", "tasks:a", "images:" + cfg.Versions.OpenClaw.Image + ",task:tag"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events=%v want=%v", events, want)
+	}
+	if _, statErr := os.Stat(cfg.OutputDir); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("run output created before preparation: %v", statErr)
+	}
+}
+
+func TestSetupRetriesIncompletePreparationWithoutReadinessMarker(t *testing.T) {
+	profile := writeCommandProfile(t, filepath.Join(t.TempDir(), "runs"))
+	pullCalls := 0
+	wiring := Wiring{
+		ValidateComponents: func(config.Config) error { return nil },
+		PrepareBackend: func(cfg config.Config, _ string) (PreparedBackend, error) {
+			return PreparedBackend{Model: cfg.CoreModel()}, nil
+		},
+		SetupBenchmark:       func(context.Context, config.Config) error { return nil },
+		LoadPreparationTasks: func(context.Context, config.Config, []string) ([]core.Task, error) { return nil, nil },
+		PullImages: func(context.Context, []string) error {
+			pullCalls++
+			if pullCalls == 1 {
+				return errors.New("partial pull")
+			}
+			return nil
+		},
+	}
+	if err := Setup(context.Background(), profile, io.Discard, Dependencies{Wiring: wiring}); err == nil {
+		t.Fatal("first setup unexpectedly succeeded")
+	}
+	if err := Setup(context.Background(), profile, io.Discard, Dependencies{Wiring: wiring}); err != nil {
+		t.Fatal(err)
+	}
+	if pullCalls != 2 {
+		t.Fatalf("pull calls=%d", pullCalls)
+	}
+}
+
+func TestRunCancellationDuringPreparationHasNoDownstreamEffects(t *testing.T) {
+	profile := writeCommandProfile(t, filepath.Join(t.TempDir(), "runs"))
+	cfg, err := config.Load(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	downstream := 0
+	wiring := Wiring{
+		ValidateComponents: func(config.Config) error { return nil },
+		PrepareBackend: func(cfg config.Config, _ string) (PreparedBackend, error) {
+			return PreparedBackend{Model: cfg.CoreModel()}, nil
+		},
+		SetupBenchmark:       func(ctx context.Context, _ config.Config) error { return ctx.Err() },
+		LoadPreparationTasks: func(context.Context, config.Config, []string) ([]core.Task, error) { downstream++; return nil, nil },
+		PullImages:           func(context.Context, []string) error { downstream++; return nil },
+		NewBenchmark:         func(config.Config, string, string, string) (runner.Benchmark, error) { downstream++; return nil, nil },
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := Run(ctx, profile, io.Discard, Dependencies{Wiring: wiring}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error=%v", err)
+	}
+	if downstream != 0 {
+		t.Fatalf("downstream effects=%d", downstream)
+	}
+	if _, statErr := os.Stat(cfg.OutputDir); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("run output created during canceled preparation: %v", statErr)
 	}
 }
 

@@ -60,7 +60,7 @@ func Setup(ctx context.Context, profilePath string, stdout io.Writer, dependenci
 	if _, err := dependencies.Wiring.PrepareBackend(cfg, cfg.OutputDir); err != nil {
 		return err
 	}
-	if err := prepareProfile(ctx, cfg, dependencies.Wiring); err != nil {
+	if err := ensurePrepared(ctx, cfg, dependencies.Wiring); err != nil {
 		return err
 	}
 	_, err = fmt.Fprintf(stdout, "profile ready: %s\n", profilePath)
@@ -91,6 +91,13 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 	if err != nil {
 		return err
 	}
+	preparationEntry := logger.WithFields(logrus.Fields{"run_id": runID, "profile": cfg.Name, "backend": cfg.Runtime.Backend, "mode": cfg.Runtime.Mode, "component": "preparation"})
+	preparationEntry.WithField("preparation_state", "preparing").Info("profile preparation")
+	if err := ensurePrepared(ctx, cfg, dependencies.Wiring); err != nil {
+		preparationEntry.WithFields(logrus.Fields{"preparation_state": "not_prepared", "error_category": "preparation_failed"}).Error("profile preparation")
+		return err
+	}
+	preparationEntry.WithField("preparation_state", "prepared").Info("profile preparation")
 	if err := createRunOutputRoot(outputRoot); err != nil {
 		return fmt.Errorf("create private run output root: %w", err)
 	}
@@ -142,6 +149,7 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 			return fmt.Errorf("start model runtime: %w", err)
 		}
 		runtimeEntry.WithField("runtime_state", "started").Info("model runtime lifecycle")
+		runtimeEntry.WithField("runtime_state", "loading").Info("model runtime lifecycle")
 		defer func() {
 			stopErr := stopRuntime(runtime, cfg.Runtime.Config.StopTimeout)
 			logRuntimeExit(runtime.Err())
@@ -153,11 +161,16 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 			returnErr = errors.Join(returnErr, stopErr)
 		}()
 		startupCtx, cancel := context.WithTimeout(ctx, cfg.Runtime.Config.StartupTimeout)
-		healthErr := waitForRuntimeHealth(startupCtx, runtime, dependencies.PreflightSleep)
+		healthErr := waitForRuntimeHealthObserved(startupCtx, runtime, dependencies.PreflightSleep, func() {
+			runtimeEntry.WithFields(logrus.Fields{"runtime_state": "loading", "error_category": "retryable_health_failure"}).Info("model runtime lifecycle")
+		})
 		cancel()
 		if healthErr != nil {
 			runtimeErr, _ := runtimeExitIfDone(runtime)
 			logRuntimeExit(runtimeErr)
+			if runtimeErr == nil {
+				runtimeEntry.WithFields(logrus.Fields{"runtime_state": "terminal_configuration_or_model_mismatch", "error_category": "runtime_health"}).Error("model runtime lifecycle")
+			}
 			return fmt.Errorf("wait for model runtime health: %w", errors.Join(healthErr, runtimeErr))
 		}
 		runtimeEntry.WithField("runtime_state", "healthy").Info("model runtime lifecycle")
@@ -185,8 +198,14 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 	cancelPreflight()
 	validation, preflightErr := preflight.validation, preflight.err
 	persistErr := persistLiveValidation(outputRoot, validation)
+	if preflightErr != nil {
+		runtimeEntry.WithFields(logrus.Fields{"runtime_state": "terminal_configuration_or_model_mismatch", "error_category": "model_preflight"}).Error("model runtime lifecycle")
+	}
 	if preflightErr != nil || persistErr != nil {
 		return errors.Join(preflightErr, persistErr)
+	}
+	if runtime == nil {
+		runtimeEntry.WithField("runtime_state", "healthy").Info("model runtime lifecycle")
 	}
 
 	runCtx, cancelRun := context.WithCancel(ctx)
@@ -214,9 +233,9 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 	return returnErr
 }
 
-func prepareProfile(ctx context.Context, cfg config.Config, wiring Wiring) error {
+func ensurePrepared(ctx context.Context, cfg config.Config, wiring Wiring) error {
 	if wiring.SetupBenchmark == nil || wiring.LoadPreparationTasks == nil || wiring.PullImages == nil {
-		return errors.New("setup wiring is incomplete")
+		return errors.New("preparation wiring is incomplete")
 	}
 	if err := wiring.SetupBenchmark(ctx, cfg); err != nil {
 		return err
@@ -229,7 +248,7 @@ func prepareProfile(ctx context.Context, cfg config.Config, wiring Wiring) error
 	for _, task := range tasks {
 		images = append(images, task.Environment.Image)
 	}
-	return wiring.PullImages(ctx, images)
+	return wiring.PullImages(ctx, uniqueStrings(images))
 }
 
 func validateWiredComponents(cfg config.Config, wiring Wiring) error {

@@ -57,8 +57,19 @@ func Setup(ctx context.Context, root, repositoryURL, revision string) error {
 	if err := VerifyRevision(ctx, temporary, revision); err != nil {
 		return err
 	}
+	return installCheckout(ctx, temporary, root, revision)
+}
+
+func installCheckout(ctx context.Context, temporary, root, revision string) error {
 	if err := os.Rename(temporary, root); err != nil {
-		return fmt.Errorf("install terminalbench checkout at %q: %w", root, err)
+		// Another setup may have atomically installed the same pinned checkout
+		// after our initial absence check. Accept only a freshly reverified
+		// destination; a wrong, dirty, or partial winner remains an error.
+		if verifyErr := VerifyRevision(ctx, root, revision); verifyErr == nil {
+			return nil
+		} else {
+			return fmt.Errorf("install terminalbench checkout at %q: %w", root, errors.Join(err, verifyErr))
+		}
 	}
 	return nil
 }

@@ -48,6 +48,17 @@ func TestHealthRetryabilityIsStructuralAndUnknownIsTerminal(t *testing.T) {
 	}
 }
 
+func TestObservedHealthReportsOnlyStructurallyRetryableFailures(t *testing.T) {
+	runtime := &fakeRuntime{health: []error{classifiedHealth{true}, nil}, done: make(chan struct{})}
+	retries := 0
+	if err := waitForRuntimeHealthObserved(context.Background(), runtime, func(context.Context, time.Duration) error { return nil }, func() { retries++ }); err != nil {
+		t.Fatal(err)
+	}
+	if retries != 1 {
+		t.Fatalf("retry observations=%d", retries)
+	}
+}
+
 func TestRuntimeDoneDuringHealthReturnsPublishedError(t *testing.T) {
 	done := make(chan struct{})
 	close(done)

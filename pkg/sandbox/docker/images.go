@@ -37,7 +37,10 @@ func pullImages(ctx context.Context, api imageClient, images []string) error {
 		if err := validatePullImage(image); err != nil {
 			return fmt.Errorf("prepare Docker image %q: %w", image, err)
 		}
-		if _, err := api.ImageInspect(ctx, image); err == nil {
+		if inspection, err := api.ImageInspect(ctx, image); err == nil {
+			if err := validatePreparedImage(image, inspection); err != nil {
+				return err
+			}
 			continue
 		} else if !cerrdefs.IsNotFound(err) {
 			return fmt.Errorf("inspect Docker image %q: %w", image, err)
@@ -55,9 +58,20 @@ func pullImages(ctx context.Context, api imageClient, images []string) error {
 		if err := pull.Close(); err != nil {
 			return fmt.Errorf("close Docker image pull %q: %w", image, err)
 		}
-		if _, err := api.ImageInspect(ctx, image); err != nil {
+		inspection, err := api.ImageInspect(ctx, image)
+		if err != nil {
 			return fmt.Errorf("confirm Docker image %q after pull: %w", image, err)
 		}
+		if err := validatePreparedImage(image, inspection); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validatePreparedImage(image string, inspection client.ImageInspectResult) error {
+	if inspection.ID == "" {
+		return fmt.Errorf("confirm Docker image %q: inspection returned an empty image identity", image)
 	}
 	return nil
 }

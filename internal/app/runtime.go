@@ -30,6 +30,10 @@ type PreparedBackend struct {
 }
 
 func waitForRuntimeHealth(ctx context.Context, runtime ModelRuntime, sleep contextSleep) error {
+	return waitForRuntimeHealthObserved(ctx, runtime, sleep, nil)
+}
+
+func waitForRuntimeHealthObserved(ctx context.Context, runtime ModelRuntime, sleep contextSleep, observeRetry func()) error {
 	if sleep == nil {
 		sleep = sleepWithContext
 	}
@@ -64,6 +68,9 @@ func waitForRuntimeHealth(ctx context.Context, runtime ModelRuntime, sleep conte
 		var retryable retryableHealthError
 		if !errors.As(err, &retryable) || !retryable.Retryable() {
 			return err
+		}
+		if observeRetry != nil {
+			observeRetry()
 		}
 		if err := sleep(retryCtx, managedStartupRetryDelay); err != nil {
 			if runtimeErr, exited := runtimeExitIfDone(runtime); exited {
