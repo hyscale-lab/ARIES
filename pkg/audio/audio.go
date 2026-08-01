@@ -31,6 +31,13 @@ const (
 	ulawClip = 32635
 	minPCM16 = -32768
 	maxPCM16 = 32767
+
+	// Bounds keep malformed or hostile audio metadata from driving unbounded
+	// reads, allocation, or arithmetic in the harness process.
+	MaxSampleRate            = 384000
+	MaxPCM16Bytes            = 32 << 20
+	MaxWAVBytes              = MaxPCM16Bytes + (1 << 20)
+	MaxSilenceDurationMillis = 60000
 )
 
 var maxInt = int(^uint(0) >> 1)
@@ -56,9 +63,12 @@ func ReadWAVFilePCM16Mono(path string) ([]byte, int, error) {
 // ReadWAVPCM16Mono reads a RIFF/WAVE stream and returns its raw little-endian
 // PCM16 mono data plus sample rate.
 func ReadWAVPCM16Mono(reader io.Reader) ([]byte, int, error) {
-	content, err := io.ReadAll(reader)
+	content, err := io.ReadAll(io.LimitReader(reader, MaxWAVBytes+1))
 	if err != nil {
 		return nil, 0, fmt.Errorf("read WAV: %w", err)
+	}
+	if len(content) > MaxWAVBytes {
+		return nil, 0, errors.New("WAV exceeds size bound")
 	}
 	if len(content) < wavHeaderSize || string(content[0:4]) != wavRIFFChunk || string(content[8:12]) != wavWAVEType {
 		return nil, 0, errors.New("WAV must be RIFF/WAVE")
@@ -110,7 +120,7 @@ func ReadWAVPCM16Mono(reader io.Reader) ([]byte, int, error) {
 	if bits != 16 {
 		return nil, 0, fmt.Errorf("WAV must be 16-bit PCM, got %d-bit", bits)
 	}
-	if rate == 0 || rate > uint32(maxInt) {
+	if rate == 0 || rate > MaxSampleRate {
 		return nil, 0, errors.New("WAV sample rate is invalid")
 	}
 	if !dataSeen {
@@ -118,6 +128,9 @@ func ReadWAVPCM16Mono(reader io.Reader) ([]byte, int, error) {
 	}
 	if len(data)%pcm16BytesPerSample != 0 {
 		return nil, 0, errors.New("WAV PCM16 data has an odd byte length")
+	}
+	if len(data) > MaxPCM16Bytes {
+		return nil, 0, errors.New("WAV PCM16 data exceeds size bound")
 	}
 	return data, int(rate), nil
 }
@@ -142,14 +155,17 @@ func readWAVChunk(content []byte, offset int) (string, []byte, int, error) {
 
 // SilencePCM16 returns zero-valued little-endian PCM16 silence.
 func SilencePCM16(rate, durationMS int) ([]byte, error) {
-	if rate <= 0 {
-		return nil, errors.New("sample rate must be positive")
+	if rate <= 0 || rate > MaxSampleRate {
+		return nil, errors.New("sample rate is outside the supported bound")
 	}
 	if durationMS < 0 {
 		return nil, errors.New("duration must not be negative")
 	}
+	if durationMS > MaxSilenceDurationMillis {
+		return nil, errors.New("silence duration exceeds supported bound")
+	}
 	samples := int64(rate) * int64(durationMS) / 1000
-	if samples > int64(maxInt/pcm16BytesPerSample) {
+	if samples > int64(MaxPCM16Bytes/pcm16BytesPerSample) || samples > int64(maxInt/pcm16BytesPerSample) {
 		return nil, errors.New("silence duration is too large")
 	}
 	return make([]byte, int(samples)*pcm16BytesPerSample), nil
@@ -157,11 +173,14 @@ func SilencePCM16(rate, durationMS int) ([]byte, error) {
 
 // ResamplePCM16 linearly resamples little-endian PCM16 audio.
 func ResamplePCM16(pcm []byte, srcRate, dstRate int) ([]byte, error) {
-	if srcRate <= 0 || dstRate <= 0 {
-		return nil, errors.New("sample rates must be positive")
+	if srcRate <= 0 || dstRate <= 0 || srcRate > MaxSampleRate || dstRate > MaxSampleRate {
+		return nil, errors.New("sample rates are outside the supported bound")
 	}
 	if len(pcm)%pcm16BytesPerSample != 0 {
 		return nil, errors.New("PCM16 input has an odd byte length")
+	}
+	if len(pcm) > MaxPCM16Bytes {
+		return nil, errors.New("PCM16 input exceeds size bound")
 	}
 	if len(pcm) == 0 {
 		return nil, nil
@@ -171,7 +190,12 @@ func ResamplePCM16(pcm []byte, srcRate, dstRate int) ([]byte, error) {
 	}
 
 	inputSamples := len(pcm) / pcm16BytesPerSample
-	outputSamples := int(math.Round(float64(inputSamples) * float64(dstRate) / float64(srcRate)))
+	numerator := uint64(inputSamples)*uint64(dstRate) + uint64(srcRate)/2
+	outputSamples64 := numerator / uint64(srcRate)
+	if outputSamples64 > uint64(MaxPCM16Bytes/pcm16BytesPerSample) || outputSamples64 > uint64(maxInt/pcm16BytesPerSample) {
+		return nil, errors.New("resampled PCM16 output exceeds size bound")
+	}
+	outputSamples := int(outputSamples64)
 	if outputSamples < 1 {
 		outputSamples = 1
 	}
@@ -206,6 +230,9 @@ func ResamplePCM16(pcm []byte, srcRate, dstRate int) ([]byte, error) {
 func PCM16ToG711ULaw(pcm []byte) ([]byte, error) {
 	if len(pcm)%pcm16BytesPerSample != 0 {
 		return nil, errors.New("PCM16 input has an odd byte length")
+	}
+	if len(pcm) > MaxPCM16Bytes {
+		return nil, errors.New("PCM16 input exceeds size bound")
 	}
 	output := make([]byte, len(pcm)/pcm16BytesPerSample)
 	for index := range output {

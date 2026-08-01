@@ -51,12 +51,10 @@ func pullImages(ctx context.Context, api imageClient, images []string) error {
 		if err != nil {
 			return fmt.Errorf("pull Docker image %q: %w", image, err)
 		}
-		if err := pull.Wait(ctx); err != nil {
-			_ = pull.Close()
-			return fmt.Errorf("wait for Docker image pull %q: %w", image, err)
-		}
-		if err := pull.Close(); err != nil {
-			return fmt.Errorf("close Docker image pull %q: %w", image, err)
+		waitErr := pull.Wait(ctx)
+		closeErr := pull.Close()
+		if waitErr != nil || closeErr != nil {
+			return fmt.Errorf("complete Docker image pull %q: %w", image, errors.Join(waitErr, closeErr))
 		}
 		inspection, err := api.ImageInspect(ctx, image)
 		if err != nil {

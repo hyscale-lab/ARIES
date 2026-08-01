@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 )
 
+var renameCheckout = os.Rename
+
 // Setup creates an exact shallow detached checkout at root. An existing root
 // is accepted only when it is already at the pinned revision.
 func Setup(ctx context.Context, root, repositoryURL, revision string) error {
@@ -61,7 +63,7 @@ func Setup(ctx context.Context, root, repositoryURL, revision string) error {
 }
 
 func installCheckout(ctx context.Context, temporary, root, revision string) error {
-	if err := os.Rename(temporary, root); err != nil {
+	if err := renameCheckout(temporary, root); err != nil {
 		// Another setup may have atomically installed the same pinned checkout
 		// after our initial absence check. Accept only a freshly reverified
 		// destination; a wrong, dirty, or partial winner remains an error.

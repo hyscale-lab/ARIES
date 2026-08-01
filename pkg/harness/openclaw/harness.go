@@ -270,7 +270,7 @@ func New(options Options) (*Manager, error) {
 		agentTimeout: options.AgentTimeout, logger: options.Logger,
 		apiKeyLookup: options.APIKeyLookup, mode: options.Mode, realtime: options.Realtime, newID: randomID,
 		newGateway: func(rawURL string, token []byte) (gatewayConnection, error) {
-			return newGatewayClient(rawURL, token, gatewayScopes(options.Mode))
+			return newGatewayClientWithDisposition(rawURL, token, gatewayScopes(options.Mode), gatewayEventDisposition(options.Mode))
 		},
 		newRealtime: newRealtimeRunner, newSpeech: newSpeechClient,
 	}, nil
@@ -486,6 +486,7 @@ func (manager *Manager) Run(ctx context.Context, instruction string) (core.Harne
 	client, err := manager.newGateway(active.gatewayURL, active.gatewayToken)
 	if err != nil {
 		cancel()
+		err = redactSessionError(err, active)
 		return failedHarnessResult(active, started, err), err
 	}
 	defer client.Close()
@@ -505,6 +506,9 @@ func (manager *Manager) Run(ctx context.Context, instruction string) (core.Harne
 		})
 	}
 	cancel()
+	connectSummary = redactConnectSummary(connectSummary, active)
+	agentResult = redactAgentResult(agentResult, active)
+	err = redactSessionError(err, active)
 	resultPath, writeErr := manager.writeAgentResult(active, connectSummary, agentResult, err)
 	if writeErr == nil {
 		active.logPaths = appendUnique(active.logPaths, resultPath)
@@ -529,10 +533,12 @@ func (manager *Manager) runRealtime(ctx context.Context, active *session, instru
 		active.logPaths = appendUnique(active.logPaths, speechPaths...)
 	}
 	if synthErr != nil {
+		synthErr = redactSessionError(synthErr, active)
 		return failedHarnessResult(active, started, synthErr), synthErr
 	}
 	client, err := manager.newGateway(active.gatewayURL, active.gatewayToken)
 	if err != nil {
+		err = redactSessionError(err, active)
 		return failedHarnessResult(active, started, err), err
 	}
 	runner, err := manager.newRealtime(client, realtimeclient.Options{
@@ -554,11 +560,14 @@ func (manager *Manager) runRealtime(ctx context.Context, active *session, instru
 	})
 	if err != nil {
 		_ = client.Close()
+		err = redactSessionError(err, active)
 		return failedHarnessResult(active, started, err), err
 	}
 	runCtx, cancel := context.WithTimeout(ctx, active.agentTimeout)
 	realtimeResult, err := runner.Run(runCtx)
 	cancel()
+	realtimeResult = redactRealtimeResult(realtimeResult, active)
+	err = redactSessionError(err, active)
 	resultPath, writeErr := manager.writeRealtimeResult(active, realtimeResult)
 	if writeErr == nil {
 		active.logPaths = appendUnique(active.logPaths, resultPath)
@@ -580,12 +589,19 @@ func (manager *Manager) runRealtime(ctx context.Context, active *session, instru
 	}, nil
 }
 
-func newGatewayClient(rawURL string, token []byte, scopes []string) (gatewayConnection, error) {
+func newGatewayClientWithDisposition(rawURL string, token []byte, scopes []string, disposition gatewayclient.EventDisposition) (gatewayConnection, error) {
 	dialer, err := gatewayclient.NewWebSocketDialer(gatewayclient.WebSocketOptions{URL: rawURL})
 	if err != nil {
 		return nil, err
 	}
-	return gatewayclient.New(dialer, gatewayclient.Options{Token: string(token), Scopes: scopes})
+	return gatewayclient.New(dialer, gatewayclient.Options{Token: string(token), Scopes: scopes, EventDisposition: disposition})
+}
+
+func gatewayEventDisposition(mode string) gatewayclient.EventDisposition {
+	if mode == ModeAgent {
+		return gatewayclient.EventDispositionResponseOnly
+	}
+	return gatewayclient.EventDispositionDelivery
 }
 
 func gatewayScopes(mode string) []string {
@@ -706,6 +722,9 @@ func (manager *Manager) realtimeAudioProvider(audioPath string) realtimeclient.A
 			if err != nil {
 				return realtimeclient.Audio{}, err
 			}
+			if len(silence) > audioinput.MaxPCM16Bytes-len(pcm) {
+				return realtimeclient.Audio{}, errors.New("realtime audio with trailing silence exceeds size bound")
+			}
 			pcm = append(pcm, silence...)
 		}
 		encoding := session.InputEncoding
@@ -728,11 +747,13 @@ func (manager *Manager) realtimeAudioProvider(audioPath string) realtimeclient.A
 }
 
 func (manager *Manager) writeRealtimeResult(active *session, result realtimeclient.Result) (string, error) {
+	result = redactRealtimeResult(result, active)
 	content, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("encode realtime result: %w", err)
 	}
 	content = append(content, '\n')
+	content = redactSession(content, active)
 	path := filepath.Join(active.artifactDir, "realtime-result.json")
 	if err := writeArtifact(path, content); err != nil {
 		return "", fmt.Errorf("write realtime result: %w", err)
@@ -741,6 +762,9 @@ func (manager *Manager) writeRealtimeResult(active *session, result realtimeclie
 }
 
 func (manager *Manager) writeAgentResult(active *session, summary gatewayclient.ConnectSummary, result gatewayclient.AgentResult, runErr error) (string, error) {
+	summary = redactConnectSummary(summary, active)
+	result = redactAgentResult(result, active)
+	runErr = redactSessionError(runErr, active)
 	errorText := ""
 	if runErr != nil {
 		errorText = runErr.Error()
@@ -1343,7 +1367,11 @@ func failedHarnessResult(active *session, started time.Time, err error) core.Har
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		status = core.StatusCanceled
 	}
-	return core.HarnessResult{Status: status, Duration: time.Since(started), LogPaths: append([]string(nil), active.logPaths...), Error: err.Error()}
+	errorText := ""
+	if err != nil {
+		errorText = string(redactSession([]byte(err.Error()), active))
+	}
+	return core.HarnessResult{Status: status, Duration: time.Since(started), LogPaths: append([]string(nil), active.logPaths...), Error: errorText}
 }
 
 func readStablePrivateFile(path string, mode os.FileMode) ([]byte, error) {
@@ -1599,4 +1627,81 @@ func clearSessionSecrets(active *session) {
 
 func redactSession(content []byte, active *session) []byte {
 	return redactSecrets(content, active.apiKey, active.realtimeAPIKey, active.gatewayToken)
+}
+
+type sessionRedactedError struct {
+	message string
+	cause   error
+}
+
+func (err *sessionRedactedError) Error() string { return err.message }
+func (err *sessionRedactedError) Unwrap() error { return err.cause }
+
+func redactSessionError(err error, active *session) error {
+	if err == nil {
+		return nil
+	}
+	var classification error
+	if errors.Is(err, context.Canceled) {
+		classification = context.Canceled
+	} else if errors.Is(err, context.DeadlineExceeded) {
+		classification = context.DeadlineExceeded
+	}
+	return &sessionRedactedError{message: string(redactSession([]byte(err.Error()), active)), cause: classification}
+}
+
+func redactRealtimeResult(result realtimeclient.Result, active *session) realtimeclient.Result {
+	content, err := json.Marshal(result)
+	if err != nil {
+		return realtimeclient.Result{SchemaVersion: realtimeclient.ResultSchemaVersion, Errors: []string{"realtime result could not be safely encoded"}}
+	}
+	var tree any
+	if err := json.Unmarshal(content, &tree); err != nil {
+		return realtimeclient.Result{SchemaVersion: realtimeclient.ResultSchemaVersion, Errors: []string{"realtime result could not be safely decoded"}}
+	}
+	tree = redactRealtimeJSON(tree, active)
+	content, err = json.Marshal(tree)
+	if err != nil {
+		return realtimeclient.Result{SchemaVersion: realtimeclient.ResultSchemaVersion, Errors: []string{"redacted realtime result could not be safely encoded"}}
+	}
+	var redacted realtimeclient.Result
+	if err := json.Unmarshal(content, &redacted); err != nil {
+		return realtimeclient.Result{SchemaVersion: realtimeclient.ResultSchemaVersion, Errors: []string{"redacted realtime result could not be safely decoded"}}
+	}
+	return redacted
+}
+
+func redactConnectSummary(summary gatewayclient.ConnectSummary, active *session) gatewayclient.ConnectSummary {
+	summary.Role = string(redactSession([]byte(summary.Role), active))
+	for index := range summary.Scopes {
+		summary.Scopes[index] = string(redactSession([]byte(summary.Scopes[index]), active))
+	}
+	return summary
+}
+
+func redactAgentResult(result gatewayclient.AgentResult, active *session) gatewayclient.AgentResult {
+	result.RunID = string(redactSession([]byte(result.RunID), active))
+	result.Text = string(redactSession([]byte(result.Text), active))
+	return result
+}
+
+func redactRealtimeJSON(value any, active *session) any {
+	switch typed := value.(type) {
+	case string:
+		return string(redactSession([]byte(typed), active))
+	case []any:
+		for index := range typed {
+			typed[index] = redactRealtimeJSON(typed[index], active)
+		}
+		return typed
+	case map[string]any:
+		redacted := make(map[string]any, len(typed))
+		for key, item := range typed {
+			redactedKey := string(redactSession([]byte(key), active))
+			redacted[redactedKey] = redactRealtimeJSON(item, active)
+		}
+		return redacted
+	default:
+		return value
+	}
 }

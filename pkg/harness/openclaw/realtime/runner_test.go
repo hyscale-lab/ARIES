@@ -445,8 +445,80 @@ func TestRunnerSubmitsAgentConsultFailureAsToolResult(t *testing.T) {
 		t.Fatalf("submit method = %q", submit.method)
 	}
 	toolResult := submit.params["result"].(map[string]any)
-	if got := toolResult["error"].(string); !strings.Contains(got, "talk.client.toolCall failed") || !strings.Contains(got, "bridge_failed") {
+	if got := toolResult["error"].(string); !strings.Contains(got, "talk.client.toolCall rejected request") || !strings.Contains(got, "bridge_failed") {
 		t.Fatalf("submitted failure = %#v", toolResult)
+	}
+}
+
+func TestRunnerProtocolErrorsDoNotRenderSecretDetails(t *testing.T) {
+	secret := "gateway-auth-secret-canary"
+	gateway := newScriptedGateway()
+	gateway.calls = append(gateway.calls, scriptedCall{method: "talk.session.create", response: gatewayclient.Frame{
+		"ok":    false,
+		"error": map[string]any{"code": "DENIED", "message": "request rejected", "details": map[string]any{"token": secret}},
+	}})
+	runner, err := New(gateway, Options{Audio: Audio{Data: []byte{1, 2}, Rate: 24000, BytesPerSample: 2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, runErr := runner.Run(context.Background())
+	if runErr == nil || strings.Contains(runErr.Error(), secret) || strings.Contains(strings.Join(result.Errors, "\n"), secret) {
+		t.Fatalf("result/error leaked protocol details: %#v / %v", result, runErr)
+	}
+}
+
+func TestRunnerDeadlineDoesNotAcceptPartialEventBeforeFatalOverflow(t *testing.T) {
+	gateway := newScriptedGateway()
+	gateway.calls = append(gateway.calls,
+		scriptedCall{method: "talk.session.create", response: gatewayclient.Frame{"ok": true, "payload": map[string]any{
+			"sessionId": "session-1", "audio": map[string]any{"inputEncoding": "pcm16", "inputSampleRateHz": 24000},
+		}}},
+		scriptedCall{method: "talk.session.appendAudio", response: gatewayclient.Frame{"ok": true}},
+	)
+	gateway.events = append(gateway.events, gatewayclient.Frame{
+		"type": "event", "event": "talk.event", "payload": map[string]any{"talkEvent": map[string]any{
+			"type": "transcript.delta", "sessionId": "session-1", "payload": map[string]any{"text": "partial-must-not-succeed"},
+		}},
+	})
+	gateway.recvDelay = 5 * time.Millisecond
+	gateway.recvErr = errors.New("gateway event queue overflow")
+	runner, err := New(gateway, Options{
+		Audio:          Audio{Data: []byte{1, 2}, Rate: 24000, BytesPerSample: 2},
+		ListenDuration: time.Millisecond, QuietDuration: time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, runErr := runner.Run(context.Background())
+	if runErr == nil || !strings.Contains(runErr.Error(), "event queue overflow") {
+		t.Fatalf("Run accepted boundary partial result: %#v, %v", result, runErr)
+	}
+	if result.Transcript != "" || result.OutputText != "" {
+		t.Fatalf("fatal overflow exposed partial success: %#v", result)
+	}
+}
+
+func TestRunnerRejectsHugeOrMisalignedAudioBeforeGatewayUse(t *testing.T) {
+	tests := []Audio{
+		{Data: []byte{1, 2}, Rate: maxRealtimeSampleRate + 1, BytesPerSample: 2},
+		{Data: []byte{1, 2}, Rate: 24000, BytesPerSample: maxRealtimeBytesPerSample + 1},
+		{Data: []byte{1, 2, 3}, Rate: 24000, BytesPerSample: 2},
+	}
+	for _, audio := range tests {
+		if _, err := New(newScriptedGateway(), Options{Audio: audio}); err == nil || !strings.Contains(err.Error(), "bounds") {
+			t.Fatalf("New(%#v) error = %v", audio, err)
+		}
+	}
+	if _, err := New(newScriptedGateway(), Options{Audio: Audio{Data: []byte{1, 2}, Rate: 24000, BytesPerSample: 2}, ChunkDuration: maxRealtimeChunkDuration + 1}); err == nil || !strings.Contains(err.Error(), "duration") {
+		t.Fatalf("huge chunk duration error = %v", err)
+	}
+}
+
+func TestSessionInfoExtractionDoesNotRenderPayload(t *testing.T) {
+	secret := "tts-secret-canary"
+	_, err := sessionInfoFromPayload(map[string]any{"auth": map[string]any{"token": secret}})
+	if err == nil || strings.Contains(err.Error(), secret) {
+		t.Fatalf("sessionInfoFromPayload error = %v", err)
 	}
 }
 
@@ -466,6 +538,8 @@ type scriptedGateway struct {
 	events         []gatewayclient.Frame
 	requests       []realtimeRequest
 	closed         bool
+	recvDelay      time.Duration
+	recvErr        error
 }
 
 func newScriptedGateway() *scriptedGateway {
@@ -510,11 +584,17 @@ func (gateway *scriptedGateway) Call(_ context.Context, method string, params ma
 
 func (gateway *scriptedGateway) RecvEvent(ctx context.Context) (gatewayclient.Frame, error) {
 	if len(gateway.events) == 0 {
+		if gateway.recvErr != nil {
+			return nil, gateway.recvErr
+		}
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
 	next := gateway.events[0]
 	gateway.events = gateway.events[1:]
+	if gateway.recvDelay > 0 {
+		time.Sleep(gateway.recvDelay)
+	}
 	return next, nil
 }
 
@@ -522,6 +602,8 @@ func (gateway *scriptedGateway) Close() error {
 	gateway.closed = true
 	return nil
 }
+
+func (gateway *scriptedGateway) FatalError() error { return gateway.recvErr }
 
 func cloneMap(source map[string]any) map[string]any {
 	out := make(map[string]any, len(source))

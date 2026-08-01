@@ -23,6 +23,8 @@ import (
 	"github.com/hyscale-lab/aries/pkg/bridge/openclawssh"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
+	gatewayclient "github.com/hyscale-lab/aries/pkg/harness/openclaw/gateway"
+	realtimeclient "github.com/hyscale-lab/aries/pkg/harness/openclaw/realtime"
 	"github.com/hyscale-lab/aries/pkg/monitor"
 	"github.com/hyscale-lab/aries/pkg/runner"
 	dockersandbox "github.com/hyscale-lab/aries/pkg/sandbox/docker"
@@ -362,6 +364,118 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 	}
 	assertNoRunResources(t, ctx, api, runID)
 	assertSecretAbsent(t, outputDir, key)
+}
+
+func TestPinnedGatewayRealtimeProtocolSmoke(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	api, err := client.New(client.FromEnv, client.WithUserAgent("aries-openclaw-realtime-smoke/1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = api.Close() })
+	if _, err := api.Ping(ctx, client.PingOptions{}); err != nil {
+		t.Fatalf("Docker daemon is required: %v", err)
+	}
+	root := repositoryRoot(t)
+	versions, err := config.LoadVersions(filepath.Join(root, "configs", "versions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ensureSDKImage(t, ctx, api, versions.OpenClaw.Image)
+
+	runID := "openclaw-realtime-protocol-smoke"
+	networkName := "aries-net-realtime-smoke"
+	if _, err := api.NetworkCreate(ctx, networkName, client.NetworkCreateOptions{
+		Internal: false,
+		Labels:   map[string]string{"aries.managed": "true", "aries.kind": "realtime-smoke", "aries.run": runID},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		_, _ = api.NetworkRemove(cleanupCtx, networkName, client.NetworkRemoveOptions{})
+	})
+
+	privateRoot := t.TempDir()
+	writePrivate := func(name, content string, mode os.FileMode) string {
+		path := filepath.Join(privateRoot, name)
+		if err := os.WriteFile(path, []byte(content), mode); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	clientContent, err := os.ReadFile(requiredIntegrationFile(t, "ARIES_SSH_CLIENT"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := core.ToolEndpoint{
+		Protocol: "ssh", Address: "127.0.0.1:1", Username: "aries", Network: networkName,
+		ClientCommand: "/opt/aries/bin/aries-ssh", ClientSourceFile: writePrivate("aries-ssh", string(clientContent), 0o555),
+		IdentityFile: "/run/aries/ssh/id_ed25519", IdentitySourceFile: writePrivate("id_ed25519", "fixture-identity", 0o600),
+		KnownHostsFile: "/run/aries/ssh/known_hosts", KnownHostsSourceFile: writePrivate("known_hosts", "fixture-known-host", 0o600),
+	}
+	keys := map[string]string{"MODEL_KEY": "deterministic-model-key", "OPENAI_API_KEY": "deterministic-realtime-key"}
+	harness, err := New(Options{
+		Image: versions.OpenClaw.Image, OutputDir: t.TempDir(), Mode: ModeRealtime,
+		CleanupTimeout: 30 * time.Second, StartTimeout: time.Minute, AgentTimeout: 10 * time.Second,
+		Realtime:     RealtimeOptions{TTS: RealtimeTTSOptions{APIKeyEnv: "OPENAI_API_KEY"}},
+		APIKeyLookup: func(name string) ([]byte, bool) { value, ok := keys[name]; return []byte(value), ok },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		_ = harness.Stop(cleanupCtx)
+		_ = harness.Close()
+	})
+	if err := harness.Start(ctx, core.HarnessRequest{
+		RunID: runID, TaskID: "realtime-smoke", Endpoint: endpoint, Timeout: 10 * time.Second,
+		Model: core.ModelConfig{Provider: "deepseek", BaseURL: "http://model.invalid/v1", Model: "deterministic-model", APIKeyEnv: "MODEL_KEY"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	harness.mu.Lock()
+	active := harness.active
+	clientURL := active.gatewayURL
+	token := append([]byte(nil), active.gatewayToken...)
+	harness.mu.Unlock()
+	connection, err := newGatewayClientWithDisposition(
+		clientURL,
+		token,
+		[]string{"operator.read", "operator.write"},
+		gatewayclient.EventDispositionDelivery,
+	)
+	clear(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner, err := realtimeclient.New(connection, realtimeclient.Options{
+		SessionKey:    "agent:main:aries-realtime-smoke",
+		Audio:         realtimeclient.Audio{Data: make([]byte, 480), Rate: 24000, BytesPerSample: 2, Encoding: realtimeclient.DefaultInputEncoding},
+		ChunkDuration: 10 * time.Millisecond, ListenDuration: 500 * time.Millisecond, QuietDuration: 50 * time.Millisecond,
+		ConnectOptions: gatewayclient.ConnectOptions{Timeout: 20 * time.Second}, CloseGateway: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runner.Run(ctx)
+	if err != nil {
+		t.Fatalf("real v2026.7.1 realtime protocol failed before session completion: %v (result=%#v)", err, result)
+	}
+	if result.SessionID == nil || *result.SessionID == "" {
+		t.Fatalf("real v2026.7.1 gateway did not create a realtime session: %#v", result)
+	}
+	if err := harness.Stop(context.WithoutCancel(ctx)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.NetworkRemove(ctx, networkName, client.NetworkRemoveOptions{}); err != nil && !errdefs.IsNotFound(err) {
+		t.Fatal(err)
+	}
+	assertNoRunResources(t, ctx, api, runID)
 }
 
 func parseRawBridgeAudit(t *testing.T, content []byte) []map[string]string {

@@ -57,17 +57,17 @@ func sessionInfoFromPayload(payload any) (SessionInfo, error) {
 	mapped := toMap(payload)
 	sessionID, _ := mapped["sessionId"].(string)
 	if sessionID == "" {
-		return SessionInfo{}, fmt.Errorf("talk.session.create payload missing sessionId: %s", gateway.StableString(payload))
+		return SessionInfo{}, fmt.Errorf("talk.session.create payload missing sessionId")
 	}
 	relaySessionID, _ := mapped["relaySessionId"].(string)
 	audio := toMap(mapped["audio"])
 	encoding, _ := audio["inputEncoding"].(string)
 	if encoding == "" {
-		return SessionInfo{}, fmt.Errorf("talk.session.create audio missing inputEncoding: %s", gateway.StableString(audio))
+		return SessionInfo{}, fmt.Errorf("talk.session.create audio missing inputEncoding")
 	}
 	rate, ok := numericInt(audio["inputSampleRateHz"])
-	if !ok || rate <= 0 {
-		return SessionInfo{}, fmt.Errorf("talk.session.create audio missing inputSampleRateHz: %s", gateway.StableString(audio))
+	if !ok || rate <= 0 || rate > maxRealtimeSampleRate {
+		return SessionInfo{}, fmt.Errorf("talk.session.create audio missing inputSampleRateHz")
 	}
 	return SessionInfo{SessionID: sessionID, RelaySessionID: relaySessionID, InputEncoding: encoding, InputSampleRateHz: rate}, nil
 }

@@ -22,8 +22,7 @@ const (
 	DefaultConnectRetryDelay = 500 * time.Millisecond
 	maxMessageBytes          = 64 << 20
 	defaultEventQueueSize    = 2048
-	defaultEventHistorySize  = 2048
-	defaultEventHistoryBytes = 16 << 20
+	defaultEventQueueBytes   = 16 << 20
 )
 
 var DefaultScopes = []string{"operator.write"}
@@ -37,6 +36,13 @@ type Transport interface {
 
 type DialFunc func(context.Context) (Transport, error)
 
+type EventDisposition uint8
+
+const (
+	EventDispositionDelivery EventDisposition = iota
+	EventDispositionResponseOnly
+)
+
 type DeviceIdentity struct {
 	ID        string
 	PublicKey string
@@ -44,38 +50,40 @@ type DeviceIdentity struct {
 }
 
 type Client struct {
-	dial     DialFunc
-	role     string
-	scopes   []string
-	token    string
-	device   *DeviceIdentity
-	deviceTk string
+	dial             DialFunc
+	role             string
+	scopes           []string
+	token            string
+	device           *DeviceIdentity
+	deviceTk         string
+	eventDisposition EventDisposition
 
-	mu           sync.Mutex
-	transport    Transport
-	sequence     int
-	pending      map[string]chan responseDelivery
-	events       []Frame
-	eventCh      chan Frame
-	eventMax     int
-	eventByteMax int
-	eventBytes   int
-	readerErr    error
-	readerFatal  bool
-	reader       context.CancelFunc
-	readerFailed chan struct{}
-	connected    *ConnectSummary
+	mu             sync.Mutex
+	transport      Transport
+	sequence       int
+	pending        map[string]chan responseDelivery
+	eventCh        chan eventDelivery
+	eventByteMax   int
+	eventCount     int
+	eventBytes     int
+	readerErr      error
+	readerFatal    bool
+	reader         context.CancelFunc
+	readerFailed   chan struct{}
+	connected      *ConnectSummary
+	awaitChallenge bool
+	generation     uint64
 }
 
 type Options struct {
-	Role              string
-	Scopes            []string
-	Token             string
-	Device            *DeviceIdentity
-	DeviceToken       string
-	EventQueueSize    int
-	EventHistorySize  int
-	EventHistoryBytes int
+	Role             string
+	Scopes           []string
+	Token            string
+	Device           *DeviceIdentity
+	DeviceToken      string
+	EventQueueSize   int
+	EventQueueBytes  int
+	EventDisposition EventDisposition
 }
 
 type ConnectOptions struct {
@@ -105,6 +113,12 @@ type responseDelivery struct {
 	err   error
 }
 
+type eventDelivery struct {
+	frame      Frame
+	bytes      int
+	generation uint64
+}
+
 func New(dial DialFunc, options Options) (*Client, error) {
 	if dial == nil {
 		return nil, errors.New("gateway dialer is required")
@@ -121,18 +135,17 @@ func New(dial DialFunc, options Options) (*Client, error) {
 	if size <= 0 {
 		size = defaultEventQueueSize
 	}
-	historySize := options.EventHistorySize
-	if historySize <= 0 {
-		historySize = defaultEventHistorySize
+	queueBytes := options.EventQueueBytes
+	if queueBytes <= 0 {
+		queueBytes = defaultEventQueueBytes
 	}
-	historyBytes := options.EventHistoryBytes
-	if historyBytes <= 0 {
-		historyBytes = defaultEventHistoryBytes
+	if options.EventDisposition != EventDispositionDelivery && options.EventDisposition != EventDispositionResponseOnly {
+		return nil, errors.New("gateway event disposition is invalid")
 	}
 	return &Client{
 		dial: dial, role: role, scopes: scopes, token: options.Token,
-		device: options.Device, deviceTk: options.DeviceToken,
-		pending: make(map[string]chan responseDelivery), eventCh: make(chan Frame, size), eventMax: historySize, eventByteMax: historyBytes,
+		device: options.Device, deviceTk: options.DeviceToken, eventDisposition: options.EventDisposition,
+		pending: make(map[string]chan responseDelivery), eventCh: make(chan eventDelivery, size), eventByteMax: queueBytes,
 		readerFailed: make(chan struct{}),
 	}, nil
 }
@@ -196,14 +209,18 @@ func (client *Client) connectOnce(ctx context.Context, challengeTimeout time.Dur
 	readerCtx, cancel := context.WithCancel(context.Background())
 	client.mu.Lock()
 	client.transport = transport
+	client.generation++
+	generation := client.generation
 	client.reader = cancel
 	client.readerErr = nil
 	client.readerFatal = false
 	client.readerFailed = make(chan struct{})
-	client.events = nil
+	client.eventCount = 0
 	client.eventBytes = 0
+	client.eventCh = make(chan eventDelivery, cap(client.eventCh))
+	client.awaitChallenge = true
 	client.mu.Unlock()
-	go client.readLoop(readerCtx, transport)
+	go client.readConnection(readerCtx, transport, generation)
 
 	challengeCtx, challengeCancel := context.WithTimeout(ctx, challengeTimeout)
 	defer challengeCancel()
@@ -214,7 +231,7 @@ func (client *Client) connectOnce(ctx context.Context, challengeTimeout time.Dur
 	}
 	if first.String("type") != "event" || first.String("event") != "connect.challenge" {
 		client.Close()
-		return nil, fmt.Errorf("expected connect.challenge, got %s", StableString(first))
+		return nil, errors.New("expected connect.challenge")
 	}
 	return first, nil
 }
@@ -285,6 +302,12 @@ func (client *Client) Call(ctx context.Context, method string, params map[string
 	reply := make(chan responseDelivery, 1)
 	client.mu.Lock()
 	transport := client.transport
+	generation := client.generation
+	if client.readerFatal {
+		err := client.readerErr
+		client.mu.Unlock()
+		return nil, err
+	}
 	if transport == nil {
 		client.mu.Unlock()
 		return nil, errors.New("gateway transport is not connected")
@@ -300,11 +323,17 @@ func (client *Client) Call(ctx context.Context, method string, params map[string
 	}
 	if err := transport.Send(ctx, content); err != nil {
 		client.removePending(id)
+		if fatalErr := client.connectionFatal(generation); fatalErr != nil {
+			return nil, fatalErr
+		}
 		return nil, fmt.Errorf("send gateway request: %w", err)
 	}
 	select {
 	case delivery := <-reply:
 		client.removePending(id)
+		if fatalErr := client.connectionFatal(generation); fatalErr != nil {
+			return nil, fatalErr
+		}
 		return delivery.frame, delivery.err
 	case <-ctx.Done():
 		client.removePending(id)
@@ -318,12 +347,21 @@ func (client *Client) RecvEvent(ctx context.Context) (Frame, error) {
 		readerErr := client.readerErr
 		readerFatal := client.readerFatal
 		readerFailed := client.readerFailed
+		eventCh := client.eventCh
+		generation := client.generation
 		client.mu.Unlock()
 		if readerFatal {
 			return nil, readerErr
 		}
 		select {
-		case frame := <-client.eventCh:
+		case delivery := <-eventCh:
+			frame, err, current := client.finishEventDelivery(delivery, generation)
+			if !current {
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
 			return frame, nil
 		default:
 		}
@@ -331,7 +369,14 @@ func (client *Client) RecvEvent(ctx context.Context) (Frame, error) {
 			return nil, readerErr
 		}
 		select {
-		case frame := <-client.eventCh:
+		case delivery := <-eventCh:
+			frame, err, current := client.finishEventDelivery(delivery, generation)
+			if !current {
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
 			return frame, nil
 		case <-readerFailed:
 			// A normal EOF can race with the event that preceded it. Loop once
@@ -343,10 +388,36 @@ func (client *Client) RecvEvent(ctx context.Context) (Frame, error) {
 	}
 }
 
-func (client *Client) eventsSnapshot() []Frame {
+func (client *Client) releaseEventLocked(delivery eventDelivery) {
+	if delivery.generation != client.generation {
+		return
+	}
+	client.eventCount--
+	client.eventBytes -= delivery.bytes
+}
+
+func (client *Client) finishEventDelivery(delivery eventDelivery, generation uint64) (Frame, error, bool) {
 	client.mu.Lock()
 	defer client.mu.Unlock()
-	return append([]Frame(nil), client.events...)
+	client.releaseEventLocked(delivery)
+	if client.generation != generation || delivery.generation != generation {
+		return nil, nil, false
+	}
+	if client.readerFatal {
+		return nil, client.readerErr, true
+	}
+	return delivery.frame, nil, true
+}
+
+// FatalError reports a generation-fatal protocol/overflow failure without
+// treating a normal reader EOF as fatal.
+func (client *Client) FatalError() error {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.readerFatal {
+		return client.readerErr
+	}
+	return nil
 }
 
 func (client *Client) Close() error {
@@ -368,10 +439,22 @@ func (client *Client) removePending(id string) {
 }
 
 func (client *Client) readLoop(ctx context.Context, transport Transport) {
+	client.mu.Lock()
+	generation := client.generation
+	client.mu.Unlock()
+	client.readConnection(ctx, transport, generation)
+}
+
+func (client *Client) readConnection(ctx context.Context, transport Transport, generation uint64) {
 	for {
 		content, err := transport.Receive(ctx)
 		if err != nil {
-			client.failTransport(transport, fmt.Errorf("gateway reader stopped: %w", err))
+			readerErr := fmt.Errorf("gateway reader stopped: %w", err)
+			if isWebSocketProtocolError(err) {
+				client.failTransportFatal(transport, readerErr)
+			} else {
+				client.failTransport(transport, readerErr)
+			}
 			return
 		}
 		if len(content) > maxMessageBytes {
@@ -384,48 +467,91 @@ func (client *Client) readLoop(ctx context.Context, transport Transport) {
 			return
 		}
 		if frame.String("type") == "res" {
-			if id := frame.String("id"); id != "" {
-				client.mu.Lock()
-				reply := client.pending[id]
+			client.mu.Lock()
+			if client.transport != transport || client.generation != generation {
 				client.mu.Unlock()
+				return
+			}
+			if id := frame.String("id"); id != "" {
+				reply := client.pending[id]
 				if reply != nil {
 					select {
 					case reply <- responseDelivery{frame: frame}:
-						continue
+						client.mu.Unlock()
 					default:
-						client.failTransportFatal(transport, errors.New("gateway response queue overflow"))
+						termination, ok := client.terminateConnectionLocked(transport, errors.New("gateway response queue overflow"), true)
+						client.mu.Unlock()
+						if ok {
+							finishConnectionTermination(termination)
+						}
 						return
 					}
+				} else {
+					client.mu.Unlock()
 				}
+			} else {
+				client.mu.Unlock()
 			}
-		}
-		if frame.String("event") == "connect.challenge" {
-			select {
-			case client.eventCh <- frame:
-			default:
-				client.failTransportFatal(transport, errors.New("gateway event queue overflow"))
-				return
-			}
+			// Responses are point-to-point protocol data. Missing, stale, late,
+			// and duplicate responses are discarded rather than retained or
+			// exposed as events, where auth/device-token payloads could leak.
 			continue
 		}
 		client.mu.Lock()
-		if len(client.events) >= client.eventMax || client.eventBytes+len(content) > client.eventByteMax {
+		if client.transport != transport || client.generation != generation {
 			client.mu.Unlock()
-			client.failTransportFatal(transport, errors.New("gateway event history overflow"))
 			return
 		}
-		client.events = append(client.events, frame)
-		client.eventBytes += len(content)
-		client.mu.Unlock()
-		select {
-		case client.eventCh <- frame:
-		default:
-			client.failTransportFatal(transport, errors.New("gateway event queue overflow"))
+		challenge := frame.String("event") == "connect.challenge"
+		if challenge {
+			if !client.awaitChallenge {
+				client.mu.Unlock()
+				continue
+			}
+			client.awaitChallenge = false
+		} else if client.eventDisposition == EventDispositionResponseOnly && !client.awaitChallenge {
+			client.mu.Unlock()
+			continue
+		}
+		if client.eventCount >= cap(client.eventCh) || client.eventBytes+len(content) > client.eventByteMax {
+			termination, ok := client.terminateConnectionLocked(transport, errors.New("gateway event queue overflow"), true)
+			client.mu.Unlock()
+			if ok {
+				finishConnectionTermination(termination)
+			}
 			return
-		case <-ctx.Done():
+		}
+		eventCh := client.eventCh
+		delivery := eventDelivery{frame: frame, bytes: len(content), generation: generation}
+		select {
+		case eventCh <- delivery:
+			client.eventCount++
+			client.eventBytes += len(content)
+			client.mu.Unlock()
+		default:
+			termination, ok := client.terminateConnectionLocked(transport, errors.New("gateway event queue overflow"), true)
+			client.mu.Unlock()
+			if ok {
+				finishConnectionTermination(termination)
+			}
 			return
 		}
 	}
+}
+
+func (client *Client) connectionFatal(generation uint64) error {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.generation != generation {
+		if client.readerErr != nil {
+			return client.readerErr
+		}
+		return errors.New("gateway connection changed")
+	}
+	if client.readerFatal {
+		return client.readerErr
+	}
+	return nil
 }
 
 func pairingRequired(frame Frame) bool {
@@ -461,9 +587,24 @@ func (client *Client) failTransportFatal(transport Transport, readerErr error) {
 
 func (client *Client) terminateConnection(expected Transport, readerErr error, fatal bool) error {
 	client.mu.Lock()
-	if expected != nil && client.transport != expected {
-		client.mu.Unlock()
+	termination, ok := client.terminateConnectionLocked(expected, readerErr, fatal)
+	client.mu.Unlock()
+	if !ok {
 		return nil
+	}
+	return finishConnectionTermination(termination)
+}
+
+type connectionTermination struct {
+	cancel      context.CancelFunc
+	transport   Transport
+	pending     map[string]chan responseDelivery
+	deliveryErr error
+}
+
+func (client *Client) terminateConnectionLocked(expected Transport, readerErr error, fatal bool) (connectionTermination, bool) {
+	if expected != nil && client.transport != expected {
+		return connectionTermination{}, false
 	}
 	if client.readerErr == nil {
 		client.readerErr = readerErr
@@ -478,18 +619,21 @@ func (client *Client) terminateConnection(expected Transport, readerErr error, f
 	client.connected = nil
 	pending := client.pending
 	client.pending = make(map[string]chan responseDelivery)
-	client.mu.Unlock()
-	if cancel != nil {
-		cancel()
+	return connectionTermination{cancel: cancel, transport: transport, pending: pending, deliveryErr: deliveryErr}, true
+}
+
+func finishConnectionTermination(termination connectionTermination) error {
+	if termination.cancel != nil {
+		termination.cancel()
 	}
-	for _, reply := range pending {
+	for _, reply := range termination.pending {
 		select {
-		case reply <- responseDelivery{err: deliveryErr}:
+		case reply <- responseDelivery{err: termination.deliveryErr}:
 		default:
 		}
 	}
-	if transport != nil {
-		return transport.Close()
+	if termination.transport != nil {
+		return termination.transport.Close()
 	}
 	return nil
 }

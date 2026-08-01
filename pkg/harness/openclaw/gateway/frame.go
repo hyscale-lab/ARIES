@@ -1,6 +1,9 @@
 package gateway
 
-import "encoding/json"
+import (
+	"fmt"
+	"strings"
+)
 
 // Frame is one decoded OpenClaw Gateway protocol frame. Higher-level packages
 // interpret method- and event-specific payloads.
@@ -34,18 +37,18 @@ func Map(value any) map[string]any {
 	return map[string]any{}
 }
 
-// StableString renders protocol-safe diagnostics. Callers must not use it for
-// authentication frames, whose raw contents are deliberately transient.
-func StableString(value any) string {
-	if value == nil {
-		return ""
+// ResponseError reports only bounded protocol metadata. It deliberately never
+// renders the response because error details can contain credentials or echoed
+// request parameters.
+func ResponseError(method string, response Frame) error {
+	errorPayload := response.Map("error")
+	code := boundedDiagnostic(errorPayload["code"])
+	message := boundedDiagnostic(errorPayload["message"])
+	if code == "" {
+		code = "UNKNOWN"
 	}
-	if text, ok := value.(string); ok {
-		return text
+	if message == "" {
+		message = "request rejected"
 	}
-	content, err := json.Marshal(value)
-	if err != nil {
-		return "<unencodable>"
-	}
-	return string(content)
+	return fmt.Errorf("gateway %s rejected request (%s): %s", strings.TrimSpace(method), code, message)
 }

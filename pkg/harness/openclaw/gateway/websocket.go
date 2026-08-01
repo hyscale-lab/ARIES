@@ -9,18 +9,49 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 const websocketGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+type webSocketProtocolViolation string
+
+const (
+	webSocketReservedBits    webSocketProtocolViolation = "reserved bits"
+	webSocketFragmentation   webSocketProtocolViolation = "fragmentation"
+	webSocketInvalidOpcode   webSocketProtocolViolation = "invalid opcode"
+	webSocketMaskDirection   webSocketProtocolViolation = "invalid mask direction"
+	webSocketInvalidFraming  webSocketProtocolViolation = "invalid framing"
+	webSocketMessageTooLarge webSocketProtocolViolation = "message too large"
+	webSocketInvalidControl  webSocketProtocolViolation = "invalid control frame"
+	webSocketInvalidClose    webSocketProtocolViolation = "invalid close frame"
+)
+
+type webSocketProtocolError struct {
+	violation webSocketProtocolViolation
+}
+
+func (err *webSocketProtocolError) Error() string {
+	return "gateway websocket protocol violation: " + string(err.violation)
+}
+
+func newWebSocketProtocolError(violation webSocketProtocolViolation) error {
+	return &webSocketProtocolError{violation: violation}
+}
+
+func isWebSocketProtocolError(err error) bool {
+	var protocolErr *webSocketProtocolError
+	return errors.As(err, &protocolErr)
+}
 
 type WebSocketOptions struct {
 	URL string
@@ -30,6 +61,8 @@ type webSocketTransport struct {
 	connection net.Conn
 	reader     *bufio.Reader
 	mu         sync.Mutex
+	closeOnce  sync.Once
+	closeErr   error
 }
 
 func NewWebSocketDialer(options WebSocketOptions) (DialFunc, error) {
@@ -160,12 +193,18 @@ func (transport *webSocketTransport) Receive(ctx context.Context) ([]byte, error
 	for {
 		opcode, payload, err := readWebSocketFrameWithMask(transport.reader, false)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			return nil, err
 		}
 		switch opcode {
 		case 1, 2:
 			return payload, nil
 		case 8:
+			if err := validateClosePayload(payload); err != nil {
+				return nil, err
+			}
 			return nil, io.EOF
 		case 9:
 			if err := transport.writeControl(10, payload); err != nil {
@@ -173,7 +212,7 @@ func (transport *webSocketTransport) Receive(ctx context.Context) ([]byte, error
 			}
 		case 10:
 		default:
-			return nil, fmt.Errorf("gateway websocket returned unsupported opcode %d", opcode)
+			return nil, newWebSocketProtocolError(webSocketInvalidOpcode)
 		}
 	}
 }
@@ -182,8 +221,10 @@ func (transport *webSocketTransport) Close() error {
 	if transport == nil || transport.connection == nil {
 		return nil
 	}
-	_ = transport.writeControl(8, []byte{})
-	return transport.connection.Close()
+	transport.closeOnce.Do(func() {
+		transport.closeErr = transport.connection.Close()
+	})
+	return transport.closeErr
 }
 
 func (transport *webSocketTransport) writeControl(opcode byte, payload []byte) error {
@@ -264,58 +305,90 @@ func readWebSocketFrameWithMask(reader *bufio.Reader, expectMasked bool) (byte, 
 		return 0, nil, err
 	}
 	if header&0x70 != 0 {
-		return 0, nil, fmt.Errorf("gateway websocket frame has reserved bits set")
+		return 0, nil, newWebSocketProtocolError(webSocketReservedBits)
 	}
 	if header&0x80 == 0 {
-		return 0, nil, fmt.Errorf("gateway websocket fragmented frames are not supported")
+		return 0, nil, newWebSocketProtocolError(webSocketFragmentation)
 	}
 	opcode := header & 0x0f
 	if opcode != 0x1 && opcode != 0x2 && opcode != 0x8 && opcode != 0x9 && opcode != 0xa {
-		return 0, nil, fmt.Errorf("gateway websocket frame has invalid opcode %d", opcode)
+		return 0, nil, newWebSocketProtocolError(webSocketInvalidOpcode)
 	}
 	lengthByte, err := reader.ReadByte()
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, newWebSocketProtocolError(webSocketInvalidFraming)
 	}
 	masked := lengthByte&0x80 != 0
 	if masked != expectMasked {
-		return 0, nil, fmt.Errorf("gateway websocket frame mask direction is invalid")
+		return 0, nil, newWebSocketProtocolError(webSocketMaskDirection)
 	}
 	length := uint64(lengthByte & 0x7f)
+	if opcode >= 0x8 && length >= 126 {
+		return 0, nil, newWebSocketProtocolError(webSocketInvalidControl)
+	}
 	switch length {
 	case 126:
 		var encoded [2]byte
 		if _, err := io.ReadFull(reader, encoded[:]); err != nil {
-			return 0, nil, err
+			return 0, nil, newWebSocketProtocolError(webSocketInvalidFraming)
 		}
 		length = uint64(binary.BigEndian.Uint16(encoded[:]))
+		if length < 126 {
+			return 0, nil, newWebSocketProtocolError(webSocketInvalidFraming)
+		}
 	case 127:
 		var encoded [8]byte
 		if _, err := io.ReadFull(reader, encoded[:]); err != nil {
-			return 0, nil, err
+			return 0, nil, newWebSocketProtocolError(webSocketInvalidFraming)
 		}
 		length = binary.BigEndian.Uint64(encoded[:])
+		if length < 65536 || length&(uint64(1)<<63) != 0 {
+			return 0, nil, newWebSocketProtocolError(webSocketInvalidFraming)
+		}
 	}
 	if length > maxMessageBytes {
-		return 0, nil, fmt.Errorf("gateway websocket message too large: %s bytes", strconv.FormatUint(length, 10))
-	}
-	if opcode >= 0x8 && length > 125 {
-		return 0, nil, fmt.Errorf("gateway websocket control frame is too large")
+		return 0, nil, newWebSocketProtocolError(webSocketMessageTooLarge)
 	}
 	var mask [4]byte
 	if masked {
 		if _, err := io.ReadFull(reader, mask[:]); err != nil {
-			return 0, nil, err
+			return 0, nil, newWebSocketProtocolError(webSocketInvalidFraming)
 		}
 	}
 	payload := make([]byte, int(length))
 	if _, err := io.ReadFull(reader, payload); err != nil {
-		return 0, nil, err
+		return 0, nil, newWebSocketProtocolError(webSocketInvalidFraming)
 	}
 	if masked {
 		for index := range payload {
 			payload[index] ^= mask[index%len(mask)]
 		}
 	}
+	if opcode == 1 && !utf8.Valid(payload) {
+		return 0, nil, newWebSocketProtocolError(webSocketInvalidFraming)
+	}
 	return opcode, payload, nil
+}
+
+func validateClosePayload(payload []byte) error {
+	if len(payload) == 1 {
+		return newWebSocketProtocolError(webSocketInvalidClose)
+	}
+	if len(payload) < 2 {
+		return nil
+	}
+	code := binary.BigEndian.Uint16(payload[:2])
+	if !validCloseCode(code) || !utf8.Valid(payload[2:]) {
+		return newWebSocketProtocolError(webSocketInvalidClose)
+	}
+	return nil
+}
+
+func validCloseCode(code uint16) bool {
+	switch code {
+	case 1000, 1001, 1002, 1003, 1007, 1008, 1009, 1010, 1011, 1012, 1013, 1014:
+		return true
+	default:
+		return code >= 3000 && code < 5000
+	}
 }

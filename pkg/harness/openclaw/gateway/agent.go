@@ -36,7 +36,13 @@ func (client *Client) Agent(ctx context.Context, request AgentRequest) (AgentRes
 	client.mu.Lock()
 	summary := client.connected
 	transport := client.transport
+	generation := client.generation
+	readerFatal := client.readerFatal
+	readerErr := client.readerErr
 	client.mu.Unlock()
+	if readerFatal {
+		return AgentResult{}, readerErr
+	}
 	if summary == nil || transport == nil {
 		return AgentResult{}, errors.New("gateway agent client is not connected")
 	}
@@ -47,8 +53,12 @@ func (client *Client) Agent(ctx context.Context, request AgentRequest) (AgentRes
 	id := client.nextID("agent")
 	reply := make(chan responseDelivery, agentResponseQueueSize)
 	client.mu.Lock()
-	if client.transport != transport {
+	if client.transport != transport || client.generation != generation || client.readerFatal {
+		fatalErr := client.readerErr
 		client.mu.Unlock()
+		if fatalErr != nil {
+			return AgentResult{}, fatalErr
+		}
 		return AgentResult{}, errors.New("gateway agent transport changed before submission")
 	}
 	client.pending[id] = reply
@@ -67,6 +77,9 @@ func (client *Client) Agent(ctx context.Context, request AgentRequest) (AgentRes
 		return AgentResult{}, fmt.Errorf("marshal gateway agent request: %w", err)
 	}
 	if err := transport.Send(ctx, content); err != nil {
+		if fatalErr := client.connectionFatal(generation); fatalErr != nil {
+			return AgentResult{}, fmt.Errorf("gateway agent delivery is ambiguous after fatal send failure: %w", fatalErr)
+		}
 		return AgentResult{}, fmt.Errorf("gateway agent delivery is ambiguous after send failure: %w", err)
 	}
 
@@ -74,6 +87,12 @@ func (client *Client) Agent(ctx context.Context, request AgentRequest) (AgentRes
 	for {
 		select {
 		case delivery := <-reply:
+			if fatalErr := client.connectionFatal(generation); fatalErr != nil {
+				if acceptedRunID == "" {
+					return AgentResult{}, fmt.Errorf("gateway agent delivery is ambiguous before acknowledgement: %w", fatalErr)
+				}
+				return AgentResult{}, fmt.Errorf("gateway agent %s was accepted but its outcome is unknown: %w", acceptedRunID, fatalErr)
+			}
 			if delivery.err != nil {
 				if acceptedRunID == "" {
 					return AgentResult{}, fmt.Errorf("gateway agent delivery is ambiguous before acknowledgement: %w", delivery.err)
@@ -115,16 +134,7 @@ func (client *Client) Agent(ctx context.Context, request AgentRequest) (AgentRes
 }
 
 func agentProtocolError(response Frame) error {
-	errorPayload := response.Map("error")
-	code := boundedDiagnostic(errorPayload["code"])
-	message := boundedDiagnostic(errorPayload["message"])
-	if code == "" {
-		code = "UNKNOWN"
-	}
-	if message == "" {
-		message = "request rejected"
-	}
-	return fmt.Errorf("gateway agent rejected request (%s): %s", code, message)
+	return ResponseError("agent", response)
 }
 
 func boundedDiagnostic(value any) string {

@@ -6,11 +6,17 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func connectedAgentClient(t *testing.T, transport *fakeTransport, scopes ...string) *Client {
 	t.Helper()
-	client, err := New(func(context.Context) (Transport, error) { return transport, nil }, Options{})
+	return connectedAgentClientWithOptions(t, transport, Options{}, scopes...)
+}
+
+func connectedAgentClientWithOptions(t *testing.T, transport *fakeTransport, options Options, scopes ...string) *Client {
+	t.Helper()
+	client, err := New(func(context.Context) (Transport, error) { return transport, nil }, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -18,6 +24,44 @@ func connectedAgentClient(t *testing.T, transport *fakeTransport, scopes ...stri
 	client.connected = &ConnectSummary{Role: "operator", Scopes: scopes}
 	go client.readLoop(context.Background(), transport)
 	return client
+}
+
+func TestAgentResponseOnlySurvivesHighVolumeUnsolicitedEvents(t *testing.T) {
+	transport := newFakeTransport()
+	client := connectedAgentClientWithOptions(t, transport, Options{EventDisposition: EventDispositionResponseOnly}, "operator.write")
+	defer client.Close()
+	done := make(chan struct {
+		result AgentResult
+		err    error
+	}, 1)
+	go func() {
+		result, err := client.Agent(context.Background(), validAgentRequest())
+		done <- struct {
+			result AgentResult
+			err    error
+		}{result, err}
+	}()
+
+	sent := transport.nextSent(t)
+	id := sent.String("id")
+	transport.deliver(acceptedFrame(id, "run-high-volume"))
+	for index := 0; index < 2049; index++ {
+		transport.deliver(Frame{"type": "event", "event": "agent.progress", "payload": map[string]any{"index": index}})
+	}
+	transport.deliver(terminalFrame(id, "run-high-volume", "ok", []any{map[string]any{"text": "complete"}}))
+
+	got := <-done
+	if got.err != nil || got.result.RunID != "run-high-volume" || got.result.Text != "complete" {
+		t.Fatalf("Agent = %#v, %v", got.result, got.err)
+	}
+	if count, bytes := client.queuedEventUsage(); count != 0 || bytes != 0 || client.FatalError() != nil {
+		t.Fatalf("response-only retained events or fatal state: %d/%d/%v", count, bytes, client.FatalError())
+	}
+	select {
+	case extra := <-transport.out:
+		t.Fatalf("agent request was resubmitted: %s", extra)
+	default:
+	}
 }
 
 func validAgentRequest() AgentRequest {
@@ -152,6 +196,7 @@ func TestAgentDisconnectIsAmbiguousAndNeverResubmits(t *testing.T) {
 			sent := transport.nextSent(t)
 			if accepted {
 				transport.deliver(acceptedFrame(sent.String("id"), "run-1"))
+				time.Sleep(20 * time.Millisecond)
 			}
 			transport.Close()
 			err := <-done
@@ -168,6 +213,64 @@ func TestAgentDisconnectIsAmbiguousAndNeverResubmits(t *testing.T) {
 			default:
 			}
 		})
+	}
+}
+
+func TestAgentCancellationClassifiesAmbiguousDelivery(t *testing.T) {
+	for _, accepted := range []bool{false, true} {
+		t.Run(map[bool]string{false: "before-accepted", true: "after-accepted"}[accepted], func(t *testing.T) {
+			transport := newFakeTransport()
+			client := connectedAgentClient(t, transport, "operator.write")
+			defer client.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			go func() { _, err := client.Agent(ctx, validAgentRequest()); done <- err }()
+			sent := transport.nextSent(t)
+			if accepted {
+				transport.deliver(acceptedFrame(sent.String("id"), "run-1"))
+				time.Sleep(20 * time.Millisecond)
+			}
+			cancel()
+			err := <-done
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("Agent error = %v, want cancellation classification", err)
+			}
+			want := "ambiguous"
+			if accepted {
+				want = "outcome is unknown"
+			}
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("Agent error = %v, want %q", err, want)
+			}
+		})
+	}
+}
+
+func TestAgentDropsMissingLateAndDuplicateResponses(t *testing.T) {
+	transport := newFakeTransport()
+	client := connectedAgentClient(t, transport, "operator.write")
+	defer client.Close()
+	done := make(chan error, 1)
+	go func() {
+		result, err := client.Agent(context.Background(), validAgentRequest())
+		if err == nil && result.Text != "ok" {
+			err = errors.New("wrong result")
+		}
+		done <- err
+	}()
+	sent := transport.nextSent(t)
+	id := sent.String("id")
+	transport.deliver(Frame{"type": "res", "ok": true, "payload": map[string]any{"deviceToken": "secret"}})
+	transport.deliver(Frame{"type": "res", "id": "late-old-id", "ok": true, "payload": map[string]any{"deviceToken": "secret"}})
+	transport.deliver(acceptedFrame(id, "run-1"))
+	transport.deliver(terminalFrame(id, "run-1", "ok", []any{map[string]any{"text": "ok"}}))
+	transport.deliver(terminalFrame(id, "run-1", "ok", []any{map[string]any{"text": "duplicate"}}))
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if count, bytes := client.queuedEventUsage(); count != 0 || bytes != 0 {
+		t.Fatalf("response frames entered event queue: %d/%d", count, bytes)
 	}
 }
 
@@ -211,6 +314,31 @@ func TestAgentInterleavedResponseStress(t *testing.T) {
 		}
 		if err := client.Close(); err != nil {
 			t.Fatalf("iteration %d close: %v", iteration, err)
+		}
+	}
+}
+
+func TestAgentFatalOverflowDominatesQueuedResponsesStress(t *testing.T) {
+	for iteration := 0; iteration < 200; iteration++ {
+		transport := newFakeTransport()
+		client := connectedAgentClient(t, transport, "operator.write")
+		done := make(chan error, 1)
+		go func() { _, err := client.Agent(context.Background(), validAgentRequest()); done <- err }()
+		sent := transport.nextSent(t)
+		id := sent.String("id")
+		client.mu.Lock()
+		reply := client.pending[id]
+		reply <- responseDelivery{frame: acceptedFrame(id, "run-fatal")}
+		reply <- responseDelivery{frame: terminalFrame(id, "run-fatal", "ok", []any{map[string]any{"text": "must-not-win"}})}
+		reply <- responseDelivery{frame: terminalFrame(id, "run-fatal", "ok", []any{map[string]any{"text": "duplicate"}})}
+		time.Sleep(time.Microsecond)
+		client.readerErr = errors.New("gateway response queue overflow")
+		client.readerFatal = true
+		client.transport = nil
+		client.connected = nil
+		client.mu.Unlock()
+		if err := <-done; err == nil || !strings.Contains(err.Error(), "overflow") {
+			t.Fatalf("iteration %d accepted queued response over fatal overflow: %v", iteration, err)
 		}
 	}
 }

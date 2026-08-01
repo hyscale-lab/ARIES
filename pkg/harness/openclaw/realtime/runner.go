@@ -28,6 +28,10 @@ const (
 	DefaultInputEncoding            = "pcm16"
 	DefaultInputSampleRate          = 24000
 	defaultRealtimeOutputBufferSize = 32 << 10
+	maxRealtimeAudioBytes           = 32 << 20
+	maxRealtimeSampleRate           = 384000
+	maxRealtimeBytesPerSample       = 8
+	maxRealtimeChunkDuration        = time.Minute
 )
 
 const (
@@ -74,6 +78,7 @@ type Gateway interface {
 	Connect(context.Context, gateway.ConnectOptions) (gateway.ConnectSummary, error)
 	Call(context.Context, string, map[string]any) (gateway.Frame, error)
 	RecvEvent(context.Context) (gateway.Frame, error)
+	FatalError() error
 	Close() error
 }
 
@@ -133,11 +138,11 @@ func New(gateway Gateway, options Options) (*Runner, error) {
 	if len(options.Audio.Data) == 0 && options.AudioProvider == nil {
 		return nil, errors.New("realtime audio is required")
 	}
-	if len(options.Audio.Data) != 0 && options.Audio.Rate <= 0 {
-		return nil, errors.New("realtime audio sample rate must be positive")
+	if len(options.Audio.Data) != 0 && !validAudio(options.Audio) {
+		return nil, errors.New("realtime audio is outside supported bounds")
 	}
-	if len(options.Audio.Data) != 0 && options.Audio.BytesPerSample <= 0 {
-		return nil, errors.New("realtime audio bytes per sample must be positive")
+	if options.ChunkDuration > maxRealtimeChunkDuration {
+		return nil, errors.New("realtime audio chunk duration exceeds supported bound")
 	}
 	return &Runner{
 		gateway: gateway,
@@ -193,7 +198,7 @@ func (runner *Runner) createSession(ctx context.Context) (SessionInfo, error) {
 		return SessionInfo{}, err
 	}
 	if !response.Bool("ok") {
-		return SessionInfo{}, fmt.Errorf("%s failed: %s", methodSessionCreate, gateway.StableString(response))
+		return SessionInfo{}, gateway.ResponseError(methodSessionCreate, response)
 	}
 	return sessionInfoFromPayload(response.Map("payload"))
 }
@@ -241,7 +246,10 @@ func (runner *Runner) loadAudioForSession(session SessionInfo) error {
 }
 
 func validAudio(audio Audio) bool {
-	return len(audio.Data) != 0 && audio.Rate > 0 && audio.BytesPerSample > 0
+	return len(audio.Data) != 0 && len(audio.Data) <= maxRealtimeAudioBytes &&
+		audio.Rate > 0 && audio.Rate <= maxRealtimeSampleRate &&
+		audio.BytesPerSample > 0 && audio.BytesPerSample <= maxRealtimeBytesPerSample &&
+		len(audio.Data)%audio.BytesPerSample == 0
 }
 
 func (runner *Runner) appendAudio(ctx context.Context, session SessionInfo) error {
@@ -265,7 +273,7 @@ func (runner *Runner) appendAudio(ctx context.Context, session SessionInfo) erro
 			return fmt.Errorf("%s chunk offset %d: %w", methodAppendAudio, offset, err)
 		}
 		if !response.Bool("ok") {
-			return fmt.Errorf("%s failed: %s", methodAppendAudio, gateway.StableString(response))
+			return gateway.ResponseError(methodAppendAudio, response)
 		}
 		if end < len(audio.Data) {
 			if err := runner.sleep(ctx, chunkDuration); err != nil {
@@ -322,6 +330,9 @@ func (runner *Runner) processEvents(ctx context.Context, result *Result) error {
 		if err := runner.processFrame(ctx, frame, result, &state); err != nil {
 			return err
 		}
+	}
+	if err := runner.gateway.FatalError(); err != nil {
+		return err
 	}
 	if state.latestUserTranscript == "" {
 		result.Transcript = state.partialTranscript
@@ -380,7 +391,7 @@ func (runner *Runner) processFrame(ctx context.Context, frame gateway.Frame, res
 			state.touchQuiet(runner.options.QuietDuration)
 		}
 	case eventSessionError, eventToolError, eventTurnCancelled:
-		result.AppendError(gateway.StableString(talk.Payload))
+		result.AppendError(talkPayloadDiagnostic(talk.EventType, talk.Payload))
 		state.touchQuiet(runner.options.QuietDuration)
 	}
 	return nil
@@ -555,7 +566,7 @@ func (runner *Runner) consultAgent(ctx context.Context, toolCall toolCallEvent) 
 		return outcome, err
 	}
 	if !response.Bool("ok") {
-		return outcome, fmt.Errorf("%s failed: %s", methodClientToolCall, gateway.StableString(response))
+		return outcome, gateway.ResponseError(methodClientToolCall, response)
 	}
 	payload := response.Map("payload")
 	runID, _ := payload["runId"].(string)
@@ -582,7 +593,7 @@ func (runner *Runner) submitToolResult(ctx context.Context, toolCall toolCallEve
 		return err
 	}
 	if !response.Bool("ok") {
-		return fmt.Errorf("%s failed: %s", methodSubmitToolResult, gateway.StableString(response))
+		return gateway.ResponseError(methodSubmitToolResult, response)
 	}
 	return nil
 }
@@ -606,10 +617,36 @@ func (runner *Runner) finishActiveAgentRuns(ctx context.Context, result *Result,
 		}
 		detail := firstNonEmpty(stringFromAny(payload["error"]), stringFromAny(payload["stopReason"]), status)
 		if detail == "" {
-			detail = gateway.StableString(response)
+			detail = "unknown status"
 		}
 		result.AppendError(fmt.Sprintf("agent run %s did not finish cleanly: %s", runID, detail))
 	}
+}
+
+func talkPayloadDiagnostic(eventType string, payload map[string]any) string {
+	detail := firstNonEmpty(
+		boundedProtocolText(payload["message"]), boundedProtocolText(payload["error"]),
+		boundedProtocolText(payload["reason"]), boundedProtocolText(payload["code"]),
+	)
+	if detail == "" {
+		detail = "protocol event reported an error"
+	}
+	return eventType + ": " + detail
+}
+
+func boundedProtocolText(value any) string {
+	text, _ := value.(string)
+	text = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, text)
+	text = strings.TrimSpace(text)
+	if len(text) > 512 {
+		text = text[:512] + "…"
+	}
+	return text
 }
 
 type realtimeEventState struct {

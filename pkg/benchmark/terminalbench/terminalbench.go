@@ -582,18 +582,18 @@ func safeIdentity(id string) bool {
 // VerifyRevision confirms that root is the exact clean pinned checkout.
 func VerifyRevision(ctx context.Context, root, revision string) error {
 	cmd := exec.CommandContext(ctx, "git", "-C", root, "rev-parse", "HEAD")
-	output, err := cmd.Output()
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("verify terminalbench checkout %q: %w", root, err)
+		return fmt.Errorf("verify terminalbench checkout %q: %w: %s", root, err, output)
 	}
 	got := strings.TrimSpace(string(output))
 	if got != revision {
 		return fmt.Errorf("terminalbench checkout %q is revision %q; want pinned %q", root, got, revision)
 	}
 	status := exec.CommandContext(ctx, "git", "-C", root, "status", "--porcelain", "--untracked-files=all")
-	output, err = status.Output()
+	output, err = status.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("inspect terminalbench checkout %q: %w", root, err)
+		return fmt.Errorf("inspect terminalbench checkout %q: %w: %s", root, err, output)
 	}
 	if len(output) != 0 {
 		return fmt.Errorf("terminalbench checkout %q has local changes; the pinned dataset must be clean", root)

@@ -71,3 +71,12 @@ keys are not retained.
 Realtime requires both `operator.read` and `operator.write`; text-agent mode
 requires only `operator.write`. Event queue or diagnostic-history overflow is
 terminal and closes the connection instead of silently dropping frames.
+Unmatched, late, duplicate, and missing-ID response frames are discarded rather
+than entering event history, and authentication challenges are accepted only
+during the active handshake. Protocol errors retain only bounded code/message
+metadata; raw response and authentication payloads are never rendered.
+
+Host audio processing accepts sample rates through 384 kHz and bounds PCM16
+input/output to 32 MiB, WAV input to 33 MiB, and generated trailing silence to
+60 seconds. Inputs whose resampled output would exceed the bound fail before
+allocation.

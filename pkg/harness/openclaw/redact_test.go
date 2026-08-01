@@ -13,3 +13,12 @@ func TestRedactBytesRemovesEveryExactSecret(t *testing.T) {
 		t.Fatalf("redacted = %q", redacted)
 	}
 }
+
+func TestRedactBytesRemovesJSONEscapedQuoteAndBackslashSecret(t *testing.T) {
+	secret := []byte(`key-"quoted"-and-\backslash`)
+	content := []byte(`{"message":"key-\"quoted\"-and-\\backslash"}`)
+	redacted := redactBytes(content, secret)
+	if bytes.Contains(redacted, secret) || bytes.Contains(redacted, []byte(`key-\"quoted\"-and-\\backslash`)) {
+		t.Fatalf("redacted = %q", redacted)
+	}
+}

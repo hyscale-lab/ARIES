@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -401,6 +402,8 @@ func (stubGateway) RecvEvent(context.Context) (gatewayclient.Frame, error) {
 	return nil, context.Canceled
 }
 
+func (stubGateway) FatalError() error { return nil }
+
 func (stubGateway) Close() error {
 	return nil
 }
@@ -410,6 +413,27 @@ type recordingGateway struct {
 	agentCalls int
 	request    gatewayclient.AgentRequest
 }
+
+type secretAgentGateway struct {
+	summary gatewayclient.ConnectSummary
+	result  gatewayclient.AgentResult
+	err     error
+}
+
+func (gateway *secretAgentGateway) Connect(context.Context, gatewayclient.ConnectOptions) (gatewayclient.ConnectSummary, error) {
+	return gateway.summary, nil
+}
+func (gateway *secretAgentGateway) Agent(context.Context, gatewayclient.AgentRequest) (gatewayclient.AgentResult, error) {
+	return gateway.result, gateway.err
+}
+func (*secretAgentGateway) Call(context.Context, string, map[string]any) (gatewayclient.Frame, error) {
+	return nil, errors.New("unexpected realtime call")
+}
+func (*secretAgentGateway) RecvEvent(context.Context) (gatewayclient.Frame, error) {
+	return nil, errors.New("unexpected realtime event")
+}
+func (*secretAgentGateway) FatalError() error { return nil }
+func (*secretAgentGateway) Close() error      { return nil }
 
 func (gateway *recordingGateway) Connect(context.Context, gatewayclient.ConnectOptions) (gatewayclient.ConnectSummary, error) {
 	return gateway.summary, nil
@@ -429,6 +453,8 @@ func (*recordingGateway) RecvEvent(context.Context) (gatewayclient.Frame, error)
 	return nil, errors.New("unexpected realtime event")
 }
 
+func (*recordingGateway) FatalError() error { return nil }
+
 func (*recordingGateway) Close() error { return nil }
 
 type stubRunner struct {
@@ -442,6 +468,152 @@ func (runner stubRunner) Run(context.Context) (realtimeclient.Result, error) {
 
 type stubSpeechSynthesizer struct {
 	request *audioinput.SpeechRequest
+}
+
+func TestRealtimeResultAndErrorsRedactEverySessionSecret(t *testing.T) {
+	active := &session{
+		artifactDir: t.TempDir(),
+		apiKey:      []byte(`model-"quoted"-secret`), realtimeAPIKey: []byte(`tts-\backslash-secret`),
+		gatewayToken: []byte(`gateway-"quote"-and-\slash-secret`),
+	}
+	secrets := []string{string(active.apiKey), string(active.realtimeAPIKey), string(active.gatewayToken)}
+	for _, secret := range [][]byte{active.apiKey, active.realtimeAPIKey, active.gatewayToken} {
+		if err := validateAPIKey(secret); err != nil {
+			t.Fatalf("distinctive canary must be a valid API key: %v", err)
+		}
+	}
+	result := realtimeclient.Result{
+		SchemaVersion:  realtimeclient.ResultSchemaVersion,
+		OriginalPrompt: strings.Join(secrets, " "), OutputText: secrets[0], Errors: append([]string(nil), secrets...),
+		ConnectAuth: map[string]any{"token": secrets[2]},
+		Timings:     map[string]any{secrets[0]: secrets[1]},
+		Events:      []gatewayclient.Frame{{"type": "event", "payload": map[string]any{"authorization": secrets[2], "tts": secrets[1], "model": secrets[0]}}},
+	}
+	redacted := redactRealtimeResult(result, active)
+	assertJSONValueHasNoSecrets(t, redacted, secrets)
+	manager := &Manager{}
+	path, err := manager.writeRealtimeResult(active, result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var artifactValue any
+	if err := json.Unmarshal(artifact, &artifactValue); err != nil {
+		t.Fatal(err)
+	}
+	assertJSONValueHasNoSecrets(t, artifactValue, secrets)
+	rawErr := fmt.Errorf("operation contained model=%s tts=%s gateway=%s: %w", secrets[0], secrets[1], secrets[2], context.Canceled)
+	redactedErr := redactSessionError(rawErr, active)
+	if !errors.Is(redactedErr, context.Canceled) {
+		t.Fatalf("redacted error lost classification or retained secret: %v", redactedErr)
+	}
+	for _, secret := range secrets {
+		if strings.Contains(redactedErr.Error(), secret) {
+			t.Fatalf("redacted error retained %q: %v", secret, redactedErr)
+		}
+	}
+	harnessResult := failedHarnessResult(active, time.Now(), rawErr)
+	if harnessResult.Status != core.StatusCanceled {
+		t.Fatalf("HarnessResult = %#v", harnessResult)
+	}
+	for _, secret := range secrets {
+		if strings.Contains(harnessResult.Error, secret) {
+			t.Fatalf("HarnessResult retained %q: %#v", secret, harnessResult)
+		}
+	}
+}
+
+func TestAgentResultAndErrorsRedactEverySessionSecret(t *testing.T) {
+	secrets := []string{`model-"quoted"-secret`, `tts-\backslash-secret`, `gateway-"quote"-and-\slash-secret`}
+	for _, test := range []struct {
+		name    string
+		gateway *secretAgentGateway
+		status  string
+	}{
+		{name: "success", status: core.StatusSucceeded, gateway: &secretAgentGateway{
+			summary: gatewayclient.ConnectSummary{Role: secrets[0], Scopes: []string{"operator.write", secrets[1]}},
+			result:  gatewayclient.AgentResult{RunID: secrets[2], Text: strings.Join(secrets, " ")},
+		}},
+		{name: "canceled", status: core.StatusCanceled, gateway: &secretAgentGateway{
+			summary: gatewayclient.ConnectSummary{Role: "operator", Scopes: []string{"operator.write"}},
+			err:     fmt.Errorf("connect/agent contained %s %s %s: %w", secrets[0], secrets[1], secrets[2], context.Canceled),
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fake := newFakeDocker()
+			manager := newTestManager(t, fake, []byte("initial-model-key"))
+			manager.newGateway = func(string, []byte) (gatewayConnection, error) { return test.gateway, nil }
+			request := core.HarnessRequest{RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(), Timeout: time.Second}
+			if err := manager.Start(context.Background(), request); err != nil {
+				t.Fatal(err)
+			}
+			manager.active.apiKey = []byte(secrets[0])
+			manager.active.realtimeAPIKey = []byte(secrets[1])
+			manager.active.gatewayToken = []byte(secrets[2])
+			result, runErr := manager.Run(context.Background(), "repair git")
+			if result.Status != test.status {
+				t.Fatalf("result = %#v, error = %v", result, runErr)
+			}
+			if test.status == core.StatusCanceled && !errors.Is(runErr, context.Canceled) {
+				t.Fatalf("cancellation lost: %v", runErr)
+			}
+			for _, secret := range secrets {
+				if strings.Contains(result.FinalResponse, secret) || strings.Contains(result.Error, secret) || runErr != nil && strings.Contains(runErr.Error(), secret) {
+					t.Fatalf("returned result retained %q: %#v / %v", secret, result, runErr)
+				}
+			}
+			artifact, err := os.ReadFile(filepath.Join(manager.active.artifactDir, "agent-result.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded any
+			if err := json.Unmarshal(artifact, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			assertJSONValueHasNoSecrets(t, decoded, secrets)
+		})
+	}
+}
+
+func assertJSONValueHasNoSecrets(t *testing.T, value any, secrets []string) {
+	t.Helper()
+	var visit func(any)
+	check := func(text string) {
+		for _, secret := range secrets {
+			if strings.Contains(text, secret) {
+				t.Fatalf("JSON value retained secret %q in %q", secret, text)
+			}
+		}
+	}
+	visit = func(value any) {
+		switch typed := value.(type) {
+		case string:
+			check(typed)
+		case []any:
+			for _, item := range typed {
+				visit(item)
+			}
+		case map[string]any:
+			for key, item := range typed {
+				check(key)
+				visit(item)
+			}
+		case realtimeclient.Result:
+			content, err := json.Marshal(typed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded any
+			if err := json.Unmarshal(content, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			visit(decoded)
+		}
+	}
+	visit(value)
 }
 
 func (synthesizer stubSpeechSynthesizer) Synthesize(_ context.Context, request audioinput.SpeechRequest) (audioinput.SpeechResult, error) {
@@ -593,6 +765,15 @@ func TestAgentRunUsesGatewayOnceWithExactParameters(t *testing.T) {
 	}
 	if err := manager.Stop(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestGatewayEventDispositionFollowsHarnessMode(t *testing.T) {
+	if got := gatewayEventDisposition(ModeAgent); got != gatewayclient.EventDispositionResponseOnly {
+		t.Fatalf("agent disposition = %v", got)
+	}
+	if got := gatewayEventDisposition(ModeRealtime); got != gatewayclient.EventDispositionDelivery {
+		t.Fatalf("realtime disposition = %v", got)
 	}
 }
 

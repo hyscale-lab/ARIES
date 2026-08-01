@@ -112,6 +112,24 @@ func TestPrepareAudioResamplesAndEncodes(t *testing.T) {
 	}
 }
 
+func TestAudioBoundsRejectHugeRatesOutputsAndSilence(t *testing.T) {
+	if _, err := ResamplePCM16(pcm16Bytes(1), MaxSampleRate+1, 24000); err == nil || !strings.Contains(err.Error(), "bound") {
+		t.Fatalf("huge source rate error = %v", err)
+	}
+	// A small input can still imply an enormous output when metadata claims a
+	// one-hertz source. Reject it before allocating the derived output buffer.
+	if _, err := ResamplePCM16(make([]byte, 200), 1, MaxSampleRate); err == nil || !strings.Contains(err.Error(), "output exceeds") {
+		t.Fatalf("huge resample output error = %v", err)
+	}
+	if _, err := SilencePCM16(MaxSampleRate, MaxSilenceDurationMillis+1); err == nil || !strings.Contains(err.Error(), "duration") {
+		t.Fatalf("huge silence error = %v", err)
+	}
+	wav := testWAV(t, MaxSampleRate+1, 1, 16, 1, []byte{0, 0}, false)
+	if _, _, err := ReadWAVPCM16Mono(bytes.NewReader(wav)); err == nil || !strings.Contains(err.Error(), "sample rate") {
+		t.Fatalf("huge WAV rate error = %v", err)
+	}
+}
+
 func pcm16Bytes(values ...int16) []byte {
 	var out bytes.Buffer
 	for _, value := range values {
