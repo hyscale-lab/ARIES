@@ -1,4 +1,4 @@
-package gateway
+package realtime
 
 import (
 	"context"
@@ -69,7 +69,7 @@ const (
 )
 
 type RealtimeGateway interface {
-	Connect(context.Context, ConnectOptions) (map[string]any, error)
+	Connect(context.Context, ConnectOptions) (ConnectSummary, error)
 	Call(context.Context, string, map[string]any) (Frame, error)
 	RecvEvent(context.Context) (Frame, error)
 	Close() error
@@ -169,14 +169,17 @@ func (runner *RealtimeRunner) Run(ctx context.Context) (RealtimeResult, error) {
 	if runner.options.CloseGateway {
 		defer runner.gateway.Close()
 	}
-	connectPayload, err := runner.gateway.Connect(ctx, runner.options.ConnectOptions)
+	connectSummary, err := runner.gateway.Connect(ctx, runner.options.ConnectOptions)
 	if err != nil {
 		result.AppendError(err.Error())
 		return result.WithoutEvents(), err
 	}
-	if auth := toMap(connectPayload["auth"]); len(auth) != 0 {
-		result.ConnectAuth = auth
+	if !connectSummary.HasScope("operator.read") || !connectSummary.HasScope("operator.write") {
+		err := errors.New("realtime gateway requires operator.read and operator.write scopes")
+		result.AppendError(err.Error())
+		return result.WithoutEvents(), err
 	}
+	result.ConnectAuth = map[string]any{"role": connectSummary.Role, "scopes": append([]string(nil), connectSummary.Scopes...)}
 	session, err := runner.createSession(ctx)
 	if err != nil {
 		result.AppendError(err.Error())

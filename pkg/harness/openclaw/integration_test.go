@@ -350,6 +350,16 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 	if !strings.Contains(task.Harness.FinalResponse, "Recovered lost commit") {
 		t.Fatalf("final response = %q", task.Harness.FinalResponse)
 	}
+	agentArtifact := filepath.Join(outputDir, "fix-git", "harness", "agent-result.json")
+	agentContent, err := os.ReadFile(agentArtifact)
+	if err != nil || !bytes.Contains(agentContent, []byte(`"role": "operator"`)) || !bytes.Contains(agentContent, []byte(`"operator.write"`)) || !bytes.Contains(agentContent, []byte(`"run_id":`)) {
+		t.Fatalf("sanitized gateway agent artifact = %s, %v", agentContent, err)
+	}
+	for _, obsolete := range []string{"agent.stdout", "agent.stderr.log"} {
+		if _, err := os.Stat(filepath.Join(outputDir, "fix-git", "harness", obsolete)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("obsolete exec artifact %q still exists: %v", obsolete, err)
+		}
+	}
 	assertNoRunResources(t, ctx, api, runID)
 	assertSecretAbsent(t, outputDir, key)
 }

@@ -158,7 +158,7 @@ func (transport *webSocketTransport) Receive(ctx context.Context) ([]byte, error
 		defer transport.connection.SetReadDeadline(time.Time{})
 	}
 	for {
-		opcode, payload, err := readWebSocketFrame(transport.reader)
+		opcode, payload, err := readWebSocketFrameWithMask(transport.reader, false)
 		if err != nil {
 			return nil, err
 		}
@@ -255,6 +255,10 @@ func encodeClientWebSocketFrame(opcode byte, payload []byte) ([]byte, error) {
 }
 
 func readWebSocketFrame(reader *bufio.Reader) (byte, []byte, error) {
+	return readWebSocketFrameWithMask(reader, true)
+}
+
+func readWebSocketFrameWithMask(reader *bufio.Reader, expectMasked bool) (byte, []byte, error) {
 	header, err := reader.ReadByte()
 	if err != nil {
 		return 0, nil, err
@@ -266,11 +270,17 @@ func readWebSocketFrame(reader *bufio.Reader) (byte, []byte, error) {
 		return 0, nil, fmt.Errorf("gateway websocket fragmented frames are not supported")
 	}
 	opcode := header & 0x0f
+	if opcode != 0x1 && opcode != 0x2 && opcode != 0x8 && opcode != 0x9 && opcode != 0xa {
+		return 0, nil, fmt.Errorf("gateway websocket frame has invalid opcode %d", opcode)
+	}
 	lengthByte, err := reader.ReadByte()
 	if err != nil {
 		return 0, nil, err
 	}
 	masked := lengthByte&0x80 != 0
+	if masked != expectMasked {
+		return 0, nil, fmt.Errorf("gateway websocket frame mask direction is invalid")
+	}
 	length := uint64(lengthByte & 0x7f)
 	switch length {
 	case 126:
@@ -288,6 +298,9 @@ func readWebSocketFrame(reader *bufio.Reader) (byte, []byte, error) {
 	}
 	if length > maxMessageBytes {
 		return 0, nil, fmt.Errorf("gateway websocket message too large: %s bytes", strconv.FormatUint(length, 10))
+	}
+	if opcode >= 0x8 && length > 125 {
+		return 0, nil, fmt.Errorf("gateway websocket control frame is too large")
 	}
 	var mask [4]byte
 	if masked {

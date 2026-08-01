@@ -45,16 +45,20 @@ func TestClientConnectSignsChallengeAndReturnsPayload(t *testing.T) {
 		t.Fatalf("Connect returned error: %v", err)
 	}
 	<-done
-	if DeviceToken(payload) != "dt" {
-		t.Fatalf("device token = %q, want dt", DeviceToken(payload))
+	content, _ := json.Marshal(payload)
+	if strings.Contains(string(content), "dt") {
+		t.Fatalf("connect summary leaked device token: %s", content)
 	}
-	scopes := GrantedScopes(payload)
+	scopes := payload.Scopes
 	if len(scopes) != 1 || scopes[0] != "operator.write" {
 		t.Fatalf("scopes = %#v", scopes)
 	}
+	if payload.Role != "operator" || len(client.Events()) != 0 {
+		t.Fatalf("summary/history = %#v/%#v", payload, client.Events())
+	}
 }
 
-func TestClientConnectCanReturnPairingRequired(t *testing.T) {
+func TestClientConnectRejectsPairingRequired(t *testing.T) {
 	transport := newFakeTransport(Frame{"type": "event", "event": "connect.challenge", "payload": map[string]any{"nonce": "n-1"}})
 	client, err := New(func(context.Context) (Transport, error) { return transport, nil }, Options{Token: "gateway-token"})
 	if err != nil {
@@ -67,12 +71,8 @@ func TestClientConnectCanReturnPairingRequired(t *testing.T) {
 			"error": map[string]any{"code": "NOT_PAIRED", "details": map[string]any{"requestId": "pair-1"}},
 		})
 	}()
-	payload, err := client.Connect(context.Background(), ConnectOptions{AllowPairingRequired: true, Timeout: time.Second})
-	if err != nil {
-		t.Fatalf("Connect returned error: %v", err)
-	}
-	if !payload["pairing_required"].(bool) || PairingRequestID(payload) != "pair-1" {
-		t.Fatalf("payload = %#v", payload)
+	if _, err := client.Connect(context.Background(), ConnectOptions{Timeout: time.Second}); err == nil || !strings.Contains(err.Error(), "pairing") {
+		t.Fatalf("Connect error = %v", err)
 	}
 }
 
@@ -123,7 +123,7 @@ func TestClientCallCorrelatesResponseAndQueuesEvents(t *testing.T) {
 	}
 }
 
-func TestClientReaderDoesNotBlockResponsesWhenEventQueueIsFull(t *testing.T) {
+func TestClientReaderFailsClosedWhenEventQueueIsFull(t *testing.T) {
 	transport := newFakeTransport()
 	client, err := New(func(context.Context) (Transport, error) { return transport, nil }, Options{Token: "gateway-token", EventQueueSize: 1})
 	if err != nil {
@@ -145,72 +145,162 @@ func TestClientReaderDoesNotBlockResponsesWhenEventQueueIsFull(t *testing.T) {
 		}
 		done <- nil
 	}()
-	sent := transport.nextSent(t)
+	_ = transport.nextSent(t)
 	transport.deliver(Frame{"type": "event", "event": "talk.event", "payload": map[string]any{"n": 1}})
 	transport.deliver(Frame{"type": "event", "event": "talk.event", "payload": map[string]any{"n": 2}})
-	transport.deliver(Frame{"type": "res", "id": sent["id"], "ok": true})
 
 	select {
 	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "overflow") {
+			t.Fatalf("Call error = %v, want overflow", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("pending response was not woken by overflow")
+	}
+	if len(client.Events()) > defaultEventHistorySize {
+		t.Fatalf("stored events exceeded bound: %d", len(client.Events()))
+	}
+}
+
+func TestClientCloseWakesPendingCallWithExplicitError(t *testing.T) {
+	transport := newFakeTransport()
+	client, err := New(func(context.Context) (Transport, error) { return transport, nil }, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.transport = transport
+	go client.readLoop(context.Background(), transport)
+	done := make(chan error, 1)
+	go func() { _, err := client.Call(context.Background(), "status", nil); done <- err }()
+	_ = transport.nextSent(t)
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "closed") {
+			t.Fatalf("Call error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("pending call blocked after Close")
+	}
+}
+
+func TestClientCloseWakesPendingEventWaiter(t *testing.T) {
+	transport := newFakeTransport()
+	client, err := New(func(context.Context) (Transport, error) { return transport, nil }, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.transport = transport
+	go client.readLoop(context.Background(), transport)
+	done := make(chan error, 1)
+	go func() { _, err := client.RecvEvent(context.Background()); done <- err }()
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "closed") {
+			t.Fatalf("RecvEvent error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("event waiter blocked after Close")
+	}
+}
+
+func TestClientDrainsQueuedEventBeforeReaderEOF(t *testing.T) {
+	for iteration := 0; iteration < 500; iteration++ {
+		transport := newFakeTransport()
+		client, err := New(func(context.Context) (Transport, error) { return transport, nil }, Options{})
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(time.Second):
-		t.Fatal("response was blocked behind a full event queue")
-	}
-	if len(client.Events()) != 2 {
-		t.Fatalf("stored events = %d, want 2", len(client.Events()))
+		client.transport = transport
+		go client.readLoop(context.Background(), transport)
+		transport.deliver(Frame{"type": "event", "event": "queued", "payload": map[string]any{"iteration": iteration}})
+		deadline := time.Now().Add(time.Second)
+		for len(client.Events()) != 1 && time.Now().Before(deadline) {
+			time.Sleep(time.Microsecond)
+		}
+		if len(client.Events()) != 1 {
+			t.Fatalf("iteration %d: event was not queued", iteration)
+		}
+		if err := transport.Close(); err != nil {
+			t.Fatal(err)
+		}
+		frame, err := client.RecvEvent(context.Background())
+		if err != nil || frame.String("event") != "queued" {
+			t.Fatalf("iteration %d: queued frame = %#v, %v", iteration, frame, err)
+		}
+		if _, err := client.RecvEvent(context.Background()); err == nil || !strings.Contains(err.Error(), "reader stopped") {
+			t.Fatalf("iteration %d: terminal reader error = %v", iteration, err)
+		}
 	}
 }
 
-func TestTalkAndChatParsers(t *testing.T) {
-	session, err := TalkSessionInfoFromPayload(map[string]any{
-		"sessionId": "s-1", "relaySessionId": "r-1",
-		"audio": map[string]any{"inputEncoding": "pcm16", "inputSampleRateHz": float64(24000)},
+func TestClientFailsClosedWhenEventHistoryOverflows(t *testing.T) {
+	transport := newFakeTransport()
+	client, err := New(func(context.Context) (Transport, error) { return transport, nil }, Options{EventQueueSize: 8, EventHistorySize: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.transport = transport
+	go client.readLoop(context.Background(), transport)
+	transport.deliver(Frame{"type": "event", "event": "one"})
+	transport.deliver(Frame{"type": "event", "event": "two"})
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		client.mu.Lock()
+		err := client.readerErr
+		client.mu.Unlock()
+		if err != nil {
+			if !strings.Contains(err.Error(), "history overflow") {
+				t.Fatalf("reader error = %v", err)
+			}
+			if len(client.Events()) != 1 {
+				t.Fatalf("history = %d", len(client.Events()))
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("history overflow did not fail connection")
+}
+
+func TestClientFailsClosedWhenEventHistoryByteBudgetOverflows(t *testing.T) {
+	transport := newFakeTransport()
+	client, err := New(func(context.Context) (Transport, error) { return transport, nil }, Options{
+		EventQueueSize: 8, EventHistorySize: 8, EventHistoryBytes: 32,
 	})
 	if err != nil {
-		t.Fatalf("TalkSessionInfoFromPayload returned error: %v", err)
+		t.Fatal(err)
 	}
-	if session.SessionID != "s-1" || session.RelaySessionID != "r-1" || session.InputSampleRateHz != 24000 {
-		t.Fatalf("session = %#v", session)
+	client.transport = transport
+	go client.readLoop(context.Background(), transport)
+	transport.deliver(Frame{"type": "event", "event": "chat", "payload": map[string]any{"text": strings.Repeat("x", 64)}})
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		client.mu.Lock()
+		err := client.readerErr
+		client.mu.Unlock()
+		if err != nil {
+			if !strings.Contains(err.Error(), "history overflow") || len(client.Events()) != 0 {
+				t.Fatalf("reader/history = %v/%#v", err, client.Events())
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
 	}
-
-	frame := Frame{
-		"type": "event", "event": "talk.event",
-		"payload": map[string]any{
-			"relaySessionId": "relay",
-			"talkEvent": map[string]any{
-				"type": "tool.call", "sessionId": "s-1", "callId": "call-1",
-				"payload": map[string]any{"name": "openclaw_agent_consult", "args": map[string]any{"question": "q"}},
-			},
-		},
-	}
-	talk, ok := TalkEventFromFrame(frame)
-	if !ok {
-		t.Fatalf("TalkEventFromFrame rejected frame")
-	}
-	tool, ok := ToolCallEventFromTalk(talk)
-	if !ok || tool.RelaySessionID != "relay" || tool.Args["question"] != "q" {
-		t.Fatalf("tool = %#v ok=%v", tool, ok)
-	}
-
-	chat, ok := ChatEventFromFrame(Frame{
-		"type": "event", "event": "chat",
-		"payload": map[string]any{
-			"runId": "run-1", "state": "final",
-			"message": map[string]any{"content": []any{map[string]any{"type": "text", "text": "hello"}, map[string]any{"type": "text", "text": " world"}}},
-		},
-	})
-	if !ok || chat.MessageText != "hello world" {
-		t.Fatalf("chat = %#v ok=%v", chat, ok)
-	}
+	t.Fatal("history byte overflow did not fail connection")
 }
 
 type fakeTransport struct {
-	in     chan []byte
-	out    chan []byte
-	closed chan struct{}
-	once   sync.Once
+	in      chan []byte
+	out     chan []byte
+	closed  chan struct{}
+	once    sync.Once
+	sendErr error
 }
 
 func newFakeTransport(initial ...Frame) *fakeTransport {
@@ -222,6 +312,9 @@ func newFakeTransport(initial ...Frame) *fakeTransport {
 }
 
 func (transport *fakeTransport) Send(ctx context.Context, content []byte) error {
+	if transport.sendErr != nil {
+		return transport.sendErr
+	}
 	select {
 	case transport.out <- append([]byte(nil), content...):
 		return nil

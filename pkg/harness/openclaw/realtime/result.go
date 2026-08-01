@@ -1,4 +1,4 @@
-package gateway
+package realtime
 
 const RealtimeResultSchemaVersion = 1
 

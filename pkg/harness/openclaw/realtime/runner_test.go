@@ -1,4 +1,4 @@
-package gateway
+package realtime
 
 import (
 	"context"
@@ -512,7 +512,7 @@ type realtimeRequest struct {
 }
 
 type scriptedRealtimeGateway struct {
-	connectPayload map[string]any
+	connectPayload ConnectSummary
 	calls          []scriptedCall
 	events         []Frame
 	requests       []realtimeRequest
@@ -520,10 +520,29 @@ type scriptedRealtimeGateway struct {
 }
 
 func newScriptedRealtimeGateway() *scriptedRealtimeGateway {
-	return &scriptedRealtimeGateway{connectPayload: map[string]any{"auth": map[string]any{"scopes": []any{"operator.write"}}}}
+	return &scriptedRealtimeGateway{connectPayload: ConnectSummary{Role: "operator", Scopes: []string{"operator.read", "operator.write"}}}
 }
 
-func (gateway *scriptedRealtimeGateway) Connect(context.Context, ConnectOptions) (map[string]any, error) {
+func TestRealtimeRequiresReadAndWriteScopesBeforeSessionCreation(t *testing.T) {
+	for _, scopes := range [][]string{{"operator.read"}, {"operator.write"}, nil} {
+		gateway := newScriptedRealtimeGateway()
+		gateway.connectPayload.Scopes = scopes
+		runner, err := NewRealtimeRunner(gateway, RealtimeRunnerOptions{
+			Audio: RealtimeAudio{Data: []byte{1, 2}, Rate: 24000, BytesPerSample: 2},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := runner.Run(context.Background()); err == nil || !strings.Contains(err.Error(), "operator.read and operator.write") {
+			t.Fatalf("Run error = %v for scopes %#v", err, scopes)
+		}
+		if len(gateway.requests) != 0 {
+			t.Fatalf("realtime sent work without scopes %#v: %#v", scopes, gateway.requests)
+		}
+	}
+}
+
+func (gateway *scriptedRealtimeGateway) Connect(context.Context, ConnectOptions) (ConnectSummary, error) {
 	return gateway.connectPayload, nil
 }
 

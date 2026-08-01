@@ -55,31 +55,26 @@ func TestWebSocketDialerConnectsAndCarriesGatewayFrames(t *testing.T) {
 
 	ctx, cancel := contextWithTestTimeout()
 	defer cancel()
-	payload, err := client.Connect(ctx, ConnectOptions{})
+	summary, err := client.Connect(ctx, ConnectOptions{})
 	if err != nil {
 		t.Fatalf("Connect returned error: %v", err)
 	}
-	if scopes := GrantedScopes(payload); len(scopes) != 1 || scopes[0] != "operator.write" {
+	if scopes := summary.Scopes; len(scopes) != 1 || scopes[0] != "operator.write" {
 		t.Fatalf("scopes = %#v", scopes)
 	}
 	response, err := client.Call(ctx, "talk.session.create", map[string]any{"mode": "realtime"})
 	if err != nil {
 		t.Fatalf("Call returned error: %v", err)
 	}
-	session, err := TalkSessionInfoFromPayload(response.Map("payload"))
-	if err != nil {
-		t.Fatalf("TalkSessionInfoFromPayload returned error: %v", err)
-	}
-	if session.SessionID != "s-1" || session.InputEncoding != "pcm16" || session.InputSampleRateHz != 24000 {
-		t.Fatalf("session = %#v", session)
+	if response.Map("payload")["sessionId"] != "s-1" {
+		t.Fatalf("response = %#v", response)
 	}
 	event, err := client.RecvEvent(ctx)
 	if err != nil {
 		t.Fatalf("RecvEvent returned error: %v", err)
 	}
-	talk, ok := TalkEventFromFrame(event)
-	if !ok || talk.EventType != "session.ready" {
-		t.Fatalf("talk event = %#v ok=%v", talk, ok)
+	if event.String("event") != "talk.event" {
+		t.Fatalf("event = %#v", event)
 	}
 }
 
@@ -181,5 +176,20 @@ func TestWebSocketFrameEncodingMasksClientPayload(t *testing.T) {
 	}
 	if _, err := reader.Peek(1); err != io.EOF {
 		t.Fatalf("trailing frame data err = %v", err)
+	}
+}
+
+func TestWebSocketRejectsHostileServerFrames(t *testing.T) {
+	tests := map[string][]byte{
+		"fragmented": {0x01, 0x00},
+		"masked":     {0x81, 0x80, 0, 0, 0, 0},
+		"oversized":  {0x81, 0x7f, 0, 0, 0, 0, 4, 0, 0, 1},
+	}
+	for name, frame := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, _, err := readWebSocketFrameWithMask(bufio.NewReader(bytes.NewReader(frame)), false); err == nil {
+				t.Fatal("hostile frame was accepted")
+			}
+		})
 	}
 }

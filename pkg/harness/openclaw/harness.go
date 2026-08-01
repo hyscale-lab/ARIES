@@ -27,6 +27,7 @@ import (
 	"github.com/hyscale-lab/aries/pkg/containerimage"
 	"github.com/hyscale-lab/aries/pkg/core"
 	gatewayclient "github.com/hyscale-lab/aries/pkg/harness/openclaw/gateway"
+	realtimeclient "github.com/hyscale-lab/aries/pkg/harness/openclaw/realtime"
 	"github.com/hyscale-lab/aries/pkg/runner"
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
@@ -58,7 +59,6 @@ exit "$status"`
 
 var gatewayPort = network.MustParsePort(gatewayPortSpec)
 
-var gatewayCommand = []string{"node", "openclaw.mjs", "gateway", "--bind", "loopback", "--port", gatewayListenPort}
 var realtimeGatewayCommand = []string{"/run/aries/realtime-gateway"}
 
 const (
@@ -137,8 +137,8 @@ type Manager struct {
 	mode           string
 	realtime       RealtimeOptions
 	newID          func() (string, error)
-	newGateway     func(string, []byte) (gatewayclient.RealtimeGateway, error)
-	newRealtime    func(gatewayclient.RealtimeGateway, gatewayclient.RealtimeRunnerOptions) (realtimeRunner, error)
+	newGateway     func(string, []byte) (gatewayConnection, error)
+	newRealtime    func(realtimeclient.RealtimeGateway, realtimeclient.RealtimeRunnerOptions) (realtimeRunner, error)
 	newSpeech      func(audioinput.SpeechClientOptions) (speechSynthesizer, error)
 
 	mu        sync.Mutex
@@ -151,7 +151,12 @@ type Manager struct {
 }
 
 type realtimeRunner interface {
-	Run(context.Context) (gatewayclient.RealtimeResult, error)
+	Run(context.Context) (realtimeclient.RealtimeResult, error)
+}
+
+type gatewayConnection interface {
+	realtimeclient.RealtimeGateway
+	Agent(context.Context, gatewayclient.AgentRequest) (gatewayclient.AgentResult, error)
 }
 
 type speechSynthesizer interface {
@@ -173,22 +178,23 @@ func (manager *Manager) Close() error {
 }
 
 type session struct {
-	runID          string
-	taskID         string
-	safeTaskID     string
-	attemptID      string
-	containerName  string
-	containerID    string
-	artifactDir    string
-	endpoint       core.ToolEndpoint
-	model          core.ModelConfig
-	agentTimeout   time.Duration
-	apiKey         []byte
-	realtimeAPIKey []byte
-	gatewayToken   []byte
-	gatewayURL     string
-	runAttempted   bool
-	logPaths       []string
+	runID            string
+	taskID           string
+	safeTaskID       string
+	attemptID        string
+	containerName    string
+	containerID      string
+	artifactDir      string
+	endpoint         core.ToolEndpoint
+	model            core.ModelConfig
+	agentTimeout     time.Duration
+	apiKey           []byte
+	realtimeAPIKey   []byte
+	gatewayToken     []byte
+	gatewayURL       string
+	agentIdempotency string
+	runAttempted     bool
+	logPaths         []string
 }
 
 var _ runner.AgentHarness = (*Manager)(nil)
@@ -263,7 +269,10 @@ func New(options Options) (*Manager, error) {
 		cleanupTimeout: options.CleanupTimeout, startTimeout: options.StartTimeout,
 		agentTimeout: options.AgentTimeout, logger: options.Logger,
 		apiKeyLookup: options.APIKeyLookup, mode: options.Mode, realtime: options.Realtime, newID: randomID,
-		newGateway: newGatewayClient, newRealtime: newRealtimeRunner, newSpeech: newSpeechClient,
+		newGateway: func(rawURL string, token []byte) (gatewayConnection, error) {
+			return newGatewayClient(rawURL, token, gatewayScopes(options.Mode))
+		},
+		newRealtime: newRealtimeRunner, newSpeech: newSpeechClient,
 	}, nil
 }
 
@@ -343,10 +352,8 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		},
 	}
 	hostConfig := &container.HostConfig{NetworkMode: container.NetworkMode(request.Endpoint.Network), Resources: resources}
-	if manager.mode == ModeRealtime {
-		containerConfig.ExposedPorts = network.PortSet{gatewayPort: struct{}{}}
-		hostConfig.PortBindings = network.PortMap{gatewayPort: []network.PortBinding{{HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: ""}}}
-	}
+	containerConfig.ExposedPorts = network.PortSet{gatewayPort: struct{}{}}
+	hostConfig.PortBindings = network.PortMap{gatewayPort: []network.PortBinding{{HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: ""}}}
 	id, err := manager.newID()
 	if err != nil {
 		clear(apiKey)
@@ -359,10 +366,17 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		clear(realtimeAPIKey)
 		return fmt.Errorf("generate OpenClaw gateway token: %w", err)
 	}
+	agentIdempotency, err := randomID()
+	if err != nil {
+		clear(apiKey)
+		clear(realtimeAPIKey)
+		clear(gatewayToken)
+		return fmt.Errorf("generate OpenClaw agent idempotency key: %w", err)
+	}
 	active := &session{
 		runID: request.RunID, taskID: request.TaskID, safeTaskID: safeTaskID(request.TaskID), attemptID: id,
 		containerName: "aries-openclaw-" + id, artifactDir: filepath.Join(manager.outputDir, request.TaskID, "harness"),
-		endpoint: request.Endpoint, model: request.Model, agentTimeout: agentTimeout, apiKey: apiKey, realtimeAPIKey: realtimeAPIKey, gatewayToken: gatewayToken,
+		endpoint: request.Endpoint, model: request.Model, agentTimeout: agentTimeout, apiKey: apiKey, realtimeAPIKey: realtimeAPIKey, gatewayToken: gatewayToken, agentIdempotency: agentIdempotency,
 	}
 	containerConfig.Labels["aries.attempt"] = active.attemptID
 	fail := func(primary error) error {
@@ -417,13 +431,11 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	if err != nil {
 		return fail(err)
 	}
-	if manager.mode == ModeRealtime {
-		gatewayURL, err := manager.gatewayURL(ctx, active)
-		if err != nil {
-			return fail(err)
-		}
-		active.gatewayURL = gatewayURL
+	gatewayURL, err := manager.gatewayURL(ctx, active)
+	if err != nil {
+		return fail(err)
 	}
+	active.gatewayURL = gatewayURL
 	manager.active = active
 	manager.stopErr = nil
 	manager.logger.WithContext(ctx).WithFields(logrus.Fields{"task_id": active.taskID, "container": active.containerName}).Info("OpenClaw harness started")
@@ -470,23 +482,34 @@ func (manager *Manager) Run(ctx context.Context, instruction string) (core.Harne
 	if manager.mode == ModeRealtime {
 		return manager.runRealtime(ctx, active, instruction, started)
 	}
-	timeoutSeconds := max(1, int((active.agentTimeout+time.Second-1)/time.Second))
-	command := buildAgentCommand(active, instruction, timeoutSeconds)
 	runCtx, cancel := context.WithTimeout(ctx, active.agentTimeout)
-	result, err := manager.execAttached(runCtx, active.containerID, command, "/app")
-	cancel()
-	stdout := redactSession(result.stdout, active)
-	stderr := redactSession(result.stderr, active)
-	paths, writeErr := manager.writeRunArtifacts(active, stdout, stderr)
-	active.logPaths = appendUnique(active.logPaths, paths...)
-	err = errors.Join(err, writeErr)
-	var response string
-	if err == nil && result.exitCode != 0 {
-		err = fmt.Errorf("OpenClaw agent exited %d", result.exitCode)
+	client, err := manager.newGateway(active.gatewayURL, active.gatewayToken)
+	if err != nil {
+		cancel()
+		return failedHarnessResult(active, started, err), err
+	}
+	defer client.Close()
+	connectSummary, err := client.Connect(runCtx, gatewayclient.ConnectOptions{})
+	var agentResult gatewayclient.AgentResult
+	if err == nil && !connectSummary.HasScope("operator.write") {
+		err = errors.New("OpenClaw agent gateway requires operator.write scope")
 	}
 	if err == nil {
-		response, err = parseAgentResult(stdout, stderr)
+		thinking := ""
+		if disablesThinking(active.model) {
+			thinking = "off"
+		}
+		agentResult, err = client.Agent(runCtx, gatewayclient.AgentRequest{
+			Message: instruction, SessionKey: "agent:main:aries-" + active.safeTaskID,
+			IdempotencyKey: active.agentIdempotency, Thinking: thinking,
+		})
 	}
+	cancel()
+	resultPath, writeErr := manager.writeAgentResult(active, connectSummary, agentResult, err)
+	if writeErr == nil {
+		active.logPaths = appendUnique(active.logPaths, resultPath)
+	}
+	err = errors.Join(err, writeErr)
 	artifactCtx, artifactCancel := context.WithTimeout(context.WithoutCancel(ctx), manager.cleanupTimeout)
 	artifactErr := manager.collectArtifacts(artifactCtx, active)
 	artifactCancel()
@@ -495,7 +518,7 @@ func (manager *Manager) Run(ctx context.Context, instruction string) (core.Harne
 		return failedHarnessResult(active, started, err), err
 	}
 	return core.HarnessResult{
-		Status: core.StatusSucceeded, FinalResponse: response, Duration: time.Since(started),
+		Status: core.StatusSucceeded, FinalResponse: agentResult.Text, Duration: time.Since(started),
 		LogPaths: append([]string(nil), active.logPaths...),
 	}, nil
 }
@@ -512,7 +535,7 @@ func (manager *Manager) runRealtime(ctx context.Context, active *session, instru
 	if err != nil {
 		return failedHarnessResult(active, started, err), err
 	}
-	runner, err := manager.newRealtime(client, gatewayclient.RealtimeRunnerOptions{
+	runner, err := manager.newRealtime(client, realtimeclient.RealtimeRunnerOptions{
 		OriginalPrompt:        instruction,
 		SessionKey:            "agent:main:aries-" + active.safeTaskID,
 		Provider:              manager.realtime.Provider,
@@ -557,32 +580,27 @@ func (manager *Manager) runRealtime(ctx context.Context, active *session, instru
 	}, nil
 }
 
-func newGatewayClient(rawURL string, token []byte) (gatewayclient.RealtimeGateway, error) {
+func newGatewayClient(rawURL string, token []byte, scopes []string) (gatewayConnection, error) {
 	dialer, err := gatewayclient.NewWebSocketDialer(gatewayclient.WebSocketOptions{URL: rawURL})
 	if err != nil {
 		return nil, err
 	}
-	return gatewayclient.New(dialer, gatewayclient.Options{Token: string(token)})
+	return gatewayclient.New(dialer, gatewayclient.Options{Token: string(token), Scopes: scopes})
 }
 
-func newRealtimeRunner(gateway gatewayclient.RealtimeGateway, options gatewayclient.RealtimeRunnerOptions) (realtimeRunner, error) {
-	return gatewayclient.NewRealtimeRunner(gateway, options)
+func gatewayScopes(mode string) []string {
+	if mode == ModeRealtime {
+		return []string{"operator.read", "operator.write"}
+	}
+	return []string{"operator.write"}
+}
+
+func newRealtimeRunner(gateway realtimeclient.RealtimeGateway, options realtimeclient.RealtimeRunnerOptions) (realtimeRunner, error) {
+	return realtimeclient.NewRealtimeRunner(gateway, options)
 }
 
 func newSpeechClient(options audioinput.SpeechClientOptions) (speechSynthesizer, error) {
 	return audioinput.NewSpeechClient(options)
-}
-
-func buildAgentCommand(active *session, instruction string, timeoutSeconds int) []string {
-	command := []string{
-		launcherPath, "node", "openclaw.mjs", "agent",
-		"--session-key", "agent:main:aries-" + active.safeTaskID,
-		"--message", instruction, "--json", "--timeout", fmt.Sprint(timeoutSeconds),
-	}
-	if disablesThinking(active.model) {
-		command = append(command, "--thinking", "off")
-	}
-	return command
 }
 
 func disablesThinking(model core.ModelConfig) bool {
@@ -590,39 +608,34 @@ func disablesThinking(model core.ModelConfig) bool {
 }
 
 func (manager *Manager) gatewayCommand() []string {
-	if manager.mode == ModeRealtime {
-		return append([]string(nil), realtimeGatewayCommand...)
-	}
-	return append([]string(nil), gatewayCommand...)
+	return append([]string(nil), realtimeGatewayCommand...)
 }
 
 func (manager *Manager) readyPort() string {
-	if manager.mode == ModeRealtime {
-		return realtimeGatewayPort
-	}
-	return gatewayListenPort
+	return realtimeGatewayPort
 }
 
 func (manager *Manager) gatewayURL(ctx context.Context, active *session) (string, error) {
 	inspection, err := manager.client.ContainerInspect(ctx, active.containerID, client.ContainerInspectOptions{})
 	if err != nil {
-		return "", fmt.Errorf("inspect realtime OpenClaw gateway port: %w", err)
+		return "", fmt.Errorf("inspect OpenClaw gateway port: %w", err)
 	}
 	if inspection.Container.NetworkSettings == nil {
-		return "", errors.New("OpenClaw realtime gateway port binding is missing")
+		return "", errors.New("OpenClaw gateway port binding is missing")
 	}
 	bindings := inspection.Container.NetworkSettings.Ports[gatewayPort]
-	for _, binding := range bindings {
-		if binding.HostPort == "" {
-			continue
-		}
-		host := binding.HostIP.String()
-		if host == "" || host == "0.0.0.0" || host == "::" {
-			host = "127.0.0.1"
-		}
-		return "ws://" + net.JoinHostPort(host, binding.HostPort), nil
+	if len(bindings) != 1 {
+		return "", fmt.Errorf("OpenClaw gateway requires exactly one host port binding, got %d", len(bindings))
 	}
-	return "", errors.New("OpenClaw realtime gateway host port was not published")
+	binding := bindings[0]
+	if binding.HostIP.String() != "127.0.0.1" {
+		return "", errors.New("OpenClaw gateway host port must bind 127.0.0.1")
+	}
+	port, err := strconv.ParseUint(binding.HostPort, 10, 16)
+	if err != nil || port == 0 {
+		return "", errors.New("OpenClaw gateway host port was not published")
+	}
+	return "ws://" + net.JoinHostPort("127.0.0.1", binding.HostPort), nil
 }
 
 func (manager *Manager) synthesizeRealtimeAudio(ctx context.Context, active *session, instruction string) (string, []string, error) {
@@ -682,39 +695,39 @@ func (manager *Manager) synthesizeRealtimeAudio(ctx context.Context, active *ses
 	return audioPath, []string{instructionPath, audioPath, metaPath}, nil
 }
 
-func (manager *Manager) realtimeAudioProvider(audioPath string) gatewayclient.RealtimeAudioProvider {
-	return func(session gatewayclient.TalkSessionInfo) (gatewayclient.RealtimeAudio, error) {
+func (manager *Manager) realtimeAudioProvider(audioPath string) realtimeclient.RealtimeAudioProvider {
+	return func(session realtimeclient.TalkSessionInfo) (realtimeclient.RealtimeAudio, error) {
 		pcm, sourceRate, err := audioinput.ReadWAVFilePCM16Mono(audioPath)
 		if err != nil {
-			return gatewayclient.RealtimeAudio{}, fmt.Errorf("read realtime audio: %w", err)
+			return realtimeclient.RealtimeAudio{}, fmt.Errorf("read realtime audio: %w", err)
 		}
 		if manager.realtime.TrailingSilenceMillis > 0 {
 			silence, err := audioinput.SilencePCM16(sourceRate, manager.realtime.TrailingSilenceMillis)
 			if err != nil {
-				return gatewayclient.RealtimeAudio{}, err
+				return realtimeclient.RealtimeAudio{}, err
 			}
 			pcm = append(pcm, silence...)
 		}
 		encoding := session.InputEncoding
 		if encoding == "" {
-			encoding = gatewayclient.DefaultRealtimeInputEncoding
+			encoding = realtimeclient.DefaultRealtimeInputEncoding
 		}
 		rate := session.InputSampleRateHz
 		if rate <= 0 {
-			rate = gatewayclient.DefaultRealtimeInputSampleRate
+			rate = realtimeclient.DefaultRealtimeInputSampleRate
 		}
 		prepared, err := audioinput.PrepareAudio(pcm, sourceRate, encoding, rate)
 		if err != nil {
-			return gatewayclient.RealtimeAudio{}, err
+			return realtimeclient.RealtimeAudio{}, err
 		}
-		return gatewayclient.RealtimeAudio{
+		return realtimeclient.RealtimeAudio{
 			Data: prepared.Data, Rate: prepared.Rate,
 			BytesPerSample: prepared.BytesPerSample, Encoding: prepared.Encoding,
 		}, nil
 	}
 }
 
-func (manager *Manager) writeRealtimeResult(active *session, result gatewayclient.RealtimeResult) (string, error) {
+func (manager *Manager) writeRealtimeResult(active *session, result realtimeclient.RealtimeResult) (string, error) {
 	content, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("encode realtime result: %w", err)
@@ -723,6 +736,30 @@ func (manager *Manager) writeRealtimeResult(active *session, result gatewayclien
 	path := filepath.Join(active.artifactDir, "realtime-result.json")
 	if err := writeArtifact(path, content); err != nil {
 		return "", fmt.Errorf("write realtime result: %w", err)
+	}
+	return path, nil
+}
+
+func (manager *Manager) writeAgentResult(active *session, summary gatewayclient.ConnectSummary, result gatewayclient.AgentResult, runErr error) (string, error) {
+	errorText := ""
+	if runErr != nil {
+		errorText = runErr.Error()
+	}
+	content, err := json.MarshalIndent(struct {
+		Role     string   `json:"role"`
+		Scopes   []string `json:"scopes"`
+		RunID    string   `json:"run_id"`
+		Response string   `json:"response"`
+		Error    string   `json:"error,omitempty"`
+	}{Role: summary.Role, Scopes: append([]string(nil), summary.Scopes...), RunID: result.RunID, Response: result.Text, Error: errorText}, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("encode OpenClaw agent result: %w", err)
+	}
+	content = append(content, '\n')
+	content = redactSession(content, active)
+	path := filepath.Join(active.artifactDir, "agent-result.json")
+	if err := writeArtifact(path, content); err != nil {
+		return "", fmt.Errorf("write OpenClaw agent result: %w", err)
 	}
 	return path, nil
 }
@@ -1301,11 +1338,6 @@ func (manager *Manager) collectTelemetry(ctx context.Context, active *session) (
 	return extractTelemetry(active.artifactDir, archive, active.apiKey, active.realtimeAPIKey, active.gatewayToken)
 }
 
-func (manager *Manager) writeRunArtifacts(active *session, stdout, stderr []byte) ([]string, error) {
-	paths := []string{filepath.Join(active.artifactDir, "agent-result.json"), filepath.Join(active.artifactDir, "agent.stderr.log")}
-	return paths, errors.Join(writeArtifact(paths[0], stdout), writeArtifact(paths[1], stderr))
-}
-
 func failedHarnessResult(active *session, started time.Time, err error) core.HarnessResult {
 	status := core.StatusFailed
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -1562,6 +1594,7 @@ func clearSessionSecrets(active *session) {
 	active.realtimeAPIKey = nil
 	clear(active.gatewayToken)
 	active.gatewayToken = nil
+	active.agentIdempotency = ""
 }
 
 func redactSession(content []byte, active *session) []byte {

@@ -22,6 +22,7 @@ import (
 	audioinput "github.com/hyscale-lab/aries/pkg/audio"
 	"github.com/hyscale-lab/aries/pkg/core"
 	gatewayclient "github.com/hyscale-lab/aries/pkg/harness/openclaw/gateway"
+	realtimeclient "github.com/hyscale-lab/aries/pkg/harness/openclaw/realtime"
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
@@ -378,13 +379,18 @@ func newTestManager(t *testing.T, fake *fakeDocker, secret []byte) *Manager {
 	}
 	manager.client = fake
 	manager.newID = func() (string, error) { return "attempt", nil }
+	manager.newGateway = func(string, []byte) (gatewayConnection, error) { return &stubRealtimeGateway{}, nil }
 	return manager
 }
 
 type stubRealtimeGateway struct{}
 
-func (stubRealtimeGateway) Connect(context.Context, gatewayclient.ConnectOptions) (map[string]any, error) {
-	return nil, nil
+func (stubRealtimeGateway) Connect(context.Context, gatewayclient.ConnectOptions) (gatewayclient.ConnectSummary, error) {
+	return gatewayclient.ConnectSummary{Role: "operator", Scopes: []string{"operator.read", "operator.write"}}, nil
+}
+
+func (stubRealtimeGateway) Agent(context.Context, gatewayclient.AgentRequest) (gatewayclient.AgentResult, error) {
+	return gatewayclient.AgentResult{RunID: "run-agent", Text: "task complete"}, nil
 }
 
 func (stubRealtimeGateway) Call(context.Context, string, map[string]any) (gatewayclient.Frame, error) {
@@ -399,12 +405,38 @@ func (stubRealtimeGateway) Close() error {
 	return nil
 }
 
+type recordingGateway struct {
+	summary    gatewayclient.ConnectSummary
+	agentCalls int
+	request    gatewayclient.AgentRequest
+}
+
+func (gateway *recordingGateway) Connect(context.Context, gatewayclient.ConnectOptions) (gatewayclient.ConnectSummary, error) {
+	return gateway.summary, nil
+}
+
+func (gateway *recordingGateway) Agent(_ context.Context, request gatewayclient.AgentRequest) (gatewayclient.AgentResult, error) {
+	gateway.agentCalls++
+	gateway.request = request
+	return gatewayclient.AgentResult{RunID: "run-1", Text: "first\nsecond"}, nil
+}
+
+func (*recordingGateway) Call(context.Context, string, map[string]any) (gatewayclient.Frame, error) {
+	return nil, errors.New("unexpected realtime call")
+}
+
+func (*recordingGateway) RecvEvent(context.Context) (gatewayclient.Frame, error) {
+	return nil, errors.New("unexpected realtime event")
+}
+
+func (*recordingGateway) Close() error { return nil }
+
 type stubRealtimeRunner struct {
-	result gatewayclient.RealtimeResult
+	result realtimeclient.RealtimeResult
 	err    error
 }
 
-func (runner stubRealtimeRunner) Run(context.Context) (gatewayclient.RealtimeResult, error) {
+func (runner stubRealtimeRunner) Run(context.Context) (realtimeclient.RealtimeResult, error) {
 	return runner.result, runner.err
 }
 
@@ -488,17 +520,12 @@ func TestHarnessUsesOneSDKContainerAndDirectPrivateArchive(t *testing.T) {
 	if fake.created.Name != "aries-openclaw-attempt" || len(fake.created.Config.Cmd) == 0 || len(fake.created.HostConfig.Mounts) != 0 || len(fake.created.HostConfig.Binds) != 0 {
 		t.Fatalf("container create = %#v", fake.created)
 	}
-	fake.mu.Lock()
-	var agentCommand string
-	for _, exec := range fake.execs {
-		joined := strings.Join(exec.Cmd, " ")
-		if strings.Contains(joined, " openclaw.mjs agent ") {
-			agentCommand = joined
-		}
+	bindings := fake.created.HostConfig.PortBindings[gatewayPort]
+	if len(bindings) != 1 || bindings[0].HostIP.String() != "127.0.0.1" {
+		t.Fatalf("agent gateway port bindings = %#v", bindings)
 	}
-	fake.mu.Unlock()
-	if !strings.Contains(agentCommand, " --timeout 37") {
-		t.Fatalf("task timeout was not passed to OpenClaw: %q", agentCommand)
+	if _, err := os.Stat(filepath.Join(manager.outputDir, "fix-git", "harness", "agent-result.json")); err != nil {
+		t.Fatalf("agent result artifact: %v", err)
 	}
 	serialized := strings.Join(append(append([]string{}, fake.created.Config.Env...), fake.created.Config.Cmd...), "\n")
 	for _, value := range fake.created.Config.Labels {
@@ -537,6 +564,67 @@ func TestHarnessUsesOneSDKContainerAndDirectPrivateArchive(t *testing.T) {
 	}
 	if info, err := os.Stat(configPath); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("retained OpenClaw config mode = %v, %v", info, err)
+	}
+}
+
+func TestAgentRunUsesGatewayOnceWithExactParameters(t *testing.T) {
+	fake := newFakeDocker()
+	manager := newTestManager(t, fake, []byte("model-secret"))
+	gateway := &recordingGateway{summary: gatewayclient.ConnectSummary{Role: "operator", Scopes: []string{"operator.write"}}}
+	manager.newGateway = func(rawURL string, token []byte) (gatewayConnection, error) {
+		if rawURL != "ws://127.0.0.1:38089" || len(token) == 0 {
+			t.Fatalf("gateway construction = %q token=%d", rawURL, len(token))
+		}
+		return gateway, nil
+	}
+	request := core.HarnessRequest{RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(), Timeout: 37 * time.Second}
+	if err := manager.Start(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	result, err := manager.Run(context.Background(), "repair git")
+	if err != nil || result.FinalResponse != "first\nsecond" {
+		t.Fatalf("Run = %#v, %v", result, err)
+	}
+	if gateway.agentCalls != 1 || gateway.request.Message != "repair git" || gateway.request.SessionKey != "agent:main:aries-fix-git" || gateway.request.IdempotencyKey == "" {
+		t.Fatalf("agent calls=%d request=%#v", gateway.agentCalls, gateway.request)
+	}
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAgentRunRejectsMissingWriteScopeBeforeSubmission(t *testing.T) {
+	fake := newFakeDocker()
+	manager := newTestManager(t, fake, []byte("model-secret"))
+	gateway := &recordingGateway{summary: gatewayclient.ConnectSummary{Role: "operator", Scopes: []string{"operator.read"}}}
+	manager.newGateway = func(string, []byte) (gatewayConnection, error) { return gateway, nil }
+	if err := manager.Start(context.Background(), core.HarnessRequest{RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := manager.Run(context.Background(), "repair git")
+	if err == nil || result.Status != core.StatusFailed || gateway.agentCalls != 0 || !strings.Contains(err.Error(), "operator.write") {
+		t.Fatalf("Run = %#v, %v calls=%d", result, err, gateway.agentCalls)
+	}
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGatewayURLRejectsMissingDuplicateWildcardAndInvalidBindings(t *testing.T) {
+	for name, bindings := range map[string][]network.PortBinding{
+		"missing":   nil,
+		"duplicate": {{HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: "3001"}, {HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: "3002"}},
+		"wildcard":  {{HostIP: netip.IPv4Unspecified(), HostPort: "3001"}},
+		"invalid":   {{HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: "bad"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake := newFakeDocker()
+			fake.container = container.InspectResponse{ID: "id", NetworkSettings: &container.NetworkSettings{Ports: network.PortMap{gatewayPort: bindings}}}
+			manager := newTestManager(t, fake, []byte("model-secret"))
+			if _, err := manager.gatewayURL(context.Background(), &session{containerID: "id"}); err == nil {
+				t.Fatal("invalid binding was accepted")
+			}
+		})
 	}
 }
 
@@ -579,16 +667,16 @@ func TestRealtimeModePublishesGatewayAndRunsRealtimeRunner(t *testing.T) {
 	}
 	var gatewayURL string
 	var gatewayToken []byte
-	manager.newGateway = func(rawURL string, token []byte) (gatewayclient.RealtimeGateway, error) {
+	manager.newGateway = func(rawURL string, token []byte) (gatewayConnection, error) {
 		gatewayURL = rawURL
 		gatewayToken = append([]byte(nil), token...)
 		return &stubRealtimeGateway{}, nil
 	}
-	var runnerOptions gatewayclient.RealtimeRunnerOptions
-	manager.newRealtime = func(_ gatewayclient.RealtimeGateway, options gatewayclient.RealtimeRunnerOptions) (realtimeRunner, error) {
+	var runnerOptions realtimeclient.RealtimeRunnerOptions
+	manager.newRealtime = func(_ realtimeclient.RealtimeGateway, options realtimeclient.RealtimeRunnerOptions) (realtimeRunner, error) {
 		runnerOptions = options
-		return stubRealtimeRunner{result: gatewayclient.RealtimeResult{
-			SchemaVersion:       gatewayclient.RealtimeResultSchemaVersion,
+		return stubRealtimeRunner{result: realtimeclient.RealtimeResult{
+			SchemaVersion:       realtimeclient.RealtimeResultSchemaVersion,
 			Transcript:          "heard",
 			OutputText:          "spoken",
 			AgentOutputText:     "final answer",
@@ -634,7 +722,7 @@ func TestRealtimeModePublishesGatewayAndRunsRealtimeRunner(t *testing.T) {
 	if speechRequest.Text != "voice task" || speechRequest.Model != "tts-model" || speechRequest.Voice != "alloy" || speechRequest.Format != "wav" {
 		t.Fatalf("speech request = %#v", speechRequest)
 	}
-	audio, err := runnerOptions.AudioProvider(gatewayclient.TalkSessionInfo{InputEncoding: "pcm16", InputSampleRateHz: 24000})
+	audio, err := runnerOptions.AudioProvider(realtimeclient.TalkSessionInfo{InputEncoding: "pcm16", InputSampleRateHz: 24000})
 	if err != nil {
 		t.Fatalf("audio provider returned error: %v", err)
 	}
@@ -763,20 +851,6 @@ func TestStopFailsUntilContainerAbsenceCanBeConfirmed(t *testing.T) {
 	}
 	if manager.active != nil || active.containerID != "" || len(active.apiKey) != 0 {
 		t.Fatal("successful retry did not clear lifecycle state and secrets")
-	}
-}
-
-func TestBuildAgentCommandUsesPinnedDirectExec(t *testing.T) {
-	active := &session{safeTaskID: "fix-git", model: testModel()}
-	command := buildAgentCommand(active, "repair", 12)
-	wantPrefix := []string{launcherPath, "node", "openclaw.mjs", "agent", "--session-key", "agent:main:aries-fix-git", "--message", "repair", "--json", "--timeout", "12"}
-	if !equalStrings(command, wantPrefix) {
-		t.Fatalf("command = %q", command)
-	}
-	for _, value := range command {
-		if strings.Contains(value, "secret") {
-			t.Fatal("secret entered exec argv")
-		}
 	}
 }
 

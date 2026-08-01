@@ -21,6 +21,9 @@ const (
 	DefaultChallengeTimeout  = 5 * time.Second
 	DefaultConnectRetryDelay = 500 * time.Millisecond
 	maxMessageBytes          = 64 << 20
+	defaultEventQueueSize    = 2048
+	defaultEventHistorySize  = 2048
+	defaultEventHistoryBytes = 16 << 20
 )
 
 var DefaultScopes = []string{"operator.write"}
@@ -48,30 +51,58 @@ type Client struct {
 	device   *DeviceIdentity
 	deviceTk string
 
-	mu        sync.Mutex
-	transport Transport
-	sequence  int
-	pending   map[string]chan Frame
-	events    []Frame
-	eventCh   chan Frame
-	readerErr error
-	reader    context.CancelFunc
+	mu           sync.Mutex
+	transport    Transport
+	sequence     int
+	pending      map[string]chan responseDelivery
+	events       []Frame
+	eventCh      chan Frame
+	eventMax     int
+	eventByteMax int
+	eventBytes   int
+	readerErr    error
+	readerFatal  bool
+	reader       context.CancelFunc
+	readerFailed chan struct{}
+	connected    *ConnectSummary
 }
 
 type Options struct {
-	Role           string
-	Scopes         []string
-	Token          string
-	Device         *DeviceIdentity
-	DeviceToken    string
-	EventQueueSize int
+	Role              string
+	Scopes            []string
+	Token             string
+	Device            *DeviceIdentity
+	DeviceToken       string
+	EventQueueSize    int
+	EventHistorySize  int
+	EventHistoryBytes int
 }
 
 type ConnectOptions struct {
-	AllowPairingRequired bool
-	Timeout              time.Duration
-	RetryDelay           time.Duration
-	ChallengeTimeout     time.Duration
+	Timeout          time.Duration
+	RetryDelay       time.Duration
+	ChallengeTimeout time.Duration
+}
+
+// ConnectSummary is the complete public result of authentication. Raw auth,
+// challenge, device-token, signature, and nonce material never leaves Client.
+type ConnectSummary struct {
+	Role   string   `json:"role"`
+	Scopes []string `json:"scopes"`
+}
+
+func (summary ConnectSummary) HasScope(want string) bool {
+	for _, scope := range summary.Scopes {
+		if scope == want {
+			return true
+		}
+	}
+	return false
+}
+
+type responseDelivery struct {
+	frame Frame
+	err   error
 }
 
 func New(dial DialFunc, options Options) (*Client, error) {
@@ -88,12 +119,21 @@ func New(dial DialFunc, options Options) (*Client, error) {
 	}
 	size := options.EventQueueSize
 	if size <= 0 {
-		size = 128
+		size = defaultEventQueueSize
+	}
+	historySize := options.EventHistorySize
+	if historySize <= 0 {
+		historySize = defaultEventHistorySize
+	}
+	historyBytes := options.EventHistoryBytes
+	if historyBytes <= 0 {
+		historyBytes = defaultEventHistoryBytes
 	}
 	return &Client{
 		dial: dial, role: role, scopes: scopes, token: options.Token,
 		device: options.Device, deviceTk: options.DeviceToken,
-		pending: make(map[string]chan Frame), eventCh: make(chan Frame, size),
+		pending: make(map[string]chan responseDelivery), eventCh: make(chan Frame, size), eventMax: historySize, eventByteMax: historyBytes,
+		readerFailed: make(chan struct{}),
 	}, nil
 }
 
@@ -110,7 +150,7 @@ func GenerateDeviceIdentity() (*DeviceIdentity, error) {
 	}, nil
 }
 
-func (client *Client) Connect(ctx context.Context, options ConnectOptions) (map[string]any, error) {
+func (client *Client) Connect(ctx context.Context, options ConnectOptions) (ConnectSummary, error) {
 	timeout := options.Timeout
 	if timeout <= 0 {
 		timeout = DefaultConnectTimeout
@@ -130,7 +170,7 @@ func (client *Client) Connect(ctx context.Context, options ConnectOptions) (map[
 		first, err := client.connectOnce(attemptCtx, challengeTimeout)
 		cancel()
 		if err == nil {
-			return client.finishConnect(ctx, first, options.AllowPairingRequired)
+			return client.finishConnect(ctx, first)
 		}
 		lastErr = err
 		if ctx.Err() != nil || !time.Now().Add(retryDelay).Before(deadline) {
@@ -140,11 +180,11 @@ func (client *Client) Connect(ctx context.Context, options ConnectOptions) (map[
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return nil, fmt.Errorf("gateway websocket connect failed: %w", ctx.Err())
+			return ConnectSummary{}, fmt.Errorf("gateway websocket connect failed: %w", ctx.Err())
 		case <-timer.C:
 		}
 	}
-	return nil, fmt.Errorf("gateway websocket connect failed: %w", lastErr)
+	return ConnectSummary{}, fmt.Errorf("gateway websocket connect failed: %w", lastErr)
 }
 
 func (client *Client) connectOnce(ctx context.Context, challengeTimeout time.Duration) (Frame, error) {
@@ -157,6 +197,11 @@ func (client *Client) connectOnce(ctx context.Context, challengeTimeout time.Dur
 	client.mu.Lock()
 	client.transport = transport
 	client.reader = cancel
+	client.readerErr = nil
+	client.readerFatal = false
+	client.readerFailed = make(chan struct{})
+	client.events = nil
+	client.eventBytes = 0
 	client.mu.Unlock()
 	go client.readLoop(readerCtx, transport)
 
@@ -174,11 +219,11 @@ func (client *Client) connectOnce(ctx context.Context, challengeTimeout time.Dur
 	return first, nil
 }
 
-func (client *Client) finishConnect(ctx context.Context, challenge Frame, allowPairing bool) (map[string]any, error) {
+func (client *Client) finishConnect(ctx context.Context, challenge Frame) (ConnectSummary, error) {
 	payload := challenge.Map("payload")
 	nonce, _ := payload["nonce"].(string)
 	if nonce == "" {
-		return nil, fmt.Errorf("connect.challenge missing nonce: %s", StableString(challenge))
+		return ConnectSummary{}, errors.New("connect.challenge missing nonce")
 	}
 	authToken := client.token
 	auth := map[string]any{"token": client.token}
@@ -191,7 +236,7 @@ func (client *Client) finishConnect(ctx context.Context, challenge Frame, allowP
 		"client": map[string]any{"id": "gateway-client", "version": "0.1", "platform": "go", "mode": "backend"},
 		"role":   client.role, "scopes": append([]string(nil), client.scopes...),
 		"caps": []any{}, "commands": []any{}, "permissions": map[string]any{},
-		"auth": auth, "locale": "en-US", "userAgent": "gateway-client/aries-realtime/0.1",
+		"auth": auth, "locale": "en-US", "userAgent": "gateway-client/aries/0.1",
 	}
 	if client.device != nil {
 		signedAt := time.Now().UnixMilli()
@@ -208,16 +253,28 @@ func (client *Client) finishConnect(ctx context.Context, challenge Frame, allowP
 	}
 	response, err := client.Call(ctx, "connect", params)
 	if err != nil {
-		return nil, err
+		return ConnectSummary{}, err
 	}
 	if response.Bool("ok") {
 		payload := response.Map("payload")
-		return payload, nil
+		auth := Map(payload["auth"])
+		role, _ := auth["role"].(string)
+		if role == "" {
+			role, _ = payload["role"].(string)
+		}
+		if role == "" {
+			role = client.role
+		}
+		summary := ConnectSummary{Role: role, Scopes: grantedScopes(payload)}
+		client.mu.Lock()
+		client.connected = &summary
+		client.mu.Unlock()
+		return summary, nil
 	}
-	if allowPairing && pairingRequired(response) {
-		return map[string]any{"auth": map[string]any{}, "pairing_required": true, "connect_error": map[string]any(response)}, nil
+	if pairingRequired(response) {
+		return ConnectSummary{}, errors.New("connect failed: gateway pairing is required")
 	}
-	return nil, fmt.Errorf("connect failed: %s", StableString(response))
+	return ConnectSummary{}, errors.New("connect failed: gateway rejected authentication")
 }
 
 func (client *Client) Call(ctx context.Context, method string, params map[string]any) (Frame, error) {
@@ -225,7 +282,7 @@ func (client *Client) Call(ctx context.Context, method string, params map[string
 		return nil, errors.New("gateway method is required")
 	}
 	id := client.nextID(method)
-	reply := make(chan Frame, 1)
+	reply := make(chan responseDelivery, 1)
 	client.mu.Lock()
 	transport := client.transport
 	if transport == nil {
@@ -243,11 +300,12 @@ func (client *Client) Call(ctx context.Context, method string, params map[string
 	}
 	if err := transport.Send(ctx, content); err != nil {
 		client.removePending(id)
-		return nil, err
+		return nil, fmt.Errorf("send gateway request: %w", err)
 	}
 	select {
-	case response := <-reply:
-		return response, nil
+	case delivery := <-reply:
+		client.removePending(id)
+		return delivery.frame, delivery.err
 	case <-ctx.Done():
 		client.removePending(id)
 		return nil, ctx.Err()
@@ -255,11 +313,33 @@ func (client *Client) Call(ctx context.Context, method string, params map[string
 }
 
 func (client *Client) RecvEvent(ctx context.Context) (Frame, error) {
-	select {
-	case frame := <-client.eventCh:
-		return frame, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	for {
+		client.mu.Lock()
+		readerErr := client.readerErr
+		readerFatal := client.readerFatal
+		readerFailed := client.readerFailed
+		client.mu.Unlock()
+		if readerFatal {
+			return nil, readerErr
+		}
+		select {
+		case frame := <-client.eventCh:
+			return frame, nil
+		default:
+		}
+		if readerErr != nil {
+			return nil, readerErr
+		}
+		select {
+		case frame := <-client.eventCh:
+			return frame, nil
+		case <-readerFailed:
+			// A normal EOF can race with the event that preceded it. Loop once
+			// more so an already queued event is observed before the EOF.
+			continue
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 }
 
@@ -268,6 +348,7 @@ func (client *Client) RestoreEvents(frames []Frame) {
 		select {
 		case client.eventCh <- frame:
 		default:
+			client.failConnectionFatal(errors.New("gateway event queue overflow"))
 			return
 		}
 	}
@@ -290,23 +371,7 @@ func (client *Client) Events() []Frame {
 }
 
 func (client *Client) Close() error {
-	client.mu.Lock()
-	cancel := client.reader
-	transport := client.transport
-	client.reader = nil
-	client.transport = nil
-	for id, ch := range client.pending {
-		delete(client.pending, id)
-		close(ch)
-	}
-	client.mu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-	if transport != nil {
-		return transport.Close()
-	}
-	return nil
+	return client.failConnectionFatal(errors.New("gateway connection closed"))
 }
 
 func (client *Client) nextID(method string) string {
@@ -327,41 +392,57 @@ func (client *Client) readLoop(ctx context.Context, transport Transport) {
 	for {
 		content, err := transport.Receive(ctx)
 		if err != nil {
-			client.mu.Lock()
-			client.readerErr = err
-			for id, ch := range client.pending {
-				delete(client.pending, id)
-				close(ch)
-			}
-			client.mu.Unlock()
+			client.failTransport(transport, fmt.Errorf("gateway reader stopped: %w", err))
 			return
 		}
 		if len(content) > maxMessageBytes {
-			continue
+			client.failTransportFatal(transport, errors.New("gateway message exceeded size bound"))
+			return
 		}
 		var frame Frame
 		if err := json.Unmarshal(content, &frame); err != nil {
-			frame = Frame{"type": "parse.error", "error": err.Error(), "raw": string(content)}
+			client.failTransportFatal(transport, errors.New("gateway returned malformed JSON"))
+			return
 		}
 		if frame.String("type") == "res" {
 			if id := frame.String("id"); id != "" {
 				client.mu.Lock()
 				reply := client.pending[id]
-				delete(client.pending, id)
 				client.mu.Unlock()
 				if reply != nil {
-					reply <- frame
-					close(reply)
-					continue
+					select {
+					case reply <- responseDelivery{frame: frame}:
+						continue
+					default:
+						client.failTransportFatal(transport, errors.New("gateway response queue overflow"))
+						return
+					}
 				}
 			}
 		}
+		if frame.String("event") == "connect.challenge" {
+			select {
+			case client.eventCh <- frame:
+			default:
+				client.failTransportFatal(transport, errors.New("gateway event queue overflow"))
+				return
+			}
+			continue
+		}
 		client.mu.Lock()
+		if len(client.events) >= client.eventMax || client.eventBytes+len(content) > client.eventByteMax {
+			client.mu.Unlock()
+			client.failTransportFatal(transport, errors.New("gateway event history overflow"))
+			return
+		}
 		client.events = append(client.events, frame)
+		client.eventBytes += len(content)
 		client.mu.Unlock()
 		select {
 		case client.eventCh <- frame:
 		default:
+			client.failTransportFatal(transport, errors.New("gateway event queue overflow"))
+			return
 		case <-ctx.Done():
 			return
 		}
@@ -370,12 +451,12 @@ func (client *Client) readLoop(ctx context.Context, transport Transport) {
 
 func pairingRequired(frame Frame) bool {
 	errorFrame := frame.Map("error")
-	details := toMap(errorFrame["details"])
+	details := Map(errorFrame["details"])
 	return errorFrame["code"] == "NOT_PAIRED" || details["code"] == "PAIRING_REQUIRED"
 }
 
-func GrantedScopes(payload map[string]any) []string {
-	auth := toMap(payload["auth"])
+func grantedScopes(payload map[string]any) []string {
+	auth := Map(payload["auth"])
 	raw, _ := auth["scopes"].([]any)
 	out := make([]string, 0, len(raw))
 	for _, item := range raw {
@@ -387,30 +468,49 @@ func GrantedScopes(payload map[string]any) []string {
 	return out
 }
 
-func DeviceToken(payload map[string]any) string {
-	auth := toMap(payload["auth"])
-	value, _ := auth["deviceToken"].(string)
-	return value
+func (client *Client) failTransport(transport Transport, readerErr error) {
+	_ = client.terminateConnection(transport, readerErr, false)
 }
 
-func PairingRequestID(payload map[string]any) string {
-	errorFrame := toMap(payload["connect_error"])
-	errorPayload := toMap(errorFrame["error"])
-	details := toMap(errorPayload["details"])
-	value, _ := details["requestId"].(string)
-	return value
+func (client *Client) failConnectionFatal(readerErr error) error {
+	return client.terminateConnection(nil, readerErr, true)
 }
 
-func StableString(value any) string {
-	if value == nil {
-		return ""
+func (client *Client) failTransportFatal(transport Transport, readerErr error) {
+	_ = client.terminateConnection(transport, readerErr, true)
+}
+
+func (client *Client) terminateConnection(expected Transport, readerErr error, fatal bool) error {
+	client.mu.Lock()
+	if expected != nil && client.transport != expected {
+		client.mu.Unlock()
+		return nil
 	}
-	if text, ok := value.(string); ok {
-		return text
+	if client.readerErr == nil {
+		client.readerErr = readerErr
+		client.readerFatal = fatal
+		close(client.readerFailed)
 	}
-	content, err := json.Marshal(value)
-	if err != nil {
-		return fmt.Sprint(value)
+	deliveryErr := client.readerErr
+	cancel := client.reader
+	transport := client.transport
+	client.reader = nil
+	client.transport = nil
+	client.connected = nil
+	pending := client.pending
+	client.pending = make(map[string]chan responseDelivery)
+	client.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
-	return string(content)
+	for _, reply := range pending {
+		select {
+		case reply <- responseDelivery{err: deliveryErr}:
+		default:
+		}
+	}
+	if transport != nil {
+		return transport.Close()
+	}
+	return nil
 }

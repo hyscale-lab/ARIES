@@ -18,6 +18,21 @@ the harness only after the sandbox and bridge are ready. On success, failure, or
 cancellation, it stops the harness and confirms absence. Evaluation remains a
 separate Benchmark outcome rather than an interpretation of harness success.
 
+OpenClaw container lifecycle, gateway protocol, and voice-session semantics are
+separate concrete responsibilities. `openclaw.Manager` owns the container and
+publishes one ephemeral host-loopback port. `openclaw/gateway.Client` owns one
+authenticated WebSocket protocol connection and bounded fail-closed frame
+dispatch. `openclaw/realtime.Runner` consumes that client for talk/chat/tool
+session semantics; the gateway package intentionally contains no voice event
+parsers or Docker lifecycle.
+
+Text and realtime modes share the authenticated Gateway transport. Text sends
+exactly one pinned-version `agent` request and correlates accepted and terminal
+responses by both frame request ID and non-empty run ID; an ambiguous send,
+disconnect, timeout, or protocol mismatch is never retried. Realtime requires
+read and write scopes, while text requires write scope. Only sanitized role and
+sorted scope metadata may leave the authentication boundary.
+
 ## Customization & Contribution Guide
 
 Add a harness only when it can implement the existing `AgentHarness` lifecycle

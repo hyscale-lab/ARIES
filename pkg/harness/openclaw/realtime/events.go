@@ -1,8 +1,14 @@
-package gateway
+package realtime
 
-import "fmt"
+import (
+	"fmt"
 
-type Frame map[string]any
+	"github.com/hyscale-lab/aries/pkg/harness/openclaw/gateway"
+)
+
+type Frame = gateway.Frame
+type ConnectOptions = gateway.ConnectOptions
+type ConnectSummary = gateway.ConnectSummary
 
 type TalkSessionInfo struct {
 	SessionID         string
@@ -43,32 +49,8 @@ type ChatEvent struct {
 	Data         map[string]any
 }
 
-func (frame Frame) String(key string) string {
-	value, _ := frame[key].(string)
-	return value
-}
-
-func (frame Frame) Bool(key string) bool {
-	value, _ := frame[key].(bool)
-	return value
-}
-
-func (frame Frame) Map(key string) map[string]any {
-	return toMap(frame[key])
-}
-
-func toMap(value any) map[string]any {
-	if value == nil {
-		return map[string]any{}
-	}
-	if typed, ok := value.(map[string]any); ok {
-		return typed
-	}
-	if typed, ok := value.(Frame); ok {
-		return map[string]any(typed)
-	}
-	return map[string]any{}
-}
+func toMap(value any) map[string]any { return gateway.Map(value) }
+func StableString(value any) string  { return gateway.StableString(value) }
 
 func TextFromPayload(payload any) string {
 	mapped := toMap(payload)
@@ -92,10 +74,7 @@ func TalkSessionInfoFromPayload(payload any) (TalkSessionInfo, error) {
 	if !ok || rate <= 0 {
 		return TalkSessionInfo{}, fmt.Errorf("talk.session.create audio missing inputSampleRateHz: %s", StableString(audio))
 	}
-	return TalkSessionInfo{
-		SessionID: sessionID, RelaySessionID: relaySessionID,
-		InputEncoding: encoding, InputSampleRateHz: rate,
-	}, nil
+	return TalkSessionInfo{SessionID: sessionID, RelaySessionID: relaySessionID, InputEncoding: encoding, InputSampleRateHz: rate}, nil
 }
 
 func TalkEventFromFrame(frame any) (TalkEvent, bool) {
@@ -108,16 +87,12 @@ func TalkEventFromFrame(frame any) (TalkEvent, bool) {
 	eventType, _ := raw["type"].(string)
 	sessionID, _ := raw["sessionId"].(string)
 	payload := toMap(raw["payload"])
-	if eventType == "" || sessionID == "" || payload == nil {
+	if eventType == "" || sessionID == "" {
 		return TalkEvent{}, false
 	}
 	callID, _ := raw["callId"].(string)
 	itemID, _ := raw["itemId"].(string)
-	return TalkEvent{
-		EventType: eventType, SessionID: sessionID, Payload: payload,
-		Wrapper: wrapper, Raw: raw, Final: truthy(raw["final"]),
-		CallID: callID, ItemID: itemID,
-	}, true
+	return TalkEvent{EventType: eventType, SessionID: sessionID, Payload: payload, Wrapper: wrapper, Raw: raw, Final: truthy(raw["final"]), CallID: callID, ItemID: itemID}, true
 }
 
 func ToolCallEventFromTalk(event TalkEvent) (ToolCallEvent, bool) {
@@ -126,14 +101,11 @@ func ToolCallEventFromTalk(event TalkEvent) (ToolCallEvent, bool) {
 	}
 	name, _ := event.Payload["name"].(string)
 	args := toMap(event.Payload["args"])
-	if name == "" || args == nil {
+	if name == "" {
 		return ToolCallEvent{}, false
 	}
 	relaySessionID, _ := event.Wrapper["relaySessionId"].(string)
-	return ToolCallEvent{
-		SessionID: event.SessionID, RelaySessionID: relaySessionID,
-		CallID: event.CallID, Name: name, Args: args,
-	}, true
+	return ToolCallEvent{SessionID: event.SessionID, RelaySessionID: relaySessionID, CallID: event.CallID, Name: name, Args: args}, true
 }
 
 func ChatEventFromFrame(frame any) (ChatEvent, bool) {
@@ -152,12 +124,7 @@ func ChatEventFromFrame(frame any) (ChatEvent, bool) {
 	errorKind, _ := payload["errorKind"].(string)
 	stopReason, _ := payload["stopReason"].(string)
 	stream, _ := payload["stream"].(string)
-	return ChatEvent{
-		RunID: runID, State: state, DeltaText: deltaText,
-		Replace: truthy(payload["replace"]), MessageText: textFromChatMessage(payload["message"]),
-		ErrorMessage: errorMessage, ErrorKind: errorKind, StopReason: stopReason,
-		Stream: stream, Data: toMap(payload["data"]),
-	}, true
+	return ChatEvent{RunID: runID, State: state, DeltaText: deltaText, Replace: truthy(payload["replace"]), MessageText: textFromChatMessage(payload["message"]), ErrorMessage: errorMessage, ErrorKind: errorKind, StopReason: stopReason, Stream: stream, Data: toMap(payload["data"])}, true
 }
 
 func textFromChatMessage(message any) string {
@@ -166,19 +133,15 @@ func textFromChatMessage(message any) string {
 	var out string
 	for _, item := range rawContent {
 		part := toMap(item)
-		if part["type"] != "text" {
-			continue
+		if part["type"] == "text" {
+			text, _ := part["text"].(string)
+			out += text
 		}
-		text, _ := part["text"].(string)
-		out += text
 	}
 	return out
 }
 
-func truthy(value any) bool {
-	typed, _ := value.(bool)
-	return typed
-}
+func truthy(value any) bool { typed, _ := value.(bool); return typed }
 
 func numericInt(value any) (int, bool) {
 	switch typed := value.(type) {
@@ -188,14 +151,10 @@ func numericInt(value any) (int, bool) {
 		return int(typed), true
 	case float64:
 		return int(typed), typed == float64(int(typed))
-	case jsonNumber:
+	case interface{ Int64() (int64, error) }:
 		parsed, err := typed.Int64()
 		return int(parsed), err == nil
 	default:
 		return 0, false
 	}
-}
-
-type jsonNumber interface {
-	Int64() (int64, error)
 }

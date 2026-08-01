@@ -1,4 +1,4 @@
-package gateway
+package realtime
 
 import (
 	"encoding/json"
