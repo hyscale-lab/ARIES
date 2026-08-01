@@ -29,11 +29,7 @@ type PreparedBackend struct {
 	EffectiveGPUIndices []int
 }
 
-func waitForRuntimeHealth(ctx context.Context, runtime ModelRuntime, sleep contextSleep) error {
-	return waitForRuntimeHealthObserved(ctx, runtime, sleep, nil)
-}
-
-func waitForRuntimeHealthObserved(ctx context.Context, runtime ModelRuntime, sleep contextSleep, observeRetry func()) error {
+func waitForRuntimeHealth(ctx context.Context, runtime ModelRuntime, sleep contextSleep, observeRetry func()) error {
 	if sleep == nil {
 		sleep = sleepWithContext
 	}

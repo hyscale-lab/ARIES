@@ -53,8 +53,8 @@ func TestClientConnectSignsChallengeAndReturnsPayload(t *testing.T) {
 	if len(scopes) != 1 || scopes[0] != "operator.write" {
 		t.Fatalf("scopes = %#v", scopes)
 	}
-	if payload.Role != "operator" || len(client.Events()) != 0 {
-		t.Fatalf("summary/history = %#v/%#v", payload, client.Events())
+	if payload.Role != "operator" || len(client.eventsSnapshot()) != 0 {
+		t.Fatalf("summary/history = %#v/%#v", payload, client.eventsSnapshot())
 	}
 }
 
@@ -116,11 +116,6 @@ func TestClientCallCorrelatesResponseAndQueuesEvents(t *testing.T) {
 	if event.String("event") != "talk.event" {
 		t.Fatalf("event = %#v", event)
 	}
-	client.RestoreEvents([]Frame{event})
-	restored, err := client.RecvEvent(context.Background())
-	if err != nil || restored.String("event") != "talk.event" {
-		t.Fatalf("restored = %#v err=%v", restored, err)
-	}
 }
 
 func TestClientReaderFailsClosedWhenEventQueueIsFull(t *testing.T) {
@@ -157,8 +152,8 @@ func TestClientReaderFailsClosedWhenEventQueueIsFull(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("pending response was not woken by overflow")
 	}
-	if len(client.Events()) > defaultEventHistorySize {
-		t.Fatalf("stored events exceeded bound: %d", len(client.Events()))
+	if len(client.eventsSnapshot()) > defaultEventHistorySize {
+		t.Fatalf("stored events exceeded bound: %d", len(client.eventsSnapshot()))
 	}
 }
 
@@ -220,10 +215,10 @@ func TestClientDrainsQueuedEventBeforeReaderEOF(t *testing.T) {
 		go client.readLoop(context.Background(), transport)
 		transport.deliver(Frame{"type": "event", "event": "queued", "payload": map[string]any{"iteration": iteration}})
 		deadline := time.Now().Add(time.Second)
-		for len(client.Events()) != 1 && time.Now().Before(deadline) {
+		for len(client.eventsSnapshot()) != 1 && time.Now().Before(deadline) {
 			time.Sleep(time.Microsecond)
 		}
-		if len(client.Events()) != 1 {
+		if len(client.eventsSnapshot()) != 1 {
 			t.Fatalf("iteration %d: event was not queued", iteration)
 		}
 		if err := transport.Close(); err != nil {
@@ -258,8 +253,8 @@ func TestClientFailsClosedWhenEventHistoryOverflows(t *testing.T) {
 			if !strings.Contains(err.Error(), "history overflow") {
 				t.Fatalf("reader error = %v", err)
 			}
-			if len(client.Events()) != 1 {
-				t.Fatalf("history = %d", len(client.Events()))
+			if len(client.eventsSnapshot()) != 1 {
+				t.Fatalf("history = %d", len(client.eventsSnapshot()))
 			}
 			return
 		}
@@ -285,8 +280,8 @@ func TestClientFailsClosedWhenEventHistoryByteBudgetOverflows(t *testing.T) {
 		err := client.readerErr
 		client.mu.Unlock()
 		if err != nil {
-			if !strings.Contains(err.Error(), "history overflow") || len(client.Events()) != 0 {
-				t.Fatalf("reader/history = %v/%#v", err, client.Events())
+			if !strings.Contains(err.Error(), "history overflow") || len(client.eventsSnapshot()) != 0 {
+				t.Fatalf("reader/history = %v/%#v", err, client.eventsSnapshot())
 			}
 			return
 		}

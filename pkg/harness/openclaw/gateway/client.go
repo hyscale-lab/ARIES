@@ -343,28 +343,7 @@ func (client *Client) RecvEvent(ctx context.Context) (Frame, error) {
 	}
 }
 
-func (client *Client) RestoreEvents(frames []Frame) {
-	for _, frame := range frames {
-		select {
-		case client.eventCh <- frame:
-		default:
-			client.failConnectionFatal(errors.New("gateway event queue overflow"))
-			return
-		}
-	}
-}
-
-func (client *Client) DiscardQueuedEvents() {
-	for {
-		select {
-		case <-client.eventCh:
-		default:
-			return
-		}
-	}
-}
-
-func (client *Client) Events() []Frame {
+func (client *Client) eventsSnapshot() []Frame {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	return append([]Frame(nil), client.events...)

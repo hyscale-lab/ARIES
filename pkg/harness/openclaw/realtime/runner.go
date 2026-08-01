@@ -8,23 +8,25 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/hyscale-lab/aries/pkg/harness/openclaw/gateway"
 )
 
 const (
-	DefaultSessionKey               = "agent:main:aries-realtime"
-	DefaultChunkDuration            = 50 * time.Millisecond
-	DefaultTrailingListenDuration   = 180 * time.Second
-	DefaultQuietDuration            = 8 * time.Second
-	DefaultAgentWaitDuration        = 60 * time.Second
-	DefaultAgentWaitFallback        = 15 * time.Second
-	DefaultToolCallTimeout          = 60 * time.Second
-	DefaultSubmitToolResultTimeout  = 30 * time.Second
-	DefaultAppendAudioTimeout       = 10 * time.Second
-	DefaultVADThreshold             = 0.3
-	DefaultSilenceDurationMillis    = 1500
-	DefaultPrefixPaddingMillis      = 500
-	DefaultRealtimeInputEncoding    = "pcm16"
-	DefaultRealtimeInputSampleRate  = 24000
+	defaultSessionKey               = "agent:main:aries-realtime"
+	defaultChunkDuration            = 50 * time.Millisecond
+	defaultTrailingListenDuration   = 180 * time.Second
+	defaultQuietDuration            = 8 * time.Second
+	defaultAgentWaitDuration        = 60 * time.Second
+	defaultAgentWaitFallback        = 15 * time.Second
+	defaultToolCallTimeout          = 60 * time.Second
+	defaultSubmitToolResultTimeout  = 30 * time.Second
+	defaultAppendAudioTimeout       = 10 * time.Second
+	defaultVADThreshold             = 0.3
+	defaultSilenceDurationMillis    = 1500
+	defaultPrefixPaddingMillis      = 500
+	DefaultInputEncoding            = "pcm16"
+	DefaultInputSampleRate          = 24000
 	defaultRealtimeOutputBufferSize = 32 << 10
 )
 
@@ -68,26 +70,14 @@ const (
 	roleUser               = "user"
 )
 
-type RealtimeGateway interface {
-	Connect(context.Context, ConnectOptions) (ConnectSummary, error)
-	Call(context.Context, string, map[string]any) (Frame, error)
-	RecvEvent(context.Context) (Frame, error)
+type Gateway interface {
+	Connect(context.Context, gateway.ConnectOptions) (gateway.ConnectSummary, error)
+	Call(context.Context, string, map[string]any) (gateway.Frame, error)
+	RecvEvent(context.Context) (gateway.Frame, error)
 	Close() error
 }
 
-type RealtimeToolHandler interface {
-	HandleRealtimeToolCall(context.Context, RealtimeToolCallRequest) (RealtimeToolCallResult, error)
-}
-
-type RealtimeToolCallRequest struct {
-	Gateway               RealtimeGateway
-	ToolCall              ToolCallEvent
-	SessionKey            string
-	AgentQuestionTemplate string
-	ToolCallTimeout       time.Duration
-}
-
-type RealtimeToolCallResult struct {
+type toolCallOutcome struct {
 	ToolResult           any
 	AgentRunID           string
 	ProviderToolQuestion string
@@ -95,30 +85,24 @@ type RealtimeToolCallResult struct {
 	AgentConsultOK       bool
 }
 
-// AgentConsultBridgeToolHandler asks OpenClaw to run its agent-consult tool.
-// That nested agent uses the harness configuration, including the ARIES SSH
-// bridge, so sandbox tool execution and audit logs stay on the existing bridge
-// path.
-type AgentConsultBridgeToolHandler struct{}
-
-type RealtimeAudio struct {
+type Audio struct {
 	Data           []byte
 	Rate           int
 	BytesPerSample int
 	Encoding       string
 }
 
-type RealtimeAudioProvider func(TalkSessionInfo) (RealtimeAudio, error)
+type AudioProvider func(SessionInfo) (Audio, error)
 
-type RealtimeRunnerOptions struct {
+type Options struct {
 	OriginalPrompt            string
 	SessionKey                string
 	Provider                  string
 	Model                     string
 	Voice                     string
 	ReasoningEffort           string
-	Audio                     RealtimeAudio
-	AudioProvider             RealtimeAudioProvider
+	Audio                     Audio
+	AudioProvider             AudioProvider
 	ChunkDuration             time.Duration
 	ListenDuration            time.Duration
 	QuietDuration             time.Duration
@@ -131,19 +115,18 @@ type RealtimeRunnerOptions struct {
 	SilenceDurationMillis     *int
 	PrefixPaddingMillis       *int
 	AgentQuestionTemplate     string
-	ToolHandler               RealtimeToolHandler
-	ConnectOptions            ConnectOptions
+	ConnectOptions            gateway.ConnectOptions
 	IncludeEvents             bool
 	CloseGateway              bool
 }
 
-type RealtimeRunner struct {
-	gateway RealtimeGateway
-	options RealtimeRunnerOptions
+type Runner struct {
+	gateway Gateway
+	options Options
 	sleep   func(context.Context, time.Duration) error
 }
 
-func NewRealtimeRunner(gateway RealtimeGateway, options RealtimeRunnerOptions) (*RealtimeRunner, error) {
+func New(gateway Gateway, options Options) (*Runner, error) {
 	if gateway == nil {
 		return nil, errors.New("realtime gateway is required")
 	}
@@ -156,15 +139,15 @@ func NewRealtimeRunner(gateway RealtimeGateway, options RealtimeRunnerOptions) (
 	if len(options.Audio.Data) != 0 && options.Audio.BytesPerSample <= 0 {
 		return nil, errors.New("realtime audio bytes per sample must be positive")
 	}
-	return &RealtimeRunner{
+	return &Runner{
 		gateway: gateway,
 		options: options,
 		sleep:   sleepContext,
 	}, nil
 }
 
-func (runner *RealtimeRunner) Run(ctx context.Context) (RealtimeResult, error) {
-	result := NewRealtimeResult()
+func (runner *Runner) Run(ctx context.Context) (Result, error) {
+	result := newResult()
 	result.OriginalPrompt = runner.options.OriginalPrompt
 	if runner.options.CloseGateway {
 		defer runner.gateway.Close()
@@ -204,27 +187,27 @@ func (runner *RealtimeRunner) Run(ctx context.Context) (RealtimeResult, error) {
 	return scrubRealtimeEvents(result, runner.options.IncludeEvents), nil
 }
 
-func (runner *RealtimeRunner) createSession(ctx context.Context) (TalkSessionInfo, error) {
+func (runner *Runner) createSession(ctx context.Context) (SessionInfo, error) {
 	response, err := runner.gateway.Call(ctx, methodSessionCreate, runner.sessionParams())
 	if err != nil {
-		return TalkSessionInfo{}, err
+		return SessionInfo{}, err
 	}
 	if !response.Bool("ok") {
-		return TalkSessionInfo{}, fmt.Errorf("%s failed: %s", methodSessionCreate, StableString(response))
+		return SessionInfo{}, fmt.Errorf("%s failed: %s", methodSessionCreate, gateway.StableString(response))
 	}
-	return TalkSessionInfoFromPayload(response.Map("payload"))
+	return sessionInfoFromPayload(response.Map("payload"))
 }
 
-func (runner *RealtimeRunner) sessionParams() map[string]any {
+func (runner *Runner) sessionParams() map[string]any {
 	options := runner.options
 	params := map[string]any{
-		"sessionKey":        valueOrDefault(options.SessionKey, DefaultSessionKey),
+		"sessionKey":        valueOrDefault(options.SessionKey, defaultSessionKey),
 		"mode":              sessionModeRealtime,
 		"transport":         sessionTransportRelay,
 		"brain":             sessionBrainAgent,
-		"vadThreshold":      pointerOrDefault(options.VADThreshold, DefaultVADThreshold),
-		"silenceDurationMs": intPointerOrDefault(options.SilenceDurationMillis, DefaultSilenceDurationMillis),
-		"prefixPaddingMs":   intPointerOrDefault(options.PrefixPaddingMillis, DefaultPrefixPaddingMillis),
+		"vadThreshold":      pointerOrDefault(options.VADThreshold, defaultVADThreshold),
+		"silenceDurationMs": intPointerOrDefault(options.SilenceDurationMillis, defaultSilenceDurationMillis),
+		"prefixPaddingMs":   intPointerOrDefault(options.PrefixPaddingMillis, defaultPrefixPaddingMillis),
 	}
 	for _, item := range []struct {
 		value string
@@ -242,7 +225,7 @@ func (runner *RealtimeRunner) sessionParams() map[string]any {
 	return params
 }
 
-func (runner *RealtimeRunner) loadAudioForSession(session TalkSessionInfo) error {
+func (runner *Runner) loadAudioForSession(session SessionInfo) error {
 	if runner.options.AudioProvider == nil {
 		return nil
 	}
@@ -250,20 +233,20 @@ func (runner *RealtimeRunner) loadAudioForSession(session TalkSessionInfo) error
 	if err != nil {
 		return err
 	}
-	if !validRealtimeAudio(audio) {
+	if !validAudio(audio) {
 		return errors.New("realtime audio provider returned invalid audio")
 	}
 	runner.options.Audio = audio
 	return nil
 }
 
-func validRealtimeAudio(audio RealtimeAudio) bool {
+func validAudio(audio Audio) bool {
 	return len(audio.Data) != 0 && audio.Rate > 0 && audio.BytesPerSample > 0
 }
 
-func (runner *RealtimeRunner) appendAudio(ctx context.Context, session TalkSessionInfo) error {
+func (runner *Runner) appendAudio(ctx context.Context, session SessionInfo) error {
 	audio := runner.options.Audio
-	chunkDuration := durationOrDefault(runner.options.ChunkDuration, DefaultChunkDuration)
+	chunkDuration := durationOrDefault(runner.options.ChunkDuration, defaultChunkDuration)
 	chunkSize := realtimeAudioChunkSize(audio, chunkDuration)
 	for offset := 0; offset < len(audio.Data); offset += chunkSize {
 		end := offset + chunkSize
@@ -271,7 +254,7 @@ func (runner *RealtimeRunner) appendAudio(ctx context.Context, session TalkSessi
 			end = len(audio.Data)
 		}
 		timestamp := realtimeAudioTimestampMillis(audio, offset)
-		callCtx, cancel := context.WithTimeout(ctx, durationOrDefault(runner.options.AppendAudioTimeout, DefaultAppendAudioTimeout))
+		callCtx, cancel := context.WithTimeout(ctx, durationOrDefault(runner.options.AppendAudioTimeout, defaultAppendAudioTimeout))
 		response, err := runner.gateway.Call(callCtx, methodAppendAudio, map[string]any{
 			"sessionId":   session.SessionID,
 			"audioBase64": base64.StdEncoding.EncodeToString(audio.Data[offset:end]),
@@ -282,7 +265,7 @@ func (runner *RealtimeRunner) appendAudio(ctx context.Context, session TalkSessi
 			return fmt.Errorf("%s chunk offset %d: %w", methodAppendAudio, offset, err)
 		}
 		if !response.Bool("ok") {
-			return fmt.Errorf("%s failed: %s", methodAppendAudio, StableString(response))
+			return fmt.Errorf("%s failed: %s", methodAppendAudio, gateway.StableString(response))
 		}
 		if end < len(audio.Data) {
 			if err := runner.sleep(ctx, chunkDuration); err != nil {
@@ -293,7 +276,7 @@ func (runner *RealtimeRunner) appendAudio(ctx context.Context, session TalkSessi
 	return nil
 }
 
-func realtimeAudioChunkSize(audio RealtimeAudio, duration time.Duration) int {
+func realtimeAudioChunkSize(audio Audio, duration time.Duration) int {
 	chunkSize := int(int64(audio.Rate) * int64(audio.BytesPerSample) * int64(duration) / int64(time.Second))
 	if chunkSize < audio.BytesPerSample {
 		chunkSize = audio.BytesPerSample
@@ -305,16 +288,16 @@ func realtimeAudioChunkSize(audio RealtimeAudio, duration time.Duration) int {
 	return chunkSize
 }
 
-func realtimeAudioTimestampMillis(audio RealtimeAudio, offset int) int {
+func realtimeAudioTimestampMillis(audio Audio, offset int) int {
 	return offset * 1000 / max(1, audio.Rate*audio.BytesPerSample)
 }
 
-func (runner *RealtimeRunner) processEvents(ctx context.Context, result *RealtimeResult) error {
+func (runner *Runner) processEvents(ctx context.Context, result *Result) error {
 	state := realtimeEventState{
 		activeAgentRuns:    map[string]struct{}{},
 		completedAgentRuns: map[string]struct{}{},
 		failedAgentRuns:    map[string]string{},
-		deadline:           time.Now().Add(durationOrDefault(runner.options.ListenDuration, DefaultTrailingListenDuration)),
+		deadline:           time.Now().Add(durationOrDefault(runner.options.ListenDuration, defaultTrailingListenDuration)),
 	}
 	for time.Now().Before(state.deadline) {
 		waitUntil := state.deadline
@@ -353,12 +336,12 @@ func (runner *RealtimeRunner) processEvents(ctx context.Context, result *Realtim
 	return nil
 }
 
-func (runner *RealtimeRunner) processFrame(ctx context.Context, frame Frame, result *RealtimeResult, state *realtimeEventState) error {
-	if chat, ok := ChatEventFromFrame(frame); ok {
+func (runner *Runner) processFrame(ctx context.Context, frame gateway.Frame, result *Result, state *realtimeEventState) error {
+	if chat, ok := chatEventFromFrame(frame); ok {
 		runner.processChatEvent(chat, result, state)
 		return nil
 	}
-	talk, ok := TalkEventFromFrame(frame)
+	talk, ok := talkEventFromFrame(frame)
 	if !ok {
 		return nil
 	}
@@ -373,12 +356,12 @@ func (runner *RealtimeRunner) processFrame(ctx context.Context, frame Frame, res
 	case eventOutputAudioDone:
 		result.OutputAudioDone = true
 	case eventTranscriptDelta:
-		if text := TextFromPayload(talk.Payload); text != "" {
+		if text := textFromPayload(talk.Payload); text != "" {
 			state.partialTranscript = text
 			state.touchQuiet(runner.options.QuietDuration)
 		}
 	case eventTranscriptDone:
-		if text := TextFromPayload(talk.Payload); text != "" {
+		if text := textFromPayload(talk.Payload); text != "" {
 			if role, _ := talk.Payload["role"].(string); role == roleUser {
 				state.latestUserTranscript = text
 				result.TranscriptDone = text
@@ -392,19 +375,19 @@ func (runner *RealtimeRunner) processFrame(ctx context.Context, frame Frame, res
 	case eventToolResult, eventToolProgress, eventTurnEnded, eventSessionClosed:
 		state.touchQuiet(runner.options.QuietDuration)
 	case eventOutputTextDelta, eventOutputTextDone:
-		if text := TextFromPayload(talk.Payload); text != "" {
+		if text := textFromPayload(talk.Payload); text != "" {
 			state.output.WriteStringBounded(text, defaultRealtimeOutputBufferSize)
 			state.touchQuiet(runner.options.QuietDuration)
 		}
 	case eventSessionError, eventToolError, eventTurnCancelled:
-		result.AppendError(StableString(talk.Payload))
+		result.AppendError(gateway.StableString(talk.Payload))
 		state.touchQuiet(runner.options.QuietDuration)
 	}
 	return nil
 }
 
-func (runner *RealtimeRunner) processToolCall(ctx context.Context, talk TalkEvent, result *RealtimeResult, state *realtimeEventState) error {
-	toolCall, ok := ToolCallEventFromTalk(talk)
+func (runner *Runner) processToolCall(ctx context.Context, talk talkEvent, result *Result, state *realtimeEventState) error {
+	toolCall, ok := toolCallEventFromTalk(talk)
 	if !ok {
 		return nil
 	}
@@ -427,7 +410,7 @@ func (runner *RealtimeRunner) processToolCall(ctx context.Context, talk TalkEven
 	return nil
 }
 
-func (runner *RealtimeRunner) handleAgentControl(ctx context.Context, toolCall ToolCallEvent, result *RealtimeResult, state *realtimeEventState) error {
+func (runner *Runner) handleAgentControl(ctx context.Context, toolCall toolCallEvent, result *Result, state *realtimeEventState) error {
 	result.ToolCalls++
 	mode, _ := toolCall.Args["mode"].(string)
 	mode = strings.ToLower(strings.TrimSpace(mode))
@@ -458,7 +441,7 @@ func (runner *RealtimeRunner) handleAgentControl(ctx context.Context, toolCall T
 	return nil
 }
 
-func (runner *RealtimeRunner) processChatEvent(event ChatEvent, result *RealtimeResult, state *realtimeEventState) {
+func (runner *Runner) processChatEvent(event chatEvent, result *Result, state *realtimeEventState) {
 	result.IncrementEvent(chatEventPrefix)
 	result.IncrementEvent(chatEventPrefix + "." + event.State)
 	if _, ok := state.activeAgentRuns[event.RunID]; !ok && !containsString(result.AgentRunIDs, event.RunID) {
@@ -505,18 +488,9 @@ func (runner *RealtimeRunner) processChatEvent(event ChatEvent, result *Realtime
 	}
 }
 
-func (runner *RealtimeRunner) handleToolCall(ctx context.Context, toolCall ToolCallEvent, result *RealtimeResult) (string, error) {
+func (runner *Runner) handleToolCall(ctx context.Context, toolCall toolCallEvent, result *Result) (string, error) {
 	result.ToolCalls++
-	handler := runner.options.ToolHandler
-	if handler == nil {
-		handler = AgentConsultBridgeToolHandler{}
-	}
-	outcome, err := handler.HandleRealtimeToolCall(ctx, RealtimeToolCallRequest{
-		Gateway: runner.gateway, ToolCall: toolCall,
-		SessionKey:            valueOrDefault(runner.options.SessionKey, DefaultSessionKey),
-		AgentQuestionTemplate: runner.options.AgentQuestionTemplate,
-		ToolCallTimeout:       durationOrDefault(runner.options.ToolCallTimeout, DefaultToolCallTimeout),
-	})
+	outcome, err := runner.consultAgent(ctx, toolCall)
 	if outcome.ProviderToolQuestion != "" {
 		result.ProviderToolQuestion = outcome.ProviderToolQuestion
 	}
@@ -527,10 +501,6 @@ func (runner *RealtimeRunner) handleToolCall(ctx context.Context, toolCall ToolC
 	if err != nil {
 		toolResult = map[string]any{toolResultErrorKey: err.Error()}
 		result.AppendError(err.Error())
-	}
-	if toolResult == nil {
-		toolResult = map[string]any{toolResultErrorKey: "realtime tool handler returned no result"}
-		result.AppendError("realtime tool handler returned no result")
 	}
 	if outcome.AgentRunID != "" {
 		result.AgentRunIDs = append(result.AgentRunIDs, outcome.AgentRunID)
@@ -545,47 +515,47 @@ func (runner *RealtimeRunner) handleToolCall(ctx context.Context, toolCall ToolC
 	return outcome.AgentRunID, nil
 }
 
-func (AgentConsultBridgeToolHandler) HandleRealtimeToolCall(ctx context.Context, request RealtimeToolCallRequest) (RealtimeToolCallResult, error) {
-	if request.Gateway == nil {
-		return RealtimeToolCallResult{}, errors.New("realtime gateway is required")
-	}
-	providerQuestion, _ := request.ToolCall.Args[toolArgQuestion].(string)
+// consultAgent asks OpenClaw to run its agent-consult tool. That nested agent
+// uses the harness configuration, including the ARIES SSH bridge, so sandbox
+// tool execution and audit logs stay on the existing bridge path.
+func (runner *Runner) consultAgent(ctx context.Context, toolCall toolCallEvent) (toolCallOutcome, error) {
+	providerQuestion, _ := toolCall.Args[toolArgQuestion].(string)
 	agentQuestion := providerQuestion
-	if request.AgentQuestionTemplate != "" {
-		agentQuestion = strings.ReplaceAll(request.AgentQuestionTemplate, "{question}", providerQuestion)
+	if runner.options.AgentQuestionTemplate != "" {
+		agentQuestion = strings.ReplaceAll(runner.options.AgentQuestionTemplate, "{question}", providerQuestion)
 	}
-	outcome := RealtimeToolCallResult{
+	outcome := toolCallOutcome{
 		ProviderToolQuestion: providerQuestion,
 		AgentQuestionUsed:    agentQuestion,
 	}
-	if request.ToolCall.Name != toolAgentConsult {
-		message := fmt.Sprintf("runner does not handle tool %q", request.ToolCall.Name)
+	if toolCall.Name != toolAgentConsult {
+		message := fmt.Sprintf("runner does not handle tool %q", toolCall.Name)
 		outcome.ToolResult = map[string]any{toolResultErrorKey: message}
 		return outcome, errors.New(message)
 	}
 	args := map[string]any{toolArgQuestion: agentQuestion}
 	for _, key := range []string{toolArgContext, toolArgResponseStyle} {
-		if value, _ := request.ToolCall.Args[key].(string); value != "" {
+		if value, _ := toolCall.Args[key].(string); value != "" {
 			args[key] = value
 		}
 	}
 	params := map[string]any{
-		"sessionKey": request.SessionKey,
-		"callId":     request.ToolCall.CallID,
-		"name":       request.ToolCall.Name,
+		"sessionKey": valueOrDefault(runner.options.SessionKey, defaultSessionKey),
+		"callId":     toolCall.CallID,
+		"name":       toolCall.Name,
 		"args":       args,
 	}
-	if request.ToolCall.RelaySessionID != "" {
-		params["relaySessionId"] = request.ToolCall.RelaySessionID
+	if toolCall.RelaySessionID != "" {
+		params["relaySessionId"] = toolCall.RelaySessionID
 	}
-	callCtx, cancel := context.WithTimeout(ctx, durationOrDefault(request.ToolCallTimeout, DefaultToolCallTimeout))
-	response, err := request.Gateway.Call(callCtx, methodClientToolCall, params)
+	callCtx, cancel := context.WithTimeout(ctx, durationOrDefault(runner.options.ToolCallTimeout, defaultToolCallTimeout))
+	response, err := runner.gateway.Call(callCtx, methodClientToolCall, params)
 	cancel()
 	if err != nil {
 		return outcome, err
 	}
 	if !response.Bool("ok") {
-		return outcome, fmt.Errorf("%s failed: %s", methodClientToolCall, StableString(response))
+		return outcome, fmt.Errorf("%s failed: %s", methodClientToolCall, gateway.StableString(response))
 	}
 	payload := response.Map("payload")
 	runID, _ := payload["runId"].(string)
@@ -598,9 +568,9 @@ func (AgentConsultBridgeToolHandler) HandleRealtimeToolCall(ctx context.Context,
 	return outcome, nil
 }
 
-func (runner *RealtimeRunner) submitToolResult(ctx context.Context, toolCall ToolCallEvent, toolResult any) error {
+func (runner *Runner) submitToolResult(ctx context.Context, toolCall toolCallEvent, toolResult any) error {
 	sessionID := firstNonEmpty(toolCall.RelaySessionID, toolCall.SessionID)
-	callCtx, cancel := context.WithTimeout(ctx, durationOrDefault(runner.options.SubmitToolResultTimeout, DefaultSubmitToolResultTimeout))
+	callCtx, cancel := context.WithTimeout(ctx, durationOrDefault(runner.options.SubmitToolResultTimeout, defaultSubmitToolResultTimeout))
 	response, err := runner.gateway.Call(callCtx, methodSubmitToolResult, map[string]any{
 		"sessionId": sessionID,
 		"callId":    toolCall.CallID,
@@ -612,17 +582,17 @@ func (runner *RealtimeRunner) submitToolResult(ctx context.Context, toolCall Too
 		return err
 	}
 	if !response.Bool("ok") {
-		return fmt.Errorf("%s failed: %s", methodSubmitToolResult, StableString(response))
+		return fmt.Errorf("%s failed: %s", methodSubmitToolResult, gateway.StableString(response))
 	}
 	return nil
 }
 
-func (runner *RealtimeRunner) finishActiveAgentRuns(ctx context.Context, result *RealtimeResult, state *realtimeEventState) {
+func (runner *Runner) finishActiveAgentRuns(ctx context.Context, result *Result, state *realtimeEventState) {
 	for runID := range state.activeAgentRuns {
-		callCtx, cancel := context.WithTimeout(ctx, durationOrDefault(runner.options.AgentWaitFallbackDuration, DefaultAgentWaitFallback))
+		callCtx, cancel := context.WithTimeout(ctx, durationOrDefault(runner.options.AgentWaitFallbackDuration, defaultAgentWaitFallback))
 		response, err := runner.gateway.Call(callCtx, methodAgentWait, map[string]any{
 			"runId":     runID,
-			"timeoutMs": max(1, int(durationOrDefault(runner.options.AgentWaitFallbackDuration, DefaultAgentWaitFallback)/time.Millisecond)),
+			"timeoutMs": max(1, int(durationOrDefault(runner.options.AgentWaitFallbackDuration, defaultAgentWaitFallback)/time.Millisecond)),
 		})
 		cancel()
 		if err != nil {
@@ -636,7 +606,7 @@ func (runner *RealtimeRunner) finishActiveAgentRuns(ctx context.Context, result 
 		}
 		detail := firstNonEmpty(stringFromAny(payload["error"]), stringFromAny(payload["stopReason"]), status)
 		if detail == "" {
-			detail = StableString(response)
+			detail = gateway.StableString(response)
 		}
 		result.AppendError(fmt.Sprintf("agent run %s did not finish cleanly: %s", runID, detail))
 	}
@@ -658,17 +628,17 @@ func (state *realtimeEventState) hasActiveRuns() bool {
 }
 
 func (state *realtimeEventState) touchQuiet(duration time.Duration) {
-	state.quietDeadline = time.Now().Add(durationOrDefault(duration, DefaultQuietDuration))
+	state.quietDeadline = time.Now().Add(durationOrDefault(duration, defaultQuietDuration))
 }
 
 func (state *realtimeEventState) extend(duration time.Duration) {
-	deadline := time.Now().Add(durationOrDefault(duration, DefaultAgentWaitDuration))
+	deadline := time.Now().Add(durationOrDefault(duration, defaultAgentWaitDuration))
 	if deadline.After(state.deadline) {
 		state.deadline = deadline
 	}
 }
 
-func (state *realtimeEventState) appendUnrecoveredFailures(result *RealtimeResult) {
+func (state *realtimeEventState) appendUnrecoveredFailures(result *Result) {
 	for _, runID := range sortedStringKeys(state.failedAgentRuns) {
 		result.AppendError(state.failedAgentRuns[runID])
 	}
@@ -701,7 +671,7 @@ func (value *boundedString) Reset() {
 	value.builder.Reset()
 }
 
-func scrubRealtimeEvents(result RealtimeResult, include bool) RealtimeResult {
+func scrubRealtimeEvents(result Result, include bool) Result {
 	if include {
 		return result
 	}
@@ -792,8 +762,8 @@ func sortedStringKeys(values map[string]string) []string {
 	return keys
 }
 
-func cloneFrame(frame Frame) Frame {
-	out := make(Frame, len(frame))
+func cloneFrame(frame gateway.Frame) gateway.Frame {
+	out := make(gateway.Frame, len(frame))
 	for key, value := range frame {
 		out[key] = value
 	}

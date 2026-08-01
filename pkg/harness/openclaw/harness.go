@@ -47,7 +47,7 @@ const (
 	execTrailerKeep       = 256
 	gatewayListenPort     = "18789"
 	gatewayPortSpec       = gatewayListenPort + "/tcp"
-	realtimeGatewayPort   = "18790"
+	upstreamGatewayPort   = "18790"
 )
 
 const execShell = `token=$1
@@ -59,7 +59,7 @@ exit "$status"`
 
 var gatewayPort = network.MustParsePort(gatewayPortSpec)
 
-var realtimeGatewayCommand = []string{"/run/aries/realtime-gateway"}
+var gatewayLauncherCommand = []string{"/run/aries/gateway-launcher"}
 
 const (
 	ModeAgent    = "agent"
@@ -138,7 +138,7 @@ type Manager struct {
 	realtime       RealtimeOptions
 	newID          func() (string, error)
 	newGateway     func(string, []byte) (gatewayConnection, error)
-	newRealtime    func(realtimeclient.RealtimeGateway, realtimeclient.RealtimeRunnerOptions) (realtimeRunner, error)
+	newRealtime    func(realtimeclient.Gateway, realtimeclient.Options) (realtimeRunner, error)
 	newSpeech      func(audioinput.SpeechClientOptions) (speechSynthesizer, error)
 
 	mu        sync.Mutex
@@ -151,11 +151,11 @@ type Manager struct {
 }
 
 type realtimeRunner interface {
-	Run(context.Context) (realtimeclient.RealtimeResult, error)
+	Run(context.Context) (realtimeclient.Result, error)
 }
 
 type gatewayConnection interface {
-	realtimeclient.RealtimeGateway
+	realtimeclient.Gateway
 	Agent(context.Context, gatewayclient.AgentRequest) (gatewayclient.AgentResult, error)
 }
 
@@ -535,7 +535,7 @@ func (manager *Manager) runRealtime(ctx context.Context, active *session, instru
 	if err != nil {
 		return failedHarnessResult(active, started, err), err
 	}
-	runner, err := manager.newRealtime(client, realtimeclient.RealtimeRunnerOptions{
+	runner, err := manager.newRealtime(client, realtimeclient.Options{
 		OriginalPrompt:        instruction,
 		SessionKey:            "agent:main:aries-" + active.safeTaskID,
 		Provider:              manager.realtime.Provider,
@@ -595,8 +595,8 @@ func gatewayScopes(mode string) []string {
 	return []string{"operator.write"}
 }
 
-func newRealtimeRunner(gateway realtimeclient.RealtimeGateway, options realtimeclient.RealtimeRunnerOptions) (realtimeRunner, error) {
-	return realtimeclient.NewRealtimeRunner(gateway, options)
+func newRealtimeRunner(gateway realtimeclient.Gateway, options realtimeclient.Options) (realtimeRunner, error) {
+	return realtimeclient.New(gateway, options)
 }
 
 func newSpeechClient(options audioinput.SpeechClientOptions) (speechSynthesizer, error) {
@@ -608,11 +608,11 @@ func disablesThinking(model core.ModelConfig) bool {
 }
 
 func (manager *Manager) gatewayCommand() []string {
-	return append([]string(nil), realtimeGatewayCommand...)
+	return append([]string(nil), gatewayLauncherCommand...)
 }
 
 func (manager *Manager) readyPort() string {
-	return realtimeGatewayPort
+	return upstreamGatewayPort
 }
 
 func (manager *Manager) gatewayURL(ctx context.Context, active *session) (string, error) {
@@ -695,39 +695,39 @@ func (manager *Manager) synthesizeRealtimeAudio(ctx context.Context, active *ses
 	return audioPath, []string{instructionPath, audioPath, metaPath}, nil
 }
 
-func (manager *Manager) realtimeAudioProvider(audioPath string) realtimeclient.RealtimeAudioProvider {
-	return func(session realtimeclient.TalkSessionInfo) (realtimeclient.RealtimeAudio, error) {
+func (manager *Manager) realtimeAudioProvider(audioPath string) realtimeclient.AudioProvider {
+	return func(session realtimeclient.SessionInfo) (realtimeclient.Audio, error) {
 		pcm, sourceRate, err := audioinput.ReadWAVFilePCM16Mono(audioPath)
 		if err != nil {
-			return realtimeclient.RealtimeAudio{}, fmt.Errorf("read realtime audio: %w", err)
+			return realtimeclient.Audio{}, fmt.Errorf("read realtime audio: %w", err)
 		}
 		if manager.realtime.TrailingSilenceMillis > 0 {
 			silence, err := audioinput.SilencePCM16(sourceRate, manager.realtime.TrailingSilenceMillis)
 			if err != nil {
-				return realtimeclient.RealtimeAudio{}, err
+				return realtimeclient.Audio{}, err
 			}
 			pcm = append(pcm, silence...)
 		}
 		encoding := session.InputEncoding
 		if encoding == "" {
-			encoding = realtimeclient.DefaultRealtimeInputEncoding
+			encoding = realtimeclient.DefaultInputEncoding
 		}
 		rate := session.InputSampleRateHz
 		if rate <= 0 {
-			rate = realtimeclient.DefaultRealtimeInputSampleRate
+			rate = realtimeclient.DefaultInputSampleRate
 		}
 		prepared, err := audioinput.PrepareAudio(pcm, sourceRate, encoding, rate)
 		if err != nil {
-			return realtimeclient.RealtimeAudio{}, err
+			return realtimeclient.Audio{}, err
 		}
-		return realtimeclient.RealtimeAudio{
+		return realtimeclient.Audio{
 			Data: prepared.Data, Rate: prepared.Rate,
 			BytesPerSample: prepared.BytesPerSample, Encoding: prepared.Encoding,
 		}, nil
 	}
 }
 
-func (manager *Manager) writeRealtimeResult(active *session, result realtimeclient.RealtimeResult) (string, error) {
+func (manager *Manager) writeRealtimeResult(active *session, result realtimeclient.Result) (string, error) {
 	content, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("encode realtime result: %w", err)
@@ -1109,7 +1109,7 @@ func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([
 		"run/aries/gateway.key":      {content: active.gatewayToken, mode: 0o600},
 		"run/aries/launch":           {content: launcherScript(active.model.APIKeyEnv, manager.realtimeAPIKeyEnv(active)), mode: 0o555},
 		"run/aries/gateway-proxy.js": {content: gatewayProxyScript(), mode: 0o555},
-		"run/aries/realtime-gateway": {content: realtimeGatewayScript(), mode: 0o555},
+		"run/aries/gateway-launcher": {content: gatewayLauncherScript(), mode: 0o555},
 		"run/aries/ssh/id_ed25519":   {content: identity, mode: 0o600},
 		"run/aries/ssh/known_hosts":  {content: knownHosts, mode: 0o600},
 		"opt/aries/bin/aries-ssh":    {content: clientBytes, mode: 0o555},
@@ -1136,7 +1136,7 @@ func (manager *Manager) realtimeAPIKeyEnv(active *session) string {
 	return manager.realtime.TTS.APIKeyEnv
 }
 
-func realtimeGatewayScript() []byte {
+func gatewayLauncherScript() []byte {
 	return []byte(`#!/bin/sh
 set -eu
 node /run/aries/gateway-proxy.js &
@@ -1147,7 +1147,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 set +e
-openclaw gateway run --port ` + realtimeGatewayPort + ` --auth token --bind loopback
+openclaw gateway run --port ` + upstreamGatewayPort + ` --auth token --bind loopback
 status=$?
 set -e
 cleanup
@@ -1161,7 +1161,7 @@ const net = require("net");
 const listenHost = "0.0.0.0";
 const listenPort = ` + gatewayListenPort + `;
 const targetHost = "127.0.0.1";
-const targetPort = ` + realtimeGatewayPort + `;
+const targetPort = ` + upstreamGatewayPort + `;
 const server = net.createServer((client) => {
   const upstream = net.connect({host: targetHost, port: targetPort});
   const close = () => {

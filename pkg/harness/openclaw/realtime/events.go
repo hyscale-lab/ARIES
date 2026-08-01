@@ -6,18 +6,14 @@ import (
 	"github.com/hyscale-lab/aries/pkg/harness/openclaw/gateway"
 )
 
-type Frame = gateway.Frame
-type ConnectOptions = gateway.ConnectOptions
-type ConnectSummary = gateway.ConnectSummary
-
-type TalkSessionInfo struct {
+type SessionInfo struct {
 	SessionID         string
 	RelaySessionID    string
 	InputEncoding     string
 	InputSampleRateHz int
 }
 
-type TalkEvent struct {
+type talkEvent struct {
 	EventType string
 	SessionID string
 	Payload   map[string]any
@@ -28,7 +24,7 @@ type TalkEvent struct {
 	ItemID    string
 }
 
-type ToolCallEvent struct {
+type toolCallEvent struct {
 	SessionID      string
 	RelaySessionID string
 	CallID         string
@@ -36,7 +32,7 @@ type ToolCallEvent struct {
 	Args           map[string]any
 }
 
-type ChatEvent struct {
+type chatEvent struct {
 	RunID        string
 	State        string
 	DeltaText    string
@@ -50,37 +46,36 @@ type ChatEvent struct {
 }
 
 func toMap(value any) map[string]any { return gateway.Map(value) }
-func StableString(value any) string  { return gateway.StableString(value) }
 
-func TextFromPayload(payload any) string {
+func textFromPayload(payload any) string {
 	mapped := toMap(payload)
 	text, _ := mapped["text"].(string)
 	return text
 }
 
-func TalkSessionInfoFromPayload(payload any) (TalkSessionInfo, error) {
+func sessionInfoFromPayload(payload any) (SessionInfo, error) {
 	mapped := toMap(payload)
 	sessionID, _ := mapped["sessionId"].(string)
 	if sessionID == "" {
-		return TalkSessionInfo{}, fmt.Errorf("talk.session.create payload missing sessionId: %s", StableString(payload))
+		return SessionInfo{}, fmt.Errorf("talk.session.create payload missing sessionId: %s", gateway.StableString(payload))
 	}
 	relaySessionID, _ := mapped["relaySessionId"].(string)
 	audio := toMap(mapped["audio"])
 	encoding, _ := audio["inputEncoding"].(string)
 	if encoding == "" {
-		return TalkSessionInfo{}, fmt.Errorf("talk.session.create audio missing inputEncoding: %s", StableString(audio))
+		return SessionInfo{}, fmt.Errorf("talk.session.create audio missing inputEncoding: %s", gateway.StableString(audio))
 	}
 	rate, ok := numericInt(audio["inputSampleRateHz"])
 	if !ok || rate <= 0 {
-		return TalkSessionInfo{}, fmt.Errorf("talk.session.create audio missing inputSampleRateHz: %s", StableString(audio))
+		return SessionInfo{}, fmt.Errorf("talk.session.create audio missing inputSampleRateHz: %s", gateway.StableString(audio))
 	}
-	return TalkSessionInfo{SessionID: sessionID, RelaySessionID: relaySessionID, InputEncoding: encoding, InputSampleRateHz: rate}, nil
+	return SessionInfo{SessionID: sessionID, RelaySessionID: relaySessionID, InputEncoding: encoding, InputSampleRateHz: rate}, nil
 }
 
-func TalkEventFromFrame(frame any) (TalkEvent, bool) {
+func talkEventFromFrame(frame any) (talkEvent, bool) {
 	mapped := toMap(frame)
 	if mapped["type"] != "event" || mapped["event"] != "talk.event" {
-		return TalkEvent{}, false
+		return talkEvent{}, false
 	}
 	wrapper := toMap(mapped["payload"])
 	raw := toMap(wrapper["talkEvent"])
@@ -88,43 +83,43 @@ func TalkEventFromFrame(frame any) (TalkEvent, bool) {
 	sessionID, _ := raw["sessionId"].(string)
 	payload := toMap(raw["payload"])
 	if eventType == "" || sessionID == "" {
-		return TalkEvent{}, false
+		return talkEvent{}, false
 	}
 	callID, _ := raw["callId"].(string)
 	itemID, _ := raw["itemId"].(string)
-	return TalkEvent{EventType: eventType, SessionID: sessionID, Payload: payload, Wrapper: wrapper, Raw: raw, Final: truthy(raw["final"]), CallID: callID, ItemID: itemID}, true
+	return talkEvent{EventType: eventType, SessionID: sessionID, Payload: payload, Wrapper: wrapper, Raw: raw, Final: truthy(raw["final"]), CallID: callID, ItemID: itemID}, true
 }
 
-func ToolCallEventFromTalk(event TalkEvent) (ToolCallEvent, bool) {
+func toolCallEventFromTalk(event talkEvent) (toolCallEvent, bool) {
 	if event.EventType != "tool.call" || event.CallID == "" {
-		return ToolCallEvent{}, false
+		return toolCallEvent{}, false
 	}
 	name, _ := event.Payload["name"].(string)
 	args := toMap(event.Payload["args"])
 	if name == "" {
-		return ToolCallEvent{}, false
+		return toolCallEvent{}, false
 	}
 	relaySessionID, _ := event.Wrapper["relaySessionId"].(string)
-	return ToolCallEvent{SessionID: event.SessionID, RelaySessionID: relaySessionID, CallID: event.CallID, Name: name, Args: args}, true
+	return toolCallEvent{SessionID: event.SessionID, RelaySessionID: relaySessionID, CallID: event.CallID, Name: name, Args: args}, true
 }
 
-func ChatEventFromFrame(frame any) (ChatEvent, bool) {
+func chatEventFromFrame(frame any) (chatEvent, bool) {
 	mapped := toMap(frame)
 	if mapped["type"] != "event" || mapped["event"] != "chat" {
-		return ChatEvent{}, false
+		return chatEvent{}, false
 	}
 	payload := toMap(mapped["payload"])
 	runID, _ := payload["runId"].(string)
 	state, _ := payload["state"].(string)
 	if runID == "" || state == "" {
-		return ChatEvent{}, false
+		return chatEvent{}, false
 	}
 	deltaText, _ := payload["deltaText"].(string)
 	errorMessage, _ := payload["errorMessage"].(string)
 	errorKind, _ := payload["errorKind"].(string)
 	stopReason, _ := payload["stopReason"].(string)
 	stream, _ := payload["stream"].(string)
-	return ChatEvent{RunID: runID, State: state, DeltaText: deltaText, Replace: truthy(payload["replace"]), MessageText: textFromChatMessage(payload["message"]), ErrorMessage: errorMessage, ErrorKind: errorKind, StopReason: stopReason, Stream: stream, Data: toMap(payload["data"])}, true
+	return chatEvent{RunID: runID, State: state, DeltaText: deltaText, Replace: truthy(payload["replace"]), MessageText: textFromChatMessage(payload["message"]), ErrorMessage: errorMessage, ErrorKind: errorKind, StopReason: stopReason, Stream: stream, Data: toMap(payload["data"])}, true
 }
 
 func textFromChatMessage(message any) string {

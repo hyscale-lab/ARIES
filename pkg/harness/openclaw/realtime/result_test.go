@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+
+	"github.com/hyscale-lab/aries/pkg/harness/openclaw/gateway"
 )
 
-func TestNewRealtimeResultHasStableArtifactShape(t *testing.T) {
-	result := NewRealtimeResult()
+func TestNewResultHasStableArtifactShape(t *testing.T) {
+	result := newResult()
 	result.Transcript = "heard"
 	result.OutputText = "provider"
 	result.AgentOutputText = "agent"
@@ -29,7 +31,7 @@ func TestNewRealtimeResultHasStableArtifactShape(t *testing.T) {
 	result.SessionID = &sessionID
 	usage := "agent.final"
 	result.AgentUsageSource = &usage
-	result.Events = append(result.Events, Frame{"type": "event", "event": "talk.event"})
+	result.Events = append(result.Events, gateway.Frame{"type": "event", "event": "talk.event"})
 
 	content, err := json.Marshal(result)
 	if err != nil {
@@ -52,7 +54,7 @@ func TestNewRealtimeResultHasStableArtifactShape(t *testing.T) {
 			t.Fatalf("missing key %q in %#v", key, decoded)
 		}
 	}
-	if decoded["schema_version"] != float64(RealtimeResultSchemaVersion) {
+	if decoded["schema_version"] != float64(ResultSchemaVersion) {
 		t.Fatalf("schema_version = %v", decoded["schema_version"])
 	}
 	if decoded["session_id"] != sessionID || decoded["agent_usage_source"] != usage || decoded["relay_session_id"] != nil {
@@ -63,9 +65,9 @@ func TestNewRealtimeResultHasStableArtifactShape(t *testing.T) {
 	}
 }
 
-func TestRealtimeResultWithoutEventsKeepsCountersAndDropsRawEvents(t *testing.T) {
-	result := NewRealtimeResult()
-	result.Events = append(result.Events, Frame{"event": "chat"})
+func TestResultWithoutEventsKeepsCountersAndDropsRawEvents(t *testing.T) {
+	result := newResult()
+	result.Events = append(result.Events, gateway.Frame{"event": "chat"})
 	result.IncrementEvent("chat")
 
 	content, err := json.Marshal(result.WithoutEvents())
@@ -85,8 +87,8 @@ func TestRealtimeResultWithoutEventsKeepsCountersAndDropsRawEvents(t *testing.T)
 	}
 }
 
-func TestRealtimeResultFinalTextFallback(t *testing.T) {
-	result := NewRealtimeResult()
+func TestResultFinalTextFallback(t *testing.T) {
+	result := newResult()
 	result.Transcript = "transcript"
 	if got := result.FinalText(); got != "transcript" {
 		t.Fatalf("FinalText transcript = %q", got)

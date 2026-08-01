@@ -379,29 +379,29 @@ func newTestManager(t *testing.T, fake *fakeDocker, secret []byte) *Manager {
 	}
 	manager.client = fake
 	manager.newID = func() (string, error) { return "attempt", nil }
-	manager.newGateway = func(string, []byte) (gatewayConnection, error) { return &stubRealtimeGateway{}, nil }
+	manager.newGateway = func(string, []byte) (gatewayConnection, error) { return &stubGateway{}, nil }
 	return manager
 }
 
-type stubRealtimeGateway struct{}
+type stubGateway struct{}
 
-func (stubRealtimeGateway) Connect(context.Context, gatewayclient.ConnectOptions) (gatewayclient.ConnectSummary, error) {
+func (stubGateway) Connect(context.Context, gatewayclient.ConnectOptions) (gatewayclient.ConnectSummary, error) {
 	return gatewayclient.ConnectSummary{Role: "operator", Scopes: []string{"operator.read", "operator.write"}}, nil
 }
 
-func (stubRealtimeGateway) Agent(context.Context, gatewayclient.AgentRequest) (gatewayclient.AgentResult, error) {
+func (stubGateway) Agent(context.Context, gatewayclient.AgentRequest) (gatewayclient.AgentResult, error) {
 	return gatewayclient.AgentResult{RunID: "run-agent", Text: "task complete"}, nil
 }
 
-func (stubRealtimeGateway) Call(context.Context, string, map[string]any) (gatewayclient.Frame, error) {
+func (stubGateway) Call(context.Context, string, map[string]any) (gatewayclient.Frame, error) {
 	return nil, nil
 }
 
-func (stubRealtimeGateway) RecvEvent(context.Context) (gatewayclient.Frame, error) {
+func (stubGateway) RecvEvent(context.Context) (gatewayclient.Frame, error) {
 	return nil, context.Canceled
 }
 
-func (stubRealtimeGateway) Close() error {
+func (stubGateway) Close() error {
 	return nil
 }
 
@@ -431,12 +431,12 @@ func (*recordingGateway) RecvEvent(context.Context) (gatewayclient.Frame, error)
 
 func (*recordingGateway) Close() error { return nil }
 
-type stubRealtimeRunner struct {
-	result realtimeclient.RealtimeResult
+type stubRunner struct {
+	result realtimeclient.Result
 	err    error
 }
 
-func (runner stubRealtimeRunner) Run(context.Context) (realtimeclient.RealtimeResult, error) {
+func (runner stubRunner) Run(context.Context) (realtimeclient.Result, error) {
 	return runner.result, runner.err
 }
 
@@ -520,6 +520,9 @@ func TestHarnessUsesOneSDKContainerAndDirectPrivateArchive(t *testing.T) {
 	if fake.created.Name != "aries-openclaw-attempt" || len(fake.created.Config.Cmd) == 0 || len(fake.created.HostConfig.Mounts) != 0 || len(fake.created.HostConfig.Binds) != 0 {
 		t.Fatalf("container create = %#v", fake.created)
 	}
+	if !equalStrings(fake.created.Config.Cmd, append([]string{launcherPath}, gatewayLauncherCommand...)) {
+		t.Fatalf("agent gateway command = %#v", fake.created.Config.Cmd)
+	}
 	bindings := fake.created.HostConfig.PortBindings[gatewayPort]
 	if len(bindings) != 1 || bindings[0].HostIP.String() != "127.0.0.1" {
 		t.Fatalf("agent gateway port bindings = %#v", bindings)
@@ -537,7 +540,7 @@ func TestHarnessUsesOneSDKContainerAndDirectPrivateArchive(t *testing.T) {
 	files := readArchive(t, fake.archive)
 	for path, mode := range map[string]int64{
 		"run/aries/openclaw.json": 0o600, "run/aries/model.key": 0o600, "run/aries/gateway.key": 0o600,
-		"run/aries/launch": 0o555, "run/aries/gateway-proxy.js": 0o555, "run/aries/realtime-gateway": 0o555,
+		"run/aries/launch": 0o555, "run/aries/gateway-proxy.js": 0o555, "run/aries/gateway-launcher": 0o555,
 		"run/aries/ssh/id_ed25519": 0o600, "run/aries/ssh/known_hosts": 0o600,
 		"opt/aries/bin/aries-ssh": 0o555,
 	} {
@@ -642,7 +645,7 @@ func TestStartFailureRemovesOnlyContainerAndClearsSecret(t *testing.T) {
 	}
 }
 
-func TestRealtimeModePublishesGatewayAndRunsRealtimeRunner(t *testing.T) {
+func TestRealtimeModePublishesGatewayAndRunsRunner(t *testing.T) {
 	fake := newFakeDocker()
 	keys := map[string][]byte{"ARIES_FAKE_API_KEY": []byte("model-secret"), "OPENAI_API_KEY": []byte("speech-secret")}
 	manager := newTestManager(t, fake, keys["ARIES_FAKE_API_KEY"])
@@ -670,13 +673,13 @@ func TestRealtimeModePublishesGatewayAndRunsRealtimeRunner(t *testing.T) {
 	manager.newGateway = func(rawURL string, token []byte) (gatewayConnection, error) {
 		gatewayURL = rawURL
 		gatewayToken = append([]byte(nil), token...)
-		return &stubRealtimeGateway{}, nil
+		return &stubGateway{}, nil
 	}
-	var runnerOptions realtimeclient.RealtimeRunnerOptions
-	manager.newRealtime = func(_ realtimeclient.RealtimeGateway, options realtimeclient.RealtimeRunnerOptions) (realtimeRunner, error) {
+	var runnerOptions realtimeclient.Options
+	manager.newRealtime = func(_ realtimeclient.Gateway, options realtimeclient.Options) (realtimeRunner, error) {
 		runnerOptions = options
-		return stubRealtimeRunner{result: realtimeclient.RealtimeResult{
-			SchemaVersion:       realtimeclient.RealtimeResultSchemaVersion,
+		return stubRunner{result: realtimeclient.Result{
+			SchemaVersion:       realtimeclient.ResultSchemaVersion,
 			Transcript:          "heard",
 			OutputText:          "spoken",
 			AgentOutputText:     "final answer",
@@ -692,7 +695,7 @@ func TestRealtimeModePublishesGatewayAndRunsRealtimeRunner(t *testing.T) {
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
-	if !equalStrings(fake.created.Config.Cmd, append([]string{launcherPath}, realtimeGatewayCommand...)) {
+	if !equalStrings(fake.created.Config.Cmd, append([]string{launcherPath}, gatewayLauncherCommand...)) {
 		t.Fatalf("gateway command = %#v", fake.created.Config.Cmd)
 	}
 	if _, ok := fake.created.Config.ExposedPorts[gatewayPort]; !ok {
@@ -722,7 +725,7 @@ func TestRealtimeModePublishesGatewayAndRunsRealtimeRunner(t *testing.T) {
 	if speechRequest.Text != "voice task" || speechRequest.Model != "tts-model" || speechRequest.Voice != "alloy" || speechRequest.Format != "wav" {
 		t.Fatalf("speech request = %#v", speechRequest)
 	}
-	audio, err := runnerOptions.AudioProvider(realtimeclient.TalkSessionInfo{InputEncoding: "pcm16", InputSampleRateHz: 24000})
+	audio, err := runnerOptions.AudioProvider(realtimeclient.SessionInfo{InputEncoding: "pcm16", InputSampleRateHz: 24000})
 	if err != nil {
 		t.Fatalf("audio provider returned error: %v", err)
 	}

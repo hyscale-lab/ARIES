@@ -34,16 +34,16 @@ func (e classifiedHealth) Retryable() bool { return e.retry }
 
 func TestHealthRetryabilityIsStructuralAndUnknownIsTerminal(t *testing.T) {
 	runtime := &fakeRuntime{health: []error{classifiedHealth{true}, nil}, done: make(chan struct{})}
-	if err := waitForRuntimeHealth(context.Background(), runtime, func(context.Context, time.Duration) error { return nil }); err != nil || runtime.calls != 2 {
+	if err := waitForRuntimeHealth(context.Background(), runtime, func(context.Context, time.Duration) error { return nil }, nil); err != nil || runtime.calls != 2 {
 		t.Fatalf("calls=%d err=%v", runtime.calls, err)
 	}
 	runtime = &fakeRuntime{health: []error{errors.New("retryable-looking")}, done: make(chan struct{})}
-	err := waitForRuntimeHealth(context.Background(), runtime, nil)
+	err := waitForRuntimeHealth(context.Background(), runtime, nil, nil)
 	if err == nil || runtime.calls != 1 {
 		t.Fatalf("calls=%d err=%v", runtime.calls, err)
 	}
 	runtime = &fakeRuntime{health: []error{classifiedHealth{false}}, done: make(chan struct{})}
-	if err := waitForRuntimeHealth(context.Background(), runtime, nil); err == nil || runtime.calls != 1 {
+	if err := waitForRuntimeHealth(context.Background(), runtime, nil, nil); err == nil || runtime.calls != 1 {
 		t.Fatalf("calls=%d err=%v", runtime.calls, err)
 	}
 }
@@ -51,7 +51,7 @@ func TestHealthRetryabilityIsStructuralAndUnknownIsTerminal(t *testing.T) {
 func TestObservedHealthReportsOnlyStructurallyRetryableFailures(t *testing.T) {
 	runtime := &fakeRuntime{health: []error{classifiedHealth{true}, nil}, done: make(chan struct{})}
 	retries := 0
-	if err := waitForRuntimeHealthObserved(context.Background(), runtime, func(context.Context, time.Duration) error { return nil }, func() { retries++ }); err != nil {
+	if err := waitForRuntimeHealth(context.Background(), runtime, func(context.Context, time.Duration) error { return nil }, func() { retries++ }); err != nil {
 		t.Fatal(err)
 	}
 	if retries != 1 {
@@ -63,7 +63,7 @@ func TestRuntimeDoneDuringHealthReturnsPublishedError(t *testing.T) {
 	done := make(chan struct{})
 	close(done)
 	runtime := &fakeRuntime{health: []error{classifiedHealth{true}}, done: done, err: errors.New("exit canary")}
-	err := waitForRuntimeHealth(context.Background(), runtime, func(context.Context, time.Duration) error { return nil })
+	err := waitForRuntimeHealth(context.Background(), runtime, func(context.Context, time.Duration) error { return nil }, nil)
 	if err == nil || !strings.Contains(err.Error(), "exit canary") {
 		t.Fatalf("err=%v", err)
 	}
@@ -79,7 +79,7 @@ func TestRuntimeDoneInterruptsStartupRetrySleepWithoutAnotherHealthCall(t *testi
 			close(sleepEntered)
 			<-ctx.Done()
 			return ctx.Err()
-		})
+		}, nil)
 	}()
 	<-sleepEntered
 	close(runtime.done)
@@ -107,7 +107,7 @@ func TestRuntimeDoneInterruptsStartupRetrySleepStress(t *testing.T) {
 				close(sleepEntered)
 				<-ctx.Done()
 				return ctx.Err()
-			})
+			}, nil)
 		}()
 		<-sleepEntered
 		close(runtime.done)

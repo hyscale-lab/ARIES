@@ -8,14 +8,16 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	gatewayclient "github.com/hyscale-lab/aries/pkg/harness/openclaw/gateway"
 )
 
-func TestRealtimeRunnerCreatesSessionStreamsAudioAndHandlesToolCall(t *testing.T) {
-	gateway := newScriptedRealtimeGateway()
+func TestRunnerCreatesSessionStreamsAudioAndHandlesToolCall(t *testing.T) {
+	gateway := newScriptedGateway()
 	gateway.calls = append(gateway.calls,
 		scriptedCall{
 			method: "talk.session.create",
-			response: Frame{"ok": true, "payload": map[string]any{
+			response: gatewayclient.Frame{"ok": true, "payload": map[string]any{
 				"sessionId": "session-1",
 				"audio": map[string]any{
 					"inputEncoding":     "pcm16",
@@ -23,20 +25,20 @@ func TestRealtimeRunnerCreatesSessionStreamsAudioAndHandlesToolCall(t *testing.T
 				},
 			}},
 		},
-		scriptedCall{method: "talk.session.appendAudio", response: Frame{"ok": true}},
-		scriptedCall{method: "talk.session.appendAudio", response: Frame{"ok": true}},
-		scriptedCall{method: "talk.client.toolCall", response: Frame{"ok": true, "payload": map[string]any{"runId": "run-1", "answer": "done"}}},
-		scriptedCall{method: "talk.session.submitToolResult", response: Frame{"ok": true}},
+		scriptedCall{method: "talk.session.appendAudio", response: gatewayclient.Frame{"ok": true}},
+		scriptedCall{method: "talk.session.appendAudio", response: gatewayclient.Frame{"ok": true}},
+		scriptedCall{method: "talk.client.toolCall", response: gatewayclient.Frame{"ok": true, "payload": map[string]any{"runId": "run-1", "answer": "done"}}},
+		scriptedCall{method: "talk.session.submitToolResult", response: gatewayclient.Frame{"ok": true}},
 	)
 	gateway.events = append(gateway.events,
-		Frame{
+		gatewayclient.Frame{
 			"type": "event", "event": "talk.event",
 			"payload": map[string]any{"talkEvent": map[string]any{
 				"type": "transcript.done", "sessionId": "session-1",
 				"payload": map[string]any{"role": "user", "text": "hello"},
 			}},
 		},
-		Frame{
+		gatewayclient.Frame{
 			"type": "event", "event": "talk.event",
 			"payload": map[string]any{"relaySessionId": "relay-1", "talkEvent": map[string]any{
 				"type": "tool.call", "sessionId": "session-1", "callId": "call-1",
@@ -46,7 +48,7 @@ func TestRealtimeRunnerCreatesSessionStreamsAudioAndHandlesToolCall(t *testing.T
 				},
 			}},
 		},
-		Frame{
+		gatewayclient.Frame{
 			"type": "event", "event": "chat",
 			"payload": map[string]any{
 				"runId":     "run-1",
@@ -54,7 +56,7 @@ func TestRealtimeRunnerCreatesSessionStreamsAudioAndHandlesToolCall(t *testing.T
 				"deltaText": "answer ",
 			},
 		},
-		Frame{
+		gatewayclient.Frame{
 			"type": "event", "event": "chat",
 			"payload": map[string]any{
 				"runId": "run-1",
@@ -64,17 +66,17 @@ func TestRealtimeRunnerCreatesSessionStreamsAudioAndHandlesToolCall(t *testing.T
 				}},
 			},
 		},
-		Frame{
+		gatewayclient.Frame{
 			"type": "event", "event": "talk.event",
 			"payload": map[string]any{"talkEvent": map[string]any{
 				"type": "output.audio.done", "sessionId": "session-1", "payload": map[string]any{},
 			}},
 		},
 	)
-	runner, err := NewRealtimeRunner(gateway, RealtimeRunnerOptions{
+	runner, err := New(gateway, Options{
 		OriginalPrompt:        "original",
 		SessionKey:            "agent:test:main",
-		Audio:                 RealtimeAudio{Data: []byte{1, 2, 3, 4}, Rate: 4, BytesPerSample: 2, Encoding: "pcm16"},
+		Audio:                 Audio{Data: []byte{1, 2, 3, 4}, Rate: 4, BytesPerSample: 2, Encoding: "pcm16"},
 		ChunkDuration:         250 * time.Millisecond,
 		ListenDuration:        50 * time.Millisecond,
 		QuietDuration:         time.Millisecond,
@@ -86,7 +88,7 @@ func TestRealtimeRunnerCreatesSessionStreamsAudioAndHandlesToolCall(t *testing.T
 		CloseGateway:          true,
 	})
 	if err != nil {
-		t.Fatalf("NewRealtimeRunner returned error: %v", err)
+		t.Fatalf("New returned error: %v", err)
 	}
 	runner.sleep = func(context.Context, time.Duration) error { return nil }
 
@@ -139,28 +141,28 @@ func TestRealtimeRunnerCreatesSessionStreamsAudioAndHandlesToolCall(t *testing.T
 	}
 }
 
-func TestRealtimeRunnerOmitsEventsByDefaultAndFallsBackToPartialTranscript(t *testing.T) {
-	gateway := newScriptedRealtimeGateway()
+func TestRunnerOmitsEventsByDefaultAndFallsBackToPartialTranscript(t *testing.T) {
+	gateway := newScriptedGateway()
 	gateway.calls = append(gateway.calls,
-		scriptedCall{method: "talk.session.create", response: Frame{"ok": true, "payload": map[string]any{
+		scriptedCall{method: "talk.session.create", response: gatewayclient.Frame{"ok": true, "payload": map[string]any{
 			"sessionId": "session-1",
 			"audio":     map[string]any{"inputEncoding": "pcm16", "inputSampleRateHz": 24000},
 		}}},
-		scriptedCall{method: "talk.session.appendAudio", response: Frame{"ok": true}},
+		scriptedCall{method: "talk.session.appendAudio", response: gatewayclient.Frame{"ok": true}},
 	)
-	gateway.events = append(gateway.events, Frame{
+	gateway.events = append(gateway.events, gatewayclient.Frame{
 		"type": "event", "event": "talk.event",
 		"payload": map[string]any{"talkEvent": map[string]any{
 			"type": "transcript.delta", "sessionId": "session-1", "payload": map[string]any{"text": "partial"},
 		}},
 	})
-	runner, err := NewRealtimeRunner(gateway, RealtimeRunnerOptions{
-		Audio:          RealtimeAudio{Data: []byte{1, 2}, Rate: 24000, BytesPerSample: 2},
+	runner, err := New(gateway, Options{
+		Audio:          Audio{Data: []byte{1, 2}, Rate: 24000, BytesPerSample: 2},
 		ListenDuration: 5 * time.Millisecond,
 		QuietDuration:  time.Millisecond,
 	})
 	if err != nil {
-		t.Fatalf("NewRealtimeRunner returned error: %v", err)
+		t.Fatalf("New returned error: %v", err)
 	}
 
 	result, err := runner.Run(context.Background())
@@ -175,27 +177,27 @@ func TestRealtimeRunnerOmitsEventsByDefaultAndFallsBackToPartialTranscript(t *te
 	}
 }
 
-func TestRealtimeRunnerCanPrepareAudioAfterSessionCreate(t *testing.T) {
-	var gotSession TalkSessionInfo
-	gateway := newScriptedRealtimeGateway()
+func TestRunnerCanPrepareAudioAfterSessionCreate(t *testing.T) {
+	var gotSession SessionInfo
+	gateway := newScriptedGateway()
 	gateway.calls = append(gateway.calls,
-		scriptedCall{method: "talk.session.create", response: Frame{"ok": true, "payload": map[string]any{
+		scriptedCall{method: "talk.session.create", response: gatewayclient.Frame{"ok": true, "payload": map[string]any{
 			"sessionId":      "session-1",
 			"relaySessionId": "relay-1",
 			"audio":          map[string]any{"inputEncoding": "g711_ulaw", "inputSampleRateHz": 8000},
 		}}},
-		scriptedCall{method: "talk.session.appendAudio", response: Frame{"ok": true}},
+		scriptedCall{method: "talk.session.appendAudio", response: gatewayclient.Frame{"ok": true}},
 	)
-	runner, err := NewRealtimeRunner(gateway, RealtimeRunnerOptions{
-		AudioProvider: func(session TalkSessionInfo) (RealtimeAudio, error) {
+	runner, err := New(gateway, Options{
+		AudioProvider: func(session SessionInfo) (Audio, error) {
 			gotSession = session
-			return RealtimeAudio{Data: []byte{0xff}, Rate: session.InputSampleRateHz, BytesPerSample: 1, Encoding: session.InputEncoding}, nil
+			return Audio{Data: []byte{0xff}, Rate: session.InputSampleRateHz, BytesPerSample: 1, Encoding: session.InputEncoding}, nil
 		},
 		ListenDuration: 5 * time.Millisecond,
 		QuietDuration:  time.Millisecond,
 	})
 	if err != nil {
-		t.Fatalf("NewRealtimeRunner returned error: %v", err)
+		t.Fatalf("New returned error: %v", err)
 	}
 	result, err := runner.Run(context.Background())
 	if err != nil {
@@ -213,30 +215,30 @@ func TestRealtimeRunnerCanPrepareAudioAfterSessionCreate(t *testing.T) {
 	}
 }
 
-func TestRealtimeRunnerReportsFailedToolAndStillSubmitsResult(t *testing.T) {
-	gateway := newScriptedRealtimeGateway()
+func TestRunnerReportsFailedToolAndStillSubmitsResult(t *testing.T) {
+	gateway := newScriptedGateway()
 	gateway.calls = append(gateway.calls,
-		scriptedCall{method: "talk.session.create", response: Frame{"ok": true, "payload": map[string]any{
+		scriptedCall{method: "talk.session.create", response: gatewayclient.Frame{"ok": true, "payload": map[string]any{
 			"sessionId": "session-1",
 			"audio":     map[string]any{"inputEncoding": "pcm16", "inputSampleRateHz": 24000},
 		}}},
-		scriptedCall{method: "talk.session.appendAudio", response: Frame{"ok": true}},
-		scriptedCall{method: "talk.session.submitToolResult", response: Frame{"ok": true}},
+		scriptedCall{method: "talk.session.appendAudio", response: gatewayclient.Frame{"ok": true}},
+		scriptedCall{method: "talk.session.submitToolResult", response: gatewayclient.Frame{"ok": true}},
 	)
-	gateway.events = append(gateway.events, Frame{
+	gateway.events = append(gateway.events, gatewayclient.Frame{
 		"type": "event", "event": "talk.event",
 		"payload": map[string]any{"talkEvent": map[string]any{
 			"type": "tool.call", "sessionId": "session-1", "callId": "call-1",
 			"payload": map[string]any{"name": "unknown.tool", "args": map[string]any{}},
 		}},
 	})
-	runner, err := NewRealtimeRunner(gateway, RealtimeRunnerOptions{
-		Audio:          RealtimeAudio{Data: []byte{1, 2}, Rate: 24000, BytesPerSample: 2},
+	runner, err := New(gateway, Options{
+		Audio:          Audio{Data: []byte{1, 2}, Rate: 24000, BytesPerSample: 2},
 		ListenDuration: 5 * time.Millisecond,
 		QuietDuration:  time.Millisecond,
 	})
 	if err != nil {
-		t.Fatalf("NewRealtimeRunner returned error: %v", err)
+		t.Fatalf("New returned error: %v", err)
 	}
 
 	result, err := runner.Run(context.Background())
@@ -253,47 +255,47 @@ func TestRealtimeRunnerReportsFailedToolAndStillSubmitsResult(t *testing.T) {
 	}
 }
 
-func TestRealtimeRunnerHandlesAgentControlStatusWithoutStartingAnotherAgent(t *testing.T) {
-	gateway := newScriptedRealtimeGateway()
+func TestRunnerHandlesAgentControlStatusWithoutStartingAnotherAgent(t *testing.T) {
+	gateway := newScriptedGateway()
 	gateway.calls = append(gateway.calls,
-		scriptedCall{method: "talk.session.create", response: Frame{"ok": true, "payload": map[string]any{
+		scriptedCall{method: "talk.session.create", response: gatewayclient.Frame{"ok": true, "payload": map[string]any{
 			"sessionId": "session-1",
 			"audio":     map[string]any{"inputEncoding": "pcm16", "inputSampleRateHz": 24000},
 		}}},
-		scriptedCall{method: "talk.session.appendAudio", response: Frame{"ok": true}},
-		scriptedCall{method: "talk.client.toolCall", response: Frame{"ok": true, "payload": map[string]any{"runId": "run-1"}}},
-		scriptedCall{method: "talk.session.submitToolResult", response: Frame{"ok": true}},
-		scriptedCall{method: "talk.session.submitToolResult", response: Frame{"ok": true}},
+		scriptedCall{method: "talk.session.appendAudio", response: gatewayclient.Frame{"ok": true}},
+		scriptedCall{method: "talk.client.toolCall", response: gatewayclient.Frame{"ok": true, "payload": map[string]any{"runId": "run-1"}}},
+		scriptedCall{method: "talk.session.submitToolResult", response: gatewayclient.Frame{"ok": true}},
+		scriptedCall{method: "talk.session.submitToolResult", response: gatewayclient.Frame{"ok": true}},
 	)
 	gateway.events = append(gateway.events,
-		Frame{
+		gatewayclient.Frame{
 			"type": "event", "event": "talk.event",
 			"payload": map[string]any{"relaySessionId": "relay-1", "talkEvent": map[string]any{
 				"type": "tool.call", "sessionId": "session-1", "callId": "consult-1",
 				"payload": map[string]any{"name": "openclaw_agent_consult", "args": map[string]any{"question": "q"}},
 			}},
 		},
-		Frame{
+		gatewayclient.Frame{
 			"type": "event", "event": "talk.event",
 			"payload": map[string]any{"relaySessionId": "relay-1", "talkEvent": map[string]any{
 				"type": "tool.call", "sessionId": "session-1", "callId": "control-1",
 				"payload": map[string]any{"name": "openclaw_agent_control", "args": map[string]any{"mode": "status", "text": "status"}},
 			}},
 		},
-		Frame{
+		gatewayclient.Frame{
 			"type": "event", "event": "chat",
 			"payload": map[string]any{"runId": "run-1", "state": "final", "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": "done"}}}},
 		},
 	)
-	runner, err := NewRealtimeRunner(gateway, RealtimeRunnerOptions{
-		Audio:                     RealtimeAudio{Data: []byte{1, 2}, Rate: 24000, BytesPerSample: 2},
+	runner, err := New(gateway, Options{
+		Audio:                     Audio{Data: []byte{1, 2}, Rate: 24000, BytesPerSample: 2},
 		ListenDuration:            5 * time.Millisecond,
 		QuietDuration:             time.Millisecond,
 		AgentWaitDuration:         2 * time.Millisecond,
 		AgentWaitFallbackDuration: time.Millisecond,
 	})
 	if err != nil {
-		t.Fatalf("NewRealtimeRunner returned error: %v", err)
+		t.Fatalf("New returned error: %v", err)
 	}
 
 	result, err := runner.Run(context.Background())
@@ -312,41 +314,41 @@ func TestRealtimeRunnerHandlesAgentControlStatusWithoutStartingAnotherAgent(t *t
 	}
 }
 
-func TestRealtimeRunnerIgnoresRecoveredAgentErrorAfterFinal(t *testing.T) {
-	gateway := newScriptedRealtimeGateway()
+func TestRunnerIgnoresRecoveredAgentErrorAfterFinal(t *testing.T) {
+	gateway := newScriptedGateway()
 	gateway.calls = append(gateway.calls,
-		scriptedCall{method: "talk.session.create", response: Frame{"ok": true, "payload": map[string]any{
+		scriptedCall{method: "talk.session.create", response: gatewayclient.Frame{"ok": true, "payload": map[string]any{
 			"sessionId": "session-1",
 			"audio":     map[string]any{"inputEncoding": "pcm16", "inputSampleRateHz": 24000},
 		}}},
-		scriptedCall{method: "talk.session.appendAudio", response: Frame{"ok": true}},
-		scriptedCall{method: "talk.client.toolCall", response: Frame{"ok": true, "payload": map[string]any{"runId": "run-1"}}},
-		scriptedCall{method: "talk.session.submitToolResult", response: Frame{"ok": true}},
+		scriptedCall{method: "talk.session.appendAudio", response: gatewayclient.Frame{"ok": true}},
+		scriptedCall{method: "talk.client.toolCall", response: gatewayclient.Frame{"ok": true, "payload": map[string]any{"runId": "run-1"}}},
+		scriptedCall{method: "talk.session.submitToolResult", response: gatewayclient.Frame{"ok": true}},
 	)
 	gateway.events = append(gateway.events,
-		Frame{
+		gatewayclient.Frame{
 			"type": "event", "event": "talk.event",
 			"payload": map[string]any{"relaySessionId": "relay-1", "talkEvent": map[string]any{
 				"type": "tool.call", "sessionId": "session-1", "callId": "consult-1",
 				"payload": map[string]any{"name": "openclaw_agent_consult", "args": map[string]any{"question": "q"}},
 			}},
 		},
-		Frame{
+		gatewayclient.Frame{
 			"type": "event", "event": "chat",
 			"payload": map[string]any{"runId": "run-1", "state": "error", "errorMessage": "transient exec failed"},
 		},
-		Frame{
+		gatewayclient.Frame{
 			"type": "event", "event": "chat",
 			"payload": map[string]any{"runId": "run-1", "state": "final", "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": "done"}}}},
 		},
 	)
-	runner, err := NewRealtimeRunner(gateway, RealtimeRunnerOptions{
-		Audio:          RealtimeAudio{Data: []byte{1, 2}, Rate: 24000, BytesPerSample: 2},
+	runner, err := New(gateway, Options{
+		Audio:          Audio{Data: []byte{1, 2}, Rate: 24000, BytesPerSample: 2},
 		ListenDuration: 5 * time.Millisecond,
 		QuietDuration:  time.Millisecond,
 	})
 	if err != nil {
-		t.Fatalf("NewRealtimeRunner returned error: %v", err)
+		t.Fatalf("New returned error: %v", err)
 	}
 
 	result, err := runner.Run(context.Background())
@@ -358,41 +360,41 @@ func TestRealtimeRunnerIgnoresRecoveredAgentErrorAfterFinal(t *testing.T) {
 	}
 }
 
-func TestRealtimeRunnerIgnoresLateAgentErrorAfterFinal(t *testing.T) {
-	gateway := newScriptedRealtimeGateway()
+func TestRunnerIgnoresLateAgentErrorAfterFinal(t *testing.T) {
+	gateway := newScriptedGateway()
 	gateway.calls = append(gateway.calls,
-		scriptedCall{method: "talk.session.create", response: Frame{"ok": true, "payload": map[string]any{
+		scriptedCall{method: "talk.session.create", response: gatewayclient.Frame{"ok": true, "payload": map[string]any{
 			"sessionId": "session-1",
 			"audio":     map[string]any{"inputEncoding": "pcm16", "inputSampleRateHz": 24000},
 		}}},
-		scriptedCall{method: "talk.session.appendAudio", response: Frame{"ok": true}},
-		scriptedCall{method: "talk.client.toolCall", response: Frame{"ok": true, "payload": map[string]any{"runId": "run-1"}}},
-		scriptedCall{method: "talk.session.submitToolResult", response: Frame{"ok": true}},
+		scriptedCall{method: "talk.session.appendAudio", response: gatewayclient.Frame{"ok": true}},
+		scriptedCall{method: "talk.client.toolCall", response: gatewayclient.Frame{"ok": true, "payload": map[string]any{"runId": "run-1"}}},
+		scriptedCall{method: "talk.session.submitToolResult", response: gatewayclient.Frame{"ok": true}},
 	)
 	gateway.events = append(gateway.events,
-		Frame{
+		gatewayclient.Frame{
 			"type": "event", "event": "talk.event",
 			"payload": map[string]any{"relaySessionId": "relay-1", "talkEvent": map[string]any{
 				"type": "tool.call", "sessionId": "session-1", "callId": "consult-1",
 				"payload": map[string]any{"name": "openclaw_agent_consult", "args": map[string]any{"question": "q"}},
 			}},
 		},
-		Frame{
+		gatewayclient.Frame{
 			"type": "event", "event": "chat",
 			"payload": map[string]any{"runId": "run-1", "state": "final", "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": "done"}}}},
 		},
-		Frame{
+		gatewayclient.Frame{
 			"type": "event", "event": "chat",
 			"payload": map[string]any{"runId": "run-1", "state": "error", "errorMessage": "late exec failed"},
 		},
 	)
-	runner, err := NewRealtimeRunner(gateway, RealtimeRunnerOptions{
-		Audio:          RealtimeAudio{Data: []byte{1, 2}, Rate: 24000, BytesPerSample: 2},
+	runner, err := New(gateway, Options{
+		Audio:          Audio{Data: []byte{1, 2}, Rate: 24000, BytesPerSample: 2},
 		ListenDuration: 5 * time.Millisecond,
 		QuietDuration:  time.Millisecond,
 	})
 	if err != nil {
-		t.Fatalf("NewRealtimeRunner returned error: %v", err)
+		t.Fatalf("New returned error: %v", err)
 	}
 
 	result, err := runner.Run(context.Background())
@@ -404,31 +406,31 @@ func TestRealtimeRunnerIgnoresLateAgentErrorAfterFinal(t *testing.T) {
 	}
 }
 
-func TestRealtimeRunnerSubmitsAgentConsultFailureAsToolResult(t *testing.T) {
-	gateway := newScriptedRealtimeGateway()
+func TestRunnerSubmitsAgentConsultFailureAsToolResult(t *testing.T) {
+	gateway := newScriptedGateway()
 	gateway.calls = append(gateway.calls,
-		scriptedCall{method: "talk.session.create", response: Frame{"ok": true, "payload": map[string]any{
+		scriptedCall{method: "talk.session.create", response: gatewayclient.Frame{"ok": true, "payload": map[string]any{
 			"sessionId": "session-1",
 			"audio":     map[string]any{"inputEncoding": "pcm16", "inputSampleRateHz": 24000},
 		}}},
-		scriptedCall{method: "talk.session.appendAudio", response: Frame{"ok": true}},
-		scriptedCall{method: "talk.client.toolCall", response: Frame{"ok": false, "error": map[string]any{"code": "bridge_failed"}}},
-		scriptedCall{method: "talk.session.submitToolResult", response: Frame{"ok": true}},
+		scriptedCall{method: "talk.session.appendAudio", response: gatewayclient.Frame{"ok": true}},
+		scriptedCall{method: "talk.client.toolCall", response: gatewayclient.Frame{"ok": false, "error": map[string]any{"code": "bridge_failed"}}},
+		scriptedCall{method: "talk.session.submitToolResult", response: gatewayclient.Frame{"ok": true}},
 	)
-	gateway.events = append(gateway.events, Frame{
+	gateway.events = append(gateway.events, gatewayclient.Frame{
 		"type": "event", "event": "talk.event",
 		"payload": map[string]any{"relaySessionId": "relay-1", "talkEvent": map[string]any{
 			"type": "tool.call", "sessionId": "session-1", "callId": "call-1",
 			"payload": map[string]any{"name": "openclaw_agent_consult", "args": map[string]any{"question": "q"}},
 		}},
 	})
-	runner, err := NewRealtimeRunner(gateway, RealtimeRunnerOptions{
-		Audio:          RealtimeAudio{Data: []byte{1, 2}, Rate: 24000, BytesPerSample: 2},
+	runner, err := New(gateway, Options{
+		Audio:          Audio{Data: []byte{1, 2}, Rate: 24000, BytesPerSample: 2},
 		ListenDuration: 5 * time.Millisecond,
 		QuietDuration:  time.Millisecond,
 	})
 	if err != nil {
-		t.Fatalf("NewRealtimeRunner returned error: %v", err)
+		t.Fatalf("New returned error: %v", err)
 	}
 
 	result, err := runner.Run(context.Background())
@@ -448,62 +450,9 @@ func TestRealtimeRunnerSubmitsAgentConsultFailureAsToolResult(t *testing.T) {
 	}
 }
 
-func TestRealtimeRunnerUsesInjectedToolHandlerBeforeSubmitting(t *testing.T) {
-	handler := &capturingRealtimeToolHandler{outcome: RealtimeToolCallResult{
-		ToolResult:           map[string]any{"ok": true},
-		AgentRunID:           "run-custom",
-		ProviderToolQuestion: "provider question",
-		AgentQuestionUsed:    "agent question",
-		AgentConsultOK:       true,
-	}}
-	gateway := newScriptedRealtimeGateway()
-	gateway.calls = append(gateway.calls,
-		scriptedCall{method: "talk.session.create", response: Frame{"ok": true, "payload": map[string]any{
-			"sessionId": "session-1",
-			"audio":     map[string]any{"inputEncoding": "pcm16", "inputSampleRateHz": 24000},
-		}}},
-		scriptedCall{method: "talk.session.appendAudio", response: Frame{"ok": true}},
-		scriptedCall{method: "talk.session.submitToolResult", response: Frame{"ok": true}},
-	)
-	gateway.events = append(gateway.events, Frame{
-		"type": "event", "event": "talk.event",
-		"payload": map[string]any{"talkEvent": map[string]any{
-			"type": "tool.call", "sessionId": "session-1", "callId": "call-1",
-			"payload": map[string]any{"name": "custom", "args": map[string]any{"question": "q"}},
-		}},
-	})
-	runner, err := NewRealtimeRunner(gateway, RealtimeRunnerOptions{
-		SessionKey:                "session-key",
-		ToolHandler:               handler,
-		Audio:                     RealtimeAudio{Data: []byte{1, 2}, Rate: 24000, BytesPerSample: 2},
-		ListenDuration:            5 * time.Millisecond,
-		QuietDuration:             time.Millisecond,
-		AgentWaitDuration:         2 * time.Millisecond,
-		AgentWaitFallbackDuration: time.Millisecond,
-	})
-	if err != nil {
-		t.Fatalf("NewRealtimeRunner returned error: %v", err)
-	}
-
-	result, err := runner.Run(context.Background())
-	if err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
-	if handler.calls != 1 || handler.request.SessionKey != "session-key" || handler.request.ToolCall.Name != "custom" {
-		t.Fatalf("handler calls=%d request=%#v", handler.calls, handler.request)
-	}
-	if result.AgentRunIDs[0] != "run-custom" || result.ProviderToolQuestion != "provider question" || result.AgentQuestionUsed != "agent question" || !result.AgentConsultOK {
-		t.Fatalf("result = %#v", result)
-	}
-	submit := gateway.requests[2]
-	if !reflect.DeepEqual(submit.params["result"], map[string]any{"ok": true}) {
-		t.Fatalf("submitted result = %#v", submit.params["result"])
-	}
-}
-
 type scriptedCall struct {
 	method   string
-	response Frame
+	response gatewayclient.Frame
 }
 
 type realtimeRequest struct {
@@ -511,24 +460,24 @@ type realtimeRequest struct {
 	params map[string]any
 }
 
-type scriptedRealtimeGateway struct {
-	connectPayload ConnectSummary
+type scriptedGateway struct {
+	connectPayload gatewayclient.ConnectSummary
 	calls          []scriptedCall
-	events         []Frame
+	events         []gatewayclient.Frame
 	requests       []realtimeRequest
 	closed         bool
 }
 
-func newScriptedRealtimeGateway() *scriptedRealtimeGateway {
-	return &scriptedRealtimeGateway{connectPayload: ConnectSummary{Role: "operator", Scopes: []string{"operator.read", "operator.write"}}}
+func newScriptedGateway() *scriptedGateway {
+	return &scriptedGateway{connectPayload: gatewayclient.ConnectSummary{Role: "operator", Scopes: []string{"operator.read", "operator.write"}}}
 }
 
 func TestRealtimeRequiresReadAndWriteScopesBeforeSessionCreation(t *testing.T) {
 	for _, scopes := range [][]string{{"operator.read"}, {"operator.write"}, nil} {
-		gateway := newScriptedRealtimeGateway()
+		gateway := newScriptedGateway()
 		gateway.connectPayload.Scopes = scopes
-		runner, err := NewRealtimeRunner(gateway, RealtimeRunnerOptions{
-			Audio: RealtimeAudio{Data: []byte{1, 2}, Rate: 24000, BytesPerSample: 2},
+		runner, err := New(gateway, Options{
+			Audio: Audio{Data: []byte{1, 2}, Rate: 24000, BytesPerSample: 2},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -542,11 +491,11 @@ func TestRealtimeRequiresReadAndWriteScopesBeforeSessionCreation(t *testing.T) {
 	}
 }
 
-func (gateway *scriptedRealtimeGateway) Connect(context.Context, ConnectOptions) (ConnectSummary, error) {
+func (gateway *scriptedGateway) Connect(context.Context, gatewayclient.ConnectOptions) (gatewayclient.ConnectSummary, error) {
 	return gateway.connectPayload, nil
 }
 
-func (gateway *scriptedRealtimeGateway) Call(_ context.Context, method string, params map[string]any) (Frame, error) {
+func (gateway *scriptedGateway) Call(_ context.Context, method string, params map[string]any) (gatewayclient.Frame, error) {
 	gateway.requests = append(gateway.requests, realtimeRequest{method: method, params: cloneMap(params)})
 	if len(gateway.calls) == 0 {
 		return nil, errors.New("unexpected call " + method)
@@ -559,7 +508,7 @@ func (gateway *scriptedRealtimeGateway) Call(_ context.Context, method string, p
 	return next.response, nil
 }
 
-func (gateway *scriptedRealtimeGateway) RecvEvent(ctx context.Context) (Frame, error) {
+func (gateway *scriptedGateway) RecvEvent(ctx context.Context) (gatewayclient.Frame, error) {
 	if len(gateway.events) == 0 {
 		<-ctx.Done()
 		return nil, ctx.Err()
@@ -569,7 +518,7 @@ func (gateway *scriptedRealtimeGateway) RecvEvent(ctx context.Context) (Frame, e
 	return next, nil
 }
 
-func (gateway *scriptedRealtimeGateway) Close() error {
+func (gateway *scriptedGateway) Close() error {
 	gateway.closed = true
 	return nil
 }
@@ -582,24 +531,11 @@ func cloneMap(source map[string]any) map[string]any {
 	return out
 }
 
-type capturingRealtimeToolHandler struct {
-	calls   int
-	request RealtimeToolCallRequest
-	outcome RealtimeToolCallResult
-	err     error
-}
-
-func (handler *capturingRealtimeToolHandler) HandleRealtimeToolCall(_ context.Context, request RealtimeToolCallRequest) (RealtimeToolCallResult, error) {
-	handler.calls++
-	handler.request = request
-	return handler.outcome, handler.err
-}
-
-func TestRealtimeRunnerSessionParams(t *testing.T) {
+func TestRunnerSessionParams(t *testing.T) {
 	vad := 0.7
 	silence := 900
 	padding := 120
-	runner, err := NewRealtimeRunner(newScriptedRealtimeGateway(), RealtimeRunnerOptions{
+	runner, err := New(newScriptedGateway(), Options{
 		SessionKey:            "session-key",
 		Provider:              "openai",
 		Model:                 "gpt-realtime",
@@ -608,10 +544,10 @@ func TestRealtimeRunnerSessionParams(t *testing.T) {
 		VADThreshold:          &vad,
 		SilenceDurationMillis: &silence,
 		PrefixPaddingMillis:   &padding,
-		Audio:                 RealtimeAudio{Data: []byte{1, 2}, Rate: 24000, BytesPerSample: 2},
+		Audio:                 Audio{Data: []byte{1, 2}, Rate: 24000, BytesPerSample: 2},
 	})
 	if err != nil {
-		t.Fatalf("NewRealtimeRunner returned error: %v", err)
+		t.Fatalf("New returned error: %v", err)
 	}
 	want := map[string]any{
 		"sessionKey":        "session-key",

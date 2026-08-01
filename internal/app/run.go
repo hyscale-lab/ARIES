@@ -161,7 +161,7 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 			returnErr = errors.Join(returnErr, stopErr)
 		}()
 		startupCtx, cancel := context.WithTimeout(ctx, cfg.Runtime.Config.StartupTimeout)
-		healthErr := waitForRuntimeHealthObserved(startupCtx, runtime, dependencies.PreflightSleep, func() {
+		healthErr := waitForRuntimeHealth(startupCtx, runtime, dependencies.PreflightSleep, func() {
 			runtimeEntry.WithFields(logrus.Fields{"runtime_state": "loading", "error_category": "retryable_health_failure"}).Info("model runtime lifecycle")
 		})
 		cancel()
