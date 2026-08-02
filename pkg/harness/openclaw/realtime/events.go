@@ -18,10 +18,7 @@ type talkEvent struct {
 	SessionID string
 	Payload   map[string]any
 	Wrapper   map[string]any
-	Raw       map[string]any
-	Final     bool
 	CallID    string
-	ItemID    string
 }
 
 type toolCallEvent struct {
@@ -86,8 +83,7 @@ func talkEventFromFrame(frame any) (talkEvent, bool) {
 		return talkEvent{}, false
 	}
 	callID, _ := raw["callId"].(string)
-	itemID, _ := raw["itemId"].(string)
-	return talkEvent{EventType: eventType, SessionID: sessionID, Payload: payload, Wrapper: wrapper, Raw: raw, Final: truthy(raw["final"]), CallID: callID, ItemID: itemID}, true
+	return talkEvent{EventType: eventType, SessionID: sessionID, Payload: payload, Wrapper: wrapper, CallID: callID}, true
 }
 
 func toolCallEventFromTalk(event talkEvent) (toolCallEvent, bool) {

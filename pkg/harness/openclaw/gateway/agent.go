@@ -104,7 +104,7 @@ func (client *Client) Agent(ctx context.Context, request AgentRequest) (AgentRes
 				return AgentResult{}, errors.New("gateway agent received an uncorrelated response")
 			}
 			if !response.Bool("ok") {
-				return AgentResult{}, agentProtocolError(response)
+				return AgentResult{}, ResponseError("agent", response)
 			}
 			payload := response.Map("payload")
 			runID, _ := payload["runId"].(string)
@@ -131,10 +131,6 @@ func (client *Client) Agent(ctx context.Context, request AgentRequest) (AgentRes
 			return AgentResult{}, fmt.Errorf("gateway agent %s was accepted but its outcome is unknown: %w", acceptedRunID, ctx.Err())
 		}
 	}
-}
-
-func agentProtocolError(response Frame) error {
-	return ResponseError("agent", response)
 }
 
 func boundedDiagnostic(value any) string {

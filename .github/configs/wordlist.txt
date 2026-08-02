@@ -21,6 +21,7 @@ gpu
 hostname
 html
 http
+idempotently
 integrations
 json
 jsonl
@@ -41,9 +42,12 @@ openclaw's
 openhands
 openssh
 orchestrator
+parsers
 pid
 pre
 preflight
+prewarm
+Realtime
 replayable
 roadmap
 runnable
@@ -67,6 +71,7 @@ toolbridge
 toolchain
 toolsandbox
 tp
+TTS
 tty
 utf
 uuid

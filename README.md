@@ -101,7 +101,15 @@ the discussion remains available to other users and contributors.
 
 ## Citation
 ```
-
+@misc{kondrashov2026rethinkingaicloudinfrastructure,
+      title={Rethinking AI Cloud Infrastructure for Agentic Serving Systems with the Aries Experimentation Framework}, 
+      author={Leonid Kondrashov and Hongrui Liu and JooYoung Park and Boxi Zhou and Zonghao Liu and Chengzhi Lu and Riccardo Mancini and Esha Choukse and Haris Javaid and German Sviridov and Tao Peng and Chen Zhao and Anastasia Avdeeva and Aleksei Gusev and Marios Kogias and Luo Mai and Dmitrii Ustiugov},
+      year={2026},
+      eprint={2607.29069},
+      archivePrefix={arXiv},
+      primaryClass={cs.DC},
+      url={https://arxiv.org/abs/2607.29069}, 
+}
 ```
 
 ## License

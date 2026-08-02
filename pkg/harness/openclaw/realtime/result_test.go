@@ -12,11 +12,8 @@ func TestNewResultHasStableArtifactShape(t *testing.T) {
 	result := newResult()
 	result.Transcript = "heard"
 	result.OutputText = "provider"
-	result.AgentOutputText = "agent"
 	result.ProviderToolQuestion = "question"
 	result.AgentQuestionUsed = "question with context"
-	result.AgentPromptTokens = 11
-	result.AgentCompletionTokens = 7
 	result.ToolCalls = 1
 	result.ToolResults = 1
 	result.AgentConsultOK = true
@@ -24,13 +21,10 @@ func TestNewResultHasStableArtifactShape(t *testing.T) {
 	result.TranscriptDoneParts = append(result.TranscriptDoneParts, "heard")
 	result.AgentRunIDs = append(result.AgentRunIDs, "run-1")
 	result.ConnectAuth["scopes"] = []any{"operator.write"}
-	result.Timings["listen_seconds"] = 2.5
 	result.IncrementEvent("transcript.done")
 	result.AppendError("diagnostic")
 	sessionID := "session-1"
 	result.SessionID = &sessionID
-	usage := "agent.final"
-	result.AgentUsageSource = &usage
 	result.Events = append(result.Events, gateway.Frame{"type": "event", "event": "talk.event"})
 
 	content, err := json.Marshal(result)
@@ -42,13 +36,12 @@ func TestNewResultHasStableArtifactShape(t *testing.T) {
 		t.Fatalf("decode realtime result: %v", err)
 	}
 	for _, key := range []string{
-		"schema_version", "transcript", "output_text", "agent_output_text",
+		"schema_version", "transcript", "output_text",
 		"original_prompt", "transcript_done", "transcript_done_parts",
-		"provider_tool_question", "agent_question_used", "error_type",
-		"agent_prompt_tokens", "agent_completion_tokens", "agent_usage_source",
+		"provider_tool_question", "agent_question_used",
 		"tool_calls", "tool_results", "agent_consult_ok", "output_audio_done",
 		"session_id", "relay_session_id", "agent_run_ids", "event_counts",
-		"connect_auth", "errors", "timings", "events",
+		"connect_auth", "errors", "events",
 	} {
 		if _, ok := decoded[key]; !ok {
 			t.Fatalf("missing key %q in %#v", key, decoded)
@@ -57,10 +50,10 @@ func TestNewResultHasStableArtifactShape(t *testing.T) {
 	if decoded["schema_version"] != float64(ResultSchemaVersion) {
 		t.Fatalf("schema_version = %v", decoded["schema_version"])
 	}
-	if decoded["session_id"] != sessionID || decoded["agent_usage_source"] != usage || decoded["relay_session_id"] != nil {
-		t.Fatalf("nullable fields = session:%#v usage:%#v relay:%#v", decoded["session_id"], decoded["agent_usage_source"], decoded["relay_session_id"])
+	if decoded["session_id"] != sessionID || decoded["relay_session_id"] != nil {
+		t.Fatalf("nullable fields = session:%#v relay:%#v", decoded["session_id"], decoded["relay_session_id"])
 	}
-	if got := result.FinalText(); got != "agent" {
+	if got := result.FinalText(); got != "provider" {
 		t.Fatalf("FinalText() = %q", got)
 	}
 }
@@ -96,9 +89,5 @@ func TestResultFinalTextFallback(t *testing.T) {
 	result.OutputText = "output"
 	if got := result.FinalText(); got != "output" {
 		t.Fatalf("FinalText output = %q", got)
-	}
-	result.AgentOutputText = "agent"
-	if got := result.FinalText(); got != "agent" {
-		t.Fatalf("FinalText agent = %q", got)
 	}
 }

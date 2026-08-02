@@ -7,8 +7,8 @@ USE CODEX NATIVE SUBAGENTS FOR INDEPENDENT PARALLEL SUBTASKS WHEN THAT IMPROVES 
 
 # ARIES Agent Contract
 
-ARIES is a small, readable Go benchmark runner. `.agent/DESIGN.md` and
-`docs/design.md` are the architecture source of truth; `.agent/TASKS.md` records
+ARIES is a small, readable Go benchmark runner. `.agents/DESIGN.md` and
+`docs/design.md` are the architecture source of truth; `.agents/TASKS.md` records
 completed work and active cleanup plans.
 
 ## Repository boundary
@@ -75,7 +75,7 @@ outcome remain separate.
 
 For each behavior-changing unit:
 
-1. Read `.agent/DESIGN.md`, `.agent/TASKS.md`, and `git status`.
+1. Read `.agents/DESIGN.md`, `.agents/TASKS.md`, and `git status`.
 2. Inspect the relevant implementation and current run evidence.
 3. Add a focused regression first when coverage is missing.
 4. Make the smallest behavior-preserving or evidence-driven change.

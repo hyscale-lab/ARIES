@@ -57,12 +57,12 @@ func ReadWAVFilePCM16Mono(path string) ([]byte, int, error) {
 		return nil, 0, err
 	}
 	defer file.Close()
-	return ReadWAVPCM16Mono(file)
+	return readWAVPCM16Mono(file)
 }
 
-// ReadWAVPCM16Mono reads a RIFF/WAVE stream and returns its raw little-endian
+// readWAVPCM16Mono reads a RIFF/WAVE stream and returns its raw little-endian
 // PCM16 mono data plus sample rate.
-func ReadWAVPCM16Mono(reader io.Reader) ([]byte, int, error) {
+func readWAVPCM16Mono(reader io.Reader) ([]byte, int, error) {
 	content, err := io.ReadAll(io.LimitReader(reader, MaxWAVBytes+1))
 	if err != nil {
 		return nil, 0, fmt.Errorf("read WAV: %w", err)
@@ -171,8 +171,8 @@ func SilencePCM16(rate, durationMS int) ([]byte, error) {
 	return make([]byte, int(samples)*pcm16BytesPerSample), nil
 }
 
-// ResamplePCM16 linearly resamples little-endian PCM16 audio.
-func ResamplePCM16(pcm []byte, srcRate, dstRate int) ([]byte, error) {
+// resamplePCM16 linearly resamples little-endian PCM16 audio.
+func resamplePCM16(pcm []byte, srcRate, dstRate int) ([]byte, error) {
 	if srcRate <= 0 || dstRate <= 0 || srcRate > MaxSampleRate || dstRate > MaxSampleRate {
 		return nil, errors.New("sample rates are outside the supported bound")
 	}
@@ -226,8 +226,8 @@ func ResamplePCM16(pcm []byte, srcRate, dstRate int) ([]byte, error) {
 	return output, nil
 }
 
-// PCM16ToG711ULaw encodes little-endian PCM16 samples as G.711 mu-law bytes.
-func PCM16ToG711ULaw(pcm []byte) ([]byte, error) {
+// pcm16ToG711ULaw encodes little-endian PCM16 samples as G.711 mu-law bytes.
+func pcm16ToG711ULaw(pcm []byte) ([]byte, error) {
 	if len(pcm)%pcm16BytesPerSample != 0 {
 		return nil, errors.New("PCM16 input has an odd byte length")
 	}
@@ -244,7 +244,7 @@ func PCM16ToG711ULaw(pcm []byte) ([]byte, error) {
 
 // PrepareAudio resamples PCM16 input and encodes it for the OpenClaw Gateway.
 func PrepareAudio(pcm []byte, srcRate int, encoding string, targetRate int) (PreparedAudio, error) {
-	resampled, err := ResamplePCM16(pcm, srcRate, targetRate)
+	resampled, err := resamplePCM16(pcm, srcRate, targetRate)
 	if err != nil {
 		return PreparedAudio{}, err
 	}
@@ -252,7 +252,7 @@ func PrepareAudio(pcm []byte, srcRate int, encoding string, targetRate int) (Pre
 	case audioEncodingPCM16:
 		return PreparedAudio{Data: resampled, Rate: targetRate, BytesPerSample: pcm16BytesPerSample, Encoding: audioEncodingPCM16}, nil
 	case audioEncodingG711ULaw:
-		encoded, err := PCM16ToG711ULaw(resampled)
+		encoded, err := pcm16ToG711ULaw(resampled)
 		if err != nil {
 			return PreparedAudio{}, err
 		}

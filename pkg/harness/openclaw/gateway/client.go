@@ -2,10 +2,6 @@ package gateway
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,7 +21,7 @@ const (
 	defaultEventQueueBytes   = 16 << 20
 )
 
-var DefaultScopes = []string{"operator.write"}
+var defaultScopes = []string{"operator.write"}
 
 // Transport is the narrow websocket-like surface used by the Gateway client.
 type Transport interface {
@@ -43,19 +39,11 @@ const (
 	EventDispositionResponseOnly
 )
 
-type DeviceIdentity struct {
-	ID        string
-	PublicKey string
-	private   ed25519.PrivateKey
-}
-
 type Client struct {
 	dial             DialFunc
 	role             string
 	scopes           []string
 	token            string
-	device           *DeviceIdentity
-	deviceTk         string
 	eventDisposition EventDisposition
 
 	mu             sync.Mutex
@@ -79,8 +67,6 @@ type Options struct {
 	Role             string
 	Scopes           []string
 	Token            string
-	Device           *DeviceIdentity
-	DeviceToken      string
 	EventQueueSize   int
 	EventQueueBytes  int
 	EventDisposition EventDisposition
@@ -129,7 +115,7 @@ func New(dial DialFunc, options Options) (*Client, error) {
 	}
 	scopes := append([]string(nil), options.Scopes...)
 	if len(scopes) == 0 {
-		scopes = append([]string(nil), DefaultScopes...)
+		scopes = append([]string(nil), defaultScopes...)
 	}
 	size := options.EventQueueSize
 	if size <= 0 {
@@ -144,22 +130,9 @@ func New(dial DialFunc, options Options) (*Client, error) {
 	}
 	return &Client{
 		dial: dial, role: role, scopes: scopes, token: options.Token,
-		device: options.Device, deviceTk: options.DeviceToken, eventDisposition: options.EventDisposition,
-		pending: make(map[string]chan responseDelivery), eventCh: make(chan eventDelivery, size), eventByteMax: queueBytes,
+		eventDisposition: options.EventDisposition,
+		pending:          make(map[string]chan responseDelivery), eventCh: make(chan eventDelivery, size), eventByteMax: queueBytes,
 		readerFailed: make(chan struct{}),
-	}, nil
-}
-
-func GenerateDeviceIdentity() (*DeviceIdentity, error) {
-	public, private, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return nil, fmt.Errorf("generate gateway device identity: %w", err)
-	}
-	sum := sha256.Sum256(public)
-	return &DeviceIdentity{
-		ID:        fmt.Sprintf("%x", sum[:]),
-		PublicKey: base64.RawURLEncoding.EncodeToString(public),
-		private:   private,
 	}, nil
 }
 
@@ -242,31 +215,12 @@ func (client *Client) finishConnect(ctx context.Context, challenge Frame) (Conne
 	if nonce == "" {
 		return ConnectSummary{}, errors.New("connect.challenge missing nonce")
 	}
-	authToken := client.token
-	auth := map[string]any{"token": client.token}
-	if client.deviceTk != "" {
-		authToken = client.deviceTk
-		auth = map[string]any{"deviceToken": client.deviceTk}
-	}
 	params := map[string]any{
 		"minProtocol": 3, "maxProtocol": 4,
 		"client": map[string]any{"id": "gateway-client", "version": "0.1", "platform": "go", "mode": "backend"},
 		"role":   client.role, "scopes": append([]string(nil), client.scopes...),
 		"caps": []any{}, "commands": []any{}, "permissions": map[string]any{},
-		"auth": auth, "locale": "en-US", "userAgent": "gateway-client/aries/0.1",
-	}
-	if client.device != nil {
-		signedAt := time.Now().UnixMilli()
-		message := strings.Join([]string{
-			"v3", client.device.ID, "gateway-client", "backend", client.role,
-			strings.Join(client.scopes, ","), fmt.Sprint(signedAt), authToken, nonce, "go", "",
-		}, "|")
-		signature := ed25519.Sign(client.device.private, []byte(message))
-		params["device"] = map[string]any{
-			"id": client.device.ID, "publicKey": client.device.PublicKey,
-			"signature": base64.RawURLEncoding.EncodeToString(signature),
-			"signedAt":  signedAt, "nonce": nonce,
-		}
+		"auth": map[string]any{"token": client.token}, "locale": "en-US", "userAgent": "gateway-client/aries/0.1",
 	}
 	response, err := client.Call(ctx, "connect", params)
 	if err != nil {

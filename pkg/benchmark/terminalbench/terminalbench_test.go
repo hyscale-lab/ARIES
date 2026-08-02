@@ -974,12 +974,11 @@ func TestInstallCheckoutConcurrentSameRevisionConverges(t *testing.T) {
 	var ready sync.WaitGroup
 	ready.Add(len(temporary))
 	for _, candidate := range temporary {
-		candidate := candidate
-		go func() {
+		go func(candidate string) {
 			ready.Done()
 			<-start
 			errs <- installCheckout(context.Background(), candidate, root, revision)
-		}()
+		}(candidate)
 	}
 	ready.Wait()
 	close(start)

@@ -486,7 +486,6 @@ func TestRealtimeResultAndErrorsRedactEverySessionSecret(t *testing.T) {
 		SchemaVersion:  realtimeclient.ResultSchemaVersion,
 		OriginalPrompt: strings.Join(secrets, " "), OutputText: secrets[0], Errors: append([]string(nil), secrets...),
 		ConnectAuth: map[string]any{"token": secrets[2]},
-		Timings:     map[string]any{secrets[0]: secrets[1]},
 		Events:      []gatewayclient.Frame{{"type": "event", "payload": map[string]any{"authorization": secrets[2], "tts": secrets[1], "model": secrets[0]}}},
 	}
 	redacted := redactRealtimeResult(result, active)
@@ -695,7 +694,7 @@ func TestHarnessUsesOneSDKContainerAndDirectPrivateArchive(t *testing.T) {
 	if fake.created.Name != "aries-openclaw-attempt" || len(fake.created.Config.Cmd) == 0 || len(fake.created.HostConfig.Mounts) != 0 || len(fake.created.HostConfig.Binds) != 0 {
 		t.Fatalf("container create = %#v", fake.created)
 	}
-	if !equalStrings(fake.created.Config.Cmd, append([]string{launcherPath}, gatewayLauncherCommand...)) {
+	if !equalStrings(fake.created.Config.Cmd, []string{launcherPath, gatewayLauncherPath}) {
 		t.Fatalf("agent gateway command = %#v", fake.created.Config.Cmd)
 	}
 	bindings := fake.created.HostConfig.PortBindings[gatewayPort]
@@ -866,11 +865,9 @@ func TestRealtimeModePublishesGatewayAndRunsRunner(t *testing.T) {
 			SchemaVersion:       realtimeclient.ResultSchemaVersion,
 			Transcript:          "heard",
 			OutputText:          "spoken",
-			AgentOutputText:     "final answer",
 			EventCounts:         map[string]int{"chat.final": 1},
 			ConnectAuth:         map[string]any{},
 			Errors:              []string{},
-			Timings:             map[string]any{},
 			AgentRunIDs:         []string{},
 			TranscriptDoneParts: []string{},
 		}}, nil
@@ -879,7 +876,7 @@ func TestRealtimeModePublishesGatewayAndRunsRunner(t *testing.T) {
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
-	if !equalStrings(fake.created.Config.Cmd, append([]string{launcherPath}, gatewayLauncherCommand...)) {
+	if !equalStrings(fake.created.Config.Cmd, []string{launcherPath, gatewayLauncherPath}) {
 		t.Fatalf("gateway command = %#v", fake.created.Config.Cmd)
 	}
 	if _, ok := fake.created.Config.ExposedPorts[gatewayPort]; !ok {
@@ -893,7 +890,7 @@ func TestRealtimeModePublishesGatewayAndRunsRunner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
-	if result.Status != core.StatusSucceeded || result.FinalResponse != "final answer" {
+	if result.Status != core.StatusSucceeded || result.FinalResponse != "spoken" {
 		t.Fatalf("result = %#v", result)
 	}
 	if gatewayURL != "ws://127.0.0.1:38089" || len(gatewayToken) == 0 {
@@ -937,7 +934,7 @@ func TestRealtimeModePublishesGatewayAndRunsRunner(t *testing.T) {
 	}
 	path := filepath.Join(manager.outputDir, "fix-git", "harness", "realtime-result.json")
 	content, err := os.ReadFile(path)
-	if err != nil || !bytes.Contains(content, []byte(`"agent_output_text": "final answer"`)) {
+	if err != nil || !bytes.Contains(content, []byte(`"output_text": "spoken"`)) {
 		t.Fatalf("realtime result artifact = %s, %v", content, err)
 	}
 	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {

@@ -46,7 +46,7 @@ const (
 	gracefulStopSeconds   = 5
 	execTrailerKeep       = 256
 	gatewayListenPort     = "18789"
-	gatewayPortSpec       = gatewayListenPort + "/tcp"
+	gatewayLauncherPath   = "/run/aries/gateway-launcher"
 	upstreamGatewayPort   = "18790"
 )
 
@@ -57,9 +57,7 @@ status=$?
 printf '\036ARIES_OPENCLAW_EXIT_%s=%s\037' "$token" "$status" >&2
 exit "$status"`
 
-var gatewayPort = network.MustParsePort(gatewayPortSpec)
-
-var gatewayLauncherCommand = []string{"/run/aries/gateway-launcher"}
+var gatewayPort = network.MustParsePort(gatewayListenPort + "/tcp")
 
 const (
 	ModeAgent    = "agent"
@@ -340,11 +338,10 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		clear(realtimeAPIKey)
 		return errors.New("rendered OpenClaw config contains the realtime API-key value")
 	}
-	command := manager.gatewayCommand()
 	containerConfig := &container.Config{
 		Image: manager.image,
 		Env:   []string{"OPENCLAW_CONFIG_PATH=" + configContainerPath},
-		Cmd:   append([]string{launcherPath}, command...),
+		Cmd:   []string{launcherPath, gatewayLauncherPath},
 		Labels: map[string]string{
 			"aries.managed": "true", "aries.kind": "openclaw-harness",
 			"aries.component": "harness",
@@ -621,14 +618,6 @@ func newSpeechClient(options audioinput.SpeechClientOptions) (speechSynthesizer,
 
 func disablesThinking(model core.ModelConfig) bool {
 	return model.BaseURL == "https://api.deepseek.com" && (model.Model == "deepseek-v4-flash" || model.Model == "deepseek-v4-pro")
-}
-
-func (manager *Manager) gatewayCommand() []string {
-	return append([]string(nil), gatewayLauncherCommand...)
-}
-
-func (manager *Manager) readyPort() string {
-	return upstreamGatewayPort
 }
 
 func (manager *Manager) gatewayURL(ctx context.Context, active *session) (string, error) {
@@ -1058,7 +1047,7 @@ func (manager *Manager) waitReady(ctx context.Context, active *session) error {
 	defer ticker.Stop()
 	for {
 		probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		result, err := manager.execAttached(probeCtx, active.containerID, []string{"node", "-e", probe, manager.readyPort()}, "/app")
+		result, err := manager.execAttached(probeCtx, active.containerID, []string{"node", "-e", probe, upstreamGatewayPort}, "/app")
 		cancel()
 		if err == nil && result.exitCode == 0 {
 			return nil
@@ -1088,7 +1077,7 @@ func (manager *Manager) validateContainer(ctx context.Context, active *session) 
 		return errors.New("OpenClaw container inspection is incomplete")
 	}
 	configuration := containerInfo.Config
-	if configuration.Image != manager.image || !equalStrings(configuration.Cmd, append([]string{launcherPath}, manager.gatewayCommand()...)) {
+	if configuration.Image != manager.image || !equalStrings(configuration.Cmd, []string{launcherPath, gatewayLauncherPath}) {
 		return errors.New("OpenClaw image or gateway command differs from the pinned direct configuration")
 	}
 	if configuration.Labels["aries.managed"] != "true" || configuration.Labels["aries.kind"] != "openclaw-harness" || configuration.Labels["aries.component"] != "harness" ||

@@ -17,17 +17,11 @@ func (client *Client) queuedEventUsage() (int, int) {
 	return client.eventCount, client.eventBytes
 }
 
-func TestClientConnectSignsChallengeAndReturnsPayload(t *testing.T) {
-	identity, err := GenerateDeviceIdentity()
-	if err != nil {
-		t.Fatalf("GenerateDeviceIdentity returned error: %v", err)
-	}
+func TestClientConnectUsesTokenAndReturnsSanitizedSummary(t *testing.T) {
 	transport := newFakeTransport(
 		Frame{"type": "event", "event": "connect.challenge", "payload": map[string]any{"nonce": "n-1"}},
 	)
-	client, err := New(func(context.Context) (Transport, error) { return transport, nil }, Options{
-		Token: "gateway-token", Device: identity, Scopes: []string{"operator.write", "operator.read"},
-	})
+	client, err := New(func(context.Context) (Transport, error) { return transport, nil }, Options{Token: "gateway-token", Scopes: []string{"operator.write", "operator.read"}})
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}
@@ -39,11 +33,13 @@ func TestClientConnectSignsChallengeAndReturnsPayload(t *testing.T) {
 			t.Errorf("method = %v, want connect", sent["method"])
 		}
 		params := sent["params"].(map[string]any)
-		device := params["device"].(map[string]any)
-		if device["id"] != identity.ID || device["publicKey"] != identity.PublicKey || device["signature"] == "" {
-			t.Errorf("device params = %#v", device)
+		if auth := params["auth"].(map[string]any); auth["token"] != "gateway-token" {
+			t.Errorf("auth params = %#v", auth)
 		}
-		transport.deliver(Frame{"type": "res", "id": sent["id"], "ok": true, "payload": map[string]any{"auth": map[string]any{"scopes": []any{"operator.write"}, "deviceToken": "dt"}}})
+		if _, ok := params["device"]; ok {
+			t.Errorf("unsupported device auth was sent: %#v", params["device"])
+		}
+		transport.deliver(Frame{"type": "res", "id": sent["id"], "ok": true, "payload": map[string]any{"auth": map[string]any{"scopes": []any{"operator.write"}, "private": "never-retain"}}})
 		close(done)
 	}()
 
@@ -53,8 +49,8 @@ func TestClientConnectSignsChallengeAndReturnsPayload(t *testing.T) {
 	}
 	<-done
 	content, _ := json.Marshal(payload)
-	if strings.Contains(string(content), "dt") {
-		t.Fatalf("connect summary leaked device token: %s", content)
+	if strings.Contains(string(content), "never-retain") {
+		t.Fatalf("connect summary leaked private auth material: %s", content)
 	}
 	scopes := payload.Scopes
 	if len(scopes) != 1 || scopes[0] != "operator.write" {

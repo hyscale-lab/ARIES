@@ -127,8 +127,7 @@ The preferred source for `./bin/aries` is the ignored repository-root file
 `DEEPSEEK_API.key`:
 
 ```sh
-install -m 600 /dev/null DEEPSEEK_API.key
-${EDITOR:-vi} DEEPSEEK_API.key
+echo 'api_key' > DEEPSEEK_API.key
 chmod 600 DEEPSEEK_API.key
 ```
 

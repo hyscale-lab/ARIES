@@ -11,7 +11,7 @@ func TestReadWAVPCM16MonoAcceptsChunkedPCM(t *testing.T) {
 	pcm := []byte{0x01, 0x00, 0x02, 0x00, 0xff, 0x7f, 0x00, 0x80}
 	wav := testWAV(t, 24000, 1, 16, 1, pcm, true)
 
-	got, rate, err := ReadWAVPCM16Mono(bytes.NewReader(wav))
+	got, rate, err := readWAVPCM16Mono(bytes.NewReader(wav))
 	if err != nil {
 		t.Fatalf("ReadWAVPCM16Mono returned error: %v", err)
 	}
@@ -27,7 +27,7 @@ func TestReadWAVPCM16MonoAcceptsUnknownStreamingSizes(t *testing.T) {
 	pcm := []byte{0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04, 0x00}
 	wav := testWAVWithUnknownSizes(t, 24000, pcm)
 
-	got, rate, err := ReadWAVPCM16Mono(bytes.NewReader(wav))
+	got, rate, err := readWAVPCM16Mono(bytes.NewReader(wav))
 	if err != nil {
 		t.Fatalf("ReadWAVPCM16Mono returned error: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestReadWAVPCM16MonoRejectsUnsupportedFormats(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, _, err := ReadWAVPCM16Mono(bytes.NewReader(test.wav))
+			_, _, err := readWAVPCM16Mono(bytes.NewReader(test.wav))
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %v, want containing %q", err, test.want)
 			}
@@ -74,7 +74,7 @@ func TestSilencePCM16(t *testing.T) {
 
 func TestResamplePCM16PreservesEndpointsAndRejectsInvalidInput(t *testing.T) {
 	input := pcm16Bytes(-32768, -16384, 0, 16384, 32767)
-	got, err := ResamplePCM16(input, 5, 3)
+	got, err := resamplePCM16(input, 5, 3)
 	if err != nil {
 		t.Fatalf("ResamplePCM16 returned error: %v", err)
 	}
@@ -83,13 +83,13 @@ func TestResamplePCM16PreservesEndpointsAndRejectsInvalidInput(t *testing.T) {
 		t.Fatalf("resampled = %v, want %v", decodePCM16(t, got), decodePCM16(t, want))
 	}
 
-	if _, err := ResamplePCM16([]byte{1}, 24000, 16000); err == nil || !strings.Contains(err.Error(), "odd") {
+	if _, err := resamplePCM16([]byte{1}, 24000, 16000); err == nil || !strings.Contains(err.Error(), "odd") {
 		t.Fatalf("odd input error = %v, want odd length rejection", err)
 	}
 }
 
 func TestPCM16ToG711ULawKnownPoints(t *testing.T) {
-	got, err := PCM16ToG711ULaw(pcm16Bytes(-32768, 0, 32767))
+	got, err := pcm16ToG711ULaw(pcm16Bytes(-32768, 0, 32767))
 	if err != nil {
 		t.Fatalf("PCM16ToG711ULaw returned error: %v", err)
 	}
@@ -113,19 +113,19 @@ func TestPrepareAudioResamplesAndEncodes(t *testing.T) {
 }
 
 func TestAudioBoundsRejectHugeRatesOutputsAndSilence(t *testing.T) {
-	if _, err := ResamplePCM16(pcm16Bytes(1), MaxSampleRate+1, 24000); err == nil || !strings.Contains(err.Error(), "bound") {
+	if _, err := resamplePCM16(pcm16Bytes(1), MaxSampleRate+1, 24000); err == nil || !strings.Contains(err.Error(), "bound") {
 		t.Fatalf("huge source rate error = %v", err)
 	}
 	// A small input can still imply an enormous output when metadata claims a
 	// one-hertz source. Reject it before allocating the derived output buffer.
-	if _, err := ResamplePCM16(make([]byte, 200), 1, MaxSampleRate); err == nil || !strings.Contains(err.Error(), "output exceeds") {
+	if _, err := resamplePCM16(make([]byte, 200), 1, MaxSampleRate); err == nil || !strings.Contains(err.Error(), "output exceeds") {
 		t.Fatalf("huge resample output error = %v", err)
 	}
 	if _, err := SilencePCM16(MaxSampleRate, MaxSilenceDurationMillis+1); err == nil || !strings.Contains(err.Error(), "duration") {
 		t.Fatalf("huge silence error = %v", err)
 	}
 	wav := testWAV(t, MaxSampleRate+1, 1, 16, 1, []byte{0, 0}, false)
-	if _, _, err := ReadWAVPCM16Mono(bytes.NewReader(wav)); err == nil || !strings.Contains(err.Error(), "sample rate") {
+	if _, _, err := readWAVPCM16Mono(bytes.NewReader(wav)); err == nil || !strings.Contains(err.Error(), "sample rate") {
 		t.Fatalf("huge WAV rate error = %v", err)
 	}
 }

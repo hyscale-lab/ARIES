@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -162,8 +161,8 @@ func TestAgentRejectsProtocolSequenceAndResultViolations(t *testing.T) {
 	}
 }
 
-func TestAgentProtocolErrorRetainsOnlyBoundedCodeAndMessage(t *testing.T) {
-	err := agentProtocolError(Frame{"error": map[string]any{
+func TestAgentResponseErrorRetainsOnlyBoundedCodeAndMessage(t *testing.T) {
+	err := ResponseError("agent", Frame{"error": map[string]any{
 		"code": "INVALID_REQUEST", "message": "invalid agent params: missing timeout\n",
 		"details": map[string]any{"gatewayToken": "never-retain", "params": map[string]any{"message": "private instruction"}},
 	}})
@@ -280,13 +279,6 @@ func TestAgentSendFailureIsAmbiguous(t *testing.T) {
 	client := connectedAgentClient(t, transport, "operator.write")
 	if _, err := client.Agent(context.Background(), validAgentRequest()); err == nil || !strings.Contains(err.Error(), "ambiguous") {
 		t.Fatalf("Agent error = %v", err)
-	}
-}
-
-func TestAgentRequestSerializesWithoutSecretsOrRetries(t *testing.T) {
-	content, err := json.Marshal(validAgentRequest())
-	if err != nil || strings.Contains(string(content), "token") {
-		t.Fatalf("request snapshot = %s, %v", content, err)
 	}
 }
 
