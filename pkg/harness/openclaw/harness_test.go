@@ -655,6 +655,9 @@ func endpointFiles(t *testing.T) core.ToolEndpoint {
 		if err := os.WriteFile(path, []byte(content), mode); err != nil {
 			t.Fatal(err)
 		}
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
 		return path
 	}
 	return core.ToolEndpoint{

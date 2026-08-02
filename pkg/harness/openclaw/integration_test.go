@@ -404,6 +404,9 @@ func TestPinnedGatewayRealtimeProtocolSmoke(t *testing.T) {
 		if err := os.WriteFile(path, []byte(content), mode); err != nil {
 			t.Fatal(err)
 		}
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
 		return path
 	}
 	clientContent, err := os.ReadFile(requiredIntegrationFile(t, "ARIES_SSH_CLIENT"))
