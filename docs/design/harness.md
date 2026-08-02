@@ -33,6 +33,16 @@ disconnect, timeout, or protocol mismatch is never retried. Realtime requires
 read and write scopes, while text requires write scope. Only sanitized role and
 sorted scope metadata may leave the authentication boundary.
 
+Realtime converts the task instruction to staged audio, owns one talk session,
+and may invoke nested agent runs through the same authenticated client. Its
+audio, transcript, result, and optional event records remain private harness
+artifacts. The separate realtime/TTS credential is staged privately for voice
+mode and is not part of model configuration, Gateway authentication, or
+structured results.
+Both modes remain concrete behavior of the single `AgentHarness` role; realtime
+does not create a fifth Runner role or take ownership from the benchmark,
+sandbox, or bridge.
+
 ## Customization & Contribution Guide
 
 Add a harness only when it can implement the existing `AgentHarness` lifecycle

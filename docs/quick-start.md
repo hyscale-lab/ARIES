@@ -289,15 +289,35 @@ and checks an owned managed runtime when configured, performs a bounded model
 preflight, and runs each task in profile order. For each task it stops OpenClaw,
 revokes SSH access, and only then evaluates the same still-running sandbox.
 
+### Realtime OpenClaw mode
+
+OpenClaw uses text-agent mode when `harness.mode` is omitted. Set
+`harness.mode: "realtime"` to deliver the same task instruction through a
+realtime voice session. The checked-in realtime profile does this already.
+Keep the configured DeepSeek key file from the text setup and provide the
+separate TTS credential named by the realtime profile through a secret manager
+or interactive shell, then verify it is nonempty:
+
+```sh
+export OPENAI_API_KEY
+test -n "${OPENAI_API_KEY:-}"
+./bin/aries profiles/openclaw-tb2-fix-git-realtime-deepseek.json
+```
+
+This run can incur charges from both the configured model provider and the TTS
+provider. The realtime profile keeps model and TTS credentials separate;
+neither belongs in profile JSON.
+
 ## 5. Check the result
 
 For the one-task profile:
 
 ```sh
 run_dir="$(ls -1dt runs/*-openclaw-tb2-fix-git-deepseek | head -1)"
-task_dir="$(find "$run_dir" -mindepth 1 -maxdepth 1 -type d -name 'fix-git*' | head -1)"
 cat "$run_dir/live-validation.json"
 cat "$run_dir/run-result.json"
+task_id="$(jq -er '.tasks[0].task_id' "$run_dir/run-result.json")"
+task_dir="$run_dir/$task_id"
 cat "$task_dir/evaluation/reward.txt"
 cat "$task_dir/bridge/tool-calls.jsonl"
 cat "$task_dir/bridge/ssh_raw.log"
@@ -310,9 +330,10 @@ when applicable:
 
 ```sh
 run_dir="$(ls -1dt runs/*-openclaw-tb2-fix-git-sglang | head -1)"
-task_dir="$(find "$run_dir" -mindepth 1 -maxdepth 1 -type d -name 'fix-git*' | head -1)"
 cat "$run_dir/live-validation.json"
 cat "$run_dir/run-result.json"
+task_id="$(jq -er '.tasks[0].task_id' "$run_dir/run-result.json")"
+task_dir="$run_dir/$task_id"
 cat "$run_dir/aries.log"
 jq 'select(.component == "gpu")' "$task_dir/monitor/resources.jsonl"
 cat "$task_dir/monitor/index.json"
@@ -360,6 +381,11 @@ SSH tool inputs, Docker sandbox logs, one-second CPU and memory samples,
 verifier stdout/stderr, and CTRF output. `aries.log` is the structured Logrus
 run log.
 
+Text mode writes `harness/agent-result.json`. Realtime mode instead writes the
+private `harness/voice-instruction.txt`, `harness/voice-instruction.wav`, its
+metadata, and `harness/realtime-result.json`. These mode-specific harness and
+bridge artifacts may contain task or model content; review them before sharing.
+
 ## Troubleshooting
 
 - **Docker permission or socket error:** run `docker info`; ARIES uses the local
@@ -370,6 +396,13 @@ run log.
   world permissions, and one-line formatting of `DEEPSEEK_API.key`.
 - **Model error:** inspect `live-validation.json` for authentication, rate
   limit, connectivity, or missing-model categories.
+- **Realtime TTS error:** confirm `OPENAI_API_KEY` is set and that the provider,
+  model, and voice in `harness.realtime.tts` are available to that account.
+- **Gateway or realtime session error:** inspect the task's
+  `harness/gateway.log`, `harness/realtime-result.json`, and
+  `harness/telemetry.index.json`, then correlate the harness status in the run's
+  `run-result.json`. Keep these private artifacts out of issue reports unless
+  their task and model content has been reviewed.
 - **SGLang configuration error:** confirm that the YAML uses only the supported
   fields and that its served model and port match the profile.
 - **SGLang readiness error:** inspect `sglang/stderr.log`, confirm that
