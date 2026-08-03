@@ -41,7 +41,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Lint commits
-        uses: dafnik/commitlint@v1
+        uses: dafnik/commitlint@v1.3.0
 
   markdown-link-check:
     name: Markdown links
