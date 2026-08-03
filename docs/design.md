@@ -9,39 +9,18 @@ concurrently; every occurrence still receives its own components and sandbox.
 ## System overview
 
 ```mermaid
-flowchart TB
-    C[Command and scheduler]
-    M[Model API or runtime]
-    O[Recorder]
-
-    subgraph E[Per-task Runner]
-        direction LR
-        R[Runner]
-        B[Benchmark]
-        H[Agent Harness]
-        T[Tool Bridge]
-        S[Tool Sandbox]
-
-        R -. controls .-> B
-        R -. controls .-> H
-        R -. controls .-> T
-        R -. controls .-> S
-
-        B ==>|task request| H
-        H ==>|tool request| T
-        T ==>|sandbox I/O| S
-    end
-
-    C -. configures and starts .-> R
-    C -. manages local mode .-> M
-    C -. owns .-> O
-
-    R ==>|lifecycle and results| O
-    H ==>|LLM API calls| M
-    S ==>|container metrics| O
-    M ==>|managed runtime and GPU metrics| O
-    
+flowchart LR
+    B[Benchmark task] --> R[ARIES Runner]
+    R --> H[Agent harness]
+    H --> M[LLM backend]
+    H --> T[Tool bridge]
+    T --> S[Tool sandbox]
+    R --> E[Independent evaluation]
+    H --> O[Run artifacts and telemetry]
+    S --> O
+    M --> O
 ```
+
 
 Dashed arrows are control and management paths. Solid arrows are logical data
 paths; the Runner remains the caller and orchestrator. The ordered safety gates
@@ -101,6 +80,43 @@ artifacts. Replayable bridge input, child logs, rendered harness configuration,
 and benchmark evaluation evidence are private run artifacts and should be
 reviewed before sharing. Model credential values are not stored in profiles,
 structured logs, Docker metadata, or results.
+
+## Detailed Design
+```mermaid
+flowchart TB
+    C[Command and scheduler]
+    M[Model API or runtime]
+    O[Recorder]
+
+    subgraph E[Per-task Runner]
+        direction LR
+        R[Runner]
+        B[Benchmark]
+        H[Agent Harness]
+        T[Tool Bridge]
+        S[Tool Sandbox]
+
+        R -. controls .-> B
+        R -. controls .-> H
+        R -. controls .-> T
+        R -. controls .-> S
+
+        B ==>|task request| H
+        H ==>|tool request| T
+        T ==>|sandbox I/O| S
+    end
+
+    C -. configures and starts .-> R
+    C -. manages local mode .-> M
+    C -. owns .-> O
+
+    R ==>|lifecycle and results| O
+    H ==>|LLM API calls| M
+    S ==>|container metrics| O
+    M ==>|managed runtime and GPU metrics| O
+    
+```
+
 
 ## Guides
 

@@ -1,124 +1,168 @@
-# ARIES
+# ARIES: Agent Runtime & Infrastructure Experimentation System
 
-ARIES is a small, readable Go runner for reproducible agent benchmarks. It
-executes tasks concurrently while keeping the agent harness, task sandbox, tool
-access, and independent evaluation under separate ownership.
+ARIES is an open-source experimentation framework for agent serving systems.
+It lets systems researchers run reproducible agent benchmarks while observing
+the full task trajectory: repeated model calls, harness decisions, stateful tool
+execution, task outcome, and available resource telemetry.
 
-The current end-to-end path combines OpenClaw, Terminal-Bench 2, Docker, an
-OpenClaw SSH bridge, and either DeepSeek or SGLang model serving.
+Agent workloads are not isolated LLM requests. An agent repeatedly observes its
+state, invokes a model, executes tools in a sandbox, and incorporates the
+results into the next step. ARIES treats that ordered, end-to-end trajectory as
+the unit of experimentation, so researchers can relate task progress and
+correctness to behavior across the agent-serving stack.
 
-## Key Features & Capabilities
+## Mission
 
-- **Controlled concurrency.** Profiles select ordered task occurrences and a
-  concurrency bound. Every admitted occurrence receives fresh components and
-  completes evaluation and cleanup.
-- **Fail-closed isolation.** The harness is stopped and tool access is
-  positively revoked before private verifier material is introduced. The live
-  sandbox is evaluated independently and then removed.
-- **Modular runtimes and components.** A Runner composes four small roles:
-  `Benchmark`, `AgentHarness`, `ToolSandbox`, and `ToolBridge`. Implementations
-  are selected through explicit constructors and command switches.
-- **Flexible model serving.** Model services sit outside the four Runner roles.
-  ARIES supports external endpoints and an ARIES-managed SGLang process for the
-  duration of a run.
-- **Private, replayable evidence.** Structured results and component artifacts
-  preserve run evidence while keeping credentials out of profiles, structured
-  logs, Docker metadata, and results.
+ARIES aims to help researchers innovate across the software and systems stack
+that serves AI agents. Conventional model-serving measurements—such as token
+throughput or per-request latency—do not explain delays, resource pressure, or
+failures that occur in agent harnesses and tool sandboxes. ARIES bridges that
+measurement gap by keeping task semantics independent from the execution stack,
+making stateful tool execution consistently observable, and preserving evidence
+needed to reconstruct a run.
 
-## Supported Implementations
+The framework supports controlled comparisons across agent harnesses, model
+backends, and sandbox substrates without changing the benchmark task being
+evaluated. It is designed for experiments that connect task success with
+end-to-end latency, resource use, and execution behavior—not only model-call
+metrics.
 
-ARIES currently supports:
+## Why ARIES
+
+ARIES is built around three needs of agent-serving research:
+
+- **Preserve task semantics across configurations.** Benchmark tasks and their
+  evaluation stay separate from the chosen harness, model backend, tool bridge,
+  sandbox, and telemetry setup.
+- **Observe complete agent trajectories.** Run artifacts and correlated
+  component evidence make it possible to study where an agent spends time and
+  how execution behavior relates to the final outcome.
+- **Make stateful tool execution comparable.** A narrow bridge gives the
+  harness temporary access to a persistent task environment while sandbox
+  adapters retain control of lifecycle, isolation, and resource observation.
+- **Ground systems research in production behavior. (will be added soon!)** The included
+  [AntGroup Agentic LLM Trace 2026](docs/ant-group-agent-LLM-trace.md) captures
+  engine request logs and harness-environment metrics from a real online
+  serving workload.
+
+This enables research on questions such as whether tool and harness work—not
+inference alone—limits task completion; how retained trajectory context trades
+accuracy for serving capacity; and how sandbox resource management and
+isolation should evolve for long-running agents.
+
+## ARIES architecture
+
+![design](docs/_figures/aries.png)
+
+ARIES separates benchmark task meaning from execution configuration. For every
+task, the Runner composes four substitutable roles:
+
+| Role | Responsibility |
+| --- | --- |
+| `Benchmark` | Loads tasks, keeps verifier material private, prepares the live sandbox, and independently evaluates final task state. |
+| `AgentHarness` | Runs the configured agent and its model interaction. |
+| `ToolSandbox` | Owns the isolated task environment and confirms its cleanup. |
+| `ToolBridge` | Grants one harness temporary, narrow access to one sandbox and positively revokes it. |
+
+The model service and recorder surround this per-task composition. A model
+endpoint may be external or, for SGLang, managed for a profile run; neither is a
+fifth Runner role.
+
+The lifecycle is deliberately fail-closed: ARIES stops the harness and confirms
+that the bridge has been revoked before exposing private verifier material for
+evaluation. Evaluation runs against the still-live sandbox and remains separate
+from the harness outcome; ARIES then removes the sandbox. This keeps agent
+execution, tool access, and scoring under distinct ownership while retaining
+replayable private evidence for a run.
+
+Read the [Architecture](docs/design.md) for the complete lifecycle, isolation
+gates, concurrency model, artifact boundaries, and extension contract.
+
+## Current implementation
+
+The research framework is intended to support multiple harnesses, benchmarks,
+and sandbox substrates. This repository currently wires the following explicit
+implementations:
 
 | Role or service | Implementation |
 | --- | --- |
-| Agent harness | OpenClaw |
+| Agent harness | OpenClaw (text and realtime voice modes) |
 | Benchmark | Terminal-Bench 2 |
-| Tool sandbox | Docker through the Moby Go SDK |
-| Tool bridge | Harness - Tool Sandbox SSH bridge |
+| Tool sandbox | Docker, using the Moby Go SDK |
+| Tool bridge | OpenClaw–Docker SSH bridge |
 | Model service | External DeepSeek; external or ARIES-managed SGLang |
 
-See [Supported implementations](docs/supported.md) for status, ownership,
-configuration keys, and checked-in examples.
+See [Supported implementations](docs/supported.md) for ownership,
+configuration keys, status, and runnable profiles. ARIES uses explicit
+constructors and command switches; it does not discover or register components
+at runtime.
 
-## Getting Started
+## Getting started
 
-ARIES requires Linux, a local Docker Engine, Go, Git, Make, and network access
-to the configured model service and required image registries.
+ARIES requires Linux, a local Docker Engine, Go, Git, Make, network access to
+the configured model service, and access to required image registries.
 
 ```sh
 make build
 ./bin/aries profiles/openclaw-tb2-fix-git-deepseek.json
 ```
 
-Every run idempotently prepares the pinned benchmark checkout and required
-container images before creating run artifacts or contacting the model
-service. `aries setup PROFILE.json` remains available as an optional prewarm;
-it never starts a managed runtime, loads model weights, or contacts an external
-model endpoint.
+Before a run, ARIES idempotently prepares the pinned benchmark checkout and
+required container images. `aries setup PROFILE.json` is available to prewarm
+those inputs; it does not start a managed runtime, load model weights, or
+contact an external model endpoint.
 
-The DeepSeek example requires an API key and can incur charges. Follow the
-[Quick start](docs/quick-start.md) for secure credential setup, the first run,
-SGLang alternatives, result checks, and troubleshooting.
+The DeepSeek example requires an API key and can incur charges. The
+[Quick start](docs/quick-start.md) covers secure credential setup, the first
+run, SGLang alternatives, result inspection, and troubleshooting.
 
-## Architecture & Design
+## Research and roadmap
 
-For each task, ARIES loads benchmark data, starts and sanitizes a sandbox,
-grants temporary bridge access, runs and stops the harness, revokes the bridge,
-evaluates the still-running sandbox, and finally removes the sandbox. Harness
-execution and evaluation outcomes remain separate.
-
-Read the [Architecture](docs/design.md) for the complete lifecycle, isolation
-gates, concurrency model, and artifact boundaries. Component and extension
-guides cover the [benchmark](docs/design/benchmark.md),
-[agent harness](docs/design/harness.md), [tool sandbox](docs/design/sandbox.md),
-[tool bridge](docs/design/bridge.md), and
-[model runtime platform service](docs/design/runtime.md).
-
-## Roadmap & Research Goals
+ARIES accompanies the paper [*Rethinking AI Cloud Infrastructure for Agentic
+Serving Systems with the Aries Experimentation Framework*](https://arxiv.org/abs/2607.29069).
+The paper uses ARIES alongside anonymized production traces to study agent
+serving beyond token-centric metrics, including harness and tool critical-path
+costs, context-capacity trade-offs, bursty sandbox resources, and sandbox attack
+surface.
 
 [Aries Roadmap](https://github.com/orgs/hyscale-lab/projects/7)
 
-ARIES is intended to support research on reproducible agent evaluation,
-including task-level concurrency, strict tool isolation, independent scoring,
-and comparisons across explicitly configured agent and model runtimes. Future
-work may add rigorously tested implementations behind the existing component
-boundaries and expand repeatable experiment workflows. These are research
-directions, not claims of currently supported integrations.
+Future work may add rigorously tested implementations behind the existing
+component boundaries and broaden repeatable experiment workflows. Those are
+research directions, not claims of currently supported integrations.
 
-## Industry Collaborators
+## Industry collaborators
 
-ARIES is built and maintained in collaboration with many industry collaborators:
-Amazon Web Service, Microsoft, AMD Singapore, NCSpeech
+ARIES is built and maintained in collaboration with Amazon Web Services,
+Microsoft, AMD Singapore, Ant Group, and NCSpeech.
 
-## Community, Contributing & Contact
+## Community, contributing, and contact
 
-Contributions are welcome through
-[GitHub issues](https://github.com/hyscale-lab/aries/issues) and pull requests.
-Before proposing a component, read the relevant architecture guide and keep the
-four-role Runner lifecycle, explicit construction, isolation gates, and cleanup
-guarantees intact. Questions and design proposals can use the issue tracker so
-the discussion remains available to other users and contributors.
+Contributions are welcome through [GitHub issues](https://github.com/hyscale-lab/aries/issues)
+and pull requests. Questions and design proposals can use
+the issue tracker so the discussion remains available to the community.
 
+## Maintainers
+### GPU Related
+- Chengzhi Lu (chengzhi.lu at ntu.edu.sg), 
+
+### Agent Harness, Benchmark, Tool Sandbox, Tool Bridge
+- JooYoung Park (jooyoung001 at e.ntu.edu.sg)
+- Leonid Kondrashov (leonid001 at e.ntu.edu.sg)
 ## Citation
-```
+
+```bibtex
 @misc{kondrashov2026rethinkingaicloudinfrastructure,
-      title={Rethinking AI Cloud Infrastructure for Agentic Serving Systems with the Aries Experimentation Framework}, 
-      author={Leonid Kondrashov and Hongrui Liu and JooYoung Park and Boxi Zhou and Zonghao Liu and Chengzhi Lu and Riccardo Mancini and Esha Choukse and Haris Javaid and German Sviridov and Tao Peng and Chen Zhao and Anastasia Avdeeva and Aleksei Gusev and Marios Kogias and Luo Mai and Dmitrii Ustiugov},
-      year={2026},
-      eprint={2607.29069},
-      archivePrefix={arXiv},
-      primaryClass={cs.DC},
-      url={https://arxiv.org/abs/2607.29069}, 
+      title={Rethinking AI Cloud Infrastructure for Agentic Serving Systems with the Aries Experimentation Framework},
+      author={Leonid Kondrashov and Hongrui Liu and JooYoung Park and Boxi Zhou and Zonghao Liu and Chengzhi Lu and Riccardo Mancini and Esha Choukse and Haris Javaid and German Sviridov and Tao Peng and Chen Zhao and Anastasia Avdeeva and Aleksei Gusev and Marios Kogias and Luo Mai and Dmitrii Ustiugov},
+      year={2026},
+      eprint={2607.29069},
+      archivePrefix={arXiv},
+      primaryClass={cs.DC},
+      url={https://arxiv.org/abs/2607.29069},
 }
 ```
 
-## Traces
-
-The [AntGroup Agentic LLM Trace 2026](docs/ant-group-agent-LLM-trace.md) is a
-public available dataset capturing part of the online serving workload from Ant
-Group's LLM inference infrastructure. It includes engine request logs and
-harness environment metrics collected in July 2026.
-
 ## License
 
-The Aries codebase is licensed under MIT License. See the [MIT License](LICENSE) file for details.
+ARIES is licensed under the [MIT License](LICENSE).
