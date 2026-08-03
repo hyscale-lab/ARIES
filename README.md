@@ -112,6 +112,13 @@ the discussion remains available to other users and contributors.
 }
 ```
 
+## Traces
+
+The [AntGroup Agentic LLM Trace 2026](docs/ant-group-agent-LLM-trace.md) is a
+public available dataset capturing part of the online serving workload from Ant
+Group's LLM inference infrastructure. It includes engine request logs and
+harness environment metrics collected in July 2026.
+
 ## License
 
 The Aries codebase is licensed under MIT License. See the [MIT License](LICENSE) file for details.

@@ -1,4 +1,6 @@
 agentharness
+agentic
+antgroup
 api
 argv
 aries
@@ -9,6 +11,7 @@ codebase
 config
 controlmaster
 cpu
+csv
 ctrf
 deepseek
 docker
@@ -25,7 +28,9 @@ idempotently
 integrations
 json
 jsonl
+kimi
 lifecycle
+llm
 logrus
 loopback
 metadata
@@ -45,6 +50,7 @@ orchestrator
 parsers
 pid
 pre
+prefill
 preflight
 prewarm
 Realtime
@@ -65,13 +71,16 @@ stdin
 stdout
 substitutable
 symlink
+tbd
 tcp
 toml
 toolbridge
 toolchain
 toolsandbox
 tp
-TTS
+tpot
+ttft
+tts
 tty
 utf
 uuid
