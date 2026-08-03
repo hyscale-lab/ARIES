@@ -32,18 +32,18 @@ metrics.
 ARIES is built around three needs of agent-serving research:
 
 - **Preserve task semantics across configurations.** Benchmark tasks and their
-  evaluation stay separate from the chosen harness, model backend, tool bridge,
-  sandbox, and telemetry setup.
+evaluation stay separate from the chosen harness, model backend, tool bridge,
+sandbox, and telemetry setup.
 - **Observe complete agent trajectories.** Run artifacts and correlated
-  component evidence make it possible to study where an agent spends time and
-  how execution behavior relates to the final outcome.
+component evidence make it possible to study where an agent spends time and
+how execution behavior relates to the final outcome.
 - **Make stateful tool execution comparable.** A narrow bridge gives the
-  harness temporary access to a persistent task environment while sandbox
-  adapters retain control of lifecycle, isolation, and resource observation.
+harness temporary access to a persistent task environment while sandbox
+adapters retain control of lifecycle, isolation, and resource observation.
 - **Ground systems research in production behavior. (will be added soon!)** The included
-  [AntGroup Agentic LLM Trace 2026](docs/ant-group-agent-LLM-trace.md) captures
-  engine request logs and harness-environment metrics from a real online
-  serving workload.
+ [Ant Group Agentic LLM Trace 2026](docs/ant-group-agent-LLM-trace.md) captures
+engine request logs and harness-environment metrics from a real online
+serving workload.
 
 This enables research on questions such as whether tool and harness work—not
 inference alone—limits task completion; how retained trajectory context trades
@@ -143,26 +143,29 @@ and pull requests. Questions and design proposals can use
 the issue tracker so the discussion remains available to the community.
 
 ## Maintainers
-### GPU Related
-- Chengzhi Lu (chengzhi.lu at ntu.edu.sg), 
-
 ### Agent Harness, Benchmark, Tool Sandbox, Tool Bridge
 - JooYoung Park (jooyoung001 at e.ntu.edu.sg)
 - Leonid Kondrashov (leonid001 at e.ntu.edu.sg)
+
+### GPU, Industry Traces
+- Chengzhi Lu (chengzhi.lu at ntu.edu.sg), 
+
 ## Citation
 
 ```bibtex
 @misc{kondrashov2026rethinkingaicloudinfrastructure,
-      title={Rethinking AI Cloud Infrastructure for Agentic Serving Systems with the Aries Experimentation Framework},
-      author={Leonid Kondrashov and Hongrui Liu and JooYoung Park and Boxi Zhou and Zonghao Liu and Chengzhi Lu and Riccardo Mancini and Esha Choukse and Haris Javaid and German Sviridov and Tao Peng and Chen Zhao and Anastasia Avdeeva and Aleksei Gusev and Marios Kogias and Luo Mai and Dmitrii Ustiugov},
-      year={2026},
-      eprint={2607.29069},
-      archivePrefix={arXiv},
-      primaryClass={cs.DC},
-      url={https://arxiv.org/abs/2607.29069},
+title={Rethinking AI Cloud Infrastructure for Agentic Serving Systems with the Aries Experimentation Framework},
+author={Leonid Kondrashov and Hongrui Liu and JooYoung Park and Boxi Zhou and Zonghao Liu and Chengzhi Lu and Riccardo Mancini and Esha Choukse and Haris Javaid and German Sviridov and Tao Peng and Chen Zhao and Anastasia Avdeeva and Aleksei Gusev and Marios Kogias and Luo Mai and Dmitrii Ustiugov},
+year={2026},
+eprint={2607.29069},
+archivePrefix={arXiv},
+primaryClass={cs.DC},
+url={https://arxiv.org/abs/2607.29069},
 }
 ```
 
 ## License
 
-ARIES is licensed under the [MIT License](LICENSE).
+ARIES code base is licensed under the [MIT License](LICENSE-CODE).
+
+The trace from Ant Group is under the [CC-BY-4.0](LICENSE).

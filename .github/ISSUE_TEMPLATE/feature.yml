@@ -1,7 +1,7 @@
 name: Feature Request
 description: Suggest an idea or new feature for the project.
 title: "[Feature]: "
-labels: ["Feature"]
+labels: ["Feature", "Triage"]
 projects: ["hyscale-lab/projects/7"]
 type: feature
 body:
