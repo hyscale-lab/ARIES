@@ -10,9 +10,11 @@ import (
 	"github.com/hyscale-lab/aries/internal/app"
 	runtimesglang "github.com/hyscale-lab/aries/internal/modelruntime/sglang"
 	"github.com/hyscale-lab/aries/pkg/benchmark/terminalbench"
+	"github.com/hyscale-lab/aries/pkg/bridge/hermesssh"
 	"github.com/hyscale-lab/aries/pkg/bridge/openclawssh"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
+	hermesharness "github.com/hyscale-lab/aries/pkg/harness/hermes"
 	openclawharness "github.com/hyscale-lab/aries/pkg/harness/openclaw"
 	"github.com/hyscale-lab/aries/pkg/monitor"
 	nvidiamonitor "github.com/hyscale-lab/aries/pkg/monitor/nvidia"
@@ -43,6 +45,7 @@ func validateComponents(cfg config.Config) error {
 	}
 	switch cfg.Harness.Type {
 	case "openclaw":
+	case "hermes":
 	default:
 		return fmt.Errorf("unsupported harness type %q", cfg.Harness.Type)
 	}
@@ -53,8 +56,14 @@ func validateComponents(cfg config.Config) error {
 	}
 	switch cfg.Bridge.Type {
 	case "openclaw-ssh":
+	case "hermes-ssh":
 	default:
 		return fmt.Errorf("unsupported bridge type %q", cfg.Bridge.Type)
+	}
+	// Each bridge speaks one harness's SSH grammar, so the pair is checked
+	// here rather than left to fail at the first tool call.
+	if (cfg.Harness.Type == "hermes") != (cfg.Bridge.Type == "hermes-ssh") {
+		return fmt.Errorf("harness type %q requires its paired bridge, not %q", cfg.Harness.Type, cfg.Bridge.Type)
 	}
 	return nil
 }
@@ -138,6 +147,12 @@ func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byt
 			return app.HarnessInstance{}, fmt.Errorf("construct OpenClaw harness: %w", err)
 		}
 		return app.HarnessInstance{Harness: manager, Close: manager.Close}, nil
+	case "hermes":
+		manager, err := hermesharness.New(hermesharness.Options{Image: cfg.Versions.Hermes.Image, OutputDir: outputRoot, APIKeyLookup: lookup, Logger: logger})
+		if err != nil {
+			return app.HarnessInstance{}, fmt.Errorf("construct Hermes harness: %w", err)
+		}
+		return app.HarnessInstance{Harness: manager, Close: manager.Close}, nil
 	default:
 		return app.HarnessInstance{}, fmt.Errorf("unsupported harness type %q", cfg.Harness.Type)
 	}
@@ -199,6 +214,14 @@ func newBridge(cfg config.Config, outputRoot string, logger *logrus.Logger) (run
 		bridge, err := openclawssh.New(openclawssh.Options{OutputDir: outputRoot, ClientPath: filepath.Join(filepath.Dir(executable), "aries-ssh"), Logger: logger})
 		if err != nil {
 			return nil, fmt.Errorf("construct OpenClaw SSH bridge: %w", err)
+		}
+		return bridge, nil
+	case "hermes-ssh":
+		// Hermes runs OpenSSH itself, so this bridge stages no client helper
+		// and needs no path to the ARIES executable.
+		bridge, err := hermesssh.New(hermesssh.Options{OutputDir: outputRoot, Logger: logger})
+		if err != nil {
+			return nil, fmt.Errorf("construct Hermes SSH bridge: %w", err)
 		}
 		return bridge, nil
 	default:

@@ -27,6 +27,8 @@ filesystem
 ghcr
 github
 gpu
+hermes
+hermes's
 hostname
 html
 http

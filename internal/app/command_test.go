@@ -395,7 +395,7 @@ func assertCommandAuthorization(t *testing.T, exe, want string) {
 func writeCommandProfile(t *testing.T, output string) string {
 	t.Helper()
 	dir := t.TempDir()
-	versions := config.Versions{TerminalBench2: config.TerminalBench2Versions{RepositoryURL: "https://example.invalid/repo.git", Revision: "0123456789abcdef0123456789abcdef01234567"}, OpenClaw: config.OpenClawVersions{Image: "ghcr.io/openclaw/openclaw:2026.7.1"}}
+	versions := config.Versions{TerminalBench2: config.TerminalBench2Versions{RepositoryURL: "https://example.invalid/repo.git", Revision: "0123456789abcdef0123456789abcdef01234567"}, OpenClaw: config.OpenClawVersions{Image: "ghcr.io/openclaw/openclaw:2026.7.1"}, Hermes: config.HermesVersions{Image: "docker.io/nousresearch/hermes-agent:v2026.5.29.2"}}
 	data, _ := json.Marshal(versions)
 	if err := os.WriteFile(filepath.Join(dir, "versions.json"), data, 0600); err != nil {
 		t.Fatal(err)

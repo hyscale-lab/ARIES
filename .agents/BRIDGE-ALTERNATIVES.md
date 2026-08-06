@@ -273,8 +273,35 @@ sandbox.
 | **Install or require `sshd` in every task image** | Moves daemon, user, key, port, and process ownership into the evaluator's sandbox. | Assumes each heterogeneous benchmark image can run and safely configure SSH. | Adds another service to stop and audit; transport logs depend on image configuration. | The evaluator sees daemon and credential setup mutations unrelated to the task. | Rejected. |
 | **Give OpenClaw the Docker socket** | Exposes daemon authority far beyond one task container and lets the harness create, inspect, or remove unrelated resources. | Uses the harness's Docker behavior rather than the exact ARIES sandbox boundary. | ARIES cannot narrowly revoke per-task daemon authority or guarantee equivalent evidence. | The harness could replace or bypass the container intended for evaluation. | Rejected. |
 | **Generic remote-tool relay** | A shared protocol would need to encode the union of harness authentication and command semantics before a second implementation exists. | Risks hiding pair-specific workspace, transfer, and image assumptions behind weak abstractions. | Cancellation, revocation, and replay guarantees would become lowest-common-denominator policy. | Translation mistakes could target state other than the evaluator's sandbox. | Rejected until multiple real adapters reveal a smaller shared seam. |
-| **Hermes-specific SSH adapter** | Could preserve ARIES ownership, but must implement Hermes's own connection and authentication behavior. | Hermes SSH/SCP, ControlMaster, remote-home, and sync semantics differ from OpenClaw's virtual workspace. | Needs separate cancellation, transfer, revocation, and evidence tests. | Can target the ARIES sandbox only through a Hermes-specific adapter. | Candidate only when Hermes is implemented; do not reuse `openclawssh` by name alone. |
+| **Hermes-specific SSH adapter** | Preserves ARIES ownership; implements Hermes's own connection and authentication behavior in `pkg/bridge/hermesssh`. | Hermes addresses the sandbox with ordinary absolute paths, so there is no virtual workspace to translate. SCP is unreachable (`SSHEnvironment` always sets `bulk_upload_fn`), and the `~/.hermes` sync is denied outright. | Has its own cancellation, revocation, and evidence tests; refusals are recorded with a distinct `denied` status. | Targets the ARIES sandbox through the Hermes-specific grammar only. | **Selected for Hermes.** `openclawssh` was not reused: its canonical single-token `env … /bin/sh -c` grammar rejects every `bash -c` payload Hermes sends. |
 | **OpenHands workspace adapter or controlled agent-server sidecar** | Can preserve narrow authority if ARIES controls the workspace endpoint or sidecar lifecycle. | OpenHands uses `Workspace`/`RemoteWorkspace` over HTTP/WebSocket rather than OpenClaw's SSH grammar. | Must map its API operations, sessions, streaming, cancellation, and artifacts explicitly. | Can modify the evaluator's sandbox if the adapter delegates to its typed capabilities. | Candidate only when OpenHands is implemented; do not force it through SSH. |
+
+### Hermes file-sync decision and evidence
+
+`SSHEnvironment.__init__` pushes `~/.hermes` to the remote before the agent
+runs, and the set comes from `iter_sync_files`, which includes credential
+files. The remote is the container the verifier later inspects, so ARIES denies
+those payloads at the bridge rather than confining them.
+
+Recorded against Hermes v2026.5.29.2 driving a logging SSH server, the complete
+wire surface is: `echo 'SSH connection established'`, `echo $HOME`,
+`mkdir -p …`, `tar xf - --no-overwrite-dir -C …` (with stdin), `tar cf - -C / …`,
+`rm -f …`, and `bash [-l] -c <shlex-quoted script>`. `scp` never appears,
+because `_scp_upload` is only the per-file fallback and `SSHEnvironment` always
+supplies `bulk_upload_fn`.
+
+Denying the sync is non-fatal, and this was measured rather than assumed. With a
+planted skill file, the allowed run pushed 10240 bytes of `tar` stdin into the
+remote; the denied run pushed none, the agent's own command still returned exit
+0, and Hermes logged exactly one warning
+(`file_sync: sync failed, rolled back state`). `FileSyncManager.sync` catches
+every exception and rolls back, and `sync_back` then early-returns with
+`no prior push state — skipping`, so the teardown `tar cf -` never fires either.
+
+Hermes still writes `/tmp/hermes-snap-*.sh` and `/tmp/hermes-cwd-*.txt` into the
+sandbox as part of its ordinary session-snapshot mechanism. That is inherent to
+its `bash -c` protocol, stays in `/tmp` rather than the task workspace, and is
+not suppressed.
 
 ## Extension boundary
 

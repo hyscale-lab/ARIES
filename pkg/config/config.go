@@ -142,6 +142,7 @@ func (c Config) CoreModel() core.ModelConfig {
 type Versions struct {
 	TerminalBench2 TerminalBench2Versions `json:"terminalbench2"`
 	OpenClaw       OpenClawVersions       `json:"openclaw"`
+	Hermes         HermesVersions         `json:"hermes"`
 }
 
 type TerminalBench2Versions struct {
@@ -150,6 +151,10 @@ type TerminalBench2Versions struct {
 }
 
 type OpenClawVersions struct {
+	Image string `json:"image"`
+}
+
+type HermesVersions struct {
 	Image string `json:"image"`
 }
 
@@ -550,6 +555,7 @@ func (c Versions) validate() error {
 		{"terminalbench2.repository_url", c.TerminalBench2.RepositoryURL},
 		{"terminalbench2.revision", c.TerminalBench2.Revision},
 		{"openclaw.image", c.OpenClaw.Image},
+		{"hermes.image", c.Hermes.Image},
 	}
 	for _, check := range checks {
 		if strings.TrimSpace(check.value) == "" {
@@ -568,6 +574,9 @@ func (c Versions) validate() error {
 	}
 	if err := containerimage.ValidatePinnedTagOnly(c.OpenClaw.Image); err != nil {
 		return fmt.Errorf("openclaw.image: %w", err)
+	}
+	if err := containerimage.ValidatePinnedTagOnly(c.Hermes.Image); err != nil {
+		return fmt.Errorf("hermes.image: %w", err)
 	}
 	return nil
 }

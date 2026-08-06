@@ -43,6 +43,50 @@ Both modes remain concrete behavior of the single `AgentHarness` role; realtime
 does not create a fifth Runner role or take ownership from the benchmark,
 sandbox, or bridge.
 
+## Hermes
+
+Hermes is the second supported harness and runs the pinned upstream image
+unmodified. It is text mode only; `harness.mode: "realtime"` remains OpenClaw's.
+
+`hermes.Manager` owns one container held at an idle command, so ARIES decides
+when the agent starts rather than the image entrypoint. One task instruction is
+delivered by executing a staged wrapper that runs the Hermes one-shot
+(`hermes --ignore-rules --yolo --model … --provider … -z …`) and reports its
+status through a delimited exit trailer. The instruction is passed as a single
+argument vector element, never interpolated into a shell string. `--toolsets` is
+deliberately not passed: on the pinned version its validator can return a bare
+`None` that the caller unpacks, so the agent would exit before doing any work.
+Toolsets come from the rendered configuration instead.
+
+Hermes exposes no control protocol, so there is no gateway client. The final
+response is the one-shot's standard output, and the message-level trajectory is
+Hermes's own SQLite session store exported to standard output. Container logs,
+both output streams, the redacted configuration, and the session export are
+private harness artifacts.
+
+Hermes reads its tool backend only from environment variables, so ARIES sets
+`TERMINAL_ENV=ssh` with the bridge's host, port, user, and identity path; this
+is upstream's native SSH environment, not an ARIES modification. `HERMES_HOME`
+is relocated to a staged private directory so the image's declared `/opt/data`
+volume holds no run state; that one anonymous volume is still created by Docker
+and is the only mount the harness tolerates. The model credential is written to
+the rendered configuration as a `${NAME}` reference, staged separately as a
+private key file, and exported by the wrapper inside the container, so no
+credential value reaches the configuration, Docker metadata, or results.
+
+Two upstream details are load-bearing. First, `/opt/hermes/bin/hermes` sits
+earliest on `PATH` and is a privilege-drop shim: invoked as root it re-execs the
+real binary as the image's unprivileged `hermes` user. Everything ARIES stages
+is therefore owned by that user, asserted by the container's own start command
+because the Engine's copy API resets archive ownership to root. Staging as root
+instead leaves the agent unable to read its own configuration, and the failure
+surfaces far from its cause. The readiness probe runs `hermes --version` rather
+than only stat-ing the staged files, because those checks run as root and pass
+regardless of ownership.
+
+Second, Hermes requires `/bin/bash` in the task image, because every tool call
+it issues is `bash -c` on the remote.
+
 ## Customization & Contribution Guide
 
 Add a harness only when it can implement the existing `AgentHarness` lifecycle

@@ -38,15 +38,18 @@ make build
 - `profiles/openclaw-tb2-fix-git-deepseek.json`
 - `profiles/openclaw-tb2-fix-git-sglang.json`
 - `profiles/openclaw-tb2-five-deepseek.json`
+- `profiles/hermes-tb2-fix-git-deepseek.json`
 
 Running a profile automatically loads `configs/versions.json`, creates or
 verifies the pinned Terminal-Bench checkout at `.cache/terminal-bench-2`, reads
 each selected task's explicit Docker image tag from its `task.toml`, and pulls
-only OpenClaw plus those selected images through the Docker Go SDK. Preparation
+only the configured harness image plus those selected images through the
+Docker Go SDK. Preparation
 happens before the run directory is created, a managed runtime is started,
 model weights load, an external endpoint is contacted, or task work is
 admitted. The Terminal-Bench Git revision and exact tag-pinned OpenClaw image
-remain in `configs/versions.json`; task image digests are not duplicated there.
+remain in `configs/versions.json`, alongside the tag-pinned Hermes image; task
+image digests are not duplicated there.
 Preparation is safe to repeat and refuses to replace a checkout at another
 revision.
 
@@ -287,6 +290,26 @@ images. ARIES first ensures the benchmark and images are prepared, then starts
 and checks an owned managed runtime when configured, performs a bounded model
 preflight, and runs each task in profile order. For each task it stops OpenClaw,
 revokes SSH access, and only then evaluates the same still-running sandbox.
+
+### Hermes instead of OpenClaw
+
+The Hermes profile is the same run with a different harness, so it needs the
+same DeepSeek credential and no extra setup:
+
+```sh
+./bin/aries profiles/hermes-tb2-fix-git-deepseek.json
+```
+
+Hermes is text only. It runs the pinned upstream image unmodified and is paired
+with `bridge.type: "hermes-ssh"`; the two values must match, and a crossed pair
+is rejected before the run starts. Hermes issues every tool call as `bash -c`,
+so the task image must provide `/bin/bash`. Its `~/.hermes` file sync is refused by
+the bridge to keep the evaluated sandbox free of harness scaffold and
+credentials; Hermes logs one `file_sync: sync failed` warning and continues.
+
+Artifacts land under `<run>/<task>/harness/`: the redacted `config.yaml`, the
+one-shot's `hermes_stdout.log` and `hermes_stderr.log`, `container.log`, and the
+exported message-level trajectory at `telemetry/sessions.jsonl`.
 
 ### Realtime OpenClaw mode
 

@@ -74,7 +74,7 @@ func TestExplicitCompositionSwitches(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(source)
-	for _, value := range []string{`case "terminalbench2"`, `case "openclaw"`, `case "docker"`, `case "openclaw-ssh"`, `case "deepseek"`, `case "sglang"`} {
+	for _, value := range []string{`case "terminalbench2"`, `case "openclaw"`, `case "hermes"`, `case "docker"`, `case "openclaw-ssh"`, `case "hermes-ssh"`, `case "deepseek"`, `case "sglang"`} {
 		if !strings.Contains(text, value) {
 			t.Fatalf("missing explicit switch %s", value)
 		}
@@ -107,6 +107,41 @@ func TestValidateComponentsRejectsEveryUnsupportedSelector(t *testing.T) {
 			cfg := base
 			tc.set(&cfg)
 			if err := validateComponents(cfg); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err=%v", err)
+			}
+		})
+	}
+}
+
+// Each bridge implements exactly one harness's SSH grammar, so a crossed pair
+// must be refused before the run starts rather than at the first tool call.
+func TestValidateComponentsRequiresPairedHarnessAndBridge(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		harness string
+		bridge  string
+		wantErr bool
+	}{
+		{name: "openclaw pair", harness: "openclaw", bridge: "openclaw-ssh"},
+		{name: "hermes pair", harness: "hermes", bridge: "hermes-ssh"},
+		{name: "hermes with openclaw bridge", harness: "hermes", bridge: "openclaw-ssh", wantErr: true},
+		{name: "openclaw with hermes bridge", harness: "openclaw", bridge: "hermes-ssh", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Config{
+				Benchmark: config.BenchmarkConfig{Type: "terminalbench2"},
+				Harness:   config.HarnessConfig{Type: tc.harness},
+				Sandbox:   config.SandboxConfig{Type: "docker"},
+				Bridge:    config.BridgeConfig{Type: tc.bridge},
+			}
+			err := validateComponents(cfg)
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "paired bridge") {
+					t.Fatalf("err=%v", err)
+				}
+				return
+			}
+			if err != nil {
 				t.Fatalf("err=%v", err)
 			}
 		})
