@@ -2,7 +2,6 @@ package hermesssh
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 )
 
@@ -19,8 +18,7 @@ import (
 // (mkdir -p, tar xf -, tar cf -, rm -f). ARIES refuses those: the remote is the
 // exact container the verifier later inspects, and the sync payload is built
 // from `iter_sync_files`, which includes credential files. Refusal is safe —
-// `FileSyncManager.sync` catches every exception, rolls its state back, and
-// continues, and `sync_back` then self-suppresses because nothing was pushed.
+// Hermes catches and rolls back every sync failure.
 const (
 	remoteShell = "bash"
 	remoteEcho  = "echo"
@@ -29,11 +27,14 @@ const (
 	remoteHomePayload      = "echo $HOME"
 )
 
-// classKind separates a well-formed agent command from the bootstrap probes and
-// from a refused file-sync attempt, so evidence records say which one occurred.
+// The kinds classify each request in the evidence record: a well-formed agent
+// command, a bootstrap probe, a refused file sync, or a payload that never
+// decoded far enough to tell.
 const (
 	kindAgent     = "agent"
 	kindBootstrap = "bootstrap"
+	kindSync      = "sync"
+	kindUnknown   = "unknown"
 )
 
 type remoteCommand struct {
@@ -140,7 +141,7 @@ func decodeShellToken(encoded string) (string, error) {
 		decoded = value.String()
 	}
 	if shlexQuote(decoded) != encoded {
-		return "", fmt.Errorf("SSH exec script token is not canonically quoted")
+		return "", errors.New("SSH exec script token is not canonically quoted")
 	}
 	return decoded, nil
 }

@@ -2,8 +2,10 @@ package hermesssh
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"maps"
 	"net"
@@ -306,6 +308,46 @@ func TestBridgeDeniesFileSyncAndRecordsItAsPolicy(t *testing.T) {
 		if record["status"] != "denied" || !strings.Contains(record["error"].(string), "file sync is denied") {
 			t.Fatalf("record = %#v", record)
 		}
+		// A refused sync must not be filed as an agent command; the evidence has
+		// to distinguish ARIES policy from a command the agent actually ran.
+		if record["operation_class"] != kindSync {
+			t.Fatalf("denied sync recorded as %q, want %q", record["operation_class"], kindSync)
+		}
+	}
+}
+
+// The private identity is revoked on Stop, but known_hosts holds only the
+// ephemeral host public key and is the evidence of what Hermes pinned.
+func TestStopRevokesIdentityAndRetainsKnownHosts(t *testing.T) {
+	outputDir := t.TempDir()
+	manager := newTestManager(t, outputDir)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	endpoint, err := manager.Start(ctx, &testSandbox{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bridgeDir := filepath.Join(outputDir, "test-task", "bridge")
+	knownHosts := filepath.Join(bridgeDir, "known_hosts")
+	before, err := os.ReadFile(knownHosts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) == 0 {
+		t.Fatal("known_hosts is empty during the run")
+	}
+	if err := manager.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(knownHosts)
+	if err != nil {
+		t.Fatalf("known_hosts did not survive Stop: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("known_hosts changed across Stop: %q -> %q", before, after)
+	}
+	if _, err := os.Stat(endpoint.IdentitySourceFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("private identity survived Stop: %v", err)
 	}
 }
 

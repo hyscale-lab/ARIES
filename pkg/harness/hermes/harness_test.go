@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -328,7 +329,7 @@ func TestStartStagesPrivateRuntimeAndPinsIdleContainer(t *testing.T) {
 	defer manager.Stop(context.Background())
 
 	config := fake.created.Config
-	if !equalStrings(config.Entrypoint, idleEntrypoint) || !equalStrings(config.Cmd, idleCommand) {
+	if !slices.Equal(config.Entrypoint, idleEntrypoint) || !slices.Equal(config.Cmd, idleCommand) {
 		t.Fatalf("container is not pinned to the idle command: %v %v", config.Entrypoint, config.Cmd)
 	}
 	if config.Labels["aries.component"] != "harness" || config.Labels["aries.kind"] != "hermes-harness" || config.Labels["aries.managed"] != "true" {

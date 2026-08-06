@@ -17,9 +17,9 @@ const (
 	stateContainerPath  = stagedRoot + "/hermes"
 	configContainerPath = stateContainerPath + "/config.yaml"
 	modelKeyPath        = stateContainerPath + "/model.key"
-	identityContainerFS = "/run/aries/ssh/id_ed25519"
-	agentWrapperPath    = "/run/aries/run-agent"
-	workspaceRoot       = "/run/aries/workspace"
+	identityContainerFS = stagedRoot + "/ssh/id_ed25519"
+	agentWrapperPath    = stagedRoot + "/run-agent"
+	workspaceRoot       = stagedRoot + "/workspace"
 )
 
 // renderConfig produces the Hermes `config.yaml`. The credential is written as
@@ -77,8 +77,7 @@ func renderConfig(model core.ModelConfig, maxTurns int) ([]byte, error) {
 // every command in the sandbox's own workdir. Hermes opens its session with
 // `cd <TERMINAL_CWD> 2>/dev/null || true` followed by `pwd -P`, so a path it
 // cannot enter makes it adopt the workdir the bridge chose. Naming a real
-// sandbox path here is impossible in any case — the harness never learns it,
-// just as OpenClaw never learns it and is given a virtual root instead.
+// sandbox path here is impossible in any case — the harness never learns it.
 func containerEnvironment(endpoint core.ToolEndpoint, workdir string, terminalTimeout int) ([]string, error) {
 	if err := validateEndpoint(endpoint); err != nil {
 		return nil, err
@@ -211,8 +210,10 @@ func validWorkdir(value string) bool {
 	return true
 }
 
-// yamlString emits a double-quoted YAML scalar with the minimal escaping the
-// spec requires, so no rendered value can terminate its own scalar.
+// yamlString emits a double-quoted YAML scalar, escaping the quote, backslash,
+// and whitespace controls that would otherwise terminate the scalar. Other C0
+// control bytes are emitted raw and would produce invalid YAML; nothing
+// upstream currently rejects them.
 func yamlString(value string) string {
 	var output strings.Builder
 	output.WriteByte('"')

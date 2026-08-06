@@ -7,18 +7,16 @@ import (
 	"github.com/hyscale-lab/aries/pkg/core"
 )
 
-// Hermes has no virtual workspace namespace. It learns its working directory
-// from the rendered `terminal.cwd` and its remote home from `echo $HOME`, then
-// addresses the sandbox with ordinary absolute paths, so there is nothing to
-// translate. The mapping here is therefore direct: the sandbox workdir is used
-// verbatim and the decoded command runs as-is.
+// Hermes has no virtual workspace namespace: it addresses the sandbox with
+// ordinary absolute paths, so the sandbox workdir is used verbatim and the
+// decoded command runs as-is.
 const (
 	bootstrapShell = "/bin/sh"
 
-	// wireShell is the bare token Hermes puts on the wire; remoteShellPath is
-	// where it is resolved to. The sandbox requires an absolute command path
-	// and performs no PATH lookup of its own, so the mapping has to happen
-	// here. This is why a Hermes task image must provide /bin/bash.
+	// remoteShellPath is where the bare `remoteShell` token Hermes puts on the
+	// wire is resolved to. The sandbox requires an absolute command path and
+	// performs no PATH lookup of its own, so the mapping has to happen here.
+	// This is why a Hermes task image must provide /bin/bash.
 	remoteShellPath = "/bin/bash"
 )
 

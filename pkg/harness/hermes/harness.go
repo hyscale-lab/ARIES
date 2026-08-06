@@ -13,7 +13,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -68,14 +68,11 @@ status=$?
 printf '\036ARIES_HERMES_EXIT_%s=%s\037' "$token" "$status" >&2
 exit "$status"`
 
-// idleCommand keeps the container alive so ARIES can drive one-shot runs into
-// it. The upstream image's own entrypoint is replaced deliberately: ARIES owns
-// when the agent starts, not the image.
-//
-// It first aligns the staged runtime with the unprivileged `hermes` UID. The
-// archive already carries that ownership, but the Engine's copy API resets it
-// to root, so the ownership is asserted here where it is guaranteed to hold:
-// the start command runs as root, after the copy and before readiness.
+// idleCommand replaces the upstream entrypoint so ARIES owns when the agent
+// starts. It first aligns the staged runtime with the unprivileged `hermes`
+// UID: the archive already carries that ownership, but the Engine's copy API
+// resets it to root, and the start command is the one place that runs as root
+// after the copy and before readiness.
 var (
 	idleEntrypoint = []string{"/bin/sh"}
 	idleCommand    = []string{"-c", fmt.Sprintf("chown -R %d:%d %s && exec sleep infinity", runtimeUID, runtimeGID, stagedRoot)}
@@ -714,7 +711,7 @@ func (manager *Manager) validateContainer(ctx context.Context, active *session) 
 		return errors.New("Hermes container inspection is incomplete")
 	}
 	configuration := containerInfo.Config
-	if configuration.Image != manager.image || !equalStrings(configuration.Cmd, idleCommand) || !equalStrings(configuration.Entrypoint, idleEntrypoint) {
+	if configuration.Image != manager.image || !slices.Equal(configuration.Cmd, idleCommand) || !slices.Equal(configuration.Entrypoint, idleEntrypoint) {
 		return errors.New("Hermes image or idle command differs from the pinned direct configuration")
 	}
 	if configuration.Labels["aries.managed"] != "true" || configuration.Labels["aries.kind"] != "hermes-harness" || configuration.Labels["aries.component"] != "harness" ||
@@ -799,7 +796,7 @@ func stageArchive(files map[string]stagedFile) ([]byte, error) {
 	for name := range files {
 		names = append(names, name)
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	for _, name := range names {
 		file := files[name]
 		if name == "" || filepath.IsAbs(name) || filepath.Clean(name) != name || strings.HasPrefix(name, "../") {
@@ -1099,26 +1096,30 @@ func validateRunID(value string) error {
 	if value == "" || len(value) > 128 {
 		return errors.New("Hermes run ID must contain 1 to 128 safe characters")
 	}
-	for index, character := range value {
-		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || index > 0 && (character == '-' || character == '_' || character == '.') {
-			continue
-		}
+	if !safeIdentifierChars(value) {
 		return errors.New("Hermes run ID contains an unsafe character")
 	}
 	return nil
 }
 
 func validateTaskID(value string) error {
-	if value == "" || len(value) > 149 {
+	if value == "" || len(value) > 149 || !safeIdentifierChars(value) {
 		return errors.New("Hermes task ID is invalid")
 	}
+	return nil
+}
+
+// safeIdentifierChars accepts an alphanumeric label that may also carry `-`,
+// `_`, or `.` after its first character, so the value stays safe in a container
+// name, a label, and a filesystem path.
+func safeIdentifierChars(value string) bool {
 	for index, character := range value {
 		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || index > 0 && (character == '-' || character == '_' || character == '.') {
 			continue
 		}
-		return errors.New("Hermes task ID is invalid")
+		return false
 	}
-	return nil
+	return true
 }
 
 func randomID() (string, error) {
@@ -1127,18 +1128,6 @@ func randomID() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(content[:]), nil
-}
-
-func equalStrings(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
-			return false
-		}
-	}
-	return true
 }
 
 func clearSessionSecrets(active *session) {

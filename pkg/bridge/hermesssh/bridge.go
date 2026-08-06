@@ -713,13 +713,13 @@ func (session *bridgeSession) handleSession(ctx context.Context, channel ssh.Cha
 			continue
 		}
 		if !request.WantReply {
-			session.logRejected(audit)
+			session.logRejected(audit, kindUnknown)
 			return
 		}
 		var payload struct{ Command string }
 		if err := ssh.Unmarshal(request.Payload, &payload); err != nil {
 			_ = session.reply(request, false)
-			session.logRejected(audit)
+			session.logRejected(audit, kindUnknown)
 			return
 		}
 		audit.remoteCommand = payload.Command
@@ -727,20 +727,20 @@ func (session *bridgeSession) handleSession(ctx context.Context, channel ssh.Cha
 		if err != nil {
 			_ = session.reply(request, false)
 			if errors.Is(err, errSyncDenied) {
-				session.logRequestFailure(audit, "denied", errSyncDenied.Error())
+				session.logRequestFailure(audit, kindSync, "denied", errSyncDenied.Error())
 			} else {
-				session.logRejected(audit)
+				session.logRejected(audit, kindUnknown)
 			}
 			return
 		}
 		prepared, err := prepareRemoteCommand(command, session.sandbox.Workdir())
 		if err != nil {
 			_ = session.reply(request, false)
-			session.logRejected(audit)
+			session.logRejected(audit, command.kind)
 			return
 		}
 		if err := session.reply(request, true); err != nil {
-			session.logRequestFailure(audit, "failed", "SSH accept reply failed")
+			session.logRequestFailure(audit, prepared.kind, "failed", "SSH accept reply failed")
 			return
 		}
 		exitCode := session.execute(ctx, channel, prepared, audit)
@@ -749,11 +749,10 @@ func (session *bridgeSession) handleSession(ctx context.Context, channel ssh.Cha
 	}
 }
 
+// reply routes through session.replyRequest, which Start always populates and
+// tests override to observe accept/reject outcomes.
 func (session *bridgeSession) reply(request *ssh.Request, accepted bool) error {
-	if session.replyRequest != nil {
-		return session.replyRequest(request, accepted)
-	}
-	return request.Reply(accepted, nil)
+	return session.replyRequest(request, accepted)
 }
 
 func (session *bridgeSession) execute(ctx context.Context, channel ssh.Channel, prepared preparedRemoteCommand, audit requestAudit) int {
@@ -804,14 +803,18 @@ func (session *bridgeSession) execute(ctx context.Context, channel ssh.Channel, 
 	return exitCode
 }
 
-func (session *bridgeSession) logRejected(audit requestAudit) {
-	session.logRequestFailure(audit, "rejected", "invalid remote command")
+func (session *bridgeSession) logRejected(audit requestAudit, kind string) {
+	session.logRequestFailure(audit, kind, "rejected", "invalid remote command")
 }
 
-func (session *bridgeSession) logRequestFailure(audit requestAudit, status, message string) {
+// logRequestFailure records a request that never reached the sandbox. The kind
+// is whatever decoding established before the failure, so a refused file sync
+// is not filed as an agent command; kindUnknown marks a payload that never
+// decoded far enough to classify.
+func (session *bridgeSession) logRequestFailure(audit requestAudit, kind, status, message string) {
 	session.writeRecord(toolCallRecord{
 		ContainerID: session.sandbox.ContainerID(), ContainerName: session.sandbox.ContainerName(),
-		OperationClass: kindAgent, CommandHash: commandHash(audit.remoteCommand),
+		OperationClass: kind, CommandHash: commandHash(audit.remoteCommand),
 		StdinEncoding: "utf-8",
 		Status:        status, Error: message,
 		RequestType: audit.requestType, WantReply: audit.wantReply,
@@ -882,10 +885,12 @@ func (session *bridgeSession) finalize(ctx context.Context) error {
 	if session.audit != nil && !session.audit.finished() {
 		return auditErr
 	}
+	// Only the private identity is removed; that is revocation. knownSource
+	// holds nothing but the ephemeral host public key and is retained as the
+	// evidence of what Hermes pinned on first use.
 	cleanupErr := errors.Join(
 		session.revocationError(), auditErr,
 		removeIfPresent(session.identitySource),
-		removeIfPresent(session.knownSource),
 	)
 	if session.partialStart && cleanupErr == nil {
 		cleanupErr = os.RemoveAll(session.artifactDir)
