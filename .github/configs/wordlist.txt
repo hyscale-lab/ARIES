@@ -23,6 +23,7 @@ docker
 dockerfile
 durations
 edu
+entrypoint
 filesystem
 ghcr
 github
@@ -63,6 +64,7 @@ pid
 pre
 prefill
 preflight
+preload
 prewarm
 Realtime
 replayable
@@ -86,17 +88,21 @@ substitutable
 symlink
 tbd
 tcp
+teardown
 toml
 toolbridge
 toolchain
 toolsandbox
+toolsets
 tp
 tpot
 ttft
 tts
 tty
+upstream's
 utf
 uuid
+validator
 verifier
 websocket
 workdir
