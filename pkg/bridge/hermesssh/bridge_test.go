@@ -127,6 +127,19 @@ func runExec(t *testing.T, client *ssh.Client, payload string, stdin string) (st
 	return stdout.String(), stderr.String(), err
 }
 
+// recordsOfType selects one request type from the audit. OpenSSH sends an `env`
+// request before every exec and each one is recorded, so tests that care about
+// commands filter rather than index into the whole stream.
+func recordsOfType(records []map[string]any, requestType string) []map[string]any {
+	var selected []map[string]any
+	for _, record := range records {
+		if record["request_type"] == requestType {
+			selected = append(selected, record)
+		}
+	}
+	return selected
+}
+
 func readToolCalls(t *testing.T, path string) []map[string]any {
 	t.Helper()
 	file, err := os.Open(path)
@@ -213,15 +226,26 @@ func TestBridgeProxiesHermesCommandsAndRetainsEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	records := readToolCalls(t, filepath.Join(outputDir, "test-task", "bridge", "tool-calls.jsonl"))
-	if len(records) != 1 {
-		t.Fatalf("tool call records = %#v", records)
+	execs := recordsOfType(records, "exec")
+	if len(execs) != 1 {
+		t.Fatalf("exec records = %#v", records)
 	}
-	record := records[0]
+	record := execs[0]
 	if record["status"] != "completed" || record["operation_class"] != kindAgent || record["exit_code"].(float64) != 7 {
 		t.Fatalf("record = %#v", record)
 	}
 	if record["container_id"] != "sandbox-container-id" || record["run_id"] != "test-run" || record["task_id"] != "test-task" {
 		t.Fatalf("record identity = %#v", record)
+	}
+	// The audit is only lossless if the requests ARIES refuses appear too.
+	envs := recordsOfType(records, "env")
+	if len(envs) == 0 {
+		t.Fatalf("no env request was recorded; audit dropped it: %#v", records)
+	}
+	for _, env := range envs {
+		if env["status"] != "unsupported" || env["operation_class"] != kindUnknown {
+			t.Fatalf("env record = %#v", env)
+		}
 	}
 	raw, err := os.ReadFile(filepath.Join(outputDir, "test-task", "bridge", "ssh_raw.log"))
 	if err != nil {
@@ -300,7 +324,7 @@ func TestBridgeDeniesFileSyncAndRecordsItAsPolicy(t *testing.T) {
 	if err := manager.Stop(ctx); err != nil {
 		t.Fatal(err)
 	}
-	records := readToolCalls(t, filepath.Join(outputDir, "test-task", "bridge", "tool-calls.jsonl"))
+	records := recordsOfType(readToolCalls(t, filepath.Join(outputDir, "test-task", "bridge", "tool-calls.jsonl")), "exec")
 	if len(records) != 2 {
 		t.Fatalf("records = %#v", records)
 	}

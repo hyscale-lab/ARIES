@@ -555,7 +555,6 @@ func (c Versions) validate() error {
 		{"terminalbench2.repository_url", c.TerminalBench2.RepositoryURL},
 		{"terminalbench2.revision", c.TerminalBench2.Revision},
 		{"openclaw.image", c.OpenClaw.Image},
-		{"hermes.image", c.Hermes.Image},
 	}
 	for _, check := range checks {
 		if strings.TrimSpace(check.value) == "" {
@@ -575,10 +574,35 @@ func (c Versions) validate() error {
 	if err := containerimage.ValidatePinnedTagOnly(c.OpenClaw.Image); err != nil {
 		return fmt.Errorf("openclaw.image: %w", err)
 	}
-	if err := containerimage.ValidatePinnedTagOnly(c.Hermes.Image); err != nil {
-		return fmt.Errorf("hermes.image: %w", err)
+	// A catalog predating a given harness stays valid: only the image the
+	// selected harness actually needs is required, and that is enforced by
+	// HarnessImage once the profile's harness type is known. Any image that is
+	// present must still be pinned.
+	if strings.TrimSpace(c.Hermes.Image) != "" {
+		if err := containerimage.ValidatePinnedTagOnly(c.Hermes.Image); err != nil {
+			return fmt.Errorf("hermes.image: %w", err)
+		}
 	}
 	return nil
+}
+
+// HarnessImage returns the pinned image the named harness runs from. The set of
+// harnesses is enumerated rather than discovered, so an unknown type is an
+// error instead of an empty result.
+func (c Versions) HarnessImage(harnessType string) (string, error) {
+	var image, field string
+	switch harnessType {
+	case "openclaw":
+		image, field = c.OpenClaw.Image, "openclaw.image"
+	case "hermes":
+		image, field = c.Hermes.Image, "hermes.image"
+	default:
+		return "", fmt.Errorf("unsupported harness type %q", harnessType)
+	}
+	if strings.TrimSpace(image) == "" {
+		return "", fmt.Errorf("%s is required for harness type %q", field, harnessType)
+	}
+	return image, nil
 }
 
 func isHex(value string, characters int) bool {

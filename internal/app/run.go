@@ -244,7 +244,7 @@ func ensurePrepared(ctx context.Context, cfg config.Config, wiring Wiring) error
 	if err != nil {
 		return err
 	}
-	harnessImage, err := harnessImage(cfg)
+	harnessImage, err := cfg.Versions.HarnessImage(cfg.Harness.Type)
 	if err != nil {
 		return err
 	}
@@ -253,20 +253,6 @@ func ensurePrepared(ctx context.Context, cfg config.Config, wiring Wiring) error
 		images = append(images, task.Environment.Image)
 	}
 	return wiring.PullImages(ctx, uniqueStrings(images))
-}
-
-// harnessImage selects the pinned image to pre-pull for the configured
-// harness. It is an explicit switch for the same reason the Runner roles are:
-// the set of supported harnesses is enumerated, not discovered.
-func harnessImage(cfg config.Config) (string, error) {
-	switch cfg.Harness.Type {
-	case "openclaw":
-		return cfg.Versions.OpenClaw.Image, nil
-	case "hermes":
-		return cfg.Versions.Hermes.Image, nil
-	default:
-		return "", fmt.Errorf("unsupported harness type %q", cfg.Harness.Type)
-	}
 }
 
 func validateWiredComponents(cfg config.Config, wiring Wiring) error {

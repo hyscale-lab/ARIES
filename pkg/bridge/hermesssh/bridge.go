@@ -706,10 +706,13 @@ func (session *bridgeSession) handleSession(ctx context.Context, channel ssh.Cha
 		if request.Type != "exec" {
 			// OpenSSH sends an `env` request on every channel before the exec.
 			// Refusing it is correct and expected, but the channel must stay
-			// open or Hermes loses every command it ever issues.
+			// open or Hermes loses every command it ever issues. The refusal is
+			// still recorded: the wire-side evidence is only lossless if every
+			// request Hermes sends appears, including the ones ARIES declines.
 			if request.WantReply {
 				_ = session.reply(request, false)
 			}
+			session.logRequestFailure(audit, kindUnknown, "unsupported", "channel request type is not exec")
 			continue
 		}
 		if !request.WantReply {

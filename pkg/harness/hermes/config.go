@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/hyscale-lab/aries/pkg/core"
 )
@@ -140,7 +141,11 @@ func validateModel(model core.ModelConfig) error {
 			return errors.New("Hermes model base URL must not contain credentials, query, or fragment")
 		}
 	}
-	if strings.TrimSpace(model.Model) == "" || strings.ContainsAny(model.Model, "\x00\r\n") {
+	// yamlString would render a control character as a numeric escape rather
+	// than break the document, but a model ID containing one is a configuration
+	// error. Rejecting it here fails immediately instead of at the readiness
+	// timeout, with an error that names the cause.
+	if strings.TrimSpace(model.Model) == "" || strings.ContainsFunc(model.Model, unicode.IsControl) {
 		return errors.New("Hermes model ID is invalid")
 	}
 	if !validEnvironmentName(model.APIKeyEnv) {
@@ -210,25 +215,33 @@ func validWorkdir(value string) bool {
 	return true
 }
 
-// yamlString emits a double-quoted YAML scalar, escaping the quote, backslash,
-// and whitespace controls that would otherwise terminate the scalar. Other C0
-// control bytes are emitted raw and would produce invalid YAML; nothing
-// upstream currently rejects them.
+// yamlString emits a double-quoted YAML scalar. Every character that could
+// terminate the scalar or be read as a line break is escaped, so no rendered
+// value can restructure the document: the quote and backslash, the three
+// whitespace controls with short forms, and any remaining control character or
+// Unicode line/paragraph separator as a numeric escape.
 func yamlString(value string) string {
 	var output strings.Builder
 	output.WriteByte('"')
 	for _, character := range value {
-		switch character {
-		case '"':
+		switch {
+		case character == '"':
 			output.WriteString(`\"`)
-		case '\\':
+		case character == '\\':
 			output.WriteString(`\\`)
-		case '\n':
+		case character == '\n':
 			output.WriteString(`\n`)
-		case '\r':
+		case character == '\r':
 			output.WriteString(`\r`)
-		case '\t':
+		case character == '\t':
 			output.WriteString(`\t`)
+		case character == '\u2028':
+			output.WriteString(`\L`)
+		case character == '\u2029':
+			output.WriteString(`\P`)
+		case unicode.IsControl(character):
+			// IsControl covers C0, DEL, and C1; all fit the two-digit form.
+			fmt.Fprintf(&output, `\x%02X`, character)
 		default:
 			output.WriteRune(character)
 		}

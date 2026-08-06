@@ -72,7 +72,7 @@ func TestRenderConfigNormalizesSGLangAndRejectsBadInput(t *testing.T) {
 // A value that could terminate its own YAML scalar must be escaped, not emitted.
 func TestRenderConfigQuotesInjectionAttempts(t *testing.T) {
 	model := validModel()
-	model.Model = `x" \nevil: true` + "\t"
+	model.Model = `x" \nevil: true`
 	rendered, err := renderConfig(model, 10)
 	if err != nil {
 		t.Fatal(err)
@@ -82,6 +82,43 @@ func TestRenderConfigQuotesInjectionAttempts(t *testing.T) {
 	}
 	if !strings.Contains(string(rendered), `\"`) {
 		t.Fatalf("model ID quote was not escaped:\n%s", rendered)
+	}
+}
+
+// A control byte cannot reach yamlString through renderConfig because
+// validateModel rejects it first, so the renderer is covered directly: a raw
+// control byte in a double-quoted scalar is invalid YAML, and Hermes would fail
+// to parse its own config well after the cause.
+func TestYAMLStringEscapesControlCharacters(t *testing.T) {
+	for _, test := range []struct{ name, value, want string }{
+		{"nul", "a\x00b", `"a\x00b"`},
+		{"bell", "a\x07b", `"a\x07b"`},
+		{"vertical tab", "a\x0bb", `"a\x0Bb"`},
+		{"escape", "a\x1bb", `"a\x1Bb"`},
+		{"delete", "a\x7fb", `"a\x7Fb"`},
+		{"next line", "a\u0085b", `"a\x85b"`},
+		{"line separator", "a\u2028b", `"a\Lb"`},
+		{"paragraph separator", "a\u2029b", `"a\Pb"`},
+		{"short forms retained", "a\n\r\tb", `"a\n\r\tb"`},
+		{"printable untouched", "deepseek-v4/flash_1", `"deepseek-v4/flash_1"`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := yamlString(test.value); got != test.want {
+				t.Fatalf("yamlString(%q) = %s, want %s", test.value, got, test.want)
+			}
+		})
+	}
+}
+
+// The readiness probe cannot distinguish a malformed config from a slow start,
+// so a control byte must be refused where the cause is still visible.
+func TestValidateModelRejectsControlCharactersInModelID(t *testing.T) {
+	for _, value := range []string{"a\x00b", "a\x07b", "a\x1bb", "a\x7fb", "a\u0085b"} {
+		model := validModel()
+		model.Model = value
+		if err := validateModel(model); err == nil {
+			t.Fatalf("model ID %q was accepted", value)
+		}
 	}
 }
 

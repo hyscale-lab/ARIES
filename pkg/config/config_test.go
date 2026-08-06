@@ -217,6 +217,38 @@ func TestDecodeVersionsValidation(t *testing.T) {
 	}
 }
 
+// A catalog written before a harness existed must keep loading, so an absent
+// image is only an error for the harness that actually needs it. An image that
+// is present is still pin-validated.
+func TestVersionsRequireOnlyTheSelectedHarnessImage(t *testing.T) {
+	withoutHermes := `{"terminalbench2":{"repository_url":"https://example.invalid/terminal-bench-2.git","revision":"0123456789abcdef0123456789abcdef01234567"},"openclaw":{"image":"ghcr.io/openclaw/openclaw:2026.7.1"}}`
+	versions, err := DecodeVersions(strings.NewReader(withoutHermes))
+	if err != nil {
+		t.Fatalf("catalog without hermes.image was rejected: %v", err)
+	}
+	if image, err := versions.HarnessImage("openclaw"); err != nil || image != "ghcr.io/openclaw/openclaw:2026.7.1" {
+		t.Fatalf("openclaw image = %q, %v", image, err)
+	}
+	if _, err := versions.HarnessImage("hermes"); err == nil {
+		t.Fatal("missing hermes.image was accepted for the hermes harness")
+	}
+	if _, err := versions.HarnessImage("nope"); err == nil {
+		t.Fatal("unknown harness type was accepted")
+	}
+
+	full, err := DecodeVersions(strings.NewReader(validVersions))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if image, err := full.HarnessImage("hermes"); err != nil || image != "docker.io/nousresearch/hermes-agent:v2026.5.29.2" {
+		t.Fatalf("hermes image = %q, %v", image, err)
+	}
+	unpinned := strings.Replace(validVersions, "hermes-agent:v2026.5.29.2", "hermes-agent:latest", 1)
+	if _, err := DecodeVersions(strings.NewReader(unpinned)); err == nil {
+		t.Fatal("unpinned hermes.image was accepted")
+	}
+}
+
 func TestDecodeRejectsInvalidGenericFields(t *testing.T) {
 	cases := []string{
 		strings.Replace(validConfig, `"type":"docker"`, `"type":"docker","future":true`, 1),
