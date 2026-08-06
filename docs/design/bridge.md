@@ -49,10 +49,12 @@ client command; it hands over only a generated identity. Hermes forces
 file, so it pins the generated host key on first use; the bridge retains that
 key as evidence rather than implying a guarantee it cannot enforce.
 
-Recorded against Hermes v2026.5.29.2, the accepted grammar is exactly four
-payload shapes: the two fixed bootstrap probes `echo 'SSH connection
-established'` and `echo $HOME`, and `bash -c` / `bash -l -c` with one
-canonically `shlex.quote`-encoded script. Scripts carry embedded newlines and
+Recorded against Hermes v2026.5.29.2 and re-verified unchanged against
+v2026.8.3, the accepted grammar is exactly four payload shapes: the two fixed
+bootstrap probes `echo 'SSH connection established'` and `echo $HOME`, and
+`bash -c` / `bash -l -c` with one canonically `shlex.quote`-encoded script.
+A harness may open more than one SSH session per run — v2026.8.3 opens two —
+so the grammar is applied per connection and carries no run-level state. Scripts carry embedded newlines and
 nested quoting, so the canonical single-token encoding OpenClaw uses does not
 apply. Anything else is refused. Hermes multiplexes every command onto a single
 ControlMaster connection and sends an `env` request on each channel before the
