@@ -819,7 +819,10 @@ func (session *bridgeSession) logRequestFailure(audit requestAudit, kind, status
 		ContainerID: session.sandbox.ContainerID(), ContainerName: session.sandbox.ContainerName(),
 		OperationClass: kind, CommandHash: commandHash(audit.remoteCommand),
 		StdinEncoding: "utf-8",
-		Status:        status, Error: message,
+		// The request never ran, so the record must not carry the exit code of
+		// a successful command.
+		ExitCode: -1,
+		Status:   status, Error: message,
 		RequestType: audit.requestType, WantReply: audit.wantReply,
 	}, rawRecord(audit, 0, nil, status))
 }

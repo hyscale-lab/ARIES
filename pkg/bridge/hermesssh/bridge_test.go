@@ -200,7 +200,7 @@ func TestBridgeProxiesHermesCommandsAndRetainsEvidence(t *testing.T) {
 	if runErr == nil {
 		t.Fatal("expected the sandbox exit status to propagate")
 	}
-	if !asExitError(runErr, &exitErr) || exitErr.ExitStatus() != 7 {
+	if !errors.As(runErr, &exitErr) || exitErr.ExitStatus() != 7 {
 		t.Fatalf("run error = %v", runErr)
 	}
 	if stdout != "tool-output" || stderr != "tool-diagnostic" {
@@ -518,12 +518,4 @@ func TestNewRequiresOutputDirectory(t *testing.T) {
 	if _, err := New(Options{OutputDir: "  "}); err == nil {
 		t.Fatal("blank output directory was accepted")
 	}
-}
-
-func asExitError(err error, target **ssh.ExitError) bool {
-	exitErr, ok := err.(*ssh.ExitError)
-	if ok {
-		*target = exitErr
-	}
-	return ok
 }

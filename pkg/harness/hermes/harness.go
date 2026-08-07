@@ -80,9 +80,13 @@ var (
 
 // Options are the host-local inputs to one upstream Hermes container.
 type Options struct {
-	Image           string
-	OutputDir       string
-	DockerSocket    string
+	Image        string
+	OutputDir    string
+	DockerSocket string
+	// APIKeyLookup returns the model API key for one environment name. The
+	// harness takes ownership of the returned slice: it clones the bytes it
+	// needs and then clears the returned buffer in place, so a caller must
+	// not retain or reuse it after the call.
 	APIKeyLookup    func(string) ([]byte, bool)
 	MaxTurns        int
 	TerminalTimeout int
@@ -381,6 +385,12 @@ func (manager *Manager) Run(ctx context.Context, instruction string) (core.Harne
 		return core.HarnessResult{Status: core.StatusFailed}, errors.New("Hermes task instruction is invalid")
 	}
 	active.runAttempted = true
+	// Run outlives the lock, so it works from its own copy of the session
+	// rather than the pointer a concurrent Stop may be mutating. The copy
+	// carries every field the exec, artifact collection, redaction, and result
+	// construction below read.
+	local := *active
+	active = &local
 	manager.mu.Unlock()
 
 	runCtx, cancel := context.WithTimeout(ctx, active.agentTimeout)
@@ -547,8 +557,16 @@ func (manager *Manager) execAttached(ctx context.Context, containerID string, co
 }
 
 func (manager *Manager) waitExec(ctx context.Context, containerID, execID string) (client.ExecInspectResult, error) {
-	ticker := time.NewTicker(20 * time.Millisecond)
-	defer ticker.Stop()
+	// Polling starts tight so short execs (readiness probes, session exports)
+	// stay responsive, then backs off so a multi-minute agent run does not
+	// inspect the daemon thousands of times.
+	const (
+		firstInterval = 20 * time.Millisecond
+		lastInterval  = time.Second
+	)
+	interval := firstInterval
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
 	for {
 		inspection, err := manager.client.ExecInspect(ctx, execID, client.ExecInspectOptions{})
 		if err != nil {
@@ -569,8 +587,12 @@ func (manager *Manager) waitExec(ctx context.Context, containerID, execID string
 		select {
 		case <-ctx.Done():
 			return client.ExecInspectResult{}, ctx.Err()
-		case <-ticker.C:
+		case <-timer.C:
 		}
+		if interval < lastInterval {
+			interval = min(interval*2, lastInterval)
+		}
+		timer.Reset(interval)
 	}
 }
 
@@ -888,8 +910,12 @@ func (manager *Manager) collectArtifacts(ctx context.Context, active *session, s
 		out.limit, errBuffer.limit = maxDockerOutput, maxDockerOutput
 		_, copyErr := stdcopy.StdCopy(&out, &errBuffer, logs)
 		closeErr := logs.Close()
-		if copyErr != nil || closeErr != nil || out.exceeded || errBuffer.exceeded {
-			errs = append(errs, errors.Join(copyErr, closeErr, errors.New("Hermes container logs exceeded their bound")))
+		var boundErr error
+		if out.exceeded || errBuffer.exceeded {
+			boundErr = errors.New("Hermes container logs exceeded their bound")
+		}
+		if copyErr != nil || closeErr != nil || boundErr != nil {
+			errs = append(errs, errors.Join(copyErr, closeErr, boundErr))
 		} else {
 			content := allowContainerLogs(append(out.Bytes(), errBuffer.Bytes()...), active.apiKey)
 			path := filepath.Join(active.artifactDir, "container.log")

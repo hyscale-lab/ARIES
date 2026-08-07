@@ -135,7 +135,7 @@ func TestUpstreamHermesDrivesTheBridgeWithoutPatches(t *testing.T) {
 	if err := os.WriteFile(identityPath, identity, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	host, port, err := splitEndpoint(endpoint.Address)
+	host, port, err := net.SplitHostPort(endpoint.Address)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,13 +184,13 @@ func TestUpstreamHermesDrivesTheBridgeWithoutPatches(t *testing.T) {
 	}
 	sawAgentCommand := false
 	for _, item := range commands {
-		if item.Path == remoteShellPath {
-			sawAgentCommand = true
+		// The agent shell is the only executable the bridge may run, so any
+		// other path — a future tar, scp, or mkdir file-sync leak included —
+		// fails here.
+		if item.Path != remoteShellPath {
+			t.Fatalf("an unexpected command reached the sandbox: %#v", item)
 		}
-		// Nothing that writes the Hermes home may be executed in the sandbox.
-		if item.Path == "tar" || item.Path == "scp" || strings.HasPrefix(item.Path, "mkdir") {
-			t.Fatalf("a file-sync command reached the sandbox: %#v", item)
-		}
+		sawAgentCommand = true
 	}
 	if !sawAgentCommand {
 		t.Fatalf("no shell command reached the sandbox: %#v", commands)
@@ -238,12 +238,4 @@ func TestUpstreamHermesDrivesTheBridgeWithoutPatches(t *testing.T) {
 	if denied == 0 {
 		t.Fatalf("no file-sync refusal was recorded: %#v", records)
 	}
-}
-
-func splitEndpoint(address string) (string, string, error) {
-	index := strings.LastIndex(address, ":")
-	if index < 0 {
-		return "", "", fmt.Errorf("address %q has no port", address)
-	}
-	return address[:index], address[index+1:], nil
 }

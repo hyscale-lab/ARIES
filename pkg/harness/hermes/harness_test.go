@@ -255,7 +255,9 @@ func newTestManager(t *testing.T, fake *fakeDocker, secret []byte) *Manager {
 	t.Helper()
 	manager, err := New(Options{
 		Image: testHermesImage, OutputDir: t.TempDir(), StartTimeout: 2 * time.Second, AgentTimeout: 2 * time.Second,
-		APIKeyLookup: func(string) ([]byte, bool) { return secret, true },
+		// Start clears the buffer the lookup hands it, so the test keeps its
+		// own copy for later assertions.
+		APIKeyLookup: func(string) ([]byte, bool) { return bytes.Clone(secret), true },
 	})
 	if err != nil {
 		t.Fatal(err)

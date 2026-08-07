@@ -77,7 +77,10 @@ func TestRenderConfigQuotesInjectionAttempts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(rendered), "\nevil: true") {
+	// The model ID carries a literal backslash-n. It must reach the file as a
+	// doubled backslash, not as the `\n` escape a YAML parser would decode
+	// into a line break that starts a new key.
+	if !strings.Contains(string(rendered), `\\nevil: true`) {
 		t.Fatalf("model ID escaped its scalar:\n%s", rendered)
 	}
 	if !strings.Contains(string(rendered), `\"`) {
