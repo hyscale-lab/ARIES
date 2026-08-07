@@ -1254,7 +1254,7 @@ func TestRecordedInputKeepsRawAndUsesSafeStructuredEncoding(t *testing.T) {
 			if _, err := io.Copy(io.Discard, input); err != nil {
 				t.Fatal(err)
 			}
-			count, content, encoding, raw, overflow := input.record()
+			count, content, encoding, raw, overflow := input.record(true)
 			if count != int64(len(test.content)) || content != test.want || encoding != test.encoding || !bytes.Equal(raw, test.content) || overflow {
 				t.Fatalf("record = %d %q %q", count, content, encoding)
 			}
@@ -1265,7 +1265,7 @@ func TestRecordedInputKeepsRawAndUsesSafeStructuredEncoding(t *testing.T) {
 		if _, err := io.Copy(io.Discard, input); err == nil || !strings.Contains(err.Error(), "stdin exceeds") {
 			t.Fatalf("oversized stdin error = %v", err)
 		}
-		count, content, encoding, raw, overflow := input.record()
+		count, content, encoding, raw, overflow := input.record(true)
 		if count <= maxRecordedInputBytes || content != "" || encoding != "utf-8" || len(raw) != 0 || !overflow {
 			t.Fatalf("bounded record = count %d content %d encoding %q", count, len(content), encoding)
 		}
@@ -1285,13 +1285,13 @@ func TestRecordedInputSnapshotsCountAndContentTogether(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			count, content, encoding, raw, overflow := input.record()
+			count, content, encoding, raw, overflow := input.record(true)
 			if encoding != "utf-8" || count != int64(len(content)) || !bytes.Equal(raw, []byte(content)) || overflow {
 				t.Fatalf("final snapshot = count %d content %d encoding %q", count, len(content), encoding)
 			}
 			return
 		default:
-			count, content, encoding, raw, overflow := input.record()
+			count, content, encoding, raw, overflow := input.record(true)
 			if encoding != "utf-8" || count != int64(len(content)) || !bytes.Equal(raw, []byte(content)) || overflow {
 				t.Fatalf("inconsistent snapshot = count %d content %d encoding %q", count, len(content), encoding)
 			}

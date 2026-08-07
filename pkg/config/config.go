@@ -132,6 +132,18 @@ type SandboxConfig struct {
 
 type BridgeConfig struct {
 	Type string `json:"type"`
+	// RetainRawLog keeps the bridge's byte-level ssh_raw.log. It defaults to
+	// true because that log is the only record of raw wire commands, request
+	// payloads, and binary stdin; profiles that only need the structured
+	// tool-call log can set it false and drop the largest artifact a run
+	// writes.
+	RetainRawLog *bool `json:"retain_raw_log,omitempty"`
+}
+
+// RetainBridgeRawLog reports whether ssh_raw.log should be written, defaulting
+// to true when a profile does not mention it.
+func (c BridgeConfig) RetainBridgeRawLog() bool {
+	return c.RetainRawLog == nil || *c.RetainRawLog
 }
 
 func (c Config) CoreModel() core.ModelConfig {

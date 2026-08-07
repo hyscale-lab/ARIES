@@ -714,3 +714,40 @@ func TestNewRejectsUnpinnedImage(t *testing.T) {
 		}
 	}
 }
+
+// TestRunOutcomeRecordsTerminalState pins the artifact that closes the gap in
+// Hermes's own export: its session store leaves ended_at and end_reason null
+// for one-shot runs, so the exit trailer is the only positive terminal record.
+func TestRunOutcomeRecordsTerminalState(t *testing.T) {
+	started := time.Now().Add(-2 * time.Second)
+	for _, testCase := range []struct {
+		name      string
+		exitCode  int
+		runErr    error
+		status    string
+		endReason string
+	}{
+		{"completed", 0, nil, string(core.StatusSucceeded), "completed"},
+		{"nonzero exit", 3, nil, string(core.StatusFailed), "nonzero_exit"},
+		{"deadline", -1, context.DeadlineExceeded, string(core.StatusCanceled), "deadline_exceeded"},
+		{"canceled", -1, context.Canceled, string(core.StatusCanceled), "canceled"},
+		{"exec error", -1, errors.New("attach failed"), string(core.StatusFailed), "exec_error"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			outcome := newRunOutcome(started, testCase.exitCode, testCase.runErr)
+			if outcome.Status != testCase.status || outcome.EndReason != testCase.endReason {
+				t.Fatalf("outcome = %+v, want status %q reason %q", outcome, testCase.status, testCase.endReason)
+			}
+			if outcome.ExitCode != testCase.exitCode {
+				t.Fatalf("exit code = %d, want %d", outcome.ExitCode, testCase.exitCode)
+			}
+			// The fields Hermes leaves null must both be populated and ordered.
+			if outcome.StartedAt == "" || outcome.EndedAt == "" || outcome.DurationMS <= 0 {
+				t.Fatalf("timings = %+v", outcome)
+			}
+			if outcome.EndedAt < outcome.StartedAt {
+				t.Fatalf("ended_at %q precedes started_at %q", outcome.EndedAt, outcome.StartedAt)
+			}
+		})
+	}
+}

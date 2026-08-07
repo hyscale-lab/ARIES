@@ -211,7 +211,7 @@ func newBridge(cfg config.Config, outputRoot string, logger *logrus.Logger) (run
 		if err != nil {
 			return nil, fmt.Errorf("locate ARIES executable: %w", err)
 		}
-		bridge, err := openclawssh.New(openclawssh.Options{OutputDir: outputRoot, ClientPath: filepath.Join(filepath.Dir(executable), "aries-ssh"), Logger: logger})
+		bridge, err := openclawssh.New(openclawssh.Options{OutputDir: outputRoot, ClientPath: filepath.Join(filepath.Dir(executable), "aries-ssh"), Logger: logger, OmitRawLog: !cfg.Bridge.RetainBridgeRawLog()})
 		if err != nil {
 			return nil, fmt.Errorf("construct OpenClaw SSH bridge: %w", err)
 		}
@@ -219,7 +219,7 @@ func newBridge(cfg config.Config, outputRoot string, logger *logrus.Logger) (run
 	case "hermes-ssh":
 		// Hermes runs OpenSSH itself, so this bridge stages no client helper
 		// and needs no path to the ARIES executable.
-		bridge, err := hermesssh.New(hermesssh.Options{OutputDir: outputRoot, Logger: logger})
+		bridge, err := hermesssh.New(hermesssh.Options{OutputDir: outputRoot, Logger: logger, OmitRawLog: !cfg.Bridge.RetainBridgeRawLog()})
 		if err != nil {
 			return nil, fmt.Errorf("construct Hermes SSH bridge: %w", err)
 		}

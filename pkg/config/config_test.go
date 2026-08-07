@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -262,5 +263,31 @@ func TestDecodeRejectsInvalidGenericFields(t *testing.T) {
 		if _, err := Decode(strings.NewReader(input)); err == nil {
 			t.Fatal("expected rejection")
 		}
+	}
+}
+
+// TestBridgeRawLogDefaultsToRetained keeps the forensic log opt-out rather than
+// opt-in: a profile that never mentions it must still get ssh_raw.log.
+func TestBridgeRawLogDefaultsToRetained(t *testing.T) {
+	var absent BridgeConfig
+	if err := json.Unmarshal([]byte(`{"type":"hermes-ssh"}`), &absent); err != nil {
+		t.Fatal(err)
+	}
+	if !absent.RetainBridgeRawLog() {
+		t.Fatal("a profile without retain_raw_log must retain the raw log")
+	}
+	var disabled BridgeConfig
+	if err := json.Unmarshal([]byte(`{"type":"hermes-ssh","retain_raw_log":false}`), &disabled); err != nil {
+		t.Fatal(err)
+	}
+	if disabled.RetainBridgeRawLog() {
+		t.Fatal("retain_raw_log:false must disable the raw log")
+	}
+	var enabled BridgeConfig
+	if err := json.Unmarshal([]byte(`{"type":"hermes-ssh","retain_raw_log":true}`), &enabled); err != nil {
+		t.Fatal(err)
+	}
+	if !enabled.RetainBridgeRawLog() {
+		t.Fatal("retain_raw_log:true must retain the raw log")
 	}
 }

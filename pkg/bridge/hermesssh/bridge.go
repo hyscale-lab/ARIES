@@ -44,6 +44,13 @@ type Options struct {
 	OutputDir      string
 	CleanupTimeout time.Duration
 	Logger         *logrus.Logger
+	// OmitRawLog drops ssh_raw.log, the byte-level record of every channel
+	// request. That log is the only artifact holding the raw wire command,
+	// the request payload, and binary stdin that the structured log omits,
+	// so it is the forensic record rather than a duplicate of
+	// tool-calls.jsonl. The zero value retains it; setting this trades that
+	// evidence for disk.
+	OmitRawLog bool
 }
 
 // Manager exposes one SSH endpoint at a time and proxies its exec requests to
@@ -54,6 +61,7 @@ type Manager struct {
 	logger         *logrus.Logger
 	openAudit      func(string) (*auditFile, error)
 	afterStart     func(*bridgeSession) error
+	omitRawLog     bool
 
 	mu       sync.Mutex
 	active   *bridgeSession
@@ -220,7 +228,7 @@ func (input *recordedInput) Read(content []byte) (int, error) {
 	return n, err
 }
 
-func (input *recordedInput) record() (int64, string, string, []byte, bool) {
+func (input *recordedInput) record(retainedRaw bool) (int64, string, string, []byte, bool) {
 	input.mu.Lock()
 	count := input.n
 	content := bytes.Clone(input.data.Bytes())
@@ -229,7 +237,13 @@ func (input *recordedInput) record() (int64, string, string, []byte, bool) {
 	if safeStructuredText(content) {
 		return count, string(content), "utf-8", content, overflow
 	}
-	return count, fmt.Sprintf("[binary input omitted; %d bytes retained in ssh_raw.log]", count), "binary-omitted", content, overflow
+	// Without the raw log the bytes are retained nowhere, so the note must not
+	// point at an artifact this run did not write.
+	note := fmt.Sprintf("[binary input omitted; %d bytes not retained]", count)
+	if retainedRaw {
+		note = fmt.Sprintf("[binary input omitted; %d bytes retained in ssh_raw.log]", count)
+	}
+	return count, note, "binary-omitted", content, overflow
 }
 
 func safeStructuredText(content []byte) bool {
@@ -262,6 +276,12 @@ func newAuditWriter(structured, raw *auditFile) *auditWriter {
 	return writer
 }
 
+// retainsRaw reports whether this run writes ssh_raw.log, so callers can
+// describe where omitted bytes were kept without guessing.
+func (writer *auditWriter) retainsRaw() bool {
+	return writer != nil && writer.raw != nil
+}
+
 func (writer *auditWriter) enqueue(structured toolCallRecord, raw rawSSHRecord) {
 	writer.mu.Lock()
 	defer writer.mu.Unlock()
@@ -281,10 +301,13 @@ func (writer *auditWriter) enqueue(structured toolCallRecord, raw rawSSHRecord) 
 		writer.latchLocked(fmt.Errorf("marshal structured SSH audit: %w", err))
 		return
 	}
-	rawLine, err := writer.renderRaw(raw)
-	if err != nil {
-		writer.latchLocked(fmt.Errorf("render raw SSH audit: %w", err))
-		return
+	var rawLine []byte
+	if writer.raw != nil {
+		rawLine, err = writer.renderRaw(raw)
+		if err != nil {
+			writer.latchLocked(fmt.Errorf("render raw SSH audit: %w", err))
+			return
+		}
 	}
 	charge := int64(len(structuredLine) + len(rawLine))
 	if charge > maxToolLogBytes-writer.bytes {
@@ -431,6 +454,9 @@ func (writer *auditWriter) persist(entry auditEntry) {
 }
 
 func (writer *auditWriter) persistLine(file *auditFile, line []byte, operation string) {
+	if file == nil {
+		return
+	}
 	written, err := file.write(line)
 	if err == nil && written != len(line) {
 		err = io.ErrShortWrite
@@ -443,6 +469,9 @@ func (writer *auditWriter) persistLine(file *auditFile, line []byte, operation s
 }
 
 func (writer *auditWriter) persistSync(file *auditFile, operation string) {
+	if file == nil {
+		return
+	}
 	if err := file.sync(); err != nil {
 		writer.mu.Lock()
 		writer.latchLocked(fmt.Errorf("%s: %w", operation, err))
@@ -457,6 +486,9 @@ func (writer *auditWriter) finish() {
 		name string
 		file *auditFile
 	}{{"structured close", writer.structured}, {"raw close", writer.raw}} {
+		if item.file == nil {
+			continue
+		}
 		if err := item.file.close(); err != nil {
 			writer.mu.Lock()
 			writer.latchLocked(fmt.Errorf("%s: %w", item.name, err))
@@ -516,7 +548,7 @@ func New(options Options) (*Manager, error) {
 	}
 	return &Manager{
 		outputDir: outputDir, cleanupTimeout: options.CleanupTimeout,
-		logger: options.Logger, openAudit: openAuditFile,
+		logger: options.Logger, openAudit: openAuditFile, omitRawLog: options.OmitRawLog,
 	}, nil
 }
 
@@ -565,7 +597,9 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 	session.identitySource = filepath.Join(session.artifactDir, "id_ed25519")
 	session.knownSource = filepath.Join(session.artifactDir, "known_hosts")
 	session.toolLogPath = filepath.Join(session.artifactDir, "tool-calls.jsonl")
-	session.rawLogPath = filepath.Join(session.artifactDir, "ssh_raw.log")
+	if !manager.omitRawLog {
+		session.rawLogPath = filepath.Join(session.artifactDir, "ssh_raw.log")
+	}
 	if err := writeExclusivePrivate(session.identitySource, clientPEM); err != nil {
 		return fail(fmt.Errorf("write Hermes SSH identity: %w", err))
 	}
@@ -589,9 +623,12 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 	if err != nil {
 		return fail(fmt.Errorf("create Hermes SSH tool log: %w", err))
 	}
-	raw, err := manager.openAudit(session.rawLogPath)
-	if err != nil {
-		return fail(errors.Join(fmt.Errorf("create Hermes SSH raw log: %w", err), structured.close()))
+	var raw *auditFile
+	if session.rawLogPath != "" {
+		raw, err = manager.openAudit(session.rawLogPath)
+		if err != nil {
+			return fail(errors.Join(fmt.Errorf("create Hermes SSH raw log: %w", err), structured.close()))
+		}
 	}
 	session.audit = newAuditWriter(structured, raw)
 	serveCtx, cancel := context.WithCancel(context.Background())
@@ -612,8 +649,17 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 	return core.ToolEndpoint{
 		Protocol: "ssh", Address: address, Username: lockedUsername, Network: network,
 		IdentityFile: identityContainerPath, IdentitySourceFile: session.identitySource,
-		LogPaths: []string{session.toolLogPath, session.rawLogPath},
+		LogPaths: session.logPaths(),
 	}, nil
+}
+
+// logPaths omits ssh_raw.log when it was not retained, so the endpoint never
+// advertises an artifact that does not exist.
+func (session *bridgeSession) logPaths() []string {
+	if session.rawLogPath == "" {
+		return []string{session.toolLogPath}
+	}
+	return []string{session.toolLogPath, session.rawLogPath}
 }
 
 func newServerConfig(hostSigner ssh.Signer, authorized ssh.PublicKey) *ssh.ServerConfig {
@@ -787,7 +833,7 @@ func (session *bridgeSession) execute(ctx context.Context, channel ssh.Channel, 
 	if exitCode < 0 || exitCode > 255 {
 		exitCode = 255
 	}
-	stdinBytes, stdinContent, stdinEncoding, rawStdin, stdinOverflow := stdin.record()
+	stdinBytes, stdinContent, stdinEncoding, rawStdin, stdinOverflow := stdin.record(session.audit.retainsRaw())
 	if stdinOverflow {
 		session.audit.latch(fmt.Errorf("retain Hermes SSH stdin: input exceeds %d bytes", maxRecordedInputBytes))
 		return exitCode

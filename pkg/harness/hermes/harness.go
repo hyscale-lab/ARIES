@@ -404,8 +404,9 @@ func (manager *Manager) Run(ctx context.Context, instruction string) (core.Harne
 	if err == nil && result.exitCode != 0 {
 		err = fmt.Errorf("Hermes one-shot exited with status %d", result.exitCode)
 	}
+	outcome := newRunOutcome(started, result.exitCode, runErr)
 	artifactCtx, artifactCancel := context.WithTimeout(context.WithoutCancel(ctx), manager.cleanupTimeout)
-	artifactErr := manager.collectArtifacts(artifactCtx, active, stdout, stderr)
+	artifactErr := manager.collectArtifacts(artifactCtx, active, stdout, stderr, outcome)
 	artifactCancel()
 	err = errors.Join(err, artifactErr)
 	if err != nil {
@@ -890,8 +891,52 @@ func (manager *Manager) stopSession(ctx context.Context, active *session) error 
 	return nil
 }
 
-func (manager *Manager) collectArtifacts(ctx context.Context, active *session, stdout, stderr []byte) error {
+// runOutcome is the terminal state of the one-shot. Hermes's own session store
+// leaves ended_at and end_reason null for `-z` runs, so the exit trailer that
+// execAttached already recovered is the only positive record of how the agent
+// finished. It is retained beside the native export rather than merged into it,
+// which keeps that export byte-identical to what Hermes wrote.
+type runOutcome struct {
+	Status     string `json:"status"`
+	EndReason  string `json:"end_reason"`
+	ExitCode   int    `json:"exit_code"`
+	StartedAt  string `json:"started_at"`
+	EndedAt    string `json:"ended_at"`
+	DurationMS int64  `json:"duration_ms"`
+}
+
+func newRunOutcome(started time.Time, exitCode int, runErr error) runOutcome {
+	ended := time.Now()
+	outcome := runOutcome{
+		Status: string(core.StatusSucceeded), EndReason: "completed", ExitCode: exitCode,
+		StartedAt: started.UTC().Format(time.RFC3339Nano), EndedAt: ended.UTC().Format(time.RFC3339Nano),
+		DurationMS: ended.Sub(started).Milliseconds(),
+	}
+	switch {
+	case errors.Is(runErr, context.DeadlineExceeded):
+		outcome.Status, outcome.EndReason = string(core.StatusCanceled), "deadline_exceeded"
+	case errors.Is(runErr, context.Canceled):
+		outcome.Status, outcome.EndReason = string(core.StatusCanceled), "canceled"
+	case runErr != nil:
+		outcome.Status, outcome.EndReason = string(core.StatusFailed), "exec_error"
+	case exitCode != 0:
+		outcome.Status, outcome.EndReason = string(core.StatusFailed), "nonzero_exit"
+	}
+	return outcome
+}
+
+func (manager *Manager) collectArtifacts(ctx context.Context, active *session, stdout, stderr []byte, outcome runOutcome) error {
 	var errs []error
+	if encoded, err := json.MarshalIndent(outcome, "", "  "); err != nil {
+		errs = append(errs, fmt.Errorf("encode Hermes session outcome: %w", err))
+	} else {
+		path := filepath.Join(active.artifactDir, "session-outcome.json")
+		if err := writeArtifact(path, append(encoded, '\n')); err != nil {
+			errs = append(errs, fmt.Errorf("retain Hermes session outcome: %w", err))
+		} else {
+			active.logPaths = appendUnique(active.logPaths, path)
+		}
+	}
 	for _, item := range []struct {
 		name    string
 		content []byte

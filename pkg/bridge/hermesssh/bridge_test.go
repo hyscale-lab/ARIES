@@ -519,3 +519,75 @@ func TestNewRequiresOutputDirectory(t *testing.T) {
 		t.Fatal("blank output directory was accepted")
 	}
 }
+
+// TestBridgeOmitsRawLogWhenConfigured proves the opt-out drops only
+// ssh_raw.log: the structured tool log still records the call, the endpoint
+// stops advertising the raw path, and the stdin note no longer points at an
+// artifact this run never wrote.
+func TestBridgeOmitsRawLogWhenConfigured(t *testing.T) {
+	outputDir := t.TempDir()
+	manager, err := New(Options{OutputDir: outputDir, CleanupTimeout: 5 * time.Second, OmitRawLog: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sandbox := &testSandbox{result: core.CommandResult{ExitCode: 0, Stdout: "ok"}}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	endpoint, err := manager.Start(ctx, sandbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range endpoint.LogPaths {
+		if strings.HasSuffix(path, "ssh_raw.log") {
+			t.Fatalf("endpoint advertised a raw log that is not written: %v", endpoint.LogPaths)
+		}
+	}
+	client, err := ssh.Dial("tcp", endpoint.Address, clientConfig(t, endpoint))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runExec(t, client, capturedAgentPayload, ""); err != nil {
+		t.Fatal(err)
+	}
+	_ = client.Close()
+	if err := manager.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	toolLog := filepath.Join(outputDir, sandbox.TaskID(), "bridge", "tool-calls.jsonl")
+	content, err := os.ReadFile(toolLog)
+	if err != nil {
+		t.Fatalf("structured tool log must survive the opt-out: %v", err)
+	}
+	if len(bytes.TrimSpace(content)) == 0 {
+		t.Fatal("structured tool log is empty")
+	}
+	if _, err := os.Stat(filepath.Join(outputDir, sandbox.TaskID(), "bridge", "ssh_raw.log")); !os.IsNotExist(err) {
+		t.Fatalf("ssh_raw.log still written: %v", err)
+	}
+}
+
+// TestBinaryStdinNoteMatchesRawRetention keeps the structured log honest about
+// where omitted bytes went, in both retention modes.
+func TestBinaryStdinNoteMatchesRawRetention(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		retained bool
+		want     string
+	}{
+		{"retained", true, "retained in ssh_raw.log"},
+		{"omitted", false, "not retained"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			input := &recordedInput{reader: bytes.NewReader(nil)}
+			input.data.Write([]byte{0x00, 0x01, 0x02})
+			input.n = 3
+			_, note, encoding, _, _ := input.record(testCase.retained)
+			if encoding != "binary-omitted" {
+				t.Fatalf("encoding = %q", encoding)
+			}
+			if !strings.Contains(note, testCase.want) {
+				t.Fatalf("note = %q, want it to mention %q", note, testCase.want)
+			}
+		})
+	}
+}
