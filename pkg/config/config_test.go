@@ -266,15 +266,15 @@ func TestDecodeRejectsInvalidGenericFields(t *testing.T) {
 	}
 }
 
-// TestBridgeRawLogDefaultsToRetained keeps the forensic log opt-out rather than
-// opt-in: a profile that never mentions it must still get ssh_raw.log.
-func TestBridgeRawLogDefaultsToRetained(t *testing.T) {
+// TestBridgeRawLogDefaultsToDropped keeps the forensic log opt-in rather than
+// opt-out: a profile that never mentions it must not write ssh_raw.log.
+func TestBridgeRawLogDefaultsToDropped(t *testing.T) {
 	var absent BridgeConfig
 	if err := json.Unmarshal([]byte(`{"type":"hermes-ssh"}`), &absent); err != nil {
 		t.Fatal(err)
 	}
-	if !absent.RetainBridgeRawLog() {
-		t.Fatal("a profile without retain_raw_log must retain the raw log")
+	if absent.RetainBridgeRawLog() {
+		t.Fatal("a profile without retain_raw_log must drop the raw log")
 	}
 	var disabled BridgeConfig
 	if err := json.Unmarshal([]byte(`{"type":"hermes-ssh","retain_raw_log":false}`), &disabled); err != nil {

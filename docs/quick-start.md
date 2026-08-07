@@ -342,7 +342,7 @@ task_id="$(jq -er '.tasks[0].task_id' "$run_dir/run-result.json")"
 task_dir="$run_dir/$task_id"
 cat "$task_dir/evaluation/reward.txt"
 cat "$task_dir/bridge/tool-calls.jsonl"
-cat "$task_dir/bridge/ssh_raw.log"
+test ! -f "$task_dir/bridge/ssh_raw.log" || cat "$task_dir/bridge/ssh_raw.log"
 cat "$task_dir/harness/openclaw.json"
 cat "$run_dir/aries.log"
 ```
@@ -379,7 +379,9 @@ A successful task has:
 - reward `1`; and
 - completed tool calls in `bridge/tool-calls.jsonl`.
 
-`bridge/ssh_raw.log` is an unconditional mode-0600 sensitive audit containing
+`bridge/ssh_raw.log` is an opt-in mode-0600 sensitive audit. It is written only
+when a profile sets `bridge.retain_raw_log` to `true`; an omitted or `false`
+value drops it, so the file is absent by default. When retained it contains
 lossless, human-readable text records between full-line
 `--- ARIES SSH CALL BEGIN ---` and `--- ARIES SSH CALL END ---` delimiters.
 Fixed-order `key=value` lines include the decoded wire command when available,

@@ -230,11 +230,12 @@ credential remains.
 
 ## Evidence and privacy
 
-Every task retains two private mode-0600 bridge artifacts:
+Every task retains a private mode-0600 structured bridge artifact, plus an
+opt-in raw one that requires `bridge.retain_raw_log: true`:
 
 ```text
 <task>/bridge/tool-calls.jsonl
-<task>/bridge/ssh_raw.log
+<task>/bridge/ssh_raw.log   (only when bridge.retain_raw_log is true)
 ```
 
 `tool-calls.jsonl` contains one valid JSON object per line. It describes the
