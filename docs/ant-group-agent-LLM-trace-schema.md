@@ -6,13 +6,22 @@ This document describes the schema and file formats for the [AntGroup Agentic LL
 
 The data is collected from Ant Group's internal API platform, where both agentic and non-agentic workflows can be routed to the same instance. The instances are for internal use only. Since the API platform lacks a clear indicator of whether a harness is used, agentic and non-agentic requests are differentiated based on the input and response content.
 
-One file contains the following fields and covers requests from multiple serving instances during working hours from 10:00 to 18:00, in CSV format: `antgroup_engine_trace_2026.csv`
+The engine trace is provided as CSV files in two groups:
+
+- **Working hours** - `antgroup_engine_trace_2026_working_hours.csv` covers requests during working hours from 10:00 to 18:00 from a group of pods randomly selected from all serving pods. It includes the `pod` field identifying each request's pod. This is the engine-side file used in the [ARIES paper](https://arxiv.org/abs/2607.29069).
+- **24-hour per-pod logs** - `antgroup_engine_trace_2026_24h_1.csv` through `antgroup_engine_trace_2026_24h_5.csv` each record one pod's requests over a 24-hour period (five pods in total). They omit the `pod` field; the pod identity is encoded in the file-name suffix (`1`-`5`) rather than in a column.
+
+> **Notes:**
+> - The working-hours and 24-hour trace sets cover different pod groups and do not overlap.
+> - The 24-hour files span a full calendar day, from 00:00 to 23:59.
+> - The working-hours file comprises 10 pods in total.
+> - Due to imperfections in the upstream data source, some data points may be missing; consumers should account for empty values when processing the data.
 
 ### Schema
 
 | Field                 | Description                                                  |
 | --------------------- | ------------------------------------------------------------ |
-| pod                   | Label of the pod (virtual environment) that served the request |
+| pod                   | Label of the pod (virtual environment) that served the request; present only in `antgroup_engine_trace_2026_working_hours.csv` (the 24-hour files identify their pod by file-name suffix `1`-`5`) |
 | emit_time             | Timestamp of the log record, expressed as a relative time    |
 | actual_hit_ratio      | Actual prefix-cache hit ratio of the request                 |
 | check_pass            | Whether the request completed successfully                   |
@@ -39,6 +48,10 @@ The harness side is a variant of OpenClaw used internally for tasks such as offi
 
 > **Note:** The engine-side and harness-side data are not from the same period and production environment, so they are not directly relatable.
 
-One file contains CPU and memory utilization data for 100 pods, collected over a 24-hour period, in CSV format: `antgroup_harness_cpu_utilization_2026.csv` and `antgroup_harness_memory_utilization_2026.csv`
+CPU and memory utilization for 100 pods, collected over a 24-hour period, are provided as CSV files: `antgroup_harness_cpu_utilization_2026_24h.csv` and `antgroup_harness_memory_utilization_2026_24h.csv`
 
 Each file contains 100 columns, one per pod. Columns follow the pattern `[Metric](pod=[pod name])`, where `Metric` is `cpu_util` or `mem_util`.
+
+> **Notes:**
+> - Utilization values are expressed as percentages of allocation (%).
+> - Harness pods are not necessarily active for the full 24-hour period; utilization is recorded only over each pod's lifespan.

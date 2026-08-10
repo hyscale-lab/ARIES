@@ -40,7 +40,7 @@ how execution behavior relates to the final outcome.
 - **Make stateful tool execution comparable.** A narrow bridge gives the
 harness temporary access to a persistent task environment while sandbox
 adapters retain control of lifecycle, isolation, and resource observation.
-- **Ground systems research in production behavior. (will be added soon!)** The included
+- **Ground systems research in production behavior.** The included
  [Ant Group Agentic LLM Trace 2026](docs/ant-group-agent-LLM-trace.md) captures
 engine request logs and harness-environment metrics from a real online
 serving workload.
@@ -115,6 +115,15 @@ contact an external model endpoint.
 The DeepSeek example requires an API key and can incur charges. The
 [Quick start](docs/quick-start.md) covers secure credential setup, the first
 run, SGLang alternatives, result inspection, and troubleshooting.
+
+## Trace dataset
+
+The repository includes the [Ant Group Agentic LLM Trace 2026](docs/ant-group-agent-LLM-trace.md)
+under `traces/` — per-pod 24-hour engine logs, a working-hours engine log from
+a randomly selected group of pods, and harness CPU/memory utilization metrics
+collected from Ant Group's production inference infrastructure. The dataset is
+released under [CC-BY-4.0](LICENSE) and is tracked with Git LFS; fetch the
+files after cloning with `git lfs pull`.
 
 ## Research and roadmap
 
