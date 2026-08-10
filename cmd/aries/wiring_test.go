@@ -16,6 +16,7 @@ import (
 
 	"github.com/hyscale-lab/aries/internal/app"
 	runtimesglang "github.com/hyscale-lab/aries/internal/modelruntime/sglang"
+	"github.com/hyscale-lab/aries/pkg/bridge/openclawe2b"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
 )
@@ -74,7 +75,7 @@ func TestExplicitCompositionSwitches(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(source)
-	for _, value := range []string{`case "terminalbench2"`, `case "openclaw"`, `case "hermes"`, `case "docker"`, `case "openclaw-ssh"`, `case "hermes-ssh"`, `case "deepseek"`, `case "sglang"`} {
+	for _, value := range []string{`case "terminalbench2"`, `case "openclaw"`, `case "hermes"`, `case "docker"`, `case "openclaw-ssh"`, `case "openclaw-e2b"`, `case "hermes-ssh"`, `case "deepseek"`, `case "sglang"`} {
 		if !strings.Contains(text, value) {
 			t.Fatalf("missing explicit switch %s", value)
 		}
@@ -113,8 +114,8 @@ func TestValidateComponentsRejectsEveryUnsupportedSelector(t *testing.T) {
 	}
 }
 
-// Each bridge implements exactly one harness's SSH grammar, so a crossed pair
-// must be refused before the run starts rather than at the first tool call.
+// Each bridge is paired with one harness, so a crossed pair must be refused
+// before the run starts rather than at the first tool call.
 func TestValidateComponentsRequiresPairedHarnessAndBridge(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -122,7 +123,8 @@ func TestValidateComponentsRequiresPairedHarnessAndBridge(t *testing.T) {
 		bridge  string
 		wantErr bool
 	}{
-		{name: "openclaw pair", harness: "openclaw", bridge: "openclaw-ssh"},
+		{name: "openclaw SSH pair", harness: "openclaw", bridge: "openclaw-ssh"},
+		{name: "openclaw E2B pair", harness: "openclaw", bridge: "openclaw-e2b"},
 		{name: "hermes pair", harness: "hermes", bridge: "hermes-ssh"},
 		{name: "hermes with openclaw bridge", harness: "hermes", bridge: "openclaw-ssh", wantErr: true},
 		{name: "openclaw with hermes bridge", harness: "openclaw", bridge: "hermes-ssh", wantErr: true},
@@ -145,6 +147,77 @@ func TestValidateComponentsRequiresPairedHarnessAndBridge(t *testing.T) {
 				t.Fatalf("err=%v", err)
 			}
 		})
+	}
+}
+
+type recordingOpenClawE2BServer struct {
+	starts   int
+	stops    int
+	grants   int
+	startErr error
+}
+
+func (server *recordingOpenClawE2BServer) Start(context.Context) error {
+	server.starts++
+	return server.startErr
+}
+func (server *recordingOpenClawE2BServer) Stop(context.Context) error {
+	server.stops++
+	return nil
+}
+func (server *recordingOpenClawE2BServer) NewGrant(string) *openclawe2b.Grant {
+	server.grants++
+	return nil
+}
+
+func TestPrepareBridgeStartsOneE2BServerAndSSHBridgesStartNone(t *testing.T) {
+	original := newOpenClawE2BServer
+	t.Cleanup(func() { newOpenClawE2BServer = original })
+	constructed := 0
+	server := &recordingOpenClawE2BServer{}
+	newOpenClawE2BServer = func() openClawE2BServer {
+		constructed++
+		return server
+	}
+	for _, bridgeType := range []string{"openclaw-ssh", "hermes-ssh"} {
+		prepared, err := prepareBridge(context.Background(), config.Config{Bridge: config.BridgeConfig{Type: bridgeType}}, t.TempDir(), nil)
+		if err != nil || prepared.NewTaskBridge == nil || prepared.Stop != nil {
+			t.Fatalf("%s prepared bridge = %#v, %v", bridgeType, prepared, err)
+		}
+	}
+	if constructed != 0 {
+		t.Fatalf("SSH/Hermes constructed %d centralized servers", constructed)
+	}
+	prepared, err := prepareBridge(context.Background(), config.Config{Bridge: config.BridgeConfig{Type: "openclaw-e2b"}}, t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if constructed != 1 || server.starts != 1 || prepared.NewTaskBridge == nil || prepared.Stop == nil {
+		t.Fatalf("E2B lifecycle constructed=%d server=%#v prepared=%#v", constructed, server, prepared)
+	}
+	if _, err := prepared.NewTaskBridge(config.Config{}, "ignored", nil); err != nil {
+		t.Fatalf("first task bridge: %v", err)
+	}
+	if _, err := prepared.NewTaskBridge(config.Config{}, "ignored", nil); err != nil {
+		t.Fatalf("second task bridge: %v", err)
+	}
+	if server.grants != 2 {
+		t.Fatalf("task grant count = %d", server.grants)
+	}
+	if err := prepared.Stop(context.Background()); err != nil || server.stops != 1 {
+		t.Fatalf("Stop() = %v, calls=%d", err, server.stops)
+	}
+}
+
+func TestPrepareBridgeStopsPartiallyStartedE2BServer(t *testing.T) {
+	original := newOpenClawE2BServer
+	t.Cleanup(func() { newOpenClawE2BServer = original })
+	want := errors.New("partial start")
+	server := &recordingOpenClawE2BServer{startErr: want}
+	newOpenClawE2BServer = func() openClawE2BServer { return server }
+	_, err := prepareBridge(context.Background(), config.Config{Bridge: config.BridgeConfig{Type: "openclaw-e2b"}}, t.TempDir(), nil)
+	if !errors.Is(err, want) || server.starts != 1 || server.stops != 1 {
+		t.Fatalf("PrepareBridge() error=%v server=%#v", err, server)
 	}
 }
 

@@ -89,17 +89,21 @@ type ModelConfig struct {
 // the source files into its container before start; source paths are not bind
 // mounts and are removed when the bridge is revoked.
 type ToolEndpoint struct {
-	Protocol             string   `json:"protocol"`
-	Address              string   `json:"address"`
-	Username             string   `json:"username,omitempty"`
-	Network              string   `json:"network,omitempty"`
-	ClientCommand        string   `json:"client_command,omitempty"`
-	ClientSourceFile     string   `json:"client_source_file,omitempty"`
-	IdentityFile         string   `json:"identity_file,omitempty"`
-	IdentitySourceFile   string   `json:"identity_source_file,omitempty"`
-	KnownHostsFile       string   `json:"known_hosts_file,omitempty"`
-	KnownHostsSourceFile string   `json:"known_hosts_source_file,omitempty"`
-	LogPaths             []string `json:"log_paths,omitempty"`
+	Protocol              string   `json:"protocol"`
+	Address               string   `json:"address"`
+	SandboxID             string   `json:"sandbox_id,omitempty"`
+	Username              string   `json:"username,omitempty"`
+	Network               string   `json:"network,omitempty"`
+	Workdir               string   `json:"workdir,omitempty"`
+	AccessTokenFile       string   `json:"access_token_file,omitempty"`
+	AccessTokenSourceFile string   `json:"access_token_source_file,omitempty"`
+	ClientCommand         string   `json:"client_command,omitempty"`
+	ClientSourceFile      string   `json:"client_source_file,omitempty"`
+	IdentityFile          string   `json:"identity_file,omitempty"`
+	IdentitySourceFile    string   `json:"identity_source_file,omitempty"`
+	KnownHostsFile        string   `json:"known_hosts_file,omitempty"`
+	KnownHostsSourceFile  string   `json:"known_hosts_source_file,omitempty"`
+	LogPaths              []string `json:"log_paths,omitempty"`
 }
 
 // HarnessRequest contains task-local runtime inputs supplied before Run.

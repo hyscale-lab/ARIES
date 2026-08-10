@@ -667,6 +667,51 @@ func endpointFiles(t *testing.T) core.ToolEndpoint {
 	}
 }
 
+func e2bEndpointFiles(t *testing.T) core.ToolEndpoint {
+	t.Helper()
+	tokenPath := filepath.Join(t.TempDir(), "e2b-access.token")
+	if err := os.WriteFile(tokenPath, []byte("task-token-bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	endpoint := testE2BEndpoint()
+	endpoint.AccessTokenSourceFile = tokenPath
+	return endpoint
+}
+
+func TestRuntimeArchiveStagesPinnedE2BPluginHelperAndToken(t *testing.T) {
+	manager := &Manager{}
+	active := &session{endpoint: e2bEndpointFiles(t), model: testModel(), apiKey: []byte("model"), gatewayToken: []byte("gateway")}
+	configuration, err := renderConfig(active.model, active.endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive, err := manager.runtimeArchive(active, configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := readArchive(t, archive)
+	for name, mode := range map[string]int64{
+		"run/aries/e2b/access.token":                        0o600,
+		"opt/aries/openclaw/aries-e2b/index.ts":             0o444,
+		"opt/aries/openclaw/aries-e2b/client.mjs":           0o444,
+		"opt/aries/openclaw/aries-e2b/helper.mjs":           0o555,
+		"opt/aries/openclaw/aries-e2b/openclaw.plugin.json": 0o444,
+		"opt/aries/openclaw/aries-e2b/package.json":         0o444,
+	} {
+		if file, ok := files[name]; !ok || file.mode != mode {
+			t.Fatalf("archive %q = %#v", name, file)
+		}
+	}
+	if string(files["run/aries/e2b/access.token"].content) != "task-token-bytes" || bytes.Contains(files["run/aries/openclaw.json"].content, []byte("task-token-bytes")) {
+		t.Fatal("token was not staged only in its private file")
+	}
+	for _, forbidden := range []string{"opt/aries/bin/aries-ssh", "run/aries/ssh/id_ed25519", "run/aries/ssh/known_hosts"} {
+		if _, ok := files[forbidden]; ok {
+			t.Fatalf("E2B archive contains SSH file %q", forbidden)
+		}
+	}
+}
+
 func TestHarnessUsesOneSDKContainerAndDirectPrivateArchive(t *testing.T) {
 	fake := newFakeDocker()
 	// Docker 29 may keep the hijacked attach socket open after ExecInspect says

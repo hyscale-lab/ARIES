@@ -40,10 +40,10 @@ The required task lifecycle is:
 
 1. load task;
 2. start task sandbox;
-3. start bridge;
+3. register and grant harness access to the sandbox;
 4. start and run harness;
 5. stop harness;
-6. revoke bridge;
+6. positively revoke and unregister sandbox access;
 7. evaluate the still-running sandbox;
 8. stop sandbox.
 
@@ -51,6 +51,50 @@ Cleanup is reverse-order and fail-closed. Evaluation is independent of the
 harness. Verifier tests and solutions must never be exposed before harness stop
 and bridge revocation are positively confirmed. Harness failure and evaluation
 outcome remain separate.
+
+### Centralized sandbox bridge
+
+The E2B-like backend uses one centralized bridge shared across task
+occurrences. The bridge server is application-scoped rather than created
+and destroyed per task.
+
+A task receives a temporary bridge access grant after its sandbox starts.
+That grant is positively revoked and unregistered after harness shutdown
+and before verifier material is exposed.
+
+The centralized bridge multiplexes requests by sandbox ID:
+
+    sandboxID -> ToolSandbox
+
+Every harness request carries:
+
+    E2b-Sandbox-Id
+    X-Access-Token
+
+A token authorizes exactly one sandbox ID.
+
+Process identity is scoped by:
+
+    (sandboxID, PID)
+
+ARIES owns sandbox lifecycle. Harnesses must not create, delete, pause,
+resume, or otherwise manage task sandboxes.
+
+The E2B-like protocol initially uses plain HTTP/REST and supports:
+
+- Process.Start
+- Process.SendSignal
+- file read/write
+- Filesystem.Stat
+- Filesystem.ListDir
+- Filesystem.MakeDir
+- Filesystem.Remove
+- Filesystem.Move
+
+It does not initially support PTYs, stdin APIs, reconnect, detached
+processes, code execution, or ConnectRPC.
+
+The existing SSH backend remains supported.
 
 ## Engineering rules
 

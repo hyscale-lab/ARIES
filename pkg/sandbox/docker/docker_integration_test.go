@@ -4,12 +4,14 @@ package docker
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -377,6 +379,50 @@ func TestExecCancellationKillsOnlyItsProcessGroup(t *testing.T) {
 	}
 	if _, err := api.NetworkInspect(ctx, sandbox.NetworkName(), client.NetworkInspectOptions{}); !errdefs.IsNotFound(err) {
 		t.Fatalf("network remains after Stop: %v", err)
+	}
+}
+
+func TestExecProcessStreamReportsActualChildPIDForShortCommands(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	api, err := client.New(client.FromEnv, client.WithUserAgent("aries-sandbox-integration-test/1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.Ping(ctx, client.PingOptions{}); err != nil {
+		t.Fatalf("Docker daemon is required for integration tests: %v", err)
+	}
+	ensureFixtureImage(t, ctx, api)
+	manager, err := New(Options{OutputDir: t.TempDir(), CleanupTimeout: 8 * time.Second, Logger: logrus.New()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := manager.Start(ctx, core.SandboxRequest{
+		RunID: "process-run", TaskID: "process-task",
+		Environment: core.Environment{Image: fixtureImage, Workdir: "/work", CPU: 0.5, MemoryMB: 32, StorageMB: 64},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sandbox := live.(*Sandbox)
+	t.Cleanup(func() { _ = manager.Stop(context.Background(), live) })
+
+	for _, command := range []core.Command{
+		{Path: "/bin/sh", Args: []string{"-c", `printf '%s' "$$"`}},
+		{Path: "/bin/true"},
+	} {
+		var stdout bytes.Buffer
+		startedPID, starts := 0, 0
+		result, err := sandbox.ExecProcessStream(ctx, command, &stdout, io.Discard, func(ref ProcessRef) error {
+			startedPID, starts = ref.PID, starts+1
+			return nil
+		})
+		if err != nil || result.ExitCode != 0 || starts != 1 || startedPID <= 1 {
+			t.Fatalf("ExecProcessStream(%s) = result=%#v pid=%d starts=%d err=%v", command.Path, result, startedPID, starts, err)
+		}
+		if command.Path == "/bin/sh" && strings.TrimSpace(stdout.String()) != strconv.Itoa(startedPID) {
+			t.Fatalf("reported PID=%d child stdout=%q", startedPID, stdout.String())
+		}
 	}
 }
 

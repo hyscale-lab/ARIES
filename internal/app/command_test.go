@@ -163,6 +163,12 @@ type httpDoerFunc func(*http.Request) (*http.Response, error)
 
 func (f httpDoerFunc) Do(r *http.Request) (*http.Response, error) { return f(r) }
 
+func prepareTestBridge(factory TaskBridgeFactory) func(context.Context, config.Config, string, *logrus.Logger) (PreparedBridge, error) {
+	return func(context.Context, config.Config, string, *logrus.Logger) (PreparedBridge, error) {
+		return PreparedBridge{NewTaskBridge: factory}, nil
+	}
+}
+
 func failingRunWiring(runtime ModelRuntime, events *[]string, runErr error) Wiring {
 	return Wiring{
 		ValidateComponents: func(config.Config) error { return nil },
@@ -184,7 +190,7 @@ func failingRunWiring(runtime ModelRuntime, events *[]string, runErr error) Wiri
 		NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
 			return SandboxInstance{}, nil
 		},
-		NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) { return nil, nil },
+		PrepareBridge: prepareTestBridge(func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) { return nil, nil }),
 	}
 }
 
@@ -242,9 +248,9 @@ func TestRunForwardsFreshPreparedGPUIndicesToEveryOccurrence(t *testing.T) {
 			gpuIndices[0] = 99
 			return SandboxInstance{Sandbox: &managedIntegrationSandbox{}, Resources: &stubResources{}, Close: func() error { return nil }}, nil
 		},
-		NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
+		PrepareBridge: prepareTestBridge(func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
 			return &stubBridge{}, nil
-		},
+		}),
 	}
 	doer := &preflightDoer{t: t, replies: []preflightReply{{status: 200, body: `{"data":[{"id":"deepseek-v4-flash"}]}`}}}
 	logger := logrus.New()
@@ -311,7 +317,10 @@ func TestUnsupportedComponentsAreRejectedImmediatelyOnRunAndSetup(t *testing.T) 
 						effects++
 						return SandboxInstance{}, nil
 					},
-					NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) { effects++; return nil, nil },
+					PrepareBridge: func(context.Context, config.Config, string, *logrus.Logger) (PreparedBridge, error) {
+						effects++
+						return PreparedBridge{}, nil
+					},
 				}
 				err = useCase.call(profile, io.Discard, Dependencies{Wiring: wiring})
 				if err == nil || !strings.Contains(err.Error(), "unsupported component canary") || effects != 0 {
@@ -447,8 +456,17 @@ func TestRuntimeExitCancelsAndDrainsRun(t *testing.T) {
 		return HarnessInstance{Harness: h, Close: func() error { return nil }}, nil
 	}, NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
 		return SandboxInstance{Sandbox: &cancelSandbox{events: &events}, Resources: &stubResources{}, Close: func() error { return nil }}, nil
-	}, NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
-		return &cancelBridge{events: &events}, nil
+	}, PrepareBridge: func(context.Context, config.Config, string, *logrus.Logger) (PreparedBridge, error) {
+		events = append(events, "bridge-service-start")
+		return PreparedBridge{
+			NewTaskBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
+				return &cancelBridge{events: &events}, nil
+			},
+			Stop: func(context.Context) error {
+				events = append(events, "bridge-service-stop")
+				return nil
+			},
+		}, nil
 	}}
 	doer := &preflightDoer{t: t, replies: []preflightReply{{status: 200, body: `{"data":[{"id":"deepseek-v4-flash"}]}`}}}
 	done := make(chan error, 1)
@@ -464,10 +482,16 @@ func TestRuntimeExitCancelsAndDrainsRun(t *testing.T) {
 	if constructed != 1 {
 		t.Fatalf("constructed=%d", constructed)
 	}
-	for _, want := range []string{"harness-stop", "bridge-stop", "sandbox-stop", "stop"} {
+	for _, want := range []string{"bridge-service-start", "harness-stop", "bridge-stop", "sandbox-stop", "bridge-service-stop", "stop"} {
 		if !contains(events, want) {
 			t.Fatalf("events=%v missing=%s", events, want)
 		}
+	}
+	if indexOf(events, "bridge-service-start") > indexOf(events, "harness-stop") || indexOf(events, "bridge-service-stop") < indexOf(events, "sandbox-stop") {
+		t.Fatalf("bridge service did not surround the admitted occurrence: %v", events)
+	}
+	if countOf(events, "bridge-service-start") != 1 || countOf(events, "bridge-service-stop") != 1 {
+		t.Fatalf("bridge service lifecycle was not application-scoped: %v", events)
 	}
 }
 func contains(values []string, want string) bool {
@@ -477,6 +501,25 @@ func contains(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func indexOf(values []string, want string) int {
+	for index, value := range values {
+		if value == want {
+			return index
+		}
+	}
+	return -1
+}
+
+func countOf(values []string, want string) int {
+	count := 0
+	for _, value := range values {
+		if value == want {
+			count++
+		}
+	}
+	return count
 }
 
 type oneTaskBenchmark struct{}

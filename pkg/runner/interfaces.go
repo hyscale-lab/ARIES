@@ -35,8 +35,9 @@ type Sandbox interface {
 	Download(context.Context, string, string) error
 }
 
-// ToolBridge grants and then positively revokes harness access to a sandbox.
-// A nil Stop error is the positive revocation confirmation.
+// ToolBridge grants temporary harness access to the exact sandbox passed to
+// Start. Stop positively revokes that task's harness access. Stop is
+// idempotent, and a nil error confirms positive revocation.
 type ToolBridge interface {
 	Start(context.Context, Sandbox) (core.ToolEndpoint, error)
 	Stop(context.Context) error

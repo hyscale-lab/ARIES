@@ -1,5 +1,237 @@
 # ARIES Tasks
 
+## R22 — Centralized E2B-like OpenClaw sandbox bridge
+
+Plan, regression-first:
+
+1. [x] Pin the OpenClaw v2026.7.1 extension and backend contract from official
+   source before production integration. Evidence is locked in
+   `pkg/harness/openclaw/testdata/v2026.7.1-sandbox-plugin-contract.json` and
+   `plugin_contract_test.go` against signed tag object
+   `842a951d5d0843aa6eb77575dc9867bf0603835c`, commit
+   `2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4`, and byte hashes of the exact
+   upstream SDK, backend, filesystem, config, tool, and OpenShell reference
+   files. The supported seam is a full-mode local plugin calling
+   `registerSandboxBackend`, selected by `agents.defaults.sandbox.backend`,
+   returning a `SandboxBackendHandle` whose attached command path is
+   `buildExecSpec` plus a local client argv. Native `read`/`write`/`edit` use
+   `SandboxFsBridge`; `apply_patch` remains disabled for the initial path. The
+   task grant token is staged in a private file named by nonsecret plugin
+   config because v2026.7.1 plugin entries have no SecretRef field. Version
+   discrepancies are explicit in the fixture: upstream has no built-in E2B
+   backend, direct Process.Start/SendSignal plugin methods, typed original argv,
+   or filesystem ListDir method. The ARIES REST routes, headers, streaming
+   framing, signal client, and ListDir implementation therefore remain ARIES
+   protocol work for later R22 steps rather than invented upstream APIs.
+2. [x] Preserve the Runner's four roles and existing isolation order. The
+   `ToolBridge` signature already models a task-scoped grant adapter, so it is
+   unchanged: `Start` receives the exact live sandbox and `Stop` remains the
+   idempotent positive revocation gate. Focused regressions lock
+   the exact sandbox capability, harness-stop -> bridge-stop -> evaluation
+   order, partial-Start cleanup, and permanent evaluation blocking after an
+   isolation failure. Application composition now names the occurrence seam
+   `TaskBridgeFactory` and passes a run-bound factory explicitly into
+   `buildTaskExperiment`; current wiring binds the same OpenClaw SSH or Hermes
+   SSH constructor, while a future application-scoped service can bind a method
+   that returns distinct grant adapters sharing one owner. This adds no Runner
+   role, listener, registry, protocol, or service framework. The pinned
+   OpenClaw `buildExecSpec(command: string, ...)` limitation remains explicit:
+   this seam neither promises original typed argv nor parses the shell command
+   to reconstruct it.
+3. [x] Establish application-scoped centralized bridge ownership before task
+   admission and stop it with a fresh bounded context after all admitted
+   occurrences drain. `PreparedBridge` carries the run-bound
+   `TaskBridgeFactory` plus its optional infrastructure `Stop`; SSH and Hermes
+   return their unchanged occurrence constructor with no shared-service stop.
+   The new `openclawe2b.Server` owns exactly one
+   `net.ListenConfig.Listen(ctx, "tcp4", "0.0.0.0:0")` listener, rejects every
+   request as unavailable until authenticated dispatch exists, and idempotently
+   shuts down HTTP serving while positively waiting for `Serve` to exit. Task
+   endpoints will substitute each owned Docker-network gateway for the wildcard
+   address while retaining the one shared port in later steps. Focused and race
+   regressions lock one prepare per run, service lifetime around occurrence
+   cleanup, wildcard TCP4 ownership, startup failure, repeated stop, and
+   listener absence. No published port, shared ingress network, host networking,
+   bridge container, Docker socket exposure, authentication, or protocol
+   endpoint was added.
+4. [x] Make `openclaw-e2b` a real explicitly selected prepared bridge. One
+   `openclawe2b.Server` starts per E2B run and supplies distinct occurrence
+   `Grant` adapters while SSH and Hermes construct no centralized server. Each
+   grant binds the exact Docker sandbox, its IPv4 network gateway, a random
+   128-bit sandbox ID, and the SHA-256 verifier for a random 256-bit access
+   token in the concurrency-safe `sandboxID -> registration` map. Token bytes
+   live only in a private `0600` task artifact staged as
+   `/run/aries/e2b/access.token`; the endpoint carries the sandbox ID, token
+   source/target paths, task network, and
+   `http://<task-gateway>:<shared-port>`, never token bytes. `ConnContext`
+   retains the accepted socket's local destination and authorization validates
+   that IP, `E2b-Sandbox-Id`, and `X-Access-Token` before reading the body or
+   dispatching. Authenticated routes deliberately return not implemented.
+   Revocation atomically changes active -> revoking and zeroes the verifier
+   before waiting for admitted requests, then removes the registration, marks
+   it revoked, confirms map absence, and removes the token file; retries remain
+   idempotent and fail closed. Focused/race regressions cover shared port and
+   distinct grants, cross-task/missing/wrong/unknown/revoked credentials,
+   destination mismatch, pre-body rejection, independent revocation, admitted
+   request drain, partial Start cleanup, explicit selection, one server per
+   preparation, SSH/Hermes exclusion, and concurrent grant churn.
+5. [x] Implement `POST /v1/process/start` as an attached NDJSON stream through
+   the pair-specific Docker `ExecProcessStream` capability without changing the
+   existing SSH/Hermes `ExecStream` path. The REST `cmd` and `args` remain typed
+   argv. A separate wrapper launches a `setsid` child that writes its own `$$`
+   group-leader PID to the unique exec state file and a token-bound private
+   stderr frame, then blocks on fd 3. ARIES consumes and validates that complete
+   frame, emits and flushes exactly one start event, invokes the callback, writes
+   `ARIES_EXEC_START_<token>` on the private Docker attach input, and closes that
+   input before the child executes. Token-matched PID and exit framing is
+   filtered while arbitrary binary and PID-looking user stdout/stderr remains
+   byte-exact. Each raw chunk becomes base64 JSON data, nonzero exit remains a
+   normal final end event, and post-start errors/cancellation are represented in
+   that final event. The attached request context retains the existing targeted
+   TERM -> KILL -> positive-absence cancellation path and never stops the task
+   container. Unit/race regressions cover authentication before parsing,
+   malformed and pre-start failure, one start before output, fragmented private
+   framing, short simulated execution, binary separated multi-chunk output,
+   zero/nonzero result framing, post-start errors, cancellation, concurrent
+   starts within/across grants, exact argv/env, and unchanged legacy Docker exec
+   tests. A build-tagged real-Docker regression compares the callback PID with
+   child `$$` and covers `/bin/true`, but Docker is unavailable in this
+   environment; execution of that test remains explicitly pending for R22 step
+   10 integration validation and is not claimed here.
+6. [x] Implement `POST /v1/process/send-signal` and sandbox-scoped active
+   process ownership. The centralized map keys by `(sandboxID, childPID)` and
+   retains the exact registration, pair-specific Docker `ProcessRef`, sandbox
+   capability, and a monotonic occurrence generation; completion deletes only
+   the identical entry pointer, so an older completion cannot erase a reused
+   PID generation. Docker keeps the reference's exec ID, unique state path, and
+   random generation private. `SendProcessSignal` accepts only that reference
+   plus `SIGNAL_SIGTERM` or `SIGNAL_SIGKILL`; its in-container helper re-reads
+   the unique state file, requires its group leader to equal the reported PID,
+   and signals that exact negative process group. Authentication still precedes
+   body reads. Success is `{"ok":true}` JSON; malformed/unsupported requests,
+   unknown/exited/cross-sandbox PIDs, stale references, and helper failures are
+   structured fail-closed errors. Process registration occurs before the start
+   event/callback returns and therefore before the private launch handshake;
+   completion is generation-safe. Revocation first invalidates the token and
+   process admission, applies the existing targeted TERM -> KILL -> confirmed
+   absence cleanup to every process in that registration, drains admitted
+   attached requests, confirms the sandbox process set is empty, then removes
+   the registration. Server shutdown uses the same path for every grant.
+   Focused/race regressions cover pre-body authentication, TERM/KILL, unsupported
+   and unknown/exited processes, equal PIDs in isolated sandboxes, generation
+   reuse, registration-before-release, completion, selective revocation,
+   shutdown cleanup, concurrent starts and signal/revocation state, exact Docker
+   helper arguments, and unchanged legacy exec coverage. Docker is unavailable
+   here, so real-container signal delivery and PID-generation behavior remain
+   pending for R22 step 10 and are not claimed.
+7. [x] Implement raw `GET/POST /v1/files?path=...` plus
+   `POST /v1/filesystem/{stat,list-dir,make-dir,remove,move}` through a narrow
+   Docker filesystem capability. Authentication by destination, sandbox ID,
+   and token still completes before any body read or sandbox dispatch. Raw
+   reads/writes preserve binary and zero-length content, are bounded at 64 MiB,
+   use Docker archive copy directly, create parents, and never materialize a
+   host path. Stat/list metadata comes from Docker archive stat/tar headers and
+   returns path, name, `file|directory|symlink|other`, size, octal permissions,
+   modification time when present, and link target when applicable; listing
+   filters and sorts exactly one directory level. Parent creation, recursive
+   removal, and rename use the existing attached Docker exec implementation
+   with exact argv to `/bin/mkdir`, `/bin/rm`, and `/bin/mv`; user paths are
+   never shell-concatenated. Paths must be absolute, NUL-free, and already
+   normalized. Every modifying operation rejects `/`, while dirty normalized
+   equivalents such as `/.` and `/workspace/..` fail validation before Docker.
+   Archive reads reject symlinks as raw files; stat/list report them without
+   following them. Docker extraction and exact-argv utilities retain normal
+   in-container symlink semantics, confined to the exact unmounted task
+   sandbox. Focused/race regressions cover pre-body authentication, binary and
+   zero-byte create/overwrite, parents, file/directory/missing stat, depth-one
+   listing, recursive mkdir/remove, root variants, move, malformed requests,
+   sandbox isolation, revocation, concurrent operations, archive metadata, and
+   exact helper argv. No lifecycle, PTY, stdin, reconnect, detached execution,
+   code execution, ConnectRPC, or unrecognized protocol route was added.
+   Docker is unavailable here, so real-container archive, rename, symlink, and
+   recursive-removal behavior remains pending for R22 step 10 and is not claimed.
+8. [x] Implement and stage the pinned OpenClaw v2026.7.1 local `aries-e2b`
+   sandbox backend plugin. Its full-mode entry calls
+   `registerSandboxBackend("aries-e2b", {factory, resolveWorkdir})` with no
+   manager or lifecycle surface and returns the exact pinned
+   `SandboxBackendHandle`. `buildExecSpec` accepts the upstream command string
+   as-is and returns the local `helper.mjs` argv, task workdir/environment, and
+   `stdinMode: "pipe-closed"`; the helper sends explicit
+   `/bin/bash -lc <command>` argv to attached `Process.Start`, decodes NDJSON
+   binary stdout/stderr, propagates the final exit code, and aborts the request
+   on termination. It exposes no PTY or user stdin. `runShellCommand` uses the
+   same client, preserves its explicit script arguments, returns pinned
+   `{stdout: Buffer, stderr: Buffer, code}`, honors `allowFailure` and
+   `AbortSignal`, and rejects nonempty stdin. `createFsBridge` implements only
+   `resolvePath`, `readFile`, `writeFile`, `mkdirp`, `remove`, `rename`, and
+   `stat` against the raw/semantic REST routes; it invents no `listDir`.
+   ToolEndpoint now carries the exact task workdir in addition to bridge address
+   and sandbox ID. OpenClaw JSON selects backend `aries-e2b`, loads
+   `/opt/aries/openclaw/aries-e2b`, and contains only address, sandbox ID,
+   workdir, and `/run/aries/e2b/access.token`; token bytes remain solely in the
+   staged private `0600` file. Native `read`, `write`, and `edit` are enabled by
+   denying only `apply_patch`; the SSH config/archive path and its broader deny
+   list remain unchanged. Embedded plugin, manifest, package, shared client,
+   and executable helper are copied through the existing runtime archive.
+   Focused executable Node tests cover headers and token-file reads, exact bash
+   request payload, streamed binary output, exit/cancellation, buffered shell
+   behavior, and every pinned fs method without opening sockets. Go unit/race
+   tests lock config selection, no token bytes, SSH stability, archive modes,
+   exact pinned registration strings, and absence of manager/lifecycle/PTY/
+   stdin/reconnect/detached/ConnectRPC surfaces. Loading the plugin inside the
+   pinned OpenClaw image remains deferred to R22 step 10 because Docker is
+   unavailable here and is not claimed.
+9. [x] Add focused unit and race coverage first: unchanged Runner ordering and
+   SSH behavior; one server across concurrent occurrences; gateway destination,
+   sandbox-ID, and token isolation; wildcard-listener routing across two task
+   networks; immediate fail-closed revocation; attached start framing before
+   user output; actual child-PID accuracy for short-lived commands; nonterminal
+   and terminal signals; PID reuse; exact argv; raw and semantic filesystem
+   behavior; handler/process/evidence drain; idempotent unregister; and server
+   startup/shutdown failures. The steps 1–8 regression inventory was mapped to
+   every invariant above and only genuinely missing failure coverage was added:
+   failed process revocation and failed centralized shutdown now remain
+   unauthorized, retain cleanup state, and can be retried to positive absence.
+   Focused unit/race suites, repository-wide compile-only checks, integration-
+   tagged compile-only checks, build, vet/format, and `git diff --check` pass
+   locally. Real gateway routing, child PID/signal delivery, Docker filesystem
+   semantics, and pinned-image plugin loading remain step 10 claims because this
+   machine has no Docker daemon.
+
+Transfer checkpoint: R22 steps 1–9 are implemented and validated as far as the
+non-Docker environment permits. A checkpoint commit may be created here solely
+to transfer this exact implementation state to a Docker-capable machine. That
+checkpoint is not the final R22 completion commit and does not complete R22.
+Step 10 remains unchecked until its real-Docker tests pass on that machine.
+Step 11, final release validation, and the final R22 completion commit still
+occur only after step 10 passes.
+
+10. [ ] Add real-Docker and deterministic pinned-OpenClaw integration proving
+   two concurrent task networks reach the same listener through their own
+   gateways, cannot reach one another's gateway, route identical PID values
+   independently, revoke one grant while the other remains usable, expose no
+   verifier material before positive revocation, and leave no managed listener,
+   process, container, network, credential, or key behind.
+11. [ ] Update the architecture, bridge alternatives, supported-implementation,
+    configuration, profile, harness, sandbox, and quick-start documentation with
+    exact versioned upstream citations. Run build, unit, race, lint, integration,
+    leak, secret, evidence, and cleanup validation before one concise final R22
+    completion commit.
+
+Protected boundaries:
+
+- The centralized server is surrounding application infrastructure, not a
+  fifth Runner role; the shared `ToolBridge` interface remains task-scoped.
+- ARIES alone owns sandbox lifecycle. A harness cannot create, delete, pause,
+  resume, or otherwise manage a task sandbox.
+- Model keys and bridge tokens do not enter JSON profiles, Docker metadata,
+  logs, results, or retained nonsecret configuration.
+- A wildcard socket may accept TCP on other local IPv4 destinations, but HTTP
+  dispatch is denied unless the connection destination is the registered task
+  gateway. If future policy forbids even that TCP handshake, use one centralized
+  server with dynamically managed gateway-bound listeners instead of weakening
+  request authorization or task-network isolation.
+
 ## R21 — GPU metrics data-flow cleanup
 
 Cleanup plan, based on `8b4930c` and executed regression-first:

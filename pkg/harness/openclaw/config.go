@@ -26,10 +26,11 @@ const (
 )
 
 type openClawConfig struct {
-	Gateway gatewayConfig `json:"gateway"`
-	Models  modelsConfig  `json:"models"`
-	Agents  agentsConfig  `json:"agents"`
-	Tools   toolPolicy    `json:"tools"`
+	Gateway gatewayConfig  `json:"gateway"`
+	Models  modelsConfig   `json:"models"`
+	Agents  agentsConfig   `json:"agents"`
+	Tools   toolPolicy     `json:"tools"`
+	Plugins *pluginsConfig `json:"plugins,omitempty"`
 }
 
 type toolPolicy struct {
@@ -82,11 +83,32 @@ type primaryModel struct {
 }
 
 type sandboxConfig struct {
-	Mode            string    `json:"mode"`
-	Scope           string    `json:"scope"`
-	Backend         string    `json:"backend"`
-	WorkspaceAccess string    `json:"workspaceAccess"`
-	SSH             sshConfig `json:"ssh"`
+	Mode            string     `json:"mode"`
+	Scope           string     `json:"scope"`
+	Backend         string     `json:"backend"`
+	WorkspaceAccess string     `json:"workspaceAccess"`
+	SSH             *sshConfig `json:"ssh,omitempty"`
+}
+
+type pluginsConfig struct {
+	Enabled bool                         `json:"enabled"`
+	Allow   []string                     `json:"allow"`
+	Load    pluginLoadConfig             `json:"load"`
+	Entries map[string]pluginEntryConfig `json:"entries"`
+}
+
+type pluginLoadConfig struct {
+	Paths []string `json:"paths"`
+}
+type pluginEntryConfig struct {
+	Enabled bool            `json:"enabled"`
+	Config  e2bPluginConfig `json:"config"`
+}
+type e2bPluginConfig struct {
+	Address   string `json:"address"`
+	SandboxID string `json:"sandboxId"`
+	TokenFile string `json:"tokenFile"`
+	Workdir   string `json:"workdir"`
 }
 
 type sshConfig struct {
@@ -131,20 +153,30 @@ func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint) ([]byte, e
 			},
 		},
 		Agents: agentsConfig{Defaults: agentDefaults{
-			Model: primaryModel{Primary: providerID + "/" + model.Model},
-			Sandbox: sandboxConfig{
-				Mode: "all", Scope: "shared", Backend: "ssh", WorkspaceAccess: "rw",
-				SSH: sshConfig{
-					Target: endpoint.Username + "@" + endpoint.Address, Command: endpoint.ClientCommand,
-					WorkspaceRoot: workspaceRoot, StrictHostKeyChecking: true, UpdateHostKeys: false,
-					IdentityFile: endpoint.IdentityFile, KnownHostsFile: endpoint.KnownHostsFile,
-				},
-			},
+			Model:   primaryModel{Primary: providerID + "/" + model.Model},
+			Sandbox: sandboxConfig{Mode: "all", Scope: "shared", WorkspaceAccess: "rw"},
 		}},
+	}
+	if endpoint.Protocol == "ssh" {
+		configuration.Agents.Defaults.Sandbox.Backend = "ssh"
+		configuration.Agents.Defaults.Sandbox.SSH = &sshConfig{
+			Target: endpoint.Username + "@" + endpoint.Address, Command: endpoint.ClientCommand,
+			WorkspaceRoot: workspaceRoot, StrictHostKeyChecking: true, UpdateHostKeys: false,
+			IdentityFile: endpoint.IdentityFile, KnownHostsFile: endpoint.KnownHostsFile,
+		}
 		// OpenClaw's native SSH filesystem helpers require python3 inside the
 		// remote image. Terminal-Bench images do not promise it, while the exec
 		// tool has the same sandbox access without changing task images.
-		Tools: toolPolicy{Deny: []string{"read", "write", "edit", "apply_patch"}},
+		configuration.Tools = toolPolicy{Deny: []string{"read", "write", "edit", "apply_patch"}}
+	} else {
+		configuration.Agents.Defaults.Sandbox.Backend = "aries-e2b"
+		configuration.Tools = toolPolicy{Deny: []string{"apply_patch"}}
+		configuration.Plugins = &pluginsConfig{
+			Enabled: true, Allow: []string{"aries-e2b"}, Load: pluginLoadConfig{Paths: []string{e2bPluginContainerDir}},
+			Entries: map[string]pluginEntryConfig{"aries-e2b": {Enabled: true, Config: e2bPluginConfig{
+				Address: endpoint.Address, SandboxID: endpoint.SandboxID, TokenFile: endpoint.AccessTokenFile, Workdir: endpoint.Workdir,
+			}}},
+		}
 	}
 	var output bytes.Buffer
 	encoder := json.NewEncoder(&output)
@@ -195,6 +227,25 @@ func normalizeSGLangBaseURL(baseURL string) (string, error) {
 }
 
 func validateEndpoint(endpoint core.ToolEndpoint) error {
+	if endpoint.Protocol == "http" {
+		parsed, err := url.Parse(endpoint.Address)
+		if err != nil || parsed.Scheme != "http" || parsed.Host == "" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return errors.New("OpenClaw E2B address must be an absolute origin using HTTP")
+		}
+		host, port, err := net.SplitHostPort(parsed.Host)
+		if err != nil || net.ParseIP(host) == nil || port == "" || endpoint.SandboxID == "" || strings.TrimSpace(endpoint.Network) == "" {
+			return errors.New("OpenClaw E2B endpoint identity is invalid")
+		}
+		for name, candidate := range map[string]string{"token": endpoint.AccessTokenFile, "token source": endpoint.AccessTokenSourceFile, "workdir": endpoint.Workdir} {
+			if candidate == "" || strings.ContainsRune(candidate, 0) || !filepath.IsAbs(candidate) || filepath.Clean(candidate) != candidate {
+				return fmt.Errorf("OpenClaw E2B %s path must be absolute and clean", name)
+			}
+		}
+		if endpoint.AccessTokenFile != e2bTokenContainerPath {
+			return errors.New("OpenClaw E2B token path does not match the pinned bridge contract")
+		}
+		return nil
+	}
 	if endpoint.Protocol != "ssh" || endpoint.Username != "aries" || strings.TrimSpace(endpoint.Network) == "" {
 		return errors.New("OpenClaw requires a task-local SSH endpoint")
 	}

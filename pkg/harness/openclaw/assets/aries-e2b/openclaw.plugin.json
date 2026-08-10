@@ -1,0 +1,16 @@
+{
+  "id": "aries-e2b",
+  "name": "ARIES E2B Bridge",
+  "description": "Task-scoped access to an ARIES-owned sandbox.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["address", "sandboxId", "tokenFile", "workdir"],
+    "properties": {
+      "address": {"type": "string"},
+      "sandboxId": {"type": "string"},
+      "tokenFile": {"type": "string"},
+      "workdir": {"type": "string"}
+    }
+  }
+}

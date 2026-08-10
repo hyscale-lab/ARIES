@@ -26,6 +26,18 @@ type SandboxInstance struct {
 	Close     func() error
 }
 
+// TaskBridgeFactory constructs one occurrence-scoped access grant adapter.
+// A run-scoped bridge service may provide this function as a bound method;
+// the returned ToolBridge still belongs exclusively to one Runner occurrence.
+type TaskBridgeFactory func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error)
+
+// PreparedBridge owns bridge infrastructure for one application run while
+// retaining occurrence-scoped ToolBridge adapters for Runner construction.
+type PreparedBridge struct {
+	NewTaskBridge TaskBridgeFactory
+	Stop          func(context.Context) error
+}
+
 type Wiring struct {
 	PrepareBackend       func(config.Config, string) (PreparedBackend, error)
 	ValidateComponents   func(config.Config) error
@@ -35,7 +47,7 @@ type Wiring struct {
 	NewBenchmark         func(config.Config, string, string, string) (runner.Benchmark, error)
 	NewHarness           func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error)
 	NewSandbox           func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error)
-	NewBridge            func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error)
+	PrepareBridge        func(context.Context, config.Config, string, *logrus.Logger) (PreparedBridge, error)
 }
 
 type Dependencies struct {
@@ -208,6 +220,20 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 		runtimeEntry.WithField("runtime_state", "healthy").Info("model runtime lifecycle")
 	}
 
+	if dependencies.Wiring.PrepareBridge == nil {
+		return errors.New("bridge preparer is required")
+	}
+	preparedBridge, err := dependencies.Wiring.PrepareBridge(ctx, cfg, outputRoot, logger)
+	if err != nil {
+		return fmt.Errorf("prepare bridge: %w", err)
+	}
+	defer func() {
+		returnErr = errors.Join(returnErr, stopPreparedBridge(preparedBridge, observerStopTimeout))
+	}()
+	if preparedBridge.NewTaskBridge == nil {
+		return errors.New("prepare bridge: returned a nil task bridge factory")
+	}
+
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
 	completed := make(chan error, 1)
@@ -215,7 +241,7 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 		completed <- executeAndRecord(runCtx, func(executionCtx context.Context) (core.RunResult, error) {
 			return runProfile(executionCtx, cfg.Name, runID, cfg.Benchmark.Tasks, cfg.Execution.Concurrency, cfg.Execution.Loop,
 				func(taskCtx context.Context, occurrence taskOccurrence) (core.RunResult, error) {
-					experiment, err := buildTaskExperiment(cfg, prepared.Model, prepared.EffectiveGPUIndices, runID, outputRoot, occurrence.logicalID, occurrence.executionID, harnessLookup, logger, dependencies.Wiring)
+					experiment, err := buildTaskExperiment(cfg, prepared.Model, prepared.EffectiveGPUIndices, runID, outputRoot, occurrence.logicalID, occurrence.executionID, harnessLookup, logger, dependencies.Wiring, preparedBridge.NewTaskBridge)
 					if err != nil {
 						return core.RunResult{}, err
 					}
@@ -231,6 +257,18 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 	logRuntimeExit(runtimeErr)
 	returnErr = errors.Join(returnErr, runtimeErr)
 	return returnErr
+}
+
+func stopPreparedBridge(bridge PreparedBridge, timeout time.Duration) error {
+	if bridge.Stop == nil {
+		return nil
+	}
+	if timeout <= 0 {
+		timeout = time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return bridge.Stop(ctx)
 }
 
 func ensurePrepared(ctx context.Context, cfg config.Config, wiring Wiring) error {
@@ -282,11 +320,11 @@ func resolveOutputRoot(root, runID string) (string, error) {
 	return outputRoot, nil
 }
 
-func buildTaskExperiment(cfg config.Config, model core.ModelConfig, effectiveGPUIndices []int, runID, outputRoot, logicalID, occurrenceID string, apiKeyLookup func(string) ([]byte, bool), logger *logrus.Logger, wiring Wiring) (*experiment, error) {
+func buildTaskExperiment(cfg config.Config, model core.ModelConfig, effectiveGPUIndices []int, runID, outputRoot, logicalID, occurrenceID string, apiKeyLookup func(string) ([]byte, bool), logger *logrus.Logger, wiring Wiring, newTaskBridge TaskBridgeFactory) (*experiment, error) {
 	if logger == nil {
 		logger = logrus.StandardLogger()
 	}
-	if wiring.NewBenchmark == nil || wiring.NewHarness == nil || wiring.NewSandbox == nil || wiring.NewBridge == nil {
+	if wiring.NewBenchmark == nil || wiring.NewHarness == nil || wiring.NewSandbox == nil || newTaskBridge == nil {
 		return nil, errors.New("component wiring is incomplete")
 	}
 	benchmark, err := wiring.NewBenchmark(cfg, outputRoot, logicalID, occurrenceID)
@@ -301,7 +339,7 @@ func buildTaskExperiment(cfg config.Config, model core.ModelConfig, effectiveGPU
 	if err != nil {
 		return nil, errors.Join(err, closeOccurrenceClients(nil, harness.Close))
 	}
-	bridge, err := wiring.NewBridge(cfg, outputRoot, logger)
+	bridge, err := newTaskBridge(cfg, outputRoot, logger)
 	if err != nil {
 		return nil, errors.Join(err, sandbox.Resources.Close(), closeOccurrenceClients(sandbox.Close, harness.Close))
 	}

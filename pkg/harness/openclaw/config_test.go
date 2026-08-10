@@ -18,6 +18,13 @@ func testEndpoint() core.ToolEndpoint {
 	}
 }
 
+func testE2BEndpoint() core.ToolEndpoint {
+	return core.ToolEndpoint{
+		Protocol: "http", Address: "http://172.30.0.1:43123", SandboxID: "sandbox-123", Network: "aries-net-test", Workdir: "/workspace",
+		AccessTokenFile: e2bTokenContainerPath, AccessTokenSourceFile: "/host/e2b-access.token",
+	}
+}
+
 func testModel() core.ModelConfig {
 	return core.ModelConfig{Provider: "deepseek", BaseURL: "http://fake-model:8080/v1", Model: "deterministic-model", APIKeyEnv: "ARIES_FAKE_API_KEY"}
 }
@@ -50,6 +57,34 @@ func TestRenderConfigLocksProviderSharedSSHAndPlaceholder(t *testing.T) {
 	}
 	if got := strings.Join(configuration.Tools.Deny, ","); got != "read,write,edit,apply_patch" {
 		t.Fatalf("tool deny list = %q", got)
+	}
+	if configuration.Plugins != nil || bytes.Contains(content, []byte(`"plugins"`)) {
+		t.Fatalf("SSH config unexpectedly changed plugin loading: %s", content)
+	}
+}
+
+func TestRenderConfigSelectsPinnedE2BPluginWithoutTokenBytes(t *testing.T) {
+	content, err := renderConfig(testModel(), testE2BEndpoint())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var configuration openClawConfig
+	if err := json.Unmarshal(content, &configuration); err != nil {
+		t.Fatal(err)
+	}
+	sandbox := configuration.Agents.Defaults.Sandbox
+	entry := configuration.Plugins.Entries["aries-e2b"]
+	if sandbox.Backend != "aries-e2b" || sandbox.SSH != nil || configuration.Plugins == nil || !configuration.Plugins.Enabled || strings.Join(configuration.Plugins.Allow, ",") != "aries-e2b" || strings.Join(configuration.Plugins.Load.Paths, ",") != e2bPluginContainerDir || !entry.Enabled {
+		t.Fatalf("E2B selection = %#v plugins=%#v", sandbox, configuration.Plugins)
+	}
+	if entry.Config.Address != "http://172.30.0.1:43123" || entry.Config.SandboxID != "sandbox-123" || entry.Config.TokenFile != e2bTokenContainerPath || entry.Config.Workdir != "/workspace" {
+		t.Fatalf("plugin config = %#v", entry.Config)
+	}
+	if strings.Join(configuration.Tools.Deny, ",") != "apply_patch" {
+		t.Fatalf("E2B tool deny = %#v", configuration.Tools.Deny)
+	}
+	if bytes.Contains(content, []byte("token-bytes")) || bytes.Contains(content, []byte(testE2BEndpoint().AccessTokenSourceFile)) {
+		t.Fatalf("config exposed credential source or bytes: %s", content)
 	}
 }
 

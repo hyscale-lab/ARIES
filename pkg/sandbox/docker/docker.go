@@ -38,8 +38,12 @@ const (
 	execPollInterval      = 20 * time.Millisecond
 	execDrainTimeout      = 200 * time.Millisecond
 	execTrailerKeep       = 128
+	maxBridgeFileSize     = 64 << 20
 	execStatePrefix       = "/tmp/.aries-exec-"
 	execShell             = `state=$1; token=$2; shift 2; umask 077; trap 'rm -f "$state" "$state.tmp"' EXIT; exec 3<&0; setsid "$@" <&3 & pid=$!; printf '%s\n' "$pid" >"$state.tmp" || exit 125; mv "$state.tmp" "$state" || exit 125; wait "$pid"; status=$?; rm -f "$state" "$state.tmp"; trap - EXIT; printf '\036ARIES_EXEC_EXIT_%s=%d\037' "$token" "$status" >&2; exit "$status"`
+	processExecShell      = `state=$1; token=$2; child=$3; shift 3; umask 077; trap 'rm -f "$state" "$state.tmp"' EXIT; exec 3<&0; setsid /bin/sh -c "$child" aries-child "$state" "$token" "$@" <&3 & pid=$!; wait "$pid"; status=$?; rm -f "$state" "$state.tmp"; trap - EXIT; printf '\036ARIES_EXEC_EXIT_%s=%d\037' "$token" "$status" >&2; exit "$status"`
+	processChildShell     = `state=$1; token=$2; shift 2; pid=$$; printf '%s\n' "$pid" >"$state.tmp" || exit 125; mv "$state.tmp" "$state" || exit 125; printf '\036ARIES_EXEC_PID_%s=%s\037' "$token" "$pid" >&2 || exit 125; IFS= read -r launch <&3 || exit 126; [ "$launch" = "ARIES_EXEC_START_$token" ] || exit 126; exec "$@"`
+	signalExecShell       = `state=$1; expected=$2; signal=$3; IFS= read -r pgid <"$state" || exit 71; [ "$pgid" = "$expected" ] || exit 72; case "$signal" in TERM|KILL) ;; *) exit 73;; esac; kill "-$signal" "-$pgid"`
 	cancelExecShell       = `state=$1; attempts=0; while [ ! -r "$state" ]; do attempts=$((attempts+1)); [ "$attempts" -ge 200 ] && exit 70; sleep 0.01; done; IFS= read -r pgid <"$state" || exit 71; case "$pgid" in ''|*[!0-9]*|0|1) exit 71;; esac; kill -TERM "-$pgid" 2>/dev/null || :; sleep 0.2; kill -KILL "-$pgid" 2>/dev/null || :; rm -f "$state"; exit 0`
 )
 
@@ -532,9 +536,286 @@ func (s *Sandbox) ExecStream(ctx context.Context, command core.Command, stdin io
 	}, nil
 }
 
+// ProcessRef is the unforgeable execution identity returned by the
+// E2B-pair-specific attached process path. PID is the child process-group
+// leader exposed by the REST protocol; the remaining identity stays private
+// to this package so callers cannot redirect a signal to an arbitrary PID.
+type ProcessRef struct {
+	PID        int
+	execID     string
+	statePath  string
+	generation string
+}
+
+// ExecProcessStream is the E2B-pair-specific attached process form. It reports
+// the actual setsid child group leader before releasing that child to exec.
+// Its input channel is private startup control and never carries user stdin.
+func (s *Sandbox) ExecProcessStream(ctx context.Context, command core.Command, stdout, stderr io.Writer, onStart func(ProcessRef) error) (core.CommandResult, error) {
+	started := time.Now()
+	failure := func() core.CommandResult { return core.CommandResult{ExitCode: -1, Duration: time.Since(started)} }
+	if err := validateCommand(command); err != nil {
+		return failure(), err
+	}
+	if onStart == nil {
+		return failure(), errors.New("Docker process start callback is required")
+	}
+	if command.Dir == "" {
+		command.Dir = s.workdir
+	}
+	if stdout == nil {
+		stdout = io.Discard
+	}
+	if stderr == nil {
+		stderr = io.Discard
+	}
+	execCtx := ctx
+	cancel := func() {}
+	if command.Timeout > 0 {
+		execCtx, cancel = context.WithTimeout(ctx, command.Timeout)
+	}
+	defer cancel()
+
+	token, err := randomID()
+	if err != nil {
+		return failure(), fmt.Errorf("generate Docker process exit token: %w", err)
+	}
+	statePath := execStatePrefix + token
+	created, err := s.client.ExecCreate(execCtx, s.containerID, client.ExecCreateOptions{
+		AttachStdin: true, AttachStdout: true, AttachStderr: true,
+		Cmd: wrappedProcessCommand(statePath, token, command),
+		Env: dockerEnvironment(command.Env), WorkingDir: command.Dir,
+	})
+	if err != nil {
+		return failure(), fmt.Errorf("create Docker process exec: %w", err)
+	}
+	attached, err := s.client.ExecAttach(execCtx, created.ID, client.ExecAttachOptions{})
+	if err != nil {
+		return failure(), fmt.Errorf("attach Docker process exec: %w", err)
+	}
+	defer attached.Close()
+
+	readDone := make(chan struct{})
+	go func() {
+		select {
+		case <-execCtx.Done():
+			attached.Close()
+		case <-readDone:
+		}
+	}()
+	var closeWrite sync.Once
+	closeDockerInput := func() { closeWrite.Do(func() { _ = attached.CloseWrite() }) }
+
+	copyDone := make(chan error, 1)
+	exitTrailer := newExitTrailer(&limitedWriter{writer: stderr, limit: maxExecOutput}, token)
+	pidControl := newPIDControlWriter(exitTrailer, token, func(pid int) error {
+		if err := onStart(ProcessRef{PID: pid, execID: created.ID, statePath: statePath, generation: token}); err != nil {
+			return err
+		}
+		if _, err := io.WriteString(attached.Conn, "ARIES_EXEC_START_"+token+"\n"); err != nil {
+			return fmt.Errorf("release Docker process child: %w", err)
+		}
+		closeDockerInput()
+		return nil
+	})
+	go func() {
+		_, copyErr := stdcopy.StdCopy(
+			&limitedWriter{writer: stdout, limit: maxExecOutput},
+			pidControl,
+			attached.Reader,
+		)
+		copyDone <- copyErr
+	}()
+	exitDone := make(chan error, 1)
+	go func() { exitDone <- s.waitForExecExit(execCtx, created.ID) }()
+	var stopRead sync.Once
+	stopReading := func() {
+		stopRead.Do(func() {
+			close(readDone)
+			attached.Close()
+		})
+	}
+	abort := func(cause error) (core.CommandResult, error) {
+		stopReading()
+		contextErr := execCtx.Err()
+		terminateCtx, terminateCancel := context.WithTimeout(context.WithoutCancel(execCtx), s.cleanupTimeout)
+		defer terminateCancel()
+		terminateErr := s.terminateExec(terminateCtx, created.ID, statePath)
+		if contextErr != nil {
+			if terminateErr == nil {
+				return failure(), contextErr
+			}
+			return failure(), errors.Join(contextErr, terminateErr)
+		}
+		if terminateErr == nil {
+			return failure(), cause
+		}
+		return failure(), errors.Join(cause, terminateErr)
+	}
+
+	copyFinished := false
+	var copyErr error
+	var observedErr error
+	for {
+		select {
+		case <-execCtx.Done():
+			return abort(execCtx.Err())
+		case err := <-copyDone:
+			copyFinished, copyErr = true, err
+			if err != nil {
+				return abort(err)
+			}
+		case observedErr = <-exitDone:
+			goto exited
+		}
+	}
+
+exited:
+	if observedErr != nil {
+		return abort(observedErr)
+	}
+	closeDockerInput()
+	forcedClose := false
+	if !copyFinished {
+		select {
+		case copyErr = <-copyDone:
+			copyFinished = true
+		case <-time.After(execDrainTimeout):
+			forcedClose = true
+			attached.Close()
+			copyErr = <-copyDone
+			copyFinished = true
+		}
+	}
+	stopReading()
+	if copyErr != nil && !forcedClose {
+		return abort(copyErr)
+	}
+	if err := pidControl.Finish(); err != nil {
+		return abort(err)
+	}
+	exitCode, err := exitTrailer.Finish()
+	if err != nil {
+		return abort(err)
+	}
+	return core.CommandResult{ExitCode: exitCode, Duration: time.Since(started)}, nil
+}
+
+// SendProcessSignal targets the exact still-active process group represented by
+// ref. The private state path and generation are created by ExecProcessStream;
+// an arbitrary numeric PID is never accepted as signaling authority.
+func (s *Sandbox) SendProcessSignal(ctx context.Context, ref ProcessRef, signal string) error {
+	if ref.PID <= 1 || ref.execID == "" || ref.statePath == "" || ref.generation == "" {
+		return errors.New("invalid Docker process reference")
+	}
+	var shellSignal string
+	switch signal {
+	case "SIGNAL_SIGTERM":
+		shellSignal = "TERM"
+	case "SIGNAL_SIGKILL":
+		shellSignal = "KILL"
+	default:
+		return fmt.Errorf("unsupported process signal %q", signal)
+	}
+	inspection, err := s.client.ExecInspect(ctx, ref.execID, client.ExecInspectOptions{})
+	if err != nil {
+		return fmt.Errorf("inspect Docker process before signal: %w", err)
+	}
+	if !inspection.Running {
+		return errors.New("Docker process is no longer running")
+	}
+	created, err := s.client.ExecCreate(ctx, s.containerID, client.ExecCreateOptions{
+		Cmd: []string{"/bin/sh", "-c", signalExecShell, "aries-signal", ref.statePath, strconv.Itoa(ref.PID), shellSignal},
+	})
+	if err != nil {
+		return fmt.Errorf("create Docker process signal helper: %w", err)
+	}
+	if _, err := s.client.ExecStart(ctx, created.ID, client.ExecStartOptions{Detach: true}); err != nil {
+		return fmt.Errorf("start Docker process signal helper: %w", err)
+	}
+	if err := s.waitForExecExit(ctx, created.ID); err != nil {
+		return fmt.Errorf("wait for Docker process signal helper: %w", err)
+	}
+	helper, err := s.client.ExecInspect(ctx, created.ID, client.ExecInspectOptions{})
+	if err != nil {
+		return fmt.Errorf("inspect Docker process signal helper: %w", err)
+	}
+	if helper.ExitCode != 0 {
+		return fmt.Errorf("Docker process signal helper exited with code %d", helper.ExitCode)
+	}
+	return nil
+}
+
+// TerminateProcess applies the existing TERM -> KILL -> positive-absence
+// cleanup to the exact execution instance represented by ref.
+func (s *Sandbox) TerminateProcess(ctx context.Context, ref ProcessRef) error {
+	if ref.PID <= 1 || ref.execID == "" || ref.statePath == "" || ref.generation == "" {
+		return errors.New("invalid Docker process reference")
+	}
+	return s.terminateExec(ctx, ref.execID, ref.statePath)
+}
+
 func wrappedCommand(statePath, token string, command core.Command) []string {
 	arguments := []string{"/bin/sh", "-c", execShell, "aries-exec", statePath, token, command.Path}
 	return append(arguments, command.Args...)
+}
+
+func wrappedProcessCommand(statePath, token string, command core.Command) []string {
+	arguments := []string{"/bin/sh", "-c", processExecShell, "aries-process", statePath, token, processChildShell, command.Path}
+	return append(arguments, command.Args...)
+}
+
+type pidControlWriter struct {
+	destination io.Writer
+	prefix      []byte
+	buffer      bytes.Buffer
+	onStart     func(int) error
+	started     bool
+}
+
+func newPIDControlWriter(destination io.Writer, token string, onStart func(int) error) *pidControlWriter {
+	return &pidControlWriter{destination: destination, prefix: []byte("\x1eARIES_EXEC_PID_" + token + "="), onStart: onStart}
+}
+
+func (writer *pidControlWriter) Write(content []byte) (int, error) {
+	if writer.started {
+		return writer.destination.Write(content)
+	}
+	written, _ := writer.buffer.Write(content)
+	buffered := writer.buffer.Bytes()
+	end := bytes.IndexByte(buffered, '\x1f')
+	if end < 0 {
+		if writer.buffer.Len() > execTrailerKeep {
+			return 0, errors.New("Docker process output is missing its PID control frame")
+		}
+		return written, nil
+	}
+	frame := buffered[:end]
+	if !bytes.HasPrefix(frame, writer.prefix) {
+		return 0, errors.New("Docker process output has an invalid PID control frame")
+	}
+	pid, err := strconv.Atoi(string(frame[len(writer.prefix):]))
+	if err != nil || pid <= 1 {
+		return 0, errors.New("Docker process output has an invalid child PID")
+	}
+	if err := writer.onStart(pid); err != nil {
+		return 0, fmt.Errorf("report Docker process start: %w", err)
+	}
+	writer.started = true
+	remainder := append([]byte(nil), buffered[end+1:]...)
+	writer.buffer.Reset()
+	if len(remainder) != 0 {
+		if _, err := writer.destination.Write(remainder); err != nil {
+			return 0, err
+		}
+	}
+	return written, nil
+}
+
+func (writer *pidControlWriter) Finish() error {
+	if !writer.started {
+		return errors.New("Docker process output is missing its PID control frame")
+	}
+	return nil
 }
 
 type exitTrailerWriter struct {
@@ -877,6 +1158,193 @@ func (s *Sandbox) Download(ctx context.Context, source, destination string) erro
 		return fmt.Errorf("publish Docker download: %w", err)
 	}
 	return nil
+}
+
+// FileInfo is the small E2B-pair-specific filesystem metadata surface derived
+// from Docker's archive stat information.
+type FileInfo struct {
+	Name       string
+	Path       string
+	Type       string
+	Size       int64
+	Mode       os.FileMode
+	ModTime    time.Time
+	LinkTarget string
+}
+
+// ReadFile returns exact bytes for one regular container file. Docker archive
+// metadata is used without introducing any host destination path.
+func (s *Sandbox) ReadFile(ctx context.Context, source string) ([]byte, error) {
+	source, err := cleanContainerPath(source)
+	if err != nil {
+		return nil, fmt.Errorf("invalid Docker file read path: %w", err)
+	}
+	result, err := s.client.CopyFromContainer(ctx, s.containerID, client.CopyFromContainerOptions{SourcePath: source})
+	if err != nil {
+		return nil, fmt.Errorf("read file from Docker task container: %w", err)
+	}
+	defer result.Content.Close()
+	if !result.Stat.Mode.IsRegular() {
+		return nil, errors.New("Docker file read source must be a regular file")
+	}
+	reader := tar.NewReader(result.Content)
+	for {
+		header, nextErr := reader.Next()
+		if errors.Is(nextErr, io.EOF) {
+			return nil, errors.New("Docker file archive contains no regular file")
+		}
+		if nextErr != nil {
+			return nil, fmt.Errorf("read Docker file archive: %w", nextErr)
+		}
+		if !header.FileInfo().Mode().IsRegular() {
+			continue
+		}
+		if header.Size < 0 || header.Size > maxBridgeFileSize {
+			return nil, fmt.Errorf("Docker file exceeds %d bytes", maxBridgeFileSize)
+		}
+		content, readErr := io.ReadAll(io.LimitReader(reader, header.Size+1))
+		if readErr != nil {
+			return nil, fmt.Errorf("read Docker file bytes: %w", readErr)
+		}
+		if int64(len(content)) != header.Size {
+			return nil, errors.New("Docker file archive has an invalid size")
+		}
+		return content, nil
+	}
+}
+
+// WriteFile overwrites or creates a regular container file after creating its
+// parent directories. The content is archived directly from memory.
+func (s *Sandbox) WriteFile(ctx context.Context, destination string, content []byte) error {
+	destination, err := cleanContainerPath(destination)
+	if err != nil {
+		return fmt.Errorf("invalid Docker file write path: %w", err)
+	}
+	if err := s.runFilesystemCommand(ctx, "/bin/mkdir", "-p", "--", filepath.Dir(destination)); err != nil {
+		return fmt.Errorf("create Docker file parent directories: %w", err)
+	}
+	var archive bytes.Buffer
+	writer := tar.NewWriter(&archive)
+	if err := writer.WriteHeader(&tar.Header{Name: filepath.Base(destination), Mode: 0o644, Size: int64(len(content)), ModTime: time.Now()}); err != nil {
+		return fmt.Errorf("archive Docker file write: %w", err)
+	}
+	if _, err := writer.Write(content); err != nil {
+		return fmt.Errorf("archive Docker file bytes: %w", err)
+	}
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("close Docker file archive: %w", err)
+	}
+	_, err = s.client.CopyToContainer(ctx, s.containerID, client.CopyToContainerOptions{
+		DestinationPath: filepath.Dir(destination), Content: bytes.NewReader(archive.Bytes()),
+	})
+	if err != nil {
+		return fmt.Errorf("write file to Docker task container: %w", err)
+	}
+	return nil
+}
+
+func (s *Sandbox) StatPath(ctx context.Context, target string) (FileInfo, error) {
+	target, err := cleanContainerWorkdir(target)
+	if err != nil {
+		return FileInfo{}, fmt.Errorf("invalid Docker stat path: %w", err)
+	}
+	result, err := s.client.CopyFromContainer(ctx, s.containerID, client.CopyFromContainerOptions{SourcePath: target})
+	if err != nil {
+		return FileInfo{}, fmt.Errorf("stat Docker task path: %w", err)
+	}
+	defer result.Content.Close()
+	return dockerFileInfo(target, result.Stat.Name, result.Stat.Size, result.Stat.Mode, result.Stat.Mtime, result.Stat.LinkTarget), nil
+}
+
+func (s *Sandbox) ListDir(ctx context.Context, target string) ([]FileInfo, error) {
+	target, err := cleanContainerWorkdir(target)
+	if err != nil {
+		return nil, fmt.Errorf("invalid Docker directory path: %w", err)
+	}
+	result, err := s.client.CopyFromContainer(ctx, s.containerID, client.CopyFromContainerOptions{SourcePath: target})
+	if err != nil {
+		return nil, fmt.Errorf("list Docker task directory: %w", err)
+	}
+	defer result.Content.Close()
+	if !result.Stat.Mode.IsDir() {
+		return nil, errors.New("Docker directory listing source must be a directory")
+	}
+	reader := tar.NewReader(result.Content)
+	entries := make([]FileInfo, 0)
+	root := ""
+	for {
+		header, nextErr := reader.Next()
+		if errors.Is(nextErr, io.EOF) {
+			break
+		}
+		if nextErr != nil {
+			return nil, fmt.Errorf("read Docker directory archive: %w", nextErr)
+		}
+		name := strings.TrimSuffix(filepath.ToSlash(header.Name), "/")
+		if root == "" {
+			root = name
+			continue
+		}
+		relative := strings.TrimPrefix(name, root+"/")
+		if relative == "" || relative == name || strings.Contains(relative, "/") {
+			continue
+		}
+		entries = append(entries, dockerFileInfo(filepath.Join(target, relative), relative, header.Size, header.FileInfo().Mode(), header.ModTime, header.Linkname))
+	}
+	slices.SortFunc(entries, func(left, right FileInfo) int { return strings.Compare(left.Name, right.Name) })
+	return entries, nil
+}
+
+func (s *Sandbox) MakeDir(ctx context.Context, target string) error {
+	target, err := cleanContainerPath(target)
+	if err != nil {
+		return fmt.Errorf("invalid Docker directory path: %w", err)
+	}
+	return s.runFilesystemCommand(ctx, "/bin/mkdir", "-p", "--", target)
+}
+
+func (s *Sandbox) RemovePath(ctx context.Context, target string) error {
+	target, err := cleanContainerPath(target)
+	if err != nil {
+		return fmt.Errorf("invalid Docker removal path: %w", err)
+	}
+	return s.runFilesystemCommand(ctx, "/bin/rm", "-rf", "--", target)
+}
+
+func (s *Sandbox) MovePath(ctx context.Context, source, destination string) error {
+	source, err := cleanContainerPath(source)
+	if err != nil {
+		return fmt.Errorf("invalid Docker move source: %w", err)
+	}
+	destination, err = cleanContainerPath(destination)
+	if err != nil {
+		return fmt.Errorf("invalid Docker move destination: %w", err)
+	}
+	return s.runFilesystemCommand(ctx, "/bin/mv", "--", source, destination)
+}
+
+func (s *Sandbox) runFilesystemCommand(ctx context.Context, command string, arguments ...string) error {
+	result, err := s.Exec(ctx, core.Command{Path: command, Args: arguments})
+	if err != nil {
+		return err
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("filesystem command exited with code %d", result.ExitCode)
+	}
+	return nil
+}
+
+func dockerFileInfo(target, name string, size int64, mode os.FileMode, modified time.Time, linkTarget string) FileInfo {
+	entryType := "other"
+	switch {
+	case mode.IsRegular():
+		entryType = "file"
+	case mode.IsDir():
+		entryType = "directory"
+	case mode&os.ModeSymlink != 0:
+		entryType = "symlink"
+	}
+	return FileInfo{Name: name, Path: target, Type: entryType, Size: size, Mode: mode, ModTime: modified, LinkTarget: linkTarget}
 }
 
 // stop records logs and removes the task container and network. Concurrent and

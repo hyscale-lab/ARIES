@@ -211,10 +211,14 @@ type fakeBridge struct {
 	startErr   error
 	stopErrors []error
 	stops      int
+	sandboxes  []Sandbox
 }
 
-func (f *fakeBridge) Start(ctx context.Context, _ Sandbox) (core.ToolEndpoint, error) {
+func (f *fakeBridge) Start(ctx context.Context, sandbox Sandbox) (core.ToolEndpoint, error) {
 	f.log.add("bridge.start", ctx)
+	f.mu.Lock()
+	f.sandboxes = append(f.sandboxes, sandbox)
+	f.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		f.log.addRollback("bridge.rollback", ctx)
 		return core.ToolEndpoint{}, err
@@ -242,6 +246,12 @@ func (f *fakeBridge) stopCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.stops
+}
+
+func (f *fakeBridge) startedSandboxes() []Sandbox {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]Sandbox(nil), f.sandboxes...)
 }
 
 type fakeHarness struct {
@@ -384,6 +394,31 @@ func TestRunnerSuccessOrdering(t *testing.T) {
 	rig.harness.mu.Unlock()
 	if len(harnessRequests) != 1 || harnessRequests[0].RunID != "test-run" || harnessRequests[0].TaskID != "a" || harnessRequests[0].OutputDir != "runs" || harnessRequests[0].Timeout != 37*time.Minute {
 		t.Fatalf("harness requests = %#v", harnessRequests)
+	}
+}
+
+func TestRunnerToolBridgeGrantUsesExactLiveSandboxAndIsRevokedBeforeEvaluation(t *testing.T) {
+	rig := newRig(t, 1)
+	result, err := rig.runner.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := rig.bridge.startedSandboxes()
+	if len(started) != 1 || started[0] != rig.factory.sandbox {
+		t.Fatalf("bridge Start sandboxes = %#v, want exact live sandbox %p", started, rig.factory.sandbox)
+	}
+	if !result.Tasks[0].Isolation.BridgeRevoked {
+		t.Fatalf("isolation = %#v, want positive grant revocation", result.Tasks[0].Isolation)
+	}
+	want := []string{"harness.stop", "bridge.stop", "benchmark.evaluate"}
+	var isolationCalls []string
+	for _, call := range rig.log.snapshot() {
+		if call == "harness.stop" || call == "bridge.stop" || call == "benchmark.evaluate" {
+			isolationCalls = append(isolationCalls, call)
+		}
+	}
+	if !reflect.DeepEqual(isolationCalls, want) {
+		t.Fatalf("isolation calls = %v, want %v", isolationCalls, want)
 	}
 }
 

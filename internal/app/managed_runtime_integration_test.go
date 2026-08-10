@@ -82,9 +82,9 @@ func TestConcreteManagedRuntimeWrapsPreflightAndTaskLifecycle(t *testing.T) {
 		NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
 			return SandboxInstance{Sandbox: &managedIntegrationSandbox{}, Resources: &stubResources{}, Close: func() error { return nil }}, nil
 		},
-		NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
+		PrepareBridge: prepareTestBridge(func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
 			return &stubBridge{}, nil
-		},
+		}),
 	}
 	var logs strings.Builder
 	logger := logrus.New()
@@ -177,9 +177,9 @@ func TestConcreteManagedRuntimeNaturalExitLogsStoppedAfterUnexpectedExit(t *test
 		NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
 			return SandboxInstance{Sandbox: &managedIntegrationSandbox{}, Resources: &stubResources{}, Close: func() error { return nil }}, nil
 		},
-		NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
+		PrepareBridge: prepareTestBridge(func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
 			return &stubBridge{}, nil
-		},
+		}),
 	}
 	var logs strings.Builder
 	logger := logrus.New()

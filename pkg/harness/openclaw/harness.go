@@ -1101,21 +1101,6 @@ func (manager *Manager) validateContainer(ctx context.Context, active *session) 
 }
 
 func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([]byte, error) {
-	clientBytes, err := readStablePrivateFile(active.endpoint.ClientSourceFile, 0o555)
-	if err != nil {
-		return nil, fmt.Errorf("read OpenClaw SSH client: %w", err)
-	}
-	defer clear(clientBytes)
-	identity, err := readStablePrivateFile(active.endpoint.IdentitySourceFile, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("read OpenClaw SSH identity: %w", err)
-	}
-	defer clear(identity)
-	knownHosts, err := readStablePrivateFile(active.endpoint.KnownHostsSourceFile, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("read OpenClaw known-hosts: %w", err)
-	}
-	defer clear(knownHosts)
 	files := map[string]stagedFile{
 		"run/aries/openclaw.json":    {content: configuration, mode: 0o600},
 		"run/aries/model.key":        {content: active.apiKey, mode: 0o600},
@@ -1123,9 +1108,40 @@ func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([
 		"run/aries/launch":           {content: launcherScript(active.model.APIKeyEnv, manager.realtimeAPIKeyEnv(active)), mode: 0o555},
 		"run/aries/gateway-proxy.js": {content: gatewayProxyScript(), mode: 0o555},
 		"run/aries/gateway-launcher": {content: gatewayLauncherScript(), mode: 0o555},
-		"run/aries/ssh/id_ed25519":   {content: identity, mode: 0o600},
-		"run/aries/ssh/known_hosts":  {content: knownHosts, mode: 0o600},
-		"opt/aries/bin/aries-ssh":    {content: clientBytes, mode: 0o555},
+	}
+	if active.endpoint.Protocol == "ssh" {
+		clientBytes, err := readStablePrivateFile(active.endpoint.ClientSourceFile, 0o555)
+		if err != nil {
+			return nil, fmt.Errorf("read OpenClaw SSH client: %w", err)
+		}
+		defer clear(clientBytes)
+		identity, err := readStablePrivateFile(active.endpoint.IdentitySourceFile, 0o600)
+		if err != nil {
+			return nil, fmt.Errorf("read OpenClaw SSH identity: %w", err)
+		}
+		defer clear(identity)
+		knownHosts, err := readStablePrivateFile(active.endpoint.KnownHostsSourceFile, 0o600)
+		if err != nil {
+			return nil, fmt.Errorf("read OpenClaw known-hosts: %w", err)
+		}
+		defer clear(knownHosts)
+		files["run/aries/ssh/id_ed25519"] = stagedFile{content: identity, mode: 0o600}
+		files["run/aries/ssh/known_hosts"] = stagedFile{content: knownHosts, mode: 0o600}
+		files["opt/aries/bin/aries-ssh"] = stagedFile{content: clientBytes, mode: 0o555}
+	} else {
+		token, err := readStablePrivateFile(active.endpoint.AccessTokenSourceFile, 0o600)
+		if err != nil {
+			return nil, fmt.Errorf("read OpenClaw E2B access token: %w", err)
+		}
+		defer clear(token)
+		files["run/aries/e2b/access.token"] = stagedFile{content: token, mode: 0o600}
+		pluginFiles, err := stagedE2BPluginFiles()
+		if err != nil {
+			return nil, fmt.Errorf("read embedded OpenClaw E2B plugin: %w", err)
+		}
+		for name, file := range pluginFiles {
+			files[name] = file
+		}
 	}
 	if len(active.realtimeAPIKey) != 0 {
 		files["run/aries/realtime.key"] = stagedFile{content: active.realtimeAPIKey, mode: 0o600}
@@ -1205,6 +1221,9 @@ func stageArchive(files map[string]stagedFile) ([]byte, error) {
 	var output bytes.Buffer
 	writer := tar.NewWriter(&output)
 	directories := []string{"run/aries", "run/aries/ssh", "opt/aries", "opt/aries/bin", "home/node/.openclaw", "home/node/.openclaw/.aries"}
+	if _, ok := files["run/aries/e2b/access.token"]; ok {
+		directories = append(directories, "run/aries/e2b", "opt/aries/openclaw", "opt/aries/openclaw/aries-e2b")
+	}
 	for _, name := range directories {
 		mode := int64(0o755)
 		if strings.HasPrefix(name, "run/aries") || strings.HasPrefix(name, "home/node/.openclaw") {

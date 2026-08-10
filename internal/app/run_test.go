@@ -267,12 +267,32 @@ func (*stubBridge) Start(context.Context, runner.Sandbox) (core.ToolEndpoint, er
 }
 func (*stubBridge) Stop(context.Context) error { return nil }
 
+type sharedGrantOwner struct {
+	adapters []*taskGrantAdapter
+}
+
+type taskGrantAdapter struct {
+	owner *sharedGrantOwner
+}
+
+func (*taskGrantAdapter) Start(context.Context, runner.Sandbox) (core.ToolEndpoint, error) {
+	return core.ToolEndpoint{}, nil
+}
+func (*taskGrantAdapter) Stop(context.Context) error { return nil }
+
+func (owner *sharedGrantOwner) NewTaskBridge(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
+	adapter := &taskGrantAdapter{owner: owner}
+	owner.adapters = append(owner.adapters, adapter)
+	return adapter, nil
+}
+
 type stubResources struct{}
 
 func (*stubResources) Sample(context.Context) ([]core.ResourceReading, error) { return nil, nil }
 func (*stubResources) Close() error                                           { return nil }
 
 func TestBuildTaskExperimentCreatesFreshFourRoleGraphs(t *testing.T) {
+	newTaskBridge := TaskBridgeFactory(func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) { return &stubBridge{}, nil })
 	wiring := Wiring{
 		NewBenchmark: func(config.Config, string, string, string) (runner.Benchmark, error) { return &stubBenchmark{}, nil },
 		NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
@@ -287,16 +307,15 @@ func TestBuildTaskExperimentCreatesFreshFourRoleGraphs(t *testing.T) {
 			s := &stubToolSandbox{}
 			return SandboxInstance{Sandbox: s, Resources: &stubResources{}, Close: func() error { return nil }}, nil
 		},
-		NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) { return &stubBridge{}, nil },
 	}
 	cfg := config.Config{Name: "x"}
 	model := core.ModelConfig{Provider: "deepseek", BaseURL: "https://example.invalid", Model: "m", APIKeyEnv: "KEY"}
 	preparedGPUIndices := []int{4, 2}
-	first, err := buildTaskExperiment(cfg, model, preparedGPUIndices, "run", t.TempDir(), "a", "a-001", nil, nil, wiring)
+	first, err := buildTaskExperiment(cfg, model, preparedGPUIndices, "run", t.TempDir(), "a", "a-001", nil, nil, wiring, newTaskBridge)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := buildTaskExperiment(cfg, model, preparedGPUIndices, "run", t.TempDir(), "a", "a-002", nil, nil, wiring)
+	second, err := buildTaskExperiment(cfg, model, preparedGPUIndices, "run", t.TempDir(), "a", "a-002", nil, nil, wiring, newTaskBridge)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,8 +333,37 @@ func TestBuildTaskExperimentCreatesFreshFourRoleGraphs(t *testing.T) {
 	}
 }
 
+func TestBuildTaskExperimentAcceptsRunScopedTaskBridgeFactory(t *testing.T) {
+	owner := &sharedGrantOwner{}
+	wiring := Wiring{
+		NewBenchmark: func(config.Config, string, string, string) (runner.Benchmark, error) { return &stubBenchmark{}, nil },
+		NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
+			return HarnessInstance{Harness: &stubHarness{}, Close: func() error { return nil }}, nil
+		},
+		NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
+			return SandboxInstance{Sandbox: &stubToolSandbox{}, Resources: &stubResources{}, Close: func() error { return nil }}, nil
+		},
+	}
+	model := core.ModelConfig{Provider: "deepseek", BaseURL: "https://example.invalid", Model: "m", APIKeyEnv: "KEY"}
+	for _, occurrenceID := range []string{"a-001", "a-002"} {
+		experiment, err := buildTaskExperiment(config.Config{Name: "x"}, model, nil, "run", t.TempDir(), "a", occurrenceID, nil, nil, wiring, owner.NewTaskBridge)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := experiment.close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(owner.adapters) != 2 || owner.adapters[0] == owner.adapters[1] || owner.adapters[0].owner != owner || owner.adapters[1].owner != owner {
+		t.Fatalf("task adapters = %#v, want distinct adapters backed by one run-scoped owner", owner.adapters)
+	}
+}
+
 func TestBuildTaskExperimentUnwindsPartialConstruction(t *testing.T) {
 	var events []string
+	newTaskBridge := TaskBridgeFactory(func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
+		return nil, errors.New("bridge construct")
+	})
 	wiring := Wiring{
 		NewBenchmark: func(config.Config, string, string, string) (runner.Benchmark, error) { return &stubBenchmark{}, nil },
 		NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
@@ -324,11 +372,8 @@ func TestBuildTaskExperimentUnwindsPartialConstruction(t *testing.T) {
 		NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
 			return SandboxInstance{Sandbox: &stubToolSandbox{}, Resources: &stubResources{}, Close: func() error { events = append(events, "sandbox"); return errors.New("sandbox close") }}, nil
 		},
-		NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
-			return nil, errors.New("bridge construct")
-		},
 	}
-	_, err := buildTaskExperiment(config.Config{Name: "x"}, core.ModelConfig{}, nil, "run", t.TempDir(), "a", "a-001", nil, nil, wiring)
+	_, err := buildTaskExperiment(config.Config{Name: "x"}, core.ModelConfig{}, nil, "run", t.TempDir(), "a", "a-001", nil, nil, wiring, newTaskBridge)
 	if err == nil || !strings.Contains(err.Error(), "bridge construct") || !strings.Contains(err.Error(), "sandbox close") || !strings.Contains(err.Error(), "harness close") {
 		t.Fatalf("err=%v", err)
 	}

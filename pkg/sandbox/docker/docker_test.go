@@ -2,6 +2,7 @@ package docker
 
 import (
 	"archive/tar"
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
@@ -69,6 +70,7 @@ type fakeClient struct {
 	containerLive  bool
 	createErr      error
 	execOptions    client.ExecCreateOptions
+	controlOptions client.ExecCreateOptions
 	execExit       int
 	execRunning    bool
 	controlExit    int
@@ -199,7 +201,8 @@ func (f *fakeClient) ContainerRemove(context.Context, string, client.ContainerRe
 func (f *fakeClient) ExecCreate(_ context.Context, _ string, options client.ExecCreateOptions) (client.ExecCreateResult, error) {
 	f.mu.Lock()
 	f.execCreates++
-	if len(options.Cmd) > 2 && options.Cmd[2] == cancelExecShell {
+	if len(options.Cmd) > 2 && (options.Cmd[2] == cancelExecShell || options.Cmd[2] == signalExecShell) {
+		f.controlOptions = options
 		f.mu.Unlock()
 		return client.ExecCreateResult{ID: "control-id"}, nil
 	}
@@ -497,6 +500,126 @@ func TestExecAcceptsAriesEnvironment(t *testing.T) {
 	}
 }
 
+func TestExecProcessStreamReportsChildPIDBeforeExactBinaryOutput(t *testing.T) {
+	fake := &fakeClient{execExit: 9}
+	fake.attach = func(conn net.Conn) {
+		fake.mu.Lock()
+		token := fake.execOptions.Cmd[5]
+		fake.mu.Unlock()
+		pidFrame := []byte("\x1eARIES_EXEC_PID_" + token + "=101\x1f")
+		writeFrame(conn, stdcopy.Stderr, pidFrame[:7])
+		writeFrame(conn, stdcopy.Stderr, pidFrame[7:])
+		launch, err := bufio.NewReader(conn).ReadString('\n')
+		if err != nil || launch != "ARIES_EXEC_START_"+token+"\n" {
+			return
+		}
+		writeFrame(conn, stdcopy.Stdout, []byte{0x00, 0xff, 'a'})
+		writeFrame(conn, stdcopy.Stdout, []byte("second"))
+		writeFrame(conn, stdcopy.Stderr, append([]byte{0xfe, 0x00, 'b'}, []byte("\x1eARIES_EXEC_PID_spoof=999\x1f")...))
+	}
+	sandbox := startSandbox(t, fake)
+	defer sandbox.stop(context.Background())
+	var stdout, stderr bytes.Buffer
+	var events []string
+	result, err := sandbox.ExecProcessStream(context.Background(), core.Command{
+		Path: "/bin/tool", Args: []string{"first", "second value"}, Dir: "/work", Env: map[string]string{"B": "2", "A": "1"},
+	}, eventWriter{buffer: &stdout, events: &events, event: "stdout"}, eventWriter{buffer: &stderr, events: &events, event: "stderr"}, func(ref ProcessRef) error {
+		if ref.PID != 101 || ref.execID == "" || ref.statePath == "" || ref.generation == "" {
+			t.Fatalf("process ref = %#v", ref)
+		}
+		events = append(events, "start")
+		return nil
+	})
+	if err != nil || result.ExitCode != 9 {
+		t.Fatalf("ExecProcessStream() = %#v, %v", result, err)
+	}
+	wantStderr := append([]byte{0xfe, 0x00, 'b'}, []byte("\x1eARIES_EXEC_PID_spoof=999\x1f")...)
+	if !bytes.Equal(stdout.Bytes(), append([]byte{0x00, 0xff, 'a'}, []byte("second")...)) || !bytes.Equal(stderr.Bytes(), wantStderr) {
+		t.Fatalf("stdout=%v stderr=%v", stdout.Bytes(), stderr.Bytes())
+	}
+	if len(events) < 3 || events[0] != "start" || strings.Count(strings.Join(events, ","), "start") != 1 {
+		t.Fatalf("events = %v", events)
+	}
+	if bytes.Contains(stdout.Bytes(), []byte("ARIES_EXEC_PID_"+fake.execOptions.Cmd[5])) || bytes.Contains(stderr.Bytes(), []byte("ARIES_EXEC_PID_"+fake.execOptions.Cmd[5])) || bytes.Contains(stderr.Bytes(), []byte("ARIES_EXEC_EXIT_"+fake.execOptions.Cmd[5])) {
+		t.Fatalf("private framing leaked: stdout=%q stderr=%q", stdout.Bytes(), stderr.Bytes())
+	}
+	if !fake.execOptions.AttachStdin || fake.execOptions.Cmd[2] != processExecShell || fake.execOptions.Cmd[6] != processChildShell || !reflect.DeepEqual(fake.execOptions.Cmd[7:], []string{"/bin/tool", "first", "second value"}) || !reflect.DeepEqual(fake.execOptions.Env, []string{"A=1", "B=2"}) {
+		t.Fatalf("process exec options = %#v", fake.execOptions)
+	}
+}
+
+type eventWriter struct {
+	buffer *bytes.Buffer
+	events *[]string
+	event  string
+}
+
+func (writer eventWriter) Write(content []byte) (int, error) {
+	*writer.events = append(*writer.events, writer.event)
+	return writer.buffer.Write(content)
+}
+
+func TestExecProcessStreamCancellationUsesTargetedTermination(t *testing.T) {
+	fake := &fakeClient{execRunning: true}
+	started := make(chan struct{})
+	fake.attach = func(conn net.Conn) {
+		fake.mu.Lock()
+		token := fake.execOptions.Cmd[5]
+		fake.mu.Unlock()
+		writeFrame(conn, stdcopy.Stderr, []byte("\x1eARIES_EXEC_PID_"+token+"=101\x1f"))
+		_, _ = bufio.NewReader(conn).ReadString('\n')
+		close(started)
+		_, _ = io.Copy(io.Discard, conn)
+	}
+	sandbox := startSandbox(t, fake)
+	defer sandbox.stop(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := sandbox.ExecProcessStream(ctx, core.Command{Path: "/bin/sleep", Args: []string{"60"}}, io.Discard, io.Discard, func(ProcessRef) error { return nil })
+		done <- err
+	}()
+	<-started
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("ExecProcessStream() error = %v", err)
+	}
+	fake.mu.Lock()
+	execCreates, running := fake.execCreates, fake.execRunning
+	fake.mu.Unlock()
+	if execCreates != 2 || running {
+		t.Fatalf("targeted termination execCreates=%d running=%v", execCreates, running)
+	}
+}
+
+func TestSendProcessSignalUsesExactPrivateReferenceAndAllowedSignal(t *testing.T) {
+	fake := &fakeClient{execRunning: true}
+	sandbox := startSandbox(t, fake)
+	defer sandbox.stop(context.Background())
+	ref := ProcessRef{PID: 101, execID: "exec-id", statePath: "/tmp/.aries-exec-generation", generation: "generation"}
+	for _, signal := range []string{"SIGNAL_SIGTERM", "SIGNAL_SIGKILL"} {
+		fake.mu.Lock()
+		fake.execRunning = true
+		fake.mu.Unlock()
+		if err := sandbox.SendProcessSignal(context.Background(), ref, signal); err != nil {
+			t.Fatalf("SendProcessSignal(%s) = %v", signal, err)
+		}
+		fake.mu.Lock()
+		options := fake.controlOptions
+		fake.mu.Unlock()
+		wantShellSignal := strings.TrimPrefix(signal, "SIGNAL_SIG")
+		if !reflect.DeepEqual(options.Cmd, []string{"/bin/sh", "-c", signalExecShell, "aries-signal", ref.statePath, "101", wantShellSignal}) {
+			t.Fatalf("%s helper = %#v", signal, options.Cmd)
+		}
+	}
+	if err := sandbox.SendProcessSignal(context.Background(), ref, "SIGNAL_SIGINT"); err == nil {
+		t.Fatal("unsupported signal succeeded")
+	}
+	if err := sandbox.SendProcessSignal(context.Background(), ProcessRef{PID: 101}, "SIGNAL_SIGTERM"); err == nil {
+		t.Fatal("forged incomplete reference succeeded")
+	}
+}
+
 func TestExecCancellationReturnsTerminationConfirmationFailure(t *testing.T) {
 	fake := &fakeClient{execRunning: true, leaveExecAlive: true}
 	fake.attach = func(conn net.Conn) { _, _ = io.Copy(io.Discard, conn) }
@@ -650,6 +773,95 @@ func TestUploadAndDownloadUseDockerArchives(t *testing.T) {
 	if err := sandbox.Download(context.Background(), "/work/source.bin", filepath.Join(sandbox.outputDir, "..", "escape")); err == nil {
 		t.Fatal("Download accepted destination outside output root")
 	}
+}
+
+func TestE2BFilesystemCapabilitiesUseArchivesAndExactArgv(t *testing.T) {
+	fake := &fakeClient{}
+	sandbox := startSandbox(t, fake)
+	defer sandbox.stop(context.Background())
+
+	binaryContent := []byte{0x00, 0xff, 'a'}
+	fake.download = client.CopyFromContainerResult{
+		Content: io.NopCloser(bytes.NewReader(archiveFile(t, "bytes.bin", binaryContent))),
+		Stat:    container.PathStat{Name: "bytes.bin", Size: int64(len(binaryContent)), Mode: 0o640, Mtime: time.Unix(123, 0)},
+	}
+	content, err := sandbox.ReadFile(context.Background(), "/work/bytes.bin")
+	if err != nil || !bytes.Equal(content, binaryContent) {
+		t.Fatalf("ReadFile() = %v, %v", content, err)
+	}
+
+	if err := sandbox.WriteFile(context.Background(), "/work/missing/bytes.bin", []byte{}); err != nil {
+		t.Fatal(err)
+	}
+	header, uploaded := readArchive(t, fake.uploadBytes)
+	if fake.upload.DestinationPath != "/work/missing" || header.Name != "bytes.bin" || header.Size != 0 || len(uploaded) != 0 {
+		t.Fatalf("WriteFile archive path=%q header=%#v content=%v options=%#v", fake.upload.DestinationPath, header, uploaded, fake.upload)
+	}
+
+	fake.download = client.CopyFromContainerResult{
+		Content: io.NopCloser(bytes.NewReader(archiveFile(t, "bytes.bin", binaryContent))),
+		Stat:    container.PathStat{Name: "bytes.bin", Size: 3, Mode: 0o640, Mtime: time.Unix(123, 0)},
+	}
+	info, err := sandbox.StatPath(context.Background(), "/work/bytes.bin")
+	if err != nil || info.Path != "/work/bytes.bin" || info.Name != "bytes.bin" || info.Type != "file" || info.Size != 3 || info.Mode.Perm() != 0o640 {
+		t.Fatalf("StatPath() = %#v, %v", info, err)
+	}
+
+	fake.download = client.CopyFromContainerResult{
+		Content: io.NopCloser(bytes.NewReader(directoryArchive(t))),
+		Stat:    container.PathStat{Name: "work", Mode: os.ModeDir | 0o755},
+	}
+	entries, err := sandbox.ListDir(context.Background(), "/work")
+	if err != nil || len(entries) != 3 || entries[0].Name != "a.txt" || entries[1].Name != "link" || entries[1].Type != "symlink" || entries[2].Name != "sub" || entries[2].Type != "directory" {
+		t.Fatalf("ListDir() = %#v, %v", entries, err)
+	}
+
+	for _, operation := range []struct {
+		call func() error
+		want []string
+	}{
+		{func() error { return sandbox.MakeDir(context.Background(), "/work/a/b") }, []string{"/bin/mkdir", "-p", "--", "/work/a/b"}},
+		{func() error { return sandbox.RemovePath(context.Background(), "/work/a") }, []string{"/bin/rm", "-rf", "--", "/work/a"}},
+		{func() error { return sandbox.MovePath(context.Background(), "/work/a", "/work/b") }, []string{"/bin/mv", "--", "/work/a", "/work/b"}},
+	} {
+		if err := operation.call(); err != nil {
+			t.Fatal(err)
+		}
+		if got := fake.execOptions.Cmd[6:]; !reflect.DeepEqual(got, operation.want) {
+			t.Fatalf("filesystem argv = %#v, want %#v", got, operation.want)
+		}
+	}
+	for _, target := range []string{"/", "/.", "/work/.."} {
+		if err := sandbox.RemovePath(context.Background(), target); err == nil {
+			t.Fatalf("RemovePath(%q) succeeded", target)
+		}
+	}
+}
+
+func directoryArchive(t *testing.T) []byte {
+	t.Helper()
+	var result bytes.Buffer
+	writer := tar.NewWriter(&result)
+	for _, header := range []*tar.Header{
+		{Name: "work/", Typeflag: tar.TypeDir, Mode: 0o755},
+		{Name: "work/a.txt", Size: 1, Mode: 0o644},
+		{Name: "work/sub/", Typeflag: tar.TypeDir, Mode: 0o755},
+		{Name: "work/sub/deep.txt", Size: 1, Mode: 0o644},
+		{Name: "work/link", Typeflag: tar.TypeSymlink, Linkname: "a.txt", Mode: 0o777},
+	} {
+		if err := writer.WriteHeader(header); err != nil {
+			t.Fatal(err)
+		}
+		if header.Size != 0 {
+			if _, err := writer.Write([]byte{'x'}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return result.Bytes()
 }
 
 func TestValidationRejectsUnsafeInputsBeforeDocker(t *testing.T) {

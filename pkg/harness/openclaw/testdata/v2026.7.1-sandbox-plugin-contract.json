@@ -1,0 +1,73 @@
+{
+  "upstream": {
+    "repository": "https://github.com/openclaw/openclaw",
+    "tag": "v2026.7.1",
+    "tagObject": "842a951d5d0843aa6eb77575dc9867bf0603835c",
+    "commit": "2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4"
+  },
+  "sources": {
+    "src/plugin-sdk/sandbox.ts": "3140345cf1e88d1881aee3b72f2b3a4d6bd01598f8faab26eef20b9d64caa251",
+    "src/agents/sandbox/backend.ts": "22f8fc3ec6e2494839908588460040d46bbaa71124f5d46b8be71f810f73d577",
+    "src/agents/sandbox/backend.types.ts": "ab98d85f2d11a4d06c688b395b05afce8ea434062fb5718e58af7a17c7257b35",
+    "src/agents/sandbox/backend-handle.types.ts": "5c1c5a950e0868fad40095623f01ac0e50e679830ba19469b7ea0cc734a12a29",
+    "src/agents/sandbox/fs-bridge.types.ts": "6316c649cad175874fc91aa5d63455077b9db4dae95f724838fbeb9c1bcf603b",
+    "src/agents/sandbox/context.ts": "b69df7104620bcb0e9b8bf1a29649dd0d42441ec8db1a44cf26d6321b36fe2a6",
+    "src/config/types.plugins.ts": "82dbcaef080dbf0ee70519a583a7bcab690f9a21acca34367c82a9d3ba7e95f0",
+    "src/config/types.agents-shared.ts": "bc70f812f37f8ec041f8e86da466ad0f62b8f4a40f7175b954748b6d42012271",
+    "src/config/zod-schema.agent-runtime.ts": "041d8ca8d94d10b5585b95f707fddef6da4e9f7b42f203e7695f77f826492d3e",
+    "src/agents/agent-tools.ts": "e3525593ff35dad9a996dbc8f029b8d8459cd03c5dfd468f8f34e5b09885d48a",
+    "extensions/openshell/index.ts": "cdf7bbfb1842dafbda7b38bf160e683f73489c193d65cf60b8a828e5de1e9ce9",
+    "extensions/openshell/openclaw.plugin.json": "c7cd076727e86dbcfd2869ef3936c430116b0f15240cb7b1837ff97cdd38be1a",
+    "extensions/openshell/package.json": "1dbe9d8fe95859289b08dc582f78c07a44476db061ef53f0cea6fbafefa12158"
+  },
+  "plugin": {
+    "sdkImport": "openclaw/plugin-sdk/sandbox",
+    "registrationFunction": "registerSandboxBackend",
+    "registrationMode": "full",
+    "backendID": "aries-e2b",
+    "localLoadPath": "/opt/aries/openclaw/aries-e2b",
+    "manifest": "openclaw.plugin.json",
+    "entrypointField": "openclaw.extensions",
+    "config": {
+      "plugins.enabled": true,
+      "plugins.allow": ["aries-e2b"],
+      "plugins.load.paths": ["/opt/aries/openclaw/aries-e2b"],
+      "plugins.entries.aries-e2b.enabled": true,
+      "agents.defaults.sandbox.backend": "aries-e2b",
+      "agents.defaults.sandbox.mode": "all",
+      "agents.defaults.sandbox.scope": "shared",
+      "agents.defaults.sandbox.workspaceAccess": "rw"
+    }
+  },
+  "backend": {
+    "createParams": ["sessionKey", "scopeKey", "workspaceDir", "agentWorkspaceDir", "skillsWorkspaceDir", "cfg"],
+    "requiredHandleFields": ["id", "runtimeId", "runtimeLabel", "workdir", "buildExecSpec", "runShellCommand"],
+    "execSpecFields": ["argv", "env", "stdinMode", "finalizeToken"],
+    "buildExecSpecParams": ["command", "workdir", "env", "usePty"],
+    "commandParams": ["script", "args", "stdin", "allowFailure", "signal"],
+    "managerIsOptional": true,
+    "ariesRegistersManager": false
+  },
+  "filesystemBridge": {
+    "methods": ["resolvePath", "readFile", "writeFile", "mkdirp", "remove", "rename", "stat"],
+    "hasListDir": false,
+    "nativeTools": {
+      "enabled": ["read", "write", "edit"],
+      "disabled": ["apply_patch"],
+      "writeRequiresWorkspaceAccess": "rw"
+    }
+  },
+  "secrets": {
+    "tokenConfigField": "tokenFile",
+    "tokenFile": "/run/aries/e2b/access.token",
+    "tokenBytesInOpenClawJSON": false,
+    "pluginEntrySupportsSecretRef": false
+  },
+  "limitations": {
+    "builtInE2BBackend": false,
+    "directProcessStartMethod": false,
+    "directProcessSendSignalMethod": false,
+    "buildExecSpecAcceptsCommandString": true,
+    "filesystemBridgeHasListDir": false
+  }
+}

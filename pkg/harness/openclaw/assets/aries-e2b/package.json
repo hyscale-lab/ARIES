@@ -1,0 +1,8 @@
+{
+  "name": "@aries/openclaw-e2b",
+  "private": true,
+  "type": "module",
+  "openclaw": {
+    "extensions": ["./index.ts"]
+  }
+}

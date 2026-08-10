@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/hyscale-lab/aries/internal/app"
 	runtimesglang "github.com/hyscale-lab/aries/internal/modelruntime/sglang"
 	"github.com/hyscale-lab/aries/pkg/benchmark/terminalbench"
 	"github.com/hyscale-lab/aries/pkg/bridge/hermesssh"
+	"github.com/hyscale-lab/aries/pkg/bridge/openclawe2b"
 	"github.com/hyscale-lab/aries/pkg/bridge/openclawssh"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
@@ -23,6 +25,14 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+type openClawE2BServer interface {
+	Start(context.Context) error
+	Stop(context.Context) error
+	NewGrant(string) *openclawe2b.Grant
+}
+
+var newOpenClawE2BServer = func() openClawE2BServer { return openclawe2b.New() }
+
 func commandWiring() app.Wiring {
 	return app.Wiring{
 		PrepareBackend:       prepareBackend,
@@ -33,7 +43,29 @@ func commandWiring() app.Wiring {
 		NewBenchmark:         newBenchmark,
 		NewHarness:           newHarness,
 		NewSandbox:           newSandbox,
-		NewBridge:            newBridge,
+		PrepareBridge:        prepareBridge,
+	}
+}
+
+func prepareBridge(ctx context.Context, cfg config.Config, outputRoot string, logger *logrus.Logger) (app.PreparedBridge, error) {
+	switch cfg.Bridge.Type {
+	case "openclaw-ssh", "hermes-ssh":
+		return app.PreparedBridge{NewTaskBridge: newBridge}, nil
+	case "openclaw-e2b":
+		server := newOpenClawE2BServer()
+		if err := server.Start(ctx); err != nil {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			return app.PreparedBridge{}, errors.Join(fmt.Errorf("start OpenClaw E2B bridge: %w", err), server.Stop(cleanupCtx))
+		}
+		return app.PreparedBridge{
+			NewTaskBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
+				return server.NewGrant(outputRoot), nil
+			},
+			Stop: server.Stop,
+		}, nil
+	default:
+		return app.PreparedBridge{}, fmt.Errorf("unsupported bridge type %q", cfg.Bridge.Type)
 	}
 }
 
@@ -56,13 +88,12 @@ func validateComponents(cfg config.Config) error {
 	}
 	switch cfg.Bridge.Type {
 	case "openclaw-ssh":
+	case "openclaw-e2b":
 	case "hermes-ssh":
 	default:
 		return fmt.Errorf("unsupported bridge type %q", cfg.Bridge.Type)
 	}
-	// Each bridge speaks one harness's SSH grammar, so the pair is checked
-	// here rather than left to fail at the first tool call.
-	if (cfg.Harness.Type == "hermes") != (cfg.Bridge.Type == "hermes-ssh") {
+	if cfg.Harness.Type == "hermes" && cfg.Bridge.Type != "hermes-ssh" || cfg.Harness.Type == "openclaw" && cfg.Bridge.Type != "openclaw-ssh" && cfg.Bridge.Type != "openclaw-e2b" {
 		return fmt.Errorf("harness type %q requires its paired bridge, not %q", cfg.Harness.Type, cfg.Bridge.Type)
 	}
 	return nil

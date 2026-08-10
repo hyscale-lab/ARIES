@@ -20,6 +20,7 @@ import (
 
 	"github.com/containerd/errdefs"
 	"github.com/hyscale-lab/aries/pkg/benchmark/terminalbench"
+	"github.com/hyscale-lab/aries/pkg/bridge/openclawe2b"
 	"github.com/hyscale-lab/aries/pkg/bridge/openclawssh"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
@@ -481,6 +482,131 @@ func TestPinnedGatewayRealtimeProtocolSmoke(t *testing.T) {
 	assertNoRunResources(t, ctx, api, runID)
 }
 
+func TestPinnedOpenClawE2BPluginExecAndNativeFilesystem(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	api, err := client.New(client.FromEnv, client.WithUserAgent("aries-openclaw-e2b-integration/1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer api.Close()
+	if _, err := api.Ping(ctx, client.PingOptions{}); err != nil {
+		t.Fatalf("Docker daemon is required: %v", err)
+	}
+	root := repositoryRoot(t)
+	versions, err := config.LoadVersions(filepath.Join(root, "configs", "versions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if versions.OpenClaw.Image != "ghcr.io/openclaw/openclaw:2026.7.1" {
+		t.Fatalf("OpenClaw image = %q, want pinned v2026.7.1", versions.OpenClaw.Image)
+	}
+	ensureSDKImage(t, ctx, api, versions.OpenClaw.Image)
+
+	const runID = "openclaw-e2b-plugin-real"
+	outputDir := t.TempDir()
+	logger := logrus.New()
+	sandboxManager, err := dockersandbox.New(dockersandbox.Options{OutputDir: outputDir, CleanupTimeout: 30 * time.Second, Logger: logger})
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := sandboxManager.Start(ctx, core.SandboxRequest{RunID: runID, TaskID: "plugin-task", Environment: core.Environment{Image: versions.OpenClaw.Image, Workdir: "/workspace", CPU: 1, MemoryMB: 256, StorageMB: 256}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sandbox := live.(*dockersandbox.Sandbox)
+	t.Cleanup(func() { _ = sandboxManager.Stop(context.Background(), sandbox) })
+
+	server := openclawe2b.New()
+	if err := server.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Stop(context.Background()) })
+	grant := server.NewGrant(outputDir)
+	endpoint, err := grant.Start(ctx, sandbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := os.ReadFile(endpoint.AccessTokenSourceFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = grant.Stop(context.Background()) })
+
+	modelKey := "deterministic-e2b-model-key"
+	digest := sha256.Sum256([]byte(modelKey))
+	created, err := api.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name:             "aries-fake-model-" + runID,
+		Config:           &container.Config{Image: versions.OpenClaw.Image, Entrypoint: []string{"node"}, Cmd: []string{"-e", deterministicE2BModelScript(), hex.EncodeToString(digest[:])}, Labels: map[string]string{"aries.managed": "true", "aries.run": runID}},
+		HostConfig:       &container.HostConfig{NetworkMode: container.NetworkMode(endpoint.Network)},
+		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{endpoint.Network: {Aliases: []string{"fake-model"}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	modelID := created.ID
+	t.Cleanup(func() {
+		_, _ = api.ContainerRemove(context.Background(), modelID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
+	})
+	if _, err := api.ContainerStart(ctx, modelID, client.ContainerStartOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	harness, err := New(Options{Image: versions.OpenClaw.Image, OutputDir: outputDir, CleanupTimeout: 30 * time.Second, StartTimeout: time.Minute, AgentTimeout: 2 * time.Minute, Logger: logger, APIKeyLookup: func(name string) ([]byte, bool) {
+		if name != "MODEL_KEY" {
+			return nil, false
+		}
+		return []byte(modelKey), true
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = harness.Stop(context.Background()); _ = harness.Close() })
+	if err := harness.Start(ctx, core.HarnessRequest{RunID: runID, TaskID: "plugin-task", Endpoint: endpoint, Timeout: 90 * time.Second, Model: core.ModelConfig{Provider: "deepseek", BaseURL: "http://fake-model:8080/v1", Model: "aries-deterministic", APIKeyEnv: "MODEL_KEY"}, OutputDir: outputDir}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := harness.Run(ctx, "Exercise the configured sandbox tools.")
+	if err != nil || result.Status != core.StatusSucceeded || !strings.Contains(result.FinalResponse, "E2B bridge verified") {
+		logFailedRunArtifacts(t, core.RunResult{Tasks: []core.TaskResult{{Harness: result}}})
+		t.Fatalf("OpenClaw E2B run = %#v, %v", result, err)
+	}
+	if err := harness.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]string{"/workspace/exec.txt": "exec-through-bridge", "/workspace/native.txt": "after"} {
+		got, err := sandbox.Exec(ctx, core.Command{Path: "/bin/cat", Args: []string{path}})
+		if err != nil || got.ExitCode != 0 || got.Stdout != want {
+			t.Fatalf("sandbox file %s = %#v, %v", path, got, err)
+		}
+	}
+	if err := grant.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(endpoint.AccessTokenSourceFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("E2B token artifact remains: %v", err)
+	}
+	if _, err := api.ContainerRemove(ctx, modelID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !errdefs.IsNotFound(err) {
+		t.Fatal(err)
+	}
+	modelID = ""
+	containerID, networkName := sandbox.ContainerID(), sandbox.NetworkName()
+	if err := sandboxManager.Stop(ctx, sandbox); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
+		t.Fatalf("task container remains: %v", err)
+	}
+	if _, err := api.NetworkInspect(ctx, networkName, client.NetworkInspectOptions{}); !errdefs.IsNotFound(err) {
+		t.Fatalf("task network remains: %v", err)
+	}
+	assertNoRunResources(t, ctx, api, runID)
+	assertSecretAbsent(t, outputDir, string(token))
+	assertSecretAbsent(t, outputDir, modelKey)
+}
+
 func parseRawBridgeAudit(t *testing.T, content []byte) []map[string]string {
 	t.Helper()
 	const begin = "--- ARIES SSH CALL BEGIN ---\n"
@@ -661,5 +787,19 @@ if(step===2){const head=(out.match(/ARIES_HEAD\s+([0-9a-f]{40})/)||[])[1],hashes
 if(step===3){if(!out.includes(candidate.slice(0,7)))throw Error("inspect");step++;return call(res,"merge","exec",{command:"git checkout master && git -c user.name='ARIES Benchmark' -c user.email='aries@example.invalid' merge -X theirs --no-edit "+candidate})}
 if(step===4){if(!/fast-forward|merge made|already up.to.date/i.test(out))throw Error("merge");step++;return call(res,"verify","exec",{command:"git merge-base --is-ancestor "+candidate+" HEAD && test -z \"$(git status --porcelain)\" && git status --short --branch && git log --oneline -5"})}
 if(step===5){if(!out.includes(candidate.slice(0,7))||!out.includes("master"))throw Error("verify");step++;return stream(res,{role:"assistant",content:"Recovered lost commit "+candidate+" and verified a clean master branch."},"stop")}
+throw Error("extra request")}catch(error){res.writeHead(400,{"content-type":"application/json"});res.end(JSON.stringify({error:{message:error.message}}))}})}).listen(8080,"0.0.0.0");`
+}
+
+func deterministicE2BModelScript() string {
+	return `const http=require("http"),crypto=require("crypto");
+const expected=process.argv[1];let step=0;
+function stream(res,delta,finish){const id="e2b-"+step;res.writeHead(200,{"content-type":"text/event-stream","cache-control":"no-cache","connection":"close"});res.write("data: "+JSON.stringify({id,object:"chat.completion.chunk",created:1,model:"aries-deterministic",choices:[{index:0,delta,finish_reason:null}]})+"\n\n");res.write("data: "+JSON.stringify({id,object:"chat.completion.chunk",created:1,model:"aries-deterministic",choices:[{index:0,delta:{},finish_reason:finish}]})+"\n\n");res.end("data: [DONE]\n\n")}
+function call(res,id,name,args){step++;stream(res,{role:"assistant",tool_calls:[{index:0,id,type:"function",function:{name,arguments:JSON.stringify(args)}}]},"tool_calls")}
+http.createServer((req,res)=>{let raw="";req.on("data",c=>raw+=c);req.on("end",()=>{try{if(req.method!=="POST"||req.url!=="/v1/chat/completions")throw Error("route");const bearer=(req.headers.authorization||"").replace(/^Bearer /,"");if(crypto.createHash("sha256").update(bearer).digest("hex")!==expected)throw Error("auth");const body=JSON.parse(raw),names=(body.tools||[]).map(x=>x?.function?.name);for(const required of ["exec","read","write","edit"])if(!names.includes(required))throw Error("missing "+required);if(names.includes("apply_patch"))throw Error("apply_patch enabled");
+if(step===0)return call(res,"exec","exec",{command:"printf exec-through-bridge > /workspace/exec.txt"});
+if(step===1)return call(res,"write","write",{path:"/workspace/native.txt",content:"before"});
+if(step===2)return call(res,"read","read",{path:"/workspace/native.txt"});
+if(step===3)return call(res,"edit","edit",{path:"/workspace/native.txt",oldText:"before",newText:"after"});
+if(step===4){step++;return stream(res,{role:"assistant",content:"E2B bridge verified"},"stop")}
 throw Error("extra request")}catch(error){res.writeHead(400,{"content-type":"application/json"});res.end(JSON.stringify({error:{message:error.message}}))}})}).listen(8080,"0.0.0.0");`
 }
