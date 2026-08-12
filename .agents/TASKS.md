@@ -206,12 +206,23 @@ Step 10 remains unchecked until its real-Docker tests pass on that machine.
 Step 11, final release validation, and the final R22 completion commit still
 occur only after step 10 passes.
 
-10. [ ] Add real-Docker and deterministic pinned-OpenClaw integration proving
+10. [x] Add real-Docker and deterministic pinned-OpenClaw integration proving
    two concurrent task networks reach the same listener through their own
-   gateways, cannot reach one another's gateway, route identical PID values
+   gateways, cannot reach one another.s gateway, route identical PID values
    independently, revoke one grant while the other remains usable, expose no
    verifier material before positive revocation, and leave no managed listener,
-   process, container, network, credential, or key behind.
+   process, container, network, credential, or key behind. The exact pinned
+   OpenClaw v2026.7.1 image (source commit `2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4`)
+   required `activation.onStartup` in the staged plugin manifest; without it the
+   gateway discovered but did not activate the backend. Real Docker now proves
+   container-originated two-network routing to one shared port, cross-network and
+   credential isolation, exact binary process streams and ordering, real PID,
+   cancellation, TERM/KILL, stale and cross-sandbox rejection, zero-byte and
+   binary filesystem operations, metadata/listing/root/symlink semantics,
+   selective revocation, active-process server shutdown, pinned plugin exec and
+   native read/write/edit with apply_patch denied, secret absence, and positive
+   cleanup. `make integration`, `make test`, `make test-race`, and `git diff
+   --check` pass; post-suite inspection finds no managed resource or process.
 11. [ ] Update the architecture, bridge alternatives, supported-implementation,
     configuration, profile, harness, sandbox, and quick-start documentation with
     exact versioned upstream citations. Run build, unit, race, lint, integration,

@@ -126,6 +126,13 @@ func TestAriesPluginUsesOnlyPinnedBackendAndFilesystemSurface(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	manifest, err := os.ReadFile("assets/aries-e2b/openclaw.plugin.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(manifest, []byte(`"activation": {"onStartup": true}`)) {
+		t.Fatal("ARIES plugin manifest must activate its sandbox backend at gateway startup")
+	}
 	for _, required := range [][]byte{
 		[]byte(`from "openclaw/plugin-sdk/sandbox"`), []byte(`registerSandboxBackend("aries-e2b"`),
 		[]byte("buildExecSpec:"), []byte("runShellCommand:"), []byte("createFsBridge:"),
