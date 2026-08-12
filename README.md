@@ -89,7 +89,7 @@ implementations:
 | Agent harness | OpenClaw (text and realtime voice modes); Hermes (text) |
 | Benchmark | Terminal-Bench 2 |
 | Tool sandbox | Docker, using the Moby Go SDK |
-| Tool bridge | OpenClaw–Docker SSH bridge; Hermes–Docker SSH bridge |
+| Tool bridge | Centralized OpenClaw E2B-like bridge; OpenClaw–Docker SSH bridge; Hermes–Docker SSH bridge |
 | Model service | External DeepSeek; external or ARIES-managed SGLang |
 
 See [Supported implementations](docs/supported.md) for ownership,

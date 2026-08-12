@@ -18,6 +18,16 @@ the harness only after the sandbox and bridge are ready. On success, failure, or
 cancellation, it stops the harness and confirms absence. Evaluation remains a
 separate Benchmark outcome rather than an interpretation of harness success.
 
+For `bridge.type: "openclaw-e2b"`, ARIES stages the `aries-e2b` plugin into the
+pinned OpenClaw `v2026.7.1` image, loads it at startup, and selects it through
+`agents.defaults.sandbox.backend`. The implementation follows the versioned
+upstream
+[`registerSandboxBackend` API](https://github.com/openclaw/openclaw/blob/2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4/src/plugin-sdk/sandbox.ts)
+and the upstream
+[`OpenShell` full-mode plugin example](https://github.com/openclaw/openclaw/blob/2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4/extensions/openshell/index.ts).
+It exposes no sandbox manager, PTY, stdin, detached process, or lifecycle API;
+ARIES remains the sole owner of the task container.
+
 OpenClaw container lifecycle, gateway protocol, and voice-session semantics are
 separate concrete responsibilities. `openclaw.Manager` owns the container and
 publishes one ephemeral host-loopback port. `openclaw/gateway.Client` owns one

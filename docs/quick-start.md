@@ -36,6 +36,7 @@ make build
 ```
 
 - `profiles/openclaw-tb2-fix-git-deepseek.json`
+- `profiles/openclaw-tb2-fix-git-deepseek-e2b.json`
 - `profiles/openclaw-tb2-fix-git-sglang.json`
 - `profiles/openclaw-tb2-five-deepseek.json`
 - `profiles/hermes-tb2-fix-git-deepseek.json`
@@ -277,6 +278,18 @@ For the one-task example:
 ./bin/aries profiles/openclaw-tb2-fix-git-deepseek.json
 ```
 
+To run the same task through the centralized E2B-like bridge instead of SSH:
+
+```sh
+./bin/aries profiles/openclaw-tb2-fix-git-deepseek-e2b.json
+```
+
+This starts one run-scoped `openclaw-e2b` server. Each task reaches its shared
+port through its own Docker-network gateway and authenticates with a private
+sandbox ID/token pair. OpenClaw `exec` and native `read`/`write`/`edit` route to
+the existing task container; `apply_patch` is disabled. This profile does not
+need `bin/aries-ssh`.
+
 For the five-task subset:
 
 ```sh
@@ -288,8 +301,9 @@ Keep `bin/aries-ssh` beside `bin/aries`. A live DeepSeek run can incur API
 charges; the five-task profile also takes substantially longer and pulls more
 images. ARIES first ensures the benchmark and images are prepared, then starts
 and checks an owned managed runtime when configured, performs a bounded model
-preflight, and runs each task in profile order. For each task it stops OpenClaw,
-revokes SSH access, and only then evaluates the same still-running sandbox.
+preflight, and runs each task in profile order. For each task it stops
+OpenClaw, positively revokes the selected bridge grant, and only then evaluates the same
+still-running sandbox.
 
 ### Hermes instead of OpenClaw
 
@@ -346,6 +360,12 @@ test ! -f "$task_dir/bridge/ssh_raw.log" || cat "$task_dir/bridge/ssh_raw.log"
 cat "$task_dir/harness/openclaw.json"
 cat "$run_dir/aries.log"
 ```
+
+The E2B-like profile retains the same harness, evaluation, monitor, and run
+artifacts, but it does not produce SSH `bridge/tool-calls.jsonl` or
+`bridge/ssh_raw.log`. Confirm `agents.defaults.sandbox.backend` is `aries-e2b`
+and the plugin entry contains only a `tokenFile` path in
+`harness/openclaw.json`; the token bytes must not appear there or in logs.
 
 For the SGLang example, select its run and inspect the managed runtime logs
 when applicable:
@@ -447,6 +467,9 @@ bridge artifacts may contain task or model content; review them before sharing.
   deletes it automatically.
 - **SSH timeout:** check host firewall rules and confirm containers can reach
   the Docker bridge gateway.
+- **E2B bridge error:** inspect `harness/gateway.log`, confirm the rendered
+  backend is `aries-e2b`, and confirm the task container can reach its own
+  Docker-network gateway. Do not expose or copy the temporary access-token file.
 - **Suspected leak:** inspect `docker ps -a --filter label=aries.managed=true`
   and `docker network ls --filter label=aries.managed=true`.
 

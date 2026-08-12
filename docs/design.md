@@ -40,6 +40,12 @@ be external or managed by ARIES for the duration of a run, but it is
 not a fifth Runner role. Recording and command-level scheduling likewise
 surround the four-role task composition rather than expanding it.
 
+The centralized OpenClaw E2B-like server is also surrounding run-scoped
+infrastructure, not a fifth role. The command layer starts one server before
+task admission; each per-task `ToolBridge` grant registers exactly one Docker
+sandbox and later revokes it. Concurrent grants share the listener port but use
+their own task-network gateway destination, sandbox ID, and access token.
+
 ## Task lifecycle and isolation gates
 
 For every task the Runner performs this order:

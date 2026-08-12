@@ -27,17 +27,55 @@ flowchart TB
     P -->|revocation confirmed| E
 ```
 
-The current pair-specific OpenClaw SSH bridge adapts OpenClaw's pinned SSH
-behavior to a narrow streaming capability of the Docker sandbox. OpenClaw never
-receives the Docker socket, sandbox ownership, or verifier material. The bridge
-does not create a persistent workspace alias in the evaluated environment.
-Credentials, listeners, sessions, and helper processes are owned and revoked
-fail-closed.
+OpenClaw has two supported pair-specific adapters. The SSH bridge adapts the
+pinned SSH behavior to Docker streaming execution. The E2B-like bridge stages a
+local full-mode OpenClaw plugin that registers the `aries-e2b` sandbox backend
+and maps native sandbox execution and filesystem tools to a centralized ARIES
+HTTP service. Neither path gives OpenClaw the Docker socket, sandbox ownership,
+or verifier material. Credentials, listeners, sessions, processes, and helper
+files are owned and revoked fail-closed.
 
 The bridge retains structured executed-command records and lossless wire-side
 input as private replayable evidence. These artifacts may contain task data and
 must remain private unless reviewed; model credentials and SSH private-key
 bytes do not belong in the records.
+
+## Centralized OpenClaw E2B-like bridge
+
+`bridge.type: "openclaw-e2b"` starts one application-scoped TCP4 listener for
+the run. Every Docker task has its own bridge network, so its endpoint replaces
+the wildcard listener host with that network's gateway while retaining the one
+shared port. Dispatch succeeds only when the accepted socket destination,
+`E2b-Sandbox-Id`, and `X-Access-Token` all match one active registration.
+
+The REST surface supports attached `Process.Start`, `Process.SendSignal`, raw
+binary file reads and writes, and filesystem stat, depth-one listing, mkdir,
+recursive remove, and move. Process identity is `(sandbox ID, PID)`; only
+`SIGTERM` and `SIGKILL` are accepted. Cancellation and revocation terminate the
+actual process group and positively confirm absence. Paths are absolute and
+normalized, modifying `/` is forbidden, raw reads reject symlinks, and metadata
+reports symlinks without following them.
+
+The staged plugin is pinned to OpenClaw
+[`v2026.7.1`](https://github.com/openclaw/openclaw/tree/2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4),
+specifically its
+[`registerSandboxBackend` SDK](https://github.com/openclaw/openclaw/blob/2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4/src/plugin-sdk/sandbox.ts),
+[`SandboxBackendHandle` contract](https://github.com/openclaw/openclaw/blob/2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4/src/agents/sandbox/backend-handle.types.ts),
+and
+[`SandboxFsBridge` contract](https://github.com/openclaw/openclaw/blob/2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4/src/agents/sandbox/fs-bridge.types.ts).
+OpenClaw receives only the address, sandbox ID, workdir, and token-file path in
+configuration. Token bytes exist only in the private mode-0600
+`/run/aries/e2b/access.token`. Native `read`, `write`, and `edit` are enabled;
+`apply_patch` remains disabled. The upstream command seam supplies a command
+string rather than original typed argv, so the plugin deliberately executes
+that string as `/bin/bash -lc`; ARIES does not claim typed-argv preservation at
+that upstream boundary.
+
+Revocation invalidates authentication immediately, rejects new process and file
+work, terminates active process groups, drains admitted requests, confirms the
+registration is empty, removes it, and deletes the staged token. Server shutdown
+applies the same cleanup to every remaining registration. The service owns no
+sandbox lifecycle operation.
 
 ## Hermes SSH bridge
 

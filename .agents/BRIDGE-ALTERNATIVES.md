@@ -4,15 +4,20 @@ This internal record preserves implementation history, pinned protocol mechanics
 
 ## Decision
 
-ARIES keeps the OpenClaw-to-Docker bridge concrete and pair-specific:
+ARIES keeps both OpenClaw-to-Docker bridges concrete and pair-specific:
 
 ```text
 OpenClaw container -> pinned SSH client -> host ARIES listener
                    -> Moby ExecStream -> exact task container
+
+OpenClaw container -> staged aries-e2b plugin -> task-network gateway
+                   -> centralized ARIES HTTP server -> exact task container
 ```
 
-This path uses OpenClaw's unmodified upstream SSH integration while keeping the
-Docker socket out of the harness and keeping task-container ownership in ARIES.
+The SSH path uses OpenClaw's upstream SSH integration. The E2B-like path uses
+the pinned full-mode sandbox-plugin contract and one application-scoped server
+with task-scoped registrations. Both keep the Docker socket out of the harness
+and task-container ownership in ARIES.
 It also lets the evaluator inspect the same still-running container that the
 agent changed. ARIES shares only the Runner-facing `ToolBridge` role; it does
 not impose one remote-tool protocol on future harnesses.
@@ -270,7 +275,8 @@ sandbox.
 
 | Design | Security and ownership | Workspace and image assumptions | Cancellation, revocation, and evidence | Evaluator visibility | Decision |
 | --- | --- | --- | --- | --- | --- |
-| **Current host SSH-to-Moby bridge** | ARIES owns the task container and ephemeral credentials; the harness receives neither the Docker socket nor verifier data. | Uses OpenClaw's pinned SSH grammar and virtual namespace; derives each task workdir from its Dockerfile. Task images need no SSH daemon or Python helper. | Targets one exec process group, positively revokes sessions, and retains paired wire/executed evidence. | Agent changes occur in the exact still-running container later evaluated; no bridge alias remains. | **Selected for OpenClaw.** |
+| **Host SSH-to-Moby bridge** | ARIES owns the task container and ephemeral credentials; the harness receives neither the Docker socket nor verifier data. | Uses OpenClaw's pinned SSH grammar and virtual namespace; derives each task workdir from its Dockerfile. Task images need no SSH daemon or Python helper. | Targets one exec process group, positively revokes sessions, and retains paired wire/executed evidence. | Agent changes occur in the exact still-running container later evaluated; no bridge alias remains. | **Supported for OpenClaw.** |
+| **Centralized E2B-like bridge** | One ARIES server multiplexes exact sandbox registrations; destination IP, sandbox ID, and token must all match. The plugin has no sandbox manager. | Uses OpenClaw v2026.7.1 full-mode backend and filesystem bridge contracts; task images need bash and ordinary core filesystem utilities but no daemon. | Attached process groups are scoped by sandbox and PID; revocation invalidates auth, terminates processes, drains requests, deletes the registration and credential. | Native exec/read/write/edit affect the exact still-running container later evaluated. | **Supported for OpenClaw.** |
 | **Install or require `sshd` in every task image** | Moves daemon, user, key, port, and process ownership into the evaluator's sandbox. | Assumes each heterogeneous benchmark image can run and safely configure SSH. | Adds another service to stop and audit; transport logs depend on image configuration. | The evaluator sees daemon and credential setup mutations unrelated to the task. | Rejected. |
 | **Give OpenClaw the Docker socket** | Exposes daemon authority far beyond one task container and lets the harness create, inspect, or remove unrelated resources. | Uses the harness's Docker behavior rather than the exact ARIES sandbox boundary. | ARIES cannot narrowly revoke per-task daemon authority or guarantee equivalent evidence. | The harness could replace or bypass the container intended for evaluation. | Rejected. |
 | **Generic remote-tool relay** | A shared protocol would need to encode the union of harness authentication and command semantics before a second implementation exists. | Risks hiding pair-specific workspace, transfer, and image assumptions behind weak abstractions. | Cancellation, revocation, and replay guarantees would become lowest-common-denominator policy. | Translation mistakes could target state other than the evaluator's sandbox. | Rejected until multiple real adapters reveal a smaller shared seam. |
@@ -315,9 +321,12 @@ evidence shows otherwise.
 
 ## Upstream references
 
-- OpenClaw [sandbox documentation](https://github.com/openclaw/openclaw/blob/main/docs/gateway/sandboxing.md),
-  [SSH transport](https://github.com/openclaw/openclaw/blob/main/src/agents/sandbox/ssh.ts),
-  and [SSH backend](https://github.com/openclaw/openclaw/blob/main/src/agents/sandbox/ssh-backend.ts).
+- OpenClaw v2026.7.1 commit
+  [`2d2ddc43`](https://github.com/openclaw/openclaw/tree/2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4):
+  [sandbox SDK](https://github.com/openclaw/openclaw/blob/2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4/src/plugin-sdk/sandbox.ts),
+  [backend handle](https://github.com/openclaw/openclaw/blob/2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4/src/agents/sandbox/backend-handle.types.ts),
+  [filesystem bridge](https://github.com/openclaw/openclaw/blob/2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4/src/agents/sandbox/fs-bridge.types.ts),
+  and [OpenShell plugin example](https://github.com/openclaw/openclaw/blob/2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4/extensions/openshell/index.ts).
 - Hermes [configuration](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/configuration.md),
   [SSH environment](https://github.com/NousResearch/hermes-agent/blob/main/tools/environments/ssh.py),
   and [Docker environment](https://github.com/NousResearch/hermes-agent/blob/main/tools/environments/docker.py).

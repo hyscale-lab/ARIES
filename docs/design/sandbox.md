@@ -19,6 +19,14 @@ operations. A pair-specific bridge may use a narrow sandbox capability such as
 streaming command execution, but the harness does not receive Docker daemon
 access.
 
+Each task receives one owned Docker bridge network. The centralized E2B-like
+server is reached from that task container through the network's host gateway;
+task networks are not joined to one another and no host port is published.
+The Docker adapter exposes attached execution, scoped signaling, archive-based
+binary file transfer and metadata, and exact-argv directory operations only to
+the pair-specific bridge. These capabilities do not let the harness create,
+remove, pause, or otherwise manage sandboxes.
+
 ## Customization & Contribution Guide
 
 A new sandbox implementation must preserve exact command argument boundaries,

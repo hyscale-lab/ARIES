@@ -44,12 +44,15 @@ artifacts, and ARIES does not manage model installation.
 
 Terminal-Bench 2 remains pinned by its exact Git revision, while each task's
 explicit Docker image tag is read from that pinned task's `task.toml` rather
-than repeated in `configs/versions.json`. OpenClaw uses an exact non-`latest`
-release tag. Each task workdir is derived from its pinned Dockerfile with `/`
-as the conservative fallback. The bridge maps OpenClaw's pinned virtual workspace to that workdir
-without creating a sandbox symlink. It retains structured JSONL tool records
-plus sensitive, lossless human-readable `bridge/ssh_raw.log` evidence through
-a bounded asynchronous writer whose failure blocks positive bridge revocation.
+than repeated in `configs/versions.json`. OpenClaw uses the exact `v2026.7.1` image and source commit
+`2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4`. Each task workdir is derived
+from its pinned Dockerfile with `/` as the conservative fallback. The SSH
+bridge maps OpenClaw's pinned virtual workspace to that workdir without
+creating a sandbox symlink and retains private replay evidence. The alternative
+E2B-like pairing uses one application-scoped HTTP server, task-network gateway
+destinations, sandbox IDs, and per-task tokens to multiplex typed process and
+filesystem operations onto the same Docker sandboxes. Both pairings preserve
+the same Runner lifecycle and positive revocation gate.
 
 ## Repository boundary
 

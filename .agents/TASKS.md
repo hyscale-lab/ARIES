@@ -198,17 +198,9 @@ Plan, regression-first:
    semantics, and pinned-image plugin loading remain step 10 claims because this
    machine has no Docker daemon.
 
-Transfer checkpoint: R22 steps 1–9 are implemented and validated as far as the
-non-Docker environment permits. A checkpoint commit may be created here solely
-to transfer this exact implementation state to a Docker-capable machine. That
-checkpoint is not the final R22 completion commit and does not complete R22.
-Step 10 remains unchecked until its real-Docker tests pass on that machine.
-Step 11, final release validation, and the final R22 completion commit still
-occur only after step 10 passes.
-
 10. [x] Add real-Docker and deterministic pinned-OpenClaw integration proving
    two concurrent task networks reach the same listener through their own
-   gateways, cannot reach one another.s gateway, route identical PID values
+   gateways, cannot reach one another's gateway, route identical PID values
    independently, revoke one grant while the other remains usable, expose no
    verifier material before positive revocation, and leave no managed listener,
    process, container, network, credential, or key behind. The exact pinned
@@ -223,11 +215,16 @@ occur only after step 10 passes.
    native read/write/edit with apply_patch denied, secret absence, and positive
    cleanup. `make integration`, `make test`, `make test-race`, and `git diff
    --check` pass; post-suite inspection finds no managed resource or process.
-11. [ ] Update the architecture, bridge alternatives, supported-implementation,
+11. [x] Update the architecture, bridge alternatives, supported-implementation,
     configuration, profile, harness, sandbox, and quick-start documentation with
-    exact versioned upstream citations. Run build, unit, race, lint, integration,
-    leak, secret, evidence, and cleanup validation before one concise final R22
-    completion commit.
+    exact versioned upstream citations. The checked-in one-task DeepSeek profile
+    now selects `openclaw-e2b`; non-paid setup validation passes. Immutable links
+    to OpenClaw v2026.7.1 source commit `2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4`
+    cover the sandbox SDK, backend handle, filesystem bridge, and full-mode plugin
+    example. `make build`, `make test`, `make test-race`, `make lint`, and `make
+    integration` pass. Citation reachability, `git diff --check`, mode-0600 run
+    evidence, DeepSeek-key absence, temporary-token absence, and post-suite
+    container, network, and process leak checks also pass.
 
 Protected boundaries:
 

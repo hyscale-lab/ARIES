@@ -11,6 +11,7 @@ plugin discovery.
 | Benchmark | **Terminal-Bench 2** — current supported benchmark | Verifies the pinned checkout, loads tasks, sanitizes verifier paths, and evaluates | `benchmark.type: "terminalbench2"`; checkout and revision in `configs/versions.json` |
 | Tool sandbox | **Docker** — current supported sandbox | Owns task containers and networks through the Moby Go SDK | `sandbox.type: "docker"`; task images come from pinned Terminal-Bench task data |
 | Tool bridge | **OpenClaw SSH** — pair-specific bridge for OpenClaw | Owns temporary SSH access, evidence, credentials, listener, sessions, and revocation | `bridge.type: "openclaw-ssh"`; requires `bin/aries-ssh` beside `bin/aries` |
+| Tool bridge | **OpenClaw E2B-like** — centralized service with task-scoped grants | Owns one shared listener plus destination/sandbox/token authentication, active processes, private task tokens, request drain, and revocation; it does not own sandboxes | `bridge.type: "openclaw-e2b"`; `profiles/openclaw-tb2-fix-git-deepseek-e2b.json` |
 | Tool bridge | **Hermes SSH** — pair-specific bridge for Hermes | Same ownership; accepts Hermes's own SSH grammar and denies its `~/.hermes` file sync | `bridge.type: "hermes-ssh"`; requires `harness.type: "hermes"`; needs no helper binary because Hermes runs OpenSSH itself |
 | Model service | **DeepSeek** — supported external OpenAI-compatible endpoint | Validates model access; does not own the service | `runtime.backend: "deepseek"`, `runtime.mode: "external"`; `profiles/openclaw-tb2-fix-git-deepseek.json` |
 | Model service | **SGLang** — supported external or ARIES-managed runtime | Validates both modes; in managed mode owns one host process for the profile run | `runtime.backend: "sglang"`; `profiles/openclaw-tb2-fix-git-sglang.json`; `configs/sglang/qwen3-8b-local.yaml` |
@@ -22,9 +23,8 @@ The four Runner implementations are chosen by `benchmark.type`, `harness.type`,
 only wired choices. Concrete construction is explicit rather than registered or
 discovered.
 
-Each bridge implements exactly one harness's SSH grammar, so the harness and
-bridge values must be paired: `openclaw` with `openclaw-ssh`, and `hermes` with
-`hermes-ssh`. A crossed pair is rejected before the run starts. Hermes
+Each bridge implements exactly one harness boundary, so the harness and bridge
+values must be paired: `openclaw` with `openclaw-ssh` or `openclaw-e2b`, and `hermes` with `hermes-ssh`. A crossed pair is rejected before the run starts. Hermes
 additionally requires `/bin/bash` in the task image, because every tool call it
 issues is `bash -c` on the remote.
 
@@ -43,6 +43,7 @@ and [AgentHarness design](design/harness.md) for ownership boundaries.
 Start with one of the checked-in profiles:
 
 - `profiles/openclaw-tb2-fix-git-deepseek.json`
+- `profiles/openclaw-tb2-fix-git-deepseek-e2b.json`
 - `profiles/openclaw-tb2-fix-git-sglang.json`
 - `profiles/openclaw-tb2-fix-git-realtime-deepseek.json`
 - `profiles/hermes-tb2-fix-git-deepseek.json`
