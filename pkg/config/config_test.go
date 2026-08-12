@@ -48,13 +48,17 @@ func TestNormalizedRuntimeSchema(t *testing.T) {
 }
 
 func TestRealtimeHarnessConfigValidationAndResolution(t *testing.T) {
-	realtime := strings.Replace(validConfig, `"harness":{"type":"openclaw"}`, `"harness":{"type":"openclaw","mode":"realtime","realtime":{"tts":{"provider":"openai","model":"gpt-4o-mini-tts","voice":"alloy","timeout":"2s","speed":1.1},"chunk_duration":"25ms","listen_duration":"3s","quiet_duration":"250ms","agent_wait_duration":"2s","tool_call_timeout":"1s","trailing_silence_ms":300,"voice":"alloy","reasoning_effort":"low","include_events":true}}`, 1)
+	realtime := strings.Replace(validConfig, `"harness":{"type":"openclaw"}`, `"harness":{"type":"openclaw","mode":"realtime-talk","realtime":{"tts":{"provider":"openai","model":"gpt-4o-mini-tts","voice":"alloy","timeout":"2s","speed":1.1},"chunk_duration":"25ms","listen_duration":"3s","quiet_duration":"250ms","agent_wait_duration":"2s","tool_call_timeout":"1s","trailing_silence_ms":300,"voice":"alloy","reasoning_effort":"low","include_events":true}}`, 1)
 	cfg, err := Decode(strings.NewReader(realtime))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Harness.Mode != "realtime" || cfg.Harness.Realtime.ChunkDuration != 25*time.Millisecond || cfg.Harness.Realtime.ListenDuration != 3*time.Second || cfg.Harness.Realtime.TrailingSilenceMillis != 300 || !cfg.Harness.Realtime.IncludeEvents || cfg.Harness.Realtime.TTS.APIKeyEnv != "OPENAI_API_KEY" || cfg.Harness.Realtime.TTS.Timeout != 2*time.Second {
+	if cfg.Harness.Mode != "realtime-talk" || cfg.Harness.Realtime.ChunkDuration != 25*time.Millisecond || cfg.Harness.Realtime.ListenDuration != 3*time.Second || cfg.Harness.Realtime.TrailingSilenceMillis != 300 || !cfg.Harness.Realtime.IncludeEvents || cfg.Harness.Realtime.TTS.APIKeyEnv != "OPENAI_API_KEY" || cfg.Harness.Realtime.TTS.Timeout != 2*time.Second {
 		t.Fatalf("harness realtime = %#v", cfg.Harness)
+	}
+	transcribe := strings.Replace(realtime, `"mode":"realtime-talk"`, `"mode":"realtime-transcribe"`, 1)
+	if cfg, err := Decode(strings.NewReader(transcribe)); err != nil || cfg.Harness.Mode != "realtime-transcribe" {
+		t.Fatalf("decode realtime-transcribe = %#v, %v", cfg.Harness, err)
 	}
 
 	for name, input := range map[string]string{
@@ -64,6 +68,44 @@ func TestRealtimeHarnessConfigValidationAndResolution(t *testing.T) {
 		"bad duration":   strings.Replace(realtime, `"chunk_duration":"25ms"`, `"chunk_duration":"0s"`, 1),
 		"bad silence":    strings.Replace(realtime, `"trailing_silence_ms":300`, `"trailing_silence_ms":-1`, 1),
 		"bad tts":        strings.Replace(realtime, `"provider":"openai"`, `"provider":"elevenlabs"`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Decode(strings.NewReader(input)); err == nil {
+				t.Fatal("expected rejection")
+			}
+		})
+	}
+}
+
+func TestHermesVoiceTranscribeConfigValidationAndResolution(t *testing.T) {
+	voice := strings.Replace(validConfig, `"harness":{"type":"openclaw"}`, `"harness":{"type":"hermes","mode":"voice-transcribe","voice_transcribe":{"tts":{"provider":"openai","model":"gpt-4o-mini-tts","voice":"alloy","timeout":"2s","speed":1.1},"stt":{"provider":"openai","model":"gpt-4o-mini-transcribe","language":"en","timeout":"3s"}}}`, 1)
+	voice = strings.Replace(voice, `"bridge":{"type":"openclaw-ssh"}`, `"bridge":{"type":"hermes-ssh"}`, 1)
+	cfg, err := Decode(strings.NewReader(voice))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Harness.Mode != "voice-transcribe" || cfg.Harness.VoiceTranscribe.TTS.APIKeyEnv != "OPENAI_API_KEY" || cfg.Harness.VoiceTranscribe.TTS.Timeout != 2*time.Second || cfg.Harness.VoiceTranscribe.STT.Timeout != 3*time.Second || cfg.Harness.VoiceTranscribe.STT.Language != "en" {
+		t.Fatalf("harness voice_transcribe = %#v", cfg.Harness.VoiceTranscribe)
+	}
+
+	localSTT := strings.Replace(voice, `"provider":"openai","model":"gpt-4o-mini-transcribe","language":"en"`, `"provider":"local","language":"en"`, 1)
+	cfg, err = Decode(strings.NewReader(localSTT))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Harness.VoiceTranscribe.STT.Model != "base" {
+		t.Fatalf("local stt model = %q, want base", cfg.Harness.VoiceTranscribe.STT.Model)
+	}
+
+	for name, input := range map[string]string{
+		"non hermes": strings.Replace(validConfig, `"harness":{"type":"openclaw"}`, `"harness":{"type":"openclaw","mode":"voice-transcribe","voice_transcribe":{"tts":{"provider":"openai","model":"gpt-4o-mini-tts","voice":"alloy"},"stt":{"provider":"openai"}}}`, 1),
+		"agent voice": func() string {
+			input := strings.Replace(validConfig, `"harness":{"type":"openclaw"}`, `"harness":{"type":"hermes","mode":"agent","voice_transcribe":{"tts":{"provider":"openai","model":"gpt-4o-mini-tts","voice":"alloy"},"stt":{"provider":"openai"}}}`, 1)
+			return strings.Replace(input, `"bridge":{"type":"openclaw-ssh"}`, `"bridge":{"type":"hermes-ssh"}`, 1)
+		}(),
+		"realtime voice": strings.Replace(voice, `"mode":"voice-transcribe","voice_transcribe"`, `"mode":"realtime-talk","voice_transcribe"`, 1),
+		"bad stt":        strings.Replace(voice, `"provider":"openai","model":"gpt-4o-mini-transcribe","language":"en"`, `"provider":"bad","model":"gpt-4o-mini-transcribe","language":"en"`, 1),
+		"bad timeout":    strings.Replace(voice, `"timeout":"3s"`, `"timeout":"0s"`, 1),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Decode(strings.NewReader(input)); err == nil {
@@ -466,7 +508,7 @@ func TestCheckedInProfilesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 9 {
+	if len(paths) != 11 {
 		t.Fatalf("profiles=%v", paths)
 	}
 	for _, path := range paths {
@@ -478,8 +520,17 @@ func TestCheckedInProfilesLoad(t *testing.T) {
 			t.Fatalf("%s: %#v", path, cfg)
 		}
 		if strings.Contains(path, "realtime") {
-			if cfg.Harness.Mode != "realtime" || cfg.Harness.Realtime.TTS.APIKeyEnv != "OPENAI_API_KEY" || cfg.Harness.Realtime.ChunkDuration != 50*time.Millisecond {
+			wantMode := "realtime-talk"
+			if strings.Contains(path, "realtime-transcribe") {
+				wantMode = "realtime-transcribe"
+			}
+			if cfg.Harness.Mode != wantMode || cfg.Harness.Realtime.TTS.APIKeyEnv != "OPENAI_API_KEY" || cfg.Harness.Realtime.ChunkDuration != 50*time.Millisecond {
 				t.Fatalf("%s realtime harness: %#v", path, cfg.Harness)
+			}
+		}
+		if strings.Contains(path, "voice-transcribe") {
+			if cfg.Harness.Type != "hermes" || cfg.Harness.Mode != "voice-transcribe" || cfg.Harness.VoiceTranscribe.TTS.APIKeyEnv != "OPENAI_API_KEY" || cfg.Harness.VoiceTranscribe.STT.Model != "gpt-4o-mini-transcribe" {
+				t.Fatalf("%s voice harness: %#v", path, cfg.Harness)
 			}
 		}
 	}

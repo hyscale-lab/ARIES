@@ -149,11 +149,12 @@ func (f FactConfig) CoreModel() core.ModelConfig {
 }
 
 type HarnessConfig struct {
-	Type      string                 `json:"type"`
-	Mode      string                 `json:"mode,omitempty"`
-	Realtime  HarnessRealtimeConfig  `json:"realtime,omitempty"`
-	WebSearch HarnessWebSearchConfig `json:"web_search,omitempty"`
-	Subagents HarnessSubagentsConfig `json:"subagents,omitempty"`
+	Type            string                       `json:"type"`
+	Mode            string                       `json:"mode,omitempty"`
+	Realtime        HarnessRealtimeConfig        `json:"realtime,omitempty"`
+	VoiceTranscribe HarnessVoiceTranscribeConfig `json:"voice_transcribe,omitempty"`
+	WebSearch       HarnessWebSearchConfig       `json:"web_search,omitempty"`
+	Subagents       HarnessSubagentsConfig       `json:"subagents,omitempty"`
 }
 
 // HarnessWebSearchConfig is an OpenClaw/Hermes-only concept (see
@@ -218,6 +219,19 @@ type RealtimeTTSConfig struct {
 	Speed        *float64      `json:"speed,omitempty"`
 	TimeoutText  string        `json:"timeout,omitempty"`
 	Timeout      time.Duration `json:"-"`
+}
+
+type HarnessVoiceTranscribeConfig struct {
+	TTS RealtimeTTSConfig `json:"tts,omitempty"`
+	STT VoiceSTTConfig    `json:"stt,omitempty"`
+}
+
+type VoiceSTTConfig struct {
+	Provider    string        `json:"provider,omitempty"`
+	Model       string        `json:"model,omitempty"`
+	Language    string        `json:"language,omitempty"`
+	TimeoutText string        `json:"timeout,omitempty"`
+	Timeout     time.Duration `json:"-"`
 }
 
 type SandboxConfig struct {
@@ -616,12 +630,18 @@ func (h *HarnessConfig) validate() error {
 	switch h.Mode {
 	case "agent":
 		if h.Realtime != (HarnessRealtimeConfig{}) {
-			return errors.New("harness.realtime must be empty unless harness.mode is realtime")
+			return errors.New("harness.realtime must be empty unless harness.mode is realtime-talk or realtime-transcribe")
+		}
+		if h.VoiceTranscribe != (HarnessVoiceTranscribeConfig{}) {
+			return errors.New("harness.voice_transcribe must be empty unless harness.mode is voice-transcribe")
 		}
 		return nil
-	case "realtime":
+	case "realtime-talk", "realtime-transcribe":
 		if h.Type != "openclaw" {
-			return errors.New("harness.mode realtime requires OpenClaw")
+			return errors.New("harness.mode realtime-talk or realtime-transcribe requires OpenClaw")
+		}
+		if h.VoiceTranscribe != (HarnessVoiceTranscribeConfig{}) {
+			return errors.New("harness.voice_transcribe must be empty unless harness.mode is voice-transcribe")
 		}
 		if err := h.Realtime.TTS.validate(); err != nil {
 			return err
@@ -646,32 +666,50 @@ func (h *HarnessConfig) validate() error {
 			return err
 		}
 		return nil
+	case "voice-transcribe":
+		if h.Type != "hermes" {
+			return errors.New("harness.mode voice-transcribe requires Hermes")
+		}
+		if h.Realtime != (HarnessRealtimeConfig{}) {
+			return errors.New("harness.realtime must be empty unless harness.mode is realtime-talk or realtime-transcribe")
+		}
+		if err := h.VoiceTranscribe.TTS.validateNamed("harness.voice_transcribe.tts"); err != nil {
+			return err
+		}
+		if err := h.VoiceTranscribe.STT.validate(); err != nil {
+			return err
+		}
+		return nil
 	default:
-		return errors.New("harness.mode must be agent or realtime")
+		return errors.New("harness.mode must be agent, realtime-talk, realtime-transcribe, or voice-transcribe")
 	}
 }
 
 func (tts *RealtimeTTSConfig) validate() error {
+	return tts.validateNamed("harness.realtime.tts")
+}
+
+func (tts *RealtimeTTSConfig) validateNamed(name string) error {
 	if tts.Provider == "" {
 		tts.Provider = "openai"
 	}
 	if tts.Provider != "openai" {
-		return errors.New("harness.realtime.tts.provider must be openai")
+		return fmt.Errorf("%s.provider must be openai", name)
 	}
 	if tts.APIKeyEnv == "" {
 		tts.APIKeyEnv = "OPENAI_API_KEY"
 	}
 	if !validEnvName(tts.APIKeyEnv) {
-		return errors.New("harness.realtime.tts.api_key_env must be an environment variable name")
+		return fmt.Errorf("%s.api_key_env must be an environment variable name", name)
 	}
 	if strings.ContainsRune(tts.BaseURL, 0) || strings.ContainsRune(tts.Model, 0) || strings.ContainsRune(tts.Voice, 0) || strings.ContainsRune(tts.Instructions, 0) {
-		return errors.New("harness.realtime.tts contains an invalid NUL byte")
+		return fmt.Errorf("%s contains an invalid NUL byte", name)
 	}
 	if tts.Speed != nil && (*tts.Speed < 0.25 || *tts.Speed > 4 || math.IsNaN(*tts.Speed) || math.IsInf(*tts.Speed, 0)) {
-		return errors.New("harness.realtime.tts.speed must be between 0.25 and 4")
+		return fmt.Errorf("%s.speed must be between 0.25 and 4", name)
 	}
 	var err error
-	tts.Timeout, err = parseOptionalPositiveDuration("harness.realtime.tts.timeout", tts.TimeoutText)
+	tts.Timeout, err = parseOptionalPositiveDuration(name+".timeout", tts.TimeoutText)
 	return err
 }
 
@@ -765,6 +803,27 @@ func validateExperimentName(name string) error {
 		}
 	}
 	return nil
+}
+
+func (stt *VoiceSTTConfig) validate() error {
+	if stt.Provider == "" {
+		stt.Provider = "openai"
+	}
+	if stt.Provider != "openai" && stt.Provider != "local" {
+		return errors.New("harness.voice_transcribe.stt.provider must be openai or local")
+	}
+	if stt.Provider == "openai" && stt.Model == "" {
+		stt.Model = "gpt-4o-mini-transcribe"
+	}
+	if stt.Provider == "local" && stt.Model == "" {
+		stt.Model = "base"
+	}
+	if strings.ContainsRune(stt.Provider, 0) || strings.ContainsRune(stt.Model, 0) || strings.ContainsRune(stt.Language, 0) {
+		return errors.New("harness.voice_transcribe.stt contains an invalid NUL byte")
+	}
+	var err error
+	stt.Timeout, err = parseOptionalPositiveDuration("harness.voice_transcribe.stt.timeout", stt.TimeoutText)
+	return err
 }
 
 func (c Versions) validate() error {

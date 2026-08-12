@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
+	audioinput "github.com/hyscale-lab/aries/pkg/audio"
 	"github.com/hyscale-lab/aries/pkg/containerimage"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/runner"
@@ -35,6 +36,7 @@ const (
 	defaultCleanupTimeout  = 30 * time.Second
 	defaultStartTimeout    = 45 * time.Second
 	defaultAgentTimeout    = 20 * time.Minute
+	defaultVoiceSTTTimeout = 5 * time.Minute
 	defaultMaxTurns        = 90
 	defaultTerminalTimeout = 180
 	maxDockerOutput        = 16 << 20
@@ -56,6 +58,9 @@ const (
 	// as a PermissionError inside Hermes's dotenv loader.
 	runtimeUID = 10000
 	runtimeGID = 10000
+
+	ModeAgent           = "agent"
+	ModeVoiceTranscribe = "voice-transcribe"
 )
 
 // execShell reports the child's exit status as a delimited stderr trailer.
@@ -83,6 +88,7 @@ type Options struct {
 	Image        string
 	OutputDir    string
 	DockerSocket string
+	Mode         string
 	// APIKeyLookup returns the model API key for one environment name. The
 	// harness takes ownership of the returned slice: it clones the bytes it
 	// needs and then clears the returned buffer in place, so a caller must
@@ -96,6 +102,7 @@ type Options struct {
 	AgentTimeout     time.Duration
 	WebSearchEnabled bool
 	ExtractAPIKeyEnv string
+	VoiceTranscribe  VoiceTranscribeOptions
 	// SubagentsEnabled controls Hermes's delegate_task tool. False emits
 	// disabled_toolsets: [delegation] in the rendered config.yaml.
 	SubagentsEnabled bool
@@ -104,6 +111,29 @@ type Options struct {
 	// (3) in place. Ignored when SubagentsEnabled is false.
 	MaxConcurrentSubagents int
 	Logger                 *logrus.Logger
+}
+
+type VoiceTranscribeOptions struct {
+	TTS VoiceTTSOptions
+	STT VoiceSTTOptions
+}
+
+type VoiceTTSOptions struct {
+	Provider     string
+	BaseURL      string
+	APIKeyEnv    string
+	Model        string
+	Voice        string
+	Instructions string
+	Speed        *float64
+	Timeout      time.Duration
+}
+
+type VoiceSTTOptions struct {
+	Provider string
+	Model    string
+	Language string
+	Timeout  time.Duration
 }
 
 // dockerClient is the small official Engine SDK surface used by the harness.
@@ -134,10 +164,13 @@ type Manager struct {
 	terminalTimeout        int
 	webSearchEnabled       bool
 	extractAPIKeyEnv       string
+	mode                   string
+	voiceTranscribe        VoiceTranscribeOptions
 	subagentsEnabled       bool
 	maxConcurrentSubagents int
 	logger                 *logrus.Logger
 	apiKeyLookup           func(string) ([]byte, bool)
+	newSpeech              func(audioinput.SpeechClientOptions) (speechSynthesizer, error)
 	newID                  func() (string, error)
 
 	mu        sync.Mutex
@@ -161,8 +194,14 @@ type session struct {
 	agentTimeout  time.Duration
 	apiKey        []byte
 	extractAPIKey []byte
+	voiceAPIKey   []byte
 	runAttempted  bool
 	logPaths      []string
+}
+
+type speechSynthesizer interface {
+	Synthesize(context.Context, audioinput.SpeechRequest) (audioinput.SpeechResult, error)
+	Close()
 }
 
 var _ runner.AgentHarness = (*Manager)(nil)
@@ -227,14 +266,48 @@ func New(options Options) (*Manager, error) {
 	if options.APIKeyLookup == nil {
 		options.APIKeyLookup = environmentAPIKeyLookup
 	}
+	if options.Mode == "" {
+		options.Mode = ModeAgent
+	}
+	switch options.Mode {
+	case ModeAgent:
+		if options.VoiceTranscribe != (VoiceTranscribeOptions{}) {
+			return nil, errors.New("Hermes voice options require voice-transcribe mode")
+		}
+	case ModeVoiceTranscribe:
+		if options.VoiceTranscribe.TTS.Provider == "" {
+			options.VoiceTranscribe.TTS.Provider = "openai"
+		}
+		if options.VoiceTranscribe.TTS.Provider != "openai" {
+			return nil, errors.New("Hermes voice TTS provider must be openai")
+		}
+		if options.VoiceTranscribe.TTS.APIKeyEnv == "" {
+			options.VoiceTranscribe.TTS.APIKeyEnv = "OPENAI_API_KEY"
+		}
+		if options.VoiceTranscribe.STT.Provider == "" {
+			options.VoiceTranscribe.STT.Provider = "openai"
+		}
+		if options.VoiceTranscribe.STT.Provider != "openai" && options.VoiceTranscribe.STT.Provider != "local" {
+			return nil, errors.New("Hermes voice STT provider must be openai or local")
+		}
+		if options.VoiceTranscribe.STT.Model == "" {
+			if options.VoiceTranscribe.STT.Provider == "local" {
+				options.VoiceTranscribe.STT.Model = "base"
+			} else {
+				options.VoiceTranscribe.STT.Model = "gpt-4o-mini-transcribe"
+			}
+		}
+	default:
+		return nil, errors.New("Hermes mode must be agent or voice-transcribe")
+	}
 	return &Manager{
 		client: api, image: options.Image, outputDir: outputDir,
 		cleanupTimeout: options.CleanupTimeout, startTimeout: options.StartTimeout,
 		agentTimeout: options.AgentTimeout, maxTurns: options.MaxTurns,
-		terminalTimeout: options.TerminalTimeout, webSearchEnabled: options.WebSearchEnabled,
+		terminalTimeout: options.TerminalTimeout, webSearchEnabled: options.WebSearchEnabled, mode: options.Mode, voiceTranscribe: options.VoiceTranscribe,
 		extractAPIKeyEnv: options.ExtractAPIKeyEnv, logger: options.Logger,
 		subagentsEnabled: options.SubagentsEnabled, maxConcurrentSubagents: options.MaxConcurrentSubagents,
-		apiKeyLookup: options.APIKeyLookup, newID: randomID,
+		apiKeyLookup: options.APIKeyLookup, newSpeech: newSpeechClient, newID: randomID,
 	}, nil
 }
 
@@ -306,8 +379,33 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 			return errors.New("rendered Hermes config contains the extract API-key value")
 		}
 	}
+	var voiceAPIKey []byte
+	if manager.mode == ModeVoiceTranscribe {
+		voiceSource, ok := manager.apiKeyLookup(manager.voiceTranscribe.TTS.APIKeyEnv)
+		if !ok {
+			clear(voiceSource)
+			clear(extractAPIKey)
+			clear(apiKey)
+			return fmt.Errorf("Hermes voice API-key environment %q is not set", manager.voiceTranscribe.TTS.APIKeyEnv)
+		}
+		voiceAPIKey = bytes.Clone(voiceSource)
+		clear(voiceSource)
+		if err := validateAPIKey(voiceAPIKey); err != nil {
+			clear(voiceAPIKey)
+			clear(extractAPIKey)
+			clear(apiKey)
+			return fmt.Errorf("Hermes voice API key: %w", err)
+		}
+		if bytes.Contains(configuration, voiceAPIKey) {
+			clear(voiceAPIKey)
+			clear(extractAPIKey)
+			clear(apiKey)
+			return errors.New("rendered Hermes config contains the voice API-key value")
+		}
+	}
 	id, err := manager.newID()
 	if err != nil {
+		clear(voiceAPIKey)
 		clear(apiKey)
 		clear(extractAPIKey)
 		return fmt.Errorf("generate Hermes harness ID: %w", err)
@@ -330,7 +428,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		containerName: "aries-hermes-" + id,
 		artifactDir:   filepath.Join(manager.outputDir, request.TaskID, "harness"),
 		endpoint:      request.Endpoint, model: request.Model,
-		agentTimeout: agentTimeout, apiKey: apiKey, extractAPIKey: extractAPIKey,
+		agentTimeout: agentTimeout, apiKey: apiKey, extractAPIKey: extractAPIKey, voiceAPIKey: voiceAPIKey,
 	}
 	fail := func(primary error) error {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), manager.cleanupTimeout)
@@ -433,6 +531,9 @@ func (manager *Manager) Run(ctx context.Context, instruction string) (core.Harne
 	active = &local
 	manager.mu.Unlock()
 
+	if manager.mode == ModeVoiceTranscribe {
+		return manager.runVoiceTranscribe(ctx, active, instruction, started)
+	}
 	runCtx, cancel := context.WithTimeout(ctx, active.agentTimeout)
 	result, runErr := manager.execAttached(runCtx, active.containerID,
 		[]string{agentWrapperPath, active.model.Model, active.model.Provider, instruction}, workspaceRoot)
@@ -457,6 +558,270 @@ func (manager *Manager) Run(ctx context.Context, instruction string) (core.Harne
 		Status: core.StatusSucceeded, FinalResponse: strings.TrimRight(string(stdout), "\n"),
 		Duration: time.Since(started), LogPaths: append([]string(nil), active.logPaths...),
 	}, nil
+}
+
+func (manager *Manager) runVoiceTranscribe(ctx context.Context, active *session, instruction string, started time.Time) (core.HarnessResult, error) {
+	audioPath, voicePaths, err := manager.synthesizeVoiceInstruction(ctx, active, instruction)
+	if len(voicePaths) != 0 {
+		active.logPaths = appendUnique(active.logPaths, voicePaths...)
+	}
+	if err != nil {
+		err = redactSessionError(err, active)
+		return failedHarnessResult(active, started, err), err
+	}
+	if err := manager.stageVoiceWAV(ctx, active, audioPath); err != nil {
+		err = redactSessionError(err, active)
+		return failedHarnessResult(active, started, err), err
+	}
+	sttResult := manager.transcribeVoice(ctx, active)
+	if !sttResult.OK {
+		if err := manager.writeVoiceResult(active, instruction, sttResult, ""); err != nil {
+			err = redactSessionError(err, active)
+			return failedHarnessResult(active, started, err), err
+		}
+		err := errors.New(firstNonEmpty(sttResult.Error, "Hermes voice STT failed"))
+		err = redactSessionError(err, active)
+		return failedHarnessResult(active, started, err), err
+	}
+	runCtx, cancel := context.WithTimeout(ctx, active.agentTimeout)
+	result, runErr := manager.execAttached(runCtx, active.containerID,
+		[]string{agentWrapperPath, active.model.Model, active.model.Provider, sttResult.Transcript}, workspaceRoot)
+	cancel()
+	stdout := redactSession(result.stdout, active)
+	stderr := redactSession(result.stderr, active)
+	err = runErr
+	if err == nil && result.exitCode != 0 {
+		err = fmt.Errorf("Hermes one-shot exited with status %d", result.exitCode)
+	}
+	agentOutput := strings.TrimRight(string(stdout), "\n")
+	if writeErr := manager.writeVoiceResult(active, instruction, sttResult, agentOutput); writeErr != nil {
+		err = errors.Join(err, redactSessionError(writeErr, active))
+		return failedHarnessResult(active, started, err), err
+	}
+	outcome := newRunOutcome(started, result.exitCode, runErr)
+	artifactCtx, artifactCancel := context.WithTimeout(context.WithoutCancel(ctx), manager.cleanupTimeout)
+	artifactErr := manager.collectArtifacts(artifactCtx, active, stdout, stderr, outcome)
+	artifactCancel()
+	err = errors.Join(err, artifactErr)
+	if err != nil {
+		err = redactSessionError(err, active)
+		return failedHarnessResult(active, started, err), err
+	}
+	return core.HarnessResult{
+		Status: core.StatusSucceeded, FinalResponse: agentOutput,
+		Duration: time.Since(started), LogPaths: append([]string(nil), active.logPaths...),
+	}, nil
+}
+
+type voiceSTTResult struct {
+	OK            bool           `json:"ok"`
+	Transcript    string         `json:"transcript"`
+	RawTranscript string         `json:"raw_transcript"`
+	ReturnCode    int            `json:"returncode"`
+	RawResult     map[string]any `json:"raw_result,omitempty"`
+	Stdout        string         `json:"stdout"`
+	Stderr        string         `json:"stderr"`
+	Signature     string         `json:"signature,omitempty"`
+	Error         string         `json:"error,omitempty"`
+}
+
+func (manager *Manager) synthesizeVoiceInstruction(ctx context.Context, active *session, instruction string) (string, []string, error) {
+	instructionPath := filepath.Join(active.artifactDir, "voice-instruction.txt")
+	if err := writeArtifact(instructionPath, []byte(instruction)); err != nil {
+		return "", nil, fmt.Errorf("write Hermes voice instruction: %w", err)
+	}
+	synthesizer, err := manager.newSpeech(audioinput.SpeechClientOptions{BaseURL: manager.voiceTranscribe.TTS.BaseURL, APIKey: active.voiceAPIKey, Timeout: manager.voiceTranscribe.TTS.Timeout})
+	if err != nil {
+		return "", []string{instructionPath}, fmt.Errorf("construct Hermes voice TTS client: %w", err)
+	}
+	defer synthesizer.Close()
+	result, err := synthesizer.Synthesize(ctx, audioinput.SpeechRequest{
+		Text: instruction, Model: manager.voiceTranscribe.TTS.Model, Voice: manager.voiceTranscribe.TTS.Voice,
+		Format: "wav", Instructions: manager.voiceTranscribe.TTS.Instructions, Speed: manager.voiceTranscribe.TTS.Speed,
+	})
+	if err != nil {
+		return "", []string{instructionPath}, fmt.Errorf("synthesize Hermes voice instruction: %w", err)
+	}
+	audioPath := filepath.Join(active.artifactDir, "voice-instruction.wav")
+	if err := writeArtifact(audioPath, result.Audio); err != nil {
+		clear(result.Audio)
+		return "", []string{instructionPath}, fmt.Errorf("write Hermes voice audio: %w", err)
+	}
+	clear(result.Audio)
+	metaPath := filepath.Join(active.artifactDir, "voice-instruction.wav.meta.json")
+	metadata := map[string]any{
+		"provider":    manager.voiceTranscribe.TTS.Provider,
+		"model":       result.Model,
+		"voice":       result.Voice,
+		"format":      result.Format,
+		"text_sha256": result.TextSHA256,
+		"text_chars":  len(instruction),
+		"cached":      false,
+		"output_path": audioPath,
+	}
+	content, err := json.MarshalIndent(metadata, "", "  ")
+	if err != nil {
+		return "", []string{instructionPath, audioPath}, fmt.Errorf("encode Hermes voice TTS metadata: %w", err)
+	}
+	content = append(content, '\n')
+	if err := writeArtifact(metaPath, content); err != nil {
+		return "", []string{instructionPath, audioPath}, fmt.Errorf("write Hermes voice TTS metadata: %w", err)
+	}
+	return audioPath, []string{instructionPath, audioPath, metaPath}, nil
+}
+
+func (manager *Manager) stageVoiceWAV(ctx context.Context, active *session, audioPath string) error {
+	audio, err := os.ReadFile(audioPath)
+	if err != nil {
+		return fmt.Errorf("read Hermes voice audio artifact: %w", err)
+	}
+	defer clear(audio)
+	archive, err := stageFileArchive(strings.TrimPrefix(voiceWAVPath, "/"), stagedFile{content: audio, mode: 0o600})
+	if err != nil {
+		return fmt.Errorf("stage Hermes voice audio archive: %w", err)
+	}
+	defer clear(archive)
+	if _, err := manager.client.CopyToContainer(ctx, active.containerID, client.CopyToContainerOptions{
+		DestinationPath: "/", Content: bytes.NewReader(archive), CopyUIDGID: true,
+	}); err != nil {
+		return fmt.Errorf("copy Hermes voice audio: %w", err)
+	}
+	return nil
+}
+
+func (manager *Manager) transcribeVoice(ctx context.Context, active *session) voiceSTTResult {
+	timeout := manager.voiceTranscribe.STT.Timeout
+	if timeout <= 0 {
+		timeout = defaultVoiceSTTTimeout
+	}
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	result, err := manager.execAttached(runCtx, active.containerID, hermesSTTCommand(manager.voiceTranscribe.STT), workspaceRoot)
+	stt := voiceSTTResult{
+		ReturnCode: result.exitCode,
+		Stdout:     tailString(redactSession(result.stdout, active), 20000),
+		Stderr:     tailString(redactSession(result.stderr, active), 20000),
+	}
+	if err != nil {
+		stt.Error = err.Error()
+		return stt
+	}
+	if result.exitCode != 0 {
+		stt.Error = firstNonEmpty(strings.TrimSpace(stt.Stderr), strings.TrimSpace(stt.Stdout), fmt.Sprintf("stt_exit_%d", result.exitCode))
+		return stt
+	}
+	payload, ok := lastJSONObject(stt.Stdout)
+	if !ok {
+		stt.Error = "stt_no_json_result"
+		return stt
+	}
+	stt.RawResult = payload
+	if success, ok := payload["success"].(bool); ok && !success {
+		stt.Error = firstNonEmpty(normalizeTranscript(payload["error"]), "stt_failed")
+		return stt
+	}
+	stt.Transcript = strings.TrimSpace(normalizeTranscript(payload["transcript"]))
+	stt.RawTranscript = stt.Transcript
+	stt.Signature, _ = payload["signature"].(string)
+	if stt.Transcript == "" {
+		stt.Error = "stt_empty_transcript"
+		return stt
+	}
+	stt.OK = true
+	return stt
+}
+
+func hermesSTTCommand(options VoiceSTTOptions) []string {
+	provider := options.Provider
+	if provider == "" {
+		provider = "openai"
+	}
+	model := options.Model
+	if model == "" {
+		if provider == "local" {
+			model = "base"
+		} else {
+			model = "gpt-4o-mini-transcribe"
+		}
+	}
+	script := `set -eu
+if [ -f ` + voiceKeyPath + ` ]; then
+  OPENAI_API_KEY="$(cat ` + voiceKeyPath + `)"
+  export OPENAI_API_KEY
+fi
+exec python3 -c "$1" "$2" "$3" "$4" "$5"
+`
+	return []string{"/bin/sh", "-c", script, "aries-hermes-stt", hermesSTTScript, voiceWAVPath, model, provider, options.Language}
+}
+
+const hermesSTTScript = `
+import inspect
+import json
+import os
+import sys
+from tools.voice_mode import transcribe_recording
+wav_path = sys.argv[1]
+model = sys.argv[2]
+provider = sys.argv[3] if len(sys.argv) > 3 else os.environ.get("HERMES_STT_PROVIDER", "openai")
+language = sys.argv[4] if len(sys.argv) > 4 else os.environ.get("HERMES_STT_LANGUAGE", "")
+os.environ["HERMES_STT_PROVIDER"] = provider
+os.environ["HERMES_STT_MODEL"] = model
+os.environ["OPENAI_STT_MODEL"] = model
+os.environ["OPENAI_TRANSCRIBE_MODEL"] = model
+if language:
+    os.environ["HERMES_STT_LANGUAGE"] = language
+sig = inspect.signature(transcribe_recording)
+kwargs = {}
+params = list(sig.parameters.values())
+if not params:
+    result = transcribe_recording()
+else:
+    first = params[0].name
+    kwargs[first] = wav_path
+    if "provider" in sig.parameters:
+        kwargs["provider"] = provider
+    if "model" in sig.parameters:
+        kwargs["model"] = model
+    if "language" in sig.parameters and language:
+        kwargs["language"] = language
+    result = transcribe_recording(**kwargs)
+if isinstance(result, str):
+    payload = {"transcript": result}
+elif isinstance(result, dict):
+    payload = result
+else:
+    payload = {"transcript": getattr(result, "text", None) or getattr(result, "transcript", None) or str(result)}
+payload.setdefault("signature", str(sig))
+print(json.dumps(payload, ensure_ascii=False))
+`
+
+func (manager *Manager) writeVoiceResult(active *session, originalPrompt string, stt voiceSTTResult, agentOutput string) error {
+	payload := map[string]any{
+		"ok":                  stt.OK,
+		"original_prompt":     originalPrompt,
+		"transcript":          stt.Transcript,
+		"agent_question_used": stt.Transcript,
+		"agent_output_text":   agentOutput,
+		"stt":                 stt,
+		"container_wav_path":  voiceWAVPath,
+	}
+	content, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode Hermes voice result: %w", err)
+	}
+	content = append(content, '\n')
+	content = redactSession(content, active)
+	path := filepath.Join(active.artifactDir, "voice-result.json")
+	if err := writeArtifact(path, content); err != nil {
+		return fmt.Errorf("write Hermes voice result: %w", err)
+	}
+	active.logPaths = appendUnique(active.logPaths, path)
+	transcriptPath := filepath.Join(active.artifactDir, "voice-transcript.txt")
+	if err := writeArtifact(transcriptPath, []byte(stt.Transcript)); err != nil {
+		return fmt.Errorf("write Hermes voice transcript: %w", err)
+	}
+	active.logPaths = appendUnique(active.logPaths, transcriptPath)
+	return nil
 }
 
 func (manager *Manager) Stop(ctx context.Context) error {
@@ -595,6 +960,10 @@ func (manager *Manager) execAttached(ctx context.Context, containerID string, co
 		return execResult{stdout: stdout.Bytes(), stderr: stderr.Bytes(), exitCode: -1}, err
 	}
 	return execResult{stdout: stdout.Bytes(), stderr: stderr.Bytes(), exitCode: exitCode}, nil
+}
+
+func newSpeechClient(options audioinput.SpeechClientOptions) (speechSynthesizer, error) {
+	return audioinput.NewSpeechClient(options)
 }
 
 func (manager *Manager) waitExec(ctx context.Context, containerID, execID string) (client.ExecInspectResult, error) {
@@ -782,12 +1151,12 @@ func (manager *Manager) validateContainer(ctx context.Context, active *session) 
 		return errors.New("Hermes container labels do not match the task")
 	}
 	for _, value := range append(append([]string(nil), configuration.Env...), configuration.Cmd...) {
-		if containsSecret(value, active.apiKey, active.extractAPIKey) {
+		if containsSecret(value, active.apiKey, active.extractAPIKey, active.voiceAPIKey) {
 			return errors.New("Hermes secret entered Docker configuration")
 		}
 	}
 	for _, value := range configuration.Labels {
-		if containsSecret(value, active.apiKey, active.extractAPIKey) {
+		if containsSecret(value, active.apiKey, active.extractAPIKey, active.voiceAPIKey) {
 			return errors.New("Hermes secret entered Docker labels")
 		}
 	}
@@ -825,6 +1194,9 @@ func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([
 	}
 	if extractEnabled {
 		files[strings.TrimPrefix(extractKeyPath, "/")] = stagedFile{content: active.extractAPIKey, mode: 0o600}
+	}
+	if len(active.voiceAPIKey) != 0 {
+		files[strings.TrimPrefix(voiceKeyPath, "/")] = stagedFile{content: active.voiceAPIKey, mode: 0o600}
 	}
 	return stageArchive(files)
 }
@@ -866,8 +1238,8 @@ func stageArchive(files map[string]stagedFile) ([]byte, error) {
 	slices.Sort(names)
 	for _, name := range names {
 		file := files[name]
-		if name == "" || filepath.IsAbs(name) || filepath.Clean(name) != name || strings.HasPrefix(name, "../") {
-			return nil, fmt.Errorf("invalid staged Hermes path %q", name)
+		if err := validateStagedPath(name); err != nil {
+			return nil, err
 		}
 		header := &tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: file.mode, Size: int64(len(file.content)), Uid: runtimeUID, Gid: runtimeGID}
 		if err := writer.WriteHeader(header); err != nil {
@@ -881,6 +1253,32 @@ func stageArchive(files map[string]stagedFile) ([]byte, error) {
 		return nil, err
 	}
 	return output.Bytes(), nil
+}
+
+func stageFileArchive(name string, file stagedFile) ([]byte, error) {
+	if err := validateStagedPath(name); err != nil {
+		return nil, err
+	}
+	var output bytes.Buffer
+	writer := tar.NewWriter(&output)
+	header := &tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: file.mode, Size: int64(len(file.content)), Uid: runtimeUID, Gid: runtimeGID}
+	if err := writer.WriteHeader(header); err != nil {
+		return nil, err
+	}
+	if _, err := writer.Write(file.content); err != nil {
+		return nil, err
+	}
+	if err := writer.Close(); err != nil {
+		return nil, err
+	}
+	return output.Bytes(), nil
+}
+
+func validateStagedPath(name string) error {
+	if name == "" || filepath.IsAbs(name) || filepath.Clean(name) != name || strings.HasPrefix(name, "../") {
+		return fmt.Errorf("invalid staged Hermes path %q", name)
+	}
+	return nil
 }
 
 func (manager *Manager) stopSession(ctx context.Context, active *session) error {
@@ -1006,7 +1404,7 @@ func (manager *Manager) collectArtifacts(ctx context.Context, active *session, s
 		if copyErr != nil || closeErr != nil || boundErr != nil {
 			errs = append(errs, errors.Join(copyErr, closeErr, boundErr))
 		} else {
-			content := allowContainerLogs(append(out.Bytes(), errBuffer.Bytes()...), active.apiKey, active.extractAPIKey)
+			content := allowContainerLogs(append(out.Bytes(), errBuffer.Bytes()...), active.apiKey, active.extractAPIKey, active.voiceAPIKey)
 			path := filepath.Join(active.artifactDir, "container.log")
 			if err := writeArtifact(path, content); err != nil {
 				errs = append(errs, err)
@@ -1245,15 +1643,68 @@ func randomID() (string, error) {
 	return hex.EncodeToString(content[:]), nil
 }
 
+func lastJSONObject(text string) (map[string]any, bool) {
+	lines := strings.Split(text, "\n")
+	for index := len(lines) - 1; index >= 0; index-- {
+		line := strings.TrimSpace(lines[index])
+		if line == "" {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(line), &payload); err == nil {
+			return payload, true
+		}
+	}
+	return nil, false
+}
+
+func normalizeTranscript(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case map[string]any:
+		for _, key := range []string{"text", "transcript", "output_text"} {
+			if text, ok := typed[key].(string); ok {
+				return text
+			}
+		}
+	}
+	if value == nil {
+		return ""
+	}
+	return fmt.Sprint(value)
+}
+
+func tailString(content []byte, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	if len(content) > limit {
+		content = content[len(content)-limit:]
+	}
+	return string(content)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func clearSessionSecrets(active *session) {
 	clear(active.apiKey)
 	active.apiKey = nil
 	clear(active.extractAPIKey)
 	active.extractAPIKey = nil
+	clear(active.voiceAPIKey)
+	active.voiceAPIKey = nil
 }
 
 func redactSession(content []byte, active *session) []byte {
-	return redactSecrets(content, active.apiKey, active.extractAPIKey)
+	return redactSecrets(content, active.apiKey, active.extractAPIKey, active.voiceAPIKey)
 }
 
 type sessionRedactedError struct {

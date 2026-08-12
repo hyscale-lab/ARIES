@@ -238,8 +238,21 @@ func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byt
 		}
 		return app.HarnessInstance{Harness: manager, Close: manager.Close}, nil
 	case "hermes":
+		voiceTranscribe := hermesharness.VoiceTranscribeOptions{
+			TTS: hermesharness.VoiceTTSOptions{
+				Provider: cfg.Harness.VoiceTranscribe.TTS.Provider, BaseURL: cfg.Harness.VoiceTranscribe.TTS.BaseURL,
+				APIKeyEnv: cfg.Harness.VoiceTranscribe.TTS.APIKeyEnv, Model: cfg.Harness.VoiceTranscribe.TTS.Model,
+				Voice: cfg.Harness.VoiceTranscribe.TTS.Voice, Instructions: cfg.Harness.VoiceTranscribe.TTS.Instructions,
+				Speed: cfg.Harness.VoiceTranscribe.TTS.Speed, Timeout: cfg.Harness.VoiceTranscribe.TTS.Timeout,
+			},
+			STT: hermesharness.VoiceSTTOptions{
+				Provider: cfg.Harness.VoiceTranscribe.STT.Provider, Model: cfg.Harness.VoiceTranscribe.STT.Model,
+				Language: cfg.Harness.VoiceTranscribe.STT.Language, Timeout: cfg.Harness.VoiceTranscribe.STT.Timeout,
+			},
+		}
 		manager, err := hermesharness.New(hermesharness.Options{
 			Image: cfg.Versions.Hermes.Image, OutputDir: outputRoot, APIKeyLookup: lookup, Logger: logger,
+			Mode: cfg.Harness.Mode, VoiceTranscribe: voiceTranscribe,
 			WebSearchEnabled: cfg.Harness.WebSearch.Enabled, ExtractAPIKeyEnv: cfg.Harness.WebSearch.ExtractAPIKeyEnv,
 			SubagentsEnabled:       cfg.Harness.Subagents.Enabled != nil && *cfg.Harness.Subagents.Enabled,
 			MaxConcurrentSubagents: cfg.Harness.Subagents.MaxConcurrent,

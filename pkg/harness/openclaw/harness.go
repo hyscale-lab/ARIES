@@ -60,19 +60,24 @@ exit "$status"`
 var gatewayPort = network.MustParsePort(gatewayListenPort + "/tcp")
 
 const (
-	ModeAgent    = "agent"
-	ModeRealtime = "realtime"
+	ModeAgent              = "agent"
+	ModeRealtimeTalk       = "realtime-talk"
+	ModeRealtimeTranscribe = "realtime-transcribe"
 )
+
+func isRealtimeMode(mode string) bool {
+	return mode == ModeRealtimeTalk || mode == ModeRealtimeTranscribe
+}
 
 // Options are the host-local inputs to one upstream OpenClaw container.
 type Options struct {
-	Image            string
-	OutputDir        string
-	DockerSocket     string
-	APIKeyLookup     func(string) ([]byte, bool)
-	Mode             string
-	Realtime         RealtimeOptions
-	WebSearchEnabled bool
+	Image                  string
+	OutputDir              string
+	DockerSocket           string
+	APIKeyLookup           func(string) ([]byte, bool)
+	Mode                   string
+	Realtime               RealtimeOptions
+	WebSearchEnabled       bool
 	ExtractAPIKeyEnv       string
 	SubagentsEnabled       bool
 	MaxConcurrentSubagents int
@@ -255,7 +260,7 @@ func New(options Options) (*Manager, error) {
 		if options.Realtime != (RealtimeOptions{}) {
 			return nil, errors.New("OpenClaw realtime options require realtime mode")
 		}
-	case ModeRealtime:
+	case ModeRealtimeTalk, ModeRealtimeTranscribe:
 		if options.Realtime.TrailingSilenceMillis < 0 {
 			return nil, errors.New("OpenClaw realtime options are invalid")
 		}
@@ -269,7 +274,7 @@ func New(options Options) (*Manager, error) {
 			options.Realtime.TTS.APIKeyEnv = "OPENAI_API_KEY"
 		}
 	default:
-		return nil, errors.New("OpenClaw mode must be agent or realtime")
+		return nil, errors.New("OpenClaw mode must be agent, realtime-talk, or realtime-transcribe")
 	}
 	return &Manager{
 		client: api, image: options.Image, outputDir: outputDir,
@@ -348,7 +353,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		return err
 	}
 	var realtimeAPIKey []byte
-	if manager.mode == ModeRealtime {
+	if isRealtimeMode(manager.mode) {
 		realtimeKeySource, ok := manager.apiKeyLookup(manager.realtime.TTS.APIKeyEnv)
 		if !ok {
 			clear(apiKey)
@@ -524,7 +529,7 @@ func (manager *Manager) Run(ctx context.Context, instruction string) (core.Harne
 	active.runAttempted = true
 	manager.mu.Unlock()
 
-	if manager.mode == ModeRealtime {
+	if isRealtimeMode(manager.mode) {
 		return manager.runRealtime(ctx, active, instruction, started)
 	}
 	runCtx, cancel := context.WithTimeout(ctx, active.agentTimeout)
@@ -586,8 +591,13 @@ func (manager *Manager) runRealtime(ctx context.Context, active *session, instru
 		err = redactSessionError(err, active)
 		return failedHarnessResult(active, started, err), err
 	}
+	closeGatewayInRunner := manager.mode == ModeRealtimeTalk
+	if !closeGatewayInRunner {
+		defer client.Close()
+	}
 	runner, err := manager.newRealtime(client, realtimeclient.Options{
 		OriginalPrompt:        instruction,
+		SessionMode:           manager.mode,
 		SessionKey:            "agent:main:aries-" + active.safeTaskID,
 		Provider:              manager.realtime.Provider,
 		Model:                 manager.realtime.Model,
@@ -601,7 +611,7 @@ func (manager *Manager) runRealtime(ctx context.Context, active *session, instru
 		ToolCallTimeout:       manager.realtime.ToolCallTimeout,
 		AgentQuestionTemplate: manager.realtime.AgentQuestionTemplate,
 		IncludeEvents:         manager.realtime.IncludeEvents,
-		CloseGateway:          true,
+		CloseGateway:          closeGatewayInRunner,
 	})
 	if err != nil {
 		_ = client.Close()
@@ -610,6 +620,9 @@ func (manager *Manager) runRealtime(ctx context.Context, active *session, instru
 	}
 	runCtx, cancel := context.WithTimeout(ctx, active.agentTimeout)
 	realtimeResult, err := runner.Run(runCtx)
+	if err == nil && manager.mode == ModeRealtimeTranscribe {
+		err = manager.runAgentWithTranscript(runCtx, active, client, &realtimeResult)
+	}
 	cancel()
 	realtimeResult = redactRealtimeResult(realtimeResult, active)
 	err = redactSessionError(err, active)
@@ -634,6 +647,34 @@ func (manager *Manager) runRealtime(ctx context.Context, active *session, instru
 	}, nil
 }
 
+func (manager *Manager) runAgentWithTranscript(ctx context.Context, active *session, client gatewayConnection, result *realtimeclient.Result) error {
+	transcript := strings.TrimSpace(result.Transcript)
+	if transcript == "" {
+		err := errors.New("missing_transcript: OpenClaw realtime-transcribe mode returned no text")
+		result.AppendError(err.Error())
+		return err
+	}
+	thinking := ""
+	if disablesThinking(active.model) {
+		thinking = "off"
+	}
+	agentResult, err := client.Agent(ctx, gatewayclient.AgentRequest{
+		Message: transcript, SessionKey: "agent:main:aries-" + active.safeTaskID,
+		IdempotencyKey: active.agentIdempotency, Thinking: thinking,
+	})
+	if agentResult.RunID != "" {
+		result.AgentRunIDs = append(result.AgentRunIDs, agentResult.RunID)
+	}
+	result.AgentQuestionUsed = transcript
+	result.OutputText = agentResult.Text
+	if err != nil {
+		result.AppendError(err.Error())
+		return err
+	}
+	result.AgentConsultOK = true
+	return nil
+}
+
 func newGatewayClientWithDisposition(rawURL string, token []byte, scopes []string, disposition gatewayclient.EventDisposition) (gatewayConnection, error) {
 	dialer, err := gatewayclient.NewWebSocketDialer(gatewayclient.WebSocketOptions{URL: rawURL})
 	if err != nil {
@@ -650,7 +691,7 @@ func gatewayEventDisposition(mode string) gatewayclient.EventDisposition {
 }
 
 func gatewayScopes(mode string) []string {
-	if mode == ModeRealtime {
+	if isRealtimeMode(mode) {
 		return []string{"operator.read", "operator.write"}
 	}
 	return []string{"operator.write"}
@@ -1194,7 +1235,7 @@ func containsSecret(value string, secrets ...[]byte) bool {
 }
 
 func (manager *Manager) realtimeAPIKeyEnv(active *session) string {
-	if manager.mode != ModeRealtime || len(active.realtimeAPIKey) == 0 {
+	if !isRealtimeMode(manager.mode) || len(active.realtimeAPIKey) == 0 {
 		return ""
 	}
 	return manager.realtime.TTS.APIKeyEnv

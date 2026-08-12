@@ -19,6 +19,8 @@ const (
 	configContainerPath = stateContainerPath + "/config.yaml"
 	modelKeyPath        = stateContainerPath + "/model.key"
 	extractKeyPath      = stateContainerPath + "/tavily.key"
+	voiceKeyPath        = stateContainerPath + "/voice.key"
+	voiceWAVPath        = stateContainerPath + "/voice-instruction.wav"
 	identityContainerFS = stagedRoot + "/ssh/id_ed25519"
 	agentWrapperPath    = stagedRoot + "/run-agent"
 	workspaceRoot       = stagedRoot + "/workspace"
