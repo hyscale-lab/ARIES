@@ -104,6 +104,7 @@ type testSandbox struct {
 	taskID    string
 	network   string
 	gateway   string
+	gatewayFn func(context.Context) (string, error)
 	process   func(context.Context, core.Command, io.Writer, io.Writer, func(arsandbox.ProcessRef) error) (core.CommandResult, error)
 	signal    func(context.Context, arsandbox.ProcessRef, string) error
 	terminate func(context.Context, arsandbox.ProcessRef) error
@@ -122,7 +123,10 @@ func (*testSandbox) Exec(context.Context, core.Command) (core.CommandResult, err
 func (*testSandbox) Upload(context.Context, string, string) error   { return nil }
 func (*testSandbox) Download(context.Context, string, string) error { return nil }
 func (sandbox *testSandbox) NetworkName() string                    { return sandbox.network }
-func (sandbox *testSandbox) NetworkGateway(context.Context) (string, error) {
+func (sandbox *testSandbox) NetworkGateway(ctx context.Context) (string, error) {
+	if sandbox.gatewayFn != nil {
+		return sandbox.gatewayFn(ctx)
+	}
 	return sandbox.gateway, nil
 }
 func (sandbox *testSandbox) TaskID() string { return sandbox.taskID }
@@ -1167,6 +1171,53 @@ func TestFailedGrantStartRemovesPartialTokenArtifact(t *testing.T) {
 	}
 	if err := grant.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop after partial Start = %v", err)
+	}
+}
+
+func TestGrantStopWaitsForConcurrentStartAndThenRevokes(t *testing.T) {
+	server := startTestServer(t)
+	startEntered := make(chan struct{})
+	releaseStart := make(chan struct{})
+	sandbox := &testSandbox{taskID: "a", network: "net-a", gatewayFn: func(context.Context) (string, error) {
+		close(startEntered)
+		<-releaseStart
+		return "172.30.0.1", nil
+	}}
+	grant := server.NewGrant(t.TempDir())
+	type startResult struct {
+		endpoint core.ToolEndpoint
+		err      error
+	}
+	started := make(chan startResult, 1)
+	go func() {
+		endpoint, err := grant.Start(context.Background(), sandbox)
+		started <- startResult{endpoint: endpoint, err: err}
+	}()
+	<-startEntered
+	stopped := make(chan error, 1)
+	go func() { stopped <- grant.Stop(context.Background()) }()
+	select {
+	case err := <-stopped:
+		t.Fatalf("Stop returned while Start was still publishing the grant: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(releaseStart)
+	result := <-started
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	token, err := os.ReadFile(result.endpoint.AccessTokenSourceFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-stopped; err != nil {
+		t.Fatal(err)
+	}
+	if status := requestStatus(server, authorizedRequest(result.endpoint, string(token), "172.30.0.1", nil)); status != http.StatusUnauthorized {
+		t.Fatalf("grant remains authorized after concurrent Stop: status=%d", status)
+	}
+	if _, err := os.Stat(result.endpoint.AccessTokenSourceFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("grant token remains after concurrent Stop: %v", err)
 	}
 }
 

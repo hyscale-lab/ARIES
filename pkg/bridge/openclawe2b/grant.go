@@ -51,12 +51,11 @@ func (server *Server) NewGrant(outputDir string) *Grant {
 
 func (grant *Grant) Start(ctx context.Context, capability runner.Sandbox) (core.ToolEndpoint, error) {
 	grant.mu.Lock()
+	defer grant.mu.Unlock()
 	if grant.started || grant.stopping || grant.stopped {
-		grant.mu.Unlock()
 		return core.ToolEndpoint{}, errors.New("OpenClaw E2B task grant already started or stopped")
 	}
 	grant.started = true
-	grant.mu.Unlock()
 
 	sandbox, ok := capability.(grantSandbox)
 	if !ok {
@@ -89,15 +88,19 @@ func (grant *Grant) Start(ctx context.Context, capability runner.Sandbox) (core.
 		return core.ToolEndpoint{}, errors.Join(err, removeToken(tokenPath))
 	}
 
-	grant.mu.Lock()
 	grant.sandboxID = sandboxID
 	grant.tokenPath = tokenPath
-	grant.mu.Unlock()
 	endpoint, err := grant.server.endpoint(sandboxID, gatewayText, sandbox.NetworkName(), sandbox.Workdir(), tokenPath)
 	if err != nil {
 		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), grantRollbackTimeout)
 		defer cancel()
-		return core.ToolEndpoint{}, errors.Join(err, grant.Stop(rollbackCtx))
+		rollbackErr := errors.Join(grant.server.revoke(rollbackCtx, sandboxID), removeToken(tokenPath))
+		if rollbackErr == nil {
+			grant.stopped = true
+			grant.sandboxID = ""
+			grant.tokenPath = ""
+		}
+		return core.ToolEndpoint{}, errors.Join(err, rollbackErr)
 	}
 	return endpoint, nil
 }
