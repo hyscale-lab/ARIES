@@ -1,5 +1,6 @@
 {
   "id": "aries-e2b",
+  "activation": {"onStartup": true},
   "name": "ARIES E2B Bridge",
   "description": "Task-scoped access to an ARIES-owned sandbox.",
   "configSchema": {

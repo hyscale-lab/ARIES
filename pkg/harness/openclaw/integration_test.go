@@ -510,7 +510,7 @@ func TestPinnedOpenClawE2BPluginExecAndNativeFilesystem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	live, err := sandboxManager.Start(ctx, core.SandboxRequest{RunID: runID, TaskID: "plugin-task", Environment: core.Environment{Image: versions.OpenClaw.Image, Workdir: "/workspace", CPU: 1, MemoryMB: 256, StorageMB: 256}})
+	live, err := sandboxManager.Start(ctx, core.SandboxRequest{RunID: runID, TaskID: "plugin-task", Environment: core.Environment{Image: versions.OpenClaw.Image, Workdir: "/tmp", CPU: 1, MemoryMB: 256, StorageMB: 256, AllowNetwork: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -573,7 +573,7 @@ func TestPinnedOpenClawE2BPluginExecAndNativeFilesystem(t *testing.T) {
 	if err := harness.Stop(ctx); err != nil {
 		t.Fatal(err)
 	}
-	for path, want := range map[string]string{"/workspace/exec.txt": "exec-through-bridge", "/workspace/native.txt": "after"} {
+	for path, want := range map[string]string{"/tmp/exec.txt": "exec-through-bridge", "/tmp/native.txt": "after"} {
 		got, err := sandbox.Exec(ctx, core.Command{Path: "/bin/cat", Args: []string{path}})
 		if err != nil || got.ExitCode != 0 || got.Stdout != want {
 			t.Fatalf("sandbox file %s = %#v, %v", path, got, err)
@@ -795,11 +795,12 @@ func deterministicE2BModelScript() string {
 const expected=process.argv[1];let step=0;
 function stream(res,delta,finish){const id="e2b-"+step;res.writeHead(200,{"content-type":"text/event-stream","cache-control":"no-cache","connection":"close"});res.write("data: "+JSON.stringify({id,object:"chat.completion.chunk",created:1,model:"aries-deterministic",choices:[{index:0,delta,finish_reason:null}]})+"\n\n");res.write("data: "+JSON.stringify({id,object:"chat.completion.chunk",created:1,model:"aries-deterministic",choices:[{index:0,delta:{},finish_reason:finish}]})+"\n\n");res.end("data: [DONE]\n\n")}
 function call(res,id,name,args){step++;stream(res,{role:"assistant",tool_calls:[{index:0,id,type:"function",function:{name,arguments:JSON.stringify(args)}}]},"tool_calls")}
+function result(body,id){const message=[...(body.messages||[])].reverse().find(x=>x.role==="tool"&&x.tool_call_id===id);if(!message)throw Error("missing result "+id);const text=typeof message.content==="string"?message.content:JSON.stringify(message.content);if(/error|failed/i.test(text))throw Error("failed result "+id+": "+text);return text}
 http.createServer((req,res)=>{let raw="";req.on("data",c=>raw+=c);req.on("end",()=>{try{if(req.method!=="POST"||req.url!=="/v1/chat/completions")throw Error("route");const bearer=(req.headers.authorization||"").replace(/^Bearer /,"");if(crypto.createHash("sha256").update(bearer).digest("hex")!==expected)throw Error("auth");const body=JSON.parse(raw),names=(body.tools||[]).map(x=>x?.function?.name);for(const required of ["exec","read","write","edit"])if(!names.includes(required))throw Error("missing "+required);if(names.includes("apply_patch"))throw Error("apply_patch enabled");
-if(step===0)return call(res,"exec","exec",{command:"printf exec-through-bridge > /workspace/exec.txt"});
-if(step===1)return call(res,"write","write",{path:"/workspace/native.txt",content:"before"});
-if(step===2)return call(res,"read","read",{path:"/workspace/native.txt"});
-if(step===3)return call(res,"edit","edit",{path:"/workspace/native.txt",oldText:"before",newText:"after"});
-if(step===4){step++;return stream(res,{role:"assistant",content:"E2B bridge verified"},"stop")}
+if(step===0)return call(res,"exec","exec",{command:"printf exec-through-bridge > /tmp/exec.txt; cat /tmp/exec.txt"});
+if(step===1){if(!result(body,"exec").includes("exec-through-bridge"))throw Error("exec content");return call(res,"write","write",{path:"/tmp/native.txt",content:"before"})}
+if(step===2){result(body,"write");return call(res,"read","read",{path:"/tmp/native.txt"})}
+if(step===3){if(!result(body,"read").includes("before"))throw Error("read content");return call(res,"edit","edit",{path:"/tmp/native.txt",oldText:"before",newText:"after"})}
+if(step===4){result(body,"edit");step++;return stream(res,{role:"assistant",content:"E2B bridge verified"},"stop")}
 throw Error("extra request")}catch(error){res.writeHead(400,{"content-type":"application/json"});res.end(JSON.stringify({error:{message:error.message}}))}})}).listen(8080,"0.0.0.0");`
 }
