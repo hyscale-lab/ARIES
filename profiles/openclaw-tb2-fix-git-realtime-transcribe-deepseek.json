@@ -1,5 +1,5 @@
 {
-  "name": "openclaw-tb2-fix-git-realtime-deepseek",
+  "name": "openclaw-tb2-fix-git-realtime-transcribe-deepseek",
   "versions_file": "../configs/versions.json",
   "overrides_file": "",
   "execution": {
@@ -14,7 +14,7 @@
   },
   "harness": {
     "type": "openclaw",
-    "mode": "realtime-talk",
+    "mode": "realtime-transcribe",
     "realtime": {
       "tts": {
         "provider": "openai",

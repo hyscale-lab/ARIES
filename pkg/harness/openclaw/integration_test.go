@@ -421,7 +421,7 @@ func TestPinnedGatewayRealtimeProtocolSmoke(t *testing.T) {
 	}
 	keys := map[string]string{"MODEL_KEY": "deterministic-model-key", "OPENAI_API_KEY": "deterministic-realtime-key"}
 	harness, err := New(Options{
-		Image: versions.OpenClaw.Image, OutputDir: t.TempDir(), Mode: ModeRealtime,
+		Image: versions.OpenClaw.Image, OutputDir: t.TempDir(), Mode: ModeRealtimeTalk,
 		CleanupTimeout: 30 * time.Second, StartTimeout: time.Minute, AgentTimeout: 10 * time.Second,
 		Realtime:     RealtimeOptions{TTS: RealtimeTTSOptions{APIKeyEnv: "OPENAI_API_KEY"}},
 		APIKeyLookup: func(name string) ([]byte, bool) { value, ok := keys[name]; return []byte(value), ok },
