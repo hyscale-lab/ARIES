@@ -342,11 +342,18 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		agentTimeout = manager.agentTimeout
 	}
 	extractEnabled := manager.webSearchEnabled && manager.extractAPIKeyEnv != ""
+
+	var voiceSTT *VoiceSTTOptions
+	if manager.mode == ModeVoiceTranscribe {
+		voiceSTT = &manager.voiceTranscribe.STT
+	}
+
 	configuration, err := renderConfig(request.Model, renderSettings{
 		maxTurns: manager.maxTurns, webSearchEnabled: manager.webSearchEnabled, extractEnabled: extractEnabled,
 		subagentsEnabled: manager.subagentsEnabled, maxConcurrentSubagents: manager.maxConcurrentSubagents,
 		compaction: manager.compaction, extraBody: manager.extraBody,
-	})
+	}, voiceSTT)
+
 	if err != nil {
 		return err
 	}

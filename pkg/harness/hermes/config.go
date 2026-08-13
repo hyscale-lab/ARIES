@@ -105,7 +105,7 @@ type renderSettings struct {
 //     Hermes matches the entry by base_url and merges the object into every
 //     chat request; that merge happens only for provider "custom" (see
 //     hermesProvider), so the block is refused under DeepSeek.
-func renderConfig(model core.ModelConfig, settings renderSettings) ([]byte, error) {
+func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *VoiceSTTOptions) ([]byte, error) {
 	if err := validateModel(model); err != nil {
 		return nil, err
 	}
@@ -208,6 +208,16 @@ func renderConfig(model core.ModelConfig, settings renderSettings) ([]byte, erro
 	} else if settings.maxConcurrentSubagents > 0 {
 		output.WriteString("\ndelegation:\n")
 		output.WriteString("  max_concurrent_children: " + strconv.Itoa(settings.maxConcurrentSubagents) + "\n")
+	}
+	if voiceSTT != nil {
+		output.WriteString("\nstt:\n")
+		output.WriteString("  enabled: true\n")
+		output.WriteString("  provider: " + yamlString(voiceSTT.Provider) + "\n")
+		output.WriteString("  openai:\n")
+		output.WriteString("    model: " + yamlString(voiceSTT.Model) + "\n")
+		output.WriteString("  local:\n")
+		output.WriteString("    model: " + yamlString(voiceSTT.Model) + "\n")
+		output.WriteString("    language: " + yamlString(voiceSTT.Language) + "\n")
 	}
 	output.WriteString("\ndisplay:\n")
 	output.WriteString("  streaming: false\n")
