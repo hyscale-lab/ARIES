@@ -30,9 +30,11 @@ const (
 	// OpenClaw harness container, which joins the same per-task Docker
 	// network. Not profile-configurable: it's an internal wiring detail, not
 	// something a user should need to know or vary.
-	searxngBaseURL = "http://task-sandbox:8888"
-	tavilyKeyPath  = "/run/aries/tavily.key"
+	searxngBaseURL  = "http://task-sandbox:8888"
+	tavilyKeyPath   = "/run/aries/tavily.key"
 	tavilyAPIKeyEnv = "TAVILY_API_KEY"
+
+	consultRoutingForceAgent = "force-agent-consult"
 )
 
 type openClawConfig struct {
@@ -40,7 +42,16 @@ type openClawConfig struct {
 	Models  modelsConfig   `json:"models"`
 	Agents  agentsConfig   `json:"agents"`
 	Tools   toolPolicy     `json:"tools"`
+	Talk    *talkConfig    `json:"talk,omitempty"`
 	Plugins *pluginsConfig `json:"plugins,omitempty"`
+}
+
+type talkConfig struct {
+	Realtime realtimeTalkConfig `json:"realtime"`
+}
+
+type realtimeTalkConfig struct {
+	ConsultRouting string `json:"consultRouting"`
 }
 
 type toolPolicy struct {
@@ -160,7 +171,7 @@ type sshConfig struct {
 	KnownHostsFile        string `json:"knownHostsFile"`
 }
 
-func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, webSearchEnabled, extractEnabled, subagentsEnabled bool, maxConcurrentSubagents int) ([]byte, error) {
+func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, mode string, webSearchEnabled, extractEnabled, subagentsEnabled bool, maxConcurrentSubagents int) ([]byte, error) {
 	if err := validateModel(model); err != nil {
 		return nil, err
 	}
@@ -203,6 +214,9 @@ func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, webSearchE
 			},
 		}},
 		Tools: toolPolicy{Deny: denyToolList(subagentsEnabled)},
+	}
+	if mode == ModeRealtime {
+		configuration.Talk = &talkConfig{Realtime: realtimeTalkConfig{ConsultRouting: consultRoutingForceAgent}}
 	}
 	if subagentsEnabled && maxConcurrentSubagents > 0 {
 		configuration.Agents.Defaults.Subagents = &subagentsConfig{MaxConcurrent: maxConcurrentSubagents}
