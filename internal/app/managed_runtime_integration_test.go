@@ -69,9 +69,11 @@ func TestConcreteManagedRuntimeWrapsPreflightAndTaskLifecycle(t *testing.T) {
 			concrete, err = runtimesglang.New(runtimesglang.Options{Executable: cfg.Runtime.Config.Executable, ConfigPath: cfg.Runtime.Config.ResolvedFile, OutputDir: outputDir, BaseURL: cfg.Model.BaseURL})
 			return PreparedBackend{Model: cfg.CoreModel(), Runtime: concrete}, err
 		},
-		SetupBenchmark:       func(context.Context, config.Config) error { record("prepare"); return nil },
-		LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) { return nil, nil },
-		PullImages:           func(context.Context, []string) error { return nil },
+		SetupBenchmark: func(context.Context, config.Config) error { record("prepare"); return nil },
+		LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
+			return nil, nil
+		},
+		PullImages: func(context.Context, []string) error { return nil },
 		NewBenchmark: func(_ config.Config, _, _, occurrenceID string, _ func(string) ([]byte, bool)) (runner.Benchmark, error) {
 			record("compose")
 			return &managedIntegrationBenchmark{id: occurrenceID}, nil
@@ -157,9 +159,11 @@ func TestConcreteManagedRuntimeNaturalExitLogsStoppedAfterUnexpectedExit(t *test
 			concrete, err = runtimesglang.New(runtimesglang.Options{Executable: cfg.Runtime.Config.Executable, ConfigPath: cfg.Runtime.Config.ResolvedFile, OutputDir: outputDir, BaseURL: cfg.Model.BaseURL, CredentialEnv: cfg.Model.APIKeyEnv})
 			return PreparedBackend{Model: cfg.CoreModel(), Runtime: concrete}, err
 		},
-		SetupBenchmark:       func(context.Context, config.Config) error { return nil },
-		LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) { return nil, nil },
-		PullImages:           func(context.Context, []string) error { return nil },
+		SetupBenchmark: func(context.Context, config.Config) error { return nil },
+		LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
+			return nil, nil
+		},
+		PullImages: func(context.Context, []string) error { return nil },
 		NewBenchmark: func(_ config.Config, _, _, occurrenceID string, _ func(string) ([]byte, bool)) (runner.Benchmark, error) {
 			if err := os.WriteFile(exitNow, []byte("exit"), 0o600); err != nil {
 				return nil, err
@@ -217,7 +221,7 @@ func writeManagedIntegrationProfile(t *testing.T, root, serverURL, executable st
 		t.Fatal(err)
 	}
 	versions := filepath.Join(root, "versions.json")
-	if err := os.WriteFile(versions, []byte(`{"terminalbench2":{"repository_url":"https://example.invalid/repo.git","revision":"0123456789abcdef0123456789abcdef01234567"},"deepresearchbench":{"repository_url":"https://example.invalid/deep-research-bench.git","revision":"fedcba9876543210fedcba9876543210fedcba98"},"openclaw":{"image":"ghcr.io/openclaw/openclaw:2026.7.1"},"hermes":{"image":"docker.io/nousresearch/hermes-agent:v2026.5.29.2"}}`), 0o600); err != nil {
+	if err := os.WriteFile(versions, []byte(`{"terminalbench2":{"repository_url":"https://example.invalid/repo.git","revision":"0123456789abcdef0123456789abcdef01234567"},"deepresearchbench":{"repository_url":"https://example.invalid/deep-research-bench.git","revision":"fedcba9876543210fedcba9876543210fedcba98"},"swebenchpro":{"dataset_repository_url":"https://example.invalid/swe-bench-pro-data.git","dataset_revision":"1111111111111111111111111111111111111111","evaluator_repository_url":"https://example.invalid/swe-bench-pro-evaluator.git","evaluator_revision":"2222222222222222222222222222222222222222"},"openclaw":{"image":"ghcr.io/openclaw/openclaw:2026.7.1"},"hermes":{"image":"docker.io/nousresearch/hermes-agent:v2026.5.29.2"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	profile := filepath.Join(root, "profile.json")

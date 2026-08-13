@@ -34,18 +34,22 @@ const (
 	defaultCleanupTimeout = 30 * time.Second
 	maxExecInput          = 16 << 20
 	maxExecOutput         = 16 << 20
+	maxConfiguredOutput   = 1 << 30
 	networkAlias          = "task-sandbox"
 	execPollInterval      = 20 * time.Millisecond
 	execDrainTimeout      = 200 * time.Millisecond
 	execTrailerKeep       = 128
 	execStatePrefix       = "/tmp/.aries-exec-"
+	rootExecUser          = "0:0"
 	execShell             = `state=$1; token=$2; shift 2; umask 077; trap 'rm -f "$state" "$state.tmp"' EXIT; exec 3<&0; setsid "$@" <&3 & pid=$!; printf '%s\n' "$pid" >"$state.tmp" || exit 125; mv "$state.tmp" "$state" || exit 125; wait "$pid"; status=$?; rm -f "$state" "$state.tmp"; trap - EXIT; printf '\036ARIES_EXEC_EXIT_%s=%d\037' "$token" "$status" >&2; exit "$status"`
 	cancelExecShell       = `state=$1; attempts=0; while [ ! -r "$state" ]; do attempts=$((attempts+1)); [ "$attempts" -ge 200 ] && exit 70; sleep 0.01; done; IFS= read -r pgid <"$state" || exit 71; case "$pgid" in ''|*[!0-9]*|0|1) exit 71;; esac; kill -TERM "-$pgid" 2>/dev/null || :; sleep 0.2; kill -KILL "-$pgid" 2>/dev/null || :; rm -f "$state"; exit 0`
 )
 
 var (
-	_ runner.ToolSandbox = (*Manager)(nil)
-	_ runner.Sandbox     = (*Sandbox)(nil)
+	_ runner.ToolSandbox       = (*Manager)(nil)
+	_ runner.Sandbox           = (*Sandbox)(nil)
+	_ runner.LimitedDownloader = (*Sandbox)(nil)
+	_ runner.StreamExecutor    = (*Sandbox)(nil)
 )
 
 // Options are the host-local inputs to the Docker sandbox manager.
@@ -96,6 +100,7 @@ type Sandbox struct {
 	containerName  string
 	networkName    string
 	workdir        string
+	execUser       string
 	artifactDir    string
 	outputDir      string
 	cleanupTimeout time.Duration
@@ -183,6 +188,7 @@ func (m *Manager) Start(ctx context.Context, request core.SandboxRequest) (runne
 		containerName:  "aries-task-" + id,
 		networkName:    "aries-net-" + id,
 		workdir:        request.Environment.Workdir,
+		execUser:       request.Environment.ExecUser,
 		artifactDir:    filepath.Join(m.outputDir, request.TaskID, "sandbox"),
 		outputDir:      m.outputDir,
 		cleanupTimeout: m.cleanupTimeout,
@@ -264,6 +270,9 @@ func containerOptions(request core.SandboxRequest, sandbox *Sandbox, labels map[
 		NetworkMode: container.NetworkMode(sandbox.networkName),
 		Resources:   resources,
 		Init:        boolPointer(true),
+	}
+	if environment.ExecUser != "" {
+		host.SecurityOpt = []string{"no-new-privileges=true"}
 	}
 	if environment.StorageMB > 0 {
 		host.StorageOpt = map[string]string{"size": fmt.Sprintf("%dm", environment.StorageMB)}
@@ -359,10 +368,7 @@ func (s *Sandbox) Exec(ctx context.Context, command core.Command) (core.CommandR
 	if len(command.Stdin) > 0 {
 		stdin = bytes.NewReader(command.Stdin)
 	}
-	result, err := s.ExecStream(ctx, command, stdin,
-		&limitedWriter{writer: &stdout, limit: maxExecOutput},
-		&limitedWriter{writer: &stderr, limit: maxExecOutput},
-	)
+	result, err := s.ExecStream(ctx, command, stdin, &stdout, &stderr)
 	result.Stdout = stdout.String()
 	result.Stderr = stderr.String()
 	return result, err
@@ -376,6 +382,10 @@ func (s *Sandbox) ExecStream(ctx context.Context, command core.Command, stdin io
 	failure := func() core.CommandResult { return core.CommandResult{ExitCode: -1, Duration: time.Since(started)} }
 	if err := validateCommand(command); err != nil {
 		return failure(), err
+	}
+	outputLimit := command.OutputLimitBytes
+	if outputLimit == 0 {
+		outputLimit = maxExecOutput
 	}
 	if command.Dir == "" {
 		command.Dir = s.workdir
@@ -402,10 +412,14 @@ func (s *Sandbox) ExecStream(ctx context.Context, command core.Command, stdin io
 		return failure(), fmt.Errorf("generate Docker exec exit token: %w", err)
 	}
 	statePath := execStatePrefix + token
+	execUser := command.User
+	if execUser == "" {
+		execUser = s.execUser
+	}
 	created, err := s.client.ExecCreate(execCtx, s.containerID, client.ExecCreateOptions{
 		AttachStdin: attachInput, AttachStdout: true, AttachStderr: true,
 		Cmd: wrappedCommand(statePath, token, command),
-		Env: dockerEnvironment(command.Env), WorkingDir: command.Dir,
+		Env: dockerEnvironment(command.Env), WorkingDir: command.Dir, User: execUser,
 	})
 	if err != nil {
 		return failure(), fmt.Errorf("create Docker exec: %w", err)
@@ -438,10 +452,10 @@ func (s *Sandbox) ExecStream(ctx context.Context, command core.Command, stdin io
 	}()
 
 	copyDone := make(chan error, 1)
-	exitTrailer := newExitTrailer(&limitedWriter{writer: stderr, limit: maxExecOutput}, token)
+	exitTrailer := newExitTrailer(&limitedWriter{writer: stderr, limit: outputLimit}, token)
 	go func() {
 		_, copyErr := stdcopy.StdCopy(
-			&limitedWriter{writer: stdout, limit: maxExecOutput},
+			&limitedWriter{writer: stdout, limit: outputLimit},
 			exitTrailer,
 			attached.Reader,
 		)
@@ -656,7 +670,8 @@ func (s *Sandbox) terminateExec(ctx context.Context, execID, statePath string) e
 		return nil
 	}
 	created, err := s.client.ExecCreate(ctx, s.containerID, client.ExecCreateOptions{
-		Cmd: []string{"/bin/sh", "-c", cancelExecShell, "aries-cancel", statePath},
+		Cmd:  []string{"/bin/sh", "-c", cancelExecShell, "aries-cancel", statePath},
+		User: rootExecUser,
 	})
 	if err != nil {
 		return fmt.Errorf("create Docker exec termination helper: %w", err)
@@ -801,28 +816,45 @@ func (s *Sandbox) Upload(ctx context.Context, source, destination string) error 
 		return fmt.Errorf("open Docker upload source: %w", err)
 	}
 	defer file.Close()
-	var archive bytes.Buffer
-	writer := tar.NewWriter(&archive)
-	if err := writer.WriteHeader(&tar.Header{Name: filepath.Base(destination), Mode: int64(info.Mode().Perm()), Size: info.Size(), ModTime: info.ModTime()}); err != nil {
-		return fmt.Errorf("archive Docker upload: %w", err)
-	}
-	if _, err := io.Copy(writer, file); err != nil {
-		return fmt.Errorf("archive Docker upload: %w", err)
-	}
-	if err := writer.Close(); err != nil {
-		return fmt.Errorf("close Docker upload archive: %w", err)
-	}
-	_, err = s.client.CopyToContainer(ctx, s.containerID, client.CopyToContainerOptions{
-		DestinationPath: filepath.Dir(destination), Content: bytes.NewReader(archive.Bytes()),
+	archiveReader, archiveWriter := io.Pipe()
+	archiveErr := make(chan error, 1)
+	go func() {
+		writer := tar.NewWriter(archiveWriter)
+		writeErr := writer.WriteHeader(&tar.Header{Name: filepath.Base(destination), Mode: int64(info.Mode().Perm()), Size: info.Size(), ModTime: info.ModTime()})
+		if writeErr == nil {
+			_, writeErr = io.Copy(writer, file)
+		}
+		if closeErr := writer.Close(); writeErr == nil {
+			writeErr = closeErr
+		}
+		_ = archiveWriter.CloseWithError(writeErr)
+		archiveErr <- writeErr
+	}()
+	_, copyErr := s.client.CopyToContainer(ctx, s.containerID, client.CopyToContainerOptions{
+		DestinationPath: filepath.Dir(destination), Content: archiveReader,
 	})
-	if err != nil {
-		return fmt.Errorf("upload file to Docker task container: %w", err)
+	_ = archiveReader.Close()
+	writeErr := <-archiveErr
+	if copyErr != nil || writeErr != nil {
+		return fmt.Errorf("upload file to Docker task container: %w", errors.Join(copyErr, writeErr))
 	}
 	return nil
 }
 
 // Download copies one regular container file beneath the configured output directory.
 func (s *Sandbox) Download(ctx context.Context, source, destination string) error {
+	return s.download(ctx, source, destination, nil)
+}
+
+// DownloadLimit copies one regular container file while bounding host bytes.
+func (s *Sandbox) DownloadLimit(ctx context.Context, source, destination string, maxBytes int64) error {
+	if maxBytes < 0 {
+		return errors.New("Docker download byte limit must be nonnegative")
+	}
+	return s.download(ctx, source, destination, &maxBytes)
+}
+
+func (s *Sandbox) download(ctx context.Context, source, destination string, maxBytes *int64) error {
 	source, err := cleanContainerPath(source)
 	if err != nil {
 		return fmt.Errorf("invalid Docker download source: %w", err)
@@ -836,6 +868,9 @@ func (s *Sandbox) Download(ctx context.Context, source, destination string) erro
 		return fmt.Errorf("download file from Docker task container: %w", err)
 	}
 	defer result.Content.Close()
+	if maxBytes != nil && (result.Stat.Size < 0 || result.Stat.Size > *maxBytes) {
+		return fmt.Errorf("Docker download source size %d exceeds limit %d", result.Stat.Size, *maxBytes)
+	}
 	if !result.Stat.Mode.IsRegular() {
 		return errors.New("Docker download source must be a regular file")
 	}
@@ -852,6 +887,9 @@ func (s *Sandbox) Download(ctx context.Context, source, destination string) erro
 		if err != nil {
 			return fmt.Errorf("read Docker download archive: %w", err)
 		}
+	}
+	if maxBytes != nil && header.Size > *maxBytes {
+		return fmt.Errorf("Docker download archive file size %d exceeds limit %d", header.Size, *maxBytes)
 	}
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return fmt.Errorf("create Docker download directory: %w", err)
@@ -1037,6 +1075,9 @@ func validateEnvironment(environment core.Environment) error {
 	if _, err := cleanContainerWorkdir(environment.Workdir); err != nil {
 		return fmt.Errorf("invalid docker sandbox workdir: %w", err)
 	}
+	if err := validateExecUser(environment.ExecUser); err != nil {
+		return fmt.Errorf("invalid docker sandbox exec user: %w", err)
+	}
 	if environment.CPU < 0 || math.IsNaN(environment.CPU) || math.IsInf(environment.CPU, 0) || environment.CPU*1e9 >= math.Exp2(63) {
 		return errors.New("docker sandbox CPU must be finite, nonnegative, and convert to NanoCPUs below 2^63")
 	}
@@ -1077,8 +1118,14 @@ func validateCommand(command core.Command) error {
 			return fmt.Errorf("invalid command workdir: %w", err)
 		}
 	}
+	if err := validateExecUser(command.User); err != nil {
+		return fmt.Errorf("invalid command user: %w", err)
+	}
 	if command.Timeout < 0 {
 		return errors.New("command timeout must be nonnegative")
+	}
+	if command.OutputLimitBytes < 0 || command.OutputLimitBytes > maxConfiguredOutput {
+		return fmt.Errorf("command output limit must be between 0 and %d bytes", maxConfiguredOutput)
 	}
 	for _, argument := range command.Args {
 		if strings.ContainsRune(argument, 0) {
@@ -1091,6 +1138,29 @@ func validateCommand(command core.Command) error {
 		}
 	}
 	return nil
+}
+
+func validateExecUser(value string) error {
+	if value == "" {
+		return nil
+	}
+	uid, gid, found := strings.Cut(value, ":")
+	if !found || strings.ContainsRune(gid, ':') || !decimalDigits(uid) || !decimalDigits(gid) {
+		return errors.New("exec user must be a numeric UID:GID pair")
+	}
+	return nil
+}
+
+func decimalDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, character := range value {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func cleanContainerPath(path string) (string, error) {

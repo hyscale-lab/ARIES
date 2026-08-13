@@ -30,8 +30,8 @@ const (
 	// OpenClaw harness container, which joins the same per-task Docker
 	// network. Not profile-configurable: it's an internal wiring detail, not
 	// something a user should need to know or vary.
-	searxngBaseURL = "http://task-sandbox:8888"
-	tavilyKeyPath  = "/run/aries/tavily.key"
+	searxngBaseURL  = "http://task-sandbox:8888"
+	tavilyKeyPath   = "/run/aries/tavily.key"
 	tavilyAPIKeyEnv = "TAVILY_API_KEY"
 )
 
