@@ -263,6 +263,7 @@ func TestRunnerTranscribeRequiresFinalTranscript(t *testing.T) {
 			"audio":     map[string]any{"inputEncoding": "pcm16", "inputSampleRateHz": 24000},
 		}}},
 		scriptedCall{method: "talk.session.appendAudio", response: gatewayclient.Frame{"ok": true}},
+		scriptedCall{method: "talk.session.close", response: gatewayclient.Frame{"ok": true}},
 	)
 	gateway.events = append(gateway.events, gatewayclient.Frame{
 		"type": "event", "event": "talk.event",
@@ -283,6 +284,45 @@ func TestRunnerTranscribeRequiresFinalTranscript(t *testing.T) {
 	result, err := runner.Run(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "missing_final_transcript") || len(result.Errors) != 1 {
 		t.Fatalf("Run = %#v, %v", result, err)
+	}
+	if len(gateway.requests) != 3 || gateway.requests[2].method != "talk.session.close" || gateway.requests[2].params["sessionId"] != "session-1" {
+		t.Fatalf("requests = %#v", gateway.requests)
+	}
+}
+
+func TestRunnerTranscribeClosesSessionAfterAppendFailure(t *testing.T) {
+	gateway := newScriptedGateway()
+	gateway.calls = append(gateway.calls,
+		scriptedCall{method: "talk.session.create", response: gatewayclient.Frame{"ok": true, "payload": map[string]any{
+			"sessionId": "session-1",
+			"audio":     map[string]any{"inputEncoding": "pcm16", "inputSampleRateHz": 24000},
+		}}},
+		scriptedCall{method: "talk.session.appendAudio", response: gatewayclient.Frame{
+			"ok": false, "error": map[string]any{"code": "APPEND_FAILED", "message": "append rejected"},
+		}},
+		scriptedCall{method: "talk.session.close", response: gatewayclient.Frame{
+			"ok": false, "error": map[string]any{"code": "CLOSE_FAILED", "message": "close rejected"},
+		}},
+	)
+	runner, err := New(gateway, Options{
+		SessionMode:    SessionModeTranscribe,
+		Audio:          Audio{Data: []byte{1, 2}, Rate: 24000, BytesPerSample: 2},
+		ListenDuration: 5 * time.Millisecond,
+		QuietDuration:  time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	result, err := runner.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "append rejected") || !strings.Contains(err.Error(), "close rejected") {
+		t.Fatalf("Run = %#v, %v", result, err)
+	}
+	if len(result.Errors) != 2 || !strings.Contains(result.Errors[0], "append rejected") || !strings.Contains(result.Errors[1], "close rejected") {
+		t.Fatalf("result errors = %#v", result.Errors)
+	}
+	if len(gateway.requests) != 3 || gateway.requests[2].method != "talk.session.close" || gateway.requests[2].params["sessionId"] != "session-1" {
+		t.Fatalf("requests = %#v", gateway.requests)
 	}
 }
 
