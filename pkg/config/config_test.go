@@ -69,6 +69,7 @@ func TestRealtimeHarnessConfigValidationAndResolution(t *testing.T) {
 		"bad silence":               strings.Replace(realtime, `"trailing_silence_ms":300`, `"trailing_silence_ms":-1`, 1),
 		"bad tts":                   strings.Replace(realtime, `"provider":"openai"`, `"provider":"elevenlabs"`, 1),
 		"transcribe realtime block": strings.Replace(realtime, `"mode":"realtime"`, `"mode":"voice-transcribe"`, 1),
+		"openclaw transcribe stt":   strings.Replace(transcribe, `"include_events":true`, `"include_events":true,"stt":{"provider":"openai"}`, 1),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Decode(strings.NewReader(input)); err == nil {

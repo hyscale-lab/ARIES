@@ -705,6 +705,9 @@ func (tts *RealtimeTTSConfig) validate() error {
 }
 
 func (voice *HarnessVoiceTranscribeConfig) validateOpenClaw() error {
+	if voice.STT != (VoiceSTTConfig{}) {
+		return errors.New("harness.voice_transcribe.stt must be empty for OpenClaw voice-transcribe")
+	}
 	return voice.HarnessRealtimeConfig.validateNamed("harness.voice_transcribe")
 }
 
