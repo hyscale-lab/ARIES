@@ -587,6 +587,10 @@ func (manager *Manager) runVoiceTranscribe(ctx context.Context, active *session,
 		err = redactSessionError(err, active)
 		return failedHarnessResult(active, started, err), err
 	}
+	if strings.TrimSpace(sttResult.Transcript) == "" || strings.ContainsRune(sttResult.Transcript, 0) {
+		err := redactSessionError(errors.New("Hermes voice transcript is invalid"), active)
+		return failedHarnessResult(active, started, err), err
+	}
 	runCtx, cancel := context.WithTimeout(ctx, active.agentTimeout)
 	result, runErr := manager.execAttached(runCtx, active.containerID,
 		[]string{agentWrapperPath, active.model.Model, active.model.Provider, sttResult.Transcript}, workspaceRoot)
