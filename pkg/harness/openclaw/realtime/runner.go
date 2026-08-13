@@ -22,6 +22,7 @@ const (
 	defaultToolCallTimeout          = 60 * time.Second
 	defaultSubmitToolResultTimeout  = 30 * time.Second
 	defaultAppendAudioTimeout       = 10 * time.Second
+	defaultSessionCloseTimeout      = 30 * time.Second
 	defaultVADThreshold             = 0.3
 	defaultSilenceDurationMillis    = 1500
 	defaultPrefixPaddingMillis      = 500
@@ -41,8 +42,8 @@ const (
 	methodClientToolCall   = "talk.client.toolCall"
 	methodSubmitToolResult = "talk.session.submitToolResult"
 	methodAgentWait        = "agent.wait"
-	SessionModeTalk        = "realtime-talk"
-	SessionModeTranscribe  = "realtime-transcribe"
+	SessionModeRealtime    = "realtime"
+	SessionModeTranscribe  = "voice-transcribe"
 	protocolModeRealtime   = "realtime"
 	protocolModeTranscribe = "transcription"
 	sessionTransportRelay  = "gateway-relay"
@@ -142,10 +143,10 @@ func New(gateway Gateway, options Options) (*Runner, error) {
 		return nil, errors.New("realtime gateway is required")
 	}
 	if options.SessionMode == "" {
-		options.SessionMode = SessionModeTalk
+		options.SessionMode = SessionModeRealtime
 	}
-	if options.SessionMode != SessionModeTalk && options.SessionMode != SessionModeTranscribe {
-		return nil, errors.New("realtime session mode must be realtime-talk or realtime-transcribe")
+	if options.SessionMode != SessionModeRealtime && options.SessionMode != SessionModeTranscribe {
+		return nil, errors.New("realtime session mode must be realtime or voice-transcribe")
 	}
 	if len(options.Audio.Data) == 0 && options.AudioProvider == nil {
 		return nil, errors.New("realtime audio is required")
@@ -163,7 +164,7 @@ func New(gateway Gateway, options Options) (*Runner, error) {
 	}, nil
 }
 
-func (runner *Runner) Run(ctx context.Context) (Result, error) {
+func (runner *Runner) Run(ctx context.Context) (out Result, err error) {
 	result := newResult()
 	result.OriginalPrompt = runner.options.OriginalPrompt
 	if runner.options.CloseGateway {
@@ -189,6 +190,18 @@ func (runner *Runner) Run(ctx context.Context) (Result, error) {
 	if session.RelaySessionID != "" {
 		result.RelaySessionID = stringPtr(session.RelaySessionID)
 	}
+	if runner.options.SessionMode == SessionModeTranscribe {
+		defer func() {
+			closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultSessionCloseTimeout)
+			closeErr := runner.closeSession(closeCtx, session)
+			cancel()
+			if closeErr != nil {
+				result.AppendError(closeErr.Error())
+				err = errors.Join(err, closeErr)
+			}
+			out = scrubRealtimeEvents(result, runner.options.IncludeEvents)
+		}()
+	}
 	if err := runner.loadAudioForSession(session); err != nil {
 		result.AppendError(err.Error())
 		return result.WithoutEvents(), err
@@ -200,12 +213,6 @@ func (runner *Runner) Run(ctx context.Context) (Result, error) {
 	if err := runner.processEvents(ctx, &result); err != nil {
 		result.AppendError(err.Error())
 		return scrubRealtimeEvents(result, runner.options.IncludeEvents), err
-	}
-	if runner.options.SessionMode == SessionModeTranscribe {
-		if err := runner.closeSession(ctx, session); err != nil {
-			result.AppendError(err.Error())
-			return scrubRealtimeEvents(result, runner.options.IncludeEvents), err
-		}
 	}
 	return scrubRealtimeEvents(result, runner.options.IncludeEvents), nil
 }

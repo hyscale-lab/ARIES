@@ -14,7 +14,7 @@
   },
   "harness": {
     "type": "openclaw",
-    "mode": "realtime-talk",
+    "mode": "realtime",
     "realtime": {
       "tts": {
         "provider": "openai",

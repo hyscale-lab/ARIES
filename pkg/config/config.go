@@ -222,8 +222,8 @@ type RealtimeTTSConfig struct {
 }
 
 type HarnessVoiceTranscribeConfig struct {
-	TTS RealtimeTTSConfig `json:"tts,omitempty"`
-	STT VoiceSTTConfig    `json:"stt,omitempty"`
+	HarnessRealtimeConfig
+	STT VoiceSTTConfig `json:"stt,omitempty"`
 }
 
 type VoiceSTTConfig struct {
@@ -630,63 +630,82 @@ func (h *HarnessConfig) validate() error {
 	switch h.Mode {
 	case "agent":
 		if h.Realtime != (HarnessRealtimeConfig{}) {
-			return errors.New("harness.realtime must be empty unless harness.mode is realtime-talk or realtime-transcribe")
+			return errors.New("harness.realtime must be empty unless harness.mode is realtime")
 		}
 		if h.VoiceTranscribe != (HarnessVoiceTranscribeConfig{}) {
 			return errors.New("harness.voice_transcribe must be empty unless harness.mode is voice-transcribe")
 		}
 		return nil
-	case "realtime-talk", "realtime-transcribe":
+	case "realtime":
 		if h.Type != "openclaw" {
-			return errors.New("harness.mode realtime-talk or realtime-transcribe requires OpenClaw")
+			return errors.New("harness.mode realtime requires OpenClaw")
 		}
 		if h.VoiceTranscribe != (HarnessVoiceTranscribeConfig{}) {
 			return errors.New("harness.voice_transcribe must be empty unless harness.mode is voice-transcribe")
 		}
-		if err := h.Realtime.TTS.validate(); err != nil {
-			return err
-		}
-		if h.Realtime.TrailingSilenceMillis < 0 {
-			return errors.New("harness.realtime.trailing_silence_ms must not be negative")
-		}
-		var err error
-		if h.Realtime.ChunkDuration, err = parseOptionalPositiveDuration("harness.realtime.chunk_duration", h.Realtime.ChunkDurationText); err != nil {
-			return err
-		}
-		if h.Realtime.ListenDuration, err = parseOptionalPositiveDuration("harness.realtime.listen_duration", h.Realtime.ListenDurationText); err != nil {
-			return err
-		}
-		if h.Realtime.QuietDuration, err = parseOptionalPositiveDuration("harness.realtime.quiet_duration", h.Realtime.QuietDurationText); err != nil {
-			return err
-		}
-		if h.Realtime.AgentWaitDuration, err = parseOptionalPositiveDuration("harness.realtime.agent_wait_duration", h.Realtime.AgentWaitDurationText); err != nil {
-			return err
-		}
-		if h.Realtime.ToolCallTimeout, err = parseOptionalPositiveDuration("harness.realtime.tool_call_timeout", h.Realtime.ToolCallTimeoutText); err != nil {
-			return err
-		}
-		return nil
+		return h.Realtime.validate()
 	case "voice-transcribe":
-		if h.Type != "hermes" {
-			return errors.New("harness.mode voice-transcribe requires Hermes")
+		switch h.Type {
+		case "openclaw":
+			if h.Realtime != (HarnessRealtimeConfig{}) {
+				return errors.New("harness.realtime must be empty unless harness.mode is realtime")
+			}
+			return h.VoiceTranscribe.validateOpenClaw()
+		case "hermes":
+			if h.Realtime != (HarnessRealtimeConfig{}) {
+				return errors.New("harness.realtime must be empty unless harness.mode is realtime")
+			}
+			if err := h.VoiceTranscribe.TTS.validateNamed("harness.voice_transcribe.tts"); err != nil {
+				return err
+			}
+			if err := h.VoiceTranscribe.STT.validate(); err != nil {
+				return err
+			}
+			return nil
+		default:
+			return errors.New("harness.mode voice-transcribe requires OpenClaw or Hermes")
 		}
-		if h.Realtime != (HarnessRealtimeConfig{}) {
-			return errors.New("harness.realtime must be empty unless harness.mode is realtime-talk or realtime-transcribe")
-		}
-		if err := h.VoiceTranscribe.TTS.validateNamed("harness.voice_transcribe.tts"); err != nil {
-			return err
-		}
-		if err := h.VoiceTranscribe.STT.validate(); err != nil {
-			return err
-		}
-		return nil
 	default:
-		return errors.New("harness.mode must be agent, realtime-talk, realtime-transcribe, or voice-transcribe")
+		return errors.New("harness.mode must be agent, realtime, or voice-transcribe")
 	}
+}
+
+func (realtime *HarnessRealtimeConfig) validate() error {
+	return realtime.validateNamed("harness.realtime")
+}
+
+func (realtime *HarnessRealtimeConfig) validateNamed(name string) error {
+	if err := realtime.TTS.validateNamed(name + ".tts"); err != nil {
+		return err
+	}
+	if realtime.TrailingSilenceMillis < 0 {
+		return fmt.Errorf("%s.trailing_silence_ms must not be negative", name)
+	}
+	var err error
+	if realtime.ChunkDuration, err = parseOptionalPositiveDuration(name+".chunk_duration", realtime.ChunkDurationText); err != nil {
+		return err
+	}
+	if realtime.ListenDuration, err = parseOptionalPositiveDuration(name+".listen_duration", realtime.ListenDurationText); err != nil {
+		return err
+	}
+	if realtime.QuietDuration, err = parseOptionalPositiveDuration(name+".quiet_duration", realtime.QuietDurationText); err != nil {
+		return err
+	}
+	if realtime.AgentWaitDuration, err = parseOptionalPositiveDuration(name+".agent_wait_duration", realtime.AgentWaitDurationText); err != nil {
+		return err
+	}
+	if realtime.ToolCallTimeout, err = parseOptionalPositiveDuration(name+".tool_call_timeout", realtime.ToolCallTimeoutText); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (tts *RealtimeTTSConfig) validate() error {
 	return tts.validateNamed("harness.realtime.tts")
+}
+
+func (voice *HarnessVoiceTranscribeConfig) validateOpenClaw() error {
+	return voice.HarnessRealtimeConfig.validateNamed("harness.voice_transcribe")
 }
 
 func (tts *RealtimeTTSConfig) validateNamed(name string) error {

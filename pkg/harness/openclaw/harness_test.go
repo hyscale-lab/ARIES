@@ -913,11 +913,11 @@ func TestGatewayEventDispositionFollowsHarnessMode(t *testing.T) {
 	if got := gatewayEventDisposition(ModeAgent); got != gatewayclient.EventDispositionResponseOnly {
 		t.Fatalf("agent disposition = %v", got)
 	}
-	if got := gatewayEventDisposition(ModeRealtimeTalk); got != gatewayclient.EventDispositionDelivery {
-		t.Fatalf("realtime-talk disposition = %v", got)
+	if got := gatewayEventDisposition(ModeRealtime); got != gatewayclient.EventDispositionDelivery {
+		t.Fatalf("realtime disposition = %v", got)
 	}
-	if got := gatewayEventDisposition(ModeRealtimeTranscribe); got != gatewayclient.EventDispositionDelivery {
-		t.Fatalf("realtime-transcribe disposition = %v", got)
+	if got := gatewayEventDisposition(ModeVoiceTranscribe); got != gatewayclient.EventDispositionDelivery {
+		t.Fatalf("voice-transcribe disposition = %v", got)
 	}
 }
 
@@ -978,7 +978,7 @@ func TestRealtimeModePublishesGatewayAndRunsRunner(t *testing.T) {
 		value, ok := keys[name]
 		return append([]byte(nil), value...), ok
 	}
-	manager.mode = ModeRealtimeTalk
+	manager.mode = ModeRealtime
 	manager.realtime = RealtimeOptions{
 		TTS:            RealtimeTTSOptions{Provider: "openai", APIKeyEnv: "OPENAI_API_KEY", Model: "tts-model", Voice: "alloy"},
 		ChunkDuration:  25 * time.Millisecond,
@@ -1038,7 +1038,7 @@ func TestRealtimeModePublishesGatewayAndRunsRunner(t *testing.T) {
 	if gatewayURL != "ws://127.0.0.1:38089" || len(gatewayToken) == 0 {
 		t.Fatalf("gateway URL/token = %q/%d", gatewayURL, len(gatewayToken))
 	}
-	if runnerOptions.OriginalPrompt != "voice task" || runnerOptions.SessionMode != ModeRealtimeTalk || runnerOptions.SessionKey != "agent:main:aries-fix-git" ||
+	if runnerOptions.OriginalPrompt != "voice task" || runnerOptions.SessionMode != ModeRealtime || runnerOptions.SessionKey != "agent:main:aries-fix-git" ||
 		runnerOptions.ChunkDuration != 25*time.Millisecond || runnerOptions.Voice != "alloy" || runnerOptions.ReasoningEffort != "low" || !runnerOptions.IncludeEvents {
 		t.Fatalf("runner options = %#v", runnerOptions)
 	}
@@ -1095,7 +1095,7 @@ func TestRealtimeTranscribeModeSendsTranscriptToAgent(t *testing.T) {
 		value, ok := keys[name]
 		return append([]byte(nil), value...), ok
 	}
-	manager.mode = ModeRealtimeTranscribe
+	manager.mode = ModeVoiceTranscribe
 	manager.realtime = RealtimeOptions{
 		TTS: RealtimeTTSOptions{Provider: "openai", APIKeyEnv: "OPENAI_API_KEY", Model: "tts-model", Voice: "alloy"},
 	}
@@ -1129,7 +1129,7 @@ func TestRealtimeTranscribeModeSendsTranscriptToAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
-	if runnerOptions.SessionMode != ModeRealtimeTranscribe {
+	if runnerOptions.SessionMode != ModeVoiceTranscribe {
 		t.Fatalf("runner options = %#v", runnerOptions)
 	}
 	if gateway.agentCalls != 1 || gateway.request.Message != "repair git from transcript" || gateway.request.SessionKey != "agent:main:aries-fix-git" || gateway.request.IdempotencyKey == "" {

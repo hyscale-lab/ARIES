@@ -60,13 +60,13 @@ exit "$status"`
 var gatewayPort = network.MustParsePort(gatewayListenPort + "/tcp")
 
 const (
-	ModeAgent              = "agent"
-	ModeRealtimeTalk       = "realtime-talk"
-	ModeRealtimeTranscribe = "realtime-transcribe"
+	ModeAgent           = "agent"
+	ModeRealtime        = "realtime"
+	ModeVoiceTranscribe = "voice-transcribe"
 )
 
 func isRealtimeMode(mode string) bool {
-	return mode == ModeRealtimeTalk || mode == ModeRealtimeTranscribe
+	return mode == ModeRealtime || mode == ModeVoiceTranscribe
 }
 
 // Options are the host-local inputs to one upstream OpenClaw container.
@@ -260,7 +260,7 @@ func New(options Options) (*Manager, error) {
 		if options.Realtime != (RealtimeOptions{}) {
 			return nil, errors.New("OpenClaw realtime options require realtime mode")
 		}
-	case ModeRealtimeTalk, ModeRealtimeTranscribe:
+	case ModeRealtime, ModeVoiceTranscribe:
 		if options.Realtime.TrailingSilenceMillis < 0 {
 			return nil, errors.New("OpenClaw realtime options are invalid")
 		}
@@ -274,7 +274,7 @@ func New(options Options) (*Manager, error) {
 			options.Realtime.TTS.APIKeyEnv = "OPENAI_API_KEY"
 		}
 	default:
-		return nil, errors.New("OpenClaw mode must be agent, realtime-talk, or realtime-transcribe")
+		return nil, errors.New("OpenClaw mode must be agent, realtime, or voice-transcribe")
 	}
 	return &Manager{
 		client: api, image: options.Image, outputDir: outputDir,
@@ -591,7 +591,7 @@ func (manager *Manager) runRealtime(ctx context.Context, active *session, instru
 		err = redactSessionError(err, active)
 		return failedHarnessResult(active, started, err), err
 	}
-	closeGatewayInRunner := manager.mode == ModeRealtimeTalk
+	closeGatewayInRunner := manager.mode == ModeRealtime
 	if !closeGatewayInRunner {
 		defer client.Close()
 	}
@@ -620,7 +620,7 @@ func (manager *Manager) runRealtime(ctx context.Context, active *session, instru
 	}
 	runCtx, cancel := context.WithTimeout(ctx, active.agentTimeout)
 	realtimeResult, err := runner.Run(runCtx)
-	if err == nil && manager.mode == ModeRealtimeTranscribe {
+	if err == nil && manager.mode == ModeVoiceTranscribe {
 		err = manager.runAgentWithTranscript(runCtx, active, client, &realtimeResult)
 	}
 	cancel()
@@ -650,7 +650,7 @@ func (manager *Manager) runRealtime(ctx context.Context, active *session, instru
 func (manager *Manager) runAgentWithTranscript(ctx context.Context, active *session, client gatewayConnection, result *realtimeclient.Result) error {
 	transcript := strings.TrimSpace(result.Transcript)
 	if transcript == "" {
-		err := errors.New("missing_transcript: OpenClaw realtime-transcribe mode returned no text")
+		err := errors.New("missing_transcript: OpenClaw voice-transcribe mode returned no text")
 		result.AppendError(err.Error())
 		return err
 	}
