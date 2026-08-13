@@ -66,13 +66,13 @@ const (
 
 // Options are the host-local inputs to one upstream OpenClaw container.
 type Options struct {
-	Image            string
-	OutputDir        string
-	DockerSocket     string
-	APIKeyLookup     func(string) ([]byte, bool)
-	Mode             string
-	Realtime         RealtimeOptions
-	WebSearchEnabled bool
+	Image                  string
+	OutputDir              string
+	DockerSocket           string
+	APIKeyLookup           func(string) ([]byte, bool)
+	Mode                   string
+	Realtime               RealtimeOptions
+	WebSearchEnabled       bool
 	ExtractAPIKeyEnv       string
 	SubagentsEnabled       bool
 	MaxConcurrentSubagents int

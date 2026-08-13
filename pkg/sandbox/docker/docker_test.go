@@ -5,8 +5,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
-	"github.com/sirupsen/logrus"
 	"io"
 	"math"
 	"net"
@@ -21,11 +21,15 @@ import (
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/runner"
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
+	"github.com/sirupsen/logrus"
 )
+
+var _ runner.LimitedDownloader = (*Sandbox)(nil)
 
 type fakeNotFound struct{ kind string }
 
@@ -73,13 +77,16 @@ type fakeClient struct {
 	execRunning    bool
 	controlExit    int
 	controlErr     error
+	controlOptions client.ExecCreateOptions
 	leaveExecAlive bool
 	execCreates    int
 	attach         func(net.Conn)
 	logs           []byte
 	upload         client.CopyToContainerOptions
 	uploadBytes    []byte
+	uploadErr      error
 	download       client.CopyFromContainerResult
+	downloadCalls  int
 	closeCalls     int
 	closeErr       error
 }
@@ -200,6 +207,7 @@ func (f *fakeClient) ExecCreate(_ context.Context, _ string, options client.Exec
 	f.mu.Lock()
 	f.execCreates++
 	if len(options.Cmd) > 2 && options.Cmd[2] == cancelExecShell {
+		f.controlOptions = options
 		f.mu.Unlock()
 		return client.ExecCreateResult{ID: "control-id"}, nil
 	}
@@ -249,6 +257,9 @@ func (f *fakeClient) ExecInspect(_ context.Context, execID string, _ client.Exec
 }
 
 func (f *fakeClient) CopyToContainer(_ context.Context, _ string, options client.CopyToContainerOptions) (client.CopyToContainerResult, error) {
+	if f.uploadErr != nil {
+		return client.CopyToContainerResult{}, f.uploadErr
+	}
 	content, err := io.ReadAll(options.Content)
 	if err != nil {
 		return client.CopyToContainerResult{}, err
@@ -262,6 +273,7 @@ func (f *fakeClient) CopyToContainer(_ context.Context, _ string, options client
 func (f *fakeClient) CopyFromContainer(context.Context, string, client.CopyFromContainerOptions) (client.CopyFromContainerResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.downloadCalls++
 	return f.download, nil
 }
 
@@ -343,6 +355,19 @@ func TestStartUsesTypedOptionsAndStopIsIdempotent(t *testing.T) {
 	}
 	if fake.containerID != "" || fake.networkExists {
 		t.Fatal("Stop left fake resources behind")
+	}
+}
+
+func TestContainerOptionsEnablesNoNewPrivilegesForConfiguredExecUser(t *testing.T) {
+	request := testRequest()
+	sandbox := &Sandbox{containerName: "task", networkName: "network"}
+	if got := containerOptions(request, sandbox, nil).HostConfig.SecurityOpt; got != nil {
+		t.Fatalf("default security options = %v", got)
+	}
+	request.Environment.ExecUser = "65532:65532"
+	got := containerOptions(request, sandbox, nil).HostConfig.SecurityOpt
+	if !reflect.DeepEqual(got, []string{"no-new-privileges=true"}) {
+		t.Fatalf("non-root security options = %v", got)
 	}
 }
 
@@ -461,6 +486,18 @@ func TestStartRollsBackNetworkOnContainerFailure(t *testing.T) {
 	}
 }
 
+func TestCommandOutputLimitIsNotSerialized(t *testing.T) {
+	encoded, err := json.Marshal(core.Command{
+		Path: "/bin/true", OutputLimitBytes: 123456789,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "123456789") || strings.Contains(string(encoded), "OutputLimit") {
+		t.Fatalf("internal output limit leaked into JSON: %s", encoded)
+	}
+}
+
 func TestExecStreamsStdinAndSeparatesOutput(t *testing.T) {
 	fake := &fakeClient{execExit: 7}
 	fake.attach = func(conn net.Conn) {
@@ -497,6 +534,114 @@ func TestExecAcceptsAriesEnvironment(t *testing.T) {
 	}
 }
 
+func TestExecUsesConfiguredUserAndAllowsExplicitOverride(t *testing.T) {
+	fake := &fakeClient{}
+	request := testRequest()
+	request.Environment.ExecUser = "65532:65532"
+	manager := testManager(t, fake)
+	live, err := manager.Start(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sandbox := live.(*Sandbox)
+	defer sandbox.stop(context.Background())
+
+	if _, err := sandbox.Exec(context.Background(), core.Command{Path: "/bin/true"}); err != nil {
+		t.Fatal(err)
+	}
+	if fake.execOptions.User != "65532:65532" {
+		t.Fatalf("default Docker exec user = %q", fake.execOptions.User)
+	}
+	if _, err := sandbox.Exec(context.Background(), core.Command{Path: "/bin/true", User: "0:0"}); err != nil {
+		t.Fatal(err)
+	}
+	if fake.execOptions.User != "0:0" {
+		t.Fatalf("explicit Docker exec user = %q", fake.execOptions.User)
+	}
+}
+
+func TestExecUserValidationRejectsNamesAndMalformedIDs(t *testing.T) {
+	for _, user := range []string{"root", "1000", "1000:", ":1000", "1:2:3", "-1:0", "1.0:2", " 1:2", "1:2 "} {
+		t.Run(user, func(t *testing.T) {
+			environment := testEnvironment()
+			environment.ExecUser = user
+			if err := validateEnvironment(environment); err == nil {
+				t.Fatalf("validateEnvironment accepted exec user %q", user)
+			}
+			if err := validateCommand(core.Command{Path: "/bin/true", User: user}); err == nil {
+				t.Fatalf("validateCommand accepted exec user %q", user)
+			}
+		})
+	}
+	for _, user := range []string{"", "0:0", "65532:65532", "0001:0002"} {
+		environment := testEnvironment()
+		environment.ExecUser = user
+		if err := validateEnvironment(environment); err != nil {
+			t.Fatalf("validateEnvironment rejected exec user %q: %v", user, err)
+		}
+		if err := validateCommand(core.Command{Path: "/bin/true", User: user}); err != nil {
+			t.Fatalf("validateCommand rejected exec user %q: %v", user, err)
+		}
+	}
+}
+
+func TestInternalExecUsersAreNotSerialized(t *testing.T) {
+	encoded, err := json.Marshal(struct {
+		Environment core.Environment `json:"environment"`
+		Command     core.Command     `json:"command"`
+	}{
+		Environment: core.Environment{ExecUser: "65532:65532"},
+		Command:     core.Command{User: "0:0"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "65532") || strings.Contains(string(encoded), "0:0") || strings.Contains(string(encoded), "ExecUser") || strings.Contains(string(encoded), "User") {
+		t.Fatalf("internal exec users leaked into JSON: %s", encoded)
+	}
+}
+
+func TestExecStreamHonorsConfiguredOutputLimit(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		limit   int
+		wantErr bool
+	}{
+		{name: "within limit", limit: 4},
+		{name: "over limit", limit: 3, wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fake := &fakeClient{}
+			fake.attach = func(conn net.Conn) {
+				writeFrame(conn, stdcopy.Stdout, []byte("four"))
+			}
+			sandbox := startSandbox(t, fake)
+			defer sandbox.stop(context.Background())
+			var stdout bytes.Buffer
+			_, err := sandbox.ExecStream(context.Background(), core.Command{
+				Path: "/bin/true", OutputLimitBytes: test.limit,
+			}, nil, &stdout, io.Discard)
+			if test.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "output exceeds 3 bytes") {
+					t.Fatalf("ExecStream() error = %v", err)
+				}
+				return
+			}
+			if err != nil || stdout.String() != "four" {
+				t.Fatalf("ExecStream() stdout = %q, error = %v", stdout.String(), err)
+			}
+		})
+	}
+}
+
+func TestCommandOutputLimitValidation(t *testing.T) {
+	for _, limit := range []int{-1, maxConfiguredOutput + 1} {
+		if err := validateCommand(core.Command{Path: "/bin/true", OutputLimitBytes: limit}); err == nil {
+			t.Fatalf("validateCommand accepted output limit %d", limit)
+		}
+	}
+}
+
 func TestExecCancellationReturnsTerminationConfirmationFailure(t *testing.T) {
 	fake := &fakeClient{execRunning: true, leaveExecAlive: true}
 	fake.attach = func(conn net.Conn) { _, _ = io.Copy(io.Discard, conn) }
@@ -514,6 +659,9 @@ func TestExecCancellationReturnsTerminationConfirmationFailure(t *testing.T) {
 	fake.mu.Unlock()
 	if execCreates != 2 {
 		t.Fatalf("exec create count = %d, want command plus targeted termination helper", execCreates)
+	}
+	if fake.controlOptions.User != "0:0" {
+		t.Fatalf("termination helper user = %q, want root", fake.controlOptions.User)
 	}
 }
 
@@ -649,6 +797,120 @@ func TestUploadAndDownloadUseDockerArchives(t *testing.T) {
 	}
 	if err := sandbox.Download(context.Background(), "/work/source.bin", filepath.Join(sandbox.outputDir, "..", "escape")); err == nil {
 		t.Fatal("Download accepted destination outside output root")
+	}
+}
+
+func TestDownloadLimitRejectsInvalidLimitBeforeDocker(t *testing.T) {
+	fake := &fakeClient{}
+	sandbox := startSandbox(t, fake)
+	defer sandbox.stop(context.Background())
+	destination := filepath.Join(sandbox.outputDir, "evaluation", "result.bin")
+	if err := sandbox.DownloadLimit(context.Background(), "/work/source.bin", destination, -1); err == nil {
+		t.Fatal("DownloadLimit accepted a negative limit")
+	}
+	if fake.downloadCalls != 0 {
+		t.Fatalf("Docker download calls = %d, want zero", fake.downloadCalls)
+	}
+	if _, err := os.Stat(filepath.Dir(destination)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("destination directory created before rejecting limit: %v", err)
+	}
+}
+
+func TestDownloadLimitRejectsOversizedStatBeforeReadingArchive(t *testing.T) {
+	content := &trackingReadCloser{}
+	fake := &fakeClient{download: client.CopyFromContainerResult{
+		Content: content,
+		Stat:    container.PathStat{Name: "source.bin", Size: 9, Mode: 0o600},
+	}}
+	sandbox := startSandbox(t, fake)
+	defer sandbox.stop(context.Background())
+	destination := filepath.Join(sandbox.outputDir, "evaluation", "result.bin")
+	if err := sandbox.DownloadLimit(context.Background(), "/work/source.bin", destination, 8); err == nil {
+		t.Fatal("DownloadLimit accepted oversized Docker stat")
+	}
+	if content.reads != 0 || !content.closed {
+		t.Fatalf("archive reads = %d, closed = %t", content.reads, content.closed)
+	}
+	if _, err := os.Stat(filepath.Dir(destination)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("destination directory created for oversized stat: %v", err)
+	}
+}
+
+func TestDownloadLimitRejectsOversizedArchiveHeaderBeforeWriting(t *testing.T) {
+	archive := archiveFile(t, "source.bin", []byte("123456789"))
+	fake := &fakeClient{download: client.CopyFromContainerResult{
+		Content: io.NopCloser(bytes.NewReader(archive)),
+		Stat:    container.PathStat{Name: "source.bin", Size: 8, Mode: 0o600},
+	}}
+	sandbox := startSandbox(t, fake)
+	defer sandbox.stop(context.Background())
+	destination := filepath.Join(sandbox.outputDir, "evaluation", "result.bin")
+	if err := sandbox.DownloadLimit(context.Background(), "/work/source.bin", destination, 8); err == nil {
+		t.Fatal("DownloadLimit accepted oversized archive header")
+	}
+	if _, err := os.Stat(filepath.Dir(destination)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("destination directory created for oversized header: %v", err)
+	}
+}
+
+func TestDownloadLimitPublishesFileWithinLimit(t *testing.T) {
+	archive := archiveFile(t, "source.bin", []byte("download"))
+	fake := &fakeClient{download: client.CopyFromContainerResult{
+		Content: io.NopCloser(bytes.NewReader(archive)),
+		Stat:    container.PathStat{Name: "source.bin", Size: 8, Mode: 0o600},
+	}}
+	sandbox := startSandbox(t, fake)
+	defer sandbox.stop(context.Background())
+	destination := filepath.Join(sandbox.outputDir, "evaluation", "result.bin")
+	if err := sandbox.DownloadLimit(context.Background(), "/work/source.bin", destination, 8); err != nil {
+		t.Fatalf("DownloadLimit() error = %v", err)
+	}
+	content, err := os.ReadFile(destination)
+	if err != nil || string(content) != "download" {
+		t.Fatalf("download = %q, %v", content, err)
+	}
+	info, err := os.Stat(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("download mode = %v", info.Mode())
+	}
+}
+
+type trackingReadCloser struct {
+	reads  int
+	closed bool
+}
+
+func (r *trackingReadCloser) Read([]byte) (int, error) {
+	r.reads++
+	return 0, errors.New("unexpected archive read")
+}
+
+func (r *trackingReadCloser) Close() error {
+	r.closed = true
+	return nil
+}
+
+func TestUploadUnblocksArchiveProducerWhenDockerRejectsStream(t *testing.T) {
+	uploadFailure := errors.New("copy rejected")
+	fake := &fakeClient{uploadErr: uploadFailure}
+	sandbox := startSandbox(t, fake)
+	defer sandbox.stop(context.Background())
+	source := filepath.Join(t.TempDir(), "source.bin")
+	if err := os.WriteFile(source, make([]byte, 1<<20), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	finished := make(chan error, 1)
+	go func() { finished <- sandbox.Upload(context.Background(), source, "/work/destination.bin") }()
+	select {
+	case err := <-finished:
+		if !errors.Is(err, uploadFailure) {
+			t.Fatalf("Upload() error = %v, want %v", err, uploadFailure)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Upload blocked after Docker stopped reading its archive stream")
 	}
 }
 

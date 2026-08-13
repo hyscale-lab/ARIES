@@ -106,7 +106,7 @@ func TestSetupPreparesBackendBeforeSideEffects(t *testing.T) {
 	root := t.TempDir()
 	profile := filepath.Join(root, "profile.json")
 	versions := filepath.Join(root, "versions.json")
-	if err := os.WriteFile(versions, []byte(`{"terminalbench2":{"repository_url":"https://example.invalid/repo.git","revision":"0123456789abcdef0123456789abcdef01234567"},"deepresearchbench":{"repository_url":"https://example.invalid/deep-research-bench.git","revision":"fedcba9876543210fedcba9876543210fedcba98"},"openclaw":{"image":"ghcr.io/openclaw/openclaw:2026.7.1"},"hermes":{"image":"docker.io/nousresearch/hermes-agent:v2026.5.29.2"}}`), 0600); err != nil {
+	if err := os.WriteFile(versions, []byte(`{"terminalbench2":{"repository_url":"https://example.invalid/repo.git","revision":"0123456789abcdef0123456789abcdef01234567"},"deepresearchbench":{"repository_url":"https://example.invalid/deep-research-bench.git","revision":"fedcba9876543210fedcba9876543210fedcba98"},"swebenchpro":{"dataset_repository_url":"https://example.invalid/swe-bench-pro-data.git","dataset_revision":"1111111111111111111111111111111111111111","evaluator_repository_url":"https://example.invalid/swe-bench-pro-evaluator.git","evaluator_revision":"2222222222222222222222222222222222222222"},"openclaw":{"image":"ghcr.io/openclaw/openclaw:2026.7.1"},"hermes":{"image":"docker.io/nousresearch/hermes-agent:v2026.5.29.2"}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	content := `{"name":"test","versions_file":"versions.json","benchmark":{"type":"terminalbench2","root":"root","tasks":["a"]},"harness":{"type":"openclaw"},"sandbox":{"type":"docker"},"bridge":{"type":"openclaw-ssh"},"runtime":{"backend":"deepseek","mode":"external"},"model":{"id":"m","base_url":"https://example.invalid","api_key_env":"KEY"},"output_dir":"runs"}`
@@ -186,8 +186,10 @@ func TestSetupRetriesIncompletePreparationWithoutReadinessMarker(t *testing.T) {
 		PrepareBackend: func(cfg config.Config, _ string) (PreparedBackend, error) {
 			return PreparedBackend{Model: cfg.CoreModel()}, nil
 		},
-		SetupBenchmark:       func(context.Context, config.Config) error { return nil },
-		LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) { return nil, nil },
+		SetupBenchmark: func(context.Context, config.Config) error { return nil },
+		LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
+			return nil, nil
+		},
 		PullImages: func(context.Context, []string) error {
 			pullCalls++
 			if pullCalls == 1 {
@@ -219,10 +221,16 @@ func TestRunCancellationDuringPreparationHasNoDownstreamEffects(t *testing.T) {
 		PrepareBackend: func(cfg config.Config, _ string) (PreparedBackend, error) {
 			return PreparedBackend{Model: cfg.CoreModel()}, nil
 		},
-		SetupBenchmark:       func(ctx context.Context, _ config.Config) error { return ctx.Err() },
-		LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) { downstream++; return nil, nil },
-		PullImages:           func(context.Context, []string) error { downstream++; return nil },
-		NewBenchmark:         func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) { downstream++; return nil, nil },
+		SetupBenchmark: func(ctx context.Context, _ config.Config) error { return ctx.Err() },
+		LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
+			downstream++
+			return nil, nil
+		},
+		PullImages: func(context.Context, []string) error { downstream++; return nil },
+		NewBenchmark: func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
+			downstream++
+			return nil, nil
+		},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -274,7 +282,9 @@ func (*stubResources) Close() error                                           { 
 
 func TestBuildTaskExperimentCreatesFreshFourRoleGraphs(t *testing.T) {
 	wiring := Wiring{
-		NewBenchmark: func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) { return &stubBenchmark{}, nil },
+		NewBenchmark: func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
+			return &stubBenchmark{}, nil
+		},
 		NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
 			h := &stubHarness{}
 			return HarnessInstance{Harness: h, Close: func() error { return nil }}, nil
@@ -317,7 +327,9 @@ func TestBuildTaskExperimentCreatesFreshFourRoleGraphs(t *testing.T) {
 func TestBuildTaskExperimentUnwindsPartialConstruction(t *testing.T) {
 	var events []string
 	wiring := Wiring{
-		NewBenchmark: func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) { return &stubBenchmark{}, nil },
+		NewBenchmark: func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
+			return &stubBenchmark{}, nil
+		},
 		NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
 			return HarnessInstance{Harness: &stubHarness{}, Close: func() error { events = append(events, "harness"); return errors.New("harness close") }}, nil
 		},

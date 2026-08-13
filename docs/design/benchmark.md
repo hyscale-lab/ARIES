@@ -31,10 +31,10 @@ flowchart TB
     A --> HO --> O
 ```
 
-The current implementations are Terminal-Bench 2 and Deep Research Bench, both
-from an exact pinned checkout. Terminal-Bench 2's task environment images and
-workdirs are derived from the selected task data; setup verifies the pinned
-checkout and selected task inputs before a run.
+The current implementations are Terminal-Bench 2, Deep Research Bench, and the
+public SWE-bench Pro split, all from exact pinned sources. Terminal-Bench 2's
+task environment images and workdirs are derived from the selected task data;
+setup verifies the pinned checkout and selected task inputs before a run.
 
 Deep Research Bench has no sandbox-resident private verifier tree. Its private
 material is a reference report and RACE-dimension rubric compared by an
@@ -51,6 +51,35 @@ cited URL host-side through the Jina AI Reader API, and validates the claim
 against the fetched content with its own judge model. FACT is strictly
 additive — configuring it (or not) never changes the RACE-derived score,
 reward, or status.
+
+SWE-bench Pro uses two independent pins: the public dataset and the official
+open-source evaluator. Each dataset row supplies the base revision, task image
+tag, problem statement, requirements, new-interface description, selected test
+files, and required `FAIL_TO_PASS`/`PASS_TO_PASS` tests. Before the bridge is
+started, the benchmark captures the selected verifier files and the image's
+initial ignored build artifacts into private host snapshots, restores the base
+worktree, removes local remotes, refs, reflogs, and unreachable future objects,
+and proves the gold revision is not locally reachable. The task image still
+has network access for the agent workflow, so this local-history sanitization
+does not prevent an agent from deliberately retrieving public upstream data.
+
+After both isolation gates, evaluation first captures the candidate patch,
+restores the base worktree and initial ignored-artifact snapshot, applies the
+candidate, then injects the private verifier snapshot and pinned task-specific
+script and parser. A task resolves only when every required `FAIL_TO_PASS` and
+`PASS_TO_PASS` test is reported `PASSED`. See the
+[SWE-bench Pro guide](../benchmarks/swe-bench-pro.md) for setup, artifacts, and
+scope limitations.
+
+SWE-bench Pro runs agent and test commands as numeric UID/GID `65532:65532`
+with `no-new-privileges`, while benchmark-owned sanitation and parsing use
+explicit root commands. Evaluation restores private sanitized Git metadata
+before bounded candidate capture, clears residual agent processes before
+private staging and after testing, rejects symlink-traversing verifier paths,
+makes injected tests root-owned and read-only, and streams bounded verifier
+logs directly to private host artifacts. The parser uses an empty environment
+and isolated Python mode, and all private container staging is scrubbed on
+return.
 
 ## Customization & Contribution Guide
 

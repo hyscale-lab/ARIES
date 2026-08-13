@@ -87,7 +87,7 @@ implementations:
 | Role or service | Implementation |
 | --- | --- |
 | Agent harness | OpenClaw (text and realtime voice modes); Hermes (text) |
-| Benchmark | Terminal-Bench 2; Deep Research Bench |
+| Benchmark | Terminal-Bench 2; Deep Research Bench; the 731-task public SWE-bench Pro split |
 | Tool sandbox | Docker, using the Moby Go SDK |
 | Tool bridge | OpenClaw–Docker SSH bridge; Hermes–Docker SSH bridge |
 | Model service | External DeepSeek; external or ARIES-managed SGLang |
@@ -115,6 +115,11 @@ contact an external model endpoint.
 The DeepSeek example requires an API key and can incur charges. The
 [Quick start](docs/quick-start.md) covers secure credential setup, the first
 run, SGLang alternatives, result inspection, and troubleshooting.
+
+For repository-level software-engineering tasks, see the
+[SWE-bench Pro guide](docs/benchmarks/swe-bench-pro.md). Its setup additionally
+requires Git LFS and access to the pinned public dataset, evaluator repository,
+and selected `linux/amd64` task images.
 
 ## Trace dataset
 

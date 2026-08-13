@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"io"
 
 	"github.com/hyscale-lab/aries/pkg/core"
 )
@@ -33,6 +34,18 @@ type Sandbox interface {
 	Exec(context.Context, core.Command) (core.CommandResult, error)
 	Upload(context.Context, string, string) error
 	Download(context.Context, string, string) error
+}
+
+// LimitedDownloader is an optional sandbox capability for downloads that must
+// be rejected before more than maxBytes can be written to the host.
+type LimitedDownloader interface {
+	DownloadLimit(ctx context.Context, source, destination string, maxBytes int64) error
+}
+
+// StreamExecutor is an optional sandbox capability for keeping command output
+// outside an agent-writable container filesystem.
+type StreamExecutor interface {
+	ExecStream(ctx context.Context, command core.Command, stdin io.Reader, stdout, stderr io.Writer) (core.CommandResult, error)
 }
 
 // ToolBridge grants and then positively revokes harness access to a sandbox.
