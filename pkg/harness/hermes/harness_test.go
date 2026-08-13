@@ -628,6 +628,13 @@ func TestVoiceTranscribeSynthesizesAudioAndRunsTranscriptAsAgentMessage(t *testi
 	if speechRequest.Text != "fix the git repository by voice" || speechRequest.Model != "gpt-4o-mini-tts" || speechRequest.Voice != "alloy" || speechRequest.Format != "wav" {
 		t.Fatalf("speech request = %#v", speechRequest)
 	}
+	retainedConfig, err := os.ReadFile(filepath.Join(manager.outputDir, request.TaskID, "harness", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(retainedConfig, []byte("provider: \"openai\"")) || !bytes.Contains(retainedConfig, []byte("model: \"gpt-4o-mini-transcribe\"")) {
+		t.Fatalf("config is missing voice STT settings:\n%s", retainedConfig)
+	}
 
 	runtimeEntries := archiveContents(t, runtimeArchive)
 	if !bytes.Equal(runtimeEntries[strings.TrimPrefix(voiceKeyPath, "/")], voiceSecret) {

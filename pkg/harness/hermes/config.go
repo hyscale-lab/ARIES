@@ -49,7 +49,7 @@ const (
 // Terminal settings are deliberately absent. Hermes resolves its backend from
 // environment variables only (tools/terminal_tool.py::_get_env_config), so the
 // SSH target is supplied through containerEnvironment below.
-func renderConfig(model core.ModelConfig, maxTurns int, webSearchEnabled, extractEnabled, subagentsEnabled bool, maxConcurrentSubagents int) ([]byte, error) {
+func renderConfig(model core.ModelConfig, maxTurns int, webSearchEnabled, extractEnabled, subagentsEnabled bool, maxConcurrentSubagents int, voiceSTT *VoiceSTTOptions) ([]byte, error) {
 	if err := validateModel(model); err != nil {
 		return nil, err
 	}
@@ -82,6 +82,16 @@ func renderConfig(model core.ModelConfig, maxTurns int, webSearchEnabled, extrac
 	} else if maxConcurrentSubagents > 0 {
 		output.WriteString("\ndelegation:\n")
 		output.WriteString("  max_concurrent_children: " + strconv.Itoa(maxConcurrentSubagents) + "\n")
+	}
+	if voiceSTT != nil {
+		output.WriteString("\nstt:\n")
+		output.WriteString("  enabled: true\n")
+		output.WriteString("  provider: " + yamlString(voiceSTT.Provider) + "\n")
+		output.WriteString("  openai:\n")
+		output.WriteString("    model: " + yamlString(voiceSTT.Model) + "\n")
+		output.WriteString("  local:\n")
+		output.WriteString("    model: " + yamlString(voiceSTT.Model) + "\n")
+		output.WriteString("    language: " + yamlString(voiceSTT.Language) + "\n")
 	}
 	output.WriteString("\ndisplay:\n")
 	output.WriteString("  streaming: false\n")
