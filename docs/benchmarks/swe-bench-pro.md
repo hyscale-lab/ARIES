@@ -44,11 +44,13 @@ Prerequisites beyond the normal ARIES requirements are:
 - a Linux host able to run the published `linux/amd64` task images;
 - enough disk and memory for the selected repository image.
 
-Build and prewarm the checked-in one-task profile from the repository root:
+Build and prewarm either checked-in one-task profile from the repository root:
 
 ```sh
 make build
-./bin/aries setup profiles/openclaw-swebenchpro-smoke1-deepseek.json
+./bin/aries setup profiles/openclaw-sbpro-smoke1-deepseek.json
+# Or use Hermes:
+./bin/aries setup profiles/hermes-sbpro-smoke1-deepseek.json
 ```
 
 `setup` is idempotent. It installs or verifies the two pinned repositories and
@@ -56,7 +58,9 @@ pulls the selected task and harness images, but does not contact the external
 model endpoint or admit task work. Run the same profile with:
 
 ```sh
-./bin/aries profiles/openclaw-swebenchpro-smoke1-deepseek.json
+./bin/aries profiles/openclaw-sbpro-smoke1-deepseek.json
+# Or use Hermes:
+./bin/aries profiles/hermes-sbpro-smoke1-deepseek.json
 ```
 
 The example uses DeepSeek and therefore needs the credential described in the
