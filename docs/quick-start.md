@@ -144,6 +144,15 @@ installed elsewhere, ARIES reads `DEEPSEEK_API_KEY` from the environment. If a
 repository-local file exists but is invalid, ARIES fails closed rather than
 falling back.
 
+This file convenience is not limited to a DeepSeek-backed harness: it also
+applies whenever a benchmark's `judge` block is genuinely official DeepSeek
+(`provider: "deepseek"`, `base_url: "https://api.deepseek.com"`, and a
+supported model), even if `runtime.backend` is `sglang` — e.g. SWE-Atlas QA's
+`profiles/openclaw-sweatlasqa-smoke1-sglang.json`, which runs its agent
+against a local SGLang server but grades with a DeepSeek judge. Any other
+credential (SGLang's own `api_key_env`, for instance) is always read from the
+environment regardless.
+
 ### External SGLang
 
 The checked-in SGLang profile keeps experiment configuration in JSON and

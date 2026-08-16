@@ -74,7 +74,7 @@ func TestExplicitCompositionSwitches(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(source)
-	for _, value := range []string{`case "terminalbench2"`, `case "openclaw"`, `case "hermes"`, `case "docker"`, `case "openclaw-ssh"`, `case "hermes-ssh"`, `case "deepseek"`, `case "sglang"`} {
+	for _, value := range []string{`case "terminalbench2"`, `case "sweatlasqa"`, `case "openclaw"`, `case "hermes"`, `case "docker"`, `case "openclaw-ssh"`, `case "hermes-ssh"`, `case "deepseek"`, `case "sglang"`} {
 		if !strings.Contains(text, value) {
 			t.Fatalf("missing explicit switch %s", value)
 		}
@@ -110,6 +110,18 @@ func TestValidateComponentsRejectsEveryUnsupportedSelector(t *testing.T) {
 				t.Fatalf("err=%v", err)
 			}
 		})
+	}
+}
+
+func TestValidateComponentsAcceptsSWEAtlasQA(t *testing.T) {
+	cfg := config.Config{
+		Benchmark: config.BenchmarkConfig{Type: "sweatlasqa"},
+		Harness:   config.HarnessConfig{Type: "openclaw"},
+		Sandbox:   config.SandboxConfig{Type: "docker"},
+		Bridge:    config.BridgeConfig{Type: "openclaw-ssh"},
+	}
+	if err := validateComponents(cfg); err != nil {
+		t.Fatalf("err=%v", err)
 	}
 }
 

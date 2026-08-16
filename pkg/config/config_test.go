@@ -19,7 +19,7 @@ const validConfig = `{
   "model":{"id":"fake","base_url":"http://127.0.0.1:8080","api_key_env":"DEEPSEEK_API_KEY"}
 }`
 
-const validVersions = `{"terminalbench2":{"repository_url":"https://example.invalid/terminal-bench-2.git","revision":"0123456789abcdef0123456789abcdef01234567"},"deepresearchbench":{"repository_url":"https://example.invalid/deep-research-bench.git","revision":"fedcba9876543210fedcba9876543210fedcba98"},"openclaw":{"image":"ghcr.io/openclaw/openclaw:2026.7.1"},"hermes":{"image":"docker.io/nousresearch/hermes-agent:v2026.5.29.2"}}`
+const validVersions = `{"terminalbench2":{"repository_url":"https://example.invalid/terminal-bench-2.git","revision":"0123456789abcdef0123456789abcdef01234567"},"deepresearchbench":{"repository_url":"https://example.invalid/deep-research-bench.git","revision":"fedcba9876543210fedcba9876543210fedcba98"},"sweatlasqa":{"repository_url":"https://example.invalid/swe-atlas.git","revision":"1111111111111111111111111111111111111111"},"openclaw":{"image":"ghcr.io/openclaw/openclaw:2026.7.1"},"hermes":{"image":"docker.io/nousresearch/hermes-agent:v2026.5.29.2"}}`
 
 func TestNormalizedRuntimeSchema(t *testing.T) {
 	cfg, err := Decode(strings.NewReader(validConfig))
@@ -466,7 +466,7 @@ func TestCheckedInProfilesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 9 {
+	if len(paths) != 10 {
 		t.Fatalf("profiles=%v", paths)
 	}
 	for _, path := range paths {
@@ -528,7 +528,7 @@ func TestDecodeVersionsValidation(t *testing.T) {
 // image is only an error for the harness that actually needs it. An image that
 // is present is still pin-validated.
 func TestVersionsRequireOnlyTheSelectedHarnessImage(t *testing.T) {
-	withoutHermes := `{"terminalbench2":{"repository_url":"https://example.invalid/terminal-bench-2.git","revision":"0123456789abcdef0123456789abcdef01234567"},"deepresearchbench":{"repository_url":"https://example.invalid/deep-research-bench.git","revision":"fedcba9876543210fedcba9876543210fedcba98"},"openclaw":{"image":"ghcr.io/openclaw/openclaw:2026.7.1"}}`
+	withoutHermes := `{"terminalbench2":{"repository_url":"https://example.invalid/terminal-bench-2.git","revision":"0123456789abcdef0123456789abcdef01234567"},"deepresearchbench":{"repository_url":"https://example.invalid/deep-research-bench.git","revision":"fedcba9876543210fedcba9876543210fedcba98"},"sweatlasqa":{"repository_url":"https://example.invalid/swe-atlas.git","revision":"1111111111111111111111111111111111111111"},"openclaw":{"image":"ghcr.io/openclaw/openclaw:2026.7.1"}}`
 	versions, err := DecodeVersions(strings.NewReader(withoutHermes))
 	if err != nil {
 		t.Fatalf("catalog without hermes.image was rejected: %v", err)

@@ -247,6 +247,7 @@ func (c Config) CoreModel() core.ModelConfig {
 type Versions struct {
 	TerminalBench2    TerminalBench2Versions    `json:"terminalbench2"`
 	DeepResearchBench DeepResearchBenchVersions `json:"deepresearchbench"`
+	SWEAtlas          SWEAtlasVersions          `json:"sweatlasqa"`
 	OpenClaw          OpenClawVersions          `json:"openclaw"`
 	Hermes            HermesVersions            `json:"hermes"`
 }
@@ -257,6 +258,11 @@ type TerminalBench2Versions struct {
 }
 
 type DeepResearchBenchVersions struct {
+	RepositoryURL string `json:"repository_url"`
+	Revision      string `json:"revision"`
+}
+
+type SWEAtlasVersions struct {
 	RepositoryURL string `json:"repository_url"`
 	Revision      string `json:"revision"`
 }
@@ -575,6 +581,33 @@ func (c *Config) validateBenchmarkType() error {
 			return errors.New("fact must not be set for terminalbench2")
 		}
 		return nil
+	case "sweatlasqa":
+		judge := c.Benchmark.Judge
+		if judge == nil {
+			return errors.New("benchmark.judge is required for sweatlasqa")
+		}
+		if judge.Enabled != nil {
+			return errors.New("judge.enabled must not be set for sweatlasqa; grading cannot be disabled")
+		}
+		if strings.TrimSpace(judge.Provider) == "" {
+			return errors.New("judge.provider is required for sweatlasqa")
+		}
+		if err := validateHTTPBaseURL("judge.base_url", judge.BaseURL); err != nil {
+			return err
+		}
+		if strings.TrimSpace(judge.ID) == "" {
+			return errors.New("judge.model is required for sweatlasqa")
+		}
+		if !validEnvName(judge.APIKeyEnv) {
+			return errors.New("judge.api_key_env must be an environment variable name")
+		}
+		if c.Benchmark.Environment != nil {
+			return errors.New("benchmark.environment must not be set for sweatlasqa")
+		}
+		if c.Benchmark.Fact != nil {
+			return errors.New("fact must not be set for sweatlasqa")
+		}
+		return nil
 	default:
 		return nil
 	}
@@ -775,6 +808,9 @@ func (c Versions) validate() error {
 		return err
 	}
 	if err := validateRepositoryPin("deepresearchbench", c.DeepResearchBench.RepositoryURL, c.DeepResearchBench.Revision); err != nil {
+		return err
+	}
+	if err := validateRepositoryPin("sweatlasqa", c.SWEAtlas.RepositoryURL, c.SWEAtlas.Revision); err != nil {
 		return err
 	}
 	if err := containerimage.ValidatePinnedTagOnly(c.OpenClaw.Image); err != nil {

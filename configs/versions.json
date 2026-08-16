@@ -7,6 +7,10 @@
     "repository_url": "https://github.com/Ayanami0730/deep_research_bench.git",
     "revision": "469cce54ea7f6a63c163d3d9fec879cf289ec484"
   },
+  "sweatlasqa": {
+    "repository_url": "https://github.com/scaleapi/SWE-Atlas",
+    "revision": "6de82c3603fb9e254170b440d7560441eb257176"
+  },
   "openclaw": {
     "image": "ghcr.io/openclaw/openclaw:2026.7.1"
   },

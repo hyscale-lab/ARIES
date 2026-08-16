@@ -10,6 +10,7 @@ import (
 	"github.com/hyscale-lab/aries/internal/app"
 	runtimesglang "github.com/hyscale-lab/aries/internal/modelruntime/sglang"
 	"github.com/hyscale-lab/aries/pkg/benchmark/deepresearchbench"
+	"github.com/hyscale-lab/aries/pkg/benchmark/sweatlas"
 	"github.com/hyscale-lab/aries/pkg/benchmark/terminalbench"
 	"github.com/hyscale-lab/aries/pkg/bridge/hermesssh"
 	"github.com/hyscale-lab/aries/pkg/bridge/openclawssh"
@@ -51,7 +52,7 @@ func commandWiring() app.Wiring {
 
 func validateComponents(cfg config.Config) error {
 	switch cfg.Benchmark.Type {
-	case "terminalbench2", "deepresearchbench":
+	case "terminalbench2", "deepresearchbench", "sweatlasqa":
 	default:
 		return fmt.Errorf("unsupported benchmark type %q", cfg.Benchmark.Type)
 	}
@@ -150,6 +151,23 @@ func newBenchmark(cfg config.Config, outputRoot, logicalID, occurrenceID string,
 		}
 		if reason := benchmark.FactSkipReason(); reason != "" {
 			fmt.Fprintf(os.Stderr, "warning: %s\n", reason)
+		}
+		return benchmark, nil
+	case "sweatlasqa":
+		var executionIDs []string
+		if occurrenceID != logicalID {
+			executionIDs = []string{occurrenceID}
+		}
+		// validateBenchmarkType already guarantees cfg.Benchmark.Judge is
+		// non-nil for this type by the time wiring runs.
+		benchmark, err := sweatlas.New(sweatlas.Options{
+			Root: cfg.Benchmark.Root, TaskIDs: []string{logicalID}, ExecutionTaskIDs: executionIDs, OutputDir: outputRoot,
+			Revision:     cfg.Versions.SWEAtlas.Revision,
+			Judge:        cfg.Benchmark.Judge.CoreModel(),
+			APIKeyLookup: lookup,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("construct sweatlasqa benchmark: %w", err)
 		}
 		return benchmark, nil
 	default:
@@ -328,8 +346,12 @@ func setupBenchmark(ctx context.Context, cfg config.Config) error {
 	switch cfg.Benchmark.Type {
 	case "deepresearchbench":
 		return deepresearchbench.Setup(ctx, cfg.Benchmark.Root, cfg.Versions.DeepResearchBench.RepositoryURL, cfg.Versions.DeepResearchBench.Revision)
-	default:
+	case "sweatlasqa":
+		return sweatlas.Setup(ctx, cfg.Benchmark.Root, cfg.Versions.SWEAtlas.RepositoryURL, cfg.Versions.SWEAtlas.Revision)
+	case "terminalbench2":
 		return terminalbench.Setup(ctx, cfg.Benchmark.Root, cfg.Versions.TerminalBench2.RepositoryURL, cfg.Versions.TerminalBench2.Revision)
+	default:
+		return fmt.Errorf("unsupported benchmark type %q", cfg.Benchmark.Type)
 	}
 }
 
@@ -361,7 +383,24 @@ func loadPreparationTasks(ctx context.Context, cfg config.Config, taskIDs []stri
 			return nil, fmt.Errorf("load deepresearchbench tasks: %w", err)
 		}
 		return tasks, nil
-	default:
+	case "sweatlasqa":
+		// validateBenchmarkType already guarantees cfg.Benchmark.Judge is
+		// non-nil for this type by the time wiring runs.
+		benchmark, err := sweatlas.New(sweatlas.Options{
+			Root: cfg.Benchmark.Root, TaskIDs: taskIDs, OutputDir: cfg.OutputDir,
+			Revision:     cfg.Versions.SWEAtlas.Revision,
+			Judge:        cfg.Benchmark.Judge.CoreModel(),
+			APIKeyLookup: lookup,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("validate sweatlasqa profile: %w", err)
+		}
+		tasks, err := benchmark.Tasks(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("load sweatlasqa tasks: %w", err)
+		}
+		return tasks, nil
+	case "terminalbench2":
 		benchmark, err := terminalbench.New(terminalbench.Options{Root: cfg.Benchmark.Root, TaskIDs: taskIDs, OutputDir: cfg.OutputDir, Revision: cfg.Versions.TerminalBench2.Revision})
 		if err != nil {
 			return nil, fmt.Errorf("validate terminalbench2 profile: %w", err)
@@ -371,5 +410,7 @@ func loadPreparationTasks(ctx context.Context, cfg config.Config, taskIDs []stri
 			return nil, fmt.Errorf("load terminalbench2 tasks: %w", err)
 		}
 		return tasks, nil
+	default:
+		return nil, fmt.Errorf("unsupported benchmark type %q", cfg.Benchmark.Type)
 	}
 }
