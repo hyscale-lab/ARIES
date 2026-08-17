@@ -90,8 +90,9 @@ The verifier, ignored-build, and sanitized-Git snapshots are host artifacts
 outside both the task and harness containers. They are mode `0600` under a
 mode `0700` private directory. The harness container has no bind mount to the
 run output directory. Docker applies `no-new-privileges` to task containers
-using the non-root agent identity; benchmark-owned preparation and evaluation
-commands explicitly use root.
+using the non-root agent identity and positively confirms the option through
+post-start container inspection before returning the live sandbox.
+Benchmark-owned preparation and evaluation commands explicitly use root.
 
 This is local hardening, not an embargo on public information. SWE-bench Pro is
 a public benchmark and the task network remains enabled so the harness can use

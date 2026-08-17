@@ -72,8 +72,10 @@ script and parser. A task resolves only when every required `FAIL_TO_PASS` and
 scope limitations.
 
 SWE-bench Pro runs agent and test commands as numeric UID/GID `65532:65532`
-with `no-new-privileges`, while benchmark-owned sanitation and parsing use
-explicit root commands. Evaluation restores private sanitized Git metadata
+with `no-new-privileges`. Docker startup positively confirms that option from
+container inspection before returning the live sandbox. Benchmark-owned
+sanitation and parsing use explicit root commands. Evaluation restores private
+sanitized Git metadata
 before bounded candidate capture, clears residual agent processes before
 private staging and after testing, rejects symlink-traversing verifier paths,
 makes injected tests root-owned and read-only, and streams bounded verifier

@@ -22,8 +22,10 @@ history sanitization is not a claim that publicly hosted data cannot be
 refetched.
 
 SWE-bench Pro task commands default to numeric UID/GID `65532:65532` with
-`no-new-privileges`; benchmark-owned preparation and evaluation commands
-explicitly use root. Evaluation restores a private sanitized-Git baseline
+`no-new-privileges`; Docker startup positively confirms that security option
+from container inspection before returning the live sandbox. Benchmark-owned
+preparation and evaluation commands explicitly use root. Evaluation restores a
+private sanitized-Git baseline
 before bounded candidate capture, clears residual agent-UID processes before
 private staging and after tests, installs verifier files through non-symlink
 parents as root-owned read-only inputs, streams bounded test logs host-side,

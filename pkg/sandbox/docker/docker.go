@@ -304,6 +304,9 @@ func (s *Sandbox) verifyLive(ctx context.Context) error {
 	if c.Config == nil || c.Config.WorkingDir != s.workdir || !sameIdentity(c.Config.Labels, s.runID, s.taskID) {
 		return errors.New("inspect started docker task container: identity or workdir does not match")
 	}
+	if s.execUser != "" && (c.HostConfig == nil || !noNewPrivilegesEnabled(c.HostConfig.SecurityOpt)) {
+		return errors.New("inspect started docker task container: no-new-privileges is not enabled")
+	}
 	if c.NetworkSettings == nil || c.NetworkSettings.Networks[s.networkName] == nil {
 		return fmt.Errorf("inspect started docker task container: network %q is not attached", s.networkName)
 	}
@@ -315,6 +318,17 @@ func (s *Sandbox) verifyLive(ctx context.Context) error {
 		return errors.New("inspect started docker task network: identity labels do not match")
 	}
 	return nil
+}
+
+func noNewPrivilegesEnabled(options []string) bool {
+	return slices.ContainsFunc(options, func(option string) bool {
+		switch option {
+		case "no-new-privileges", "no-new-privileges=true", "no-new-privileges:true":
+			return true
+		default:
+			return false
+		}
+	})
 }
 
 func sameIdentity(labels map[string]string, runID, taskID string) bool {

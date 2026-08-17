@@ -255,6 +255,53 @@ func TestDockerSandboxRealLifecycle(t *testing.T) {
 	}
 }
 
+func TestDockerSandboxVerifiesNoNewPrivileges(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	api, err := client.New(client.FromEnv, client.WithUserAgent("aries-no-new-privileges-integration-test/1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.Ping(ctx, client.PingOptions{}); err != nil {
+		t.Fatalf("Docker daemon is required for integration tests: %v", err)
+	}
+	ensureFixtureImage(t, ctx, api)
+
+	manager, err := New(Options{OutputDir: t.TempDir(), CleanupTimeout: 20 * time.Second, Logger: logrus.New()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := manager.Start(ctx, core.SandboxRequest{
+		RunID: "no-new-privileges-integration", TaskID: "non-root-task",
+		Environment: core.Environment{
+			Image: fixtureImage, Workdir: "/", CPU: 0.5, MemoryMB: 32, StorageMB: 64,
+			ExecUser: "65532:65532",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	sandbox := live.(*Sandbox)
+	t.Cleanup(func() { _ = manager.Stop(context.Background(), live) })
+
+	inspection, err := api.ContainerInspect(ctx, sandbox.ContainerID(), client.ContainerInspectOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspection.Container.HostConfig == nil || !noNewPrivilegesEnabled(inspection.Container.HostConfig.SecurityOpt) {
+		t.Fatalf("container security options = %#v", inspection.Container.HostConfig)
+	}
+	assertExec(t, ctx, sandbox, core.Command{
+		Path: "/bin/sh", Args: []string{"-c", "grep -Eq '^NoNewPrivs:[[:space:]]*1$' /proc/self/status"},
+	}, 0, "", "")
+	if err := manager.Stop(ctx, live); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.ContainerInspect(ctx, sandbox.ContainerID(), client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
+		t.Fatalf("container remains after Stop: %v", err)
+	}
+}
+
 func TestDockerSandboxRootWorkdirLifecycle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

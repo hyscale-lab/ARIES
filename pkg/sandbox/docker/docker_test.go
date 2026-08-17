@@ -168,9 +168,17 @@ func (f *fakeClient) ContainerInspect(context.Context, string, client.ContainerI
 		config = &container.Config{}
 	}
 	return client.ContainerInspectResult{Container: container.InspectResponse{
-		ID: f.containerID, State: &container.State{Running: f.containerLive}, Config: config,
+		ID: f.containerID, State: &container.State{Running: f.containerLive}, Config: config, HostConfig: f.containerOpts.HostConfig,
 		NetworkSettings: &container.NetworkSettings{Networks: map[string]*network.EndpointSettings{f.networkName: {}}},
 	}}, nil
+}
+
+type missingSecurityOptClient struct{ *fakeClient }
+
+func (f *missingSecurityOptClient) ContainerInspect(ctx context.Context, id string, options client.ContainerInspectOptions) (client.ContainerInspectResult, error) {
+	result, err := f.fakeClient.ContainerInspect(ctx, id, options)
+	result.Container.HostConfig = nil
+	return result, err
 }
 
 func (f *fakeClient) ContainerTop(context.Context, string, client.ContainerTopOptions) (client.ContainerTopResult, error) {
@@ -368,6 +376,21 @@ func TestContainerOptionsEnablesNoNewPrivilegesForConfiguredExecUser(t *testing.
 	got := containerOptions(request, sandbox, nil).HostConfig.SecurityOpt
 	if !reflect.DeepEqual(got, []string{"no-new-privileges=true"}) {
 		t.Fatalf("non-root security options = %v", got)
+	}
+}
+
+func TestStartRejectsMissingNoNewPrivilegesForConfiguredExecUser(t *testing.T) {
+	fake := &fakeClient{}
+	manager := testManager(t, fake)
+	manager.client = &missingSecurityOptClient{fakeClient: fake}
+	request := testRequest()
+	request.Environment.ExecUser = "65532:65532"
+	_, err := manager.Start(context.Background(), request)
+	if err == nil || !strings.Contains(err.Error(), "no-new-privileges") {
+		t.Fatalf("Start() error = %v, want missing no-new-privileges", err)
+	}
+	if fake.containerID != "" || fake.networkExists {
+		t.Fatal("failed security verification left Docker resources behind")
 	}
 }
 
