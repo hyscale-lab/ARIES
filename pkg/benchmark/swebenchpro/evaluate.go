@@ -163,7 +163,10 @@ func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner
 	}); err != nil {
 		return finish(err)
 	}
-	if err := proveRestoredGitBaseline(ctx, sandbox, details.baseCommit, details.goldCommit); err != nil {
+	if err := proveRepositoryAtBase(ctx, sandbox, details.baseCommit); err != nil {
+		return finish(err)
+	}
+	if err := proveRepositoryHistoryIsolated(ctx, sandbox, details.goldCommit); err != nil {
 		return finish(err)
 	}
 
@@ -354,39 +357,6 @@ func quiesceAgentProcesses(ctx context.Context, sandbox runner.Sandbox) error {
 		Path: "/bin/sh", Args: []string{"-c", quiesceAgentPredicate, "aries-swebenchpro-quiesce", agentUID}, User: rootExecUser,
 	})
 	return err
-}
-
-func proveRestoredGitBaseline(ctx context.Context, sandbox runner.Sandbox, baseCommit, goldCommit string) error {
-	head, err := execOK(ctx, sandbox, "confirm restored repository HEAD", gitCommand("rev-parse", "--verify", "HEAD"))
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(head.Stdout) != baseCommit {
-		return fmt.Errorf("restored repository HEAD = %q, want base commit %s", strings.TrimSpace(head.Stdout), baseCommit)
-	}
-	for _, proof := range []struct {
-		name    string
-		command core.Command
-	}{
-		{"confirm restored repository remotes absent", gitCommand("remote")},
-		{"confirm restored repository refs absent", gitCommand("for-each-ref", "--format=%(refname)")},
-	} {
-		result, err := execOK(ctx, sandbox, proof.name, proof.command)
-		if err != nil {
-			return err
-		}
-		if result.Stdout != "" {
-			return fmt.Errorf("%s: unexpected output %q", proof.name, result.Stdout)
-		}
-	}
-	result, err := sandbox.Exec(ctx, gitCommand("cat-file", "-e", goldCommit+"^{commit}"))
-	if err != nil {
-		return fmt.Errorf("prove restored gold commit unreachable: %w", err)
-	}
-	if result.ExitCode == 0 {
-		return errors.New("gold commit remains reachable in restored Git baseline")
-	}
-	return nil
 }
 
 func openPrivateArtifact(path string) (*os.File, error) {
