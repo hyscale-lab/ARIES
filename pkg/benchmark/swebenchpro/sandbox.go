@@ -182,7 +182,13 @@ func (b *Benchmark) PrepareSandbox(ctx context.Context, task core.Task, sandbox 
 	if err := purgeRepositoryHistory(ctx, sandbox); err != nil {
 		return err
 	}
-	if err := proveSanitizedRepository(ctx, sandbox, details.baseCommit, details.goldCommit); err != nil {
+	if err := proveRepositoryAtBase(ctx, sandbox, details.baseCommit); err != nil {
+		return err
+	}
+	if err := proveCleanWorktree(ctx, sandbox, "confirm sanitized worktree clean"); err != nil {
+		return err
+	}
+	if err := proveRepositoryHistoryIsolated(ctx, sandbox, details.goldCommit); err != nil {
 		return err
 	}
 	if _, err := execOK(ctx, sandbox, "create private Git baseline staging directory", core.Command{
@@ -350,7 +356,7 @@ func purgeRepositoryHistory(ctx context.Context, sandbox runner.Sandbox) error {
 	return err
 }
 
-func proveSanitizedRepository(ctx context.Context, sandbox runner.Sandbox, baseCommit, goldCommit string) error {
+func proveRepositoryAtBase(ctx context.Context, sandbox runner.Sandbox, baseCommit string) error {
 	head, err := execOK(ctx, sandbox, "confirm repository HEAD", gitCommand("rev-parse", "--verify", "HEAD"))
 	if err != nil {
 		return err
@@ -358,9 +364,10 @@ func proveSanitizedRepository(ctx context.Context, sandbox runner.Sandbox, baseC
 	if strings.TrimSpace(head.Stdout) != baseCommit {
 		return fmt.Errorf("repository HEAD = %q, want base commit %s", strings.TrimSpace(head.Stdout), baseCommit)
 	}
-	if err := proveCleanWorktree(ctx, sandbox, "confirm sanitized worktree clean"); err != nil {
-		return err
-	}
+	return nil
+}
+
+func proveRepositoryHistoryIsolated(ctx context.Context, sandbox runner.Sandbox, goldCommit string) error {
 	for _, proof := range []struct {
 		name    string
 		command core.Command
