@@ -2,6 +2,7 @@ package hermes
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -47,7 +48,7 @@ const (
 // Terminal settings are deliberately absent. Hermes resolves its backend from
 // environment variables only (tools/terminal_tool.py::_get_env_config), so the
 // SSH target is supplied through containerEnvironment below.
-func renderConfig(model core.ModelConfig, maxTurns int, webSearchEnabled, extractEnabled, subagentsEnabled bool, maxConcurrentSubagents int) ([]byte, error) {
+func renderConfig(model core.ModelConfig, maxTurns int, webSearchEnabled, extractEnabled, subagentsEnabled bool, maxConcurrentSubagents int, mcpTools []map[string]interface{}) ([]byte, error) {
 	if err := validateModel(model); err != nil {
 		return nil, err
 	}
@@ -104,6 +105,12 @@ func renderConfig(model core.ModelConfig, maxTurns int, webSearchEnabled, extrac
 		output.WriteString("  search_backend: \"searxng\"\n")
 		if extractEnabled {
 			output.WriteString("  extract_backend: \"tavily\"\n")
+		}
+	}
+	if len(mcpTools) > 0 {
+		toolsBytes, err := json.Marshal(mcpTools)
+		if err == nil {
+			output.WriteString("\ncustom_tools: " + string(toolsBytes) + "\n")
 		}
 	}
 	return output.Bytes(), nil

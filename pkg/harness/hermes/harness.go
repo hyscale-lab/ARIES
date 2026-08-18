@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
+	"github.com/hyscale-lab/aries/internal/harness"
 	"github.com/hyscale-lab/aries/pkg/containerimage"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/runner"
@@ -262,7 +263,18 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		agentTimeout = manager.agentTimeout
 	}
 	extractEnabled := manager.webSearchEnabled && manager.extractAPIKeyEnv != ""
-	configuration, err := renderConfig(request.Model, manager.maxTurns, manager.webSearchEnabled, extractEnabled, manager.subagentsEnabled, manager.maxConcurrentSubagents)
+
+	// Fetch MCP Tools
+	var mcpTools []map[string]interface{}
+	mcpClient, err := harness.NewMCPClient()
+	if err == nil {
+		if err := mcpClient.Start(ctx); err == nil {
+			mcpTools, _ = mcpClient.FetchAndMapTools(ctx)
+			mcpClient.Stop()
+		}
+	}
+
+	configuration, err := renderConfig(request.Model, manager.maxTurns, manager.webSearchEnabled, extractEnabled, manager.subagentsEnabled, manager.maxConcurrentSubagents, mcpTools)
 	if err != nil {
 		return err
 	}

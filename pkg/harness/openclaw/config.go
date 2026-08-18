@@ -38,9 +38,10 @@ const (
 type openClawConfig struct {
 	Gateway gatewayConfig  `json:"gateway"`
 	Models  modelsConfig   `json:"models"`
-	Agents  agentsConfig   `json:"agents"`
-	Tools   toolPolicy     `json:"tools"`
-	Plugins *pluginsConfig `json:"plugins,omitempty"`
+	Agents      agentsConfig             `json:"agents"`
+	Tools       toolPolicy               `json:"tools"`
+	Plugins     *pluginsConfig           `json:"plugins,omitempty"`
+	CustomTools []map[string]interface{} `json:"customTools,omitempty"`
 }
 
 type toolPolicy struct {
@@ -160,7 +161,7 @@ type sshConfig struct {
 	KnownHostsFile        string `json:"knownHostsFile"`
 }
 
-func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, webSearchEnabled, extractEnabled, subagentsEnabled bool, maxConcurrentSubagents int) ([]byte, error) {
+func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, webSearchEnabled, extractEnabled, subagentsEnabled bool, maxConcurrentSubagents int, mcpTools []map[string]interface{}) ([]byte, error) {
 	if err := validateModel(model); err != nil {
 		return nil, err
 	}
@@ -203,6 +204,7 @@ func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, webSearchE
 			},
 		}},
 		Tools: toolPolicy{Deny: denyToolList(subagentsEnabled)},
+		CustomTools: mcpTools,
 	}
 	if subagentsEnabled && maxConcurrentSubagents > 0 {
 		configuration.Agents.Defaults.Subagents = &subagentsConfig{MaxConcurrent: maxConcurrentSubagents}
