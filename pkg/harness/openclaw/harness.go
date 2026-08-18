@@ -28,6 +28,7 @@ import (
 	"github.com/hyscale-lab/aries/pkg/core"
 	gatewayclient "github.com/hyscale-lab/aries/pkg/harness/openclaw/gateway"
 	realtimeclient "github.com/hyscale-lab/aries/pkg/harness/openclaw/realtime"
+	"github.com/hyscale-lab/aries/internal/harness"
 	"github.com/hyscale-lab/aries/pkg/runner"
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
@@ -329,7 +330,16 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 			extractEnabled = true
 		}
 	}
-	configuration, err := renderConfig(request.Model, request.Endpoint, manager.webSearchEnabled, extractEnabled, manager.subagentsEnabled, manager.maxConcurrentSubagents)
+	var mcpTools []map[string]interface{}
+	mcpClient, err := harness.NewMCPClient()
+	if err == nil {
+		if err := mcpClient.Start(ctx); err == nil {
+			mcpTools, _ = mcpClient.FetchAndMapTools(ctx)
+			mcpClient.Stop()
+		}
+	}
+
+	configuration, err := renderConfig(request.Model, request.Endpoint, manager.webSearchEnabled, extractEnabled, manager.subagentsEnabled, manager.maxConcurrentSubagents, mcpTools)
 	if err != nil {
 		clear(extractAPIKey)
 		return err
