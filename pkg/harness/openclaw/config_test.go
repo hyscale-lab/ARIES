@@ -23,7 +23,8 @@ func testModel() core.ModelConfig {
 }
 
 func TestRenderConfigLocksProviderSharedSSHAndPlaceholder(t *testing.T) {
-	content, err := renderConfig(testModel(), testEndpoint(), false, false, false, 0, nil)
+	mockTool := []map[string]interface{}{{"name": "mock_tool", "description": "mock"}}
+	content, err := renderConfig(testModel(), testEndpoint(), false, false, false, 0, mockTool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,6 +42,9 @@ func TestRenderConfigLocksProviderSharedSSHAndPlaceholder(t *testing.T) {
 	}
 	if configuration.Gateway.Auth.Mode != "token" || configuration.Gateway.Auth.Token != "${OPENCLAW_GATEWAY_TOKEN}" || configuration.Gateway.Remote.Token != "${OPENCLAW_GATEWAY_TOKEN}" {
 		t.Fatalf("gateway config = %#v", configuration.Gateway)
+	}
+	if len(configuration.CustomTools) == 0 || configuration.CustomTools[0]["name"] != "mock_tool" {
+		t.Fatalf("config is missing customTools: %#v", configuration.CustomTools)
 	}
 	if configuration.Agents.Defaults.Model.Primary != "aries/deterministic-model" || sandbox.Mode != "all" || sandbox.Scope != "shared" || sandbox.Backend != "ssh" || sandbox.WorkspaceAccess != "rw" {
 		t.Fatalf("agent config = %#v", configuration.Agents.Defaults)
