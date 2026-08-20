@@ -152,7 +152,7 @@ Microsoft, AMD Singapore, Ant Group, and NCSpeech.
 
 ## Community, contributing, and contact
 
-Contributions are welcome through [GitHub issues](https://github.com/hyscale-lab/aries/issues)
+Contributions are welcome through [GitHub issues](https://github.com/hyscale-lab/ARIES/issues)
 and pull requests. Questions and design proposals can use
 the issue tracker so the discussion remains available to the community.
 
@@ -162,7 +162,7 @@ the issue tracker so the discussion remains available to the community.
 - Leonid Kondrashov (leonid001 at e.ntu.edu.sg)
 
 ### GPU, Industry Traces
-- Chengzhi Lu (chengzhi.lu at ntu.edu.sg), 
+- Chengzhi Lu (chengzhi.lu at ntu.edu.sg)
 
 ## Citation
 
