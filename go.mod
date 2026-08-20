@@ -3,7 +3,7 @@ module github.com/hyscale-lab/aries
 go 1.26.5
 
 require (
-	github.com/BurntSushi/toml v1.4.0
+	github.com/BurntSushi/toml v1.6.0
 	github.com/containerd/errdefs v1.0.0
 	github.com/distribution/reference v0.6.0
 	github.com/moby/moby/api v1.55.0
