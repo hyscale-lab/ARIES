@@ -21,7 +21,8 @@ func validEndpoint() core.ToolEndpoint {
 // The credential must reach the container as a ${NAME} reference that Hermes
 // expands at run time, never as a value written into the rendered config.
 func TestRenderConfigReferencesCredentialByName(t *testing.T) {
-	rendered, err := renderConfig(validModel(), 90, false, false, true, 0, nil)
+	mockTool := []map[string]interface{}{{"name": "mock_tool", "description": "mock"}}
+	rendered, err := renderConfig(validModel(), 90, false, false, true, 0, mockTool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,6 +37,9 @@ func TestRenderConfigReferencesCredentialByName(t *testing.T) {
 	}
 	if !strings.Contains(text, "max_turns: 90") || !strings.Contains(text, "- terminal") {
 		t.Fatalf("config is missing agent or toolset settings:\n%s", text)
+	}
+	if !strings.Contains(text, "mock_tool") {
+		t.Fatalf("config is missing custom_tools:\n%s", text)
 	}
 }
 
