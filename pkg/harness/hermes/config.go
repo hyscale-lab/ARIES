@@ -109,9 +109,10 @@ func renderConfig(model core.ModelConfig, maxTurns int, webSearchEnabled, extrac
 	}
 	if len(mcpTools) > 0 {
 		toolsBytes, err := json.Marshal(mcpTools)
-		if err == nil {
-			output.WriteString("\ncustom_tools: " + string(toolsBytes) + "\n")
+		if err != nil {
+			return nil, fmt.Errorf("serialize Hermes custom tools: %w", err)
 		}
+		output.WriteString("\ncustom_tools: " + string(toolsBytes) + "\n")
 	}
 	return output.Bytes(), nil
 }

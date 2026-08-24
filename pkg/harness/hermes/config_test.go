@@ -369,3 +369,26 @@ func TestAgentWrapperExportsExtractKeyWhenEnabled(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderConfigCustomTools(t *testing.T) {
+	tools := []map[string]interface{}{
+		{
+			"name":        "fetch_memory",
+			"description": "Retrieve temporal memory graph context",
+			"parameters": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"query": map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+	}
+	rendered, err := renderConfig(validModel(), 10, false, false, false, 0, tools)
+	if err != nil {
+		t.Fatalf("renderConfig with custom tools failed: %v", err)
+	}
+	if !strings.Contains(string(rendered), "custom_tools:") || !strings.Contains(string(rendered), "fetch_memory") {
+		t.Fatalf("rendered config missing custom_tools:\n%s", rendered)
+	}
+}
+

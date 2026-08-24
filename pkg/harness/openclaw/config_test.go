@@ -313,3 +313,30 @@ func TestLauncherExportsTavilyKeyWhenExtractEnabled(t *testing.T) {
 		t.Fatalf("launcher exports tavily key when extract is disabled: %s", disabledScript)
 	}
 }
+
+func TestRenderConfigCustomTools(t *testing.T) {
+	tools := []map[string]interface{}{
+		{
+			"name":        "memory_query",
+			"description": "Query Smriti knowledge graph",
+			"parameters": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"entity": map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+	}
+	content, err := renderConfig(testModel(), testEndpoint(), false, false, false, 0, tools)
+	if err != nil {
+		t.Fatalf("renderConfig failed: %v", err)
+	}
+	var configuration openClawConfig
+	if err := json.Unmarshal(content, &configuration); err != nil {
+		t.Fatalf("unmarshal openClawConfig failed: %v", err)
+	}
+	if len(configuration.CustomTools) != 1 || configuration.CustomTools[0]["name"] != "memory_query" {
+		t.Fatalf("CustomTools not rendered properly: %#v", configuration.CustomTools)
+	}
+}
+
