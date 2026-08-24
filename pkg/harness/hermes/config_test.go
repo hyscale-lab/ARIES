@@ -378,7 +378,7 @@ func TestRenderConfigMapsOpenAICompatibleBackendsToCustomProvider(t *testing.T) 
 		model := validModel()
 		model.Provider = provider
 		model.BaseURL = "http://vllm.local:8000/v1"
-		rendered, err := renderConfig(model, 10, false, false, true, 0)
+		rendered, err := renderConfig(model, 10, false, false, true, 0, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -390,11 +390,33 @@ func TestRenderConfigMapsOpenAICompatibleBackendsToCustomProvider(t *testing.T) 
 			t.Fatalf("hermesProvider(%s) = %q", provider, got)
 		}
 	}
-	rendered, err := renderConfig(validModel(), 10, false, false, true, 0)
+	rendered, err := renderConfig(validModel(), 10, false, false, true, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(rendered), `provider: "deepseek"`) || hermesProvider("deepseek") != "deepseek" {
 		t.Fatal("deepseek provider was rewritten")
+	}
+}
+
+func TestRenderConfigCustomTools(t *testing.T) {
+	tools := []map[string]interface{}{
+		{
+			"name":        "fetch_memory",
+			"description": "Retrieve temporal memory graph context",
+			"parameters": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"query": map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+	}
+	rendered, err := renderConfig(validModel(), 10, false, false, false, 0, tools)
+	if err != nil {
+		t.Fatalf("renderConfig with custom tools failed: %v", err)
+	}
+	if !strings.Contains(string(rendered), "custom_tools:") || !strings.Contains(string(rendered), "fetch_memory") {
+		t.Fatalf("rendered config missing custom_tools:\n%s", rendered)
 	}
 }
