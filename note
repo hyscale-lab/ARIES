@@ -1,0 +1,20 @@
+# Running ARIES (OpenClaw E2B bridge) in a container on non-Linux hosts
+
+# 1. Provide your model API key on the host (never commit it):
+export DEEPSEEK_API_KEY=sk-...
+
+# 2. Build the image (pick the arch of your host; arm64 for Apple Silicon):
+docker-compose build --build-arg TARGETPLATFORM=linux/arm64
+
+# 3. Run:
+docker-compose up
+
+# Notes / caveats:
+# - The container mounts /var/run/docker.sock, so ARIES spawns the agent and
+#   task sandboxes as sibling containers on your host Docker engine.
+# - The E2B bridge listens inside the ARIES container and the task sandbox
+#   reaches it via its Docker network gateway. On Docker Desktop (macOS/Windows)
+#   host networking is emulated, so if the sandbox cannot reach the bridge,
+#   this is the first thing to debug.
+# - Default profile is profiles/openclaw-tb2-fix-git-deepseek-e2b.json
+#   (bridge: openclaw-e2b, sandbox: docker).
