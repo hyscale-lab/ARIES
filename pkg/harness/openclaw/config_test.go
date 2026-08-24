@@ -23,7 +23,8 @@ func testModel() core.ModelConfig {
 }
 
 func TestRenderConfigLocksProviderSharedSSHAndPlaceholder(t *testing.T) {
-	content, err := renderConfig(testModel(), testEndpoint(), false, false, false, 0)
+	mockTool := []map[string]interface{}{{"name": "mock_tool", "description": "mock"}}
+	content, err := renderConfig(testModel(), testEndpoint(), false, false, false, 0, mockTool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,6 +43,9 @@ func TestRenderConfigLocksProviderSharedSSHAndPlaceholder(t *testing.T) {
 	if configuration.Gateway.Auth.Mode != "token" || configuration.Gateway.Auth.Token != "${OPENCLAW_GATEWAY_TOKEN}" || configuration.Gateway.Remote.Token != "${OPENCLAW_GATEWAY_TOKEN}" {
 		t.Fatalf("gateway config = %#v", configuration.Gateway)
 	}
+	if len(configuration.CustomTools) == 0 || configuration.CustomTools[0]["name"] != "mock_tool" {
+		t.Fatalf("config is missing customTools: %#v", configuration.CustomTools)
+	}
 	if configuration.Agents.Defaults.Model.Primary != "aries/deterministic-model" || sandbox.Mode != "all" || sandbox.Scope != "shared" || sandbox.Backend != "ssh" || sandbox.WorkspaceAccess != "rw" {
 		t.Fatalf("agent config = %#v", configuration.Agents.Defaults)
 	}
@@ -57,7 +61,7 @@ func TestRenderConfigSelectsSGLangProviderWithoutSerializingKey(t *testing.T) {
 	model := testModel()
 	model.Provider = "sglang"
 	model.APIKeyEnv = "SGLANG_API_KEY"
-	content, err := renderConfig(model, testEndpoint(), false, false, false, 0)
+	content, err := renderConfig(model, testEndpoint(), false, false, false, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +82,7 @@ func TestRenderConfigNormalizesAndStrictlyValidatesSGLangBaseURL(t *testing.T) {
 	model := testModel()
 	model.Provider = "sglang"
 	model.BaseURL += "/"
-	content, err := renderConfig(model, testEndpoint(), false, false, false, 0)
+	content, err := renderConfig(model, testEndpoint(), false, false, false, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +95,7 @@ func TestRenderConfigNormalizesAndStrictlyValidatesSGLangBaseURL(t *testing.T) {
 	}
 	for _, invalid := range []string{"http://host/v1/v1", "http://host/v1?", "http://host/v%31"} {
 		model.BaseURL = invalid
-		if _, err := renderConfig(model, testEndpoint(), false, false, false, 0); err == nil {
+		if _, err := renderConfig(model, testEndpoint(), false, false, false, 0, nil); err == nil {
 			t.Fatalf("accepted SGLang base URL %q", invalid)
 		}
 	}
@@ -111,7 +115,7 @@ func TestRenderConfigRejectsInvalidInputs(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			model, endpoint := testModel(), testEndpoint()
 			mutate(&model, &endpoint)
-			if _, err := renderConfig(model, endpoint, false, false, false, 0); err == nil {
+			if _, err := renderConfig(model, endpoint, false, false, false, 0, nil); err == nil {
 				t.Fatal("invalid input was accepted")
 			}
 		})
@@ -121,13 +125,13 @@ func TestRenderConfigRejectsInvalidInputs(t *testing.T) {
 func TestRenderConfigAcceptsLowercaseEnvironmentName(t *testing.T) {
 	model := testModel()
 	model.APIKeyEnv = "aries_fake_api_key"
-	if _, err := renderConfig(model, testEndpoint(), false, false, false, 0); err != nil {
+	if _, err := renderConfig(model, testEndpoint(), false, false, false, 0, nil); err != nil {
 		t.Fatalf("renderConfig() rejected a valid environment name: %v", err)
 	}
 }
 
 func TestRenderConfigOmitsWebSearchWhenDisabled(t *testing.T) {
-	content, err := renderConfig(testModel(), testEndpoint(), false, false, false, 0)
+	content, err := renderConfig(testModel(), testEndpoint(), false, false, false, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +151,7 @@ func TestRenderConfigOmitsWebSearchWhenDisabled(t *testing.T) {
 }
 
 func TestRenderConfigEnablesSearXNGWebSearch(t *testing.T) {
-	content, err := renderConfig(testModel(), testEndpoint(), true, false, false, 0)
+	content, err := renderConfig(testModel(), testEndpoint(), true, false, false, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +179,7 @@ func TestRenderConfigEnablesSearXNGWebSearch(t *testing.T) {
 }
 
 func TestRenderConfigEnablesTavilyExtractAlongsideSearXNGSearch(t *testing.T) {
-	content, err := renderConfig(testModel(), testEndpoint(), true, true, false, 0)
+	content, err := renderConfig(testModel(), testEndpoint(), true, true, false, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +211,7 @@ func TestRenderConfigEnablesTavilyExtractAlongsideSearXNGSearch(t *testing.T) {
 }
 
 func TestRenderConfigIgnoresExtractWhenWebSearchDisabled(t *testing.T) {
-	content, err := renderConfig(testModel(), testEndpoint(), false, true, false, 0)
+	content, err := renderConfig(testModel(), testEndpoint(), false, true, false, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +228,7 @@ func TestRenderConfigIgnoresExtractWhenWebSearchDisabled(t *testing.T) {
 }
 
 func TestRenderConfigAllowsSubagentsWhenEnabled(t *testing.T) {
-	content, err := renderConfig(testModel(), testEndpoint(), false, false, true, 0)
+	content, err := renderConfig(testModel(), testEndpoint(), false, false, true, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +242,7 @@ func TestRenderConfigAllowsSubagentsWhenEnabled(t *testing.T) {
 }
 
 func TestRenderConfigSetsMaxConcurrentSubagentsWhenEnabled(t *testing.T) {
-	content, err := renderConfig(testModel(), testEndpoint(), false, false, true, 2)
+	content, err := renderConfig(testModel(), testEndpoint(), false, false, true, 2, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +256,7 @@ func TestRenderConfigSetsMaxConcurrentSubagentsWhenEnabled(t *testing.T) {
 }
 
 func TestRenderConfigOmitsSubagentsBlockWhenNoLimitSet(t *testing.T) {
-	content, err := renderConfig(testModel(), testEndpoint(), false, false, true, 0)
+	content, err := renderConfig(testModel(), testEndpoint(), false, false, true, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +270,7 @@ func TestRenderConfigOmitsSubagentsBlockWhenNoLimitSet(t *testing.T) {
 }
 
 func TestRenderConfigIgnoresMaxConcurrentWhenSubagentsDisabled(t *testing.T) {
-	content, err := renderConfig(testModel(), testEndpoint(), false, false, false, 2)
+	content, err := renderConfig(testModel(), testEndpoint(), false, false, false, 2, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,3 +313,30 @@ func TestLauncherExportsTavilyKeyWhenExtractEnabled(t *testing.T) {
 		t.Fatalf("launcher exports tavily key when extract is disabled: %s", disabledScript)
 	}
 }
+
+func TestRenderConfigCustomTools(t *testing.T) {
+	tools := []map[string]interface{}{
+		{
+			"name":        "memory_query",
+			"description": "Query Smriti knowledge graph",
+			"parameters": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"entity": map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+	}
+	content, err := renderConfig(testModel(), testEndpoint(), false, false, false, 0, tools)
+	if err != nil {
+		t.Fatalf("renderConfig failed: %v", err)
+	}
+	var configuration openClawConfig
+	if err := json.Unmarshal(content, &configuration); err != nil {
+		t.Fatalf("unmarshal openClawConfig failed: %v", err)
+	}
+	if len(configuration.CustomTools) != 1 || configuration.CustomTools[0]["name"] != "memory_query" {
+		t.Fatalf("CustomTools not rendered properly: %#v", configuration.CustomTools)
+	}
+}
+

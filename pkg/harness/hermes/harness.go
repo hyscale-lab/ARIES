@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
+	"github.com/hyscale-lab/aries/internal/harness"
 	"github.com/hyscale-lab/aries/pkg/containerimage"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/runner"
@@ -163,6 +164,7 @@ type session struct {
 	extractAPIKey []byte
 	runAttempted  bool
 	logPaths      []string
+	mcpClient     *harness.MCPClient
 }
 
 var _ runner.AgentHarness = (*Manager)(nil)
@@ -262,26 +264,56 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		agentTimeout = manager.agentTimeout
 	}
 	extractEnabled := manager.webSearchEnabled && manager.extractAPIKeyEnv != ""
-	configuration, err := renderConfig(request.Model, manager.maxTurns, manager.webSearchEnabled, extractEnabled, manager.subagentsEnabled, manager.maxConcurrentSubagents)
+
+	// Discover and initialize live MCP tools for the session
+	var mcpTools []map[string]interface{}
+	mcpClient, err := harness.NewMCPClient()
+	if err == nil {
+		if err := mcpClient.Start(ctx); err == nil {
+			if tools, err := mcpClient.FetchAndMapTools(ctx); err == nil {
+				mcpTools = tools
+			}
+		} else {
+			_ = mcpClient.Stop()
+			mcpClient = nil
+		}
+	}
+
+	configuration, err := renderConfig(request.Model, manager.maxTurns, manager.webSearchEnabled, extractEnabled, manager.subagentsEnabled, manager.maxConcurrentSubagents, mcpTools)
 	if err != nil {
+		if mcpClient != nil {
+			_ = mcpClient.Stop()
+		}
 		return err
 	}
 	environment, err := containerEnvironment(request.Endpoint, workspaceRoot, manager.terminalTimeout, manager.webSearchEnabled)
 	if err != nil {
+		if mcpClient != nil {
+			_ = mcpClient.Stop()
+		}
 		return err
 	}
 	apiKeySource, ok := manager.apiKeyLookup(request.Model.APIKeyEnv)
 	if !ok {
+		if mcpClient != nil {
+			_ = mcpClient.Stop()
+		}
 		clear(apiKeySource)
 		return fmt.Errorf("Hermes API-key environment %q is not set", request.Model.APIKeyEnv)
 	}
 	apiKey := bytes.Clone(apiKeySource)
 	clear(apiKeySource)
 	if err := validateAPIKey(apiKey); err != nil {
+		if mcpClient != nil {
+			_ = mcpClient.Stop()
+		}
 		clear(apiKey)
 		return err
 	}
 	if bytes.Contains(configuration, apiKey) {
+		if mcpClient != nil {
+			_ = mcpClient.Stop()
+		}
 		clear(apiKey)
 		return errors.New("rendered Hermes config contains the API-key value")
 	}
@@ -289,6 +321,9 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	if extractEnabled {
 		extractSource, ok := manager.apiKeyLookup(manager.extractAPIKeyEnv)
 		if !ok {
+			if mcpClient != nil {
+				_ = mcpClient.Stop()
+			}
 			clear(extractSource)
 			clear(apiKey)
 			return fmt.Errorf("Hermes extract API-key environment %q is not set", manager.extractAPIKeyEnv)
@@ -296,11 +331,17 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		extractAPIKey = bytes.Clone(extractSource)
 		clear(extractSource)
 		if err := validateAPIKey(extractAPIKey); err != nil {
+			if mcpClient != nil {
+				_ = mcpClient.Stop()
+			}
 			clear(extractAPIKey)
 			clear(apiKey)
 			return err
 		}
 		if bytes.Contains(configuration, extractAPIKey) {
+			if mcpClient != nil {
+				_ = mcpClient.Stop()
+			}
 			clear(extractAPIKey)
 			clear(apiKey)
 			return errors.New("rendered Hermes config contains the extract API-key value")
@@ -308,6 +349,9 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	}
 	id, err := manager.newID()
 	if err != nil {
+		if mcpClient != nil {
+			_ = mcpClient.Stop()
+		}
 		clear(apiKey)
 		clear(extractAPIKey)
 		return fmt.Errorf("generate Hermes harness ID: %w", err)
@@ -331,6 +375,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		artifactDir:   filepath.Join(manager.outputDir, request.TaskID, "harness"),
 		endpoint:      request.Endpoint, model: request.Model,
 		agentTimeout: agentTimeout, apiKey: apiKey, extractAPIKey: extractAPIKey,
+		mcpClient:     mcpClient,
 	}
 	fail := func(primary error) error {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), manager.cleanupTimeout)
@@ -888,10 +933,20 @@ func (manager *Manager) stopSession(ctx context.Context, active *session) error 
 		return nil
 	}
 	if active.containerID == "" {
+		if active.mcpClient != nil {
+			_ = active.mcpClient.Stop()
+			active.mcpClient = nil
+		}
 		clearSessionSecrets(active)
 		return nil
 	}
 	var errs []error
+	if active.mcpClient != nil {
+		if err := active.mcpClient.Stop(); err != nil {
+			errs = append(errs, fmt.Errorf("stop Hermes MCP client: %w", err))
+		}
+		active.mcpClient = nil
+	}
 	inspection, inspectErr := manager.client.ContainerInspect(ctx, active.containerID, client.ContainerInspectOptions{})
 	if errdefs.IsNotFound(inspectErr) {
 		active.containerID = ""
