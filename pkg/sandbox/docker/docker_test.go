@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/core"
+	arsandbox "github.com/hyscale-lab/aries/pkg/sandbox"
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
@@ -523,8 +524,9 @@ func TestExecProcessStreamReportsChildPIDBeforeExactBinaryOutput(t *testing.T) {
 	var events []string
 	result, err := sandbox.ExecProcessStream(context.Background(), core.Command{
 		Path: "/bin/tool", Args: []string{"first", "second value"}, Dir: "/work", Env: map[string]string{"B": "2", "A": "1"},
-	}, eventWriter{buffer: &stdout, events: &events, event: "stdout"}, eventWriter{buffer: &stderr, events: &events, event: "stderr"}, func(ref ProcessRef) error {
-		if ref.PID != 101 || ref.execID == "" || ref.statePath == "" || ref.generation == "" {
+	}, eventWriter{buffer: &stdout, events: &events, event: "stdout"}, eventWriter{buffer: &stderr, events: &events, event: "stderr"}, func(ref arsandbox.ProcessRef) error {
+		handle, ok := ref.Handle.(processHandle)
+		if ref.PID != 101 || !ok || handle.execID == "" || handle.statePath == "" || handle.generation == "" {
 			t.Fatalf("process ref = %#v", ref)
 		}
 		events = append(events, "start")
@@ -576,7 +578,7 @@ func TestExecProcessStreamCancellationUsesTargetedTermination(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := sandbox.ExecProcessStream(ctx, core.Command{Path: "/bin/sleep", Args: []string{"60"}}, io.Discard, io.Discard, func(ProcessRef) error { return nil })
+		_, err := sandbox.ExecProcessStream(ctx, core.Command{Path: "/bin/sleep", Args: []string{"60"}}, io.Discard, io.Discard, func(arsandbox.ProcessRef) error { return nil })
 		done <- err
 	}()
 	<-started
@@ -596,7 +598,7 @@ func TestSendProcessSignalUsesExactPrivateReferenceAndAllowedSignal(t *testing.T
 	fake := &fakeClient{execRunning: true}
 	sandbox := startSandbox(t, fake)
 	defer sandbox.stop(context.Background())
-	ref := ProcessRef{PID: 101, execID: "exec-id", statePath: "/tmp/.aries-exec-generation", generation: "generation"}
+	ref := arsandbox.ProcessRef{PID: 101, Handle: processHandle{execID: "exec-id", statePath: "/tmp/.aries-exec-generation", generation: "generation"}}
 	for _, signal := range []string{"SIGNAL_SIGTERM", "SIGNAL_SIGKILL"} {
 		fake.mu.Lock()
 		fake.execRunning = true
@@ -608,14 +610,14 @@ func TestSendProcessSignalUsesExactPrivateReferenceAndAllowedSignal(t *testing.T
 		options := fake.controlOptions
 		fake.mu.Unlock()
 		wantShellSignal := strings.TrimPrefix(signal, "SIGNAL_SIG")
-		if !reflect.DeepEqual(options.Cmd, []string{"/bin/sh", "-c", signalExecShell, "aries-signal", ref.statePath, "101", wantShellSignal}) {
+		if !reflect.DeepEqual(options.Cmd, []string{"/bin/sh", "-c", signalExecShell, "aries-signal", ref.Handle.(processHandle).statePath, "101", wantShellSignal}) {
 			t.Fatalf("%s helper = %#v", signal, options.Cmd)
 		}
 	}
 	if err := sandbox.SendProcessSignal(context.Background(), ref, "SIGNAL_SIGINT"); err == nil {
 		t.Fatal("unsupported signal succeeded")
 	}
-	if err := sandbox.SendProcessSignal(context.Background(), ProcessRef{PID: 101}, "SIGNAL_SIGTERM"); err == nil {
+	if err := sandbox.SendProcessSignal(context.Background(), arsandbox.ProcessRef{PID: 101}, "SIGNAL_SIGTERM"); err == nil {
 		t.Fatal("forged incomplete reference succeeded")
 	}
 }

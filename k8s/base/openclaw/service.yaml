@@ -1,0 +1,25 @@
+# Routes to the OpenClaw gateway. The gateway proxy inside the pod binds
+# 0.0.0.0:18789 and forwards to the loopback gateway on 18790, so the Service
+# targets 18789.
+#
+# ClusterIP is deliberate: ARIES is out-of-cluster and reaches this via
+# `kubectl port-forward svc/aries-openclaw 18789:18789`, which needs no
+# node-IP or cloud load-balancer access and works against any cluster
+# (kind/minikube/remote). Switch to NodePort or LoadBalancer only if you want
+# direct addressing instead of a forward.
+apiVersion: v1
+kind: Service
+metadata:
+  name: aries-openclaw
+  namespace: aries
+  labels:
+    app.kubernetes.io/name: aries-openclaw
+    app.kubernetes.io/component: harness
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: aries-openclaw
+  ports:
+    - name: gateway
+      port: 18789
+      targetPort: gateway

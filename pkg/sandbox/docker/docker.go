@@ -22,6 +22,7 @@ import (
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/runner"
+	arsandbox "github.com/hyscale-lab/aries/pkg/sandbox"
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
@@ -536,12 +537,11 @@ func (s *Sandbox) ExecStream(ctx context.Context, command core.Command, stdin io
 	}, nil
 }
 
-// ProcessRef is the unforgeable execution identity returned by the
-// E2B-pair-specific attached process path. PID is the child process-group
-// leader exposed by the REST protocol; the remaining identity stays private
-// to this package so callers cannot redirect a signal to an arbitrary PID.
-type ProcessRef struct {
-	PID        int
+// processHandle is the unforgeable execution identity carried opaquely inside
+// arsandbox.ProcessRef.Handle. The child process-group leader PID is exposed by
+// the REST protocol on the ProcessRef; the remaining identity stays private to
+// this package so callers cannot redirect a signal to an arbitrary PID.
+type processHandle struct {
 	execID     string
 	statePath  string
 	generation string
@@ -550,7 +550,7 @@ type ProcessRef struct {
 // ExecProcessStream is the E2B-pair-specific attached process form. It reports
 // the actual setsid child group leader before releasing that child to exec.
 // Its input channel is private startup control and never carries user stdin.
-func (s *Sandbox) ExecProcessStream(ctx context.Context, command core.Command, stdout, stderr io.Writer, onStart func(ProcessRef) error) (core.CommandResult, error) {
+func (s *Sandbox) ExecProcessStream(ctx context.Context, command core.Command, stdout, stderr io.Writer, onStart func(arsandbox.ProcessRef) error) (core.CommandResult, error) {
 	started := time.Now()
 	failure := func() core.CommandResult { return core.CommandResult{ExitCode: -1, Duration: time.Since(started)} }
 	if err := validateCommand(command); err != nil {
@@ -608,7 +608,7 @@ func (s *Sandbox) ExecProcessStream(ctx context.Context, command core.Command, s
 	copyDone := make(chan error, 1)
 	exitTrailer := newExitTrailer(&limitedWriter{writer: stderr, limit: maxExecOutput}, token)
 	pidControl := newPIDControlWriter(exitTrailer, token, func(pid int) error {
-		if err := onStart(ProcessRef{PID: pid, execID: created.ID, statePath: statePath, generation: token}); err != nil {
+		if err := onStart(arsandbox.ProcessRef{PID: pid, Handle: processHandle{execID: created.ID, statePath: statePath, generation: token}}); err != nil {
 			return err
 		}
 		if _, err := io.WriteString(attached.Conn, "ARIES_EXEC_START_"+token+"\n"); err != nil {
@@ -703,8 +703,9 @@ exited:
 // SendProcessSignal targets the exact still-active process group represented by
 // ref. The private state path and generation are created by ExecProcessStream;
 // an arbitrary numeric PID is never accepted as signaling authority.
-func (s *Sandbox) SendProcessSignal(ctx context.Context, ref ProcessRef, signal string) error {
-	if ref.PID <= 1 || ref.execID == "" || ref.statePath == "" || ref.generation == "" {
+func (s *Sandbox) SendProcessSignal(ctx context.Context, ref arsandbox.ProcessRef, signal string) error {
+	handle, ok := ref.Handle.(processHandle)
+	if !ok || ref.PID <= 1 || handle.execID == "" || handle.statePath == "" || handle.generation == "" {
 		return errors.New("invalid Docker process reference")
 	}
 	var shellSignal string
@@ -716,7 +717,7 @@ func (s *Sandbox) SendProcessSignal(ctx context.Context, ref ProcessRef, signal 
 	default:
 		return fmt.Errorf("unsupported process signal %q", signal)
 	}
-	inspection, err := s.client.ExecInspect(ctx, ref.execID, client.ExecInspectOptions{})
+	inspection, err := s.client.ExecInspect(ctx, handle.execID, client.ExecInspectOptions{})
 	if err != nil {
 		return fmt.Errorf("inspect Docker process before signal: %w", err)
 	}
@@ -724,7 +725,7 @@ func (s *Sandbox) SendProcessSignal(ctx context.Context, ref ProcessRef, signal 
 		return errors.New("Docker process is no longer running")
 	}
 	created, err := s.client.ExecCreate(ctx, s.containerID, client.ExecCreateOptions{
-		Cmd: []string{"/bin/sh", "-c", signalExecShell, "aries-signal", ref.statePath, strconv.Itoa(ref.PID), shellSignal},
+		Cmd: []string{"/bin/sh", "-c", signalExecShell, "aries-signal", handle.statePath, strconv.Itoa(ref.PID), shellSignal},
 	})
 	if err != nil {
 		return fmt.Errorf("create Docker process signal helper: %w", err)
@@ -747,11 +748,12 @@ func (s *Sandbox) SendProcessSignal(ctx context.Context, ref ProcessRef, signal 
 
 // TerminateProcess applies the existing TERM -> KILL -> positive-absence
 // cleanup to the exact execution instance represented by ref.
-func (s *Sandbox) TerminateProcess(ctx context.Context, ref ProcessRef) error {
-	if ref.PID <= 1 || ref.execID == "" || ref.statePath == "" || ref.generation == "" {
+func (s *Sandbox) TerminateProcess(ctx context.Context, ref arsandbox.ProcessRef) error {
+	handle, ok := ref.Handle.(processHandle)
+	if !ok || ref.PID <= 1 || handle.execID == "" || handle.statePath == "" || handle.generation == "" {
 		return errors.New("invalid Docker process reference")
 	}
-	return s.terminateExec(ctx, ref.execID, ref.statePath)
+	return s.terminateExec(ctx, handle.execID, handle.statePath)
 }
 
 func wrappedCommand(statePath, token string, command core.Command) []string {
@@ -1160,18 +1162,6 @@ func (s *Sandbox) Download(ctx context.Context, source, destination string) erro
 	return nil
 }
 
-// FileInfo is the small E2B-pair-specific filesystem metadata surface derived
-// from Docker's archive stat information.
-type FileInfo struct {
-	Name       string
-	Path       string
-	Type       string
-	Size       int64
-	Mode       os.FileMode
-	ModTime    time.Time
-	LinkTarget string
-}
-
 // ReadFile returns exact bytes for one regular container file. Docker archive
 // metadata is used without introducing any host destination path.
 func (s *Sandbox) ReadFile(ctx context.Context, source string) ([]byte, error) {
@@ -1243,20 +1233,20 @@ func (s *Sandbox) WriteFile(ctx context.Context, destination string, content []b
 	return nil
 }
 
-func (s *Sandbox) StatPath(ctx context.Context, target string) (FileInfo, error) {
+func (s *Sandbox) StatPath(ctx context.Context, target string) (arsandbox.FileInfo, error) {
 	target, err := cleanContainerWorkdir(target)
 	if err != nil {
-		return FileInfo{}, fmt.Errorf("invalid Docker stat path: %w", err)
+		return arsandbox.FileInfo{}, fmt.Errorf("invalid Docker stat path: %w", err)
 	}
 	result, err := s.client.CopyFromContainer(ctx, s.containerID, client.CopyFromContainerOptions{SourcePath: target})
 	if err != nil {
-		return FileInfo{}, fmt.Errorf("stat Docker task path: %w", err)
+		return arsandbox.FileInfo{}, fmt.Errorf("stat Docker task path: %w", err)
 	}
 	defer result.Content.Close()
 	return dockerFileInfo(target, result.Stat.Name, result.Stat.Size, result.Stat.Mode, result.Stat.Mtime, result.Stat.LinkTarget), nil
 }
 
-func (s *Sandbox) ListDir(ctx context.Context, target string) ([]FileInfo, error) {
+func (s *Sandbox) ListDir(ctx context.Context, target string) ([]arsandbox.FileInfo, error) {
 	target, err := cleanContainerWorkdir(target)
 	if err != nil {
 		return nil, fmt.Errorf("invalid Docker directory path: %w", err)
@@ -1270,7 +1260,7 @@ func (s *Sandbox) ListDir(ctx context.Context, target string) ([]FileInfo, error
 		return nil, errors.New("Docker directory listing source must be a directory")
 	}
 	reader := tar.NewReader(result.Content)
-	entries := make([]FileInfo, 0)
+	entries := make([]arsandbox.FileInfo, 0)
 	root := ""
 	for {
 		header, nextErr := reader.Next()
@@ -1291,7 +1281,7 @@ func (s *Sandbox) ListDir(ctx context.Context, target string) ([]FileInfo, error
 		}
 		entries = append(entries, dockerFileInfo(filepath.Join(target, relative), relative, header.Size, header.FileInfo().Mode(), header.ModTime, header.Linkname))
 	}
-	slices.SortFunc(entries, func(left, right FileInfo) int { return strings.Compare(left.Name, right.Name) })
+	slices.SortFunc(entries, func(left, right arsandbox.FileInfo) int { return strings.Compare(left.Name, right.Name) })
 	return entries, nil
 }
 
@@ -1334,7 +1324,7 @@ func (s *Sandbox) runFilesystemCommand(ctx context.Context, command string, argu
 	return nil
 }
 
-func dockerFileInfo(target, name string, size int64, mode os.FileMode, modified time.Time, linkTarget string) FileInfo {
+func dockerFileInfo(target, name string, size int64, mode os.FileMode, modified time.Time, linkTarget string) arsandbox.FileInfo {
 	entryType := "other"
 	switch {
 	case mode.IsRegular():
@@ -1344,7 +1334,7 @@ func dockerFileInfo(target, name string, size int64, mode os.FileMode, modified 
 	case mode&os.ModeSymlink != 0:
 		entryType = "symlink"
 	}
-	return FileInfo{Name: name, Path: target, Type: entryType, Size: size, Mode: mode, ModTime: modified, LinkTarget: linkTarget}
+	return arsandbox.FileInfo{Name: name, Path: target, Type: entryType, Size: size, Mode: mode, ModTime: modified, LinkTarget: linkTarget}
 }
 
 // stop records logs and removes the task container and network. Concurrent and

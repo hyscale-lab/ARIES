@@ -11,7 +11,10 @@ RUN make build
 FROM debian:bookworm-slim
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git ca-certificates docker.io openssh-client \
+    git ca-certificates docker.io openssh-client curl \
+    && curl -fsSL "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/$(dpkg --print-architecture)/kubectl" -o /usr/local/bin/kubectl \
+    && chmod +x /usr/local/bin/kubectl \
+    && apt-get purge -y curl && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app/bin/aries /app/bin/aries
 COPY --from=builder /app/bin/aries-ssh /app/bin/aries-ssh

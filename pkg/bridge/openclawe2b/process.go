@@ -11,7 +11,7 @@ import (
 
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/runner"
-	arsandbox "github.com/hyscale-lab/aries/pkg/sandbox/docker"
+	arsandbox "github.com/hyscale-lab/aries/pkg/sandbox"
 )
 
 const maxProcessBody = 1 << 20

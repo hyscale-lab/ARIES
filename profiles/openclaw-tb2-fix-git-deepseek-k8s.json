@@ -1,0 +1,35 @@
+{
+  "name": "openclaw-tb2-fix-git-deepseek-k8s",
+  "versions_file": "../configs/versions.json",
+  "overrides_file": "",
+  "execution": {
+    "concurrency": 1
+  },
+  "benchmark": {
+    "type": "terminalbench2",
+    "root": ".cache/terminal-bench-2",
+    "tasks": [
+      "fix-git"
+    ]
+  },
+  "harness": {
+    "type": "openclaw"
+  },
+  "sandbox": {
+    "type": "kubernetes",
+    "namespace": "aries"
+  },
+  "bridge": {
+    "type": "openclaw-e2b"
+  },
+  "runtime": {
+    "backend": "deepseek",
+    "mode": "external"
+  },
+  "model": {
+    "base_url": "https://api.deepseek.com",
+    "api_key_env": "DEEPSEEK_API_KEY",
+    "id": "deepseek-v4-flash"
+  },
+  "output_dir": "runs"
+}

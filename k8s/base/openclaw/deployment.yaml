@@ -1,0 +1,75 @@
+# OpenClaw agent-harness gateway as a Kubernetes workload.
+#
+# Topology: ARIES runs OUTSIDE the cluster and reaches this gateway through the
+# Service (see service.yaml). Because ARIES is out-of-cluster, reach the
+# ClusterIP Service with a port-forward:
+#
+#   kubectl -n aries port-forward svc/aries-openclaw 18789:18789
+#
+# then point the harness gateway URL at ws://127.0.0.1:18789.
+#
+# NOTE (integration status): this manifest is the deployment + routing scaffold.
+# The ARIES-side Go harness backend that injects the per-task plugin/config and
+# drives this gateway is not wired yet, and end-to-end operation is still gated
+# on adapting the OpenClaw E2B bridge's reachability/auth to the cluster network
+# (the same gap tracked for the Kubernetes sandbox). See k8s/README.md.
+#
+# The pod boots into a wait state: it stays alive until ARIES delivers the
+# per-task private runtime archive (plugin + gateway launcher + rendered config)
+# and releases it by creating the sentinel file. This preserves the Docker
+# "inject files, then start the gateway" ordering on Kubernetes.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aries-openclaw
+  namespace: aries
+  labels:
+    app.kubernetes.io/name: aries-openclaw
+    app.kubernetes.io/component: harness
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: aries-openclaw
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aries-openclaw
+        app.kubernetes.io/component: harness
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 5
+      containers:
+        - name: openclaw
+          # Pin to the contract-tested tag; overridden by an overlay in practice.
+          image: ghcr.io/openclaw/openclaw:2026.7.1
+          # Wait for ARIES to stage the per-task runtime, then exec the gateway
+          # launcher it delivered. Until the sentinel exists, the pod idles.
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              sentinel=/run/aries/ready
+              echo "waiting for ARIES to stage the OpenClaw runtime..."
+              while [ ! -f "$sentinel" ]; do sleep 0.5; done
+              exec /run/aries/gateway-launcher
+          env:
+            - name: OPENCLAW_CONFIG_PATH
+              value: /home/node/.openclaw/config.json
+          ports:
+            - name: gateway
+              containerPort: 18789
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 18790
+            initialDelaySeconds: 2
+            periodSeconds: 2
+            failureThreshold: 30
+          resources:
+            requests:
+              cpu: "1"
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 2Gi

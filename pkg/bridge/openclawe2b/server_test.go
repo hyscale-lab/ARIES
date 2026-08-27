@@ -23,7 +23,7 @@ import (
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/core"
-	arsandbox "github.com/hyscale-lab/aries/pkg/sandbox/docker"
+	arsandbox "github.com/hyscale-lab/aries/pkg/sandbox"
 )
 
 func TestUnauthenticatedRequestIsRejectedWithoutProtocolDispatch(t *testing.T) {

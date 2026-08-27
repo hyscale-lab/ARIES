@@ -413,7 +413,7 @@ func TestExecProcessStreamReportsActualChildPIDForShortCommands(t *testing.T) {
 	} {
 		var stdout bytes.Buffer
 		startedPID, starts := 0, 0
-		result, err := sandbox.ExecProcessStream(ctx, command, &stdout, io.Discard, func(ref ProcessRef) error {
+		result, err := sandbox.ExecProcessStream(ctx, command, &stdout, io.Discard, func(ref arsandbox.ProcessRef) error {
 			startedPID, starts = ref.PID, starts+1
 			return nil
 		})

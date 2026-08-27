@@ -128,6 +128,9 @@ type RealtimeTTSConfig struct {
 
 type SandboxConfig struct {
 	Type string `json:"type"`
+	// Namespace is the Kubernetes namespace task pods are created in. It applies
+	// only to the "kubernetes" sandbox type and defaults to "aries".
+	Namespace string `json:"namespace,omitempty"`
 }
 
 type BridgeConfig struct {
