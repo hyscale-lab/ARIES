@@ -22,6 +22,7 @@ import (
 	nvidiamonitor "github.com/hyscale-lab/aries/pkg/monitor/nvidia"
 	"github.com/hyscale-lab/aries/pkg/runner"
 	dockersandbox "github.com/hyscale-lab/aries/pkg/sandbox/docker"
+	k8ssandbox "github.com/hyscale-lab/aries/pkg/sandbox/kubernetes"
 	"github.com/sirupsen/logrus"
 )
 
@@ -83,6 +84,7 @@ func validateComponents(cfg config.Config) error {
 	}
 	switch cfg.Sandbox.Type {
 	case "docker":
+	case "kubernetes":
 	default:
 		return fmt.Errorf("unsupported sandbox type %q", cfg.Sandbox.Type)
 	}
@@ -209,6 +211,12 @@ func newSandbox(cfg config.Config, outputRoot, runID, occurrenceID string, gpuIn
 			resources = &combinedResourceSource{container: source, gpu: gpuSource}
 		}
 		return app.SandboxInstance{Sandbox: manager, Resources: resources, Close: manager.Close}, nil
+	case "kubernetes":
+		manager, err := k8ssandbox.New(k8ssandbox.Options{OutputDir: outputRoot, Namespace: cfg.Sandbox.Namespace, Logger: logger})
+		if err != nil {
+			return app.SandboxInstance{}, fmt.Errorf("construct Kubernetes sandbox: %w", err)
+		}
+		return app.SandboxInstance{Sandbox: manager, Resources: k8ssandbox.NewResourceSource(), Close: manager.Close}, nil
 	default:
 		return app.SandboxInstance{}, fmt.Errorf("unsupported sandbox type %q", cfg.Sandbox.Type)
 	}

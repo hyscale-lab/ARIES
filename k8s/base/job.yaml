@@ -1,0 +1,47 @@
+# ARIES runs a profile to completion and exits, so it is a batch Job rather
+# than a Deployment. Re-running an experiment means re-applying / recreating
+# this Job.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: aries
+  namespace: aries
+spec:
+  # An experiment is not idempotent to retry mid-run; fail loudly instead.
+  backoffLimit: 0
+  completions: 1
+  parallelism: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aries
+    spec:
+      serviceAccountName: aries
+      restartPolicy: Never
+      containers:
+        - name: aries
+          image: aries:latest
+          # The profile to run. Override per environment in an overlay.
+          args:
+            - profiles/openclaw-tb2-fix-git-deepseek-e2b.json
+          env:
+            - name: DEEPSEEK_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aries-model
+                  key: DEEPSEEK_API_KEY
+          volumeMounts:
+            - name: runs
+              mountPath: /app/runs
+          resources:
+            requests:
+              cpu: "1"
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+      volumes:
+        # Run artifacts. Swap for a PersistentVolumeClaim to retain results
+        # across Job recreations.
+        - name: runs
+          emptyDir: {}

@@ -1,0 +1,33 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: aries
+
+resources:
+  - ../../base
+
+# DEEPSEEK_API_KEY is read from secret.env (gitignored). Copy secret.env.example
+# to secret.env and fill in your key. The name suffix hash is disabled so the
+# Job's secretKeyRef can reference a stable name.
+secretGenerator:
+  - name: aries-model
+    envs:
+      - secret.env
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+# For a local cluster (kind/minikube) the image is loaded into the node, so
+# never pull from a registry.
+patches:
+  - target:
+      kind: Job
+      name: aries
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Never
+
+images:
+  - name: aries
+    newTag: latest
