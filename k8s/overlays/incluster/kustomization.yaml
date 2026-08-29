@@ -43,3 +43,8 @@ patches:
           valueFrom:
             fieldRef:
               fieldPath: status.podIP
+      # The image tag is mutable (:latest); always re-pull so redeploys pick up
+      # a freshly pushed image.
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Always
