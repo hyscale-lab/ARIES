@@ -290,6 +290,12 @@ func ensurePrepared(ctx context.Context, cfg config.Config, wiring Wiring) error
 	for _, task := range tasks {
 		images = append(images, task.Environment.Image)
 	}
+	if cfg.Sandbox.Type == "kubernetes" {
+		// The Kubernetes backend has no local Docker engine to pre-pull into;
+		// the kubelet pulls the agent and task images when their pods are
+		// created. Pre-pull is a Docker-only optimization, so skip it here.
+		return nil
+	}
 	return wiring.PullImages(ctx, uniqueStrings(images))
 }
 
