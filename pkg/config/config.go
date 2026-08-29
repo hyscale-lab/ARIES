@@ -140,6 +140,13 @@ type BridgeConfig struct {
 	// raw wire commands, request payloads, and binary stdin; profiles that need
 	// that forensic record must opt in by setting it true.
 	RetainRawLog *bool `json:"retain_raw_log,omitempty"`
+	// AdvertiseHost is the externally reachable host that agents use to reach the
+	// bridge when the sandbox is not on a local Docker network (e.g. the
+	// Kubernetes sandbox with ARIES out-of-cluster). Empty keeps the Docker
+	// gateway-bound behavior. On Docker Desktop / kind this is typically
+	// "host.docker.internal"; on a remote cluster it is the host's routable
+	// address.
+	AdvertiseHost string `json:"advertise_host,omitempty"`
 }
 
 // RetainBridgeRawLog reports whether ssh_raw.log should be written, defaulting

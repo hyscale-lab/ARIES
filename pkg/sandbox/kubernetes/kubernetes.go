@@ -268,6 +268,27 @@ func (s *Sandbox) TaskID() string { return s.taskID }
 // Workdir returns the sandbox working directory.
 func (s *Sandbox) Workdir() string { return s.workdir }
 
+// RunID returns the stable run identity.
+func (s *Sandbox) RunID() string { return s.runID }
+
+// ContainerID identifies the backing pod. Kubernetes has no Docker container ID;
+// the namespaced pod name is the stable equivalent.
+func (s *Sandbox) ContainerID() string { return s.namespace + "/" + s.podName }
+
+// ContainerName returns the pod name.
+func (s *Sandbox) ContainerName() string { return s.podName }
+
+// ExecStream is the streaming exec form used by the SSH bridge: it runs a
+// command with the given stdin/stdout/stderr and returns its exit code.
+func (s *Sandbox) ExecStream(ctx context.Context, command core.Command, stdin io.Reader, stdout, stderr io.Writer) (core.CommandResult, error) {
+	started := time.Now()
+	if err := validateCommand(command); err != nil {
+		return core.CommandResult{ExitCode: -1, Duration: time.Since(started)}, err
+	}
+	exit, err := s.execStream(ctx, command, stdin, stdout, stderr)
+	return core.CommandResult{ExitCode: exit, Duration: time.Since(started)}, err
+}
+
 // --- filesystemSandbox ------------------------------------------------------
 
 // ReadFile returns the exact bytes of one file in the sandbox.
