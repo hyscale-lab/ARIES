@@ -257,7 +257,9 @@ func newBridge(cfg config.Config, outputRoot string, logger *logrus.Logger) (run
 		if err != nil {
 			return nil, fmt.Errorf("locate ARIES executable: %w", err)
 		}
-		bridge, err := openclawssh.New(openclawssh.Options{OutputDir: outputRoot, ClientPath: filepath.Join(filepath.Dir(executable), "aries-ssh"), Logger: logger, OmitRawLog: !cfg.Bridge.RetainBridgeRawLog(), AdvertiseHost: cfg.Bridge.AdvertiseHost})
+		// Expand env references so a profile can advertise ARIES's own pod IP
+		// in-cluster via "$POD_IP" (injected by the downward API).
+		bridge, err := openclawssh.New(openclawssh.Options{OutputDir: outputRoot, ClientPath: filepath.Join(filepath.Dir(executable), "aries-ssh"), Logger: logger, OmitRawLog: !cfg.Bridge.RetainBridgeRawLog(), AdvertiseHost: os.ExpandEnv(cfg.Bridge.AdvertiseHost)})
 		if err != nil {
 			return nil, fmt.Errorf("construct OpenClaw SSH bridge: %w", err)
 		}

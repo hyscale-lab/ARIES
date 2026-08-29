@@ -1,0 +1,45 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# ARIES running INSIDE the cluster (Option A for remote clusters). ARIES, the
+# bridge, and the agent/sandbox pods all share the cluster network, so the
+# agent's reverse SSH hop to the bridge is pod-to-pod. The bridge advertises
+# ARIES's own pod IP via the downward API ($POD_IP), so no external routing is
+# needed.
+
+namespace: aries
+
+resources:
+  - ../../base
+
+# DEEPSEEK_API_KEY from a gitignored secret.env (cp secret.env.example secret.env).
+secretGenerator:
+  - name: aries-model
+    envs:
+      - secret.env
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+images:
+  # Push the aries image to a registry your cluster can pull, and set it here.
+  - name: aries
+    newName: REPLACE_ME/aries
+    newTag: latest
+
+patches:
+  # Run the in-cluster profile and inject POD_IP for $POD_IP advertise_host.
+  - target:
+      kind: Job
+      name: aries
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/args
+        value: ["profiles/openclaw-tb2-fix-git-deepseek-k8s-incluster.json"]
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
