@@ -24,43 +24,43 @@ ARIES pod.
 ```mermaid
 sequenceDiagram
     participant U as kubectl apply
-    participant J as aries Job/Pod
+    participant J as aries Pod
     participant K as kube-apiserver
-    participant S as aries-task Pod
-    participant B as SSH bridge (in aries Pod)
-    participant H as aries-openclaw Pod+Svc
+    participant S as task Pod
+    participant B as SSH bridge
+    participant H as agent Pod
     participant M as DeepSeek
 
-    U->>K: apply -k overlays/incluster
-    K->>J: schedule aries Pod (SA aries)
-    J->>J: preparation (benchmark checkout; skip Docker pre-pull)
-    J->>J: run started; model runtime healthy
+    U->>K: apply overlays incluster
+    K->>J: schedule aries Pod as SA aries
+    J->>J: preparation, benchmark checkout, skip Docker pre-pull
+    J->>J: run started, model runtime healthy
     Note over J: per task fix-git-001
-    J->>K: create aries-task Pod
-    K->>S: start; wait Ready
-    J->>S: benchmark sanitizes sandbox (kubectl exec)
-    J->>B: start SSH bridge, bind 0.0.0.0, advertise $POD_IP
-    J->>K: create aries-openclaw Service + Pod
-    K->>H: initContainer chown; container idles on sentinel
-    J->>H: kubectl exec tar -x (stage runtime)
-    J->>H: touch sentinel -> gateway launches
-    J->>H: /readyz probe until ready
-    J->>H: kubectl port-forward svc :18789
-    J->>H: gateway.Connect + Agent(instruction)
+    J->>K: create task Pod
+    K->>S: start and wait Ready
+    J->>S: benchmark sanitizes sandbox via kubectl exec
+    J->>B: start SSH bridge, bind 0.0.0.0, advertise POD_IP
+    J->>K: create agent Service and Pod
+    K->>H: initContainer chown, then idle on sentinel
+    J->>H: kubectl exec tar to stage runtime
+    J->>H: touch sentinel, gateway launches
+    J->>H: readyz probe until ready
+    J->>H: kubectl port-forward svc 18789
+    J->>H: gateway Connect and Agent instruction
     loop agent tool loop
         H->>M: model call
-        M-->>H: tool call / response
-        H->>B: SSH exec (tool) to $POD_IP
+        M-->>H: tool call or response
+        H->>B: SSH exec tool to POD_IP
         B->>S: kubectl exec in task pod
-        S-->>B: stdout/stderr/exit
+        S-->>B: stdout stderr exit
         B-->>H: SSH result
     end
     H-->>J: agent final response
-    J->>H: Stop: kill port-forward, delete Pod+Svc
-    J->>B: revoke bridge (positive)
-    J->>S: benchmark evaluates live sandbox (kubectl exec)
-    J->>K: delete aries-task Pod
-    J-->>U: run-result.json (score)
+    J->>H: Stop, kill port-forward, delete Pod and Svc
+    J->>B: revoke bridge, positive
+    J->>S: benchmark evaluates live sandbox via kubectl exec
+    J->>K: delete task Pod
+    J-->>U: run-result json with score
 ```
 
 ## Phase 0 — Deploy
