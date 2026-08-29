@@ -131,6 +131,7 @@ flowchart TB
 - [Tool sandbox](design/sandbox.md)
 - [Tool bridge](design/bridge.md)
 - [Kubernetes backend](design/kubernetes.md)
+- [Kubernetes run flow](design/kubernetes-flow.md)
 - [Model runtime platform service](design/runtime.md)
 - [Supported implementations](supported.md)
 - [Quick start](quick-start.md)

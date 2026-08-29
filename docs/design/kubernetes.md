@@ -8,6 +8,9 @@ configuration surface, the deployment models, and the per-task lifecycle.
 The Kubernetes path is selected entirely through profile configuration; no code
 paths are hard-wired. The Docker backends are untouched and remain the default.
 
+For a chronological walkthrough of one run — from `kubectl apply` through the
+per-task lifecycle to teardown — see the [Kubernetes run flow](kubernetes-flow.md).
+
 ## Motivation
 
 The Docker backends assume a local Docker Engine: the sandbox creates
