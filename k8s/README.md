@@ -37,10 +37,15 @@ runtime (plugin + gateway launcher + rendered config) and creates the
 `/run/aries/ready` sentinel — preserving the Docker "inject files, then start the
 gateway" ordering on Kubernetes.
 
-**Integration status:** these are the deployment + routing manifests. The
-ARIES-side Go harness backend that stages the per-task runtime and drives this
-gateway is **not wired yet**, and end-to-end operation is gated on the
-bridge-network adaptation below. See "Status / caveats".
+**Integration status:** the ARIES-side Kubernetes harness backend is now wired
+(`pkg/harness/openclaw`, `NewKube`), selected by `harness.deployment:
+"kubernetes"`. It creates a per-task agent pod + Service, stages the private
+runtime via `kubectl exec tar -x`, releases the gateway, and reaches it with an
+automatic `kubectl port-forward` (agent/text mode only; realtime unsupported).
+The static manifests in this directory are a reference/template for that flow.
+
+Pair it with a Kubernetes-capable bridge: `bridge.type: "openclaw-ssh"` with
+`bridge.advertise_host` set (see `profiles/openclaw-tb2-fix-git-deepseek-k8s-ssh.json`).
 
 ## Usage (local cluster)
 

@@ -13,7 +13,9 @@
     ]
   },
   "harness": {
-    "type": "openclaw"
+    "type": "openclaw",
+    "deployment": "kubernetes",
+    "namespace": "aries"
   },
   "sandbox": {
     "type": "kubernetes",
