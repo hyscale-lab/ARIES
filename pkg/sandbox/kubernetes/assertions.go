@@ -40,8 +40,23 @@ type processSandbox interface {
 	TerminateProcess(context.Context, arsandbox.ProcessRef) error
 }
 
+// sshBridgeSandbox mirrors the unexported bridgeSandbox in pkg/bridge/openclawssh
+// so the SSH bridge's requirements are enforced here at compile time too.
+type sshBridgeSandbox interface {
+	runner.Sandbox
+	ContainerID() string
+	ContainerName() string
+	NetworkName() string
+	NetworkGateway(context.Context) (string, error)
+	RunID() string
+	TaskID() string
+	Workdir() string
+	ExecStream(context.Context, core.Command, io.Reader, io.Writer, io.Writer) (core.CommandResult, error)
+}
+
 var (
 	_ grantSandbox      = (*Sandbox)(nil)
 	_ filesystemSandbox = (*Sandbox)(nil)
 	_ processSandbox    = (*Sandbox)(nil)
+	_ sshBridgeSandbox  = (*Sandbox)(nil)
 )

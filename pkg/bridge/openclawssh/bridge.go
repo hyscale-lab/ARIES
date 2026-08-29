@@ -44,6 +44,12 @@ type Options struct {
 	ClientPath     string
 	CleanupTimeout time.Duration
 	Logger         *logrus.Logger
+	// AdvertiseHost, when set, switches the bridge to "advertised" mode for
+	// sandboxes that are not on a local Docker network (e.g. Kubernetes, with
+	// ARIES out-of-cluster). The SSH server then binds all interfaces and the
+	// endpoint/known-hosts advertise this host instead of the sandbox's Docker
+	// network gateway. Empty preserves the Docker gateway-bound behavior.
+	AdvertiseHost string
 	// OmitRawLog drops ssh_raw.log, the byte-level record of every channel
 	// request. That log is the only artifact holding the raw wire command,
 	// the request payload, and binary stdin that the structured log omits,
@@ -63,6 +69,7 @@ type Manager struct {
 	openAudit      func(string) (*auditFile, error)
 	afterStart     func(*bridgeSession) error
 	omitRawLog     bool
+	advertiseHost  string
 
 	mu       sync.Mutex
 	active   *bridgeSession
@@ -562,7 +569,8 @@ func New(options Options) (*Manager, error) {
 	return &Manager{
 		outputDir: outputDir, clientPath: clientPath,
 		cleanupTimeout: options.CleanupTimeout, logger: options.Logger,
-		openAudit: openAuditFile, omitRawLog: options.OmitRawLog,
+		advertiseHost: options.AdvertiseHost,
+		openAudit:     openAuditFile, omitRawLog: options.OmitRawLog,
 	}, nil
 }
 
@@ -576,9 +584,19 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 	if !ok {
 		return core.ToolEndpoint{}, errors.New("OpenClaw SSH bridge requires the local Docker sandbox capability")
 	}
-	gateway, err := sandbox.NetworkGateway(ctx)
-	if err != nil {
-		return core.ToolEndpoint{}, fmt.Errorf("resolve task network gateway: %w", err)
+	// listenHost is the interface the SSH server binds; advertiseHost is the
+	// address the agent connects to. For Docker they are the sandbox's network
+	// gateway. In advertised mode (e.g. Kubernetes) the server binds all
+	// interfaces and advertises the configured, cluster-reachable host.
+	listenHost, advertiseHost := "", manager.advertiseHost
+	if advertiseHost == "" {
+		gateway, err := sandbox.NetworkGateway(ctx)
+		if err != nil {
+			return core.ToolEndpoint{}, fmt.Errorf("resolve task network gateway: %w", err)
+		}
+		listenHost, advertiseHost = gateway, gateway
+	} else {
+		listenHost = "0.0.0.0"
 	}
 	session := &bridgeSession{
 		sandbox: sandbox, connections: make(map[net.Conn]struct{}),
@@ -621,15 +639,18 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 	if err := writeExclusivePrivate(session.identitySource, clientPEM); err != nil {
 		return fail(fmt.Errorf("write OpenClaw SSH identity: %w", err))
 	}
-	listener, err := net.Listen("tcp4", net.JoinHostPort(gateway, "0"))
+	listener, err := net.Listen("tcp4", net.JoinHostPort(listenHost, "0"))
 	if err != nil {
 		return fail(fmt.Errorf("listen on task network gateway: %w", err))
 	}
 	session.listener = listener
-	host, port, err := net.SplitHostPort(listener.Addr().String())
+	_, port, err := net.SplitHostPort(listener.Addr().String())
 	if err != nil {
 		return fail(fmt.Errorf("parse OpenClaw SSH listener address: %w", err))
 	}
+	// The agent reaches the bridge at the advertised host, not the bound
+	// interface (which is 0.0.0.0 in advertised mode).
+	host := advertiseHost
 	knownLine := fmt.Sprintf("[%s]:%s %s", host, port, ssh.MarshalAuthorizedKey(hostSigner.PublicKey()))
 	if err := writeExclusivePrivate(session.knownSource, []byte(knownLine)); err != nil {
 		return fail(fmt.Errorf("write OpenClaw SSH known-hosts file: %w", err))
