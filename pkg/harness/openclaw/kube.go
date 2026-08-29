@@ -495,7 +495,13 @@ func podManifest(active *kubeSession, namespace, image string) []byte {
 			"name": active.podName, "namespace": namespace,
 			"labels": map[string]string{
 				"app.kubernetes.io/name": "aries-openclaw", "app.kubernetes.io/component": "harness",
-				"aries.dev/run-id": active.runID, "aries.dev/task-id": active.taskID, "aries.dev/attempt": active.attemptID,
+				"aries.dev/attempt": active.attemptID,
+			},
+			// Run/task IDs can exceed the 63-byte label limit; keep them as
+			// annotations. The short attempt ID stays a label for Service
+			// selection.
+			"annotations": map[string]string{
+				"aries.dev/run-id": active.runID, "aries.dev/task-id": active.taskID,
 			},
 		},
 		"spec": map[string]any{
