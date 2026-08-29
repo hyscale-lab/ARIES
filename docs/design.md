@@ -130,6 +130,7 @@ flowchart TB
 - [Agent harness](design/harness.md)
 - [Tool sandbox](design/sandbox.md)
 - [Tool bridge](design/bridge.md)
+- [Kubernetes backend](design/kubernetes.md)
 - [Model runtime platform service](design/runtime.md)
 - [Supported implementations](supported.md)
 - [Quick start](quick-start.md)
