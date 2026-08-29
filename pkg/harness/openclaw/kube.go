@@ -231,8 +231,10 @@ func (manager *KubeManager) Start(ctx context.Context, request core.HarnessReque
 		return fail(fmt.Errorf("wait for OpenClaw pod Running: %w", err))
 	}
 	// Stage the private runtime archive, then release the gateway.
+	// --no-same-owner/--no-overwrite-dir let a non-root extraction reuse the
+	// pre-existing volume mountpoints without trying to chown/chmod them.
 	if _, err := manager.runInput(startCtx, archive, "exec", "-i", "-n", manager.namespace, active.podName,
-		"--", "tar", "-xmf", "-", "-C", "/"); err != nil {
+		"--", "tar", "-xmf", "-", "-C", "/", "--no-same-owner", "--no-overwrite-dir"); err != nil {
 		return fail(fmt.Errorf("stage OpenClaw runtime into pod: %w", err))
 	}
 	if _, err := manager.run(startCtx, "exec", "-n", manager.namespace, active.podName,
@@ -507,12 +509,25 @@ func podManifest(active *kubeSession, namespace, image string) []byte {
 		"spec": map[string]any{
 			"restartPolicy":                "Never",
 			"automountServiceAccountToken": false,
+			// The container runs as uid 1000 (readiness requires it), so it
+			// cannot write under root-owned /run or /opt. Mount writable
+			// emptyDir volumes at the two staging roots, group-owned 1000 via
+			// fsGroup, so `kubectl exec tar` can extract the runtime there.
+			"securityContext": map[string]any{"fsGroup": 1000},
 			"containers": []any{map[string]any{
 				"name": "openclaw", "image": image,
 				"command": []string{"/bin/sh", "-c", boot},
 				"env":     []any{map[string]string{"name": "OPENCLAW_CONFIG_PATH", "value": configContainerPath}},
 				"ports":   []any{map[string]any{"name": "gateway", "containerPort": 18789}},
+				"volumeMounts": []any{
+					map[string]any{"name": "run-aries", "mountPath": "/run/aries"},
+					map[string]any{"name": "opt-aries", "mountPath": "/opt/aries"},
+				},
 			}},
+			"volumes": []any{
+				map[string]any{"name": "run-aries", "emptyDir": map[string]any{}},
+				map[string]any{"name": "opt-aries", "emptyDir": map[string]any{}},
+			},
 		},
 	}
 	out, _ := json.Marshal(pod)
