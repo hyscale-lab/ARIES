@@ -8,17 +8,22 @@ metadata:
   name: aries-sandbox
   namespace: aries
 rules:
-  # Sandbox pod lifecycle.
+  # Sandbox and agent pod lifecycle.
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["create", "get", "list", "watch", "delete", "patch"]
-  # Attached process execution (the pod exec subresource) and log streaming.
+  # Attached process execution (the pod exec subresource), log streaming, and
+  # the port-forward the Kubernetes harness uses to reach the agent gateway.
   - apiGroups: [""]
-    resources: ["pods/exec", "pods/attach"]
-    verbs: ["create"]
+    resources: ["pods/exec", "pods/attach", "pods/portforward"]
+    verbs: ["create", "get"]
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
+  # The per-task Service the Kubernetes harness creates to route to the agent.
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["create", "get", "list", "delete"]
   # Access-token / config material handed to each task sandbox.
   - apiGroups: [""]
     resources: ["configmaps", "secrets"]
