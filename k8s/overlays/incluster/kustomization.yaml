@@ -24,7 +24,7 @@ generatorOptions:
 images:
   # Push the aries image to a registry your cluster can pull, and set it here.
   - name: aries
-    newName: REPLACE_ME/aries
+    newName: jingxiang212/aries
     newTag: latest
 
 patches:

@@ -18,6 +18,13 @@ spec:
     spec:
       serviceAccountName: aries
       restartPolicy: Never
+      # Pull secret for a private ARIES image (e.g. a private Docker Hub repo).
+      # Create it in the namespace, e.g.:
+      #   kubectl -n aries create secret docker-registry aries-registry \
+      #     --docker-server=https://index.docker.io/v1/ \
+      #     --docker-username=<user> --docker-password=<token>
+      imagePullSecrets:
+        - name: aries-registry
       containers:
         - name: aries
           image: aries:latest
