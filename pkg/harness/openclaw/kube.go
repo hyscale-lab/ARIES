@@ -511,9 +511,19 @@ func podManifest(active *kubeSession, namespace, image string) []byte {
 			"automountServiceAccountToken": false,
 			// The container runs as uid 1000 (readiness requires it), so it
 			// cannot write under root-owned /run or /opt. Mount writable
-			// emptyDir volumes at the two staging roots, group-owned 1000 via
-			// fsGroup, so `kubectl exec tar` can extract the runtime there.
+			// emptyDir volumes at the two staging roots and have a root
+			// initContainer chown them to 1000 so `kubectl exec tar` (running as
+			// the node user) can create and chmod the runtime files there.
 			"securityContext": map[string]any{"fsGroup": 1000},
+			"initContainers": []any{map[string]any{
+				"name": "fix-perms", "image": image,
+				"command":         []string{"/bin/sh", "-c", "chown 1000:1000 /run/aries /opt/aries"},
+				"securityContext": map[string]any{"runAsUser": 0},
+				"volumeMounts": []any{
+					map[string]any{"name": "run-aries", "mountPath": "/run/aries"},
+					map[string]any{"name": "opt-aries", "mountPath": "/opt/aries"},
+				},
+			}},
 			"containers": []any{map[string]any{
 				"name": "openclaw", "image": image,
 				"command": []string{"/bin/sh", "-c", boot},
