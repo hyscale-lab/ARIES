@@ -506,7 +506,7 @@ func (manager *Manager) Run(ctx context.Context, instruction string) (core.Harne
 	connectSummary = redactConnectSummary(connectSummary, active)
 	agentResult = redactAgentResult(agentResult, active)
 	err = redactSessionError(err, active)
-	resultPath, writeErr := manager.writeAgentResult(active, connectSummary, agentResult, err)
+	resultPath, writeErr := writeAgentResult(active, connectSummary, agentResult, err)
 	if writeErr == nil {
 		active.logPaths = appendUnique(active.logPaths, resultPath)
 	}
@@ -750,7 +750,7 @@ func (manager *Manager) writeRealtimeResult(active *session, result realtimeclie
 	return path, nil
 }
 
-func (manager *Manager) writeAgentResult(active *session, summary gatewayclient.ConnectSummary, result gatewayclient.AgentResult, runErr error) (string, error) {
+func writeAgentResult(active *session, summary gatewayclient.ConnectSummary, result gatewayclient.AgentResult, runErr error) (string, error) {
 	summary = redactConnectSummary(summary, active)
 	result = redactAgentResult(result, active)
 	runErr = redactSessionError(runErr, active)
@@ -1101,11 +1101,18 @@ func (manager *Manager) validateContainer(ctx context.Context, active *session) 
 }
 
 func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([]byte, error) {
+	return buildRuntimeArchive(active, configuration, manager.realtimeAPIKeyEnv(active))
+}
+
+// buildRuntimeArchive stages the private per-task runtime tar (config, keys,
+// launcher, gateway scripts, and bridge client material) shared by the Docker
+// and Kubernetes harness backends. realtimeAPIKeyEnv is empty outside realtime.
+func buildRuntimeArchive(active *session, configuration []byte, realtimeAPIKeyEnv string) ([]byte, error) {
 	files := map[string]stagedFile{
 		"run/aries/openclaw.json":    {content: configuration, mode: 0o600},
 		"run/aries/model.key":        {content: active.apiKey, mode: 0o600},
 		"run/aries/gateway.key":      {content: active.gatewayToken, mode: 0o600},
-		"run/aries/launch":           {content: launcherScript(active.model.APIKeyEnv, manager.realtimeAPIKeyEnv(active)), mode: 0o555},
+		"run/aries/launch":           {content: launcherScript(active.model.APIKeyEnv, realtimeAPIKeyEnv), mode: 0o555},
 		"run/aries/gateway-proxy.js": {content: gatewayProxyScript(), mode: 0o555},
 		"run/aries/gateway-launcher": {content: gatewayLauncherScript(), mode: 0o555},
 	}

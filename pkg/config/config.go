@@ -88,9 +88,13 @@ type BenchmarkConfig struct {
 }
 
 type HarnessConfig struct {
-	Type     string                `json:"type"`
-	Mode     string                `json:"mode,omitempty"`
-	Realtime HarnessRealtimeConfig `json:"realtime,omitempty"`
+	Type string `json:"type"`
+	Mode string `json:"mode,omitempty"`
+	// Deployment selects where the OpenClaw agent runs: "docker" (default) or
+	// "kubernetes" (agent pod + Service, ARIES out-of-cluster via port-forward).
+	Deployment string                `json:"deployment,omitempty"`
+	Namespace  string                `json:"namespace,omitempty"`
+	Realtime   HarnessRealtimeConfig `json:"realtime,omitempty"`
 }
 
 type HarnessRealtimeConfig struct {
@@ -411,6 +415,18 @@ func (c *Config) validate() error {
 }
 
 func (h *HarnessConfig) validate() error {
+	switch h.Deployment {
+	case "", "docker":
+	case "kubernetes":
+		if h.Type != "openclaw" {
+			return errors.New("harness.deployment kubernetes requires OpenClaw")
+		}
+		if h.Mode == "realtime" {
+			return errors.New("harness.deployment kubernetes does not support realtime mode")
+		}
+	default:
+		return fmt.Errorf("unsupported harness.deployment %q", h.Deployment)
+	}
 	if h.Mode == "" {
 		h.Mode = "agent"
 	}

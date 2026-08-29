@@ -175,6 +175,13 @@ func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byt
 			ReasoningEffort:       cfg.Harness.Realtime.ReasoningEffort,
 			IncludeEvents:         cfg.Harness.Realtime.IncludeEvents,
 		}
+		if cfg.Harness.Deployment == "kubernetes" {
+			manager, err := openclawharness.NewKube(openclawharness.KubeOptions{Image: cfg.Versions.OpenClaw.Image, OutputDir: outputRoot, Namespace: cfg.Harness.Namespace, APIKeyLookup: lookup, Logger: logger})
+			if err != nil {
+				return app.HarnessInstance{}, fmt.Errorf("construct OpenClaw Kubernetes harness: %w", err)
+			}
+			return app.HarnessInstance{Harness: manager, Close: manager.Close}, nil
+		}
 		manager, err := openclawharness.New(openclawharness.Options{Image: cfg.Versions.OpenClaw.Image, OutputDir: outputRoot, APIKeyLookup: lookup, Logger: logger, Mode: cfg.Harness.Mode, Realtime: realtime})
 		if err != nil {
 			return app.HarnessInstance{}, fmt.Errorf("construct OpenClaw harness: %w", err)
