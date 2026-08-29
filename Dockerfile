@@ -3,10 +3,15 @@
 # and task sandboxes are spawned as sibling containers via the mounted Docker
 # socket, so this image intentionally does not bundle Node or the benchmark
 # images.
-FROM golang:1.26 AS builder
+# Run the builder on the host's native architecture and cross-compile to the
+# target arch. This avoids emulating the Go compiler (which hangs under qemu),
+# so building a linux/amd64 image on an arm64 Mac stays fast.
+FROM --platform=$BUILDPLATFORM golang:1.26 AS builder
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
 WORKDIR /app
 COPY . .
-RUN make build
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} make build
 
 FROM debian:bookworm-slim
 WORKDIR /app
