@@ -159,8 +159,13 @@ func podManifest(sandbox *Sandbox, request core.SandboxRequest) ([]byte, error) 
 			"namespace": sandbox.namespace,
 			"labels": map[string]string{
 				"app.kubernetes.io/managed-by": "aries",
-				"aries.dev/run-id":             request.RunID,
-				"aries.dev/task-id":            request.TaskID,
+				"app.kubernetes.io/component":  "sandbox",
+			},
+			// Run and task IDs can exceed the 63-byte label limit, so they are
+			// annotations (no length cap) rather than labels.
+			"annotations": map[string]string{
+				"aries.dev/run-id":  request.RunID,
+				"aries.dev/task-id": request.TaskID,
 			},
 		},
 		"spec": map[string]any{
