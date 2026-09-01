@@ -1,18 +1,32 @@
 # ARIES on Kubernetes (Kustomize)
 
-Kustomize package for running ARIES as a batch Job on Kubernetes.
+Kustomize package for running ARIES as a batch Job on Kubernetes. For what the
+Kubernetes port implements across ARIES, the harness, and the bridge — and what
+is still missing — see [KUBERNETES.md](KUBERNETES.md).
 
 ```
 k8s/
+  install/              # kubeadm bootstrap scripts for master and worker nodes
   base/                 # namespace, service account, RBAC, Job
   overlays/
     local/              # kind/minikube: secret from secret.env, image pull Never
+    incluster/          # remote cluster: image pulled from a registry, POD_IP bridge
 ```
+
+If you do not have a cluster yet, [`install/`](install/README.md) bootstraps one
+on bare Linux hosts with kubeadm — `install-master.sh` for the control plane and
+`install-worker.sh` for each worker. The kube packages, the containerd runtime
+and the CNI are downloaded from upstream at run time.
 
 ## Layout
 
+- **install/** — `common.sh` (shared node preparation), `install-master.sh`,
+  `install-worker.sh` and `reset-node.sh`. See its
+  [README](install/README.md).
 - **base/job.yaml** — ARIES runs a profile to completion, so it is a `Job`
-  (`restartPolicy: Never`, `backoffLimit: 0`), not a Deployment.
+  (`restartPolicy: Never`, `backoffLimit: 0`), not a Deployment. It references an
+  `aries-registry` pull secret, which the in-cluster overlay generates from a
+  gitignored `registry.json`; see [Image registry secret](#image-registry-secret).
 - **base/rbac.yaml** — a namespace-scoped `Role` granting ARIES the permissions
   the upcoming Kubernetes *Tool Sandbox* needs: create/manage sandbox **pods**,
   `pods/exec` + `pods/attach`, `pods/log`, and configmaps/secrets for per-task
@@ -67,6 +81,96 @@ kubectl -n aries logs -f job/aries
 ```
 
 Tear down with `kubectl delete -k .`.
+
+The local overlay needs no registry secret: it sets `imagePullPolicy: Never` and
+uses the image already loaded into the node. The `aries-registry` pull secret
+inherited from `base/job.yaml` is simply absent, which the kubelet ignores
+because it never pulls.
+
+## Usage (in-cluster overlay)
+
+`overlays/incluster` runs ARIES **inside** a remote cluster, so the node has to
+pull the ARIES image from a registry rather than have it loaded locally. Point
+`images:` in `overlays/incluster/kustomization.yaml` at your own repository
+first — it ships with `jingxiang212/aries:latest`.
+
+### Image registry secret
+
+`base/job.yaml` declares `imagePullSecrets: [aries-registry]`, and the overlay's
+`secretGenerator` builds that Secret from `registry.json` — a Docker config
+document that is gitignored, exactly like `secret.env`:
+
+```yaml
+secretGenerator:
+  - name: aries-registry
+    type: kubernetes.io/dockerconfigjson
+    files:
+      - .dockerconfigjson=registry.json
+```
+
+`disableNameSuffixHash: true` keeps the generated name exactly `aries-registry`,
+which is what `imagePullSecrets` references. Rename it in both places if you
+change it.
+
+Write `registry.json` with your own credentials. The least error-prone way is to
+let `kubectl` build the document and never apply it — use an access token, not
+an account password:
+
+```sh
+cd k8s/overlays/incluster
+
+# Docker Hub (personal access token with read scope):
+kubectl create secret docker-registry aries-registry \
+  --docker-server=https://index.docker.io/v1/ \
+  --docker-username=<docker-hub-user> \
+  --docker-password=<access-token> \
+  --dry-run=client -o jsonpath='{.data.\.dockerconfigjson}' \
+  | base64 -d > registry.json
+
+# GHCR (classic PAT with read:packages) — same command with:
+#   --docker-server=ghcr.io --docker-username=<github-user> --docker-password=<pat>
+```
+
+`registry.json.example` shows the resulting shape if you prefer to write it by
+hand. An existing `docker login` can also be reused with
+`cp ~/.docker/config.json registry.json`, but only when that file holds a real
+credential: Docker Desktop and `credsStore` setups keep the token in an external
+keychain and leave an empty `auths` entry behind, which yields a Secret that
+authenticates as anonymous. Verify what the overlay will actually ship:
+
+```sh
+kubectl kustomize . | grep -A4 'name: aries-registry'
+```
+
+If your image is public, delete the `aries-registry` generator and the
+`imagePullSecrets` block instead of supplying dummy credentials — a missing pull
+secret is only a kubelet warning for a public image, but `ImagePullBackOff` for
+a private one.
+
+### Deploy
+
+```sh
+# 1. Build and push the image to the registry the cluster pulls from:
+docker build -t <registry>/aries:latest .
+docker push <registry>/aries:latest
+
+# 2. Provide the model key and the registry credentials (both gitignored):
+cd k8s/overlays/incluster
+cp secret.env.example secret.env            # then edit secret.env
+#   ...and create registry.json as shown above
+
+# 3. Render / apply:
+kubectl kustomize .                         # preview
+kubectl apply -k .                          # apply
+
+# 4. Watch it:
+kubectl -n aries logs -f job/aries
+```
+
+Both files are required: Kustomize fails with `evalsymlink failure on
+.../registry.json` if the credentials are missing, before anything reaches the
+cluster. `kubectl delete -k .` now removes the pull secret along with the Job and
+the `aries-model` Secret, so a redeploy recreates it from `registry.json`.
 
 ## Status / caveats
 
