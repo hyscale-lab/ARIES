@@ -12,11 +12,25 @@ namespace: aries
 resources:
   - ../../base
 
-# DEEPSEEK_API_KEY from a gitignored secret.env (cp secret.env.example secret.env).
 secretGenerator:
+  # DEEPSEEK_API_KEY from a gitignored secret.env (cp secret.env.example secret.env).
   - name: aries-model
     envs:
       - secret.env
+
+  # Registry credentials for pulling the ARIES image. base/job.yaml references
+  # this Secret by name through imagePullSecrets, so the name is load-bearing.
+  # registry.json is gitignored; generate it with your own credentials:
+  #
+  #   kubectl create secret docker-registry aries-registry \
+  #     --docker-server=https://index.docker.io/v1/ \
+  #     --docker-username=<user> --docker-password=<access-token> \
+  #     --dry-run=client -o jsonpath='{.data.\.dockerconfigjson}' \
+  #     | base64 -d > registry.json
+  - name: aries-registry
+    type: kubernetes.io/dockerconfigjson
+    files:
+      - .dockerconfigjson=registry.json
 
 generatorOptions:
   disableNameSuffixHash: true

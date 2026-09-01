@@ -1,0 +1,9 @@
+{
+  "auths": {
+    "https://index.docker.io/v1/": {
+      "username": "replace-me",
+      "password": "replace-me-with-an-access-token",
+      "auth": "cmVwbGFjZS1tZTpyZXBsYWNlLW1lLXdpdGgtYW4tYWNjZXNzLXRva2Vu"
+    }
+  }
+}
