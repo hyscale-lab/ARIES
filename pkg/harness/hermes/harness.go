@@ -634,48 +634,22 @@ type voiceSTTResult struct {
 }
 
 func (manager *Manager) synthesizeVoiceInstruction(ctx context.Context, active *session, instruction string) (string, []string, error) {
-	instructionPath := filepath.Join(active.artifactDir, "voice-instruction.txt")
-	if err := writeArtifact(instructionPath, []byte(instruction)); err != nil {
-		return "", nil, fmt.Errorf("write Hermes voice instruction: %w", err)
-	}
-	synthesizer, err := manager.newSpeech(audioinput.SpeechClientOptions{BaseURL: manager.voiceTranscribe.TTS.BaseURL, APIKey: active.voiceAPIKey, Timeout: manager.voiceTranscribe.TTS.Timeout})
-	if err != nil {
-		return "", []string{instructionPath}, fmt.Errorf("construct Hermes voice TTS client: %w", err)
-	}
-	defer synthesizer.Close()
-	result, err := synthesizer.Synthesize(ctx, audioinput.SpeechRequest{
-		Text: instruction, Model: manager.voiceTranscribe.TTS.Model, Voice: manager.voiceTranscribe.TTS.Voice,
-		Format: "wav", Instructions: manager.voiceTranscribe.TTS.Instructions, Speed: manager.voiceTranscribe.TTS.Speed,
+	return audioinput.SynthesizeVoiceInstruction(ctx, instruction, audioinput.VoiceInstructionOptions{
+		ArtifactDir:  active.artifactDir,
+		ErrorLabel:   "Hermes",
+		Provider:     manager.voiceTranscribe.TTS.Provider,
+		BaseURL:      manager.voiceTranscribe.TTS.BaseURL,
+		APIKey:       active.voiceAPIKey,
+		Model:        manager.voiceTranscribe.TTS.Model,
+		Voice:        manager.voiceTranscribe.TTS.Voice,
+		Instructions: manager.voiceTranscribe.TTS.Instructions,
+		Speed:        manager.voiceTranscribe.TTS.Speed,
+		Timeout:      manager.voiceTranscribe.TTS.Timeout,
+		NewSpeech: func(options audioinput.SpeechClientOptions) (audioinput.SpeechSynthesizer, error) {
+			return manager.newSpeech(options)
+		},
+		WriteArtifact: writeArtifact,
 	})
-	if err != nil {
-		return "", []string{instructionPath}, fmt.Errorf("synthesize Hermes voice instruction: %w", err)
-	}
-	audioPath := filepath.Join(active.artifactDir, "voice-instruction.wav")
-	if err := writeArtifact(audioPath, result.Audio); err != nil {
-		clear(result.Audio)
-		return "", []string{instructionPath}, fmt.Errorf("write Hermes voice audio: %w", err)
-	}
-	clear(result.Audio)
-	metaPath := filepath.Join(active.artifactDir, "voice-instruction.wav.meta.json")
-	metadata := map[string]any{
-		"provider":    manager.voiceTranscribe.TTS.Provider,
-		"model":       result.Model,
-		"voice":       result.Voice,
-		"format":      result.Format,
-		"text_sha256": result.TextSHA256,
-		"text_chars":  len(instruction),
-		"cached":      false,
-		"output_path": audioPath,
-	}
-	content, err := json.MarshalIndent(metadata, "", "  ")
-	if err != nil {
-		return "", []string{instructionPath, audioPath}, fmt.Errorf("encode Hermes voice TTS metadata: %w", err)
-	}
-	content = append(content, '\n')
-	if err := writeArtifact(metaPath, content); err != nil {
-		return "", []string{instructionPath, audioPath}, fmt.Errorf("write Hermes voice TTS metadata: %w", err)
-	}
-	return audioPath, []string{instructionPath, audioPath, metaPath}, nil
 }
 
 func (manager *Manager) stageVoiceWAV(ctx context.Context, active *session, audioPath string) error {
