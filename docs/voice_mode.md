@@ -1,3 +1,4 @@
+
 # Voice Modes
 
 Three voice-oriented harness modes are currently supported. In each voice mode, the task prompt is synthesized into `voice-instruction.wav` at the start of the task run.
@@ -74,13 +75,18 @@ Use:
     },
     "stt": {
       "provider": "openai",
-      "model": "gpt-4o-mini-transcribe"
+      "model": "gpt-4o-mini-transcribe",
+      "timeout": "5m"
     }
   }
 }
 ```
 
 This mode follows Hermes’ voice interaction pipeline. The synthesized audio is passed as a complete utterance to the configured Hermes ASR engine for transcription. The resulting transcript is then used as input to a Hermes agent run.
+
+`harness.voice_transcribe.stt.timeout` bounds only the speech-to-text step: the time ARIES waits for Hermes to transcribe the synthesized audio before starting
+the agent. It does not limit the later agent run; that is still controlled by
+the task/harness agent timeout.
 
 Main artifacts:
 
