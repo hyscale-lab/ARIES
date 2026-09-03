@@ -177,6 +177,155 @@ func TestRunnerOmitsEventsByDefaultAndFallsBackToPartialTranscript(t *testing.T)
 	}
 }
 
+func TestRunnerTranscribeClosesSessionAfterFinalTranscript(t *testing.T) {
+	gateway := newScriptedGateway()
+	gateway.calls = append(gateway.calls,
+		scriptedCall{method: "talk.session.create", response: gatewayclient.Frame{"ok": true, "payload": map[string]any{
+			"sessionId": "session-1",
+			"audio":     map[string]any{"inputEncoding": "pcm16", "inputSampleRateHz": 24000},
+		}}},
+		scriptedCall{method: "talk.session.appendAudio", response: gatewayclient.Frame{"ok": true}},
+		scriptedCall{method: "talk.session.close", response: gatewayclient.Frame{"ok": true}},
+	)
+	gateway.events = append(gateway.events, gatewayclient.Frame{
+		"type": "event", "event": "talk.event",
+		"payload": map[string]any{"talkEvent": map[string]any{
+			"type": "transcript.done", "sessionId": "session-1", "payload": map[string]any{"role": "user", "text": "transcribed task"},
+		}},
+	})
+	runner, err := New(gateway, Options{
+		SessionMode:    SessionModeTranscribe,
+		Audio:          Audio{Data: []byte{1, 2}, Rate: 24000, BytesPerSample: 2},
+		ListenDuration: 5 * time.Millisecond,
+		QuietDuration:  time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	result, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if result.Transcript != "transcribed task" || result.TranscriptDone != "transcribed task" {
+		t.Fatalf("transcript result = %#v", result)
+	}
+	if len(gateway.requests) != 3 || gateway.requests[2].method != "talk.session.close" || gateway.requests[2].params["sessionId"] != "session-1" {
+		t.Fatalf("requests = %#v", gateway.requests)
+	}
+}
+
+func TestRunnerTranscribeAcceptsFinalTranscriptWithoutRole(t *testing.T) {
+	gateway := newScriptedGateway()
+	gateway.calls = append(gateway.calls,
+		scriptedCall{method: "talk.session.create", response: gatewayclient.Frame{"ok": true, "payload": map[string]any{
+			"sessionId": "session-1",
+			"audio":     map[string]any{"inputEncoding": "pcm16", "inputSampleRateHz": 24000},
+		}}},
+		scriptedCall{method: "talk.session.appendAudio", response: gatewayclient.Frame{"ok": true}},
+		scriptedCall{method: "talk.session.close", response: gatewayclient.Frame{"ok": true}},
+	)
+	gateway.events = append(gateway.events, gatewayclient.Frame{
+		"type": "event", "event": "talk.event",
+		"payload": map[string]any{
+			"final": true,
+			"text":  "transcribed task",
+			"type":  "transcript",
+			"talkEvent": map[string]any{
+				"type": "transcript.done", "sessionId": "session-1", "payload": map[string]any{"text": "transcribed task"},
+			},
+		},
+	})
+	runner, err := New(gateway, Options{
+		SessionMode:    SessionModeTranscribe,
+		Audio:          Audio{Data: []byte{1, 2}, Rate: 24000, BytesPerSample: 2},
+		ListenDuration: 5 * time.Millisecond,
+		QuietDuration:  time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	result, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if result.Transcript != "transcribed task" || result.TranscriptDone != "transcribed task" {
+		t.Fatalf("transcript result = %#v", result)
+	}
+}
+
+func TestRunnerTranscribeRequiresFinalTranscript(t *testing.T) {
+	gateway := newScriptedGateway()
+	gateway.calls = append(gateway.calls,
+		scriptedCall{method: "talk.session.create", response: gatewayclient.Frame{"ok": true, "payload": map[string]any{
+			"sessionId": "session-1",
+			"audio":     map[string]any{"inputEncoding": "pcm16", "inputSampleRateHz": 24000},
+		}}},
+		scriptedCall{method: "talk.session.appendAudio", response: gatewayclient.Frame{"ok": true}},
+		scriptedCall{method: "talk.session.close", response: gatewayclient.Frame{"ok": true}},
+	)
+	gateway.events = append(gateway.events, gatewayclient.Frame{
+		"type": "event", "event": "talk.event",
+		"payload": map[string]any{"talkEvent": map[string]any{
+			"type": "transcript.delta", "sessionId": "session-1", "payload": map[string]any{"text": "partial"},
+		}},
+	})
+	runner, err := New(gateway, Options{
+		SessionMode:    SessionModeTranscribe,
+		Audio:          Audio{Data: []byte{1, 2}, Rate: 24000, BytesPerSample: 2},
+		ListenDuration: 5 * time.Millisecond,
+		QuietDuration:  time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	result, err := runner.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "missing_final_transcript") || len(result.Errors) != 1 {
+		t.Fatalf("Run = %#v, %v", result, err)
+	}
+	if len(gateway.requests) != 3 || gateway.requests[2].method != "talk.session.close" || gateway.requests[2].params["sessionId"] != "session-1" {
+		t.Fatalf("requests = %#v", gateway.requests)
+	}
+}
+
+func TestRunnerTranscribeClosesSessionAfterAppendFailure(t *testing.T) {
+	gateway := newScriptedGateway()
+	gateway.calls = append(gateway.calls,
+		scriptedCall{method: "talk.session.create", response: gatewayclient.Frame{"ok": true, "payload": map[string]any{
+			"sessionId": "session-1",
+			"audio":     map[string]any{"inputEncoding": "pcm16", "inputSampleRateHz": 24000},
+		}}},
+		scriptedCall{method: "talk.session.appendAudio", response: gatewayclient.Frame{
+			"ok": false, "error": map[string]any{"code": "APPEND_FAILED", "message": "append rejected"},
+		}},
+		scriptedCall{method: "talk.session.close", response: gatewayclient.Frame{
+			"ok": false, "error": map[string]any{"code": "CLOSE_FAILED", "message": "close rejected"},
+		}},
+	)
+	runner, err := New(gateway, Options{
+		SessionMode:    SessionModeTranscribe,
+		Audio:          Audio{Data: []byte{1, 2}, Rate: 24000, BytesPerSample: 2},
+		ListenDuration: 5 * time.Millisecond,
+		QuietDuration:  time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	result, err := runner.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "append rejected") || !strings.Contains(err.Error(), "close rejected") {
+		t.Fatalf("Run = %#v, %v", result, err)
+	}
+	if len(result.Errors) != 2 || !strings.Contains(result.Errors[0], "append rejected") || !strings.Contains(result.Errors[1], "close rejected") {
+		t.Fatalf("result errors = %#v", result.Errors)
+	}
+	if len(gateway.requests) != 3 || gateway.requests[2].method != "talk.session.close" || gateway.requests[2].params["sessionId"] != "session-1" {
+		t.Fatalf("requests = %#v", gateway.requests)
+	}
+}
+
 func TestRunnerCanPrepareAudioAfterSessionCreate(t *testing.T) {
 	var gotSession SessionInfo
 	gateway := newScriptedGateway()
@@ -643,6 +792,30 @@ func TestRunnerSessionParams(t *testing.T) {
 		"model":             "gpt-realtime",
 		"voice":             "alloy",
 		"reasoningEffort":   "low",
+	}
+	if got := runner.sessionParams(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("sessionParams = %#v, want %#v", got, want)
+	}
+}
+
+func TestRunnerTranscribeSessionParams(t *testing.T) {
+	runner, err := New(newScriptedGateway(), Options{
+		SessionMode: SessionModeTranscribe,
+		SessionKey:  "session-key",
+		Provider:    "openai",
+		Model:       "gpt-4o-mini-transcribe",
+		Audio:       Audio{Data: []byte{1, 2}, Rate: 24000, BytesPerSample: 2},
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	want := map[string]any{
+		"sessionKey": "session-key",
+		"mode":       "transcription",
+		"transport":  "gateway-relay",
+		"brain":      "none",
+		"provider":   "openai",
+		"model":      "gpt-4o-mini-transcribe",
 	}
 	if got := runner.sessionParams(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("sessionParams = %#v, want %#v", got, want)

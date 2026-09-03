@@ -1,3 +1,4 @@
+
 # AgentHarness
 
 `AgentHarness` owns agent execution. It receives a task instruction, model
@@ -26,27 +27,21 @@ dispatch. `openclaw/realtime.Runner` consumes that client for talk/chat/tool
 session semantics; the gateway package intentionally contains no voice event
 parsers or Docker lifecycle.
 
-Text and realtime modes share the authenticated Gateway transport. Text sends
-exactly one pinned-version `agent` request and correlates accepted and terminal
-responses by both frame request ID and non-empty run ID; an ambiguous send,
-disconnect, timeout, or protocol mismatch is never retried. Realtime requires
-read and write scopes, while text requires write scope. Only sanitized role and
+Text, realtime and voice-transcribe modes share the authenticated Gateway transport. Text sends exactly one pinned-version `agent` request and correlates accepted and terminal responses by both frame request ID and non-empty run ID; an ambiguous send, disconnect, timeout, or protocol mismatch is never retried. Realtime and voice-transcribe require read and write scopes, while text requires write scope. Only sanitized role and
 sorted scope metadata may leave the authentication boundary.
 
-Realtime converts the task instruction to staged audio, owns one talk session,
-and may invoke nested agent runs through the same authenticated client. Its
-audio, transcript, result, and optional event records remain private harness
-artifacts. The separate realtime/TTS credential is staged privately for voice
-mode and is not part of model configuration, Gateway authentication, or
-structured results.
-Both modes remain concrete behavior of the single `AgentHarness` role; realtime
+Realtime and voice-transcribe both convert the task instruction to staged audio
+and stream it through an authenticated OpenClaw Gateway Talk session. Realtime
+owns one `realtime` talk session and may invoke nested agent runs through the same authenticated client. Voice-transcribe owns one `transcription`session, closes it after receiving the final transcript, and then invokes the OpenClaw agent through the same authenticated client with that transcript as the input text message. Their audio, transcript, result, and optional event records remain private harness artifacts. The separate realtime/TTS credential is staged privately for voice mode and is not part of model configuration, Gateway authentication, or structured results. All modes remain concrete behavior of the single`AgentHarness` role; realtime
 does not create a fifth Runner role or take ownership from the benchmark,
 sandbox, or bridge.
+
+OpenClaw `voice-transcribe` deliberately separates speech recognition from agent execution. Once the final transcript is received, it closes the transcription session, then invokes the agent with the transcript as a normal text input. This preserves the standard text-mode agent behavior while still using OpenClaw's streaming speech recognition path.
 
 ## Hermes
 
 Hermes is the second supported harness and runs the pinned upstream image
-unmodified. It is text mode only; `harness.mode: "realtime"` remains OpenClaw's.
+unmodified. It supports text and voice-transcribe modes; `harness.mode: "realtime"` remains OpenClaw's.
 
 `hermes.Manager` owns one container held at an idle command, so ARIES decides
 when the agent starts rather than the image entrypoint. One task instruction is
@@ -57,6 +52,8 @@ argument vector element, never interpolated into a shell string. `--toolsets` is
 deliberately not passed: on the pinned version its validator can return a bare
 `None` that the caller unpacks, so the agent would exit before doing any work.
 Toolsets come from the rendered configuration instead.
+
+In voice-transcribe mode, unlike OpenClaw, Hermes exposes no realtime gateway session. It synthesizes the task prompt into audio, sends the whole recording to the configured Hermes ASR provider, stores the transcript, and then starts the same Hermes one-shot agent flow with the transcript as the text instruction.
 
 Hermes exposes no control protocol, so there is no gateway client. The final
 response is the one-shot's standard output, and the message-level trajectory is

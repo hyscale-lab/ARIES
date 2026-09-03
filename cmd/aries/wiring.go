@@ -222,26 +222,7 @@ func environmentFromConfig(cfg *config.BenchmarkEnvironment) core.Environment {
 func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byte, bool), logger *logrus.Logger) (app.HarnessInstance, error) {
 	switch cfg.Harness.Type {
 	case "openclaw":
-		realtime := openclawharness.RealtimeOptions{
-			AgentQuestionTemplate: cfg.Harness.Realtime.AgentQuestionTemplate,
-			TTS: openclawharness.RealtimeTTSOptions{
-				Provider: cfg.Harness.Realtime.TTS.Provider, BaseURL: cfg.Harness.Realtime.TTS.BaseURL,
-				APIKeyEnv: cfg.Harness.Realtime.TTS.APIKeyEnv, Model: cfg.Harness.Realtime.TTS.Model,
-				Voice: cfg.Harness.Realtime.TTS.Voice, Instructions: cfg.Harness.Realtime.TTS.Instructions,
-				Speed: cfg.Harness.Realtime.TTS.Speed, Timeout: cfg.Harness.Realtime.TTS.Timeout,
-			},
-			ChunkDuration:         cfg.Harness.Realtime.ChunkDuration,
-			ListenDuration:        cfg.Harness.Realtime.ListenDuration,
-			QuietDuration:         cfg.Harness.Realtime.QuietDuration,
-			AgentWaitDuration:     cfg.Harness.Realtime.AgentWaitDuration,
-			ToolCallTimeout:       cfg.Harness.Realtime.ToolCallTimeout,
-			TrailingSilenceMillis: cfg.Harness.Realtime.TrailingSilenceMillis,
-			Provider:              cfg.Harness.Realtime.Provider,
-			Model:                 cfg.Harness.Realtime.Model,
-			Voice:                 cfg.Harness.Realtime.Voice,
-			ReasoningEffort:       cfg.Harness.Realtime.ReasoningEffort,
-			IncludeEvents:         cfg.Harness.Realtime.IncludeEvents,
-		}
+		realtime := openClawRealtimeOptions(cfg.Harness)
 		manager, err := openclawharness.New(openclawharness.Options{
 			Image: cfg.Versions.OpenClaw.Image, OutputDir: outputRoot, APIKeyLookup: lookup, Logger: logger,
 			Mode: cfg.Harness.Mode, Realtime: realtime, WebSearchEnabled: cfg.Harness.WebSearch.Enabled,
@@ -254,8 +235,21 @@ func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byt
 		}
 		return app.HarnessInstance{Harness: manager, Close: manager.Close}, nil
 	case "hermes":
+		voiceTranscribe := hermesharness.VoiceTranscribeOptions{
+			TTS: hermesharness.VoiceTTSOptions{
+				Provider: cfg.Harness.VoiceTranscribe.TTS.Provider, BaseURL: cfg.Harness.VoiceTranscribe.TTS.BaseURL,
+				APIKeyEnv: cfg.Harness.VoiceTranscribe.TTS.APIKeyEnv, Model: cfg.Harness.VoiceTranscribe.TTS.Model,
+				Voice: cfg.Harness.VoiceTranscribe.TTS.Voice, Instructions: cfg.Harness.VoiceTranscribe.TTS.Instructions,
+				Speed: cfg.Harness.VoiceTranscribe.TTS.Speed, Timeout: cfg.Harness.VoiceTranscribe.TTS.Timeout,
+			},
+			STT: hermesharness.VoiceSTTOptions{
+				Provider: cfg.Harness.VoiceTranscribe.STT.Provider, Model: cfg.Harness.VoiceTranscribe.STT.Model,
+				Language: cfg.Harness.VoiceTranscribe.STT.Language, Timeout: cfg.Harness.VoiceTranscribe.STT.Timeout,
+			},
+		}
 		manager, err := hermesharness.New(hermesharness.Options{
 			Image: cfg.Versions.Hermes.Image, OutputDir: outputRoot, APIKeyLookup: lookup, Logger: logger,
+			Mode: cfg.Harness.Mode, VoiceTranscribe: voiceTranscribe,
 			WebSearchEnabled: cfg.Harness.WebSearch.Enabled, ExtractAPIKeyEnv: cfg.Harness.WebSearch.ExtractAPIKeyEnv,
 			SubagentsEnabled:       cfg.Harness.Subagents.Enabled != nil && *cfg.Harness.Subagents.Enabled,
 			MaxConcurrentSubagents: cfg.Harness.Subagents.MaxConcurrent,
@@ -266,6 +260,33 @@ func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byt
 		return app.HarnessInstance{Harness: manager, Close: manager.Close}, nil
 	default:
 		return app.HarnessInstance{}, fmt.Errorf("unsupported harness type %q", cfg.Harness.Type)
+	}
+}
+
+func openClawRealtimeOptions(harness config.HarnessConfig) openclawharness.RealtimeOptions {
+	realtime := harness.Realtime
+	if harness.Mode == openclawharness.ModeVoiceTranscribe {
+		realtime = harness.VoiceTranscribe.HarnessRealtimeConfig
+	}
+	return openclawharness.RealtimeOptions{
+		AgentQuestionTemplate: realtime.AgentQuestionTemplate,
+		TTS: openclawharness.RealtimeTTSOptions{
+			Provider: realtime.TTS.Provider, BaseURL: realtime.TTS.BaseURL,
+			APIKeyEnv: realtime.TTS.APIKeyEnv, Model: realtime.TTS.Model,
+			Voice: realtime.TTS.Voice, Instructions: realtime.TTS.Instructions,
+			Speed: realtime.TTS.Speed, Timeout: realtime.TTS.Timeout,
+		},
+		ChunkDuration:         realtime.ChunkDuration,
+		ListenDuration:        realtime.ListenDuration,
+		QuietDuration:         realtime.QuietDuration,
+		AgentWaitDuration:     realtime.AgentWaitDuration,
+		ToolCallTimeout:       realtime.ToolCallTimeout,
+		TrailingSilenceMillis: realtime.TrailingSilenceMillis,
+		Provider:              realtime.Provider,
+		Model:                 realtime.Model,
+		Voice:                 realtime.Voice,
+		ReasoningEffort:       realtime.ReasoningEffort,
+		IncludeEvents:         realtime.IncludeEvents,
 	}
 }
 

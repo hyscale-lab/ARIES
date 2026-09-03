@@ -916,6 +916,9 @@ func TestGatewayEventDispositionFollowsHarnessMode(t *testing.T) {
 	if got := gatewayEventDisposition(ModeRealtime); got != gatewayclient.EventDispositionDelivery {
 		t.Fatalf("realtime disposition = %v", got)
 	}
+	if got := gatewayEventDisposition(ModeVoiceTranscribe); got != gatewayclient.EventDispositionDelivery {
+		t.Fatalf("voice-transcribe disposition = %v", got)
+	}
 }
 
 func TestAgentRunRejectsMissingWriteScopeBeforeSubmission(t *testing.T) {
@@ -1035,7 +1038,7 @@ func TestRealtimeModePublishesGatewayAndRunsRunner(t *testing.T) {
 	if gatewayURL != "ws://127.0.0.1:38089" || len(gatewayToken) == 0 {
 		t.Fatalf("gateway URL/token = %q/%d", gatewayURL, len(gatewayToken))
 	}
-	if runnerOptions.OriginalPrompt != "voice task" || runnerOptions.SessionKey != "agent:main:aries-fix-git" ||
+	if runnerOptions.OriginalPrompt != "voice task" || runnerOptions.SessionMode != ModeRealtime || runnerOptions.SessionKey != "agent:main:aries-fix-git" ||
 		runnerOptions.ChunkDuration != 25*time.Millisecond || runnerOptions.Voice != "alloy" || runnerOptions.ReasoningEffort != "low" || !runnerOptions.IncludeEvents {
 		t.Fatalf("runner options = %#v", runnerOptions)
 	}
@@ -1078,6 +1081,72 @@ func TestRealtimeModePublishesGatewayAndRunsRunner(t *testing.T) {
 	}
 	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("realtime result artifact mode = %v, %v", info, err)
+	}
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRealtimeTranscribeModeSendsTranscriptToAgent(t *testing.T) {
+	fake := newFakeDocker()
+	keys := map[string][]byte{"ARIES_FAKE_API_KEY": []byte("model-secret"), "OPENAI_API_KEY": []byte("speech-secret")}
+	manager := newTestManager(t, fake, keys["ARIES_FAKE_API_KEY"])
+	manager.apiKeyLookup = func(name string) ([]byte, bool) {
+		value, ok := keys[name]
+		return append([]byte(nil), value...), ok
+	}
+	manager.mode = ModeVoiceTranscribe
+	manager.realtime = RealtimeOptions{
+		TTS: RealtimeTTSOptions{Provider: "openai", APIKeyEnv: "OPENAI_API_KEY", Model: "tts-model", Voice: "alloy"},
+	}
+	var speechRequest audioinput.SpeechRequest
+	manager.newSpeech = func(options audioinput.SpeechClientOptions) (speechSynthesizer, error) {
+		return stubSpeechSynthesizer{request: &speechRequest}, nil
+	}
+	gateway := &recordingGateway{summary: gatewayclient.ConnectSummary{Role: "operator", Scopes: []string{"operator.read", "operator.write"}}}
+	manager.newGateway = func(string, []byte) (gatewayConnection, error) {
+		return gateway, nil
+	}
+	var runnerOptions realtimeclient.Options
+	manager.newRealtime = func(_ realtimeclient.Gateway, options realtimeclient.Options) (realtimeRunner, error) {
+		runnerOptions = options
+		return stubRunner{result: realtimeclient.Result{
+			SchemaVersion:       realtimeclient.ResultSchemaVersion,
+			Transcript:          "repair git from transcript",
+			TranscriptDone:      "repair git from transcript",
+			TranscriptDoneParts: []string{"repair git from transcript"},
+			EventCounts:         map[string]int{"transcript.done": 1},
+			ConnectAuth:         map[string]any{},
+			Errors:              []string{},
+			AgentRunIDs:         []string{},
+		}}, nil
+	}
+	request := core.HarnessRequest{RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
+	if err := manager.Start(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	result, err := manager.Run(context.Background(), "voice task")
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if runnerOptions.SessionMode != ModeVoiceTranscribe {
+		t.Fatalf("runner options = %#v", runnerOptions)
+	}
+	if gateway.agentCalls != 1 || gateway.request.Message != "repair git from transcript" || gateway.request.SessionKey != "agent:main:aries-fix-git" || gateway.request.IdempotencyKey == "" {
+		t.Fatalf("agent calls=%d request=%#v", gateway.agentCalls, gateway.request)
+	}
+	if result.Status != core.StatusSucceeded || result.FinalResponse != "first\nsecond" {
+		t.Fatalf("result = %#v", result)
+	}
+	path := filepath.Join(manager.outputDir, "fix-git", "harness", "realtime-result.json")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"transcript": "repair git from transcript"`, `"agent_question_used": "repair git from transcript"`, `"output_text": "first\nsecond"`, `"agent_consult_ok": true`} {
+		if !bytes.Contains(content, []byte(want)) {
+			t.Fatalf("realtime result missing %s: %s", want, content)
+		}
 	}
 	if err := manager.Stop(context.Background()); err != nil {
 		t.Fatal(err)

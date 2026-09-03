@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
+	audioinput "github.com/hyscale-lab/aries/pkg/audio"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
@@ -39,6 +40,9 @@ type fakeDocker struct {
 	agentStdout    string
 	agentStderr    string
 	agentExit      int
+	sttStdout      string
+	sttStderr      string
+	sttExit        int
 	sessionsStdout string
 	sessionsExit   int
 	removed        bool
@@ -168,6 +172,12 @@ func (fake *fakeDocker) ExecAttach(_ context.Context, execID string, _ client.Ex
 				_ = writeMux(engineSide, stdcopy.Stdout, []byte(fake.agentStdout))
 				_ = writeMux(engineSide, stdcopy.Stderr, []byte(fake.agentStderr))
 				exitCode = fake.agentExit
+			case "/bin/sh":
+				if len(options.Cmd) > 8 && options.Cmd[8] == "aries-hermes-stt" {
+					_ = writeMux(engineSide, stdcopy.Stdout, []byte(fake.sttStdout))
+					_ = writeMux(engineSide, stdcopy.Stderr, []byte(fake.sttStderr))
+					exitCode = fake.sttExit
+				}
 			case "hermes":
 				_ = writeMux(engineSide, stdcopy.Stdout, []byte(fake.sessionsStdout))
 				exitCode = fake.sessionsExit
@@ -267,6 +277,23 @@ func newTestManager(t *testing.T, fake *fakeDocker, secret []byte) *Manager {
 	return manager
 }
 
+type stubSpeechSynthesizer struct {
+	request *audioinput.SpeechRequest
+}
+
+func (stub stubSpeechSynthesizer) Synthesize(_ context.Context, request audioinput.SpeechRequest) (audioinput.SpeechResult, error) {
+	if stub.request != nil {
+		*stub.request = request
+	}
+	return audioinput.SpeechResult{
+		Audio: []byte("fake-wav-audio"),
+		Model: request.Model, Voice: request.Voice, Format: request.Format,
+		TextSHA256: strings.Repeat("a", 64),
+	}, nil
+}
+
+func (stubSpeechSynthesizer) Close() {}
+
 func endpointFiles(t *testing.T) core.ToolEndpoint {
 	t.Helper()
 	root := t.TempDir()
@@ -302,6 +329,30 @@ func archiveEntries(t *testing.T, archive []byte) map[string]*tar.Header {
 		}
 		copied := *header
 		entries[header.Name] = &copied
+	}
+	return entries
+}
+
+func archiveContents(t *testing.T, archive []byte) map[string][]byte {
+	t.Helper()
+	entries := make(map[string][]byte)
+	reader := tar.NewReader(bytes.NewReader(archive))
+	for {
+		header, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if header.Typeflag != tar.TypeReg {
+			continue
+		}
+		content, err := io.ReadAll(reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries[header.Name] = content
 	}
 	return entries
 }
@@ -522,6 +573,116 @@ func TestRunReturnsFinalResponseAndArtifacts(t *testing.T) {
 	}
 	if len(agentCmd) != 9 || agentCmd[6] != "deepseek-v4-flash" || agentCmd[7] != "deepseek" || agentCmd[8] != "fix the git repository" {
 		t.Fatalf("agent exec argv = %#v", agentCmd)
+	}
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVoiceTranscribeSynthesizesAudioAndRunsTranscriptAsAgentMessage(t *testing.T) {
+	modelSecret := []byte("model-secret")
+	voiceSecret := []byte("voice-secret")
+	fake := newFakeDocker()
+	fake.sttStdout = `{"transcript":"fix the repository from speech","signature":"transcribe_recording(wav_path, provider=None, model=None)"}` + "\n"
+	manager, err := New(Options{
+		Image: testHermesImage, OutputDir: t.TempDir(), StartTimeout: 2 * time.Second, AgentTimeout: 2 * time.Second,
+		Mode: ModeVoiceTranscribe,
+		VoiceTranscribe: VoiceTranscribeOptions{
+			TTS: VoiceTTSOptions{Provider: "openai", APIKeyEnv: "OPENAI_API_KEY", Model: "gpt-4o-mini-tts", Voice: "alloy", Timeout: time.Second},
+			STT: VoiceSTTOptions{Provider: "openai", Model: "gpt-4o-mini-transcribe", Language: "en", Timeout: time.Second},
+		},
+		APIKeyLookup: func(name string) ([]byte, bool) {
+			switch name {
+			case "OPENAI_API_KEY":
+				return bytes.Clone(voiceSecret), true
+			default:
+				return bytes.Clone(modelSecret), true
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var speechRequest audioinput.SpeechRequest
+	manager.client = fake
+	manager.newID = func() (string, error) { return "attempt", nil }
+	manager.newSpeech = func(options audioinput.SpeechClientOptions) (speechSynthesizer, error) {
+		if string(options.APIKey) != string(voiceSecret) || options.Timeout != time.Second {
+			t.Fatalf("speech options = %#v", options)
+		}
+		return stubSpeechSynthesizer{request: &speechRequest}, nil
+	}
+
+	request := testRequest(t)
+	if err := manager.Start(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	runtimeArchive := bytes.Clone(fake.archive)
+	result, err := manager.Run(context.Background(), "fix the git repository by voice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != core.StatusSucceeded || result.FinalResponse != "the task is complete" {
+		t.Fatalf("result = %#v", result)
+	}
+	if speechRequest.Text != "fix the git repository by voice" || speechRequest.Model != "gpt-4o-mini-tts" || speechRequest.Voice != "alloy" || speechRequest.Format != "wav" {
+		t.Fatalf("speech request = %#v", speechRequest)
+	}
+	retainedConfig, err := os.ReadFile(filepath.Join(manager.outputDir, request.TaskID, "harness", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(retainedConfig, []byte("provider: \"openai\"")) || !bytes.Contains(retainedConfig, []byte("model: \"gpt-4o-mini-transcribe\"")) {
+		t.Fatalf("config is missing voice STT settings:\n%s", retainedConfig)
+	}
+
+	runtimeEntries := archiveContents(t, runtimeArchive)
+	if !bytes.Equal(runtimeEntries[strings.TrimPrefix(voiceKeyPath, "/")], voiceSecret) {
+		t.Fatal("runtime archive did not stage the voice API key")
+	}
+	stagedEntries := archiveContents(t, fake.archive)
+	if !bytes.Equal(stagedEntries[strings.TrimPrefix(voiceWAVPath, "/")], []byte("fake-wav-audio")) {
+		t.Fatal("voice WAV was not staged into the container")
+	}
+	stagedHeaders := archiveEntries(t, fake.archive)
+	if len(stagedHeaders) != 1 {
+		t.Fatalf("voice WAV archive rewrote runtime paths: %#v", stagedHeaders)
+	}
+
+	var sttCmd, agentCmd []string
+	for _, options := range fake.execs {
+		if len(options.Cmd) > 8 && options.Cmd[8] == "aries-hermes-stt" {
+			sttCmd = options.Cmd
+		}
+		if len(options.Cmd) > 5 && options.Cmd[5] == agentWrapperPath {
+			agentCmd = options.Cmd
+		}
+	}
+	if len(sttCmd) != 14 || sttCmd[10] != voiceWAVPath || sttCmd[11] != "gpt-4o-mini-transcribe" || sttCmd[12] != "openai" || sttCmd[13] != "en" {
+		t.Fatalf("stt exec argv = %#v", sttCmd)
+	}
+	if len(agentCmd) != 9 || agentCmd[8] != "fix the repository from speech" {
+		t.Fatalf("agent exec argv = %#v", agentCmd)
+	}
+
+	artifacts := filepath.Join(manager.outputDir, request.TaskID, "harness")
+	for _, name := range []string{"voice-instruction.txt", "voice-instruction.wav", "voice-instruction.wav.meta.json", "voice-transcript.txt", "voice-result.json"} {
+		if _, err := os.Stat(filepath.Join(artifacts, name)); err != nil {
+			t.Fatalf("missing voice artifact %s: %v", name, err)
+		}
+	}
+	voiceResult, err := os.ReadFile(filepath.Join(artifacts, "voice-result.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(voiceResult, []byte(`"agent_question_used": "fix the repository from speech"`)) || !bytes.Contains(voiceResult, []byte(`"agent_output_text": "the task is complete"`)) {
+		t.Fatalf("voice result = %s", voiceResult)
+	}
+	config := fake.created.Config
+	for _, value := range append(append([]string(nil), config.Env...), append(config.Cmd, config.Entrypoint...)...) {
+		if strings.Contains(value, string(voiceSecret)) {
+			t.Fatalf("voice secret leaked into Docker configuration: %q", value)
+		}
 	}
 	if err := manager.Stop(context.Background()); err != nil {
 		t.Fatal(err)

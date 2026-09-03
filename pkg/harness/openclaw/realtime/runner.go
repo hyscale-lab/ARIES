@@ -22,6 +22,7 @@ const (
 	defaultToolCallTimeout          = 60 * time.Second
 	defaultSubmitToolResultTimeout  = 30 * time.Second
 	defaultAppendAudioTimeout       = 10 * time.Second
+	defaultSessionCloseTimeout      = 30 * time.Second
 	defaultVADThreshold             = 0.3
 	defaultSilenceDurationMillis    = 1500
 	defaultPrefixPaddingMillis      = 500
@@ -37,12 +38,17 @@ const (
 const (
 	methodSessionCreate    = "talk.session.create"
 	methodAppendAudio      = "talk.session.appendAudio"
+	methodSessionClose     = "talk.session.close"
 	methodClientToolCall   = "talk.client.toolCall"
 	methodSubmitToolResult = "talk.session.submitToolResult"
 	methodAgentWait        = "agent.wait"
-	sessionModeRealtime    = "realtime"
+	SessionModeRealtime    = "realtime"
+	SessionModeTranscribe  = "voice-transcribe"
+	protocolModeRealtime   = "realtime"
+	protocolModeTranscribe = "transcription"
 	sessionTransportRelay  = "gateway-relay"
 	sessionBrainAgent      = "agent-consult"
+	sessionBrainNone       = "none"
 	toolAgentConsult       = "openclaw_agent_consult"
 	toolAgentControl       = "openclaw_agent_control"
 	eventOutputAudioDone   = "output.audio.done"
@@ -101,6 +107,7 @@ type AudioProvider func(SessionInfo) (Audio, error)
 
 type Options struct {
 	OriginalPrompt            string
+	SessionMode               string
 	SessionKey                string
 	Provider                  string
 	Model                     string
@@ -135,6 +142,12 @@ func New(gateway Gateway, options Options) (*Runner, error) {
 	if gateway == nil {
 		return nil, errors.New("realtime gateway is required")
 	}
+	if options.SessionMode == "" {
+		options.SessionMode = SessionModeRealtime
+	}
+	if options.SessionMode != SessionModeRealtime && options.SessionMode != SessionModeTranscribe {
+		return nil, errors.New("realtime session mode must be realtime or voice-transcribe")
+	}
 	if len(options.Audio.Data) == 0 && options.AudioProvider == nil {
 		return nil, errors.New("realtime audio is required")
 	}
@@ -151,7 +164,7 @@ func New(gateway Gateway, options Options) (*Runner, error) {
 	}, nil
 }
 
-func (runner *Runner) Run(ctx context.Context) (Result, error) {
+func (runner *Runner) Run(ctx context.Context) (out Result, err error) {
 	result := newResult()
 	result.OriginalPrompt = runner.options.OriginalPrompt
 	if runner.options.CloseGateway {
@@ -176,6 +189,18 @@ func (runner *Runner) Run(ctx context.Context) (Result, error) {
 	result.SessionID = stringPtr(session.SessionID)
 	if session.RelaySessionID != "" {
 		result.RelaySessionID = stringPtr(session.RelaySessionID)
+	}
+	if runner.options.SessionMode == SessionModeTranscribe {
+		defer func() {
+			closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultSessionCloseTimeout)
+			closeErr := runner.closeSession(closeCtx, session)
+			cancel()
+			if closeErr != nil {
+				result.AppendError(closeErr.Error())
+				err = errors.Join(err, closeErr)
+			}
+			out = scrubRealtimeEvents(result, runner.options.IncludeEvents)
+		}()
 	}
 	if err := runner.loadAudioForSession(session); err != nil {
 		result.AppendError(err.Error())
@@ -203,16 +228,34 @@ func (runner *Runner) createSession(ctx context.Context) (SessionInfo, error) {
 	return sessionInfoFromPayload(response.Map("payload"))
 }
 
+func (runner *Runner) closeSession(ctx context.Context, session SessionInfo) error {
+	response, err := runner.gateway.Call(ctx, methodSessionClose, map[string]any{"sessionId": session.SessionID})
+	if err != nil {
+		return err
+	}
+	if !response.Bool("ok") {
+		return gateway.ResponseError(methodSessionClose, response)
+	}
+	return nil
+}
+
 func (runner *Runner) sessionParams() map[string]any {
 	options := runner.options
 	params := map[string]any{
 		"sessionKey":        valueOrDefault(options.SessionKey, defaultSessionKey),
-		"mode":              sessionModeRealtime,
+		"mode":              protocolModeRealtime,
 		"transport":         sessionTransportRelay,
 		"brain":             sessionBrainAgent,
 		"vadThreshold":      pointerOrDefault(options.VADThreshold, defaultVADThreshold),
 		"silenceDurationMs": intPointerOrDefault(options.SilenceDurationMillis, defaultSilenceDurationMillis),
 		"prefixPaddingMs":   intPointerOrDefault(options.PrefixPaddingMillis, defaultPrefixPaddingMillis),
+	}
+	if options.SessionMode == SessionModeTranscribe {
+		params["mode"] = protocolModeTranscribe
+		params["brain"] = sessionBrainNone
+		delete(params, "vadThreshold")
+		delete(params, "silenceDurationMs")
+		delete(params, "prefixPaddingMs")
 	}
 	for _, item := range []struct {
 		value string
@@ -339,6 +382,9 @@ func (runner *Runner) processEvents(ctx context.Context, result *Result) error {
 	} else {
 		result.Transcript = state.latestUserTranscript
 	}
+	if runner.options.SessionMode == SessionModeTranscribe && result.TranscriptDone == "" {
+		return errors.New("missing_final_transcript: no final transcript.done event was observed")
+	}
 	result.OutputText = state.output.String()
 	if state.hasActiveRuns() {
 		runner.finishActiveAgentRuns(ctx, result, &state)
@@ -373,7 +419,7 @@ func (runner *Runner) processFrame(ctx context.Context, frame gateway.Frame, res
 		}
 	case eventTranscriptDone:
 		if text := textFromPayload(talk.Payload); text != "" {
-			if role, _ := talk.Payload["role"].(string); role == roleUser {
+			if runner.acceptTranscriptDone(talk) {
 				state.latestUserTranscript = text
 				result.TranscriptDone = text
 				result.TranscriptDoneParts = append(result.TranscriptDoneParts, text)
@@ -395,6 +441,14 @@ func (runner *Runner) processFrame(ctx context.Context, frame gateway.Frame, res
 		state.touchQuiet(runner.options.QuietDuration)
 	}
 	return nil
+}
+
+func (runner *Runner) acceptTranscriptDone(talk talkEvent) bool {
+	if runner.options.SessionMode == SessionModeTranscribe {
+		return true
+	}
+	role, _ := talk.Payload["role"].(string)
+	return role == roleUser
 }
 
 func (runner *Runner) processToolCall(ctx context.Context, talk talkEvent, result *Result, state *realtimeEventState) error {
