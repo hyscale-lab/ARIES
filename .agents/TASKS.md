@@ -1,5 +1,41 @@
 # ARIES Tasks
 
+## R22 — Public SWE-bench Pro benchmark adapter
+
+1. [x] Pin the public dataset and official open-source evaluator independently,
+   install them atomically with Git LFS resolution, and strictly validate all
+   731 public rows plus their task-specific evaluator files.
+2. [x] Map selected rows to benchmark-neutral tasks and row-provided tagged
+   images while keeping gold patches, verifier tests, gold revisions, and test
+   expectations out of `core.Task`.
+3. [x] Before bridge access, capture private verifier and initial ignored-build
+   snapshots, restore the base worktree, remove local remotes/future refs and
+   unreachable gold history, and positively prove the sanitized state.
+4. [x] After harness stop and bridge revocation, capture the candidate patch,
+   restore the fresh-image baseline, inject only the pinned verifier inputs,
+   and score all `FAIL_TO_PASS` plus `PASS_TO_PASS` expectations.
+5. [x] Add strict configuration/version decoding, explicit command wiring, a
+   one-task profile, package regressions, real pinned-source integration
+   coverage for all 731 tasks, and public/internal documentation.
+6. [x] Complete focused, race, full release, Docker-backed gold-patch, cleanup,
+   secret, and final diff validation; record any environment gap before the
+   standalone commit.
+
+Completion evidence:
+
+- The exact pinned dataset and evaluator load all 731 public tasks; schema, task
+  order, image tags, prompt construction, selector/file separation, and private
+  state validation pass against the real upstream artifacts.
+- A pinned qutebrowser image resolves with the dataset gold patch and remains
+  unresolved with an empty patch. The same E2E leaves a background agent-owned
+  process before evaluation, proving the UID quiescence gate and container
+  cleanup on both outcomes.
+- Focused and race tests, `make build`, `make test`, `make test-race`,
+  `make lint`, `make integration`, `go mod verify`, and `git diff --check` pass.
+  The root filesystem Go cache was full, so validation used the ignored
+  repository-local `.cache/go-build`; no product behavior or tracked artifact
+  depends on that cache.
+
 ## R21 — GPU metrics data-flow cleanup
 
 Cleanup plan, based on `8b4930c` and executed regression-first:

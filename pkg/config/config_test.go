@@ -19,7 +19,7 @@ const validConfig = `{
   "model":{"id":"fake","base_url":"http://127.0.0.1:8080","api_key_env":"DEEPSEEK_API_KEY"}
 }`
 
-const validVersions = `{"terminalbench2":{"repository_url":"https://example.invalid/terminal-bench-2.git","revision":"0123456789abcdef0123456789abcdef01234567"},"deepresearchbench":{"repository_url":"https://example.invalid/deep-research-bench.git","revision":"fedcba9876543210fedcba9876543210fedcba98"},"openclaw":{"image":"ghcr.io/openclaw/openclaw:2026.7.1"},"hermes":{"image":"docker.io/nousresearch/hermes-agent:v2026.5.29.2"}}`
+const validVersions = `{"terminalbench2":{"repository_url":"https://example.invalid/terminal-bench-2.git","revision":"0123456789abcdef0123456789abcdef01234567"},"deepresearchbench":{"repository_url":"https://example.invalid/deep-research-bench.git","revision":"fedcba9876543210fedcba9876543210fedcba98"},"swebenchpro":{"dataset_repository_url":"https://example.invalid/swe-bench-pro-data.git","dataset_revision":"1111111111111111111111111111111111111111","evaluator_repository_url":"https://example.invalid/swe-bench-pro-evaluator.git","evaluator_revision":"2222222222222222222222222222222222222222"},"openclaw":{"image":"ghcr.io/openclaw/openclaw:2026.7.1"},"hermes":{"image":"docker.io/nousresearch/hermes-agent:v2026.5.29.2"}}`
 
 func TestNormalizedRuntimeSchema(t *testing.T) {
 	cfg, err := Decode(strings.NewReader(validConfig))
@@ -446,6 +446,29 @@ func TestTerminalBench2RejectsEnvironmentAndJudge(t *testing.T) {
 	}
 }
 
+func TestSWEbenchProRejectsUnrelatedBenchmarkBlocks(t *testing.T) {
+	base := strings.Replace(validConfig, `"type":"terminalbench2"`, `"type":"swebenchpro"`, 1)
+	for name, testCase := range map[string]struct {
+		block   string
+		wantErr string
+	}{
+		"environment": {block: `,"environment":{"image":"x"}`, wantErr: "benchmark.environment must not be set for swebenchpro"},
+		"judge":       {block: `,"judge":{"enabled":false}`, wantErr: "judge must not be set for swebenchpro"},
+		"fact":        {block: `,"fact":{"jina_api_key_env":"JINA_API_KEY"}`, wantErr: "fact must not be set for swebenchpro"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			input := strings.Replace(base, `"tasks":["fix-git"]}`, `"tasks":["fix-git"]`+testCase.block+`}`, 1)
+			_, err := Decode(strings.NewReader(input))
+			if err == nil || !strings.Contains(err.Error(), testCase.wantErr) {
+				t.Fatalf("error = %v, want it to contain %q", err, testCase.wantErr)
+			}
+		})
+	}
+	if _, err := Decode(strings.NewReader(base)); err != nil {
+		t.Fatalf("valid swebenchpro config rejected: %v", err)
+	}
+}
+
 func TestDeepResearchBenchFactIsOptionalButValidatedWhenPresent(t *testing.T) {
 	if _, err := Decode(strings.NewReader(validDeepResearchBenchWithFactConfig)); err != nil {
 		t.Fatalf("valid fact config rejected: %v", err)
@@ -577,11 +600,28 @@ func TestDecodeVersionsValidation(t *testing.T) {
 	}
 }
 
+func TestSWEbenchProVersionPinsAreMandatory(t *testing.T) {
+	for name, field := range map[string]string{
+		"dataset URL":        `"dataset_repository_url":"https://example.invalid/swe-bench-pro-data.git"`,
+		"dataset revision":   `"dataset_revision":"1111111111111111111111111111111111111111"`,
+		"evaluator URL":      `"evaluator_repository_url":"https://example.invalid/swe-bench-pro-evaluator.git"`,
+		"evaluator revision": `"evaluator_revision":"2222222222222222222222222222222222222222"`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			parts := strings.SplitN(field, ":", 2)
+			input := strings.Replace(validVersions, field, parts[0]+`:""`, 1)
+			if _, err := DecodeVersions(strings.NewReader(input)); err == nil || !strings.Contains(err.Error(), "swebenchpro") {
+				t.Fatalf("missing %s: err=%v", field, err)
+			}
+		})
+	}
+}
+
 // A catalog written before a harness existed must keep loading, so an absent
 // image is only an error for the harness that actually needs it. An image that
 // is present is still pin-validated.
 func TestVersionsRequireOnlyTheSelectedHarnessImage(t *testing.T) {
-	withoutHermes := `{"terminalbench2":{"repository_url":"https://example.invalid/terminal-bench-2.git","revision":"0123456789abcdef0123456789abcdef01234567"},"deepresearchbench":{"repository_url":"https://example.invalid/deep-research-bench.git","revision":"fedcba9876543210fedcba9876543210fedcba98"},"openclaw":{"image":"ghcr.io/openclaw/openclaw:2026.7.1"}}`
+	withoutHermes := `{"terminalbench2":{"repository_url":"https://example.invalid/terminal-bench-2.git","revision":"0123456789abcdef0123456789abcdef01234567"},"deepresearchbench":{"repository_url":"https://example.invalid/deep-research-bench.git","revision":"fedcba9876543210fedcba9876543210fedcba98"},"swebenchpro":{"dataset_repository_url":"https://example.invalid/swe-bench-pro-data.git","dataset_revision":"1111111111111111111111111111111111111111","evaluator_repository_url":"https://example.invalid/swe-bench-pro-evaluator.git","evaluator_revision":"2222222222222222222222222222222222222222"},"openclaw":{"image":"ghcr.io/openclaw/openclaw:2026.7.1"}}`
 	versions, err := DecodeVersions(strings.NewReader(withoutHermes))
 	if err != nil {
 		t.Fatalf("catalog without hermes.image was rejected: %v", err)

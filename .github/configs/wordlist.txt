@@ -17,6 +17,7 @@ codebase
 config
 controlmaster
 cpu
+cpus
 csv
 ctrf
 deduplicates
@@ -29,6 +30,8 @@ edu
 entrypoint
 filesystem
 ghcr
+gib
+gid
 github
 gpu
 hermes
@@ -74,7 +77,9 @@ preload
 Qwen
 prewarm
 Realtime
+reflogs
 reimplement
+relicense
 replayable
 roadmap
 runnable
@@ -97,6 +102,7 @@ stt
 subagent
 subagents
 substitutable
+swe
 symlink
 tavily
 tbd
@@ -112,6 +118,8 @@ tpot
 ttft
 tts
 tty
+uid
+untracked
 upstream's
 url's
 utf
@@ -122,5 +130,6 @@ wav
 websocket
 workdir
 workdirs
+worktree
 xfs
 yaml

@@ -207,10 +207,10 @@ type Options struct {
 	Environment      core.Environment
 	Judge            core.ModelConfig
 	JudgeDisabled    bool
-	FactJudge       core.ModelConfig
-	JinaAPIKeyEnv   string
-	APIKeyLookup    func(string) ([]byte, bool)
-	RewardThreshold float64
+	FactJudge        core.ModelConfig
+	JinaAPIKeyEnv    string
+	APIKeyLookup     func(string) ([]byte, bool)
+	RewardThreshold  float64
 }
 
 // Benchmark discovers selected Deep Research Bench tasks. Unlike

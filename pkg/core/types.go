@@ -20,6 +20,7 @@ type Environment struct {
 	GPUs         int               `json:"gpus,omitempty"`
 	AllowNetwork bool              `json:"allow_network"`
 	Env          map[string]string `json:"env,omitempty"`
+	ExecUser     string            `json:"-"`
 }
 
 // SandboxRequest carries stable run and task identity separately from the
@@ -32,12 +33,14 @@ type SandboxRequest struct {
 
 // Command is an argument-safe process invocation inside a sandbox.
 type Command struct {
-	Path    string            `json:"path"`
-	Args    []string          `json:"args,omitempty"`
-	Dir     string            `json:"dir,omitempty"`
-	Env     map[string]string `json:"env,omitempty"`
-	Stdin   []byte            `json:"-"`
-	Timeout time.Duration     `json:"timeout,omitempty"`
+	Path             string            `json:"path"`
+	Args             []string          `json:"args,omitempty"`
+	Dir              string            `json:"dir,omitempty"`
+	Env              map[string]string `json:"env,omitempty"`
+	Stdin            []byte            `json:"-"`
+	Timeout          time.Duration     `json:"timeout,omitempty"`
+	User             string            `json:"-"`
+	OutputLimitBytes int               `json:"-"`
 }
 
 // CommandResult records a completed sandbox process.

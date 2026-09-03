@@ -195,7 +195,10 @@ func TestBackendPreparationPrecedesAllEffects(t *testing.T) {
 	called := false
 	wiring := Wiring{ValidateComponents: func(config.Config) error { return nil }, PrepareBackend: func(config.Config, string) (PreparedBackend, error) {
 		return PreparedBackend{}, errors.New("prepare canary")
-	}, NewBenchmark: func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) { called = true; return nil, nil }}
+	}, NewBenchmark: func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
+		called = true
+		return nil, nil
+	}}
 	err := Run(context.Background(), profile, io.Discard, Dependencies{Wiring: wiring})
 	if err == nil || !strings.Contains(err.Error(), "prepare canary") || called {
 		t.Fatalf("err=%v called=%t", err, called)
@@ -298,11 +301,17 @@ func TestUnsupportedComponentsAreRejectedImmediatelyOnRunAndSetup(t *testing.T) 
 						}
 						return nil
 					},
-					PrepareBackend:       func(config.Config, string) (PreparedBackend, error) { effects++; return PreparedBackend{}, nil },
-					SetupBenchmark:       func(context.Context, config.Config) error { effects++; return nil },
-					LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) { effects++; return nil, nil },
-					PullImages:           func(context.Context, []string) error { effects++; return nil },
-					NewBenchmark:         func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) { effects++; return nil, nil },
+					PrepareBackend: func(config.Config, string) (PreparedBackend, error) { effects++; return PreparedBackend{}, nil },
+					SetupBenchmark: func(context.Context, config.Config) error { effects++; return nil },
+					LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
+						effects++
+						return nil, nil
+					},
+					PullImages: func(context.Context, []string) error { effects++; return nil },
+					NewBenchmark: func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
+						effects++
+						return nil, nil
+					},
 					NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
 						effects++
 						return HarnessInstance{}, nil
@@ -398,6 +407,7 @@ func writeCommandProfile(t *testing.T, output string) string {
 	versions := config.Versions{
 		TerminalBench2:    config.TerminalBench2Versions{RepositoryURL: "https://example.invalid/repo.git", Revision: "0123456789abcdef0123456789abcdef01234567"},
 		DeepResearchBench: config.DeepResearchBenchVersions{RepositoryURL: "https://example.invalid/deep-research-bench.git", Revision: "fedcba9876543210fedcba9876543210fedcba98"},
+		SWEbenchPro:       config.SWEbenchProVersions{DatasetRepositoryURL: "https://example.invalid/swe-bench-pro-data.git", DatasetRevision: "1111111111111111111111111111111111111111", EvaluatorRepositoryURL: "https://example.invalid/swe-bench-pro-evaluator.git", EvaluatorRevision: "2222222222222222222222222222222222222222"},
 		OpenClaw:          config.OpenClawVersions{Image: "ghcr.io/openclaw/openclaw:2026.7.1"},
 		Hermes:            config.HermesVersions{Image: "docker.io/nousresearch/hermes-agent:v2026.5.29.2"},
 	}

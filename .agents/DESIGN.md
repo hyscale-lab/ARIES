@@ -12,7 +12,24 @@ live sandbox, starts the bridge and harness, positively stops the harness and
 revokes the bridge, evaluates the still-running sandbox, then stops the
 sandbox. Terminal-Bench verifier files remain benchmark-private and are
 uploaded only from the freshly reverified pinned checkout after both isolation
-gates succeed.
+gates succeed. The public SWE-bench Pro adapter follows the same gates: before
+bridge access it privately snapshots selected verifier files and the image's
+initial ignored build artifacts, restores the base tree, and removes local
+future history; only after both gates does it restore the clean image baseline,
+apply the captured candidate patch, and inject the verifier snapshot plus the
+pinned task script and parser. Task networking remains enabled, so local Git
+history sanitization is not a claim that publicly hosted data cannot be
+refetched.
+
+SWE-bench Pro task commands default to numeric UID/GID `65532:65532` with
+`no-new-privileges`; Docker startup positively confirms that security option
+from container inspection before returning the live sandbox. Benchmark-owned
+preparation and evaluation commands explicitly use root. Evaluation restores a
+private sanitized-Git baseline
+before bounded candidate capture, clears residual agent-UID processes before
+private staging and after tests, installs verifier files through non-symlink
+parents as root-owned read-only inputs, streams bounded test logs host-side,
+runs the parser in an isolated root context, and scrubs container staging.
 
 Every checked-in profile explicitly declares `overrides_file`; an empty string
 disables overrides without opening a file. A referenced strict-JSON override
@@ -50,6 +67,13 @@ as the conservative fallback. The bridge maps OpenClaw's pinned virtual workspac
 without creating a sandbox symlink. It retains structured JSONL tool records
 plus sensitive, lossless human-readable `bridge/ssh_raw.log` evidence through
 a bounded asynchronous writer whose failure blocks positive bridge revocation.
+
+SWE-bench Pro independently pins its public Parquet dataset and official
+open-source evaluator. The adapter requires exactly 731 public rows, takes each
+task image tag from the row's `dockerhub_tag`, uses `/app` as the repository
+workdir, and keeps gold patch/test data out of `core.Task`. A task is resolved
+only when the pinned parser reports every row-declared `FAIL_TO_PASS` and
+`PASS_TO_PASS` test as passed.
 
 ## Repository boundary
 

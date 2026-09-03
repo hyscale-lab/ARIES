@@ -26,7 +26,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Check spelling
-        uses: rojopolis/spellcheck-github-actions@0.63.0
+        uses: rojopolis/spellcheck-github-actions@0.66.0
         with:
           config_path: .github/configs/spellcheck.yml
 
@@ -42,6 +42,8 @@ jobs:
           persist-credentials: false
       - name: Lint commits
         uses: dafnik/commitlint@v1
+        with:
+          configFile: commitlint.config.js
 
   markdown-link-check:
     name: Markdown links
