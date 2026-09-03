@@ -5,6 +5,7 @@ antgroup
 api
 argv
 aries
+asr
 backend
 backends
 bursty
@@ -92,6 +93,7 @@ stateful
 stderr
 stdin
 stdout
+stt
 subagent
 subagents
 substitutable
@@ -116,6 +118,7 @@ utf
 uuid
 validator
 verifier
+wav
 websocket
 workdir
 workdirs
