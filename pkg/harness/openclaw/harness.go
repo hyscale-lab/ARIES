@@ -578,7 +578,7 @@ func (manager *Manager) Run(ctx context.Context, instruction string) (core.Harne
 }
 
 func (manager *Manager) runRealtime(ctx context.Context, active *session, instruction string, started time.Time) (core.HarnessResult, error) {
-	audioPath, speechPaths, synthErr := manager.synthesizeRealtimeAudio(ctx, active, instruction)
+	audioPath, speechPaths, synthErr := manager.synthesizeVoiceInstruction(ctx, active, instruction)
 	if len(speechPaths) != 0 {
 		active.logPaths = appendUnique(active.logPaths, speechPaths...)
 	}
@@ -732,8 +732,8 @@ func (manager *Manager) gatewayURL(ctx context.Context, active *session) (string
 	return "ws://" + net.JoinHostPort("127.0.0.1", binding.HostPort), nil
 }
 
-func (manager *Manager) synthesizeRealtimeAudio(ctx context.Context, active *session, instruction string) (string, []string, error) {
-	instructionPath := filepath.Join(active.artifactDir, "voice-instruction.txt")
+func (manager *Manager) synthesizeVoiceInstruction(ctx context.Context, active *session, instruction string) (string, []string, error) {
+	instructionPath := filepath.Join(active.artifactDir, audioinput.VoiceInstructionTextFile)
 	if err := writeArtifact(instructionPath, []byte(instruction)); err != nil {
 		return "", nil, fmt.Errorf("write realtime voice instruction: %w", err)
 	}
@@ -748,45 +748,33 @@ func (manager *Manager) synthesizeRealtimeAudio(ctx context.Context, active *ses
 		clear(apiKey)
 		return "", []string{instructionPath}, fmt.Errorf("OpenClaw realtime TTS API key: %w", err)
 	}
-	synthesizer, err := manager.newSpeech(audioinput.SpeechClientOptions{BaseURL: manager.realtime.TTS.BaseURL, APIKey: apiKey, Timeout: manager.realtime.TTS.Timeout})
-	clear(apiKey)
-	if err != nil {
-		return "", []string{instructionPath}, fmt.Errorf("construct realtime TTS client: %w", err)
-	}
-	defer synthesizer.Close()
-	result, err := synthesizer.Synthesize(ctx, audioinput.SpeechRequest{
-		Text: instruction, Model: manager.realtime.TTS.Model, Voice: manager.realtime.TTS.Voice,
-		Format: "wav", Instructions: manager.realtime.TTS.Instructions, Speed: manager.realtime.TTS.Speed,
+	apiKeyCleared := false
+	defer func() {
+		if !apiKeyCleared {
+			clear(apiKey)
+		}
+	}()
+	return audioinput.SynthesizeVoiceInstruction(ctx, instruction, audioinput.VoiceInstructionOptions{
+		ArtifactDir:     active.artifactDir,
+		InstructionPath: instructionPath,
+		ErrorLabel:      "realtime",
+		TTSErrorLabel:   "realtime",
+		Provider:        manager.realtime.TTS.Provider,
+		BaseURL:         manager.realtime.TTS.BaseURL,
+		APIKey:          apiKey,
+		Model:           manager.realtime.TTS.Model,
+		Voice:           manager.realtime.TTS.Voice,
+		Instructions:    manager.realtime.TTS.Instructions,
+		Speed:           manager.realtime.TTS.Speed,
+		Timeout:         manager.realtime.TTS.Timeout,
+		NewSpeech: func(options audioinput.SpeechClientOptions) (audioinput.SpeechSynthesizer, error) {
+			synthesizer, err := manager.newSpeech(options)
+			clear(apiKey)
+			apiKeyCleared = true
+			return synthesizer, err
+		},
+		WriteArtifact: writeArtifact,
 	})
-	if err != nil {
-		return "", []string{instructionPath}, fmt.Errorf("synthesize realtime voice instruction: %w", err)
-	}
-	audioPath := filepath.Join(active.artifactDir, "voice-instruction.wav")
-	if err := writeArtifact(audioPath, result.Audio); err != nil {
-		clear(result.Audio)
-		return "", []string{instructionPath}, fmt.Errorf("write realtime voice audio: %w", err)
-	}
-	clear(result.Audio)
-	metaPath := filepath.Join(active.artifactDir, "voice-instruction.wav.meta.json")
-	metadata := map[string]any{
-		"provider":    manager.realtime.TTS.Provider,
-		"model":       result.Model,
-		"voice":       result.Voice,
-		"format":      result.Format,
-		"text_sha256": result.TextSHA256,
-		"text_chars":  len(instruction),
-		"cached":      false,
-		"output_path": audioPath,
-	}
-	content, err := json.MarshalIndent(metadata, "", "  ")
-	if err != nil {
-		return "", []string{instructionPath, audioPath}, fmt.Errorf("encode realtime TTS metadata: %w", err)
-	}
-	content = append(content, '\n')
-	if err := writeArtifact(metaPath, content); err != nil {
-		return "", []string{instructionPath, audioPath}, fmt.Errorf("write realtime TTS metadata: %w", err)
-	}
-	return audioPath, []string{instructionPath, audioPath, metaPath}, nil
 }
 
 func (manager *Manager) realtimeAudioProvider(audioPath string) realtimeclient.AudioProvider {
