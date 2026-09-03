@@ -67,6 +67,41 @@ func TestSynthesizeVoiceInstructionWritesArtifacts(t *testing.T) {
 	}
 }
 
+func TestSynthesizeVoiceInstructionUsesSuppliedInstructionPath(t *testing.T) {
+	instructionPath := filepath.Join(t.TempDir(), VoiceInstructionTextFile)
+	synthesizer := &stubInstructionSynthesizer{result: SpeechResult{
+		Audio: []byte("RIFF....WAVE"), Model: "tts-model", Voice: "alloy", Format: "wav", TextSHA256: "abc123",
+	}}
+	writes := map[string]int{}
+	audioPath, paths, err := SynthesizeVoiceInstruction(context.Background(), "repair git", VoiceInstructionOptions{
+		ArtifactDir:     filepath.Join(t.TempDir(), "harness"),
+		InstructionPath: instructionPath,
+		ErrorLabel:      "test",
+		Provider:        "openai",
+		Model:           "tts-model",
+		Voice:           "alloy",
+		NewSpeech: func(SpeechClientOptions) (SpeechSynthesizer, error) {
+			return synthesizer, nil
+		},
+		WriteArtifact: func(path string, _ []byte) error {
+			writes[path]++
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 3 || paths[0] != instructionPath || audioPath != paths[1] {
+		t.Fatalf("audioPath=%q paths=%#v", audioPath, paths)
+	}
+	if writes[instructionPath] != 0 {
+		t.Fatalf("supplied instruction path was written %d time(s)", writes[instructionPath])
+	}
+	if writes[filepath.Join(filepath.Dir(audioPath), VoiceInstructionWAVFile)] != 1 || writes[filepath.Join(filepath.Dir(audioPath), VoiceInstructionMetaFile)] != 1 {
+		t.Fatalf("writes = %#v", writes)
+	}
+}
+
 func TestSynthesizeVoiceInstructionReturnsPartialArtifactsOnError(t *testing.T) {
 	_, paths, err := SynthesizeVoiceInstruction(context.Background(), "repair git", VoiceInstructionOptions{
 		ArtifactDir: t.TempDir(),
