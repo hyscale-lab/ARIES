@@ -74,7 +74,7 @@ func TestExplicitCompositionSwitches(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(source)
-	for _, value := range []string{`case "terminalbench2"`, `case "swebenchpro"`, `case "openclaw"`, `case "hermes"`, `case "docker"`, `case "openclaw-ssh"`, `case "hermes-ssh"`, `case "deepseek"`, `case "sglang"`} {
+	for _, value := range []string{`case "terminalbench2"`, `case "swebenchpro"`, `case "openclaw"`, `case "hermes"`, `case "docker"`, `case "openclaw-ssh"`, `case "hermes-ssh"`, `case "deepseek"`, `case "sglang"`, `case "openai"`} {
 		if !strings.Contains(text, value) {
 			t.Fatalf("missing explicit switch %s", value)
 		}
@@ -346,3 +346,18 @@ mem-fraction-static: 0.85
 reasoning-parser: qwen3
 tool-call-parser: qwen
 `
+
+func TestExternalOpenAIPreparationReturnsNilRuntime(t *testing.T) {
+	cfg := config.Config{Runtime: config.RuntimeConfig{Backend: "openai", Mode: "external"}, Model: config.ProfileModel{ID: "served/model", BaseURL: "http://vllm.local:8000/v1", APIKeyEnv: "KEY"}}
+	prepared, err := prepareBackend(cfg, filepath.Join(t.TempDir(), "absent"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.Runtime != nil || prepared.Model.Provider != "openai" || len(prepared.EffectiveGPUIndices) != 0 {
+		t.Fatalf("prepared=%#v", prepared)
+	}
+	cfg.Runtime.Mode = "managed"
+	if _, err := prepareBackend(cfg, t.TempDir()); err == nil {
+		t.Fatal("managed OpenAI-compatible runtime was accepted")
+	}
+}

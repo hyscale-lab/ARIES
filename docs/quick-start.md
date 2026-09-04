@@ -102,8 +102,9 @@ ARIES owns a model-server process. The supported combinations are:
 | `deepseek` | `external` | Must be omitted | DeepSeek |
 | `sglang` | `external` | `file` only | User |
 | `sglang` | `managed` | `file`, `executable`, `startup_timeout`, `stop_timeout` | ARIES |
+| `openai` | `external` | Must be omitted | User |
 
-DeepSeek cannot use managed mode. SGLang supports both modes.
+DeepSeek and `openai` are external only. SGLang supports both modes.
 
 ### External DeepSeek
 
@@ -205,6 +206,51 @@ credential:
 export SGLANG_API_KEY=unused-local-token
 ./bin/aries .cache/openclaw-tb2-fix-git-sglang.json
 ```
+
+### External OpenAI-compatible server
+
+`runtime.backend: "openai"` accepts any server that speaks the OpenAI chat
+completions API and lists its models at `/v1/models`: vLLM, `llama.cpp`, a
+gateway, or a hosted endpoint. ARIES never starts, configures, or stops the
+server. Before the run it makes one bounded `/v1/models` request and confirms
+that `model.id` is served. `runtime.config` must be omitted.
+
+The checked-in profile targets a vLLM server:
+
+```json
+{
+  "runtime": {
+    "backend": "openai",
+    "mode": "external"
+  },
+  "model": {
+    "base_url": "http://vllm.local:8000/v1",
+    "api_key_env": "VLLM_API_KEY",
+    "id": "Qwen/Qwen3.6-35B-A3B-FP8"
+  }
+}
+```
+
+Copy the profile, then set `model.base_url` to an HTTP endpoint that ends
+exactly in `/v1` and `model.id` to the name the server reports. The
+`vllm.local` hostname is a placeholder; the address must resolve from the ARIES
+host and from the harness containers. Start the server yourself, for example:
+
+```sh
+vllm serve Qwen/Qwen3.6-35B-A3B-FP8 --port 8000 \
+  --served-model-name Qwen/Qwen3.6-35B-A3B-FP8
+```
+
+An unauthenticated server still needs a nonempty placeholder credential:
+
+```sh
+export VLLM_API_KEY=unused-local-token
+./bin/aries profiles/hermes-tb2-fix-git-vllm.json
+```
+
+Hermes has no `sglang` or plain `openai` provider, so for both backends ARIES
+renders Hermes's generic `custom` provider, which routes to `model.base_url`.
+OpenClaw receives the server as a `models.providers` entry named `aries`.
 
 ### Managed SGLang
 

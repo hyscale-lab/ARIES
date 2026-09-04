@@ -309,3 +309,28 @@ func TestLauncherExportsTavilyKeyWhenExtractEnabled(t *testing.T) {
 		t.Fatalf("launcher exports tavily key when extract is disabled: %s", disabledScript)
 	}
 }
+
+// A generic OpenAI-compatible server is keyed under the neutral "aries"
+// provider id, like DeepSeek, and its base URL follows the /v1 rule.
+func TestRenderConfigKeysOpenAICompatibleProviderAsAries(t *testing.T) {
+	model := testModel()
+	model.Provider = "openai"
+	model.BaseURL = "http://vllm.local:8000/v1/"
+	model.APIKeyEnv = "VLLM_API_KEY"
+	content, err := renderConfig(model, testEndpoint(), false, false, false, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var configuration openClawConfig
+	if err := json.Unmarshal(content, &configuration); err != nil {
+		t.Fatal(err)
+	}
+	provider, ok := configuration.Models.Providers["aries"]
+	if !ok || len(configuration.Models.Providers) != 1 || provider.BaseURL != "http://vllm.local:8000/v1" || provider.APIKey != "${VLLM_API_KEY}" || configuration.Agents.Defaults.Model.Primary != "aries/deterministic-model" {
+		t.Fatalf("configuration = %#v", configuration)
+	}
+	model.BaseURL = "http://vllm.local:8000"
+	if _, err := renderConfig(model, testEndpoint(), false, false, false, 0); err == nil {
+		t.Fatal("accepted an openai base URL without /v1")
+	}
+}
