@@ -87,6 +87,13 @@ regardless of ownership.
 Second, Hermes requires `/bin/bash` in the task image, because every tool call
 it issues is `bash -c` on the remote.
 
+Third, Hermes accepts only provider names in its own registry, and the one-shot
+rejects an unknown name before any request. Neither pinned version knows
+`sglang` or a plain `openai` provider, so the renderer maps both backends to
+Hermes's generic `custom` provider, which routes to `model.base_url`, in the
+rendered config and in the one-shot's `--provider` argument. DeepSeek is a
+built-in provider and stays as written.
+
 ## Customization & Contribution Guide
 
 Add a harness only when it can implement the existing `AgentHarness` lifecycle

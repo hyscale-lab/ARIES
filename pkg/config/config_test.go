@@ -489,7 +489,7 @@ func TestCheckedInProfilesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 11 {
+	if len(paths) != 12 {
 		t.Fatalf("profiles=%v", paths)
 	}
 	for _, path := range paths {
@@ -635,5 +635,27 @@ func TestBridgeRawLogDefaultsToDropped(t *testing.T) {
 	}
 	if !enabled.RetainBridgeRawLog() {
 		t.Fatal("retain_raw_log:true must retain the raw log")
+	}
+}
+
+// The openai backend names any OpenAI-compatible server. It is external only,
+// carries no native configuration, and shares the /v1 base URL rule.
+func TestOpenAIBackendIsExternalOnly(t *testing.T) {
+	openai := strings.Replace(validConfig, `"runtime":{"backend":"deepseek","mode":"external"}`, `"runtime":{"backend":"openai","mode":"external"}`, 1)
+	openai = strings.Replace(openai, `http://127.0.0.1:8080`, `http://vllm.local:8000/v1/`, 1)
+	cfg, err := Decode(strings.NewReader(openai))
+	if err != nil || cfg.Model.BaseURL != "http://vllm.local:8000/v1" || cfg.CoreModel().Provider != "openai" {
+		t.Fatalf("url=%q provider=%q err=%v", cfg.Model.BaseURL, cfg.CoreModel().Provider, err)
+	}
+	rejected := map[string]string{
+		"managed mode":    strings.Replace(openai, `"mode":"external"`, `"mode":"managed"`, 1),
+		"native file":     strings.Replace(openai, `"mode":"external"`, `"mode":"external","config":{"file":"native.yaml"}`, 1),
+		"path without v1": strings.Replace(openai, `http://vllm.local:8000/v1/`, `http://vllm.local:8000`, 1),
+		"unknown backend": strings.Replace(openai, `"backend":"openai"`, `"backend":"vllm"`, 1),
+	}
+	for name, text := range rejected {
+		if _, err := Decode(strings.NewReader(text)); err == nil {
+			t.Fatalf("%s: expected rejection", name)
+		}
 	}
 }

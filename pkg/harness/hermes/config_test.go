@@ -51,7 +51,7 @@ func TestRenderConfigNormalizesSGLangAndRejectsBadInput(t *testing.T) {
 		t.Fatalf("SGLang base URL was not normalized:\n%s", rendered)
 	}
 	bad := map[string]func(*core.ModelConfig){
-		"provider":  func(m *core.ModelConfig) { m.Provider = "openai" },
+		"provider":  func(m *core.ModelConfig) { m.Provider = "anthropic" },
 		"base url":  func(m *core.ModelConfig) { m.BaseURL = "ftp://host" },
 		"model id":  func(m *core.ModelConfig) { m.Model = " " },
 		"key env":   func(m *core.ModelConfig) { m.APIKeyEnv = "1BAD" },
@@ -363,5 +363,34 @@ func TestAgentWrapperExportsExtractKeyWhenEnabled(t *testing.T) {
 		if !strings.Contains(script, want) {
 			t.Fatalf("wrapper is missing %q:\n%s", want, script)
 		}
+	}
+}
+
+// Neither pinned Hermes version knows an "sglang" or plain "openai" provider,
+// and the one-shot rejects an unknown name, so both backends must render as
+// Hermes's generic "custom" provider. DeepSeek is built in and stays as written.
+func TestRenderConfigMapsOpenAICompatibleBackendsToCustomProvider(t *testing.T) {
+	for _, provider := range []string{"sglang", "openai"} {
+		model := validModel()
+		model.Provider = provider
+		model.BaseURL = "http://vllm.local:8000/v1"
+		rendered, err := renderConfig(model, 10, false, false, true, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(rendered)
+		if !strings.Contains(text, `provider: "custom"`) || strings.Contains(text, `provider: "`+provider+`"`) {
+			t.Fatalf("%s backend was not rendered as the custom provider:\n%s", provider, text)
+		}
+		if got := hermesProvider(provider); got != "custom" {
+			t.Fatalf("hermesProvider(%s) = %q", provider, got)
+		}
+	}
+	rendered, err := renderConfig(validModel(), 10, false, false, true, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(rendered), `provider: "deepseek"`) || hermesProvider("deepseek") != "deepseek" {
+		t.Fatal("deepseek provider was rewritten")
 	}
 }

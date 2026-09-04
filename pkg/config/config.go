@@ -44,6 +44,11 @@ type ExecutionConfig struct {
 	Loop         time.Duration `json:"-"`
 }
 
+// RuntimeConfig selects the model service. Backend "deepseek" and "openai"
+// are external only: "deepseek" is the official DeepSeek endpoint with its own
+// preflight, "openai" is any OpenAI-compatible server (vLLM, llama.cpp, a
+// gateway) that ARIES neither starts nor configures. Backend "sglang" may be
+// external or managed and carries a native YAML file either way.
 type RuntimeConfig struct {
 	Backend string              `json:"backend"`
 	Mode    string              `json:"mode"`
@@ -464,8 +469,8 @@ func (c *Config) validate() error {
 			return fmt.Errorf("%s is required", check.name)
 		}
 	}
-	if c.Runtime.Backend != "deepseek" && c.Runtime.Backend != "sglang" {
-		return errors.New("runtime.backend must be deepseek or sglang")
+	if c.Runtime.Backend != "deepseek" && c.Runtime.Backend != "sglang" && c.Runtime.Backend != "openai" {
+		return errors.New("runtime.backend must be deepseek, sglang, or openai")
 	}
 	if c.Harness.Mode == "" {
 		c.Harness.Mode = "agent"
@@ -488,10 +493,10 @@ func (c *Config) validate() error {
 		}
 	}
 
-	if c.Runtime.Backend == "sglang" {
-		normalized, err := normalizeSGLangBaseURL(c.Model.BaseURL)
+	if c.Runtime.Backend == "sglang" || c.Runtime.Backend == "openai" {
+		normalized, err := normalizeV1BaseURL(c.Model.BaseURL)
 		if err != nil {
-			return fmt.Errorf("model.base_url for sglang: %w", err)
+			return fmt.Errorf("model.base_url for %s: %w", c.Runtime.Backend, err)
 		}
 		c.Model.BaseURL = normalized
 	} else if err := validateHTTPBaseURL("model.base_url", c.Model.BaseURL); err != nil {
@@ -708,17 +713,17 @@ func parseOptionalPositiveDuration(name, value string) (time.Duration, error) {
 
 func (c *RuntimeConfig) validate() error {
 	switch c.Backend {
-	case "deepseek":
+	case "deepseek", "openai":
 		if c.Mode != "external" {
-			return errors.New("runtime.backend deepseek requires external mode")
+			return fmt.Errorf("runtime.backend %s requires external mode", c.Backend)
 		}
 		if c.Config.File != "" || c.Config.Executable != "" || c.Config.StartupTimeoutText != "" || c.Config.StopTimeoutText != "" || len(c.Config.GPUIndices) != 0 {
-			return errors.New("external deepseek runtime.config must be empty")
+			return fmt.Errorf("external %s runtime.config must be empty", c.Backend)
 		}
 		return nil
 	case "sglang":
 	default:
-		return errors.New("runtime.backend must be deepseek or sglang")
+		return errors.New("runtime.backend must be deepseek, sglang, or openai")
 	}
 	switch c.Mode {
 	case "external":
@@ -761,7 +766,9 @@ func (c *RuntimeConfig) validate() error {
 	}
 }
 
-func normalizeSGLangBaseURL(baseURL string) (string, error) {
+// normalizeV1BaseURL accepts the base URL of an OpenAI-compatible server: an
+// absolute HTTP(S) URL whose path is exactly the versioned /v1 prefix.
+func normalizeV1BaseURL(baseURL string) (string, error) {
 	parsed, err := url.Parse(baseURL)
 	if err != nil || parsed.Scheme != "http" && parsed.Scheme != "https" || parsed.Host == "" || parsed.Opaque != "" || parsed.User != nil || parsed.RawPath != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || strings.Contains(baseURL, "#") {
 		return "", errors.New("must be an absolute HTTP(S) URL without credentials, escaped path, query, or fragment")

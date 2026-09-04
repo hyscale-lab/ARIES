@@ -91,6 +91,14 @@ func prepareBackend(cfg config.Config, outputDir string) (app.PreparedBackend, e
 			return app.PreparedBackend{}, errors.New("DeepSeek runtime must be external")
 		}
 		return app.PreparedBackend{Model: model}, nil
+	case "openai":
+		// Any OpenAI-compatible server. ARIES validates the endpoint in
+		// preflight and never owns the process, so there is nothing to
+		// prepare beyond the model description.
+		if cfg.Runtime.Mode != "external" {
+			return app.PreparedBackend{}, errors.New("OpenAI-compatible runtime must be external")
+		}
+		return app.PreparedBackend{Model: model}, nil
 	case "sglang":
 		native, err := runtimesglang.LoadNativeConfig(cfg.Runtime.Config.ResolvedFile, cfg.Model.ID, cfg.Model.BaseURL)
 		if err != nil {

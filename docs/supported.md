@@ -16,6 +16,7 @@ plugin discovery.
 | Tool bridge | **Hermes SSH** — pair-specific bridge for Hermes | Same ownership; accepts Hermes's own SSH grammar and denies its `~/.hermes` file sync | `bridge.type: "hermes-ssh"`; requires `harness.type: "hermes"`; needs no helper binary because Hermes runs OpenSSH itself |
 | Model service | **DeepSeek** — supported external OpenAI-compatible endpoint | Validates model access; does not own the service | `runtime.backend: "deepseek"`, `runtime.mode: "external"`; `profiles/openclaw-tb2-fix-git-deepseek.json` |
 | Model service | **SGLang** — supported external or ARIES-managed runtime | Validates both modes; in managed mode owns one host process for the profile run | `runtime.backend: "sglang"`; `profiles/openclaw-tb2-fix-git-sglang.json`; `configs/sglang/qwen3-8b-local.yaml` |
+| Model service | **OpenAI-compatible server** — external only; vLLM, `llama.cpp`, gateways, hosted endpoints | Confirms the served model through one bounded `/v1/models` request; never starts, configures, or stops the server | `runtime.backend: "openai"`, `runtime.mode: "external"`; `profiles/hermes-tb2-fix-git-vllm.json` |
 
 ## Configuration boundaries
 
@@ -33,8 +34,9 @@ issues is `bash -c` on the remote.
 Model services sit outside the four-role Runner. DeepSeek must be external and uses the
 configured remote base URL. SGLang accepts an external endpoint backed by its
 native YAML, or a managed mode with an explicit Python executable, startup and
-stop timeouts, and optional validated GPU indices. DeepSeek is not a managed
-runtime, and SGLang is not a fifth Runner role.
+stop timeouts, and optional validated GPU indices. The `openai` backend is any
+other OpenAI-compatible server; it is external only and has no native file.
+DeepSeek is not a managed runtime, and SGLang is not a fifth Runner role.
 
 Realtime mode requires `harness.realtime` TTS and session settings and the
 separate `OPENAI_API_KEY` named by `harness.realtime.tts.api_key_env`. The TTS
@@ -48,6 +50,7 @@ Start with one of the checked-in profiles:
 - `profiles/openclaw-tb2-fix-git-sglang.json`
 - `profiles/openclaw-tb2-fix-git-realtime-deepseek.json`
 - `profiles/hermes-tb2-fix-git-deepseek.json`
+- `profiles/hermes-tb2-fix-git-vllm.json` — the same run against an external vLLM server through the `openai` backend
 - `profiles/openclaw-drb-smoke1-deepseek.json` — Deep Research Bench, DeepSeek harness model, DeepSeek judge model, web search with Tavily extract
 - `profiles/openclaw-drb-smoke3-deepseek.json` — Deep Research Bench, larger task subset, web search with Tavily extract
 - `profiles/hermes-drb-smoke1-deepseek.json` — Deep Research Bench, Hermes harness with web search and Tavily extract
