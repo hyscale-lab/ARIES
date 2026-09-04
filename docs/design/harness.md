@@ -87,6 +87,26 @@ regardless of ownership.
 Second, Hermes requires `/bin/bash` in the task image, because every tool call
 it issues is `bash -c` on the remote.
 
+Third, Hermes accepts only provider names in its own registry, and the one-shot
+rejects an unknown name before any request. Neither pinned version knows
+`sglang` or a plain `openai` provider, so the renderer maps both backends to
+Hermes's generic `custom` provider, which routes to `model.base_url`, in the
+rendered config and in the one-shot's `--provider` argument. DeepSeek is a
+built-in provider and stays as written.
+
+Fourth, three optional profile blocks render into `config.yaml` only when set:
+`model.context_length` / `max_tokens` / `temperature`, `harness.compaction`,
+and `harness.extra_body`. The last is an opaque JSON object written as the
+`extra_body` of one `custom_providers` entry, which Hermes merges into every
+chat request for its `custom` provider. Hermes expands `${NAME}` references in
+its configuration from the process environment, so the harness exports
+`ARIES_RUN_ID` and `ARIES_TASK_ID` into the container, so a profile can tag every
+request with the task; a profile may reference only those two, which keeps the
+credential reference out of request bodies. The `v2026.8.31` image also sets
+`HERMES_WRITE_SAFE_ROOT=/opt/data`, which makes `write_file` and `patch` refuse
+every sandbox path; the harness clears it, because the sandbox is the isolation
+boundary and the tools act on it over SSH.
+
 ## Customization & Contribution Guide
 
 Add a harness only when it can implement the existing `AgentHarness` lifecycle

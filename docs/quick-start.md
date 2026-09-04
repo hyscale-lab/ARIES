@@ -102,8 +102,9 @@ ARIES owns a model-server process. The supported combinations are:
 | `deepseek` | `external` | Must be omitted | DeepSeek |
 | `sglang` | `external` | `file` only | User |
 | `sglang` | `managed` | `file`, `executable`, `startup_timeout`, `stop_timeout` | ARIES |
+| `openai` | `external` | Must be omitted | User |
 
-DeepSeek cannot use managed mode. SGLang supports both modes.
+DeepSeek and `openai` are external only. SGLang supports both modes.
 
 ### External DeepSeek
 
@@ -205,6 +206,51 @@ credential:
 export SGLANG_API_KEY=unused-local-token
 ./bin/aries .cache/openclaw-tb2-fix-git-sglang.json
 ```
+
+### External OpenAI-compatible server
+
+`runtime.backend: "openai"` accepts any server that speaks the OpenAI chat
+completions API and lists its models at `/v1/models`: vLLM, `llama.cpp`, a
+gateway, or a hosted endpoint. ARIES never starts, configures, or stops the
+server. Before the run it makes one bounded `/v1/models` request and confirms
+that `model.id` is served. `runtime.config` must be omitted.
+
+The checked-in profile targets a vLLM server:
+
+```json
+{
+  "runtime": {
+    "backend": "openai",
+    "mode": "external"
+  },
+  "model": {
+    "base_url": "http://vllm.local:8000/v1",
+    "api_key_env": "VLLM_API_KEY",
+    "id": "Qwen/Qwen3.6-35B-A3B-FP8"
+  }
+}
+```
+
+Copy the profile, then set `model.base_url` to an HTTP endpoint that ends
+exactly in `/v1` and `model.id` to the name the server reports. The
+`vllm.local` hostname is a placeholder; the address must resolve from the ARIES
+host and from the harness containers. Start the server yourself, for example:
+
+```sh
+vllm serve Qwen/Qwen3.6-35B-A3B-FP8 --port 8000 \
+  --served-model-name Qwen/Qwen3.6-35B-A3B-FP8
+```
+
+An unauthenticated server still needs a nonempty placeholder credential:
+
+```sh
+export VLLM_API_KEY=unused-local-token
+./bin/aries profiles/hermes-tb2-fix-git-vllm.json
+```
+
+Hermes has no `sglang` or plain `openai` provider, so for both backends ARIES
+renders Hermes's generic `custom` provider, which routes to `model.base_url`.
+OpenClaw receives the server as a `models.providers` entry named `aries`.
 
 ### Managed SGLang
 
@@ -310,6 +356,66 @@ credentials; Hermes logs one `file_sync: sync failed` warning and continues.
 Artifacts land under `<run>/<task>/harness/`: the redacted `config.yaml`, the
 one-shot's `hermes_stdout.log` and `hermes_stderr.log`, `container.log`, and the
 exported message-level trajectory at `telemetry/sessions.jsonl`.
+
+### Hermes context window, compaction, and request extra body
+
+Three optional profile blocks reach the rendered Hermes `config.yaml`. Each is
+Hermes-only and is rejected under another harness. A profile without them
+renders the same file as before.
+
+- `model.context_length`, `model.max_tokens`, and `model.temperature` set the
+  window Hermes's compressor reasons about and the request sampling.
+- `harness.compaction.threshold_tokens` is an absolute compaction trigger.
+  Hermes applies it after its 64K minimum and its 75% floor for windows under
+  512K, so it is the one knob that gives an exact trigger on a large window.
+  `harness.compaction.enabled: false` turns compaction off.
+- `harness.extra_body` is any JSON object. ARIES writes it as the `extra_body`
+  of one `custom_providers` entry, and Hermes merges it into every chat
+  request. Hermes performs that merge only for its `custom` provider, so the
+  block requires the `sglang` or `openai` backend.
+
+Hermes expands `${NAME}` references in its configuration from the container
+environment. ARIES exports `ARIES_RUN_ID` and `ARIES_TASK_ID` into the Hermes
+container, and those two are the only references `harness.extra_body` may
+carry. The checked-in profile compacts at 65,536 tokens and tags every request
+with the task through the OpenAI `user` field:
+
+```json
+{
+  "harness": {
+    "type": "hermes",
+    "compaction": {
+      "enabled": true,
+      "threshold_tokens": 65536
+    },
+    "extra_body": {
+      "chat_template_kwargs": {
+        "preserve_thinking": true
+      },
+      "user": "${ARIES_RUN_ID}-${ARIES_TASK_ID}"
+    }
+  },
+  "model": {
+    "base_url": "http://vllm.local:8000/v1",
+    "api_key_env": "VLLM_API_KEY",
+    "id": "Qwen/Qwen3.6-35B-A3B-FP8",
+    "context_length": 262144,
+    "max_tokens": 32768,
+    "temperature": 1.0
+  }
+}
+```
+
+```sh
+export VLLM_API_KEY=unused-local-token
+./bin/aries profiles/hermes-tb2-fix-git-vllm-compaction.json
+```
+
+`compression.threshold_tokens` exists since Hermes v2026.8, so the pinned image
+moves to `v2026.8.31`. The rendered `config.yaml` under `<run>/<task>/harness/`
+shows the block exactly as Hermes reads it. The `agent.max_turns` value in that
+file does not bound the one-shot; use `agent_timeout_seconds` in the overrides
+file to bound a run.
 
 ### Realtime OpenClaw mode
 

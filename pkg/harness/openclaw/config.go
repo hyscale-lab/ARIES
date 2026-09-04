@@ -164,15 +164,19 @@ func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, webSearchE
 	if err := validateModel(model); err != nil {
 		return nil, err
 	}
-	if model.Provider == "sglang" {
-		model.BaseURL, _ = normalizeSGLangBaseURL(model.BaseURL)
+	if openAICompatible(model.Provider) {
+		model.BaseURL, _ = normalizeV1BaseURL(model.BaseURL)
 	}
 	if err := validateEndpoint(endpoint); err != nil {
 		return nil, err
 	}
-	providerID := model.Provider
-	if providerID == "deepseek" {
-		providerID = "aries"
+	// providerID keys the models.providers entry OpenClaw merges into its
+	// catalog. DeepSeek and generic OpenAI-compatible servers use the neutral
+	// "aries" id so the entry never collides with a built-in provider of the
+	// same name; SGLang keeps its own id.
+	providerID := "aries"
+	if model.Provider == "sglang" {
+		providerID = "sglang"
 	}
 	configuration := openClawConfig{
 		Gateway: gatewayConfig{
@@ -256,12 +260,12 @@ func denyToolList(subagentsEnabled bool) []string {
 }
 
 func validateModel(model core.ModelConfig) error {
-	if model.Provider != "deepseek" && model.Provider != "sglang" {
-		return errors.New("OpenClaw model provider must be deepseek or sglang")
+	if model.Provider != "deepseek" && !openAICompatible(model.Provider) {
+		return errors.New("OpenClaw model provider must be deepseek, sglang, or openai")
 	}
-	if model.Provider == "sglang" {
-		if _, err := normalizeSGLangBaseURL(model.BaseURL); err != nil {
-			return fmt.Errorf("OpenClaw SGLang base URL: %w", err)
+	if openAICompatible(model.Provider) {
+		if _, err := normalizeV1BaseURL(model.BaseURL); err != nil {
+			return fmt.Errorf("OpenClaw %s base URL: %w", model.Provider, err)
 		}
 	} else {
 		parsed, err := url.Parse(model.BaseURL)
@@ -281,7 +285,13 @@ func validateModel(model core.ModelConfig) error {
 	return nil
 }
 
-func normalizeSGLangBaseURL(baseURL string) (string, error) {
+// openAICompatible reports whether the backend is a generic OpenAI-compatible
+// server whose base URL must be the versioned /v1 prefix.
+func openAICompatible(provider string) bool {
+	return provider == "sglang" || provider == "openai"
+}
+
+func normalizeV1BaseURL(baseURL string) (string, error) {
 	parsed, err := url.Parse(baseURL)
 	if err != nil || parsed.Scheme != "http" && parsed.Scheme != "https" || parsed.Host == "" || parsed.Opaque != "" || parsed.User != nil || parsed.RawPath != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || strings.Contains(baseURL, "#") {
 		return "", errors.New("must be an absolute HTTP(S) URL without credentials, escaped path, query, or fragment")

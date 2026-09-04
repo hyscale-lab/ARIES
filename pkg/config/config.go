@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -44,6 +45,11 @@ type ExecutionConfig struct {
 	Loop         time.Duration `json:"-"`
 }
 
+// RuntimeConfig selects the model service. Backend "deepseek" and "openai"
+// are external only: "deepseek" is the official DeepSeek endpoint with its own
+// preflight, "openai" is any OpenAI-compatible server (vLLM, llama.cpp, a
+// gateway) that ARIES neither starts nor configures. Backend "sglang" may be
+// external or managed and carries a native YAML file either way.
 type RuntimeConfig struct {
 	Backend string              `json:"backend"`
 	Mode    string              `json:"mode"`
@@ -79,6 +85,40 @@ type ProfileModel struct {
 	ID        string `json:"id"`
 	BaseURL   string `json:"base_url"`
 	APIKeyEnv string `json:"api_key_env"`
+	// ContextLength, MaxTokens, and Temperature are optional. They reach the
+	// harness through core.ModelConfig. Only Hermes renders them, so a
+	// profile that sets one under another harness is rejected.
+	ContextLength int      `json:"context_length,omitempty"`
+	MaxTokens     int      `json:"max_tokens,omitempty"`
+	Temperature   *float64 `json:"temperature,omitempty"`
+}
+
+// validateGeneration checks the optional generation settings against the
+// selected harness. Unset fields are always valid.
+func (m ProfileModel) validateGeneration(harnessType string) error {
+	set := m.ContextLength != 0 || m.MaxTokens != 0 || m.Temperature != nil
+	if !set {
+		return nil
+	}
+	if harnessType != "hermes" {
+		return errors.New("model.context_length, model.max_tokens, and model.temperature require Hermes")
+	}
+	if m.ContextLength < 0 {
+		return errors.New("model.context_length must be positive")
+	}
+	if m.MaxTokens < 0 {
+		return errors.New("model.max_tokens must be positive")
+	}
+	if m.ContextLength > 0 && m.MaxTokens > 0 && m.MaxTokens >= m.ContextLength {
+		return errors.New("model.max_tokens must be smaller than model.context_length")
+	}
+	if m.Temperature != nil {
+		t := *m.Temperature
+		if math.IsNaN(t) || math.IsInf(t, 0) || t < 0 || t > 2 {
+			return errors.New("model.temperature must be between 0 and 2")
+		}
+	}
+	return nil
 }
 
 type BenchmarkConfig struct {
@@ -155,7 +195,36 @@ type HarnessConfig struct {
 	Realtime  HarnessRealtimeConfig  `json:"realtime,omitempty"`
 	WebSearch HarnessWebSearchConfig `json:"web_search,omitempty"`
 	Subagents HarnessSubagentsConfig `json:"subagents,omitempty"`
+	// Compaction and ExtraBody are Hermes-only concepts (see
+	// (*HarnessConfig).validateHermesBlocks), same as WebSearch above: they
+	// live on the shared struct and are gated by an explicit type check. An
+	// absent block keeps Hermes's own defaults.
+	Compaction *HarnessCompactionConfig `json:"compaction,omitempty"`
+	// ExtraBody is an opaque JSON object that Hermes merges into every chat
+	// request. It is kept as raw bytes: ARIES validates its shape and its
+	// ${NAME} references but never interprets its keys.
+	ExtraBody json.RawMessage `json:"extra_body,omitempty"`
 }
+
+// HarnessCompactionConfig controls Hermes's context compaction. Hermes
+// compacts when the prompt reaches max(context_length * threshold, 64K),
+// raised to 75% of windows under 512K. ThresholdTokens is an absolute cap
+// that Hermes applies after those floors (compression.threshold_tokens in
+// config.yaml), so it is the one knob that sets an exact trigger on a
+// large-window model. Enabled false turns compaction off.
+type HarnessCompactionConfig struct {
+	Enabled         *bool `json:"enabled,omitempty"`
+	ThresholdTokens int   `json:"threshold_tokens,omitempty"`
+}
+
+// extraBodyPlaceholders are the only ${NAME} references harness.extra_body may
+// carry. Hermes expands every ${NAME} in its configuration from the process
+// environment, and the Hermes harness exports exactly these two names into
+// the container, so any other reference would either stay literal or pull a
+// value, such as the credential, into request bodies.
+var extraBodyPlaceholders = map[string]bool{"ARIES_RUN_ID": true, "ARIES_TASK_ID": true}
+
+var placeholderPattern = regexp.MustCompile(`\$\{([^}]*)\}`)
 
 // HarnessWebSearchConfig is an OpenClaw/Hermes-only concept (see
 // (*HarnessConfig).validate), same as Realtime above: it lives on the shared
@@ -241,7 +310,10 @@ func (c BridgeConfig) RetainBridgeRawLog() bool {
 }
 
 func (c Config) CoreModel() core.ModelConfig {
-	return core.ModelConfig{Provider: c.Runtime.Backend, BaseURL: c.Model.BaseURL, Model: c.Model.ID, APIKeyEnv: c.Model.APIKeyEnv}
+	return core.ModelConfig{
+		Provider: c.Runtime.Backend, BaseURL: c.Model.BaseURL, Model: c.Model.ID, APIKeyEnv: c.Model.APIKeyEnv,
+		ContextLength: c.Model.ContextLength, MaxTokens: c.Model.MaxTokens, Temperature: c.Model.Temperature,
+	}
 }
 
 // Versions contains the upstream version selections shared by profiles.
@@ -464,14 +536,26 @@ func (c *Config) validate() error {
 			return fmt.Errorf("%s is required", check.name)
 		}
 	}
-	if c.Runtime.Backend != "deepseek" && c.Runtime.Backend != "sglang" {
-		return errors.New("runtime.backend must be deepseek or sglang")
+	if c.Runtime.Backend != "deepseek" && c.Runtime.Backend != "sglang" && c.Runtime.Backend != "openai" {
+		return errors.New("runtime.backend must be deepseek, sglang, or openai")
 	}
 	if c.Harness.Mode == "" {
 		c.Harness.Mode = "agent"
 	}
 	if err := c.Harness.validate(); err != nil {
 		return err
+	}
+	if err := c.Model.validateGeneration(c.Harness.Type); err != nil {
+		return err
+	}
+	if c.Harness.Compaction != nil && c.Model.ContextLength > 0 && c.Harness.Compaction.ThresholdTokens >= c.Model.ContextLength {
+		return errors.New("harness.compaction.threshold_tokens must be smaller than model.context_length")
+	}
+	// Hermes merges a custom_providers extra_body only for its "custom"
+	// provider, which is how the OpenAI-compatible backends render; under
+	// DeepSeek the block would be silently ignored.
+	if len(c.Harness.ExtraBody) != 0 && c.Runtime.Backend != "sglang" && c.Runtime.Backend != "openai" {
+		return errors.New("harness.extra_body requires runtime.backend sglang or openai")
 	}
 	if err := c.Runtime.validate(); err != nil {
 		return err
@@ -488,10 +572,10 @@ func (c *Config) validate() error {
 		}
 	}
 
-	if c.Runtime.Backend == "sglang" {
-		normalized, err := normalizeSGLangBaseURL(c.Model.BaseURL)
+	if c.Runtime.Backend == "sglang" || c.Runtime.Backend == "openai" {
+		normalized, err := normalizeV1BaseURL(c.Model.BaseURL)
 		if err != nil {
-			return fmt.Errorf("model.base_url for sglang: %w", err)
+			return fmt.Errorf("model.base_url for %s: %w", c.Runtime.Backend, err)
 		}
 		c.Model.BaseURL = normalized
 	} else if err := validateHTTPBaseURL("model.base_url", c.Model.BaseURL); err != nil {
@@ -600,9 +684,44 @@ func (c *Config) validateBenchmarkType() error {
 	}
 }
 
+// validateHermesBlocks rejects the Hermes-only blocks under another harness
+// and checks their values. Empty blocks are rejected rather than ignored so a
+// profile never carries a block that changes nothing.
+func (h *HarnessConfig) validateHermesBlocks() error {
+	if h.Compaction != nil {
+		if h.Type != "hermes" {
+			return errors.New("harness.compaction requires Hermes")
+		}
+		if h.Compaction.Enabled == nil && h.Compaction.ThresholdTokens == 0 {
+			return errors.New("harness.compaction must set enabled or threshold_tokens")
+		}
+		if h.Compaction.ThresholdTokens < 0 {
+			return errors.New("harness.compaction.threshold_tokens must be positive")
+		}
+	}
+	if len(h.ExtraBody) != 0 {
+		if h.Type != "hermes" {
+			return errors.New("harness.extra_body requires Hermes")
+		}
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal(h.ExtraBody, &object); err != nil || len(object) == 0 {
+			return errors.New("harness.extra_body must be a non-empty JSON object")
+		}
+		for _, match := range placeholderPattern.FindAllSubmatch(h.ExtraBody, -1) {
+			if !extraBodyPlaceholders[string(match[1])] {
+				return fmt.Errorf("harness.extra_body may reference only ${ARIES_RUN_ID} and ${ARIES_TASK_ID}, not ${%s}", match[1])
+			}
+		}
+	}
+	return nil
+}
+
 func (h *HarnessConfig) validate() error {
 	if h.Mode == "" {
 		h.Mode = "agent"
+	}
+	if err := h.validateHermesBlocks(); err != nil {
+		return err
 	}
 	if h.WebSearch.Enabled && h.Type != "openclaw" && h.Type != "hermes" {
 		return errors.New("harness.web_search requires OpenClaw or Hermes")
@@ -708,17 +827,17 @@ func parseOptionalPositiveDuration(name, value string) (time.Duration, error) {
 
 func (c *RuntimeConfig) validate() error {
 	switch c.Backend {
-	case "deepseek":
+	case "deepseek", "openai":
 		if c.Mode != "external" {
-			return errors.New("runtime.backend deepseek requires external mode")
+			return fmt.Errorf("runtime.backend %s requires external mode", c.Backend)
 		}
 		if c.Config.File != "" || c.Config.Executable != "" || c.Config.StartupTimeoutText != "" || c.Config.StopTimeoutText != "" || len(c.Config.GPUIndices) != 0 {
-			return errors.New("external deepseek runtime.config must be empty")
+			return fmt.Errorf("external %s runtime.config must be empty", c.Backend)
 		}
 		return nil
 	case "sglang":
 	default:
-		return errors.New("runtime.backend must be deepseek or sglang")
+		return errors.New("runtime.backend must be deepseek, sglang, or openai")
 	}
 	switch c.Mode {
 	case "external":
@@ -761,7 +880,9 @@ func (c *RuntimeConfig) validate() error {
 	}
 }
 
-func normalizeSGLangBaseURL(baseURL string) (string, error) {
+// normalizeV1BaseURL accepts the base URL of an OpenAI-compatible server: an
+// absolute HTTP(S) URL whose path is exactly the versioned /v1 prefix.
+func normalizeV1BaseURL(baseURL string) (string, error) {
 	parsed, err := url.Parse(baseURL)
 	if err != nil || parsed.Scheme != "http" && parsed.Scheme != "https" || parsed.Host == "" || parsed.Opaque != "" || parsed.User != nil || parsed.RawPath != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || strings.Contains(baseURL, "#") {
 		return "", errors.New("must be an absolute HTTP(S) URL without credentials, escaped path, query, or fragment")

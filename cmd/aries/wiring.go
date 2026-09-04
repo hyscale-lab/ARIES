@@ -91,6 +91,14 @@ func prepareBackend(cfg config.Config, outputDir string) (app.PreparedBackend, e
 			return app.PreparedBackend{}, errors.New("DeepSeek runtime must be external")
 		}
 		return app.PreparedBackend{Model: model}, nil
+	case "openai":
+		// Any OpenAI-compatible server. ARIES validates the endpoint in
+		// preflight and never owns the process, so there is nothing to
+		// prepare beyond the model description.
+		if cfg.Runtime.Mode != "external" {
+			return app.PreparedBackend{}, errors.New("OpenAI-compatible runtime must be external")
+		}
+		return app.PreparedBackend{Model: model}, nil
 	case "sglang":
 		native, err := runtimesglang.LoadNativeConfig(cfg.Runtime.Config.ResolvedFile, cfg.Model.ID, cfg.Model.BaseURL)
 		if err != nil {
@@ -259,6 +267,8 @@ func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byt
 			WebSearchEnabled: cfg.Harness.WebSearch.Enabled, ExtractAPIKeyEnv: cfg.Harness.WebSearch.ExtractAPIKeyEnv,
 			SubagentsEnabled:       cfg.Harness.Subagents.Enabled != nil && *cfg.Harness.Subagents.Enabled,
 			MaxConcurrentSubagents: cfg.Harness.Subagents.MaxConcurrent,
+			Compaction:             hermesCompaction(cfg.Harness.Compaction),
+			ExtraBody:              []byte(cfg.Harness.ExtraBody),
 		})
 		if err != nil {
 			return app.HarnessInstance{}, fmt.Errorf("construct Hermes harness: %w", err)
@@ -407,4 +417,14 @@ func loadPreparationTasks(ctx context.Context, cfg config.Config, taskIDs []stri
 	default:
 		return nil, fmt.Errorf("unsupported benchmark type %q", cfg.Benchmark.Type)
 	}
+}
+
+// hermesCompaction copies the profile's compaction block into the harness's
+// own settings type. The harness package does not import pkg/config, so the
+// copy is explicit, field by field.
+func hermesCompaction(block *config.HarnessCompactionConfig) *hermesharness.CompactionSettings {
+	if block == nil {
+		return nil
+	}
+	return &hermesharness.CompactionSettings{Enabled: block.Enabled, ThresholdTokens: block.ThresholdTokens}
 }

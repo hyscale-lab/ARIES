@@ -51,7 +51,9 @@ lifecycle. SGLang is the current implementation of this rule.
 
 Model selection is explicit through `runtime.backend`: `deepseek` retains its
 official bounded preflight, while `sglang` performs bounded exact model
-discovery at a versioned `/v1` endpoint. A local SGLang profile references one
+discovery at a versioned `/v1` endpoint. `openai` names any other
+OpenAI-compatible server, is external only, carries no native file, and shares
+that discovery. A local SGLang profile references one
 strict native YAML file under `runtime.config.file`, whose
 served model and port must match the profile. SGLang may remain external or run
 as one application-owned host process supplied by an explicit command switch.

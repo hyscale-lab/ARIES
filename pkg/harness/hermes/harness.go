@@ -103,7 +103,11 @@ type Options struct {
 	// delegation.max_concurrent_children. Zero leaves Hermes's own default
 	// (3) in place. Ignored when SubagentsEnabled is false.
 	MaxConcurrentSubagents int
-	Logger                 *logrus.Logger
+	// Compaction and ExtraBody render optional blocks of config.yaml (see
+	// renderConfig). Nil keeps Hermes's own defaults.
+	Compaction *CompactionSettings
+	ExtraBody  []byte
+	Logger     *logrus.Logger
 }
 
 // dockerClient is the small official Engine SDK surface used by the harness.
@@ -136,6 +140,8 @@ type Manager struct {
 	extractAPIKeyEnv       string
 	subagentsEnabled       bool
 	maxConcurrentSubagents int
+	compaction             *CompactionSettings
+	extraBody              []byte
 	logger                 *logrus.Logger
 	apiKeyLookup           func(string) ([]byte, bool)
 	newID                  func() (string, error)
@@ -234,6 +240,7 @@ func New(options Options) (*Manager, error) {
 		terminalTimeout: options.TerminalTimeout, webSearchEnabled: options.WebSearchEnabled,
 		extractAPIKeyEnv: options.ExtractAPIKeyEnv, logger: options.Logger,
 		subagentsEnabled: options.SubagentsEnabled, maxConcurrentSubagents: options.MaxConcurrentSubagents,
+		compaction: options.Compaction, extraBody: bytes.Clone(options.ExtraBody),
 		apiKeyLookup: options.APIKeyLookup, newID: randomID,
 	}, nil
 }
@@ -262,11 +269,15 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		agentTimeout = manager.agentTimeout
 	}
 	extractEnabled := manager.webSearchEnabled && manager.extractAPIKeyEnv != ""
-	configuration, err := renderConfig(request.Model, manager.maxTurns, manager.webSearchEnabled, extractEnabled, manager.subagentsEnabled, manager.maxConcurrentSubagents)
+	configuration, err := renderConfig(request.Model, renderSettings{
+		maxTurns: manager.maxTurns, webSearchEnabled: manager.webSearchEnabled, extractEnabled: extractEnabled,
+		subagentsEnabled: manager.subagentsEnabled, maxConcurrentSubagents: manager.maxConcurrentSubagents,
+		compaction: manager.compaction, extraBody: manager.extraBody,
+	})
 	if err != nil {
 		return err
 	}
-	environment, err := containerEnvironment(request.Endpoint, workspaceRoot, manager.terminalTimeout, manager.webSearchEnabled)
+	environment, err := containerEnvironment(request.Endpoint, workspaceRoot, manager.terminalTimeout, manager.webSearchEnabled, request.RunID, request.TaskID)
 	if err != nil {
 		return err
 	}
@@ -435,7 +446,7 @@ func (manager *Manager) Run(ctx context.Context, instruction string) (core.Harne
 
 	runCtx, cancel := context.WithTimeout(ctx, active.agentTimeout)
 	result, runErr := manager.execAttached(runCtx, active.containerID,
-		[]string{agentWrapperPath, active.model.Model, active.model.Provider, instruction}, workspaceRoot)
+		[]string{agentWrapperPath, active.model.Model, hermesProvider(active.model.Provider), instruction}, workspaceRoot)
 	cancel()
 
 	stdout := redactSession(result.stdout, active)

@@ -12,7 +12,7 @@ variable. ARIES validates the endpoint before admitting task work.
 
 ```mermaid
 flowchart TB
-    X[External DeepSeek or SGLang]
+    X[External DeepSeek, SGLang, or OpenAI-compatible server]
     M[ARIES-managed SGLang process]
     E[Validated model endpoint]
 
@@ -28,8 +28,11 @@ flowchart TB
 ```
 
 DeepSeek is supported only as an external OpenAI-compatible endpoint. ARIES
-performs bounded model validation but does not own the remote service. SGLang
-may also be external, or ARIES may manage one host process across a profile run.
+performs bounded model validation but does not own the remote service. The
+`openai` backend names any other OpenAI-compatible server, such as vLLM; it is
+external only, has no native configuration file, and receives the same bounded
+model discovery as external SGLang. SGLang may also be external, or ARIES may
+manage one host process across a profile run.
 Managed SGLang uses a native YAML file, explicit executable and timeouts, and
 optional GPU indices; ARIES validates model, port, and GPU topology before side
 effects and stops the owned process after admitted tasks drain.

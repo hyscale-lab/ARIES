@@ -21,7 +21,7 @@ func validEndpoint() core.ToolEndpoint {
 // The credential must reach the container as a ${NAME} reference that Hermes
 // expands at run time, never as a value written into the rendered config.
 func TestRenderConfigReferencesCredentialByName(t *testing.T) {
-	rendered, err := renderConfig(validModel(), 90, false, false, true, 0)
+	rendered, err := renderConfig(validModel(), renderSettings{maxTurns: 90, webSearchEnabled: false, extractEnabled: false, subagentsEnabled: true, maxConcurrentSubagents: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestRenderConfigNormalizesSGLangAndRejectsBadInput(t *testing.T) {
 	model := validModel()
 	model.Provider = "sglang"
 	model.BaseURL = "http://host:30000/v1/"
-	rendered, err := renderConfig(model, 10, false, false, true, 0)
+	rendered, err := renderConfig(model, renderSettings{maxTurns: 10, webSearchEnabled: false, extractEnabled: false, subagentsEnabled: true, maxConcurrentSubagents: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestRenderConfigNormalizesSGLangAndRejectsBadInput(t *testing.T) {
 		t.Fatalf("SGLang base URL was not normalized:\n%s", rendered)
 	}
 	bad := map[string]func(*core.ModelConfig){
-		"provider":  func(m *core.ModelConfig) { m.Provider = "openai" },
+		"provider":  func(m *core.ModelConfig) { m.Provider = "anthropic" },
 		"base url":  func(m *core.ModelConfig) { m.BaseURL = "ftp://host" },
 		"model id":  func(m *core.ModelConfig) { m.Model = " " },
 		"key env":   func(m *core.ModelConfig) { m.APIKeyEnv = "1BAD" },
@@ -60,11 +60,11 @@ func TestRenderConfigNormalizesSGLangAndRejectsBadInput(t *testing.T) {
 	for name, mutate := range bad {
 		model := validModel()
 		mutate(&model)
-		if _, err := renderConfig(model, 10, false, false, true, 0); err == nil {
+		if _, err := renderConfig(model, renderSettings{maxTurns: 10, webSearchEnabled: false, extractEnabled: false, subagentsEnabled: true, maxConcurrentSubagents: 0}); err == nil {
 			t.Fatalf("%s: invalid model was accepted", name)
 		}
 	}
-	if _, err := renderConfig(validModel(), 0, false, false, true, 0); err == nil {
+	if _, err := renderConfig(validModel(), renderSettings{maxTurns: 0, webSearchEnabled: false, extractEnabled: false, subagentsEnabled: true, maxConcurrentSubagents: 0}); err == nil {
 		t.Fatal("non-positive max turns was accepted")
 	}
 }
@@ -73,7 +73,7 @@ func TestRenderConfigNormalizesSGLangAndRejectsBadInput(t *testing.T) {
 func TestRenderConfigQuotesInjectionAttempts(t *testing.T) {
 	model := validModel()
 	model.Model = `x" \nevil: true`
-	rendered, err := renderConfig(model, 10, false, false, true, 0)
+	rendered, err := renderConfig(model, renderSettings{maxTurns: 10, webSearchEnabled: false, extractEnabled: false, subagentsEnabled: true, maxConcurrentSubagents: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,19 +128,22 @@ func TestValidateModelRejectsControlCharactersInModelID(t *testing.T) {
 // Hermes selects its SSH backend purely from the environment, so this is the
 // contract that replaces Agent_Bench's exec-bridge patch.
 func TestContainerEnvironmentSelectsNativeSSHBackend(t *testing.T) {
-	environment, err := containerEnvironment(validEndpoint(), "/aries/workspace", 180, false)
+	environment, err := containerEnvironment(validEndpoint(), "/aries/workspace", 180, false, "run-1", "fix-git")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := map[string]string{
-		"HERMES_HOME":       stateContainerPath,
-		"TERMINAL_ENV":      "ssh",
-		"TERMINAL_SSH_HOST": "172.17.0.1",
-		"TERMINAL_SSH_PORT": "41234",
-		"TERMINAL_SSH_USER": "aries",
-		"TERMINAL_SSH_KEY":  identityContainerFS,
-		"TERMINAL_CWD":      "/aries/workspace",
-		"TERMINAL_TIMEOUT":  "180",
+		"HERMES_HOME":            stateContainerPath,
+		"TERMINAL_ENV":           "ssh",
+		"TERMINAL_SSH_HOST":      "172.17.0.1",
+		"TERMINAL_SSH_PORT":      "41234",
+		"TERMINAL_SSH_USER":      "aries",
+		"TERMINAL_SSH_KEY":       identityContainerFS,
+		"TERMINAL_CWD":           "/aries/workspace",
+		"TERMINAL_TIMEOUT":       "180",
+		"ARIES_RUN_ID":           "run-1",
+		"ARIES_TASK_ID":          "fix-git",
+		"HERMES_WRITE_SAFE_ROOT": "",
 	}
 	got := map[string]string{}
 	for _, entry := range environment {
@@ -171,16 +174,16 @@ func TestContainerEnvironmentRejectsUnusableEndpoints(t *testing.T) {
 	for name, mutate := range cases {
 		endpoint := validEndpoint()
 		mutate(&endpoint)
-		if _, err := containerEnvironment(endpoint, "/aries/workspace", 180, false); err == nil {
+		if _, err := containerEnvironment(endpoint, "/aries/workspace", 180, false, "run-1", "fix-git"); err == nil {
 			t.Fatalf("%s: invalid endpoint was accepted", name)
 		}
 	}
 	for _, workdir := range []string{"", "relative", "/has space", "/trailing/", "/a/../b"} {
-		if _, err := containerEnvironment(validEndpoint(), workdir, 180, false); err == nil {
+		if _, err := containerEnvironment(validEndpoint(), workdir, 180, false, "run-1", "fix-git"); err == nil {
 			t.Fatalf("workdir %q was accepted", workdir)
 		}
 	}
-	if _, err := containerEnvironment(validEndpoint(), "/aries/workspace", 0, false); err == nil {
+	if _, err := containerEnvironment(validEndpoint(), "/aries/workspace", 0, false, "run-1", "fix-git"); err == nil {
 		t.Fatal("non-positive terminal timeout was accepted")
 	}
 }
@@ -188,7 +191,7 @@ func TestContainerEnvironmentRejectsUnusableEndpoints(t *testing.T) {
 // Disabled web search must leave today's toolset list and environment
 // unchanged — a regression guard for callers that never opt in.
 func TestRenderConfigOmitsWebToolsetWhenDisabled(t *testing.T) {
-	rendered, err := renderConfig(validModel(), 90, false, false, true, 0)
+	rendered, err := renderConfig(validModel(), renderSettings{maxTurns: 90, webSearchEnabled: false, extractEnabled: false, subagentsEnabled: true, maxConcurrentSubagents: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +202,7 @@ func TestRenderConfigOmitsWebToolsetWhenDisabled(t *testing.T) {
 }
 
 func TestRenderConfigAddsWebToolsetWhenEnabled(t *testing.T) {
-	rendered, err := renderConfig(validModel(), 90, true, false, true, 0)
+	rendered, err := renderConfig(validModel(), renderSettings{maxTurns: 90, webSearchEnabled: true, extractEnabled: false, subagentsEnabled: true, maxConcurrentSubagents: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +218,7 @@ func TestRenderConfigAddsWebToolsetWhenEnabled(t *testing.T) {
 // otherwise a web_extract call would hit Hermes with no explicit backend
 // rather than the clear "search-only backend" error SearXNG-only gives.
 func TestRenderConfigOmitsExtractBackendWithoutExtractKey(t *testing.T) {
-	rendered, err := renderConfig(validModel(), 90, true, false, true, 0)
+	rendered, err := renderConfig(validModel(), renderSettings{maxTurns: 90, webSearchEnabled: true, extractEnabled: false, subagentsEnabled: true, maxConcurrentSubagents: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +228,7 @@ func TestRenderConfigOmitsExtractBackendWithoutExtractKey(t *testing.T) {
 }
 
 func TestRenderConfigAddsExtractBackendWhenEnabled(t *testing.T) {
-	rendered, err := renderConfig(validModel(), 90, true, true, true, 0)
+	rendered, err := renderConfig(validModel(), renderSettings{maxTurns: 90, webSearchEnabled: true, extractEnabled: true, subagentsEnabled: true, maxConcurrentSubagents: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +243,7 @@ func TestRenderConfigAddsExtractBackendWhenEnabled(t *testing.T) {
 // extract_backend must never be rendered when web search itself is off, even
 // if a caller passes extractEnabled=true by mistake.
 func TestRenderConfigOmitsExtractBackendWhenWebSearchDisabled(t *testing.T) {
-	rendered, err := renderConfig(validModel(), 90, false, true, true, 0)
+	rendered, err := renderConfig(validModel(), renderSettings{maxTurns: 90, webSearchEnabled: false, extractEnabled: true, subagentsEnabled: true, maxConcurrentSubagents: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +254,7 @@ func TestRenderConfigOmitsExtractBackendWhenWebSearchDisabled(t *testing.T) {
 }
 
 func TestRenderConfigDisablesDelegationToolsetWhenSubagentsDisabled(t *testing.T) {
-	rendered, err := renderConfig(validModel(), 90, false, false, false, 0)
+	rendered, err := renderConfig(validModel(), renderSettings{maxTurns: 90, webSearchEnabled: false, extractEnabled: false, subagentsEnabled: false, maxConcurrentSubagents: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +265,7 @@ func TestRenderConfigDisablesDelegationToolsetWhenSubagentsDisabled(t *testing.T
 }
 
 func TestRenderConfigOmitsDisabledToolsetsWhenSubagentsEnabled(t *testing.T) {
-	rendered, err := renderConfig(validModel(), 90, false, false, true, 0)
+	rendered, err := renderConfig(validModel(), renderSettings{maxTurns: 90, webSearchEnabled: false, extractEnabled: false, subagentsEnabled: true, maxConcurrentSubagents: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +276,7 @@ func TestRenderConfigOmitsDisabledToolsetsWhenSubagentsEnabled(t *testing.T) {
 }
 
 func TestRenderConfigSetsMaxConcurrentChildrenWhenLimited(t *testing.T) {
-	rendered, err := renderConfig(validModel(), 90, false, false, true, 2)
+	rendered, err := renderConfig(validModel(), renderSettings{maxTurns: 90, webSearchEnabled: false, extractEnabled: false, subagentsEnabled: true, maxConcurrentSubagents: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +287,7 @@ func TestRenderConfigSetsMaxConcurrentChildrenWhenLimited(t *testing.T) {
 }
 
 func TestRenderConfigOmitsDelegationBlockWhenNoLimitSet(t *testing.T) {
-	rendered, err := renderConfig(validModel(), 90, false, false, true, 0)
+	rendered, err := renderConfig(validModel(), renderSettings{maxTurns: 90, webSearchEnabled: false, extractEnabled: false, subagentsEnabled: true, maxConcurrentSubagents: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,7 +298,7 @@ func TestRenderConfigOmitsDelegationBlockWhenNoLimitSet(t *testing.T) {
 }
 
 func TestRenderConfigIgnoresMaxConcurrentChildrenWhenSubagentsDisabled(t *testing.T) {
-	rendered, err := renderConfig(validModel(), 90, false, false, false, 2)
+	rendered, err := renderConfig(validModel(), renderSettings{maxTurns: 90, webSearchEnabled: false, extractEnabled: false, subagentsEnabled: false, maxConcurrentSubagents: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +309,7 @@ func TestRenderConfigIgnoresMaxConcurrentChildrenWhenSubagentsDisabled(t *testin
 }
 
 func TestContainerEnvironmentSetsSearXNGURLWhenWebSearchEnabled(t *testing.T) {
-	disabled, err := containerEnvironment(validEndpoint(), "/aries/workspace", 180, false)
+	disabled, err := containerEnvironment(validEndpoint(), "/aries/workspace", 180, false, "run-1", "fix-git")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +318,7 @@ func TestContainerEnvironmentSetsSearXNGURLWhenWebSearchEnabled(t *testing.T) {
 			t.Fatalf("SEARXNG_URL set despite web search being disabled: %v", disabled)
 		}
 	}
-	enabled, err := containerEnvironment(validEndpoint(), "/aries/workspace", 180, true)
+	enabled, err := containerEnvironment(validEndpoint(), "/aries/workspace", 180, true, "run-1", "fix-git")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,5 +366,34 @@ func TestAgentWrapperExportsExtractKeyWhenEnabled(t *testing.T) {
 		if !strings.Contains(script, want) {
 			t.Fatalf("wrapper is missing %q:\n%s", want, script)
 		}
+	}
+}
+
+// Neither pinned Hermes version knows an "sglang" or plain "openai" provider,
+// and the one-shot rejects an unknown name, so both backends must render as
+// Hermes's generic "custom" provider. DeepSeek is built in and stays as written.
+func TestRenderConfigMapsOpenAICompatibleBackendsToCustomProvider(t *testing.T) {
+	for _, provider := range []string{"sglang", "openai"} {
+		model := validModel()
+		model.Provider = provider
+		model.BaseURL = "http://vllm.local:8000/v1"
+		rendered, err := renderConfig(model, renderSettings{maxTurns: 10, webSearchEnabled: false, extractEnabled: false, subagentsEnabled: true, maxConcurrentSubagents: 0})
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(rendered)
+		if !strings.Contains(text, `provider: "custom"`) || strings.Contains(text, `provider: "`+provider+`"`) {
+			t.Fatalf("%s backend was not rendered as the custom provider:\n%s", provider, text)
+		}
+		if got := hermesProvider(provider); got != "custom" {
+			t.Fatalf("hermesProvider(%s) = %q", provider, got)
+		}
+	}
+	rendered, err := renderConfig(validModel(), renderSettings{maxTurns: 10, webSearchEnabled: false, extractEnabled: false, subagentsEnabled: true, maxConcurrentSubagents: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(rendered), `provider: "deepseek"`) || hermesProvider("deepseek") != "deepseek" {
+		t.Fatal("deepseek provider was rewritten")
 	}
 }
