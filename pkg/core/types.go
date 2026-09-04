@@ -85,6 +85,12 @@ type ModelConfig struct {
 	BaseURL   string `json:"base_url"`
 	Model     string `json:"model"`
 	APIKeyEnv string `json:"api_key_env"`
+	// ContextLength, MaxTokens, and Temperature are optional generation
+	// settings the harness writes into its own model configuration. Zero or
+	// nil keeps the harness default. Only the Hermes harness renders them.
+	ContextLength int      `json:"context_length,omitempty"`
+	MaxTokens     int      `json:"max_tokens,omitempty"`
+	Temperature   *float64 `json:"temperature,omitempty"`
 }
 
 // ToolEndpoint is the bridge endpoint and task-local file contract given to a

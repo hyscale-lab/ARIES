@@ -19,7 +19,7 @@ const validConfig = `{
   "model":{"id":"fake","base_url":"http://127.0.0.1:8080","api_key_env":"DEEPSEEK_API_KEY"}
 }`
 
-const validVersions = `{"terminalbench2":{"repository_url":"https://example.invalid/terminal-bench-2.git","revision":"0123456789abcdef0123456789abcdef01234567"},"deepresearchbench":{"repository_url":"https://example.invalid/deep-research-bench.git","revision":"fedcba9876543210fedcba9876543210fedcba98"},"swebenchpro":{"dataset_repository_url":"https://example.invalid/swe-bench-pro-data.git","dataset_revision":"1111111111111111111111111111111111111111","evaluator_repository_url":"https://example.invalid/swe-bench-pro-evaluator.git","evaluator_revision":"2222222222222222222222222222222222222222"},"openclaw":{"image":"ghcr.io/openclaw/openclaw:2026.7.1"},"hermes":{"image":"docker.io/nousresearch/hermes-agent:v2026.5.29.2"}}`
+const validVersions = `{"terminalbench2":{"repository_url":"https://example.invalid/terminal-bench-2.git","revision":"0123456789abcdef0123456789abcdef01234567"},"deepresearchbench":{"repository_url":"https://example.invalid/deep-research-bench.git","revision":"fedcba9876543210fedcba9876543210fedcba98"},"swebenchpro":{"dataset_repository_url":"https://example.invalid/swe-bench-pro-data.git","dataset_revision":"1111111111111111111111111111111111111111","evaluator_repository_url":"https://example.invalid/swe-bench-pro-evaluator.git","evaluator_revision":"2222222222222222222222222222222222222222"},"openclaw":{"image":"ghcr.io/openclaw/openclaw:2026.7.1"},"hermes":{"image":"docker.io/nousresearch/hermes-agent:v2026.8.31"}}`
 
 func TestNormalizedRuntimeSchema(t *testing.T) {
 	cfg, err := Decode(strings.NewReader(validConfig))
@@ -489,7 +489,7 @@ func TestCheckedInProfilesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 12 {
+	if len(paths) != 13 {
 		t.Fatalf("profiles=%v", paths)
 	}
 	for _, path := range paths {
@@ -587,10 +587,10 @@ func TestVersionsRequireOnlyTheSelectedHarnessImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if image, err := full.HarnessImage("hermes"); err != nil || image != "docker.io/nousresearch/hermes-agent:v2026.5.29.2" {
+	if image, err := full.HarnessImage("hermes"); err != nil || image != "docker.io/nousresearch/hermes-agent:v2026.8.31" {
 		t.Fatalf("hermes image = %q, %v", image, err)
 	}
-	unpinned := strings.Replace(validVersions, "hermes-agent:v2026.5.29.2", "hermes-agent:latest", 1)
+	unpinned := strings.Replace(validVersions, "hermes-agent:v2026.8.31", "hermes-agent:latest", 1)
 	if _, err := DecodeVersions(strings.NewReader(unpinned)); err == nil {
 		t.Fatal("unpinned hermes.image was accepted")
 	}
@@ -652,6 +652,52 @@ func TestOpenAIBackendIsExternalOnly(t *testing.T) {
 		"native file":     strings.Replace(openai, `"mode":"external"`, `"mode":"external","config":{"file":"native.yaml"}`, 1),
 		"path without v1": strings.Replace(openai, `http://vllm.local:8000/v1/`, `http://vllm.local:8000`, 1),
 		"unknown backend": strings.Replace(openai, `"backend":"openai"`, `"backend":"vllm"`, 1),
+	}
+	for name, text := range rejected {
+		if _, err := Decode(strings.NewReader(text)); err == nil {
+			t.Fatalf("%s: expected rejection", name)
+		}
+	}
+}
+
+const hermesExtraBody = `{"user":"${ARIES_RUN_ID}-${ARIES_TASK_ID}","chat_template_kwargs":{"preserve_thinking":true},"metadata":{"trace":true}}`
+
+func TestHermesOnlyBlocksAndGenerationSettings(t *testing.T) {
+	hermes := strings.Replace(validConfig, `"harness":{"type":"openclaw"},"sandbox":{"type":"docker"},"bridge":{"type":"openclaw-ssh"}`,
+		`"harness":{"type":"hermes","compaction":{"threshold_tokens":65536},"extra_body":`+hermesExtraBody+`},"sandbox":{"type":"docker"},"bridge":{"type":"hermes-ssh"}`, 1)
+	hermes = strings.Replace(hermes, `"runtime":{"backend":"deepseek","mode":"external"}`, `"runtime":{"backend":"openai","mode":"external"}`, 1)
+	hermes = strings.Replace(hermes, `"model":{"id":"fake","base_url":"http://127.0.0.1:8080","api_key_env":"DEEPSEEK_API_KEY"}`,
+		`"model":{"id":"fake","base_url":"http://vllm.local:8000/v1","api_key_env":"VLLM_API_KEY","context_length":262144,"max_tokens":32768,"temperature":1.0}`, 1)
+	cfg, err := Decode(strings.NewReader(hermes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Harness.Compaction == nil || cfg.Harness.Compaction.ThresholdTokens != 65536 {
+		t.Fatalf("compaction = %#v", cfg.Harness.Compaction)
+	}
+	if string(cfg.Harness.ExtraBody) != hermesExtraBody {
+		t.Fatalf("extra_body = %s", cfg.Harness.ExtraBody)
+	}
+	model := cfg.CoreModel()
+	if model.ContextLength != 262144 || model.MaxTokens != 32768 || model.Temperature == nil || *model.Temperature != 1.0 {
+		t.Fatalf("core model = %#v", model)
+	}
+
+	rejected := map[string]string{
+		"compaction under openclaw": strings.Replace(validConfig, `"harness":{"type":"openclaw"}`, `"harness":{"type":"openclaw","compaction":{"threshold_tokens":1000}}`, 1),
+		"extra_body under openclaw": strings.Replace(validConfig, `"harness":{"type":"openclaw"}`, `"harness":{"type":"openclaw","extra_body":{"a":1}}`, 1),
+		"eviction demo removed":     strings.Replace(hermes, `"metadata":{"trace":true}`, `"metadata":{"trace":`, 1),
+		"generation under openclaw": strings.Replace(validConfig, `"api_key_env":"DEEPSEEK_API_KEY"}`, `"api_key_env":"DEEPSEEK_API_KEY","context_length":1000}`, 1),
+		"empty compaction":          strings.Replace(hermes, `"compaction":{"threshold_tokens":65536}`, `"compaction":{}`, 1),
+		"extra_body array":          strings.Replace(hermes, hermesExtraBody, `[1]`, 1),
+		"extra_body empty object":   strings.Replace(hermes, hermesExtraBody, `{}`, 1),
+		"extra_body scalar":         strings.Replace(hermes, hermesExtraBody, `"x"`, 1),
+		"foreign placeholder":       strings.Replace(hermes, `${ARIES_TASK_ID}`, `${VLLM_API_KEY}`, 1),
+		"env placeholder form":      strings.Replace(hermes, `${ARIES_TASK_ID}`, `${env:ARIES_TASK_ID}`, 1),
+		"extra_body under deepseek": strings.Replace(hermes, `"backend":"openai"`, `"backend":"deepseek"`, 1),
+		"threshold fills window":    strings.Replace(hermes, `"threshold_tokens":65536`, `"threshold_tokens":262144`, 1),
+		"max tokens fills window":   strings.Replace(hermes, `"max_tokens":32768`, `"max_tokens":262144`, 1),
+		"temperature out of range":  strings.Replace(hermes, `"temperature":1.0`, `"temperature":3`, 1),
 	}
 	for name, text := range rejected {
 		if _, err := Decode(strings.NewReader(text)); err == nil {

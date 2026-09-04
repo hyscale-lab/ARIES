@@ -409,7 +409,7 @@ func writeCommandProfile(t *testing.T, output string) string {
 		DeepResearchBench: config.DeepResearchBenchVersions{RepositoryURL: "https://example.invalid/deep-research-bench.git", Revision: "fedcba9876543210fedcba9876543210fedcba98"},
 		SWEbenchPro:       config.SWEbenchProVersions{DatasetRepositoryURL: "https://example.invalid/swe-bench-pro-data.git", DatasetRevision: "1111111111111111111111111111111111111111", EvaluatorRepositoryURL: "https://example.invalid/swe-bench-pro-evaluator.git", EvaluatorRevision: "2222222222222222222222222222222222222222"},
 		OpenClaw:          config.OpenClawVersions{Image: "ghcr.io/openclaw/openclaw:2026.7.1"},
-		Hermes:            config.HermesVersions{Image: "docker.io/nousresearch/hermes-agent:v2026.5.29.2"},
+		Hermes:            config.HermesVersions{Image: "docker.io/nousresearch/hermes-agent:v2026.8.31"},
 	}
 	data, _ := json.Marshal(versions)
 	if err := os.WriteFile(filepath.Join(dir, "versions.json"), data, 0600); err != nil {

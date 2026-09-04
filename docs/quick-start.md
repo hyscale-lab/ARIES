@@ -357,6 +357,66 @@ Artifacts land under `<run>/<task>/harness/`: the redacted `config.yaml`, the
 one-shot's `hermes_stdout.log` and `hermes_stderr.log`, `container.log`, and the
 exported message-level trajectory at `telemetry/sessions.jsonl`.
 
+### Hermes context window, compaction, and request extra body
+
+Three optional profile blocks reach the rendered Hermes `config.yaml`. Each is
+Hermes-only and is rejected under another harness. A profile without them
+renders the same file as before.
+
+- `model.context_length`, `model.max_tokens`, and `model.temperature` set the
+  window Hermes's compressor reasons about and the request sampling.
+- `harness.compaction.threshold_tokens` is an absolute compaction trigger.
+  Hermes applies it after its 64K minimum and its 75% floor for windows under
+  512K, so it is the one knob that gives an exact trigger on a large window.
+  `harness.compaction.enabled: false` turns compaction off.
+- `harness.extra_body` is any JSON object. ARIES writes it as the `extra_body`
+  of one `custom_providers` entry, and Hermes merges it into every chat
+  request. Hermes performs that merge only for its `custom` provider, so the
+  block requires the `sglang` or `openai` backend.
+
+Hermes expands `${NAME}` references in its configuration from the container
+environment. ARIES exports `ARIES_RUN_ID` and `ARIES_TASK_ID` into the Hermes
+container, and those two are the only references `harness.extra_body` may
+carry. The checked-in profile compacts at 65,536 tokens and tags every request
+with the task through the OpenAI `user` field:
+
+```json
+{
+  "harness": {
+    "type": "hermes",
+    "compaction": {
+      "enabled": true,
+      "threshold_tokens": 65536
+    },
+    "extra_body": {
+      "chat_template_kwargs": {
+        "preserve_thinking": true
+      },
+      "user": "${ARIES_RUN_ID}-${ARIES_TASK_ID}"
+    }
+  },
+  "model": {
+    "base_url": "http://vllm.local:8000/v1",
+    "api_key_env": "VLLM_API_KEY",
+    "id": "Qwen/Qwen3.6-35B-A3B-FP8",
+    "context_length": 262144,
+    "max_tokens": 32768,
+    "temperature": 1.0
+  }
+}
+```
+
+```sh
+export VLLM_API_KEY=unused-local-token
+./bin/aries profiles/hermes-tb2-fix-git-vllm-compaction.json
+```
+
+`compression.threshold_tokens` exists since Hermes v2026.8, so the pinned image
+moves to `v2026.8.31`. The rendered `config.yaml` under `<run>/<task>/harness/`
+shows the block exactly as Hermes reads it. The `agent.max_turns` value in that
+file does not bound the one-shot; use `agent_timeout_seconds` in the overrides
+file to bound a run.
+
 ### Realtime OpenClaw mode
 
 OpenClaw uses text-agent mode when `harness.mode` is omitted. Set
