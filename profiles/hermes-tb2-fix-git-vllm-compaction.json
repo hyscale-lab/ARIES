@@ -1,0 +1,47 @@
+{
+  "name": "hermes-tb2-fix-git-vllm-compaction",
+  "versions_file": "../configs/versions.json",
+  "overrides_file": "",
+  "execution": {
+    "concurrency": 1
+  },
+  "benchmark": {
+    "type": "terminalbench2",
+    "root": ".cache/terminal-bench-2",
+    "tasks": [
+      "fix-git"
+    ]
+  },
+  "harness": {
+    "type": "hermes",
+    "compaction": {
+      "enabled": true,
+      "threshold_tokens": 65536
+    },
+    "extra_body": {
+      "chat_template_kwargs": {
+        "preserve_thinking": true
+      },
+      "user": "${ARIES_RUN_ID}-${ARIES_TASK_ID}"
+    }
+  },
+  "sandbox": {
+    "type": "docker"
+  },
+  "bridge": {
+    "type": "hermes-ssh"
+  },
+  "runtime": {
+    "backend": "openai",
+    "mode": "external"
+  },
+  "model": {
+    "base_url": "http://vllm.local:8000/v1",
+    "api_key_env": "VLLM_API_KEY",
+    "id": "Qwen/Qwen3.6-35B-A3B-FP8",
+    "context_length": 262144,
+    "max_tokens": 32768,
+    "temperature": 1.0
+  },
+  "output_dir": "runs"
+}
