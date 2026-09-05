@@ -92,9 +92,14 @@ type HarnessConfig struct {
 	Mode string `json:"mode,omitempty"`
 	// Deployment selects where the OpenClaw agent runs: "docker" (default) or
 	// "kubernetes" (agent pod + Service, ARIES out-of-cluster via port-forward).
-	Deployment string                `json:"deployment,omitempty"`
-	Namespace  string                `json:"namespace,omitempty"`
-	Realtime   HarnessRealtimeConfig `json:"realtime,omitempty"`
+	Deployment string `json:"deployment,omitempty"`
+	Namespace  string `json:"namespace,omitempty"`
+	// NodeRole pins agent pods to nodes labelled "aries.dev/role=<NodeRole>" and
+	// tolerates the matching NoSchedule taint that k8s/install applies to a
+	// dedicated pool. Applies only to the "kubernetes" deployment. Empty leaves
+	// agent pods unpinned, which a cluster with no role labels needs.
+	NodeRole string                `json:"node_role,omitempty"`
+	Realtime HarnessRealtimeConfig `json:"realtime,omitempty"`
 }
 
 type HarnessRealtimeConfig struct {
@@ -135,6 +140,25 @@ type SandboxConfig struct {
 	// Namespace is the Kubernetes namespace task pods are created in. It applies
 	// only to the "kubernetes" sandbox type and defaults to "aries".
 	Namespace string `json:"namespace,omitempty"`
+	// NodeRole pins task pods to nodes labelled "aries.dev/role=<NodeRole>" and
+	// tolerates the matching NoSchedule taint that k8s/install applies to a
+	// dedicated pool. ARIES owns this value; the installer only labels and
+	// taints the nodes. Empty leaves task pods unpinned, which is what a cluster
+	// with no role labels needs.
+	NodeRole string `json:"node_role,omitempty"`
+	// PodCIDR and ServiceCIDR name the cluster's own networks, so that a task
+	// whose benchmark sets allow_internet can be given egress to the internet
+	// while still being denied the pod network, the Services and the API server.
+	//
+	// These are cluster facts rather than preferences; read them off the control
+	// plane with:
+	//
+	//	kubectl cluster-info dump | grep -m2 -E 'cluster-cidr|service-cluster-ip-range'
+	//
+	// Leaving them empty only widens what such a task may dial out to. Ingress to
+	// every task pod is denied either way, so tasks never reach each other.
+	PodCIDR     string `json:"pod_cidr,omitempty"`
+	ServiceCIDR string `json:"service_cidr,omitempty"`
 }
 
 type BridgeConfig struct {

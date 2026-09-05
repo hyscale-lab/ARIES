@@ -28,6 +28,11 @@ rules:
   - apiGroups: [""]
     resources: ["configmaps", "secrets"]
     verbs: ["create", "get", "list", "delete"]
+  # The per-task deny-all NetworkPolicy that isolates each sandbox pod. Created
+  # before the pod and deleted after it, so ARIES needs the full lifecycle.
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["create", "get", "list", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -38,6 +43,39 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: aries-sandbox
+subjects:
+  - kind: ServiceAccount
+    name: aries
+    namespace: aries
+---
+# Pod resource telemetry reads the kubelet Summary API through the API server
+# proxy (/api/v1/nodes/<node>/proxy/stats/summary), which reports the cumulative
+# usageCoreNanoSeconds counter pkg/monitor needs. `nodes` is a cluster-scoped
+# resource, so this cannot be folded into the namespaced Role above.
+#
+# This is the one privilege ARIES holds outside its own namespace. It is
+# read-only and confined to a single subresource: `get` on nodes/proxy permits
+# reading kubelet endpoints, and nothing else — no node mutation, and no access
+# to workloads in other namespaces. Drop this ClusterRole and its binding if you
+# do not want pod telemetry; the sandbox and harness still work, and
+# resources.jsonl is simply empty.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: aries-node-metrics
+rules:
+  - apiGroups: [""]
+    resources: ["nodes/proxy"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: aries-node-metrics
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: aries-node-metrics
 subjects:
   - kind: ServiceAccount
     name: aries

@@ -1,0 +1,88 @@
+# ARIES cluster topology for install-cluster.sh.
+#
+#   cp cluster.conf.example cluster.conf     # cluster.conf is gitignored
+#   ./install-cluster.sh --config cluster.conf
+#
+# This file is sourced by bash, so it is shell syntax, not JSON. Only assign
+# variables here — anything else runs on your machine as you.
+
+# --- Nodes -------------------------------------------------------------------
+# SSH targets, exactly as you would type them after `ssh`.
+
+MASTER="username@master_node"
+
+# Role pools. Every node listed below is joined as a worker. Nodes in the three
+# role pools are additionally labelled AND tainted:
+#
+#   label  aries.dev/role=<role>              pods select it with nodeSelector
+#   taint  aries.dev/role=<role>:NoSchedule   keeps everything else off
+#
+# Both are needed to dedicate a node. A taint alone only repels pods without a
+# toleration; it cannot stop a tolerating pod from landing somewhere else.
+#
+# A node may appear in more than one pool only if you want it to carry several
+# roles — the last role listed wins, since a node holds one aries.dev/role.
+
+ARIES_NODES=(
+  # "username@aries_node"
+)
+
+HARNESS_NODES=(
+  # "xxx@harness_node"
+)
+
+SANDBOX_NODES=(
+  # "xxx@sandbox_node"
+)
+
+# General-purpose workers: joined, but neither labelled nor tainted. Anything
+# without a nodeSelector lands here.
+WORKERS=(
+  "xxx@worker_node"
+)
+
+# Set to 0 to join every node as a plain worker and skip all labelling and
+# tainting. Useful for a first bring-up before the pod specs carry tolerations.
+TAINT_NODES=1
+
+# --- SSH ---------------------------------------------------------------------
+# Identity file to authenticate with. Leave empty to use your ssh-agent and
+# ~/.ssh/config as-is.
+SSH_KEY=""
+
+# Extra options appended to every ssh/scp invocation.
+SSH_OPTS="-o ConnectTimeout=15"
+
+# --- Cluster -----------------------------------------------------------------
+# Pod network. flannel | calico | none
+#
+# Keep calico unless you have a reason not to. ARIES isolates each task
+# sandbox with a deny-all NetworkPolicy, and NetworkPolicy is enforced by the
+# CNI, not by Kubernetes. Under flannel the policies are created and silently
+# ignored, so task pods stay fully connected while `kubectl get netpol` shows
+# them present. calico enforces them.
+CNI="calico"
+
+# Leave empty to take the per-CNI default (192.168.0.0/16 for calico,
+# 10.244.0.0/16 for flannel).
+POD_CIDR=""
+
+# Pin an exact Kubernetes patch, e.g. "1.34.2". Empty tracks the current stable
+# release resolved from dl.k8s.io at install time.
+K8S_VERSION=""
+
+# API server address workers connect to. Empty auto-detects the source address
+# of the master's default route, which is correct on CloudLab.
+ADVERTISE_ADDRESS=""
+
+# Set to 1 to remove the control-plane taint so ARIES Jobs and task pods can
+# schedule on the master too. Use for a one-machine cluster.
+SINGLE_NODE=0
+
+# Set to 1 to open the required ports in an active ufw/firewalld on each node.
+OPEN_FIREWALL=0
+
+# --- Local -------------------------------------------------------------------
+# Set to 1 to copy the cluster's kubeconfig back to ./kubeconfig when the
+# install finishes.
+FETCH_KUBECONFIG=0

@@ -31,6 +31,10 @@ go.work.sum
 .omx/
 .cache/
 runs/
+# Run artifacts pulled off a cluster with `kubectl cp` land outside runs/.
+# They hold full agent trajectories and tool-call logs.
+x4run/
+*-run-artifacts/
 .aries/
 DEEPSEEK_API.key
 /bin/

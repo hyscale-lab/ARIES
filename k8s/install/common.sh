@@ -14,7 +14,10 @@
 #   K8S_MINOR       Package channel, e.g. "v1.34". Default: resolved online
 #                   from https://dl.k8s.io/release/stable.txt.
 #   K8S_VERSION     Exact patch to pin, e.g. "1.34.2". Default: repo latest.
-#   CNI             flannel | calico | none. Default: flannel.
+#   CNI             flannel | calico | none. Default: calico.
+#                   calico is the default because ARIES isolates task sandboxes
+#                   with NetworkPolicy, and flannel does not implement it: the
+#                   API server accepts the policies and nothing enforces them.
 #   POD_CIDR        Pod network CIDR. Default: per-CNI (see resolve_pod_cidr).
 #   OPEN_FIREWALL   1 to open the required ports in ufw/firewalld. Default: 0.
 
@@ -22,7 +25,7 @@ set -euo pipefail
 
 K8S_STABLE_URL="https://dl.k8s.io/release/stable.txt"
 
-CNI="${CNI:-flannel}"
+CNI="${CNI:-calico}"
 OPEN_FIREWALL="${OPEN_FIREWALL:-0}"
 
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }

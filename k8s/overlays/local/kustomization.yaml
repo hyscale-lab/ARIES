@@ -21,7 +21,7 @@ generatorOptions:
 # never pull from a registry.
 patches:
   - target:
-      kind: Job
+      kind: Deployment
       name: aries
     patch: |-
       - op: add

@@ -39,6 +39,18 @@ spec:
     spec:
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 5
+      # Pin the gateway to a node the installer labelled and tainted
+      # aries.dev/role=harness (see k8s/install/README.md). Both halves are
+      # needed: the nodeSelector pulls the pod onto that node, the toleration
+      # gets it past the taint. Remove both blocks on a cluster whose nodes
+      # carry no role labels, or this pod stays Pending forever.
+      nodeSelector:
+        aries.dev/role: harness
+      tolerations:
+        - key: aries.dev/role
+          operator: Equal
+          value: harness
+          effect: NoSchedule
       containers:
         - name: openclaw
           # Pin to the contract-tested tag; overridden by an overlay in practice.

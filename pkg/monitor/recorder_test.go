@@ -577,3 +577,90 @@ func waitFor(t *testing.T, timeout time.Duration, condition func() bool) {
 		time.Sleep(time.Millisecond)
 	}
 }
+
+// tolerantSource is a fakeSource that declares a baseline grace period, standing
+// in for the Kubernetes source: it reports a runtime only when the underlying
+// kubelet observation actually advances, so live runtimes are absent from most
+// samples.
+type tolerantSource struct {
+	fakeSource
+	grace int
+}
+
+func (source *tolerantSource) BaselineGracePeriod() int { return source.grace }
+
+// Mirrors TestRecorderCPUBaselinesHandleIdleDisappearAndRejectRegression, but
+// for a source that opts into absence tolerance. The same gap that resets the
+// baseline to 0 for Docker must instead be spanned here, because for a
+// cache-backed source absence means "no new observation", not "runtime gone".
+func TestRecorderToleratesAbsenceWhenSourceOptsIn(t *testing.T) {
+	t0 := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
+	source := &tolerantSource{grace: 30}
+	recorder := newTestRecorder(t, source, filepath.Join(t.TempDir(), "run"), time.Hour)
+	source.sample = func(context.Context, int) ([]core.ResourceReading, error) {
+		return []core.ResourceReading{testReading("sandbox", "runtime", t0, 0)}, nil
+	}
+	if err := recorder.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// Two samples in which the source reports nothing, as happens while the
+	// kubelet serves an unchanged cache.
+	source.sample = func(context.Context, int) ([]core.ResourceReading, error) { return nil, nil }
+	for second := uint64(1); second <= 2; second++ {
+		if err := recorder.sample(context.Background(), second, t0.Add(time.Duration(second)*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	source.sample = func(context.Context, int) ([]core.ResourceReading, error) {
+		return []core.ResourceReading{testReading("sandbox", "runtime", t0.Add(3*time.Second), 900_000_000)}, nil
+	}
+	if err := recorder.sample(context.Background(), 3, t0.Add(3*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recorder.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	samples := readSamplesStrict(t, filepath.Join(recorder.outputDir, "fix-git", "monitor", "resources.jsonl"))
+	if len(samples) != 2 {
+		t.Fatalf("expected 2 samples, got %+v", samples)
+	}
+	// 900ms of CPU over the 3s spanning the absence.
+	if samples[1].CPUPercent != 30 {
+		t.Errorf("CPUPercent = %v, want 30; a dropped baseline would report 0 while the counter climbed", samples[1].CPUPercent)
+	}
+}
+
+// Past the grace period the baseline is discarded, so a runtime that really did
+// go away and later returns does not have its usage averaged across the gap.
+func TestRecorderDropsBaselineBeyondGracePeriod(t *testing.T) {
+	t0 := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
+	source := &tolerantSource{grace: 2}
+	recorder := newTestRecorder(t, source, filepath.Join(t.TempDir(), "run"), time.Hour)
+	source.sample = func(context.Context, int) ([]core.ResourceReading, error) {
+		return []core.ResourceReading{testReading("sandbox", "runtime", t0, 0)}, nil
+	}
+	if err := recorder.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	source.sample = func(context.Context, int) ([]core.ResourceReading, error) { return nil, nil }
+	for second := uint64(1); second <= 4; second++ {
+		if err := recorder.sample(context.Background(), second, t0.Add(time.Duration(second)*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	source.sample = func(context.Context, int) ([]core.ResourceReading, error) {
+		return []core.ResourceReading{testReading("sandbox", "runtime", t0.Add(5*time.Second), 900_000_000)}, nil
+	}
+	if err := recorder.sample(context.Background(), 5, t0.Add(5*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recorder.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	samples := readSamplesStrict(t, filepath.Join(recorder.outputDir, "fix-git", "monitor", "resources.jsonl"))
+	if len(samples) != 2 || samples[1].CPUPercent != 0 {
+		t.Fatalf("expected the baseline to be discarded past the grace period, got %+v", samples)
+	}
+}

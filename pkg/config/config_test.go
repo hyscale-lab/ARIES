@@ -160,8 +160,11 @@ func TestCheckedInProfilesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 10 {
-		t.Fatalf("profiles=%v", paths)
+	// A lower bound, not an exact count: the guard exists to catch a glob that
+	// silently matches nothing, and an exact count only fails whenever someone
+	// adds a profile — a failure that says nothing about whether profiles load.
+	if len(paths) < 10 {
+		t.Fatalf("expected the checked-in profiles to be found, got %v", paths)
 	}
 	for _, path := range paths {
 		cfg, err := Load(path)

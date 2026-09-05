@@ -71,6 +71,7 @@ type Recorder struct {
 	completed       bool
 	reports         map[string]core.ObserverResult
 	baselines       map[string]cpuBaseline
+	baselineGrace   int
 	sourceCloseOnce sync.Once
 	sourceCloseErr  error
 }
@@ -85,6 +86,34 @@ type stopAttempt struct {
 type cpuBaseline struct {
 	usage uint64
 	time  time.Time
+	// missed counts consecutive samples in which this runtime produced no
+	// reading. See dropMissingBaselines.
+	missed int
+}
+
+// BaselineTolerantSource is an optional interface a ResourceSource may
+// implement to declare that it does not report every live runtime on every
+// sample, and how many consecutive absences the recorder should tolerate before
+// discarding a runtime's CPU baseline.
+//
+// The default — a source that does not implement this — is to discard on the
+// first absence, which is right when absence means "the runtime is gone". The
+// Docker source is in that position: ContainerStats computes fresh values per
+// call, so a live container is always reported.
+//
+// The Kubernetes source is not. The kubelet serves stats from a cache refreshed
+// every 10-20s, so a reading is only emitted when the observation time actually
+// advances and the runtime is legitimately absent in between. Discarding its
+// baseline on the first absence makes every sample look like that runtime's
+// first, reporting cpu_percent 0 forever while the raw counter climbs.
+//
+// Holding a baseline across absences is safe because the baseline key includes
+// the runtime ID, and both backends mint a fresh one per container or pod, so a
+// stale baseline can never be matched to a different runtime. A runtime that is
+// genuinely replaced would also reset its counter, which the existing
+// "CPU counter decreased" check already rejects.
+type BaselineTolerantSource interface {
+	BaselineGracePeriod() int
 }
 
 // New validates configuration without contacting Docker or creating artifacts.
@@ -150,7 +179,16 @@ func New(options Options) (*Recorder, error) {
 	if options.Logger == nil {
 		options.Logger = logrus.StandardLogger()
 	}
+	// Sources that cannot report every live runtime on every sample say so here;
+	// everything else keeps the strict drop-on-first-absence behaviour.
+	grace := 0
+	if tolerant, ok := options.Source.(BaselineTolerantSource); ok {
+		if grace = tolerant.BaselineGracePeriod(); grace < 0 {
+			return nil, errors.New("monitor baseline grace period must not be negative")
+		}
+	}
 	return &Recorder{
+		baselineGrace:     grace,
 		runID:             options.RunID,
 		taskIDs:           tasks,
 		taskSet:           taskSet,
@@ -381,10 +419,20 @@ func (recorder *Recorder) cpuPercent(key string, reading core.ResourceReading) (
 }
 
 func (recorder *Recorder) dropMissingBaselines(present map[string]struct{}) {
-	for key := range recorder.baselines {
-		if _, ok := present[key]; !ok {
-			delete(recorder.baselines, key)
+	for key, baseline := range recorder.baselines {
+		if _, ok := present[key]; ok {
+			if baseline.missed != 0 {
+				baseline.missed = 0
+				recorder.baselines[key] = baseline
+			}
+			continue
 		}
+		baseline.missed++
+		if baseline.missed > recorder.baselineGrace {
+			delete(recorder.baselines, key)
+			continue
+		}
+		recorder.baselines[key] = baseline
 	}
 }
 

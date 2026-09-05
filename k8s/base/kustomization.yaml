@@ -5,7 +5,7 @@ resources:
   - namespace.yaml
   - serviceaccount.yaml
   - rbac.yaml
-  - job.yaml
+  - deployment.yaml
 
 labels:
   - pairs:

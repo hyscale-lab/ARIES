@@ -176,7 +176,7 @@ func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byt
 			IncludeEvents:         cfg.Harness.Realtime.IncludeEvents,
 		}
 		if cfg.Harness.Deployment == "kubernetes" {
-			manager, err := openclawharness.NewKube(openclawharness.KubeOptions{Image: cfg.Versions.OpenClaw.Image, OutputDir: outputRoot, Namespace: cfg.Harness.Namespace, APIKeyLookup: lookup, Logger: logger})
+			manager, err := openclawharness.NewKube(openclawharness.KubeOptions{Image: cfg.Versions.OpenClaw.Image, OutputDir: outputRoot, Namespace: cfg.Harness.Namespace, NodeRole: cfg.Harness.NodeRole, APIKeyLookup: lookup, Logger: logger})
 			if err != nil {
 				return app.HarnessInstance{}, fmt.Errorf("construct OpenClaw Kubernetes harness: %w", err)
 			}
@@ -219,11 +219,17 @@ func newSandbox(cfg config.Config, outputRoot, runID, occurrenceID string, gpuIn
 		}
 		return app.SandboxInstance{Sandbox: manager, Resources: resources, Close: manager.Close}, nil
 	case "kubernetes":
-		manager, err := k8ssandbox.New(k8ssandbox.Options{OutputDir: outputRoot, Namespace: cfg.Sandbox.Namespace, Logger: logger})
+		manager, err := k8ssandbox.New(k8ssandbox.Options{OutputDir: outputRoot, Namespace: cfg.Sandbox.Namespace, NodeRole: cfg.Sandbox.NodeRole, PodCIDR: cfg.Sandbox.PodCIDR, ServiceCIDR: cfg.Sandbox.ServiceCIDR, Logger: logger})
 		if err != nil {
 			return app.SandboxInstance{}, fmt.Errorf("construct Kubernetes sandbox: %w", err)
 		}
-		return app.SandboxInstance{Sandbox: manager, Resources: k8ssandbox.NewResourceSource(), Close: manager.Close}, nil
+		source, err := k8ssandbox.NewResourceSource(k8ssandbox.ResourceOptions{
+			RunID: runID, TaskIDs: []string{occurrenceID}, Namespace: cfg.Sandbox.Namespace,
+		})
+		if err != nil {
+			return app.SandboxInstance{}, errors.Join(fmt.Errorf("construct Kubernetes resource source: %w", err), manager.Close())
+		}
+		return app.SandboxInstance{Sandbox: manager, Resources: source, Close: manager.Close}, nil
 	default:
 		return app.SandboxInstance{}, fmt.Errorf("unsupported sandbox type %q", cfg.Sandbox.Type)
 	}

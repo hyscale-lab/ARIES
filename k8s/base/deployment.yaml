@@ -1,0 +1,73 @@
+# ARIES as a long-running pod.
+#
+# The ARIES binary is a batch runner, not a server: `aries PROFILE.json` runs a
+# profile to completion and exits. A Deployment restarts its container whenever
+# the process exits, so running the profile as the entrypoint here would re-run
+# the whole experiment in a loop.
+#
+# Instead the container idles and you trigger runs on demand:
+#
+#   kubectl -n aries exec deploy/aries -- sh -c './bin/aries "$ARIES_PROFILE"'
+#
+# The pod stays up between runs, keeping the image, the model key, and the
+# run-artifact volume mounted, which makes iterating much faster than recreating
+# a Job each time. Swap this for a Service-backed Deployment once ARIES grows a
+# real task-intake API.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aries
+  namespace: aries
+spec:
+  replicas: 1
+  # Recreate, not RollingUpdate: two ARIES pods must never run concurrently
+  # against the same namespace, and the run volume is not shared.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: aries
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aries
+    spec:
+      serviceAccountName: aries
+      # Pull secret for a private ARIES image (e.g. a private Docker Hub repo).
+      # The in-cluster overlay generates it from a gitignored registry.json.
+      imagePullSecrets:
+        - name: aries-registry
+      containers:
+        - name: aries
+          image: aries:latest
+          # Overrides the image ENTRYPOINT so the pod idles instead of running a
+          # profile. Specifying command without args also discards the image
+          # CMD, so no profile is started at boot.
+          command: ["sleep", "infinity"]
+          env:
+            # The profile `kubectl exec` runs. Overridden per environment in an
+            # overlay; expanded inside the pod, so the exec line never has to
+            # repeat the path.
+            - name: ARIES_PROFILE
+              value: profiles/openclaw-tb2-fix-git-deepseek-e2b.json
+            - name: DEEPSEEK_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aries-model
+                  key: DEEPSEEK_API_KEY
+          volumeMounts:
+            - name: runs
+              mountPath: /app/runs
+          resources:
+            requests:
+              cpu: "1"
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+      volumes:
+        # Run artifacts. These now survive between runs because the pod is
+        # long-lived, but still die with the pod. Swap for a
+        # PersistentVolumeClaim to retain results across restarts.
+        - name: runs
+          emptyDir: {}

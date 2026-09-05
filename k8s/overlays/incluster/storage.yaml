@@ -1,0 +1,63 @@
+# Persistent storage for ARIES run artifacts.
+#
+# A bare kubeadm cluster has no dynamic provisioner and no default
+# StorageClass, so a plain PVC would stay Pending forever. This defines the
+# volume statically instead: a node-local directory on the node holding the
+# aries role, which is the only node the ARIES pod ever schedules onto.
+#
+# Node-local means the artifacts live on one machine. If that node is rebuilt
+# the data is gone, and the pod cannot move elsewhere while bound to this
+# volume. That is an acceptable trade for run artifacts on an experiment
+# cluster; swap in NFS or a CSI driver if results must outlive the node.
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: aries-local
+# No provisioner: volumes are created by hand below, not on demand.
+provisioner: kubernetes.io/no-provisioner
+# Bind only once a pod needs it, so the scheduler places the pod first and then
+# matches a volume on that node rather than the reverse.
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Retain
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: aries-runs
+spec:
+  capacity:
+    storage: 20Gi
+  accessModes:
+    # One writer: the Deployment uses strategy Recreate, so two ARIES pods never
+    # hold this volume at once.
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: aries-local
+  # DirectoryOrCreate lets the kubelet create the path on first use, so no
+  # manual mkdir on the node is needed.
+  hostPath:
+    path: /var/lib/aries/runs
+    type: DirectoryOrCreate
+  # Pins the volume to the aries-role node. Without this the scheduler could
+  # place the pod on a node where the directory holds different data.
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: aries.dev/role
+              operator: In
+              values: ["aries"]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: aries-runs
+  namespace: aries
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: aries-local
+  resources:
+    requests:
+      storage: 20Gi
