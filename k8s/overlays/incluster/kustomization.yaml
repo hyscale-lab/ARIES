@@ -11,6 +11,9 @@ namespace: aries
 
 resources:
   - ../../base
+  # StorageClass + PV + PVC for run artifacts. Defined statically because a bare
+  # kubeadm cluster has no dynamic provisioner.
+  - storage.yaml
 
 secretGenerator:
   # DEEPSEEK_API_KEY from a gitignored secret.env (cp secret.env.example secret.env).
@@ -18,7 +21,7 @@ secretGenerator:
     envs:
       - secret.env
 
-  # Registry credentials for pulling the ARIES image. base/job.yaml references
+  # Registry credentials for pulling the ARIES image. base/deployment.yaml references
   # this Secret by name through imagePullSecrets, so the name is load-bearing.
   # registry.json is gitignored; generate it with your own credentials:
   #
@@ -42,14 +45,16 @@ images:
     newTag: latest
 
 patches:
-  # Run the in-cluster profile and inject POD_IP for $POD_IP advertise_host.
+  # Select the in-cluster profile and inject POD_IP for $POD_IP advertise_host.
   - target:
-      kind: Job
+      kind: Deployment
       name: aries
     patch: |-
+      # env[0] is ARIES_PROFILE — the profile the documented `kubectl exec`
+      # line runs. The pod idles, so this starts nothing on its own.
       - op: replace
-        path: /spec/template/spec/containers/0/args
-        value: ["profiles/openclaw-tb2-fix-git-deepseek-k8s-incluster.json"]
+        path: /spec/template/spec/containers/0/env/0/value
+        value: profiles/openclaw-tb2-fix-git-deepseek-k8s-incluster.json
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:
@@ -62,3 +67,27 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: Always
+      # Pin ARIES to a node the installer labelled and tainted
+      # aries.dev/role=aries. Both halves are needed: the nodeSelector pulls the
+      # pod onto that node, the toleration gets it past the taint. This lives in
+      # the overlay rather than base so the local (kind/minikube) path keeps
+      # working on a cluster with no role labels.
+      - op: add
+        path: /spec/template/spec/nodeSelector
+        value:
+          aries.dev/role: aries
+      # Persist run artifacts. base uses an emptyDir, which dies with the pod;
+      # swap the whole volume for the PVC defined in storage.yaml.
+      - op: replace
+        path: /spec/template/spec/volumes/0
+        value:
+          name: runs
+          persistentVolumeClaim:
+            claimName: aries-runs
+      - op: add
+        path: /spec/template/spec/tolerations
+        value:
+          - key: aries.dev/role
+            operator: Equal
+            value: aries
+            effect: NoSchedule

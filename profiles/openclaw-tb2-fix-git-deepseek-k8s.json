@@ -17,7 +17,8 @@
   },
   "sandbox": {
     "type": "kubernetes",
-    "namespace": "aries"
+    "namespace": "aries",
+    "node_role": "sandbox"
   },
   "bridge": {
     "type": "openclaw-e2b"

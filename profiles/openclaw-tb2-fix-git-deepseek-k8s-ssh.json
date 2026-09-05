@@ -15,11 +15,15 @@
   "harness": {
     "type": "openclaw",
     "deployment": "kubernetes",
-    "namespace": "aries"
+    "namespace": "aries",
+    "node_role": "harness"
   },
   "sandbox": {
     "type": "kubernetes",
-    "namespace": "aries"
+    "namespace": "aries",
+    "node_role": "sandbox",
+    "pod_cidr": "192.168.0.0/16",
+    "service_cidr": "10.96.0.0/12"
   },
   "bridge": {
     "type": "openclaw-ssh",

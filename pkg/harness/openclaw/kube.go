@@ -25,15 +25,27 @@ const (
 	defaultHarnessNamespace = "aries"
 	defaultKubectl          = "kubectl"
 	sentinelPath            = "/run/aries/ready"
+	// nodeRoleLabel is the label k8s/install puts on each dedicated node pool,
+	// and the key of the NoSchedule taint it pairs with.
+	nodeRoleLabel = "aries.dev/role"
+	// defaultKubeStartTimeout is deliberately larger than the Docker backend's
+	// 45s. On Docker the agent image is already local when Start runs; on
+	// Kubernetes the kubelet pulls it on first use, inside this window, and a
+	// cold pull of the OpenClaw image takes about a minute on a fresh node.
+	// The Kubernetes sandbox uses 120s for the same reason.
+	defaultKubeStartTimeout = 5 * time.Minute
 )
 
 // KubeOptions are the inputs to the Kubernetes-backed OpenClaw harness. ARIES
 // runs out-of-cluster and drives the agent pod through the kubectl binary; the
 // gateway is reached via a port-forward to a per-task Service.
 type KubeOptions struct {
-	Image          string
-	OutputDir      string
-	Namespace      string
+	Image     string
+	OutputDir string
+	Namespace string
+	// NodeRole, when set, pins agent pods to nodes labelled
+	// nodeRoleLabel=<NodeRole> and tolerates the matching NoSchedule taint.
+	NodeRole       string
 	KubectlPath    string
 	APIKeyLookup   func(string) ([]byte, bool)
 	StartTimeout   time.Duration
@@ -51,6 +63,7 @@ type KubeManager struct {
 	image          string
 	outputDir      string
 	namespace      string
+	nodeRole       string
 	kubectl        string
 	apiKeyLookup   func(string) ([]byte, bool)
 	startTimeout   time.Duration
@@ -97,7 +110,7 @@ func NewKube(options KubeOptions) (*KubeManager, error) {
 		options.KubectlPath = defaultKubectl
 	}
 	if options.StartTimeout <= 0 {
-		options.StartTimeout = defaultStartTimeout
+		options.StartTimeout = defaultKubeStartTimeout
 	}
 	if options.AgentTimeout <= 0 {
 		options.AgentTimeout = defaultAgentTimeout
@@ -113,7 +126,8 @@ func NewKube(options KubeOptions) (*KubeManager, error) {
 	}
 	return &KubeManager{
 		image: options.Image, outputDir: outputDir, namespace: options.Namespace,
-		kubectl: options.KubectlPath, apiKeyLookup: options.APIKeyLookup,
+		nodeRole: options.NodeRole,
+		kubectl:  options.KubectlPath, apiKeyLookup: options.APIKeyLookup,
 		startTimeout: options.StartTimeout, agentTimeout: options.AgentTimeout,
 		cleanupTimeout: options.CleanupTimeout, logger: options.Logger, newID: randomID,
 	}, nil
@@ -218,7 +232,7 @@ func (manager *KubeManager) Start(ctx context.Context, request core.HarnessReque
 	if err := manager.apply(ctx, servicePodManifest(active, manager.namespace)); err != nil {
 		return fail(fmt.Errorf("apply OpenClaw Service: %w", err))
 	}
-	if err := manager.apply(ctx, podManifest(active, manager.namespace, manager.image)); err != nil {
+	if err := manager.apply(ctx, podManifest(active, manager.namespace, manager.image, manager.nodeRole)); err != nil {
 		return fail(fmt.Errorf("apply OpenClaw pod: %w", err))
 	}
 
@@ -489,7 +503,7 @@ func seconds(d time.Duration) string {
 	return fmt.Sprintf("%ds", int(d.Seconds()))
 }
 
-func podManifest(active *kubeSession, namespace, image string) []byte {
+func podManifest(active *kubeSession, namespace, image, nodeRole string) []byte {
 	boot := "while [ ! -f " + sentinelPath + " ]; do sleep 0.3; done; exec " + launcherPath + " " + gatewayLauncherPath
 	pod := map[string]any{
 		"apiVersion": "v1", "kind": "Pod",
@@ -497,7 +511,11 @@ func podManifest(active *kubeSession, namespace, image string) []byte {
 			"name": active.podName, "namespace": namespace,
 			"labels": map[string]string{
 				"app.kubernetes.io/name": "aries-openclaw", "app.kubernetes.io/component": "harness",
-				"aries.dev/attempt": active.attemptID,
+				// managed-by is the ownership label the resource source selects
+				// on. Without it the agent pod is invisible to pod telemetry and
+				// only sandbox readings reach resources.jsonl.
+				"app.kubernetes.io/managed-by": "aries",
+				"aries.dev/attempt":            active.attemptID,
 			},
 			// Run/task IDs can exceed the 63-byte label limit; keep them as
 			// annotations. The short attempt ID stays a label for Service
@@ -539,6 +557,20 @@ func podManifest(active *kubeSession, namespace, image string) []byte {
 				map[string]any{"name": "opt-aries", "emptyDir": map[string]any{}},
 			},
 		},
+	}
+	// Pin the agent pod to its dedicated node pool. Both halves are required:
+	// the nodeSelector pulls the pod onto a labelled node, the toleration gets
+	// it past the NoSchedule taint keeping everything else off. An empty role
+	// omits both, so a cluster with no role labels still schedules agent pods.
+	if nodeRole != "" {
+		spec := pod["spec"].(map[string]any)
+		spec["nodeSelector"] = map[string]string{nodeRoleLabel: nodeRole}
+		spec["tolerations"] = []any{map[string]any{
+			"key":      nodeRoleLabel,
+			"operator": "Equal",
+			"value":    nodeRole,
+			"effect":   "NoSchedule",
+		}}
 	}
 	out, _ := json.Marshal(pod)
 	return out

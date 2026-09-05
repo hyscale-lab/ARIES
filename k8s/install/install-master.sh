@@ -104,7 +104,9 @@ install_cni() {
       # Server-side apply: the operator bundle carries CRDs larger than the
       # client-side last-applied annotation limit, and it must stay re-runnable.
       kubectl_admin apply --server-side --force-conflicts -f \
-        https://github.com/projectcalico/calico/releases/latest/download/tigera-operator.yaml
+        https://raw.githubusercontent.com/projectcalico/calico/v3.32.2/manifests/v1_crd_projectcalico_org.yaml
+      kubectl_admin apply --server-side --force-conflicts -f \
+        https://raw.githubusercontent.com/projectcalico/calico/v3.32.2/manifests/tigera-operator.yaml
       kubectl_admin wait --for=condition=Available --timeout=180s \
         -n tigera-operator deployment/tigera-operator
       kubectl_admin apply -f - <<EOF

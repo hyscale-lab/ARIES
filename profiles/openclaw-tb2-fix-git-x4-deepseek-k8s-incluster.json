@@ -1,14 +1,17 @@
 {
-  "name": "openclaw-tb2-fix-git-deepseek-k8s-incluster",
+  "name": "openclaw-tb2-fix-git-x4-deepseek-k8s-incluster",
   "versions_file": "../configs/versions.json",
   "overrides_file": "",
   "execution": {
-    "concurrency": 1
+    "concurrency": 4
   },
   "benchmark": {
     "type": "terminalbench2",
     "root": ".cache/terminal-bench-2",
     "tasks": [
+      "fix-git",
+      "fix-git",
+      "fix-git",
       "fix-git"
     ]
   },

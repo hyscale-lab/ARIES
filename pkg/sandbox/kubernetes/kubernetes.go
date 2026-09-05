@@ -32,7 +32,16 @@ import (
 )
 
 const (
-	defaultNamespace      = "aries"
+	defaultNamespace = "aries"
+	// nodeRoleLabel is the label k8s/install puts on each dedicated node pool,
+	// and the key of the NoSchedule taint it pairs with. Task pods select and
+	// tolerate it when a profile sets sandbox.node_role.
+	nodeRoleLabel = "aries.dev/role"
+	// sandboxIDLabel carries the generated per-sandbox ID. It exists so the
+	// per-task NetworkPolicy has a selector that matches exactly one pod; the
+	// run and task IDs cannot serve that purpose because they may exceed the
+	// 63-byte label-value limit and are therefore annotations.
+	sandboxIDLabel        = "aries.dev/sandbox-id"
 	defaultKubectl        = "kubectl"
 	defaultReadyTimeout   = 120 * time.Second
 	defaultCleanupTimeout = 60 * time.Second
@@ -47,8 +56,19 @@ var (
 
 // Options are the host-local inputs to the Kubernetes sandbox manager.
 type Options struct {
-	OutputDir      string
-	Namespace      string
+	OutputDir string
+	Namespace string
+	// NodeRole, when set, pins task pods to nodes labelled
+	// nodeRoleLabel=<NodeRole> and tolerates the matching NoSchedule taint.
+	// Empty leaves pods unpinned.
+	NodeRole string
+	// PodCIDR and ServiceCIDR are the cluster's own networks. They are excluded
+	// from the egress allowed to a task whose benchmark sets allow_internet, so
+	// such a task reaches the internet but not other pods or the API server.
+	// Leaving them empty leaves that egress open; ingress is denied either way,
+	// so tasks stay isolated from each other regardless.
+	PodCIDR        string
+	ServiceCIDR    string
 	KubectlPath    string
 	ReadyTimeout   time.Duration
 	CleanupTimeout time.Duration
@@ -59,6 +79,9 @@ type Options struct {
 type Manager struct {
 	outputDir      string
 	namespace      string
+	nodeRole       string
+	podCIDR        string
+	serviceCIDR    string
 	kubectl        string
 	readyTimeout   time.Duration
 	cleanupTimeout time.Duration
@@ -68,13 +91,19 @@ type Manager struct {
 
 // Sandbox is a live Kubernetes task environment backed by one pod.
 type Sandbox struct {
-	owner          *Manager
-	namespace      string
-	podName        string
-	workdir        string
-	artifactDir    string
-	runID          string
-	taskID         string
+	owner       *Manager
+	namespace   string
+	podName     string
+	sandboxID   string
+	policyName  string
+	workdir     string
+	artifactDir string
+	runID       string
+	taskID      string
+	// policyOwned records that this sandbox created its NetworkPolicy, so stop
+	// deletes only what it made. It stays false when Start fails before the
+	// policy is applied.
+	policyOwned    bool
 	cleanupTimeout time.Duration
 }
 
@@ -113,9 +142,15 @@ func New(options Options) (*Manager, error) {
 	if options.Logger == nil {
 		options.Logger = logrus.StandardLogger()
 	}
+	if err := validateNodeRole(options.NodeRole); err != nil {
+		return nil, err
+	}
 	return &Manager{
 		outputDir:      outputDir,
 		namespace:      options.Namespace,
+		nodeRole:       options.NodeRole,
+		podCIDR:        options.PodCIDR,
+		serviceCIDR:    options.ServiceCIDR,
 		kubectl:        options.KubectlPath,
 		readyTimeout:   options.ReadyTimeout,
 		cleanupTimeout: options.CleanupTimeout,
@@ -150,6 +185,8 @@ func (m *Manager) Start(ctx context.Context, request core.SandboxRequest) (runne
 		owner:          m,
 		namespace:      m.namespace,
 		podName:        "aries-task-" + id,
+		sandboxID:      id,
+		policyName:     "aries-task-" + id,
 		workdir:        workdir,
 		artifactDir:    filepath.Join(m.outputDir, request.TaskID, "sandbox"),
 		runID:          request.RunID,
@@ -160,12 +197,29 @@ func (m *Manager) Start(ctx context.Context, request core.SandboxRequest) (runne
 		return nil, fmt.Errorf("create kubernetes sandbox artifact directory: %w", err)
 	}
 
-	manifest, err := podManifest(sandbox, request)
+	// Every task gets a policy. AllowNetwork decides what it permits, not
+	// whether it exists: a task allowed the internet must still be unreachable
+	// from its peers, which is what Docker gets for free by giving each task its
+	// own network and what a flat cluster pod network does not.
+	//
+	// The policy goes in before the pod, not after. One that lands second leaves
+	// a window in which the container is running and unisolated, and that window
+	// is exactly when an image's entrypoint does its network calls.
+	policy, err := networkPolicyManifest(sandbox, request.Environment.AllowNetwork)
 	if err != nil {
 		return nil, err
 	}
+	if _, err := m.runInput(ctx, policy, "apply", "-f", "-"); err != nil {
+		return nil, fmt.Errorf("apply kubernetes task network policy: %w", err)
+	}
+	sandbox.policyOwned = true
+
+	manifest, err := podManifest(sandbox, request)
+	if err != nil {
+		return nil, errors.Join(err, sandbox.stop(ctx))
+	}
 	if _, err := m.runInput(ctx, manifest, "apply", "-f", "-"); err != nil {
-		return nil, fmt.Errorf("apply kubernetes task pod: %w", err)
+		return nil, errors.Join(fmt.Errorf("apply kubernetes task pod: %w", err), sandbox.stop(ctx))
 	}
 
 	readyCtx, cancel := context.WithTimeout(ctx, m.readyTimeout)
@@ -200,6 +254,21 @@ func (s *Sandbox) stop(ctx context.Context) error {
 		return fmt.Errorf("confirm kubernetes task pod absent: %w", err)
 	} else if strings.TrimSpace(string(out)) != "" {
 		return fmt.Errorf("kubernetes task pod %q still present after delete", s.podName)
+	}
+	if !s.policyOwned {
+		return nil
+	}
+	// The policy is deleted after the pod, mirroring the create order. Deleting
+	// it first would un-isolate a pod that is still terminating.
+	if _, err := s.owner.run(cleanupCtx, "delete", "networkpolicy", "-n", s.namespace, s.policyName,
+		"--ignore-not-found"); err != nil {
+		return fmt.Errorf("delete kubernetes task network policy: %w", err)
+	}
+	if out, err := s.owner.run(cleanupCtx, "get", "networkpolicy", "-n", s.namespace, s.policyName,
+		"--ignore-not-found", "-o", "name"); err != nil {
+		return fmt.Errorf("confirm kubernetes task network policy absent: %w", err)
+	} else if strings.TrimSpace(string(out)) != "" {
+		return fmt.Errorf("kubernetes task network policy %q still present after delete", s.policyName)
 	}
 	return nil
 }

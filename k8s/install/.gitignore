@@ -1,0 +1,7 @@
+# Your cluster topology — hostnames and usernames stay local.
+cluster.conf
+
+# What FETCH_KUBECONFIG=1 writes: a copy of the control plane's
+# /etc/kubernetes/admin.conf. That embeds a cluster-admin client certificate —
+# it is the credential itself, not a pointer to one.
+kubeconfig
