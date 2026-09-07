@@ -266,7 +266,7 @@ func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byt
 			SubagentsEnabled:       cfg.Harness.Subagents.Enabled != nil && *cfg.Harness.Subagents.Enabled,
 			MaxConcurrentSubagents: cfg.Harness.Subagents.MaxConcurrent,
 			Compaction:             hermesCompaction(cfg.Harness.Compaction),
-			ExtraBody:              []byte(cfg.Harness.ExtraBody),
+			ExtraBody:              hermesExtraBody(cfg.Harness.Hermes),
 		})
 		if err != nil {
 			return app.HarnessInstance{}, fmt.Errorf("construct Hermes harness: %w", err)
@@ -415,6 +415,15 @@ func loadPreparationTasks(ctx context.Context, cfg config.Config, taskIDs []stri
 	default:
 		return nil, fmt.Errorf("unsupported benchmark type %q", cfg.Benchmark.Type)
 	}
+}
+
+// hermesExtraBody returns the profile's harness.hermes.extra_body bytes, or nil
+// when the block is absent.
+func hermesExtraBody(block *config.HarnessHermesConfig) []byte {
+	if block == nil {
+		return nil
+	}
+	return []byte(block.ExtraBody)
 }
 
 // hermesCompaction copies the profile's compaction block into the harness's

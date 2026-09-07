@@ -96,13 +96,17 @@ built-in provider and stays as written.
 
 Fourth, three optional profile blocks render into `config.yaml` only when set:
 `model.context_length` / `max_tokens` / `temperature`, `harness.compaction`,
-and `harness.extra_body`. The last is an opaque JSON object written as the
-`extra_body` of one `custom_providers` entry, which Hermes merges into every
-chat request for its `custom` provider. Hermes expands `${NAME}` references in
-its configuration from the process environment, so the harness exports
-`ARIES_RUN_ID` and `ARIES_TASK_ID` into the container, so a profile can tag every
-request with the task; a profile may reference only those two, which keeps the
-credential reference out of request bodies. The `v2026.8.31` image also sets
+and `harness.hermes.extra_body`. Compaction is a general harness capability and
+stays on the shared `harness` block; `extra_body` is a Hermes escape hatch, so
+it lives under the type-specific `harness.hermes` block. It is a non-empty JSON
+object written as the `extra_body` of one `custom_providers` entry, which
+Hermes merges into every chat request for its `custom` provider. Hermes expands
+`${NAME}` references in its configuration from the process environment, so the
+harness exports `ARIES_RUN_ID` and `ARIES_TASK_ID` into the container and a
+profile can tag every request with the task; a profile may reference only those
+two, which keeps the credential reference out of request bodies. The profile
+loader also rejects any field, at any depth, named like a credential, so a
+literal key cannot reach the retained `config.yaml` or the request bodies. The `v2026.8.31` image also sets
 `HERMES_WRITE_SAFE_ROOT=/opt/data`, which makes `write_file` and `patch` refuse
 every sandbox path; the harness clears it, because the sandbox is the isolation
 boundary and the tools act on it over SSH.

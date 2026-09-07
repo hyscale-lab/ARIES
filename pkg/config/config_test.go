@@ -668,7 +668,7 @@ const hermesExtraBody = `{"user":"${ARIES_RUN_ID}-${ARIES_TASK_ID}","chat_templa
 
 func TestHermesOnlyBlocksAndGenerationSettings(t *testing.T) {
 	hermes := strings.Replace(validConfig, `"harness":{"type":"openclaw"},"sandbox":{"type":"docker"},"bridge":{"type":"openclaw-ssh"}`,
-		`"harness":{"type":"hermes","compaction":{"threshold_tokens":65536},"extra_body":`+hermesExtraBody+`},"sandbox":{"type":"docker"},"bridge":{"type":"hermes-ssh"}`, 1)
+		`"harness":{"type":"hermes","compaction":{"threshold_tokens":65536},"hermes":{"extra_body":`+hermesExtraBody+`}},"sandbox":{"type":"docker"},"bridge":{"type":"hermes-ssh"}`, 1)
 	hermes = strings.Replace(hermes, `"runtime":{"backend":"deepseek","mode":"external"}`, `"runtime":{"backend":"openai","mode":"external"}`, 1)
 	hermes = strings.Replace(hermes, `"model":{"id":"fake","base_url":"http://127.0.0.1:8080","api_key_env":"DEEPSEEK_API_KEY"}`,
 		`"model":{"id":"fake","base_url":"http://vllm.local:8000/v1","api_key_env":"VLLM_API_KEY","context_length":262144,"max_tokens":32768,"temperature":1.0}`, 1)
@@ -679,8 +679,13 @@ func TestHermesOnlyBlocksAndGenerationSettings(t *testing.T) {
 	if cfg.Harness.Compaction == nil || cfg.Harness.Compaction.ThresholdTokens != 65536 {
 		t.Fatalf("compaction = %#v", cfg.Harness.Compaction)
 	}
-	if string(cfg.Harness.ExtraBody) != hermesExtraBody {
-		t.Fatalf("extra_body = %s", cfg.Harness.ExtraBody)
+	if cfg.Harness.Hermes == nil || string(cfg.Harness.Hermes.ExtraBody) != hermesExtraBody {
+		t.Fatalf("hermes block = %#v", cfg.Harness.Hermes)
+	}
+	// Exact credential names are rejected, not substrings: sampling knobs that
+	// happen to contain "token" or "key" are ordinary request fields.
+	if _, err := Decode(strings.NewReader(strings.Replace(hermes, hermesExtraBody, `{"max_tokens":100,"top_k":5,"key_values":1,"tokens_to_keep":2}`, 1))); err != nil {
+		t.Fatalf("sampling fields rejected: %v", err)
 	}
 	model := cfg.CoreModel()
 	if model.ContextLength != 262144 || model.MaxTokens != 32768 || model.Temperature == nil || *model.Temperature != 1.0 {
@@ -688,20 +693,26 @@ func TestHermesOnlyBlocksAndGenerationSettings(t *testing.T) {
 	}
 
 	rejected := map[string]string{
-		"compaction under openclaw": strings.Replace(validConfig, `"harness":{"type":"openclaw"}`, `"harness":{"type":"openclaw","compaction":{"threshold_tokens":1000}}`, 1),
-		"extra_body under openclaw": strings.Replace(validConfig, `"harness":{"type":"openclaw"}`, `"harness":{"type":"openclaw","extra_body":{"a":1}}`, 1),
-		"eviction demo removed":     strings.Replace(hermes, `"metadata":{"trace":true}`, `"metadata":{"trace":`, 1),
-		"generation under openclaw": strings.Replace(validConfig, `"api_key_env":"DEEPSEEK_API_KEY"}`, `"api_key_env":"DEEPSEEK_API_KEY","context_length":1000}`, 1),
-		"empty compaction":          strings.Replace(hermes, `"compaction":{"threshold_tokens":65536}`, `"compaction":{}`, 1),
-		"extra_body array":          strings.Replace(hermes, hermesExtraBody, `[1]`, 1),
-		"extra_body empty object":   strings.Replace(hermes, hermesExtraBody, `{}`, 1),
-		"extra_body scalar":         strings.Replace(hermes, hermesExtraBody, `"x"`, 1),
-		"foreign placeholder":       strings.Replace(hermes, `${ARIES_TASK_ID}`, `${VLLM_API_KEY}`, 1),
-		"env placeholder form":      strings.Replace(hermes, `${ARIES_TASK_ID}`, `${env:ARIES_TASK_ID}`, 1),
-		"extra_body under deepseek": strings.Replace(hermes, `"backend":"openai"`, `"backend":"deepseek"`, 1),
-		"threshold fills window":    strings.Replace(hermes, `"threshold_tokens":65536`, `"threshold_tokens":262144`, 1),
-		"max tokens fills window":   strings.Replace(hermes, `"max_tokens":32768`, `"max_tokens":262144`, 1),
-		"temperature out of range":  strings.Replace(hermes, `"temperature":1.0`, `"temperature":3`, 1),
+		"compaction under openclaw":   strings.Replace(validConfig, `"harness":{"type":"openclaw"}`, `"harness":{"type":"openclaw","compaction":{"threshold_tokens":1000}}`, 1),
+		"hermes block under openclaw": strings.Replace(validConfig, `"harness":{"type":"openclaw"}`, `"harness":{"type":"openclaw","hermes":{"extra_body":{"a":1}}}`, 1),
+		"empty hermes block":          strings.Replace(hermes, `"hermes":{"extra_body":`+hermesExtraBody+`}`, `"hermes":{}`, 1),
+		"null extra_body":             strings.Replace(hermes, hermesExtraBody, `null`, 1),
+		"api key field":               strings.Replace(hermes, hermesExtraBody, `{"auth":{"api_key":"sk-live"}}`, 1),
+		"authorization field":         strings.Replace(hermes, hermesExtraBody, `{"Authorization":"Bearer x"}`, 1),
+		"token field in array":        strings.Replace(hermes, hermesExtraBody, `{"tools":[{"name":"a"},{"access-token":"x"}]}`, 1),
+		"secret field nested":         strings.Replace(hermes, hermesExtraBody, `{"metadata":{"trace":{"client_secret":"x"}}}`, 1),
+		"eviction demo removed":       strings.Replace(hermes, `"metadata":{"trace":true}`, `"metadata":{"trace":`, 1),
+		"generation under openclaw":   strings.Replace(validConfig, `"api_key_env":"DEEPSEEK_API_KEY"}`, `"api_key_env":"DEEPSEEK_API_KEY","context_length":1000}`, 1),
+		"empty compaction":            strings.Replace(hermes, `"compaction":{"threshold_tokens":65536}`, `"compaction":{}`, 1),
+		"extra_body array":            strings.Replace(hermes, hermesExtraBody, `[1]`, 1),
+		"extra_body empty object":     strings.Replace(hermes, hermesExtraBody, `{}`, 1),
+		"extra_body scalar":           strings.Replace(hermes, hermesExtraBody, `"x"`, 1),
+		"foreign placeholder":         strings.Replace(hermes, `${ARIES_TASK_ID}`, `${VLLM_API_KEY}`, 1),
+		"env placeholder form":        strings.Replace(hermes, `${ARIES_TASK_ID}`, `${env:ARIES_TASK_ID}`, 1),
+		"extra_body under deepseek":   strings.Replace(hermes, `"backend":"openai"`, `"backend":"deepseek"`, 1),
+		"threshold fills window":      strings.Replace(hermes, `"threshold_tokens":65536`, `"threshold_tokens":262144`, 1),
+		"max tokens fills window":     strings.Replace(hermes, `"max_tokens":32768`, `"max_tokens":262144`, 1),
+		"temperature out of range":    strings.Replace(hermes, `"temperature":1.0`, `"temperature":3`, 1),
 	}
 	for name, text := range rejected {
 		if _, err := Decode(strings.NewReader(text)); err == nil {

@@ -6,11 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -199,14 +202,25 @@ type HarnessConfig struct {
 	Realtime  HarnessRealtimeConfig  `json:"realtime,omitempty"`
 	WebSearch HarnessWebSearchConfig `json:"web_search,omitempty"`
 	Subagents HarnessSubagentsConfig `json:"subagents,omitempty"`
-	// Compaction and ExtraBody are Hermes-only concepts (see
-	// (*HarnessConfig).validateHermesBlocks), same as WebSearch above: they
-	// live on the shared struct and are gated by an explicit type check. An
-	// absent block keeps Hermes's own defaults.
+	// Compaction is rendered only by Hermes today (see
+	// (*HarnessConfig).validateHermesBlocks) but names a general harness
+	// capability, so it lives on the shared struct and is gated by an
+	// explicit type check, same as WebSearch above. An absent block keeps
+	// Hermes's own defaults.
 	Compaction *HarnessCompactionConfig `json:"compaction,omitempty"`
+	// Hermes holds settings that exist only because of how Hermes is
+	// configured and mean nothing to another harness. Such escape hatches go
+	// under this type-specific block rather than onto the shared fields.
+	Hermes *HarnessHermesConfig `json:"hermes,omitempty"`
+}
+
+// HarnessHermesConfig is the harness.hermes block. It is valid only with
+// harness.type "hermes" and must set at least one field.
+type HarnessHermesConfig struct {
 	// ExtraBody is an opaque JSON object that Hermes merges into every chat
-	// request. It is kept as raw bytes: ARIES validates its shape and its
-	// ${NAME} references but never interprets its keys.
+	// request (custom_providers[].extra_body in config.yaml). It is kept as
+	// raw bytes: ARIES validates its shape, its ${NAME} references, and the
+	// absence of credential-bearing fields, but never interprets its keys.
 	ExtraBody json.RawMessage `json:"extra_body,omitempty"`
 }
 
@@ -221,14 +235,54 @@ type HarnessCompactionConfig struct {
 	ThresholdTokens int   `json:"threshold_tokens,omitempty"`
 }
 
-// extraBodyPlaceholders are the only ${NAME} references harness.extra_body may
-// carry. Hermes expands every ${NAME} in its configuration from the process
-// environment, and the Hermes harness exports exactly these two names into
-// the container, so any other reference would either stay literal or pull a
-// value, such as the credential, into request bodies.
+// extraBodyPlaceholders are the only ${NAME} references
+// harness.hermes.extra_body may carry. Hermes expands every ${NAME} in its
+// configuration from the process environment, and the Hermes harness exports
+// exactly these two names into the container, so any other reference would
+// either stay literal or pull a value, such as the credential, into request
+// bodies.
 var extraBodyPlaceholders = map[string]bool{"ARIES_RUN_ID": true, "ARIES_TASK_ID": true}
 
 var placeholderPattern = regexp.MustCompile(`\$\{([^}]*)\}`)
+
+// credentialFieldNames are field names that carry a credential in common
+// request and gateway schemas, compared after lowercasing and dropping "_",
+// "-", and ".". A profile is rejected when harness.hermes.extra_body contains
+// one at any depth: the object is written into the retained config.yaml and
+// sent with every request, and model keys stay out of JSON profiles. Exact
+// names rather than substrings, so max_tokens and threshold_tokens pass.
+var credentialFieldNames = map[string]bool{
+	"accesstoken": true, "apikey": true, "apitoken": true, "auth": true, "authorization": true,
+	"authtoken": true, "bearer": true, "bearertoken": true, "clientsecret": true, "credential": true,
+	"credentials": true, "key": true, "passwd": true, "password": true, "privatekey": true,
+	"refreshtoken": true, "secret": true, "sessiontoken": true, "token": true, "xapikey": true,
+}
+
+// findCredentialField walks a decoded JSON value and returns the dotted path
+// of the first credential-bearing field name, or "" when there is none. Keys
+// are visited in sorted order so the reported path is stable.
+func findCredentialField(value any, path string) string {
+	switch typed := value.(type) {
+	case map[string]any:
+		for _, key := range slices.Sorted(maps.Keys(typed)) {
+			child := path + "." + key
+			normalized := strings.NewReplacer("_", "", "-", "", ".", "").Replace(strings.ToLower(key))
+			if credentialFieldNames[normalized] {
+				return child
+			}
+			if found := findCredentialField(typed[key], child); found != "" {
+				return found
+			}
+		}
+	case []any:
+		for index, element := range typed {
+			if found := findCredentialField(element, path+"["+strconv.Itoa(index)+"]"); found != "" {
+				return found
+			}
+		}
+	}
+	return ""
+}
 
 // HarnessWebSearchConfig is an OpenClaw/Hermes-only concept (see
 // (*HarnessConfig).validate), same as Realtime above: it lives on the shared
@@ -558,8 +612,8 @@ func (c *Config) validate() error {
 	// Hermes merges a custom_providers extra_body only for its "custom"
 	// provider, which is how the OpenAI-compatible backends render; under
 	// DeepSeek the block would be silently ignored.
-	if len(c.Harness.ExtraBody) != 0 && c.Runtime.Backend != "sglang" && c.Runtime.Backend != "openai" {
-		return errors.New("harness.extra_body requires runtime.backend sglang or openai")
+	if c.Harness.Hermes != nil && c.Runtime.Backend != "sglang" && c.Runtime.Backend != "openai" {
+		return errors.New("harness.hermes.extra_body requires runtime.backend sglang or openai")
 	}
 	if err := c.Runtime.validate(); err != nil {
 		return err
@@ -703,17 +757,23 @@ func (h *HarnessConfig) validateHermesBlocks() error {
 			return errors.New("harness.compaction.threshold_tokens must be positive")
 		}
 	}
-	if len(h.ExtraBody) != 0 {
+	if h.Hermes != nil {
 		if h.Type != "hermes" {
-			return errors.New("harness.extra_body requires Hermes")
+			return errors.New("harness.hermes requires Hermes")
 		}
-		var object map[string]json.RawMessage
-		if err := json.Unmarshal(h.ExtraBody, &object); err != nil || len(object) == 0 {
-			return errors.New("harness.extra_body must be a non-empty JSON object")
+		if len(h.Hermes.ExtraBody) == 0 {
+			return errors.New("harness.hermes must set extra_body")
 		}
-		for _, match := range placeholderPattern.FindAllSubmatch(h.ExtraBody, -1) {
+		var object map[string]any
+		if err := json.Unmarshal(h.Hermes.ExtraBody, &object); err != nil || len(object) == 0 {
+			return errors.New("harness.hermes.extra_body must be a non-empty JSON object")
+		}
+		if field := findCredentialField(object, "harness.hermes.extra_body"); field != "" {
+			return fmt.Errorf("%s is named like a credential; model keys stay out of JSON profiles", field)
+		}
+		for _, match := range placeholderPattern.FindAllSubmatch(h.Hermes.ExtraBody, -1) {
 			if !extraBodyPlaceholders[string(match[1])] {
-				return fmt.Errorf("harness.extra_body may reference only ${ARIES_RUN_ID} and ${ARIES_TASK_ID}, not ${%s}", match[1])
+				return fmt.Errorf("harness.hermes.extra_body may reference only ${ARIES_RUN_ID} and ${ARIES_TASK_ID}, not ${%s}", match[1])
 			}
 		}
 	}

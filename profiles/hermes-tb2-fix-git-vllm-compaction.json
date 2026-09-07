@@ -18,11 +18,13 @@
       "enabled": true,
       "threshold_tokens": 65536
     },
-    "extra_body": {
-      "chat_template_kwargs": {
-        "preserve_thinking": true
-      },
-      "user": "${ARIES_RUN_ID}-${ARIES_TASK_ID}"
+    "hermes": {
+      "extra_body": {
+        "chat_template_kwargs": {
+          "preserve_thinking": true
+        },
+        "user": "${ARIES_RUN_ID}-${ARIES_TASK_ID}"
+      }
     }
   },
   "sandbox": {

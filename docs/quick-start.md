@@ -374,16 +374,21 @@ renders the same file as before.
   Hermes applies it after its 64K minimum and its 75% floor for windows under
   512K, so it is the one knob that gives an exact trigger on a large window.
   `harness.compaction.enabled: false` turns compaction off.
-- `harness.extra_body` is any JSON object. ARIES writes it as the `extra_body`
-  of one `custom_providers` entry, and Hermes merges it into every chat
-  request. Hermes performs that merge only for its `custom` provider, so the
-  block requires the `sglang` or `openai` backend.
+- `harness.hermes.extra_body` is a non-empty JSON object. ARIES writes it as
+  the `extra_body` of one `custom_providers` entry, and Hermes merges it into
+  every chat request. Hermes performs that merge only for its `custom`
+  provider, so the block requires the `sglang` or `openai` backend. It sits
+  under `harness.hermes` because it is a Hermes escape hatch with no meaning
+  for another harness, whereas compaction is a general harness setting.
 
 Hermes expands `${NAME}` references in its configuration from the container
 environment. ARIES exports `ARIES_RUN_ID` and `ARIES_TASK_ID` into the Hermes
-container, and those two are the only references `harness.extra_body` may
-carry. The checked-in profile compacts at 65,536 tokens and tags every request
-with the task through the OpenAI `user` field:
+container, and those two are the only references `harness.hermes.extra_body`
+may carry. The object is also rejected when any field at any depth is named
+like a credential, such as `api_key`, `authorization`, or `token`: it is
+written into the retained `config.yaml` and sent with every request, and model
+keys stay out of JSON profiles. The checked-in profile compacts at 65,536
+tokens and tags every request with the task through the OpenAI `user` field:
 
 ```json
 {
@@ -393,11 +398,13 @@ with the task through the OpenAI `user` field:
       "enabled": true,
       "threshold_tokens": 65536
     },
-    "extra_body": {
-      "chat_template_kwargs": {
-        "preserve_thinking": true
-      },
-      "user": "${ARIES_RUN_ID}-${ARIES_TASK_ID}"
+    "hermes": {
+      "extra_body": {
+        "chat_template_kwargs": {
+          "preserve_thinking": true
+        },
+        "user": "${ARIES_RUN_ID}-${ARIES_TASK_ID}"
+      }
     }
   },
   "model": {
