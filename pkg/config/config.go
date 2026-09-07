@@ -44,11 +44,15 @@ type ExecutionConfig struct {
 	Loop         time.Duration `json:"-"`
 }
 
-// RuntimeConfig selects the model service. Backend "deepseek" and "openai"
-// are external only: "deepseek" is the official DeepSeek endpoint with its own
-// preflight, "openai" is any OpenAI-compatible server (vLLM, llama.cpp, a
-// gateway) that ARIES neither starts nor configures. Backend "sglang" may be
-// external or managed and carries a native YAML file either way.
+// RuntimeConfig selects the model service. Mode is the ownership distinction:
+// "external" is an endpoint ARIES validates but never starts, configures, or
+// stops; "managed" is a host process ARIES owns for the run. Backend names the
+// kind of service behind the endpoint, not a runtime ARIES prepares: it
+// selects the preflight and the provider each harness renders. "deepseek" is
+// the official DeepSeek endpoint with its own preflight; "openai" is any other
+// OpenAI-compatible server (vLLM, llama.cpp, a gateway) with generic /v1/models
+// discovery; both are external only. "sglang" shares that discovery, may be
+// external or managed, and carries a native YAML file either way.
 type RuntimeConfig struct {
 	Backend string              `json:"backend"`
 	Mode    string              `json:"mode"`

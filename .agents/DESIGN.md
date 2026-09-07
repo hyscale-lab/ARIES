@@ -49,11 +49,13 @@ Backend-specific resolution supplies the same effective list to runtime
 construction and NVIDIA sampling without changing the Runner or Recorder
 lifecycle. SGLang is the current implementation of this rule.
 
-Model selection is explicit through `runtime.backend`: `deepseek` retains its
-official bounded preflight, while `sglang` performs bounded exact model
-discovery at a versioned `/v1` endpoint. `openai` names any other
-OpenAI-compatible server, is external only, carries no native file, and shares
-that discovery. A local SGLang profile references one
+Ownership is explicit through `runtime.mode`: every external endpoint is
+prepared the same way, and only managed mode names a runtime ARIES prepares.
+Model selection is explicit through `runtime.backend`, which names the kind of
+service behind the endpoint: `deepseek` retains its official bounded preflight,
+while `sglang` performs bounded exact model discovery at a versioned `/v1`
+endpoint. `openai` names any other OpenAI-compatible server, is external only,
+carries no native file, and shares that discovery. A local SGLang profile references one
 strict native YAML file under `runtime.config.file`, whose
 served model and port must match the profile. SGLang may remain external or run
 as one application-owned host process supplied by an explicit command switch.

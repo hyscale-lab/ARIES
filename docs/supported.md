@@ -35,8 +35,9 @@ Model services sit outside the four-role Runner. DeepSeek must be external and u
 configured remote base URL. SGLang accepts an external endpoint backed by its
 native YAML, or a managed mode with an explicit Python executable, startup and
 stop timeouts, and optional validated GPU indices. The `openai` backend is any
-other OpenAI-compatible server; it is external only and has no native file.
-DeepSeek is not a managed runtime, and SGLang is not a fifth Runner role.
+other OpenAI-compatible server; it names the endpoint's API rather than a
+runtime ARIES prepares, is external only, and has no native file. DeepSeek is
+not a managed runtime, and SGLang is not a fifth Runner role.
 
 Realtime mode requires `harness.realtime` TTS and session settings and the
 separate `OPENAI_API_KEY` named by `harness.realtime.tts.api_key_env`. The TTS

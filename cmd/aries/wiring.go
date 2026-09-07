@@ -83,45 +83,47 @@ func validateComponents(cfg config.Config) error {
 	return nil
 }
 
+// prepareBackend turns the profile's runtime block into the model the harness
+// receives and, for managed SGLang only, the host process ARIES owns.
+// runtime.mode is the ownership distinction: every external endpoint is
+// prepared the same way, whatever serves it. runtime.backend names the kind of
+// service behind the endpoint, which selects the preflight and the harness's
+// provider mapping downstream; here it only decides whether a native file must
+// agree with the profile.
 func prepareBackend(cfg config.Config, outputDir string) (app.PreparedBackend, error) {
 	model := cfg.CoreModel()
-	switch cfg.Runtime.Backend {
-	case "deepseek":
-		if cfg.Runtime.Mode != "external" {
-			return app.PreparedBackend{}, errors.New("DeepSeek runtime must be external")
+	switch cfg.Runtime.Mode {
+	case "external":
+		switch cfg.Runtime.Backend {
+		case "deepseek":
+		case "openai":
+		case "sglang":
+			if _, err := runtimesglang.LoadNativeConfig(cfg.Runtime.Config.ResolvedFile, cfg.Model.ID, cfg.Model.BaseURL); err != nil {
+				return app.PreparedBackend{}, err
+			}
+		default:
+			return app.PreparedBackend{}, fmt.Errorf("unsupported model runtime backend %q", cfg.Runtime.Backend)
 		}
 		return app.PreparedBackend{Model: model}, nil
-	case "openai":
-		// Any OpenAI-compatible server. ARIES validates the endpoint in
-		// preflight and never owns the process, so there is nothing to
-		// prepare beyond the model description.
-		if cfg.Runtime.Mode != "external" {
-			return app.PreparedBackend{}, errors.New("OpenAI-compatible runtime must be external")
+	case "managed":
+		if cfg.Runtime.Backend != "sglang" {
+			return app.PreparedBackend{}, fmt.Errorf("runtime.backend %q must be external", cfg.Runtime.Backend)
 		}
-		return app.PreparedBackend{Model: model}, nil
-	case "sglang":
 		native, err := runtimesglang.LoadNativeConfig(cfg.Runtime.Config.ResolvedFile, cfg.Model.ID, cfg.Model.BaseURL)
 		if err != nil {
 			return app.PreparedBackend{}, err
 		}
-		switch cfg.Runtime.Mode {
-		case "external":
-			return app.PreparedBackend{Model: model}, nil
-		case "managed":
-			gpuIndices, err := native.ResolveGPUIndices(cfg.Runtime.Config.GPUIndices)
-			if err != nil {
-				return app.PreparedBackend{}, fmt.Errorf("resolve managed SGLang GPUs: %w", err)
-			}
-			runtime, err := runtimesglang.New(runtimesglang.Options{Executable: cfg.Runtime.Config.Executable, ConfigPath: cfg.Runtime.Config.ResolvedFile, OutputDir: outputDir, BaseURL: cfg.Model.BaseURL, CredentialEnv: cfg.Model.APIKeyEnv, GPUIndices: append([]int(nil), gpuIndices...)})
-			if err != nil {
-				return app.PreparedBackend{}, err
-			}
-			return app.PreparedBackend{Model: model, Runtime: runtime, EffectiveGPUIndices: append([]int(nil), gpuIndices...)}, nil
-		default:
-			return app.PreparedBackend{}, fmt.Errorf("unsupported SGLang runtime mode %q", cfg.Runtime.Mode)
+		gpuIndices, err := native.ResolveGPUIndices(cfg.Runtime.Config.GPUIndices)
+		if err != nil {
+			return app.PreparedBackend{}, fmt.Errorf("resolve managed SGLang GPUs: %w", err)
 		}
+		runtime, err := runtimesglang.New(runtimesglang.Options{Executable: cfg.Runtime.Config.Executable, ConfigPath: cfg.Runtime.Config.ResolvedFile, OutputDir: outputDir, BaseURL: cfg.Model.BaseURL, CredentialEnv: cfg.Model.APIKeyEnv, GPUIndices: append([]int(nil), gpuIndices...)})
+		if err != nil {
+			return app.PreparedBackend{}, err
+		}
+		return app.PreparedBackend{Model: model, Runtime: runtime, EffectiveGPUIndices: append([]int(nil), gpuIndices...)}, nil
 	default:
-		return app.PreparedBackend{}, fmt.Errorf("unsupported model runtime backend %q", cfg.Runtime.Backend)
+		return app.PreparedBackend{}, fmt.Errorf("unsupported model runtime mode %q", cfg.Runtime.Mode)
 	}
 }
 

@@ -94,8 +94,12 @@ task's `task.toml`; no version-catalog or Go code change is required.
 
 ## 3. Configure the model backend
 
-`runtime.backend` selects the provider, while `runtime.mode` states whether
-ARIES owns a model-server process. The supported combinations are:
+`runtime.mode` states whether ARIES owns a model-server process: an `external`
+endpoint is validated but never started, configured, or stopped, and a
+`managed` process is owned for the run. `runtime.backend` names the kind of
+service behind the endpoint, which selects the preflight and the provider each
+harness renders; it is not a runtime ARIES prepares. The supported combinations
+are:
 
 | Backend | Mode | `runtime.config` | Process owner |
 | --- | --- | --- | --- |
