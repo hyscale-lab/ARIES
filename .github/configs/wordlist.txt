@@ -1,5 +1,6 @@
 agentharness
 agentic
+allowlist
 anonymized
 antgroup
 api
@@ -80,6 +81,7 @@ openrouter
 openssh
 orchestrator
 parsers
+passthrough
 pid
 pre
 prefill
@@ -137,6 +139,7 @@ ttft
 tts
 tty
 uid
+unary
 untracked
 upstream's
 url's
