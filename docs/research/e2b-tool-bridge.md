@@ -510,7 +510,7 @@ Docker containers. Its own header comment states the architecture in one sentenc
 
 ```text
 The envd surface: what the official SDK reaches through its `sandboxUrl` option. [...] Connect RPC
-rides the JSON codec (the SDK sets useBinaryFormat: false); files ride plain HTTP. The daemon
+rides the JSON codec (the SDK sets `useBinaryFormat: false`); files ride plain HTTP. The daemon
 itself plays the role of envd -- there is no agent inside the container.
 ```
 

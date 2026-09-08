@@ -220,7 +220,7 @@ Both are recoverable later by adding a streaming variant beside this method, wit
 `pkg/harness/hermes/config.go`, `cmd/aries/wiring.go`,
 `.cache/terminal-bench-2/*/task.toml`.
 
-### ReadFile, WriteFile, Stat
+### `ReadFile`, `WriteFile`, `Stat`
 
 These map onto capabilities the sandbox already has and that **no bridge currently reaches**:
 `Download`/`DownloadLimit` for reads, `Upload` for writes. `bridgeSandbox` embeds `runner.Sandbox`
