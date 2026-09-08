@@ -41,7 +41,7 @@ func TestRenderConfigEmitsGenerationSettingsOnlyWhenSet(t *testing.T) {
 	model := vllmModel()
 	model.ContextLength, model.MaxTokens, model.Temperature = 262144, 32768, floatPtr(1)
 	text := mustRender(t, model, baseSettings())
-	for _, line := range []string{"  context_length: 262144\n", "  max_tokens: 32768\n", "  temperature: 1.0\n"} {
+	for _, line := range []string{"  context_length: 262144\n", "  max_tokens: 32768\n", `"temperature": 1.0`} {
 		if !strings.Contains(text, line) {
 			t.Fatalf("missing %q:\n%s", line, text)
 		}
@@ -187,5 +187,45 @@ func TestStartRendersContextBlocksAndExportsIDs(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("container environment lacks %q: %v", want, fake.created.Config.Env)
 		}
+	}
+}
+
+// Temperature must reach the custom request overrides, including explicit zero.
+func TestRenderTemperatureUsesRequestExtraBody(t *testing.T) {
+	for _, backend := range []string{"openai", "sglang"} {
+		for _, temperature := range []float64{0, 0.7} {
+			model := vllmModel()
+			model.Provider, model.Temperature = backend, floatPtr(temperature)
+			settings := baseSettings()
+			settings.extraBody = []byte(`{"metadata":{"weight":1234567890123456789}}`)
+			text := mustRender(t, model, settings)
+			var parsed struct {
+				Model     map[string]any `yaml:"model"`
+				Providers []struct {
+					Extra map[string]any `yaml:"extra_body"`
+				} `yaml:"custom_providers"`
+			}
+			if err := yaml.Unmarshal([]byte(text), &parsed); err != nil {
+				t.Fatal(err)
+			}
+			if _, exists := parsed.Model["temperature"]; exists {
+				t.Fatal("temperature rendered in ignored model field")
+			}
+			if len(parsed.Providers) != 1 || parsed.Providers[0].Extra["temperature"] != temperature {
+				t.Fatalf("request overrides: %#v", parsed.Providers)
+			}
+			if !strings.Contains(text, "1234567890123456789") {
+				t.Fatal("extra_body number lost precision")
+			}
+			settings.extraBody = []byte(`{"temperature":0.2}`)
+			if _, err := renderConfig(model, settings); err == nil {
+				t.Fatal("ambiguous temperature accepted")
+			}
+		}
+	}
+	model := validModel()
+	model.Temperature = floatPtr(0)
+	if _, err := renderConfig(model, baseSettings()); err == nil {
+		t.Fatal("unsupported DeepSeek temperature accepted")
 	}
 }

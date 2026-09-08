@@ -370,6 +370,11 @@ renders the same file as before.
 
 - `model.context_length`, `model.max_tokens`, and `model.temperature` set the
   window Hermes's compressor reasons about and the request sampling.
+  Temperature (including `0.0`) requires the `sglang` or `openai` backend;
+  ARIES places it in the custom provider's request `extra_body`, because the
+  pinned one-shot path ignores Hermes's `model.temperature` YAML field.
+  Setting both `model.temperature` and `harness.hermes.extra_body.temperature`
+  is rejected. Native DeepSeek temperature is unsupported by this path.
 - `harness.compaction.threshold_tokens` is an absolute compaction trigger.
   Hermes applies it after its 64K minimum and its 75% floor for windows under
   512K, so it is the one knob that gives an exact trigger on a large window.

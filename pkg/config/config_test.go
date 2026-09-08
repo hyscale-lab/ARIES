@@ -667,11 +667,7 @@ func TestOpenAIBackendIsExternalOnly(t *testing.T) {
 const hermesExtraBody = `{"user":"${ARIES_RUN_ID}-${ARIES_TASK_ID}","chat_template_kwargs":{"preserve_thinking":true},"metadata":{"trace":true}}`
 
 func TestHermesOnlyBlocksAndGenerationSettings(t *testing.T) {
-	hermes := strings.Replace(validConfig, `"harness":{"type":"openclaw"},"sandbox":{"type":"docker"},"bridge":{"type":"openclaw-ssh"}`,
-		`"harness":{"type":"hermes","compaction":{"threshold_tokens":65536},"hermes":{"extra_body":`+hermesExtraBody+`}},"sandbox":{"type":"docker"},"bridge":{"type":"hermes-ssh"}`, 1)
-	hermes = strings.Replace(hermes, `"runtime":{"backend":"deepseek","mode":"external"}`, `"runtime":{"backend":"openai","mode":"external"}`, 1)
-	hermes = strings.Replace(hermes, `"model":{"id":"fake","base_url":"http://127.0.0.1:8080","api_key_env":"DEEPSEEK_API_KEY"}`,
-		`"model":{"id":"fake","base_url":"http://vllm.local:8000/v1","api_key_env":"VLLM_API_KEY","context_length":262144,"max_tokens":32768,"temperature":1.0}`, 1)
+	hermes := hermesContextConfig()
 	cfg, err := Decode(strings.NewReader(hermes))
 	if err != nil {
 		t.Fatal(err)
@@ -719,4 +715,37 @@ func TestHermesOnlyBlocksAndGenerationSettings(t *testing.T) {
 			t.Fatalf("%s: expected rejection", name)
 		}
 	}
+}
+
+// Profiles reject unsupported or ambiguous temperature settings before setup.
+func TestHermesTemperatureRequestValidation(t *testing.T) {
+	profile := hermesContextConfig()
+	for _, backend := range []string{"openai", "sglang"} {
+		candidate := strings.Replace(profile, `"backend":"openai"`, `"backend":"`+backend+`"`, 1)
+		candidate = strings.Replace(candidate, `"temperature":1.0`, `"temperature":0.0`, 1)
+		cfg, err := Decode(strings.NewReader(candidate))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Model.Temperature == nil || *cfg.Model.Temperature != 0 {
+			t.Fatal("explicit zero lost")
+		}
+	}
+	for _, candidate := range []string{
+		strings.Replace(profile, hermesExtraBody, `{"temperature":0.2}`, 1),
+		strings.Replace(strings.Replace(profile, `"backend":"openai"`, `"backend":"deepseek"`, 1), `,"hermes":{"extra_body":`+hermesExtraBody+`}`, "", 1),
+	} {
+		if _, err := Decode(strings.NewReader(candidate)); err == nil || !strings.Contains(err.Error(), "temperature") {
+			t.Fatalf("expected temperature error, got %v", err)
+		}
+	}
+}
+
+func hermesContextConfig() string {
+	hermes := strings.Replace(validConfig, `"harness":{"type":"openclaw"},"sandbox":{"type":"docker"},"bridge":{"type":"openclaw-ssh"}`,
+		`"harness":{"type":"hermes","compaction":{"threshold_tokens":65536},"hermes":{"extra_body":`+hermesExtraBody+`}},"sandbox":{"type":"docker"},"bridge":{"type":"hermes-ssh"}`, 1)
+	hermes = strings.Replace(hermes, `"runtime":{"backend":"deepseek","mode":"external"}`, `"runtime":{"backend":"openai","mode":"external"}`, 1)
+	hermes = strings.Replace(hermes, `"model":{"id":"fake","base_url":"http://127.0.0.1:8080","api_key_env":"DEEPSEEK_API_KEY"}`,
+		`"model":{"id":"fake","base_url":"http://vllm.local:8000/v1","api_key_env":"VLLM_API_KEY","context_length":262144,"max_tokens":32768,"temperature":1.0}`, 1)
+	return hermes
 }

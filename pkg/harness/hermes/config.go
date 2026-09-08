@@ -93,8 +93,9 @@ type renderSettings struct {
 // Optional blocks are written only when the profile set them, so a profile
 // without them renders the same file as before they existed:
 //
-//   - model.context_length, model.max_tokens, model.temperature feed Hermes's
-//     compressor window arithmetic and its request sampling.
+//   - model.context_length and model.max_tokens feed Hermes's compressor
+//     window arithmetic and output budget. Temperature is merged into the
+//     custom provider extra_body because one-shot ignores model.temperature.
 //   - compression.enabled / compression.threshold_tokens set the compaction
 //     trigger. threshold_tokens is an absolute cap Hermes applies after its
 //     64K minimum and its 75% small-window floor.
@@ -127,12 +128,33 @@ func renderConfig(model core.ModelConfig, settings renderSettings) ([]byte, erro
 			return nil, errors.New("Hermes compaction threshold must be smaller than the context length")
 		}
 	}
+	requestBody := settings.extraBody
+	if model.Temperature != nil {
+		if !openAICompatible(model.Provider) {
+			return nil, errors.New("Hermes temperature requires the sglang or openai backend")
+		}
+		object := make(map[string]json.RawMessage)
+		if len(requestBody) != 0 {
+			if err := json.Unmarshal(requestBody, &object); err != nil || len(object) == 0 {
+				return nil, errors.New("Hermes extra_body must be a non-empty JSON object")
+			}
+		}
+		if _, exists := object["temperature"]; exists {
+			return nil, errors.New("Hermes model.temperature conflicts with extra_body.temperature")
+		}
+		object["temperature"] = json.RawMessage(yamlFloat(*model.Temperature))
+		var err error
+		requestBody, err = json.Marshal(object)
+		if err != nil {
+			return nil, fmt.Errorf("Hermes request body: %w", err)
+		}
+	}
 	var extraBody string
-	if len(settings.extraBody) != 0 {
+	if len(requestBody) != 0 {
 		if hermesProvider(model.Provider) != "custom" {
 			return nil, errors.New("Hermes merges extra_body only for the custom provider, not " + model.Provider)
 		}
-		indented, err := indentedJSONObject(settings.extraBody, "      ")
+		indented, err := indentedJSONObject(requestBody, "      ")
 		if err != nil {
 			return nil, fmt.Errorf("Hermes extra_body: %w", err)
 		}
@@ -150,9 +172,6 @@ func renderConfig(model core.ModelConfig, settings renderSettings) ([]byte, erro
 	}
 	if model.MaxTokens > 0 {
 		output.WriteString("  max_tokens: " + strconv.Itoa(model.MaxTokens) + "\n")
-	}
-	if model.Temperature != nil {
-		output.WriteString("  temperature: " + yamlFloat(*model.Temperature) + "\n")
 	}
 	output.WriteString("\nagent:\n")
 	output.WriteString("  max_turns: " + strconv.Itoa(settings.maxTurns) + "\n")

@@ -1,5 +1,20 @@
 # ARIES Tasks
 
+## PR #51 — Effective Hermes temperature
+
+- Confirmed the pinned one-shot ignores model YAML temperature. Route explicit
+  profile temperature through custom-provider request extra_body, preserving
+  zero and existing JSON number precision. Reject duplicate temperature sources
+  and unsupported native DeepSeek temperature before setup and rendering.
+- Retained the reviewed Hermes-specific extra_body block and credential checks;
+  shared model and compaction data remain unchanged for future harness support.
+- Regression-first unit checks and a real pinned v2026.8.31 one-shot HTTP test
+  reproduced the defect, then passed for zero and 0.7 with unrelated request
+  fields preserved. Independent diff review found no blocking issue.
+- Build, unit, race, lint, and every integration package except the unchanged
+  SWE-bench Pro LFS fixture pass. That environment gap is recorded under PR #50.
+  SDK inspection confirms zero ARIES containers/networks; diff and key scans pass.
+
 ## PR #50 — External SGLang review correction
 
 - Removed the native launch-file requirement from external SGLang profile

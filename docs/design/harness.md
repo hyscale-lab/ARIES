@@ -100,7 +100,11 @@ and `harness.hermes.extra_body`. Compaction is a general harness capability and
 stays on the shared `harness` block; `extra_body` is a Hermes escape hatch, so
 it lives under the type-specific `harness.hermes` block. It is a non-empty JSON
 object written as the `extra_body` of one `custom_providers` entry, which
-Hermes merges into every chat request for its `custom` provider. Hermes expands
+Hermes merges into every chat request for its `custom` provider. Explicit
+`model.temperature`, including zero, uses this same request path on `sglang`
+and `openai`; the pinned one-shot ignores the model YAML temperature field.
+Native DeepSeek temperature and duplicate temperature settings in the profile
+and extra body are rejected. Hermes expands
 `${NAME}` references in its configuration from the process environment, so the
 harness exports `ARIES_RUN_ID` and `ARIES_TASK_ID` into the container and a
 profile can tag every request with the task; a profile may reference only those

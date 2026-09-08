@@ -615,6 +615,20 @@ func (c *Config) validate() error {
 	if c.Harness.Hermes != nil && c.Runtime.Backend != "sglang" && c.Runtime.Backend != "openai" {
 		return errors.New("harness.hermes.extra_body requires runtime.backend sglang or openai")
 	}
+	if c.Model.Temperature != nil {
+		if c.Runtime.Backend != "sglang" && c.Runtime.Backend != "openai" {
+			return errors.New("model.temperature requires runtime.backend sglang or openai for Hermes")
+		}
+		if c.Harness.Hermes != nil {
+			var object map[string]json.RawMessage
+			if err := json.Unmarshal(c.Harness.Hermes.ExtraBody, &object); err != nil {
+				return fmt.Errorf("harness.hermes.extra_body: %w", err)
+			}
+			if _, exists := object["temperature"]; exists {
+				return errors.New("model.temperature conflicts with harness.hermes.extra_body.temperature")
+			}
+		}
+	}
 	if err := c.Runtime.validate(); err != nil {
 		return err
 	}
