@@ -30,12 +30,16 @@ drb
 durations
 edu
 entrypoint
+eof
 filesystem
 ghcr
 gib
 gid
 github
 gpu
+grpc
+heredoc
+heredocs
 hermes
 hermes's
 hostname
@@ -55,10 +59,12 @@ lifecycle
 llm
 logrus
 loopback
+mb
 metadata
 mib
 moby
 moe
+mtls
 NCSpeech
 nousresearch
 ntu
@@ -79,6 +85,7 @@ pre
 prefill
 preflight
 preload
+protobuf
 qa's
 prewarm
 Qwen
@@ -89,6 +96,7 @@ relicense
 renderer
 replayable
 roadmap
+rpc
 runnable
 runtime
 runtimes
