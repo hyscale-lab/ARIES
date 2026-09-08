@@ -12,8 +12,8 @@ API.
 
 The shape is **one RPC per operation** (Option A). A connection is established once per task and
 reused; each call is one HTTP/2 stream, which is the direct analogue of today's single-use SSH
-channel. The server holds no execution state — the working directory is a request field, not
-session state — so revocation stays as provable as it is now.
+channel. The server holds no execution state and carries no working directory of its own, so
+revocation stays as provable as it is now.
 
 ```mermaid
 flowchart TB
@@ -35,7 +35,7 @@ flowchart TB
     G -. owns .-> A
     G -. owns .-> R
 
-    C ==>|Exec request: argv or script, stdin| G
+    C ==>|Exec request: script, stdin| G
     G ==>|core.Command via ExecStream| T
     T ==>|stdout, stderr| G
     G ==>|ExecResponse: stdout, stderr, exit code| C
@@ -64,6 +64,12 @@ value, constructed by a new `case` in `newBridge` (`cmd/aries/wiring.go:318-341`
 `runner.ToolBridge` and returns a `core.ToolEndpoint` describing a gRPC endpoint instead of an SSH
 one.
 
+The four methods below are the design; they are not one deliverable. The first implementation
+carries **`Exec` alone**, which already exercises everything structural — the connection, the
+credential material, the audit writer, `ExecStream`, and revocation. `ReadFile`, `WriteFile`, and
+`Stat` add file-transfer plumbing that proves nothing further about the transport, and they make
+the file-transfer policy question live before there is anything to test it against.
+
 **Out of scope, deliberately.**
 
 - *The harness side.* Some client has to speak this. Which harness, and how it is taught to, is a
@@ -82,10 +88,11 @@ one.
 
 ## 2. Service definition
 
-Four methods. The command-profile research found that roughly half to two-thirds of observed
-commands are plain `argv`, file writes appear in 74% of Terminal-Bench tasks, and 27% of tasks
-contain a pipeline or substitution that cannot be expressed without a shell — so the surface needs
-an `argv` form, a script escape hatch, and first-class file transfer.
+Four methods. The command-profile research found that 27% of Terminal-Bench tasks contain a
+pipeline or substitution no typed method can replace, and that file writes appear in 74% — so the
+surface needs a shell form and first-class file transfer. It found no structured commands crossing
+the wire at all, which is why `Exec` carries a script rather than an argument vector; see
+[why nothing else is here](#why-nothing-else-is-here).
 
 ```proto
 service Sandbox {
@@ -104,23 +111,42 @@ bounded fields on the response. This is the deliberate first-iteration choice �
 
 ```proto
 message ExecRequest {
-  oneof command {
-    Argv argv = 1;      // exact argument boundaries, no shell
-    string script = 2;  // the escape hatch, run under /bin/bash -c
-  }
-  string working_dir = 3;          // empty means the sandbox workdir
-  map<string, string> env = 4;     // subject to policy, see below
-  int64 timeout_ms = 5;
-  int64 output_limit_bytes = 6;
-  bytes stdin = 7;                 // bounded; large input goes through WriteFile
+  string script = 1;   // run under /bin/bash -c, exactly as the wire carries today
+  bytes stdin = 2;     // bounded; large input goes through WriteFile
 }
-
-message Argv { string path = 1; repeated string args = 2; }
 ```
 
-The `oneof` is the point: an `argv` call and a `script` call are **structurally distinguishable**,
-so the audit records which was used and a future policy can restrict one without touching the
-other. Today both arrive as an opaque shell string and cannot be told apart.
+Two fields, because two fields are what actually crosses the wire.
+
+#### Why nothing else is here
+
+The Hermes bridge populates **three of `core.Command`'s eight fields** — `Path`, `Args`, and
+`Dir` — and `Dir` is a constant it forces itself (`pkg/bridge/hermesssh/workspace.go:46-51`).
+Every other field a general-purpose sandbox API would carry is unreachable in this one:
+
+| Omitted | Why |
+| --- | --- |
+| `working_dir` | The bridge forces `Dir` to `sandbox.Workdir()` on every call, and the client establishes its own position on top of that. Under the transport-swap decision the client owns the directory, so the field would never be read. |
+| `env` | The bridge never sets `Command.Env`, and no client environment reaching the sandbox is a preserved property ([section 7](#7-what-is-preserved-and-what-is-dropped)). Defining a field the server intends to refuse is worse than omitting it. |
+| `timeout_ms` | The bridge sets no `Command.Timeout`; the per-command bound is applied client-side. |
+| `output_limit_bytes` | Never set, so `ExecStream` applies its 16 MiB default. |
+| `argv` | Nothing emits structured commands. Every payload arriving today is a shell string, so an `argv` arm would be defined and never populated. |
+
+The omissions are cheap to reverse. Adding fields is wire-compatible, and promoting `script` into
+a `oneof` at field 1 later stays wire-compatible on the wire — only the generated Go API changes,
+which matters little while there is one client.
+
+**What would bring each back.** `working_dir` and `env` become necessary if a client ever arrives
+without a command wrapper of its own — the typed-backend end state, where the client no longer
+builds its own `cd`. `argv` becomes necessary when a client emits structured commands, at which
+point the `oneof` earns its stated purpose of making a structured call and a shell escape hatch
+distinguishable in the audit. `timeout_ms` and `output_limit_bytes` become necessary only if the
+bridge starts imposing per-call bounds, which it does not today.
+
+The general trap this avoids: `envd` carries `cwd` and `envs` because it is a general-purpose
+sandbox API serving many clients. This bridge has one client, which supplies all of that inside
+the script it already builds. Copying the reference surface would import requirements that do not
+exist here.
 
 ```proto
 message ExecResponse {
@@ -145,15 +171,14 @@ indistinguishable from "the bridge failed", which is exactly the distinction the
 
 #### The working directory, and what ARIES does not do
 
-`working_dir` on the request replaces the bridge silently forcing `Dir` on every call
-(`pkg/bridge/hermesssh/workspace.go:46-51`). Empty still means the sandbox workdir, so the default
-is unchanged; the difference is that a client can now say where a command should start instead of
-having no say at all.
+The bridge continues to force `Dir` to `sandbox.Workdir()` on every call
+(`pkg/bridge/hermesssh/workspace.go:46-51`). The request carries no directory and the response
+reports none.
 
-**There is no corresponding response field, and ARIES adds no mechanism for tracking the directory
-across calls.** A shell command can `cd`, and a process's directory dies with it, so reporting
-where a command finished would mean ARIES appending a `pwd` to the script and stripping the result
-back out — the same technique the existing transport already carries, reintroduced one layer down.
+**ARIES adds no mechanism for tracking the directory across calls.** A shell command can `cd`, and
+a process's directory dies with it, so reporting where a command finished would mean ARIES
+appending a `pwd` to the script and stripping the result back out — the same technique the existing
+transport already carries, reintroduced one layer down.
 
 That is not ARIES's problem to solve here. Clients that need a persistent directory already
 maintain one themselves, entirely above this boundary: they re-establish it at the top of each
@@ -268,18 +293,18 @@ request the current server has to implement itself.
 
 ## 4. State: what the server holds
 
-**Per session:** the listener, the live-stream set, the audit writer, the credential paths, and
-the revoked flag. That is the same list the current `bridgeSession` holds
+**Per session:** the listener, the set of in-flight calls, the audit writer, the credential paths,
+and the revoked flag. That is the same list the current `bridgeSession` holds
 (`pkg/bridge/hermesssh/bridge.go:85-105`), plus the flag.
 
-**Per call:** the working directory, environment, timeout, and output limit — all request fields,
-all discarded when the call returns.
+**Per call:** the script and its `stdin`, discarded when the call returns. Nothing else is
+carried — see [why nothing else is here](#why-nothing-else-is-here).
 
-**Not held: the working directory across calls.** `working_dir` defaults to `sandbox.Workdir()`
-when empty, exactly as `Dir` is forced today (`pkg/bridge/hermesssh/workspace.go:46-51`). A client
-that wants a persistent directory tracks it entirely on its own side, as clients already do — see
-[the working directory](#the-working-directory-and-what-aries-does-not-do). ARIES neither
-remembers it nor reports it back.
+**Not held: the working directory.** `Dir` stays forced to `sandbox.Workdir()` on every call,
+exactly as today (`pkg/bridge/hermesssh/workspace.go:46-51`). A client that wants a persistent
+directory tracks it entirely on its own side, as clients already do — see
+[the working directory](#the-working-directory-and-what-aries-does-not-do). ARIES neither accepts
+it, remembers it, nor reports it back.
 
 This is the deliberate choice of Option A over a session-scoped design. The reason is revocation.
 Today `Stop` returning `nil` is easy to honour because nothing the bridge holds can act after it
@@ -289,9 +314,9 @@ thing was terminated and its termination was confirmed," which is a larger oblig
 guarantee that gates evaluation. Metadata-only state keeps the current proof structure intact
 while still removing the marker channel from the wire.
 
-The environment map is subject to policy: no client-supplied environment reaches the sandbox
-today, and this proposal does not change that by default. If it is ever allowed, it should be an
-explicit allowlist rather than a passthrough.
+No client-supplied environment reaches the sandbox today, and the request carries no field that
+could change that. If one is ever added, it should be an explicit allowlist rather than a
+passthrough.
 
 **Sources:** `pkg/bridge/hermesssh/bridge.go`, `pkg/bridge/hermesssh/workspace.go`,
 `pkg/runner/runner.go`, `docs/design/ssh-connection-lifecycle.md`.
@@ -305,9 +330,9 @@ explicit allowlist rather than a passthrough.
 The sequence mirrors `revoke` and `finalize` today:
 
 1. Mark the session id revoked, so any surviving call is refused.
-2. Cancel the serve context, which cancels every in-flight stream's context.
+2. Cancel the serve context, which cancels every in-flight call's context.
 3. Stop the gRPC server, refusing new connections and closing established ones.
-4. Wait for every stream handler to return.
+4. Wait for every handler to return.
 5. Seal the audit; if it cannot be flushed, `Stop` returns the error.
 6. Remove the client credential material.
 
@@ -333,8 +358,8 @@ has an equivalent, and two gain precision:
 
 | Today | Under gRPC |
 | --- | --- |
-| `command` — the shell string | the `argv` or the script, plus which `oneof` arm was used |
-| `operation_class` — `agent`, `bootstrap`, `sync` | the method name, plus the command arm |
+| `command` — the shell string | the script, unchanged in substance |
+| `operation_class` — `agent`, `bootstrap`, `sync` | the method name |
 | `exit_code` clamped to 0-255 | `exit_code` plus a structured termination reason |
 | `stdin_bytes`, `stdout_bytes`, `stderr_bytes` | unchanged |
 | raw wire log | the request messages, which are already structured |
@@ -357,7 +382,8 @@ should not be reproduced: a refused call is a recordable event.
 
 - Positive revocation, and the fail-closed treatment of ambiguity.
 - Audit completeness gating revocation.
-- Workdir authority: the sandbox workdir is the default and the client cannot escape it by omission.
+- Workdir authority: the bridge forces the sandbox workdir on every call and the request offers
+  no way to override it.
 - Exact argument boundaries via `core.Command`.
 - Absolute command paths with no `PATH` lookup.
 - No client environment reaching the sandbox.
@@ -374,7 +400,8 @@ should not be reproduced: a refused call is a recordable event.
 - Host keys and known-hosts pinning, replaced by mTLS.
 - The handshake deadline, and the fact that clearing it leaves no idle timeout.
 - The `keepalive` global-request handler.
-- Grammar-based payload validation, replaced by typed messages.
+- Grammar-based payload validation of the *envelope*, replaced by typed messages. The script
+  itself stays an opaque string, so nothing validates its contents on either transport.
 
 **Sources:** `docs/design/hermes-bridge-inventory.md`,
 `docs/design/ssh-connection-lifecycle.md`.
@@ -404,9 +431,9 @@ should not be reproduced: a refused call is a recordable event.
 3. **Per-call user identity.** `core.Command.User` is `json:"-"` and no bridge sets it, so the
    agent inherits the container default. Whether `Start` should carry a UID, and under what
    policy, is unresolved.
-4. **Timeout placement.** SWE-bench Pro sets hour-long timeouts on individual commands, not on the
-   session. `Start.timeout_ms` reflects that, but the interaction with the run-level cleanup budget
-   needs stating.
+4. **Timeout placement.** The first cut carries no per-call timeout, matching today: the bridge
+   sets none and the client bounds its own commands. If a server-side bound is ever wanted, the
+   interaction with the run-level cleanup budget needs stating before adding the field.
 5. **Backgrounded processes.** Deep Research Bench launches a server that must outlive the call.
    A unary or streaming `Exec` does not model this; today it works only because the shell
    backgrounds it and the sandbox does not reap it.
@@ -424,9 +451,10 @@ should not be reproduced: a refused call is a recordable event.
    ([e2b-tool-bridge](../research/e2b-tool-bridge.md)) both hand-write the Connect envelope with no
    protobuf runtime at all. Decide before writing code, not during.
 
-7. **Resolved: `script` stays distinguishable.** The `oneof` in `ExecRequest` keeps a structured
-   call and a shell escape hatch apart, so the audit can separate them. Recorded here because the
-   alternative — treating `script` as ordinary — was considered and rejected.
+7. **Deferred: distinguishing structured calls from shell escapes.** A `oneof` over `argv` and
+   `script` would let the audit separate the two, which the research argues for. It is omitted from
+   the first cut because nothing emits structured commands, so the arm would never be populated.
+   Adding it later is wire-compatible.
 
 ## 9. Reaching a real harness without moving the pin
 
