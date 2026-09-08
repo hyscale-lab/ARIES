@@ -1,7 +1,9 @@
 package kubernetes
 
 import (
+	"context"
 	"encoding/json"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -241,5 +243,70 @@ func TestRepeatedKubeletObservationsAreSuppressed(t *testing.T) {
 	// another's first reading.
 	if !source.observationIsNew("aries-task-xyz", first) {
 		t.Error("a different runtime must be tracked separately")
+	}
+}
+
+// A discovery failure must not end the run's telemetry on the first occurrence.
+// The monitor stops its sample loop permanently on any Sample error, so before
+// this budget existed one slow `kubectl get pods` — which a CPU-throttled ARIES
+// pod produces readily under concurrency — cost every remaining sample. Three
+// of four concurrent occurrences died that way at ~180s of a ~500s run.
+func TestDiscoveryFailuresAreAbsorbedThenReported(t *testing.T) {
+	source, err := NewResourceSource(ResourceOptions{
+		RunID: "run-1", TaskIDs: []string{"fix-git"}, Namespace: "aries",
+		// A path that cannot execute, so every discovery attempt fails.
+		KubectlPath: filepath.Join(t.TempDir(), "absent-kubectl"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 1; attempt <= discoveryFailureBudget; attempt++ {
+		readings, err := source.Sample(context.Background())
+		if err != nil {
+			t.Fatalf("attempt %d: failure %d of %d must be absorbed, got %v",
+				attempt, attempt, discoveryFailureBudget, err)
+		}
+		if len(readings) != 0 {
+			t.Fatalf("attempt %d: absorbed failure must yield no readings", attempt)
+		}
+	}
+	// Past the budget the error surfaces, so a genuine breakage — RBAC revoked,
+	// API server unreachable — is not hidden behind an empty artifact forever.
+	if _, err := source.Sample(context.Background()); err == nil {
+		t.Fatal("a failure past the budget must be reported")
+	}
+}
+
+// The budget counts *consecutive* failures. A source that fails intermittently
+// for the whole run must keep sampling rather than accumulating toward the cap.
+func TestDiscoverySuccessClearsTheFailureBudget(t *testing.T) {
+	source := &KubeResourceSource{lastObserved: map[string]time.Time{}}
+	for range discoveryFailureBudget {
+		if !source.absorbDiscoveryFailure() {
+			t.Fatal("failure within budget must be absorbed")
+		}
+	}
+	source.clearDiscoveryFailures()
+	if !source.absorbDiscoveryFailure() {
+		t.Error("a success must reset the budget; otherwise intermittent failures accumulate")
+	}
+}
+
+// The backstop applies only when the caller has no deadline. Under pkg/monitor
+// the request context is always tighter, and pretending otherwise is what
+// obscured the real timeout during the first live run.
+func TestCallerDeadlineTakesPrecedenceOverBackstop(t *testing.T) {
+	if backstopTimeout <= minimumSampleInterval {
+		t.Fatalf("backstop %v should exceed the sample floor %v", backstopTimeout, minimumSampleInterval)
+	}
+	source := &KubeResourceSource{kubectl: filepath.Join(t.TempDir(), "absent"), lastObserved: map[string]time.Time{}}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := source.run(ctx, "get", "pods"); err == nil {
+		t.Fatal("expected the call to fail")
+	}
+	if elapsed := time.Since(start); elapsed >= backstopTimeout {
+		t.Errorf("call took %v; the caller's deadline must bound it, not the backstop", elapsed)
 	}
 }

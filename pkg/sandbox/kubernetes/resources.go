@@ -36,7 +36,32 @@ import (
 // cluster-scoped `nodes/proxy` subresource, which a namespaced Role cannot
 // grant. See k8s/base/rbac.yaml.
 
-const summaryTimeout = 20 * time.Second
+// backstopTimeout bounds one kubectl call when the caller supplied no deadline
+// of its own. It is only a backstop: pkg/monitor wraps every Sample in a much
+// tighter request context, so under the monitor this value is never reached.
+// An earlier version of this constant was written as if it governed monitor
+// sampling, which it never did.
+const backstopTimeout = 20 * time.Second
+
+// minimumSampleInterval is the fastest cadence at which this source can produce
+// new data. See MinimumSampleInterval.
+const minimumSampleInterval = 5 * time.Second
+
+// discoveryFailureBudget is how many consecutive pod-discovery failures are
+// absorbed before Sample reports one.
+//
+// Discovery spawns a kubectl process per sample, and a throttled ARIES pod can
+// take longer than the monitor's request timeout to complete one. Because a
+// single Sample error stops the monitor's loop for good, treating the first
+// slow call as fatal costs the rest of the run's telemetry — which is what
+// happened in practice: three of four concurrent occurrences died at ~180s with
+// "list kubernetes resource pods: signal: killed".
+//
+// A node that stops answering is already tolerated the same way (see Sample),
+// so this closes an inconsistency rather than inventing a policy. The budget is
+// small so that a genuine breakage — RBAC revoked, API server gone — still
+// surfaces as an error instead of an eternally empty artifact.
+const discoveryFailureBudget = 3
 
 // ResourceOptions scope one Kubernetes resource source to a single ARIES run.
 type ResourceOptions struct {
@@ -58,6 +83,9 @@ type KubeResourceSource struct {
 	// runtime, used to suppress repeats. See Sample.
 	mu           sync.Mutex
 	lastObserved map[string]time.Time
+	// discoveryFailures counts consecutive discovery failures, reset by the
+	// first success. See discoveryFailureBudget.
+	discoveryFailures int
 }
 
 // NewResourceSource constructs a Kubernetes resource source without contacting
@@ -109,6 +137,22 @@ func (source *KubeResourceSource) Close() error { return nil }
 // gone within about half a minute.
 func (source *KubeResourceSource) BaselineGracePeriod() int { return 30 }
 
+// MinimumSampleInterval implements monitor.PacedSource.
+//
+// The kubelet refreshes its cAdvisor cache every 10-20s, so sampling faster
+// than that cannot produce new data: observationIsNew discards the duplicates.
+// Every discarded sample still costs a kubectl process spawn, a TLS handshake
+// and API discovery, multiplied by the number of concurrent occurrences, from
+// inside a CPU-limited pod. That cost is what pushes discovery past the
+// monitor's request timeout.
+//
+// 5s rather than the kubelet's own 10-20s: the cadence is not configured here
+// and varies, so this stays short enough to catch the fast end without
+// pretending to know the exact value.
+func (source *KubeResourceSource) MinimumSampleInterval() time.Duration {
+	return minimumSampleInterval
+}
+
 // resourceTarget is one ARIES-owned pod resolved from the API server, carrying
 // the identity the Summary API does not report.
 type resourceTarget struct {
@@ -125,8 +169,14 @@ type resourceTarget struct {
 func (source *KubeResourceSource) Sample(ctx context.Context) ([]core.ResourceReading, error) {
 	targets, err := source.discover(ctx)
 	if err != nil {
+		if source.absorbDiscoveryFailure() {
+			// Reported as no readings rather than as an error, so the monitor
+			// keeps sampling. The gap is visible in the artifact's sample count.
+			return nil, nil
+		}
 		return nil, err
 	}
+	source.clearDiscoveryFailures()
 	if len(targets) == 0 {
 		return nil, nil
 	}
@@ -174,6 +224,21 @@ func (source *KubeResourceSource) Sample(ctx context.Context) ([]core.ResourceRe
 		return readings[i].RuntimeID < readings[j].RuntimeID
 	})
 	return readings, nil
+}
+
+// absorbDiscoveryFailure records one failure and reports whether it is still
+// within budget.
+func (source *KubeResourceSource) absorbDiscoveryFailure() bool {
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	source.discoveryFailures++
+	return source.discoveryFailures <= discoveryFailureBudget
+}
+
+func (source *KubeResourceSource) clearDiscoveryFailures() {
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	source.discoveryFailures = 0
 }
 
 // observationIsNew reports whether this runtime's kubelet observation time has
@@ -346,9 +411,15 @@ func (stats *nodeStats) reading(target resourceTarget) (core.ResourceReading, bo
 }
 
 func (source *KubeResourceSource) run(ctx context.Context, args ...string) ([]byte, error) {
-	callCtx, cancel := context.WithTimeout(ctx, summaryTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(callCtx, source.kubectl, args...)
+	// Only impose the backstop when the caller has no deadline of its own.
+	// Wrapping unconditionally hid the fact that the monitor's tighter request
+	// context was always the one doing the killing.
+	if _, bounded := ctx.Deadline(); !bounded {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, backstopTimeout)
+		defer cancel()
+	}
+	cmd := exec.CommandContext(ctx, source.kubectl, args...)
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

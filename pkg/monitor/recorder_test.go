@@ -75,6 +75,14 @@ func newTestRecorder(t *testing.T, source ResourceSource, outputDir string, inte
 	return recorder
 }
 
+// pinClock fixes the recorder's start time so that fabricated sample times of
+// the form t0.Add(n*time.Second) land n seconds into the run. Sample derives the
+// `second` field from the clock rather than counting ticks, so without this the
+// hand-driven samples below would be measured against real wall-clock time.
+func pinClock(recorder *Recorder, t0 time.Time) {
+	recorder.now = func() time.Time { return t0 }
+}
+
 func TestRecorderDerivesCPUAndWritesPortablePrivateArtifacts(t *testing.T) {
 	started := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
 	source := &fakeSource{sample: func(_ context.Context, call int) ([]core.ResourceReading, error) {
@@ -115,7 +123,7 @@ func TestRecorderDerivesCPUAndWritesPortablePrivateArtifacts(t *testing.T) {
 		t.Fatalf("positive CPU components = %#v", seenPositive)
 	}
 	index := readIndexStrict(t, report.LogPaths[1])
-	if index.SchemaVersion != 3 || index.SampleCount != uint64(len(samples)) || len(index.Components) != 2 {
+	if index.SchemaVersion != 4 || index.SampleCount != uint64(len(samples)) || len(index.Components) != 2 {
 		t.Fatalf("index = %+v", index)
 	}
 	for _, path := range append([]string{filepath.Dir(report.LogPaths[0])}, report.LogPaths...) {
@@ -173,6 +181,7 @@ func TestRecorderCPUBaselinesHandleIdleDisappearAndRejectRegression(t *testing.T
 	t0 := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
 	source := &fakeSource{}
 	recorder := newTestRecorder(t, source, filepath.Join(t.TempDir(), "run"), time.Hour)
+	pinClock(recorder, t0)
 	source.sample = func(context.Context, int) ([]core.ResourceReading, error) {
 		return []core.ResourceReading{testReading("sandbox", "runtime", t0, 0)}, nil
 	}
@@ -182,23 +191,23 @@ func TestRecorderCPUBaselinesHandleIdleDisappearAndRejectRegression(t *testing.T
 	source.sample = func(context.Context, int) ([]core.ResourceReading, error) {
 		return []core.ResourceReading{testReading("sandbox", "runtime", t0.Add(time.Second), 500_000_000)}, nil
 	}
-	if err := recorder.sample(context.Background(), 1, t0.Add(time.Second)); err != nil {
+	if err := recorder.sample(context.Background(), t0.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	source.sample = func(context.Context, int) ([]core.ResourceReading, error) { return nil, nil }
-	if err := recorder.sample(context.Background(), 2, t0.Add(2*time.Second)); err != nil {
+	if err := recorder.sample(context.Background(), t0.Add(2*time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	source.sample = func(context.Context, int) ([]core.ResourceReading, error) {
 		return []core.ResourceReading{testReading("sandbox", "runtime", t0.Add(3*time.Second), 900_000_000)}, nil
 	}
-	if err := recorder.sample(context.Background(), 3, t0.Add(3*time.Second)); err != nil {
+	if err := recorder.sample(context.Background(), t0.Add(3*time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	source.sample = func(context.Context, int) ([]core.ResourceReading, error) {
 		return []core.ResourceReading{testReading("sandbox", "runtime", t0.Add(4*time.Second), 800_000_000)}, nil
 	}
-	if err := recorder.sample(context.Background(), 4, t0.Add(4*time.Second)); err == nil || !strings.Contains(err.Error(), "CPU counter decreased") {
+	if err := recorder.sample(context.Background(), t0.Add(4*time.Second)); err == nil || !strings.Contains(err.Error(), "CPU counter decreased") {
 		t.Fatalf("regression error = %v", err)
 	}
 	if _, err := recorder.Stop(context.Background()); err != nil {
@@ -230,10 +239,11 @@ func TestRecorderScopesCPUBaselinesByTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	pinClock(recorder, t0)
 	if err := recorder.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := recorder.sample(context.Background(), 1, t0.Add(time.Second)); err != nil {
+	if err := recorder.sample(context.Background(), t0.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := recorder.Stop(context.Background()); err != nil {
@@ -597,6 +607,7 @@ func TestRecorderToleratesAbsenceWhenSourceOptsIn(t *testing.T) {
 	t0 := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
 	source := &tolerantSource{grace: 30}
 	recorder := newTestRecorder(t, source, filepath.Join(t.TempDir(), "run"), time.Hour)
+	pinClock(recorder, t0)
 	source.sample = func(context.Context, int) ([]core.ResourceReading, error) {
 		return []core.ResourceReading{testReading("sandbox", "runtime", t0, 0)}, nil
 	}
@@ -607,14 +618,14 @@ func TestRecorderToleratesAbsenceWhenSourceOptsIn(t *testing.T) {
 	// kubelet serves an unchanged cache.
 	source.sample = func(context.Context, int) ([]core.ResourceReading, error) { return nil, nil }
 	for second := uint64(1); second <= 2; second++ {
-		if err := recorder.sample(context.Background(), second, t0.Add(time.Duration(second)*time.Second)); err != nil {
+		if err := recorder.sample(context.Background(), t0.Add(time.Duration(second)*time.Second)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	source.sample = func(context.Context, int) ([]core.ResourceReading, error) {
 		return []core.ResourceReading{testReading("sandbox", "runtime", t0.Add(3*time.Second), 900_000_000)}, nil
 	}
-	if err := recorder.sample(context.Background(), 3, t0.Add(3*time.Second)); err != nil {
+	if err := recorder.sample(context.Background(), t0.Add(3*time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := recorder.Stop(context.Background()); err != nil {
@@ -637,6 +648,7 @@ func TestRecorderDropsBaselineBeyondGracePeriod(t *testing.T) {
 	t0 := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
 	source := &tolerantSource{grace: 2}
 	recorder := newTestRecorder(t, source, filepath.Join(t.TempDir(), "run"), time.Hour)
+	pinClock(recorder, t0)
 	source.sample = func(context.Context, int) ([]core.ResourceReading, error) {
 		return []core.ResourceReading{testReading("sandbox", "runtime", t0, 0)}, nil
 	}
@@ -645,14 +657,14 @@ func TestRecorderDropsBaselineBeyondGracePeriod(t *testing.T) {
 	}
 	source.sample = func(context.Context, int) ([]core.ResourceReading, error) { return nil, nil }
 	for second := uint64(1); second <= 4; second++ {
-		if err := recorder.sample(context.Background(), second, t0.Add(time.Duration(second)*time.Second)); err != nil {
+		if err := recorder.sample(context.Background(), t0.Add(time.Duration(second)*time.Second)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	source.sample = func(context.Context, int) ([]core.ResourceReading, error) {
 		return []core.ResourceReading{testReading("sandbox", "runtime", t0.Add(5*time.Second), 900_000_000)}, nil
 	}
-	if err := recorder.sample(context.Background(), 5, t0.Add(5*time.Second)); err != nil {
+	if err := recorder.sample(context.Background(), t0.Add(5*time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := recorder.Stop(context.Background()); err != nil {
@@ -662,5 +674,94 @@ func TestRecorderDropsBaselineBeyondGracePeriod(t *testing.T) {
 	samples := readSamplesStrict(t, filepath.Join(recorder.outputDir, "fix-git", "monitor", "resources.jsonl"))
 	if len(samples) != 2 || samples[1].CPUPercent != 0 {
 		t.Fatalf("expected the baseline to be discarded past the grace period, got %+v", samples)
+	}
+}
+
+// pacedSource stands in for a cache-backed source: it cannot produce new data
+// faster than its declared floor.
+type pacedSource struct {
+	fakeSource
+	floor time.Duration
+}
+
+func (source *pacedSource) MinimumSampleInterval() time.Duration { return source.floor }
+
+// A source that declares a floor raises a faster configured interval to it.
+// Sampling below the floor returns duplicate observations the source discards,
+// while still paying the full per-sample cost — which for the Kubernetes source
+// is a kubectl process spawn per sample per concurrent occurrence.
+func TestPacedSourceRaisesConfiguredInterval(t *testing.T) {
+	source := &pacedSource{floor: 5 * time.Second}
+	recorder := newTestRecorder(t, source, filepath.Join(t.TempDir(), "run"), time.Second)
+	if recorder.interval != 5*time.Second {
+		t.Errorf("interval = %v, want 5s; a faster interval only produces duplicates", recorder.interval)
+	}
+}
+
+// The floor raises, never lowers. A caller that deliberately samples slowly is
+// not sped up to the source's minimum.
+func TestPacedSourceDoesNotLowerASlowerInterval(t *testing.T) {
+	source := &pacedSource{floor: 5 * time.Second}
+	recorder := newTestRecorder(t, source, filepath.Join(t.TempDir(), "run"), 30*time.Second)
+	if recorder.interval != 30*time.Second {
+		t.Errorf("interval = %v, want the configured 30s", recorder.interval)
+	}
+}
+
+// The default stays exactly as it was for sources that do not opt in, so the
+// Docker path is unaffected.
+func TestUnpacedSourceKeepsItsInterval(t *testing.T) {
+	recorder := newTestRecorder(t, &fakeSource{}, filepath.Join(t.TempDir(), "run"), time.Second)
+	if recorder.interval != time.Second {
+		t.Errorf("interval = %v, want the configured 1s", recorder.interval)
+	}
+}
+
+// The `second` field must report elapsed time, not the number of samples taken.
+// These coincided while the interval was fixed at one second, so a tick counter
+// passed unnoticed until PacedSource let a source raise the interval — at which
+// point sample 10 of a 5s run was still labelled "second": 10 while standing 50
+// seconds in. The artifact stayed well-formed and nothing errored, which is why
+// this is asserted rather than left to inspection.
+func TestSampleSecondIsElapsedTimeNotTickCount(t *testing.T) {
+	t0 := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
+	source := &pacedSource{floor: 5 * time.Second}
+	recorder := newTestRecorder(t, source, filepath.Join(t.TempDir(), "run"), time.Second)
+	pinClock(recorder, t0)
+	source.sample = func(_ context.Context, call int) ([]core.ResourceReading, error) {
+		observed := t0.Add(time.Duration(call-1) * 5 * time.Second)
+		return []core.ResourceReading{testReading("sandbox", "runtime", observed, uint64(call-1)*500_000_000)}, nil
+	}
+	if err := recorder.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// Three ticks of the effective 5s interval: 5s, 10s, 15s into the run.
+	for tick := 1; tick <= 3; tick++ {
+		if err := recorder.sample(context.Background(), t0.Add(time.Duration(tick)*5*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := recorder.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	samples := readSamplesStrict(t, filepath.Join(recorder.outputDir, "fix-git", "monitor", "resources.jsonl"))
+	want := []uint64{0, 5, 10, 15}
+	if len(samples) != len(want) {
+		t.Fatalf("expected %d samples, got %d", len(want), len(samples))
+	}
+	for index, sample := range samples {
+		if sample.Second != want[index] {
+			t.Errorf("sample[%d].Second = %d, want %d; a tick counter would report %d",
+				index, sample.Second, want[index], index)
+		}
+	}
+
+	index := readIndexStrict(t, filepath.Join(recorder.outputDir, "fix-git", "monitor", "index.json"))
+	if index.SchemaVersion != 4 {
+		t.Errorf("schema_version = %d, want 4; the meaning of `second` changed", index.SchemaVersion)
+	}
+	if len(index.Components) != 1 || index.Components[0].FirstSecond != 0 || index.Components[0].LastSecond != 15 {
+		t.Errorf("coverage = %+v, want first_second 0 and last_second 15", index.Components)
 	}
 }

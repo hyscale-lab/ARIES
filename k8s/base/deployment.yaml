@@ -60,11 +60,11 @@ spec:
               mountPath: /app/runs
           resources:
             requests:
-              cpu: "1"
-              memory: 1Gi
-            limits:
               cpu: "2"
-              memory: 2Gi
+              memory: 4Gi
+            limits:
+              cpu: "8"
+              memory: 16Gi
       volumes:
         # Run artifacts. These now survive between runs because the pod is
         # long-lived, but still die with the pod. Swap for a
