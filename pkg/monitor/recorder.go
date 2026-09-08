@@ -116,6 +116,22 @@ type BaselineTolerantSource interface {
 	BaselineGracePeriod() int
 }
 
+// PacedSource is an optional interface a ResourceSource may implement to
+// declare the fastest interval at which it can produce new data.
+//
+// The default — a source that does not implement this — is sampled at whatever
+// interval the caller configured. The Docker source is in that position:
+// ContainerStats computes fresh values per call, so a faster interval genuinely
+// buys resolution.
+//
+// A source backed by a cache does not have that property. Sampling it faster
+// returns the same observation repeatedly while still paying the full per-sample
+// cost, which under concurrency is enough to push the source past its own
+// request timeout and end the run's telemetry.
+type PacedSource interface {
+	MinimumSampleInterval() time.Duration
+}
+
 // New validates configuration without contacting Docker or creating artifacts.
 func New(options Options) (*Recorder, error) {
 	if err := validateIdentity("run", options.RunID); err != nil {
@@ -151,6 +167,16 @@ func New(options Options) (*Recorder, error) {
 	}
 	if options.Interval <= 0 {
 		return nil, errors.New("monitor sample interval must be positive")
+	}
+	// A source that cannot produce new data faster than some cadence raises the
+	// interval to it. Sampling below that floor yields duplicate observations
+	// the source discards anyway, while still paying the per-sample cost. The
+	// effective value is recorded as interval_milliseconds in the index, so the
+	// artifact shows what was used rather than what was asked for.
+	if paced, ok := options.Source.(PacedSource); ok {
+		if floor := paced.MinimumSampleInterval(); floor > options.Interval {
+			options.Interval = floor
+		}
 	}
 	if options.RequestTimeout == 0 {
 		options.RequestTimeout = defaultRequestTimeout
@@ -249,7 +275,7 @@ func (recorder *Recorder) Start(ctx context.Context) error {
 		}
 		return errors.Join(cause, rollbackErr, recorder.closeSource())
 	}
-	if err := recorder.sample(ctx, 0, startedAt); err != nil {
+	if err := recorder.sample(ctx, startedAt); err != nil {
 		return startFailure(err)
 	}
 	if err := ctx.Err(); err != nil {
@@ -279,13 +305,12 @@ func (recorder *Recorder) sampleLoop(ctx context.Context, done chan struct{}) {
 	defer close(done)
 	ticker := time.NewTicker(recorder.interval)
 	defer ticker.Stop()
-	second := uint64(1)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case sampleTime := <-ticker.C:
-			if err := recorder.sample(ctx, second, sampleTime.UTC()); err != nil {
+			if err := recorder.sample(ctx, sampleTime.UTC()); err != nil {
 				if errors.Is(err, context.Canceled) && ctx.Err() != nil {
 					return
 				}
@@ -296,12 +321,34 @@ func (recorder *Recorder) sampleLoop(ctx context.Context, done chan struct{}) {
 				recorder.mu.Unlock()
 				return
 			}
-			second++
 		}
 	}
 }
 
-func (recorder *Recorder) sample(ctx context.Context, second uint64, sampleTime time.Time) error {
+// elapsedSeconds is how far into the run a sample was taken, measured from the
+// clock rather than counted in ticks.
+//
+// Counting ticks was correct only while the interval was fixed at one second.
+// Once a source could raise it (see PacedSource) the counter and the field name
+// diverged silently: at a 5s interval, tick 25 was labelled "second": 25 while
+// standing 125 seconds into the run. Nothing errored and the artifact stayed
+// well-formed, which is the kind of defect that survives into a results table.
+//
+// Deriving from the clock also keeps artifacts comparable across intervals, and
+// leaves the one-second case producing exactly the values it always did.
+func (recorder *Recorder) elapsedSeconds(sampleTime time.Time) uint64 {
+	recorder.mu.Lock()
+	startTime := recorder.startTime
+	recorder.mu.Unlock()
+	elapsed := sampleTime.Sub(startTime)
+	if elapsed <= 0 {
+		return 0
+	}
+	return uint64(elapsed / time.Second)
+}
+
+func (recorder *Recorder) sample(ctx context.Context, sampleTime time.Time) error {
+	second := recorder.elapsedSeconds(sampleTime)
 	requestCtx, cancel := requestContext(ctx, recorder.requestTimeout)
 	readings, err := recorder.source.Sample(requestCtx)
 	cancel()
