@@ -58,6 +58,11 @@ SGLang child environment. ARIES does not install SGLang, download models, or
 configure connectivity between the host endpoint and harness containers. See
 the [quick start](../quick-start.md) for exact external and managed workflows.
 
+An HTTP model endpoint is supported only as a trusted-local exception. Local
+HTTP examples use a non-secret placeholder because ARIES requires a non-empty
+credential value even for an unauthenticated server. Remote or credentialed
+endpoints must use HTTPS; a real API key must never be sent over HTTP.
+
 ## Customization & Contribution Guide
 
 A new backend or managed service must remain outside the four Runner roles.

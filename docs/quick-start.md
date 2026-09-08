@@ -110,6 +110,11 @@ are:
 
 DeepSeek and `openai` are external only. SGLang supports both modes.
 
+HTTP model endpoints are a trusted-local exception. The checked-in HTTP
+examples use the non-secret `unused-local-token` placeholder and are suitable
+only when the endpoint and network are under your control. Never send a real
+API key over HTTP; use an HTTPS endpoint for a remote or credentialed service.
+
 ### External DeepSeek
 
 The checked-in DeepSeek profile uses:
@@ -166,10 +171,11 @@ cp profiles/openclaw-tb2-fix-git-sglang.json \
   .cache/openclaw-tb2-fix-git-sglang.json
 ```
 
-Replace `model.base_url` in the copy with an HTTP endpoint ending exactly in
-`/v1`. The checked-in `sglang.local` hostname is a placeholder: the configured
+Replace `model.base_url` in the copy with an endpoint ending exactly in `/v1`.
+The checked-in `sglang.local` hostname is a placeholder: the configured
 hostname or address must resolve and be reachable from both the ARIES host and
-OpenClaw containers.
+OpenClaw containers. Use HTTP only for a trusted local endpoint with the
+non-secret placeholder below; use HTTPS for a remote or credentialed service.
 
 The checked-in profile uses the following external runtime and model settings:
 
@@ -236,17 +242,18 @@ The checked-in profile targets a vLLM server:
 }
 ```
 
-Copy the profile, then set `model.base_url` to an HTTP endpoint that ends
-exactly in `/v1` and `model.id` to the name the server reports. The
-`vllm.local` hostname is a placeholder; the address must resolve from the ARIES
-host and from the harness containers. Start the server yourself, for example:
+Copy the profile, then set `model.base_url` to an endpoint that ends exactly in
+`/v1` and `model.id` to the name the server reports. The checked-in
+`http://vllm.local:8000/v1` value is a trusted-local placeholder; the address
+must resolve from the ARIES host and from the harness containers. Use HTTPS for
+a remote or credentialed server. Start the server yourself, for example:
 
 ```sh
 vllm serve Qwen/Qwen3.6-35B-A3B-FP8 --port 8000 \
   --served-model-name Qwen/Qwen3.6-35B-A3B-FP8
 ```
 
-An unauthenticated server still needs a nonempty placeholder credential:
+For this trusted-local HTTP example, use the non-secret placeholder credential:
 
 ```sh
 export VLLM_API_KEY=unused-local-token
@@ -392,7 +399,9 @@ container, and those two are the only references `harness.hermes.extra_body`
 may carry. The object is also rejected when any field at any depth is named
 like a credential, such as `api_key`, `authorization`, or `token`: it is
 written into the retained `config.yaml` and sent with every request, and model
-keys stay out of JSON profiles. The checked-in profile compacts at 65,536
+keys stay out of JSON profiles. Its checked-in HTTP endpoint is intended only
+for trusted local use with the non-secret placeholder shown below; use HTTPS
+for a remote or credentialed server. The checked-in profile compacts at 65,536
 tokens and tags every request with the task through the OpenAI `user` field:
 
 ```json
