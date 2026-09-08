@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+// Package aries.sandbox.v1 is the wire contract between an agent harness and
+// the ARIES tool bridge. The bridge serves it from the ARIES process on the
+// task network gateway; the task container itself serves nothing and runs no
+// daemon. See docs/design/grpc-bridge.md.
+package aries.sandbox.v1;
+
+option go_package = "github.com/hyscale-lab/aries/pkg/bridge/hermesgrpc/sandboxv1";
+
+// Sandbox grants a harness narrow, audited, revocable access to one task
+// sandbox. The first iteration carries Exec alone; ReadFile, WriteFile and
+// Stat are designed but not implemented.
+service Sandbox {
+  rpc Exec(ExecRequest) returns (ExecResponse);
+}
+
+// ExecRequest carries only what crosses the wire today. The bridge sets the
+// working directory itself and passes no environment, so neither is a field
+// here; docs/design/grpc-bridge.md records why each omission is deliberate and
+// what would bring it back.
+message ExecRequest {
+  // script runs under /bin/bash -c in the sandbox, uninterpreted by the bridge.
+  string script = 1;
+
+  // stdin is bounded. Large input belongs in WriteFile, which streams.
+  bytes stdin = 2;
+}
+
+// Reason distinguishes how a command ended, so a caller can tell a command that
+// failed from a bridge that did. The SSH transport has to flatten all of these
+// into exit code 255.
+enum Reason {
+  REASON_UNSPECIFIED = 0;
+  REASON_COMPLETED = 1;
+  REASON_CANCELED = 2;
+  REASON_TIMED_OUT = 3;
+  REASON_OUTPUT_LIMIT_EXCEEDED = 4;
+  REASON_SANDBOX_ERROR = 5;
+}
+
+// ExecResponse is returned with an OK status even when the command failed. A
+// non-zero exit_code is a task outcome, not an RPC error; RPC error statuses
+// are reserved for bridge-level failures.
+message ExecResponse {
+  int32 exit_code = 1;
+  Reason reason = 2;
+
+  // stdout and stderr stay separate rather than interleaved, which is stricter
+  // than SSH's extended-data channel.
+  bytes stdout = 3;
+  bytes stderr = 4;
+
+  // truncated reports that output reached the bridge's cap and was cut.
+  bool truncated = 5;
+}
