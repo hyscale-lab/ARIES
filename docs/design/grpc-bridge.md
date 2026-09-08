@@ -373,6 +373,27 @@ with extra data, channel accept errors, and refused global requests
 (see [SSH connection lifecycle](ssh-connection-lifecycle.md#4-the-request-funnel)). Those gaps
 should not be reproduced: a refused call is a recordable event.
 
+#### Per-command logging is reduced, deliberately
+
+The SSH bridges write two artifacts per task: the structured `tool-calls.jsonl` and a byte-level
+`ssh_raw.log`, the latter opt-out through `bridge.retain_raw_log`. **This bridge writes only the
+structured log**, and there is no equivalent option.
+
+The raw artifact exists because on SSH the wire command and the executed command are different
+objects: canonical quoting, and on the OpenClaw path a virtual-namespace translation, mean the
+structured record cannot reproduce what actually arrived. Here the request message carries the
+script verbatim and the bridge forwards it unchanged, so the structured record is already a
+faithful copy of both.
+
+One thing is genuinely lost. Binary `stdin` that is not valid text is omitted from the structured
+record with a note, and the SSH bridges keep those bytes in the raw log; this bridge retains them
+nowhere. The note says so rather than pointing at a file that does not exist. If binary `stdin`
+fidelity turns out to matter, the answer is a raw artifact reintroduced on its own merits, not
+carried over by default.
+
+Refusals are recorded here, including a rejected session identity and a call against a revoked
+session — closing the gap named in the paragraph above rather than inheriting it.
+
 **Sources:** `pkg/bridge/hermesssh/bridge.go`, `docs/design/hermes-bridge-inventory.md`,
 `docs/design/ssh-connection-lifecycle.md`.
 
