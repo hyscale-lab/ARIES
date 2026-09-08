@@ -32,8 +32,8 @@ additionally requires `/bin/bash` in the task image, because every tool call it
 issues is `bash -c` on the remote.
 
 Model services sit outside the four-role Runner. DeepSeek must be external and uses the
-configured remote base URL. SGLang accepts an external endpoint backed by its
-native YAML, or a managed mode with an explicit Python executable, startup and
+configured remote base URL. SGLang accepts an external endpoint without a local
+launch file, or a managed mode with an explicit Python executable, startup and
 stop timeouts, and optional validated GPU indices. The `openai` backend is any
 other OpenAI-compatible server; it names the endpoint's API rather than a
 runtime ARIES prepares, is external only, and has no native file. DeepSeek is

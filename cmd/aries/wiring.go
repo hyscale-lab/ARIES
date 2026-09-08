@@ -88,8 +88,7 @@ func validateComponents(cfg config.Config) error {
 // runtime.mode is the ownership distinction: every external endpoint is
 // prepared the same way, whatever serves it. runtime.backend names the kind of
 // service behind the endpoint, which selects the preflight and the harness's
-// provider mapping downstream; here it only decides whether a native file must
-// agree with the profile.
+// provider mapping downstream. Only managed SGLang loads a native launch file.
 func prepareBackend(cfg config.Config, outputDir string) (app.PreparedBackend, error) {
 	model := cfg.CoreModel()
 	switch cfg.Runtime.Mode {
@@ -98,9 +97,6 @@ func prepareBackend(cfg config.Config, outputDir string) (app.PreparedBackend, e
 		case "deepseek":
 		case "openai":
 		case "sglang":
-			if _, err := runtimesglang.LoadNativeConfig(cfg.Runtime.Config.ResolvedFile, cfg.Model.ID, cfg.Model.BaseURL); err != nil {
-				return app.PreparedBackend{}, err
-			}
 		default:
 			return app.PreparedBackend{}, fmt.Errorf("unsupported model runtime backend %q", cfg.Runtime.Backend)
 		}

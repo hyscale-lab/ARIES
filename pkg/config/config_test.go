@@ -45,6 +45,10 @@ func TestNormalizedRuntimeSchema(t *testing.T) {
 	if _, err := Decode(strings.NewReader(external)); err != nil {
 		t.Fatal(err)
 	}
+	external = strings.Replace(external, `,"config":{"file":"native.yaml"}`, "", 1)
+	if _, err := Decode(strings.NewReader(external)); err != nil {
+		t.Fatalf("external SGLang without native config: %v", err)
+	}
 }
 
 func TestRealtimeHarnessConfigValidationAndResolution(t *testing.T) {

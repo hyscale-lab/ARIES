@@ -57,7 +57,8 @@ while `sglang` performs bounded exact model discovery at a versioned `/v1`
 endpoint. `openai` names any other OpenAI-compatible server, is external only,
 carries no native file, and shares that discovery. A local SGLang profile references one
 strict native YAML file under `runtime.config.file`, whose
-served model and port must match the profile. SGLang may remain external or run
+served model and port must match the profile. External SGLang needs no native file; an optional legacy file reference is not
+read or validated. SGLang may remain external or run
 as one application-owned host process supplied by an explicit command switch.
 The general runtime lifecycle/health interface is separate from inference and
 is not a fifth Runner role. Neither provider stores key bytes in profiles or

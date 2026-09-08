@@ -52,7 +52,7 @@ type ExecutionConfig struct {
 // the official DeepSeek endpoint with its own preflight; "openai" is any other
 // OpenAI-compatible server (vLLM, llama.cpp, a gateway) with generic /v1/models
 // discovery; both are external only. "sglang" shares that discovery, may be
-// external or managed, and carries a native YAML file either way.
+// external or managed; only managed mode requires a native YAML launch file.
 type RuntimeConfig struct {
 	Backend string              `json:"backend"`
 	Mode    string              `json:"mode"`
@@ -731,9 +731,6 @@ func (c *RuntimeConfig) validate() error {
 	}
 	switch c.Mode {
 	case "external":
-		if strings.TrimSpace(c.Config.File) == "" {
-			return errors.New("external SGLang runtime.config.file is required")
-		}
 		if c.Config.Executable != "" || c.Config.StartupTimeoutText != "" || c.Config.StopTimeoutText != "" || len(c.Config.GPUIndices) != 0 {
 			return errors.New("external SGLang runtime.config must not set executable, timeouts, or gpu_indices")
 		}

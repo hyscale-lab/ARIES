@@ -1,5 +1,17 @@
 # ARIES Tasks
 
+## PR #50 — External SGLang review correction
+
+- Removed the native launch-file requirement from external SGLang profile
+  validation and preparation; retained managed configuration and external
+  ownership checks. Existing optional external file references remain accepted
+  but are not opened. Added decode and no-side-effect preparation regressions.
+- Build, unit, race, and lint checks pass. All integration packages except
+  SWE-bench Pro pass. That fixture initially lacked Git LFS; an ignored local
+  official Git LFS installation still leaves the pinned Parquet as an LFS
+  pointer, so the dataset integration remains an explicit environment gap.
+- Final Docker inspection found no ARIES containers or networks.
+
 ## R22 — Public SWE-bench Pro benchmark adapter
 
 1. [x] Pin the public dataset and official open-source evaluator independently,

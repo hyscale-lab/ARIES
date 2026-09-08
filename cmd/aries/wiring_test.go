@@ -176,11 +176,7 @@ func TestMakeLintIncludesInternalPackages(t *testing.T) {
 
 func TestExternalSGLangPreparationReturnsNilRuntime(t *testing.T) {
 	root := t.TempDir()
-	native := filepath.Join(root, "native.yaml")
-	if err := os.WriteFile(native, []byte(nativeForWiring), 0600); err != nil {
-		t.Fatal(err)
-	}
-	cfg := config.Config{Runtime: config.RuntimeConfig{Backend: "sglang", Mode: "external", Config: config.RuntimeConfigValues{ResolvedFile: native}}, Model: config.ProfileModel{ID: "Qwen/Qwen3-8B", BaseURL: "http://host:30000/v1", APIKeyEnv: "KEY"}}
+	cfg := config.Config{Runtime: config.RuntimeConfig{Backend: "sglang", Mode: "external"}, Model: config.ProfileModel{ID: "Qwen/Qwen3-8B", BaseURL: "http://host:30000/v1", APIKeyEnv: "KEY"}}
 	prepared, err := prepareBackend(cfg, filepath.Join(root, "absent"))
 	if err != nil {
 		t.Fatal(err)

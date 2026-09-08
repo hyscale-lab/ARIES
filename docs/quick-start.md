@@ -190,7 +190,8 @@ The checked-in profile uses the following external runtime and model settings:
 }
 ```
 
-External SGLang mode accepts only `runtime.config.file`; `executable`,
+External SGLang mode needs no `runtime.config`. An optional `config.file` is
+accepted for existing profiles but is not read or validated; `executable`,
 `startup_timeout`, and `stop_timeout` are rejected because ARIES does not own
 that process. Start SGLang separately; for example, this exposes GPU0 to the
 server:
