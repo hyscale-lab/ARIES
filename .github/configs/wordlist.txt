@@ -5,6 +5,7 @@ antgroup
 api
 argv
 aries
+automattic's
 backend
 backends
 bursty
@@ -21,6 +22,7 @@ csv
 ctrf
 deduplicates
 deepseek
+deepseek's
 docker
 dockerfile
 drb
@@ -61,10 +63,12 @@ ntu
 nvidia
 OAuth
 oci
+onboarding
 openai
 openclaw
 openclaw's
 openhands
+openrouter
 openssh
 orchestrator
 parsers
@@ -73,6 +77,7 @@ pre
 prefill
 preflight
 preload
+qa's
 prewarm
 Qwen
 Realtime
@@ -93,6 +98,7 @@ sdk
 searxng
 sg
 sglang
+sglang's
 ssh
 stateful
 stderr
@@ -102,12 +108,14 @@ subagent
 subagents
 substitutable
 swe
+swe-atlas
 symlink
 tavily
 tbd
 tcp
 teardown
 toml
+toml's
 toolbridge
 toolchain
 toolsandbox
@@ -124,6 +132,7 @@ url's
 utf
 uuid
 validator
+vendored
 verifier
 vllm
 websocket

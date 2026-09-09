@@ -10,6 +10,7 @@ import (
 	"github.com/hyscale-lab/aries/internal/app"
 	runtimesglang "github.com/hyscale-lab/aries/internal/modelruntime/sglang"
 	"github.com/hyscale-lab/aries/pkg/benchmark/deepresearchbench"
+	"github.com/hyscale-lab/aries/pkg/benchmark/sweatlas"
 	"github.com/hyscale-lab/aries/pkg/benchmark/swebenchpro"
 	"github.com/hyscale-lab/aries/pkg/benchmark/terminalbench"
 	"github.com/hyscale-lab/aries/pkg/bridge/hermesssh"
@@ -54,6 +55,7 @@ func validateComponents(cfg config.Config) error {
 	switch cfg.Benchmark.Type {
 	case "terminalbench2":
 	case "deepresearchbench":
+	case "sweatlasqa":
 	case "swebenchpro":
 	default:
 		return fmt.Errorf("unsupported benchmark type %q", cfg.Benchmark.Type)
@@ -174,6 +176,23 @@ func newBenchmark(cfg config.Config, outputRoot, logicalID, occurrenceID string,
 			fmt.Fprintf(os.Stderr, "warning: %s\n", reason)
 		}
 		return benchmark, nil
+	case "sweatlasqa":
+		var executionIDs []string
+		if occurrenceID != logicalID {
+			executionIDs = []string{occurrenceID}
+		}
+		judgeModel, judgeDisabled := sweatlasModels(cfg)
+		benchmark, err := sweatlas.New(sweatlas.Options{
+			Root: cfg.Benchmark.Root, TaskIDs: []string{logicalID}, ExecutionTaskIDs: executionIDs, OutputDir: outputRoot,
+			Revision:      cfg.Versions.SWEAtlas.Revision,
+			Judge:         judgeModel,
+			JudgeDisabled: judgeDisabled,
+			APIKeyLookup:  lookup,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("construct sweatlasqa benchmark: %w", err)
+		}
+		return benchmark, nil
 	default:
 		return nil, fmt.Errorf("unsupported benchmark type %q", cfg.Benchmark.Type)
 	}
@@ -205,6 +224,14 @@ func deepresearchbenchModels(cfg config.Config) (judge, fact core.ModelConfig, j
 		}
 	}
 	return judge, fact, jinaAPIKeyEnv, judgeDisabled
+}
+
+func sweatlasModels(cfg config.Config) (judge core.ModelConfig, judgeDisabled bool) {
+	judgeCfg := cfg.Benchmark.Judge
+	if judgeCfg.Enabled != nil && !*judgeCfg.Enabled {
+		return core.ModelConfig{}, true
+	}
+	return judgeCfg.CoreModel(), false
 }
 
 // environmentFromConfig converts a profile's benchmark.environment block into
@@ -352,6 +379,8 @@ func setupBenchmark(ctx context.Context, cfg config.Config) error {
 		return terminalbench.Setup(ctx, cfg.Benchmark.Root, cfg.Versions.TerminalBench2.RepositoryURL, cfg.Versions.TerminalBench2.Revision)
 	case "deepresearchbench":
 		return deepresearchbench.Setup(ctx, cfg.Benchmark.Root, cfg.Versions.DeepResearchBench.RepositoryURL, cfg.Versions.DeepResearchBench.Revision)
+	case "sweatlasqa":
+		return sweatlas.Setup(ctx, cfg.Benchmark.Root, cfg.Versions.SWEAtlas.RepositoryURL, cfg.Versions.SWEAtlas.Revision)
 	case "swebenchpro":
 		return swebenchpro.Setup(ctx, cfg.Benchmark.Root, cfg.Versions.SWEbenchPro.DatasetRepositoryURL, cfg.Versions.SWEbenchPro.DatasetRevision, cfg.Versions.SWEbenchPro.EvaluatorRepositoryURL, cfg.Versions.SWEbenchPro.EvaluatorRevision)
 	default:
@@ -398,6 +427,23 @@ func loadPreparationTasks(ctx context.Context, cfg config.Config, taskIDs []stri
 		tasks, err := benchmark.Tasks(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("load deepresearchbench tasks: %w", err)
+		}
+		return tasks, nil
+	case "sweatlasqa":
+		judgeModel, judgeDisabled := sweatlasModels(cfg)
+		benchmark, err := sweatlas.New(sweatlas.Options{
+			Root: cfg.Benchmark.Root, TaskIDs: taskIDs, OutputDir: cfg.OutputDir,
+			Revision:      cfg.Versions.SWEAtlas.Revision,
+			Judge:         judgeModel,
+			JudgeDisabled: judgeDisabled,
+			APIKeyLookup:  lookup,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("validate sweatlasqa profile: %w", err)
+		}
+		tasks, err := benchmark.Tasks(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("load sweatlasqa tasks: %w", err)
 		}
 		return tasks, nil
 	case "terminalbench2":
