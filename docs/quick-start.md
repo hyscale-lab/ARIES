@@ -110,6 +110,11 @@ are:
 
 DeepSeek and `openai` are external only. SGLang supports both modes.
 
+HTTP model endpoints are a trusted-local exception. The checked-in HTTP
+examples use the non-secret `unused-local-token` placeholder and are suitable
+only when the endpoint and network are under your control. Never send a real
+API key over HTTP; use an HTTPS endpoint for a remote or credentialed service.
+
 ### External DeepSeek
 
 The checked-in DeepSeek profile uses:
@@ -166,10 +171,11 @@ cp profiles/openclaw-tb2-fix-git-sglang.json \
   .cache/openclaw-tb2-fix-git-sglang.json
 ```
 
-Replace `model.base_url` in the copy with an HTTP endpoint ending exactly in
-`/v1`. The checked-in `sglang.local` hostname is a placeholder: the configured
+Replace `model.base_url` in the copy with an endpoint ending exactly in `/v1`.
+The checked-in `sglang.local` hostname is a placeholder: the configured
 hostname or address must resolve and be reachable from both the ARIES host and
-OpenClaw containers.
+OpenClaw containers. Use HTTP only for a trusted local endpoint with the
+non-secret placeholder below; use HTTPS for a remote or credentialed service.
 
 The checked-in profile uses the following external runtime and model settings:
 
@@ -236,17 +242,18 @@ The checked-in profile targets a vLLM server:
 }
 ```
 
-Copy the profile, then set `model.base_url` to an HTTP endpoint that ends
-exactly in `/v1` and `model.id` to the name the server reports. The
-`vllm.local` hostname is a placeholder; the address must resolve from the ARIES
-host and from the harness containers. Start the server yourself, for example:
+Copy the profile, then set `model.base_url` to an endpoint that ends exactly in
+`/v1` and `model.id` to the name the server reports. The checked-in
+`http://vllm.local:8000/v1` value is a trusted-local placeholder; the address
+must resolve from the ARIES host and from the harness containers. Use HTTPS for
+a remote or credentialed server. Start the server yourself, for example:
 
 ```sh
 vllm serve Qwen/Qwen3.6-35B-A3B-FP8 --port 8000 \
   --served-model-name Qwen/Qwen3.6-35B-A3B-FP8
 ```
 
-An unauthenticated server still needs a nonempty placeholder credential:
+For this trusted-local HTTP example, use the non-secret placeholder credential:
 
 ```sh
 export VLLM_API_KEY=unused-local-token
@@ -361,6 +368,80 @@ credentials; Hermes logs one `file_sync: sync failed` warning and continues.
 Artifacts land under `<run>/<task>/harness/`: the redacted `config.yaml`, the
 one-shot's `hermes_stdout.log` and `hermes_stderr.log`, `container.log`, and the
 exported message-level trajectory at `telemetry/sessions.jsonl`.
+
+### Hermes context window, compaction, and request extra body
+
+Three optional profile blocks reach the rendered Hermes `config.yaml`. Each is
+Hermes-only and is rejected under another harness. A profile without them
+renders the same file as before.
+
+- `model.context_length`, `model.max_tokens`, and `model.temperature` set the
+  window Hermes's compressor reasons about and the request sampling.
+  Temperature (including `0.0`) requires the `sglang` or `openai` backend;
+  ARIES places it in the custom provider's request `extra_body`, because the
+  pinned one-shot path ignores Hermes's `model.temperature` YAML field.
+  Setting both `model.temperature` and `harness.hermes.extra_body.temperature`
+  is rejected. Native DeepSeek temperature is unsupported by this path.
+- `harness.compaction.threshold_tokens` is an absolute compaction trigger.
+  Hermes applies it after its 64K minimum and its 75% floor for windows under
+  512K, so it is the one knob that gives an exact trigger on a large window.
+  `harness.compaction.enabled: false` turns compaction off.
+- `harness.hermes.extra_body` is a non-empty JSON object. ARIES writes it as
+  the `extra_body` of one `custom_providers` entry, and Hermes merges it into
+  every chat request. Hermes performs that merge only for its `custom`
+  provider, so the block requires the `sglang` or `openai` backend. It sits
+  under `harness.hermes` because it is a Hermes escape hatch with no meaning
+  for another harness, whereas compaction is a general harness setting.
+
+Hermes expands `${NAME}` references in its configuration from the container
+environment. ARIES exports `ARIES_RUN_ID` and `ARIES_TASK_ID` into the Hermes
+container, and those two are the only references `harness.hermes.extra_body`
+may carry. The object is also rejected when any field at any depth is named
+like a credential, such as `api_key`, `authorization`, or `token`: it is
+written into the retained `config.yaml` and sent with every request, and model
+keys stay out of JSON profiles. Its checked-in HTTP endpoint is intended only
+for trusted local use with the non-secret placeholder shown below; use HTTPS
+for a remote or credentialed server. The checked-in profile compacts at 65,536
+tokens and tags every request with the task through the OpenAI `user` field:
+
+```json
+{
+  "harness": {
+    "type": "hermes",
+    "compaction": {
+      "enabled": true,
+      "threshold_tokens": 65536
+    },
+    "hermes": {
+      "extra_body": {
+        "chat_template_kwargs": {
+          "preserve_thinking": true
+        },
+        "user": "${ARIES_RUN_ID}-${ARIES_TASK_ID}"
+      }
+    }
+  },
+  "model": {
+    "base_url": "http://vllm.local:8000/v1",
+    "api_key_env": "VLLM_API_KEY",
+    "id": "Qwen/Qwen3.6-35B-A3B-FP8",
+    "context_length": 262144,
+    "max_tokens": 32768,
+    "temperature": 1.0
+  }
+}
+```
+
+```sh
+export VLLM_API_KEY=unused-local-token
+./bin/aries profiles/hermes-tb2-fix-git-vllm-compaction.json
+```
+
+`compression.threshold_tokens` exists since Hermes v2026.8, so the pinned image
+moves to `v2026.8.31`. The rendered `config.yaml` under `<run>/<task>/harness/`
+shows the block exactly as Hermes reads it. The `agent.max_turns` value in that
+file does not bound the one-shot; use `agent_timeout_seconds` in the overrides
+file to bound a run.
 
 ### Realtime OpenClaw mode
 

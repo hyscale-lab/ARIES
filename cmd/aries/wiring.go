@@ -265,6 +265,8 @@ func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byt
 			WebSearchEnabled: cfg.Harness.WebSearch.Enabled, ExtractAPIKeyEnv: cfg.Harness.WebSearch.ExtractAPIKeyEnv,
 			SubagentsEnabled:       cfg.Harness.Subagents.Enabled != nil && *cfg.Harness.Subagents.Enabled,
 			MaxConcurrentSubagents: cfg.Harness.Subagents.MaxConcurrent,
+			Compaction:             hermesCompaction(cfg.Harness.Compaction),
+			ExtraBody:              hermesExtraBody(cfg.Harness.Hermes),
 		})
 		if err != nil {
 			return app.HarnessInstance{}, fmt.Errorf("construct Hermes harness: %w", err)
@@ -413,4 +415,23 @@ func loadPreparationTasks(ctx context.Context, cfg config.Config, taskIDs []stri
 	default:
 		return nil, fmt.Errorf("unsupported benchmark type %q", cfg.Benchmark.Type)
 	}
+}
+
+// hermesExtraBody returns the profile's harness.hermes.extra_body bytes, or nil
+// when the block is absent.
+func hermesExtraBody(block *config.HarnessHermesConfig) []byte {
+	if block == nil {
+		return nil
+	}
+	return []byte(block.ExtraBody)
+}
+
+// hermesCompaction copies the profile's compaction block into the harness's
+// own settings type. The harness package does not import pkg/config, so the
+// copy is explicit, field by field.
+func hermesCompaction(block *config.HarnessCompactionConfig) *hermesharness.CompactionSettings {
+	if block == nil {
+		return nil
+	}
+	return &hermesharness.CompactionSettings{Enabled: block.Enabled, ThresholdTokens: block.ThresholdTokens}
 }

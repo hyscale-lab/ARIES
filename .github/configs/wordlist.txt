@@ -38,6 +38,7 @@ hermes's
 hostname
 html
 http
+HTTPS
 idempotently
 integrations
 jina
