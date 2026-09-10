@@ -394,7 +394,7 @@ func TestRenderConfigMapsOpenAICompatibleBackendsToCustomProvider(t *testing.T) 
 		model := validModel()
 		model.Provider = provider
 		model.BaseURL = "http://vllm.local:8000/v1"
-		rendered, err := renderConfig(model, 10, false, false, true, 0)
+		rendered, err := renderConfig(model, 10, false, false, true, 0, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -406,7 +406,7 @@ func TestRenderConfigMapsOpenAICompatibleBackendsToCustomProvider(t *testing.T) 
 			t.Fatalf("hermesProvider(%s) = %q", provider, got)
 		}
 	}
-	rendered, err := renderConfig(validModel(), 10, false, false, true, 0)
+	rendered, err := renderConfig(validModel(), 10, false, false, true, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
