@@ -222,38 +222,33 @@ func environmentFromConfig(cfg *config.BenchmarkEnvironment) core.Environment {
 func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byte, bool), logger *logrus.Logger) (app.HarnessInstance, error) {
 	switch cfg.Harness.Type {
 	case "openclaw":
-		realtime := openClawRealtimeOptions(cfg.Harness)
-		manager, err := openclawharness.New(openclawharness.Options{
+		options := openclawharness.Options{
 			Image: cfg.Versions.OpenClaw.Image, OutputDir: outputRoot, APIKeyLookup: lookup, Logger: logger,
-			Mode: cfg.Harness.Mode, Realtime: realtime, WebSearchEnabled: cfg.Harness.WebSearch.Enabled,
+			Mode: cfg.Harness.Mode, WebSearchEnabled: cfg.Harness.WebSearch.Enabled,
 			ExtractAPIKeyEnv:       cfg.Harness.WebSearch.ExtractAPIKeyEnv,
 			SubagentsEnabled:       cfg.Harness.Subagents.Enabled != nil && *cfg.Harness.Subagents.Enabled,
 			MaxConcurrentSubagents: cfg.Harness.Subagents.MaxConcurrent,
-		})
+		}
+		if cfg.Harness.Mode == openclawharness.ModeRealtime || cfg.Harness.Mode == openclawharness.ModeVoiceTranscribe {
+			options.Realtime = openClawVoiceOptions(cfg.Harness)
+		}
+		manager, err := openclawharness.New(options)
 		if err != nil {
 			return app.HarnessInstance{}, fmt.Errorf("construct OpenClaw harness: %w", err)
 		}
 		return app.HarnessInstance{Harness: manager, Close: manager.Close}, nil
 	case "hermes":
-		voiceTranscribe := hermesharness.VoiceTranscribeOptions{
-			TTS: hermesharness.VoiceTTSOptions{
-				Provider: cfg.Harness.VoiceTranscribe.TTS.Provider, BaseURL: cfg.Harness.VoiceTranscribe.TTS.BaseURL,
-				APIKeyEnv: cfg.Harness.VoiceTranscribe.TTS.APIKeyEnv, Model: cfg.Harness.VoiceTranscribe.TTS.Model,
-				Voice: cfg.Harness.VoiceTranscribe.TTS.Voice, Instructions: cfg.Harness.VoiceTranscribe.TTS.Instructions,
-				Speed: cfg.Harness.VoiceTranscribe.TTS.Speed, Timeout: cfg.Harness.VoiceTranscribe.TTS.Timeout,
-			},
-			STT: hermesharness.VoiceSTTOptions{
-				Provider: cfg.Harness.VoiceTranscribe.STT.Provider, Model: cfg.Harness.VoiceTranscribe.STT.Model,
-				Language: cfg.Harness.VoiceTranscribe.STT.Language, Timeout: cfg.Harness.VoiceTranscribe.STT.Timeout,
-			},
-		}
-		manager, err := hermesharness.New(hermesharness.Options{
+		options := hermesharness.Options{
 			Image: cfg.Versions.Hermes.Image, OutputDir: outputRoot, APIKeyLookup: lookup, Logger: logger,
-			Mode: cfg.Harness.Mode, VoiceTranscribe: voiceTranscribe,
-			WebSearchEnabled: cfg.Harness.WebSearch.Enabled, ExtractAPIKeyEnv: cfg.Harness.WebSearch.ExtractAPIKeyEnv,
+			Mode: cfg.Harness.Mode, WebSearchEnabled: cfg.Harness.WebSearch.Enabled,
+			ExtractAPIKeyEnv:       cfg.Harness.WebSearch.ExtractAPIKeyEnv,
 			SubagentsEnabled:       cfg.Harness.Subagents.Enabled != nil && *cfg.Harness.Subagents.Enabled,
 			MaxConcurrentSubagents: cfg.Harness.Subagents.MaxConcurrent,
-		})
+		}
+		if cfg.Harness.Mode == hermesharness.ModeVoiceTranscribe {
+			options.VoiceTranscribe = hermesVoiceOptions(cfg.Harness.VoiceTranscribe)
+		}
+		manager, err := hermesharness.New(options)
 		if err != nil {
 			return app.HarnessInstance{}, fmt.Errorf("construct Hermes harness: %w", err)
 		}
@@ -263,11 +258,15 @@ func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byt
 	}
 }
 
-func openClawRealtimeOptions(harness config.HarnessConfig) openclawharness.RealtimeOptions {
+func openClawVoiceOptions(harness config.HarnessConfig) openclawharness.RealtimeOptions {
 	realtime := harness.Realtime
 	if harness.Mode == openclawharness.ModeVoiceTranscribe {
 		realtime = harness.VoiceTranscribe.HarnessRealtimeConfig
 	}
+	return openClawVoiceOptionsFromConfig(realtime)
+}
+
+func openClawVoiceOptionsFromConfig(realtime config.HarnessRealtimeConfig) openclawharness.RealtimeOptions {
 	return openclawharness.RealtimeOptions{
 		AgentQuestionTemplate: realtime.AgentQuestionTemplate,
 		TTS: openclawharness.RealtimeTTSOptions{
@@ -287,6 +286,21 @@ func openClawRealtimeOptions(harness config.HarnessConfig) openclawharness.Realt
 		Voice:                 realtime.Voice,
 		ReasoningEffort:       realtime.ReasoningEffort,
 		IncludeEvents:         realtime.IncludeEvents,
+	}
+}
+
+func hermesVoiceOptions(voice config.HarnessVoiceTranscribeConfig) hermesharness.VoiceTranscribeOptions {
+	return hermesharness.VoiceTranscribeOptions{
+		TTS: hermesharness.VoiceTTSOptions{
+			Provider: voice.TTS.Provider, BaseURL: voice.TTS.BaseURL,
+			APIKeyEnv: voice.TTS.APIKeyEnv, Model: voice.TTS.Model,
+			Voice: voice.TTS.Voice, Instructions: voice.TTS.Instructions,
+			Speed: voice.TTS.Speed, Timeout: voice.TTS.Timeout,
+		},
+		STT: hermesharness.VoiceSTTOptions{
+			Provider: voice.STT.Provider, Model: voice.STT.Model,
+			Language: voice.STT.Language, Timeout: voice.STT.Timeout,
+		},
 	}
 }
 
