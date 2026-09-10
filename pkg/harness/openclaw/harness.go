@@ -37,17 +37,18 @@ import (
 )
 
 const (
-	defaultDockerSocket   = "/var/run/docker.sock"
-	defaultCleanupTimeout = 30 * time.Second
-	defaultStartTimeout   = 45 * time.Second
-	defaultAgentTimeout   = 20 * time.Minute
-	maxDockerOutput       = 16 << 20
-	maxAPIKeyBytes        = 16 << 10
-	gracefulStopSeconds   = 5
-	execTrailerKeep       = 256
-	gatewayListenPort     = "18789"
-	gatewayLauncherPath   = "/run/aries/gateway-launcher"
-	upstreamGatewayPort   = "18790"
+	defaultDockerSocket    = "/var/run/docker.sock"
+	defaultCleanupTimeout  = 30 * time.Second
+	defaultStartTimeout    = 45 * time.Second
+	defaultAgentTimeout    = 20 * time.Minute
+	defaultVoiceSTTTimeout = 5 * time.Minute
+	maxDockerOutput        = 16 << 20
+	maxAPIKeyBytes         = 16 << 10
+	gracefulStopSeconds    = 5
+	execTrailerKeep        = 256
+	gatewayListenPort      = "18789"
+	gatewayLauncherPath    = "/run/aries/gateway-launcher"
+	upstreamGatewayPort    = "18790"
 )
 
 const execShell = `token=$1
@@ -149,6 +150,7 @@ type Manager struct {
 	maxConcurrentSubagents int
 	newID                  func() (string, error)
 	newGateway             func(string, []byte) (gatewayConnection, error)
+	newAgentGateway        func(string, []byte) (gatewayConnection, error)
 	newRealtime            func(realtimeclient.Gateway, realtimeclient.Options) (realtimeRunner, error)
 	newSpeech              func(audioinput.SpeechClientOptions) (speechSynthesizer, error)
 
@@ -285,6 +287,9 @@ func New(options Options) (*Manager, error) {
 		maxConcurrentSubagents: options.MaxConcurrentSubagents, newID: randomID,
 		newGateway: func(rawURL string, token []byte) (gatewayConnection, error) {
 			return newGatewayClientWithDisposition(rawURL, token, gatewayScopes(options.Mode), gatewayEventDisposition(options.Mode))
+		},
+		newAgentGateway: func(rawURL string, token []byte) (gatewayConnection, error) {
+			return newGatewayClientWithDisposition(rawURL, token, gatewayScopes(ModeAgent), gatewayclient.EventDispositionResponseOnly)
 		},
 		newRealtime: newRealtimeRunner, newSpeech: newSpeechClient,
 	}, nil
@@ -592,9 +597,6 @@ func (manager *Manager) runRealtime(ctx context.Context, active *session, instru
 		return failedHarnessResult(active, started, err), err
 	}
 	closeGatewayInRunner := manager.mode == ModeRealtime
-	if !closeGatewayInRunner {
-		defer client.Close()
-	}
 	runner, err := manager.newRealtime(client, realtimeclient.Options{
 		OriginalPrompt:        instruction,
 		SessionMode:           manager.mode,
@@ -618,12 +620,29 @@ func (manager *Manager) runRealtime(ctx context.Context, active *session, instru
 		err = redactSessionError(err, active)
 		return failedHarnessResult(active, started, err), err
 	}
-	runCtx, cancel := context.WithTimeout(ctx, active.agentTimeout)
-	realtimeResult, err := runner.Run(runCtx)
-	if err == nil && manager.mode == ModeVoiceTranscribe {
-		err = manager.runAgentWithTranscript(runCtx, active, client, &realtimeResult)
+	var realtimeResult realtimeclient.Result
+	if manager.mode == ModeVoiceTranscribe {
+		transcribeCtx, transcribeCancel := context.WithTimeout(ctx, defaultVoiceSTTTimeout)
+		realtimeResult, err = runner.Run(transcribeCtx)
+		transcribeCancel()
+		closeErr := client.Close()
+		if err == nil {
+			agentClient, agentErr := manager.newAgentGateway(active.gatewayURL, active.gatewayToken)
+			if agentErr != nil {
+				err = agentErr
+			} else {
+				agentCtx, agentCancel := context.WithTimeout(ctx, active.agentTimeout)
+				err = manager.runAgentWithTranscript(agentCtx, active, agentClient, &realtimeResult)
+				agentCancel()
+				err = errors.Join(err, agentClient.Close())
+			}
+		}
+		err = errors.Join(err, closeErr)
+	} else {
+		runCtx, cancel := context.WithTimeout(ctx, active.agentTimeout)
+		realtimeResult, err = runner.Run(runCtx)
+		cancel()
 	}
-	cancel()
 	realtimeResult = redactRealtimeResult(realtimeResult, active)
 	err = redactSessionError(err, active)
 	resultPath, writeErr := manager.writeRealtimeResult(active, realtimeResult)
@@ -649,6 +668,17 @@ func (manager *Manager) runRealtime(ctx context.Context, active *session, instru
 
 func (manager *Manager) runAgentWithTranscript(ctx context.Context, active *session, client gatewayConnection, result *realtimeclient.Result) error {
 	transcript := strings.TrimSpace(result.Transcript)
+	if len(result.TranscriptDoneParts) != 0 {
+		parts := make([]string, 0, len(result.TranscriptDoneParts))
+		for _, part := range result.TranscriptDoneParts {
+			if text := strings.TrimSpace(part); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		if len(parts) != 0 {
+			transcript = strings.Join(parts, "\n")
+		}
+	}
 	if transcript == "" {
 		err := errors.New("missing_transcript: OpenClaw voice-transcribe mode returned no text")
 		result.AppendError(err.Error())
@@ -657,6 +687,14 @@ func (manager *Manager) runAgentWithTranscript(ctx context.Context, active *sess
 	thinking := ""
 	if disablesThinking(active.model) {
 		thinking = "off"
+	}
+	connectSummary, err := client.Connect(ctx, gatewayclient.ConnectOptions{})
+	if err == nil && !connectSummary.HasScope("operator.write") {
+		err = errors.New("OpenClaw agent gateway requires operator.write scope")
+	}
+	if err != nil {
+		result.AppendError(err.Error())
+		return err
 	}
 	agentResult, err := client.Agent(ctx, gatewayclient.AgentRequest{
 		Message: transcript, SessionKey: "agent:main:aries-" + active.safeTaskID,
