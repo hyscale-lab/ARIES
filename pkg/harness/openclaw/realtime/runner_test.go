@@ -290,6 +290,49 @@ func TestRunnerTranscribeRequiresFinalTranscript(t *testing.T) {
 	}
 }
 
+func TestRunnerTranscribeRejectsUnfinalizedTrailingPartial(t *testing.T) {
+	gateway := newScriptedGateway()
+	gateway.calls = append(gateway.calls,
+		scriptedCall{method: "talk.session.create", response: gatewayclient.Frame{"ok": true, "payload": map[string]any{
+			"sessionId": "session-1",
+			"audio":     map[string]any{"inputEncoding": "pcm16", "inputSampleRateHz": 24000},
+		}}},
+		scriptedCall{method: "talk.session.appendAudio", response: gatewayclient.Frame{"ok": true}},
+		scriptedCall{method: "talk.session.close", response: gatewayclient.Frame{"ok": true}},
+	)
+	gateway.events = append(gateway.events,
+		gatewayclient.Frame{
+			"type": "event", "event": "talk.event",
+			"payload": map[string]any{"talkEvent": map[string]any{
+				"type": "transcript.done", "sessionId": "session-1", "payload": map[string]any{"text": "first segment"},
+			}},
+		},
+		gatewayclient.Frame{
+			"type": "event", "event": "talk.event",
+			"payload": map[string]any{"talkEvent": map[string]any{
+				"type": "transcript.delta", "sessionId": "session-1", "payload": map[string]any{"text": "unfinished second segment"},
+			}},
+		},
+	)
+	runner, err := New(gateway, Options{
+		SessionMode:    SessionModeTranscribe,
+		Audio:          Audio{Data: []byte{1, 2}, Rate: 24000, BytesPerSample: 2},
+		ListenDuration: 5 * time.Millisecond,
+		QuietDuration:  time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	result, err := runner.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "incomplete_final_transcript") || len(result.Errors) != 1 {
+		t.Fatalf("Run = %#v, %v", result, err)
+	}
+	if result.Transcript != "first segment" || result.TranscriptDone != "first segment" {
+		t.Fatalf("transcript result = %#v", result)
+	}
+}
+
 func TestRunnerTranscribeClosesSessionAfterAppendFailure(t *testing.T) {
 	gateway := newScriptedGateway()
 	gateway.calls = append(gateway.calls,
