@@ -343,7 +343,7 @@ func TestRenderConfigKeysOpenAICompatibleProviderAsAries(t *testing.T) {
 	model.Provider = "openai"
 	model.BaseURL = "http://vllm.local:8000/v1/"
 	model.APIKeyEnv = "VLLM_API_KEY"
-	content, err := renderConfig(model, testEndpoint(), false, false, false, 0)
+	content, err := renderConfig(model, testEndpoint(), ModeAgent, false, false, false, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +356,7 @@ func TestRenderConfigKeysOpenAICompatibleProviderAsAries(t *testing.T) {
 		t.Fatalf("configuration = %#v", configuration)
 	}
 	model.BaseURL = "http://vllm.local:8000"
-	if _, err := renderConfig(model, testEndpoint(), false, false, false, 0); err == nil {
+	if _, err := renderConfig(model, testEndpoint(), ModeAgent, false, false, false, 0); err == nil {
 		t.Fatal("accepted an openai base URL without /v1")
 	}
 }
