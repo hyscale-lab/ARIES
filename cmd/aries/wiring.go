@@ -263,10 +263,6 @@ func openClawVoiceOptions(harness config.HarnessConfig) openclawharness.Realtime
 	if harness.Mode == openclawharness.ModeVoiceTranscribe {
 		realtime = harness.VoiceTranscribe.HarnessRealtimeConfig
 	}
-	return openClawVoiceOptionsFromConfig(realtime)
-}
-
-func openClawVoiceOptionsFromConfig(realtime config.HarnessRealtimeConfig) openclawharness.RealtimeOptions {
 	return openclawharness.RealtimeOptions{
 		AgentQuestionTemplate: realtime.AgentQuestionTemplate,
 		TTS: openclawharness.RealtimeTTSOptions{
