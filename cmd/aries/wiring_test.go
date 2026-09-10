@@ -18,6 +18,7 @@ import (
 	runtimesglang "github.com/hyscale-lab/aries/internal/modelruntime/sglang"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
+	openclawharness "github.com/hyscale-lab/aries/pkg/harness/openclaw"
 )
 
 func TestDispatchAcceptsOnlyExactCommandGrammar(t *testing.T) {
@@ -277,6 +278,62 @@ func TestManagedSGLangReceivesConfiguredCredentialEnvironmentName(t *testing.T) 
 	if !strings.Contains(string(source), "CredentialEnv: cfg.Model.APIKeyEnv") {
 		t.Fatal("managed SGLang credential environment name is not forwarded")
 	}
+}
+
+func TestOpenClawVoiceOptionsSelectModeConfig(t *testing.T) {
+	harness := config.HarnessConfig{
+		Mode: openclawharness.ModeRealtime,
+		Realtime: config.HarnessRealtimeConfig{
+			ChunkDuration: time.Second,
+			TTS:           config.RealtimeTTSConfig{Model: "realtime-tts"},
+		},
+	}
+	options := openClawVoiceOptions(harness)
+	if options.ChunkDuration != time.Second || options.TTS.Model != "realtime-tts" {
+		t.Fatalf("realtime options = %#v", options)
+	}
+
+	harness.Mode = openclawharness.ModeVoiceTranscribe
+	harness.VoiceTranscribe.HarnessRealtimeConfig = config.HarnessRealtimeConfig{
+		ChunkDuration: 2 * time.Second,
+		TTS:           config.RealtimeTTSConfig{Model: "voice-tts"},
+	}
+	options = openClawVoiceOptions(harness)
+	if options.ChunkDuration != 2*time.Second || options.TTS.Model != "voice-tts" {
+		t.Fatalf("voice-transcribe options = %#v", options)
+	}
+}
+
+func TestHermesVoiceOptionsMapTTSAndSTT(t *testing.T) {
+	voice := config.HarnessVoiceTranscribeConfig{
+		HarnessRealtimeConfig: config.HarnessRealtimeConfig{
+			TTS: config.RealtimeTTSConfig{
+				Provider: "openai", BaseURL: "https://tts.example/v1",
+				APIKeyEnv: "TTS_KEY", Model: "tts-model",
+				Voice: "alloy", Instructions: "speak clearly",
+				Speed: floatPtr(1.1), Timeout: 2 * time.Second,
+			},
+		},
+		STT: config.VoiceSTTConfig{
+			Provider: "local", Model: "base",
+			Language: "en", Timeout: 3 * time.Second,
+		},
+	}
+	options := hermesVoiceOptions(voice)
+	if options.TTS.Provider != "openai" || options.TTS.BaseURL != "https://tts.example/v1" ||
+		options.TTS.APIKeyEnv != "TTS_KEY" || options.TTS.Model != "tts-model" ||
+		options.TTS.Voice != "alloy" || options.TTS.Instructions != "speak clearly" ||
+		options.TTS.Speed == nil || *options.TTS.Speed != 1.1 || options.TTS.Timeout != 2*time.Second {
+		t.Fatalf("TTS options = %#v", options.TTS)
+	}
+	if options.STT.Provider != "local" || options.STT.Model != "base" ||
+		options.STT.Language != "en" || options.STT.Timeout != 3*time.Second {
+		t.Fatalf("STT options = %#v", options.STT)
+	}
+}
+
+func floatPtr(value float64) *float64 {
+	return &value
 }
 
 func TestCombinedResourceSourceSamplesAndClosesBothSources(t *testing.T) {

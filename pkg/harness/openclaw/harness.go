@@ -37,17 +37,18 @@ import (
 )
 
 const (
-	defaultDockerSocket   = "/var/run/docker.sock"
-	defaultCleanupTimeout = 30 * time.Second
-	defaultStartTimeout   = 45 * time.Second
-	defaultAgentTimeout   = 20 * time.Minute
-	maxDockerOutput       = 16 << 20
-	maxAPIKeyBytes        = 16 << 10
-	gracefulStopSeconds   = 5
-	execTrailerKeep       = 256
-	gatewayListenPort     = "18789"
-	gatewayLauncherPath   = "/run/aries/gateway-launcher"
-	upstreamGatewayPort   = "18790"
+	defaultDockerSocket    = "/var/run/docker.sock"
+	defaultCleanupTimeout  = 30 * time.Second
+	defaultStartTimeout    = 45 * time.Second
+	defaultAgentTimeout    = 20 * time.Minute
+	defaultVoiceSTTTimeout = 5 * time.Minute
+	maxDockerOutput        = 16 << 20
+	maxAPIKeyBytes         = 16 << 10
+	gracefulStopSeconds    = 5
+	execTrailerKeep        = 256
+	gatewayListenPort      = "18789"
+	gatewayLauncherPath    = "/run/aries/gateway-launcher"
+	upstreamGatewayPort    = "18790"
 )
 
 const execShell = `token=$1
@@ -60,9 +61,14 @@ exit "$status"`
 var gatewayPort = network.MustParsePort(gatewayListenPort + "/tcp")
 
 const (
-	ModeAgent    = "agent"
-	ModeRealtime = "realtime"
+	ModeAgent           = "agent"
+	ModeRealtime        = "realtime"
+	ModeVoiceTranscribe = "voice-transcribe"
 )
+
+func isRealtimeMode(mode string) bool {
+	return mode == ModeRealtime || mode == ModeVoiceTranscribe
+}
 
 // Options are the host-local inputs to one upstream OpenClaw container.
 type Options struct {
@@ -144,6 +150,7 @@ type Manager struct {
 	maxConcurrentSubagents int
 	newID                  func() (string, error)
 	newGateway             func(string, []byte) (gatewayConnection, error)
+	newAgentGateway        func(string, []byte) (gatewayConnection, error)
 	newRealtime            func(realtimeclient.Gateway, realtimeclient.Options) (realtimeRunner, error)
 	newSpeech              func(audioinput.SpeechClientOptions) (speechSynthesizer, error)
 
@@ -255,7 +262,7 @@ func New(options Options) (*Manager, error) {
 		if options.Realtime != (RealtimeOptions{}) {
 			return nil, errors.New("OpenClaw realtime options require realtime mode")
 		}
-	case ModeRealtime:
+	case ModeRealtime, ModeVoiceTranscribe:
 		if options.Realtime.TrailingSilenceMillis < 0 {
 			return nil, errors.New("OpenClaw realtime options are invalid")
 		}
@@ -269,7 +276,7 @@ func New(options Options) (*Manager, error) {
 			options.Realtime.TTS.APIKeyEnv = "OPENAI_API_KEY"
 		}
 	default:
-		return nil, errors.New("OpenClaw mode must be agent or realtime")
+		return nil, errors.New("OpenClaw mode must be agent, realtime, or voice-transcribe")
 	}
 	return &Manager{
 		client: api, image: options.Image, outputDir: outputDir,
@@ -280,6 +287,9 @@ func New(options Options) (*Manager, error) {
 		maxConcurrentSubagents: options.MaxConcurrentSubagents, newID: randomID,
 		newGateway: func(rawURL string, token []byte) (gatewayConnection, error) {
 			return newGatewayClientWithDisposition(rawURL, token, gatewayScopes(options.Mode), gatewayEventDisposition(options.Mode))
+		},
+		newAgentGateway: func(rawURL string, token []byte) (gatewayConnection, error) {
+			return newGatewayClientWithDisposition(rawURL, token, gatewayScopes(ModeAgent), gatewayclient.EventDispositionResponseOnly)
 		},
 		newRealtime: newRealtimeRunner, newSpeech: newSpeechClient,
 	}, nil
@@ -329,7 +339,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 			extractEnabled = true
 		}
 	}
-	configuration, err := renderConfig(request.Model, request.Endpoint, manager.webSearchEnabled, extractEnabled, manager.subagentsEnabled, manager.maxConcurrentSubagents)
+	configuration, err := renderConfig(request.Model, request.Endpoint, manager.mode, manager.webSearchEnabled, extractEnabled, manager.subagentsEnabled, manager.maxConcurrentSubagents)
 	if err != nil {
 		clear(extractAPIKey)
 		return err
@@ -348,7 +358,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		return err
 	}
 	var realtimeAPIKey []byte
-	if manager.mode == ModeRealtime {
+	if isRealtimeMode(manager.mode) {
 		realtimeKeySource, ok := manager.apiKeyLookup(manager.realtime.TTS.APIKeyEnv)
 		if !ok {
 			clear(apiKey)
@@ -524,7 +534,7 @@ func (manager *Manager) Run(ctx context.Context, instruction string) (core.Harne
 	active.runAttempted = true
 	manager.mu.Unlock()
 
-	if manager.mode == ModeRealtime {
+	if isRealtimeMode(manager.mode) {
 		return manager.runRealtime(ctx, active, instruction, started)
 	}
 	runCtx, cancel := context.WithTimeout(ctx, active.agentTimeout)
@@ -573,7 +583,7 @@ func (manager *Manager) Run(ctx context.Context, instruction string) (core.Harne
 }
 
 func (manager *Manager) runRealtime(ctx context.Context, active *session, instruction string, started time.Time) (core.HarnessResult, error) {
-	audioPath, speechPaths, synthErr := manager.synthesizeRealtimeAudio(ctx, active, instruction)
+	audioPath, speechPaths, synthErr := manager.synthesizeVoiceInstruction(ctx, active, instruction)
 	if len(speechPaths) != 0 {
 		active.logPaths = appendUnique(active.logPaths, speechPaths...)
 	}
@@ -586,8 +596,10 @@ func (manager *Manager) runRealtime(ctx context.Context, active *session, instru
 		err = redactSessionError(err, active)
 		return failedHarnessResult(active, started, err), err
 	}
+	closeGatewayInRunner := manager.mode == ModeRealtime
 	runner, err := manager.newRealtime(client, realtimeclient.Options{
 		OriginalPrompt:        instruction,
+		SessionMode:           manager.mode,
 		SessionKey:            "agent:main:aries-" + active.safeTaskID,
 		Provider:              manager.realtime.Provider,
 		Model:                 manager.realtime.Model,
@@ -601,16 +613,36 @@ func (manager *Manager) runRealtime(ctx context.Context, active *session, instru
 		ToolCallTimeout:       manager.realtime.ToolCallTimeout,
 		AgentQuestionTemplate: manager.realtime.AgentQuestionTemplate,
 		IncludeEvents:         manager.realtime.IncludeEvents,
-		CloseGateway:          true,
+		CloseGateway:          closeGatewayInRunner,
 	})
 	if err != nil {
 		_ = client.Close()
 		err = redactSessionError(err, active)
 		return failedHarnessResult(active, started, err), err
 	}
-	runCtx, cancel := context.WithTimeout(ctx, active.agentTimeout)
-	realtimeResult, err := runner.Run(runCtx)
-	cancel()
+	var realtimeResult realtimeclient.Result
+	if manager.mode == ModeVoiceTranscribe {
+		transcribeCtx, transcribeCancel := context.WithTimeout(ctx, defaultVoiceSTTTimeout)
+		realtimeResult, err = runner.Run(transcribeCtx)
+		transcribeCancel()
+		closeErr := client.Close()
+		if err == nil {
+			agentClient, agentErr := manager.newAgentGateway(active.gatewayURL, active.gatewayToken)
+			if agentErr != nil {
+				err = agentErr
+			} else {
+				agentCtx, agentCancel := context.WithTimeout(ctx, active.agentTimeout)
+				err = manager.runAgentWithTranscript(agentCtx, active, agentClient, &realtimeResult)
+				agentCancel()
+				err = errors.Join(err, agentClient.Close())
+			}
+		}
+		err = errors.Join(err, closeErr)
+	} else {
+		runCtx, cancel := context.WithTimeout(ctx, active.agentTimeout)
+		realtimeResult, err = runner.Run(runCtx)
+		cancel()
+	}
 	realtimeResult = redactRealtimeResult(realtimeResult, active)
 	err = redactSessionError(err, active)
 	resultPath, writeErr := manager.writeRealtimeResult(active, realtimeResult)
@@ -634,6 +666,53 @@ func (manager *Manager) runRealtime(ctx context.Context, active *session, instru
 	}, nil
 }
 
+func (manager *Manager) runAgentWithTranscript(ctx context.Context, active *session, client gatewayConnection, result *realtimeclient.Result) error {
+	transcript := strings.TrimSpace(result.Transcript)
+	if len(result.TranscriptDoneParts) != 0 {
+		parts := make([]string, 0, len(result.TranscriptDoneParts))
+		for _, part := range result.TranscriptDoneParts {
+			if text := strings.TrimSpace(part); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		if len(parts) != 0 {
+			transcript = strings.Join(parts, "\n")
+		}
+	}
+	if transcript == "" {
+		err := errors.New("missing_transcript: OpenClaw voice-transcribe mode returned no text")
+		result.AppendError(err.Error())
+		return err
+	}
+	thinking := ""
+	if disablesThinking(active.model) {
+		thinking = "off"
+	}
+	connectSummary, err := client.Connect(ctx, gatewayclient.ConnectOptions{})
+	if err == nil && !connectSummary.HasScope("operator.write") {
+		err = errors.New("OpenClaw agent gateway requires operator.write scope")
+	}
+	if err != nil {
+		result.AppendError(err.Error())
+		return err
+	}
+	agentResult, err := client.Agent(ctx, gatewayclient.AgentRequest{
+		Message: transcript, SessionKey: "agent:main:aries-" + active.safeTaskID,
+		IdempotencyKey: active.agentIdempotency, Thinking: thinking,
+	})
+	if agentResult.RunID != "" {
+		result.AgentRunIDs = append(result.AgentRunIDs, agentResult.RunID)
+	}
+	result.AgentQuestionUsed = transcript
+	result.OutputText = agentResult.Text
+	if err != nil {
+		result.AppendError(err.Error())
+		return err
+	}
+	result.AgentConsultOK = true
+	return nil
+}
+
 func newGatewayClientWithDisposition(rawURL string, token []byte, scopes []string, disposition gatewayclient.EventDisposition) (gatewayConnection, error) {
 	dialer, err := gatewayclient.NewWebSocketDialer(gatewayclient.WebSocketOptions{URL: rawURL})
 	if err != nil {
@@ -650,7 +729,7 @@ func gatewayEventDisposition(mode string) gatewayclient.EventDisposition {
 }
 
 func gatewayScopes(mode string) []string {
-	if mode == ModeRealtime {
+	if isRealtimeMode(mode) {
 		return []string{"operator.read", "operator.write"}
 	}
 	return []string{"operator.write"}
@@ -691,8 +770,8 @@ func (manager *Manager) gatewayURL(ctx context.Context, active *session) (string
 	return "ws://" + net.JoinHostPort("127.0.0.1", binding.HostPort), nil
 }
 
-func (manager *Manager) synthesizeRealtimeAudio(ctx context.Context, active *session, instruction string) (string, []string, error) {
-	instructionPath := filepath.Join(active.artifactDir, "voice-instruction.txt")
+func (manager *Manager) synthesizeVoiceInstruction(ctx context.Context, active *session, instruction string) (string, []string, error) {
+	instructionPath := filepath.Join(active.artifactDir, audioinput.VoiceInstructionTextFile)
 	if err := writeArtifact(instructionPath, []byte(instruction)); err != nil {
 		return "", nil, fmt.Errorf("write realtime voice instruction: %w", err)
 	}
@@ -707,45 +786,33 @@ func (manager *Manager) synthesizeRealtimeAudio(ctx context.Context, active *ses
 		clear(apiKey)
 		return "", []string{instructionPath}, fmt.Errorf("OpenClaw realtime TTS API key: %w", err)
 	}
-	synthesizer, err := manager.newSpeech(audioinput.SpeechClientOptions{BaseURL: manager.realtime.TTS.BaseURL, APIKey: apiKey, Timeout: manager.realtime.TTS.Timeout})
-	clear(apiKey)
-	if err != nil {
-		return "", []string{instructionPath}, fmt.Errorf("construct realtime TTS client: %w", err)
-	}
-	defer synthesizer.Close()
-	result, err := synthesizer.Synthesize(ctx, audioinput.SpeechRequest{
-		Text: instruction, Model: manager.realtime.TTS.Model, Voice: manager.realtime.TTS.Voice,
-		Format: "wav", Instructions: manager.realtime.TTS.Instructions, Speed: manager.realtime.TTS.Speed,
+	apiKeyCleared := false
+	defer func() {
+		if !apiKeyCleared {
+			clear(apiKey)
+		}
+	}()
+	return audioinput.SynthesizeVoiceInstruction(ctx, instruction, audioinput.VoiceInstructionOptions{
+		ArtifactDir:     active.artifactDir,
+		InstructionPath: instructionPath,
+		ErrorLabel:      "realtime",
+		TTSErrorLabel:   "realtime",
+		Provider:        manager.realtime.TTS.Provider,
+		BaseURL:         manager.realtime.TTS.BaseURL,
+		APIKey:          apiKey,
+		Model:           manager.realtime.TTS.Model,
+		Voice:           manager.realtime.TTS.Voice,
+		Instructions:    manager.realtime.TTS.Instructions,
+		Speed:           manager.realtime.TTS.Speed,
+		Timeout:         manager.realtime.TTS.Timeout,
+		NewSpeech: func(options audioinput.SpeechClientOptions) (audioinput.SpeechSynthesizer, error) {
+			synthesizer, err := manager.newSpeech(options)
+			clear(apiKey)
+			apiKeyCleared = true
+			return synthesizer, err
+		},
+		WriteArtifact: writeArtifact,
 	})
-	if err != nil {
-		return "", []string{instructionPath}, fmt.Errorf("synthesize realtime voice instruction: %w", err)
-	}
-	audioPath := filepath.Join(active.artifactDir, "voice-instruction.wav")
-	if err := writeArtifact(audioPath, result.Audio); err != nil {
-		clear(result.Audio)
-		return "", []string{instructionPath}, fmt.Errorf("write realtime voice audio: %w", err)
-	}
-	clear(result.Audio)
-	metaPath := filepath.Join(active.artifactDir, "voice-instruction.wav.meta.json")
-	metadata := map[string]any{
-		"provider":    manager.realtime.TTS.Provider,
-		"model":       result.Model,
-		"voice":       result.Voice,
-		"format":      result.Format,
-		"text_sha256": result.TextSHA256,
-		"text_chars":  len(instruction),
-		"cached":      false,
-		"output_path": audioPath,
-	}
-	content, err := json.MarshalIndent(metadata, "", "  ")
-	if err != nil {
-		return "", []string{instructionPath, audioPath}, fmt.Errorf("encode realtime TTS metadata: %w", err)
-	}
-	content = append(content, '\n')
-	if err := writeArtifact(metaPath, content); err != nil {
-		return "", []string{instructionPath, audioPath}, fmt.Errorf("write realtime TTS metadata: %w", err)
-	}
-	return audioPath, []string{instructionPath, audioPath, metaPath}, nil
 }
 
 func (manager *Manager) realtimeAudioProvider(audioPath string) realtimeclient.AudioProvider {
@@ -1194,7 +1261,7 @@ func containsSecret(value string, secrets ...[]byte) bool {
 }
 
 func (manager *Manager) realtimeAPIKeyEnv(active *session) string {
-	if manager.mode != ModeRealtime || len(active.realtimeAPIKey) == 0 {
+	if !isRealtimeMode(manager.mode) || len(active.realtimeAPIKey) == 0 {
 		return ""
 	}
 	return manager.realtime.TTS.APIKeyEnv
