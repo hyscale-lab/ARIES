@@ -382,8 +382,13 @@ func (runner *Runner) processEvents(ctx context.Context, result *Result) error {
 	} else {
 		result.Transcript = state.latestUserTranscript
 	}
-	if runner.options.SessionMode == SessionModeTranscribe && result.TranscriptDone == "" {
-		return errors.New("missing_final_transcript: no final transcript.done event was observed")
+	if runner.options.SessionMode == SessionModeTranscribe {
+		if result.TranscriptDone == "" {
+			return errors.New("missing_final_transcript: no final transcript.done event was observed")
+		}
+		if state.partialTranscriptPending {
+			return errors.New("incomplete_final_transcript: latest transcript.delta was not finalized")
+		}
 	}
 	result.OutputText = state.output.String()
 	if state.hasActiveRuns() {
@@ -415,6 +420,7 @@ func (runner *Runner) processFrame(ctx context.Context, frame gateway.Frame, res
 	case eventTranscriptDelta:
 		if text := textFromPayload(talk.Payload); text != "" {
 			state.partialTranscript = text
+			state.partialTranscriptPending = true
 			state.touchQuiet(runner.options.QuietDuration)
 		}
 	case eventTranscriptDone:
@@ -424,6 +430,7 @@ func (runner *Runner) processFrame(ctx context.Context, frame gateway.Frame, res
 				result.TranscriptDone = text
 				result.TranscriptDoneParts = append(result.TranscriptDoneParts, text)
 				result.Transcript = text
+				state.partialTranscriptPending = false
 				state.touchQuiet(runner.options.QuietDuration)
 			}
 		}
@@ -704,14 +711,15 @@ func boundedProtocolText(value any) string {
 }
 
 type realtimeEventState struct {
-	deadline             time.Time
-	quietDeadline        time.Time
-	activeAgentRuns      map[string]struct{}
-	completedAgentRuns   map[string]struct{}
-	failedAgentRuns      map[string]string
-	partialTranscript    string
-	latestUserTranscript string
-	output               boundedString
+	deadline                 time.Time
+	quietDeadline            time.Time
+	activeAgentRuns          map[string]struct{}
+	completedAgentRuns       map[string]struct{}
+	failedAgentRuns          map[string]string
+	partialTranscript        string
+	partialTranscriptPending bool
+	latestUserTranscript     string
+	output                   boundedString
 }
 
 func (state *realtimeEventState) hasActiveRuns() bool {
