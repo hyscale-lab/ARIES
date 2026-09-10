@@ -28,6 +28,7 @@ import (
 	"github.com/hyscale-lab/aries/pkg/core"
 	gatewayclient "github.com/hyscale-lab/aries/pkg/harness/openclaw/gateway"
 	realtimeclient "github.com/hyscale-lab/aries/pkg/harness/openclaw/realtime"
+	"github.com/hyscale-lab/aries/internal/harness"
 	"github.com/hyscale-lab/aries/pkg/runner"
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
@@ -202,6 +203,7 @@ type session struct {
 	agentIdempotency string
 	runAttempted     bool
 	logPaths         []string
+	mcpClient        *harness.MCPClient
 }
 
 var _ runner.AgentHarness = (*Manager)(nil)
@@ -329,13 +331,32 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 			extractEnabled = true
 		}
 	}
-	configuration, err := renderConfig(request.Model, request.Endpoint, manager.webSearchEnabled, extractEnabled, manager.subagentsEnabled, manager.maxConcurrentSubagents)
+	var mcpTools []map[string]interface{}
+	mcpClient, err := harness.NewMCPClient()
+	if err == nil {
+		if err := mcpClient.Start(ctx); err == nil {
+			if tools, err := mcpClient.FetchAndMapTools(ctx); err == nil {
+				mcpTools = tools
+			}
+		} else {
+			_ = mcpClient.Stop()
+			mcpClient = nil
+		}
+	}
+
+	configuration, err := renderConfig(request.Model, request.Endpoint, manager.webSearchEnabled, extractEnabled, manager.subagentsEnabled, manager.maxConcurrentSubagents, mcpTools)
 	if err != nil {
+		if mcpClient != nil {
+			_ = mcpClient.Stop()
+		}
 		clear(extractAPIKey)
 		return err
 	}
 	apiKeySource, ok := manager.apiKeyLookup(request.Model.APIKeyEnv)
 	if !ok {
+		if mcpClient != nil {
+			_ = mcpClient.Stop()
+		}
 		clear(apiKeySource)
 		clear(extractAPIKey)
 		return fmt.Errorf("OpenClaw API-key environment %q is not set", request.Model.APIKeyEnv)
@@ -343,6 +364,9 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	apiKey := bytes.Clone(apiKeySource)
 	clear(apiKeySource)
 	if err := validateAPIKey(apiKey); err != nil {
+		if mcpClient != nil {
+			_ = mcpClient.Stop()
+		}
 		clear(apiKey)
 		clear(extractAPIKey)
 		return err
@@ -351,6 +375,9 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	if manager.mode == ModeRealtime {
 		realtimeKeySource, ok := manager.apiKeyLookup(manager.realtime.TTS.APIKeyEnv)
 		if !ok {
+			if mcpClient != nil {
+				_ = mcpClient.Stop()
+			}
 			clear(apiKey)
 			clear(realtimeKeySource)
 			clear(extractAPIKey)
@@ -359,6 +386,9 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		realtimeAPIKey = bytes.Clone(realtimeKeySource)
 		clear(realtimeKeySource)
 		if err := validateAPIKey(realtimeAPIKey); err != nil {
+			if mcpClient != nil {
+				_ = mcpClient.Stop()
+			}
 			clear(apiKey)
 			clear(realtimeAPIKey)
 			clear(extractAPIKey)
@@ -366,18 +396,27 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		}
 	}
 	if bytes.Contains(configuration, apiKey) {
+		if mcpClient != nil {
+			_ = mcpClient.Stop()
+		}
 		clear(apiKey)
 		clear(realtimeAPIKey)
 		clear(extractAPIKey)
 		return errors.New("rendered OpenClaw config contains the API-key value")
 	}
 	if len(realtimeAPIKey) != 0 && bytes.Contains(configuration, realtimeAPIKey) {
+		if mcpClient != nil {
+			_ = mcpClient.Stop()
+		}
 		clear(apiKey)
 		clear(realtimeAPIKey)
 		clear(extractAPIKey)
 		return errors.New("rendered OpenClaw config contains the realtime API-key value")
 	}
 	if len(extractAPIKey) != 0 && bytes.Contains(configuration, extractAPIKey) {
+		if mcpClient != nil {
+			_ = mcpClient.Stop()
+		}
 		clear(apiKey)
 		clear(realtimeAPIKey)
 		clear(extractAPIKey)
@@ -398,6 +437,9 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	hostConfig.PortBindings = network.PortMap{gatewayPort: []network.PortBinding{{HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: ""}}}
 	id, err := manager.newID()
 	if err != nil {
+		if mcpClient != nil {
+			_ = mcpClient.Stop()
+		}
 		clear(apiKey)
 		clear(realtimeAPIKey)
 		clear(extractAPIKey)
@@ -405,6 +447,9 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	}
 	gatewayToken, err := randomSecret(32)
 	if err != nil {
+		if mcpClient != nil {
+			_ = mcpClient.Stop()
+		}
 		clear(apiKey)
 		clear(realtimeAPIKey)
 		clear(extractAPIKey)
@@ -412,6 +457,9 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	}
 	agentIdempotency, err := randomID()
 	if err != nil {
+		if mcpClient != nil {
+			_ = mcpClient.Stop()
+		}
 		clear(apiKey)
 		clear(realtimeAPIKey)
 		clear(extractAPIKey)
@@ -422,6 +470,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		runID: request.RunID, taskID: request.TaskID, safeTaskID: safeTaskID(request.TaskID), attemptID: id,
 		containerName: "aries-openclaw-" + id, artifactDir: filepath.Join(manager.outputDir, request.TaskID, "harness"),
 		endpoint: request.Endpoint, model: request.Model, agentTimeout: agentTimeout, apiKey: apiKey, realtimeAPIKey: realtimeAPIKey, extractAPIKey: extractAPIKey, gatewayToken: gatewayToken, agentIdempotency: agentIdempotency,
+		mcpClient: mcpClient,
 	}
 	containerConfig.Labels["aries.attempt"] = active.attemptID
 	fail := func(primary error) error {
@@ -1294,10 +1343,20 @@ func (manager *Manager) stopSession(ctx context.Context, active *session) error 
 		return nil
 	}
 	if active.containerID == "" {
+		if active.mcpClient != nil {
+			_ = active.mcpClient.Stop()
+			active.mcpClient = nil
+		}
 		clearSessionSecrets(active)
 		return nil
 	}
 	var errs []error
+	if active.mcpClient != nil {
+		if err := active.mcpClient.Stop(); err != nil {
+			errs = append(errs, fmt.Errorf("stop OpenClaw MCP client: %w", err))
+		}
+		active.mcpClient = nil
+	}
 	inspection, inspectErr := manager.client.ContainerInspect(ctx, active.containerID, client.ContainerInspectOptions{})
 	if errdefs.IsNotFound(inspectErr) {
 		active.containerID = ""
