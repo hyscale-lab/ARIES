@@ -8,11 +8,15 @@ four component roles and is not a fifth Runner role.
 
 Profiles select `runtime.backend` and `runtime.mode`, while model configuration
 identifies the endpoint, served model, and name of the credential environment
-variable. ARIES validates the endpoint before admitting task work.
+variable. The mode is the ownership distinction: every external endpoint is
+prepared the same way, whatever serves it, and only a managed process is a
+runtime ARIES prepares. The backend names the kind of service behind the
+endpoint and selects its preflight and the provider each harness renders.
+ARIES validates the endpoint before admitting task work.
 
 ```mermaid
 flowchart TB
-    X[External DeepSeek or SGLang]
+    X[External DeepSeek, SGLang, or OpenAI-compatible server]
     M[ARIES-managed SGLang process]
     E[Validated model endpoint]
 
@@ -28,8 +32,12 @@ flowchart TB
 ```
 
 DeepSeek is supported only as an external OpenAI-compatible endpoint. ARIES
-performs bounded model validation but does not own the remote service. SGLang
-may also be external, or ARIES may manage one host process across a profile run.
+performs bounded model validation but does not own the remote service. The
+`openai` backend names any other OpenAI-compatible server, such as vLLM. It
+describes the endpoint's API rather than a distinct runtime: it is external
+only, has no native configuration file, adds no preparation step, and receives
+the same bounded model discovery as external SGLang. SGLang may also be
+external, or ARIES may manage one host process across a profile run.
 Managed SGLang uses a native YAML file, explicit executable and timeouts, and
 optional GPU indices; ARIES validates model, port, and GPU topology before side
 effects and stops the owned process after admitted tasks drain.
