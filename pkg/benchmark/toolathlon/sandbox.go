@@ -46,6 +46,20 @@ const gatewayStartScript = `cd ` + workspaceRoot + ` && nohup uv run python -m s
 // target host, $3 port list, $4 ready file, $5 log file.
 const forwarderStartScript = `nohup python3 "$1" --target "$2" --ports "$3" --ready "$4" >"$5" 2>&1 &`
 
+// Toolathlon's scripts run under `uv run` from the image's own PATH, which
+// the sandbox does not resolve for a bare command name. The shell resolves
+// it; the arguments are still passed positionally, never spliced into text.
+const uvScript = `exec uv "$@"`
+
+// uvCommand is `uv <args>` in the project directory.
+func uvCommand(args ...string) core.Command {
+	return core.Command{
+		Path: "/bin/sh",
+		Args: append([]string{"-c", uvScript, "aries-toolathlon-uv"}, args...),
+		Dir:  workspaceRoot,
+	}
+}
+
 // PrepareSandbox reproduces the container-side half of Toolathlon's
 // decoupled runner, then hides the grader before any bridge exists:
 //
@@ -133,7 +147,7 @@ func (b *Benchmark) installProject(ctx context.Context, sandbox runner.Sandbox, 
 	if err := sandbox.Upload(ctx, archive, archiveContainerPath); err != nil {
 		return fmt.Errorf("upload project archive: %w", err)
 	}
-	if err := execOK(ctx, sandbox, core.Command{Path: "tar", Args: []string{"-C", workspaceRoot, "-xf", archiveContainerPath}}, "extract project archive"); err != nil {
+	if err := execOK(ctx, sandbox, core.Command{Path: tarPath, Args: []string{"-C", workspaceRoot, "-xf", archiveContainerPath}}, "extract project archive"); err != nil {
 		return err
 	}
 	return removePaths(ctx, sandbox, []string{archiveContainerPath})
@@ -193,23 +207,20 @@ func (b *Benchmark) startForwarder(ctx context.Context, sandbox runner.Sandbox) 
 // arguments its decoupled runner uses, minus the ones that only matter to
 // its host-side agent loop, and keeps its full output on the host.
 func (b *Benchmark) runPreprocess(ctx context.Context, sandbox runner.Sandbox, taskName, hostDir string) error {
-	result, execErr := sandbox.Exec(ctx, core.Command{
-		Path: "uv",
-		Args: []string{
-			"run", "python", "-m", "scripts.decoupled.container_preprocess",
-			"--eval_config", evalConfigPath,
-			"--task_dir", taskPool + "/" + taskName,
-			"--max_steps_under_single_turn_mode", strconv.Itoa(b.maxSteps),
-			"--model_short_name", b.modelName,
-			"--provider", "unified",
-			"--bundle_file", bundleContainerPath,
-			"--host_output_folder", taskRootPath,
-			"--debug",
-		},
-		Dir:     workspaceRoot,
-		Env:     map[string]string{"TOOLATHLON_OPENAI_BASE_URL": modelPlaceholderURL},
-		Timeout: preprocessTimeout,
-	})
+	command := uvCommand(
+		"run", "python", "-m", "scripts.decoupled.container_preprocess",
+		"--eval_config", evalConfigPath,
+		"--task_dir", taskPool+"/"+taskName,
+		"--max_steps_under_single_turn_mode", strconv.Itoa(b.maxSteps),
+		"--model_short_name", b.modelName,
+		"--provider", "unified",
+		"--bundle_file", bundleContainerPath,
+		"--host_output_folder", taskRootPath,
+		"--debug",
+	)
+	command.Env = map[string]string{"TOOLATHLON_OPENAI_BASE_URL": modelPlaceholderURL}
+	command.Timeout = preprocessTimeout
+	result, execErr := sandbox.Exec(ctx, command)
 	logPath := filepath.Join(hostDir, "preprocess.log")
 	if err := os.WriteFile(logPath, []byte(result.Stdout+result.Stderr), 0o600); err != nil {
 		return fmt.Errorf("write preprocess log: %w", err)

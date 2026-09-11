@@ -132,8 +132,10 @@ func (s *flowSandbox) Exec(_ context.Context, command core.Command) (core.Comman
 				return core.CommandResult{ExitCode: 7}, nil
 			}
 			return core.CommandResult{}, nil
+		case "aries-toolathlon-uv":
+			return s.execUV(command, args[3:])
 		}
-	case "tar":
+	case tarPath:
 		switch args[2] {
 		case "-xf":
 			archive := args[3]
@@ -179,7 +181,7 @@ func (s *flowSandbox) Exec(_ context.Context, command core.Command) (core.Comman
 			s.events = append(s.events, "stash")
 			return core.CommandResult{}, nil
 		}
-	case "find":
+	case findPath:
 		names := make([]string, 0, len(s.taskDir))
 		for name := range s.taskDir {
 			names = append(names, name)
@@ -190,50 +192,54 @@ func (s *flowSandbox) Exec(_ context.Context, command core.Command) (core.Comman
 			fmt.Fprintf(&listing, "%c\t%s\n", s.taskDir[name], name)
 		}
 		return core.CommandResult{Stdout: listing.String()}, nil
-	case "uv":
-		module := args[3]
-		if command.Dir != workspaceRoot {
-			s.t.Errorf("%s ran in %q, want %q", module, command.Dir, workspaceRoot)
-		}
-		switch module {
-		case "scripts.decoupled.container_preprocess":
-			if !s.projectInstalled {
-				s.t.Error("preprocess ran before the project was installed")
-			}
-			if s.needsApplication && !s.forwarderStarted {
-				s.t.Error("preprocess ran before the loopback forwarder")
-			}
-			if command.Env["TOOLATHLON_OPENAI_BASE_URL"] == "" {
-				s.t.Error("preprocess ran without the placeholder model URL")
-			}
-			s.events = append(s.events, "preprocess")
-			if s.preprocessExit != 0 {
-				return core.CommandResult{ExitCode: s.preprocessExit, Stdout: "boom"}, nil
-			}
-			s.files[bundleContainerPath] = true
-			return core.CommandResult{Stdout: "Preprocess done."}, nil
-		case "scripts.decoupled.container_eval":
-			if _, ok := s.taskDir["evaluation"]; !ok {
-				s.t.Error("evaluator ran without the grader restored")
-			}
-			if !s.files[trajectoryPath] || !s.files[bundleContainerPath] {
-				s.t.Error("evaluator ran without the trajectory stub and bundle")
-			}
-			if !s.gatewayStarted || (s.needsApplication && !s.forwarderStarted) {
-				s.t.Error("evaluator ran without the services still up")
-			}
-			s.events = append(s.events, "evaluate")
-			delete(s.files, bundleContainerPath)
-			s.files[evalResultPath] = true
-			var parsed evalResult
-			_ = json.Unmarshal([]byte(s.evalResult), &parsed)
-			if parsed.Pass != nil && *parsed.Pass {
-				return core.CommandResult{Stdout: "Pass: True"}, nil
-			}
-			return core.CommandResult{ExitCode: 1, Stdout: "Pass: False"}, nil
-		}
 	}
 	return core.CommandResult{}, fmt.Errorf("unscripted command %q %v", command.Path, command.Args)
+}
+
+// execUV scripts `uv run python -m <module> ...`, the two Toolathlon phases.
+func (s *flowSandbox) execUV(command core.Command, args []string) (core.CommandResult, error) {
+	module := args[3]
+	if command.Dir != workspaceRoot {
+		s.t.Errorf("%s ran in %q, want %q", module, command.Dir, workspaceRoot)
+	}
+	switch module {
+	case "scripts.decoupled.container_preprocess":
+		if !s.projectInstalled {
+			s.t.Error("preprocess ran before the project was installed")
+		}
+		if s.needsApplication && !s.forwarderStarted {
+			s.t.Error("preprocess ran before the loopback forwarder")
+		}
+		if command.Env["TOOLATHLON_OPENAI_BASE_URL"] == "" {
+			s.t.Error("preprocess ran without the placeholder model URL")
+		}
+		s.events = append(s.events, "preprocess")
+		if s.preprocessExit != 0 {
+			return core.CommandResult{ExitCode: s.preprocessExit, Stdout: "boom"}, nil
+		}
+		s.files[bundleContainerPath] = true
+		return core.CommandResult{Stdout: "Preprocess done."}, nil
+	case "scripts.decoupled.container_eval":
+		if _, ok := s.taskDir["evaluation"]; !ok {
+			s.t.Error("evaluator ran without the grader restored")
+		}
+		if !s.files[trajectoryPath] || !s.files[bundleContainerPath] {
+			s.t.Error("evaluator ran without the trajectory stub and bundle")
+		}
+		if !s.gatewayStarted || (s.needsApplication && !s.forwarderStarted) {
+			s.t.Error("evaluator ran without the services still up")
+		}
+		s.events = append(s.events, "evaluate")
+		delete(s.files, bundleContainerPath)
+		s.files[evalResultPath] = true
+		var parsed evalResult
+		_ = json.Unmarshal([]byte(s.evalResult), &parsed)
+		if parsed.Pass != nil && *parsed.Pass {
+			return core.CommandResult{Stdout: "Pass: True"}, nil
+		}
+		return core.CommandResult{ExitCode: 1, Stdout: "Pass: False"}, nil
+	}
+	return core.CommandResult{}, fmt.Errorf("unscripted uv invocation %v", args)
 }
 
 func (s *flowSandbox) Upload(_ context.Context, source, destination string) error {
