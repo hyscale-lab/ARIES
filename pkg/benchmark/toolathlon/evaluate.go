@@ -107,18 +107,15 @@ func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner
 		return finish(fmt.Errorf("inject trusted task bundle: %w", err))
 	}
 
-	result, execErr := sandbox.Exec(ctx, core.Command{
-		Path: "uv",
-		Args: []string{
-			"run", "python", "-m", "scripts.decoupled.container_eval",
-			"--bundle_file", bundleContainerPath,
-			"--require_resolved_task_config",
-			"--consume_bundle",
-			"--agent_exit_code", "0",
-		},
-		Dir:     workspaceRoot,
-		Timeout: evalTimeout,
-	})
+	command := uvCommand(
+		"run", "python", "-m", "scripts.decoupled.container_eval",
+		"--bundle_file", bundleContainerPath,
+		"--require_resolved_task_config",
+		"--consume_bundle",
+		"--agent_exit_code", "0",
+	)
+	command.Timeout = evalTimeout
+	result, execErr := sandbox.Exec(ctx, command)
 	var artifactErrors []error
 	if err := os.WriteFile(evalLogPath, []byte(result.Stdout+result.Stderr), 0o600); err != nil {
 		artifactErrors = append(artifactErrors, fmt.Errorf("write evaluator log: %w", err))
