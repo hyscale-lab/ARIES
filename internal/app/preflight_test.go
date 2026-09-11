@@ -326,6 +326,7 @@ func TestValidateLiveModelConfigurationCredentialAndCancellation(t *testing.T) {
 
 func TestOfficialDeepSeekSelectionIsExact(t *testing.T) {
 	for _, model := range []core.ModelConfig{
+		{Provider: "deepseek", BaseURL: deepSeekBaseURL, Model: "deepseek-flash"},
 		{Provider: "deepseek", BaseURL: deepSeekBaseURL, Model: "deepseek-v4-flash"},
 		{Provider: "deepseek", BaseURL: deepSeekBaseURL, Model: "deepseek-v4-pro"},
 	} {

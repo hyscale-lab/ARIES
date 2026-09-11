@@ -665,7 +665,7 @@ func newSpeechClient(options audioinput.SpeechClientOptions) (speechSynthesizer,
 }
 
 func disablesThinking(model core.ModelConfig) bool {
-	return model.BaseURL == "https://api.deepseek.com" && (model.Model == "deepseek-v4-flash" || model.Model == "deepseek-v4-pro")
+	return model.BaseURL == "https://api.deepseek.com" && (model.Model == "deepseek-flash" || model.Model == "deepseek-v4-flash" || model.Model == "deepseek-v4-pro")
 }
 
 func (manager *Manager) gatewayURL(ctx context.Context, active *session) (string, error) {
