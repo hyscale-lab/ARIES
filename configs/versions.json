@@ -13,6 +13,10 @@
     "evaluator_repository_url": "https://github.com/scaleapi/SWE-bench_Pro-os.git",
     "evaluator_revision": "ca10a60a5fcae51e6948ffe1485d4153d421e6c5"
   },
+  "toolathlon": {
+    "repository_url": "https://github.com/hkust-nlp/Toolathlon.git",
+    "revision": "9be8d8fe07a497b18ee61e3f2ae694e9797f39eb"
+  },
   "openclaw": {
     "image": "ghcr.io/openclaw/openclaw:2026.7.1"
   },
