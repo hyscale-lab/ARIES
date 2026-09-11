@@ -130,6 +130,91 @@ func renderConfig(model core.ModelConfig, maxTurns int, webSearchEnabled, extrac
 	return output.Bytes(), nil
 }
 
+// MCPServer is one remote MCP server Hermes connects to at startup, rendered
+// under Hermes's `mcp_servers` key. Hermes registers every tool the server
+// lists as `mcp_<name>_<tool>`; with no MCP server named in
+// platform_toolsets, all configured servers are enabled
+// (hermes_cli/tools_config.py). A benchmark that exposes its tools this way
+// (Toolathlon's gateway) is reached through the sandbox's fixed
+// `task-sandbox` network alias, like searxngBaseURL above.
+type MCPServer struct {
+	Name string
+	URL  string
+	// Transport is "sse" or "streamable-http" (Hermes's default when the
+	// key is absent, so it is only rendered for "sse").
+	Transport string
+	// TimeoutSeconds is Hermes's per-tool-call timeout for this server; zero
+	// keeps Hermes's own default.
+	TimeoutSeconds int
+}
+
+// renderMCPServers produces the `mcp_servers` block appended to the rendered
+// config.yaml. Every value passes through yamlString, so a profile value
+// cannot restructure the document.
+func renderMCPServers(servers []MCPServer) ([]byte, error) {
+	if len(servers) == 0 {
+		return nil, nil
+	}
+	seen := make(map[string]struct{}, len(servers))
+	var output bytes.Buffer
+	output.WriteString("\nmcp_servers:\n")
+	for _, server := range servers {
+		if err := validateMCPServer(server); err != nil {
+			return nil, err
+		}
+		if _, duplicate := seen[server.Name]; duplicate {
+			return nil, fmt.Errorf("duplicate Hermes MCP server name %q", server.Name)
+		}
+		seen[server.Name] = struct{}{}
+		output.WriteString("  " + server.Name + ":\n")
+		output.WriteString("    url: " + yamlString(server.URL) + "\n")
+		if server.Transport == "sse" {
+			output.WriteString("    transport: \"sse\"\n")
+		}
+		if server.TimeoutSeconds > 0 {
+			output.WriteString("    timeout: " + strconv.Itoa(server.TimeoutSeconds) + "\n")
+		}
+	}
+	return output.Bytes(), nil
+}
+
+func validateMCPServer(server MCPServer) error {
+	if !validMCPServerName(server.Name) {
+		return fmt.Errorf("Hermes MCP server name %q must be a lowercase identifier", server.Name)
+	}
+	parsed, err := url.Parse(server.URL)
+	if err != nil || parsed.Host == "" || parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("Hermes MCP server %q URL must be absolute HTTP(S)", server.Name)
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("Hermes MCP server %q URL must not contain credentials, query, or fragment", server.Name)
+	}
+	switch server.Transport {
+	case "sse", "streamable-http":
+	default:
+		return fmt.Errorf("Hermes MCP server %q transport must be sse or streamable-http", server.Name)
+	}
+	if server.TimeoutSeconds < 0 {
+		return fmt.Errorf("Hermes MCP server %q timeout must not be negative", server.Name)
+	}
+	return nil
+}
+
+// validMCPServerName keeps the name usable as a YAML key without quoting
+// and as Hermes's tool-name prefix.
+func validMCPServerName(name string) bool {
+	if name == "" || len(name) > 64 {
+		return false
+	}
+	for index, character := range name {
+		if character >= 'a' && character <= 'z' || index > 0 && (character >= '0' && character <= '9' || character == '_') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 // containerEnvironment is the non-secret environment given to the Hermes
 // container. Hermes reads its terminal backend entirely from these names.
 //

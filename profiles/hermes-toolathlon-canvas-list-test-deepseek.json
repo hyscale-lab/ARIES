@@ -1,0 +1,50 @@
+{
+  "name": "hermes-toolathlon-canvas-list-test-deepseek",
+  "versions_file": "../configs/versions.json",
+  "overrides_file": "",
+  "execution": {
+    "concurrency": 1
+  },
+  "benchmark": {
+    "type": "toolathlon",
+    "root": ".cache/toolathlon",
+    "tasks": [
+      "canvas-list-test"
+    ],
+    "environment": {
+      "image": "docker.io/lockon0927/toolathlon-task-image:1016beta"
+    }
+  },
+  "harness": {
+    "type": "hermes",
+    "subagents": {
+      "enabled": false
+    },
+    "mcp": {
+      "servers": [
+        {
+          "name": "toolathlon",
+          "url": "http://task-sandbox:10086/sse",
+          "transport": "sse",
+          "timeout_seconds": 300
+        }
+      ]
+    }
+  },
+  "sandbox": {
+    "type": "docker"
+  },
+  "bridge": {
+    "type": "hermes-ssh"
+  },
+  "runtime": {
+    "backend": "deepseek",
+    "mode": "external"
+  },
+  "model": {
+    "base_url": "https://api.deepseek.com",
+    "api_key_env": "DEEPSEEK_API_KEY",
+    "id": "deepseek-v4-flash"
+  },
+  "output_dir": "runs"
+}
