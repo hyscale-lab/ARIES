@@ -174,3 +174,25 @@ Sources: [preparation](../../pkg/benchmark/swebenchpro/sandbox.go),
 [evaluation tests](../../pkg/benchmark/swebenchpro/evaluate_test.go).
 See the [usage guide](../benchmarks/swe-bench-pro.md) for pins, prerequisites,
 result artifacts, public-data limitations, and licensing.
+
+## Toolathlon
+
+Toolathlon's own decoupled runner already splits a task the way ARIES does.
+Preparation installs the pinned project tree and the task directory in the
+task image, runs Toolathlon's `container_preprocess`, and starts its
+`container_tool_gateway`: one MCP-over-SSE server in front of every MCP server
+the task declares, which the harness reaches at the sandbox's network alias.
+For tasks backed by Toolathlon's self-hosted applications, a loopback forwarder
+inside the sandbox carries the applications' fixed ports to the Docker host.
+Before bridge access, preparation archives the grader and ground truth
+(Toolathlon's protected-name list) to the private run directory, removes them,
+and proves their absence. After the isolation gates, evaluation discards
+anything the agent left under those names, restores the archive, and runs
+Toolathlon's `container_eval`, whose verdict file decides the score.
+
+Sources: [task loading](../../pkg/benchmark/toolathlon/toolathlon.go),
+[preparation](../../pkg/benchmark/toolathlon/sandbox.go),
+[evaluation](../../pkg/benchmark/toolathlon/evaluate.go), and
+[tests](../../pkg/benchmark/toolathlon/toolathlon_test.go).
+See the [usage guide](../benchmarks/toolathlon.md) for the task subset, the
+application deployments, and what differs from Toolathlon's own runner.
