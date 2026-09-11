@@ -305,10 +305,10 @@ func sleepWithContext(ctx context.Context, duration time.Duration) error {
 // name it, and both fail the live listing check if DeepSeek stops serving
 // them.
 func isOfficialDeepSeek(model core.ModelConfig) bool {
-	return model.Provider == "deepseek" && model.BaseURL == deepSeekBaseURL && officialDeepSeekModel(model.Model)
+	return model.Provider == "deepseek" && model.BaseURL == deepSeekBaseURL && officialDeepSeekModelID(model.Model)
 }
 
-func officialDeepSeekModel(id string) bool {
+func officialDeepSeekModelID(id string) bool {
 	switch id {
 	case "deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro":
 		return true

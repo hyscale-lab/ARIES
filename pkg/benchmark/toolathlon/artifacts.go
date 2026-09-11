@@ -160,6 +160,13 @@ func parseFindListing(output string) ([]dirEntry, error) {
 	return entries, nil
 }
 
+// The sandbox requires absolute command paths. Both binaries are part of
+// every Debian/Ubuntu-derived image, including Toolathlon's.
+const (
+	tarPath  = "/usr/bin/tar"
+	findPath = "/usr/bin/find"
+)
+
 func taskDirectoryPath(taskName string) string {
 	return path.Join(workspaceRoot, "tasks", taskPool, taskName)
 }
@@ -167,7 +174,7 @@ func taskDirectoryPath(taskName string) string {
 // listTaskDirectory returns the direct children of the task directory.
 func listTaskDirectory(ctx context.Context, sandbox runner.Sandbox, taskName string) ([]dirEntry, error) {
 	result, err := sandbox.Exec(ctx, core.Command{
-		Path: "find", Args: []string{taskDirectoryPath(taskName), "-mindepth", "1", "-maxdepth", "1", "-printf", `%y\t%f\n`},
+		Path: findPath, Args: []string{taskDirectoryPath(taskName), "-mindepth", "1", "-maxdepth", "1", "-printf", `%y\t%f\n`},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list task directory: %w", err)
@@ -196,7 +203,7 @@ func stashArtifacts(ctx context.Context, sandbox runner.Sandbox, taskName, hostA
 	}
 	taskDir := taskDirectoryPath(taskName)
 	archived, err := sandbox.Exec(ctx, core.Command{
-		Path: "tar", Args: append([]string{"-C", taskDir, "-cf", stashContainerPath, "--"}, names...),
+		Path: tarPath, Args: append([]string{"-C", taskDir, "-cf", stashContainerPath, "--"}, names...),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("archive grader artifacts: %w", err)
@@ -247,7 +254,7 @@ func restoreArtifacts(ctx context.Context, sandbox runner.Sandbox, taskName, hos
 	if err := sandbox.Upload(ctx, hostArchive, stashContainerPath); err != nil {
 		return fmt.Errorf("inject grader artifacts: %w", err)
 	}
-	extracted, err := sandbox.Exec(ctx, core.Command{Path: "tar", Args: []string{"-C", taskDir, "-xf", stashContainerPath}})
+	extracted, err := sandbox.Exec(ctx, core.Command{Path: tarPath, Args: []string{"-C", taskDir, "-xf", stashContainerPath}})
 	if err != nil {
 		return fmt.Errorf("extract grader artifacts: %w", err)
 	}
