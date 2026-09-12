@@ -34,7 +34,10 @@ var (
 
 // gatewayStartScript backgrounds Toolathlon's MCP gateway from the project
 // directory. Its arguments arrive as positional parameters, so no value is
-// spliced into shell text: $1 bundle file, $2 port, $3 log file. ARIES
+// spliced into shell text: $1 bundle file, $2 port, $3 log file. The gateway
+// binds 0.0.0.0 because its client is the harness in another container,
+// reaching it over the per-task bridge network by the sandbox's alias; that
+// network is internal to the task, so nothing else can. ARIES
 // overrides the task image's entrypoint with `/bin/sleep infinity`, so this
 // is the only place the gateway is launched, and the backgrounded process
 // is reparented to PID 1 when the shell exits (see the SearXNG note in
