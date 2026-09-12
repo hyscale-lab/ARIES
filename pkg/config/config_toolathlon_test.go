@@ -132,6 +132,14 @@ func TestToolathlonBenchmarkValidation(t *testing.T) {
 			input:   strings.Replace(valid, `"tasks":["canvas-list-test"],`, `"tasks":["canvas-list-test"],"toolathlon":{"app_host":"[fd00::5]"},`, 1),
 			wantErr: "app_host must be a hostname or IP address",
 		},
+		"empty host label": {
+			input:   strings.Replace(valid, `"tasks":["canvas-list-test"],`, `"tasks":["canvas-list-test"],"toolathlon":{"app_host":"host..example"},`, 1),
+			wantErr: "app_host must be a hostname or IP address",
+		},
+		"hyphen-edged host label": {
+			input:   strings.Replace(valid, `"tasks":["canvas-list-test"],`, `"tasks":["canvas-list-test"],"toolathlon":{"app_host":"host-.example"},`, 1),
+			wantErr: "app_host must be a hostname or IP address",
+		},
 		"toolathlon block under terminalbench2": {
 			input:   strings.Replace(validConfig, `"tasks":["fix-git"]}`, `"tasks":["fix-git"],"toolathlon":{"max_steps":5}}`, 1),
 			wantErr: "benchmark.toolathlon must not be set for terminalbench2",
@@ -148,7 +156,7 @@ func TestToolathlonBenchmarkValidation(t *testing.T) {
 			}
 		})
 	}
-	for _, host := range []string{"fd00::5", "2001:db8::1", "::1"} {
+	for _, host := range []string{"fd00::5", "2001:db8::1", "::1", "docker-host.internal", "10.148.0.5"} {
 		literal := strings.Replace(valid, `"tasks":["canvas-list-test"],`, `"tasks":["canvas-list-test"],"toolathlon":{"app_host":"`+host+`"},`, 1)
 		cfg, err := Decode(strings.NewReader(literal))
 		if err != nil || cfg.Benchmark.Toolathlon == nil || cfg.Benchmark.Toolathlon.AppHost != host {

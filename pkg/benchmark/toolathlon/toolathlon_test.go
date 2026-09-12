@@ -229,6 +229,29 @@ func TestTasksRejectsRevisionMismatch(t *testing.T) {
 	}
 }
 
+// The runner's occurrence ID is the logical ID plus "-NNN", so a logical ID
+// at its own 128-byte limit yields a 132-byte execution ID: that must pass,
+// and only the execution ID's own 149-byte limit may refuse a longer one.
+func TestSafeExecutionTaskIDHasItsOwnLengthLimit(t *testing.T) {
+	longest := strings.Repeat("a", 128)
+	if !safeExecutionTaskID(longest, longest+"-001") {
+		t.Fatal("128-byte logical ID with an occurrence suffix rejected")
+	}
+	atLimit := strings.Repeat("b", 145)
+	if !safeExecutionTaskID(atLimit, atLimit+"-001") {
+		t.Fatal("149-byte execution ID rejected")
+	}
+	over := strings.Repeat("c", 146)
+	if safeExecutionTaskID(over, over+"-001") {
+		t.Fatal("150-byte execution ID accepted")
+	}
+	for _, bad := range []string{"task", "task-", "task-0", "task-01", "task-abc", "task-001/x", "other-001", "task-1000000000000000000000"} {
+		if safeExecutionTaskID("task", bad) {
+			t.Fatalf("%q accepted", bad)
+		}
+	}
+}
+
 func TestTasksRemapsToExecutionTaskID(t *testing.T) {
 	root := writeFixture(t)
 	options := baseOptions(t, root)
@@ -268,8 +291,13 @@ func TestNewValidatesOptions(t *testing.T) {
 		"application port": func(o *Options) { o.GatewayPort = 20001 },
 		"bad app host":     func(o *Options) { o.AppHost = "host name" },
 		"bracketed host":   func(o *Options) { o.AppHost = "[::1]" },
-		"negative steps":   func(o *Options) { o.MaxSteps = -1 },
-		"bad model name":   func(o *Options) { o.ModelName = "deep seek" },
+		"empty host label": func(o *Options) { o.AppHost = "host..example" },
+		"hyphen-edged host label": func(o *Options) {
+			o.AppHost = "host-.example"
+		},
+		"leading hyphen host": func(o *Options) { o.AppHost = "-host" },
+		"negative steps":      func(o *Options) { o.MaxSteps = -1 },
+		"bad model name":      func(o *Options) { o.ModelName = "deep seek" },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
