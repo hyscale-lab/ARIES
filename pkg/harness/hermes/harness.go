@@ -103,7 +103,10 @@ type Options struct {
 	// delegation.max_concurrent_children. Zero leaves Hermes's own default
 	// (3) in place. Ignored when SubagentsEnabled is false.
 	MaxConcurrentSubagents int
-	Logger                 *logrus.Logger
+	// MCPServers are remote MCP servers rendered into config.yaml; Hermes
+	// connects to each at startup and registers its tools.
+	MCPServers []MCPServer
+	Logger     *logrus.Logger
 }
 
 // dockerClient is the small official Engine SDK surface used by the harness.
@@ -136,6 +139,7 @@ type Manager struct {
 	extractAPIKeyEnv       string
 	subagentsEnabled       bool
 	maxConcurrentSubagents int
+	mcpServers             []MCPServer
 	logger                 *logrus.Logger
 	apiKeyLookup           func(string) ([]byte, bool)
 	newID                  func() (string, error)
@@ -227,6 +231,11 @@ func New(options Options) (*Manager, error) {
 	if options.APIKeyLookup == nil {
 		options.APIKeyLookup = environmentAPIKeyLookup
 	}
+	// Profile errors in the MCP block surface here rather than at the first
+	// task's Start.
+	if _, err := renderMCPServers(options.MCPServers); err != nil {
+		return nil, err
+	}
 	return &Manager{
 		client: api, image: options.Image, outputDir: outputDir,
 		cleanupTimeout: options.CleanupTimeout, startTimeout: options.StartTimeout,
@@ -234,6 +243,7 @@ func New(options Options) (*Manager, error) {
 		terminalTimeout: options.TerminalTimeout, webSearchEnabled: options.WebSearchEnabled,
 		extractAPIKeyEnv: options.ExtractAPIKeyEnv, logger: options.Logger,
 		subagentsEnabled: options.SubagentsEnabled, maxConcurrentSubagents: options.MaxConcurrentSubagents,
+		mcpServers:   append([]MCPServer(nil), options.MCPServers...),
 		apiKeyLookup: options.APIKeyLookup, newID: randomID,
 	}, nil
 }
@@ -266,6 +276,11 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	if err != nil {
 		return err
 	}
+	mcpBlock, err := renderMCPServers(manager.mcpServers)
+	if err != nil {
+		return err
+	}
+	configuration = append(configuration, mcpBlock...)
 	environment, err := containerEnvironment(request.Endpoint, workspaceRoot, manager.terminalTimeout, manager.webSearchEnabled)
 	if err != nil {
 		return err

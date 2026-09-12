@@ -299,8 +299,21 @@ func sleepWithContext(ctx context.Context, duration time.Duration) error {
 	}
 }
 
+// isOfficialDeepSeek accepts the model IDs DeepSeek's own /models endpoint
+// lists. The V4 flash model is served as "deepseek-flash" since the V4
+// rename; the earlier "deepseek-v4-flash" is kept for profiles that still
+// name it, and both fail the live listing check if DeepSeek stops serving
+// them.
 func isOfficialDeepSeek(model core.ModelConfig) bool {
-	return model.Provider == "deepseek" && model.BaseURL == deepSeekBaseURL && (model.Model == "deepseek-v4-flash" || model.Model == "deepseek-v4-pro")
+	return model.Provider == "deepseek" && model.BaseURL == deepSeekBaseURL && officialDeepSeekModelID(model.Model)
+}
+
+func officialDeepSeekModelID(id string) bool {
+	switch id {
+	case "deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro":
+		return true
+	}
+	return false
 }
 
 func liveValidationFailure(model core.ModelConfig, category liveValidationCategory, attempts int) (liveValidation, error) {

@@ -11,6 +11,42 @@
   official Git LFS installation still leaves the pinned Parquet as an LFS
   pointer, so the dataset integration remains an explicit environment gap.
 - Final Docker inspection found no ARIES containers or networks.
+## R23 — Toolathlon benchmark adapter
+
+1. [x] Pin the Toolathlon checkout, install it atomically, and materialize the
+   two gitignored site configs its scripts import unconditionally.
+2. [x] Map task directories to benchmark-neutral tasks, and refuse at load every
+   task whose MCP servers need a third-party account or the k8s host runtime.
+3. [x] Before bridge access, install the pinned project tree, start a loopback
+   forwarder for Toolathlon's fixed application ports, run Toolathlon's own
+   preprocess, validate the task bundle it writes, stash the grader and ground
+   truth to the private run directory and prove them absent, then start the
+   MCP gateway and wait for its health endpoint.
+4. [x] Render Hermes's `mcp_servers` block from a new `harness.mcp.servers`
+   profile block, so the harness reaches the gateway at the sandbox's fixed
+   network alias.
+5. [x] After harness stop and bridge revocation, discard agent-planted grader
+   paths, restore the stash, re-inject the trusted bundle, run Toolathlon's
+   evaluator, and score from its verdict file.
+6. [x] Add strict configuration/version decoding, explicit command wiring, a
+   one-task profile, package regressions with a scripted-sandbox flow test,
+   and public documentation.
+
+Completion evidence:
+
+- `make lint`, `make build`, and `go test ./...` pass; `aries setup` installs
+  the pinned checkout and verifies it clean.
+- `canvas-list-test` ran end to end against DeepSeek: preprocess seeded Canvas
+  through the forwarder, Hermes made 55 tool calls (30 through the gateway, 25
+  through the SSH bridge), both isolation gates were confirmed, the grader ran,
+  and cleanup left no container or network behind. The verdict was a fail by
+  one row — the grader's judgement of the agent, not a pipeline fault.
+- Running the first profile exposed a stale DeepSeek model list in preflight
+  (the API now serves `deepseek-flash`); fixed in a separate commit.
+- `make test-race` passes. `make integration` passes once the Terminal-Bench 2
+  checkout the OpenClaw integration test expects is installed (`aries setup`
+  with a TB2 profile); it is an environment prerequisite, not a code change.
+  Final Docker inspection found no ARIES containers or networks.
 
 ## R22 — Public SWE-bench Pro benchmark adapter
 
