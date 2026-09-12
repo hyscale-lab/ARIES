@@ -267,6 +267,7 @@ func TestNewValidatesOptions(t *testing.T) {
 		"privileged port":  func(o *Options) { o.GatewayPort = 80 },
 		"application port": func(o *Options) { o.GatewayPort = 20001 },
 		"bad app host":     func(o *Options) { o.AppHost = "host name" },
+		"bracketed host":   func(o *Options) { o.AppHost = "[::1]" },
 		"negative steps":   func(o *Options) { o.MaxSteps = -1 },
 		"bad model name":   func(o *Options) { o.ModelName = "deep seek" },
 	}
@@ -289,6 +290,14 @@ func TestNewValidatesOptions(t *testing.T) {
 	}
 	if benchmark.gatewayPort != DefaultGatewayPort || benchmark.maxSteps != DefaultMaxSteps || benchmark.appHost != "10.148.0.5" {
 		t.Fatalf("defaults not applied: %#v", benchmark)
+	}
+	// The forwarder hands the host to asyncio.open_connection, which takes
+	// IPv6 literals bare, so the validator does too.
+	for _, host := range []string{"fd00::5", "2001:db8::1", "::1", "docker-host.internal"} {
+		options.AppHost = host
+		if _, err := New(options); err != nil {
+			t.Fatalf("app host %q rejected: %v", host, err)
+		}
 	}
 }
 
@@ -360,5 +369,22 @@ func TestSetupMaterializesSiteConfigsOnAnExistingCheckout(t *testing.T) {
 	}
 	if err := Setup(context.Background(), root, "https://example.invalid/toolathlon.git", strings.Repeat("0", 40)); err == nil {
 		t.Fatal("expected a wrong pinned revision to be rejected")
+	}
+}
+
+// The site configs are gitignored, so the revision check cannot see them; a
+// local edit to one would change the pinned benchmark silently.
+func TestSetupRejectsAnEditedSiteConfig(t *testing.T) {
+	root := writeFixture(t)
+	edited := filepath.Join(root, filepath.FromSlash("configs/global_configs.py"))
+	if err := os.WriteFile(edited, []byte("podman_or_docker = 'podman'\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := Setup(context.Background(), root, "https://example.invalid/toolathlon.git", fixtureGitRevision(t, root))
+	if err == nil || !strings.Contains(err.Error(), "differs from its pinned example") {
+		t.Fatalf("err=%v", err)
+	}
+	if got, _ := os.ReadFile(edited); !strings.Contains(string(got), "podman") {
+		t.Fatal("the edited file was overwritten rather than refused")
 	}
 }

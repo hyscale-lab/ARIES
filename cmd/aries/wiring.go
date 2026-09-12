@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/hyscale-lab/aries/internal/app"
 	runtimesglang "github.com/hyscale-lab/aries/internal/modelruntime/sglang"
@@ -62,6 +64,12 @@ func validateComponents(cfg config.Config) error {
 		if cfg.Harness.Type != "hermes" || len(cfg.Harness.MCP.Servers) == 0 {
 			return errors.New("benchmark type \"toolathlon\" requires the hermes harness with a harness.mcp server for the gateway")
 		}
+		// And that server must be the gateway the adapter starts -- the
+		// sandbox's alias on the gateway port. Any other endpoint would
+		// start Hermes with no Toolathlon tools at all.
+		if !hasToolathlonGateway(cfg) {
+			return fmt.Errorf("benchmark type \"toolathlon\" requires a harness.mcp server at http://%s:%d, the gateway the adapter starts", dockersandbox.NetworkAlias, toolathlonGatewayPort(cfg))
+		}
 	default:
 		return fmt.Errorf("unsupported benchmark type %q", cfg.Benchmark.Type)
 	}
@@ -88,6 +96,31 @@ func validateComponents(cfg config.Config) error {
 		return fmt.Errorf("harness type %q requires its paired bridge, not %q", cfg.Harness.Type, cfg.Bridge.Type)
 	}
 	return nil
+}
+
+// toolathlonGatewayPort is the port the adapter will start the gateway on
+// for this profile.
+func toolathlonGatewayPort(cfg config.Config) int {
+	if settings := cfg.Benchmark.Toolathlon; settings != nil && settings.GatewayPort != 0 {
+		return settings.GatewayPort
+	}
+	return toolathlon.DefaultGatewayPort
+}
+
+// hasToolathlonGateway reports whether one of the profile's MCP servers is
+// the sandbox's gateway: the sandbox's network alias on the gateway port.
+func hasToolathlonGateway(cfg config.Config) bool {
+	port := strconv.Itoa(toolathlonGatewayPort(cfg))
+	for _, server := range cfg.Harness.MCP.Servers {
+		parsed, err := url.Parse(server.URL)
+		if err != nil {
+			continue
+		}
+		if parsed.Hostname() == dockersandbox.NetworkAlias && parsed.Port() == port {
+			return true
+		}
+	}
+	return false
 }
 
 // prepareBackend turns the profile's runtime block into the model the harness

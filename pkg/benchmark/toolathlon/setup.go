@@ -1,6 +1,7 @@
 package toolathlon
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -87,14 +88,21 @@ func Setup(ctx context.Context, root, repositoryURL, revision string) error {
 func materializeSiteConfigs(root string) error {
 	for target, example := range siteConfigs {
 		targetPath := filepath.Join(root, filepath.FromSlash(target))
-		if _, err := os.Lstat(targetPath); err == nil {
-			continue
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("inspect toolathlon site config %q: %w", target, err)
-		}
 		content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(example)))
 		if err != nil {
 			return fmt.Errorf("read toolathlon example config %q: %w", example, err)
+		}
+		// The targets are gitignored, so VerifyRevision cannot see them:
+		// an existing one is accepted only when it is the example, byte
+		// for byte. Anything else would change the pinned benchmark.
+		existing, err := os.ReadFile(targetPath)
+		switch {
+		case err == nil && bytes.Equal(existing, content):
+			continue
+		case err == nil:
+			return fmt.Errorf("toolathlon site config %q differs from its pinned example %q; the checkout must not carry local edits", target, example)
+		case !errors.Is(err, os.ErrNotExist):
+			return fmt.Errorf("inspect toolathlon site config %q: %w", target, err)
 		}
 		if err := os.WriteFile(targetPath, content, 0o644); err != nil {
 			return fmt.Errorf("write toolathlon site config %q: %w", target, err)

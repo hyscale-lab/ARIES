@@ -1,6 +1,7 @@
 package toolathlon
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -46,6 +47,41 @@ func TestWriteProjectArchiveCopiesWhatTheRunnerCopies(t *testing.T) {
 		case strings.HasPrefix(member, "tasks/finalpool/excel-only/"):
 			t.Fatalf("archive carries another task: %s", member)
 		}
+	}
+}
+
+// A symlink is followed inside the sandbox, so its target is judged where it
+// resolves from the link's own directory, not by how it is spelled.
+func TestWriteProjectArchiveJudgesSymlinksWhereTheyResolve(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		target  string
+		escapes bool
+	}{
+		{name: "sibling", target: "task_config.json"},
+		{name: "up and back down inside the checkout", target: "../canvas-list-test/task_config.json"},
+		{name: "dotdot after a segment, still inside", target: "docs/../task_config.json"},
+		{name: "plain parent escape", target: "../../../../outside", escapes: true},
+		{name: "escape hidden behind a segment", target: "docs/../../../../../outside", escapes: true},
+		{name: "absolute", target: "/etc/passwd", escapes: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := writeFixture(t)
+			link := filepath.Join(root, "tasks", "finalpool", "canvas-list-test", "link")
+			if err := os.Symlink(filepath.FromSlash(tc.target), link); err != nil {
+				t.Skipf("symlinks unavailable: %v", err)
+			}
+			err := writeProjectArchive(root, "canvas-list-test", filepath.Join(t.TempDir(), "project.tar"))
+			if tc.escapes {
+				if err == nil || !strings.Contains(err.Error(), "escapes the checkout") {
+					t.Fatalf("err=%v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("err=%v", err)
+			}
+		})
 	}
 }
 
