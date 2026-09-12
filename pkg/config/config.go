@@ -973,10 +973,9 @@ func validMCPServerName(name string) bool {
 	return true
 }
 
-// validHostName accepts a DNS name or dotted IPv4 address.
-// validHostName accepts a hostname or a bare IP literal, IPv6 included --
-// the same rule as the adapter's own validator, since the value reaches the
-// sandbox's forwarder unchanged.
+// validHostName accepts a bare IP literal, IPv6 included, or a DNS name
+// judged label by label -- the same rule as the adapter's own validator,
+// since the value reaches the sandbox's forwarder unchanged.
 func validHostName(value string) bool {
 	if net.ParseIP(value) != nil {
 		return true
@@ -984,8 +983,22 @@ func validHostName(value string) bool {
 	if value == "" || len(value) > 253 {
 		return false
 	}
-	for index, character := range value {
-		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || index > 0 && (character == '.' || character == '-') {
+	for _, label := range strings.Split(value, ".") {
+		if !validHostLabel(label) {
+			return false
+		}
+	}
+	return true
+}
+
+// validHostLabel is one DNS label: 1-63 letters, digits or hyphens, not
+// starting or ending in a hyphen.
+func validHostLabel(label string) bool {
+	if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+		return false
+	}
+	for _, character := range label {
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '-' {
 			continue
 		}
 		return false
