@@ -128,6 +128,10 @@ func TestToolathlonBenchmarkValidation(t *testing.T) {
 			input:   strings.Replace(valid, `"tasks":["canvas-list-test"],`, `"tasks":["canvas-list-test"],"toolathlon":{"app_host":"host name"},`, 1),
 			wantErr: "app_host must be a hostname or IP address",
 		},
+		"bracketed app host": {
+			input:   strings.Replace(valid, `"tasks":["canvas-list-test"],`, `"tasks":["canvas-list-test"],"toolathlon":{"app_host":"[fd00::5]"},`, 1),
+			wantErr: "app_host must be a hostname or IP address",
+		},
 		"toolathlon block under terminalbench2": {
 			input:   strings.Replace(validConfig, `"tasks":["fix-git"]}`, `"tasks":["fix-git"],"toolathlon":{"max_steps":5}}`, 1),
 			wantErr: "benchmark.toolathlon must not be set for terminalbench2",
@@ -143,6 +147,13 @@ func TestToolathlonBenchmarkValidation(t *testing.T) {
 				t.Fatalf("error = %q, want it to contain %q", err.Error(), testCase.wantErr)
 			}
 		})
+	}
+	for _, host := range []string{"fd00::5", "2001:db8::1", "::1"} {
+		literal := strings.Replace(valid, `"tasks":["canvas-list-test"],`, `"tasks":["canvas-list-test"],"toolathlon":{"app_host":"`+host+`"},`, 1)
+		cfg, err := Decode(strings.NewReader(literal))
+		if err != nil || cfg.Benchmark.Toolathlon == nil || cfg.Benchmark.Toolathlon.AppHost != host {
+			t.Fatalf("IPv6 app host %q: %v", host, err)
+		}
 	}
 }
 
