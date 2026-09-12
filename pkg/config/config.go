@@ -8,6 +8,7 @@ import (
 	"io"
 	"maps"
 	"math"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -1279,7 +1280,13 @@ func (c Versions) HarnessImage(harnessType string) (string, error) {
 }
 
 // validHostName accepts a DNS name or dotted IPv4 address.
+// validHostName accepts a hostname or a bare IP literal, IPv6 included --
+// the same rule as the adapter's own validator, since the value reaches the
+// sandbox's forwarder unchanged.
 func validHostName(value string) bool {
+	if net.ParseIP(value) != nil {
+		return true
+	}
 	if value == "" || len(value) > 253 {
 		return false
 	}
