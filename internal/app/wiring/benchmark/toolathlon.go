@@ -50,7 +50,9 @@ func toolathlonGatewayPort(cfg config.Config) int {
 }
 
 // hasToolathlonGateway reports whether one of the profile's MCP servers is
-// the sandbox's gateway: the sandbox's network alias on the gateway port.
+// the sandbox's gateway: plain HTTP at the sandbox's network alias on the
+// gateway port. The gateway speaks no TLS, so an https URL would fail its
+// handshake and leave Hermes without tools just as an unrelated host would.
 func hasToolathlonGateway(cfg config.Config) bool {
 	port := strconv.Itoa(toolathlonGatewayPort(cfg))
 	for _, server := range cfg.Harness.MCPServers {
@@ -58,7 +60,7 @@ func hasToolathlonGateway(cfg config.Config) bool {
 		if err != nil {
 			continue
 		}
-		if parsed.Hostname() == taskSandboxAlias && parsed.Port() == port {
+		if parsed.Scheme == "http" && parsed.Hostname() == taskSandboxAlias && parsed.Port() == port {
 			return true
 		}
 	}
