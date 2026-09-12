@@ -433,7 +433,9 @@ var (
 	taskIDPattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 	serverNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 	modelNamePattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]*$`)
-	hostPattern       = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]*$`)
+	// hostPattern is a DNS name label by label: no empty label, no label
+	// starting or ending in a hyphen, none longer than 63 bytes.
+	hostPattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$`)
 )
 
 func safeTaskID(id string) bool {
@@ -442,8 +444,12 @@ func safeTaskID(id string) bool {
 
 // safeExecutionTaskID accepts the logical ID with the runner's zero-padded
 // occurrence suffix, matching the other benchmark packages.
+// safeExecutionTaskID accepts the runner's occurrence form of a logical ID:
+// the ID, a hyphen, and a positive index of at least three digits. It has its
+// own length limit, since a logical ID at its own limit plus the suffix is
+// longer than safeTaskID allows.
 func safeExecutionTaskID(logicalID, id string) bool {
-	if len(id) > 149 || !safeTaskID(id) || !strings.HasPrefix(id, logicalID+"-") {
+	if len(id) > 149 || id == "." || id == ".." || !taskIDPattern.MatchString(id) || !strings.HasPrefix(id, logicalID+"-") {
 		return false
 	}
 	suffix := strings.TrimPrefix(id, logicalID+"-")

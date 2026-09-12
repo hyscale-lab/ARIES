@@ -201,6 +201,7 @@ func TestValidateComponentsRequiresTheToolathlonGateway(t *testing.T) {
 		{name: "no server", cfg: base(), want: "requires the hermes harness with a harness.mcp_servers entry"},
 		{name: "unrelated host", cfg: base(core.MCPServerConfig{Name: "toolathlon", URL: "http://gateway.example:10086/sse", Transport: "sse"}), want: "requires a harness.mcp_servers entry at http://task-sandbox:10086"},
 		{name: "wrong port", cfg: base(core.MCPServerConfig{Name: "toolathlon", URL: "http://task-sandbox:10087/sse", Transport: "sse"}), want: "requires a harness.mcp_servers entry at http://task-sandbox:10086"},
+		{name: "https form", cfg: base(core.MCPServerConfig{Name: "toolathlon", URL: "https://task-sandbox:10086/sse", Transport: "sse"}), want: "requires a harness.mcp_servers entry at http://task-sandbox:10086"},
 		{name: "openclaw harness", cfg: func() config.Config {
 			cfg := base(gateway)
 			cfg.Harness.Type = "openclaw"
