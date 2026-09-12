@@ -94,7 +94,11 @@ func archiveEntry(writer *tar.Writer, root, entry string) error {
 			if err != nil {
 				return fmt.Errorf("read symlink %q: %w", name, err)
 			}
-			if path.IsAbs(target) || strings.HasPrefix(target, "../") || target == ".." {
+			// The link is followed inside the sandbox, so its target is
+			// judged where it resolves from the link's own directory: a
+			// target of "x/../../../out" escapes as surely as "../out".
+			resolved := path.Join(path.Dir(name), target)
+			if path.IsAbs(target) || resolved == ".." || strings.HasPrefix(resolved, "../") {
 				return fmt.Errorf("symlink %q escapes the checkout", name)
 			}
 			return writer.WriteHeader(&tar.Header{Typeflag: tar.TypeSymlink, Name: name, Linkname: target, Mode: 0o777, ModTime: info.ModTime()})

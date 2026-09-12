@@ -33,6 +33,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -461,6 +462,8 @@ func safeModelName(name string) bool {
 	return len(name) <= 128 && modelNamePattern.MatchString(name)
 }
 
+// validHost accepts a hostname or a bare IP literal, IPv6 included: the
+// forwarder passes the value to asyncio.open_connection, which takes both.
 func validHost(host string) bool {
-	return len(host) <= 253 && hostPattern.MatchString(host)
+	return net.ParseIP(host) != nil || (len(host) <= 253 && hostPattern.MatchString(host))
 }
