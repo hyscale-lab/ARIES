@@ -435,7 +435,7 @@ func (manager *Manager) Run(ctx context.Context, instruction string) (core.Harne
 
 	runCtx, cancel := context.WithTimeout(ctx, active.agentTimeout)
 	result, runErr := manager.execAttached(runCtx, active.containerID,
-		[]string{agentWrapperPath, active.model.Model, active.model.Provider, instruction}, workspaceRoot)
+		[]string{agentWrapperPath, active.model.Model, hermesProvider(active.model.Provider), instruction}, workspaceRoot)
 	cancel()
 
 	stdout := redactSession(result.stdout, active)

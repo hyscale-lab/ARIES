@@ -58,8 +58,8 @@ moe
 NCSpeech
 nousresearch
 ntu
-OAuth
 nvidia
+OAuth
 oci
 openai
 openclaw
@@ -73,12 +73,13 @@ pre
 prefill
 preflight
 preload
-Qwen
 prewarm
+Qwen
 Realtime
 reflogs
 reimplement
 relicense
+renderer
 replayable
 roadmap
 runnable
@@ -124,6 +125,7 @@ utf
 uuid
 validator
 verifier
+vllm
 websocket
 workdir
 workdirs

@@ -38,6 +38,27 @@ const (
 	searxngBaseURL = "http://task-sandbox:8888"
 )
 
+// hermesProvider maps the profile's runtime backend onto a provider name
+// Hermes accepts. "deepseek" is a built-in Hermes provider. Neither pinned
+// Hermes version knows "sglang" or a plain "openai" provider
+// (hermes_cli/auth.py PROVIDER_REGISTRY), and the one-shot rejects an unknown
+// name before any request is made. The generic "custom" provider is the one
+// that routes to model.base_url with the configured key, so every
+// OpenAI-compatible backend renders as "custom". The same value is passed to
+// the one-shot as --provider, so the wrapper and the config never disagree.
+func hermesProvider(backend string) string {
+	if openAICompatible(backend) {
+		return "custom"
+	}
+	return backend
+}
+
+// openAICompatible reports whether the backend is a generic OpenAI-compatible
+// server whose base URL must be the versioned /v1 prefix.
+func openAICompatible(provider string) bool {
+	return provider == "sglang" || provider == "openai"
+}
+
 // renderConfig produces the Hermes `config.yaml`. The credential is written as
 // a ${NAME} reference rather than a value: Hermes expands those from the process
 // environment (hermes_cli/config.py::_expand_env_vars), and the wrapper script
@@ -51,10 +72,10 @@ func renderConfig(model core.ModelConfig, maxTurns int, webSearchEnabled, extrac
 	if err := validateModel(model); err != nil {
 		return nil, err
 	}
-	if model.Provider == "sglang" {
-		normalized, err := normalizeSGLangBaseURL(model.BaseURL)
+	if openAICompatible(model.Provider) {
+		normalized, err := normalizeV1BaseURL(model.BaseURL)
 		if err != nil {
-			return nil, fmt.Errorf("Hermes SGLang base URL: %w", err)
+			return nil, fmt.Errorf("Hermes %s base URL: %w", model.Provider, err)
 		}
 		model.BaseURL = normalized
 	}
@@ -64,7 +85,7 @@ func renderConfig(model core.ModelConfig, maxTurns int, webSearchEnabled, extrac
 	var output bytes.Buffer
 	output.WriteString("model:\n")
 	output.WriteString("  default: " + yamlString(model.Model) + "\n")
-	output.WriteString("  provider: " + yamlString(model.Provider) + "\n")
+	output.WriteString("  provider: " + yamlString(hermesProvider(model.Provider)) + "\n")
 	output.WriteString("  base_url: " + yamlString(model.BaseURL) + "\n")
 	output.WriteString("  api_key: " + yamlString("${"+model.APIKeyEnv+"}") + "\n")
 	output.WriteString("  api_mode: \"chat_completions\"\n")
@@ -181,12 +202,12 @@ export ` + tavilyAPIKeyEnv + `
 }
 
 func validateModel(model core.ModelConfig) error {
-	if model.Provider != "deepseek" && model.Provider != "sglang" {
-		return errors.New("Hermes model provider must be deepseek or sglang")
+	if model.Provider != "deepseek" && !openAICompatible(model.Provider) {
+		return errors.New("Hermes model provider must be deepseek, sglang, or openai")
 	}
-	if model.Provider == "sglang" {
-		if _, err := normalizeSGLangBaseURL(model.BaseURL); err != nil {
-			return fmt.Errorf("Hermes SGLang base URL: %w", err)
+	if openAICompatible(model.Provider) {
+		if _, err := normalizeV1BaseURL(model.BaseURL); err != nil {
+			return fmt.Errorf("Hermes %s base URL: %w", model.Provider, err)
 		}
 	} else {
 		parsed, err := url.Parse(model.BaseURL)
@@ -210,7 +231,7 @@ func validateModel(model core.ModelConfig) error {
 	return nil
 }
 
-func normalizeSGLangBaseURL(baseURL string) (string, error) {
+func normalizeV1BaseURL(baseURL string) (string, error) {
 	parsed, err := url.Parse(baseURL)
 	if err != nil || parsed.Scheme != "http" && parsed.Scheme != "https" || parsed.Host == "" || parsed.Opaque != "" || parsed.User != nil || parsed.RawPath != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || strings.Contains(baseURL, "#") {
 		return "", errors.New("must be an absolute HTTP(S) URL without credentials, escaped path, query, or fragment")

@@ -437,3 +437,19 @@ func errString(err error) string {
 	}
 	return err.Error()
 }
+
+// A generic OpenAI-compatible server takes the same bounded /v1/models path as
+// SGLang, and the recorded provider stays the profile's backend name.
+func TestOpenAIPreflightUsesModelListingAndKeepsBackendName(t *testing.T) {
+	model := core.ModelConfig{Provider: "openai", BaseURL: "http://fake.invalid/v1", Model: "served/model", APIKeyEnv: "VLLM_API_KEY"}
+	doer := &sglangPreflightDoer{t: t, wantURL: "http://fake.invalid/v1/models", body: `{"data":[{"id":"served/model"}]}`}
+	validation, err := validateLiveModel(context.Background(), model, func(string) ([]byte, bool) { return []byte("dummy"), true }, doer, nil)
+	if err != nil || validation.Provider != "openai" || validation.Status != liveValidationSucceeded || validation.Attempts != 1 || doer.authorization != "Bearer dummy" {
+		t.Fatalf("validation=%+v auth=%q error=%v", validation, doer.authorization, err)
+	}
+	doer = &sglangPreflightDoer{t: t, wantURL: "http://fake.invalid/v1/models", body: `{"data":[{"id":"other"}]}`}
+	validation, err = validateLiveModel(context.Background(), model, func(string) ([]byte, bool) { return []byte("dummy"), true }, doer, nil)
+	if err == nil || validation.Category != liveValidationModelMissing || validation.Provider != "openai" {
+		t.Fatalf("validation=%+v error=%v", validation, err)
+	}
+}

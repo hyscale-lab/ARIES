@@ -89,7 +89,7 @@ func validateLiveModel(
 		if !isOfficialDeepSeek(model) || model.APIKeyEnv != deepSeekAPIKey {
 			return liveValidationFailure(model, liveValidationConfigurationInvalid, 0)
 		}
-	case "sglang":
+	case "sglang", "openai":
 	default:
 		return liveValidationFailure(model, liveValidationConfigurationInvalid, 0)
 	}
@@ -105,8 +105,8 @@ func validateLiveModel(
 	if len(key) == 0 || len(key) > maxAPIKeyBytes || bytes.ContainsAny(key, "\x00\r\n") {
 		return liveValidationFailure(model, liveValidationCredentialInvalid, 0)
 	}
-	if model.Provider == "sglang" {
-		return validateSGLangModel(ctx, model, key, client)
+	if model.Provider == "sglang" || model.Provider == "openai" {
+		return validateOpenAICompatibleModel(ctx, model, key, client)
 	}
 	if client == nil {
 		client = newDeepSeekHTTPClient()
@@ -139,7 +139,11 @@ func (transport doerTransport) RoundTrip(request *http.Request) (*http.Response,
 	return transport.doer.Do(request)
 }
 
-func validateSGLangModel(ctx context.Context, model core.ModelConfig, key []byte, doer httpDoer) (liveValidation, error) {
+// validateOpenAICompatibleModel performs one bounded GET on the server's
+// /v1/models listing and confirms the configured model ID is served. SGLang
+// and every other OpenAI-compatible server share this path; the recorded
+// provider is the profile's backend name.
+func validateOpenAICompatibleModel(ctx context.Context, model core.ModelConfig, key []byte, doer httpDoer) (liveValidation, error) {
 	var httpClient *http.Client
 	if doer != nil {
 		httpClient = &http.Client{Timeout: deepSeekRequestTimeout, Transport: doerTransport{doer: doer}}
@@ -185,7 +189,7 @@ func validateSGLangModel(ctx context.Context, model core.ModelConfig, key []byte
 	}
 	for _, candidate := range models {
 		if candidate == model.Model {
-			return liveValidation{SchemaVersion: 1, Status: liveValidationSucceeded, Category: liveValidationConfirmed, Provider: "sglang", BaseURL: model.BaseURL, Model: model.Model, Attempts: 1}, nil
+			return liveValidation{SchemaVersion: 1, Status: liveValidationSucceeded, Category: liveValidationConfirmed, Provider: model.Provider, BaseURL: model.BaseURL, Model: model.Model, Attempts: 1}, nil
 		}
 	}
 	return liveValidationFailure(model, liveValidationModelMissing, 1)

@@ -90,7 +90,7 @@ implementations:
 | Benchmark | Terminal-Bench 2; Deep Research Bench; the 731-task public SWE-bench Pro split |
 | Tool sandbox | Docker, using the Moby Go SDK |
 | Tool bridge | OpenClaw–Docker SSH bridge; Hermes–Docker SSH bridge |
-| Model service | External DeepSeek; external or ARIES-managed SGLang |
+| Model service | External DeepSeek; external OpenAI-compatible servers such as vLLM; external or ARIES-managed SGLang |
 
 See [Supported implementations](docs/supported.md) for ownership,
 configuration keys, status, and runnable profiles. ARIES uses explicit
