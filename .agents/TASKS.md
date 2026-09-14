@@ -11,6 +11,10 @@
 - Regression-first unit checks and a real pinned v2026.8.31 one-shot HTTP test
   reproduced the defect, then passed for zero and 0.7 with unrelated request
   fields preserved. Independent diff review found no blocking issue.
+- The same real one-shot now covers legacy v2026.5.29.2 and confirms its
+  request path accepts the explicit context length and sends max tokens,
+  temperature, and custom extra-body data. Source inspection confirms that
+  release ignores only the new absolute `compression.threshold_tokens` cap.
 - Build, unit, race, lint, and every integration package except the unchanged
   SWE-bench Pro LFS fixture pass. That environment gap is recorded under PR #50.
   SDK inspection confirms zero ARIES containers/networks; diff and key scans pass.

@@ -5,7 +5,6 @@ package hermes
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -15,12 +14,28 @@ import (
 )
 
 // Exercise the real one-shot configuration loader and OpenAI SDK serialization,
-// not merely the YAML shape. The fake endpoint stays inside each task container.
-func TestTemperatureReachesRealHermesRequest(t *testing.T) {
-	for _, temperature := range []float64{0, 0.7} {
-		t.Run(fmt.Sprint(temperature), func(t *testing.T) {
+// not merely the YAML shape. The legacy case locks compatibility for the
+// request settings supported by v2026.5.29.2; compression.threshold_tokens is
+// intentionally excluded because that release ignores it. The fake endpoint
+// stays inside each task container.
+func TestRequestSettingsReachRealHermes(t *testing.T) {
+	tests := []struct {
+		name        string
+		image       string
+		temperature float64
+	}{
+		{name: "current-zero", image: "docker.io/nousresearch/hermes-agent:v2026.8.31", temperature: 0},
+		{name: "current-nonzero", image: "docker.io/nousresearch/hermes-agent:v2026.8.31", temperature: 0.7},
+		{name: "legacy-v2026.5.29.2", image: integrationImage, temperature: 0.7},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			temperature := test.temperature
+			if test.image == integrationImage {
+				requireDockerImage(t)
+			}
 			manager, err := New(Options{
-				Image: "docker.io/nousresearch/hermes-agent:v2026.8.31", OutputDir: t.TempDir(),
+				Image: test.image, OutputDir: t.TempDir(),
 				StartTimeout: 90 * time.Second, CleanupTimeout: 60 * time.Second,
 				ExtraBody:    []byte(`{"user":"aries-temperature-regression"}`),
 				APIKeyLookup: func(string) ([]byte, bool) { return []byte("sk-integration-not-a-real-key"), true },
@@ -45,7 +60,10 @@ func TestTemperatureReachesRealHermesRequest(t *testing.T) {
 			request := core.HarnessRequest{
 				RunID: "temperature-integration", TaskID: "temperature",
 				Endpoint: core.ToolEndpoint{Protocol: "ssh", Address: "127.0.0.1:2222", Username: "aries", Network: "bridge", IdentitySourceFile: identity},
-				Model:    core.ModelConfig{Provider: "openai", BaseURL: "http://127.0.0.1:18080/v1", Model: "aries-deterministic", APIKeyEnv: "ARIES_TEST_MODEL_KEY", Temperature: &temperature},
+				Model: core.ModelConfig{
+					Provider: "openai", BaseURL: "http://127.0.0.1:18080/v1", Model: "aries-deterministic",
+					APIKeyEnv: "ARIES_TEST_MODEL_KEY", ContextLength: 262144, MaxTokens: 32768, Temperature: &temperature,
+				},
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 			defer cancel()
@@ -76,6 +94,9 @@ func TestTemperatureReachesRealHermesRequest(t *testing.T) {
 				}
 				if string(body["user"]) != `"aries-temperature-regression"` {
 					t.Errorf("extra_body user=%s", body["user"])
+				}
+				if string(body["max_tokens"]) != "32768" {
+					t.Errorf("request max_tokens=%s", body["max_tokens"])
 				}
 			}
 			if mainRequests == 0 {

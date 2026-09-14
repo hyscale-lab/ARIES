@@ -438,8 +438,13 @@ export VLLM_API_KEY=unused-local-token
 ```
 
 `compression.threshold_tokens` exists since Hermes v2026.8, so the pinned image
-moves to `v2026.8.31`. The rendered `config.yaml` under `<run>/<task>/harness/`
-shows the block exactly as Hermes reads it. The `agent.max_turns` value in that
+moves to `v2026.8.31`. Profiles that omit that absolute compaction cap remain
+compatible with the previously pinned `v2026.5.29.2`: that release accepts
+`model.context_length`, `model.max_tokens`, and custom-provider `extra_body`
+(including the request-level temperature path), but silently ignores
+`compression.threshold_tokens`. The rendered `config.yaml` under
+`<run>/<task>/harness/` shows the block exactly as Hermes reads it. The
+`agent.max_turns` value in that
 file does not bound the one-shot; use `agent_timeout_seconds` in the overrides
 file to bound a run.
 
