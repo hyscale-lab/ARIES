@@ -19,7 +19,7 @@ const validConfig = `{
   "model":{"id":"fake","base_url":"http://127.0.0.1:8080","api_key_env":"DEEPSEEK_API_KEY"}
 }`
 
-const validVersions = `{"terminalbench2":{"repository_url":"https://example.invalid/terminal-bench-2.git","revision":"0123456789abcdef0123456789abcdef01234567"},"deepresearchbench":{"repository_url":"https://example.invalid/deep-research-bench.git","revision":"fedcba9876543210fedcba9876543210fedcba98"},"swebenchpro":{"dataset_repository_url":"https://example.invalid/swe-bench-pro-data.git","dataset_revision":"1111111111111111111111111111111111111111","evaluator_repository_url":"https://example.invalid/swe-bench-pro-evaluator.git","evaluator_revision":"2222222222222222222222222222222222222222"},"openclaw":{"image":"ghcr.io/openclaw/openclaw:2026.7.1"},"hermes":{"image":"docker.io/nousresearch/hermes-agent:v2026.5.29.2"}}`
+const validVersions = `{"terminalbench2":{"repository_url":"https://example.invalid/terminal-bench-2.git","revision":"0123456789abcdef0123456789abcdef01234567"},"deepresearchbench":{"repository_url":"https://example.invalid/deep-research-bench.git","revision":"fedcba9876543210fedcba9876543210fedcba98"},"sweatlasqa":{"repository_url":"https://example.invalid/swe-atlas.git","revision":"1111111111111111111111111111111111111111"},"swebenchpro":{"dataset_repository_url":"https://example.invalid/swe-bench-pro-data.git","dataset_revision":"1111111111111111111111111111111111111111","evaluator_repository_url":"https://example.invalid/swe-bench-pro-evaluator.git","evaluator_revision":"2222222222222222222222222222222222222222"},"openclaw":{"image":"ghcr.io/openclaw/openclaw:2026.7.1"},"hermes":{"image":"docker.io/nousresearch/hermes-agent:v2026.5.29.2"}}`
 
 func TestNormalizedRuntimeSchema(t *testing.T) {
 	cfg, err := Decode(strings.NewReader(validConfig))
@@ -372,6 +372,36 @@ func TestJudgeDisabledValidation(t *testing.T) {
 	}
 }
 
+const validSweatlasqaConfig = `{
+  "name":"test-run","versions_file":"../configs/versions.json",
+  "benchmark":{"type":"sweatlasqa","root":".cache/swe-atlas-qa","tasks":["task-1"],
+    "judge":{"provider":"deepseek","base_url":"https://api.deepseek.com","model":"deepseek-v4-flash","api_key_env":"DEEPSEEK_API_KEY"}},
+  "harness":{"type":"openclaw"},"sandbox":{"type":"docker"},"bridge":{"type":"openclaw-ssh"},
+  "runtime":{"backend":"deepseek","mode":"external"},
+  "model":{"id":"fake","base_url":"http://127.0.0.1:8080","api_key_env":"DEEPSEEK_API_KEY"}
+}`
+
+func TestSweatlasqaJudgeDisabledValidation(t *testing.T) {
+	if _, err := Decode(strings.NewReader(validSweatlasqaConfig)); err != nil {
+		t.Fatal(err)
+	}
+
+	judgeDisabled := strings.Replace(validSweatlasqaConfig, `"judge":{"provider":"deepseek","base_url":"https://api.deepseek.com","model":"deepseek-v4-flash","api_key_env":"DEEPSEEK_API_KEY"}`, `"judge":{"enabled":false}`, 1)
+	if _, err := Decode(strings.NewReader(judgeDisabled)); err != nil {
+		t.Fatalf("judge.enabled:false alone rejected: %v", err)
+	}
+
+	judgeDisabledWithFields := strings.Replace(validSweatlasqaConfig, `"judge":{"provider":"deepseek"`, `"judge":{"enabled":false,"provider":"deepseek"`, 1)
+	if _, err := Decode(strings.NewReader(judgeDisabledWithFields)); err == nil {
+		t.Fatal("expected rejection of judge model fields set alongside judge.enabled:false")
+	}
+
+	missingJudge := strings.Replace(validSweatlasqaConfig, ",\n    \"judge\":{\"provider\":\"deepseek\",\"base_url\":\"https://api.deepseek.com\",\"model\":\"deepseek-v4-flash\",\"api_key_env\":\"DEEPSEEK_API_KEY\"}", ``, 1)
+	if _, err := Decode(strings.NewReader(missingJudge)); err == nil {
+		t.Fatal("expected rejection of a missing judge block for sweatlasqa")
+	}
+}
+
 func TestTerminalBench2RejectsEnvironmentAndJudge(t *testing.T) {
 	cases := map[string]struct {
 		input   string
@@ -493,7 +523,7 @@ func TestCheckedInProfilesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 12 {
+	if len(paths) != 13 {
 		t.Fatalf("profiles=%v", paths)
 	}
 	for _, path := range paths {
@@ -572,7 +602,7 @@ func TestSWEbenchProVersionPinsAreMandatory(t *testing.T) {
 // image is only an error for the harness that actually needs it. An image that
 // is present is still pin-validated.
 func TestVersionsRequireOnlyTheSelectedHarnessImage(t *testing.T) {
-	withoutHermes := `{"terminalbench2":{"repository_url":"https://example.invalid/terminal-bench-2.git","revision":"0123456789abcdef0123456789abcdef01234567"},"deepresearchbench":{"repository_url":"https://example.invalid/deep-research-bench.git","revision":"fedcba9876543210fedcba9876543210fedcba98"},"swebenchpro":{"dataset_repository_url":"https://example.invalid/swe-bench-pro-data.git","dataset_revision":"1111111111111111111111111111111111111111","evaluator_repository_url":"https://example.invalid/swe-bench-pro-evaluator.git","evaluator_revision":"2222222222222222222222222222222222222222"},"openclaw":{"image":"ghcr.io/openclaw/openclaw:2026.7.1"}}`
+	withoutHermes := `{"terminalbench2":{"repository_url":"https://example.invalid/terminal-bench-2.git","revision":"0123456789abcdef0123456789abcdef01234567"},"deepresearchbench":{"repository_url":"https://example.invalid/deep-research-bench.git","revision":"fedcba9876543210fedcba9876543210fedcba98"},"sweatlasqa":{"repository_url":"https://example.invalid/swe-atlas.git","revision":"1111111111111111111111111111111111111111"},"swebenchpro":{"dataset_repository_url":"https://example.invalid/swe-bench-pro-data.git","dataset_revision":"1111111111111111111111111111111111111111","evaluator_repository_url":"https://example.invalid/swe-bench-pro-evaluator.git","evaluator_revision":"2222222222222222222222222222222222222222"},"openclaw":{"image":"ghcr.io/openclaw/openclaw:2026.7.1"}}`
 	versions, err := DecodeVersions(strings.NewReader(withoutHermes))
 	if err != nil {
 		t.Fatalf("catalog without hermes.image was rejected: %v", err)

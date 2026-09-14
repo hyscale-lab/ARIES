@@ -115,19 +115,21 @@ type BenchmarkEnvironment struct {
 }
 
 // JudgeConfig identifies the LLM used to grade Deep Research Bench reports
-// (see BenchmarkConfig.Judge). It is intentionally a distinct type from
-// ProfileModel so judge-specific fields can be added later without colliding
-// with the harness model's shape.
+// or SWE-Atlas QA answers (see BenchmarkConfig.Judge). It is intentionally a
+// distinct type from ProfileModel so judge-specific fields can be added
+// later without colliding with the harness model's shape.
 //
-// Enabled is a master switch for all LLM-based grading, not just RACE:
-// setting it to false also disables FACT (see BenchmarkConfig.Fact), even
-// if a fact block is separately configured — a still-present fact block is
-// silently skipped rather than rejected in that case (see
-// deepresearchbench.New's FactSkipReason). It is a pointer so "unset"
-// (defaults to enabled, matching today's always-on RACE behavior) is
-// distinguishable from an explicit "false", mirroring
-// HarnessSubagentsConfig.Enabled. The other fields must be left empty when
-// Enabled is false, since they would otherwise be meaningless.
+// Enabled is a master switch for all LLM-based grading. For
+// deepresearchbench, setting it to false also disables FACT (see
+// BenchmarkConfig.Fact), even if a fact block is separately configured — a
+// still-present fact block is silently skipped rather than rejected in that
+// case (see deepresearchbench.New's FactSkipReason). For sweatlasqa, setting
+// it to false skips rubric grading entirely (see sweatlas.New's
+// JudgeDisabled). It is a pointer so "unset" (defaults to enabled, matching
+// today's always-on grading behavior) is distinguishable from an explicit
+// "false", mirroring HarnessSubagentsConfig.Enabled. The other fields must
+// be left empty when Enabled is false, since they would otherwise be
+// meaningless.
 type JudgeConfig struct {
 	Enabled   *bool  `json:"enabled,omitempty"`
 	Provider  string `json:"provider"`
@@ -257,6 +259,7 @@ func (c Config) CoreModel() core.ModelConfig {
 type Versions struct {
 	TerminalBench2    TerminalBench2Versions    `json:"terminalbench2"`
 	DeepResearchBench DeepResearchBenchVersions `json:"deepresearchbench"`
+	SWEAtlas          SWEAtlasVersions          `json:"sweatlasqa"`
 	SWEbenchPro       SWEbenchProVersions       `json:"swebenchpro"`
 	OpenClaw          OpenClawVersions          `json:"openclaw"`
 	Hermes            HermesVersions            `json:"hermes"`
@@ -268,6 +271,11 @@ type TerminalBench2Versions struct {
 }
 
 type DeepResearchBenchVersions struct {
+	RepositoryURL string `json:"repository_url"`
+	Revision      string `json:"revision"`
+}
+
+type SWEAtlasVersions struct {
 	RepositoryURL string `json:"repository_url"`
 	Revision      string `json:"revision"`
 }
@@ -593,6 +601,36 @@ func (c *Config) validateBenchmarkType() error {
 			return errors.New("fact must not be set for terminalbench2")
 		}
 		return nil
+	case "sweatlasqa":
+		judge := c.Benchmark.Judge
+		if judge == nil {
+			return errors.New("benchmark.judge is required for sweatlasqa")
+		}
+		if judge.Enabled != nil && !*judge.Enabled {
+			if judge.Provider != "" || judge.BaseURL != "" || judge.ID != "" || judge.APIKeyEnv != "" {
+				return errors.New("judge fields must not be set when judge.enabled is false for sweatlasqa")
+			}
+		} else {
+			if strings.TrimSpace(judge.Provider) == "" {
+				return errors.New("judge.provider is required for sweatlasqa")
+			}
+			if err := validateHTTPBaseURL("judge.base_url", judge.BaseURL); err != nil {
+				return err
+			}
+			if strings.TrimSpace(judge.ID) == "" {
+				return errors.New("judge.model is required for sweatlasqa")
+			}
+			if !validEnvName(judge.APIKeyEnv) {
+				return errors.New("judge.api_key_env must be an environment variable name")
+			}
+		}
+		if c.Benchmark.Environment != nil {
+			return errors.New("benchmark.environment must not be set for sweatlasqa")
+		}
+		if c.Benchmark.Fact != nil {
+			return errors.New("fact must not be set for sweatlasqa")
+		}
+		return nil
 	case "swebenchpro":
 		if c.Benchmark.Environment != nil {
 			return errors.New("benchmark.environment must not be set for swebenchpro")
@@ -803,6 +841,9 @@ func (c Versions) validate() error {
 		return err
 	}
 	if err := validateRepositoryPin("deepresearchbench", c.DeepResearchBench.RepositoryURL, c.DeepResearchBench.Revision); err != nil {
+		return err
+	}
+	if err := validateRepositoryPin("sweatlasqa", c.SWEAtlas.RepositoryURL, c.SWEAtlas.Revision); err != nil {
 		return err
 	}
 	if err := validateRepositoryPin("swebenchpro.dataset", c.SWEbenchPro.DatasetRepositoryURL, c.SWEbenchPro.DatasetRevision); err != nil {
