@@ -293,9 +293,10 @@ func yamlFloat(value float64) string {
 
 // MCPServer is one remote MCP server Hermes connects to at startup, rendered
 // under Hermes's `mcp_servers` key. Hermes registers every tool the server
-// lists as `mcp_<name>_<tool>`; with no MCP server named in
-// platform_toolsets, all configured servers are enabled
-// (hermes_cli/tools_config.py). A benchmark that exposes its tools this way
+// lists -- directly as `mcp_<name>_<tool>` up to v2026.8.3, and as
+// `mcp__<name>__<tool>` behind its tool_describe/tool_call pair from
+// v2026.8.31; with no MCP server named in platform_toolsets, all configured
+// servers are enabled (hermes_cli/tools_config.py). A benchmark that exposes its tools this way
 // (Toolathlon's gateway) is reached through the sandbox's fixed
 // `task-sandbox` network alias, like searxngBaseURL above.
 type MCPServer struct {
