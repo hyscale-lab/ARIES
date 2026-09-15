@@ -133,3 +133,16 @@ workdirs
 worktree
 xfs
 yaml
+toolathlon
+toolathlon's
+woocommerce
+poste
+hkust
+nlp
+forwarder
+preprocess
+mcp
+sse
+arxiv
+youtube
+wandb

@@ -107,6 +107,9 @@ type Options struct {
 	// renderConfig). Nil keeps Hermes's own defaults.
 	Compaction *CompactionSettings
 	ExtraBody  []byte
+	// MCPServers are remote MCP servers rendered into config.yaml; Hermes
+	// connects to each at startup and registers its tools.
+	MCPServers []MCPServer
 	Logger     *logrus.Logger
 }
 
@@ -142,6 +145,7 @@ type Manager struct {
 	maxConcurrentSubagents int
 	compaction             *CompactionSettings
 	extraBody              []byte
+	mcpServers             []MCPServer
 	logger                 *logrus.Logger
 	apiKeyLookup           func(string) ([]byte, bool)
 	newID                  func() (string, error)
@@ -233,6 +237,11 @@ func New(options Options) (*Manager, error) {
 	if options.APIKeyLookup == nil {
 		options.APIKeyLookup = environmentAPIKeyLookup
 	}
+	// Profile errors in the MCP block surface here rather than at the first
+	// task's Start.
+	if _, err := renderMCPServers(options.MCPServers); err != nil {
+		return nil, err
+	}
 	return &Manager{
 		client: api, image: options.Image, outputDir: outputDir,
 		cleanupTimeout: options.CleanupTimeout, startTimeout: options.StartTimeout,
@@ -241,6 +250,7 @@ func New(options Options) (*Manager, error) {
 		extractAPIKeyEnv: options.ExtractAPIKeyEnv, logger: options.Logger,
 		subagentsEnabled: options.SubagentsEnabled, maxConcurrentSubagents: options.MaxConcurrentSubagents,
 		compaction: options.Compaction, extraBody: bytes.Clone(options.ExtraBody),
+		mcpServers:   append([]MCPServer(nil), options.MCPServers...),
 		apiKeyLookup: options.APIKeyLookup, newID: randomID,
 	}, nil
 }
@@ -277,6 +287,11 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	if err != nil {
 		return err
 	}
+	mcpBlock, err := renderMCPServers(manager.mcpServers)
+	if err != nil {
+		return err
+	}
+	configuration = append(configuration, mcpBlock...)
 	environment, err := containerEnvironment(request.Endpoint, workspaceRoot, manager.terminalTimeout, manager.webSearchEnabled, request.RunID, request.TaskID)
 	if err != nil {
 		return err
