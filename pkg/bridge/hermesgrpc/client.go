@@ -79,6 +79,11 @@ func ClientMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 	connection, err := grpc.NewClient(target,
 		grpc.WithTransportCredentials(transport),
+		// grpc-go honours HTTPS_PROXY by default. The bridge is reachable only
+		// on the task network and a proxy would carry every script, its stdin
+		// and all output off that network, so proxying is refused outright
+		// rather than left to whatever the harness image's environment says.
+		grpc.WithNoProxy(),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(maxMessageBytes),
 			grpc.MaxCallSendMsgSize(maxMessageBytes),
