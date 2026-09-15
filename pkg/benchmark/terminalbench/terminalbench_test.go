@@ -318,6 +318,39 @@ func TestLoadFixGitMapsGenericTaskAndKeepsVerifierPrivate(t *testing.T) {
 	}
 }
 
+func TestTasksRaiseVerifierTimeoutToFloorButNeverLowerIt(t *testing.T) {
+	root := writeArbitraryFixture(t) // verifier.timeout_sec = 360
+	for _, tc := range []struct {
+		name  string
+		floor time.Duration
+		want  time.Duration
+	}{
+		{"no floor keeps the task value", 0, 6 * time.Minute},
+		{"a floor above the task value raises it", 15 * time.Minute, 15 * time.Minute},
+		{"a floor below the task value leaves it", time.Minute, 6 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			benchmark, err := New(Options{Root: root, TaskIDs: []string{arbitraryTaskID}, OutputDir: t.TempDir(), Revision: fixtureGitRevision(root), VerifierTimeoutFloor: tc.floor})
+			if err != nil {
+				t.Fatal(err)
+			}
+			tasks, err := benchmark.Tasks(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tasks[0].Timeout != 750*time.Second {
+				t.Fatalf("agent timeout changed: %v", tasks[0].Timeout)
+			}
+			if got := benchmark.details[arbitraryTaskID].timeout; got != tc.want {
+				t.Fatalf("verifier timeout = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	if _, err := New(Options{Root: root, TaskIDs: []string{arbitraryTaskID}, OutputDir: t.TempDir(), VerifierTimeoutFloor: -time.Second}); err == nil {
+		t.Fatal("accepted a negative floor")
+	}
+}
+
 func TestLoadArbitraryTaskMapsGenericFieldsWithoutTaskSpecificRules(t *testing.T) {
 	root := writeArbitraryFixture(t)
 
