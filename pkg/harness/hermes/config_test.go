@@ -372,7 +372,7 @@ func TestContainerEnvironmentSetsSearXNGURLWhenWebSearchEnabled(t *testing.T) {
 // --toolsets is unusable on the pinned Hermes build, so the wrapper must not
 // pass it; toolsets come from the rendered config instead.
 func TestAgentWrapperExportsKeyAndAvoidsToolsetsFlag(t *testing.T) {
-	script := string(agentWrapperScript("DEEPSEEK_API_KEY", false))
+	script := string(agentWrapperScript("DEEPSEEK_API_KEY", false, false))
 	for _, want := range []string{
 		"DEEPSEEK_API_KEY=\"$(cat " + modelKeyPath + ")\"",
 		"export DEEPSEEK_API_KEY",
@@ -391,7 +391,7 @@ func TestAgentWrapperExportsKeyAndAvoidsToolsetsFlag(t *testing.T) {
 }
 
 func TestAgentWrapperExportsExtractKeyWhenEnabled(t *testing.T) {
-	script := string(agentWrapperScript("DEEPSEEK_API_KEY", true))
+	script := string(agentWrapperScript("DEEPSEEK_API_KEY", true, false))
 	for _, want := range []string{
 		"DEEPSEEK_API_KEY=\"$(cat " + modelKeyPath + ")\"",
 		"export DEEPSEEK_API_KEY",
@@ -432,5 +432,99 @@ func TestRenderConfigMapsOpenAICompatibleBackendsToCustomProvider(t *testing.T) 
 	}
 	if !strings.Contains(string(rendered), `provider: "deepseek"`) || hermesProvider("deepseek") != "deepseek" {
 		t.Fatal("deepseek provider was rewritten")
+	}
+}
+
+func validGRPCEndpoint() core.ToolEndpoint {
+	return core.ToolEndpoint{
+		Protocol: "grpc", Address: "172.17.0.1:41234", Username: "aries", Network: "aries-net",
+		ClientCommand: clientContainerFS, ClientSourceFile: "/tmp/aries-grpc",
+		IdentityFile: grpcIdentityPath, IdentitySourceFile: "/tmp/client.pem",
+		KnownHostsFile: grpcTrustedPath, KnownHostsSourceFile: "/tmp/server.crt",
+	}
+}
+
+// The gRPC endpoint must not disturb how Hermes selects its backend: it still
+// reads TERMINAL_ENV=ssh and the TERMINAL_SSH_* block, and reaches ARIES's
+// client only because that client shadows `ssh` on PATH. Only the identity
+// path moves, and the client's own settings are added.
+func TestContainerEnvironmentKeepsTheSSHBackendUnderGRPC(t *testing.T) {
+	environment, err := containerEnvironment(validGRPCEndpoint(), "/aries/workspace", 180, false, "run-1", "fix-git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, entry := range environment {
+		name, value, _ := strings.Cut(entry, "=")
+		got[name] = value
+	}
+	want := map[string]string{
+		"HERMES_HOME":            stateContainerPath,
+		"TERMINAL_ENV":           "ssh",
+		"TERMINAL_SSH_HOST":      "172.17.0.1",
+		"TERMINAL_SSH_PORT":      "41234",
+		"TERMINAL_SSH_USER":      "aries",
+		"TERMINAL_SSH_KEY":       grpcIdentityPath,
+		"TERMINAL_CWD":           "/aries/workspace",
+		"TERMINAL_TIMEOUT":       "180",
+		"ARIES_RUN_ID":           "run-1",
+		"ARIES_TASK_ID":          "fix-git",
+		"HERMES_WRITE_SAFE_ROOT": "",
+		"ARIES_GRPC_TARGET":      "172.17.0.1:41234",
+		"ARIES_GRPC_IDENTITY":    grpcIdentityPath,
+		"ARIES_GRPC_TRUSTED":     grpcTrustedPath,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("environment=%v", environment)
+	}
+	for name, value := range want {
+		if got[name] != value {
+			t.Fatalf("%s=%q, want %q", name, got[name], value)
+		}
+	}
+}
+
+// An SSH endpoint must gain nothing from the gRPC support.
+func TestContainerEnvironmentLeavesSSHUntouched(t *testing.T) {
+	environment, err := containerEnvironment(validEndpoint(), "/aries/workspace", 180, false, "run-1", "fix-git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range environment {
+		if strings.HasPrefix(entry, "ARIES_GRPC_") {
+			t.Fatalf("SSH endpoint carried %q", entry)
+		}
+	}
+}
+
+func TestContainerEnvironmentRejectsUnusableGRPCEndpoints(t *testing.T) {
+	cases := map[string]func(*core.ToolEndpoint){
+		"missing client command": func(e *core.ToolEndpoint) { e.ClientCommand = "" },
+		"client command moved":   func(e *core.ToolEndpoint) { e.ClientCommand = "/usr/bin/ssh" },
+		"missing client source":  func(e *core.ToolEndpoint) { e.ClientSourceFile = "" },
+		"identity path moved":    func(e *core.ToolEndpoint) { e.IdentityFile = "/tmp/elsewhere.pem" },
+		"trusted path moved":     func(e *core.ToolEndpoint) { e.KnownHostsFile = "/tmp/elsewhere.crt" },
+		"missing trusted source": func(e *core.ToolEndpoint) { e.KnownHostsSourceFile = "" },
+		"unknown protocol":       func(e *core.ToolEndpoint) { e.Protocol = "quic" },
+	}
+	for name, mutate := range cases {
+		endpoint := validGRPCEndpoint()
+		mutate(&endpoint)
+		if _, err := containerEnvironment(endpoint, "/aries/workspace", 180, false, "run-1", "fix-git"); err == nil {
+			t.Fatalf("%s: invalid endpoint was accepted", name)
+		}
+	}
+}
+
+// The wrapper is the only place ARIES can put its client ahead of the image's
+// own ssh, because Hermes resolves the client by name.
+func TestAgentWrapperShadowsSSHOnlyForGRPC(t *testing.T) {
+	shimmed := string(agentWrapperScript("DEEPSEEK_API_KEY", false, true))
+	if !strings.Contains(shimmed, "PATH="+clientBinDir+":$PATH") {
+		t.Fatalf("wrapper does not prepend the client directory:\n%s", shimmed)
+	}
+	plain := string(agentWrapperScript("DEEPSEEK_API_KEY", false, false))
+	if strings.Contains(plain, clientBinDir) {
+		t.Fatalf("SSH wrapper was given a PATH shim:\n%s", plain)
 	}
 }
