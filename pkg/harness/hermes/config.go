@@ -246,6 +246,11 @@ func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *Voi
 			output.WriteString("  extract_backend: \"tavily\"\n")
 		}
 	}
+	// Hermes registers every tool a server lists -- directly as
+	// mcp_<name>_<tool> up to v2026.8.3, and as mcp__<name>__<tool> behind
+	// its tool_describe/tool_call pair from v2026.8.31; with no MCP server
+	// named in platform_toolsets, all configured servers are enabled
+	// (hermes_cli/tools_config.py).
 	if len(settings.mcpServers) > 0 {
 		output.WriteString("\nmcp_servers:\n")
 		for _, server := range settings.mcpServers {
