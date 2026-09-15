@@ -2,9 +2,11 @@ package hermesgrpc
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -21,7 +23,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -84,9 +85,32 @@ func (sandbox *testSandbox) snapshot() []core.Command {
 	return append([]core.Command(nil), sandbox.commands...)
 }
 
+// Payloads are Hermes-shaped because the bridge enforces Hermes's grammar:
+// the client sends what OpenSSH would have put on the wire, and the bridge
+// decodes it. A bare script is not a valid request.
+const (
+	agentPayload   = "bash -c 'echo hi'"
+	catPayload     = "bash -c cat"
+	falsePayload   = "bash -c false"
+	sleepPayload   = "bash -c sleep"
+	syncPayload    = "mkdir -p /root/.hermes /root/.hermes/credentials"
+	garbagePayload = "curl http://example.invalid"
+)
+
+func fakeClient(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "aries-grpc")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o555); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func newTestManager(t *testing.T, outputDir string) *Manager {
 	t.Helper()
-	manager, err := New(Options{OutputDir: outputDir, CleanupTimeout: 5 * time.Second})
+	manager, err := New(Options{
+		OutputDir: outputDir, CleanupTimeout: 5 * time.Second, ClientPath: fakeClient(t),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,8 +118,8 @@ func newTestManager(t *testing.T, outputDir string) *Manager {
 }
 
 // dial reproduces what a harness-side client must do: load the staged
-// certificate and key, trust the bridge's certificate, and present the
-// session identity on every call.
+// certificate and key and trust the bridge's certificate. There is no
+// per-call identity token; the pinned certificate is the identity.
 func dial(t *testing.T, endpoint core.ToolEndpoint) (sandboxv1.SandboxClient, func()) {
 	t.Helper()
 	certificate, err := tls.LoadX509KeyPair(endpoint.KnownHostsSourceFile, endpoint.IdentitySourceFile)
@@ -126,16 +150,6 @@ func dial(t *testing.T, endpoint core.ToolEndpoint) (sandboxv1.SandboxClient, fu
 		t.Fatalf("dial bridge: %v", err)
 	}
 	return sandboxv1.NewSandboxClient(connection), func() { _ = connection.Close() }
-}
-
-func sessionContext(t *testing.T, manager *Manager) context.Context {
-	t.Helper()
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	if manager.active == nil {
-		t.Fatal("no active session")
-	}
-	return metadata.AppendToOutgoingContext(context.Background(), sessionHeader, manager.active.sessionID)
 }
 
 func readToolCalls(t *testing.T, path string) []map[string]any {
@@ -189,13 +203,16 @@ func TestBridgeProxiesCommandsAndRetainsEvidence(t *testing.T) {
 	if endpoint.Network != "sandbox-network-name" {
 		t.Fatalf("endpoint network = %q", endpoint.Network)
 	}
-	if endpoint.ClientCommand != "" || endpoint.ClientSourceFile != "" {
-		t.Fatalf("bridge advertised a client command: %#v", endpoint)
+	if endpoint.ClientCommand != clientContainerPath || endpoint.ClientSourceFile == "" {
+		t.Fatalf("bridge did not advertise its staged client: %#v", endpoint)
+	}
+	if info, err := os.Stat(endpoint.ClientSourceFile); err != nil || info.Mode().Perm() != 0o555 {
+		t.Fatalf("staged client = %v, %v", info, err)
 	}
 
 	client, closeClient := dial(t, endpoint)
 	defer closeClient()
-	response, err := client.Exec(sessionContext(t, manager), &sandboxv1.ExecRequest{Script: "echo hi"})
+	response, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: agentPayload})
 	if err != nil {
 		t.Fatalf("Exec() error = %v", err)
 	}
@@ -232,8 +249,8 @@ func TestBridgeProxiesCommandsAndRetainsEvidence(t *testing.T) {
 	}
 	record := records[0]
 	for field, want := range map[string]any{
-		"operation_class": "exec", "status": "completed", "path": remoteShellPath,
-		"workdir": "/app", "command": "echo hi",
+		"operation_class": kindAgent, "status": "completed", "path": remoteShellPath,
+		"workdir": "/app", "command": agentPayload,
 		"run_id": "test-run", "task_id": "test-task",
 		"container_id": "sandbox-container-id", "container_name": "sandbox-container-name",
 	} {
@@ -257,12 +274,12 @@ func TestBridgeProxiesCommandsAndRetainsEvidence(t *testing.T) {
 
 func TestBridgePassesStdinThrough(t *testing.T) {
 	sandbox := &testSandbox{result: core.CommandResult{ExitCode: 0}}
-	manager, endpoint := startBridge(t, sandbox)
+	_, endpoint := startBridge(t, sandbox)
 	client, closeClient := dial(t, endpoint)
 	defer closeClient()
 
-	if _, err := client.Exec(sessionContext(t, manager), &sandboxv1.ExecRequest{
-		Script: "cat", Stdin: []byte("piped-input"),
+	if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{
+		Script: catPayload, Stdin: []byte("piped-input"),
 	}); err != nil {
 		t.Fatalf("Exec() error = %v", err)
 	}
@@ -277,11 +294,11 @@ func TestBridgePassesStdinThrough(t *testing.T) {
 // a command that failed is not a bridge that failed.
 func TestNonZeroExitIsNotAnRPCError(t *testing.T) {
 	sandbox := &testSandbox{result: core.CommandResult{ExitCode: 42}}
-	manager, endpoint := startBridge(t, sandbox)
+	_, endpoint := startBridge(t, sandbox)
 	client, closeClient := dial(t, endpoint)
 	defer closeClient()
 
-	response, err := client.Exec(sessionContext(t, manager), &sandboxv1.ExecRequest{Script: "false"})
+	response, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: falsePayload})
 	if err != nil {
 		t.Fatalf("non-zero exit surfaced as an RPC error: %v", err)
 	}
@@ -327,7 +344,7 @@ func TestStopCancelsInFlightCall(t *testing.T) {
 	callDone := make(chan struct{})
 	go func() {
 		defer close(callDone)
-		_, _ = client.Exec(sessionContext(t, manager), &sandboxv1.ExecRequest{Script: "sleep"})
+		_, _ = client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: sleepPayload})
 	}()
 	// Let the call reach the blocked sandbox before revoking.
 	time.Sleep(200 * time.Millisecond)
@@ -355,36 +372,26 @@ func TestRevokedSessionRefusedAtTheGuard(t *testing.T) {
 	session := manager.active
 	manager.mu.Unlock()
 
-	authorized := metadata.NewIncomingContext(context.Background(),
-		metadata.Pairs(sessionHeader, session.sessionID))
-
-	if err := session.authorize(authorized); err != nil {
-		t.Fatalf("a live session refused a valid identity: %v", err)
+	if err := session.authorize(agentPayload); err != nil {
+		t.Fatalf("a live session refused a call: %v", err)
 	}
 
 	// revoke is idempotent, so a later Stop is still safe.
 	session.revoke()
 
-	if err := session.authorize(authorized); status.Code(err) != codes.FailedPrecondition {
+	if err := session.authorize(agentPayload); status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("revoked session = %v, want FailedPrecondition", err)
-	}
-	wrong := metadata.NewIncomingContext(context.Background(),
-		metadata.Pairs(sessionHeader, "not-the-session"))
-	if err := session.authorize(wrong); err == nil {
-		t.Fatal("a wrong session identity was accepted")
 	}
 
 	if err := manager.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	records := readToolCalls(t, endpoint.LogPaths[0])
-	if len(records) != 2 {
-		t.Fatalf("refusals recorded = %d, want 2: %#v", len(records), records)
+	if len(records) != 1 {
+		t.Fatalf("refusals recorded = %d, want 1: %#v", len(records), records)
 	}
-	for _, record := range records {
-		if record["status"] != "rejected" {
-			t.Fatalf("record = %#v", record)
-		}
+	if records[0]["status"] != "rejected" || records[0]["command"] != agentPayload {
+		t.Fatalf("record = %#v", records[0])
 	}
 }
 
@@ -397,13 +404,13 @@ func TestRevokedTransportIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	callCtx := sessionContext(t, manager)
+	callCtx := context.Background()
 	client, closeClient := dial(t, endpoint)
 	defer closeClient()
 	if err := manager.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.Exec(callCtx, &sandboxv1.ExecRequest{Script: "echo hi"}); err == nil {
+	if _, err := client.Exec(callCtx, &sandboxv1.ExecRequest{Script: agentPayload}); err == nil {
 		t.Fatal("a revoked session accepted a call")
 	}
 	if len(sandbox.snapshot()) != 0 {
@@ -411,28 +418,167 @@ func TestRevokedTransportIsRefused(t *testing.T) {
 	}
 }
 
-// TestRejectedCallIsRecorded pins the gap the SSH bridge leaves: several
-// refusal classes there produce no audit entry at all.
-func TestRejectedCallIsRecorded(t *testing.T) {
+// TestFileSyncIsDeniedAndRecorded is the policy gate the migration must not
+// lose: Hermes's ~/.hermes sync carries harness scaffold and the credential
+// files iter_sync_files collects, and the container it targets is the one the
+// verifier later inspects. The refusal is enforced on the server, so a client
+// that skipped the shim could not route around it.
+func TestFileSyncIsDeniedAndRecorded(t *testing.T) {
 	sandbox := &testSandbox{result: core.CommandResult{ExitCode: 0}}
 	manager, endpoint := startBridge(t, sandbox)
 	client, closeClient := dial(t, endpoint)
 	defer closeClient()
 
-	wrong := metadata.AppendToOutgoingContext(context.Background(), sessionHeader, "not-the-session")
-	_, err := client.Exec(wrong, &sandboxv1.ExecRequest{Script: "echo hi"})
+	_, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: syncPayload})
 	if status.Code(err) != codes.PermissionDenied {
-		t.Fatalf("wrong session identity = %v, want PermissionDenied", err)
+		t.Fatalf("file sync = %v, want PermissionDenied", err)
 	}
 	if len(sandbox.snapshot()) != 0 {
-		t.Fatal("a refused call reached the sandbox")
+		t.Fatal("a denied sync reached the sandbox")
 	}
 	if err := manager.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	records := readToolCalls(t, endpoint.LogPaths[0])
-	if len(records) != 1 || records[0]["status"] != "rejected" {
-		t.Fatalf("refusal was not recorded: %#v", records)
+	if len(records) != 1 {
+		t.Fatalf("records = %#v", records)
+	}
+	// The verbatim payload must survive. The SSH bridge keeps only a hash here
+	// and puts the bytes in ssh_raw.log, which this bridge does not write.
+	for field, want := range map[string]any{
+		"operation_class": kindSync, "status": "denied", "command": syncPayload,
+	} {
+		if records[0][field] != want {
+			t.Fatalf("record[%q] = %v, want %v", field, records[0][field], want)
+		}
+	}
+}
+
+// TestUndecodablePayloadIsRejectedAndRecorded covers the other refusal class.
+func TestUndecodablePayloadIsRejectedAndRecorded(t *testing.T) {
+	sandbox := &testSandbox{result: core.CommandResult{ExitCode: 0}}
+	manager, endpoint := startBridge(t, sandbox)
+	client, closeClient := dial(t, endpoint)
+	defer closeClient()
+
+	_, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: garbagePayload})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("undecodable payload = %v, want InvalidArgument", err)
+	}
+	if len(sandbox.snapshot()) != 0 {
+		t.Fatal("an undecodable payload reached the sandbox")
+	}
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	records := readToolCalls(t, endpoint.LogPaths[0])
+	if len(records) != 1 {
+		t.Fatalf("records = %#v", records)
+	}
+	if records[0]["operation_class"] != kindUnknown || records[0]["status"] != "rejected" {
+		t.Fatalf("record = %#v", records[0])
+	}
+	if records[0]["command"] != garbagePayload {
+		t.Fatalf("refused payload was not retained: %#v", records[0])
+	}
+}
+
+// TestBootstrapProbeRunsThroughPOSIXShell pins that the two probes replay
+// literally through /bin/sh, so `echo $HOME` reports the sandbox's own home
+// rather than a value ARIES invents.
+func TestBootstrapProbeRunsThroughPOSIXShell(t *testing.T) {
+	sandbox := &testSandbox{result: core.CommandResult{ExitCode: 0, Stdout: "/root"}}
+	_, endpoint := startBridge(t, sandbox)
+	client, closeClient := dial(t, endpoint)
+	defer closeClient()
+
+	if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: remoteHomePayload}); err != nil {
+		t.Fatalf("Exec() error = %v", err)
+	}
+	commands := sandbox.snapshot()
+	if len(commands) != 1 || commands[0].Path != bootstrapShell {
+		t.Fatalf("command = %#v", commands)
+	}
+	if len(commands[0].Args) != 2 || commands[0].Args[1] != remoteHomePayload {
+		t.Fatalf("args = %#v", commands[0].Args)
+	}
+}
+
+// TestBinaryStdinIsRetainedInTheRecord covers what the dropped raw log used to
+// hold. JSON cannot carry arbitrary bytes, so they are base64 in their own
+// field and the note names it rather than claiming nothing was kept.
+func TestBinaryStdinIsRetainedInTheRecord(t *testing.T) {
+	sandbox := &testSandbox{result: core.CommandResult{ExitCode: 0}}
+	manager, endpoint := startBridge(t, sandbox)
+	client, closeClient := dial(t, endpoint)
+	defer closeClient()
+
+	binary := []byte{0x00, 0x01, 0x02, 0xff}
+	if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{
+		Script: catPayload, Stdin: binary,
+	}); err != nil {
+		t.Fatalf("Exec() error = %v", err)
+	}
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	records := readToolCalls(t, endpoint.LogPaths[0])
+	if len(records) != 1 {
+		t.Fatalf("records = %#v", records)
+	}
+	if records[0]["stdin_encoding"] != "binary-omitted" {
+		t.Fatalf("stdin_encoding = %v", records[0]["stdin_encoding"])
+	}
+	raw, _ := records[0]["stdin_raw"].(string)
+	decoded, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		t.Fatalf("stdin_raw is not base64: %v (%q)", err, raw)
+	}
+	if !bytes.Equal(decoded, binary) {
+		t.Fatalf("stdin_raw = % x, want % x", decoded, binary)
+	}
+	note, _ := records[0]["stdin"].(string)
+	if !strings.Contains(note, "stdin_raw") {
+		t.Fatalf("note does not name the field holding the bytes: %q", note)
+	}
+}
+
+// TestOutputBeyondTheLimitTruncates exercises the bound. The shipped limit is
+// unlimited, so the path is driven through Options rather than left untested
+// until a number is chosen from real runs.
+func TestOutputBeyondTheLimitTruncates(t *testing.T) {
+	sandbox := &testSandbox{result: core.CommandResult{ExitCode: 0, Stdout: "0123456789", Stderr: "abcdefghij"}}
+	manager, err := New(Options{
+		OutputDir: t.TempDir(), CleanupTimeout: 5 * time.Second,
+		ClientPath: fakeClient(t), OutputLimit: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint, err := manager.Start(context.Background(), sandbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, closeClient := dial(t, endpoint)
+	defer closeClient()
+
+	response, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: agentPayload})
+	if err != nil {
+		t.Fatalf("output past the bound failed the RPC instead of truncating: %v", err)
+	}
+	if !response.GetTruncated() {
+		t.Fatal("truncated was not reported")
+	}
+	if string(response.GetStdout()) != "0123" || string(response.GetStderr()) != "abcd" {
+		t.Fatalf("stdout = %q, stderr = %q", response.GetStdout(), response.GetStderr())
+	}
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	records := readToolCalls(t, endpoint.LogPaths[0])
+	// The counts report everything the sandbox produced, not what was kept.
+	if records[0]["stdout_bytes"] != float64(10) || records[0]["truncated"] != true {
+		t.Fatalf("record = %#v", records[0])
 	}
 }
 
@@ -463,11 +609,16 @@ func (plainSandbox) Exec(context.Context, core.Command) (core.CommandResult, err
 func (plainSandbox) Upload(context.Context, string, string) error   { return nil }
 func (plainSandbox) Download(context.Context, string, string) error { return nil }
 
-func TestNewRequiresOutputDirectory(t *testing.T) {
-	if _, err := New(Options{}); err == nil {
+func TestNewRequiresOutputDirectoryAndClient(t *testing.T) {
+	if _, err := New(Options{ClientPath: fakeClient(t)}); err == nil {
 		t.Fatal("a blank output directory was accepted")
 	}
-	if _, err := New(Options{OutputDir: filepath.Join(t.TempDir(), "nested")}); err != nil {
+	if _, err := New(Options{OutputDir: t.TempDir()}); err == nil {
+		t.Fatal("a blank client path was accepted")
+	}
+	if _, err := New(Options{
+		OutputDir: filepath.Join(t.TempDir(), "nested"), ClientPath: fakeClient(t),
+	}); err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
 }
