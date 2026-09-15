@@ -738,8 +738,16 @@ func (buffer *limitedBuffer) Write(content []byte) (int, error) {
 // invoking the CLI proves the staged runtime is readable by the identity that
 // will actually use it.
 func (manager *Manager) waitReady(ctx context.Context, active *session) error {
+	identityPath, extra := identityContainerFS, ""
+	if active.endpoint.Protocol == protocolGRPC {
+		// `command -v ssh` still holds: it resolves to the staged client,
+		// which is the point of putting it on PATH. Checking the client and
+		// the pinned certificate as well proves the shadowing took effect.
+		identityPath = grpcIdentityPath
+		extra = ` && test -x ` + clientContainerFS + ` && test -r ` + grpcTrustedPath
+	}
 	probe := `test -x ` + agentWrapperPath + ` && test -r ` + configContainerPath + ` && test -r ` + modelKeyPath +
-		` && test -r ` + identityContainerFS + ` && command -v ssh >/dev/null && hermes --version >/dev/null 2>&1`
+		` && test -r ` + identityPath + extra + ` && command -v ssh >/dev/null && hermes --version >/dev/null 2>&1`
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -813,15 +821,33 @@ func (manager *Manager) validateContainer(ctx context.Context, active *session) 
 func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([]byte, error) {
 	identity, err := readStablePrivateFile(active.endpoint.IdentitySourceFile, 0o600)
 	if err != nil {
-		return nil, fmt.Errorf("read Hermes SSH identity: %w", err)
+		return nil, fmt.Errorf("read Hermes identity: %w", err)
 	}
 	defer clear(identity)
+	grpc := active.endpoint.Protocol == protocolGRPC
 	extractEnabled := len(active.extractAPIKey) != 0
 	files := map[string]stagedFile{
 		strings.TrimPrefix(configContainerPath, "/"): {content: configuration, mode: 0o600},
 		strings.TrimPrefix(modelKeyPath, "/"):        {content: active.apiKey, mode: 0o600},
-		strings.TrimPrefix(identityContainerFS, "/"): {content: identity, mode: 0o600},
-		strings.TrimPrefix(agentWrapperPath, "/"):    {content: agentWrapperScript(active.model.APIKeyEnv, extractEnabled), mode: 0o555},
+		strings.TrimPrefix(agentWrapperPath, "/"):    {content: agentWrapperScript(active.model.APIKeyEnv, extractEnabled, grpc), mode: 0o555},
+	}
+	if grpc {
+		// The identity is the client certificate and key; the trusted file is
+		// the one bridge certificate the client accepts. Both are read with
+		// their exact host modes, as the SSH identity is.
+		trusted, err := readStablePrivateFile(active.endpoint.KnownHostsSourceFile, 0o600)
+		if err != nil {
+			return nil, fmt.Errorf("read Hermes gRPC trusted certificate: %w", err)
+		}
+		client, err := readStablePrivateFile(active.endpoint.ClientSourceFile, 0o555)
+		if err != nil {
+			return nil, fmt.Errorf("read Hermes gRPC client: %w", err)
+		}
+		files[strings.TrimPrefix(grpcIdentityPath, "/")] = stagedFile{content: identity, mode: 0o600}
+		files[strings.TrimPrefix(grpcTrustedPath, "/")] = stagedFile{content: trusted, mode: 0o600}
+		files[strings.TrimPrefix(clientContainerFS, "/")] = stagedFile{content: client, mode: 0o555}
+	} else {
+		files[strings.TrimPrefix(identityContainerFS, "/")] = stagedFile{content: identity, mode: 0o600}
 	}
 	if extractEnabled {
 		files[strings.TrimPrefix(extractKeyPath, "/")] = stagedFile{content: active.extractAPIKey, mode: 0o600}
@@ -849,7 +875,10 @@ func stageArchive(files map[string]stagedFile) ([]byte, error) {
 	// Everything is owned by the image's unprivileged `hermes` user, because
 	// that is the identity the PATH shim drops to. Modes stay restrictive: the
 	// wrapper still reads the key as root before handing off.
-	directories := []string{"run/aries", "run/aries/hermes", "run/aries/ssh", "run/aries/workspace"}
+	directories := []string{
+		"run/aries", "run/aries/hermes", "run/aries/ssh", "run/aries/workspace",
+		"run/aries/bin", "run/aries/grpc",
+	}
 	for _, name := range directories {
 		mode := int64(0o700)
 		if name == "run/aries/workspace" {

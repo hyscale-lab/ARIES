@@ -835,3 +835,63 @@ func TestRunOutcomeRecordsTerminalState(t *testing.T) {
 		})
 	}
 }
+
+func grpcEndpointFiles(t *testing.T) core.ToolEndpoint {
+	t.Helper()
+	root := t.TempDir()
+	write := func(name string, content string, mode os.FileMode) string {
+		path := filepath.Join(root, name)
+		if err := os.WriteFile(path, []byte(content), mode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	return core.ToolEndpoint{
+		Protocol: "grpc", Address: "172.22.0.1:39425", Username: "aries", Network: "aries-net-test",
+		ClientCommand: clientContainerFS, ClientSourceFile: write("aries-grpc", "client-binary", 0o555),
+		IdentityFile: grpcIdentityPath, IdentitySourceFile: write("client.pem", "cert-and-key", 0o600),
+		KnownHostsFile: grpcTrustedPath, KnownHostsSourceFile: write("server.crt", "bridge-cert", 0o600),
+	}
+}
+
+// A gRPC endpoint must stage the client and both credentials, and must not
+// stage the SSH identity, whose path nothing would read.
+func TestStartStagesTheGRPCClientAndCredentials(t *testing.T) {
+	fake := newFakeDocker()
+	manager := newTestManager(t, fake, []byte("model-secret"))
+	request := testRequest(t)
+	request.Endpoint = grpcEndpointFiles(t)
+	if err := manager.Start(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop(context.Background())
+
+	entries := archiveEntries(t, fake.archive)
+	for name, mode := range map[string]int64{
+		strings.TrimPrefix(clientContainerFS, "/"): 0o555,
+		strings.TrimPrefix(grpcIdentityPath, "/"):  0o600,
+		strings.TrimPrefix(grpcTrustedPath, "/"):   0o600,
+	} {
+		entry, ok := entries[name]
+		if !ok {
+			t.Fatalf("%s was not staged", name)
+		}
+		if entry.Mode != mode {
+			t.Fatalf("%s mode = %o, want %o", name, entry.Mode, mode)
+		}
+		if entry.Uid != runtimeUID || entry.Gid != runtimeGID {
+			t.Fatalf("%s owned by %d:%d", name, entry.Uid, entry.Gid)
+		}
+	}
+	if _, present := entries[strings.TrimPrefix(identityContainerFS, "/")]; present {
+		t.Fatal("the SSH identity was staged for a gRPC endpoint")
+	}
+	for _, directory := range []string{"run/aries/bin", "run/aries/grpc"} {
+		if _, ok := entries[directory]; !ok {
+			t.Fatalf("%s was not created", directory)
+		}
+	}
+}
