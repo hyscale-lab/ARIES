@@ -7,18 +7,27 @@ package hermesgrpc
 // the abstraction around SSH's raw record. Note this is the third copy:
 // hermesssh is already a near-verbatim copy of openclawssh.
 //
-// What is dropped relative to those two: rawSSHRecord and its renderer. The
-// SSH bridges keep a second byte-level artifact because their wire command
-// differs from the executed command — quoting and translation mean the
-// structured record alone loses fidelity. Here the request message carries the
-// script verbatim, so there is nothing the structured record cannot express.
-// The one thing lost is binary stdin retention, which is now noted rather than
-// kept.
+// What is dropped relative to those two: rawSSHRecord and its renderer. This
+// bridge writes one artifact, not two. The SSH bridges keep a second
+// byte-level log for three things the structured record cannot hold, and each
+// is accounted for here rather than assumed away:
+//
+//   - The verbatim wire command. Accepted calls need nothing: the canonical
+//     round-trip check in decodeShellToken means the recorded command already
+//     is the payload that arrived. Refused calls have no canonical encoding by
+//     definition, so Command is recorded for those too — the SSH bridge stores
+//     only a hash there and keeps the bytes in the raw log alone.
+//   - Binary stdin. JSON cannot carry arbitrary bytes, which is a property of
+//     the file format rather than of SSH, so StdinRaw holds them base64-encoded
+//     when they are not structured-safe.
+//   - The SSH request framing. This has no successor and is the one accepted
+//     loss; a protobuf request is not a comparable artifact.
 
 import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -27,7 +36,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -49,15 +57,19 @@ type toolCallRecord struct {
 	Argv           []string `json:"argv,omitempty"`
 	Stdin          string   `json:"stdin"`
 	StdinEncoding  string   `json:"stdin_encoding"`
-	StdinBytes     int64    `json:"stdin_bytes"`
-	StdoutBytes    int64    `json:"stdout_bytes"`
-	StderrBytes    int64    `json:"stderr_bytes"`
-	ExitCode       int      `json:"exit_code"`
-	DurationMS     int64    `json:"duration_ms"`
-	Status         string   `json:"status"`
-	Error          string   `json:"error,omitempty"`
-	RunID          string   `json:"run_id,omitempty"`
-	TaskID         string   `json:"task_id,omitempty"`
+	// StdinRaw carries base64 bytes only when Stdin holds the omission note,
+	// so a structured-safe input is never stored twice.
+	StdinRaw    string `json:"stdin_raw,omitempty"`
+	StdinBytes  int64  `json:"stdin_bytes"`
+	StdoutBytes int64  `json:"stdout_bytes"`
+	Truncated   bool   `json:"truncated,omitempty"`
+	StderrBytes int64  `json:"stderr_bytes"`
+	ExitCode    int    `json:"exit_code"`
+	DurationMS  int64  `json:"duration_ms"`
+	Status      string `json:"status"`
+	Error       string `json:"error,omitempty"`
+	RunID       string `json:"run_id,omitempty"`
+	TaskID      string `json:"task_id,omitempty"`
 }
 
 type auditFile struct {
@@ -85,18 +97,60 @@ type auditWriter struct {
 	now      func() time.Time
 }
 
-type byteCounter struct {
+// boundedWriter retains at most limit bytes while reporting everything the
+// sandbox produced, so a truncated call still records its true output volume.
+// It replaces the SSH bridge's byteCounter, which needed no bound because it
+// wrote straight to the channel instead of buffering a reply.
+type boundedWriter struct {
 	writer io.Writer
-	n      atomic.Int64
+	limit  int64
+
+	mu      sync.Mutex
+	total   int64
+	written int64
+	cut     bool
 }
 
-func (counter *byteCounter) Write(content []byte) (int, error) {
-	n, err := counter.writer.Write(content)
-	counter.n.Add(int64(n))
-	return n, err
+func newBoundedWriter(writer io.Writer, limit int64) *boundedWriter {
+	return &boundedWriter{writer: writer, limit: limit}
 }
 
-func (counter *byteCounter) count() int64 { return counter.n.Load() }
+func (writer *boundedWriter) Write(content []byte) (int, error) {
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+	offered := len(content)
+	writer.total += int64(offered)
+	remaining := writer.limit - writer.written
+	if remaining <= 0 {
+		writer.cut = true
+		return offered, nil
+	}
+	if int64(offered) > remaining {
+		content = content[:remaining]
+		writer.cut = true
+	}
+	n, err := writer.writer.Write(content)
+	writer.written += int64(n)
+	if err != nil {
+		return n, err
+	}
+	// Report every offered byte as accepted. A short write would look to the
+	// sandbox like a failed copy, when the only thing that happened is that
+	// ARIES stopped retaining output.
+	return offered, nil
+}
+
+func (writer *boundedWriter) count() int64 {
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+	return writer.total
+}
+
+func (writer *boundedWriter) truncated() bool {
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+	return writer.cut
+}
 
 // recordedInput taps stdin for the audit while it streams to the sandbox.
 // Exceeding the bound discards what was buffered and reports the overflow, so
@@ -128,18 +182,22 @@ func (input *recordedInput) Read(content []byte) (int, error) {
 	return n, err
 }
 
-func (input *recordedInput) record() (int64, string, string, bool) {
+// record returns the byte count, the text for the Stdin field, the encoding
+// label, the base64 payload for StdinRaw, and the overflow flag. The raw value
+// is empty unless the bytes were unfit for the structured field.
+func (input *recordedInput) record() (int64, string, string, string, bool) {
 	input.mu.Lock()
 	count := input.n
 	content := bytes.Clone(input.data.Bytes())
 	overflow := input.overflow
 	input.mu.Unlock()
 	if safeStructuredText(content) {
-		return count, string(content), "utf-8", overflow
+		return count, string(content), "utf-8", "", overflow
 	}
-	// This bridge writes no raw artifact, so binary input is retained nowhere
-	// and the note must not point at a file that does not exist.
-	return count, fmt.Sprintf("[binary input omitted; %d bytes not retained]", count), "binary-omitted", overflow
+	// The bytes are kept, base64-encoded, in the same record. The note names
+	// the field holding them so the evidence never points at nothing.
+	note := fmt.Sprintf("[binary input omitted; %d bytes retained in stdin_raw]", count)
+	return count, note, "binary-omitted", base64.StdEncoding.EncodeToString(content), overflow
 }
 
 func safeStructuredText(content []byte) bool {
@@ -364,6 +422,30 @@ type exclusiveWriteFile interface {
 type exclusiveWriteOperations struct {
 	open   func(string, int, os.FileMode) (exclusiveWriteFile, error)
 	remove func(string) error
+}
+
+// stageExecutable copies the client binary into the task artifact directory,
+// verifying the source did not change underneath the read.
+func stageExecutable(source, destination string) error {
+	before, err := os.Lstat(source)
+	if err != nil {
+		return err
+	}
+	if !before.Mode().IsRegular() || before.Mode().Perm()&0o111 == 0 {
+		return errors.New("helper source must be a regular executable")
+	}
+	content, err := os.ReadFile(source)
+	if err != nil {
+		return err
+	}
+	after, err := os.Lstat(source)
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(before, after) || before.Size() != int64(len(content)) || before.Mode() != after.Mode() || !before.ModTime().Equal(after.ModTime()) {
+		return errors.New("helper source changed while being staged")
+	}
+	return writeExclusive(destination, content, 0o555)
 }
 
 func writeExclusive(path string, content []byte, mode os.FileMode) error {

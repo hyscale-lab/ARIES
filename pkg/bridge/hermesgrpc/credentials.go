@@ -16,7 +16,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -24,16 +23,6 @@ import (
 	"net"
 	"time"
 )
-
-// randomSessionID returns the value the harness must echo in the
-// aries-session-id header on every call.
-func randomSessionID() (string, error) {
-	var raw [16]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return "", fmt.Errorf("generate Hermes gRPC session identity: %w", err)
-	}
-	return hex.EncodeToString(raw[:]), nil
-}
 
 // generateSessionCertificates returns the server's TLS certificate, the
 // client's parsed certificate for pinning, and the client's certificate and

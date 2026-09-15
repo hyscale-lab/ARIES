@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -34,7 +35,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -53,14 +53,26 @@ const (
 	certificateContainerPath = "/run/aries/grpc/client.crt"
 	keyContainerPath         = "/run/aries/grpc/client.key"
 
+	// clientContainerPath is where the staged client lands. It is named `ssh`
+	// and reached by a PATH entry the harness prepends, because Hermes resolves
+	// its terminal client by name. See docs/design/grpc-bridge.md section 9 for
+	// why that shadowing is temporary.
+	clientContainerPath = "/run/aries/bin/ssh"
+
 	lockedUsername = "aries"
 
-	// sessionHeader carries the per-task session identity. Checking it on every
-	// call makes revocation provable per call rather than only by the transport
-	// having been closed.
-	sessionHeader = "aries-session-id"
-
 	certificateLifetime = 24 * time.Hour
+
+	// maxMessageBytes and defaultOutputLimit are deliberately unlimited for the
+	// first iteration. grpc-go caps *receive* at 4 MiB by default on both sides
+	// and would reject a response after the command had already run, which the
+	// SSH bridge never did because it wrote straight to the channel. Go has no
+	// -1 sentinel, so math.MaxInt32 is the unlimited idiom and it matches the
+	// send default. The truncation path below is built and tested so that
+	// imposing a real bound later is a constant, not new code; the number
+	// should come from the per-call sizes logged on real runs.
+	maxMessageBytes    = math.MaxInt32
+	defaultOutputLimit = int64(math.MaxInt32)
 )
 
 // Options are the host-local inputs to one Hermes gRPC bridge.
@@ -68,6 +80,12 @@ type Options struct {
 	OutputDir      string
 	CleanupTimeout time.Duration
 	Logger         *logrus.Logger
+	// ClientPath is the host path of the aries-grpc executable staged into the
+	// harness container.
+	ClientPath string
+	// OutputLimit bounds retained stdout and stderr per call. Zero selects
+	// defaultOutputLimit.
+	OutputLimit int64
 }
 
 // Manager exposes one gRPC endpoint at a time and proxies its calls to the
@@ -76,6 +94,8 @@ type Manager struct {
 	outputDir      string
 	cleanupTimeout time.Duration
 	logger         *logrus.Logger
+	clientPath     string
+	outputLimit    int64
 	openAudit      func(string) (*auditFile, error)
 
 	mu       sync.Mutex
@@ -105,11 +125,13 @@ type bridgeSession struct {
 	server          *grpc.Server
 	cancel          context.CancelFunc
 	artifactDir     string
+	clientSource    string
 	certificateFile string
 	keyFile         string
 	toolLogPath     string
 	audit           *auditWriter
-	sessionID       string
+	logger          *logrus.Logger
+	outputLimit     int64
 	partialStart    bool
 
 	revoked       chan struct{}
@@ -139,9 +161,16 @@ func New(options Options) (*Manager, error) {
 	if options.Logger == nil {
 		options.Logger = logrus.StandardLogger()
 	}
+	if options.OutputLimit <= 0 {
+		options.OutputLimit = defaultOutputLimit
+	}
+	if strings.TrimSpace(options.ClientPath) == "" {
+		return nil, errors.New("Hermes gRPC client path is required")
+	}
 	return &Manager{
 		outputDir: outputDir, cleanupTimeout: options.CleanupTimeout,
-		logger: options.Logger, openAudit: openAuditFile,
+		logger: options.Logger, clientPath: options.ClientPath,
+		outputLimit: options.OutputLimit, openAudit: openAuditFile,
 	}, nil
 }
 
@@ -160,7 +189,10 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 		return core.ToolEndpoint{}, fmt.Errorf("resolve task network gateway: %w", err)
 	}
 
-	session := &bridgeSession{sandbox: sandbox, revoked: make(chan struct{})}
+	session := &bridgeSession{
+		sandbox: sandbox, revoked: make(chan struct{}),
+		logger: manager.logger, outputLimit: manager.outputLimit,
+	}
 	session.artifactDir = filepath.Join(manager.outputDir, sandbox.TaskID(), "bridge")
 
 	// Start may fail after allocating task-local resources. Stop is idempotent,
@@ -186,11 +218,10 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 	if err := ensurePrivateDirectory(session.artifactDir); err != nil {
 		return fail(fmt.Errorf("create private Hermes gRPC artifact directory: %w", err))
 	}
-	sessionID, err := randomSessionID()
-	if err != nil {
-		return fail(err)
+	session.clientSource = filepath.Join(session.artifactDir, "aries-grpc")
+	if err := stageExecutable(manager.clientPath, session.clientSource); err != nil {
+		return fail(fmt.Errorf("stage Hermes gRPC client: %w", err))
 	}
-	session.sessionID = sessionID
 
 	serverCertificate, clientCertificate, clientPEM, keyPEM, err := generateSessionCertificates(gateway)
 	if err != nil {
@@ -220,15 +251,17 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 
 	serveCtx, cancel := context.WithCancel(context.Background())
 	session.cancel = cancel
-	session.server = grpc.NewServer(grpc.Creds(credentials.NewTLS(&tls.Config{
-		Certificates: []tls.Certificate{serverCertificate},
-		ClientAuth:   tls.RequireAnyClientCert,
-		MinVersion:   tls.VersionTLS13,
-		// Exactly one client is authorized, pinned by its raw certificate
-		// bytes. This mirrors the SSH bridge's exact public-key comparison
-		// rather than trusting a certificate authority.
-		VerifyPeerCertificate: pinnedPeer(clientCertificate),
-	})))
+	session.server = grpc.NewServer(
+		grpc.MaxRecvMsgSize(maxMessageBytes), grpc.MaxSendMsgSize(maxMessageBytes),
+		grpc.Creds(credentials.NewTLS(&tls.Config{
+			Certificates: []tls.Certificate{serverCertificate},
+			ClientAuth:   tls.RequireAnyClientCert,
+			MinVersion:   tls.VersionTLS13,
+			// Exactly one client is authorized, pinned by its raw certificate
+			// bytes. This mirrors the SSH bridge's exact public-key comparison
+			// rather than trusting a certificate authority.
+			VerifyPeerCertificate: pinnedPeer(clientCertificate),
+		})))
 	sandboxv1.RegisterSandboxServer(session.server, &service{session: session, serveCtx: serveCtx})
 
 	session.wait.Add(1)
@@ -244,8 +277,12 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 	manager.logger.WithContext(ctx).WithFields(logrus.Fields{
 		"address": address, "network": network, "container": sandbox.ContainerName(),
 	}).Info("Hermes gRPC bridge started")
+	// IdentityFile carries the mTLS key and KnownHostsFile the pinned server
+	// certificate. The names are SSH-shaped because core.ToolEndpoint is; the
+	// struct's doc comment records the reuse.
 	return core.ToolEndpoint{
 		Protocol: "grpc", Address: address, Username: lockedUsername, Network: network,
+		ClientCommand: clientContainerPath, ClientSourceFile: session.clientSource,
 		IdentityFile: keyContainerPath, IdentitySourceFile: session.keyFile,
 		KnownHostsFile: certificateContainerPath, KnownHostsSourceFile: session.certificateFile,
 		LogPaths: []string{session.toolLogPath},
@@ -385,13 +422,31 @@ type service struct {
 
 func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*sandboxv1.ExecResponse, error) {
 	session := svc.session
-	if err := session.authorize(ctx); err != nil {
+	// The payload is read before the guard so a refusal records what was
+	// attempted. Reading a field runs nothing.
+	payload := request.GetScript()
+	if err := session.authorize(payload); err != nil {
 		return nil, err
 	}
-	script := request.GetScript()
-	if strings.TrimSpace(script) == "" {
-		session.reject("exec", "empty script")
-		return nil, status.Error(codes.InvalidArgument, "script is required")
+
+	// The allowlist is enforced here rather than in the client: the harness
+	// container holds the credentials, so a check that ran there could be
+	// routed around. Refusing a file sync keeps harness scaffold and the
+	// credential files iter_sync_files collects out of the container the
+	// verifier later inspects.
+	remote, decodeErr := decodeRemoteCommand(payload)
+	if decodeErr != nil {
+		if errors.Is(decodeErr, errSyncDenied) {
+			session.logRequestFailure(payload, kindSync, "denied", errSyncDenied.Error())
+			return nil, status.Error(codes.PermissionDenied, errSyncDenied.Error())
+		}
+		session.logRequestFailure(payload, kindUnknown, "rejected", "invalid remote command")
+		return nil, status.Error(codes.InvalidArgument, "invalid remote command")
+	}
+	prepared, prepareErr := prepareRemoteCommand(remote, session.sandbox.Workdir())
+	if prepareErr != nil {
+		session.logRequestFailure(payload, remote.kind, "rejected", "invalid remote command")
+		return nil, status.Error(codes.InvalidArgument, "invalid remote command")
 	}
 
 	// The serve context carries revocation; the call context carries the
@@ -406,17 +461,13 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 		}
 	}()
 
-	command := core.Command{
-		Path: remoteShellPath,
-		Args: []string{"-c", script},
-		Dir:  session.sandbox.Workdir(),
-	}
+	command := prepared.command
 
 	started := time.Now()
 	stdin := &recordedInput{reader: bytes.NewReader(request.GetStdin())}
 	var stdoutBuffer, stderrBuffer bytes.Buffer
-	stdout := &byteCounter{writer: &stdoutBuffer}
-	stderr := &byteCounter{writer: &stderrBuffer}
+	stdout := newBoundedWriter(&stdoutBuffer, session.outputLimit)
+	stderr := newBoundedWriter(&stderrBuffer, session.outputLimit)
 
 	result, execErr := session.sandbox.ExecStream(callCtx, command, stdin, stdout, stderr)
 	if contextErr := callCtx.Err(); contextErr != nil && !hasCancellationCause(execErr) {
@@ -450,60 +501,85 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 		exitCode = 255
 	}
 
-	stdinBytes, stdinContent, stdinEncoding, stdinOverflow := stdin.record()
+	stdinBytes, stdinContent, stdinEncoding, stdinRaw, stdinOverflow := stdin.record()
 	if stdinOverflow {
 		session.audit.latch(fmt.Errorf("retain Hermes gRPC stdin: input exceeds %d bytes", maxRecordedInputBytes))
 		return nil, status.Error(codes.ResourceExhausted, "stdin exceeds the retained bound")
 	}
 
+	// The command itself completed; only the retained output was cut, so the
+	// reason is left alone and truncation is reported in its own field.
+	truncated := stdout.truncated() || stderr.truncated()
+	duration := time.Since(started).Milliseconds()
+
+	// commandHash and Command are taken from the request field directly. The
+	// canonical round-trip check in decodeShellToken already proves a
+	// re-encoding would reproduce it, so there is nothing to re-encode.
 	session.writeRecord(toolCallRecord{
-		OperationClass: "exec",
+		OperationClass: prepared.kind,
 		Path:           command.Path,
 		Workdir:        command.Dir,
-		CommandHash:    commandHash(script),
-		Command:        script,
+		CommandHash:    commandHash(payload),
+		Command:        payload,
 		Argv:           append([]string{command.Path}, command.Args...),
-		Stdin:          stdinContent, StdinEncoding: stdinEncoding, StdinBytes: stdinBytes,
-		StdoutBytes: stdout.count(), StderrBytes: stderr.count(),
+		Stdin:          stdinContent, StdinEncoding: stdinEncoding, StdinRaw: stdinRaw, StdinBytes: stdinBytes,
+		StdoutBytes: stdout.count(), StderrBytes: stderr.count(), Truncated: truncated,
 		ExitCode:   int(exitCode),
-		DurationMS: time.Since(started).Milliseconds(),
+		DurationMS: duration,
 		Status:     statusText, Error: message,
 	})
 
+	// Per-call sizes are surfaced here so a real run supplies the numbers the
+	// output bound should eventually be chosen from.
+	session.logger.WithFields(logrus.Fields{
+		"kind": prepared.kind, "status": statusText, "exit_code": exitCode,
+		"stdin_bytes": stdinBytes, "stdout_bytes": stdout.count(), "stderr_bytes": stderr.count(),
+		"truncated": truncated, "duration_ms": duration,
+	}).Info("Hermes gRPC exec")
+
 	return &sandboxv1.ExecResponse{
-		ExitCode: int32(exitCode),
-		Reason:   reason,
-		Stdout:   stdoutBuffer.Bytes(),
-		Stderr:   stderrBuffer.Bytes(),
+		ExitCode:  int32(exitCode),
+		Reason:    reason,
+		Stdout:    stdoutBuffer.Bytes(),
+		Stderr:    stderrBuffer.Bytes(),
+		Truncated: truncated,
 	}, nil
 }
 
-// authorize refuses a call whose session is revoked or whose header does not
-// match, and records the refusal. A refused call is a recordable event: the
-// SSH bridge leaves several refusal classes with no audit entry at all, and
-// that gap is deliberately not reproduced.
-func (session *bridgeSession) authorize(ctx context.Context) error {
+// authorize refuses a call on a revoked session and records the refusal. A
+// refused call is a recordable event: the SSH bridge leaves several refusal
+// classes with no audit entry at all, and that gap is deliberately not
+// reproduced.
+//
+// There is no per-call identity token. Identity is settled at the TLS
+// handshake, where exactly one client certificate is accepted by raw bytes,
+// and the SSH bridge likewise checks its pinned key once and nothing per call.
+// The revocation check below is the part that has no SSH counterpart: it makes
+// revocation provable per call rather than only by the transport having closed.
+func (session *bridgeSession) authorize(payload string) error {
 	if session.isRevoked() {
-		session.reject("exec", "session revoked")
+		session.logRequestFailure(payload, kindUnknown, "rejected", "session revoked")
 		return status.Error(codes.FailedPrecondition, "session revoked")
-	}
-	incoming, _ := metadata.FromIncomingContext(ctx)
-	values := incoming.Get(sessionHeader)
-	if len(values) != 1 || values[0] != session.sessionID {
-		session.reject("exec", "session identity rejected")
-		return status.Error(codes.PermissionDenied, "session identity rejected")
 	}
 	return nil
 }
 
-func (session *bridgeSession) reject(class, message string) {
+// logRequestFailure records a call that never reached the sandbox. Unlike the
+// SSH bridge, which stores only a hash and keeps the bytes in ssh_raw.log, the
+// verbatim payload is recorded here: a payload that failed to decode has no
+// canonical encoding, so a hash alone would leave it unrecoverable.
+func (session *bridgeSession) logRequestFailure(payload, kind, status, message string) {
 	session.writeRecord(toolCallRecord{
-		OperationClass: class,
-		ExitCode:       -1,
-		Status:         "rejected",
-		Error:          message,
-		Stdin:          "",
-		StdinEncoding:  "utf-8",
+		OperationClass: kind,
+		CommandHash:    commandHash(payload),
+		Command:        payload,
+		// The call never ran, so the record must not carry an exit code that
+		// could be mistaken for one.
+		ExitCode:      -1,
+		Status:        status,
+		Error:         message,
+		Stdin:         "",
+		StdinEncoding: "utf-8",
 	})
 }
 
