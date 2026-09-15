@@ -48,10 +48,11 @@ const (
 	// /bin/bash — the same requirement the SSH bridge imposes.
 	remoteShellPath = "/bin/bash"
 
-	// certificateContainerPath and keyContainerPath are the in-container paths
-	// the endpoint advertises; the harness stages the source files there.
-	certificateContainerPath = "/run/aries/grpc/client.crt"
-	keyContainerPath         = "/run/aries/grpc/client.key"
+	// identityContainerPath holds the client's own certificate and key;
+	// trustedContainerPath holds the single server certificate the client
+	// accepts. The harness stages both at these paths.
+	identityContainerPath = "/run/aries/grpc/client.pem"
+	trustedContainerPath  = "/run/aries/grpc/server.crt"
 
 	// clientContainerPath is where the staged client lands. It is named `ssh`
 	// and reached by a PATH entry the harness prepends, because Hermes resolves
@@ -120,19 +121,19 @@ type bridgeSandbox interface {
 }
 
 type bridgeSession struct {
-	sandbox         bridgeSandbox
-	listener        net.Listener
-	server          *grpc.Server
-	cancel          context.CancelFunc
-	artifactDir     string
-	clientSource    string
-	certificateFile string
-	keyFile         string
-	toolLogPath     string
-	audit           *auditWriter
-	logger          *logrus.Logger
-	outputLimit     int64
-	partialStart    bool
+	sandbox      bridgeSandbox
+	listener     net.Listener
+	server       *grpc.Server
+	cancel       context.CancelFunc
+	artifactDir  string
+	clientSource string
+	identityFile string
+	trustedFile  string
+	toolLogPath  string
+	audit        *auditWriter
+	logger       *logrus.Logger
+	outputLimit  int64
+	partialStart bool
 
 	revoked       chan struct{}
 	revocationMu  sync.Mutex
@@ -223,18 +224,18 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 		return fail(fmt.Errorf("stage Hermes gRPC client: %w", err))
 	}
 
-	serverCertificate, clientCertificate, clientPEM, keyPEM, err := generateSessionCertificates(gateway)
+	credentialMaterial, err := generateSessionCertificates(gateway)
 	if err != nil {
 		return fail(err)
 	}
-	session.certificateFile = filepath.Join(session.artifactDir, "client.crt")
-	session.keyFile = filepath.Join(session.artifactDir, "client.key")
+	session.identityFile = filepath.Join(session.artifactDir, "client.pem")
+	session.trustedFile = filepath.Join(session.artifactDir, "server.crt")
 	session.toolLogPath = filepath.Join(session.artifactDir, "tool-calls.jsonl")
-	if err := writeExclusivePrivate(session.certificateFile, clientPEM); err != nil {
-		return fail(fmt.Errorf("write Hermes gRPC client certificate: %w", err))
+	if err := writeExclusivePrivate(session.identityFile, credentialMaterial.identity); err != nil {
+		return fail(fmt.Errorf("write Hermes gRPC client identity: %w", err))
 	}
-	if err := writeExclusivePrivate(session.keyFile, keyPEM); err != nil {
-		return fail(fmt.Errorf("write Hermes gRPC client key: %w", err))
+	if err := writeExclusivePrivate(session.trustedFile, credentialMaterial.trusted); err != nil {
+		return fail(fmt.Errorf("write Hermes gRPC trusted certificate: %w", err))
 	}
 
 	listener, err := net.Listen("tcp4", net.JoinHostPort(gateway, "0"))
@@ -254,13 +255,13 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 	session.server = grpc.NewServer(
 		grpc.MaxRecvMsgSize(maxMessageBytes), grpc.MaxSendMsgSize(maxMessageBytes),
 		grpc.Creds(credentials.NewTLS(&tls.Config{
-			Certificates: []tls.Certificate{serverCertificate},
+			Certificates: []tls.Certificate{credentialMaterial.server},
 			ClientAuth:   tls.RequireAnyClientCert,
 			MinVersion:   tls.VersionTLS13,
 			// Exactly one client is authorized, pinned by its raw certificate
 			// bytes. This mirrors the SSH bridge's exact public-key comparison
 			// rather than trusting a certificate authority.
-			VerifyPeerCertificate: pinnedPeer(clientCertificate),
+			VerifyPeerCertificate: pinnedPeer(credentialMaterial.client),
 		})))
 	sandboxv1.RegisterSandboxServer(session.server, &service{session: session, serveCtx: serveCtx})
 
@@ -277,14 +278,14 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 	manager.logger.WithContext(ctx).WithFields(logrus.Fields{
 		"address": address, "network": network, "container": sandbox.ContainerName(),
 	}).Info("Hermes gRPC bridge started")
-	// IdentityFile carries the mTLS key and KnownHostsFile the pinned server
-	// certificate. The names are SSH-shaped because core.ToolEndpoint is; the
-	// struct's doc comment records the reuse.
+	// The SSH-shaped names carry their SSH meanings: IdentityFile is the
+	// client's own credential, KnownHostsFile the server identity it must
+	// accept and nothing else.
 	return core.ToolEndpoint{
 		Protocol: "grpc", Address: address, Username: lockedUsername, Network: network,
 		ClientCommand: clientContainerPath, ClientSourceFile: session.clientSource,
-		IdentityFile: keyContainerPath, IdentitySourceFile: session.keyFile,
-		KnownHostsFile: certificateContainerPath, KnownHostsSourceFile: session.certificateFile,
+		IdentityFile: identityContainerPath, IdentitySourceFile: session.identityFile,
+		KnownHostsFile: trustedContainerPath, KnownHostsSourceFile: session.trustedFile,
 		LogPaths: []string{session.toolLogPath},
 	}, nil
 }
@@ -366,11 +367,12 @@ func (session *bridgeSession) finalize(ctx context.Context) error {
 	if session.audit != nil && !session.audit.finished() {
 		return auditErr
 	}
-	// Only the private key is removed; that is revocation. The certificate is
-	// retained as evidence of what the harness was told to trust.
+	// Only the client identity is removed; that is revocation. The server
+	// certificate is retained as evidence of what the harness was told to
+	// trust, exactly as the SSH bridge retains its known-hosts line.
 	cleanupErr := errors.Join(
 		session.revocationError(), auditErr,
-		removeIfPresent(session.keyFile),
+		removeIfPresent(session.identityFile),
 	)
 	if session.partialStart && cleanupErr == nil {
 		cleanupErr = os.RemoveAll(session.artifactDir)

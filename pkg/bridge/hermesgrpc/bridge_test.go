@@ -4,11 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"io"
 	"maps"
 	"os"
@@ -22,7 +19,6 @@ import (
 	"github.com/hyscale-lab/aries/pkg/core"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 )
 
@@ -117,35 +113,16 @@ func newTestManager(t *testing.T, outputDir string) *Manager {
 	return manager
 }
 
-// dial reproduces what a harness-side client must do: load the staged
-// certificate and key and trust the bridge's certificate. There is no
-// per-call identity token; the pinned certificate is the identity.
+// dial goes through the shipped client's own credential loader, so the tests
+// exercise the trust decision the staged binary actually makes rather than a
+// permissive stand-in.
 func dial(t *testing.T, endpoint core.ToolEndpoint) (sandboxv1.SandboxClient, func()) {
 	t.Helper()
-	certificate, err := tls.LoadX509KeyPair(endpoint.KnownHostsSourceFile, endpoint.IdentitySourceFile)
+	transport, err := clientCredentials(endpoint.IdentitySourceFile, endpoint.KnownHostsSourceFile)
 	if err != nil {
-		t.Fatalf("load staged client keypair: %v", err)
+		t.Fatalf("load staged client credentials: %v", err)
 	}
-	pool := x509.NewCertPool()
-	pem, err := os.ReadFile(endpoint.KnownHostsSourceFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pool.AppendCertsFromPEM(pem)
-
-	connection, err := grpc.NewClient(endpoint.Address, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
-		Certificates: []tls.Certificate{certificate},
-		MinVersion:   tls.VersionTLS13,
-		// The bridge's certificate is self-signed and pinned by the server
-		// side; the client verifies the peer it was told to expect.
-		InsecureSkipVerify: true,
-		VerifyPeerCertificate: func(raw [][]byte, _ [][]*x509.Certificate) error {
-			if len(raw) == 0 {
-				return errors.New("no server certificate")
-			}
-			return nil
-		},
-	})))
+	connection, err := grpc.NewClient(endpoint.Address, grpc.WithTransportCredentials(transport))
 	if err != nil {
 		t.Fatalf("dial bridge: %v", err)
 	}
@@ -320,10 +297,10 @@ func TestStopRevokesAndIsIdempotent(t *testing.T) {
 		}
 	}
 	if _, err := os.Stat(endpoint.IdentitySourceFile); !os.IsNotExist(err) {
-		t.Fatalf("private key survived revocation: %v", err)
+		t.Fatalf("client identity survived revocation: %v", err)
 	}
-	// The certificate is retained as evidence of what the harness was told to
-	// trust; only the key is revocation.
+	// The server certificate is retained as evidence of what the harness was
+	// told to trust; removing the client identity is revocation.
 	if _, err := os.Stat(endpoint.KnownHostsSourceFile); err != nil {
 		t.Fatalf("certificate evidence was removed: %v", err)
 	}
