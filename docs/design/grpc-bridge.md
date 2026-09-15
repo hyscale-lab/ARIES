@@ -273,12 +273,29 @@ that distinction expressible for the first time, where the shell string could no
 gateway at port 0, exactly as `Start` does today (`pkg/bridge/hermesssh/bridge.go:606`). The
 client dials it from the harness container, which shares that network.
 
-**Authentication is mTLS with per-task material.** `Start` generates a certificate authority and a
-client keypair for this task only, mirroring the current per-session `Ed25519` generation
-(`:1036-1058`); the client certificate and key are written to private host paths and advertised
-through `core.ToolEndpoint` for the harness to stage, as the SSH identity is today. The server
-accepts exactly one client certificate. This preserves the property that credentials exist only
-for the life of one task and are removed at revocation.
+**Authentication is mTLS with per-task material, and there is no certificate authority.** `Start`
+generates two self-signed `Ed25519` certificates for this task only, one per side, mirroring the
+current per-session generation (`:1036-1058`). Each side accepts exactly one peer certificate,
+compared by raw bytes in `VerifyPeerCertificate` — the same shape as the SSH bridge comparing one
+marshalled public key rather than validating a chain. An earlier revision of this document said a
+certificate authority was generated; that was never what the code did, and a chain would be more
+machinery for a channel with exactly two parties.
+
+Two files are written to private host paths and advertised through `core.ToolEndpoint` for the
+harness to stage. They carry the meanings their SSH-shaped field names already have:
+
+| Endpoint field | Content | Role |
+| --- | --- | --- |
+| `IdentitySourceFile` | client certificate and key, one PEM, `0600` | the client's own credential, as an SSH identity is |
+| `KnownHostsSourceFile` | the bridge's certificate, `0600` | the single server identity the client accepts |
+
+**The server's private key is never written anywhere.** It exists only inside the `tls.Certificate`
+the listener holds, so nothing can stage or persist it; only the certificate, which is public
+material, reaches the container.
+
+Credentials exist only for the life of one task. Revocation removes the identity file; the bridge
+certificate is retained as evidence of what the harness was told to trust, exactly as the SSH
+bridge retains its `known_hosts` line.
 
 **There is no per-call identity token.** An earlier revision of this document specified an
 `aries-session-id` metadata header and justified it as making revocation checkable per call. That
@@ -293,10 +310,11 @@ marks the session revoked, a call that reaches a surviving connection is refused
 `FAILED_PRECONDITION`. That check has no SSH counterpart — `hermesssh` has no revoked flag at all
 and relies on the transport being torn down — and it is the part worth keeping.
 
-**The client authenticates the bridge.** The endpoint stages two files: an identity holding the
-client's certificate and key, and the single bridge certificate the client accepts, pinned by raw
-bytes. This is stricter than the SSH path, where Hermes accepts the host key on first use and ARIES
-has no way to preload one.
+**The client authenticates the bridge, which the SSH path cannot.** Hermes forces
+`StrictHostKeyChecking=accept-new` and offers no way to preload a known-hosts file, so on SSH the
+harness trusts whatever answers first and ARIES's `known_hosts` line is evidence rather than
+something it can hand over. Here the harness is told in advance which certificate is acceptable, so
+substituting another — a second bridge's valid certificate, say — is refused.
 
 **The client refuses to be proxied.** grpc-go honours `HTTPS_PROXY` by default, which would carry
 every script, its `stdin` and all output off the task network. The staged client opts out
@@ -305,7 +323,8 @@ explicitly rather than depending on the harness image's `NO_PROXY`.
 Keepalive is HTTP/2 PING, handled by the transport, replacing the `keepalive@openssh.com` global
 request the current server has to implement itself.
 
-**Sources:** `pkg/bridge/hermesssh/bridge.go`, `pkg/core/types.go`.
+**Sources:** `pkg/bridge/hermesgrpc/credentials.go`, `pkg/bridge/hermesgrpc/client.go`,
+`pkg/bridge/hermesssh/bridge.go`, `pkg/core/types.go`.
 
 ## 4. State: what the server holds
 
@@ -350,7 +369,7 @@ The sequence mirrors `revoke` and `finalize` today:
 3. Stop the gRPC server, refusing new connections and closing established ones.
 4. Wait for every handler to return.
 5. Seal the audit; if it cannot be flushed, `Stop` returns the error.
-6. Remove the client credential material.
+6. Remove the client identity file. The bridge certificate stays as evidence.
 
 An in-flight `Exec` is aborted, not awaited. The cancelled context reaches `ExecStream`, which
 terminates the container process group and confirms its absence — machinery that already exists
