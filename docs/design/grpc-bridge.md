@@ -280,11 +280,27 @@ through `core.ToolEndpoint` for the harness to stage, as the SSH identity is tod
 accepts exactly one client certificate. This preserves the property that credentials exist only
 for the life of one task and are removed at revocation.
 
-**Session identity is a metadata header**, `aries-session-id`, checked on every call. It is not
-redundant with the connection: it makes revocation checkable *per call* rather than relying on the
-connection having been closed. After `Stop` marks the id revoked, any call carrying it is refused
-with `FAILED_PRECONDITION` even if a connection survives. That is defence in depth for the one
-guarantee the bridge exists to provide.
+**There is no per-call identity token.** An earlier revision of this document specified an
+`aries-session-id` metadata header and justified it as making revocation checkable per call. That
+reasoning was wrong: the revocation check is what delivers that property, and it is independent of
+any header. Identity is settled once, at the TLS handshake, where exactly one client certificate is
+accepted by raw bytes — the same shape as the SSH bridge, which compares its pinned public key once
+in `PublicKeyCallback` and checks nothing per call. A header could therefore only have failed on a
+bug in ARIES's own client.
+
+**Revocation is still checked on every call**, before anything else the handler does. After `Stop`
+marks the session revoked, a call that reaches a surviving connection is refused with
+`FAILED_PRECONDITION`. That check has no SSH counterpart — `hermesssh` has no revoked flag at all
+and relies on the transport being torn down — and it is the part worth keeping.
+
+**The client authenticates the bridge.** The endpoint stages two files: an identity holding the
+client's certificate and key, and the single bridge certificate the client accepts, pinned by raw
+bytes. This is stricter than the SSH path, where Hermes accepts the host key on first use and ARIES
+has no way to preload one.
+
+**The client refuses to be proxied.** grpc-go honours `HTTPS_PROXY` by default, which would carry
+every script, its `stdin` and all output off the task network. The staged client opts out
+explicitly rather than depending on the harness image's `NO_PROXY`.
 
 Keepalive is HTTP/2 PING, handled by the transport, replacing the `keepalive@openssh.com` global
 request the current server has to implement itself.
@@ -362,7 +378,7 @@ has an equivalent, and two gain precision:
 | `operation_class` — `agent`, `bootstrap`, `sync` | the method name |
 | `exit_code` clamped to 0-255 | `exit_code` plus a structured termination reason |
 | `stdin_bytes`, `stdout_bytes`, `stderr_bytes` | unchanged |
-| raw wire log | the request messages, which are already structured |
+| raw wire log | absorbed into the structured record; see below |
 
 Two rules carry over unchanged. Command **output never enters the audit** — byte counts only.
 And retained `stdin` stays bounded, with the overflow latching an audit error rather than
@@ -373,26 +389,58 @@ with extra data, channel accept errors, and refused global requests
 (see [SSH connection lifecycle](ssh-connection-lifecycle.md#4-the-request-funnel)). Those gaps
 should not be reproduced: a refused call is a recordable event.
 
-#### Per-command logging is reduced, deliberately
+#### One artifact, without losing what the second one held
 
 The SSH bridges write two artifacts per task: the structured `tool-calls.jsonl` and a byte-level
-`ssh_raw.log`, the latter opt-out through `bridge.retain_raw_log`. **This bridge writes only the
-structured log**, and there is no equivalent option.
+`ssh_raw.log`, the latter opt-in through `bridge.retain_raw_log`. **This bridge writes only the
+structured log**, and `retain_raw_log` is *refused* for it rather than ignored, since there is no
+file for it to control.
 
-The raw artifact exists because on SSH the wire command and the executed command are different
-objects: canonical quoting, and on the OpenClaw path a virtual-namespace translation, mean the
-structured record cannot reproduce what actually arrived. Here the request message carries the
-script verbatim and the bridge forwards it unchanged, so the structured record is already a
-faithful copy of both.
+An earlier revision justified that by arguing the raw artifact exists only because the SSH wire
+command and the executed command are different objects. That argument no longer holds: the bridge
+now decodes Hermes's grammar itself (section 2), so it receives the same verbatim payload SSH does.
+Three things the raw log uniquely held were re-examined, and each is accounted for:
 
-One thing is genuinely lost. Binary `stdin` that is not valid text is omitted from the structured
-record with a note, and the SSH bridges keep those bytes in the raw log; this bridge retains them
-nowhere. The note says so rather than pointing at a file that does not exist. If binary `stdin`
-fidelity turns out to matter, the answer is a raw artifact reintroduced on its own merits, not
-carried over by default.
+- **The verbatim wire command.** Accepted calls need nothing. The canonical round-trip check in
+  `decodeShellToken` rejects any payload whose script token is not canonically quoted, so for a call
+  that runs, the recorded `command` *is* the payload that arrived. Refused calls are different:
+  a payload that failed to decode has no canonical encoding, and `hermesssh` records only
+  `command_hash` for those, keeping the bytes in the raw log alone. Here refusal records carry
+  `command` too.
+- **Binary `stdin`.** JSON cannot hold arbitrary bytes — a property of the file format, not of SSH —
+  so `stdin_raw` carries them base64-encoded when they are not structured-safe, and the omission
+  note names that field instead of saying the bytes were not retained.
+- **The SSH request framing.** This has no successor and is the one accepted loss. A protobuf
+  request is not a comparable artifact.
 
-Refusals are recorded here, including a rejected session identity and a call against a revoked
-session — closing the gap named in the paragraph above rather than inheriting it.
+Refusals are recorded, including a call against a revoked session — closing the gap named in the
+paragraph above rather than inheriting it.
+
+#### Per-call sizes are logged, and the output bound is not yet chosen
+
+`Exec` buffers a whole reply, which the SSH bridge never did: it wrote straight to the channel and
+therefore had no output ceiling at all. grpc-go caps *receive* at 4 MiB by default on both sides,
+which would reject a response after the command had already run — a new failure mode. Both sides
+now set the limit to `math.MaxInt32`, Go's unlimited idiom, matching the existing send default.
+
+The truncation path is built and tested behind an `OutputLimit` option, with `truncated` reported in
+both the response and the record, so imposing a real bound later is a constant rather than new code.
+The number should come from measurement, not from this document: every call logs `stdin_bytes`,
+`stdout_bytes`, `stderr_bytes`, `truncated` and `duration_ms` at info level.
+
+**The risk being accepted meanwhile:** a reply is resident in memory twice on each side — the
+handler's buffer and the marshalled copy — so a large `stdout` costs roughly twice its size in the
+ARIES process, multiplied by task concurrency. That is the reason to measure early rather than to
+leave it unlimited indefinitely.
+
+**Compression is available and deliberately off.** grpc-go ships gzip but compresses nothing by
+default, and a server with no compressor configured only gzips a reply when the client gzipped the
+request — backwards here, where the request is a script and the reply is the large half. Forcing it
+is one blank import plus `grpc.SetSendCompressor` in the handler. It is not enabled because the
+bytes never leave the host: harness container to task gateway over a local Docker bridge, where
+link bandwidth is not the scarce resource and memory is. The trigger to revisit is a bridge whose
+two ends stop sharing a host. Note also that `MaxRecvMsgSize` applies to the *decompressed* size,
+so compression does not interact with that cap the way it might appear to.
 
 **Sources:** `pkg/bridge/hermesssh/bridge.go`, `docs/design/hermes-bridge-inventory.md`,
 `docs/design/ssh-connection-lifecycle.md`.
@@ -410,9 +458,11 @@ session — closing the gap named in the paragraph above rather than inheriting 
 - No client environment reaching the sandbox.
 - Bounded `stdin` retention; no command output in the audit.
 - Per-task ephemeral credentials, removed at revocation.
-- Per-call output bounds. Note that `Exec` now buffers up to that bound rather than
-  streaming through; see [why neither side streams](#why-neither-side-streams).
 - Refusals recorded distinctly from failures.
+- Grammar-based validation of the payload, and with it the refusal of Hermes's `~/.hermes` file
+  sync. The check stays on the server, where a caller holding the staged credentials cannot route
+  around it.
+- Canonical shell quoting and its round-trip verification, which `grammar.go` carries over whole.
 
 **Dropped — transport artifacts with no successor.**
 
@@ -421,8 +471,10 @@ session — closing the gap named in the paragraph above rather than inheriting 
 - Host keys and known-hosts pinning, replaced by mTLS.
 - The handshake deadline, and the fact that clearing it leaves no idle timeout.
 - The `keepalive` global-request handler.
-- Grammar-based payload validation of the *envelope*, replaced by typed messages. The script
-  itself stays an opaque string, so nothing validates its contents on either transport.
+- The byte-level `ssh_raw.log`. What it uniquely held is absorbed into the structured record;
+  see [section 6](#6-evidence).
+- Per-call output bounds, for now. `Exec` buffers a whole reply where SSH streamed, and the bound
+  is deliberately unlimited until real runs supply a number; see [section 6](#6-evidence).
 
 **Sources:** `docs/design/hermes-bridge-inventory.md`,
 `docs/design/ssh-connection-lifecycle.md`.
@@ -490,9 +542,19 @@ translates the invocation into a gRPC call.
 
 There is direct precedent: ARIES stages `/opt/aries/bin/aries-ssh` mode `0555` for the OpenClaw
 path and OpenClaw is *configured* to call it (`pkg/harness/openclaw/config.go:314`). The
-difference for Hermes is that ARIES deliberately refuses to supply a client command
-(`pkg/harness/hermes/config.go:232-238`), so the shim is reached by shadowing `PATH` rather than by
-configuration — implicit where the other is explicit.
+difference for Hermes is that ARIES deliberately refuses to supply a client command, so the shim is
+reached by shadowing `PATH` rather than by configuration — implicit where the other is explicit.
+
+> **The shadowing is temporary, and removing it takes two separate changes.**
+>
+> It exists first because `pkg/harness/hermes/config.go` must keep emitting a working SSH
+> environment for `hermes-ssh`, which is still the supported pairing. Retiring SSH frees that file
+> to be rewritten for gRPC alone.
+>
+> That alone does not remove the trick, and it would be misleading to imply otherwise: upstream
+> Hermes resolves `ssh` by name from `PATH` whatever ARIES puts in the environment. The shadowing
+> disappears only together with the pin move to a Hermes carrying its own pluggable-backend seam —
+> the second route below. Two removals, not one, and neither is on this iteration's path.
 
 What this buys: an end-to-end run against the **same pinned image the SSH bridge uses**, with no
 image patch and no dependency on a pluggable-backend seam. Staging a file is what ARIES already
@@ -523,8 +585,14 @@ revocation are all testable against a purpose-built Go client — which is what 
 would use regardless, exactly as `bridge_test.go` drives the SSH bridge with a raw
 `x/crypto/ssh` client rather than a real harness. Suggested order:
 
-1. Build the bridge and its test client. No pin change, no harness change, nothing user-visible.
-2. Add the staged shim and prove an end-to-end run on the current pin.
+1. ~~Build the bridge and its test client.~~ **Done.**
+2. ~~Add the staged client and wire it through.~~ **Done**, with one gap: the argv Hermes actually
+   emits has not been captured, so `remotePayload`'s rule is reasoned from `ssh(1)`'s option set
+   rather than from a recording. `pkg/bridge/hermesgrpc/integration_test.go` proves the whole path
+   against a real Docker sandbox, but drives it with an argv this repository wrote. Capturing the
+   real one against the pinned image is what closes it — and it also decides whether `ExecRequest`
+   should carry `repeated string argv` instead of a flattened `script`, which would remove the
+   client's join and the server's re-parse.
 3. Move the pin and adopt the native backend later, as its own change, re-recording payloads and
    re-running `TestUpstreamHermesDrivesTheBridgeWithoutPatches`.
 

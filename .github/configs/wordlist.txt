@@ -10,6 +10,7 @@ automattic's
 asr
 backend
 backends
+base64
 bursty
 cadvisor
 centric
@@ -22,6 +23,7 @@ cpu
 cpus
 csv
 ctrf
+decompressed
 deduplicates
 deepseek
 deepseek's
@@ -39,6 +41,7 @@ gid
 github
 gpu
 grpc
+gzip
 heredoc
 heredocs
 hermes
@@ -88,6 +91,7 @@ prefill
 preflight
 preload
 protobuf
+proxied
 qa's
 prewarm
 Qwen
@@ -140,6 +144,7 @@ tts
 tty
 uid
 unary
+unbounded
 untracked
 upstream's
 url's

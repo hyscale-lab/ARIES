@@ -387,14 +387,15 @@ cases and a `default` error each:
 | `benchmark.type` | `terminalbench2`, `deepresearchbench`, `swebenchpro` | `unsupported benchmark type %q` |
 | `harness.type` | `openclaw`, `hermes` | `unsupported harness type %q` |
 | `sandbox.type` | `docker` | `unsupported sandbox type %q` |
-| `bridge.type` | `openclaw-ssh`, `hermes-ssh` | `unsupported bridge type %q` |
+| `bridge.type` | `openclaw-ssh`, `hermes-ssh`, `hermes-grpc` | `unsupported bridge type %q` |
 
 Then the pairing rule (`wiring.go:78-82`):
 
 ```go
-	// Each bridge speaks one harness's SSH grammar, so the pair is checked
-	// here rather than left to fail at the first tool call.
-	if (cfg.Harness.Type == "hermes") != (cfg.Bridge.Type == "hermes-ssh") {
+	// Each bridge speaks one harness's command grammar, so the pair is checked
+	// here rather than left to fail at the first tool call. Hermes now has two
+	// bridges; a third harness would make this boolean the wrong shape.
+	if (cfg.Harness.Type == "hermes") != (cfg.Bridge.Type == "hermes-ssh" || cfg.Bridge.Type == "hermes-grpc") {
 		return fmt.Errorf("harness type %q requires its paired bridge, not %q", cfg.Harness.Type, cfg.Bridge.Type)
 	}
 ```
@@ -549,7 +550,8 @@ Validation is exhaustive on shape and on the enumerations config owns — `runti
 (`environment`/`judge`/`fact` for Deep Research Bench; `web_search`/`subagents`/`realtime` for the
 two harnesses) with an explicit comment delegating unknown-type rejection to wiring (`:525-527`);
 `sandbox.type` and `bridge.type` are never inspected by value. The harness↔bridge pairing has no
-code in this package.
+code in this package, nor does the refusal of `bridge.retain_raw_log` for the gRPC bridge; both
+live in wiring.
 
 `versions.json` (`Versions`, `:247-279`) pins a repository URL and 40-hex revision for each
 benchmark and a tag-only, non-`latest` image for each harness; every pin is validated on every
