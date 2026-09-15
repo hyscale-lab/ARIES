@@ -301,8 +301,11 @@ same DeepSeek credential and no extra setup:
 ```
 
 Hermes is text only. It runs the pinned upstream image unmodified and is paired
-with `bridge.type: "hermes-ssh"`; the two values must match, and a crossed pair
-is rejected before the run starts. Hermes issues every tool call as `bash -c`,
+with `bridge.type: "hermes-ssh"` or `"hermes-grpc"`; a crossed pair is rejected
+before the run starts. The gRPC bridge is a transport swap and keeps the same
+guarantees, including the file-sync refusal below; it stages ARIES's own client
+into the harness container, so `bin/aries-grpc` must sit beside `bin/aries`, and
+it writes no `ssh_raw.log`, so `bridge.retain_raw_log` is refused for it. Hermes issues every tool call as `bash -c`,
 so the task image must provide `/bin/bash`. Its `~/.hermes` file sync is refused by
 the bridge to keep the evaluated sandbox free of harness scaffold and
 credentials; Hermes logs one `file_sync: sync failed` warning and continues.
