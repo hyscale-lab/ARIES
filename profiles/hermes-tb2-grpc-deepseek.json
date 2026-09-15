@@ -1,5 +1,5 @@
 {
-  "name": "hermes-tb2-fix-git-deepseek",
+  "name": "hermes-tb2-grpc-deepseek",
   "versions_file": "../configs/versions.json",
   "overrides_file": "",
   "execution": {
