@@ -40,9 +40,14 @@ const (
 	defaultMaxTurns        = 90
 	defaultTerminalTimeout = 180
 	maxDockerOutput        = 16 << 20
-	maxAPIKeyBytes         = 16 << 10
-	gracefulStopSeconds    = 5
-	execTrailerKeep        = 256
+
+	// maxStagedClientBytes bounds the staged gRPC client. It is a linked Go
+	// binary, not a credential: aries-grpc is already ~16 MB and varies with
+	// the toolchain, so the credential bound is the wrong order of magnitude.
+	maxStagedClientBytes = 128 << 20
+	maxAPIKeyBytes       = 16 << 10
+	gracefulStopSeconds  = 5
+	execTrailerKeep      = 256
 
 	// imageDeclaredVolume is the upstream image's own VOLUME. ARIES does not
 	// use it — HERMES_HOME is relocated to a staged private directory — but
@@ -1184,7 +1189,7 @@ func (manager *Manager) validateContainer(ctx context.Context, active *session) 
 }
 
 func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([]byte, error) {
-	identity, err := readStablePrivateFile(active.endpoint.IdentitySourceFile, 0o600)
+	identity, err := readStablePrivateFile(active.endpoint.IdentitySourceFile, 0o600, maxDockerOutput)
 	if err != nil {
 		return nil, fmt.Errorf("read Hermes identity: %w", err)
 	}
@@ -1200,11 +1205,11 @@ func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([
 		// The identity is the client certificate and key; the trusted file is
 		// the one bridge certificate the client accepts. Both are read with
 		// their exact host modes, as the SSH identity is.
-		trusted, err := readStablePrivateFile(active.endpoint.KnownHostsSourceFile, 0o600)
+		trusted, err := readStablePrivateFile(active.endpoint.KnownHostsSourceFile, 0o600, maxDockerOutput)
 		if err != nil {
 			return nil, fmt.Errorf("read Hermes gRPC trusted certificate: %w", err)
 		}
-		client, err := readStablePrivateFile(active.endpoint.ClientSourceFile, 0o555)
+		client, err := readStablePrivateFile(active.endpoint.ClientSourceFile, 0o555, maxStagedClientBytes)
 		if err != nil {
 			return nil, fmt.Errorf("read Hermes gRPC client: %w", err)
 		}
@@ -1513,7 +1518,12 @@ func failedHarnessResult(active *session, started time.Time, err error) core.Har
 	return core.HarnessResult{Status: status, Duration: time.Since(started), LogPaths: append([]string(nil), active.logPaths...), Error: errorText}
 }
 
-func readStablePrivateFile(path string, mode os.FileMode) ([]byte, error) {
+// readStablePrivateFile reads one file whose mode and size must both be exactly
+// what the caller expects. The limit is explicit because the two classes of
+// staged file differ by five orders of magnitude: credentials are bounded by
+// maxDockerOutput, while the staged client is a Go binary and needs its own
+// bound. Reusing the credential bound for the binary is what broke a real run.
+func readStablePrivateFile(path string, mode os.FileMode, limit int64) ([]byte, error) {
 	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, err
@@ -1524,11 +1534,11 @@ func readStablePrivateFile(path string, mode os.FileMode) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !before.Mode().IsRegular() || before.Mode().Perm() != mode || before.Size() < 1 || before.Size() > maxDockerOutput {
-		return nil, errors.New("private source is not one bounded regular file with the required mode")
+	if !before.Mode().IsRegular() || before.Mode().Perm() != mode || before.Size() < 1 || before.Size() > limit {
+		return nil, fmt.Errorf("private source %s is not one regular file of mode %04o within %d bytes", filepath.Base(path), mode, limit)
 	}
-	content, err := io.ReadAll(io.LimitReader(file, maxDockerOutput+1))
-	if err != nil || len(content) > maxDockerOutput {
+	content, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil || int64(len(content)) > limit {
 		return nil, errors.New("read private source within bound")
 	}
 	after, err := file.Stat()
@@ -1547,7 +1557,7 @@ func writeArtifact(path string, content []byte) error {
 		if !errors.Is(err, os.ErrExist) {
 			return err
 		}
-		existing, readErr := readStablePrivateFile(path, 0o600)
+		existing, readErr := readStablePrivateFile(path, 0o600, maxDockerOutput)
 		if readErr == nil && bytes.Equal(existing, content) {
 			clear(existing)
 			return nil

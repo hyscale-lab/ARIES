@@ -1111,3 +1111,60 @@ func TestStartStagesTheGRPCClientAndCredentials(t *testing.T) {
 		}
 	}
 }
+
+// The staged client is a linked Go binary, not a credential. It already sits
+// near 16 MB and varies with the toolchain, so reading it under the credential
+// bound failed a real run with "private source is not one bounded regular file
+// with the required mode" — a message that pointed at the mode rather than the
+// size. This stages a client larger than maxDockerOutput to keep the two
+// bounds from being conflated again.
+func TestStartStagesAClientLargerThanTheCredentialBound(t *testing.T) {
+	fake := newFakeDocker()
+	manager := newTestManager(t, fake, []byte("model-secret"))
+	request := testRequest(t)
+	request.Endpoint = grpcEndpointFiles(t)
+
+	oversized := filepath.Join(t.TempDir(), "aries-grpc")
+	if err := os.WriteFile(oversized, make([]byte, maxDockerOutput+1), 0o555); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(oversized, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	request.Endpoint.ClientSourceFile = oversized
+
+	if err := manager.Start(context.Background(), request); err != nil {
+		t.Fatalf("a client past the credential bound was refused: %v", err)
+	}
+	defer manager.Stop(context.Background())
+
+	entry, ok := archiveEntries(t, fake.archive)[strings.TrimPrefix(clientContainerFS, "/")]
+	if !ok {
+		t.Fatal("the client was not staged")
+	}
+	if entry.Size != int64(maxDockerOutput)+1 {
+		t.Fatalf("staged client size = %d, want %d", entry.Size, maxDockerOutput+1)
+	}
+}
+
+// Credentials keep the tight bound; only the client may be large.
+func TestStartRefusesAnOversizedCredential(t *testing.T) {
+	fake := newFakeDocker()
+	manager := newTestManager(t, fake, []byte("model-secret"))
+	request := testRequest(t)
+	request.Endpoint = grpcEndpointFiles(t)
+
+	oversized := filepath.Join(t.TempDir(), "client.pem")
+	if err := os.WriteFile(oversized, make([]byte, maxDockerOutput+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(oversized, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	request.Endpoint.IdentitySourceFile = oversized
+
+	if err := manager.Start(context.Background(), request); err == nil {
+		t.Fatal("an oversized credential was accepted")
+	}
+	manager.Stop(context.Background())
+}
