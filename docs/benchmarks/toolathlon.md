@@ -26,6 +26,12 @@ pieces through the sandbox and leaves the agent loop to the ARIES harness.
   block. Only the Hermes harness renders an MCP client configuration today,
   so `benchmark.type: "toolathlon"` requires `harness.type: "hermes"`. The
   harness's own terminal and file tools still go through the SSH bridge.
+  How the gateway's tools appear to the model depends on the Hermes
+  version: `v2026.5.29.2` registers each one as a tool named
+  `mcp_<server>_<tool>`; `v2026.8.31` (the current pin) lists them as
+  `mcp__<server>__<tool>` behind its `tool_describe` and `tool_call` pair,
+  so the trajectory records calls to `tool_call` with the MCP tool's name
+  as an argument. Verified end to end on both.
 - **Evaluation** re-injects the trusted task bundle and the grader, then runs
   Toolathlon's `container_eval`, whose verdict file decides the score. The
   grader trusts nothing the agent could write: the task configuration comes
