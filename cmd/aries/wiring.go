@@ -13,6 +13,7 @@ import (
 	"github.com/hyscale-lab/aries/pkg/benchmark/sweatlas"
 	"github.com/hyscale-lab/aries/pkg/benchmark/swebenchpro"
 	"github.com/hyscale-lab/aries/pkg/benchmark/terminalbench"
+	"github.com/hyscale-lab/aries/pkg/bridge/hermesgrpc"
 	"github.com/hyscale-lab/aries/pkg/bridge/hermesssh"
 	"github.com/hyscale-lab/aries/pkg/bridge/openclawssh"
 	"github.com/hyscale-lab/aries/pkg/config"
@@ -74,13 +75,21 @@ func validateComponents(cfg config.Config) error {
 	switch cfg.Bridge.Type {
 	case "openclaw-ssh":
 	case "hermes-ssh":
+	case "hermes-grpc":
 	default:
 		return fmt.Errorf("unsupported bridge type %q", cfg.Bridge.Type)
 	}
-	// Each bridge speaks one harness's SSH grammar, so the pair is checked
-	// here rather than left to fail at the first tool call.
-	if (cfg.Harness.Type == "hermes") != (cfg.Bridge.Type == "hermes-ssh") {
+	// Each bridge speaks one harness's command grammar, so the pair is checked
+	// here rather than left to fail at the first tool call. Hermes now has two
+	// bridges; a third harness would make this boolean the wrong shape.
+	if (cfg.Harness.Type == "hermes") != (cfg.Bridge.Type == "hermes-ssh" || cfg.Bridge.Type == "hermes-grpc") {
 		return fmt.Errorf("harness type %q requires its paired bridge, not %q", cfg.Harness.Type, cfg.Bridge.Type)
+	}
+	// The gRPC bridge writes one audit artifact and no raw log, so the flag
+	// would silently do nothing. Refusing an inapplicable field is this
+	// repository's convention.
+	if cfg.Bridge.Type == "hermes-grpc" && cfg.Bridge.RetainRawLog != nil {
+		return errors.New("bridge type \"hermes-grpc\" writes no raw log, so retain_raw_log does not apply")
 	}
 	return nil
 }
@@ -400,6 +409,18 @@ func newBridge(cfg config.Config, outputRoot string, logger *logrus.Logger) (run
 		bridge, err := hermesssh.New(hermesssh.Options{OutputDir: outputRoot, Logger: logger, OmitRawLog: !cfg.Bridge.RetainBridgeRawLog()})
 		if err != nil {
 			return nil, fmt.Errorf("construct Hermes SSH bridge: %w", err)
+		}
+		return bridge, nil
+	case "hermes-grpc":
+		// Hermes has no client for this transport, so ARIES supplies one and
+		// the harness puts it on PATH under the name Hermes invokes.
+		executable, err := os.Executable()
+		if err != nil {
+			return nil, fmt.Errorf("locate ARIES executable: %w", err)
+		}
+		bridge, err := hermesgrpc.New(hermesgrpc.Options{OutputDir: outputRoot, ClientPath: filepath.Join(filepath.Dir(executable), "aries-grpc"), Logger: logger})
+		if err != nil {
+			return nil, fmt.Errorf("construct Hermes gRPC bridge: %w", err)
 		}
 		return bridge, nil
 	default:

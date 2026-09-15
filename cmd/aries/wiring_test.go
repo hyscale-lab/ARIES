@@ -75,7 +75,7 @@ func TestExplicitCompositionSwitches(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(source)
-	for _, value := range []string{`case "terminalbench2"`, `case "sweatlasqa"`, `case "swebenchpro"`, `case "openclaw"`, `case "hermes"`, `case "docker"`, `case "openclaw-ssh"`, `case "hermes-ssh"`, `case "deepseek"`, `case "sglang"`, `case "openai"`} {
+	for _, value := range []string{`case "terminalbench2"`, `case "sweatlasqa"`, `case "swebenchpro"`, `case "openclaw"`, `case "hermes"`, `case "docker"`, `case "openclaw-ssh"`, `case "hermes-ssh"`, `case "hermes-grpc"`, `case "deepseek"`, `case "sglang"`, `case "openai"`} {
 		if !strings.Contains(text, value) {
 			t.Fatalf("missing explicit switch %s", value)
 		}
@@ -142,7 +142,7 @@ func TestBenchmarkDispatchersFailClosed(t *testing.T) {
 	}
 }
 
-// Each bridge implements exactly one harness's SSH grammar, so a crossed pair
+// Each bridge implements exactly one harness's command grammar, so a crossed pair
 // must be refused before the run starts rather than at the first tool call.
 func TestValidateComponentsRequiresPairedHarnessAndBridge(t *testing.T) {
 	for _, tc := range []struct {
@@ -153,8 +153,10 @@ func TestValidateComponentsRequiresPairedHarnessAndBridge(t *testing.T) {
 	}{
 		{name: "openclaw pair", harness: "openclaw", bridge: "openclaw-ssh"},
 		{name: "hermes pair", harness: "hermes", bridge: "hermes-ssh"},
+		{name: "hermes grpc pair", harness: "hermes", bridge: "hermes-grpc"},
 		{name: "hermes with openclaw bridge", harness: "hermes", bridge: "openclaw-ssh", wantErr: true},
 		{name: "openclaw with hermes bridge", harness: "openclaw", bridge: "hermes-ssh", wantErr: true},
+		{name: "openclaw with hermes grpc bridge", harness: "openclaw", bridge: "hermes-grpc", wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := config.Config{
@@ -424,5 +426,58 @@ func TestExternalOpenAIPreparationReturnsNilRuntime(t *testing.T) {
 	cfg.Runtime.Mode = "managed"
 	if _, err := prepareBackend(cfg, t.TempDir()); err == nil {
 		t.Fatal("managed OpenAI-compatible runtime was accepted")
+	}
+}
+
+// The gRPC bridge writes one audit artifact and no raw log, so a profile that
+// sets retain_raw_log for it is asking for something that cannot happen. This
+// repository refuses an inapplicable field rather than ignoring it.
+func TestValidateComponentsRejectsRetainRawLogForGRPC(t *testing.T) {
+	retain := true
+	for _, value := range []*bool{&retain, new(bool)} {
+		cfg := config.Config{
+			Benchmark: config.BenchmarkConfig{Type: "terminalbench2"},
+			Harness:   config.HarnessConfig{Type: "hermes"},
+			Sandbox:   config.SandboxConfig{Type: "docker"},
+			Bridge:    config.BridgeConfig{Type: "hermes-grpc", RetainRawLog: value},
+		}
+		if err := validateComponents(cfg); err == nil || !strings.Contains(err.Error(), "retain_raw_log") {
+			t.Fatalf("retain_raw_log=%v was accepted: %v", *value, err)
+		}
+	}
+	cfg := config.Config{
+		Benchmark: config.BenchmarkConfig{Type: "terminalbench2"},
+		Harness:   config.HarnessConfig{Type: "hermes"},
+		Sandbox:   config.SandboxConfig{Type: "docker"},
+		Bridge:    config.BridgeConfig{Type: "hermes-grpc"},
+	}
+	if err := validateComponents(cfg); err != nil {
+		t.Fatalf("an unset retain_raw_log was rejected: %v", err)
+	}
+}
+
+// Every shipped profile must select a wired composition. pkg/config's
+// TestCheckedInProfilesLoad already proves they parse, but it cannot reach
+// validateComponents from there, so an unsupported bridge type or a crossed
+// harness/bridge pair would otherwise only surface when someone ran the
+// profile.
+func TestShippedProfilesSelectWiredComponents(t *testing.T) {
+	paths, err := filepath.Glob(filepath.Join("..", "..", "profiles", "*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) == 0 {
+		t.Fatal("no profiles found")
+	}
+	for _, path := range paths {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			cfg, err := config.Load(path)
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			if err := validateComponents(cfg); err != nil {
+				t.Fatalf("validateComponents: %v", err)
+			}
+		})
 	}
 }
