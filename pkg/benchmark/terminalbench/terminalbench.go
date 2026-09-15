@@ -36,16 +36,20 @@ type Options struct {
 	ExecutionTaskIDs []string
 	OutputDir        string
 	Revision         string
+	// VerifierTimeoutFloor raises every task's verifier budget to at least
+	// this duration. Zero keeps the task.toml values. It never lowers one.
+	VerifierTimeoutFloor time.Duration
 }
 
 // Benchmark discovers selected Terminal-Bench tasks and retains their private
 // verifier trees until evaluation.
 type Benchmark struct {
-	root             string
-	taskIDs          []string
-	executionTaskIDs []string
-	outputDir        string
-	revision         string
+	root                 string
+	taskIDs              []string
+	executionTaskIDs     []string
+	outputDir            string
+	revision             string
+	verifierTimeoutFloor time.Duration
 
 	mu      sync.RWMutex
 	details map[string]taskDetails
@@ -144,13 +148,18 @@ func New(options Options) (*Benchmark, error) {
 		}
 	}
 
+	if options.VerifierTimeoutFloor < 0 {
+		return nil, errors.New("verifier timeout floor must not be negative")
+	}
+
 	return &Benchmark{
-		root:             filepath.Clean(options.Root),
-		taskIDs:          slices.Clone(options.TaskIDs),
-		executionTaskIDs: slices.Clone(executionIDs),
-		outputDir:        filepath.Clean(options.OutputDir),
-		revision:         options.Revision,
-		details:          make(map[string]taskDetails, len(options.TaskIDs)),
+		root:                 filepath.Clean(options.Root),
+		taskIDs:              slices.Clone(options.TaskIDs),
+		executionTaskIDs:     slices.Clone(executionIDs),
+		outputDir:            filepath.Clean(options.OutputDir),
+		revision:             options.Revision,
+		verifierTimeoutFloor: options.VerifierTimeoutFloor,
+		details:              make(map[string]taskDetails, len(options.TaskIDs)),
 	}, nil
 }
 
@@ -171,6 +180,9 @@ func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
 		}
 		executionID := b.executionTaskIDs[index]
 		task.ID = executionID
+		if private.timeout < b.verifierTimeoutFloor {
+			private.timeout = b.verifierTimeoutFloor
+		}
 		tasks = append(tasks, task)
 		details[executionID] = private
 	}
