@@ -11,6 +11,7 @@ build:
 	mkdir -p bin
 	go build -o bin/aries ./cmd/aries
 	CGO_ENABLED=0 go build -o bin/aries-ssh ./cmd/aries-ssh
+	CGO_ENABLED=0 go build -o bin/aries-grpc ./cmd/aries-grpc
 
 test:
 	go test -v ./...

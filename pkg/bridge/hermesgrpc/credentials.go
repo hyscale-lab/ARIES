@@ -24,33 +24,49 @@ import (
 	"time"
 )
 
-// generateSessionCertificates returns the server's TLS certificate, the
-// client's parsed certificate for pinning, and the client's certificate and
-// key in PEM form for staging into the harness container.
-func generateSessionCertificates(gateway string) (tls.Certificate, *x509.Certificate, []byte, []byte, error) {
+// sessionCredentials is the per-task material. The two files mirror what SSH
+// calls an identity and a known-hosts file, and are named for that: identity
+// holds the client's own certificate and key, trusted holds the one server
+// certificate the client accepts. Pinning the server is stricter than the SSH
+// path, where Hermes accepts the host key on first use and ARIES has no way to
+// preload one.
+type sessionCredentials struct {
+	server   tls.Certificate
+	client   *x509.Certificate
+	identity []byte
+	trusted  []byte
+}
+
+func generateSessionCertificates(gateway string) (sessionCredentials, error) {
 	address := net.ParseIP(gateway)
 	if address == nil {
-		return tls.Certificate{}, nil, nil, nil, fmt.Errorf("task network gateway %q is not an IP address", gateway)
+		return sessionCredentials{}, fmt.Errorf("task network gateway %q is not an IP address", gateway)
 	}
 
 	serverPEM, serverKeyPEM, err := selfSignedCertificate("aries-bridge", []net.IP{address})
 	if err != nil {
-		return tls.Certificate{}, nil, nil, nil, fmt.Errorf("generate Hermes gRPC server certificate: %w", err)
+		return sessionCredentials{}, fmt.Errorf("generate Hermes gRPC server certificate: %w", err)
 	}
 	clientPEM, clientKeyPEM, err := selfSignedCertificate(lockedUsername, nil)
 	if err != nil {
-		return tls.Certificate{}, nil, nil, nil, fmt.Errorf("generate Hermes gRPC client certificate: %w", err)
+		return sessionCredentials{}, fmt.Errorf("generate Hermes gRPC client certificate: %w", err)
 	}
 
 	serverCertificate, err := tls.X509KeyPair(serverPEM, serverKeyPEM)
 	if err != nil {
-		return tls.Certificate{}, nil, nil, nil, fmt.Errorf("load Hermes gRPC server keypair: %w", err)
+		return sessionCredentials{}, fmt.Errorf("load Hermes gRPC server keypair: %w", err)
 	}
 	clientCertificate, err := parseCertificate(clientPEM)
 	if err != nil {
-		return tls.Certificate{}, nil, nil, nil, err
+		return sessionCredentials{}, err
 	}
-	return serverCertificate, clientCertificate, clientPEM, clientKeyPEM, nil
+	// The identity file carries the certificate and the key together, as an
+	// SSH identity does; revocation removes it whole.
+	return sessionCredentials{
+		server: serverCertificate, client: clientCertificate,
+		identity: append(append([]byte(nil), clientPEM...), clientKeyPEM...),
+		trusted:  serverPEM,
+	}, nil
 }
 
 // selfSignedCertificate issues one Ed25519 certificate that is its own issuer.
