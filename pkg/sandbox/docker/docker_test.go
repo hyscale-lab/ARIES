@@ -86,6 +86,7 @@ type fakeClient struct {
 	uploadBytes    []byte
 	uploadErr      error
 	download       client.CopyFromContainerResult
+	downloadErr    error
 	downloadCalls  int
 	closeCalls     int
 	closeErr       error
@@ -282,6 +283,9 @@ func (f *fakeClient) CopyFromContainer(context.Context, string, client.CopyFromC
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.downloadCalls++
+	if f.downloadErr != nil {
+		return client.CopyFromContainerResult{}, f.downloadErr
+	}
 	return f.download, nil
 }
 
@@ -820,6 +824,37 @@ func TestUploadAndDownloadUseDockerArchives(t *testing.T) {
 	}
 	if err := sandbox.Download(context.Background(), "/work/source.bin", filepath.Join(sandbox.outputDir, "..", "escape")); err == nil {
 		t.Fatal("Download accepted destination outside output root")
+	}
+}
+
+func TestDownloadMissingSourcePathReturnsErrNotFound(t *testing.T) {
+	fake := &fakeClient{downloadErr: fakeNotFound{"archive path"}}
+	sandbox := startSandbox(t, fake)
+	defer sandbox.stop(context.Background())
+	destination := filepath.Join(sandbox.outputDir, "evaluation", "result.bin")
+	err := sandbox.Download(context.Background(), "/work/missing.bin", destination)
+	if !errors.Is(err, runner.ErrNotFound) {
+		t.Fatalf("Download() error = %v, want an error wrapping runner.ErrNotFound", err)
+	}
+}
+
+func TestDownloadMissingContainerDoesNotReturnErrNotFound(t *testing.T) {
+	fake := &fakeClient{downloadErr: fakeNotFound{"archive path"}}
+	sandbox := startSandbox(t, fake)
+	defer sandbox.stop(context.Background())
+	// Simulate the container itself vanishing: ContainerInspect now reports
+	// not-found too, so the ambiguous CopyFromContainer 404 must not be
+	// mistaken for a missing source path.
+	fake.mu.Lock()
+	fake.containerID = ""
+	fake.mu.Unlock()
+	destination := filepath.Join(sandbox.outputDir, "evaluation", "result.bin")
+	err := sandbox.Download(context.Background(), "/work/missing.bin", destination)
+	if err == nil {
+		t.Fatal("Download() succeeded despite container loss")
+	}
+	if errors.Is(err, runner.ErrNotFound) {
+		t.Fatalf("Download() error = %v, want a plain failure, not runner.ErrNotFound", err)
 	}
 }
 
