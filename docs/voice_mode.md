@@ -62,6 +62,8 @@ Main artifacts are the same as in `realtime` mode.
 
 **Timeout semantics:** OpenClaw `voice-transcribe` uses a separate STT timeout for the streaming transcription session. After the transcript is ready, ARIES closes the realtime gateway connection and starts the agent over a fresh response-only gateway connection with the full harness agent timeout.
 
+OpenClaw currently does not expose a recording-level "transcription complete"signal for this path. ARIES therefore treats the transcription as complete after receiving at least one finalized `transcript.done` segment and then observing no further relevant events during `quiet_duration`, bounded by `listen_duration`.
+
 ## Hermes `voice-transcribe`
 
 Use:
