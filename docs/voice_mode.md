@@ -1,4 +1,3 @@
-
 # Voice Modes
 
 Three voice-oriented harness modes are currently supported. In each voice mode, the task prompt is synthesized into `voice-instruction.wav` at the start of the task run.
@@ -24,10 +23,10 @@ Use:
 
 This is OpenClaw’s realtime Talk mode. Synthesized audio chunks are streamed to the OpenClaw Gateway, which relays them to the realtime voice provider. The recognized request is then always forwarded to the OpenClaw agent via `agent-consult`, as `force-agent-consult` is enabled in our setup. Rather than providing a direct transcription, the realtime provider generates a request for the downstream agent. Consequently, the original spoken request may be reformulated, summarized, or transformed into an agent-oriented instruction before reaching the agent.
 
-For OpenClaw, the ASR/realtime provider and model are the top-level
-`harness.realtime.provider` and `harness.realtime.model` fields; they are sent
-as gateway session parameters. `harness.realtime.tts` configures only
+For OpenClaw, the ASR/realtime provider and model are the top-level `harness.realtime.provider` and `harness.realtime.model` fields; they are sent as gateway session parameters. `harness.realtime.tts` configures only
 synthesis of the task prompt into WAV before the task run starts.
+
+**Timeout semantics:** OpenClaw `realtime` is bounded as one end-to-end realtime session. Audio streaming, realtime speech recognition, provider output, tool call handling, and any nested agent consult all share the harness agent timeout.
 
 Main artifacts:
 
@@ -50,7 +49,8 @@ Use:
     "model": "gpt-realtime",
     "tts": {
       "provider": "openai",
-      "api_key_env": "OPENAI_API_KEY"
+      "api_key_env": "OPENAI_API_KEY",
+      "timeout": "5m"
     }
   }
 }
@@ -59,6 +59,8 @@ Use:
 This mode uses OpenClaw’s realtime transcription mode. Synthesized audio chunks are streamed to the OpenClaw Gateway, which performs streaming speech recognition and returns the resulting transcript without generating a conversational response. The transcript is then passed to the OpenClaw agent as a regular text input, reproducing the default text-based pipeline.
 
 Main artifacts are the same as in `realtime` mode.
+
+**Timeout semantics:** OpenClaw `voice-transcribe` uses a separate STT timeout for the streaming transcription session. After the transcript is ready, ARIES closes the realtime gateway connection and starts the agent over a fresh response-only gateway connection with the full harness agent timeout.
 
 ## Hermes `voice-transcribe`
 
@@ -84,9 +86,7 @@ Use:
 
 This mode follows Hermes’ voice interaction pipeline. The synthesized audio is passed as a complete utterance to the configured Hermes ASR engine for transcription. The resulting transcript is then used as input to a Hermes agent run.
 
-`harness.voice_transcribe.stt.timeout` bounds only the speech-to-text step: the time ARIES waits for Hermes to transcribe the synthesized audio before starting
-the agent. It does not limit the later agent run; that is still controlled by
-the task/harness agent timeout.
+**Timeout semantics:** `harness.voice_transcribe.stt.timeout` bounds only the speech-to-text step: the time ARIES waits for Hermes to transcribe the synthesized audio before starting the agent. It does not limit the later agent run; that is still controlled by the task/harness agent timeout. This matches OpenClaw `voice-transcribe` semantics: speech recognition and agent execution have separate budgets.
 
 Main artifacts:
 
