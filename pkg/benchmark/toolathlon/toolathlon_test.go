@@ -22,6 +22,8 @@ var fixtureTasks = map[string]string{
 	"github-task":      `{"needed_mcp_servers": ["github", "filesystem"], "max_turns": 10}`,
 	"k8s-task":         `{"needed_mcp_servers": ["k8s"], "max_turns": 10}`,
 	"unknown-server":   `{"needed_mcp_servers": ["mystery"], "max_turns": 10}`,
+	"public-task":      `{"needed_mcp_servers": ["fetch", "scholarly", "rail_12306", "youtube-transcript", "arxiv-latex", "filesystem"], "max_turns": 10}`,
+	"agent-tool-task":  `{"needed_mcp_servers": ["yahoo-finance", "web_search"], "max_turns": 10}`,
 	"bad-server-name":  `{"needed_mcp_servers": ["../etc"], "max_turns": 10}`,
 	"no-evaluation":    `{"needed_mcp_servers": ["memory"], "max_turns": 10}`,
 	"empty-task":       `{"needed_mcp_servers": ["memory"], "max_turns": 10}`,
@@ -60,7 +62,7 @@ func writeFixture(t *testing.T) string {
 	writeFile(t, root, ".gitignore", "configs/global_configs.py\nconfigs/token_key_session.py\n__pycache__/\nconfigs/.mcp-auth/\n")
 	writeFile(t, root, "configs/global_configs_example.py", "global_configs = {'podman_or_docker': 'docker'}\n")
 	writeFile(t, root, "configs/token_key_session_example.py", "canvas_domain = 'localhost:20001'\n")
-	writeFile(t, root, "configs/mcp_servers/canvas.yaml", "type: stdio\n")
+	writeCatalogue(t, root)
 	writeFile(t, root, "scripts/formal_run_v0.json", `{"global_task_config": {"dump_path": "./dumps", "direct_to_dumps": true}}`)
 	writeFile(t, root, "scripts/decoupled/container_preprocess.py", "print('preprocess')\n")
 	writeFile(t, root, "utils/helper.py", "def helper(): pass\n")
@@ -95,6 +97,19 @@ func writeFixture(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return root
+}
+
+// writeCatalogue lays out one server file per classified server, named
+// after the server as most of the real files are. The name inside is what
+// counts; TestTasksChecksTheServerCatalogue covers a file named otherwise.
+func writeCatalogue(t *testing.T, root string) {
+	t.Helper()
+	for name, kind := range serverKinds {
+		if kind == serverAgentTool {
+			continue
+		}
+		writeFile(t, root, catalogueDir+"/"+name+".yaml", "name: "+name+"\ntype: stdio\n")
+	}
 }
 
 func commitFixture(t *testing.T, root string) {
@@ -187,6 +202,79 @@ func TestTasksAcceptsObjectFormServersAndLocalOnlyTasks(t *testing.T) {
 	}
 	if servers := benchmark.details["object-form"].servers; !slices.Equal(servers, []string{"memory"}) {
 		t.Fatalf("object-form servers = %v", servers)
+	}
+}
+
+// Tasks cite a server by the `name:` inside its file, and five files are
+// named otherwise; every public server is accepted under the cited name, and
+// the one agent-side tool a task lists among its servers is let through as
+// Toolathlon's own runner lets it through.
+func TestTasksAcceptsPublicServersByTheirCitedNames(t *testing.T) {
+	root := writeFixture(t)
+	options := baseOptions(t, root)
+	options.TaskIDs = []string{"public-task", "agent-tool-task"}
+	benchmark, err := New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := benchmark.Tasks(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("tasks = %d, want 2", len(tasks))
+	}
+	if servers := benchmark.details["agent-tool-task"].servers; !slices.Equal(servers, []string{"yahoo-finance", "web_search"}) {
+		t.Fatalf("agent-tool-task servers = %v, want the config's list unmodified", servers)
+	}
+	for _, id := range options.TaskIDs {
+		if benchmark.details[id].needsApplications {
+			t.Fatalf("%s must not start the forwarder", id)
+		}
+	}
+}
+
+// The classification is only as good as its agreement with the pinned
+// checkout, so task load compares the two and names any difference.
+func TestTasksChecksTheServerCatalogue(t *testing.T) {
+	run := func(t *testing.T, mutate func(root string)) error {
+		t.Helper()
+		root := writeFixture(t)
+		mutate(root)
+		commitFixture(t, root)
+		options := baseOptions(t, root)
+		options.TaskIDs = []string{"excel-only"}
+		benchmark, err := New(options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = benchmark.Tasks(context.Background())
+		return err
+	}
+	if err := run(t, func(root string) {
+		// The file name is not the server name: the real npx-fetch.yaml.
+		if err := os.Rename(filepath.Join(root, catalogueDir, "fetch.yaml"), filepath.Join(root, catalogueDir, "npx-fetch.yaml")); err != nil {
+			t.Fatal(err)
+		}
+	}); err != nil {
+		t.Fatalf("renamed file: %v", err)
+	}
+	err := run(t, func(root string) {
+		writeFile(t, root, catalogueDir+"/xmind.yaml", "name: xmind\ntype: stdio\n")
+		if err := os.Remove(filepath.Join(root, catalogueDir, "git.yaml")); err != nil {
+			t.Fatal(err)
+		}
+	})
+	for _, want := range []string{"does not classify (xmind)", "lacks servers it expects (git)"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("err = %v, want it to contain %q", err, want)
+		}
+	}
+	err = run(t, func(root string) {
+		writeFile(t, root, catalogueDir+"/git.yaml", "type: stdio\n")
+	})
+	if err == nil || !strings.Contains(err.Error(), "git.yaml has no top-level name") {
+		t.Fatalf("err = %v, want the nameless file named", err)
 	}
 }
 

@@ -4,10 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"time"
 
 	"github.com/hyscale-lab/aries/internal/app"
@@ -63,15 +61,17 @@ func validateComponents(cfg config.Config) error {
 	case "swebenchpro":
 	case "toolathlon":
 		// Toolathlon's tools reach the harness only as an MCP server, and
-		// only the Hermes harness renders one.
-		if cfg.Harness.Type != "hermes" || len(cfg.Harness.MCPServers) == 0 {
-			return errors.New("benchmark type \"toolathlon\" requires the hermes harness with a harness.mcp_servers entry for the gateway")
+		// the adapter is wired for the Hermes harness. The gateway itself is
+		// added to that harness's MCP servers by mcpServers, so a profile's
+		// own harness.mcp_servers entries are extra servers and may not take
+		// its name.
+		if cfg.Harness.Type != "hermes" {
+			return errors.New("benchmark type \"toolathlon\" requires the hermes harness")
 		}
-		// And that server must be the gateway the adapter starts -- the
-		// sandbox's alias on the gateway port. Any other endpoint would
-		// start Hermes with no Toolathlon tools at all.
-		if !hasToolathlonGateway(cfg) {
-			return fmt.Errorf("benchmark type \"toolathlon\" requires a harness.mcp_servers entry at http://%s:%d, the gateway the adapter starts", dockersandbox.NetworkAlias, toolathlonGatewayPort(cfg))
+		for _, server := range cfg.Harness.MCPServers {
+			if server.Name == toolathlon.GatewayServerName {
+				return fmt.Errorf("harness.mcp_servers may not name %q: the adapter adds Toolathlon's gateway to the harness itself", toolathlon.GatewayServerName)
+			}
 		}
 	default:
 		return fmt.Errorf("unsupported benchmark type %q", cfg.Benchmark.Type)
@@ -108,24 +108,6 @@ func toolathlonGatewayPort(cfg config.Config) int {
 		return settings.GatewayPort
 	}
 	return toolathlon.DefaultGatewayPort
-}
-
-// hasToolathlonGateway reports whether one of the profile's MCP servers is
-// the sandbox's gateway: plain HTTP at the sandbox's network alias on the
-// gateway port. The gateway speaks no TLS, so an https URL would fail its
-// handshake and leave Hermes without tools just as an unrelated host would.
-func hasToolathlonGateway(cfg config.Config) bool {
-	port := strconv.Itoa(toolathlonGatewayPort(cfg))
-	for _, server := range cfg.Harness.MCPServers {
-		parsed, err := url.Parse(server.URL)
-		if err != nil {
-			continue
-		}
-		if parsed.Scheme == "http" && parsed.Hostname() == dockersandbox.NetworkAlias && parsed.Port() == port {
-			return true
-		}
-	}
-	return false
 }
 
 // prepareBackend turns the profile's runtime block into the model the harness
@@ -304,6 +286,19 @@ func sweatlasModels(cfg config.Config) (judge core.ModelConfig, judgeDisabled bo
 	return judgeCfg.CoreModel(), false
 }
 
+// mcpServers is the harness's MCP server list: the benchmark's own server
+// first, when the benchmark exposes its tools that way (Toolathlon's
+// gateway, at the sandbox's alias on the gateway port), then the profile's
+// harness.mcp_servers entries.
+func mcpServers(cfg config.Config) []core.MCPServerConfig {
+	out := make([]core.MCPServerConfig, 0, len(cfg.Harness.MCPServers)+1)
+	if cfg.Benchmark.Type == "toolathlon" {
+		gateway := toolathlon.Gateway(dockersandbox.NetworkAlias, toolathlonGatewayPort(cfg))
+		out = append(out, core.MCPServerConfig{Name: gateway.Name, URL: gateway.URL, Transport: gateway.Transport, TimeoutSeconds: gateway.TimeoutSeconds})
+	}
+	return append(out, cfg.Harness.MCPServers...)
+}
+
 // environmentFromConfig converts a profile's benchmark.environment block into
 // the runner-neutral core.Environment. cfg is nil only when Config.validate
 // hasn't run (e.g. ad-hoc construction); callers of newBenchmark and
@@ -355,7 +350,7 @@ func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byt
 			MaxConcurrentSubagents: cfg.Harness.Subagents.MaxConcurrent,
 			Compaction:             hermesCompaction(cfg.Harness.Compaction),
 			ExtraBody:              hermesExtraBody(cfg.Harness.Hermes),
-			MCPServers:             cfg.Harness.MCPServers,
+			MCPServers:             mcpServers(cfg),
 		}
 
 		if cfg.Harness.Mode == hermesharness.ModeVoiceTranscribe {

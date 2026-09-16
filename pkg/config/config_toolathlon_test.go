@@ -17,15 +17,17 @@ func toolathlonConfig(harness string) string {
 	return strings.Replace(profile, `"bridge":{"type":"openclaw-ssh"}`, `"bridge":{"type":"hermes-ssh"}`, 1)
 }
 
-const hermesWithGateway = `"harness":{"type":"hermes","mcp_servers":[{"name":"toolathlon","url":"http://task-sandbox:10086/sse","transport":"sse","timeout_seconds":300}]}`
+// hermesWithMCP names one MCP server of the profile's own; Toolathlon's
+// gateway is not a profile matter (see cmd/aries wiring).
+const hermesWithMCP = `"harness":{"type":"hermes","mcp_servers":[{"name":"docs","url":"https://docs.example/mcp","transport":"sse","timeout_seconds":300}]}`
 
 func TestHarnessMCPServersDecodeTransportAndTimeout(t *testing.T) {
-	cfg, err := Decode(strings.NewReader(toolathlonConfig(hermesWithGateway)))
+	cfg, err := Decode(strings.NewReader(toolathlonConfig(hermesWithMCP)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	servers := cfg.Harness.MCPServers
-	if len(servers) != 1 || servers[0].Name != "toolathlon" || servers[0].Transport != "sse" || servers[0].TimeoutSeconds != 300 {
+	if len(servers) != 1 || servers[0].Name != "docs" || servers[0].Transport != "sse" || servers[0].TimeoutSeconds != 300 {
 		t.Fatalf("mcp servers = %#v", servers)
 	}
 }
@@ -36,23 +38,23 @@ func TestHarnessMCPServersValidation(t *testing.T) {
 		wantErr string
 	}{
 		"bad name": {
-			harness: strings.Replace(hermesWithGateway, `"name":"toolathlon"`, `"name":"tool athlon"`, 1),
+			harness: strings.Replace(hermesWithMCP, `"name":"docs"`, `"name":"docs mcp"`, 1),
 			wantErr: "contains invalid characters",
 		},
 		"bad url": {
-			harness: strings.Replace(hermesWithGateway, `"url":"http://task-sandbox:10086/sse"`, `"url":"task-sandbox:10086/sse"`, 1),
+			harness: strings.Replace(hermesWithMCP, `"url":"https://docs.example/mcp"`, `"url":"docs.example/mcp"`, 1),
 			wantErr: "url must be absolute HTTP(S)",
 		},
 		"bad transport": {
-			harness: strings.Replace(hermesWithGateway, `"transport":"sse"`, `"transport":"stdio"`, 1),
+			harness: strings.Replace(hermesWithMCP, `"transport":"sse"`, `"transport":"stdio"`, 1),
 			wantErr: "transport must be sse or streamable-http",
 		},
 		"negative timeout": {
-			harness: strings.Replace(hermesWithGateway, `"timeout_seconds":300`, `"timeout_seconds":-1`, 1),
+			harness: strings.Replace(hermesWithMCP, `"timeout_seconds":300`, `"timeout_seconds":-1`, 1),
 			wantErr: "timeout_seconds must not be negative",
 		},
 		"duplicate name": {
-			harness: strings.Replace(hermesWithGateway, `}]}`, `},{"name":"toolathlon","url":"http://task-sandbox:10087/sse"}]}`, 1),
+			harness: strings.Replace(hermesWithMCP, `}]}`, `},{"name":"docs","url":"https://docs.example/other"}]}`, 1),
 			wantErr: "duplicate MCP server name",
 		},
 	}
@@ -70,7 +72,7 @@ func TestHarnessMCPServersValidation(t *testing.T) {
 }
 
 func TestToolathlonBenchmarkValidation(t *testing.T) {
-	valid := toolathlonConfig(hermesWithGateway)
+	valid := toolathlonConfig(`"harness":{"type":"hermes"}`)
 	cfg, err := Decode(strings.NewReader(valid))
 	if err != nil {
 		t.Fatal(err)
@@ -172,7 +174,7 @@ func TestToolathlonVersionPinRequiredOnlyWhenSelected(t *testing.T) {
 		}
 	}
 	profilePath := filepath.Join(profiles, "profile.json")
-	if err := os.WriteFile(profilePath, []byte(toolathlonConfig(hermesWithGateway)), 0o600); err != nil {
+	if err := os.WriteFile(profilePath, []byte(toolathlonConfig(`"harness":{"type":"hermes"}`)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	versionsPath := filepath.Join(configs, "versions.json")
