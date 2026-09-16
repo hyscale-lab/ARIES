@@ -4,10 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 
 	"github.com/hyscale-lab/aries/internal/app"
 	runtimesglang "github.com/hyscale-lab/aries/internal/modelruntime/sglang"
@@ -62,15 +60,16 @@ func validateComponents(cfg config.Config) error {
 	case "swebenchpro":
 	case "toolathlon":
 		// Toolathlon's tools reach the harness only as an MCP server, and
-		// only the Hermes harness renders one.
-		if cfg.Harness.Type != "hermes" || len(cfg.Harness.MCP.Servers) == 0 {
-			return errors.New("benchmark type \"toolathlon\" requires the hermes harness with a harness.mcp server for the gateway")
+		// only the Hermes harness has an MCP client. The gateway itself is
+		// added to that client by hermesMCPServers, so a profile's own
+		// harness.mcp entries are extra servers and may not take its name.
+		if cfg.Harness.Type != "hermes" {
+			return errors.New("benchmark type \"toolathlon\" requires the hermes harness, the one with an MCP client")
 		}
-		// And that server must be the gateway the adapter starts -- the
-		// sandbox's alias on the gateway port. Any other endpoint would
-		// start Hermes with no Toolathlon tools at all.
-		if !hasToolathlonGateway(cfg) {
-			return fmt.Errorf("benchmark type \"toolathlon\" requires a harness.mcp server at http://%s:%d, the gateway the adapter starts", dockersandbox.NetworkAlias, toolathlonGatewayPort(cfg))
+		for _, server := range cfg.Harness.MCP.Servers {
+			if server.Name == toolathlon.GatewayServerName {
+				return fmt.Errorf("harness.mcp.servers may not name %q: the adapter adds Toolathlon's gateway to the harness itself", toolathlon.GatewayServerName)
+			}
 		}
 	default:
 		return fmt.Errorf("unsupported benchmark type %q", cfg.Benchmark.Type)
@@ -107,24 +106,6 @@ func toolathlonGatewayPort(cfg config.Config) int {
 		return settings.GatewayPort
 	}
 	return toolathlon.DefaultGatewayPort
-}
-
-// hasToolathlonGateway reports whether one of the profile's MCP servers is
-// the sandbox's gateway: plain HTTP at the sandbox's network alias on the
-// gateway port. The gateway speaks no TLS, so an https URL would fail its
-// handshake and leave Hermes without tools just as an unrelated host would.
-func hasToolathlonGateway(cfg config.Config) bool {
-	port := strconv.Itoa(toolathlonGatewayPort(cfg))
-	for _, server := range cfg.Harness.MCP.Servers {
-		parsed, err := url.Parse(server.URL)
-		if err != nil {
-			continue
-		}
-		if parsed.Scheme == "http" && parsed.Hostname() == dockersandbox.NetworkAlias && parsed.Port() == port {
-			return true
-		}
-	}
-	return false
 }
 
 // prepareBackend turns the profile's runtime block into the model the harness
@@ -303,18 +284,26 @@ func sweatlasModels(cfg config.Config) (judge core.ModelConfig, judgeDisabled bo
 	return judgeCfg.CoreModel(), false
 }
 
-// environmentFromConfig converts a profile's benchmark.environment block into
-// the runner-neutral core.Environment. cfg is nil only when Config.validate
-// hasn't run (e.g. ad-hoc construction); callers of newBenchmark and
-// loadPreparationTasks always pass an already-validated config.
-func hermesMCPServers(servers []config.HarnessMCPServerConfig) []hermesharness.MCPServer {
-	out := make([]hermesharness.MCPServer, 0, len(servers))
-	for _, server := range servers {
+// hermesMCPServers is the Hermes harness's MCP client configuration: the
+// benchmark's own server first, when the benchmark exposes its tools that
+// way (Toolathlon's gateway, at the sandbox's alias on the gateway port),
+// then the profile's harness.mcp entries.
+func hermesMCPServers(cfg config.Config) []hermesharness.MCPServer {
+	out := make([]hermesharness.MCPServer, 0, len(cfg.Harness.MCP.Servers)+1)
+	if cfg.Benchmark.Type == "toolathlon" {
+		gateway := toolathlon.Gateway(dockersandbox.NetworkAlias, toolathlonGatewayPort(cfg))
+		out = append(out, hermesharness.MCPServer{Name: gateway.Name, URL: gateway.URL, Transport: gateway.Transport, TimeoutSeconds: gateway.TimeoutSeconds})
+	}
+	for _, server := range cfg.Harness.MCP.Servers {
 		out = append(out, hermesharness.MCPServer{Name: server.Name, URL: server.URL, Transport: server.Transport, TimeoutSeconds: server.TimeoutSeconds})
 	}
 	return out
 }
 
+// environmentFromConfig converts a profile's benchmark.environment block into
+// the runner-neutral core.Environment. cfg is nil only when Config.validate
+// hasn't run (e.g. ad-hoc construction); callers of newBenchmark and
+// loadPreparationTasks always pass an already-validated config.
 func environmentFromConfig(cfg *config.BenchmarkEnvironment) core.Environment {
 	if cfg == nil {
 		return core.Environment{}
@@ -371,7 +360,7 @@ func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byt
 			MaxConcurrentSubagents: cfg.Harness.Subagents.MaxConcurrent,
 			Compaction:             hermesCompaction(cfg.Harness.Compaction),
 			ExtraBody:              hermesExtraBody(cfg.Harness.Hermes),
-			MCPServers:             hermesMCPServers(cfg.Harness.MCP.Servers),
+			MCPServers:             hermesMCPServers(cfg),
 		})
 		if err != nil {
 			return app.HarnessInstance{}, fmt.Errorf("construct Hermes harness: %w", err)

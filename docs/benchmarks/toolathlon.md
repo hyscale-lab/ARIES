@@ -22,9 +22,12 @@ pieces through the sandbox and leaves the agent loop to the ARIES harness.
   fixed port. Every MCP server the task declares, plus Toolathlon's own
   `claim_done`, is one tool behind that gateway.
 - **The harness** reaches the gateway at `http://task-sandbox:<port>/sse`,
-  the sandbox's fixed network alias, through the `harness.mcp.servers`
-  block. Only the Hermes harness renders an MCP client configuration today,
-  so `benchmark.type: "toolathlon"` requires `harness.type: "hermes"`. The
+  the sandbox's fixed network alias. The adapter adds that endpoint to the
+  harness's MCP client itself, as the server named `toolathlon`, so the
+  profile names no server for it (which MCP servers a task needs is the
+  task's business, and they all sit behind the one gateway). Only the
+  Hermes harness has an MCP client today, so `benchmark.type: "toolathlon"`
+  requires `harness.type: "hermes"`; OpenClaw follows once it has one. The
   harness's own terminal and file tools still go through the SSH bridge.
   How the gateway's tools appear to the model depends on the Hermes
   version: `v2026.5.29.2` registers each one as a tool named
@@ -74,12 +77,19 @@ Two smaller differences are deliberate:
 - Toolathlon nulls the verdict when its agent loop did not finish cleanly;
   ARIES records harness failure separately and always grades the sandbox
   state, so a task the agent abandoned scores as it stands.
-- The `k8s` server (a `kind` cluster that needs the Docker socket and host
-  networking) and the servers that need a third-party account (GitHub,
-  Google, Hugging Face, Notion, Snowflake, W&B, YouTube) are refused at task
-  load with a message naming the server. The remaining catalogue — local
-  tools, public-internet servers, and the three self-hosted applications —
-  covers the reproducible subset.
+- Not every task can run. Toolathlon's catalogue is 34 MCP servers: 9 run
+  inside the sandbox (files, terminal, git, spreadsheets, documents,
+  memory, time), 3 are the self-hosted applications, 9 reach the public
+  internet without an account, and 13 need a credentialed third-party
+  account (GitHub, Google ×6, Hugging Face, Notion ×2, Snowflake, W&B,
+  YouTube) or, for `k8s`, a `kind` cluster on the Docker socket with host
+  networking. A task whose servers include one of the last group is
+  refused at task load with a message naming the server. At the pinned
+  revision **53 of the 108 tasks load**: 28 need nothing outside the
+  sandbox and the applications, 25 more also reach the public internet
+  (the sandbox network is on for them). The other 55 need an account or
+  `k8s`; running them would mean provisioning those accounts for every
+  run, which is not reproducible in ARIES today.
 
 ## Running the example
 
@@ -125,17 +135,18 @@ sandbox starts.
   "environment": {"image": "docker.io/lockon0927/toolathlon-task-image:1016beta"},
   "toolathlon": {"gateway_port": 10086, "app_host": "", "max_steps": 200}
 },
-"harness": {
-  "type": "hermes",
-  "mcp": {"servers": [{"name": "toolathlon", "url": "http://task-sandbox:10086/sse", "transport": "sse", "timeout_seconds": 300}]}
-}
+"harness": {"type": "hermes"}
 ```
 
 `benchmark.environment.workdir` is fixed to Toolathlon's agent workspace and
 `allow_network` to true; a profile that sets them otherwise is rejected. The
 `benchmark.toolathlon` block is optional and its values above are the
-defaults. The gateway port in `harness.mcp.servers[].url` must match
-`benchmark.toolathlon.gateway_port`.
+defaults. The gateway needs no `harness.mcp` entry: the adapter registers it
+with the harness as `toolathlon` (SSE at `task-sandbox` on `gateway_port`,
+with a per-call timeout above every backend timeout in Toolathlon's own
+server configs, so Toolathlon's timeouts are the ones that fire). A
+`harness.mcp.servers` block, if present, adds servers of your own and may
+not reuse the name `toolathlon`.
 
 ## Artifacts
 

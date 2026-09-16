@@ -10,14 +10,17 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/hyscale-lab/aries/internal/app"
 	runtimesglang "github.com/hyscale-lab/aries/internal/modelruntime/sglang"
+	"github.com/hyscale-lab/aries/pkg/benchmark/toolathlon"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
+	hermesharness "github.com/hyscale-lab/aries/pkg/harness/hermes"
 )
 
 func TestDispatchAcceptsOnlyExactCommandGrammar(t *testing.T) {
@@ -177,10 +180,10 @@ func TestValidateComponentsRequiresPairedHarnessAndBridge(t *testing.T) {
 }
 
 // The adapter starts Toolathlon's gateway at the sandbox's alias on the
-// gateway port; a profile whose MCP server points anywhere else would start
-// Hermes with no Toolathlon tools, so the endpoint is checked, not just the
-// presence of a server.
-func TestValidateComponentsRequiresTheToolathlonGateway(t *testing.T) {
+// gateway port and adds it to the Hermes MCP client itself, ahead of any
+// server the profile names; the profile may not name one after it, and no
+// other harness has an MCP client to receive it.
+func TestToolathlonGatewayIsAddedToTheHermesHarness(t *testing.T) {
 	base := func(servers ...config.HarnessMCPServerConfig) config.Config {
 		return config.Config{
 			Benchmark: config.BenchmarkConfig{Type: "toolathlon"},
@@ -189,20 +192,17 @@ func TestValidateComponentsRequiresTheToolathlonGateway(t *testing.T) {
 			Bridge:    config.BridgeConfig{Type: "hermes-ssh"},
 		}
 	}
-	gateway := config.HarnessMCPServerConfig{Name: "toolathlon", URL: "http://task-sandbox:10086/sse", Transport: "sse"}
+	docs := config.HarnessMCPServerConfig{Name: "docs", URL: "https://docs.example/mcp", Transport: "streamable-http", TimeoutSeconds: 30}
 	for _, tc := range []struct {
 		name string
 		cfg  config.Config
 		want string
 	}{
-		{name: "gateway on the default port", cfg: base(gateway)},
-		{name: "gateway beside another server", cfg: base(config.HarnessMCPServerConfig{Name: "docs", URL: "https://docs.example/mcp", Transport: "streamable-http"}, gateway)},
-		{name: "no server", cfg: base(), want: "requires the hermes harness with a harness.mcp server"},
-		{name: "unrelated host", cfg: base(config.HarnessMCPServerConfig{Name: "toolathlon", URL: "http://gateway.example:10086/sse", Transport: "sse"}), want: "requires a harness.mcp server at http://task-sandbox:10086"},
-		{name: "wrong port", cfg: base(config.HarnessMCPServerConfig{Name: "toolathlon", URL: "http://task-sandbox:10087/sse", Transport: "sse"}), want: "requires a harness.mcp server at http://task-sandbox:10086"},
-		{name: "https form", cfg: base(config.HarnessMCPServerConfig{Name: "toolathlon", URL: "https://task-sandbox:10086/sse", Transport: "sse"}), want: "requires a harness.mcp server at http://task-sandbox:10086"},
+		{name: "no profile servers", cfg: base()},
+		{name: "another server beside the gateway", cfg: base(docs)},
+		{name: "the gateway's name taken", cfg: base(config.HarnessMCPServerConfig{Name: "toolathlon", URL: "http://task-sandbox:10086/sse", Transport: "sse"}), want: `harness.mcp.servers may not name "toolathlon"`},
 		{name: "openclaw harness", cfg: func() config.Config {
-			cfg := base(gateway)
+			cfg := base()
 			cfg.Harness.Type = "openclaw"
 			cfg.Bridge.Type = "openclaw-ssh"
 			return cfg
@@ -221,15 +221,26 @@ func TestValidateComponentsRequiresTheToolathlonGateway(t *testing.T) {
 			}
 		})
 	}
-	// A profile that moves the gateway port must point its server at it.
-	moved := base(config.HarnessMCPServerConfig{Name: "toolathlon", URL: "http://task-sandbox:20086/sse", Transport: "sse"})
-	moved.Benchmark.Toolathlon = &config.ToolathlonConfig{GatewayPort: 20086}
-	if err := validateComponents(moved); err != nil {
-		t.Fatalf("moved port: %v", err)
+
+	gateway := hermesharness.MCPServer{Name: "toolathlon", URL: "http://task-sandbox:10086/sse", Transport: "sse", TimeoutSeconds: toolathlon.GatewayCallTimeoutSeconds}
+	if got := hermesMCPServers(base()); !slices.Equal(got, []hermesharness.MCPServer{gateway}) {
+		t.Fatalf("servers = %+v, want the gateway alone", got)
 	}
-	moved.Benchmark.Toolathlon.GatewayPort = 10086
-	if err := validateComponents(moved); err == nil || !strings.Contains(err.Error(), "http://task-sandbox:10086") {
-		t.Fatalf("moved port mismatch: %v", err)
+	want := []hermesharness.MCPServer{gateway, {Name: "docs", URL: "https://docs.example/mcp", Transport: "streamable-http", TimeoutSeconds: 30}}
+	if got := hermesMCPServers(base(docs)); !slices.Equal(got, want) {
+		t.Fatalf("servers = %+v, want the gateway then the profile's", got)
+	}
+	// A profile that moves the gateway port moves the entry with it.
+	moved := base()
+	moved.Benchmark.Toolathlon = &config.ToolathlonConfig{GatewayPort: 20086}
+	if got := hermesMCPServers(moved); len(got) != 1 || got[0].URL != "http://task-sandbox:20086/sse" {
+		t.Fatalf("moved port: servers = %+v", got)
+	}
+	// Another benchmark gets only what its profile names.
+	other := base(docs)
+	other.Benchmark.Type = "terminalbench2"
+	if got := hermesMCPServers(other); !slices.Equal(got, want[1:]) {
+		t.Fatalf("terminalbench2 servers = %+v, want the profile's alone", got)
 	}
 }
 
