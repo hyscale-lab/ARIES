@@ -346,7 +346,7 @@ func TestTasksRaiseVerifierTimeoutToFloorButNeverLowerIt(t *testing.T) {
 			}
 		})
 	}
-	if _, err := New(Options{Root: root, TaskIDs: []string{arbitraryTaskID}, OutputDir: t.TempDir(), VerifierTimeoutFloor: -time.Second}); err == nil {
+	if _, err := New(Options{Root: root, TaskIDs: []string{arbitraryTaskID}, OutputDir: t.TempDir(), Revision: fixtureGitRevision(root), VerifierTimeoutFloor: -time.Second}); err == nil {
 		t.Fatal("accepted a negative floor")
 	}
 }
