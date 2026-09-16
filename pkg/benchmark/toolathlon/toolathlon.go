@@ -52,8 +52,21 @@ const (
 	DefaultRoot = ".cache/toolathlon"
 
 	// DefaultGatewayPort is Toolathlon's own default for the MCP gateway.
-	// The harness profile must name the same port in its MCP server URL.
 	DefaultGatewayPort = 10086
+
+	// GatewayServerName is the name the gateway is registered under in the
+	// harness's MCP client configuration, so its tools reach the model as
+	// `mcp_toolathlon_<tool>` (or `mcp__toolathlon__<tool>`, by Hermes
+	// version). A profile may not use it for a server of its own.
+	GatewayServerName = "toolathlon"
+
+	// GatewayCallTimeoutSeconds is the harness's per-call timeout for the
+	// gateway. Every backend behind the gateway has Toolathlon's own
+	// per-call timeout (`client_session_timeout_seconds` in
+	// configs/mcp_servers, at most 1000 s for howtocook), so this sits
+	// above the largest of them and Toolathlon's timeouts are the ones
+	// that fire; the harness's is only the backstop.
+	GatewayCallTimeoutSeconds = 1200
 
 	// DefaultMaxSteps mirrors `max_steps_under_single_turn_mode` in
 	// Toolathlon's formal run config; it only bounds Toolathlon's own
@@ -97,6 +110,32 @@ const (
 	// reserved (RFC 2606) and can never resolve.
 	modelPlaceholderURL = "http://model-not-used-by-aries.invalid/v1"
 )
+
+// GatewayServer is the gateway described as the MCP server a harness
+// connects to: plain HTTP over SSE at the sandbox's alias on the gateway
+// port. The adapter derives it from the profile, so a profile does not
+// spell out an endpoint the adapter already fixes.
+type GatewayServer struct {
+	Name           string
+	URL            string
+	Transport      string
+	TimeoutSeconds int
+}
+
+// Gateway describes the gateway as reached from the harness, where host is
+// the sandbox's network alias and port the gateway port (zero for the
+// default). The gateway speaks no TLS, so the scheme is fixed to http.
+func Gateway(host string, port int) GatewayServer {
+	if port == 0 {
+		port = DefaultGatewayPort
+	}
+	return GatewayServer{
+		Name:           GatewayServerName,
+		URL:            fmt.Sprintf("http://%s/sse", net.JoinHostPort(host, strconv.Itoa(port))),
+		Transport:      "sse",
+		TimeoutSeconds: GatewayCallTimeoutSeconds,
+	}
+}
 
 // Options selects tasks from one pinned Toolathlon checkout.
 type Options struct {
@@ -165,8 +204,14 @@ type taskConfigFile struct {
 
 var _ runner.Benchmark = (*Benchmark)(nil)
 
-// serverKind classifies each MCP server named in the pinned checkout's
-// configs/mcp_servers by what it needs at run time.
+// serverKind classifies each MCP server in the pinned checkout's
+// configs/mcp_servers by what it needs at run time. The catalogue is keyed
+// by the `name:` field inside each file, which is what a task's
+// needed_mcp_servers cites; five files are named differently from their
+// server (npx-fetch.yaml is `fetch`, scholarly_search.yaml `scholarly`,
+// 12306.yaml `rail_12306`, youtube_transcript.yaml `youtube-transcript`,
+// arxiv-latex-mcp.yaml `arxiv-latex`). Tasks() checks the map against the
+// checkout so a re-pin that adds or renames a server fails at task load.
 type serverKind int
 
 const (
@@ -181,6 +226,11 @@ const (
 	// serverUnsupported needs a credentialed third-party account, or (k8s)
 	// a Docker socket and host networking the sandbox does not grant.
 	serverUnsupported
+	// serverAgentTool is not an MCP server but one of the tools Toolathlon's
+	// own agent loop implements, which one task lists among its servers
+	// anyway. Toolathlon's runner and gateway skip such a name with a
+	// warning, so the task is accepted without it.
+	serverAgentTool
 )
 
 var serverKinds = map[string]serverKind{
@@ -190,15 +240,87 @@ var serverKinds = map[string]serverKind{
 
 	"canvas": serverApplication, "emails": serverApplication, "woocommerce": serverApplication,
 
-	"12306": serverPublic, "arxiv-latex-mcp": serverPublic, "arxiv_local": serverPublic,
-	"howtocook": serverPublic, "npx-fetch": serverPublic, "playwright_with_chunk": serverPublic,
-	"scholarly_search": serverPublic, "yahoo-finance": serverPublic, "youtube_transcript": serverPublic,
+	"arxiv-latex": serverPublic, "arxiv_local": serverPublic, "fetch": serverPublic,
+	"howtocook": serverPublic, "playwright_with_chunk": serverPublic, "rail_12306": serverPublic,
+	"scholarly": serverPublic, "yahoo-finance": serverPublic, "youtube-transcript": serverPublic,
 
 	"github": serverUnsupported, "google-cloud": serverUnsupported, "google_calendar": serverUnsupported,
 	"google_forms": serverUnsupported, "google_map": serverUnsupported, "google_sheet": serverUnsupported,
 	"huggingface": serverUnsupported, "k8s": serverUnsupported, "notion": serverUnsupported,
 	"notion_official": serverUnsupported, "snowflake": serverUnsupported, "wandb": serverUnsupported,
 	"youtube": serverUnsupported,
+
+	"web_search": serverAgentTool,
+}
+
+// catalogueDir holds one YAML file per MCP server in the checkout, relative
+// to its root.
+const catalogueDir = "configs/mcp_servers"
+
+// checkCatalogue reports whether the checkout's server catalogue is exactly
+// the set serverKinds classifies (agent-side tools aside), naming what
+// differs, so a re-pinned checkout cannot silently route a server the
+// adapter has not classified.
+func checkCatalogue(root string) error {
+	entries, err := os.ReadDir(filepath.Join(root, catalogueDir))
+	if err != nil {
+		return fmt.Errorf("read the MCP server catalogue: %w", err)
+	}
+	found := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".yaml" {
+			continue
+		}
+		name, err := catalogueServerName(filepath.Join(root, catalogueDir, entry.Name()))
+		if err != nil {
+			return err
+		}
+		found[name] = struct{}{}
+	}
+	var unknown, missing []string
+	for name := range found {
+		if _, known := serverKinds[name]; !known {
+			unknown = append(unknown, name)
+		}
+	}
+	for name, kind := range serverKinds {
+		if _, ok := found[name]; !ok && kind != serverAgentTool {
+			missing = append(missing, name)
+		}
+	}
+	sort.Strings(unknown)
+	sort.Strings(missing)
+	switch {
+	case len(unknown) != 0 && len(missing) != 0:
+		return fmt.Errorf("the checkout's MCP server catalogue has servers the adapter does not classify (%s) and lacks servers it expects (%s)", strings.Join(unknown, ", "), strings.Join(missing, ", "))
+	case len(unknown) != 0:
+		return fmt.Errorf("the checkout's MCP server catalogue has servers the adapter does not classify: %s", strings.Join(unknown, ", "))
+	case len(missing) != 0:
+		return fmt.Errorf("the checkout's MCP server catalogue lacks servers the adapter expects: %s", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+// catalogueServerName is the top-level `name:` of one server file, the
+// name tasks cite. The files are flat YAML mappings, so a line scan is
+// enough and avoids a YAML dependency for one key.
+func catalogueServerName(path string) (string, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read MCP server file: %w", err)
+	}
+	for _, line := range strings.Split(string(content), "\n") {
+		value, ok := strings.CutPrefix(line, "name:")
+		if !ok {
+			continue
+		}
+		value = strings.Trim(strings.TrimSpace(value), `"'`)
+		if !safeServerName(value) {
+			return "", fmt.Errorf("MCP server file %s names an invalid server %q", filepath.Base(path), value)
+		}
+		return value, nil
+	}
+	return "", fmt.Errorf("MCP server file %s has no top-level name", filepath.Base(path))
 }
 
 // applicationPorts are the fixed localhost ports Toolathlon's task-side
@@ -304,6 +426,9 @@ func New(options Options) (*Benchmark, error) {
 
 func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
 	if err := VerifyRevision(ctx, b.root, b.revision); err != nil {
+		return nil, err
+	}
+	if err := checkCatalogue(b.root); err != nil {
 		return nil, err
 	}
 

@@ -142,8 +142,8 @@ type BenchmarkConfig struct {
 // ToolathlonConfig tunes the Toolathlon adapter (see BenchmarkConfig). All
 // fields are optional; the adapter's defaults are Toolathlon's own.
 type ToolathlonConfig struct {
-	// GatewayPort is the in-sandbox port of Toolathlon's MCP gateway. The
-	// harness's MCP server URL must name the same port.
+	// GatewayPort is the in-sandbox port of Toolathlon's MCP gateway; the
+	// harness's MCP client is pointed at it by the adapter.
 	GatewayPort int `json:"gateway_port,omitempty"`
 	// AppHost is where the self-hosted applications (Canvas, poste.io,
 	// WooCommerce) listen as seen from the Docker host; empty means the
@@ -306,9 +306,10 @@ func findCredentialField(value any, path string) string {
 }
 
 // HarnessMCPConfig is a Hermes-only concept (see (*HarnessConfig).validate):
-// remote MCP servers the harness connects to at startup. A benchmark whose
-// tools are an MCP server inside the task sandbox (Toolathlon) is reached
-// through the sandbox's fixed `task-sandbox` network alias.
+// remote MCP servers the harness connects to at startup, beyond any the
+// benchmark provides. A benchmark whose tools are an MCP server inside the
+// task sandbox (Toolathlon's gateway) is added to the client by wiring, not
+// by the profile, and its name is reserved.
 type HarnessMCPConfig struct {
 	Servers []HarnessMCPServerConfig `json:"servers,omitempty"`
 }

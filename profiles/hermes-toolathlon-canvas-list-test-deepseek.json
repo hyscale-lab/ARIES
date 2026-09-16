@@ -19,16 +19,6 @@
     "type": "hermes",
     "subagents": {
       "enabled": false
-    },
-    "mcp": {
-      "servers": [
-        {
-          "name": "toolathlon",
-          "url": "http://task-sandbox:10086/sse",
-          "transport": "sse",
-          "timeout_seconds": 300
-        }
-      ]
     }
   },
   "sandbox": {
