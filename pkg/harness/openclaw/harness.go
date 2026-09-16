@@ -627,6 +627,11 @@ func (manager *Manager) runRealtime(ctx context.Context, active *session, instru
 		transcribeCancel()
 		closeErr := client.Close()
 		if err == nil {
+			if len(realtimeResult.Errors) != 0 {
+				err = errors.New(strings.Join(realtimeResult.Errors, "; "))
+			}
+		}
+		if err == nil {
 			agentClient, agentErr := manager.newAgentGateway(active.gatewayURL, active.gatewayToken)
 			if agentErr != nil {
 				err = agentErr
@@ -650,7 +655,7 @@ func (manager *Manager) runRealtime(ctx context.Context, active *session, instru
 		active.logPaths = appendUnique(active.logPaths, resultPath)
 	}
 	err = errors.Join(err, writeErr)
-	if len(realtimeResult.Errors) != 0 {
+	if len(realtimeResult.Errors) != 0 && manager.mode != ModeVoiceTranscribe {
 		err = errors.Join(err, errors.New(strings.Join(realtimeResult.Errors, "; ")))
 	}
 	artifactCtx, artifactCancel := context.WithTimeout(context.WithoutCancel(ctx), manager.cleanupTimeout)

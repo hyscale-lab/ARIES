@@ -1229,6 +1229,70 @@ func TestRealtimeTranscribeModeSendsTranscriptToAgent(t *testing.T) {
 	}
 }
 
+func TestRealtimeTranscribeErrorsDoNotStartAgent(t *testing.T) {
+	fake := newFakeDocker()
+	keys := map[string][]byte{"ARIES_FAKE_API_KEY": []byte("model-secret"), "OPENAI_API_KEY": []byte("speech-secret")}
+	manager := newTestManager(t, fake, keys["ARIES_FAKE_API_KEY"])
+	manager.apiKeyLookup = func(name string) ([]byte, bool) {
+		value, ok := keys[name]
+		return append([]byte(nil), value...), ok
+	}
+	manager.mode = ModeVoiceTranscribe
+	manager.realtime = RealtimeOptions{
+		TTS: RealtimeTTSOptions{Provider: "openai", APIKeyEnv: "OPENAI_API_KEY", Model: "tts-model", Voice: "alloy"},
+	}
+	var speechRequest audioinput.SpeechRequest
+	manager.newSpeech = func(audioinput.SpeechClientOptions) (speechSynthesizer, error) {
+		return stubSpeechSynthesizer{request: &speechRequest}, nil
+	}
+	manager.newGateway = func(string, []byte) (gatewayConnection, error) {
+		return &recordingGateway{summary: gatewayclient.ConnectSummary{Role: "operator", Scopes: []string{"operator.read", "operator.write"}}}, nil
+	}
+	agentGatewayCreated := false
+	agentGateway := &recordingGateway{summary: gatewayclient.ConnectSummary{Role: "operator", Scopes: []string{"operator.write"}}}
+	manager.newAgentGateway = func(string, []byte) (gatewayConnection, error) {
+		agentGatewayCreated = true
+		return agentGateway, nil
+	}
+	manager.newRealtime = func(_ realtimeclient.Gateway, _ realtimeclient.Options) (realtimeRunner, error) {
+		return stubRunner{result: realtimeclient.Result{
+			SchemaVersion:       realtimeclient.ResultSchemaVersion,
+			Transcript:          "partial request",
+			TranscriptDone:      "partial request",
+			TranscriptDoneParts: []string{"partial request"},
+			EventCounts:         map[string]int{"transcript.done": 1, "session.error": 1},
+			ConnectAuth:         map[string]any{},
+			Errors:              []string{"session.error: provider failed after final transcript"},
+			AgentRunIDs:         []string{},
+		}}, nil
+	}
+	request := core.HarnessRequest{RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
+	if err := manager.Start(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	result, err := manager.Run(context.Background(), "voice task")
+	if err == nil || !strings.Contains(err.Error(), "session.error") {
+		t.Fatalf("Run error = %v", err)
+	}
+	if result.Status != core.StatusFailed {
+		t.Fatalf("result = %#v", result)
+	}
+	if agentGatewayCreated || agentGateway.agentCalls != 0 {
+		t.Fatalf("agent was called despite transcription errors: created=%v calls=%d", agentGatewayCreated, agentGateway.agentCalls)
+	}
+	path := filepath.Join(manager.outputDir, "fix-git", "harness", "realtime-result.json")
+	content, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !bytes.Contains(content, []byte(`"errors": [`)) || !bytes.Contains(content, []byte(`"agent_question_used": ""`)) || !bytes.Contains(content, []byte(`"output_text": ""`)) {
+		t.Fatalf("realtime result = %s", content)
+	}
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRealtimeTranscribeUsesSeparateSTTTimeoutAndFreshAgentTimeout(t *testing.T) {
 	fake := newFakeDocker()
 	keys := map[string][]byte{"ARIES_FAKE_API_KEY": []byte("model-secret"), "OPENAI_API_KEY": []byte("speech-secret")}
