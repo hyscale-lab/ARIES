@@ -689,6 +689,61 @@ func TestVoiceTranscribeSynthesizesAudioAndRunsTranscriptAsAgentMessage(t *testi
 	}
 }
 
+func TestVoiceTranscribeMapsOpenAICompatibleAgentProvider(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		provider string
+		baseURL  string
+	}{
+		{name: "openai", provider: "openai", baseURL: "http://openai-compatible.local:8000/v1"},
+		{name: "sglang", provider: "sglang", baseURL: "http://sglang.local:30000/v1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newFakeDocker()
+			fake.sttStdout = `{"transcript":"fix from speech"}` + "\n"
+			manager, err := New(Options{
+				Image: testHermesImage, OutputDir: t.TempDir(), StartTimeout: 2 * time.Second, AgentTimeout: 2 * time.Second,
+				Mode: ModeVoiceTranscribe,
+				VoiceTranscribe: VoiceTranscribeOptions{
+					TTS: VoiceTTSOptions{Provider: "openai", APIKeyEnv: "OPENAI_API_KEY", Model: "gpt-4o-mini-tts", Voice: "alloy", Timeout: time.Second},
+					STT: VoiceSTTOptions{Provider: "openai", Model: "gpt-4o-mini-transcribe", Language: "en", Timeout: time.Second},
+				},
+				APIKeyLookup: func(string) ([]byte, bool) { return []byte("secret"), true },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			manager.client = fake
+			manager.newID = func() (string, error) { return "attempt", nil }
+			manager.newSpeech = func(audioinput.SpeechClientOptions) (speechSynthesizer, error) {
+				return stubSpeechSynthesizer{}, nil
+			}
+			request := testRequest(t)
+			request.Model.Provider = tc.provider
+			request.Model.BaseURL = tc.baseURL
+			request.Model.APIKeyEnv = strings.ToUpper(tc.provider) + "_API_KEY"
+			if err := manager.Start(context.Background(), request); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := manager.Run(context.Background(), "fix by voice"); err != nil {
+				t.Fatal(err)
+			}
+			var agentCmd []string
+			for _, options := range fake.execs {
+				if len(options.Cmd) > 5 && options.Cmd[5] == agentWrapperPath {
+					agentCmd = options.Cmd
+				}
+			}
+			if len(agentCmd) != 9 || agentCmd[7] != "custom" || agentCmd[8] != "fix from speech" {
+				t.Fatalf("agent exec argv = %#v", agentCmd)
+			}
+			if err := manager.Stop(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestRunAcceptsExactlyOneInstruction(t *testing.T) {
 	fake := newFakeDocker()
 	manager := newTestManager(t, fake, []byte("model-secret"))

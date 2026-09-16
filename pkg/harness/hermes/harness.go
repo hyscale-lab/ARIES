@@ -607,7 +607,7 @@ func (manager *Manager) runVoiceTranscribe(ctx context.Context, active *session,
 	}
 	runCtx, cancel := context.WithTimeout(ctx, active.agentTimeout)
 	result, runErr := manager.execAttached(runCtx, active.containerID,
-		[]string{agentWrapperPath, active.model.Model, active.model.Provider, sttResult.Transcript}, workspaceRoot)
+		[]string{agentWrapperPath, active.model.Model, hermesProvider(active.model.Provider), sttResult.Transcript}, workspaceRoot)
 	cancel()
 	stdout := redactSession(result.stdout, active)
 	stderr := redactSession(result.stderr, active)
