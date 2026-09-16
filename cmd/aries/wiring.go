@@ -126,6 +126,7 @@ func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byt
 	if err := validateDeployment(&cfg); err != nil {
 		return app.HarnessInstance{}, err
 	}
+	cfg.Harness.MCPServers = harnessMCPServers(cfg)
 	if err := harnesswiring.ValidateMCPServers(cfg.Harness); err != nil {
 		return app.HarnessInstance{}, err
 	}
@@ -140,6 +141,18 @@ func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byt
 		return harnesswiring.NewHermes(cfg, outputRoot, lookup, logger, transport)
 	default:
 		return app.HarnessInstance{}, errors.Join(fmt.Errorf("unsupported harness type %q", cfg.Harness.Type), transport.Close())
+	}
+}
+
+// harnessMCPServers is the harness's MCP server list: the benchmark's own
+// server first, when the benchmark exposes its tools that way (Toolathlon's
+// gateway), then the profile's harness.mcp_servers entries.
+func harnessMCPServers(cfg config.Config) []core.MCPServerConfig {
+	switch cfg.Benchmark.Type {
+	case "toolathlon":
+		return benchmarkwiring.ToolathlonMCPServers(cfg)
+	default:
+		return cfg.Harness.MCPServers
 	}
 }
 

@@ -1,38 +1,36 @@
 package benchmark
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/hyscale-lab/aries/pkg/benchmark/toolathlon"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
 )
 
 // The adapter starts Toolathlon's gateway at the sandbox's alias on the
-// gateway port; a profile whose MCP server points anywhere else would start
-// Hermes with no Toolathlon tools, so the endpoint is checked, not just the
-// presence of a server.
-func TestValidateToolathlonRequiresTheGateway(t *testing.T) {
+// gateway port and adds it to the Hermes harness's MCP servers itself, ahead
+// of any server the profile names; the profile may not name one after it.
+func TestToolathlonGatewayIsAddedToTheHermesHarness(t *testing.T) {
 	base := func(servers ...core.MCPServerConfig) config.Config {
 		return config.Config{
 			Benchmark: config.BenchmarkConfig{Type: "toolathlon"},
 			Harness:   config.HarnessConfig{Type: "hermes", MCPServers: servers},
 		}
 	}
-	gateway := core.MCPServerConfig{Name: "toolathlon", URL: "http://task-sandbox:10086/sse", Transport: "sse"}
+	docs := core.MCPServerConfig{Name: "docs", URL: "https://docs.example/mcp", Transport: "streamable-http", TimeoutSeconds: 30}
 	for _, tc := range []struct {
 		name string
 		cfg  config.Config
 		want string
 	}{
-		{name: "gateway on the default port", cfg: base(gateway)},
-		{name: "gateway beside another server", cfg: base(core.MCPServerConfig{Name: "docs", URL: "https://docs.example/mcp", Transport: "streamable-http"}, gateway)},
-		{name: "no server", cfg: base(), want: "requires the hermes harness with a harness.mcp_servers entry"},
-		{name: "unrelated host", cfg: base(core.MCPServerConfig{Name: "toolathlon", URL: "http://gateway.example:10086/sse", Transport: "sse"}), want: "requires a harness.mcp_servers entry at http://task-sandbox:10086"},
-		{name: "wrong port", cfg: base(core.MCPServerConfig{Name: "toolathlon", URL: "http://task-sandbox:10087/sse", Transport: "sse"}), want: "requires a harness.mcp_servers entry at http://task-sandbox:10086"},
-		{name: "https form", cfg: base(core.MCPServerConfig{Name: "toolathlon", URL: "https://task-sandbox:10086/sse", Transport: "sse"}), want: "requires a harness.mcp_servers entry at http://task-sandbox:10086"},
+		{name: "no profile servers", cfg: base()},
+		{name: "another server beside the gateway", cfg: base(docs)},
+		{name: "the gateway's name taken", cfg: base(core.MCPServerConfig{Name: "toolathlon", URL: "http://task-sandbox:10086/sse", Transport: "sse"}), want: `harness.mcp_servers may not name "toolathlon"`},
 		{name: "openclaw harness", cfg: func() config.Config {
-			cfg := base(gateway)
+			cfg := base()
 			cfg.Harness.Type = "openclaw"
 			return cfg
 		}(), want: "requires the hermes harness"},
@@ -50,14 +48,18 @@ func TestValidateToolathlonRequiresTheGateway(t *testing.T) {
 			}
 		})
 	}
-	// A profile that moves the gateway port must point its server at it.
-	moved := base(core.MCPServerConfig{Name: "toolathlon", URL: "http://task-sandbox:20086/sse", Transport: "sse"})
-	moved.Benchmark.Toolathlon = &config.ToolathlonConfig{GatewayPort: 20086}
-	if err := ValidateToolathlon(moved); err != nil {
-		t.Fatalf("moved port: %v", err)
+
+	gateway := core.MCPServerConfig{Name: "toolathlon", URL: "http://task-sandbox:10086/sse", Transport: "sse", TimeoutSeconds: toolathlon.GatewayCallTimeoutSeconds}
+	if got := ToolathlonMCPServers(base()); !reflect.DeepEqual(got, []core.MCPServerConfig{gateway}) {
+		t.Fatalf("servers = %+v, want the gateway alone", got)
 	}
-	moved.Benchmark.Toolathlon.GatewayPort = 10086
-	if err := ValidateToolathlon(moved); err == nil || !strings.Contains(err.Error(), "http://task-sandbox:10086") {
-		t.Fatalf("moved port mismatch: %v", err)
+	if got := ToolathlonMCPServers(base(docs)); !reflect.DeepEqual(got, []core.MCPServerConfig{gateway, docs}) {
+		t.Fatalf("servers = %+v, want the gateway then the profile's", got)
+	}
+	// A profile that moves the gateway port moves the entry with it.
+	moved := base()
+	moved.Benchmark.Toolathlon = &config.ToolathlonConfig{GatewayPort: 20086}
+	if got := ToolathlonMCPServers(moved); len(got) != 1 || got[0].URL != "http://task-sandbox:20086/sse" {
+		t.Fatalf("moved port: servers = %+v", got)
 	}
 }
