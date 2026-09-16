@@ -144,7 +144,7 @@ sandbox starts.
 defaults. The gateway needs no `harness.mcp` entry: the adapter registers it
 with the harness as `toolathlon` (SSE at `task-sandbox` on `gateway_port`,
 with a per-call timeout above every backend timeout in Toolathlon's own
-server configs, so Toolathlon's timeouts are the ones that fire). A
+server configuration files, so Toolathlon's timeouts are the ones that fire). A
 `harness.mcp.servers` block, if present, adds servers of your own and may
 not reuse the name `toolathlon`.
 
