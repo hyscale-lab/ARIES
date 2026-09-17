@@ -28,8 +28,10 @@ pieces through the sandbox and leaves the agent loop to the ARIES harness.
   task's business, and they all sit behind the one gateway). Both harnesses
   have an MCP client: Hermes renders the entry under its `mcp_servers`,
   OpenClaw under its native `mcp.servers` (a remote server with an SSE
-  transport). The harness's own terminal and file tools still go through
-  the SSH bridge.
+  transport) together with the sandbox-gate entry `bundle-mcp`, without
+  which OpenClaw loads the server and then filters its tools out of a
+  session in sandbox mode. The harness's own terminal and file tools still go
+  through the SSH bridge.
   How the gateway's tools appear to the model depends on the Hermes
   version: `v2026.5.29.2` registers each one as a tool named
   `mcp_<server>_<tool>`; `v2026.8.31` (the current pin) lists them as

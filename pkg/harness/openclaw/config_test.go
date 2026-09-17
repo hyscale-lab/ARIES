@@ -3,6 +3,7 @@ package openclaw
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -23,7 +24,7 @@ func testModel() core.ModelConfig {
 }
 
 func TestRenderConfigLocksProviderSharedSSHAndPlaceholder(t *testing.T) {
-	content, err := renderConfig(testModel(), testEndpoint(), ModeAgent, false, false, false, 0)
+	content, err := renderConfig(testModel(), testEndpoint(), ModeAgent, false, false, false, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +58,7 @@ func TestRenderConfigSelectsSGLangProviderWithoutSerializingKey(t *testing.T) {
 	model := testModel()
 	model.Provider = "sglang"
 	model.APIKeyEnv = "SGLANG_API_KEY"
-	content, err := renderConfig(model, testEndpoint(), ModeAgent, false, false, false, 0)
+	content, err := renderConfig(model, testEndpoint(), ModeAgent, false, false, false, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +76,7 @@ func TestRenderConfigSelectsSGLangProviderWithoutSerializingKey(t *testing.T) {
 }
 
 func TestRenderConfigSetsRealtimeConsultRoutingOnlyForRealtimeMode(t *testing.T) {
-	content, err := renderConfig(testModel(), testEndpoint(), ModeRealtime, false, false, false, 0)
+	content, err := renderConfig(testModel(), testEndpoint(), ModeRealtime, false, false, false, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +88,7 @@ func TestRenderConfigSetsRealtimeConsultRoutingOnlyForRealtimeMode(t *testing.T)
 		t.Fatalf("talk realtime config = %#v", configuration.Talk)
 	}
 
-	content, err = renderConfig(testModel(), testEndpoint(), ModeVoiceTranscribe, false, false, false, 0)
+	content, err = renderConfig(testModel(), testEndpoint(), ModeVoiceTranscribe, false, false, false, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +105,7 @@ func TestRenderConfigNormalizesAndStrictlyValidatesSGLangBaseURL(t *testing.T) {
 	model := testModel()
 	model.Provider = "sglang"
 	model.BaseURL += "/"
-	content, err := renderConfig(model, testEndpoint(), ModeAgent, false, false, false, 0)
+	content, err := renderConfig(model, testEndpoint(), ModeAgent, false, false, false, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +118,7 @@ func TestRenderConfigNormalizesAndStrictlyValidatesSGLangBaseURL(t *testing.T) {
 	}
 	for _, invalid := range []string{"http://host/v1/v1", "http://host/v1?", "http://host/v%31"} {
 		model.BaseURL = invalid
-		if _, err := renderConfig(model, testEndpoint(), ModeAgent, false, false, false, 0); err == nil {
+		if _, err := renderConfig(model, testEndpoint(), ModeAgent, false, false, false, 0, nil); err == nil {
 			t.Fatalf("accepted SGLang base URL %q", invalid)
 		}
 	}
@@ -137,7 +138,7 @@ func TestRenderConfigRejectsInvalidInputs(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			model, endpoint := testModel(), testEndpoint()
 			mutate(&model, &endpoint)
-			if _, err := renderConfig(model, endpoint, ModeAgent, false, false, false, 0); err == nil {
+			if _, err := renderConfig(model, endpoint, ModeAgent, false, false, false, 0, nil); err == nil {
 				t.Fatal("invalid input was accepted")
 			}
 		})
@@ -147,13 +148,13 @@ func TestRenderConfigRejectsInvalidInputs(t *testing.T) {
 func TestRenderConfigAcceptsLowercaseEnvironmentName(t *testing.T) {
 	model := testModel()
 	model.APIKeyEnv = "aries_fake_api_key"
-	if _, err := renderConfig(model, testEndpoint(), ModeAgent, false, false, false, 0); err != nil {
+	if _, err := renderConfig(model, testEndpoint(), ModeAgent, false, false, false, 0, nil); err != nil {
 		t.Fatalf("renderConfig() rejected a valid environment name: %v", err)
 	}
 }
 
 func TestRenderConfigOmitsWebSearchWhenDisabled(t *testing.T) {
-	content, err := renderConfig(testModel(), testEndpoint(), ModeAgent, false, false, false, 0)
+	content, err := renderConfig(testModel(), testEndpoint(), ModeAgent, false, false, false, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +174,7 @@ func TestRenderConfigOmitsWebSearchWhenDisabled(t *testing.T) {
 }
 
 func TestRenderConfigEnablesSearXNGWebSearch(t *testing.T) {
-	content, err := renderConfig(testModel(), testEndpoint(), ModeAgent, true, false, false, 0)
+	content, err := renderConfig(testModel(), testEndpoint(), ModeAgent, true, false, false, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +202,7 @@ func TestRenderConfigEnablesSearXNGWebSearch(t *testing.T) {
 }
 
 func TestRenderConfigEnablesTavilyExtractAlongsideSearXNGSearch(t *testing.T) {
-	content, err := renderConfig(testModel(), testEndpoint(), ModeAgent, true, true, false, 0)
+	content, err := renderConfig(testModel(), testEndpoint(), ModeAgent, true, true, false, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +234,7 @@ func TestRenderConfigEnablesTavilyExtractAlongsideSearXNGSearch(t *testing.T) {
 }
 
 func TestRenderConfigIgnoresExtractWhenWebSearchDisabled(t *testing.T) {
-	content, err := renderConfig(testModel(), testEndpoint(), ModeAgent, false, true, false, 0)
+	content, err := renderConfig(testModel(), testEndpoint(), ModeAgent, false, true, false, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +251,7 @@ func TestRenderConfigIgnoresExtractWhenWebSearchDisabled(t *testing.T) {
 }
 
 func TestRenderConfigAllowsSubagentsWhenEnabled(t *testing.T) {
-	content, err := renderConfig(testModel(), testEndpoint(), ModeAgent, false, false, true, 0)
+	content, err := renderConfig(testModel(), testEndpoint(), ModeAgent, false, false, true, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +265,7 @@ func TestRenderConfigAllowsSubagentsWhenEnabled(t *testing.T) {
 }
 
 func TestRenderConfigSetsMaxConcurrentSubagentsWhenEnabled(t *testing.T) {
-	content, err := renderConfig(testModel(), testEndpoint(), ModeAgent, false, false, true, 2)
+	content, err := renderConfig(testModel(), testEndpoint(), ModeAgent, false, false, true, 2, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +279,7 @@ func TestRenderConfigSetsMaxConcurrentSubagentsWhenEnabled(t *testing.T) {
 }
 
 func TestRenderConfigOmitsSubagentsBlockWhenNoLimitSet(t *testing.T) {
-	content, err := renderConfig(testModel(), testEndpoint(), ModeAgent, false, false, true, 0)
+	content, err := renderConfig(testModel(), testEndpoint(), ModeAgent, false, false, true, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +293,7 @@ func TestRenderConfigOmitsSubagentsBlockWhenNoLimitSet(t *testing.T) {
 }
 
 func TestRenderConfigIgnoresMaxConcurrentWhenSubagentsDisabled(t *testing.T) {
-	content, err := renderConfig(testModel(), testEndpoint(), ModeAgent, false, false, false, 2)
+	content, err := renderConfig(testModel(), testEndpoint(), ModeAgent, false, false, false, 2, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +344,7 @@ func TestRenderConfigKeysOpenAICompatibleProviderAsAries(t *testing.T) {
 	model.Provider = "openai"
 	model.BaseURL = "http://vllm.local:8000/v1/"
 	model.APIKeyEnv = "VLLM_API_KEY"
-	content, err := renderConfig(model, testEndpoint(), ModeAgent, false, false, false, 0)
+	content, err := renderConfig(model, testEndpoint(), ModeAgent, false, false, false, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +357,69 @@ func TestRenderConfigKeysOpenAICompatibleProviderAsAries(t *testing.T) {
 		t.Fatalf("configuration = %#v", configuration)
 	}
 	model.BaseURL = "http://vllm.local:8000"
-	if _, err := renderConfig(model, testEndpoint(), ModeAgent, false, false, false, 0); err == nil {
+	if _, err := renderConfig(model, testEndpoint(), ModeAgent, false, false, false, 0, nil); err == nil {
 		t.Fatal("accepted an openai base URL without /v1")
+	}
+}
+
+func TestRenderConfigRendersMCPServers(t *testing.T) {
+	servers := []MCPServer{{Name: "toolathlon", URL: "http://task-sandbox:10086/sse", Transport: "sse", TimeoutSeconds: 1200}, {Name: "docs", URL: "https://docs.example/mcp", Transport: "streamable-http"}}
+	output, err := renderConfig(testModel(), testEndpoint(), ModeAgent, false, false, false, 0, servers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(output, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	mcp, _ := parsed["mcp"].(map[string]any)
+	rendered, _ := mcp["servers"].(map[string]any)
+	gateway, _ := rendered["toolathlon"].(map[string]any)
+	if gateway["url"] != "http://task-sandbox:10086/sse" || gateway["transport"] != "sse" || gateway["requestTimeoutMs"] != float64(1200000) {
+		t.Fatalf("toolathlon server = %v", gateway)
+	}
+	docs, _ := rendered["docs"].(map[string]any)
+	if docs["transport"] != "streamable-http" || docs["requestTimeoutMs"] != nil {
+		t.Fatalf("docs server = %v (no timeout means OpenClaw's default)", docs)
+	}
+	// The sandbox gate must name bundle-mcp, or the servers' tools are
+	// filtered out of every sandboxed session.
+	var configuration openClawConfig
+	if err := json.Unmarshal(output, &configuration); err != nil {
+		t.Fatal(err)
+	}
+	if configuration.Tools.Sandbox == nil || !slices.Contains(configuration.Tools.Sandbox.Tools.AlsoAllow, "bundle-mcp") {
+		t.Fatalf("tools.sandbox.tools.alsoAllow = %#v: bundle-mcp missing, the MCP tools would be invisible", configuration.Tools.Sandbox)
+	}
+	withWeb, err := renderConfig(testModel(), testEndpoint(), ModeAgent, true, false, false, 0, servers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(withWeb, &configuration); err != nil {
+		t.Fatal(err)
+	}
+	if got := configuration.Tools.Sandbox.Tools.AlsoAllow; len(got) != 3 || got[2] != "bundle-mcp" {
+		t.Fatalf("tools.sandbox.tools.alsoAllow with web search = %#v", got)
+	}
+	without, err := renderConfig(testModel(), testEndpoint(), ModeAgent, false, false, false, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(without), `"mcp"`) {
+		t.Fatal("an mcp block was rendered with no servers")
+	}
+	for name, server := range map[string]MCPServer{
+		"bad name":      {Name: "Tool-athlon", URL: "http://task-sandbox:10086/sse", Transport: "sse"},
+		"relative url":  {Name: "toolathlon", URL: "task-sandbox:10086/sse", Transport: "sse"},
+		"query in url":  {Name: "toolathlon", URL: "http://task-sandbox:10086/sse?x=1", Transport: "sse"},
+		"bad transport": {Name: "toolathlon", URL: "http://task-sandbox:10086/sse", Transport: "stdio"},
+		"negative":      {Name: "toolathlon", URL: "http://task-sandbox:10086/sse", Transport: "sse", TimeoutSeconds: -1},
+	} {
+		if _, err := renderConfig(testModel(), testEndpoint(), ModeAgent, false, false, false, 0, []MCPServer{server}); err == nil {
+			t.Fatalf("%s: expected rejection", name)
+		}
+	}
+	if _, err := renderConfig(testModel(), testEndpoint(), ModeAgent, false, false, false, 0, []MCPServer{servers[0], servers[0]}); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("duplicate name: err = %v", err)
 	}
 }

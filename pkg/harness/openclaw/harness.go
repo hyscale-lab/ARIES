@@ -82,6 +82,7 @@ type Options struct {
 	ExtractAPIKeyEnv       string
 	SubagentsEnabled       bool
 	MaxConcurrentSubagents int
+	MCPServers             []MCPServer // rendered under OpenClaw's mcp.servers; see MCPServer
 	CleanupTimeout         time.Duration
 	StartTimeout           time.Duration
 	AgentTimeout           time.Duration
@@ -148,6 +149,7 @@ type Manager struct {
 	extractAPIKeyEnv       string
 	subagentsEnabled       bool
 	maxConcurrentSubagents int
+	mcpServers             []MCPServer
 	newID                  func() (string, error)
 	newGateway             func(string, []byte) (gatewayConnection, error)
 	newAgentGateway        func(string, []byte) (gatewayConnection, error)
@@ -284,7 +286,7 @@ func New(options Options) (*Manager, error) {
 		agentTimeout: options.AgentTimeout, logger: options.Logger,
 		apiKeyLookup: options.APIKeyLookup, mode: options.Mode, realtime: options.Realtime,
 		webSearchEnabled: options.WebSearchEnabled, extractAPIKeyEnv: options.ExtractAPIKeyEnv, subagentsEnabled: options.SubagentsEnabled,
-		maxConcurrentSubagents: options.MaxConcurrentSubagents, newID: randomID,
+		maxConcurrentSubagents: options.MaxConcurrentSubagents, mcpServers: options.MCPServers, newID: randomID,
 		newGateway: func(rawURL string, token []byte) (gatewayConnection, error) {
 			return newGatewayClientWithDisposition(rawURL, token, gatewayScopes(options.Mode), gatewayEventDisposition(options.Mode))
 		},
@@ -339,7 +341,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 			extractEnabled = true
 		}
 	}
-	configuration, err := renderConfig(request.Model, request.Endpoint, manager.mode, manager.webSearchEnabled, extractEnabled, manager.subagentsEnabled, manager.maxConcurrentSubagents)
+	configuration, err := renderConfig(request.Model, request.Endpoint, manager.mode, manager.webSearchEnabled, extractEnabled, manager.subagentsEnabled, manager.maxConcurrentSubagents, manager.mcpServers)
 	if err != nil {
 		clear(extractAPIKey)
 		return err

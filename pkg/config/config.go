@@ -305,7 +305,7 @@ func findCredentialField(value any, path string) string {
 	return ""
 }
 
-// HarnessMCPConfig is a Hermes-only concept (see (*HarnessConfig).validate):
+// HarnessMCPConfig is an OpenClaw/Hermes concept (see (*HarnessConfig).validate):
 // remote MCP servers the harness connects to at startup, beyond any the
 // benchmark provides. A benchmark whose tools are an MCP server inside the
 // task sandbox (Toolathlon's gateway) is added to the client by wiring, not
@@ -964,8 +964,8 @@ func (h *HarnessConfig) validate() error {
 		enabled := true
 		h.Subagents.Enabled = &enabled
 	}
-	if len(h.MCP.Servers) != 0 && h.Type != "hermes" {
-		return errors.New("harness.mcp requires Hermes")
+	if len(h.MCP.Servers) != 0 && h.Type != "openclaw" && h.Type != "hermes" {
+		return errors.New("harness.mcp requires OpenClaw or Hermes")
 	}
 	seenMCP := make(map[string]struct{}, len(h.MCP.Servers))
 	for index, server := range h.MCP.Servers {
