@@ -72,7 +72,9 @@ func uvCommand(args ...string) core.Command {
 //     applications and writes the task bundle;
 //  4. keep a trusted copy of the bundle on the host and check its layout;
 //  5. stash the grader and ground truth on the host, and prove them absent;
-//  6. start the MCP gateway and wait for its health endpoint.
+//  6. start the MCP gateway and wait for its health endpoint;
+//  7. inventory the evaluator's runtime (runtime.go), the last thing before
+//     the bridge exists, so Evaluate can tell whether the agent touched it.
 func (b *Benchmark) PrepareSandbox(ctx context.Context, task core.Task, sandbox runner.Sandbox) error {
 	if sandbox == nil {
 		return errors.New("toolathlon preparation requires a live sandbox")
@@ -136,7 +138,13 @@ func (b *Benchmark) PrepareSandbox(ctx context.Context, task core.Task, sandbox 
 	}
 	// The gateway read the bundle at startup; the container copy is not
 	// needed again until evaluation re-injects the trusted host copy.
-	return removePaths(ctx, sandbox, []string{bundleContainerPath})
+	if err := removePaths(ctx, sandbox, []string{bundleContainerPath}); err != nil {
+		return err
+	}
+	if err := writeRuntimeManifest(ctx, sandbox, filepath.Join(hostDir, runtimeManifestHostName)); err != nil {
+		return fmt.Errorf("inventory evaluator runtime before harness: %w", err)
+	}
+	return nil
 }
 
 // installProject uploads one archive of the pinned project tree and the task

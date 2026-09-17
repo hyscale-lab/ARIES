@@ -35,11 +35,35 @@ pieces through the sandbox and leaves the agent loop to the ARIES harness.
   `mcp__<server>__<tool>` behind its `tool_describe` and `tool_call` pair,
   so the trajectory records calls to `tool_call` with the MCP tool's name
   as an argument. Verified end to end on both.
-- **Evaluation** re-injects the trusted task bundle and the grader, then runs
-  Toolathlon's `container_eval`, whose verdict file decides the score. The
-  grader trusts nothing the agent could write: the task configuration comes
-  from the bundle preserved on the host, and the task status from an
-  argument the adapter passes to the evaluator.
+- **Evaluation** puts the grader's inputs and code back from the host, checks
+  the runtime it will run on, and then runs Toolathlon's `container_eval`,
+  whose verdict file decides the score. What the grader reads and executes
+  is trusted as follows (the rest of this list is what "trusted" means here):
+  - *inputs*: the task configuration comes from the bundle preserved on the
+    host at preparation, and the task status from an argument the adapter
+    passes; the trajectory file is a stub, since no pinned grader reads it;
+  - *grader and ground truth*: the task's protected entries are restored
+    from the archive stashed on the host, after anything the agent left
+    under those names (including capitalization variants of `README.md`)
+    is discarded;
+  - *evaluator code*: `container_eval` and everything it imports from the
+    project tree (`scripts/`, `utils/`, `configs/`, `main.py`) is extracted
+    again from the host checkout, whose revision is re-verified first;
+  - *runtime*: uv, the interpreter it manages, the project's virtualenv, the
+    files uv reads for its configuration, and the top level of the project
+    directory are inventoried file by file (SHA-256, plus every symlink's
+    target) before the bridge exists and again before the grader runs; any
+    change refuses the evaluation, naming the paths, and the verdict is
+    "failed" with that reason. The grader runs with a private bytecode cache
+    prefix and without the user site directory, so a planted `.pyc` or
+    user-site `.pth` is never loaded;
+  - *not covered*: the image's system programs and libraries — the shell,
+    `tar`, `find`, `sha256sum`, libc. The agent has root in the sandbox, and
+    a grader that runs in the same container after the agent cannot defend
+    against an agent that replaces those; this is the limit ARIES's other
+    same-container verifiers share. Grading in a fresh container from the
+    pinned image would close it and needs a sandbox capability ARIES does
+    not have yet.
 
 The task's instruction is Toolathlon's `docs/task.md` plus the two facts
 Toolathlon's agent system prompt supplies: the workspace path and that a
@@ -152,7 +176,25 @@ sandbox starts.
 `benchmark.environment.workdir` is fixed to Toolathlon's agent workspace and
 `allow_network` to true; a profile that sets them otherwise is rejected. The
 `benchmark.toolathlon` block is optional and its values above are the
-defaults. The gateway needs no `harness.mcp` entry: the adapter registers it
+defaults. `max_steps` does **not** bound the agent: it is Toolathlon's
+`max_steps_under_single_turn_mode`, handed to its preprocess for the task
+bundle, where it is bookkeeping for Toolathlon's own loop — which does not
+run here. What bounds the Hermes agent loop is Hermes's own turn limit
+(`max_turns`, rendered as 90) and the run's `agent_timeout_seconds` in the
+overrides file; a run that hits either is recorded as such by the harness.
+
+**Concurrency.** The three self-hosted applications are one deployment on
+the Docker host, and every sandbox's forwarder reaches the same one. A
+task's preprocess resets the state it uses (Canvas courses, mailboxes,
+products), so two application-backed occurrences running at once would
+corrupt each other. Task load therefore refuses any application-backed
+task when `execution.concurrency` is above 1, naming the tasks; with
+concurrency 1, looping included, occurrences never overlap. Tasks with no
+application run at any concurrency. Isolating application state per
+occurrence would need one deployment per sandbox (Toolathlon's instance
+prefixes) and per-occurrence ports, which the adapter does not manage.
+
+The gateway needs no `harness.mcp` entry: the adapter registers it
 with the harness as `toolathlon` (SSE at `task-sandbox` on `gateway_port`,
 with a per-call timeout above every backend timeout in Toolathlon's own
 server configuration files, so Toolathlon's timeouts are the ones that fire). A

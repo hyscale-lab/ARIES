@@ -38,15 +38,31 @@ type flowSandbox struct {
 	healthFailures   int
 	preprocessExit   int
 	evalResult       string
+
+	// runtimeManifest is what the runtime inventory reports; a test changes
+	// it between preparation and evaluation to model a tampered runtime.
+	runtimeManifest string
+	// evaluatorTampered models the agent having rewritten the evaluator's
+	// code: true until the pinned project tree is extracted over it again.
+	evaluatorTampered bool
 }
 
 func newFlowSandbox(t *testing.T, taskName string, needsApplication bool) *flowSandbox {
 	return &flowSandbox{
 		t: t, taskName: taskName, needsApplication: needsApplication,
 		uploads: map[string]string{}, files: map[string]bool{}, taskDir: map[string]byte{},
-		evalResult: `{"pass": true, "details": "All evaluation checks passed"}`,
+		evalResult:      `{"pass": true, "details": "All evaluation checks passed"}`,
+		runtimeManifest: pristineRuntimeManifest,
 	}
 }
+
+// pristineRuntimeManifest is the inventory of a runtime nobody touched: two
+// files, one symlink, one top-level project file.
+const pristineRuntimeManifest = "" +
+	"1111111111111111111111111111111111111111111111111111111111111111  .venv/lib/python3.12/site-packages/json_repair/__init__.py\n" +
+	"2222222222222222222222222222222222222222222222222222222222222222  /root/.local/bin/uv\n" +
+	"link .venv/bin/python -> /root/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/bin/python3.12\n" +
+	"3333333333333333333333333333333333333333333333333333333333333333  ./main.py\n"
 
 func (s *flowSandbox) taskPath() string { return taskDirectoryPath(s.taskName) }
 
@@ -134,6 +150,13 @@ func (s *flowSandbox) Exec(_ context.Context, command core.Command) (core.Comman
 			return core.CommandResult{}, nil
 		case "aries-toolathlon-uv":
 			return s.execUV(command, args[3:])
+		case "aries-toolathlon-runtime":
+			if args[3] != workspaceRoot || args[4] != runtimeManifestContainerPath {
+				s.t.Errorf("runtime inventory arguments = %v", args[3:])
+			}
+			s.files[runtimeManifestContainerPath] = true
+			s.events = append(s.events, "manifest")
+			return core.CommandResult{Stdout: "digest\n"}, nil
 		}
 	case tarPath:
 		switch args[2] {
@@ -158,6 +181,7 @@ func (s *flowSandbox) Exec(_ context.Context, command core.Command) (core.Comman
 					}
 				}
 				s.projectInstalled = true
+				s.evaluatorTampered = false
 				s.events = append(s.events, "project")
 				return core.CommandResult{}, nil
 			}
@@ -222,6 +246,12 @@ func (s *flowSandbox) execUV(command core.Command, args []string) (core.CommandR
 	case "scripts.decoupled.container_eval":
 		if _, ok := s.taskDir["evaluation"]; !ok {
 			s.t.Error("evaluator ran without the grader restored")
+		}
+		if s.evaluatorTampered {
+			s.t.Error("evaluator ran with the agent's rewrite of its code still in place")
+		}
+		if command.Env["PYTHONPYCACHEPREFIX"] != pycachePrefixPath || command.Env["PYTHONNOUSERSITE"] != "1" {
+			s.t.Errorf("evaluator env = %v, want a private bytecode prefix and no user site", command.Env)
 		}
 		if !s.files[trajectoryPath] || !s.files[bundleContainerPath] {
 			s.t.Error("evaluator ran without the trajectory stub and bundle")
@@ -288,6 +318,8 @@ func (s *flowSandbox) Download(_ context.Context, source, destination string) er
 		return file.Close()
 	case gatewayLogPath:
 		return os.WriteFile(destination, []byte("[gateway] exposed tools: []\n"), 0o600)
+	case runtimeManifestContainerPath:
+		return os.WriteFile(destination, []byte(s.runtimeManifest), 0o600)
 	case evalResultPath:
 		return os.WriteFile(destination, []byte(s.evalResult), 0o600)
 	}
@@ -320,7 +352,7 @@ func TestPrepareSandboxRunsTheDecoupledStepsInOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := []string{"rm", "upload:project.tar", "project", "rm", "upload:portfwd.py", "forwarder", "preprocess", "stash", "rm", "gateway", "rm"}
+	want := []string{"rm", "upload:project.tar", "project", "rm", "upload:portfwd.py", "forwarder", "preprocess", "stash", "rm", "gateway", "rm", "manifest", "rm"}
 	if !slices.Equal(sandbox.events, want) {
 		t.Fatalf("events = %v\nwant     %v", sandbox.events, want)
 	}
@@ -342,10 +374,13 @@ func TestPrepareSandboxRunsTheDecoupledStepsInOrder(t *testing.T) {
 		t.Fatal("the container bundle survived preparation")
 	}
 	hostDir := filepath.Join(benchmark.outputDir, task.ID, "toolathlon")
-	for _, name := range []string{"task_bundle.json", "artifact-stash.tar", "preprocess.log"} {
+	for _, name := range []string{"task_bundle.json", "artifact-stash.tar", "preprocess.log", runtimeManifestHostName} {
 		if _, err := os.Stat(filepath.Join(hostDir, name)); err != nil {
 			t.Fatalf("host artifact %s: %v", name, err)
 		}
+	}
+	if sandbox.files[runtimeManifestContainerPath] {
+		t.Fatal("the runtime inventory was left in the sandbox")
 	}
 	if _, err := os.Stat(filepath.Join(hostDir, "project.tar")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("the project archive was left on the host")
@@ -435,7 +470,7 @@ func TestEvaluateRestoresTheGraderAndScoresTheResult(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := []string{"rm", "upload:artifact-stash.tar", "restore", "rm", "rm", "upload:traj_log.json", "upload:task_bundle.json", "evaluate"}
+			want := []string{"rm", "upload:artifact-stash.tar", "restore", "rm", "upload:project.tar", "project", "rm", "manifest", "rm", "rm", "upload:traj_log.json", "upload:task_bundle.json", "evaluate"}
 			if !slices.Equal(sandbox.events, want) {
 				t.Fatalf("events = %v\nwant     %v", sandbox.events, want)
 			}
@@ -456,6 +491,93 @@ func TestEvaluateRestoresTheGraderAndScoresTheResult(t *testing.T) {
 				if !slices.Contains(evaluation.LogPaths, filepath.Join(hostDir, name)) {
 					t.Fatalf("log paths = %v, missing %s", evaluation.LogPaths, name)
 				}
+			}
+		})
+	}
+}
+
+// The agent had root in the sandbox. Rewriting the evaluator's code buys it
+// nothing: the pinned project tree comes back from the host before the
+// grader runs, so the verdict is the real grader's -- here a fail -- and not
+// the pass a rewritten container_eval would have written.
+func TestEvaluateReinstallsTheEvaluatorCodeBeforeGrading(t *testing.T) {
+	sandbox := newFlowSandbox(t, "canvas-list-test", true)
+	sandbox.evalResult = `{"pass": false, "failure": "[ROW_COUNT] 14 != 13"}`
+	gatewayReadyDelay, forwarderReadyDelay = 0, 0
+	benchmark, task := preparedBenchmark(t, sandbox)
+	if err := benchmark.PrepareSandbox(context.Background(), task, sandbox); err != nil {
+		t.Fatal(err)
+	}
+	sandbox.evaluatorTampered = true
+	sandbox.files[evalResultPath] = true // the rewrite's own {"pass": true}
+	sandbox.events = nil
+
+	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evaluation.Score != 0 || evaluation.Status != core.StatusFailed {
+		t.Fatalf("evaluation = %#v, want the real grader's fail", evaluation)
+	}
+	project := slices.Index(sandbox.events, "project")
+	evaluate := slices.Index(sandbox.events, "evaluate")
+	if project < 0 || evaluate < 0 || project > evaluate {
+		t.Fatalf("events = %v: the project tree must be reinstalled before the grader runs", sandbox.events)
+	}
+	if sandbox.evaluatorTampered {
+		t.Fatal("the agent's rewrite survived the reinstall")
+	}
+}
+
+// A runtime the agent altered -- a package in the virtualenv, the
+// interpreter symlink, a planted top-level file -- is refused before the
+// grader runs, with the paths named.
+func TestEvaluateRefusesAnAlteredRuntime(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		manifest string
+		want     []string
+	}{
+		"package rewritten": {
+			manifest: strings.Replace(pristineRuntimeManifest, "1111111111111111111111111111111111111111111111111111111111111111", "dead111111111111111111111111111111111111111111111111111111111111", 1),
+			want:     []string{"changed 1", "json_repair/__init__.py"},
+		},
+		"interpreter repointed": {
+			manifest: strings.Replace(pristineRuntimeManifest, "-> /root/.local/share/uv", "-> /tmp/evil", 1),
+			want:     []string{"changed 1", "link .venv/bin/python"},
+		},
+		"file planted": {
+			manifest: pristineRuntimeManifest + "4444444444444444444444444444444444444444444444444444444444444444  ./sitecustomize.py\n",
+			want:     []string{"added 1", "./sitecustomize.py"},
+		},
+		"uv removed": {
+			manifest: strings.Replace(pristineRuntimeManifest, "2222222222222222222222222222222222222222222222222222222222222222  /root/.local/bin/uv\n", "", 1),
+			want:     []string{"removed 1", "/root/.local/bin/uv"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sandbox := newFlowSandbox(t, "canvas-list-test", true)
+			gatewayReadyDelay, forwarderReadyDelay = 0, 0
+			benchmark, task := preparedBenchmark(t, sandbox)
+			if err := benchmark.PrepareSandbox(context.Background(), task, sandbox); err != nil {
+				t.Fatal(err)
+			}
+			sandbox.runtimeManifest = testCase.manifest
+			sandbox.events = nil
+
+			evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox)
+			if err == nil || !strings.Contains(err.Error(), "evaluator runtime changed while the agent ran") {
+				t.Fatalf("err = %v", err)
+			}
+			for _, want := range testCase.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("err = %v, want it to name %q", err, want)
+				}
+			}
+			if evaluation.Score != 0 || evaluation.Status != core.StatusFailed || evaluation.VerifierStatus != core.StatusFailed {
+				t.Fatalf("evaluation = %#v", evaluation)
+			}
+			if slices.Contains(sandbox.events, "evaluate") {
+				t.Fatalf("events = %v: the grader ran on an altered runtime", sandbox.events)
 			}
 		})
 	}
