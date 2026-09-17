@@ -98,9 +98,12 @@ func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner
 	}
 	// The evaluator's own code -- container_eval and everything it imports
 	// from the project tree -- comes back from the verified host checkout,
-	// not from the sandbox the agent had root in.
-	if err := b.installProject(ctx, sandbox, details.name, hostDir); err != nil {
-		return finish(fmt.Errorf("reinstall project tree before evaluation: %w", err))
+	// not from the sandbox the agent had root in. The task directory is
+	// left as restored: preprocess writes the ground truth some graders read
+	// (seeded product IDs, expected results), and the stash carries that
+	// state; the checkout's copy would be stale.
+	if err := b.installProject(ctx, sandbox, "", hostDir); err != nil {
+		return finish(fmt.Errorf("reinstall project code before evaluation: %w", err))
 	}
 	if err := writeRuntimeManifest(ctx, sandbox, manifestAfterPath); err != nil {
 		return finish(fmt.Errorf("inventory evaluator runtime after harness: %w", err))

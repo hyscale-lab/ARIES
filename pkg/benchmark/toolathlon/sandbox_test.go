@@ -2,6 +2,7 @@ package toolathlon
 
 import (
 	"archive/tar"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -45,6 +46,8 @@ type flowSandbox struct {
 	// evaluatorTampered models the agent having rewritten the evaluator's
 	// code: true until the pinned project tree is extracted over it again.
 	evaluatorTampered bool
+	// projectMembers are the members of the last project archive extracted.
+	projectMembers []string
 }
 
 func newFlowSandbox(t *testing.T, taskName string, needsApplication bool) *flowSandbox {
@@ -154,6 +157,9 @@ func (s *flowSandbox) Exec(_ context.Context, command core.Command) (core.Comman
 			if args[3] != workspaceRoot || args[4] != runtimeManifestContainerPath {
 				s.t.Errorf("runtime inventory arguments = %v", args[3:])
 			}
+			if !bytes.Contains(command.Stdin, []byte("POSIX_FADV_DONTNEED")) {
+				s.t.Error("runtime inventory ran without the program on stdin")
+			}
 			s.files[runtimeManifestContainerPath] = true
 			s.events = append(s.events, "manifest")
 			return core.CommandResult{Stdout: "digest\n"}, nil
@@ -182,6 +188,7 @@ func (s *flowSandbox) Exec(_ context.Context, command core.Command) (core.Comman
 				}
 				s.projectInstalled = true
 				s.evaluatorTampered = false
+				s.projectMembers = members
 				s.events = append(s.events, "project")
 				return core.CommandResult{}, nil
 			}
@@ -526,6 +533,17 @@ func TestEvaluateReinstallsTheEvaluatorCodeBeforeGrading(t *testing.T) {
 	}
 	if sandbox.evaluatorTampered {
 		t.Fatal("the agent's rewrite survived the reinstall")
+	}
+	// Preprocess writes ground truth some graders read; the stash carries it
+	// and the reinstall must not overwrite it with the checkout's copy.
+	members := sandbox.projectMembers
+	for _, member := range members {
+		if strings.HasPrefix(member, "tasks/") {
+			t.Fatalf("the evaluation-time archive carries %s: the task directory must come from the stash", member)
+		}
+	}
+	if !slices.ContainsFunc(members, func(member string) bool { return strings.HasPrefix(member, "scripts/") }) {
+		t.Fatalf("the evaluation-time archive lacks the evaluator's code: %v", members)
 	}
 }
 
