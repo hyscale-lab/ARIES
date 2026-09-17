@@ -190,9 +190,20 @@ and proves their absence. After the isolation gates, evaluation discards
 anything the agent left under those names, restores the archive, and runs
 Toolathlon's `container_eval`, whose verdict file decides the score.
 
+The grader runs in the sandbox the agent had root in, so evaluation does not
+trust what the agent left of it. The evaluator code is extracted again from
+the host checkout, whose revision is re-verified first. The runtime the
+checkout does not carry (uv, the interpreter it manages, the virtual
+environment, uv's configuration files and the project's top-level files) is
+inventoried file by file before bridge access and again before grading; any
+difference refuses the evaluation, naming the paths. The image's system
+programs are not covered, as for the other benchmarks that verify in the
+task container.
+
 Sources: [task loading](../../pkg/benchmark/toolathlon/toolathlon.go),
 [preparation](../../pkg/benchmark/toolathlon/sandbox.go),
-[evaluation](../../pkg/benchmark/toolathlon/evaluate.go), and
+[evaluation](../../pkg/benchmark/toolathlon/evaluate.go),
+[runtime inventory](../../pkg/benchmark/toolathlon/runtime.go), and
 [tests](../../pkg/benchmark/toolathlon/toolathlon_test.go).
 See the [usage guide](../benchmarks/toolathlon.md) for the task subset, the
 application deployments, and what differs from Toolathlon's own runner.

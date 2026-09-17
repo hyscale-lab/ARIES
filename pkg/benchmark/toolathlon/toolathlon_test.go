@@ -270,6 +270,40 @@ func TestTasksMapsLocalToolsOntoTheHarness(t *testing.T) {
 	}
 }
 
+// Every sandbox forwards to the one application deployment, and a task's
+// preprocess resets what it uses, so application-backed tasks are accepted
+// only when occurrences cannot overlap.
+func TestTasksRefusesApplicationTasksAboveConcurrencyOne(t *testing.T) {
+	root := writeFixture(t)
+	load := func(t *testing.T, concurrency int, ids ...string) error {
+		t.Helper()
+		options := baseOptions(t, root)
+		options.TaskIDs = ids
+		options.Concurrency = concurrency
+		benchmark, err := New(options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = benchmark.Tasks(context.Background())
+		return err
+	}
+	if err := load(t, 1, "canvas-list-test", "excel-only"); err != nil {
+		t.Fatalf("concurrency 1: %v", err)
+	}
+	if err := load(t, 4, "excel-only", "object-form"); err != nil {
+		t.Fatalf("local-only tasks at concurrency 4: %v", err)
+	}
+	err := load(t, 2, "excel-only", "canvas-list-test")
+	if err == nil || !strings.Contains(err.Error(), "execution.concurrency 1 (concurrency 2 with canvas-list-test)") {
+		t.Fatalf("application task at concurrency 2: err = %v", err)
+	}
+	options := baseOptions(t, root)
+	options.Concurrency = -1
+	if _, err := New(options); err == nil || !strings.Contains(err.Error(), "concurrency must be positive") {
+		t.Fatalf("negative concurrency: err = %v", err)
+	}
+}
+
 // The classification is only as good as its agreement with the pinned
 // checkout, so task load compares the two and names any difference.
 func TestTasksChecksTheServerCatalogue(t *testing.T) {
