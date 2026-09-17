@@ -169,9 +169,15 @@ type Options struct {
 	// The self-hosted applications are one deployment shared by every
 	// sandbox (each forwards to the same host and ports), and a task's
 	// preprocess resets the state of the applications it uses, so
-	// application-backed tasks are accepted only at concurrency 1. Zero
-	// means 1.
+	// application-backed tasks are accepted only at concurrency 1; so are
+	// account-backed tasks, whose state lives in one third-party account.
+	// Zero means 1.
 	Concurrency int
+	// CredentialsDir is a host directory holding Toolathlon's filled
+	// configs/token_key_session.py and the key files it names, which makes
+	// the account-backed servers available (see credentials.go). Empty
+	// refuses every task that needs one.
+	CredentialsDir string
 }
 
 // Benchmark discovers selected Toolathlon tasks and retains their private
@@ -189,6 +195,7 @@ type Benchmark struct {
 	modelName        string
 	harnessWebSearch bool
 	concurrency      int
+	credentialsDir   string
 
 	mu      sync.RWMutex
 	details map[string]taskDetails
@@ -201,6 +208,12 @@ type taskDetails struct {
 	// needsApplications is true when any MCP server is backed by one of the
 	// self-hosted applications, so the loopback forwarder must run.
 	needsApplications bool
+	// needsCredentials is true when any MCP server is account-backed, so
+	// the credentials directory is overlaid on the sandbox's configs/.
+	needsCredentials bool
+	// extraEntries are checkout paths the project archive must carry for
+	// this task beyond the project code (serverBinaries).
+	extraEntries []string
 	// stashed names the task-directory entries PrepareSandbox moved to the
 	// host, for Evaluate to restore.
 	stashed []string
@@ -236,9 +249,12 @@ const (
 	serverApplication
 	// serverPublic reaches the public internet without an account.
 	serverPublic
-	// serverUnsupported needs a credentialed third-party account, or (k8s)
-	// a Docker socket and host networking the sandbox does not grant.
-	serverUnsupported
+	// serverAccount needs a credentialed third-party account: available
+	// when the profile names a credentials directory (credentials.go).
+	serverAccount
+	// serverHostRuntime (k8s) needs a kind cluster on a Docker socket with
+	// host networking, which the sandbox does not grant.
+	serverHostRuntime
 	// serverAgentTool is not an MCP server but one of the tools Toolathlon's
 	// own agent loop implements, which one task lists among its servers
 	// anyway. Toolathlon's runner and gateway skip such a name with a
@@ -257,11 +273,12 @@ var serverKinds = map[string]serverKind{
 	"howtocook": serverPublic, "playwright_with_chunk": serverPublic, "rail_12306": serverPublic,
 	"scholarly": serverPublic, "yahoo-finance": serverPublic, "youtube-transcript": serverPublic,
 
-	"github": serverUnsupported, "google-cloud": serverUnsupported, "google_calendar": serverUnsupported,
-	"google_forms": serverUnsupported, "google_map": serverUnsupported, "google_sheet": serverUnsupported,
-	"huggingface": serverUnsupported, "k8s": serverUnsupported, "notion": serverUnsupported,
-	"notion_official": serverUnsupported, "snowflake": serverUnsupported, "wandb": serverUnsupported,
-	"youtube": serverUnsupported,
+	"github": serverAccount, "google-cloud": serverAccount, "google_calendar": serverAccount,
+	"google_forms": serverAccount, "google_map": serverAccount, "google_sheet": serverAccount,
+	"huggingface": serverAccount, "notion": serverAccount, "notion_official": serverAccount,
+	"snowflake": serverAccount, "wandb": serverAccount, "youtube": serverAccount,
+
+	"k8s": serverHostRuntime,
 
 	"web_search": serverAgentTool,
 }
@@ -304,25 +321,26 @@ var localTools = map[string]localToolKind{
 // to its root.
 const catalogueDir = "configs/mcp_servers"
 
-// checkCatalogue reports whether the checkout's server catalogue is exactly
-// the set serverKinds classifies (agent-side tools aside), naming what
-// differs, so a re-pinned checkout cannot silently route a server the
-// adapter has not classified.
-func checkCatalogue(root string) error {
+// readCatalogue reads the checkout's server catalogue, name to file, and
+// checks it is exactly the set serverKinds classifies (agent-side tools
+// aside), naming what differs, so a re-pinned checkout cannot silently
+// route a server the adapter has not classified.
+func readCatalogue(root string) (map[string]string, error) {
 	entries, err := os.ReadDir(filepath.Join(root, catalogueDir))
 	if err != nil {
-		return fmt.Errorf("read the MCP server catalogue: %w", err)
+		return nil, fmt.Errorf("read the MCP server catalogue: %w", err)
 	}
-	found := make(map[string]struct{}, len(entries))
+	found := make(map[string]string, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".yaml" {
 			continue
 		}
-		name, err := catalogueServerName(filepath.Join(root, catalogueDir, entry.Name()))
+		serverFile := filepath.Join(root, catalogueDir, entry.Name())
+		name, err := catalogueServerName(serverFile)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		found[name] = struct{}{}
+		found[name] = serverFile
 	}
 	var unknown, missing []string
 	for name := range found {
@@ -339,13 +357,13 @@ func checkCatalogue(root string) error {
 	sort.Strings(missing)
 	switch {
 	case len(unknown) != 0 && len(missing) != 0:
-		return fmt.Errorf("the checkout's MCP server catalogue has servers the adapter does not classify (%s) and lacks servers it expects (%s)", strings.Join(unknown, ", "), strings.Join(missing, ", "))
+		return nil, fmt.Errorf("the checkout's MCP server catalogue has servers the adapter does not classify (%s) and lacks servers it expects (%s)", strings.Join(unknown, ", "), strings.Join(missing, ", "))
 	case len(unknown) != 0:
-		return fmt.Errorf("the checkout's MCP server catalogue has servers the adapter does not classify: %s", strings.Join(unknown, ", "))
+		return nil, fmt.Errorf("the checkout's MCP server catalogue has servers the adapter does not classify: %s", strings.Join(unknown, ", "))
 	case len(missing) != 0:
-		return fmt.Errorf("the checkout's MCP server catalogue lacks servers the adapter expects: %s", strings.Join(missing, ", "))
+		return nil, fmt.Errorf("the checkout's MCP server catalogue lacks servers the adapter expects: %s", strings.Join(missing, ", "))
 	}
-	return nil
+	return found, nil
 }
 
 // catalogueServerName is the top-level `name:` of one server file, the
@@ -425,6 +443,11 @@ func New(options Options) (*Benchmark, error) {
 	if !safeModelName(options.ModelName) {
 		return nil, fmt.Errorf("invalid toolathlon model name %q", options.ModelName)
 	}
+	if options.CredentialsDir != "" {
+		if _, err := readCredentials(options.CredentialsDir); err != nil {
+			return nil, err
+		}
+	}
 
 	seen := make(map[string]struct{}, len(options.TaskIDs))
 	for _, id := range options.TaskIDs {
@@ -475,6 +498,7 @@ func New(options Options) (*Benchmark, error) {
 		modelName:        options.ModelName,
 		harnessWebSearch: options.HarnessWebSearch,
 		concurrency:      options.Concurrency,
+		credentialsDir:   options.CredentialsDir,
 		details:          make(map[string]taskDetails, len(options.TaskIDs)),
 	}, nil
 }
@@ -483,18 +507,27 @@ func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
 	if err := VerifyRevision(ctx, b.root, b.revision); err != nil {
 		return nil, err
 	}
-	if err := checkCatalogue(b.root); err != nil {
+	catalogue, err := readCatalogue(b.root)
+	if err != nil {
 		return nil, err
+	}
+	var creds *credentials
+	if b.credentialsDir != "" {
+		// Read again at task load: the directory may have been filled in
+		// since the profile was validated.
+		if creds, err = readCredentials(b.credentialsDir); err != nil {
+			return nil, err
+		}
 	}
 
 	tasks := make([]core.Task, 0, len(b.taskIDs))
 	details := make(map[string]taskDetails, len(b.taskIDs))
-	var applicationTasks []string
+	var sharedStateTasks []string
 	for index, id := range b.taskIDs {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		task, private, err := loadTask(b.root, id, b.environment, b.harnessWebSearch)
+		task, private, err := loadTask(b.root, id, b.environment, b.harnessWebSearch, catalogue, creds)
 		if err != nil {
 			return nil, fmt.Errorf("load toolathlon task %q: %w", id, err)
 		}
@@ -502,16 +535,18 @@ func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
 		task.ID = executionID
 		tasks = append(tasks, task)
 		details[executionID] = private
-		if private.needsApplications {
-			applicationTasks = append(applicationTasks, id)
+		if private.needsApplications || private.needsCredentials {
+			sharedStateTasks = append(sharedStateTasks, id)
 		}
 	}
 	// Two occurrences on the shared deployment would race: one task's
 	// preprocess deletes and recreates the courses, mailboxes, or products
-	// another task is in the middle of using. Refuse the overlap rather
-	// than serialize it, so a run's concurrency means what it says.
-	if b.concurrency > 1 && len(applicationTasks) != 0 {
-		return nil, fmt.Errorf("application-backed tasks share one deployment and must run at execution.concurrency 1 (concurrency %d with %s)", b.concurrency, strings.Join(applicationTasks, ", "))
+	// another task is in the middle of using; the account-backed tasks
+	// reset repositories, pages, and sheets in one account the same way.
+	// Refuse the overlap rather than serialize it, so a run's concurrency
+	// means what it says.
+	if b.concurrency > 1 && len(sharedStateTasks) != 0 {
+		return nil, fmt.Errorf("application-backed and account-backed tasks share state outside the sandbox and must run at execution.concurrency 1 (concurrency %d with %s)", b.concurrency, strings.Join(sharedStateTasks, ", "))
 	}
 
 	b.mu.Lock()
@@ -522,7 +557,9 @@ func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
 
 // loadTask reads one task directory and rejects, before any sandbox exists,
 // every task whose MCP servers or local tools the adapter cannot provide.
-func loadTask(root, id string, environment core.Environment, harnessWebSearch bool) (core.Task, taskDetails, error) {
+// catalogue maps each server to its file; creds is nil when the profile
+// names no credentials directory.
+func loadTask(root, id string, environment core.Environment, harnessWebSearch bool, catalogue map[string]string, creds *credentials) (core.Task, taskDetails, error) {
 	taskDir := filepath.Join(root, "tasks", taskPool, id)
 	configBytes, err := os.ReadFile(filepath.Join(taskDir, "task_config.json"))
 	if err != nil {
@@ -536,16 +573,38 @@ func loadTask(root, id string, environment core.Environment, harnessWebSearch bo
 	if err != nil {
 		return core.Task{}, taskDetails{}, fmt.Errorf("parse needed_mcp_servers: %w", err)
 	}
-	needsApplications := false
+	details := taskDetails{name: id, servers: servers}
+	var overrides map[string]tokenValue
 	for _, server := range servers {
 		kind, known := serverKinds[server]
 		switch {
 		case !known:
 			return core.Task{}, taskDetails{}, fmt.Errorf("MCP server %q is not in the pinned server catalogue", server)
-		case kind == serverUnsupported:
-			return core.Task{}, taskDetails{}, fmt.Errorf("MCP server %q needs a third-party account or host runtime the sandbox does not provide", server)
+		case kind == serverHostRuntime:
+			return core.Task{}, taskDetails{}, fmt.Errorf("MCP server %q needs a host runtime the sandbox does not provide (a kind cluster on the Docker socket with host networking)", server)
+		case kind == serverAccount:
+			if creds == nil {
+				return core.Task{}, taskDetails{}, fmt.Errorf("MCP server %q needs a third-party account: set benchmark.toolathlon.credentials_dir to a directory holding Toolathlon's filled %s", server, credentialsFileName)
+			}
+			if overrides == nil {
+				if overrides, err = taskTokenOverrides(taskDir); err != nil {
+					return core.Task{}, taskDetails{}, err
+				}
+				if overrides == nil {
+					overrides = map[string]tokenValue{}
+				}
+			}
+			keys, err := serverTokenKeys(catalogue[server])
+			if err != nil {
+				return core.Task{}, taskDetails{}, err
+			}
+			if missing := creds.missing(keys, overrides); len(missing) != 0 {
+				return core.Task{}, taskDetails{}, fmt.Errorf("MCP server %q needs credentials the credentials directory does not provide: %s", server, strings.Join(missing, ", "))
+			}
+			details.needsCredentials = true
+			details.extraEntries = append(details.extraEntries, serverBinaries[server]...)
 		case kind == serverApplication:
-			needsApplications = true
+			details.needsApplications = true
 		}
 	}
 	tools, err := serverNames(parsed.NeededLocalTools)
@@ -580,7 +639,7 @@ func loadTask(root, id string, environment core.Environment, harnessWebSearch bo
 		Environment: environment,
 	}
 	task.Environment.Env = maps.Clone(environment.Env)
-	return task, taskDetails{name: id, servers: servers, needsApplications: needsApplications}, nil
+	return task, details, nil
 }
 
 // renderInstruction is the task description plus the two facts Toolathlon's

@@ -11,7 +11,7 @@ import (
 func TestWriteProjectArchiveCopiesWhatTheRunnerCopies(t *testing.T) {
 	root := writeFixture(t)
 	archive := filepath.Join(t.TempDir(), "project.tar")
-	if err := writeProjectArchive(root, "canvas-list-test", archive); err != nil {
+	if err := writeProjectArchive(root, "canvas-list-test", nil, archive); err != nil {
 		t.Fatal(err)
 	}
 	members, err := archiveMemberNames(archive)
@@ -71,7 +71,7 @@ func TestWriteProjectArchiveJudgesSymlinksWhereTheyResolve(t *testing.T) {
 			if err := os.Symlink(filepath.FromSlash(tc.target), link); err != nil {
 				t.Skipf("symlinks unavailable: %v", err)
 			}
-			err := writeProjectArchive(root, "canvas-list-test", filepath.Join(t.TempDir(), "project.tar"))
+			err := writeProjectArchive(root, "canvas-list-test", nil, filepath.Join(t.TempDir(), "project.tar"))
 			if tc.escapes {
 				if err == nil || !strings.Contains(err.Error(), "escapes the checkout") {
 					t.Fatalf("err=%v", err)
@@ -87,7 +87,38 @@ func TestWriteProjectArchiveJudgesSymlinksWhereTheyResolve(t *testing.T) {
 
 func TestWriteProjectArchiveFailsForMissingTask(t *testing.T) {
 	root := writeFixture(t)
-	if err := writeProjectArchive(root, "missing-task", filepath.Join(t.TempDir(), "project.tar")); err == nil {
+	if err := writeProjectArchive(root, "missing-task", nil, filepath.Join(t.TempDir(), "project.tar")); err == nil {
 		t.Fatal("expected a missing task directory to be an error")
+	}
+}
+
+// A task's extra entries ride in the same archive at preparation and are
+// left out of the evaluation-time reinstall with the task directory.
+func TestWriteProjectArchiveCarriesExtraEntriesWithTheTask(t *testing.T) {
+	root := writeFixture(t)
+	archive := filepath.Join(t.TempDir(), "project.tar")
+	if err := writeProjectArchive(root, "github-task", serverBinaries["github"], archive); err != nil {
+		t.Fatal(err)
+	}
+	members, err := archiveMemberNames(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(members, "local_binary/github-mcp-server") {
+		t.Fatalf("archive lacks the GitHub server binary; members: %v", members)
+	}
+	if slices.Contains(members, "local_binary/github-mcp-version.txt") {
+		t.Fatalf("archive carries more of local_binary than the binary: %v", members)
+	}
+	if err := writeProjectArchive(root, "", serverBinaries["github"], archive); err != nil {
+		t.Fatal(err)
+	}
+	if members, err = archiveMemberNames(archive); err != nil {
+		t.Fatal(err)
+	}
+	for _, member := range members {
+		if strings.HasPrefix(member, "local_binary/") || strings.HasPrefix(member, "tasks/") {
+			t.Fatalf("the reinstall archive carries %s", member)
+		}
 	}
 }

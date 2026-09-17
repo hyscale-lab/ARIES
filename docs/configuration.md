@@ -729,10 +729,12 @@ these guides:
   task image) and a harness with an MCP client, Hermes or OpenClaw. The adapter
   adds its gateway to the harness's MCP servers, so `harness.mcp_servers` may
   not name `toolathlon`.
-  Tasks backed by Toolathlon's self-hosted applications share one deployment,
-  so they load only at `execution.concurrency` 1. The optional `toolathlon`
-  block sets the gateway port, the application host, and `max_steps`, which
-  Toolathlon records in its task bundle but which does not bound the agent.
+  Tasks backed by Toolathlon's self-hosted applications or by a third-party
+  account share state outside the sandbox, so they load only at
+  `execution.concurrency` 1. The optional `toolathlon` block sets the gateway
+  port, the application host, `max_steps`, which Toolathlon records in its task
+  bundle but which does not bound the agent, and `credentials_dir`, a directory
+  holding Toolathlon's token file for the account-backed tasks.
 
 ### Judge model settings
 
