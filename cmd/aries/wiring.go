@@ -60,13 +60,12 @@ func validateComponents(cfg config.Config) error {
 	case "sweatlasqa":
 	case "swebenchpro":
 	case "toolathlon":
-		// Toolathlon's tools reach the harness only as an MCP server, and
-		// the adapter is wired for the Hermes harness. The gateway itself is
-		// added to that harness's MCP servers by mcpServers, so a profile's
-		// own harness.mcp_servers entries are extra servers and may not take
-		// its name.
-		if cfg.Harness.Type != "hermes" {
-			return errors.New("benchmark type \"toolathlon\" requires the hermes harness")
+		// Toolathlon's tools reach the harness only as an MCP server; both
+		// harnesses have an MCP client. The gateway itself is added to their
+		// MCP servers by mcpServers, so a profile's own harness.mcp_servers
+		// entries are extra servers and may not take its name.
+		if cfg.Harness.Type != "hermes" && cfg.Harness.Type != "openclaw" {
+			return fmt.Errorf("benchmark type \"toolathlon\" requires a harness with an MCP client (hermes or openclaw), not %q", cfg.Harness.Type)
 		}
 		for _, server := range cfg.Harness.MCPServers {
 			if server.Name == toolathlon.GatewayServerName {
@@ -288,10 +287,10 @@ func sweatlasModels(cfg config.Config) (judge core.ModelConfig, judgeDisabled bo
 	return judgeCfg.CoreModel(), false
 }
 
-// mcpServers is the harness's MCP server list: the benchmark's own server
-// first, when the benchmark exposes its tools that way (Toolathlon's
-// gateway, at the sandbox's alias on the gateway port), then the profile's
-// harness.mcp_servers entries.
+// mcpServers is the harness's MCP server list, whichever harness renders
+// it: the benchmark's own server first, when the benchmark exposes its tools
+// that way (Toolathlon's gateway, at the sandbox's alias on the gateway
+// port), then the profile's harness.mcp_servers entries.
 func mcpServers(cfg config.Config) []core.MCPServerConfig {
 	out := make([]core.MCPServerConfig, 0, len(cfg.Harness.MCPServers)+1)
 	if cfg.Benchmark.Type == "toolathlon" {
@@ -333,7 +332,7 @@ func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byt
 			ExtractAPIKeyEnv:       cfg.Harness.WebSearch.ExtractAPIKeyEnv,
 			SubagentsEnabled:       cfg.Harness.Subagents.Enabled != nil && *cfg.Harness.Subagents.Enabled,
 			MaxConcurrentSubagents: cfg.Harness.Subagents.MaxConcurrent,
-			MCPServers:             cfg.Harness.MCPServers,
+			MCPServers:             mcpServers(cfg),
 		}
 		if cfg.Harness.Mode == openclawharness.ModeRealtime || cfg.Harness.Mode == openclawharness.ModeVoiceTranscribe {
 			options.Realtime = openClawVoiceOptions(cfg.Harness)

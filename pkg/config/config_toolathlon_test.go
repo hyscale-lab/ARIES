@@ -37,6 +37,10 @@ func TestHarnessMCPServersValidation(t *testing.T) {
 		harness string
 		wantErr string
 	}{
+		"other harness": {
+			harness: strings.Replace(hermesWithMCP, `"type":"hermes"`, `"type":"other"`, 1),
+			wantErr: "harness.mcp_servers requires OpenClaw or Hermes",
+		},
 		"bad name": {
 			harness: strings.Replace(hermesWithMCP, `"name":"docs"`, `"name":"docs mcp"`, 1),
 			wantErr: "contains invalid characters",
