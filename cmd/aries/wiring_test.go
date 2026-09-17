@@ -10,14 +10,18 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/hyscale-lab/aries/internal/app"
 	runtimesglang "github.com/hyscale-lab/aries/internal/modelruntime/sglang"
+	"github.com/hyscale-lab/aries/pkg/benchmark/toolathlon"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
+	hermesharness "github.com/hyscale-lab/aries/pkg/harness/hermes"
+	openclawharness "github.com/hyscale-lab/aries/pkg/harness/openclaw"
 )
 
 func TestDispatchAcceptsOnlyExactCommandGrammar(t *testing.T) {
@@ -173,6 +177,84 @@ func TestValidateComponentsRequiresPairedHarnessAndBridge(t *testing.T) {
 				t.Fatalf("err=%v", err)
 			}
 		})
+	}
+}
+
+// The adapter starts Toolathlon's gateway at the sandbox's alias on the
+// gateway port and adds it to the harness's MCP client itself, ahead of any
+// server the profile names; the profile may not name one after it, and a
+// harness without an MCP client is refused.
+func TestToolathlonGatewayIsAddedToTheHarness(t *testing.T) {
+	base := func(servers ...config.HarnessMCPServerConfig) config.Config {
+		return config.Config{
+			Benchmark: config.BenchmarkConfig{Type: "toolathlon"},
+			Harness:   config.HarnessConfig{Type: "hermes", MCP: config.HarnessMCPConfig{Servers: servers}},
+			Sandbox:   config.SandboxConfig{Type: "docker"},
+			Bridge:    config.BridgeConfig{Type: "hermes-ssh"},
+		}
+	}
+	docs := config.HarnessMCPServerConfig{Name: "docs", URL: "https://docs.example/mcp", Transport: "streamable-http", TimeoutSeconds: 30}
+	for _, tc := range []struct {
+		name string
+		cfg  config.Config
+		want string
+	}{
+		{name: "no profile servers", cfg: base()},
+		{name: "another server beside the gateway", cfg: base(docs)},
+		{name: "the gateway's name taken", cfg: base(config.HarnessMCPServerConfig{Name: "toolathlon", URL: "http://task-sandbox:10086/sse", Transport: "sse"}), want: `harness.mcp.servers may not name "toolathlon"`},
+		{name: "openclaw harness", cfg: func() config.Config {
+			cfg := base()
+			cfg.Harness.Type = "openclaw"
+			cfg.Bridge.Type = "openclaw-ssh"
+			return cfg
+		}()},
+		{name: "a harness without an MCP client", cfg: func() config.Config {
+			cfg := base()
+			cfg.Harness.Type = "other"
+			return cfg
+		}(), want: "requires a harness with an MCP client"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateComponents(tc.cfg)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("err=%v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err=%v, want %q", err, tc.want)
+			}
+		})
+	}
+
+	gateway := hermesharness.MCPServer{Name: "toolathlon", URL: "http://task-sandbox:10086/sse", Transport: "sse", TimeoutSeconds: toolathlon.GatewayCallTimeoutSeconds}
+	if got := hermesMCPServers(base()); !slices.Equal(got, []hermesharness.MCPServer{gateway}) {
+		t.Fatalf("servers = %+v, want the gateway alone", got)
+	}
+	want := []hermesharness.MCPServer{gateway, {Name: "docs", URL: "https://docs.example/mcp", Transport: "streamable-http", TimeoutSeconds: 30}}
+	if got := hermesMCPServers(base(docs)); !slices.Equal(got, want) {
+		t.Fatalf("servers = %+v, want the gateway then the profile's", got)
+	}
+	// A profile that moves the gateway port moves the entry with it.
+	moved := base()
+	moved.Benchmark.Toolathlon = &config.ToolathlonConfig{GatewayPort: 20086}
+	if got := hermesMCPServers(moved); len(got) != 1 || got[0].URL != "http://task-sandbox:20086/sse" {
+		t.Fatalf("moved port: servers = %+v", got)
+	}
+	// Another benchmark gets only what its profile names.
+	other := base(docs)
+	other.Benchmark.Type = "terminalbench2"
+	if got := hermesMCPServers(other); !slices.Equal(got, want[1:]) {
+		t.Fatalf("terminalbench2 servers = %+v, want the profile's alone", got)
+	}
+	// OpenClaw receives the same list in its own type.
+	openclaw := base(docs)
+	openclaw.Harness.Type = "openclaw"
+	openclaw.Bridge.Type = "openclaw-ssh"
+	wantOpenclaw := []openclawharness.MCPServer{{Name: "toolathlon", URL: "http://task-sandbox:10086/sse", Transport: "sse", TimeoutSeconds: toolathlon.GatewayCallTimeoutSeconds}, {Name: "docs", URL: "https://docs.example/mcp", Transport: "streamable-http", TimeoutSeconds: 30}}
+	if got := openclawMCPServers(openclaw); !slices.Equal(got, wantOpenclaw) {
+		t.Fatalf("openclaw servers = %+v", got)
 	}
 }
 
