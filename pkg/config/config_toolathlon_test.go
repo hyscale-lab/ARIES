@@ -94,12 +94,12 @@ func TestToolathlonBenchmarkValidation(t *testing.T) {
 	if cfg.Benchmark.Toolathlon != nil {
 		t.Fatalf("toolathlon block = %#v, want absent by default", cfg.Benchmark.Toolathlon)
 	}
-	tuned := strings.Replace(valid, `"tasks":["canvas-list-test"],`, `"tasks":["canvas-list-test"],"toolathlon":{"gateway_port":10086,"app_host":"10.148.0.5","max_steps":50},`, 1)
+	tuned := strings.Replace(valid, `"tasks":["canvas-list-test"],`, `"tasks":["canvas-list-test"],"toolathlon":{"gateway_port":10086,"app_host":"10.148.0.5","max_steps":50,"credentials_dir":"/srv/toolathlon-credentials"},`, 1)
 	cfg, err = Decode(strings.NewReader(tuned))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings := cfg.Benchmark.Toolathlon; settings == nil || settings.GatewayPort != 10086 || settings.AppHost != "10.148.0.5" || settings.MaxSteps != 50 {
+	if settings := cfg.Benchmark.Toolathlon; settings == nil || settings.GatewayPort != 10086 || settings.AppHost != "10.148.0.5" || settings.MaxSteps != 50 || settings.CredentialsDir != "/srv/toolathlon-credentials" {
 		t.Fatalf("toolathlon block = %#v", cfg.Benchmark.Toolathlon)
 	}
 
@@ -122,6 +122,10 @@ func TestToolathlonBenchmarkValidation(t *testing.T) {
 		"negative max steps": {
 			input:   strings.Replace(valid, `"tasks":["canvas-list-test"],`, `"tasks":["canvas-list-test"],"toolathlon":{"max_steps":-5},`, 1),
 			wantErr: "max_steps must be positive",
+		},
+		"blank credentials directory": {
+			input:   strings.Replace(valid, `"tasks":["canvas-list-test"],`, `"tasks":["canvas-list-test"],"toolathlon":{"credentials_dir":"  "},`, 1),
+			wantErr: "credentials_dir must be a directory path",
 		},
 		"bad app host": {
 			input:   strings.Replace(valid, `"tasks":["canvas-list-test"],`, `"tasks":["canvas-list-test"],"toolathlon":{"app_host":"host name"},`, 1),

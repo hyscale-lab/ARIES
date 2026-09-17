@@ -152,6 +152,12 @@ type ToolathlonConfig struct {
 	// MaxSteps is Toolathlon's max_steps_under_single_turn_mode, recorded in
 	// its task bundle.
 	MaxSteps int `json:"max_steps,omitempty"`
+	// CredentialsDir is a host directory holding Toolathlon's filled
+	// configs/token_key_session.py and the key files it names; it makes the
+	// tasks that need a third-party account (GitHub, Google, Hugging Face,
+	// Notion, Snowflake, W&B, YouTube) loadable. Without it they are
+	// refused at task load.
+	CredentialsDir string `json:"credentials_dir,omitempty"`
 }
 
 // BenchmarkEnvironment describes the task sandbox for benchmarks (currently
@@ -882,6 +888,9 @@ func (c *Config) validateBenchmarkType() error {
 			}
 			if settings.AppHost != "" && !validHostName(settings.AppHost) {
 				return errors.New("benchmark.toolathlon.app_host must be a hostname or IP address")
+			}
+			if settings.CredentialsDir != "" && strings.TrimSpace(settings.CredentialsDir) == "" {
+				return errors.New("benchmark.toolathlon.credentials_dir must be a directory path")
 			}
 		}
 		return nil

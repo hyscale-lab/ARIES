@@ -102,8 +102,16 @@ func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner
 	// left as restored: preprocess writes the ground truth some graders read
 	// (seeded product IDs, expected results), and the stash carries that
 	// state; the checkout's copy would be stale.
-	if err := b.installProject(ctx, sandbox, "", hostDir); err != nil {
+	if err := b.installProject(ctx, sandbox, "", nil, hostDir); err != nil {
 		return finish(fmt.Errorf("reinstall project code before evaluation: %w", err))
+	}
+	// The reinstall put the checkout's example token file back; a grader
+	// that talks to the account needs the real one, from the host, not
+	// whatever the agent left.
+	if details.needsCredentials {
+		if err := b.installCredentials(ctx, sandbox, hostDir); err != nil {
+			return finish(fmt.Errorf("reinstall credentials before evaluation: %w", err))
+		}
 	}
 	if err := writeRuntimeManifest(ctx, sandbox, manifestAfterPath); err != nil {
 		return finish(fmt.Errorf("inventory evaluator runtime after harness: %w", err))
