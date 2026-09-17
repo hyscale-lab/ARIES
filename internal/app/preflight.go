@@ -295,8 +295,12 @@ func sleepWithContext(ctx context.Context, duration time.Duration) error {
 	}
 }
 
+// isOfficialDeepSeek must list the same models as disablesThinking in
+// pkg/harness/openclaw. A model accepted here but missing there still runs,
+// with thinking left on, which silently changes latency and token use. DeepSeek
+// retired deepseek-v4-flash in favour of deepseek-flash; update both together.
 func isOfficialDeepSeek(model core.ModelConfig) bool {
-	return model.Provider == "deepseek" && model.BaseURL == deepSeekBaseURL && (model.Model == "deepseek-v4-flash" || model.Model == "deepseek-v4-pro")
+	return model.Provider == "deepseek" && model.BaseURL == deepSeekBaseURL && (model.Model == "deepseek-flash" || model.Model == "deepseek-v4-pro")
 }
 
 func liveValidationFailure(model core.ModelConfig, category liveValidationCategory, attempts int) (liveValidation, error) {

@@ -62,7 +62,7 @@ func TestInjectedModelRuntimeWrapsPreflightAndRunFailure(t *testing.T) {
 	events := []string{}
 	runtime := &recordingRuntime{events: &events, done: make(chan struct{})}
 	wiring := failingRunWiring(runtime, &events, errors.New("run canary"))
-	doer := &preflightDoer{t: t, replies: []preflightReply{{status: 200, body: `{"data":[{"id":"deepseek-v4-flash"}]}`}}}
+	doer := &preflightDoer{t: t, replies: []preflightReply{{status: 200, body: `{"data":[{"id":"deepseek-flash"}]}`}}}
 	err := Run(context.Background(), profile, io.Discard, Dependencies{PreflightClient: doer, PreflightSleep: func(context.Context, time.Duration) error { return nil }, Wiring: wiring})
 	if err == nil || !strings.Contains(err.Error(), "run canary") {
 		t.Fatalf("err=%v", err)
@@ -81,7 +81,7 @@ func TestInjectedModelRuntimeStopFailureIsReturned(t *testing.T) {
 	events := []string{}
 	runtime := &recordingRuntime{events: &events, done: make(chan struct{}), stopErr: errors.New("stop canary")}
 	wiring := failingRunWiring(runtime, &events, errors.New("run canary"))
-	doer := &preflightDoer{t: t, replies: []preflightReply{{status: 200, body: `{"data":[{"id":"deepseek-v4-flash"}]}`}}}
+	doer := &preflightDoer{t: t, replies: []preflightReply{{status: 200, body: `{"data":[{"id":"deepseek-flash"}]}`}}}
 	err := Run(context.Background(), profile, io.Discard, Dependencies{PreflightClient: doer, Wiring: wiring})
 	if err == nil || !strings.Contains(err.Error(), "run canary") || !strings.Contains(err.Error(), "stop canary") {
 		t.Fatalf("joined err=%v", err)
@@ -96,7 +96,7 @@ func TestManagedRuntimeLifecycleOrder(t *testing.T) {
 	wiring := failingRunWiring(runtime, &events, errors.New("run complete canary"))
 	doer := httpDoerFunc(func(req *http.Request) (*http.Response, error) {
 		events = append(events, "preflight")
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"data":[{"id":"deepseek-v4-flash"}]}`))}, nil
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"data":[{"id":"deepseek-flash"}]}`))}, nil
 	})
 	err := Run(context.Background(), profile, io.Discard, Dependencies{PreflightClient: doer, PreflightSleep: func(context.Context, time.Duration) error { return nil }, Wiring: wiring})
 	if err == nil || !strings.Contains(err.Error(), "run complete canary") {
@@ -134,7 +134,7 @@ func TestRuntimeLifecycleLogsAreStructuredAndSanitized(t *testing.T) {
 			logger := logrus.New()
 			logger.SetOutput(&logs)
 			logger.SetFormatter(&logrus.JSONFormatter{})
-			doer := &preflightDoer{t: t, replies: []preflightReply{{status: 200, body: `{"data":[{"id":"deepseek-v4-flash"}]}`}}}
+			doer := &preflightDoer{t: t, replies: []preflightReply{{status: 200, body: `{"data":[{"id":"deepseek-flash"}]}`}}}
 			err := Run(context.Background(), profile, io.Discard, Dependencies{Logger: logger, PreflightClient: doer, Wiring: wiring})
 			if err == nil {
 				t.Fatal("expected run error")
@@ -252,7 +252,7 @@ func TestRunForwardsFreshPreparedGPUIndicesToEveryOccurrence(t *testing.T) {
 			return &stubBridge{}, nil
 		}),
 	}
-	doer := &preflightDoer{t: t, replies: []preflightReply{{status: 200, body: `{"data":[{"id":"deepseek-v4-flash"}]}`}}}
+	doer := &preflightDoer{t: t, replies: []preflightReply{{status: 200, body: `{"data":[{"id":"deepseek-flash"}]}`}}}
 	logger := logrus.New()
 	logger.SetOutput(io.Discard)
 	if err := Run(context.Background(), profile, io.Discard, Dependencies{Logger: logger, PreflightClient: doer, Wiring: wiring}); err == nil || !strings.Contains(err.Error(), "observer report missing") {
@@ -394,7 +394,7 @@ func assertCommandAuthorization(t *testing.T, exe, want string) {
 	events := []string{}
 	runtime := &recordingRuntime{events: &events, done: make(chan struct{})}
 	w := failingRunWiring(runtime, &events, errors.New("done"))
-	doer := &preflightDoer{t: t, replies: []preflightReply{{status: 200, body: `{"data":[{"id":"deepseek-v4-flash"}]}`}}}
+	doer := &preflightDoer{t: t, replies: []preflightReply{{status: 200, body: `{"data":[{"id":"deepseek-flash"}]}`}}}
 	_ = Run(context.Background(), profile, io.Discard, Dependencies{ExecutablePath: exe, PreflightClient: doer, Wiring: w})
 	if len(doer.authorizations) != 1 || doer.authorizations[0] != "Bearer "+want {
 		t.Fatalf("authorization=%v", doer.authorizations)
@@ -409,7 +409,7 @@ func writeCommandProfile(t *testing.T, output string) string {
 	if err := os.WriteFile(filepath.Join(dir, "versions.json"), data, 0600); err != nil {
 		t.Fatal(err)
 	}
-	profile := fmt.Sprintf(`{"name":"test","versions_file":"versions.json","benchmark":{"type":"terminalbench2","root":"root","tasks":["a"]},"harness":{"type":"openclaw"},"sandbox":{"type":"docker"},"bridge":{"type":"openclaw-ssh"},"runtime":{"backend":"deepseek","mode":"external"},"model":{"id":"deepseek-v4-flash","base_url":"https://api.deepseek.com","api_key_env":"DEEPSEEK_API_KEY"},"output_dir":%q}`, output)
+	profile := fmt.Sprintf(`{"name":"test","versions_file":"versions.json","benchmark":{"type":"terminalbench2","root":"root","tasks":["a"]},"harness":{"type":"openclaw"},"sandbox":{"type":"docker"},"bridge":{"type":"openclaw-ssh"},"runtime":{"backend":"deepseek","mode":"external"},"model":{"id":"deepseek-flash","base_url":"https://api.deepseek.com","api_key_env":"DEEPSEEK_API_KEY"},"output_dir":%q}`, output)
 	path := filepath.Join(dir, "profile.json")
 	if err := os.WriteFile(path, []byte(profile), 0600); err != nil {
 		t.Fatal(err)
@@ -468,7 +468,7 @@ func TestRuntimeExitCancelsAndDrainsRun(t *testing.T) {
 			},
 		}, nil
 	}}
-	doer := &preflightDoer{t: t, replies: []preflightReply{{status: 200, body: `{"data":[{"id":"deepseek-v4-flash"}]}`}}}
+	doer := &preflightDoer{t: t, replies: []preflightReply{{status: 200, body: `{"data":[{"id":"deepseek-flash"}]}`}}}
 	done := make(chan error, 1)
 	go func() {
 		done <- Run(context.Background(), profile, io.Discard, Dependencies{PreflightClient: doer, Wiring: wiring})

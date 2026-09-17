@@ -8,7 +8,7 @@ import (
 )
 
 func validModel() core.ModelConfig {
-	return core.ModelConfig{Provider: "deepseek", BaseURL: "https://api.deepseek.com", Model: "deepseek-v4-flash", APIKeyEnv: "DEEPSEEK_API_KEY"}
+	return core.ModelConfig{Provider: "deepseek", BaseURL: "https://api.deepseek.com", Model: "deepseek-flash", APIKeyEnv: "DEEPSEEK_API_KEY"}
 }
 
 func validEndpoint() core.ToolEndpoint {

@@ -68,7 +68,7 @@ func TestHarnessStartsRealHermesContainerAndStopsPositively(t *testing.T) {
 			Protocol: "ssh", Address: "127.0.0.1:2222", Username: "aries", Network: "bridge",
 			IdentityFile: identityContainerFS, IdentitySourceFile: identityPath,
 		},
-		Model: core.ModelConfig{Provider: "deepseek", BaseURL: "https://api.deepseek.com", Model: "deepseek-v4-flash", APIKeyEnv: "DEEPSEEK_API_KEY"},
+		Model: core.ModelConfig{Provider: "deepseek", BaseURL: "https://api.deepseek.com", Model: "deepseek-flash", APIKeyEnv: "DEEPSEEK_API_KEY"},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)

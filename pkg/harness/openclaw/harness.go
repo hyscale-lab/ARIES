@@ -616,8 +616,11 @@ func newSpeechClient(options audioinput.SpeechClientOptions) (speechSynthesizer,
 	return audioinput.NewSpeechClient(options)
 }
 
+// disablesThinking must list the same models as isOfficialDeepSeek in
+// internal/app. Nothing fails when a model is missing here: it just runs with
+// thinking left on.
 func disablesThinking(model core.ModelConfig) bool {
-	return model.BaseURL == "https://api.deepseek.com" && (model.Model == "deepseek-v4-flash" || model.Model == "deepseek-v4-pro")
+	return model.BaseURL == "https://api.deepseek.com" && (model.Model == "deepseek-flash" || model.Model == "deepseek-v4-pro")
 }
 
 func (manager *Manager) gatewayURL(ctx context.Context, active *session) (string, error) {
