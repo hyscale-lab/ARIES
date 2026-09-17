@@ -73,6 +73,23 @@ func generateSessionCertificates(gateway string) (sessionCredentials, error) {
 // IsCA is set so each side can place the peer's certificate directly in a
 // trust pool; the pin in VerifyPeerCertificate is what actually restricts the
 // peer to one identity.
+//
+// The validity window is deliberately far wider than any task, because nothing
+// consults it. Pinning replaces chain validation on both sides — the server
+// uses RequireAnyClientCert and the client InsecureSkipVerify, so neither runs
+// the standard checks that read NotAfter, and pinnedPeer compares raw bytes
+// with no notion of time. An expired certificate is accepted by this
+// configuration; that was verified, not assumed.
+//
+// A short lifetime here would therefore be decorative, and worse than absent:
+// it would read as a control that exists, and would become a live failure for
+// long tasks the moment anyone enabled standard verification. What actually
+// bounds these credentials is the task — Stop removes the client identity and
+// tears down the server, which is positive revocation rather than a clock.
+// certificateValidity spans a century: see selfSignedCertificate on why the
+// window carries no meaning here.
+const certificateValidity = 100 * 365 * 24 * time.Hour
+
 func selfSignedCertificate(commonName string, addresses []net.IP) ([]byte, []byte, error) {
 	public, private, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -87,7 +104,7 @@ func selfSignedCertificate(commonName string, addresses []net.IP) ([]byte, []byt
 		SerialNumber:          serial,
 		Subject:               pkix.Name{CommonName: commonName},
 		NotBefore:             now.Add(-time.Minute),
-		NotAfter:              now.Add(certificateLifetime),
+		NotAfter:              now.Add(certificateValidity),
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 		BasicConstraintsValid: true,

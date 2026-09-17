@@ -62,8 +62,6 @@ const (
 
 	lockedUsername = "aries"
 
-	certificateLifetime = 24 * time.Hour
-
 	// maxMessageBytes and defaultOutputLimit are deliberately unlimited for the
 	// first iteration. grpc-go caps *receive* at 4 MiB by default on both sides
 	// and would reject a response after the command had already run, which the

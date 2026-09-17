@@ -289,6 +289,14 @@ harness to stage. They carry the meanings their SSH-shaped field names already h
 | `IdentitySourceFile` | client certificate and key, one PEM, `0600` | the client's own credential, as an SSH identity is |
 | `KnownHostsSourceFile` | the bridge's certificate, `0600` | the single server identity the client accepts |
 
+**Certificate validity is not a control here, and is not pretended to be.** Pinning replaces chain
+validation on both sides, so neither end runs the standard checks that read `NotAfter`, and the pin
+itself compares raw bytes with no notion of time — an expired certificate is accepted by this
+configuration, which was verified rather than assumed. The certificates are therefore issued with a
+window far wider than any task. What bounds them is `Stop`, which removes the identity and tears the
+server down: positive revocation rather than a clock. A short lifetime would be decorative today and
+would become a live failure for long tasks the moment anyone enabled standard verification.
+
 **The server's private key is never written anywhere.** It exists only inside the `tls.Certificate`
 the listener holds, so nothing can stage or persist it; only the certificate, which is public
 material, reaches the container.
