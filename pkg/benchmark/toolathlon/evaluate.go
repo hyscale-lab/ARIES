@@ -33,11 +33,13 @@ type evalResult struct {
 	Failure string `json:"failure"`
 }
 
-// Evaluate restores the grader, re-injects the trusted bundle, and runs
-// Toolathlon's container_eval against the sandbox the agent left behind.
-// The gateway and the loopback forwarder are still running: graders for
-// application-backed tasks query the applications the same way preprocess
-// seeded them.
+// Evaluate restores the grader, re-installs the pinned project tree over
+// whatever the agent left of it, confirms the evaluator's runtime is the
+// one inventoried before the agent existed (runtime.go), re-injects the
+// trusted bundle, and runs Toolathlon's container_eval against the sandbox
+// the agent left behind. The gateway and the loopback forwarder are still
+// running: graders for application-backed tasks query the applications the
+// same way preprocess seeded them.
 func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner.Sandbox) (core.Evaluation, error) {
 	started := time.Now()
 	evaluation := core.Evaluation{Status: core.StatusFailed, VerifierStatus: core.StatusFailed}
@@ -68,6 +70,8 @@ func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner
 	hostDir := filepath.Join(b.outputDir, task.ID, "toolathlon")
 	bundleHostPath := filepath.Join(hostDir, "task_bundle.json")
 	stashHostPath := filepath.Join(hostDir, "artifact-stash.tar")
+	manifestBeforePath := filepath.Join(hostDir, runtimeManifestHostName)
+	manifestAfterPath := filepath.Join(hostDir, "runtime-manifest-after.txt")
 	evalLogPath := filepath.Join(hostDir, "eval.log")
 	evalResultHostPath := filepath.Join(hostDir, "eval_res.json")
 	gatewayLogHostPath := filepath.Join(hostDir, "gateway.log")
@@ -77,7 +81,7 @@ func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner
 			return finish(fmt.Errorf("remove stale evaluator artifact %q: %w", path, err))
 		}
 	}
-	for _, path := range []string{bundleHostPath, stashHostPath} {
+	for _, path := range []string{bundleHostPath, stashHostPath, manifestBeforePath} {
 		if _, err := os.Stat(path); err != nil {
 			return finish(fmt.Errorf("trusted preparation artifact missing: %w", err))
 		}
@@ -91,6 +95,18 @@ func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner
 
 	if err := restoreArtifacts(ctx, sandbox, details.name, stashHostPath, details.stashed); err != nil {
 		return finish(fmt.Errorf("restore grader artifacts: %w", err))
+	}
+	// The evaluator's own code -- container_eval and everything it imports
+	// from the project tree -- comes back from the verified host checkout,
+	// not from the sandbox the agent had root in.
+	if err := b.installProject(ctx, sandbox, details.name, hostDir); err != nil {
+		return finish(fmt.Errorf("reinstall project tree before evaluation: %w", err))
+	}
+	if err := writeRuntimeManifest(ctx, sandbox, manifestAfterPath); err != nil {
+		return finish(fmt.Errorf("inventory evaluator runtime after harness: %w", err))
+	}
+	if err := compareRuntimeManifests(manifestBeforePath, manifestAfterPath); err != nil {
+		return finish(err)
 	}
 	// Anything the agent left at the two paths the grader reads is discarded.
 	if err := removePaths(ctx, sandbox, []string{trajectoryPath, evalResultPath, bundleContainerPath}); err != nil {
@@ -114,6 +130,10 @@ func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner
 		"--consume_bundle",
 		"--agent_exit_code", "0",
 	)
+	// Bytecode is compiled into a prefix the agent never saw, so a planted
+	// .pyc is never loaded; the user site directory is disabled for the
+	// same reason (see runtime.go).
+	command.Env = map[string]string{"PYTHONPYCACHEPREFIX": pycachePrefixPath, "PYTHONNOUSERSITE": "1"}
 	command.Timeout = evalTimeout
 	result, execErr := sandbox.Exec(ctx, command)
 	var artifactErrors []error
