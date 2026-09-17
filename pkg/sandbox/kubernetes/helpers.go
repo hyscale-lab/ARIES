@@ -231,7 +231,7 @@ func podSpec(container map[string]any, nodeRole string) map[string]any {
 // IMPORTANT: NetworkPolicy is enforced by the CNI plugin, not by Kubernetes.
 // Under a plugin that does not implement it (flannel, for one) the API server
 // still accepts this object and silently enforces nothing. See
-// k8s/install/README.md for the CNI requirement.
+// setup/README.md for the CNI requirement.
 func networkPolicyManifest(sandbox *Sandbox, allowNetwork bool) ([]byte, error) {
 	spec := map[string]any{
 		"podSelector": map[string]any{

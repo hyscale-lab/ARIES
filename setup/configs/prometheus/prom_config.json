@@ -1,0 +1,11 @@
+{
+  "namespace": "monitoring",
+  "release": "prometheus",
+  "chart_version": "72.6.2",
+  "node_role": "aries",
+  "helm_version": "v3.22.0",
+  "helm_sha256": {
+    "amd64": "1e4ab49e429626cf6c6958d914248b78c9730803c2751b87627e171dc800e7bb",
+    "arm64": "f14e804dfee240f55525b667488fe9adca349e63e00c9af634c0beb1421ac310"
+  }
+}

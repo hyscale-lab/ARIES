@@ -1,0 +1,13 @@
+# The model API key and registry credentials for `helm -f secret.yaml`.
+# Start from secret.yaml.example.
+#
+# Anchored to this directory and named exactly, not `secret*.yaml`: that glob
+# also matches templates/secrets.yaml, the template that renders the Secrets,
+# and a clone would silently get a chart with no Secret at all.
+/secret.yaml
+
+# Local values files, so an experiment-specific override holding a key cannot be
+# committed by accident. Anchored here, and never matching the templates
+# directory.
+/values-local-*.yaml
+/secret-*.yaml

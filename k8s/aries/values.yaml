@@ -1,0 +1,160 @@
+# Defaults for the ARIES chart.
+#
+# These reproduce what the old Kustomize `base` rendered: a long-lived idling
+# pod with an emptyDir for run artifacts, no role pinning, and no OpenClaw
+# gateway. Pick an environment file on top:
+#
+#   values-local.yaml       kind/minikube, image loaded into the node
+#   values-incluster.yaml   remote kubeadm cluster, image pulled, PVC, role pins
+#
+# Credentials are NOT here. They go in secret.yaml, which is gitignored; copy
+# secret.yaml.example and fill it in. See that file for the trade-off.
+
+# Resource names are kept stable at "aries" regardless of the release name, so
+# `kubectl -n aries exec deploy/aries` and `svc/aries-openclaw` keep working and
+# the docs stay correct. Clear this to get standard release-prefixed names.
+fullnameOverride: aries
+
+image:
+  repository: aries
+  tag: latest
+  # IfNotPresent suits an immutable tag. values-local sets Never (the image is
+  # side-loaded) and values-incluster sets Always (the :latest tag is mutable,
+  # so a redeploy must re-pull).
+  pullPolicy: IfNotPresent
+
+# Pull secret for a private ARIES image. Set registry.create to render it from
+# secret.yaml, or point this at a Secret you created yourself. Leave the list
+# empty for a public image: an absent pull secret is only a kubelet warning for
+# a public image, but ImagePullBackOff for a private one.
+imagePullSecrets:
+  - name: aries-registry
+
+registry:
+  # Render the aries-registry dockerconfigjson Secret from
+  # registry.dockerconfigjson in secret.yaml. Off by default because the local
+  # path never pulls from a registry.
+  create: false
+  # A full Docker config document. Set this in secret.yaml, never here.
+  dockerconfigjson: ""
+
+model:
+  # Render the aries-model Secret holding the model API key.
+  create: true
+  secretName: aries-model
+  # The env var ARIES reads, and the key inside the Secret.
+  key: DEEPSEEK_API_KEY
+  # Set this in secret.yaml, never here.
+  apiKey: ""
+
+# The profile the documented `kubectl exec` line runs, exported as
+# $ARIES_PROFILE. The pod idles, so this starts nothing on its own.
+profile: profiles/openclaw-tb2-fix-git-deepseek-e2b.json
+
+# Expose the pod's own IP as $POD_IP, for a bridge advertise_host that has to
+# be reachable from agent pods. Only needed when ARIES runs in-cluster.
+podIP: false
+
+# Pin ARIES to a node the installer labelled and tainted aries.dev/role=aries.
+# Both halves are needed: nodeSelector pulls the pod onto that node, the
+# toleration gets it past the taint. Off by default so a cluster with no role
+# labels (kind/minikube) still schedules the pod.
+role:
+  enabled: false
+  name: aries
+
+resources:
+  requests:
+    cpu: "2"
+    memory: 4Gi
+  # Monitors shell out to kubectl on a 5s timeout; a limit low enough to get
+  # CFS-throttled makes them miss it and die. 8 CPU keeps throttling off the
+  # sampling path.
+  limits:
+    cpu: "8"
+    memory: 16Gi
+
+runs:
+  # Where run artifacts land. emptyDir survives between runs, because the pod
+  # is long-lived, but dies with the pod.
+  persistence:
+    enabled: false
+    claimName: aries-runs
+    size: 20Gi
+    storageClassName: aries-local
+
+# A StorageClass and node-local PersistentVolume for the claim above. A bare
+# kubeadm cluster has no dynamic provisioner and no default StorageClass, so a
+# plain PVC would stay Pending forever.
+storage:
+  create: false
+  hostPath: /var/lib/aries/runs
+  # The PV is pinned to nodes carrying aries.dev/role=<role.name>, which is the
+  # only node the ARIES pod ever schedules onto.
+  nodeRoleAffinity: true
+
+rbac:
+  # The namespaced Role for sandbox pod lifecycle, exec, logs, services,
+  # configmaps/secrets and NetworkPolicies. ARIES cannot run without it.
+  create: true
+  # The one privilege ARIES holds outside its namespace: `get` on nodes/proxy,
+  # so pod telemetry can read the kubelet Summary API through the API server.
+  # Read-only and confined to that subresource. Set false to drop it; the
+  # sandbox and harness still work and resources.jsonl is simply empty.
+  nodeMetrics: true
+
+serviceAccount:
+  create: true
+  name: aries
+
+# OpenClaw harness gateway: a Deployment plus a ClusterIP Service. Off by
+# default because ARIES's Kubernetes harness backend creates its own per-task
+# agent pods; these static resources are the reference/template for that flow,
+# useful when driving a single long-lived gateway by port-forward.
+openclaw:
+  enabled: false
+  image:
+    repository: ghcr.io/openclaw/openclaw
+    tag: "2026.7.1"
+    pullPolicy: IfNotPresent
+  # Pin the gateway to the harness role pool, same two-halves reasoning as
+  # role above.
+  role:
+    enabled: true
+    name: harness
+  service:
+    # ClusterIP is deliberate: reach it with
+    # `kubectl -n aries port-forward svc/aries-openclaw 18789:18789`, which
+    # needs no node-IP or cloud load-balancer access and works against any
+    # cluster. NodePort/LoadBalancer only if you want direct addressing.
+    type: ClusterIP
+    port: 18789
+  resources:
+    requests:
+      cpu: "1"
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+# The ARIES Grafana dashboard, shipped as a ConfigMap for Grafana's dashboard
+# sidecar to pick up. It plots CPU, memory and CFS throttling for ARIES pods
+# from the kubelet's cAdvisor endpoint, which kube-prometheus-stack already
+# scrapes every 10s.
+#
+# On by default: the ConfigMap is inert without the monitoring stack. It does
+# need k8s/grafana/values.yaml's sidecar.dashboards.searchNamespace=ALL, since
+# it lives in this namespace rather than the monitoring one.
+grafanaDashboard:
+  enabled: true
+  # Both must match the monitoring release's sidecar.dashboards.label and
+  # .labelValue. kube-prometheus-stack sets the value to "1" and the sidecar
+  # matches on it, so a mismatch means the dashboard is never loaded and
+  # nothing reports an error.
+  label: grafana_dashboard
+  labelValue: "1"
+  # Grafana folder to file it under. Empty puts it in the sidecar's default.
+  folder: ARIES
+
+# Extra labels applied to every resource.
+commonLabels: {}

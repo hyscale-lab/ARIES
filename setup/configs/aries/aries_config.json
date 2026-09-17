@@ -1,0 +1,6 @@
+{
+  "namespace": "aries",
+  "release": "aries",
+  "values_files": ["values-incluster.yaml", "secret.yaml"],
+  "timeout": "10m"
+}

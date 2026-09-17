@@ -34,7 +34,7 @@ import (
 //
 // The tradeoff is RBAC: reading the Summary API needs `get` on the
 // cluster-scoped `nodes/proxy` subresource, which a namespaced Role cannot
-// grant. See k8s/base/rbac.yaml.
+// grant. See the ClusterRole in k8s/aries/templates/rbac.yaml.
 
 // backstopTimeout bounds one kubectl call when the caller supplied no deadline
 // of its own. It is only a backstop: pkg/monitor wraps every Sample in a much

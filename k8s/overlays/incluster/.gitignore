@@ -1,3 +1,0 @@
-# Never commit real secrets.
-secret.env
-registry.json

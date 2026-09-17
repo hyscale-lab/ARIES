@@ -196,10 +196,10 @@ own pod IP.
 ```sh
 # 1. Push the ARIES image to a registry the cluster can pull.
 docker buildx build --platform linux/amd64 -t <registry>/aries:latest --push .
-#    Set images.newName in k8s/overlays/incluster/kustomization.yaml.
+#    Set image.repository in k8s/aries/values-incluster.yaml.
 
 # 2. Provide the model key (gitignored).
-cd k8s/overlays/incluster && cp secret.env.example secret.env   # edit DEEPSEEK_API_KEY
+cp k8s/aries/secret.yaml.example k8s/aries/secret.yaml   # edit model.apiKey
 
 # 3. (private image) create the pull secret in the namespace.
 kubectl create namespace aries
@@ -209,7 +209,8 @@ kubectl -n aries create secret docker-registry aries-registry \
 
 # 4. Deploy. Jobs are immutable, so delete before re-applying.
 kubectl -n aries delete job aries --ignore-not-found
-kubectl apply -k k8s/overlays/incluster
+helm upgrade --install aries ./k8s/aries --namespace aries --create-namespace \
+  -f ./k8s/aries/values-incluster.yaml -f ./k8s/aries/secret.yaml
 kubectl -n aries logs -f job/aries
 ```
 
@@ -224,7 +225,7 @@ profile. No manifests are needed; ARIES drives the cluster via `kubectl`.
 For kind/minikube/Docker Desktop, use `overlays/local`: load the image into the
 node (`kind load docker-image` / `minikube image load`), set `advertise_host` to
 `host.docker.internal` (Docker Desktop) or the host-reachable address, and
-`kubectl apply -k k8s/overlays/local`.
+`helm upgrade --install aries ./k8s/aries -n aries --create-namespace -f ./k8s/aries/values-local.yaml -f ./k8s/aries/secret.yaml`.
 
 ## Operational notes
 

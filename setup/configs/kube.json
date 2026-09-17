@@ -1,0 +1,11 @@
+{
+  "k8s_version": "",
+  "k8s_minor": "",
+  "cni": "calico",
+  "pod_cidr": "",
+  "calico_version": "v3.32.2",
+  "advertise_address": "",
+  "control_plane_endpoint": "",
+  "single_node": false,
+  "open_firewall": false
+}

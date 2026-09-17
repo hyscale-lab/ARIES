@@ -1,0 +1,39 @@
+{{- if .Values.grafanaDashboard.enabled }}
+# The ARIES Grafana dashboard, delivered as a ConfigMap.
+#
+# Grafana's dashboard sidecar watches for ConfigMaps carrying a label (default
+# grafana_dashboard) and loads whatever JSON they hold, so a dashboard can ship
+# with the workload it describes instead of being pasted into the UI or pinned
+# inside the monitoring release.
+#
+# This lives in the ARIES namespace, not the monitoring one, so it is created
+# and removed with this release. That requires the sidecar to look outside its
+# own namespace: k8s/grafana/values.yaml sets
+# sidecar.dashboards.searchNamespace=ALL. Grafana's ClusterRole already grants
+# cluster-wide configmap read, so no extra permission is needed.
+#
+# The ConfigMap is inert if the monitoring stack is not installed, which is why
+# this is on by default.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "aries.fullname" . }}-grafana-dashboard
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aries.labels" . | nindent 4 }}
+    # What the sidecar selects on. kube-prometheus-stack sets the sidecar's
+    # labelValue to "1", so the value is matched too, not just the key's
+    # presence — a different value here means the dashboard is never loaded,
+    # silently.
+    {{ .Values.grafanaDashboard.label }}: {{ .Values.grafanaDashboard.labelValue | quote }}
+  {{- with .Values.grafanaDashboard.folder }}
+  annotations:
+    # Which Grafana folder the sidecar files it under.
+    grafana_folder: {{ . | quote }}
+  {{- end }}
+data:
+  # Read from the chart rather than inlined, so the dashboard stays valid JSON
+  # that can be edited, diffed and exported straight from Grafana.
+  aries-pods.json: |-
+    {{- .Files.Get "dashboards/aries-pods.json" | nindent 4 }}
+{{- end }}

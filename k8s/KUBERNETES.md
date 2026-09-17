@@ -96,7 +96,7 @@ wrong.
 
 **This depends on the CNI.** NetworkPolicy is enforced by the network plugin,
 not by Kubernetes. Under flannel the API server accepts every policy, `kubectl
-get netpol` lists them, and nothing is enforced. `k8s/install` therefore
+get netpol` lists them, and nothing is enforced. `setup` therefore
 defaults to **Calico**.
 
 ### Resource telemetry
@@ -113,7 +113,7 @@ alternative of reading cgroup files through `kubectl exec` would put a process
 spawn and a TLS handshake on every pod on every tick.
 
 The cost is one cluster-scoped permission: `get` on `nodes/proxy`, granted by a
-ClusterRole in `base/rbac.yaml`. It is read-only and confined to that
+ClusterRole the chart creates. It is read-only and confined to that
 subresource. Delete it and telemetry goes quiet without affecting runs.
 
 **Effective resolution is the kubelet's, not the configured interval.** The
@@ -177,58 +177,70 @@ verification still matches what the agent dials.
 `cmd/aries/wiring.go` passes the profile's `advertise_host` through
 `os.ExpandEnv`, which is what lets the in-cluster profile write the literal
 string `"$POD_IP"` and have it resolve to ARIES's own pod IP at run time. The
-in-cluster overlay injects `POD_IP` through the downward API
+in-cluster values file injects `POD_IP` through the downward API
 (`fieldRef: status.podIP`).
 
 Per-task session keys, the staged `aries-ssh` client, the structured
 `tool-calls.jsonl`, and the raw `ssh_raw.log` are unchanged from the Docker
 path — the Kubernetes work did not fork the audit or key-handling logic.
 
-## Manifests — `k8s/base`, `k8s/overlays`
+## Charts — `k8s/aries`, `k8s/prometheus`, `k8s/grafana`
 
-- **`base/deployment.yaml`** — ARIES runs as a long-lived pod. The binary is a
+- **`aries/templates/deployment.yaml`** — ARIES runs as a long-lived pod. The binary is a
   batch runner with no server mode, so the container overrides the image
   entrypoint with `sleep infinity` and runs are triggered on demand with
   `kubectl exec`. Running a profile as the entrypoint under a Deployment would
   re-run the whole experiment every time the process exited. `strategy: Recreate`
   keeps two ARIES pods from ever running against the same namespace at once.
-- **`base/rbac.yaml`** — a namespace-scoped Role granting exactly what the
+- **`aries/templates/rbac.yaml`** — a namespace-scoped Role granting exactly what the
   Kubernetes backends use: `pods` (create/get/list/watch/delete/patch),
   `pods/exec` + `pods/attach` + `pods/portforward`, `pods/log`, `services` for
   the harness's per-task Service, and `configmaps`/`secrets` for per-task access
   material.
-- **`base/openclaw/`** — Deployment + ClusterIP Service running the gateway as a
+- **`aries/templates/openclaw.yaml`** (`openclaw.enabled`) — Deployment + ClusterIP Service running the gateway as a
   long-lived workload, booting into the same sentinel wait state. This is a
   reference/template for the flow the Go harness now performs per task, not
   something the runner applies itself.
-- **`overlays/local`** — kind/minikube: `imagePullPolicy: Never`, image loaded
-  into the node.
-- **`overlays/incluster`** — remote cluster: image pulled from a registry,
-  `imagePullPolicy: Always` (the `:latest` tag is mutable), the in-cluster
-  profile selected, `POD_IP` injected, and two generated Secrets —
-  `aries-model` from `secret.env` and `aries-registry` from `registry.json`,
-  both gitignored.
+- **`aries/values-local.yaml`** — kind/minikube: `imagePullPolicy: Never`, image
+  loaded into the node, no role pinning.
+- **`aries/values-incluster.yaml`** — remote cluster: image pulled from a
+  registry, `imagePullPolicy: Always` (the `:latest` tag is mutable), the
+  in-cluster profile selected, `POD_IP` injected, ARIES pinned to the `aries`
+  role pool, and run artifacts on a node-local PersistentVolume. The two Secrets
+  it renders — `aries-model` and `aries-registry` — come from the gitignored
+  `aries/secret.yaml`.
+- **`prometheus/`** — the kube-prometheus-stack chart, vendored under `chart/`
+  so a deployment contacts no chart repository, with our overrides beside it.
+- **`grafana/`** — Grafana's overrides. Grafana is a subchart of
+  kube-prometheus-stack, so it is installed by the same release and its keys are
+  nested under `grafana:`. That is what supplies the Prometheus datasource and
+  the default Kubernetes dashboards for free.
 
-## Cluster bootstrap — `k8s/install`
+## Cluster bootstrap — `setup`
 
 Added so a cluster can be created from bare Linux hosts rather than assumed.
-`install-master.sh` and `install-worker.sh` share `common.sh`, which resolves
-the release channel from `dl.k8s.io/release/stable.txt`, disables swap, loads
+`setup/aries-setup` is a Go tool laid out like vHive's `scripts/setup`, with JSON
+configuration in `setup/configs`. `setup_node` resolves the release
+channel from `dl.k8s.io/release/stable.txt`, disables swap, loads
 `overlay`/`br_netfilter`, installs containerd with `SystemdCgroup = true`, and
-installs the kube packages from `pkgs.k8s.io`. The control-plane script runs
-`kubeadm init`, installs the CNI (flannel or Calico), and emits a join command;
-`reset-node.sh` returns a node to a pre-kubeadm state. Full detail in
-[k8s/install/README.md](install/README.md).
+installs the kube packages from `pkgs.k8s.io`. `setup_master_node` runs
+`kubeadm init`, installs the CNI (Calico, pinned, or flannel), and emits a join
+command; `setup_worker` joins; `reset_node` returns a node to a pre-kubeadm
+state; `setup_prometheus` installs kube-prometheus-stack. `create_cluster` runs
+all of them over SSH from the operator's machine and applies the role labels
+and taints. It replaced an earlier set of shell scripts. Full detail in
+[setup/README.md](../setup/README.md).
 
 The CNI default is **Calico**, and that is a correctness requirement rather than
 a preference: task isolation is expressed as NetworkPolicy, and flannel accepts
-those objects without enforcing them. Choosing `CNI=flannel` leaves task pods
+those objects without enforcing them. Choosing `"cni": "flannel"` leaves task pods
 mutually reachable while every policy still appears in `kubectl get netpol`.
 
 ## Current deployment state
 
 A four-node, role-partitioned cluster is running on CloudLab
-(`jxiang-314636.ntu-cloud-pg0`), built by `k8s/install/install-cluster.sh`:
+(`jxiang-314636.ntu-cloud-pg0`), built with the shell installer that
+`aries-setup` has since replaced:
 
 | | |
 | --- | --- |
@@ -237,7 +249,7 @@ A four-node, role-partitioned cluster is running on CloudLab
 | Runtime | containerd 2.3.4 |
 | OS | Ubuntu 22.04.2 LTS, kernel 5.15.0 |
 | CNI | flannel |
-| Manifests | `overlays/incluster`, ARIES as a long-lived Deployment on the `aries` node |
+| Deployment | `k8s/aries` with `values-incluster.yaml`, ARIES as a long-lived Deployment on the `aries` node |
 
 **The in-cluster profile has completed a four-way concurrent run.**
 `openclaw-tb2-fix-git-x4-deepseek-k8s-incluster` ran `fix-git` four times at
@@ -335,10 +347,10 @@ Stated plainly, because the code existing is not the same as the path working:
   `hostNetwork`, and NodePort Services. Adding the node CIDR to
   `sandbox.pod_cidr`'s exclusion list would close it. This matters only if task
   images are untrusted; they are not, today.
-- **Run artifacts survive restarts on the in-cluster overlay**, which binds a
+- **Run artifacts survive restarts with `runs.persistence.enabled`**, which binds a
   20 GiB node-local PersistentVolume at `/var/lib/aries/runs` on the aries node.
   They do not survive that node being rebuilt — the volume is `hostPath`, not
-  replicated. `base` still uses an `emptyDir` so the local/kind path needs no
+  replicated. The chart default is an `emptyDir`, so the local/kind path needs no
   storage setup.
-- **Single control-plane only.** The bootstrap scripts do not join additional
+- **Single control-plane only.** `aries-setup` does not join additional
   control-plane nodes.

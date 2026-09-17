@@ -50,3 +50,22 @@ DEEPSEEK_API.key
 .codex/skills/.system/**
 !.codex/prompts/
 !.codex/prompts/**
+
+# aries-setup writes a command log to the directory it runs in.
+aries-setup-*.log
+
+# Credentials for the ARIES chart: the model API key and the registry document.
+# Start from k8s/aries/secret.yaml.example.
+#
+# Anchored to that one directory on purpose. A bare `secret.yaml` pattern is
+# repo-wide and silently excludes the four templates named secret.yaml inside
+# the vendored chart in k8s/prometheus/chart — including the one that creates
+# Grafana's admin Secret — leaving a clone with a chart that renders without
+# them.
+/k8s/aries/secret.yaml
+# secret.env and registry.json are the Kustomize-era equivalents, kept ignored
+# because local copies outlive the overlays that read them. No chart ships a
+# file by either name, so these stay repo-wide.
+secret.env
+registry.json
+!**/registry.json.example

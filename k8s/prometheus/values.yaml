@@ -1,0 +1,86 @@
+# Prometheus-side overrides for the vendored kube-prometheus-stack in ./chart.
+#
+# Checked against chart 72.6.2 (appVersion v0.82.2). Helm ignores keys a chart
+# does not define rather than rejecting them, so re-verify every key here when
+# ./chart is re-vendored to a new version — a misspelt key leaves the default
+# in place silently.
+#
+# Grafana lives in ../grafana/values.yaml, applied to this same release.
+# Placement is not set in either file: aries-setup renders nodeSelector and
+# tolerations from node_role in prom_config.json and passes them as a final
+# values file, so the monitoring node is named in exactly one place.
+
+# The kubelet is the scrape that matters for ARIES: its cAdvisor endpoint is
+# where per-pod CPU, memory and CFS throttling come from. The chart enables it
+# by default and this makes that explicit, since disabling it by accident would
+# empty the pod dashboards without any other symptom.
+#
+# The four endpoints below are separate scrape jobs on the same target:
+#   /metrics           kubelet's own operation metrics
+#   /metrics/cadvisor  per-container CPU, memory, network   <- the useful one
+#   /metrics/probes    liveness/readiness probe results
+#   /metrics/resource  a lighter-weight subset of cAdvisor
+#
+# cAdvisor is scraped every 10s regardless of the global scrapeInterval below,
+# which is finer than the kubelet Summary API that ARIES samples into
+# resources.jsonl — so Prometheus sees detail that ARIES's own telemetry
+# cannot.
+kubelet:
+  enabled: true
+  serviceMonitor:
+    cAdvisor: true
+    probes: true
+    # Left at the chart default. It duplicates cAdvisor's CPU and memory series
+    # under different names, so enabling it doubles the sample volume for
+    # metrics the dashboards do not use.
+    resource: false
+
+# These components bind their metrics endpoints to localhost under a default
+# kubeadm install, so Prometheus cannot scrape them. Exposing them means
+# re-rendering the control-plane manifests, which this setup does not do.
+# Disabling them also drops their alert rules, instead of leaving four targets
+# permanently down and alerting.
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+kubeEtcd:
+  enabled: false
+
+prometheus:
+  prometheusSpec:
+    # The kubelet refreshes cAdvisor stats every 10-25s, so a shorter interval
+    # mostly re-reads the same observation.
+    scrapeInterval: 15s
+    # Select ServiceMonitors and PodMonitors in any namespace without the
+    # Helm release label, so monitors for ARIES itself can be added later.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    # Storage is the pod's emptyDir: this retention bounds disk use, and data
+    # does not survive the Prometheus pod being rescheduled.
+    retention: 7d
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: "3"
+        memory: 10Gi
+
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+kube-state-metrics:
+  # Export pod labels as kube_pod_labels, so queries can select ARIES pods by
+  # app.kubernetes.io/component and join task pods on aries.dev/sandbox-id.
+  # Run and task IDs are annotations, not labels, and are not exported.
+  metricLabelsAllowlist:
+    - pods=[*]

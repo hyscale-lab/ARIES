@@ -1,0 +1,90 @@
+# Grafana overrides for the vendored kube-prometheus-stack in ../prometheus/chart.
+#
+# Grafana is a subchart of kube-prometheus-stack (grafana 9.0.0, per
+# ../prometheus/chart/Chart.lock), not a release of its own. This file is
+# applied to the same release as ../prometheus/values.yaml, which is why every
+# key is nested under `grafana:` — that is the subchart's alias in the parent.
+#
+# Keeping it bundled is deliberate: the parent chart wires the Prometheus
+# datasource and ships the default Kubernetes dashboards. A standalone
+# grafana/grafana release would need both configured by hand.
+#
+# Keys resolve against the parent's `grafana:` block first and otherwise
+# against the subchart's own values.yaml, so both files are worth grepping when
+# adding a key here.
+
+grafana:
+  # Explicit rather than inherited: Grafana ships with Prometheus, so a
+  # chart-default flip would be a silent change in what gets deployed.
+  enabled: true
+
+  # The chart's default password, prom-operator, is published in its
+  # documentation. Empty makes the chart look up the existing
+  # <release>-grafana Secret and reuse its password, or generate a 40-character
+  # random one on a first install (see grafana.password in the subchart's
+  # _helpers.tpl). Note that `helm template` and --dry-run cannot perform the
+  # lookup, so they render a throwaway password rather than the live one.
+  adminPassword: ""
+
+  # The ~20 bundled Kubernetes dashboards, and the sidecars that load them
+  # plus the Prometheus datasource. Explicit because these are the reason
+  # Grafana stays a subchart. "Compute Resources / Namespace (Pods)" and
+  # "Kubelet" among them already plot the kubelet and cAdvisor scrapes.
+  defaultDashboardsEnabled: true
+  sidecar:
+    dashboards:
+      enabled: true
+      # Watch every namespace, not just this release's. The ARIES chart ships
+      # its own dashboard as a ConfigMap in the aries namespace, so it is
+      # created and deleted with that release rather than pinned inside this
+      # one. Grafana's ClusterRole already allows cluster-wide configmap reads,
+      # so this needs no extra RBAC. Without it the ARIES dashboard is simply
+      # never loaded, with nothing logged as wrong.
+      searchNamespace: ALL
+      # File dashboards by a grafana_folder annotation when one is set.
+      folderAnnotation: grafana_folder
+      provider:
+        # Required for folderAnnotation to be honoured.
+        foldersFromFilesStructure: true
+    datasources:
+      enabled: true
+
+  # Reachable on every node's IP at :30300, so no port-forward is needed.
+  #
+  # nodePort is fixed rather than assigned, so the URL survives a reinstall.
+  # 30300 echoes Grafana's own 3000 and sits inside the default NodePort range
+  # 30000-32767, which is also the range setup_node opens when open_firewall is
+  # set. Nothing pins this to the monitoring node: kube-proxy answers on every
+  # node and forwards to wherever the pod runs.
+  #
+  # SECURITY: a NodePort is open on every node interface, so on a cluster whose
+  # nodes have public addresses — CloudLab's do — this publishes Grafana to the
+  # internet. A login is still required: the admin password is generated, not
+  # the chart's published default, and anonymous access is off. But it is a
+  # public login page, so keep the generated password and do not enable
+  # auth.anonymous. Set type back to ClusterIP to return to port-forward-only
+  # access.
+  service:
+    type: NodePort
+    nodePort: 30300
+
+  # Scrape Grafana itself, so the monitoring stack is visible in its own
+  # Prometheus.
+  serviceMonitor:
+    enabled: true
+
+  # Left at the subchart default of false: storage is the pod's emptyDir.
+  # Dashboards and the datasource are re-created from ConfigMaps by the
+  # sidecars on every restart, so only ad-hoc UI state is lost. Anything saved
+  # in the UI is not durable — set enabled: true with a storageClassName to
+  # keep it.
+  persistence:
+    enabled: false
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi

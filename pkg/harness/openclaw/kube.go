@@ -25,7 +25,7 @@ const (
 	defaultHarnessNamespace = "aries"
 	defaultKubectl          = "kubectl"
 	sentinelPath            = "/run/aries/ready"
-	// nodeRoleLabel is the label k8s/install puts on each dedicated node pool,
+	// nodeRoleLabel is the label setup/ puts on each dedicated node pool,
 	// and the key of the NoSchedule taint it pairs with.
 	nodeRoleLabel = "aries.dev/role"
 	// defaultKubeStartTimeout is deliberately larger than the Docker backend's

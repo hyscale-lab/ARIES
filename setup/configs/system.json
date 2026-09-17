@@ -1,0 +1,9 @@
+{
+  "cri_socket": "unix:///run/containerd/containerd.sock",
+  "k8s_stable_url": "https://dl.k8s.io/release/stable.txt",
+  "k8s_package_repo": "https://pkgs.k8s.io/core:/stable:",
+  "docker_repo": "https://download.docker.com/linux",
+  "calico_manifest_base": "https://raw.githubusercontent.com/projectcalico/calico",
+  "flannel_manifest": "https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml",
+  "join_file": "/etc/aries/kubeadm-join.sh"
+}

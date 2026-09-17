@@ -1,0 +1,46 @@
+# Local cluster (kind/minikube).
+#
+#   docker build -t aries:latest .
+#   kind load docker-image aries:latest        # or: minikube image load aries:latest
+#   cp k8s/aries/secret.yaml.example k8s/aries/secret.yaml   # then edit it
+#   helm upgrade --install aries ./k8s/aries --namespace aries --create-namespace \
+#     -f ./k8s/aries/values-local.yaml -f ./k8s/aries/secret.yaml
+
+image:
+  repository: aries
+  tag: latest
+  # The image is side-loaded into the node, so never pull from a registry.
+  pullPolicy: Never
+
+# No registry to authenticate against: the node already holds the image. An
+# empty list is what makes this work — a pull secret referencing a Secret that
+# does not exist would be a kubelet warning here and nothing more, but leaving
+# it out is clearer.
+imagePullSecrets: []
+registry:
+  create: false
+
+# kind/minikube nodes carry no aries.dev/role labels, so pinning would leave
+# every pod Pending.
+role:
+  enabled: false
+openclaw:
+  role:
+    enabled: false
+
+# No provisioner and no node-local volume: run artifacts live in the pod's
+# emptyDir and survive between runs but not a pod restart.
+runs:
+  persistence:
+    enabled: false
+storage:
+  create: false
+
+# A single-node local cluster usually cannot satisfy the production requests.
+resources:
+  requests:
+    cpu: "1"
+    memory: 2Gi
+  limits:
+    cpu: "4"
+    memory: 8Gi
