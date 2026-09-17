@@ -17,7 +17,9 @@ import (
 // by name, with their task_config.json content.
 var fixtureTasks = map[string]string{
 	"canvas-list-test": `{"needed_mcp_servers": ["canvas", "memory"], "needed_local_tools": ["claim_done"], "max_turns": 10, "meta": {}}`,
-	"excel-only":       `{"needed_mcp_servers": ["excel", "filesystem", "terminal"], "max_turns": 10}`,
+	"excel-only":       `{"needed_mcp_servers": ["excel", "filesystem", "terminal"], "needed_local_tools": ["claim_done", "python_execute", "sleep", "handle_overlong_tool_outputs", "manage_context", "history"], "max_turns": 10}`,
+	"web-search-task":  `{"needed_mcp_servers": ["fetch"], "needed_local_tools": ["claim_done", "web_search", "python_execute"], "max_turns": 10}`,
+	"odd-local-tool":   `{"needed_mcp_servers": ["memory"], "needed_local_tools": ["ai_webpage_summary"], "max_turns": 10}`,
 	"object-form":      `{"needed_mcp_servers": {"memory": {"enabled": true}}, "max_turns": 10}`,
 	"github-task":      `{"needed_mcp_servers": ["github", "filesystem"], "max_turns": 10}`,
 	"k8s-task":         `{"needed_mcp_servers": ["k8s"], "max_turns": 10}`,
@@ -231,6 +233,40 @@ func TestTasksAcceptsPublicServersByTheirCitedNames(t *testing.T) {
 		if benchmark.details[id].needsApplications {
 			t.Fatalf("%s must not start the forwarder", id)
 		}
+	}
+}
+
+// A task's local tools are tools of Toolathlon's own agent loop. The
+// bookkeeping ones and the terminal-shaped ones are the harness's already;
+// web_search is only there when the profile enables the harness's own, and a
+// tool the adapter has no mapping for is refused, like an unknown server.
+func TestTasksMapsLocalToolsOntoTheHarness(t *testing.T) {
+	root := writeFixture(t)
+	load := func(t *testing.T, webSearch bool, ids ...string) error {
+		t.Helper()
+		options := baseOptions(t, root)
+		options.TaskIDs = ids
+		options.HarnessWebSearch = webSearch
+		benchmark, err := New(options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = benchmark.Tasks(context.Background())
+		return err
+	}
+	if err := load(t, false, "excel-only", "canvas-list-test"); err != nil {
+		t.Fatalf("bookkeeping and terminal tools: %v", err)
+	}
+	err := load(t, false, "web-search-task")
+	if err == nil || !strings.Contains(err.Error(), "enable harness.web_search") {
+		t.Fatalf("web_search without the harness's: err = %v", err)
+	}
+	if err := load(t, true, "web-search-task"); err != nil {
+		t.Fatalf("web_search with the harness's: %v", err)
+	}
+	err = load(t, true, "odd-local-tool")
+	if err == nil || !strings.Contains(err.Error(), `local tool "ai_webpage_summary" is not one the adapter maps`) {
+		t.Fatalf("unknown local tool: err = %v", err)
 	}
 }
 

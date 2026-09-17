@@ -161,6 +161,10 @@ type Options struct {
 	// ModelName is recorded in Toolathlon's task bundle as the agent model's
 	// short name. It is bookkeeping only; the harness owns the model.
 	ModelName string
+	// HarnessWebSearch reports whether the harness brings a web search tool
+	// of its own. A task that needs Toolathlon's `web_search` local tool is
+	// refused without it (see localTools).
+	HarnessWebSearch bool
 }
 
 // Benchmark discovers selected Toolathlon tasks and retains their private
@@ -176,6 +180,7 @@ type Benchmark struct {
 	appHost          string
 	maxSteps         int
 	modelName        string
+	harnessWebSearch bool
 
 	mu      sync.RWMutex
 	details map[string]taskDetails
@@ -251,6 +256,40 @@ var serverKinds = map[string]serverKind{
 	"youtube": serverUnsupported,
 
 	"web_search": serverAgentTool,
+}
+
+// localToolKind says what provides each of the "local tools" a task lists
+// beside its MCP servers (needed_local_tools): tools of Toolathlon's own
+// agent loop, which under ARIES is the harness. Toolathlon's decoupled
+// runner ignores the bookkeeping ones itself (host_agent_loop.py,
+// IGNORED_LOCAL_TOOLS) and keeps the rest on the host; here each maps to
+// what the harness already has, and one needs the profile's say-so.
+type localToolKind int
+
+const (
+	// localToolGateway is served by the gateway beside the MCP servers.
+	localToolGateway localToolKind = iota
+	// localToolLoop is bookkeeping of Toolathlon's agent loop (context
+	// management, history, over-long outputs); the harness's loop has its
+	// own.
+	localToolLoop
+	// localToolTerminal is covered by the harness's terminal in the
+	// sandbox: Toolathlon's python_execute runs Python on its runner's host,
+	// the harness runs it in the task container, where the workspace is.
+	localToolTerminal
+	// localToolWebSearch needs a web search the harness brings itself
+	// (harness.web_search); without it the task is refused.
+	localToolWebSearch
+)
+
+var localTools = map[string]localToolKind{
+	"claim_done":                   localToolGateway,
+	"handle_overlong_tool_outputs": localToolLoop,
+	"history":                      localToolLoop,
+	"manage_context":               localToolLoop,
+	"python_execute":               localToolTerminal,
+	"sleep":                        localToolTerminal,
+	"web_search":                   localToolWebSearch,
 }
 
 // catalogueDir holds one YAML file per MCP server in the checkout, relative
@@ -420,6 +459,7 @@ func New(options Options) (*Benchmark, error) {
 		appHost:          options.AppHost,
 		maxSteps:         options.MaxSteps,
 		modelName:        options.ModelName,
+		harnessWebSearch: options.HarnessWebSearch,
 		details:          make(map[string]taskDetails, len(options.TaskIDs)),
 	}, nil
 }
@@ -438,7 +478,7 @@ func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		task, private, err := loadTask(b.root, id, b.environment)
+		task, private, err := loadTask(b.root, id, b.environment, b.harnessWebSearch)
 		if err != nil {
 			return nil, fmt.Errorf("load toolathlon task %q: %w", id, err)
 		}
@@ -455,8 +495,8 @@ func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
 }
 
 // loadTask reads one task directory and rejects, before any sandbox exists,
-// every task whose MCP servers the adapter cannot provide.
-func loadTask(root, id string, environment core.Environment) (core.Task, taskDetails, error) {
+// every task whose MCP servers or local tools the adapter cannot provide.
+func loadTask(root, id string, environment core.Environment, harnessWebSearch bool) (core.Task, taskDetails, error) {
 	taskDir := filepath.Join(root, "tasks", taskPool, id)
 	configBytes, err := os.ReadFile(filepath.Join(taskDir, "task_config.json"))
 	if err != nil {
@@ -480,6 +520,19 @@ func loadTask(root, id string, environment core.Environment) (core.Task, taskDet
 			return core.Task{}, taskDetails{}, fmt.Errorf("MCP server %q needs a third-party account or host runtime the sandbox does not provide", server)
 		case kind == serverApplication:
 			needsApplications = true
+		}
+	}
+	tools, err := serverNames(parsed.NeededLocalTools)
+	if err != nil {
+		return core.Task{}, taskDetails{}, fmt.Errorf("parse needed_local_tools: %w", err)
+	}
+	for _, tool := range tools {
+		kind, known := localTools[tool]
+		switch {
+		case !known:
+			return core.Task{}, taskDetails{}, fmt.Errorf("local tool %q is not one the adapter maps onto the harness", tool)
+		case kind == localToolWebSearch && !harnessWebSearch:
+			return core.Task{}, taskDetails{}, errors.New("task needs Toolathlon's web_search tool, which only the harness's own web search can stand in for: enable harness.web_search or leave the task out")
 		}
 	}
 
