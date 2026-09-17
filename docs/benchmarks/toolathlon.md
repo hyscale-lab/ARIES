@@ -25,10 +25,11 @@ pieces through the sandbox and leaves the agent loop to the ARIES harness.
   the sandbox's fixed network alias. The adapter adds that endpoint to the
   harness's MCP client itself, as the server named `toolathlon`, so the
   profile names no server for it (which MCP servers a task needs is the
-  task's business, and they all sit behind the one gateway). Only the
-  Hermes harness has an MCP client today, so `benchmark.type: "toolathlon"`
-  requires `harness.type: "hermes"`; OpenClaw follows once it has one. The
-  harness's own terminal and file tools still go through the SSH bridge.
+  task's business, and they all sit behind the one gateway). Both harnesses
+  have an MCP client: Hermes renders the entry under its `mcp_servers`,
+  OpenClaw under its native `mcp.servers` (a remote server with an SSE
+  transport). The harness's own terminal and file tools still go through
+  the SSH bridge.
   How the gateway's tools appear to the model depends on the Hermes
   version: `v2026.5.29.2` registers each one as a tool named
   `mcp_<server>_<tool>`; `v2026.8.31` (the current pin) lists them as
@@ -48,7 +49,11 @@ pieces through the sandbox and leaves the agent loop to the ARIES harness.
     is discarded;
   - *evaluator code*: `container_eval` and everything it imports from the
     project tree (`scripts/`, `utils/`, `configs/`, `main.py`) is extracted
-    again from the host checkout, whose revision is re-verified first;
+    again from the host checkout, whose revision is re-verified first. The
+    task directory is not part of that extraction: its grader and ground
+    truth are the stash's, as preprocess left them (several graders read
+    ground truth that preprocess writes, such as the IDs of the products it
+    seeded), and the checkout's copies would be stale;
   - *runtime*: uv, the interpreter it manages, the project's virtual
     environment, the files uv reads for its configuration, and the top level
     of the project directory are inventoried file by file (a `SHA-256` digest
@@ -56,7 +61,13 @@ pieces through the sandbox and leaves the agent loop to the ARIES harness.
     again before the grader runs; any change refuses the evaluation, naming
     the paths, and the verdict is "failed" with that reason. The grader runs
     with a private `.pyc` cache prefix and without the user site directory,
-    so a planted `.pyc` or user-site `.pth` is never loaded;
+    so a planted `.pyc` or user-site `.pth` is never loaded; `.log` files are
+    not inventoried (an MCP server logs into the virtual environment while the
+    agent works). The inventory
+    runs on the image's system Python, not on the virtual environment it
+    checks, and releases what it read from the page cache, so the sandbox
+    memory ARIES reports (the usage of its control group, cache included) is not raised
+    by the 1.5 GB it reads;
   - *not covered*: the image's system programs and libraries — the shell,
     `tar`, `find`, `sha256sum`, the C library. The agent has root in the
     sandbox, and a grader that runs in the same container after the agent
