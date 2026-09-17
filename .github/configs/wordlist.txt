@@ -32,6 +32,7 @@ edu
 entrypoint
 eof
 filesystem
+GeneralizedTime
 ghcr
 gib
 gid

@@ -600,27 +600,29 @@ func TestNewRequiresOutputDirectoryAndClient(t *testing.T) {
 	}
 }
 
-// Certificates must outlast any task by a wide margin. Nothing consults the
-// validity window — pinning replaces chain validation on both sides — so a
-// short lifetime would be decorative today and a live failure for long tasks
+// These certificates carry the RFC 5280 no-expiration date. Nothing consults a
+// validity window — pinning replaces chain validation on both sides — so any
+// finite lifetime would be decorative today and a live failure for long tasks
 // the moment anyone enabled standard verification. This guards against
-// reintroducing one: the value is not a tuning knob, and the credential's real
-// bound is Stop removing the identity.
-func TestGeneratedCertificatesOutlastAnyTask(t *testing.T) {
+// reintroducing one; the credential's real bound is Stop removing the identity.
+func TestGeneratedCertificatesDoNotExpire(t *testing.T) {
 	material, err := generateSessionCertificates("127.0.0.1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := parseCertificate(material.trusted)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The longest harness budget is measured in hours; a year is far beyond any
-	// of them and far below the century the generator actually issues.
-	if remaining := time.Until(client.NotAfter); remaining < 365*24*time.Hour {
-		t.Fatalf("certificate expires in %s, which a long task could reach", remaining)
-	}
-	if client.NotBefore.After(time.Now()) {
-		t.Fatalf("certificate is not yet valid: NotBefore = %s", client.NotBefore)
+	for name, pem := range map[string][]byte{"server": material.trusted, "client": material.identity} {
+		certificate, err := parseCertificate(pem)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !certificate.NotAfter.Equal(noExpiry) {
+			t.Fatalf("%s certificate expires at %s, want the RFC 5280 no-expiration date %s",
+				name, certificate.NotAfter, noExpiry)
+		}
+		// The zero time encodes as year one, which reads as long expired rather
+		// than as never expiring.
+		if certificate.NotBefore.IsZero() || certificate.NotBefore.After(time.Now()) {
+			t.Fatalf("%s certificate is not yet valid: NotBefore = %s", name, certificate.NotBefore)
+		}
 	}
 }
