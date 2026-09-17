@@ -38,9 +38,12 @@ var skippedNames = map[string]struct{}{
 	".git":        {},
 }
 
-// writeProjectArchive writes one tar archive of the project entries plus the
-// task directory, with members relative to the checkout root, so that
-// extracting it at workspaceRoot reproduces the runner's copy step.
+// writeProjectArchive writes one tar archive of the project entries plus,
+// when taskName is not empty, the task directory, with members relative to
+// the checkout root, so that extracting it at workspaceRoot reproduces the
+// runner's copy step. Evaluation reinstalls the code without the task
+// directory: the grader and ground truth it needs are what preprocess left
+// there, which the stash preserves, not the checkout's pristine copies.
 func writeProjectArchive(root, taskName, destination string) (err error) {
 	file, err := os.OpenFile(destination, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -53,7 +56,9 @@ func writeProjectArchive(root, taskName, destination string) (err error) {
 	}()
 	writer := tar.NewWriter(file)
 	entries := append([]string(nil), projectEntries...)
-	entries = append(entries, path.Join("tasks", taskPool, taskName))
+	if taskName != "" {
+		entries = append(entries, path.Join("tasks", taskPool, taskName))
+	}
 	for _, entry := range entries {
 		if err := archiveEntry(writer, root, entry); err != nil {
 			return err

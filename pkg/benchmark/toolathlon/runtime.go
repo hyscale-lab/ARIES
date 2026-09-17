@@ -3,6 +3,7 @@ package toolathlon
 import (
 	"bufio"
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"os"
@@ -36,37 +37,27 @@ const (
 
 var runtimeManifestTimeout = 10 * time.Minute
 
-// runtimeManifestScript writes the inventory to $2 from the project directory
-// $1: a SHA-256 per regular file under the virtualenv, the interpreter's
-// home, the uv binary, and the files uv reads for its own configuration; every
-// symlink under the first two with its target; and every regular file at the
-// top of the project directory, where Python would find a planted
-// sitecustomize. Bytecode caches are pruned (see above). Only the manifest's
-// own digest is printed.
-const runtimeManifestScript = `set -e
-cd "$1"
-uv_bin="$(command -v uv)" || { echo "uv is not on PATH" >&2; exit 3; }
-[ -x .venv/bin/python ] || { echo "no .venv/bin/python under $1" >&2; exit 3; }
-python_home="$(dirname "$(dirname "$(readlink -f .venv/bin/python)")")"
-manifest="$2"
-set -- .venv "$python_home" "$uv_bin"
-for extra in pyproject.toml uv.lock uv.toml .python-version "$HOME/.config/uv" /etc/uv; do
-  if [ -e "$extra" ]; then set -- "$@" "$extra"; fi
-done
-{
-  find "$@" -xdev \( -name __pycache__ -prune \) -o \( -type f ! -name '*.pyc' -print0 \) | LC_ALL=C sort -z | xargs -0 -r sha256sum
-  find "$@" -xdev -type l -printf 'link %p -> %l\n' | LC_ALL=C sort
-  find . -maxdepth 1 -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum
-} > "$manifest"
-sha256sum "$manifest" | cut -c1-64
-`
+// inventoryProgram is the inventory itself (inventory.py): one SHA-256 per
+// regular file under the virtualenv, the interpreter's home, the uv binary
+// and the files uv reads for its configuration, every symbolic link under
+// the first two with its target, and every regular file at the top of the
+// project directory, where Python would find a planted sitecustomize;
+// bytecode caches and .log files skipped (see above and inventory.py). It runs on the image's system
+// Python, never on the virtualenv it inventories, and releases every file
+// it read from the page cache afterwards: ARIES's monitor reports the
+// sandbox cgroup's usage, cache included, and a 1.5 GB read would otherwise
+// raise that figure by 1.5 GB for the rest of the run.
+//
+//go:embed inventory.py
+var inventoryProgram []byte
 
 // writeRuntimeManifest inventories the evaluator runtime inside the sandbox
 // and keeps the inventory at hostPath.
 func writeRuntimeManifest(ctx context.Context, sandbox runner.Sandbox, hostPath string) error {
 	result, err := sandbox.Exec(ctx, core.Command{
 		Path:    "/bin/sh",
-		Args:    []string{"-c", runtimeManifestScript, "aries-toolathlon-runtime", workspaceRoot, runtimeManifestContainerPath},
+		Args:    []string{"-c", `exec python3 - "$@"`, "aries-toolathlon-runtime", workspaceRoot, runtimeManifestContainerPath},
+		Stdin:   inventoryProgram,
 		Timeout: runtimeManifestTimeout,
 	})
 	if err != nil {
