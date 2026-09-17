@@ -165,6 +165,13 @@ type Options struct {
 	// of its own. A task that needs Toolathlon's `web_search` local tool is
 	// refused without it (see localTools).
 	HarnessWebSearch bool
+	// Concurrency is how many task occurrences the run may execute at once.
+	// The self-hosted applications are one deployment shared by every
+	// sandbox (each forwards to the same host and ports), and a task's
+	// preprocess resets the state of the applications it uses, so
+	// application-backed tasks are accepted only at concurrency 1. Zero
+	// means 1.
+	Concurrency int
 }
 
 // Benchmark discovers selected Toolathlon tasks and retains their private
@@ -181,6 +188,7 @@ type Benchmark struct {
 	maxSteps         int
 	modelName        string
 	harnessWebSearch bool
+	concurrency      int
 
 	mu      sync.RWMutex
 	details map[string]taskDetails
@@ -408,6 +416,12 @@ func New(options Options) (*Benchmark, error) {
 	if options.ModelName == "" {
 		options.ModelName = "aries"
 	}
+	if options.Concurrency == 0 {
+		options.Concurrency = 1
+	}
+	if options.Concurrency < 0 {
+		return nil, errors.New("toolathlon concurrency must be positive")
+	}
 	if !safeModelName(options.ModelName) {
 		return nil, fmt.Errorf("invalid toolathlon model name %q", options.ModelName)
 	}
@@ -460,6 +474,7 @@ func New(options Options) (*Benchmark, error) {
 		maxSteps:         options.MaxSteps,
 		modelName:        options.ModelName,
 		harnessWebSearch: options.HarnessWebSearch,
+		concurrency:      options.Concurrency,
 		details:          make(map[string]taskDetails, len(options.TaskIDs)),
 	}, nil
 }
@@ -474,6 +489,7 @@ func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
 
 	tasks := make([]core.Task, 0, len(b.taskIDs))
 	details := make(map[string]taskDetails, len(b.taskIDs))
+	var applicationTasks []string
 	for index, id := range b.taskIDs {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -486,6 +502,16 @@ func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
 		task.ID = executionID
 		tasks = append(tasks, task)
 		details[executionID] = private
+		if private.needsApplications {
+			applicationTasks = append(applicationTasks, id)
+		}
+	}
+	// Two occurrences on the shared deployment would race: one task's
+	// preprocess deletes and recreates the courses, mailboxes, or products
+	// another task is in the middle of using. Refuse the overlap rather
+	// than serialize it, so a run's concurrency means what it says.
+	if b.concurrency > 1 && len(applicationTasks) != 0 {
+		return nil, fmt.Errorf("application-backed tasks share one deployment and must run at execution.concurrency 1 (concurrency %d with %s)", b.concurrency, strings.Join(applicationTasks, ", "))
 	}
 
 	b.mu.Lock()

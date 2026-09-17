@@ -240,6 +240,7 @@ func toolathlonOptions(cfg config.Config, taskIDs, executionIDs []string, output
 		Environment:      environmentFromConfig(cfg.Benchmark.Environment),
 		ModelName:        cfg.Model.ID,
 		HarnessWebSearch: cfg.Harness.WebSearch.Enabled,
+		Concurrency:      cfg.Execution.Concurrency,
 	}
 	if settings := cfg.Benchmark.Toolathlon; settings != nil {
 		options.GatewayPort = settings.GatewayPort
