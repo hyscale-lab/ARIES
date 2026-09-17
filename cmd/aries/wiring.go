@@ -246,6 +246,7 @@ func toolathlonOptions(cfg config.Config, taskIDs, executionIDs []string, output
 		options.GatewayPort = settings.GatewayPort
 		options.AppHost = settings.AppHost
 		options.MaxSteps = settings.MaxSteps
+		options.CredentialsDir = settings.CredentialsDir
 	}
 	return options
 }

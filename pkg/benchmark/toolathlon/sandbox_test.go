@@ -48,6 +48,14 @@ type flowSandbox struct {
 	evaluatorTampered bool
 	// projectMembers are the members of the last project archive extracted.
 	projectMembers []string
+	// bundleServers are what the scripted preprocess writes into the
+	// bundle as needed_mcp_servers.
+	bundleServers []string
+	// credentialsMembers are the members of the last credentials archive
+	// extracted; credentialsInstalled says one has been since the last
+	// project extraction.
+	credentialsMembers   []string
+	credentialsInstalled bool
 }
 
 func newFlowSandbox(t *testing.T, taskName string, needsApplication bool) *flowSandbox {
@@ -56,6 +64,7 @@ func newFlowSandbox(t *testing.T, taskName string, needsApplication bool) *flowS
 		uploads: map[string]string{}, files: map[string]bool{}, taskDir: map[string]byte{},
 		evalResult:      `{"pass": true, "details": "All evaluation checks passed"}`,
 		runtimeManifest: pristineRuntimeManifest,
+		bundleServers:   []string{"canvas", "memory"},
 	}
 }
 
@@ -189,7 +198,21 @@ func (s *flowSandbox) Exec(_ context.Context, command core.Command) (core.Comman
 				s.projectInstalled = true
 				s.evaluatorTampered = false
 				s.projectMembers = members
+				s.credentialsInstalled = false
 				s.events = append(s.events, "project")
+				return core.CommandResult{}, nil
+			}
+			if archive == credentialsArchiveContainerPath && args[1] == workspaceRoot {
+				members, err := archiveMemberNames(s.uploads[archive])
+				if err != nil {
+					s.t.Fatal(err)
+				}
+				if !s.projectInstalled {
+					s.t.Error("credentials overlaid before the project tree")
+				}
+				s.credentialsMembers = members
+				s.credentialsInstalled = true
+				s.events = append(s.events, "credentials")
 				return core.CommandResult{}, nil
 			}
 			if archive == stashContainerPath && args[1] == s.taskPath() {
@@ -298,9 +321,10 @@ func (s *flowSandbox) Download(_ context.Context, source, destination string) er
 	}
 	switch source {
 	case bundleContainerPath:
-		bundle := fmt.Sprintf(`{"schema_version": 2, "task_dir": "%s/%s", "needed_mcp_servers": ["canvas", "memory"],
+		servers, _ := json.Marshal(s.bundleServers)
+		bundle := fmt.Sprintf(`{"schema_version": 2, "task_dir": "%s/%s", "needed_mcp_servers": %s,
 			"container_paths": {"task_root": %q, "agent_workspace": %q, "log_file": %q},
-			"resolved_task_config": {"task_dir": "%s/%s"}}`, taskPool, s.taskName, taskRootPath, agentWorkspacePath, trajectoryPath, taskPool, s.taskName)
+			"resolved_task_config": {"task_dir": "%s/%s"}}`, taskPool, s.taskName, servers, taskRootPath, agentWorkspacePath, trajectoryPath, taskPool, s.taskName)
 		return os.WriteFile(destination, []byte(bundle), 0o600)
 	case stashContainerPath:
 		file, err := os.Create(destination)
@@ -624,5 +648,68 @@ func TestValidateBundleRejectsLayoutDrift(t *testing.T) {
 				t.Fatal("expected rejection")
 			}
 		})
+	}
+}
+
+// An account-backed task gets the credentials directory overlaid on
+// configs/ after the project tree at preparation and again after the
+// evaluate-time reinstall, and its project archive carries the server
+// binary. The host copy of the overlay does not outlive the upload.
+func TestPrepareAndEvaluateOverlayTheCredentials(t *testing.T) {
+	sandbox := newFlowSandbox(t, "github-task", false)
+	sandbox.bundleServers = []string{"github", "filesystem"}
+	gatewayReadyDelay, forwarderReadyDelay = 0, 0
+	root := writeFixture(t)
+	options := baseOptions(t, root)
+	options.TaskIDs = []string{sandbox.taskName}
+	options.CredentialsDir = writeCredentials(t, "    github_token = \"ghp_example\",\n", "google_credentials.json")
+	benchmark, err := New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := benchmark.Tasks(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := tasks[0]
+
+	if err := benchmark.PrepareSandbox(context.Background(), task, sandbox); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"rm", "upload:project.tar", "project", "rm", "upload:credentials.tar", "credentials", "rm", "preprocess", "stash", "rm", "gateway", "rm", "manifest", "rm"}
+	if !slices.Equal(sandbox.events, want) {
+		t.Fatalf("prepare events = %v\nwant     %v", sandbox.events, want)
+	}
+	if !slices.Contains(sandbox.projectMembers, "local_binary/github-mcp-server") {
+		t.Fatalf("project archive lacks the GitHub server binary: %v", sandbox.projectMembers)
+	}
+	if !slices.Equal(sandbox.credentialsMembers, []string{"configs/google_credentials.json", "configs/token_key_session.py"}) {
+		t.Fatalf("credentials archive members = %v", sandbox.credentialsMembers)
+	}
+	hostDir := filepath.Join(benchmark.outputDir, task.ID, "toolathlon")
+	if _, err := os.Stat(filepath.Join(hostDir, "credentials.tar")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("the credentials archive was left in the run directory")
+	}
+
+	// The agent replaced the token file; evaluation must not grade with it.
+	sandbox.credentialsInstalled = false
+	sandbox.files[evalResultPath] = true
+	sandbox.files[trajectoryPath] = true
+	sandbox.events = nil
+	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = []string{"rm", "upload:artifact-stash.tar", "restore", "rm", "upload:project.tar", "project", "rm", "upload:credentials.tar", "credentials", "rm", "manifest", "rm", "rm", "upload:traj_log.json", "upload:task_bundle.json", "evaluate"}
+	if !slices.Equal(sandbox.events, want) {
+		t.Fatalf("evaluate events = %v\nwant     %v", sandbox.events, want)
+	}
+	if !sandbox.credentialsInstalled || evaluation.Score != 1 {
+		t.Fatalf("evaluation = %+v, credentials installed %v", evaluation, sandbox.credentialsInstalled)
+	}
+	for _, member := range sandbox.projectMembers {
+		if strings.HasPrefix(member, "local_binary/") {
+			t.Fatalf("the reinstall carried %s", member)
+		}
 	}
 }
