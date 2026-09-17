@@ -114,19 +114,23 @@ Two smaller differences are deliberate:
 - Toolathlon nulls the verdict when its agent loop did not finish cleanly;
   ARIES records harness failure separately and always grades the sandbox
   state, so a task the agent abandoned scores as it stands.
-- Not every task can run. Toolathlon's catalogue is 34 MCP servers: 9 run
-  inside the sandbox (files, terminal, git, spreadsheets, documents,
-  memory, time), 3 are the self-hosted applications, 9 reach the public
-  internet without an account, and 13 need a credentialed third-party
-  account (GitHub, Google ×6, Hugging Face, Notion ×2, Snowflake, W&B,
-  YouTube) or, for `k8s`, a `kind` cluster on the Docker socket with host
-  networking. A task whose servers include one of the last group is
-  refused at task load with a message naming the server. At the pinned
-  revision **53 of the 108 tasks load**: 28 need nothing outside the
-  sandbox and the applications, 25 more also reach the public internet
-  (the sandbox network is on for them). The other 55 need an account or
-  `k8s`; running them would mean provisioning those accounts for every
-  run, which is not reproducible in ARIES today.
+- Not every task can run without preparation. Toolathlon's catalogue is
+  34 MCP servers: 9 run inside the sandbox (files, terminal, git,
+  spreadsheets, documents, memory, time), 3 are the self-hosted
+  applications, 9 reach the public internet without an account, 12 need a
+  credentialed third-party account (GitHub, Google ×6, Hugging Face,
+  Notion ×2, Snowflake, W&B, YouTube), and `k8s` needs a `kind` cluster on
+  the Docker socket with host networking. At the pinned revision **53 of
+  the 108 tasks load with no account**: 28 need nothing outside the sandbox
+  and the applications, 25 more also reach the public internet (the
+  sandbox network is on for them). **50 more load once the profile names a
+  credentials directory** (see [the account-backed
+  tasks](#running-the-account-backed-tasks); 11 of them also list
+  `web_search`, so need `harness.web_search` like the public ones); without
+  one they are refused at task load with a message naming the server and
+  the setting. The 5
+  `k8s` tasks are refused whatever the profile says; running them would mean
+  giving the sandbox a Docker socket, which the adapter will not do.
 - A task also lists "local tools": tools of Toolathlon's own agent loop,
   which under ARIES is the harness. `claim_done` is served by the gateway;
   `manage_context`, `history` and `handle_overlong_tool_outputs` are the
@@ -173,6 +177,70 @@ replace `benchmark.tasks` with directory names from `tasks/finalpool` in the
 pinned checkout; a task the adapter cannot serve is rejected before any
 sandbox starts.
 
+## Running the account-backed tasks
+
+Fifty tasks use a server that talks to a third-party service through an
+account of yours: GitHub (7 tasks), Google Sheets (10), Google Cloud (8),
+Notion (8), Google Maps (6), Hugging Face (5), Snowflake (4), W&B (3),
+Google Calendar, Google Forms and YouTube (2 each; some tasks use several).
+Toolathlon reads every token from one file, `configs/token_key_session.py`,
+derived from the checked-in `token_key_session_example.py` and ignored by git;
+its guide, `global_preparation/how2register_accounts.md` in the pinned
+checkout, walks through registering each account and filling the file (about
+half an hour; `automated_additional_services.sh` and
+`automated_google_setup.sh` script most of it), and what a task may touch in
+an account is narrowed by the task's own `token_key_session.py` (the
+repositories, pages, folders it works on), which the task directory carries.
+
+The adapter keeps the checkout's copy of the file at the example, so the
+pinned tree stays verifiable, and takes yours from a directory **outside the
+checkout**:
+
+1. Follow Toolathlon's guide. Put the filled `token_key_session.py` and every
+   file it names under `configs/` (`google_credentials.json`,
+   `gcp-service_account.keys.json`, `snowflake_rsa_key.p8`, an OAuth cache
+   under `.mcp-auth/`) into one directory, laid out as they would sit in
+   `configs/`.
+2. Name it in the profile:
+
+   ```json
+   "toolathlon": {"credentials_dir": "/srv/toolathlon-credentials"}
+   ```
+
+3. List the tasks. At task load the adapter reads each server's
+   configuration file for the fields it substitutes (`${token.<field>}`) and
+   refuses the task, naming the server and the fields, when your file does
+   not provide one: not assigned, still the example's `"XX"`, or naming a
+   file under `configs/` the directory does not hold. A field the task's own
+   file assigns counts as provided; a field the file computes (the example
+   derives the Google client fields from `google_credentials.json`) is taken
+   as set.
+
+At preparation the directory is overlaid on the sandbox's `configs/` right
+after the project tree, so preprocess, the MCP servers and the gateway read
+your tokens; after the evaluate-time reinstall of the project code — which
+puts the example back — it is overlaid again, so a grader that queries the
+service (Notion's, GitHub's, Google's do) grades with the same credentials and
+not with whatever the agent left in the file. The archive that carries it
+exists on the host only for the upload and is not kept in the run directory.
+The GitHub server's binary, `local_binary/github-mcp-server` in the checkout,
+rides in the project archive for the tasks that need it.
+
+What to know before running them:
+
+- The tokens reach the task container, where the agent has root: use
+  accounts and tokens created for the benchmark, scoped as Toolathlon's guide
+  says (read-only GitHub tokens unless a task asks otherwise, one Notion
+  workspace, one Google Cloud project), never your own.
+- A task's preprocess resets the account state it uses (re-forking
+  repositories, restoring pages, clearing sheets), which is how Toolathlon
+  makes runs repeatable against a live service; the service's own rate
+  limits and outages are part of what such a run measures.
+- The account is one deployment like the self-hosted applications, so
+  account-backed tasks run only at `execution.concurrency` 1 (below).
+- The run directory's `task_bundle.json` carries the task's own
+  `token_key_session.py` (repository and page names), not the global file.
+
 ## Configuration
 
 ```json
@@ -181,7 +249,7 @@ sandbox starts.
   "root": ".cache/toolathlon",
   "tasks": ["canvas-list-test"],
   "environment": {"image": "docker.io/lockon0927/toolathlon-task-image:1016beta"},
-  "toolathlon": {"gateway_port": 10086, "app_host": "", "max_steps": 200}
+  "toolathlon": {"gateway_port": 10086, "app_host": "", "max_steps": 200, "credentials_dir": ""}
 },
 "harness": {"type": "hermes"}
 ```
@@ -189,7 +257,8 @@ sandbox starts.
 `benchmark.environment.workdir` is fixed to Toolathlon's agent workspace and
 `allow_network` to true; a profile that sets them otherwise is rejected. The
 `benchmark.toolathlon` block is optional and its values above are the
-defaults. `max_steps` does **not** bound the agent: it is Toolathlon's
+defaults. `credentials_dir` unlocks the account-backed tasks (above).
+`max_steps` does **not** bound the agent: it is Toolathlon's
 `max_steps_under_single_turn_mode`, handed to its preprocess for the task
 bundle, where it is bookkeeping for Toolathlon's own loop — which does not
 run here. What bounds the Hermes agent loop is Hermes's own turn limit
@@ -202,8 +271,9 @@ task's preprocess resets the state it uses (Canvas courses, mailboxes,
 products), so two application-backed occurrences running at once would
 corrupt each other. Task load therefore refuses any application-backed
 task when `execution.concurrency` is above 1, naming the tasks; with
-concurrency 1, looping included, occurrences never overlap. Tasks with no
-application run at any concurrency. Isolating application state per
+concurrency 1, looping included, occurrences never overlap. The same holds
+for the account-backed tasks, whose state lives in one third-party account.
+Tasks with neither run at any concurrency. Isolating application state per
 occurrence would need one deployment per sandbox (Toolathlon's instance
 prefixes) and per-occurrence ports, which the adapter does not manage.
 

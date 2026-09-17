@@ -106,8 +106,13 @@ func (b *Benchmark) PrepareSandbox(ctx context.Context, task core.Task, sandbox 
 		return err
 	}
 
-	if err := b.installProject(ctx, sandbox, details.name, hostDir); err != nil {
+	if err := b.installProject(ctx, sandbox, details.name, details.extraEntries, hostDir); err != nil {
 		return err
+	}
+	if details.needsCredentials {
+		if err := b.installCredentials(ctx, sandbox, hostDir); err != nil {
+			return err
+		}
 	}
 	if details.needsApplications {
 		if err := b.startForwarder(ctx, sandbox); err != nil {
@@ -149,19 +154,36 @@ func (b *Benchmark) PrepareSandbox(ctx context.Context, task core.Task, sandbox 
 
 // installProject uploads one archive of the pinned project tree and the task
 // directory and extracts it over the image's own copy.
-func (b *Benchmark) installProject(ctx context.Context, sandbox runner.Sandbox, taskName, hostDir string) error {
+func (b *Benchmark) installProject(ctx context.Context, sandbox runner.Sandbox, taskName string, extras []string, hostDir string) error {
 	archive := filepath.Join(hostDir, "project.tar")
-	if err := writeProjectArchive(b.root, taskName, archive); err != nil {
+	if err := writeProjectArchive(b.root, taskName, extras, archive); err != nil {
 		return err
 	}
-	defer os.Remove(archive)
-	if err := sandbox.Upload(ctx, archive, archiveContainerPath); err != nil {
-		return fmt.Errorf("upload project archive: %w", err)
-	}
-	if err := execOK(ctx, sandbox, core.Command{Path: tarPath, Args: []string{"-C", workspaceRoot, "-xf", archiveContainerPath}}, "extract project archive"); err != nil {
+	return extractArchive(ctx, sandbox, archive, archiveContainerPath, "project archive")
+}
+
+// installCredentials overlays the credentials directory on the project's
+// configs/ (see credentials.go). The archive lives on the host only for
+// the upload.
+func (b *Benchmark) installCredentials(ctx context.Context, sandbox runner.Sandbox, hostDir string) error {
+	archive := filepath.Join(hostDir, "credentials.tar")
+	if err := writeCredentialsArchive(b.credentialsDir, archive); err != nil {
 		return err
 	}
-	return removePaths(ctx, sandbox, []string{archiveContainerPath})
+	return extractArchive(ctx, sandbox, archive, credentialsArchiveContainerPath, "credentials archive")
+}
+
+// extractArchive uploads a host archive, extracts it at workspaceRoot, and
+// removes both copies.
+func extractArchive(ctx context.Context, sandbox runner.Sandbox, hostArchive, containerArchive, what string) error {
+	defer os.Remove(hostArchive)
+	if err := sandbox.Upload(ctx, hostArchive, containerArchive); err != nil {
+		return fmt.Errorf("upload %s: %w", what, err)
+	}
+	if err := execOK(ctx, sandbox, core.Command{Path: tarPath, Args: []string{"-C", workspaceRoot, "-xf", containerArchive}}, "extract "+what); err != nil {
+		return err
+	}
+	return removePaths(ctx, sandbox, []string{containerArchive})
 }
 
 func (b *Benchmark) startForwarder(ctx context.Context, sandbox runner.Sandbox) error {

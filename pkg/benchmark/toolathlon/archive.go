@@ -18,10 +18,11 @@ import (
 // the same tree; copying the pinned tree over it is what makes the run
 // reproduce the pinned revision rather than the image build.
 //
-// Omitted from the upstream list on purpose: deployment/k8s and
-// local_binary/github-mcp-server serve the k8s and GitHub servers, which the
-// adapter rejects at task load (18 MB of binary for nothing), and
-// deployment/canvas/logs does not exist in the pinned checkout.
+// Omitted from the upstream list on purpose: deployment/k8s serves the k8s
+// server, which the adapter rejects at task load; local_binary/github-mcp-server
+// (18 MB) is added only for a task that loads the GitHub server
+// (serverBinaries); and deployment/canvas/logs does not exist in the pinned
+// checkout.
 var projectEntries = []string{
 	"configs",
 	"scripts",
@@ -39,12 +40,13 @@ var skippedNames = map[string]struct{}{
 }
 
 // writeProjectArchive writes one tar archive of the project entries plus,
-// when taskName is not empty, the task directory, with members relative to
-// the checkout root, so that extracting it at workspaceRoot reproduces the
-// runner's copy step. Evaluation reinstalls the code without the task
-// directory: the grader and ground truth it needs are what preprocess left
-// there, which the stash preserves, not the checkout's pristine copies.
-func writeProjectArchive(root, taskName, destination string) (err error) {
+// when taskName is not empty, the task directory and the task's extra
+// entries, with members relative to the checkout root, so that extracting
+// it at workspaceRoot reproduces the runner's copy step. Evaluation
+// reinstalls the code without the task directory: the grader and ground
+// truth it needs are what preprocess left there, which the stash preserves,
+// not the checkout's pristine copies.
+func writeProjectArchive(root, taskName string, extras []string, destination string) (err error) {
 	file, err := os.OpenFile(destination, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("create project archive: %w", err)
@@ -58,6 +60,7 @@ func writeProjectArchive(root, taskName, destination string) (err error) {
 	entries := append([]string(nil), projectEntries...)
 	if taskName != "" {
 		entries = append(entries, path.Join("tasks", taskPool, taskName))
+		entries = append(entries, extras...)
 	}
 	for _, entry := range entries {
 		if err := archiveEntry(writer, root, entry); err != nil {
