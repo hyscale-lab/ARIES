@@ -49,19 +49,19 @@ pieces through the sandbox and leaves the agent loop to the ARIES harness.
   - *evaluator code*: `container_eval` and everything it imports from the
     project tree (`scripts/`, `utils/`, `configs/`, `main.py`) is extracted
     again from the host checkout, whose revision is re-verified first;
-  - *runtime*: uv, the interpreter it manages, the project's virtualenv, the
-    files uv reads for its configuration, and the top level of the project
-    directory are inventoried file by file (SHA-256, plus every symlink's
-    target) before the bridge exists and again before the grader runs; any
-    change refuses the evaluation, naming the paths, and the verdict is
-    "failed" with that reason. The grader runs with a private bytecode cache
-    prefix and without the user site directory, so a planted `.pyc` or
-    user-site `.pth` is never loaded;
+  - *runtime*: uv, the interpreter it manages, the project's virtual
+    environment, the files uv reads for its configuration, and the top level
+    of the project directory are inventoried file by file (a `SHA-256` digest
+    per file, plus every symbolic link's target) before the bridge exists and
+    again before the grader runs; any change refuses the evaluation, naming
+    the paths, and the verdict is "failed" with that reason. The grader runs
+    with a private `.pyc` cache prefix and without the user site directory,
+    so a planted `.pyc` or user-site `.pth` is never loaded;
   - *not covered*: the image's system programs and libraries — the shell,
-    `tar`, `find`, `sha256sum`, libc. The agent has root in the sandbox, and
-    a grader that runs in the same container after the agent cannot defend
-    against an agent that replaces those; this is the limit ARIES's other
-    same-container verifiers share. Grading in a fresh container from the
+    `tar`, `find`, `sha256sum`, the C library. The agent has root in the
+    sandbox, and a grader that runs in the same container after the agent
+    cannot defend against an agent that replaces those; the other benchmarks'
+    same-container verification has the same limit. Grading in a fresh container from the
     pinned image would close it and needs a sandbox capability ARIES does
     not have yet.
 
