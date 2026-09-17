@@ -41,6 +41,33 @@ type openClawConfig struct {
 	Agents  agentsConfig   `json:"agents"`
 	Tools   toolPolicy     `json:"tools"`
 	Plugins *pluginsConfig `json:"plugins,omitempty"`
+	MCP     *mcpConfig     `json:"mcp,omitempty"`
+}
+
+// MCPServer is one remote MCP server OpenClaw connects to at startup,
+// rendered under its `mcp.servers` key (docs.openclaw.ai, "Configuration —
+// MCP, skills, and plugins"): a URL with an SSE or streamable-HTTP transport
+// and a per-request timeout. A benchmark that serves its tools this way
+// (Toolathlon's gateway) is reached through the sandbox's fixed
+// `task-sandbox` alias, like searxngBaseURL above.
+type MCPServer struct {
+	Name string
+	URL  string
+	// Transport is "sse" or "streamable-http".
+	Transport string
+	// TimeoutSeconds is the per-request timeout for this server; zero keeps
+	// OpenClaw's own default.
+	TimeoutSeconds int
+}
+
+type mcpConfig struct {
+	Servers map[string]mcpServerConfig `json:"servers"`
+}
+
+type mcpServerConfig struct {
+	URL              string `json:"url"`
+	Transport        string `json:"transport"`
+	RequestTimeoutMs int    `json:"requestTimeoutMs,omitempty"`
 }
 
 type toolPolicy struct {
@@ -160,7 +187,7 @@ type sshConfig struct {
 	KnownHostsFile        string `json:"knownHostsFile"`
 }
 
-func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, webSearchEnabled, extractEnabled, subagentsEnabled bool, maxConcurrentSubagents int) ([]byte, error) {
+func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, webSearchEnabled, extractEnabled, subagentsEnabled bool, maxConcurrentSubagents int, mcpServers []MCPServer) ([]byte, error) {
 	if err := validateModel(model); err != nil {
 		return nil, err
 	}
@@ -211,9 +238,13 @@ func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, webSearchE
 	if subagentsEnabled && maxConcurrentSubagents > 0 {
 		configuration.Agents.Defaults.Subagents = &subagentsConfig{MaxConcurrent: maxConcurrentSubagents}
 	}
+	// Everything the sandbox gate must name for a sandboxed session to see
+	// it: the web tools when enabled, and configured MCP servers, which
+	// OpenClaw exposes as tools owned by its bundle-mcp plugin.
+	var alsoAllow []string
 	if webSearchEnabled {
 		configuration.Tools.Web = &webToolsConfig{Search: &webSearchToolConfig{Provider: "searxng"}}
-		alsoAllow := []string{"web_search", "web_fetch"}
+		alsoAllow = []string{"web_search", "web_fetch"}
 		entries := map[string]pluginEntry{
 			"searxng": {Config: &pluginConfigBlock{WebSearch: webSearchPluginConfig{BaseURL: searxngBaseURL}}},
 		}
@@ -225,8 +256,27 @@ func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, webSearchE
 			alsoAllow = append(alsoAllow, "tavily_extract")
 			entries["tavily"] = pluginEntry{Enabled: true}
 		}
-		configuration.Tools.Sandbox = &sandboxToolsGate{Tools: sandboxToolsAllowList{AlsoAllow: alsoAllow}}
 		configuration.Plugins = &pluginsConfig{Entries: entries}
+	}
+	if len(mcpServers) != 0 {
+		servers := make(map[string]mcpServerConfig, len(mcpServers))
+		for _, server := range mcpServers {
+			if err := validateMCPServer(server); err != nil {
+				return nil, err
+			}
+			if _, duplicate := servers[server.Name]; duplicate {
+				return nil, fmt.Errorf("duplicate OpenClaw MCP server name %q", server.Name)
+			}
+			servers[server.Name] = mcpServerConfig{URL: server.URL, Transport: server.Transport, RequestTimeoutMs: server.TimeoutSeconds * 1000}
+		}
+		configuration.MCP = &mcpConfig{Servers: servers}
+		// Without this entry the servers load and their tools are filtered
+		// out before the model sees them (a session with only the built-in
+		// tools, as the first Toolathlon run on OpenClaw showed).
+		alsoAllow = append(alsoAllow, "bundle-mcp")
+	}
+	if len(alsoAllow) != 0 {
+		configuration.Tools.Sandbox = &sandboxToolsGate{Tools: sandboxToolsAllowList{AlsoAllow: alsoAllow}}
 	}
 	var output bytes.Buffer
 	encoder := json.NewEncoder(&output)
@@ -236,6 +286,45 @@ func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, webSearchE
 		return nil, fmt.Errorf("encode OpenClaw config: %w", err)
 	}
 	return output.Bytes(), nil
+}
+
+// validateMCPServer mirrors the Hermes harness's rule for the same block:
+// a lowercase identifier for the name, an absolute HTTP(S) URL without
+// credentials, query or fragment, one of the two transports, and a
+// non-negative timeout.
+func validateMCPServer(server MCPServer) error {
+	if !validMCPServerName(server.Name) {
+		return fmt.Errorf("OpenClaw MCP server name %q must be a lowercase identifier", server.Name)
+	}
+	parsed, err := url.Parse(server.URL)
+	if err != nil || parsed.Host == "" || parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("OpenClaw MCP server %q URL must be absolute HTTP(S)", server.Name)
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("OpenClaw MCP server %q URL must not contain credentials, query, or fragment", server.Name)
+	}
+	switch server.Transport {
+	case "sse", "streamable-http":
+	default:
+		return fmt.Errorf("OpenClaw MCP server %q transport must be sse or streamable-http", server.Name)
+	}
+	if server.TimeoutSeconds < 0 {
+		return fmt.Errorf("OpenClaw MCP server %q timeout must not be negative", server.Name)
+	}
+	return nil
+}
+
+func validMCPServerName(name string) bool {
+	if name == "" || len(name) > 64 {
+		return false
+	}
+	for index, character := range name {
+		if character >= 'a' && character <= 'z' || index > 0 && (character >= '0' && character <= '9' || character == '_') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func denyToolList(subagentsEnabled bool) []string {

@@ -46,9 +46,9 @@ func TestHarnessMCPServersValidation(t *testing.T) {
 		harness string
 		wantErr string
 	}{
-		"openclaw": {
-			harness: strings.Replace(hermesWithMCP, `"type":"hermes"`, `"type":"openclaw"`, 1),
-			wantErr: "harness.mcp requires Hermes",
+		"other harness": {
+			harness: strings.Replace(hermesWithMCP, `"type":"hermes"`, `"type":"other"`, 1),
+			wantErr: "harness.mcp requires OpenClaw or Hermes",
 		},
 		"bad name": {
 			harness: strings.Replace(hermesWithMCP, `"name":"docs"`, `"name":"Docs-MCP"`, 1),
@@ -74,9 +74,6 @@ func TestHarnessMCPServersValidation(t *testing.T) {
 	for name, testCase := range cases {
 		t.Run(name, func(t *testing.T) {
 			input := toolathlonConfig(testCase.harness)
-			if name == "openclaw" {
-				input = strings.Replace(input, `"bridge":{"type":"hermes-ssh"}`, `"bridge":{"type":"openclaw-ssh"}`, 1)
-			}
 			_, err := Decode(strings.NewReader(input))
 			if err == nil {
 				t.Fatal("expected rejection")

@@ -59,12 +59,12 @@ func validateComponents(cfg config.Config) error {
 	case "sweatlasqa":
 	case "swebenchpro":
 	case "toolathlon":
-		// Toolathlon's tools reach the harness only as an MCP server, and
-		// only the Hermes harness has an MCP client. The gateway itself is
-		// added to that client by hermesMCPServers, so a profile's own
-		// harness.mcp entries are extra servers and may not take its name.
-		if cfg.Harness.Type != "hermes" {
-			return errors.New("benchmark type \"toolathlon\" requires the hermes harness, the one with an MCP client")
+		// Toolathlon's tools reach the harness only as an MCP server; both
+		// harnesses have an MCP client. The gateway itself is added to that
+		// client by mcpServers, so a profile's own harness.mcp entries are
+		// extra servers and may not take its name.
+		if cfg.Harness.Type != "hermes" && cfg.Harness.Type != "openclaw" {
+			return fmt.Errorf("benchmark type \"toolathlon\" requires a harness with an MCP client (hermes or openclaw), not %q", cfg.Harness.Type)
 		}
 		for _, server := range cfg.Harness.MCP.Servers {
 			if server.Name == toolathlon.GatewayServerName {
@@ -286,18 +286,33 @@ func sweatlasModels(cfg config.Config) (judge core.ModelConfig, judgeDisabled bo
 	return judgeCfg.CoreModel(), false
 }
 
-// hermesMCPServers is the Hermes harness's MCP client configuration: the
-// benchmark's own server first, when the benchmark exposes its tools that
-// way (Toolathlon's gateway, at the sandbox's alias on the gateway port),
-// then the profile's harness.mcp entries.
-func hermesMCPServers(cfg config.Config) []hermesharness.MCPServer {
-	out := make([]hermesharness.MCPServer, 0, len(cfg.Harness.MCP.Servers)+1)
+// mcpServers is the harness's MCP client configuration, whichever harness
+// renders it: the benchmark's own server first, when the benchmark exposes
+// its tools that way (Toolathlon's gateway, at the sandbox's alias on the
+// gateway port), then the profile's harness.mcp entries.
+func mcpServers(cfg config.Config) []config.HarnessMCPServerConfig {
+	out := make([]config.HarnessMCPServerConfig, 0, len(cfg.Harness.MCP.Servers)+1)
 	if cfg.Benchmark.Type == "toolathlon" {
 		gateway := toolathlon.Gateway(dockersandbox.NetworkAlias, toolathlonGatewayPort(cfg))
-		out = append(out, hermesharness.MCPServer{Name: gateway.Name, URL: gateway.URL, Transport: gateway.Transport, TimeoutSeconds: gateway.TimeoutSeconds})
+		out = append(out, config.HarnessMCPServerConfig{Name: gateway.Name, URL: gateway.URL, Transport: gateway.Transport, TimeoutSeconds: gateway.TimeoutSeconds})
 	}
-	for _, server := range cfg.Harness.MCP.Servers {
+	return append(out, cfg.Harness.MCP.Servers...)
+}
+
+func hermesMCPServers(cfg config.Config) []hermesharness.MCPServer {
+	servers := mcpServers(cfg)
+	out := make([]hermesharness.MCPServer, 0, len(servers))
+	for _, server := range servers {
 		out = append(out, hermesharness.MCPServer{Name: server.Name, URL: server.URL, Transport: server.Transport, TimeoutSeconds: server.TimeoutSeconds})
+	}
+	return out
+}
+
+func openclawMCPServers(cfg config.Config) []openclawharness.MCPServer {
+	servers := mcpServers(cfg)
+	out := make([]openclawharness.MCPServer, 0, len(servers))
+	for _, server := range servers {
+		out = append(out, openclawharness.MCPServer{Name: server.Name, URL: server.URL, Transport: server.Transport, TimeoutSeconds: server.TimeoutSeconds})
 	}
 	return out
 }
@@ -349,6 +364,7 @@ func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byt
 			ExtractAPIKeyEnv:       cfg.Harness.WebSearch.ExtractAPIKeyEnv,
 			SubagentsEnabled:       cfg.Harness.Subagents.Enabled != nil && *cfg.Harness.Subagents.Enabled,
 			MaxConcurrentSubagents: cfg.Harness.Subagents.MaxConcurrent,
+			MCPServers:             openclawMCPServers(cfg),
 		})
 		if err != nil {
 			return app.HarnessInstance{}, fmt.Errorf("construct OpenClaw harness: %w", err)
