@@ -118,7 +118,7 @@ func (doer *preflightDoer) Do(request *http.Request) (*http.Response, error) {
 }
 
 func officialDeepSeekModel() core.ModelConfig {
-	return core.ModelConfig{Provider: "deepseek", BaseURL: deepSeekBaseURL, Model: "deepseek-v4-flash", APIKeyEnv: deepSeekAPIKey}
+	return core.ModelConfig{Provider: "deepseek", BaseURL: deepSeekBaseURL, Model: "deepseek-flash", APIKeyEnv: deepSeekAPIKey}
 }
 
 func TestValidateLiveModelConfirmsExactModelAndClearsCredentialBuffer(t *testing.T) {
@@ -126,7 +126,7 @@ func TestValidateLiveModelConfirmsExactModelAndClearsCredentialBuffer(t *testing
 	returned := append([]byte(nil), secret...)
 	doer := &preflightDoer{t: t, replies: []preflightReply{{
 		status: http.StatusOK,
-		body:   `{"object":"list","data":[{"id":"other"},{"id":"deepseek-v4-flash"}]}`,
+		body:   `{"object":"list","data":[{"id":"other"},{"id":"deepseek-flash"}]}`,
 	}}}
 	validation, err := validateLiveModel(context.Background(), officialDeepSeekModel(), func(name string) ([]byte, bool) {
 		if name != deepSeekAPIKey {
@@ -169,7 +169,7 @@ func TestValidateLiveModelRetriesOnlyTransport500And503(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			doer := &preflightDoer{t: t, replies: []preflightReply{
 				test.first,
-				{status: http.StatusOK, body: `{"data":[{"id":"deepseek-v4-flash"}]}`},
+				{status: http.StatusOK, body: `{"data":[{"id":"deepseek-flash"}]}`},
 			}}
 			var sleeps []time.Duration
 			validation, err := validateLiveModel(context.Background(), officialDeepSeekModel(), syntheticLookup, doer, func(_ context.Context, duration time.Duration) error {
@@ -326,7 +326,7 @@ func TestValidateLiveModelConfigurationCredentialAndCancellation(t *testing.T) {
 
 func TestOfficialDeepSeekSelectionIsExact(t *testing.T) {
 	for _, model := range []core.ModelConfig{
-		{Provider: "deepseek", BaseURL: deepSeekBaseURL, Model: "deepseek-v4-flash"},
+		{Provider: "deepseek", BaseURL: deepSeekBaseURL, Model: "deepseek-flash"},
 		{Provider: "deepseek", BaseURL: deepSeekBaseURL, Model: "deepseek-v4-pro"},
 	} {
 		if !isOfficialDeepSeek(model) {
@@ -334,8 +334,10 @@ func TestOfficialDeepSeekSelectionIsExact(t *testing.T) {
 		}
 	}
 	for _, model := range []core.ModelConfig{
-		{Provider: "deepseek", BaseURL: deepSeekBaseURL + "/", Model: "deepseek-v4-flash"},
+		{Provider: "deepseek", BaseURL: deepSeekBaseURL + "/", Model: "deepseek-flash"},
 		{Provider: "deepseek", BaseURL: deepSeekBaseURL, Model: "deepseek-v4"},
+		// Retired by DeepSeek; its /models no longer lists it.
+		{Provider: "deepseek", BaseURL: deepSeekBaseURL, Model: "deepseek-v4-flash"},
 		{Provider: "deepseek", BaseURL: "http://api.deepseek.com", Model: "deepseek-v4-pro"},
 	} {
 		if isOfficialDeepSeek(model) {
@@ -386,8 +388,8 @@ func TestDeepSeekHTTPClientHasBoundedTimeoutAndRejectsRedirects(t *testing.T) {
 
 func TestPersistLiveValidationIsPrivateExclusiveAndContainsNoCredential(t *testing.T) {
 	for _, validation := range []liveValidation{
-		{SchemaVersion: 1, Status: liveValidationSucceeded, Category: liveValidationConfirmed, Provider: "deepseek", BaseURL: deepSeekBaseURL, Model: "deepseek-v4-flash", Attempts: 1},
-		{SchemaVersion: 1, Status: liveValidationFailed, Category: liveValidationUnauthorized, Provider: "deepseek", BaseURL: deepSeekBaseURL, Model: "deepseek-v4-flash", Attempts: 1},
+		{SchemaVersion: 1, Status: liveValidationSucceeded, Category: liveValidationConfirmed, Provider: "deepseek", BaseURL: deepSeekBaseURL, Model: "deepseek-flash", Attempts: 1},
+		{SchemaVersion: 1, Status: liveValidationFailed, Category: liveValidationUnauthorized, Provider: "deepseek", BaseURL: deepSeekBaseURL, Model: "deepseek-flash", Attempts: 1},
 	} {
 		root := filepath.Join(t.TempDir(), "run")
 		if err := createRunOutputRoot(root); err != nil {

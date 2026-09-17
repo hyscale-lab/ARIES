@@ -436,7 +436,7 @@ func TestRunReturnsFinalResponseAndArtifacts(t *testing.T) {
 			agentCmd = options.Cmd
 		}
 	}
-	if len(agentCmd) != 9 || agentCmd[6] != "deepseek-v4-flash" || agentCmd[7] != "deepseek" || agentCmd[8] != "fix the git repository" {
+	if len(agentCmd) != 9 || agentCmd[6] != "deepseek-flash" || agentCmd[7] != "deepseek" || agentCmd[8] != "fix the git repository" {
 		t.Fatalf("agent exec argv = %#v", agentCmd)
 	}
 	if err := manager.Stop(context.Background()); err != nil {
