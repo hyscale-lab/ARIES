@@ -277,6 +277,9 @@ func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, mode strin
 	if subagentsEnabled && maxConcurrentSubagents > 0 {
 		configuration.Agents.Defaults.Subagents = &subagentsConfig{MaxConcurrent: maxConcurrentSubagents}
 	}
+	// Everything the sandbox gate must name for a sandboxed session to see
+	// it: the web tools when enabled, and configured MCP servers, which
+	// OpenClaw exposes as tools owned by its bundle-mcp plugin.
 	var alsoAllow []string
 	if webSearchEnabled {
 		if err := harness.ValidateSearch(searchURL, true); err != nil {
@@ -329,6 +332,10 @@ func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, mode strin
 				servers[server.Name] = entry
 			}
 			configuration.MCP = &openClawMCP{Servers: servers}
+			// Without this entry the servers load and their tools are
+			// filtered out before the model sees them (a session with only
+			// the built-in tools, as the first Toolathlon run on OpenClaw
+			// showed).
 			if !slices.Contains(alsoAllow, "bundle-mcp") {
 				alsoAllow = append(alsoAllow, "bundle-mcp")
 			}

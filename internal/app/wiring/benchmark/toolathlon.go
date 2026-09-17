@@ -2,7 +2,6 @@ package benchmark
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/hyscale-lab/aries/pkg/benchmark/toolathlon"
@@ -24,13 +23,13 @@ func SetupToolathlon(ctx context.Context, cfg config.Config) error {
 }
 
 // ValidateToolathlon checks the components a Toolathlon profile needs.
-// Toolathlon's tools reach the harness only as an MCP server, and the
-// adapter is wired for the Hermes harness. The gateway itself is added to
-// that harness's MCP servers by ToolathlonMCPServers, so a profile's own
-// harness.mcp_servers entries are extra servers and may not take its name.
+// Toolathlon's tools reach the harness only as an MCP server; both
+// harnesses have an MCP client. The gateway itself is added to their MCP
+// servers by ToolathlonMCPServers, so a profile's own harness.mcp_servers
+// entries are extra servers and may not take its name.
 func ValidateToolathlon(cfg config.Config) error {
-	if cfg.Harness.Type != "hermes" {
-		return errors.New("benchmark type \"toolathlon\" requires the hermes harness")
+	if cfg.Harness.Type != "hermes" && cfg.Harness.Type != "openclaw" {
+		return fmt.Errorf("benchmark type \"toolathlon\" requires a harness with an MCP client (hermes or openclaw), not %q", cfg.Harness.Type)
 	}
 	for _, server := range cfg.Harness.MCPServers {
 		if server.Name == toolathlon.GatewayServerName {

@@ -11,9 +11,10 @@ import (
 )
 
 // The adapter starts Toolathlon's gateway at the sandbox's alias on the
-// gateway port and adds it to the Hermes harness's MCP servers itself, ahead
-// of any server the profile names; the profile may not name one after it.
-func TestToolathlonGatewayIsAddedToTheHermesHarness(t *testing.T) {
+// gateway port and adds it to the harness's MCP servers itself, ahead of any
+// server the profile names; the profile may not name one after it, and a
+// harness without an MCP client is refused.
+func TestToolathlonGatewayIsAddedToTheHarness(t *testing.T) {
 	base := func(servers ...core.MCPServerConfig) config.Config {
 		return config.Config{
 			Benchmark: config.BenchmarkConfig{Type: "toolathlon"},
@@ -33,7 +34,12 @@ func TestToolathlonGatewayIsAddedToTheHermesHarness(t *testing.T) {
 			cfg := base()
 			cfg.Harness.Type = "openclaw"
 			return cfg
-		}(), want: "requires the hermes harness"},
+		}()},
+		{name: "a harness without an MCP client", cfg: func() config.Config {
+			cfg := base()
+			cfg.Harness.Type = "other"
+			return cfg
+		}(), want: "requires a harness with an MCP client"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := ValidateToolathlon(tc.cfg)

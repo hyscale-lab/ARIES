@@ -237,6 +237,11 @@ func TestHarnessMCPServersAddOnlyToolathlonsGateway(t *testing.T) {
 	if got := harnessMCPServers(cfg); len(got) != 2 || got[0].Name != "toolathlon" || !reflect.DeepEqual(got[1], docs) {
 		t.Fatalf("toolathlon servers = %+v, want the gateway then the profile's", got)
 	}
+	// OpenClaw receives the same list.
+	cfg.Harness.Type = "openclaw"
+	if got := harnessMCPServers(cfg); len(got) != 2 || got[0].Name != "toolathlon" || !reflect.DeepEqual(got[1], docs) {
+		t.Fatalf("openclaw servers = %+v", got)
+	}
 	cfg.Benchmark.Type = "terminalbench2"
 	if got := harnessMCPServers(cfg); !reflect.DeepEqual(got, []core.MCPServerConfig{docs}) {
 		t.Fatalf("terminalbench2 servers = %+v, want the profile's alone", got)

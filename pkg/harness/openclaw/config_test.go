@@ -501,3 +501,27 @@ func TestRenderConfig_MCPServerTransportAndTimeout(t *testing.T) {
 		t.Fatalf("streaming = %#v, want streamable-http with the default timeout", streaming)
 	}
 }
+
+// The sandbox gate names the web tools and bundle-mcp together when both are
+// on, and renders no mcp block when there are no servers.
+func TestRenderConfig_MCPServersBesideWebSearch(t *testing.T) {
+	servers := MCPOptions{Servers: []core.MCPServerConfig{{Name: "toolathlon", URL: "http://task-sandbox:10086/sse", Transport: "sse", TimeoutSeconds: 1200}}}
+	withWeb, err := renderConfig(testModel(), testEndpoint(), ModeAgent, "http://search.example:8123", true, false, false, 0, servers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var configuration openClawConfig
+	if err := json.Unmarshal(withWeb, &configuration); err != nil {
+		t.Fatal(err)
+	}
+	if got := configuration.Tools.Sandbox.Tools.AlsoAllow; strings.Join(got, ",") != "web_search,web_fetch,bundle-mcp" {
+		t.Fatalf("tools.sandbox.tools.alsoAllow with web search = %#v", got)
+	}
+	without, err := renderConfig(testModel(), testEndpoint(), ModeAgent, "", false, false, false, 0, MCPOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(without), `"mcp"`) {
+		t.Fatal("an mcp block was rendered with no servers")
+	}
+}

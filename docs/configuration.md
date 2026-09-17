@@ -726,8 +726,9 @@ these guides:
   `agent_sandbox_resources` overrides do not apply to evaluation. It rejects
   `environment`, `judge`, and `fact`.
 - [Toolathlon](benchmarks/toolathlon.md) requires `environment.image` (Toolathlon's
-  task image) and `harness.type: "hermes"`. The adapter adds its gateway to the
-  harness's MCP servers, so `harness.mcp_servers` may not name `toolathlon`.
+  task image) and a harness with an MCP client, Hermes or OpenClaw. The adapter
+  adds its gateway to the harness's MCP servers, so `harness.mcp_servers` may
+  not name `toolathlon`.
   Tasks backed by Toolathlon's self-hosted applications share one deployment,
   so they load only at `execution.concurrency` 1. The optional `toolathlon`
   block sets the gateway port, the application host, and `max_steps`, which
