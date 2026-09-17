@@ -1,0 +1,100 @@
+{{- if .Values.openclaw.enabled }}
+# OpenClaw agent-harness gateway as a Kubernetes workload.
+#
+# This is the deployment + routing scaffold for a single long-lived gateway.
+# ARIES's Kubernetes harness backend (pkg/harness/openclaw, NewKube) creates
+# its own per-task agent pod and Service instead, so these resources are a
+# reference/template for that flow rather than a dependency of it.
+#
+# The pod boots into a wait state: it stays alive until ARIES delivers the
+# per-task private runtime archive (plugin + gateway launcher + rendered
+# config) and releases it by creating the sentinel file. This preserves the
+# Docker "inject files, then start the gateway" ordering on Kubernetes.
+#
+# Reach it from outside the cluster with:
+#
+#   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "aries.openclaw.fullname" . }} {{ .Values.openclaw.service.port }}:{{ .Values.openclaw.service.port }}
+#
+# then point the harness gateway URL at ws://127.0.0.1:{{ .Values.openclaw.service.port }}.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aries.openclaw.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aries.labels" . | nindent 4 }}
+    app.kubernetes.io/component: harness
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "aries.openclaw.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "aries.labels" . | nindent 8 }}
+        {{- include "aries.openclaw.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: harness
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 5
+      {{- if .Values.openclaw.role.enabled }}
+      # Pin the gateway to a node the installer labelled and tainted
+      # aries.dev/role=harness. Both halves are needed: the nodeSelector pulls
+      # the pod onto that node, the toleration gets it past the taint. Set
+      # openclaw.role.enabled=false on a cluster whose nodes carry no role
+      # labels, or this pod stays Pending forever.
+      {{- include "aries.rolePlacement" (dict "role" .Values.openclaw.role.name) | nindent 6 }}
+      {{- end }}
+      containers:
+        - name: openclaw
+          image: "{{ .Values.openclaw.image.repository }}:{{ .Values.openclaw.image.tag }}"
+          imagePullPolicy: {{ .Values.openclaw.image.pullPolicy }}
+          # Wait for ARIES to stage the per-task runtime, then exec the gateway
+          # launcher it delivered. Until the sentinel exists, the pod idles.
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              sentinel=/run/aries/ready
+              echo "waiting for ARIES to stage the OpenClaw runtime..."
+              while [ ! -f "$sentinel" ]; do sleep 0.5; done
+              exec /run/aries/gateway-launcher
+          env:
+            - name: OPENCLAW_CONFIG_PATH
+              value: /home/node/.openclaw/config.json
+          ports:
+            - name: gateway
+              containerPort: {{ .Values.openclaw.service.port }}
+          readinessProbe:
+            # The gateway proxy binds 0.0.0.0:18789 and forwards to the
+            # loopback gateway on 18790, which is what reports readiness.
+            httpGet:
+              path: /readyz
+              port: 18790
+            initialDelaySeconds: 2
+            periodSeconds: 2
+            failureThreshold: 30
+          resources:
+            {{- toYaml .Values.openclaw.resources | nindent 12 }}
+---
+# Routes to the OpenClaw gateway. The gateway proxy inside the pod binds
+# 0.0.0.0:18789 and forwards to the loopback gateway on 18790, so the Service
+# targets the named gateway port.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aries.openclaw.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aries.labels" . | nindent 4 }}
+    app.kubernetes.io/component: harness
+spec:
+  type: {{ .Values.openclaw.service.type }}
+  selector:
+    {{- include "aries.openclaw.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: gateway
+      port: {{ .Values.openclaw.service.port }}
+      targetPort: gateway
+{{- end }}

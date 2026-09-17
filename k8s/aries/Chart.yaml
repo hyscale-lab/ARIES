@@ -1,0 +1,17 @@
+apiVersion: v2
+name: aries
+description: ARIES agent-serving experiment runner, with the OpenClaw harness gateway
+type: application
+
+# Chart version. Bump on template or values changes.
+version: 0.1.0
+
+# ARIES has no release tags yet; the image tag in values.yaml is what actually
+# pins the code that runs.
+appVersion: "0.1.0"
+
+keywords:
+  - aries
+  - agent-serving
+  - benchmarking
+home: https://github.com/hyscale-lab/aries

@@ -1,0 +1,13 @@
+{
+  "master": "username@master-node",
+  "aries_nodes": ["username@aries-node"],
+  "harness_nodes": ["username@harness-node"],
+  "sandbox_nodes": ["username@sandbox-node"],
+  "workers": [],
+  "skip_role_taints": false,
+  "ssh_key": "",
+  "ssh_options": ["-o", "ConnectTimeout=15"],
+  "fetch_kubeconfig": true,
+  "deploy_prometheus": false
+  "deploy_aries": true
+}

@@ -1,0 +1,39 @@
+ARIES is deployed as {{ include "aries.fullname" . }} in namespace {{ .Release.Namespace }}.
+
+The pod idles: the ARIES binary is a batch runner, so nothing starts on its own.
+Trigger a run with
+
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "aries.fullname" . }} -- sh -c './bin/aries "$ARIES_PROFILE"'
+
+which runs {{ .Values.profile }}.
+
+Collect the artifacts:
+
+  kubectl -n {{ .Release.Namespace }} cp {{ include "aries.fullname" . }}-<pod>:/app/runs ./runs
+{{- if not .Values.runs.persistence.enabled }}
+
+Run artifacts are in the pod's emptyDir: they survive between runs but are lost
+when the pod restarts. Set runs.persistence.enabled to keep them.
+{{- end }}
+{{- if .Values.role.enabled }}
+
+Pinned to nodes labelled aries.dev/role={{ .Values.role.name }}. If the pod stays
+Pending, no node carries that label — check with
+`kubectl get nodes -l aries.dev/role={{ .Values.role.name }}`.
+{{- end }}
+{{- if .Values.openclaw.enabled }}
+
+The OpenClaw gateway is deployed. Reach it with
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "aries.openclaw.fullname" . }} {{ .Values.openclaw.service.port }}:{{ .Values.openclaw.service.port }}
+
+and point the harness gateway URL at ws://127.0.0.1:{{ .Values.openclaw.service.port }}.
+The pod waits for ARIES to stage its runtime before the gateway starts, so it
+reports NotReady until then — that is expected.
+{{- end }}
+{{- if .Values.model.create }}
+
+The model key was rendered into Secret {{ .Values.model.secretName }} from your values,
+so it is also readable with `helm get values {{ .Release.Name }}` and kept in the
+release history.
+{{- end }}

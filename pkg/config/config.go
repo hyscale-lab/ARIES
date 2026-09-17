@@ -95,7 +95,7 @@ type HarnessConfig struct {
 	Deployment string `json:"deployment,omitempty"`
 	Namespace  string `json:"namespace,omitempty"`
 	// NodeRole pins agent pods to nodes labelled "aries.dev/role=<NodeRole>" and
-	// tolerates the matching NoSchedule taint that k8s/install applies to a
+	// tolerates the matching NoSchedule taint that setup/ applies to a
 	// dedicated pool. Applies only to the "kubernetes" deployment. Empty leaves
 	// agent pods unpinned, which a cluster with no role labels needs.
 	NodeRole string                `json:"node_role,omitempty"`
@@ -141,7 +141,7 @@ type SandboxConfig struct {
 	// only to the "kubernetes" sandbox type and defaults to "aries".
 	Namespace string `json:"namespace,omitempty"`
 	// NodeRole pins task pods to nodes labelled "aries.dev/role=<NodeRole>" and
-	// tolerates the matching NoSchedule taint that k8s/install applies to a
+	// tolerates the matching NoSchedule taint that setup/ applies to a
 	// dedicated pool. ARIES owns this value; the installer only labels and
 	// taints the nodes. Empty leaves task pods unpinned, which is what a cluster
 	// with no role labels needs.

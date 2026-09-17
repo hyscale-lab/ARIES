@@ -33,7 +33,7 @@ import (
 
 const (
 	defaultNamespace = "aries"
-	// nodeRoleLabel is the label k8s/install puts on each dedicated node pool,
+	// nodeRoleLabel is the label setup/ puts on each dedicated node pool,
 	// and the key of the NoSchedule taint it pairs with. Task pods select and
 	// tolerate it when a profile sets sandbox.node_role.
 	nodeRoleLabel = "aries.dev/role"

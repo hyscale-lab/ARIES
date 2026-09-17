@@ -1,0 +1,86 @@
+# ARIES as a long-running pod.
+#
+# The ARIES binary is a batch runner, not a server: `aries PROFILE.json` runs a
+# profile to completion and exits. A Deployment restarts its container whenever
+# the process exits, so running the profile as the entrypoint here would re-run
+# the whole experiment in a loop.
+#
+# Instead the container idles and you trigger runs on demand:
+#
+#   kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "aries.fullname" . }} -- sh -c './bin/aries "$ARIES_PROFILE"'
+#
+# The pod stays up between runs, keeping the image, the model key, and the
+# run-artifact volume mounted, which makes iterating much faster than recreating
+# a Job each time. Swap this for a Service-backed Deployment once ARIES grows a
+# real task-intake API.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aries.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aries.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  # Recreate, not RollingUpdate: two ARIES pods must never run concurrently
+  # against the same namespace, and the run volume is not shared.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "aries.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "aries.labels" . | nindent 8 }}
+        {{- include "aries.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "aries.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.role.enabled }}
+      {{- include "aries.rolePlacement" (dict "role" .Values.role.name) | nindent 6 }}
+      {{- end }}
+      containers:
+        - name: aries
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # Overrides the image ENTRYPOINT so the pod idles instead of running a
+          # profile. Specifying command without args also discards the image
+          # CMD, so no profile is started at boot.
+          command: ["sleep", "infinity"]
+          env:
+            # The profile `kubectl exec` runs; expanded inside the pod, so the
+            # exec line never has to repeat the path.
+            - name: ARIES_PROFILE
+              value: {{ .Values.profile | quote }}
+            - name: {{ .Values.model.key }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.model.secretName }}
+                  key: {{ .Values.model.key }}
+            {{- if .Values.podIP }}
+            # For a bridge advertise_host of $POD_IP: agent pods dial ARIES
+            # back on this address, which only exists inside the cluster.
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            {{- end }}
+          volumeMounts:
+            - name: runs
+              mountPath: /app/runs
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: runs
+          {{- if .Values.runs.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.runs.persistence.claimName }}
+          {{- else }}
+          # Run artifacts survive between runs, because the pod is long-lived,
+          # but die with the pod. Set runs.persistence.enabled for a PVC.
+          emptyDir: {}
+          {{- end }}

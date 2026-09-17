@@ -65,7 +65,7 @@ sequenceDiagram
 
 ## Phase 0 — Deploy
 
-`kubectl apply -k k8s/overlays/incluster` creates the namespace, the `aries`
+`helm upgrade --install aries ./k8s/aries -f values-incluster.yaml` creates the namespace, the `aries`
 ServiceAccount, the `aries-sandbox` Role/RoleBinding, the `aries-model` Secret,
 and the `aries` Job. The Job template carries the image, the profile argument,
 `DEEPSEEK_API_KEY` from the Secret, `POD_IP` from the downward API, and the

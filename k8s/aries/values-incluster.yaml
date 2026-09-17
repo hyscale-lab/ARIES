@@ -1,0 +1,53 @@
+# ARIES running INSIDE a remote kubeadm cluster.
+#
+# ARIES, the bridge, and the agent/sandbox pods all share the cluster network,
+# so the agent's reverse SSH hop to the bridge is pod-to-pod. The bridge
+# advertises ARIES's own pod IP via the downward API ($POD_IP), so no external
+# routing is needed.
+#
+#   docker build -t <registry>/aries:latest . && docker push <registry>/aries:latest
+#   cp k8s/aries/secret.yaml.example k8s/aries/secret.yaml   # then edit it
+#   helm upgrade --install aries ./k8s/aries --namespace aries --create-namespace \
+#     -f ./k8s/aries/values-incluster.yaml -f ./k8s/aries/secret.yaml
+#
+# aries-setup does exactly that on the control plane when cluster.json sets
+# deploy_aries.
+
+image:
+  # Point this at a repository your cluster can pull from.
+  repository: jingxiang212/aries
+  tag: latest
+  # The :latest tag is mutable, so always re-pull or a redeploy silently keeps
+  # running the old image.
+  pullPolicy: Always
+
+imagePullSecrets:
+  - name: aries-registry
+
+registry:
+  # Render the pull secret from registry.dockerconfigjson in secret.yaml. Set
+  # this to false for a public image and drop imagePullSecrets above.
+  create: true
+
+profile: profiles/openclaw-tb2-fix-git-deepseek-k8s-incluster.json
+
+# The bridge advertises this to agent pods as its reachable address.
+podIP: true
+
+# Pin to the node pool the installer labelled and tainted aries.dev/role=aries.
+role:
+  enabled: true
+  name: aries
+
+# Persist run artifacts on the role node, instead of losing them with the pod.
+runs:
+  persistence:
+    enabled: true
+storage:
+  create: true
+
+# The harness backend creates its own per-task agent pods, so the static
+# gateway is not deployed. Set enabled: true to drive one long-lived gateway by
+# port-forward instead.
+openclaw:
+  enabled: false
