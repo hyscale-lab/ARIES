@@ -90,6 +90,17 @@ Two smaller differences are deliberate:
   (the sandbox network is on for them). The other 55 need an account or
   `k8s`; running them would mean provisioning those accounts for every
   run, which is not reproducible in ARIES today.
+- A task also lists "local tools": tools of Toolathlon's own agent loop,
+  which under ARIES is the harness. `claim_done` is served by the gateway;
+  `manage_context`, `history` and `handle_overlong_tool_outputs` are the
+  loop's bookkeeping, which Toolathlon's own decoupled runner ignores too
+  and the harness does its own way; `python_execute` and `sleep` are what
+  the harness's terminal does in the task container (Toolathlon's runner
+  executes them on its host). `web_search` has no stand-in but the
+  harness's own: a task that lists it loads only when the profile enables
+  `harness.web_search`, and is otherwise refused with that message — 14 of
+  the 53, all public-internet tasks. A local tool the adapter has no
+  mapping for is refused like an unknown server.
 
 ## Running the example
 
