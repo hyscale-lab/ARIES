@@ -74,21 +74,28 @@ func generateSessionCertificates(gateway string) (sessionCredentials, error) {
 // trust pool; the pin in VerifyPeerCertificate is what actually restricts the
 // peer to one identity.
 //
-// The validity window is deliberately far wider than any task, because nothing
-// consults it. Pinning replaces chain validation on both sides — the server
-// uses RequireAnyClientCert and the client InsecureSkipVerify, so neither runs
-// the standard checks that read NotAfter, and pinnedPeer compares raw bytes
-// with no notion of time. An expired certificate is accepted by this
-// configuration; that was verified, not assumed.
+// These certificates do not expire, and that is stated in X.509's own terms
+// rather than by picking a duration. Nothing here consults a validity window:
+// pinning replaces chain validation on both sides — the server uses
+// RequireAnyClientCert and the client InsecureSkipVerify, so neither runs the
+// standard checks that read NotAfter, and pinnedPeer compares raw bytes with
+// no notion of time. An expired certificate is accepted by this configuration;
+// that was verified, not assumed.
 //
-// A short lifetime here would therefore be decorative, and worse than absent:
-// it would read as a control that exists, and would become a live failure for
-// long tasks the moment anyone enabled standard verification. What actually
-// bounds these credentials is the task — Stop removes the client identity and
-// tears down the server, which is positive revocation rather than a clock.
-// certificateValidity spans a century: see selfSignedCertificate on why the
-// window carries no meaning here.
-const certificateValidity = 100 * 365 * 24 * time.Hour
+// Any finite lifetime would therefore be decorative, and worse than none: it
+// would read as a control that exists, and would become a live failure for long
+// tasks the moment anyone enabled standard verification. What bounds these
+// credentials is the task — Stop removes the client identity and tears down the
+// server, which is positive revocation rather than a clock.
+// noExpiry is the GeneralizedTime RFC 5280 section 4.1.2.5 reserves for a
+// certificate with no well-defined expiration date. It is the standard's way of
+// saying "does not expire", so it needs no local justification for its value.
+//
+// Leaving NotBefore and NotAfter unset is not the same thing and is not an
+// option: Go encodes the zero time as 0001-01-01, which reads as expired since
+// year one — the opposite of what is meant, and indistinguishable from a
+// corrupt certificate when the retained server.crt is inspected.
+var noExpiry = time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
 
 func selfSignedCertificate(commonName string, addresses []net.IP) ([]byte, []byte, error) {
 	public, private, err := ed25519.GenerateKey(rand.Reader)
@@ -104,7 +111,7 @@ func selfSignedCertificate(commonName string, addresses []net.IP) ([]byte, []byt
 		SerialNumber:          serial,
 		Subject:               pkix.Name{CommonName: commonName},
 		NotBefore:             now.Add(-time.Minute),
-		NotAfter:              now.Add(certificateValidity),
+		NotAfter:              noExpiry,
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 		BasicConstraintsValid: true,

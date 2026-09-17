@@ -289,13 +289,24 @@ harness to stage. They carry the meanings their SSH-shaped field names already h
 | `IdentitySourceFile` | client certificate and key, one PEM, `0600` | the client's own credential, as an SSH identity is |
 | `KnownHostsSourceFile` | the bridge's certificate, `0600` | the single server identity the client accepts |
 
-**Certificate validity is not a control here, and is not pretended to be.** Pinning replaces chain
-validation on both sides, so neither end runs the standard checks that read `NotAfter`, and the pin
-itself compares raw bytes with no notion of time — an expired certificate is accepted by this
-configuration, which was verified rather than assumed. The certificates are therefore issued with a
-window far wider than any task. What bounds them is `Stop`, which removes the identity and tears the
-server down: positive revocation rather than a clock. A short lifetime would be decorative today and
-would become a live failure for long tasks the moment anyone enabled standard verification.
+**These certificates never expire, deliberately.** They are issued with `99991231235959Z`, the
+GeneralizedTime [RFC 5280 section 4.1.2.5](https://datatracker.ietf.org/doc/html/rfc5280#section-4.1.2.5)
+reserves for a certificate with no well-defined expiration date — so the lifetime is stated in
+X.509's own vocabulary rather than as a duration somebody chose.
+
+Nothing here would consult a shorter one. Pinning replaces chain validation on both sides, so
+neither end runs the standard checks that read `NotAfter`, and the pin compares raw bytes with no
+notion of time; an expired certificate is accepted by this configuration, which was verified rather
+than assumed. Any finite lifetime would therefore be decorative today, and would become a live
+failure for long tasks the moment anyone enabled standard verification — which is why an earlier
+24-hour constant was removed rather than tuned.
+
+What bounds these credentials is `Stop`: it removes the client identity and tears the server down.
+That is positive revocation, and it is the guarantee the bridge exists to provide — a clock is not.
+
+Leaving the dates unset is not the same thing and is not an option: Go encodes the zero time as
+`0001-01-01`, which reads as expired since year one and is indistinguishable from a corrupt
+certificate when the retained `server.crt` is inspected.
 
 **The server's private key is never written anywhere.** It exists only inside the `tls.Certificate`
 the listener holds, so nothing can stage or persist it; only the certificate, which is public
