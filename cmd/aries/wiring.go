@@ -236,9 +236,10 @@ func newBenchmark(cfg config.Config, outputRoot, logicalID, occurrenceID string,
 func toolathlonOptions(cfg config.Config, taskIDs, executionIDs []string, outputDir string) toolathlon.Options {
 	options := toolathlon.Options{
 		Root: cfg.Benchmark.Root, TaskIDs: taskIDs, ExecutionTaskIDs: executionIDs, OutputDir: outputDir,
-		Revision:    cfg.Versions.Toolathlon.Revision,
-		Environment: environmentFromConfig(cfg.Benchmark.Environment),
-		ModelName:   cfg.Model.ID,
+		Revision:         cfg.Versions.Toolathlon.Revision,
+		Environment:      environmentFromConfig(cfg.Benchmark.Environment),
+		ModelName:        cfg.Model.ID,
+		HarnessWebSearch: cfg.Harness.WebSearch.Enabled,
 	}
 	if settings := cfg.Benchmark.Toolathlon; settings != nil {
 		options.GatewayPort = settings.GatewayPort
