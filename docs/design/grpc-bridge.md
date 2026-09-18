@@ -81,8 +81,8 @@ the file-transfer policy question live before there is anything to test it again
   on `ExecStream`, `Upload`, `Download`, or `DownloadLimit`, all of which already exist.
 - *Session-scoped server state.* Considered and rejected for this iteration; see
   [section 4](#4-state-what-the-server-holds).
-- *Anything running inside the task container.* See
-  [containers](containers.md) for why the sandbox stays empty.
+- *Anything running inside the task container.* The sandbox serves nothing and gains no daemon;
+  every call still reaches it through the Docker Engine API from outside.
 
 **Sources:** `pkg/runner/interfaces.go`, `cmd/aries/wiring.go`, `pkg/sandbox/docker/docker.go`.
 
@@ -424,8 +424,8 @@ truncating silently.
 
 Four request classes currently produce no audit record at all — rejected channel types, channels
 with extra data, channel accept errors, and refused global requests
-(see [SSH connection lifecycle](ssh-connection-lifecycle.md#4-the-request-funnel)). Those gaps
-should not be reproduced: a refused call is a recordable event.
+(the SSH request funnel, `pkg/bridge/hermesssh/bridge.go:720-760`). Those gaps should not be
+reproduced: a refused call is a recordable event.
 
 #### One artifact, without losing what the second one held
 
@@ -568,9 +568,8 @@ so compression does not interact with that cap the way it might appear to.
    That collides with a standing rule: *"Add dependencies only when the stdlib or an existing
    dependency genuinely cannot do the job."* The rule is satisfiable — no stdlib package speaks
    gRPC — but the case should be made explicitly rather than assumed, and the alternative is real:
-   the two independent reimplementations found during the E2B research
-   ([e2b-tool-bridge](../research/e2b-tool-bridge.md)) both hand-write the Connect envelope with no
-   protobuf runtime at all. Decide before writing code, not during.
+   the two independent reimplementations found during the E2B research both hand-write the Connect
+   envelope with no protobuf runtime at all. Decide before writing code, not during.
 
 7. **Deferred: distinguishing structured calls from shell escapes.** A `oneof` over `argv` and
    `script` would let the audit separate the two, which the research argues for. It is omitted from
@@ -646,10 +645,13 @@ would use regardless, exactly as `bridge_test.go` drives the SSH bridge with a r
 
 Only step 3 carries comparability risk, and it is no longer on the critical path.
 
-## Related documents
+## Background material
 
-- What the current bridge guarantees, as a checklist: [hermes-bridge-inventory](hermes-bridge-inventory.md).
-- The lifecycle this replaces: [ssh-connection-lifecycle](ssh-connection-lifecycle.md).
-- What actually runs in the sandbox: [sandbox-command-profile](../research/sandbox-command-profile.md).
-- E2B and `envd` as reference: [e2b-tool-bridge](../research/e2b-tool-bridge.md).
-- Container topology: [containers](containers.md).
+The research behind this proposal is deliberately not tracked in the repository. It was written to
+reach these decisions rather than to be maintained alongside the code, and it would go stale as the
+bridge changes. The `**Sources:**` lines in each section name the code that section rests on, which
+is the part that stays true.
+
+For anyone who has the working copy, the unversioned notes are `docs/design/containers.md`,
+`hermes-bridge-inventory.md`, `hermes-integration.md`, `ssh-connection-lifecycle.md`,
+`code-structure.md`, and `docs/research/{e2b-tool-bridge,sandbox-command-profile}.md`.
