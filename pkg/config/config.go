@@ -46,6 +46,13 @@ type ExecutionConfig struct {
 	Concurrency  int           `json:"concurrency"`
 	LoopDuration string        `json:"loop_duration,omitempty"`
 	Loop         time.Duration `json:"-"`
+	// ArrivalsFile and ArrivalRatePerMin turn the run into an open loop: each
+	// task starts at the offset the trace gives it, scaled from the trace's
+	// base rate to ArrivalRatePerMin, instead of as soon as a worker is free.
+	// Concurrency still caps the tasks in flight; set it at or above the task
+	// count so the schedule, not the pool, decides when a task starts.
+	ArrivalsFile      string  `json:"arrivals_file,omitempty"`
+	ArrivalRatePerMin float64 `json:"arrival_rate_per_min,omitempty"`
 }
 
 // RuntimeConfig selects the model service. Mode is the ownership distinction:
@@ -586,6 +593,17 @@ func (c *Config) validate() error {
 			return errors.New("execution.loop_duration must be a positive Go duration")
 		}
 		c.Execution.Loop = loop
+	}
+	if (c.Execution.ArrivalsFile != "") != (c.Execution.ArrivalRatePerMin != 0) {
+		return errors.New("execution.arrivals_file and execution.arrival_rate_per_min must be set together")
+	}
+	if c.Execution.ArrivalsFile != "" {
+		if !(c.Execution.ArrivalRatePerMin > 0) || math.IsInf(c.Execution.ArrivalRatePerMin, 0) {
+			return errors.New("execution.arrival_rate_per_min must be finite and positive")
+		}
+		if c.Execution.LoopDuration != "" {
+			return errors.New("execution.arrivals_file cannot be combined with execution.loop_duration")
+		}
 	}
 	checks := []struct {
 		name  string
