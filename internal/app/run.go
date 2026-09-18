@@ -213,12 +213,24 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 		runtimeEntry.WithField("runtime_state", "healthy").Info("model runtime lifecycle")
 	}
 
+	var schedule []arrival
+	if cfg.Execution.ArrivalsFile != "" {
+		loaded, err := config.LoadArrivals(cfg.Execution.ArrivalsFile, cfg.Execution.ArrivalRatePerMin, cfg.Benchmark.Tasks)
+		if err != nil {
+			return fmt.Errorf("load arrival schedule: %w", err)
+		}
+		for _, entry := range loaded {
+			schedule = append(schedule, arrival{logicalID: entry.TaskID, at: entry.At})
+		}
+		logger.WithFields(logrus.Fields{"arrivals": len(schedule), "rate_per_min": cfg.Execution.ArrivalRatePerMin, "last_offset": schedule[len(schedule)-1].at.String()}).Info("open-loop arrival schedule loaded")
+	}
+
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
 	completed := make(chan error, 1)
 	go func() {
 		completed <- executeAndRecord(runCtx, func(executionCtx context.Context) (core.RunResult, error) {
-			return runProfile(executionCtx, cfg.Name, runID, cfg.Benchmark.Tasks, cfg.Execution.Concurrency, cfg.Execution.Loop,
+			return runProfile(executionCtx, cfg.Name, runID, cfg.Benchmark.Tasks, cfg.Execution.Concurrency, cfg.Execution.Loop, schedule,
 				func(taskCtx context.Context, occurrence taskOccurrence) (core.RunResult, error) {
 					experiment, err := buildTaskExperiment(cfg, prepared.Model, prepared.EffectiveGPUIndices, runID, outputRoot, occurrence.logicalID, occurrence.executionID, harnessLookup, logger, dependencies.Wiring)
 					if err != nil {

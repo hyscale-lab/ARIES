@@ -124,6 +124,7 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 	sandboxEnvironment, harnessCPU, harnessMemory, harnessTimeout := effectiveRuntime(task, r.runtimeOverrides)
 	started := time.Now()
 	result := newTaskResult(task.ID)
+	result.StartedAt = started
 	r.logger.WithContext(ctx).WithField("task_id", task.ID).Info("task started")
 
 	var (
