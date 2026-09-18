@@ -24,7 +24,7 @@ func floatPtr(value float64) *float64 { return &value }
 
 func mustRender(t *testing.T, model core.ModelConfig, settings renderSettings) string {
 	t.Helper()
-	rendered, err := renderConfig(model, settings)
+	rendered, err := renderConfig(model, settings, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestRenderConfigEmitsGenerationSettingsOnlyWhenSet(t *testing.T) {
 	for name, mutate := range bad {
 		model := vllmModel()
 		mutate(&model)
-		if _, err := renderConfig(model, baseSettings()); err == nil {
+		if _, err := renderConfig(model, baseSettings(), nil); err == nil {
 			t.Fatalf("%s: invalid generation settings were accepted", name)
 		}
 	}
@@ -78,11 +78,11 @@ func TestRenderConfigEmitsCompactionBlockOnlyWhenSet(t *testing.T) {
 	model := vllmModel()
 	model.ContextLength = 65536
 	settings.compaction = &CompactionSettings{ThresholdTokens: 65536}
-	if _, err := renderConfig(model, settings); err == nil {
+	if _, err := renderConfig(model, settings, nil); err == nil {
 		t.Fatal("threshold at the context length was accepted")
 	}
 	settings.compaction = &CompactionSettings{ThresholdTokens: -1}
-	if _, err := renderConfig(vllmModel(), settings); err == nil {
+	if _, err := renderConfig(vllmModel(), settings, nil); err == nil {
 		t.Fatal("negative threshold was accepted")
 	}
 }
@@ -129,12 +129,12 @@ func TestRenderConfigWritesExtraBodyAsYAMLReadableJSON(t *testing.T) {
 	}
 	for _, bad := range []string{`[1]`, `"x"`, `{}`, `null`, `{"a":`, ``} {
 		settings.extraBody = []byte(bad)
-		if _, err := renderConfig(vllmModel(), settings); err == nil && bad != "" {
+		if _, err := renderConfig(vllmModel(), settings, nil); err == nil && bad != "" {
 			t.Fatalf("accepted extra_body %q", bad)
 		}
 	}
 	settings.extraBody = []byte(`{"a": 1}`)
-	if _, err := renderConfig(validModel(), settings); err == nil {
+	if _, err := renderConfig(validModel(), settings, nil); err == nil {
 		t.Fatal("extra_body under the deepseek provider was accepted")
 	}
 }
@@ -218,14 +218,14 @@ func TestRenderTemperatureUsesRequestExtraBody(t *testing.T) {
 				t.Fatal("extra_body number lost precision")
 			}
 			settings.extraBody = []byte(`{"temperature":0.2}`)
-			if _, err := renderConfig(model, settings); err == nil {
+			if _, err := renderConfig(model, settings, nil); err == nil {
 				t.Fatal("ambiguous temperature accepted")
 			}
 		}
 	}
 	model := validModel()
 	model.Temperature = floatPtr(0)
-	if _, err := renderConfig(model, baseSettings()); err == nil {
+	if _, err := renderConfig(model, baseSettings(), nil); err == nil {
 		t.Fatal("unsupported DeepSeek temperature accepted")
 	}
 }
