@@ -187,7 +187,11 @@ type TaskResult struct {
 	Evaluation   Evaluation      `json:"evaluation"`
 	Observer     ObserverResult  `json:"observer"`
 	Cleanup      CleanupResult   `json:"cleanup"`
-	Duration     time.Duration   `json:"duration"`
+	// StartedAt is when the runner began the task: with an arrival schedule
+	// it is the realised start, which an analysis sets against the offset the
+	// schedule asked for.
+	StartedAt time.Time     `json:"started_at,omitempty"`
+	Duration  time.Duration `json:"duration"`
 }
 
 // RunSummary is a direct count of task outcomes.
