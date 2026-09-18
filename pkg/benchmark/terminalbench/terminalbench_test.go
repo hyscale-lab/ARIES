@@ -1320,3 +1320,31 @@ func cloneBytesMap(source map[string][]byte) map[string][]byte {
 	}
 	return clone
 }
+
+func TestLoadTaskReadsTheTerminalBench21TasksLayout(t *testing.T) {
+	// Terminal-Bench 2.1 keeps tasks under tasks/; 2.0 kept them at the root.
+	flat := writeArbitraryFixture(t)
+	root := t.TempDir()
+	if err := os.Rename(filepath.Join(flat, arbitraryTaskID), filepath.Join(root, "tasks", arbitraryTaskID)); err != nil {
+		if err := os.MkdirAll(filepath.Join(root, "tasks"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(filepath.Join(flat, arbitraryTaskID), filepath.Join(root, "tasks", arbitraryTaskID)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, filepath.Join(root, "dataset.toml"), "name = \"terminal-bench-2-1\"\n")
+	task, _, err := loadTask(root, arbitraryTaskID)
+	if err != nil {
+		t.Fatalf("loadTask under tasks/: %v", err)
+	}
+	if task.ID != arbitraryTaskID {
+		t.Fatalf("task id = %q", task.ID)
+	}
+	if got := taskDirectory(root, arbitraryTaskID); got != filepath.Join(root, "tasks", arbitraryTaskID) {
+		t.Fatalf("taskDirectory = %q", got)
+	}
+	if got := taskDirectory(flat, arbitraryTaskID); got != filepath.Join(flat, arbitraryTaskID) {
+		t.Fatalf("flat taskDirectory = %q", got)
+	}
+}

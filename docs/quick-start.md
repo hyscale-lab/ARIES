@@ -41,7 +41,7 @@ make build
 - `profiles/hermes-tb2-fix-git-deepseek.json`
 
 Running a profile automatically loads `configs/versions.json`, creates or
-verifies the pinned Terminal-Bench checkout at `.cache/terminal-bench-2`, reads
+verifies the pinned Terminal-Bench checkout at `.cache/terminal-bench-2-1`, reads
 each selected task's explicit Docker image tag from its `task.toml`, and pulls
 only the configured harness image plus those selected images through the
 Docker Go SDK. Preparation
