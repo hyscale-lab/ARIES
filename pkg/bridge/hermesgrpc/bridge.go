@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -62,16 +61,27 @@ const (
 
 	lockedUsername = "aries"
 
-	// maxMessageBytes and defaultOutputLimit are deliberately unlimited for the
-	// first iteration. grpc-go caps *receive* at 4 MiB by default on both sides
-	// and would reject a response after the command had already run, which the
-	// SSH bridge never did because it wrote straight to the channel. Go has no
-	// -1 sentinel, so math.MaxInt32 is the unlimited idiom and it matches the
-	// send default. The truncation path below is built and tested so that
-	// imposing a real bound later is a constant, not new code; the number
-	// should come from the per-call sizes logged on real runs.
-	maxMessageBytes    = math.MaxInt32
-	defaultOutputLimit = int64(math.MaxInt32)
+	// defaultOutputLimit truncates each of stdout and stderr. Unary Exec holds a
+	// whole reply in this process — the handler's buffer plus the marshalled
+	// copy — where the SSH bridge streamed to the channel and accumulated
+	// nothing, so this bound covers memory the gRPC design newly puts at risk.
+	// It matters because ARIES is shared across tasks and unconstrained: if it
+	// dies, Stop never runs, so revocation is unconfirmed and the audit unsealed
+	// for every concurrent task, not just the one that produced the output.
+	//
+	// 16 MiB is far above anything measured — a Terminal-Bench run peaked at
+	// 5.6 KB — and a high bound costs nothing until it fires, since the limit is
+	// one comparison against a length already on the wire. Erring high is
+	// deliberate: truncation is not free either, because the agent stops seeing
+	// the output it asked for, which can change a task's outcome.
+	defaultOutputLimit = int64(16 << 20)
+
+	// maxMessageBytes is a backstop and must never be the binding constraint.
+	// If the transport cap fired first, a command would run to completion and
+	// then have its reply rejected — the exact failure mode truncation exists to
+	// avoid, and the one grpc-go's 4 MiB receive default would have caused. Two
+	// fully truncated streams plus framing must fit well inside it.
+	maxMessageBytes = 64 << 20
 )
 
 // Options are the host-local inputs to one Hermes gRPC bridge.

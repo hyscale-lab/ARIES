@@ -22,7 +22,7 @@
     "provider": "deepseek",
     "base_url": "https://api.deepseek.com",
     "api_key_env": "DEEPSEEK_API_KEY",
-    "model": "deepseek-v4-flash"
+    "model": "deepseek-v4-pro"
     }
   },
   "harness": {
@@ -48,7 +48,7 @@
   "model": {
     "base_url": "https://api.deepseek.com",
     "api_key_env": "DEEPSEEK_API_KEY",
-    "id": "deepseek-v4-flash"
+    "id": "deepseek-v4-pro"
   },
   "output_dir": "runs"
 }

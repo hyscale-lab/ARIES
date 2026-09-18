@@ -457,19 +457,29 @@ paragraph above rather than inheriting it.
 #### Per-call sizes are logged, and the output bound is not yet chosen
 
 `Exec` buffers a whole reply, which the SSH bridge never did: it wrote straight to the channel and
-therefore had no output ceiling at all. grpc-go caps *receive* at 4 MiB by default on both sides,
-which would reject a response after the command had already run — a new failure mode. Both sides
-now set the limit to `math.MaxInt32`, Go's unlimited idiom, matching the existing send default.
+accumulated nothing. Both designs end with the full output assembled — the agent's tool-call
+interface is request/response, so nothing consumes it incrementally either way — but they
+accumulate it in different processes, and that is what the bound is about.
 
-The truncation path is built and tested behind an `OutputLimit` option, with `truncated` reported in
-both the response and the record, so imposing a real bound later is a constant rather than new code.
-The number should come from measurement, not from this document: every call logs `stdin_bytes`,
-`stdout_bytes`, `stderr_bytes`, `truncated` and `duration_ms` at info level.
+Under SSH the bytes pile up in the harness container, which Docker already caps through
+`harness_resources`, and whose death the lifecycle handles as a harness failure. Under gRPC they
+additionally materialise inside ARIES, which is shared across tasks and unconstrained. If that
+process dies, `Stop` never runs: revocation is unconfirmed and the audit unsealed for **every**
+concurrent task, not only the one that produced the output. The bound therefore protects the
+fail-closed lifecycle, not throughput.
 
-**The risk being accepted meanwhile:** a reply is resident in memory twice on each side — the
-handler's buffer and the marshalled copy — so a large `stdout` costs roughly twice its size in the
-ARIES process, multiplied by task concurrency. That is the reason to measure early rather than to
-leave it unlimited indefinitely.
+**Two limits, and the order between them is the point.** `stdout` and `stderr` each truncate at
+16 MiB, reporting `truncated` in both the response and the record while the byte counts stay
+truthful — they report what the sandbox produced, not what was kept, so a truncated call still says
+what it would have needed. The transport cap sits at 64 MiB as a backstop that must never bind
+first: if it did, a command would run to completion and then have its reply rejected, which is
+exactly the failure grpc-go's 4 MiB receive default would have caused. A test pins that ordering.
+
+**The numbers are deliberately generous.** A Terminal-Bench run peaked at 5.6 KB of `stdout` across
+twenty calls, so 16 MiB is roughly three orders of magnitude of headroom. A high limit costs nothing
+until it fires — `parser.recvMsg` compares against a length already on the wire, with no
+preallocation — while a low one is not free, because truncation stops the agent seeing output it
+asked for and can change a task's outcome.
 
 **Compression is available and deliberately off.** grpc-go ships gzip but compresses nothing by
 default, and a server with no compressor configured only gzips a reply when the client gzipped the

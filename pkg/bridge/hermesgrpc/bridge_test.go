@@ -626,3 +626,21 @@ func TestGeneratedCertificatesDoNotExpire(t *testing.T) {
 		}
 	}
 }
+
+// The transport cap must never fire before truncation does. If it did, a
+// command would run to completion and then have its reply rejected — which is
+// precisely what grpc-go's 4 MiB receive default would have caused, and what
+// the truncation path exists to avoid. Both streams can be full at once, so
+// the backstop has to clear twice the retained bound plus framing.
+func TestTruncationBindsBeforeTheTransportCap(t *testing.T) {
+	worstCaseReply := 2 * defaultOutputLimit
+	if int64(maxMessageBytes) <= worstCaseReply {
+		t.Fatalf("maxMessageBytes = %d does not clear two truncated streams (%d)",
+			maxMessageBytes, worstCaseReply)
+	}
+	// Framing, the exit code and the reason are small, but the margin should be
+	// comfortable rather than exact.
+	if margin := int64(maxMessageBytes) - worstCaseReply; margin < defaultOutputLimit {
+		t.Fatalf("margin above the worst-case reply is only %d bytes", margin)
+	}
+}
