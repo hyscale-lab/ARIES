@@ -1,0 +1,40 @@
+{
+  "name": "openclaw-sweatlasqa-smoke1-deepseek",
+  "versions_file": "../configs/versions.json",
+  "overrides_file": "",
+  "execution": {
+    "concurrency": 1
+  },
+  "benchmark": {
+    "type": "sweatlasqa",
+    "root": ".cache/swe-atlas-qa",
+    "tasks": [
+      "task-6905333b74f22949d97ba998"
+    ],
+    "judge": {
+      "provider": "deepseek",
+      "base_url": "https://api.deepseek.com",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "model": "deepseek-v4-flash"
+    }
+  },
+  "harness": {
+    "type": "openclaw"
+  },
+  "sandbox": {
+    "type": "docker"
+  },
+  "bridge": {
+    "type": "openclaw-ssh"
+  },
+  "runtime": {
+    "backend": "deepseek",
+    "mode": "external"
+  },
+  "model": {
+    "base_url": "https://api.deepseek.com",
+    "api_key_env": "DEEPSEEK_API_KEY",
+    "id": "deepseek-v4-flash"
+  },
+  "output_dir": "runs"
+}

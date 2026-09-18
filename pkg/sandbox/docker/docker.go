@@ -879,6 +879,15 @@ func (s *Sandbox) download(ctx context.Context, source, destination string, maxB
 	}
 	result, err := s.client.CopyFromContainer(ctx, s.containerID, client.CopyFromContainerOptions{SourcePath: source})
 	if err != nil {
+		if cerrdefs.IsNotFound(err) {
+			// CopyFromContainer's 404 is ambiguous between a missing
+			// container and a missing source path. Confirm the container is
+			// still alive before treating this as a source-path absence;
+			// otherwise it's container loss, a genuine download failure.
+			if _, inspectErr := s.client.ContainerInspect(ctx, s.containerID, client.ContainerInspectOptions{}); inspectErr == nil {
+				return fmt.Errorf("download file from Docker task container: %w: %w", runner.ErrNotFound, err)
+			}
+		}
 		return fmt.Errorf("download file from Docker task container: %w", err)
 	}
 	defer result.Content.Close()
