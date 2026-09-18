@@ -7,7 +7,7 @@
   },
   "benchmark": {
     "type": "terminalbench2",
-    "root": ".cache/terminal-bench-2",
+    "root": ".cache/terminal-bench-2-1",
     "tasks": [
       "fix-git",
       "prove-plus-comm",

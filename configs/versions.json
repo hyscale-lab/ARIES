@@ -1,7 +1,7 @@
 {
   "terminalbench2": {
-    "repository_url": "https://github.com/harbor-framework/terminal-bench-2.git",
-    "revision": "2fd12b88aafdd04a52c298e3940bcb189f9766d6"
+    "repository_url": "https://github.com/harbor-framework/terminal-bench-2-1.git",
+    "revision": "7131e4375048a0e408a8fb404b5f499d726b695b"
   },
   "deepresearchbench": {
     "repository_url": "https://github.com/Ayanami0730/deep_research_bench.git",

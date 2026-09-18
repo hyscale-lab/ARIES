@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	DefaultRoot = ".cache/terminal-bench-2"
+	DefaultRoot = ".cache/terminal-bench-2-1"
 
 	testsPath       = "/tests"
 	verifierLogPath = "/logs/verifier"
@@ -226,7 +226,7 @@ func (b *Benchmark) PrepareSandbox(ctx context.Context, task core.Task, sandbox 
 }
 
 func loadTask(root, id string) (core.Task, taskDetails, error) {
-	taskDir := filepath.Join(root, id)
+	taskDir := taskDirectory(root, id)
 	info, err := os.Stat(taskDir)
 	if err != nil {
 		return core.Task{}, taskDetails{}, fmt.Errorf("open task directory: %w", err)
@@ -589,6 +589,18 @@ func safeIdentity(id string) bool {
 		return false
 	}
 	return true
+}
+
+// taskDirectory locates one task inside the pinned checkout. Terminal-Bench
+// 2.0 keeps every task directory at the repository root; Terminal-Bench 2.1
+// moves them under tasks/ beside dataset.toml. The checkout, not the task
+// directory, stays the root, so revision verification is unchanged.
+func taskDirectory(root, id string) string {
+	nested := filepath.Join(root, "tasks")
+	if info, err := os.Stat(nested); err == nil && info.IsDir() {
+		return filepath.Join(nested, id)
+	}
+	return filepath.Join(root, id)
 }
 
 // VerifyRevision confirms that root is the exact clean pinned checkout.
