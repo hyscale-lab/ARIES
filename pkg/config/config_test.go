@@ -573,14 +573,21 @@ func TestLoadRuntimeOverridesStrictSparseAndChecked(t *testing.T) {
 		}
 		return p
 	}
-	overrides, err := LoadRuntimeOverrides(write("valid.json", `{"harness_resources":{"cpu":1.25,"memory_mb":1024},"agent_sandbox_resources":{"cpu":2.5,"memory_mb":4096},"agent_timeout_seconds":12.5}`))
+	overrides, err := LoadRuntimeOverrides(write("valid.json", `{"harness_resources":{"cpu":1.25,"memory_mb":1024},"agent_sandbox_resources":{"cpu":2.5,"memory_mb":4096},"agent_timeout_seconds":12.5,"verifier_timeout_floor_seconds":900}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if overrides.AgentTimeout == nil || *overrides.AgentTimeout != 12500*time.Millisecond {
 		t.Fatalf("%#v", overrides)
 	}
-	for name, content := range map[string]string{"unknown": `{"future":1}`, "nested": `{"harness_resources":{"future":1}}`, "trailing": `{} {}`, "zero": `{"agent_sandbox_resources":{"cpu":0}}`, "overflow": `{"agent_timeout_seconds":1e999}`} {
+	if overrides.VerifierTimeoutFloor == nil || *overrides.VerifierTimeoutFloor != 15*time.Minute {
+		t.Fatalf("%#v", overrides)
+	}
+	sparse, err := LoadRuntimeOverrides(write("sparse.json", `{"agent_timeout_seconds":12.5}`))
+	if err != nil || sparse.VerifierTimeoutFloor != nil {
+		t.Fatalf("sparse = %#v, err = %v", sparse, err)
+	}
+	for name, content := range map[string]string{"unknown": `{"future":1}`, "nested": `{"harness_resources":{"future":1}}`, "trailing": `{} {}`, "zero": `{"agent_sandbox_resources":{"cpu":0}}`, "overflow": `{"agent_timeout_seconds":1e999}`, "floor zero": `{"verifier_timeout_floor_seconds":0}`, "floor negative": `{"verifier_timeout_floor_seconds":-1}`} {
 		if _, err := LoadRuntimeOverrides(write(name+".json", content)); err == nil {
 			t.Fatalf("accepted %s", name)
 		}

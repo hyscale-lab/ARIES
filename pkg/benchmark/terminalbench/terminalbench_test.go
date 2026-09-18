@@ -318,6 +318,39 @@ func TestLoadFixGitMapsGenericTaskAndKeepsVerifierPrivate(t *testing.T) {
 	}
 }
 
+func TestTasksRaiseVerifierTimeoutToFloorButNeverLowerIt(t *testing.T) {
+	root := writeArbitraryFixture(t) // verifier.timeout_sec = 360
+	for _, tc := range []struct {
+		name  string
+		floor time.Duration
+		want  time.Duration
+	}{
+		{"no floor keeps the task value", 0, 6 * time.Minute},
+		{"a floor above the task value raises it", 15 * time.Minute, 15 * time.Minute},
+		{"a floor below the task value leaves it", time.Minute, 6 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			benchmark, err := New(Options{Root: root, TaskIDs: []string{arbitraryTaskID}, OutputDir: t.TempDir(), Revision: fixtureGitRevision(root), VerifierTimeoutFloor: tc.floor})
+			if err != nil {
+				t.Fatal(err)
+			}
+			tasks, err := benchmark.Tasks(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tasks[0].Timeout != 750*time.Second {
+				t.Fatalf("agent timeout changed: %v", tasks[0].Timeout)
+			}
+			if got := benchmark.details[arbitraryTaskID].timeout; got != tc.want {
+				t.Fatalf("verifier timeout = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	if _, err := New(Options{Root: root, TaskIDs: []string{arbitraryTaskID}, OutputDir: t.TempDir(), Revision: fixtureGitRevision(root), VerifierTimeoutFloor: -time.Second}); err == nil {
+		t.Fatal("accepted a negative floor")
+	}
+}
+
 func TestLoadArbitraryTaskMapsGenericFieldsWithoutTaskSpecificRules(t *testing.T) {
 	root := writeArbitraryFixture(t)
 
@@ -1286,4 +1319,32 @@ func cloneBytesMap(source map[string][]byte) map[string][]byte {
 		clone[key] = append([]byte(nil), value...)
 	}
 	return clone
+}
+
+func TestLoadTaskReadsTheTerminalBench21TasksLayout(t *testing.T) {
+	// Terminal-Bench 2.1 keeps tasks under tasks/; 2.0 kept them at the root.
+	flat := writeArbitraryFixture(t)
+	root := t.TempDir()
+	if err := os.Rename(filepath.Join(flat, arbitraryTaskID), filepath.Join(root, "tasks", arbitraryTaskID)); err != nil {
+		if err := os.MkdirAll(filepath.Join(root, "tasks"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(filepath.Join(flat, arbitraryTaskID), filepath.Join(root, "tasks", arbitraryTaskID)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, filepath.Join(root, "dataset.toml"), "name = \"terminal-bench-2-1\"\n")
+	task, _, err := loadTask(root, arbitraryTaskID)
+	if err != nil {
+		t.Fatalf("loadTask under tasks/: %v", err)
+	}
+	if task.ID != arbitraryTaskID {
+		t.Fatalf("task id = %q", task.ID)
+	}
+	if got := taskDirectory(root, arbitraryTaskID); got != filepath.Join(root, "tasks", arbitraryTaskID) {
+		t.Fatalf("taskDirectory = %q", got)
+	}
+	if got := taskDirectory(flat, arbitraryTaskID); got != filepath.Join(flat, arbitraryTaskID) {
+		t.Fatalf("flat taskDirectory = %q", got)
+	}
 }

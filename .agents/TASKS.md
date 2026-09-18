@@ -1,5 +1,16 @@
 # ARIES Tasks
 
+## Verifier timeout floor
+
+- `verifier_timeout_floor_seconds` in the runtime overrides file raises a
+  Terminal-Bench task's verifier budget to at least that value and never lowers
+  one. The overfull-hbox task declares 360 s and its test script installs
+  packages first, so every arm scored TIMEOUT there regardless of the agent.
+- The floor rides `terminalbench.Options` from the wiring; the benchmark applies
+  it when it loads a task, so the agent deadline and the private verifier
+  material are untouched. Unit checks cover decode, rejection of non-positive
+  values, raising, and not lowering.
+
 ## PR #51 — Effective Hermes temperature
 
 - Confirmed the pinned one-shot ignores model YAML temperature. Route explicit

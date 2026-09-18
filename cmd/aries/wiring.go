@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/hyscale-lab/aries/internal/app"
 	runtimesglang "github.com/hyscale-lab/aries/internal/modelruntime/sglang"
@@ -135,7 +136,7 @@ func newBenchmark(cfg config.Config, outputRoot, logicalID, occurrenceID string,
 		if occurrenceID != logicalID {
 			executionIDs = []string{occurrenceID}
 		}
-		benchmark, err := terminalbench.New(terminalbench.Options{Root: cfg.Benchmark.Root, TaskIDs: []string{logicalID}, ExecutionTaskIDs: executionIDs, OutputDir: outputRoot, Revision: cfg.Versions.TerminalBench2.Revision})
+		benchmark, err := terminalbench.New(terminalbench.Options{Root: cfg.Benchmark.Root, TaskIDs: []string{logicalID}, ExecutionTaskIDs: executionIDs, OutputDir: outputRoot, Revision: cfg.Versions.TerminalBench2.Revision, VerifierTimeoutFloor: verifierTimeoutFloor(cfg)})
 		if err != nil {
 			return nil, fmt.Errorf("construct terminalbench2 benchmark: %w", err)
 		}
@@ -449,7 +450,7 @@ func loadPreparationTasks(ctx context.Context, cfg config.Config, taskIDs []stri
 		}
 		return tasks, nil
 	case "terminalbench2":
-		benchmark, err := terminalbench.New(terminalbench.Options{Root: cfg.Benchmark.Root, TaskIDs: taskIDs, OutputDir: cfg.OutputDir, Revision: cfg.Versions.TerminalBench2.Revision})
+		benchmark, err := terminalbench.New(terminalbench.Options{Root: cfg.Benchmark.Root, TaskIDs: taskIDs, OutputDir: cfg.OutputDir, Revision: cfg.Versions.TerminalBench2.Revision, VerifierTimeoutFloor: verifierTimeoutFloor(cfg)})
 		if err != nil {
 			return nil, fmt.Errorf("validate terminalbench2 profile: %w", err)
 		}
@@ -480,4 +481,12 @@ func hermesCompaction(block *config.HarnessCompactionConfig) *hermesharness.Comp
 		return nil
 	}
 	return &hermesharness.CompactionSettings{Enabled: block.Enabled, ThresholdTokens: block.ThresholdTokens}
+}
+
+// verifierTimeoutFloor is the overrides file's verifier floor, or zero.
+func verifierTimeoutFloor(cfg config.Config) time.Duration {
+	if cfg.Overrides.VerifierTimeoutFloor == nil {
+		return 0
+	}
+	return *cfg.Overrides.VerifierTimeoutFloor
 }

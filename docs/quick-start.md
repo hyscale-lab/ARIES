@@ -41,7 +41,7 @@ make build
 - `profiles/hermes-tb2-fix-git-deepseek.json`
 
 Running a profile automatically loads `configs/versions.json`, creates or
-verifies the pinned Terminal-Bench checkout at `.cache/terminal-bench-2`, reads
+verifies the pinned Terminal-Bench checkout at `.cache/terminal-bench-2-1`, reads
 each selected task's explicit Docker image tag from its `task.toml`, and pulls
 only the configured harness image plus those selected images through the
 Docker Go SDK. Preparation
@@ -60,6 +60,10 @@ respective containers and may specify different CPU and memory limits. An
 omitted harness dimension stays unlimited; an omitted sandbox dimension keeps
 the value in the task's `task.toml`. Neither block inherits from the other.
 The independent `agent_timeout_seconds` field changes only the agent deadline.
+The independent `verifier_timeout_floor_seconds` field raises a Terminal-Bench
+task's verifier budget to at least that many seconds and never lowers one; some
+task test scripts install packages before their tests start and exhaust a short
+declared budget on the install alone.
 Every checked-in profile explicitly contains `overrides_file`; the one-task
 profile uses `""`, which disables override loading without opening a file.
 Profiles and nonempty referenced override files reject unknown fields and

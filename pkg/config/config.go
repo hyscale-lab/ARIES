@@ -46,6 +46,13 @@ type ExecutionConfig struct {
 	Concurrency  int           `json:"concurrency"`
 	LoopDuration string        `json:"loop_duration,omitempty"`
 	Loop         time.Duration `json:"-"`
+	// ArrivalsFile and ArrivalRatePerMin turn the run into an open loop: each
+	// task starts at the offset the trace gives it, scaled from the trace's
+	// base rate to ArrivalRatePerMin, instead of as soon as a worker is free.
+	// Concurrency still caps the tasks in flight; set it at or above the task
+	// count so the schedule, not the pool, decides when a task starts.
+	ArrivalsFile      string  `json:"arrivals_file,omitempty"`
+	ArrivalRatePerMin float64 `json:"arrival_rate_per_min,omitempty"`
 }
 
 // RuntimeConfig selects the model service. Mode is the ownership distinction:
@@ -80,6 +87,10 @@ type RuntimeOverrides struct {
 	AgentSandboxResources ResourceOverrides `json:"agent_sandbox_resources,omitempty"`
 	AgentTimeoutSeconds   *float64          `json:"agent_timeout_seconds,omitempty"`
 	AgentTimeout          *time.Duration    `json:"-"`
+	// VerifierTimeoutFloorSeconds raises a Terminal-Bench task's verifier
+	// budget to at least this value. It never lowers a declared budget.
+	VerifierTimeoutFloorSeconds *float64       `json:"verifier_timeout_floor_seconds,omitempty"`
+	VerifierTimeoutFloor        *time.Duration `json:"-"`
 }
 
 // ResourceOverrides changes only the named container resource dimensions.
@@ -486,15 +497,27 @@ func (o *RuntimeOverrides) validate() error {
 	if err := validateResources("agent_sandbox_resources", o.AgentSandboxResources); err != nil {
 		return err
 	}
-	if o.AgentTimeoutSeconds != nil {
-		scaled := *o.AgentTimeoutSeconds * float64(time.Second)
-		if *o.AgentTimeoutSeconds <= 0 || math.IsNaN(*o.AgentTimeoutSeconds) || math.IsInf(*o.AgentTimeoutSeconds, 0) || scaled >= math.Exp2(63) {
-			return errors.New("agent_timeout_seconds must be finite, positive, and convert to nanoseconds below 2^63")
-		}
-		duration := time.Duration(scaled)
-		o.AgentTimeout = &duration
+	var err error
+	if o.AgentTimeout, err = secondsDuration("agent_timeout_seconds", o.AgentTimeoutSeconds); err != nil {
+		return err
+	}
+	if o.VerifierTimeoutFloor, err = secondsDuration("verifier_timeout_floor_seconds", o.VerifierTimeoutFloorSeconds); err != nil {
+		return err
 	}
 	return nil
+}
+
+// secondsDuration converts an optional positive seconds value into a duration.
+func secondsDuration(name string, seconds *float64) (*time.Duration, error) {
+	if seconds == nil {
+		return nil, nil
+	}
+	scaled := *seconds * float64(time.Second)
+	if *seconds <= 0 || math.IsNaN(*seconds) || math.IsInf(*seconds, 0) || scaled >= math.Exp2(63) {
+		return nil, fmt.Errorf("%s must be finite, positive, and convert to nanoseconds below 2^63", name)
+	}
+	duration := time.Duration(scaled)
+	return &duration, nil
 }
 
 func validateResources(name string, resources ResourceOverrides) error {
@@ -578,6 +601,17 @@ func (c *Config) validate() error {
 			return errors.New("execution.loop_duration must be a positive Go duration")
 		}
 		c.Execution.Loop = loop
+	}
+	if (c.Execution.ArrivalsFile != "") != (c.Execution.ArrivalRatePerMin != 0) {
+		return errors.New("execution.arrivals_file and execution.arrival_rate_per_min must be set together")
+	}
+	if c.Execution.ArrivalsFile != "" {
+		if !(c.Execution.ArrivalRatePerMin > 0) || math.IsInf(c.Execution.ArrivalRatePerMin, 0) {
+			return errors.New("execution.arrival_rate_per_min must be finite and positive")
+		}
+		if c.Execution.LoopDuration != "" {
+			return errors.New("execution.arrivals_file cannot be combined with execution.loop_duration")
+		}
 	}
 	checks := []struct {
 		name  string
