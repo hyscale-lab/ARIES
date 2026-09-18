@@ -49,3 +49,12 @@ DEEPSEEK_API.key
 
 # Deep Research Sandbox Dockerfile
 images/**
+
+# Research notes behind docs/design/grpc-bridge.md. Kept locally: they were
+# written to reach the design decisions, not to be maintained with the code.
+docs/design/code-structure.md
+docs/design/containers.md
+docs/design/hermes-bridge-inventory.md
+docs/design/hermes-integration.md
+docs/design/ssh-connection-lifecycle.md
+docs/research/
