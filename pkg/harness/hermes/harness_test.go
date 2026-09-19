@@ -835,3 +835,21 @@ func TestRunOutcomeRecordsTerminalState(t *testing.T) {
 		})
 	}
 }
+
+func TestManager_CallTool_Guards(t *testing.T) {
+	manager := &Manager{}
+	ctx := context.Background()
+
+	// Inactive harness guard
+	_, err := manager.CallTool(ctx, "test-server", "some_tool", nil)
+	if err == nil || !strings.Contains(err.Error(), "Hermes harness is not active") {
+		t.Fatalf("expected harness inactive error, got: %v", err)
+	}
+
+	// Server not found guard
+	manager.active = &session{}
+	_, err = manager.CallTool(ctx, "test-server", "some_tool", nil)
+	if err == nil || !strings.Contains(err.Error(), "MCP server \"test-server\" not found") {
+		t.Fatalf("expected server not found error, got: %v", err)
+	}
+}

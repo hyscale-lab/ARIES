@@ -12,6 +12,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/hyscale-lab/aries/internal/harness"
 	"github.com/hyscale-lab/aries/pkg/core"
 )
 
@@ -78,6 +79,7 @@ type renderSettings struct {
 	maxConcurrentSubagents int
 	compaction             *CompactionSettings
 	extraBody              []byte
+	mcpServers             []harness.MCPServerConfig
 }
 
 // renderConfig produces the Hermes `config.yaml`. The credential is written as
@@ -230,6 +232,23 @@ func renderConfig(model core.ModelConfig, settings renderSettings) ([]byte, erro
 		output.WriteString("  search_backend: \"searxng\"\n")
 		if settings.extractEnabled {
 			output.WriteString("  extract_backend: \"tavily\"\n")
+		}
+	}
+	if len(settings.mcpServers) > 0 {
+		output.WriteString("\nmcp_servers:\n")
+		for _, server := range settings.mcpServers {
+			output.WriteString("  " + server.Name + ":\n")
+			if server.URL != "" {
+				output.WriteString("    url: " + yamlString(server.URL) + "\n")
+			} else if server.Command != "" {
+				output.WriteString("    command: " + yamlString(server.Command) + "\n")
+				if len(server.Args) > 0 {
+					output.WriteString("    args:\n")
+					for _, arg := range server.Args {
+						output.WriteString("      - " + yamlString(arg) + "\n")
+					}
+				}
+			}
 		}
 	}
 	return output.Bytes(), nil

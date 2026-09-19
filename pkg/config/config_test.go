@@ -801,3 +801,58 @@ func hermesContextConfig() string {
 		`"model":{"id":"fake","base_url":"http://vllm.local:8000/v1","api_key_env":"VLLM_API_KEY","context_length":262144,"max_tokens":32768,"temperature":1.0}`, 1)
 	return hermes
 }
+
+func TestHarnessMCPServerConfigValidation(t *testing.T) {
+	// Valid MCP configuration for openclaw
+	validOpenClaw := strings.Replace(validConfig, `"harness":{"type":"openclaw"}`,
+		`"harness":{"type":"openclaw","mcp_servers":[{"name":"fetch","command":"uvx","args":["mcp-server-fetch"]},{"name":"weather","url":"https://weather.example.com/sse"}]}`, 1)
+	cfg, err := Decode(strings.NewReader(validOpenClaw))
+	if err != nil {
+		t.Fatalf("unexpected decode error: %v", err)
+	}
+	if len(cfg.Harness.MCPServers) != 2 {
+		t.Fatalf("expected 2 MCP servers, got %d", len(cfg.Harness.MCPServers))
+	}
+	if cfg.Harness.MCPServers[0].Name != "fetch" || cfg.Harness.MCPServers[0].Command != "uvx" {
+		t.Fatalf("mcp server 0 mismatch: %#v", cfg.Harness.MCPServers[0])
+	}
+	if cfg.Harness.MCPServers[1].Name != "weather" || cfg.Harness.MCPServers[1].URL != "https://weather.example.com/sse" {
+		t.Fatalf("mcp server 1 mismatch: %#v", cfg.Harness.MCPServers[1])
+	}
+
+	// Valid MCP configuration for hermes
+	validHermes := strings.Replace(hermesContextConfig(), `"harness":{"type":"hermes"`,
+		`"harness":{"type":"hermes","mcp_servers":[{"name":"custom","command":"./mcp-tool"}]`, 1)
+	hCfg, err := Decode(strings.NewReader(validHermes))
+	if err != nil {
+		t.Fatalf("unexpected decode error for hermes: %v", err)
+	}
+	if len(hCfg.Harness.MCPServers) != 1 || hCfg.Harness.MCPServers[0].Name != "custom" {
+		t.Fatalf("hermes mcp servers mismatch: %#v", hCfg.Harness.MCPServers)
+	}
+
+	// Invalid cases
+	invalidCases := map[string]string{
+		"unsupported harness": strings.Replace(validConfig, `"harness":{"type":"openclaw"}`,
+			`"harness":{"type":"unknown","mcp_servers":[{"name":"s1","command":"cmd"}]}`, 1),
+		"duplicate server name": strings.Replace(validConfig, `"harness":{"type":"openclaw"}`,
+			`"harness":{"type":"openclaw","mcp_servers":[{"name":"dup","command":"c1"},{"name":"dup","command":"c2"}]}`, 1),
+		"empty server name": strings.Replace(validConfig, `"harness":{"type":"openclaw"}`,
+			`"harness":{"type":"openclaw","mcp_servers":[{"name":"","command":"c1"}]}`, 1),
+		"invalid server name characters": strings.Replace(validConfig, `"harness":{"type":"openclaw"}`,
+			`"harness":{"type":"openclaw","mcp_servers":[{"name":"server with space","command":"c1"}]}`, 1),
+		"neither command nor url": strings.Replace(validConfig, `"harness":{"type":"openclaw"}`,
+			`"harness":{"type":"openclaw","mcp_servers":[{"name":"s1"}]}`, 1),
+		"both command and url": strings.Replace(validConfig, `"harness":{"type":"openclaw"}`,
+			`"harness":{"type":"openclaw","mcp_servers":[{"name":"s1","command":"c1","url":"https://example.com"}]}`, 1),
+		"relative url": strings.Replace(validConfig, `"harness":{"type":"openclaw"}`,
+			`"harness":{"type":"openclaw","mcp_servers":[{"name":"s1","url":"/local/path"}]}`, 1),
+	}
+
+	for name, text := range invalidCases {
+		if _, err := Decode(strings.NewReader(text)); err == nil {
+			t.Fatalf("%s: expected rejection, but got nil error", name)
+		}
+	}
+}
+

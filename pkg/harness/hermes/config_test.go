@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hyscale-lab/aries/internal/harness"
 	"github.com/hyscale-lab/aries/pkg/core"
 )
 
@@ -395,5 +396,44 @@ func TestRenderConfigMapsOpenAICompatibleBackendsToCustomProvider(t *testing.T) 
 	}
 	if !strings.Contains(string(rendered), `provider: "deepseek"`) || hermesProvider("deepseek") != "deepseek" {
 		t.Fatal("deepseek provider was rewritten")
+	}
+}
+
+func TestRenderConfig_MCPServers(t *testing.T) {
+	servers := []harness.MCPServerConfig{
+		{
+			Name:    "filesystem",
+			Command: "npx",
+			Args:    []string{"-y", "@modelcontextprotocol/server-filesystem", "/workspace"},
+		},
+		{
+			Name: "remote-sse",
+			URL:  "https://mcp.example.com/sse",
+		},
+	}
+
+	rendered, err := renderConfig(validModel(), renderSettings{
+		maxTurns:   10,
+		mcpServers: servers,
+	})
+	if err != nil {
+		t.Fatalf("renderConfig failed: %v", err)
+	}
+
+	text := string(rendered)
+	if strings.Contains(text, "custom_tools") {
+		t.Fatalf("rendered config contains invalid custom_tools field:\n%s", text)
+	}
+	if !strings.Contains(text, "mcp_servers:") {
+		t.Fatalf("rendered config missing mcp_servers block:\n%s", text)
+	}
+	if !strings.Contains(text, "filesystem:") || !strings.Contains(text, `command: "npx"`) {
+		t.Fatalf("rendered config missing filesystem command:\n%s", text)
+	}
+	if !strings.Contains(text, `- "-y"`) || !strings.Contains(text, `- "@modelcontextprotocol/server-filesystem"`) {
+		t.Fatalf("rendered config missing filesystem arguments:\n%s", text)
+	}
+	if !strings.Contains(text, "remote-sse:") || !strings.Contains(text, `url: "https://mcp.example.com/sse"`) {
+		t.Fatalf("rendered config missing remote-sse url:\n%s", text)
 	}
 }

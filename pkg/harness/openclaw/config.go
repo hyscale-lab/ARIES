@@ -8,8 +8,10 @@ import (
 	"net"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
 
+	"github.com/hyscale-lab/aries/internal/harness"
 	"github.com/hyscale-lab/aries/pkg/core"
 )
 
@@ -41,6 +43,25 @@ type openClawConfig struct {
 	Agents  agentsConfig   `json:"agents"`
 	Tools   toolPolicy     `json:"tools"`
 	Plugins *pluginsConfig `json:"plugins,omitempty"`
+	MCP     *openClawMCP   `json:"mcp,omitempty"`
+}
+
+type openClawMCP struct {
+	Servers map[string]openClawMCPServer `json:"servers"`
+}
+
+type openClawMCPServer struct {
+	Command   string            `json:"command,omitempty"`
+	Args      []string          `json:"args,omitempty"`
+	URL       string            `json:"url,omitempty"`
+	Transport string            `json:"transport,omitempty"`
+	Env       map[string]string `json:"env,omitempty"`
+}
+
+// MCPOptions configures MCP servers and sandbox-allowlisted tools for OpenClaw.
+type MCPOptions struct {
+	Servers   []harness.MCPServerConfig
+	ToolNames []string
 }
 
 type toolPolicy struct {
@@ -160,7 +181,7 @@ type sshConfig struct {
 	KnownHostsFile        string `json:"knownHostsFile"`
 }
 
-func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, webSearchEnabled, extractEnabled, subagentsEnabled bool, maxConcurrentSubagents int) ([]byte, error) {
+func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, webSearchEnabled, extractEnabled, subagentsEnabled bool, maxConcurrentSubagents int, mcp ...MCPOptions) ([]byte, error) {
 	if err := validateModel(model); err != nil {
 		return nil, err
 	}
@@ -211,9 +232,10 @@ func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, webSearchE
 	if subagentsEnabled && maxConcurrentSubagents > 0 {
 		configuration.Agents.Defaults.Subagents = &subagentsConfig{MaxConcurrent: maxConcurrentSubagents}
 	}
+	var alsoAllow []string
 	if webSearchEnabled {
 		configuration.Tools.Web = &webToolsConfig{Search: &webSearchToolConfig{Provider: "searxng"}}
-		alsoAllow := []string{"web_search", "web_fetch"}
+		alsoAllow = append(alsoAllow, "web_search", "web_fetch")
 		entries := map[string]pluginEntry{
 			"searxng": {Config: &pluginConfigBlock{WebSearch: webSearchPluginConfig{BaseURL: searxngBaseURL}}},
 		}
@@ -225,8 +247,36 @@ func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, webSearchE
 			alsoAllow = append(alsoAllow, "tavily_extract")
 			entries["tavily"] = pluginEntry{Enabled: true}
 		}
-		configuration.Tools.Sandbox = &sandboxToolsGate{Tools: sandboxToolsAllowList{AlsoAllow: alsoAllow}}
 		configuration.Plugins = &pluginsConfig{Entries: entries}
+	}
+	if len(mcp) > 0 {
+		opts := mcp[0]
+		if len(opts.Servers) > 0 {
+			servers := make(map[string]openClawMCPServer, len(opts.Servers))
+			for _, server := range opts.Servers {
+				entry := openClawMCPServer{
+					Command: server.Command,
+					Args:    server.Args,
+					URL:     server.URL,
+					Env:     server.Env,
+				}
+				if server.Command != "" {
+					entry.Transport = "stdio"
+				} else if server.URL != "" {
+					entry.Transport = "sse"
+				}
+				servers[server.Name] = entry
+			}
+			configuration.MCP = &openClawMCP{Servers: servers}
+		}
+		for _, toolName := range opts.ToolNames {
+			if strings.TrimSpace(toolName) != "" && !slices.Contains(alsoAllow, toolName) {
+				alsoAllow = append(alsoAllow, toolName)
+			}
+		}
+	}
+	if len(alsoAllow) > 0 {
+		configuration.Tools.Sandbox = &sandboxToolsGate{Tools: sandboxToolsAllowList{AlsoAllow: alsoAllow}}
 	}
 	var output bytes.Buffer
 	encoder := json.NewEncoder(&output)

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hyscale-lab/aries/internal/harness"
 	"github.com/hyscale-lab/aries/pkg/core"
 )
 
@@ -332,5 +333,56 @@ func TestRenderConfigKeysOpenAICompatibleProviderAsAries(t *testing.T) {
 	model.BaseURL = "http://vllm.local:8000"
 	if _, err := renderConfig(model, testEndpoint(), false, false, false, 0); err == nil {
 		t.Fatal("accepted an openai base URL without /v1")
+	}
+}
+
+func TestRenderConfig_MCPServersAndSandboxAllowlist(t *testing.T) {
+	servers := []harness.MCPServerConfig{
+		{
+			Name:    "sqlite-server",
+			Command: "mcp-server-sqlite",
+			Args:    []string{"--db-path", "/tmp/test.db"},
+			Env:     map[string]string{"DEBUG": "1"},
+		},
+		{
+			Name: "remote-tools",
+			URL:  "https://mcp.example.com/sse",
+		},
+	}
+	toolNames := []string{"query_db", "fetch_remote"}
+
+	content, err := renderConfig(testModel(), testEndpoint(), false, false, false, 0, MCPOptions{
+		Servers:   servers,
+		ToolNames: toolNames,
+	})
+	if err != nil {
+		t.Fatalf("renderConfig failed: %v", err)
+	}
+
+	var configuration openClawConfig
+	if err := json.Unmarshal(content, &configuration); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+
+	if configuration.MCP == nil || len(configuration.MCP.Servers) != 2 {
+		t.Fatalf("mcp.servers = %#v, want 2 servers", configuration.MCP)
+	}
+
+	sqlite, ok := configuration.MCP.Servers["sqlite-server"]
+	if !ok || sqlite.Command != "mcp-server-sqlite" || sqlite.Transport != "stdio" || len(sqlite.Args) != 2 || sqlite.Env["DEBUG"] != "1" {
+		t.Fatalf("sqlite server config = %#v", sqlite)
+	}
+
+	remote, ok := configuration.MCP.Servers["remote-tools"]
+	if !ok || remote.URL != "https://mcp.example.com/sse" || remote.Transport != "sse" {
+		t.Fatalf("remote server config = %#v", remote)
+	}
+
+	if configuration.Tools.Sandbox == nil {
+		t.Fatal("tools.sandbox must not be nil when MCP toolNames are provided")
+	}
+	alsoAllow := configuration.Tools.Sandbox.Tools.AlsoAllow
+	if len(alsoAllow) != 2 || alsoAllow[0] != "query_db" || alsoAllow[1] != "fetch_remote" {
+		t.Fatalf("tools.sandbox.tools.alsoAllow = %v, want [query_db, fetch_remote]", alsoAllow)
 	}
 }

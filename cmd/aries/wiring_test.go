@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/hyscale-lab/aries/internal/app"
+	"github.com/hyscale-lab/aries/internal/harness"
 	runtimesglang "github.com/hyscale-lab/aries/internal/modelruntime/sglang"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
@@ -369,3 +370,49 @@ func TestExternalOpenAIPreparationReturnsNilRuntime(t *testing.T) {
 		t.Fatal("managed OpenAI-compatible runtime was accepted")
 	}
 }
+
+func TestNewHarness_WiresMCPServers(t *testing.T) {
+	servers := []harness.MCPServerConfig{
+		{Name: "fetch", Command: "uvx", Args: []string{"mcp-server-fetch"}},
+		{Name: "weather", URL: "https://weather.example.com/sse"},
+	}
+	outputDir := t.TempDir()
+	lookup := func(string) ([]byte, bool) { return []byte("test-key"), true }
+
+	for _, harnessType := range []string{"openclaw", "hermes"} {
+		t.Run(harnessType, func(t *testing.T) {
+			cfg := config.Config{
+				Harness: config.HarnessConfig{
+					Type:       harnessType,
+					MCPServers: servers,
+				},
+				Versions: config.Versions{
+					OpenClaw: config.OpenClawVersions{Image: "ghcr.io/openclaw/openclaw:2026.7.1"},
+					Hermes:   config.HermesVersions{Image: "docker.io/nousresearch/hermes-agent:v2026.8.31"},
+				},
+			}
+			instance, err := newHarness(cfg, outputDir, lookup, nil)
+			if err != nil {
+				t.Fatalf("newHarness(%s) error = %v", harnessType, err)
+			}
+			defer instance.Close()
+
+			inspector, ok := instance.Harness.(interface {
+				MCPServers() []harness.MCPServerConfig
+			})
+			if !ok {
+				t.Fatalf("harness %T does not implement MCPServers()", instance.Harness)
+			}
+			gotServers := inspector.MCPServers()
+			if len(gotServers) != len(servers) {
+				t.Fatalf("len(MCPServers) = %d, want %d", len(gotServers), len(servers))
+			}
+			for i := range servers {
+				if gotServers[i].Name != servers[i].Name || gotServers[i].Command != servers[i].Command || gotServers[i].URL != servers[i].URL {
+					t.Fatalf("server %d mismatch: got %#v, want %#v", i, gotServers[i], servers[i])
+				}
+			}
+		})
+	}
+}
+
