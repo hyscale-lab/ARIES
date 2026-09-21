@@ -397,3 +397,22 @@ func TestRenderConfigMapsOpenAICompatibleBackendsToCustomProvider(t *testing.T) 
 		t.Fatal("deepseek provider was rewritten")
 	}
 }
+
+// The terminal cwd is the sandbox's workdir when the runner supplies one, so
+// the per-command `builtin cd -- <cwd> || exit 126` Hermes emits succeeds in
+// the task container.
+func TestContainerEnvironmentUsesSandboxWorkdir(t *testing.T) {
+	environment, err := containerEnvironment(validEndpoint(), "/app", 180, false, "run-1", "fix-git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, entry := range environment {
+		if entry == "TERMINAL_CWD=/app" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("TERMINAL_CWD=/app missing from %q", environment)
+	}
+}

@@ -278,7 +278,11 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	if err != nil {
 		return err
 	}
-	environment, err := containerEnvironment(request.Endpoint, workspaceRoot, manager.terminalTimeout, manager.webSearchEnabled, request.RunID, request.TaskID)
+	terminalWorkdir := request.SandboxWorkdir
+	if terminalWorkdir == "" {
+		terminalWorkdir = workspaceRoot
+	}
+	environment, err := containerEnvironment(request.Endpoint, terminalWorkdir, manager.terminalTimeout, manager.webSearchEnabled, request.RunID, request.TaskID)
 	if err != nil {
 		return err
 	}

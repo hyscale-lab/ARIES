@@ -227,14 +227,15 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 	result.ToolLogPaths = append([]string(nil), endpoint.LogPaths...)
 
 	err = r.harness.Start(ctx, core.HarnessRequest{
-		RunID:     r.runID,
-		TaskID:    task.ID,
-		Endpoint:  endpoint,
-		Model:     r.model,
-		Timeout:   harnessTimeout,
-		CPU:       harnessCPU,
-		MemoryMB:  harnessMemory,
-		OutputDir: r.outputDir,
+		RunID:          r.runID,
+		TaskID:         task.ID,
+		Endpoint:       endpoint,
+		Model:          r.model,
+		Timeout:        harnessTimeout,
+		CPU:            harnessCPU,
+		MemoryMB:       harnessMemory,
+		OutputDir:      r.outputDir,
+		SandboxWorkdir: sandboxEnvironment.Workdir,
 	})
 	// Start may fail after allocating task-local resources. Stop is idempotent,
 	// so every Start attempt must be followed by a positive stop confirmation

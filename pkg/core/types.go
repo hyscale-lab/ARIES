@@ -121,6 +121,11 @@ type HarnessRequest struct {
 	CPU       *float64      `json:"cpu,omitempty"`
 	MemoryMB  *int          `json:"memory_mb,omitempty"`
 	OutputDir string        `json:"output_dir"`
+	// SandboxWorkdir is the task container's working directory, the path the
+	// bridge runs every command in. A harness whose terminal tool enters a
+	// directory of its own choosing before each command must be told this
+	// one, since no other real path exists in a task image.
+	SandboxWorkdir string `json:"sandbox_workdir,omitempty"`
 }
 
 const (

@@ -287,12 +287,16 @@ func yamlFloat(value float64) string {
 // environment, so a profile's extra_body can carry a per-task value, such as
 // a per-task tag, without ARIES interpreting the block.
 //
-// TERMINAL_CWD is an ARIES-owned path that deliberately does not exist in any
-// task image. The bridge is authoritative for the working directory: it runs
-// every command in the sandbox's own workdir. Hermes opens its session with
-// `cd <TERMINAL_CWD> 2>/dev/null || true` followed by `pwd -P`, so a path it
-// cannot enter makes it adopt the workdir the bridge chose. Naming a real
-// sandbox path here is impossible in any case — the harness never learns it.
+// TERMINAL_CWD is the task container's own workdir (core.HarnessRequest
+// .SandboxWorkdir), the directory the bridge runs every command in. Earlier
+// this named an ARIES-owned path absent from every task image, relying on
+// Hermes opening its session with `cd <TERMINAL_CWD> 2>/dev/null || true` and
+// adopting the bridge's workdir. Hermes v0.21 also prefixes individual
+// commands with `builtin cd -- <cwd> || exit 126`, so a path the sandbox
+// lacks fails the agent's commands with exit 126 ("cd: /run/aries/workspace:
+// No such file or directory" in the Qwen3.8 goodput runs of 2026-09-18).
+// The Hermes container's staged workspace stays the fallback for callers
+// that do not know the sandbox workdir.
 func containerEnvironment(endpoint core.ToolEndpoint, workdir string, terminalTimeout int, webSearchEnabled bool, runID, taskID string) ([]string, error) {
 	if err := validateEndpoint(endpoint); err != nil {
 		return nil, err
