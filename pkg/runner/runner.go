@@ -259,21 +259,23 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		}
 	}
 
+	// Each confirmation gets the whole cleanup budget. Stopping the harness
+	// and revoking the bridge both wait on the Engine, and a harness stop that
+	// spent a shared deadline left the bridge's exec terminations no time to
+	// be confirmed.
 	isolationErrors := make([]error, 0, 2)
-	isolationCtx, cancelIsolation := context.WithTimeout(context.WithoutCancel(ctx), r.cleanupTimeout)
-	if err := r.harness.Stop(isolationCtx); err != nil {
+	if err := withCleanupDeadline(r.harness.Stop); err != nil {
 		isolationErrors = append(isolationErrors, fmt.Errorf("confirm harness stopped: %w", err))
 	} else {
 		harnessActive = false
 		result.Isolation.HarnessStopped = true
 	}
-	if err := r.bridge.Stop(isolationCtx); err != nil {
+	if err := withCleanupDeadline(r.bridge.Stop); err != nil {
 		isolationErrors = append(isolationErrors, fmt.Errorf("confirm bridge revoked: %w", err))
 	} else {
 		bridgeActive = false
 		result.Isolation.BridgeRevoked = true
 	}
-	cancelIsolation()
 
 	if len(isolationErrors) != 0 {
 		isolationErr := errors.Join(isolationErrors...)

@@ -1039,3 +1039,37 @@ func readArchive(t *testing.T, content []byte) (*tar.Header, []byte) {
 	}
 	return header, payload
 }
+
+// The termination budget is its own option: a short one fails confirmation
+// promptly even when the container cleanup budget is long.
+func TestExecTerminationUsesItsOwnBudget(t *testing.T) {
+	fake := &fakeClient{execRunning: true, leaveExecAlive: true}
+	fake.attach = func(conn net.Conn) { _, _ = io.Copy(io.Discard, conn) }
+	sandbox := startSandbox(t, fake)
+	sandbox.cleanupTimeout = 30 * time.Second
+	sandbox.terminateTimeout = 80 * time.Millisecond
+	defer sandbox.stop(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	started := time.Now()
+	_, err := sandbox.ExecStream(ctx, core.Command{Path: "/bin/sleep", Args: []string{"60"}}, nil, io.Discard, io.Discard)
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "confirm terminated Docker exec process-group exit") {
+		t.Fatalf("ExecStream() error = %v", err)
+	}
+	if !strings.Contains(err.Error(), "still present") {
+		t.Fatalf("ExecStream() error = %v, want the surviving processes named", err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("termination took %v, want the 80 ms budget, not the 30 s cleanup budget", elapsed)
+	}
+}
+
+func TestPollBackoffDoublesToCap(t *testing.T) {
+	poll := newPollBackoff(150 * time.Millisecond)
+	want := []time.Duration{20 * time.Millisecond, 40 * time.Millisecond, 80 * time.Millisecond, 150 * time.Millisecond, 150 * time.Millisecond}
+	for i, w := range want {
+		if got := poll.next(); got != w {
+			t.Fatalf("poll %d = %v, want %v", i, got, w)
+		}
+	}
+}

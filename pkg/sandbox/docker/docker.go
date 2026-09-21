@@ -33,17 +33,31 @@ import (
 const (
 	defaultDockerSocket   = "/var/run/docker.sock"
 	defaultCleanupTimeout = 30 * time.Second
-	maxExecInput          = 16 << 20
-	maxExecOutput         = 16 << 20
-	maxConfiguredOutput   = 1 << 30
-	networkAlias          = "task-sandbox"
-	execPollInterval      = 20 * time.Millisecond
-	execDrainTimeout      = 200 * time.Millisecond
-	execTrailerKeep       = 128
-	execStatePrefix       = "/tmp/.aries-exec-"
-	rootExecUser          = "0:0"
-	execShell             = `state=$1; token=$2; shift 2; umask 077; trap 'rm -f "$state" "$state.tmp"' EXIT; exec 3<&0; setsid "$@" <&3 & pid=$!; printf '%s\n' "$pid" >"$state.tmp" || exit 125; mv "$state.tmp" "$state" || exit 125; wait "$pid"; status=$?; rm -f "$state" "$state.tmp"; trap - EXIT; printf '\036ARIES_EXEC_EXIT_%s=%d\037' "$token" "$status" >&2; exit "$status"`
-	cancelExecShell       = `state=$1; attempts=0; while [ ! -r "$state" ]; do attempts=$((attempts+1)); [ "$attempts" -ge 200 ] && exit 70; sleep 0.01; done; IFS= read -r pgid <"$state" || exit 71; case "$pgid" in ''|*[!0-9]*|0|1) exit 71;; esac; kill -TERM "-$pgid" 2>/dev/null || :; sleep 0.2; kill -KILL "-$pgid" 2>/dev/null || :; rm -f "$state"; exit 0`
+	// defaultTerminateTimeout bounds the targeted termination of one exec's
+	// process group after its context is canceled: the kill helper plus the
+	// polls that confirm the group is gone. Separate from the container
+	// cleanup budget because it runs while the run is being torn down, when
+	// the Engine is busiest (Qwen3.8 goodput runs, 2026-09-18: 7 of 712 task
+	// runs lost their evaluation to a 30 s confirmation that ran out).
+	defaultTerminateTimeout = 90 * time.Second
+	maxExecInput            = 16 << 20
+	maxExecOutput           = 16 << 20
+	maxConfiguredOutput     = 1 << 30
+	networkAlias            = "task-sandbox"
+	execPollInterval        = 20 * time.Millisecond
+	// Polls back off from execPollInterval, doubling to these caps. At a
+	// fixed 20 ms every running command and every termination in progress
+	// cost the Engine 50 requests per second each, and a node tearing down
+	// several tasks at once was making the Engine slow enough to miss its
+	// own deadlines.
+	execExitPollMax  = 250 * time.Millisecond
+	terminatePollMax = 500 * time.Millisecond
+	execDrainTimeout = 200 * time.Millisecond
+	execTrailerKeep  = 128
+	execStatePrefix  = "/tmp/.aries-exec-"
+	rootExecUser     = "0:0"
+	execShell        = `state=$1; token=$2; shift 2; umask 077; trap 'rm -f "$state" "$state.tmp"' EXIT; exec 3<&0; setsid "$@" <&3 & pid=$!; printf '%s\n' "$pid" >"$state.tmp" || exit 125; mv "$state.tmp" "$state" || exit 125; wait "$pid"; status=$?; rm -f "$state" "$state.tmp"; trap - EXIT; printf '\036ARIES_EXEC_EXIT_%s=%d\037' "$token" "$status" >&2; exit "$status"`
+	cancelExecShell  = `state=$1; attempts=0; while [ ! -r "$state" ]; do attempts=$((attempts+1)); [ "$attempts" -ge 200 ] && exit 70; sleep 0.01; done; IFS= read -r pgid <"$state" || exit 71; case "$pgid" in ''|*[!0-9]*|0|1) exit 71;; esac; kill -TERM "-$pgid" 2>/dev/null || :; sleep 0.2; kill -KILL "-$pgid" 2>/dev/null || :; rm -f "$state"; exit 0`
 )
 
 var (
@@ -58,7 +72,11 @@ type Options struct {
 	OutputDir      string
 	DockerSocket   string
 	CleanupTimeout time.Duration
-	Logger         *logrus.Logger
+	// TerminateTimeout bounds the targeted termination of a canceled exec's
+	// process group (kill helper plus confirmation). Zero selects
+	// defaultTerminateTimeout.
+	TerminateTimeout time.Duration
+	Logger           *logrus.Logger
 }
 
 // dockerClient is the small Engine surface used by this package. The official
@@ -84,29 +102,31 @@ type dockerClient interface {
 
 // Manager starts one isolated Docker container and network per task.
 type Manager struct {
-	client         dockerClient
-	outputDir      string
-	cleanupTimeout time.Duration
-	logger         *logrus.Logger
-	newID          func() (string, error)
-	closeOnce      sync.Once
-	closeErr       error
+	client           dockerClient
+	outputDir        string
+	cleanupTimeout   time.Duration
+	terminateTimeout time.Duration
+	logger           *logrus.Logger
+	newID            func() (string, error)
+	closeOnce        sync.Once
+	closeErr         error
 }
 
 // Sandbox is a live Docker task environment.
 type Sandbox struct {
-	owner          *Manager
-	client         dockerClient
-	containerID    string
-	containerName  string
-	networkName    string
-	workdir        string
-	execUser       string
-	artifactDir    string
-	outputDir      string
-	cleanupTimeout time.Duration
-	runID          string
-	taskID         string
+	owner            *Manager
+	client           dockerClient
+	containerID      string
+	containerName    string
+	networkName      string
+	workdir          string
+	execUser         string
+	artifactDir      string
+	outputDir        string
+	cleanupTimeout   time.Duration
+	terminateTimeout time.Duration
+	runID            string
+	taskID           string
 
 	mu             sync.Mutex
 	containerOwned bool
@@ -156,15 +176,19 @@ func New(options Options) (*Manager, error) {
 	if options.CleanupTimeout <= 0 {
 		options.CleanupTimeout = defaultCleanupTimeout
 	}
+	if options.TerminateTimeout <= 0 {
+		options.TerminateTimeout = defaultTerminateTimeout
+	}
 	if options.Logger == nil {
 		options.Logger = logrus.StandardLogger()
 	}
 	return &Manager{
-		client:         api,
-		outputDir:      outputDir,
-		cleanupTimeout: options.CleanupTimeout,
-		logger:         options.Logger,
-		newID:          randomID,
+		client:           api,
+		outputDir:        outputDir,
+		cleanupTimeout:   options.CleanupTimeout,
+		terminateTimeout: options.TerminateTimeout,
+		logger:           options.Logger,
+		newID:            randomID,
 	}, nil
 }
 
@@ -184,17 +208,18 @@ func (m *Manager) Start(ctx context.Context, request core.SandboxRequest) (runne
 		return nil, fmt.Errorf("generate docker sandbox ID: %w", err)
 	}
 	sandbox := &Sandbox{
-		owner:          m,
-		client:         m.client,
-		containerName:  "aries-task-" + id,
-		networkName:    "aries-net-" + id,
-		workdir:        request.Environment.Workdir,
-		execUser:       request.Environment.ExecUser,
-		artifactDir:    filepath.Join(m.outputDir, request.TaskID, "sandbox"),
-		outputDir:      m.outputDir,
-		cleanupTimeout: m.cleanupTimeout,
-		runID:          request.RunID,
-		taskID:         request.TaskID,
+		owner:            m,
+		client:           m.client,
+		containerName:    "aries-task-" + id,
+		networkName:      "aries-net-" + id,
+		workdir:          request.Environment.Workdir,
+		execUser:         request.Environment.ExecUser,
+		artifactDir:      filepath.Join(m.outputDir, request.TaskID, "sandbox"),
+		outputDir:        m.outputDir,
+		cleanupTimeout:   m.cleanupTimeout,
+		terminateTimeout: m.terminateTimeout,
+		runID:            request.RunID,
+		taskID:           request.TaskID,
 	}
 	if err := os.MkdirAll(sandbox.artifactDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create docker sandbox artifact directory: %w", err)
@@ -492,7 +517,7 @@ func (s *Sandbox) ExecStream(ctx context.Context, command core.Command, stdin io
 		// know whether targeted termination was confirmed, not which attach error
 		// happened to win the select.
 		contextErr := execCtx.Err()
-		terminateCtx, terminateCancel := context.WithTimeout(context.WithoutCancel(execCtx), s.cleanupTimeout)
+		terminateCtx, terminateCancel := context.WithTimeout(context.WithoutCancel(execCtx), s.terminationBudget())
 		defer terminateCancel()
 		terminateErr := s.terminateExec(terminateCtx, created.ID, statePath)
 		if contextErr != nil {
@@ -613,8 +638,7 @@ func (w *exitTrailerWriter) Finish() (int, error) {
 }
 
 func (s *Sandbox) waitForExecExit(ctx context.Context, execID string) error {
-	ticker := time.NewTicker(execPollInterval)
-	defer ticker.Stop()
+	poll := newPollBackoff(execExitPollMax)
 	for {
 		inspection, err := s.client.ExecInspect(ctx, execID, client.ExecInspectOptions{})
 		if err != nil {
@@ -634,10 +658,8 @@ func (s *Sandbox) waitForExecExit(ctx context.Context, execID string) error {
 				return nil
 			}
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
+		if err := poll.wait(ctx); err != nil {
+			return err
 		}
 	}
 }
@@ -708,8 +730,7 @@ func (s *Sandbox) terminateExec(ctx context.Context, execID, statePath string) e
 }
 
 func (s *Sandbox) findExecProcessGroup(ctx context.Context, wrapperPID int) (int, bool, error) {
-	ticker := time.NewTicker(execPollInterval)
-	defer ticker.Stop()
+	poll := newPollBackoff(terminatePollMax)
 	for {
 		table, err := s.processTable(ctx)
 		if err != nil {
@@ -723,17 +744,14 @@ func (s *Sandbox) findExecProcessGroup(ctx context.Context, wrapperPID int) (int
 				return process.pgid, true, nil
 			}
 		}
-		select {
-		case <-ctx.Done():
-			return 0, false, ctx.Err()
-		case <-ticker.C:
+		if err := poll.wait(ctx); err != nil {
+			return 0, false, err
 		}
 	}
 }
 
 func (s *Sandbox) waitForProcessAbsence(ctx context.Context, wrapperPID, processGroup, helperPID int) error {
-	ticker := time.NewTicker(execPollInterval)
-	defer ticker.Stop()
+	poll := newPollBackoff(terminatePollMax)
 	for {
 		table, err := s.processTable(ctx)
 		if err != nil {
@@ -742,11 +760,52 @@ func (s *Sandbox) waitForProcessAbsence(ctx context.Context, wrapperPID, process
 		if !table.hasPID(wrapperPID) && !table.hasGroup(processGroup) && (helperPID <= 0 || !table.hasPID(helperPID)) {
 			return nil
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
+		if err := poll.wait(ctx); err != nil {
+			// Name what survived, so a failed confirmation can be told apart
+			// from an Engine that stopped answering. The cause stays wrapped.
+			return fmt.Errorf("%w (still present: wrapper pid %d=%v, process group %d=%v, helper pid %d=%v)",
+				err, wrapperPID, table.hasPID(wrapperPID), processGroup, table.hasGroup(processGroup),
+				helperPID, helperPID > 0 && table.hasPID(helperPID))
 		}
+	}
+}
+
+// terminationBudget is the deadline for one exec's targeted termination.
+// Sandboxes built without one (tests) fall back to the cleanup budget.
+func (s *Sandbox) terminationBudget() time.Duration {
+	if s.terminateTimeout > 0 {
+		return s.terminateTimeout
+	}
+	return s.cleanupTimeout
+}
+
+// pollBackoff spaces Engine polls: execPollInterval first, doubling to max.
+type pollBackoff struct {
+	delay time.Duration
+	max   time.Duration
+}
+
+func newPollBackoff(max time.Duration) *pollBackoff {
+	return &pollBackoff{delay: execPollInterval, max: max}
+}
+
+func (p *pollBackoff) next() time.Duration {
+	current := p.delay
+	p.delay *= 2
+	if p.delay > p.max {
+		p.delay = p.max
+	}
+	return current
+}
+
+func (p *pollBackoff) wait(ctx context.Context) error {
+	timer := time.NewTimer(p.next())
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 
