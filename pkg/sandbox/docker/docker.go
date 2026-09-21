@@ -20,6 +20,7 @@ import (
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
+	"github.com/hyscale-lab/aries/internal/dockerremove"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/runner"
 	"github.com/moby/moby/api/pkg/stdcopy"
@@ -989,19 +990,14 @@ func (s *Sandbox) stopOnce(ctx context.Context, collectLogs bool) error {
 		if err != nil && !cerrdefs.IsNotFound(err) {
 			errs = append(errs, fmt.Errorf("stop docker task container: %w", err))
 		}
-		_, err = s.client.ContainerRemove(ctx, s.containerID, client.ContainerRemoveOptions{Force: true})
-		if err != nil && !cerrdefs.IsNotFound(err) {
+		// Removal is retried and confirmed together: a contended Engine
+		// rejects or drops the request while still completing it.
+		if err := dockerremove.Default().Container(ctx, s.client, s.containerID, client.ContainerRemoveOptions{Force: true}); err != nil {
 			errs = append(errs, fmt.Errorf("remove docker task container: %w", err))
-		}
-		_, err = s.client.ContainerInspect(ctx, s.containerID, client.ContainerInspectOptions{})
-		if cerrdefs.IsNotFound(err) {
+		} else {
 			s.mu.Lock()
 			s.containerOwned = false
 			s.mu.Unlock()
-		} else if err == nil {
-			errs = append(errs, errors.New("confirm docker task container absence: container still exists"))
-		} else {
-			errs = append(errs, fmt.Errorf("confirm docker task container absence: %w", err))
 		}
 	}
 	if networkOwned {

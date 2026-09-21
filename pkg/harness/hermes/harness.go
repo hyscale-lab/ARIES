@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
+	"github.com/hyscale-lab/aries/internal/dockerremove"
 	"github.com/hyscale-lab/aries/pkg/containerimage"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/runner"
@@ -928,14 +929,10 @@ func (manager *Manager) stopSession(ctx context.Context, active *session) error 
 			}
 		}
 	}
-	if _, err := manager.client.ContainerRemove(ctx, active.containerID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !errdefs.IsNotFound(err) {
+	// Removal is retried and confirmed together: a contended Engine rejects
+	// or drops the request while still completing it.
+	if err := dockerremove.Default().Container(ctx, manager.client, active.containerID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil {
 		errs = append(errs, fmt.Errorf("remove Hermes container: %w", err))
-	}
-	if _, err := manager.client.ContainerInspect(ctx, active.containerID, client.ContainerInspectOptions{}); err == nil {
-		errs = append(errs, errors.New("Hermes container remains after removal"))
-		return errors.Join(errs...)
-	} else if !errdefs.IsNotFound(err) {
-		errs = append(errs, fmt.Errorf("verify Hermes removal: %w", err))
 		return errors.Join(errs...)
 	}
 	active.containerID = ""

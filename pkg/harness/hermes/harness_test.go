@@ -658,10 +658,13 @@ func TestStopFailsWhenContainerRemains(t *testing.T) {
 	fake.mu.Lock()
 	fake.removeCalls = 0
 	fake.mu.Unlock()
-	// Removal silently does nothing, so the container stays present.
+	// Removal silently does nothing, so the container stays present. The
+	// cleanup budget is cut short so the removal retry gives up here rather
+	// than spending its full backoff on a container that never goes.
 	stubborn := &stubbornDocker{fakeDocker: fake}
 	manager.client = stubborn
-	if err := manager.Stop(context.Background()); err == nil || !strings.Contains(err.Error(), "remains after removal") {
+	manager.cleanupTimeout = 50 * time.Millisecond
+	if err := manager.Stop(context.Background()); err == nil || !strings.Contains(err.Error(), "remove Hermes container") || !strings.Contains(err.Error(), "still exists") {
 		t.Fatalf("err = %v", err)
 	}
 	if manager.active == nil {

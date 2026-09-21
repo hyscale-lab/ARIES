@@ -11,7 +11,11 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-const defaultCleanupTimeout = 30 * time.Second
+// defaultCleanupTimeout is the budget each cleanup stage gets on its own. It
+// covers a container removal that a contended Engine retries with backoff for
+// about 30s before it drains, plus the stop, log capture, and network release
+// around it.
+const defaultCleanupTimeout = 120 * time.Second
 
 // Options contains the few experiment-level inputs needed by the Runner.
 type Options struct {
@@ -134,26 +138,21 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		harnessActive bool
 		allErrors     []error
 		cleanupErrors []error
-		cleanupCtx    context.Context
-		cleanupCancel context.CancelFunc
 		cleanupUsed   bool
 	)
-	defer func() {
-		if cleanupCancel != nil {
-			cleanupCancel()
-		}
-	}()
-	ensureCleanupContext := func() context.Context {
-		if cleanupCtx == nil {
-			cleanupCtx, cleanupCancel = context.WithTimeout(context.WithoutCancel(ctx), r.cleanupTimeout)
-		}
-		return cleanupCtx
+	// Every cleanup stage gets the whole budget rather than a shared one: a
+	// harness or bridge that spends the single deadline leaves the stages
+	// behind it no time at all, and they then fail on a context that was
+	// already dead when they were called.
+	withCleanupDeadline := func(stop func(context.Context) error) error {
+		stageCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.cleanupTimeout)
+		defer cancel()
+		return stop(stageCtx)
 	}
 	finish := func() (core.TaskResult, error) {
-		cleanup := ensureCleanupContext()
 		if harnessActive {
 			cleanupUsed = true
-			if err := r.harness.Stop(cleanup); err != nil {
+			if err := withCleanupDeadline(r.harness.Stop); err != nil {
 				cleanupErrors = append(cleanupErrors, fmt.Errorf("cleanup harness: %w", err))
 			} else {
 				harnessActive = false
@@ -161,7 +160,7 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		}
 		if bridgeActive {
 			cleanupUsed = true
-			if err := r.bridge.Stop(cleanup); err != nil {
+			if err := withCleanupDeadline(r.bridge.Stop); err != nil {
 				cleanupErrors = append(cleanupErrors, fmt.Errorf("cleanup bridge: %w", err))
 			} else {
 				bridgeActive = false
@@ -169,7 +168,8 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		}
 		if sandboxActive {
 			cleanupUsed = true
-			if err := r.toolSandbox.Stop(cleanup, sandbox); err != nil {
+			stopSandbox := func(stageCtx context.Context) error { return r.toolSandbox.Stop(stageCtx, sandbox) }
+			if err := withCleanupDeadline(stopSandbox); err != nil {
 				cleanupErrors = append(cleanupErrors, fmt.Errorf("cleanup sandbox: %w", err))
 			} else {
 				sandboxActive = false
