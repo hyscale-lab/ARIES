@@ -462,6 +462,16 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 		return nil, status.Error(codes.InvalidArgument, "invalid remote command")
 	}
 
+	// Checked before the command runs. The SSH bridge can only discover this
+	// mid-stream and has to latch an audit error, which blocks revocation;
+	// here the whole input is already in hand, so the call is refused outright
+	// and the refusal is the evidence.
+	input := request.GetStdin()
+	if int64(len(input)) > maxRecordedInputBytes {
+		session.logRequestFailure(payload, prepared.kind, "rejected", "stdin exceeds the retained bound")
+		return nil, status.Error(codes.ResourceExhausted, "stdin exceeds the retained bound")
+	}
+
 	// The serve context carries revocation; the call context carries the
 	// client going away. Either must abort the command.
 	callCtx, cancel := context.WithCancel(ctx)
@@ -477,7 +487,7 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 	command := prepared.command
 
 	started := time.Now()
-	stdin := &recordedInput{reader: bytes.NewReader(request.GetStdin())}
+	stdin := bytes.NewReader(input)
 	var stdoutBuffer, stderrBuffer bytes.Buffer
 	stdout := newBoundedWriter(&stdoutBuffer, session.outputLimit)
 	stderr := newBoundedWriter(&stderrBuffer, session.outputLimit)
@@ -514,11 +524,7 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 		exitCode = 255
 	}
 
-	stdinBytes, stdinContent, stdinEncoding, stdinRaw, stdinOverflow := stdin.record()
-	if stdinOverflow {
-		session.audit.latch(fmt.Errorf("retain Hermes gRPC stdin: input exceeds %d bytes", maxRecordedInputBytes))
-		return nil, status.Error(codes.ResourceExhausted, "stdin exceeds the retained bound")
-	}
+	stdinContent, stdinEncoding, stdinRaw := describeStdin(input)
 
 	// The command itself completed; only the retained output was cut, so the
 	// reason is left alone and truncation is reported in its own field.
@@ -535,7 +541,7 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 		CommandHash:    commandHash(payload),
 		Command:        payload,
 		Argv:           append([]string{command.Path}, command.Args...),
-		Stdin:          stdinContent, StdinEncoding: stdinEncoding, StdinRaw: stdinRaw, StdinBytes: stdinBytes,
+		Stdin:          stdinContent, StdinEncoding: stdinEncoding, StdinRaw: stdinRaw, StdinBytes: int64(len(input)),
 		StdoutBytes: stdout.count(), StderrBytes: stderr.count(), Truncated: truncated,
 		ExitCode:   int(exitCode),
 		DurationMS: duration,
@@ -546,7 +552,7 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 	// output bound should eventually be chosen from.
 	session.logger.WithFields(logrus.Fields{
 		"kind": prepared.kind, "status": statusText, "exit_code": exitCode,
-		"stdin_bytes": stdinBytes, "stdout_bytes": stdout.count(), "stderr_bytes": stderr.count(),
+		"stdin_bytes": len(input), "stdout_bytes": stdout.count(), "stderr_bytes": stderr.count(),
 		"truncated": truncated, "duration_ms": duration,
 	}).Info("Hermes gRPC exec")
 

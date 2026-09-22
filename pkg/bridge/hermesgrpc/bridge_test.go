@@ -644,3 +644,33 @@ func TestTruncationBindsBeforeTheTransportCap(t *testing.T) {
 		t.Fatalf("margin above the worst-case reply is only %d bytes", margin)
 	}
 }
+
+// Oversized stdin must be refused before the command runs. The SSH bridge can
+// only notice mid-stream, after the sandbox has already executed, and latches
+// an audit error that blocks revocation; here the whole input is in hand up
+// front, so nothing runs and the refusal is recorded instead.
+func TestOversizedStdinIsRefusedBeforeExecution(t *testing.T) {
+	sandbox := &testSandbox{result: core.CommandResult{ExitCode: 0}}
+	manager, endpoint := startBridge(t, sandbox)
+	client, closeClient := dial(t, endpoint)
+	defer closeClient()
+
+	_, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{
+		Script: catPayload, Stdin: make([]byte, maxRecordedInputBytes+1),
+	})
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("oversized stdin = %v, want ResourceExhausted", err)
+	}
+	if commands := sandbox.snapshot(); len(commands) != 0 {
+		t.Fatalf("the command ran anyway: %#v", commands)
+	}
+	// Revocation must still confirm: this is a refused request, not a failure
+	// to retain evidence.
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	records := readToolCalls(t, endpoint.LogPaths[0])
+	if len(records) != 1 || records[0]["status"] != "rejected" {
+		t.Fatalf("refusal was not recorded: %#v", records)
+	}
+}

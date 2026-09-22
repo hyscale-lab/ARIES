@@ -152,52 +152,15 @@ func (writer *boundedWriter) truncated() bool {
 	return writer.cut
 }
 
-// recordedInput taps stdin for the audit while it streams to the sandbox.
-// Exceeding the bound discards what was buffered and reports the overflow, so
-// a partial record is never written.
-type recordedInput struct {
-	reader   io.Reader
-	mu       sync.Mutex
-	n        int64
-	data     bytes.Buffer
-	overflow bool
-}
-
-func (input *recordedInput) Read(content []byte) (int, error) {
-	n, err := input.reader.Read(content)
-	if n > 0 {
-		input.mu.Lock()
-		remaining := maxRecordedInputBytes - input.data.Len()
-		if n > remaining {
-			input.n += int64(n)
-			input.data.Reset()
-			input.overflow = true
-			input.mu.Unlock()
-			return n, fmt.Errorf("Hermes gRPC stdin exceeds %d bytes", maxRecordedInputBytes)
-		}
-		_, _ = input.data.Write(content[:n])
-		input.n += int64(n)
-		input.mu.Unlock()
-	}
-	return n, err
-}
-
-// record returns the byte count, the text for the Stdin field, the encoding
-// label, the base64 payload for StdinRaw, and the overflow flag. The raw value
-// is empty unless the bytes were unfit for the structured field.
-func (input *recordedInput) record() (int64, string, string, string, bool) {
-	input.mu.Lock()
-	count := input.n
-	content := bytes.Clone(input.data.Bytes())
-	overflow := input.overflow
-	input.mu.Unlock()
+// describeStdin renders retained input for the record. JSON cannot hold
+// arbitrary bytes, so anything not structured-safe goes to stdin_raw as base64
+// and the Stdin field carries a note naming that field.
+func describeStdin(content []byte) (text, encoding, raw string) {
 	if safeStructuredText(content) {
-		return count, string(content), "utf-8", "", overflow
+		return string(content), "utf-8", ""
 	}
-	// The bytes are kept, base64-encoded, in the same record. The note names
-	// the field holding them so the evidence never points at nothing.
-	note := fmt.Sprintf("[binary input omitted; %d bytes retained in stdin_raw]", count)
-	return count, note, "binary-omitted", base64.StdEncoding.EncodeToString(content), overflow
+	return fmt.Sprintf("[binary input omitted; %d bytes retained in stdin_raw]", len(content)),
+		"binary-omitted", base64.StdEncoding.EncodeToString(content)
 }
 
 func safeStructuredText(content []byte) bool {
