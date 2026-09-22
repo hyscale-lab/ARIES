@@ -1,7 +1,8 @@
 # gRPC tool bridge
 
-**Status: proposal.** Nothing described here is implemented. It replaces the transport of
-`ToolBridge`, not the role. The contract in `pkg/runner/interfaces.go` is unchanged.
+**Status: `Exec` is implemented and wired; `ReadFile`, `WriteFile` and `Stat` remain design.** It
+replaces the transport of `ToolBridge`, not the role. The contract in `pkg/runner/interfaces.go` is
+unchanged.
 
 ## Overview
 
@@ -76,7 +77,7 @@ the file-transfer policy question live before there is anything to test it again
   separate decision. The first iteration is paired with Hermes only — `bridge.type` `hermes-grpc`,
   admitted for `harness.type == "hermes"` — but **the service itself is harness-neutral by
   requirement**, because OpenClaw is expected to follow. See
-  [section 8](#8-open-questions), items 1 and 2.
+  [section 8](#8-open-questions), item 1.
 - *The sandbox.* `runner.Sandbox` and `pkg/sandbox/docker` are untouched. Every method below lands
   on `ExecStream`, `Upload`, `Download`, or `DownloadLimit`, all of which already exist.
 - *Session-scoped server state.* Considered and rejected for this iteration; see
@@ -277,9 +278,8 @@ client dials it from the harness container, which shares that network.
 generates two self-signed `Ed25519` certificates for this task only, one per side, mirroring the
 current per-session generation (`:1036-1058`). Each side accepts exactly one peer certificate,
 compared by raw bytes in `VerifyPeerCertificate` — the same shape as the SSH bridge comparing one
-marshalled public key rather than validating a chain. An earlier revision of this document said a
-certificate authority was generated; that was never what the code did, and a chain would be more
-machinery for a channel with exactly two parties.
+marshalled public key rather than validating a chain. A chain would be more machinery for a channel
+with exactly two parties.
 
 Two files are written to private host paths and advertised through `core.ToolEndpoint` for the
 harness to stage. They carry the meanings their SSH-shaped field names already have:
@@ -298,15 +298,13 @@ Nothing here would consult a shorter one. Pinning replaces chain validation on b
 neither end runs the standard checks that read `NotAfter`, and the pin compares raw bytes with no
 notion of time; an expired certificate is accepted by this configuration, which was verified rather
 than assumed. Any finite lifetime would therefore be decorative today, and would become a live
-failure for long tasks the moment anyone enabled standard verification — which is why an earlier
-24-hour constant was removed rather than tuned.
+failure for long tasks the moment anyone enabled standard verification.
 
 What bounds these credentials is `Stop`: it removes the client identity and tears the server down.
 That is positive revocation, and it is the guarantee the bridge exists to provide — a clock is not.
 
-Leaving the dates unset is not the same thing and is not an option: Go encodes the zero time as
-`0001-01-01`, which reads as expired since year one and is indistinguishable from a corrupt
-certificate when the retained `server.crt` is inspected.
+Leaving the dates unset is not equivalent: Go encodes the zero time as `0001-01-01`, which reads as
+expired since year one.
 
 **The server's private key is never written anywhere.** It exists only inside the `tls.Certificate`
 the listener holds, so nothing can stage or persist it; only the certificate, which is public
@@ -316,13 +314,11 @@ Credentials exist only for the life of one task. Revocation removes the identity
 certificate is retained as evidence of what the harness was told to trust, exactly as the SSH
 bridge retains its `known_hosts` line.
 
-**There is no per-call identity token.** An earlier revision of this document specified an
-`aries-session-id` metadata header and justified it as making revocation checkable per call. That
-reasoning was wrong: the revocation check is what delivers that property, and it is independent of
-any header. Identity is settled once, at the TLS handshake, where exactly one client certificate is
-accepted by raw bytes — the same shape as the SSH bridge, which compares its pinned public key once
-in `PublicKeyCallback` and checks nothing per call. A header could therefore only have failed on a
-bug in ARIES's own client.
+**There is no per-call identity token.** Identity is settled once, at the TLS handshake, where
+exactly one client certificate is accepted by raw bytes — the same shape as the SSH bridge, which
+compares its pinned public key once in `PublicKeyCallback` and checks nothing per call. A per-call
+token would add nothing: the revocation check below delivers per-call refusal on its own, and a
+token could only fail on a bug in ARIES's own client.
 
 **Revocation is still checked on every call**, before anything else the handler does. After `Stop`
 marks the session revoked, a call that reaches a surviving connection is refused with
@@ -434,10 +430,8 @@ The SSH bridges write two artifacts per task: the structured `tool-calls.jsonl` 
 structured log**, and `retain_raw_log` is *refused* for it rather than ignored, since there is no
 file for it to control.
 
-An earlier revision justified that by arguing the raw artifact exists only because the SSH wire
-command and the executed command are different objects. That argument no longer holds: the bridge
-now decodes Hermes's grammar itself (section 2), so it receives the same verbatim payload SSH does.
-Three things the raw log uniquely held were re-examined, and each is accounted for:
+The bridge decodes Hermes's grammar itself (section 2), so it receives the same verbatim payload SSH
+does. Three things the raw log uniquely held are therefore accounted for here:
 
 - **The verbatim wire command.** Accepted calls need nothing. The canonical round-trip check in
   `decodeShellToken` rejects any payload whose script token is not canonically quoted, so for a call
@@ -454,7 +448,7 @@ Three things the raw log uniquely held were re-examined, and each is accounted f
 Refusals are recorded, including a call against a revoked session — closing the gap named in the
 paragraph above rather than inheriting it.
 
-#### Per-call sizes are logged, and the output bound is not yet chosen
+#### Per-call sizes are logged, and the output bound is 16 MiB
 
 `Exec` buffers a whole reply, which the SSH bridge never did: it wrote straight to the channel and
 accumulated nothing. Both designs end with the full output assembled — the agent's tool-call
@@ -514,15 +508,14 @@ so compression does not interact with that cap the way it might appear to.
 
 **Dropped — transport artifacts with no successor.**
 
-- Canonical shell quoting and its round-trip verification.
 - The one-exec-per-channel rule, which becomes inherent.
 - Host keys and known-hosts pinning, replaced by mTLS.
 - The handshake deadline, and the fact that clearing it leaves no idle timeout.
 - The `keepalive` global-request handler.
 - The byte-level `ssh_raw.log`. What it uniquely held is absorbed into the structured record;
   see [section 6](#6-evidence).
-- Per-call output bounds, for now. `Exec` buffers a whole reply where SSH streamed, and the bound
-  is deliberately unlimited until real runs supply a number; see [section 6](#6-evidence).
+- Streaming output. `Exec` buffers a whole reply where SSH wrote straight to the channel, which is
+  why a truncation bound is needed at all; see [section 6](#6-evidence).
 
 **Sources:** `docs/design/hermes-bridge-inventory.md`,
 `docs/design/ssh-connection-lifecycle.md`.
@@ -537,48 +530,27 @@ so compression does not interact with that cap the way it might appear to.
    service. The one place ARIES currently encodes such a difference is the OpenClaw path's prefix
    stripping and `HOME` remapping (`pkg/bridge/openclawssh/workspace.go`); a gRPC client for
    OpenClaw would carry that itself, and the service would not learn about it.
-2. **The pairing rule — open, with an interim decision.** `cmd/aries/wiring.go:78-82` is a two-way
-   boolean equality and cannot express a third harness/bridge pair. Rewriting it into a table or an
-   explicit per-harness mapping is the correct fix and is **not** part of this iteration. For the
-   first iteration, admit the new bridge only for `harness.type == "hermes"`, extending the same
-   boolean shape:
-
-   ```go
-   if (cfg.Harness.Type == "hermes") != (cfg.Bridge.Type == "hermes-ssh" || cfg.Bridge.Type == "hermes-grpc") {
-   ```
-
-   That keeps the crossed-pair rejection intact and defers the restructuring until a second
-   harness actually needs it. Record the debt rather than paying it early.
-3. **Per-call user identity.** `core.Command.User` is `json:"-"` and no bridge sets it, so the
+2. **Per-call user identity.** `core.Command.User` is `json:"-"` and no bridge sets it, so the
    agent inherits the container default. Whether `Start` should carry a UID, and under what
    policy, is unresolved.
-4. **Timeout placement.** The first cut carries no per-call timeout, matching today: the bridge
+3. **Timeout placement.** The first cut carries no per-call timeout, matching today: the bridge
    sets none and the client bounds its own commands. If a server-side bound is ever wanted, the
    interaction with the run-level cleanup budget needs stating before adding the field.
-5. **Backgrounded processes.** Deep Research Bench launches a server that must outlive the call.
+4. **Backgrounded processes.** Deep Research Bench launches a server that must outlive the call.
    A unary or streaming `Exec` does not model this; today it works only because the shell
    backgrounds it and the sandbox does not reap it.
-6. **The dependency and code-generation question — unresolved, and the largest thing this adds.**
-   The repository has **no gRPC dependency today**: `go.mod` lists eleven direct requirements and
-   `google.golang.org/protobuf` appears only as `// indirect`. There are no `.proto` files, no
-   `protoc` or `buf` configuration, and no generation target in the `Makefile`. So this proposal
-   introduces a new direct dependency, a new build step, and a decision about whether generated
-   code is checked in or produced at build time.
-
-   That collides with a standing rule: *"Add dependencies only when the stdlib or an existing
-   dependency genuinely cannot do the job."* The rule is satisfiable — no stdlib package speaks
-   gRPC — but the case should be made explicitly rather than assumed, and the alternative is real:
-   the two independent reimplementations found during the E2B research both hand-write the Connect
-   envelope with no protobuf runtime at all. Decide before writing code, not during.
-
-7. **Deferred: distinguishing structured calls from shell escapes.** A `oneof` over `argv` and
+5. **Deferred: distinguishing structured calls from shell escapes.** A `oneof` over `argv` and
    `script` would let the audit separate the two, which the research argues for. It is omitted from
    the first cut because nothing emits structured commands, so the arm would never be populated.
    Adding it later is wire-compatible.
 
+Two questions this section used to carry are settled: the harness/bridge pairing now admits
+`hermes-grpc` alongside `hermes-ssh` in `cmd/aries/wiring.go`, and the gRPC dependency and
+code-generation step are in `go.mod` and `make proto`, with generated code committed.
+
 ## 9. Reaching a real harness without moving the pin
 
-Everything in section 8 is deferrable; items 3 to 5 each resolve to "match today's behaviour". The
+Everything in section 8 is deferrable; items 2 to 4 each resolve to "match today's behaviour". The
 one genuine question is how a client speaks this protocol at all, and there are two routes.
 
 **The route that does not require a pin move.** ARIES already owns the harness container's
@@ -632,18 +604,16 @@ revocation are all testable against a purpose-built Go client — which is what 
 would use regardless, exactly as `bridge_test.go` drives the SSH bridge with a raw
 `x/crypto/ssh` client rather than a real harness. Suggested order:
 
-1. ~~Build the bridge and its test client.~~ **Done.**
-2. ~~Add the staged client and wire it through.~~ **Done**, with one gap: the argv Hermes actually
-   emits has not been captured, so `remotePayload`'s rule is reasoned from `ssh(1)`'s option set
-   rather than from a recording. `pkg/bridge/hermesgrpc/integration_test.go` proves the whole path
-   against a real Docker sandbox, but drives it with an argv this repository wrote. Capturing the
-   real one against the pinned image is what closes it — and it also decides whether `ExecRequest`
-   should carry `repeated string argv` instead of a flattened `script`, which would remove the
-   client's join and the server's re-parse.
-3. Move the pin and adopt the native backend later, as its own change, re-recording payloads and
-   re-running `TestUpstreamHermesDrivesTheBridgeWithoutPatches`.
+The bridge, the staged client and the wiring are built. One gap remains: the argv Hermes emits has
+not been captured, so `remotePayload`'s rule is reasoned from `ssh(1)`'s option set rather than from
+a recording — `integration_test.go` proves the whole path against a real Docker sandbox, but drives
+it with an argv this repository wrote. Capturing the real one also decides whether `ExecRequest`
+should carry `repeated string argv` instead of a flattened `script`, removing the client's join and
+the server's re-parse.
 
-Only step 3 carries comparability risk, and it is no longer on the critical path.
+Moving the pin and adopting the native backend stays a later change of its own, re-recording
+payloads and re-running `TestUpstreamHermesDrivesTheBridgeWithoutPatches`. It is the only step
+carrying comparability risk, and it is not on the critical path.
 
 ## Background material
 
