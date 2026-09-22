@@ -335,8 +335,13 @@ substituting another — a second bridge's valid certificate, say — is refused
 every script, its `stdin` and all output off the task network. The staged client opts out
 explicitly rather than depending on the harness image's `NO_PROXY`.
 
-Keepalive is HTTP/2 PING, handled by the transport, replacing the `keepalive@openssh.com` global
-request the current server has to implement itself.
+**Keepalive is off, and nothing replaced the SSH handler.** HTTP/2 PING exists and the transport
+would manage it, but grpc-go disables it by default — `defaultClientKeepaliveTime` is `infinity`, so
+the client sends no pings, and the server's own interval is two hours. The SSH bridge's
+`keepalive@openssh.com` handler was therefore dropped rather than replaced
+([section 7](#7-what-is-preserved-and-what-is-dropped)). Nothing needs it today: a call is one
+request and one reply over a connection the harness opens and ARIES tears down, with no idle period
+either end must survive. Turning it on is `grpc.WithKeepaliveParams` if that stops being true.
 
 **Sources:** `pkg/bridge/hermesgrpc/credentials.go`, `pkg/bridge/hermesgrpc/client.go`,
 `pkg/bridge/hermesssh/bridge.go`, `pkg/core/types.go`.

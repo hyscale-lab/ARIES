@@ -281,7 +281,10 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 
 	manager.active = session
 	manager.stopErr = nil
-	address := net.JoinHostPort(listenerHost(listener), listenerPort(listener))
+	// Addr().String() is already built with net.JoinHostPort, zone included, so
+	// splitting it apart to rejoin it can only lose information: a failed split
+	// would yield ":" and advertise an endpoint that reaches nothing.
+	address := listener.Addr().String()
 	network := sandbox.NetworkName()
 	manager.logger.WithContext(ctx).WithFields(logrus.Fields{
 		"address": address, "network": network, "container": sandbox.ContainerName(),

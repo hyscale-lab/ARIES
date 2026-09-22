@@ -13,6 +13,7 @@ package hermesgrpc
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -147,37 +148,10 @@ func parseCertificate(certificatePEM []byte) (*x509.Certificate, error) {
 func pinnedPeer(expected *x509.Certificate) func([][]byte, [][]*x509.Certificate) error {
 	return func(rawCertificates [][]byte, _ [][]*x509.Certificate) error {
 		for _, raw := range rawCertificates {
-			if len(raw) == len(expected.Raw) && subtleEqual(raw, expected.Raw) {
+			if subtle.ConstantTimeCompare(raw, expected.Raw) == 1 {
 				return nil
 			}
 		}
 		return errors.New("peer certificate rejected")
 	}
-}
-
-func subtleEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	var diff byte
-	for i := range a {
-		diff |= a[i] ^ b[i]
-	}
-	return diff == 0
-}
-
-func listenerHost(listener net.Listener) string {
-	host, _, err := net.SplitHostPort(listener.Addr().String())
-	if err != nil {
-		return ""
-	}
-	return host
-}
-
-func listenerPort(listener net.Listener) string {
-	_, port, err := net.SplitHostPort(listener.Addr().String())
-	if err != nil {
-		return ""
-	}
-	return port
 }
