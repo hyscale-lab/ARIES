@@ -252,6 +252,10 @@ func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *Voi
 			output.WriteString("  " + server.Name + ":\n")
 			if server.URL != "" {
 				output.WriteString("    url: " + yamlString(server.URL) + "\n")
+				// streamable-http is Hermes's default when the key is absent.
+				if server.Transport == "sse" {
+					output.WriteString("    transport: \"sse\"\n")
+				}
 			} else if server.Command != "" {
 				output.WriteString("    command: " + yamlString(server.Command) + "\n")
 				if len(server.Args) > 0 {
@@ -278,6 +282,9 @@ func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *Voi
 						}
 					}
 				}
+			}
+			if server.TimeoutSeconds > 0 {
+				output.WriteString("    timeout: " + strconv.Itoa(server.TimeoutSeconds) + "\n")
 			}
 		}
 	}

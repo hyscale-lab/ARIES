@@ -127,13 +127,14 @@ registration, discovery, factory, reflection, DI, or generic plugin layer.
 
 ARIES supports configuring Model Context Protocol (`MCP`) servers for agent harnesses via `harness.mcp_servers`.
 
-`core.MCPServerConfig` defines the server configuration (name, command/`args` for `stdio`, or `url` for `SSE`/`HTTP`). Configuration validation is enforced by `core.ValidateMCPServer`:
+`core.MCPServerConfig` defines the server configuration (name, command/`args` for `stdio`, or `url` for `SSE`/`HTTP`). A `url` server may name its `transport` (`sse` or `streamable-http`; empty keeps the harness's default, which differs between harnesses) and any server a per-call `timeout_seconds` (zero keeps the harness's default). Configuration validation is enforced by `core.ValidateMCPServer`:
 - Server names must not contain `whitespace` or control characters.
 - Either an executable command or an absolute `HTTP`/`HTTPS` `url` must be specified, never both.
 - Environment variable mappings are split into benign plain text (`env`) and host credentials (`secret_env`):
   - `env` maps target variables to plain text values that do not contain control characters.
   - `secret_env` maps target variables to host environment variable names. Raw secrets are rejected at validation time; rendered configurations persist `${NAME}` placeholders, and harness session startup stages credentials into private key files (`0600`) exported by in-container launcher scripts rather than exposing them in container environment metadata.
   - Both `env` and `secret_env` are supported for command servers and rejected for `url` servers.
+- `transport` applies only to `url` servers; `timeout_seconds` must not be negative.
 
 Harnesses manage `MCP` execution and network boundaries as follows:
 - **Command servers (`stdio`)** execute directly inside the agent container environment.

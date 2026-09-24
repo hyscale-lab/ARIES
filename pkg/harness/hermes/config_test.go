@@ -511,3 +511,25 @@ func TestAgentWrapperScriptExportsMCPHostVariables(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderConfig_MCPServerTransportAndTimeout(t *testing.T) {
+	rendered, err := renderConfig(validModel(), renderSettings{
+		maxTurns: 10,
+		mcpServers: []core.MCPServerConfig{
+			{Name: "gateway", URL: "http://task-sandbox:10086/sse", Transport: "sse", TimeoutSeconds: 1200},
+			{Name: "streaming", URL: "https://mcp.example.com/mcp", Transport: "streamable-http"},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("renderConfig failed: %v", err)
+	}
+	text := string(rendered)
+	want := "  gateway:\n    url: \"http://task-sandbox:10086/sse\"\n    transport: \"sse\"\n    timeout: 1200\n"
+	if !strings.Contains(text, want) {
+		t.Fatalf("rendered config missing the gateway entry %q:\n%s", want, text)
+	}
+	// streamable-http is Hermes's default, so it is left implicit.
+	if !strings.Contains(text, "  streaming:\n    url: \"https://mcp.example.com/mcp\"\n") || strings.Count(text, "transport:") != 1 {
+		t.Fatalf("streamable-http server rendered with an explicit transport:\n%s", text)
+	}
+}

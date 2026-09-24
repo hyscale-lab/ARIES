@@ -424,3 +424,27 @@ func TestRenderConfig_MCPServersAndSandboxAllowlist(t *testing.T) {
 		t.Fatalf("tools.sandbox.tools.alsoAllow = %v, want [bundle-mcp]", alsoAllow)
 	}
 }
+
+func TestRenderConfig_MCPServerTransportAndTimeout(t *testing.T) {
+	content, err := renderConfig(testModel(), testEndpoint(), ModeAgent, false, false, false, 0, MCPOptions{
+		Servers: []core.MCPServerConfig{
+			{Name: "gateway", URL: "http://task-sandbox:10086/sse", Transport: "sse", TimeoutSeconds: 1200},
+			{Name: "streaming", URL: "https://mcp.example.com/mcp", Transport: "streamable-http"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("renderConfig failed: %v", err)
+	}
+	var configuration openClawConfig
+	if err := json.Unmarshal(content, &configuration); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	gateway := configuration.MCP.Servers["gateway"]
+	if gateway.Transport != "sse" || gateway.RequestTimeoutMs != 1200000 {
+		t.Fatalf("gateway = %#v, want sse with a 1200000 ms request timeout", gateway)
+	}
+	streaming := configuration.MCP.Servers["streaming"]
+	if streaming.Transport != "streamable-http" || streaming.RequestTimeoutMs != 0 {
+		t.Fatalf("streaming = %#v, want streamable-http with the default timeout", streaming)
+	}
+}
