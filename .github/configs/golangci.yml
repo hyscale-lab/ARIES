@@ -12,3 +12,7 @@ linters:
     - nilnesserr
     - rowserrcheck
     - sqlclosecheck
+
+formatters:
+  enable:
+    - gofmt
