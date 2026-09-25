@@ -24,7 +24,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Sandbox_Exec_FullMethodName = "/aries.sandbox.v1.Sandbox/Exec"
+	Sandbox_Exec_FullMethodName      = "/aries.sandbox.v1.Sandbox/Exec"
+	Sandbox_Stat_FullMethodName      = "/aries.sandbox.v1.Sandbox/Stat"
+	Sandbox_ReadFile_FullMethodName  = "/aries.sandbox.v1.Sandbox/ReadFile"
+	Sandbox_ReadLines_FullMethodName = "/aries.sandbox.v1.Sandbox/ReadLines"
+	Sandbox_WriteFile_FullMethodName = "/aries.sandbox.v1.Sandbox/WriteFile"
 )
 
 // SandboxClient is the client API for Sandbox service.
@@ -32,10 +36,28 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
 // Sandbox grants a harness narrow, audited, revocable access to one task
-// sandbox. The first iteration carries Exec alone; ReadFile, WriteFile and
-// Stat are designed but not implemented.
+// sandbox. Exec runs a script; the four file procedures move bytes without a
+// shell. Paths are absolute inside the sandbox; the caller resolves relative
+// paths before the call. Every procedure is refused with UNAVAILABLE once the
+// session is revoked, and with UNIMPLEMENTED when the sandbox offers no file
+// access.
 type SandboxClient interface {
 	Exec(ctx context.Context, in *ExecRequest, opts ...grpc.CallOption) (*ExecResponse, error)
+	// Stat reports what is at a path without reading it. Absence is a normal
+	// answer (exists=false), not an error, so callers can probe cheaply.
+	Stat(ctx context.Context, in *StatRequest, opts ...grpc.CallOption) (*StatResponse, error)
+	// ReadFile returns a byte range of a regular file. It serves whole-file
+	// reads and the small probes (binary sample, BOM, line ending).
+	ReadFile(ctx context.Context, in *ReadFileRequest, opts ...grpc.CallOption) (*ReadFileResponse, error)
+	// ReadLines returns a window of lines with the counts a paginated text read
+	// needs, computed next to the data so only the window crosses the wire. It
+	// matches `sed -n 'a,bp' | cut -b1-N`, `wc -l`, and a trailing-newline
+	// check, in one pass.
+	ReadLines(ctx context.Context, in *ReadLinesRequest, opts ...grpc.CallOption) (*ReadLinesResponse, error)
+	// WriteFile replaces or creates a regular file with exactly the given bytes.
+	// A reader sees the old file or the new one, never a prefix; missing parent
+	// directories are created.
+	WriteFile(ctx context.Context, in *WriteFileRequest, opts ...grpc.CallOption) (*WriteFileResponse, error)
 }
 
 type sandboxClient struct {
@@ -56,15 +78,73 @@ func (c *sandboxClient) Exec(ctx context.Context, in *ExecRequest, opts ...grpc.
 	return out, nil
 }
 
+func (c *sandboxClient) Stat(ctx context.Context, in *StatRequest, opts ...grpc.CallOption) (*StatResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StatResponse)
+	err := c.cc.Invoke(ctx, Sandbox_Stat_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sandboxClient) ReadFile(ctx context.Context, in *ReadFileRequest, opts ...grpc.CallOption) (*ReadFileResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReadFileResponse)
+	err := c.cc.Invoke(ctx, Sandbox_ReadFile_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sandboxClient) ReadLines(ctx context.Context, in *ReadLinesRequest, opts ...grpc.CallOption) (*ReadLinesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReadLinesResponse)
+	err := c.cc.Invoke(ctx, Sandbox_ReadLines_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sandboxClient) WriteFile(ctx context.Context, in *WriteFileRequest, opts ...grpc.CallOption) (*WriteFileResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WriteFileResponse)
+	err := c.cc.Invoke(ctx, Sandbox_WriteFile_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SandboxServer is the server API for Sandbox service.
 // All implementations must embed UnimplementedSandboxServer
 // for forward compatibility.
 //
 // Sandbox grants a harness narrow, audited, revocable access to one task
-// sandbox. The first iteration carries Exec alone; ReadFile, WriteFile and
-// Stat are designed but not implemented.
+// sandbox. Exec runs a script; the four file procedures move bytes without a
+// shell. Paths are absolute inside the sandbox; the caller resolves relative
+// paths before the call. Every procedure is refused with UNAVAILABLE once the
+// session is revoked, and with UNIMPLEMENTED when the sandbox offers no file
+// access.
 type SandboxServer interface {
 	Exec(context.Context, *ExecRequest) (*ExecResponse, error)
+	// Stat reports what is at a path without reading it. Absence is a normal
+	// answer (exists=false), not an error, so callers can probe cheaply.
+	Stat(context.Context, *StatRequest) (*StatResponse, error)
+	// ReadFile returns a byte range of a regular file. It serves whole-file
+	// reads and the small probes (binary sample, BOM, line ending).
+	ReadFile(context.Context, *ReadFileRequest) (*ReadFileResponse, error)
+	// ReadLines returns a window of lines with the counts a paginated text read
+	// needs, computed next to the data so only the window crosses the wire. It
+	// matches `sed -n 'a,bp' | cut -b1-N`, `wc -l`, and a trailing-newline
+	// check, in one pass.
+	ReadLines(context.Context, *ReadLinesRequest) (*ReadLinesResponse, error)
+	// WriteFile replaces or creates a regular file with exactly the given bytes.
+	// A reader sees the old file or the new one, never a prefix; missing parent
+	// directories are created.
+	WriteFile(context.Context, *WriteFileRequest) (*WriteFileResponse, error)
 	mustEmbedUnimplementedSandboxServer()
 }
 
@@ -77,6 +157,18 @@ type UnimplementedSandboxServer struct{}
 
 func (UnimplementedSandboxServer) Exec(context.Context, *ExecRequest) (*ExecResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Exec not implemented")
+}
+func (UnimplementedSandboxServer) Stat(context.Context, *StatRequest) (*StatResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Stat not implemented")
+}
+func (UnimplementedSandboxServer) ReadFile(context.Context, *ReadFileRequest) (*ReadFileResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReadFile not implemented")
+}
+func (UnimplementedSandboxServer) ReadLines(context.Context, *ReadLinesRequest) (*ReadLinesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReadLines not implemented")
+}
+func (UnimplementedSandboxServer) WriteFile(context.Context, *WriteFileRequest) (*WriteFileResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method WriteFile not implemented")
 }
 func (UnimplementedSandboxServer) mustEmbedUnimplementedSandboxServer() {}
 func (UnimplementedSandboxServer) testEmbeddedByValue()                 {}
@@ -117,6 +209,78 @@ func _Sandbox_Exec_Handler(srv interface{}, ctx context.Context, dec func(interf
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Sandbox_Stat_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StatRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SandboxServer).Stat(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Sandbox_Stat_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SandboxServer).Stat(ctx, req.(*StatRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Sandbox_ReadFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReadFileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SandboxServer).ReadFile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Sandbox_ReadFile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SandboxServer).ReadFile(ctx, req.(*ReadFileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Sandbox_ReadLines_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReadLinesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SandboxServer).ReadLines(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Sandbox_ReadLines_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SandboxServer).ReadLines(ctx, req.(*ReadLinesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Sandbox_WriteFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(WriteFileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SandboxServer).WriteFile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Sandbox_WriteFile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SandboxServer).WriteFile(ctx, req.(*WriteFileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Sandbox_ServiceDesc is the grpc.ServiceDesc for Sandbox service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -127,6 +291,22 @@ var Sandbox_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Exec",
 			Handler:    _Sandbox_Exec_Handler,
+		},
+		{
+			MethodName: "Stat",
+			Handler:    _Sandbox_Stat_Handler,
+		},
+		{
+			MethodName: "ReadFile",
+			Handler:    _Sandbox_ReadFile_Handler,
+		},
+		{
+			MethodName: "ReadLines",
+			Handler:    _Sandbox_ReadLines_Handler,
+		},
+		{
+			MethodName: "WriteFile",
+			Handler:    _Sandbox_WriteFile_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
