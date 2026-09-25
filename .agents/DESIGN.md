@@ -41,8 +41,11 @@ timezone and noninteractive values.
 
 The command layer may schedule fresh one-task Runner compositions concurrently.
 Profile order, including duplicate weights, determines admission and result
-order. Each occurrence has an exact global execution ID for directories,
-labels, monitoring, and results. A configured loop duration bounds admissions,
+order by default. An arrival trace instead orders selected occurrences by
+scaled offset, preserving profile order for ties; concurrency still bounds
+admission. See [arrival scheduling](../docs/quick-start.md#replay-task-arrivals).
+Each occurrence has an exact global execution ID for directories, labels,
+monitoring, and results. A configured loop duration bounds admissions,
 not cleanup: admitted occurrences always drain through the unchanged lifecycle.
 `runtime.config.gpu_indices` is the only explicit GPU selection input.
 Backend-specific resolution supplies the same effective list to runtime
