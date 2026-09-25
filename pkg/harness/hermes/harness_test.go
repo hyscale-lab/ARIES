@@ -407,6 +407,12 @@ func TestStartStagesPrivateRuntimeAndPinsIdleContainer(t *testing.T) {
 			t.Fatalf("%s mode = %o, want %o", name, header.Mode, mode)
 		}
 	}
+	// The SSH route runs the pinned image unmodified and loads no plugin.
+	for _, name := range []string{strings.TrimPrefix(seamContainerFS, "/"), strings.TrimPrefix(pluginContainerFS, "/") + "/__init__.py"} {
+		if _, present := entries[name]; present {
+			t.Fatalf("%s was staged for an SSH endpoint", name)
+		}
+	}
 	// Every staged entry must be owned by the image's unprivileged `hermes`
 	// user. The PATH shim drops root to that UID before exec'ing the real
 	// binary, so root-owned staging leaves Hermes unable to read its own
@@ -1087,9 +1093,12 @@ func TestStartStagesTheGRPCClientAndCredentials(t *testing.T) {
 
 	entries := archiveEntries(t, fake.archive)
 	for name, mode := range map[string]int64{
-		strings.TrimPrefix(clientContainerFS, "/"): 0o555,
-		strings.TrimPrefix(grpcIdentityPath, "/"):  0o600,
-		strings.TrimPrefix(grpcTrustedPath, "/"):   0o600,
+		strings.TrimPrefix(clientContainerFS, "/"):                  0o555,
+		strings.TrimPrefix(grpcIdentityPath, "/"):                   0o600,
+		strings.TrimPrefix(grpcTrustedPath, "/"):                    0o600,
+		strings.TrimPrefix(pluginContainerFS, "/") + "/plugin.yaml": 0o400,
+		strings.TrimPrefix(pluginContainerFS, "/") + "/__init__.py": 0o400,
+		strings.TrimPrefix(seamContainerFS, "/"):                    0o400,
 	} {
 		entry, ok := entries[name]
 		if !ok {
@@ -1105,7 +1114,7 @@ func TestStartStagesTheGRPCClientAndCredentials(t *testing.T) {
 	if _, present := entries[strings.TrimPrefix(identityContainerFS, "/")]; present {
 		t.Fatal("the SSH identity was staged for a gRPC endpoint")
 	}
-	for _, directory := range []string{"run/aries/bin", "run/aries/grpc"} {
+	for _, directory := range []string{"run/aries/bin", "run/aries/grpc", "run/aries/hermes/plugins/aries"} {
 		if _, ok := entries[directory]; !ok {
 			t.Fatalf("%s was not created", directory)
 		}

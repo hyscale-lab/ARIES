@@ -444,11 +444,9 @@ func validGRPCEndpoint() core.ToolEndpoint {
 	}
 }
 
-// The gRPC endpoint must not disturb how Hermes selects its backend: it still
-// reads TERMINAL_ENV=ssh and the TERMINAL_SSH_* block, and reaches ARIES's
-// client only because that client shadows `ssh` on PATH. Only the identity
-// path moves, and the client's own settings are added.
-func TestContainerEnvironmentKeepsTheSSHBackendUnderGRPC(t *testing.T) {
+// The gRPC endpoint selects the ARIES plugin backend and carries no SSH target:
+// the plugin's client reads its target and credentials from ARIES_GRPC_*.
+func TestContainerEnvironmentSelectsTheAriesBackendUnderGRPC(t *testing.T) {
 	environment, err := containerEnvironment(validGRPCEndpoint(), "/aries/workspace", 180, false, "run-1", "fix-git")
 	if err != nil {
 		t.Fatal(err)
@@ -460,11 +458,7 @@ func TestContainerEnvironmentKeepsTheSSHBackendUnderGRPC(t *testing.T) {
 	}
 	want := map[string]string{
 		"HERMES_HOME":            stateContainerPath,
-		"TERMINAL_ENV":           "ssh",
-		"TERMINAL_SSH_HOST":      "172.17.0.1",
-		"TERMINAL_SSH_PORT":      "41234",
-		"TERMINAL_SSH_USER":      "aries",
-		"TERMINAL_SSH_KEY":       grpcIdentityPath,
+		"TERMINAL_ENV":           "aries",
 		"TERMINAL_CWD":           "/aries/workspace",
 		"TERMINAL_TIMEOUT":       "180",
 		"ARIES_RUN_ID":           "run-1",
@@ -516,15 +510,37 @@ func TestContainerEnvironmentRejectsUnusableGRPCEndpoints(t *testing.T) {
 	}
 }
 
-// The wrapper is the only place ARIES can put its client ahead of the image's
-// own ssh, because Hermes resolves the client by name.
-func TestAgentWrapperShadowsSSHOnlyForGRPC(t *testing.T) {
-	shimmed := string(agentWrapperScript("DEEPSEEK_API_KEY", false, true))
-	if !strings.Contains(shimmed, "PATH="+clientBinDir+":$PATH") {
-		t.Fatalf("wrapper does not prepend the client directory:\n%s", shimmed)
+// The seam must run before Hermes starts, and only on the gRPC route: the SSH
+// route runs the pinned image unmodified.
+func TestAgentWrapperAppliesTheSeamOnlyForGRPC(t *testing.T) {
+	patched := string(agentWrapperScript("DEEPSEEK_API_KEY", false, true))
+	seam, hermes := strings.Index(patched, "python3 "+seamContainerFS+"\n"), strings.Index(patched, "exec hermes ")
+	if seam < 0 || hermes < 0 || seam > hermes {
+		t.Fatalf("wrapper does not apply the seam before Hermes:\n%s", patched)
 	}
 	plain := string(agentWrapperScript("DEEPSEEK_API_KEY", false, false))
-	if strings.Contains(plain, clientBinDir) {
-		t.Fatalf("SSH wrapper was given a PATH shim:\n%s", plain)
+	if strings.Contains(plain, seamContainerFS) || strings.Contains(plain, "PATH=") {
+		t.Fatalf("SSH wrapper was modified:\n%s", plain)
+	}
+}
+
+// Hermes loads a user plugin only when plugins.enabled names it, and must not
+// load it on the SSH route.
+func TestRenderConfigEnablesThePluginOnlyForTheAriesBackend(t *testing.T) {
+	settings := renderSettings{maxTurns: 10, subagentsEnabled: true}
+	plain, err := renderConfig(validModel(), settings, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.ariesBackend = true
+	enabled, err := renderConfig(validModel(), settings, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(plain), "plugins:") {
+		t.Fatalf("SSH config enables plugins:\n%s", plain)
+	}
+	if !strings.Contains(string(enabled), "\nplugins:\n  enabled:\n    - aries\n") {
+		t.Fatalf("gRPC config does not enable the plugin:\n%s", enabled)
 	}
 }

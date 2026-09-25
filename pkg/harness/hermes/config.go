@@ -2,6 +2,7 @@ package hermes
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,12 +28,13 @@ const (
 	agentWrapperPath    = stagedRoot + "/run-agent"
 	workspaceRoot       = stagedRoot + "/workspace"
 
-	// The gRPC bridge stages three more files. clientBinDir goes on PATH and
-	// clientContainerFS is named `ssh` because Hermes resolves its terminal
-	// client by name; see docs/design/grpc-bridge.md section 9 for why that
-	// shadowing is a workaround rather than the end state.
-	clientBinDir      = stagedRoot + "/bin"
-	clientContainerFS = clientBinDir + "/ssh"
+	// The gRPC route stages the client, its two credentials, the ARIES Hermes
+	// plugin that runs the client, and the seam script that lets the plugin
+	// supply file operations. The plugin lives under HERMES_HOME, which is
+	// where Hermes looks for user plugins.
+	clientContainerFS = stagedRoot + "/bin/aries-grpc"
+	pluginContainerFS = stateContainerPath + "/plugins/aries"
+	seamContainerFS   = stagedRoot + "/seam.py"
 	grpcCredentialDir = stagedRoot + "/grpc"
 	grpcIdentityPath  = grpcCredentialDir + "/client.pem"
 	grpcTrustedPath   = grpcCredentialDir + "/server.crt"
@@ -86,6 +88,17 @@ type CompactionSettings struct {
 	ThresholdTokens int
 }
 
+// The ARIES Hermes plugin and the seam script that lets it supply file
+// operations. Both are staged only on the gRPC route.
+var (
+	//go:embed plugin/plugin.yaml
+	pluginManifest []byte
+	//go:embed plugin/__init__.py
+	pluginModule []byte
+	//go:embed seam.py
+	seamScript []byte
+)
+
 // renderSettings are the inputs to renderConfig beyond the model. extraBody
 // is the profile's opaque JSON object, or nil.
 type renderSettings struct {
@@ -96,6 +109,8 @@ type renderSettings struct {
 	maxConcurrentSubagents int
 	compaction             *CompactionSettings
 	extraBody              []byte
+	// ariesBackend enables the ARIES terminal backend plugin (gRPC route).
+	ariesBackend bool
 }
 
 // renderConfig produces the Hermes `config.yaml`. The credential is written as
@@ -235,6 +250,12 @@ func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *Voi
 		output.WriteString("    model: " + yamlString(voiceSTT.Model) + "\n")
 		output.WriteString("    language: " + yamlString(voiceSTT.Language) + "\n")
 	}
+	if settings.ariesBackend {
+		// Hermes loads a user plugin only when plugins.enabled names it.
+		output.WriteString("\nplugins:\n")
+		output.WriteString("  enabled:\n")
+		output.WriteString("    - aries\n")
+	}
 	output.WriteString("\ndisplay:\n")
 	output.WriteString("  streaming: false\n")
 	output.WriteString("  compact: true\n")
@@ -344,36 +365,34 @@ func containerEnvironment(endpoint core.ToolEndpoint, workdir string, terminalTi
 	if _, err := strconv.Atoi(port); err != nil {
 		return nil, errors.New("Hermes endpoint port is invalid")
 	}
-	// The TERMINAL_* block is identical for both transports on purpose. Hermes
-	// selects its backend from these names and knows nothing else; under gRPC
-	// the client it invokes is ARIES's, reached by shadowing `ssh` on PATH, so
-	// the backend selection must stay exactly as it is.
-	identityPath := identityContainerFS
+	// Hermes selects its backend from TERMINAL_ENV. SSH uses Hermes's own ssh
+	// backend and needs the TERMINAL_SSH_* target; gRPC uses the ARIES plugin,
+	// whose client reads ARIES_GRPC_* below instead.
+	environment := []string{"HERMES_HOME=" + stateContainerPath}
 	if endpoint.Protocol == protocolGRPC {
-		identityPath = grpcIdentityPath
+		environment = append(environment, "TERMINAL_ENV=aries")
+	} else {
+		environment = append(environment,
+			"TERMINAL_ENV=ssh",
+			"TERMINAL_SSH_HOST="+host,
+			"TERMINAL_SSH_PORT="+port,
+			"TERMINAL_SSH_USER="+endpoint.Username,
+			"TERMINAL_SSH_KEY="+identityContainerFS,
+		)
 	}
-	environment := []string{
-		"HERMES_HOME=" + stateContainerPath,
-		"TERMINAL_ENV=ssh",
-		"TERMINAL_SSH_HOST=" + host,
-		"TERMINAL_SSH_PORT=" + port,
-		"TERMINAL_SSH_USER=" + endpoint.Username,
-		"TERMINAL_SSH_KEY=" + identityPath,
-		"TERMINAL_CWD=" + workdir,
-		"TERMINAL_TIMEOUT=" + strconv.Itoa(terminalTimeout),
-		"ARIES_RUN_ID=" + runID,
-		"ARIES_TASK_ID=" + taskID,
+	environment = append(environment,
+		"TERMINAL_CWD="+workdir,
+		"TERMINAL_TIMEOUT="+strconv.Itoa(terminalTimeout),
+		"ARIES_RUN_ID="+runID,
+		"ARIES_TASK_ID="+taskID,
 		// The v2026.8 image ships HERMES_WRITE_SAFE_ROOT=/opt/data, which makes
 		// write_file and patch refuse every path outside that directory. The
 		// tools act on the sandbox over SSH, and the sandbox is the isolation
 		// boundary, so the prefix check only denies the agent its own
 		// workspace. An empty value turns the check off (agent/file_safety.py).
 		"HERMES_WRITE_SAFE_ROOT=",
-	}
+	)
 	if endpoint.Protocol == protocolGRPC {
-		// The staged client reads its target and credentials from these rather
-		// than from the argv Hermes builds, so only one argv question is left
-		// to it: which operand is the remote command.
 		environment = append(environment,
 			"ARIES_GRPC_TARGET="+endpoint.Address,
 			"ARIES_GRPC_IDENTITY="+grpcIdentityPath,
@@ -391,16 +410,15 @@ func containerEnvironment(endpoint core.ToolEndpoint, workdir string, terminalTi
 // inside the container means no value ever appears in Docker's exec or
 // container config. extractEnabled additionally exports the Tavily key
 // staged at extractKeyPath, under Hermes's fixed tavilyAPIKeyEnv name.
-func agentWrapperScript(apiKeyEnv string, extractEnabled bool, shimPath bool) []byte {
+func agentWrapperScript(apiKeyEnv string, extractEnabled bool, seam bool) []byte {
 	script := `#!/bin/sh
 set -eu
 `
-	if shimPath {
-		// Hermes invokes `ssh` by name, so ARIES's client is put in front of
-		// whatever the image provides. $PATH is expanded in the container
-		// because the image's own PATH is not known here.
-		script += `PATH=` + clientBinDir + `:$PATH
-export PATH
+	if seam {
+		// The wrapper runs as root before Hermes drops privileges, which is the
+		// one point where the image's own files can be patched. A failed seam
+		// stops here, so file tools never silently stay on the shell.
+		script += `python3 ` + seamContainerFS + `
 `
 	}
 	script += `if [ ! -f ` + modelKeyPath + ` ]; then

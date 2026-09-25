@@ -357,6 +357,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		maxTurns: manager.maxTurns, webSearchEnabled: manager.webSearchEnabled, extractEnabled: extractEnabled,
 		subagentsEnabled: manager.subagentsEnabled, maxConcurrentSubagents: manager.maxConcurrentSubagents,
 		compaction: manager.compaction, extraBody: manager.extraBody,
+		ariesBackend: request.Endpoint.Protocol == protocolGRPC,
 	}, voiceSTT)
 
 	if err != nil {
@@ -1108,16 +1109,13 @@ func (buffer *limitedBuffer) Write(content []byte) (int, error) {
 // invoking the CLI proves the staged runtime is readable by the identity that
 // will actually use it.
 func (manager *Manager) waitReady(ctx context.Context, active *session) error {
-	identityPath, extra := identityContainerFS, ""
+	transport := ` && test -r ` + identityContainerFS + ` && command -v ssh >/dev/null`
 	if active.endpoint.Protocol == protocolGRPC {
-		// `command -v ssh` still holds: it resolves to the staged client,
-		// which is the point of putting it on PATH. Checking the client and
-		// the pinned certificate as well proves the shadowing took effect.
-		identityPath = grpcIdentityPath
-		extra = ` && test -x ` + clientContainerFS + ` && test -r ` + grpcTrustedPath
+		transport = ` && test -r ` + grpcIdentityPath + ` && test -r ` + grpcTrustedPath +
+			` && test -x ` + clientContainerFS + ` && test -r ` + pluginContainerFS + `/__init__.py && test -r ` + seamContainerFS
 	}
 	probe := `test -x ` + agentWrapperPath + ` && test -r ` + configContainerPath + ` && test -r ` + modelKeyPath +
-		` && test -r ` + identityPath + extra + ` && command -v ssh >/dev/null && hermes --version >/dev/null 2>&1`
+		transport + ` && hermes --version >/dev/null 2>&1`
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -1216,6 +1214,9 @@ func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([
 		files[strings.TrimPrefix(grpcIdentityPath, "/")] = stagedFile{content: identity, mode: 0o600}
 		files[strings.TrimPrefix(grpcTrustedPath, "/")] = stagedFile{content: trusted, mode: 0o600}
 		files[strings.TrimPrefix(clientContainerFS, "/")] = stagedFile{content: client, mode: 0o555}
+		files[strings.TrimPrefix(pluginContainerFS, "/")+"/plugin.yaml"] = stagedFile{content: pluginManifest, mode: 0o400}
+		files[strings.TrimPrefix(pluginContainerFS, "/")+"/__init__.py"] = stagedFile{content: pluginModule, mode: 0o400}
+		files[strings.TrimPrefix(seamContainerFS, "/")] = stagedFile{content: seamScript, mode: 0o400}
 	} else {
 		files[strings.TrimPrefix(identityContainerFS, "/")] = stagedFile{content: identity, mode: 0o600}
 	}
@@ -1250,7 +1251,7 @@ func stageArchive(files map[string]stagedFile) ([]byte, error) {
 	// wrapper still reads the key as root before handing off.
 	directories := []string{
 		"run/aries", "run/aries/hermes", "run/aries/ssh", "run/aries/workspace",
-		"run/aries/bin", "run/aries/grpc",
+		"run/aries/bin", "run/aries/grpc", "run/aries/hermes/plugins", "run/aries/hermes/plugins/aries",
 	}
 	for _, name := range directories {
 		mode := int64(0o700)
