@@ -15,6 +15,7 @@ func validEndpoint() core.ToolEndpoint {
 	return core.ToolEndpoint{
 		Protocol: "ssh", Address: "172.17.0.1:41234", Username: "aries", Network: "aries-net",
 		IdentityFile: identityContainerFS, IdentitySourceFile: "/tmp/id_ed25519",
+		Workdir: "/aries/workspace",
 	}
 }
 
@@ -152,7 +153,7 @@ func TestValidateModelRejectsControlCharactersInModelID(t *testing.T) {
 // Hermes selects its SSH backend purely from the environment, so this is the
 // contract that replaces Agent_Bench's exec-bridge patch.
 func TestContainerEnvironmentSelectsNativeSSHBackend(t *testing.T) {
-	environment, err := containerEnvironment(validEndpoint(), "/aries/workspace", 180, false, "run-1", "fix-git")
+	environment, err := containerEnvironment(validEndpoint(), 180, false, "run-1", "fix-git")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,16 +199,18 @@ func TestContainerEnvironmentRejectsUnusableEndpoints(t *testing.T) {
 	for name, mutate := range cases {
 		endpoint := validEndpoint()
 		mutate(&endpoint)
-		if _, err := containerEnvironment(endpoint, "/aries/workspace", 180, false, "run-1", "fix-git"); err == nil {
+		if _, err := containerEnvironment(endpoint, 180, false, "run-1", "fix-git"); err == nil {
 			t.Fatalf("%s: invalid endpoint was accepted", name)
 		}
 	}
 	for _, workdir := range []string{"", "relative", "/has space", "/trailing/", "/a/../b"} {
-		if _, err := containerEnvironment(validEndpoint(), workdir, 180, false, "run-1", "fix-git"); err == nil {
+		endpoint := validEndpoint()
+		endpoint.Workdir = workdir
+		if _, err := containerEnvironment(endpoint, 180, false, "run-1", "fix-git"); err == nil {
 			t.Fatalf("workdir %q was accepted", workdir)
 		}
 	}
-	if _, err := containerEnvironment(validEndpoint(), "/aries/workspace", 0, false, "run-1", "fix-git"); err == nil {
+	if _, err := containerEnvironment(validEndpoint(), 0, false, "run-1", "fix-git"); err == nil {
 		t.Fatal("non-positive terminal timeout was accepted")
 	}
 }
@@ -344,7 +347,7 @@ func TestRenderConfigIgnoresMaxConcurrentChildrenWhenSubagentsDisabled(t *testin
 }
 
 func TestContainerEnvironmentSetsSearXNGURLWhenWebSearchEnabled(t *testing.T) {
-	disabled, err := containerEnvironment(validEndpoint(), "/aries/workspace", 180, false, "run-1", "fix-git")
+	disabled, err := containerEnvironment(validEndpoint(), 180, false, "run-1", "fix-git")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +356,7 @@ func TestContainerEnvironmentSetsSearXNGURLWhenWebSearchEnabled(t *testing.T) {
 			t.Fatalf("SEARXNG_URL set despite web search being disabled: %v", disabled)
 		}
 	}
-	enabled, err := containerEnvironment(validEndpoint(), "/aries/workspace", 180, true, "run-1", "fix-git")
+	enabled, err := containerEnvironment(validEndpoint(), 180, true, "run-1", "fix-git")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -441,13 +444,14 @@ func validGRPCEndpoint() core.ToolEndpoint {
 		ClientCommand: clientContainerFS, ClientSourceFile: "/tmp/aries-grpc",
 		IdentityFile: grpcIdentityPath, IdentitySourceFile: "/tmp/client.pem",
 		KnownHostsFile: grpcTrustedPath, KnownHostsSourceFile: "/tmp/server.crt",
+		Workdir: "/aries/workspace",
 	}
 }
 
 // The gRPC endpoint selects the ARIES plugin backend and carries no SSH target:
 // the plugin's client reads its target and credentials from ARIES_GRPC_*.
 func TestContainerEnvironmentSelectsTheAriesBackendUnderGRPC(t *testing.T) {
-	environment, err := containerEnvironment(validGRPCEndpoint(), "/aries/workspace", 180, false, "run-1", "fix-git")
+	environment, err := containerEnvironment(validGRPCEndpoint(), 180, false, "run-1", "fix-git")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -480,7 +484,7 @@ func TestContainerEnvironmentSelectsTheAriesBackendUnderGRPC(t *testing.T) {
 
 // An SSH endpoint must gain nothing from the gRPC support.
 func TestContainerEnvironmentLeavesSSHUntouched(t *testing.T) {
-	environment, err := containerEnvironment(validEndpoint(), "/aries/workspace", 180, false, "run-1", "fix-git")
+	environment, err := containerEnvironment(validEndpoint(), 180, false, "run-1", "fix-git")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -504,7 +508,7 @@ func TestContainerEnvironmentRejectsUnusableGRPCEndpoints(t *testing.T) {
 	for name, mutate := range cases {
 		endpoint := validGRPCEndpoint()
 		mutate(&endpoint)
-		if _, err := containerEnvironment(endpoint, "/aries/workspace", 180, false, "run-1", "fix-git"); err == nil {
+		if _, err := containerEnvironment(endpoint, 180, false, "run-1", "fix-git"); err == nil {
 			t.Fatalf("%s: invalid endpoint was accepted", name)
 		}
 	}

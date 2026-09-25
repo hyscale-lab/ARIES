@@ -306,7 +306,7 @@ func endpointFiles(t *testing.T) core.ToolEndpoint {
 	}
 	return core.ToolEndpoint{
 		Protocol: "ssh", Address: "172.22.0.1:39425", Username: "aries", Network: "aries-net-test",
-		IdentityFile: identityContainerFS, IdentitySourceFile: path,
+		IdentityFile: identityContainerFS, IdentitySourceFile: path, Workdir: "/app",
 	}
 }
 
@@ -1076,6 +1076,7 @@ func grpcEndpointFiles(t *testing.T) core.ToolEndpoint {
 		ClientCommand: clientContainerFS, ClientSourceFile: write("aries-grpc", "client-binary", 0o555),
 		IdentityFile: grpcIdentityPath, IdentitySourceFile: write("client.pem", "cert-and-key", 0o600),
 		KnownHostsFile: grpcTrustedPath, KnownHostsSourceFile: write("server.crt", "bridge-cert", 0o600),
+		Workdir: "/app",
 	}
 }
 

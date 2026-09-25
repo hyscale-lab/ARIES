@@ -336,13 +336,11 @@ func yamlFloat(value float64) string {
 // environment, so a profile's extra_body can carry a per-task value, such as
 // a per-task tag, without ARIES interpreting the block.
 //
-// TERMINAL_CWD is an ARIES-owned path that deliberately does not exist in any
-// task image. The bridge is authoritative for the working directory: it runs
-// every command in the sandbox's own workdir. Hermes opens its session with
-// `cd <TERMINAL_CWD> 2>/dev/null || true` followed by `pwd -P`, so a path it
-// cannot enter makes it adopt the workdir the bridge chose. Naming a real
-// sandbox path here is impossible in any case — the harness never learns it.
-func containerEnvironment(endpoint core.ToolEndpoint, workdir string, terminalTimeout int, webSearchEnabled bool, runID, taskID string) ([]string, error) {
+// TERMINAL_CWD is the sandbox's own workdir, as the bridge advertises it.
+// Hermes runs a session's first command in TERMINAL_CWD and records a new cwd
+// only after a command completes, so a path that does not exist in the sandbox
+// fails every command with exit 126. Relative file-tool paths anchor on it too.
+func containerEnvironment(endpoint core.ToolEndpoint, terminalTimeout int, webSearchEnabled bool, runID, taskID string) ([]string, error) {
 	if err := validateEndpoint(endpoint); err != nil {
 		return nil, err
 	}
@@ -352,8 +350,8 @@ func containerEnvironment(endpoint core.ToolEndpoint, workdir string, terminalTi
 	if err := validateTaskID(taskID); err != nil {
 		return nil, err
 	}
-	if !validWorkdir(workdir) {
-		return nil, fmt.Errorf("Hermes terminal workdir %q is not shell-neutral", workdir)
+	if !validWorkdir(endpoint.Workdir) {
+		return nil, fmt.Errorf("Hermes terminal workdir %q is not shell-neutral", endpoint.Workdir)
 	}
 	if terminalTimeout <= 0 {
 		return nil, errors.New("Hermes terminal timeout must be positive")
@@ -381,7 +379,7 @@ func containerEnvironment(endpoint core.ToolEndpoint, workdir string, terminalTi
 		)
 	}
 	environment = append(environment,
-		"TERMINAL_CWD="+workdir,
+		"TERMINAL_CWD="+endpoint.Workdir,
 		"TERMINAL_TIMEOUT="+strconv.Itoa(terminalTimeout),
 		"ARIES_RUN_ID="+runID,
 		"ARIES_TASK_ID="+taskID,

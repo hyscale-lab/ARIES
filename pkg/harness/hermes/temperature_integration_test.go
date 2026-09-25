@@ -59,7 +59,7 @@ func TestRequestSettingsReachRealHermes(t *testing.T) {
 			}
 			request := core.HarnessRequest{
 				RunID: "temperature-integration", TaskID: "temperature",
-				Endpoint: core.ToolEndpoint{Protocol: "ssh", Address: "127.0.0.1:2222", Username: "aries", Network: "bridge", IdentitySourceFile: identity},
+				Endpoint: core.ToolEndpoint{Protocol: "ssh", Address: "127.0.0.1:2222", Username: "aries", Network: "bridge", IdentitySourceFile: identity, Workdir: "/app"},
 				Model: core.ModelConfig{
 					Provider: "openai", BaseURL: "http://127.0.0.1:18080/v1", Model: "aries-deterministic",
 					APIKeyEnv: "ARIES_TEST_MODEL_KEY", ContextLength: 262144, MaxTokens: 32768, Temperature: &temperature,

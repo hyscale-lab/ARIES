@@ -295,7 +295,7 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 		ClientCommand: clientContainerPath, ClientSourceFile: session.clientSource,
 		IdentityFile: identityContainerPath, IdentitySourceFile: session.identityFile,
 		KnownHostsFile: trustedContainerPath, KnownHostsSourceFile: session.trustedFile,
-		LogPaths: []string{session.toolLogPath},
+		LogPaths: []string{session.toolLogPath}, Workdir: sandbox.Workdir(),
 	}, nil
 }
 

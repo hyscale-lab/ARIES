@@ -180,6 +180,10 @@ func TestBridgeProxiesCommandsAndRetainsEvidence(t *testing.T) {
 	if endpoint.Network != "sandbox-network-name" {
 		t.Fatalf("endpoint network = %q", endpoint.Network)
 	}
+	// Hermes must start its session in the sandbox's workdir.
+	if endpoint.Workdir != "/app" {
+		t.Fatalf("endpoint workdir = %q", endpoint.Workdir)
+	}
 	if endpoint.ClientCommand != clientContainerPath || endpoint.ClientSourceFile == "" {
 		t.Fatalf("bridge did not advertise its staged client: %#v", endpoint)
 	}
