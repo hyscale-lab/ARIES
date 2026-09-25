@@ -92,6 +92,96 @@ bound parallel occurrences. Add a positive Go duration such as `"30m"` as
 work is always drained. ARIES loads each task's explicit tagged image directly from that
 task's `task.toml`; no version-catalog or Go code change is required.
 
+### Replay task arrivals
+
+An arrival trace schedules task occurrences at offsets from the start of task
+scheduling, after benchmark/image preparation and model preflight. It applies
+to every supported benchmark and harness: Terminal-Bench 2, Deep Research
+Bench, SWE-Atlas QA, and SWE-bench Pro; OpenClaw and Hermes in all supported
+harness modes. Scheduling happens outside the harness. Keep each benchmark's
+required configuration and the matching harness/bridge pair from its existing
+profile.
+
+For example, save this trace as `.cache/arrivals.json` (create `.cache` first):
+
+```json
+{
+  "trace_id": "fix-git-replay",
+  "base_rate_per_min": 1.0,
+  "arrivals": [
+    {"t": 0, "traj": "fix-git"},
+    {"t": 60, "traj": "fix-git"},
+    {"t": 180, "traj": "fix-git"}
+  ]
+}
+```
+
+`trace_id` is optional descriptive metadata. `base_rate_per_min` is the positive
+reference rate. Each `t` is an offset in seconds, not a delay from the previous
+entry; `traj` is the exact logical task ID from `benchmark.tasks`. Selected
+offsets must be nonnegative and fit Go's `time.Duration` after scaling. The
+trace must contain at least one arrival. Extra metadata fields are accepted in
+the trace; the experiment profile still rejects unknown fields.
+
+Copy the one-task profile and replace its `execution` block and
+`benchmark.tasks` with the following values (these are profile fragments):
+
+```sh
+cp profiles/openclaw-tb2-fix-git-deepseek.json .cache/arrival-demo.json
+```
+
+```json
+{
+  "execution": {
+    "concurrency": 3,
+    "arrivals_file": ".cache/arrivals.json",
+    "arrival_rate_per_min": 2.0
+  },
+  "benchmark": {
+    "type": "terminalbench2",
+    "root": ".cache/terminal-bench-2",
+    "tasks": ["fix-git", "fix-git", "fix-git"]
+  }
+}
+```
+
+Keep the other fields from the copied profile. From the repository root, after
+configuring the model credential as described below, run:
+
+```sh
+./bin/aries .cache/arrival-demo.json
+```
+
+Relative `arrivals_file` paths resolve from the command's working directory,
+not the profile directory. The copied profile's `../configs/versions.json`
+continues to resolve relative to `.cache/arrival-demo.json`. Both
+`arrivals_file` and a finite, positive `arrival_rate_per_min` must be set
+together; omit `loop_duration` because a trace cannot be combined with looping.
+
+The scheduler uses `offset = t * base_rate_per_min / arrival_rate_per_min`.
+The example therefore schedules three independent `fix-git` occurrences at
+0, 30, and 90 seconds. It replays the supplied offsets; it does not generate a
+Poisson stream or guarantee a measured throughput of two tasks per minute.
+For each task, its k-th occurrence in `benchmark.tasks` selects its k-th entry
+in trace file order. Missing occurrences fail the run; unused trace entries
+are ignored. Selected occurrences are then sorted by scaled offset, preserving
+profile order for ties. This schedule order determines occurrence IDs and
+result order, regardless of completion order.
+
+`execution.concurrency` still caps active occurrences, including evaluation
+and cleanup. A full pool delays admission and can make later arrivals overdue;
+they run as capacity becomes available instead of being dropped. Choose enough
+capacity for the intended overlap (three guarantees a free slot for each
+arrival in this example). Cancellation stops further admissions and drains
+admitted work through lifecycle cleanup.
+
+Each task's `started_at` in `run-result.json` records when its Runner task
+lifecycle began, after occurrence construction, observer startup, and task
+loading, but before sandbox startup. It is neither the planned arrival time
+nor the first model request time. Starts can be delayed by capacity or setup;
+scheduling is not a hard realtime guarantee. Trace contents are loaded during
+`run` after model preflight, so `setup` alone does not validate them.
+
 ## 3. Configure the model backend
 
 `runtime.mode` states whether ARIES owns a model-server process: an `external`
