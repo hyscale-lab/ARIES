@@ -53,11 +53,9 @@ const (
 	identityContainerPath = "/run/aries/grpc/client.pem"
 	trustedContainerPath  = "/run/aries/grpc/server.crt"
 
-	// clientContainerPath is where the staged client lands. It is named `ssh`
-	// and reached by a PATH entry the harness prepends, because Hermes resolves
-	// its terminal client by name. See docs/design/grpc-bridge.md section 9 for
-	// why that shadowing is temporary.
-	clientContainerPath = "/run/aries/bin/ssh"
+	// clientContainerPath is where the staged client lands. The ARIES Hermes
+	// plugin runs it by this path.
+	clientContainerPath = "/run/aries/bin/aries-grpc"
 
 	lockedUsername = "aries"
 

@@ -1,5 +1,6 @@
 // Command aries-grpc is the client the Hermes gRPC bridge stages into the
-// harness container. It is invoked there as `ssh`; see pkg/bridge/hermesgrpc.
+// harness container, where the ARIES Hermes plugin runs it once per command;
+// see pkg/bridge/hermesgrpc.
 package main
 
 import (

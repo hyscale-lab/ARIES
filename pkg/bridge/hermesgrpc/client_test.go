@@ -3,63 +3,37 @@ package hermesgrpc
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/hyscale-lab/aries/pkg/core"
 )
 
-// TestRemotePayloadRecoversTheCommand pins the one piece of OpenSSH grammar
-// the client has to understand. The cases are reasoned from ssh(1)'s option
-// set, not from a recording: until the argv Hermes actually emits is captured
-// against the pinned image, this is the unverified part of the client.
-func TestRemotePayloadRecoversTheCommand(t *testing.T) {
-	for _, testCase := range []struct {
-		name string
-		args []string
-		want string
-	}{
-		{
-			name: "separate value options",
-			args: []string{"-p", "39425", "-i", "/run/aries/grpc/client.pem", "aries@172.17.0.1", "bash", "-c", "'echo hi'"},
-			want: "bash -c 'echo hi'",
-		},
-		{
-			name: "inline value option",
-			args: []string{"-p39425", "aries@172.17.0.1", "echo", "$HOME"},
-			want: "echo $HOME",
-		},
-		{
-			name: "repeated -o and boolean flags",
-			args: []string{"-T", "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes", "aries@host", "bash", "-c", "x"},
-			want: "bash -c x",
-		},
-		{
-			name: "clustered flags ending in a value option",
-			args: []string{"-tp", "39425", "aries@host", "true"},
-			want: "true",
-		},
-		{
-			name: "double dash ends the options",
-			args: []string{"--", "aries@host", "true"},
-			want: "true",
-		},
-		{
-			name: "destination with no command",
-			args: []string{"-p", "39425", "aries@172.17.0.1"},
-			want: "",
-		},
-		{
-			name: "no operands at all",
-			args: []string{"-O", "check"},
-			want: "",
-		},
+// TestClientRejectsAnythingButExec pins the argv contract the plugin relies on:
+// one mode, one script operand, nothing sent otherwise.
+func TestClientRejectsAnythingButExec(t *testing.T) {
+	sandbox := &testSandbox{result: core.CommandResult{ExitCode: 0}}
+	_, endpoint := startBridge(t, sandbox)
+	t.Setenv(targetEnv, endpoint.Address)
+	t.Setenv(identityEnv, endpoint.IdentitySourceFile)
+	t.Setenv(trustedEnv, endpoint.KnownHostsSourceFile)
+
+	for _, args := range [][]string{
+		nil,
+		{"aries@host", "bash", "-c", "true"},
+		{"exec"},
+		{"exec", "true", "extra"},
+		{"exec", "--unknown", "true"},
 	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			if got := remotePayload(testCase.args); got != testCase.want {
-				t.Fatalf("remotePayload(%q) = %q, want %q", testCase.args, got, testCase.want)
-			}
-		})
+		var stdout, stderr bytes.Buffer
+		if code := ClientMain(args, strings.NewReader(""), &stdout, &stderr); code != transportFailureExit {
+			t.Fatalf("ClientMain(%q) = %d, want %d", args, code, transportFailureExit)
+		}
+	}
+	if len(sandbox.snapshot()) != 0 {
+		t.Fatal("a malformed invocation reached the sandbox")
 	}
 }
 
@@ -75,9 +49,7 @@ func TestClientMainRunsThroughTheBridge(t *testing.T) {
 	t.Setenv(trustedEnv, endpoint.KnownHostsSourceFile)
 
 	var stdout, stderr bytes.Buffer
-	code := ClientMain(
-		[]string{"-p", "1", "aries@host", "bash", "-c", "'echo hi'"},
-		strings.NewReader("piped"), &stdout, &stderr)
+	code := ClientMain([]string{"exec", "--", "echo hi"}, strings.NewReader("piped"), &stdout, &stderr)
 
 	if code != 7 {
 		t.Fatalf("exit code = %d, want 7 (stderr: %s)", code, stderr.String())
@@ -100,46 +72,57 @@ func TestClientMainRunsThroughTheBridge(t *testing.T) {
 	_ = manager
 }
 
-// TestClientMainReportsRefusalAsTransportFailure pins that a denied file sync
-// reaches Hermes the way a refused SSH channel request does: exit 255, not a
-// command exit code it might mistake for a result.
-func TestClientMainReportsRefusalAsTransportFailure(t *testing.T) {
+// TestClientRunsLoginScriptsUnderALoginShell pins the flag Hermes's session
+// bootstrap needs: the script must reach the sandbox as `bash -l -c`.
+func TestClientRunsLoginScriptsUnderALoginShell(t *testing.T) {
 	sandbox := &testSandbox{result: core.CommandResult{ExitCode: 0}}
 	_, endpoint := startBridge(t, sandbox)
-
 	t.Setenv(targetEnv, endpoint.Address)
 	t.Setenv(identityEnv, endpoint.IdentitySourceFile)
 	t.Setenv(trustedEnv, endpoint.KnownHostsSourceFile)
 
 	var stdout, stderr bytes.Buffer
-	code := ClientMain(
-		[]string{"aries@host", "mkdir", "-p", "/root/.hermes"},
-		strings.NewReader(""), &stdout, &stderr)
-
-	if code != transportFailureExit {
-		t.Fatalf("exit code = %d, want %d", code, transportFailureExit)
+	if code := ClientMain([]string{"exec", "--login", "--", "pwd -P"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
+		t.Fatalf("exit code = %d (stderr: %s)", code, stderr.String())
 	}
-	if len(sandbox.snapshot()) != 0 {
-		t.Fatal("a denied sync reached the sandbox")
+	commands := sandbox.snapshot()
+	if len(commands) != 1 || strings.Join(commands[0].Args, " ") != "-l -c pwd -P" {
+		t.Fatalf("commands = %#v", commands)
 	}
 }
 
-// TestClientMainWithoutACommandDoesNothing covers the connection-setup
-// invocation: there is nothing to run, so nothing must be sent.
-func TestClientMainWithoutACommandDoesNothing(t *testing.T) {
+// TestClientMainReportsRevocationAsTransportFailure pins that a call after the
+// bridge is revoked reaches Hermes as exit 255, not as a command exit code.
+func TestClientMainReportsRevocationAsTransportFailure(t *testing.T) {
 	sandbox := &testSandbox{result: core.CommandResult{ExitCode: 0}}
-	_, endpoint := startBridge(t, sandbox)
+	manager, endpoint := startBridge(t, sandbox)
 
+	// Revocation deletes the credentials; keep copies so the call fails at the
+	// bridge rather than at loading them.
+	directory := t.TempDir()
+	identity, trusted := filepath.Join(directory, "client.pem"), filepath.Join(directory, "server.crt")
+	for source, target := range map[string]string{endpoint.IdentitySourceFile: identity, endpoint.KnownHostsSourceFile: trusted} {
+		content, err := os.ReadFile(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(target, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv(targetEnv, endpoint.Address)
-	t.Setenv(identityEnv, endpoint.IdentitySourceFile)
-	t.Setenv(trustedEnv, endpoint.KnownHostsSourceFile)
+	t.Setenv(identityEnv, identity)
+	t.Setenv(trustedEnv, trusted)
 
 	var stdout, stderr bytes.Buffer
-	if code := ClientMain([]string{"-N", "aries@host"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
-		t.Fatalf("exit code = %d, want 0", code)
+	if code := ClientMain([]string{"exec", "true"}, strings.NewReader(""), &stdout, &stderr); code != transportFailureExit {
+		t.Fatalf("exit code = %d, want %d", code, transportFailureExit)
 	}
 	if len(sandbox.snapshot()) != 0 {
-		t.Fatal("a setup invocation reached the sandbox")
+		t.Fatal("a call after revocation reached the sandbox")
 	}
 }
 
@@ -165,7 +148,7 @@ func TestClientRefusesAnUnpinnedServer(t *testing.T) {
 	t.Setenv(trustedEnv, otherEndpoint.KnownHostsSourceFile)
 
 	var stdout, stderr bytes.Buffer
-	code := ClientMain([]string{"aries@host", "bash", "-c", "x"}, strings.NewReader(""), &stdout, &stderr)
+	code := ClientMain([]string{"exec", "x"}, strings.NewReader(""), &stdout, &stderr)
 	if code != transportFailureExit {
 		t.Fatalf("exit code = %d, want %d", code, transportFailureExit)
 	}

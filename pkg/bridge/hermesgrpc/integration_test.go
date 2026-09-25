@@ -7,9 +7,8 @@ package hermesgrpc
 // a real Docker sandbox, so the whole path is exercised: argv to payload, mTLS
 // with a pinned server, the grammar gate, the sandbox, and the audit.
 //
-// What it does not cover is the argv Hermes actually emits. Proving that needs
-// the pinned Hermes image driving this bridge through the staged client, which
-// is the capture step the client's own tests flag as unverified.
+// The pinned Hermes image driving this path through the ARIES plugin is
+// covered by pkg/harness/hermes's integration test.
 
 import (
 	"bytes"
@@ -114,9 +113,9 @@ func TestClientDrivesTheBridgeIntoARealSandbox(t *testing.T) {
 		return code, stdout.String(), stderr.String()
 	}
 
-	// The bootstrap probe must report the sandbox's own home, not a value
-	// ARIES invents, which is why it replays through a POSIX shell.
-	code, stdout, stderr := call("", "aries@host", "echo", "$HOME")
+	// Hermes's session bootstrap runs under a login shell and must see the
+	// sandbox's own environment, not one ARIES invents.
+	code, stdout, stderr := call("", "exec", "--login", "--", "echo $HOME")
 	if code != 0 || strings.TrimSpace(stdout) == "" || strings.Contains(stdout, "$HOME") {
 		t.Fatalf("home probe: code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
@@ -124,23 +123,12 @@ func TestClientDrivesTheBridgeIntoARealSandbox(t *testing.T) {
 	// An agent command must reach the real container, and its effect must be
 	// visible to the evaluator afterwards.
 	code, stdout, stderr = call("streamed-input",
-		"aries@host", "bash", "-c", `'cat > /work/bridge-state; cat /work/bridge-state; printf tool-stderr >&2; exit 7'`)
+		"exec", "--", "cat > /work/bridge-state; cat /work/bridge-state; printf tool-stderr >&2; exit 7")
 	if code != 7 {
 		t.Fatalf("agent command: code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	if stdout != "streamed-input" || !strings.Contains(stderr, "tool-stderr") {
 		t.Fatalf("agent command output: stdout=%q stderr=%q", stdout, stderr)
-	}
-
-	// The file sync must be refused before it reaches the container the
-	// verifier later inspects.
-	code, _, _ = call("", "aries@host", "mkdir", "-p", "/root/.hermes/skills")
-	if code != transportFailureExit {
-		t.Fatalf("file sync: code=%d, want %d", code, transportFailureExit)
-	}
-	result, err := sandbox.Exec(ctx, core.Command{Path: "/bin/sh", Args: []string{"-c", "test ! -e /root/.hermes"}})
-	if err != nil || result.ExitCode != 0 {
-		t.Fatalf("/root/.hermes was created in the sandbox: %v (exit %d)", err, result.ExitCode)
 	}
 
 	if err := manager.Stop(ctx); err != nil {
@@ -156,16 +144,12 @@ func TestClientDrivesTheBridgeIntoARealSandbox(t *testing.T) {
 	}
 
 	records := readToolCalls(t, endpoint.LogPaths[0])
-	if len(records) != 3 {
-		t.Fatalf("records = %d, want 3: %#v", len(records), records)
+	if len(records) != 2 {
+		t.Fatalf("records = %d, want 2: %#v", len(records), records)
 	}
-	for index, want := range []struct{ class, status string }{
-		{kindBootstrap, "completed"},
-		{kindAgent, "completed"},
-		{kindSync, "denied"},
-	} {
-		if records[index]["operation_class"] != want.class || records[index]["status"] != want.status {
-			t.Fatalf("record %d = %#v, want %s/%s", index, records[index], want.class, want.status)
+	for index, record := range records {
+		if record["operation_class"] != kindAgent || record["status"] != "completed" {
+			t.Fatalf("record %d = %#v, want %s/completed", index, record, kindAgent)
 		}
 	}
 	// Command output must never enter the audit.
