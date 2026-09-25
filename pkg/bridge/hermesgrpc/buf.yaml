@@ -1,0 +1,18 @@
+version: v2
+modules:
+  - path: sandboxv1
+lint:
+  use:
+    - STANDARD
+  except:
+    # PACKAGE_DIRECTORY_MATCH wants aries/sandbox/v1/ on disk. This repository
+    # keeps every package self-contained with no central proto tree, so the
+    # file lives beside the code that generates from it.
+    - PACKAGE_DIRECTORY_MATCH
+    # SERVICE_SUFFIX wants "SandboxService". The suffix is redundant inside a
+    # package already named sandbox, and the generated Go identifiers read
+    # worse for it.
+    - SERVICE_SUFFIX
+breaking:
+  use:
+    - FILE

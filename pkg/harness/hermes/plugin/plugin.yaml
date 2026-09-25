@@ -1,0 +1,4 @@
+name: aries
+version: 1.0.0
+description: Run Hermes terminal and file tools in the ARIES task sandbox through the ARIES gRPC bridge
+kind: backend

@@ -1,5 +1,6 @@
 agentharness
 agentic
+allowlist
 anonymized
 antgroup
 api
@@ -9,6 +10,7 @@ automattic's
 asr
 backend
 backends
+base64
 bursty
 cadvisor
 centric
@@ -21,6 +23,7 @@ cpu
 cpus
 csv
 ctrf
+decompressed
 deduplicates
 deepseek
 deepseek's
@@ -30,12 +33,18 @@ drb
 durations
 edu
 entrypoint
+eof
 filesystem
+GeneralizedTime
 ghcr
 gib
 gid
 github
 gpu
+grpc
+gzip
+heredoc
+heredocs
 hermes
 hermes's
 hostname
@@ -55,10 +64,12 @@ lifecycle
 llm
 logrus
 loopback
+mb
 metadata
 mib
 moby
 moe
+mtls
 NCSpeech
 nousresearch
 ntu
@@ -74,11 +85,15 @@ openrouter
 openssh
 orchestrator
 parsers
+passthrough
 pid
 pre
+postconditions
 prefill
 preflight
 preload
+protobuf
+proxied
 qa's
 prewarm
 Qwen
@@ -89,6 +104,7 @@ relicense
 renderer
 replayable
 roadmap
+rpc
 runnable
 runtime
 runtimes
@@ -129,6 +145,8 @@ ttft
 tts
 tty
 uid
+unary
+unbounded
 untracked
 upstream's
 url's

@@ -66,7 +66,7 @@ func TestHarnessStartsRealHermesContainerAndStopsPositively(t *testing.T) {
 		RunID: "integration-run", TaskID: "integration-task",
 		Endpoint: core.ToolEndpoint{
 			Protocol: "ssh", Address: "127.0.0.1:2222", Username: "aries", Network: "bridge",
-			IdentityFile: identityContainerFS, IdentitySourceFile: identityPath,
+			IdentityFile: identityContainerFS, IdentitySourceFile: identityPath, Workdir: "/app",
 		},
 		Model: core.ModelConfig{Provider: "deepseek", BaseURL: "https://api.deepseek.com", Model: "deepseek-v4-flash", APIKeyEnv: "DEEPSEEK_API_KEY"},
 	}
