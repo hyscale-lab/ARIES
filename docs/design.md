@@ -72,8 +72,11 @@ positively removed.
 Concrete implementations are selected through explicit constructors and
 switches in the command wiring. There is no runtime discovery or registration
 layer. The command layer can admit independent task occurrences concurrently,
-but profile order determines admission and result order, and every admitted
-occurrence drains through the full lifecycle.
+with profile order determining admission and result order by default. An
+[arrival trace](quick-start.md#replay-task-arrivals) instead orders selected
+occurrences by scaled offset, preserving profile order for ties. Concurrency
+still bounds admission, and every admitted occurrence drains through the full
+lifecycle.
 
 Run output contains structured lifecycle and outcome records plus component
 artifacts. Replayable bridge input, child logs, rendered harness configuration,

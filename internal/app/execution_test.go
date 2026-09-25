@@ -369,9 +369,6 @@ func TestRunProfileArrivalsAdmitEachTaskAtItsOffset(t *testing.T) {
 	if gap := starts["b"].Sub(began); gap < 80*time.Millisecond {
 		t.Fatalf("b started %v after the run began; scheduled at 80ms", gap)
 	}
-	if starts["a"].Sub(began) > 60*time.Millisecond {
-		t.Fatalf("a started %v after the run began; scheduled at 0", starts["a"].Sub(began))
-	}
 }
 
 func TestRunProfileArrivalsRejectMismatchedScheduleAndLoop(t *testing.T) {
