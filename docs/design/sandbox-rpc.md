@@ -7,9 +7,9 @@ bridge in the ARIES process (`pkg/bridge/hermesgrpc`), and the sandbox. Bridge-s
 document is the contract. The wire definition with every field documented is
 `pkg/bridge/hermesgrpc/sandboxv1/sandbox.proto`.
 
-**Status.** All five procedures are implemented in the client and the bridge. No sandbox offers
-file access yet: the Docker sandbox lacks the capability below, so every file call is recorded and
-answered `UNIMPLEMENTED`.
+**Status.** All five procedures are implemented in the client, the bridge and the Docker sandbox.
+A sandbox without the file capability gets every file call recorded and answered
+`UNIMPLEMENTED`.
 
 ## Layers
 
@@ -81,10 +81,35 @@ What a sandbox implementation must guarantee; how it does so is its own business
 The client prints the payload on stdout and exactly one line on stderr: JSON metadata on success,
 a message on failure.
 
+## Docker implementation
+
+`pkg/sandbox/docker/files.go`, on the Docker archive API: no binaries needed in the task image and
+no process per read, about 5 ms per small read against 50-70 ms for any exec.
+
+- **`StatFile`** uses `ContainerStatPath`. **`OpenFile`** uses `CopyFromContainer` and hands the
+  bridge the tar entry as a stream; closing it early stops the transfer. Both follow a symlink
+  through the daemon's fully resolved `LinkTarget`.
+- **`WriteFile`** matches Hermes's own `_atomic_write`. Missing parents are created `0755` and
+  owned by the exec user, existing ones are untouched, an existing file keeps its mode (special bits
+  included), a new one gets `0644`. The daemon's extraction deletes the old file and writes in
+  place, so the bytes land under a temporary name in the target's directory and one exec renames
+  them into place: a reader sees the old file or the new one, and a failed write leaves the
+  original intact. One exec per write; reads need none.
+- **A 404 is absence only if the container is alive**, the rule `Download` already applies.
+
+Known limits:
+
+- **The archive API acts as root**, not as the sandbox's exec user, so on a benchmark that runs the
+  agent unprivileged (SWE-bench Pro, `65532:65532`) typed file calls can reach paths the agent's
+  own shell cannot. Accepted for performance. Upgrade path: run the three methods as exec scripts
+  under the exec user.
+- **tmpfs mounts are invisible** to the archive API (`/dev/shm` reads as not found). Upgrade path:
+  an exec `cat` fallback for paths under a tmpfs mount.
+
 ## Bounds and what comes later
 
 Every procedure is unary. File content, like command output, is bounded by the bridge's 16 MiB
 output limit. The intended transport for large files is gRPC streaming, a wire change to
-`ReadFile` and `WriteFile` that comes with the Docker sandbox implementation or when a measured
+`ReadFile` and `WriteFile` that comes when a measured
 file exceeds the bound. `Delete`, `Move` and `ListDir` arrive when Hermes's delete, move and
 directory listings move off the shell.

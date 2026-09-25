@@ -382,8 +382,8 @@ runs ARIES's own client, so `bin/aries-grpc` must sit beside `bin/aries`. The
 plugin attempts no file sync. Before Hermes starts, the harness applies a
 two-line file-operations seam to the pinned image. The bridge writes no
 `ssh_raw.log`; for it `bridge.retain_raw_log` instead keeps file content in
-`tool-calls.jsonl`. File tools on this route use typed file calls, which fail
-until the Docker sandbox gains file access.
+`tool-calls.jsonl`. File tools on this route use typed file calls served by the
+Docker sandbox; see `docs/design/sandbox-rpc.md` for their known limits.
 
 Artifacts land under `<run>/<task>/harness/`: the redacted `config.yaml`, the
 one-shot's `hermes_stdout.log` and `hermes_stderr.log`, `container.log`, and the

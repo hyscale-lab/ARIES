@@ -1,7 +1,7 @@
 # gRPC tool bridge
 
-**Status: `Exec` and the file procedures are implemented and wired; no sandbox offers file access
-yet, so file calls are answered `UNIMPLEMENTED`.** The file procedures are specified in
+**Status: `Exec` and the file procedures are implemented and wired, and the Docker sandbox serves
+the file procedures.** They are specified in
 [the sandbox RPC interface](sandbox-rpc.md). It
 replaces the transport of `ToolBridge`, not the role. The contract in `pkg/runner/interfaces.go` is
 unchanged.
