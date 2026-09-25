@@ -524,6 +524,9 @@ func secondsDuration(name string, seconds *float64) (*time.Duration, error) {
 		return nil, fmt.Errorf("%s must be finite, positive, and convert to nanoseconds below 2^63", name)
 	}
 	duration := time.Duration(scaled)
+	if duration <= 0 {
+		return nil, fmt.Errorf("%s must be finite, positive, and convert to a positive duration below 2^63 nanoseconds", name)
+	}
 	return &duration, nil
 }
 
