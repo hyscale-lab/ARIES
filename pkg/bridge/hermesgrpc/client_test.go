@@ -3,17 +3,19 @@ package hermesgrpc
 import (
 	"bytes"
 	"context"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/hyscale-lab/aries/pkg/core"
 )
 
-// TestClientRejectsAnythingButExec pins the argv contract the plugin relies on:
-// one mode, one script operand, nothing sent otherwise.
-func TestClientRejectsAnythingButExec(t *testing.T) {
+// TestClientRejectsMalformedInvocations pins the argv contract the plugin relies on:
+// a known mode, one operand, nothing sent otherwise.
+func TestClientRejectsMalformedInvocations(t *testing.T) {
 	sandbox := &testSandbox{result: core.CommandResult{ExitCode: 0}}
 	_, endpoint := startBridge(t, sandbox)
 	t.Setenv(targetEnv, endpoint.Address)
@@ -154,5 +156,52 @@ func TestClientRefusesAnUnpinnedServer(t *testing.T) {
 	}
 	if len(sandbox.snapshot()) != 0 {
 		t.Fatal("a call reached the sandbox over an unpinned connection")
+	}
+}
+
+// TestClientFileModesRoundTripBytes drives every file mode as the plugin will:
+// payload on stdout, one metadata line on stderr, statuses as fixed exit codes.
+func TestClientFileModesRoundTripBytes(t *testing.T) {
+	sandbox := newMemorySandbox(fstest.MapFS{"app/dir": &fstest.MapFile{Mode: fs.ModeDir | 0o755}})
+	_, _, endpoint := startFileBridge(t, sandbox, Options{})
+	t.Setenv(targetEnv, endpoint.Address)
+	t.Setenv(identityEnv, endpoint.IdentitySourceFile)
+	t.Setenv(trustedEnv, endpoint.KnownHostsSourceFile)
+	run := func(stdin string, args ...string) (int, string, string) {
+		var stdout, stderr bytes.Buffer
+		code := ClientMain(args, strings.NewReader(stdin), &stdout, &stderr)
+		return code, stdout.String(), stderr.String()
+	}
+
+	binary := "a\x00b\nline two\n\xff"
+	if code, out, meta := run(binary, "file", "write", "/app/f"); code != 0 || out != "" || meta != `{"bytes_written":14,"created":true}`+"\n" {
+		t.Fatalf("write: %d %q %q", code, out, meta)
+	}
+	if code, out, meta := run("", "file", "read", "/app/f"); code != 0 || out != binary || meta != `{"size":14,"truncated":false}`+"\n" {
+		t.Fatalf("read: %d %q %q", code, out, meta)
+	}
+	if code, out, _ := run("", "file", "read", "--offset", "1", "--max-bytes", "2", "/app/f"); code != 0 || out != "\x00b" {
+		t.Fatalf("read range: %d %q", code, out)
+	}
+	if code, out, meta := run("", "file", "lines", "--first", "2", "--max", "1", "--max-line-bytes", "4", "/app/f"); code != 0 || out != "line\n" ||
+		meta != `{"ends_with_newline":false,"more":false,"size":14,"total_lines":2}`+"\n" {
+		t.Fatalf("lines: %d %q %q", code, out, meta)
+	}
+	if code, out, meta := run("", "file", "stat", "/app/dir"); code != 0 || out != `{"exists":true,"mode":"0755","size":0,"type":"directory"}`+"\n" || meta != "" {
+		t.Fatalf("stat: %d %q %q", code, out, meta)
+	}
+
+	for _, test := range []struct {
+		args []string
+		want int
+	}{
+		{[]string{"file", "read", "/app/none"}, 1},
+		{[]string{"file", "stat", "app/relative"}, 3},
+		{[]string{"file", "read", "/app/dir"}, 5},
+		{[]string{"file", "copy", "/app/f"}, transportFailureExit},
+	} {
+		if code, _, message := run("", test.args...); code != test.want || message == "" {
+			t.Fatalf("%q: exit %d, want %d (stderr %q)", test.args, code, test.want, message)
+		}
 	}
 }
