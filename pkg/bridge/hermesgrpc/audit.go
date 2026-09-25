@@ -59,7 +59,10 @@ type toolCallRecord struct {
 	StdinEncoding  string   `json:"stdin_encoding"`
 	// StdinRaw carries base64 bytes only when Stdin holds the omission note,
 	// so a structured-safe input is never stored twice.
-	StdinRaw    string `json:"stdin_raw,omitempty"`
+	StdinRaw string `json:"stdin_raw,omitempty"`
+	// ContentRaw carries a file procedure's content, base64, only when the
+	// profile set bridge.retain_raw_log.
+	ContentRaw  string `json:"content_raw,omitempty"`
 	StdinBytes  int64  `json:"stdin_bytes"`
 	StdoutBytes int64  `json:"stdout_bytes"`
 	Truncated   bool   `json:"truncated,omitempty"`

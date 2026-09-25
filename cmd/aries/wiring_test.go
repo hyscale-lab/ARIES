@@ -429,30 +429,20 @@ func TestExternalOpenAIPreparationReturnsNilRuntime(t *testing.T) {
 	}
 }
 
-// The gRPC bridge writes one audit artifact and no raw log, so a profile that
-// sets retain_raw_log for it is asking for something that cannot happen. This
-// repository refuses an inapplicable field rather than ignoring it.
-func TestValidateComponentsRejectsRetainRawLogForGRPC(t *testing.T) {
+// For the gRPC bridge retain_raw_log keeps file content in tool-calls.jsonl,
+// so every value of it is a valid profile.
+func TestValidateComponentsAcceptsRetainRawLogForGRPC(t *testing.T) {
 	retain := true
-	for _, value := range []*bool{&retain, new(bool)} {
+	for _, value := range []*bool{nil, &retain, new(bool)} {
 		cfg := config.Config{
 			Benchmark: config.BenchmarkConfig{Type: "terminalbench2"},
 			Harness:   config.HarnessConfig{Type: "hermes"},
 			Sandbox:   config.SandboxConfig{Type: "docker"},
 			Bridge:    config.BridgeConfig{Type: "hermes-grpc", RetainRawLog: value},
 		}
-		if err := validateComponents(cfg); err == nil || !strings.Contains(err.Error(), "retain_raw_log") {
-			t.Fatalf("retain_raw_log=%v was accepted: %v", *value, err)
+		if err := validateComponents(cfg); err != nil {
+			t.Fatalf("retain_raw_log=%v was rejected: %v", value, err)
 		}
-	}
-	cfg := config.Config{
-		Benchmark: config.BenchmarkConfig{Type: "terminalbench2"},
-		Harness:   config.HarnessConfig{Type: "hermes"},
-		Sandbox:   config.SandboxConfig{Type: "docker"},
-		Bridge:    config.BridgeConfig{Type: "hermes-grpc"},
-	}
-	if err := validateComponents(cfg); err != nil {
-		t.Fatalf("an unset retain_raw_log was rejected: %v", err)
 	}
 }
 

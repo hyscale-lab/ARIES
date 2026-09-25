@@ -360,8 +360,8 @@ func TestRevokedSessionRefusedAtTheGuard(t *testing.T) {
 	// revoke is idempotent, so a later Stop is still safe.
 	session.revoke()
 
-	if err := session.authorize(agentPayload); status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("revoked session = %v, want FailedPrecondition", err)
+	if err := session.authorize(agentPayload); status.Code(err) != codes.Unavailable {
+		t.Fatalf("revoked session = %v, want Unavailable", err)
 	}
 
 	if err := manager.Stop(context.Background()); err != nil {

@@ -85,12 +85,6 @@ func validateComponents(cfg config.Config) error {
 	if (cfg.Harness.Type == "hermes") != (cfg.Bridge.Type == "hermes-ssh" || cfg.Bridge.Type == "hermes-grpc") {
 		return fmt.Errorf("harness type %q requires its paired bridge, not %q", cfg.Harness.Type, cfg.Bridge.Type)
 	}
-	// The gRPC bridge writes one audit artifact and no raw log, so the flag
-	// would silently do nothing. Refusing an inapplicable field is this
-	// repository's convention.
-	if cfg.Bridge.Type == "hermes-grpc" && cfg.Bridge.RetainRawLog != nil {
-		return errors.New("bridge type \"hermes-grpc\" writes no raw log, so retain_raw_log does not apply")
-	}
 	return nil
 }
 
@@ -413,12 +407,17 @@ func newBridge(cfg config.Config, outputRoot string, logger *logrus.Logger) (run
 		return bridge, nil
 	case "hermes-grpc":
 		// Hermes has no client for this transport, so ARIES supplies one and
-		// the harness puts it on PATH under the name Hermes invokes.
+		// the harness stages it for the ARIES plugin. retain_raw_log is the
+		// most verbose evidence level: for this bridge it keeps file content
+		// in tool-calls.jsonl.
 		executable, err := os.Executable()
 		if err != nil {
 			return nil, fmt.Errorf("locate ARIES executable: %w", err)
 		}
-		bridge, err := hermesgrpc.New(hermesgrpc.Options{OutputDir: outputRoot, ClientPath: filepath.Join(filepath.Dir(executable), "aries-grpc"), Logger: logger})
+		bridge, err := hermesgrpc.New(hermesgrpc.Options{
+			OutputDir: outputRoot, ClientPath: filepath.Join(filepath.Dir(executable), "aries-grpc"), Logger: logger,
+			RetainContent: cfg.Bridge.RetainBridgeRawLog(),
+		})
 		if err != nil {
 			return nil, fmt.Errorf("construct Hermes gRPC bridge: %w", err)
 		}

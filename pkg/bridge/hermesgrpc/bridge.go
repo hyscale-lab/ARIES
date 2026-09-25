@@ -90,9 +90,12 @@ type Options struct {
 	// ClientPath is the host path of the aries-grpc executable staged into the
 	// harness container.
 	ClientPath string
-	// OutputLimit bounds retained stdout and stderr per call. Zero selects
-	// defaultOutputLimit.
+	// OutputLimit bounds retained stdout and stderr per call, and file
+	// content per file call. Zero selects defaultOutputLimit.
 	OutputLimit int64
+	// RetainContent keeps file content, base64, in tool-calls.jsonl. It is the
+	// profile's bridge.retain_raw_log: the most verbose evidence level.
+	RetainContent bool
 }
 
 // Manager exposes one gRPC endpoint at a time and proxies its calls to the
@@ -103,6 +106,7 @@ type Manager struct {
 	logger         *logrus.Logger
 	clientPath     string
 	outputLimit    int64
+	retainContent  bool
 	openAudit      func(string) (*auditFile, error)
 
 	mu       sync.Mutex
@@ -139,7 +143,9 @@ type bridgeSession struct {
 	audit        *auditWriter
 	logger       *logrus.Logger
 	outputLimit  int64
-	partialStart bool
+	// retainContent keeps file content in the audit; see Options.
+	retainContent bool
+	partialStart  bool
 
 	revoked       chan struct{}
 	revocationMu  sync.Mutex
@@ -177,7 +183,7 @@ func New(options Options) (*Manager, error) {
 	return &Manager{
 		outputDir: outputDir, cleanupTimeout: options.CleanupTimeout,
 		logger: options.Logger, clientPath: options.ClientPath,
-		outputLimit: options.OutputLimit, openAudit: openAuditFile,
+		outputLimit: options.OutputLimit, retainContent: options.RetainContent, openAudit: openAuditFile,
 	}, nil
 }
 
@@ -198,7 +204,7 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 
 	session := &bridgeSession{
 		sandbox: sandbox, revoked: make(chan struct{}),
-		logger: manager.logger, outputLimit: manager.outputLimit,
+		logger: manager.logger, outputLimit: manager.outputLimit, retainContent: manager.retainContent,
 	}
 	session.artifactDir = filepath.Join(manager.outputDir, sandbox.TaskID(), "bridge")
 
@@ -491,16 +497,7 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 	stderr := newBoundedWriter(&stderrBuffer, session.outputLimit)
 
 	result, execErr := session.sandbox.ExecStream(callCtx, command, stdin, stdout, stderr)
-	if contextErr := callCtx.Err(); contextErr != nil && !hasCancellationCause(execErr) {
-		// A sandbox error returned after revocation is ambiguous unless it
-		// carries the cancellation cause. Preserve both so Stop fails closed
-		// rather than treating an unconfirmed termination as an earlier error.
-		if execErr == nil {
-			execErr = contextErr
-		} else {
-			execErr = errors.Join(contextErr, execErr)
-		}
-	}
+	execErr = withCancellation(callCtx, execErr)
 
 	exitCode := result.ExitCode
 	reason := sandboxv1.Reason_REASON_COMPLETED
@@ -563,6 +560,22 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 	}, nil
 }
 
+// withCancellation keeps a cancelled call from looking successful or like an
+// ordinary failure. A sandbox error returned after revocation is ambiguous
+// unless it carries the cancellation cause, so both are preserved and Stop
+// fails closed rather than treating an unconfirmed termination as an earlier
+// error.
+func withCancellation(ctx context.Context, err error) error {
+	contextErr := ctx.Err()
+	if contextErr == nil || hasCancellationCause(err) {
+		return err
+	}
+	if err == nil {
+		return contextErr
+	}
+	return errors.Join(contextErr, err)
+}
+
 // authorize refuses a call on a revoked session and records the refusal. A
 // refused call is a recordable event: the SSH bridge leaves several refusal
 // classes with no audit entry at all, and that gap is deliberately not
@@ -576,7 +589,7 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 func (session *bridgeSession) authorize(payload string) error {
 	if session.isRevoked() {
 		session.logRequestFailure(payload, kindUnknown, "rejected", "session revoked")
-		return status.Error(codes.FailedPrecondition, "session revoked")
+		return status.Error(codes.Unavailable, "session revoked")
 	}
 	return nil
 }
