@@ -119,7 +119,7 @@ For example, save this trace as `.cache/arrivals.json` (create `.cache` first):
 `trace_id` is optional descriptive metadata. `base_rate_per_min` is the positive
 reference rate. Each `t` is an offset in seconds, not a delay from the previous
 entry; `traj` is the exact logical task ID from `benchmark.tasks`. Selected
-offsets must be nonnegative and fit Go's `time.Duration` after scaling. The
+offsets must be zero or positive and fit Go's `time.Duration` after scaling. The
 trace must contain at least one arrival. Extra metadata fields are accepted in
 the trace; the experiment profile still rejects unknown fields.
 
