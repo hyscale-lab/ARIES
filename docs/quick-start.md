@@ -61,9 +61,22 @@ omitted harness dimension stays unlimited; an omitted sandbox dimension keeps
 the value in the task's `task.toml`. Neither block inherits from the other.
 The independent `agent_timeout_seconds` field changes only the agent deadline.
 The independent `verifier_timeout_floor_seconds` field raises a Terminal-Bench
-task's verifier budget to at least that many seconds and never lowers one; some
-task test scripts install packages before their tests start and exhaust a short
-declared budget on the install alone.
+task's evaluation budget to at least that many seconds and never lowers one.
+It covers the entire verifier command, including dependency installation and
+test execution, and leaves the agent deadline unchanged. Some task test scripts
+exhaust a short declared budget while installing dependencies.
+
+For example, an overrides file containing the following sets a 900-second
+minimum verifier budget:
+
+```json
+{
+  "verifier_timeout_floor_seconds": 900
+}
+```
+
+Report the configured floor with benchmark results and use the same verifier
+budget policy across compared runs.
 Every checked-in profile explicitly contains `overrides_file`; the one-task
 profile uses `""`, which disables override loading without opening a file.
 Profiles and nonempty referenced override files reject unknown fields and

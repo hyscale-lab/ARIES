@@ -653,6 +653,43 @@ func TestLoadRuntimeOverridesStrictSparseAndChecked(t *testing.T) {
 	}
 }
 
+func TestLoadRuntimeOverridesNanosecondBoundary(t *testing.T) {
+	for _, field := range []string{"agent_timeout_seconds", "verifier_timeout_floor_seconds"} {
+		for _, tc := range []struct {
+			name    string
+			seconds string
+			want    time.Duration
+		}{
+			{name: "sub-nanosecond", seconds: "0.0000000005"},
+			{name: "one-nanosecond", seconds: "0.000000001", want: time.Nanosecond},
+		} {
+			t.Run(field+"/"+tc.name, func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), "overrides.json")
+				if err := os.WriteFile(path, []byte(fmt.Sprintf(`{"%s":%s}`, field, tc.seconds)), 0600); err != nil {
+					t.Fatal(err)
+				}
+				overrides, err := LoadRuntimeOverrides(path)
+				if tc.want == 0 {
+					if err == nil || !strings.Contains(err.Error(), field) {
+						t.Fatalf("expected %s validation error, got %v", field, err)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				got := overrides.AgentTimeout
+				if field == "verifier_timeout_floor_seconds" {
+					got = overrides.VerifierTimeoutFloor
+				}
+				if got == nil || *got != tc.want {
+					t.Fatalf("%s = %v, want %v", field, got, tc.want)
+				}
+			})
+		}
+	}
+}
+
 func TestDecodeVersionsValidation(t *testing.T) {
 	if _, err := DecodeVersions(strings.NewReader(validVersions)); err != nil {
 		t.Fatal(err)
