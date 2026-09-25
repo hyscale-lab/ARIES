@@ -42,8 +42,6 @@ jobs:
           persist-credentials: false
       - name: Lint commits
         uses: dafnik/commitlint@v1
-        with:
-          configFile: commitlint.config.js
 
   markdown-link-check:
     name: Markdown links
