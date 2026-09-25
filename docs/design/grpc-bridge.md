@@ -56,7 +56,8 @@ Dashed arrows are control and lifecycle; thick arrows are data.
 - [Section 6](#6-evidence) — preserving the audit contract.
 - [Section 7](#7-what-is-preserved-and-what-is-dropped) — the migration checklist.
 - [Section 8](#8-open-questions) — what this proposal does not settle.
-- [Section 9](#9-reaching-a-real-harness-without-moving-the-pin) — how a real client is reached.
+- [Section 9](#9-how-hermes-reaches-the-bridge) — the ARIES plugin, the file-operations seam,
+  and the working directory.
 
 ## 1. Scope
 
@@ -506,9 +507,10 @@ so compression does not interact with that cap the way it might appear to.
 - Bounded `stdin` retention; no command output in the audit.
 - Per-task ephemeral credentials, removed at revocation.
 - Refusals recorded distinctly from failures.
-- Grammar-based validation of the payload, and with it the refusal of Hermes's `~/.hermes` file
-  sync. The check stays on the server, where a caller holding the staged credentials cannot route
-  around it.
+- Grammar-based validation of the payload, including the refusal of a raw `~/.hermes` file-sync
+  payload. The check stays on the server, where a caller holding the staged credentials cannot
+  route around it. On the plugin route Hermes never attempts the sync
+  ([section 9](#9-how-hermes-reaches-the-bridge)).
 - Canonical shell quoting and its round-trip verification, which `grammar.go` carries over whole.
 
 **Dropped — transport artifacts with no successor.**
@@ -553,72 +555,42 @@ Two questions this section used to carry are settled: the harness/bridge pairing
 `hermes-grpc` alongside `hermes-ssh` in `cmd/aries/wiring.go`, and the gRPC dependency and
 code-generation step are in `go.mod` and `make proto`, with generated code committed.
 
-## 9. Reaching a real harness without moving the pin
+## 9. How Hermes reaches the bridge
 
-Everything in section 8 is deferrable; items 2 to 4 each resolve to "match today's behaviour". The
-one genuine question is how a client speaks this protocol at all, and there are two routes.
+Hermes reaches the bridge through an ARIES terminal-backend plugin, the pluggable-backend seam
+Hermes gained in `v2026.8.27`. The harness stages the plugin under `HERMES_HOME/plugins/aries`,
+enables it with `plugins.enabled: [aries]` in the rendered `config.yaml`, and selects it with
+`TERMINAL_ENV=aries`. The plugin's environment subclasses Hermes's `BaseEnvironment`, so Hermes's
+own working-directory and environment envelope wraps every command, and runs each one as
 
-**The route that does not require a pin move.** ARIES already owns the harness container's
-entrypoint wrapper (`pkg/harness/hermes/config.go:159-181`), which exports credentials and then
-`exec`s the agent. Prepending a directory to `PATH` there, and staging a shim into it, makes the
-harness invoke ARIES's binary wherever it would have invoked its transport client. The shim
-translates the invocation into a gRPC call.
+```sh
+/run/aries/bin/aries-grpc exec [--login] -- SCRIPT
+```
 
-There is direct precedent: ARIES stages `/opt/aries/bin/aries-ssh` mode `0555` for the OpenClaw
-path and OpenClaw is *configured* to call it (`pkg/harness/openclaw/config.go:314`). The
-difference for Hermes is that ARIES deliberately refuses to supply a client command, so the shim is
-reached by shadowing `PATH` rather than by configuration — implicit where the other is explicit.
+one process per command. The client wraps `SCRIPT` as the `bash -c` payload the grammar accepts
+and makes one `Exec` call. It is run by path, so nothing shadows `ssh` on `PATH` and there is no
+OpenSSH argv to reconstruct. That wrapping is temporary: it keeps the grammar gate and audit
+classification unchanged, and gives way to a native command request when the SSH pairing is
+retired. Hermes enforces command timeouts by killing the client, and the closed connection
+cancels the call on the bridge. The plugin constructs no `FileSyncManager`, so Hermes never
+attempts its `~/.hermes` sync on this route.
 
-> **The shadowing is temporary, and removing it takes two separate changes.**
->
-> It exists first because `pkg/harness/hermes/config.go` must keep emitting a working SSH
-> environment for `hermes-ssh`, which is still the supported pairing. Retiring SSH frees that file
-> to be rewritten for gRPC alone.
->
-> That alone does not remove the trick, and it would be misleading to imply otherwise: upstream
-> Hermes resolves `ssh` by name from `PATH` whatever ARIES puts in the environment. The shadowing
-> disappears only together with the pin move to a Hermes carrying its own pluggable-backend seam —
-> the second route below. Two removals, not one, and neither is on this iteration's path.
+**File operations need one seam in Hermes itself.** Hermes lowers every file tool into shell
+commands through `ShellFileOperations`, and `_get_file_ops` constructs that class
+unconditionally, so no plugin can supply typed file operations. ARIES adds
+`BaseEnvironment.get_file_operations()`, returning `None` by default, and makes `_get_file_ops`
+ask the environment first; the plugin's environment returns its own `FileOperations` subclass.
+Until that two-line change is upstream, `pkg/harness/hermes/seam.py` applies it inside the
+container: the agent wrapper runs it as root before Hermes starts, it checks every anchor before
+writing, and a missing anchor stops the container, so a moved pin cannot silently leave file
+tools on the shell. The gRPC route therefore runs the pinned image with that patch applied; the
+SSH route runs it unmodified.
 
-What this buys: an end-to-end run against the **same pinned image the SSH bridge uses**, with no
-image patch and no dependency on a pluggable-backend seam. Staging a file is what ARIES already
-does; it is not a patch layer.
-
-What it does **not** buy: the client's command wrapper survives unchanged, the payload is still an
-opaque script, and a translation step is added between the harness's invocation shape and the RPC.
-That is consistent with this proposal being a transport swap
-([the working directory](#the-working-directory-and-what-aries-does-not-do)) rather than a
-simplification of what crosses the wire — but it should not be mistaken for progress toward typed
-operations.
-
-The cost to weigh is coupling: the shim must understand the harness's invocation shape, and will
-break if that shape changes. That coupling belongs in the client, which is where
-[section 8](#8-open-questions) item 1 says per-harness behaviour goes, so it does not compromise
-the service. It does mean the shim needs its own pinned-payload tests, exactly as the current
-grammar has.
-
-**The route that does require a pin move.** A first-class backend registered through the harness's
-own pluggable-backend seam. That seam is absent from the pinned image
-(`configs/versions.json:19-21`) and present only in later releases, so this path requires moving
-the pin — which changes agent behaviour mid-milestone and invalidates the wire payloads recorded in
-`pkg/bridge/hermesssh/grammar_test.go:15-16`. It is the cleaner end state and the wrong thing to
-attempt first.
-
-**Neither route blocks building the bridge.** The server, service definition, audit path, and
-revocation are all testable against a purpose-built Go client — which is what this package's tests
-would use regardless, exactly as `bridge_test.go` drives the SSH bridge with a raw
-`x/crypto/ssh` client rather than a real harness. Suggested order:
-
-The bridge, the staged client and the wiring are built. One gap remains: the argv Hermes emits has
-not been captured, so `remotePayload`'s rule is reasoned from `ssh(1)`'s option set rather than from
-a recording — `integration_test.go` proves the whole path against a real Docker sandbox, but drives
-it with an argv this repository wrote. Capturing the real one also decides whether `ExecRequest`
-should carry `repeated string argv` instead of a flattened `script`, removing the client's join and
-the server's re-parse.
-
-Moving the pin and adopting the native backend stays a later change of its own, re-recording
-payloads and re-running `TestUpstreamHermesDrivesTheBridgeWithoutPatches`. It is the only step
-carrying comparability risk, and it is not on the critical path.
+**The working directory.** Both Hermes bridges advertise the sandbox workdir in
+`core.ToolEndpoint.Workdir`, and the harness sets `TERMINAL_CWD` from it. Hermes runs a session's
+first command in `TERMINAL_CWD` behind `cd || exit 126` and records a new directory only after a command
+completes, so a path the sandbox lacks fails every command. An earlier placeholder path did exactly
+that on both routes.
 
 ## Background material
 
