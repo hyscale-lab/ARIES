@@ -40,11 +40,13 @@ ops = _get_file_ops("tool-probe")
 print("FILE_OPS", type(ops).__name__, type(ops.env).__name__)
 from tools.terminal_tool import terminal_tool
 print("TOOL", terminal_tool(command="echo aries-tool-ok && pwd", task_id="tool-probe"))
+from tools.file_tools import read_file_tool
+print("READ", read_file_tool(path="/etc/hostname", task_id="tool-probe"))
 `
 
 // runToolProbe starts one Hermes harness against the named bridge and returns
-// what the probe printed.
-func runToolProbe(t *testing.T, protocol string) string {
+// what the probe printed and the bridge's endpoint.
+func runToolProbe(t *testing.T, protocol string) (string, core.ToolEndpoint) {
 	t.Helper()
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker is not available")
@@ -141,15 +143,65 @@ func runToolProbe(t *testing.T, protocol string) string {
 	if !strings.Contains(text, "aries-tool-ok") || !strings.Contains(text, "/work") || !strings.Contains(text, `"exit_code": 0`) {
 		t.Fatalf("terminal tool did not run in the sandbox workdir:\n%s", text)
 	}
-	return text
+	return text, endpoint
 }
 
 func TestHermesSSHRouteRunsTheFirstCommandInTheSandboxWorkdir(t *testing.T) {
 	runToolProbe(t, protocolSSH)
 }
 
+// The Docker sandbox offers no file access yet, so a file tool must reach the
+// bridge as a typed call, be recorded there, and come back to Hermes as a
+// clean tool error: never a success, never a shell fallback.
 func TestPluginRunsHermesToolsThroughTheGRPCBridge(t *testing.T) {
-	if text := runToolProbe(t, protocolGRPC); !strings.Contains(text, "FILE_OPS AriesFileOperations AriesEnvironment") {
+	text, endpoint := runToolProbe(t, protocolGRPC)
+	if !strings.Contains(text, "FILE_OPS AriesFileOperations AriesEnvironment") {
 		t.Fatalf("file tools did not reach the plugin through the seam:\n%s", text)
+	}
+	if !strings.Contains(text, "READ") || !strings.Contains(text, "sandbox offers no file access") {
+		t.Fatalf("read_file did not fail cleanly through the bridge:\n%s", text)
+	}
+	// The audit is written asynchronously; give it a moment.
+	var log []byte
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		log, _ = os.ReadFile(endpoint.LogPaths[0])
+		if strings.Contains(string(log), `"operation_class":"file_stat"`) && strings.Contains(string(log), `"status":"unimplemented"`) {
+			return
+		}
+	}
+	t.Fatalf("the file call was not recorded at the bridge:\n%s", log)
+}
+
+// TestPluginFileOperationsInThePinnedImage runs the plugin's file operations
+// inside the pinned Hermes image, with the seam applied, against a fake client
+// that serves the same contract from the container's own filesystem. Hermes
+// is importable only there, so this is where the adapter's unit test lives.
+func TestPluginFileOperationsInThePinnedImage(t *testing.T) {
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("docker is not available")
+	}
+	versions, err := config.LoadVersions(filepath.Join("..", "..", "..", "configs", "versions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	if err := dockersandbox.PullImages(ctx, []string{versions.Hermes.Image}); err != nil {
+		t.Fatalf("prepare image: %v", err)
+	}
+	here, err := filepath.Abs(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := "mkdir -p /fake && cp /t/fake_aries_grpc.py /fake/aries-grpc && chmod +x /fake/aries-grpc" +
+		" && python3 /seam.py && cd /opt/hermes && python3 /t/plugin_check.py"
+	output, err := exec.CommandContext(ctx, "docker", "run", "--rm",
+		"-v", filepath.Join(here, "plugin")+":/plugin:ro",
+		"-v", filepath.Join(here, "seam.py")+":/seam.py:ro",
+		"-v", filepath.Join(here, "testdata")+":/t:ro",
+		"-e", "FAKE_CLIENT_LOG=/tmp/client.log", "-e", "HERMES_WRITE_SAFE_ROOT=",
+		"--entrypoint", "sh", versions.Hermes.Image, "-c", script).CombinedOutput()
+	if err != nil || !strings.Contains(string(output), "PLUGIN_CHECK_OK") {
+		t.Fatalf("plugin check: %v\n%s", err, output)
 	}
 }
