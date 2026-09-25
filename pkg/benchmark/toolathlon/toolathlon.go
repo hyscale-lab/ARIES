@@ -1,0 +1,738 @@
+// Package toolathlon adapts the Toolathlon benchmark (hkust-nlp/Toolathlon)
+// to the ARIES Benchmark role.
+//
+// Toolathlon's own runner has a "decoupled" mode that already separates the
+// three concerns ARIES separates: task preparation and the MCP tool gateway
+// run inside the task container, the agent loop runs outside it, and the
+// grader runs inside it again after the agent is gone. This package drives
+// exactly those in-container pieces through the Sandbox capability, and lets
+// the ARIES harness be the agent loop. The gateway is an MCP-over-SSE server
+// on a fixed port; the harness reaches it through the sandbox's fixed
+// `task-sandbox` network alias, the same way Deep Research Bench's SearXNG is
+// reached.
+//
+// Two upstream assumptions do not hold in an ARIES sandbox and are handled
+// here rather than by weakening the sandbox:
+//
+//   - Toolathlon starts its task container with `--network host`, so its MCP
+//     servers and preprocess scripts reach the self-hosted applications
+//     (Canvas, poste.io, WooCommerce) at `localhost`. An ARIES task container
+//     is on a private per-task network, so PrepareSandbox starts a loopback
+//     port forwarder inside the container that carries those fixed ports to
+//     the Docker host.
+//   - Toolathlon hides the grader and ground truth by copying them to the
+//     host with `docker cp`. Here the same entries are archived, downloaded
+//     into the private run directory, and removed before the bridge exists,
+//     then restored only after harness stop and bridge revocation are
+//     confirmed — the Terminal-Bench 2 verifier pattern.
+package toolathlon
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"maps"
+	"net"
+	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+
+	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/runner"
+)
+
+const (
+	// DefaultRoot is the conventional local checkout path for Toolathlon.
+	DefaultRoot = ".cache/toolathlon"
+
+	// DefaultGatewayPort is Toolathlon's own default for the MCP gateway.
+	DefaultGatewayPort = 10086
+
+	// GatewayServerName is the name the gateway is registered under in the
+	// harness's MCP client configuration, so its tools reach the model as
+	// `mcp_toolathlon_<tool>` (or `mcp__toolathlon__<tool>`, by Hermes
+	// version). A profile may not use it for a server of its own.
+	GatewayServerName = "toolathlon"
+
+	// GatewayCallTimeoutSeconds is the harness's per-call timeout for the
+	// gateway. Every backend behind the gateway has Toolathlon's own
+	// per-call timeout (`client_session_timeout_seconds` in
+	// configs/mcp_servers, at most 1000 s for howtocook), so this sits
+	// above the largest of them and Toolathlon's timeouts are the ones
+	// that fire; the harness's is only the backstop.
+	GatewayCallTimeoutSeconds = 1200
+
+	// DefaultMaxSteps mirrors `max_steps_under_single_turn_mode` in
+	// Toolathlon's formal run config; it only bounds Toolathlon's own
+	// bookkeeping here, since the ARIES harness owns the agent loop.
+	DefaultMaxSteps = 200
+
+	// taskPool is the only task pool in the pinned checkout.
+	taskPool = "finalpool"
+
+	// workspaceRoot is the task image's project directory and the working
+	// directory of every Toolathlon script.
+	workspaceRoot = "/workspace"
+	// taskRootPath is where Toolathlon's `direct_to_dumps` run config places
+	// the task root: the agent workspace, trajectory, and grader output all
+	// live beneath it. The harness's terminal starts in the workspace.
+	taskRootPath       = workspaceRoot + "/dumps"
+	agentWorkspacePath = taskRootPath + "/workspace"
+	trajectoryPath     = taskRootPath + "/traj_log.json"
+	evalResultPath     = taskRootPath + "/eval_res.json"
+	// privateRoot holds the adapter's own files inside the sandbox: the task
+	// bundle, the project archive, and service logs. Nothing here is a
+	// secret from the agent — the agent runs as the sandbox's exec user — but
+	// keeping it out of /workspace keeps it out of the task's own listings.
+	privateRoot          = "/run/aries-toolathlon"
+	bundleContainerPath  = privateRoot + "/task_bundle.json"
+	archiveContainerPath = privateRoot + "/project.tar"
+	stashContainerPath   = privateRoot + "/artifact-stash.tar"
+	gatewayLogPath       = privateRoot + "/gateway.log"
+	forwarderLogPath     = privateRoot + "/portfwd.log"
+	forwarderReadyPath   = privateRoot + "/portfwd.ready"
+	forwarderScriptPath  = privateRoot + "/portfwd.py"
+
+	// evalConfigPath is Toolathlon's formal run configuration, relative to
+	// workspaceRoot. It carries the MCP server catalogue and the
+	// `direct_to_dumps` layout the constants above depend on.
+	evalConfigPath = "scripts/formal_run_v0.json"
+
+	// modelPlaceholderURL satisfies Toolathlon's preprocess step, which
+	// constructs its "unified" model provider and refuses to start without a
+	// base URL, although preprocess never calls a model. The .invalid TLD is
+	// reserved (RFC 2606) and can never resolve.
+	modelPlaceholderURL = "http://model-not-used-by-aries.invalid/v1"
+)
+
+// GatewayServer is the gateway described as the MCP server a harness
+// connects to: plain HTTP over SSE at the sandbox's alias on the gateway
+// port. The adapter derives it from the profile, so a profile does not
+// spell out an endpoint the adapter already fixes.
+type GatewayServer struct {
+	Name           string
+	URL            string
+	Transport      string
+	TimeoutSeconds int
+}
+
+// Gateway describes the gateway as reached from the harness, where host is
+// the sandbox's network alias and port the gateway port (zero for the
+// default). The gateway speaks no TLS, so the scheme is fixed to http.
+func Gateway(host string, port int) GatewayServer {
+	if port == 0 {
+		port = DefaultGatewayPort
+	}
+	return GatewayServer{
+		Name:           GatewayServerName,
+		URL:            fmt.Sprintf("http://%s/sse", net.JoinHostPort(host, strconv.Itoa(port))),
+		Transport:      "sse",
+		TimeoutSeconds: GatewayCallTimeoutSeconds,
+	}
+}
+
+// Options selects tasks from one pinned Toolathlon checkout.
+type Options struct {
+	Root             string
+	TaskIDs          []string
+	ExecutionTaskIDs []string
+	OutputDir        string
+	Revision         string
+	// Environment is the profile's sandbox description. The task image must
+	// be Toolathlon's own task image; the workdir and network policy are
+	// fixed by the adapter and any profile values for them are rejected.
+	Environment core.Environment
+	// GatewayPort is the in-sandbox port of the MCP gateway. Zero selects
+	// DefaultGatewayPort.
+	GatewayPort int
+	// AppHost is where the self-hosted applications listen, as seen from the
+	// Docker host. Empty means the sandbox's own default gateway, which is
+	// the Docker host for a bridge network.
+	AppHost string
+	// MaxSteps is passed to Toolathlon's preprocess as
+	// max_steps_under_single_turn_mode. Zero selects DefaultMaxSteps.
+	MaxSteps int
+	// ModelName is recorded in Toolathlon's task bundle as the agent model's
+	// short name. It is bookkeeping only; the harness owns the model.
+	ModelName string
+	// HarnessWebSearch reports whether the harness brings a web search tool
+	// of its own. A task that needs Toolathlon's `web_search` local tool is
+	// refused without it (see localTools).
+	HarnessWebSearch bool
+	// Concurrency is how many task occurrences the run may execute at once.
+	// The self-hosted applications are one deployment shared by every
+	// sandbox (each forwards to the same host and ports), and a task's
+	// preprocess resets the state of the applications it uses, so
+	// application-backed tasks are accepted only at concurrency 1; so are
+	// account-backed tasks, whose state lives in one third-party account.
+	// Zero means 1.
+	Concurrency int
+	// CredentialsDir is a host directory holding Toolathlon's filled
+	// configs/token_key_session.py and the key files it names, which makes
+	// the account-backed servers available (see credentials.go). Empty
+	// refuses every task that needs one.
+	CredentialsDir string
+}
+
+// Benchmark discovers selected Toolathlon tasks and retains their private
+// grader archives until evaluation.
+type Benchmark struct {
+	root             string
+	taskIDs          []string
+	executionTaskIDs []string
+	outputDir        string
+	revision         string
+	environment      core.Environment
+	gatewayPort      int
+	appHost          string
+	maxSteps         int
+	modelName        string
+	harnessWebSearch bool
+	concurrency      int
+	credentialsDir   string
+
+	mu      sync.RWMutex
+	details map[string]taskDetails
+}
+
+type taskDetails struct {
+	// name is the task directory name beneath tasks/finalpool.
+	name    string
+	servers []string
+	// needsApplications is true when any MCP server is backed by one of the
+	// self-hosted applications, so the loopback forwarder must run.
+	needsApplications bool
+	// needsCredentials is true when any MCP server is account-backed, so
+	// the credentials directory is overlaid on the sandbox's configs/.
+	needsCredentials bool
+	// extraEntries are checkout paths the project archive must carry for
+	// this task beyond the project code (serverBinaries).
+	extraEntries []string
+	// stashed names the task-directory entries PrepareSandbox moved to the
+	// host, for Evaluate to restore.
+	stashed []string
+}
+
+// taskConfigFile is the subset of tasks/<pool>/<task>/task_config.json the
+// adapter reads. needed_mcp_servers is a list in every pinned task, but the
+// upstream loader also accepts an object keyed by server name.
+type taskConfigFile struct {
+	NeededMCPServers json.RawMessage `json:"needed_mcp_servers"`
+	NeededLocalTools json.RawMessage `json:"needed_local_tools"`
+	MaxTurns         int             `json:"max_turns"`
+}
+
+var _ runner.Benchmark = (*Benchmark)(nil)
+
+// serverKind classifies each MCP server in the pinned checkout's
+// configs/mcp_servers by what it needs at run time. The catalogue is keyed
+// by the `name:` field inside each file, which is what a task's
+// needed_mcp_servers cites; five files are named differently from their
+// server (npx-fetch.yaml is `fetch`, scholarly_search.yaml `scholarly`,
+// 12306.yaml `rail_12306`, youtube_transcript.yaml `youtube-transcript`,
+// arxiv-latex-mcp.yaml `arxiv-latex`). Tasks() checks the map against the
+// checkout so a re-pin that adds or renames a server fails at task load.
+type serverKind int
+
+const (
+	// serverLocal runs entirely inside the sandbox.
+	serverLocal serverKind = iota
+	// serverApplication talks to an application Toolathlon deploys itself
+	// (deployment/canvas, deployment/poste, deployment/woocommerce), at a
+	// fixed localhost port.
+	serverApplication
+	// serverPublic reaches the public internet without an account.
+	serverPublic
+	// serverAccount needs a credentialed third-party account: available
+	// when the profile names a credentials directory (credentials.go).
+	serverAccount
+	// serverHostRuntime (k8s) needs a kind cluster on a Docker socket with
+	// host networking, which the sandbox does not grant.
+	serverHostRuntime
+	// serverAgentTool is not an MCP server but one of the tools Toolathlon's
+	// own agent loop implements, which one task lists among its servers
+	// anyway. Toolathlon's runner and gateway skip such a name with a
+	// warning, so the task is accepted without it.
+	serverAgentTool
+)
+
+var serverKinds = map[string]serverKind{
+	"excel": serverLocal, "filesystem": serverLocal, "git": serverLocal, "memory": serverLocal,
+	"pdf-tools": serverLocal, "pptx": serverLocal, "terminal": serverLocal, "time": serverLocal,
+	"word": serverLocal,
+
+	"canvas": serverApplication, "emails": serverApplication, "woocommerce": serverApplication,
+
+	"arxiv-latex": serverPublic, "arxiv_local": serverPublic, "fetch": serverPublic,
+	"howtocook": serverPublic, "playwright_with_chunk": serverPublic, "rail_12306": serverPublic,
+	"scholarly": serverPublic, "yahoo-finance": serverPublic, "youtube-transcript": serverPublic,
+
+	"github": serverAccount, "google-cloud": serverAccount, "google_calendar": serverAccount,
+	"google_forms": serverAccount, "google_map": serverAccount, "google_sheet": serverAccount,
+	"huggingface": serverAccount, "notion": serverAccount, "notion_official": serverAccount,
+	"snowflake": serverAccount, "wandb": serverAccount, "youtube": serverAccount,
+
+	"k8s": serverHostRuntime,
+
+	"web_search": serverAgentTool,
+}
+
+// localToolKind says what provides each of the "local tools" a task lists
+// beside its MCP servers (needed_local_tools): tools of Toolathlon's own
+// agent loop, which under ARIES is the harness. Toolathlon's decoupled
+// runner ignores the bookkeeping ones itself (host_agent_loop.py,
+// IGNORED_LOCAL_TOOLS) and keeps the rest on the host; here each maps to
+// what the harness already has, and one needs the profile's say-so.
+type localToolKind int
+
+const (
+	// localToolGateway is served by the gateway beside the MCP servers.
+	localToolGateway localToolKind = iota
+	// localToolLoop is bookkeeping of Toolathlon's agent loop (context
+	// management, history, over-long outputs); the harness's loop has its
+	// own.
+	localToolLoop
+	// localToolTerminal is covered by the harness's terminal in the
+	// sandbox: Toolathlon's python_execute runs Python on its runner's host,
+	// the harness runs it in the task container, where the workspace is.
+	localToolTerminal
+	// localToolWebSearch needs a web search the harness brings itself
+	// (harness.web_search); without it the task is refused.
+	localToolWebSearch
+)
+
+var localTools = map[string]localToolKind{
+	"claim_done":                   localToolGateway,
+	"handle_overlong_tool_outputs": localToolLoop,
+	"history":                      localToolLoop,
+	"manage_context":               localToolLoop,
+	"python_execute":               localToolTerminal,
+	"sleep":                        localToolTerminal,
+	"web_search":                   localToolWebSearch,
+}
+
+// catalogueDir holds one YAML file per MCP server in the checkout, relative
+// to its root.
+const catalogueDir = "configs/mcp_servers"
+
+// readCatalogue reads the checkout's server catalogue, name to file, and
+// checks it is exactly the set serverKinds classifies (agent-side tools
+// aside), naming what differs, so a re-pinned checkout cannot silently
+// route a server the adapter has not classified.
+func readCatalogue(root string) (map[string]string, error) {
+	entries, err := os.ReadDir(filepath.Join(root, catalogueDir))
+	if err != nil {
+		return nil, fmt.Errorf("read the MCP server catalogue: %w", err)
+	}
+	found := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".yaml" {
+			continue
+		}
+		serverFile := filepath.Join(root, catalogueDir, entry.Name())
+		name, err := catalogueServerName(serverFile)
+		if err != nil {
+			return nil, err
+		}
+		found[name] = serverFile
+	}
+	var unknown, missing []string
+	for name := range found {
+		if _, known := serverKinds[name]; !known {
+			unknown = append(unknown, name)
+		}
+	}
+	for name, kind := range serverKinds {
+		if _, ok := found[name]; !ok && kind != serverAgentTool {
+			missing = append(missing, name)
+		}
+	}
+	sort.Strings(unknown)
+	sort.Strings(missing)
+	switch {
+	case len(unknown) != 0 && len(missing) != 0:
+		return nil, fmt.Errorf("the checkout's MCP server catalogue has servers the adapter does not classify (%s) and lacks servers it expects (%s)", strings.Join(unknown, ", "), strings.Join(missing, ", "))
+	case len(unknown) != 0:
+		return nil, fmt.Errorf("the checkout's MCP server catalogue has servers the adapter does not classify: %s", strings.Join(unknown, ", "))
+	case len(missing) != 0:
+		return nil, fmt.Errorf("the checkout's MCP server catalogue lacks servers the adapter expects: %s", strings.Join(missing, ", "))
+	}
+	return found, nil
+}
+
+// catalogueServerName is the top-level `name:` of one server file, the
+// name tasks cite. The files are flat YAML mappings, so a line scan is
+// enough and avoids a YAML dependency for one key.
+func catalogueServerName(path string) (string, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read MCP server file: %w", err)
+	}
+	for _, line := range strings.Split(string(content), "\n") {
+		value, ok := strings.CutPrefix(line, "name:")
+		if !ok {
+			continue
+		}
+		value = strings.Trim(strings.TrimSpace(value), `"'`)
+		if !safeServerName(value) {
+			return "", fmt.Errorf("MCP server file %s names an invalid server %q", filepath.Base(path), value)
+		}
+		return value, nil
+	}
+	return "", fmt.Errorf("MCP server file %s has no top-level name", filepath.Base(path))
+}
+
+// applicationPorts are the fixed localhost ports Toolathlon's task-side
+// code uses for the self-hosted applications (configs/ports_config.yaml):
+// Canvas HTTP and HTTPS, poste.io SMTP, IMAP, submission, and web UI, and
+// WooCommerce. The forwarder carries exactly these to the Docker host.
+var applicationPorts = []int{1143, 1587, 2525, 10001, 10003, 10005, 20001}
+
+func New(options Options) (*Benchmark, error) {
+	if strings.TrimSpace(options.Root) == "" {
+		return nil, errors.New("toolathlon root is required")
+	}
+	if len(options.TaskIDs) == 0 {
+		return nil, errors.New("toolathlon task IDs are required")
+	}
+	if strings.TrimSpace(options.OutputDir) == "" {
+		return nil, errors.New("toolathlon output directory is required")
+	}
+	if strings.TrimSpace(options.Revision) == "" {
+		return nil, errors.New("toolathlon revision is required")
+	}
+	if strings.TrimSpace(options.Environment.Image) == "" {
+		return nil, errors.New("toolathlon task image is required")
+	}
+	if options.Environment.Workdir != "" && options.Environment.Workdir != agentWorkspacePath {
+		return nil, fmt.Errorf("toolathlon workdir is fixed to %s", agentWorkspacePath)
+	}
+	if options.GatewayPort == 0 {
+		options.GatewayPort = DefaultGatewayPort
+	}
+	if options.GatewayPort < 1024 || options.GatewayPort > 65535 {
+		return nil, errors.New("toolathlon gateway port must be between 1024 and 65535")
+	}
+	if slices.Contains(applicationPorts, options.GatewayPort) {
+		return nil, fmt.Errorf("toolathlon gateway port %d collides with an application port", options.GatewayPort)
+	}
+	if options.AppHost != "" && !validHost(options.AppHost) {
+		return nil, fmt.Errorf("toolathlon application host %q is not a hostname or IP address", options.AppHost)
+	}
+	if options.MaxSteps == 0 {
+		options.MaxSteps = DefaultMaxSteps
+	}
+	if options.MaxSteps < 0 {
+		return nil, errors.New("toolathlon max steps must be positive")
+	}
+	if options.ModelName == "" {
+		options.ModelName = "aries"
+	}
+	if options.Concurrency == 0 {
+		options.Concurrency = 1
+	}
+	if options.Concurrency < 0 {
+		return nil, errors.New("toolathlon concurrency must be positive")
+	}
+	if !safeModelName(options.ModelName) {
+		return nil, fmt.Errorf("invalid toolathlon model name %q", options.ModelName)
+	}
+	if options.CredentialsDir != "" {
+		if _, err := readCredentials(options.CredentialsDir); err != nil {
+			return nil, err
+		}
+	}
+
+	seen := make(map[string]struct{}, len(options.TaskIDs))
+	for _, id := range options.TaskIDs {
+		if !safeTaskID(id) {
+			return nil, fmt.Errorf("invalid toolathlon task ID %q", id)
+		}
+		if _, duplicate := seen[id]; duplicate {
+			return nil, fmt.Errorf("duplicate toolathlon task ID %q", id)
+		}
+		seen[id] = struct{}{}
+	}
+	executionIDs := options.ExecutionTaskIDs
+	if executionIDs == nil {
+		executionIDs = options.TaskIDs
+	} else if len(executionIDs) != len(options.TaskIDs) {
+		return nil, errors.New("toolathlon execution task IDs must match task IDs")
+	} else {
+		seen = make(map[string]struct{}, len(executionIDs))
+		for index, id := range executionIDs {
+			if !safeExecutionTaskID(options.TaskIDs[index], id) {
+				return nil, fmt.Errorf("invalid toolathlon execution task ID %q", id)
+			}
+			if _, duplicate := seen[id]; duplicate {
+				return nil, fmt.Errorf("duplicate toolathlon execution task ID %q", id)
+			}
+			seen[id] = struct{}{}
+		}
+	}
+
+	environment := options.Environment
+	environment.Env = maps.Clone(options.Environment.Env)
+	environment.Workdir = agentWorkspacePath
+	// Toolathlon's public-internet servers (arXiv, Yahoo Finance, fetch)
+	// and the loopback forwarder's path to the Docker host both need a
+	// non-internal network, so the policy is fixed rather than configurable.
+	environment.AllowNetwork = true
+
+	return &Benchmark{
+		root:             filepath.Clean(options.Root),
+		taskIDs:          slices.Clone(options.TaskIDs),
+		executionTaskIDs: slices.Clone(executionIDs),
+		outputDir:        filepath.Clean(options.OutputDir),
+		revision:         options.Revision,
+		environment:      environment,
+		gatewayPort:      options.GatewayPort,
+		appHost:          options.AppHost,
+		maxSteps:         options.MaxSteps,
+		modelName:        options.ModelName,
+		harnessWebSearch: options.HarnessWebSearch,
+		concurrency:      options.Concurrency,
+		credentialsDir:   options.CredentialsDir,
+		details:          make(map[string]taskDetails, len(options.TaskIDs)),
+	}, nil
+}
+
+func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
+	if err := VerifyRevision(ctx, b.root, b.revision); err != nil {
+		return nil, err
+	}
+	catalogue, err := readCatalogue(b.root)
+	if err != nil {
+		return nil, err
+	}
+	var creds *credentials
+	if b.credentialsDir != "" {
+		// Read again at task load: the directory may have been filled in
+		// since the profile was validated.
+		if creds, err = readCredentials(b.credentialsDir); err != nil {
+			return nil, err
+		}
+	}
+
+	tasks := make([]core.Task, 0, len(b.taskIDs))
+	details := make(map[string]taskDetails, len(b.taskIDs))
+	var sharedStateTasks []string
+	for index, id := range b.taskIDs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		task, private, err := loadTask(b.root, id, b.environment, b.harnessWebSearch, catalogue, creds)
+		if err != nil {
+			return nil, fmt.Errorf("load toolathlon task %q: %w", id, err)
+		}
+		executionID := b.executionTaskIDs[index]
+		task.ID = executionID
+		tasks = append(tasks, task)
+		details[executionID] = private
+		if private.needsApplications || private.needsCredentials {
+			sharedStateTasks = append(sharedStateTasks, id)
+		}
+	}
+	// Two occurrences on the shared deployment would race: one task's
+	// preprocess deletes and recreates the courses, mailboxes, or products
+	// another task is in the middle of using; the account-backed tasks
+	// reset repositories, pages, and sheets in one account the same way.
+	// Refuse the overlap rather than serialize it, so a run's concurrency
+	// means what it says.
+	if b.concurrency > 1 && len(sharedStateTasks) != 0 {
+		return nil, fmt.Errorf("application-backed and account-backed tasks share state outside the sandbox and must run at execution.concurrency 1 (concurrency %d with %s)", b.concurrency, strings.Join(sharedStateTasks, ", "))
+	}
+
+	b.mu.Lock()
+	b.details = details
+	b.mu.Unlock()
+	return tasks, nil
+}
+
+// loadTask reads one task directory and rejects, before any sandbox exists,
+// every task whose MCP servers or local tools the adapter cannot provide.
+// catalogue maps each server to its file; creds is nil when the profile
+// names no credentials directory.
+func loadTask(root, id string, environment core.Environment, harnessWebSearch bool, catalogue map[string]string, creds *credentials) (core.Task, taskDetails, error) {
+	taskDir := filepath.Join(root, "tasks", taskPool, id)
+	configBytes, err := os.ReadFile(filepath.Join(taskDir, "task_config.json"))
+	if err != nil {
+		return core.Task{}, taskDetails{}, fmt.Errorf("read task config: %w", err)
+	}
+	var parsed taskConfigFile
+	if err := json.Unmarshal(configBytes, &parsed); err != nil {
+		return core.Task{}, taskDetails{}, fmt.Errorf("parse task config: %w", err)
+	}
+	servers, err := serverNames(parsed.NeededMCPServers)
+	if err != nil {
+		return core.Task{}, taskDetails{}, fmt.Errorf("parse needed_mcp_servers: %w", err)
+	}
+	details := taskDetails{name: id, servers: servers}
+	var overrides map[string]tokenValue
+	for _, server := range servers {
+		kind, known := serverKinds[server]
+		switch {
+		case !known:
+			return core.Task{}, taskDetails{}, fmt.Errorf("MCP server %q is not in the pinned server catalogue", server)
+		case kind == serverHostRuntime:
+			return core.Task{}, taskDetails{}, fmt.Errorf("MCP server %q needs a host runtime the sandbox does not provide (a kind cluster on the Docker socket with host networking)", server)
+		case kind == serverAccount:
+			if creds == nil {
+				return core.Task{}, taskDetails{}, fmt.Errorf("MCP server %q needs a third-party account: set benchmark.toolathlon.credentials_dir to a directory holding Toolathlon's filled %s", server, credentialsFileName)
+			}
+			if overrides == nil {
+				if overrides, err = taskTokenOverrides(taskDir); err != nil {
+					return core.Task{}, taskDetails{}, err
+				}
+				if overrides == nil {
+					overrides = map[string]tokenValue{}
+				}
+			}
+			keys, err := serverTokenKeys(catalogue[server])
+			if err != nil {
+				return core.Task{}, taskDetails{}, err
+			}
+			if missing := creds.missing(keys, overrides); len(missing) != 0 {
+				return core.Task{}, taskDetails{}, fmt.Errorf("MCP server %q needs credentials the credentials directory does not provide: %s", server, strings.Join(missing, ", "))
+			}
+			details.needsCredentials = true
+			details.extraEntries = append(details.extraEntries, serverBinaries[server]...)
+		case kind == serverApplication:
+			details.needsApplications = true
+		}
+	}
+	tools, err := serverNames(parsed.NeededLocalTools)
+	if err != nil {
+		return core.Task{}, taskDetails{}, fmt.Errorf("parse needed_local_tools: %w", err)
+	}
+	for _, tool := range tools {
+		kind, known := localTools[tool]
+		switch {
+		case !known:
+			return core.Task{}, taskDetails{}, fmt.Errorf("local tool %q is not one the adapter maps onto the harness", tool)
+		case kind == localToolWebSearch && !harnessWebSearch:
+			return core.Task{}, taskDetails{}, errors.New("task needs Toolathlon's web_search tool, which only the harness's own web search can stand in for: enable harness.web_search or leave the task out")
+		}
+	}
+
+	instructionBytes, err := os.ReadFile(filepath.Join(taskDir, "docs", "task.md"))
+	if err != nil {
+		return core.Task{}, taskDetails{}, fmt.Errorf("read task description: %w", err)
+	}
+	instruction := strings.TrimSpace(string(instructionBytes))
+	if instruction == "" {
+		return core.Task{}, taskDetails{}, errors.New("task description is empty")
+	}
+	if _, err := os.Stat(filepath.Join(taskDir, "evaluation")); err != nil {
+		return core.Task{}, taskDetails{}, fmt.Errorf("task has no evaluation directory: %w", err)
+	}
+
+	task := core.Task{
+		ID:          id,
+		Instruction: renderInstruction(instruction),
+		Environment: environment,
+	}
+	task.Environment.Env = maps.Clone(environment.Env)
+	return task, details, nil
+}
+
+// renderInstruction is the task description plus the two facts Toolathlon's
+// own agent system prompt gives its agent: where the workspace is, and that
+// replying without a tool call ends the task. The harness keeps its own
+// system prompt; this is the task-level part only.
+func renderInstruction(description string) string {
+	return description + "\n\n" +
+		"Accessible workspace directory: " + agentWorkspacePath + "\n" +
+		"When the task refers to a relative path, it is relative to that directory. " +
+		"When you believe the task is complete, reply without calling any tool; " +
+		"that ends the task and you will have no further opportunity to work on it."
+}
+
+// serverNames accepts Toolathlon's two spellings of needed_mcp_servers: a
+// list of names, or an object whose keys are names. Missing means none.
+func serverNames(raw json.RawMessage) ([]string, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var list []string
+	if err := json.Unmarshal(raw, &list); err == nil {
+		return normalizeServerNames(list)
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return nil, errors.New("must be a list of names or an object keyed by name")
+	}
+	names := make([]string, 0, len(object))
+	for name := range object {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return normalizeServerNames(names)
+}
+
+func normalizeServerNames(names []string) ([]string, error) {
+	seen := make(map[string]struct{}, len(names))
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		if !safeServerName(name) {
+			return nil, fmt.Errorf("invalid MCP server name %q", name)
+		}
+		if _, duplicate := seen[name]; duplicate {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	return out, nil
+}
+
+var (
+	taskIDPattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	serverNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	modelNamePattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]*$`)
+	// hostPattern is a DNS name label by label: no empty label, no label
+	// starting or ending in a hyphen, none longer than 63 bytes.
+	hostPattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$`)
+)
+
+func safeTaskID(id string) bool {
+	return id != "." && id != ".." && len(id) <= 128 && taskIDPattern.MatchString(id)
+}
+
+// safeExecutionTaskID accepts the logical ID with the runner's zero-padded
+// occurrence suffix, matching the other benchmark packages.
+// safeExecutionTaskID accepts the runner's occurrence form of a logical ID:
+// the ID, a hyphen, and a positive index of at least three digits. It has its
+// own length limit, since a logical ID at its own limit plus the suffix is
+// longer than safeTaskID allows.
+func safeExecutionTaskID(logicalID, id string) bool {
+	if len(id) > 149 || id == "." || id == ".." || !taskIDPattern.MatchString(id) || !strings.HasPrefix(id, logicalID+"-") {
+		return false
+	}
+	suffix := strings.TrimPrefix(id, logicalID+"-")
+	if len(suffix) < 3 {
+		return false
+	}
+	index, err := strconv.ParseUint(suffix, 10, 64)
+	return err == nil && index > 0
+}
+
+func safeServerName(name string) bool {
+	return name != "." && name != ".." && len(name) <= 64 && serverNamePattern.MatchString(name)
+}
+
+func safeModelName(name string) bool {
+	return len(name) <= 128 && modelNamePattern.MatchString(name)
+}
+
+// validHost accepts a hostname or a bare IP literal, IPv6 included: the
+// forwarder passes the value to asyncio.open_connection, which takes both.
+func validHost(host string) bool {
+	return net.ParseIP(host) != nil || (len(host) <= 253 && hostPattern.MatchString(host))
+}

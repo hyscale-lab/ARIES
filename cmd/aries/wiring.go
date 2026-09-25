@@ -14,6 +14,7 @@ import (
 	"github.com/hyscale-lab/aries/pkg/benchmark/sweatlas"
 	"github.com/hyscale-lab/aries/pkg/benchmark/swebenchpro"
 	"github.com/hyscale-lab/aries/pkg/benchmark/terminalbench"
+	"github.com/hyscale-lab/aries/pkg/benchmark/toolathlon"
 	"github.com/hyscale-lab/aries/pkg/bridge/hermesssh"
 	"github.com/hyscale-lab/aries/pkg/bridge/openclawssh"
 	"github.com/hyscale-lab/aries/pkg/config"
@@ -58,6 +59,19 @@ func validateComponents(cfg config.Config) error {
 	case "deepresearchbench":
 	case "sweatlasqa":
 	case "swebenchpro":
+	case "toolathlon":
+		// Toolathlon's tools reach the harness only as an MCP server; both
+		// harnesses have an MCP client. The gateway itself is added to that
+		// client by mcpServers, so a profile's own harness.mcp entries are
+		// extra servers and may not take its name.
+		if cfg.Harness.Type != "hermes" && cfg.Harness.Type != "openclaw" {
+			return fmt.Errorf("benchmark type \"toolathlon\" requires a harness with an MCP client (hermes or openclaw), not %q", cfg.Harness.Type)
+		}
+		for _, server := range cfg.Harness.MCP.Servers {
+			if server.Name == toolathlon.GatewayServerName {
+				return fmt.Errorf("harness.mcp.servers may not name %q: the adapter adds Toolathlon's gateway to the harness itself", toolathlon.GatewayServerName)
+			}
+		}
 	default:
 		return fmt.Errorf("unsupported benchmark type %q", cfg.Benchmark.Type)
 	}
@@ -84,6 +98,15 @@ func validateComponents(cfg config.Config) error {
 		return fmt.Errorf("harness type %q requires its paired bridge, not %q", cfg.Harness.Type, cfg.Bridge.Type)
 	}
 	return nil
+}
+
+// toolathlonGatewayPort is the port the adapter will start the gateway on
+// for this profile.
+func toolathlonGatewayPort(cfg config.Config) int {
+	if settings := cfg.Benchmark.Toolathlon; settings != nil && settings.GatewayPort != 0 {
+		return settings.GatewayPort
+	}
+	return toolathlon.DefaultGatewayPort
 }
 
 // prepareBackend turns the profile's runtime block into the model the harness
@@ -194,9 +217,39 @@ func newBenchmark(cfg config.Config, outputRoot, logicalID, occurrenceID string,
 			return nil, fmt.Errorf("construct sweatlasqa benchmark: %w", err)
 		}
 		return benchmark, nil
+	case "toolathlon":
+		var executionIDs []string
+		if occurrenceID != logicalID {
+			executionIDs = []string{occurrenceID}
+		}
+		benchmark, err := toolathlon.New(toolathlonOptions(cfg, []string{logicalID}, executionIDs, outputRoot))
+		if err != nil {
+			return nil, fmt.Errorf("construct toolathlon benchmark: %w", err)
+		}
+		return benchmark, nil
 	default:
 		return nil, fmt.Errorf("unsupported benchmark type %q", cfg.Benchmark.Type)
 	}
+}
+
+// toolathlonOptions maps the profile onto the adapter. The model ID is
+// bookkeeping for Toolathlon's task bundle; the harness owns the model.
+func toolathlonOptions(cfg config.Config, taskIDs, executionIDs []string, outputDir string) toolathlon.Options {
+	options := toolathlon.Options{
+		Root: cfg.Benchmark.Root, TaskIDs: taskIDs, ExecutionTaskIDs: executionIDs, OutputDir: outputDir,
+		Revision:         cfg.Versions.Toolathlon.Revision,
+		Environment:      environmentFromConfig(cfg.Benchmark.Environment),
+		ModelName:        cfg.Model.ID,
+		HarnessWebSearch: cfg.Harness.WebSearch.Enabled,
+		Concurrency:      cfg.Execution.Concurrency,
+	}
+	if settings := cfg.Benchmark.Toolathlon; settings != nil {
+		options.GatewayPort = settings.GatewayPort
+		options.AppHost = settings.AppHost
+		options.MaxSteps = settings.MaxSteps
+		options.CredentialsDir = settings.CredentialsDir
+	}
+	return options
 }
 
 // deepresearchbenchModels resolves the RACE judge and FACT judge model
@@ -235,6 +288,37 @@ func sweatlasModels(cfg config.Config) (judge core.ModelConfig, judgeDisabled bo
 	return judgeCfg.CoreModel(), false
 }
 
+// mcpServers is the harness's MCP client configuration, whichever harness
+// renders it: the benchmark's own server first, when the benchmark exposes
+// its tools that way (Toolathlon's gateway, at the sandbox's alias on the
+// gateway port), then the profile's harness.mcp entries.
+func mcpServers(cfg config.Config) []config.HarnessMCPServerConfig {
+	out := make([]config.HarnessMCPServerConfig, 0, len(cfg.Harness.MCP.Servers)+1)
+	if cfg.Benchmark.Type == "toolathlon" {
+		gateway := toolathlon.Gateway(dockersandbox.NetworkAlias, toolathlonGatewayPort(cfg))
+		out = append(out, config.HarnessMCPServerConfig{Name: gateway.Name, URL: gateway.URL, Transport: gateway.Transport, TimeoutSeconds: gateway.TimeoutSeconds})
+	}
+	return append(out, cfg.Harness.MCP.Servers...)
+}
+
+func hermesMCPServers(cfg config.Config) []hermesharness.MCPServer {
+	servers := mcpServers(cfg)
+	out := make([]hermesharness.MCPServer, 0, len(servers))
+	for _, server := range servers {
+		out = append(out, hermesharness.MCPServer{Name: server.Name, URL: server.URL, Transport: server.Transport, TimeoutSeconds: server.TimeoutSeconds})
+	}
+	return out
+}
+
+func openclawMCPServers(cfg config.Config) []openclawharness.MCPServer {
+	servers := mcpServers(cfg)
+	out := make([]openclawharness.MCPServer, 0, len(servers))
+	for _, server := range servers {
+		out = append(out, openclawharness.MCPServer{Name: server.Name, URL: server.URL, Transport: server.Transport, TimeoutSeconds: server.TimeoutSeconds})
+	}
+	return out
+}
+
 // environmentFromConfig converts a profile's benchmark.environment block into
 // the runner-neutral core.Environment. cfg is nil only when Config.validate
 // hasn't run (e.g. ad-hoc construction); callers of newBenchmark and
@@ -262,6 +346,7 @@ func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byt
 			ExtractAPIKeyEnv:       cfg.Harness.WebSearch.ExtractAPIKeyEnv,
 			SubagentsEnabled:       cfg.Harness.Subagents.Enabled != nil && *cfg.Harness.Subagents.Enabled,
 			MaxConcurrentSubagents: cfg.Harness.Subagents.MaxConcurrent,
+			MCPServers:             openclawMCPServers(cfg),
 		}
 		if cfg.Harness.Mode == openclawharness.ModeRealtime || cfg.Harness.Mode == openclawharness.ModeVoiceTranscribe {
 			options.Realtime = openClawVoiceOptions(cfg.Harness)
@@ -280,6 +365,7 @@ func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byt
 			MaxConcurrentSubagents: cfg.Harness.Subagents.MaxConcurrent,
 			Compaction:             hermesCompaction(cfg.Harness.Compaction),
 			ExtraBody:              hermesExtraBody(cfg.Harness.Hermes),
+			MCPServers:             hermesMCPServers(cfg),
 		}
 
 		if cfg.Harness.Mode == hermesharness.ModeVoiceTranscribe {
@@ -418,6 +504,8 @@ func setupBenchmark(ctx context.Context, cfg config.Config) error {
 		return sweatlas.Setup(ctx, cfg.Benchmark.Root, cfg.Versions.SWEAtlas.RepositoryURL, cfg.Versions.SWEAtlas.Revision)
 	case "swebenchpro":
 		return swebenchpro.Setup(ctx, cfg.Benchmark.Root, cfg.Versions.SWEbenchPro.DatasetRepositoryURL, cfg.Versions.SWEbenchPro.DatasetRevision, cfg.Versions.SWEbenchPro.EvaluatorRepositoryURL, cfg.Versions.SWEbenchPro.EvaluatorRevision)
+	case "toolathlon":
+		return toolathlon.Setup(ctx, cfg.Benchmark.Root, cfg.Versions.Toolathlon.RepositoryURL, cfg.Versions.Toolathlon.Revision)
 	default:
 		return fmt.Errorf("unsupported benchmark type %q", cfg.Benchmark.Type)
 	}
@@ -489,6 +577,16 @@ func loadPreparationTasks(ctx context.Context, cfg config.Config, taskIDs []stri
 		tasks, err := benchmark.Tasks(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("load terminalbench2 tasks: %w", err)
+		}
+		return tasks, nil
+	case "toolathlon":
+		benchmark, err := toolathlon.New(toolathlonOptions(cfg, taskIDs, nil, cfg.OutputDir))
+		if err != nil {
+			return nil, fmt.Errorf("validate toolathlon profile: %w", err)
+		}
+		tasks, err := benchmark.Tasks(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("load toolathlon tasks: %w", err)
 		}
 		return tasks, nil
 	default:
