@@ -29,7 +29,7 @@ import (
 // fileSandbox is the file capability a sandbox may offer this bridge. The
 // postconditions each method must meet are documented on the procedures in
 // sandbox.proto; errors use the fs sentinels (fs.ErrNotExist, fs.ErrPermission)
-// and syscall.EISDIR so no sandbox needs to import this package.
+// and syscall.EISDIR/ENOTDIR so no sandbox needs to import this package.
 type fileSandbox interface {
 	StatFile(ctx context.Context, path string) (fs.FileInfo, error)
 	// OpenFile streams the whole file; the bridge reads only what it needs
@@ -112,7 +112,7 @@ func fileStatus(err error) error {
 		return status.Error(codes.NotFound, "no such file")
 	case errors.Is(err, fs.ErrPermission):
 		return status.Error(codes.PermissionDenied, "permission denied")
-	case errors.Is(err, syscall.EISDIR), errors.Is(err, errNotRegular):
+	case errors.Is(err, syscall.EISDIR), errors.Is(err, syscall.ENOTDIR), errors.Is(err, errNotRegular):
 		return status.Error(codes.FailedPrecondition, "not a regular file")
 	case errors.Is(err, errWindowTooLarge):
 		return status.Error(codes.ResourceExhausted, errWindowTooLarge.Error())

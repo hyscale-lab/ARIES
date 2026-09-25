@@ -40,8 +40,10 @@ ops = _get_file_ops("tool-probe")
 print("FILE_OPS", type(ops).__name__, type(ops.env).__name__)
 from tools.terminal_tool import terminal_tool
 print("TOOL", terminal_tool(command="echo aries-tool-ok && pwd", task_id="tool-probe"))
-from tools.file_tools import read_file_tool
-print("READ", read_file_tool(path="/etc/hostname", task_id="tool-probe"))
+from tools.file_tools import read_file_tool, write_file_tool
+print("WRITE", write_file_tool(path="/work/e2e/note.txt", content="first line\nsecond line\n", task_id="tool-probe"))
+print("READ", read_file_tool(path="/work/e2e/note.txt", offset=2, limit=1, task_id="tool-probe"))
+print("CHECK", terminal_tool(command="cat /work/e2e/note.txt", task_id="tool-probe"))
 `
 
 // runToolProbe starts one Hermes harness against the named bridge and returns
@@ -137,6 +139,7 @@ func runToolProbe(t *testing.T, protocol string) (string, core.ToolEndpoint) {
 	if err != nil {
 		t.Fatalf("tool probe: %v\n%s", err, text)
 	}
+	t.Logf("tool probe output:\n%s", text)
 	// The first command must succeed and run in the sandbox's workdir, which
 	// exists only in the sandbox. Hermes runs a session's first command in
 	// TERMINAL_CWD, so a path the sandbox lacks fails every command with 126.
@@ -146,30 +149,50 @@ func runToolProbe(t *testing.T, protocol string) (string, core.ToolEndpoint) {
 	return text, endpoint
 }
 
+// The SSH route is the baseline: the same file round trip through Hermes's
+// own shell-lowered file operations.
 func TestHermesSSHRouteRunsTheFirstCommandInTheSandboxWorkdir(t *testing.T) {
-	runToolProbe(t, protocolSSH)
+	text, _ := runToolProbe(t, protocolSSH)
+	fileRoundTrip(t, text)
 }
 
-// The Docker sandbox offers no file access yet, so a file tool must reach the
-// bridge as a typed call, be recorded there, and come back to Hermes as a
-// clean tool error: never a success, never a shell fallback.
+// fileRoundTrip is what both routes must produce: write_file creates the file
+// through a missing parent, read_file returns the requested numbered line, and
+// the bytes are really in the sandbox.
+func fileRoundTrip(t *testing.T, text string) {
+	t.Helper()
+	if !strings.Contains(text, "WRITE") || strings.Contains(text[strings.Index(text, "WRITE"):strings.Index(text, "READ")], `"error"`) {
+		t.Fatalf("write_file failed:\n%s", text)
+	}
+	if !strings.Contains(text, "2|second line") || strings.Contains(text, "1|first line") {
+		t.Fatalf("read_file did not return the requested line:\n%s", text)
+	}
+	if !strings.Contains(text, `first line\nsecond line`) {
+		t.Fatalf("the written bytes are not in the sandbox:\n%s", text)
+	}
+}
+
+// On the gRPC route file tools go through the typed procedures end to end:
+// plugin, client, bridge and the Docker sandbox's file capability.
 func TestPluginRunsHermesToolsThroughTheGRPCBridge(t *testing.T) {
 	text, endpoint := runToolProbe(t, protocolGRPC)
 	if !strings.Contains(text, "FILE_OPS AriesFileOperations AriesEnvironment") {
 		t.Fatalf("file tools did not reach the plugin through the seam:\n%s", text)
 	}
-	if !strings.Contains(text, "READ") || !strings.Contains(text, "sandbox offers no file access") {
-		t.Fatalf("read_file did not fail cleanly through the bridge:\n%s", text)
-	}
+	fileRoundTrip(t, text)
 	// The audit is written asynchronously; give it a moment.
 	var log []byte
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
 		log, _ = os.ReadFile(endpoint.LogPaths[0])
-		if strings.Contains(string(log), `"operation_class":"file_stat"`) && strings.Contains(string(log), `"status":"unimplemented"`) {
+		if strings.Contains(string(log), `"operation_class":"file_write","path":"/work/e2e/note.txt"`) &&
+			strings.Contains(string(log), `"operation_class":"file_lines","path":"/work/e2e/note.txt"`) {
+			if strings.Contains(string(log), `"status":"unimplemented"`) {
+				t.Fatalf("a file call was not served:\n%s", log)
+			}
 			return
 		}
 	}
-	t.Fatalf("the file call was not recorded at the bridge:\n%s", log)
+	t.Fatalf("the typed file calls were not recorded at the bridge:\n%s", log)
 }
 
 // TestPluginFileOperationsInThePinnedImage runs the plugin's file operations
