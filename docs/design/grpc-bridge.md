@@ -1,6 +1,8 @@
 # gRPC tool bridge
 
-**Status: `Exec` is implemented and wired; `ReadFile`, `WriteFile` and `Stat` remain design.** It
+**Status: `Exec` and the file procedures are implemented and wired; no sandbox offers file access
+yet, so file calls are answered `UNIMPLEMENTED`.** The file procedures are specified in
+[the sandbox RPC interface](sandbox-rpc.md). It
 replaces the transport of `ToolBridge`, not the role. The contract in `pkg/runner/interfaces.go` is
 unchanged.
 
@@ -40,9 +42,8 @@ flowchart TB
     G ==>|core.Command via ExecStream| T
     T ==>|stdout, stderr| G
     G ==>|ExecResponse: stdout, stderr, exit code| C
-    C ==>|WriteFile stream| G
-    G ==>|Upload| T
-    G ==>|ReadFile: Download| C
+    C ==>|Stat, ReadFile, ReadLines, WriteFile: path, bytes| G
+    G ==>|fileSandbox capability| T
 ```
 
 Dashed arrows are control and lifecycle; thick arrows are data.
@@ -66,11 +67,9 @@ value, constructed by a new `case` in `newBridge` (`cmd/aries/wiring.go:318-341`
 `runner.ToolBridge` and returns a `core.ToolEndpoint` describing a gRPC endpoint instead of an SSH
 one.
 
-The four methods below are the design; they are not one deliverable. The first implementation
-carries **`Exec` alone**, which already exercises everything structural — the connection, the
-credential material, the audit writer, `ExecStream`, and revocation. `ReadFile`, `WriteFile`, and
-`Stat` add file-transfer plumbing that proves nothing further about the transport, and they make
-the file-transfer policy question live before there is anything to test it against.
+`Exec` came first and exercises everything structural: the connection, the credential material, the
+audit writer, `ExecStream`, and revocation. The file procedures followed, specified in
+[the sandbox RPC interface](sandbox-rpc.md).
 
 **Out of scope, deliberately.**
 
@@ -79,8 +78,9 @@ the file-transfer policy question live before there is anything to test it again
   admitted for `harness.type == "hermes"` — but **the service itself is harness-neutral by
   requirement**, because OpenClaw is expected to follow. See
   [section 8](#8-open-questions), item 1.
-- *The sandbox.* `runner.Sandbox` and `pkg/sandbox/docker` are untouched. Every method below lands
-  on `ExecStream`, `Upload`, `Download`, or `DownloadLimit`, all of which already exist.
+- *The sandbox.* `runner.Sandbox` and `pkg/sandbox/docker` are untouched. `Exec` lands on
+  `ExecStream`; the file procedures land on a narrow capability the bridge asserts, which no
+  sandbox implements yet.
 - *Session-scoped server state.* Considered and rejected for this iteration; see
   [section 4](#4-state-what-the-server-holds).
 - *Anything running inside the task container.* The sandbox serves nothing and gains no daemon;
@@ -90,7 +90,8 @@ the file-transfer policy question live before there is anything to test it again
 
 ## 2. Service definition
 
-Four methods. The command-profile research found that 27% of Terminal-Bench tasks contain a
+Five methods; the four file procedures are specified in
+[the sandbox RPC interface](sandbox-rpc.md). The command-profile research found that 27% of Terminal-Bench tasks contain a
 pipeline or substitution no typed method can replace, and that file writes appear in 74% — so the
 surface needs a shell form and first-class file transfer. It found no structured commands crossing
 the wire at all, which is why `Exec` carries a script rather than an argument vector; see
@@ -99,9 +100,10 @@ the wire at all, which is why `Exec` carries a script rather than an argument ve
 ```proto
 service Sandbox {
   rpc Exec(ExecRequest) returns (ExecResponse);
-  rpc ReadFile(ReadFileRequest) returns (stream FileChunk);
-  rpc WriteFile(stream WriteFileRequest) returns (WriteFileResponse);
   rpc Stat(StatRequest) returns (StatResponse);
+  rpc ReadFile(ReadFileRequest) returns (ReadFileResponse);
+  rpc ReadLines(ReadLinesRequest) returns (ReadLinesResponse);
+  rpc WriteFile(WriteFileRequest) returns (WriteFileResponse);
 }
 ```
 
@@ -114,7 +116,7 @@ bounded fields on the response. This is the deliberate first-iteration choice �
 ```proto
 message ExecRequest {
   string script = 1;   // run under /bin/bash -c, exactly as the wire carries today
-  bytes stdin = 2;     // bounded; large input goes through WriteFile
+  bytes stdin = 2;     // bounded; file content goes through WriteFile
 }
 ```
 
@@ -247,23 +249,16 @@ Both are recoverable later by adding a streaming variant beside this method, wit
 `pkg/harness/hermes/config.go`, `cmd/aries/wiring.go`,
 `.cache/terminal-bench-2/*/task.toml`.
 
-### `ReadFile`, `WriteFile`, `Stat`
+### The file procedures
 
-These map onto capabilities the sandbox already has and that **no bridge currently reaches**:
-`Download`/`DownloadLimit` for reads, `Upload` for writes. `bridgeSandbox` embeds `runner.Sandbox`
-(`pkg/bridge/hermesssh/bridge.go:73-83`), so those methods are available to the bridge today and
-simply never called.
+`Stat`, `ReadFile`, `ReadLines` and `WriteFile` are specified in
+[the sandbox RPC interface](sandbox-rpc.md). They reach the sandbox through a capability the bridge
+asserts, not through `Upload` and `Download`, which take host paths and serve the runner.
 
-`ReadFile` server-streams chunks with a mandatory byte cap, landing on `DownloadLimit` so an
-oversized read is refused rather than truncated. `WriteFile` client-streams content, landing on
-`Upload`. `Stat` is unary and answers the predicate questions that today become `test` and `wc`
-invocations.
-
-**A policy note that is not incidental.** The current bridge denies file-transfer payloads
-outright, because a harness attempted to push its own configuration — including credential files —
-into the container the verifier later inspects. `WriteFile` must not reopen that: it exists for
-*agent intent*, and there is deliberately no separate "sync my runtime" path. A typed API makes
-that distinction expressible for the first time, where the shell string could not.
+**A policy note that is not incidental.** The SSH bridge denies file-transfer payloads outright,
+because a harness attempted to push its own configuration — including credential files — into the
+container the verifier later inspects. `WriteFile` does not reopen that: it exists for *agent
+intent*, and the plugin route has no "sync my runtime" path at all.
 
 **Sources:** `pkg/bridge/hermesssh/bridge.go`, `pkg/bridge/hermesssh/grammar.go`,
 `pkg/sandbox/docker/docker.go`, `docs/research/sandbox-command-profile.md`,
@@ -323,7 +318,8 @@ token could only fail on a bug in ARIES's own client.
 
 **Revocation is still checked on every call**, before anything else the handler does. After `Stop`
 marks the session revoked, a call that reaches a surviving connection is refused with
-`FAILED_PRECONDITION`. That check has no SSH counterpart — `hermesssh` has no revoked flag at all
+`UNAVAILABLE`, on every procedure, so the client can tell it from a failed precondition. That check
+has no SSH counterpart — `hermesssh` has no revoked flag at all
 and relies on the transport being torn down — and it is the part worth keeping.
 
 **The client authenticates the bridge, which the SSH path cannot.** Hermes forces
@@ -433,8 +429,9 @@ reproduced: a refused call is a recordable event.
 
 The SSH bridges write two artifacts per task: the structured `tool-calls.jsonl` and a byte-level
 `ssh_raw.log`, the latter opt-in through `bridge.retain_raw_log`. **This bridge writes only the
-structured log**, and `retain_raw_log` is *refused* for it rather than ignored, since there is no
-file for it to control.
+structured log.** For it `retain_raw_log` means the most verbose evidence level: file content,
+base64, in a `content_raw` field of each file record. Off by default; content never reaches
+`aries.log` or results.
 
 The bridge decodes Hermes's grammar itself (section 2), so it receives the same verbatim payload SSH
 does. Three things the raw log uniquely held are therefore accounted for here:
