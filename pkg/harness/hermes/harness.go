@@ -43,6 +43,7 @@ const (
 	maxAPIKeyBytes         = 16 << 10
 	gracefulStopSeconds    = 5
 	execTrailerKeep        = 256
+	execStartTimeout       = 30 * time.Second
 
 	// imageDeclaredVolume is the upstream image's own VOLUME. ARIES does not
 	// use it — HERMES_HOME is relocated to a staged private directory — but
@@ -898,7 +899,7 @@ func (manager *Manager) execAttached(ctx context.Context, containerID string, co
 	inspectCtx, cancelInspect := context.WithCancel(ctx)
 	defer cancelInspect()
 	go func() {
-		inspection, err := manager.waitExec(inspectCtx, containerID, created.ID)
+		inspection, err := manager.waitExec(inspectCtx, containerID, created.ID, execStartTimeout)
 		if err != nil {
 			inspectErr <- err
 			return
@@ -962,7 +963,9 @@ func newSpeechClient(options audioinput.SpeechClientOptions) (speechSynthesizer,
 	return audioinput.NewSpeechClient(options)
 }
 
-func (manager *Manager) waitExec(ctx context.Context, containerID, execID string) (client.ExecInspectResult, error) {
+// waitExec returns once the exec's process has exited. An exec that Docker
+// has not started yet is waited for, up to startTimeout.
+func (manager *Manager) waitExec(ctx context.Context, containerID, execID string, startTimeout time.Duration) (client.ExecInspectResult, error) {
 	// Polling starts tight so short execs (readiness probes, session exports)
 	// stay responsive, then backs off so a multi-minute agent run does not
 	// inspect the daemon thousands of times.
@@ -973,15 +976,21 @@ func (manager *Manager) waitExec(ctx context.Context, containerID, execID string
 	interval := firstInterval
 	timer := time.NewTimer(interval)
 	defer timer.Stop()
+	began := time.Now()
 	for {
 		inspection, err := manager.client.ExecInspect(ctx, execID, client.ExecInspectOptions{})
 		if err != nil {
 			return client.ExecInspectResult{}, fmt.Errorf("inspect Hermes exec: %w", err)
 		}
-		if !inspection.Running {
-			return inspection, nil
+		started := execHasStarted(inspection)
+		if !started && time.Since(began) > startTimeout {
+			return client.ExecInspectResult{}, fmt.Errorf("Hermes exec did not start within %s", startTimeout)
 		}
-		if inspection.PID > 0 {
+		if !inspection.Running {
+			if started {
+				return inspection, nil
+			}
+		} else if inspection.PID > 0 {
 			present, err := manager.containerHasPID(ctx, containerID, inspection.PID)
 			if err != nil {
 				return client.ExecInspectResult{}, fmt.Errorf("inspect Hermes exec process: %w", err)
@@ -1000,6 +1009,16 @@ func (manager *Manager) waitExec(ctx context.Context, containerID, execID string
 		}
 		timer.Reset(interval)
 	}
+}
+
+// execHasStarted reports whether Docker has started the exec's process. Docker
+// answers the attach (HTTP 101) before it marks the exec running, and marks it
+// running before it creates the process, so on a busy host an inspect can
+// report an exec with no PID and no exit code, running or not. An exec keeps
+// its PID after it exits, and one that failed to start has exit code 126, so
+// an exec with neither has not started.
+func execHasStarted(inspection client.ExecInspectResult) bool {
+	return inspection.PID > 0 || inspection.ExitCode != 0
 }
 
 func (manager *Manager) containerHasPID(ctx context.Context, containerID string, pid int) (bool, error) {

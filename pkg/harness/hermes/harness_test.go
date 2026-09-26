@@ -57,6 +57,13 @@ type fakeDocker struct {
 	removeCalls    int
 	closeCalls     int
 	closeErr       error
+
+	// Docker answers an exec's attach before it starts the process: the first
+	// unstartedInspects inspects report an exec it has not started yet, as
+	// running (marked, with no process yet) when unstartedRunning is set.
+	unstartedInspects int
+	unstartedRunning  bool
+	execDelay         time.Duration
 }
 
 func newFakeDocker() *fakeDocker {
@@ -163,6 +170,7 @@ func (fake *fakeDocker) ExecAttach(_ context.Context, execID string, _ client.Ex
 	response := client.ExecAttachResult{HijackedResponse: client.NewHijackedResponse(clientSide, "application/vnd.docker.multiplexed-stream")}
 	go func() {
 		defer engineSide.Close()
+		time.Sleep(fake.execDelay)
 		exitCode := 0
 		// Cmd is /bin/sh -c <execShell> <label> <token> <command...>; index 5 is
 		// the first token of the wrapped command.
@@ -199,8 +207,12 @@ func (fake *fakeDocker) ExecAttach(_ context.Context, execID string, _ client.Ex
 func (fake *fakeDocker) ExecInspect(_ context.Context, execID string, _ client.ExecInspectOptions) (client.ExecInspectResult, error) {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
+	if fake.unstartedInspects > 0 {
+		fake.unstartedInspects--
+		return client.ExecInspectResult{ID: execID, ContainerID: fake.container.ID, Running: fake.unstartedRunning}, nil
+	}
 	pid := 0
-	if fake.execRunning[execID] {
+	if _, started := fake.execs[execID]; started {
 		pid = 123
 	}
 	return client.ExecInspectResult{ID: execID, ContainerID: fake.container.ID, Running: fake.execRunning[execID], PID: pid, ExitCode: fake.exitCodes[execID]}, nil
@@ -1049,5 +1061,42 @@ func TestRunOutcomeRecordsTerminalState(t *testing.T) {
 				t.Fatalf("ended_at %q precedes started_at %q", outcome.EndedAt, outcome.StartedAt)
 			}
 		})
+	}
+}
+
+func TestExecAttachedWaitsForAnExecDockerHasNotStarted(t *testing.T) {
+	// Taking the first "not running, no PID" inspect for an exit closed the
+	// stream after the drain, before the command wrote its trailer.
+	fake := newFakeDocker()
+	fake.container.ID = "container"
+	fake.container.State = &container.State{Running: true}
+	fake.unstartedInspects = 3
+	fake.execDelay = 800 * time.Millisecond
+	manager := &Manager{client: fake}
+	result, err := manager.execAttached(context.Background(), "container", []string{"hermes", "sessions", "export"}, "/")
+	if err != nil || result.exitCode != 0 || string(result.stdout) != fake.sessionsStdout {
+		t.Fatalf("execAttached() = %#v, %v", result, err)
+	}
+}
+
+func TestWaitExecGivesUpOnAnExecThatNeverStarts(t *testing.T) {
+	fake := newFakeDocker()
+	fake.unstartedInspects = 1 << 30
+	manager := &Manager{client: fake}
+	_, err := manager.waitExec(context.Background(), "container", "exec-1", 100*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "Hermes exec did not start within 100ms") {
+		t.Fatalf("waitExec() = %v", err)
+	}
+}
+
+func TestWaitExecGivesUpOnAnExecStuckStarting(t *testing.T) {
+	// Docker marks an exec running before it creates the process; the start
+	// bound applies to that state too.
+	fake := newFakeDocker()
+	fake.unstartedInspects, fake.unstartedRunning = 1<<30, true
+	manager := &Manager{client: fake}
+	_, err := manager.waitExec(context.Background(), "container", "exec-1", 100*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "Hermes exec did not start within 100ms") {
+		t.Fatalf("waitExec() = %v", err)
 	}
 }
