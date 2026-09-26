@@ -38,6 +38,7 @@ const (
 	networkAlias          = "task-sandbox"
 	execPollInterval      = 20 * time.Millisecond
 	execDrainTimeout      = 200 * time.Millisecond
+	execStartTimeout      = 30 * time.Second
 	execTrailerKeep       = 128
 	execStatePrefix       = "/tmp/.aries-exec-"
 	rootExecUser          = "0:0"
@@ -476,7 +477,7 @@ func (s *Sandbox) ExecStream(ctx context.Context, command core.Command, stdin io
 		copyDone <- copyErr
 	}()
 	exitDone := make(chan error, 1)
-	go func() { exitDone <- s.waitForExecExit(execCtx, created.ID) }()
+	go func() { exitDone <- s.waitForExecExit(execCtx, created.ID, execStartTimeout) }()
 	var stopRead sync.Once
 	stopReading := func() {
 		stopRead.Do(func() {
@@ -611,18 +612,25 @@ func (w *exitTrailerWriter) Finish() (int, error) {
 	return exitCode, nil
 }
 
-func (s *Sandbox) waitForExecExit(ctx context.Context, execID string) error {
+// waitForExecExit returns once the exec's process has exited. An exec that
+// Docker has not started yet is waited for, up to startTimeout.
+func (s *Sandbox) waitForExecExit(ctx context.Context, execID string, startTimeout time.Duration) error {
 	ticker := time.NewTicker(execPollInterval)
 	defer ticker.Stop()
+	began := time.Now()
 	for {
 		inspection, err := s.client.ExecInspect(ctx, execID, client.ExecInspectOptions{})
 		if err != nil {
 			return fmt.Errorf("inspect running Docker exec: %w", err)
 		}
 		if !inspection.Running {
-			return nil
-		}
-		if inspection.PID > 0 {
+			if execHasStarted(inspection) {
+				return nil
+			}
+			if time.Since(began) > startTimeout {
+				return fmt.Errorf("Docker exec did not start within %s", startTimeout)
+			}
+		} else if inspection.PID > 0 {
 			present, err := s.containerHasPID(ctx, inspection.PID)
 			if err != nil {
 				return fmt.Errorf("inspect Docker exec process: %w", err)
@@ -639,6 +647,16 @@ func (s *Sandbox) waitForExecExit(ctx context.Context, execID string) error {
 		case <-ticker.C:
 		}
 	}
+}
+
+// execHasStarted tells an exec that has run from one Docker has not started
+// yet; both report Running false. Docker answers the attach (HTTP 101) before
+// it marks the exec running and creates its process, so on a busy host the
+// first inspects can report an exec with no PID and no exit code. An exec
+// keeps its PID after it exits, and one that failed to start has exit code
+// 126, so only that state means "not started".
+func execHasStarted(inspection client.ExecInspectResult) bool {
+	return inspection.PID > 0 || inspection.ExitCode != 0
 }
 
 func (s *Sandbox) containerHasPID(ctx context.Context, pid int) (bool, error) {

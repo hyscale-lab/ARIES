@@ -61,6 +61,11 @@ type fakeDocker struct {
 	createCalls      int
 	closeCalls       int
 	closeErr         error
+
+	// Docker answers an exec's attach before it starts the process: the first
+	// unstartedInspects inspects report an exec it has not started yet.
+	unstartedInspects int
+	execDelay         time.Duration
 }
 
 func (fake *fakeDocker) Close() error {
@@ -240,6 +245,7 @@ func (fake *fakeDocker) ExecAttach(_ context.Context, execID string, _ client.Ex
 	response := client.ExecAttachResult{HijackedResponse: client.NewHijackedResponse(clientSide, "application/vnd.docker.multiplexed-stream")}
 	go func() {
 		defer engineSide.Close()
+		time.Sleep(fake.execDelay)
 		exitCode := 0
 		if len(options.Cmd) > 5 && options.Cmd[5] == launcherPath {
 			_ = writeMux(engineSide, stdcopy.Stdout, []byte(`{"status":"ok","result":{"payloads":[{"text":"task complete"}]}}`))
@@ -270,8 +276,12 @@ func (fake *fakeDocker) ExecInspect(_ context.Context, execID string, _ client.E
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	status := fake.exitCodes[execID]
+	if fake.unstartedInspects > 0 {
+		fake.unstartedInspects--
+		return client.ExecInspectResult{ID: execID, ContainerID: fake.container.ID}, nil
+	}
 	pid := 0
-	if fake.execRunning[execID] {
+	if _, started := fake.execs[execID]; started {
 		pid = 123
 	}
 	return client.ExecInspectResult{ID: execID, ContainerID: fake.container.ID, Running: fake.execRunning[execID], PID: pid, ExitCode: status}, nil
@@ -1589,5 +1599,30 @@ func TestInputValidationAndSecretHelpers(t *testing.T) {
 	second, _ := environmentAPIKeyLookup("ARIES_TEST_KEY")
 	if string(second) != "value" {
 		t.Fatalf("environment lookup aliased: %q", second)
+	}
+}
+
+func TestExecAttachedWaitsForAnExecDockerHasNotStarted(t *testing.T) {
+	// Taking the first "not running, no PID" inspect for an exit closed the
+	// stream after the drain, before the command wrote its trailer.
+	fake := newFakeDocker()
+	fake.container.ID = "container"
+	fake.container.State = &container.State{Running: true}
+	fake.unstartedInspects = 3
+	fake.execDelay = 800 * time.Millisecond
+	manager := &Manager{client: fake}
+	result, err := manager.execAttached(context.Background(), "container", []string{"true"}, "/")
+	if err != nil || result.exitCode != 0 || string(result.stdout) != "" {
+		t.Fatalf("execAttached() = %#v, %v", result, err)
+	}
+}
+
+func TestWaitExecGivesUpOnAnExecThatNeverStarts(t *testing.T) {
+	fake := newFakeDocker()
+	fake.unstartedInspects = 1 << 30
+	manager := &Manager{client: fake}
+	_, err := manager.waitExec(context.Background(), "container", "exec-1", 100*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "OpenClaw exec did not start within 100ms") {
+		t.Fatalf("waitExec() = %v", err)
 	}
 }

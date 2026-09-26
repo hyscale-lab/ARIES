@@ -46,6 +46,7 @@ const (
 	maxAPIKeyBytes         = 16 << 10
 	gracefulStopSeconds    = 5
 	execTrailerKeep        = 256
+	execStartTimeout       = 30 * time.Second
 	gatewayListenPort      = "18789"
 	gatewayLauncherPath    = "/run/aries/gateway-launcher"
 	upstreamGatewayPort    = "18790"
@@ -982,7 +983,7 @@ func (manager *Manager) execAttached(ctx context.Context, containerID string, co
 	inspectCtx, cancelInspect := context.WithCancel(ctx)
 	defer cancelInspect()
 	go func() {
-		inspection, err := manager.waitExec(inspectCtx, containerID, created.ID)
+		inspection, err := manager.waitExec(inspectCtx, containerID, created.ID, execStartTimeout)
 		if err != nil {
 			inspectErr <- err
 			return
@@ -1042,18 +1043,25 @@ func (manager *Manager) execAttached(ctx context.Context, containerID string, co
 	return execResult{stdout: stdout.Bytes(), stderr: stderr.Bytes(), exitCode: exitCode}, nil
 }
 
-func (manager *Manager) waitExec(ctx context.Context, containerID, execID string) (client.ExecInspectResult, error) {
+// waitExec returns once the exec's process has exited. An exec that Docker
+// has not started yet is waited for, up to startTimeout.
+func (manager *Manager) waitExec(ctx context.Context, containerID, execID string, startTimeout time.Duration) (client.ExecInspectResult, error) {
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
+	began := time.Now()
 	for {
 		inspection, err := manager.client.ExecInspect(ctx, execID, client.ExecInspectOptions{})
 		if err != nil {
 			return client.ExecInspectResult{}, fmt.Errorf("inspect OpenClaw exec: %w", err)
 		}
 		if !inspection.Running {
-			return inspection, nil
-		}
-		if inspection.PID > 0 {
+			if execHasStarted(inspection) {
+				return inspection, nil
+			}
+			if time.Since(began) > startTimeout {
+				return client.ExecInspectResult{}, fmt.Errorf("OpenClaw exec did not start within %s", startTimeout)
+			}
+		} else if inspection.PID > 0 {
 			present, err := manager.containerHasPID(ctx, containerID, inspection.PID)
 			if err != nil {
 				return client.ExecInspectResult{}, fmt.Errorf("inspect OpenClaw exec process: %w", err)
@@ -1068,6 +1076,16 @@ func (manager *Manager) waitExec(ctx context.Context, containerID, execID string
 		case <-ticker.C:
 		}
 	}
+}
+
+// execHasStarted tells an exec that has run from one Docker has not started
+// yet; both report Running false. Docker answers the attach (HTTP 101) before
+// it marks the exec running and creates its process, so on a busy host the
+// first inspects can report an exec with no PID and no exit code. An exec
+// keeps its PID after it exits, and one that failed to start has exit code
+// 126, so only that state means "not started".
+func execHasStarted(inspection client.ExecInspectResult) bool {
+	return inspection.PID > 0 || inspection.ExitCode != 0
 }
 
 func (manager *Manager) containerHasPID(ctx context.Context, containerID string, pid int) (bool, error) {

@@ -90,6 +90,11 @@ type fakeClient struct {
 	downloadCalls  int
 	closeCalls     int
 	closeErr       error
+
+	// Docker answers an exec's attach before it starts the process: the first
+	// unstartedInspects inspects report an exec it has not started yet.
+	unstartedInspects int
+	failedStart       bool
 }
 
 func (f *fakeClient) Close() error {
@@ -261,6 +266,13 @@ func (f *fakeClient) ExecInspect(_ context.Context, execID string, _ client.Exec
 	defer f.mu.Unlock()
 	if execID == "control-id" {
 		return client.ExecInspectResult{ID: execID, ContainerID: f.containerID, ExitCode: f.controlExit}, nil
+	}
+	if f.unstartedInspects > 0 {
+		f.unstartedInspects--
+		return client.ExecInspectResult{ID: execID, ContainerID: f.containerID}, nil
+	}
+	if f.failedStart {
+		return client.ExecInspectResult{ID: execID, ContainerID: f.containerID, ExitCode: 126}, nil
 	}
 	return client.ExecInspectResult{ID: execID, ContainerID: f.containerID, Running: f.execRunning, ExitCode: f.execExit, PID: 100}, nil
 }
@@ -1038,4 +1050,48 @@ func readArchive(t *testing.T, content []byte) (*tar.Header, []byte) {
 		t.Fatal(err)
 	}
 	return header, payload
+}
+
+func TestExecWaitsForAnExecDockerHasNotStarted(t *testing.T) {
+	// Taking the first "not running, no PID" inspect for an exit closed the
+	// stream after execDrainTimeout, before the command wrote its trailer.
+	fake := &fakeClient{}
+	sandbox := startSandbox(t, fake)
+	defer sandbox.stop(context.Background())
+	fake.mu.Lock()
+	fake.execRunning, fake.execExit, fake.unstartedInspects = true, 3, 3
+	fake.attach = func(conn net.Conn) {
+		time.Sleep(4 * execDrainTimeout)
+		writeFrame(conn, stdcopy.Stdout, []byte("done"))
+		fake.mu.Lock()
+		fake.execRunning = false
+		fake.mu.Unlock()
+	}
+	fake.mu.Unlock()
+	result, err := sandbox.Exec(context.Background(), core.Command{Path: "/bin/sleep", Args: []string{"1"}})
+	if err != nil || result.ExitCode != 3 || result.Stdout != "done" {
+		t.Fatalf("Exec() = %#v, %v", result, err)
+	}
+}
+
+func TestExecDoesNotWaitForAnExecThatFailedToStart(t *testing.T) {
+	fake := &fakeClient{}
+	sandbox := startSandbox(t, fake)
+	defer sandbox.stop(context.Background())
+	fake.mu.Lock()
+	fake.failedStart, fake.execExit = true, 126
+	fake.mu.Unlock()
+	began := time.Now()
+	result, err := sandbox.Exec(context.Background(), core.Command{Path: "/missing"})
+	if err != nil || result.ExitCode != 126 || time.Since(began) > 5*time.Second {
+		t.Fatalf("Exec() = %#v, %v after %s", result, err, time.Since(began))
+	}
+}
+
+func TestWaitForExecExitGivesUpOnAnExecThatNeverStarts(t *testing.T) {
+	sandbox := &Sandbox{client: &fakeClient{unstartedInspects: 1 << 30}}
+	err := sandbox.waitForExecExit(context.Background(), "exec-id", 100*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "did not start within 100ms") {
+		t.Fatalf("waitForExecExit() = %v", err)
+	}
 }
