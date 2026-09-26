@@ -8,6 +8,7 @@ import (
 	"math"
 	"net"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -80,6 +81,7 @@ type renderSettings struct {
 	maxConcurrentSubagents int
 	compaction             *CompactionSettings
 	extraBody              []byte
+	mcpServers             []core.MCPServerConfig
 }
 
 // renderConfig produces the Hermes `config.yaml`. The credential is written as
@@ -244,6 +246,41 @@ func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *Voi
 			output.WriteString("  extract_backend: \"tavily\"\n")
 		}
 	}
+	if len(settings.mcpServers) > 0 {
+		output.WriteString("\nmcp_servers:\n")
+		for _, server := range settings.mcpServers {
+			output.WriteString("  " + server.Name + ":\n")
+			if server.URL != "" {
+				output.WriteString("    url: " + yamlString(server.URL) + "\n")
+			} else if server.Command != "" {
+				output.WriteString("    command: " + yamlString(server.Command) + "\n")
+				if len(server.Args) > 0 {
+					output.WriteString("    args:\n")
+					for _, arg := range server.Args {
+						output.WriteString("      - " + yamlString(arg) + "\n")
+					}
+				}
+				if len(server.Env) > 0 || len(server.SecretEnv) > 0 {
+					output.WriteString("    env:\n")
+					keys := make([]string, 0, len(server.Env)+len(server.SecretEnv))
+					for k := range server.Env {
+						keys = append(keys, k)
+					}
+					for k := range server.SecretEnv {
+						keys = append(keys, k)
+					}
+					sort.Strings(keys)
+					for _, k := range keys {
+						if hostVar, ok := server.SecretEnv[k]; ok {
+							output.WriteString("      " + k + ": " + yamlString("${"+hostVar+"}") + "\n")
+						} else {
+							output.WriteString("      " + k + ": " + yamlString(server.Env[k]) + "\n")
+						}
+					}
+				}
+			}
+		}
+	}
 	return output.Bytes(), nil
 }
 
@@ -357,7 +394,7 @@ func containerEnvironment(endpoint core.ToolEndpoint, workdir string, terminalTi
 // inside the container means no value ever appears in Docker's exec or
 // container config. extractEnabled additionally exports the Tavily key
 // staged at extractKeyPath, under Hermes's fixed tavilyAPIKeyEnv name.
-func agentWrapperScript(apiKeyEnv string, extractEnabled bool) []byte {
+func agentWrapperScript(apiKeyEnv string, extractEnabled bool, mcpHostVars ...string) []byte {
 	script := `#!/bin/sh
 set -eu
 if [ ! -f ` + modelKeyPath + ` ]; then
@@ -374,6 +411,16 @@ export ` + apiKeyEnv + `
 fi
 ` + tavilyAPIKeyEnv + `="$(cat ` + extractKeyPath + `)"
 export ` + tavilyAPIKeyEnv + `
+`
+	}
+	for _, hostVar := range mcpHostVars {
+		keyPath := stateContainerPath + "/mcp_" + hostVar + ".key"
+		script += `if [ ! -f ` + keyPath + ` ]; then
+  echo "ARIES: Hermes MCP secret ` + hostVar + ` is missing" >&2
+  exit 1
+fi
+` + hostVar + `="$(cat ` + keyPath + `)"
+export ` + hostVar + `
 `
 	}
 	script += `exec hermes --ignore-rules --yolo --model "$1" --provider "$2" -z "$3"

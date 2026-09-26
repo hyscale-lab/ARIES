@@ -116,3 +116,23 @@ to the command wiring, and provide focused tests for start, run, cancellation,
 idempotent stop, positive absence, credential handling, and artifacts. Update
 the supported reference and this guide with evidenced behavior; do not add a
 registration, discovery, factory, reflection, DI, or generic plugin layer.
+
+## Model Context Protocol (`MCP`)
+
+ARIES supports configuring Model Context Protocol (`MCP`) servers for agent harnesses via `harness.mcp_servers`.
+
+`core.MCPServerConfig` defines the server configuration (name, command/`args` for `stdio`, or `url` for `SSE`/`HTTP`). Configuration validation is enforced by `core.ValidateMCPServer`:
+- Server names must not contain `whitespace` or control characters.
+- Either an executable command or an absolute `HTTP`/`HTTPS` `url` must be specified, never both.
+- Environment variable mappings are split into benign plain text (`env`) and host credentials (`secret_env`):
+  - `env` maps target variables to plain text values that do not contain control characters.
+  - `secret_env` maps target variables to host environment variable names. Raw secrets are rejected at validation time; rendered configurations persist `${NAME}` placeholders, and harness session startup stages credentials into private key files (`0600`) exported by in-container launcher scripts rather than exposing them in container environment metadata.
+  - Both `env` and `secret_env` are supported for command servers and rejected for `url` servers.
+
+Harnesses manage `MCP` execution and network boundaries as follows:
+- **Command servers (`stdio`)** execute directly inside the agent container environment.
+- **`URL` servers (`HTTP`/`SSE`)** connect over the network to remote endpoints rather than running inside the local container.
+- **OpenClaw**: Configures `MCP` servers in the rendered `openclaw.json` under `mcp.servers`. In `sandboxed` execution, `MCP` tool access is gated by appending `"bundle-mcp"` to `tools.sandbox.tools.alsoAllow`.
+- **Hermes**: Renders configured `MCP` servers into `config.yaml` under `mcp_servers`, enabling in-container agent discovery and invocation.
+
+ARIES does not run host-side `MCP` client bridges; tool invocation and communication remain entirely within the agent container boundary.

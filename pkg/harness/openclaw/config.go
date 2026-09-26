@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/hyscale-lab/aries/pkg/core"
@@ -44,6 +45,24 @@ type openClawConfig struct {
 	Tools   toolPolicy     `json:"tools"`
 	Talk    *talkConfig    `json:"talk,omitempty"`
 	Plugins *pluginsConfig `json:"plugins,omitempty"`
+	MCP     *openClawMCP   `json:"mcp,omitempty"`
+}
+
+type openClawMCP struct {
+	Servers map[string]openClawMCPServer `json:"servers"`
+}
+
+type openClawMCPServer struct {
+	Command   string            `json:"command,omitempty"`
+	Args      []string          `json:"args,omitempty"`
+	URL       string            `json:"url,omitempty"`
+	Transport string            `json:"transport,omitempty"`
+	Env       map[string]string `json:"env,omitempty"`
+}
+
+// MCPOptions configures MCP servers and sandbox-allowlisted tools for OpenClaw.
+type MCPOptions struct {
+	Servers []core.MCPServerConfig
 }
 
 type talkConfig struct {
@@ -171,7 +190,7 @@ type sshConfig struct {
 	KnownHostsFile        string `json:"knownHostsFile"`
 }
 
-func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, mode string, webSearchEnabled, extractEnabled, subagentsEnabled bool, maxConcurrentSubagents int) ([]byte, error) {
+func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, mode string, webSearchEnabled, extractEnabled, subagentsEnabled bool, maxConcurrentSubagents int, mcp ...MCPOptions) ([]byte, error) {
 	if err := validateModel(model); err != nil {
 		return nil, err
 	}
@@ -225,9 +244,10 @@ func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, mode strin
 	if subagentsEnabled && maxConcurrentSubagents > 0 {
 		configuration.Agents.Defaults.Subagents = &subagentsConfig{MaxConcurrent: maxConcurrentSubagents}
 	}
+	var alsoAllow []string
 	if webSearchEnabled {
 		configuration.Tools.Web = &webToolsConfig{Search: &webSearchToolConfig{Provider: "searxng"}}
-		alsoAllow := []string{"web_search", "web_fetch"}
+		alsoAllow = append(alsoAllow, "web_search", "web_fetch")
 		entries := map[string]pluginEntry{
 			"searxng": {Config: &pluginConfigBlock{WebSearch: webSearchPluginConfig{BaseURL: searxngBaseURL}}},
 		}
@@ -239,8 +259,43 @@ func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, mode strin
 			alsoAllow = append(alsoAllow, "tavily_extract")
 			entries["tavily"] = pluginEntry{Enabled: true}
 		}
-		configuration.Tools.Sandbox = &sandboxToolsGate{Tools: sandboxToolsAllowList{AlsoAllow: alsoAllow}}
 		configuration.Plugins = &pluginsConfig{Entries: entries}
+	}
+	if len(mcp) > 0 {
+		opts := mcp[0]
+		if len(opts.Servers) > 0 {
+			servers := make(map[string]openClawMCPServer, len(opts.Servers))
+			for _, server := range opts.Servers {
+				entry := openClawMCPServer{
+					Command: server.Command,
+					Args:    server.Args,
+					URL:     server.URL,
+				}
+				if server.Command != "" {
+					entry.Transport = "stdio"
+					if len(server.Env) > 0 || len(server.SecretEnv) > 0 {
+						envMap := make(map[string]string, len(server.Env)+len(server.SecretEnv))
+						for targetKey, val := range server.Env {
+							envMap[targetKey] = val
+						}
+						for targetKey, hostVar := range server.SecretEnv {
+							envMap[targetKey] = "${" + hostVar + "}"
+						}
+						entry.Env = envMap
+					}
+				} else if server.URL != "" {
+					entry.Transport = "sse"
+				}
+				servers[server.Name] = entry
+			}
+			configuration.MCP = &openClawMCP{Servers: servers}
+			if !slices.Contains(alsoAllow, "bundle-mcp") {
+				alsoAllow = append(alsoAllow, "bundle-mcp")
+			}
+		}
+	}
+	if len(alsoAllow) > 0 {
+		configuration.Tools.Sandbox = &sandboxToolsGate{Tools: sandboxToolsAllowList{AlsoAllow: alsoAllow}}
 	}
 	var output bytes.Buffer
 	encoder := json.NewEncoder(&output)
@@ -351,13 +406,16 @@ func validEnvironmentName(value string) bool {
 	return value != ""
 }
 
-func launcherScript(apiKeyEnv, realtimeAPIKeyEnv string, extractEnabled bool) []byte {
+func launcherScript(apiKeyEnv, realtimeAPIKeyEnv string, extractEnabled bool, mcpHostVars ...string) []byte {
 	script := "#!/bin/sh\nset -eu\nmodel_key=$(cat " + modelKeyPath + ")\ngateway_key=$(cat " + gatewayKeyPath + ")\nexport " + apiKeyEnv + "=\"$model_key\"\nexport " + gatewayTokenEnv + "=\"$gateway_key\"\n"
 	if realtimeAPIKeyEnv != "" {
 		script += "realtime_key=$(cat " + realtimeKeyPath + ")\nexport " + realtimeAPIKeyEnv + "=\"$realtime_key\"\nunset realtime_key\n"
 	}
 	if extractEnabled {
 		script += "tavily_key=$(cat " + tavilyKeyPath + ")\nexport " + tavilyAPIKeyEnv + "=\"$tavily_key\"\nunset tavily_key\n"
+	}
+	for _, hostVar := range mcpHostVars {
+		script += hostVar + "=\"$(cat /run/aries/mcp_" + hostVar + ".key)\"\nexport " + hostVar + "\n"
 	}
 	script += "unset model_key gateway_key\nexec \"$@\"\n"
 	return []byte(script)

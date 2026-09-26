@@ -434,3 +434,61 @@ func TestRenderConfigMapsOpenAICompatibleBackendsToCustomProvider(t *testing.T) 
 		t.Fatal("deepseek provider was rewritten")
 	}
 }
+
+func TestRenderConfig_MCPServers(t *testing.T) {
+	servers := []core.MCPServerConfig{
+		{
+			Name:      "filesystem",
+			Command:   "npx",
+			Args:      []string{"-y", "@modelcontextprotocol/server-filesystem", "/workspace"},
+			Env:       map[string]string{"DEBUG": "1"},
+			SecretEnv: map[string]string{"API_KEY": "TOOLATHLON_API_KEY"},
+		},
+		{
+			Name: "remote-sse",
+			URL:  "https://mcp.example.com/sse",
+		},
+	}
+
+	rendered, err := renderConfig(validModel(), renderSettings{
+		maxTurns:   10,
+		mcpServers: servers,
+	}, nil)
+	if err != nil {
+		t.Fatalf("renderConfig failed: %v", err)
+	}
+
+	text := string(rendered)
+	if strings.Contains(text, "custom_tools") {
+		t.Fatalf("rendered config contains invalid custom_tools field:\n%s", text)
+	}
+	if !strings.Contains(text, "mcp_servers:") {
+		t.Fatalf("rendered config missing mcp_servers block:\n%s", text)
+	}
+	if !strings.Contains(text, "filesystem:") || !strings.Contains(text, `command: "npx"`) {
+		t.Fatalf("rendered config missing filesystem command:\n%s", text)
+	}
+	if !strings.Contains(text, `- "-y"`) || !strings.Contains(text, `- "@modelcontextprotocol/server-filesystem"`) {
+		t.Fatalf("rendered config missing filesystem arguments:\n%s", text)
+	}
+	if !strings.Contains(text, "env:") || !strings.Contains(text, `API_KEY: "${TOOLATHLON_API_KEY}"`) || !strings.Contains(text, `DEBUG: "1"`) {
+		t.Fatalf("rendered config missing filesystem env mapping:\n%s", text)
+	}
+	if !strings.Contains(text, "remote-sse:") || !strings.Contains(text, `url: "https://mcp.example.com/sse"`) {
+		t.Fatalf("rendered config missing remote-sse url:\n%s", text)
+	}
+}
+
+func TestAgentWrapperScriptExportsMCPHostVariables(t *testing.T) {
+	script := string(agentWrapperScript("DEEPSEEK_API_KEY", false, "TOOLATHLON_API_KEY", "OTHER_KEY"))
+	for _, required := range []string{
+		"TOOLATHLON_API_KEY=\"$(cat /run/aries/hermes/mcp_TOOLATHLON_API_KEY.key)\"",
+		"export TOOLATHLON_API_KEY",
+		"OTHER_KEY=\"$(cat /run/aries/hermes/mcp_OTHER_KEY.key)\"",
+		"export OTHER_KEY",
+	} {
+		if !strings.Contains(script, required) {
+			t.Fatalf("agentWrapperScript missing MCP export %q: %s", required, script)
+		}
+	}
+}

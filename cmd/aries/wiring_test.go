@@ -426,3 +426,57 @@ func TestExternalOpenAIPreparationReturnsNilRuntime(t *testing.T) {
 		t.Fatal("managed OpenAI-compatible runtime was accepted")
 	}
 }
+
+func TestNewHarness_WiresMCPServers(t *testing.T) {
+	servers := []core.MCPServerConfig{
+		{Name: "fetch", Command: "uvx", Args: []string{"mcp-server-fetch"}},
+		{Name: "weather", URL: "https://weather.example.com/sse"},
+	}
+	outputDir := t.TempDir()
+	lookup := func(string) ([]byte, bool) { return []byte("test-key"), true }
+
+	for _, harnessType := range []string{"openclaw", "hermes"} {
+		t.Run(harnessType, func(t *testing.T) {
+			cfg := config.Config{
+				Harness: config.HarnessConfig{
+					Type:       harnessType,
+					MCPServers: servers,
+				},
+				Versions: config.Versions{
+					OpenClaw: config.OpenClawVersions{Image: "ghcr.io/openclaw/openclaw:2026.7.1"},
+					Hermes:   config.HermesVersions{Image: "docker.io/nousresearch/hermes-agent:v2026.8.31"},
+				},
+			}
+			instance, err := newHarness(cfg, outputDir, lookup, nil)
+			if err != nil {
+				t.Fatalf("newHarness(%s) error = %v", harnessType, err)
+			}
+			defer instance.Close()
+
+			if instance.Harness == nil {
+				t.Fatalf("newHarness(%s) returned nil Harness", harnessType)
+			}
+		})
+	}
+
+	invalidServers := []core.MCPServerConfig{
+		{Name: "bad", Command: "mcp-server", Env: map[string]string{"SECRET": "invalid-secret-value!"}},
+	}
+	for _, harnessType := range []string{"openclaw", "hermes"} {
+		t.Run(harnessType+"_invalid", func(t *testing.T) {
+			cfg := config.Config{
+				Harness: config.HarnessConfig{
+					Type:       harnessType,
+					MCPServers: invalidServers,
+				},
+				Versions: config.Versions{
+					OpenClaw: config.OpenClawVersions{Image: "ghcr.io/openclaw/openclaw:2026.7.1"},
+					Hermes:   config.HermesVersions{Image: "docker.io/nousresearch/hermes-agent:v2026.8.31"},
+				},
+			}
+			if _, err := newHarness(cfg, outputDir, lookup, nil); err == nil {
+				t.Fatalf("newHarness(%s) accepted invalid MCPServers", harnessType)
+			}
+		})
+	}
+}

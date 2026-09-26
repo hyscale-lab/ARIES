@@ -82,6 +82,7 @@ type Options struct {
 	ExtractAPIKeyEnv       string
 	SubagentsEnabled       bool
 	MaxConcurrentSubagents int
+	MCPServers             []core.MCPServerConfig
 	CleanupTimeout         time.Duration
 	StartTimeout           time.Duration
 	AgentTimeout           time.Duration
@@ -148,6 +149,7 @@ type Manager struct {
 	extractAPIKeyEnv       string
 	subagentsEnabled       bool
 	maxConcurrentSubagents int
+	mcpServers             []core.MCPServerConfig
 	newID                  func() (string, error)
 	newGateway             func(string, []byte) (gatewayConnection, error)
 	newAgentGateway        func(string, []byte) (gatewayConnection, error)
@@ -205,6 +207,8 @@ type session struct {
 	realtimeAPIKey   []byte
 	extractAPIKey    []byte
 	gatewayToken     []byte
+	mcpSecrets       [][]byte
+	mcpSecretFiles   map[string][]byte
 	gatewayURL       string
 	agentIdempotency string
 	runAttempted     bool
@@ -278,13 +282,18 @@ func New(options Options) (*Manager, error) {
 	default:
 		return nil, errors.New("OpenClaw mode must be agent, realtime, or voice-transcribe")
 	}
+	for _, server := range options.MCPServers {
+		if err := core.ValidateMCPServer(server); err != nil {
+			return nil, err
+		}
+	}
 	return &Manager{
 		client: api, image: options.Image, outputDir: outputDir,
 		cleanupTimeout: options.CleanupTimeout, startTimeout: options.StartTimeout,
 		agentTimeout: options.AgentTimeout, logger: options.Logger,
 		apiKeyLookup: options.APIKeyLookup, mode: options.Mode, realtime: options.Realtime,
 		webSearchEnabled: options.WebSearchEnabled, extractAPIKeyEnv: options.ExtractAPIKeyEnv, subagentsEnabled: options.SubagentsEnabled,
-		maxConcurrentSubagents: options.MaxConcurrentSubagents, newID: randomID,
+		maxConcurrentSubagents: options.MaxConcurrentSubagents, mcpServers: options.MCPServers, newID: randomID,
 		newGateway: func(rawURL string, token []byte) (gatewayConnection, error) {
 			return newGatewayClientWithDisposition(rawURL, token, gatewayScopes(options.Mode), gatewayEventDisposition(options.Mode))
 		},
@@ -339,7 +348,9 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 			extractEnabled = true
 		}
 	}
-	configuration, err := renderConfig(request.Model, request.Endpoint, manager.mode, manager.webSearchEnabled, extractEnabled, manager.subagentsEnabled, manager.maxConcurrentSubagents)
+	configuration, err := renderConfig(request.Model, request.Endpoint, manager.mode, manager.webSearchEnabled, extractEnabled, manager.subagentsEnabled, manager.maxConcurrentSubagents, MCPOptions{
+		Servers: manager.mcpServers,
+	})
 	if err != nil {
 		clear(extractAPIKey)
 		return err
@@ -393,6 +404,55 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		clear(extractAPIKey)
 		return errors.New("rendered OpenClaw config contains the extract API-key value")
 	}
+	mcpSecretFiles := make(map[string][]byte)
+	var mcpSecrets [][]byte
+	for _, srv := range manager.mcpServers {
+		keys := make([]string, 0, len(srv.SecretEnv))
+		for k := range srv.SecretEnv {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			hostVar := srv.SecretEnv[k]
+			if _, exists := mcpSecretFiles[hostVar]; exists {
+				continue
+			}
+			secretSource, ok := manager.apiKeyLookup(hostVar)
+			if !ok {
+				clear(apiKey)
+				clear(realtimeAPIKey)
+				clear(extractAPIKey)
+				for _, s := range mcpSecrets {
+					clear(s)
+				}
+				return fmt.Errorf("OpenClaw MCP server %q secret environment variable %q (%q) is not set", srv.Name, hostVar, k)
+			}
+			secret := bytes.Clone(secretSource)
+			clear(secretSource)
+			if err := validateAPIKey(secret); err != nil {
+				clear(apiKey)
+				clear(realtimeAPIKey)
+				clear(extractAPIKey)
+				clear(secret)
+				for _, s := range mcpSecrets {
+					clear(s)
+				}
+				return fmt.Errorf("OpenClaw MCP server %q secret environment variable %q (%q): %w", srv.Name, hostVar, k, err)
+			}
+			if bytes.Contains(configuration, secret) {
+				clear(apiKey)
+				clear(realtimeAPIKey)
+				clear(extractAPIKey)
+				clear(secret)
+				for _, s := range mcpSecrets {
+					clear(s)
+				}
+				return fmt.Errorf("rendered OpenClaw config contains secret for MCP server %q (%q)", srv.Name, k)
+			}
+			mcpSecretFiles[hostVar] = secret
+			mcpSecrets = append(mcpSecrets, secret)
+		}
+	}
 	containerConfig := &container.Config{
 		Image: manager.image,
 		Env:   []string{"OPENCLAW_CONFIG_PATH=" + configContainerPath},
@@ -411,6 +471,9 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		clear(apiKey)
 		clear(realtimeAPIKey)
 		clear(extractAPIKey)
+		for _, s := range mcpSecrets {
+			clear(s)
+		}
 		return fmt.Errorf("generate OpenClaw harness ID: %w", err)
 	}
 	gatewayToken, err := randomSecret(32)
@@ -418,6 +481,9 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		clear(apiKey)
 		clear(realtimeAPIKey)
 		clear(extractAPIKey)
+		for _, s := range mcpSecrets {
+			clear(s)
+		}
 		return fmt.Errorf("generate OpenClaw gateway token: %w", err)
 	}
 	agentIdempotency, err := randomID()
@@ -426,12 +492,15 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		clear(realtimeAPIKey)
 		clear(extractAPIKey)
 		clear(gatewayToken)
+		for _, s := range mcpSecrets {
+			clear(s)
+		}
 		return fmt.Errorf("generate OpenClaw agent idempotency key: %w", err)
 	}
 	active := &session{
 		runID: request.RunID, taskID: request.TaskID, safeTaskID: safeTaskID(request.TaskID), attemptID: id,
 		containerName: "aries-openclaw-" + id, artifactDir: filepath.Join(manager.outputDir, request.TaskID, "harness"),
-		endpoint: request.Endpoint, model: request.Model, agentTimeout: agentTimeout, apiKey: apiKey, realtimeAPIKey: realtimeAPIKey, extractAPIKey: extractAPIKey, gatewayToken: gatewayToken, agentIdempotency: agentIdempotency,
+		endpoint: request.Endpoint, model: request.Model, agentTimeout: agentTimeout, apiKey: apiKey, realtimeAPIKey: realtimeAPIKey, extractAPIKey: extractAPIKey, gatewayToken: gatewayToken, mcpSecrets: mcpSecrets, mcpSecretFiles: mcpSecretFiles, agentIdempotency: agentIdempotency,
 	}
 	containerConfig.Labels["aries.attempt"] = active.attemptID
 	fail := func(primary error) error {
@@ -1204,13 +1273,14 @@ func (manager *Manager) validateContainer(ctx context.Context, active *session) 
 		configuration.Labels["aries.run"] != active.runID || configuration.Labels["aries.task"] != active.taskID || configuration.Labels["aries.attempt"] != active.attemptID {
 		return errors.New("OpenClaw container labels do not match the task")
 	}
+	secrets := append([][]byte{active.apiKey, active.realtimeAPIKey, active.extractAPIKey, active.gatewayToken}, active.mcpSecrets...)
 	for _, value := range append(append([]string(nil), configuration.Env...), configuration.Cmd...) {
-		if containsSecret(value, active.apiKey, active.realtimeAPIKey, active.extractAPIKey, active.gatewayToken) {
+		if containsSecret(value, secrets...) {
 			return errors.New("OpenClaw secret entered Docker configuration")
 		}
 	}
 	for _, value := range configuration.Labels {
-		if containsSecret(value, active.apiKey, active.realtimeAPIKey, active.extractAPIKey, active.gatewayToken) {
+		if containsSecret(value, secrets...) {
 			return errors.New("OpenClaw secret entered Docker labels")
 		}
 	}
@@ -1236,11 +1306,16 @@ func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([
 		return nil, fmt.Errorf("read OpenClaw known-hosts: %w", err)
 	}
 	defer clear(knownHosts)
+	mcpHostVars := make([]string, 0, len(active.mcpSecretFiles))
+	for hostVar := range active.mcpSecretFiles {
+		mcpHostVars = append(mcpHostVars, hostVar)
+	}
+	sort.Strings(mcpHostVars)
 	files := map[string]stagedFile{
 		"run/aries/openclaw.json":    {content: configuration, mode: 0o600},
 		"run/aries/model.key":        {content: active.apiKey, mode: 0o600},
 		"run/aries/gateway.key":      {content: active.gatewayToken, mode: 0o600},
-		"run/aries/launch":           {content: launcherScript(active.model.APIKeyEnv, manager.realtimeAPIKeyEnv(active), len(active.extractAPIKey) != 0), mode: 0o555},
+		"run/aries/launch":           {content: launcherScript(active.model.APIKeyEnv, manager.realtimeAPIKeyEnv(active), len(active.extractAPIKey) != 0, mcpHostVars...), mode: 0o555},
 		"run/aries/gateway-proxy.js": {content: gatewayProxyScript(), mode: 0o555},
 		"run/aries/gateway-launcher": {content: gatewayLauncherScript(), mode: 0o555},
 		"run/aries/ssh/id_ed25519":   {content: identity, mode: 0o600},
@@ -1252,6 +1327,9 @@ func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([
 	}
 	if len(active.extractAPIKey) != 0 {
 		files["run/aries/tavily.key"] = stagedFile{content: active.extractAPIKey, mode: 0o600}
+	}
+	for _, hostVar := range mcpHostVars {
+		files["run/aries/mcp_"+hostVar+".key"] = stagedFile{content: active.mcpSecretFiles[hostVar], mode: 0o600}
 	}
 	return stageArchive(files)
 }
@@ -1736,11 +1814,20 @@ func clearSessionSecrets(active *session) {
 	active.extractAPIKey = nil
 	clear(active.gatewayToken)
 	active.gatewayToken = nil
+	for i := range active.mcpSecrets {
+		clear(active.mcpSecrets[i])
+	}
+	active.mcpSecrets = nil
+	for k := range active.mcpSecretFiles {
+		clear(active.mcpSecretFiles[k])
+	}
+	active.mcpSecretFiles = nil
 	active.agentIdempotency = ""
 }
 
 func redactSession(content []byte, active *session) []byte {
-	return redactSecrets(content, active.apiKey, active.realtimeAPIKey, active.extractAPIKey, active.gatewayToken)
+	secrets := append([][]byte{active.apiKey, active.realtimeAPIKey, active.extractAPIKey, active.gatewayToken}, active.mcpSecrets...)
+	return redactSecrets(content, secrets...)
 }
 
 type sessionRedactedError struct {

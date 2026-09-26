@@ -209,6 +209,9 @@ type HarnessConfig struct {
 	VoiceTranscribe HarnessVoiceTranscribeConfig `json:"voice_transcribe,omitempty"`
 	WebSearch       HarnessWebSearchConfig       `json:"web_search,omitempty"`
 	Subagents       HarnessSubagentsConfig       `json:"subagents,omitempty"`
+	// MCPServers configures external or in-harness Model Context Protocol (MCP) servers
+	// for Hermes and OpenClaw harnesses.
+	MCPServers []core.MCPServerConfig `json:"mcp_servers,omitempty"`
 	// Compaction is rendered only by Hermes today (see
 	// (*HarnessConfig).validateHermesBlocks) but names a general harness
 	// capability, so it lives on the shared struct and is gated by an
@@ -900,6 +903,21 @@ func (h *HarnessConfig) validate() error {
 	if h.Subagents.Enabled == nil && (h.Type == "openclaw" || h.Type == "hermes") {
 		enabled := true
 		h.Subagents.Enabled = &enabled
+	}
+	if len(h.MCPServers) > 0 {
+		if h.Type != "openclaw" && h.Type != "hermes" {
+			return errors.New("harness.mcp_servers requires OpenClaw or Hermes")
+		}
+		seenMCPServers := make(map[string]bool, len(h.MCPServers))
+		for _, server := range h.MCPServers {
+			if seenMCPServers[server.Name] {
+				return fmt.Errorf("duplicate MCP server name %q", server.Name)
+			}
+			seenMCPServers[server.Name] = true
+			if err := core.ValidateMCPServer(server); err != nil {
+				return fmt.Errorf("harness.mcp_servers: %w", err)
+			}
+		}
 	}
 	switch h.Mode {
 	case "agent":

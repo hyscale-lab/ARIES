@@ -336,6 +336,20 @@ func TestLauncherExportsTavilyKeyWhenExtractEnabled(t *testing.T) {
 	}
 }
 
+func TestLauncherExportsMCPHostVariables(t *testing.T) {
+	script := string(launcherScript("ARIES_FAKE_API_KEY", "", false, "TOOLATHLON_API_KEY", "OTHER_KEY"))
+	for _, required := range []string{
+		"TOOLATHLON_API_KEY=\"$(cat /run/aries/mcp_TOOLATHLON_API_KEY.key)\"",
+		"export TOOLATHLON_API_KEY",
+		"OTHER_KEY=\"$(cat /run/aries/mcp_OTHER_KEY.key)\"",
+		"export OTHER_KEY",
+	} {
+		if !strings.Contains(script, required) {
+			t.Fatalf("launcher missing MCP export %q: %s", required, script)
+		}
+	}
+}
+
 // A generic OpenAI-compatible server is keyed under the neutral "aries"
 // provider id, like DeepSeek, and its base URL follows the /v1 rule.
 func TestRenderConfigKeysOpenAICompatibleProviderAsAries(t *testing.T) {
@@ -358,5 +372,55 @@ func TestRenderConfigKeysOpenAICompatibleProviderAsAries(t *testing.T) {
 	model.BaseURL = "http://vllm.local:8000"
 	if _, err := renderConfig(model, testEndpoint(), ModeAgent, false, false, false, 0); err == nil {
 		t.Fatal("accepted an openai base URL without /v1")
+	}
+}
+
+func TestRenderConfig_MCPServersAndSandboxAllowlist(t *testing.T) {
+	servers := []core.MCPServerConfig{
+		{
+			Name:      "sqlite-server",
+			Command:   "mcp-server-sqlite",
+			Args:      []string{"--db-path", "/tmp/test.db"},
+			Env:       map[string]string{"DEBUG": "1"},
+			SecretEnv: map[string]string{"API_KEY": "TOOLATHLON_API_KEY"},
+		},
+		{
+			Name: "remote-tools",
+			URL:  "https://mcp.example.com/sse",
+		},
+	}
+
+	content, err := renderConfig(testModel(), testEndpoint(), ModeAgent, false, false, false, 0, MCPOptions{
+		Servers: servers,
+	})
+	if err != nil {
+		t.Fatalf("renderConfig failed: %v", err)
+	}
+
+	var configuration openClawConfig
+	if err := json.Unmarshal(content, &configuration); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+
+	if configuration.MCP == nil || len(configuration.MCP.Servers) != 2 {
+		t.Fatalf("mcp.servers = %#v, want 2 servers", configuration.MCP)
+	}
+
+	sqlite, ok := configuration.MCP.Servers["sqlite-server"]
+	if !ok || sqlite.Command != "mcp-server-sqlite" || sqlite.Transport != "stdio" || len(sqlite.Args) != 2 || sqlite.Env["API_KEY"] != "${TOOLATHLON_API_KEY}" || sqlite.Env["DEBUG"] != "1" {
+		t.Fatalf("sqlite server config = %#v", sqlite)
+	}
+
+	remote, ok := configuration.MCP.Servers["remote-tools"]
+	if !ok || remote.URL != "https://mcp.example.com/sse" || remote.Transport != "sse" {
+		t.Fatalf("remote server config = %#v", remote)
+	}
+
+	if configuration.Tools.Sandbox == nil {
+		t.Fatal("tools.sandbox must not be nil when MCP servers are provided")
+	}
+	alsoAllow := configuration.Tools.Sandbox.Tools.AlsoAllow
+	if len(alsoAllow) != 1 || alsoAllow[0] != "bundle-mcp" {
+		t.Fatalf("tools.sandbox.tools.alsoAllow = %v, want [bundle-mcp]", alsoAllow)
 	}
 }

@@ -114,6 +114,7 @@ type Options struct {
 	// renderConfig). Nil keeps Hermes's own defaults.
 	Compaction *CompactionSettings
 	ExtraBody  []byte
+	MCPServers []core.MCPServerConfig
 	Logger     *logrus.Logger
 }
 
@@ -174,6 +175,7 @@ type Manager struct {
 	maxConcurrentSubagents int
 	compaction             *CompactionSettings
 	extraBody              []byte
+	mcpServers             []core.MCPServerConfig
 	logger                 *logrus.Logger
 	apiKeyLookup           func(string) ([]byte, bool)
 	newSpeech              func(audioinput.SpeechClientOptions) (speechSynthesizer, error)
@@ -201,6 +203,8 @@ type session struct {
 	apiKey        []byte
 	extractAPIKey []byte
 	voiceAPIKey   []byte
+	mcpSecrets    [][]byte
+	mcpSecretFiles map[string][]byte
 	runAttempted  bool
 	logPaths      []string
 }
@@ -306,6 +310,11 @@ func New(options Options) (*Manager, error) {
 	default:
 		return nil, errors.New("Hermes mode must be agent or voice-transcribe")
 	}
+	for _, server := range options.MCPServers {
+		if err := core.ValidateMCPServer(server); err != nil {
+			return nil, fmt.Errorf("Hermes MCP server: %w", err)
+		}
+	}
 	return &Manager{
 		client: api, image: options.Image, outputDir: outputDir,
 		cleanupTimeout: options.CleanupTimeout, startTimeout: options.StartTimeout,
@@ -314,6 +323,7 @@ func New(options Options) (*Manager, error) {
 		extractAPIKeyEnv: options.ExtractAPIKeyEnv, logger: options.Logger,
 		subagentsEnabled: options.SubagentsEnabled, maxConcurrentSubagents: options.MaxConcurrentSubagents,
 		compaction: options.Compaction, extraBody: bytes.Clone(options.ExtraBody),
+		mcpServers:   append([]core.MCPServerConfig(nil), options.MCPServers...),
 		apiKeyLookup: options.APIKeyLookup, newSpeech: newSpeechClient, newID: randomID,
 	}, nil
 }
@@ -342,7 +352,6 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		agentTimeout = manager.agentTimeout
 	}
 	extractEnabled := manager.webSearchEnabled && manager.extractAPIKeyEnv != ""
-
 	var voiceSTT *VoiceSTTOptions
 	if manager.mode == ModeVoiceTranscribe {
 		voiceSTT = &manager.voiceTranscribe.STT
@@ -351,9 +360,8 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	configuration, err := renderConfig(request.Model, renderSettings{
 		maxTurns: manager.maxTurns, webSearchEnabled: manager.webSearchEnabled, extractEnabled: extractEnabled,
 		subagentsEnabled: manager.subagentsEnabled, maxConcurrentSubagents: manager.maxConcurrentSubagents,
-		compaction: manager.compaction, extraBody: manager.extraBody,
+		compaction: manager.compaction, extraBody: manager.extraBody, mcpServers: manager.mcpServers,
 	}, voiceSTT)
-
 	if err != nil {
 		return err
 	}
@@ -421,11 +429,63 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 			return errors.New("rendered Hermes config contains the voice API-key value")
 		}
 	}
+	mcpSecretFiles := make(map[string][]byte)
+	var mcpSecrets [][]byte
+	for _, srv := range manager.mcpServers {
+		keys := make([]string, 0, len(srv.SecretEnv))
+		for k := range srv.SecretEnv {
+			keys = append(keys, k)
+		}
+		slices.Sort(keys)
+		for _, k := range keys {
+			hostVar := srv.SecretEnv[k]
+			if _, exists := mcpSecretFiles[hostVar]; exists {
+				continue
+			}
+			secretSource, ok := manager.apiKeyLookup(hostVar)
+			if !ok {
+				clear(voiceAPIKey)
+				clear(apiKey)
+				clear(extractAPIKey)
+				for _, s := range mcpSecrets {
+					clear(s)
+				}
+				return fmt.Errorf("Hermes MCP server %q secret environment variable %q (%q) is not set", srv.Name, hostVar, k)
+			}
+			secret := bytes.Clone(secretSource)
+			clear(secretSource)
+			if err := validateAPIKey(secret); err != nil {
+				clear(voiceAPIKey)
+				clear(apiKey)
+				clear(extractAPIKey)
+				clear(secret)
+				for _, s := range mcpSecrets {
+					clear(s)
+				}
+				return fmt.Errorf("Hermes MCP server %q secret environment variable %q (%q): %w", srv.Name, hostVar, k, err)
+			}
+			if bytes.Contains(configuration, secret) {
+				clear(voiceAPIKey)
+				clear(apiKey)
+				clear(extractAPIKey)
+				clear(secret)
+				for _, s := range mcpSecrets {
+					clear(s)
+				}
+				return fmt.Errorf("rendered Hermes config contains secret for MCP server %q (%q)", srv.Name, k)
+			}
+			mcpSecretFiles[hostVar] = secret
+			mcpSecrets = append(mcpSecrets, secret)
+		}
+	}
 	id, err := manager.newID()
 	if err != nil {
 		clear(voiceAPIKey)
 		clear(apiKey)
 		clear(extractAPIKey)
+		for _, s := range mcpSecrets {
+			clear(s)
+		}
 		return fmt.Errorf("generate Hermes harness ID: %w", err)
 	}
 	containerConfig := &container.Config{
@@ -443,10 +503,9 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	hostConfig := &container.HostConfig{NetworkMode: container.NetworkMode(request.Endpoint.Network), Resources: resources}
 	active := &session{
 		runID: request.RunID, taskID: request.TaskID, attemptID: id,
-		containerName: "aries-hermes-" + id,
-		artifactDir:   filepath.Join(manager.outputDir, request.TaskID, "harness"),
-		endpoint:      request.Endpoint, model: request.Model,
-		agentTimeout: agentTimeout, apiKey: apiKey, extractAPIKey: extractAPIKey, voiceAPIKey: voiceAPIKey,
+		containerName: "aries-hermes-" + id, artifactDir: filepath.Join(manager.outputDir, request.TaskID, "harness"),
+		endpoint: request.Endpoint, model: request.Model,
+		agentTimeout: agentTimeout, apiKey: apiKey, extractAPIKey: extractAPIKey, voiceAPIKey: voiceAPIKey, mcpSecrets: mcpSecrets, mcpSecretFiles: mcpSecretFiles,
 	}
 	fail := func(primary error) error {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), manager.cleanupTimeout)
@@ -1146,13 +1205,14 @@ func (manager *Manager) validateContainer(ctx context.Context, active *session) 
 		configuration.Labels["aries.run"] != active.runID || configuration.Labels["aries.task"] != active.taskID || configuration.Labels["aries.attempt"] != active.attemptID {
 		return errors.New("Hermes container labels do not match the task")
 	}
+	secrets := append([][]byte{active.apiKey, active.extractAPIKey, active.voiceAPIKey}, active.mcpSecrets...)
 	for _, value := range append(append([]string(nil), configuration.Env...), configuration.Cmd...) {
-		if containsSecret(value, active.apiKey, active.extractAPIKey, active.voiceAPIKey) {
+		if containsSecret(value, secrets...) {
 			return errors.New("Hermes secret entered Docker configuration")
 		}
 	}
 	for _, value := range configuration.Labels {
-		if containsSecret(value, active.apiKey, active.extractAPIKey, active.voiceAPIKey) {
+		if containsSecret(value, secrets...) {
 			return errors.New("Hermes secret entered Docker labels")
 		}
 	}
@@ -1182,17 +1242,28 @@ func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([
 	}
 	defer clear(identity)
 	extractEnabled := len(active.extractAPIKey) != 0
+	mcpHostVars := make([]string, 0, len(active.mcpSecretFiles))
+	for hostVar := range active.mcpSecretFiles {
+		mcpHostVars = append(mcpHostVars, hostVar)
+	}
+	slices.Sort(mcpHostVars)
 	files := map[string]stagedFile{
 		strings.TrimPrefix(configContainerPath, "/"): {content: configuration, mode: 0o600},
 		strings.TrimPrefix(modelKeyPath, "/"):        {content: active.apiKey, mode: 0o600},
 		strings.TrimPrefix(identityContainerFS, "/"): {content: identity, mode: 0o600},
-		strings.TrimPrefix(agentWrapperPath, "/"):    {content: agentWrapperScript(active.model.APIKeyEnv, extractEnabled), mode: 0o555},
+		strings.TrimPrefix(agentWrapperPath, "/"):    {content: agentWrapperScript(active.model.APIKeyEnv, extractEnabled, mcpHostVars...), mode: 0o555},
 	}
 	if extractEnabled {
 		files[strings.TrimPrefix(extractKeyPath, "/")] = stagedFile{content: active.extractAPIKey, mode: 0o600}
 	}
 	if len(active.voiceAPIKey) != 0 {
 		files[strings.TrimPrefix(voiceKeyPath, "/")] = stagedFile{content: active.voiceAPIKey, mode: 0o600}
+	}
+	for _, hostVar := range mcpHostVars {
+		files[strings.TrimPrefix(stateContainerPath+"/mcp_"+hostVar+".key", "/")] = stagedFile{
+			content: active.mcpSecretFiles[hostVar],
+			mode:    0o600,
+		}
 	}
 	return stageArchive(files)
 }
@@ -1697,10 +1768,19 @@ func clearSessionSecrets(active *session) {
 	active.extractAPIKey = nil
 	clear(active.voiceAPIKey)
 	active.voiceAPIKey = nil
+	for i := range active.mcpSecrets {
+		clear(active.mcpSecrets[i])
+	}
+	active.mcpSecrets = nil
+	for k := range active.mcpSecretFiles {
+		clear(active.mcpSecretFiles[k])
+	}
+	active.mcpSecretFiles = nil
 }
 
 func redactSession(content []byte, active *session) []byte {
-	return redactSecrets(content, active.apiKey, active.extractAPIKey, active.voiceAPIKey)
+	secrets := append([][]byte{active.apiKey, active.extractAPIKey, active.voiceAPIKey}, active.mcpSecrets...)
+	return redactSecrets(content, secrets...)
 }
 
 type sessionRedactedError struct {
