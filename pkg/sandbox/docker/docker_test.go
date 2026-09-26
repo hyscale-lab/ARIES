@@ -92,8 +92,10 @@ type fakeClient struct {
 	closeErr       error
 
 	// Docker answers an exec's attach before it starts the process: the first
-	// unstartedInspects inspects report an exec it has not started yet.
+	// unstartedInspects inspects report an exec it has not started yet, as
+	// running (marked, with no process yet) when unstartedRunning is set.
 	unstartedInspects int
+	unstartedRunning  bool
 	failedStart       bool
 }
 
@@ -269,7 +271,7 @@ func (f *fakeClient) ExecInspect(_ context.Context, execID string, _ client.Exec
 	}
 	if f.unstartedInspects > 0 {
 		f.unstartedInspects--
-		return client.ExecInspectResult{ID: execID, ContainerID: f.containerID}, nil
+		return client.ExecInspectResult{ID: execID, ContainerID: f.containerID, Running: f.unstartedRunning}, nil
 	}
 	if f.failedStart {
 		return client.ExecInspectResult{ID: execID, ContainerID: f.containerID, ExitCode: 126}, nil
@@ -1090,6 +1092,16 @@ func TestExecDoesNotWaitForAnExecThatFailedToStart(t *testing.T) {
 
 func TestWaitForExecExitGivesUpOnAnExecThatNeverStarts(t *testing.T) {
 	sandbox := &Sandbox{client: &fakeClient{unstartedInspects: 1 << 30}}
+	err := sandbox.waitForExecExit(context.Background(), "exec-id", 100*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "did not start within 100ms") {
+		t.Fatalf("waitForExecExit() = %v", err)
+	}
+}
+
+func TestWaitForExecExitGivesUpOnAnExecStuckStarting(t *testing.T) {
+	// Docker marks an exec running before it creates the process; the start
+	// bound applies to that state too.
+	sandbox := &Sandbox{client: &fakeClient{unstartedInspects: 1 << 30, unstartedRunning: true}}
 	err := sandbox.waitForExecExit(context.Background(), "exec-id", 100*time.Millisecond)
 	if err == nil || !strings.Contains(err.Error(), "did not start within 100ms") {
 		t.Fatalf("waitForExecExit() = %v", err)

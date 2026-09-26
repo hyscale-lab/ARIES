@@ -63,8 +63,10 @@ type fakeDocker struct {
 	closeErr         error
 
 	// Docker answers an exec's attach before it starts the process: the first
-	// unstartedInspects inspects report an exec it has not started yet.
+	// unstartedInspects inspects report an exec it has not started yet, as
+	// running (marked, with no process yet) when unstartedRunning is set.
 	unstartedInspects int
+	unstartedRunning  bool
 	execDelay         time.Duration
 }
 
@@ -278,7 +280,7 @@ func (fake *fakeDocker) ExecInspect(_ context.Context, execID string, _ client.E
 	status := fake.exitCodes[execID]
 	if fake.unstartedInspects > 0 {
 		fake.unstartedInspects--
-		return client.ExecInspectResult{ID: execID, ContainerID: fake.container.ID}, nil
+		return client.ExecInspectResult{ID: execID, ContainerID: fake.container.ID, Running: fake.unstartedRunning}, nil
 	}
 	pid := 0
 	if _, started := fake.execs[execID]; started {
@@ -1620,6 +1622,18 @@ func TestExecAttachedWaitsForAnExecDockerHasNotStarted(t *testing.T) {
 func TestWaitExecGivesUpOnAnExecThatNeverStarts(t *testing.T) {
 	fake := newFakeDocker()
 	fake.unstartedInspects = 1 << 30
+	manager := &Manager{client: fake}
+	_, err := manager.waitExec(context.Background(), "container", "exec-1", 100*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "OpenClaw exec did not start within 100ms") {
+		t.Fatalf("waitExec() = %v", err)
+	}
+}
+
+func TestWaitExecGivesUpOnAnExecStuckStarting(t *testing.T) {
+	// Docker marks an exec running before it creates the process; the start
+	// bound applies to that state too.
+	fake := newFakeDocker()
+	fake.unstartedInspects, fake.unstartedRunning = 1<<30, true
 	manager := &Manager{client: fake}
 	_, err := manager.waitExec(context.Background(), "container", "exec-1", 100*time.Millisecond)
 	if err == nil || !strings.Contains(err.Error(), "OpenClaw exec did not start within 100ms") {

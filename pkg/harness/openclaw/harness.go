@@ -1054,12 +1054,13 @@ func (manager *Manager) waitExec(ctx context.Context, containerID, execID string
 		if err != nil {
 			return client.ExecInspectResult{}, fmt.Errorf("inspect OpenClaw exec: %w", err)
 		}
+		started := execHasStarted(inspection)
+		if !started && time.Since(began) > startTimeout {
+			return client.ExecInspectResult{}, fmt.Errorf("OpenClaw exec did not start within %s", startTimeout)
+		}
 		if !inspection.Running {
-			if execHasStarted(inspection) {
+			if started {
 				return inspection, nil
-			}
-			if time.Since(began) > startTimeout {
-				return client.ExecInspectResult{}, fmt.Errorf("OpenClaw exec did not start within %s", startTimeout)
 			}
 		} else if inspection.PID > 0 {
 			present, err := manager.containerHasPID(ctx, containerID, inspection.PID)
@@ -1078,12 +1079,12 @@ func (manager *Manager) waitExec(ctx context.Context, containerID, execID string
 	}
 }
 
-// execHasStarted tells an exec that has run from one Docker has not started
-// yet; both report Running false. Docker answers the attach (HTTP 101) before
-// it marks the exec running and creates its process, so on a busy host the
-// first inspects can report an exec with no PID and no exit code. An exec
-// keeps its PID after it exits, and one that failed to start has exit code
-// 126, so only that state means "not started".
+// execHasStarted reports whether Docker has started the exec's process. Docker
+// answers the attach (HTTP 101) before it marks the exec running, and marks it
+// running before it creates the process, so on a busy host an inspect can
+// report an exec with no PID and no exit code, running or not. An exec keeps
+// its PID after it exits, and one that failed to start has exit code 126, so
+// an exec with neither has not started.
 func execHasStarted(inspection client.ExecInspectResult) bool {
 	return inspection.PID > 0 || inspection.ExitCode != 0
 }
