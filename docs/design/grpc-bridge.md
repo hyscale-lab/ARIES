@@ -1,10 +1,12 @@
 # gRPC tool bridge
 
-**Status: `Exec` and the file procedures are implemented and wired, and the Docker sandbox serves
-the file procedures.** They are specified in
-[the sandbox RPC interface](sandbox-rpc.md). It
-replaces the transport of `ToolBridge`, not the role. The contract in `pkg/runner/interfaces.go` is
-unchanged.
+**Status: implemented end to end.** `Exec` and the four file procedures (`Stat`, `ReadFile`,
+`ReadLines`, `WriteFile`) are served by the bridge, the Docker sandbox implements the file
+capability, and Hermes reaches all five through an ARIES backend plugin
+([section 9](#9-how-hermes-reaches-the-bridge)). Hermes's terminal tool goes through `Exec`, and its
+file reads and writes go through the typed procedures, which are specified in
+[the sandbox RPC interface](sandbox-rpc.md). The bridge replaces the transport of `ToolBridge`, not
+the role. The contract in `pkg/runner/interfaces.go` is unchanged.
 
 ## Overview
 
@@ -43,7 +45,7 @@ flowchart TB
     T ==>|stdout, stderr| G
     G ==>|ExecResponse: stdout, stderr, exit code| C
     C ==>|Stat, ReadFile, ReadLines, WriteFile: path, bytes| G
-    G ==>|fileSandbox capability| T
+    G ==>|fileSandbox: archive API, one rename exec per write| T
 ```
 
 Dashed arrows are control and lifecycle; thick arrows are data.
@@ -52,18 +54,19 @@ Dashed arrows are control and lifecycle; thick arrows are data.
 - [Section 2](#2-service-definition) — the methods and messages.
 - [Section 3](#3-connection-authentication-and-session-identity) — one connection, mTLS, and
   what the session id is for.
-- [Section 4](#4-state-what-the-server-holds) — why the working directory is a field.
+- [Section 4](#4-state-what-the-server-holds) — what the server holds, and why the working
+  directory is not part of it.
 - [Section 5](#5-revocation) — how `Stop` keeps its guarantee.
 - [Section 6](#6-evidence) — preserving the audit contract.
 - [Section 7](#7-what-is-preserved-and-what-is-dropped) — the migration checklist.
 - [Section 8](#8-open-questions) — what this proposal does not settle.
-- [Section 9](#9-how-hermes-reaches-the-bridge) — the ARIES plugin, the file-operations seam,
-  and the working directory.
+- [Section 9](#9-how-hermes-reaches-the-bridge) — the ARIES plugin, the client's modes, the
+  file adapter and its seam, the working directory, and how the route is tested.
 
 ## 1. Scope
 
 **In scope.** A new bridge implementation under `pkg/bridge/`, selected by a new `bridge.type`
-value, constructed by a new `case` in `newBridge` (`cmd/aries/wiring.go:318-341`). It implements
+value, constructed by a new `case` in `newBridge` (`cmd/aries/wiring.go:388-431`). It implements
 `runner.ToolBridge` and returns a `core.ToolEndpoint` describing a gRPC endpoint instead of an SSH
 one.
 
@@ -123,10 +126,19 @@ message ExecRequest {
 
 Two fields, because two fields are what actually crosses the wire.
 
+**The script is still Hermes's grammar.** `grammar.go` decodes it exactly as the SSH bridge decodes
+its payload: two literal bootstrap probes, an agent command in the `bash -c` or `bash -l -c` shape
+with a canonically quoted script, or a `~/.hermes` file sync. Anything else is `INVALID_ARGUMENT`,
+and the file sync is `PERMISSION_DENIED`. `stdin` over 16 MiB is refused with
+`RESOURCE_EXHAUSTED` before the command runs. The SSH bridge can only find that out mid-stream,
+where it has to latch an audit error. The client produces the `bash -c` shape itself
+([section 9](#9-how-hermes-reaches-the-bridge)), so the gate and the audit classification are the
+same on both routes.
+
 #### Why nothing else is here
 
 The Hermes bridge populates **three of `core.Command`'s eight fields** — `Path`, `Args`, and
-`Dir` — and `Dir` is a constant it forces itself (`pkg/bridge/hermesssh/workspace.go:46-51`).
+`Dir` — and `Dir` is a constant it forces itself (`pkg/bridge/hermesssh/workspace.go:41-50`).
 Every other field a general-purpose sandbox API would carry is unreachable in this one:
 
 | Omitted | Why |
@@ -177,7 +189,7 @@ indistinguishable from "the bridge failed", which is exactly the distinction the
 #### The working directory, and what ARIES does not do
 
 The bridge continues to force `Dir` to `sandbox.Workdir()` on every call
-(`pkg/bridge/hermesssh/workspace.go:46-51`). The request carries no directory and the response
+(`pkg/bridge/hermesssh/workspace.go:41-50`). The request carries no directory and the response
 reports none.
 
 **ARIES adds no mechanism for tracking the directory across calls.** A shell command can `cd`, and
@@ -200,7 +212,7 @@ mean doing two risky things at once.
 If a future client arrives that carries no wrapper of its own, it will need the directory reported
 back. At that point a response field is the right answer, and the exit-status trailer that
 `wrappedCommand` already emits (`pkg/sandbox/docker/docker.go:44`, stripped by `exitTrailerWriter`
-at `:568-612`) is the mechanism to extend. Not before.
+at `:569-612`) is the mechanism to extend. Not before.
 
 #### Why neither side streams
 
@@ -226,13 +238,13 @@ justify streaming belong elsewhere:
 
 - The 256 MiB output cap is SWE-bench Pro's verifier, which calls `ExecStream` directly on the
   sandbox and never traverses the bridge. Bridge traffic sets no `OutputLimitBytes`
-  (`pkg/bridge/hermesssh/workspace.go:46-51`) and so takes the 16 MiB default
-  (`pkg/sandbox/docker/docker.go:36`, `:399-403`).
+  (`pkg/bridge/hermesssh/workspace.go:41-50`) and so takes the 16 MiB default
+  (`pkg/sandbox/docker/docker.go:36`, `:401-404`).
 - The 600-12,000 second budgets in Terminal-Bench's `task.toml` are **whole-task** budgets covering
   many commands, not single-command durations. The per-command bound over this bridge is
   `TERMINAL_TIMEOUT`, which defaults to 180 seconds and is never set from a profile
-  (`pkg/harness/hermes/harness.go:39`, `pkg/harness/hermes/config.go:146`; not passed by
-  `cmd/aries/wiring.go:257-262`). A twenty-minute command over one bridge call cannot occur.
+  (`pkg/harness/hermes/harness.go:41`, `:272`; not passed by
+  `cmd/aries/wiring.go:277-285`). A twenty-minute command over one bridge call cannot occur.
 
 So the observed traffic is short commands with small outputs, consumed whole. Unary fits it, and
 this is a first iteration where simplicity is the point.
@@ -253,16 +265,36 @@ Both are recoverable later by adding a streaming variant beside this method, wit
 ### The file procedures
 
 `Stat`, `ReadFile`, `ReadLines` and `WriteFile` are specified in
-[the sandbox RPC interface](sandbox-rpc.md). They reach the sandbox through a capability the bridge
-asserts, not through `Upload` and `Download`, which take host paths and serve the runner.
+[the sandbox RPC interface](sandbox-rpc.md), which holds the messages, postconditions and status
+codes. What is a bridge decision rather than contract:
+
+- **The bridge owns policy, the sandbox owns mechanics.** The bridge checks revocation, requires
+  an absolute NUL-free path, enforces bounds, maps errors to statuses, and writes one audit record
+  per call. The sandbox only moves bytes, through a narrow capability the bridge asserts on the
+  sandbox it adapts (`fileSandbox`: `StatFile`, `OpenFile`, `WriteFile`). This is not `Upload` or
+  `Download`, which take host paths and serve the runner.
+- **`ReadLines` has no sandbox method.** The bridge computes it from `OpenFile`'s stream in one
+  pass and closes the stream once it has enough. Only the window crosses the wire, and a sandbox
+  implements three methods, not four. `ReadFile` is served from the same stream.
+- **One bound for everything.** File content, a line window, and `WriteFile` content all share
+  the 16 MiB bound that `Exec` output uses ([section 6](#6-evidence)). A `max_bytes` above it is
+  `INVALID_ARGUMENT`; a window or a write over it is `RESOURCE_EXHAUSTED`.
+- **A sandbox without the capability still gets an answer.** The call is recorded with status
+  `unimplemented`, logged, and answered `UNIMPLEMENTED`. This let the chain be tested end to end
+  before any sandbox implemented it.
+- **Docker implements it on the archive API**, with no binaries needed in the task image and no
+  process per read. A write lands under a temporary name and one exec renames it into place, so
+  writes are atomic. The API acts as root rather than the exec user, a weakness accepted for
+  performance ([details and limits](sandbox-rpc.md#docker-implementation)).
 
 **A policy note that is not incidental.** The SSH bridge denies file-transfer payloads outright,
 because a harness attempted to push its own configuration — including credential files — into the
 container the verifier later inspects. `WriteFile` does not reopen that: it exists for *agent
 intent*, and the plugin route has no "sync my runtime" path at all.
 
-**Sources:** `pkg/bridge/hermesssh/bridge.go`, `pkg/bridge/hermesssh/grammar.go`,
-`pkg/sandbox/docker/docker.go`, `docs/research/sandbox-command-profile.md`,
+**Sources:** `pkg/bridge/hermesgrpc/files.go`, `pkg/bridge/hermesgrpc/bridge.go`,
+`pkg/bridge/hermesgrpc/grammar.go`, `pkg/bridge/hermesssh/bridge.go`,
+`pkg/sandbox/docker/files.go`, `docs/research/sandbox-command-profile.md`,
 `docs/research/e2b-tool-bridge.md`.
 
 ## 3. Connection, authentication, and session identity
@@ -350,11 +382,13 @@ either end must survive. Turning it on is `grpc.WithKeepaliveParams` if that sto
 and the revoked flag. That is the same list the current `bridgeSession` holds
 (`pkg/bridge/hermesssh/bridge.go:85-105`), plus the flag.
 
-**Per call:** the script and its `stdin`, discarded when the call returns. Nothing else is
-carried — see [why nothing else is here](#why-nothing-else-is-here).
+**Per call:** for `Exec`, the script and its `stdin`; for a file procedure, the path and the
+content. Both are discarded when the call returns. Nothing else is carried; see
+[why nothing else is here](#why-nothing-else-is-here). No file handle outlives a call either:
+`ReadLines` and `ReadFile` open, read and close within the handler.
 
 **Not held: the working directory.** `Dir` stays forced to `sandbox.Workdir()` on every call,
-exactly as today (`pkg/bridge/hermesssh/workspace.go:46-51`). A client that wants a persistent
+exactly as today (`pkg/bridge/hermesssh/workspace.go:41-50`). A client that wants a persistent
 directory tracks it entirely on its own side, as clients already do — see
 [the working directory](#the-working-directory-and-what-aries-does-not-do). ARIES neither accepts
 it, remembers it, nor reports it back.
@@ -377,7 +411,7 @@ passthrough.
 ## 5. Revocation
 
 `Stop` keeps its meaning exactly: a `nil` return is the positive revocation confirmation
-(`pkg/runner/interfaces.go:51-53`), and the Runner blocks evaluation without it
+(`pkg/runner/interfaces.go:58-63`), and the Runner blocks evaluation without it
 (`pkg/runner/runner.go:260-284`).
 
 The sequence mirrors `revoke` and `finalize` today:
@@ -393,10 +427,15 @@ An in-flight `Exec` is aborted, not awaited. The cancelled context reaches `Exec
 terminates the container process group and confirms its absence — machinery that already exists
 and is unchanged (`pkg/sandbox/docker/docker.go:668-706`). An error returned after cancellation
 that cannot be proven to be pure cancellation must still be preserved and must still fail `Stop`
-(`pkg/bridge/hermesssh/bridge.go:813-822`); that logic ports directly.
+(`pkg/bridge/hermesssh/bridge.go:813-822`). That logic ports directly as `withCancellation`, which
+`Exec` and the file procedures share.
+
+A file call is cancelled the same way. Docker's `WriteFile` checks the context between copying the
+temporary file and renaming it, and removes the temporary with a fresh bounded context. So a write
+that revocation interrupts never lands.
 
 One improvement over the current implementation: the ordering gap where the listener is closed
-before the connection set is locked (`:1002-1005`) does not need to be reproduced. Marking the
+before the connection set is locked (`:997-1005`) does not need to be reproduced. Marking the
 session revoked first makes a late-arriving connection harmless by construction rather than by
 timing.
 
@@ -412,14 +451,19 @@ has an equivalent, and two gain precision:
 | Today | Under gRPC |
 | --- | --- |
 | `command` — the shell string | the script, unchanged in substance |
-| `operation_class` — `agent`, `bootstrap`, `sync` | the method name |
-| `exit_code` clamped to 0-255 | `exit_code` plus a structured termination reason |
-| `stdin_bytes`, `stdout_bytes`, `stderr_bytes` | unchanged |
+| `operation_class` — `agent`, `bootstrap`, `sync` | the same for `Exec`, plus `file_stat`, `file_read`, `file_lines`, `file_write` |
+| `exit_code` clamped to 0-255 | unchanged for `Exec`; `-1` for file calls and refusals, which ran no process |
+| `status` — `completed`, `failed`, `canceled`, refusals | the same; file calls add the lower-cased gRPC code (`not_found`, `failed_precondition`, `unimplemented`, …) |
+| `stdin_bytes`, `stdout_bytes`, `stderr_bytes` | unchanged; a file call puts bytes written in `stdin_bytes` and bytes returned in `stdout_bytes` |
 | raw wire log | absorbed into the structured record; see below |
 
+A file record carries the path in `path` and has no `command`. The response's `reason` enum
+(cancelled, timed out, sandbox error) is for the caller; the record keeps `status`, as the SSH
+bridge does.
+
 Two rules carry over unchanged. Command **output never enters the audit** — byte counts only.
-And retained `stdin` stays bounded, with the overflow latching an audit error rather than
-truncating silently.
+File content is the one opt-in exception, below. And retained `stdin` stays bounded. Oversized
+`stdin` is refused before the command runs, so it never reaches the audit.
 
 Four request classes currently produce no audit record at all — rejected channel types, channels
 with extra data, channel accept errors, and refused global requests
@@ -431,8 +475,8 @@ reproduced: a refused call is a recordable event.
 The SSH bridges write two artifacts per task: the structured `tool-calls.jsonl` and a byte-level
 `ssh_raw.log`, the latter opt-in through `bridge.retain_raw_log`. **This bridge writes only the
 structured log.** For it `retain_raw_log` means the most verbose evidence level: file content,
-base64, in a `content_raw` field of each file record. Off by default; content never reaches
-`aries.log` or results.
+base64, in a `content_raw` field of each successful file record (what was read or written, at most
+16 MiB). Off by default; content never reaches `aries.log` or results.
 
 The bridge decodes Hermes's grammar itself (section 2), so it receives the same verbatim payload SSH
 does. Three things the raw log uniquely held are therefore accounted for here:
@@ -473,6 +517,12 @@ what it would have needed. The transport cap sits at 64 MiB as a backstop that m
 first: if it did, a command would run to completion and then have its reply rejected, which is
 exactly the failure grpc-go's 4 MiB receive default would have caused. A test pins that ordering.
 
+File procedures share the 16 MiB bound but do not truncate: returning a partial file as if it
+were whole would be wrong. `ReadFile` is bounded by `max_bytes` and reports `truncated` against
+the file size. A `ReadLines` window or `WriteFile` content over the bound is refused with
+`RESOURCE_EXHAUSTED`. Streaming is the intended transport for larger files, added when a measured
+file needs it ([section 8](#8-open-questions)).
+
 **The numbers are deliberately generous.** A Terminal-Bench run peaked at 5.6 KB of `stdout` across
 twenty calls, so 16 MiB is roughly three orders of magnitude of headroom. A high limit costs nothing
 until it fires — `parser.recvMsg` compares against a length already on the wire, with no
@@ -488,7 +538,8 @@ link bandwidth is not the scarce resource and memory is. The trigger to revisit 
 two ends stop sharing a host. Note also that `MaxRecvMsgSize` applies to the *decompressed* size,
 so compression does not interact with that cap the way it might appear to.
 
-**Sources:** `pkg/bridge/hermesssh/bridge.go`, `docs/design/hermes-bridge-inventory.md`,
+**Sources:** `pkg/bridge/hermesgrpc/audit.go`, `pkg/bridge/hermesgrpc/files.go`,
+`pkg/bridge/hermesssh/bridge.go`, `docs/design/hermes-bridge-inventory.md`,
 `docs/design/ssh-connection-lifecycle.md`.
 
 ## 7. What is preserved, and what is dropped
@@ -502,7 +553,8 @@ so compression does not interact with that cap the way it might appear to.
 - Exact argument boundaries via `core.Command`.
 - Absolute command paths with no `PATH` lookup.
 - No client environment reaching the sandbox.
-- Bounded `stdin` retention; no command output in the audit.
+- Bounded `stdin` retention; no command output in the audit. File content enters it only when the
+  profile opts in with `retain_raw_log`.
 - Per-task ephemeral credentials, removed at revocation.
 - Refusals recorded distinctly from failures.
 - Grammar-based validation of the payload, including the refusal of a raw `~/.hermes` file-sync
@@ -522,6 +574,18 @@ so compression does not interact with that cap the way it might appear to.
 - Streaming output. `Exec` buffers a whole reply where SSH wrote straight to the channel, which is
   why a truncation bound is needed at all; see [section 6](#6-evidence).
 
+**Changed — file tools leave the shell.** On SSH every Hermes file tool is a shell pipeline run
+under the sandbox's exec user. On gRPC, reads, probes and the atomic write are typed calls. Two
+consequences follow:
+
+- The file procedures skip the grammar gate. That gate exists to validate shell payloads, and a
+  file call carries no shell. Their policy is the bridge's own: revocation, absolute paths,
+  bounds, and an audit record per call.
+- On Docker they act as root, not as the exec user, because the archive API does. On a benchmark
+  that runs the agent unprivileged, a typed call can reach paths the agent's shell cannot. This
+  was accepted for performance and is recorded, with its upgrade path, in
+  [the sandbox RPC interface](sandbox-rpc.md#docker-implementation).
+
 **Sources:** `docs/design/hermes-bridge-inventory.md`,
 `docs/design/ssh-connection-lifecycle.md`.
 
@@ -535,9 +599,10 @@ so compression does not interact with that cap the way it might appear to.
    service. The one place ARIES currently encodes such a difference is the OpenClaw path's prefix
    stripping and `HOME` remapping (`pkg/bridge/openclawssh/workspace.go`); a gRPC client for
    OpenClaw would carry that itself, and the service would not learn about it.
-2. **Per-call user identity.** `core.Command.User` is `json:"-"` and no bridge sets it, so the
-   agent inherits the container default. Whether `Start` should carry a UID, and under what
-   policy, is unresolved.
+2. **Per-call user identity.** `core.Command.User` is `json:"-"` and no bridge sets it, so an
+   `Exec` inherits the sandbox's exec user. Docker's file procedures act as root instead
+   ([section 7](#7-what-is-preserved-and-what-is-dropped)). Whether `Start` should carry a UID,
+   and whether file calls should honour it at the cost of an exec per call, is unresolved.
 3. **Timeout placement.** The first cut carries no per-call timeout, matching today: the bridge
    sets none and the client bounds its own commands. If a server-side bound is ever wanted, the
    interaction with the run-level cleanup budget needs stating before adding the field.
@@ -548,6 +613,16 @@ so compression does not interact with that cap the way it might appear to.
    `script` would let the audit separate the two, which the research argues for. It is omitted from
    the first cut because nothing emits structured commands, so the arm would never be populated.
    Adding it later is wire-compatible.
+6. **The `bash -c` wrapping.** The client wraps each script in the SSH-shaped payload so that the
+   grammar gate and audit classification stay shared with `hermes-ssh`. A native command request
+   replaces it when the SSH pairing is retired.
+7. **What remains on the shell.** Search, delete, move, patch reads, similar-name suggestions, the
+   UTF-16 rescue, and `write_file`'s `sha256sum` check and lint still run through `Exec`. `Delete`,
+   `Move` and `ListDir` arrive when those tools move off the shell. Files over 16 MiB need
+   streaming `ReadFile` and `WriteFile`.
+8. **Where line parsing lives.** `ReadLines` is computed in the bridge from a byte stream. A
+   sandbox that can compute the window next to the data, for example a remote one, would want the
+   window itself as a sandbox method. The decision is deferred until such a sandbox exists.
 
 Two questions this section used to carry are settled: the harness/bridge pairing now admits
 `hermes-grpc` alongside `hermes-ssh` in `cmd/aries/wiring.go`, and the gRPC dependency and
@@ -573,6 +648,44 @@ retired. Hermes enforces command timeouts by killing the client, and the closed 
 cancels the call on the bridge. The plugin constructs no `FileSyncManager`, so Hermes never
 attempts its `~/.hermes` sync on this route.
 
+**What the harness stages.** The client goes to `/run/aries/bin/aries-grpc`, and the two
+credential files go to `/run/aries/grpc/`. The plugin goes under `HERMES_HOME/plugins/aries`, and
+the seam script to `/run/aries/seam.py`. The client reads its target and credentials from
+`ARIES_GRPC_TARGET`, `ARIES_GRPC_IDENTITY` and `ARIES_GRPC_TRUSTED`, not from argv. The
+container's readiness probe checks that all three staged pieces are present. The plugin reports
+itself available only when the client is executable and the three variables are set.
+
+**One process per call, deliberately.** A long-lived client would save the process start and TLS
+handshake per call, but it would need its own supervision and a restart story. Revocation gains
+nothing from it, because the server enforces revocation on every call and on every connection.
+
+**The client's file modes.** File calls use the same client:
+
+```sh
+aries-grpc file stat PATH
+aries-grpc file read [--offset N] [--max-bytes N] PATH
+aries-grpc file lines --first N --max N [--max-line-bytes N] PATH
+aries-grpc file write PATH < content
+```
+
+Each mode makes exactly one RPC. `stdout` carries only the payload, and `stderr` carries exactly
+one line: JSON metadata on success, a message on failure. The exit code encodes the status: `0`
+ok, `1` not found, `2` permission denied, `3` invalid argument, `4` resource exhausted, `5`
+failed precondition, and `255` for everything else, including revocation and a sandbox without
+file access. The client
+never interprets bytes. How a write lands belongs to the bridge and the sandbox, and what the
+bytes mean belongs to Hermes.
+
+**The file adapter.** The plugin's environment returns `AriesFileOperations`, a subclass of
+Hermes's `ShellFileOperations`. It overrides only the byte-moving primitives: the size and type
+probe, the binary sample, the BOM and line-ending probes, whole-file reads, the paginated
+`read_file` window (served by `ReadLines`), and `_atomic_write` (served by `WriteFile`). Hermes's
+own tool logic stays above them unchanged: the syntax gate, lint, patching, line numbering, BOM
+stripping, and pagination hints. It even keeps Hermes's quirk of dropping the final newline of an
+untruncated window when the file lacks one. A failure that Hermes would read as "no data" raises
+instead, so a broken bridge surfaces as a tool error rather than a silent fallback to the shell.
+The operations that stay on the shell are listed in [section 8](#8-open-questions), item 7.
+
 **File operations need one seam in Hermes itself.** Hermes lowers every file tool into shell
 commands through `ShellFileOperations`, and `_get_file_ops` constructs that class
 unconditionally, so no plugin can supply typed file operations. ARIES adds
@@ -590,6 +703,22 @@ first command in `TERMINAL_CWD` behind `cd || exit 126` and records a new direct
 completes, so a path the sandbox lacks fails every command. An earlier placeholder path did exactly
 that on both routes.
 
+**How it is tested.** The bridge's file handlers run against an in-memory sandbox, and
+`readLines` is held to the `sed | cut` and `wc -l` pipeline it replaces. The client's file modes
+are tested against a live bridge. The Docker capability is tested with a fake daemon client and,
+in an integration test, against a real container: ownership, modes, inode change on replace, no
+leftover temporary, symlinks, and a file over 16 MiB. In the pinned Hermes image, the adapter runs
+against a fake client and is compared with stock `ShellFileOperations` on the same files. End to
+end, the real bridge and a real sandbox run Hermes's terminal, `write_file` and paginated
+`read_file` tools over both routes. The output must be identical, and the gRPC audit must show
+served `file_write` and `file_lines` records.
+
+**Sources:** `pkg/harness/hermes/plugin/__init__.py`, `pkg/harness/hermes/seam.py`,
+`pkg/harness/hermes/config.go`, `pkg/harness/hermes/harness.go`,
+`pkg/harness/hermes/tools_integration_test.go`, `pkg/bridge/hermesgrpc/client.go`,
+`pkg/bridge/hermesgrpc/files_test.go`, `pkg/sandbox/docker/files_test.go`,
+`pkg/sandbox/docker/files_integration_test.go`.
+
 ## Background material
 
 The research behind this proposal is deliberately not tracked in the repository. It was written to
@@ -599,4 +728,7 @@ is the part that stays true.
 
 For anyone who has the working copy, the unversioned notes are `docs/design/containers.md`,
 `hermes-bridge-inventory.md`, `hermes-integration.md`, `ssh-connection-lifecycle.md`,
-`code-structure.md`, and `docs/research/{e2b-tool-bridge,sandbox-command-profile}.md`.
+`code-structure.md`, and
+`docs/research/{e2b-tool-bridge,sandbox-command-profile,hermes-typed-file-ops}.md`.
+The last one records the facts and measurements behind the typed file route: Hermes's file-tool
+internals, the plugin and seam options, and the Docker archive API's timings and limits.

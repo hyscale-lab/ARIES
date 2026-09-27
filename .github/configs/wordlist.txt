@@ -163,3 +163,8 @@ workdirs
 worktree
 xfs
 yaml
+bom
+inode
+nul
+symlinks
+untruncated
