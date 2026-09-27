@@ -294,3 +294,30 @@ func TestBridgeRawLogDefaultsToDropped(t *testing.T) {
 		t.Fatal("retain_raw_log:true must retain the raw log")
 	}
 }
+
+// Both agent harnesses can run on Kubernetes; realtime mode, which only
+// OpenClaw has, still cannot.
+func TestKubernetesDeploymentAcceptsOpenClawAndHermes(t *testing.T) {
+	kube := `"harness":{"type":"%s","deployment":"kubernetes","namespace":"aries","node_role":"harness"}`
+	for _, harness := range []string{"openclaw", "hermes"} {
+		input := strings.Replace(validConfig, `"harness":{"type":"openclaw"}`, fmt.Sprintf(kube, harness), 1)
+		cfg, err := Decode(strings.NewReader(input))
+		if err != nil {
+			t.Fatalf("%s on kubernetes rejected: %v", harness, err)
+		}
+		if cfg.Harness.Deployment != "kubernetes" || cfg.Harness.NodeRole != "harness" {
+			t.Fatalf("%s harness = %#v", harness, cfg.Harness)
+		}
+	}
+	for name, harness := range map[string]string{
+		"unknown deployment": `"harness":{"type":"hermes","deployment":"nomad"}`,
+		"unknown harness":    `"harness":{"type":"other","deployment":"kubernetes"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			input := strings.Replace(validConfig, `"harness":{"type":"openclaw"}`, harness, 1)
+			if _, err := Decode(strings.NewReader(input)); err == nil {
+				t.Fatal("expected rejection")
+			}
+		})
+	}
+}

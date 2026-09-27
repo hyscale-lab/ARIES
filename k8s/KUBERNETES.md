@@ -1,7 +1,7 @@
 # ARIES on Kubernetes: implementation record
 
-What has been built so far to run ARIES, the OpenClaw agent harness, and the
-tool bridge on Kubernetes, and what is still missing. This is a status record of
+What has been built so far to run ARIES, the OpenClaw and Hermes agent
+harnesses, and the tool bridges on Kubernetes, and what is still missing. This is a status record of
 the Kubernetes port — the architectural contract it must satisfy is in
 [docs/design.md](../docs/design.md), and the deployment instructions are in
 [k8s/README.md](README.md).
@@ -16,13 +16,15 @@ dependency tree into a benchmark runner.
 
 Kubernetes changes one thing that matters: on Docker, the agent reaches the
 ARIES bridge over the sandbox's network gateway, and that address does not
-exist in a cluster. Both Kubernetes profiles use the `openclaw-ssh` bridge and
-differ only in how the agent reaches it.
+exist in a cluster. Every Kubernetes profile uses an SSH bridge in advertised
+mode and differs only in which harness it runs and how the agent reaches the
+bridge.
 
 | Profile | ARIES runs | Harness | Sandbox | Bridge | Status |
 | --- | --- | --- | --- | --- | --- |
 | `openclaw-tb2-fix-git-deepseek-k8s-ssh.json` | outside | Kubernetes | Kubernetes | `openclaw-ssh` (`advertise_host: host.docker.internal`) | Implemented, not yet run end to end |
 | `openclaw-tb2-fix-git-deepseek-k8s-incluster.json` | **inside** | Kubernetes | Kubernetes | `openclaw-ssh` (`advertise_host: $POD_IP`) | **Tested and working** — completed a full run in-cluster |
+| `hermes-tb2-fix-git-deepseek-k8s-incluster.json` (and `x4`) | **inside** | Kubernetes (Hermes) | Kubernetes | `hermes-ssh` (`advertise_host: $POD_IP`) | Pod lifecycle verified on the cluster; not yet run end to end |
 
 The in-cluster profile is the one that closes the reachability problem
 cleanly: ARIES, the bridge, and the agent/sandbox pods all sit on the same pod
@@ -160,9 +162,61 @@ created.
 **Not supported:** realtime voice mode. The Kubernetes harness backend is
 agent/text mode only.
 
-## Tool Bridge — `pkg/bridge/openclawssh`
+## Agent Harness — `pkg/harness/hermes/kube.go`
 
-The SSH bridge gained an **advertised mode**, which is the change that makes it
+Hermes on Kubernetes, selected the same way (`harness.type: "hermes"`,
+`harness.deployment: "kubernetes"`) and constructed by `hermes.NewKube`. It is
+simpler than the OpenClaw port because Hermes has no gateway: the agent is a
+one-shot `exec` inside an idling pod, so there is no Service, no port-forward,
+and no sentinel. Its only network peers are the model API and the
+`hermes-ssh` bridge, both of which it dials itself.
+
+1. `kubectl create` the pod, held at `sh -c 'exec sleep infinity'` instead of
+   the image's s6 init. `create` rather than `apply`, so a pod that already has
+   the fresh attempt name is never patched into ours;
+2. `kubectl wait` for `Running`;
+3. **verify the admitted pod** — see below — before any secret is staged;
+4. stage the runtime (config, model key, bridge identity, agent wrapper) with
+   `kubectl exec -i -- tar -xpf - -C / --same-owner`. The pod runs as root, so
+   GNU tar keeps the archive's `10000:10000` ownership; Docker's copy API resets
+   it and needs a `chown` instead;
+5. poll `hermes --version` until it answers, which proves the staged runtime is
+   readable by the unprivileged user the PATH shim drops to.
+
+Run executes the same wrapper as Docker and writes **the same artifact layout**
+(`session-outcome.json`, `hermes_stdout.log`, `hermes_stderr.log`,
+`container.log`, `telemetry/sessions.jsonl`, `telemetry.index.json`), through
+code shared with the Docker backend rather than a copy of it.
+
+**Exit status.** The command's status comes from a random-token trailer on
+stderr, as on Docker. `kubectl exec` complicates it: a non-zero remote exit is
+reported as a kubectl error *and* kubectl appends `command terminated with exit
+code N` to the same stream. A task the agent fails is still a successful exec,
+so when the trailer parses the kubectl error is disregarded and exactly that
+suffix is stripped; a missing trailer, or anything else after it, is treated as
+the exec itself failing.
+
+**Admission verification** is the counterpart of Docker's `validateContainer`.
+A mutating webhook can change a pod after ARIES creates it, so Start reads the
+pod back and refuses — deleting it — unless it has exactly the Hermes container
+with the pinned image and idle command, no init or ephemeral containers, no
+volumes or mounts, no service-account token, no host network/PID/IPC, no
+privileged container, no env sourced from the cluster, and no API key anywhere
+in the spec. Tolerations are deliberately not compared: admission adds the
+default `not-ready`/`unreachable` ones.
+
+**Timeout caveat.** Cancelling `kubectl exec` stops the client, not reliably the
+remote process. Stop deletes the pod, which is what actually ends an agent that
+outlived its deadline.
+
+Verified on the cluster with `go test -tags kubecluster` (see
+`kube_cluster_test.go`): pod admitted, verified, staged and ready in 49s
+including a cold image pull, scheduled on the harness node, staged secrets
+`10000:10000 600`, and absent after Stop.
+
+## Tool Bridge — `pkg/bridge/openclawssh`, `pkg/bridge/hermesssh`
+
+Both SSH bridges have an **advertised mode**, which is the change that makes it
 usable off Docker. `Options.AdvertiseHost` switches behavior:
 
 - **empty (Docker):** resolve the sandbox's network gateway, bind the SSH
@@ -179,6 +233,10 @@ verification still matches what the agent dials.
 string `"$POD_IP"` and have it resolve to ARIES's own pod IP at run time. The
 in-cluster values file injects `POD_IP` through the downward API
 (`fieldRef: status.podIP`).
+
+`hermes-ssh` gained the identical mode for the Hermes harness. The only
+difference is that it stages no client helper, since Hermes runs OpenSSH
+itself.
 
 Per-task session keys, the staged `aries-ssh` client, the structured
 `tool-calls.jsonl`, and the raw `ssh_raw.log` are unchanged from the Docker

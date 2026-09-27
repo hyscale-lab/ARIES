@@ -148,12 +148,12 @@ Docker's root-privileged `CopyToContainer`.
 | --- | --- | --- |
 | `sandbox.type` | `docker` \| `kubernetes` | Task environment backend. |
 | `sandbox.namespace` | string (default `aries`) | Namespace for task pods. |
-| `harness.deployment` | `docker` (default) \| `kubernetes` | Where the OpenClaw agent runs. |
+| `harness.deployment` | `docker` (default) \| `kubernetes` | Where the OpenClaw or Hermes agent runs. |
 | `harness.namespace` | string (default `aries`) | Namespace for agent pods. |
 | `bridge.advertise_host` | string | Host agents use to reach the bridge; env refs are expanded (e.g. `"$POD_IP"`). Empty keeps Docker gateway binding. |
 
-Constraints: `harness.deployment: kubernetes` requires `harness.type: openclaw`
-and rejects realtime mode.
+Constraints: `harness.deployment: kubernetes` requires `harness.type` `openclaw`
+or `hermes`, and rejects realtime mode.
 
 Bundled profiles:
 
@@ -163,6 +163,9 @@ Bundled profiles:
   harness + SSH bridge, `advertise_host: host.docker.internal` (local clusters).
 - `profiles/openclaw-tb2-fix-git-deepseek-k8s-incluster.json` — the same with
   `advertise_host: "$POD_IP"` for ARIES running inside the cluster.
+- `profiles/hermes-tb2-fix-git-deepseek-k8s-incluster.json` and its `x4`
+  variant — Hermes with the `hermes-ssh` bridge, otherwise identical to the
+  OpenClaw in-cluster profiles.
 
 ## Deployment
 

@@ -90,8 +90,10 @@ type BenchmarkConfig struct {
 type HarnessConfig struct {
 	Type string `json:"type"`
 	Mode string `json:"mode,omitempty"`
-	// Deployment selects where the OpenClaw agent runs: "docker" (default) or
-	// "kubernetes" (agent pod + Service, ARIES out-of-cluster via port-forward).
+	// Deployment selects where the agent runs: "docker" (default) or
+	// "kubernetes". OpenClaw runs an agent pod plus a Service reached by
+	// port-forward; Hermes runs a one-shot in an idling agent pod and needs
+	// neither, since it dials the model API and the hermes-ssh bridge itself.
 	Deployment string `json:"deployment,omitempty"`
 	Namespace  string `json:"namespace,omitempty"`
 	// NodeRole pins agent pods to nodes labelled "aries.dev/role=<NodeRole>" and
@@ -442,8 +444,8 @@ func (h *HarnessConfig) validate() error {
 	switch h.Deployment {
 	case "", "docker":
 	case "kubernetes":
-		if h.Type != "openclaw" {
-			return errors.New("harness.deployment kubernetes requires OpenClaw")
+		if h.Type != "openclaw" && h.Type != "hermes" {
+			return errors.New("harness.deployment kubernetes requires OpenClaw or Hermes")
 		}
 		if h.Mode == "realtime" {
 			return errors.New("harness.deployment kubernetes does not support realtime mode")

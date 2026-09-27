@@ -188,6 +188,13 @@ func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byt
 		}
 		return app.HarnessInstance{Harness: manager, Close: manager.Close}, nil
 	case "hermes":
+		if cfg.Harness.Deployment == "kubernetes" {
+			manager, err := hermesharness.NewKube(hermesharness.KubeOptions{Image: cfg.Versions.Hermes.Image, OutputDir: outputRoot, Namespace: cfg.Harness.Namespace, NodeRole: cfg.Harness.NodeRole, APIKeyLookup: lookup, Logger: logger})
+			if err != nil {
+				return app.HarnessInstance{}, fmt.Errorf("construct Hermes Kubernetes harness: %w", err)
+			}
+			return app.HarnessInstance{Harness: manager, Close: manager.Close}, nil
+		}
 		manager, err := hermesharness.New(hermesharness.Options{Image: cfg.Versions.Hermes.Image, OutputDir: outputRoot, APIKeyLookup: lookup, Logger: logger})
 		if err != nil {
 			return app.HarnessInstance{}, fmt.Errorf("construct Hermes harness: %w", err)
@@ -272,8 +279,10 @@ func newBridge(cfg config.Config, outputRoot string, logger *logrus.Logger) (run
 		return bridge, nil
 	case "hermes-ssh":
 		// Hermes runs OpenSSH itself, so this bridge stages no client helper
-		// and needs no path to the ARIES executable.
-		bridge, err := hermesssh.New(hermesssh.Options{OutputDir: outputRoot, Logger: logger, OmitRawLog: !cfg.Bridge.RetainBridgeRawLog()})
+		// and needs no path to the ARIES executable. advertise_host is expanded
+		// the same way as for openclaw-ssh, so an in-cluster profile can name
+		// ARIES's own pod IP as "$POD_IP".
+		bridge, err := hermesssh.New(hermesssh.Options{OutputDir: outputRoot, Logger: logger, OmitRawLog: !cfg.Bridge.RetainBridgeRawLog(), AdvertiseHost: os.ExpandEnv(cfg.Bridge.AdvertiseHost)})
 		if err != nil {
 			return nil, fmt.Errorf("construct Hermes SSH bridge: %w", err)
 		}

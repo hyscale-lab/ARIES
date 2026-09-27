@@ -312,7 +312,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		return fail(fmt.Errorf("retain rendered Hermes config: %w", err))
 	}
 	active.logPaths = appendUnique(active.logPaths, configArtifact)
-	archive, err := manager.runtimeArchive(active, configuration)
+	archive, err := buildRuntimeArchive(active, configuration)
 	if err != nil {
 		return fail(err)
 	}
@@ -688,33 +688,52 @@ func (buffer *limitedBuffer) Write(content []byte) (int, error) {
 	return consumed, err
 }
 
-// waitReady confirms the container is running and the staged runtime is intact
-// before any task instruction is accepted. Hermes exposes no readiness service,
-// so the positive signal is the CLI answering from the staged configuration.
+// readinessProbe is the positive readiness signal on both backends. Hermes
+// exposes no readiness service, so the signal is the CLI answering from the
+// staged configuration.
 //
 // The probe deliberately runs `hermes --version` rather than only stat-ing the
 // staged files. Those checks run as root and pass regardless of ownership,
 // while the real agent runs through the PATH shim as an unprivileged user; only
 // invoking the CLI proves the staged runtime is readable by the identity that
 // will actually use it.
+var readinessProbe = `test -x ` + agentWrapperPath + ` && test -r ` + configContainerPath + ` && test -r ` + modelKeyPath +
+	` && test -r ` + identityContainerFS + ` && command -v ssh >/dev/null && hermes --version >/dev/null 2>&1`
+
+// waitReady confirms the container is running and the staged runtime is intact
+// before any task instruction is accepted.
 func (manager *Manager) waitReady(ctx context.Context, active *session) error {
-	probe := `test -x ` + agentWrapperPath + ` && test -r ` + configContainerPath + ` && test -r ` + modelKeyPath +
-		` && test -r ` + identityContainerFS + ` && command -v ssh >/dev/null && hermes --version >/dev/null 2>&1`
+	return awaitReady(ctx,
+		func(probeCtx context.Context) (execResult, error) {
+			return manager.execAttached(probeCtx, active.containerID, []string{"/bin/sh", "-c", readinessProbe}, workspaceRoot)
+		},
+		func(ctx context.Context) error {
+			inspection, err := manager.client.ContainerInspect(ctx, active.containerID, client.ContainerInspectOptions{})
+			if err != nil {
+				return fmt.Errorf("inspect Hermes readiness: %w", err)
+			}
+			if inspection.Container.State == nil || !inspection.Container.State.Running {
+				return errors.New("Hermes container exited before readiness")
+			}
+			return nil
+		})
+}
+
+// awaitReady polls probe until it exits 0. Between attempts alive must confirm
+// the runtime is still up, so a crashed container fails fast instead of at the
+// start timeout.
+func awaitReady(ctx context.Context, probe func(context.Context) (execResult, error), alive func(context.Context) error) error {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		result, err := manager.execAttached(probeCtx, active.containerID, []string{"/bin/sh", "-c", probe}, workspaceRoot)
+		result, err := probe(probeCtx)
 		cancel()
 		if err == nil && result.exitCode == 0 {
 			return nil
 		}
-		inspection, inspectErr := manager.client.ContainerInspect(ctx, active.containerID, client.ContainerInspectOptions{})
-		if inspectErr != nil {
-			return fmt.Errorf("inspect Hermes readiness: %w", inspectErr)
-		}
-		if inspection.Container.State == nil || !inspection.Container.State.Running {
-			return errors.New("Hermes container exited before readiness")
+		if err := alive(ctx); err != nil {
+			return err
 		}
 		select {
 		case <-ctx.Done():
@@ -770,7 +789,10 @@ func (manager *Manager) validateContainer(ctx context.Context, active *session) 
 	return nil
 }
 
-func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([]byte, error) {
+// buildRuntimeArchive is the private runtime both backends stage: config, model
+// key, bridge identity and the agent wrapper, all owned by the image's
+// unprivileged hermes user.
+func buildRuntimeArchive(active *session, configuration []byte) ([]byte, error) {
 	identity, err := readStablePrivateFile(active.endpoint.IdentitySourceFile, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("read Hermes SSH identity: %w", err)
@@ -926,6 +948,44 @@ func newRunOutcome(started time.Time, exitCode int, runErr error) runOutcome {
 }
 
 func (manager *Manager) collectArtifacts(ctx context.Context, active *session, stdout, stderr []byte, outcome runOutcome) error {
+	return retainRunArtifacts(ctx, manager.logger, active, stdout, stderr, outcome, artifactSources{
+		containerLogs: func(ctx context.Context) ([]byte, error) {
+			logs, err := manager.client.ContainerLogs(ctx, active.containerID, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true})
+			if err != nil {
+				return nil, fmt.Errorf("collect Hermes container logs: %w", err)
+			}
+			var out, errBuffer limitedBuffer
+			out.limit, errBuffer.limit = maxDockerOutput, maxDockerOutput
+			_, copyErr := stdcopy.StdCopy(&out, &errBuffer, logs)
+			closeErr := logs.Close()
+			var boundErr error
+			if out.exceeded || errBuffer.exceeded {
+				boundErr = errors.New("Hermes container logs exceeded their bound")
+			}
+			if err := errors.Join(copyErr, closeErr, boundErr); err != nil {
+				return nil, err
+			}
+			return append(out.Bytes(), errBuffer.Bytes()...), nil
+		},
+		exportSessions: func(ctx context.Context) (execResult, error) {
+			return manager.execAttached(ctx, active.containerID, []string{"hermes", "sessions", "export", "-"}, workspaceRoot)
+		},
+	})
+}
+
+// artifactSources are the two things a backend supplies to retainRunArtifacts.
+// containerLogs returns the runtime's own log output, already bounded;
+// exportSessions runs `hermes sessions export -` inside the runtime.
+type artifactSources struct {
+	containerLogs  func(context.Context) ([]byte, error)
+	exportSessions func(context.Context) (execResult, error)
+}
+
+// retainRunArtifacts writes the harness artifact layout, which is identical on
+// every backend so a run's results can be compared regardless of where the
+// agent ran: session-outcome.json, hermes_stdout.log, hermes_stderr.log,
+// container.log, telemetry/sessions.jsonl and telemetry.index.json.
+func retainRunArtifacts(ctx context.Context, logger *logrus.Logger, active *session, stdout, stderr []byte, outcome runOutcome, sources artifactSources) error {
 	var errs []error
 	if encoded, err := json.MarshalIndent(outcome, "", "  "); err != nil {
 		errs = append(errs, fmt.Errorf("encode Hermes session outcome: %w", err))
@@ -948,30 +1008,18 @@ func (manager *Manager) collectArtifacts(ctx context.Context, active *session, s
 		}
 		active.logPaths = appendUnique(active.logPaths, path)
 	}
-	if logs, err := manager.client.ContainerLogs(ctx, active.containerID, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true}); err != nil {
-		errs = append(errs, fmt.Errorf("collect Hermes container logs: %w", err))
+	if logs, err := sources.containerLogs(ctx); err != nil {
+		errs = append(errs, err)
 	} else {
-		var out, errBuffer limitedBuffer
-		out.limit, errBuffer.limit = maxDockerOutput, maxDockerOutput
-		_, copyErr := stdcopy.StdCopy(&out, &errBuffer, logs)
-		closeErr := logs.Close()
-		var boundErr error
-		if out.exceeded || errBuffer.exceeded {
-			boundErr = errors.New("Hermes container logs exceeded their bound")
-		}
-		if copyErr != nil || closeErr != nil || boundErr != nil {
-			errs = append(errs, errors.Join(copyErr, closeErr, boundErr))
+		content := allowContainerLogs(logs, active.apiKey)
+		path := filepath.Join(active.artifactDir, "container.log")
+		if err := writeArtifact(path, content); err != nil {
+			errs = append(errs, err)
 		} else {
-			content := allowContainerLogs(append(out.Bytes(), errBuffer.Bytes()...), active.apiKey)
-			path := filepath.Join(active.artifactDir, "container.log")
-			if err := writeArtifact(path, content); err != nil {
-				errs = append(errs, err)
-			} else {
-				active.logPaths = appendUnique(active.logPaths, path)
-			}
+			active.logPaths = appendUnique(active.logPaths, path)
 		}
 	}
-	sessionPaths, sessionErr := manager.collectSessions(ctx, active)
+	sessionPaths, sessionErr := retainSessions(ctx, logger, active, sources.exportSessions)
 	if sessionErr != nil {
 		errs = append(errs, sessionErr)
 	} else {
@@ -994,19 +1042,18 @@ func (manager *Manager) collectArtifacts(ctx context.Context, active *session, s
 	return errors.Join(errs...)
 }
 
-// collectSessions exports Hermes's own SQLite session store as the
+// retainSessions exports Hermes's own SQLite session store as the
 // message-level trajectory. Writing to stdout avoids depending on a path
-// inside the container that the export may or may not have produced.
-func (manager *Manager) collectSessions(ctx context.Context, active *session) ([]string, error) {
-	result, err := manager.execAttached(ctx, active.containerID,
-		[]string{"hermes", "sessions", "export", "-"}, workspaceRoot)
+// inside the runtime that the export may or may not have produced.
+func retainSessions(ctx context.Context, logger *logrus.Logger, active *session, export func(context.Context) (execResult, error)) ([]string, error) {
+	result, err := export(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("export Hermes sessions: %w", err)
 	}
 	if result.exitCode != 0 || len(bytes.TrimSpace(result.stdout)) == 0 {
 		// A run that never reached the model leaves no session; that is not a
 		// harness failure and must not mask the real result.
-		manager.logger.WithContext(ctx).WithField("task_id", active.taskID).Debug("Hermes produced no session export")
+		logger.WithContext(ctx).WithField("task_id", active.taskID).Debug("Hermes produced no session export")
 		return nil, nil
 	}
 	path := filepath.Join(active.artifactDir, "telemetry", "sessions.jsonl")

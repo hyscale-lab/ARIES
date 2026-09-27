@@ -97,6 +97,11 @@ regardless of ownership.
 Second, Hermes requires `/bin/bash` in the task image, because every tool call
 it issues is `bash -c` on the remote.
 
+On Kubernetes, `hermes.KubeManager` runs the same one-shot in an idling pod and
+writes the same artifacts through the same code; the backend differences —
+`kubectl exec` staging, admitted-pod verification, and recovering the exit
+status past kubectl's own suffix — are described in `k8s/KUBERNETES.md`.
+
 ## Customization & Contribution Guide
 
 Add a harness only when it can implement the existing `AgentHarness` lifecycle
