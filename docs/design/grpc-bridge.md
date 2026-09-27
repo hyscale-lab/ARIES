@@ -78,15 +78,16 @@ audit writer, `ExecStream`, and revocation. The file procedures followed, specif
   admitted for `harness.type == "hermes"` — but **the service itself is harness-neutral by
   requirement**, because OpenClaw is expected to follow. See
   [section 8](#8-open-questions), item 1.
-- *The sandbox.* `runner.Sandbox` and `pkg/sandbox/docker` are untouched. `Exec` lands on
-  `ExecStream`; the file procedures land on a narrow capability the bridge asserts, which no
-  sandbox implements yet.
+- *The sandbox's role.* `runner.Sandbox` is untouched. `Exec` lands on `ExecStream`; the file
+  procedures land on a narrow capability the bridge asserts, which `pkg/sandbox/docker`
+  implements on the archive API ([the sandbox RPC interface](sandbox-rpc.md#docker-implementation)).
 - *Session-scoped server state.* Considered and rejected for this iteration; see
   [section 4](#4-state-what-the-server-holds).
 - *Anything running inside the task container.* The sandbox serves nothing and gains no daemon;
   every call still reaches it through the Docker Engine API from outside.
 
-**Sources:** `pkg/runner/interfaces.go`, `cmd/aries/wiring.go`, `pkg/sandbox/docker/docker.go`.
+**Sources:** `pkg/runner/interfaces.go`, `cmd/aries/wiring.go`, `pkg/sandbox/docker/docker.go`,
+`pkg/sandbox/docker/files.go`.
 
 ## 2. Service definition
 
