@@ -623,6 +623,32 @@ consequences follow:
 8. **Where line parsing lives.** `ReadLines` is computed in the bridge from a byte stream. A
    sandbox that can compute the window next to the data, for example a remote one, would want the
    window itself as a sandbox method. The decision is deferred until such a sandbox exists.
+9. **Passing the working directory and environment as fields.** Hermes's working directory could
+   travel in `core.Command.Dir` and its environment in `core.Command.Env`, rather than inside the
+   script. Hermes holds them apart only briefly. `BaseEnvironment.execute()` has the command, the
+   effective cwd and stdin as separate values. Then `_wrap_command(command, cwd)` folds them into
+   one script, and `_run_bash` receives only that script, which it cannot take apart again. The
+   envelope also does two more jobs:
+   - It sources a snapshot of the environment kept in the sandbox (`export -p` output plus
+     functions, aliases and shell options), and writes it back after the command.
+   - It prints `pwd -P` after the command, and `_extract_cwd_from_output` parses that to follow a
+     `cd`.
+
+   Environment is therefore shell state in the sandbox, not a per-command dict, and functions and
+   aliases cannot be expressed as `Env` at all. Two questions need answers first:
+   - *Where does environment persistence live?* The options are the sandbox snapshot, a
+     session-scoped server state (rejected in [section 4](#4-state-what-the-server-holds)), or
+     nowhere.
+   - *How is the cwd after a `cd` reported back?* One option is a `cwd` field in `ExecResponse`,
+     filled by extending the exit trailer.
+
+   Carrying the split values through the plugin by overriding `_wrap_command` and `_run_bash` with
+   a changed argument and return shape would work, but it is rejected as fragile. The route is a
+   more layered backend interface: Hermes calls a command-execution method with the command, cwd
+   and environment as arguments, and a backend supplies that method. On the ARIES side, a native
+   command request with `working_dir` and `env` fields follows, replacing the `bash -c` wrapping
+   of item 6. See [why nothing else is here](#why-nothing-else-is-here) for what the request omits
+   today.
 
 Two questions this section used to carry are settled: the harness/bridge pairing now admits
 `hermes-grpc` alongside `hermes-ssh` in `cmd/aries/wiring.go`, and the gRPC dependency and
