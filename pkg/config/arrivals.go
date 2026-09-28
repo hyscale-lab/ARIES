@@ -25,12 +25,12 @@ type arrivalTrace struct {
 	} `json:"arrivals"`
 }
 
-// LoadArrivals reads a context-gc arrival trace and returns one start time per
-// entry of taskIDs, in start order. The k-th occurrence of a task in taskIDs
-// takes the k-th arrival of that task in the trace, and every offset is
-// scaled from the trace's base rate to ratePerMin: at rate r a Poisson stream
-// recorded at base rate b keeps its order with every time multiplied by b/r.
-// A task with no arrival left in the trace is an error, never a silent skip.
+// LoadArrivals reads an arrival trace and returns one start time per entry of
+// taskIDs, in start order. The k-th occurrence of a task in taskIDs takes the
+// k-th arrival of that task in the trace, and every offset is scaled from the
+// trace's base rate b to ratePerMin r by multiplying it by b/r, which keeps
+// the trace's order. A task with no arrival left in the trace is an error,
+// never a silent skip.
 func LoadArrivals(path string, ratePerMin float64, taskIDs []string) ([]Arrival, error) {
 	if !(ratePerMin > 0) || math.IsInf(ratePerMin, 0) {
 		return nil, errors.New("arrival rate must be finite and positive")
