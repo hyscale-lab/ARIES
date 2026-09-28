@@ -173,11 +173,16 @@ type Options struct {
 	// account-backed tasks, whose state lives in one third-party account.
 	// Zero means 1.
 	Concurrency int
-	// CredentialsDir is a host directory holding Toolathlon's filled
-	// configs/token_key_session.py and the key files it names, which makes
-	// the account-backed servers available (see credentials.go). Empty
-	// refuses every task that needs one.
-	CredentialsDir string
+	// CredentialsEnv maps Toolathlon token fields to host environment
+	// variables, and CredentialFilesEnv key files under configs/ to
+	// variables holding their contents; they make the account-backed servers
+	// available (see credentials.go). Empty refuses every task that needs
+	// one.
+	CredentialsEnv     map[string]string
+	CredentialFilesEnv map[string]string
+	// SecretLookup reads a variable named by CredentialsEnv or
+	// CredentialFilesEnv and hands over the returned buffer.
+	SecretLookup func(string) ([]byte, bool)
 }
 
 // Benchmark discovers selected Toolathlon tasks and retains their private
@@ -195,10 +200,17 @@ type Benchmark struct {
 	modelName        string
 	harnessWebSearch bool
 	concurrency      int
-	credentialsDir   string
+
+	// Account credentials come from the environment (credentials.go); creds
+	// and scrub are set by Tasks.
+	credentialsEnv     map[string]string
+	credentialFilesEnv map[string]string
+	secretLookup       func(string) ([]byte, bool)
 
 	mu      sync.RWMutex
 	details map[string]taskDetails
+	creds   *credentials
+	scrub   *scrubber
 }
 
 type taskDetails struct {
@@ -209,7 +221,7 @@ type taskDetails struct {
 	// self-hosted applications, so the loopback forwarder must run.
 	needsApplications bool
 	// needsCredentials is true when any MCP server is account-backed, so
-	// the credentials directory is overlaid on the sandbox's configs/.
+	// the credentials are overlaid on the sandbox's configs/.
 	needsCredentials bool
 	// extraEntries are checkout paths the project archive must carry for
 	// this task beyond the project code (serverBinaries).
@@ -250,7 +262,8 @@ const (
 	// serverPublic reaches the public internet without an account.
 	serverPublic
 	// serverAccount needs a credentialed third-party account: available
-	// when the profile names a credentials directory (credentials.go).
+	// when the profile maps its token fields to environment variables
+	// (credentials.go).
 	serverAccount
 	// serverHostRuntime (k8s) needs a kind cluster on a Docker socket with
 	// host networking, which the sandbox does not grant.
@@ -443,10 +456,8 @@ func New(options Options) (*Benchmark, error) {
 	if !safeModelName(options.ModelName) {
 		return nil, fmt.Errorf("invalid toolathlon model name %q", options.ModelName)
 	}
-	if options.CredentialsDir != "" {
-		if _, err := readCredentials(options.CredentialsDir); err != nil {
-			return nil, err
-		}
+	if err := validateCredentialNames(options.CredentialsEnv, options.CredentialFilesEnv); err != nil {
+		return nil, err
 	}
 
 	seen := make(map[string]struct{}, len(options.TaskIDs))
@@ -485,7 +496,7 @@ func New(options Options) (*Benchmark, error) {
 	// non-internal network, so the policy is fixed rather than configurable.
 	environment.AllowNetwork = true
 
-	return &Benchmark{
+	benchmark := &Benchmark{
 		root:             filepath.Clean(options.Root),
 		taskIDs:          slices.Clone(options.TaskIDs),
 		executionTaskIDs: slices.Clone(executionIDs),
@@ -498,9 +509,12 @@ func New(options Options) (*Benchmark, error) {
 		modelName:        options.ModelName,
 		harnessWebSearch: options.HarnessWebSearch,
 		concurrency:      options.Concurrency,
-		credentialsDir:   options.CredentialsDir,
 		details:          make(map[string]taskDetails, len(options.TaskIDs)),
-	}, nil
+	}
+	benchmark.credentialsEnv = maps.Clone(options.CredentialsEnv)
+	benchmark.credentialFilesEnv = maps.Clone(options.CredentialFilesEnv)
+	benchmark.secretLookup = options.SecretLookup
+	return benchmark, nil
 }
 
 func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
@@ -512,10 +526,9 @@ func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
 		return nil, err
 	}
 	var creds *credentials
-	if b.credentialsDir != "" {
-		// Read again at task load: the directory may have been filled in
-		// since the profile was validated.
-		if creds, err = readCredentials(b.credentialsDir); err != nil {
+	if len(b.credentialsEnv) != 0 || len(b.credentialFilesEnv) != 0 {
+		// Read at task load, from the environment of the run itself.
+		if creds, err = resolveCredentials(b.root, b.credentialsEnv, b.credentialFilesEnv, b.secretLookup); err != nil {
 			return nil, err
 		}
 	}
@@ -551,6 +564,11 @@ func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
 
 	b.mu.Lock()
 	b.details = details
+	b.creds = creds
+	b.scrub = nil
+	if creds != nil {
+		b.scrub = newScrubber(creds.secrets)
+	}
 	b.mu.Unlock()
 	return tasks, nil
 }
@@ -558,7 +576,7 @@ func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
 // loadTask reads one task directory and rejects, before any sandbox exists,
 // every task whose MCP servers or local tools the adapter cannot provide.
 // catalogue maps each server to its file; creds is nil when the profile
-// names no credentials directory.
+// maps no credentials to environment variables.
 func loadTask(root, id string, environment core.Environment, harnessWebSearch bool, catalogue map[string]string, creds *credentials) (core.Task, taskDetails, error) {
 	taskDir := filepath.Join(root, "tasks", taskPool, id)
 	configBytes, err := os.ReadFile(filepath.Join(taskDir, "task_config.json"))
@@ -584,7 +602,7 @@ func loadTask(root, id string, environment core.Environment, harnessWebSearch bo
 			return core.Task{}, taskDetails{}, fmt.Errorf("MCP server %q needs a host runtime the sandbox does not provide (a kind cluster on the Docker socket with host networking)", server)
 		case kind == serverAccount:
 			if creds == nil {
-				return core.Task{}, taskDetails{}, fmt.Errorf("MCP server %q needs a third-party account: set benchmark.toolathlon.credentials_dir to a directory holding Toolathlon's filled %s", server, credentialsFileName)
+				return core.Task{}, taskDetails{}, fmt.Errorf("MCP server %q needs a third-party account: map the fields of Toolathlon's %s it reads to environment variables in benchmark.toolathlon.credentials_env", server, credentialsFileName)
 			}
 			if overrides == nil {
 				if overrides, err = taskTokenOverrides(taskDir); err != nil {
@@ -599,7 +617,7 @@ func loadTask(root, id string, environment core.Environment, harnessWebSearch bo
 				return core.Task{}, taskDetails{}, err
 			}
 			if missing := creds.missing(keys, overrides); len(missing) != 0 {
-				return core.Task{}, taskDetails{}, fmt.Errorf("MCP server %q needs credentials the credentials directory does not provide: %s", server, strings.Join(missing, ", "))
+				return core.Task{}, taskDetails{}, fmt.Errorf("MCP server %q needs credentials the environment does not provide: %s", server, strings.Join(missing, ", "))
 			}
 			details.needsCredentials = true
 			details.extraEntries = append(details.extraEntries, serverBinaries[server]...)

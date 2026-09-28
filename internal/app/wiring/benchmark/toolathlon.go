@@ -13,8 +13,8 @@ import (
 const taskSandboxAlias = "task-sandbox"
 
 // NewToolathlon constructs the benchmark for preparation or execution.
-func NewToolathlon(cfg config.Config, outputRoot string, taskIDs, executionIDs []string, _ func(string) ([]byte, bool)) (*toolathlon.Benchmark, error) {
-	return toolathlon.New(toolathlonOptions(cfg, taskIDs, executionIDs, outputRoot))
+func NewToolathlon(cfg config.Config, outputRoot string, taskIDs, executionIDs []string, lookup func(string) ([]byte, bool)) (*toolathlon.Benchmark, error) {
+	return toolathlon.New(toolathlonOptions(cfg, taskIDs, executionIDs, outputRoot, lookup))
 }
 
 // SetupToolathlon prepares the pinned benchmark data.
@@ -60,7 +60,9 @@ func toolathlonGatewayPort(cfg config.Config) int {
 
 // toolathlonOptions maps the profile onto the adapter. The model ID is
 // bookkeeping for Toolathlon's task bundle; the harness owns the model.
-func toolathlonOptions(cfg config.Config, taskIDs, executionIDs []string, outputDir string) toolathlon.Options {
+// lookup reads the environment variables the profile names for account
+// credentials, as it reads a model's API key.
+func toolathlonOptions(cfg config.Config, taskIDs, executionIDs []string, outputDir string, lookup func(string) ([]byte, bool)) toolathlon.Options {
 	options := toolathlon.Options{
 		Root: cfg.Benchmark.Root, TaskIDs: taskIDs, ExecutionTaskIDs: executionIDs, OutputDir: outputDir,
 		Revision:         cfg.Versions.Toolathlon.Revision,
@@ -73,7 +75,9 @@ func toolathlonOptions(cfg config.Config, taskIDs, executionIDs []string, output
 		options.GatewayPort = settings.GatewayPort
 		options.AppHost = settings.AppHost
 		options.MaxSteps = settings.MaxSteps
-		options.CredentialsDir = settings.CredentialsDir
+		options.CredentialsEnv = settings.CredentialsEnv
+		options.CredentialFilesEnv = settings.CredentialFilesEnv
 	}
+	options.SecretLookup = lookup
 	return options
 }

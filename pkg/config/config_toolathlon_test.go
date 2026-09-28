@@ -84,12 +84,12 @@ func TestToolathlonBenchmarkValidation(t *testing.T) {
 	if cfg.Benchmark.Toolathlon != nil {
 		t.Fatalf("toolathlon block = %#v, want absent by default", cfg.Benchmark.Toolathlon)
 	}
-	tuned := strings.Replace(valid, `"tasks":["canvas-list-test"],`, `"tasks":["canvas-list-test"],"toolathlon":{"gateway_port":10086,"app_host":"10.148.0.5","max_steps":50,"credentials_dir":"/srv/toolathlon-credentials"},`, 1)
+	tuned := strings.Replace(valid, `"tasks":["canvas-list-test"],`, `"tasks":["canvas-list-test"],"toolathlon":{"gateway_port":10086,"app_host":"10.148.0.5","max_steps":50,"credentials_env":{"github_token":"GITHUB_TOKEN"},"credential_files_env":{"configs/google_credentials.json":"GOOGLE_CREDENTIALS"}},`, 1)
 	cfg, err = Decode(strings.NewReader(tuned))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings := cfg.Benchmark.Toolathlon; settings == nil || settings.GatewayPort != 10086 || settings.AppHost != "10.148.0.5" || settings.MaxSteps != 50 || settings.CredentialsDir != "/srv/toolathlon-credentials" {
+	if settings := cfg.Benchmark.Toolathlon; settings == nil || settings.GatewayPort != 10086 || settings.AppHost != "10.148.0.5" || settings.MaxSteps != 50 || settings.CredentialsEnv["github_token"] != "GITHUB_TOKEN" || settings.CredentialFilesEnv["configs/google_credentials.json"] != "GOOGLE_CREDENTIALS" {
 		t.Fatalf("toolathlon block = %#v", cfg.Benchmark.Toolathlon)
 	}
 
@@ -113,9 +113,21 @@ func TestToolathlonBenchmarkValidation(t *testing.T) {
 			input:   strings.Replace(valid, `"tasks":["canvas-list-test"],`, `"tasks":["canvas-list-test"],"toolathlon":{"max_steps":-5},`, 1),
 			wantErr: "max_steps must be positive",
 		},
-		"blank credentials directory": {
-			input:   strings.Replace(valid, `"tasks":["canvas-list-test"],`, `"tasks":["canvas-list-test"],"toolathlon":{"credentials_dir":"  "},`, 1),
-			wantErr: "credentials_dir must be a directory path",
+		"credentials field name": {
+			input:   strings.Replace(valid, `"tasks":["canvas-list-test"],`, `"tasks":["canvas-list-test"],"toolathlon":{"credentials_env":{"github-token":"GITHUB_TOKEN"}},`, 1),
+			wantErr: "credentials_env key \"github-token\" must be a token field name",
+		},
+		"credentials variable name": {
+			input:   strings.Replace(valid, `"tasks":["canvas-list-test"],`, `"tasks":["canvas-list-test"],"toolathlon":{"credentials_env":{"github_token":"ghp_literal-value"}},`, 1),
+			wantErr: "credentials_env[\"github_token\"] must name an environment variable",
+		},
+		"credential file outside configs": {
+			input:   strings.Replace(valid, `"tasks":["canvas-list-test"],`, `"tasks":["canvas-list-test"],"toolathlon":{"credential_files_env":{"configs/../key.json":"KEY"}},`, 1),
+			wantErr: "credential_files_env key \"configs/../key.json\" must be a path under configs/",
+		},
+		"removed credentials directory": {
+			input:   strings.Replace(valid, `"tasks":["canvas-list-test"],`, `"tasks":["canvas-list-test"],"toolathlon":{"credentials_dir":"/srv/toolathlon-credentials"},`, 1),
+			wantErr: "credentials_dir",
 		},
 		"bad app host": {
 			input:   strings.Replace(valid, `"tasks":["canvas-list-test"],`, `"tasks":["canvas-list-test"],"toolathlon":{"app_host":"host name"},`, 1),

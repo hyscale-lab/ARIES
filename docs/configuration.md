@@ -733,8 +733,10 @@ these guides:
   account share state outside the sandbox, so they load only at
   `execution.concurrency` 1. The optional `toolathlon` block sets the gateway
   port, the application host, `max_steps`, which Toolathlon records in its task
-  bundle but which does not bound the agent, and `credentials_dir`, a directory
-  holding Toolathlon's token file for the account-backed tasks.
+  bundle but which does not bound the agent, and `credentials_env` and
+  `credential_files_env`, which map the token fields and key files of the
+  account-backed tasks to environment variables; the profile names variables,
+  never values.
 
 ### Judge model settings
 

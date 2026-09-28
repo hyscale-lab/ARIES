@@ -200,6 +200,11 @@ difference refuses the evaluation, naming the paths. The image's system
 programs are not covered, as for the other benchmarks that verify in the
 task container.
 
+Account credentials come from the environment variables the profile names. The
+adapter writes them into Toolathlon's token file in the sandbox, and replaces
+every value taken from the environment with `<redacted>` in the logs, bundle
+and results it saves.
+
 Sources: [task loading](../../pkg/benchmark/toolathlon/toolathlon.go),
 [preparation](../../pkg/benchmark/toolathlon/sandbox.go),
 [evaluation](../../pkg/benchmark/toolathlon/evaluate.go),

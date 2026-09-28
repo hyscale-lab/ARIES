@@ -43,8 +43,11 @@ type evalResult struct {
 func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner.Sandbox, _ runner.EvaluationSandboxes) (core.Evaluation, error) {
 	started := time.Now()
 	evaluation := core.Evaluation{Status: core.StatusFailed, VerifierStatus: core.StatusFailed}
+	// Errors may quote the grader's output, which may quote a credential.
+	scrub := b.scrubber()
 	finish := func(err error) (core.Evaluation, error) {
 		evaluation.Duration = time.Since(started)
+		err = scrub.err(err)
 		if err != nil {
 			evaluation.Error = err.Error()
 		}
@@ -90,6 +93,10 @@ func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner
 	// The gateway log is telemetry, not evidence; its absence is not an
 	// evaluation failure.
 	if err := sandbox.Download(ctx, gatewayLogPath, gatewayLogHostPath); err == nil {
+		// Servers log their requests, headers included.
+		if err := scrub.file(gatewayLogHostPath); err != nil {
+			return finish(fmt.Errorf("scrub gateway log: %w", err))
+		}
 		evaluation.LogPaths = append(evaluation.LogPaths, gatewayLogHostPath)
 	}
 
@@ -148,11 +155,18 @@ func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner
 	command.Timeout = evalTimeout
 	result, execErr := sandbox.Exec(ctx, command)
 	var artifactErrors []error
-	if err := os.WriteFile(evalLogPath, []byte(result.Stdout+result.Stderr), 0o600); err != nil {
+	if err := os.WriteFile(evalLogPath, []byte(scrub.text(result.Stdout+result.Stderr)), 0o600); err != nil {
 		artifactErrors = append(artifactErrors, fmt.Errorf("write evaluator log: %w", err))
 	}
 	if err := sandbox.Download(ctx, evalResultPath, evalResultHostPath); err != nil {
 		artifactErrors = append(artifactErrors, fmt.Errorf("download evaluator result: %w", err))
+	} else if err := scrub.file(evalResultHostPath); err != nil {
+		artifactErrors = append(artifactErrors, fmt.Errorf("scrub evaluator result: %w", err))
+	}
+	// The grader has read the trusted bundle; the copy kept in the run
+	// directory is scrubbed like every other artifact.
+	if err := scrub.file(bundleHostPath); err != nil {
+		artifactErrors = append(artifactErrors, fmt.Errorf("scrub task bundle: %w", err))
 	}
 	if execErr != nil {
 		artifactErrors = append(artifactErrors, fmt.Errorf("run toolathlon evaluator: %w", execErr))

@@ -2,9 +2,8 @@ package toolathlon
 
 import (
 	"archive/tar"
+	"encoding/json"
 	"fmt"
-	"io"
-	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -16,18 +15,27 @@ import (
 // Account-backed servers (GitHub, Google, Hugging Face, Notion, Snowflake,
 // W&B, YouTube) read their tokens from Toolathlon's configs/token_key_session.py,
 // a gitignored file the user derives from token_key_session_example.py after
-// registering the accounts (global_preparation/how2register_accounts.md). The
-// adapter keeps the checkout's copy at the example, so the pinned tree stays
-// verifiable, and takes the filled file -- with the key files it names -- from
-// a directory outside the checkout named by benchmark.toolathlon.credentials_dir.
-// That directory is overlaid on the sandbox's configs/ after the project tree
-// is installed, at preparation and again after the evaluate-time reinstall,
-// so the agent's sandbox and the grader both see the same credentials and
-// neither depends on what the agent left behind.
+// registering the accounts (global_preparation/how2register_accounts.md), and
+// some of them read key files under configs/ that it names. The adapter keeps
+// the checkout's copies at the example, so the pinned tree stays verifiable,
+// and takes the values from the host environment, as ARIES takes a model's
+// API key: benchmark.toolathlon.credentials_env maps each token field, and
+// credential_files_env each key file, to the name of an environment variable,
+// so a profile and every saved configuration hold names only. At task load
+// the adapter writes the token file from the checkout's example with those
+// fields filled in. It is overlaid on the sandbox's configs/ together with
+// the key files after the project tree is installed, at preparation and again
+// after the evaluate-time reinstall, so the agent's sandbox and the grader
+// both see the same credentials and neither depends on what the agent left
+// behind. Every value taken from the environment is scrubbed from what the
+// adapter saves (scrub.go).
 
 const (
-	// credentialsFileName is the one file the directory must hold.
+	// credentialsFileName is the token file Toolathlon's servers read.
 	credentialsFileName = "token_key_session.py"
+	// credentialsExampleName is the checkout's example that the token file
+	// is written from.
+	credentialsExampleName = "token_key_session_example.py"
 	// credentialsArchiveContainerPath is where the overlay archive lands
 	// before extraction over workspaceRoot.
 	credentialsArchiveContainerPath = privateRoot + "/credentials.tar"
@@ -56,6 +64,9 @@ var (
 	// tokenReference matches the `${token.<key>}` substitutions in a server
 	// file: the fields Toolathlon reads for that server.
 	tokenReference = regexp.MustCompile(`\$\{token\.([A-Za-z0-9_]+)\}`)
+	// identifier is a token field name, and also the shape required of an
+	// environment variable named in the profile.
+	identifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
 
 // tokenValue is one assignment in a token_key_session.py: the string
@@ -66,28 +77,144 @@ type tokenValue struct {
 	isLiteral bool
 }
 
-// credentials is a credentials directory with its token_key_session.py
-// parsed.
+// credentials are the token file written for the sandbox, the key files,
+// and what the environment did not provide.
 type credentials struct {
-	dir    string
-	values map[string]tokenValue
+	// tokenFile is the checkout's example with the configured fields filled.
+	tokenFile []byte
+	values    map[string]tokenValue
+	// files maps a key file's path relative to configs/ to its content.
+	files map[string][]byte
+	// unset maps a field, or a key file's configs/ path, to the environment
+	// variable the profile names for it and the environment does not set.
+	unset map[string]string
+	// secrets are the values taken from the environment, for scrubbing.
+	secrets []string
 }
 
-// readCredentials checks the directory and parses its token file.
-func readCredentials(dir string) (*credentials, error) {
-	dir = filepath.Clean(dir)
-	info, err := os.Stat(dir)
+// validateCredentialNames checks the profile's two maps before any value is
+// read: token fields are Python identifiers, key files are paths under
+// configs/ other than the token file, and every value names an environment
+// variable.
+func validateCredentialNames(fields, files map[string]string) error {
+	for field, variable := range fields {
+		if !identifier.MatchString(field) {
+			return fmt.Errorf("toolathlon credentials_env key %q is not a token field name", field)
+		}
+		if !identifier.MatchString(variable) {
+			return fmt.Errorf("toolathlon credentials_env[%q] must name an environment variable, not %q", field, variable)
+		}
+	}
+	for file, variable := range files {
+		if _, ok := configsRelative(file); !ok {
+			return fmt.Errorf("toolathlon credential_files_env key %q must be a file path under %s/ other than %s", file, credentialsConfigsDir, credentialsFileName)
+		}
+		if !identifier.MatchString(variable) {
+			return fmt.Errorf("toolathlon credential_files_env[%q] must name an environment variable, not %q", file, variable)
+		}
+	}
+	return nil
+}
+
+// configsRelative returns a configs/ path relative to configs/, refusing
+// paths that leave it and the token file itself.
+func configsRelative(file string) (string, bool) {
+	relative, found := strings.CutPrefix(file, credentialsConfigsDir+"/")
+	if !found || relative == "" || path.IsAbs(relative) || path.Clean(relative) != relative ||
+		relative == ".." || strings.HasPrefix(relative, "../") || relative == credentialsFileName {
+		return "", false
+	}
+	return relative, true
+}
+
+// resolveCredentials reads the configured values through lookup and writes
+// the token file from the checkout's example. A variable that is not set,
+// or set to nothing, leaves its field or file unprovided; task load then
+// refuses only the tasks that need it.
+func resolveCredentials(root string, fields, files map[string]string, lookup func(string) ([]byte, bool)) (*credentials, error) {
+	example, err := os.ReadFile(filepath.Join(root, credentialsConfigsDir, credentialsExampleName))
 	if err != nil {
-		return nil, fmt.Errorf("toolathlon credentials directory: %w", err)
+		return nil, fmt.Errorf("read Toolathlon's %s: %w", credentialsExampleName, err)
 	}
-	if !info.IsDir() {
-		return nil, fmt.Errorf("toolathlon credentials directory %q is not a directory", dir)
+	creds := &credentials{files: make(map[string][]byte), unset: make(map[string]string)}
+	filled := make(map[string]string, len(fields))
+	for _, field := range sortedKeys(fields) {
+		value, ok := lookupValue(lookup, fields[field])
+		if !ok {
+			creds.unset[field] = fields[field]
+			continue
+		}
+		filled[field] = value
+		creds.secrets = append(creds.secrets, value)
 	}
-	content, err := os.ReadFile(filepath.Join(dir, credentialsFileName))
-	if err != nil {
-		return nil, fmt.Errorf("toolathlon credentials directory must hold Toolathlon's filled %s: %w", credentialsFileName, err)
+	if creds.tokenFile, err = fillTokenFile(example, filled); err != nil {
+		return nil, err
 	}
-	return &credentials{dir: dir, values: parseTokenAssignments(content)}, nil
+	creds.values = parseTokenAssignments(creds.tokenFile)
+	for _, file := range sortedKeys(files) {
+		relative, _ := configsRelative(file)
+		value, ok := lookupValue(lookup, files[file])
+		if !ok {
+			creds.unset[file] = files[file]
+			continue
+		}
+		creds.files[relative] = []byte(value)
+		creds.secrets = append(creds.secrets, value)
+	}
+	return creds, nil
+}
+
+// lookupValue reads one environment variable through the profile's lookup.
+// The lookup hands over its buffer, which is cleared once copied.
+func lookupValue(lookup func(string) ([]byte, bool), name string) (string, bool) {
+	if lookup == nil {
+		return "", false
+	}
+	raw, ok := lookup(name)
+	if !ok || len(raw) == 0 {
+		return "", false
+	}
+	value := string(raw)
+	clear(raw)
+	return value, true
+}
+
+// fillTokenFile writes each filled field's value over the string literals
+// the example assigns to it, encoded as a JSON string, which is also a valid
+// Python string literal. A field the example does not assign a string to is
+// refused: its value is computed by the file's own code (the Google client
+// fields read google_credentials.json, which credential_files_env provides).
+func fillTokenFile(example []byte, filled map[string]string) ([]byte, error) {
+	lines := strings.Split(string(example), "\n")
+	replaced := make(map[string]bool, len(filled))
+	for index, line := range lines {
+		match := tokenAssignment.FindStringSubmatchIndex(line)
+		if match == nil {
+			continue
+		}
+		field := line[match[2]:match[3]]
+		value, wanted := filled[field]
+		if !wanted {
+			continue
+		}
+		rest := line[match[4]:match[5]]
+		literal := stringLiteral.FindStringIndex(rest)
+		if literal == nil {
+			continue
+		}
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("encode token field %q: %w", field, err)
+		}
+		lines[index] = line[:match[4]] + string(encoded) + rest[literal[1]:]
+		replaced[field] = true
+	}
+	for _, field := range sortedKeys(filled) {
+		if !replaced[field] {
+			return nil, fmt.Errorf("token field %q is not assigned a string in Toolathlon's %s (a computed field takes the file it reads from credential_files_env)", field, credentialsExampleName)
+		}
+	}
+	return []byte(strings.Join(lines, "\n")), nil
 }
 
 // parseTokenAssignments scans a token_key_session.py line by line for
@@ -112,9 +239,10 @@ func parseTokenAssignments(content []byte) map[string]tokenValue {
 	return values
 }
 
-// missing reports which of the keys a server reads the directory does not
-// provide: not assigned, still the example's placeholder, or naming a file
-// under configs/ that the directory does not hold. A key the task's own
+// missing reports which of the keys a server reads the environment does not
+// provide: a variable the profile names but the environment does not set, a
+// field the profile does not map (still the example's placeholder), or a
+// key file under configs/ the profile does not map. A key the task's own
 // token_key_session.py assigns (the repositories, pages, or folders that
 // task works on) is provided by the task.
 func (c *credentials) missing(keys []string, taskOverrides map[string]tokenValue) []string {
@@ -123,20 +251,28 @@ func (c *credentials) missing(keys []string, taskOverrides map[string]tokenValue
 		if _, overridden := taskOverrides[key]; overridden {
 			continue
 		}
+		if variable, unset := c.unset[key]; unset {
+			missing = append(missing, key+" (environment variable "+variable+" is not set)")
+			continue
+		}
 		value, ok := c.values[key]
 		switch {
 		case !ok:
-			missing = append(missing, key+" (not set)")
+			missing = append(missing, key+" (not in the token file)")
 		case !value.isLiteral:
 			// Computed by the file's own code: taken as set.
 		case value.literal == credentialPlaceholder:
-			missing = append(missing, key+" (still the example's placeholder)")
+			missing = append(missing, key+" (not in benchmark.toolathlon.credentials_env)")
 		case strings.HasPrefix(value.literal, credentialsConfigsDir+"/"):
-			relative := strings.TrimPrefix(value.literal, credentialsConfigsDir+"/")
-			if relative == "" || strings.Contains(relative, "..") || path.IsAbs(relative) {
+			relative, ok := configsRelative(value.literal)
+			if !ok {
 				missing = append(missing, key+" (not a file under "+credentialsConfigsDir+"/)")
-			} else if _, err := os.Stat(filepath.Join(c.dir, filepath.FromSlash(relative))); err != nil {
-				missing = append(missing, key+" (file "+value.literal+" is not in the directory)")
+			} else if c.files[relative] == nil {
+				if variable, unset := c.unset[value.literal]; unset {
+					missing = append(missing, key+" (file "+value.literal+": environment variable "+variable+" is not set)")
+				} else {
+					missing = append(missing, key+" (file "+value.literal+" is not in benchmark.toolathlon.credential_files_env)")
+				}
 			}
 		}
 	}
@@ -175,12 +311,11 @@ func taskTokenOverrides(taskDir string) (map[string]tokenValue, error) {
 	return parseTokenAssignments(content), nil
 }
 
-// writeCredentialsArchive writes the directory as a tar archive whose
-// members sit under configs/, so extracting it at workspaceRoot overlays the
-// checkout's copies. Bytecode caches are skipped; anything that is not a
-// regular file or directory is refused, because nothing Toolathlon's guide
-// asks for is one.
-func writeCredentialsArchive(dir, destination string) (err error) {
+// writeCredentialsArchive writes the token file and the key files as a tar
+// archive whose members sit under configs/, so extracting it at
+// workspaceRoot overlays the checkout's copies. The archive is written only
+// for the upload and removed with it (extractArchive).
+func writeCredentialsArchive(creds *credentials, destination string) (err error) {
 	file, err := os.OpenFile(destination, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("create credentials archive: %w", err)
@@ -190,54 +325,43 @@ func writeCredentialsArchive(dir, destination string) (err error) {
 			err = fmt.Errorf("close credentials archive: %w", closeErr)
 		}
 	}()
+	members := map[string][]byte{credentialsFileName: creds.tokenFile}
+	directories := make(map[string]struct{})
+	for relative, content := range creds.files {
+		members[relative] = content
+		for dir := path.Dir(relative); dir != "."; dir = path.Dir(dir) {
+			directories[dir] = struct{}{}
+		}
+	}
 	writer := tar.NewWriter(file)
-	err = filepath.WalkDir(dir, func(current string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return fmt.Errorf("walk credentials directory: %w", walkErr)
+	for _, dir := range sortedKeys(directories) {
+		if err := writer.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: path.Join(credentialsConfigsDir, dir) + "/", Mode: 0o755}); err != nil {
+			return fmt.Errorf("write header %q: %w", dir, err)
 		}
-		relative, err := filepath.Rel(dir, current)
-		if err != nil {
-			return fmt.Errorf("relativize %q: %w", current, err)
+	}
+	for _, relative := range sortedKeys(members) {
+		name := path.Join(credentialsConfigsDir, relative)
+		content := members[relative]
+		if err := writer.WriteHeader(&tar.Header{Typeflag: tar.TypeReg, Name: name, Mode: 0o644, Size: int64(len(content))}); err != nil {
+			return fmt.Errorf("write header %q: %w", name, err)
 		}
-		if relative == "." {
-			return nil
+		if _, err := writer.Write(content); err != nil {
+			return fmt.Errorf("archive %q: %w", name, err)
 		}
-		if entry.Name() == "__pycache__" {
-			if entry.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		name := path.Join(credentialsConfigsDir, filepath.ToSlash(relative))
-		info, err := entry.Info()
-		if err != nil {
-			return fmt.Errorf("stat %q: %w", name, err)
-		}
-		switch {
-		case info.IsDir():
-			return writer.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: name + "/", Mode: int64(info.Mode().Perm()), ModTime: info.ModTime()})
-		case info.Mode().IsRegular():
-			if err := writer.WriteHeader(&tar.Header{Typeflag: tar.TypeReg, Name: name, Mode: int64(info.Mode().Perm()), Size: info.Size(), ModTime: info.ModTime()}); err != nil {
-				return fmt.Errorf("write header %q: %w", name, err)
-			}
-			content, err := os.Open(current)
-			if err != nil {
-				return fmt.Errorf("open %q: %w", name, err)
-			}
-			defer content.Close()
-			if _, err := io.Copy(writer, content); err != nil {
-				return fmt.Errorf("archive %q: %w", name, err)
-			}
-			return nil
-		default:
-			return fmt.Errorf("credentials directory entry %q is neither a regular file nor a directory", relative)
-		}
-	})
-	if err != nil {
-		return err
 	}
 	if err := writer.Close(); err != nil {
 		return fmt.Errorf("finish credentials archive: %w", err)
 	}
 	return nil
+}
+
+// sortedKeys returns a map's keys in order, so archives and errors do not
+// depend on map iteration.
+func sortedKeys[V any](values map[string]V) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
