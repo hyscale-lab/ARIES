@@ -19,6 +19,15 @@ operations. A pair-specific bridge may use a narrow sandbox capability such as
 streaming command execution, but the harness does not receive Docker daemon
 access.
 
+The Codex pairing uses `TaskUser` to resolve the benchmark's effective identity
+and `ExecSupervisedStream` to start its trusted descendant supervisor directly.
+This narrow capability preserves argv, bounds streams, checks container and
+exec identity, and confirms Docker exec exit. It never runs task-owned shell
+or cancellation helpers. Its caller must independently prove descendant
+cleanup; closing an attach on error is not such proof, and the Runner must
+block evaluation and remove the sandbox. Ordinary command execution retains
+its existing process-group wrapper.
+
 ## Customization & Contribution Guide
 
 A new sandbox implementation must preserve exact command argument boundaries,

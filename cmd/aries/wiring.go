@@ -14,10 +14,12 @@ import (
 	"github.com/hyscale-lab/aries/pkg/benchmark/sweatlas"
 	"github.com/hyscale-lab/aries/pkg/benchmark/swebenchpro"
 	"github.com/hyscale-lab/aries/pkg/benchmark/terminalbench"
+	"github.com/hyscale-lab/aries/pkg/bridge/codexssh"
 	"github.com/hyscale-lab/aries/pkg/bridge/hermesssh"
 	"github.com/hyscale-lab/aries/pkg/bridge/openclawssh"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
+	codexharness "github.com/hyscale-lab/aries/pkg/harness/codex"
 	hermesharness "github.com/hyscale-lab/aries/pkg/harness/hermes"
 	openclawharness "github.com/hyscale-lab/aries/pkg/harness/openclaw"
 	"github.com/hyscale-lab/aries/pkg/monitor"
@@ -64,6 +66,10 @@ func validateComponents(cfg config.Config) error {
 	switch cfg.Harness.Type {
 	case "openclaw":
 	case "hermes":
+	case "codex":
+		if cfg.Runtime.Backend != "openai" && cfg.Runtime.Backend != "sglang" {
+			return errors.New("Codex requires runtime.backend openai or sglang with Responses API support")
+		}
 	default:
 		return fmt.Errorf("unsupported harness type %q", cfg.Harness.Type)
 	}
@@ -75,12 +81,17 @@ func validateComponents(cfg config.Config) error {
 	switch cfg.Bridge.Type {
 	case "openclaw-ssh":
 	case "hermes-ssh":
+	case "codex-ssh":
 	default:
 		return fmt.Errorf("unsupported bridge type %q", cfg.Bridge.Type)
 	}
 	// Each bridge speaks one harness's SSH grammar, so the pair is checked
 	// here rather than left to fail at the first tool call.
-	if (cfg.Harness.Type == "hermes") != (cfg.Bridge.Type == "hermes-ssh") {
+	switch {
+	case cfg.Harness.Type == "openclaw" && cfg.Bridge.Type == "openclaw-ssh":
+	case cfg.Harness.Type == "hermes" && cfg.Bridge.Type == "hermes-ssh":
+	case cfg.Harness.Type == "codex" && cfg.Bridge.Type == "codex-ssh":
+	default:
 		return fmt.Errorf("harness type %q requires its paired bridge, not %q", cfg.Harness.Type, cfg.Bridge.Type)
 	}
 	return nil
@@ -290,6 +301,18 @@ func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byt
 			return app.HarnessInstance{}, fmt.Errorf("construct Hermes harness: %w", err)
 		}
 		return app.HarnessInstance{Harness: manager, Close: manager.Close}, nil
+	case "codex":
+		if cfg.Harness.Codex == nil {
+			return app.HarnessInstance{}, errors.New("construct Codex harness: harness.codex is required")
+		}
+		manager, err := codexharness.New(codexharness.Options{
+			Image: cfg.Versions.Codex.Image, CodexPath: cfg.Harness.Codex.ResolvedExecutable,
+			CodexVersion: cfg.Versions.Codex.Version, OutputDir: outputRoot, APIKeyLookup: lookup, Logger: logger,
+		})
+		if err != nil {
+			return app.HarnessInstance{}, fmt.Errorf("construct Codex harness: %w", err)
+		}
+		return app.HarnessInstance{Harness: manager, Close: manager.Close}, nil
 	default:
 		return app.HarnessInstance{}, fmt.Errorf("unsupported harness type %q", cfg.Harness.Type)
 	}
@@ -401,6 +424,24 @@ func newBridge(cfg config.Config, outputRoot string, logger *logrus.Logger) (run
 		bridge, err := hermesssh.New(hermesssh.Options{OutputDir: outputRoot, Logger: logger, OmitRawLog: !cfg.Bridge.RetainBridgeRawLog()})
 		if err != nil {
 			return nil, fmt.Errorf("construct Hermes SSH bridge: %w", err)
+		}
+		return bridge, nil
+	case "codex-ssh":
+		if cfg.Harness.Codex == nil {
+			return nil, errors.New("construct Codex SSH bridge: harness.codex is required")
+		}
+		executable, err := os.Executable()
+		if err != nil {
+			return nil, fmt.Errorf("locate ARIES executable: %w", err)
+		}
+		binaryDir := filepath.Dir(executable)
+		bridge, err := codexssh.New(codexssh.Options{
+			ClientPath: filepath.Join(binaryDir, "aries-codex-ssh"), CodexPath: cfg.Harness.Codex.ResolvedExecutable,
+			SupervisorPath: filepath.Join(binaryDir, "aries-codex-exec"), OutputDir: outputRoot, Logger: logger,
+			OmitRawLog: !cfg.Bridge.RetainBridgeRawLog(),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("construct Codex SSH bridge: %w", err)
 		}
 		return bridge, nil
 	default:

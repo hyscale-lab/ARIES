@@ -1,5 +1,36 @@
 # ARIES Tasks
 
+## Codex harness and native SSH bridge
+
+- Added a pinned `0.157.1` Codex harness, its native remote environment, strict
+  Responses-only provider configuration, private credentials and trajectories,
+  explicit command switches, build helpers, and a runnable profile template.
+- Added one-session SSH transport with exact host-key verification and private
+  RPC evidence. A protected Linux child subreaper preserves the task's user,
+  kills and reaps escaped descendants, and removes staging before proving
+  revocation. A narrow direct Docker exec capability preserves the four-role
+  architecture without a new dependency or task-owned post-proof cleanup.
+- Regression-first review exposed task-modifiable `rm` execution after the
+  original cleanup proof. The trusted supervisor and direct Docker capability
+  close that path; the real root-task regression replaces `rm` and proves it
+  is never invoked during revocation. Container capability/no-new-privileges
+  inspection now also precedes credential copying.
+- On `dual-h100`, Go `1.26.5` passes `make build`,
+  `make test`, `make test-race`, `make lint`, and `make integration`. The first
+  integration pass lacked the root Terminal-Bench checkout; the new Codex
+  profile's `aries setup` prepared it, the affected OpenClaw package passed,
+  and the complete integration command then passed.
+- Real Codex + deterministic Responses tests prove same-sandbox mutation,
+  private credential exclusion, hostile-cleanup resistance, `65532:65532`
+  identity preservation, and cancellation that reaps detached children while
+  retaining an unrelated task daemon. Independent final review found no
+  remaining blocker. SDK inspection finds no ARIES container or network;
+  component-process, staged-key, profile/diff credential, and diff checks pass.
+- No paid API or live Qwen inference was used. RoadmapBench still has no
+  adapter. The optional SWE-bench Pro gold-patch Docker experiment was not
+  enabled; its pinned dataset integration passed. Local Go `1.25.9` is below
+  the repository requirement, so all executable validation ran on dual-h100.
+
 ## Verifier timeout floor
 
 - `verifier_timeout_floor_seconds` in the runtime overrides file raises a

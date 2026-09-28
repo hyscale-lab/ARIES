@@ -87,7 +87,8 @@ type ModelConfig struct {
 	APIKeyEnv string `json:"api_key_env"`
 	// ContextLength, MaxTokens, and Temperature are optional generation
 	// settings the harness writes into its own model configuration. Zero or
-	// nil keeps the harness default. Only the Hermes harness renders them.
+	// nil keeps the harness default. Hermes supports all three; Codex supports
+	// ContextLength.
 	ContextLength int      `json:"context_length,omitempty"`
 	MaxTokens     int      `json:"max_tokens,omitempty"`
 	Temperature   *float64 `json:"temperature,omitempty"`
@@ -102,6 +103,7 @@ type ToolEndpoint struct {
 	Address              string   `json:"address"`
 	Username             string   `json:"username,omitempty"`
 	Network              string   `json:"network,omitempty"`
+	Workdir              string   `json:"workdir,omitempty"`
 	ClientCommand        string   `json:"client_command,omitempty"`
 	ClientSourceFile     string   `json:"client_source_file,omitempty"`
 	IdentityFile         string   `json:"identity_file,omitempty"`

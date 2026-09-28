@@ -80,6 +80,20 @@ workdir, and keeps gold patch/test data out of `core.Task`. A task is resolved
 only when the pinned parser reports every row-declared `FAIL_TO_PASS` and
 `PASS_TO_PASS` test as passed.
 
+Codex is a third concrete harness, pinned to the unmodified static CLI
+`0.157.1` and paired only with `codex-ssh`. It uses Responses API model servers
+and the pinned native remote environment (`include_local = false`), keeping
+model credentials in the harness and tools in the task container. Its SSH
+bridge permits one native stdio executor session. A root Go supervisor starts
+the native child with the benchmark's effective UID/GID, protects a private
+stdin nonce, reaps all descendants as a Linux subreaper, removes its stage with
+Go filesystem calls, and emits a terminal cleanup proof. The Docker sandbox's
+narrow `TaskUser` and `ExecSupervisedStream` capabilities avoid task-owned shell
+and cleanup commands on this path. Proof, supervisor exit, Docker exec exit,
+audit drain, and host credential removal must all succeed before evaluation.
+This adds no Runner role, shared transport framework, or dependency. RoadmapBench
+and a live Qwen experiment are not part of this implementation.
+
 ## Repository boundary
 
 - `aries` is the only write and Git-operation boundary.

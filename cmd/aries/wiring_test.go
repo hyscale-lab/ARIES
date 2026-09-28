@@ -18,6 +18,7 @@ import (
 	runtimesglang "github.com/hyscale-lab/aries/internal/modelruntime/sglang"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
+	codexharness "github.com/hyscale-lab/aries/pkg/harness/codex"
 	openclawharness "github.com/hyscale-lab/aries/pkg/harness/openclaw"
 )
 
@@ -75,7 +76,7 @@ func TestExplicitCompositionSwitches(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(source)
-	for _, value := range []string{`case "terminalbench2"`, `case "sweatlasqa"`, `case "swebenchpro"`, `case "openclaw"`, `case "hermes"`, `case "docker"`, `case "openclaw-ssh"`, `case "hermes-ssh"`, `case "deepseek"`, `case "sglang"`, `case "openai"`} {
+	for _, value := range []string{`case "terminalbench2"`, `case "sweatlasqa"`, `case "swebenchpro"`, `case "openclaw"`, `case "hermes"`, `case "codex"`, `case "docker"`, `case "openclaw-ssh"`, `case "hermes-ssh"`, `case "codex-ssh"`, `case "deepseek"`, `case "sglang"`, `case "openai"`} {
 		if !strings.Contains(text, value) {
 			t.Fatalf("missing explicit switch %s", value)
 		}
@@ -153,8 +154,13 @@ func TestValidateComponentsRequiresPairedHarnessAndBridge(t *testing.T) {
 	}{
 		{name: "openclaw pair", harness: "openclaw", bridge: "openclaw-ssh"},
 		{name: "hermes pair", harness: "hermes", bridge: "hermes-ssh"},
+		{name: "codex pair", harness: "codex", bridge: "codex-ssh"},
 		{name: "hermes with openclaw bridge", harness: "hermes", bridge: "openclaw-ssh", wantErr: true},
 		{name: "openclaw with hermes bridge", harness: "openclaw", bridge: "hermes-ssh", wantErr: true},
+		{name: "codex with openclaw bridge", harness: "codex", bridge: "openclaw-ssh", wantErr: true},
+		{name: "codex with hermes bridge", harness: "codex", bridge: "hermes-ssh", wantErr: true},
+		{name: "openclaw with codex bridge", harness: "openclaw", bridge: "codex-ssh", wantErr: true},
+		{name: "hermes with codex bridge", harness: "hermes", bridge: "codex-ssh", wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := config.Config{
@@ -162,6 +168,7 @@ func TestValidateComponentsRequiresPairedHarnessAndBridge(t *testing.T) {
 				Harness:   config.HarnessConfig{Type: tc.harness},
 				Sandbox:   config.SandboxConfig{Type: "docker"},
 				Bridge:    config.BridgeConfig{Type: tc.bridge},
+				Runtime:   config.RuntimeConfig{Backend: "openai", Mode: "external"},
 			}
 			err := validateComponents(cfg)
 			if tc.wantErr {
@@ -184,6 +191,43 @@ func TestMakeLintIncludesInternalPackages(t *testing.T) {
 	}
 	if !strings.Contains(string(makefile), "find cmd internal pkg") || !strings.Contains(string(makefile), "go vet ./...") {
 		t.Fatalf("lint target does not cover cmd, internal, and pkg: %s", makefile)
+	}
+}
+
+func TestCodexHarnessConstructionUsesSelectedNativeVersion(t *testing.T) {
+	cfg := config.Config{
+		Harness: config.HarnessConfig{
+			Type: "codex", Mode: "agent",
+			Codex: &config.HarnessCodexConfig{ResolvedExecutable: filepath.Join(t.TempDir(), "codex")},
+		},
+		Versions: config.Versions{Codex: config.CodexVersions{Image: "docker.io/library/debian:12.12-slim", Version: "0.157.1"}},
+	}
+	instance, err := newHarness(cfg, t.TempDir(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := instance.Harness.(*codexharness.Manager); !ok {
+		t.Fatalf("harness = %T, want Codex", instance.Harness)
+	}
+	if err := instance.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Versions.Codex.Version = "0.156.1"
+	if _, err := newHarness(cfg, t.TempDir(), nil, nil); err == nil || !strings.Contains(err.Error(), "version") {
+		t.Fatalf("unsupported native version was accepted: %v", err)
+	}
+}
+
+func TestValidateComponentsRejectsCodexDeepSeek(t *testing.T) {
+	cfg := config.Config{
+		Benchmark: config.BenchmarkConfig{Type: "terminalbench2"},
+		Harness:   config.HarnessConfig{Type: "codex"},
+		Sandbox:   config.SandboxConfig{Type: "docker"},
+		Bridge:    config.BridgeConfig{Type: "codex-ssh"},
+		Runtime:   config.RuntimeConfig{Backend: "deepseek", Mode: "external"},
+	}
+	if err := validateComponents(cfg); err == nil || !strings.Contains(err.Error(), "Responses") {
+		t.Fatalf("Codex accepted DeepSeek: %v", err)
 	}
 }
 

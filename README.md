@@ -86,10 +86,10 @@ implementations:
 
 | Role or service | Implementation |
 | --- | --- |
-| Agent harness | OpenClaw (text and realtime voice modes); Hermes (text) |
+| Agent harness | OpenClaw (text and realtime voice modes); Hermes (text); Codex (text) |
 | Benchmark | Terminal-Bench 2; Deep Research Bench; the 731-task public SWE-bench Pro split |
 | Tool sandbox | Docker, using the Moby Go SDK |
-| Tool bridge | OpenClaw–Docker SSH bridge; Hermes–Docker SSH bridge |
+| Tool bridge | OpenClaw–Docker SSH bridge; Hermes–Docker SSH bridge; Codex native executor over SSH |
 | Model service | External DeepSeek; external OpenAI-compatible servers such as vLLM; external or ARIES-managed SGLang |
 
 See [Supported implementations](docs/supported.md) for ownership,
@@ -115,6 +115,9 @@ contact an external model endpoint.
 The DeepSeek example requires an API key and can incur charges. The
 [Quick start](docs/quick-start.md) covers secure credential setup, the first
 run, SGLang alternatives, result inspection, and troubleshooting.
+
+The [Codex guide](docs/codex.md) covers the pinned upstream CLI, its SSH bridge,
+and model servers that implement the Responses API.
 
 For repository-level software-engineering tasks, see the
 [SWE-bench Pro guide](docs/benchmarks/swe-bench-pro.md). Its setup additionally

@@ -13,7 +13,7 @@ rendered configuration as private run artifacts. Model credentials are supplied
 at runtime and must not be written into profiles, structured logs, Docker
 metadata, or results.
 
-The current implementation is OpenClaw in a pinned container image. ARIES starts
+The supported implementations are OpenClaw, Hermes, and Codex. ARIES starts
 the harness only after the sandbox and bridge are ready. On success, failure, or
 cancellation, it stops the harness and confirms absence. Evaluation remains a
 separate Benchmark outcome rather than an interpretation of harness success.
@@ -106,6 +106,24 @@ literal key cannot reach the retained `config.yaml` or the request bodies. The `
 `HERMES_WRITE_SAFE_ROOT=/opt/data`, which makes `write_file` and `patch` refuse
 every sandbox path; the harness clears it, because the sandbox is the isolation
 boundary and the tools act on it over SSH.
+
+## Codex
+
+`codex.Manager` stages the unmodified static CLI `0.157.1` into a separate
+tag-pinned Linux container, checks its reported version, and invokes one
+`codex exec --json --ephemeral` turn. The instruction remains one argv element.
+The model provider uses the Responses API; the credential is read from a
+private file by the container wrapper and never enters Docker configuration.
+JSONL trajectory, stderr, and placeholder-only TOML are private artifacts.
+
+The pinned native `environments.toml` contract selects only the bridge-backed
+environment (`include_local = false`). Shell and filesystem operations use
+Codex's native executor inside the task sandbox. The harness contains an empty
+matching workdir for CLI path validation, not a copy of the task repository.
+It receives neither the Docker socket nor verifier material. Codex's internal
+sandbox mode permits remote tools; the separate containers and bridge enforce
+ARIES's isolation boundary. See the [Codex guide](../codex.md) for setup and
+supported model configuration.
 
 ## Customization & Contribution Guide
 

@@ -395,10 +395,18 @@ Artifacts land under `<run>/<task>/harness/`: the redacted `config.yaml`, the
 one-shot's `hermes_stdout.log` and `hermes_stderr.log`, `container.log`, and the
 exported message-level trajectory at `telemetry/sessions.jsonl`.
 
+### Codex instead of OpenClaw
+
+Use `profiles/codex-tb2-fix-git-openai.json` after following the
+[Codex setup guide](codex.md). It requires the pinned static CLI and a model
+server implementing streaming Responses tool calls. The profile contains
+endpoint and model placeholders; a Chat Completions-only server is insufficient.
+
 ### Hermes context window, compaction, and request extra body
 
-Three optional profile blocks reach the rendered Hermes `config.yaml`. Each is
-Hermes-only and is rejected under another harness. A profile without them
+Three optional profile blocks reach the rendered Hermes `config.yaml`.
+Compaction, request extra body, max tokens, and temperature are Hermes-only;
+Codex also accepts `model.context_length`. A profile without these overrides
 renders the same file as before.
 
 - `model.context_length`, `model.max_tokens`, and `model.temperature` set the
