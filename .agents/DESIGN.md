@@ -97,11 +97,21 @@ and a live Qwen experiment are not part of this implementation.
 The three SSH bridges share concrete connection/session transport, private
 key/file operations, stream accounting, and bounded audit persistence in
 `pkg/bridge/internal/sshbridge`. Command grammar, workspace and credential
-policy, and execution/revocation guarantees remain adapter-owned. OpenClaw and
-Hermes currently retain an independently reproduced process-group cleanup gap
-for setsid/double-fork descendants; common transport does not fix or strengthen
-that policy. The separately scoped supervision fix must preserve background
-services across calls while retiring every agent descendant before evaluation.
+policy, and execution/revocation guarantees remain adapter-owned.
+
+All three bridges use the static `aries-exec` helper and shared Linux primitives
+in `internal/execsupervisor`. Codex retains its native executor session.
+OpenClaw and Hermes start one protected broker through concrete Docker sandbox
+capabilities before publishing SSH access. Per-command subreapers preserve
+background services across successful calls, retire a canceled call's lineage,
+and retire all agent descendants at bridge Stop, including setsid/double-fork.
+The broker preserves exact argv, streams, and effective task credentials;
+workers reexec `/proc/self/exe` and never receive its private nonce. Confirmation
+requires joined workers, final `ECHILD`, Go stage removal, terminal proof,
+Docker exit, and host stream drain. Ambiguous cleanup remains a permanent
+failed evaluation gate even after sandbox destruction. Ordinary benchmark
+Exec/ExecStream and unrelated benchmark services retain their prior semantics.
+No new Runner role or dependency is introduced.
 
 ## Repository boundary
 

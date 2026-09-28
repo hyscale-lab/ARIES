@@ -25,14 +25,16 @@ import (
 )
 
 const (
-	defaultClientPath    = "bin/aries-ssh"
-	defaultBridgeCleanup = 20 * time.Second
+	defaultClientPath     = "bin/aries-ssh"
+	defaultSupervisorPath = "bin/aries-exec"
+	defaultBridgeCleanup  = 20 * time.Second
 )
 
 // Options are the host-local inputs to one OpenClaw SSH bridge.
 type Options struct {
 	OutputDir      string
 	ClientPath     string
+	SupervisorPath string
 	CleanupTimeout time.Duration
 	Logger         *logrus.Logger
 	// OmitRawLog drops ssh_raw.log, the byte-level record of every channel
@@ -49,6 +51,7 @@ type Options struct {
 type Manager struct {
 	outputDir      string
 	clientPath     string
+	supervisorPath string
 	cleanupTimeout time.Duration
 	logger         *logrus.Logger
 	openAudit      func(string) (*sshbridge.AuditFile, error)
@@ -71,21 +74,25 @@ type bridgeSandbox interface {
 	RunID() string
 	TaskID() string
 	Workdir() string
-	ExecStream(context.Context, core.Command, io.Reader, io.Writer, io.Writer) (core.CommandResult, error)
+	StartAgentSession(context.Context, string) error
+	ExecAgentStream(context.Context, core.Command, io.Reader, io.Writer, io.Writer) (core.CommandResult, error)
+	StopAgentSession(context.Context) error
 }
 
 type bridgeSession struct {
-	sandbox        bridgeSandbox
-	server         *sshbridge.Server
-	artifactDir    string
-	clientSource   string
-	identitySource string
-	knownSource    string
-	toolLogPath    string
-	rawLogPath     string
-	audit          *sshbridge.AuditWriter
-	partialStart   bool
-	replyRequest   func(*ssh.Request, bool) error
+	sandbox               bridgeSandbox
+	server                *sshbridge.Server
+	artifactDir           string
+	clientSource          string
+	identitySource        string
+	knownSource           string
+	toolLogPath           string
+	rawLogPath            string
+	audit                 *sshbridge.AuditWriter
+	partialStart          bool
+	agentSessionAttempted bool
+	agentStopErr          error
+	replyRequest          func(*ssh.Request, bool) error
 
 	revocationMu  sync.Mutex
 	revocationErr error
@@ -118,6 +125,13 @@ func New(options Options) (*Manager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve OpenClaw SSH client helper: %w", err)
 	}
+	if options.SupervisorPath == "" {
+		options.SupervisorPath = defaultSupervisorPath
+	}
+	supervisorPath, err := filepath.Abs(options.SupervisorPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve OpenClaw SSH supervisor: %w", err)
+	}
 	if options.CleanupTimeout <= 0 {
 		options.CleanupTimeout = defaultBridgeCleanup
 	}
@@ -125,7 +139,7 @@ func New(options Options) (*Manager, error) {
 		options.Logger = logrus.StandardLogger()
 	}
 	return &Manager{
-		outputDir: outputDir, clientPath: clientPath,
+		outputDir: outputDir, clientPath: clientPath, supervisorPath: supervisorPath,
 		cleanupTimeout: options.CleanupTimeout, logger: options.Logger,
 		openAudit: sshbridge.OpenAuditFile, omitRawLog: options.OmitRawLog,
 	}, nil
@@ -211,6 +225,10 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 		}
 	}
 	session.audit = sshbridge.NewAuditWriter("OpenClaw", structured, raw)
+	session.agentSessionAttempted = true
+	if err := sandbox.StartAgentSession(ctx, manager.supervisorPath); err != nil {
+		return fail(fmt.Errorf("start OpenClaw agent supervision: %w", err))
+	}
 	session.server.Start(session.handleSession, manager.logger)
 	if manager.afterStart != nil {
 		if err := manager.afterStart(session); err != nil {
@@ -295,7 +313,7 @@ func (session *bridgeSession) execute(ctx context.Context, channel ssh.Channel, 
 	result := core.CommandResult{}
 	var err error
 	if !prepared.suppressed {
-		result, err = session.sandbox.ExecStream(ctx, command, stdin, stdout, stderr)
+		result, err = session.sandbox.ExecAgentStream(ctx, command, stdin, stdout, stderr)
 	} else {
 		_, err = io.Copy(io.Discard, stdin)
 	}
@@ -421,12 +439,16 @@ func (manager *Manager) Stop(ctx context.Context) error {
 }
 
 func (session *bridgeSession) finalize(ctx context.Context) error {
+	if session.agentSessionAttempted {
+		// A later cleanup retry cannot erase a missing descendant proof.
+		session.agentStopErr = errors.Join(session.agentStopErr, session.sandbox.StopAgentSession(ctx))
+	}
 	auditErr := session.audit.SealAndWait(ctx)
 	if session.audit != nil && !session.audit.Finished() {
-		return auditErr
+		return errors.Join(session.agentStopErr, auditErr)
 	}
 	cleanupErr := errors.Join(
-		session.revocationError(), auditErr,
+		session.agentStopErr, session.revocationError(), auditErr,
 		sshbridge.RemoveIfPresent(session.clientSource),
 		sshbridge.RemoveIfPresent(session.identitySource),
 		sshbridge.RemoveIfPresent(session.knownSource),

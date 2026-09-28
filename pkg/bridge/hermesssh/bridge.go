@@ -23,7 +23,8 @@ import (
 )
 
 const (
-	defaultBridgeCleanup = 20 * time.Second
+	defaultBridgeCleanup  = 20 * time.Second
+	defaultSupervisorPath = "bin/aries-exec"
 
 	identityContainerPath = "/run/aries/ssh/id_ed25519"
 	lockedUsername        = "aries"
@@ -32,6 +33,7 @@ const (
 // Options are the host-local inputs to one Hermes SSH bridge.
 type Options struct {
 	OutputDir      string
+	SupervisorPath string
 	CleanupTimeout time.Duration
 	Logger         *logrus.Logger
 	// OmitRawLog drops ssh_raw.log, the byte-level record of every channel
@@ -47,6 +49,7 @@ type Options struct {
 // the exact Docker sandbox passed to Start.
 type Manager struct {
 	outputDir      string
+	supervisorPath string
 	cleanupTimeout time.Duration
 	logger         *logrus.Logger
 	openAudit      func(string) (*sshbridge.AuditFile, error)
@@ -69,20 +72,24 @@ type bridgeSandbox interface {
 	RunID() string
 	TaskID() string
 	Workdir() string
-	ExecStream(context.Context, core.Command, io.Reader, io.Writer, io.Writer) (core.CommandResult, error)
+	StartAgentSession(context.Context, string) error
+	ExecAgentStream(context.Context, core.Command, io.Reader, io.Writer, io.Writer) (core.CommandResult, error)
+	StopAgentSession(context.Context) error
 }
 
 type bridgeSession struct {
-	sandbox        bridgeSandbox
-	server         *sshbridge.Server
-	artifactDir    string
-	identitySource string
-	knownSource    string
-	toolLogPath    string
-	rawLogPath     string
-	audit          *sshbridge.AuditWriter
-	partialStart   bool
-	replyRequest   func(*ssh.Request, bool) error
+	sandbox               bridgeSandbox
+	server                *sshbridge.Server
+	artifactDir           string
+	identitySource        string
+	knownSource           string
+	toolLogPath           string
+	rawLogPath            string
+	audit                 *sshbridge.AuditWriter
+	partialStart          bool
+	agentSessionAttempted bool
+	agentStopErr          error
+	replyRequest          func(*ssh.Request, bool) error
 
 	revocationMu  sync.Mutex
 	revocationErr error
@@ -108,6 +115,13 @@ func New(options Options) (*Manager, error) {
 	if err := sshbridge.EnsurePrivateDirectory(outputDir); err != nil {
 		return nil, fmt.Errorf("prepare Hermes SSH output directory: %w", err)
 	}
+	if options.SupervisorPath == "" {
+		options.SupervisorPath = defaultSupervisorPath
+	}
+	supervisorPath, err := filepath.Abs(options.SupervisorPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve Hermes SSH supervisor: %w", err)
+	}
 	if options.CleanupTimeout <= 0 {
 		options.CleanupTimeout = defaultBridgeCleanup
 	}
@@ -115,7 +129,7 @@ func New(options Options) (*Manager, error) {
 		options.Logger = logrus.StandardLogger()
 	}
 	return &Manager{
-		outputDir: outputDir, cleanupTimeout: options.CleanupTimeout,
+		outputDir: outputDir, supervisorPath: supervisorPath, cleanupTimeout: options.CleanupTimeout,
 		logger: options.Logger, openAudit: sshbridge.OpenAuditFile, omitRawLog: options.OmitRawLog,
 	}, nil
 }
@@ -199,6 +213,10 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 		}
 	}
 	session.audit = sshbridge.NewAuditWriter("Hermes", structured, raw)
+	session.agentSessionAttempted = true
+	if err := sandbox.StartAgentSession(ctx, manager.supervisorPath); err != nil {
+		return fail(fmt.Errorf("start Hermes agent supervision: %w", err))
+	}
 	session.server.Start(session.handleSession, manager.logger)
 	if manager.afterStart != nil {
 		if err := manager.afterStart(session); err != nil {
@@ -289,7 +307,7 @@ func (session *bridgeSession) execute(ctx context.Context, channel ssh.Channel, 
 	stdin := sshbridge.NewRecordedInput("Hermes", channel)
 	stdout := &sshbridge.ByteCounter{Writer: channel}
 	stderr := &sshbridge.ByteCounter{Writer: channel.Stderr()}
-	result, err := session.sandbox.ExecStream(ctx, prepared.command, stdin, stdout, stderr)
+	result, err := session.sandbox.ExecAgentStream(ctx, prepared.command, stdin, stdout, stderr)
 	if contextErr := ctx.Err(); contextErr != nil && !hasCancellationCause(err) {
 		// A sandbox error returned after revocation is ambiguous unless it carries
 		// the cancellation cause. Preserve both so Stop fails closed rather than
@@ -413,15 +431,19 @@ func (manager *Manager) Stop(ctx context.Context) error {
 }
 
 func (session *bridgeSession) finalize(ctx context.Context) error {
+	if session.agentSessionAttempted {
+		// A later cleanup retry cannot erase a missing descendant proof.
+		session.agentStopErr = errors.Join(session.agentStopErr, session.sandbox.StopAgentSession(ctx))
+	}
 	auditErr := session.audit.SealAndWait(ctx)
 	if session.audit != nil && !session.audit.Finished() {
-		return auditErr
+		return errors.Join(session.agentStopErr, auditErr)
 	}
 	// Only the private identity is removed; that is revocation. knownSource
 	// holds nothing but the ephemeral host public key and is retained as the
 	// evidence of what Hermes pinned on first use.
 	cleanupErr := errors.Join(
-		session.revocationError(), auditErr,
+		session.agentStopErr, session.revocationError(), auditErr,
 		sshbridge.RemoveIfPresent(session.identitySource),
 	)
 	if session.partialStart && cleanupErr == nil {

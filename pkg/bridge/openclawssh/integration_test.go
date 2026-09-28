@@ -394,11 +394,28 @@ func newIntegrationBridge(t *testing.T, outputDir string, logger *logrus.Logger)
 	if err := os.WriteFile(clientHelper, []byte("integration fixture"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	bridge, err := New(Options{OutputDir: outputDir, ClientPath: clientHelper, Logger: logger})
+	bridge, err := New(Options{OutputDir: outputDir, ClientPath: clientHelper, SupervisorPath: integrationSupervisorPath(t), Logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return bridge
+}
+
+func integrationSupervisorPath(t *testing.T) string {
+	t.Helper()
+	path := os.Getenv("ARIES_EXEC_SUPERVISOR")
+	if path == "" {
+		path = filepath.Join("..", "..", "..", "bin", "aries-exec")
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(absolute)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("build the static aries-exec helper before integration: %s (%v)", absolute, err)
+	}
+	return absolute
 }
 
 func dialIntegrationBridge(t *testing.T, endpoint core.ToolEndpoint) *ssh.Client {

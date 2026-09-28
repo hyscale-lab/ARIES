@@ -114,6 +114,7 @@ type Sandbox struct {
 	stopping       bool
 	stopDone       chan struct{}
 	stopErr        error
+	agent          *agentSession
 }
 
 // Close releases the manager's Docker SDK transport. Resource cleanup remains Stop's responsibility.
@@ -388,7 +389,7 @@ func (s *Sandbox) Exec(ctx context.Context, command core.Command) (core.CommandR
 	return result, err
 }
 
-// ExecStream is the bridge-facing streaming form of Exec. It starts reading
+// ExecStream is the benchmark-facing streaming form of Exec. It starts reading
 // output while stdin is still arriving, so interactive SSH commands cannot
 // deadlock on full pipes.
 func (s *Sandbox) ExecStream(ctx context.Context, command core.Command, stdin io.Reader, stdout, stderr io.Writer) (core.CommandResult, error) {
@@ -964,13 +965,22 @@ func (s *Sandbox) stop(ctx context.Context) error {
 	s.stopping = true
 	s.stopDone = make(chan struct{})
 	done := s.stopDone
+	agent := s.agent
 	s.mu.Unlock()
 
+	if agent != nil {
+		agent.abortForSandbox()
+	}
 	err := s.stopOnce(ctx, true)
+	var agentErr error
+	if agent != nil {
+		agentErr = agent.waitHost(ctx)
+	}
+	err = errors.Join(err, agentErr)
 	s.mu.Lock()
 	s.stopErr = err
 	s.stopping = false
-	s.stopped = !s.containerOwned && !s.networkOwned
+	s.stopped = !s.containerOwned && !s.networkOwned && agentErr == nil
 	close(done)
 	s.mu.Unlock()
 	return err

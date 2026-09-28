@@ -1,5 +1,63 @@
 # ARIES Tasks
 
+## Agent descendant supervision — completed repair
+
+1. [x] Reproduce successful Stop with surviving setsid/double-fork descendants
+   in real Hermes containers for both completed and canceled calls; confirm
+   unrelated benchmark services survive and diagnostic resources are removed.
+2. [x] Preserve Codex's native executor contract while moving Linux supervisor
+   primitives to `internal/execsupervisor` and one `aries-exec` helper.
+3. [x] Add one protected Docker-owned agent broker for OpenClaw/Hermes before
+   SSH access. Each command has a child subreaper retaining background work;
+   normal calls may finish while their descendants remain owned until Stop.
+4. [x] Use exact argv and bounded multiplexed streams, preserve identity and
+   concurrency, and keep ordinary benchmark Exec/ExecStream semantics intact.
+5. [x] Make bridge Stop require trusted final descendant reaping, stage absence,
+   private proof, Docker exit, SSH drain, audit persistence, and credential
+   removal. No proof or cleanup failure may permit verifier exposure.
+6. [x] Add regression-first subprocess and real-container coverage for normal
+   completion/cancellation, escape, retained services, unrelated services,
+   hostile task changes, identity, and independent blocked streams.
+7. [x] Review ownership and fail-closed cleanup, update docs, run all release
+   checks on dual-h100, confirm no leaked resources/keys, and commit cleanly.
+
+Branch: `fix/agent-descendant-supervision`, based on shared transport commit
+`9f4195f`. The user requested the issue text only; no external issue is created.
+The reviewed coordination contract and issue text are private ignored artifacts
+in `.cache/ssh-share-review/`. No new Runner role or dependency was introduced.
+
+Completion evidence:
+
+- Shared Linux primitives now serve Codex's native executor and the persistent
+  OpenClaw/Hermes broker through one `aries-exec` binary. Ordinary benchmark
+  execution remains unchanged; no task-owned program runs after cleanup proof.
+- Regression-first review reproduced three host RPC failures: worker cleanup
+  failure not closing admission, a canceled unqueued call poisoning its peers,
+  and normal EOF leaking a blocked writer. All three fail on the saved earlier
+  implementation and pass after repair. Session regressions additionally prove
+  that delayed Docker inspection cannot falsely complete host cleanup and that
+  container destruction cannot clear the failed evaluation gate.
+- Real OpenClaw/Hermes SSH + Docker tests pass for completed and canceled calls:
+  setsid/double-fork descendants are reaped, background work survives later
+  calls until Stop, and unrelated benchmark daemons survive. Root tasks cannot
+  replace the worker executable or invoke a substituted rm during cleanup;
+  UID/GID 65532:65532 and exact arguments remain intact. Killing the broker
+  leaves a permanent failed gate, including on repeated Stop.
+- Independent review found a continuously writing background process could
+  extend the output drain window. The new regression fails before repair and
+  passes with one fixed deadline and finite nonblocking buffered-tail drain;
+  delayed-ACK output remains complete. Final independent review found no
+  remaining blocking issue.
+- On dual-h100 with Go 1.26.5, final `make build`, `make test`,
+  `make test-race`, `make lint`, and `make integration` all pass, including real
+  Codex, Hermes, and OpenClaw harness paths. Focused race and Docker tests pass.
+  Moby inspection finds no ARIES containers/networks; helper/test-process and
+  staged-key scans are empty. Formatting, diff, and new-credential scans pass.
+- Release and regression logs remain ignored under `.cache/ssh-share-review/`.
+  Local Go 1.25.9 is below the module requirement, so executable validation ran
+  on the requested test host. No live Qwen/paid API run or RoadmapBench adapter
+  was added; the optional SWE-bench Pro gold-patch experiment was not enabled.
+
 ## Shared SSH transport and audit
 
 Completed the recorded cleanup plan: moved concrete SSH clients/server,

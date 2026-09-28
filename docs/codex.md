@@ -34,7 +34,7 @@ make build
 The checksum above identifies the archive used for validation. ARIES rejects
 scripts, dynamic executables, symlinks, and a staged CLI that reports a
 different version. `make build` also builds the static `aries-codex-ssh`
-client and `aries-codex-exec` supervisor; keep both beside `bin/aries`.
+client and shared `aries-exec` supervisor; keep both beside `bin/aries`.
 The version and base image are declared in `configs/versions.json`.
 The default Debian slim image supports local HTTP endpoints. For HTTPS, select
 a pinned harness image containing the required CA certificates; ARIES does not

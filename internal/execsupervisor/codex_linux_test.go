@@ -1,6 +1,6 @@
 //go:build linux
 
-package codexssh
+package execsupervisor
 
 import (
 	"bytes"

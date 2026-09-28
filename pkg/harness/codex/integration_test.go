@@ -53,7 +53,7 @@ func runNativeSSHScenario(t *testing.T, cancelTool bool, taskUser string) {
 	}
 	binary := integrationExecutable(t, "ARIES_CODEX_BINARY", filepath.Join(root, ".cache", "codex", "0.157.1", "codex"))
 	helper := integrationExecutable(t, "ARIES_CODEX_SSH_CLIENT", filepath.Join(root, "bin", "aries-codex-ssh"))
-	supervisor := integrationExecutable(t, "ARIES_CODEX_EXEC_SUPERVISOR", filepath.Join(root, "bin", "aries-codex-exec"))
+	supervisor := integrationExecutable(t, "ARIES_EXEC_SUPERVISOR", filepath.Join(root, "bin", "aries-exec"))
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	api, err := client.New(client.FromEnv)

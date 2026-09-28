@@ -408,7 +408,7 @@ type cancelingSandbox struct {
 	once     sync.Once
 }
 
-func (sandbox *cancelingSandbox) ExecStream(ctx context.Context, _ core.Command, _ io.Reader, _, _ io.Writer) (core.CommandResult, error) {
+func (sandbox *cancelingSandbox) ExecAgentStream(ctx context.Context, _ core.Command, _ io.Reader, _, _ io.Writer) (core.CommandResult, error) {
 	sandbox.once.Do(func() { close(sandbox.started) })
 	<-ctx.Done()
 	close(sandbox.canceled)
@@ -458,7 +458,7 @@ type failingToolSandbox struct {
 	err error
 }
 
-func (sandbox *failingToolSandbox) ExecStream(context.Context, core.Command, io.Reader, io.Writer, io.Writer) (core.CommandResult, error) {
+func (sandbox *failingToolSandbox) ExecAgentStream(context.Context, core.Command, io.Reader, io.Writer, io.Writer) (core.CommandResult, error) {
 	return core.CommandResult{ExitCode: -1}, sandbox.err
 }
 
@@ -501,7 +501,7 @@ type terminationFailSandbox struct {
 	terminationErr error
 }
 
-func (sandbox *terminationFailSandbox) ExecStream(ctx context.Context, _ core.Command, _ io.Reader, _, _ io.Writer) (core.CommandResult, error) {
+func (sandbox *terminationFailSandbox) ExecAgentStream(ctx context.Context, _ core.Command, _ io.Reader, _, _ io.Writer) (core.CommandResult, error) {
 	sandbox.once.Do(func() { close(sandbox.started) })
 	<-ctx.Done()
 	close(sandbox.canceled)
@@ -565,7 +565,7 @@ type cancellationBlindSandbox struct {
 	err error
 }
 
-func (sandbox *cancellationBlindSandbox) ExecStream(ctx context.Context, _ core.Command, _ io.Reader, _, _ io.Writer) (core.CommandResult, error) {
+func (sandbox *cancellationBlindSandbox) ExecAgentStream(ctx context.Context, _ core.Command, _ io.Reader, _, _ io.Writer) (core.CommandResult, error) {
 	sandbox.once.Do(func() { close(sandbox.started) })
 	<-ctx.Done()
 	close(sandbox.canceled)

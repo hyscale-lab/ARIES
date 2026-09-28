@@ -227,7 +227,10 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sshBridge, err := openclawssh.New(openclawssh.Options{OutputDir: outputDir, ClientPath: requiredIntegrationFile(t, "ARIES_SSH_CLIENT"), CleanupTimeout: 30 * time.Second, Logger: logger})
+	sshBridge, err := openclawssh.New(openclawssh.Options{
+		OutputDir: outputDir, ClientPath: requiredIntegrationFile(t, "ARIES_SSH_CLIENT"),
+		SupervisorPath: requiredIntegrationFile(t, "ARIES_EXEC_SUPERVISOR"), CleanupTimeout: 30 * time.Second, Logger: logger,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

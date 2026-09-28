@@ -407,21 +407,27 @@ func (source *combinedResourceSource) Close() error {
 }
 
 func newBridge(cfg config.Config, outputRoot string, logger *logrus.Logger) (runner.ToolBridge, error) {
+	executable, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("locate ARIES executable: %w", err)
+	}
+	binaryDir := filepath.Dir(executable)
+	supervisorPath := filepath.Join(binaryDir, "aries-exec")
 	switch cfg.Bridge.Type {
 	case "openclaw-ssh":
-		executable, err := os.Executable()
-		if err != nil {
-			return nil, fmt.Errorf("locate ARIES executable: %w", err)
-		}
-		bridge, err := openclawssh.New(openclawssh.Options{OutputDir: outputRoot, ClientPath: filepath.Join(filepath.Dir(executable), "aries-ssh"), Logger: logger, OmitRawLog: !cfg.Bridge.RetainBridgeRawLog()})
+		bridge, err := openclawssh.New(openclawssh.Options{
+			OutputDir: outputRoot, ClientPath: filepath.Join(binaryDir, "aries-ssh"), SupervisorPath: supervisorPath,
+			Logger: logger, OmitRawLog: !cfg.Bridge.RetainBridgeRawLog(),
+		})
 		if err != nil {
 			return nil, fmt.Errorf("construct OpenClaw SSH bridge: %w", err)
 		}
 		return bridge, nil
 	case "hermes-ssh":
-		// Hermes runs OpenSSH itself, so this bridge stages no client helper
-		// and needs no path to the ARIES executable.
-		bridge, err := hermesssh.New(hermesssh.Options{OutputDir: outputRoot, Logger: logger, OmitRawLog: !cfg.Bridge.RetainBridgeRawLog()})
+		bridge, err := hermesssh.New(hermesssh.Options{
+			OutputDir: outputRoot, SupervisorPath: supervisorPath,
+			Logger: logger, OmitRawLog: !cfg.Bridge.RetainBridgeRawLog(),
+		})
 		if err != nil {
 			return nil, fmt.Errorf("construct Hermes SSH bridge: %w", err)
 		}
@@ -430,14 +436,9 @@ func newBridge(cfg config.Config, outputRoot string, logger *logrus.Logger) (run
 		if cfg.Harness.Codex == nil {
 			return nil, errors.New("construct Codex SSH bridge: harness.codex is required")
 		}
-		executable, err := os.Executable()
-		if err != nil {
-			return nil, fmt.Errorf("locate ARIES executable: %w", err)
-		}
-		binaryDir := filepath.Dir(executable)
 		bridge, err := codexssh.New(codexssh.Options{
 			ClientPath: filepath.Join(binaryDir, "aries-codex-ssh"), CodexPath: cfg.Harness.Codex.ResolvedExecutable,
-			SupervisorPath: filepath.Join(binaryDir, "aries-codex-exec"), OutputDir: outputRoot, Logger: logger,
+			SupervisorPath: supervisorPath, OutputDir: outputRoot, Logger: logger,
 			OmitRawLog: !cfg.Bridge.RetainBridgeRawLog(),
 		})
 		if err != nil {

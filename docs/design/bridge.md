@@ -47,6 +47,26 @@ and exit handling. Each adapter retains its own command grammar, credential
 file rules, workspace mapping, and execution/revocation policy. This internal
 package adds no Runner role or registration layer.
 
+All three adapters use the static `aries-exec` helper built beside `aries`.
+Its concrete Linux protection, identity, subreaper, and cleanup primitives
+live in `internal/execsupervisor`. Codex retains its native executor session;
+OpenClaw and Hermes establish a persistent agent broker before publishing SSH
+access and send each command through the sandbox's supervised session. A
+completed tool call can leave background services for later calls. Cancellation
+retires that call's descendants, and bridge Stop retires the entire agent
+lineage, including `setsid` and double-fork descendants. Benchmark services
+started outside that lineage remain alive.
+
+The broker carries exact command arguments and independently acknowledged
+64 KiB stream chunks, with per-command input and output limits. One slow
+command stream cannot block decoding other calls. On cancellation, EOF may
+follow an outstanding chunk before its acknowledgement, but host cleanup still
+waits for that chunk's writer. Revocation closes SSH admission, drains active
+handlers, and requires the sandbox's private final cleanup proof and confirmed
+Docker exit before audit and credential cleanup can complete. Unconfirmed
+cleanup permanently blocks evaluation; destroying the sandbox does not clear
+that failed gate.
+
 ## Hermes SSH bridge
 
 The Hermes pairing is a second, separate adapter rather than a reuse of the
@@ -128,15 +148,6 @@ normal completion, failure, or cancellation, the Runner positively stops the
 harness, revokes the bridge, evaluates the still-running sandbox, and finally
 stops the sandbox. A future harness may require a different pair-specific
 adapter rather than a lowest-common-denominator remote-tool protocol.
-
-The OpenClaw and Hermes execution paths currently confirm cleanup of the
-original process group only. A real-container diagnostic shows that `setsid`
-and double-fork descendants can survive a successful Stop, including after a
-normally completed command. This is a known revocation gap, not a guarantee
-provided by the shared transport. Its separate fix must retain background
-services across tool calls, reap all agent descendants at Stop, and preserve
-unrelated benchmark services. Codex's descendant proof described above remains
-independent of this transport extraction.
 
 ## Customization & Contribution Guide
 

@@ -50,7 +50,7 @@ func (sandbox *contractSandbox) Exec(_ context.Context, command core.Command) (c
 	return sandbox.result, nil
 }
 
-func (sandbox *contractSandbox) ExecStream(ctx context.Context, command core.Command, stdin io.Reader, stdout, stderr io.Writer) (core.CommandResult, error) {
+func (sandbox *contractSandbox) ExecAgentStream(ctx context.Context, command core.Command, stdin io.Reader, stdout, stderr io.Writer) (core.CommandResult, error) {
 	content, err := io.ReadAll(stdin)
 	if err != nil {
 		return core.CommandResult{ExitCode: -1}, err
@@ -63,6 +63,9 @@ func (sandbox *contractSandbox) ExecStream(ctx context.Context, command core.Com
 	}
 	return result, err
 }
+
+func (*contractSandbox) StartAgentSession(context.Context, string) error { return nil }
+func (*contractSandbox) StopAgentSession(context.Context) error          { return nil }
 
 func (*contractSandbox) Upload(context.Context, string, string) error   { return nil }
 func (*contractSandbox) Download(context.Context, string, string) error { return nil }

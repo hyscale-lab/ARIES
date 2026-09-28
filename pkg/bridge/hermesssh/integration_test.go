@@ -97,9 +97,9 @@ func (sandbox *integrationSandbox) Exec(context.Context, core.Command) (core.Com
 	return core.CommandResult{}, errors.New("unused")
 }
 
-// ExecStream runs the translated command on the host, standing in for the
+// ExecAgentStream runs the translated command on the host, standing in for the
 // Docker sandbox. The bridge's own behaviour is what is under test.
-func (sandbox *integrationSandbox) ExecStream(ctx context.Context, command core.Command, stdin io.Reader, stdout, stderr io.Writer) (core.CommandResult, error) {
+func (sandbox *integrationSandbox) ExecAgentStream(ctx context.Context, command core.Command, stdin io.Reader, stdout, stderr io.Writer) (core.CommandResult, error) {
 	sandbox.mu.Lock()
 	recorded := command
 	recorded.Args = append([]string(nil), command.Args...)
@@ -121,6 +121,11 @@ func (sandbox *integrationSandbox) ExecStream(ctx context.Context, command core.
 	}
 	return core.CommandResult{ExitCode: 0}, nil
 }
+
+// This fixture checks upstream SSH grammar only. Real descendant ownership is
+// covered by the Docker-backed bridge integration regressions.
+func (*integrationSandbox) StartAgentSession(context.Context, string) error { return nil }
+func (*integrationSandbox) StopAgentSession(context.Context) error          { return nil }
 
 func (*integrationSandbox) Upload(context.Context, string, string) error   { return nil }
 func (*integrationSandbox) Download(context.Context, string, string) error { return nil }
@@ -329,7 +334,14 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 		}
 	})
 
-	manager := newTestManager(t, outputDir)
+	supervisor := os.Getenv("ARIES_EXEC_SUPERVISOR")
+	if supervisor == "" {
+		supervisor = filepath.Join(repositoryRoot(t), "bin", "aries-exec")
+	}
+	manager, err := New(Options{OutputDir: outputDir, SupervisorPath: supervisor, Logger: logger})
+	if err != nil {
+		t.Fatal(err)
+	}
 	endpoint, err := manager.Start(ctx, sandbox)
 	if err != nil {
 		t.Fatal(err)

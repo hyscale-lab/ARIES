@@ -368,7 +368,7 @@ For the five-task subset:
 ```
 
 For SGLang, use the external or managed command from the previous section.
-Keep `bin/aries-ssh` beside `bin/aries`. A live DeepSeek run can incur API
+Keep `bin/aries-ssh` and `bin/aries-exec` beside `bin/aries`. A live DeepSeek run can incur API
 charges; the five-task profile also takes substantially longer and pulls more
 images. ARIES first ensures the benchmark and images are prepared, then starts
 and checks an owned managed runtime when configured, performs a bounded model
@@ -585,8 +585,8 @@ bridge artifacts may contain task or model content; review them before sharing.
 
 - **Docker permission or socket error:** run `docker info`; ARIES uses the local
   daemon at `/var/run/docker.sock`.
-- **Missing `aries-ssh` error:** rebuild with `make build` and keep the helper
-  beside the main binary.
+- **Missing SSH client or agent supervisor:** rebuild with `make build` and
+  keep `aries-ssh` and `aries-exec` beside the main binary.
 - **Credential error:** check ownership, owner read access, absence of group or
   world permissions, and one-line formatting of `DEEPSEEK_API.key`.
 - **Model error:** inspect `live-validation.json` for authentication, rate
