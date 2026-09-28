@@ -112,12 +112,10 @@ task's `task.toml`; no version-catalog or Go code change is required.
 ### Replay task arrivals
 
 An arrival trace schedules task occurrences at offsets from the start of task
-scheduling, after benchmark/image preparation and model preflight. It applies
-to every supported benchmark and harness: Terminal-Bench 2, Deep Research
-Bench, SWE-Atlas QA, and SWE-bench Pro; OpenClaw and Hermes in all supported
-harness modes. Scheduling happens outside the harness. Keep each benchmark's
-required configuration and the matching harness/bridge pair from its existing
-profile.
+scheduling, after benchmark/image preparation and model preflight. Scheduling
+happens outside the harness, so it works with any benchmark, harness, and mode
+listed in [supported implementations](supported.md). Keep the rest of an
+existing profile unchanged.
 
 For example, save this trace as `.cache/arrivals.json` (create `.cache` first):
 
@@ -140,8 +138,8 @@ offsets must be zero or positive and fit Go's `time.Duration` after scaling. The
 trace must contain at least one arrival. Extra metadata fields are accepted in
 the trace; the experiment profile still rejects unknown fields.
 
-Copy the one-task profile and replace its `execution` block and
-`benchmark.tasks` with the following values (these are profile fragments):
+Copy the one-task profile, replace its `execution` block, and set
+`benchmark.tasks` as follows (these are profile fragments):
 
 ```sh
 cp profiles/openclaw-tb2-fix-git-deepseek.json .cache/arrival-demo.json
@@ -155,8 +153,6 @@ cp profiles/openclaw-tb2-fix-git-deepseek.json .cache/arrival-demo.json
     "arrival_rate_per_min": 2.0
   },
   "benchmark": {
-    "type": "terminalbench2",
-    "root": ".cache/terminal-bench-2",
     "tasks": ["fix-git", "fix-git", "fix-git"]
   }
 }
