@@ -67,7 +67,8 @@ func TestPrepareSandboxRemovesThenProvesReportPathAbsent(t *testing.T) {
 		t.Fatalf("SearXNG start command = %#v", start)
 	}
 	health := sandbox.commands[3]
-	if health.Path != "/bin/sh" || len(health.Args) != 2 || health.Args[0] != "-c" || !strings.Contains(health.Args[1], searxngHealthCheckURL) {
+	wantHealthArgs := []string{"-sf", "-o", "/dev/null", "http://127.0.0.1:8888/search?format=json&q=aries-healthcheck"}
+	if health.Path != "/usr/bin/curl" || !reflect.DeepEqual(health.Args, wantHealthArgs) {
 		t.Fatalf("SearXNG health check command = %#v", health)
 	}
 	if sandbox.uploads != 0 {

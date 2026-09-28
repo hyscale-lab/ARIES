@@ -31,7 +31,7 @@ const (
 
 // Codex 0.157.1 speaks Responses to custom providers. Chat Completions-only
 // providers and unsupported generation knobs must fail before any side effect.
-func renderConfig(model core.ModelConfig) ([]byte, error) {
+func renderConfig(model core.ModelConfig, reasoningEffort, developerInstructions string, subagentsEnabled bool, maxConcurrentSubagents int) ([]byte, error) {
 	if model.Provider != "openai" && model.Provider != "sglang" {
 		return nil, errors.New("Codex requires an openai or sglang backend with the Responses API")
 	}
@@ -57,12 +57,40 @@ func renderConfig(model core.ModelConfig) ([]byte, error) {
 	if model.ContextLength > 0 {
 		fmt.Fprintf(&output, "model_context_window = %d\n", model.ContextLength)
 	}
+	if reasoningEffort != "" {
+		fmt.Fprintf(&output, "model_reasoning_effort = %s\n", tomlString(reasoningEffort))
+	}
+	if developerInstructions != "" {
+		fmt.Fprintf(&output, "developer_instructions = %s\n", tomlString(developerInstructions))
+	}
+	// Children inherit the parent's effective model and reasoning effort.
+	// Explicit child overrides instead require that model to exist in Codex's
+	// catalog, which excludes otherwise valid custom-provider model names.
+	fmt.Fprintf(&output, "\n[agents]\nenabled = %t\n", subagentsEnabled)
+	if subagentsEnabled && maxConcurrentSubagents > 0 {
+		fmt.Fprintf(&output, "max_concurrent_threads_per_session = %d\n", maxConcurrentSubagents)
+	}
 	// Native exec-server applies this policy to its own remote environment;
 	// Codex removes unchanged local environment values before sending the
 	// request. Preserve the remote HOME/PATH/locale and exclude the model key.
 	fmt.Fprintf(&output, "\n[shell_environment_policy]\ninherit = \"core\"\nexclude = [%s]\n", tomlString(model.APIKeyEnv))
 	fmt.Fprintf(&output, "\n[model_providers.aries]\nname = \"ARIES\"\nbase_url = %s\nwire_api = \"responses\"\nenv_key = %s\nrequires_openai_auth = false\n", tomlString(parsed.String()), tomlString(model.APIKeyEnv))
 	return output.Bytes(), nil
+}
+
+func validateNativeSettings(reasoningEffort, developerInstructions string, maxConcurrentSubagents int) error {
+	switch reasoningEffort {
+	case "", "none", "minimal", "low", "medium", "high", "xhigh":
+	default:
+		return errors.New("Codex reasoning effort must be none, minimal, low, medium, high, or xhigh")
+	}
+	if strings.ContainsRune(developerInstructions, '\x00') {
+		return errors.New("Codex developer instructions must not contain NUL")
+	}
+	if maxConcurrentSubagents < 0 {
+		return errors.New("Codex subagent concurrency must not be negative")
+	}
+	return nil
 }
 
 func renderEnvironments(endpoint core.ToolEndpoint) ([]byte, error) {

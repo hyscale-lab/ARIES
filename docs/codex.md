@@ -57,8 +57,27 @@ Use `runtime.backend: "openai"` for an external server, or `"sglang"` for
 the existing SGLang runtime path. Both require streaming `/v1/responses` with
 tool calls. Model discovery checks `/v1/models`; it does not test Responses
 compatibility. This integration has no Chat Completions translation and
-rejects the native DeepSeek backend, `max_tokens`, `temperature`, voice, web,
-compaction, and subagent configuration overrides.
+rejects the native DeepSeek backend, `max_tokens`, `temperature`, voice,
+dedicated web-search tools, and compaction overrides.
+
+`harness.codex.reasoning_effort` sets the native Responses reasoning effort
+(`none`, `minimal`, `low`, `medium`, `high`, or `xhigh`); the model server must
+support the selected value. `harness.codex.developer_instructions` adds
+experiment instructions without changing the benchmark question.
+`harness.subagents.enabled` defaults to true, and `max_concurrent` limits
+concurrent child threads, excluding the parent. Native children share the
+parent's SSH environment and inherit its model and reasoning settings when
+the spawn call omits overrides. For models absent from Codex's built-in
+catalog, explicitly selecting a child model or effort can fail validation;
+omit `model`, `reasoning_effort`, and `agent_type` in those spawn calls.
+
+`profiles/codex-drb-qwen38-27b-xhigh-all100.json` collects all 100
+DeepResearchBench reports with `xhigh`, up to three native subagents, and
+RACE/FACT disabled. Set its endpoint to the actual model service, keep its
+context length aligned with the server, and use its one-hour task budget
+from `configs/runtime-overrides.json`. Research uses the task container's
+SearXNG endpoint and shell HTTP clients; no paid search or scoring key is
+needed. Validate one task before starting the full collection.
 
 ```sh
 ./bin/aries setup profiles/codex-tb2-fix-git-openai.json

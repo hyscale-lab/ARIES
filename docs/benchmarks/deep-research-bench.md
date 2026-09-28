@@ -113,9 +113,9 @@ does not fail the task.
 ### Web search and fetch 
 
 Deep Research Bench tasks need the agent to search and read live web pages
-from inside the sandbox. Both harnesses support this through
-`harness.web_search.enabled: true`, using the DRB task sandbox's built-in
-SearXNG instance as the search backend:
+from inside the sandbox. ARIES starts the task image's SearXNG service before
+the harness runs. OpenClaw and Hermes expose dedicated web tools through
+`harness.web_search.enabled: true`, using that service as the search backend:
 
 - **OpenClaw** needs no further configuration for basic `web_search`/
   `web_fetch`. It also accepts `harness.web_search.extract_api_key_env`,
@@ -125,15 +125,28 @@ SearXNG instance as the search backend:
 - **Hermes** likewise accepts `harness.web_search.extract_api_key_env`,
   naming the host environment variable holding a Tavily API key. Without it,
   Hermes's `web_search` tool still works, but `web_extract` (reading a page's
-  content) has no backend and fails.
+  content) has no backend; the agent can use the shell fallback below.
+- **Codex** uses its SSH-backed shell to query SearXNG and read public source
+  pages in the task container. Its native web search remains disabled, so a
+  custom Responses model server does not need to implement that tool. Shell
+  retrieval needs no Tavily key.
 
-For either harness, export the key before the run, e.g.
+When enabling Tavily for OpenClaw or Hermes, export the key before the run, e.g.
 `export TAVILY_API_KEY=...`, matching the name given in the profile.
 
-The task prompt itself nudges the agent to call `web_fetch`/`web_extract`
-rather than reimplement page retrieval with `curl`/`wget`/a custom parser over
-the terminal tool, since models don't reliably prefer the dedicated tool on
-their own even when it's in their function-calling schema.
+The task prompt prefers available search and fetch/extract tools. If those
+tools are unavailable or fail, it allows shell access to the task-local
+SearXNG JSON endpoint and curl or Python to retrieve public pages:
+
+```sh
+curl -fsS -G 'http://127.0.0.1:8888/search' \
+  --data-urlencode 'format=json' --data-urlencode 'q=your query'
+```
+
+The agent must follow the returned source URLs and read their content before
+citing them. Reports still require inline Markdown citations, must be written
+to `/tmp/aries-report.md`, and end with the standalone reply `DONE`, including
+when `judge.enabled` is false.
 
 #### Steps to obtain a tavily API key
 1. **Go to the Tavily Platform:** Visit [tavily.com](https://www.tavily.com) or go directly to the [Tavily Dashboard](https://app.tavily.com).
@@ -145,15 +158,18 @@ their own even when it's in their function-calling schema.
 
 ### Disabling or limiting subagents (Optional)
 
-`harness.subagents.enabled: false` turns off nested agent sessions for either
-harness: OpenClaw's `sessions_spawn`/`sessions_yield` tools, or Hermes's
-`delegate_task` tool. The checked-in DRB profiles set this explicitly, since
-subagent spawning is not useful for this benchmark's single-report task shape
-and adds uncontrolled cost.
+`harness.subagents.enabled: false` turns off nested agent sessions:
+OpenClaw's `sessions_spawn`/`sessions_yield` tools, Hermes's `delegate_task`
+tool, or Codex's native subagent tools. The checked-in OpenClaw and Hermes DRB
+smoke profiles disable these tools to limit model requests.
 
 To bound fan-out instead of disabling it outright, set
 `harness.subagents.max_concurrent` to a positive integer. It maps to each
-harness's own concurrency knob — OpenClaw's
-`agents.defaults.subagents.maxConcurrent` (default 5 per parent) or Hermes's
-`delegation.max_concurrent_children` (default 3) — and is ignored when
-`enabled` is `false`.
+harness's own concurrency limit. Omitting it preserves the native default;
+the Codex Qwen DRB profile explicitly selects three children. The limit is
+ignored when `enabled` is `false`.
+
+DRB does not prohibit subagents. A harness with delegation support can assign
+independent research questions to them; the parent remains responsible for
+checking the evidence and writing the single complete report. Delegation and
+its concurrency limits are harness settings, not benchmark requirements.

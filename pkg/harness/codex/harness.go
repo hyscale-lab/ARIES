@@ -35,6 +35,12 @@ type Options struct {
 	CodexVersion string
 	OutputDir    string
 	DockerSocket string
+	// ReasoningEffort is omitted when empty so the model keeps its default.
+	ReasoningEffort       string
+	DeveloperInstructions string
+	SubagentsEnabled      bool
+	// Zero retains Codex's own concurrency limit. Ignored when disabled.
+	MaxConcurrentSubagents int
 	// APIKeyLookup transfers ownership of its returned buffer to the harness,
 	// which clones the key and clears that buffer before returning from Start.
 	APIKeyLookup   func(string) ([]byte, bool)
@@ -62,6 +68,9 @@ type Manager struct {
 	cleanupTimeout, startTimeout, agentTimeout time.Duration
 	apiKeyLookup                               func(string) ([]byte, bool)
 	logger                                     *logrus.Logger
+	reasoningEffort, developerInstructions     string
+	subagentsEnabled                           bool
+	maxConcurrentSubagents                     int
 	mu                                         sync.Mutex
 	active                                     *session
 	stopping                                   bool
@@ -90,6 +99,9 @@ func New(options Options) (*Manager, error) {
 	}
 	if options.CodexVersion != supportedVersion {
 		return nil, fmt.Errorf("Codex native SSH integration requires version %s", supportedVersion)
+	}
+	if err := validateNativeSettings(options.ReasoningEffort, options.DeveloperInstructions, options.MaxConcurrentSubagents); err != nil {
+		return nil, err
 	}
 	if strings.TrimSpace(options.CodexPath) == "" || strings.TrimSpace(options.OutputDir) == "" {
 		return nil, errors.New("Codex executable and output directory are required")
@@ -131,7 +143,13 @@ func New(options Options) (*Manager, error) {
 	if options.AgentTimeout <= 0 {
 		options.AgentTimeout = 20 * time.Minute
 	}
-	return &Manager{client: api, image: options.Image, codexSource: source, outputDir: output, cleanupTimeout: options.CleanupTimeout, startTimeout: options.StartTimeout, agentTimeout: options.AgentTimeout, apiKeyLookup: options.APIKeyLookup, logger: options.Logger}, nil
+	return &Manager{
+		client: api, image: options.Image, codexSource: source, outputDir: output,
+		cleanupTimeout: options.CleanupTimeout, startTimeout: options.StartTimeout, agentTimeout: options.AgentTimeout,
+		apiKeyLookup: options.APIKeyLookup, logger: options.Logger,
+		reasoningEffort: options.ReasoningEffort, developerInstructions: options.DeveloperInstructions,
+		subagentsEnabled: options.SubagentsEnabled, maxConcurrentSubagents: options.MaxConcurrentSubagents,
+	}, nil
 }
 
 func (manager *Manager) Close() error {
@@ -162,7 +180,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	if err != nil {
 		return err
 	}
-	configuration, err := renderConfig(request.Model)
+	configuration, err := renderConfig(request.Model, manager.reasoningEffort, manager.developerInstructions, manager.subagentsEnabled, manager.maxConcurrentSubagents)
 	if err != nil {
 		return err
 	}
@@ -200,7 +218,9 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	}
 	containerConfig := &container.Config{Image: manager.image, Env: []string{"HOME=" + codexHome, "CODEX_HOME=" + codexHome, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}, Entrypoint: []string{"/bin/sh"}, Cmd: []string{"-c", "exec sleep infinity"}, Labels: map[string]string{"aries.managed": "true", "aries.kind": "codex-harness", "aries.component": "harness", "aries.run": active.runID, "aries.task": active.taskID, "aries.attempt": id}}
 	metadata, _ := json.Marshal(containerConfig)
-	if bytes.Contains(metadata, key) || bytes.Contains(configuration, key) || bytes.Contains(environments, key) {
+	// Check instructions before TOML escaping as well: quoting a credential
+	// containing a backslash or quote must not bypass the artifact boundary.
+	if bytes.Contains(metadata, key) || bytes.Contains(configuration, key) || bytes.Contains(environments, key) || strings.Contains(manager.developerInstructions, string(key)) {
 		return fail(errors.New("Codex credential overlaps configuration or Docker metadata"))
 	}
 	for _, artifact := range []struct {

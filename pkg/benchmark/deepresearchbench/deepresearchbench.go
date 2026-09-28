@@ -43,10 +43,7 @@ const expectedTaskCount = 100
 const reportPath = "/tmp/aries-report.md"
 
 // reportInstruction is appended to every task's instruction so the agent
-// knows the evaluation contract, on top of taskPromptTemplate. Unlike the
-// shell CLI tools this used to point at, native web_search/web_fetch (see
-// pkg/harness/openclaw/config.go) are advertised to the model structurally
-// as callable tools, so no prompt-level discovery hint is needed here.
+// knows the evaluation contract, on top of taskPromptTemplate.
 //
 // The "you must do this by actually invoking a tool" clause exists because
 // weaker models have been observed to end their final turn narrating intent
@@ -65,14 +62,8 @@ const reportInstruction = "\n\nWrite your final, complete research report to " +
 // exact same contract. "{question}" is replaced with the task's actual
 // research prompt by applyPromptTemplate.
 //
-// The web fetch/extract nudge (step 3, and again under Rules) exists because
-// models are structurally aware of the tool (it's in their function-calling
-// schema) but don't reliably prefer it: observed smoke-test transcripts show
-// the agent writing its own curl-plus-HTML-parser pipeline over the terminal
-// tool instead of calling web_fetch/web_extract, which is slower and
-// duplicates work the tool already does — for Hermes, extraction is backed
-// by Tavily when harness.web_search.extract_api_key_env is configured (see
-// pkg/harness/hermes/config.go); for OpenClaw, web_fetch needs no backend.
+// Prefer dedicated web tools when available, while allowing harnesses with
+// shell tools to use the sandbox's SearXNG service and read public pages.
 const taskPromptTemplate = "" +
 	"You are an autonomous research analyst tackling a DeepResearch-Bench task in\n" +
 	"a Linux container. Carry it out by searching the web, reading sources, and\n" +
@@ -88,11 +79,15 @@ const taskPromptTemplate = "" +
 	"   and any specific deliverables the prompter asks for.\n" +
 	"2. Plan the work: decompose the question into sub-questions and decide what\n" +
 	"   evidence each sub-question needs.\n" +
-	"3. Search the web with the search tool to find authoritative sources, then\n" +
-	"   read them with your web fetch/extract tool (e.g. `web_fetch`/`web_extract`)\n" +
-	"   — it returns the page's readable text directly. Do not write a custom\n" +
-	"   script (curl, wget, a Python HTML parser, etc.) to download and parse\n" +
-	"   pages yourself; that duplicates what the tool already does.\n" +
+	"3. Search for authoritative sources and read their content. Prefer search\n" +
+	"   and web fetch/extract tools when available (e.g. `web_fetch`/`web_extract`).\n" +
+	"   If a search tool is unavailable or fails, use the shell to query the\n" +
+	"   sandbox's SearXNG service at `http://127.0.0.1:8888/search` with\n" +
+	"   `format=json` and a URL-encoded `q` parameter, for example:\n" +
+	"   `curl -fsS -G 'http://127.0.0.1:8888/search' --data-urlencode 'format=json' --data-urlencode 'q=your query'`.\n" +
+	"   If a fetch/extract tool is unavailable or fails, use curl or Python to\n" +
+	"   retrieve and read the public source pages. Follow source URLs from the\n" +
+	"   search results; the search response alone does not replace reading them.\n" +
 	"4. Synthesize the evidence into a coherent long-form markdown report at\n" +
 	"   `" + reportPath + "`, with **inline citations** to the source URLs.\n" +
 	"5. When the report is complete, reply with a single line: `DONE`.\n" +
@@ -164,7 +159,7 @@ const taskPromptTemplate = "" +
 	"\n" +
 	"## Rules\n" +
 	"\n" +
-	"- Edit files directly with the file-editing tool. Do not paste the report\n" +
+	"- Write the report with file-editing or shell tools. Do not paste the report\n" +
 	"  into chat.\n" +
 	"- Do not write markdown fences, explanations, or summaries in your final\n" +
 	"  reply.\n" +
@@ -172,9 +167,6 @@ const taskPromptTemplate = "" +
 	"- Treat your search/fetch tool outputs as evidence; do not invent sources.\n" +
 	"  If a search returns nothing useful, broaden the query or try a different\n" +
 	"  angle — but never fabricate a citation.\n" +
-	"- Prefer your web fetch/extract tool over shell commands (curl, wget) or\n" +
-	"  ad-hoc scripts for retrieving page content — it is faster and already\n" +
-	"  extracts readable text, so there is nothing to gain by reimplementing it.\n" +
 	"- The agent loop is on a wall-clock budget. Plan early; cut depth on\n" +
 	"  sub-questions where you've already found enough evidence rather than\n" +
 	"  searching infinitely.\n" +

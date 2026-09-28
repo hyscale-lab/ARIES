@@ -1,5 +1,42 @@
 # ARIES Tasks
 
+## Codex + Qwen3.8 DeepResearchBench report collection
+
+Active plan: collect all 100 DRB reports on dual-h100 with the exact BF16
+Qwen/Qwen3.8-27B checkpoint, explicit xhigh reasoning, and native Codex
+subagents. RACE and FACT are disabled per user choice.
+
+1. Add focused regressions for Codex reasoning/developer instructions and
+   inherited native subagents, plus DRB shell search fallback without exposing
+   references or rubrics. Reuse the existing SSH environment and audit code.
+2. Wire narrow Codex settings through the existing harness options and profile
+   schema. Keep all four Runner roles, cleanup gates, and credential isolation.
+3. Validate the pinned Codex CLI with deterministic subagent Responses traffic;
+   deploy the exact model only on idle GPU 0, preserving the GPU 1 workload.
+4. Run one real DRB task proving retrieval, xhigh requests, actual subagent use,
+   report capture, and no scoring; then run the requested 100-task collection.
+5. Run release validation, review run/resource evidence, document limitations,
+   and commit the small implementation on its separate branch.
+
+Implementation and pre-run validation:
+
+- Added native reasoning effort, developer instructions, and subagent controls
+  with inherited model/effort and one shared SSH executor. The real pinned
+  Codex CLI regression passes all six parent/child Responses exchanges with
+  Qwen+xhigh, shared file state, credential isolation, and positive cleanup.
+- DRB now permits task-local SearXNG and shell page retrieval when dedicated
+  tools are unavailable. A real startup probe also reproduced an existing
+  unquoted `&` health-check bug; direct curl argv fixes its false readiness.
+  The corrected live probe returns 20 results and reads a public source.
+- All five release targets pass on dual-h100 after the final code change.
+  SDK/process/file inspection confirms no test container, network, helper,
+  or staged identity remains. Local Go remains below the required version.
+- The 100-ID profile selects xhigh, three concurrent children, a one-hour
+  per-task deadline, and disabled RACE/FACT. Exact BF16 weights and a pinned
+  vLLM environment are prepared separately in an ignored ARIES worktree on
+  the data volume. Real Qwen smoke and full collection are still in progress;
+  the native deterministic regression is not a claim of completed live runs.
+
 ## Shared SSH transport and audit
 
 Completed the recorded cleanup plan: moved concrete SSH clients/server,

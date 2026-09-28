@@ -38,8 +38,10 @@ Codex requires an `openai` or `sglang` endpoint implementing streaming
 `/v1/responses`, including tool calls. Passing `/v1/models` discovery alone does
 not establish that capability. A Chat Completions-only endpoint, including the
 configured native DeepSeek backend, cannot serve this harness. Codex accepts
-`model.context_length`; `max_tokens`, `temperature`, compaction, voice, web,
-and subagent profile overrides are not supported by this integration.
+`model.context_length`, native reasoning effort and developer instructions
+under `harness.codex`, and `harness.subagents` controls. `max_tokens`,
+`temperature`, compaction, voice, and dedicated web-search overrides remain
+unsupported. Codex can research through the task sandbox's shell and SearXNG.
 
 Model services sit outside the four-role Runner. DeepSeek must be external and uses the
 configured remote base URL. SGLang accepts an external endpoint without a local

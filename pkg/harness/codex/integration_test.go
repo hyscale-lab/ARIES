@@ -29,23 +29,29 @@ import (
 
 const integrationImage = "docker.io/library/debian:12.12-slim"
 const integrationKey = "sk-codex-integration-not-a-real-model-key"
+const integrationQwen = "Qwen/Qwen3.8-27B"
+const integrationInstructions = "ARIES research policy: delegate independent work and omit child model, reasoning_effort, and agent_type overrides to inherit the parent settings."
 
 // This is the complete production path: upstream Codex emits a native tool
 // call, its native exec-server receives it over the SSH bridge, and evaluation
 // sees that exact task container only after both isolation gates succeed.
 func TestCodexNativeSSHMutatesEvaluatorSandbox(t *testing.T) {
-	runNativeSSHScenario(t, false, "")
+	runNativeSSHScenario(t, false, "", false)
 }
 
 func TestCodexNativeSSHCancelReapsEscapedChildrenOnly(t *testing.T) {
-	runNativeSSHScenario(t, true, "")
+	runNativeSSHScenario(t, true, "", false)
 }
 
 func TestCodexNativeSSHRetainsNonrootTaskIdentity(t *testing.T) {
-	runNativeSSHScenario(t, false, "65532:65532")
+	runNativeSSHScenario(t, false, "65532:65532", false)
 }
 
-func runNativeSSHScenario(t *testing.T, cancelTool bool, taskUser string) {
+func TestCodexNativeSubagentInheritsQwenReasoningAndSSHExecutor(t *testing.T) {
+	runNativeSSHScenario(t, false, "", true)
+}
+
+func runNativeSSHScenario(t *testing.T, cancelTool bool, taskUser string, subagents bool) {
 	t.Helper()
 	root, err := filepath.Abs("../../..")
 	if err != nil {
@@ -148,11 +154,18 @@ func runNativeSSHScenario(t *testing.T, cancelTool bool, taskUser string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	model := &responsesFixture{cancelTool: cancelTool, taskUser: taskUser}
+	model := &responsesFixture{cancelTool: cancelTool, taskUser: taskUser, subagents: subagents}
 	server := &http.Server{Handler: model, ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() { _ = server.Close() })
-	harness, err := codexharness.New(codexharness.Options{Image: integrationImage, CodexPath: binary, CodexVersion: "0.157.1", OutputDir: output, Logger: logger, StartTimeout: 90 * time.Second, AgentTimeout: 90 * time.Second, APIKeyLookup: func(string) ([]byte, bool) { return []byte(integrationKey), true }})
+	options := codexharness.Options{Image: integrationImage, CodexPath: binary, CodexVersion: "0.157.1", OutputDir: output, Logger: logger, StartTimeout: 90 * time.Second, AgentTimeout: 90 * time.Second, APIKeyLookup: func(string) ([]byte, bool) { return []byte(integrationKey), true }}
+	if subagents {
+		options.ReasoningEffort = "xhigh"
+		options.DeveloperInstructions = integrationInstructions
+		options.SubagentsEnabled = true
+		options.MaxConcurrentSubagents = 2
+	}
+	harness, err := codexharness.New(options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,6 +178,9 @@ func runNativeSSHScenario(t *testing.T, cancelTool bool, taskUser string) {
 		_ = harness.Close()
 	})
 	request := core.HarnessRequest{RunID: runID, TaskID: "native-ssh", Endpoint: endpoint, Model: core.ModelConfig{Provider: "openai", BaseURL: "http://" + listener.Addr().String() + "/v1", Model: "aries-deterministic-codex", APIKeyEnv: "ARIES_CODEX_TEST_KEY"}}
+	if subagents {
+		request.Model.Model = integrationQwen
+	}
 	if err := harness.Start(ctx, request); err != nil {
 		t.Fatal(err)
 	}
@@ -220,6 +236,8 @@ func runNativeSSHScenario(t *testing.T, cancelTool bool, taskUser string) {
 	wantCalls := 2
 	if cancelTool {
 		wantCalls = 1
+	} else if subagents {
+		wantCalls = 6 // Four parent requests and two requests from its real child.
 	}
 	if calls != wantCalls || modelErr != nil {
 		t.Fatalf("Responses exchange calls=%d error=%v", calls, modelErr)
@@ -238,8 +256,11 @@ func runNativeSSHScenario(t *testing.T, cancelTool bool, taskUser string) {
 	if !cancelTool {
 		verification += `; test "$(cat /app/native-state)" = native-exec-state`
 	}
-	if !cancelTool && taskUser == "" {
+	if !cancelTool && taskUser == "" && !subagents {
 		verification += `; case "$(cat /bin/rm)" in */app/cleanup-compromised*) ;; *) exit 1;; esac`
+	}
+	if subagents {
+		verification += `; test "$(cat /app/parent-state)" = native-parent-state`
 	}
 	created, err := api.ExecCreate(ctx, sandbox.ContainerID(), client.ExecCreateOptions{Cmd: []string{"/bin/sh", "-c", verification}, User: "0:0"})
 	if err != nil {
@@ -314,6 +335,27 @@ func runNativeSSHScenario(t *testing.T, cancelTool bool, taskUser string) {
 	} else if !bytes.Contains(trajectory, []byte(`"type":"command_execution"`)) || !bytes.Contains(trajectory, []byte(`"type":"turn.completed"`)) {
 		t.Fatalf("native trajectory missing expected tool/turn evidence: %s", trajectory)
 	}
+	if subagents {
+		if !bytes.Contains(trajectory, []byte(`"tool":"spawn_agent"`)) || !bytes.Contains(trajectory, []byte(`"tool":"wait"`)) {
+			t.Fatalf("native trajectory has no completed delegation: %s", trajectory)
+		}
+		// Both parent and child execute through one native exec-server. The
+		// bridge would reject another SSH executor, and its audit must agree.
+		audit, err := os.ReadFile(filepath.Join(output, "native-ssh", "bridge", "tool-calls.jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := bytes.Split(bytes.TrimSpace(audit), []byte{'\n'})
+		var record struct {
+			Container string `json:"container_id"`
+			Operation string `json:"operation_class"`
+			Status    string `json:"status"`
+			ExitCode  int    `json:"exit_code"`
+		}
+		if len(lines) != 1 || json.Unmarshal(lines[0], &record) != nil || record.Container != sandbox.ContainerID() || record.Operation != "executor" || record.Status != "completed" || record.ExitCode != 0 {
+			t.Fatalf("parent/child did not share one clean SSH executor: %s", audit)
+		}
+	}
 	if err := sandboxes.Stop(ctx, live); err != nil {
 		t.Fatal(err)
 	}
@@ -378,11 +420,14 @@ func integrationExecutable(t *testing.T, variable, fallback string) string {
 }
 
 type responsesFixture struct {
-	mu         sync.Mutex
-	calls      int
-	err        error
-	cancelTool bool
-	taskUser   string
+	mu          sync.Mutex
+	calls       int
+	err         error
+	cancelTool  bool
+	taskUser    string
+	subagents   bool
+	parentCalls int
+	childCalls  int
 }
 
 func (fixture *responsesFixture) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -410,46 +455,55 @@ func (fixture *responsesFixture) ServeHTTP(writer http.ResponseWriter, request *
 	}
 	fixture.calls++
 	var item map[string]any
-	switch fixture.calls {
-	case 1:
-		// The key name is deliberately visible; its value must be absent in
-		// the native tool environment and its private harness file unreachable.
-		command := `set -eu; test -z "${ARIES_CODEX_TEST_KEY+x}"; test ! -e /run/aries/codex/model.key; test "$PWD" = /app; `
-		if fixture.taskUser == "" {
-			command += `printf '#!/bin/sh\nprintf compromised > /app/cleanup-compromised\nexit 0\n' > /bin/rm; chmod 0755 /bin/rm; `
-		} else {
-			command += `test "$(id -u):$(id -g)" = 65532:65532; `
-		}
-		command += `printf native-exec-state > /app/native-state; printf REMOTE_CODEX_OK`
-		if fixture.cancelTool {
-			command = `set -eu; test -z "${ARIES_CODEX_TEST_KEY+x}"; echo $$ > /app/native.pid; setsid /bin/sh -c 'echo $$ > /app/escaped.pid; exec sleep 600' </dev/null >/dev/null 2>&1 & while [ ! -s /app/escaped.pid ]; do sleep 0.02; done; printf ready > /app/native.started; sleep 600`
-		}
-		arguments, _ := json.Marshal(map[string]any{"cmd": command, "workdir": "/app", "login": false, "yield_time_ms": 10000, "max_output_tokens": 1000})
-		item = map[string]any{"type": "function_call", "call_id": "call-native-exec", "name": "exec_command", "arguments": string(arguments)}
-	case 2:
-		var body struct {
-			Input []struct {
-				Type   string          `json:"type"`
-				Output json.RawMessage `json:"output"`
-			} `json:"input"`
-		}
-		if err := json.Unmarshal(content, &body); err != nil {
+	if fixture.subagents {
+		item, err = fixture.subagentResponse(request, content)
+		if err != nil {
 			fixture.err = err
+			http.Error(writer, "invalid subagent exchange", http.StatusBadRequest)
+			return
 		}
-		toolOutput := false
-		for _, input := range body.Input {
-			if input.Type == "function_call_output" && bytes.Contains(input.Output, []byte("REMOTE_CODEX_OK")) {
-				toolOutput = true
+	} else {
+		switch fixture.calls {
+		case 1:
+			// The key name is deliberately visible; its value must be absent in
+			// the native tool environment and its private harness file unreachable.
+			command := `set -eu; test -z "${ARIES_CODEX_TEST_KEY+x}"; test ! -e /run/aries/codex/model.key; test "$PWD" = /app; `
+			if fixture.taskUser == "" {
+				command += `printf '#!/bin/sh\nprintf compromised > /app/cleanup-compromised\nexit 0\n' > /bin/rm; chmod 0755 /bin/rm; `
+			} else {
+				command += `test "$(id -u):$(id -g)" = 65532:65532; `
 			}
+			command += `printf native-exec-state > /app/native-state; printf REMOTE_CODEX_OK`
+			if fixture.cancelTool {
+				command = `set -eu; test -z "${ARIES_CODEX_TEST_KEY+x}"; echo $$ > /app/native.pid; setsid /bin/sh -c 'echo $$ > /app/escaped.pid; exec sleep 600' </dev/null >/dev/null 2>&1 & while [ ! -s /app/escaped.pid ]; do sleep 0.02; done; printf ready > /app/native.started; sleep 600`
+			}
+			arguments, _ := json.Marshal(map[string]any{"cmd": command, "workdir": "/app", "login": false, "yield_time_ms": 10000, "max_output_tokens": 1000})
+			item = map[string]any{"type": "function_call", "call_id": "call-native-exec", "name": "exec_command", "arguments": string(arguments)}
+		case 2:
+			var body struct {
+				Input []struct {
+					Type   string          `json:"type"`
+					Output json.RawMessage `json:"output"`
+				} `json:"input"`
+			}
+			if err := json.Unmarshal(content, &body); err != nil {
+				fixture.err = err
+			}
+			toolOutput := false
+			for _, input := range body.Input {
+				if input.Type == "function_call_output" && bytes.Contains(input.Output, []byte("REMOTE_CODEX_OK")) {
+					toolOutput = true
+				}
+			}
+			if !toolOutput {
+				fixture.err = errors.New("native remote command did not return its marker")
+			}
+			item = map[string]any{"type": "message", "role": "assistant", "id": "message-final", "content": []any{map[string]any{"type": "output_text", "text": "native Codex SSH complete"}}}
+		default:
+			fixture.err = errors.New("unexpected additional Responses request")
+			http.Error(writer, "too many requests", http.StatusBadRequest)
+			return
 		}
-		if !toolOutput {
-			fixture.err = errors.New("native remote command did not return its marker")
-		}
-		item = map[string]any{"type": "message", "role": "assistant", "id": "message-final", "content": []any{map[string]any{"type": "output_text", "text": "native Codex SSH complete"}}}
-	default:
-		fixture.err = errors.New("unexpected additional Responses request")
-		http.Error(writer, "too many requests", http.StatusBadRequest)
-		return
 	}
 	writer.Header().Set("Content-Type", "text/event-stream")
 	for _, event := range []map[string]any{
@@ -460,4 +514,109 @@ func (fixture *responsesFixture) ServeHTTP(writer http.ResponseWriter, request *
 		encoded, _ := json.Marshal(event)
 		_, _ = fmt.Fprintf(writer, "event: %s\ndata: %s\n\n", event["type"], encoded)
 	}
+}
+
+type subagentResponseRequest struct {
+	Model     string `json:"model"`
+	Reasoning struct {
+		Effort string `json:"effort"`
+	} `json:"reasoning"`
+	Input []struct {
+		Type   string          `json:"type"`
+		CallID string          `json:"call_id"`
+		Output json.RawMessage `json:"output"`
+	} `json:"input"`
+}
+
+func (fixture *responsesFixture) subagentResponse(request *http.Request, content []byte) (map[string]any, error) {
+	var body subagentResponseRequest
+	if err := json.Unmarshal(content, &body); err != nil {
+		return nil, err
+	}
+	if body.Model != integrationQwen || body.Reasoning.Effort != "xhigh" || !bytes.Contains(content, []byte(integrationInstructions)) {
+		return nil, fmt.Errorf("native model/effort/developer inheritance mismatch: model=%q effort=%q", body.Model, body.Reasoning.Effort)
+	}
+	if request.Header.Get("X-OpenAI-Subagent") == "collab_spawn" {
+		fixture.childCalls++
+		switch fixture.childCalls {
+		case 1:
+			if request.Header.Get("X-Codex-Parent-Thread-Id") == "" {
+				return nil, errors.New("native child request has no parent thread identity")
+			}
+			return nativeFunctionCall("call-child-exec", "", "exec_command", map[string]any{"cmd": `set -eu; test -z "${ARIES_CODEX_TEST_KEY+x}"; test ! -e /run/aries/codex/model.key; test "$PWD" = /app; printf native-exec-state > /app/native-state; printf REMOTE_CHILD_OK`, "workdir": "/app", "login": false, "yield_time_ms": 10000}), nil
+		case 2:
+			if !strings.Contains(body.functionOutput("call-child-exec"), "REMOTE_CHILD_OK") {
+				return nil, errors.New("native child did not execute in the task sandbox")
+			}
+			return nativeMessage("native child complete"), nil
+		default:
+			return nil, errors.New("unexpected extra native child request")
+		}
+	}
+	if request.Header.Get("X-OpenAI-Subagent") != "" {
+		return nil, errors.New("unexpected subagent identity")
+	}
+	fixture.parentCalls++
+	switch fixture.parentCalls {
+	case 1:
+		if !bytes.Contains(content, []byte(`"spawn_agent"`)) {
+			return nil, errors.New("native delegation tool was not exposed")
+		}
+		return nativeFunctionCall("call-spawn", "multi_agent_v1", "spawn_agent", map[string]any{"message": "Use the terminal to write the native child marker in /app, then report completion."}), nil
+	case 2:
+		var spawned struct {
+			AgentID string `json:"agent_id"`
+		}
+		if json.Unmarshal([]byte(body.functionOutput("call-spawn")), &spawned) != nil || spawned.AgentID == "" {
+			return nil, errors.New("native spawn_agent did not return a child id")
+		}
+		return nativeFunctionCall("call-wait", "multi_agent_v1", "wait_agent", map[string]any{"targets": []string{spawned.AgentID}, "timeout_ms": 60000}), nil
+	case 3:
+		if !strings.Contains(body.functionOutput("call-wait"), "native child complete") {
+			return nil, errors.New("native wait_agent did not observe child completion")
+		}
+		return nativeFunctionCall("call-parent-exec", "", "exec_command", map[string]any{"cmd": `set -eu; test "$(cat /app/native-state)" = native-exec-state; test -z "${ARIES_CODEX_TEST_KEY+x}"; printf native-parent-state > /app/parent-state; printf REMOTE_PARENT_OK`, "workdir": "/app", "login": false, "yield_time_ms": 10000}), nil
+	case 4:
+		if !strings.Contains(body.functionOutput("call-parent-exec"), "REMOTE_PARENT_OK") {
+			return nil, errors.New("native parent did not observe the child's sandbox state")
+		}
+		return nativeMessage("native Codex SSH complete"), nil
+	default:
+		return nil, errors.New("unexpected extra native parent request")
+	}
+}
+
+func (body subagentResponseRequest) functionOutput(callID string) string {
+	for _, input := range body.Input {
+		if input.Type != "function_call_output" || input.CallID != callID {
+			continue
+		}
+		var text string
+		if json.Unmarshal(input.Output, &text) == nil {
+			return text
+		}
+		var parts []struct {
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(input.Output, &parts) == nil {
+			for _, part := range parts {
+				text += part.Text
+			}
+			return text
+		}
+	}
+	return ""
+}
+
+func nativeFunctionCall(callID, namespace, name string, args map[string]any) map[string]any {
+	encoded, _ := json.Marshal(args)
+	item := map[string]any{"type": "function_call", "call_id": callID, "name": name, "arguments": string(encoded)}
+	if namespace != "" {
+		item["namespace"] = namespace
+	}
+	return item
+}
+
+func nativeMessage(text string) map[string]any {
+	return map[string]any{"type": "message", "role": "assistant", "id": "message-final", "content": []any{map[string]any{"type": "output_text", "text": text}}}
 }

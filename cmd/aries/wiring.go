@@ -308,6 +308,10 @@ func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byt
 		manager, err := codexharness.New(codexharness.Options{
 			Image: cfg.Versions.Codex.Image, CodexPath: cfg.Harness.Codex.ResolvedExecutable,
 			CodexVersion: cfg.Versions.Codex.Version, OutputDir: outputRoot, APIKeyLookup: lookup, Logger: logger,
+			ReasoningEffort:        cfg.Harness.Codex.ReasoningEffort,
+			DeveloperInstructions:  cfg.Harness.Codex.DeveloperInstructions,
+			SubagentsEnabled:       cfg.Harness.Subagents.Enabled != nil && *cfg.Harness.Subagents.Enabled,
+			MaxConcurrentSubagents: cfg.Harness.Subagents.MaxConcurrent,
 		})
 		if err != nil {
 			return app.HarnessInstance{}, fmt.Errorf("construct Codex harness: %w", err)

@@ -224,11 +224,13 @@ type HarnessConfig struct {
 	Codex  *HarnessCodexConfig  `json:"codex,omitempty"`
 }
 
-// HarnessCodexConfig selects the installed, unmodified Codex CLI executable.
+// HarnessCodexConfig configures the installed, unmodified Codex CLI.
 // Load resolves its path relative to the experiment profile, without running it.
 type HarnessCodexConfig struct {
-	Executable         string `json:"executable"`
-	ResolvedExecutable string `json:"-"`
+	Executable            string `json:"executable"`
+	ResolvedExecutable    string `json:"-"`
+	ReasoningEffort       string `json:"reasoning_effort,omitempty"`
+	DeveloperInstructions string `json:"developer_instructions,omitempty"`
 }
 
 // HarnessHermesConfig is the harness.hermes block. It is valid only with
@@ -310,23 +312,22 @@ type HarnessWebSearchConfig struct {
 	ExtractAPIKeyEnv string `json:"extract_api_key_env,omitempty"`
 }
 
-// HarnessSubagentsConfig is an OpenClaw/Hermes-only concept (see
-// (*HarnessConfig).validate), same as WebSearch above. Under OpenClaw,
+// HarnessSubagentsConfig controls native delegation. Under OpenClaw,
 // disabling denies its sessions_spawn/sessions_yield tools, because ARIES's
 // harness protocol has no continuation mechanism to relay async sub-agent
 // completions back to a single-turn request. Under Hermes, disabling removes
 // its delegate_task tool via disabled_toolsets; Hermes's delegation blocks
 // and returns within the same tool call, so it has no equivalent protocol
 // hazard — disabling it there is purely a cost/determinism control.
-// Enabled is a pointer so "unset" (defaults to enabled, matching both
-// harnesses' own defaults) is distinguishable from an explicit "false" (e.g.
-// Deep Research Bench, which opts out since subagent spawning isn't useful
-// for its single-report task shape and adds uncontrolled cost).
+// Codex children inherit the parent model and remote tool environment.
+// Enabled is a pointer so "unset" (defaults to enabled) is distinguishable
+// from an explicit "false" for cost or determinism control.
 //
 // MaxConcurrent bounds how many subagents may run at once without disabling
 // subagents outright: OpenClaw's agents.defaults.subagents.maxConcurrent, or
-// Hermes's delegation.max_concurrent_children. Zero leaves each harness's own
-// built-in default in place.
+// Hermes's delegation.max_concurrent_children, or Codex's
+// agents.max_concurrent_threads_per_session (excluding the parent). Zero
+// leaves each harness's own built-in default in place.
 type HarnessSubagentsConfig struct {
 	Enabled       *bool `json:"enabled,omitempty"`
 	MaxConcurrent int   `json:"max_concurrent,omitempty"`
@@ -909,6 +910,14 @@ func (h *HarnessConfig) validate() error {
 		if strings.TrimSpace(h.Codex.Executable) == "" || strings.ContainsRune(h.Codex.Executable, 0) {
 			return errors.New("harness.codex.executable must name a nonempty, NUL-free executable path")
 		}
+		switch h.Codex.ReasoningEffort {
+		case "", "none", "minimal", "low", "medium", "high", "xhigh":
+		default:
+			return errors.New("harness.codex.reasoning_effort must be none, minimal, low, medium, high, or xhigh")
+		}
+		if strings.ContainsRune(h.Codex.DeveloperInstructions, 0) {
+			return errors.New("harness.codex.developer_instructions must be NUL-free")
+		}
 	} else if h.Type == "codex" {
 		return errors.New("harness.codex.executable is required for Codex")
 	}
@@ -929,18 +938,18 @@ func (h *HarnessConfig) validate() error {
 			return errors.New("harness.web_search.extract_api_key_env must be an environment variable name")
 		}
 	}
-	if h.Subagents.Enabled != nil && h.Type != "openclaw" && h.Type != "hermes" {
-		return errors.New("harness.subagents requires OpenClaw or Hermes")
+	if h.Subagents.Enabled != nil && h.Type != "openclaw" && h.Type != "hermes" && h.Type != "codex" {
+		return errors.New("harness.subagents requires OpenClaw, Hermes, or Codex")
 	}
 	if h.Subagents.MaxConcurrent != 0 {
-		if h.Type != "openclaw" && h.Type != "hermes" {
-			return errors.New("harness.subagents.max_concurrent requires OpenClaw or Hermes")
+		if h.Type != "openclaw" && h.Type != "hermes" && h.Type != "codex" {
+			return errors.New("harness.subagents.max_concurrent requires OpenClaw, Hermes, or Codex")
 		}
 		if h.Subagents.MaxConcurrent < 0 {
 			return errors.New("harness.subagents.max_concurrent must be positive")
 		}
 	}
-	if h.Subagents.Enabled == nil && (h.Type == "openclaw" || h.Type == "hermes") {
+	if h.Subagents.Enabled == nil && (h.Type == "openclaw" || h.Type == "hermes" || h.Type == "codex") {
 		enabled := true
 		h.Subagents.Enabled = &enabled
 	}

@@ -20,8 +20,8 @@ func TestDecodeCodexSupportsResponsesBackendsAndContextLength(t *testing.T) {
 		if cfg.Harness.Mode != "agent" || cfg.Harness.Codex == nil || cfg.Harness.Codex.Executable != "../.cache/codex/0.157.1/codex" {
 			t.Fatalf("Codex harness = %#v", cfg.Harness)
 		}
-		if cfg.Harness.Subagents.Enabled != nil || cfg.Harness.WebSearch.Enabled {
-			t.Fatal("Codex inherited unsupported harness features")
+		if cfg.Harness.Subagents.Enabled == nil || !*cfg.Harness.Subagents.Enabled || cfg.Harness.WebSearch.Enabled {
+			t.Fatal("Codex must enable native subagents and leave web search disabled")
 		}
 		if model := cfg.CoreModel(); model.Provider != backend || model.ContextLength != 32768 || model.MaxTokens != 0 || model.Temperature != nil {
 			t.Fatalf("Codex model = %#v", model)
@@ -41,7 +41,9 @@ func TestDecodeCodexRejectsUnsupportedSettings(t *testing.T) {
 		"max tokens":          strings.Replace(base, `"context_length":32768`, `"context_length":32768,"max_tokens":512`, 1),
 		"zero temperature":    strings.Replace(base, `"context_length":32768`, `"context_length":32768,"temperature":0`, 1),
 		"web search":          strings.Replace(base, `"type":"codex"`, `"type":"codex","web_search":{"enabled":true}`, 1),
-		"subagents":           strings.Replace(base, `"type":"codex"`, `"type":"codex","subagents":{"enabled":false}`, 1),
+		"negative subagents":  strings.Replace(base, `"type":"codex"`, `"type":"codex","subagents":{"max_concurrent":-1}`, 1),
+		"invalid effort":      strings.Replace(base, `"codex":{"executable":`, `"codex":{"reasoning_effort":"maximum","executable":`, 1),
+		"NUL instructions":    strings.Replace(base, `"codex":{"executable":`, `"codex":{"developer_instructions":"bad\u0000prompt","executable":`, 1),
 		"compaction":          strings.Replace(base, `"type":"codex"`, `"type":"codex","compaction":{"enabled":false}`, 1),
 		"realtime mode":       strings.Replace(base, `"type":"codex"`, `"type":"codex","mode":"realtime"`, 1),
 		"voice mode":          strings.Replace(base, `"type":"codex"`, `"type":"codex","mode":"voice-transcribe"`, 1),
@@ -55,6 +57,41 @@ func TestDecodeCodexRejectsUnsupportedSettings(t *testing.T) {
 				t.Fatal("unsupported Codex profile was accepted")
 			}
 		})
+	}
+}
+
+func TestDecodeCodexReasoningAndNativeSubagents(t *testing.T) {
+	for _, effort := range []string{"none", "minimal", "low", "medium", "high", "xhigh"} {
+		t.Run(effort, func(t *testing.T) {
+			input := strings.Replace(codexProfileJSON(), `"codex":{"executable":`, `"codex":{"reasoning_effort":"`+effort+`","developer_instructions":"Delegate independent research; inherit the parent model.","executable":`, 1)
+			input = strings.Replace(input, `"type":"codex"`, `"type":"codex","subagents":{"enabled":true,"max_concurrent":3}`, 1)
+			cfg, err := Decode(strings.NewReader(input))
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := json.Marshal(cfg.Harness.Codex)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var settings map[string]string
+			if err := json.Unmarshal(encoded, &settings); err != nil {
+				t.Fatal(err)
+			}
+			if settings["reasoning_effort"] != effort || settings["developer_instructions"] != "Delegate independent research; inherit the parent model." {
+				t.Fatalf("Codex settings = %s", encoded)
+			}
+			if cfg.Harness.Subagents.Enabled == nil || !*cfg.Harness.Subagents.Enabled || cfg.Harness.Subagents.MaxConcurrent != 3 {
+				t.Fatalf("native subagents = %#v", cfg.Harness.Subagents)
+			}
+		})
+	}
+	input := strings.Replace(codexProfileJSON(), `"type":"codex"`, `"type":"codex","subagents":{"enabled":false}`, 1)
+	cfg, err := Decode(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Harness.Subagents.Enabled == nil || *cfg.Harness.Subagents.Enabled {
+		t.Fatal("explicit native subagent disable was lost")
 	}
 }
 

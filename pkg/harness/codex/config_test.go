@@ -31,7 +31,7 @@ func testEndpoint(t *testing.T) core.ToolEndpoint {
 func TestConfigUsesResponsesAndRemoteEnvironmentOnly(t *testing.T) {
 	model := testModel()
 	model.ContextLength = 65536
-	config, err := renderConfig(model)
+	config, err := renderConfig(model, "", "", false, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestUnsupportedModelSettingsFailExplicitly(t *testing.T) {
 	} {
 		model := testModel()
 		mutate(&model)
-		if _, err := renderConfig(model); err == nil {
+		if _, err := renderConfig(model, "", "", false, 0); err == nil {
 			t.Fatalf("accepted invalid model: %#v", model)
 		}
 	}
@@ -112,7 +112,7 @@ func TestWrapperKeepsPromptAsOneArgumentAndKeyOutOfMetadata(t *testing.T) {
 	for _, name := range []string{"HOME", "PATH", "SHELL", "BASH_ENV", "ENV", "CODEX_HOME", "RUST_LOG", "LD_LIBRARY_PATH"} {
 		model := testModel()
 		model.APIKeyEnv = name
-		if _, err := renderConfig(model); err == nil {
+		if _, err := renderConfig(model, "", "", false, 0); err == nil {
 			t.Fatalf("reserved key variable accepted: %s", name)
 		}
 	}

@@ -115,6 +115,11 @@ tag-pinned Linux container, checks its reported version, and invokes one
 The model provider uses the Responses API; the credential is read from a
 private file by the container wrapper and never enters Docker configuration.
 JSONL trajectory, stderr, and placeholder-only TOML are private artifacts.
+Native reasoning effort and developer instructions are optional harness
+settings. Native subagents default to enabled and can have an explicit
+concurrency limit; children inherit the model, effort, and shared remote
+environment when their spawn calls omit overrides. Subagents add no ARIES
+component or SSH session.
 
 The pinned native `environments.toml` contract selects only the bridge-backed
 environment (`include_local = false`). Shell and filesystem operations use

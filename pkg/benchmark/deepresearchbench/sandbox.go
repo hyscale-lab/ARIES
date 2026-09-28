@@ -85,7 +85,7 @@ func startSearXNG(ctx context.Context, sandbox runner.Sandbox) error {
 			}
 		}
 		probed, err := sandbox.Exec(ctx, core.Command{
-			Path: "/bin/sh", Args: []string{"-c", "curl -sf -o /dev/null " + searxngHealthCheckURL},
+			Path: "/usr/bin/curl", Args: []string{"-sf", "-o", "/dev/null", searxngHealthCheckURL},
 		})
 		if err == nil && probed.ExitCode == 0 {
 			return nil

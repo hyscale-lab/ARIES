@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/containerd/errdefs"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/moby/moby/api/pkg/stdcopy"
@@ -159,13 +160,21 @@ func writeStaticELF(t *testing.T, path string) {
 	}
 }
 
-func testManager(t *testing.T) (*Manager, *fakeDocker, core.HarnessRequest, []byte) {
+func testManager(t *testing.T, settings ...Options) (*Manager, *fakeDocker, core.HarnessRequest, []byte) {
 	t.Helper()
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "codex")
 	writeStaticELF(t, bin)
 	key := []byte("test-model-secret")
-	manager, err := New(Options{Image: testImage, CodexPath: bin, CodexVersion: "0.157.1", OutputDir: filepath.Join(dir, "runs"), APIKeyLookup: func(string) ([]byte, bool) { return key, true }, StartTimeout: time.Second})
+	var options Options
+	if len(settings) != 0 {
+		options = settings[0]
+	}
+	options.Image, options.CodexPath, options.CodexVersion = testImage, bin, "0.157.1"
+	options.OutputDir = filepath.Join(dir, "runs")
+	options.APIKeyLookup = func(string) ([]byte, bool) { return key, true }
+	options.StartTimeout = time.Second
+	manager, err := New(options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,6 +185,99 @@ func testManager(t *testing.T) (*Manager, *fakeDocker, core.HarnessRequest, []by
 	endpoint.ClientSourceFile = filepath.Join(dir, "aries-codex-ssh")
 	writeStaticELF(t, endpoint.ClientSourceFile)
 	return manager, fake, core.HarnessRequest{RunID: "run-1", TaskID: "task-1", Model: testModel(), Endpoint: endpoint}, key
+}
+
+func TestHarnessRendersNativeReasoningInstructionsAndSubagents(t *testing.T) {
+	instructions := "Delegate independent research.\nKeep \"Qwen\" and ${LITERAL} unchanged; omit model overrides."
+	for _, effort := range []string{"", "none", "minimal", "low", "medium", "high", "xhigh"} {
+		t.Run("effort="+effort, func(t *testing.T) {
+			manager, _, request, _ := testManager(t, Options{ReasoningEffort: effort, DeveloperInstructions: instructions, SubagentsEnabled: true, MaxConcurrentSubagents: 3})
+			if err := manager.Start(context.Background(), request); err != nil {
+				t.Fatal(err)
+			}
+			defer manager.Stop(context.Background())
+			content, err := os.ReadFile(filepath.Join(manager.outputDir, request.TaskID, "harness", "config.toml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded struct {
+				Effort       string `toml:"model_reasoning_effort"`
+				Instructions string `toml:"developer_instructions"`
+				Agents       struct {
+					Enabled bool `toml:"enabled"`
+					Max     int  `toml:"max_concurrent_threads_per_session"`
+				} `toml:"agents"`
+			}
+			if _, err := toml.Decode(string(content), &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if decoded.Effort != effort || decoded.Instructions != instructions || !decoded.Agents.Enabled || decoded.Agents.Max != 3 {
+				t.Fatalf("native settings were not staged exactly: %s", content)
+			}
+			if effort == "" && bytes.Contains(content, []byte("model_reasoning_effort")) {
+				t.Fatal("unset effort replaced the model default")
+			}
+			if bytes.Contains(content, []byte("default_subagent_")) || bytes.Contains(content, []byte("model_catalog_json")) {
+				t.Fatal("child inheritance was replaced with catalog-validated overrides")
+			}
+		})
+	}
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("native-cap-default-enabled=%t", enabled), func(t *testing.T) {
+			manager, _, request, _ := testManager(t, Options{SubagentsEnabled: enabled})
+			if err := manager.Start(context.Background(), request); err != nil {
+				t.Fatal(err)
+			}
+			defer manager.Stop(context.Background())
+			content, err := os.ReadFile(filepath.Join(manager.outputDir, request.TaskID, "harness", "config.toml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(content, []byte(fmt.Sprintf("enabled = %t", enabled))) || bytes.Contains(content, []byte("max_concurrent_threads_per_session")) || bytes.Contains(content, []byte("developer_instructions")) {
+				t.Fatalf("unexpected default/disabled native settings: %s", content)
+			}
+		})
+	}
+}
+
+func TestNewRejectsInvalidNativeSettingsBeforeOutputCreation(t *testing.T) {
+	for _, options := range []Options{
+		{ReasoningEffort: "ultra"},
+		{ReasoningEffort: "high\nmodel = 'other'"},
+		{DeveloperInstructions: "instruction\x00suffix"},
+		{MaxConcurrentSubagents: -1},
+	} {
+		output := filepath.Join(t.TempDir(), "not-created")
+		options.Image, options.CodexPath, options.CodexVersion, options.OutputDir = testImage, "/unused/codex", "0.157.1", output
+		manager, err := New(options)
+		if manager != nil {
+			_ = manager.Close()
+		}
+		if err == nil {
+			t.Fatalf("invalid native settings accepted: %#v", options)
+		}
+		if _, err := os.Stat(output); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("invalid settings created output directory: %v", err)
+		}
+	}
+}
+
+func TestStartRejectsCredentialInDeveloperInstructionsBeforeArtifacts(t *testing.T) {
+	for _, secret := range []string{"test-model-secret", "secret-with-\"quote\\slash"} {
+		manager, fake, request, _ := testManager(t, Options{DeveloperInstructions: "Never print " + secret})
+		manager.apiKeyLookup = func(string) ([]byte, bool) { return []byte(secret), true }
+		if err := manager.Start(context.Background(), request); err == nil {
+			t.Fatal("credential-bearing developer instructions accepted")
+		} else if strings.Contains(err.Error(), secret) {
+			t.Fatal("credential entered error")
+		}
+		if fake.created.Config != nil || len(fake.archive) != 0 {
+			t.Fatal("credential-bearing instructions reached Docker")
+		}
+		if _, err := os.Stat(filepath.Join(manager.outputDir, request.TaskID)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("credential-bearing instructions retained in artifacts: %v", err)
+		}
+	}
 }
 
 func TestHarnessStagesSeparateContainerWithoutModelCredentialMetadata(t *testing.T) {

@@ -171,9 +171,23 @@ func TestTasksLoadsSelectedPromptsInOrder(t *testing.T) {
 	}
 }
 
-func TestTasksAppliesTaskPromptTemplate(t *testing.T) {
-	root := writeFixture(t, defaultFixtureRows(t))
+func TestTasksResearchContractSupportsShellFallback(t *testing.T) {
+	const question = "Compare the evidence from public sources.\n请保留问题的语言和范围。"
+	const privateReference = "PRIVATE_REFERENCE_SENTINEL"
+	const privateCriterion = "PRIVATE_CRITERION_SENTINEL"
+	rows := defaultFixtureRows(t)
+	rows[0].Prompt = question
+	rows[0].Article = privateReference
+	criteria := defaultCriteriaFixtureRows(t)
+	criteria[0].Criterions.Comprehensiveness[0].Criterion = privateCriterion
+	root := t.TempDir()
+	writeJSONLFile(t, root, DefaultQueryFile, rows)
+	writeJSONLFile(t, root, DefaultReferenceFile, rows)
+	writeJSONLFile(t, root, DefaultCriteriaFile, criteria)
+	commitFixture(t, root)
 	options := baseOptions(root)
+	options.Judge = core.ModelConfig{}
+	options.JudgeDisabled = true
 	benchmark, err := New(options)
 	if err != nil {
 		t.Fatal(err)
@@ -182,12 +196,41 @@ func TestTasksAppliesTaskPromptTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := applyPromptTemplate(taskPromptTemplate, "research prompt 1") + reportInstruction
-	if tasks[0].Instruction != want {
-		t.Fatalf("Instruction = %q, want %q", tasks[0].Instruction, want)
+	if len(tasks) != 1 {
+		t.Fatalf("Tasks returned %d tasks, want 1", len(tasks))
 	}
-	if !strings.Contains(tasks[0].Instruction, "research prompt 1") {
-		t.Fatalf("Instruction = %q, want it to contain the task's research prompt", tasks[0].Instruction)
+	instruction := tasks[0].Instruction
+	if strings.Count(instruction, question) != 1 {
+		t.Fatal("instruction must preserve the complete research question exactly once")
+	}
+	for _, required := range []string{
+		"tools when available",
+		"If a search tool is unavailable or fails",
+		"http://127.0.0.1:8888/search",
+		"format=json",
+		"--data-urlencode 'q=your query'",
+		"If a fetch/extract tool is unavailable or fails",
+		"use curl or Python",
+		"/tmp/aries-report.md",
+		"[short label](https://full-public-url)",
+		"reply with a single line: `DONE`",
+		"You must do this by actually invoking a tool",
+	} {
+		if !strings.Contains(instruction, required) {
+			t.Errorf("instruction is missing research contract %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"Do not write a custom",
+		"there is nothing to gain by reimplementing it",
+		privateReference,
+		privateCriterion,
+		DefaultReferenceFile,
+		DefaultCriteriaFile,
+	} {
+		if strings.Contains(instruction, forbidden) {
+			t.Errorf("instruction contains forbidden content %q", forbidden)
+		}
 	}
 }
 

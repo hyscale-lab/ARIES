@@ -92,7 +92,11 @@ narrow `TaskUser` and `ExecSupervisedStream` capabilities avoid task-owned shell
 and cleanup commands on this path. Proof, supervisor exit, Docker exec exit,
 audit drain, and host credential removal must all succeed before evaluation.
 This adds no Runner role, shared transport framework, or dependency. RoadmapBench
-and a live Qwen experiment are not part of this implementation.
+is not implemented. Codex reasoning effort and developer instructions remain
+native harness settings. Its subagents inherit the parent model, effort, and
+remote environment without requiring another bridge or SSH session. DRB
+allows task-local SearXNG and shell HTTP retrieval when dedicated web tools
+are unavailable; judge-disabled runs still collect reports after both gates.
 
 The three SSH bridges share concrete connection/session transport, private
 key/file operations, stream accounting, and bounded audit persistence in
