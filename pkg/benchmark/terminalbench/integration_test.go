@@ -42,7 +42,7 @@ func TestPinnedFixGitCheckout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tasks) != 1 || tasks[0].ID != fixGitID || tasks[0].Environment.Image != "alexgshaw/fix-git:20251031" {
+	if len(tasks) != 1 || tasks[0].ID != fixGitID || tasks[0].Environment.Image != "alexgshaw/fix-git:20260403" {
 		t.Fatalf("Tasks() = %#v", tasks)
 	}
 }
@@ -104,7 +104,8 @@ func TestPinnedSelectedTasksLoadInRequestedOrder(t *testing.T) {
 
 func TestEveryTaskInPinnedDatasetLoadsAtGenericBoundary(t *testing.T) {
 	root, _ := requirePinnedDataset(t)
-	entries, err := os.ReadDir(root)
+	taskRoot := taskDirectory(root, "")
+	entries, err := os.ReadDir(taskRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +114,7 @@ func TestEveryTaskInPinnedDatasetLoadsAtGenericBoundary(t *testing.T) {
 		if !entry.IsDir() {
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(root, entry.Name(), "task.toml")); err == nil {
+		if _, err := os.Stat(filepath.Join(taskRoot, entry.Name(), "task.toml")); err == nil {
 			taskIDs = append(taskIDs, entry.Name())
 		} else if !os.IsNotExist(err) {
 			t.Fatal(err)
@@ -134,7 +135,7 @@ func TestEveryTaskInPinnedDatasetLoadsAtGenericBoundary(t *testing.T) {
 		if task.Environment.Image != image || !filepath.IsAbs(task.Environment.Workdir) || task.Environment.CPU <= 0 || task.Environment.MemoryMB <= 0 || task.Environment.StorageMB <= 0 || task.Environment.GPUs < 0 {
 			t.Fatalf("task %q invalid generic environment = %#v", id, task.Environment)
 		}
-		wantVerifierFiles := countRegularVerifierFiles(t, filepath.Join(root, id, "tests"))
+		wantVerifierFiles := countRegularVerifierFiles(t, filepath.Join(taskDirectory(root, id), "tests"))
 		if len(details.verifierFiles) != wantVerifierFiles {
 			t.Fatalf("task %q captured %d verifier files, want recursive tree of %d", id, len(details.verifierFiles), wantVerifierFiles)
 		}
