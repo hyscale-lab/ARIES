@@ -8,6 +8,9 @@ file reads and writes go through the typed procedures, which are specified in
 [the sandbox RPC interface](sandbox-rpc.md). The bridge replaces the transport of `ToolBridge`, not
 the role. The contract in `pkg/runner/interfaces.go` is unchanged.
 
+For what runs where and what happens on each tool call, see
+[the gRPC route overview](grpc-route.md).
+
 ## Overview
 
 One `ToolBridge` implementation serving gRPC instead of SSH, running **in the ARIES process** on
