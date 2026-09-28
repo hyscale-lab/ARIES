@@ -163,12 +163,16 @@ type ToolathlonConfig struct {
 	// MaxSteps is Toolathlon's max_steps_under_single_turn_mode, recorded in
 	// its task bundle.
 	MaxSteps int `json:"max_steps,omitempty"`
-	// CredentialsDir is a host directory holding Toolathlon's filled
-	// configs/token_key_session.py and the key files it names; it makes the
-	// tasks that need a third-party account (GitHub, Google, Hugging Face,
-	// Notion, Snowflake, W&B, YouTube) loadable. Without it they are
-	// refused at task load.
-	CredentialsDir string `json:"credentials_dir,omitempty"`
+	// CredentialsEnv maps fields of Toolathlon's configs/token_key_session.py
+	// to the host environment variables holding their values, and
+	// CredentialFilesEnv maps the key files that file names (paths under
+	// configs/) to variables holding their contents. Like model.api_key_env
+	// they name variables only, so the values never enter a profile or a
+	// saved configuration. They make the tasks that need a third-party
+	// account (GitHub, Google, Hugging Face, Notion, Snowflake, W&B, YouTube)
+	// loadable; without them those tasks are refused at task load.
+	CredentialsEnv     map[string]string `json:"credentials_env,omitempty"`
+	CredentialFilesEnv map[string]string `json:"credential_files_env,omitempty"`
 }
 
 // BenchmarkEnvironment describes the task sandbox for benchmarks (currently
@@ -911,8 +915,21 @@ func (c *Config) validateBenchmarkType() error {
 			if settings.AppHost != "" && !validHostName(settings.AppHost) {
 				return errors.New("benchmark.toolathlon.app_host must be a hostname or IP address")
 			}
-			if settings.CredentialsDir != "" && strings.TrimSpace(settings.CredentialsDir) == "" {
-				return errors.New("benchmark.toolathlon.credentials_dir must be a directory path")
+			for field, variable := range settings.CredentialsEnv {
+				if !validEnvName(field) {
+					return fmt.Errorf("benchmark.toolathlon.credentials_env key %q must be a token field name", field)
+				}
+				if !validEnvName(variable) {
+					return fmt.Errorf("benchmark.toolathlon.credentials_env[%q] must name an environment variable", field)
+				}
+			}
+			for file, variable := range settings.CredentialFilesEnv {
+				if !strings.HasPrefix(file, "configs/") || strings.Contains(file, "..") {
+					return fmt.Errorf("benchmark.toolathlon.credential_files_env key %q must be a path under configs/", file)
+				}
+				if !validEnvName(variable) {
+					return fmt.Errorf("benchmark.toolathlon.credential_files_env[%q] must name an environment variable", file)
+				}
 			}
 		}
 		return nil

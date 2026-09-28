@@ -222,7 +222,7 @@ func newBenchmark(cfg config.Config, outputRoot, logicalID, occurrenceID string,
 		if occurrenceID != logicalID {
 			executionIDs = []string{occurrenceID}
 		}
-		benchmark, err := toolathlon.New(toolathlonOptions(cfg, []string{logicalID}, executionIDs, outputRoot))
+		benchmark, err := toolathlon.New(toolathlonOptions(cfg, []string{logicalID}, executionIDs, outputRoot, lookup))
 		if err != nil {
 			return nil, fmt.Errorf("construct toolathlon benchmark: %w", err)
 		}
@@ -234,7 +234,9 @@ func newBenchmark(cfg config.Config, outputRoot, logicalID, occurrenceID string,
 
 // toolathlonOptions maps the profile onto the adapter. The model ID is
 // bookkeeping for Toolathlon's task bundle; the harness owns the model.
-func toolathlonOptions(cfg config.Config, taskIDs, executionIDs []string, outputDir string) toolathlon.Options {
+// lookup reads the environment variables the profile names for account
+// credentials, as it reads a model's API key.
+func toolathlonOptions(cfg config.Config, taskIDs, executionIDs []string, outputDir string, lookup func(string) ([]byte, bool)) toolathlon.Options {
 	options := toolathlon.Options{
 		Root: cfg.Benchmark.Root, TaskIDs: taskIDs, ExecutionTaskIDs: executionIDs, OutputDir: outputDir,
 		Revision:         cfg.Versions.Toolathlon.Revision,
@@ -247,8 +249,10 @@ func toolathlonOptions(cfg config.Config, taskIDs, executionIDs []string, output
 		options.GatewayPort = settings.GatewayPort
 		options.AppHost = settings.AppHost
 		options.MaxSteps = settings.MaxSteps
-		options.CredentialsDir = settings.CredentialsDir
+		options.CredentialsEnv = settings.CredentialsEnv
+		options.CredentialFilesEnv = settings.CredentialFilesEnv
 	}
+	options.SecretLookup = lookup
 	return options
 }
 
@@ -567,7 +571,7 @@ func loadPreparationTasks(ctx context.Context, cfg config.Config, taskIDs []stri
 		}
 		return tasks, nil
 	case "toolathlon":
-		benchmark, err := toolathlon.New(toolathlonOptions(cfg, taskIDs, nil, cfg.OutputDir))
+		benchmark, err := toolathlon.New(toolathlonOptions(cfg, taskIDs, nil, cfg.OutputDir, lookup))
 		if err != nil {
 			return nil, fmt.Errorf("validate toolathlon profile: %w", err)
 		}

@@ -64,7 +64,7 @@ func writeFixture(t *testing.T) string {
 	root := t.TempDir()
 	writeFile(t, root, ".gitignore", "configs/global_configs.py\nconfigs/token_key_session.py\n__pycache__/\nconfigs/.mcp-auth/\n")
 	writeFile(t, root, "configs/global_configs_example.py", "global_configs = {'podman_or_docker': 'docker'}\n")
-	writeFile(t, root, "configs/token_key_session_example.py", "canvas_domain = 'localhost:20001'\n")
+	writeFile(t, root, "configs/token_key_session_example.py", fixtureTokenExample)
 	writeCatalogue(t, root)
 	writeFile(t, root, "scripts/formal_run_v0.json", `{"global_task_config": {"dump_path": "./dumps", "direct_to_dumps": true}}`)
 	writeFile(t, root, "scripts/decoupled/container_preprocess.py", "print('preprocess')\n")
@@ -94,7 +94,7 @@ func writeFixture(t *testing.T) string {
 	writeFile(t, root, base+"preprocess/main.py", "print('seed')\n")
 	writeFile(t, root, base+"token_key_session.py", "canvas_domain = 'localhost:20001'\n")
 	// The GitHub task names its repository the way the real ones do; the
-	// token itself must come from the credentials directory.
+	// token itself must come from the environment.
 	writeFile(t, root, "tasks/"+taskPool+"/github-task/token_key_session.py", "all_token_key_session = Dict(\n    github_allowed_repos = \"Annoy-DataSync\", # only this repo\n    github_read_only = \"0\",\n)\n")
 	commitFixture(t, root)
 	// Ignored content that must never reach the archive.
@@ -134,16 +134,37 @@ func writeCatalogue(t *testing.T, root string) {
 	}
 }
 
-// writeCredentials lays out a credentials directory: Toolathlon's token file
-// with the given assignments, plus any key files.
-func writeCredentials(t *testing.T, assignments string, files ...string) string {
-	t.Helper()
-	dir := t.TempDir()
-	writeFile(t, dir, credentialsFileName, "from addict import Dict\nall_token_key_session = Dict(\n"+assignments+")\n")
-	for _, name := range files {
-		writeFile(t, dir, name, "key material\n")
+// fixtureTokenExample is the fixture's configs/token_key_session_example.py,
+// in the shape of the real one: account fields at the "XX" placeholder, a
+// key file named by its path, and a field computed from that file.
+const fixtureTokenExample = `from addict import Dict
+import os
+if os.path.exists("./configs/google_credentials.json"):
+    google_credentials_filename = "./configs/google_credentials.json"
+else:
+    google_credentials_filename = None
+all_token_key_session = Dict(
+    canvas_domain = 'localhost:20001',
+    github_token = "XX", # TO BE FILLED
+    github_allowed_repos = "null", # KEEP_IT_ASIS
+    github_read_only = "1", # default to ban write
+    huggingface_token = "XX", # TO BE FILLED
+    google_oauth2_credentials_path = "configs/google_credentials.json", # copy the json file here
+    google_sheets_folder_id = "XX", # KEEP_IT_ASIS
+    google_client_id = google_credentials.get("client_id", ""),
+)
+`
+
+// envLookup reads the given variables as a run's environment provides
+// them, handing over a fresh buffer each time.
+func envLookup(values map[string]string) func(string) ([]byte, bool) {
+	return func(name string) ([]byte, bool) {
+		value, ok := values[name]
+		if !ok {
+			return nil, false
+		}
+		return []byte(value), true
 	}
-	return dir
 }
 
 func commitFixture(t *testing.T, root string) {
@@ -332,7 +353,8 @@ func TestTasksRefusesApplicationTasksAboveConcurrencyOne(t *testing.T) {
 	options := baseOptions(t, root)
 	options.TaskIDs = []string{"excel-only", "github-task"}
 	options.Concurrency = 2
-	options.CredentialsDir = writeCredentials(t, "    github_token = \"ghp_example\",\n")
+	options.CredentialsEnv = map[string]string{"github_token": "GITHUB_TOKEN"}
+	options.SecretLookup = envLookup(map[string]string{"GITHUB_TOKEN": "ghp_example"})
 	benchmark, err := New(options)
 	if err != nil {
 		t.Fatal(err)
@@ -394,7 +416,7 @@ func TestTasksChecksTheServerCatalogue(t *testing.T) {
 func TestTasksRejectsTasksTheSandboxCannotServe(t *testing.T) {
 	root := writeFixture(t)
 	cases := map[string]string{
-		"github-task":     "third-party account: set benchmark.toolathlon.credentials_dir",
+		"github-task":     "third-party account: map the fields",
 		"k8s-task":        "host runtime the sandbox does not provide",
 		"unknown-server":  "not in the pinned server catalogue",
 		"bad-server-name": "invalid MCP server name",
@@ -618,16 +640,19 @@ func TestSetupRejectsAnEditedSiteConfig(t *testing.T) {
 	}
 }
 
-// An account-backed task loads when the credentials directory provides
-// every field its server reads; the check names what is missing, the task's
-// own token file counts, and the k8s server stays refused.
+// An account-backed task loads when the environment provides every field
+// its server reads; the check names what is missing and why, the task's own
+// token file counts, the profile's names are checked when the benchmark is
+// built, and the k8s server stays refused.
 func TestTasksRunsAccountTasksWithCredentials(t *testing.T) {
 	root := writeFixture(t)
-	load := func(t *testing.T, dir, id string) (taskDetails, error) {
+	load := func(t *testing.T, fields, files, values map[string]string, id string) (taskDetails, error) {
 		t.Helper()
 		options := baseOptions(t, root)
 		options.TaskIDs = []string{id}
-		options.CredentialsDir = dir
+		options.CredentialsEnv = fields
+		options.CredentialFilesEnv = files
+		options.SecretLookup = envLookup(values)
 		benchmark, err := New(options)
 		if err != nil {
 			return taskDetails{}, err
@@ -637,53 +662,91 @@ func TestTasksRunsAccountTasksWithCredentials(t *testing.T) {
 		}
 		return benchmark.details[id], nil
 	}
-	details, err := load(t, writeCredentials(t, "    github_token = \"ghp_example\", # filled\n    huggingface_token = \"XX\", # not this task's\n"), "github-task")
+	github := map[string]string{"github_token": "GITHUB_TOKEN"}
+	token := map[string]string{"GITHUB_TOKEN": "ghp_example"}
+	details, err := load(t, github, nil, token, "github-task")
 	if err != nil {
-		t.Fatalf("filled token: %v", err)
+		t.Fatalf("token from the environment: %v", err)
 	}
 	if !details.needsCredentials || !slices.Equal(details.extraEntries, []string{"local_binary/github-mcp-server"}) {
 		t.Fatalf("details = %+v: the task must carry the credentials and the server binary", details)
 	}
-	if details, err := load(t, writeCredentials(t, "    github_token = \"ghp_example\",\n"), "excel-only"); err != nil || details.needsCredentials || details.extraEntries != nil {
+	if details, err := load(t, github, nil, token, "excel-only"); err != nil || details.needsCredentials || details.extraEntries != nil {
 		t.Fatalf("a task without an account server must not carry credentials: %+v, %v", details, err)
 	}
 
+	sheets := map[string]string{"google_sheets_folder_id": "SHEETS_FOLDER"}
+	sheetsFile := map[string]string{"configs/google_credentials.json": "GOOGLE_CREDENTIALS"}
+	folder := map[string]string{"SHEETS_FOLDER": "1abc"}
 	refusals := map[string]struct {
-		assignments string
-		files       []string
-		id          string
-		want        string
+		fields, files, values map[string]string
+		id, want              string
 	}{
-		"placeholder":   {"    github_token = \"XX\", # TO BE FILLED\n", nil, "github-task", "github_token (still the example's placeholder)"},
-		"not set":       {"    huggingface_token = \"hf_example\",\n", nil, "github-task", "github_token (not set)"},
-		"missing file":  {"    google_oauth2_credentials_path = \"configs/google_credentials.json\",\n    google_sheets_folder_id = \"XX\",\n", nil, "sheets-task", "google_oauth2_credentials_path (file configs/google_credentials.json is not in the directory), google_sheets_folder_id (still the example's placeholder)"},
-		"escaping path": {"    google_oauth2_credentials_path = \"configs/../../etc/passwd\",\n    google_sheets_folder_id = \"1abc\",\n", nil, "sheets-task", "google_oauth2_credentials_path (not a file under configs/)"},
-		"k8s":           {"    github_token = \"ghp_example\",\n", nil, "k8s-task", "host runtime the sandbox does not provide"},
+		"no mapping":    {nil, nil, nil, "github-task", "third-party account: map the fields"},
+		"not mapped":    {map[string]string{"huggingface_token": "HF_TOKEN"}, nil, map[string]string{"HF_TOKEN": "hf_example"}, "github-task", "github_token (not in benchmark.toolathlon.credentials_env)"},
+		"unset":         {github, nil, nil, "github-task", "github_token (environment variable GITHUB_TOKEN is not set)"},
+		"empty":         {github, nil, map[string]string{"GITHUB_TOKEN": ""}, "github-task", "github_token (environment variable GITHUB_TOKEN is not set)"},
+		"file unmapped": {sheets, nil, folder, "sheets-task", "google_oauth2_credentials_path (file configs/google_credentials.json is not in benchmark.toolathlon.credential_files_env)"},
+		"file unset":    {sheets, sheetsFile, folder, "sheets-task", "google_oauth2_credentials_path (file configs/google_credentials.json: environment variable GOOGLE_CREDENTIALS is not set)"},
+		"escaping path": {map[string]string{"google_oauth2_credentials_path": "CREDS_PATH", "google_sheets_folder_id": "SHEETS_FOLDER"}, nil, map[string]string{"CREDS_PATH": "configs/../../etc/passwd", "SHEETS_FOLDER": "1abc"}, "sheets-task", "google_oauth2_credentials_path (not a file under configs/)"},
+		"computed":      {map[string]string{"google_client_id": "CLIENT_ID"}, nil, map[string]string{"CLIENT_ID": "id"}, "excel-only", `token field "google_client_id" is not assigned a string`},
+		"k8s":           {github, nil, token, "k8s-task", "host runtime the sandbox does not provide"},
 	}
 	for name, testCase := range refusals {
 		t.Run(name, func(t *testing.T) {
-			_, err := load(t, writeCredentials(t, testCase.assignments, testCase.files...), testCase.id)
+			_, err := load(t, testCase.fields, testCase.files, testCase.values, testCase.id)
 			if err == nil || !strings.Contains(err.Error(), testCase.want) {
 				t.Fatalf("err = %v, want it to contain %q", err, testCase.want)
 			}
 		})
 	}
-	// The sheets task, with the key file present and a computed value for
-	// a field the example derives from that file.
-	dir := writeCredentials(t, "    google_oauth2_credentials_path = \"configs/google_credentials.json\",\n    google_sheets_folder_id = credentials.get(\"folder\", \"\"),\n", "google_credentials.json")
-	if details, err := load(t, dir, "sheets-task"); err != nil || !details.needsCredentials || details.extraEntries != nil {
+	// The sheets task, with its key file from the environment and the field
+	// the example derives from that file left to the file's own code.
+	values := map[string]string{"SHEETS_FOLDER": "1abc", "GOOGLE_CREDENTIALS": `{"client_id": "id"}`}
+	if details, err := load(t, sheets, sheetsFile, values, "sheets-task"); err != nil || !details.needsCredentials || details.extraEntries != nil {
 		t.Fatalf("sheets task with its key file: %+v, %v", details, err)
 	}
 
-	// The directory itself is checked when the benchmark is built.
-	options := baseOptions(t, root)
-	options.CredentialsDir = filepath.Join(t.TempDir(), "absent")
-	if _, err := New(options); err == nil || !strings.Contains(err.Error(), "credentials directory") {
-		t.Fatalf("absent directory: err = %v", err)
+	// The profile's names are checked when the benchmark is built.
+	for name, testCase := range map[string]struct {
+		fields, files map[string]string
+		want          string
+	}{
+		"field name":     {map[string]string{"github-token": "GITHUB_TOKEN"}, nil, "is not a token field name"},
+		"variable name":  {map[string]string{"github_token": "GITHUB TOKEN"}, nil, "must name an environment variable"},
+		"file variable":  {nil, map[string]string{"configs/key.json": "$KEY"}, "must name an environment variable"},
+		"outside":        {nil, map[string]string{"/etc/passwd": "KEY"}, "must be a file path under configs/"},
+		"escaping":       {nil, map[string]string{"configs/../x": "KEY"}, "must be a file path under configs/"},
+		"the token file": {nil, map[string]string{"configs/token_key_session.py": "KEY"}, "must be a file path under configs/"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			options := baseOptions(t, root)
+			options.CredentialsEnv, options.CredentialFilesEnv = testCase.fields, testCase.files
+			if _, err := New(options); err == nil || !strings.Contains(err.Error(), testCase.want) {
+				t.Fatalf("err = %v, want it to contain %q", err, testCase.want)
+			}
+		})
 	}
-	options.CredentialsDir = t.TempDir()
-	if _, err := New(options); err == nil || !strings.Contains(err.Error(), "must hold Toolathlon's filled token_key_session.py") {
-		t.Fatalf("directory without the token file: err = %v", err)
+}
+
+// Filled fields become JSON string literals, which Python reads as the same
+// string; comments and every other assignment are left as the example has
+// them, and a field the example does not assign a string to is refused.
+func TestFillTokenFileWritesJSONLiterals(t *testing.T) {
+	filled, err := fillTokenFile([]byte(fixtureTokenExample), map[string]string{"github_token": "gh\"p\\1\nx", "huggingface_token": "hf_é"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(filled)
+	if !strings.Contains(text, `    github_token = "gh\"p\\1\nx", # TO BE FILLED`) || !strings.Contains(text, `    huggingface_token = "hf_é", # TO BE FILLED`) {
+		t.Fatalf("filled file:\n%s", text)
+	}
+	values := parseTokenAssignments(filled)
+	if values["github_read_only"] != (tokenValue{literal: "1", isLiteral: true}) || values["google_client_id"] != (tokenValue{}) {
+		t.Fatalf("untouched fields changed: %+v", values)
+	}
+	if _, err := fillTokenFile([]byte(fixtureTokenExample), map[string]string{"notion_token": "secret_value"}); err == nil || !strings.Contains(err.Error(), "not assigned a string") {
+		t.Fatalf("a field the example lacks: err = %v", err)
 	}
 }
 
@@ -719,10 +782,12 @@ all_token_key_session = Dict(
 }
 
 func TestWriteCredentialsArchiveOverlaysConfigs(t *testing.T) {
-	dir := writeCredentials(t, "    github_token = \"ghp_example\",\n", "google_credentials.json", ".mcp-auth/notion.json")
-	writeFile(t, dir, "__pycache__/token_key_session.cpython-312.pyc", "cache\n")
+	creds := &credentials{
+		tokenFile: []byte("all_token_key_session = Dict()\n"),
+		files:     map[string][]byte{"google_credentials.json": []byte("{}"), ".mcp-auth/notion.json": []byte("{}")},
+	}
 	archive := filepath.Join(t.TempDir(), "credentials.tar")
-	if err := writeCredentialsArchive(dir, archive); err != nil {
+	if err := writeCredentialsArchive(creds, archive); err != nil {
 		t.Fatal(err)
 	}
 	members, err := archiveMemberNames(archive)
@@ -733,11 +798,5 @@ func TestWriteCredentialsArchiveOverlaysConfigs(t *testing.T) {
 	want := []string{"configs/.mcp-auth/", "configs/.mcp-auth/notion.json", "configs/google_credentials.json", "configs/token_key_session.py"}
 	if !slices.Equal(members, want) {
 		t.Fatalf("members = %v, want %v", members, want)
-	}
-	if err := os.Symlink(filepath.Join(dir, "google_credentials.json"), filepath.Join(dir, "link.json")); err != nil {
-		t.Skip("symlinks unavailable:", err)
-	}
-	if err := writeCredentialsArchive(dir, archive); err == nil || !strings.Contains(err.Error(), "neither a regular file nor a directory") {
-		t.Fatalf("symlink: err = %v", err)
 	}
 }

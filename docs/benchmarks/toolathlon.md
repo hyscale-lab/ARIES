@@ -123,11 +123,11 @@ Two smaller differences are deliberate:
   the Docker socket with host networking. At the pinned revision **53 of
   the 108 tasks load with no account**: 28 need nothing outside the sandbox
   and the applications, 25 more also reach the public internet (the
-  sandbox network is on for them). **50 more load once the profile names a
-  credentials directory** (see [the account-backed
+  sandbox network is on for them). **50 more load once the profile maps
+  their token fields to environment variables** (see [the account-backed
   tasks](#running-the-account-backed-tasks); 11 of them also list
   `web_search`, so need `harness.web_search` like the public ones); without
-  one they are refused at task load with a message naming the server and
+  that they are refused at task load with a message naming the server and
   the setting. The 5
   `k8s` tasks are refused whatever the profile says; running them would mean
   giving the sandbox a Docker socket, which the adapter will not do.
@@ -193,38 +193,64 @@ an account is narrowed by the task's own `token_key_session.py` (the
 repositories, pages, folders it works on), which the task directory carries.
 
 The adapter keeps the checkout's copy of the file at the example, so the
-pinned tree stays verifiable, and takes yours from a directory **outside the
-checkout**:
+pinned tree stays verifiable, and takes the values from the **host
+environment**, as ARIES takes a model's API key (`model.api_key_env`): the
+profile names environment variables, never the values, so no profile or saved
+configuration holds a token.
 
-1. Follow Toolathlon's guide. Put the filled `token_key_session.py` and every
-   file it names under `configs/` (`google_credentials.json`,
-   `gcp-service_account.keys.json`, `snowflake_rsa_key.p8`, an OAuth cache
-   under `.mcp-auth/`) into one directory, laid out as they would sit in
-   `configs/`.
-2. Name it in the profile:
+1. Follow Toolathlon's guide to register the accounts, then export each value
+   the tasks you run need, and the content of each file the token file names
+   under `configs/` (`google_credentials.json`,
+   `gcp-service_account.keys.json`, `snowflake_rsa_key.p8`), in the shell that
+   starts ARIES.
+2. Map them in the profile, fields of `token_key_session.py` on the left:
 
    ```json
-   "toolathlon": {"credentials_dir": "/srv/toolathlon-credentials"}
+   "toolathlon": {
+     "credentials_env": {
+       "github_token": "TOOLATHLON_GITHUB_TOKEN",
+       "google_sheets_folder_id": "TOOLATHLON_SHEETS_FOLDER"
+     },
+     "credential_files_env": {
+       "configs/google_credentials.json": "TOOLATHLON_GOOGLE_CREDENTIALS"
+     }
+   }
    ```
 
-3. List the tasks. At task load the adapter reads each server's
-   configuration file for the fields it substitutes (`${token.<field>}`) and
-   refuses the task, naming the server and the fields, when your file does
-   not provide one: not assigned, still the example's `"XX"`, or naming a
-   file under `configs/` the directory does not hold. A field the task's own
-   file assigns counts as provided; a field the file computes (the example
-   derives the Google client fields from `google_credentials.json`) is taken
-   as set.
+3. List the tasks. At task load the adapter writes the token file from the
+   checkout's `token_key_session_example.py` with the mapped fields filled in,
+   reads each server's configuration file for the fields it substitutes
+   (`${token.<field>}`), and refuses the task, naming the server, the fields
+   and why, when one is not provided: not mapped (still the example's
+   `"XX"`), mapped to a variable that is not set or is empty, or naming a
+   file under `configs/` that `credential_files_env` does not provide. A field
+   the task's own file assigns counts as provided; a field the example
+   computes (the Google client fields, read from `google_credentials.json`)
+   takes the file it reads from `credential_files_env` and cannot be mapped
+   itself.
 
-At preparation the directory is overlaid on the sandbox's `configs/` right
-after the project tree, so preprocess, the MCP servers and the gateway read
-your tokens; after the evaluate-time reinstall of the project code — which
-puts the example back — it is overlaid again, so a grader that queries the
-service (Notion's, GitHub's, Google's do) grades with the same credentials and
-not with whatever the agent left in the file. The archive that carries it
-exists on the host only for the upload and is not kept in the run directory.
-The GitHub server's binary, `local_binary/github-mcp-server` in the checkout,
-rides in the project archive for the tasks that need it.
+At preparation the token file and the key files are overlaid on the sandbox's
+`configs/` right after the project tree, so preprocess, the MCP servers and
+the gateway read your tokens; after the evaluate-time reinstall of the project
+code — which puts the example back — they are overlaid again, so a grader that
+queries the service (Notion's, GitHub's, Google's do) grades with the same
+credentials and not with whatever the agent left in the file. The archive that
+carries them exists on the host only for the upload and is not kept in the run
+directory. The GitHub server's binary, `local_binary/github-mcp-server` in the
+checkout, rides in the project archive for the tasks that need it.
+
+Toolathlon's servers and scripts log what they send and print what they read,
+so a token can reach the adapter's artifacts. Every value taken from the
+environment is replaced with `<redacted>` in what the adapter saves —
+`preprocess.log`, `gateway.log`, `eval.log`, `eval_res.json`,
+`task_bundle.json` — and in the errors and evaluation details it returns;
+a value is matched as it is, JSON-escaped, and by its lines and the string
+fields of a JSON value (a key file), and values shorter than 8 characters are
+settings, left as they are. What the adapter does not write is not scrubbed:
+the harness's own session and log files, the model bridge's log, and the
+containers' output. The agent has root in the sandbox and can read the token
+file: when a scripted agent did, the token reached its requests to the model and
+the harness's saved session, which the adapter does not scrub.
 
 What to know before running them:
 
@@ -249,7 +275,7 @@ What to know before running them:
   "root": ".cache/toolathlon",
   "tasks": ["canvas-list-test"],
   "environment": {"image": "docker.io/lockon0927/toolathlon-task-image:1016beta"},
-  "toolathlon": {"gateway_port": 10086, "app_host": "", "max_steps": 200, "credentials_dir": ""}
+  "toolathlon": {"gateway_port": 10086, "app_host": "", "max_steps": 200, "credentials_env": {}, "credential_files_env": {}}
 },
 "harness": {"type": "hermes"}
 ```
@@ -257,7 +283,8 @@ What to know before running them:
 `benchmark.environment.workdir` is fixed to Toolathlon's agent workspace and
 `allow_network` to true; a profile that sets them otherwise is rejected. The
 `benchmark.toolathlon` block is optional and its values above are the
-defaults. `credentials_dir` unlocks the account-backed tasks (above).
+defaults. `credentials_env` and `credential_files_env` unlock the
+account-backed tasks (above).
 `max_steps` does **not** bound the agent: it is Toolathlon's
 `max_steps_under_single_turn_mode`, handed to its preprocess for the task
 bundle, where it is bookkeeping for Toolathlon's own loop — which does not

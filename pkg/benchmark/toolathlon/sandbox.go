@@ -75,7 +75,9 @@ func uvCommand(args ...string) core.Command {
 //  6. start the MCP gateway and wait for its health endpoint;
 //  7. inventory the evaluator's runtime (runtime.go), the last thing before
 //     the bridge exists, so Evaluate can tell whether the agent touched it.
-func (b *Benchmark) PrepareSandbox(ctx context.Context, task core.Task, sandbox runner.Sandbox) error {
+func (b *Benchmark) PrepareSandbox(ctx context.Context, task core.Task, sandbox runner.Sandbox) (err error) {
+	// An error may quote a command's output, which may quote a credential.
+	defer func() { err = b.scrubber().err(err) }()
 	if sandbox == nil {
 		return errors.New("toolathlon preparation requires a live sandbox")
 	}
@@ -162,12 +164,18 @@ func (b *Benchmark) installProject(ctx context.Context, sandbox runner.Sandbox, 
 	return extractArchive(ctx, sandbox, archive, archiveContainerPath, "project archive")
 }
 
-// installCredentials overlays the credentials directory on the project's
-// configs/ (see credentials.go). The archive lives on the host only for
-// the upload.
+// installCredentials overlays the token file and the key files written
+// from the environment on the project's configs/ (see credentials.go). The
+// archive lives on the host only for the upload.
 func (b *Benchmark) installCredentials(ctx context.Context, sandbox runner.Sandbox, hostDir string) error {
+	b.mu.RLock()
+	creds := b.creds
+	b.mu.RUnlock()
+	if creds == nil {
+		return errors.New("toolathlon credentials were not read by Tasks")
+	}
 	archive := filepath.Join(hostDir, "credentials.tar")
-	if err := writeCredentialsArchive(b.credentialsDir, archive); err != nil {
+	if err := writeCredentialsArchive(creds, archive); err != nil {
 		return err
 	}
 	return extractArchive(ctx, sandbox, archive, credentialsArchiveContainerPath, "credentials archive")
@@ -255,7 +263,7 @@ func (b *Benchmark) runPreprocess(ctx context.Context, sandbox runner.Sandbox, t
 	command.Timeout = preprocessTimeout
 	result, execErr := sandbox.Exec(ctx, command)
 	logPath := filepath.Join(hostDir, "preprocess.log")
-	if err := os.WriteFile(logPath, []byte(result.Stdout+result.Stderr), 0o600); err != nil {
+	if err := os.WriteFile(logPath, []byte(b.scrubber().text(result.Stdout+result.Stderr)), 0o600); err != nil {
 		return fmt.Errorf("write preprocess log: %w", err)
 	}
 	if execErr != nil {

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -56,6 +57,11 @@ type flowSandbox struct {
 	// project extraction.
 	credentialsMembers   []string
 	credentialsInstalled bool
+	// credentialsTokenFile is the token file of the last credentials archive.
+	credentialsTokenFile []byte
+	// leak is a value the scripted preprocess, evaluator, gateway, bundle and
+	// result repeat, as Toolathlon's servers repeat the tokens they use.
+	leak string
 }
 
 func newFlowSandbox(t *testing.T, taskName string, needsApplication bool) *flowSandbox {
@@ -211,6 +217,7 @@ func (s *flowSandbox) Exec(_ context.Context, command core.Command) (core.Comman
 					s.t.Error("credentials overlaid before the project tree")
 				}
 				s.credentialsMembers = members
+				s.credentialsTokenFile = tarMember(s.t, s.uploads[archive], credentialsConfigsDir+"/"+credentialsFileName)
 				s.credentialsInstalled = true
 				s.events = append(s.events, "credentials")
 				return core.CommandResult{}, nil
@@ -272,7 +279,7 @@ func (s *flowSandbox) execUV(command core.Command, args []string) (core.CommandR
 			return core.CommandResult{ExitCode: s.preprocessExit, Stdout: "boom"}, nil
 		}
 		s.files[bundleContainerPath] = true
-		return core.CommandResult{Stdout: "Preprocess done."}, nil
+		return core.CommandResult{Stdout: "Preprocess done." + s.leak}, nil
 	case "scripts.decoupled.container_eval":
 		if _, ok := s.taskDir["evaluation"]; !ok {
 			s.t.Error("evaluator ran without the grader restored")
@@ -295,7 +302,7 @@ func (s *flowSandbox) execUV(command core.Command, args []string) (core.CommandR
 		var parsed evalResult
 		_ = json.Unmarshal([]byte(s.evalResult), &parsed)
 		if parsed.Pass != nil && *parsed.Pass {
-			return core.CommandResult{Stdout: "Pass: True"}, nil
+			return core.CommandResult{Stdout: "Pass: True" + s.leak}, nil
 		}
 		return core.CommandResult{ExitCode: 1, Stdout: "Pass: False"}, nil
 	}
@@ -324,7 +331,7 @@ func (s *flowSandbox) Download(_ context.Context, source, destination string) er
 		servers, _ := json.Marshal(s.bundleServers)
 		bundle := fmt.Sprintf(`{"schema_version": 2, "task_dir": "%s/%s", "needed_mcp_servers": %s,
 			"container_paths": {"task_root": %q, "agent_workspace": %q, "log_file": %q},
-			"resolved_task_config": {"task_dir": "%s/%s"}}`, taskPool, s.taskName, servers, taskRootPath, agentWorkspacePath, trajectoryPath, taskPool, s.taskName)
+			"resolved_task_config": {"task_dir": "%s/%s"}, "note": %q}`, taskPool, s.taskName, servers, taskRootPath, agentWorkspacePath, trajectoryPath, taskPool, s.taskName, s.leak)
 		return os.WriteFile(destination, []byte(bundle), 0o600)
 	case stashContainerPath:
 		file, err := os.Create(destination)
@@ -348,7 +355,7 @@ func (s *flowSandbox) Download(_ context.Context, source, destination string) er
 		}
 		return file.Close()
 	case gatewayLogPath:
-		return os.WriteFile(destination, []byte("[gateway] exposed tools: []\n"), 0o600)
+		return os.WriteFile(destination, []byte("[gateway] exposed tools: []\n"+s.leak), 0o600)
 	case runtimeManifestContainerPath:
 		return os.WriteFile(destination, []byte(s.runtimeManifest), 0o600)
 	case evalResultPath:
@@ -651,10 +658,11 @@ func TestValidateBundleRejectsLayoutDrift(t *testing.T) {
 	}
 }
 
-// An account-backed task gets the credentials directory overlaid on
-// configs/ after the project tree at preparation and again after the
+// An account-backed task gets the credentials from the environment overlaid
+// on configs/ after the project tree at preparation and again after the
 // evaluate-time reinstall, and its project archive carries the server
-// binary. The host copy of the overlay does not outlive the upload.
+// binary. The host copy of the overlay does not outlive the upload, and no
+// saved artifact keeps a value that came from the environment.
 func TestPrepareAndEvaluateOverlayTheCredentials(t *testing.T) {
 	sandbox := newFlowSandbox(t, "github-task", false)
 	sandbox.bundleServers = []string{"github", "filesystem"}
@@ -662,7 +670,11 @@ func TestPrepareAndEvaluateOverlayTheCredentials(t *testing.T) {
 	root := writeFixture(t)
 	options := baseOptions(t, root)
 	options.TaskIDs = []string{sandbox.taskName}
-	options.CredentialsDir = writeCredentials(t, "    github_token = \"ghp_example\",\n", "google_credentials.json")
+	options.CredentialsEnv = map[string]string{"github_token": "GITHUB_TOKEN"}
+	options.CredentialFilesEnv = map[string]string{"configs/google_credentials.json": "GOOGLE_CREDENTIALS"}
+	options.SecretLookup = envLookup(map[string]string{"GITHUB_TOKEN": "ghp_example123", "GOOGLE_CREDENTIALS": `{"refresh_token": "1//0gRefreshTokenValue"}`})
+	sandbox.leak = " Authorization: Bearer ghp_example123 refresh 1//0gRefreshTokenValue"
+	sandbox.evalResult = `{"pass": true, "details": "checked with ghp_example123"}`
 	benchmark, err := New(options)
 	if err != nil {
 		t.Fatal(err)
@@ -685,6 +697,9 @@ func TestPrepareAndEvaluateOverlayTheCredentials(t *testing.T) {
 	}
 	if !slices.Equal(sandbox.credentialsMembers, []string{"configs/google_credentials.json", "configs/token_key_session.py"}) {
 		t.Fatalf("credentials archive members = %v", sandbox.credentialsMembers)
+	}
+	if !strings.Contains(string(sandbox.credentialsTokenFile), `    github_token = "ghp_example123", # TO BE FILLED`) {
+		t.Fatalf("token file written from the example:\n%s", sandbox.credentialsTokenFile)
 	}
 	hostDir := filepath.Join(benchmark.outputDir, task.ID, "toolathlon")
 	if _, err := os.Stat(filepath.Join(hostDir, "credentials.tar")); !errors.Is(err, os.ErrNotExist) {
@@ -710,6 +725,64 @@ func TestPrepareAndEvaluateOverlayTheCredentials(t *testing.T) {
 	for _, member := range sandbox.projectMembers {
 		if strings.HasPrefix(member, "local_binary/") {
 			t.Fatalf("the reinstall carried %s", member)
+		}
+	}
+	entries, err := os.ReadDir(hostDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scrubbed := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		content, err := os.ReadFile(filepath.Join(hostDir, entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(content), "ghp_example123") || strings.Contains(string(content), "1//0gRefreshTokenValue") {
+			t.Errorf("%s keeps a value from the environment", entry.Name())
+		}
+		if strings.Contains(string(content), redactedValue) {
+			scrubbed++
+		}
+	}
+	// preprocess.log, gateway.log, eval.log, eval_res.json and task_bundle.json
+	if scrubbed != 5 {
+		t.Fatalf("%d artifacts carry the placeholder, want 5", scrubbed)
+	}
+
+	// A grader that fails to grade quotes its details in the error, scrubbed
+	// like the files.
+	sandbox.evalResult = `{"pass": null, "details": "token ghp_example123 was refused"}`
+	sandbox.files[evalResultPath] = true
+	sandbox.files[trajectoryPath] = true
+	evaluation, err = benchmark.Evaluate(context.Background(), task, sandbox)
+	if (err != nil && strings.Contains(err.Error(), "ghp_example123")) || !strings.Contains(evaluation.Error, "token "+redactedValue+" was refused") {
+		t.Fatalf("evaluation error = %q, err = %v", evaluation.Error, err)
+	}
+}
+
+// tarMember returns one member of a tar archive.
+func tarMember(t *testing.T, archive, name string) []byte {
+	t.Helper()
+	file, err := os.Open(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	reader := tar.NewReader(file)
+	for {
+		header, err := reader.Next()
+		if err != nil {
+			t.Fatalf("%s not in %s: %v", name, archive, err)
+		}
+		if header.Name == name {
+			content, err := io.ReadAll(reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return content
 		}
 	}
 }
