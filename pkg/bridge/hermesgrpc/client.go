@@ -208,10 +208,11 @@ func connect() (sandboxv1.SandboxClient, func(), error) {
 	}
 	connection, err := grpc.NewClient(target,
 		grpc.WithTransportCredentials(transport),
-		// grpc-go honours HTTPS_PROXY by default. The bridge is reachable only
-		// on the task network and a proxy would carry every script, its stdin
-		// and all output off that network, so proxying is refused outright
-		// rather than left to whatever the harness image's environment says.
+		// grpc-go honours HTTPS_PROXY by default. The bridge listens on the
+		// per-task network's gateway, which a proxy outside that network
+		// cannot reach, and the address changes per task, so NO_PROXY in the
+		// harness image cannot be relied on to exempt it. TLS with pinning
+		// already keeps a CONNECT proxy from reading the traffic.
 		grpc.WithNoProxy(),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(maxMessageBytes),

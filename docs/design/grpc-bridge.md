@@ -371,9 +371,14 @@ reaches the server after `Stop` has marked the session revoked is refused with `
 every procedure, and recorded. `hermesssh` has no such flag and relies on the transport being torn
 down.
 
-**The client refuses to be proxied.** grpc-go honours `HTTPS_PROXY` by default, which would carry
-every script, its `stdin`, file content and all output off the task network. The client opts out
-with `grpc.WithNoProxy()` rather than depending on the harness image's `NO_PROXY`.
+**The client refuses to be proxied, so that it can reach the bridge at all.** grpc-go honours
+`HTTPS_PROXY` by default, sending every connection to the proxy. The bridge listens on the gateway
+of a per-task network, which a proxy outside that network generally cannot reach, so any environment
+that routes model traffic through a proxy would fail every tool call. The integration test caught
+exactly that. The address changes per task, so `NO_PROXY` in the harness image cannot be relied on
+to exempt it, and the client opts out with `grpc.WithNoProxy()` instead. Confidentiality is not the
+reason: with TLS and a pinned server certificate, a `CONNECT` proxy only relays ciphertext. The SSH
+route never had the problem, because OpenSSH uses no proxy without a `ProxyCommand`.
 
 **Keepalive is off.** grpc-go sends no client pings by default, and the server's own interval is two
 hours. The SSH bridge's `keepalive@openssh.com` handler was dropped rather than replaced
