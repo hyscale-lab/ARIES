@@ -61,7 +61,8 @@ omitted harness dimension stays unlimited; an omitted sandbox dimension keeps
 the value in the task's `task.toml`. Neither block inherits from the other.
 The independent `agent_timeout_seconds` field changes only the agent deadline.
 The independent `verifier_timeout_floor_seconds` field raises a Terminal-Bench
-task's evaluation budget to at least that many seconds and never lowers one.
+or RoadmapBench task's evaluation budget to at least that many seconds and never
+lowers one.
 It covers the entire verifier command, including dependency installation and
 test execution, and leaves the agent deadline unchanged. Some task test scripts
 exhaust a short declared budget while installing dependencies.

@@ -32,10 +32,17 @@ flowchart TB
 ```
 
 The current implementations are Terminal-Bench 2, Deep Research Bench,
-SWE-Atlas QA, and the public SWE-bench Pro split, all from exact pinned
+SWE-Atlas QA, RoadmapBench, and the public SWE-bench Pro split, all from exact pinned
 sources. Terminal-Bench 2's task environment images and workdirs are derived
 from the selected task data; setup verifies the pinned checkout and selected
 task inputs before a run.
+
+RoadmapBench loads its own Harbor version-1 task data through a sparse pinned
+checkout. It removes known verifier/oracle staging before agent access and
+injects the pinned private tests only after both gates. Official fractional
+rewards remain fractional; only a reward of 1 resolves the task. Its published
+image names imply mutable `latest` tags. See the
+[RoadmapBench guide](../benchmarks/roadmapbench.md) for setup and artifacts.
 
 Deep Research Bench has no sandbox-resident private verifier tree. Its private
 material is a reference report and RACE-dimension rubric compared by an

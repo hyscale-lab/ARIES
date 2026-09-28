@@ -1,5 +1,36 @@
 # ARIES Tasks
 
+## RoadmapBench benchmark adapter
+
+Implemented on `feat/roadmapbench` with no new dependency or Runner role:
+
+- Pinned the official 115-task dataset and inspected all 345 task TOMLs,
+  Dockerfiles, and test scripts. Loader, configuration, and explicit command
+  wiring support the existing harness/bridge pairs and a Codex smoke profile.
+- Setup atomically installs a shallow sparse checkout containing instructions,
+  TOML, Dockerfiles, and private tests, excluding solutions and vendored source.
+  Real source validation reproduced Hugging Face HTTP 500 on bulk lazy-blob
+  requests; population one task at a time succeeds. Regressions cover bounded
+  requests, NUL-delimited paths, ignored unpinned files, and failed/concurrent
+  installation. The installed exact revision loads all 115 tasks successfully.
+- Preparation removes and proves absence of known verifier/oracle staging,
+  including Polars' pip cache. Evaluation rechecks the pinned source, clears
+  stale outputs for eight upstream scripts, and injects private tests only
+  after the existing isolation gates. Official fractional rewards and raw
+  reward details are retained; only reward 1 resolves a task. Dataset pins do
+  not make upstream's implicit latest image tags immutable.
+- Local Go 1.26.5 passes `make build`, `make test`, `make test-race`, and
+  `make lint`, plus the real 115-task dataset integration test. The complete
+  `make integration` was attempted: container tests cannot run without a local
+  Docker socket, and existing SWE-bench Pro source tests lack Git LFS. The new
+  deterministic Docker evaluator fixture is therefore still unverified.
+- Final dependency, formatting, diff, and changed-file credential checks pass.
+  No owned test/run process, temporary source checkout, test directory, or
+  staged identity remains; the absent local daemon prevented container creation.
+- Per user choice, verification remains local. Automatic approval review
+  rejected the proposed remote source transfer for missing transmission
+  authorization; no source was transferred and no paid model run was used.
+
 ## Codex + Qwen3.8 DeepResearchBench report collection
 
 Active plan: collect all 100 DRB reports on dual-h100 with the exact BF16

@@ -92,7 +92,14 @@ narrow `TaskUser` and `ExecSupervisedStream` capabilities avoid task-owned shell
 and cleanup commands on this path. Proof, supervisor exit, Docker exec exit,
 audit drain, and host credential removal must all succeed before evaluation.
 This adds no Runner role, shared transport framework, or dependency. RoadmapBench
-is not implemented. Codex reasoning effort and developer instructions remain
+now has an independent adapter for the 115-task pinned Harbor version-1 release.
+Its sparse checkout excludes vendored repositories and solutions. Task image
+names retain upstream's implicit latest tag as an explicit tag, so the dataset
+pin does not pin image bytes. Preparation removes and confirms absence of
+known verifier/oracle staging; evaluation rechecks the private source checkout,
+resets known stale verifier outputs, injects only tests after both gates, and
+preserves the official fractional reward. Only reward 1 resolves a task.
+Codex reasoning effort and developer instructions remain
 native harness settings. Its subagents inherit the parent model, effort, and
 remote environment without requiring another bridge or SSH session. DRB
 allows task-local SearXNG and shell HTTP retrieval when dedicated web tools

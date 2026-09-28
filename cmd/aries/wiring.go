@@ -11,6 +11,7 @@ import (
 	"github.com/hyscale-lab/aries/internal/app"
 	runtimesglang "github.com/hyscale-lab/aries/internal/modelruntime/sglang"
 	"github.com/hyscale-lab/aries/pkg/benchmark/deepresearchbench"
+	"github.com/hyscale-lab/aries/pkg/benchmark/roadmapbench"
 	"github.com/hyscale-lab/aries/pkg/benchmark/sweatlas"
 	"github.com/hyscale-lab/aries/pkg/benchmark/swebenchpro"
 	"github.com/hyscale-lab/aries/pkg/benchmark/terminalbench"
@@ -57,6 +58,7 @@ func commandWiring() app.Wiring {
 func validateComponents(cfg config.Config) error {
 	switch cfg.Benchmark.Type {
 	case "terminalbench2":
+	case "roadmapbench":
 	case "deepresearchbench":
 	case "sweatlasqa":
 	case "swebenchpro":
@@ -150,6 +152,16 @@ func newBenchmark(cfg config.Config, outputRoot, logicalID, occurrenceID string,
 		benchmark, err := terminalbench.New(terminalbench.Options{Root: cfg.Benchmark.Root, TaskIDs: []string{logicalID}, ExecutionTaskIDs: executionIDs, OutputDir: outputRoot, Revision: cfg.Versions.TerminalBench2.Revision, VerifierTimeoutFloor: verifierTimeoutFloor(cfg)})
 		if err != nil {
 			return nil, fmt.Errorf("construct terminalbench2 benchmark: %w", err)
+		}
+		return benchmark, nil
+	case "roadmapbench":
+		var executionIDs []string
+		if occurrenceID != logicalID {
+			executionIDs = []string{occurrenceID}
+		}
+		benchmark, err := roadmapbench.New(roadmapbench.Options{Root: cfg.Benchmark.Root, TaskIDs: []string{logicalID}, ExecutionTaskIDs: executionIDs, OutputDir: outputRoot, Revision: cfg.Versions.RoadmapBench.Revision, VerifierTimeoutFloor: verifierTimeoutFloor(cfg)})
+		if err != nil {
+			return nil, fmt.Errorf("construct roadmapbench benchmark: %w", err)
 		}
 		return benchmark, nil
 	case "swebenchpro":
@@ -457,6 +469,8 @@ func setupBenchmark(ctx context.Context, cfg config.Config) error {
 	switch cfg.Benchmark.Type {
 	case "terminalbench2":
 		return terminalbench.Setup(ctx, cfg.Benchmark.Root, cfg.Versions.TerminalBench2.RepositoryURL, cfg.Versions.TerminalBench2.Revision)
+	case "roadmapbench":
+		return roadmapbench.Setup(ctx, cfg.Benchmark.Root, cfg.Versions.RoadmapBench.RepositoryURL, cfg.Versions.RoadmapBench.Revision)
 	case "deepresearchbench":
 		return deepresearchbench.Setup(ctx, cfg.Benchmark.Root, cfg.Versions.DeepResearchBench.RepositoryURL, cfg.Versions.DeepResearchBench.Revision)
 	case "sweatlasqa":
@@ -473,6 +487,16 @@ func loadPreparationTasks(ctx context.Context, cfg config.Config, taskIDs []stri
 		lookup = environmentAPIKeyLookup
 	}
 	switch cfg.Benchmark.Type {
+	case "roadmapbench":
+		benchmark, err := roadmapbench.New(roadmapbench.Options{Root: cfg.Benchmark.Root, TaskIDs: taskIDs, OutputDir: cfg.OutputDir, Revision: cfg.Versions.RoadmapBench.Revision, VerifierTimeoutFloor: verifierTimeoutFloor(cfg)})
+		if err != nil {
+			return nil, fmt.Errorf("validate roadmapbench profile: %w", err)
+		}
+		tasks, err := benchmark.Tasks(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("load roadmapbench tasks: %w", err)
+		}
+		return tasks, nil
 	case "swebenchpro":
 		benchmark, err := swebenchpro.New(swebenchpro.Options{
 			Root: cfg.Benchmark.Root, TaskIDs: taskIDs, OutputDir: cfg.OutputDir,

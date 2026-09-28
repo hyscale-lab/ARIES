@@ -408,6 +408,7 @@ func (c Config) CoreModel() core.ModelConfig {
 // Versions contains the upstream version selections shared by profiles.
 type Versions struct {
 	TerminalBench2    TerminalBench2Versions    `json:"terminalbench2"`
+	RoadmapBench      RoadmapBenchVersions      `json:"roadmapbench"`
 	DeepResearchBench DeepResearchBenchVersions `json:"deepresearchbench"`
 	SWEAtlas          SWEAtlasVersions          `json:"sweatlasqa"`
 	SWEbenchPro       SWEbenchProVersions       `json:"swebenchpro"`
@@ -417,6 +418,11 @@ type Versions struct {
 }
 
 type TerminalBench2Versions struct {
+	RepositoryURL string `json:"repository_url"`
+	Revision      string `json:"revision"`
+}
+
+type RoadmapBenchVersions struct {
 	RepositoryURL string `json:"repository_url"`
 	Revision      string `json:"revision"`
 }
@@ -472,6 +478,11 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("load version pins: %w", err)
 	}
 	cfg.Versions = versions
+	if cfg.Benchmark.Type == "roadmapbench" {
+		if err := validateRepositoryPin("roadmapbench", versions.RoadmapBench.RepositoryURL, versions.RoadmapBench.Revision); err != nil {
+			return Config{}, fmt.Errorf("load RoadmapBench version pins: %w", err)
+		}
+	}
 	if cfg.Harness.Type == "codex" {
 		if _, err := versions.HarnessImage("codex"); err != nil {
 			return Config{}, fmt.Errorf("load Codex version pins: %w", err)
@@ -813,6 +824,17 @@ func (c *Config) validateBenchmarkType() error {
 		}
 		if c.Benchmark.Fact != nil {
 			return errors.New("fact must not be set for terminalbench2")
+		}
+		return nil
+	case "roadmapbench":
+		if c.Benchmark.Environment != nil {
+			return errors.New("benchmark.environment must not be set for roadmapbench")
+		}
+		if c.Benchmark.Judge != nil {
+			return errors.New("judge must not be set for roadmapbench")
+		}
+		if c.Benchmark.Fact != nil {
+			return errors.New("fact must not be set for roadmapbench")
 		}
 		return nil
 	case "sweatlasqa":
@@ -1179,6 +1201,13 @@ func (c Versions) validate() error {
 	}
 	if err := validateRepositoryPin("terminalbench2", c.TerminalBench2.RepositoryURL, c.TerminalBench2.Revision); err != nil {
 		return err
+	}
+	// Older catalogs remain valid for other benchmarks. A selected
+	// RoadmapBench profile requires this pin in Load.
+	if c.RoadmapBench != (RoadmapBenchVersions{}) {
+		if err := validateRepositoryPin("roadmapbench", c.RoadmapBench.RepositoryURL, c.RoadmapBench.Revision); err != nil {
+			return err
+		}
 	}
 	if err := validateRepositoryPin("deepresearchbench", c.DeepResearchBench.RepositoryURL, c.DeepResearchBench.Revision); err != nil {
 		return err

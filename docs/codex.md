@@ -6,8 +6,8 @@ shell and filesystem tools over SSH into the task container. The harness and
 evaluator therefore operate on the same task files, with the usual harness
 stop and bridge revocation gates before evaluation.
 
-This adds a harness and bridge, not a benchmark adapter. RoadmapBench is not
-implemented. A particular Qwen checkpoint is usable only when its serving
+The [RoadmapBench adapter](benchmarks/roadmapbench.md) has a checked-in Codex
+profile. A particular Qwen checkpoint is usable only when its serving
 stack implements the Responses API and the native tool-call formats expected
 by this Codex version; no live Qwen result is implied by the deterministic
 integration test.

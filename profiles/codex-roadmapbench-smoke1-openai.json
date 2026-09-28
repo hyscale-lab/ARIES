@@ -1,0 +1,38 @@
+{
+  "name": "codex-roadmapbench-smoke1-openai",
+  "versions_file": "../configs/versions.json",
+  "overrides_file": "",
+  "execution": {
+    "concurrency": 1
+  },
+  "benchmark": {
+    "type": "roadmapbench",
+    "root": ".cache/roadmapbench",
+    "tasks": [
+      "opt-3.0.0-roadmap"
+    ]
+  },
+  "harness": {
+    "type": "codex",
+    "mode": "agent",
+    "codex": {
+      "executable": "../.cache/codex/0.157.1/codex"
+    }
+  },
+  "sandbox": {
+    "type": "docker"
+  },
+  "bridge": {
+    "type": "codex-ssh"
+  },
+  "runtime": {
+    "backend": "openai",
+    "mode": "external"
+  },
+  "model": {
+    "base_url": "http://model.local:8000/v1",
+    "api_key_env": "MODEL_API_KEY",
+    "id": "replace-with-served-model-id"
+  },
+  "output_dir": "runs"
+}

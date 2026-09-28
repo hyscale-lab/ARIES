@@ -76,13 +76,16 @@ func TestExplicitCompositionSwitches(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(source)
-	for _, value := range []string{`case "terminalbench2"`, `case "sweatlasqa"`, `case "swebenchpro"`, `case "openclaw"`, `case "hermes"`, `case "codex"`, `case "docker"`, `case "openclaw-ssh"`, `case "hermes-ssh"`, `case "codex-ssh"`, `case "deepseek"`, `case "sglang"`, `case "openai"`} {
+	for _, value := range []string{`case "terminalbench2"`, `case "roadmapbench"`, `case "sweatlasqa"`, `case "swebenchpro"`, `case "openclaw"`, `case "hermes"`, `case "codex"`, `case "docker"`, `case "openclaw-ssh"`, `case "hermes-ssh"`, `case "codex-ssh"`, `case "deepseek"`, `case "sglang"`, `case "openai"`} {
 		if !strings.Contains(text, value) {
 			t.Fatalf("missing explicit switch %s", value)
 		}
 	}
 	if got := strings.Count(text, `case "swebenchpro"`); got != 4 {
 		t.Fatalf("swebenchpro explicit switch count = %d, want 4", got)
+	}
+	if got := strings.Count(text, `case "roadmapbench"`); got != 4 {
+		t.Fatalf("roadmapbench explicit switch count = %d, want 4", got)
 	}
 	for _, forbidden := range []string{"plugin.Open", "reflect.", "Register("} {
 		if strings.Contains(text, forbidden) {

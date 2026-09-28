@@ -87,7 +87,7 @@ implementations:
 | Role or service | Implementation |
 | --- | --- |
 | Agent harness | OpenClaw (text and realtime voice modes); Hermes (text); Codex (text) |
-| Benchmark | Terminal-Bench 2; Deep Research Bench; the 731-task public SWE-bench Pro split |
+| Benchmark | Terminal-Bench 2; Deep Research Bench; the 731-task public SWE-bench Pro split; [RoadmapBench](docs/benchmarks/roadmapbench.md) |
 | Tool sandbox | Docker, using the Moby Go SDK |
 | Tool bridge | OpenClaw–Docker SSH bridge; Hermes–Docker SSH bridge; Codex native executor over SSH |
 | Model service | External DeepSeek; external OpenAI-compatible servers such as vLLM; external or ARIES-managed SGLang |
