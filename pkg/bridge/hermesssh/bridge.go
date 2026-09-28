@@ -646,10 +646,12 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 	address := net.JoinHostPort(host, port)
 	network := sandbox.NetworkName()
 	manager.logger.WithContext(ctx).WithFields(logrus.Fields{"address": address, "network": network, "container": sandbox.ContainerName()}).Info("Hermes SSH bridge started")
+	// Every agent exec runs in the sandbox's workdir (prepareRemoteCommand), so
+	// the endpoint names it for Hermes's terminal to use as its own.
 	return core.ToolEndpoint{
 		Protocol: "ssh", Address: address, Username: lockedUsername, Network: network,
 		IdentityFile: identityContainerPath, IdentitySourceFile: session.identitySource,
-		LogPaths: session.logPaths(),
+		LogPaths: session.logPaths(), Workdir: sandbox.Workdir(),
 	}, nil
 }
 

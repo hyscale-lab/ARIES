@@ -306,7 +306,7 @@ func endpointFiles(t *testing.T) core.ToolEndpoint {
 	}
 	return core.ToolEndpoint{
 		Protocol: "ssh", Address: "172.22.0.1:39425", Username: "aries", Network: "aries-net-test",
-		IdentityFile: identityContainerFS, IdentitySourceFile: path,
+		IdentityFile: identityContainerFS, IdentitySourceFile: path, Workdir: "/app",
 	}
 }
 
@@ -415,6 +415,41 @@ func TestStartStagesPrivateRuntimeAndPinsIdleContainer(t *testing.T) {
 		if header.Uid != runtimeUID || header.Gid != runtimeGID {
 			t.Fatalf("%s owned by %d:%d, want %d:%d", name, header.Uid, header.Gid, runtimeUID, runtimeGID)
 		}
+	}
+}
+
+// Hermes must run agent commands where the bridge does: the rendered terminal
+// section and TERMINAL_CWD both name the endpoint's workdir.
+func TestStartNamesTheBridgeWorkdirToTheTerminal(t *testing.T) {
+	fake := newFakeDocker()
+	manager := newTestManager(t, fake, []byte("model-secret"))
+	request := testRequest(t)
+	if err := manager.Start(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop(context.Background())
+
+	retained, err := os.ReadFile(filepath.Join(manager.outputDir, request.TaskID, "harness", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("\nterminal:\n  backend: \"ssh\"\n  cwd: \"/app\"\n  timeout: %d\n", manager.terminalTimeout)
+	if !strings.Contains(string(retained), want) {
+		t.Fatalf("config.yaml lacks the terminal section %q:\n%s", want, retained)
+	}
+	if !slices.Contains(fake.created.Config.Env, "TERMINAL_CWD=/app") {
+		t.Fatalf("TERMINAL_CWD does not name the bridge's workdir: %v", fake.created.Config.Env)
+	}
+}
+
+func TestStartRefusesEndpointWithoutWorkdir(t *testing.T) {
+	fake := newFakeDocker()
+	manager := newTestManager(t, fake, []byte("model-secret"))
+	request := testRequest(t)
+	request.Endpoint.Workdir = ""
+	err := manager.Start(context.Background(), request)
+	if err == nil || !strings.Contains(err.Error(), "workdir") {
+		t.Fatalf("Start without an endpoint workdir: %v", err)
 	}
 }
 

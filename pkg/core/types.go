@@ -109,6 +109,9 @@ type ToolEndpoint struct {
 	KnownHostsFile       string   `json:"known_hosts_file,omitempty"`
 	KnownHostsSourceFile string   `json:"known_hosts_source_file,omitempty"`
 	LogPaths             []string `json:"log_paths,omitempty"`
+	// Workdir is the sandbox directory the endpoint runs agent commands in,
+	// for a harness that must name it to its own tool layer.
+	Workdir string `json:"workdir,omitempty"`
 }
 
 // HarnessRequest contains task-local runtime inputs supplied before Run.

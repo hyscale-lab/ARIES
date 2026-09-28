@@ -56,9 +56,15 @@ Hermes's own SQLite session store exported to standard output. Container logs,
 both output streams, the redacted configuration, and the session export are
 private harness artifacts.
 
-Hermes reads its tool backend only from environment variables, so ARIES sets
+Hermes reads its SSH target from environment variables, so ARIES sets
 `TERMINAL_ENV=ssh` with the bridge's host, port, user, and identity path; this
-is upstream's native SSH environment, not an ARIES modification. `HERMES_HOME`
+is upstream's native SSH environment, not an ARIES modification. The working
+directory is the sandbox workdir the bridge reports on its endpoint, the
+directory every agent command runs in. Hermes prefixes each command with
+`builtin cd -- <dir> || exit 126`, so ARIES names that directory both in
+`TERMINAL_CWD` and in a `terminal:` section of the rendered configuration
+(backend, directory, timeout): without that section the v2026.5.29.2 CLI
+replaces `TERMINAL_CWD` with its own process directory. `HERMES_HOME`
 is relocated to a staged private directory so the image's declared `/opt/data`
 volume holds no run state; that one anonymous volume is still created by Docker
 and is the only mount the harness tolerates. The model credential is written to

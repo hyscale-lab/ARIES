@@ -184,6 +184,10 @@ func TestBridgeProxiesHermesCommandsAndRetainsEvidence(t *testing.T) {
 	if endpoint.Protocol != "ssh" || endpoint.Username != "aries" || endpoint.IdentitySourceFile == "" {
 		t.Fatalf("endpoint = %+v", endpoint)
 	}
+	// Hermes's terminal must be told the directory the bridge runs commands in.
+	if endpoint.Workdir != sandbox.Workdir() {
+		t.Fatalf("endpoint workdir = %q, want the sandbox's %q", endpoint.Workdir, sandbox.Workdir())
+	}
 	host, port, err := net.SplitHostPort(endpoint.Address)
 	if err != nil || host != "127.0.0.1" || port == "" || port == "22" {
 		t.Fatalf("endpoint address = %q", endpoint.Address)

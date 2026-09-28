@@ -90,9 +90,9 @@ type renderSettings struct {
 // exports the name from a private staged key file, so no credential ever reaches
 // the rendered config, Docker metadata, or results.
 //
-// Terminal settings are deliberately absent. Hermes resolves its backend from
-// environment variables only (tools/terminal_tool.py::_get_env_config), so the
-// SSH target is supplied through containerEnvironment below.
+// The terminal section is rendered separately (renderTerminal) because it names
+// the sandbox's workdir, which comes from the bridge's endpoint rather than the
+// profile; the SSH target itself is supplied through containerEnvironment.
 //
 // Optional blocks are written only when the profile set them, so a profile
 // without them renders the same file as before they existed:
@@ -284,6 +284,35 @@ func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *Voi
 	return output.Bytes(), nil
 }
 
+// renderTerminal is the `terminal:` section appended to config.yaml. Hermes
+// wraps every agent command in `builtin cd -- <cwd> || exit 126`, where <cwd>
+// is the call's own workdir or else the configured one (tools/terminal_tool.py),
+// so the configured directory must exist in the sandbox: it is the directory
+// the bridge runs commands in. The file has to carry it, not only
+// TERMINAL_CWD: without a terminal section the v2026.5.29.2 CLI takes the
+// backend to be local and exports its own process directory as TERMINAL_CWD
+// (cli.py load_cli_config). With a section present the CLI exports every key
+// of its terminal defaults over the environment, so the backend and the
+// timeout are written here too; the remaining defaults configure other
+// backends only.
+func renderTerminal(workdir string, timeout int) ([]byte, error) {
+	if workdir == "" {
+		return nil, errors.New("Hermes SSH endpoint does not name the sandbox workdir")
+	}
+	if !validWorkdir(workdir) {
+		return nil, fmt.Errorf("Hermes terminal workdir %q is not shell-neutral", workdir)
+	}
+	if timeout <= 0 {
+		return nil, errors.New("Hermes terminal timeout must be positive")
+	}
+	var output bytes.Buffer
+	output.WriteString("\nterminal:\n")
+	output.WriteString("  backend: \"ssh\"\n")
+	output.WriteString("  cwd: " + yamlString(workdir) + "\n")
+	output.WriteString("  timeout: " + strconv.Itoa(timeout) + "\n")
+	return output.Bytes(), nil
+}
+
 // validateGeneration mirrors pkg/config's checks so a caller that bypasses the
 // profile loader cannot render an unusable window.
 func validateGeneration(model core.ModelConfig) error {
@@ -336,12 +365,12 @@ func yamlFloat(value float64) string {
 // environment, so a profile's extra_body can carry a per-task value, such as
 // a per-task tag, without ARIES interpreting the block.
 //
-// TERMINAL_CWD is an ARIES-owned path that deliberately does not exist in any
-// task image. The bridge is authoritative for the working directory: it runs
-// every command in the sandbox's own workdir. Hermes opens its session with
-// `cd <TERMINAL_CWD> 2>/dev/null || true` followed by `pwd -P`, so a path it
-// cannot enter makes it adopt the workdir the bridge chose. Naming a real
-// sandbox path here is impossible in any case — the harness never learns it.
+// TERMINAL_CWD is the sandbox directory the bridge runs every agent command in
+// (the endpoint's Workdir), the same one renderTerminal writes into
+// config.yaml. Hermes opens its session with `cd <TERMINAL_CWD> 2>/dev/null ||
+// true`, but it then wraps each command in `builtin cd -- <cwd> || exit 126`
+// with the call's workdir or else this directory, so a path the sandbox lacks
+// would fail every command that names no workdir before it runs.
 func containerEnvironment(endpoint core.ToolEndpoint, workdir string, terminalTimeout int, webSearchEnabled bool, runID, taskID string) ([]string, error) {
 	if err := validateEndpoint(endpoint); err != nil {
 		return nil, err

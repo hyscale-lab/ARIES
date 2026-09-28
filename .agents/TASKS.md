@@ -1,5 +1,29 @@
 # ARIES Tasks
 
+## Hermes terminal workdir
+
+- Hermes prefixes every agent command with `builtin cd -- <cwd> || exit 126`,
+  using the call's workdir or else `TERMINAL_CWD`, which the harness set to
+  `/run/aries/workspace`, a path only the harness container has. Every terminal
+  call without a workdir, and `terminal()` inside `execute_code`, exited 126 in
+  the sandbox before running, on both pinned images. On v2026.5.29.2 the CLI
+  also replaces `TERMINAL_CWD` with its own process directory when
+  `config.yaml` has no terminal section.
+- The Hermes SSH bridge reports the sandbox workdir as `ToolEndpoint.Workdir`.
+  The harness renders a `terminal:` section (backend, directory, timeout), sets
+  `TERMINAL_CWD` to the same directory, and refuses an endpoint without one.
+  The section carries the harness's timeout because the CLI exports every
+  terminal default over the environment once a section exists.
+- A real one-shot integration test on both images (a fake model asking for one
+  terminal call, an `ssh` stand-in recording the command) failed against the
+  previous harness code and passes now. Unit checks cover the rendered section,
+  the environment, the refusal and the bridge endpoint. A stub-model run of
+  Terminal-Bench 2 `fix-git` on both images: terminal calls with and without a
+  workdir, and `terminal()` in `execute_code`, exit 0 in the task workdir.
+- gofmt, lint, test, race, build and integration (21 packages, with the
+  Terminal-Bench 2 checkout the OpenClaw package expects) pass; no ARIES
+  container or network remains.
+
 ## PR #49 — In-harness MCP server support (Closes #35)
 
 - Added Model Context Protocol (MCP) server configuration support to ARIES harnesses.

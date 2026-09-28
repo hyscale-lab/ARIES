@@ -365,7 +365,12 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	if err != nil {
 		return err
 	}
-	environment, err := containerEnvironment(request.Endpoint, workspaceRoot, manager.terminalTimeout, manager.webSearchEnabled, request.RunID, request.TaskID)
+	terminal, err := renderTerminal(request.Endpoint.Workdir, manager.terminalTimeout)
+	if err != nil {
+		return err
+	}
+	configuration = append(configuration, terminal...)
+	environment, err := containerEnvironment(request.Endpoint, request.Endpoint.Workdir, manager.terminalTimeout, manager.webSearchEnabled, request.RunID, request.TaskID)
 	if err != nil {
 		return err
 	}

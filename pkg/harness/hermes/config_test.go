@@ -18,6 +18,25 @@ func validEndpoint() core.ToolEndpoint {
 	}
 }
 
+func TestRenderTerminalNamesTheSandboxWorkdir(t *testing.T) {
+	rendered, err := renderTerminal("/workspace/dumps/workspace", 180)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "\nterminal:\n  backend: \"ssh\"\n  cwd: \"/workspace/dumps/workspace\"\n  timeout: 180\n"
+	if string(rendered) != want {
+		t.Fatalf("terminal section = %q, want %q", rendered, want)
+	}
+	for _, workdir := range []string{"", "relative", "/app/", "/a b", "/a/../b", "/a;b"} {
+		if _, err := renderTerminal(workdir, 180); err == nil {
+			t.Fatalf("accepted workdir %q", workdir)
+		}
+	}
+	if _, err := renderTerminal("/app", 0); err == nil {
+		t.Fatal("accepted a zero terminal timeout")
+	}
+}
+
 // The credential must reach the container as a ${NAME} reference that Hermes
 // expands at run time, never as a value written into the rendered config.
 func TestRenderConfigReferencesCredentialByName(t *testing.T) {
