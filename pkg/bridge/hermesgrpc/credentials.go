@@ -1,0 +1,157 @@
+package hermesgrpc
+
+// Per-task credential material. Two self-signed Ed25519 certificates are
+// generated per session, one per side, and each side both trusts the other's
+// certificate and pins its exact bytes. There is no certificate authority:
+// exactly one peer is ever authorized, which mirrors the SSH bridge comparing
+// one marshalled public key rather than validating a chain.
+//
+// The material exists only for the life of one task. The private key is
+// removed at revocation; the certificate is retained as evidence of what the
+// harness was told to trust.
+
+import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/subtle"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"math/big"
+	"net"
+	"time"
+)
+
+// sessionCredentials is the per-task material. The two files mirror what SSH
+// calls an identity and a known-hosts file, and are named for that: identity
+// holds the client's own certificate and key, trusted holds the one server
+// certificate the client accepts. Pinning the server is stricter than the SSH
+// path, where Hermes accepts the host key on first use and ARIES has no way to
+// preload one.
+type sessionCredentials struct {
+	server   tls.Certificate
+	client   *x509.Certificate
+	identity []byte
+	trusted  []byte
+}
+
+func generateSessionCertificates(gateway string) (sessionCredentials, error) {
+	address := net.ParseIP(gateway)
+	if address == nil {
+		return sessionCredentials{}, fmt.Errorf("task network gateway %q is not an IP address", gateway)
+	}
+
+	serverPEM, serverKeyPEM, err := selfSignedCertificate("aries-bridge", []net.IP{address})
+	if err != nil {
+		return sessionCredentials{}, fmt.Errorf("generate Hermes gRPC server certificate: %w", err)
+	}
+	clientPEM, clientKeyPEM, err := selfSignedCertificate(lockedUsername, nil)
+	if err != nil {
+		return sessionCredentials{}, fmt.Errorf("generate Hermes gRPC client certificate: %w", err)
+	}
+
+	serverCertificate, err := tls.X509KeyPair(serverPEM, serverKeyPEM)
+	if err != nil {
+		return sessionCredentials{}, fmt.Errorf("load Hermes gRPC server keypair: %w", err)
+	}
+	clientCertificate, err := parseCertificate(clientPEM)
+	if err != nil {
+		return sessionCredentials{}, err
+	}
+	// The identity file carries the certificate and the key together, as an
+	// SSH identity does; revocation removes it whole.
+	return sessionCredentials{
+		server: serverCertificate, client: clientCertificate,
+		identity: append(append([]byte(nil), clientPEM...), clientKeyPEM...),
+		trusted:  serverPEM,
+	}, nil
+}
+
+// selfSignedCertificate issues one Ed25519 certificate that is its own issuer.
+// IsCA is set so each side can place the peer's certificate directly in a
+// trust pool; the pin in VerifyPeerCertificate is what actually restricts the
+// peer to one identity.
+//
+// These certificates do not expire, and that is stated in X.509's own terms
+// rather than by picking a duration. Nothing here consults a validity window:
+// pinning replaces chain validation on both sides — the server uses
+// RequireAnyClientCert and the client InsecureSkipVerify, so neither runs the
+// standard checks that read NotAfter, and pinnedPeer compares raw bytes with
+// no notion of time. An expired certificate is accepted by this configuration;
+// that was verified, not assumed.
+//
+// Any finite lifetime would therefore be decorative, and worse than none: it
+// would read as a control that exists, and would become a live failure for long
+// tasks the moment anyone enabled standard verification. What bounds these
+// credentials is the task — Stop removes the client identity and tears down the
+// server, which is positive revocation rather than a clock.
+// noExpiry is the GeneralizedTime RFC 5280 section 4.1.2.5 reserves for a
+// certificate with no well-defined expiration date. It is the standard's way of
+// saying "does not expire", so it needs no local justification for its value.
+//
+// Leaving NotBefore and NotAfter unset is not the same thing and is not an
+// option: Go encodes the zero time as 0001-01-01, which reads as expired since
+// year one — the opposite of what is meant, and indistinguishable from a
+// corrupt certificate when the retained server.crt is inspected.
+var noExpiry = time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
+
+func selfSignedCertificate(commonName string, addresses []net.IP) ([]byte, []byte, error) {
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return nil, nil, err
+	}
+	now := time.Now()
+	template := &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: commonName},
+		NotBefore:             now.Add(-time.Minute),
+		NotAfter:              noExpiry,
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		IPAddresses:           addresses,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, public, private)
+	if err != nil {
+		return nil, nil, err
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(private)
+	if err != nil {
+		return nil, nil, err
+	}
+	certificatePEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	return certificatePEM, keyPEM, nil
+}
+
+func parseCertificate(certificatePEM []byte) (*x509.Certificate, error) {
+	block, _ := pem.Decode(certificatePEM)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return nil, errors.New("decode Hermes gRPC certificate")
+	}
+	certificate, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse Hermes gRPC certificate: %w", err)
+	}
+	return certificate, nil
+}
+
+// pinnedPeer accepts exactly one peer certificate, compared by raw bytes.
+func pinnedPeer(expected *x509.Certificate) func([][]byte, [][]*x509.Certificate) error {
+	return func(rawCertificates [][]byte, _ [][]*x509.Certificate) error {
+		for _, raw := range rawCertificates {
+			if subtle.ConstantTimeCompare(raw, expected.Raw) == 1 {
+				return nil
+			}
+		}
+		return errors.New("peer certificate rejected")
+	}
+}

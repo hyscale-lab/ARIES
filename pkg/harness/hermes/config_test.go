@@ -15,6 +15,7 @@ func validEndpoint() core.ToolEndpoint {
 	return core.ToolEndpoint{
 		Protocol: "ssh", Address: "172.17.0.1:41234", Username: "aries", Network: "aries-net",
 		IdentityFile: identityContainerFS, IdentitySourceFile: "/tmp/id_ed25519",
+		Workdir: "/aries/workspace",
 	}
 }
 
@@ -152,7 +153,7 @@ func TestValidateModelRejectsControlCharactersInModelID(t *testing.T) {
 // Hermes selects its SSH backend purely from the environment, so this is the
 // contract that replaces Agent_Bench's exec-bridge patch.
 func TestContainerEnvironmentSelectsNativeSSHBackend(t *testing.T) {
-	environment, err := containerEnvironment(validEndpoint(), "/aries/workspace", 180, false, "run-1", "fix-git")
+	environment, err := containerEnvironment(validEndpoint(), 180, false, "run-1", "fix-git")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,16 +199,18 @@ func TestContainerEnvironmentRejectsUnusableEndpoints(t *testing.T) {
 	for name, mutate := range cases {
 		endpoint := validEndpoint()
 		mutate(&endpoint)
-		if _, err := containerEnvironment(endpoint, "/aries/workspace", 180, false, "run-1", "fix-git"); err == nil {
+		if _, err := containerEnvironment(endpoint, 180, false, "run-1", "fix-git"); err == nil {
 			t.Fatalf("%s: invalid endpoint was accepted", name)
 		}
 	}
 	for _, workdir := range []string{"", "relative", "/has space", "/trailing/", "/a/../b"} {
-		if _, err := containerEnvironment(validEndpoint(), workdir, 180, false, "run-1", "fix-git"); err == nil {
+		endpoint := validEndpoint()
+		endpoint.Workdir = workdir
+		if _, err := containerEnvironment(endpoint, 180, false, "run-1", "fix-git"); err == nil {
 			t.Fatalf("workdir %q was accepted", workdir)
 		}
 	}
-	if _, err := containerEnvironment(validEndpoint(), "/aries/workspace", 0, false, "run-1", "fix-git"); err == nil {
+	if _, err := containerEnvironment(validEndpoint(), 0, false, "run-1", "fix-git"); err == nil {
 		t.Fatal("non-positive terminal timeout was accepted")
 	}
 }
@@ -344,7 +347,7 @@ func TestRenderConfigIgnoresMaxConcurrentChildrenWhenSubagentsDisabled(t *testin
 }
 
 func TestContainerEnvironmentSetsSearXNGURLWhenWebSearchEnabled(t *testing.T) {
-	disabled, err := containerEnvironment(validEndpoint(), "/aries/workspace", 180, false, "run-1", "fix-git")
+	disabled, err := containerEnvironment(validEndpoint(), 180, false, "run-1", "fix-git")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +356,7 @@ func TestContainerEnvironmentSetsSearXNGURLWhenWebSearchEnabled(t *testing.T) {
 			t.Fatalf("SEARXNG_URL set despite web search being disabled: %v", disabled)
 		}
 	}
-	enabled, err := containerEnvironment(validEndpoint(), "/aries/workspace", 180, true, "run-1", "fix-git")
+	enabled, err := containerEnvironment(validEndpoint(), 180, true, "run-1", "fix-git")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,7 +375,7 @@ func TestContainerEnvironmentSetsSearXNGURLWhenWebSearchEnabled(t *testing.T) {
 // --toolsets is unusable on the pinned Hermes build, so the wrapper must not
 // pass it; toolsets come from the rendered config instead.
 func TestAgentWrapperExportsKeyAndAvoidsToolsetsFlag(t *testing.T) {
-	script := string(agentWrapperScript("DEEPSEEK_API_KEY", false))
+	script := string(agentWrapperScript("DEEPSEEK_API_KEY", false, false))
 	for _, want := range []string{
 		"DEEPSEEK_API_KEY=\"$(cat " + modelKeyPath + ")\"",
 		"export DEEPSEEK_API_KEY",
@@ -391,7 +394,7 @@ func TestAgentWrapperExportsKeyAndAvoidsToolsetsFlag(t *testing.T) {
 }
 
 func TestAgentWrapperExportsExtractKeyWhenEnabled(t *testing.T) {
-	script := string(agentWrapperScript("DEEPSEEK_API_KEY", true))
+	script := string(agentWrapperScript("DEEPSEEK_API_KEY", true, false))
 	for _, want := range []string{
 		"DEEPSEEK_API_KEY=\"$(cat " + modelKeyPath + ")\"",
 		"export DEEPSEEK_API_KEY",
@@ -432,5 +435,116 @@ func TestRenderConfigMapsOpenAICompatibleBackendsToCustomProvider(t *testing.T) 
 	}
 	if !strings.Contains(string(rendered), `provider: "deepseek"`) || hermesProvider("deepseek") != "deepseek" {
 		t.Fatal("deepseek provider was rewritten")
+	}
+}
+
+func validGRPCEndpoint() core.ToolEndpoint {
+	return core.ToolEndpoint{
+		Protocol: "grpc", Address: "172.17.0.1:41234", Username: "aries", Network: "aries-net",
+		ClientCommand: clientContainerFS, ClientSourceFile: "/tmp/aries-grpc",
+		IdentityFile: grpcIdentityPath, IdentitySourceFile: "/tmp/client.pem",
+		KnownHostsFile: grpcTrustedPath, KnownHostsSourceFile: "/tmp/server.crt",
+		Workdir: "/aries/workspace",
+	}
+}
+
+// The gRPC endpoint selects the ARIES plugin backend and carries no SSH target:
+// the plugin's client reads its target and credentials from ARIES_GRPC_*.
+func TestContainerEnvironmentSelectsTheAriesBackendUnderGRPC(t *testing.T) {
+	environment, err := containerEnvironment(validGRPCEndpoint(), 180, false, "run-1", "fix-git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, entry := range environment {
+		name, value, _ := strings.Cut(entry, "=")
+		got[name] = value
+	}
+	want := map[string]string{
+		"HERMES_HOME":            stateContainerPath,
+		"TERMINAL_ENV":           "aries",
+		"TERMINAL_CWD":           "/aries/workspace",
+		"TERMINAL_TIMEOUT":       "180",
+		"ARIES_RUN_ID":           "run-1",
+		"ARIES_TASK_ID":          "fix-git",
+		"HERMES_WRITE_SAFE_ROOT": "",
+		"ARIES_GRPC_TARGET":      "172.17.0.1:41234",
+		"ARIES_GRPC_IDENTITY":    grpcIdentityPath,
+		"ARIES_GRPC_TRUSTED":     grpcTrustedPath,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("environment=%v", environment)
+	}
+	for name, value := range want {
+		if got[name] != value {
+			t.Fatalf("%s=%q, want %q", name, got[name], value)
+		}
+	}
+}
+
+// An SSH endpoint must gain nothing from the gRPC support.
+func TestContainerEnvironmentLeavesSSHUntouched(t *testing.T) {
+	environment, err := containerEnvironment(validEndpoint(), 180, false, "run-1", "fix-git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range environment {
+		if strings.HasPrefix(entry, "ARIES_GRPC_") {
+			t.Fatalf("SSH endpoint carried %q", entry)
+		}
+	}
+}
+
+func TestContainerEnvironmentRejectsUnusableGRPCEndpoints(t *testing.T) {
+	cases := map[string]func(*core.ToolEndpoint){
+		"missing client command": func(e *core.ToolEndpoint) { e.ClientCommand = "" },
+		"client command moved":   func(e *core.ToolEndpoint) { e.ClientCommand = "/usr/bin/ssh" },
+		"missing client source":  func(e *core.ToolEndpoint) { e.ClientSourceFile = "" },
+		"identity path moved":    func(e *core.ToolEndpoint) { e.IdentityFile = "/tmp/elsewhere.pem" },
+		"trusted path moved":     func(e *core.ToolEndpoint) { e.KnownHostsFile = "/tmp/elsewhere.crt" },
+		"missing trusted source": func(e *core.ToolEndpoint) { e.KnownHostsSourceFile = "" },
+		"unknown protocol":       func(e *core.ToolEndpoint) { e.Protocol = "quic" },
+	}
+	for name, mutate := range cases {
+		endpoint := validGRPCEndpoint()
+		mutate(&endpoint)
+		if _, err := containerEnvironment(endpoint, 180, false, "run-1", "fix-git"); err == nil {
+			t.Fatalf("%s: invalid endpoint was accepted", name)
+		}
+	}
+}
+
+// The seam must run before Hermes starts, and only on the gRPC route: the SSH
+// route runs the pinned image unmodified.
+func TestAgentWrapperAppliesTheSeamOnlyForGRPC(t *testing.T) {
+	patched := string(agentWrapperScript("DEEPSEEK_API_KEY", false, true))
+	seam, hermes := strings.Index(patched, "python3 "+seamContainerFS+"\n"), strings.Index(patched, "exec hermes ")
+	if seam < 0 || hermes < 0 || seam > hermes {
+		t.Fatalf("wrapper does not apply the seam before Hermes:\n%s", patched)
+	}
+	plain := string(agentWrapperScript("DEEPSEEK_API_KEY", false, false))
+	if strings.Contains(plain, seamContainerFS) || strings.Contains(plain, "PATH=") {
+		t.Fatalf("SSH wrapper was modified:\n%s", plain)
+	}
+}
+
+// Hermes loads a user plugin only when plugins.enabled names it, and must not
+// load it on the SSH route.
+func TestRenderConfigEnablesThePluginOnlyForTheAriesBackend(t *testing.T) {
+	settings := renderSettings{maxTurns: 10, subagentsEnabled: true}
+	plain, err := renderConfig(validModel(), settings, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.ariesBackend = true
+	enabled, err := renderConfig(validModel(), settings, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(plain), "plugins:") {
+		t.Fatalf("SSH config enables plugins:\n%s", plain)
+	}
+	if !strings.Contains(string(enabled), "\nplugins:\n  enabled:\n    - aries\n") {
+		t.Fatalf("gRPC config does not enable the plugin:\n%s", enabled)
 	}
 }

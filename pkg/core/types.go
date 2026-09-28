@@ -109,6 +109,9 @@ type ToolEndpoint struct {
 	KnownHostsFile       string   `json:"known_hosts_file,omitempty"`
 	KnownHostsSourceFile string   `json:"known_hosts_source_file,omitempty"`
 	LogPaths             []string `json:"log_paths,omitempty"`
+	// Workdir is the sandbox's own working directory, where the bridge runs
+	// every command. A harness that tracks a cwd must start from it.
+	Workdir string `json:"workdir,omitempty"`
 }
 
 // HarnessRequest contains task-local runtime inputs supplied before Run.

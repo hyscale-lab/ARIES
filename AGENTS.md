@@ -100,6 +100,12 @@ make lint
 make integration
 ```
 
+`make proto` regenerates the protobuf and gRPC bindings. It is deliberately not
+part of the list above and not a prerequisite of any target in it: the
+generated code is committed, so a clean checkout builds and tests with no
+protobuf toolchain installed. Run it only after editing a `.proto`, then commit
+what it produces.
+
 Unit tests and race tests must not require Docker or a paid API. Integration
 tests use real local containers and the deterministic fake OpenAI-compatible
 endpoint. A live DeepSeek run is optional unless explicitly requested and uses

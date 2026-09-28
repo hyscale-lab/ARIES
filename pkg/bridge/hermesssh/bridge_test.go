@@ -181,6 +181,10 @@ func TestBridgeProxiesHermesCommandsAndRetainsEvidence(t *testing.T) {
 	if endpoint.ClientCommand != "" || endpoint.ClientSourceFile != "" {
 		t.Fatalf("bridge advertised a client helper: %+v", endpoint)
 	}
+	// Hermes must start its session in the sandbox's workdir.
+	if endpoint.Workdir != "/app" {
+		t.Fatalf("endpoint workdir = %q", endpoint.Workdir)
+	}
 	if endpoint.Protocol != "ssh" || endpoint.Username != "aries" || endpoint.IdentitySourceFile == "" {
 		t.Fatalf("endpoint = %+v", endpoint)
 	}

@@ -649,7 +649,7 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 	return core.ToolEndpoint{
 		Protocol: "ssh", Address: address, Username: lockedUsername, Network: network,
 		IdentityFile: identityContainerPath, IdentitySourceFile: session.identitySource,
-		LogPaths: session.logPaths(),
+		LogPaths: session.logPaths(), Workdir: sandbox.Workdir(),
 	}, nil
 }
 

@@ -2,6 +2,7 @@ package hermes
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +28,17 @@ const (
 	agentWrapperPath    = stagedRoot + "/run-agent"
 	workspaceRoot       = stagedRoot + "/workspace"
 
+	// The gRPC route stages the client, its two credentials, the ARIES Hermes
+	// plugin that runs the client, and the seam script that lets the plugin
+	// supply file operations. The plugin lives under HERMES_HOME, which is
+	// where Hermes looks for user plugins.
+	clientContainerFS = stagedRoot + "/bin/aries-grpc"
+	pluginContainerFS = stateContainerPath + "/plugins/aries"
+	seamContainerFS   = stagedRoot + "/seam.py"
+	grpcCredentialDir = stagedRoot + "/grpc"
+	grpcIdentityPath  = grpcCredentialDir + "/client.pem"
+	grpcTrustedPath   = grpcCredentialDir + "/server.crt"
+
 	// tavilyAPIKeyEnv is the in-container environment variable name Hermes's
 	// Tavily plugin reads. It is fixed by Hermes itself, unlike the profile's
 	// (host-side) HarnessWebSearchConfig.ExtractAPIKeyEnv lookup name.
@@ -40,6 +52,12 @@ const (
 	// network. Mirrors pkg/harness/openclaw/config.go's constant of the same
 	// name and value.
 	searxngBaseURL = "http://task-sandbox:8888"
+
+	// The bridge locks its endpoint to one user, and both transports use it.
+	lockedUsername = "aries"
+
+	protocolSSH  = "ssh"
+	protocolGRPC = "grpc"
 )
 
 // hermesProvider maps the profile's runtime backend onto a provider name
@@ -70,6 +88,17 @@ type CompactionSettings struct {
 	ThresholdTokens int
 }
 
+// The ARIES Hermes plugin and the seam script that lets it supply file
+// operations. Both are staged only on the gRPC route.
+var (
+	//go:embed plugin/plugin.yaml
+	pluginManifest []byte
+	//go:embed plugin/__init__.py
+	pluginModule []byte
+	//go:embed seam.py
+	seamScript []byte
+)
+
 // renderSettings are the inputs to renderConfig beyond the model. extraBody
 // is the profile's opaque JSON object, or nil.
 type renderSettings struct {
@@ -80,6 +109,8 @@ type renderSettings struct {
 	maxConcurrentSubagents int
 	compaction             *CompactionSettings
 	extraBody              []byte
+	// ariesBackend enables the ARIES terminal backend plugin (gRPC route).
+	ariesBackend bool
 }
 
 // renderConfig produces the Hermes `config.yaml`. The credential is written as
@@ -219,6 +250,12 @@ func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *Voi
 		output.WriteString("    model: " + yamlString(voiceSTT.Model) + "\n")
 		output.WriteString("    language: " + yamlString(voiceSTT.Language) + "\n")
 	}
+	if settings.ariesBackend {
+		// Hermes loads a user plugin only when plugins.enabled names it.
+		output.WriteString("\nplugins:\n")
+		output.WriteString("  enabled:\n")
+		output.WriteString("    - aries\n")
+	}
 	output.WriteString("\ndisplay:\n")
 	output.WriteString("  streaming: false\n")
 	output.WriteString("  compact: true\n")
@@ -299,13 +336,11 @@ func yamlFloat(value float64) string {
 // environment, so a profile's extra_body can carry a per-task value, such as
 // a per-task tag, without ARIES interpreting the block.
 //
-// TERMINAL_CWD is an ARIES-owned path that deliberately does not exist in any
-// task image. The bridge is authoritative for the working directory: it runs
-// every command in the sandbox's own workdir. Hermes opens its session with
-// `cd <TERMINAL_CWD> 2>/dev/null || true` followed by `pwd -P`, so a path it
-// cannot enter makes it adopt the workdir the bridge chose. Naming a real
-// sandbox path here is impossible in any case — the harness never learns it.
-func containerEnvironment(endpoint core.ToolEndpoint, workdir string, terminalTimeout int, webSearchEnabled bool, runID, taskID string) ([]string, error) {
+// TERMINAL_CWD is the sandbox's own workdir, as the bridge advertises it.
+// Hermes runs a session's first command in TERMINAL_CWD and records a new cwd
+// only after a command completes, so a path that does not exist in the sandbox
+// fails every command with exit 126. Relative file-tool paths anchor on it too.
+func containerEnvironment(endpoint core.ToolEndpoint, terminalTimeout int, webSearchEnabled bool, runID, taskID string) ([]string, error) {
 	if err := validateEndpoint(endpoint); err != nil {
 		return nil, err
 	}
@@ -315,36 +350,52 @@ func containerEnvironment(endpoint core.ToolEndpoint, workdir string, terminalTi
 	if err := validateTaskID(taskID); err != nil {
 		return nil, err
 	}
-	if !validWorkdir(workdir) {
-		return nil, fmt.Errorf("Hermes terminal workdir %q is not shell-neutral", workdir)
+	if !validWorkdir(endpoint.Workdir) {
+		return nil, fmt.Errorf("Hermes terminal workdir %q is not shell-neutral", endpoint.Workdir)
 	}
 	if terminalTimeout <= 0 {
 		return nil, errors.New("Hermes terminal timeout must be positive")
 	}
 	host, port, err := net.SplitHostPort(endpoint.Address)
 	if err != nil {
-		return nil, fmt.Errorf("parse Hermes SSH endpoint address: %w", err)
+		return nil, fmt.Errorf("parse Hermes endpoint address: %w", err)
 	}
 	if _, err := strconv.Atoi(port); err != nil {
-		return nil, errors.New("Hermes SSH endpoint port is invalid")
+		return nil, errors.New("Hermes endpoint port is invalid")
 	}
-	environment := []string{
-		"HERMES_HOME=" + stateContainerPath,
-		"TERMINAL_ENV=ssh",
-		"TERMINAL_SSH_HOST=" + host,
-		"TERMINAL_SSH_PORT=" + port,
-		"TERMINAL_SSH_USER=" + endpoint.Username,
-		"TERMINAL_SSH_KEY=" + identityContainerFS,
-		"TERMINAL_CWD=" + workdir,
-		"TERMINAL_TIMEOUT=" + strconv.Itoa(terminalTimeout),
-		"ARIES_RUN_ID=" + runID,
-		"ARIES_TASK_ID=" + taskID,
+	// Hermes selects its backend from TERMINAL_ENV. SSH uses Hermes's own ssh
+	// backend and needs the TERMINAL_SSH_* target; gRPC uses the ARIES plugin,
+	// whose client reads ARIES_GRPC_* below instead.
+	environment := []string{"HERMES_HOME=" + stateContainerPath}
+	if endpoint.Protocol == protocolGRPC {
+		environment = append(environment, "TERMINAL_ENV=aries")
+	} else {
+		environment = append(environment,
+			"TERMINAL_ENV=ssh",
+			"TERMINAL_SSH_HOST="+host,
+			"TERMINAL_SSH_PORT="+port,
+			"TERMINAL_SSH_USER="+endpoint.Username,
+			"TERMINAL_SSH_KEY="+identityContainerFS,
+		)
+	}
+	environment = append(environment,
+		"TERMINAL_CWD="+endpoint.Workdir,
+		"TERMINAL_TIMEOUT="+strconv.Itoa(terminalTimeout),
+		"ARIES_RUN_ID="+runID,
+		"ARIES_TASK_ID="+taskID,
 		// The v2026.8 image ships HERMES_WRITE_SAFE_ROOT=/opt/data, which makes
 		// write_file and patch refuse every path outside that directory. The
 		// tools act on the sandbox over SSH, and the sandbox is the isolation
 		// boundary, so the prefix check only denies the agent its own
 		// workspace. An empty value turns the check off (agent/file_safety.py).
 		"HERMES_WRITE_SAFE_ROOT=",
+	)
+	if endpoint.Protocol == protocolGRPC {
+		environment = append(environment,
+			"ARIES_GRPC_TARGET="+endpoint.Address,
+			"ARIES_GRPC_IDENTITY="+grpcIdentityPath,
+			"ARIES_GRPC_TRUSTED="+grpcTrustedPath,
+		)
 	}
 	if webSearchEnabled {
 		environment = append(environment, "SEARXNG_URL="+searxngBaseURL)
@@ -357,10 +408,18 @@ func containerEnvironment(endpoint core.ToolEndpoint, workdir string, terminalTi
 // inside the container means no value ever appears in Docker's exec or
 // container config. extractEnabled additionally exports the Tavily key
 // staged at extractKeyPath, under Hermes's fixed tavilyAPIKeyEnv name.
-func agentWrapperScript(apiKeyEnv string, extractEnabled bool) []byte {
+func agentWrapperScript(apiKeyEnv string, extractEnabled bool, seam bool) []byte {
 	script := `#!/bin/sh
 set -eu
-if [ ! -f ` + modelKeyPath + ` ]; then
+`
+	if seam {
+		// The wrapper runs as root before Hermes drops privileges, which is the
+		// one point where the image's own files can be patched. A failed seam
+		// stops here, so file tools never silently stay on the shell.
+		script += `python3 ` + seamContainerFS + `
+`
+	}
+	script += `if [ ! -f ` + modelKeyPath + ` ]; then
   echo "ARIES: Hermes model key is missing" >&2
   exit 1
 fi
@@ -424,19 +483,46 @@ func normalizeV1BaseURL(baseURL string) (string, error) {
 }
 
 func validateEndpoint(endpoint core.ToolEndpoint) error {
-	if endpoint.Protocol != "ssh" || endpoint.Username != "aries" || strings.TrimSpace(endpoint.Network) == "" {
-		return errors.New("Hermes requires a task-local SSH endpoint")
+	if endpoint.Username != lockedUsername {
+		return errors.New("Hermes requires the aries endpoint user")
+	}
+	if strings.TrimSpace(endpoint.Network) == "" {
+		return errors.New("Hermes requires a task-local endpoint network")
 	}
 	if strings.TrimSpace(endpoint.IdentitySourceFile) == "" {
-		return errors.New("Hermes requires a staged SSH identity file")
+		return errors.New("Hermes requires a staged identity file")
 	}
-	// Hermes builds its own ssh argv and offers no way to preload a known-hosts
-	// file, so a bridge-supplied one would be silently ignored. Refuse rather
-	// than imply a host-key guarantee the harness cannot honour.
-	if endpoint.ClientCommand != "" || endpoint.ClientSourceFile != "" {
-		return errors.New("Hermes uses its own SSH client and accepts no bridge client command")
+	switch endpoint.Protocol {
+	case protocolSSH:
+		// Hermes builds its own ssh argv and offers no way to preload a
+		// known-hosts file, so a bridge-supplied one would be silently
+		// ignored. Refuse rather than imply a host-key guarantee the harness
+		// cannot honour.
+		if endpoint.ClientCommand != "" || endpoint.ClientSourceFile != "" {
+			return errors.New("Hermes uses its own SSH client and accepts no bridge client command")
+		}
+		return nil
+	case protocolGRPC:
+		// The gRPC bridge supplies the client, because Hermes has none for
+		// this transport. Its paths are pinned so a mismatch between what the
+		// bridge advertises and what the harness stages fails here rather than
+		// at the first tool call.
+		if endpoint.ClientCommand != clientContainerFS {
+			return fmt.Errorf("Hermes gRPC client must be staged at %s", clientContainerFS)
+		}
+		if strings.TrimSpace(endpoint.ClientSourceFile) == "" {
+			return errors.New("Hermes requires a staged gRPC client")
+		}
+		if endpoint.IdentityFile != grpcIdentityPath || endpoint.KnownHostsFile != grpcTrustedPath {
+			return errors.New("Hermes gRPC credentials must be staged at their pinned paths")
+		}
+		if strings.TrimSpace(endpoint.KnownHostsSourceFile) == "" {
+			return errors.New("Hermes requires the bridge certificate to pin")
+		}
+		return nil
+	default:
+		return fmt.Errorf("Hermes does not support the %q endpoint protocol", endpoint.Protocol)
 	}
-	return nil
 }
 
 func validEnvironmentName(name string) bool {

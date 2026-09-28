@@ -87,9 +87,13 @@ type fakeClient struct {
 	uploadErr      error
 	download       client.CopyFromContainerResult
 	downloadErr    error
-	downloadCalls  int
-	closeCalls     int
-	closeErr       error
+	// stats and downloads, when set, answer per path; absent paths are 404.
+	stats         map[string]container.PathStat
+	downloads     map[string]client.CopyFromContainerResult
+	execCommands  [][]string
+	downloadCalls int
+	closeCalls    int
+	closeErr      error
 }
 
 func (f *fakeClient) Close() error {
@@ -221,6 +225,7 @@ func (f *fakeClient) ExecCreate(_ context.Context, _ string, options client.Exec
 		return client.ExecCreateResult{ID: "control-id"}, nil
 	}
 	f.execOptions = options
+	f.execCommands = append(f.execCommands, options.Cmd)
 	f.execRunning = f.execRunning || f.leaveExecAlive
 	f.mu.Unlock()
 	return client.ExecCreateResult{ID: "exec-id"}, nil
@@ -279,14 +284,31 @@ func (f *fakeClient) CopyToContainer(_ context.Context, _ string, options client
 	return client.CopyToContainerResult{}, nil
 }
 
-func (f *fakeClient) CopyFromContainer(context.Context, string, client.CopyFromContainerOptions) (client.CopyFromContainerResult, error) {
+func (f *fakeClient) CopyFromContainer(_ context.Context, _ string, options client.CopyFromContainerOptions) (client.CopyFromContainerResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.downloadCalls++
 	if f.downloadErr != nil {
 		return client.CopyFromContainerResult{}, f.downloadErr
 	}
+	if f.downloads != nil {
+		result, ok := f.downloads[options.SourcePath]
+		if !ok {
+			return client.CopyFromContainerResult{}, fakeNotFound{"path"}
+		}
+		return result, nil
+	}
 	return f.download, nil
+}
+
+func (f *fakeClient) ContainerStatPath(_ context.Context, _ string, options client.ContainerStatPathOptions) (client.ContainerStatPathResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	stat, ok := f.stats[options.Path]
+	if !ok {
+		return client.ContainerStatPathResult{}, fakeNotFound{"path"}
+	}
+	return client.ContainerStatPathResult{Stat: stat}, nil
 }
 
 func testEnvironment() core.Environment {

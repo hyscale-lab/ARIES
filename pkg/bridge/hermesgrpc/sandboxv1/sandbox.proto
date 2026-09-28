@@ -1,0 +1,169 @@
+syntax = "proto3";
+
+// Package aries.sandbox.v1 is the wire contract between an agent harness and
+// the ARIES tool bridge. The bridge serves it from the ARIES process on the
+// task network gateway; the task container itself serves nothing and runs no
+// daemon. See docs/design/grpc-bridge.md.
+package aries.sandbox.v1;
+
+option go_package = "github.com/hyscale-lab/aries/pkg/bridge/hermesgrpc/sandboxv1";
+
+// Sandbox grants a harness narrow, audited, revocable access to one task
+// sandbox. Exec runs a script; the four file procedures move bytes without a
+// shell. Paths are absolute inside the sandbox; the caller resolves relative
+// paths before the call. Every procedure is refused with UNAVAILABLE once the
+// session is revoked, and with UNIMPLEMENTED when the sandbox offers no file
+// access.
+service Sandbox {
+  rpc Exec(ExecRequest) returns (ExecResponse);
+  // Stat reports what is at a path without reading it. Absence is a normal
+  // answer (exists=false), not an error, so callers can probe cheaply.
+  rpc Stat(StatRequest) returns (StatResponse);
+  // ReadFile returns a byte range of a regular file. It serves whole-file
+  // reads and the small probes (binary sample, BOM, line ending).
+  rpc ReadFile(ReadFileRequest) returns (ReadFileResponse);
+  // ReadLines returns a window of lines with the counts a paginated text read
+  // needs, computed next to the data so only the window crosses the wire. It
+  // matches `sed -n 'a,bp' | cut -b1-N`, `wc -l`, and a trailing-newline
+  // check, in one pass.
+  rpc ReadLines(ReadLinesRequest) returns (ReadLinesResponse);
+  // WriteFile replaces or creates a regular file with exactly the given bytes.
+  // A reader sees the old file or the new one, never a prefix; missing parent
+  // directories are created.
+  rpc WriteFile(WriteFileRequest) returns (WriteFileResponse);
+}
+
+// ExecRequest carries only what crosses the wire today. The bridge sets the
+// working directory itself and passes no environment, so neither is a field
+// here; docs/design/grpc-bridge.md records why each omission is deliberate and
+// what would bring it back.
+message ExecRequest {
+  // script runs under /bin/bash -c in the sandbox, uninterpreted by the bridge.
+  string script = 1;
+
+  // stdin is bounded; file content belongs in WriteFile.
+  bytes stdin = 2;
+}
+
+// Reason distinguishes how a command ended, so a caller can tell a command that
+// failed from a bridge that did. The SSH transport has to flatten all of these
+// into exit code 255.
+enum Reason {
+  REASON_UNSPECIFIED = 0;
+  REASON_COMPLETED = 1;
+  REASON_CANCELED = 2;
+  REASON_TIMED_OUT = 3;
+  REASON_OUTPUT_LIMIT_EXCEEDED = 4;
+  REASON_SANDBOX_ERROR = 5;
+}
+
+// ExecResponse is returned with an OK status even when the command failed. A
+// non-zero exit_code is a task outcome, not an RPC error; RPC error statuses
+// are reserved for bridge-level failures.
+message ExecResponse {
+  int32 exit_code = 1;
+  Reason reason = 2;
+
+  // stdout and stderr stay separate rather than interleaved, which is stricter
+  // than SSH's extended-data channel.
+  bytes stdout = 3;
+  bytes stderr = 4;
+
+  // truncated reports that output reached the bridge's cap and was cut.
+  bool truncated = 5;
+}
+
+message StatRequest {
+  // path is absolute. A relative path is INVALID_ARGUMENT.
+  string path = 1;
+}
+
+message StatResponse {
+  // exists is false when nothing is at path; every other field is then zero.
+  bool exists = 1;
+  // type classifies what is there. Only REGULAR files can be read or written.
+  FileType type = 2;
+  // size in bytes. Meaningful only for REGULAR; zero otherwise.
+  int64 size = 3;
+  // mode holds the permission bits, for callers that preserve them across a
+  // rewrite.
+  uint32 mode = 4;
+}
+
+enum FileType {
+  FILE_TYPE_UNSPECIFIED = 0;
+  FILE_TYPE_REGULAR = 1;
+  FILE_TYPE_DIRECTORY = 2;
+  // OTHER covers symlinks that do not resolve, devices, sockets, and fifos.
+  FILE_TYPE_OTHER = 3;
+}
+
+message ReadFileRequest {
+  // path is absolute and must name a regular file (FAILED_PRECONDITION
+  // otherwise, NOT_FOUND when absent).
+  string path = 1;
+  // offset is the first byte to return, counted from the start of the file.
+  // Negative is INVALID_ARGUMENT; past the end yields empty content.
+  int64 offset = 2;
+  // max_bytes bounds the returned content. Zero selects the bridge's bound; a
+  // value above it is INVALID_ARGUMENT. Probes pass small values (3, 1000,
+  // 4096).
+  int64 max_bytes = 3;
+}
+
+message ReadFileResponse {
+  // content is bytes [offset, offset+len(content)) of the file.
+  bytes content = 1;
+  // size is the file's total length, not len(content).
+  int64 size = 2;
+  // truncated is true when offset + len(content) < size.
+  bool truncated = 3;
+}
+
+message ReadLinesRequest {
+  // path is absolute and must name a regular file.
+  string path = 1;
+  // first_line is 1-based, matching Hermes's read_file offset. Zero or
+  // negative is INVALID_ARGUMENT. Beyond the last line yields empty content.
+  int64 first_line = 2;
+  // max_lines is the window height. Zero or negative is INVALID_ARGUMENT.
+  int64 max_lines = 3;
+  // max_line_bytes cuts each returned line to this many bytes, counted before
+  // the newline, so one pathological line cannot flood the reply. Zero means
+  // unclamped. A window larger than the bridge's bound is RESOURCE_EXHAUSTED.
+  int64 max_line_bytes = 4;
+}
+
+message ReadLinesResponse {
+  // content is the window: each line cut at max_line_bytes and terminated by
+  // a newline, except the file's last line when it has none on disk.
+  bytes content = 1;
+  // total_lines is the number of newline bytes in the file, what `wc -l`
+  // reports.
+  int64 total_lines = 2;
+  // size is the file's length in bytes.
+  int64 size = 3;
+  // ends_with_newline reports whether the file's last byte is a newline.
+  bool ends_with_newline = 4;
+  // more is true when newline-terminated lines exist after the window, i.e.
+  // total_lines > first_line + max_lines - 1.
+  bool more = 5;
+}
+
+message WriteFileRequest {
+  // path is absolute. A directory at path is FAILED_PRECONDITION. A symlink at
+  // path is followed and the write lands on its target.
+  string path = 1;
+  // content is the complete new file body; empty writes an empty file. Above
+  // the bridge's bound it is RESOURCE_EXHAUSTED.
+  bytes content = 2;
+}
+
+message WriteFileResponse {
+  // bytes_written equals len(content) on success.
+  int64 bytes_written = 1;
+  // created is true when no file existed at path before the call. A replaced
+  // file keeps its mode; a created one gets the sandbox's default mode, and
+  // either way the owner is the sandbox's exec user.
+  bool created = 2;
+}

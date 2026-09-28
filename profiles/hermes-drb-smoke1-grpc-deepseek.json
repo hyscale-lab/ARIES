@@ -1,0 +1,54 @@
+{
+  "name": "hermes-drb-smoke1-grpc-deepseek",
+  "versions_file": "../configs/versions.json",
+  "overrides_file": "",
+  "execution": {
+    "concurrency": 1
+  },
+  "benchmark": {
+    "type": "deepresearchbench",
+    "root": ".cache/deep-research-bench",
+    "tasks": [
+      "1"
+    ],
+    "environment": {
+      "image": "ihasfarm/aries-deepresearchbench:latest",
+      "workdir": "/workspace"
+    },
+    "fact": {
+      "jina_api_key_env": "JINA_API_KEY"
+    },
+    "judge": {
+    "provider": "deepseek",
+    "base_url": "https://api.deepseek.com",
+    "api_key_env": "DEEPSEEK_API_KEY",
+    "model": "deepseek-v4-pro"
+    }
+  },
+  "harness": {
+    "type": "hermes",
+    "web_search": {
+      "enabled": true,
+      "extract_api_key_env": "TAVILY_API_KEY"
+    },
+    "subagents": {
+      "enabled": false
+    }
+  },
+  "sandbox": {
+    "type": "docker"
+  },
+  "bridge": {
+    "type": "hermes-grpc"
+  },
+  "runtime": {
+    "backend": "deepseek",
+    "mode": "external"
+  },
+  "model": {
+    "base_url": "https://api.deepseek.com",
+    "api_key_env": "DEEPSEEK_API_KEY",
+    "id": "deepseek-v4-pro"
+  },
+  "output_dir": "runs"
+}

@@ -40,9 +40,14 @@ const (
 	defaultMaxTurns        = 90
 	defaultTerminalTimeout = 180
 	maxDockerOutput        = 16 << 20
-	maxAPIKeyBytes         = 16 << 10
-	gracefulStopSeconds    = 5
-	execTrailerKeep        = 256
+
+	// maxStagedClientBytes bounds the staged gRPC client. It is a linked Go
+	// binary, not a credential: aries-grpc is already ~16 MB and varies with
+	// the toolchain, so the credential bound is the wrong order of magnitude.
+	maxStagedClientBytes = 128 << 20
+	maxAPIKeyBytes       = 16 << 10
+	gracefulStopSeconds  = 5
+	execTrailerKeep      = 256
 
 	// imageDeclaredVolume is the upstream image's own VOLUME. ARIES does not
 	// use it — HERMES_HOME is relocated to a staged private directory — but
@@ -352,12 +357,13 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		maxTurns: manager.maxTurns, webSearchEnabled: manager.webSearchEnabled, extractEnabled: extractEnabled,
 		subagentsEnabled: manager.subagentsEnabled, maxConcurrentSubagents: manager.maxConcurrentSubagents,
 		compaction: manager.compaction, extraBody: manager.extraBody,
+		ariesBackend: request.Endpoint.Protocol == protocolGRPC,
 	}, voiceSTT)
 
 	if err != nil {
 		return err
 	}
-	environment, err := containerEnvironment(request.Endpoint, workspaceRoot, manager.terminalTimeout, manager.webSearchEnabled, request.RunID, request.TaskID)
+	environment, err := containerEnvironment(request.Endpoint, manager.terminalTimeout, manager.webSearchEnabled, request.RunID, request.TaskID)
 	if err != nil {
 		return err
 	}
@@ -1103,8 +1109,13 @@ func (buffer *limitedBuffer) Write(content []byte) (int, error) {
 // invoking the CLI proves the staged runtime is readable by the identity that
 // will actually use it.
 func (manager *Manager) waitReady(ctx context.Context, active *session) error {
+	transport := ` && test -r ` + identityContainerFS + ` && command -v ssh >/dev/null`
+	if active.endpoint.Protocol == protocolGRPC {
+		transport = ` && test -r ` + grpcIdentityPath + ` && test -r ` + grpcTrustedPath +
+			` && test -x ` + clientContainerFS + ` && test -r ` + pluginContainerFS + `/__init__.py && test -r ` + seamContainerFS
+	}
 	probe := `test -x ` + agentWrapperPath + ` && test -r ` + configContainerPath + ` && test -r ` + modelKeyPath +
-		` && test -r ` + identityContainerFS + ` && command -v ssh >/dev/null && hermes --version >/dev/null 2>&1`
+		transport + ` && hermes --version >/dev/null 2>&1`
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -1176,17 +1187,38 @@ func (manager *Manager) validateContainer(ctx context.Context, active *session) 
 }
 
 func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([]byte, error) {
-	identity, err := readStablePrivateFile(active.endpoint.IdentitySourceFile, 0o600)
+	identity, err := readStablePrivateFile(active.endpoint.IdentitySourceFile, 0o600, maxDockerOutput)
 	if err != nil {
-		return nil, fmt.Errorf("read Hermes SSH identity: %w", err)
+		return nil, fmt.Errorf("read Hermes identity: %w", err)
 	}
 	defer clear(identity)
+	grpc := active.endpoint.Protocol == protocolGRPC
 	extractEnabled := len(active.extractAPIKey) != 0
 	files := map[string]stagedFile{
 		strings.TrimPrefix(configContainerPath, "/"): {content: configuration, mode: 0o600},
 		strings.TrimPrefix(modelKeyPath, "/"):        {content: active.apiKey, mode: 0o600},
-		strings.TrimPrefix(identityContainerFS, "/"): {content: identity, mode: 0o600},
-		strings.TrimPrefix(agentWrapperPath, "/"):    {content: agentWrapperScript(active.model.APIKeyEnv, extractEnabled), mode: 0o555},
+		strings.TrimPrefix(agentWrapperPath, "/"):    {content: agentWrapperScript(active.model.APIKeyEnv, extractEnabled, grpc), mode: 0o555},
+	}
+	if grpc {
+		// The identity is the client certificate and key; the trusted file is
+		// the one bridge certificate the client accepts. Both are read with
+		// their exact host modes, as the SSH identity is.
+		trusted, err := readStablePrivateFile(active.endpoint.KnownHostsSourceFile, 0o600, maxDockerOutput)
+		if err != nil {
+			return nil, fmt.Errorf("read Hermes gRPC trusted certificate: %w", err)
+		}
+		client, err := readStablePrivateFile(active.endpoint.ClientSourceFile, 0o555, maxStagedClientBytes)
+		if err != nil {
+			return nil, fmt.Errorf("read Hermes gRPC client: %w", err)
+		}
+		files[strings.TrimPrefix(grpcIdentityPath, "/")] = stagedFile{content: identity, mode: 0o600}
+		files[strings.TrimPrefix(grpcTrustedPath, "/")] = stagedFile{content: trusted, mode: 0o600}
+		files[strings.TrimPrefix(clientContainerFS, "/")] = stagedFile{content: client, mode: 0o555}
+		files[strings.TrimPrefix(pluginContainerFS, "/")+"/plugin.yaml"] = stagedFile{content: pluginManifest, mode: 0o400}
+		files[strings.TrimPrefix(pluginContainerFS, "/")+"/__init__.py"] = stagedFile{content: pluginModule, mode: 0o400}
+		files[strings.TrimPrefix(seamContainerFS, "/")] = stagedFile{content: seamScript, mode: 0o400}
+	} else {
+		files[strings.TrimPrefix(identityContainerFS, "/")] = stagedFile{content: identity, mode: 0o600}
 	}
 	if extractEnabled {
 		files[strings.TrimPrefix(extractKeyPath, "/")] = stagedFile{content: active.extractAPIKey, mode: 0o600}
@@ -1217,7 +1249,10 @@ func stageArchive(files map[string]stagedFile) ([]byte, error) {
 	// Everything is owned by the image's unprivileged `hermes` user, because
 	// that is the identity the PATH shim drops to. Modes stay restrictive: the
 	// wrapper still reads the key as root before handing off.
-	directories := []string{"run/aries", "run/aries/hermes", "run/aries/ssh", "run/aries/workspace"}
+	directories := []string{
+		"run/aries", "run/aries/hermes", "run/aries/ssh", "run/aries/workspace",
+		"run/aries/bin", "run/aries/grpc", "run/aries/hermes/plugins", "run/aries/hermes/plugins/aries",
+	}
 	for _, name := range directories {
 		mode := int64(0o700)
 		if name == "run/aries/workspace" {
@@ -1484,7 +1519,12 @@ func failedHarnessResult(active *session, started time.Time, err error) core.Har
 	return core.HarnessResult{Status: status, Duration: time.Since(started), LogPaths: append([]string(nil), active.logPaths...), Error: errorText}
 }
 
-func readStablePrivateFile(path string, mode os.FileMode) ([]byte, error) {
+// readStablePrivateFile reads one file whose mode and size must both be exactly
+// what the caller expects. The limit is explicit because the two classes of
+// staged file differ by five orders of magnitude: credentials are bounded by
+// maxDockerOutput, while the staged client is a Go binary and needs its own
+// bound. Reusing the credential bound for the binary is what broke a real run.
+func readStablePrivateFile(path string, mode os.FileMode, limit int64) ([]byte, error) {
 	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, err
@@ -1495,11 +1535,11 @@ func readStablePrivateFile(path string, mode os.FileMode) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !before.Mode().IsRegular() || before.Mode().Perm() != mode || before.Size() < 1 || before.Size() > maxDockerOutput {
-		return nil, errors.New("private source is not one bounded regular file with the required mode")
+	if !before.Mode().IsRegular() || before.Mode().Perm() != mode || before.Size() < 1 || before.Size() > limit {
+		return nil, fmt.Errorf("private source %s is not one regular file of mode %04o within %d bytes", filepath.Base(path), mode, limit)
 	}
-	content, err := io.ReadAll(io.LimitReader(file, maxDockerOutput+1))
-	if err != nil || len(content) > maxDockerOutput {
+	content, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil || int64(len(content)) > limit {
 		return nil, errors.New("read private source within bound")
 	}
 	after, err := file.Stat()
@@ -1518,7 +1558,7 @@ func writeArtifact(path string, content []byte) error {
 		if !errors.Is(err, os.ErrExist) {
 			return err
 		}
-		existing, readErr := readStablePrivateFile(path, 0o600)
+		existing, readErr := readStablePrivateFile(path, 0o600, maxDockerOutput)
 		if readErr == nil && bytes.Equal(existing, content) {
 			clear(existing)
 			return nil
