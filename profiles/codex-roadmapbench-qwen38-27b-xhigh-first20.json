@@ -1,0 +1,63 @@
+{
+  "name": "codex-roadmapbench-qwen38-27b-xhigh-first20",
+  "versions_file": "../configs/versions.json",
+  "overrides_file": "",
+  "execution": {
+    "concurrency": 1
+  },
+  "benchmark": {
+    "type": "roadmapbench",
+    "root": ".cache/roadmapbench",
+    "tasks": [
+      "dsl-2.1.0-roadmap",
+      "dsl-2.2.0-roadmap",
+      "dsl-2.3.0-roadmap",
+      "fal-1.3.0-roadmap",
+      "fal-2.0.0-roadmap",
+      "fal-3.0.0-roadmap",
+      "fal-4.0.0-roadmap",
+      "fal-4.1.0-roadmap",
+      "fbr-2.27.0-roadmap",
+      "fbr-2.37.0-roadmap",
+      "fbr-2.40.0-roadmap",
+      "fbr-2.42.0-roadmap",
+      "fbr-2.43.0-roadmap",
+      "fbr-3.0.0-roadmap",
+      "fyn-2.1.0-roadmap",
+      "fyn-2.2.0-roadmap",
+      "fyn-2.4.0-roadmap",
+      "fyn-2.5.0-roadmap",
+      "fyn-2.7.0-roadmap",
+      "glz-3.0.0-roadmap"
+    ]
+  },
+  "harness": {
+    "type": "codex",
+    "mode": "agent",
+    "codex": {
+      "executable": "../.cache/codex/0.157.1/codex",
+      "reasoning_effort": "xhigh",
+      "developer_instructions": "Use the ultra execution strategy. As the primary agent, start with a brief plan and delegate at least one substantive independent subtask early, before the main implementation. Use investigation, implementation, or test review as appropriate. Actively parallelize independent work whenever possible, with at most three active children. Give each child a bounded task and a verification target. All agents share the same sandbox and working tree; assign mutually exclusive file ownership for edits and prevent overlapping writes. When spawning a subagent, omit model, reasoning_effort, and agent_type so it inherits the parent's model, reasoning effort, and remote environment. Stay responsible for integration and completion: inspect and verify child results, resolve conflicts, run the relevant tests yourself, and confirm the requested task is complete. Execute ordinary reversible actions autonomously. If you are a delegated child, stay within the assigned scope and report findings, edits, and test evidence to the primary agent."
+    },
+    "subagents": {
+      "enabled": true,
+      "max_concurrent": 3
+    }
+  },
+  "sandbox": {
+    "type": "docker"
+  },
+  "bridge": {
+    "type": "codex-ssh"
+  },
+  "runtime": {
+    "backend": "openai",
+    "mode": "external"
+  },
+  "model": {
+    "base_url": "http://model.local:8000/v1",
+    "api_key_env": "MODEL_API_KEY",
+    "id": "Qwen/Qwen3.8-27B"
+  },
+  "output_dir": "runs"
+}

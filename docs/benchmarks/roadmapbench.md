@@ -21,6 +21,42 @@ make build
 ./bin/aries profiles/codex-roadmapbench-smoke1-openai.json
 ```
 
+For all 115 tasks, replace the same endpoint and model placeholders in
+`profiles/codex-roadmapbench-all115-openai.json`, then run:
+
+```sh
+./bin/aries setup profiles/codex-roadmapbench-all115-openai.json
+./bin/aries profiles/codex-roadmapbench-all115-openai.json
+```
+
+The full profile selects each pinned task once in task-ID order.
+
+`profiles/codex-roadmapbench-qwen38-27b-xhigh-first20.json` selects the first
+20 tasks in that same order, from `dsl-2.1.0-roadmap` through
+`glz-3.0.0-roadmap`. It uses `Qwen/Qwen3.8-27B`, `xhigh` reasoning effort,
+and up to three native Codex subagents. Replace its endpoint placeholder,
+provide `MODEL_API_KEY`, and run:
+
+```sh
+./bin/aries setup profiles/codex-roadmapbench-qwen38-27b-xhigh-first20.json
+./bin/aries profiles/codex-roadmapbench-qwen38-27b-xhigh-first20.json
+```
+
+This profile's native
+[`developer_instructions`](https://learn.chatgpt.com/docs/config-file/config-reference)
+define the **ultra** execution
+strategy: plan briefly, delegate an independent subtask early, parallelize
+bounded work with exclusive edit ownership in the shared sandbox, and have
+the parent verify and integrate results and run tests. Child spawns omit
+`model`, `reasoning_effort`, and `agent_type` to inherit the parent
+configuration. Ultra names the prompt strategy; the API reasoning effort
+remains `xhigh`.
+
+All three examples use sequential task execution (`execution.concurrency: 1`)
+and leave `overrides_file` empty, retaining the task's published resources
+and two-hour agent budget. Set `model.context_length` to the actual model
+server's context window before running the first20 profile.
+
 Setup prepares data and images without contacting the model. Runs use the
 normal ARIES model, concurrency, task-order, and resource-override settings.
 Replace `benchmark.tasks` with task directory names from the pinned dataset
@@ -81,3 +117,7 @@ See the [official metrics](https://github.com/UniPat-AI/RoadmapBench/tree/9bbc34
 Dataset-backed integration tests load all 115 tasks. A deterministic Docker
 fixture separately checks verifier injection, partial/full rewards, and positive
 sandbox cleanup without a paid API.
+With the pinned Codex CLI installed, another regression runs the complete
+Runner through native parent/child delegation, SSH, and RoadmapBench evaluation.
+It checks the first20 profile's xhigh and ultra instructions, verifier privacy,
+partial/full rewards, and cleanup against a deterministic Responses endpoint.

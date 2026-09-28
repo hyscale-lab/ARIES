@@ -1,5 +1,43 @@
 # ARIES Tasks
 
+## Codex + RoadmapBench integration
+
+Active plan on `feat/codex-roadmapbench`, based on the completed adapter:
+
+1. Add a complete 115-task Codex profile and regression coverage for its exact
+   pinned task selection, retaining the one-task smoke profile.
+2. Exercise the real Runner with RoadmapBench, native Codex, the Codex SSH
+   bridge, and Docker against a deterministic Responses endpoint. Prove
+   private verifier separation, partial/full scoring, and positive cleanup.
+3. Per the updated user instruction, validate on `boxi@10.96.190.63` in an
+   isolated ARIES source directory without credentials or run-data transfer;
+   run the release matrix, record actual evidence, and commit the integration.
+4. Run the first 20 pinned tasks in task-ID order with Qwen3.8-27B, xhigh,
+   and the Codex ultra developer prompt requiring early substantive native
+   delegation. Confirm actual child execution before the full collection and
+   preserve existing remote workloads throughout verification and the run.
+
+Implementation and current validation:
+
+- Added all-115 and first-20 Codex profiles with regression coverage for the
+  exact pinned inventory. The first-20 profile sets xhigh, three native child
+  slots, and an ultra developer prompt requiring early substantive delegation,
+  disjoint edit ownership, inherited model/effort, integration, and real tests.
+- Added a real Runner/Codex/RoadmapBench Docker regression with deterministic
+  Responses traffic. It exercises parent/child configuration inheritance,
+  private verifier separation, partial/full rewards, and positive cleanup.
+  It compiles and passes vet; execution is skipped locally because the pinned
+  Codex binary and Docker daemon are unavailable here.
+- Local `make build`, `make test`, `make test-race`, and `make lint` pass.
+  Read-only remote checks confirm Go 1.26.5, Codex 0.157.1, Docker, Git LFS,
+  and the existing BF16 Qwen3.8-27B service with a 131072-token context.
+- Remote validation and the real 20-task run have not started. Automatic
+  approval review rejected the proposed source snapshot transfer, requiring
+  payload- and destination-specific authorization beyond the user's remote
+  validation instruction. The exact source-transfer question is pending;
+  no source was transferred, no inference was called, and existing remote
+  worktrees, processes, and model services remain untouched.
+
 ## RoadmapBench benchmark adapter
 
 Implemented on `feat/roadmapbench` with no new dependency or Runner role:

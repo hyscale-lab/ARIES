@@ -1,8 +1,11 @@
 package config
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -100,5 +103,117 @@ func TestCheckedInRoadmapBenchProfileLoads(t *testing.T) {
 	}
 	if cfg.OverridesFile != "" || cfg.Harness.Type != "codex" || cfg.Bridge.Type != "codex-ssh" || cfg.Runtime.Backend != "openai" {
 		t.Fatalf("RoadmapBench profile = %#v", cfg)
+	}
+}
+
+func TestCheckedInRoadmapBenchAllProfileLoads(t *testing.T) {
+	profilePath := filepath.Join("..", "..", "profiles", "codex-roadmapbench-all115-openai.json")
+	cfg, err := Load(profilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Name != "codex-roadmapbench-all115-openai" || cfg.Benchmark.Type != "roadmapbench" || cfg.Benchmark.Root != ".cache/roadmapbench" {
+		t.Fatalf("RoadmapBench full profile identity = %q, %#v", cfg.Name, cfg.Benchmark)
+	}
+	tasks := cfg.Benchmark.Tasks
+	if len(tasks) != 115 {
+		t.Fatalf("RoadmapBench task count = %d, want 115", len(tasks))
+	}
+	for i := 1; i < len(tasks); i++ {
+		if tasks[i-1] >= tasks[i] {
+			t.Fatalf("tasks must be unique and sorted: %q before %q", tasks[i-1], tasks[i])
+		}
+	}
+	// SHA-256 of the sorted task directory names, each followed by a newline,
+	// from dataset revision 59184e779909300a5a0150b06b945d39da81a099.
+	const taskSetSHA256 = "7c395b8981f6fc8ebae8246f912b4cc4e66548b87777783018b2df726afd6111"
+	if got := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(tasks, "\n")+"\n"))); got != taskSetSHA256 {
+		t.Fatalf("RoadmapBench task inventory SHA-256 = %s, want %s", got, taskSetSHA256)
+	}
+	if cfg.Harness.Type != "codex" || cfg.Harness.Mode != "agent" || cfg.Harness.Codex == nil || cfg.Bridge.Type != "codex-ssh" || cfg.Sandbox.Type != "docker" {
+		t.Fatalf("RoadmapBench component selection = %#v, %#v, %#v", cfg.Harness, cfg.Bridge, cfg.Sandbox)
+	}
+	wantRoadmap := RoadmapBenchVersions{
+		RepositoryURL: "https://huggingface.co/datasets/UnipatAI/RoadmapBench",
+		Revision:      "59184e779909300a5a0150b06b945d39da81a099",
+	}
+	wantCodex := CodexVersions{Image: "docker.io/library/debian:12.12-slim", Version: "0.157.1"}
+	if cfg.Versions.RoadmapBench != wantRoadmap || cfg.Versions.Codex != wantCodex {
+		t.Fatalf("RoadmapBench/Codex pins = %#v, %#v", cfg.Versions.RoadmapBench, cfg.Versions.Codex)
+	}
+	if cfg.VersionsFile != "../configs/versions.json" || cfg.OverridesFile != "" || cfg.OutputDir != "runs" || cfg.Harness.Codex.Executable != "../.cache/codex/0.157.1/codex" {
+		t.Fatalf("RoadmapBench profile paths = %#v", cfg)
+	}
+	wantExecutable, err := filepath.Abs(filepath.Join("..", "..", ".cache", "codex", "0.157.1", "codex"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Harness.Codex.ResolvedExecutable != wantExecutable {
+		t.Fatalf("resolved Codex executable = %q, want %q", cfg.Harness.Codex.ResolvedExecutable, wantExecutable)
+	}
+	smoke, err := Load(filepath.Join("..", "..", "profiles", "codex-roadmapbench-smoke1-openai.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Name = smoke.Name
+	cfg.Benchmark.Tasks = smoke.Benchmark.Tasks
+	if !reflect.DeepEqual(cfg, smoke) {
+		t.Fatal("full profile settings differ from smoke profile beyond name and task selection")
+	}
+}
+
+func TestCheckedInRoadmapBenchFirst20ProfileLoads(t *testing.T) {
+	cfg, err := Load(filepath.Join("..", "..", "profiles", "codex-roadmapbench-qwen38-27b-xhigh-first20.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	full, err := Load(filepath.Join("..", "..", "profiles", "codex-roadmapbench-all115-openai.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(full.Benchmark.Tasks) != 115 || !reflect.DeepEqual(cfg.Benchmark.Tasks, full.Benchmark.Tasks[:20]) {
+		t.Fatalf("first20 tasks = %v, want the first 20 tasks from the pinned full profile", cfg.Benchmark.Tasks)
+	}
+	if cfg.Name != "codex-roadmapbench-qwen38-27b-xhigh-first20" || cfg.Model.ID != "Qwen/Qwen3.8-27B" || cfg.Execution.Concurrency != 1 || cfg.OverridesFile != "" {
+		t.Fatalf("first20 model/execution settings = %#v", cfg)
+	}
+	if cfg.Harness.Type != "codex" || cfg.Bridge.Type != "codex-ssh" || cfg.Harness.Codex == nil || cfg.Harness.Codex.ReasoningEffort != "xhigh" {
+		t.Fatalf("first20 Codex settings = %#v, %#v", cfg.Harness, cfg.Bridge)
+	}
+	if cfg.Harness.Subagents.Enabled == nil || !*cfg.Harness.Subagents.Enabled || cfg.Harness.Subagents.MaxConcurrent != 3 {
+		t.Fatalf("first20 native subagent settings = %#v", cfg.Harness.Subagents)
+	}
+	for _, instruction := range []string{
+		"ultra execution strategy",
+		"start with a brief plan",
+		"delegate at least one substantive independent subtask early, before the main implementation",
+		"investigation, implementation, or test review",
+		"Actively parallelize independent work",
+		"at most three active children",
+		"bounded task and a verification target",
+		"same sandbox and working tree",
+		"mutually exclusive file ownership",
+		"omit model, reasoning_effort, and agent_type",
+		"inherits the parent's model, reasoning effort, and remote environment",
+		"inspect and verify child results",
+		"run the relevant tests yourself",
+		"confirm the requested task is complete",
+		"Execute ordinary reversible actions autonomously",
+		"If you are a delegated child, stay within the assigned scope",
+	} {
+		if !strings.Contains(cfg.Harness.Codex.DeveloperInstructions, instruction) {
+			t.Errorf("native developer instructions missing %q", instruction)
+		}
+	}
+	// Endpoint, context window, pins, paths, and other defaults stay identical
+	// to the complete profile; only this explicitly requested selection differs.
+	cfg.Name = full.Name
+	cfg.Benchmark.Tasks = full.Benchmark.Tasks
+	cfg.Model.ID = full.Model.ID
+	cfg.Harness.Codex.ReasoningEffort = full.Harness.Codex.ReasoningEffort
+	cfg.Harness.Codex.DeveloperInstructions = full.Harness.Codex.DeveloperInstructions
+	cfg.Harness.Subagents = full.Harness.Subagents
+	if !reflect.DeepEqual(cfg, full) {
+		t.Fatal("first20 profile differs from the full profile beyond its task, model, and delegation settings")
 	}
 }

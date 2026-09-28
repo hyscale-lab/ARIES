@@ -420,14 +420,17 @@ func integrationExecutable(t *testing.T, variable, fallback string) string {
 }
 
 type responsesFixture struct {
-	mu          sync.Mutex
-	calls       int
-	err         error
-	cancelTool  bool
-	taskUser    string
-	subagents   bool
-	parentCalls int
-	childCalls  int
+	mu                    sync.Mutex
+	calls                 int
+	err                   error
+	cancelTool            bool
+	taskUser              string
+	subagents             bool
+	parentCalls           int
+	childCalls            int
+	command               string
+	privateMarker         string
+	developerInstructions string
 }
 
 func (fixture *responsesFixture) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -453,6 +456,11 @@ func (fixture *responsesFixture) ServeHTTP(writer http.ResponseWriter, request *
 		http.Error(writer, "invalid request", http.StatusBadRequest)
 		return
 	}
+	if fixture.privateMarker != "" && bytes.Contains(content, []byte(fixture.privateMarker)) {
+		fixture.err = errors.New("private verifier entered Responses JSON")
+		http.Error(writer, "private verifier input", http.StatusBadRequest)
+		return
+	}
 	fixture.calls++
 	var item map[string]any
 	if fixture.subagents {
@@ -476,6 +484,9 @@ func (fixture *responsesFixture) ServeHTTP(writer http.ResponseWriter, request *
 			command += `printf native-exec-state > /app/native-state; printf REMOTE_CODEX_OK`
 			if fixture.cancelTool {
 				command = `set -eu; test -z "${ARIES_CODEX_TEST_KEY+x}"; echo $$ > /app/native.pid; setsid /bin/sh -c 'echo $$ > /app/escaped.pid; exec sleep 600' </dev/null >/dev/null 2>&1 & while [ ! -s /app/escaped.pid ]; do sleep 0.02; done; printf ready > /app/native.started; sleep 600`
+			}
+			if fixture.command != "" {
+				command = fixture.command
 			}
 			arguments, _ := json.Marshal(map[string]any{"cmd": command, "workdir": "/app", "login": false, "yield_time_ms": 10000, "max_output_tokens": 1000})
 			item = map[string]any{"type": "function_call", "call_id": "call-native-exec", "name": "exec_command", "arguments": string(arguments)}
@@ -533,7 +544,11 @@ func (fixture *responsesFixture) subagentResponse(request *http.Request, content
 	if err := json.Unmarshal(content, &body); err != nil {
 		return nil, err
 	}
-	if body.Model != integrationQwen || body.Reasoning.Effort != "xhigh" || !bytes.Contains(content, []byte(integrationInstructions)) {
+	instructions := fixture.developerInstructions
+	if instructions == "" {
+		instructions = integrationInstructions
+	}
+	if body.Model != integrationQwen || body.Reasoning.Effort != "xhigh" || !bytes.Contains(content, []byte(instructions)) {
 		return nil, fmt.Errorf("native model/effort/developer inheritance mismatch: model=%q effort=%q", body.Model, body.Reasoning.Effort)
 	}
 	if request.Header.Get("X-OpenAI-Subagent") == "collab_spawn" {
@@ -543,7 +558,12 @@ func (fixture *responsesFixture) subagentResponse(request *http.Request, content
 			if request.Header.Get("X-Codex-Parent-Thread-Id") == "" {
 				return nil, errors.New("native child request has no parent thread identity")
 			}
-			return nativeFunctionCall("call-child-exec", "", "exec_command", map[string]any{"cmd": `set -eu; test -z "${ARIES_CODEX_TEST_KEY+x}"; test ! -e /run/aries/codex/model.key; test "$PWD" = /app; printf native-exec-state > /app/native-state; printf REMOTE_CHILD_OK`, "workdir": "/app", "login": false, "yield_time_ms": 10000}), nil
+			command := `set -eu; test -z "${ARIES_CODEX_TEST_KEY+x}"; test ! -e /run/aries/codex/model.key; test "$PWD" = /app; printf native-exec-state > /app/native-state; `
+			if fixture.command != "" {
+				command += fixture.command + "; "
+			}
+			command += "printf REMOTE_CHILD_OK"
+			return nativeFunctionCall("call-child-exec", "", "exec_command", map[string]any{"cmd": command, "workdir": "/app", "login": false, "yield_time_ms": 10000}), nil
 		case 2:
 			if !strings.Contains(body.functionOutput("call-child-exec"), "REMOTE_CHILD_OK") {
 				return nil, errors.New("native child did not execute in the task sandbox")
