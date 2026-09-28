@@ -145,8 +145,18 @@ sequenceDiagram
 
 ## Reading a file
 
-`read_file(path, offset, limit)` makes three calls, each a separate client process and a separate
-RPC.
+One `read_file(path, offset, limit)` tool call is **three separate bridge calls**, run one after
+another. Each is its own client process and its own RPC. Only the third one returns the text the
+model sees.
+
+| Step | RPC | Why | Returns |
+| --- | --- | --- | --- |
+| 1 | `Stat` | Does the file exist, and is it a regular file? | type, size |
+| 2 | `ReadFile`, first 1000 bytes | Is the file binary? | a byte sample |
+| 3 | `ReadLines`, the requested window | The content itself | the lines, plus line counts |
+
+The diagram shows the three steps as three boxes. Steps 2 and 3 use the same sandbox path
+(`OpenFile`) and differ only in what the bridge keeps from the stream.
 
 ```mermaid
 sequenceDiagram
@@ -159,36 +169,48 @@ sequenceDiagram
 
     H->>P: read_file(path, offset, limit)
 
-    P->>C: file stat PATH
-    C->>B: Stat(path)
-    B->>S: StatFile
-    S->>D: ContainerStatPath
-    D-->>S: mode, size, link target
-    B-->>C: exists, type, size, mode
-    C-->>P: JSON on stdout
+    rect rgba(128, 128, 128, 0.12)
+        Note over P,D: Step 1 of 3. Stat RPC: does the file exist?
+        P->>C: file stat PATH
+        C->>B: Stat(path)
+        B->>S: StatFile
+        S->>D: ContainerStatPath
+        D-->>S: mode, size, link target
+        B-->>C: exists, type, size, mode
+        C-->>P: JSON on stdout
+    end
 
-    P->>C: file read --max-bytes 1000 PATH
-    C->>B: ReadFile(path, 0, 1000)
-    B->>S: OpenFile
-    S->>D: CopyFromContainer
-    D-->>S: tar stream
-    Note over B: read 1000 bytes, close the stream early
-    B-->>C: content
-    C-->>P: bytes on stdout (binary check)
+    rect rgba(128, 128, 128, 0.12)
+        Note over P,D: Step 2 of 3. ReadFile RPC: binary check on a small sample
+        P->>C: file read --max-bytes 1000 PATH
+        C->>B: ReadFile(path, 0, 1000)
+        B->>S: OpenFile
+        S->>D: CopyFromContainer
+        D-->>S: tar stream
+        Note over B: read 1000 bytes, close the stream early
+        B-->>C: content
+        C-->>P: bytes on stdout
+    end
 
-    P->>C: file lines --first N --max M --max-line-bytes K PATH
-    C->>B: ReadLines(path, N, M, K)
-    B->>S: OpenFile
-    S->>D: CopyFromContainer
-    D-->>S: tar stream
-    Note over B: one pass: keep lines N..N+M-1,<br/>cut each at K bytes, count all newlines
-    B-->>C: window, total_lines, size, ends_with_newline, more
-    C-->>P: window on stdout, JSON metadata on stderr
+    rect rgba(128, 128, 128, 0.12)
+        Note over P,D: Step 3 of 3. ReadLines RPC: the window the model asked for
+        P->>C: file lines --first N --max M --max-line-bytes K PATH
+        C->>B: ReadLines(path, N, M, K)
+        B->>S: OpenFile
+        S->>D: CopyFromContainer
+        D-->>S: tar stream
+        Note over B: one pass: keep lines N..N+M-1,<br/>cut each at K bytes, count all newlines
+        B-->>C: window, total_lines, size, ends_with_newline, more
+        C-->>P: window on stdout, JSON metadata on stderr
+    end
 
     Note over P: strip BOM, number lines, build the pagination hint
     P-->>H: ReadResult
 ```
 
+- **`ReadFile` and `ReadLines` are different procedures.** `ReadFile` returns a byte range and
+  serves probes and whole-file reads. `ReadLines` returns a range of lines and serves the
+  paginated `read_file` tool.
 - **Docker to bridge streams; bridge to client does not.** The bridge reads the tar stream as it
   arrives and keeps only what the call asked for. The reply is one message, at most 16 MiB.
 - **No process runs in the task container for a read.** The archive API needs no binaries in the
@@ -196,6 +218,8 @@ sequenceDiagram
 - **A symlink is followed.** The daemon reports the resolved target, and the adapter reads that.
 - **The plugin formats, the bridge selects.** The bridge returns raw bytes of the window. Line
   numbers, truncation markers and hints are Hermes's own code.
+- **A step can end the call early.** A missing file stops after step 1. A binary file stops after
+  step 2, unless Hermes's UTF-16 rescue applies, which runs on the shell.
 
 ## Writing a file
 
