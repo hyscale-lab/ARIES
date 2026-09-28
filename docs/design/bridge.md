@@ -39,6 +39,14 @@ input as private replayable evidence. These artifacts may contain task data and
 must remain private unless reviewed; model credentials and SSH private-key
 bytes do not belong in the records.
 
+OpenClaw, Hermes, and Codex share the concrete SSH transport and audit code in
+`pkg/bridge/internal/sshbridge`: ephemeral keys, private files, connection and
+session shutdown, stream accounting, and the bounded JSONL/raw writer. The two
+ARIES SSH clients also share connection, host-key verification, cancellation,
+and exit handling. Each adapter retains its own command grammar, credential
+file rules, workspace mapping, and execution/revocation policy. This internal
+package adds no Runner role or registration layer.
+
 ## Hermes SSH bridge
 
 The Hermes pairing is a second, separate adapter rather than a reuse of the
@@ -120,6 +128,15 @@ normal completion, failure, or cancellation, the Runner positively stops the
 harness, revokes the bridge, evaluates the still-running sandbox, and finally
 stops the sandbox. A future harness may require a different pair-specific
 adapter rather than a lowest-common-denominator remote-tool protocol.
+
+The OpenClaw and Hermes execution paths currently confirm cleanup of the
+original process group only. A real-container diagnostic shows that `setsid`
+and double-fork descendants can survive a successful Stop, including after a
+normally completed command. This is a known revocation gap, not a guarantee
+provided by the shared transport. Its separate fix must retain background
+services across tool calls, reap all agent descendants at Stop, and preserve
+unrelated benchmark services. Codex's descendant proof described above remains
+independent of this transport extraction.
 
 ## Customization & Contribution Guide
 

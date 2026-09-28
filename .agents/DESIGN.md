@@ -94,6 +94,15 @@ audit drain, and host credential removal must all succeed before evaluation.
 This adds no Runner role, shared transport framework, or dependency. RoadmapBench
 and a live Qwen experiment are not part of this implementation.
 
+The three SSH bridges share concrete connection/session transport, private
+key/file operations, stream accounting, and bounded audit persistence in
+`pkg/bridge/internal/sshbridge`. Command grammar, workspace and credential
+policy, and execution/revocation guarantees remain adapter-owned. OpenClaw and
+Hermes currently retain an independently reproduced process-group cleanup gap
+for setsid/double-fork descendants; common transport does not fix or strengthen
+that policy. The separately scoped supervision fix must preserve background
+services across calls while retiring every agent descendant before evaluation.
+
 ## Repository boundary
 
 - `aries` is the only write and Git-operation boundary.

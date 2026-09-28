@@ -1,5 +1,33 @@
 # ARIES Tasks
 
+## Shared SSH transport and audit
+
+Completed the recorded cleanup plan: moved concrete SSH clients/server,
+ephemeral keys/private files, bounded input accounting, and audit persistence
+into `pkg/bridge/internal/sshbridge`. The three adapters keep their grammar,
+workspace, credential rules, and revocation policy; no Runner role, dependency,
+registry, or transport framework was added. Duplicated implementation and pure
+tests were removed; bridge policy and real-container coverage remain.
+
+- Focused tests and race checks pass. Peer review caught an input-copy error
+  regression; a real SSH EIO regression failed before the fix and passes after
+  it, preserving remote nonzero exit priority and return without caller EOF.
+- Final `make build`, `make test`, `make test-race`, `make lint`, and
+  `make integration` pass on dual-h100 with Go 1.26.5. The first integration run
+  had one OpenClaw concurrent-call status-255 failure; its isolated test passed
+  three runs and the final complete release passed. Its initial cause was not
+  reproduced. Real Codex, Hermes, and OpenClaw harness paths all pass.
+- Moby SDK inspection confirms no ARIES container or network. No SSH helper
+  process or staged identity remains; temporary diagnostic source was removed.
+  Formatting, diff, and changed-source secret checks pass.
+- A separate real-container diagnostic confirms the existing OpenClaw/Hermes
+  supervision gap: normal completion and cancellation can both leave setsid
+  and double-fork children alive after Hermes Stop returns nil. Benchmark
+  daemons must survive, and background jobs must remain usable across calls.
+  Per user request, the fix follows on a separate branch. Its issue description
+  and private diagnostic evidence remain ignored artifacts; the user will
+  publish the issue. Codex's existing descendant proof remains intact.
+
 ## Codex harness and native SSH bridge
 
 - Added a pinned `0.157.1` Codex harness, its native remote environment, strict

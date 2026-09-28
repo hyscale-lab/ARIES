@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/sshbridge"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 )
@@ -56,75 +57,10 @@ func RunClient(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 	if err != nil {
 		return 255, err
 	}
-	configuration := &ssh.ClientConfig{
-		User: invocation.user,
-		Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: func(host string, _ net.Addr, presented ssh.PublicKey) error {
-			if host != invocation.address || !bytes.Equal(presented.Marshal(), hostKey.Marshal()) {
-				return errors.New("strict SSH host key verification failed")
-			}
-			return nil
-		},
-		HostKeyAlgorithms: []string{ssh.KeyAlgoED25519},
-		Timeout:           clientConnectTimeout,
-	}
-	dialer := net.Dialer{Timeout: clientConnectTimeout}
-	connection, err := dialer.DialContext(ctx, "tcp", invocation.address)
-	if err != nil {
-		return clientFailure(ctx, "connect SSH bridge", err)
-	}
-	defer connection.Close()
-	stopCancellation := context.AfterFunc(ctx, func() { _ = connection.Close() })
-	defer stopCancellation()
-	if err := connection.SetDeadline(time.Now().Add(clientConnectTimeout)); err != nil {
-		return clientFailure(ctx, "set SSH startup deadline", err)
-	}
-	sshConnection, channels, requests, err := ssh.NewClientConn(connection, invocation.address, configuration)
-	if err != nil {
-		return clientFailure(ctx, "establish SSH connection", err)
-	}
-	client := ssh.NewClient(sshConnection, channels, requests)
-	defer client.Close()
-	session, err := client.NewSession()
-	if err != nil {
-		return clientFailure(ctx, "open SSH session", err)
-	}
-	defer session.Close()
-	remoteStdin, err := session.StdinPipe()
-	if err != nil {
-		return clientFailure(ctx, "open SSH stdin", err)
-	}
-	session.Stdout = stdout
-	session.Stderr = stderr
-	if err := session.Start("aries-codex-exec-server-v1"); err != nil {
-		return clientFailure(ctx, "start Codex executor", err)
-	}
-	// A fast executor may have already sent its exit status and closed the
-	// socket. Session.Wait still owns that buffered result.
-	if err := connection.SetDeadline(time.Time{}); err != nil && !errors.Is(err, net.ErrClosed) {
-		return clientFailure(ctx, "clear SSH startup deadline", err)
-	}
-	// Session.Stdin makes ssh.Session.Wait wait for the input copier. Native
-	// executor input can remain open after remote exit or cancellation, so keep
-	// that copier independent and close only the SSH input half on EOF.
-	go func() {
-		_, _ = io.Copy(remoteStdin, stdin)
-		_ = remoteStdin.Close()
-	}()
-	err = session.Wait()
-	if ctx.Err() != nil {
-		return 255, ctx.Err()
-	}
-	if err == nil {
-		return 0, nil
-	}
-	var exitError *ssh.ExitError
-	if errors.As(err, &exitError) {
-		if code := exitError.ExitStatus(); code >= 0 && code <= 255 {
-			return code, nil
-		}
-	}
-	return 255, fmt.Errorf("wait for Codex executor: %w", err)
+	return sshbridge.RunClient(ctx, sshbridge.ClientConfig{
+		Address: invocation.address, User: invocation.user, Signer: signer, HostKey: hostKey,
+		ConnectTimeout: clientConnectTimeout,
+	}, "aries-codex-exec-server-v1", stdin, stdout, stderr)
 }
 
 func parseClientArguments(args []string) (clientArguments, error) {
@@ -195,11 +131,4 @@ func readClientFile(path string) ([]byte, error) {
 		return nil, fmt.Errorf("file exceeds %d bytes", clientFileLimit)
 	}
 	return content, nil
-}
-
-func clientFailure(ctx context.Context, operation string, err error) (int, error) {
-	if ctx.Err() != nil {
-		return 255, ctx.Err()
-	}
-	return 255, fmt.Errorf("%s: %w", operation, err)
 }
