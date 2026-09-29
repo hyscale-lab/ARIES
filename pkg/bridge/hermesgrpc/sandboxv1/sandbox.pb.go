@@ -406,9 +406,8 @@ type ReadFileRequest struct {
 	// offset is the first byte to return, counted from the start of the file.
 	// Negative is INVALID_ARGUMENT; past the end yields empty content.
 	Offset int64 `protobuf:"varint,2,opt,name=offset,proto3" json:"offset,omitempty"`
-	// max_bytes bounds the returned content. Zero selects the bridge's bound; a
-	// value above it is INVALID_ARGUMENT. Probes pass small values (3, 1000,
-	// 4096).
+	// max_bytes bounds the returned content. Zero reads to the end of the file;
+	// negative is INVALID_ARGUMENT. Probes pass small values (3, 1000, 4096).
 	MaxBytes      int64 `protobuf:"varint,3,opt,name=max_bytes,json=maxBytes,proto3" json:"max_bytes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -465,14 +464,16 @@ func (x *ReadFileRequest) GetMaxBytes() int64 {
 	return 0
 }
 
+// ReadFileResponse is one message of the ReadFile stream: exactly one header
+// first, then zero or more chunks. The chunks concatenated are bytes
+// [offset, offset+n) of the file.
 type ReadFileResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// content is bytes [offset, offset+len(content)) of the file.
-	Content []byte `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
-	// size is the file's total length, not len(content).
-	Size int64 `protobuf:"varint,2,opt,name=size,proto3" json:"size,omitempty"`
-	// truncated is true when offset + len(content) < size.
-	Truncated     bool `protobuf:"varint,3,opt,name=truncated,proto3" json:"truncated,omitempty"`
+	// Types that are valid to be assigned to Part:
+	//
+	//	*ReadFileResponse_Header
+	//	*ReadFileResponse_Chunk
+	Part          isReadFileResponse_Part `protobuf_oneof:"part"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -507,21 +508,95 @@ func (*ReadFileResponse) Descriptor() ([]byte, []int) {
 	return file_sandbox_proto_rawDescGZIP(), []int{5}
 }
 
-func (x *ReadFileResponse) GetContent() []byte {
+func (x *ReadFileResponse) GetPart() isReadFileResponse_Part {
 	if x != nil {
-		return x.Content
+		return x.Part
 	}
 	return nil
 }
 
-func (x *ReadFileResponse) GetSize() int64 {
+func (x *ReadFileResponse) GetHeader() *ReadFileHeader {
+	if x != nil {
+		if x, ok := x.Part.(*ReadFileResponse_Header); ok {
+			return x.Header
+		}
+	}
+	return nil
+}
+
+func (x *ReadFileResponse) GetChunk() []byte {
+	if x != nil {
+		if x, ok := x.Part.(*ReadFileResponse_Chunk); ok {
+			return x.Chunk
+		}
+	}
+	return nil
+}
+
+type isReadFileResponse_Part interface {
+	isReadFileResponse_Part()
+}
+
+type ReadFileResponse_Header struct {
+	Header *ReadFileHeader `protobuf:"bytes,1,opt,name=header,proto3,oneof"`
+}
+
+type ReadFileResponse_Chunk struct {
+	Chunk []byte `protobuf:"bytes,2,opt,name=chunk,proto3,oneof"`
+}
+
+func (*ReadFileResponse_Header) isReadFileResponse_Part() {}
+
+func (*ReadFileResponse_Chunk) isReadFileResponse_Part() {}
+
+type ReadFileHeader struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// size is the file's total length, not the length of the range returned.
+	Size int64 `protobuf:"varint,1,opt,name=size,proto3" json:"size,omitempty"`
+	// truncated is true when the range ends before the end of the file.
+	Truncated     bool `protobuf:"varint,2,opt,name=truncated,proto3" json:"truncated,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReadFileHeader) Reset() {
+	*x = ReadFileHeader{}
+	mi := &file_sandbox_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReadFileHeader) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReadFileHeader) ProtoMessage() {}
+
+func (x *ReadFileHeader) ProtoReflect() protoreflect.Message {
+	mi := &file_sandbox_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReadFileHeader.ProtoReflect.Descriptor instead.
+func (*ReadFileHeader) Descriptor() ([]byte, []int) {
+	return file_sandbox_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *ReadFileHeader) GetSize() int64 {
 	if x != nil {
 		return x.Size
 	}
 	return 0
 }
 
-func (x *ReadFileResponse) GetTruncated() bool {
+func (x *ReadFileHeader) GetTruncated() bool {
 	if x != nil {
 		return x.Truncated
 	}
@@ -539,7 +614,7 @@ type ReadLinesRequest struct {
 	MaxLines int64 `protobuf:"varint,3,opt,name=max_lines,json=maxLines,proto3" json:"max_lines,omitempty"`
 	// max_line_bytes cuts each returned line to this many bytes, counted before
 	// the newline, so one pathological line cannot flood the reply. Zero means
-	// unclamped. A window larger than the bridge's bound is RESOURCE_EXHAUSTED.
+	// unclamped.
 	MaxLineBytes  int64 `protobuf:"varint,4,opt,name=max_line_bytes,json=maxLineBytes,proto3" json:"max_line_bytes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -547,7 +622,7 @@ type ReadLinesRequest struct {
 
 func (x *ReadLinesRequest) Reset() {
 	*x = ReadLinesRequest{}
-	mi := &file_sandbox_proto_msgTypes[6]
+	mi := &file_sandbox_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -559,7 +634,7 @@ func (x *ReadLinesRequest) String() string {
 func (*ReadLinesRequest) ProtoMessage() {}
 
 func (x *ReadLinesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_sandbox_proto_msgTypes[6]
+	mi := &file_sandbox_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -572,7 +647,7 @@ func (x *ReadLinesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadLinesRequest.ProtoReflect.Descriptor instead.
 func (*ReadLinesRequest) Descriptor() ([]byte, []int) {
-	return file_sandbox_proto_rawDescGZIP(), []int{6}
+	return file_sandbox_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ReadLinesRequest) GetPath() string {
@@ -603,28 +678,24 @@ func (x *ReadLinesRequest) GetMaxLineBytes() int64 {
 	return 0
 }
 
+// ReadLinesResponse is one message of the ReadLines stream: zero or more
+// chunks, then exactly one summary last. The chunks concatenated are the
+// window: each line cut at max_line_bytes and terminated by a newline, except
+// the file's last line when it has none on disk.
 type ReadLinesResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// content is the window: each line cut at max_line_bytes and terminated by
-	// a newline, except the file's last line when it has none on disk.
-	Content []byte `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
-	// total_lines is the number of newline bytes in the file, what `wc -l`
-	// reports.
-	TotalLines int64 `protobuf:"varint,2,opt,name=total_lines,json=totalLines,proto3" json:"total_lines,omitempty"`
-	// size is the file's length in bytes.
-	Size int64 `protobuf:"varint,3,opt,name=size,proto3" json:"size,omitempty"`
-	// ends_with_newline reports whether the file's last byte is a newline.
-	EndsWithNewline bool `protobuf:"varint,4,opt,name=ends_with_newline,json=endsWithNewline,proto3" json:"ends_with_newline,omitempty"`
-	// more is true when newline-terminated lines exist after the window, i.e.
-	// total_lines > first_line + max_lines - 1.
-	More          bool `protobuf:"varint,5,opt,name=more,proto3" json:"more,omitempty"`
+	// Types that are valid to be assigned to Part:
+	//
+	//	*ReadLinesResponse_Chunk
+	//	*ReadLinesResponse_Summary
+	Part          isReadLinesResponse_Part `protobuf_oneof:"part"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ReadLinesResponse) Reset() {
 	*x = ReadLinesResponse{}
-	mi := &file_sandbox_proto_msgTypes[7]
+	mi := &file_sandbox_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -636,7 +707,7 @@ func (x *ReadLinesResponse) String() string {
 func (*ReadLinesResponse) ProtoMessage() {}
 
 func (x *ReadLinesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_sandbox_proto_msgTypes[7]
+	mi := &file_sandbox_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -649,59 +720,141 @@ func (x *ReadLinesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadLinesResponse.ProtoReflect.Descriptor instead.
 func (*ReadLinesResponse) Descriptor() ([]byte, []int) {
-	return file_sandbox_proto_rawDescGZIP(), []int{7}
+	return file_sandbox_proto_rawDescGZIP(), []int{8}
 }
 
-func (x *ReadLinesResponse) GetContent() []byte {
+func (x *ReadLinesResponse) GetPart() isReadLinesResponse_Part {
 	if x != nil {
-		return x.Content
+		return x.Part
 	}
 	return nil
 }
 
-func (x *ReadLinesResponse) GetTotalLines() int64 {
+func (x *ReadLinesResponse) GetChunk() []byte {
+	if x != nil {
+		if x, ok := x.Part.(*ReadLinesResponse_Chunk); ok {
+			return x.Chunk
+		}
+	}
+	return nil
+}
+
+func (x *ReadLinesResponse) GetSummary() *ReadLinesSummary {
+	if x != nil {
+		if x, ok := x.Part.(*ReadLinesResponse_Summary); ok {
+			return x.Summary
+		}
+	}
+	return nil
+}
+
+type isReadLinesResponse_Part interface {
+	isReadLinesResponse_Part()
+}
+
+type ReadLinesResponse_Chunk struct {
+	Chunk []byte `protobuf:"bytes,1,opt,name=chunk,proto3,oneof"`
+}
+
+type ReadLinesResponse_Summary struct {
+	Summary *ReadLinesSummary `protobuf:"bytes,2,opt,name=summary,proto3,oneof"`
+}
+
+func (*ReadLinesResponse_Chunk) isReadLinesResponse_Part() {}
+
+func (*ReadLinesResponse_Summary) isReadLinesResponse_Part() {}
+
+type ReadLinesSummary struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// total_lines is the number of newline bytes in the file, what `wc -l`
+	// reports.
+	TotalLines int64 `protobuf:"varint,1,opt,name=total_lines,json=totalLines,proto3" json:"total_lines,omitempty"`
+	// size is the file's length in bytes.
+	Size int64 `protobuf:"varint,2,opt,name=size,proto3" json:"size,omitempty"`
+	// ends_with_newline reports whether the file's last byte is a newline.
+	EndsWithNewline bool `protobuf:"varint,3,opt,name=ends_with_newline,json=endsWithNewline,proto3" json:"ends_with_newline,omitempty"`
+	// more is true when newline-terminated lines exist after the window, i.e.
+	// total_lines > first_line + max_lines - 1.
+	More          bool `protobuf:"varint,4,opt,name=more,proto3" json:"more,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReadLinesSummary) Reset() {
+	*x = ReadLinesSummary{}
+	mi := &file_sandbox_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReadLinesSummary) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReadLinesSummary) ProtoMessage() {}
+
+func (x *ReadLinesSummary) ProtoReflect() protoreflect.Message {
+	mi := &file_sandbox_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReadLinesSummary.ProtoReflect.Descriptor instead.
+func (*ReadLinesSummary) Descriptor() ([]byte, []int) {
+	return file_sandbox_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *ReadLinesSummary) GetTotalLines() int64 {
 	if x != nil {
 		return x.TotalLines
 	}
 	return 0
 }
 
-func (x *ReadLinesResponse) GetSize() int64 {
+func (x *ReadLinesSummary) GetSize() int64 {
 	if x != nil {
 		return x.Size
 	}
 	return 0
 }
 
-func (x *ReadLinesResponse) GetEndsWithNewline() bool {
+func (x *ReadLinesSummary) GetEndsWithNewline() bool {
 	if x != nil {
 		return x.EndsWithNewline
 	}
 	return false
 }
 
-func (x *ReadLinesResponse) GetMore() bool {
+func (x *ReadLinesSummary) GetMore() bool {
 	if x != nil {
 		return x.More
 	}
 	return false
 }
 
+// WriteFileRequest is one message of the WriteFile stream: exactly one header
+// first, then chunks whose lengths sum to header.size. Fewer or more bytes is
+// INVALID_ARGUMENT, and the file is left as it was.
 type WriteFileRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// path is absolute. A directory at path is FAILED_PRECONDITION. A symlink at
-	// path is followed and the write lands on its target.
-	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
-	// content is the complete new file body; empty writes an empty file. Above
-	// the bridge's bound it is RESOURCE_EXHAUSTED.
-	Content       []byte `protobuf:"bytes,2,opt,name=content,proto3" json:"content,omitempty"`
+	// Types that are valid to be assigned to Part:
+	//
+	//	*WriteFileRequest_Header
+	//	*WriteFileRequest_Chunk
+	Part          isWriteFileRequest_Part `protobuf_oneof:"part"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *WriteFileRequest) Reset() {
 	*x = WriteFileRequest{}
-	mi := &file_sandbox_proto_msgTypes[8]
+	mi := &file_sandbox_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -713,7 +866,7 @@ func (x *WriteFileRequest) String() string {
 func (*WriteFileRequest) ProtoMessage() {}
 
 func (x *WriteFileRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_sandbox_proto_msgTypes[8]
+	mi := &file_sandbox_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -726,26 +879,109 @@ func (x *WriteFileRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WriteFileRequest.ProtoReflect.Descriptor instead.
 func (*WriteFileRequest) Descriptor() ([]byte, []int) {
-	return file_sandbox_proto_rawDescGZIP(), []int{8}
+	return file_sandbox_proto_rawDescGZIP(), []int{10}
 }
 
-func (x *WriteFileRequest) GetPath() string {
+func (x *WriteFileRequest) GetPart() isWriteFileRequest_Part {
+	if x != nil {
+		return x.Part
+	}
+	return nil
+}
+
+func (x *WriteFileRequest) GetHeader() *WriteFileHeader {
+	if x != nil {
+		if x, ok := x.Part.(*WriteFileRequest_Header); ok {
+			return x.Header
+		}
+	}
+	return nil
+}
+
+func (x *WriteFileRequest) GetChunk() []byte {
+	if x != nil {
+		if x, ok := x.Part.(*WriteFileRequest_Chunk); ok {
+			return x.Chunk
+		}
+	}
+	return nil
+}
+
+type isWriteFileRequest_Part interface {
+	isWriteFileRequest_Part()
+}
+
+type WriteFileRequest_Header struct {
+	Header *WriteFileHeader `protobuf:"bytes,1,opt,name=header,proto3,oneof"`
+}
+
+type WriteFileRequest_Chunk struct {
+	Chunk []byte `protobuf:"bytes,2,opt,name=chunk,proto3,oneof"`
+}
+
+func (*WriteFileRequest_Header) isWriteFileRequest_Part() {}
+
+func (*WriteFileRequest_Chunk) isWriteFileRequest_Part() {}
+
+type WriteFileHeader struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// path is absolute. A directory at path is FAILED_PRECONDITION. A symlink at
+	// path is followed and the write lands on its target.
+	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	// size is the length of the complete new file body; zero writes an empty
+	// file. The sandbox needs it before the first byte.
+	Size          int64 `protobuf:"varint,2,opt,name=size,proto3" json:"size,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WriteFileHeader) Reset() {
+	*x = WriteFileHeader{}
+	mi := &file_sandbox_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WriteFileHeader) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WriteFileHeader) ProtoMessage() {}
+
+func (x *WriteFileHeader) ProtoReflect() protoreflect.Message {
+	mi := &file_sandbox_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WriteFileHeader.ProtoReflect.Descriptor instead.
+func (*WriteFileHeader) Descriptor() ([]byte, []int) {
+	return file_sandbox_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *WriteFileHeader) GetPath() string {
 	if x != nil {
 		return x.Path
 	}
 	return ""
 }
 
-func (x *WriteFileRequest) GetContent() []byte {
+func (x *WriteFileHeader) GetSize() int64 {
 	if x != nil {
-		return x.Content
+		return x.Size
 	}
-	return nil
+	return 0
 }
 
 type WriteFileResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// bytes_written equals len(content) on success.
+	// bytes_written equals header.size on success.
 	BytesWritten int64 `protobuf:"varint,1,opt,name=bytes_written,json=bytesWritten,proto3" json:"bytes_written,omitempty"`
 	// created is true when no file existed at path before the call. A replaced
 	// file keeps its mode; a created one gets the sandbox's default mode, and
@@ -757,7 +993,7 @@ type WriteFileResponse struct {
 
 func (x *WriteFileResponse) Reset() {
 	*x = WriteFileResponse{}
-	mi := &file_sandbox_proto_msgTypes[9]
+	mi := &file_sandbox_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -769,7 +1005,7 @@ func (x *WriteFileResponse) String() string {
 func (*WriteFileResponse) ProtoMessage() {}
 
 func (x *WriteFileResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_sandbox_proto_msgTypes[9]
+	mi := &file_sandbox_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -782,7 +1018,7 @@ func (x *WriteFileResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WriteFileResponse.ProtoReflect.Descriptor instead.
 func (*WriteFileResponse) Descriptor() ([]byte, []int) {
-	return file_sandbox_proto_rawDescGZIP(), []int{9}
+	return file_sandbox_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *WriteFileResponse) GetBytesWritten() int64 {
@@ -823,27 +1059,37 @@ const file_sandbox_proto_rawDesc = "" +
 	"\x0fReadFileRequest\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x16\n" +
 	"\x06offset\x18\x02 \x01(\x03R\x06offset\x12\x1b\n" +
-	"\tmax_bytes\x18\x03 \x01(\x03R\bmaxBytes\"^\n" +
-	"\x10ReadFileResponse\x12\x18\n" +
-	"\acontent\x18\x01 \x01(\fR\acontent\x12\x12\n" +
-	"\x04size\x18\x02 \x01(\x03R\x04size\x12\x1c\n" +
-	"\ttruncated\x18\x03 \x01(\bR\ttruncated\"\x88\x01\n" +
+	"\tmax_bytes\x18\x03 \x01(\x03R\bmaxBytes\"n\n" +
+	"\x10ReadFileResponse\x12:\n" +
+	"\x06header\x18\x01 \x01(\v2 .aries.sandbox.v1.ReadFileHeaderH\x00R\x06header\x12\x16\n" +
+	"\x05chunk\x18\x02 \x01(\fH\x00R\x05chunkB\x06\n" +
+	"\x04part\"B\n" +
+	"\x0eReadFileHeader\x12\x12\n" +
+	"\x04size\x18\x01 \x01(\x03R\x04size\x12\x1c\n" +
+	"\ttruncated\x18\x02 \x01(\bR\ttruncated\"\x88\x01\n" +
 	"\x10ReadLinesRequest\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x1d\n" +
 	"\n" +
 	"first_line\x18\x02 \x01(\x03R\tfirstLine\x12\x1b\n" +
 	"\tmax_lines\x18\x03 \x01(\x03R\bmaxLines\x12$\n" +
-	"\x0emax_line_bytes\x18\x04 \x01(\x03R\fmaxLineBytes\"\xa2\x01\n" +
-	"\x11ReadLinesResponse\x12\x18\n" +
-	"\acontent\x18\x01 \x01(\fR\acontent\x12\x1f\n" +
-	"\vtotal_lines\x18\x02 \x01(\x03R\n" +
+	"\x0emax_line_bytes\x18\x04 \x01(\x03R\fmaxLineBytes\"s\n" +
+	"\x11ReadLinesResponse\x12\x16\n" +
+	"\x05chunk\x18\x01 \x01(\fH\x00R\x05chunk\x12>\n" +
+	"\asummary\x18\x02 \x01(\v2\".aries.sandbox.v1.ReadLinesSummaryH\x00R\asummaryB\x06\n" +
+	"\x04part\"\x87\x01\n" +
+	"\x10ReadLinesSummary\x12\x1f\n" +
+	"\vtotal_lines\x18\x01 \x01(\x03R\n" +
 	"totalLines\x12\x12\n" +
-	"\x04size\x18\x03 \x01(\x03R\x04size\x12*\n" +
-	"\x11ends_with_newline\x18\x04 \x01(\bR\x0fendsWithNewline\x12\x12\n" +
-	"\x04more\x18\x05 \x01(\bR\x04more\"@\n" +
-	"\x10WriteFileRequest\x12\x12\n" +
-	"\x04path\x18\x01 \x01(\tR\x04path\x12\x18\n" +
-	"\acontent\x18\x02 \x01(\fR\acontent\"R\n" +
+	"\x04size\x18\x02 \x01(\x03R\x04size\x12*\n" +
+	"\x11ends_with_newline\x18\x03 \x01(\bR\x0fendsWithNewline\x12\x12\n" +
+	"\x04more\x18\x04 \x01(\bR\x04more\"o\n" +
+	"\x10WriteFileRequest\x12;\n" +
+	"\x06header\x18\x01 \x01(\v2!.aries.sandbox.v1.WriteFileHeaderH\x00R\x06header\x12\x16\n" +
+	"\x05chunk\x18\x02 \x01(\fH\x00R\x05chunkB\x06\n" +
+	"\x04part\"9\n" +
+	"\x0fWriteFileHeader\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
+	"\x04size\x18\x02 \x01(\x03R\x04size\"R\n" +
 	"\x11WriteFileResponse\x12#\n" +
 	"\rbytes_written\x18\x01 \x01(\x03R\fbytesWritten\x12\x18\n" +
 	"\acreated\x18\x02 \x01(\bR\acreated*\x9d\x01\n" +
@@ -858,13 +1104,13 @@ const file_sandbox_proto_rawDesc = "" +
 	"\x15FILE_TYPE_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11FILE_TYPE_REGULAR\x10\x01\x12\x17\n" +
 	"\x13FILE_TYPE_DIRECTORY\x10\x02\x12\x13\n" +
-	"\x0fFILE_TYPE_OTHER\x10\x032\x96\x03\n" +
+	"\x0fFILE_TYPE_OTHER\x10\x032\x9c\x03\n" +
 	"\aSandbox\x12E\n" +
 	"\x04Exec\x12\x1d.aries.sandbox.v1.ExecRequest\x1a\x1e.aries.sandbox.v1.ExecResponse\x12E\n" +
-	"\x04Stat\x12\x1d.aries.sandbox.v1.StatRequest\x1a\x1e.aries.sandbox.v1.StatResponse\x12Q\n" +
-	"\bReadFile\x12!.aries.sandbox.v1.ReadFileRequest\x1a\".aries.sandbox.v1.ReadFileResponse\x12T\n" +
-	"\tReadLines\x12\".aries.sandbox.v1.ReadLinesRequest\x1a#.aries.sandbox.v1.ReadLinesResponse\x12T\n" +
-	"\tWriteFile\x12\".aries.sandbox.v1.WriteFileRequest\x1a#.aries.sandbox.v1.WriteFileResponseB>Z<github.com/hyscale-lab/aries/pkg/bridge/hermesgrpc/sandboxv1b\x06proto3"
+	"\x04Stat\x12\x1d.aries.sandbox.v1.StatRequest\x1a\x1e.aries.sandbox.v1.StatResponse\x12S\n" +
+	"\bReadFile\x12!.aries.sandbox.v1.ReadFileRequest\x1a\".aries.sandbox.v1.ReadFileResponse0\x01\x12V\n" +
+	"\tReadLines\x12\".aries.sandbox.v1.ReadLinesRequest\x1a#.aries.sandbox.v1.ReadLinesResponse0\x01\x12V\n" +
+	"\tWriteFile\x12\".aries.sandbox.v1.WriteFileRequest\x1a#.aries.sandbox.v1.WriteFileResponse(\x01B>Z<github.com/hyscale-lab/aries/pkg/bridge/hermesgrpc/sandboxv1b\x06proto3"
 
 var (
 	file_sandbox_proto_rawDescOnce sync.Once
@@ -879,7 +1125,7 @@ func file_sandbox_proto_rawDescGZIP() []byte {
 }
 
 var file_sandbox_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_sandbox_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_sandbox_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_sandbox_proto_goTypes = []any{
 	(Reason)(0),               // 0: aries.sandbox.v1.Reason
 	(FileType)(0),             // 1: aries.sandbox.v1.FileType
@@ -889,29 +1135,35 @@ var file_sandbox_proto_goTypes = []any{
 	(*StatResponse)(nil),      // 5: aries.sandbox.v1.StatResponse
 	(*ReadFileRequest)(nil),   // 6: aries.sandbox.v1.ReadFileRequest
 	(*ReadFileResponse)(nil),  // 7: aries.sandbox.v1.ReadFileResponse
-	(*ReadLinesRequest)(nil),  // 8: aries.sandbox.v1.ReadLinesRequest
-	(*ReadLinesResponse)(nil), // 9: aries.sandbox.v1.ReadLinesResponse
-	(*WriteFileRequest)(nil),  // 10: aries.sandbox.v1.WriteFileRequest
-	(*WriteFileResponse)(nil), // 11: aries.sandbox.v1.WriteFileResponse
+	(*ReadFileHeader)(nil),    // 8: aries.sandbox.v1.ReadFileHeader
+	(*ReadLinesRequest)(nil),  // 9: aries.sandbox.v1.ReadLinesRequest
+	(*ReadLinesResponse)(nil), // 10: aries.sandbox.v1.ReadLinesResponse
+	(*ReadLinesSummary)(nil),  // 11: aries.sandbox.v1.ReadLinesSummary
+	(*WriteFileRequest)(nil),  // 12: aries.sandbox.v1.WriteFileRequest
+	(*WriteFileHeader)(nil),   // 13: aries.sandbox.v1.WriteFileHeader
+	(*WriteFileResponse)(nil), // 14: aries.sandbox.v1.WriteFileResponse
 }
 var file_sandbox_proto_depIdxs = []int32{
 	0,  // 0: aries.sandbox.v1.ExecResponse.reason:type_name -> aries.sandbox.v1.Reason
 	1,  // 1: aries.sandbox.v1.StatResponse.type:type_name -> aries.sandbox.v1.FileType
-	2,  // 2: aries.sandbox.v1.Sandbox.Exec:input_type -> aries.sandbox.v1.ExecRequest
-	4,  // 3: aries.sandbox.v1.Sandbox.Stat:input_type -> aries.sandbox.v1.StatRequest
-	6,  // 4: aries.sandbox.v1.Sandbox.ReadFile:input_type -> aries.sandbox.v1.ReadFileRequest
-	8,  // 5: aries.sandbox.v1.Sandbox.ReadLines:input_type -> aries.sandbox.v1.ReadLinesRequest
-	10, // 6: aries.sandbox.v1.Sandbox.WriteFile:input_type -> aries.sandbox.v1.WriteFileRequest
-	3,  // 7: aries.sandbox.v1.Sandbox.Exec:output_type -> aries.sandbox.v1.ExecResponse
-	5,  // 8: aries.sandbox.v1.Sandbox.Stat:output_type -> aries.sandbox.v1.StatResponse
-	7,  // 9: aries.sandbox.v1.Sandbox.ReadFile:output_type -> aries.sandbox.v1.ReadFileResponse
-	9,  // 10: aries.sandbox.v1.Sandbox.ReadLines:output_type -> aries.sandbox.v1.ReadLinesResponse
-	11, // 11: aries.sandbox.v1.Sandbox.WriteFile:output_type -> aries.sandbox.v1.WriteFileResponse
-	7,  // [7:12] is the sub-list for method output_type
-	2,  // [2:7] is the sub-list for method input_type
-	2,  // [2:2] is the sub-list for extension type_name
-	2,  // [2:2] is the sub-list for extension extendee
-	0,  // [0:2] is the sub-list for field type_name
+	8,  // 2: aries.sandbox.v1.ReadFileResponse.header:type_name -> aries.sandbox.v1.ReadFileHeader
+	11, // 3: aries.sandbox.v1.ReadLinesResponse.summary:type_name -> aries.sandbox.v1.ReadLinesSummary
+	13, // 4: aries.sandbox.v1.WriteFileRequest.header:type_name -> aries.sandbox.v1.WriteFileHeader
+	2,  // 5: aries.sandbox.v1.Sandbox.Exec:input_type -> aries.sandbox.v1.ExecRequest
+	4,  // 6: aries.sandbox.v1.Sandbox.Stat:input_type -> aries.sandbox.v1.StatRequest
+	6,  // 7: aries.sandbox.v1.Sandbox.ReadFile:input_type -> aries.sandbox.v1.ReadFileRequest
+	9,  // 8: aries.sandbox.v1.Sandbox.ReadLines:input_type -> aries.sandbox.v1.ReadLinesRequest
+	12, // 9: aries.sandbox.v1.Sandbox.WriteFile:input_type -> aries.sandbox.v1.WriteFileRequest
+	3,  // 10: aries.sandbox.v1.Sandbox.Exec:output_type -> aries.sandbox.v1.ExecResponse
+	5,  // 11: aries.sandbox.v1.Sandbox.Stat:output_type -> aries.sandbox.v1.StatResponse
+	7,  // 12: aries.sandbox.v1.Sandbox.ReadFile:output_type -> aries.sandbox.v1.ReadFileResponse
+	10, // 13: aries.sandbox.v1.Sandbox.ReadLines:output_type -> aries.sandbox.v1.ReadLinesResponse
+	14, // 14: aries.sandbox.v1.Sandbox.WriteFile:output_type -> aries.sandbox.v1.WriteFileResponse
+	10, // [10:15] is the sub-list for method output_type
+	5,  // [5:10] is the sub-list for method input_type
+	5,  // [5:5] is the sub-list for extension type_name
+	5,  // [5:5] is the sub-list for extension extendee
+	0,  // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_sandbox_proto_init() }
@@ -919,13 +1171,25 @@ func file_sandbox_proto_init() {
 	if File_sandbox_proto != nil {
 		return
 	}
+	file_sandbox_proto_msgTypes[5].OneofWrappers = []any{
+		(*ReadFileResponse_Header)(nil),
+		(*ReadFileResponse_Chunk)(nil),
+	}
+	file_sandbox_proto_msgTypes[8].OneofWrappers = []any{
+		(*ReadLinesResponse_Chunk)(nil),
+		(*ReadLinesResponse_Summary)(nil),
+	}
+	file_sandbox_proto_msgTypes[10].OneofWrappers = []any{
+		(*WriteFileRequest_Header)(nil),
+		(*WriteFileRequest_Chunk)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_sandbox_proto_rawDesc), len(file_sandbox_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   10,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

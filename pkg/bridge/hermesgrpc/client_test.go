@@ -3,14 +3,19 @@ package hermesgrpc
 import (
 	"bytes"
 	"context"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
 
+	"github.com/hyscale-lab/aries/pkg/bridge/hermesgrpc/sandboxv1"
 	"github.com/hyscale-lab/aries/pkg/core"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/status"
 )
 
 // TestClientRejectsMalformedInvocations pins the argv contract the plugin relies on:
@@ -174,8 +179,16 @@ func TestClientFileModesRoundTripBytes(t *testing.T) {
 	}
 
 	binary := "a\x00b\nline two\n\xff"
-	if code, out, meta := run(binary, "file", "write", "/app/f"); code != 0 || out != "" || meta != `{"bytes_written":14,"created":true}`+"\n" {
+	if code, out, meta := run(binary, "file", "write", "--size", "14", "/app/f"); code != 0 || out != "" || meta != `{"bytes_written":14,"created":true}`+"\n" {
 		t.Fatalf("write: %d %q %q", code, out, meta)
+	}
+	// Several chunks each way: the client never holds the whole file.
+	large := strings.Repeat("0123456789abcdef", 3*chunkBytes/16+5)
+	if code, _, meta := run(large, "file", "write", "--size", strconv.Itoa(len(large)), "/app/large"); code != 0 {
+		t.Fatalf("large write: %d %q", code, meta)
+	}
+	if code, out, _ := run("", "file", "read", "/app/large"); code != 0 || out != large {
+		t.Fatalf("large read: %d, %d bytes, want %d", code, len(out), len(large))
 	}
 	if code, out, meta := run("", "file", "read", "/app/f"); code != 0 || out != binary || meta != `{"size":14,"truncated":false}`+"\n" {
 		t.Fatalf("read: %d %q %q", code, out, meta)
@@ -198,10 +211,42 @@ func TestClientFileModesRoundTripBytes(t *testing.T) {
 		{[]string{"file", "read", "/app/none"}, 1},
 		{[]string{"file", "stat", "app/relative"}, 3},
 		{[]string{"file", "read", "/app/dir"}, 5},
+		{[]string{"file", "write", "--size", "3", "/app/f"}, 3},
+		{[]string{"file", "write", "/app/f"}, transportFailureExit},
 		{[]string{"file", "copy", "/app/f"}, transportFailureExit},
 	} {
-		if code, _, message := run("", test.args...); code != test.want || message == "" {
+		if code, _, message := run("four", test.args...); code != test.want || message == "" {
 			t.Fatalf("%q: exit %d, want %d (stderr %q)", test.args, code, test.want, message)
 		}
+	}
+}
+
+// summarylessClient answers ReadLines with a window and no summary, which a
+// well-behaved bridge never sends.
+type summarylessClient struct{ sandboxv1.SandboxClient }
+
+type summarylessStream struct {
+	grpc.ServerStreamingClient[sandboxv1.ReadLinesResponse]
+	sent bool
+}
+
+func (summarylessClient) ReadLines(context.Context, *sandboxv1.ReadLinesRequest, ...grpc.CallOption) (grpc.ServerStreamingClient[sandboxv1.ReadLinesResponse], error) {
+	return &summarylessStream{}, nil
+}
+
+func (stream *summarylessStream) Recv() (*sandboxv1.ReadLinesResponse, error) {
+	if stream.sent {
+		return nil, io.EOF
+	}
+	stream.sent = true
+	return &sandboxv1.ReadLinesResponse{Part: &sandboxv1.ReadLinesResponse_Chunk{Chunk: []byte("x\n")}}, nil
+}
+
+// Without its summary a window cannot be paginated, so the call fails with a
+// code that is not a file status: the plugin sees 255 and discards stdout.
+func TestClientRefusesALineStreamWithoutASummary(t *testing.T) {
+	_, err := receiveLines(context.Background(), summarylessClient{}, &sandboxv1.ReadLinesRequest{}, io.Discard)
+	if _, known := fileExit[status.Code(err)]; err == nil || known {
+		t.Fatalf("receiveLines = %v, want a failure outside the file statuses", err)
 	}
 }

@@ -46,18 +46,20 @@ type SandboxClient interface {
 	// Stat reports what is at a path without reading it. Absence is a normal
 	// answer (exists=false), not an error, so callers can probe cheaply.
 	Stat(ctx context.Context, in *StatRequest, opts ...grpc.CallOption) (*StatResponse, error)
-	// ReadFile returns a byte range of a regular file. It serves whole-file
-	// reads and the small probes (binary sample, BOM, line ending).
-	ReadFile(ctx context.Context, in *ReadFileRequest, opts ...grpc.CallOption) (*ReadFileResponse, error)
-	// ReadLines returns a window of lines with the counts a paginated text read
+	// ReadFile streams a byte range of a regular file: a header, then chunks.
+	// It serves whole-file reads and the small probes (binary sample, BOM, line
+	// ending). File content has no size bound.
+	ReadFile(ctx context.Context, in *ReadFileRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ReadFileResponse], error)
+	// ReadLines streams a window of lines, then the counts a paginated text read
 	// needs, computed next to the data so only the window crosses the wire. It
 	// matches `sed -n 'a,bp' | cut -b1-N`, `wc -l`, and a trailing-newline
 	// check, in one pass.
-	ReadLines(ctx context.Context, in *ReadLinesRequest, opts ...grpc.CallOption) (*ReadLinesResponse, error)
-	// WriteFile replaces or creates a regular file with exactly the given bytes.
-	// A reader sees the old file or the new one, never a prefix; missing parent
-	// directories are created.
-	WriteFile(ctx context.Context, in *WriteFileRequest, opts ...grpc.CallOption) (*WriteFileResponse, error)
+	ReadLines(ctx context.Context, in *ReadLinesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ReadLinesResponse], error)
+	// WriteFile replaces or creates a regular file with exactly the streamed
+	// bytes: a header, then chunks, then the client half-closes. A reader sees
+	// the old file or the new one, never a prefix; missing parent directories
+	// are created. The file changes only if exactly header.size bytes arrived.
+	WriteFile(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[WriteFileRequest, WriteFileResponse], error)
 }
 
 type sandboxClient struct {
@@ -88,35 +90,56 @@ func (c *sandboxClient) Stat(ctx context.Context, in *StatRequest, opts ...grpc.
 	return out, nil
 }
 
-func (c *sandboxClient) ReadFile(ctx context.Context, in *ReadFileRequest, opts ...grpc.CallOption) (*ReadFileResponse, error) {
+func (c *sandboxClient) ReadFile(ctx context.Context, in *ReadFileRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ReadFileResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ReadFileResponse)
-	err := c.cc.Invoke(ctx, Sandbox_ReadFile_FullMethodName, in, out, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &Sandbox_ServiceDesc.Streams[0], Sandbox_ReadFile_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	x := &grpc.GenericClientStream[ReadFileRequest, ReadFileResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
 }
 
-func (c *sandboxClient) ReadLines(ctx context.Context, in *ReadLinesRequest, opts ...grpc.CallOption) (*ReadLinesResponse, error) {
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Sandbox_ReadFileClient = grpc.ServerStreamingClient[ReadFileResponse]
+
+func (c *sandboxClient) ReadLines(ctx context.Context, in *ReadLinesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ReadLinesResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ReadLinesResponse)
-	err := c.cc.Invoke(ctx, Sandbox_ReadLines_FullMethodName, in, out, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &Sandbox_ServiceDesc.Streams[1], Sandbox_ReadLines_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	x := &grpc.GenericClientStream[ReadLinesRequest, ReadLinesResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
 }
 
-func (c *sandboxClient) WriteFile(ctx context.Context, in *WriteFileRequest, opts ...grpc.CallOption) (*WriteFileResponse, error) {
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Sandbox_ReadLinesClient = grpc.ServerStreamingClient[ReadLinesResponse]
+
+func (c *sandboxClient) WriteFile(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[WriteFileRequest, WriteFileResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(WriteFileResponse)
-	err := c.cc.Invoke(ctx, Sandbox_WriteFile_FullMethodName, in, out, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &Sandbox_ServiceDesc.Streams[2], Sandbox_WriteFile_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	x := &grpc.GenericClientStream[WriteFileRequest, WriteFileResponse]{ClientStream: stream}
+	return x, nil
 }
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Sandbox_WriteFileClient = grpc.ClientStreamingClient[WriteFileRequest, WriteFileResponse]
 
 // SandboxServer is the server API for Sandbox service.
 // All implementations must embed UnimplementedSandboxServer
@@ -133,18 +156,20 @@ type SandboxServer interface {
 	// Stat reports what is at a path without reading it. Absence is a normal
 	// answer (exists=false), not an error, so callers can probe cheaply.
 	Stat(context.Context, *StatRequest) (*StatResponse, error)
-	// ReadFile returns a byte range of a regular file. It serves whole-file
-	// reads and the small probes (binary sample, BOM, line ending).
-	ReadFile(context.Context, *ReadFileRequest) (*ReadFileResponse, error)
-	// ReadLines returns a window of lines with the counts a paginated text read
+	// ReadFile streams a byte range of a regular file: a header, then chunks.
+	// It serves whole-file reads and the small probes (binary sample, BOM, line
+	// ending). File content has no size bound.
+	ReadFile(*ReadFileRequest, grpc.ServerStreamingServer[ReadFileResponse]) error
+	// ReadLines streams a window of lines, then the counts a paginated text read
 	// needs, computed next to the data so only the window crosses the wire. It
 	// matches `sed -n 'a,bp' | cut -b1-N`, `wc -l`, and a trailing-newline
 	// check, in one pass.
-	ReadLines(context.Context, *ReadLinesRequest) (*ReadLinesResponse, error)
-	// WriteFile replaces or creates a regular file with exactly the given bytes.
-	// A reader sees the old file or the new one, never a prefix; missing parent
-	// directories are created.
-	WriteFile(context.Context, *WriteFileRequest) (*WriteFileResponse, error)
+	ReadLines(*ReadLinesRequest, grpc.ServerStreamingServer[ReadLinesResponse]) error
+	// WriteFile replaces or creates a regular file with exactly the streamed
+	// bytes: a header, then chunks, then the client half-closes. A reader sees
+	// the old file or the new one, never a prefix; missing parent directories
+	// are created. The file changes only if exactly header.size bytes arrived.
+	WriteFile(grpc.ClientStreamingServer[WriteFileRequest, WriteFileResponse]) error
 	mustEmbedUnimplementedSandboxServer()
 }
 
@@ -161,14 +186,14 @@ func (UnimplementedSandboxServer) Exec(context.Context, *ExecRequest) (*ExecResp
 func (UnimplementedSandboxServer) Stat(context.Context, *StatRequest) (*StatResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Stat not implemented")
 }
-func (UnimplementedSandboxServer) ReadFile(context.Context, *ReadFileRequest) (*ReadFileResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ReadFile not implemented")
+func (UnimplementedSandboxServer) ReadFile(*ReadFileRequest, grpc.ServerStreamingServer[ReadFileResponse]) error {
+	return status.Error(codes.Unimplemented, "method ReadFile not implemented")
 }
-func (UnimplementedSandboxServer) ReadLines(context.Context, *ReadLinesRequest) (*ReadLinesResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ReadLines not implemented")
+func (UnimplementedSandboxServer) ReadLines(*ReadLinesRequest, grpc.ServerStreamingServer[ReadLinesResponse]) error {
+	return status.Error(codes.Unimplemented, "method ReadLines not implemented")
 }
-func (UnimplementedSandboxServer) WriteFile(context.Context, *WriteFileRequest) (*WriteFileResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method WriteFile not implemented")
+func (UnimplementedSandboxServer) WriteFile(grpc.ClientStreamingServer[WriteFileRequest, WriteFileResponse]) error {
+	return status.Error(codes.Unimplemented, "method WriteFile not implemented")
 }
 func (UnimplementedSandboxServer) mustEmbedUnimplementedSandboxServer() {}
 func (UnimplementedSandboxServer) testEmbeddedByValue()                 {}
@@ -227,59 +252,34 @@ func _Sandbox_Stat_Handler(srv interface{}, ctx context.Context, dec func(interf
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Sandbox_ReadFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ReadFileRequest)
-	if err := dec(in); err != nil {
-		return nil, err
+func _Sandbox_ReadFile_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ReadFileRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
 	}
-	if interceptor == nil {
-		return srv.(SandboxServer).ReadFile(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Sandbox_ReadFile_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SandboxServer).ReadFile(ctx, req.(*ReadFileRequest))
-	}
-	return interceptor(ctx, in, info, handler)
+	return srv.(SandboxServer).ReadFile(m, &grpc.GenericServerStream[ReadFileRequest, ReadFileResponse]{ServerStream: stream})
 }
 
-func _Sandbox_ReadLines_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ReadLinesRequest)
-	if err := dec(in); err != nil {
-		return nil, err
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Sandbox_ReadFileServer = grpc.ServerStreamingServer[ReadFileResponse]
+
+func _Sandbox_ReadLines_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ReadLinesRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
 	}
-	if interceptor == nil {
-		return srv.(SandboxServer).ReadLines(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Sandbox_ReadLines_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SandboxServer).ReadLines(ctx, req.(*ReadLinesRequest))
-	}
-	return interceptor(ctx, in, info, handler)
+	return srv.(SandboxServer).ReadLines(m, &grpc.GenericServerStream[ReadLinesRequest, ReadLinesResponse]{ServerStream: stream})
 }
 
-func _Sandbox_WriteFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(WriteFileRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(SandboxServer).WriteFile(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Sandbox_WriteFile_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SandboxServer).WriteFile(ctx, req.(*WriteFileRequest))
-	}
-	return interceptor(ctx, in, info, handler)
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Sandbox_ReadLinesServer = grpc.ServerStreamingServer[ReadLinesResponse]
+
+func _Sandbox_WriteFile_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(SandboxServer).WriteFile(&grpc.GenericServerStream[WriteFileRequest, WriteFileResponse]{ServerStream: stream})
 }
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Sandbox_WriteFileServer = grpc.ClientStreamingServer[WriteFileRequest, WriteFileResponse]
 
 // Sandbox_ServiceDesc is the grpc.ServiceDesc for Sandbox service.
 // It's only intended for direct use with grpc.RegisterService,
@@ -296,19 +296,23 @@ var Sandbox_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "Stat",
 			Handler:    _Sandbox_Stat_Handler,
 		},
+	},
+	Streams: []grpc.StreamDesc{
 		{
-			MethodName: "ReadFile",
-			Handler:    _Sandbox_ReadFile_Handler,
+			StreamName:    "ReadFile",
+			Handler:       _Sandbox_ReadFile_Handler,
+			ServerStreams: true,
 		},
 		{
-			MethodName: "ReadLines",
-			Handler:    _Sandbox_ReadLines_Handler,
+			StreamName:    "ReadLines",
+			Handler:       _Sandbox_ReadLines_Handler,
+			ServerStreams: true,
 		},
 		{
-			MethodName: "WriteFile",
-			Handler:    _Sandbox_WriteFile_Handler,
+			StreamName:    "WriteFile",
+			Handler:       _Sandbox_WriteFile_Handler,
+			ClientStreams: true,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
 	Metadata: "sandbox.proto",
 }

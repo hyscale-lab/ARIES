@@ -19,18 +19,20 @@ service Sandbox {
   // Stat reports what is at a path without reading it. Absence is a normal
   // answer (exists=false), not an error, so callers can probe cheaply.
   rpc Stat(StatRequest) returns (StatResponse);
-  // ReadFile returns a byte range of a regular file. It serves whole-file
-  // reads and the small probes (binary sample, BOM, line ending).
-  rpc ReadFile(ReadFileRequest) returns (ReadFileResponse);
-  // ReadLines returns a window of lines with the counts a paginated text read
+  // ReadFile streams a byte range of a regular file: a header, then chunks.
+  // It serves whole-file reads and the small probes (binary sample, BOM, line
+  // ending). File content has no size bound.
+  rpc ReadFile(ReadFileRequest) returns (stream ReadFileResponse);
+  // ReadLines streams a window of lines, then the counts a paginated text read
   // needs, computed next to the data so only the window crosses the wire. It
   // matches `sed -n 'a,bp' | cut -b1-N`, `wc -l`, and a trailing-newline
   // check, in one pass.
-  rpc ReadLines(ReadLinesRequest) returns (ReadLinesResponse);
-  // WriteFile replaces or creates a regular file with exactly the given bytes.
-  // A reader sees the old file or the new one, never a prefix; missing parent
-  // directories are created.
-  rpc WriteFile(WriteFileRequest) returns (WriteFileResponse);
+  rpc ReadLines(ReadLinesRequest) returns (stream ReadLinesResponse);
+  // WriteFile replaces or creates a regular file with exactly the streamed
+  // bytes: a header, then chunks, then the client half-closes. A reader sees
+  // the old file or the new one, never a prefix; missing parent directories
+  // are created. The file changes only if exactly header.size bytes arrived.
+  rpc WriteFile(stream WriteFileRequest) returns (WriteFileResponse);
 }
 
 // ExecRequest carries only what crosses the wire today. The bridge sets the
@@ -105,19 +107,26 @@ message ReadFileRequest {
   // offset is the first byte to return, counted from the start of the file.
   // Negative is INVALID_ARGUMENT; past the end yields empty content.
   int64 offset = 2;
-  // max_bytes bounds the returned content. Zero selects the bridge's bound; a
-  // value above it is INVALID_ARGUMENT. Probes pass small values (3, 1000,
-  // 4096).
+  // max_bytes bounds the returned content. Zero reads to the end of the file;
+  // negative is INVALID_ARGUMENT. Probes pass small values (3, 1000, 4096).
   int64 max_bytes = 3;
 }
 
+// ReadFileResponse is one message of the ReadFile stream: exactly one header
+// first, then zero or more chunks. The chunks concatenated are bytes
+// [offset, offset+n) of the file.
 message ReadFileResponse {
-  // content is bytes [offset, offset+len(content)) of the file.
-  bytes content = 1;
-  // size is the file's total length, not len(content).
-  int64 size = 2;
-  // truncated is true when offset + len(content) < size.
-  bool truncated = 3;
+  oneof part {
+    ReadFileHeader header = 1;
+    bytes chunk = 2;
+  }
+}
+
+message ReadFileHeader {
+  // size is the file's total length, not the length of the range returned.
+  int64 size = 1;
+  // truncated is true when the range ends before the end of the file.
+  bool truncated = 2;
 }
 
 message ReadLinesRequest {
@@ -130,37 +139,55 @@ message ReadLinesRequest {
   int64 max_lines = 3;
   // max_line_bytes cuts each returned line to this many bytes, counted before
   // the newline, so one pathological line cannot flood the reply. Zero means
-  // unclamped. A window larger than the bridge's bound is RESOURCE_EXHAUSTED.
+  // unclamped.
   int64 max_line_bytes = 4;
 }
 
+// ReadLinesResponse is one message of the ReadLines stream: zero or more
+// chunks, then exactly one summary last. The chunks concatenated are the
+// window: each line cut at max_line_bytes and terminated by a newline, except
+// the file's last line when it has none on disk.
 message ReadLinesResponse {
-  // content is the window: each line cut at max_line_bytes and terminated by
-  // a newline, except the file's last line when it has none on disk.
-  bytes content = 1;
-  // total_lines is the number of newline bytes in the file, what `wc -l`
-  // reports.
-  int64 total_lines = 2;
-  // size is the file's length in bytes.
-  int64 size = 3;
-  // ends_with_newline reports whether the file's last byte is a newline.
-  bool ends_with_newline = 4;
-  // more is true when newline-terminated lines exist after the window, i.e.
-  // total_lines > first_line + max_lines - 1.
-  bool more = 5;
+  oneof part {
+    bytes chunk = 1;
+    ReadLinesSummary summary = 2;
+  }
 }
 
+message ReadLinesSummary {
+  // total_lines is the number of newline bytes in the file, what `wc -l`
+  // reports.
+  int64 total_lines = 1;
+  // size is the file's length in bytes.
+  int64 size = 2;
+  // ends_with_newline reports whether the file's last byte is a newline.
+  bool ends_with_newline = 3;
+  // more is true when newline-terminated lines exist after the window, i.e.
+  // total_lines > first_line + max_lines - 1.
+  bool more = 4;
+}
+
+// WriteFileRequest is one message of the WriteFile stream: exactly one header
+// first, then chunks whose lengths sum to header.size. Fewer or more bytes is
+// INVALID_ARGUMENT, and the file is left as it was.
 message WriteFileRequest {
+  oneof part {
+    WriteFileHeader header = 1;
+    bytes chunk = 2;
+  }
+}
+
+message WriteFileHeader {
   // path is absolute. A directory at path is FAILED_PRECONDITION. A symlink at
   // path is followed and the write lands on its target.
   string path = 1;
-  // content is the complete new file body; empty writes an empty file. Above
-  // the bridge's bound it is RESOURCE_EXHAUSTED.
-  bytes content = 2;
+  // size is the length of the complete new file body; zero writes an empty
+  // file. The sandbox needs it before the first byte.
+  int64 size = 2;
 }
 
 message WriteFileResponse {
-  // bytes_written equals len(content) on success.
+  // bytes_written equals header.size on success.
   int64 bytes_written = 1;
   // created is true when no file existed at path before the call. A replaced
   // file keeps its mode; a created one gets the sandbox's default mode, and

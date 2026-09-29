@@ -90,8 +90,8 @@ type Options struct {
 	// ClientPath is the host path of the aries-grpc executable staged into the
 	// harness container.
 	ClientPath string
-	// OutputLimit bounds retained stdout and stderr per call, and file
-	// content per file call. Zero selects defaultOutputLimit.
+	// OutputLimit bounds retained stdout and stderr per Exec call. File
+	// content streams and has no bound. Zero selects defaultOutputLimit.
 	OutputLimit int64
 	// RetainContent keeps file content, base64, in tool-calls.jsonl. It is the
 	// profile's bridge.retain_raw_log: the most verbose evidence level.

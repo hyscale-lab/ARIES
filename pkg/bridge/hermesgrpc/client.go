@@ -7,7 +7,7 @@ package hermesgrpc
 //	aries-grpc file stat PATH
 //	aries-grpc file read [--offset N] [--max-bytes N] PATH
 //	aries-grpc file lines --first N --max N [--max-line-bytes N] PATH
-//	aries-grpc file write PATH < content
+//	aries-grpc file write --size N PATH < content
 //
 // It is deliberately thin. exec wraps SCRIPT as the `bash -c` payload the
 // bridge accepts; it does not decode Hermes's grammar, because that check is a
@@ -15,13 +15,16 @@ package hermesgrpc
 // credentials cannot route around it. file forwards a path and raw bytes; how
 // they land is the bridge's and the sandbox's business. For file, stdout is the
 // payload only and stderr is exactly one line: JSON metadata on success, a
-// message on failure. There is no timeout flag: Hermes kills the process when
+// message on failure. Content streams through in chunks and is never held
+// whole here; a failure after some content leaves it on stdout and exits
+// non-zero, so the caller must check the exit code before using stdout. There is no timeout flag: Hermes kills the process when
 // a command times out, and the closed connection cancels the call.
 
 import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -120,30 +123,24 @@ func execMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 func fileMain(operation string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet(operation, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	var offset, maxBytes, first, count, lineBytes *int64
+	var offset, maxBytes, first, count, lineBytes, size *int64
 	switch operation {
 	case "read":
 		offset, maxBytes = flags.Int64("offset", 0, ""), flags.Int64("max-bytes", 0, "")
 	case "lines":
 		first, count, lineBytes = flags.Int64("first", 0, ""), flags.Int64("max", 0, ""), flags.Int64("max-line-bytes", 0, "")
-	case "stat", "write":
+	case "write":
+		size = flags.Int64("size", -1, "")
+	case "stat":
 	default:
 		fmt.Fprintln(stderr, clientUsage)
 		return transportFailureExit
 	}
-	if err := flags.Parse(args); err != nil || flags.NArg() != 1 {
+	if err := flags.Parse(args); err != nil || flags.NArg() != 1 || (size != nil && *size < 0) {
 		fmt.Fprintln(stderr, clientUsage)
 		return transportFailureExit
 	}
 	path := flags.Arg(0)
-	var content []byte
-	if operation == "write" {
-		var err error
-		if content, err = io.ReadAll(stdin); err != nil {
-			fmt.Fprintf(stderr, "aries: read stdin: %v\n", err)
-			return transportFailureExit
-		}
-	}
 	client, done, err := connect()
 	if err != nil {
 		fmt.Fprintf(stderr, "aries: %v\n", err)
@@ -152,7 +149,6 @@ func fileMain(operation string, args []string, stdin io.Reader, stdout, stderr i
 	defer done()
 
 	ctx := context.Background()
-	var payload []byte
 	var metadata any
 	switch operation {
 	case "stat":
@@ -160,24 +156,15 @@ func fileMain(operation string, args []string, stdin io.Reader, stdout, stderr i
 		if response, err = client.Stat(ctx, &sandboxv1.StatRequest{Path: path}); err == nil {
 			// stat reports on stdout because the report is its payload.
 			types := map[sandboxv1.FileType]string{sandboxv1.FileType_FILE_TYPE_REGULAR: "regular", sandboxv1.FileType_FILE_TYPE_DIRECTORY: "directory", sandboxv1.FileType_FILE_TYPE_OTHER: "other"}
-			payload, _ = json.Marshal(map[string]any{"exists": response.GetExists(), "type": types[response.GetType()], "size": response.GetSize(), "mode": fmt.Sprintf("%04o", response.GetMode())})
-			payload = append(payload, '\n')
+			report, _ := json.Marshal(map[string]any{"exists": response.GetExists(), "type": types[response.GetType()], "size": response.GetSize(), "mode": fmt.Sprintf("%04o", response.GetMode())})
+			_, err = fmt.Fprintf(stdout, "%s\n", report)
 		}
 	case "read":
-		var response *sandboxv1.ReadFileResponse
-		if response, err = client.ReadFile(ctx, &sandboxv1.ReadFileRequest{Path: path, Offset: *offset, MaxBytes: *maxBytes}); err == nil {
-			payload, metadata = response.GetContent(), map[string]any{"size": response.GetSize(), "truncated": response.GetTruncated()}
-		}
+		metadata, err = receiveRead(ctx, client, &sandboxv1.ReadFileRequest{Path: path, Offset: *offset, MaxBytes: *maxBytes}, stdout)
 	case "lines":
-		var response *sandboxv1.ReadLinesResponse
-		if response, err = client.ReadLines(ctx, &sandboxv1.ReadLinesRequest{Path: path, FirstLine: *first, MaxLines: *count, MaxLineBytes: *lineBytes}); err == nil {
-			payload, metadata = response.GetContent(), map[string]any{"total_lines": response.GetTotalLines(), "size": response.GetSize(), "ends_with_newline": response.GetEndsWithNewline(), "more": response.GetMore()}
-		}
+		metadata, err = receiveLines(ctx, client, &sandboxv1.ReadLinesRequest{Path: path, FirstLine: *first, MaxLines: *count, MaxLineBytes: *lineBytes}, stdout)
 	case "write":
-		var response *sandboxv1.WriteFileResponse
-		if response, err = client.WriteFile(ctx, &sandboxv1.WriteFileRequest{Path: path, Content: content}); err == nil {
-			metadata = map[string]any{"bytes_written": response.GetBytesWritten(), "created": response.GetCreated()}
-		}
+		metadata, err = sendWrite(ctx, client, &sandboxv1.WriteFileHeader{Path: path, Size: *size}, stdin)
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "aries: %s\n", status.Convert(err).Message())
@@ -186,14 +173,98 @@ func fileMain(operation string, args []string, stdin io.Reader, stdout, stderr i
 		}
 		return transportFailureExit
 	}
-	if _, err := stdout.Write(payload); err != nil {
-		return transportFailureExit
-	}
 	if metadata != nil {
 		line, _ := json.Marshal(metadata)
 		fmt.Fprintf(stderr, "%s\n", line)
 	}
 	return 0
+}
+
+// receiveRead copies the chunks of a ReadFile stream to stdout and returns the
+// header as metadata.
+func receiveRead(ctx context.Context, client sandboxv1.SandboxClient, request *sandboxv1.ReadFileRequest, stdout io.Writer) (any, error) {
+	stream, err := client.ReadFile(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	var header *sandboxv1.ReadFileHeader
+	for {
+		message, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if message.GetHeader() != nil {
+			header = message.GetHeader()
+		} else if _, err := stdout.Write(message.GetChunk()); err != nil {
+			return nil, err
+		}
+	}
+	if header == nil {
+		return nil, errors.New("stream ended without a header")
+	}
+	return map[string]any{"size": header.GetSize(), "truncated": header.GetTruncated()}, nil
+}
+
+// receiveLines copies the window of a ReadLines stream to stdout and returns
+// the summary, which arrives last, as metadata.
+func receiveLines(ctx context.Context, client sandboxv1.SandboxClient, request *sandboxv1.ReadLinesRequest, stdout io.Writer) (any, error) {
+	stream, err := client.ReadLines(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	var summary *sandboxv1.ReadLinesSummary
+	for {
+		message, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if message.GetSummary() != nil {
+			summary = message.GetSummary()
+		} else if _, err := stdout.Write(message.GetChunk()); err != nil {
+			return nil, err
+		}
+	}
+	if summary == nil {
+		return nil, errors.New("stream ended without a summary")
+	}
+	return map[string]any{"total_lines": summary.GetTotalLines(), "size": summary.GetSize(), "ends_with_newline": summary.GetEndsWithNewline(), "more": summary.GetMore()}, nil
+}
+
+// sendWrite streams stdin to WriteFile after the header. The bridge checks
+// that exactly header.size bytes arrive, so a short or long stdin fails there
+// and the file is left as it was.
+func sendWrite(ctx context.Context, client sandboxv1.SandboxClient, header *sandboxv1.WriteFileHeader, stdin io.Reader) (any, error) {
+	stream, err := client.WriteFile(ctx)
+	if err != nil {
+		return nil, err
+	}
+	err = stream.Send(&sandboxv1.WriteFileRequest{Part: &sandboxv1.WriteFileRequest_Header{Header: header}})
+	for err == nil {
+		// A fresh buffer per message: gRPC may still hold a sent one.
+		chunk := make([]byte, chunkBytes)
+		read, readErr := io.ReadFull(stdin, chunk)
+		if read > 0 {
+			err = stream.Send(&sandboxv1.WriteFileRequest{Part: &sandboxv1.WriteFileRequest_Chunk{Chunk: chunk[:read]}})
+		}
+		if errors.Is(readErr, io.EOF) || errors.Is(readErr, io.ErrUnexpectedEOF) {
+			break
+		}
+		if readErr != nil {
+			return nil, fmt.Errorf("read stdin: %w", readErr)
+		}
+	}
+	// A failed Send means the bridge ended the call; CloseAndRecv reports why.
+	response, err := stream.CloseAndRecv()
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"bytes_written": response.GetBytesWritten(), "created": response.GetCreated()}, nil
 }
 
 // connect dials the bridge named by the harness environment.

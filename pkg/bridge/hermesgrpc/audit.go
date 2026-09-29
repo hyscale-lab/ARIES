@@ -62,7 +62,9 @@ type toolCallRecord struct {
 	StdinRaw string `json:"stdin_raw,omitempty"`
 	// ContentRaw carries a file procedure's content, base64, only when the
 	// profile set bridge.retain_raw_log.
-	ContentRaw  string `json:"content_raw,omitempty"`
+	ContentRaw string `json:"content_raw,omitempty"`
+	// SHA256 is the hex digest of a completed file procedure's content.
+	SHA256      string `json:"sha256,omitempty"`
 	StdinBytes  int64  `json:"stdin_bytes"`
 	StdoutBytes int64  `json:"stdout_bytes"`
 	Truncated   bool   `json:"truncated,omitempty"`
@@ -94,10 +96,12 @@ type auditWriter struct {
 	bytes    int64
 	sealed   bool
 	err      error
-	wake     chan struct{}
-	done     chan struct{}
-	marshal  func(any) ([]byte, error)
-	now      func() time.Time
+	// limit bounds the log's size, file content aside; see enqueue.
+	limit   int64
+	wake    chan struct{}
+	done    chan struct{}
+	marshal func(any) ([]byte, error)
+	now     func() time.Time
 }
 
 // boundedWriter retains at most limit bytes while reporting everything the
@@ -190,7 +194,7 @@ func newAuditWriter(structured *auditFile) *auditWriter {
 	writer := &auditWriter{
 		structured: structured,
 		wake:       make(chan struct{}, 1), done: make(chan struct{}),
-		marshal: marshalJSONLine, now: time.Now,
+		marshal: marshalJSONLine, now: time.Now, limit: maxToolLogBytes,
 	}
 	go writer.run()
 	return writer
@@ -214,9 +218,12 @@ func (writer *auditWriter) enqueue(structured toolCallRecord) {
 		writer.latchLocked(fmt.Errorf("marshal structured gRPC audit: %w", err))
 		return
 	}
-	charge := int64(len(line))
-	if charge > maxToolLogBytes-writer.bytes {
-		writer.latchLocked(fmt.Errorf("Hermes gRPC audit exceeds %d bytes", maxToolLogBytes))
+	// Retained file content is not charged: the profile asked for it with no
+	// size bound, and one large file would otherwise latch the audit and fail
+	// Stop. Base64 needs no JSON escaping, so the subtraction is exact.
+	charge := int64(len(line) - len(structured.ContentRaw))
+	if charge > writer.limit-writer.bytes {
+		writer.latchLocked(fmt.Errorf("Hermes gRPC audit exceeds %d bytes", writer.limit))
 		return
 	}
 	writer.sequence = sequence
