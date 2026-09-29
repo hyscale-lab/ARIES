@@ -37,7 +37,7 @@ flowchart LR
         F[("container filesystem")]
     end
 
-    C ==>|"mTLS gRPC, one unary RPC"| B
+    C ==>|"mTLS gRPC, one RPC: unary, or a stream of chunks for file content"| B
     S ==>|"Docker Engine API over the local socket"| D
     D ==>|"exec"| X
     D ==>|"archive API: stat, tar out, tar in"| F
@@ -187,8 +187,9 @@ sequenceDiagram
         B->>S: OpenFile
         S->>D: CopyFromContainer
         D-->>S: tar stream
+        B-->>C: header: size, truncated
         Note over B: read 1000 bytes, close the stream early
-        B-->>C: content
+        B-->>C: chunk
         C-->>P: bytes on stdout
     end
 
@@ -200,8 +201,12 @@ sequenceDiagram
         S->>D: CopyFromContainer
         D-->>S: tar stream
         Note over B: one pass: keep lines N..N+M-1,<br/>cut each at K bytes, count all newlines
-        B-->>C: window, total_lines, size, ends_with_newline, more
-        C-->>P: window on stdout, JSON metadata on stderr
+        loop as the window is produced
+            B-->>C: chunk of the window, up to 64 KiB
+            C-->>P: bytes on stdout
+        end
+        B-->>C: summary: total_lines, size, ends_with_newline, more
+        C-->>P: JSON metadata on stderr
     end
 
     Note over P: strip BOM, number lines, build the pagination hint
@@ -211,8 +216,10 @@ sequenceDiagram
 - **`ReadFile` and `ReadLines` are different procedures.** `ReadFile` returns a byte range and
   serves probes and whole-file reads. `ReadLines` returns a range of lines and serves the
   paginated `read_file` tool.
-- **Docker to bridge streams; bridge to client does not.** The bridge reads the tar stream as it
-  arrives and keeps only what the call asked for. The reply is one message, at most 16 MiB.
+- **Content streams end to end, with no size bound.** Docker's tar stream feeds the bridge, and
+  the bridge sends 64 KiB chunks that the client writes straight to stdout. Only the plugin holds
+  the whole content, because Hermes's `ReadResult` is one string. Metadata rides in the stream: a
+  header first for `ReadFile`, a summary last for `ReadLines`.
 - **No process runs in the task container for a read.** The archive API needs no binaries in the
   task image.
 - **A symlink is followed.** The daemon reports the resolved target, and the adapter reads that.
@@ -239,12 +246,19 @@ sequenceDiagram
     C->>B: ReadFile (line-ending and BOM probes)
     B-->>C: content, or NOT_FOUND for a new file
 
-    P->>C: file write PATH (content on stdin)
-    C->>B: WriteFile(path, content)
-    Note over B: revoked? absolute path? content at most 16 MiB
+    P->>C: file write --size N PATH (content on stdin)
+    C->>B: header: path, size
+    Note over B: revoked? absolute path?
     B->>S: WriteFile(path, reader, size)
     S->>D: ContainerStatPath: target, then parents
     S->>D: CopyToContainer: tar with missing parent<br/>directories and .aries-tmp-ID
+    loop until N bytes
+        C->>B: chunk, up to 64 KiB
+        B->>S: chunk into the tar entry
+        S->>D: streamed
+    end
+    C->>B: half-close
+    Note over S: the reader must end exactly at N bytes
     D->>T: extract into the target's directory
     S->>D: exec as root: mv -f TEMP TARGET
     D->>T: rename
@@ -262,7 +276,10 @@ sequenceDiagram
 
 - **The write is atomic.** The bytes land under a temporary name in the target's directory, and
   one rename makes them visible. A reader sees the old file or the new one. A failed or cancelled
-  write removes the temporary file and leaves the original intact.
+  write, or a stream that does not carry exactly the declared size, removes the temporary file and
+  leaves the original intact. The rename waits for the client's half-close.
+- **Nothing holds the whole file except the plugin.** The client streams stdin and the bridge
+  passes chunks into the tar entry, so a write has no size bound.
 - **Modes and owners.** An existing file keeps its mode. A new file gets `0644`. Missing parent
   directories are created `0755`. New files and directories are owned by the sandbox's exec
   user.
@@ -281,9 +298,9 @@ calls the bridge refuses.
 | --- | --- | --- |
 | `Exec` | `agent`, `bootstrap`, or `sync` (refused) | the script, stdin, byte counts, exit code, duration |
 | `Stat` | `file_stat` | path, status, duration |
-| `ReadFile` | `file_read` | path, bytes returned, status, duration |
-| `ReadLines` | `file_lines` | path, bytes returned, status, duration |
-| `WriteFile` | `file_write` | path, bytes written, status, duration |
+| `ReadFile` | `file_read` | path, bytes returned, `sha256`, status, duration |
+| `ReadLines` | `file_lines` | path, bytes returned, `sha256`, status, duration |
+| `WriteFile` | `file_write` | path, bytes written, `sha256`, status, duration |
 
 Command output is never recorded. File content is recorded only when the profile sets
 `bridge.retain_raw_log`.
@@ -293,7 +310,7 @@ Command output is never recorded. File content is recorded only when the profile
 | Where it fails | What the client gets | What Hermes sees |
 | --- | --- | --- |
 | The command exits non-zero | `OK`, exit code in the response | the command's output and exit code |
-| File not found, not a regular file, over the bound | a gRPC status; exit code 1 to 5 | a tool error with the message |
+| File not found, not a regular file, a write stream that does not match its size | a gRPC status; exit code 1 to 5 | a tool error with the message |
 | The session is revoked | `UNAVAILABLE`; exit code 255 | a failed tool call |
 | The bridge is unreachable or the certificate does not match | a transport error; exit code 255 | a failed tool call |
 

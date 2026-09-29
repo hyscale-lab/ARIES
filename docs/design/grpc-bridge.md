@@ -279,9 +279,14 @@ codes. What is a bridge decision rather than contract:
 - **`ReadLines` has no sandbox method.** The bridge computes it from `OpenFile`'s stream in one
   pass and closes the stream once it has enough. Only the window crosses the wire, and a sandbox
   implements three methods, not four. `ReadFile` is served from the same stream.
-- **One bound for everything.** File content, a line window, and `WriteFile` content all share
-  the 16 MiB bound that `Exec` output uses ([section 6](#6-evidence)). A `max_bytes` above it is
-  `INVALID_ARGUMENT`; a window or a write over it is `RESOURCE_EXHAUSTED`.
+- **File content streams, with no size bound.** `ReadFile` and `ReadLines` are server-streaming
+  and `WriteFile` is client-streaming, in chunks of up to 64 KiB. Metadata travels in the same
+  stream as a typed `oneof`: a header first for reads and writes, a summary last for `ReadLines`,
+  whose counts are known only at the end of the file. The bridge holds one chunk at a time, so
+  the reason for the 16 MiB bound on `Exec` output ([section 6](#6-evidence)) does not arise.
+- **A write carries its size up front.** Docker's tar header needs it before the first byte. The
+  bridge's reader enforces it: fewer bytes, more bytes, or a second header is `INVALID_ARGUMENT`,
+  and the sandbox commits only after reading the stream's end, so a partial write never lands.
 - **A sandbox without the capability still gets an answer.** The call is recorded with status
   `unimplemented`, logged, and answered `UNIMPLEMENTED`. This let the chain be tested end to end
   before any sandbox implemented it.
@@ -482,6 +487,9 @@ Two rules carry over unchanged. Command **output never enters the audit** — by
 File content is the one opt-in exception, below. And retained `stdin` stays bounded. Oversized
 `stdin` is refused before the command runs, so it never reaches the audit.
 
+Every completed file record also carries the content's `sha256`, computed as the stream passes,
+so the audit shows what was read or written without keeping the content.
+
 Four request classes currently produce no audit record at all — rejected channel types, channels
 with extra data, channel accept errors, and refused global requests
 (the SSH request funnel, `pkg/bridge/hermesssh/bridge.go:720-760`). Those gaps should not be
@@ -492,8 +500,11 @@ reproduced: a refused call is a recordable event.
 The SSH bridges write two artifacts per task: the structured `tool-calls.jsonl` and a byte-level
 `ssh_raw.log`, the latter opt-in through `bridge.retain_raw_log`. **This bridge writes only the
 structured log.** For it `retain_raw_log` means the most verbose evidence level: file content,
-base64, in a `content_raw` field of each successful file record (what was read or written, at most
-16 MiB). Off by default; content never reaches `aries.log` or results.
+base64, in a `content_raw` field of each successful file record (what was read or written, with
+no size limit). Off by default; content never reaches `aries.log` or results. Retained content is
+not charged against the audit's 256 MiB per-task limit, which still bounds every other record:
+the profile asked for unbounded file evidence, and one large file would otherwise latch the audit
+and fail `Stop`. The bridge holds a retained file whole while it builds that record.
 
 The bridge decodes Hermes's grammar itself (section 2), so it receives the same verbatim payload SSH
 does. Three things the raw log uniquely held are therefore accounted for here:
@@ -513,7 +524,7 @@ does. Three things the raw log uniquely held are therefore accounted for here:
 Refusals are recorded, including a call against a revoked session — closing the gap named in the
 paragraph above rather than inheriting it.
 
-#### Per-call sizes are logged, and the output bound is 16 MiB
+#### Per-call sizes are logged, and the `Exec` output bound is 16 MiB
 
 `Exec` buffers a whole reply, which the SSH bridge never did: it wrote straight to the channel and
 accumulated nothing. Both designs end with the full output assembled — the agent's tool-call
@@ -534,11 +545,9 @@ what it would have needed. The transport cap sits at 64 MiB as a backstop that m
 first: if it did, a command would run to completion and then have its reply rejected, which is
 exactly the failure grpc-go's 4 MiB receive default would have caused. A test pins that ordering.
 
-File procedures share the 16 MiB bound but do not truncate: returning a partial file as if it
-were whole would be wrong. `ReadFile` is bounded by `max_bytes` and reports `truncated` against
-the file size. A `ReadLines` window or `WriteFile` content over the bound is refused with
-`RESOURCE_EXHAUSTED`. Streaming is the intended transport for larger files, added when a measured
-file needs it ([section 8](#8-open-questions)).
+File procedures are outside both limits. They stream in chunks far below the message cap, and
+the bridge never holds a whole file unless `retain_raw_log` asks it to. `ReadFile` returns a
+range only when the caller passes `max_bytes`, and reports `truncated` against the file size.
 
 **The numbers are deliberately generous.** A Terminal-Bench run peaked at 5.6 KB of `stdout` across
 twenty calls, so 16 MiB is roughly three orders of magnitude of headroom. A high limit costs nothing
@@ -635,8 +644,7 @@ consequences follow:
    replaces it when the SSH pairing is retired.
 7. **What remains on the shell.** Search, delete, move, patch reads, similar-name suggestions, the
    UTF-16 rescue, and `write_file`'s `sha256sum` check and lint still run through `Exec`. `Delete`,
-   `Move` and `ListDir` arrive when those tools move off the shell. Files over 16 MiB need
-   streaming `ReadFile` and `WriteFile`.
+   `Move` and `ListDir` arrive when those tools move off the shell.
 8. **Where line parsing lives.** `ReadLines` is computed in the bridge from a byte stream. A
    sandbox that can compute the window next to the data, for example a remote one, would want the
    window itself as a sandbox method. The decision is deferred until such a sandbox exists.
@@ -708,16 +716,18 @@ nothing from it, because the server enforces revocation on every call and on eve
 aries-grpc file stat PATH
 aries-grpc file read [--offset N] [--max-bytes N] PATH
 aries-grpc file lines --first N --max N [--max-line-bytes N] PATH
-aries-grpc file write PATH < content
+aries-grpc file write --size N PATH < content
 ```
 
-Each mode makes exactly one RPC. `stdout` carries only the payload, and `stderr` carries exactly
-one line: JSON metadata on success, a message on failure. The exit code encodes the status: `0`
-ok, `1` not found, `2` permission denied, `3` invalid argument, `4` resource exhausted, `5`
-failed precondition, and `255` for everything else, including revocation and a sandbox without
-file access. The client
-never interprets bytes. How a write lands belongs to the bridge and the sandbox, and what the
-bytes mean belongs to Hermes.
+Each mode makes exactly one RPC. `stdout` carries only the payload, written chunk by chunk as it
+arrives, and `stderr` carries exactly one line after the stream ends: JSON metadata on success, a
+message on failure. The client never holds a whole file; the plugin accumulates it, because
+Hermes's contract is whole strings. A failure after some content leaves it on stdout with a
+non-zero exit, and the plugin discards it. The exit code encodes the status: `0` ok, `1` not
+found, `2` permission denied, `3` invalid argument, `4` resource exhausted, `5` failed
+precondition, and `255` for everything else, including revocation, a sandbox without file access,
+and a `ReadLines` stream with no summary. The client never interprets bytes. How a write lands
+belongs to the bridge and the sandbox, and what the bytes mean belongs to Hermes.
 
 **The file adapter.** The plugin's environment returns `AriesFileOperations`, a subclass of
 Hermes's `ShellFileOperations`. It overrides only the byte-moving primitives: the size and type
@@ -746,13 +756,15 @@ first command in `TERMINAL_CWD` behind `cd || exit 126` and records a new direct
 completes, so a path the sandbox lacks fails every command. An earlier placeholder path did exactly
 that on both routes.
 
-**How it is tested.** The bridge's file handlers run against an in-memory sandbox, and
-`readLines` is held to the `sed | cut` and `wc -l` pipeline it replaces. The client's file modes
-are tested against a live bridge. The Docker capability is tested with a fake daemon client and,
-in an integration test, against a real container: ownership, modes, inode change on replace, no
-leftover temporary, symlinks, and a file over 16 MiB. In the pinned Hermes image, the adapter runs
-against a fake client and is compared with stock `ShellFileOperations` on the same files. End to
-end, the real bridge and a real sandbox run Hermes's terminal, `write_file` and paginated
+**How it is tested.** The bridge's file handlers run against an in-memory sandbox, including a
+20 MiB file written, read and windowed through the real client, malformed write streams, and the
+audit exemption for retained content. `readLines` is held to the `sed | cut` and `wc -l` pipeline
+it replaces. The client's file modes are tested against a live bridge. The Docker capability is
+tested with a fake daemon client and, in an integration test, against a real container:
+ownership, modes, inode change on replace, no leftover temporary, symlinks, and a 70 MiB round
+trip, above both the old 16 MiB bound and the 64 MiB message cap. In the pinned Hermes image, the
+adapter runs against a fake client and is compared with stock `ShellFileOperations` on the same
+files. End to end, the real bridge and a real sandbox run Hermes's terminal, `write_file` and paginated
 `read_file` tools over both routes. The output must be identical, and the gRPC audit must show
 served `file_write` and `file_lines` records.
 
