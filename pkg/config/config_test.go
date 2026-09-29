@@ -589,7 +589,7 @@ func TestCheckedInProfilesLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(paths) != 21 {
+	if len(paths) != 22 {
 
 		t.Fatalf("profiles=%v", paths)
 	}

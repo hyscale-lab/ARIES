@@ -217,3 +217,22 @@ func TestCheckedInRoadmapBenchFirst20ProfileLoads(t *testing.T) {
 		t.Fatal("first20 profile differs from the full profile beyond its task, model, and delegation settings")
 	}
 }
+
+func TestCheckedInRoadmapBenchQwen36FP8First20ProfileLoads(t *testing.T) {
+	cfg, err := Load(filepath.Join("..", "..", "profiles", "codex-roadmapbench-qwen36-35b-a3b-fp8-xhigh-first20.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Name != "codex-roadmapbench-qwen36-35b-a3b-fp8-xhigh-first20" || cfg.Model.ID != "Qwen/Qwen3.6-35B-A3B-FP8" {
+		t.Fatalf("Qwen3.6 FP8 first20 identity = %q, %q", cfg.Name, cfg.Model.ID)
+	}
+	previous, err := Load(filepath.Join("..", "..", "profiles", "codex-roadmapbench-qwen38-27b-xhigh-first20.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Name = previous.Name
+	cfg.Model.ID = previous.Model.ID
+	if !reflect.DeepEqual(cfg, previous) {
+		t.Fatal("Qwen3.6 FP8 first20 profile differs from Qwen3.8 beyond its name and model")
+	}
+}

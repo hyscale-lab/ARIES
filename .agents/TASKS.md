@@ -12,7 +12,7 @@ Active plan on `feat/codex-roadmapbench`, based on the completed adapter:
 3. Per the updated user instruction, validate on `boxi@10.96.190.63` in an
    isolated ARIES source directory without credentials or run-data transfer;
    run the release matrix, record actual evidence, and commit the integration.
-4. Run the first 20 pinned tasks in task-ID order with Qwen3.8-27B, xhigh,
+4. Run the first 20 pinned tasks in task-ID order with Qwen3.6-35B-A3B-FP8, xhigh,
    and the Codex ultra developer prompt requiring early substantive native
    delegation. Confirm actual child execution before the full collection and
    preserve existing remote workloads throughout verification and the run.
@@ -53,13 +53,22 @@ Implementation and current validation:
   after the fix; SDK inspection confirms no owned test container or network
   remains. The local Codex unit tests also pass. No model or benchmark budget
   was changed.
-- The remaining 19 tasks have not entered inference. Their image prewarm hit
-  a Docker Hub connection reset for the large `fal-4.0.0` image. A retry was
-  stopped during preparation to repair the environment defects before task
-  admission. The large image has since downloaded successfully; remaining
-  images are being prepared for a separately identified corrected first20
-  run. The first task's original artifacts remain intact. Private RPC evidence
-  stays on the remote host; only aggregate diagnostics are retained locally.
+- All 20 task images are now prepared; a transient Docker Hub connection
+  reset for the large `fal-4.0.0` image succeeded on retry. The corrected
+  Qwen3.8 batch was stopped after 55 seconds at the user's model-switch
+  request, with isolation and cleanup confirmed. It is not a completed
+  benchmark attempt. The original two-hour task's artifacts remain intact.
+  Private RPC evidence stays on the remote host; only aggregate diagnostics
+  are retained locally.
+- The latest user selection is the official `Qwen/Qwen3.6-35B-A3B-FP8`
+  checkpoint. Its new first20 profile changes only the name and model ID;
+  task order, xhigh, ultra prompt, three child slots, concurrency, and upstream
+  deadlines remain unchanged. A focused regression locks that equivalence.
+  vLLM 0.28.0 accepts xhigh as thinking enabled, without a distinct additional
+  reasoning-budget tier. The FP8 experiment is being prepared separately from
+  the earlier Qwen3.8 attempts. The new profile passes the focused configuration
+  regression and all five release targets on the isolated remote source;
+  SDK inspection found no ARIES test container or network afterward.
 
 ## RoadmapBench benchmark adapter
 

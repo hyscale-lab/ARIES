@@ -31,18 +31,21 @@ For all 115 tasks, replace the same endpoint and model placeholders in
 
 The full profile selects each pinned task once in task-ID order.
 
-`profiles/codex-roadmapbench-qwen38-27b-xhigh-first20.json` selects the first
+`profiles/codex-roadmapbench-qwen36-35b-a3b-fp8-xhigh-first20.json` selects the first
 20 tasks in that same order, from `dsl-2.1.0-roadmap` through
-`glz-3.0.0-roadmap`. It uses `Qwen/Qwen3.8-27B`, `xhigh` reasoning effort,
+`glz-3.0.0-roadmap`. It uses `Qwen/Qwen3.6-35B-A3B-FP8`, `xhigh` reasoning effort,
 and up to three native Codex subagents. Replace its endpoint placeholder,
 provide `MODEL_API_KEY`, and run:
 
 ```sh
-./bin/aries setup profiles/codex-roadmapbench-qwen38-27b-xhigh-first20.json
-./bin/aries profiles/codex-roadmapbench-qwen38-27b-xhigh-first20.json
+./bin/aries setup profiles/codex-roadmapbench-qwen36-35b-a3b-fp8-xhigh-first20.json
+./bin/aries profiles/codex-roadmapbench-qwen36-35b-a3b-fp8-xhigh-first20.json
 ```
 
-This profile's native
+The retained `profiles/codex-roadmapbench-qwen38-27b-xhigh-first20.json`
+selects the same tasks and settings with `Qwen/Qwen3.8-27B`.
+
+Both first20 profiles' native
 [`developer_instructions`](https://learn.chatgpt.com/docs/config-file/config-reference)
 define the **ultra** execution
 strategy: plan briefly, delegate an independent subtask early, parallelize
@@ -52,10 +55,15 @@ the parent verify and integrate results and run tests. Child spawns omit
 configuration. Ultra names the prompt strategy; the API reasoning effort
 remains `xhigh`.
 
-All three examples use sequential task execution (`execution.concurrency: 1`)
+For Qwen3.6 on vLLM 0.28.0, `xhigh` is accepted and enables thinking; it does
+not select a separate extra reasoning-token budget. The
+[Responses implementation](https://github.com/vllm-project/vllm/blob/v0.28.0/vllm/entrypoints/openai/responses/protocol.py#L299)
+maps non-`none` reasoning effort to `enable_thinking`.
+
+All examples use sequential task execution (`execution.concurrency: 1`)
 and leave `overrides_file` empty, retaining the task's published resources
 and two-hour agent budget. Set `model.context_length` to the actual model
-server's context window before running the first20 profile.
+server's context window before running either first20 profile.
 
 Setup prepares data and images without contacting the model. Runs use the
 normal ARIES model, concurrency, task-order, and resource-override settings.
