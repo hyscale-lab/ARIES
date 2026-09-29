@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -28,21 +29,22 @@ import (
 const testImage = "debian:bookworm-20260812-slim"
 
 type fakeDocker struct {
-	mu                sync.Mutex
-	created           client.ContainerCreateOptions
-	info              container.InspectResponse
-	archive           []byte
-	execs             []client.ExecCreateOptions
-	removed           bool
-	refuseRemoval     bool
-	copyErr           error
-	createErr         error
-	inspectHostConfig func(*container.HostConfig)
-	stopCalls         int
-	removeCalls       int
-	stdout            string
-	stderr            string
-	exit              int
+	mu                 sync.Mutex
+	created            client.ContainerCreateOptions
+	info               container.InspectResponse
+	archive            []byte
+	execs              []client.ExecCreateOptions
+	removed            bool
+	refuseRemoval      bool
+	requireStoppedCopy bool
+	copyErr            error
+	createErr          error
+	inspectHostConfig  func(*container.HostConfig)
+	stopCalls          int
+	removeCalls        int
+	stdout             string
+	stderr             string
+	exit               int
 }
 
 func (f *fakeDocker) ContainerCreate(_ context.Context, options client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
@@ -64,6 +66,23 @@ func (f *fakeDocker) CopyToContainer(_ context.Context, id string, options clien
 	defer f.mu.Unlock()
 	f.archive = content
 	return client.CopyToContainerResult{}, errors.Join(err, f.copyErr)
+}
+func (f *fakeDocker) CopyFromContainer(_ context.Context, _ string, options client.CopyFromContainerOptions) (client.CopyFromContainerResult, error) {
+	if f.requireStoppedCopy && f.info.State.Running {
+		return client.CopyFromContainerResult{}, errors.New("copy before producer stop")
+	}
+	if options.SourcePath != rolloutTraceContainerPath+"/bundle/trace.jsonl" {
+		return client.CopyFromContainerResult{}, errors.New("unexpected trace path")
+	}
+	data := []byte(`{"schema_version":1,"seq":1,"wall_time_unix_ms":1000,"rollout_id":"root","thread_id":"root","payload":{"type":"inference_started","inference_call_id":"call-1"}}
+{"schema_version":1,"seq":2,"wall_time_unix_ms":1100,"rollout_id":"root","thread_id":"root","payload":{"type":"inference_completed","inference_call_id":"call-1"}}
+`)
+	var buffer bytes.Buffer
+	writer := tar.NewWriter(&buffer)
+	_ = writer.WriteHeader(&tar.Header{Name: "trace.jsonl", Typeflag: tar.TypeReg, Mode: 0600, Size: int64(len(data))})
+	_, _ = writer.Write(data)
+	_ = writer.Close()
+	return client.CopyFromContainerResult{Content: io.NopCloser(&buffer)}, nil
 }
 func (f *fakeDocker) ContainerStart(context.Context, string, client.ContainerStartOptions) (client.ContainerStartResult, error) {
 	f.mu.Lock()
@@ -102,6 +121,9 @@ func (f *fakeDocker) ExecAttach(_ context.Context, id string, _ client.ExecAttac
 	stdout, stderr, exitCode := f.stdout, f.stderr, f.exit
 	if slices.Contains(options.Cmd, "--version") {
 		stdout, stderr, exitCode = "codex-cli 0.157.1\n", "", 0
+	}
+	if slices.Contains(options.Cmd, "/usr/bin/find") {
+		stdout, stderr, exitCode = rolloutTraceContainerPath+"/bundle/trace.jsonl\n", "", 0
 	}
 	f.mu.Unlock()
 	read, write := net.Pipe()
@@ -391,9 +413,25 @@ func TestRunPreservesArgvAndRetainsRedactedNativeTrajectory(t *testing.T) {
 	if err != nil || result.Status != core.StatusSucceeded || result.FinalResponse != "task done [REDACTED]" {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
-	cmd := fake.execs[len(fake.execs)-1].Cmd
+	cmd := fake.execs[1].Cmd
 	if cmd[len(cmd)-1] != instruction || cmd[len(cmd)-2] != "--" || slices.Contains(cmd, "--ignore-user-config") || !slices.Contains(cmd, "--ephemeral") || !slices.Contains(cmd, "--json") {
 		t.Fatalf("unexpected argv: %#v", cmd)
+	}
+	for _, name := range []string{"session-outcome.json", "agent-result.json", "telemetry.index.json", "telemetry/events.jsonl", "telemetry/llm-calls.jsonl"} {
+		filename := filepath.Join(manager.active.artifactDir, name)
+		data, readErr := os.ReadFile(filename)
+		if readErr != nil || len(data) == 0 {
+			t.Fatalf("missing %s: %v", name, readErr)
+		}
+		if name == "agent-result.json" {
+			var value map[string]any
+			if err := json.Unmarshal(data, &value); err != nil || value["response"] != result.FinalResponse {
+				t.Fatalf("result parity: %s", data)
+			}
+		}
+	}
+	if !slices.Contains(fake.created.Config.Env, "CODEX_ROLLOUT_TRACE_ROOT="+rolloutTraceContainerPath) {
+		t.Fatal("native tracing disabled")
 	}
 	for _, path := range result.LogPaths {
 		content, err := os.ReadFile(path)
@@ -485,5 +523,44 @@ func TestStopRefusesContainerWithWrongOwnership(t *testing.T) {
 	}
 	if fake.removeCalls != 0 || fake.stopCalls != 0 {
 		t.Fatal("unowned container was mutated")
+	}
+}
+
+func TestRunRedactsDecodedFinalResponse(t *testing.T) {
+	manager, fake, request, _ := testManager(t)
+	fake.stdout = `{"type":"item.completed","item":{"type":"agent_message","text":"test-model-\u0073ecret"}}` + "\n" + `{"type":"turn.completed"}` + "\n"
+	if err := manager.Start(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = manager.Stop(context.Background()) }()
+	result, err := manager.Run(context.Background(), "run task")
+	if err != nil || result.FinalResponse != "[REDACTED]" {
+		t.Fatalf("final not redacted: status=%s err=%v", result.Status, err)
+	}
+	data, err := os.ReadFile(filepath.Join(manager.active.artifactDir, "agent-result.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var artifact map[string]any
+	if err := json.Unmarshal(data, &artifact); err != nil || artifact["response"] != "[REDACTED]" {
+		t.Fatal("decoded result not redacted")
+	}
+}
+
+func TestCanceledTraceSnapshotStopsProducerBeforeCopy(t *testing.T) {
+	manager, fake, request, _ := testManager(t)
+	if err := manager.Start(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = manager.Stop(context.Background()) }()
+	fake.requireStoppedCopy = true
+	if _, err := manager.collectInferenceTrace(context.Background(), manager.active, true); err != nil {
+		t.Fatal(err)
+	}
+	if fake.info.State.Running {
+		t.Fatal("trace producer still running")
+	}
+	if fake.removed {
+		t.Fatal("trace source removed before snapshot")
 	}
 }

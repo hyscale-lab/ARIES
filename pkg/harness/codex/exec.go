@@ -29,6 +29,10 @@ type execResult struct {
 }
 
 func (manager *Manager) execAttached(ctx context.Context, containerID string, command []string, workdir string) (execResult, error) {
+	return manager.execAttachedObserved(ctx, containerID, command, workdir, nil)
+}
+
+func (manager *Manager) execAttachedObserved(ctx context.Context, containerID string, command []string, workdir string, observer io.Writer) (execResult, error) {
 	token, err := randomID()
 	if err != nil {
 		return execResult{exitCode: -1}, err
@@ -47,7 +51,11 @@ func (manager *Manager) execAttached(ctx context.Context, containerID string, co
 	stdout, stderr := &limitedBuffer{}, &limitedBuffer{}
 	trailer := &execTrailer{destination: stderr, prefix: []byte("\x1eARIES_CODEX_EXIT_" + token + "="), done: make(chan struct{})}
 	copied := make(chan error, 1)
-	go func() { _, copyErr := stdcopy.StdCopy(stdout, trailer, attached.Reader); copied <- copyErr }()
+	var destination io.Writer = stdout
+	if observer != nil {
+		destination = io.MultiWriter(stdout, observer)
+	}
+	go func() { _, copyErr := stdcopy.StdCopy(destination, trailer, attached.Reader); copied <- copyErr }()
 	var copyErr error
 	select {
 	case <-ctx.Done():

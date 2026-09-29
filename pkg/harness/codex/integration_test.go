@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -354,25 +355,162 @@ func runNativeSSHScenario(t *testing.T, cancelTool bool, taskUser string, subage
 		if !bytes.Contains(trajectory, []byte(`"tool":"spawn_agent"`)) || !bytes.Contains(trajectory, []byte(`"tool":"wait"`)) {
 			t.Fatalf("native trajectory has no completed delegation: %s", trajectory)
 		}
-		// Both parent and child execute through one native exec-server. The
-		// bridge would reject another SSH executor, and its audit must agree.
-		audit, err := os.ReadFile(filepath.Join(output, "native-ssh", "bridge", "tool-calls.jsonl"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		lines := bytes.Split(bytes.TrimSpace(audit), []byte{'\n'})
-		var record struct {
-			Container string `json:"container_id"`
-			Operation string `json:"operation_class"`
-			Status    string `json:"status"`
-			ExitCode  int    `json:"exit_code"`
-		}
-		if len(lines) != 1 || json.Unmarshal(lines[0], &record) != nil || record.Container != sandbox.ContainerID() || record.Operation != "executor" || record.Status != "completed" || record.ExitCode != 0 {
-			t.Fatalf("parent/child did not share one clean SSH executor: %s", audit)
-		}
+
 	}
+	assertNativeCommandTiming(t, output, sandbox.ContainerID(), cancelTool, subagents)
 	if err := sandboxes.Stop(ctx, live); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Verify the observed command timeline against the independently retained wire
+// input. Parent and child share one executor but receive distinct process rows.
+func assertNativeCommandTiming(t *testing.T, output, containerID string, canceled, subagents bool) {
+	t.Helper()
+	audit, err := os.ReadFile(filepath.Join(output, "native-ssh", "bridge", "tool-calls.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	type record struct {
+		Container  string   `json:"container_id"`
+		Operation  string   `json:"operation_class"`
+		Status     string   `json:"status"`
+		ExitCode   int      `json:"exit_code"`
+		Started    string   `json:"started_at"`
+		Finished   string   `json:"finished_at"`
+		Duration   int64    `json:"duration_ms"`
+		RequestID  string   `json:"request_id"`
+		ProcessID  string   `json:"process_id"`
+		ThreadID   string   `json:"thread_id"`
+		ToolCallID string   `json:"tool_call_id"`
+		Argv       []string `json:"argv"`
+		Stdin      string   `json:"stdin"`
+	}
+	var commands []record
+	var executor record
+	summaries := 0
+	for _, line := range bytes.Split(bytes.TrimSpace(audit), []byte{'\n'}) {
+		var row record
+		if err := json.Unmarshal(line, &row); err != nil {
+			t.Fatal(err)
+		}
+		if row.Container != containerID {
+			t.Fatal("command audit refers to a different sandbox")
+		}
+		switch row.Operation {
+		case "executor":
+			executor = row
+			summaries++
+		case "exec":
+			commands = append(commands, row)
+		default:
+			t.Fatalf("unexpected operation %q", row.Operation)
+		}
+	}
+	if summaries != 1 || executor.Status != "completed" || executor.ExitCode != 0 || len(commands) == 0 {
+		t.Fatalf("missing clean executor or command records: %s", audit)
+	}
+	starts := make(map[string]record)
+	for _, line := range strings.Split(executor.Stdin, "\n") {
+		var request struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+			Params struct {
+				ProcessID string   `json:"processId"`
+				Argv      []string `json:"argv"`
+				Metadata  struct {
+					ThreadID   string `json:"threadId"`
+					ToolCallID string `json:"toolCallId"`
+				} `json:"metadata"`
+			} `json:"params"`
+		}
+		if json.Unmarshal([]byte(line), &request) != nil || request.Method != "process/start" {
+			continue
+		}
+		starts[request.Params.ProcessID] = record{RequestID: string(request.ID), Argv: request.Params.Argv, ThreadID: request.Params.Metadata.ThreadID, ToolCallID: request.Params.Metadata.ToolCallID}
+	}
+	threads := make(map[string]string)
+	for _, row := range commands {
+		wire, ok := starts[row.ProcessID]
+		if !ok || row.RequestID != wire.RequestID || !slices.Equal(row.Argv, wire.Argv) || row.ThreadID != wire.ThreadID || row.ToolCallID != wire.ToolCallID {
+			t.Fatalf("command record lost wire attribution or argv boundaries: %+v", row)
+		}
+		delete(starts, row.ProcessID)
+		started, err := time.Parse(time.RFC3339Nano, row.Started)
+		if err != nil || row.Duration < 0 {
+			t.Fatalf("invalid command start/duration: %+v", row)
+		}
+		if row.Finished == "" {
+			if !canceled || row.ExitCode != -1 || (row.Status != "incomplete" && row.Status != "canceled") {
+				t.Fatalf("unconfirmed command claimed completion: %+v", row)
+			}
+		} else {
+			finished, err := time.Parse(time.RFC3339Nano, row.Finished)
+			if err != nil || finished.Before(started) || finished.Sub(started).Milliseconds() != row.Duration || row.Status != "completed" {
+				t.Fatalf("invalid command end/duration/status: %+v", row)
+			}
+			if !canceled && row.ToolCallID != "" && row.ExitCode != 0 {
+				t.Fatalf("deterministic command failed: %+v", row)
+			}
+		}
+		if row.ToolCallID != "" {
+			threads[row.ToolCallID] = row.ThreadID
+		}
+	}
+	if len(starts) != 0 {
+		t.Fatalf("%d native starts missing command records", len(starts))
+	}
+	if subagents {
+		if threads["call-child-exec"] == "" || threads["call-parent-exec"] == "" || threads["call-child-exec"] == threads["call-parent-exec"] {
+			t.Fatalf("parent/child command attribution missing: %#v", threads)
+		}
+	} else if threads["call-native-exec"] == "" {
+		t.Fatalf("native command attribution missing: %#v", threads)
+	}
+	t.Logf("native command timing verified: exec_count=%d", len(commands))
+	assertNativeLLMTiming(t, output, threads)
+}
+
+func assertNativeLLMTiming(t *testing.T, output string, commandThreads map[string]string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(output, "native-ssh", "harness", "telemetry", "llm-calls.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := make(map[string]int)
+	calls := 0
+	for _, line := range bytes.Split(bytes.TrimSpace(data), []byte{'\n'}) {
+		var call struct {
+			CallID   string     `json:"call_id"`
+			ThreadID string     `json:"thread_id"`
+			Started  time.Time  `json:"started_at"`
+			Ended    *time.Time `json:"ended_at"`
+			Duration *int64     `json:"duration_ms"`
+			Status   string     `json:"status"`
+		}
+		if json.Unmarshal(line, &call) != nil || call.CallID == "" || call.ThreadID == "" || call.Started.IsZero() {
+			t.Fatalf("invalid native inference record: %s", line)
+		}
+		calls++
+		if call.Status == "completed" {
+			if call.Ended == nil || call.Duration == nil || call.Ended.Before(call.Started) || call.Ended.Sub(call.Started).Milliseconds() != *call.Duration {
+				t.Fatalf("invalid inference timing: %s", line)
+			}
+			completed[call.ThreadID]++
+		}
+	}
+	if calls == 0 {
+		t.Fatal("native inference telemetry is empty")
+	}
+	for _, thread := range commandThreads {
+		if thread != "" && completed[thread] == 0 {
+			t.Fatalf("command thread %s has no completed inference", thread)
+		}
+	}
+	t.Logf("native inference timing verified: call_count=%d thread_count=%d", calls, len(completed))
+	trace, err := os.ReadFile(filepath.Join(output, "native-ssh", "harness", "telemetry", "native-trace.jsonl"))
+	if err != nil || !bytes.Contains(trace, []byte(`"type":"inference_started"`)) || !bytes.Contains(trace, []byte(`"type":"inference_completed"`)) {
+		t.Fatalf("native inference lifecycle evidence missing: %v", err)
 	}
 }
 

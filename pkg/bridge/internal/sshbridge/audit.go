@@ -23,6 +23,12 @@ const (
 // ToolCallRecord is the existing JSONL schema shared by the three SSH bridges.
 // OpenClaw alone supplies WorkspaceHome and Environment; both remain optional.
 type ToolCallRecord struct {
+	StartedAt      string   `json:"started_at,omitempty"`
+	FinishedAt     string   `json:"finished_at,omitempty"`
+	RequestID      string   `json:"request_id,omitempty"`
+	ProcessID      string   `json:"process_id,omitempty"`
+	ThreadID       string   `json:"thread_id,omitempty"`
+	ToolCallID     string   `json:"tool_call_id,omitempty"`
 	Sequence       uint64   `json:"sequence"`
 	Timestamp      string   `json:"timestamp"`
 	ContainerID    string   `json:"container_id"`

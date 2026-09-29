@@ -313,7 +313,11 @@ func (session *bridgeSession) execute(ctx context.Context, channel ssh.Channel, 
 		return 255
 	}
 	nonce := hex.EncodeToString(nonceBytes[:])
-	stdin := sshbridge.NewRecordedInput("Codex", channel)
+	observer := newRPCAudit(func(record sshbridge.ToolCallRecord) {
+		record.ContainerID, record.ContainerName = session.sandbox.ContainerID(), session.sandbox.ContainerName()
+		session.writeRecord(record, sshbridge.RawRecord{RequestType: record.RequestType, Status: record.Status})
+	}, session.audit.Latch)
+	stdin := sshbridge.NewRecordedInput("Codex", rpcAuditReader{reader: channel, audit: observer})
 	stdout := &sshbridge.ByteCounter{Writer: disconnectedWriter{channel}}
 	stderr := &sshbridge.ByteCounter{Writer: disconnectedWriter{channel.Stderr()}}
 	proof := &executorProofWriter{writer: stderr, marker: []byte("\x1eARIES_CODEX_REAPED_" + nonce + "\x1f")}
@@ -340,9 +344,10 @@ func (session *bridgeSession) execute(ctx context.Context, channel ssh.Channel, 
 		}
 	}()
 	session.executorAttempted = true
-	result, err := session.sandbox.ExecSupervisedStream(execCtx, command, io.MultiReader(strings.NewReader(nonce+"\n"), stdin), stdout, proof)
+	result, err := session.sandbox.ExecSupervisedStream(execCtx, command, io.MultiReader(strings.NewReader(nonce+"\n"), stdin), rpcAuditWriter{writer: stdout, audit: observer}, proof)
 	close(done)
 	<-watchDone
+	observer.finish(ctx.Err() != nil)
 	if err == nil {
 		err = proof.finish()
 	}

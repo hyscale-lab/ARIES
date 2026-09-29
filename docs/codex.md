@@ -99,11 +99,69 @@ excluded from both parent and child task commands.
 
 ## Evidence and validation
 
-Private harness artifacts include `config.toml`, `environments.toml`,
-`trajectory.jsonl`, `stderr.log`, and `container.log`. Bridge artifacts
-contain replayable native RPC inputs and must remain private. Revocation
-removes the task-side binaries, the host SSH identity, and the staged helper;
-the public known-hosts entry may remain as evidence.
+Private harness artifacts include `config.toml` and `environments.toml`,
+together with these run outputs:
+
+| Artifact | Meaning |
+| --- | --- |
+| `trajectory.jsonl` | Native `codex exec --json` stdout, unchanged after credential redaction. |
+| `stderr.log` | Credential-redacted native stderr. |
+| `agent-result.json` | Final assistant `response` and optional `error`, matching the corresponding OpenClaw output fields. |
+| `session-outcome.json` | Harness `status`, `end_reason`, `exit_code`, `started_at`, `ended_at`, and `duration_ms`, matching Hermes's terminal outcome fields. |
+| `telemetry.index.json` | Relative paths to the retained telemetry files. |
+| `telemetry/events.jsonl` | Native JSON events wrapped with an ordered `sequence` and host-receipt `timestamp`. |
+| `telemetry/native-trace.jsonl` | Native trace timestamps and selected structural metadata, excluding payload bodies, source, and arguments. |
+| `telemetry/llm-calls.jsonl` | Logical inference intervals derived from the pinned CLI's native trace. |
+
+The event recorder writes each complete stdout event as it arrives. Its
+host-receipt timestamp describes observation by ARIES, not the time of the
+underlying model or tool action. JSON string values and keys are decoded
+before credential redaction, including escaped credentials. Malformed,
+oversized, or truncated event streams produce an artifact-collection error;
+they are not converted into successful completion events. The terminal
+outcome separately distinguishes completion, nonzero exit, execution error,
+cancellation, and deadline expiry. Harness outcome remains independent of
+benchmark evaluation.
+
+LLM intervals use the native trace's UTC event timestamps for logical
+inference operations, observed after native payload serialization. These
+intervals can include retries and streaming; they are not per-HTTP-attempt
+measurements and do not provide time to first token. Parent and child thread
+identity is retained where the native trace supplies it. Inference statuses
+are `completed`, `failed`, `cancelled`, or `incomplete`. Missing terminal
+observations remain incomplete without an invented `ended_at` or
+`duration_ms`. Native stdout and normalized telemetry remain separate
+artifacts; trace request/response payload bodies are not exported.
+
+Native tracing still writes request/response payload files transiently inside
+the harness container. Repeated long contexts can make those files large;
+metadata-only export does not eliminate this temporary disk overhead. Only
+`trace.jsonl` is collected and reduced to the documented telemetry fields.
+Normal harness removal deletes the transient payload files with the container.
+On an interrupted run, bundle discovery is bounded to two seconds; the
+harness then verifies ownership and confirms the container has stopped before
+copying the trace. The normal Stop gate still confirms removal before evaluation.
+
+`bridge/tool-calls.jsonl` records each observed native `process/start` through
+its exit notification, even when hundreds of commands share one SSH executor
+session. Process records retain `thread_id`, `tool_call_id`, `process_id`,
+`request_id`, argv, workdir, output byte counts, exit status, `started_at`,
+`finished_at`, and `duration_ms`. These are host-side bridge observation
+times, not task-kernel process timestamps. `timestamp` is the audit enqueue
+time; `process_id` is a native logical identifier, not an operating-system
+PID. A confirmed exit has status `completed`, including nonzero exits; a
+rejected start has status `start_failed`. A missing exit notification leaves
+status `incomplete` or `canceled`, exit code -1, and no `finished_at`;
+`duration_ms` then ends at the last observation of the stream. The outer
+executor session remains a separate record; filter by
+`operation_class: "exec"` when counting native process executions. Native agent coordination
+or filesystem tools are not automatically equivalent to a process execution.
+
+Bridge artifacts also contain replayable native RPC inputs and must remain
+private. Revocation removes the task-side binaries, the host SSH identity,
+and the staged helper; the public known-hosts entry may remain as evidence.
+Timing capture applies to newly started runs; prior runs cannot recover
+missing per-call timestamps from their final stdout or executor-session log.
 
 With the pinned CLI installed, `make integration` includes a real Codex
 container, a deterministic local Responses endpoint, and the actual native

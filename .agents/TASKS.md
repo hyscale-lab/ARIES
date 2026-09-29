@@ -1,5 +1,51 @@
 # ARIES Tasks
 
+## Codex tool and inference timing parity
+
+Completed on `feat/codex-roadmapbench`, requested after inspection of the
+running Qwen3.6-35B-A3B-FP8 RoadmapBench experiment:
+
+1. Observe native executor RPC frames without changing forwarding or cleanup;
+   retain one correlated process timing record per command alongside the
+   existing executor-session evidence.
+2. Timestamp native stdout events at host receipt and derive logical LLM
+   inference intervals from the pinned CLI's native trace. Preserve thread
+   identity and incomplete observations; do not claim HTTP-attempt or TTFT
+   measurements from logical inference spans.
+3. Retain native trajectory bytes after redaction and align final response,
+   terminal outcome, and relative telemetry index artifacts with the existing
+   OpenClaw and Hermes output conventions.
+4. Prove parent/child timing, cancellation, credential redaction, and positive
+   cleanup with focused regressions and real deterministic integration; run
+   all five release targets before completion. Preserve the running experiment
+   and its original evidence while validating the new implementation.
+
+Implementation and validation:
+
+- Added per-process RPC timing with parent/child IDs, exact argv, confirmed
+  exit times, trailing-output accounting, and explicit incomplete records.
+  The original executor-session evidence and fail-closed audit gate remain.
+- Added streaming host-receipt event timestamps and native logical inference
+  spans. Trace collection exports bounded structural metadata, not repeated
+  request/response payload bodies. Interrupted runs resolve the trace path
+  within two seconds, confirm the owned container stopped, then copy evidence;
+  normal Stop still confirms removal before evaluation.
+- Added OpenClaw-compatible response/error and Hermes-compatible terminal
+  outcome/index artifacts, with decoded final-response credential redaction.
+  Focused regressions cover fragmented streams, interleaved calls, privacy,
+  cancellation, partial traces, byte limits, and write-error draining.
+- All five release targets passed on `boxi@10.96.190.63`, Go 1.26.5, with the
+  actual pinned Codex 0.157.1 and deterministic model fixture. Native parent/
+  child timing, nonroot execution, cancellation/reaping, and RoadmapBench
+  partial/full evaluation passed. The first full integration attempt lacked
+  the isolated Terminal-Bench fixture; after copying the existing pinned
+  fixture, the complete integration target passed in 222.26 seconds.
+- Post-validation SDK inspection found no other ARIES containers or networks;
+  only the ongoing first-20 batch's two containers and one network remained.
+  Its frozen source and existing artifacts were not changed. New timing
+  collectors apply to new runs and cannot reconstruct old missing timestamps.
+
+
 ## Codex + RoadmapBench integration
 
 Active plan on `feat/codex-roadmapbench`, based on the completed adapter:

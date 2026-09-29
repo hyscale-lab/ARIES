@@ -53,6 +53,7 @@ type Options struct {
 type dockerClient interface {
 	ContainerCreate(context.Context, client.ContainerCreateOptions) (client.ContainerCreateResult, error)
 	CopyToContainer(context.Context, string, client.CopyToContainerOptions) (client.CopyToContainerResult, error)
+	CopyFromContainer(context.Context, string, client.CopyFromContainerOptions) (client.CopyFromContainerResult, error)
 	ContainerStart(context.Context, string, client.ContainerStartOptions) (client.ContainerStartResult, error)
 	ContainerInspect(context.Context, string, client.ContainerInspectOptions) (client.ContainerInspectResult, error)
 	ExecCreate(context.Context, string, client.ExecCreateOptions) (client.ExecCreateResult, error)
@@ -216,7 +217,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		}
 		return primary
 	}
-	containerConfig := &container.Config{Image: manager.image, Env: []string{"HOME=" + codexHome, "CODEX_HOME=" + codexHome, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}, Entrypoint: []string{"/bin/sh"}, Cmd: []string{"-c", "exec sleep infinity"}, Labels: map[string]string{"aries.managed": "true", "aries.kind": "codex-harness", "aries.component": "harness", "aries.run": active.runID, "aries.task": active.taskID, "aries.attempt": id}}
+	containerConfig := &container.Config{Image: manager.image, Env: []string{"HOME=" + codexHome, "CODEX_HOME=" + codexHome, "CODEX_ROLLOUT_TRACE_ROOT=" + rolloutTraceContainerPath, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}, Entrypoint: []string{"/bin/sh"}, Cmd: []string{"-c", "exec sleep infinity"}, Labels: map[string]string{"aries.managed": "true", "aries.kind": "codex-harness", "aries.component": "harness", "aries.run": active.runID, "aries.task": active.taskID, "aries.attempt": id}}
 	metadata, _ := json.Marshal(containerConfig)
 	// Check instructions before TOML escaping as well: quoting a credential
 	// containing a backslash or quote must not bypass the artifact boundary.
@@ -299,28 +300,35 @@ func (manager *Manager) Run(ctx context.Context, instruction string) (core.Harne
 	active.logPaths = slices.Clone(active.logPaths)
 	manager.mu.Unlock()
 	defer clear(active.apiKey)
+	recorder, err := newEventRecorder(active.artifactDir, active.apiKey)
+	if err != nil {
+		return core.HarnessResult{Status: core.StatusFailed, Error: err.Error(), LogPaths: active.logPaths}, err
+	}
 	runCtx, cancel := context.WithTimeout(ctx, active.agentTimeout)
-	output, runErr := manager.execAttached(runCtx, active.containerID, []string{agentWrapperPath, "exec", "--json", "--ephemeral", "--skip-git-repo-check", "--ignore-rules", "--color", "never", "--cd", active.endpoint.Workdir, "--", instruction}, active.endpoint.Workdir)
+	output, runErr := manager.execAttachedObserved(runCtx, active.containerID, []string{agentWrapperPath, "exec", "--json", "--ephemeral", "--skip-git-repo-check", "--ignore-rules", "--color", "never", "--cd", active.endpoint.Workdir, "--", instruction}, active.endpoint.Workdir, recorder)
 	cancel()
+	runErr = errors.Join(runErr, recorder.finish())
+	telemetryPaths := []string{recorder.path}
+	// Collection has a fresh bounded context so cancellation retains partial evidence.
+	traceCtx, traceCancel := context.WithTimeout(context.WithoutCancel(ctx), manager.cleanupTimeout)
+	tracePaths, traceErr := manager.collectInferenceTrace(traceCtx, &active, runErr != nil)
+	traceCancel()
+	telemetryPaths = append(telemetryPaths, tracePaths...)
+	active.logPaths = append(active.logPaths, telemetryPaths...)
+	runErr = errors.Join(runErr, traceErr)
 	stdout, stderr := redact(output.stdout, active.apiKey), redact(output.stderr, active.apiKey)
 	if runErr == nil && output.exitCode != 0 {
 		runErr = fmt.Errorf("Codex exec exited with status %d", output.exitCode)
 	}
 	final, trajectoryErr := finalResponse(stdout)
+	final = string(redact([]byte(final), active.apiKey))
 	if runErr == nil {
 		runErr = trajectoryErr
 	}
-	for _, artifact := range []struct {
-		name string
-		data []byte
-	}{{"trajectory.jsonl", stdout}, {"stderr.log", stderr}} {
-		filename := filepath.Join(active.artifactDir, artifact.name)
-		if err := writeArtifact(filename, artifact.data); err != nil {
-			runErr = errors.Join(runErr, fmt.Errorf("retain Codex output: %w", err))
-		} else {
-			active.logPaths = append(active.logPaths, filename)
-		}
-	}
+	runErr = redactError(runErr, active.apiKey)
+	paths, artifactErr := writeRunArtifacts(active.artifactDir, started, output.exitCode, runErr, final, stdout, stderr, telemetryPaths)
+	active.logPaths = append(active.logPaths, paths...)
+	runErr = errors.Join(runErr, artifactErr)
 	result := core.HarnessResult{Status: core.StatusSucceeded, FinalResponse: final, Duration: time.Since(started), LogPaths: active.logPaths}
 	if runErr != nil {
 		runErr = redactError(runErr, active.apiKey)
@@ -330,6 +338,46 @@ func (manager *Manager) Run(ctx context.Context, instruction string) (core.Harne
 		}
 	}
 	return result, runErr
+}
+
+// A root invocation creates exactly one trace bundle; children share its writer.
+// Copy only its event file: payload files repeat prompts and can grow quadratically.
+func (manager *Manager) collectInferenceTrace(ctx context.Context, active *session, quiesce bool) ([]string, error) {
+	// Resolve the bundle with a short bound before stopping a canceled CLI. Docker
+	// can copy from stopped containers, so the potentially slower transfer happens
+	// only after the harness has stopped producing inference and tool requests.
+	locateCtx, locateCancel := context.WithTimeout(ctx, 2*time.Second)
+	output, err := manager.execAttached(locateCtx, active.containerID, []string{"/usr/bin/find", rolloutTraceContainerPath, "-mindepth", "2", "-maxdepth", "2", "-type", "f", "-name", "trace.jsonl", "-print"}, "/")
+	locateCancel()
+	if quiesce {
+		inspection, inspectErr := manager.client.ContainerInspect(ctx, active.containerID, client.ContainerInspectOptions{})
+		if inspectErr != nil {
+			return nil, fmt.Errorf("inspect Codex before trace snapshot: %w", inspectErr)
+		}
+		if !ownedContainer(inspection.Container, active) {
+			return nil, errors.New("refuse to stop unowned Codex trace producer")
+		}
+		if inspection.Container.State == nil || inspection.Container.State.Running {
+			_, killErr := manager.client.ContainerKill(ctx, active.containerID, client.ContainerKillOptions{Signal: "KILL"})
+			inspection, inspectErr = manager.client.ContainerInspect(ctx, active.containerID, client.ContainerInspectOptions{})
+			if inspectErr != nil || inspection.Container.State == nil || inspection.Container.State.Running {
+				return nil, errors.Join(killErr, inspectErr, errors.New("Codex trace producer is not confirmed stopped"))
+			}
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("locate Codex inference trace: %w", err)
+	}
+	names := strings.Split(strings.TrimSpace(string(output.stdout)), "\n")
+	if output.exitCode != 0 || len(names) != 1 || !strings.HasPrefix(names[0], rolloutTraceContainerPath+"/") || filepath.Base(names[0]) != "trace.jsonl" || filepath.Clean(names[0]) != names[0] || filepath.Dir(filepath.Dir(names[0])) != rolloutTraceContainerPath {
+		return nil, errors.New("Codex did not produce exactly one native inference trace")
+	}
+	archive, err := manager.client.CopyFromContainer(ctx, active.containerID, client.CopyFromContainerOptions{SourcePath: names[0]})
+	if err != nil {
+		return nil, fmt.Errorf("copy Codex inference trace: %w", err)
+	}
+	defer archive.Content.Close()
+	return collectNativeTrace(archive.Content, active.artifactDir, active.apiKey)
 }
 
 func (manager *Manager) Stop(ctx context.Context) error {
