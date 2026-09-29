@@ -124,8 +124,10 @@ func TestFileCapabilityAgainstARealContainer(t *testing.T) {
 		t.Fatal("the symlink was replaced by a file")
 	}
 
-	// More than the 16 MiB exec output cap streams through the archive API.
-	large := bytes.Repeat([]byte("0123456789abcdef"), 1<<20+7)
+	// 70 MiB streams both ways through the archive API: above the 16 MiB exec
+	// output cap, and above the bridge's 64 MiB gRPC message cap, which file
+	// content never meets because it crosses the bridge in chunks.
+	large := bytes.Repeat([]byte("0123456789abcdef"), 70<<20/16+7)
 	write("/work/large.bin", large)
 	if got := read("/work/large.bin"); !bytes.Equal(got, large) {
 		t.Fatalf("large file round trip: %d bytes, want %d", len(got), len(large))

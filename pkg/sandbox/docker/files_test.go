@@ -189,3 +189,22 @@ func TestWriteFileCleansUpAFailedCopy(t *testing.T) {
 		t.Fatalf("cleanup = %q", cleanup)
 	}
 }
+
+// Content that runs past its declared size is a malformed body: the archive
+// fails, the temporary is removed, and nothing is renamed into place.
+func TestWriteFileRefusesContentLongerThanItsSize(t *testing.T) {
+	fake := &fakeClient{}
+	sandbox := startSandbox(t, fake)
+	defer sandbox.stop(context.Background())
+	fake.stats = map[string]container.PathStat{"/": directory(0o755), "/work": directory(0o755)}
+	fake.execCommands = nil
+
+	if _, err := sandbox.WriteFile(context.Background(), "/work/f", strings.NewReader("longer"), 3); err == nil {
+		t.Fatal("content longer than its size was written")
+	}
+	for _, cmd := range fake.execCommands {
+		if commandArgs(cmd)[0] != "/bin/rm" {
+			t.Fatalf("exec %q ran; only the cleanup may", cmd)
+		}
+	}
+}

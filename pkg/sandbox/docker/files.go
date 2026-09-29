@@ -160,6 +160,15 @@ func (s *Sandbox) WriteFile(ctx context.Context, name string, content io.Reader,
 				writeErr = io.ErrUnexpectedEOF
 			}
 		}
+		// The content must end exactly at size. Reading on also makes a
+		// streamed caller finish before anything is renamed into place.
+		if writeErr == nil {
+			if _, endErr := io.ReadFull(content, make([]byte, 1)); endErr == nil {
+				writeErr = errors.New("content is longer than its size")
+			} else if !errors.Is(endErr, io.EOF) {
+				writeErr = endErr
+			}
+		}
 		if closeErr := writer.Close(); writeErr == nil {
 			writeErr = closeErr
 		}
