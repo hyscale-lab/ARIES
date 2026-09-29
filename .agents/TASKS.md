@@ -24,19 +24,42 @@ Implementation and current validation:
   slots, and an ultra developer prompt requiring early substantive delegation,
   disjoint edit ownership, inherited model/effort, integration, and real tests.
 - Added a real Runner/Codex/RoadmapBench Docker regression with deterministic
-  Responses traffic. It exercises parent/child configuration inheritance,
+  Responses traffic. It proves parent/child configuration inheritance,
   private verifier separation, partial/full rewards, and positive cleanup.
-  It compiles and passes vet; execution is skipped locally because the pinned
-  Codex binary and Docker daemon are unavailable here.
-- Local `make build`, `make test`, `make test-race`, and `make lint` pass.
-  Read-only remote checks confirm Go 1.26.5, Codex 0.157.1, Docker, Git LFS,
-  and the existing BF16 Qwen3.8-27B service with a 131072-token context.
-- Remote validation and the real 20-task run have not started. Automatic
-  approval review rejected the proposed source snapshot transfer, requiring
-  payload- and destination-specific authorization beyond the user's remote
-  validation instruction. The exact source-transfer question is pending;
-  no source was transferred, no inference was called, and existing remote
-  worktrees, processes, and model services remain untouched.
+- After explicit source-transfer authorization, an isolated snapshot of
+  commit `7254633` passed all five release targets on `boxi@10.96.190.63`
+  with Go 1.26.5 and Codex 0.157.1. The focused native Codex/RoadmapBench
+  regression, all 115 pinned task loads, and the Docker evaluator fixture also
+  passed. SDK inspection after validation found no ARIES container or network.
+  Local build, unit tests, race tests, and lint also pass.
+- The first real task (`dsl-2.1.0-roadmap`) reached its published 7200-second
+  agent deadline, then scored 0; harness stop, bridge revocation, and cleanup
+  all succeeded. The model served 498 HTTP-200 Responses requests and
+  generated 400092 tokens across the parent, children, and compactions.
+  Cumulative scheduler queue time was 0.0102 seconds with no preemptions or
+  reported generation errors. The parent issued 344 commands; the three
+  actual native children issued 53, 59, and 23 commands. Four compactions
+  preceded the deadline. The final candidate had Rust E0277 at
+  `diesel/src/query_builder/ast_pass.rs:219`, so all verifier phases failed to
+  compile. These observations do not establish that inference is optimal,
+  or that any one cause accounts for the entire two-hour budget.
+- Investigation reproduced two Codex integration defects in a real native
+  parent/child regression: `inherit = "core"` dropped image-specific toolchain
+  variables, and default login shells replaced the image's PATH. The minimal
+  fix inherits the remote task environment, continues excluding the model
+  credential, and disables login shells. The regression fails before each
+  corresponding fix and passes afterward; the full RoadmapBench native
+  partial/full scoring regression also passes. All five release targets pass
+  after the fix; SDK inspection confirms no owned test container or network
+  remains. The local Codex unit tests also pass. No model or benchmark budget
+  was changed.
+- The remaining 19 tasks have not entered inference. Their image prewarm hit
+  a Docker Hub connection reset for the large `fal-4.0.0` image. A retry was
+  stopped during preparation to repair the environment defects before task
+  admission. The large image has since downloaded successfully; remaining
+  images are being prepared for a separately identified corrected first20
+  run. The first task's original artifacts remain intact. Private RPC evidence
+  stays on the remote host; only aggregate diagnostics are retained locally.
 
 ## RoadmapBench benchmark adapter
 

@@ -105,7 +105,13 @@ func runNativeSSHScenario(t *testing.T, cancelTool bool, taskUser string, subage
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sandboxes.Close() })
-	live, err := sandboxes.Start(ctx, core.SandboxRequest{RunID: runID, TaskID: "native-ssh", Environment: core.Environment{Image: integrationImage, Workdir: "/app", MemoryMB: 1024, AllowNetwork: true, ExecUser: taskUser}})
+	live, err := sandboxes.Start(ctx, core.SandboxRequest{RunID: runID, TaskID: "native-ssh", Environment: core.Environment{
+		Image: integrationImage, Workdir: "/app", MemoryMB: 1024, AllowNetwork: true, ExecUser: taskUser,
+		Env: map[string]string{
+			"RUSTUP_HOME": "/opt/task-rustup", "CARGO_HOME": "/opt/task-cargo", "ARIES_TASK_VALUE": "task-only",
+			"PATH": "/opt/task-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		},
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,6 +127,12 @@ func runNativeSSHScenario(t *testing.T, cancelTool bool, taskUser string, subage
 		prepared, err := sandbox.Exec(ctx, core.Command{Path: "/bin/chmod", Args: []string{"0777", "/app"}, User: "0:0"})
 		if err != nil || prepared.ExitCode != 0 {
 			t.Fatalf("prepare nonroot task workspace: %#v, %v", prepared, err)
+		}
+	}
+	if subagents {
+		prepared, err := sandbox.Exec(ctx, core.Command{Path: "/bin/sh", Args: []string{"-c", `mkdir -p /opt/task-bin; printf '#!/bin/sh\nprintf TASK_TOOL_OK\n' > /opt/task-bin/task-tool; chmod 0755 /opt/task-bin/task-tool`}})
+		if err != nil || prepared.ExitCode != 0 {
+			t.Fatalf("prepare task toolchain: %#v, %v", prepared, err)
 		}
 	}
 	if cancelTool {
@@ -155,6 +167,9 @@ func runNativeSSHScenario(t *testing.T, cancelTool bool, taskUser string, subage
 		t.Fatal(err)
 	}
 	model := &responsesFixture{cancelTool: cancelTool, taskUser: taskUser, subagents: subagents}
+	if subagents {
+		model.command = `test "${RUSTUP_HOME-}" = /opt/task-rustup; test "${CARGO_HOME-}" = /opt/task-cargo; test "${ARIES_TASK_VALUE-}" = task-only; test "$(task-tool)" = TASK_TOOL_OK`
+	}
 	server := &http.Server{Handler: model, ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() { _ = server.Close() })
@@ -563,7 +578,7 @@ func (fixture *responsesFixture) subagentResponse(request *http.Request, content
 				command += fixture.command + "; "
 			}
 			command += "printf REMOTE_CHILD_OK"
-			return nativeFunctionCall("call-child-exec", "", "exec_command", map[string]any{"cmd": command, "workdir": "/app", "login": false, "yield_time_ms": 10000}), nil
+			return nativeFunctionCall("call-child-exec", "", "exec_command", map[string]any{"cmd": command, "workdir": "/app", "yield_time_ms": 10000}), nil
 		case 2:
 			if !strings.Contains(body.functionOutput("call-child-exec"), "REMOTE_CHILD_OK") {
 				return nil, errors.New("native child did not execute in the task sandbox")

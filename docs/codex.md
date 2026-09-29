@@ -91,6 +91,12 @@ Linux architecture and provide `/bin/sh`, `mkdir`, `chmod`, and `rm` for bridge
 staging and cleanup. Native command execution also needs the requested shell.
 The bridge stages about 300 MiB of binaries per active task.
 
+Native commands inherit the task image's environment, including toolchain
+variables such as `CARGO_HOME` and `RUSTUP_HOME`. ARIES disables login shells
+so shell startup does not replace the image's `PATH`; omit `login` or set it
+to false in native tool calls. The model-key variable remains explicitly
+excluded from both parent and child task commands.
+
 ## Evidence and validation
 
 Private harness artifacts include `config.toml`, `environments.toml`,

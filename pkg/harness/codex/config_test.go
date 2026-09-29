@@ -36,11 +36,12 @@ func TestConfigUsesResponsesAndRemoteEnvironmentOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	var decoded struct {
-		Model     string `toml:"model"`
-		Provider  string `toml:"model_provider"`
-		Context   int    `toml:"model_context_window"`
-		WebSearch string `toml:"web_search"`
-		Shell     struct {
+		Model      string `toml:"model"`
+		Provider   string `toml:"model_provider"`
+		Context    int    `toml:"model_context_window"`
+		WebSearch  string `toml:"web_search"`
+		LoginShell *bool  `toml:"allow_login_shell"`
+		Shell      struct {
 			Inherit string   `toml:"inherit"`
 			Exclude []string `toml:"exclude"`
 		} `toml:"shell_environment_policy"`
@@ -53,8 +54,11 @@ func TestConfigUsesResponsesAndRemoteEnvironmentOnly(t *testing.T) {
 	if _, err := toml.Decode(string(config), &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if decoded.Provider != "aries" || decoded.Model != model.Model || decoded.Context != model.ContextLength || decoded.Providers["aries"].Wire != "responses" || decoded.Providers["aries"].Key != model.APIKeyEnv || decoded.Providers["aries"].URL != "http://model:8000/v1" || decoded.Shell.Inherit != "core" || len(decoded.Shell.Exclude) != 1 || decoded.Shell.Exclude[0] != model.APIKeyEnv || decoded.WebSearch != "disabled" {
+	if decoded.Provider != "aries" || decoded.Model != model.Model || decoded.Context != model.ContextLength || decoded.Providers["aries"].Wire != "responses" || decoded.Providers["aries"].Key != model.APIKeyEnv || decoded.Providers["aries"].URL != "http://model:8000/v1" || decoded.Shell.Inherit != "all" || len(decoded.Shell.Exclude) != 1 || decoded.Shell.Exclude[0] != model.APIKeyEnv || decoded.WebSearch != "disabled" {
 		t.Fatalf("unexpected configuration: %s", config)
+	}
+	if decoded.LoginShell == nil || *decoded.LoginShell {
+		t.Fatal("login shells may replace the task image's PATH")
 	}
 	endpoint := testEndpoint(t)
 	environments, err := renderEnvironments(endpoint)

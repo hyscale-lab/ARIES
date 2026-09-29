@@ -53,7 +53,7 @@ func renderConfig(model core.ModelConfig, reasoningEffort, developerInstructions
 		return nil, errors.New("Codex does not support profile max_tokens or temperature")
 	}
 	var output bytes.Buffer
-	fmt.Fprintf(&output, "model = %s\nmodel_provider = \"aries\"\napproval_policy = \"never\"\nsandbox_mode = \"danger-full-access\"\nweb_search = \"disabled\"\n", tomlString(model.Model))
+	fmt.Fprintf(&output, "model = %s\nmodel_provider = \"aries\"\napproval_policy = \"never\"\nsandbox_mode = \"danger-full-access\"\nweb_search = \"disabled\"\nallow_login_shell = false\n", tomlString(model.Model))
 	if model.ContextLength > 0 {
 		fmt.Fprintf(&output, "model_context_window = %d\n", model.ContextLength)
 	}
@@ -72,8 +72,9 @@ func renderConfig(model core.ModelConfig, reasoningEffort, developerInstructions
 	}
 	// Native exec-server applies this policy to its own remote environment;
 	// Codex removes unchanged local environment values before sending the
-	// request. Preserve the remote HOME/PATH/locale and exclude the model key.
-	fmt.Fprintf(&output, "\n[shell_environment_policy]\ninherit = \"core\"\nexclude = [%s]\n", tomlString(model.APIKeyEnv))
+	// request. Preserve the task image's toolchain environment (for example,
+	// CARGO_HOME and RUSTUP_HOME), while excluding the harness-only model key.
+	fmt.Fprintf(&output, "\n[shell_environment_policy]\ninherit = \"all\"\nexclude = [%s]\n", tomlString(model.APIKeyEnv))
 	fmt.Fprintf(&output, "\n[model_providers.aries]\nname = \"ARIES\"\nbase_url = %s\nwire_api = \"responses\"\nenv_key = %s\nrequires_openai_auth = false\n", tomlString(parsed.String()), tomlString(model.APIKeyEnv))
 	return output.Bytes(), nil
 }

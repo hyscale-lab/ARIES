@@ -100,8 +100,10 @@ known verifier/oracle staging; evaluation rechecks the private source checkout,
 resets known stale verifier outputs, injects only tests after both gates, and
 preserves the official fractional reward. Only reward 1 resolves a task.
 Codex reasoning effort and developer instructions remain
-native harness settings. Its subagents inherit the parent model, effort, and
-remote environment without requiring another bridge or SSH session. DRB
+native harness settings. Native tools retain the task image environment while
+excluding the model key; non-login shells preserve the image PATH. Subagents
+inherit the parent model, effort, and remote environment without requiring
+another bridge or SSH session. DRB
 allows task-local SearXNG and shell HTTP retrieval when dedicated web tools
 are unavailable; judge-disabled runs still collect reports after both gates.
 
