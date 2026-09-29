@@ -49,7 +49,7 @@ fresh()
 result = ops.write_file("/work/sub/a.txt", "one\ntwo\nthree")
 assert result.error is None, result
 assert open("/work/sub/a.txt", "rb").read() == b"one\ntwo\nthree"
-assert ["file", "write", "/work/sub/a.txt"] in client_calls(), client_calls()
+assert ["file", "write", "--size", "13", "/work/sub/a.txt"] in client_calls(), client_calls()
 assert not any("mktemp" in command or "cat >" in command for command in executed), executed
 
 # A BOM and CRLF line endings survive a rewrite, decided from typed probes.

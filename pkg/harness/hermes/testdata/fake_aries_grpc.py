@@ -32,6 +32,9 @@ if operation == "stat":
     sys.exit(0)
 if operation == "write":
     data = sys.stdin.buffer.read()
+    if len(data) != int(flags["--size"]):
+        print("write stream does not match its header", file=sys.stderr)
+        sys.exit(3)
     created = not os.path.exists(path)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "wb") as target:

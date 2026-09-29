@@ -62,11 +62,8 @@ def register(ctx):
         def _stat(self, path):
             return json.loads(self._file("stat", path).stdout)
 
-        def _read_all(self, path, size):
-            content = self._file("read", path).stdout
-            if len(content) < size:
-                raise RuntimeError(f"{path} is larger than the bridge returns in one read")
-            return content
+        def _read_all(self, path):
+            return self._file("read", path).stdout
 
         def _is_binary(self, path, sample):
             return os.path.splitext(path)[1].lower() in BINARY_EXTENSIONS or self._is_likely_binary_bytes(sample)
@@ -85,8 +82,8 @@ def register(ctx):
             return _detect_line_ending(head.decode("utf-8", "replace")) if head else None
 
         def _atomic_write(self, path, content):
-            proc = self._file("write", self._absolute(path), data=content.encode("utf-8", "surrogateescape"),
-                              accept=range(256))
+            data = content.encode("utf-8", "surrogateescape")
+            proc = self._file("write", "--size", str(len(data)), self._absolute(path), data=data, accept=range(256))
             return ExecuteResult(stdout=proc.stderr.decode("utf-8", "replace").strip(), exit_code=proc.returncode)
 
         def read_file_bytes(self, path, max_bytes=None):
@@ -99,7 +96,7 @@ def register(ctx):
             if max_bytes is not None and stat["size"] > max_bytes:
                 return ReadResult(file_size=stat["size"],
                                   error=f"File is too large ({stat['size']:,} bytes, limit is {max_bytes:,})")
-            content = self._read_all(path, stat["size"])
+            content = self._read_all(path)
             return ReadResult(base64_content=base64.b64encode(content).decode(), file_size=stat["size"], is_binary=True)
 
         def read_file_raw(self, path):
@@ -114,7 +111,7 @@ def register(ctx):
             sample = self._sample_file_bytes(path)
             if self._is_binary(path, sample):
                 return ReadResult(is_binary=True, file_size=stat["size"], error=describe_binary_file(sample, stat["size"]))
-            text, _ = _strip_bom(self._read_all(path, stat["size"]).decode("utf-8", "replace"))
+            text, _ = _strip_bom(self._read_all(path).decode("utf-8", "replace"))
             return ReadResult(content=text, file_size=stat["size"])
 
         def read_file(self, path, offset=1, limit=2000):
