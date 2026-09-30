@@ -260,6 +260,9 @@ func (manager *Manager) open(ctx context.Context, session *bridgeSession, gatewa
 	session.cancel = cancel
 	session.server = grpc.NewServer(
 		grpc.MaxRecvMsgSize(maxMessageBytes), grpc.MaxSendMsgSize(maxMessageBytes),
+		// Stop must not return while a handler can still write its record;
+		// see revoke.
+		grpc.WaitForHandlers(true),
 		grpc.Creds(credentials.NewTLS(&tls.Config{
 			Certificates: []tls.Certificate{credentialMaterial.server},
 			ClientAuth:   tls.RequireAnyClientCert,
@@ -308,7 +311,15 @@ func (session *bridgeSession) revoke() {
 			session.cancel()
 		}
 		if session.server != nil {
-			session.server.Stop()
+			// Stop waits for every handler, so it runs counted in Wait:
+			// Finalize then waits for it under its own bounded context
+			// before sealing the audit. revoke always runs before that Wait,
+			// so this Add never races it.
+			session.Wait.Add(1)
+			go func() {
+				defer session.Wait.Done()
+				session.server.Stop()
+			}()
 		} else if session.listener != nil {
 			_ = session.listener.Close()
 		}
