@@ -350,9 +350,7 @@ func TestRevokedSessionRefusedAtTheGuard(t *testing.T) {
 	sandbox := &testSandbox{result: core.CommandResult{ExitCode: 0}}
 	manager, endpoint := startBridge(t, sandbox)
 
-	manager.mu.Lock()
-	session := manager.active
-	manager.mu.Unlock()
+	session := manager.slot.Active().(*bridgeSession)
 
 	if err := session.authorize(agentPayload); err != nil {
 		t.Fatalf("a live session refused a call: %v", err)

@@ -19,15 +19,14 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"io"
 	"net"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/bridge/hermesgrpc/sandboxv1"
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgekit"
 	"github.com/hyscale-lab/aries/pkg/bridge/internal/hermeswire"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/runner"
@@ -107,13 +106,10 @@ type Manager struct {
 	clientPath     string
 	outputLimit    int64
 	retainContent  bool
-	openAudit      func(string) (*auditFile, error)
+	// auditLimit bounds tool-calls.jsonl; tests lower it.
+	auditLimit int64
 
-	mu       sync.Mutex
-	active   *bridgeSession
-	stopping bool
-	stopDone chan struct{}
-	stopErr  error
+	slot bridgekit.Slot
 }
 
 // bridgeSandbox is the narrow local-sandbox capability this bridge requires,
@@ -127,31 +123,26 @@ type bridgeSandbox interface {
 	RunID() string
 	TaskID() string
 	Workdir() string
-	ExecStream(context.Context, core.Command, io.Reader, io.Writer, io.Writer) (core.CommandResult, error)
+	runner.StreamExecutor
 }
 
 type bridgeSession struct {
+	bridgekit.Session
 	sandbox      bridgeSandbox
 	listener     net.Listener
 	server       *grpc.Server
 	cancel       context.CancelFunc
-	artifactDir  string
 	clientSource string
 	identityFile string
 	trustedFile  string
 	toolLogPath  string
-	audit        *auditWriter
 	logger       *logrus.Logger
 	outputLimit  int64
 	// retainContent keeps file content in the audit; see Options.
 	retainContent bool
-	partialStart  bool
 
-	revoked       chan struct{}
-	revocationMu  sync.Mutex
-	revocationErr error
-	wait          sync.WaitGroup
-	revokeOnce    sync.Once
+	revoked    chan struct{}
+	revokeOnce sync.Once
 }
 
 var _ runner.ToolBridge = (*Manager)(nil)
@@ -165,7 +156,7 @@ func New(options Options) (*Manager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve Hermes gRPC output directory: %w", err)
 	}
-	if err := ensurePrivateDirectory(outputDir); err != nil {
+	if err := bridgekit.EnsurePrivateDirectory(outputDir); err != nil {
 		return nil, fmt.Errorf("prepare Hermes gRPC output directory: %w", err)
 	}
 	if options.CleanupTimeout <= 0 {
@@ -183,84 +174,87 @@ func New(options Options) (*Manager, error) {
 	return &Manager{
 		outputDir: outputDir, cleanupTimeout: options.CleanupTimeout,
 		logger: options.Logger, clientPath: options.ClientPath,
-		outputLimit: options.OutputLimit, retainContent: options.RetainContent, openAudit: openAuditFile,
+		outputLimit: options.OutputLimit, retainContent: options.RetainContent, auditLimit: maxToolLogBytes,
 	}, nil
 }
 
 func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core.ToolEndpoint, error) {
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	if manager.active != nil || manager.stopping {
-		return core.ToolEndpoint{}, errors.New("Hermes gRPC bridge is already active")
-	}
-	sandbox, ok := generic.(bridgeSandbox)
-	if !ok {
-		return core.ToolEndpoint{}, errors.New("Hermes gRPC bridge requires the local Docker sandbox capability")
-	}
-	gateway, err := sandbox.NetworkGateway(ctx)
+	var endpoint core.ToolEndpoint
+	err := manager.slot.Start(ctx, manager.cleanupTimeout, func() (bridgekit.Closer, error) {
+		sandbox, ok := generic.(bridgeSandbox)
+		if !ok {
+			return nil, errors.New("Hermes gRPC bridge requires the local Docker sandbox capability")
+		}
+		gateway, err := sandbox.NetworkGateway(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("resolve task network gateway: %w", err)
+		}
+		session := &bridgeSession{
+			sandbox: sandbox, revoked: make(chan struct{}),
+			logger: manager.logger, outputLimit: manager.outputLimit, retainContent: manager.retainContent,
+		}
+		session.ArtifactDir = filepath.Join(manager.outputDir, sandbox.TaskID(), "bridge")
+		if endpoint, err = manager.open(ctx, session, gateway); err != nil {
+			session.Partial = true
+			return session, err
+		}
+		return session, nil
+	})
 	if err != nil {
-		return core.ToolEndpoint{}, fmt.Errorf("resolve task network gateway: %w", err)
+		return core.ToolEndpoint{}, err
 	}
+	return endpoint, nil
+}
 
-	session := &bridgeSession{
-		sandbox: sandbox, revoked: make(chan struct{}),
-		logger: manager.logger, outputLimit: manager.outputLimit, retainContent: manager.retainContent,
-	}
-	session.artifactDir = filepath.Join(manager.outputDir, sandbox.TaskID(), "bridge")
+func (manager *Manager) Stop(ctx context.Context) error {
+	return manager.slot.Stop(ctx)
+}
 
-	// Start may fail after allocating task-local resources. Stop is idempotent,
-	// so every Start attempt must still be followed by a positive revocation
-	// confirmation; fail leaves the session recorded when its own cleanup fails
-	// so that Stop can retry.
-	fail := func(primary error) (core.ToolEndpoint, error) {
-		session.partialStart = true
-		session.revoke()
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), manager.cleanupTimeout)
-		defer cancel()
-		if waitErr := session.waitFor(cleanupCtx); waitErr != nil {
-			manager.active = session
-			return core.ToolEndpoint{}, errors.Join(primary, waitErr)
-		}
-		if cleanupErr := session.finalize(cleanupCtx); cleanupErr != nil {
-			manager.active = session
-			return core.ToolEndpoint{}, errors.Join(primary, cleanupErr)
-		}
-		return core.ToolEndpoint{}, primary
-	}
+// Close revokes the session and confirms it. Only the client identity is
+// removed; that is revocation. The server certificate is retained as evidence
+// of what the harness was told to trust, exactly as the SSH bridge retains its
+// known-hosts line.
+func (session *bridgeSession) Close(ctx context.Context) error {
+	session.revoke()
+	return session.Finish(ctx, session.identityFile)
+}
 
-	if err := ensurePrivateDirectory(session.artifactDir); err != nil {
-		return fail(fmt.Errorf("create private Hermes gRPC artifact directory: %w", err))
+// open allocates the session's client, credentials, listener, audit, and
+// server. On error the caller closes the partial session.
+func (manager *Manager) open(ctx context.Context, session *bridgeSession, gateway string) (core.ToolEndpoint, error) {
+	failed := func(err error) (core.ToolEndpoint, error) { return core.ToolEndpoint{}, err }
+	sandbox := session.sandbox
+	if err := bridgekit.EnsurePrivateDirectory(session.ArtifactDir); err != nil {
+		return failed(fmt.Errorf("create private Hermes gRPC artifact directory: %w", err))
 	}
-	session.clientSource = filepath.Join(session.artifactDir, "aries-grpc")
-	if err := stageExecutable(manager.clientPath, session.clientSource); err != nil {
-		return fail(fmt.Errorf("stage Hermes gRPC client: %w", err))
+	session.clientSource = filepath.Join(session.ArtifactDir, "aries-grpc")
+	if err := bridgekit.StageExecutable(manager.clientPath, session.clientSource); err != nil {
+		return failed(fmt.Errorf("stage Hermes gRPC client: %w", err))
 	}
 
 	credentialMaterial, err := generateSessionCertificates(gateway)
 	if err != nil {
-		return fail(err)
+		return failed(err)
 	}
-	session.identityFile = filepath.Join(session.artifactDir, "client.pem")
-	session.trustedFile = filepath.Join(session.artifactDir, "server.crt")
-	session.toolLogPath = filepath.Join(session.artifactDir, "tool-calls.jsonl")
-	if err := writeExclusivePrivate(session.identityFile, credentialMaterial.identity); err != nil {
-		return fail(fmt.Errorf("write Hermes gRPC client identity: %w", err))
+	session.identityFile = filepath.Join(session.ArtifactDir, "client.pem")
+	session.trustedFile = filepath.Join(session.ArtifactDir, "server.crt")
+	session.toolLogPath = filepath.Join(session.ArtifactDir, "tool-calls.jsonl")
+	if err := bridgekit.WritePrivate(session.identityFile, credentialMaterial.identity); err != nil {
+		return failed(fmt.Errorf("write Hermes gRPC client identity: %w", err))
 	}
-	if err := writeExclusivePrivate(session.trustedFile, credentialMaterial.trusted); err != nil {
-		return fail(fmt.Errorf("write Hermes gRPC trusted certificate: %w", err))
+	if err := bridgekit.WritePrivate(session.trustedFile, credentialMaterial.trusted); err != nil {
+		return failed(fmt.Errorf("write Hermes gRPC trusted certificate: %w", err))
 	}
 
 	listener, err := net.Listen("tcp4", net.JoinHostPort(gateway, "0"))
 	if err != nil {
-		return fail(fmt.Errorf("listen on task network gateway: %w", err))
+		return failed(fmt.Errorf("listen on task network gateway: %w", err))
 	}
 	session.listener = listener
 
-	structured, err := manager.openAudit(session.toolLogPath)
-	if err != nil {
-		return fail(fmt.Errorf("create Hermes gRPC tool log: %w", err))
+	if session.Audit, err = bridgekit.Open(session.toolLogPath, "", manager.auditLimit); err != nil {
+		return failed(fmt.Errorf("open Hermes gRPC audit: %w", err))
 	}
-	session.audit = newAuditWriter(structured)
 
 	serveCtx, cancel := context.WithCancel(context.Background())
 	session.cancel = cancel
@@ -277,14 +271,12 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 		})))
 	sandboxv1.RegisterSandboxServer(session.server, &service{session: session, serveCtx: serveCtx})
 
-	session.wait.Add(1)
+	session.Wait.Add(1)
 	go func() {
-		defer session.wait.Done()
+		defer session.Wait.Done()
 		_ = session.server.Serve(listener)
 	}()
 
-	manager.active = session
-	manager.stopErr = nil
 	// Addr().String() is already built with net.JoinHostPort, zone included, so
 	// splitting it apart to rejoin it can only lose information: a failed split
 	// would yield ":" and advertise an endpoint that reaches nothing.
@@ -305,49 +297,6 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 	}, nil
 }
 
-func (manager *Manager) Stop(ctx context.Context) error {
-	manager.mu.Lock()
-	if manager.active == nil && !manager.stopping {
-		err := manager.stopErr
-		manager.mu.Unlock()
-		return err
-	}
-	if manager.stopping {
-		done := manager.stopDone
-		manager.mu.Unlock()
-		select {
-		case <-done:
-			manager.mu.Lock()
-			err := manager.stopErr
-			manager.mu.Unlock()
-			return err
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	session := manager.active
-	manager.stopping = true
-	manager.stopDone = make(chan struct{})
-	done := manager.stopDone
-	manager.mu.Unlock()
-
-	session.revoke()
-	err := session.waitFor(ctx)
-	if err == nil {
-		err = session.finalize(ctx)
-	}
-
-	manager.mu.Lock()
-	manager.stopErr = err
-	manager.stopping = false
-	if err == nil {
-		manager.active = nil
-	}
-	close(done)
-	manager.mu.Unlock()
-	return err
-}
-
 // revoke marks the session revoked before touching the transport, so a call
 // arriving concurrently is refused by construction rather than by timing. The
 // SSH bridge closes its listener first and has a narrow window where a
@@ -364,60 +313,6 @@ func (session *bridgeSession) revoke() {
 			_ = session.listener.Close()
 		}
 	})
-}
-
-func (session *bridgeSession) waitFor(ctx context.Context) error {
-	done := make(chan struct{})
-	go func() { session.wait.Wait(); close(done) }()
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func (session *bridgeSession) finalize(ctx context.Context) error {
-	auditErr := session.closeAudit(ctx)
-	if session.audit != nil && !session.audit.finished() {
-		return auditErr
-	}
-	// Only the client identity is removed; that is revocation. The server
-	// certificate is retained as evidence of what the harness was told to
-	// trust, exactly as the SSH bridge retains its known-hosts line.
-	cleanupErr := errors.Join(
-		session.revocationError(), auditErr,
-		removeIfPresent(session.identityFile),
-	)
-	if session.partialStart && cleanupErr == nil {
-		cleanupErr = os.RemoveAll(session.artifactDir)
-	}
-	return cleanupErr
-}
-
-func (session *bridgeSession) closeAudit(ctx context.Context) error {
-	if session.audit == nil {
-		return nil
-	}
-	return session.audit.sealAndWait(ctx)
-}
-
-func (session *bridgeSession) recordRevocationError(err error) {
-	if !hasCancellationCause(err) {
-		return
-	}
-	session.revocationMu.Lock()
-	session.revocationErr = errors.Join(session.revocationErr, err)
-	session.revocationMu.Unlock()
-}
-
-func (session *bridgeSession) revocationError() error {
-	session.revocationMu.Lock()
-	defer session.revocationMu.Unlock()
-	if isPureCancellation(session.revocationErr) {
-		return nil
-	}
-	return session.revocationErr
 }
 
 func (session *bridgeSession) isRevoked() bool {
@@ -490,17 +385,17 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 	stderr := newBoundedWriter(&stderrBuffer, session.outputLimit)
 
 	result, execErr := session.sandbox.ExecStream(callCtx, command, stdin, stdout, stderr)
-	execErr = withCancellation(callCtx, execErr)
+	execErr = bridgekit.WithCancellation(callCtx, execErr)
 
 	exitCode := result.ExitCode
 	reason := sandboxv1.Reason_REASON_COMPLETED
 	statusText, message := "completed", ""
 	if execErr != nil {
-		session.recordRevocationError(execErr)
+		session.RecordRevocationError(execErr)
 		exitCode = 255
 		reason = sandboxv1.Reason_REASON_SANDBOX_ERROR
 		statusText, message = "failed", "sandbox execution failed"
-		if hasCancellationCause(execErr) {
+		if bridgekit.HasCancellationCause(execErr) {
 			reason = sandboxv1.Reason_REASON_CANCELED
 			statusText, message = "canceled", "session canceled"
 			if errors.Is(execErr, context.DeadlineExceeded) {
@@ -525,7 +420,7 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 		OperationClass: kind,
 		Path:           command.Path,
 		Workdir:        command.Dir,
-		CommandHash:    commandHash(payload),
+		CommandHash:    bridgekit.CommandHash(payload),
 		Command:        payload,
 		Argv:           append([]string{command.Path}, command.Args...),
 		Stdin:          stdinContent, StdinEncoding: stdinEncoding, StdinRaw: stdinRaw, StdinBytes: int64(len(input)),
@@ -550,22 +445,6 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 		Stderr:    stderrBuffer.Bytes(),
 		Truncated: truncated,
 	}, nil
-}
-
-// withCancellation keeps a cancelled call from looking successful or like an
-// ordinary failure. A sandbox error returned after revocation is ambiguous
-// unless it carries the cancellation cause, so both are preserved and Stop
-// fails closed rather than treating an unconfirmed termination as an earlier
-// error.
-func withCancellation(ctx context.Context, err error) error {
-	contextErr := ctx.Err()
-	if contextErr == nil || hasCancellationCause(err) {
-		return err
-	}
-	if err == nil {
-		return contextErr
-	}
-	return errors.Join(contextErr, err)
 }
 
 // authorize refuses a call on a revoked session and records the refusal. A
@@ -593,7 +472,7 @@ func (session *bridgeSession) authorize(payload string) error {
 func (session *bridgeSession) logRequestFailure(payload, kind, status, message string) {
 	session.writeRecord(toolCallRecord{
 		OperationClass: kind,
-		CommandHash:    commandHash(payload),
+		CommandHash:    bridgekit.CommandHash(payload),
 		Command:        payload,
 		// The call never ran, so the record must not carry an exit code that
 		// could be mistaken for one.
@@ -610,5 +489,5 @@ func (session *bridgeSession) writeRecord(record toolCallRecord) {
 	record.TaskID = session.sandbox.TaskID()
 	record.ContainerID = session.sandbox.ContainerID()
 	record.ContainerName = session.sandbox.ContainerName()
-	session.audit.enqueue(record)
+	session.Audit.Enqueue(&record, nil, len(record.ContentRaw))
 }

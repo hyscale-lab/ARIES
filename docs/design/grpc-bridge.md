@@ -129,8 +129,8 @@ message ExecRequest {
 
 Two fields, because two fields are what actually crosses the wire.
 
-**The script is still Hermes's grammar.** `grammar.go` decodes it exactly as the SSH bridge decodes
-its payload: two literal bootstrap probes, an agent command in the `bash -c` or `bash -l -c` shape
+**The script is still Hermes's grammar.** Both bridges decode it with the same
+`pkg/bridge/internal/hermeswire` package: two literal bootstrap probes, an agent command in the `bash -c` or `bash -l -c` shape
 with a canonically quoted script, or a `~/.hermes` file sync. Anything else is `INVALID_ARGUMENT`,
 and the file sync is `PERMISSION_DENIED`. `stdin` over 16 MiB is refused with
 `RESOURCE_EXHAUSTED` before the command runs. The SSH bridge can only find that out mid-stream,
@@ -141,7 +141,7 @@ same on both routes.
 #### Why nothing else is here
 
 The Hermes bridge populates **three of `core.Command`'s eight fields** — `Path`, `Args`, and
-`Dir` — and `Dir` is a constant it forces itself (`pkg/bridge/hermesssh/workspace.go:41-50`).
+`Dir` — and `Dir` is a constant it forces itself (`hermeswire.Prepare`, `pkg/bridge/internal/hermeswire/wire.go`).
 Every other field a general-purpose sandbox API would carry is unreachable in this one:
 
 | Omitted | Why |
@@ -192,7 +192,7 @@ indistinguishable from "the bridge failed", which is exactly the distinction the
 #### The working directory, and what ARIES does not do
 
 The bridge continues to force `Dir` to `sandbox.Workdir()` on every call
-(`pkg/bridge/hermesssh/workspace.go:41-50`). The request carries no directory and the response
+(`hermeswire.Prepare`, `pkg/bridge/internal/hermeswire/wire.go`). The request carries no directory and the response
 reports none.
 
 **ARIES adds no mechanism for tracking the directory across calls.** A shell command can `cd`, and
@@ -241,7 +241,7 @@ justify streaming belong elsewhere:
 
 - The 256 MiB output cap is SWE-bench Pro's verifier, which calls `ExecStream` directly on the
   sandbox and never traverses the bridge. Bridge traffic sets no `OutputLimitBytes`
-  (`pkg/bridge/hermesssh/workspace.go:41-50`) and so takes the 16 MiB default
+  (`hermeswire.Prepare`, `pkg/bridge/internal/hermeswire/wire.go`) and so takes the 16 MiB default
   (`pkg/sandbox/docker/docker.go:36`, `:401-404`).
 - The 600-12,000 second budgets in Terminal-Bench's `task.toml` are **whole-task** budgets covering
   many commands, not single-command durations. The per-command bound over this bridge is
@@ -260,7 +260,7 @@ foreclosed; nothing in the observed corpus needs one.
 Both are recoverable later by adding a streaming variant beside this method, without changing it.
 
 **Sources for this subsection:** `pkg/sandbox/docker/docker.go`,
-`pkg/bridge/hermesssh/bridge.go`, `pkg/bridge/hermesssh/workspace.go`,
+`pkg/bridge/hermesssh/bridge.go`, `pkg/bridge/internal/hermeswire/wire.go`,
 `pkg/bridge/hermesssh/bridge_test.go`, `pkg/harness/hermes/harness.go`,
 `pkg/harness/hermes/config.go`, `cmd/aries/wiring.go`,
 `.cache/terminal-bench-2/*/task.toml`.
@@ -301,7 +301,7 @@ container the verifier later inspects. `WriteFile` does not reopen that: it exis
 intent*, and the plugin route has no "sync my runtime" path at all.
 
 **Sources:** `pkg/bridge/hermesgrpc/files.go`, `pkg/bridge/hermesgrpc/bridge.go`,
-`pkg/bridge/hermesgrpc/grammar.go`, `pkg/bridge/hermesssh/bridge.go`,
+`pkg/bridge/internal/hermeswire/wire.go`, `pkg/bridge/hermesssh/bridge.go`,
 `pkg/sandbox/docker/files.go`, `docs/research/sandbox-command-profile.md`,
 `docs/research/e2b-tool-bridge.md`.
 
@@ -409,7 +409,7 @@ content. Both are discarded when the call returns. Nothing else is carried; see
 `ReadLines` and `ReadFile` open, read and close within the handler.
 
 **Not held: the working directory.** `Dir` stays forced to `sandbox.Workdir()` on every call,
-exactly as today (`pkg/bridge/hermesssh/workspace.go:41-50`). A client that wants a persistent
+exactly as today (`hermeswire.Prepare`, `pkg/bridge/internal/hermeswire/wire.go`). A client that wants a persistent
 directory tracks it entirely on its own side, as clients already do — see
 [the working directory](#the-working-directory-and-what-aries-does-not-do). ARIES neither accepts
 it, remembers it, nor reports it back.
@@ -426,7 +426,7 @@ No client-supplied environment reaches the sandbox today, and the request carrie
 could change that. If one is ever added, it should be an explicit allowlist rather than a
 passthrough.
 
-**Sources:** `pkg/bridge/hermesssh/bridge.go`, `pkg/bridge/hermesssh/workspace.go`,
+**Sources:** `pkg/bridge/hermesssh/bridge.go`, `pkg/bridge/internal/hermeswire/wire.go`,
 `pkg/runner/runner.go`, `docs/design/ssh-connection-lifecycle.md`.
 
 ## 5. Revocation
@@ -449,8 +449,8 @@ An in-flight `Exec` is aborted, not awaited. The cancelled context reaches `Exec
 terminates the container process group and confirms its absence — machinery that already exists
 and is unchanged (`pkg/sandbox/docker/docker.go:668-706`). An error returned after cancellation
 that cannot be proven to be pure cancellation must still be preserved and must still fail `Stop`
-(`pkg/bridge/hermesssh/bridge.go:813-822`). That logic ports directly as `withCancellation`, which
-`Exec` and the file procedures share.
+(`bridgekit.WithCancellation`, `pkg/bridge/internal/bridgekit/session.go`). Both Hermes bridges,
+and every gRPC procedure, share it.
 
 A file call is cancelled the same way. Docker's `WriteFile` checks the context between copying the
 temporary file and renaming it, and removes the temporary with a fresh bounded context. So a write
@@ -465,6 +465,10 @@ timing.
 `pkg/bridge/hermesssh/bridge.go`, `pkg/sandbox/docker/docker.go`.
 
 ## 6. Evidence
+
+The writer is the SSH bridges' own, shared through `pkg/bridge/internal/bridgekit`; each bridge
+keeps its own record type, and `reader_test.go` pins the keys and types an existing reader of
+`tool-calls.jsonl` relies on.
 
 `tool-calls.jsonl` keeps its shape and its role: one record per call, monotonic sequence, shared
 timestamp, and **an audit failure latches and blocks revocation**. Every field that exists today
@@ -565,7 +569,7 @@ two ends stop sharing a host. Note also that `MaxRecvMsgSize` applies to the *de
 so compression does not interact with that cap the way it might appear to.
 
 **Sources:** `pkg/bridge/hermesgrpc/audit.go`, `pkg/bridge/hermesgrpc/files.go`,
-`pkg/bridge/hermesssh/bridge.go`, `docs/design/hermes-bridge-inventory.md`,
+`pkg/bridge/internal/bridgekit/audit.go`, `pkg/bridge/hermesssh/bridge.go`, `docs/design/hermes-bridge-inventory.md`,
 `docs/design/ssh-connection-lifecycle.md`.
 
 ## 7. What is preserved, and what is dropped
@@ -587,7 +591,7 @@ so compression does not interact with that cap the way it might appear to.
   payload. The check stays on the server, where a caller holding the staged credentials cannot
   route around it. On the plugin route Hermes never attempts the sync
   ([section 9](#9-how-hermes-reaches-the-bridge)).
-- Canonical shell quoting and its round-trip verification, which `grammar.go` carries over whole.
+- Canonical shell quoting and its round-trip verification, in the shared `hermeswire` package.
 
 **Dropped — transport artifacts with no successor.**
 

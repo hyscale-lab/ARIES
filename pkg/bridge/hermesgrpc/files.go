@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/bridge/hermesgrpc/sandboxv1"
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgekit"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -107,11 +108,11 @@ func (call *fileCall) newSink(next io.Writer) *contentSink {
 // finish records the outcome and converts a sandbox error to a status.
 func (call *fileCall) finish(err error, sink *contentSink, truncated bool) error {
 	defer call.cancel()
-	err = withCancellation(call.ctx, err)
+	err = bridgekit.WithCancellation(call.ctx, err)
 	statusText, message := "completed", ""
 	var result error
 	if err != nil {
-		call.session.recordRevocationError(err)
+		call.session.RecordRevocationError(err)
 		result = fileStatus(err)
 		statusText, message = strings.ToLower(status.Code(result).String()), status.Convert(result).Message()
 	}
@@ -137,7 +138,7 @@ func fileStatus(err error) error {
 		return status.Error(codes.FailedPrecondition, "not a regular file")
 	case errors.Is(err, errWriteStream):
 		return status.Error(codes.InvalidArgument, errWriteStream.Error())
-	case hasCancellationCause(err):
+	case bridgekit.HasCancellationCause(err):
 		return status.Error(codes.Canceled, "session canceled")
 	default:
 		return status.Error(codes.Internal, "sandbox file access failed")

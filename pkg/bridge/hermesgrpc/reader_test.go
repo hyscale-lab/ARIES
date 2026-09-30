@@ -68,7 +68,7 @@ func TestToolCallsStayReadableByTodaysReader(t *testing.T) {
 	if _, _, err := readWindow(client, &sandboxv1.ReadLinesRequest{Path: "/app/f", FirstLine: 1, MaxLines: 1, MaxLineBytes: 100}); err != nil {
 		t.Fatal(err)
 	}
-	session := manager.active
+	session := manager.slot.Active().(*bridgeSession)
 	session.revoke()
 	_ = session.authorize(agentPayload)
 	if err := manager.Stop(ctx); err != nil {

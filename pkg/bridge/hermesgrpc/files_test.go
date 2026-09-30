@@ -284,7 +284,7 @@ func TestFileCallsWithoutFileAccessAreRecordedAndUnimplemented(t *testing.T) {
 
 func TestRevokedSessionRefusesFileCallsAsUnavailable(t *testing.T) {
 	manager, _, _ := startFileBridge(t, newMemorySandbox(fstest.MapFS{}), Options{})
-	session := manager.active
+	session := manager.slot.Active().(*bridgeSession)
 	session.revoke()
 	svc := &service{session: session, serveCtx: context.Background()}
 	if _, err := svc.Stat(context.Background(), &sandboxv1.StatRequest{Path: "/app"}); status.Code(err) != codes.Unavailable {
@@ -318,26 +318,39 @@ func TestFileContentIsRetainedOnlyWhenAsked(t *testing.T) {
 // bounds every other record: a large retained write leaves the audit intact,
 // while a retained stdin over the limit latches it and fails Stop.
 func TestRetainedFileContentIsNotChargedToTheAuditLimit(t *testing.T) {
-	manager, client, _ := startFileBridge(t, newMemorySandbox(fstest.MapFS{}), Options{RetainContent: true})
-	audit := manager.active.audit
-	audit.mu.Lock()
-	audit.limit = 4 << 10
-	audit.mu.Unlock()
-
-	if _, err := writeFile(client, "/app/f", 64<<10, make([]byte, 64<<10)); err != nil {
-		t.Fatal(err)
-	}
-	audit.mu.Lock()
-	latched := audit.err
-	audit.mu.Unlock()
-	if latched != nil {
-		t.Fatalf("retained file content latched the audit: %v", latched)
-	}
-	if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: catPayload, Stdin: make([]byte, 8<<10)}); err != nil {
-		t.Fatal(err)
-	}
-	if err := manager.Stop(context.Background()); err == nil {
-		t.Fatal("a non-file record over the limit did not fail Stop")
+	for _, testCase := range []struct {
+		name    string
+		call    func(sandboxv1.SandboxClient) error
+		latches bool
+	}{
+		{"retained file content", func(client sandboxv1.SandboxClient) error {
+			_, err := writeFile(client, "/app/f", 64<<10, make([]byte, 64<<10))
+			return err
+		}, false},
+		{"stdin", func(client sandboxv1.SandboxClient) error {
+			_, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: catPayload, Stdin: make([]byte, 8<<10)})
+			return err
+		}, true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			manager, err := New(Options{OutputDir: t.TempDir(), ClientPath: fakeClient(t), RetainContent: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			manager.auditLimit = 4 << 10
+			endpoint, err := manager.Start(context.Background(), newMemorySandbox(fstest.MapFS{}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			client, closeClient := dial(t, endpoint)
+			defer closeClient()
+			if err := testCase.call(client); err != nil {
+				t.Fatal(err)
+			}
+			if err := manager.Stop(context.Background()); (err != nil) != testCase.latches {
+				t.Fatalf("Stop() = %v, want latched %v", err, testCase.latches)
+			}
+		})
 	}
 }
 
