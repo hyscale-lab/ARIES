@@ -20,6 +20,12 @@ type Options struct {
 	SubagentsEnabled       bool
 	MaxConcurrentSubagents int
 	MCPServers             []core.MCPServerConfig
+	// RedactEnv names host environment variables whose values the harness is
+	// never given but scrubs from what it saves: a benchmark's credentials
+	// that reach the sandbox, where the agent can read them and repeat them
+	// (Toolathlon's account tokens). They are read through the API-key lookup
+	// at Start; an unset variable is skipped.
+	RedactEnv []string
 }
 
 // TTSOptions are the common speech synthesis inputs. Native transcription and

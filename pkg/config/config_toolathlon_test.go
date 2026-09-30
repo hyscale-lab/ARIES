@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -213,5 +214,26 @@ func TestToolathlonVersionPinRequiredOnlyWhenSelected(t *testing.T) {
 	}
 	if cfg.Versions.Toolathlon.Revision != "3333333333333333333333333333333333333333" {
 		t.Fatalf("toolathlon pin = %#v", cfg.Versions.Toolathlon)
+	}
+}
+
+// The harness scrubs Toolathlon's account credentials from what it saves:
+// every variable the profile names for a token field or a key file, once,
+// and nothing for another benchmark.
+func TestBenchmarkCredentialEnvNamesToolathlonCredentials(t *testing.T) {
+	cfg := Config{Benchmark: BenchmarkConfig{Type: "toolathlon", Toolathlon: &ToolathlonConfig{
+		CredentialsEnv:     map[string]string{"github_token": "GITHUB_TOKEN", "huggingface_token": "HF_TOKEN", "notion_token": "GITHUB_TOKEN"},
+		CredentialFilesEnv: map[string]string{"configs/google_credentials.json": "GOOGLE_CREDENTIALS"},
+	}}}
+	if got := cfg.BenchmarkCredentialEnv(); !slices.Equal(got, []string{"GITHUB_TOKEN", "GOOGLE_CREDENTIALS", "HF_TOKEN"}) {
+		t.Fatalf("redact env = %v", got)
+	}
+	if got := (Config{Benchmark: BenchmarkConfig{Type: "toolathlon"}}).BenchmarkCredentialEnv(); got != nil {
+		t.Fatalf("a profile without credentials: %v", got)
+	}
+	other := cfg
+	other.Benchmark.Type = "terminalbench2"
+	if got := other.BenchmarkCredentialEnv(); got != nil {
+		t.Fatalf("another benchmark: %v", got)
 	}
 }

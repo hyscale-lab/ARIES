@@ -186,6 +186,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 			credentials.Clear()
 		}
 	}()
+	credentials.AddRedactions(manager.options.Common.RedactEnv, manager.runtime.Options.APIKeyLookup)
 	extractEnabled := false
 	if extractRequested {
 		found, err := credentials.Load("extract", manager.options.Common.ExtractAPIKeyEnv, manager.runtime.Options.APIKeyLookup)

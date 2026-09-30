@@ -30,7 +30,7 @@ func NewHermes(cfg config.Config, outputRoot string, lookup func(string) ([]byte
 			APIKeyLookup: lookup,
 			Logger:       logger,
 		},
-		Common:     commonOptions(cfg.Harness),
+		Common:     commonOptions(cfg),
 		Compaction: hermesCompaction(cfg.Harness.Compaction),
 		ExtraBody:  hermesExtraBody(cfg.Harness.Hermes),
 	}

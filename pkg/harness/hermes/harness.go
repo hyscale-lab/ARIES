@@ -218,6 +218,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 			credentials.Clear()
 		}
 	}()
+	credentials.AddRedactions(manager.options.Common.RedactEnv, manager.runtime.Options.APIKeyLookup)
 	if ok, err := credentials.Load("model", request.Model.APIKeyEnv, manager.runtime.Options.APIKeyLookup); err != nil {
 		return err
 	} else if !ok {

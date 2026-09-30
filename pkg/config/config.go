@@ -155,6 +155,25 @@ type ToolathlonConfig struct {
 	CredentialFilesEnv map[string]string `json:"credential_files_env,omitempty"`
 }
 
+// BenchmarkCredentialEnv names the environment variables whose values the
+// benchmark puts where the agent can read them, so the harness scrubs them
+// from what it saves: Toolathlon's account credentials, which reach the
+// sandbox with its MCP servers. The harness is never given the values.
+func (c Config) BenchmarkCredentialEnv() []string {
+	settings := c.Benchmark.Toolathlon
+	if c.Benchmark.Type != "toolathlon" || settings == nil {
+		return nil
+	}
+	var names []string
+	for _, mapping := range []map[string]string{settings.CredentialsEnv, settings.CredentialFilesEnv} {
+		for _, name := range mapping {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	return slices.Compact(names)
+}
+
 // BenchmarkEnvironment describes the task sandbox for benchmarks (currently
 // only Deep Research Bench) that have no per-task environment source of
 // their own, unlike Terminal-Bench 2's task.toml and SWE-bench Pro's dataset

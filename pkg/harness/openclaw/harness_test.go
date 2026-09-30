@@ -1506,3 +1506,60 @@ func TestExtractTelemetryKeepsCollidingBasenames(t *testing.T) {
 		t.Fatalf("noncolliding name changed: %s", paths[0])
 	}
 }
+
+// A benchmark's credentials that reach the sandbox are never given to
+// OpenClaw, but the agent can read them there. Start adds the RedactEnv
+// values (an unset one is skipped) to the occurrence's credentials, so the
+// session trajectory copied out of the container is scrubbed of them.
+func TestTelemetryScrubsRedactEnvValues(t *testing.T) {
+	fake := newFakeDeployment()
+	token := "ghp_benchmarktoken123"
+	manager, err := New(Options{Runtime: harnesscommon.RuntimeOptions{
+		Deployment:   fake,
+		Image:        testOpenClawImage,
+		OutputDir:    t.TempDir(),
+		StartTimeout: time.Second,
+		AgentTimeout: time.Second,
+		APIKeyLookup: func(name string) ([]byte, bool) {
+			switch name {
+			case "TOOLATHLON_GITHUB_TOKEN":
+				return []byte(token), true
+			case "UNSET_TOKEN":
+				return nil, false
+			}
+			return []byte("model-secret"), true
+		},
+	}, Common: harnesscommon.Options{RedactEnv: []string{"TOOLATHLON_GITHUB_TOKEN", "UNSET_TOKEN"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.newID = func() (string, error) { return "attempt", nil }
+	manager.newGateway = func(string, []byte) (gatewayConnection, error) { return &stubGateway{}, nil }
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{Placement: core.RuntimePlacement{AttachmentID: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
+	if err := manager.Start(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop(context.Background())
+	active := manager.active
+	held := false
+	for _, secret := range active.Credentials.Secrets() {
+		held = held || string(secret) == token
+	}
+	if !held {
+		t.Fatal("the RedactEnv value is not among the occurrence's secrets")
+	}
+	fake.telemetryContent = []byte(`{"tool":"exec","output":"github_token = ` + token + `"}` + "\n")
+	paths, err := manager.collectTelemetry(context.Background(), active)
+	if err != nil || len(paths) == 0 {
+		t.Fatalf("telemetry = %v, %v", paths, err)
+	}
+	for _, path := range paths {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(content), token) || !strings.Contains(string(content), "REDACTED") {
+			t.Fatalf("telemetry %s kept the credential:\n%s", path, content)
+		}
+	}
+}
