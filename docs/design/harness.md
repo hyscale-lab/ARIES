@@ -136,6 +136,8 @@ ARIES supports configuring Model Context Protocol (`MCP`) servers for agent harn
   - Both `env` and `secret_env` are supported for command servers and rejected for `url` servers.
 - `transport` applies only to `url` servers; `timeout_seconds` must not be negative.
 
+Each harness scrubs the `secret_env` values from everything it saves (session exports, logs, the retained config) together with its own keys. A harness's `RedactEnv` option names further host variables whose values the harness is never given but scrubs the same way: a benchmark's credentials that reach the sandbox, where the agent can read them (wiring fills it from Toolathlon's `credentials_env` and `credential_files_env`). A multi-line or `JSON` value is scrubbed by its lines and string fields as well (`core.SecretParts`).
+
 Harnesses manage `MCP` execution and network boundaries as follows:
 - **Command servers (`stdio`)** execute directly inside the agent container environment.
 - **`URL` servers (`HTTP`/`SSE`)** connect over the network to remote endpoints rather than running inside the local container.

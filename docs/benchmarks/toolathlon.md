@@ -246,11 +246,15 @@ environment is replaced with `<redacted>` in what the adapter saves —
 `task_bundle.json` — and in the errors and evaluation details it returns;
 a value is matched as it is, JSON-escaped, and by its lines and the string
 fields of a JSON value (a key file), and values shorter than 8 characters are
-settings, left as they are. What the adapter does not write is not scrubbed:
-the harness's own session and log files, the model bridge's log, and the
-containers' output. The agent has root in the sandbox and can read the token
-file: when a scripted agent did, the token reached its requests to the model and
-the harness's saved session, which the adapter does not scrub.
+settings, left as they are. The agent has root in the sandbox and can read the
+token file, and agents do: in runs of this adapter they read the Canvas tasks'
+token files and wrote those test tokens into `curl` commands. So the harness
+scrubs the same values from what it saves (its session, logs and config);
+wiring gives it the variables' names as `RedactEnv`, never the values. Not
+scrubbed: the model bridge's log, which records the agent's commands as they
+were sent, and the containers' output. No scrubbing undoes what the agent sends
+to the model: a token it reads goes to the model provider with its next
+request.
 
 What to know before running them:
 

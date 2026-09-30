@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -182,6 +183,27 @@ func TestValidateComponentsRequiresPairedHarnessAndBridge(t *testing.T) {
 // gateway port and adds it to the harness's MCP servers itself, ahead of any
 // server the profile names; the profile may not name one after it, and a
 // harness without an MCP client is refused.
+// The harness scrubs Toolathlon's account credentials from what it saves:
+// every variable the profile names for a token field or a key file, once,
+// and nothing for another benchmark.
+func TestBenchmarkRedactEnvNamesToolathlonCredentials(t *testing.T) {
+	cfg := config.Config{Benchmark: config.BenchmarkConfig{Type: "toolathlon", Toolathlon: &config.ToolathlonConfig{
+		CredentialsEnv:     map[string]string{"github_token": "GITHUB_TOKEN", "huggingface_token": "HF_TOKEN", "notion_token": "GITHUB_TOKEN"},
+		CredentialFilesEnv: map[string]string{"configs/google_credentials.json": "GOOGLE_CREDENTIALS"},
+	}}}
+	if got := benchmarkRedactEnv(cfg); !slices.Equal(got, []string{"GITHUB_TOKEN", "GOOGLE_CREDENTIALS", "HF_TOKEN"}) {
+		t.Fatalf("redact env = %v", got)
+	}
+	if got := benchmarkRedactEnv(config.Config{Benchmark: config.BenchmarkConfig{Type: "toolathlon"}}); got != nil {
+		t.Fatalf("a profile without credentials: %v", got)
+	}
+	other := cfg
+	other.Benchmark.Type = "terminalbench2"
+	if got := benchmarkRedactEnv(other); got != nil {
+		t.Fatalf("another benchmark: %v", got)
+	}
+}
+
 func TestToolathlonGatewayIsAddedToTheHarness(t *testing.T) {
 	base := func(servers ...core.MCPServerConfig) config.Config {
 		return config.Config{

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/hyscale-lab/aries/internal/app"
@@ -305,6 +306,25 @@ func mcpServers(cfg config.Config) []core.MCPServerConfig {
 	return append(out, cfg.Harness.MCPServers...)
 }
 
+// benchmarkRedactEnv names the environment variables whose values the
+// benchmark puts where the agent can read them, so the harness scrubs them
+// from what it saves: Toolathlon's account credentials, which reach the
+// sandbox with its MCP servers. The harness is never given the values.
+func benchmarkRedactEnv(cfg config.Config) []string {
+	settings := cfg.Benchmark.Toolathlon
+	if cfg.Benchmark.Type != "toolathlon" || settings == nil {
+		return nil
+	}
+	var names []string
+	for _, mapping := range []map[string]string{settings.CredentialsEnv, settings.CredentialFilesEnv} {
+		for _, name := range mapping {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	return slices.Compact(names)
+}
+
 // environmentFromConfig converts a profile's benchmark.environment block into
 // the runner-neutral core.Environment. cfg is nil only when Config.validate
 // hasn't run (e.g. ad-hoc construction); callers of newBenchmark and
@@ -338,6 +358,7 @@ func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byt
 			SubagentsEnabled:       cfg.Harness.Subagents.Enabled != nil && *cfg.Harness.Subagents.Enabled,
 			MaxConcurrentSubagents: cfg.Harness.Subagents.MaxConcurrent,
 			MCPServers:             mcpServers(cfg),
+			RedactEnv:              benchmarkRedactEnv(cfg),
 		}
 		if cfg.Harness.Mode == openclawharness.ModeRealtime || cfg.Harness.Mode == openclawharness.ModeVoiceTranscribe {
 			options.Realtime = openClawVoiceOptions(cfg.Harness)
@@ -357,6 +378,7 @@ func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byt
 			Compaction:             hermesCompaction(cfg.Harness.Compaction),
 			ExtraBody:              hermesExtraBody(cfg.Harness.Hermes),
 			MCPServers:             mcpServers(cfg),
+			RedactEnv:              benchmarkRedactEnv(cfg),
 		}
 
 		if cfg.Harness.Mode == hermesharness.ModeVoiceTranscribe {

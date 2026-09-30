@@ -6,6 +6,8 @@ import (
 	"os"
 	"sort"
 	"strings"
+
+	"github.com/hyscale-lab/aries/pkg/core"
 )
 
 // The values the adapter takes from the host environment (credentials.go)
@@ -13,21 +15,12 @@ import (
 // grading logs, the gateway's log, the grader's result, the task bundle, and
 // the errors and evaluation details it returns. Toolathlon's servers and
 // scripts log request headers and print what they read, so a token given to
-// them can reach any of these, and run directories may be shared.
+// them can reach any of these, and run directories may be shared. The
+// harness scrubs the same values from what it saves (wiring passes it their
+// names), since the agent can read them in the sandbox.
 
-const (
-	// redactedValue replaces every scrubbed occurrence.
-	redactedValue = "<redacted>"
-	// minimumSecretLength is the shortest value scrubbed: shorter ones (a
-	// "1", a region, a warehouse name) are settings, and replacing them
-	// would corrupt the logs without protecting anything.
-	minimumSecretLength = 8
-	// minimumPartLength is the shortest line of a multi-line value (a
-	// private key) or string field of a JSON value (a service-account or
-	// OAuth file) that is scrubbed on its own, since a log may carry one
-	// part of such a value.
-	minimumPartLength = 16
-)
+// redactedValue replaces every scrubbed occurrence.
+const redactedValue = "<redacted>"
 
 // scrubber replaces known values. A nil scrubber, for a run without
 // credentials from the environment, leaves everything as it is.
@@ -35,33 +28,18 @@ type scrubber struct {
 	needles []string
 }
 
-// newScrubber matches each value as it is, JSON-escaped (as it appears in a
-// JSON file or a logged JSON string), and by its lines and JSON string
-// fields; the longest needles are replaced first, so a part never splits a
-// whole.
+// newScrubber matches each value by its parts (core.SecretParts: the value,
+// and the lines and JSON string fields of a key file), each as it is and
+// JSON-escaped (as it appears in a JSON file or a logged JSON string); the
+// longest needles are replaced first, so a part never splits a whole.
 func newScrubber(values []string) *scrubber {
 	seen := make(map[string]struct{})
-	add := func(value string, minimum int) {
-		for _, candidate := range []string{value, strings.TrimSpace(value)} {
-			if len(candidate) < minimum {
-				continue
-			}
-			seen[candidate] = struct{}{}
-			if encoded, err := json.Marshal(candidate); err == nil {
+	for _, value := range values {
+		for _, part := range core.SecretParts(value) {
+			seen[part] = struct{}{}
+			if encoded, err := json.Marshal(part); err == nil {
 				seen[string(encoded[1:len(encoded)-1])] = struct{}{}
 			}
-		}
-	}
-	for _, value := range values {
-		add(value, minimumSecretLength)
-		if strings.Contains(value, "\n") {
-			for _, line := range strings.Split(value, "\n") {
-				add(line, minimumPartLength)
-			}
-		}
-		var parsed any
-		if json.Unmarshal([]byte(value), &parsed) == nil {
-			jsonStrings(parsed, func(field string) { add(field, minimumPartLength) })
 		}
 	}
 	if len(seen) == 0 {
@@ -78,22 +56,6 @@ func newScrubber(values []string) *scrubber {
 		return needles[i] < needles[j]
 	})
 	return &scrubber{needles: needles}
-}
-
-// jsonStrings calls visit for every string in a decoded JSON value.
-func jsonStrings(value any, visit func(string)) {
-	switch typed := value.(type) {
-	case string:
-		visit(typed)
-	case []any:
-		for _, item := range typed {
-			jsonStrings(item, visit)
-		}
-	case map[string]any:
-		for _, item := range typed {
-			jsonStrings(item, visit)
-		}
-	}
 }
 
 // text returns value with every needle replaced.
