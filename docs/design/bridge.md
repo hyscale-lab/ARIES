@@ -63,9 +63,12 @@ closing it would drop every command.
 
 The decoded `bash` token is resolved to the absolute `/bin/bash` before it
 reaches the sandbox, which requires an absolute command path and performs no
-PATH lookup of its own. The bridge is also authoritative for the working
-directory: every command runs in the sandbox's own workdir regardless of what
-Hermes believes its `cwd` to be.
+PATH lookup of its own. Every command starts in the sandbox's own workdir, but
+that alone does not decide where it runs: Hermes's script first runs
+`builtin cd -- <cwd> || exit 126`, with the call's `workdir` or else its
+configured directory. The bridge therefore reports the sandbox workdir on its
+endpoint (`ToolEndpoint.Workdir`), and the Hermes harness gives Hermes that
+directory as its terminal `cwd` (see `harness.md`), so both name the same place.
 
 Hermes's remaining payloads belong to its `~/.hermes` file sync — `mkdir -p`,
 `tar xf -`, `tar cf -`, `rm -f` — and ARIES denies them by policy. The sync set
