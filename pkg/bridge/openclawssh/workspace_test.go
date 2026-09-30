@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgekit"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -381,10 +382,9 @@ func TestGeneratedOrdinaryMutationMapsButExactTransportCleanupDoesNot(t *testing
 }
 
 func TestVirtualizedExecutionKeepsWireEvidenceAndRecordsExecutedState(t *testing.T) {
-	structured, structuredBytes := memoryAuditFile()
-	raw, rawBytes := memoryAuditFile()
 	sandbox := &contractSandbox{acceptTools: true}
-	session := &bridgeSession{sandbox: sandbox, audit: newAuditWriter(structured, raw)}
+	session := &bridgeSession{sandbox: sandbox}
+	logs := attachTestAudit(t, session)
 	remote := remoteCommand{argv: generatedArgv("cd " + virtualWorkspace + " && cat " + virtualWorkspace + "/input >" + virtualWorkspace + "/output")}
 	wire := encodeCanonicalTokens(remote.argv)
 	prepared, err := prepareRemoteCommand(remote, sandbox.Workdir())
@@ -397,35 +397,32 @@ func TestVirtualizedExecutionKeepsWireEvidenceAndRecordsExecutedState(t *testing
 	}); exit != 0 {
 		t.Fatalf("virtualized exit = %d", exit)
 	}
-	if err := session.closeAudit(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	logs.seal(t, session)
 	commands := sandbox.snapshot()
 	if len(commands) != 1 || commands[0].Args[1] != "cd /workspace && cat /workspace/input >/workspace/output" || commands[0].Env["HOME"] != "/workspace" {
 		t.Fatalf("executed commands = %#v", commands)
 	}
-	records := decodeAuditLines(t, structuredBytes.Bytes())
+	records := decodeAuditLines(t, logs.structured)
 	if len(records) != 1 || records[0]["workspace_home"] != "/workspace" || records[0]["command"] != commands[0].Args[1] {
 		t.Fatalf("structured record = %#v", records)
 	}
-	if records[0]["command_hash"] != commandHash(prepared.encoded) || records[0]["command_hash"] == commandHash(wire) {
+	if records[0]["command_hash"] != bridgekit.CommandHash(prepared.encoded) || records[0]["command_hash"] == bridgekit.CommandHash(wire) {
 		t.Fatalf("structured command hash = %#v", records[0]["command_hash"])
 	}
 	envNames, ok := records[0]["env_names"].([]any)
 	if !ok || !containsAny(envNames, "HOME") {
 		t.Fatalf("structured env names = %#v", records[0]["env_names"])
 	}
-	rawRecords := decodeRawAuditRecords(t, rawBytes.Bytes())
+	rawRecords := decodeRawAuditRecords(t, logs.raw)
 	if len(rawRecords) != 1 || rawRecords[0]["wire_command"] != wire || !bytes.Equal(unescapeRawValue(t, rawRecords[0]["payload"]), payload) {
 		t.Fatalf("raw record = %#v", rawRecords)
 	}
 }
 
 func TestSuppressedTransportCleanupNeverExecutesSandbox(t *testing.T) {
-	structured, _ := memoryAuditFile()
-	raw, _ := memoryAuditFile()
 	sandbox := &contractSandbox{acceptTools: true}
-	session := &bridgeSession{sandbox: sandbox, audit: newAuditWriter(structured, raw)}
+	session := &bridgeSession{sandbox: sandbox}
+	logs := attachTestAudit(t, session)
 	remote := remoteCommand{argv: []string{remoteShell, "-c", directoryClearScript, directoryClearLabel, virtualSkillsWorkspace, virtualRuntimeRoot}}
 	prepared, err := prepareRemoteCommand(remote, sandbox.Workdir())
 	if err != nil {
@@ -435,19 +432,16 @@ func TestSuppressedTransportCleanupNeverExecutesSandbox(t *testing.T) {
 	if exit := session.execute(context.Background(), &stubSSHChannel{}, prepared, requestAudit{requestType: "exec", wantReply: true, remoteCommand: wire}); exit != 0 {
 		t.Fatalf("suppressed cleanup exit = %d", exit)
 	}
-	if err := session.closeAudit(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	logs.seal(t, session)
 	if commands := sandbox.snapshot(); len(commands) != 0 {
 		t.Fatalf("transport cleanup executed sandbox: %#v", commands)
 	}
 }
 
 func TestSuppressedSkillsUploadDrainsInputAndPreservesStructuredClassification(t *testing.T) {
-	structured, structuredBytes := memoryAuditFile()
-	raw, rawBytes := memoryAuditFile()
 	sandbox := &contractSandbox{acceptTools: true}
-	session := &bridgeSession{sandbox: sandbox, audit: newAuditWriter(structured, raw)}
+	session := &bridgeSession{sandbox: sandbox}
+	logs := attachTestAudit(t, session)
 	remote := remoteCommand{argv: []string{remoteShell, "-c", directoryUploadScript, directoryUploadLabel, virtualSkillsWorkspace, virtualRuntimeRoot}}
 	prepared, err := prepareRemoteCommand(remote, sandbox.Workdir())
 	if err != nil {
@@ -459,13 +453,11 @@ func TestSuppressedSkillsUploadDrainsInputAndPreservesStructuredClassification(t
 	if exit := session.execute(context.Background(), channel, prepared, requestAudit{requestType: "exec", wantReply: true, remoteCommand: encodeCanonicalTokens(remote.argv)}); exit != 0 {
 		t.Fatalf("suppressed upload exit = %d", exit)
 	}
-	if err := session.closeAudit(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	logs.seal(t, session)
 	if channel.Len() != 0 || len(sandbox.snapshot()) != 0 {
 		t.Fatalf("upload input remaining = %d, commands = %#v", channel.Len(), sandbox.snapshot())
 	}
-	records := decodeAuditLines(t, structuredBytes.Bytes())
+	records := decodeAuditLines(t, logs.structured)
 	if len(records) != 1 {
 		t.Fatalf("structured records = %#v", records)
 	}
@@ -473,11 +465,11 @@ func TestSuppressedSkillsUploadDrainsInputAndPreservesStructuredClassification(t
 	if record["operation_class"] != "workspace_upload" || record["stdin"] != "[binary input omitted; 10 bytes retained in ssh_raw.log]" || record["stdin_encoding"] != "binary-omitted" || record["stdin_bytes"] != float64(len(upload)) {
 		t.Fatalf("upload structured record = %#v", record)
 	}
-	if bytes.Contains(structuredBytes.Bytes(), []byte(`\u0000`)) || bytes.Contains(structuredBytes.Bytes(), []byte{0}) {
-		t.Fatalf("upload structured record retained NUL data: %q", structuredBytes.Bytes())
+	if bytes.Contains(logs.structured, []byte(`\u0000`)) || bytes.Contains(logs.structured, []byte{0}) {
+		t.Fatalf("upload structured record retained NUL data: %q", logs.structured)
 	}
-	if bytes.Contains(rawBytes.Bytes(), []byte{0}) || !bytes.Contains(rawBytes.Bytes(), []byte(`stdin=tar\x00stream`)) {
-		t.Fatalf("upload raw record is not escaped replay evidence: %q", rawBytes.Bytes())
+	if bytes.Contains(logs.raw, []byte{0}) || !bytes.Contains(logs.raw, []byte(`stdin=tar\x00stream`)) {
+		t.Fatalf("upload raw record is not escaped replay evidence: %q", logs.raw)
 	}
 	if _, found := record["command"]; found {
 		t.Fatalf("upload duplicated helper command: %#v", record["command"])

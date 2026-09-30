@@ -9,669 +9,22 @@ import (
 	"io"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 	"unicode/utf8"
 
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgekit"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"golang.org/x/crypto/ssh"
 )
 
-func TestWriteExclusiveExactModesUnderRestrictiveUmask(t *testing.T) {
-	const childMarker = "ARIES_TEST_RESTRICTIVE_UMASK_CHILD"
-	if os.Getenv(childMarker) == "1" {
-		syscall.Umask(0o077)
-		source := os.Getenv("ARIES_TEST_EXECUTABLE_SOURCE")
-		executable := os.Getenv("ARIES_TEST_EXECUTABLE_DESTINATION")
-		private := os.Getenv("ARIES_TEST_PRIVATE_DESTINATION")
-		content := []byte("#!/bin/sh\nexit 0\n")
-		if err := stageExecutable(source, executable); err != nil {
-			t.Fatal(err)
-		}
-		if err := writeExclusivePrivate(private, content); err != nil {
-			t.Fatal(err)
-		}
-		for path, wantMode := range map[string]os.FileMode{executable: 0o555, private: 0o600} {
-			got, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !bytes.Equal(got, content) {
-				t.Fatalf("%s content = %q", filepath.Base(path), got)
-			}
-			info, err := os.Stat(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if info.Mode().Perm() != wantMode {
-				t.Fatalf("%s mode = %04o, want %04o", filepath.Base(path), info.Mode().Perm(), wantMode)
-			}
-		}
-		return
-	}
-
-	directory := t.TempDir()
-	source := filepath.Join(directory, "source")
-	content := []byte("#!/bin/sh\nexit 0\n")
-	if err := os.WriteFile(source, content, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(source, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	command := exec.Command(os.Args[0], "-test.run=^TestWriteExclusiveExactModesUnderRestrictiveUmask$")
-	command.Env = append(os.Environ(),
-		childMarker+"=1",
-		"ARIES_TEST_EXECUTABLE_SOURCE="+source,
-		"ARIES_TEST_EXECUTABLE_DESTINATION="+filepath.Join(directory, "staged"),
-		"ARIES_TEST_PRIVATE_DESTINATION="+filepath.Join(directory, "private"),
-	)
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("restrictive-umask subprocess failed: %v\n%s", err, output)
-	}
-}
-
-func TestWriteExclusiveUsesPrivateOrderedDescriptorTransition(t *testing.T) {
-	directory := t.TempDir()
-	path := filepath.Join(directory, "staged")
-	content := []byte("complete executable")
-	var events []string
-	var openFlags int
-	var createMode os.FileMode
-	dataSynced := false
-	syncCalls := 0
-	operations := exclusiveWriteOperations{
-		open: func(name string, flags int, mode os.FileMode) (exclusiveWriteFile, error) {
-			events = append(events, "open")
-			openFlags = flags
-			createMode = mode
-			file, err := os.OpenFile(name, flags, mode)
-			if err != nil {
-				return nil, err
-			}
-			return &testExclusiveWriteFile{
-				write: func(got []byte) (int, error) {
-					events = append(events, "write")
-					requireFileMode(t, path, 0o600)
-					return file.Write(got)
-				},
-				sync: func() error {
-					syncCalls++
-					if syncCalls == 1 {
-						events = append(events, "data sync")
-						requireFileMode(t, path, 0o600)
-						dataSynced = true
-					} else {
-						events = append(events, "metadata sync")
-						requireFileMode(t, path, 0o555)
-					}
-					return file.Sync()
-				},
-				chmod: func(mode os.FileMode) error {
-					events = append(events, "chmod")
-					if !dataSynced {
-						t.Fatal("chmod ran before the content sync")
-					}
-					got, err := os.ReadFile(path)
-					if err != nil {
-						t.Fatal(err)
-					}
-					if !bytes.Equal(got, content) {
-						t.Fatalf("content at chmod = %q", got)
-					}
-					return file.Chmod(mode)
-				},
-				close: func() error {
-					events = append(events, "close")
-					return file.Close()
-				},
-			}, nil
-		},
-		remove: os.Remove,
-	}
-	if err := writeExclusiveWithOperations(path, content, 0o555, operations); err != nil {
-		t.Fatal(err)
-	}
-	if openFlags != os.O_WRONLY|os.O_CREATE|os.O_EXCL {
-		t.Fatalf("open flags = %#x", openFlags)
-	}
-	if createMode != 0o600 {
-		t.Fatalf("creation mode = %04o", createMode)
-	}
-	wantEvents := []string{"open", "write", "data sync", "chmod", "metadata sync", "close"}
-	if strings.Join(events, ",") != strings.Join(wantEvents, ",") {
-		t.Fatalf("events = %v, want %v", events, wantEvents)
-	}
-	requireFileMode(t, path, 0o555)
-}
-
-func TestWriteExclusivePreservesExistingDestination(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "existing")
-	sentinel := []byte("do not replace")
-	if err := os.WriteFile(path, sentinel, 0o640); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(path, 0o640); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeExclusive(path, []byte("replacement"), 0o555); err == nil {
-		t.Fatal("writeExclusive unexpectedly replaced an existing destination")
-	}
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, sentinel) {
-		t.Fatalf("existing content = %q", got)
-	}
-	requireFileMode(t, path, 0o640)
-}
-
-func TestWriteExclusiveRemovesDestinationAfterOperationFailure(t *testing.T) {
-	tests := []struct {
-		name       string
-		failAt     string
-		wantEvents []string
-	}{
-		{name: "write", failAt: "write", wantEvents: []string{"write", "close"}},
-		{name: "data sync", failAt: "data sync", wantEvents: []string{"write", "data sync", "close"}},
-		{name: "chmod", failAt: "chmod", wantEvents: []string{"write", "data sync", "chmod", "close"}},
-		{name: "metadata sync", failAt: "metadata sync", wantEvents: []string{"write", "data sync", "chmod", "metadata sync", "close"}},
-		{name: "close", failAt: "close", wantEvents: []string{"write", "data sync", "chmod", "metadata sync", "close"}},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "staged")
-			cause := errors.New(test.failAt)
-			var events []string
-			operations := failingExclusiveWriteOperations(test.failAt, cause, &events, os.Remove)
-			err := writeExclusiveWithOperations(path, []byte("content"), 0o555, operations)
-			if !errors.Is(err, cause) {
-				t.Fatalf("error = %v, want cause %v", err, cause)
-			}
-			if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
-				t.Fatalf("created destination remains after failure: %v", statErr)
-			}
-			if strings.Join(events, ",") != strings.Join(test.wantEvents, ",") {
-				t.Fatalf("events = %v, want %v", events, test.wantEvents)
-			}
-		})
-	}
-}
-
-func TestWriteExclusiveJoinsCleanupFailures(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "staged")
-	primary := errors.New("write failure")
-	closeFailure := errors.New("cleanup close failure")
-	removeFailure := errors.New("cleanup remove failure")
-	var events []string
-	operations := failingExclusiveWriteOperations("write", primary, &events, func(string) error {
-		return removeFailure
-	})
-	originalOpen := operations.open
-	operations.open = func(path string, flags int, mode os.FileMode) (exclusiveWriteFile, error) {
-		file, err := originalOpen(path, flags, mode)
-		if err != nil {
-			return nil, err
-		}
-		wrapped := file.(*testExclusiveWriteFile)
-		originalClose := wrapped.close
-		wrapped.close = func() error {
-			_ = originalClose()
-			return closeFailure
-		}
-		return wrapped, nil
-	}
-	err := writeExclusiveWithOperations(path, []byte("content"), 0o555, operations)
-	for _, cause := range []error{primary, closeFailure, removeFailure} {
-		if !errors.Is(err, cause) {
-			t.Fatalf("error = %v, missing cause %v", err, cause)
-		}
-	}
-	if _, statErr := os.Stat(path); statErr != nil {
-		t.Fatalf("remove failure did not retain the fixture: %v", statErr)
-	}
-	if err := os.Remove(path); err != nil {
-		t.Fatal(err)
-	}
-}
-
-type testExclusiveWriteFile struct {
-	write func([]byte) (int, error)
-	sync  func() error
-	chmod func(os.FileMode) error
-	close func() error
-}
-
-func (file *testExclusiveWriteFile) Write(content []byte) (int, error) { return file.write(content) }
-func (file *testExclusiveWriteFile) Sync() error                       { return file.sync() }
-func (file *testExclusiveWriteFile) Chmod(mode os.FileMode) error      { return file.chmod(mode) }
-func (file *testExclusiveWriteFile) Close() error                      { return file.close() }
-
-func failingExclusiveWriteOperations(failAt string, cause error, events *[]string, remove func(string) error) exclusiveWriteOperations {
-	return exclusiveWriteOperations{
-		open: func(path string, flags int, mode os.FileMode) (exclusiveWriteFile, error) {
-			file, err := os.OpenFile(path, flags, mode)
-			if err != nil {
-				return nil, err
-			}
-			syncCalls := 0
-			return &testExclusiveWriteFile{
-				write: func(content []byte) (int, error) {
-					*events = append(*events, "write")
-					if failAt == "write" {
-						return 0, cause
-					}
-					return file.Write(content)
-				},
-				sync: func() error {
-					syncCalls++
-					operation := "data sync"
-					if syncCalls == 2 {
-						operation = "metadata sync"
-					}
-					*events = append(*events, operation)
-					if failAt == operation {
-						return cause
-					}
-					return file.Sync()
-				},
-				chmod: func(mode os.FileMode) error {
-					*events = append(*events, "chmod")
-					if failAt == "chmod" {
-						return cause
-					}
-					return file.Chmod(mode)
-				},
-				close: func() error {
-					*events = append(*events, "close")
-					closeErr := file.Close()
-					if failAt == "close" {
-						return cause
-					}
-					return closeErr
-				},
-			}, nil
-		},
-		remove: remove,
-	}
-}
-
-func requireFileMode(t *testing.T, path string, want os.FileMode) {
-	t.Helper()
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != want {
-		t.Fatalf("%s mode = %04o, want %04o", filepath.Base(path), info.Mode().Perm(), want)
-	}
-}
-
-func TestAuditWriterPersistsConcurrentGapFreeCorrelatedRecords(t *testing.T) {
-	structured, structuredBytes := memoryAuditFile()
-	raw, rawBytes := memoryAuditFile()
-	writer := newAuditWriter(structured, raw)
-	const records = 50
-	var wait sync.WaitGroup
-	for i := range records {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
-			payload := []byte{0, byte(i), 0xff}
-			writer.enqueue(toolCallRecord{Status: "completed", RequestType: "exec", WantReply: true}, rawRecord(requestAudit{
-				requestType: "exec", wantReply: true, payload: payload, remoteCommand: "command",
-			}, int64(len(payload)), payload, "completed"))
-		}()
-	}
-	wait.Wait()
-	if err := writer.sealAndWait(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	structuredRecords := decodeAuditLines(t, structuredBytes.Bytes())
-	rawRecords := decodeRawAuditRecords(t, rawBytes.Bytes())
-	if len(structuredRecords) != records || len(rawRecords) != records {
-		t.Fatalf("record counts = %d, %d", len(structuredRecords), len(rawRecords))
-	}
-	for index := range records {
-		want := index + 1
-		if structuredRecords[index]["sequence"] != float64(want) || rawRecords[index]["sequence"] != strconv.Itoa(want) {
-			t.Fatalf("sequence %d = %#v / %#v", index, structuredRecords[index], rawRecords[index])
-		}
-		payload := unescapeRawValue(t, rawRecords[index]["payload"])
-		stdin := unescapeRawValue(t, rawRecords[index]["stdin"])
-		if !bytes.Equal(stdin, payload) || len(payload) != 3 {
-			t.Fatalf("raw exact bytes %d = payload %x stdin %x", index, payload, stdin)
-		}
-	}
-}
-
-func TestToolCallJSONLDisablesHTMLEscapingButKeepsRequiredEscapes(t *testing.T) {
-	structured, structuredBytes := memoryAuditFile()
-	raw, _ := memoryAuditFile()
-	writer := newAuditWriter(structured, raw)
-	want := "&& <tag> > é 漢字 \"quote\" \\slash\nline\t\x00"
-	writer.enqueue(toolCallRecord{Command: want, Status: "completed"}, rawSSHRecord{})
-	if err := writer.sealAndWait(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	content := structuredBytes.Bytes()
-	for _, literal := range [][]byte{[]byte("&&"), []byte("<tag>"), []byte("é"), []byte("漢字")} {
-		if !bytes.Contains(content, literal) {
-			t.Fatalf("structured JSON lacks literal %q: %s", literal, content)
-		}
-	}
-	for _, forbidden := range [][]byte{[]byte(`\u0026`), []byte(`\u003c`), []byte(`\u003e`)} {
-		if bytes.Contains(bytes.ToLower(content), forbidden) {
-			t.Fatalf("structured JSON retained HTML escape %q: %s", forbidden, content)
-		}
-	}
-	records := decodeAuditLines(t, content)
-	if len(records) != 1 || records[0]["command"] != want {
-		t.Fatalf("structured JSON round trip = %#v", records)
-	}
-}
-
-func TestRawAuditUsesDeterministicLosslessHumanReadableGrammar(t *testing.T) {
-	payload := append(ssh.Marshal(struct{ Command string }{"printf 'é && <tag>'"}), 0, 0xff, '\n', '\t', '\\')
-	stdin := []byte("readable é\n--- ARIES SSH CALL END ---\x00\xff")
-	record := rawRecord(requestAudit{requestType: "exec", wantReply: true, payload: payload, remoteCommand: "printf 'é && <tag>'"}, int64(len(stdin)), stdin, "completed")
-	record.Sequence = 7
-	record.Timestamp = "2026-07-24T12:00:00.000000123Z"
-	record.RunID = "run"
-	record.TaskID = "task"
-	record.ContainerID = "container"
-	content, err := renderRawSSHRecord(record)
-	if err != nil {
-		t.Fatal(err)
-	}
-	parsed := decodeRawAuditRecords(t, content)
-	if len(parsed) != 1 || parsed[0]["wire_command"] != "printf 'é && <tag>'" {
-		t.Fatalf("raw records = %#v", parsed)
-	}
-	if !bytes.Equal(unescapeRawValue(t, parsed[0]["payload"]), payload) || !bytes.Equal(unescapeRawValue(t, parsed[0]["stdin"]), stdin) {
-		t.Fatalf("raw round trip failed: %s", content)
-	}
-	if parsed[0]["payload_bytes"] != strconv.Itoa(len(payload)) || parsed[0]["stdin_bytes"] != strconv.Itoa(len(stdin)) || !bytes.Contains(content, []byte(`\xFF`)) {
-		t.Fatalf("raw byte counts or uppercase escapes are wrong: %s", content)
-	}
-	if bytes.Contains(content, []byte("base64")) || bytes.Contains(content, []byte{'\x00'}) || bytes.Count(content, []byte("--- ARIES SSH CALL END ---\n")) != 1 {
-		t.Fatalf("raw grammar is ambiguous or contains control bytes: %q", content)
-	}
-}
-
-func TestAuditWriterDoesNotBlockEnqueueOnSlowStorage(t *testing.T) {
-	for _, slowFile := range []string{"structured", "raw"} {
-		t.Run(slowFile, func(t *testing.T) {
-			blocked := make(chan struct{})
-			release := make(chan struct{})
-			var calls atomic.Int32
-			slow := &auditFile{
-				write: func(content []byte) (int, error) {
-					if calls.Add(1) == 1 {
-						close(blocked)
-						<-release
-					}
-					return len(content), nil
-				}, sync: func() error { return nil }, close: func() error { return nil },
-			}
-			fast, _ := memoryAuditFile()
-			structured, raw := slow, fast
-			if slowFile == "raw" {
-				structured, raw = fast, slow
-			}
-			writer := newAuditWriter(structured, raw)
-			writer.enqueue(toolCallRecord{Status: "completed"}, rawSSHRecord{Status: "completed"})
-			<-blocked
-			done := make(chan struct{})
-			go func() {
-				for range 100 {
-					writer.enqueue(toolCallRecord{Status: "completed"}, rawSSHRecord{Status: "completed"})
-				}
-				close(done)
-			}()
-			select {
-			case <-done:
-			case <-time.After(time.Second):
-				t.Fatal("enqueue blocked on storage")
-			}
-			close(release)
-			if err := writer.sealAndWait(context.Background()); err != nil {
-				t.Fatal(err)
-			}
-		})
-	}
-}
-
-func TestAuditWriterLatchesAdmissionAndFileFailures(t *testing.T) {
-	tests := map[string]func() (*auditFile, *auditFile){
-		"write": func() (*auditFile, *auditFile) {
-			bad := &auditFile{write: func([]byte) (int, error) { return 0, errors.New("write") }, sync: func() error { return nil }, close: func() error { return nil }}
-			good, _ := memoryAuditFile()
-			return bad, good
-		},
-		"short write": func() (*auditFile, *auditFile) {
-			bad := &auditFile{write: func([]byte) (int, error) { return 0, nil }, sync: func() error { return nil }, close: func() error { return nil }}
-			good, _ := memoryAuditFile()
-			return bad, good
-		},
-		"sync": func() (*auditFile, *auditFile) {
-			bad := &auditFile{write: func(content []byte) (int, error) { return len(content), nil }, sync: func() error { return errors.New("sync") }, close: func() error { return nil }}
-			good, _ := memoryAuditFile()
-			return bad, good
-		},
-		"close": func() (*auditFile, *auditFile) {
-			bad := &auditFile{write: func(content []byte) (int, error) { return len(content), nil }, sync: func() error { return nil }, close: func() error { return errors.New("close") }}
-			good, _ := memoryAuditFile()
-			return bad, good
-		},
-	}
-	for name, files := range tests {
-		t.Run(name, func(t *testing.T) {
-			structured, raw := files()
-			writer := newAuditWriter(structured, raw)
-			writer.enqueue(toolCallRecord{Status: "completed"}, rawSSHRecord{Status: "completed"})
-			if err := writer.sealAndWait(context.Background()); err == nil {
-				t.Fatal("expected persistence error")
-			}
-		})
-	}
-}
-
-func TestAuditWriterRejectsRecordsAfterAdmissionFailure(t *testing.T) {
-	structured, structuredBytes := memoryAuditFile()
-	raw, rawBytes := memoryAuditFile()
-	writer := newAuditWriter(structured, raw)
-	marshalCalls := 0
-	writer.marshal = func(value any) ([]byte, error) {
-		marshalCalls++
-		if marshalCalls == 1 {
-			return nil, errors.New("marshal")
-		}
-		return json.Marshal(value)
-	}
-
-	writer.enqueue(toolCallRecord{Status: "failed"}, rawSSHRecord{Status: "failed"})
-	writer.enqueue(toolCallRecord{Status: "completed"}, rawSSHRecord{Status: "completed"})
-	if err := writer.sealAndWait(context.Background()); err == nil || !strings.Contains(err.Error(), "marshal") {
-		t.Fatalf("sealAndWait() error = %v, want retained admission failure", err)
-	}
-	if marshalCalls != 1 {
-		t.Fatalf("marshal calls = %d, want no admission after failure", marshalCalls)
-	}
-	if structuredBytes.Len() != 0 || rawBytes.Len() != 0 {
-		t.Fatalf("records persisted after failure: structured=%q raw=%q", structuredBytes.Bytes(), rawBytes.Bytes())
-	}
-}
-
-func TestAuditWriterRejectsRecordsAfterPersistenceFailureAndStopRetainsError(t *testing.T) {
-	latched := make(chan struct{})
-	var structuredWrites, rawWrites atomic.Int32
-	structured := &auditFile{
-		write: func([]byte) (int, error) {
-			structuredWrites.Add(1)
-			return 0, errors.New("persist failed")
-		},
-		sync:  func() error { return nil },
-		close: func() error { return nil },
-	}
-	raw := &auditFile{
-		write: func(content []byte) (int, error) {
-			rawWrites.Add(1)
-			close(latched)
-			return len(content), nil
-		},
-		sync:  func() error { return nil },
-		close: func() error { return nil },
-	}
-	writer := newAuditWriter(structured, raw)
-	writer.enqueue(toolCallRecord{Status: "failed"}, rawSSHRecord{Status: "failed"})
-	select {
-	case <-latched:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for persistence failure to be latched")
-	}
-
-	writer.mu.Lock()
-	latchedErr := writer.err
-	writer.mu.Unlock()
-	if latchedErr == nil || !strings.Contains(latchedErr.Error(), "persist failed") {
-		t.Fatalf("latched error = %v, want persistence failure", latchedErr)
-	}
-	writer.enqueue(toolCallRecord{Status: "completed"}, rawSSHRecord{Status: "completed"})
-
-	session := &bridgeSession{audit: writer, connections: make(map[net.Conn]struct{})}
-	manager := &Manager{active: session}
-	for attempt := 0; attempt < 2; attempt++ {
-		if err := manager.Stop(context.Background()); err == nil || !strings.Contains(err.Error(), "persist failed") {
-			t.Fatalf("Stop() attempt %d error = %v, want retained persistence failure", attempt+1, err)
-		}
-	}
-	if structuredWrites.Load() != 1 || rawWrites.Load() != 1 || writer.sequence != 1 {
-		t.Fatalf("writes structured/raw=%d/%d sequence=%d, want only first pair admitted", structuredWrites.Load(), rawWrites.Load(), writer.sequence)
-	}
-}
-
-func TestAuditWriterExactCombinedBudgetBoundaryAndImmutableEnqueue(t *testing.T) {
-	fixed := time.Date(2026, 7, 24, 12, 0, 0, 123, time.UTC)
-	argv := []string{"/bin/sh", "original"}
-	structuredRecord := toolCallRecord{Status: "completed", Argv: argv}
-	rawRecord := rawSSHRecord{Status: "completed", Payload: []byte{0, 1}, PayloadBytes: 2, Stdin: []byte{2, 3}, StdinBytes: 2}
-	structuredCandidate := structuredRecord
-	rawCandidate := rawRecord
-	structuredCandidate.Sequence, rawCandidate.Sequence = 1, 1
-	structuredCandidate.Timestamp, rawCandidate.Timestamp = fixed.Format(time.RFC3339Nano), fixed.Format(time.RFC3339Nano)
-	structuredLine, _ := marshalJSONLine(structuredCandidate)
-	rawLine, _ := renderRawSSHRecord(rawCandidate)
-	charge := int64(len(structuredLine) + len(rawLine))
-
-	structured, structuredBytes := memoryAuditFile()
-	raw, rawBytes := memoryAuditFile()
-	writer := newAuditWriter(structured, raw)
-	writer.now = func() time.Time { return fixed }
-	writer.bytes = maxToolLogBytes - charge
-	writer.enqueue(structuredRecord, rawRecord)
-	argv[1] = "mutated-after-enqueue"
-	if err := writer.sealAndWait(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if writer.bytes != maxToolLogBytes || writer.sequence != 1 {
-		t.Fatalf("admission bytes/sequence = %d/%d", writer.bytes, writer.sequence)
-	}
-	if bytes.Contains(structuredBytes.Bytes(), []byte("mutated-after-enqueue")) || !bytes.Contains(structuredBytes.Bytes(), []byte("original")) || rawBytes.Len() == 0 {
-		t.Fatalf("enqueue did not retain immutable pair: %s / %s", structuredBytes.Bytes(), rawBytes.Bytes())
-	}
-
-	structured, structuredBytes = memoryAuditFile()
-	raw, rawBytes = memoryAuditFile()
-	overflow := newAuditWriter(structured, raw)
-	overflow.now = func() time.Time { return fixed }
-	overflow.bytes = maxToolLogBytes - charge + 1
-	overflow.enqueue(structuredRecord, rawRecord)
-	if err := overflow.sealAndWait(context.Background()); err == nil || overflow.sequence != 0 || structuredBytes.Len() != 0 || rawBytes.Len() != 0 {
-		t.Fatalf("overflow = %v, sequence=%d, bytes=%d/%d", err, overflow.sequence, structuredBytes.Len(), rawBytes.Len())
-	}
-}
-
-func TestAuditWriterLatchesMarshalAndEnqueueAfterSeal(t *testing.T) {
-	structured, _ := memoryAuditFile()
-	raw, _ := memoryAuditFile()
-	marshalFailure := newAuditWriter(structured, raw)
-	marshalFailure.marshal = func(any) ([]byte, error) { return nil, errors.New("marshal") }
-	marshalFailure.enqueue(toolCallRecord{Status: "completed"}, rawSSHRecord{Status: "completed"})
-	if err := marshalFailure.sealAndWait(context.Background()); err == nil || !strings.Contains(err.Error(), "marshal") {
-		t.Fatalf("marshal error = %v", err)
-	}
-
-	structured, _ = memoryAuditFile()
-	raw, _ = memoryAuditFile()
-	renderFailure := newAuditWriter(structured, raw)
-	renderFailure.renderRaw = func(rawSSHRecord) ([]byte, error) { return nil, errors.New("render") }
-	renderFailure.enqueue(toolCallRecord{Status: "completed"}, rawSSHRecord{Status: "completed"})
-	if err := renderFailure.sealAndWait(context.Background()); err == nil || !strings.Contains(err.Error(), "render") {
-		t.Fatalf("render error = %v", err)
-	}
-
-	structured, _ = memoryAuditFile()
-	raw, _ = memoryAuditFile()
-	afterSeal := newAuditWriter(structured, raw)
-	if err := afterSeal.sealAndWait(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	afterSeal.enqueue(toolCallRecord{Status: "completed"}, rawSSHRecord{Status: "completed"})
-	if err := afterSeal.sealAndWait(context.Background()); err == nil || !strings.Contains(err.Error(), "after seal") {
-		t.Fatalf("enqueue-after-seal error = %v", err)
-	}
-}
-
-func TestAuditWriterDrainTimeoutIsRetryable(t *testing.T) {
-	blocked := make(chan struct{})
-	release := make(chan struct{})
-	structured := &auditFile{
-		write: func(content []byte) (int, error) { close(blocked); <-release; return len(content), nil },
-		sync:  func() error { return nil }, close: func() error { return nil },
-	}
-	raw, _ := memoryAuditFile()
-	writer := newAuditWriter(structured, raw)
-	writer.enqueue(toolCallRecord{Status: "completed"}, rawSSHRecord{Status: "completed"})
-	<-blocked
-	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
-	defer cancel()
-	if err := writer.sealAndWait(ctx); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("drain error = %v", err)
-	}
-	close(release)
-	if err := writer.sealAndWait(context.Background()); err != nil {
-		t.Fatalf("retry drain = %v", err)
-	}
-}
-
-func TestManagerStopPropagatesAuditFailure(t *testing.T) {
-	bad := &auditFile{write: func([]byte) (int, error) { return 0, errors.New("audit write") }, sync: func() error { return nil }, close: func() error { return nil }}
-	good, _ := memoryAuditFile()
-	session := &bridgeSession{audit: newAuditWriter(bad, good), connections: make(map[net.Conn]struct{})}
-	session.audit.enqueue(toolCallRecord{Status: "completed"}, rawSSHRecord{Status: "completed"})
-	manager := &Manager{active: session}
-	if err := manager.Stop(context.Background()); err == nil || !strings.Contains(err.Error(), "audit write") {
-		t.Fatalf("Stop() error = %v", err)
-	}
-	if err := manager.Stop(context.Background()); err == nil || !strings.Contains(err.Error(), "audit write") {
-		t.Fatalf("idempotent Stop() error = %v", err)
-	}
-}
-
 func TestOversizedStdinEmitsNoPartialPairAndFailsAudit(t *testing.T) {
-	structured, structuredBytes := memoryAuditFile()
-	raw, rawBytes := memoryAuditFile()
 	sandbox := &contractSandbox{acceptTools: true}
-	session := &bridgeSession{sandbox: sandbox, audit: newAuditWriter(structured, raw)}
+	session := &bridgeSession{sandbox: sandbox}
+	logs := attachTestAudit(t, session)
 	channel := &stubSSHChannel{Buffer: *bytes.NewBuffer(bytes.Repeat([]byte{'x'}, maxRecordedInputBytes+1))}
 	encoded := encodeCanonicalTokens([]string{remoteShell, "-c", "cat"})
 	remote, err := decodeRemoteCommand(encoded)
@@ -685,35 +38,31 @@ func TestOversizedStdinEmitsNoPartialPairAndFailsAudit(t *testing.T) {
 	if exit := session.execute(context.Background(), channel, prepared, requestAudit{requestType: "exec", wantReply: true, payload: ssh.Marshal(struct{ Command string }{encoded})}); exit != 255 {
 		t.Fatalf("exit = %d", exit)
 	}
-	session.connections = make(map[net.Conn]struct{})
-	manager := &Manager{active: session}
-	if err := manager.Stop(context.Background()); err == nil || !strings.Contains(err.Error(), "stdin") {
-		t.Fatalf("Stop() audit error = %v", err)
+	if err := session.Close(context.Background()); err == nil || !strings.Contains(err.Error(), "stdin") {
+		t.Fatalf("Close() audit error = %v", err)
 	}
-	if structuredBytes.Len() != 0 || rawBytes.Len() != 0 {
-		t.Fatalf("oversized stdin emitted partial pair: %q / %q", structuredBytes.Bytes(), rawBytes.Bytes())
+	logs.read(t, session)
+	if len(logs.structured) != 0 || len(logs.raw) != 0 {
+		t.Fatalf("oversized stdin emitted partial pair: %q / %q", logs.structured, logs.raw)
 	}
 }
 
 func TestAcceptedReplyFailureRetainsExactRequestEvidence(t *testing.T) {
-	structured, structuredBytes := memoryAuditFile()
-	raw, rawBytes := memoryAuditFile()
 	sandbox := &contractSandbox{}
 	session := &bridgeSession{
-		sandbox: sandbox, audit: newAuditWriter(structured, raw),
+		sandbox:      sandbox,
 		replyRequest: func(*ssh.Request, bool) error { return errors.New("reply failed") },
 	}
+	logs := attachTestAudit(t, session)
 	encoded := encodeCanonicalTokens([]string{remoteShell, "-c", "true"})
 	payload := ssh.Marshal(struct{ Command string }{encoded})
 	requests := make(chan *ssh.Request, 1)
 	requests <- &ssh.Request{Type: "exec", WantReply: true, Payload: payload}
 	close(requests)
 	session.handleSession(context.Background(), &stubSSHChannel{}, requests)
-	if err := session.closeAudit(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	structuredRecords := decodeAuditLines(t, structuredBytes.Bytes())
-	rawRecords := decodeRawAuditRecords(t, rawBytes.Bytes())
+	logs.seal(t, session)
+	structuredRecords := decodeAuditLines(t, logs.structured)
+	rawRecords := decodeRawAuditRecords(t, logs.raw)
 	if len(structuredRecords) != 1 || len(rawRecords) != 1 || structuredRecords[0]["status"] != "failed" || rawRecords[0]["status"] != "failed" {
 		t.Fatalf("reply failure records = %#v / %#v", structuredRecords, rawRecords)
 	}
@@ -727,23 +76,20 @@ func TestAcceptedReplyFailureRetainsExactRequestEvidence(t *testing.T) {
 }
 
 func TestRawAuditRetainsMalformedRequestPayloadWithEmptyWireCommand(t *testing.T) {
-	structured, structuredBytes := memoryAuditFile()
-	raw, rawBytes := memoryAuditFile()
 	sandbox := &contractSandbox{}
 	session := &bridgeSession{
-		sandbox: sandbox, audit: newAuditWriter(structured, raw),
+		sandbox:      sandbox,
 		replyRequest: func(*ssh.Request, bool) error { return nil },
 	}
+	logs := attachTestAudit(t, session)
 	payload := []byte{0, 0, 0, 7, 'b', 'a', 'd', 0xff}
 	requests := make(chan *ssh.Request, 1)
 	requests <- &ssh.Request{Type: "exec", WantReply: true, Payload: payload}
 	close(requests)
 	session.handleSession(context.Background(), &stubSSHChannel{}, requests)
-	if err := session.closeAudit(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	structuredRecords := decodeAuditLines(t, structuredBytes.Bytes())
-	rawRecords := decodeRawAuditRecords(t, rawBytes.Bytes())
+	logs.seal(t, session)
+	structuredRecords := decodeAuditLines(t, logs.structured)
+	rawRecords := decodeRawAuditRecords(t, logs.raw)
 	if len(structuredRecords) != 1 || structuredRecords[0]["status"] != "rejected" || len(rawRecords) != 1 {
 		t.Fatalf("malformed records = %#v / %#v", structuredRecords, rawRecords)
 	}
@@ -765,13 +111,41 @@ func (*stubSSHChannel) CloseWrite() error                              { return 
 func (*stubSSHChannel) SendRequest(string, bool, []byte) (bool, error) { return true, nil }
 func (channel *stubSSHChannel) Stderr() io.ReadWriter                  { return &channel.stderr }
 
-func memoryAuditFile() (*auditFile, *bytes.Buffer) {
-	var mu sync.Mutex
-	var buffer bytes.Buffer
-	return &auditFile{
-		write: func(content []byte) (int, error) { mu.Lock(); defer mu.Unlock(); return buffer.Write(content) },
-		sync:  func() error { return nil }, close: func() error { return nil },
-	}, &buffer
+// testAudit is a real audit on two temporary files, for tests that drive a
+// session without Start.
+type testAudit struct{ structured, raw []byte }
+
+func attachTestAudit(t *testing.T, session *bridgeSession) *testAudit {
+	t.Helper()
+	directory := t.TempDir()
+	session.toolLogPath = filepath.Join(directory, "tool-calls.jsonl")
+	session.rawLogPath = filepath.Join(directory, "ssh_raw.log")
+	audit, err := bridgekit.Open(session.toolLogPath, session.rawLogPath, maxToolLogBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.Audit = audit
+	return &testAudit{}
+}
+
+// seal finishes the session's audit and reads both logs.
+func (logs *testAudit) seal(t *testing.T, session *bridgeSession) {
+	t.Helper()
+	if err := session.Finish(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	logs.read(t, session)
+}
+
+func (logs *testAudit) read(t *testing.T, session *bridgeSession) {
+	t.Helper()
+	var err error
+	if logs.structured, err = os.ReadFile(session.toolLogPath); err != nil {
+		t.Fatal(err)
+	}
+	if logs.raw, err = os.ReadFile(session.rawLogPath); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func decodeAuditLines(t *testing.T, content []byte) []map[string]any {
@@ -912,11 +286,11 @@ func TestLatePartialStartCleansListenerCredentialsAndAuditWithoutAliasBranches(t
 	var address, artifactDir string
 	var retainedPaths []string
 	manager.afterStart = func(session *bridgeSession) error {
-		if session.listener == nil || session.audit == nil {
+		if session.listener == nil || session.Audit == nil {
 			t.Fatal("late start hook ran before listener and audit allocation")
 		}
 		address = session.listener.Addr().String()
-		artifactDir = session.artifactDir
+		artifactDir = session.ArtifactDir
 		retainedPaths = []string{
 			session.clientSource,
 			session.identitySource,
@@ -941,10 +315,7 @@ func TestLatePartialStartCleansListenerCredentialsAndAuditWithoutAliasBranches(t
 	if _, err := os.Lstat(artifactDir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("partial-start artifact directory remains: %v", err)
 	}
-	manager.mu.Lock()
-	active := manager.active
-	manager.mu.Unlock()
-	if active != nil {
+	if manager.slot.Active() != nil {
 		t.Fatal("successfully cleaned partial session was retained as active")
 	}
 	sandbox.mu.Lock()
