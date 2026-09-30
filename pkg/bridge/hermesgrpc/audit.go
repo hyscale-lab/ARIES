@@ -116,7 +116,7 @@ func (writer *boundedWriter) truncated() bool {
 // arbitrary bytes, so anything not structured-safe goes to stdin_raw as base64
 // and the Stdin field carries a note naming that field.
 func describeStdin(content []byte) (text, encoding, raw string) {
-	if bridgekit.SafeText(content) {
+	if bridgekit.SafeStructuredText(content) {
 		return string(content), "utf-8", ""
 	}
 	return fmt.Sprintf("[binary input omitted; %d bytes retained in stdin_raw]", len(content)),

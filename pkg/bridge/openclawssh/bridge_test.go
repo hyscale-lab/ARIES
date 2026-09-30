@@ -24,7 +24,7 @@ func TestOversizedStdinEmitsNoPartialPairAndFailsAudit(t *testing.T) {
 	sandbox := &contractSandbox{acceptTools: true}
 	session := &bridgeSession{sandbox: sandbox}
 	logs := attachTestAudit(t, session)
-	channel := &stubSSHChannel{Buffer: *bytes.NewBuffer(bytes.Repeat([]byte{'x'}, sshserve.MaxInputBytes+1))}
+	channel := &stubSSHChannel{Buffer: *bytes.NewBuffer(bytes.Repeat([]byte{'x'}, sshserve.MaxRecordedInputBytes+1))}
 	encoded := encodeCanonicalTokens([]string{remoteShell, "-c", "cat"})
 	remote, err := decodeRemoteCommand(encoded)
 	if err != nil {
@@ -130,7 +130,7 @@ func attachTestAudit(t *testing.T, session *bridgeSession) *testAudit {
 // seal finishes the session's audit and reads both logs.
 func (logs *testAudit) seal(t *testing.T, session *bridgeSession) {
 	t.Helper()
-	if err := session.Finish(context.Background()); err != nil {
+	if err := session.Finalize(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	logs.read(t, session)

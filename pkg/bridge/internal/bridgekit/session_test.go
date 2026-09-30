@@ -128,12 +128,12 @@ func TestFinishRemovesPrivateFilesAndAPartialStart(t *testing.T) {
 		identity := filepath.Join(directory, "identity")
 		evidence := filepath.Join(directory, "evidence")
 		for _, path := range []string{identity, evidence} {
-			if err := WritePrivate(path, []byte("x")); err != nil {
+			if err := WriteExclusivePrivate(path, []byte("x")); err != nil {
 				t.Fatal(err)
 			}
 		}
 		session := &Session{ArtifactDir: directory, Partial: partial}
-		if err := session.Finish(context.Background(), identity); err != nil {
+		if err := session.Finalize(context.Background(), identity); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := os.Stat(identity); !os.IsNotExist(err) {
@@ -148,18 +148,18 @@ func TestFinishRemovesPrivateFilesAndAPartialStart(t *testing.T) {
 func TestFinishFailsOnAnUnconfirmedTermination(t *testing.T) {
 	session := &Session{}
 	session.RecordRevocationError(context.Canceled)
-	if err := session.Finish(context.Background()); err != nil {
+	if err := session.Finalize(context.Background()); err != nil {
 		t.Fatalf("pure cancellation = %v", err)
 	}
 	session.RecordRevocationError(errors.Join(context.Canceled, errors.New("exec still running")))
-	if err := session.Finish(context.Background()); err == nil {
+	if err := session.Finalize(context.Background()); err == nil {
 		t.Fatal("an unconfirmed termination was accepted")
 	}
 }
 
 func TestExemptBytesAreNotChargedToTheLimit(t *testing.T) {
 	structured, _ := memoryAuditFile()
-	writer := newWriter(structured, nil, 200)
+	writer := newAuditWriter(structured, nil, 200)
 	content := strings.Repeat("x", 256)
 	writer.Enqueue(&testRecord{Command: content}, nil, len(content))
 	if err := writer.sealAndWait(context.Background()); err != nil {
@@ -167,7 +167,7 @@ func TestExemptBytesAreNotChargedToTheLimit(t *testing.T) {
 	}
 
 	structured, _ = memoryAuditFile()
-	charged := newWriter(structured, nil, 200)
+	charged := newAuditWriter(structured, nil, 200)
 	charged.Enqueue(&testRecord{Command: content}, nil, 0)
 	if err := charged.sealAndWait(context.Background()); err == nil {
 		t.Fatal("charged content over the limit was admitted")

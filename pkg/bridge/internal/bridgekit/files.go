@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 )
 
-// WritePrivate creates path exclusively with mode 0600, removing it again if
+// WriteExclusivePrivate creates path exclusively with mode 0600, removing it again if
 // any step fails, so a credential is never left partially written.
-func WritePrivate(path string, content []byte) error {
+func WriteExclusivePrivate(path string, content []byte) error {
 	return writeExclusive(path, content, 0o600)
 }
 

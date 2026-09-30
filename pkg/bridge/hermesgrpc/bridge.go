@@ -216,7 +216,7 @@ func (manager *Manager) Stop(ctx context.Context) error {
 // known-hosts line.
 func (session *bridgeSession) Close(ctx context.Context) error {
 	session.revoke()
-	return session.Finish(ctx, session.identityFile)
+	return session.Finalize(ctx, session.identityFile)
 }
 
 // open allocates the session's client, credentials, listener, audit, and
@@ -239,10 +239,10 @@ func (manager *Manager) open(ctx context.Context, session *bridgeSession, gatewa
 	session.identityFile = filepath.Join(session.ArtifactDir, "client.pem")
 	session.trustedFile = filepath.Join(session.ArtifactDir, "server.crt")
 	session.toolLogPath = filepath.Join(session.ArtifactDir, "tool-calls.jsonl")
-	if err := bridgekit.WritePrivate(session.identityFile, credentialMaterial.identity); err != nil {
+	if err := bridgekit.WriteExclusivePrivate(session.identityFile, credentialMaterial.identity); err != nil {
 		return failed(fmt.Errorf("write Hermes gRPC client identity: %w", err))
 	}
-	if err := bridgekit.WritePrivate(session.trustedFile, credentialMaterial.trusted); err != nil {
+	if err := bridgekit.WriteExclusivePrivate(session.trustedFile, credentialMaterial.trusted); err != nil {
 		return failed(fmt.Errorf("write Hermes gRPC trusted certificate: %w", err))
 	}
 

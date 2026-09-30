@@ -115,7 +115,7 @@ func TestBridgeProxiesHermesCommandsAndRetainsEvidence(t *testing.T) {
 	}
 	defer client.Close()
 
-	stdout, stderr, runErr := runExec(t, client, hermeswire.Encode("eval 'echo hello-from-agent && pwd'", false), "")
+	stdout, stderr, runErr := runExec(t, client, hermeswire.EncodeRemoteCommand("eval 'echo hello-from-agent && pwd'", false), "")
 	var exitErr *ssh.ExitError
 	if runErr == nil {
 		t.Fatal("expected the sandbox exit status to propagate")
@@ -320,7 +320,7 @@ func TestBridgeServesConcurrentChannelsOnOneConnection(t *testing.T) {
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
-			payload := hermeswire.Encode("echo command-"+string(rune('a'+index)), false)
+			payload := hermeswire.EncodeRemoteCommand("echo command-"+string(rune('a'+index)), false)
 			if _, _, err := runExec(t, client, payload, ""); err != nil {
 				errs <- err
 			}
@@ -351,7 +351,7 @@ func TestBridgePassesStdinThrough(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.Close()
-	if _, _, err := runExec(t, client, hermeswire.Encode("cat > out", false), "piped-input"); err != nil {
+	if _, _, err := runExec(t, client, hermeswire.EncodeRemoteCommand("cat > out", false), "piped-input"); err != nil {
 		t.Fatal(err)
 	}
 	sandbox.Mu.Lock()
@@ -407,7 +407,7 @@ func TestStopCancelsInFlightCommand(t *testing.T) {
 	go func() {
 		defer close(done)
 		close(started)
-		_, _, _ = runExec(t, client, hermeswire.Encode("sleep forever", false), "")
+		_, _, _ = runExec(t, client, hermeswire.EncodeRemoteCommand("sleep forever", false), "")
 	}()
 	<-started
 	time.Sleep(200 * time.Millisecond)
@@ -466,7 +466,7 @@ func TestBridgeOmitsRawLogWhenConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := runExec(t, client, hermeswire.Encode("eval 'echo hello-from-agent && pwd'", false), ""); err != nil {
+	if _, _, err := runExec(t, client, hermeswire.EncodeRemoteCommand("eval 'echo hello-from-agent && pwd'", false), ""); err != nil {
 		t.Fatal(err)
 	}
 	_ = client.Close()

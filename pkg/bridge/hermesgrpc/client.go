@@ -85,7 +85,7 @@ func execMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, clientUsage)
 		return transportFailureExit
 	}
-	payload := hermeswire.Encode(flags.Arg(0), *login)
+	payload := hermeswire.EncodeRemoteCommand(flags.Arg(0), *login)
 	input, err := io.ReadAll(stdin)
 	if err != nil {
 		fmt.Fprintf(stderr, "aries: read stdin: %v\n", err)

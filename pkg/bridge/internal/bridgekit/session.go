@@ -12,9 +12,9 @@ import (
 // its artifact directory, the handlers it waits for, and the errors that make
 // revocation unconfirmed.
 type Session struct {
-	Audit       *Writer
+	Audit       *AuditWriter
 	ArtifactDir string
-	// Partial marks a session whose Start failed; Finish then removes the
+	// Partial marks a session whose Start failed; Finalize then removes the
 	// artifact directory instead of retaining it.
 	Partial bool
 	// Wait counts the session's live handlers.
@@ -25,7 +25,7 @@ type Session struct {
 }
 
 // RecordRevocationError keeps a handler's error when it carries a
-// cancellation cause, so Finish can tell a clean revocation from a tool whose
+// cancellation cause, so Finalize can tell a clean revocation from a tool whose
 // termination was never confirmed.
 func (session *Session) RecordRevocationError(err error) {
 	if !HasCancellationCause(err) {
@@ -45,10 +45,10 @@ func (session *Session) revocationError() error {
 	return session.revocationErr
 }
 
-// Finish runs after the transport is revoked: it waits for every handler,
+// Finalize runs after the transport is revoked: it waits for every handler,
 // seals the audit, and removes the private files, which is what makes the
 // revocation positive. Any failure is returned so Stop can be retried.
-func (session *Session) Finish(ctx context.Context, private ...string) error {
+func (session *Session) Finalize(ctx context.Context, private ...string) error {
 	done := make(chan struct{})
 	go func() { session.Wait.Wait(); close(done) }()
 	select {

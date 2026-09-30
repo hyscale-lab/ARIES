@@ -13,7 +13,7 @@ func TestByteCounterTracksConcurrentPipeTraffic(t *testing.T) {
 	want := int64(chunks * len(payload))
 
 	readPipe, writePipe := io.Pipe()
-	readCounter := &Counter{Reader: readPipe}
+	readCounter := &ByteCounter{Reader: readPipe}
 	readDone := make(chan error, 1)
 	go func() {
 		_, err := io.Copy(io.Discard, readCounter)
@@ -37,7 +37,7 @@ func TestByteCounterTracksConcurrentPipeTraffic(t *testing.T) {
 	}
 
 	readPipe, writePipe = io.Pipe()
-	writeCounter := &Counter{Writer: writePipe}
+	writeCounter := &ByteCounter{Writer: writePipe}
 	drainDone := make(chan error, 1)
 	go func() {
 		_, err := io.Copy(io.Discard, readPipe)
@@ -71,7 +71,7 @@ func TestRecordedInputKeepsRawAndUsesSafeStructuredEncoding(t *testing.T) {
 		{name: "utf8 control", content: []byte("prefix\x00suffix"), want: "[binary input omitted; 13 bytes retained in ssh_raw.log]", encoding: "binary-omitted"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			input := &Input{Reader: bytes.NewReader(test.content)}
+			input := &RecordedInput{Reader: bytes.NewReader(test.content)}
 			if _, err := io.Copy(io.Discard, input); err != nil {
 				t.Fatal(err)
 			}
@@ -82,19 +82,19 @@ func TestRecordedInputKeepsRawAndUsesSafeStructuredEncoding(t *testing.T) {
 		})
 	}
 	t.Run("bounded", func(t *testing.T) {
-		input := &Input{Reader: io.LimitReader(zeroReader{}, MaxInputBytes+1)}
+		input := &RecordedInput{Reader: io.LimitReader(zeroReader{}, MaxRecordedInputBytes+1)}
 		if _, err := io.Copy(io.Discard, input); err == nil || !strings.Contains(err.Error(), "stdin exceeds") {
 			t.Fatalf("oversized stdin error = %v", err)
 		}
 		count, content, encoding, raw, overflow := input.Record(true)
-		if count <= MaxInputBytes || content != "" || encoding != "utf-8" || len(raw) != 0 || !overflow {
+		if count <= MaxRecordedInputBytes || content != "" || encoding != "utf-8" || len(raw) != 0 || !overflow {
 			t.Fatalf("bounded record = count %d content %d encoding %q", count, len(content), encoding)
 		}
 	})
 }
 
 func TestRecordedInputSnapshotsCountAndContentTogether(t *testing.T) {
-	input := &Input{Reader: &singleByteReader{remaining: 1 << 16}}
+	input := &RecordedInput{Reader: &singleByteReader{remaining: 1 << 16}}
 	done := make(chan error, 1)
 	go func() {
 		_, err := io.Copy(io.Discard, input)
@@ -138,7 +138,7 @@ func (zeroReader) Read(content []byte) (int, error) {
 	return len(content), nil
 }
 
-func pollCounter(counter *Counter) func() {
+func pollCounter(counter *ByteCounter) func() {
 	stop := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
@@ -168,7 +168,7 @@ func TestBinaryStdinNoteMatchesRawRetention(t *testing.T) {
 		{"omitted", false, "not retained"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			input := &Input{Reader: bytes.NewReader(nil)}
+			input := &RecordedInput{Reader: bytes.NewReader(nil)}
 			input.data.Write([]byte{0x00, 0x01, 0x02})
 			input.n = 3
 			_, note, encoding, _, _ := input.Record(testCase.retained)

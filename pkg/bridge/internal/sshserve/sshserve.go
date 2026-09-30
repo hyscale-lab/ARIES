@@ -25,18 +25,18 @@ import (
 )
 
 const (
-	// Username is the only user the server authenticates.
-	Username = "aries"
-	// MaxInputBytes bounds the stdin an Input retains for the audit.
-	MaxInputBytes = 16 << 20
+	// LockedUsername is the only user the server authenticates.
+	LockedUsername = "aries"
+	// MaxRecordedInputBytes bounds the stdin a RecordedInput retains for the audit.
+	MaxRecordedInputBytes = 16 << 20
 
 	handshakeTimeout = 5 * time.Second
 )
 
-// Keys generates a fresh host key and client key for one session. The client
+// GenerateSessionKeys generates a fresh host key and client key for one session. The client
 // key is returned as PKCS#8 PEM for the harness, and as the public key the
 // server authorizes.
-func Keys() (host ssh.Signer, clientPEM []byte, authorized ssh.PublicKey, err error) {
+func GenerateSessionKeys() (host ssh.Signer, clientPEM []byte, authorized ssh.PublicKey, err error) {
 	_, hostPrivate, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("generate SSH host key: %w", err)
@@ -82,7 +82,7 @@ func Serve(listener net.Listener, host ssh.Signer, authorized ssh.PublicKey, wai
 	configuration := &ssh.ServerConfig{
 		MaxAuthTries: 3,
 		PublicKeyCallback: func(metadata ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
-			if metadata.User() != Username || !bytes.Equal(key.Marshal(), authorized.Marshal()) {
+			if metadata.User() != LockedUsername || !bytes.Equal(key.Marshal(), authorized.Marshal()) {
 				return nil, errors.New("public key rejected")
 			}
 			return &ssh.Permissions{}, nil
@@ -183,31 +183,31 @@ func serveGlobalRequests(requests <-chan *ssh.Request) {
 	}
 }
 
-// Counter passes a stream through and counts its bytes; set Reader or Writer.
-type Counter struct {
+// ByteCounter passes a stream through and counts its bytes; set Reader or Writer.
+type ByteCounter struct {
 	Reader io.Reader
 	Writer io.Writer
 	n      atomic.Int64
 }
 
-func (counter *Counter) Read(content []byte) (int, error) {
+func (counter *ByteCounter) Read(content []byte) (int, error) {
 	n, err := counter.Reader.Read(content)
 	counter.n.Add(int64(n))
 	return n, err
 }
 
-func (counter *Counter) Write(content []byte) (int, error) {
+func (counter *ByteCounter) Write(content []byte) (int, error) {
 	n, err := counter.Writer.Write(content)
 	counter.n.Add(int64(n))
 	return n, err
 }
 
 // Count is the number of bytes passed so far.
-func (counter *Counter) Count() int64 { return counter.n.Load() }
+func (counter *ByteCounter) Count() int64 { return counter.n.Load() }
 
-// Input passes stdin through and retains up to MaxInputBytes of it for the
+// RecordedInput passes stdin through and retains up to MaxRecordedInputBytes of it for the
 // audit. Beyond that the read fails and Record reports the overflow.
-type Input struct {
+type RecordedInput struct {
 	Reader io.Reader
 
 	mu       sync.Mutex
@@ -216,17 +216,17 @@ type Input struct {
 	overflow bool
 }
 
-func (input *Input) Read(content []byte) (int, error) {
+func (input *RecordedInput) Read(content []byte) (int, error) {
 	n, err := input.Reader.Read(content)
 	if n > 0 {
 		input.mu.Lock()
-		remaining := MaxInputBytes - input.data.Len()
+		remaining := MaxRecordedInputBytes - input.data.Len()
 		if n > remaining {
 			input.n += int64(n)
 			input.data.Reset()
 			input.overflow = true
 			input.mu.Unlock()
-			return n, fmt.Errorf("SSH stdin exceeds %d bytes", MaxInputBytes)
+			return n, fmt.Errorf("SSH stdin exceeds %d bytes", MaxRecordedInputBytes)
 		}
 		_, _ = input.data.Write(content[:n])
 		input.n += int64(n)
@@ -239,13 +239,13 @@ func (input *Input) Read(content []byte) (int, error) {
 // count, the text or an omission note, its encoding, the raw bytes, and
 // whether the input overflowed. retainedRaw says whether this run writes
 // ssh_raw.log, so the note names only an artifact that exists.
-func (input *Input) Record(retainedRaw bool) (count int64, text, encoding string, raw []byte, overflow bool) {
+func (input *RecordedInput) Record(retainedRaw bool) (count int64, text, encoding string, raw []byte, overflow bool) {
 	input.mu.Lock()
 	count = input.n
 	raw = bytes.Clone(input.data.Bytes())
 	overflow = input.overflow
 	input.mu.Unlock()
-	if bridgekit.SafeText(raw) {
+	if bridgekit.SafeStructuredText(raw) {
 		return count, string(raw), "utf-8", raw, overflow
 	}
 	note := fmt.Sprintf("[binary input omitted; %d bytes not retained]", count)

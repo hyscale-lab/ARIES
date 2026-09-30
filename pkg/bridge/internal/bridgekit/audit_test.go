@@ -35,13 +35,13 @@ type testSession struct {
 
 func (session *testSession) Close(ctx context.Context) error {
 	session.closes.Add(1)
-	return session.Finish(ctx)
+	return session.Finalize(ctx)
 }
 
 func TestAuditWriterPersistsConcurrentGapFreeCorrelatedRecords(t *testing.T) {
 	structured, structuredBytes := memoryAuditFile()
 	raw, rawBytes := memoryAuditFile()
-	writer := newWriter(structured, raw, testLimit)
+	writer := newAuditWriter(structured, raw, testLimit)
 	const records = 50
 	var wait sync.WaitGroup
 	for i := range records {
@@ -49,7 +49,7 @@ func TestAuditWriterPersistsConcurrentGapFreeCorrelatedRecords(t *testing.T) {
 		go func() {
 			defer wait.Done()
 			payload := []byte{0, byte(i), 0xff}
-			writer.Enqueue(&testRecord{Status: "completed", RequestType: "exec", WantReply: true}, &RawRecord{
+			writer.Enqueue(&testRecord{Status: "completed", RequestType: "exec", WantReply: true}, &RawSSHRecord{
 				RequestType: "exec", WantReply: true, WireCommand: "command", Payload: payload, PayloadBytes: int64(len(payload)),
 				Stdin: payload, StdinBytes: int64(len(payload)), Status: "completed",
 			}, 0)
@@ -80,9 +80,9 @@ func TestAuditWriterPersistsConcurrentGapFreeCorrelatedRecords(t *testing.T) {
 func TestToolCallJSONLDisablesHTMLEscapingButKeepsRequiredEscapes(t *testing.T) {
 	structured, structuredBytes := memoryAuditFile()
 	raw, _ := memoryAuditFile()
-	writer := newWriter(structured, raw, testLimit)
+	writer := newAuditWriter(structured, raw, testLimit)
 	want := "&& <tag> > é 漢字 \"quote\" \\slash\nline\t\x00"
-	writer.Enqueue(&testRecord{Command: want, Status: "completed"}, &RawRecord{}, 0)
+	writer.Enqueue(&testRecord{Command: want, Status: "completed"}, &RawSSHRecord{}, 0)
 	if err := writer.sealAndWait(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestToolCallJSONLDisablesHTMLEscapingButKeepsRequiredEscapes(t *testing.T) 
 func TestRawAuditUsesDeterministicLosslessHumanReadableGrammar(t *testing.T) {
 	payload := append([]byte("\x00\x00\x00\x13printf 'é && <tag>'"), 0, 0xff, '\n', '\t', '\\')
 	stdin := []byte("readable é\n--- ARIES SSH CALL END ---\x00\xff")
-	content := renderRawRecord(RawRecord{
+	content := renderRawSSHRecord(RawSSHRecord{
 		Sequence: 7, Timestamp: "2026-07-24T12:00:00.000000123Z", RequestType: "exec", WantReply: true,
 		Status: "completed", RunID: "run", TaskID: "task", ContainerID: "container",
 		WireCommand: "printf 'é && <tag>'", Payload: payload, PayloadBytes: int64(len(payload)),
@@ -147,13 +147,13 @@ func TestAuditWriterDoesNotBlockEnqueueOnSlowStorage(t *testing.T) {
 			if slowFile == "raw" {
 				structured, raw = fast, slow
 			}
-			writer := newWriter(structured, raw, testLimit)
-			writer.Enqueue(&testRecord{Status: "completed"}, &RawRecord{Status: "completed"}, 0)
+			writer := newAuditWriter(structured, raw, testLimit)
+			writer.Enqueue(&testRecord{Status: "completed"}, &RawSSHRecord{Status: "completed"}, 0)
 			<-blocked
 			done := make(chan struct{})
 			go func() {
 				for range 100 {
-					writer.Enqueue(&testRecord{Status: "completed"}, &RawRecord{Status: "completed"}, 0)
+					writer.Enqueue(&testRecord{Status: "completed"}, &RawSSHRecord{Status: "completed"}, 0)
 				}
 				close(done)
 			}()
@@ -196,8 +196,8 @@ func TestAuditWriterLatchesAdmissionAndFileFailures(t *testing.T) {
 	for name, files := range tests {
 		t.Run(name, func(t *testing.T) {
 			structured, raw := files()
-			writer := newWriter(structured, raw, testLimit)
-			writer.Enqueue(&testRecord{Status: "completed"}, &RawRecord{Status: "completed"}, 0)
+			writer := newAuditWriter(structured, raw, testLimit)
+			writer.Enqueue(&testRecord{Status: "completed"}, &RawSSHRecord{Status: "completed"}, 0)
 			if err := writer.sealAndWait(context.Background()); err == nil {
 				t.Fatal("expected persistence error")
 			}
@@ -208,7 +208,7 @@ func TestAuditWriterLatchesAdmissionAndFileFailures(t *testing.T) {
 func TestAuditWriterRejectsRecordsAfterAdmissionFailure(t *testing.T) {
 	structured, structuredBytes := memoryAuditFile()
 	raw, rawBytes := memoryAuditFile()
-	writer := newWriter(structured, raw, testLimit)
+	writer := newAuditWriter(structured, raw, testLimit)
 	marshalCalls := 0
 	writer.marshal = func(value any) ([]byte, error) {
 		marshalCalls++
@@ -218,8 +218,8 @@ func TestAuditWriterRejectsRecordsAfterAdmissionFailure(t *testing.T) {
 		return json.Marshal(value)
 	}
 
-	writer.Enqueue(&testRecord{Status: "failed"}, &RawRecord{Status: "failed"}, 0)
-	writer.Enqueue(&testRecord{Status: "completed"}, &RawRecord{Status: "completed"}, 0)
+	writer.Enqueue(&testRecord{Status: "failed"}, &RawSSHRecord{Status: "failed"}, 0)
+	writer.Enqueue(&testRecord{Status: "completed"}, &RawSSHRecord{Status: "completed"}, 0)
 	if err := writer.sealAndWait(context.Background()); err == nil || !strings.Contains(err.Error(), "marshal") {
 		t.Fatalf("sealAndWait() error = %v, want retained admission failure", err)
 	}
@@ -251,8 +251,8 @@ func TestAuditWriterRejectsRecordsAfterPersistenceFailureAndStopRetainsError(t *
 		sync:  func() error { return nil },
 		close: func() error { return nil },
 	}
-	writer := newWriter(structured, raw, testLimit)
-	writer.Enqueue(&testRecord{Status: "failed"}, &RawRecord{Status: "failed"}, 0)
+	writer := newAuditWriter(structured, raw, testLimit)
+	writer.Enqueue(&testRecord{Status: "failed"}, &RawSSHRecord{Status: "failed"}, 0)
 	select {
 	case <-latched:
 	case <-time.After(time.Second):
@@ -265,7 +265,7 @@ func TestAuditWriterRejectsRecordsAfterPersistenceFailureAndStopRetainsError(t *
 	if latchedErr == nil || !strings.Contains(latchedErr.Error(), "persist failed") {
 		t.Fatalf("latched error = %v, want persistence failure", latchedErr)
 	}
-	writer.Enqueue(&testRecord{Status: "completed"}, &RawRecord{Status: "completed"}, 0)
+	writer.Enqueue(&testRecord{Status: "completed"}, &RawSSHRecord{Status: "completed"}, 0)
 
 	slot := &Slot{active: &testSession{Session: Session{Audit: writer}}}
 	for attempt := 0; attempt < 2; attempt++ {
@@ -282,18 +282,18 @@ func TestAuditWriterExactCombinedBudgetBoundaryAndImmutableEnqueue(t *testing.T)
 	fixed := time.Date(2026, 7, 24, 12, 0, 0, 123, time.UTC)
 	argv := []string{"/bin/sh", "original"}
 	structuredRecord := testRecord{Status: "completed", Argv: argv}
-	rawRecord := RawRecord{Status: "completed", Payload: []byte{0, 1}, PayloadBytes: 2, Stdin: []byte{2, 3}, StdinBytes: 2}
+	rawRecord := RawSSHRecord{Status: "completed", Payload: []byte{0, 1}, PayloadBytes: 2, Stdin: []byte{2, 3}, StdinBytes: 2}
 	structuredCandidate := structuredRecord
 	rawCandidate := rawRecord
 	structuredCandidate.Sequence, rawCandidate.Sequence = 1, 1
 	structuredCandidate.Timestamp, rawCandidate.Timestamp = fixed.Format(time.RFC3339Nano), fixed.Format(time.RFC3339Nano)
 	structuredLine, _ := marshalJSONLine(structuredCandidate)
-	rawLine := renderRawRecord(rawCandidate)
+	rawLine := renderRawSSHRecord(rawCandidate)
 	charge := int64(len(structuredLine) + len(rawLine))
 
 	structured, structuredBytes := memoryAuditFile()
 	raw, rawBytes := memoryAuditFile()
-	writer := newWriter(structured, raw, testLimit)
+	writer := newAuditWriter(structured, raw, testLimit)
 	writer.now = func() time.Time { return fixed }
 	writer.bytes = testLimit - charge
 	writer.Enqueue(&structuredRecord, &rawRecord, 0)
@@ -310,7 +310,7 @@ func TestAuditWriterExactCombinedBudgetBoundaryAndImmutableEnqueue(t *testing.T)
 
 	structured, structuredBytes = memoryAuditFile()
 	raw, rawBytes = memoryAuditFile()
-	overflow := newWriter(structured, raw, testLimit)
+	overflow := newAuditWriter(structured, raw, testLimit)
 	overflow.now = func() time.Time { return fixed }
 	overflow.bytes = testLimit - charge + 1
 	overflow.Enqueue(&structuredRecord, &rawRecord, 0)
@@ -322,20 +322,20 @@ func TestAuditWriterExactCombinedBudgetBoundaryAndImmutableEnqueue(t *testing.T)
 func TestAuditWriterLatchesMarshalAndEnqueueAfterSeal(t *testing.T) {
 	structured, _ := memoryAuditFile()
 	raw, _ := memoryAuditFile()
-	marshalFailure := newWriter(structured, raw, testLimit)
+	marshalFailure := newAuditWriter(structured, raw, testLimit)
 	marshalFailure.marshal = func(any) ([]byte, error) { return nil, errors.New("marshal") }
-	marshalFailure.Enqueue(&testRecord{Status: "completed"}, &RawRecord{Status: "completed"}, 0)
+	marshalFailure.Enqueue(&testRecord{Status: "completed"}, &RawSSHRecord{Status: "completed"}, 0)
 	if err := marshalFailure.sealAndWait(context.Background()); err == nil || !strings.Contains(err.Error(), "marshal") {
 		t.Fatalf("marshal error = %v", err)
 	}
 
 	structured, _ = memoryAuditFile()
 	raw, _ = memoryAuditFile()
-	afterSeal := newWriter(structured, raw, testLimit)
+	afterSeal := newAuditWriter(structured, raw, testLimit)
 	if err := afterSeal.sealAndWait(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	afterSeal.Enqueue(&testRecord{Status: "completed"}, &RawRecord{Status: "completed"}, 0)
+	afterSeal.Enqueue(&testRecord{Status: "completed"}, &RawSSHRecord{Status: "completed"}, 0)
 	if err := afterSeal.sealAndWait(context.Background()); err == nil || !strings.Contains(err.Error(), "after seal") {
 		t.Fatalf("enqueue-after-seal error = %v", err)
 	}
@@ -349,8 +349,8 @@ func TestAuditWriterDrainTimeoutIsRetryable(t *testing.T) {
 		sync:  func() error { return nil }, close: func() error { return nil },
 	}
 	raw, _ := memoryAuditFile()
-	writer := newWriter(structured, raw, testLimit)
-	writer.Enqueue(&testRecord{Status: "completed"}, &RawRecord{Status: "completed"}, 0)
+	writer := newAuditWriter(structured, raw, testLimit)
+	writer.Enqueue(&testRecord{Status: "completed"}, &RawSSHRecord{Status: "completed"}, 0)
 	<-blocked
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()

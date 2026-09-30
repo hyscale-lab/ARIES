@@ -169,7 +169,7 @@ func (manager *Manager) Stop(ctx context.Context) error {
 // first use.
 func (session *bridgeSession) Close(ctx context.Context) error {
 	session.revoke()
-	return session.Finish(ctx, session.identitySource)
+	return session.Finalize(ctx, session.identitySource)
 }
 
 // open allocates the session's files, keys, listener, and audit. On error the
@@ -180,7 +180,7 @@ func (manager *Manager) open(ctx context.Context, session *bridgeSession, gatewa
 	if err := bridgekit.EnsurePrivateDirectory(session.ArtifactDir); err != nil {
 		return failed(fmt.Errorf("create private Hermes SSH artifact directory: %w", err))
 	}
-	hostSigner, clientPEM, authorized, err := sshserve.Keys()
+	hostSigner, clientPEM, authorized, err := sshserve.GenerateSessionKeys()
 	if err != nil {
 		return failed(err)
 	}
@@ -190,7 +190,7 @@ func (manager *Manager) open(ctx context.Context, session *bridgeSession, gatewa
 	if !manager.omitRawLog {
 		session.rawLogPath = filepath.Join(session.ArtifactDir, "ssh_raw.log")
 	}
-	if err := bridgekit.WritePrivate(session.identitySource, clientPEM); err != nil {
+	if err := bridgekit.WriteExclusivePrivate(session.identitySource, clientPEM); err != nil {
 		return failed(fmt.Errorf("write Hermes SSH identity: %w", err))
 	}
 	listener, err := net.Listen("tcp4", net.JoinHostPort(gateway, "0"))
@@ -206,7 +206,7 @@ func (manager *Manager) open(ctx context.Context, session *bridgeSession, gatewa
 	// forces StrictHostKeyChecking=accept-new and offers no way to preload a
 	// known-hosts file, so this is not handed to the harness.
 	knownLine := fmt.Sprintf("[%s]:%s %s", host, port, ssh.MarshalAuthorizedKey(hostSigner.PublicKey()))
-	if err := bridgekit.WritePrivate(session.knownSource, []byte(knownLine)); err != nil {
+	if err := bridgekit.WriteExclusivePrivate(session.knownSource, []byte(knownLine)); err != nil {
 		return failed(fmt.Errorf("write Hermes SSH known-hosts file: %w", err))
 	}
 	if session.Audit, err = bridgekit.Open(session.toolLogPath, session.rawLogPath, maxToolLogBytes); err != nil {
@@ -217,7 +217,7 @@ func (manager *Manager) open(ctx context.Context, session *bridgeSession, gatewa
 	network := sandbox.NetworkName()
 	manager.logger.WithContext(ctx).WithFields(logrus.Fields{"address": address, "network": network, "container": sandbox.ContainerName()}).Info("Hermes SSH bridge started")
 	return core.ToolEndpoint{
-		Protocol: "ssh", Address: address, Username: sshserve.Username, Network: network,
+		Protocol: "ssh", Address: address, Username: sshserve.LockedUsername, Network: network,
 		IdentityFile: identityContainerPath, IdentitySourceFile: session.identitySource,
 		LogPaths: session.logPaths(), Workdir: sandbox.Workdir(),
 	}, nil
@@ -280,9 +280,9 @@ func (session *bridgeSession) handleSession(ctx context.Context, channel ssh.Cha
 
 func (session *bridgeSession) execute(ctx context.Context, channel ssh.Channel, command core.Command, kind string, audit requestAudit) int {
 	started := time.Now()
-	stdin := &sshserve.Input{Reader: channel}
-	stdout := &sshserve.Counter{Writer: channel}
-	stderr := &sshserve.Counter{Writer: channel.Stderr()}
+	stdin := &sshserve.RecordedInput{Reader: channel}
+	stdout := &sshserve.ByteCounter{Writer: channel}
+	stderr := &sshserve.ByteCounter{Writer: channel.Stderr()}
 	result, err := session.sandbox.ExecStream(ctx, command, stdin, stdout, stderr)
 	err = bridgekit.WithCancellation(ctx, err)
 	exitCode := result.ExitCode
@@ -300,7 +300,7 @@ func (session *bridgeSession) execute(ctx context.Context, channel ssh.Channel, 
 	}
 	stdinBytes, stdinContent, stdinEncoding, rawStdin, stdinOverflow := stdin.Record(session.rawLogPath != "")
 	if stdinOverflow {
-		session.Audit.Latch(fmt.Errorf("retain Hermes SSH stdin: input exceeds %d bytes", sshserve.MaxInputBytes))
+		session.Audit.Latch(fmt.Errorf("retain Hermes SSH stdin: input exceeds %d bytes", sshserve.MaxRecordedInputBytes))
 		return exitCode
 	}
 	session.writeRecord(toolCallRecord{
@@ -340,15 +340,15 @@ func (session *bridgeSession) logRequestFailure(audit requestAudit, kind, status
 	}, rawRecord(audit, 0, nil, status))
 }
 
-func rawRecord(audit requestAudit, stdinBytes int64, stdin []byte, status string) bridgekit.RawRecord {
-	return bridgekit.RawRecord{
+func rawRecord(audit requestAudit, stdinBytes int64, stdin []byte, status string) bridgekit.RawSSHRecord {
+	return bridgekit.RawSSHRecord{
 		RequestType: audit.requestType, WantReply: audit.wantReply,
 		WireCommand: audit.remoteCommand, Payload: bytes.Clone(audit.payload), PayloadBytes: int64(len(audit.payload)),
 		Stdin: bytes.Clone(stdin), StdinBytes: stdinBytes, Status: status,
 	}
 }
 
-func (session *bridgeSession) writeRecord(record toolCallRecord, raw bridgekit.RawRecord) {
+func (session *bridgeSession) writeRecord(record toolCallRecord, raw bridgekit.RawSSHRecord) {
 	record.RunID = session.sandbox.RunID()
 	record.TaskID = session.sandbox.TaskID()
 	raw.RunID = session.sandbox.RunID()

@@ -183,7 +183,7 @@ func (manager *Manager) Stop(ctx context.Context) error {
 // the identity, and the known-hosts file.
 func (session *bridgeSession) Close(ctx context.Context) error {
 	session.revoke()
-	return session.Finish(ctx, session.clientSource, session.identitySource, session.knownSource)
+	return session.Finalize(ctx, session.clientSource, session.identitySource, session.knownSource)
 }
 
 // open allocates the session's client, keys, listener, and audit. On error
@@ -198,7 +198,7 @@ func (manager *Manager) open(ctx context.Context, session *bridgeSession, gatewa
 	if err := bridgekit.StageExecutable(manager.clientPath, session.clientSource); err != nil {
 		return failed(fmt.Errorf("stage OpenClaw SSH client: %w", err))
 	}
-	hostSigner, clientPEM, authorized, err := sshserve.Keys()
+	hostSigner, clientPEM, authorized, err := sshserve.GenerateSessionKeys()
 	if err != nil {
 		return failed(err)
 	}
@@ -208,7 +208,7 @@ func (manager *Manager) open(ctx context.Context, session *bridgeSession, gatewa
 	if !manager.omitRawLog {
 		session.rawLogPath = filepath.Join(session.ArtifactDir, "ssh_raw.log")
 	}
-	if err := bridgekit.WritePrivate(session.identitySource, clientPEM); err != nil {
+	if err := bridgekit.WriteExclusivePrivate(session.identitySource, clientPEM); err != nil {
 		return failed(fmt.Errorf("write OpenClaw SSH identity: %w", err))
 	}
 	listener, err := net.Listen("tcp4", net.JoinHostPort(gateway, "0"))
@@ -221,7 +221,7 @@ func (manager *Manager) open(ctx context.Context, session *bridgeSession, gatewa
 		return failed(fmt.Errorf("parse OpenClaw SSH listener address: %w", err))
 	}
 	knownLine := fmt.Sprintf("[%s]:%s %s", host, port, ssh.MarshalAuthorizedKey(hostSigner.PublicKey()))
-	if err := bridgekit.WritePrivate(session.knownSource, []byte(knownLine)); err != nil {
+	if err := bridgekit.WriteExclusivePrivate(session.knownSource, []byte(knownLine)); err != nil {
 		return failed(fmt.Errorf("write OpenClaw SSH known-hosts file: %w", err))
 	}
 	if session.Audit, err = bridgekit.Open(session.toolLogPath, session.rawLogPath, maxToolLogBytes); err != nil {
@@ -302,9 +302,9 @@ func (session *bridgeSession) reply(request *ssh.Request, accepted bool) error {
 func (session *bridgeSession) execute(ctx context.Context, channel ssh.Channel, prepared preparedRemoteCommand, audit requestAudit) int {
 	started := time.Now()
 	command := prepared.command
-	stdin := &sshserve.Input{Reader: channel}
-	stdout := &sshserve.Counter{Writer: channel}
-	stderr := &sshserve.Counter{Writer: channel.Stderr()}
+	stdin := &sshserve.RecordedInput{Reader: channel}
+	stdout := &sshserve.ByteCounter{Writer: channel}
+	stderr := &sshserve.ByteCounter{Writer: channel.Stderr()}
 	result := core.CommandResult{}
 	var err error
 	if !prepared.suppressed {
@@ -328,7 +328,7 @@ func (session *bridgeSession) execute(ctx context.Context, channel ssh.Channel, 
 	}
 	stdinBytes, stdinContent, stdinEncoding, rawStdin, stdinOverflow := stdin.Record(session.rawLogPath != "")
 	if stdinOverflow {
-		session.Audit.Latch(fmt.Errorf("retain OpenClaw SSH stdin: input exceeds %d bytes", sshserve.MaxInputBytes))
+		session.Audit.Latch(fmt.Errorf("retain OpenClaw SSH stdin: input exceeds %d bytes", sshserve.MaxRecordedInputBytes))
 		return exitCode
 	}
 	session.writeRecord(toolCallRecord{
@@ -365,15 +365,15 @@ func (session *bridgeSession) logRequestFailure(audit requestAudit, status, mess
 	}, rawRecord(audit, 0, nil, status))
 }
 
-func rawRecord(audit requestAudit, stdinBytes int64, stdin []byte, status string) bridgekit.RawRecord {
-	return bridgekit.RawRecord{
+func rawRecord(audit requestAudit, stdinBytes int64, stdin []byte, status string) bridgekit.RawSSHRecord {
+	return bridgekit.RawSSHRecord{
 		RequestType: audit.requestType, WantReply: audit.wantReply,
 		WireCommand: audit.remoteCommand, Payload: bytes.Clone(audit.payload), PayloadBytes: int64(len(audit.payload)),
 		Stdin: bytes.Clone(stdin), StdinBytes: stdinBytes, Status: status,
 	}
 }
 
-func (session *bridgeSession) writeRecord(record toolCallRecord, raw bridgekit.RawRecord) {
+func (session *bridgeSession) writeRecord(record toolCallRecord, raw bridgekit.RawSSHRecord) {
 	record.RunID = session.sandbox.RunID()
 	record.TaskID = session.sandbox.TaskID()
 	raw.RunID = session.sandbox.RunID()

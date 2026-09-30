@@ -36,9 +36,9 @@ func (stamp *Stamp) stamp() *Stamp { return stamp }
 // Stamped is a record that embeds Stamp.
 type Stamped interface{ stamp() *Stamp }
 
-// RawRecord is one entry of ssh_raw.log, the byte-level record of an SSH
+// RawSSHRecord is one entry of ssh_raw.log, the byte-level record of an SSH
 // channel request.
-type RawRecord struct {
+type RawSSHRecord struct {
 	Sequence     uint64
 	Timestamp    string
 	RequestType  string
@@ -65,11 +65,11 @@ type auditEntry struct {
 	raw        []byte
 }
 
-// Writer is one bounded asynchronous audit writer. Handler paths enqueue
+// AuditWriter is one bounded asynchronous audit writer. Handler paths enqueue
 // complete immutable records rather than performing storage I/O, and every
 // failure latches so that revocation cannot be confirmed on an incomplete
 // record.
-type Writer struct {
+type AuditWriter struct {
 	structured *auditFile
 	raw        *auditFile
 
@@ -88,7 +88,7 @@ type Writer struct {
 
 // Open creates the structured log and, unless rawLog is empty, the raw log,
 // both exclusively. limit bounds their combined size.
-func Open(toolLog, rawLog string, limit int64) (*Writer, error) {
+func Open(toolLog, rawLog string, limit int64) (*AuditWriter, error) {
 	structured, err := openAuditFile(toolLog)
 	if err != nil {
 		return nil, fmt.Errorf("create tool log: %w", err)
@@ -99,7 +99,7 @@ func Open(toolLog, rawLog string, limit int64) (*Writer, error) {
 			return nil, errors.Join(fmt.Errorf("create raw log: %w", err), structured.close())
 		}
 	}
-	return newWriter(structured, raw, limit), nil
+	return newAuditWriter(structured, raw, limit), nil
 }
 
 func openAuditFile(path string) (*auditFile, error) {
@@ -110,8 +110,8 @@ func openAuditFile(path string) (*auditFile, error) {
 	return &auditFile{write: file.Write, sync: file.Sync, close: file.Close}, nil
 }
 
-func newWriter(structured, raw *auditFile, limit int64) *Writer {
-	writer := &Writer{
+func newAuditWriter(structured, raw *auditFile, limit int64) *AuditWriter {
+	writer := &AuditWriter{
 		structured: structured, raw: raw, limit: limit,
 		wake: make(chan struct{}, 1), done: make(chan struct{}),
 		marshal: marshalJSONLine, now: time.Now,
@@ -124,7 +124,7 @@ func newWriter(structured, raw *auditFile, limit int64) *Writer {
 // writer keeps a raw log. exempt bytes of the record are not charged against
 // the limit: a bridge passes the length of content the profile asked to
 // retain without bound.
-func (writer *Writer) Enqueue(record Stamped, raw *RawRecord, exempt int) {
+func (writer *AuditWriter) Enqueue(record Stamped, raw *RawSSHRecord, exempt int) {
 	writer.mu.Lock()
 	defer writer.mu.Unlock()
 	if writer.err != nil {
@@ -146,7 +146,7 @@ func (writer *Writer) Enqueue(record Stamped, raw *RawRecord, exempt int) {
 	var rawLine []byte
 	if writer.raw != nil && raw != nil {
 		raw.Sequence, raw.Timestamp = sequence, timestamp
-		rawLine = renderRawRecord(*raw)
+		rawLine = renderRawSSHRecord(*raw)
 	}
 	charge := int64(len(structuredLine) + len(rawLine) - exempt)
 	if charge > writer.limit-writer.bytes {
@@ -160,24 +160,24 @@ func (writer *Writer) Enqueue(record Stamped, raw *RawRecord, exempt int) {
 }
 
 // Latch fails the audit, and therefore revocation, with err.
-func (writer *Writer) Latch(err error) {
+func (writer *AuditWriter) Latch(err error) {
 	writer.mu.Lock()
 	writer.latchLocked(err)
 	writer.mu.Unlock()
 }
 
-func (writer *Writer) latchLocked(err error) {
+func (writer *AuditWriter) latchLocked(err error) {
 	writer.err = errors.Join(writer.err, err)
 }
 
-func (writer *Writer) signal() {
+func (writer *AuditWriter) signal() {
 	select {
 	case writer.wake <- struct{}{}:
 	default:
 	}
 }
 
-func (writer *Writer) run() {
+func (writer *AuditWriter) run() {
 	defer close(writer.done)
 	for {
 		<-writer.wake
@@ -204,7 +204,7 @@ func (writer *Writer) run() {
 	}
 }
 
-func (writer *Writer) persistLine(file *auditFile, line []byte, operation string) {
+func (writer *AuditWriter) persistLine(file *auditFile, line []byte, operation string) {
 	if file == nil {
 		return
 	}
@@ -217,7 +217,7 @@ func (writer *Writer) persistLine(file *auditFile, line []byte, operation string
 	}
 }
 
-func (writer *Writer) persistSync(file *auditFile, operation string) {
+func (writer *AuditWriter) persistSync(file *auditFile, operation string) {
 	if file == nil {
 		return
 	}
@@ -226,7 +226,7 @@ func (writer *Writer) persistSync(file *auditFile, operation string) {
 	}
 }
 
-func (writer *Writer) finish() {
+func (writer *AuditWriter) finish() {
 	writer.persistSync(writer.structured, "final structured sync")
 	writer.persistSync(writer.raw, "final raw sync")
 	for _, item := range []struct {
@@ -244,7 +244,7 @@ func (writer *Writer) finish() {
 
 // sealAndWait stops admission and waits for every admitted record to be
 // persisted. A timeout leaves the writer draining, so a later call can retry.
-func (writer *Writer) sealAndWait(ctx context.Context) error {
+func (writer *AuditWriter) sealAndWait(ctx context.Context) error {
 	if writer == nil {
 		return nil
 	}
@@ -262,7 +262,7 @@ func (writer *Writer) sealAndWait(ctx context.Context) error {
 	}
 }
 
-func (writer *Writer) finished() bool {
+func (writer *AuditWriter) finished() bool {
 	if writer == nil {
 		return true
 	}
@@ -284,7 +284,7 @@ func marshalJSONLine(value any) ([]byte, error) {
 	return output.Bytes(), nil
 }
 
-func renderRawRecord(record RawRecord) []byte {
+func renderRawSSHRecord(record RawSSHRecord) []byte {
 	var output bytes.Buffer
 	output.WriteString("--- ARIES SSH CALL BEGIN ---\n")
 	writeRawField(&output, "sequence", fmt.Sprint(record.Sequence))
@@ -359,9 +359,9 @@ func writeHexEscapes(output *bytes.Buffer, value []byte) {
 	}
 }
 
-// SafeText reports whether content can sit in a JSON string as readable text:
+// SafeStructuredText reports whether content can sit in a JSON string as readable text:
 // valid UTF-8 with no control characters other than tab and line breaks.
-func SafeText(content []byte) bool {
+func SafeStructuredText(content []byte) bool {
 	if !utf8.Valid(content) {
 		return false
 	}

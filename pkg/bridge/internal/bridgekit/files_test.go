@@ -22,7 +22,7 @@ func TestWriteExclusiveExactModesUnderRestrictiveUmask(t *testing.T) {
 		if err := StageExecutable(source, executable); err != nil {
 			t.Fatal(err)
 		}
-		if err := WritePrivate(private, content); err != nil {
+		if err := WriteExclusivePrivate(private, content); err != nil {
 			t.Fatal(err)
 		}
 		for path, wantMode := range map[string]os.FileMode{executable: 0o555, private: 0o600} {

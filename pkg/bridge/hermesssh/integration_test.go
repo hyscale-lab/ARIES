@@ -346,7 +346,7 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 	// puts on the wire. It streams stdin, writes state the evaluator reads back,
 	// and carries a non-zero exit through the channel.
 	const script = "cat > /work/bridge-state; cat /work/bridge-state; printf tool-stderr >&2; exit 7"
-	agentPayload := hermeswire.Encode(script, false)
+	agentPayload := hermeswire.EncodeRemoteCommand(script, false)
 	stdout, stderr, runErr := runExec(t, client, agentPayload, "streamed-input")
 	var exitError *ssh.ExitError
 	if !errors.As(runErr, &exitError) || exitError.ExitStatus() != 7 || stdout != "streamed-input" || stderr != "tool-stderr" {

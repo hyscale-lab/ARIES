@@ -146,7 +146,7 @@ func TestDecodeRoundTripsArbitraryScripts(t *testing.T) {
 }
 
 func TestPrepareMapsAgentCommandsToTheSandboxWorkdir(t *testing.T) {
-	command, kind, err := Prepare(Encode("echo hi", false), "/testbed")
+	command, kind, err := Prepare(EncodeRemoteCommand("echo hi", false), "/testbed")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestPrepareMapsAgentCommandsToTheSandboxWorkdir(t *testing.T) {
 }
 
 func TestPreparePreservesLoginShell(t *testing.T) {
-	command, _, err := Prepare(Encode("export -p", true), "/testbed")
+	command, _, err := Prepare(EncodeRemoteCommand("export -p", true), "/testbed")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,25 +175,25 @@ func TestPreparePreservesLoginShell(t *testing.T) {
 
 func TestPrepareRejectsUnsafeWorkdir(t *testing.T) {
 	for _, workdir := range []string{"", "relative/path", "/has space", "/quote'd", "/trailing/", "/a//b", "/a/../b", "/a/./b"} {
-		if _, kind, err := Prepare(Encode("echo hi", false), workdir); err == nil || kind != "agent" {
+		if _, kind, err := Prepare(EncodeRemoteCommand("echo hi", false), workdir); err == nil || kind != "agent" {
 			t.Fatalf("workdir %q: kind %q, err %v", workdir, kind, err)
 		}
 	}
-	if _, _, err := Prepare(Encode("echo hi", false), "/"); err != nil {
+	if _, _, err := Prepare(EncodeRemoteCommand("echo hi", false), "/"); err != nil {
 		t.Fatalf("root workdir rejected: %v", err)
 	}
 }
 
 // Decoding accepts only the canonical encoding, so the payload a bridge
-// records verbatim is exactly what Encode rebuilds from the decoded script.
+// records verbatim is exactly what EncodeRemoteCommand rebuilds from the decoded script.
 func TestAcceptedPayloadsAreTheirOwnEncoding(t *testing.T) {
 	for _, payload := range []string{capturedAgentPayload, capturedLoginPayload, "bash -c ls"} {
 		command, err := decodeRemoteCommand(payload)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if encoded := Encode(command.script, command.argv[1] == "-l"); encoded != payload {
-			t.Fatalf("Encode = %q, want %q", encoded, payload)
+		if encoded := EncodeRemoteCommand(command.script, command.argv[1] == "-l"); encoded != payload {
+			t.Fatalf("EncodeRemoteCommand = %q, want %q", encoded, payload)
 		}
 	}
 }

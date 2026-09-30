@@ -98,10 +98,10 @@ func Prepare(payload, workdir string) (core.Command, string, error) {
 	return core.Command{Path: remoteShellPath, Args: remote.argv[1:], Dir: workdir}, remote.kind, nil
 }
 
-// Encode is the payload Hermes sends for script: the inverse of decoding an
+// EncodeRemoteCommand is the payload Hermes sends for script: the inverse of decoding an
 // agent command. Decoding accepts only this canonical form, so a bridge may
 // record an accepted payload verbatim.
-func Encode(script string, login bool) string {
+func EncodeRemoteCommand(script string, login bool) string {
 	if login {
 		return remoteShell + " -l -c " + shlexQuote(script)
 	}
