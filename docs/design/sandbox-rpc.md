@@ -3,7 +3,7 @@
 The typed interface between a harness and a task sandbox, as the Hermes gRPC bridge serves it.
 It spans three components: the client staged into the harness container (`cmd/aries-grpc`), the
 bridge in the ARIES process (`pkg/bridge/hermesgrpc`), and the sandbox. Bridge-specific decisions
-(transport, credentials, revocation, audit) are in [the gRPC bridge design](grpc-bridge.md); this
+(transport, revocation, audit) are in [the gRPC bridge design](grpc-bridge.md); this
 document is the contract. The wire definition with every field documented is
 `pkg/bridge/hermesgrpc/sandboxv1/sandbox.proto`.
 

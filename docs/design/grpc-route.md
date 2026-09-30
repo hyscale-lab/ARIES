@@ -37,7 +37,7 @@ flowchart LR
         F[("container filesystem")]
     end
 
-    C ==>|"mTLS gRPC, one RPC: unary, or a stream of chunks for file content"| B
+    C ==>|"plaintext gRPC, one RPC: unary, or a stream of chunks for file content"| B
     S ==>|"Docker Engine API over the local socket"| D
     D ==>|"exec"| X
     D ==>|"archive API: stat, tar out, tar in"| F
@@ -63,12 +63,12 @@ sequenceDiagram
     participant HC as Harness container
 
     R->>B: Start(sandbox)
-    Note over B: generate two certificates<br/>listen on gateway:random port<br/>open tool-calls.jsonl
-    B-->>R: ToolEndpoint: address, credential paths,<br/>client path, workdir
+    Note over B: listen on gateway:random port<br/>open tool-calls.jsonl
+    B-->>R: ToolEndpoint: address, client path, workdir
     R->>HM: Run(endpoint, task)
     Note over HM: render config.yaml with plugins.enabled: [aries]
     HM->>HC: create container on the task network
-    HM->>HC: stage client, credentials, plugin, seam.py, config
+    HM->>HC: stage client, plugin, seam.py, config
     HM->>HC: start
     Note over HC: wrapper (root): python3 /run/aries/seam.py<br/>then exec hermes, which drops to uid 10000
     Note over HC: Hermes loads the plugin,<br/>TERMINAL_ENV=aries selects it
@@ -79,8 +79,6 @@ What the harness stages into the container:
 | Path | Content |
 | --- | --- |
 | `/run/aries/bin/aries-grpc` | the client binary |
-| `/run/aries/grpc/client.pem` | the client certificate and key |
-| `/run/aries/grpc/server.crt` | the bridge certificate, the only server the client accepts |
 | `/run/aries/hermes/plugins/aries/` | the plugin (`plugin.yaml`, `__init__.py`) |
 | `/run/aries/seam.py` | the seam script |
 | `/run/aries/hermes/config.yaml` | Hermes configuration, with the plugin enabled |
@@ -93,8 +91,6 @@ Environment the harness sets:
 | `TERMINAL_CWD` | the sandbox workdir, from the endpoint | Hermes, as the first working directory |
 | `TERMINAL_TIMEOUT` | per-command timeout, 180 seconds by default | Hermes |
 | `ARIES_GRPC_TARGET` | the bridge address, `gateway:port` | the client |
-| `ARIES_GRPC_IDENTITY` | `/run/aries/grpc/client.pem` | the client |
-| `ARIES_GRPC_TRUSTED` | `/run/aries/grpc/server.crt` | the client |
 
 **The seam.** Stock Hermes always builds its shell-based file operations. `seam.py` patches two
 places in the image's Hermes before it starts: it adds `BaseEnvironment.get_file_operations()`,
@@ -312,7 +308,7 @@ Command output is never recorded. File content is recorded only when the profile
 | The command exits non-zero | `OK`, exit code in the response | the command's output and exit code |
 | File not found, not a regular file, a write stream that does not match its size | a gRPC status; exit code 1 to 5 | a tool error with the message |
 | The session is revoked | `UNAVAILABLE`; exit code 255 | a failed tool call |
-| The bridge is unreachable or the certificate does not match | a transport error; exit code 255 | a failed tool call |
+| The bridge is unreachable | a transport error; exit code 255 | a failed tool call |
 
 The plugin raises on a failed file call. It never falls back to the shell.
 

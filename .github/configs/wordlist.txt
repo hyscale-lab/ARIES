@@ -168,3 +168,4 @@ inode
 nul
 symlinks
 untruncated
+plaintext

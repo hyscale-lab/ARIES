@@ -39,7 +39,7 @@ flowchart TB
         T["process"]
     end
 
-    C -. mTLS, one connection per call .-> G
+    C -. plaintext gRPC, one connection per call .-> G
     G -. owns .-> A
     G -. owns .-> R
 
@@ -55,8 +55,8 @@ Dashed arrows are control and lifecycle; thick arrows are data.
 
 - [Section 1](#1-scope) — what changes and what deliberately does not.
 - [Section 2](#2-service-definition) — the methods and messages.
-- [Section 3](#3-connection-authentication-and-session-identity) — connections, what the
-  certificates are for, and what they are not.
+- [Section 3](#3-connection-and-session-identity) — connections, and why there is no
+  authentication.
 - [Section 4](#4-state-what-the-server-holds) — what the server holds, and why the working
   directory is not part of it.
 - [Section 5](#5-revocation) — how `Stop` keeps its guarantee.
@@ -73,7 +73,7 @@ value, constructed by a new `case` in `newBridge` (`cmd/aries/wiring.go:388-431`
 `runner.ToolBridge` and returns a `core.ToolEndpoint` describing a gRPC endpoint instead of an SSH
 one.
 
-`Exec` came first and exercises everything structural: the connection, the credential material, the
+`Exec` came first and exercises everything structural: the connection, the
 audit writer, `ExecStream`, and revocation. The file procedures followed, specified in
 [the sandbox RPC interface](sandbox-rpc.md).
 
@@ -305,74 +305,31 @@ intent*, and the plugin route has no "sync my runtime" path at all.
 `pkg/sandbox/docker/files.go`, `docs/research/sandbox-command-profile.md`,
 `docs/research/e2b-tool-bridge.md`.
 
-## 3. Connection, authentication, and session identity
+## 3. Connection and session identity
 
 **One connection per call.** The server binds `tcp4` on the task network's gateway at port 0, as the
-SSH bridge does (`pkg/bridge/hermesssh/bridge.go:606`). The harness container shares that network.
-Hermes runs `aries-grpc` once per operation ([section 9](#9-how-hermes-reaches-the-bridge)), so each
-call dials, handshakes, makes one RPC and exits, the analogue of one SSH process per command. The
-cost is a process start and a TLS 1.3 handshake per call.
+SSH bridge does. The harness container shares that network. Hermes runs `aries-grpc` once per
+operation ([section 9](#9-how-hermes-reaches-the-bridge)), so each call dials, makes one RPC over
+plaintext HTTP/2 and exits, the analogue of one SSH process per command. The cost is a process
+start per call.
 
-**What the certificates are for, and what they are not.** The certificates were chosen as a
-cheap nice-to-have, not as a requirement; security is not the goal of this bridge. Each certificate
-has one concrete role:
+**There is no authentication.** The SSH bridge generates keys only because SSH authentication
+requires them; gRPC does not, and security is not the goal of this bridge. The server accepts any
+client that reaches the port, and the client trusts whatever answers at the target. These are
+accepted consequences, not oversights:
 
-- **The client certificate keeps the sandbox from calling the bridge.** The bridge listens on the
-  task network, and the task container is on that network too, running agent-controlled code.
-  Without client authentication a process in the sandbox could dial the bridge and issue calls
-  the harness never made. Those calls would be recorded as the harness's. On Docker a
-  `WriteFile` would also run as root, which is a way around an unprivileged exec user such as
-  SWE-bench Pro's `65532:65532`. Only the harness holds the client key.
-- **The server certificate keeps anything else from posing as the bridge.** The sandbox keeps
-  Docker's default capabilities, `NET_RAW` included, so it could in principle answer for the
-  gateway address. With TLS and a pinned server certificate, a substitute cannot read the traffic
-  or feed Hermes forged results, and neither can a second bridge's valid certificate. The SSH
-  route cannot do this: Hermes forces `StrictHostKeyChecking=accept-new` and offers no way to
-  preload a known-hosts file, so ARIES's `known_hosts` line there is evidence only.
-- **Per-task generation scopes both certificates to one task.** A key from one task cannot
-  authenticate to another task's bridge. Separate task networks already mostly prevent that, so
-  this is defence in depth.
+- **The sandbox can call the bridge.** The task container is on the same network, running
+  agent-controlled code, and can dial the gateway. Such calls run and are recorded as the
+  harness's. On Docker, file procedures act as root through the archive API, so a process in the
+  sandbox can reach files its exec user cannot, for example under SWE-bench Pro's `65532:65532`.
+- **Another task can reach it.** With `execution.concurrency` above 1, a container on another task
+  network that is not `Internal` routes through the host and can reach this gateway address.
+- **Nothing proves the bridge's identity to the client.** A sandbox with `NET_RAW` could in
+  principle answer for the gateway address and feed the harness forged results.
 
-**The certificates play no part in revocation.** Revocation is the server's own state, described
-in [section 5](#5-revocation). It marks the session revoked, cancels calls in flight, and stops the
-server, which closes the listener and every connection. Once nothing accepts connections, a valid
-certificate grants nothing. Deleting the client identity file at `Stop` is cleanup, not
-revocation. It removes the host-side source, and the copy staged into the harness container stays
-in place. By then that container has already been stopped by the runner.
-
-**How the certificates are made.** `Start` generates two self-signed `Ed25519` certificates for this
-task, one per side (`pkg/bridge/hermesgrpc/credentials.go`). Each side accepts exactly one peer
-certificate, compared by raw bytes in `VerifyPeerCertificate`: the server uses
-`RequireAnyClientCert` plus the pin, and the client uses `InsecureSkipVerify` plus the pin. Both
-require TLS 1.3. There is no certificate authority and no chain, which would be more machinery for
-a channel with exactly two parties. It is the same shape as the SSH bridge comparing one marshalled
-public key.
-
-Two files are written to private host paths and advertised through `core.ToolEndpoint` for the
-harness to stage. They carry the meanings their SSH-shaped field names already have:
-
-| Endpoint field | Content | Role |
-| --- | --- | --- |
-| `IdentitySourceFile` | client certificate and key, one PEM, `0600` | the client's own credential, as an SSH identity is |
-| `KnownHostsSourceFile` | the bridge's certificate, `0600` | the single server identity the client accepts |
-
-The server's private key is never written anywhere. It exists only inside the `tls.Certificate` the
-listener holds; only the server certificate, which is public, reaches the container. The server
-certificate is kept after `Stop` as evidence of what the harness was told to trust, as the SSH
-bridge keeps its `known_hosts` line.
-
-**The certificates never expire, and nothing checks their dates.** They carry `99991231235959Z`, the
-GeneralizedTime
-[RFC 5280 section 4.1.2.5](https://datatracker.ietf.org/doc/html/rfc5280#section-4.1.2.5) reserves
-for "no well-defined expiration date". The pin replaces chain validation on both sides, so neither
-end reads `NotAfter`. An expired certificate is accepted, which was verified rather than assumed.
-A finite lifetime would therefore be decorative, and a failure waiting to happen on long tasks if
-standard verification were ever turned on. Leaving the dates unset is not equivalent: Go encodes the
-zero time as `0001-01-01`, which reads as expired.
-
-**There is no per-call identity token.** Identity is settled at the TLS handshake. A token would add
-nothing, because the revocation check below refuses calls on its own, and a token could only fail
-on a bug in ARIES's own client.
+What still bounds the bridge is its lifetime. It exists only while the task runs, and `Stop`
+revokes it before evaluation, so nothing reaches the sandbox through it once verifier material is
+uploaded.
 
 **Revocation is still checked on every call**, before anything else the handler does. A call that
 reaches the server after `Stop` has marked the session revoked is refused with `UNAVAILABLE`, on
@@ -384,24 +341,20 @@ down.
 of a per-task network, which a proxy outside that network generally cannot reach, so any environment
 that routes model traffic through a proxy would fail every tool call. The integration test caught
 exactly that. The address changes per task, so `NO_PROXY` in the harness image cannot be relied on
-to exempt it, and the client opts out with `grpc.WithNoProxy()` instead. Confidentiality is not the
-reason: with TLS and a pinned server certificate, a `CONNECT` proxy only relays ciphertext. The SSH
-route never had the problem, because OpenSSH uses no proxy without a `ProxyCommand`.
+to exempt it, and the client opts out with `grpc.WithNoProxy()` instead. The SSH route never had the problem, because OpenSSH uses no proxy without a `ProxyCommand`.
 
 **Keepalive is off.** grpc-go sends no client pings by default, and the server's own interval is two
 hours. The SSH bridge's `keepalive@openssh.com` handler was dropped rather than replaced
 ([section 7](#7-what-is-preserved-and-what-is-dropped)). A connection lives for one call, so there
 is no idle period to survive. `grpc.WithKeepaliveParams` turns it on if that ever changes.
 
-**Sources:** `pkg/bridge/hermesgrpc/credentials.go`, `pkg/bridge/hermesgrpc/client.go`,
-`pkg/bridge/hermesgrpc/bridge.go`, `pkg/bridge/hermesssh/bridge.go`, `pkg/sandbox/docker/docker.go`,
+**Sources:** `pkg/bridge/hermesgrpc/client.go`, `pkg/bridge/hermesgrpc/bridge.go`, `pkg/bridge/hermesssh/bridge.go`, `pkg/sandbox/docker/docker.go`,
 `pkg/core/types.go`.
 
 ## 4. State: what the server holds
 
-**Per session:** the listener, the set of in-flight calls, the audit writer, the credential paths,
-and the revoked flag. That is the same list the current `bridgeSession` holds
-(`pkg/bridge/hermesssh/bridge.go:85-105`), plus the flag.
+**Per session:** the listener, the set of in-flight calls, the audit writer, and the revoked flag.
+That is the SSH bridge's `bridgeSession` list without its key files, plus the flag.
 
 **Per call:** for `Exec`, the script and its `stdin`; for a file procedure, the path and the
 content. Both are discarded when the call returns. Nothing else is carried; see
@@ -442,8 +395,6 @@ The sequence mirrors `revoke` and `finalize` today:
 3. Stop the gRPC server, refusing new connections and closing established ones.
 4. Wait for every handler to return.
 5. Seal the audit; if it cannot be flushed, `Stop` returns the error.
-6. Remove the client identity file as cleanup; revocation is already complete. The bridge
-   certificate stays as evidence.
 
 An in-flight `Exec` is aborted, not awaited. The cancelled context reaches `ExecStream`, which
 terminates the container process group and confirms its absence — machinery that already exists
@@ -585,18 +536,17 @@ so compression does not interact with that cap the way it might appear to.
 - No client environment reaching the sandbox.
 - Bounded `stdin` retention; no command output in the audit. File content enters it only when the
   profile opts in with `retain_raw_log`.
-- Per-task ephemeral credentials, removed at revocation.
 - Refusals recorded distinctly from failures.
 - Grammar-based validation of the payload, including the refusal of a raw `~/.hermes` file-sync
-  payload. The check stays on the server, where a caller holding the staged credentials cannot
-  route around it. On the plugin route Hermes never attempts the sync
+  payload. The check stays on the server, where no caller can route around it. On the plugin route Hermes never attempts the sync
   ([section 9](#9-how-hermes-reaches-the-bridge)).
 - Canonical shell quoting and its round-trip verification, in the shared `hermeswire` package.
 
 **Dropped — transport artifacts with no successor.**
 
 - The one-exec-per-channel rule, which becomes inherent.
-- Host keys and known-hosts pinning, replaced by mTLS.
+- Host keys, the client identity, and known-hosts pinning. The gRPC route has no authentication;
+  see [section 3](#3-connection-and-session-identity).
 - The handshake deadline, and the fact that clearing it leaves no idle timeout.
 - The `keepalive` global-request handler.
 - The byte-level `ssh_raw.log`. What it uniquely held is absorbed into the structured record;
@@ -703,15 +653,13 @@ retired. Hermes enforces command timeouts by killing the client, and the closed 
 cancels the call on the bridge. The plugin constructs no `FileSyncManager`, so Hermes never
 attempts its `~/.hermes` sync on this route.
 
-**What the harness stages.** The client goes to `/run/aries/bin/aries-grpc`, and the two
-credential files go to `/run/aries/grpc/`. The plugin goes under `HERMES_HOME/plugins/aries`, and
-the seam script to `/run/aries/seam.py`. The client reads its target and credentials from
-`ARIES_GRPC_TARGET`, `ARIES_GRPC_IDENTITY` and `ARIES_GRPC_TRUSTED`, not from argv. The
-container's readiness probe checks that all three staged pieces are present. The plugin reports
-itself available only when the client is executable and the three variables are set.
+**What the harness stages.** The client goes to `/run/aries/bin/aries-grpc`, the plugin under
+`HERMES_HOME/plugins/aries`, and the seam script to `/run/aries/seam.py`. The client reads its
+target from `ARIES_GRPC_TARGET`, not from argv. The container's readiness probe checks that all
+three staged pieces are present. The plugin reports itself available only when the client is
+executable and `ARIES_GRPC_TARGET` is set.
 
-**One process per call, deliberately.** A long-lived client would save the process start and TLS
-handshake per call, but it would need its own supervision and a restart story. Revocation gains
+**One process per call, deliberately.** A long-lived client would save the process start per call, but it would need its own supervision and a restart story. Revocation gains
 nothing from it, because the server enforces revocation on every call and on every connection.
 
 **The client's file modes.** File calls use the same client:

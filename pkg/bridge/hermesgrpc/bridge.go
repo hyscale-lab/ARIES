@@ -424,11 +424,9 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 // classes with no audit entry at all, and that gap is deliberately not
 // reproduced.
 //
-// There is no per-call identity token. Identity is settled at the TLS
-// handshake, where exactly one client certificate is accepted by raw bytes,
-// and the SSH bridge likewise checks its pinned key once and nothing per call.
-// The revocation check below is the part that has no SSH counterpart: it makes
-// revocation provable per call rather than only by the transport having closed.
+// The bridge authenticates no caller (docs/design/grpc-bridge.md, section 3).
+// The revocation check below has no SSH counterpart: it makes revocation
+// provable per call rather than only by the transport having closed.
 func (session *bridgeSession) authorize(payload string) error {
 	if session.isRevoked() {
 		session.logRequestFailure(payload, hermeswire.KindUnknown, "rejected", "session revoked")
