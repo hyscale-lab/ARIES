@@ -1111,8 +1111,7 @@ func (buffer *limitedBuffer) Write(content []byte) (int, error) {
 func (manager *Manager) waitReady(ctx context.Context, active *session) error {
 	transport := ` && test -r ` + identityContainerFS + ` && command -v ssh >/dev/null`
 	if active.endpoint.Protocol == protocolGRPC {
-		transport = ` && test -r ` + grpcIdentityPath + ` && test -r ` + grpcTrustedPath +
-			` && test -x ` + clientContainerFS + ` && test -r ` + pluginContainerFS + `/__init__.py && test -r ` + seamContainerFS
+		transport = ` && test -x ` + clientContainerFS + ` && test -r ` + pluginContainerFS + `/__init__.py && test -r ` + seamContainerFS
 	}
 	probe := `test -x ` + agentWrapperPath + ` && test -r ` + configContainerPath + ` && test -r ` + modelKeyPath +
 		transport + ` && hermes --version >/dev/null 2>&1`
@@ -1187,11 +1186,6 @@ func (manager *Manager) validateContainer(ctx context.Context, active *session) 
 }
 
 func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([]byte, error) {
-	identity, err := readStablePrivateFile(active.endpoint.IdentitySourceFile, 0o600, maxDockerOutput)
-	if err != nil {
-		return nil, fmt.Errorf("read Hermes identity: %w", err)
-	}
-	defer clear(identity)
 	grpc := active.endpoint.Protocol == protocolGRPC
 	extractEnabled := len(active.extractAPIKey) != 0
 	files := map[string]stagedFile{
@@ -1200,24 +1194,20 @@ func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([
 		strings.TrimPrefix(agentWrapperPath, "/"):    {content: agentWrapperScript(active.model.APIKeyEnv, extractEnabled, grpc), mode: 0o555},
 	}
 	if grpc {
-		// The identity is the client certificate and key; the trusted file is
-		// the one bridge certificate the client accepts. Both are read with
-		// their exact host modes, as the SSH identity is.
-		trusted, err := readStablePrivateFile(active.endpoint.KnownHostsSourceFile, 0o600, maxDockerOutput)
-		if err != nil {
-			return nil, fmt.Errorf("read Hermes gRPC trusted certificate: %w", err)
-		}
 		client, err := readStablePrivateFile(active.endpoint.ClientSourceFile, 0o555, maxStagedClientBytes)
 		if err != nil {
 			return nil, fmt.Errorf("read Hermes gRPC client: %w", err)
 		}
-		files[strings.TrimPrefix(grpcIdentityPath, "/")] = stagedFile{content: identity, mode: 0o600}
-		files[strings.TrimPrefix(grpcTrustedPath, "/")] = stagedFile{content: trusted, mode: 0o600}
 		files[strings.TrimPrefix(clientContainerFS, "/")] = stagedFile{content: client, mode: 0o555}
 		files[strings.TrimPrefix(pluginContainerFS, "/")+"/plugin.yaml"] = stagedFile{content: pluginManifest, mode: 0o400}
 		files[strings.TrimPrefix(pluginContainerFS, "/")+"/__init__.py"] = stagedFile{content: pluginModule, mode: 0o400}
 		files[strings.TrimPrefix(seamContainerFS, "/")] = stagedFile{content: seamScript, mode: 0o400}
 	} else {
+		identity, err := readStablePrivateFile(active.endpoint.IdentitySourceFile, 0o600, maxDockerOutput)
+		if err != nil {
+			return nil, fmt.Errorf("read Hermes identity: %w", err)
+		}
+		defer clear(identity)
 		files[strings.TrimPrefix(identityContainerFS, "/")] = stagedFile{content: identity, mode: 0o600}
 	}
 	if extractEnabled {

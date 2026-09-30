@@ -85,8 +85,6 @@ func TestClientDrivesTheBridgeIntoARealSandbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv(targetEnv, endpoint.Address)
-	t.Setenv(identityEnv, endpoint.IdentitySourceFile)
-	t.Setenv(trustedEnv, endpoint.KnownHostsSourceFile)
 
 	// grpc-go honours HTTPS_PROXY by default, and a proxy would carry every
 	// script, its stdin and all output off the task network. The guard can
@@ -132,9 +130,6 @@ func TestClientDrivesTheBridgeIntoARealSandbox(t *testing.T) {
 	after, err := sandbox.Exec(ctx, core.Command{Path: "/bin/sh", Args: []string{"-c", "printf evaluator > /work/after-bridge"}})
 	if err != nil || after.ExitCode != 0 {
 		t.Fatalf("sandbox did not survive revocation: %v (exit %d)", err, after.ExitCode)
-	}
-	if _, err := os.Stat(endpoint.IdentitySourceFile); !os.IsNotExist(err) {
-		t.Fatalf("client identity survived revocation: %v", err)
 	}
 
 	records := bridgetest.ReadToolCalls(t, endpoint.LogPaths[0])

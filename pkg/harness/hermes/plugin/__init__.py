@@ -17,7 +17,7 @@ import posixpath
 import subprocess
 
 CLIENT = "/run/aries/bin/aries-grpc"
-CLIENT_ENV = ("ARIES_GRPC_TARGET", "ARIES_GRPC_IDENTITY", "ARIES_GRPC_TRUSTED")
+CLIENT_ENV = ("ARIES_GRPC_TARGET",)
 
 
 def register(ctx):

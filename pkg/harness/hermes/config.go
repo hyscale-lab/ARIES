@@ -28,16 +28,12 @@ const (
 	agentWrapperPath    = stagedRoot + "/run-agent"
 	workspaceRoot       = stagedRoot + "/workspace"
 
-	// The gRPC route stages the client, its two credentials, the ARIES Hermes
-	// plugin that runs the client, and the seam script that lets the plugin
-	// supply file operations. The plugin lives under HERMES_HOME, which is
+	// The gRPC route stages the client, the ARIES Hermes plugin that runs it,
+	// and the seam script that lets the plugin supply file operations. The plugin lives under HERMES_HOME, which is
 	// where Hermes looks for user plugins.
 	clientContainerFS = stagedRoot + "/bin/aries-grpc"
 	pluginContainerFS = stateContainerPath + "/plugins/aries"
 	seamContainerFS   = stagedRoot + "/seam.py"
-	grpcCredentialDir = stagedRoot + "/grpc"
-	grpcIdentityPath  = grpcCredentialDir + "/client.pem"
-	grpcTrustedPath   = grpcCredentialDir + "/server.crt"
 
 	// tavilyAPIKeyEnv is the in-container environment variable name Hermes's
 	// Tavily plugin reads. It is fixed by Hermes itself, unlike the profile's
@@ -393,8 +389,6 @@ func containerEnvironment(endpoint core.ToolEndpoint, terminalTimeout int, webSe
 	if endpoint.Protocol == protocolGRPC {
 		environment = append(environment,
 			"ARIES_GRPC_TARGET="+endpoint.Address,
-			"ARIES_GRPC_IDENTITY="+grpcIdentityPath,
-			"ARIES_GRPC_TRUSTED="+grpcTrustedPath,
 		)
 	}
 	if webSearchEnabled {
@@ -489,11 +483,11 @@ func validateEndpoint(endpoint core.ToolEndpoint) error {
 	if strings.TrimSpace(endpoint.Network) == "" {
 		return errors.New("Hermes requires a task-local endpoint network")
 	}
-	if strings.TrimSpace(endpoint.IdentitySourceFile) == "" {
-		return errors.New("Hermes requires a staged identity file")
-	}
 	switch endpoint.Protocol {
 	case protocolSSH:
+		if strings.TrimSpace(endpoint.IdentitySourceFile) == "" {
+			return errors.New("Hermes requires a staged identity file")
+		}
 		// Hermes builds its own ssh argv and offers no way to preload a
 		// known-hosts file, so a bridge-supplied one would be silently
 		// ignored. Refuse rather than imply a host-key guarantee the harness
@@ -512,12 +506,6 @@ func validateEndpoint(endpoint core.ToolEndpoint) error {
 		}
 		if strings.TrimSpace(endpoint.ClientSourceFile) == "" {
 			return errors.New("Hermes requires a staged gRPC client")
-		}
-		if endpoint.IdentityFile != grpcIdentityPath || endpoint.KnownHostsFile != grpcTrustedPath {
-			return errors.New("Hermes gRPC credentials must be staged at their pinned paths")
-		}
-		if strings.TrimSpace(endpoint.KnownHostsSourceFile) == "" {
-			return errors.New("Hermes requires the bridge certificate to pin")
 		}
 		return nil
 	default:

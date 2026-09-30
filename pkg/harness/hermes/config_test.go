@@ -442,8 +442,6 @@ func validGRPCEndpoint() core.ToolEndpoint {
 	return core.ToolEndpoint{
 		Protocol: "grpc", Address: "172.17.0.1:41234", Username: "aries", Network: "aries-net",
 		ClientCommand: clientContainerFS, ClientSourceFile: "/tmp/aries-grpc",
-		IdentityFile: grpcIdentityPath, IdentitySourceFile: "/tmp/client.pem",
-		KnownHostsFile: grpcTrustedPath, KnownHostsSourceFile: "/tmp/server.crt",
 		Workdir: "/aries/workspace",
 	}
 }
@@ -469,8 +467,6 @@ func TestContainerEnvironmentSelectsTheAriesBackendUnderGRPC(t *testing.T) {
 		"ARIES_TASK_ID":          "fix-git",
 		"HERMES_WRITE_SAFE_ROOT": "",
 		"ARIES_GRPC_TARGET":      "172.17.0.1:41234",
-		"ARIES_GRPC_IDENTITY":    grpcIdentityPath,
-		"ARIES_GRPC_TRUSTED":     grpcTrustedPath,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("environment=%v", environment)
@@ -500,9 +496,6 @@ func TestContainerEnvironmentRejectsUnusableGRPCEndpoints(t *testing.T) {
 		"missing client command": func(e *core.ToolEndpoint) { e.ClientCommand = "" },
 		"client command moved":   func(e *core.ToolEndpoint) { e.ClientCommand = "/usr/bin/ssh" },
 		"missing client source":  func(e *core.ToolEndpoint) { e.ClientSourceFile = "" },
-		"identity path moved":    func(e *core.ToolEndpoint) { e.IdentityFile = "/tmp/elsewhere.pem" },
-		"trusted path moved":     func(e *core.ToolEndpoint) { e.KnownHostsFile = "/tmp/elsewhere.crt" },
-		"missing trusted source": func(e *core.ToolEndpoint) { e.KnownHostsSourceFile = "" },
 		"unknown protocol":       func(e *core.ToolEndpoint) { e.Protocol = "quic" },
 	}
 	for name, mutate := range cases {

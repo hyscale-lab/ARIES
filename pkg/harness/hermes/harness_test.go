@@ -1074,15 +1074,13 @@ func grpcEndpointFiles(t *testing.T) core.ToolEndpoint {
 	return core.ToolEndpoint{
 		Protocol: "grpc", Address: "172.22.0.1:39425", Username: "aries", Network: "aries-net-test",
 		ClientCommand: clientContainerFS, ClientSourceFile: write("aries-grpc", "client-binary", 0o555),
-		IdentityFile: grpcIdentityPath, IdentitySourceFile: write("client.pem", "cert-and-key", 0o600),
-		KnownHostsFile: grpcTrustedPath, KnownHostsSourceFile: write("server.crt", "bridge-cert", 0o600),
 		Workdir: "/app",
 	}
 }
 
-// A gRPC endpoint must stage the client and both credentials, and must not
-// stage the SSH identity, whose path nothing would read.
-func TestStartStagesTheGRPCClientAndCredentials(t *testing.T) {
+// A gRPC endpoint must stage the client and its plugin, and must not stage the
+// SSH identity, whose path nothing would read.
+func TestStartStagesTheGRPCClient(t *testing.T) {
 	fake := newFakeDocker()
 	manager := newTestManager(t, fake, []byte("model-secret"))
 	request := testRequest(t)
@@ -1095,8 +1093,6 @@ func TestStartStagesTheGRPCClientAndCredentials(t *testing.T) {
 	entries := archiveEntries(t, fake.archive)
 	for name, mode := range map[string]int64{
 		strings.TrimPrefix(clientContainerFS, "/"):                  0o555,
-		strings.TrimPrefix(grpcIdentityPath, "/"):                   0o600,
-		strings.TrimPrefix(grpcTrustedPath, "/"):                    0o600,
 		strings.TrimPrefix(pluginContainerFS, "/") + "/plugin.yaml": 0o400,
 		strings.TrimPrefix(pluginContainerFS, "/") + "/__init__.py": 0o400,
 		strings.TrimPrefix(seamContainerFS, "/"):                    0o400,
@@ -1157,12 +1153,11 @@ func TestStartStagesAClientLargerThanTheCredentialBound(t *testing.T) {
 	}
 }
 
-// Credentials keep the tight bound; only the client may be large.
+// The SSH identity keeps the tight bound; only the gRPC client may be large.
 func TestStartRefusesAnOversizedCredential(t *testing.T) {
 	fake := newFakeDocker()
 	manager := newTestManager(t, fake, []byte("model-secret"))
 	request := testRequest(t)
-	request.Endpoint = grpcEndpointFiles(t)
 
 	oversized := filepath.Join(t.TempDir(), "client.pem")
 	if err := os.WriteFile(oversized, make([]byte, maxDockerOutput+1), 0o600); err != nil {

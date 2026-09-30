@@ -11,8 +11,8 @@ package hermesgrpc
 //
 // It is deliberately thin. exec wraps SCRIPT as the `bash -c` payload the
 // bridge accepts; it does not decode Hermes's grammar, because that check is a
-// policy gate and belongs on the server, where a caller holding these
-// credentials cannot route around it. file forwards a path and raw bytes; how
+// policy gate and belongs on the server, where a caller cannot route around
+// it. file forwards a path and raw bytes; how
 // they land is the bridge's and the sandbox's business. For file, stdout is the
 // payload only and stderr is exactly one line: JSON metadata on success, a
 // message on failure. Content streams through in chunks and is never held
@@ -22,7 +22,6 @@ package hermesgrpc
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -35,17 +34,13 @@ import (
 	"github.com/hyscale-lab/aries/pkg/bridge/internal/hermeswire"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 )
 
-// Environment variables the harness sets. The target and both credential paths
-// come from here rather than from argv.
-const (
-	targetEnv   = "ARIES_GRPC_TARGET"
-	identityEnv = "ARIES_GRPC_IDENTITY"
-	trustedEnv  = "ARIES_GRPC_TRUSTED"
-)
+// targetEnv names the bridge address, which the harness sets in the
+// environment rather than in argv.
+const targetEnv = "ARIES_GRPC_TARGET"
 
 // transportFailureExit means the operation did not run at all: a usage error,
 // a transport failure, or a bridge refusal. It is OpenSSH's value for the same
@@ -271,17 +266,14 @@ func connect() (sandboxv1.SandboxClient, func(), error) {
 	if strings.TrimSpace(target) == "" {
 		return nil, nil, fmt.Errorf("%s is not set", targetEnv)
 	}
-	transport, err := clientCredentials(os.Getenv(identityEnv), os.Getenv(trustedEnv))
-	if err != nil {
-		return nil, nil, err
-	}
 	connection, err := grpc.NewClient(target,
-		grpc.WithTransportCredentials(transport),
+		// The bridge is plaintext and unauthenticated; see
+		// docs/design/grpc-bridge.md, section 3.
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		// grpc-go honours HTTPS_PROXY by default. The bridge listens on the
 		// per-task network's gateway, which a proxy outside that network
 		// cannot reach, and the address changes per task, so NO_PROXY in the
-		// harness image cannot be relied on to exempt it. TLS with pinning
-		// already keeps a CONNECT proxy from reading the traffic.
+		// harness image cannot be relied on to exempt it.
 		grpc.WithNoProxy(),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(maxMessageBytes),
@@ -292,31 +284,4 @@ func connect() (sandboxv1.SandboxClient, func(), error) {
 		return nil, nil, fmt.Errorf("connect: %w", err)
 	}
 	return sandboxv1.NewSandboxClient(connection), func() { _ = connection.Close() }, nil
-}
-
-func clientCredentials(identityPath, trustedPath string) (credentials.TransportCredentials, error) {
-	if strings.TrimSpace(identityPath) == "" || strings.TrimSpace(trustedPath) == "" {
-		return nil, fmt.Errorf("%s and %s must both be set", identityEnv, trustedEnv)
-	}
-	identity, err := tls.LoadX509KeyPair(identityPath, identityPath)
-	if err != nil {
-		return nil, fmt.Errorf("load client identity: %w", err)
-	}
-	trustedPEM, err := os.ReadFile(trustedPath)
-	if err != nil {
-		return nil, fmt.Errorf("read trusted certificate: %w", err)
-	}
-	trusted, err := parseCertificate(trustedPEM)
-	if err != nil {
-		return nil, err
-	}
-	return credentials.NewTLS(&tls.Config{
-		Certificates: []tls.Certificate{identity},
-		MinVersion:   tls.VersionTLS13,
-		// The bridge's certificate is self-signed and pinned by raw bytes, so
-		// chain verification is replaced rather than skipped. Exactly one
-		// server is acceptable.
-		InsecureSkipVerify:    true,
-		VerifyPeerCertificate: pinnedPeer(trusted),
-	}), nil
 }

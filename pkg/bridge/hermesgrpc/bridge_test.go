@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/hyscale-lab/aries/pkg/core"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 )
 
@@ -51,16 +53,10 @@ func newTestManager(t *testing.T, outputDir string) *Manager {
 	return manager
 }
 
-// dial goes through the shipped client's own credential loader, so the tests
-// exercise the trust decision the staged binary actually makes rather than a
-// permissive stand-in.
+// dial connects as the shipped client does: plaintext, no credentials.
 func dial(t *testing.T, endpoint core.ToolEndpoint) (sandboxv1.SandboxClient, func()) {
 	t.Helper()
-	transport, err := clientCredentials(endpoint.IdentitySourceFile, endpoint.KnownHostsSourceFile)
-	if err != nil {
-		t.Fatalf("load staged client credentials: %v", err)
-	}
-	connection, err := grpc.NewClient(endpoint.Address, grpc.WithTransportCredentials(transport))
+	connection, err := grpc.NewClient(endpoint.Address, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatalf("dial bridge: %v", err)
 	}
@@ -212,13 +208,9 @@ func TestStopRevokesAndIsIdempotent(t *testing.T) {
 			t.Fatalf("Stop() attempt %d error = %v", attempt+1, err)
 		}
 	}
-	if _, err := os.Stat(endpoint.IdentitySourceFile); !os.IsNotExist(err) {
-		t.Fatalf("client identity survived revocation: %v", err)
-	}
-	// The server certificate is retained as evidence of what the harness was
-	// told to trust; removing the client identity is revocation.
-	if _, err := os.Stat(endpoint.KnownHostsSourceFile); err != nil {
-		t.Fatalf("certificate evidence was removed: %v", err)
+	if connection, err := net.DialTimeout("tcp", endpoint.Address, time.Second); err == nil {
+		_ = connection.Close()
+		t.Fatal("bridge listener still accepts connections after Stop")
 	}
 }
 
@@ -511,33 +503,6 @@ func TestNewRequiresOutputDirectoryAndClient(t *testing.T) {
 		OutputDir: filepath.Join(t.TempDir(), "nested"), ClientPath: fakeClient(t),
 	}); err != nil {
 		t.Fatalf("New() error = %v", err)
-	}
-}
-
-// These certificates carry the RFC 5280 no-expiration date. Nothing consults a
-// validity window — pinning replaces chain validation on both sides — so any
-// finite lifetime would be decorative today and a live failure for long tasks
-// the moment anyone enabled standard verification. This guards against
-// reintroducing one; the credential's real bound is Stop removing the identity.
-func TestGeneratedCertificatesDoNotExpire(t *testing.T) {
-	material, err := generateSessionCertificates("127.0.0.1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for name, pem := range map[string][]byte{"server": material.trusted, "client": material.identity} {
-		certificate, err := parseCertificate(pem)
-		if err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-		if !certificate.NotAfter.Equal(noExpiry) {
-			t.Fatalf("%s certificate expires at %s, want the RFC 5280 no-expiration date %s",
-				name, certificate.NotAfter, noExpiry)
-		}
-		// The zero time encodes as year one, which reads as long expired rather
-		// than as never expiring.
-		if certificate.NotBefore.IsZero() || certificate.NotBefore.After(time.Now()) {
-			t.Fatalf("%s certificate is not yet valid: NotBefore = %s", name, certificate.NotBefore)
-		}
 	}
 }
 

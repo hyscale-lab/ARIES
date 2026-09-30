@@ -16,7 +16,6 @@ package hermesgrpc
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -33,7 +32,6 @@ import (
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 )
 
@@ -45,12 +43,6 @@ const (
 	// syncDenied is the recorded reason, and the status message, for a
 	// refused Hermes file sync.
 	syncDenied = "Hermes gRPC file sync is denied by ARIES policy"
-
-	// identityContainerPath holds the client's own certificate and key;
-	// trustedContainerPath holds the single server certificate the client
-	// accepts. The harness stages both at these paths.
-	identityContainerPath = "/run/aries/grpc/client.pem"
-	trustedContainerPath  = "/run/aries/grpc/server.crt"
 
 	// clientContainerPath is where the staged client lands. The ARIES Hermes
 	// plugin runs it by this path.
@@ -133,8 +125,6 @@ type bridgeSession struct {
 	server       *grpc.Server
 	cancel       context.CancelFunc
 	clientSource string
-	identityFile string
-	trustedFile  string
 	toolLogPath  string
 	logger       *logrus.Logger
 	outputLimit  int64
@@ -210,17 +200,14 @@ func (manager *Manager) Stop(ctx context.Context) error {
 	return manager.slot.Stop(ctx)
 }
 
-// Close revokes the session and confirms it. Only the client identity is
-// removed; that is revocation. The server certificate is retained as evidence
-// of what the harness was told to trust, exactly as the SSH bridge retains its
-// known-hosts line.
+// Close revokes the session and confirms it. There is no credential to
+// remove: revocation is the server's own state, marked here and stopped.
 func (session *bridgeSession) Close(ctx context.Context) error {
 	session.revoke()
-	return session.Finalize(ctx, session.identityFile)
+	return session.Finalize(ctx)
 }
 
-// open allocates the session's client, credentials, listener, audit, and
-// server. On error the caller closes the partial session.
+// open allocates the session's client, listener, audit, and server. On error the caller closes the partial session.
 func (manager *Manager) open(ctx context.Context, session *bridgeSession, gateway string) (core.ToolEndpoint, error) {
 	failed := func(err error) (core.ToolEndpoint, error) { return core.ToolEndpoint{}, err }
 	sandbox := session.sandbox
@@ -232,19 +219,7 @@ func (manager *Manager) open(ctx context.Context, session *bridgeSession, gatewa
 		return failed(fmt.Errorf("stage Hermes gRPC client: %w", err))
 	}
 
-	credentialMaterial, err := generateSessionCertificates(gateway)
-	if err != nil {
-		return failed(err)
-	}
-	session.identityFile = filepath.Join(session.ArtifactDir, "client.pem")
-	session.trustedFile = filepath.Join(session.ArtifactDir, "server.crt")
 	session.toolLogPath = filepath.Join(session.ArtifactDir, "tool-calls.jsonl")
-	if err := bridgekit.WriteExclusivePrivate(session.identityFile, credentialMaterial.identity); err != nil {
-		return failed(fmt.Errorf("write Hermes gRPC client identity: %w", err))
-	}
-	if err := bridgekit.WriteExclusivePrivate(session.trustedFile, credentialMaterial.trusted); err != nil {
-		return failed(fmt.Errorf("write Hermes gRPC trusted certificate: %w", err))
-	}
 
 	listener, err := net.Listen("tcp4", net.JoinHostPort(gateway, "0"))
 	if err != nil {
@@ -262,16 +237,7 @@ func (manager *Manager) open(ctx context.Context, session *bridgeSession, gatewa
 		grpc.MaxRecvMsgSize(maxMessageBytes), grpc.MaxSendMsgSize(maxMessageBytes),
 		// Stop must not return while a handler can still write its record;
 		// see revoke.
-		grpc.WaitForHandlers(true),
-		grpc.Creds(credentials.NewTLS(&tls.Config{
-			Certificates: []tls.Certificate{credentialMaterial.server},
-			ClientAuth:   tls.RequireAnyClientCert,
-			MinVersion:   tls.VersionTLS13,
-			// Exactly one client is authorized, pinned by its raw certificate
-			// bytes. This mirrors the SSH bridge's exact public-key comparison
-			// rather than trusting a certificate authority.
-			VerifyPeerCertificate: pinnedPeer(credentialMaterial.client),
-		})))
+		grpc.WaitForHandlers(true))
 	sandboxv1.RegisterSandboxServer(session.server, &service{session: session, serveCtx: serveCtx})
 
 	session.Wait.Add(1)
@@ -288,14 +254,9 @@ func (manager *Manager) open(ctx context.Context, session *bridgeSession, gatewa
 	manager.logger.WithContext(ctx).WithFields(logrus.Fields{
 		"address": address, "network": network, "container": sandbox.ContainerName(),
 	}).Info("Hermes gRPC bridge started")
-	// The SSH-shaped names carry their SSH meanings: IdentityFile is the
-	// client's own credential, KnownHostsFile the server identity it must
-	// accept and nothing else.
 	return core.ToolEndpoint{
 		Protocol: "grpc", Address: address, Username: lockedUsername, Network: network,
 		ClientCommand: clientContainerPath, ClientSourceFile: session.clientSource,
-		IdentityFile: identityContainerPath, IdentitySourceFile: session.identityFile,
-		KnownHostsFile: trustedContainerPath, KnownHostsSourceFile: session.trustedFile,
 		LogPaths: []string{session.toolLogPath}, Workdir: sandbox.Workdir(),
 	}, nil
 }
