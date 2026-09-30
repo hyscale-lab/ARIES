@@ -1,13 +1,9 @@
 package hermesssh
 
 import (
-	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"io"
-	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -16,66 +12,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgetest"
 	"github.com/hyscale-lab/aries/pkg/bridge/internal/hermeswire"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"golang.org/x/crypto/ssh"
 )
-
-type testSandbox struct {
-	mu       sync.Mutex
-	commands []core.Command
-	stdins   [][]byte
-	result   core.CommandResult
-	block    chan struct{}
-}
-
-func (sandbox *testSandbox) Exec(_ context.Context, command core.Command) (core.CommandResult, error) {
-	command.Args = append([]string(nil), command.Args...)
-	command.Env = maps.Clone(command.Env)
-	sandbox.mu.Lock()
-	defer sandbox.mu.Unlock()
-	sandbox.commands = append(sandbox.commands, command)
-	return sandbox.result, nil
-}
-
-func (sandbox *testSandbox) ExecStream(ctx context.Context, command core.Command, stdin io.Reader, stdout, stderr io.Writer) (core.CommandResult, error) {
-	content, err := io.ReadAll(stdin)
-	if err != nil {
-		return core.CommandResult{ExitCode: -1}, err
-	}
-	if sandbox.block != nil {
-		select {
-		case <-sandbox.block:
-		case <-ctx.Done():
-			return core.CommandResult{ExitCode: -1}, ctx.Err()
-		}
-	}
-	sandbox.mu.Lock()
-	sandbox.stdins = append(sandbox.stdins, content)
-	sandbox.mu.Unlock()
-	result, err := sandbox.Exec(ctx, command)
-	if err == nil {
-		_, _ = io.WriteString(stdout, result.Stdout)
-		_, _ = io.WriteString(stderr, result.Stderr)
-	}
-	return result, err
-}
-
-func (*testSandbox) Upload(context.Context, string, string) error   { return nil }
-func (*testSandbox) Download(context.Context, string, string) error { return nil }
-func (*testSandbox) ContainerID() string                            { return "sandbox-container-id" }
-func (*testSandbox) ContainerName() string                          { return "sandbox-container-name" }
-func (*testSandbox) NetworkName() string                            { return "sandbox-network-name" }
-func (*testSandbox) NetworkGateway(context.Context) (string, error) { return "127.0.0.1", nil }
-func (*testSandbox) Workdir() string                                { return "/app" }
-func (*testSandbox) RunID() string                                  { return "test-run" }
-func (*testSandbox) TaskID() string                                 { return "test-task" }
-
-func (sandbox *testSandbox) snapshot() []core.Command {
-	sandbox.mu.Lock()
-	defer sandbox.mu.Unlock()
-	return append([]core.Command(nil), sandbox.commands...)
-}
 
 func newTestManager(t *testing.T, outputDir string) *Manager {
 	t.Helper()
@@ -141,36 +82,10 @@ func recordsOfType(records []map[string]any, requestType string) []map[string]an
 	return selected
 }
 
-func readToolCalls(t *testing.T, path string) []map[string]any {
-	t.Helper()
-	file, err := os.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer file.Close()
-	var records []map[string]any
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 1<<20), 1<<20)
-	for scanner.Scan() {
-		if strings.TrimSpace(scanner.Text()) == "" {
-			continue
-		}
-		var record map[string]any
-		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
-			t.Fatalf("tool-calls line is not JSON: %v", err)
-		}
-		records = append(records, record)
-	}
-	if err := scanner.Err(); err != nil {
-		t.Fatal(err)
-	}
-	return records
-}
-
 func TestBridgeProxiesHermesCommandsAndRetainsEvidence(t *testing.T) {
 	outputDir := t.TempDir()
 	manager := newTestManager(t, outputDir)
-	sandbox := &testSandbox{result: core.CommandResult{ExitCode: 7, Stdout: "tool-output", Stderr: "tool-diagnostic"}}
+	sandbox := &bridgetest.TestSandbox{Result: core.CommandResult{ExitCode: 7, Stdout: "tool-output", Stderr: "tool-diagnostic"}}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
@@ -212,7 +127,7 @@ func TestBridgeProxiesHermesCommandsAndRetainsEvidence(t *testing.T) {
 		t.Fatalf("stdout=%q stderr=%q", stdout, stderr)
 	}
 
-	commands := sandbox.snapshot()
+	commands := sandbox.Snapshot()
 	if len(commands) != 1 {
 		t.Fatalf("commands = %#v", commands)
 	}
@@ -230,7 +145,7 @@ func TestBridgeProxiesHermesCommandsAndRetainsEvidence(t *testing.T) {
 	if err := manager.Stop(ctx); err != nil {
 		t.Fatal(err)
 	}
-	records := readToolCalls(t, filepath.Join(outputDir, "test-task", "bridge", "tool-calls.jsonl"))
+	records := bridgetest.ReadToolCalls(t, filepath.Join(outputDir, "test-task", "bridge", "tool-calls.jsonl"))
 	execs := recordsOfType(records, "exec")
 	if len(execs) != 1 {
 		t.Fatalf("exec records = %#v", records)
@@ -265,7 +180,7 @@ func TestBridgeProxiesHermesCommandsAndRetainsEvidence(t *testing.T) {
 // fails, and Hermes would never issue a single command.
 func TestBridgeAnswersBootstrapProbes(t *testing.T) {
 	manager := newTestManager(t, t.TempDir())
-	sandbox := &testSandbox{result: core.CommandResult{Stdout: "/root\n"}}
+	sandbox := &bridgetest.TestSandbox{Result: core.CommandResult{Stdout: "/root\n"}}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	endpoint, err := manager.Start(ctx, sandbox)
@@ -284,7 +199,7 @@ func TestBridgeAnswersBootstrapProbes(t *testing.T) {
 			t.Fatalf("bootstrap %q failed: %v", payload, err)
 		}
 	}
-	commands := sandbox.snapshot()
+	commands := sandbox.Snapshot()
 	if len(commands) != 2 {
 		t.Fatalf("commands = %#v", commands)
 	}
@@ -303,7 +218,7 @@ func TestBridgeAnswersBootstrapProbes(t *testing.T) {
 func TestBridgeDeniesFileSyncAndRecordsItAsPolicy(t *testing.T) {
 	outputDir := t.TempDir()
 	manager := newTestManager(t, outputDir)
-	sandbox := &testSandbox{}
+	sandbox := &bridgetest.TestSandbox{}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	endpoint, err := manager.Start(ctx, sandbox)
@@ -322,14 +237,14 @@ func TestBridgeDeniesFileSyncAndRecordsItAsPolicy(t *testing.T) {
 	if _, _, err := runExec(t, client, "tar xf - --no-overwrite-dir -C /root/.hermes", "archive-bytes"); err == nil {
 		t.Fatal("file-sync tar was accepted")
 	}
-	if commands := sandbox.snapshot(); len(commands) != 0 {
+	if commands := sandbox.Snapshot(); len(commands) != 0 {
 		t.Fatalf("denied payloads still reached the sandbox: %#v", commands)
 	}
 	client.Close()
 	if err := manager.Stop(ctx); err != nil {
 		t.Fatal(err)
 	}
-	records := recordsOfType(readToolCalls(t, filepath.Join(outputDir, "test-task", "bridge", "tool-calls.jsonl")), "exec")
+	records := recordsOfType(bridgetest.ReadToolCalls(t, filepath.Join(outputDir, "test-task", "bridge", "tool-calls.jsonl")), "exec")
 	if len(records) != 2 {
 		t.Fatalf("records = %#v", records)
 	}
@@ -352,7 +267,7 @@ func TestStopRevokesIdentityAndRetainsKnownHosts(t *testing.T) {
 	manager := newTestManager(t, outputDir)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	endpoint, err := manager.Start(ctx, &testSandbox{})
+	endpoint, err := manager.Start(ctx, &bridgetest.TestSandbox{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -384,7 +299,7 @@ func TestStopRevokesIdentityAndRetainsKnownHosts(t *testing.T) {
 // server must serve many session channels concurrently on a single conn.
 func TestBridgeServesConcurrentChannelsOnOneConnection(t *testing.T) {
 	manager := newTestManager(t, t.TempDir())
-	sandbox := &testSandbox{result: core.CommandResult{Stdout: "ok"}}
+	sandbox := &bridgetest.TestSandbox{Result: core.CommandResult{Stdout: "ok"}}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	endpoint, err := manager.Start(ctx, sandbox)
@@ -416,14 +331,14 @@ func TestBridgeServesConcurrentChannelsOnOneConnection(t *testing.T) {
 	for err := range errs {
 		t.Fatalf("concurrent exec failed: %v", err)
 	}
-	if commands := sandbox.snapshot(); len(commands) != parallel {
+	if commands := sandbox.Snapshot(); len(commands) != parallel {
 		t.Fatalf("commands = %d, want %d", len(commands), parallel)
 	}
 }
 
 func TestBridgePassesStdinThrough(t *testing.T) {
 	manager := newTestManager(t, t.TempDir())
-	sandbox := &testSandbox{result: core.CommandResult{Stdout: "read"}}
+	sandbox := &bridgetest.TestSandbox{Result: core.CommandResult{Stdout: "read"}}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	endpoint, err := manager.Start(ctx, sandbox)
@@ -439,16 +354,16 @@ func TestBridgePassesStdinThrough(t *testing.T) {
 	if _, _, err := runExec(t, client, hermeswire.Encode("cat > out", false), "piped-input"); err != nil {
 		t.Fatal(err)
 	}
-	sandbox.mu.Lock()
-	defer sandbox.mu.Unlock()
-	if len(sandbox.stdins) != 1 || string(sandbox.stdins[0]) != "piped-input" {
-		t.Fatalf("stdin = %q", sandbox.stdins)
+	sandbox.Mu.Lock()
+	defer sandbox.Mu.Unlock()
+	if len(sandbox.Stdins) != 1 || string(sandbox.Stdins[0]) != "piped-input" {
+		t.Fatalf("stdin = %q", sandbox.Stdins)
 	}
 }
 
 func TestStopRevokesListenerAndIsIdempotent(t *testing.T) {
 	manager := newTestManager(t, t.TempDir())
-	sandbox := &testSandbox{}
+	sandbox := &bridgetest.TestSandbox{}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	endpoint, err := manager.Start(ctx, sandbox)
@@ -474,7 +389,7 @@ func TestStopRevokesListenerAndIsIdempotent(t *testing.T) {
 // Revocation must terminate an in-flight tool call rather than wait for it.
 func TestStopCancelsInFlightCommand(t *testing.T) {
 	manager := newTestManager(t, t.TempDir())
-	sandbox := &testSandbox{block: make(chan struct{})}
+	sandbox := &bridgetest.TestSandbox{Block: make(chan struct{})}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	endpoint, err := manager.Start(ctx, sandbox)
@@ -510,11 +425,11 @@ func TestStartRejectsSecondSessionAndNonDockerSandbox(t *testing.T) {
 	manager := newTestManager(t, t.TempDir())
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	if _, err := manager.Start(ctx, &testSandbox{}); err != nil {
+	if _, err := manager.Start(ctx, &bridgetest.TestSandbox{}); err != nil {
 		t.Fatal(err)
 	}
 	defer manager.Stop(ctx)
-	if _, err := manager.Start(ctx, &testSandbox{}); err == nil {
+	if _, err := manager.Start(ctx, &bridgetest.TestSandbox{}); err == nil {
 		t.Fatal("second Start was accepted")
 	}
 }
@@ -535,7 +450,7 @@ func TestBridgeOmitsRawLogWhenConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sandbox := &testSandbox{result: core.CommandResult{ExitCode: 0, Stdout: "ok"}}
+	sandbox := &bridgetest.TestSandbox{Result: core.CommandResult{ExitCode: 0, Stdout: "ok"}}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	endpoint, err := manager.Start(ctx, sandbox)

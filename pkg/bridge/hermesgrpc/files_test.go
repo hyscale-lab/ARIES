@@ -17,21 +17,22 @@ import (
 	"testing/fstest"
 
 	"github.com/hyscale-lab/aries/pkg/bridge/hermesgrpc/sandboxv1"
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgetest"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
-// memorySandbox adds the file capability to testSandbox over an in-memory
+// memorySandbox adds the file capability to bridgetest.TestSandbox over an in-memory
 // filesystem. Paths are absolute on the wire and unrooted in fstest.MapFS.
 type memorySandbox struct {
-	*testSandbox
+	*bridgetest.TestSandbox
 	mu    sync.Mutex
 	files fstest.MapFS
 }
 
 func newMemorySandbox(files fstest.MapFS) *memorySandbox {
-	return &memorySandbox{testSandbox: &testSandbox{result: core.CommandResult{}}, files: files}
+	return &memorySandbox{TestSandbox: &bridgetest.TestSandbox{Result: core.CommandResult{}}, files: files}
 }
 
 func (sandbox *memorySandbox) StatFile(_ context.Context, path string) (fs.FileInfo, error) {
@@ -87,7 +88,7 @@ func startFileBridge(t *testing.T, sandbox any, options Options) (*Manager, sand
 	switch value := sandbox.(type) {
 	case *memorySandbox:
 		endpoint, err = manager.Start(context.Background(), value)
-	case *testSandbox:
+	case *bridgetest.TestSandbox:
 		endpoint, err = manager.Start(context.Background(), value)
 	}
 	if err != nil {
@@ -272,11 +273,11 @@ func TestFileProceduresMapFailuresToStatuses(t *testing.T) {
 // A sandbox with no file capability is the first iteration's Docker sandbox:
 // every call must still be recorded and answered UNIMPLEMENTED, never OK.
 func TestFileCallsWithoutFileAccessAreRecordedAndUnimplemented(t *testing.T) {
-	_, client, endpoint := startFileBridge(t, &testSandbox{}, Options{})
+	_, client, endpoint := startFileBridge(t, &bridgetest.TestSandbox{}, Options{})
 	if _, err := writeFile(client, "/app/x", 1, []byte("x")); status.Code(err) != codes.Unimplemented {
 		t.Fatalf("write = %v, want Unimplemented", err)
 	}
-	records := readToolCalls(t, endpoint.LogPaths[0])
+	records := bridgetest.ReadToolCalls(t, endpoint.LogPaths[0])
 	if len(records) != 1 || records[0]["operation_class"] != kindFileWrite || records[0]["status"] != "unimplemented" || records[0]["path"] != "/app/x" {
 		t.Fatalf("records = %#v", records)
 	}
@@ -306,7 +307,7 @@ func TestFileContentIsRetainedOnlyWhenAsked(t *testing.T) {
 		if err := manager.Stop(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-		records := readToolCalls(t, endpoint.LogPaths[0])
+		records := bridgetest.ReadToolCalls(t, endpoint.LogPaths[0])
 		raw, present := records[0]["content_raw"]
 		if present != retain || retain && raw != base64.StdEncoding.EncodeToString(content) || records[0]["sha256"] != hex.EncodeToString(digest[:]) {
 			t.Fatalf("retain=%v: record = %#v", retain, records[0])

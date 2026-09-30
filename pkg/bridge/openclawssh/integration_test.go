@@ -5,7 +5,6 @@ package openclawssh
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgetest"
 	"github.com/hyscale-lab/aries/pkg/core"
 	dockersandbox "github.com/hyscale-lab/aries/pkg/sandbox/docker"
 	"github.com/sirupsen/logrus"
@@ -131,15 +131,15 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw := decodeRawAuditRecords(t, rawContent)
+	raw := bridgetest.DecodeRawAuditRecords(t, rawContent)
 	if len(raw) != 1 {
 		t.Fatalf("raw record count = %d", len(raw))
 	}
-	payload := unescapeRawValue(t, raw[0]["payload"])
+	payload := bridgetest.UnescapeRawValue(t, raw[0]["payload"])
 	if !bytes.Equal(payload, ssh.Marshal(struct{ Command string }{remote})) {
 		t.Fatalf("raw payload = %x", payload)
 	}
-	if string(unescapeRawValue(t, raw[0]["stdin"])) != "streamed-input" {
+	if string(bridgetest.UnescapeRawValue(t, raw[0]["stdin"])) != "streamed-input" {
 		t.Fatalf("raw stdin = %#v", raw[0])
 	}
 	for _, forbidden := range [][]byte{[]byte("stdout="), []byte("stderr=")} {
@@ -332,12 +332,12 @@ func TestBridgeRunsConcurrentCallsWithoutAConvoy(t *testing.T) {
 	if err != nil || postRevocation.ExitCode != 0 {
 		t.Fatalf("sandbox was not usable for evaluation after revocation: %#v, %v", postRevocation, err)
 	}
-	structured := readIntegrationJSONL(t, endpoint.LogPaths[0])
+	structured, _ := readJSONLRecords(t, endpoint.LogPaths[0])
 	rawContent, err := os.ReadFile(endpoint.LogPaths[1])
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw := decodeRawAuditRecords(t, rawContent)
+	raw := bridgetest.DecodeRawAuditRecords(t, rawContent)
 	if len(structured) != len(raw) || len(raw) < calls+activeCalls {
 		t.Fatalf("correlated audit counts = %d/%d", len(structured), len(raw))
 	}
@@ -347,7 +347,7 @@ func TestBridgeRunsConcurrentCallsWithoutAConvoy(t *testing.T) {
 		if structured[index]["sequence"] != float64(wantSequence) || raw[index]["sequence"] != fmt.Sprint(wantSequence) {
 			t.Fatalf("sequence %d = %#v/%#v", index, structured[index]["sequence"], raw[index]["sequence"])
 		}
-		payload := unescapeRawValue(t, raw[index]["payload"])
+		payload := bridgetest.UnescapeRawValue(t, raw[index]["payload"])
 		var decoded struct{ Command string }
 		if err := ssh.Unmarshal(payload, &decoded); err != nil {
 			t.Fatalf("decode raw payload %d: %v", index, err)
@@ -369,23 +369,6 @@ func assertFormerAliasAbsent(t *testing.T, ctx context.Context, sandbox *dockers
 	if err != nil || result.ExitCode != 0 {
 		t.Fatalf("former alias exists %s: %#v, %v", stage, result, err)
 	}
-}
-
-func readIntegrationJSONL(t *testing.T, path string) []map[string]any {
-	t.Helper()
-	content, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var records []map[string]any
-	for _, line := range bytes.Split(bytes.TrimSpace(content), []byte{'\n'}) {
-		var record map[string]any
-		if err := json.Unmarshal(line, &record); err != nil {
-			t.Fatalf("decode %q: %v", path, err)
-		}
-		records = append(records, record)
-	}
-	return records
 }
 
 func newIntegrationBridge(t *testing.T, outputDir string, logger *logrus.Logger) *Manager {

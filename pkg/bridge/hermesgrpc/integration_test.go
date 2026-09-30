@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgetest"
 	"github.com/hyscale-lab/aries/pkg/core"
 	dockersandbox "github.com/hyscale-lab/aries/pkg/sandbox/docker"
 	"github.com/sirupsen/logrus"
@@ -30,13 +31,6 @@ import (
 // integration test uses: the bridge resolves the bare `bash` token to
 // /bin/bash, so a busybox fixture could not run an agent command at all.
 const bridgeFixtureImage = "docker.io/library/debian:12-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241"
-
-func requireDocker(t *testing.T) {
-	t.Helper()
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("docker is not available")
-	}
-}
 
 // buildClient produces the binary the bridge stages, so the test uses the same
 // artifact `make build` ships rather than a stand-in.
@@ -52,7 +46,7 @@ func buildClient(t *testing.T) string {
 }
 
 func TestClientDrivesTheBridgeIntoARealSandbox(t *testing.T) {
-	requireDocker(t)
+	bridgetest.RequireDocker(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -143,7 +137,7 @@ func TestClientDrivesTheBridgeIntoARealSandbox(t *testing.T) {
 		t.Fatalf("client identity survived revocation: %v", err)
 	}
 
-	records := readToolCalls(t, endpoint.LogPaths[0])
+	records := bridgetest.ReadToolCalls(t, endpoint.LogPaths[0])
 	if len(records) != 2 {
 		t.Fatalf("records = %d, want 2: %#v", len(records), records)
 	}

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgekit"
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgetest"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -402,7 +403,7 @@ func TestVirtualizedExecutionKeepsWireEvidenceAndRecordsExecutedState(t *testing
 	if len(commands) != 1 || commands[0].Args[1] != "cd /workspace && cat /workspace/input >/workspace/output" || commands[0].Env["HOME"] != "/workspace" {
 		t.Fatalf("executed commands = %#v", commands)
 	}
-	records := decodeAuditLines(t, logs.structured)
+	records := bridgetest.DecodeAuditLines(t, logs.structured)
 	if len(records) != 1 || records[0]["workspace_home"] != "/workspace" || records[0]["command"] != commands[0].Args[1] {
 		t.Fatalf("structured record = %#v", records)
 	}
@@ -413,8 +414,8 @@ func TestVirtualizedExecutionKeepsWireEvidenceAndRecordsExecutedState(t *testing
 	if !ok || !containsAny(envNames, "HOME") {
 		t.Fatalf("structured env names = %#v", records[0]["env_names"])
 	}
-	rawRecords := decodeRawAuditRecords(t, logs.raw)
-	if len(rawRecords) != 1 || rawRecords[0]["wire_command"] != wire || !bytes.Equal(unescapeRawValue(t, rawRecords[0]["payload"]), payload) {
+	rawRecords := bridgetest.DecodeRawAuditRecords(t, logs.raw)
+	if len(rawRecords) != 1 || rawRecords[0]["wire_command"] != wire || !bytes.Equal(bridgetest.UnescapeRawValue(t, rawRecords[0]["payload"]), payload) {
 		t.Fatalf("raw record = %#v", rawRecords)
 	}
 }
@@ -457,7 +458,7 @@ func TestSuppressedSkillsUploadDrainsInputAndPreservesStructuredClassification(t
 	if channel.Len() != 0 || len(sandbox.snapshot()) != 0 {
 		t.Fatalf("upload input remaining = %d, commands = %#v", channel.Len(), sandbox.snapshot())
 	}
-	records := decodeAuditLines(t, logs.structured)
+	records := bridgetest.DecodeAuditLines(t, logs.structured)
 	if len(records) != 1 {
 		t.Fatalf("structured records = %#v", records)
 	}

@@ -13,6 +13,7 @@ import (
 	"testing/fstest"
 
 	"github.com/hyscale-lab/aries/pkg/bridge/hermesgrpc/sandboxv1"
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgetest"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/status"
@@ -21,7 +22,7 @@ import (
 // TestClientRejectsMalformedInvocations pins the argv contract the plugin relies on:
 // a known mode, one operand, nothing sent otherwise.
 func TestClientRejectsMalformedInvocations(t *testing.T) {
-	sandbox := &testSandbox{result: core.CommandResult{ExitCode: 0}}
+	sandbox := &bridgetest.TestSandbox{Result: core.CommandResult{ExitCode: 0}}
 	_, endpoint := startBridge(t, sandbox)
 	t.Setenv(targetEnv, endpoint.Address)
 	t.Setenv(identityEnv, endpoint.IdentitySourceFile)
@@ -39,7 +40,7 @@ func TestClientRejectsMalformedInvocations(t *testing.T) {
 			t.Fatalf("ClientMain(%q) = %d, want %d", args, code, transportFailureExit)
 		}
 	}
-	if len(sandbox.snapshot()) != 0 {
+	if len(sandbox.Snapshot()) != 0 {
 		t.Fatal("a malformed invocation reached the sandbox")
 	}
 }
@@ -48,7 +49,7 @@ func TestClientRejectsMalformedInvocations(t *testing.T) {
 // bridge, so the credential loading, the payload reconstruction, the call and
 // the exit code are all exercised as the container will exercise them.
 func TestClientMainRunsThroughTheBridge(t *testing.T) {
-	sandbox := &testSandbox{result: core.CommandResult{ExitCode: 7, Stdout: "out", Stderr: "err"}}
+	sandbox := &bridgetest.TestSandbox{Result: core.CommandResult{ExitCode: 7, Stdout: "out", Stderr: "err"}}
 	manager, endpoint := startBridge(t, sandbox)
 
 	t.Setenv(targetEnv, endpoint.Address)
@@ -64,17 +65,17 @@ func TestClientMainRunsThroughTheBridge(t *testing.T) {
 	if stdout.String() != "out" || !strings.Contains(stderr.String(), "err") {
 		t.Fatalf("stdout = %q, stderr = %q", stdout.String(), stderr.String())
 	}
-	commands := sandbox.snapshot()
+	commands := sandbox.Snapshot()
 	if len(commands) != 1 || commands[0].Path != "/bin/bash" {
 		t.Fatalf("commands = %#v", commands)
 	}
 	if len(commands[0].Args) != 2 || commands[0].Args[1] != "echo hi" {
 		t.Fatalf("args = %#v", commands[0].Args)
 	}
-	sandbox.mu.Lock()
-	defer sandbox.mu.Unlock()
-	if len(sandbox.stdins) != 1 || string(sandbox.stdins[0]) != "piped" {
-		t.Fatalf("stdin = %q", sandbox.stdins)
+	sandbox.Mu.Lock()
+	defer sandbox.Mu.Unlock()
+	if len(sandbox.Stdins) != 1 || string(sandbox.Stdins[0]) != "piped" {
+		t.Fatalf("stdin = %q", sandbox.Stdins)
 	}
 	_ = manager
 }
@@ -82,7 +83,7 @@ func TestClientMainRunsThroughTheBridge(t *testing.T) {
 // TestClientRunsLoginScriptsUnderALoginShell pins the flag Hermes's session
 // bootstrap needs: the script must reach the sandbox as `bash -l -c`.
 func TestClientRunsLoginScriptsUnderALoginShell(t *testing.T) {
-	sandbox := &testSandbox{result: core.CommandResult{ExitCode: 0}}
+	sandbox := &bridgetest.TestSandbox{Result: core.CommandResult{ExitCode: 0}}
 	_, endpoint := startBridge(t, sandbox)
 	t.Setenv(targetEnv, endpoint.Address)
 	t.Setenv(identityEnv, endpoint.IdentitySourceFile)
@@ -92,7 +93,7 @@ func TestClientRunsLoginScriptsUnderALoginShell(t *testing.T) {
 	if code := ClientMain([]string{"exec", "--login", "--", "pwd -P"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
 		t.Fatalf("exit code = %d (stderr: %s)", code, stderr.String())
 	}
-	commands := sandbox.snapshot()
+	commands := sandbox.Snapshot()
 	if len(commands) != 1 || strings.Join(commands[0].Args, " ") != "-l -c pwd -P" {
 		t.Fatalf("commands = %#v", commands)
 	}
@@ -101,7 +102,7 @@ func TestClientRunsLoginScriptsUnderALoginShell(t *testing.T) {
 // TestClientMainReportsRevocationAsTransportFailure pins that a call after the
 // bridge is revoked reaches Hermes as exit 255, not as a command exit code.
 func TestClientMainReportsRevocationAsTransportFailure(t *testing.T) {
-	sandbox := &testSandbox{result: core.CommandResult{ExitCode: 0}}
+	sandbox := &bridgetest.TestSandbox{Result: core.CommandResult{ExitCode: 0}}
 	manager, endpoint := startBridge(t, sandbox)
 
 	// Revocation deletes the credentials; keep copies so the call fails at the
@@ -128,7 +129,7 @@ func TestClientMainReportsRevocationAsTransportFailure(t *testing.T) {
 	if code := ClientMain([]string{"exec", "true"}, strings.NewReader(""), &stdout, &stderr); code != transportFailureExit {
 		t.Fatalf("exit code = %d, want %d", code, transportFailureExit)
 	}
-	if len(sandbox.snapshot()) != 0 {
+	if len(sandbox.Snapshot()) != 0 {
 		t.Fatal("a call after revocation reached the sandbox")
 	}
 }
@@ -137,12 +138,12 @@ func TestClientMainReportsRevocationAsTransportFailure(t *testing.T) {
 // rather than accepting any peer. Hermes's own SSH path accepts the host key
 // on first use, so this is stricter than what it replaces.
 func TestClientRefusesAnUnpinnedServer(t *testing.T) {
-	sandbox := &testSandbox{result: core.CommandResult{ExitCode: 0}}
+	sandbox := &bridgetest.TestSandbox{Result: core.CommandResult{ExitCode: 0}}
 	_, endpoint := startBridge(t, sandbox)
 
 	// A second bridge's certificate is a valid certificate that is not this
 	// bridge's, which is exactly the substitution pinning must reject.
-	otherSandbox := &testSandbox{result: core.CommandResult{ExitCode: 0}}
+	otherSandbox := &bridgetest.TestSandbox{Result: core.CommandResult{ExitCode: 0}}
 	other := newTestManager(t, t.TempDir())
 	otherEndpoint, err := other.Start(context.Background(), otherSandbox)
 	if err != nil {
@@ -159,7 +160,7 @@ func TestClientRefusesAnUnpinnedServer(t *testing.T) {
 	if code != transportFailureExit {
 		t.Fatalf("exit code = %d, want %d", code, transportFailureExit)
 	}
-	if len(sandbox.snapshot()) != 0 {
+	if len(sandbox.Snapshot()) != 0 {
 		t.Fatal("a call reached the sandbox over an unpinned connection")
 	}
 }

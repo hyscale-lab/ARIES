@@ -3,7 +3,6 @@ package bridgekit
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strconv"
@@ -12,7 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-	"unicode/utf8"
+
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgetest"
 )
 
 const testLimit = 256 << 20
@@ -59,8 +59,8 @@ func TestAuditWriterPersistsConcurrentGapFreeCorrelatedRecords(t *testing.T) {
 	if err := writer.sealAndWait(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	structuredRecords := decodeAuditLines(t, structuredBytes.Bytes())
-	rawRecords := decodeRawAuditRecords(t, rawBytes.Bytes())
+	structuredRecords := bridgetest.DecodeAuditLines(t, structuredBytes.Bytes())
+	rawRecords := bridgetest.DecodeRawAuditRecords(t, rawBytes.Bytes())
 	if len(structuredRecords) != records || len(rawRecords) != records {
 		t.Fatalf("record counts = %d, %d", len(structuredRecords), len(rawRecords))
 	}
@@ -69,8 +69,8 @@ func TestAuditWriterPersistsConcurrentGapFreeCorrelatedRecords(t *testing.T) {
 		if structuredRecords[index]["sequence"] != float64(want) || rawRecords[index]["sequence"] != strconv.Itoa(want) {
 			t.Fatalf("sequence %d = %#v / %#v", index, structuredRecords[index], rawRecords[index])
 		}
-		payload := unescapeRawValue(t, rawRecords[index]["payload"])
-		stdin := unescapeRawValue(t, rawRecords[index]["stdin"])
+		payload := bridgetest.UnescapeRawValue(t, rawRecords[index]["payload"])
+		stdin := bridgetest.UnescapeRawValue(t, rawRecords[index]["stdin"])
 		if !bytes.Equal(stdin, payload) || len(payload) != 3 {
 			t.Fatalf("raw exact bytes %d = payload %x stdin %x", index, payload, stdin)
 		}
@@ -97,7 +97,7 @@ func TestToolCallJSONLDisablesHTMLEscapingButKeepsRequiredEscapes(t *testing.T) 
 			t.Fatalf("structured JSON retained HTML escape %q: %s", forbidden, content)
 		}
 	}
-	records := decodeAuditLines(t, content)
+	records := bridgetest.DecodeAuditLines(t, content)
 	if len(records) != 1 || records[0]["command"] != want {
 		t.Fatalf("structured JSON round trip = %#v", records)
 	}
@@ -112,11 +112,11 @@ func TestRawAuditUsesDeterministicLosslessHumanReadableGrammar(t *testing.T) {
 		WireCommand: "printf 'é && <tag>'", Payload: payload, PayloadBytes: int64(len(payload)),
 		Stdin: stdin, StdinBytes: int64(len(stdin)),
 	})
-	parsed := decodeRawAuditRecords(t, content)
+	parsed := bridgetest.DecodeRawAuditRecords(t, content)
 	if len(parsed) != 1 || parsed[0]["wire_command"] != "printf 'é && <tag>'" {
 		t.Fatalf("raw records = %#v", parsed)
 	}
-	if !bytes.Equal(unescapeRawValue(t, parsed[0]["payload"]), payload) || !bytes.Equal(unescapeRawValue(t, parsed[0]["stdin"]), stdin) {
+	if !bytes.Equal(bridgetest.UnescapeRawValue(t, parsed[0]["payload"]), payload) || !bytes.Equal(bridgetest.UnescapeRawValue(t, parsed[0]["stdin"]), stdin) {
 		t.Fatalf("raw round trip failed: %s", content)
 	}
 	if parsed[0]["payload_bytes"] != strconv.Itoa(len(payload)) || parsed[0]["stdin_bytes"] != strconv.Itoa(len(stdin)) || !bytes.Contains(content, []byte(`\xFF`)) {
@@ -370,94 +370,4 @@ func memoryAuditFile() (*auditFile, *bytes.Buffer) {
 		write: func(content []byte) (int, error) { mu.Lock(); defer mu.Unlock(); return buffer.Write(content) },
 		sync:  func() error { return nil }, close: func() error { return nil },
 	}, &buffer
-}
-
-func decodeAuditLines(t *testing.T, content []byte) []map[string]any {
-	t.Helper()
-	var records []map[string]any
-	for _, line := range bytes.Split(bytes.TrimSpace(content), []byte{'\n'}) {
-		var record map[string]any
-		if err := json.Unmarshal(line, &record); err != nil {
-			t.Fatal(err)
-		}
-		records = append(records, record)
-	}
-	return records
-}
-
-func decodeRawAuditRecords(t *testing.T, content []byte) []map[string]string {
-	t.Helper()
-	const begin = "--- ARIES SSH CALL BEGIN ---\n"
-	const end = "--- ARIES SSH CALL END ---\n"
-	fields := []string{"sequence", "timestamp", "request_type", "want_reply", "status", "run_id", "task_id", "container_id", "wire_command", "payload_bytes", "payload", "stdin_bytes", "stdin"}
-	var records []map[string]string
-	for len(content) > 0 {
-		if !bytes.HasPrefix(content, []byte(begin)) {
-			t.Fatalf("raw audit missing begin delimiter: %q", content)
-		}
-		content = content[len(begin):]
-		record := make(map[string]string, len(fields))
-		for _, field := range fields {
-			newline := bytes.IndexByte(content, '\n')
-			if newline < 0 {
-				t.Fatalf("raw audit missing %s line ending: %q", field, content)
-			}
-			line := string(content[:newline])
-			prefix := field + "="
-			if !strings.HasPrefix(line, prefix) {
-				t.Fatalf("raw audit field order: got %q want prefix %q", line, prefix)
-			}
-			record[field] = strings.TrimPrefix(line, prefix)
-			content = content[newline+1:]
-		}
-		if !bytes.HasPrefix(content, []byte(end)) {
-			t.Fatalf("raw audit missing end delimiter: %q", content)
-		}
-		content = content[len(end):]
-		records = append(records, record)
-	}
-	return records
-}
-
-func unescapeRawValue(t *testing.T, value string) []byte {
-	t.Helper()
-	var output []byte
-	for index := 0; index < len(value); {
-		if value[index] != '\\' {
-			_, size := utf8.DecodeRuneInString(value[index:])
-			output = append(output, value[index:index+size]...)
-			index += size
-			continue
-		}
-		if index+1 >= len(value) {
-			t.Fatalf("dangling raw escape in %q", value)
-		}
-		switch value[index+1] {
-		case '\\':
-			output = append(output, '\\')
-			index += 2
-		case 'n':
-			output = append(output, '\n')
-			index += 2
-		case 'r':
-			output = append(output, '\r')
-			index += 2
-		case 't':
-			output = append(output, '\t')
-			index += 2
-		case 'x':
-			if index+4 > len(value) {
-				t.Fatalf("short raw hex escape in %q", value)
-			}
-			decoded, err := hex.DecodeString(value[index+2 : index+4])
-			if err != nil {
-				t.Fatalf("invalid raw hex escape in %q: %v", value, err)
-			}
-			output = append(output, decoded[0])
-			index += 4
-		default:
-			t.Fatalf("unknown raw escape in %q", value)
-		}
-	}
-	return output
 }

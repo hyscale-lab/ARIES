@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgetest"
 	"github.com/hyscale-lab/aries/pkg/bridge/internal/hermeswire"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
@@ -139,18 +140,6 @@ func (sandbox *integrationSandbox) snapshot() []core.Command {
 	return append([]core.Command(nil), sandbox.commands...)
 }
 
-func requireDocker(t *testing.T, image string) {
-	t.Helper()
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("docker is not available")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if output, err := exec.CommandContext(ctx, "docker", "image", "inspect", image).CombinedOutput(); err != nil {
-		t.Skipf("pinned Hermes image is not present locally (%s): %s", image, output)
-	}
-}
-
 // TestUpstreamHermesDrivesTheBridgeWithoutPatches is the load-bearing check for
 // this integration: an unmodified upstream Hermes, configured only through
 // environment variables, runs a tool call through the ARIES bridge into the
@@ -158,7 +147,7 @@ func requireDocker(t *testing.T, image string) {
 // sandbox.
 func TestUpstreamHermesDrivesTheBridgeWithoutPatches(t *testing.T) {
 	image := hermesIntegrationImage(t)
-	requireDocker(t, image)
+	bridgetest.RequireDocker(t, image)
 	outputDir := t.TempDir()
 	sandboxRoot := t.TempDir()
 	manager := newTestManager(t, outputDir)
@@ -276,7 +265,7 @@ func TestUpstreamHermesDrivesTheBridgeWithoutPatches(t *testing.T) {
 	}
 
 	// Evidence must show both the executed commands and the refusals.
-	records := readToolCalls(t, filepath.Join(outputDir, "integration-task", "bridge", "tool-calls.jsonl"))
+	records := bridgetest.ReadToolCalls(t, filepath.Join(outputDir, "integration-task", "bridge", "tool-calls.jsonl"))
 	var denied, completed int
 	for _, record := range records {
 		switch record["status"] {
@@ -405,7 +394,7 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 			t.Fatalf("retained bridge log %q = %v, %v", path, info, err)
 		}
 	}
-	records := readToolCalls(t, endpoint.LogPaths[0])
+	records := bridgetest.ReadToolCalls(t, endpoint.LogPaths[0])
 	execs := recordsOfType(records, "exec")
 	if len(execs) != 4 {
 		t.Fatalf("exec records = %#v", records)

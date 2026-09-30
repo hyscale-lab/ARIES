@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgetest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -53,8 +54,8 @@ var sshReaderRequiredKeys = []string{
 func TestToolCallsStayReadableByTodaysReader(t *testing.T) {
 	outputDir := t.TempDir()
 	manager := newTestManager(t, outputDir)
-	sandbox := &testSandbox{}
-	sandbox.result.ExitCode = 3
+	sandbox := &bridgetest.TestSandbox{}
+	sandbox.Result.ExitCode = 3
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	endpoint, err := manager.Start(ctx, sandbox)

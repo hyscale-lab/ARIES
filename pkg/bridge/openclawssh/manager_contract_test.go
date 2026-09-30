@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgetest"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
@@ -192,18 +193,18 @@ func TestManagerProxiesSSHExecToSandboxAndRetainsReplayableToolLog(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rawRecords := decodeRawAuditRecords(t, rawContent)
+	rawRecords := bridgetest.DecodeRawAuditRecords(t, rawContent)
 	if len(rawRecords) != 1 {
 		t.Fatalf("raw records = %d: %s", len(rawRecords), rawContent)
 	}
 	if rawRecords[0]["sequence"] != "1" || rawRecords[0]["request_type"] != "exec" {
 		t.Fatalf("raw identity = %#v", rawRecords[0])
 	}
-	payload := unescapeRawValue(t, rawRecords[0]["payload"])
+	payload := bridgetest.UnescapeRawValue(t, rawRecords[0]["payload"])
 	if !bytes.Equal(payload, ssh.Marshal(struct{ Command string }{encoded})) {
 		t.Fatalf("raw payload = %x", payload)
 	}
-	if string(unescapeRawValue(t, rawRecords[0]["stdin"])) != contractStdin || rawRecords[0]["wire_command"] != encoded {
+	if string(bridgetest.UnescapeRawValue(t, rawRecords[0]["stdin"])) != contractStdin || rawRecords[0]["wire_command"] != encoded {
 		t.Fatalf("raw command/stdin = %#v", rawRecords[0])
 	}
 	for _, duplicated := range []string{contractStdout, contractStderr} {
@@ -263,14 +264,14 @@ func TestManagerRejectsMalformedSSHExecWithoutSandboxExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rawRecords := decodeRawAuditRecords(t, rawContent)
+	rawRecords := bridgetest.DecodeRawAuditRecords(t, rawContent)
 	if len(rawRecords) != 1 {
 		t.Fatalf("raw rejection records = %#v", rawRecords)
 	}
 	if rawRecords[0]["status"] != "rejected" || rawRecords[0]["stdin_bytes"] != "0" {
 		t.Fatalf("raw rejection = %#v", rawRecords[0])
 	}
-	payload := unescapeRawValue(t, rawRecords[0]["payload"])
+	payload := bridgetest.UnescapeRawValue(t, rawRecords[0]["payload"])
 	if !bytes.Equal(payload, ssh.Marshal(struct{ Command string }{malformed})) || rawRecords[0]["wire_command"] != malformed || rawRecords[0]["stdin"] != "" {
 		t.Fatalf("raw rejection evidence = %#v payload=%x", rawRecords[0], payload)
 	}
