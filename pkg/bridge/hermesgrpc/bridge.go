@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/bridge/hermesgrpc/sandboxv1"
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/hermeswire"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/runner"
 	"github.com/sirupsen/logrus"
@@ -42,10 +43,9 @@ const (
 	maxRecordedInputBytes = 16 << 20
 	maxToolLogBytes       = 256 << 20
 
-	// remoteShellPath is where a script runs. The sandbox requires an absolute
-	// command path and performs no PATH lookup, so a task image must provide
-	// /bin/bash — the same requirement the SSH bridge imposes.
-	remoteShellPath = "/bin/bash"
+	// syncDenied is the recorded reason, and the status message, for a
+	// refused Hermes file sync.
+	syncDenied = "Hermes gRPC file sync is denied by ARIES policy"
 
 	// identityContainerPath holds the client's own certificate and key;
 	// trustedContainerPath holds the single server certificate the client
@@ -451,18 +451,13 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 	// routed around. Refusing a file sync keeps harness scaffold and the
 	// credential files iter_sync_files collects out of the container the
 	// verifier later inspects.
-	remote, decodeErr := decodeRemoteCommand(payload)
-	if decodeErr != nil {
-		if errors.Is(decodeErr, errSyncDenied) {
-			session.logRequestFailure(payload, kindSync, "denied", errSyncDenied.Error())
-			return nil, status.Error(codes.PermissionDenied, errSyncDenied.Error())
-		}
-		session.logRequestFailure(payload, kindUnknown, "rejected", "invalid remote command")
-		return nil, status.Error(codes.InvalidArgument, "invalid remote command")
+	command, kind, prepareErr := hermeswire.Prepare(payload, session.sandbox.Workdir())
+	if errors.Is(prepareErr, hermeswire.ErrSyncDenied) {
+		session.logRequestFailure(payload, kind, "denied", syncDenied)
+		return nil, status.Error(codes.PermissionDenied, syncDenied)
 	}
-	prepared, prepareErr := prepareRemoteCommand(remote, session.sandbox.Workdir())
 	if prepareErr != nil {
-		session.logRequestFailure(payload, remote.kind, "rejected", "invalid remote command")
+		session.logRequestFailure(payload, kind, "rejected", "invalid remote command")
 		return nil, status.Error(codes.InvalidArgument, "invalid remote command")
 	}
 
@@ -472,7 +467,7 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 	// and the refusal is the evidence.
 	input := request.GetStdin()
 	if int64(len(input)) > maxRecordedInputBytes {
-		session.logRequestFailure(payload, prepared.kind, "rejected", "stdin exceeds the retained bound")
+		session.logRequestFailure(payload, kind, "rejected", "stdin exceeds the retained bound")
 		return nil, status.Error(codes.ResourceExhausted, "stdin exceeds the retained bound")
 	}
 
@@ -487,8 +482,6 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 		case <-callCtx.Done():
 		}
 	}()
-
-	command := prepared.command
 
 	started := time.Now()
 	stdin := bytes.NewReader(input)
@@ -526,11 +519,10 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 	truncated := stdout.truncated() || stderr.truncated()
 	duration := time.Since(started).Milliseconds()
 
-	// commandHash and Command are taken from the request field directly. The
-	// canonical round-trip check in decodeShellToken already proves a
-	// re-encoding would reproduce it, so there is nothing to re-encode.
+	// commandHash and Command are taken from the request field directly:
+	// hermeswire accepts only the canonical encoding, so it is replayable.
 	session.writeRecord(toolCallRecord{
-		OperationClass: prepared.kind,
+		OperationClass: kind,
 		Path:           command.Path,
 		Workdir:        command.Dir,
 		CommandHash:    commandHash(payload),
@@ -546,7 +538,7 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 	// Per-call sizes are surfaced here so a real run supplies the numbers the
 	// output bound should eventually be chosen from.
 	session.logger.WithFields(logrus.Fields{
-		"kind": prepared.kind, "status": statusText, "exit_code": exitCode,
+		"kind": kind, "status": statusText, "exit_code": exitCode,
 		"stdin_bytes": len(input), "stdout_bytes": stdout.count(), "stderr_bytes": stderr.count(),
 		"truncated": truncated, "duration_ms": duration,
 	}).Info("Hermes gRPC exec")
@@ -588,7 +580,7 @@ func withCancellation(ctx context.Context, err error) error {
 // revocation provable per call rather than only by the transport having closed.
 func (session *bridgeSession) authorize(payload string) error {
 	if session.isRevoked() {
-		session.logRequestFailure(payload, kindUnknown, "rejected", "session revoked")
+		session.logRequestFailure(payload, hermeswire.KindUnknown, "rejected", "session revoked")
 		return status.Error(codes.Unavailable, "session revoked")
 	}
 	return nil

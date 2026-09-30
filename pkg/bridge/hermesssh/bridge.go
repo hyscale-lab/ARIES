@@ -23,11 +23,15 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/hermeswire"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/runner"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/crypto/ssh"
 )
+
+// syncDenied is the recorded reason for a refused Hermes file sync.
+const syncDenied = "Hermes SSH file sync is denied by ARIES policy"
 
 const (
 	defaultBridgeCleanup  = 20 * time.Second
@@ -758,41 +762,35 @@ func (session *bridgeSession) handleSession(ctx context.Context, channel ssh.Cha
 			if request.WantReply {
 				_ = session.reply(request, false)
 			}
-			session.logRequestFailure(audit, kindUnknown, "unsupported", "channel request type is not exec")
+			session.logRequestFailure(audit, hermeswire.KindUnknown, "unsupported", "channel request type is not exec")
 			continue
 		}
 		if !request.WantReply {
-			session.logRejected(audit, kindUnknown)
+			session.logRejected(audit, hermeswire.KindUnknown)
 			return
 		}
 		var payload struct{ Command string }
 		if err := ssh.Unmarshal(request.Payload, &payload); err != nil {
 			_ = session.reply(request, false)
-			session.logRejected(audit, kindUnknown)
+			session.logRejected(audit, hermeswire.KindUnknown)
 			return
 		}
 		audit.remoteCommand = payload.Command
-		command, err := decodeRemoteCommand(payload.Command)
+		command, kind, err := hermeswire.Prepare(payload.Command, session.sandbox.Workdir())
 		if err != nil {
 			_ = session.reply(request, false)
-			if errors.Is(err, errSyncDenied) {
-				session.logRequestFailure(audit, kindSync, "denied", errSyncDenied.Error())
+			if errors.Is(err, hermeswire.ErrSyncDenied) {
+				session.logRequestFailure(audit, kind, "denied", syncDenied)
 			} else {
-				session.logRejected(audit, kindUnknown)
+				session.logRejected(audit, kind)
 			}
 			return
 		}
-		prepared, err := prepareRemoteCommand(command, session.sandbox.Workdir())
-		if err != nil {
-			_ = session.reply(request, false)
-			session.logRejected(audit, command.kind)
-			return
-		}
 		if err := session.reply(request, true); err != nil {
-			session.logRequestFailure(audit, prepared.kind, "failed", "SSH accept reply failed")
+			session.logRequestFailure(audit, kind, "failed", "SSH accept reply failed")
 			return
 		}
-		exitCode := session.execute(ctx, channel, prepared, audit)
+		exitCode := session.execute(ctx, channel, command, kind, audit)
 		_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{uint32(exitCode)}))
 		return
 	}
@@ -804,12 +802,12 @@ func (session *bridgeSession) reply(request *ssh.Request, accepted bool) error {
 	return session.replyRequest(request, accepted)
 }
 
-func (session *bridgeSession) execute(ctx context.Context, channel ssh.Channel, prepared preparedRemoteCommand, audit requestAudit) int {
+func (session *bridgeSession) execute(ctx context.Context, channel ssh.Channel, command core.Command, kind string, audit requestAudit) int {
 	started := time.Now()
 	stdin := &recordedInput{reader: channel}
 	stdout := &byteCounter{writer: channel}
 	stderr := &byteCounter{writer: channel.Stderr()}
-	result, err := session.sandbox.ExecStream(ctx, prepared.command, stdin, stdout, stderr)
+	result, err := session.sandbox.ExecStream(ctx, command, stdin, stdout, stderr)
 	if contextErr := ctx.Err(); contextErr != nil && !hasCancellationCause(err) {
 		// A sandbox error returned after revocation is ambiguous unless it carries
 		// the cancellation cause. Preserve both so Stop fails closed rather than
@@ -840,10 +838,12 @@ func (session *bridgeSession) execute(ctx context.Context, channel ssh.Channel, 
 	}
 	session.writeRecord(toolCallRecord{
 		ContainerID: session.sandbox.ContainerID(), ContainerName: session.sandbox.ContainerName(),
-		OperationClass: prepared.kind, Path: prepared.command.Path, Workdir: prepared.command.Dir,
-		CommandHash: commandHash(prepared.encoded),
-		Command:     prepared.encoded,
-		Argv:        append([]string{prepared.command.Path}, prepared.command.Args...),
+		OperationClass: kind, Path: command.Path, Workdir: command.Dir,
+		// Decoding accepts only the canonical encoding, so the wire payload is
+		// already the replayable form.
+		CommandHash: commandHash(audit.remoteCommand),
+		Command:     audit.remoteCommand,
+		Argv:        append([]string{command.Path}, command.Args...),
 		Stdin:       stdinContent, StdinEncoding: stdinEncoding,
 		StdinBytes: stdinBytes, StdoutBytes: stdout.count(), StderrBytes: stderr.count(),
 		ExitCode: exitCode, DurationMS: time.Since(started).Milliseconds(), Status: status, Error: message,
@@ -858,7 +858,7 @@ func (session *bridgeSession) logRejected(audit requestAudit, kind string) {
 
 // logRequestFailure records a request that never reached the sandbox. The kind
 // is whatever decoding established before the failure, so a refused file sync
-// is not filed as an agent command; kindUnknown marks a payload that never
+// is not filed as an agent command; KindUnknown marks a payload that never
 // decoded far enough to classify.
 func (session *bridgeSession) logRequestFailure(audit requestAudit, kind, status, message string) {
 	session.writeRecord(toolCallRecord{

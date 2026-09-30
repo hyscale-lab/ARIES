@@ -535,7 +535,7 @@ func validEnvironmentName(name string) bool {
 	return name != ""
 }
 
-// validWorkdir mirrors the bridge's rule so the value written into
+// validWorkdir mirrors pkg/bridge/internal/hermeswire's rule so the value written into
 // TERMINAL_CWD cannot change meaning inside a shell.
 func validWorkdir(value string) bool {
 	if value == "/" {

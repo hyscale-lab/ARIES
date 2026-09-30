@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/hermeswire"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
 	dockersandbox "github.com/hyscale-lab/aries/pkg/sandbox/docker"
@@ -235,10 +236,10 @@ func TestUpstreamHermesDrivesTheBridgeWithoutPatches(t *testing.T) {
 		// the bridge may run, so any other path — a future tar, scp, or mkdir
 		// file-sync leak included — fails here.
 		switch item.Path {
-		case remoteShellPath:
+		case "/bin/bash":
 			sawAgentCommand = true
-		case bootstrapShell:
-			if len(item.Args) != 2 || item.Args[0] != "-c" || (item.Args[1] != connectionProbePayload && item.Args[1] != remoteHomePayload) {
+		case "/bin/sh":
+			if len(item.Args) != 2 || item.Args[0] != "-c" || (item.Args[1] != "echo 'SSH connection established'" && item.Args[1] != "echo $HOME") {
 				t.Fatalf("an unexpected bootstrap command reached the sandbox: %#v", item)
 			}
 		default:
@@ -343,11 +344,11 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 
 	// 1 & 2: the bootstrap probes. _establish_connection raises unless its echo
 	// succeeds, so a regression here costs every later command.
-	probe, _, err := runExec(t, client, connectionProbePayload, "")
+	probe, _, err := runExec(t, client, "echo 'SSH connection established'", "")
 	if err != nil || probe != "SSH connection established\n" {
 		t.Fatalf("connection probe = %q, %v", probe, err)
 	}
-	home, _, err := runExec(t, client, remoteHomePayload, "")
+	home, _, err := runExec(t, client, "echo $HOME", "")
 	if err != nil || strings.TrimSpace(home) == "" || strings.Contains(home, "$HOME") {
 		t.Fatalf("remote home probe = %q, %v", home, err)
 	}
@@ -356,7 +357,7 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 	// puts on the wire. It streams stdin, writes state the evaluator reads back,
 	// and carries a non-zero exit through the channel.
 	const script = "cat > /work/bridge-state; cat /work/bridge-state; printf tool-stderr >&2; exit 7"
-	agentPayload := remoteShell + " -c " + shlexQuote(script)
+	agentPayload := hermeswire.Encode(script, false)
 	stdout, stderr, runErr := runExec(t, client, agentPayload, "streamed-input")
 	var exitError *ssh.ExitError
 	if !errors.As(runErr, &exitError) || exitError.ExitStatus() != 7 || stdout != "streamed-input" || stderr != "tool-stderr" {
@@ -415,11 +416,11 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 		exitCode float64
 		command  string
 	}{
-		{kindBootstrap, "completed", 0, connectionProbePayload},
-		{kindBootstrap, "completed", 0, remoteHomePayload},
-		{kindAgent, "completed", 7, agentPayload},
+		{"bootstrap", "completed", 0, "echo 'SSH connection established'"},
+		{"bootstrap", "completed", 0, "echo $HOME"},
+		{"agent", "completed", 7, agentPayload},
 		// A refused sync never runs, so it must not borrow a command's exit code.
-		{kindSync, "denied", -1, ""},
+		{"sync", "denied", -1, ""},
 	}
 	for index, want := range wantExecs {
 		record := execs[index]
@@ -433,7 +434,7 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 			t.Fatalf("exec record %d identity = %#v", index, record)
 		}
 	}
-	if execs[2]["stdin"] != "streamed-input" || execs[2]["stdin_encoding"] != "utf-8" || execs[2]["workdir"] != "/work" || execs[2]["path"] != remoteShellPath {
+	if execs[2]["stdin"] != "streamed-input" || execs[2]["stdin_encoding"] != "utf-8" || execs[2]["workdir"] != "/work" || execs[2]["path"] != "/bin/bash" {
 		t.Fatalf("agent record = %#v", execs[2])
 	}
 	// Every request Hermes sent must appear, including the env request OpenSSH

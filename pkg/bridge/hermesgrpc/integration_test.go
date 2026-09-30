@@ -148,8 +148,8 @@ func TestClientDrivesTheBridgeIntoARealSandbox(t *testing.T) {
 		t.Fatalf("records = %d, want 2: %#v", len(records), records)
 	}
 	for index, record := range records {
-		if record["operation_class"] != kindAgent || record["status"] != "completed" {
-			t.Fatalf("record %d = %#v, want %s/completed", index, record, kindAgent)
+		if record["operation_class"] != "agent" || record["status"] != "completed" {
+			t.Fatalf("record %d = %#v, want %s/completed", index, record, "agent")
 		}
 	}
 	// Command output must never enter the audit.

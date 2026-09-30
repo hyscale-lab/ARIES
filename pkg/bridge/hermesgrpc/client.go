@@ -32,6 +32,7 @@ import (
 	"strings"
 
 	"github.com/hyscale-lab/aries/pkg/bridge/hermesgrpc/sandboxv1"
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/hermeswire"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -84,10 +85,7 @@ func execMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, clientUsage)
 		return transportFailureExit
 	}
-	payload := remoteShell + " -c " + shlexQuote(flags.Arg(0))
-	if *login {
-		payload = remoteShell + " -l -c " + shlexQuote(flags.Arg(0))
-	}
+	payload := hermeswire.Encode(flags.Arg(0), *login)
 	input, err := io.ReadAll(stdin)
 	if err != nil {
 		fmt.Fprintf(stderr, "aries: read stdin: %v\n", err)

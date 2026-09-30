@@ -65,7 +65,7 @@ func TestClientMainRunsThroughTheBridge(t *testing.T) {
 		t.Fatalf("stdout = %q, stderr = %q", stdout.String(), stderr.String())
 	}
 	commands := sandbox.snapshot()
-	if len(commands) != 1 || commands[0].Path != remoteShellPath {
+	if len(commands) != 1 || commands[0].Path != "/bin/bash" {
 		t.Fatalf("commands = %#v", commands)
 	}
 	if len(commands[0].Args) != 2 || commands[0].Args[1] != "echo hi" {

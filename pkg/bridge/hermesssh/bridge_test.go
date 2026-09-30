@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/hermeswire"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"golang.org/x/crypto/ssh"
 )
@@ -199,7 +200,7 @@ func TestBridgeProxiesHermesCommandsAndRetainsEvidence(t *testing.T) {
 	}
 	defer client.Close()
 
-	stdout, stderr, runErr := runExec(t, client, capturedAgentPayload, "")
+	stdout, stderr, runErr := runExec(t, client, hermeswire.Encode("eval 'echo hello-from-agent && pwd'", false), "")
 	var exitErr *ssh.ExitError
 	if runErr == nil {
 		t.Fatal("expected the sandbox exit status to propagate")
@@ -216,7 +217,7 @@ func TestBridgeProxiesHermesCommandsAndRetainsEvidence(t *testing.T) {
 		t.Fatalf("commands = %#v", commands)
 	}
 	command := commands[0]
-	if command.Path != remoteShellPath || len(command.Args) != 2 || command.Args[0] != "-c" {
+	if command.Path != "/bin/bash" || len(command.Args) != 2 || command.Args[0] != "-c" {
 		t.Fatalf("command = %#v", command)
 	}
 	if command.Dir != "/app" {
@@ -235,7 +236,7 @@ func TestBridgeProxiesHermesCommandsAndRetainsEvidence(t *testing.T) {
 		t.Fatalf("exec records = %#v", records)
 	}
 	record := execs[0]
-	if record["status"] != "completed" || record["operation_class"] != kindAgent || record["exit_code"].(float64) != 7 {
+	if record["status"] != "completed" || record["operation_class"] != "agent" || record["exit_code"].(float64) != 7 {
 		t.Fatalf("record = %#v", record)
 	}
 	if record["container_id"] != "sandbox-container-id" || record["run_id"] != "test-run" || record["task_id"] != "test-task" {
@@ -247,7 +248,7 @@ func TestBridgeProxiesHermesCommandsAndRetainsEvidence(t *testing.T) {
 		t.Fatalf("no env request was recorded; audit dropped it: %#v", records)
 	}
 	for _, env := range envs {
-		if env["status"] != "unsupported" || env["operation_class"] != kindUnknown {
+		if env["status"] != "unsupported" || env["operation_class"] != hermeswire.KindUnknown {
 			t.Fatalf("env record = %#v", env)
 		}
 	}
@@ -278,7 +279,7 @@ func TestBridgeAnswersBootstrapProbes(t *testing.T) {
 	}
 	defer client.Close()
 
-	for _, payload := range []string{connectionProbePayload, remoteHomePayload} {
+	for _, payload := range []string{"echo 'SSH connection established'", "echo $HOME"} {
 		if _, _, err := runExec(t, client, payload, ""); err != nil {
 			t.Fatalf("bootstrap %q failed: %v", payload, err)
 		}
@@ -288,11 +289,11 @@ func TestBridgeAnswersBootstrapProbes(t *testing.T) {
 		t.Fatalf("commands = %#v", commands)
 	}
 	for _, command := range commands {
-		if command.Path != bootstrapShell || len(command.Args) != 2 || command.Args[0] != "-c" {
+		if command.Path != "/bin/sh" || len(command.Args) != 2 || command.Args[0] != "-c" {
 			t.Fatalf("bootstrap command = %#v", command)
 		}
 	}
-	if commands[1].Args[1] != remoteHomePayload {
+	if commands[1].Args[1] != "echo $HOME" {
 		t.Fatalf("remote home probe was rewritten: %q", commands[1].Args[1])
 	}
 }
@@ -338,8 +339,8 @@ func TestBridgeDeniesFileSyncAndRecordsItAsPolicy(t *testing.T) {
 		}
 		// A refused sync must not be filed as an agent command; the evidence has
 		// to distinguish ARIES policy from a command the agent actually ran.
-		if record["operation_class"] != kindSync {
-			t.Fatalf("denied sync recorded as %q, want %q", record["operation_class"], kindSync)
+		if record["operation_class"] != "sync" {
+			t.Fatalf("denied sync recorded as %q, want %q", record["operation_class"], "sync")
 		}
 	}
 }
@@ -404,7 +405,7 @@ func TestBridgeServesConcurrentChannelsOnOneConnection(t *testing.T) {
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
-			payload := "bash -c " + shlexQuote("echo command-"+string(rune('a'+index)))
+			payload := hermeswire.Encode("echo command-"+string(rune('a'+index)), false)
 			if _, _, err := runExec(t, client, payload, ""); err != nil {
 				errs <- err
 			}
@@ -435,7 +436,7 @@ func TestBridgePassesStdinThrough(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.Close()
-	if _, _, err := runExec(t, client, "bash -c "+shlexQuote("cat > out"), "piped-input"); err != nil {
+	if _, _, err := runExec(t, client, hermeswire.Encode("cat > out", false), "piped-input"); err != nil {
 		t.Fatal(err)
 	}
 	sandbox.mu.Lock()
@@ -491,7 +492,7 @@ func TestStopCancelsInFlightCommand(t *testing.T) {
 	go func() {
 		defer close(done)
 		close(started)
-		_, _, _ = runExec(t, client, "bash -c "+shlexQuote("sleep forever"), "")
+		_, _, _ = runExec(t, client, hermeswire.Encode("sleep forever", false), "")
 	}()
 	<-started
 	time.Sleep(200 * time.Millisecond)
@@ -550,7 +551,7 @@ func TestBridgeOmitsRawLogWhenConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := runExec(t, client, capturedAgentPayload, ""); err != nil {
+	if _, _, err := runExec(t, client, hermeswire.Encode("eval 'echo hello-from-agent && pwd'", false), ""); err != nil {
 		t.Fatal(err)
 	}
 	_ = client.Close()

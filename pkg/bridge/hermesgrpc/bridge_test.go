@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/bridge/hermesgrpc/sandboxv1"
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/hermeswire"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -211,7 +212,7 @@ func TestBridgeProxiesCommandsAndRetainsEvidence(t *testing.T) {
 	if len(commands) != 1 {
 		t.Fatalf("sandbox saw %d commands", len(commands))
 	}
-	if commands[0].Path != remoteShellPath || commands[0].Dir != "/app" {
+	if commands[0].Path != "/bin/bash" || commands[0].Dir != "/app" {
 		t.Fatalf("command = %#v", commands[0])
 	}
 	if len(commands[0].Args) != 2 || commands[0].Args[0] != "-c" || commands[0].Args[1] != "echo hi" {
@@ -230,7 +231,7 @@ func TestBridgeProxiesCommandsAndRetainsEvidence(t *testing.T) {
 	}
 	record := records[0]
 	for field, want := range map[string]any{
-		"operation_class": kindAgent, "status": "completed", "path": remoteShellPath,
+		"operation_class": "agent", "status": "completed", "path": "/bin/bash",
 		"workdir": "/app", "command": agentPayload,
 		"run_id": "test-run", "task_id": "test-task",
 		"container_id": "sandbox-container-id", "container_name": "sandbox-container-name",
@@ -427,7 +428,7 @@ func TestFileSyncIsDeniedAndRecorded(t *testing.T) {
 	// The verbatim payload must survive. The SSH bridge keeps only a hash here
 	// and puts the bytes in ssh_raw.log, which this bridge does not write.
 	for field, want := range map[string]any{
-		"operation_class": kindSync, "status": "denied", "command": syncPayload,
+		"operation_class": "sync", "status": "denied", "command": syncPayload,
 	} {
 		if records[0][field] != want {
 			t.Fatalf("record[%q] = %v, want %v", field, records[0][field], want)
@@ -456,7 +457,7 @@ func TestUndecodablePayloadIsRejectedAndRecorded(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("records = %#v", records)
 	}
-	if records[0]["operation_class"] != kindUnknown || records[0]["status"] != "rejected" {
+	if records[0]["operation_class"] != hermeswire.KindUnknown || records[0]["status"] != "rejected" {
 		t.Fatalf("record = %#v", records[0])
 	}
 	if records[0]["command"] != garbagePayload {
@@ -473,14 +474,14 @@ func TestBootstrapProbeRunsThroughPOSIXShell(t *testing.T) {
 	client, closeClient := dial(t, endpoint)
 	defer closeClient()
 
-	if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: remoteHomePayload}); err != nil {
+	if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "echo $HOME"}); err != nil {
 		t.Fatalf("Exec() error = %v", err)
 	}
 	commands := sandbox.snapshot()
-	if len(commands) != 1 || commands[0].Path != bootstrapShell {
+	if len(commands) != 1 || commands[0].Path != "/bin/sh" {
 		t.Fatalf("command = %#v", commands)
 	}
-	if len(commands[0].Args) != 2 || commands[0].Args[1] != remoteHomePayload {
+	if len(commands[0].Args) != 2 || commands[0].Args[1] != "echo $HOME" {
 		t.Fatalf("args = %#v", commands[0].Args)
 	}
 }

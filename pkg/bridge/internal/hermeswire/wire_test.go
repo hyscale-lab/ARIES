@@ -1,4 +1,4 @@
-package hermesssh
+package hermeswire
 
 import (
 	"errors"
@@ -21,8 +21,8 @@ func TestDecodeAcceptsCapturedHermesPayloads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("captured login payload rejected: %v", err)
 	}
-	if !login.login || login.kind != kindAgent {
-		t.Fatalf("login payload decoded as login=%v kind=%q", login.login, login.kind)
+	if login.argv[1] != "-l" || login.kind != kindAgent {
+		t.Fatalf("login payload decoded as argv=%q kind=%q", login.argv[:2], login.kind)
 	}
 	if !strings.Contains(login.script, "shopt -s expand_aliases") || !strings.Contains(login.script, "\n") {
 		t.Fatalf("login script lost content: %q", login.script)
@@ -35,8 +35,8 @@ func TestDecodeAcceptsCapturedHermesPayloads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("captured agent payload rejected: %v", err)
 	}
-	if agent.login || agent.kind != kindAgent {
-		t.Fatalf("agent payload decoded as login=%v kind=%q", agent.login, agent.kind)
+	if agent.argv[1] != "-c" || agent.kind != kindAgent {
+		t.Fatalf("agent payload decoded as argv=%q kind=%q", agent.argv[:2], agent.kind)
 	}
 	if !strings.Contains(agent.script, "eval 'echo hello-from-agent && pwd'") {
 		t.Fatalf("agent script did not unescape the embedded command: %q", agent.script)
@@ -69,8 +69,8 @@ func TestDecodeDeniesCapturedFileSyncPayloads(t *testing.T) {
 	}
 	for _, payload := range captured {
 		_, err := decodeRemoteCommand(payload)
-		if !errors.Is(err, errSyncDenied) {
-			t.Fatalf("payload %q returned %v, want errSyncDenied", payload, err)
+		if !errors.Is(err, ErrSyncDenied) {
+			t.Fatalf("payload %q returned %v, want ErrSyncDenied", payload, err)
 		}
 	}
 }
@@ -141,6 +141,79 @@ func TestDecodeRoundTripsArbitraryScripts(t *testing.T) {
 			if command.script != script {
 				t.Fatalf("round trip lost data: got %q want %q", command.script, script)
 			}
+		}
+	}
+}
+
+func TestPrepareMapsAgentCommandsToTheSandboxWorkdir(t *testing.T) {
+	command, kind, err := Prepare(Encode("echo hi", false), "/testbed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command.Path != "/bin/bash" || command.Dir != "/testbed" || kind != "agent" {
+		t.Fatalf("prepared = %#v, kind %q", command, kind)
+	}
+	if len(command.Args) != 2 || command.Args[0] != "-c" || command.Args[1] != "echo hi" {
+		t.Fatalf("args = %#v", command.Args)
+	}
+	// Hermes sends no environment assignments of its own; anything present
+	// would mean the grammar let something through.
+	if command.Env != nil {
+		t.Fatalf("env = %#v", command.Env)
+	}
+}
+
+func TestPreparePreservesLoginShell(t *testing.T) {
+	command, _, err := Prepare(Encode("export -p", true), "/testbed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(command.Args) != 3 || command.Args[0] != "-l" || command.Args[1] != "-c" {
+		t.Fatalf("login args = %#v", command.Args)
+	}
+}
+
+func TestPrepareRejectsUnsafeWorkdir(t *testing.T) {
+	for _, workdir := range []string{"", "relative/path", "/has space", "/quote'd", "/trailing/", "/a//b", "/a/../b", "/a/./b"} {
+		if _, kind, err := Prepare(Encode("echo hi", false), workdir); err == nil || kind != "agent" {
+			t.Fatalf("workdir %q: kind %q, err %v", workdir, kind, err)
+		}
+	}
+	if _, _, err := Prepare(Encode("echo hi", false), "/"); err != nil {
+		t.Fatalf("root workdir rejected: %v", err)
+	}
+}
+
+// Decoding accepts only the canonical encoding, so the payload a bridge
+// records verbatim is exactly what Encode rebuilds from the decoded script.
+func TestAcceptedPayloadsAreTheirOwnEncoding(t *testing.T) {
+	for _, payload := range []string{capturedAgentPayload, capturedLoginPayload, "bash -c ls"} {
+		command, err := decodeRemoteCommand(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if encoded := Encode(command.script, command.argv[1] == "-l"); encoded != payload {
+			t.Fatalf("Encode = %q, want %q", encoded, payload)
+		}
+	}
+}
+
+func TestPrepareBootstrapProbesReplayLiterally(t *testing.T) {
+	for _, payload := range []string{connectionProbePayload, remoteHomePayload} {
+		command, kind, err := Prepare(payload, "/testbed")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if command.Path != "/bin/sh" || command.Args[1] != payload || kind != "bootstrap" {
+			t.Fatalf("bootstrap prepared = %#v, kind %q", command, kind)
+		}
+	}
+}
+
+func TestPrepareClassifiesRefusals(t *testing.T) {
+	for payload, want := range map[string]string{"mkdir -p /root/.hermes": "sync", "curl x": KindUnknown, "": KindUnknown} {
+		if _, kind, err := Prepare(payload, "/testbed"); err == nil || kind != want {
+			t.Fatalf("payload %q: kind %q, err %v, want kind %q", payload, kind, err, want)
 		}
 	}
 }

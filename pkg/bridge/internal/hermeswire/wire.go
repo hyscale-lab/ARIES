@@ -1,20 +1,20 @@
-package hermesgrpc
+// Package hermeswire is the Hermes wire policy shared by the SSH and gRPC
+// bridges: which payloads a Hermes remote may send, and the sandbox command
+// each one becomes. It stays on the server side of both bridges because the
+// allowlist is a policy gate: the harness container holds the client
+// credentials, so a check that ran there could be routed around.
+package hermeswire
 
 import (
 	"errors"
+	"fmt"
 	"strings"
+
+	"github.com/hyscale-lab/aries/pkg/core"
 )
 
-// This grammar is a copy of pkg/bridge/hermesssh/grammar.go. It stays on the
-// server because the allowlist below is a policy gate, not advice to a client:
-// the harness container holds the client credentials, so a check that ran there
-// could be routed around. `encodeRemoteCommand` is deliberately not copied —
-// the canonical round-trip check in decodeShellToken already proves it would
-// reproduce the payload the handler is holding, so the handler records the
-// request field directly.
-//
-// Hermes drives its remote through a client that reproduces what OpenSSH would
-// have put on the wire: whatever `tools/environments/ssh.py` appends to its
+// Hermes drives its remote through OpenSSH (or a client reproducing it), so
+// the wire command is whatever `tools/environments/ssh.py` appends to its
 // argv, joined by single spaces. Only four payload shapes are ever produced:
 //
 //	echo 'SSH connection established'   (_establish_connection, must succeed)
@@ -31,6 +31,12 @@ const (
 	remoteShell = "bash"
 	remoteEcho  = "echo"
 
+	// remoteShellPath is where the bare `bash` token resolves. The sandbox
+	// requires an absolute command path and performs no PATH lookup, so a
+	// Hermes task image must provide /bin/bash.
+	remoteShellPath = "/bin/bash"
+	bootstrapShell  = "/bin/sh"
+
 	connectionProbePayload = "echo 'SSH connection established'"
 	remoteHomePayload      = "echo $HOME"
 )
@@ -42,13 +48,12 @@ const (
 	kindAgent     = "agent"
 	kindBootstrap = "bootstrap"
 	kindSync      = "sync"
-	kindUnknown   = "unknown"
+	KindUnknown   = "unknown"
 )
 
 type remoteCommand struct {
 	argv   []string
 	script string
-	login  bool
 	kind   string
 }
 
@@ -57,8 +62,9 @@ type remoteCommand struct {
 // refused just the same.
 var syncPayloadPrefixes = []string{"mkdir -p ", "tar xf ", "tar cf ", "rm -f ", "scp "}
 
-// errSyncDenied marks a refusal that is policy rather than malformed input.
-var errSyncDenied = errors.New("Hermes gRPC file sync is denied by ARIES policy")
+// ErrSyncDenied marks a refusal that is policy rather than malformed input.
+// Each bridge records its own message for it.
+var ErrSyncDenied = errors.New("file sync is denied by ARIES policy")
 
 func isSyncPayload(encoded string) bool {
 	for _, prefix := range syncPayloadPrefixes {
@@ -69,9 +75,42 @@ func isSyncPayload(encoded string) bool {
 	return false
 }
 
+// Prepare decodes one wire payload and maps it to the command the sandbox
+// runs in workdir. The kind classifies the payload even on failure: "sync"
+// with ErrSyncDenied, KindUnknown when it does not decode, and the decoded
+// kind when only the workdir is refused.
+func Prepare(payload, workdir string) (core.Command, string, error) {
+	remote, err := decodeRemoteCommand(payload)
+	if errors.Is(err, ErrSyncDenied) {
+		return core.Command{}, kindSync, err
+	}
+	if err != nil {
+		return core.Command{}, KindUnknown, err
+	}
+	if !validWorkdir(workdir) {
+		return core.Command{}, remote.kind, fmt.Errorf("sandbox workdir %q is not shell-neutral", workdir)
+	}
+	if remote.kind == kindBootstrap {
+		// Replay the literal probe through a POSIX shell so `echo $HOME`
+		// reports the sandbox's own home rather than a value ARIES invents.
+		return core.Command{Path: bootstrapShell, Args: []string{"-c", payload}, Dir: workdir}, remote.kind, nil
+	}
+	return core.Command{Path: remoteShellPath, Args: remote.argv[1:], Dir: workdir}, remote.kind, nil
+}
+
+// Encode is the payload Hermes sends for script: the inverse of decoding an
+// agent command. Decoding accepts only this canonical form, so a bridge may
+// record an accepted payload verbatim.
+func Encode(script string, login bool) string {
+	if login {
+		return remoteShell + " -l -c " + shlexQuote(script)
+	}
+	return remoteShell + " -c " + shlexQuote(script)
+}
+
 func decodeRemoteCommand(encoded string) (remoteCommand, error) {
 	if encoded == "" || strings.ContainsRune(encoded, 0) {
-		return remoteCommand{}, errors.New("gRPC exec command is empty or contains NUL")
+		return remoteCommand{}, errors.New("exec command is empty or contains NUL")
 	}
 	switch encoded {
 	case connectionProbePayload:
@@ -80,7 +119,7 @@ func decodeRemoteCommand(encoded string) (remoteCommand, error) {
 		return remoteCommand{argv: []string{remoteEcho, "$HOME"}, kind: kindBootstrap}, nil
 	}
 	if isSyncPayload(encoded) {
-		return remoteCommand{}, errSyncDenied
+		return remoteCommand{}, ErrSyncDenied
 	}
 
 	remainder, login := strings.CutPrefix(encoded, remoteShell+" -l -c ")
@@ -88,7 +127,7 @@ func decodeRemoteCommand(encoded string) (remoteCommand, error) {
 		var ok bool
 		remainder, ok = strings.CutPrefix(encoded, remoteShell+" -c ")
 		if !ok {
-			return remoteCommand{}, errors.New("gRPC exec command must invoke only bash -c or bash -l -c")
+			return remoteCommand{}, errors.New("exec command must invoke only bash -c or bash -l -c")
 		}
 	}
 	script, err := decodeShellToken(remainder)
@@ -96,14 +135,14 @@ func decodeRemoteCommand(encoded string) (remoteCommand, error) {
 		return remoteCommand{}, err
 	}
 	if script == "" {
-		return remoteCommand{}, errors.New("gRPC exec shell script is empty")
+		return remoteCommand{}, errors.New("exec shell script is empty")
 	}
 	argv := []string{remoteShell}
 	if login {
 		argv = append(argv, "-l")
 	}
 	argv = append(argv, "-c", script)
-	return remoteCommand{argv: argv, script: script, login: login, kind: kindAgent}, nil
+	return remoteCommand{argv: argv, script: script, kind: kindAgent}, nil
 }
 
 // decodeShellToken reverses Python's shlex.quote for exactly one token and
@@ -113,12 +152,12 @@ func decodeRemoteCommand(encoded string) (remoteCommand, error) {
 // quote as '"'"'.
 func decodeShellToken(encoded string) (string, error) {
 	if encoded == "" {
-		return "", errors.New("gRPC exec command has no script token")
+		return "", errors.New("exec command has no script token")
 	}
 	var decoded string
 	if encoded[0] != '\'' {
 		if strings.ContainsAny(encoded, " \t\n\r'\"\\") {
-			return "", errors.New("gRPC exec script token is not a single shlex-quoted argument")
+			return "", errors.New("exec script token is not a single shlex-quoted argument")
 		}
 		decoded = encoded
 	} else {
@@ -141,15 +180,15 @@ func decodeShellToken(encoded string) (string, error) {
 			break
 		}
 		if !closed {
-			return "", errors.New("gRPC exec command contains an unterminated quote")
+			return "", errors.New("exec command contains an unterminated quote")
 		}
 		if position != len(encoded) {
-			return "", errors.New("gRPC exec command carries more than one script token")
+			return "", errors.New("exec command carries more than one script token")
 		}
 		decoded = value.String()
 	}
 	if shlexQuote(decoded) != encoded {
-		return "", errors.New("gRPC exec script token is not canonically quoted")
+		return "", errors.New("exec script token is not canonically quoted")
 	}
 	return decoded, nil
 }
@@ -173,6 +212,29 @@ func shlexUnsafe(value rune) bool {
 		return false
 	case strings.ContainsRune("_@%+=:,./-", value):
 		return false
+	}
+	return true
+}
+
+// validWorkdir keeps the sandbox workdir free of characters that would change
+// meaning once it becomes a process working directory or appears in evidence.
+func validWorkdir(value string) bool {
+	if value == "/" {
+		return true
+	}
+	if len(value) < 2 || value[0] != '/' || value[len(value)-1] == '/' {
+		return false
+	}
+	for _, component := range strings.Split(value[1:], "/") {
+		if component == "" || component == "." || component == ".." {
+			return false
+		}
+		for _, character := range component {
+			if character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z' || character >= '0' && character <= '9' || strings.ContainsRune("._-", character) {
+				continue
+			}
+			return false
+		}
 	}
 	return true
 }
