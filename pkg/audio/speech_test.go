@@ -57,6 +57,42 @@ func TestSpeechClientPostsOpenAICompatibleSpeechRequest(t *testing.T) {
 	}
 }
 
+func TestSpeechClientRetriesTransientServerErrors(t *testing.T) {
+	requests := 0
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
+		if request.Header.Get("Authorization") != "Bearer speech-secret" {
+			t.Fatalf("authorization = %q", request.Header.Get("Authorization"))
+		}
+		if requests == 1 {
+			return &http.Response{
+				StatusCode: http.StatusInternalServerError,
+				Body:       io.NopCloser(strings.NewReader("temporary")),
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader([]byte("RIFF....WAVE"))),
+		}, nil
+	})
+
+	client, err := NewSpeechClient(SpeechClientOptions{BaseURL: "http://tts.invalid/v1", APIKey: []byte("speech-secret"), HTTPClient: &http.Client{Transport: transport}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	result, err := client.Synthesize(context.Background(), SpeechRequest{Text: "repair git"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d", requests)
+	}
+	if !bytes.Equal(result.Audio, []byte("RIFF....WAVE")) {
+		t.Fatalf("audio = %q", result.Audio)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {

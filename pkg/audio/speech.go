@@ -23,6 +23,7 @@ const (
 	DefaultSpeechFormat  = "wav"
 	DefaultSpeechTimeout = 120 * time.Second
 	maxSpeechBytes       = 64 << 20
+	speechMaxAttempts    = 3
 )
 
 type SpeechClientOptions struct {
@@ -133,9 +134,19 @@ func (client *SpeechClient) Synthesize(ctx context.Context, request SpeechReques
 	}
 	endpoint := client.baseURL
 	endpoint.Path += "/audio/speech"
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(body))
+	for attempt := 1; attempt <= speechMaxAttempts; attempt++ {
+		result, retry, err := client.synthesizeAttempt(ctx, endpoint.String(), authorization, body, resolved)
+		if err == nil || !retry || attempt == speechMaxAttempts || ctx.Err() != nil {
+			return result, err
+		}
+	}
+	return SpeechResult{}, errors.New("speech synthesis retry loop exhausted")
+}
+
+func (client *SpeechClient) synthesizeAttempt(ctx context.Context, endpoint string, authorization string, body []byte, resolved SpeechRequest) (SpeechResult, bool, error) {
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return SpeechResult{}, errors.New("speech request: invalid configuration")
+		return SpeechResult{}, false, errors.New("speech request: invalid configuration")
 	}
 	httpRequest.Header.Set("Accept", "audio/*")
 	httpRequest.Header.Set("Authorization", authorization)
@@ -146,32 +157,33 @@ func (client *SpeechClient) Synthesize(ctx context.Context, request SpeechReques
 		if response != nil && response.Body != nil {
 			_ = response.Body.Close()
 		}
-		return SpeechResult{}, errors.New("speech request failed")
+		return SpeechResult{}, true, errors.New("speech request failed")
 	}
 	if response == nil || response.Body == nil {
-		return SpeechResult{}, errors.New("speech response is incomplete")
+		return SpeechResult{}, true, errors.New("speech response is incomplete")
 	}
 	defer response.Body.Close()
 	audio, readErr := io.ReadAll(io.LimitReader(response.Body, maxSpeechBytes+1))
 	if readErr != nil {
 		clear(audio)
-		return SpeechResult{}, errors.New("read speech response failed")
+		return SpeechResult{}, true, errors.New("read speech response failed")
 	}
 	if len(audio) > maxSpeechBytes {
 		clear(audio)
-		return SpeechResult{}, errors.New("speech response is too large")
+		return SpeechResult{}, false, errors.New("speech response is too large")
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		retry := response.StatusCode >= http.StatusInternalServerError
 		clear(audio)
-		return SpeechResult{}, fmt.Errorf("speech request returned HTTP %d", response.StatusCode)
+		return SpeechResult{}, retry, fmt.Errorf("speech request returned HTTP %d", response.StatusCode)
 	}
 	if len(audio) == 0 {
-		return SpeechResult{}, errors.New("speech response is empty")
+		return SpeechResult{}, false, errors.New("speech response is empty")
 	}
 	return SpeechResult{
 		Audio: audio, Model: resolved.Model, Voice: resolved.Voice,
 		Format: resolved.Format, TextSHA256: sha256String(resolved.Text),
-	}, nil
+	}, false, nil
 }
 
 func (client *SpeechClient) begin() (string, error) {
