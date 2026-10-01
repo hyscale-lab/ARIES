@@ -88,3 +88,6 @@ See the [deployment contract](design/deployment.md),
 [Docker implementation](implementation/docker.md),
 [Kubernetes implementation](implementation/kubernetes.md),
 [SSH bridge implementation](implementation/ssh-bridges.md) for current boundaries.
+
+The [mock LLM service](implementation/mock-llm.md) exercises real harness model
+requests through the external `openai` backend without model weights or a paid API.

@@ -367,6 +367,7 @@ are:
 | `openai` | `external` | Must be omitted | User |
 
 DeepSeek and `openai` are external only. SGLang supports both modes.
+The [mock LLM guide](implementation/mock-llm.md) provides local `openai` smoke profiles.
 
 HTTP model endpoints are a trusted-local exception. The checked-in HTTP
 examples use the non-secret `unused-local-token` placeholder and are suitable
