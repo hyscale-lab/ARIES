@@ -465,6 +465,9 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		},
 	}
 	hostConfig := &container.HostConfig{NetworkMode: container.NetworkMode(request.Endpoint.Network), Resources: resources}
+	if request.Model.UsesDockerHost() {
+		hostConfig.ExtraHosts = []string{core.DockerHostName + ":host-gateway"}
+	}
 	containerConfig.ExposedPorts = network.PortSet{gatewayPort: struct{}{}}
 	hostConfig.PortBindings = network.PortMap{gatewayPort: []network.PortBinding{{HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: ""}}}
 	id, err := manager.newID()

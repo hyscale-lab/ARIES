@@ -14,6 +14,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1638,5 +1639,30 @@ func TestWaitExecGivesUpOnAnExecStuckStarting(t *testing.T) {
 	_, err := manager.waitExec(context.Background(), "container", "exec-1", 100*time.Millisecond)
 	if err == nil || !strings.Contains(err.Error(), "OpenClaw exec did not start within 100ms") {
 		t.Fatalf("waitExec() = %v", err)
+	}
+}
+
+func TestHarnessMapsDockerHostOnlyWhenTheModelNamesIt(t *testing.T) {
+	for _, test := range []struct {
+		baseURL string
+		want    []string
+	}{
+		{"http://host.docker.internal:8080/v1", []string{"host.docker.internal:host-gateway"}},
+		{"http://echo-model:8080/v1", nil},
+	} {
+		fake := newFakeDocker()
+		manager := newTestManager(t, fake, []byte("model-secret"))
+		model := testModel()
+		model.Provider, model.BaseURL = "openai", test.baseURL
+		request := core.HarnessRequest{RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: model}
+		if err := manager.Start(context.Background(), request); err != nil {
+			t.Fatal(err)
+		}
+		if got := fake.created.HostConfig.ExtraHosts; !slices.Equal(got, test.want) {
+			t.Fatalf("%s: extra hosts = %v, want %v", test.baseURL, got, test.want)
+		}
+		if err := manager.Stop(context.Background()); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

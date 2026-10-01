@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"path/filepath"
 	"time"
@@ -147,6 +148,8 @@ func validateOpenAICompatibleModel(ctx context.Context, model core.ModelConfig, 
 	var httpClient *http.Client
 	if doer != nil {
 		httpClient = &http.Client{Timeout: deepSeekRequestTimeout, Transport: doerTransport{doer: doer}}
+	} else if model.UsesDockerHost() {
+		httpClient = loopbackHostClient()
 	}
 	client, err := sglang.New(model.BaseURL, key, httpClient)
 	if err != nil {
@@ -324,4 +327,23 @@ func persistLiveValidation(outputRoot string, validation liveValidation) error {
 		return fmt.Errorf("persist live validation: %w", err)
 	}
 	return nil
+}
+
+// loopbackHostClient reaches a server addressed as core.DockerHostName from the
+// ARIES host itself, where that name normally does not resolve. Only the dial
+// target changes; the request keeps its configured URL and Host header.
+func loopbackHostClient() *http.Client {
+	dialer := &net.Dialer{}
+	return &http.Client{
+		Timeout: deepSeekRequestTimeout,
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+				_, port, err := net.SplitHostPort(address)
+				if err != nil {
+					return nil, err
+				}
+				return dialer.DialContext(ctx, network, net.JoinHostPort("127.0.0.1", port))
+			},
+		},
+	}
 }

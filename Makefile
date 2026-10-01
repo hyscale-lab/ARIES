@@ -9,6 +9,7 @@ build:
 	mkdir -p bin
 	go build -o bin/aries ./cmd/aries
 	CGO_ENABLED=0 go build -o bin/aries-ssh ./cmd/aries-ssh
+	go build -o bin/aries-echo ./cmd/aries-echo
 
 test:
 	go test -v ./...
@@ -23,7 +24,8 @@ lint:
 integration:
 	mkdir -p .cache/integration
 	CGO_ENABLED=0 go build -o .cache/integration/aries-ssh ./cmd/aries-ssh
-	ARIES_SSH_CLIENT=$(CURDIR)/.cache/integration/aries-ssh go test -p=1 -count=1 -tags=integration ./...
+	CGO_ENABLED=0 go build -o .cache/integration/aries-echo ./cmd/aries-echo
+	ARIES_SSH_CLIENT=$(CURDIR)/.cache/integration/aries-ssh ARIES_ECHO_SERVER=$(CURDIR)/.cache/integration/aries-echo go test -p=1 -count=1 -tags=integration ./...
 
 run: build
 	./bin/aries $(PROFILE)

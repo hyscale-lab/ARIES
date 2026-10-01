@@ -1,5 +1,22 @@
 # ARIES Tasks
 
+## Echo model
+
+- `pkg/model/echo` and `cmd/aries-echo` serve `/v1/models` and
+  `/v1/chat/completions` (streamed or not) and answer with the received request
+  as the assistant message: headers (credentials redacted), tool definitions and
+  calls, and serving parameters. An optional JSONL log keeps each request.
+- Real pinned OpenClaw and Hermes images run against it on a task-style Docker
+  network (`TestEchoModelReceivesTheRealOpenClawRequest`,
+  `TestEchoModelReceivesTheRealHermesRequest`); the Hermes case asserts the
+  rendered temperature and max tokens reach the wire.
+- A model `base_url` naming `host.docker.internal` (`core.DockerHostName`) makes
+  both harnesses add `host.docker.internal:host-gateway` to their container, and
+  the host-side preflight dials loopback for that name. No other container gets
+  the mapping.
+- `profiles/{openclaw,hermes}-tb2-fix-git-echo.json` run the single `fix-git`
+  task through each harness. `make integration` builds the server helper.
+
 ## Hermes terminal workdir
 
 - Hermes prefixes every agent command with `builtin cd -- <cwd> || exit 126`,

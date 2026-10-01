@@ -507,6 +507,9 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		},
 	}
 	hostConfig := &container.HostConfig{NetworkMode: container.NetworkMode(request.Endpoint.Network), Resources: resources}
+	if request.Model.UsesDockerHost() {
+		hostConfig.ExtraHosts = []string{core.DockerHostName + ":host-gateway"}
+	}
 	active := &session{
 		runID: request.RunID, taskID: request.TaskID, attemptID: id,
 		containerName: "aries-hermes-" + id, artifactDir: filepath.Join(manager.outputDir, request.TaskID, "harness"),

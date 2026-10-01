@@ -1,0 +1,34 @@
+{
+  "name": "openclaw-tb2-fix-git-echo",
+  "versions_file": "../configs/versions.json",
+  "overrides_file": "",
+  "execution": {
+    "concurrency": 1
+  },
+  "benchmark": {
+    "type": "terminalbench2",
+    "root": ".cache/terminal-bench-2-1",
+    "tasks": [
+      "fix-git"
+    ]
+  },
+  "harness": {
+    "type": "openclaw"
+  },
+  "sandbox": {
+    "type": "docker"
+  },
+  "bridge": {
+    "type": "openclaw-ssh"
+  },
+  "runtime": {
+    "backend": "openai",
+    "mode": "external"
+  },
+  "model": {
+    "base_url": "http://host.docker.internal:8080/v1",
+    "api_key_env": "ECHO_API_KEY",
+    "id": "aries-echo"
+  },
+  "output_dir": "runs"
+}

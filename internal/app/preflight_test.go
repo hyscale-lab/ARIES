@@ -5,8 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -451,5 +454,24 @@ func TestOpenAIPreflightUsesModelListingAndKeepsBackendName(t *testing.T) {
 	validation, err = validateLiveModel(context.Background(), model, func(string) ([]byte, bool) { return []byte("dummy"), true }, doer, nil)
 	if err == nil || validation.Category != liveValidationModelMissing || validation.Provider != "openai" {
 		t.Fatalf("validation=%+v error=%v", validation, err)
+	}
+}
+
+// A model addressed as the Docker host must be reachable from the ARIES host
+// itself, where host.docker.internal normally does not resolve.
+func TestOpenAICompatiblePreflightReachesDockerHostThroughLoopback(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" || !strings.HasPrefix(r.Host, "host.docker.internal:") {
+			http.Error(w, "unexpected "+r.URL.Path+" "+r.Host, http.StatusBadRequest)
+			return
+		}
+		io.WriteString(w, `{"data":[{"id":"aries-echo"}]}`)
+	}))
+	defer server.Close()
+	port := server.Listener.Addr().(*net.TCPAddr).Port
+	model := core.ModelConfig{Provider: "openai", BaseURL: fmt.Sprintf("http://host.docker.internal:%d/v1", port), Model: "aries-echo", APIKeyEnv: deepSeekAPIKey}
+	validation, err := validateLiveModel(context.Background(), model, syntheticLookup, nil, nil)
+	if err != nil || validation.Status != liveValidationSucceeded {
+		t.Fatalf("validation = %#v, %v", validation, err)
 	}
 }

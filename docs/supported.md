@@ -53,6 +53,7 @@ Start with one of the checked-in profiles:
 - `profiles/openclaw-tb2-fix-git-realtime-deepseek.json`
 - `profiles/hermes-tb2-fix-git-deepseek.json`
 - `profiles/hermes-tb2-fix-git-vllm.json` — the same run against an external vLLM server through the `openai` backend
+- `profiles/openclaw-tb2-fix-git-echo.json`, `profiles/hermes-tb2-fix-git-echo.json` — one `fix-git` task against `aries-echo`, which replies with the request the harness sent
 - `profiles/hermes-tb2-fix-git-vllm-compaction.json` — the vLLM run with an explicit model window, a 64K compaction cap, and a per-task `extra_body`
 - `profiles/openclaw-drb-smoke1-deepseek.json` — Deep Research Bench, DeepSeek harness model, DeepSeek judge model, web search with Tavily extract
 - `profiles/openclaw-drb-smoke3-deepseek.json` — Deep Research Bench, larger task subset, web search with Tavily extract
