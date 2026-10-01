@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -138,6 +139,58 @@ func TestRunnerCreatesSessionStreamsAudioAndHandlesToolCall(t *testing.T) {
 	submit := gateway.requests[4]
 	if submit.params["sessionId"] != "relay-1" || submit.params["callId"] != "call-1" {
 		t.Fatalf("submit params = %#v", submit.params)
+	}
+}
+
+func TestRunnerProcessesEventsWhileStreamingAudio(t *testing.T) {
+	gateway := &blockingAppendGateway{eventStarted: make(chan struct{})}
+	runner, err := New(gateway, Options{
+		Audio:          Audio{Data: []byte{1, 2}, Rate: 24000, BytesPerSample: 2},
+		ListenDuration: 5 * time.Millisecond,
+		QuietDuration:  time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result, err := runner.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if result.Transcript != "streamed while appending" {
+		t.Fatalf("transcript = %q", result.Transcript)
+	}
+	gateway.mu.Lock()
+	appendObserved := gateway.appendObserved
+	gateway.mu.Unlock()
+	if !appendObserved {
+		t.Fatal("appendAudio did not run")
+	}
+}
+
+func TestRunnerDrainsManyEventsWhileStreamingAudio(t *testing.T) {
+	const streamedEvents = 2500
+	gateway := newStreamingEventsGateway(streamedEvents)
+	runner, err := New(gateway, Options{
+		Audio:          Audio{Data: []byte{1, 2}, Rate: 24000, BytesPerSample: 2},
+		ListenDuration: 20 * time.Millisecond,
+		QuietDuration:  time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result, err := runner.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if result.Transcript != "complete transcript" {
+		t.Fatalf("transcript = %q", result.Transcript)
+	}
+	if got := result.EventCounts["input.audio.delta"]; got < streamedEvents {
+		t.Fatalf("input.audio.delta count = %d, want at least %d", got, streamedEvents)
 	}
 }
 
@@ -725,13 +778,15 @@ type realtimeRequest struct {
 }
 
 type scriptedGateway struct {
-	connectPayload gatewayclient.ConnectSummary
-	calls          []scriptedCall
-	events         []gatewayclient.Frame
-	requests       []realtimeRequest
-	closed         bool
-	recvDelay      time.Duration
-	recvErr        error
+	mu                       sync.Mutex
+	connectPayload           gatewayclient.ConnectSummary
+	calls                    []scriptedCall
+	events                   []gatewayclient.Frame
+	requests                 []realtimeRequest
+	closed                   bool
+	recvDelay                time.Duration
+	recvErr                  error
+	releaseEventsWhileAppend bool
 }
 
 func newScriptedGateway() *scriptedGateway {
@@ -762,6 +817,8 @@ func (gateway *scriptedGateway) Connect(context.Context, gatewayclient.ConnectOp
 }
 
 func (gateway *scriptedGateway) Call(_ context.Context, method string, params map[string]any) (gatewayclient.Frame, error) {
+	gateway.mu.Lock()
+	defer gateway.mu.Unlock()
 	gateway.requests = append(gateway.requests, realtimeRequest{method: method, params: cloneMap(params)})
 	if len(gateway.calls) == 0 {
 		return nil, errors.New("unexpected call " + method)
@@ -775,27 +832,178 @@ func (gateway *scriptedGateway) Call(_ context.Context, method string, params ma
 }
 
 func (gateway *scriptedGateway) RecvEvent(ctx context.Context) (gatewayclient.Frame, error) {
-	if len(gateway.events) == 0 {
-		if gateway.recvErr != nil {
-			return nil, gateway.recvErr
+	for {
+		gateway.mu.Lock()
+		if len(gateway.events) != 0 && (gateway.releaseEventsWhileAppend || !gateway.hasPendingAppendLocked()) {
+			next := gateway.events[0]
+			gateway.events = gateway.events[1:]
+			delay := gateway.recvDelay
+			gateway.mu.Unlock()
+			if delay > 0 {
+				time.Sleep(delay)
+			}
+			return next, nil
 		}
-		<-ctx.Done()
-		return nil, ctx.Err()
+		if len(gateway.events) == 0 && gateway.recvErr != nil {
+			err := gateway.recvErr
+			gateway.mu.Unlock()
+			return nil, err
+		}
+		gateway.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Millisecond):
+		}
 	}
-	next := gateway.events[0]
-	gateway.events = gateway.events[1:]
-	if gateway.recvDelay > 0 {
-		time.Sleep(gateway.recvDelay)
+}
+
+func (gateway *scriptedGateway) hasPendingAppendLocked() bool {
+	for _, call := range gateway.calls {
+		if call.method == methodAppendAudio {
+			return true
+		}
 	}
-	return next, nil
+	return false
 }
 
 func (gateway *scriptedGateway) Close() error {
+	gateway.mu.Lock()
+	defer gateway.mu.Unlock()
 	gateway.closed = true
 	return nil
 }
 
-func (gateway *scriptedGateway) FatalError() error { return gateway.recvErr }
+func (gateway *scriptedGateway) FatalError() error {
+	gateway.mu.Lock()
+	defer gateway.mu.Unlock()
+	return gateway.recvErr
+}
+
+type blockingAppendGateway struct {
+	mu             sync.Mutex
+	eventStarted   chan struct{}
+	once           sync.Once
+	eventSent      bool
+	appendObserved bool
+}
+
+func (gateway *blockingAppendGateway) Connect(context.Context, gatewayclient.ConnectOptions) (gatewayclient.ConnectSummary, error) {
+	return gatewayclient.ConnectSummary{Role: "operator", Scopes: []string{"operator.read", "operator.write"}}, nil
+}
+
+func (gateway *blockingAppendGateway) Call(ctx context.Context, method string, _ map[string]any) (gatewayclient.Frame, error) {
+	switch method {
+	case methodSessionCreate:
+		return gatewayclient.Frame{"ok": true, "payload": map[string]any{
+			"sessionId": "session-1", "audio": map[string]any{"inputEncoding": "pcm16", "inputSampleRateHz": 24000},
+		}}, nil
+	case methodAppendAudio:
+		gateway.mu.Lock()
+		gateway.appendObserved = true
+		gateway.mu.Unlock()
+		select {
+		case <-gateway.eventStarted:
+			return gatewayclient.Frame{"ok": true}, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	default:
+		return nil, errors.New("unexpected call " + method)
+	}
+}
+
+func (gateway *blockingAppendGateway) RecvEvent(ctx context.Context) (gatewayclient.Frame, error) {
+	gateway.once.Do(func() { close(gateway.eventStarted) })
+	gateway.mu.Lock()
+	if !gateway.eventSent {
+		gateway.eventSent = true
+		gateway.mu.Unlock()
+		return gatewayclient.Frame{
+			"type": "event", "event": "talk.event",
+			"payload": map[string]any{"talkEvent": map[string]any{
+				"type": "transcript.done", "sessionId": "session-1", "payload": map[string]any{"role": "user", "text": "streamed while appending"},
+			}},
+		}, nil
+	}
+	gateway.mu.Unlock()
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (*blockingAppendGateway) FatalError() error { return nil }
+func (*blockingAppendGateway) Close() error      { return nil }
+
+type streamingEventsGateway struct {
+	mu              sync.Mutex
+	total           int
+	sent            int
+	appendCanReturn chan struct{}
+	closed          bool
+}
+
+func newStreamingEventsGateway(total int) *streamingEventsGateway {
+	return &streamingEventsGateway{total: total, appendCanReturn: make(chan struct{})}
+}
+
+func (gateway *streamingEventsGateway) Connect(context.Context, gatewayclient.ConnectOptions) (gatewayclient.ConnectSummary, error) {
+	return gatewayclient.ConnectSummary{Role: "operator", Scopes: []string{"operator.read", "operator.write"}}, nil
+}
+
+func (gateway *streamingEventsGateway) Call(ctx context.Context, method string, _ map[string]any) (gatewayclient.Frame, error) {
+	switch method {
+	case methodSessionCreate:
+		return gatewayclient.Frame{"ok": true, "payload": map[string]any{
+			"sessionId": "session-1", "audio": map[string]any{"inputEncoding": "pcm16", "inputSampleRateHz": 24000},
+		}}, nil
+	case methodAppendAudio:
+		select {
+		case <-gateway.appendCanReturn:
+			return gatewayclient.Frame{"ok": true}, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	default:
+		return nil, errors.New("unexpected call " + method)
+	}
+}
+
+func (gateway *streamingEventsGateway) RecvEvent(ctx context.Context) (gatewayclient.Frame, error) {
+	gateway.mu.Lock()
+	defer gateway.mu.Unlock()
+	if gateway.sent < gateway.total {
+		gateway.sent++
+		if gateway.sent == gateway.total {
+			close(gateway.appendCanReturn)
+		}
+		return gatewayclient.Frame{
+			"type": "event", "event": "talk.event",
+			"payload": map[string]any{"talkEvent": map[string]any{
+				"type": "input.audio.delta", "sessionId": "session-1", "payload": map[string]any{},
+			}},
+		}, nil
+	}
+	if gateway.sent == gateway.total {
+		gateway.sent++
+		return gatewayclient.Frame{
+			"type": "event", "event": "talk.event",
+			"payload": map[string]any{"talkEvent": map[string]any{
+				"type": "transcript.done", "sessionId": "session-1", "payload": map[string]any{"role": "user", "text": "complete transcript"},
+			}},
+		}, nil
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (gateway *streamingEventsGateway) Close() error {
+	gateway.mu.Lock()
+	defer gateway.mu.Unlock()
+	gateway.closed = true
+	return nil
+}
+
+func (*streamingEventsGateway) FatalError() error { return nil }
 
 func cloneMap(source map[string]any) map[string]any {
 	out := make(map[string]any, len(source))

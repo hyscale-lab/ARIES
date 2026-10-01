@@ -206,11 +206,25 @@ func (runner *Runner) Run(ctx context.Context) (out Result, err error) {
 		result.AppendError(err.Error())
 		return result.WithoutEvents(), err
 	}
-	if err := runner.appendAudio(ctx, session); err != nil {
-		result.AppendError(err.Error())
-		return result.WithoutEvents(), err
+	audioDone := make(chan struct{})
+	eventCtx, cancelEvents := context.WithCancel(ctx)
+	eventErr := make(chan error, 1)
+	go func() {
+		eventErr <- runner.processEvents(eventCtx, &result, audioDone)
+	}()
+	appendErr := runner.appendAudio(ctx, session)
+	close(audioDone)
+	if appendErr != nil {
+		cancelEvents()
+		if err := <-eventErr; err != nil && !errors.Is(err, context.Canceled) {
+			appendErr = errors.Join(appendErr, err)
+		}
+		result.AppendError(appendErr.Error())
+		return result.WithoutEvents(), appendErr
 	}
-	if err := runner.processEvents(ctx, &result); err != nil {
+	err = <-eventErr
+	cancelEvents()
+	if err != nil {
 		result.AppendError(err.Error())
 		return scrubRealtimeEvents(result, runner.options.IncludeEvents), err
 	}
@@ -343,24 +357,38 @@ func realtimeAudioTimestampMillis(audio Audio, offset int) int {
 	return offset * 1000 / max(1, audio.Rate*audio.BytesPerSample)
 }
 
-func (runner *Runner) processEvents(ctx context.Context, result *Result) error {
+func (runner *Runner) processEvents(ctx context.Context, result *Result, audioDone <-chan struct{}) error {
 	state := realtimeEventState{
 		activeAgentRuns:    map[string]struct{}{},
 		completedAgentRuns: map[string]struct{}{},
 		failedAgentRuns:    map[string]string{},
-		deadline:           time.Now().Add(durationOrDefault(runner.options.ListenDuration, defaultTrailingListenDuration)),
 	}
-	for time.Now().Before(state.deadline) {
-		waitUntil := state.deadline
-		if !state.hasActiveRuns() && !state.quietDeadline.IsZero() && state.quietDeadline.Before(waitUntil) {
-			waitUntil = state.quietDeadline
+	listening := false
+	for {
+		if !listening {
+			select {
+			case <-audioDone:
+				listening = true
+				state.deadline = time.Now().Add(durationOrDefault(runner.options.ListenDuration, defaultTrailingListenDuration))
+			default:
+			}
+		}
+		waitUntil := time.Now().Add(100 * time.Millisecond)
+		if listening {
+			if !time.Now().Before(state.deadline) {
+				break
+			}
+			waitUntil = state.deadline
+			if !state.hasActiveRuns() && !state.quietDeadline.IsZero() && state.quietDeadline.Before(waitUntil) {
+				waitUntil = state.quietDeadline
+			}
 		}
 		recvCtx, cancel := context.WithDeadline(ctx, waitUntil)
 		frame, err := runner.gateway.RecvEvent(recvCtx)
 		cancel()
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
-				if !state.quietDeadline.IsZero() && !state.hasActiveRuns() && !time.Now().Before(state.quietDeadline) {
+				if listening && !state.quietDeadline.IsZero() && !state.hasActiveRuns() && !time.Now().Before(state.quietDeadline) {
 					break
 				}
 				continue
