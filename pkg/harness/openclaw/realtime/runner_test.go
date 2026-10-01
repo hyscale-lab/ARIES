@@ -169,6 +169,27 @@ func TestRunnerProcessesEventsWhileStreamingAudio(t *testing.T) {
 	}
 }
 
+func TestProcessEventsReturnsExpiredParentContext(t *testing.T) {
+	runner := &Runner{
+		gateway: newScriptedGateway(),
+		options: Options{ListenDuration: time.Second},
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Millisecond))
+	defer cancel()
+	audioDone := make(chan struct{})
+	close(audioDone)
+
+	started := time.Now()
+	result := newResult()
+	err := runner.processEvents(ctx, &result, audioDone)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("processEvents error = %v, want %v", err, context.DeadlineExceeded)
+	}
+	if elapsed := time.Since(started); elapsed > 50*time.Millisecond {
+		t.Fatalf("processEvents returned after %s, want prompt context error", elapsed)
+	}
+}
+
 func TestRunnerDrainsManyEventsWhileStreamingAudio(t *testing.T) {
 	const streamedEvents = 2500
 	gateway := newStreamingEventsGateway(streamedEvents)

@@ -388,6 +388,9 @@ func (runner *Runner) processEvents(ctx context.Context, result *Result, audioDo
 		cancel()
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return ctxErr
+				}
 				if listening && !state.quietDeadline.IsZero() && !state.hasActiveRuns() && !time.Now().Before(state.quietDeadline) {
 					break
 				}
