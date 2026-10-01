@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSpeechClientPostsOpenAICompatibleSpeechRequest(t *testing.T) {
@@ -97,6 +99,77 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return fn(request)
+}
+
+func TestSpeechClientHonorsRetryAfterBeforeRetrying(t *testing.T) {
+	requests := 0
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
+		if requests == 1 {
+			return &http.Response{
+				StatusCode: http.StatusServiceUnavailable,
+				Header:     http.Header{"Retry-After": []string{"2"}},
+				Body:       io.NopCloser(strings.NewReader("cooldown")),
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader([]byte("RIFF....WAVE"))),
+		}, nil
+	})
+	var waits []time.Duration
+	originalSleep := speechRetrySleep
+	speechRetrySleep = func(ctx context.Context, delay time.Duration) error {
+		waits = append(waits, delay)
+		return nil
+	}
+	defer func() { speechRetrySleep = originalSleep }()
+
+	client, err := NewSpeechClient(SpeechClientOptions{BaseURL: "http://tts.invalid/v1", APIKey: []byte("speech-secret"), HTTPClient: &http.Client{Transport: transport}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if _, err := client.Synthesize(context.Background(), SpeechRequest{Text: "repair git"}); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d", requests)
+	}
+	if len(waits) != 1 || waits[0] != 2*time.Second {
+		t.Fatalf("waits = %#v, want [2s]", waits)
+	}
+}
+
+func TestSpeechClientRetryWaitRespectsContextCancellation(t *testing.T) {
+	requests := 0
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusServiceUnavailable,
+			Header:     http.Header{"Retry-After": []string{"2"}},
+			Body:       io.NopCloser(strings.NewReader("cooldown")),
+		}, nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	originalSleep := speechRetrySleep
+	speechRetrySleep = func(ctx context.Context, delay time.Duration) error {
+		cancel()
+		return ctx.Err()
+	}
+	defer func() { speechRetrySleep = originalSleep }()
+
+	client, err := NewSpeechClient(SpeechClientOptions{BaseURL: "http://tts.invalid/v1", APIKey: []byte("speech-secret"), HTTPClient: &http.Client{Transport: transport}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if _, err := client.Synthesize(ctx, SpeechRequest{Text: "repair git"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Synthesize error = %v, want context.Canceled", err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want 1", requests)
+	}
 }
 
 func TestSpeechClientRejectsUnsafeInputs(t *testing.T) {

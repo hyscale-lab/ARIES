@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,8 @@ const (
 	DefaultSpeechTimeout = 120 * time.Second
 	maxSpeechBytes       = 64 << 20
 	speechMaxAttempts    = 3
+	speechRetryBaseDelay = 250 * time.Millisecond
+	speechRetryMaxDelay  = 5 * time.Second
 )
 
 type SpeechClientOptions struct {
@@ -49,6 +52,8 @@ type SpeechResult struct {
 	Format     string
 	TextSHA256 string
 }
+
+var speechRetrySleep = sleepSpeechRetry
 
 type SpeechClient struct {
 	mu      sync.Mutex
@@ -135,18 +140,25 @@ func (client *SpeechClient) Synthesize(ctx context.Context, request SpeechReques
 	endpoint := client.baseURL
 	endpoint.Path += "/audio/speech"
 	for attempt := 1; attempt <= speechMaxAttempts; attempt++ {
-		result, retry, err := client.synthesizeAttempt(ctx, endpoint.String(), authorization, body, resolved)
+		result, retry, retryAfter, err := client.synthesizeAttempt(ctx, endpoint.String(), authorization, body, resolved)
 		if err == nil || !retry || attempt == speechMaxAttempts || ctx.Err() != nil {
 			return result, err
+		}
+		wait := retryAfter
+		if wait <= 0 {
+			wait = speechBackoffDelay(attempt)
+		}
+		if sleepErr := speechRetrySleep(ctx, wait); sleepErr != nil {
+			return SpeechResult{}, sleepErr
 		}
 	}
 	return SpeechResult{}, errors.New("speech synthesis retry loop exhausted")
 }
 
-func (client *SpeechClient) synthesizeAttempt(ctx context.Context, endpoint string, authorization string, body []byte, resolved SpeechRequest) (SpeechResult, bool, error) {
+func (client *SpeechClient) synthesizeAttempt(ctx context.Context, endpoint string, authorization string, body []byte, resolved SpeechRequest) (SpeechResult, bool, time.Duration, error) {
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return SpeechResult{}, false, errors.New("speech request: invalid configuration")
+		return SpeechResult{}, false, 0, errors.New("speech request: invalid configuration")
 	}
 	httpRequest.Header.Set("Accept", "audio/*")
 	httpRequest.Header.Set("Authorization", authorization)
@@ -157,33 +169,34 @@ func (client *SpeechClient) synthesizeAttempt(ctx context.Context, endpoint stri
 		if response != nil && response.Body != nil {
 			_ = response.Body.Close()
 		}
-		return SpeechResult{}, true, errors.New("speech request failed")
+		return SpeechResult{}, true, 0, errors.New("speech request failed")
 	}
 	if response == nil || response.Body == nil {
-		return SpeechResult{}, true, errors.New("speech response is incomplete")
+		return SpeechResult{}, true, 0, errors.New("speech response is incomplete")
 	}
 	defer response.Body.Close()
 	audio, readErr := io.ReadAll(io.LimitReader(response.Body, maxSpeechBytes+1))
 	if readErr != nil {
 		clear(audio)
-		return SpeechResult{}, true, errors.New("read speech response failed")
+		return SpeechResult{}, true, 0, errors.New("read speech response failed")
 	}
 	if len(audio) > maxSpeechBytes {
 		clear(audio)
-		return SpeechResult{}, false, errors.New("speech response is too large")
+		return SpeechResult{}, false, 0, errors.New("speech response is too large")
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		retry := response.StatusCode >= http.StatusInternalServerError
+		retry := response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= http.StatusInternalServerError
+		retryAfter := parseRetryAfter(response.Header.Get("Retry-After"), time.Now())
 		clear(audio)
-		return SpeechResult{}, retry, fmt.Errorf("speech request returned HTTP %d", response.StatusCode)
+		return SpeechResult{}, retry, retryAfter, fmt.Errorf("speech request returned HTTP %d", response.StatusCode)
 	}
 	if len(audio) == 0 {
-		return SpeechResult{}, false, errors.New("speech response is empty")
+		return SpeechResult{}, false, 0, errors.New("speech response is empty")
 	}
 	return SpeechResult{
 		Audio: audio, Model: resolved.Model, Voice: resolved.Voice,
 		Format: resolved.Format, TextSHA256: sha256String(resolved.Text),
-	}, false, nil
+	}, false, 0, nil
 }
 
 func (client *SpeechClient) begin() (string, error) {
@@ -228,4 +241,58 @@ func normalizeSpeechRequest(request SpeechRequest) SpeechRequest {
 func sha256String(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
+}
+
+func parseRetryAfter(value string, now time.Time) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(value); err == nil {
+		if seconds <= 0 {
+			return 0
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	retryAt, err := http.ParseTime(value)
+	if err != nil {
+		return 0
+	}
+	if !retryAt.After(now) {
+		return 0
+	}
+	return retryAt.Sub(now)
+}
+
+func speechBackoffDelay(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	delay := speechRetryBaseDelay << (attempt - 1)
+	if delay > speechRetryMaxDelay {
+		delay = speechRetryMaxDelay
+	}
+	jitterBound := delay / 2
+	if jitterBound <= 0 {
+		return delay
+	}
+	jitter := time.Duration(time.Now().UnixNano() % int64(jitterBound))
+	if delay+jitter > speechRetryMaxDelay {
+		return speechRetryMaxDelay
+	}
+	return delay + jitter
+}
+
+func sleepSpeechRetry(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
