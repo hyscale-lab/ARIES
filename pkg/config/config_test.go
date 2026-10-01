@@ -589,8 +589,7 @@ func TestCheckedInProfilesLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(paths) != 16 {
-
+	if len(paths) != 18 {
 		t.Fatalf("profiles=%v", paths)
 	}
 	for _, path := range paths {
@@ -600,6 +599,11 @@ func TestCheckedInProfilesLoad(t *testing.T) {
 		}
 		if cfg.Runtime.Backend == "" || cfg.Runtime.Mode == "" || cfg.Model.ID == "" {
 			t.Fatalf("%s: %#v", path, cfg)
+		}
+		if strings.Contains(path, "-echo") {
+			if len(cfg.Benchmark.Tasks) != 1 || cfg.Runtime.Backend != "openai" || cfg.Model.ID != "aries-echo" {
+				t.Fatalf("%s echo profile must run one task against the echo model: %#v", path, cfg)
+			}
 		}
 		if strings.Contains(path, "realtime") {
 			if cfg.Harness.Mode != "realtime" || cfg.Harness.Realtime.TTS.APIKeyEnv != "OPENAI_API_KEY" || cfg.Harness.Realtime.ChunkDuration != 50*time.Millisecond {

@@ -1135,3 +1135,27 @@ func TestWaitExecGivesUpOnAnExecStuckStarting(t *testing.T) {
 		t.Fatalf("waitExec() = %v", err)
 	}
 }
+
+func TestStartMapsDockerHostOnlyWhenTheModelNamesIt(t *testing.T) {
+	for _, test := range []struct {
+		baseURL string
+		want    []string
+	}{
+		{"http://host.docker.internal:8080/v1", []string{"host.docker.internal:host-gateway"}},
+		{"http://echo-model:8080/v1", nil},
+	} {
+		fake := newFakeDocker()
+		manager := newTestManager(t, fake, []byte("model-secret"))
+		request := testRequest(t)
+		request.Model.BaseURL = test.baseURL
+		if err := manager.Start(context.Background(), request); err != nil {
+			t.Fatal(err)
+		}
+		if got := fake.created.HostConfig.ExtraHosts; !slices.Equal(got, test.want) {
+			t.Fatalf("%s: extra hosts = %v, want %v", test.baseURL, got, test.want)
+		}
+		if err := manager.Stop(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

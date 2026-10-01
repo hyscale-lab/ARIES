@@ -398,27 +398,7 @@ func TestPinnedGatewayRealtimeProtocolSmoke(t *testing.T) {
 		_, _ = api.NetworkRemove(cleanupCtx, networkName, client.NetworkRemoveOptions{})
 	})
 
-	privateRoot := t.TempDir()
-	writePrivate := func(name, content string, mode os.FileMode) string {
-		path := filepath.Join(privateRoot, name)
-		if err := os.WriteFile(path, []byte(content), mode); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chmod(path, mode); err != nil {
-			t.Fatal(err)
-		}
-		return path
-	}
-	clientContent, err := os.ReadFile(requiredIntegrationFile(t, "ARIES_SSH_CLIENT"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	endpoint := core.ToolEndpoint{
-		Protocol: "ssh", Address: "127.0.0.1:1", Username: "aries", Network: networkName,
-		ClientCommand: "/opt/aries/bin/aries-ssh", ClientSourceFile: writePrivate("aries-ssh", string(clientContent), 0o555),
-		IdentityFile: "/run/aries/ssh/id_ed25519", IdentitySourceFile: writePrivate("id_ed25519", "fixture-identity", 0o600),
-		KnownHostsFile: "/run/aries/ssh/known_hosts", KnownHostsSourceFile: writePrivate("known_hosts", "fixture-known-host", 0o600),
-	}
+	endpoint := fixtureEndpoint(t, networkName)
 	keys := map[string]string{"MODEL_KEY": "deterministic-model-key", "OPENAI_API_KEY": "deterministic-realtime-key"}
 	harness, err := New(Options{
 		Image: versions.OpenClaw.Image, OutputDir: t.TempDir(), Mode: ModeRealtime,
@@ -662,4 +642,31 @@ if(step===3){if(!out.includes(candidate.slice(0,7)))throw Error("inspect");step+
 if(step===4){if(!/fast-forward|merge made|already up.to.date/i.test(out))throw Error("merge");step++;return call(res,"verify","exec",{command:"git merge-base --is-ancestor "+candidate+" HEAD && test -z \"$(git status --porcelain)\" && git status --short --branch && git log --oneline -5"})}
 if(step===5){if(!out.includes(candidate.slice(0,7))||!out.includes("master"))throw Error("verify");step++;return stream(res,{role:"assistant",content:"Recovered lost commit "+candidate+" and verified a clean master branch."},"stop")}
 throw Error("extra request")}catch(error){res.writeHead(400,{"content-type":"application/json"});res.end(JSON.stringify({error:{message:error.message}}))}})}).listen(8080,"0.0.0.0");`
+}
+
+// fixtureEndpoint is an SSH endpoint that is staged but never dialed, enough
+// for harness tests whose model never asks for a tool.
+func fixtureEndpoint(t *testing.T, networkName string) core.ToolEndpoint {
+	t.Helper()
+	privateRoot := t.TempDir()
+	writePrivate := func(name, content string, mode os.FileMode) string {
+		path := filepath.Join(privateRoot, name)
+		if err := os.WriteFile(path, []byte(content), mode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	clientContent, err := os.ReadFile(requiredIntegrationFile(t, "ARIES_SSH_CLIENT"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return core.ToolEndpoint{
+		Protocol: "ssh", Address: "127.0.0.1:1", Username: "aries", Network: networkName,
+		ClientCommand: "/opt/aries/bin/aries-ssh", ClientSourceFile: writePrivate("aries-ssh", string(clientContent), 0o555),
+		IdentityFile: "/run/aries/ssh/id_ed25519", IdentitySourceFile: writePrivate("id_ed25519", "fixture-identity", 0o600),
+		KnownHostsFile: "/run/aries/ssh/known_hosts", KnownHostsSourceFile: writePrivate("known_hosts", "fixture-known-host", 0o600),
+	}
 }

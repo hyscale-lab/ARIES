@@ -372,6 +372,41 @@ export VLLM_API_KEY=unused-local-token
 ./bin/aries profiles/hermes-tb2-fix-git-vllm.json
 ```
 
+### Echo model for inspecting harness requests
+
+`aries-echo` is a deterministic OpenAI-compatible server whose only reply is the
+request it received: method, path, query, headers, and the full JSON body with
+its messages, tool definitions and calls, and serving parameters such as
+`temperature` and `max_tokens`. The reply is a normal `stop` completion (streamed
+or not), so the harness ends its turn after one request and the final response
+is exactly what the harness sent. Credential headers are replaced with
+`[redacted]`, so neither the reply nor the request log can leak a model key.
+
+`profiles/openclaw-tb2-fix-git-echo.json` and
+`profiles/hermes-tb2-fix-git-echo.json` run the single Terminal-Bench 2
+`fix-git` task through each harness against it. The echo run is not expected to
+solve the task. The profiles address the server as
+`http://host.docker.internal:8080/v1`. When a model `base_url` names
+`host.docker.internal`, ARIES adds the Docker `host-gateway` mapping to the
+harness container (and only then), and its own `/v1/models` preflight dials
+loopback for that name, so the same URL works from the host and from the
+harness. Run the server on the host, listening on all interfaces so the Docker
+gateway address can reach it:
+
+```sh
+make build
+./bin/aries-echo -addr 0.0.0.0:8080 -log runs/echo-requests.jsonl &
+export ECHO_API_KEY=unused-local-token
+./bin/aries profiles/hermes-tb2-fix-git-echo.json
+```
+
+If a host firewall drops traffic from Docker bridge networks to the host, allow
+it for the echo port. Listening on `0.0.0.0` exposes the server to your
+network; it holds no credentials but echoes whatever it is sent.
+
+`-log` appends one JSON record per received request, including preflight and
+auxiliary calls. The log is a private run artifact: it holds the task prompt.
+
 Hermes has no `sglang` or plain `openai` provider, so for both backends ARIES
 renders Hermes's generic `custom` provider, which routes to `model.base_url`.
 OpenClaw receives the server as a `models.providers` entry named `aries`.

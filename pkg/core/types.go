@@ -1,6 +1,9 @@
 package core
 
-import "time"
+import (
+	"net/url"
+	"time"
+)
 
 // Task is the benchmark-independent description of one unit of work.
 type Task struct {
@@ -91,6 +94,17 @@ type ModelConfig struct {
 	ContextLength int      `json:"context_length,omitempty"`
 	MaxTokens     int      `json:"max_tokens,omitempty"`
 	Temperature   *float64 `json:"temperature,omitempty"`
+}
+
+// DockerHostName is the name a harness container uses for the ARIES host. A
+// harness resolves it to the Docker host gateway only when the model base URL
+// names it, which is how a model server running on the host is reached.
+const DockerHostName = "host.docker.internal"
+
+// UsesDockerHost reports whether the model server is addressed as the host.
+func (m ModelConfig) UsesDockerHost() bool {
+	parsed, err := url.Parse(m.BaseURL)
+	return err == nil && parsed.Hostname() == DockerHostName
 }
 
 // ToolEndpoint is the bridge endpoint and task-local file contract given to a
