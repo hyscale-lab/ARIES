@@ -62,3 +62,39 @@ func TestDeploymentBoundaryRecognizesProviderImports(t *testing.T) {
 		t.Fatal("neutral contract rejected")
 	}
 }
+
+func TestCommandUsesWiringForConcreteConstruction(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range files {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		parsed, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, spec := range parsed.Imports {
+			imported, err := strconv.Unquote(spec.Path.Value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, prefix := range []string{
+				"github.com/hyscale-lab/aries/pkg/benchmark/",
+				"github.com/hyscale-lab/aries/pkg/harness/",
+				"github.com/hyscale-lab/aries/pkg/bridge/",
+				"github.com/hyscale-lab/aries/pkg/sandbox",
+				"github.com/hyscale-lab/aries/internal/modelruntime/",
+			} {
+				if strings.HasPrefix(imported, prefix) {
+					t.Errorf("%s imports concrete implementation %s; use internal/app/wiring", path, imported)
+				}
+			}
+			if providerImport(imported) {
+				t.Errorf("%s imports deployment provider %s; use internal/app/wiring", path, imported)
+			}
+		}
+	}
+}

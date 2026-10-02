@@ -24,6 +24,7 @@ ctrf
 deduplicates
 deepseek
 deepseek's
+DNS
 docker
 dockerfile
 drb
@@ -44,11 +45,13 @@ http
 HTTPS
 idempotently
 integrations
+IPv
 jina
 jooyoung
 json
 jsonl
 kimi
+kubernetes
 kondrashov
 lfs
 lifecycle
@@ -83,6 +86,8 @@ qa's
 prewarm
 Qwen
 Realtime
+RuntimeClass
+RuntimeClasses
 reflogs
 reimplement
 relicense
@@ -109,6 +114,7 @@ stdout
 stt
 subagent
 subagents
+subpackages
 substitutable
 swe
 swe-atlas

@@ -108,9 +108,22 @@ positively removed.
 
 ## Composition, concurrency, and artifacts
 
-Concrete implementations are selected through explicit constructors and
-switches in the command wiring. There is no runtime discovery or registration
-layer. The command layer can admit independent task occurrences concurrently,
+`cmd/aries` selects concrete implementations through small explicit switches.
+Construction lives in `internal/app/wiring`, grouped into `benchmark`, `harness`,
+`sandbox`, `bridge`, `deployment`, and `runtime` packages, with a file for each
+implementation. These helpers translate profile options, construct components,
+and close partially constructed resources on failure. Selected deployment
+dependencies are passed into harness and sandbox helpers; the helpers do not
+repeat the command's implementation selection.
+
+The command supplies these constructors through `app.Wiring`. `internal/app`
+owns preparation and scheduling and does not import its wiring subpackages.
+Benchmark preparation and execution share the same constructors, including
+judge configuration, version pins, and occurrence IDs. Component behavior
+remains in `pkg`, and Runner retains lifecycle and isolation ownership.
+There is no runtime discovery or registration layer.
+
+The command layer can admit independent task occurrences concurrently,
 with profile order determining admission and result order by default. An
 [arrival trace](quick-start.md#replay-task-arrivals) instead orders selected
 occurrences by scaled offset, preserving profile order for ties. Concurrency
@@ -170,5 +183,3 @@ flowchart TB
 - [Supported implementations](supported.md)
 - [Quick start](quick-start.md)
 
-The [deployment validation record](design/deployment-validation.md) summarizes
-retained failure coverage, removed redundant tests, and real execution checks.
