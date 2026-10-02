@@ -68,13 +68,9 @@ func (*contractSandbox) Upload(context.Context, string, string) error   { return
 func (*contractSandbox) Download(context.Context, string, string) error { return nil }
 func (*contractSandbox) ContainerID() string                            { return "sandbox-container-id" }
 func (*contractSandbox) ContainerName() string                          { return "sandbox-container-name" }
-func (*contractSandbox) NetworkName() string                            { return "sandbox-network-name" }
-func (*contractSandbox) NetworkGateway(context.Context) (string, error) {
-	return "127.0.0.1", nil
-}
-func (*contractSandbox) Workdir() string { return "/workspace" }
-func (*contractSandbox) RunID() string   { return "contract-run" }
-func (*contractSandbox) TaskID() string  { return "contract-task" }
+func (*contractSandbox) Workdir() string                                { return "/workspace" }
+func (*contractSandbox) RunID() string                                  { return "contract-run" }
+func (*contractSandbox) TaskID() string                                 { return "contract-task" }
 
 func (sandbox *contractSandbox) enableToolCalls() {
 	sandbox.mu.Lock()
@@ -282,7 +278,7 @@ func newContractManager(t *testing.T, outputDir string) *Manager {
 	if err := os.WriteFile(clientPath, []byte("test client helper"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	manager, err := New(Options{OutputDir: outputDir, ClientPath: clientPath, CleanupTimeout: time.Second})
+	manager, err := New(Options{ResolveListen: loopbackListen, OutputDir: outputDir, ClientPath: clientPath, CleanupTimeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}

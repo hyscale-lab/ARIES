@@ -18,12 +18,14 @@ import (
 	"github.com/hyscale-lab/aries/pkg/bridge/openclawssh"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/deployment"
+	dockerdeployment "github.com/hyscale-lab/aries/pkg/deployment/docker"
 	hermesharness "github.com/hyscale-lab/aries/pkg/harness/hermes"
 	openclawharness "github.com/hyscale-lab/aries/pkg/harness/openclaw"
 	"github.com/hyscale-lab/aries/pkg/monitor"
 	nvidiamonitor "github.com/hyscale-lab/aries/pkg/monitor/nvidia"
 	"github.com/hyscale-lab/aries/pkg/runner"
-	dockersandbox "github.com/hyscale-lab/aries/pkg/sandbox/docker"
+	tasksandbox "github.com/hyscale-lab/aries/pkg/sandbox"
 	"github.com/sirupsen/logrus"
 )
 
@@ -44,7 +46,7 @@ func commandWiring() app.Wiring {
 		ValidateComponents:   validateComponents,
 		SetupBenchmark:       setupBenchmark,
 		LoadPreparationTasks: loadPreparationTasks,
-		PullImages:           dockersandbox.PullImages,
+		PullImages:           pullImages,
 		NewBenchmark:         newBenchmark,
 		NewHarness:           newHarness,
 		NewSandbox:           newSandbox,
@@ -53,6 +55,9 @@ func commandWiring() app.Wiring {
 }
 
 func validateComponents(cfg config.Config) error {
+	if err := validateDeployment(&cfg); err != nil {
+		return err
+	}
 	switch cfg.Benchmark.Type {
 	case "terminalbench2":
 	case "deepresearchbench":
@@ -66,11 +71,6 @@ func validateComponents(cfg config.Config) error {
 	case "hermes":
 	default:
 		return fmt.Errorf("unsupported harness type %q", cfg.Harness.Type)
-	}
-	switch cfg.Sandbox.Type {
-	case "docker":
-	default:
-		return fmt.Errorf("unsupported sandbox type %q", cfg.Sandbox.Type)
 	}
 	switch cfg.Bridge.Type {
 	case "openclaw-ssh":
@@ -254,15 +254,24 @@ func environmentFromConfig(cfg *config.BenchmarkEnvironment) core.Environment {
 }
 
 func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byte, bool), logger *logrus.Logger) (app.HarnessInstance, error) {
+	if err := validateDeployment(&cfg); err != nil {
+		return app.HarnessInstance{}, err
+	}
 	for _, server := range cfg.Harness.MCPServers {
 		if err := core.ValidateMCPServer(server); err != nil {
 			return app.HarnessInstance{}, fmt.Errorf("invalid mcp server config: %w", err)
 		}
 	}
+	// Deployment construction stays at the composition boundary. Each harness
+	// owns the returned transport after successful construction.
+	deployment, err := newDeployment(cfg.Harness.Deployment, logger)
+	if err != nil {
+		return app.HarnessInstance{}, fmt.Errorf("construct harness deployment: %w", err)
+	}
 	switch cfg.Harness.Type {
 	case "openclaw":
 		options := openclawharness.Options{
-			Image: cfg.Versions.OpenClaw.Image, OutputDir: outputRoot, APIKeyLookup: lookup, Logger: logger,
+			Deployment: deployment, Image: cfg.Versions.OpenClaw.Image, OutputDir: outputRoot, APIKeyLookup: lookup, Logger: logger,
 			Mode: cfg.Harness.Mode, WebSearchEnabled: cfg.Harness.WebSearch.Enabled,
 			ExtractAPIKeyEnv:       cfg.Harness.WebSearch.ExtractAPIKeyEnv,
 			SubagentsEnabled:       cfg.Harness.Subagents.Enabled != nil && *cfg.Harness.Subagents.Enabled,
@@ -274,12 +283,12 @@ func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byt
 		}
 		manager, err := openclawharness.New(options)
 		if err != nil {
-			return app.HarnessInstance{}, fmt.Errorf("construct OpenClaw harness: %w", err)
+			return app.HarnessInstance{}, errors.Join(fmt.Errorf("construct OpenClaw harness: %w", err), deployment.Close())
 		}
 		return app.HarnessInstance{Harness: manager, Close: manager.Close}, nil
 	case "hermes":
 		options := hermesharness.Options{
-			Image: cfg.Versions.Hermes.Image, OutputDir: outputRoot, APIKeyLookup: lookup, Logger: logger,
+			Deployment: deployment, Image: cfg.Versions.Hermes.Image, OutputDir: outputRoot, APIKeyLookup: lookup, Logger: logger,
 			Mode: cfg.Harness.Mode, WebSearchEnabled: cfg.Harness.WebSearch.Enabled,
 			ExtractAPIKeyEnv:       cfg.Harness.WebSearch.ExtractAPIKeyEnv,
 			SubagentsEnabled:       cfg.Harness.Subagents.Enabled != nil && *cfg.Harness.Subagents.Enabled,
@@ -294,11 +303,11 @@ func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byt
 		}
 		manager, err := hermesharness.New(options)
 		if err != nil {
-			return app.HarnessInstance{}, fmt.Errorf("construct Hermes harness: %w", err)
+			return app.HarnessInstance{}, errors.Join(fmt.Errorf("construct Hermes harness: %w", err), deployment.Close())
 		}
 		return app.HarnessInstance{Harness: manager, Close: manager.Close}, nil
 	default:
-		return app.HarnessInstance{}, fmt.Errorf("unsupported harness type %q", cfg.Harness.Type)
+		return app.HarnessInstance{}, errors.Join(fmt.Errorf("unsupported harness type %q", cfg.Harness.Type), deployment.Close())
 	}
 }
 
@@ -345,13 +354,20 @@ func hermesVoiceOptions(voice config.HarnessVoiceTranscribeConfig) hermesharness
 }
 
 func newSandbox(cfg config.Config, outputRoot, runID, occurrenceID string, gpuIndices []int, logger *logrus.Logger) (app.SandboxInstance, error) {
-	switch cfg.Sandbox.Type {
+	if err := validateDeployment(&cfg); err != nil {
+		return app.SandboxInstance{}, err
+	}
+	switch cfg.Sandbox.Deployment.Backend {
 	case "docker":
-		manager, err := dockersandbox.New(dockersandbox.Options{OutputDir: outputRoot, Logger: logger})
+		deployment, err := dockerdeployment.New(dockerdeployment.Options{Socket: cfg.Sandbox.Deployment.Docker.Socket, Logger: logger})
 		if err != nil {
-			return app.SandboxInstance{}, fmt.Errorf("construct Docker sandbox: %w", err)
+			return app.SandboxInstance{}, fmt.Errorf("construct sandbox deployment: %w", err)
 		}
-		source, err := dockersandbox.NewResourceSource(dockersandbox.ResourceOptions{RunID: runID, TaskIDs: []string{occurrenceID}})
+		manager, err := tasksandbox.New(tasksandbox.Options{Deployment: deployment, NewEnvironment: deployment.NewTaskEnvironment, OutputDir: outputRoot, Logger: logger})
+		if err != nil {
+			return app.SandboxInstance{}, errors.Join(fmt.Errorf("construct tool sandbox: %w", err), deployment.Close())
+		}
+		source, err := dockerdeployment.NewResourceSource(dockerdeployment.ResourceOptions{DockerSocket: cfg.Sandbox.Deployment.Docker.Socket, RunID: runID, TaskIDs: []string{occurrenceID}})
 		if err != nil {
 			return app.SandboxInstance{}, errors.Join(fmt.Errorf("construct Docker resource source: %w", err), manager.Close())
 		}
@@ -363,9 +379,9 @@ func newSandbox(cfg config.Config, outputRoot, runID, occurrenceID string, gpuIn
 			}
 			resources = &combinedResourceSource{container: source, gpu: gpuSource}
 		}
-		return app.SandboxInstance{Sandbox: manager, Resources: resources, Close: manager.Close}, nil
+		return app.SandboxInstance{Sandbox: manager, Resources: resources, Close: manager.Close, BridgeListen: manager.BridgeListen}, nil
 	default:
-		return app.SandboxInstance{}, fmt.Errorf("unsupported sandbox type %q", cfg.Sandbox.Type)
+		return app.SandboxInstance{}, fmt.Errorf("unsupported sandbox.deployment.backend %q", cfg.Sandbox.Deployment.Backend)
 	}
 }
 
@@ -390,14 +406,17 @@ func (source *combinedResourceSource) Close() error {
 	return errors.Join(source.gpu.Close(), source.container.Close())
 }
 
-func newBridge(cfg config.Config, outputRoot string, logger *logrus.Logger) (runner.ToolBridge, error) {
+func newBridge(cfg config.Config, outputRoot string, resolveListen func(context.Context) (core.BridgeListen, error), logger *logrus.Logger) (runner.ToolBridge, error) {
+	if err := validateDeployment(&cfg); err != nil {
+		return nil, err
+	}
 	switch cfg.Bridge.Type {
 	case "openclaw-ssh":
 		executable, err := os.Executable()
 		if err != nil {
 			return nil, fmt.Errorf("locate ARIES executable: %w", err)
 		}
-		bridge, err := openclawssh.New(openclawssh.Options{OutputDir: outputRoot, ClientPath: filepath.Join(filepath.Dir(executable), "aries-ssh"), Logger: logger, OmitRawLog: !cfg.Bridge.RetainBridgeRawLog()})
+		bridge, err := openclawssh.New(openclawssh.Options{ResolveListen: resolveListen, OutputDir: outputRoot, ClientPath: filepath.Join(filepath.Dir(executable), "aries-ssh"), Logger: logger, OmitRawLog: !cfg.Bridge.RetainBridgeRawLog()})
 		if err != nil {
 			return nil, fmt.Errorf("construct OpenClaw SSH bridge: %w", err)
 		}
@@ -405,7 +424,7 @@ func newBridge(cfg config.Config, outputRoot string, logger *logrus.Logger) (run
 	case "hermes-ssh":
 		// Hermes runs OpenSSH itself, so this bridge stages no client helper
 		// and needs no path to the ARIES executable.
-		bridge, err := hermesssh.New(hermesssh.Options{OutputDir: outputRoot, Logger: logger, OmitRawLog: !cfg.Bridge.RetainBridgeRawLog()})
+		bridge, err := hermesssh.New(hermesssh.Options{ResolveListen: resolveListen, OutputDir: outputRoot, Logger: logger, OmitRawLog: !cfg.Bridge.RetainBridgeRawLog()})
 		if err != nil {
 			return nil, fmt.Errorf("construct Hermes SSH bridge: %w", err)
 		}
@@ -528,4 +547,50 @@ func verifierTimeoutFloor(cfg config.Config) time.Duration {
 		return 0
 	}
 	return *cfg.Overrides.VerifierTimeoutFloor
+}
+
+// validateDeployment runs before any model, image or component side effect.
+func validateDeployment(cfg *config.Config) error {
+	if err := cfg.NormalizeDeployment(); err != nil {
+		return err
+	}
+	for _, component := range []struct {
+		path      string
+		placement config.DeploymentConfig
+	}{
+		{"harness.deployment", cfg.Harness.Deployment}, {"sandbox.deployment", cfg.Sandbox.Deployment},
+	} {
+		switch component.placement.Backend {
+		case "docker":
+		case "kubernetes":
+			return fmt.Errorf("%s: Kubernetes deployment is not implemented", component.path)
+		default:
+			return fmt.Errorf("%s: unsupported backend %q", component.path, component.placement.Backend)
+		}
+	}
+	return nil
+}
+
+func newDeployment(cfg config.DeploymentConfig, logger *logrus.Logger) (deployment.Deployment, error) {
+	switch cfg.Backend {
+	case "docker":
+		return dockerdeployment.New(dockerdeployment.Options{Socket: cfg.Docker.Socket, Logger: logger})
+	case "kubernetes":
+		return nil, errors.New("Kubernetes deployment is not implemented")
+	default:
+		return nil, fmt.Errorf("unsupported deployment backend %q", cfg.Backend)
+	}
+}
+
+func pullImages(ctx context.Context, cfg config.Config, images []string) error {
+	if err := validateDeployment(&cfg); err != nil {
+		return err
+	}
+	// The supported embedded topology requires one daemon for both components.
+	switch cfg.Sandbox.Deployment.Backend {
+	case "docker":
+		return dockerdeployment.PullImages(ctx, cfg.Sandbox.Deployment.Docker.Socket, images)
+	default:
+		return fmt.Errorf("unsupported image preparation backend %q", cfg.Sandbox.Deployment.Backend)
+	}
 }

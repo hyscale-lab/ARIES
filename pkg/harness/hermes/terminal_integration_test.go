@@ -28,7 +28,7 @@ func TestTerminalCallWithoutWorkdirRunsInTheEndpointWorkdir(t *testing.T) {
 			if image == integrationImage {
 				requireDockerImage(t)
 			}
-			manager, err := New(Options{
+			manager, err := New(Options{Deployment: integrationDeployment(t),
 				Image: image, OutputDir: t.TempDir(),
 				StartTimeout: 90 * time.Second, CleanupTimeout: 60 * time.Second,
 				APIKeyLookup: func(string) ([]byte, bool) { return []byte("sk-integration-not-a-real-key"), true },
@@ -50,9 +50,9 @@ func TestTerminalCallWithoutWorkdirRunsInTheEndpointWorkdir(t *testing.T) {
 			if err := os.WriteFile(identity, []byte("integration identity"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			request := core.HarnessRequest{
+			request := core.HarnessRequest{Network: "bridge",
 				RunID: "terminal-integration", TaskID: "terminal",
-				Endpoint: core.ToolEndpoint{Protocol: "ssh", Address: "127.0.0.1:2222", Username: "aries", Network: "bridge", IdentitySourceFile: identity, Workdir: workdir},
+				Endpoint: core.ToolEndpoint{Protocol: "ssh", Address: "127.0.0.1:2222", Username: "aries", IdentitySourceFile: identity, Workdir: workdir},
 				Model:    core.ModelConfig{Provider: "openai", BaseURL: "http://127.0.0.1:18080/v1", Model: "aries-deterministic", APIKeyEnv: "ARIES_TEST_MODEL_KEY"},
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)

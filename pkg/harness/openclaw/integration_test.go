@@ -23,11 +23,12 @@ import (
 	"github.com/hyscale-lab/aries/pkg/bridge/openclawssh"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
+	dockerdeployment "github.com/hyscale-lab/aries/pkg/deployment/docker"
 	gatewayclient "github.com/hyscale-lab/aries/pkg/harness/openclaw/gateway"
 	realtimeclient "github.com/hyscale-lab/aries/pkg/harness/openclaw/realtime"
 	"github.com/hyscale-lab/aries/pkg/monitor"
 	"github.com/hyscale-lab/aries/pkg/runner"
-	dockersandbox "github.com/hyscale-lab/aries/pkg/sandbox/docker"
+	tasksandbox "github.com/hyscale-lab/aries/pkg/sandbox"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
@@ -107,9 +108,9 @@ func (bridge *modelBridge) Start(ctx context.Context, sandbox runner.Sandbox) (c
 			Cmd:    []string{"-e", deterministicModelScript(), hex.EncodeToString(digest[:])},
 			Labels: map[string]string{"aries.managed": "true", "aries.kind": "fake-model", "aries.run": bridge.runID},
 		},
-		HostConfig: &container.HostConfig{NetworkMode: container.NetworkMode(endpoint.Network)},
+		HostConfig: &container.HostConfig{NetworkMode: container.NetworkMode(sandbox.(interface{ NetworkName() string }).NetworkName())},
 		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{
-			endpoint.Network: {Aliases: []string{"fake-model"}},
+			sandbox.(interface{ NetworkName() string }).NetworkName(): {Aliases: []string{"fake-model"}},
 		}},
 	})
 	if err == nil {
@@ -223,16 +224,16 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 	key := "deterministic-integration-key"
 	t.Setenv(integrationAPIKeyEnv, key)
 	logger := logrus.New()
-	sandbox, err := dockersandbox.New(dockersandbox.Options{OutputDir: outputDir, CleanupTimeout: 30 * time.Second, Logger: logger})
+	sandbox, err := tasksandbox.New(tasksandbox.Options{Deployment: integrationDeployment(t), NewEnvironment: integrationDeployment(t).NewTaskEnvironment, OutputDir: outputDir, CleanupTimeout: 30 * time.Second, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}
-	sshBridge, err := openclawssh.New(openclawssh.Options{OutputDir: outputDir, ClientPath: requiredIntegrationFile(t, "ARIES_SSH_CLIENT"), CleanupTimeout: 30 * time.Second, Logger: logger})
+	sshBridge, err := openclawssh.New(openclawssh.Options{ResolveListen: sandbox.BridgeListen, OutputDir: outputDir, ClientPath: requiredIntegrationFile(t, "ARIES_SSH_CLIENT"), CleanupTimeout: 30 * time.Second, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}
 	bridge := &modelBridge{inner: sshBridge, api: api, runID: runID, key: key, image: versions.OpenClaw.Image}
-	harness, err := New(Options{Image: versions.OpenClaw.Image, OutputDir: outputDir, CleanupTimeout: 30 * time.Second, StartTimeout: 60 * time.Second, AgentTimeout: 3 * time.Minute, Logger: logger})
+	harness, err := New(Options{Deployment: integrationDeployment(t), Image: versions.OpenClaw.Image, OutputDir: outputDir, CleanupTimeout: 30 * time.Second, StartTimeout: 60 * time.Second, AgentTimeout: 3 * time.Minute, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +242,7 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resourceSource, err := dockersandbox.NewResourceSource(dockersandbox.ResourceOptions{RunID: runID, TaskIDs: []string{"fix-git"}})
+	resourceSource, err := dockerdeployment.NewResourceSource(dockerdeployment.ResourceOptions{RunID: runID, TaskIDs: []string{"fix-git"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -414,13 +415,13 @@ func TestPinnedGatewayRealtimeProtocolSmoke(t *testing.T) {
 		t.Fatal(err)
 	}
 	endpoint := core.ToolEndpoint{
-		Protocol: "ssh", Address: "127.0.0.1:1", Username: "aries", Network: networkName,
+		Protocol: "ssh", Address: "127.0.0.1:1", Username: "aries",
 		ClientCommand: "/opt/aries/bin/aries-ssh", ClientSourceFile: writePrivate("aries-ssh", string(clientContent), 0o555),
 		IdentityFile: "/run/aries/ssh/id_ed25519", IdentitySourceFile: writePrivate("id_ed25519", "fixture-identity", 0o600),
 		KnownHostsFile: "/run/aries/ssh/known_hosts", KnownHostsSourceFile: writePrivate("known_hosts", "fixture-known-host", 0o600),
 	}
 	keys := map[string]string{"MODEL_KEY": "deterministic-model-key", "OPENAI_API_KEY": "deterministic-realtime-key"}
-	harness, err := New(Options{
+	harness, err := New(Options{Deployment: integrationDeployment(t),
 		Image: versions.OpenClaw.Image, OutputDir: t.TempDir(), Mode: ModeRealtime,
 		CleanupTimeout: 30 * time.Second, StartTimeout: time.Minute, AgentTimeout: 10 * time.Second,
 		Realtime:     RealtimeOptions{TTS: RealtimeTTSOptions{APIKeyEnv: "OPENAI_API_KEY"}},
@@ -435,7 +436,7 @@ func TestPinnedGatewayRealtimeProtocolSmoke(t *testing.T) {
 		_ = harness.Stop(cleanupCtx)
 		_ = harness.Close()
 	})
-	if err := harness.Start(ctx, core.HarnessRequest{
+	if err := harness.Start(ctx, core.HarnessRequest{Network: networkName,
 		RunID: runID, TaskID: "realtime-smoke", Endpoint: endpoint, Timeout: 10 * time.Second,
 		Model: core.ModelConfig{Provider: "deepseek", BaseURL: "http://model.invalid/v1", Model: "deterministic-model", APIKeyEnv: "MODEL_KEY"},
 	}); err != nil {
@@ -662,4 +663,14 @@ if(step===3){if(!out.includes(candidate.slice(0,7)))throw Error("inspect");step+
 if(step===4){if(!/fast-forward|merge made|already up.to.date/i.test(out))throw Error("merge");step++;return call(res,"verify","exec",{command:"git merge-base --is-ancestor "+candidate+" HEAD && test -z \"$(git status --porcelain)\" && git status --short --branch && git log --oneline -5"})}
 if(step===5){if(!out.includes(candidate.slice(0,7))||!out.includes("master"))throw Error("verify");step++;return stream(res,{role:"assistant",content:"Recovered lost commit "+candidate+" and verified a clean master branch."},"stop")}
 throw Error("extra request")}catch(error){res.writeHead(400,{"content-type":"application/json"});res.end(JSON.stringify({error:{message:error.message}}))}})}).listen(8080,"0.0.0.0");`
+}
+
+func integrationDeployment(t *testing.T) *dockerdeployment.Manager {
+	t.Helper()
+	d, err := dockerdeployment.New(dockerdeployment.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	return d
 }

@@ -25,13 +25,25 @@
         },
         "user": "${ARIES_RUN_ID}-${ARIES_TASK_ID}"
       }
+    },
+    "deployment": {
+      "backend": "docker",
+      "docker": {
+        "socket": "/var/run/docker.sock"
+      }
     }
   },
   "sandbox": {
-    "type": "docker"
+    "deployment": {
+      "backend": "docker",
+      "docker": {
+        "socket": "/var/run/docker.sock"
+      }
+    }
   },
   "bridge": {
-    "type": "hermes-ssh"
+    "type": "hermes-ssh",
+    "mode": "embedded"
   },
   "runtime": {
     "backend": "openai",

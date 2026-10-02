@@ -173,7 +173,7 @@ func failingRunWiring(runtime ModelRuntime, events *[]string, runErr error) Wiri
 		LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
 			return nil, nil
 		},
-		PullImages: func(context.Context, []string) error { return nil },
+		PullImages: func(context.Context, config.Config, []string) error { return nil },
 		NewBenchmark: func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
 			*events = append(*events, "run")
 			return nil, runErr
@@ -184,7 +184,9 @@ func failingRunWiring(runtime ModelRuntime, events *[]string, runErr error) Wiri
 		NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
 			return SandboxInstance{}, nil
 		},
-		NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) { return nil, nil },
+		NewBridge: func(config.Config, string, func(context.Context) (core.BridgeListen, error), *logrus.Logger) (runner.ToolBridge, error) {
+			return nil, nil
+		},
 	}
 }
 
@@ -230,7 +232,7 @@ func TestRunForwardsFreshPreparedGPUIndicesToEveryOccurrence(t *testing.T) {
 		LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
 			return nil, nil
 		},
-		PullImages: func(context.Context, []string) error { return nil },
+		PullImages: func(context.Context, config.Config, []string) error { return nil },
 		NewBenchmark: func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
 			return &oneTaskBenchmark{}, nil
 		},
@@ -245,7 +247,7 @@ func TestRunForwardsFreshPreparedGPUIndicesToEveryOccurrence(t *testing.T) {
 			gpuIndices[0] = 99
 			return SandboxInstance{Sandbox: &managedIntegrationSandbox{}, Resources: &stubResources{}, Close: func() error { return nil }}, nil
 		},
-		NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
+		NewBridge: func(config.Config, string, func(context.Context) (core.BridgeListen, error), *logrus.Logger) (runner.ToolBridge, error) {
 			return &stubBridge{}, nil
 		},
 	}
@@ -296,7 +298,7 @@ func TestUnsupportedComponentsAreRejectedImmediatelyOnRunAndSetup(t *testing.T) 
 				effects := 0
 				wiring := Wiring{
 					ValidateComponents: func(cfg config.Config) error {
-						if cfg.Benchmark.Type != "terminalbench2" || cfg.Harness.Type != "openclaw" || cfg.Sandbox.Type != "docker" || cfg.Bridge.Type != "openclaw-ssh" {
+						if cfg.Benchmark.Type != "terminalbench2" || cfg.Harness.Type != "openclaw" || cfg.Sandbox.Deployment.Backend != "docker" || cfg.Bridge.Type != "openclaw-ssh" {
 							return errors.New("unsupported component canary")
 						}
 						return nil
@@ -307,7 +309,7 @@ func TestUnsupportedComponentsAreRejectedImmediatelyOnRunAndSetup(t *testing.T) 
 						effects++
 						return nil, nil
 					},
-					PullImages: func(context.Context, []string) error { effects++; return nil },
+					PullImages: func(context.Context, config.Config, []string) error { effects++; return nil },
 					NewBenchmark: func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
 						effects++
 						return nil, nil
@@ -320,10 +322,17 @@ func TestUnsupportedComponentsAreRejectedImmediatelyOnRunAndSetup(t *testing.T) 
 						effects++
 						return SandboxInstance{}, nil
 					},
-					NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) { effects++; return nil, nil },
+					NewBridge: func(config.Config, string, func(context.Context) (core.BridgeListen, error), *logrus.Logger) (runner.ToolBridge, error) {
+						effects++
+						return nil, nil
+					},
 				}
 				err = useCase.call(profile, io.Discard, Dependencies{Wiring: wiring})
-				if err == nil || !strings.Contains(err.Error(), "unsupported component canary") || effects != 0 {
+				want := "unsupported component canary"
+				if tc.name == "sandbox" {
+					want = "sandbox.type: unsupported legacy value"
+				}
+				if err == nil || !strings.Contains(err.Error(), want) || effects != 0 {
 					t.Fatalf("err=%v effects=%d", err, effects)
 				}
 				if _, err := os.Stat(output); !errors.Is(err, os.ErrNotExist) {
@@ -454,7 +463,7 @@ func TestRuntimeExitCancelsAndDrainsRun(t *testing.T) {
 		return PreparedBackend{Model: cfg.CoreModel(), Runtime: runtime}, nil
 	}, SetupBenchmark: func(context.Context, config.Config) error { return nil }, LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
 		return nil, nil
-	}, PullImages: func(context.Context, []string) error {
+	}, PullImages: func(context.Context, config.Config, []string) error {
 		return nil
 	}, NewBenchmark: func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
 		constructed++
@@ -463,7 +472,7 @@ func TestRuntimeExitCancelsAndDrainsRun(t *testing.T) {
 		return HarnessInstance{Harness: h, Close: func() error { return nil }}, nil
 	}, NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
 		return SandboxInstance{Sandbox: &cancelSandbox{events: &events}, Resources: &stubResources{}, Close: func() error { return nil }}, nil
-	}, NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
+	}, NewBridge: func(config.Config, string, func(context.Context) (core.BridgeListen, error), *logrus.Logger) (runner.ToolBridge, error) {
 		return &cancelBridge{events: &events}, nil
 	}}
 	doer := &preflightDoer{t: t, replies: []preflightReply{{status: 200, body: `{"data":[{"id":"deepseek-v4-flash"}]}`}}}

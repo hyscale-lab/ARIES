@@ -888,7 +888,7 @@ func TestManagerStartNeverCreatesAWorkspaceAlias(t *testing.T) {
 	if err := os.WriteFile(badClient, []byte("fixture"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	broken, err := New(Options{OutputDir: t.TempDir(), ClientPath: badClient})
+	broken, err := New(Options{ResolveListen: loopbackListen, OutputDir: t.TempDir(), ClientPath: badClient})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -4,12 +4,9 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
-	"math"
-	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -18,265 +15,103 @@ import (
 	"testing"
 	"time"
 
-	"github.com/containerd/errdefs"
 	audioinput "github.com/hyscale-lab/aries/pkg/audio"
 	"github.com/hyscale-lab/aries/pkg/core"
-	"github.com/moby/moby/api/pkg/stdcopy"
-	"github.com/moby/moby/api/types/container"
-	"github.com/moby/moby/client"
+	"github.com/hyscale-lab/aries/pkg/deployment"
 )
 
 const testHermesImage = "docker.io/nousresearch/hermes-agent:v2026.5.29.2"
 
-type fakeDocker struct {
-	mu             sync.Mutex
-	created        client.ContainerCreateOptions
-	container      container.InspectResponse
-	archive        []byte
-	execs          map[string]client.ExecCreateOptions
-	execRunning    map[string]bool
-	execPresent    map[string]bool
-	exitCodes      map[string]int
-	agentStdout    string
-	agentStderr    string
-	agentExit      int
-	sttStdout      string
-	sttStderr      string
-	sttExit        int
-	sessionsStdout string
-	sessionsExit   int
-	removed        bool
-	copyToErr      error
-	logsErr        error
-	inspectErr     error
-	nextExec       int
-	createCalls    int
-	startCalls     int
-	stopCalls      int
-	killCalls      int
-	removeCalls    int
-	closeCalls     int
-	closeErr       error
-
-	// Docker answers an exec's attach before it starts the process: the first
-	// unstartedInspects inspects report an exec it has not started yet, as
-	// running (marked, with no process yet) when unstartedRunning is set.
-	unstartedInspects int
-	unstartedRunning  bool
-	execDelay         time.Duration
+type fakeDeployment struct {
+	validatedRequest                 deployment.Request
+	createErr                        error
+	mu                               sync.Mutex
+	created                          deployment.Request
+	archive                          []byte
+	execs                            []core.Command
+	agentStdout                      string
+	agentStderr                      string
+	sttStdout                        string
+	sttStderr                        string
+	sessionsStdout                   string
+	agentExit, sttExit, sessionsExit int
+	removed                          bool
+	copyToErr                        error
+	logsErr                          error
+	closeErr                         error
+	validateErr                      error
+	stopErr                          error
+	createCalls                      int
+	startCalls                       int
+	removeCalls                      int
+	closeCalls                       int
+	validatedSecrets                 [][]byte
 }
 
-func newFakeDocker() *fakeDocker {
-	return &fakeDocker{
-		execs: make(map[string]client.ExecCreateOptions), execRunning: make(map[string]bool),
-		execPresent: make(map[string]bool), exitCodes: make(map[string]int),
-		agentStdout: "the task is complete\n", agentStderr: "hermes diagnostic\n",
-		sessionsStdout: `{"role":"user","content":"do the task"}` + "\n",
-	}
+func newFakeDeployment() *fakeDeployment {
+	return &fakeDeployment{agentStdout: "the task is complete\n", agentStderr: "hermes diagnostic\n", sessionsStdout: "{\"role\":\"user\",\"content\":\"do the task\"}\n"}
 }
-
-func (fake *fakeDocker) Close() error {
-	fake.mu.Lock()
-	defer fake.mu.Unlock()
-	fake.closeCalls++
-	return fake.closeErr
+func (f *fakeDeployment) Create(_ context.Context, r deployment.Request) (string, error) {
+	f.created = r
+	f.createCalls++
+	return "hermes-id", f.createErr
 }
-
-func (fake *fakeDocker) ContainerCreate(_ context.Context, options client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
-	fake.mu.Lock()
-	defer fake.mu.Unlock()
-	fake.createCalls++
-	fake.created = options
-	fake.container = container.InspectResponse{
-		ID: "hermes-id", Config: options.Config, HostConfig: options.HostConfig, State: &container.State{},
-	}
-	return client.ContainerCreateResult{ID: "hermes-id"}, nil
+func (f *fakeDeployment) Validate(_ context.Context, _ string, request deployment.Request, secrets [][]byte) error {
+	f.validatedRequest = request
+	f.validatedSecrets = secrets
+	return f.validateErr
 }
-
-func (fake *fakeDocker) CopyToContainer(_ context.Context, id string, options client.CopyToContainerOptions) (client.CopyToContainerResult, error) {
-	if id != "hermes-id" || options.DestinationPath != "/" || !options.CopyUIDGID {
-		return client.CopyToContainerResult{}, errors.New("unexpected copy request")
+func (f *fakeDeployment) UploadArchive(_ context.Context, _, _ string, r io.Reader) error {
+	if f.copyToErr != nil {
+		return f.copyToErr
 	}
-	if fake.copyToErr != nil {
-		return client.CopyToContainerResult{}, fake.copyToErr
-	}
-	content, err := io.ReadAll(options.Content)
-	if err != nil {
-		return client.CopyToContainerResult{}, err
-	}
-	fake.mu.Lock()
-	fake.archive = content
-	fake.mu.Unlock()
-	return client.CopyToContainerResult{}, nil
+	b, e := io.ReadAll(r)
+	f.archive = b
+	return e
 }
-
-func (fake *fakeDocker) ContainerStart(_ context.Context, id string, _ client.ContainerStartOptions) (client.ContainerStartResult, error) {
-	fake.mu.Lock()
-	defer fake.mu.Unlock()
-	if id != fake.container.ID || fake.removed {
-		return client.ContainerStartResult{}, errdefs.ErrNotFound
-	}
-	fake.startCalls++
-	fake.container.State.Running = true
-	return client.ContainerStartResult{}, nil
+func (f *fakeDeployment) DownloadArchive(context.Context, string, string) (io.ReadCloser, deployment.FileInfo, error) {
+	return nil, deployment.FileInfo{}, errors.New("unexpected download")
 }
-
-func (fake *fakeDocker) ContainerInspect(_ context.Context, id string, _ client.ContainerInspectOptions) (client.ContainerInspectResult, error) {
-	fake.mu.Lock()
-	defer fake.mu.Unlock()
-	if fake.removed || id != fake.container.ID {
-		return client.ContainerInspectResult{}, fmt.Errorf("container absent: %w", errdefs.ErrNotFound)
+func (f *fakeDeployment) Start(context.Context, string) error           { f.startCalls++; return nil }
+func (f *fakeDeployment) Running(context.Context, string) (bool, error) { return !f.removed, nil }
+func (f *fakeDeployment) Exec(ctx context.Context, _ string, c core.Command) (core.CommandResult, error) {
+	if err := ctx.Err(); err != nil {
+		return core.CommandResult{ExitCode: -1}, err
 	}
-	if fake.inspectErr != nil {
-		return client.ContainerInspectResult{}, fake.inspectErr
-	}
-	return client.ContainerInspectResult{Container: fake.container}, nil
-}
-
-func (fake *fakeDocker) ContainerTop(context.Context, string, client.ContainerTopOptions) (client.ContainerTopResult, error) {
-	fake.mu.Lock()
-	defer fake.mu.Unlock()
-	processes := make([][]string, 0)
-	for _, present := range fake.execPresent {
-		if present {
-			processes = append(processes, []string{"123"})
+	f.execs = append(f.execs, c)
+	switch c.Path {
+	case agentWrapperPath:
+		return core.CommandResult{Stdout: f.agentStdout, Stderr: f.agentStderr, ExitCode: f.agentExit}, nil
+	case "hermes":
+		return core.CommandResult{Stdout: f.sessionsStdout, ExitCode: f.sessionsExit}, nil
+	case "/bin/sh":
+		if len(c.Args) > 2 && c.Args[2] == "aries-hermes-stt" {
+			return core.CommandResult{Stdout: f.sttStdout, Stderr: f.sttStderr, ExitCode: f.sttExit}, nil
 		}
 	}
-	return client.ContainerTopResult{Titles: []string{"PID"}, Processes: processes}, nil
+	return core.CommandResult{}, nil
 }
-
-func (fake *fakeDocker) ExecCreate(_ context.Context, id string, options client.ExecCreateOptions) (client.ExecCreateResult, error) {
-	fake.mu.Lock()
-	defer fake.mu.Unlock()
-	if id != fake.container.ID || !fake.container.State.Running {
-		return client.ExecCreateResult{}, errdefs.ErrNotFound
+func (f *fakeDeployment) Logs(context.Context, string, int) ([]byte, error) {
+	return []byte("container ready\n"), f.logsErr
+}
+func (f *fakeDeployment) Address(context.Context, string, int) (string, error) {
+	return "", errors.New("unexpected address")
+}
+func (f *fakeDeployment) Stop(context.Context, string) error {
+	f.removeCalls++
+	if f.stopErr != nil {
+		return f.stopErr
 	}
-	fake.nextExec++
-	execID := fmt.Sprintf("exec-%d", fake.nextExec)
-	fake.execs[execID] = options
-	fake.execRunning[execID] = true
-	fake.execPresent[execID] = true
-	return client.ExecCreateResult{ID: execID}, nil
+	f.removed = true
+	return nil
 }
+func (f *fakeDeployment) Close() error { f.closeCalls++; return f.closeErr }
 
-func (fake *fakeDocker) ExecAttach(_ context.Context, execID string, _ client.ExecAttachOptions) (client.ExecAttachResult, error) {
-	fake.mu.Lock()
-	options, ok := fake.execs[execID]
-	fake.mu.Unlock()
-	if !ok {
-		return client.ExecAttachResult{}, errdefs.ErrNotFound
-	}
-	clientSide, engineSide := net.Pipe()
-	response := client.ExecAttachResult{HijackedResponse: client.NewHijackedResponse(clientSide, "application/vnd.docker.multiplexed-stream")}
-	go func() {
-		defer engineSide.Close()
-		time.Sleep(fake.execDelay)
-		exitCode := 0
-		// Cmd is /bin/sh -c <execShell> <label> <token> <command...>; index 5 is
-		// the first token of the wrapped command.
-		if len(options.Cmd) > 5 {
-			switch options.Cmd[5] {
-			case agentWrapperPath:
-				_ = writeMux(engineSide, stdcopy.Stdout, []byte(fake.agentStdout))
-				_ = writeMux(engineSide, stdcopy.Stderr, []byte(fake.agentStderr))
-				exitCode = fake.agentExit
-			case "/bin/sh":
-				if len(options.Cmd) > 8 && options.Cmd[8] == "aries-hermes-stt" {
-					_ = writeMux(engineSide, stdcopy.Stdout, []byte(fake.sttStdout))
-					_ = writeMux(engineSide, stdcopy.Stderr, []byte(fake.sttStderr))
-					exitCode = fake.sttExit
-				}
-			case "hermes":
-				_ = writeMux(engineSide, stdcopy.Stdout, []byte(fake.sessionsStdout))
-				exitCode = fake.sessionsExit
-			}
-		}
-		if len(options.Cmd) > 4 {
-			trailer := fmt.Sprintf("\x1eARIES_HERMES_EXIT_%s=%d\x1f", options.Cmd[4], exitCode)
-			_ = writeMux(engineSide, stdcopy.Stderr, []byte(trailer))
-		}
-		fake.mu.Lock()
-		fake.exitCodes[execID] = exitCode
-		fake.execPresent[execID] = false
-		fake.execRunning[execID] = false
-		fake.mu.Unlock()
-	}()
-	return response, nil
-}
-
-func (fake *fakeDocker) ExecInspect(_ context.Context, execID string, _ client.ExecInspectOptions) (client.ExecInspectResult, error) {
-	fake.mu.Lock()
-	defer fake.mu.Unlock()
-	if fake.unstartedInspects > 0 {
-		fake.unstartedInspects--
-		return client.ExecInspectResult{ID: execID, ContainerID: fake.container.ID, Running: fake.unstartedRunning}, nil
-	}
-	pid := 0
-	if _, started := fake.execs[execID]; started {
-		pid = 123
-	}
-	return client.ExecInspectResult{ID: execID, ContainerID: fake.container.ID, Running: fake.execRunning[execID], PID: pid, ExitCode: fake.exitCodes[execID]}, nil
-}
-
-func (fake *fakeDocker) ContainerLogs(context.Context, string, client.ContainerLogsOptions) (client.ContainerLogsResult, error) {
-	fake.mu.Lock()
-	err := fake.logsErr
-	fake.mu.Unlock()
-	if err != nil {
-		return nil, err
-	}
-	return io.NopCloser(bytes.NewReader(multiplexed([]byte("container ready\n"), nil))), nil
-}
-
-func (fake *fakeDocker) ContainerStop(context.Context, string, client.ContainerStopOptions) (client.ContainerStopResult, error) {
-	fake.mu.Lock()
-	defer fake.mu.Unlock()
-	fake.stopCalls++
-	fake.container.State.Running = false
-	return client.ContainerStopResult{}, nil
-}
-
-func (fake *fakeDocker) ContainerKill(context.Context, string, client.ContainerKillOptions) (client.ContainerKillResult, error) {
-	fake.mu.Lock()
-	defer fake.mu.Unlock()
-	fake.killCalls++
-	fake.container.State.Running = false
-	return client.ContainerKillResult{}, nil
-}
-
-func (fake *fakeDocker) ContainerRemove(context.Context, string, client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
-	fake.mu.Lock()
-	defer fake.mu.Unlock()
-	fake.removeCalls++
-	fake.removed = true
-	return client.ContainerRemoveResult{}, nil
-}
-
-func multiplexed(stdout, stderr []byte) []byte {
-	var content bytes.Buffer
-	_ = writeMux(&content, stdcopy.Stdout, stdout)
-	_ = writeMux(&content, stdcopy.Stderr, stderr)
-	return content.Bytes()
-}
-
-func writeMux(writer io.Writer, stream stdcopy.StdType, content []byte) error {
-	if len(content) == 0 {
-		return nil
-	}
-	var header [8]byte
-	header[0] = byte(stream)
-	binary.BigEndian.PutUint32(header[4:], uint32(len(content)))
-	if _, err := writer.Write(header[:]); err != nil {
-		return err
-	}
-	_, err := writer.Write(content)
-	return err
-}
-
-func newTestManager(t *testing.T, fake *fakeDocker, secret []byte) *Manager {
+func newTestManager(t *testing.T, fake *fakeDeployment, secret []byte) *Manager {
 	t.Helper()
 	manager, err := New(Options{
-		Image: testHermesImage, OutputDir: t.TempDir(), StartTimeout: 2 * time.Second, AgentTimeout: 2 * time.Second,
+		Deployment: fake,
+		Image:      testHermesImage, OutputDir: t.TempDir(), StartTimeout: 2 * time.Second, AgentTimeout: 2 * time.Second,
 		// Start clears the buffer the lookup hands it, so the test keeps its
 		// own copy for later assertions.
 		APIKeyLookup: func(string) ([]byte, bool) { return bytes.Clone(secret), true },
@@ -284,7 +119,6 @@ func newTestManager(t *testing.T, fake *fakeDocker, secret []byte) *Manager {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager.client = fake
 	manager.newID = func() (string, error) { return "attempt", nil }
 	return manager
 }
@@ -317,14 +151,14 @@ func endpointFiles(t *testing.T) core.ToolEndpoint {
 		t.Fatal(err)
 	}
 	return core.ToolEndpoint{
-		Protocol: "ssh", Address: "172.22.0.1:39425", Username: "aries", Network: "aries-net-test",
+		Protocol: "ssh", Address: "172.22.0.1:39425", Username: "aries",
 		IdentityFile: identityContainerFS, IdentitySourceFile: path, Workdir: "/app",
 	}
 }
 
 func testRequest(t *testing.T) core.HarnessRequest {
 	t.Helper()
-	return core.HarnessRequest{RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: validModel()}
+	return core.HarnessRequest{Network: "aries-net-test", RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: validModel()}
 }
 
 func archiveEntries(t *testing.T, archive []byte) map[string]*tar.Header {
@@ -371,9 +205,9 @@ func archiveContents(t *testing.T, archive []byte) map[string][]byte {
 
 func TestManagerCloseIsIdempotent(t *testing.T) {
 	failure := errors.New("close failed")
-	fake := newFakeDocker()
+	fake := newFakeDeployment()
 	fake.closeErr = failure
-	manager := &Manager{client: fake}
+	manager := &Manager{deployment: fake}
 	if err := manager.Close(); !errors.Is(err, failure) {
 		t.Fatalf("error = %v", err)
 	}
@@ -386,22 +220,22 @@ func TestManagerCloseIsIdempotent(t *testing.T) {
 }
 
 func TestStartStagesPrivateRuntimeAndPinsIdleContainer(t *testing.T) {
-	fake := newFakeDocker()
+	fake := newFakeDeployment()
 	manager := newTestManager(t, fake, []byte("model-secret"))
 	if err := manager.Start(context.Background(), testRequest(t)); err != nil {
 		t.Fatal(err)
 	}
 	defer manager.Stop(context.Background())
 
-	config := fake.created.Config
-	if !slices.Equal(config.Entrypoint, idleEntrypoint) || !slices.Equal(config.Cmd, idleCommand) {
-		t.Fatalf("container is not pinned to the idle command: %v %v", config.Entrypoint, config.Cmd)
+	config := fake.created
+	if !slices.Equal(config.Entrypoint, idleEntrypoint) || !slices.Equal(config.Args, idleCommand) {
+		t.Fatalf("container is not pinned to the idle command: %v %v", config.Entrypoint, config.Args)
 	}
 	if config.Labels["aries.component"] != "harness" || config.Labels["aries.kind"] != "hermes-harness" || config.Labels["aries.managed"] != "true" {
 		t.Fatalf("labels = %v", config.Labels)
 	}
-	if string(fake.created.HostConfig.NetworkMode) != "aries-net-test" {
-		t.Fatalf("network = %v", fake.created.HostConfig.NetworkMode)
+	if string(fake.created.Network) != "aries-net-test" {
+		t.Fatalf("network = %v", fake.created.Network)
 	}
 
 	entries := archiveEntries(t, fake.archive)
@@ -433,7 +267,7 @@ func TestStartStagesPrivateRuntimeAndPinsIdleContainer(t *testing.T) {
 // Hermes must run agent commands where the bridge does: the rendered terminal
 // section and TERMINAL_CWD both name the endpoint's workdir.
 func TestStartNamesTheBridgeWorkdirToTheTerminal(t *testing.T) {
-	fake := newFakeDocker()
+	fake := newFakeDeployment()
 	manager := newTestManager(t, fake, []byte("model-secret"))
 	request := testRequest(t)
 	if err := manager.Start(context.Background(), request); err != nil {
@@ -449,13 +283,13 @@ func TestStartNamesTheBridgeWorkdirToTheTerminal(t *testing.T) {
 	if !strings.Contains(string(retained), want) {
 		t.Fatalf("config.yaml lacks the terminal section %q:\n%s", want, retained)
 	}
-	if !slices.Contains(fake.created.Config.Env, "TERMINAL_CWD=/app") {
-		t.Fatalf("TERMINAL_CWD does not name the bridge's workdir: %v", fake.created.Config.Env)
+	if !slices.Contains(fake.created.Env, "TERMINAL_CWD=/app") {
+		t.Fatalf("TERMINAL_CWD does not name the bridge's workdir: %v", fake.created.Env)
 	}
 }
 
 func TestStartRefusesEndpointWithoutWorkdir(t *testing.T) {
-	fake := newFakeDocker()
+	fake := newFakeDeployment()
 	manager := newTestManager(t, fake, []byte("model-secret"))
 	request := testRequest(t)
 	request.Endpoint.Workdir = ""
@@ -469,7 +303,7 @@ func TestStartRefusesEndpointWithoutWorkdir(t *testing.T) {
 // container configuration, environment, labels, or the retained config.
 func TestStartKeepsCredentialOutOfDockerMetadataAndArtifacts(t *testing.T) {
 	secret := []byte("sk-super-secret-value")
-	fake := newFakeDocker()
+	fake := newFakeDeployment()
 	manager := newTestManager(t, fake, secret)
 	request := testRequest(t)
 	if err := manager.Start(context.Background(), request); err != nil {
@@ -477,8 +311,8 @@ func TestStartKeepsCredentialOutOfDockerMetadataAndArtifacts(t *testing.T) {
 	}
 	defer manager.Stop(context.Background())
 
-	config := fake.created.Config
-	for _, value := range append(append([]string(nil), config.Env...), append(config.Cmd, config.Entrypoint...)...) {
+	config := fake.created
+	for _, value := range append(append([]string(nil), config.Env...), append(config.Args, config.Entrypoint...)...) {
 		if strings.Contains(value, string(secret)) {
 			t.Fatalf("secret leaked into Docker configuration: %q", value)
 		}
@@ -511,9 +345,10 @@ func TestStartKeepsCredentialOutOfDockerMetadataAndArtifacts(t *testing.T) {
 func TestStartStagesExtractKeyWhenConfigured(t *testing.T) {
 	modelSecret := []byte("model-secret")
 	extractSecret := []byte("tvly-super-secret")
-	fake := newFakeDocker()
+	fake := newFakeDeployment()
 	manager, err := New(Options{
-		Image: testHermesImage, OutputDir: t.TempDir(), StartTimeout: 2 * time.Second, AgentTimeout: 2 * time.Second,
+		Deployment: fake,
+		Image:      testHermesImage, OutputDir: t.TempDir(), StartTimeout: 2 * time.Second, AgentTimeout: 2 * time.Second,
 		WebSearchEnabled: true, ExtractAPIKeyEnv: "TAVILY_API_KEY",
 		APIKeyLookup: func(name string) ([]byte, bool) {
 			if name == "TAVILY_API_KEY" {
@@ -525,7 +360,6 @@ func TestStartStagesExtractKeyWhenConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager.client = fake
 	manager.newID = func() (string, error) { return "attempt", nil }
 
 	request := testRequest(t)
@@ -543,8 +377,8 @@ func TestStartStagesExtractKeyWhenConfigured(t *testing.T) {
 		t.Fatalf("extract key entry = %+v", extractEntry)
 	}
 
-	config := fake.created.Config
-	for _, value := range append(append([]string(nil), config.Env...), append(config.Cmd, config.Entrypoint...)...) {
+	config := fake.created
+	for _, value := range append(append([]string(nil), config.Env...), append(config.Args, config.Entrypoint...)...) {
 		if strings.Contains(value, string(extractSecret)) {
 			t.Fatalf("extract secret leaked into Docker configuration: %q", value)
 		}
@@ -564,9 +398,10 @@ func TestStartStagesExtractKeyWhenConfigured(t *testing.T) {
 // Missing extract credentials must fail Start and leave no partial container,
 // the same contract the model key already has.
 func TestStartRequiresPresentExtractCredential(t *testing.T) {
-	fake := newFakeDocker()
+	fake := newFakeDeployment()
 	manager, err := New(Options{
-		Image: testHermesImage, OutputDir: t.TempDir(), StartTimeout: 2 * time.Second, AgentTimeout: 2 * time.Second,
+		Deployment: fake,
+		Image:      testHermesImage, OutputDir: t.TempDir(), StartTimeout: 2 * time.Second, AgentTimeout: 2 * time.Second,
 		WebSearchEnabled: true, ExtractAPIKeyEnv: "TAVILY_API_KEY",
 		APIKeyLookup: func(name string) ([]byte, bool) {
 			if name == "TAVILY_API_KEY" {
@@ -578,7 +413,6 @@ func TestStartRequiresPresentExtractCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager.client = fake
 	manager.newID = func() (string, error) { return "attempt", nil }
 	if err := manager.Start(context.Background(), testRequest(t)); err == nil {
 		t.Fatal("missing extract credential was accepted")
@@ -589,7 +423,7 @@ func TestStartRequiresPresentExtractCredential(t *testing.T) {
 }
 
 func TestRunReturnsFinalResponseAndArtifacts(t *testing.T) {
-	fake := newFakeDocker()
+	fake := newFakeDeployment()
 	manager := newTestManager(t, fake, []byte("model-secret"))
 	request := testRequest(t)
 	if err := manager.Start(context.Background(), request); err != nil {
@@ -614,11 +448,11 @@ func TestRunReturnsFinalResponseAndArtifacts(t *testing.T) {
 	// The instruction must reach Hermes as one argv element, not a shell string.
 	var agentCmd []string
 	for _, options := range fake.execs {
-		if len(options.Cmd) > 5 && options.Cmd[5] == agentWrapperPath {
-			agentCmd = options.Cmd
+		if options.Path == agentWrapperPath {
+			agentCmd = append([]string{options.Path}, options.Args...)
 		}
 	}
-	if len(agentCmd) != 9 || agentCmd[6] != "deepseek-v4-flash" || agentCmd[7] != "deepseek" || agentCmd[8] != "fix the git repository" {
+	if len(agentCmd) != 4 || agentCmd[1] != "deepseek-v4-flash" || agentCmd[2] != "deepseek" || agentCmd[3] != "fix the git repository" {
 		t.Fatalf("agent exec argv = %#v", agentCmd)
 	}
 	if err := manager.Stop(context.Background()); err != nil {
@@ -629,10 +463,11 @@ func TestRunReturnsFinalResponseAndArtifacts(t *testing.T) {
 func TestVoiceTranscribeSynthesizesAudioAndRunsTranscriptAsAgentMessage(t *testing.T) {
 	modelSecret := []byte("model-secret")
 	voiceSecret := []byte("voice-secret")
-	fake := newFakeDocker()
+	fake := newFakeDeployment()
 	fake.sttStdout = `{"transcript":"fix the repository from speech","signature":"transcribe_recording(wav_path, provider=None, model=None)"}` + "\n"
 	manager, err := New(Options{
-		Image: testHermesImage, OutputDir: t.TempDir(), StartTimeout: 2 * time.Second, AgentTimeout: 2 * time.Second,
+		Deployment: fake,
+		Image:      testHermesImage, OutputDir: t.TempDir(), StartTimeout: 2 * time.Second, AgentTimeout: 2 * time.Second,
 		Mode: ModeVoiceTranscribe,
 		VoiceTranscribe: VoiceTranscribeOptions{
 			TTS: VoiceTTSOptions{Provider: "openai", APIKeyEnv: "OPENAI_API_KEY", Model: "gpt-4o-mini-tts", Voice: "alloy", Timeout: time.Second},
@@ -651,7 +486,6 @@ func TestVoiceTranscribeSynthesizesAudioAndRunsTranscriptAsAgentMessage(t *testi
 		t.Fatal(err)
 	}
 	var speechRequest audioinput.SpeechRequest
-	manager.client = fake
 	manager.newID = func() (string, error) { return "attempt", nil }
 	manager.newSpeech = func(options audioinput.SpeechClientOptions) (speechSynthesizer, error) {
 		if string(options.APIKey) != string(voiceSecret) || options.Timeout != time.Second {
@@ -698,17 +532,17 @@ func TestVoiceTranscribeSynthesizesAudioAndRunsTranscriptAsAgentMessage(t *testi
 
 	var sttCmd, agentCmd []string
 	for _, options := range fake.execs {
-		if len(options.Cmd) > 8 && options.Cmd[8] == "aries-hermes-stt" {
-			sttCmd = options.Cmd
+		if len(options.Args) > 2 && options.Args[2] == "aries-hermes-stt" {
+			sttCmd = append([]string{options.Path}, options.Args...)
 		}
-		if len(options.Cmd) > 5 && options.Cmd[5] == agentWrapperPath {
-			agentCmd = options.Cmd
+		if options.Path == agentWrapperPath {
+			agentCmd = append([]string{options.Path}, options.Args...)
 		}
 	}
-	if len(sttCmd) != 14 || sttCmd[10] != voiceWAVPath || sttCmd[11] != "gpt-4o-mini-transcribe" || sttCmd[12] != "openai" || sttCmd[13] != "en" {
+	if len(sttCmd) != 9 || sttCmd[5] != voiceWAVPath || sttCmd[6] != "gpt-4o-mini-transcribe" || sttCmd[7] != "openai" || sttCmd[8] != "en" {
 		t.Fatalf("stt exec argv = %#v", sttCmd)
 	}
-	if len(agentCmd) != 9 || agentCmd[8] != "fix the repository from speech" {
+	if len(agentCmd) != 4 || agentCmd[3] != "fix the repository from speech" {
 		t.Fatalf("agent exec argv = %#v", agentCmd)
 	}
 
@@ -725,8 +559,8 @@ func TestVoiceTranscribeSynthesizesAudioAndRunsTranscriptAsAgentMessage(t *testi
 	if !bytes.Contains(voiceResult, []byte(`"agent_question_used": "fix the repository from speech"`)) || !bytes.Contains(voiceResult, []byte(`"agent_output_text": "the task is complete"`)) {
 		t.Fatalf("voice result = %s", voiceResult)
 	}
-	config := fake.created.Config
-	for _, value := range append(append([]string(nil), config.Env...), append(config.Cmd, config.Entrypoint...)...) {
+	config := fake.created
+	for _, value := range append(append([]string(nil), config.Env...), append(config.Args, config.Entrypoint...)...) {
 		if strings.Contains(value, string(voiceSecret)) {
 			t.Fatalf("voice secret leaked into Docker configuration: %q", value)
 		}
@@ -746,10 +580,11 @@ func TestVoiceTranscribeMapsOpenAICompatibleAgentProvider(t *testing.T) {
 		{name: "sglang", provider: "sglang", baseURL: "http://sglang.local:30000/v1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			fake := newFakeDocker()
+			fake := newFakeDeployment()
 			fake.sttStdout = `{"transcript":"fix from speech"}` + "\n"
 			manager, err := New(Options{
-				Image: testHermesImage, OutputDir: t.TempDir(), StartTimeout: 2 * time.Second, AgentTimeout: 2 * time.Second,
+				Deployment: fake,
+				Image:      testHermesImage, OutputDir: t.TempDir(), StartTimeout: 2 * time.Second, AgentTimeout: 2 * time.Second,
 				Mode: ModeVoiceTranscribe,
 				VoiceTranscribe: VoiceTranscribeOptions{
 					TTS: VoiceTTSOptions{Provider: "openai", APIKeyEnv: "OPENAI_API_KEY", Model: "gpt-4o-mini-tts", Voice: "alloy", Timeout: time.Second},
@@ -760,7 +595,6 @@ func TestVoiceTranscribeMapsOpenAICompatibleAgentProvider(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			manager.client = fake
 			manager.newID = func() (string, error) { return "attempt", nil }
 			manager.newSpeech = func(audioinput.SpeechClientOptions) (speechSynthesizer, error) {
 				return stubSpeechSynthesizer{}, nil
@@ -777,11 +611,11 @@ func TestVoiceTranscribeMapsOpenAICompatibleAgentProvider(t *testing.T) {
 			}
 			var agentCmd []string
 			for _, options := range fake.execs {
-				if len(options.Cmd) > 5 && options.Cmd[5] == agentWrapperPath {
-					agentCmd = options.Cmd
+				if options.Path == agentWrapperPath {
+					agentCmd = append([]string{options.Path}, options.Args...)
 				}
 			}
-			if len(agentCmd) != 9 || agentCmd[7] != "custom" || agentCmd[8] != "fix from speech" {
+			if len(agentCmd) != 4 || agentCmd[2] != "custom" || agentCmd[3] != "fix from speech" {
 				t.Fatalf("agent exec argv = %#v", agentCmd)
 			}
 			if err := manager.Stop(context.Background()); err != nil {
@@ -792,7 +626,7 @@ func TestVoiceTranscribeMapsOpenAICompatibleAgentProvider(t *testing.T) {
 }
 
 func TestRunAcceptsExactlyOneInstruction(t *testing.T) {
-	fake := newFakeDocker()
+	fake := newFakeDeployment()
 	manager := newTestManager(t, fake, []byte("model-secret"))
 	if err := manager.Start(context.Background(), testRequest(t)); err != nil {
 		t.Fatal(err)
@@ -807,7 +641,7 @@ func TestRunAcceptsExactlyOneInstruction(t *testing.T) {
 }
 
 func TestRunRejectsInvalidInstructionAndUnstartedHarness(t *testing.T) {
-	fake := newFakeDocker()
+	fake := newFakeDeployment()
 	manager := newTestManager(t, fake, []byte("model-secret"))
 	if _, err := manager.Run(context.Background(), "task"); err == nil {
 		t.Fatal("run before start was accepted")
@@ -826,7 +660,7 @@ func TestRunRejectsInvalidInstructionAndUnstartedHarness(t *testing.T) {
 // A non-zero Hermes exit is a harness failure, but the artifacts collected on
 // the way out must still be retained for diagnosis.
 func TestRunReportsNonZeroExitAndStillRetainsArtifacts(t *testing.T) {
-	fake := newFakeDocker()
+	fake := newFakeDeployment()
 	fake.agentExit = 1
 	manager := newTestManager(t, fake, []byte("model-secret"))
 	request := testRequest(t)
@@ -847,7 +681,7 @@ func TestRunReportsNonZeroExitAndStillRetainsArtifacts(t *testing.T) {
 }
 
 func TestRunCancellationIsReportedAsCanceled(t *testing.T) {
-	fake := newFakeDocker()
+	fake := newFakeDeployment()
 	manager := newTestManager(t, fake, []byte("model-secret"))
 	if err := manager.Start(context.Background(), testRequest(t)); err != nil {
 		t.Fatal(err)
@@ -867,7 +701,7 @@ func TestRunCancellationIsReportedAsCanceled(t *testing.T) {
 // A run that never reached the model produces no session; that must not be
 // reported as a harness failure.
 func TestEmptySessionExportIsNotAFailure(t *testing.T) {
-	fake := newFakeDocker()
+	fake := newFakeDeployment()
 	fake.sessionsStdout = ""
 	fake.sessionsExit = 1
 	manager := newTestManager(t, fake, []byte("model-secret"))
@@ -889,7 +723,7 @@ func TestEmptySessionExportIsNotAFailure(t *testing.T) {
 }
 
 func TestStopIsIdempotentAndConfirmsAbsence(t *testing.T) {
-	fake := newFakeDocker()
+	fake := newFakeDeployment()
 	manager := newTestManager(t, fake, []byte("model-secret"))
 	if err := manager.Start(context.Background(), testRequest(t)); err != nil {
 		t.Fatal(err)
@@ -913,7 +747,7 @@ func TestStopIsIdempotentAndConfirmsAbsence(t *testing.T) {
 // Positive absence: if the container is still inspectable after removal, Stop
 // must fail rather than report a clean teardown.
 func TestStopFailsWhenContainerRemains(t *testing.T) {
-	fake := newFakeDocker()
+	fake := newFakeDeployment()
 	manager := newTestManager(t, fake, []byte("model-secret"))
 	if err := manager.Start(context.Background(), testRequest(t)); err != nil {
 		t.Fatal(err)
@@ -921,30 +755,21 @@ func TestStopFailsWhenContainerRemains(t *testing.T) {
 	fake.mu.Lock()
 	fake.removeCalls = 0
 	fake.mu.Unlock()
-	// Removal silently does nothing, so the container stays present.
-	stubborn := &stubbornDocker{fakeDocker: fake}
-	manager.client = stubborn
+	fake.stopErr = errors.New("runtime remains after removal")
 	if err := manager.Stop(context.Background()); err == nil || !strings.Contains(err.Error(), "remains after removal") {
 		t.Fatalf("err = %v", err)
 	}
 	if manager.active == nil {
-		t.Fatal("failed stop must keep the session for a later retry")
+		t.Fatal("failed stop must retain session")
+	}
+	fake.stopErr = nil
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }
 
-type stubbornDocker struct {
-	*fakeDocker
-}
-
-func (stubborn *stubbornDocker) ContainerRemove(context.Context, string, client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
-	stubborn.mu.Lock()
-	defer stubborn.mu.Unlock()
-	stubborn.removeCalls++
-	return client.ContainerRemoveResult{}, nil
-}
-
 func TestStartRollsBackAndClearsArtifactsOnFailure(t *testing.T) {
-	fake := newFakeDocker()
+	fake := newFakeDeployment()
 	fake.copyToErr = errors.New("copy refused")
 	manager := newTestManager(t, fake, []byte("model-secret"))
 	request := testRequest(t)
@@ -963,7 +788,7 @@ func TestStartRollsBackAndClearsArtifactsOnFailure(t *testing.T) {
 }
 
 func TestStartRejectsSecondSession(t *testing.T) {
-	fake := newFakeDocker()
+	fake := newFakeDeployment()
 	manager := newTestManager(t, fake, []byte("model-secret"))
 	if err := manager.Start(context.Background(), testRequest(t)); err != nil {
 		t.Fatal(err)
@@ -974,7 +799,7 @@ func TestStartRejectsSecondSession(t *testing.T) {
 	}
 }
 
-func TestStartValidatesIdentifiersAndResources(t *testing.T) {
+func TestStartValidatesIdentifiersAndTimeout(t *testing.T) {
 	for _, test := range []struct {
 		name string
 		set  func(*core.HarnessRequest)
@@ -983,11 +808,9 @@ func TestStartValidatesIdentifiersAndResources(t *testing.T) {
 		{"run id", func(r *core.HarnessRequest) { r.RunID = "-bad" }, "Hermes run ID contains an unsafe character"},
 		{"task id", func(r *core.HarnessRequest) { r.TaskID = "" }, "Hermes task ID is invalid"},
 		{"timeout", func(r *core.HarnessRequest) { r.Timeout = -1 }, "Hermes task timeout must not be negative"},
-		{"cpu", func(r *core.HarnessRequest) { value := math.Exp2(63) / 1e9; r.CPU = &value }, "Hermes CPU must be finite, positive, and convert to NanoCPUs below 2^63"},
-		{"memory", func(r *core.HarnessRequest) { value := int(math.MaxInt64>>20) + 1; r.MemoryMB = &value }, fmt.Sprintf("Hermes memory must be positive and no greater than %d MiB", int64(math.MaxInt64)>>20)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			fake := newFakeDocker()
+			fake := newFakeDeployment()
 			manager := newTestManager(t, fake, []byte("model-secret"))
 			request := testRequest(t)
 			test.set(&request)
@@ -1002,7 +825,7 @@ func TestStartValidatesIdentifiersAndResources(t *testing.T) {
 }
 
 func TestStartRequiresPresentCredential(t *testing.T) {
-	fake := newFakeDocker()
+	fake := newFakeDeployment()
 	manager := newTestManager(t, fake, nil)
 	manager.apiKeyLookup = func(string) ([]byte, bool) { return nil, false }
 	if err := manager.Start(context.Background(), testRequest(t)); err == nil || !strings.Contains(err.Error(), "is not set") {
@@ -1014,43 +837,6 @@ func TestStartRequiresPresentCredential(t *testing.T) {
 	}
 	if fake.createCalls != 0 {
 		t.Fatalf("ContainerCreate calls = %d, want zero", fake.createCalls)
-	}
-}
-
-// The upstream image declares VOLUME /opt/data, which Docker always
-// materialises. That one anonymous volume is tolerated; a bind mount, which is
-// how host state would reach the harness, is not.
-func TestValidateContainerAllowsOnlyTheImageDeclaredVolume(t *testing.T) {
-	for _, test := range []struct {
-		name    string
-		mounts  []container.MountPoint
-		binds   []string
-		wantErr bool
-	}{
-		{name: "no mounts"},
-		{name: "image volume", mounts: []container.MountPoint{{Type: "volume", Name: "anon", Destination: imageDeclaredVolume}}},
-		{name: "bind mount", mounts: []container.MountPoint{{Type: "bind", Source: "/etc", Destination: "/etc"}}, wantErr: true},
-		{name: "unnamed volume", mounts: []container.MountPoint{{Type: "volume", Destination: imageDeclaredVolume}}, wantErr: true},
-		{name: "other destination", mounts: []container.MountPoint{{Type: "volume", Name: "anon", Destination: "/workspace"}}, wantErr: true},
-		{name: "host bind request", binds: []string{"/etc:/etc"}, wantErr: true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			fake := newFakeDocker()
-			manager := newTestManager(t, fake, []byte("model-secret"))
-			request := testRequest(t)
-			if err := manager.Start(context.Background(), request); err != nil {
-				t.Fatal(err)
-			}
-			defer manager.Stop(context.Background())
-			fake.mu.Lock()
-			fake.container.Mounts = test.mounts
-			fake.container.HostConfig.Binds = test.binds
-			fake.mu.Unlock()
-			err := manager.validateContainer(context.Background(), manager.active)
-			if test.wantErr != (err != nil) {
-				t.Fatalf("err = %v, wantErr = %v", err, test.wantErr)
-			}
-		})
 	}
 }
 
@@ -1099,39 +885,74 @@ func TestRunOutcomeRecordsTerminalState(t *testing.T) {
 	}
 }
 
-func TestExecAttachedWaitsForAnExecDockerHasNotStarted(t *testing.T) {
-	// Taking the first "not running, no PID" inspect for an exit closed the
-	// stream after the drain, before the command wrote its trailer.
-	fake := newFakeDocker()
-	fake.container.ID = "container"
-	fake.container.State = &container.State{Running: true}
-	fake.unstartedInspects = 3
-	fake.execDelay = 800 * time.Millisecond
-	manager := &Manager{client: fake}
-	result, err := manager.execAttached(context.Background(), "container", []string{"hermes", "sessions", "export"}, "/")
-	if err != nil || result.exitCode != 0 || string(result.stdout) != fake.sessionsStdout {
-		t.Fatalf("execAttached() = %#v, %v", result, err)
+func TestStartRequiresDeployment(t *testing.T) {
+	if _, err := New(Options{Image: testHermesImage, OutputDir: t.TempDir()}); err == nil || !strings.Contains(err.Error(), "deployment is required") {
+		t.Fatalf("New() = %v", err)
+	}
+}
+func TestStartRollsBackDeploymentValidationFailure(t *testing.T) {
+	fake := newFakeDeployment()
+	fake.validateErr = errors.New("unsafe deployment")
+	manager := newTestManager(t, fake, []byte("model-secret"))
+	if err := manager.Start(context.Background(), testRequest(t)); !errors.Is(err, fake.validateErr) {
+		t.Fatalf("Start() = %v", err)
+	}
+	if !fake.removed || fake.startCalls != 0 {
+		t.Fatalf("removed=%v starts=%d", fake.removed, fake.startCalls)
+	}
+}
+func TestStartRollsBackPartialDeploymentCreate(t *testing.T) {
+	fake := newFakeDeployment()
+	fake.createErr = errors.New("partial create")
+	manager := newTestManager(t, fake, []byte("model-secret"))
+	if err := manager.Start(context.Background(), testRequest(t)); !errors.Is(err, fake.createErr) {
+		t.Fatalf("Start() = %v", err)
+	}
+	if !fake.removed || manager.active != nil {
+		t.Fatal("partial deployment was not cleaned up")
 	}
 }
 
-func TestWaitExecGivesUpOnAnExecThatNeverStarts(t *testing.T) {
-	fake := newFakeDocker()
-	fake.unstartedInspects = 1 << 30
-	manager := &Manager{client: fake}
-	_, err := manager.waitExec(context.Background(), "container", "exec-1", 100*time.Millisecond)
-	if err == nil || !strings.Contains(err.Error(), "Hermes exec did not start within 100ms") {
-		t.Fatalf("waitExec() = %v", err)
+func TestDeploymentReceivesRuntimeConstraintsAndSecretValidation(t *testing.T) {
+	fake := newFakeDeployment()
+	manager := newTestManager(t, fake, []byte("model-secret"))
+	request := testRequest(t)
+	cpu, memory := 2.5, 1536
+	request.CPU, request.MemoryMB = &cpu, &memory
+	if err := manager.Start(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop(context.Background())
+	if fake.created.CPU == nil || *fake.created.CPU != cpu || fake.created.MemoryMB == nil || *fake.created.MemoryMB != memory {
+		t.Fatalf("resources = %#v", fake.created)
+	}
+	if got := fake.validatedRequest; got.Name != fake.created.Name || got.Image != testHermesImage || got.Network != request.Network || !slices.Equal(got.Args, idleCommand) || !slices.Equal(got.Entrypoint, idleEntrypoint) {
+		t.Fatalf("validation request = %#v", got)
+	}
+	if !slices.Equal(fake.created.ImageVolumes, []string{imageDeclaredVolume}) {
+		t.Fatalf("image volumes = %v", fake.created.ImageVolumes)
+	}
+	if len(fake.validatedSecrets) == 0 || string(fake.validatedSecrets[0]) != "model-secret" {
+		t.Fatal("deployment validation did not receive model credential")
 	}
 }
 
-func TestWaitExecGivesUpOnAnExecStuckStarting(t *testing.T) {
-	// Docker marks an exec running before it creates the process; the start
-	// bound applies to that state too.
-	fake := newFakeDocker()
-	fake.unstartedInspects, fake.unstartedRunning = 1<<30, true
-	manager := &Manager{client: fake}
-	_, err := manager.waitExec(context.Background(), "container", "exec-1", 100*time.Millisecond)
-	if err == nil || !strings.Contains(err.Error(), "Hermes exec did not start within 100ms") {
-		t.Fatalf("waitExec() = %v", err)
+func (*fakeDeployment) ExecStream(context.Context, string, core.Command, io.Reader, io.Writer, io.Writer) (core.CommandResult, error) {
+	return core.CommandResult{}, errors.New("unexpected harness streaming call")
+}
+func (*fakeDeployment) LogsStream(context.Context, string, io.Writer, io.Writer) error {
+	return errors.New("unexpected harness streaming logs call")
+}
+
+func TestStartRejectsMissingAttachmentBeforeAllocation(t *testing.T) {
+	fake := newFakeDeployment()
+	manager := newTestManager(t, fake, []byte("model-secret"))
+	request := testRequest(t)
+	request.Network = " "
+	if err := manager.Start(context.Background(), request); err == nil || !strings.Contains(err.Error(), "network") {
+		t.Fatalf("missing network = %v", err)
+	}
+	if fake.created.Name != "" {
+		t.Fatal("allocated runtime without network attachment")
 	}
 }

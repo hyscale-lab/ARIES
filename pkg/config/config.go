@@ -210,6 +210,7 @@ func (f FactConfig) CoreModel() core.ModelConfig {
 }
 
 type HarnessConfig struct {
+	Deployment      DeploymentConfig             `json:"deployment,omitempty"`
 	Type            string                       `json:"type"`
 	Mode            string                       `json:"mode,omitempty"`
 	Realtime        HarnessRealtimeConfig        `json:"realtime,omitempty"`
@@ -379,10 +380,13 @@ type VoiceSTTConfig struct {
 }
 
 type SandboxConfig struct {
-	Type string `json:"type"`
+	// Type accepts the legacy Docker selector during normalization.
+	Type       string           `json:"type,omitempty"`
+	Deployment DeploymentConfig `json:"deployment,omitempty"`
 }
 
 type BridgeConfig struct {
+	Mode string `json:"mode,omitempty"`
 	Type string `json:"type"`
 	// RetainRawLog keeps the bridge's byte-level ssh_raw.log. It defaults to
 	// false because that log is the largest artifact a run writes and captures
@@ -612,6 +616,9 @@ func decodeStrictJSON(r io.Reader, destination any, name string) error {
 }
 
 func (c *Config) validate() error {
+	if err := c.NormalizeDeployment(); err != nil {
+		return err
+	}
 	if c.Execution.Concurrency <= 0 {
 		return errors.New("execution.concurrency must be positive")
 	}
@@ -642,7 +649,6 @@ func (c *Config) validate() error {
 		{"benchmark.type", c.Benchmark.Type},
 		{"benchmark.root", c.Benchmark.Root},
 		{"harness.type", c.Harness.Type},
-		{"sandbox.type", c.Sandbox.Type},
 		{"bridge.type", c.Bridge.Type},
 		{"runtime.backend", c.Runtime.Backend},
 		{"runtime.mode", c.Runtime.Mode},

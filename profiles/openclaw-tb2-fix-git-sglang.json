@@ -13,13 +13,25 @@
     ]
   },
   "harness": {
-    "type": "openclaw"
+    "type": "openclaw",
+    "deployment": {
+      "backend": "docker",
+      "docker": {
+        "socket": "/var/run/docker.sock"
+      }
+    }
   },
   "sandbox": {
-    "type": "docker"
+    "deployment": {
+      "backend": "docker",
+      "docker": {
+        "socket": "/var/run/docker.sock"
+      }
+    }
   },
   "bridge": {
-    "type": "openclaw-ssh"
+    "type": "openclaw-ssh",
+    "mode": "embedded"
   },
   "runtime": {
     "backend": "sglang",

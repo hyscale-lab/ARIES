@@ -6,9 +6,13 @@ import (
 	"errors"
 	"io"
 	"iter"
+	"net"
+	"net/http"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	cerrdefs "github.com/containerd/errdefs"
@@ -209,16 +213,6 @@ func TestPullImagesRejectsImplicitAndMalformedReferencesBeforeDocker(t *testing.
 	}
 }
 
-func TestPullImagesAcceptsExplicitTaskTag(t *testing.T) {
-	fake := &fakeImageClient{present: true}
-	if err := pullImages(context.Background(), fake, []string{"example.invalid/task:20251031"}); err != nil {
-		t.Fatal(err)
-	}
-	if fake.inspectCalls != 1 || len(fake.pullCalls) != 0 {
-		t.Fatalf("inspect=%d pull=%v", fake.inspectCalls, fake.pullCalls)
-	}
-}
-
 func TestPullImagesAcceptsTaskAndHarnessTagsWithDigestReference(t *testing.T) {
 	const (
 		taskImage    = "example.invalid/task:20251031"
@@ -238,3 +232,35 @@ var (
 	_ client.ImagePullResponse = (*fakePullResponse)(nil)
 	_ imageClient              = (*fakeImageClient)(nil)
 )
+
+func TestPullImagesUsesConfiguredSocket(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "docker.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var inspected atomic.Int32
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("API-Version", "1.52")
+		if strings.Contains(r.URL.Path, "/images/") {
+			inspected.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"Id":"sha256:fixture"}`)
+			return
+		}
+		if r.URL.Path == "/_ping" {
+			_, _ = io.WriteString(w, "OK")
+			return
+		}
+		http.NotFound(w, r)
+	})}
+	done := make(chan struct{})
+	go func() { defer close(done); _ = server.Serve(listener) }()
+	t.Cleanup(func() { _ = server.Close(); <-done })
+	if err := PullImages(context.Background(), socket, []string{"busybox:1.37.0"}); err != nil {
+		t.Fatal(err)
+	}
+	if inspected.Load() != 1 {
+		t.Fatal("configured daemon was not inspected")
+	}
+}

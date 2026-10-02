@@ -83,6 +83,77 @@ Profiles and nonempty referenced override files reject unknown fields and
 trailing JSON; there is no profile merge or inheritance layer. SGLang is the
 exception only for its separate native launch configuration, described below.
 
+### Deployment configuration
+
+Checked-in profiles select harness identity and placement separately:
+
+```json
+{
+  "harness": {
+    "type": "hermes",
+    "deployment": {
+      "backend": "docker",
+      "docker": { "socket": "/var/run/docker.sock" }
+    }
+  },
+  "sandbox": {
+    "deployment": {
+      "backend": "docker",
+      "docker": { "socket": "/var/run/docker.sock" }
+    }
+  },
+  "bridge": { "type": "hermes-ssh", "mode": "embedded" }
+}
+```
+
+This is a profile fragment; keep the benchmark, model, runtime, and other
+settings from a complete checked-in profile. OpenClaw uses `harness.type:
+"openclaw"` with `bridge.type: "openclaw-ssh"`. Pairing is checked independently
+of placement.
+
+Both components must use the same supported local Docker daemon. `socket`
+accepts an absolute Unix socket path or `unix:///absolute/path`; normalization
+cleans the path before comparing the two settings. Remote Docker endpoints are
+rejected. Image preparation and resource monitoring use the selected socket.
+The supported topology remains native Linux Docker with one network per task
+occurrence, including repeated task IDs.
+
+Compatibility normalization supplies Docker with `/var/run/docker.sock` when a
+deployment block is omitted, defaults an omitted Docker socket to that path,
+and defaults omitted `bridge.mode` to `embedded`. Legacy `sandbox.type:
+"docker"` maps to Docker deployment; conflicting explicit settings are rejected.
+Unknown backends, options from a different backend, and unsupported bridge modes
+fail validation. `embedded` means the listener runs inside ARIES. Bridge modes
+`managed` and `external` are not implemented.
+
+The loader recognizes a Kubernetes placement block:
+
+```json
+{
+  "backend": "kubernetes",
+  "kubernetes": {
+    "context": "benchmark-cluster",
+    "namespace": "aries",
+    "runtime_class_name": "kata"
+  }
+}
+```
+
+Each component has its own block, including its
+[RuntimeClass reference](https://kubernetes.io/docs/concepts/containers/runtime-class/).
+Selecting Kubernetes currently fails preflight with `harness.deployment` or
+`sandbox.deployment` in the error before model preflight, image preparation, or
+resource allocation. ARIES does not implement Kubernetes deployment, install
+runtime handlers, or create RuntimeClasses.
+
+Bridge addresses come from task composition, with separate local bind and
+harness destination addresses; they are not profile fields. Docker uses the
+task network gateway for both. The current adapters accept IPv4 addresses,
+reject DNS and wildcard destinations, and advertise the port the OS actually
+assigned. One authenticated listener grant remains bound to each task.
+
+### Prepare the selected images
+
 For an optional prewarm, `setup` performs only profile/backend validation and
 the same benchmark/image preparation. It does not contact an external model
 service, start managed SGLang, load model weights, create a run directory, or
@@ -231,7 +302,7 @@ The checked-in DeepSeek profile uses:
   "model": {
     "base_url": "https://api.deepseek.com",
     "api_key_env": "DEEPSEEK_API_KEY",
-    "id": "deepseek-v4-flash"
+    "id": "deepseek-flash"
   }
 }
 ```
@@ -265,6 +336,11 @@ supported model), even if `runtime.backend` is `sglang` — e.g. SWE-Atlas QA's
 against a local SGLang server but grades with a DeepSeek judge. Any other
 credential (SGLang's own `api_key_env`, for instance) is always read from the
 environment regardless.
+
+The live API advertises `deepseek-flash` and `deepseek-v4-pro`. ARIES also
+recognizes the legacy `deepseek-v4-flash` ID, but preflight requires the exact
+configured ID to appear in the provider's model catalog. `deepseek-v4` is not a
+supported ID.
 
 ### External SGLang
 
@@ -661,7 +737,8 @@ bridge artifacts may contain task or model content; review them before sharing.
 
 ## Troubleshooting
 
-- **Docker permission or socket error:** run `docker info`; ARIES uses the local
+- **Docker permission or socket error:** run `docker info` against the configured
+  daemon; ARIES uses the selected local
   daemon at `/var/run/docker.sock`.
 - **Missing `aries-ssh` error:** rebuild with `make build` and keep the helper
   beside the main binary.

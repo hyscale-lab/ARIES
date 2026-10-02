@@ -40,6 +40,8 @@ const (
 
 // Options are the host-local inputs to one OpenClaw SSH bridge.
 type Options struct {
+	// ResolveListen supplies task-local listener and harness destination settings.
+	ResolveListen  func(context.Context) (core.BridgeListen, error)
 	OutputDir      string
 	ClientPath     string
 	CleanupTimeout time.Duration
@@ -54,8 +56,9 @@ type Options struct {
 }
 
 // Manager exposes one SSH endpoint at a time and proxies its exec requests to
-// the exact Docker sandbox passed to Start.
+// the exact sandbox passed to Start.
 type Manager struct {
+	resolveListen  func(context.Context) (core.BridgeListen, error)
 	outputDir      string
 	clientPath     string
 	cleanupTimeout time.Duration
@@ -75,8 +78,6 @@ type bridgeSandbox interface {
 	runner.Sandbox
 	ContainerID() string
 	ContainerName() string
-	NetworkName() string
-	NetworkGateway(context.Context) (string, error)
 	RunID() string
 	TaskID() string
 	Workdir() string
@@ -536,6 +537,9 @@ func (writer *auditWriter) finished() bool {
 var _ runner.ToolBridge = (*Manager)(nil)
 
 func New(options Options) (*Manager, error) {
+	if options.ResolveListen == nil {
+		return nil, errors.New("SSH bridge listen resolver is required")
+	}
 	if strings.TrimSpace(options.OutputDir) == "" {
 		return nil, errors.New("OpenClaw SSH output directory is required")
 	}
@@ -560,7 +564,8 @@ func New(options Options) (*Manager, error) {
 		options.Logger = logrus.StandardLogger()
 	}
 	return &Manager{
-		outputDir: outputDir, clientPath: clientPath,
+		resolveListen: options.ResolveListen,
+		outputDir:     outputDir, clientPath: clientPath,
 		cleanupTimeout: options.CleanupTimeout, logger: options.Logger,
 		openAudit: openAuditFile, omitRawLog: options.OmitRawLog,
 	}, nil
@@ -574,11 +579,15 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 	}
 	sandbox, ok := generic.(bridgeSandbox)
 	if !ok {
-		return core.ToolEndpoint{}, errors.New("OpenClaw SSH bridge requires the local Docker sandbox capability")
+		return core.ToolEndpoint{}, errors.New("OpenClaw SSH bridge requires the streaming sandbox capability")
 	}
-	gateway, err := sandbox.NetworkGateway(ctx)
+	listen, err := manager.resolveListen(ctx)
 	if err != nil {
-		return core.ToolEndpoint{}, fmt.Errorf("resolve task network gateway: %w", err)
+		return core.ToolEndpoint{}, fmt.Errorf("resolve bridge listener: %w", err)
+	}
+	bindIP, advertiseIP := net.ParseIP(listen.BindHost), net.ParseIP(listen.AdvertiseHost)
+	if bindIP == nil || bindIP.To4() == nil || advertiseIP == nil || advertiseIP.To4() == nil || advertiseIP.IsUnspecified() || advertiseIP.IsMulticast() {
+		return core.ToolEndpoint{}, errors.New("SSH bridge requires an IPv4 bind host and a unicast, non-wildcard IPv4 advertised host")
 	}
 	session := &bridgeSession{
 		sandbox: sandbox, connections: make(map[net.Conn]struct{}),
@@ -621,12 +630,13 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 	if err := writeExclusivePrivate(session.identitySource, clientPEM); err != nil {
 		return fail(fmt.Errorf("write OpenClaw SSH identity: %w", err))
 	}
-	listener, err := net.Listen("tcp4", net.JoinHostPort(gateway, "0"))
+	listener, err := net.Listen("tcp4", net.JoinHostPort(listen.BindHost, "0"))
 	if err != nil {
-		return fail(fmt.Errorf("listen on task network gateway: %w", err))
+		return fail(fmt.Errorf("listen on configured bridge host: %w", err))
 	}
 	session.listener = listener
-	host, port, err := net.SplitHostPort(listener.Addr().String())
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	host := listen.AdvertiseHost
 	if err != nil {
 		return fail(fmt.Errorf("parse OpenClaw SSH listener address: %w", err))
 	}
@@ -660,10 +670,9 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 	manager.active = session
 	manager.stopErr = nil
 	address := net.JoinHostPort(host, port)
-	network := sandbox.NetworkName()
-	manager.logger.WithContext(ctx).WithFields(logrus.Fields{"address": address, "network": network, "container": sandbox.ContainerName()}).Info("OpenClaw SSH bridge started")
+	manager.logger.WithContext(ctx).WithFields(logrus.Fields{"address": address, "container": sandbox.ContainerName()}).Info("OpenClaw SSH bridge started")
 	return core.ToolEndpoint{
-		Protocol: "ssh", Address: address, Username: lockedUsername, Network: network,
+		Protocol: "ssh", Address: address, Username: lockedUsername,
 		ClientCommand: clientContainerPath, ClientSourceFile: session.clientSource,
 		IdentityFile: identityContainerPath, IdentitySourceFile: session.identitySource,
 		KnownHostsFile: knownHostsContainerPath, KnownHostsSourceFile: session.knownSource,

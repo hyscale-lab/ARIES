@@ -197,6 +197,8 @@ func (f *fakeToolSandbox) stopCount() int {
 type fakeSandbox struct {
 }
 
+func (f *fakeSandbox) NetworkName() string { return "occurrence-network" }
+
 func (f *fakeSandbox) Exec(context.Context, core.Command) (core.CommandResult, error) {
 	return core.CommandResult{}, nil
 }
@@ -382,7 +384,7 @@ func TestRunnerSuccessOrdering(t *testing.T) {
 	rig.harness.mu.Lock()
 	harnessRequests := append([]core.HarnessRequest(nil), rig.harness.requests...)
 	rig.harness.mu.Unlock()
-	if len(harnessRequests) != 1 || harnessRequests[0].RunID != "test-run" || harnessRequests[0].TaskID != "a" || harnessRequests[0].OutputDir != "runs" || harnessRequests[0].Timeout != 37*time.Minute {
+	if len(harnessRequests) != 1 || harnessRequests[0].Network != "occurrence-network" || harnessRequests[0].RunID != "test-run" || harnessRequests[0].TaskID != "a" || harnessRequests[0].OutputDir != "runs" || harnessRequests[0].Timeout != 37*time.Minute {
 		t.Fatalf("harness requests = %#v", harnessRequests)
 	}
 }

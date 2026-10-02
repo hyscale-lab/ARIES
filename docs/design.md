@@ -40,6 +40,45 @@ be external or managed by ARIES for the duration of a run, but it is
 not a fifth Runner role. Recording and command-level scheduling likewise
 surround the four-role task composition rather than expanding it.
 
+## Deployment support
+
+Harnesses and the tool sandbox share `deployment.Deployment`, an infrastructure
+capability beneath the four Runner roles. Its interface and request/result
+types live in `pkg/deployment`. Explicit command switches select separate
+Docker clients for `harness.deployment` and `sandbox.deployment`; both must name
+the same local Unix socket. Each component owns and closes its client. Image
+preparation and resource sampling use that selected daemon too.
+
+`pkg/deployment/docker` owns the Moby SDK calls for runtime creation, validation,
+archive transport, streaming execution, targeted cancellation, logs, and
+positive removal. Harness and sandbox adapters retain their policies and do not
+import provider code. Network operations are outside the common `Deployment`
+interface: command wiring supplies the Docker task-environment constructor as
+`sandbox.Options.NewEnvironment`. Each occurrence gets a fresh owner, including
+duplicate task IDs and retries. It creates and validates the labeled network,
+resolves the bridge addresses, and confirms network absence after sandbox
+container removal.
+
+The task environment supplies `core.BridgeListen` through each bridge's
+`ResolveListen` option. `BindHost` selects the local listener address;
+`AdvertiseHost` selects the harness destination. Docker defaults both to the
+owned task network's gateway. Both adapters currently require IPv4 addresses
+and reject DNS destinations and wildcard advertisement. Each listener uses an
+OS-selected port and advertises the actual port. The bridge retains one
+authenticated grant bound to the exact sandbox. `core.HarnessRequest.Network`
+carries task attachment separately from endpoint identity and credentials;
+changing an endpoint cannot select a different network.
+
+`bridge.mode` is `embedded`: both bridges run inside the runner process.
+`managed` and `external` are rejected. Typed Kubernetes placement settings are
+recognized but fail preflight with the component path before contacting model
+services, preparing images, or allocating resources. Kubernetes and bridge
+process separation are not implemented. The runtime contract still contains
+Docker attachment and image-volume semantics; staging, execution identity, and
+cancellation also need explicit design before another backend can implement it.
+See [deployment configuration](quick-start.md#deployment-configuration) for the
+profile shape and compatibility defaults.
+
 ## Task lifecycle and isolation gates
 
 For every task the Runner performs this order:
@@ -52,7 +91,7 @@ For every task the Runner performs this order:
 6. positively stop the harness;
 7. revoke the bridge and positively confirm access is gone;
 8. evaluate the still-running sandbox;
-9. stop the sandbox and confirm its resources are absent.
+9. stop the sandbox container, then remove its task network, confirming both are absent.
 
 Cleanup follows reverse ownership order and uses bounded cleanup work even when
 the run context has been cancelled. Partial starts still trigger cleanup, and
@@ -130,3 +169,6 @@ flowchart TB
 - [Model runtime platform service](design/runtime.md)
 - [Supported implementations](supported.md)
 - [Quick start](quick-start.md)
+
+The [deployment validation record](design/deployment-validation.md) summarizes
+retained failure coverage, removed redundant tests, and real execution checks.

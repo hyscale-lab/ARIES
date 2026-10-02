@@ -21,9 +21,10 @@ type HarnessInstance struct {
 }
 
 type SandboxInstance struct {
-	Sandbox   runner.ToolSandbox
-	Resources monitor.ResourceSource
-	Close     func() error
+	BridgeListen func(context.Context) (core.BridgeListen, error)
+	Sandbox      runner.ToolSandbox
+	Resources    monitor.ResourceSource
+	Close        func() error
 }
 
 type Wiring struct {
@@ -31,11 +32,11 @@ type Wiring struct {
 	ValidateComponents   func(config.Config) error
 	SetupBenchmark       func(context.Context, config.Config) error
 	LoadPreparationTasks func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error)
-	PullImages           func(context.Context, []string) error
+	PullImages           func(context.Context, config.Config, []string) error
 	NewBenchmark         func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error)
 	NewHarness           func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error)
 	NewSandbox           func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error)
-	NewBridge            func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error)
+	NewBridge            func(config.Config, string, func(context.Context) (core.BridgeListen, error), *logrus.Logger) (runner.ToolBridge, error)
 }
 
 type Dependencies struct {
@@ -269,7 +270,7 @@ func ensurePrepared(ctx context.Context, cfg config.Config, wiring Wiring, apiKe
 	for _, task := range tasks {
 		images = append(images, task.Environment.Image)
 	}
-	return wiring.PullImages(ctx, uniqueStrings(images))
+	return wiring.PullImages(ctx, cfg, uniqueStrings(images))
 }
 
 func validateWiredComponents(cfg config.Config, wiring Wiring) error {
@@ -318,7 +319,7 @@ func buildTaskExperiment(cfg config.Config, model core.ModelConfig, effectiveGPU
 	if err != nil {
 		return nil, errors.Join(err, closeOccurrenceClients(nil, harness.Close))
 	}
-	bridge, err := wiring.NewBridge(cfg, outputRoot, logger)
+	bridge, err := wiring.NewBridge(cfg, outputRoot, sandbox.BridgeListen, logger)
 	if err != nil {
 		return nil, errors.Join(err, sandbox.Resources.Close(), closeOccurrenceClients(sandbox.Close, harness.Close))
 	}

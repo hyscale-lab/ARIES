@@ -18,9 +18,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/containerd/errdefs"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
-	dockersandbox "github.com/hyscale-lab/aries/pkg/sandbox/docker"
+	dockerdeployment "github.com/hyscale-lab/aries/pkg/deployment/docker"
+	tasksandbox "github.com/hyscale-lab/aries/pkg/sandbox"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
@@ -126,8 +131,6 @@ func (*integrationSandbox) Upload(context.Context, string, string) error   { ret
 func (*integrationSandbox) Download(context.Context, string, string) error { return nil }
 func (*integrationSandbox) ContainerID() string                            { return "integration-container" }
 func (*integrationSandbox) ContainerName() string                          { return "integration-container" }
-func (*integrationSandbox) NetworkName() string                            { return "host" }
-func (*integrationSandbox) NetworkGateway(context.Context) (string, error) { return "127.0.0.1", nil }
 func (sandbox *integrationSandbox) Workdir() string                        { return sandbox.workdir }
 func (*integrationSandbox) RunID() string                                  { return "integration-run" }
 func (*integrationSandbox) TaskID() string                                 { return "integration-task" }
@@ -140,14 +143,17 @@ func (sandbox *integrationSandbox) snapshot() []core.Command {
 
 func requireDocker(t *testing.T, image string) {
 	t.Helper()
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("docker is not available")
+	api, err := client.New(client.FromEnv)
+	if err != nil {
+		t.Fatal(err)
 	}
+	defer api.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if output, err := exec.CommandContext(ctx, "docker", "image", "inspect", image).CombinedOutput(); err != nil {
-		t.Skipf("pinned Hermes image is not present locally (%s): %s", image, output)
+	if _, err := api.ImageInspect(ctx, image); err != nil {
+		t.Fatalf("required pinned Hermes image %s: %v", image, err)
 	}
+
 }
 
 // TestUpstreamHermesDrivesTheBridgeWithoutPatches is the load-bearing check for
@@ -169,6 +175,13 @@ func TestUpstreamHermesDrivesTheBridgeWithoutPatches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := manager.Stop(cleanup); err != nil {
+			t.Errorf("bridge cleanup: %v", err)
+		}
+	})
 
 	driverPath := filepath.Join(t.TempDir(), "driver.py")
 	if err := os.WriteFile(driverPath, []byte(driverScript), 0o644); err != nil {
@@ -195,29 +208,61 @@ func TestUpstreamHermesDrivesTheBridgeWithoutPatches(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	arguments := []string{
-		"run", "--rm", "--network", "host",
-		"-v", driverPath + ":/driver.py:ro",
-		"-v", identityPath + ":/run/aries/ssh/id_ed25519:ro",
-		"-v", skillDir + ":/run/aries/hermes/skills/demo:ro",
-		"-e", "HERMES_HOME=/run/aries/hermes",
-		"-e", "TERMINAL_ENV=ssh",
-		"-e", "TERMINAL_SSH_HOST=" + host,
-		"-e", "TERMINAL_SSH_PORT=" + port,
-		"-e", "TERMINAL_SSH_USER=" + endpoint.Username,
-		"-e", "TERMINAL_SSH_KEY=/run/aries/ssh/id_ed25519",
-		"-e", "TERMINAL_CWD=" + sandboxRoot,
-		"-e", "TERMINAL_TIMEOUT=60",
-		"--entrypoint", "/opt/hermes/.venv/bin/python",
-		image, "/driver.py",
+	api, err := client.New(client.FromEnv)
+	if err != nil {
+		t.Fatal(err)
 	}
-	command := exec.CommandContext(ctx, "docker", arguments...)
-	output, runErr := command.CombinedOutput()
-	t.Logf("hermes driver output:\n%s", output)
+	defer api.Close()
+	created, err := api.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config: &container.Config{Image: image, Entrypoint: []string{"/opt/hermes/.venv/bin/python"}, Cmd: []string{"/driver.py"}, Env: []string{
+			"HERMES_HOME=/run/aries/hermes", "TERMINAL_ENV=ssh", "TERMINAL_SSH_HOST=" + host,
+			"TERMINAL_SSH_PORT=" + port, "TERMINAL_SSH_USER=" + endpoint.Username,
+			"TERMINAL_SSH_KEY=/run/aries/ssh/id_ed25519", "TERMINAL_CWD=" + sandboxRoot, "TERMINAL_TIMEOUT=60",
+		}},
+		HostConfig: &container.HostConfig{NetworkMode: "host", Binds: []string{driverPath + ":/driver.py:ro", identityPath + ":/run/aries/ssh/id_ed25519:ro", skillDir + ":/run/aries/hermes/skills/demo:ro"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if _, err := api.ContainerRemove(cleanup, created.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil {
+			t.Errorf("remove driver: %v", err)
+		}
+		if _, err := api.ContainerInspect(cleanup, created.ID, client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
+			t.Errorf("driver absence not confirmed: %v", err)
+		}
+	}()
+	if _, err := api.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	wait := api.ContainerWait(ctx, created.ID, client.ContainerWaitOptions{})
+	var runErr error
+	select {
+	case result := <-wait.Result:
+		if result.StatusCode != 0 {
+			runErr = fmt.Errorf("exit code %d", result.StatusCode)
+		}
+	case runErr = <-wait.Error:
+	case <-ctx.Done():
+		runErr = ctx.Err()
+	}
+	logs, err := api.ContainerLogs(ctx, created.ID, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	_, copyErr := stdcopy.StdCopy(&output, &output, logs)
+	_ = logs.Close()
+	if copyErr != nil {
+		t.Fatal(copyErr)
+	}
+	t.Logf("hermes driver output:\n%s", output.String())
 	if runErr != nil {
 		t.Fatalf("hermes driver failed: %v", runErr)
 	}
-	text := string(output)
+	text := output.String()
 	if !strings.Contains(text, `"env_type": "ssh"`) {
 		t.Fatalf("Hermes did not select its native SSH backend:\n%s", text)
 	}
@@ -306,10 +351,10 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 	outputDir := t.TempDir()
 	logger := logrus.New()
 	logger.SetOutput(io.Discard)
-	if err := dockersandbox.PullImages(ctx, []string{bridgeFixtureImage}); err != nil {
+	if err := dockerdeployment.PullImages(ctx, "", []string{bridgeFixtureImage}); err != nil {
 		t.Fatalf("prepare pinned bridge fixture image: %v", err)
 	}
-	sandboxes, err := dockersandbox.New(dockersandbox.Options{OutputDir: outputDir, Logger: logger})
+	sandboxes, err := tasksandbox.New(tasksandbox.Options{Deployment: integrationDeployment(t), NewEnvironment: integrationDeployment(t).NewTaskEnvironment, OutputDir: outputDir, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +365,7 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sandbox := live.(*dockersandbox.Sandbox)
+	sandbox := live.(*tasksandbox.Sandbox)
 	t.Cleanup(func() {
 		cleanup, done := context.WithTimeout(context.Background(), 20*time.Second)
 		defer done()
@@ -330,10 +375,18 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 	})
 
 	manager := newTestManager(t, outputDir)
+	manager.resolveListen = sandbox.BridgeListen
 	endpoint, err := manager.Start(ctx, sandbox)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := manager.Stop(cleanup); err != nil {
+			t.Errorf("bridge cleanup: %v", err)
+		}
+	})
 	artifactDir := filepath.Join(outputDir, "same-state", "bridge")
 	client, err := ssh.Dial("tcp", endpoint.Address, pinnedClientConfig(t, endpoint, filepath.Join(artifactDir, "known_hosts")))
 	if err != nil {
@@ -486,4 +539,14 @@ func pinnedClientConfig(t *testing.T, endpoint core.ToolEndpoint, knownHostsPath
 	}
 	configuration.HostKeyCallback = callback
 	return configuration
+}
+
+func integrationDeployment(t *testing.T) *dockerdeployment.Manager {
+	t.Helper()
+	deployment, err := dockerdeployment.New(dockerdeployment.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = deployment.Close() })
+	return deployment
 }

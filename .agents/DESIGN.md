@@ -83,6 +83,17 @@ workdir, and keeps gold patch/test data out of `core.Task`. A task is resolved
 only when the pinned parser reports every row-declared `FAIL_TO_PASS` and
 `PASS_TO_PASS` test as passed.
 
+## Common deployment support
+
+The command layer constructs `pkg/deployment/docker` for both harnesses and
+`pkg/sandbox`. Both consume `deployment.Deployment`; it is infrastructure beneath
+the existing four Runner roles. Docker lifecycle, network ownership checks,
+archive transport, streaming exec, targeted cancellation, image preparation,
+and resource sampling live in that one provider package. The neutral sandbox
+retains benchmark policy, default execution identity/workdir, private artifacts,
+and its lifetime through independent evaluation. Harness packages retain agent
+configuration and protocol policy. Neither adapter imports provider code.
+
 ## Repository boundary
 
 - `aries` is the only write and Git-operation boundary.

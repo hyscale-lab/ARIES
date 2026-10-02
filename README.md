@@ -88,8 +88,8 @@ implementations:
 | --- | --- |
 | Agent harness | OpenClaw (text and realtime voice modes); Hermes (text) |
 | Benchmark | Terminal-Bench 2; Deep Research Bench; the 731-task public SWE-bench Pro split |
-| Tool sandbox | Docker, using the Moby Go SDK |
-| Tool bridge | OpenClaw–Docker SSH bridge; Hermes–Docker SSH bridge |
+| Tool sandbox | Shared Docker deployment through the Moby Go SDK |
+| Tool bridge | Embedded OpenClaw SSH bridge; embedded Hermes SSH bridge |
 | Model service | External DeepSeek; external OpenAI-compatible servers such as vLLM; external or ARIES-managed SGLang |
 
 See [Supported implementations](docs/supported.md) for ownership,
@@ -98,6 +98,11 @@ constructors and command switches; it does not discover or register components
 at runtime.
 
 ## Getting started
+
+Harness and sandbox placement use independent `deployment` blocks. Both
+currently require the same local Docker daemon. Kubernetes configuration is a
+recognized placeholder that fails preflight; it does not run tasks. See
+[deployment configuration](docs/quick-start.md#deployment-configuration).
 
 ARIES requires Linux, a local Docker Engine, Go, Git, Make, network access to
 the configured model service, and access to required image registries.

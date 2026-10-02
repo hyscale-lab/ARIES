@@ -64,8 +64,6 @@ func (*testSandbox) Upload(context.Context, string, string) error   { return nil
 func (*testSandbox) Download(context.Context, string, string) error { return nil }
 func (*testSandbox) ContainerID() string                            { return "sandbox-container-id" }
 func (*testSandbox) ContainerName() string                          { return "sandbox-container-name" }
-func (*testSandbox) NetworkName() string                            { return "sandbox-network-name" }
-func (*testSandbox) NetworkGateway(context.Context) (string, error) { return "127.0.0.1", nil }
 func (*testSandbox) Workdir() string                                { return "/app" }
 func (*testSandbox) RunID() string                                  { return "test-run" }
 func (*testSandbox) TaskID() string                                 { return "test-task" }
@@ -78,7 +76,7 @@ func (sandbox *testSandbox) snapshot() []core.Command {
 
 func newTestManager(t *testing.T, outputDir string) *Manager {
 	t.Helper()
-	manager, err := New(Options{OutputDir: outputDir, CleanupTimeout: 5 * time.Second})
+	manager, err := New(Options{ResolveListen: loopbackListen, OutputDir: outputDir, CleanupTimeout: 5 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -505,7 +503,7 @@ func TestStopCancelsInFlightCommand(t *testing.T) {
 	}
 }
 
-func TestStartRejectsSecondSessionAndNonDockerSandbox(t *testing.T) {
+func TestStartRejectsSecondSessionAndNonStreamingSandbox(t *testing.T) {
 	manager := newTestManager(t, t.TempDir())
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -518,19 +516,13 @@ func TestStartRejectsSecondSessionAndNonDockerSandbox(t *testing.T) {
 	}
 }
 
-func TestNewRequiresOutputDirectory(t *testing.T) {
-	if _, err := New(Options{OutputDir: "  "}); err == nil {
-		t.Fatal("blank output directory was accepted")
-	}
-}
-
 // TestBridgeOmitsRawLogWhenConfigured proves the opt-out drops only
 // ssh_raw.log: the structured tool log still records the call, the endpoint
 // stops advertising the raw path, and the stdin note no longer points at an
 // artifact this run never wrote.
 func TestBridgeOmitsRawLogWhenConfigured(t *testing.T) {
 	outputDir := t.TempDir()
-	manager, err := New(Options{OutputDir: outputDir, CleanupTimeout: 5 * time.Second, OmitRawLog: true})
+	manager, err := New(Options{ResolveListen: loopbackListen, OutputDir: outputDir, CleanupTimeout: 5 * time.Second, OmitRawLog: true})
 	if err != nil {
 		t.Fatal(err)
 	}

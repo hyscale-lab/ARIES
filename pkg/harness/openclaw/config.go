@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/hyscale-lab/aries/pkg/core"
@@ -25,7 +26,7 @@ const (
 	stateContainerPath  = "/home/node/.openclaw"
 	workspaceRoot       = "/aries/openclaw"
 	// searxngBaseURL matches the fixed network alias
-	// (pkg/sandbox/docker/docker.go's `networkAlias = "task-sandbox"`) and
+	// (pkg/sandbox/sandbox.go's `networkAlias = "task-sandbox"`) and
 	// port (images/deep-research-bench/Dockerfile) that the DRB task
 	// sandbox's built-in SearXNG instance is always reachable at from the
 	// OpenClaw harness container, which joins the same per-task Docker
@@ -373,12 +374,15 @@ func normalizeV1BaseURL(baseURL string) (string, error) {
 }
 
 func validateEndpoint(endpoint core.ToolEndpoint) error {
-	if endpoint.Protocol != "ssh" || endpoint.Username != "aries" || strings.TrimSpace(endpoint.Network) == "" {
+	if endpoint.Protocol != "ssh" || endpoint.Username != "aries" {
 		return errors.New("OpenClaw requires a task-local SSH endpoint")
 	}
 	host, port, err := net.SplitHostPort(endpoint.Address)
-	if err != nil || net.ParseIP(host) == nil || port == "" {
+	if err != nil || net.ParseIP(host) == nil || net.ParseIP(host).To4() == nil || net.ParseIP(host).IsUnspecified() || net.ParseIP(host).IsMulticast() || port == "" {
 		return errors.New("OpenClaw SSH address must be an IP host and port")
+	}
+	if number, err := strconv.Atoi(port); err != nil || number < 1 || number > 65535 {
+		return errors.New("OpenClaw SSH endpoint port is invalid")
 	}
 	paths := map[string]string{
 		"client command": endpoint.ClientCommand, "client source": endpoint.ClientSourceFile,

@@ -10,29 +10,23 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
-	"github.com/containerd/errdefs"
 	audioinput "github.com/hyscale-lab/aries/pkg/audio"
 	"github.com/hyscale-lab/aries/pkg/containerimage"
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/deployment"
 	"github.com/hyscale-lab/aries/pkg/runner"
-	"github.com/moby/moby/api/pkg/stdcopy"
-	"github.com/moby/moby/api/types/container"
-	"github.com/moby/moby/client"
 	"github.com/sirupsen/logrus"
 )
 
 const (
-	defaultDockerSocket    = "/var/run/docker.sock"
 	defaultCleanupTimeout  = 30 * time.Second
 	defaultStartTimeout    = 45 * time.Second
 	defaultAgentTimeout    = 20 * time.Minute
@@ -41,9 +35,6 @@ const (
 	defaultTerminalTimeout = 180
 	maxDockerOutput        = 16 << 20
 	maxAPIKeyBytes         = 16 << 10
-	gracefulStopSeconds    = 5
-	execTrailerKeep        = 256
-	execStartTimeout       = 30 * time.Second
 
 	// imageDeclaredVolume is the upstream image's own VOLUME. ARIES does not
 	// use it — HERMES_HOME is relocated to a staged private directory — but
@@ -64,16 +55,6 @@ const (
 	ModeVoiceTranscribe = "voice-transcribe"
 )
 
-// execShell reports the child's exit status as a delimited stderr trailer.
-// Docker's exec inspection can race a fast child, so the trailer is the
-// authoritative status rather than a second inspect call.
-const execShell = `token=$1
-shift
-"$@"
-status=$?
-printf '\036ARIES_HERMES_EXIT_%s=%s\037' "$token" "$status" >&2
-exit "$status"`
-
 // idleCommand replaces the upstream entrypoint so ARIES owns when the agent
 // starts. It first aligns the staged runtime with the unprivileged `hermes`
 // UID: the archive already carries that ownership, but the Engine's copy API
@@ -86,10 +67,10 @@ var (
 
 // Options are the host-local inputs to one upstream Hermes container.
 type Options struct {
-	Image        string
-	OutputDir    string
-	DockerSocket string
-	Mode         string
+	Image      string
+	OutputDir  string
+	Deployment deployment.Deployment
+	Mode       string
 	// APIKeyLookup returns the model API key for one environment name. The
 	// harness takes ownership of the returned slice: it clones the bytes it
 	// needs and then clears the returned buffer in place, so a caller must
@@ -142,25 +123,8 @@ type VoiceSTTOptions struct {
 	Timeout  time.Duration
 }
 
-// dockerClient is the small official Engine SDK surface used by the harness.
-// Tests replace it with a typed fake; production uses *client.Client directly.
-type dockerClient interface {
-	ContainerCreate(context.Context, client.ContainerCreateOptions) (client.ContainerCreateResult, error)
-	CopyToContainer(context.Context, string, client.CopyToContainerOptions) (client.CopyToContainerResult, error)
-	ContainerStart(context.Context, string, client.ContainerStartOptions) (client.ContainerStartResult, error)
-	ContainerInspect(context.Context, string, client.ContainerInspectOptions) (client.ContainerInspectResult, error)
-	ContainerTop(context.Context, string, client.ContainerTopOptions) (client.ContainerTopResult, error)
-	ExecCreate(context.Context, string, client.ExecCreateOptions) (client.ExecCreateResult, error)
-	ExecAttach(context.Context, string, client.ExecAttachOptions) (client.ExecAttachResult, error)
-	ExecInspect(context.Context, string, client.ExecInspectOptions) (client.ExecInspectResult, error)
-	ContainerLogs(context.Context, string, client.ContainerLogsOptions) (client.ContainerLogsResult, error)
-	ContainerStop(context.Context, string, client.ContainerStopOptions) (client.ContainerStopResult, error)
-	ContainerKill(context.Context, string, client.ContainerKillOptions) (client.ContainerKillResult, error)
-	ContainerRemove(context.Context, string, client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
-}
-
 type Manager struct {
-	client                 dockerClient
+	deployment             deployment.Deployment
 	image                  string
 	outputDir              string
 	cleanupTimeout         time.Duration
@@ -192,22 +156,23 @@ type Manager struct {
 }
 
 type session struct {
-	runID          string
-	taskID         string
-	attemptID      string
-	containerName  string
-	containerID    string
-	artifactDir    string
-	endpoint       core.ToolEndpoint
-	model          core.ModelConfig
-	agentTimeout   time.Duration
-	apiKey         []byte
-	extractAPIKey  []byte
-	voiceAPIKey    []byte
-	mcpSecrets     [][]byte
-	mcpSecretFiles map[string][]byte
-	runAttempted   bool
-	logPaths       []string
+	deploymentRequest deployment.Request
+	runID             string
+	taskID            string
+	attemptID         string
+	containerName     string
+	containerID       string
+	artifactDir       string
+	endpoint          core.ToolEndpoint
+	model             core.ModelConfig
+	agentTimeout      time.Duration
+	apiKey            []byte
+	extractAPIKey     []byte
+	voiceAPIKey       []byte
+	mcpSecrets        [][]byte
+	mcpSecretFiles    map[string][]byte
+	runAttempted      bool
+	logPaths          []string
 }
 
 type speechSynthesizer interface {
@@ -217,20 +182,18 @@ type speechSynthesizer interface {
 
 var _ runner.AgentHarness = (*Manager)(nil)
 
-// Close releases the manager's Docker SDK transport after lifecycle cleanup.
+// Close releases the deployment transport after lifecycle cleanup.
 func (manager *Manager) Close() error {
 	if manager == nil {
 		return nil
 	}
 	manager.closeOnce.Do(func() {
-		if closer, ok := manager.client.(interface{ Close() error }); ok {
-			manager.closeErr = closer.Close()
-		}
+		manager.closeErr = manager.deployment.Close()
 	})
 	return manager.closeErr
 }
 
-// New constructs a harness without contacting Docker.
+// New constructs a harness without starting its deployment.
 func New(options Options) (*Manager, error) {
 	if err := containerimage.ValidatePinnedTagOnly(options.Image); err != nil {
 		return nil, fmt.Errorf("Hermes image: %w", err)
@@ -245,16 +208,8 @@ func New(options Options) (*Manager, error) {
 	if err := ensurePrivateDirectory(outputDir); err != nil {
 		return nil, fmt.Errorf("prepare Hermes output directory: %w", err)
 	}
-	if options.DockerSocket == "" {
-		options.DockerSocket = defaultDockerSocket
-	}
-	host := options.DockerSocket
-	if !strings.Contains(host, "://") {
-		host = "unix://" + host
-	}
-	api, err := client.New(client.WithHost(host), client.WithUserAgent("aries-hermes/1"))
-	if err != nil {
-		return nil, fmt.Errorf("create Docker client: %w", err)
+	if options.Deployment == nil {
+		return nil, errors.New("Hermes deployment is required")
 	}
 	if options.CleanupTimeout <= 0 {
 		options.CleanupTimeout = defaultCleanupTimeout
@@ -317,7 +272,7 @@ func New(options Options) (*Manager, error) {
 		}
 	}
 	return &Manager{
-		client: api, image: options.Image, outputDir: outputDir,
+		deployment: options.Deployment, image: options.Image, outputDir: outputDir,
 		cleanupTimeout: options.CleanupTimeout, startTimeout: options.StartTimeout,
 		agentTimeout: options.AgentTimeout, maxTurns: options.MaxTurns,
 		terminalTimeout: options.TerminalTimeout, webSearchEnabled: options.WebSearchEnabled, mode: options.Mode, voiceTranscribe: options.VoiceTranscribe,
@@ -341,12 +296,11 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	if err := validateTaskID(request.TaskID); err != nil {
 		return err
 	}
+	if strings.TrimSpace(request.Network) == "" {
+		return errors.New("harness deployment network is required")
+	}
 	if request.Timeout < 0 {
 		return errors.New("Hermes task timeout must not be negative")
-	}
-	resources, err := harnessResources(request)
-	if err != nil {
-		return err
 	}
 	agentTimeout := request.Timeout
 	if agentTimeout == 0 {
@@ -494,11 +448,12 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		}
 		return fmt.Errorf("generate Hermes harness ID: %w", err)
 	}
-	containerConfig := &container.Config{
+	deploymentRequest := deployment.Request{
+		Name: "aries-hermes-" + id, Network: request.Network, CPU: request.CPU, MemoryMB: request.MemoryMB, ImageVolumes: []string{imageDeclaredVolume},
 		Image:      manager.image,
 		Env:        environment,
 		Entrypoint: append([]string(nil), idleEntrypoint...),
-		Cmd:        append([]string(nil), idleCommand...),
+		Args:       append([]string(nil), idleCommand...),
 		Labels: map[string]string{
 			"aries.managed": "true", "aries.kind": "hermes-harness",
 			"aries.component": "harness",
@@ -506,9 +461,9 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 			"aries.attempt": id,
 		},
 	}
-	hostConfig := &container.HostConfig{NetworkMode: container.NetworkMode(request.Endpoint.Network), Resources: resources}
 	active := &session{
-		runID: request.RunID, taskID: request.TaskID, attemptID: id,
+		deploymentRequest: deploymentRequest,
+		runID:             request.RunID, taskID: request.TaskID, attemptID: id,
 		containerName: "aries-hermes-" + id, artifactDir: filepath.Join(manager.outputDir, request.TaskID, "harness"),
 		endpoint: request.Endpoint, model: request.Model,
 		agentTimeout: agentTimeout, apiKey: apiKey, extractAPIKey: extractAPIKey, voiceAPIKey: voiceAPIKey, mcpSecrets: mcpSecrets, mcpSecretFiles: mcpSecretFiles,
@@ -538,25 +493,20 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		return fail(err)
 	}
 	defer clear(archive)
-	created, err := manager.client.ContainerCreate(ctx, client.ContainerCreateOptions{
-		Name: active.containerName, Config: containerConfig, HostConfig: hostConfig,
-	})
+	active.containerID, err = manager.deployment.Create(ctx, deploymentRequest)
 	if err != nil {
-		return fail(fmt.Errorf("create Hermes container: %w", err))
+		return fail(fmt.Errorf("create Hermes runtime: %w", err))
 	}
-	active.containerID = created.ID
 	if strings.TrimSpace(active.containerID) == "" {
-		return fail(errors.New("Docker returned an empty Hermes container ID"))
+		return fail(errors.New("deployment returned an empty Hermes runtime ID"))
 	}
-	if _, err := manager.client.CopyToContainer(ctx, active.containerID, client.CopyToContainerOptions{
-		DestinationPath: "/", Content: bytes.NewReader(archive), CopyUIDGID: true,
-	}); err != nil {
+	if err := manager.deployment.UploadArchive(ctx, active.containerID, "/", bytes.NewReader(archive)); err != nil {
 		return fail(fmt.Errorf("copy private Hermes runtime: %w", err))
 	}
 	if err := manager.validateContainer(ctx, active); err != nil {
 		return fail(err)
 	}
-	if _, err := manager.client.ContainerStart(ctx, active.containerID, client.ContainerStartOptions{}); err != nil {
+	if err := manager.deployment.Start(ctx, active.containerID); err != nil {
 		return fail(fmt.Errorf("start Hermes container: %w", err))
 	}
 	readyCtx, cancel := context.WithTimeout(ctx, manager.startTimeout)
@@ -569,24 +519,6 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	manager.stopErr = nil
 	manager.logger.WithContext(ctx).WithFields(logrus.Fields{"task_id": active.taskID, "container": active.containerName}).Info("Hermes harness started")
 	return nil
-}
-
-func harnessResources(request core.HarnessRequest) (container.Resources, error) {
-	var resources container.Resources
-	if request.CPU != nil {
-		scaled := *request.CPU * 1e9
-		if *request.CPU <= 0 || math.IsNaN(*request.CPU) || math.IsInf(*request.CPU, 0) || scaled >= math.Exp2(63) {
-			return container.Resources{}, errors.New("Hermes CPU must be finite, positive, and convert to NanoCPUs below 2^63")
-		}
-		resources.NanoCPUs = int64(scaled)
-	}
-	if request.MemoryMB != nil {
-		if *request.MemoryMB <= 0 || int64(*request.MemoryMB) > math.MaxInt64>>20 {
-			return container.Resources{}, fmt.Errorf("Hermes memory must be positive and no greater than %d MiB", int64(math.MaxInt64)>>20)
-		}
-		resources.Memory = int64(*request.MemoryMB) << 20
-	}
-	return resources, nil
 }
 
 func (manager *Manager) Run(ctx context.Context, instruction string) (core.HarnessResult, error) {
@@ -742,9 +674,7 @@ func (manager *Manager) stageVoiceWAV(ctx context.Context, active *session, audi
 		return fmt.Errorf("stage Hermes voice audio archive: %w", err)
 	}
 	defer clear(archive)
-	if _, err := manager.client.CopyToContainer(ctx, active.containerID, client.CopyToContainerOptions{
-		DestinationPath: "/", Content: bytes.NewReader(archive), CopyUIDGID: true,
-	}); err != nil {
+	if err := manager.deployment.UploadArchive(ctx, active.containerID, "/", bytes.NewReader(archive)); err != nil {
 		return fmt.Errorf("copy Hermes voice audio: %w", err)
 	}
 	return nil
@@ -933,258 +863,14 @@ type execResult struct {
 }
 
 func (manager *Manager) execAttached(ctx context.Context, containerID string, command []string, workdir string) (execResult, error) {
-	token, err := randomID()
-	if err != nil {
-		return execResult{exitCode: -1}, fmt.Errorf("generate Hermes exec token: %w", err)
-	}
-	wrapped := append([]string{"/bin/sh", "-c", execShell, "aries-hermes-exec", token}, command...)
-	created, err := manager.client.ExecCreate(ctx, containerID, client.ExecCreateOptions{
-		AttachStdout: true, AttachStderr: true, Cmd: wrapped, WorkingDir: workdir,
-	})
-	if err != nil {
-		return execResult{exitCode: -1}, fmt.Errorf("create Hermes exec: %w", err)
-	}
-	attached, err := manager.client.ExecAttach(ctx, created.ID, client.ExecAttachOptions{})
-	if err != nil {
-		return execResult{exitCode: -1}, fmt.Errorf("attach Hermes exec: %w", err)
-	}
-	defer attached.Close()
-	_ = attached.CloseWrite()
-	var stdout, stderr limitedBuffer
-	stdout.limit, stderr.limit = maxDockerOutput, maxDockerOutput
-	trailer := newExecTrailer(&stderr, token)
-	copyDone := make(chan error, 1)
-	go func() {
-		_, err := stdcopy.StdCopy(&stdout, trailer, attached.Reader)
-		copyDone <- err
-	}()
-	inspectDone := make(chan client.ExecInspectResult, 1)
-	inspectErr := make(chan error, 1)
-	inspectCtx, cancelInspect := context.WithCancel(ctx)
-	defer cancelInspect()
-	go func() {
-		inspection, err := manager.waitExec(inspectCtx, containerID, created.ID, execStartTimeout)
-		if err != nil {
-			inspectErr <- err
-			return
-		}
-		inspectDone <- inspection
-	}()
-	var copyErr error
-	streamDone := false
-	finished := false
-	for !finished {
-		select {
-		case <-ctx.Done():
-			attached.Close()
-			if !streamDone {
-				<-copyDone
-			}
-			return execResult{stdout: stdout.Bytes(), stderr: stderr.Bytes(), exitCode: -1}, ctx.Err()
-		case err := <-inspectErr:
-			attached.Close()
-			if !streamDone {
-				<-copyDone
-			}
-			return execResult{stdout: stdout.Bytes(), stderr: stderr.Bytes(), exitCode: -1}, err
-		case <-inspectDone:
-			finished = true
-		case <-trailer.done:
-			finished = true
-		case copyErr = <-copyDone:
-			streamDone = true
-		}
-	}
-	cancelInspect()
-	if !streamDone {
-		// The random trailer is emitted after the child and is the final stderr
-		// record. Drain any buffered frames briefly; Docker 29 may never send EOF
-		// until the hijacked connection is closed by the caller.
-		select {
-		case copyErr = <-copyDone:
-			streamDone = true
-		case <-time.After(200 * time.Millisecond):
-			attached.Close()
-			<-copyDone
-			streamDone = true
-			copyErr = nil
-		}
-	}
-	if copyErr != nil {
-		return execResult{stdout: stdout.Bytes(), stderr: stderr.Bytes(), exitCode: -1}, fmt.Errorf("read Hermes exec: %w", copyErr)
-	}
-	if stdout.exceeded || stderr.exceeded {
-		return execResult{stdout: stdout.Bytes(), stderr: stderr.Bytes(), exitCode: -1}, errors.New("Hermes exec output exceeded its bound")
-	}
-	exitCode, err := trailer.Finish()
-	if err != nil {
-		return execResult{stdout: stdout.Bytes(), stderr: stderr.Bytes(), exitCode: -1}, err
-	}
-	return execResult{stdout: stdout.Bytes(), stderr: stderr.Bytes(), exitCode: exitCode}, nil
+	result, err := manager.deployment.Exec(ctx, containerID, core.Command{Path: command[0], Args: command[1:], Dir: workdir, OutputLimitBytes: maxDockerOutput})
+	return execResult{stdout: []byte(result.Stdout), stderr: []byte(result.Stderr), exitCode: result.ExitCode}, err
 }
 
 func newSpeechClient(options audioinput.SpeechClientOptions) (speechSynthesizer, error) {
 	return audioinput.NewSpeechClient(options)
 }
 
-// waitExec returns once the exec's process has exited. An exec that Docker
-// has not started yet is waited for, up to startTimeout.
-func (manager *Manager) waitExec(ctx context.Context, containerID, execID string, startTimeout time.Duration) (client.ExecInspectResult, error) {
-	// Polling starts tight so short execs (readiness probes, session exports)
-	// stay responsive, then backs off so a multi-minute agent run does not
-	// inspect the daemon thousands of times.
-	const (
-		firstInterval = 20 * time.Millisecond
-		lastInterval  = time.Second
-	)
-	interval := firstInterval
-	timer := time.NewTimer(interval)
-	defer timer.Stop()
-	began := time.Now()
-	for {
-		inspection, err := manager.client.ExecInspect(ctx, execID, client.ExecInspectOptions{})
-		if err != nil {
-			return client.ExecInspectResult{}, fmt.Errorf("inspect Hermes exec: %w", err)
-		}
-		started := execHasStarted(inspection)
-		if !started && time.Since(began) > startTimeout {
-			return client.ExecInspectResult{}, fmt.Errorf("Hermes exec did not start within %s", startTimeout)
-		}
-		if !inspection.Running {
-			if started {
-				return inspection, nil
-			}
-		} else if inspection.PID > 0 {
-			present, err := manager.containerHasPID(ctx, containerID, inspection.PID)
-			if err != nil {
-				return client.ExecInspectResult{}, fmt.Errorf("inspect Hermes exec process: %w", err)
-			}
-			if !present {
-				return inspection, nil
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return client.ExecInspectResult{}, ctx.Err()
-		case <-timer.C:
-		}
-		if interval < lastInterval {
-			interval = min(interval*2, lastInterval)
-		}
-		timer.Reset(interval)
-	}
-}
-
-// execHasStarted reports whether Docker has started the exec's process. Docker
-// answers the attach (HTTP 101) before it marks the exec running, and marks it
-// running before it creates the process, so on a busy host an inspect can
-// report an exec with no PID and no exit code, running or not. An exec keeps
-// its PID after it exits, and one that failed to start has exit code 126, so
-// an exec with neither has not started.
-func execHasStarted(inspection client.ExecInspectResult) bool {
-	return inspection.PID > 0 || inspection.ExitCode != 0
-}
-
-func (manager *Manager) containerHasPID(ctx context.Context, containerID string, pid int) (bool, error) {
-	top, err := manager.client.ContainerTop(ctx, containerID, client.ContainerTopOptions{Arguments: []string{"-eo", "pid"}})
-	if err != nil {
-		return false, err
-	}
-	column := -1
-	for index, title := range top.Titles {
-		if strings.EqualFold(title, "PID") {
-			column = index
-			break
-		}
-	}
-	if column < 0 {
-		return false, errors.New("Docker top response has no PID column")
-	}
-	want := strconv.Itoa(pid)
-	for _, process := range top.Processes {
-		if column < len(process) && process[column] == want {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-type execTrailer struct {
-	destination io.Writer
-	prefix      []byte
-	buffer      bytes.Buffer
-	done        chan struct{}
-	once        sync.Once
-}
-
-func newExecTrailer(destination io.Writer, token string) *execTrailer {
-	return &execTrailer{destination: destination, prefix: []byte("\x1eARIES_HERMES_EXIT_" + token + "="), done: make(chan struct{})}
-}
-
-func (trailer *execTrailer) Write(content []byte) (int, error) {
-	written, _ := trailer.buffer.Write(content)
-	buffered := trailer.buffer.Bytes()
-	if len(buffered) > 0 && buffered[len(buffered)-1] == '\x1f' && bytes.LastIndex(buffered[:len(buffered)-1], trailer.prefix) >= 0 {
-		trailer.once.Do(func() { close(trailer.done) })
-	}
-	if excess := trailer.buffer.Len() - execTrailerKeep; excess > 0 {
-		chunk := trailer.buffer.Next(excess)
-		n, err := trailer.destination.Write(chunk)
-		if err != nil {
-			return 0, err
-		}
-		if n != len(chunk) {
-			return 0, io.ErrShortWrite
-		}
-	}
-	return written, nil
-}
-
-func (trailer *execTrailer) Finish() (int, error) {
-	content := trailer.buffer.Bytes()
-	if len(content) == 0 || content[len(content)-1] != '\x1f' {
-		return -1, errors.New("Hermes exec output is missing its exit trailer")
-	}
-	start := bytes.LastIndex(content[:len(content)-1], trailer.prefix)
-	if start < 0 {
-		return -1, errors.New("Hermes exec output has an invalid exit trailer")
-	}
-	exitCode, err := strconv.Atoi(string(content[start+len(trailer.prefix) : len(content)-1]))
-	if err != nil || exitCode < 0 || exitCode > 255 {
-		return -1, errors.New("Hermes exec output has an invalid exit code")
-	}
-	if _, err := trailer.destination.Write(content[:start]); err != nil {
-		return -1, fmt.Errorf("write Hermes exec stderr: %w", err)
-	}
-	return exitCode, nil
-}
-
-type limitedBuffer struct {
-	bytes.Buffer
-	limit    int
-	exceeded bool
-}
-
-func (buffer *limitedBuffer) Write(content []byte) (int, error) {
-	consumed := len(content)
-	remaining := buffer.limit - buffer.Len()
-	if len(content) > remaining {
-		content = content[:max(0, remaining)]
-		buffer.exceeded = true
-	}
-	_, err := buffer.Buffer.Write(content)
-	return consumed, err
-}
-
-// waitReady confirms the container is running and the staged runtime is intact
-// before any task instruction is accepted. Hermes exposes no readiness service,
-// so the positive signal is the CLI answering from the staged configuration.
-//
-// The probe deliberately runs `hermes --version` rather than only stat-ing the
-// staged files. Those checks run as root and pass regardless of ownership,
-// while the real agent runs through the PATH shim as an unprivileged user; only
-// invoking the CLI proves the staged runtime is readable by the identity that
-// will actually use it.
 func (manager *Manager) waitReady(ctx context.Context, active *session) error {
 	probe := `test -x ` + agentWrapperPath + ` && test -r ` + configContainerPath + ` && test -r ` + modelKeyPath +
 		` && test -r ` + identityContainerFS + ` && command -v ssh >/dev/null && hermes --version >/dev/null 2>&1`
@@ -1197,11 +883,11 @@ func (manager *Manager) waitReady(ctx context.Context, active *session) error {
 		if err == nil && result.exitCode == 0 {
 			return nil
 		}
-		inspection, inspectErr := manager.client.ContainerInspect(ctx, active.containerID, client.ContainerInspectOptions{})
+		running, inspectErr := manager.deployment.Running(ctx, active.containerID)
 		if inspectErr != nil {
 			return fmt.Errorf("inspect Hermes readiness: %w", inspectErr)
 		}
-		if inspection.Container.State == nil || !inspection.Container.State.Running {
+		if !running {
 			return errors.New("Hermes container exited before readiness")
 		}
 		select {
@@ -1213,50 +899,8 @@ func (manager *Manager) waitReady(ctx context.Context, active *session) error {
 }
 
 func (manager *Manager) validateContainer(ctx context.Context, active *session) error {
-	inspection, err := manager.client.ContainerInspect(ctx, active.containerID, client.ContainerInspectOptions{})
-	if err != nil {
-		return fmt.Errorf("inspect Hermes container: %w", err)
-	}
-	containerInfo := inspection.Container
-	if containerInfo.ID != active.containerID || containerInfo.Config == nil || containerInfo.HostConfig == nil {
-		return errors.New("Hermes container inspection is incomplete")
-	}
-	configuration := containerInfo.Config
-	if configuration.Image != manager.image || !slices.Equal(configuration.Cmd, idleCommand) || !slices.Equal(configuration.Entrypoint, idleEntrypoint) {
-		return errors.New("Hermes image or idle command differs from the pinned direct configuration")
-	}
-	if configuration.Labels["aries.managed"] != "true" || configuration.Labels["aries.kind"] != "hermes-harness" || configuration.Labels["aries.component"] != "harness" ||
-		configuration.Labels["aries.run"] != active.runID || configuration.Labels["aries.task"] != active.taskID || configuration.Labels["aries.attempt"] != active.attemptID {
-		return errors.New("Hermes container labels do not match the task")
-	}
 	secrets := append([][]byte{active.apiKey, active.extractAPIKey, active.voiceAPIKey}, active.mcpSecrets...)
-	for _, value := range append(append([]string(nil), configuration.Env...), configuration.Cmd...) {
-		if containsSecret(value, secrets...) {
-			return errors.New("Hermes secret entered Docker configuration")
-		}
-	}
-	for _, value := range configuration.Labels {
-		if containsSecret(value, secrets...) {
-			return errors.New("Hermes secret entered Docker labels")
-		}
-	}
-	if string(containerInfo.HostConfig.NetworkMode) != active.endpoint.Network {
-		return errors.New("Hermes container must use only the task network")
-	}
-	// The upstream image declares VOLUME /opt/data, so Docker always creates
-	// one anonymous local volume there. ARIES relocates HERMES_HOME away from
-	// it and removes it with the container, but the mount itself is
-	// unavoidable, so allow exactly that and nothing else — in particular no
-	// bind mount, which is how host state would reach the harness.
-	for _, mount := range containerInfo.Mounts {
-		if mount.Type != "volume" || mount.Destination != imageDeclaredVolume || mount.Name == "" {
-			return errors.New("Hermes container must not carry mounts beyond the image-declared volume")
-		}
-	}
-	if len(containerInfo.HostConfig.Binds) != 0 || len(containerInfo.HostConfig.Mounts) != 0 {
-		return errors.New("Hermes container must not request binds or mounts")
-	}
-	return nil
+	return manager.deployment.Validate(ctx, active.containerID, active.deploymentRequest, secrets)
 }
 
 func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([]byte, error) {
@@ -1290,15 +934,6 @@ func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([
 		}
 	}
 	return stageArchive(files)
-}
-
-func containsSecret(value string, secrets ...[]byte) bool {
-	for _, secret := range secrets {
-		if len(secret) != 0 && strings.Contains(value, string(secret)) {
-			return true
-		}
-	}
-	return false
 }
 
 type stagedFile struct {
@@ -1376,51 +1011,13 @@ func (manager *Manager) stopSession(ctx context.Context, active *session) error 
 	if active == nil {
 		return nil
 	}
-	if active.containerID == "" {
-		clearSessionSecrets(active)
-		return nil
-	}
-	var errs []error
-	inspection, inspectErr := manager.client.ContainerInspect(ctx, active.containerID, client.ContainerInspectOptions{})
-	if errdefs.IsNotFound(inspectErr) {
+	if active.containerID != "" {
+		if err := manager.deployment.Stop(ctx, active.containerID); err != nil {
+			return err
+		}
 		active.containerID = ""
-		clearSessionSecrets(active)
-		return nil
 	}
-	if inspectErr != nil {
-		errs = append(errs, fmt.Errorf("inspect Hermes before stop: %w", inspectErr))
-	}
-	shouldStop := inspectErr != nil || inspection.Container.State == nil || inspection.Container.State.Running
-	if shouldStop {
-		timeout := gracefulStopSeconds
-		if _, err := manager.client.ContainerStop(ctx, active.containerID, client.ContainerStopOptions{Timeout: &timeout}); err != nil && !errdefs.IsNotFound(err) {
-			errs = append(errs, fmt.Errorf("stop Hermes container: %w", err))
-		}
-		inspection, inspectErr = manager.client.ContainerInspect(ctx, active.containerID, client.ContainerInspectOptions{})
-		if inspectErr != nil && !errdefs.IsNotFound(inspectErr) {
-			errs = append(errs, fmt.Errorf("inspect Hermes after stop: %w", inspectErr))
-		}
-		if !errdefs.IsNotFound(inspectErr) && (inspectErr != nil || inspection.Container.State == nil || inspection.Container.State.Running) {
-			if _, err := manager.client.ContainerKill(ctx, active.containerID, client.ContainerKillOptions{Signal: "KILL"}); err != nil && !errdefs.IsNotFound(err) {
-				errs = append(errs, fmt.Errorf("kill Hermes container: %w", err))
-			}
-		}
-	}
-	if _, err := manager.client.ContainerRemove(ctx, active.containerID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil && !errdefs.IsNotFound(err) {
-		errs = append(errs, fmt.Errorf("remove Hermes container: %w", err))
-	}
-	if _, err := manager.client.ContainerInspect(ctx, active.containerID, client.ContainerInspectOptions{}); err == nil {
-		errs = append(errs, errors.New("Hermes container remains after removal"))
-		return errors.Join(errs...)
-	} else if !errdefs.IsNotFound(err) {
-		errs = append(errs, fmt.Errorf("verify Hermes removal: %w", err))
-		return errors.Join(errs...)
-	}
-	active.containerID = ""
 	clearSessionSecrets(active)
-	if warning := errors.Join(errs...); warning != nil {
-		manager.logger.WithContext(ctx).WithField("task_id", active.taskID).WithError(warning).Warn("Hermes cleanup recovered after lifecycle errors")
-	}
 	return nil
 }
 
@@ -1481,27 +1078,15 @@ func (manager *Manager) collectArtifacts(ctx context.Context, active *session, s
 		}
 		active.logPaths = appendUnique(active.logPaths, path)
 	}
-	if logs, err := manager.client.ContainerLogs(ctx, active.containerID, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true}); err != nil {
+	if logs, err := manager.deployment.Logs(ctx, active.containerID, maxDockerOutput); err != nil {
 		errs = append(errs, fmt.Errorf("collect Hermes container logs: %w", err))
 	} else {
-		var out, errBuffer limitedBuffer
-		out.limit, errBuffer.limit = maxDockerOutput, maxDockerOutput
-		_, copyErr := stdcopy.StdCopy(&out, &errBuffer, logs)
-		closeErr := logs.Close()
-		var boundErr error
-		if out.exceeded || errBuffer.exceeded {
-			boundErr = errors.New("Hermes container logs exceeded their bound")
-		}
-		if copyErr != nil || closeErr != nil || boundErr != nil {
-			errs = append(errs, errors.Join(copyErr, closeErr, boundErr))
+		content := allowContainerLogs(logs, append([][]byte{active.apiKey, active.extractAPIKey, active.voiceAPIKey}, active.mcpSecrets...)...)
+		path := filepath.Join(active.artifactDir, "container.log")
+		if err := writeArtifact(path, content); err != nil {
+			errs = append(errs, err)
 		} else {
-			content := allowContainerLogs(append(out.Bytes(), errBuffer.Bytes()...), active.apiKey, active.extractAPIKey, active.voiceAPIKey)
-			path := filepath.Join(active.artifactDir, "container.log")
-			if err := writeArtifact(path, content); err != nil {
-				errs = append(errs, err)
-			} else {
-				active.logPaths = appendUnique(active.logPaths, path)
-			}
+			active.logPaths = appendUnique(active.logPaths, path)
 		}
 	}
 	sessionPaths, sessionErr := manager.collectSessions(ctx, active)

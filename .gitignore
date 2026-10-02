@@ -33,19 +33,15 @@ go.work.sum
 runs/
 .aries/
 DEEPSEEK_API.key
+DEEPSEEK.key
 /bin/
 
 # Editor/IDE
 # .idea/
 # .vscode/
 .codex/*
-!.codex/agents/
-!.codex/agents/**
-!.codex/skills/
-!.codex/skills/**
-.codex/skills/.system/**
-!.codex/prompts/
-!.codex/prompts/**
+.agents/skills
+.agents/scratch
 
 # Deep Research Sandbox Dockerfile
 images/**

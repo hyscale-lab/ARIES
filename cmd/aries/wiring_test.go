@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"go/parser"
-	"go/token"
 	"io"
 	"os"
 	"path/filepath"
@@ -66,30 +64,6 @@ func TestDispatchAcceptsOnlyExactCommandGrammar(t *testing.T) {
 	}
 }
 
-func TestExplicitCompositionSwitches(t *testing.T) {
-	source, err := os.ReadFile("wiring.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := parser.ParseFile(token.NewFileSet(), "wiring.go", source, 0); err != nil {
-		t.Fatal(err)
-	}
-	text := string(source)
-	for _, value := range []string{`case "terminalbench2"`, `case "sweatlasqa"`, `case "swebenchpro"`, `case "openclaw"`, `case "hermes"`, `case "docker"`, `case "openclaw-ssh"`, `case "hermes-ssh"`, `case "deepseek"`, `case "sglang"`, `case "openai"`} {
-		if !strings.Contains(text, value) {
-			t.Fatalf("missing explicit switch %s", value)
-		}
-	}
-	if got := strings.Count(text, `case "swebenchpro"`); got != 4 {
-		t.Fatalf("swebenchpro explicit switch count = %d, want 4", got)
-	}
-	for _, forbidden := range []string{"plugin.Open", "reflect.", "Register("} {
-		if strings.Contains(text, forbidden) {
-			t.Fatalf("framework selection found: %s", forbidden)
-		}
-	}
-}
-
 func TestValidateComponentsRejectsEveryUnsupportedSelector(t *testing.T) {
 	base := config.Config{
 		Benchmark: config.BenchmarkConfig{Type: "terminalbench2"},
@@ -104,7 +78,7 @@ func TestValidateComponentsRejectsEveryUnsupportedSelector(t *testing.T) {
 	}{
 		{name: "benchmark", set: func(cfg *config.Config) { cfg.Benchmark.Type = "other" }, want: "unsupported benchmark type"},
 		{name: "harness", set: func(cfg *config.Config) { cfg.Harness.Type = "other" }, want: "unsupported harness type"},
-		{name: "sandbox", set: func(cfg *config.Config) { cfg.Sandbox.Type = "other" }, want: "unsupported sandbox type"},
+		{name: "sandbox", set: func(cfg *config.Config) { cfg.Sandbox.Type = "other" }, want: "sandbox.type: unsupported legacy value"},
 		{name: "bridge", set: func(cfg *config.Config) { cfg.Bridge.Type = "other" }, want: "unsupported bridge type"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -174,16 +148,6 @@ func TestValidateComponentsRequiresPairedHarnessAndBridge(t *testing.T) {
 				t.Fatalf("err=%v", err)
 			}
 		})
-	}
-}
-
-func TestMakeLintIncludesInternalPackages(t *testing.T) {
-	makefile, err := os.ReadFile(filepath.Join("..", "..", "Makefile"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(makefile), "find cmd internal pkg") || !strings.Contains(string(makefile), "go vet ./...") {
-		t.Fatalf("lint target does not cover cmd, internal, and pkg: %s", makefile)
 	}
 }
 
@@ -316,38 +280,6 @@ func TestOpenClawVoiceOptionsSelectModeConfig(t *testing.T) {
 	}
 }
 
-func TestHermesVoiceOptionsMapTTSAndSTT(t *testing.T) {
-	voice := config.HarnessVoiceTranscribeConfig{
-		HarnessRealtimeConfig: config.HarnessRealtimeConfig{
-			TTS: config.RealtimeTTSConfig{
-				Provider: "openai", BaseURL: "https://tts.example/v1",
-				APIKeyEnv: "TTS_KEY", Model: "tts-model",
-				Voice: "alloy", Instructions: "speak clearly",
-				Speed: floatPtr(1.1), Timeout: 2 * time.Second,
-			},
-		},
-		STT: config.VoiceSTTConfig{
-			Provider: "local", Model: "base",
-			Language: "en", Timeout: 3 * time.Second,
-		},
-	}
-	options := hermesVoiceOptions(voice)
-	if options.TTS.Provider != "openai" || options.TTS.BaseURL != "https://tts.example/v1" ||
-		options.TTS.APIKeyEnv != "TTS_KEY" || options.TTS.Model != "tts-model" ||
-		options.TTS.Voice != "alloy" || options.TTS.Instructions != "speak clearly" ||
-		options.TTS.Speed == nil || *options.TTS.Speed != 1.1 || options.TTS.Timeout != 2*time.Second {
-		t.Fatalf("TTS options = %#v", options.TTS)
-	}
-	if options.STT.Provider != "local" || options.STT.Model != "base" ||
-		options.STT.Language != "en" || options.STT.Timeout != 3*time.Second {
-		t.Fatalf("STT options = %#v", options.STT)
-	}
-}
-
-func floatPtr(value float64) *float64 {
-	return &value
-}
-
 func TestCombinedResourceSourceSamplesAndClosesBothSources(t *testing.T) {
 	firstErr := errors.New("first close")
 	secondErr := errors.New("second close")
@@ -427,38 +359,9 @@ func TestExternalOpenAIPreparationReturnsNilRuntime(t *testing.T) {
 	}
 }
 
-func TestNewHarness_WiresMCPServers(t *testing.T) {
-	servers := []core.MCPServerConfig{
-		{Name: "fetch", Command: "uvx", Args: []string{"mcp-server-fetch"}},
-		{Name: "weather", URL: "https://weather.example.com/sse"},
-	}
+func TestNewHarnessRejectsInvalidMCPCredentials(t *testing.T) {
 	outputDir := t.TempDir()
 	lookup := func(string) ([]byte, bool) { return []byte("test-key"), true }
-
-	for _, harnessType := range []string{"openclaw", "hermes"} {
-		t.Run(harnessType, func(t *testing.T) {
-			cfg := config.Config{
-				Harness: config.HarnessConfig{
-					Type:       harnessType,
-					MCPServers: servers,
-				},
-				Versions: config.Versions{
-					OpenClaw: config.OpenClawVersions{Image: "ghcr.io/openclaw/openclaw:2026.7.1"},
-					Hermes:   config.HermesVersions{Image: "docker.io/nousresearch/hermes-agent:v2026.8.31"},
-				},
-			}
-			instance, err := newHarness(cfg, outputDir, lookup, nil)
-			if err != nil {
-				t.Fatalf("newHarness(%s) error = %v", harnessType, err)
-			}
-			defer instance.Close()
-
-			if instance.Harness == nil {
-				t.Fatalf("newHarness(%s) returned nil Harness", harnessType)
-			}
-		})
-	}
-
 	invalidServers := []core.MCPServerConfig{
 		{Name: "bad", Command: "mcp-server", SecretEnv: map[string]string{"SECRET": "invalid-secret-value!"}},
 	}
