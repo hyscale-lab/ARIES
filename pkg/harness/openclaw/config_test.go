@@ -3,6 +3,7 @@ package openclaw
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -470,5 +471,28 @@ func TestRenderConfig_MCPServersBesideWebSearch(t *testing.T) {
 	}
 	if strings.Contains(string(without), `"mcp"`) {
 		t.Fatal("an mcp block was rendered with no servers")
+	}
+}
+
+// A task without sandbox tools also loses exec and process; the file tools
+// are denied either way, and the servers stay reachable through bundle-mcp.
+func TestRenderConfig_NoSandboxToolsDeniesExec(t *testing.T) {
+	servers := []core.MCPServerConfig{{Name: "toolathlon", URL: "http://task-sandbox:10086/sse", Transport: "sse"}}
+	for _, withheld := range []bool{false, true} {
+		rendered, err := renderConfig(testModel(), testEndpoint(), ModeAgent, false, false, false, 0, MCPOptions{Servers: servers, NoSandboxTools: withheld})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var configuration openClawConfig
+		if err := json.Unmarshal(rendered, &configuration); err != nil {
+			t.Fatal(err)
+		}
+		deny := configuration.Tools.Deny
+		if slices.Contains(deny, "exec") != withheld || slices.Contains(deny, "process") != withheld || !slices.Contains(deny, "read") {
+			t.Fatalf("withheld=%v: tools.deny = %v", withheld, deny)
+		}
+		if got := configuration.Tools.Sandbox.Tools.AlsoAllow; !slices.Contains(got, "bundle-mcp") {
+			t.Fatalf("withheld=%v: the servers' tools are no longer allowed: %v", withheld, got)
+		}
 	}
 }

@@ -358,7 +358,8 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		}
 	}
 	configuration, err := renderConfig(request.Model, request.Endpoint, manager.mode, manager.webSearchEnabled, extractEnabled, manager.subagentsEnabled, manager.maxConcurrentSubagents, MCPOptions{
-		Servers: manager.mcpServers,
+		Servers:        manager.mcpServers,
+		NoSandboxTools: request.NoSandboxTools,
 	})
 	if err != nil {
 		clear(extractAPIKey)

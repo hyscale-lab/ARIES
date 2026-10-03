@@ -750,6 +750,42 @@ func TestFillTokenFileWritesJSONLiterals(t *testing.T) {
 	}
 }
 
+// A task keeps the harness's sandbox tools only when its own list gives a way
+// to run code or commands, python_execute or the terminal server, as
+// Toolathlon's own loop gives exactly the listed tools.
+func TestTasksWithholdTheHarnessSandboxToolsUnlessListed(t *testing.T) {
+	root := writeFixture(t)
+	options := baseOptions(t, root)
+	options.TaskIDs = []string{"canvas-list-test", "excel-only", "web-search-task", "object-form"}
+	options.HarnessWebSearch = true
+	benchmark, err := New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := benchmark.Tasks(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{"canvas-list-test": true, "excel-only": false, "web-search-task": false, "object-form": true}
+	for _, task := range tasks {
+		if task.NoSandboxTools != want[task.ID] {
+			t.Errorf("%s: NoSandboxTools = %v, want %v", task.ID, task.NoSandboxTools, want[task.ID])
+		}
+	}
+	for _, testCase := range []struct {
+		servers, local []string
+		granted        bool
+	}{
+		{[]string{"terminal"}, nil, true},
+		{nil, []string{"python_execute"}, true},
+		{[]string{"filesystem", "canvas"}, []string{"claim_done", "sleep"}, false},
+	} {
+		if got := sandboxToolsGranted(testCase.servers, testCase.local); got != testCase.granted {
+			t.Errorf("sandboxToolsGranted(%v, %v) = %v", testCase.servers, testCase.local, got)
+		}
+	}
+}
+
 func TestParseTokenAssignmentsReadsTheExampleShape(t *testing.T) {
 	values := parseTokenAssignments([]byte(`from addict import Dict
 if os.path.exists("./configs/google_credentials.json"):

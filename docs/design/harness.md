@@ -18,6 +18,15 @@ the harness only after the sandbox and bridge are ready. On success, failure, or
 cancellation, it stops the harness and confirms absence. Evaluation remains a
 separate Benchmark outcome rather than an interpretation of harness success.
 
+A task may withhold the harness's own tools that act in the sandbox: when
+`core.Task.NoSandboxTools` is set, the runner passes it in the
+`HarnessRequest`, and the harness renders none of its shell, code-execution or
+file tools (Hermes leaves `terminal`, `file` and `code_execution` out of
+`platform_toolsets` and disables them; OpenClaw also denies `exec` and
+`process`). The agent then acts through its MCP servers and the harness's web
+tools only. A benchmark whose tasks list their own tools sets it to keep to
+that list (Toolathlon); every other task keeps all of the harness's tools.
+
 OpenClaw container lifecycle, gateway protocol, and voice-session semantics are
 separate concrete responsibilities. `openclaw.Manager` owns the container and
 publishes one ephemeral host-loopback port. `openclaw/gateway.Client` owns one
