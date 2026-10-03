@@ -151,7 +151,7 @@ Two smaller differences are deliberate:
   server is confined to the agent workspace: the adapter sets the task's
   `NoSandboxTools`, and Hermes and OpenClaw then render none of those tools.
   Without this, agents in such tasks used the harness's terminal to read
-  the token file and call the applications' APIs directly instead of the
+  the token file and call the applications directly instead of using the
   MCP tools.
 
 ## Running the example
