@@ -160,7 +160,7 @@ func TestContainerEnvironmentExportsRunAndTaskIDs(t *testing.T) {
 // The optional blocks and the identifying environment reach the container
 // through the real Start path.
 func TestStartRendersContextBlocksAndExportsIDs(t *testing.T) {
-	fake := newFakeDocker()
+	fake := newFakeDeployment()
 	manager := newTestManager(t, fake, []byte("EMPTY-but-long-enough"))
 	manager.compaction = &CompactionSettings{ThresholdTokens: 65536}
 	manager.extraBody = []byte(`{"user": "${ARIES_RUN_ID}-${ARIES_TASK_ID}"}`)
@@ -182,10 +182,10 @@ func TestStartRendersContextBlocksAndExportsIDs(t *testing.T) {
 			t.Fatalf("retained config lacks %q:\n%s", line, text)
 		}
 	}
-	joined := strings.Join(fake.created.Config.Env, "\n")
+	joined := strings.Join(fake.created.Env, "\n")
 	for _, want := range []string{"ARIES_RUN_ID=run-7", "ARIES_TASK_ID=fix-git"} {
 		if !strings.Contains(joined, want) {
-			t.Fatalf("container environment lacks %q: %v", want, fake.created.Config.Env)
+			t.Fatalf("container environment lacks %q: %v", want, fake.created.Env)
 		}
 	}
 }

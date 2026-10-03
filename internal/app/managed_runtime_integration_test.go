@@ -73,7 +73,7 @@ func TestConcreteManagedRuntimeWrapsPreflightAndTaskLifecycle(t *testing.T) {
 		LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
 			return nil, nil
 		},
-		PullImages: func(context.Context, []string) error { return nil },
+		PullImages: func(context.Context, config.Config, []string) error { return nil },
 		NewBenchmark: func(_ config.Config, _, _, occurrenceID string, _ func(string) ([]byte, bool)) (runner.Benchmark, error) {
 			record("compose")
 			return &managedIntegrationBenchmark{id: occurrenceID}, nil
@@ -84,7 +84,7 @@ func TestConcreteManagedRuntimeWrapsPreflightAndTaskLifecycle(t *testing.T) {
 		NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
 			return SandboxInstance{Sandbox: &managedIntegrationSandbox{}, Resources: &stubResources{}, Close: func() error { return nil }}, nil
 		},
-		NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
+		NewBridge: func(config.Config, string, func(context.Context) (core.BridgeListen, error), *logrus.Logger) (runner.ToolBridge, error) {
 			return &stubBridge{}, nil
 		},
 	}
@@ -163,7 +163,7 @@ func TestConcreteManagedRuntimeNaturalExitLogsStoppedAfterUnexpectedExit(t *test
 		LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
 			return nil, nil
 		},
-		PullImages: func(context.Context, []string) error { return nil },
+		PullImages: func(context.Context, config.Config, []string) error { return nil },
 		NewBenchmark: func(_ config.Config, _, _, occurrenceID string, _ func(string) ([]byte, bool)) (runner.Benchmark, error) {
 			if err := os.WriteFile(exitNow, []byte("exit"), 0o600); err != nil {
 				return nil, err
@@ -181,7 +181,7 @@ func TestConcreteManagedRuntimeNaturalExitLogsStoppedAfterUnexpectedExit(t *test
 		NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
 			return SandboxInstance{Sandbox: &managedIntegrationSandbox{}, Resources: &stubResources{}, Close: func() error { return nil }}, nil
 		},
-		NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
+		NewBridge: func(config.Config, string, func(context.Context) (core.BridgeListen, error), *logrus.Logger) (runner.ToolBridge, error) {
 			return &stubBridge{}, nil
 		},
 	}

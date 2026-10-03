@@ -5,13 +5,16 @@ package hermes
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/containerd/errdefs"
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/deployment"
+	dockerdeployment "github.com/hyscale-lab/aries/pkg/deployment/docker"
+	"github.com/moby/moby/client"
 	"github.com/sirupsen/logrus"
 )
 
@@ -19,21 +22,24 @@ const integrationImage = "docker.io/nousresearch/hermes-agent:v2026.5.29.2"
 
 func requireDockerImage(t *testing.T) {
 	t.Helper()
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("docker is not available")
+	api, err := client.New(client.FromEnv)
+	if err != nil {
+		t.Fatal(err)
 	}
+	defer api.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if output, err := exec.CommandContext(ctx, "docker", "image", "inspect", integrationImage).CombinedOutput(); err != nil {
-		t.Skipf("pinned Hermes image is not present locally (%s): %s", integrationImage, output)
+	if _, err := api.ImageInspect(ctx, integrationImage); err != nil {
+		t.Fatalf("required pinned Hermes image %s: %v", integrationImage, err)
 	}
+
 }
 
 func integrationManager(t *testing.T, outputDir string) *Manager {
 	t.Helper()
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
-	manager, err := New(Options{
+	manager, err := New(Options{Deployment: integrationDeployment(t),
 		Image: integrationImage, OutputDir: outputDir, Logger: logger,
 		StartTimeout: 90 * time.Second, AgentTimeout: 90 * time.Second, CleanupTimeout: 60 * time.Second,
 		APIKeyLookup: func(string) ([]byte, bool) { return []byte("sk-integration-not-a-real-key"), true },
@@ -41,7 +47,14 @@ func integrationManager(t *testing.T, outputDir string) *Manager {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = manager.Close() })
+	t.Cleanup(func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if err := manager.Stop(cleanup); err != nil {
+			t.Errorf("harness cleanup: %v", err)
+		}
+		_ = manager.Close()
+	})
 	return manager
 }
 
@@ -62,10 +75,10 @@ func TestHarnessStartsRealHermesContainerAndStopsPositively(t *testing.T) {
 	if err := os.Chmod(identityPath, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	request := core.HarnessRequest{
+	request := core.HarnessRequest{Network: "bridge",
 		RunID: "integration-run", TaskID: "integration-task",
 		Endpoint: core.ToolEndpoint{
-			Protocol: "ssh", Address: "127.0.0.1:2222", Username: "aries", Network: "bridge",
+			Protocol: "ssh", Address: "127.0.0.1:2222", Username: "aries",
 			IdentityFile: identityContainerFS, IdentitySourceFile: identityPath, Workdir: "/app",
 		},
 		Model: core.ModelConfig{Provider: "deepseek", BaseURL: "https://api.deepseek.com", Model: "deepseek-v4-flash", APIKeyEnv: "DEEPSEEK_API_KEY"},
@@ -87,8 +100,9 @@ func TestHarnessStartsRealHermesContainerAndStopsPositively(t *testing.T) {
 		{modelKeyPath, "sk-integration-not-a-real-key"},
 		{agentWrapperPath, "exec hermes --ignore-rules --yolo"},
 	} {
-		output, err := exec.CommandContext(ctx, "docker", "exec", containerName, "cat", check.path).CombinedOutput()
-		if err != nil {
+		result, err := manager.deployment.Exec(ctx, manager.active.containerID, core.Command{Path: "cat", Args: []string{check.path}})
+		output := result.Stdout + result.Stderr
+		if err != nil || result.ExitCode != 0 {
 			t.Fatalf("read %s: %v (%s)", check.path, err, output)
 		}
 		if !strings.Contains(string(output), check.want) {
@@ -96,8 +110,9 @@ func TestHarnessStartsRealHermesContainerAndStopsPositively(t *testing.T) {
 		}
 	}
 	// Hermes itself must accept the staged configuration.
-	output, err := exec.CommandContext(ctx, "docker", "exec", containerName, "hermes", "--version").CombinedOutput()
-	if err != nil {
+	result, err := manager.deployment.Exec(ctx, manager.active.containerID, core.Command{Path: "hermes", Args: []string{"--version"}})
+	output := result.Stdout + result.Stderr
+	if err != nil || result.ExitCode != 0 {
 		t.Fatalf("hermes --version failed: %v (%s)", err, output)
 	}
 	if !strings.Contains(string(output), "Hermes Agent") {
@@ -108,8 +123,13 @@ func TestHarnessStartsRealHermesContainerAndStopsPositively(t *testing.T) {
 		t.Fatalf("stop: %v", err)
 	}
 	// Positive absence.
-	if output, err := exec.CommandContext(ctx, "docker", "inspect", containerName).CombinedOutput(); err == nil {
-		t.Fatalf("container %s survived Stop: %s", containerName, output)
+	api, err := client.New(client.FromEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer api.Close()
+	if _, err := api.ContainerInspect(ctx, containerName, client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
+		t.Fatalf("container absence not confirmed: %v", err)
 	}
 	if err := manager.Stop(ctx); err != nil {
 		t.Fatalf("second stop: %v", err)
@@ -122,4 +142,14 @@ func TestHarnessStartsRealHermesContainerAndStopsPositively(t *testing.T) {
 	if strings.Contains(string(retained), "sk-integration-not-a-real-key") {
 		t.Fatalf("credential leaked into the retained config:\n%s", retained)
 	}
+}
+
+func integrationDeployment(t *testing.T) deployment.Deployment {
+	t.Helper()
+	d, err := dockerdeployment.New(dockerdeployment.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	return d
 }

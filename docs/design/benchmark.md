@@ -1,104 +1,63 @@
 # Benchmark
 
-`Benchmark` owns task meaning. It loads task definitions, prepares benchmark
-inputs, sanitizes the live sandbox before agent access, and independently
-evaluates the same sandbox after the harness is stopped and bridge access is
-revoked.
+`Benchmark` owns task meaning: discovery, preparation of agent-visible inputs,
+private verifier material, and independent evaluation of the live task sandbox.
+It does not own the sandbox lifecycle or decide whether isolation is confirmed.
 
-## Boundary and lifecycle
+## Operations and ownership
 
-Verifier tests and solutions remain private to the benchmark. They are not
-placed in the sandbox until positive harness-stop and bridge-revocation gates
-have both succeeded. Benchmark evaluation does not depend on whether the agent
-harness reported success, and its result is recorded separately.
+The [interface](../../pkg/runner/interfaces.go) has three operations:
 
-```mermaid
-flowchart TB
-    P[Private verifier material]
-    S[Prepare live sandbox]
-    A[Run harness with<br/>temporary access]
-    H[Positively stop harness]
-    R[Positively revoke bridge]
-    I[Inject verifier material]
-    E[Benchmark evaluates<br/>the same live sandbox]
-    HO[Harness outcome:<br/>success or failure]
-    EO[Evaluation outcome]
-    O[Run result keeps<br/>outcomes separate]
+| Operation | Meaning |
+| --- | --- |
+| `Tasks(context.Context) ([]core.Task, error)` | Load task instructions, environment requirements, and timeouts. Keep verifier inputs out of returned agent-visible data. |
+| `PrepareSandbox(context.Context, core.Task, Sandbox) error` | Prepare and sanitize the started sandbox before bridge access. Confirm private or stale output paths are absent; fail closed if preparation cannot establish its conditions. |
+| `Evaluate(context.Context, core.Task, Sandbox) (core.Evaluation, error)` | Evaluate that same sandbox after confirmed harness termination and bridge revocation. Preserve benchmark scoring semantics and return infrastructure errors separately from ordinary failed outcomes. |
 
-    S --> A
-    A --> H --> R --> I --> E --> EO --> O
-    P --> I
-    A --> HO --> O
-```
+Concrete implementations own their loaded task metadata, pinned input validation,
+private verifier files, judge credentials, and evaluation artifacts. Runner owns
+ordering and passes the live `Sandbox` capability; the benchmark uses its
+execution and transfer operations rather than constructing a deployment.
 
-The current implementations are Terminal-Bench 2, Deep Research Bench,
-SWE-Atlas QA, and the public SWE-bench Pro split, all from exact pinned
-sources. Terminal-Bench 2's task environment images and workdirs are derived
-from the selected task data; setup verifies the pinned checkout and selected
-task inputs before a run.
+## Lifecycle, cancellation, and failures
 
-Deep Research Bench has no sandbox-resident private verifier tree. Its private
-material is a reference report and RACE-dimension rubric compared by an
-LLM judge entirely host-side; that material is never uploaded into the
-sandbox. `PrepareSandbox` instead confirms the agent's designated report-output
-path starts absent, and `Evaluate` downloads the agent's report from that path
-after both isolation gates before invoking the judge. The agent's research
-work itself still runs entirely inside the sandbox, exactly like Terminal-Bench
-2 — only grading moves host-side.
+[Runner](../../pkg/runner/runner.go) loads tasks, starts the sandbox, prepares it,
+starts bridge and harness, runs the harness, then positively stops the harness
+and revokes the bridge. Only then does it call `Evaluate`; sandbox shutdown
+follows evaluation. A failed preparation stops progression before agent access.
+A failed isolation gate blocks evaluation and verifier exposure.
 
-An optional FACT pass layers citation-trustworthiness checking on top of RACE:
-it extracts claim/citation pairs from the same downloaded report, fetches each
-cited URL host-side through the Jina AI Reader API, and validates the claim
-against the fetched content with its own judge model. FACT is strictly
-additive — configuring it (or not) never changes the RACE-derived score,
-reward, or status.
+Evaluation is independent of harness success, with separate result fields.
+Runner passes the original run context to evaluation, so cancellation can still
+prevent grading; confirmed isolation is necessary but does not promise evaluation
+completion. Isolation and cleanup use bounded contexts independent of run
+cancellation. Implementations must honor the contexts supplied to external work
+and release any temporary private staging even on failure.
 
-SWE-Atlas QA follows the Deep Research Bench pattern directly: it has no
-sandbox-resident private verifier tree either. Its private material (the
-task's rubric and prompts) is read from the pinned host checkout and never
-uploaded into the sandbox; the LLM judge call happens entirely host-side.
-`PrepareSandbox` confirms the agent's designated answer-output path starts
-absent, and `Evaluate` downloads the agent's answer from that path after both
-isolation gates, then scores it rubric-by-rubric against the host-resident
-judge before writing `reward.txt`/`evaluation_results.json` to the run's
-output directory.
+Verifier tests and solutions remain private until both isolation gates succeed.
+Host-side judges retain reference reports and rubrics on the host throughout;
+container-based verifiers may inject their private inputs only after those gates.
 
-SWE-bench Pro uses two independent pins: the public dataset and the official
-open-source evaluator. Each dataset row supplies the base revision, task image
-tag, problem statement, requirements, new-interface description, selected test
-files, and required `FAIL_TO_PASS`/`PASS_TO_PASS` tests. Before the bridge is
-started, the benchmark captures the selected verifier files and the image's
-initial ignored build artifacts into private host snapshots, restores the base
-worktree, removes local remotes, refs, reflogs, and unreachable future objects,
-and proves the gold revision is not locally reachable. The task image still
-has network access for the agent workflow, so this local-history sanitization
-does not prevent an agent from deliberately retrieving public upstream data.
+## Substitution requirements
 
-After both isolation gates, evaluation first captures the candidate patch,
-restores the base worktree and initial ignored-artifact snapshot, applies the
-candidate, then injects the private verifier snapshot and pinned task-specific
-script and parser. A task resolves only when every required `FAIL_TO_PASS` and
-`PASS_TO_PASS` test is reported `PASSED`. See the
-[SWE-bench Pro guide](../benchmarks/swe-bench-pro.md) for setup, artifacts, and
-scope limitations.
+A replacement must preserve task meaning, score interpretation, resource
+ownership, failure distinctions, and verifier isolation. Optional sandbox
+capabilities are explicit requirements: SWE-bench Pro needs bounded downloads and
+streamed execution. A capability mismatch must fail rather than silently weaken
+isolation or artifact bounds. Document unsupported measurements separately from
+measured zero values; see the [known DRB download gap](../implementation/benchmarks.md#known-implementation-gap).
 
-SWE-bench Pro runs agent and test commands as numeric UID/GID `65532:65532`
-with `no-new-privileges`. Docker startup positively confirms that option from
-container inspection before returning the live sandbox. Benchmark-owned
-sanitation and parsing use explicit root commands. Evaluation restores private
-sanitized Git metadata
-before bounded candidate capture, clears residual agent processes before
-private staging and after testing, rejects symlink-traversing verifier paths,
-makes injected tests root-owned and read-only, and streams bounded verifier
-logs directly to private host artifacts. The parser uses an empty environment
-and isolated Python mode, and all private container staging is scrubbed on
-return.
+Use an explicit constructor in the concrete benchmark package, construction and
+configuration mapping in [benchmark wiring](../../internal/app/wiring/benchmark),
+and a selection switch in [cmd/aries](../../cmd/aries/wiring.go). Add focused
+coverage of preparation, evaluator errors, and isolation before exposing a new
+implementation. Do not introduce registration or generic plugin frameworks.
 
-## Customization & Contribution Guide
+## Implementations and guides
 
-Implement a new benchmark behind the existing `Benchmark` boundary: define its
-task loading, pre-agent sandbox preparation, private verifier ownership, and live
-sandbox evaluation in a concrete package. Expose an explicit constructor and
-command switch, add tests that prove verifier secrecy and evaluation after both
-isolation gates, and document setup and supported profiles. Do not introduce
-registration, discovery, factories, reflection, DI, or generic plugins.
+- Terminal-Bench 2: [quick start](../quick-start.md), [evaluation mechanism](../implementation/benchmarks.md#terminal-bench-2).
+- Deep Research Bench: [usage](../benchmarks/deep-research-bench.md), [host-side RACE and FACT](../implementation/benchmarks.md#deep-research-bench).
+- SWE-Atlas QA: [usage](../benchmarks/swe-atlas-qa.md), [rubric scoring](../implementation/benchmarks.md#swe-atlas-qa).
+- SWE-bench Pro public split: [usage](../benchmarks/swe-bench-pro.md), [private snapshots and evaluation](../implementation/benchmarks.md#swe-bench-pro).
+
+See [design principles](../design.md) for the obligations shared by all roles.

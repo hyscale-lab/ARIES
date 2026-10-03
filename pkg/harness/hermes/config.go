@@ -34,7 +34,7 @@ const (
 	tavilyAPIKeyEnv = "TAVILY_API_KEY"
 
 	// searxngBaseURL matches the fixed network alias
-	// (pkg/sandbox/docker/docker.go's `networkAlias = "task-sandbox"`) and
+	// (pkg/sandbox/sandbox.go's `networkAlias = "task-sandbox"`) and
 	// port (images/deep-research-bench/Dockerfile) that the DRB task
 	// sandbox's built-in SearXNG instance is always reachable at from the
 	// Hermes harness container, which joins the same per-task Docker
@@ -391,7 +391,10 @@ func containerEnvironment(endpoint core.ToolEndpoint, workdir string, terminalTi
 	if err != nil {
 		return nil, fmt.Errorf("parse Hermes SSH endpoint address: %w", err)
 	}
-	if _, err := strconv.Atoi(port); err != nil {
+	if ip := net.ParseIP(host); ip == nil || ip.To4() == nil || ip.IsUnspecified() || ip.IsMulticast() {
+		return nil, errors.New("Hermes SSH endpoint host must be a unicast, non-wildcard IPv4 address")
+	}
+	if number, err := strconv.Atoi(port); err != nil || number < 1 || number > 65535 {
 		return nil, errors.New("Hermes SSH endpoint port is invalid")
 	}
 	environment := []string{
@@ -500,7 +503,7 @@ func normalizeV1BaseURL(baseURL string) (string, error) {
 }
 
 func validateEndpoint(endpoint core.ToolEndpoint) error {
-	if endpoint.Protocol != "ssh" || endpoint.Username != "aries" || strings.TrimSpace(endpoint.Network) == "" {
+	if endpoint.Protocol != "ssh" || endpoint.Username != "aries" {
 		return errors.New("Hermes requires a task-local SSH endpoint")
 	}
 	if strings.TrimSpace(endpoint.IdentitySourceFile) == "" {

@@ -13,7 +13,7 @@ func validModel() core.ModelConfig {
 
 func validEndpoint() core.ToolEndpoint {
 	return core.ToolEndpoint{
-		Protocol: "ssh", Address: "172.17.0.1:41234", Username: "aries", Network: "aries-net",
+		Protocol: "ssh", Address: "172.17.0.1:41234", Username: "aries",
 		IdentityFile: identityContainerFS, IdentitySourceFile: "/tmp/id_ed25519",
 	}
 }
@@ -205,9 +205,14 @@ func TestContainerEnvironmentSelectsNativeSSHBackend(t *testing.T) {
 
 func TestContainerEnvironmentRejectsUnusableEndpoints(t *testing.T) {
 	cases := map[string]func(*core.ToolEndpoint){
+		"DNS":            func(endpoint *core.ToolEndpoint) { endpoint.Address = "example.test:2222" },
+		"IPv6":           func(endpoint *core.ToolEndpoint) { endpoint.Address = "[::1]:2222" },
+		"wildcard":       func(endpoint *core.ToolEndpoint) { endpoint.Address = "0.0.0.0:2222" },
+		"multicast":      func(endpoint *core.ToolEndpoint) { endpoint.Address = "224.0.0.1:2222" },
+		"zero port":      func(endpoint *core.ToolEndpoint) { endpoint.Address = "127.0.0.1:0" },
+		"overflow port":  func(endpoint *core.ToolEndpoint) { endpoint.Address = "127.0.0.1:65536" },
 		"protocol":       func(e *core.ToolEndpoint) { e.Protocol = "http" },
 		"username":       func(e *core.ToolEndpoint) { e.Username = "root" },
-		"network":        func(e *core.ToolEndpoint) { e.Network = "" },
 		"identity":       func(e *core.ToolEndpoint) { e.IdentitySourceFile = "" },
 		"client command": func(e *core.ToolEndpoint) { e.ClientCommand = "/opt/aries/bin/aries-ssh" },
 		"client source":  func(e *core.ToolEndpoint) { e.ClientSourceFile = "/tmp/aries-ssh" },

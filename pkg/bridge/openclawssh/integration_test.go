@@ -19,7 +19,8 @@ import (
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/core"
-	dockersandbox "github.com/hyscale-lab/aries/pkg/sandbox/docker"
+	dockerdeployment "github.com/hyscale-lab/aries/pkg/deployment/docker"
+	tasksandbox "github.com/hyscale-lab/aries/pkg/sandbox"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
@@ -32,10 +33,10 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 	defer cancel()
 	outputDir := t.TempDir()
 	logger := logrus.New()
-	if err := dockersandbox.PullImages(ctx, []string{bridgeFixtureImage}); err != nil {
+	if err := dockerdeployment.PullImages(ctx, "", []string{bridgeFixtureImage}); err != nil {
 		t.Fatalf("prepare pinned bridge fixture image: %v", err)
 	}
-	sandboxes, err := dockersandbox.New(dockersandbox.Options{OutputDir: outputDir, Logger: logger})
+	sandboxes, err := tasksandbox.New(tasksandbox.Options{Deployment: integrationDeployment(t), NewEnvironment: integrationDeployment(t).NewTaskEnvironment, OutputDir: outputDir, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +47,7 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sandbox := live.(*dockersandbox.Sandbox)
+	sandbox := live.(*tasksandbox.Sandbox)
 	t.Cleanup(func() {
 		cleanup, done := context.WithTimeout(context.Background(), 20*time.Second)
 		defer done()
@@ -56,6 +57,7 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 	})
 
 	bridge := newIntegrationBridge(t, outputDir, logger)
+	bridge.resolveListen = sandboxes.BridgeListen
 	endpoint, err := bridge.Start(ctx, sandbox)
 	if err != nil {
 		t.Fatal(err)
@@ -155,10 +157,10 @@ func TestBridgeMapsVirtualWorkspaceToContainerRootWithoutAlias(t *testing.T) {
 	outputDir := t.TempDir()
 	logger := logrus.New()
 	logger.SetOutput(io.Discard)
-	if err := dockersandbox.PullImages(ctx, []string{bridgeFixtureImage}); err != nil {
+	if err := dockerdeployment.PullImages(ctx, "", []string{bridgeFixtureImage}); err != nil {
 		t.Fatalf("prepare pinned bridge fixture image: %v", err)
 	}
-	sandboxes, err := dockersandbox.New(dockersandbox.Options{OutputDir: outputDir, Logger: logger})
+	sandboxes, err := tasksandbox.New(tasksandbox.Options{Deployment: integrationDeployment(t), NewEnvironment: integrationDeployment(t).NewTaskEnvironment, OutputDir: outputDir, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +171,7 @@ func TestBridgeMapsVirtualWorkspaceToContainerRootWithoutAlias(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sandbox := live.(*dockersandbox.Sandbox)
+	sandbox := live.(*tasksandbox.Sandbox)
 	t.Cleanup(func() {
 		cleanup, done := context.WithTimeout(context.Background(), 20*time.Second)
 		defer done()
@@ -179,6 +181,7 @@ func TestBridgeMapsVirtualWorkspaceToContainerRootWithoutAlias(t *testing.T) {
 	})
 
 	bridge := newIntegrationBridge(t, outputDir, logger)
+	bridge.resolveListen = sandboxes.BridgeListen
 	endpoint, err := bridge.Start(ctx, sandbox)
 	if err != nil {
 		t.Fatal(err)
@@ -222,10 +225,10 @@ func TestBridgeRunsConcurrentCallsWithoutAConvoy(t *testing.T) {
 	outputDir := t.TempDir()
 	logger := logrus.New()
 	logger.SetOutput(bytes.NewBuffer(nil))
-	if err := dockersandbox.PullImages(ctx, []string{bridgeFixtureImage}); err != nil {
+	if err := dockerdeployment.PullImages(ctx, "", []string{bridgeFixtureImage}); err != nil {
 		t.Fatalf("prepare pinned bridge fixture image: %v", err)
 	}
-	sandboxes, err := dockersandbox.New(dockersandbox.Options{OutputDir: outputDir, Logger: logger})
+	sandboxes, err := tasksandbox.New(tasksandbox.Options{Deployment: integrationDeployment(t), NewEnvironment: integrationDeployment(t).NewTaskEnvironment, OutputDir: outputDir, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,6 +248,7 @@ func TestBridgeRunsConcurrentCallsWithoutAConvoy(t *testing.T) {
 	})
 
 	bridge := newIntegrationBridge(t, outputDir, logger)
+	bridge.resolveListen = sandboxes.BridgeListen
 	endpoint, err := bridge.Start(ctx, live)
 	if err != nil {
 		t.Fatal(err)
@@ -309,7 +313,7 @@ func TestBridgeRunsConcurrentCallsWithoutAConvoy(t *testing.T) {
 			t.Fatal(sessionErr)
 		}
 	}
-	sandbox := live.(*dockersandbox.Sandbox)
+	sandbox := live.(*tasksandbox.Sandbox)
 	ready, err := sandbox.Exec(ctx, core.Command{
 		Path: "/bin/sh", Args: []string{"-c", "attempt=0; until test -f /work/active-0.pid && test -f /work/active-1.pid && test -f /work/active-2.pid && test -f /work/active-3.pid; do attempt=$((attempt+1)); [ \"$attempt\" -lt 100 ] || exit 1; sleep 0.02; done"},
 	})
@@ -359,7 +363,7 @@ func TestBridgeRunsConcurrentCallsWithoutAConvoy(t *testing.T) {
 	}
 }
 
-func assertFormerAliasAbsent(t *testing.T, ctx context.Context, sandbox *dockersandbox.Sandbox, stage string) {
+func assertFormerAliasAbsent(t *testing.T, ctx context.Context, sandbox *tasksandbox.Sandbox, stage string) {
 	t.Helper()
 	result, err := sandbox.Exec(ctx, core.Command{
 		Path: remoteShell,
@@ -394,7 +398,7 @@ func newIntegrationBridge(t *testing.T, outputDir string, logger *logrus.Logger)
 	if err := os.WriteFile(clientHelper, []byte("integration fixture"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	bridge, err := New(Options{OutputDir: outputDir, ClientPath: clientHelper, Logger: logger})
+	bridge, err := New(Options{ResolveListen: loopbackListen, OutputDir: outputDir, ClientPath: clientHelper, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -423,4 +427,14 @@ func dialIntegrationBridge(t *testing.T, endpoint core.ToolEndpoint) *ssh.Client
 		t.Fatal(err)
 	}
 	return client
+}
+
+func integrationDeployment(t *testing.T) *dockerdeployment.Manager {
+	t.Helper()
+	deployment, err := dockerdeployment.New(dockerdeployment.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = deployment.Close() })
+	return deployment
 }

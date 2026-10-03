@@ -17,13 +17,25 @@
     ]
   },
   "harness": {
-    "type": "openclaw"
+    "type": "openclaw",
+    "deployment": {
+      "backend": "docker",
+      "docker": {
+        "socket": "/var/run/docker.sock"
+      }
+    }
   },
   "sandbox": {
-    "type": "docker"
+    "deployment": {
+      "backend": "docker",
+      "docker": {
+        "socket": "/var/run/docker.sock"
+      }
+    }
   },
   "bridge": {
-    "type": "openclaw-ssh"
+    "type": "openclaw-ssh",
+    "mode": "embedded"
   },
   "runtime": {
     "backend": "deepseek",
@@ -32,7 +44,7 @@
   "model": {
     "base_url": "https://api.deepseek.com",
     "api_key_env": "DEEPSEEK_API_KEY",
-    "id": "deepseek-v4-flash"
+    "id": "deepseek-flash"
   },
   "output_dir": "runs"
 }

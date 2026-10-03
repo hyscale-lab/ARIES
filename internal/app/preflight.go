@@ -300,7 +300,7 @@ func sleepWithContext(ctx context.Context, duration time.Duration) error {
 }
 
 func isOfficialDeepSeek(model core.ModelConfig) bool {
-	return model.Provider == "deepseek" && model.BaseURL == deepSeekBaseURL && (model.Model == "deepseek-v4-flash" || model.Model == "deepseek-v4-pro")
+	return model.Provider == "deepseek" && model.BaseURL == deepSeekBaseURL && (model.Model == "deepseek-flash" || model.Model == "deepseek-v4-flash" || model.Model == "deepseek-v4-pro")
 }
 
 func liveValidationFailure(model core.ModelConfig, category liveValidationCategory, attempts int) (liveValidation, error) {

@@ -227,6 +227,7 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 	result.ToolLogPaths = append([]string(nil), endpoint.LogPaths...)
 
 	err = r.harness.Start(ctx, core.HarnessRequest{
+		Network:   sandbox.NetworkName(),
 		RunID:     r.runID,
 		TaskID:    task.ID,
 		Endpoint:  endpoint,

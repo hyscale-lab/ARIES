@@ -93,6 +93,13 @@ type ModelConfig struct {
 	Temperature   *float64 `json:"temperature,omitempty"`
 }
 
+// BridgeListen separates a local listener address from the address reached by the harness.
+// Embedded SSH bridges currently require IPv4 hosts and allocate the port themselves.
+type BridgeListen struct {
+	BindHost      string
+	AdvertiseHost string
+}
+
 // ToolEndpoint is the bridge endpoint and task-local file contract given to a
 // harness. Credential bytes are never carried in this value. The harness stages
 // the source files into its container before start; source paths are not bind
@@ -101,7 +108,6 @@ type ToolEndpoint struct {
 	Protocol             string   `json:"protocol"`
 	Address              string   `json:"address"`
 	Username             string   `json:"username,omitempty"`
-	Network              string   `json:"network,omitempty"`
 	ClientCommand        string   `json:"client_command,omitempty"`
 	ClientSourceFile     string   `json:"client_source_file,omitempty"`
 	IdentityFile         string   `json:"identity_file,omitempty"`
@@ -116,6 +122,8 @@ type ToolEndpoint struct {
 
 // HarnessRequest contains task-local runtime inputs supplied before Run.
 type HarnessRequest struct {
+	// Network is the task attachment supplied by the sandbox, independent of tool credentials.
+	Network   string        `json:"network,omitempty"`
 	RunID     string        `json:"run_id"`
 	TaskID    string        `json:"task_id"`
 	Endpoint  ToolEndpoint  `json:"tool_endpoint"`

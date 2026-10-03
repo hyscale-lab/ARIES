@@ -507,3 +507,7 @@ func commitEvaluationFixture(t *testing.T, root string) string {
 	}
 	return strings.TrimSpace(string(output))
 }
+
+func (s *evaluationSandboxFake) NetworkName() string { return "test-network" }
+
+func (s *basicEvaluationSandboxFake) NetworkName() string { return "test-network" }

@@ -1,6 +1,6 @@
 //go:build integration
 
-package docker
+package sandbox
 
 import (
 	"bufio"
@@ -16,8 +16,8 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
-	"github.com/hyscale-lab/aries/pkg/containerimage"
 	"github.com/hyscale-lab/aries/pkg/core"
+	deploymentdocker "github.com/hyscale-lab/aries/pkg/deployment/docker"
 	"github.com/hyscale-lab/aries/pkg/monitor"
 	"github.com/moby/moby/client"
 	"github.com/sirupsen/logrus"
@@ -40,12 +40,12 @@ func TestDockerResourceMonitorRecordsBusyCPU(t *testing.T) {
 	logger := logrus.New()
 	logger.SetOutput(io.Discard)
 	outputDir := t.TempDir()
-	manager, err := New(Options{OutputDir: outputDir, CleanupTimeout: 10 * time.Second, Logger: logger})
+	manager, err := newIntegrationManager(t, Options{OutputDir: outputDir, CleanupTimeout: 10 * time.Second, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}
 	const runID, taskID = "resource-integration", "busy-task"
-	source, err := NewResourceSource(ResourceOptions{RunID: runID, TaskIDs: []string{taskID}})
+	source, err := deploymentdocker.NewResourceSource(deploymentdocker.ResourceOptions{RunID: runID, TaskIDs: []string{taskID}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestDockerSandboxRealLifecycle(t *testing.T) {
 	ensureFixtureImage(t, ctx, api)
 
 	outputDir := t.TempDir()
-	manager, err := New(Options{
+	manager, err := newIntegrationManager(t, Options{
 		OutputDir: outputDir, CleanupTimeout: 20 * time.Second,
 		Logger: logrus.New(),
 	})
@@ -175,8 +175,8 @@ func TestDockerSandboxRealLifecycle(t *testing.T) {
 	if err != nil || !networkInspection.Network.Internal || networkInspection.Network.Labels["aries.task"] != "integration-task" {
 		t.Fatalf("network inspection = %#v, %v", networkInspection.Network, err)
 	}
-	if gateway, err := sandbox.NetworkGateway(ctx); err != nil || gateway == "" {
-		t.Fatalf("NetworkGateway() = %q, %v", gateway, err)
+	if gateway, err := sandbox.BridgeListen(ctx); err != nil || gateway.AdvertiseHost == "" {
+		t.Fatalf("BridgeListen() = %+v, %v", gateway, err)
 	}
 
 	assertExec(t, ctx, sandbox, core.Command{Path: "/bin/pwd"}, 0, "/work\n", "")
@@ -267,7 +267,7 @@ func TestDockerSandboxVerifiesNoNewPrivileges(t *testing.T) {
 	}
 	ensureFixtureImage(t, ctx, api)
 
-	manager, err := New(Options{OutputDir: t.TempDir(), CleanupTimeout: 20 * time.Second, Logger: logrus.New()})
+	manager, err := newIntegrationManager(t, Options{OutputDir: t.TempDir(), CleanupTimeout: 20 * time.Second, Logger: logrus.New()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +314,7 @@ func TestDockerSandboxRootWorkdirLifecycle(t *testing.T) {
 	}
 	ensureFixtureImage(t, ctx, api)
 
-	manager, err := New(Options{OutputDir: t.TempDir(), CleanupTimeout: 20 * time.Second, Logger: logrus.New()})
+	manager, err := newIntegrationManager(t, Options{OutputDir: t.TempDir(), CleanupTimeout: 20 * time.Second, Logger: logrus.New()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +367,7 @@ func TestExecCancellationKillsOnlyItsProcessGroup(t *testing.T) {
 	}
 	ensureFixtureImage(t, ctx, api)
 
-	manager, err := New(Options{
+	manager, err := newIntegrationManager(t, Options{
 		OutputDir: t.TempDir(), CleanupTimeout: 8 * time.Second,
 		Logger: logrus.New(),
 	})
@@ -459,8 +459,33 @@ func assertExec(t *testing.T, ctx context.Context, sandbox *Sandbox, command cor
 	}
 }
 
-func TestFixtureReferenceIsImmutable(t *testing.T) {
-	if err := containerimage.Validate(fixtureImage); err != nil {
-		t.Fatalf("fixture image is not immutable: %v", err)
+func integrationDeployment(t *testing.T) *deploymentdocker.Manager {
+	t.Helper()
+	backend, err := deploymentdocker.New(deploymentdocker.Options{})
+	if err != nil {
+		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := backend.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return backend
+}
+
+func noNewPrivilegesEnabled(options []string) bool {
+	for _, option := range options {
+		switch option {
+		case "no-new-privileges", "no-new-privileges=true", "no-new-privileges:true":
+			return true
+		}
+	}
+	return false
+}
+
+func newIntegrationManager(t *testing.T, options Options) (*Manager, error) {
+	backend := integrationDeployment(t)
+	options.Deployment = backend
+	options.NewEnvironment = backend.NewTaskEnvironment
+	return New(options)
 }

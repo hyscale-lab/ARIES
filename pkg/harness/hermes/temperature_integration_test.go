@@ -34,7 +34,7 @@ func TestRequestSettingsReachRealHermes(t *testing.T) {
 			if test.image == integrationImage {
 				requireDockerImage(t)
 			}
-			manager, err := New(Options{
+			manager, err := New(Options{Deployment: integrationDeployment(t),
 				Image: test.image, OutputDir: t.TempDir(),
 				StartTimeout: 90 * time.Second, CleanupTimeout: 60 * time.Second,
 				ExtraBody:    []byte(`{"user":"aries-temperature-regression"}`),
@@ -57,9 +57,9 @@ func TestRequestSettingsReachRealHermes(t *testing.T) {
 			if err := os.WriteFile(identity, []byte("integration identity"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			request := core.HarnessRequest{
+			request := core.HarnessRequest{Network: "bridge",
 				RunID: "temperature-integration", TaskID: "temperature",
-				Endpoint: core.ToolEndpoint{Protocol: "ssh", Address: "127.0.0.1:2222", Username: "aries", Network: "bridge", IdentitySourceFile: identity, Workdir: "/app"},
+				Endpoint: core.ToolEndpoint{Protocol: "ssh", Address: "127.0.0.1:2222", Username: "aries", IdentitySourceFile: identity, Workdir: "/app"},
 				Model: core.ModelConfig{
 					Provider: "openai", BaseURL: "http://127.0.0.1:18080/v1", Model: "aries-deterministic",
 					APIKeyEnv: "ARIES_TEST_MODEL_KEY", ContextLength: 262144, MaxTokens: 32768, Temperature: &temperature,

@@ -124,7 +124,7 @@ func TestSetupPreparesBackendBeforeSideEffects(t *testing.T) {
 		return nil
 	}, LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
 		return nil, nil
-	}, PullImages: func(context.Context, []string) error { return nil }}
+	}, PullImages: func(context.Context, config.Config, []string) error { return nil }}
 	var out bytes.Buffer
 	if err := Setup(context.Background(), profile, &out, Dependencies{Wiring: wiring}); err != nil {
 		t.Fatal(err)
@@ -160,7 +160,7 @@ func TestRunEnsuresPreparationBeforeOutputAndRuntime(t *testing.T) {
 			events = append(events, "tasks:"+strings.Join(taskIDs, ","))
 			return []core.Task{{Environment: core.Environment{Image: "task:tag"}}}, nil
 		},
-		PullImages: func(_ context.Context, images []string) error {
+		PullImages: func(_ context.Context, _ config.Config, images []string) error {
 			events = append(events, "images:"+strings.Join(images, ","))
 			return prepareErr
 		},
@@ -190,7 +190,7 @@ func TestSetupRetriesIncompletePreparationWithoutReadinessMarker(t *testing.T) {
 		LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
 			return nil, nil
 		},
-		PullImages: func(context.Context, []string) error {
+		PullImages: func(context.Context, config.Config, []string) error {
 			pullCalls++
 			if pullCalls == 1 {
 				return errors.New("partial pull")
@@ -226,7 +226,7 @@ func TestRunCancellationDuringPreparationHasNoDownstreamEffects(t *testing.T) {
 			downstream++
 			return nil, nil
 		},
-		PullImages: func(context.Context, []string) error { downstream++; return nil },
+		PullImages: func(context.Context, config.Config, []string) error { downstream++; return nil },
 		NewBenchmark: func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
 			downstream++
 			return nil, nil
@@ -297,7 +297,9 @@ func TestBuildTaskExperimentCreatesFreshFourRoleGraphs(t *testing.T) {
 			s := &stubToolSandbox{}
 			return SandboxInstance{Sandbox: s, Resources: &stubResources{}, Close: func() error { return nil }}, nil
 		},
-		NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) { return &stubBridge{}, nil },
+		NewBridge: func(config.Config, string, func(context.Context) (core.BridgeListen, error), *logrus.Logger) (runner.ToolBridge, error) {
+			return &stubBridge{}, nil
+		},
 	}
 	cfg := config.Config{Name: "x"}
 	model := core.ModelConfig{Provider: "deepseek", BaseURL: "https://example.invalid", Model: "m", APIKeyEnv: "KEY"}
@@ -336,7 +338,7 @@ func TestBuildTaskExperimentUnwindsPartialConstruction(t *testing.T) {
 		NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
 			return SandboxInstance{Sandbox: &stubToolSandbox{}, Resources: &stubResources{}, Close: func() error { events = append(events, "sandbox"); return errors.New("sandbox close") }}, nil
 		},
-		NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
+		NewBridge: func(config.Config, string, func(context.Context) (core.BridgeListen, error), *logrus.Logger) (runner.ToolBridge, error) {
 			return nil, errors.New("bridge construct")
 		},
 	}

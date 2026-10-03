@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/hyscale-lab/aries/pkg/containerimage"
@@ -19,8 +20,15 @@ type imageClient interface {
 // PullImages makes each configured image available in the local Docker Engine.
 // Configured harness and Terminal-Bench task images may use explicit tags;
 // digest-pinned references remain supported by this generic setup boundary.
-func PullImages(ctx context.Context, images []string) error {
-	api, err := client.New(client.WithHost("unix://"+defaultDockerSocket), client.WithUserAgent("aries-setup/1"))
+func PullImages(ctx context.Context, socket string, images []string) error {
+	host := socket
+	if host == "" {
+		host = defaultDockerSocket
+	}
+	if !strings.Contains(host, "://") {
+		host = "unix://" + host
+	}
+	api, err := client.New(client.WithHost(host), client.WithUserAgent("aries-setup/1"))
 	if err != nil {
 		return fmt.Errorf("create Docker client: %w", err)
 	}

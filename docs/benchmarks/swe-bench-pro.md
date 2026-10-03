@@ -64,7 +64,7 @@ model endpoint or admit task work. Run the same profile with:
 ```
 
 The example uses DeepSeek and therefore needs the credential described in the
-[quick start](../quick-start.md#external-deepseek). It can incur API charges.
+[quick start](../configuration.md#external-deepseek). It can incur API charges.
 To select another public task, copy the profile and replace
 `benchmark.tasks` with one or more `instance_id` values from the pinned public
 dataset. Profile order, repetition, concurrency, and runtime overrides follow
@@ -72,27 +72,11 @@ the normal ARIES command semantics.
 
 ## Isolation and evaluation
 
-The public task images contain repository history used to construct the
-benchmark. Before the harness receives bridge access, ARIES:
-
-1. resets the repository to the row's `base_commit` and proves it is clean;
-2. checks out exactly the official gold-commit verifier files and snapshots
-   them privately;
-3. privately snapshots ignored build artifacts already present in the image;
-4. restores the base worktree and removes verifier staging data;
-5. removes Git remotes, refs, reflogs, and unreachable future objects, then
-   proves the gold revision is not locally reachable;
-6. privately snapshots the sanitized Git metadata, transfers `/app` to the
-   numeric agent identity `65532:65532`, and proves the agent can write the
-   worktree but cannot write the trusted Git, shell, tar, or Python runtimes.
-
-The verifier, ignored-build, and sanitized-Git snapshots are host artifacts
-outside both the task and harness containers. They are mode `0600` under a
-mode `0700` private directory. The harness container has no bind mount to the
-run output directory. Docker applies `no-new-privileges` to task containers
-using the non-root agent identity and positively confirms the option through
-post-start container inspection before returning the live sandbox.
-Benchmark-owned preparation and evaluation commands explicitly use root.
+ARIES prepares private verifier snapshots before granting harness access and
+runs evaluation only after harness stop and bridge revocation are confirmed.
+The candidate is tested against the pinned base and original build artifacts.
+See [SWE-bench Pro implementation](../implementation/benchmarks.md#swe-bench-pro)
+for Git sanitation, process isolation, private staging, and output bounds.
 
 This is local hardening, not an embargo on public information. SWE-bench Pro is
 a public benchmark and the task network remains enabled so the harness can use
@@ -100,27 +84,6 @@ the configured model endpoint and ordinary network tools. A deliberately
 adversarial agent can add a remote or retrieve public upstream repositories,
 commits, datasets, or discussions. Do not use the public split as a confidential
 test set.
-
-Only after the Runner positively stops the harness and revokes the bridge does
-ARIES evaluate the still-running task sandbox. It captures staged, tracked, and
-untracked candidate changes against the privately restored sanitized Git
-baseline. The raw download is bounded to 16 MiB before host writes complete,
-and binary patch sections are removed to match the evaluator policy. Evaluation
-then restores the pinned base plus the image's initial ignored build artifacts,
-applies the candidate, and injects the private verifier files, task-specific
-script, and parser. Harness-created ignored artifacts are removed before the
-initial image snapshot is restored, which makes evaluation start from the
-fresh-image build baseline rather than agent-created caches.
-
-Before any private verifier input is staged, and again after the test process
-returns, ARIES kills and positively confirms the absence of every process owned
-by the agent UID. Verifier paths are installed only through non-symlink parent
-directories and become root-owned read-only files. The test script runs as the
-non-root agent; its stdout and stderr stream directly to mode-`0600` host
-artifacts with a 256 MiB per-stream bound. The parser then runs as root with an
-empty environment, isolated Python mode, and a root-only script. Private
-container staging is removed and positively proved absent on every evaluation
-return path.
 
 The pinned script runs only the row's `selected_test_files_to_run`. The pinned
 parser converts its output to structured test records. ARIES reports score and
