@@ -54,18 +54,20 @@ func TestCheckedInPrometheusConfigLoads(t *testing.T) {
 	if _, ok := prom.HelmSHA256["amd64"]; !ok {
 		t.Error("helm_sha256 must include amd64")
 	}
-	// The chart and both values files live under k8s/, not beside this config.
+	// Both values files live under k8s/, not beside this config.
 	charts := Charts{Dir: filepath.Join("..", "..", "..")}
 	if err := charts.RequirePrometheus(); err != nil {
-		t.Errorf("vendored chart and values: %v", err)
+		t.Errorf("values files: %v", err)
 	}
 }
 
 func validPrometheus() Prometheus {
 	return Prometheus{
 		Namespace: "monitoring", Release: "prometheus",
-		ChartVersion: "72.6.2", HelmVersion: "v3.22.0",
-		HelmSHA256: map[string]string{"amd64": strings.Repeat("a", 64)},
+		ChartRef:     "oci://ghcr.io/prometheus-community/charts/kube-prometheus-stack",
+		ChartVersion: "72.6.2", ChartDigest: "sha256:" + strings.Repeat("b", 64),
+		HelmVersion: "v3.22.0",
+		HelmSHA256:  map[string]string{"amd64": strings.Repeat("a", 64)},
 	}
 }
 
@@ -77,12 +79,19 @@ func TestPrometheusValidation(t *testing.T) {
 		// An unpinned chart would change what gets installed from day to day,
 		// and the values keys are only checked against one version.
 		"floating chart": func(p *Prometheus) { p.ChartVersion = "latest" },
-		"helm 4":         func(p *Prometheus) { p.HelmVersion = "v4.3.0" },
-		"release case":   func(p *Prometheus) { p.Release = "Prometheus" },
-		"short digest":   func(p *Prometheus) { p.HelmSHA256 = map[string]string{"amd64": "abc"} },
-		"no digests":     func(p *Prometheus) { p.HelmSHA256 = nil },
-		"odd arch":       func(p *Prometheus) { p.HelmSHA256 = map[string]string{"riscv64": strings.Repeat("a", 64)} },
-		"namespace":      func(p *Prometheus) { p.Namespace = "Monitoring" },
+		// The digest is what fixes the bytes; without it a re-pushed tag
+		// would change what gets installed.
+		"no digest":         func(p *Prometheus) { p.ChartDigest = "" },
+		"short digest":      func(p *Prometheus) { p.ChartDigest = "sha256:abc" },
+		"https repo":        func(p *Prometheus) { p.ChartRef = "https://prometheus-community.github.io/helm-charts" },
+		"tag in ref":        func(p *Prometheus) { p.ChartRef += ":72.6.2" },
+		"injection":         func(p *Prometheus) { p.ChartRef = "oci://ghcr.io/x; rm -rf /" },
+		"helm 4":            func(p *Prometheus) { p.HelmVersion = "v4.3.0" },
+		"release case":      func(p *Prometheus) { p.Release = "Prometheus" },
+		"short helm digest": func(p *Prometheus) { p.HelmSHA256 = map[string]string{"amd64": "abc"} },
+		"no digests":        func(p *Prometheus) { p.HelmSHA256 = nil },
+		"odd arch":          func(p *Prometheus) { p.HelmSHA256 = map[string]string{"riscv64": strings.Repeat("a", 64)} },
+		"namespace":         func(p *Prometheus) { p.Namespace = "Monitoring" },
 	}
 	for name, mutate := range cases {
 		p := validPrometheus()
@@ -263,52 +272,6 @@ func TestAriesValidation(t *testing.T) {
 		if a.Validate() == nil {
 			t.Errorf("%s: accepted %+v", name, a)
 		}
-	}
-}
-
-// The vendored chart must never carry AppleDouble files, and RequirePrometheus
-// must say so plainly rather than letting helm fail on "control characters are
-// not allowed" naming a file nobody created.
-func TestRequirePrometheusRejectsAppleDoubleFiles(t *testing.T) {
-	charts := Charts{Dir: filepath.Join("..", "..", "..")}
-	if err := charts.RequirePrometheus(); err != nil {
-		t.Fatalf("the committed chart is not clean: %v", err)
-	}
-
-	// Rebuild the minimum chart shape in a temp dir and poison it.
-	dir := t.TempDir()
-	chart := filepath.Join(dir, "prometheus", "chart", "crds")
-	if err := os.MkdirAll(chart, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for _, f := range []string{
-		filepath.Join(dir, "prometheus", "chart", "Chart.yaml"),
-		filepath.Join(dir, "prometheus", "values.yaml"),
-	} {
-		if err := os.WriteFile(f, []byte("version: 1.0.0\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.MkdirAll(filepath.Join(dir, "grafana"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "grafana", "values.yaml"), []byte("{}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	poisoned := Charts{Dir: dir}
-	if err := poisoned.RequirePrometheus(); err != nil {
-		t.Fatalf("clean temp chart rejected: %v", err)
-	}
-	// A resource fork, as bsdtar would leave it.
-	if err := os.WriteFile(filepath.Join(chart, "._crd-alertmanagerconfigs.yaml"), []byte("\x00\x05\x16\x07"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	err := poisoned.RequirePrometheus()
-	if err == nil {
-		t.Fatal("an AppleDouble file in the chart was accepted")
-	}
-	if !strings.Contains(err.Error(), "AppleDouble") || !strings.Contains(err.Error(), "-delete") {
-		t.Errorf("error should name the problem and the fix, got: %v", err)
 	}
 }
 

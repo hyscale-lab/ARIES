@@ -53,16 +53,17 @@ image-bridge:
 # --dry-run, schema problems that only show up once values are merged.
 # HELM is the helm binary to use; override it if yours is not on PATH.
 HELM ?= helm
+# kube-prometheus-stack is pulled from its registry, pinned in prom_config.json.
+PROM_CHART = $(shell jq -r '.chart_ref + ":" + .chart_version + "@" + .chart_digest' k8s/setup/configs/prometheus/prom_config.json)
 
 charts-lint:
 	$(HELM) lint ./k8s/aries
-	$(HELM) lint ./k8s/prometheus/chart -f ./k8s/prometheus/values.yaml -f ./k8s/grafana/values.yaml
 
 charts-template:
 	$(HELM) template aries ./k8s/aries -n aries \
 	  -f ./k8s/aries/values-local.yaml >/dev/null
 	$(HELM) template aries ./k8s/aries -n aries \
 	  -f ./k8s/aries/values-cluster.yaml --set registry.dockerconfigjson='{}' >/dev/null
-	$(HELM) template prometheus ./k8s/prometheus/chart -n monitoring \
+	$(HELM) template prometheus $(PROM_CHART) -n monitoring \
 	  -f ./k8s/prometheus/values.yaml -f ./k8s/grafana/values.yaml >/dev/null
 	@echo "charts render"

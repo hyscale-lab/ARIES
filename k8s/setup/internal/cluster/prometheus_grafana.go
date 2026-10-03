@@ -30,8 +30,9 @@ const helmBinary = "/usr/local/bin/helm"
 //
 //   - Helm is a pinned release verified against a configured digest, not the
 //     installer script from Helm's master branch piped into bash.
-//   - The chart is vendored in the repository and installed from disk, so the
-//     install needs no chart-repository access and cannot drift between runs.
+//   - The chart is pulled from its OCI registry by version and digest, not
+//     installed by name from a repository index, so it cannot drift between
+//     runs.
 //
 // It deliberately leaves out the loader's loader-nodetype placement (ARIES
 // nodes carry no role labels), its perf_event_paranoid change, the
@@ -47,17 +48,6 @@ func SetupPrometheus(prom configs.Prometheus, charts configs.Charts) error {
 	if err := charts.RequirePrometheus(); err != nil {
 		return err
 	}
-	// Helm ignores values keys a chart does not define, so a chart vendored at
-	// a different version than prom_config.json pins would silently drop every
-	// override in values.yaml instead of failing.
-	vendored, err := chartVersionOf(charts.PrometheusChart())
-	if err != nil {
-		return err
-	}
-	if vendored != prom.ChartVersion {
-		return fmt.Errorf("vendored chart at %s is version %s but prom_config.json pins %s; re-check the values files against the chart, then update chart_version",
-			charts.PrometheusChart(), vendored, prom.ChartVersion)
-	}
 
 	if err := installHelm(prom); err != nil {
 		return err
@@ -71,11 +61,12 @@ func SetupPrometheus(prom configs.Prometheus, charts configs.Charts) error {
 	// overrides, then Grafana's. Nothing pins the monitoring pods: nodes carry
 	// no role taints, so they schedule wherever there is room.
 	//
-	// There is no --version: the chart is a directory, and its version was
-	// checked against prom_config.json above. --create-namespace makes the
-	// install idempotent without a separate kubectl step.
+	// The chart reference carries version and digest, and Helm refuses it
+	// unless the tag resolves to that digest, so there is no --version.
+	// --create-namespace makes the install idempotent without a separate
+	// kubectl step.
 	if err := utils.ExecShellCmdStreaming(helm+" upgrade --install %s %s --namespace %s --create-namespace -f %s -f %s --wait --timeout 15m",
-		utils.Quote(prom.Release), utils.Quote(charts.PrometheusChart()), utils.Quote(prom.Namespace),
+		utils.Quote(prom.Release), utils.Quote(prom.Chart()), utils.Quote(prom.Namespace),
 		utils.Quote(charts.PrometheusValues()), utils.Quote(charts.GrafanaValues())); err != nil {
 		return err
 	}
@@ -124,31 +115,6 @@ func installHelm(prom configs.Prometheus) error {
 	_, err = utils.ExecShellCmd("tar -xzf %s -C %s && install -m 0755 %s %s",
 		utils.Quote(tarball), utils.Quote(workdir), utils.Quote(filepath.Join(workdir, "linux-"+arch, "helm")), helmBinary)
 	return err
-}
-
-// chartVersionOf reads the version from a chart directory's Chart.yaml. It
-// scans for the top-level `version:` key rather than parsing YAML, because
-// Chart.yaml is a flat, chart-defined schema and this avoids a YAML dependency
-// in the installer. appVersion is a different key and is not matched.
-func chartVersionOf(chartDir string) (string, error) {
-	path := filepath.Join(chartDir, "Chart.yaml")
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("read vendored chart version: %w", err)
-	}
-	for _, line := range strings.Split(string(content), "\n") {
-		rest, ok := strings.CutPrefix(line, "version:")
-		if !ok {
-			continue
-		}
-		version := strings.TrimSpace(rest)
-		version = strings.Trim(version, `"'`)
-		if version == "" {
-			continue
-		}
-		return version, nil
-	}
-	return "", fmt.Errorf("%s has no top-level version key", path)
 }
 
 func fileSHA256(path string) (string, error) {

@@ -259,9 +259,8 @@ func buildStage(opts CreateOptions) (string, error) {
 		}
 		shipped = append(shipped, filepath.Join(configs.AriesDir, "aries_config.json"))
 	}
-	// The charts live outside the configs directory, so they are copied as
-	// whole trees rather than named files. Only what is being deployed is
-	// shipped: the vendored monitoring chart alone is 6.7MB.
+	// The charts and values files live outside the configs directory. Only
+	// what is being deployed is shipped.
 	if opts.Cluster.DeployPrometheus || opts.Cluster.DeployAries {
 		if err := stageCharts(stage, opts); err != nil {
 			return fail(err)
@@ -279,8 +278,9 @@ func buildStage(opts CreateOptions) (string, error) {
 	return stage, nil
 }
 
-// stageCharts copies the Helm charts being deployed into the stage, under the
-// "charts" name the on-node subcommands expect.
+// stageCharts copies the Helm charts and values files being deployed into the
+// stage, under the "charts" name the on-node subcommands expect. For
+// Prometheus that is only our two values files; the master pulls the chart.
 //
 // Of the ARIES chart's top-level values files, only Chart.yaml, values.yaml and
 // the files aries_config.json passes to Helm are shipped. The chart directory
@@ -297,9 +297,15 @@ func stageCharts(stage string, opts CreateOptions) error {
 		if err := source.RequirePrometheus(); err != nil {
 			return err
 		}
-		for _, dir := range []string{"prometheus", "grafana"} {
-			if _, err := utils.ExecShellCmd("cp -Rp %s %s",
-				utils.Quote(filepath.Join(opts.ChartsDir, dir)), utils.Quote(dest)); err != nil {
+		staged := configs.Charts{Dir: dest}
+		for from, to := range map[string]string{
+			source.PrometheusValues(): staged.PrometheusValues(),
+			source.GrafanaValues():    staged.GrafanaValues(),
+		} {
+			if err := os.MkdirAll(filepath.Dir(to), 0o700); err != nil {
+				return err
+			}
+			if _, err := utils.ExecShellCmd("install -m 0644 %s %s", utils.Quote(from), utils.Quote(to)); err != nil {
 				return err
 			}
 		}

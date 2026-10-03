@@ -11,24 +11,32 @@ const PrometheusDir = "prometheus"
 
 var (
 	chartVersion = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
-	helmVersion  = regexp.MustCompile(`^v3\.\d+\.\d+$`)
-	sha256Hex    = regexp.MustCompile(`^[a-f0-9]{64}$`)
+	// chartRef is an OCI chart repository: no tag, digest, scheme other than
+	// oci://, or character a shell would interpret.
+	chartRef    = regexp.MustCompile(`^oci://[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+)+$`)
+	chartDigest = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
+	helmVersion = regexp.MustCompile(`^v3\.\d+\.\d+$`)
+	sha256Hex   = regexp.MustCompile(`^[a-f0-9]{64}$`)
 	// dnsLabel is a namespace or Helm release name.
 	dnsLabel = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
 )
 
-// Prometheus pins the monitoring stack setup_prometheus installs. The chart
-// itself is vendored at k8s/prometheus/chart, so there is no repository to
-// fetch from and no chart_repo here.
+// Prometheus pins the monitoring stack setup_prometheus installs. The chart is
+// pulled from its OCI registry by version and digest rather than committed, so
+// the repository carries only our values files.
 type Prometheus struct {
 	Namespace string `json:"namespace"`
 	Release   string `json:"release"`
-	// ChartVersion is the version the vendored chart is expected to be.
-	// setup_prometheus compares it against the chart's own Chart.yaml and
-	// refuses to install on a mismatch, because Helm ignores values keys a
-	// chart does not define rather than rejecting them: a silently re-vendored
-	// chart would quietly drop every override.
+	// ChartRef is the chart's OCI repository, without a tag or digest.
+	ChartRef string `json:"chart_ref"`
+	// ChartVersion and ChartDigest pin the chart. Helm refuses a reference
+	// whose tag does not resolve to the digest, so the two cannot drift apart,
+	// and the digest fixes the exact bytes even if the tag were re-pushed.
+	// Bump them together and re-check the values files: Helm ignores values
+	// keys a chart does not define, so a renamed key drops an override
+	// silently.
 	ChartVersion string `json:"chart_version"`
+	ChartDigest  string `json:"chart_digest"`
 	// HelmVersion and HelmSHA256 pin the Helm binary. The expected digest lives
 	// here rather than being downloaded beside the tarball: a checksum fetched
 	// from the same place as the file only detects corruption, not tampering.
@@ -45,6 +53,12 @@ func LoadPrometheus(dir string) (Prometheus, error) {
 	return prometheus, prometheus.Validate()
 }
 
+// Chart is the reference setup_prometheus installs: repository, version and
+// digest together.
+func (p Prometheus) Chart() string {
+	return p.ChartRef + ":" + p.ChartVersion + "@" + p.ChartDigest
+}
+
 // Validate checks every field that reaches a command line.
 func (p Prometheus) Validate() error {
 	var problems []string
@@ -54,8 +68,14 @@ func (p Prometheus) Validate() error {
 	if !dnsLabel.MatchString(p.Release) {
 		problems = append(problems, fmt.Sprintf("release %q must be a DNS label", p.Release))
 	}
+	if !chartRef.MatchString(p.ChartRef) {
+		problems = append(problems, fmt.Sprintf("chart_ref %q must be an oci:// repository without a tag or digest", p.ChartRef))
+	}
 	if !chartVersion.MatchString(p.ChartVersion) {
 		problems = append(problems, fmt.Sprintf("chart_version %q must be an exact version like 72.6.2", p.ChartVersion))
+	}
+	if !chartDigest.MatchString(p.ChartDigest) {
+		problems = append(problems, fmt.Sprintf("chart_digest %q must be sha256: followed by 64 lowercase hex characters", p.ChartDigest))
 	}
 	if !helmVersion.MatchString(p.HelmVersion) {
 		problems = append(problems, fmt.Sprintf("helm_version %q must be a Helm 3 release like v3.22.0", p.HelmVersion))

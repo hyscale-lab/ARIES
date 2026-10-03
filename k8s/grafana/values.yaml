@@ -1,7 +1,7 @@
-# Grafana overrides for the vendored kube-prometheus-stack in ../prometheus/chart.
+# Grafana overrides for kube-prometheus-stack (see ../prometheus/values.yaml).
 #
-# Grafana is a subchart of kube-prometheus-stack (grafana 9.0.0, per
-# ../prometheus/chart/Chart.lock), not a release of its own. This file is
+# Grafana is a subchart of kube-prometheus-stack (grafana 9.0.0 in chart
+# 72.6.2), not a release of its own. This file is
 # applied to the same release as ../prometheus/values.yaml, which is why every
 # key is nested under `grafana:` — that is the subchart's alias in the parent.
 #

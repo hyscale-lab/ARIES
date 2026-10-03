@@ -109,9 +109,9 @@ type Cluster struct {
 	SSHKey          string   `json:"ssh_key"`
 	SSHOptions      []string `json:"ssh_options"`
 	FetchKubeconfig bool     `json:"fetch_kubeconfig"`
-	// DeployPrometheus runs setup_prometheus on the master once the role pools
-	// are labelled, installing the vendored kube-prometheus-stack chart (with
-	// Grafana) per prometheus/prom_config.json.
+	// DeployPrometheus runs setup_prometheus on the master once the workers
+	// have joined, installing kube-prometheus-stack (with Grafana) from the
+	// registry reference pinned in prometheus/prom_config.json.
 	DeployPrometheus bool `json:"deploy_prometheus"`
 	// DeployAries runs setup_aries on the master, installing the ARIES chart
 	// per aries/aries_config.json. The chart needs an image the cluster can

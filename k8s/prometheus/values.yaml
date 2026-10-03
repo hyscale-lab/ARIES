@@ -1,14 +1,15 @@
-# Prometheus-side overrides for the vendored kube-prometheus-stack in ./chart.
+# Prometheus-side overrides for kube-prometheus-stack, which aries-setup pulls
+# from the registry reference pinned in
+# ../setup/configs/prometheus/prom_config.json.
 #
 # Checked against chart 72.6.2 (appVersion v0.82.2). Helm ignores keys a chart
 # does not define rather than rejecting them, so re-verify every key here when
-# ./chart is re-vendored to a new version — a misspelt key leaves the default
-# in place silently.
+# chart_version is bumped — a misspelt key leaves the default in place
+# silently. `helm show values <chart>` prints the new chart's keys.
 #
 # Grafana lives in ../grafana/values.yaml, applied to this same release.
-# Placement is not set in either file: aries-setup renders nodeSelector and
-# tolerations from node_role in prom_config.json and passes them as a final
-# values file, so the monitoring node is named in exactly one place.
+# Placement is not set in either file: nodes carry no role taints, so the
+# monitoring pods schedule wherever there is room.
 
 # The kubelet is the scrape that matters for ARIES: its cAdvisor endpoint is
 # where per-pod CPU, memory and CFS throttling come from. The chart enables it

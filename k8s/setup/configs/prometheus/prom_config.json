@@ -1,7 +1,9 @@
 {
   "namespace": "monitoring",
   "release": "prometheus",
+  "chart_ref": "oci://ghcr.io/prometheus-community/charts/kube-prometheus-stack",
   "chart_version": "72.6.2",
+  "chart_digest": "sha256:b6b5993a143594475fcaa3d5fff74382f06be02cae491b80f0cf6d1b68f9ec6c",
   "helm_version": "v3.22.0",
   "helm_sha256": {
     "amd64": "1e4ab49e429626cf6c6958d914248b78c9730803c2751b87627e171dc800e7bb",

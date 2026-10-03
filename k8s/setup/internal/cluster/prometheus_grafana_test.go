@@ -87,8 +87,7 @@ func TestStageShipsOnlyWhatIsDeployedAndNeverTopology(t *testing.T) {
 		return files
 	}
 
-	// The vendored chart is hundreds of files, so assert on the config tree
-	// exactly and on the charts by presence.
+	// Assert on the config tree exactly and on the charts by presence.
 	configsOnly := func(files []string) string {
 		var kept []string
 		for _, name := range files {
@@ -114,14 +113,16 @@ func TestStageShipsOnlyWhatIsDeployedAndNeverTopology(t *testing.T) {
 	if got := configsOnly(prom); got != "aries-setup configs/kube.json configs/prometheus/prom_config.json configs/system.json" {
 		t.Errorf("with Prometheus, staged configs %q", got)
 	}
-	for _, want := range []string{
-		"charts/prometheus/values.yaml",
-		"charts/prometheus/chart/Chart.yaml",
-		"charts/grafana/values.yaml", // Grafana always ships with Prometheus
-	} {
-		if !has(prom, want) {
-			t.Errorf("with Prometheus, %s was not staged", want)
+	// The chart itself is pulled on the master, so only our values files go.
+	var promCharts []string
+	for _, name := range prom {
+		if strings.HasPrefix(name, "charts/") {
+			promCharts = append(promCharts, name)
 		}
+	}
+	slices.Sort(promCharts)
+	if got := strings.Join(promCharts, " "); got != "charts/grafana/values.yaml charts/prometheus/values.yaml" {
+		t.Errorf("with Prometheus, staged charts %q; want only the two values files", got)
 	}
 	if has(prom, "charts/aries/Chart.yaml") {
 		t.Error("the ARIES chart was staged without deploy_aries")
@@ -134,8 +135,8 @@ func TestStageShipsOnlyWhatIsDeployedAndNeverTopology(t *testing.T) {
 	if !has(aries, "charts/aries/Chart.yaml") {
 		t.Error("with deploy_aries, the ARIES chart was not staged")
 	}
-	if has(aries, "charts/prometheus/chart/Chart.yaml") {
-		t.Error("the 6.7MB monitoring chart was staged without deploy_prometheus")
+	if has(aries, "charts/prometheus/values.yaml") {
+		t.Error("the monitoring values were staged without deploy_prometheus")
 	}
 
 	for _, files := range [][]string{bare, prom, aries} {
@@ -147,37 +148,20 @@ func TestStageShipsOnlyWhatIsDeployedAndNeverTopology(t *testing.T) {
 	}
 }
 
-// The vendored chart and the pinned version must agree, or every override in
-// values.yaml is silently dropped: Helm ignores keys a chart does not define.
-func TestVendoredChartMatchesThePinnedVersion(t *testing.T) {
-	charts := configs.Charts{Dir: filepath.Join("..", "..", "..")}
+// The reference Helm installs must carry both pins: Helm refuses a tag that
+// does not resolve to the digest, which is what keeps the version the values
+// were checked against and the bytes installed from drifting apart.
+func TestChartReferencePinsVersionAndDigest(t *testing.T) {
 	prom, err := configs.LoadPrometheus(filepath.Join("..", "..", "configs"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	vendored, err := chartVersionOf(charts.PrometheusChart())
-	if err != nil {
-		t.Fatal(err)
+	want := prom.ChartRef + ":" + prom.ChartVersion + "@" + prom.ChartDigest
+	if got := prom.Chart(); got != want {
+		t.Errorf("Chart() = %q, want %q", got, want)
 	}
-	if vendored != prom.ChartVersion {
-		t.Errorf("vendored chart is %s but prom_config.json pins %s; re-check the values files, then update chart_version and k8s/prometheus/VENDORED.md",
-			vendored, prom.ChartVersion)
-	}
-}
-
-// appVersion sits next to version in Chart.yaml and is a different thing.
-func TestChartVersionIgnoresAppVersion(t *testing.T) {
-	dir := t.TempDir()
-	content := "apiVersion: v2\nname: x\nappVersion: v0.82.2\nversion: 72.6.2\n"
-	if err := os.WriteFile(filepath.Join(dir, "Chart.yaml"), []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	got, err := chartVersionOf(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != "72.6.2" {
-		t.Errorf("chartVersionOf = %q, want 72.6.2", got)
+	if !strings.HasPrefix(prom.Chart(), "oci://") || !strings.Contains(prom.Chart(), "@sha256:") {
+		t.Errorf("Chart() = %q; want an oci:// reference pinned by digest", prom.Chart())
 	}
 }
 

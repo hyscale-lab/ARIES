@@ -12,7 +12,7 @@ import (
 // SetupAries installs the ARIES chart from the control plane.
 //
 // It runs where setup_prometheus runs, and for the same reason: the admin
-// kubeconfig and the vendored charts are already there, so the operator never
+// kubeconfig and the staged charts are already there, so the operator never
 // has to log in to the master or hold a kubeconfig locally to deploy.
 //
 // The chart pulls the public bridge image, so by default it needs nothing this

@@ -57,9 +57,9 @@ func (s sshClient) stage(target, dir string) error {
 // extended attributes — curl alone tags a download with com.apple.provenance —
 // and bsdtar serialises each one as a companion AppleDouble member named
 // "._<file>". Those members are binary. Landing them in a Helm chart is not
-// cosmetic: helm reads every file in the chart's crds/ directory, and "._"
-// sorts before any letter, so the first thing it parses is a resource fork and
-// the install dies on "control characters are not allowed". COPYFILE_DISABLE=1
+// cosmetic: helm parses the files it is given, and a resource fork fails with
+// "control characters are not allowed" naming a file nobody created.
+// COPYFILE_DISABLE=1
 // stops bsdtar generating them; the excludes also drop any that are already on
 // disk, and are accepted by both bsdtar and GNU tar.
 func (s sshClient) StageLine(target, dir string) string {

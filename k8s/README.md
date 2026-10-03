@@ -10,7 +10,7 @@ ARIES, the harness and the bridge — and what is still missing — see
 ```
 k8s/
   aries/                # the ARIES chart: tool bridge pod, runner RBAC, dashboard
-  prometheus/           # vendored kube-prometheus-stack + our overrides
+  prometheus/           # our kube-prometheus-stack overrides
   grafana/              # Grafana overrides (a subchart of the above)
   setup/                # aries-setup: cluster bootstrap and deployment tool
     aries-setup/        #   the binary's entry point
@@ -18,9 +18,10 @@ k8s/
     internal/           #   node, cluster, config and exec packages
 ```
 
-The three chart directories are the whole deployment surface. `aries-setup`
-installs from them directly, so what a cluster receives is exactly what is
-committed here.
+These directories are the whole deployment surface. `aries-setup` installs
+from them directly: the ARIES chart as committed, and the upstream
+kube-prometheus-stack pulled by the version and digest pinned in
+`setup/configs/prometheus/prom_config.json`, with the values files here.
 
 - **aries/** — the in-cluster half of ARIES: the tool bridge pod
   (`aries-bridge`) with its own narrow Role and NetworkPolicy, the runner's
@@ -29,10 +30,9 @@ committed here.
   not in the chart: it runs as a process on a host outside the cluster. Values
   files select the environment: `values-local.yaml` for kind/minikube and
   `values-cluster.yaml` for a remote kubeadm cluster.
-- **prometheus/** — the upstream kube-prometheus-stack chart, committed under
-  `chart/` so an install needs no chart-repository access, with our overrides in
-  `values.yaml`. Provenance and the refresh procedure are in
-  [VENDORED.md](prometheus/VENDORED.md).
+- **prometheus/** — our overrides for the upstream kube-prometheus-stack chart,
+  in `values.yaml`. The chart itself is not committed; see
+  [Deploying Prometheus and Grafana](#deploying-prometheus-and-grafana).
 - **grafana/** — Grafana's overrides. Grafana is a **subchart** of
   kube-prometheus-stack, not a release of its own, so this file is applied to
   the same release and every key is nested under `grafana:`. Keeping it bundled
@@ -79,7 +79,7 @@ exec`. Its Role allows only `get pods` and `pods/exec`, and its
 | `setup_node`                  | install containerd and kubelet/kubeadm/kubectl                     | every node, as root |
 | `setup_master_node`           | `kubeadm init`, CNI, write a join command                          | control plane       |
 | `setup_worker --join "<cmd>"` | `kubeadm join`                                                     | each worker         |
-| `setup_prometheus`            | install Prometheus + Grafana from the vendored chart               | control plane       |
+| `setup_prometheus`            | install Prometheus + Grafana from the pinned upstream chart        | control plane       |
 | `setup_aries`                 | install the ARIES chart: the tool bridge pod and the runner's RBAC | control plane       |
 | `reset_node --yes`            | tear the node back to a pre-kubeadm state                          | any node            |
 | `create_cluster`              | all of the above over SSH, then `setup_runner`                     | your machine        |
@@ -107,8 +107,9 @@ k8s/setup/configs/
 ```
 
 `--configs-dir` defaults to `k8s/setup/configs` and `--charts-dir` to `k8s`,
-both relative to the repository root. Only the charts being deployed are
-shipped, and only to the master — the vendored monitoring chart alone is 6.7MB.
+both relative to the repository root. Only what is being deployed is shipped,
+and only to the master: the ARIES chart, and for Prometheus just the two values
+files, since the master pulls the chart itself.
 
 `cluster.json` is gitignored and never copied to a node, since it names every
 host and user. Unknown keys are rejected in every file, so a typo fails
@@ -305,7 +306,7 @@ node, workers first.
   node (kubeadm preflight enforces this).
 - Outbound network access to `dl.k8s.io`, `pkgs.k8s.io`, `download.docker.com`,
   `registry.k8s.io`, GitHub, and — for Prometheus — `get.helm.sh` for the Helm
-  binary. The charts are vendored, so no chart repository is contacted.
+  binary and `ghcr.io` for the kube-prometheus-stack chart.
 - Unique hostname, MAC address and product UUID per node.
 - Workers must reach the control plane on TCP 6443.
 - On your machine: Go (to build the node binary), `ssh` and `tar`.
@@ -469,19 +470,31 @@ release brings up both Prometheus and Grafana, because Grafana is a subchart.
 By hand, it is:
 
 ```sh
-helm upgrade --install prometheus ./k8s/prometheus/chart \
+helm upgrade --install prometheus \
+  oci://ghcr.io/prometheus-community/charts/kube-prometheus-stack:72.6.2@sha256:b6b5993a143594475fcaa3d5fff74382f06be02cae491b80f0cf6d1b68f9ec6c \
   --namespace monitoring --create-namespace \
   -f ./k8s/prometheus/values.yaml -f ./k8s/grafana/values.yaml \
   --wait --timeout 15m
 ```
 
-**The chart is vendored**, at `k8s/prometheus/chart`, so the install needs no
-chart-repository access and cannot drift between runs. `chart_version` in
-`prom_config.json` is checked against the chart's own `Chart.yaml` first and the
-install is refused on a mismatch — Helm ignores values keys a chart does not
-define, so a chart re-vendored without re-checking `prometheus/values.yaml` and
-`grafana/values.yaml` would silently drop every override. See
-[VENDORED.md](prometheus/VENDORED.md) to refresh it.
+**The chart is pinned, not committed.** `prom_config.json` names the chart's
+OCI repository, `chart_version` and `chart_digest`, and the install uses all
+three as one reference. Helm refuses it unless the tag resolves to that digest,
+so the version the values were checked against and the bytes installed cannot
+drift apart, and a re-pushed tag cannot change what is installed.
+
+To move to a new version:
+
+```sh
+V=<new-version>
+helm show values oci://ghcr.io/prometheus-community/charts/kube-prometheus-stack --version $V  # re-check our keys
+helm pull oci://ghcr.io/prometheus-community/charts/kube-prometheus-stack --version $V         # prints the Digest
+```
+
+Then update `chart_version` and `chart_digest` together, and re-check
+`prometheus/values.yaml` and `grafana/values.yaml` against the new chart: Helm
+ignores values keys a chart does not define, so a renamed key drops an override
+silently.
 
 To run `setup_prometheus` alone on a cluster that already exists, either use
 `create_cluster --skip-master --skip-workers`, or stage it on the master
@@ -492,10 +505,9 @@ make setup-tool
 ssh <master> 'mkdir -p aries-setup/configs'
 scp bin/aries-setup-linux-amd64 <master>:aries-setup/
 scp -r k8s/setup/configs/prometheus <master>:aries-setup/configs/
-# COPYFILE_DISABLE and the exclude keep macOS AppleDouble files out; see VENDORED.md
-ssh <master> 'mkdir -p aries-setup/charts'
-COPYFILE_DISABLE=1 tar -C k8s --exclude '._*' -cf - prometheus grafana \
-  | ssh <master> 'tar -C aries-setup/charts -xf -'
+ssh <master> 'mkdir -p aries-setup/charts/prometheus aries-setup/charts/grafana'
+scp k8s/prometheus/values.yaml <master>:aries-setup/charts/prometheus/
+scp k8s/grafana/values.yaml <master>:aries-setup/charts/grafana/
 ssh <master> 'cd aries-setup && sudo ./aries-setup-linux-amd64 \
   --configs-dir configs --charts-dir charts setup_prometheus'
 ```
@@ -559,7 +571,7 @@ the kubelet/cAdvisor scrapes this stack already performs. See
 | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `curl …/helm/master/scripts/get-helm-3 \| bash`                               | A pinned Helm release whose tarball is checked against the SHA-256 in `prom_config.json` before it is unpacked.                                                      |
 | `helm install`, `kubectl create namespace`                                    | `helm upgrade --install --create-namespace`, so a re-run does not fail.                                                                                              |
-| `helm repo add` then install by chart name                                    | The chart is committed at `k8s/prometheus/chart` and installed from disk, with its version checked against `chart_version`.                                          |
+| `helm repo add` then install by chart name                                    | The chart is pulled from its OCI registry by version and digest, both pinned in `prom_config.json`.                                                                  |
 | `loader-nodetype` node affinity                                               | No placement; ARIES nodes carry no role labels.                                                                                                                      |
 | `perf_event_paranoid=-1` on every node                                        | Not done. It would let task containers on the sandbox node read host-wide perf events, and the perf collector that needs it is commented out in the loader's values. |
 | Re-render controller-manager, scheduler, kube-proxy with `kubeadm init phase` | Not done; those scrapes (and etcd's) are disabled instead. The loader's `kubeadm_init.yaml` hardcodes a pod subnet and version that do not match an ARIES cluster.   |
@@ -675,13 +687,6 @@ Overshoot and pods sit `Pending` on `Insufficient cpu`.
 describe pod <kube-proxy pod>` shows `429 Too Many Requests`; deleting the
   kube-proxy and then the calico-node pod on that node retries once the limit
   lifts.
-- **Copying the charts from macOS needs `COPYFILE_DISABLE=1`.** Every vendored
-  chart file carries the unremovable `com.apple.provenance` xattr, and macOS
-  `tar` turns each into a binary `._<file>` archive member. On the node those
-  become real files, and `helm` parses one as a CRD, failing with `control
-characters are not allowed` for a file you never created. `create_cluster`
-  handles this, and `setup_prometheus` refuses a chart directory containing
-  `._*` files; by hand, see [VENDORED.md](prometheus/VENDORED.md).
 - The Flannel manifest hard-codes `10.244.0.0/16`; a different `pod_cidr` needs
   a patched manifest. `setup_master_node` warns instead of failing.
 - Only single control-plane clusters are bootstrapped end to end. For HA, set
