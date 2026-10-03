@@ -75,8 +75,10 @@ from the harness outcome; ARIES then removes the sandbox. This keeps agent
 execution, tool access, and scoring under distinct ownership while retaining
 replayable private evidence for a run.
 
-Read the [Architecture](docs/design.md) for the complete lifecycle, isolation
-gates, concurrency model, artifact boundaries, and extension contract.
+Read the [design principles](docs/design.md) for lifecycle, isolation, measurement,
+and extension requirements. Detailed [component contracts](docs/design.md#guides)
+and [implementation explanations](docs/implementation/README.md) cover the code's
+current behavior. Coding agents start at [AGENTS.md](AGENTS.md).
 
 ## Current implementation
 
@@ -87,7 +89,7 @@ implementations:
 | Role or service | Implementation |
 | --- | --- |
 | Agent harness | OpenClaw (text and realtime voice modes); Hermes (text) |
-| Benchmark | Terminal-Bench 2; Deep Research Bench; the 731-task public SWE-bench Pro split |
+| Benchmark | Terminal-Bench 2; Deep Research Bench; SWE-Atlas QA; the 731-task public SWE-bench Pro split |
 | Tool sandbox | Shared Docker deployment through the Moby Go SDK |
 | Tool bridge | Embedded OpenClaw SSH bridge; embedded Hermes SSH bridge |
 | Model service | External DeepSeek; external OpenAI-compatible servers such as vLLM; external or ARIES-managed SGLang |
@@ -100,9 +102,9 @@ at runtime.
 ## Getting started
 
 Harness and sandbox placement use independent `deployment` blocks. Both
-currently require the same local Docker daemon. Kubernetes configuration is a
-recognized placeholder that fails preflight; it does not run tasks. See
-[deployment configuration](docs/quick-start.md#deployment-configuration).
+currently require the same local Docker daemon. **Remote Docker servers and
+mixed deployment backends are not supported.** See
+[deployment configuration](docs/configuration.md#deployment-configuration).
 
 ARIES requires Linux, a local Docker Engine, Go, Git, Make, network access to
 the configured model service, and access to required image registries.

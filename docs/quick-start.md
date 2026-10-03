@@ -1,461 +1,84 @@
 # Quick start: OpenClaw + Terminal-Bench 2
 
-This guide runs a checked-in Terminal-Bench 2 experiment from a clean ARIES
-clone with either DeepSeek or SGLang. Run every command from the repository
-root.
+Run one checked-in task with either DeepSeek or a local SGLang model. Choose
+one option below, then inspect its result. Run commands from the repository root.
 
-## 1. Prerequisites
+## Prerequisites
 
-- Linux with a running local Docker Engine and access to `/var/run/docker.sock`.
+- Linux with a running **local Docker Engine** and access to `/var/run/docker.sock`.
+  Harness and sandbox must use the same local daemon. Remote Docker servers,
+  Docker Desktop, rootless networking, and mixed deployment backends are unsupported.
 - Go 1.26.5, Git, and Make. Go's toolchain selection can download 1.26.5 when
   an older Go launcher is installed.
-- Network access to GitHub, GHCR, and Docker Hub.
-- For DeepSeek, access to `https://api.deepseek.com` and an API key for the
-  model named in the profile.
-- For SGLang, an installed Python environment containing SGLang, a compatible
-  local model, and enough visible GPU memory.
+- Network access to GitHub, GHCR, Docker Hub, and the configured model endpoint.
 
-Verify Docker before continuing:
+From your ARIES checkout:
 
 ```sh
-cd ~/projects/aries
 docker info >/dev/null
-```
-
-ARIES currently validates the host bridge path on native Linux Docker. Docker
-Desktop and rootless networking are not yet supported configurations.
-
-## 2. Choose a profile
-
-Build ARIES once, then choose the one-task DeepSeek profile for the quickest
-first run, the equivalent one-task SGLang profile for local serving, or the
-heterogeneous five-task DeepSeek profile:
-
-```sh
 make build
 ```
 
-- `profiles/openclaw-tb2-fix-git-deepseek.json`
-- `profiles/openclaw-tb2-fix-git-sglang.json`
-- `profiles/openclaw-tb2-five-deepseek.json`
-- `profiles/hermes-tb2-fix-git-deepseek.json`
+Keep `bin/aries-ssh` beside `bin/aries`; the build produces both.
 
-Running a profile automatically loads `configs/versions.json`, creates or
-verifies the pinned Terminal-Bench checkout at `.cache/terminal-bench-2-1`, reads
-each selected task's explicit Docker image tag from its `task.toml`, and pulls
-only the configured harness image plus those selected images through the
-Docker Go SDK. Preparation
-happens before the run directory is created, a managed runtime is started,
-model weights load, an external endpoint is contacted, or task work is
-admitted. The Terminal-Bench Git revision and exact tag-pinned OpenClaw image
-remain in `configs/versions.json`, alongside the tag-pinned Hermes image; task
-image digests are not duplicated there.
-Preparation is safe to repeat and refuses to replace a checkout at another
-revision.
+## Option A: DeepSeek
 
-The five-task profile additionally references
-`configs/runtime-overrides.json` relative to the profile. Its sparse
-`harness_resources` and `agent_sandbox_resources` blocks apply only to their
-respective containers and may specify different CPU and memory limits. An
-omitted harness dimension stays unlimited; an omitted sandbox dimension keeps
-the value in the task's `task.toml`. Neither block inherits from the other.
-The independent `agent_timeout_seconds` field changes only the agent deadline.
-The independent `verifier_timeout_floor_seconds` field raises a Terminal-Bench
-task's evaluation budget to at least that many seconds and never lowers one.
-It covers the entire verifier command, including dependency installation and
-test execution, and leaves the agent deadline unchanged. Some task test scripts
-exhaust a short declared budget while installing dependencies.
+You need a DeepSeek API key with access to the profile's model. This option can
+incur model API charges.
 
-For example, an overrides file containing the following sets a 900-second
-minimum verifier budget:
+### Configure the credential
 
-```json
-{
-  "verifier_timeout_floor_seconds": 900
-}
-```
-
-Report the configured floor with benchmark results and use the same verifier
-budget policy across compared runs.
-Every checked-in profile explicitly contains `overrides_file`; the one-task
-profile uses `""`, which disables override loading without opening a file.
-Profiles and nonempty referenced override files reject unknown fields and
-trailing JSON; there is no profile merge or inheritance layer. SGLang is the
-exception only for its separate native launch configuration, described below.
-
-### Deployment configuration
-
-Checked-in profiles select harness identity and placement separately:
-
-```json
-{
-  "harness": {
-    "type": "hermes",
-    "deployment": {
-      "backend": "docker",
-      "docker": { "socket": "/var/run/docker.sock" }
-    }
-  },
-  "sandbox": {
-    "deployment": {
-      "backend": "docker",
-      "docker": { "socket": "/var/run/docker.sock" }
-    }
-  },
-  "bridge": { "type": "hermes-ssh", "mode": "embedded" }
-}
-```
-
-This is a profile fragment; keep the benchmark, model, runtime, and other
-settings from a complete checked-in profile. OpenClaw uses `harness.type:
-"openclaw"` with `bridge.type: "openclaw-ssh"`. Pairing is checked independently
-of placement.
-
-Both components must use the same supported local Docker daemon. `socket`
-accepts an absolute Unix socket path or `unix:///absolute/path`; normalization
-cleans the path before comparing the two settings. Remote Docker endpoints are
-rejected. Image preparation and resource monitoring use the selected socket.
-The supported topology remains native Linux Docker with one network per task
-occurrence, including repeated task IDs.
-
-Compatibility normalization supplies Docker with `/var/run/docker.sock` when a
-deployment block is omitted, defaults an omitted Docker socket to that path,
-and defaults omitted `bridge.mode` to `embedded`. Legacy `sandbox.type:
-"docker"` maps to Docker deployment; conflicting explicit settings are rejected.
-Unknown backends, options from a different backend, and unsupported bridge modes
-fail validation. `embedded` means the listener runs inside ARIES. Bridge modes
-`managed` and `external` are not implemented.
-
-The loader recognizes a Kubernetes placement block:
-
-```json
-{
-  "backend": "kubernetes",
-  "kubernetes": {
-    "context": "benchmark-cluster",
-    "namespace": "aries",
-    "runtime_class_name": "kata"
-  }
-}
-```
-
-Each component has its own block, including its
-[RuntimeClass reference](https://kubernetes.io/docs/concepts/containers/runtime-class/).
-Selecting Kubernetes currently fails preflight with `harness.deployment` or
-`sandbox.deployment` in the error before model preflight, image preparation, or
-resource allocation. ARIES does not implement Kubernetes deployment, install
-runtime handlers, or create RuntimeClasses.
-
-Bridge addresses come from task composition, with separate local bind and
-harness destination addresses; they are not profile fields. Docker uses the
-task network gateway for both. The current adapters accept IPv4 addresses,
-reject DNS and wildcard destinations, and advertise the port the OS actually
-assigned. One authenticated listener grant remains bound to each task.
-
-### Prepare the selected images
-
-For an optional prewarm, `setup` performs only profile/backend validation and
-the same benchmark/image preparation. It does not contact an external model
-service, start managed SGLang, load model weights, create a run directory, or
-admit tasks:
-
-```sh
-make setup
-make setup PROFILE=profiles/openclaw-tb2-five-deepseek.json
-make setup PROFILE=profiles/openclaw-tb2-fix-git-sglang.json
-```
-
-The normal Make workflow is direct run:
-
-```sh
-make run
-make run PROFILE=profiles/openclaw-tb2-five-deepseek.json
-```
-
-To run another subset from the pinned revision, copy either profile and replace
-`benchmark.tasks` with the desired task directory names. ARIES preserves the
-listed order and repeated entries. Set positive `execution.concurrency` to
-bound parallel occurrences. Add a positive Go duration such as `"30m"` as
-`execution.loop_duration` to repeat the list until admissions close; admitted
-work is always drained. ARIES loads each task's explicit tagged image directly from that
-task's `task.toml`; no version-catalog or Go code change is required.
-
-### Replay task arrivals
-
-An arrival trace schedules task occurrences at offsets from the start of task
-scheduling, after benchmark/image preparation and model preflight. Scheduling
-happens outside the harness, so it works with any benchmark, harness, and mode
-listed in [supported implementations](supported.md). Keep the rest of an
-existing profile unchanged.
-
-For example, save this trace as `.cache/arrivals.json` (create `.cache` first):
-
-```json
-{
-  "trace_id": "fix-git-replay",
-  "base_rate_per_min": 1.0,
-  "arrivals": [
-    {"t": 0, "traj": "fix-git"},
-    {"t": 60, "traj": "fix-git"},
-    {"t": 180, "traj": "fix-git"}
-  ]
-}
-```
-
-`trace_id` is optional descriptive metadata. `base_rate_per_min` is the positive
-reference rate. Each `t` is an offset in seconds, not a delay from the previous
-entry; `traj` is the exact logical task ID from `benchmark.tasks`. Selected
-offsets must be zero or positive and fit Go's `time.Duration` after scaling. The
-trace must contain at least one arrival. Extra metadata fields are accepted in
-the trace; the experiment profile still rejects unknown fields.
-
-Copy the one-task profile, replace its `execution` block, and set
-`benchmark.tasks` as follows (these are profile fragments):
-
-```sh
-cp profiles/openclaw-tb2-fix-git-deepseek.json .cache/arrival-demo.json
-```
-
-```json
-{
-  "execution": {
-    "concurrency": 3,
-    "arrivals_file": ".cache/arrivals.json",
-    "arrival_rate_per_min": 2.0
-  },
-  "benchmark": {
-    "tasks": ["fix-git", "fix-git", "fix-git"]
-  }
-}
-```
-
-Keep the other fields from the copied profile. From the repository root, after
-configuring the model credential as described below, run:
-
-```sh
-./bin/aries .cache/arrival-demo.json
-```
-
-Relative `arrivals_file` paths resolve from the command's working directory,
-not the profile directory. The copied profile's `../configs/versions.json`
-continues to resolve relative to `.cache/arrival-demo.json`. Both
-`arrivals_file` and a finite, positive `arrival_rate_per_min` must be set
-together; omit `loop_duration` because a trace cannot be combined with looping.
-
-The scheduler uses `offset = t * base_rate_per_min / arrival_rate_per_min`.
-The example therefore schedules three independent `fix-git` occurrences at
-0, 30, and 90 seconds. It replays the supplied offsets; it does not generate a
-Poisson stream or guarantee a measured throughput of two tasks per minute.
-For each task, its k-th occurrence in `benchmark.tasks` selects its k-th entry
-in trace file order. Missing occurrences fail the run; unused trace entries
-are ignored. Selected occurrences are then sorted by scaled offset, preserving
-profile order for ties. This schedule order determines occurrence IDs and
-result order, regardless of completion order.
-
-`execution.concurrency` still caps active occurrences, including evaluation
-and cleanup. A full pool delays admission and can make later arrivals overdue;
-they run as capacity becomes available instead of being dropped. Choose enough
-capacity for the intended overlap (three guarantees a free slot for each
-arrival in this example). Cancellation stops further admissions and drains
-admitted work through lifecycle cleanup.
-
-Each task's `started_at` in `run-result.json` records when its Runner task
-lifecycle began, after occurrence construction, observer startup, and task
-loading, but before sandbox startup. It is neither the planned arrival time
-nor the first model request time. Starts can be delayed by capacity or setup;
-scheduling is not a hard realtime guarantee. Trace contents are loaded during
-`run` after model preflight, so `setup` alone does not validate them.
-
-## 3. Configure the model backend
-
-`runtime.mode` states whether ARIES owns a model-server process: an `external`
-endpoint is validated but never started, configured, or stopped, and a
-`managed` process is owned for the run. `runtime.backend` names the kind of
-service behind the endpoint, which selects the preflight and the provider each
-harness renders; it is not a runtime ARIES prepares. The supported combinations
-are:
-
-| Backend | Mode | `runtime.config` | Process owner |
-| --- | --- | --- | --- |
-| `deepseek` | `external` | Must be omitted | DeepSeek |
-| `sglang` | `external` | `file` only | User |
-| `sglang` | `managed` | `file`, `executable`, `startup_timeout`, `stop_timeout` | ARIES |
-| `openai` | `external` | Must be omitted | User |
-
-DeepSeek and `openai` are external only. SGLang supports both modes.
-
-HTTP model endpoints are a trusted-local exception. The checked-in HTTP
-examples use the non-secret `unused-local-token` placeholder and are suitable
-only when the endpoint and network are under your control. Never send a real
-API key over HTTP; use an HTTPS endpoint for a remote or credentialed service.
-
-### External DeepSeek
-
-The checked-in DeepSeek profile uses:
-
-```json
-{
-  "runtime": {
-    "backend": "deepseek",
-    "mode": "external"
-  },
-  "model": {
-    "base_url": "https://api.deepseek.com",
-    "api_key_env": "DEEPSEEK_API_KEY",
-    "id": "deepseek-flash"
-  }
-}
-```
-
-Do not add a `runtime.config` object for DeepSeek. ARIES performs model
-preflight and configures OpenClaw, but it does not manage the remote service.
-
-The preferred source for `./bin/aries` is the ignored repository-root file
-`DEEPSEEK_API.key`:
+The example profile already selects the model and endpoint. Store your key in
+the ignored repository-root `DEEPSEEK_API.key` file. In Bash:
 
 ```sh
 echo 'api_key' > DEEPSEEK_API.key
 chmod 600 DEEPSEEK_API.key
 ```
 
-The file must be a current-user-owned, regular, non-symlink file with owner
-read access, no group or world permissions, and one nonempty line. Modes `0400`
-and `0600` are both valid. ARIES never writes the value to JSON, logs, Docker
-metadata, or results.
+The file must be owned by you, regular (not a symlink), owner-readable, and have
+no group/world permissions. Keep the key out of profile JSON and shared output.
+For environment credentials and other model backends, see
+[model configuration](configuration.md#model-backends).
 
-If that repository-local file is unavailable, including when the binary is
-installed elsewhere, ARIES reads `DEEPSEEK_API_KEY` from the environment. If a
-repository-local file exists but is invalid, ARIES fails closed rather than
-falling back.
-
-This file convenience is not limited to a DeepSeek-backed harness: it also
-applies whenever a benchmark's `judge` block is genuinely official DeepSeek
-(`provider: "deepseek"`, `base_url: "https://api.deepseek.com"`, and a
-supported model), even if `runtime.backend` is `sglang` — e.g. SWE-Atlas QA's
-`profiles/openclaw-sweatlasqa-smoke1-sglang.json`, which runs its agent
-against a local SGLang server but grades with a DeepSeek judge. Any other
-credential (SGLang's own `api_key_env`, for instance) is always read from the
-environment regardless.
-
-The live API advertises `deepseek-flash` and `deepseek-v4-pro`. ARIES also
-recognizes the legacy `deepseek-v4-flash` ID, but preflight requires the exact
-configured ID to appear in the provider's model catalog. `deepseek-v4` is not a
-supported ID.
-
-### External SGLang
-
-The checked-in SGLang profile keeps experiment configuration in JSON and
-references the reusable native YAML at
-`configs/sglang/qwen3-8b-local.yaml`. SGLang reads this file through its native
-`--config` option. Before launch, ARIES performs a bounded preflight over the
-fields needed to check the served model, endpoint port, and local GPU topology.
-A mismatch with the profile or an invalid GPU topology is rejected before the
-run starts; inference settings remain owned and interpreted by SGLang.
-
-Copy the profile before changing its endpoint:
+### Run one task
 
 ```sh
-cp profiles/openclaw-tb2-fix-git-sglang.json \
-  .cache/openclaw-tb2-fix-git-sglang.json
+./bin/aries profiles/openclaw-tb2-fix-git-deepseek.json
 ```
 
-Replace `model.base_url` in the copy with an endpoint ending exactly in `/v1`.
-The checked-in `sglang.local` hostname is a placeholder: the configured
-hostname or address must resolve and be reachable from both the ARIES host and
-OpenClaw containers. Use HTTP only for a trusted local endpoint with the
-non-secret placeholder below; use HTTPS for a remote or credentialed service.
+ARIES prepares the pinned benchmark checkout and required images, validates the
+model, and runs the task. The first run can take longer because of downloads.
+After agent execution it confirms harness stop and bridge revocation, evaluates
+the same sandbox, and cleans up. Preparation refuses to replace a checkout at a
+different revision.
 
-The checked-in profile uses the following external runtime and model settings:
-
-```json
-{
-  "runtime": {
-    "backend": "sglang",
-    "mode": "external",
-    "config": {
-      "file": "../configs/sglang/qwen3-8b-local.yaml"
-    }
-  },
-  "model": {
-    "base_url": "http://sglang.local:30000/v1",
-    "api_key_env": "SGLANG_API_KEY",
-    "id": "Qwen/Qwen3-8B"
-  }
-}
-```
-
-External SGLang mode needs no `runtime.config`. An optional `config.file` is
-accepted for existing profiles but is not read or validated; `executable`,
-`startup_timeout`, and `stop_timeout` are rejected because ARIES does not own
-that process. Start SGLang separately; for example, this exposes GPU0 to the
-server:
+Optional: prewarm benchmark data and images without contacting the model service:
 
 ```sh
-CUDA_VISIBLE_DEVICES=0 /absolute/path/to/venv/bin/python \
-  -m sglang.launch_server \
-  --config configs/sglang/qwen3-8b-local.yaml
+./bin/aries setup profiles/openclaw-tb2-fix-git-deepseek.json
 ```
 
-In the shell that runs ARIES, set the environment variable named by
-`model.api_key_env`. An unauthenticated endpoint still needs a nonempty
-placeholder because OpenClaw and model preflight require the configured
-credential:
+## Option B: Local SGLang
+
+ARIES can start and stop a local SGLang process for the experiment. You need a
+Python environment with SGLang installed, NVIDIA drivers and `nvidia-smi`, and a
+GPU with enough memory for `Qwen/Qwen3-8B`. Make the model weights available to
+that environment beforehand; ARIES does not install SGLang or prepare weights.
+
+### Create a managed profile
+
+The checked-in SGLang profile selects external mode. Copy it before making
+changes:
 
 ```sh
-export SGLANG_API_KEY=unused-local-token
-./bin/aries .cache/openclaw-tb2-fix-git-sglang.json
+mkdir -p .cache
+cp profiles/openclaw-tb2-fix-git-sglang.json .cache/openclaw-tb2-fix-git-sglang.json
 ```
 
-### External OpenAI-compatible server
-
-`runtime.backend: "openai"` accepts any server that speaks the OpenAI chat
-completions API and lists its models at `/v1/models`: vLLM, `llama.cpp`, a
-gateway, or a hosted endpoint. ARIES never starts, configures, or stops the
-server. Before the run it makes one bounded `/v1/models` request and confirms
-that `model.id` is served. `runtime.config` must be omitted.
-
-The checked-in profile targets a vLLM server:
-
-```json
-{
-  "runtime": {
-    "backend": "openai",
-    "mode": "external"
-  },
-  "model": {
-    "base_url": "http://vllm.local:8000/v1",
-    "api_key_env": "VLLM_API_KEY",
-    "id": "Qwen/Qwen3.6-35B-A3B-FP8"
-  }
-}
-```
-
-Copy the profile, then set `model.base_url` to an endpoint that ends exactly in
-`/v1` and `model.id` to the name the server reports. The checked-in
-`http://vllm.local:8000/v1` value is a trusted-local placeholder; the address
-must resolve from the ARIES host and from the harness containers. Use HTTPS for
-a remote or credentialed server. Start the server yourself, for example:
-
-```sh
-vllm serve Qwen/Qwen3.6-35B-A3B-FP8 --port 8000 \
-  --served-model-name Qwen/Qwen3.6-35B-A3B-FP8
-```
-
-For this trusted-local HTTP example, use the non-secret placeholder credential:
-
-```sh
-export VLLM_API_KEY=unused-local-token
-./bin/aries profiles/hermes-tb2-fix-git-vllm.json
-```
-
-Hermes has no `sglang` or plain `openai` provider, so for both backends ARIES
-renders Hermes's generic `custom` provider, which routes to `model.base_url`.
-OpenClaw receives the server as a `models.providers` entry named `aries`.
-
-### Managed SGLang
-
-To let ARIES own one SGLang process for the entire profile run, use the
-following runtime and model settings in the copied profile:
+Open `.cache/openclaw-tb2-fix-git-sglang.json` in your editor. Replace its
+`runtime` and `model` sections with the following, keeping the rest of the
+profile unchanged. This is a profile fragment, not a complete file:
 
 ```json
 {
@@ -478,304 +101,65 @@ following runtime and model settings in the copied profile:
 }
 ```
 
-All four managed `runtime.config` fields are required. `file` is resolved
-relative to the profile, `executable` must identify the Python executable from
-the SGLang environment, and both timeout values must be positive Go durations.
-`model.base_url` must use the YAML port and end exactly in `/v1`;
-`model.id` must equal the YAML `served-model-name`; and `model.api_key_env`
-names the environment variable read by ARIES and rendered into OpenClaw.
+Set `runtime.config.executable` to the Python executable in your SGLang
+environment. Replace `sglang.local` in `model.base_url` with this machine's
+hostname or IP reachable from both the ARIES host and Docker harness containers.
+Do not use `localhost` or `127.0.0.1`: inside a harness container, those addresses
+refer to the container itself.
 
-`runtime.config.gpu_indices` is optional and valid only for managed SGLang.
-For YAML `device: cuda`, ARIES derives the number of local workers from the
-tensor, pipeline, and multi-node topology and selects physical devices
-`[0, ..., N-1]` when the field is omitted.
-Ordinary data parallelism replicates workers; DP attention, expert, MoE data,
-and attention-context parallelism partition the TP workers instead. An
-explicit list must contain exactly `N` unique, non-negative indices. ARIES uses
-the resolved list for both the child's `CUDA_VISIBLE_DEVICES` and NVIDIA
-sampling. An unsupported or inconsistent topology fails before runtime or
-monitor side effects.
+This uses the checked-in YAML for `Qwen/Qwen3-8B` on GPU 0, listening on port
+30000. Keep that port free and reachable from the containers. The HTTP example
+is for a trusted local network with a non-secret placeholder credential; use
+HTTPS for remote or credentialed endpoints. The YAML binds to `0.0.0.0`, so
+restrict access to the model server to your trusted network.
 
-Do not start `sglang.launch_server` separately in this mode. ARIES passes the
-referenced YAML using the exact arguments
-`-m sglang.launch_server --config <file>`, waits up to `startup_timeout` for
-`/health`, and then requires exact model discovery at `/v1/models`. It retains
-the child output in mode-0600 `sglang/stdout.log` and `sglang/stderr.log`, stops
-the process group after all admitted tasks drain, and uses `stop_timeout` as
-the graceful TERM budget before forced cleanup.
-
-The configured credential variable is available to ARIES and OpenClaw but is
-removed from the managed SGLang child's environment:
+### Run one task
 
 ```sh
 export SGLANG_API_KEY=unused-local-token
 ./bin/aries .cache/openclaw-tb2-fix-git-sglang.json
 ```
 
-ARIES does not install SGLang or models or configure the network path shared by
-the host and containers.
+Do not launch SGLang separately for this option. ARIES starts the server, waits
+for health and model validation, runs the task, and stops the server afterward.
+The first launch can take time to load the model. Server logs are saved under
+`sglang/stdout.log` and `sglang/stderr.log` in the run directory.
 
-## 4. Run the experiment
+See [managed SGLang configuration](configuration.md#managed-sglang) for GPU
+selection, model changes, and timeout rules. If you already operate a server,
+use [external SGLang](configuration.md#external-sglang) instead.
 
-For the one-task example:
+## Inspect the result
 
-```sh
-./bin/aries profiles/openclaw-tb2-fix-git-deepseek.json
-```
-
-For the five-task subset:
-
-```sh
-./bin/aries profiles/openclaw-tb2-five-deepseek.json
-```
-
-For SGLang, use the external or managed command from the previous section.
-Keep `bin/aries-ssh` beside `bin/aries`. A live DeepSeek run can incur API
-charges; the five-task profile also takes substantially longer and pulls more
-images. ARIES first ensures the benchmark and images are prepared, then starts
-and checks an owned managed runtime when configured, performs a bounded model
-preflight, and runs each task in profile order. For each task it stops OpenClaw,
-revokes SSH access, and only then evaluates the same still-running sandbox.
-
-### Hermes instead of OpenClaw
-
-The Hermes profile is the same run with a different harness, so it needs the
-same DeepSeek credential and no extra setup:
+Results are saved under `runs/`, in a directory named with the run timestamp and
+profile name. List the directories, newest first:
 
 ```sh
-./bin/aries profiles/hermes-tb2-fix-git-deepseek.json
+ls -1dt runs/*/
 ```
 
-Hermes is text only. It runs the pinned upstream image unmodified and is paired
-with `bridge.type: "hermes-ssh"`; the two values must match, and a crossed pair
-is rejected before the run starts. Hermes issues every tool call as `bash -c`,
-so the task image must provide `/bin/bash`. Its `~/.hermes` file sync is refused by
-the bridge to keep the evaluated sandbox free of harness scaffold and
-credentials; Hermes logs one `file_sync: sync failed` warning and continues.
-
-Artifacts land under `<run>/<task>/harness/`: the redacted `config.yaml`, the
-one-shot's `hermes_stdout.log` and `hermes_stderr.log`, `container.log`, and the
-exported message-level trajectory at `telemetry/sessions.jsonl`.
-
-### Hermes context window, compaction, and request extra body
-
-Three optional profile blocks reach the rendered Hermes `config.yaml`. Each is
-Hermes-only and is rejected under another harness. A profile without them
-renders the same file as before.
-
-- `model.context_length`, `model.max_tokens`, and `model.temperature` set the
-  window Hermes's compressor reasons about and the request sampling.
-  Temperature (including `0.0`) requires the `sglang` or `openai` backend;
-  ARIES places it in the custom provider's request `extra_body`, because the
-  pinned one-shot path ignores Hermes's `model.temperature` YAML field.
-  Setting both `model.temperature` and `harness.hermes.extra_body.temperature`
-  is rejected. Native DeepSeek temperature is unsupported by this path.
-- `harness.compaction.threshold_tokens` is an absolute compaction trigger.
-  Hermes applies it after its 64K minimum and its 75% floor for windows under
-  512K, so it is the one knob that gives an exact trigger on a large window.
-  `harness.compaction.enabled: false` turns compaction off.
-- `harness.hermes.extra_body` is a non-empty JSON object. ARIES writes it as
-  the `extra_body` of one `custom_providers` entry, and Hermes merges it into
-  every chat request. Hermes performs that merge only for its `custom`
-  provider, so the block requires the `sglang` or `openai` backend. It sits
-  under `harness.hermes` because it is a Hermes escape hatch with no meaning
-  for another harness, whereas compaction is a general harness setting.
-
-Hermes expands `${NAME}` references in its configuration from the container
-environment. ARIES exports `ARIES_RUN_ID` and `ARIES_TASK_ID` into the Hermes
-container, and those two are the only references `harness.hermes.extra_body`
-may carry. The object is also rejected when any field at any depth is named
-like a credential, such as `api_key`, `authorization`, or `token`: it is
-written into the retained `config.yaml` and sent with every request, and model
-keys stay out of JSON profiles. Its checked-in HTTP endpoint is intended only
-for trusted local use with the non-secret placeholder shown below; use HTTPS
-for a remote or credentialed server. The checked-in profile compacts at 65,536
-tokens and tags every request with the task through the OpenAI `user` field:
-
-```json
-{
-  "harness": {
-    "type": "hermes",
-    "compaction": {
-      "enabled": true,
-      "threshold_tokens": 65536
-    },
-    "hermes": {
-      "extra_body": {
-        "chat_template_kwargs": {
-          "preserve_thinking": true
-        },
-        "user": "${ARIES_RUN_ID}-${ARIES_TASK_ID}"
-      }
-    }
-  },
-  "model": {
-    "base_url": "http://vllm.local:8000/v1",
-    "api_key_env": "VLLM_API_KEY",
-    "id": "Qwen/Qwen3.6-35B-A3B-FP8",
-    "context_length": 262144,
-    "max_tokens": 32768,
-    "temperature": 1.0
-  }
-}
-```
+Choose the directory for your DeepSeek or SGLang run, then replace the placeholder
+below with its name:
 
 ```sh
-export VLLM_API_KEY=unused-local-token
-./bin/aries profiles/hermes-tb2-fix-git-vllm-compaction.json
-```
-
-`compression.threshold_tokens` exists since Hermes v2026.8, so the pinned image
-moves to `v2026.8.31`. Profiles that omit that absolute compaction cap remain
-compatible with the previously pinned `v2026.5.29.2`: that release accepts
-`model.context_length`, `model.max_tokens`, and custom-provider `extra_body`
-(including the request-level temperature path), but silently ignores
-`compression.threshold_tokens`. The rendered `config.yaml` under
-`<run>/<task>/harness/` shows the block exactly as Hermes reads it. The
-`agent.max_turns` value in that
-file does not bound the one-shot; use `agent_timeout_seconds` in the overrides
-file to bound a run.
-
-### Realtime OpenClaw mode
-
-OpenClaw uses text-agent mode when `harness.mode` is omitted. Set
-`harness.mode: "realtime"` to deliver the same task instruction through a
-realtime voice session. The checked-in realtime profile does this already.
-Keep the configured DeepSeek key file from the text setup and provide the
-separate TTS credential named by the realtime profile through a secret manager
-or interactive shell, then verify it is nonempty:
-
-```sh
-export OPENAI_API_KEY
-test -n "${OPENAI_API_KEY:-}"
-./bin/aries profiles/openclaw-tb2-fix-git-realtime-deepseek.json
-```
-
-This run can incur charges from both the configured model provider and the TTS
-provider. The realtime profile keeps model and TTS credentials separate;
-neither belongs in profile JSON.
-
-## 5. Check the result
-
-For the one-task profile:
-
-```sh
-run_dir="$(ls -1dt runs/*-openclaw-tb2-fix-git-deepseek | head -1)"
+run_dir="runs/REPLACE_WITH_RUN_DIRECTORY"
 cat "$run_dir/live-validation.json"
 cat "$run_dir/run-result.json"
-task_id="$(jq -er '.tasks[0].task_id' "$run_dir/run-result.json")"
-task_dir="$run_dir/$task_id"
-cat "$task_dir/evaluation/reward.txt"
-cat "$task_dir/bridge/tool-calls.jsonl"
-test ! -f "$task_dir/bridge/ssh_raw.log" || cat "$task_dir/bridge/ssh_raw.log"
-cat "$task_dir/harness/openclaw.json"
-cat "$run_dir/aries.log"
 ```
 
-For the SGLang example, select its run and inspect the managed runtime logs
-when applicable:
+Check each outcome separately: harness success does not imply task correctness.
+A passing task has confirmed isolation, successful evaluation with reward `1`,
+and successful cleanup. Use [run results and troubleshooting](run-results.md)
+for task logs, telemetry, verifier output, and failure diagnosis. Artifacts may
+contain private task or model content; review them before sharing.
 
-```sh
-run_dir="$(ls -1dt runs/*-openclaw-tb2-fix-git-sglang | head -1)"
-cat "$run_dir/live-validation.json"
-cat "$run_dir/run-result.json"
-task_id="$(jq -er '.tasks[0].task_id' "$run_dir/run-result.json")"
-task_dir="$run_dir/$task_id"
-cat "$run_dir/aries.log"
-jq 'select(.component == "gpu")' "$task_dir/monitor/resources.jsonl"
-cat "$task_dir/monitor/index.json"
-test ! -d "$run_dir/sglang" || ls -l "$run_dir/sglang"
-```
+## Next experiments
 
-For a multi-task profile, `run-result.json` contains one result per task and
-each task has its own readable directory:
-
-```sh
-run_dir="$(ls -1dt runs/*-openclaw-tb2-five-deepseek | head -1)"
-find "$run_dir" -maxdepth 2 -type d | sort
-find "$run_dir" -path '*/evaluation/reward.txt' -print -exec cat {} \;
-```
-
-A successful task has:
-
-- successful model validation;
-- separate successful harness, isolation, evaluation, observer, and cleanup
-  outcomes in `run-result.json`;
-- reward `1`; and
-- completed tool calls in `bridge/tool-calls.jsonl`.
-
-`bridge/ssh_raw.log` is an opt-in mode-0600 sensitive audit. It is written only
-when a profile sets `bridge.retain_raw_log` to `true`; an omitted or `false`
-value drops it, so the file is absent by default. When retained it contains
-lossless, human-readable text records between full-line
-`--- ARIES SSH CALL BEGIN ---` and `--- ARIES SSH CALL END ---` delimiters.
-Fixed-order `key=value` lines include the decoded wire command when available,
-exact payload and stdin byte counts, and escaped exact payload/stdin. Printable
-UTF-8 appears literally; backslash, newline, carriage return, tab, other
-controls, and invalid UTF-8 use explicit escapes. The file is neither JSON nor
-base64. It may contain exact wire-supplied values; keep the run directory
-private and do not publish this artifact without review.
-
-`bridge/tool-calls.jsonl` remains valid line-delimited JSON. Printable Unicode
-and HTML characters such as `&&`, `<`, and `>` appear literally, while quotes,
-backslashes, and newlines retain required JSON escaping. Printable stdin stays
-inline; binary or control-bearing stdin is replaced by a concise
-`binary-omitted` marker and exact byte count, with lossless bytes retained only
-in `ssh_raw.log`. Structured lifecycle logs and tool-call records continue to
-omit environment values and stdout/stderr bodies.
-
-Each task directory contains the exact placeholder-only rendered
-`harness/openclaw.json`, OpenClaw logs and telemetry when available, replayable
-SSH tool inputs, Docker sandbox logs, one-second CPU and memory samples,
-verifier stdout/stderr, and CTRF output. `aries.log` is the structured Logrus
-run log.
-
-Text mode writes `harness/agent-result.json`. Realtime mode instead writes the
-private `harness/voice-instruction.txt`, `harness/voice-instruction.wav`, its
-metadata, and `harness/realtime-result.json`. These mode-specific harness and
-bridge artifacts may contain task or model content; review them before sharing.
-
-## Troubleshooting
-
-- **Docker permission or socket error:** run `docker info` against the configured
-  daemon; ARIES uses the selected local
-  daemon at `/var/run/docker.sock`.
-- **Missing `aries-ssh` error:** rebuild with `make build` and keep the helper
-  beside the main binary.
-- **Credential error:** check ownership, owner read access, absence of group or
-  world permissions, and one-line formatting of `DEEPSEEK_API.key`.
-- **Model error:** inspect `live-validation.json` for authentication, rate
-  limit, connectivity, or missing-model categories.
-- **Realtime TTS error:** confirm `OPENAI_API_KEY` is set and that the provider,
-  model, and voice in `harness.realtime.tts` are available to that account.
-- **Gateway or realtime session error:** inspect the task's
-  `harness/gateway.log`, `harness/realtime-result.json`, and
-  `harness/telemetry.index.json`, then correlate the harness status in the run's
-  `run-result.json`. Keep these private artifacts out of issue reports unless
-  their task and model content has been reviewed.
-- **SGLang configuration error:** confirm that the YAML uses only the supported
-  fields and that its served model and port match the profile.
-- **SGLang readiness error:** inspect `sglang/stderr.log`, confirm that
-  `model.base_url` ends in `/v1`, and test `/health` and `/v1/models` from the
-  host. A server reachable only through loopback is not reachable from
-  OpenClaw's container.
-- **Managed SGLang exits early:** confirm that `runtime.config.executable` is
-  the Python executable from the SGLang environment and that the selected GPU
-  has enough free memory.
-- **GPU monitor error:** confirm `nvidia-smi` is available and every configured
-  `runtime.config.gpu_indices` entry exists. GPU indices must be unique and
-  non-negative.
-- **Unknown task or invalid task image:** choose a task directory from the
-  pinned checkout and ensure its `task.toml` declares a valid explicit image
-  tag. Digest-bearing or implicit-`latest` task references are rejected.
-- **Terminal-Bench revision mismatch:** move the stale checkout aside, then
-  rerun the profile command (or the optional setup prewarm). ARIES never
-  deletes it automatically.
-- **SSH timeout:** check host firewall rules and confirm containers can reach
-  the Docker bridge gateway.
-- **Suspected leak:** inspect `docker ps -a --filter label=aries.managed=true`
-  and `docker network ls --filter label=aries.managed=true`.
-
-For architecture and security boundaries, see [the architecture guide](design.md).
-For the exact implementation matrix and configuration pointers, see
-[supported implementations](supported.md).
+- **Hermes:** run `profiles/hermes-tb2-fix-git-deepseek.json` with the same key.
+- **More tasks:** run `profiles/openclaw-tb2-five-deepseek.json`; it pulls more
+  images, uses concurrent execution, and can incur more API charges.
+- **Local or other model services:** configure [external SGLang](configuration.md#external-sglang)
+  or an [OpenAI-compatible endpoint](configuration.md#external-openai-compatible-server).
+- **Custom experiments:** use the [configuration reference](configuration.md)
+  for deployment, resource limits, task arrivals, and harness settings.
+- **Other benchmarks and modes:** see [supported implementations](supported.md).

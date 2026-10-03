@@ -1348,3 +1348,7 @@ func TestLoadTaskReadsTheTerminalBench21TasksLayout(t *testing.T) {
 		t.Fatalf("flat taskDirectory = %q", got)
 	}
 }
+
+func (s *fakeSandbox) NetworkName() string { return "test-network" }
+
+func (s *prepareSandboxFake) NetworkName() string { return "test-network" }

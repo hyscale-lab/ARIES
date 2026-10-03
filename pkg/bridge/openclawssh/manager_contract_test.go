@@ -376,3 +376,5 @@ func assertLogNumber(t *testing.T, record map[string]any, key string, want int) 
 		t.Fatalf("log %s = %#v, want %d in %#v", key, record[key], want, record)
 	}
 }
+
+func (s *contractSandbox) NetworkName() string { return "test-network" }

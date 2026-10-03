@@ -3,72 +3,67 @@
 `ToolSandbox` owns the task environment. It starts one isolated environment for
 a task, returns the narrow live capability needed by the selected bridge and
 benchmark, and stops the environment with positive confirmation that owned
-resources are absent.
+resources are absent. It does not own harness policy, tool credentials, or
+benchmark scoring.
 
-## Boundary and lifecycle
+## Operations and ownership
 
-The sandbox begins before bridge or harness startup and stays live through
-independent benchmark evaluation. It does not own harness policy, tool
-credentials, or benchmark scoring. Cleanup is idempotent, reverse-order, and
-bounded after cancellation; failure to confirm resource absence remains a
-cleanup failure.
+The [Runner interfaces](../../pkg/runner/interfaces.go) define:
 
-`pkg/sandbox` implements task policy over the same `deployment.Deployment` capability
-used by both harnesses. Command wiring selects `sandbox.deployment.backend` and
-injects `pkg/deployment/docker`, which owns the Moby SDK, containers, archive
-transport, and command execution. A separate `NewEnvironment` constructor
-supplies a fresh Docker task-environment owner for each occurrence.
-ARIES never shells out to Docker for lifecycle operations. A pair-specific bridge may use a narrow sandbox capability such as
-streaming command execution, but the harness does not receive Docker daemon
-access.
+| Operation | Contract |
+| --- | --- |
+| `Start(ctx, SandboxRequest) (Sandbox, error)` | Create and validate a live task environment; clean up partial allocation on failure. |
+| `Stop(ctx, Sandbox) error` | Release the owned environment; success confirms absence. Repeated stops are safe. |
+| `Sandbox.NetworkName() string` | Return the task attachment created at startup; current harnesses require a nonempty shared deployment network name. Ownership stays with the sandbox. |
+| `Sandbox.Exec(ctx, Command)` | Execute exact argv with context cancellation; return a command result separately from transport errors. |
+| `Sandbox.Upload(ctx, source, destination)` | Transfer a host file into the task environment. |
+| `Sandbox.Download(ctx, source, destination)` | Retrieve a task file into private run output; distinguish missing files from transport or runtime loss. |
 
-## Customization & Contribution Guide
+`Sandbox` is the live capability returned by `ToolSandbox`, not another Runner
+role. Optional `StreamExecutor.ExecStream` and
+`LimitedDownloader.DownloadLimit` capabilities support streamed command I/O and
+bounded host downloads. A bridge or evaluator requiring an optional capability
+must check it before use.
 
-A new sandbox implementation must preserve exact command argument boundaries,
-context-aware external operations, bounded cancellation cleanup, and positive
-absence checks. Implement deployment-specific operations once beneath both sandbox and harness,
-with an explicit constructor and command switch. Test partial startup, live
-evaluation, idempotent stop,
-resource ownership, and bridge-facing capabilities. Update the supported
-reference and operational prerequisites. Do not add registration, discovery,
-factories, reflection, DI, or generic plugins.
+The current [sandbox implementation](../../pkg/sandbox/sandbox.go) separates task
+policy from its injected [deployment and task environment](deployment.md).
+Successful construction transfers deployment transport ownership to the manager;
+Runner owns the sandbox lifecycle. `Manager.Close` retries failed startup
+cleanup and closes the transport; it does not replace `Stop` for active tasks.
 
-## Shared deployment and task policy
+## Lifecycle, isolation, and failure
 
-The sandbox chooses task labels, default workdir and numeric execution identity,
-and private artifact paths. The injected task environment owns network creation,
-label and ownership validation, bridge address resolution, and confirmed removal.
-Network names include fresh random identity, so duplicate task IDs and retries
-remain isolated. Its commands retain absolute
-executable paths; explicit evaluator root commands override the agent UID. The
-backend confirms security settings and ownership before exposing the live task.
+The sandbox begins before bridge or harness startup. The benchmark sanitizes it
+before agent access and evaluates that same live environment after harness stop
+and bridge revocation are positively confirmed. Harness failure does not decide
+the evaluation outcome. See the [task lifecycle](../design.md#task-lifecycle-and-isolation-gates).
 
-The common execution implementation supports streaming input/output and confirms
-command process-group termination after cancellation without stopping the task
-runtime. The bridge can therefore revoke tool access before evaluation uses that
-same environment. Cleanup failures continue to block the isolation gate.
+The current adapter validates execution defaults, starts a fresh task attachment,
+creates and validates the runtime, starts it, and confirms it is running before
+returning the capability. Partial startup uses a fresh bounded cleanup context;
+unconfirmed cleanup is retained for retry. Stop rejects another manager's
+sandbox, supports concurrent/repeated callers, and removes the runtime before
+its task attachment. A cleanup error remains visible rather than being treated
+as confirmed absence.
 
-Archive transport returns source metadata so the sandbox can reject oversized or
-non-regular downloads before reading payloads. It confines host destinations to
-the run output root, checks archive sizes, and publishes private files atomically.
-Missing-source errors require evidence that the deployment still exists.
+Commands retain absolute executable paths and exact argument boundaries. The
+sandbox supplies default workdir and numeric execution identity; explicit
+evaluator identity overrides remain possible. Cancellation must terminate the
+command without stopping the sandbox needed for evaluation. Transfer limits,
+private artifacts, and missing-file semantics are part of the isolation boundary.
+[Docker mechanisms](../implementation/docker.md) explain the current realization.
 
-## Task attachment and bridge addresses
+## Substitution and validation
 
-The task environment returns the network attachment at startup. The sandbox
-passes that attachment to deployment requests and the Runner passes it through
-`HarnessRequest.Network` separately from bridge credentials. Network creation,
-validation, gateway discovery, and removal are Docker-specific operations;
-they are absent from `deployment.Deployment`.
+A replacement must preserve task identity, isolation, live evaluation, command
+semantics, bounded cancellation cleanup, and positive absence checks. Implement
+provider-specific operations beneath the component policy and select them through
+explicit composition. Supporting the interface alone does not establish support
+for every bridge or benchmark.
 
-Composition injects `ResolveListen` into the bridge. The Docker task environment
-returns its validated gateway as both the local bind host and the advertised
-host. The bridge does not discover network topology through its sandbox tool
-capability. Listener ports remain allocated by the OS, and each bridge grants
-access only to its assigned sandbox.
-
-Cleanup confirms harness absence and bridge revocation before evaluation,
-then removes the sandbox container before its owned network. Partial startup
-also cleans the occurrence's resources with fresh bounded contexts. A failure
-to confirm either removal remains a cleanup error; transport closure alone
-cannot prove resource absence.
+Existing [sandbox unit tests](../../pkg/sandbox/sandbox_test.go) cover startup
+rollback, ownership, stop retries, command defaults, transfers, and missing-file
+classification. [Integration cases](../../pkg/sandbox/sandbox_integration_test.go)
+cover the real Docker lifecycle and targeted cancellation;
+[isolation cases](../../pkg/sandbox/isolation_integration_test.go) cover concurrent
+occurrences. These are verification entry points, not evidence of a new test run.

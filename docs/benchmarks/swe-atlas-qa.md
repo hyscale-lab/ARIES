@@ -1,4 +1,4 @@
-## SWE-Atlas QA
+# SWE-Atlas QA
 
 [SWE-Atlas](https://github.com/scaleapi/SWE-Atlas) (Scale AI) has three
 tracks — Codebase QA, Test-Writing, and Refactoring — with different task and
@@ -39,23 +39,13 @@ material grading ever touches.
 
 ### Grading
 
-Unlike Terminal-Bench 2's deterministic pass/fail verifier, grading is by an
-LLM judge against a per-task rubric (`tests/rubrics.json`), entirely
-host-side — like Deep Research Bench, no code runs inside the sandbox during
-evaluation. The vendored dataset's own verifier (`tests/test.sh` running
-`tests/evaluate_answer.py` inside the sandbox) is not used at all; ARIES
-instead ports its rubric-scoring logic directly into Go
-(`pkg/benchmark/sweatlas/rubrics.go`), calling the judge over HTTP from the
-host process. For each rubric, the downloaded answer and the rubric's title
-(stripped of any numeric prefix like `"1.1: "`) are sent to the judge model,
-whose YES/NO response (tolerating a few upstream response-format quirks) is
-normalized and, for rubrics annotated "negative", flipped. The results are
-aggregated exactly like the upstream script: `reward = 1` only if every
-scored "must have" rubric scored 1, and `agg_score` is the mean over all
-scored rubrics (any importance) — both are written to
-`reward.txt`/`evaluation_results.json` in the run's output directory (not the
-sandbox), and `evaluation.score` is always finite and in `[0, 1]` by
-construction.
+Grading uses a host-side LLM judge against each task's private rubric.
+`evaluation.reward` is `1` only when at least one “must have” rubric is scored and every scored
+“must have” rubric passes;
+`evaluation.score` is the mean of all scored rubrics, in `[0, 1]`. Inspect
+`evaluation_results.json` and any `judge_errors.log`: unscored rubrics are
+excluded from aggregation. The [implementation notes](../implementation/benchmarks.md#swe-atlas-qa)
+explain extraction, normalization, retry behavior, and private inputs.
 
 A `benchmark.judge` block is **required** (unlike Deep Research Bench, where
 it is optional and falls back to the profile's own model) — judge-graded
@@ -78,11 +68,13 @@ default judge.
 
 Grading can be turned off entirely with `judge.enabled: false`, mirroring
 Deep Research Bench's judge-disable switch: no judge LLM call happens for
-any task, `evaluation.status`/`evaluation.verifier_status` become
-`"not_enabled"` (distinct from a graded task that failed), and
+any task. For a downloaded, nonempty answer,
+`evaluation.status`/`evaluation.verifier_status` become `"not_enabled"` (distinct from a graded task that failed), and
 `evaluation.score`/`evaluation.reward` are `0`. This is useful for
 collecting agent answers without paying for any judge calls, e.g. to grade
-them separately offline. `judge.enabled: false` requires every other
+them separately offline. Missing or empty answers still receive a failed
+zero-score result before the disabled-judge check. `judge.enabled: false`
+requires every other
 `judge` field (`provider`/`base_url`/`model`/`api_key_env`) to be left
 unset — they would otherwise name a judge that never gets used:
 

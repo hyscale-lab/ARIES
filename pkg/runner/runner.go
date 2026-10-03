@@ -226,12 +226,8 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 	}
 	result.ToolLogPaths = append([]string(nil), endpoint.LogPaths...)
 
-	var network string
-	if attached, ok := sandbox.(interface{ NetworkName() string }); ok {
-		network = attached.NetworkName()
-	}
 	err = r.harness.Start(ctx, core.HarnessRequest{
-		Network:   network,
+		Network:   sandbox.NetworkName(),
 		RunID:     r.runID,
 		TaskID:    task.ID,
 		Endpoint:  endpoint,

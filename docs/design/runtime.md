@@ -1,75 +1,56 @@
-# Model runtime platform service
+# Model runtime infrastructure
 
-This is the platform-service guide for model endpoints used by an
-`AgentHarness`. A model runtime surrounds task execution; it is not one of the
-four component roles and is not a fifth Runner role.
+Model endpoint preparation and managed-service ownership surround task execution.
+They are outside Runner's four component roles. `AgentHarness` owns inference
+interaction; model runtime infrastructure owns service readiness and, for managed
+services, process lifecycle.
 
-## External and managed service modes
+## External and managed ownership
 
-Profiles select `runtime.backend` and `runtime.mode`, while model configuration
-identifies the endpoint, served model, and name of the credential environment
-variable. The mode is the ownership distinction: every external endpoint is
-prepared the same way, whatever serves it, and only a managed process is a
-runtime ARIES prepares. The backend names the kind of service behind the
-endpoint and selects its preflight and the provider each harness renders.
-ARIES validates the endpoint before admitting task work.
+Profiles select `runtime.backend` and `runtime.mode`. Model configuration supplies
+the endpoint, served model, and credential environment-variable name. External
+mode validates an endpoint without acquiring ownership of the remote service.
+Managed mode owns a local service across the profile run, including concurrent
+admitted task work. Endpoint validation precedes task admission.
 
 ```mermaid
 flowchart TB
-    X[External DeepSeek, SGLang, or OpenAI-compatible server]
-    M[ARIES-managed SGLang process]
-    E[Validated model endpoint]
-
-    subgraph R[Runner composition: four roles]
-        direction TB
-        H[AgentHarness uses endpoint]
-        O[Other roles: Benchmark,<br/>ToolSandbox, ToolBridge]
-    end
-
-    X --> E
-    M --> E
-    E --> H
+    X[External model service] --> E[Validated model endpoint]
+    M[ARIES-managed model service] --> E
+    E --> H[AgentHarness]
 ```
 
-DeepSeek is supported only as an external OpenAI-compatible endpoint. ARIES
-performs bounded model validation but does not own the remote service. The
-`openai` backend names any other OpenAI-compatible server, such as vLLM. It
-describes the endpoint's API rather than a distinct runtime: it is external
-only, has no native configuration file, adds no preparation step, and receives
-the same bounded model discovery as external SGLang. SGLang may also be
-external, or ARIES may manage one host process across a profile run.
-Managed SGLang uses a native YAML file, explicit executable and timeouts, and
-optional GPU indices; ARIES validates model, port, and GPU topology before side
-effects and stops the owned process after admitted tasks drain.
+## Managed service operations
 
-Both direct run and the optional `aries setup PROFILE.json` command share one
-idempotent lightweight preparation path for the pinned benchmark checkout,
-selected task metadata, and exact Docker images. Direct run completes that
-work before creating run artifacts, starting managed SGLang, checking model
-health, or admitting tasks. Setup is prewarm-only: it validates backend
-configuration and prepares those lightweight inputs, but never starts or stops
-a runtime, contacts an external endpoint, installs SGLang, or downloads model
-weights. Managed model loading and health therefore remain live, run-scoped
-states rather than a persisted readiness marker.
+The application consumes [ModelRuntime](../../internal/app/runtime.go), separately
+from [Runner's interfaces](../../pkg/runner/interfaces.go).
 
-Credentials remain runtime inputs rather than JSON values. Managed child logs
-are private, and the configured model credential is removed from the managed
-SGLang child environment. ARIES does not install SGLang, download models, or
-configure connectivity between the host endpoint and harness containers. See
-the [quick start](../quick-start.md) for exact external and managed workflows.
+| Operation | Contract |
+| --- | --- |
+| `Start(context.Context) error` | Start the owned model service; preserve cleanup responsibility after partial startup. |
+| `Health(context.Context) error` | Check readiness. Only explicitly retryable health failures may be retried. |
+| `Done() <-chan struct{}` | Signal process completion, including unexpected exit. |
+| `Err() error` | Report the completed process outcome; a nil outcome does not make unexpected exit healthy. |
+| `Stop(context.Context) error` | Idempotently terminate owned processes and confirm absence. |
 
-An HTTP model endpoint is supported only as a trusted-local exception. Local
-HTTP examples use a non-secret placeholder because ARIES requires a non-empty
-credential value even for an unauthenticated server. Remote or credentialed
-endpoints must use HTTPS; a real API key must never be sent over HTTP.
+The application watches service completion during startup and admitted work. An
+unexpected exit cancels affected work; it is not silently treated as normal
+completion. Admitted tasks drain before managed-runtime teardown. Cleanup uses a
+fresh bounded context after cancellation. Cleanup failure remains distinct from
+an ordinary process exit or inference error.
 
-## Customization & Contribution Guide
+## Isolation and substitution
 
-A new backend or managed service must remain outside the four Runner roles.
-Implement its validation and, when needed, its narrow lifecycle in a concrete
-package, expose it with an explicit constructor and command switch, and test
-endpoint discovery, credential isolation, startup failure, cancellation,
-idempotent shutdown, and positive process absence. Update checked-in profiles,
-the supported reference, and the quick start only when real configurations
-exist. Do not add registration, discovery, factories, reflection, DI, or
-generic plugins.
+Credentials remain runtime inputs. Private child logs and process environments
+must preserve credential boundaries. External services are never stopped by
+ARIES. Replacements must preserve readiness, cancellation, process ownership,
+positive absence, and endpoint validation without becoming a fifth Runner role.
+They use explicit construction under `internal/app/wiring/runtime` and concrete
+service packages, rather than generic registration.
+
+The [implementation guide](../implementation/model-runtime.md) explains current
+DeepSeek/OpenAI-compatible endpoint preparation, SGLang process management,
+prewarm behavior, and transport limitations. The [quick start](../quick-start.md)
+contains user configuration and commands. [Runtime tests](../../internal/app/runtime_test.go)
+cover health retry classification, exit races, and cancellation-independent cleanup;
+this documentation review does not establish fresh runtime correctness.

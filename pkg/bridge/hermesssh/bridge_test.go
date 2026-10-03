@@ -587,3 +587,5 @@ func TestBinaryStdinNoteMatchesRawRetention(t *testing.T) {
 		})
 	}
 }
+
+func (s *testSandbox) NetworkName() string { return "test-network" }

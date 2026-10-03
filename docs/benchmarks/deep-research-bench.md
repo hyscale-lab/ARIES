@@ -1,14 +1,15 @@
-## Deep Research Bench
+# Deep Research Bench
 
 `profiles/openclaw-drb-smoke1-deepseek.json` runs the checked-in Deep Research
 Bench profile instead of Terminal-Bench 2 (`profiles/openclaw-drb-smoke3-deepseek.json`
 and `profiles/hermes-drb-smoke1-deepseek.json` select a larger task subset and
-the Hermes harness respectively). 
+the Hermes harness respectively).
 
 Deep Research Bench tasks are open-ended web research: the profile's
 `benchmark.environment.image` must have outbound network access and any
-research tooling (browser/search CLI) the agent needs preinstalled — ARIES
-does not build or provide that image. Grading is by an LLM judge rather than a
+research tooling the agent needs preinstalled. Preparation expects SearXNG at
+the fixed paths described in the [implementation notes](../implementation/benchmarks.md#deep-research-bench);
+an arbitrary network-enabled image is insufficient. Grading is by an LLM judge rather than a
 deterministic verifier script, configured with an optional `benchmark.judge`
 block naming a separate model. `benchmark.judge` is entirely optional: when
 omitted, the judge call reuses the profile's own `model` config, so grading
@@ -50,19 +51,20 @@ instruction following, readability). Judge artifacts land in
 `runs/<run>/<task_id>/evaluation/{report.md,judge_response.json}`;
 `run-result.json`'s `evaluation.score` is RACE's overall ratio
 (`target/(target+reference)`) scaled to `[0,100]`, and `evaluation.reward` is
-`1` at or above the configured pass threshold (default 50). Every evaluated task
-makes a paid LLM-judge API call in addition to the harness model call — using
-a cheaper judge model is recommended for large task counts.
+`1` at or above the configured pass threshold (default 50). Successful report collection with grading enabled triggers judge API calls in
+addition to harness calls. Judge retries and optional FACT add to cost; account
+for both when choosing models and task counts.
 
 ### Disabling all LLM grading (optional)
 
 Set `"judge": {"enabled": false}` to skip grading entirely — this is a
 master switch that turns off **both** RACE and FACT, not just RACE, so no
-judge LLM call happens at all for the task. `evaluation.status` and
-`evaluation.verifier_status` become `"not_enabled"` (distinct from a graded
+judge LLM call happens at all for the task. After successful report download,
+`evaluation.status` and `evaluation.verifier_status` become `"not_enabled"` (distinct from a graded
 task that failed), and `evaluation.score`/`evaluation.reward` are `0`. This
 is useful for collecting agent reports without paying for any judge calls,
-e.g. to grade them separately offline.
+e.g. to grade them separately offline. A report download failure still returns
+a failed zero-score result; see the [known download-classification gap](../implementation/benchmarks.md#known-implementation-gap).
 
 `judge.enabled: false` requires every other `judge` field
 (`provider`/`base_url`/`model`/`api_key_env`) to be left unset — they would
@@ -102,15 +104,14 @@ artifacts, when configured, land alongside the RACE ones as
 `fact_report.json` (success) or `fact_error.txt` (failure) — a failed FACT run
 does not fail the task.
 
-#### Steps to obtain a Jina API key
-1. **Go to the Jina AI Dashboard:** Visit [jina.ai/api-dashboard](https://jina.ai/api-dashboard/).
-2. **Sign In or Register:** Log in using your email, GitHub, or Google account.
-3. **Navigate to Keys:** Click on **API** in the main navigation, then select **API Key & Billing** (or **Key Manager**).
-4. **Generate / Copy Key:** Your secret API key will be displayed under your key management settings. Click to copy it.
+#### Obtain a Jina API key
 
-> **Note:** New accounts receive **10 million free tokens** for non-commercial testing. Store your key securely, as it serves as a bearer token for authentication.
+Create or retrieve a key from the [Jina dashboard](https://jina.ai/api-dashboard/)
+and export it using the environment variable named by `fact.jina_api_key_env`.
+Keep the value out of profiles and shared artifacts. Check the provider dashboard
+for current account limits and pricing.
 
-### Web search and fetch 
+### Web search and fetch
 
 Deep Research Bench tasks need the agent to search and read live web pages
 from inside the sandbox. Both harnesses support this through
@@ -135,13 +136,12 @@ rather than reimplement page retrieval with `curl`/`wget`/a custom parser over
 the terminal tool, since models don't reliably prefer the dedicated tool on
 their own even when it's in their function-calling schema.
 
-#### Steps to obtain a tavily API key
-1. **Go to the Tavily Platform:** Visit [tavily.com](https://www.tavily.com) or go directly to the [Tavily Dashboard](https://app.tavily.com).
-2. **Sign Up or Log In:** Register for a new account using your email address, or log in via Google or GitHub OAuth. No credit card is required for the free tier.
-3. **Locate Your API Key:** Once signed in, land on the **Overview** page or **API Keys** section of the dashboard.
-4. **Copy the Key:** Click to copy your default API key (it starts with the prefix `tvly-`). You can also create additional keys directly from the dashboard if needed.
+#### Obtain a Tavily API key
 
-> **Note:** The free plan includes **1,000 free API credits/searches per month**, which reset on the 1st of every month. Store your key in an environment variable named `TAVILY_API_KEY`.
+Create or retrieve a key from the [Tavily dashboard](https://app.tavily.com)
+and export it using the environment variable named by
+`harness.web_search.extract_api_key_env` (the profiles use `TAVILY_API_KEY`).
+Check the provider dashboard for current account limits and pricing.
 
 ### Disabling or limiting subagents (Optional)
 

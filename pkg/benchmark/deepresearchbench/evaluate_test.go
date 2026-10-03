@@ -377,3 +377,5 @@ func TestEvaluateFactErrorDoesNotFailRaceDrivenOutcome(t *testing.T) {
 		t.Fatalf("fact error artifact = %q, err = %v", factErrorArtifact, err)
 	}
 }
+
+func (s *evaluateFake) NetworkName() string { return "test-network" }

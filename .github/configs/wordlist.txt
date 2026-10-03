@@ -9,14 +9,17 @@ automattic's
 asr
 backend
 backends
+backoff
 bursty
 cadvisor
 centric
 chengzhi
 cli
+cmd
 codebase
 config
 controlmaster
+cpp
 cpu
 cpus
 csv
@@ -37,6 +40,8 @@ gib
 gid
 github
 gpu
+gRPC
+handoff
 hermes
 hermes's
 hostname
@@ -58,10 +63,13 @@ lifecycle
 llm
 logrus
 loopback
+MCP
 metadata
 mib
 moby
+ModelRuntime
 moe
+natively
 NCSpeech
 nousresearch
 ntu
@@ -86,6 +94,7 @@ qa's
 prewarm
 Qwen
 Realtime
+retryable
 RuntimeClass
 RuntimeClasses
 reflogs
@@ -119,6 +128,7 @@ substitutable
 swe
 swe-atlas
 symlink
+TaskEnvironment
 tavily
 tbd
 tcp
@@ -135,6 +145,8 @@ ttft
 tts
 tty
 uid
+Unparseable
+unscored
 untracked
 upstream's
 url's
@@ -143,6 +155,7 @@ uuid
 validator
 vendored
 verifier
+verifiers
 vllm
 wav
 websocket

@@ -165,3 +165,5 @@ func TestPrepareSandboxRequiresLiveSandbox(t *testing.T) {
 		t.Fatal("PrepareSandbox accepted a nil sandbox")
 	}
 }
+
+func (s *prepareSandboxFake) NetworkName() string { return "test-network" }

@@ -349,3 +349,5 @@ func (s *prepareSandboxFake) Upload(context.Context, string, string) error {
 }
 
 func (*prepareSandboxFake) Download(context.Context, string, string) error { return nil }
+
+func (s *prepareSandboxFake) NetworkName() string { return "test-network" }

@@ -302,3 +302,5 @@ func stdinCommandCall(path string, args []string, stdin string) prepareCall {
 func resultCommandCall(path string, args []string, stdout, stderr string, exitCode int) prepareCall {
 	return prepareCall{command: core.Command{Path: path, Args: args, User: rootExecUser}, result: core.CommandResult{Stdout: stdout, Stderr: stderr, ExitCode: exitCode}}
 }
+
+func (s *prepareSandboxFake) NetworkName() string { return "test-network" }

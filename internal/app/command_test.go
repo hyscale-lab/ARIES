@@ -558,3 +558,5 @@ func (b *cancelBridge) Stop(context.Context) error {
 	*b.events = append(*b.events, "bridge-stop")
 	return nil
 }
+
+func (s *stubSandbox) NetworkName() string { return "test-network" }
