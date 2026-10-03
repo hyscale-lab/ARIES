@@ -57,8 +57,11 @@ type openClawMCPServer struct {
 }
 
 // MCPOptions configures MCP servers and sandbox-allowlisted tools for OpenClaw.
+// NoSandboxTools (core.Task.NoSandboxTools) also denies exec and process, so
+// the agent acts only through the servers and the web tools.
 type MCPOptions struct {
-	Servers []core.MCPServerConfig
+	Servers        []core.MCPServerConfig
+	NoSandboxTools bool
 }
 
 type talkConfig struct {
@@ -253,6 +256,12 @@ func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, mode strin
 			},
 		}},
 		Tools: toolPolicy{Deny: denyToolList(subagentsEnabled)},
+	}
+	if len(mcp) > 0 && mcp[0].NoSandboxTools {
+		// read, write, edit and apply_patch are denied already; exec runs
+		// commands in the sandbox and process manages the ones it left
+		// running.
+		configuration.Tools.Deny = append(configuration.Tools.Deny, "exec", "process")
 	}
 	if reasoningBody != nil {
 		provider := configuration.Models.Providers[providerID]

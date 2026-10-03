@@ -143,6 +143,16 @@ Two smaller differences are deliberate:
   `harness.web_search`, and is otherwise refused with that message — 14 of
   the 53, all public-internet tasks. A local tool the adapter has no
   mapping for is refused like an unknown server.
+- Toolathlon's own loop gives the agent exactly the listed tools, so the
+  harness's own shell, code-execution and file tools are given only to a
+  task that lists `python_execute` or the `terminal` server (a shell through
+  the gateway). A task that lists neither (35 of the 108, among them
+  `canvas-do-quiz`) acts through its MCP servers only, whose filesystem
+  server is confined to the agent workspace: the adapter sets the task's
+  `NoSandboxTools`, and Hermes and OpenClaw then render none of those tools.
+  Without this, agents in such tasks used the harness's terminal to read
+  the token file and call the applications' APIs directly instead of the
+  MCP tools.
 
 ## Running the example
 

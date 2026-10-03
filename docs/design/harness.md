@@ -28,6 +28,13 @@ inputs and must not appear in profiles, Docker metadata, structured logs, or
 results. Retained configuration, trajectories, audio, and other task data remain
 private artifacts.
 
+`HarnessRequest.NoSandboxTools` carries the task's `core.Task.NoSandboxTools`.
+When it is set, the harness renders none of its own tools that act in the
+sandbox (shell, code execution, file access), so the agent acts through its MCP
+servers and the harness's web tools only. A benchmark whose tasks list their
+own tools sets it to keep to that list (Toolathlon); every other task keeps all
+of the harness's tools.
+
 ## Lifecycle, cancellation, and failure
 
 [Runner](../../pkg/runner/runner.go) starts the harness after sandbox preparation

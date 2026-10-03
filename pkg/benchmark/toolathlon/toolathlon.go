@@ -314,6 +314,8 @@ const (
 	// localToolTerminal is covered by the harness's terminal in the
 	// sandbox: Toolathlon's python_execute runs Python on its runner's host,
 	// the harness runs it in the task container, where the workspace is.
+	// The harness keeps its sandbox tools only for a task that lists
+	// python_execute or the terminal server (see sandboxToolsGranted).
 	localToolTerminal
 	// localToolWebSearch needs a web search the harness brings itself
 	// (harness.web_search); without it the task is refused.
@@ -657,7 +659,20 @@ func loadTask(root, id string, environment core.Environment, harnessWebSearch bo
 		Environment: environment,
 	}
 	task.Environment.Env = maps.Clone(environment.Env)
+	task.NoSandboxTools = !sandboxToolsGranted(servers, tools)
 	return task, details, nil
+}
+
+// sandboxToolsGranted reports whether a task's own tool list gives its agent
+// a way to run code or commands in its workspace: python_execute, which the
+// harness's tools stand in for, or the terminal server, a shell through the
+// gateway. Toolathlon's own loop gives the agent exactly the listed tools, so
+// a task that lists neither gets none of the harness's shell, code-execution
+// or file tools (core.Task.NoSandboxTools): it acts through its MCP servers
+// only, whose filesystem server is confined to the agent workspace. No task
+// at the pinned revision lists sleep without one of the two.
+func sandboxToolsGranted(servers, local []string) bool {
+	return slices.Contains(local, "python_execute") || slices.Contains(servers, "terminal")
 }
 
 // renderInstruction is the task description plus the two facts Toolathlon's

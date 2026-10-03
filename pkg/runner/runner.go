@@ -241,7 +241,7 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 	}
 	result.ToolLogPaths = append([]string(nil), endpoint.LogPaths...)
 
-	err = r.harness.Start(ctx, core.HarnessRequest{
+	request := core.HarnessRequest{
 		Connectivity: sandbox.Connectivity(),
 		RunID:        r.runID,
 		TaskID:       task.ID,
@@ -251,7 +251,9 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		CPU:          harnessCPU,
 		MemoryMB:     harnessMemory,
 		OutputDir:    r.outputDir,
-	})
+	}
+	request.NoSandboxTools = task.NoSandboxTools
+	err = r.harness.Start(ctx, request)
 	// Start may fail after allocating task-local resources. Stop is idempotent,
 	// so every Start attempt must be followed by a positive stop confirmation
 	// before the evaluator can inspect the sandbox.

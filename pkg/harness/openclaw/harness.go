@@ -201,7 +201,8 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		}
 	}
 	configuration, err := renderConfig(request.Model, request.Endpoint, manager.options.Common.Mode, request.Connectivity.SearchURL, manager.options.Common.WebSearchEnabled, extractEnabled, manager.options.Common.SubagentsEnabled, manager.options.Common.MaxConcurrentSubagents, MCPOptions{
-		Servers: manager.options.Common.MCPServers,
+		Servers:        manager.options.Common.MCPServers,
+		NoSandboxTools: request.NoSandboxTools,
 	})
 	if err != nil {
 		return err

@@ -181,6 +181,10 @@ ARIES supports configuring Model Context Protocol (`MCP`) servers for agent harn
 
 Each harness scrubs the `secret_env` values from everything it saves (session exports, logs, the retained config) together with its own keys. A harness's `RedactEnv` option names further host variables whose values the harness is never given but scrubs the same way: a benchmark's credentials that reach the sandbox, where the agent can read them (the harness wiring fills it from Toolathlon's `credentials_env` and `credential_files_env`). A multi-line or `JSON` value is scrubbed by its lines and string fields as well (`core.SecretParts`).
 
+For a task with `NoSandboxTools`, Hermes leaves `terminal`, `file` and
+`code_execution` out of `platform_toolsets` and disables them, and OpenClaw
+also denies `exec` and `process`.
+
 Harnesses manage `MCP` execution and network boundaries as follows:
 
 - **Command servers (`stdio`)** execute directly inside the agent container environment.

@@ -199,6 +199,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		maxTurns: manager.options.MaxTurns, webSearchEnabled: manager.options.Common.WebSearchEnabled, extractEnabled: extractEnabled,
 		subagentsEnabled: manager.options.Common.SubagentsEnabled, maxConcurrentSubagents: manager.options.Common.MaxConcurrentSubagents,
 		compaction: manager.options.Compaction, extraBody: manager.options.ExtraBody, mcpServers: manager.options.Common.MCPServers,
+		noSandboxTools: request.NoSandboxTools,
 	}, voiceSTT)
 	if err != nil {
 		return err

@@ -8,6 +8,13 @@ type Task struct {
 	Instruction string        `json:"instruction"`
 	Timeout     time.Duration `json:"timeout,omitempty"`
 	Environment Environment   `json:"environment"`
+	// NoSandboxTools withholds the harness's own tools that act in the
+	// sandbox (a shell, code execution, file access) for this task, so the
+	// agent acts only through its MCP servers and the harness's other tools
+	// (web search). A benchmark whose tasks list their own tools sets it for
+	// a task that lists none of these, to keep to the benchmark (Toolathlon).
+	// False keeps every harness tool.
+	NoSandboxTools bool `json:"no_sandbox_tools,omitempty"`
 }
 
 // Environment describes the task sandbox requested by a benchmark.
@@ -156,6 +163,9 @@ type HarnessRequest struct {
 	CPU          *float64            `json:"cpu,omitempty"`
 	MemoryMB     *int                `json:"memory_mb,omitempty"`
 	OutputDir    string              `json:"output_dir"`
+	// NoSandboxTools is the task's Task.NoSandboxTools: the harness renders
+	// none of its own shell, code-execution or file tools.
+	NoSandboxTools bool `json:"no_sandbox_tools,omitempty"`
 }
 
 const (
