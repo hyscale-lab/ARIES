@@ -39,12 +39,17 @@ app.kubernetes.io/part-of: aries
 {{- end }}
 
 {{/*
-Pod selector for the ARIES Deployment. Selectors are immutable after creation,
-so this deliberately carries only the one stable label the Kustomize package
-used, and never the chart/version labels.
+Tool bridge name and pod selector. The selector value is fixed rather than
+derived from the release: the runner finds the bridge pod by exactly this
+label (pkg/bridge/remote.PodSelector), whatever the chart is installed as.
+Selectors are immutable after creation, so it carries nothing else.
 */}}
-{{- define "aries.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "aries.fullname" . }}
+{{- define "aries.bridge.fullname" -}}
+{{- printf "%s-bridge" (include "aries.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "aries.bridge.selectorLabels" -}}
+app.kubernetes.io/name: aries-bridge
 {{- end }}
 
 {{/*
@@ -64,20 +69,4 @@ ServiceAccount name.
 */}}
 {{- define "aries.serviceAccountName" -}}
 {{- default (include "aries.fullname" .) .Values.serviceAccount.name }}
-{{- end }}
-
-{{/*
-nodeSelector + tolerations for a role pool. Both halves come from one place so
-a pod can never get the selector without the matching toleration and sit
-Pending forever behind the role taint.
-*/}}
-{{- define "aries.rolePlacement" -}}
-{{- $role := .role -}}
-nodeSelector:
-  aries.dev/role: {{ $role }}
-tolerations:
-  - key: aries.dev/role
-    operator: Equal
-    value: {{ $role }}
-    effect: NoSchedule
 {{- end }}

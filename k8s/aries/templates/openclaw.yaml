@@ -38,14 +38,6 @@ spec:
     spec:
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 5
-      {{- if .Values.openclaw.role.enabled }}
-      # Pin the gateway to a node the installer labelled and tainted
-      # aries.dev/role=harness. Both halves are needed: the nodeSelector pulls
-      # the pod onto that node, the toleration gets it past the taint. Set
-      # openclaw.role.enabled=false on a cluster whose nodes carry no role
-      # labels, or this pod stays Pending forever.
-      {{- include "aries.rolePlacement" (dict "role" .Values.openclaw.role.name) | nindent 6 }}
-      {{- end }}
       containers:
         - name: openclaw
           image: "{{ .Values.openclaw.image.repository }}:{{ .Values.openclaw.image.tag }}"

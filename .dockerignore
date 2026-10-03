@@ -1,0 +1,21 @@
+# Keep the build context to what the images need. The runner Dockerfile copies
+# the whole context into its build stage, so anything listed here would
+# otherwise sit in a builder layer and in the local build cache.
+
+# Credentials and cluster access: never part of an image.
+*.key
+**/secret.yaml
+**/secret-*.yaml
+**/secret.env
+**/registry.json
+k8s/setup/kubeconfig
+k8s/setup/configs/cluster.json
+k8s/aries/values-local-*.yaml
+
+# Local state, caches and build output.
+.git
+.cache
+runs
+bin
+aries-setup-*.log
+.omx

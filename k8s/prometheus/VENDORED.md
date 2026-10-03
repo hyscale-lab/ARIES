@@ -76,7 +76,7 @@ COPYFILE_DISABLE=1 tar -C k8s --exclude '._*' -cf - prometheus grafana \
 
 Update three things, or the install breaks in ways Helm will not report:
 
-- `chart_version` in `../../setup/configs/prometheus/prom_config.json`.
+- `chart_version` in `../setup/configs/prometheus/prom_config.json`.
   `aries-setup` refuses to install when it disagrees with `chart/Chart.yaml`.
 - The table above, including the new digest.
 - Every key in `values.yaml` and `../grafana/values.yaml`. **Helm ignores keys

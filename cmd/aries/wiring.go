@@ -14,6 +14,7 @@ import (
 	"github.com/hyscale-lab/aries/pkg/bridge/hermesssh"
 	"github.com/hyscale-lab/aries/pkg/bridge/openclawe2b"
 	"github.com/hyscale-lab/aries/pkg/bridge/openclawssh"
+	remotebridge "github.com/hyscale-lab/aries/pkg/bridge/remote"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
 	hermesharness "github.com/hyscale-lab/aries/pkg/harness/hermes"
@@ -49,6 +50,24 @@ func commandWiring() app.Wiring {
 }
 
 func prepareBridge(ctx context.Context, cfg config.Config, outputRoot string, logger *logrus.Logger) (app.PreparedBridge, error) {
+	if cfg.Bridge.Deployment == "kubernetes" || cfg.Bridge.Deployment == "docker" {
+		// The bridge serves from its own pod or container. Check it is there
+		// before the first sandbox is created, then give each task its own
+		// grant over one shared transport.
+		transport, closeTransport, err := newBridgeTransport(cfg)
+		if err != nil {
+			return app.PreparedBridge{}, err
+		}
+		if err := remotebridge.Preflight(ctx, remoteBridgeOptions(cfg, transport, outputRoot, logger)); err != nil {
+			return app.PreparedBridge{}, errors.Join(fmt.Errorf("%s bridge: %w", cfg.Bridge.Deployment, err), closeTransport())
+		}
+		return app.PreparedBridge{
+			NewTaskBridge: func(cfg config.Config, outputRoot string, logger *logrus.Logger) (runner.ToolBridge, error) {
+				return remotebridge.New(remoteBridgeOptions(cfg, transport, outputRoot, logger))
+			},
+			Stop: func(context.Context) error { return closeTransport() },
+		}, nil
+	}
 	switch cfg.Bridge.Type {
 	case "openclaw-ssh", "hermes-ssh":
 		return app.PreparedBridge{NewTaskBridge: newBridge}, nil
@@ -289,6 +308,48 @@ func newBridge(cfg config.Config, outputRoot string, logger *logrus.Logger) (run
 		return bridge, nil
 	default:
 		return nil, fmt.Errorf("unsupported bridge type %q", cfg.Bridge.Type)
+	}
+}
+
+// newBridgeTransport is the explicit switch from bridge deployment to how the
+// runner reaches the bridge: kubectl exec into the pod, or docker exec into
+// the container.
+func newBridgeTransport(cfg config.Config) (remotebridge.Transport, func() error, error) {
+	switch cfg.Bridge.Deployment {
+	case "kubernetes":
+		return remotebridge.NewKubeTransport(cfg.Bridge.Namespace, ""), func() error { return nil }, nil
+	case "docker":
+		transport, err := remotebridge.NewDockerTransport("")
+		if err != nil {
+			return nil, nil, err
+		}
+		return transport, transport.Close, nil
+	}
+	return nil, nil, fmt.Errorf("unsupported bridge.deployment %q", cfg.Bridge.Deployment)
+}
+
+// remoteBridgeOptions pairs the separate bridge with the runner's half of the
+// matching SSH bridge: the runner keeps the client key (and for OpenClaw the
+// aries-ssh helper) and the bridge serves with its public half.
+func remoteBridgeOptions(cfg config.Config, transport remotebridge.Transport, outputRoot string, logger *logrus.Logger) remotebridge.Options {
+	var newCredentials remotebridge.CredentialsFactory
+	switch cfg.Bridge.Type {
+	case "hermes-ssh":
+		newCredentials = func(artifactDir string) (remotebridge.Credentials, error) {
+			return hermesssh.NewCredentials(artifactDir)
+		}
+	case "openclaw-ssh":
+		newCredentials = func(artifactDir string) (remotebridge.Credentials, error) {
+			executable, err := os.Executable()
+			if err != nil {
+				return nil, fmt.Errorf("locate ARIES executable: %w", err)
+			}
+			return openclawssh.NewCredentials(artifactDir, filepath.Join(filepath.Dir(executable), "aries-ssh"))
+		}
+	}
+	return remotebridge.Options{
+		BridgeType: cfg.Bridge.Type, Transport: transport, OutputDir: outputRoot,
+		RetainRawLog: cfg.Bridge.RetainBridgeRawLog(), NewCredentials: newCredentials, Logger: logger,
 	}
 }
 

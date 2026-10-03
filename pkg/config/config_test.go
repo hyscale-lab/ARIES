@@ -321,3 +321,74 @@ func TestKubernetesDeploymentAcceptsOpenClawAndHermes(t *testing.T) {
 		})
 	}
 }
+
+// The bridge pod serves only an SSH bridge between a Kubernetes harness and a
+// Kubernetes sandbox in its own namespace; everything else stays in-process.
+func TestBridgeDeploymentKubernetesPairing(t *testing.T) {
+	pod := func(harness, sandbox, bridge string) string {
+		input := strings.Replace(validConfig, `"harness":{"type":"openclaw"}`, harness, 1)
+		input = strings.Replace(input, `"sandbox":{"type":"docker"}`, sandbox, 1)
+		return strings.Replace(input, `"bridge":{"type":"openclaw-ssh"}`, bridge, 1)
+	}
+	const (
+		kubeHarness = `"harness":{"type":"hermes","deployment":"kubernetes"}`
+		kubeSandbox = `"sandbox":{"type":"kubernetes","namespace":"aries"}`
+		podBridge   = `"bridge":{"type":"hermes-ssh","deployment":"kubernetes"}`
+	)
+	cfg, err := Decode(strings.NewReader(pod(kubeHarness, kubeSandbox, podBridge)))
+	if err != nil {
+		t.Fatalf("bridge pod rejected: %v", err)
+	}
+	if cfg.Bridge.Namespace != "aries" {
+		t.Fatalf("bridge.namespace = %q, want it defaulted from the sandbox", cfg.Bridge.Namespace)
+	}
+	for name, input := range map[string]string{
+		"docker sandbox":       pod(kubeHarness, `"sandbox":{"type":"docker"}`, podBridge),
+		"docker harness":       pod(`"harness":{"type":"hermes"}`, kubeSandbox, podBridge),
+		"e2b bridge":           pod(`"harness":{"type":"openclaw","deployment":"kubernetes"}`, kubeSandbox, `"bridge":{"type":"openclaw-e2b","deployment":"kubernetes"}`),
+		"advertise host":       pod(kubeHarness, kubeSandbox, `"bridge":{"type":"hermes-ssh","deployment":"kubernetes","advertise_host":"$POD_IP"}`),
+		"other namespace":      pod(kubeHarness, kubeSandbox, `"bridge":{"type":"hermes-ssh","deployment":"kubernetes","namespace":"elsewhere"}`),
+		"namespace in process": pod(kubeHarness, kubeSandbox, `"bridge":{"type":"hermes-ssh","namespace":"aries"}`),
+		"unknown deployment":   pod(kubeHarness, kubeSandbox, `"bridge":{"type":"hermes-ssh","deployment":"sidecar"}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Decode(strings.NewReader(input)); err == nil {
+				t.Fatal("expected rejection")
+			}
+		})
+	}
+}
+
+// The Docker bridge container pairs only with a Docker harness and sandbox,
+// and takes no namespace or advertise host.
+func TestBridgeDeploymentDockerPairing(t *testing.T) {
+	with := func(harness, sandbox, bridge string) string {
+		input := strings.Replace(validConfig, `"harness":{"type":"openclaw"}`, harness, 1)
+		input = strings.Replace(input, `"sandbox":{"type":"docker"}`, sandbox, 1)
+		return strings.Replace(input, `"bridge":{"type":"openclaw-ssh"}`, bridge, 1)
+	}
+	const (
+		dockerHarness = `"harness":{"type":"hermes"}`
+		dockerSandbox = `"sandbox":{"type":"docker"}`
+		bridge        = `"bridge":{"type":"hermes-ssh","deployment":"docker"}`
+	)
+	if _, err := Decode(strings.NewReader(with(dockerHarness, dockerSandbox, bridge))); err != nil {
+		t.Fatalf("Docker bridge container rejected: %v", err)
+	}
+	if _, err := Decode(strings.NewReader(with(`"harness":{"type":"hermes","deployment":"docker"}`, dockerSandbox, bridge))); err != nil {
+		t.Fatalf("explicit docker harness deployment rejected: %v", err)
+	}
+	for name, input := range map[string]string{
+		"kubernetes sandbox": with(dockerHarness, `"sandbox":{"type":"kubernetes"}`, bridge),
+		"kubernetes harness": with(`"harness":{"type":"hermes","deployment":"kubernetes"}`, dockerSandbox, bridge),
+		"e2b bridge":         with(`"harness":{"type":"openclaw"}`, dockerSandbox, `"bridge":{"type":"openclaw-e2b","deployment":"docker"}`),
+		"advertise host":     with(dockerHarness, dockerSandbox, `"bridge":{"type":"hermes-ssh","deployment":"docker","advertise_host":"10.0.0.1"}`),
+		"namespace":          with(dockerHarness, dockerSandbox, `"bridge":{"type":"hermes-ssh","deployment":"docker","namespace":"aries"}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Decode(strings.NewReader(input)); err == nil {
+				t.Fatal("expected rejection")
+			}
+		})
+	}
+}

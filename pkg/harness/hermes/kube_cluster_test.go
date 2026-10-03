@@ -22,7 +22,7 @@ import (
 // API key nor a bridge. It does create a pod and pull the Hermes image on the
 // target node, so it only runs when asked:
 //
-//	KUBECONFIG=setup/kubeconfig ARIES_KUBE_IT_OUTPUT=/private/tmp/aries-kube-it \
+//	KUBECONFIG=k8s/setup/kubeconfig ARIES_KUBE_IT_OUTPUT=/private/tmp/aries-kube-it \
 //	  ARIES_KUBE_IT_NODE_ROLE=harness go test -tags kubecluster \
 //	  -run TestKubeClusterStartReadyStop ./pkg/harness/hermes/
 //

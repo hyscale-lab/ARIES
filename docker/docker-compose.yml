@@ -1,0 +1,84 @@
+# Docker deployment of ARIES. See README.md in this directory.
+#
+# Run from the repository root:
+#
+#   docker compose -f docker/docker-compose.yml up -d aries-bridge
+#
+# Relative paths below resolve against this directory, so .. is the
+# repository root.
+name: aries
+
+services:
+  # The tool bridge, as its own container: the Docker counterpart of the
+  # aries-bridge pod. The runner meets this container twice per task with
+  # docker exec: grant and revoke. For each grant the runner attaches it to
+  # that task's network, and the grant listens only there.
+  aries-bridge:
+    image: jingxiang212/aries-bridge:latest
+    build:
+      context: ..
+      dockerfile: Dockerfile.bridge
+    container_name: aries-bridge
+    command: ["serve", "--backend", "docker"]
+    # The runner finds the bridge by this label (pkg/bridge/remote.ContainerLabel).
+    # It must not carry aries.managed, which marks per-run task resources.
+    labels:
+      aries.component: tool-bridge
+    # The bridge execs into task containers through the Engine socket, which is
+    # root-equivalent on the host; root in the container is what can open it.
+    # The runner holds the same socket in Docker mode.
+    user: "0:0"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    read_only: true
+    tmpfs:
+      - /var/lib/aries-bridge
+      - /run/aries-bridge
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    # A restart is a new daemon holding no grants, which the runner treats as
+    # proven revocation; tasks in flight then fail closed.
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/aries-bridge", "status"]
+      interval: 10s
+      timeout: 5s
+
+  # The runner in a container, for hosts that cannot build or run bin/aries
+  # natively (macOS). Opt-in, one run per invocation:
+  #
+  #   PROFILE=profiles/hermes-tb2-fix-git-deepseek-docker-bridge.json \
+  #     docker compose -f docker/docker-compose.yml \
+  #     --profile runner-container run --rm aries
+  aries:
+    profiles: ["runner-container"]
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: aries:latest
+    container_name: aries
+    # Host networking lets the in-runner E2B bridge listener be reachable from
+    # the sibling task containers. Profiles with bridge.deployment "docker" do
+    # not need it.
+    network_mode: host
+    volumes:
+      # Sibling containers (harness and task sandboxes) are created on the host
+      # Docker Engine through this socket.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # The model key is read from this file in the working directory, so it
+      # never appears in the container's environment or configuration.
+      - type: bind
+        source: ../DEEPSEEK_API.key
+        target: /app/DEEPSEEK_API.key
+        read_only: true
+        bind:
+          create_host_path: false
+      - ../profiles:/app/profiles:ro
+      - ../configs:/app/configs:ro
+      - ../runs:/app/runs
+      # The benchmark checkout, kept between runs.
+      - aries-cache:/app/.cache
+    command: ["${PROFILE:-profiles/openclaw-tb2-fix-git-deepseek-e2b.json}"]
+
+volumes:
+  aries-cache:

@@ -1,0 +1,160 @@
+{{- if .Values.bridge.enabled }}
+# The tool bridge, as a long-running pod apart from the runner.
+#
+# The runner runs as a process outside the cluster and meets this pod twice
+# per task, both times through `kubectl exec` into it: once to grant a sandbox
+# and once to revoke it. Tool calls go harness pod → this pod → sandbox pod and
+# never pass through the runner. See pkg/bridge/remote.
+#
+# One replica, replaced with Recreate: grants live only in the daemon's memory,
+# which is what lets the runner prove revocation when this pod is gone.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "aries.bridge.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aries.labels" . | nindent 4 }}
+---
+# The bridge's only cluster access: read a sandbox pod to check it is the one
+# a grant names, and exec into it to run tool calls. It cannot create, delete
+# or modify anything, so a compromised bridge cannot stand up workloads or
+# tamper with a sandbox's lifecycle.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "aries.bridge.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aries.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "aries.bridge.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aries.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "aries.bridge.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "aries.bridge.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aries.bridge.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aries.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "aries.bridge.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "aries.bridge.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: tool-bridge
+        app.kubernetes.io/part-of: aries
+    spec:
+      serviceAccountName: {{ include "aries.bridge.fullname" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # Close revokes every live grant on SIGTERM; give it time to drain.
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        # The container name is load-bearing: the runner execs into
+        # "-c bridge" (pkg/bridge/remote.ContainerName).
+        - name: bridge
+          image: "{{ .Values.bridge.image.repository }}:{{ .Values.bridge.image.tag }}"
+          imagePullPolicy: {{ .Values.bridge.image.pullPolicy }}
+          args: ["serve"]
+          env:
+            # Harness pods dial the bridge on this pod's own IP.
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            # The only namespace whose sandboxes the bridge will attach to.
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          readinessProbe:
+            exec:
+              command: ["/usr/local/bin/aries-bridge", "status"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            # Live grants' logs until the runner collects them. Pod-local by
+            # design: a new pod starts with no grants and no stale evidence.
+            - name: grants
+              mountPath: /var/lib/aries-bridge
+            - name: control
+              mountPath: /run/aries-bridge
+          resources:
+            {{- toYaml .Values.bridge.resources | nindent 12 }}
+      volumes:
+        - name: grants
+          emptyDir: {}
+        - name: control
+          emptyDir:
+            medium: Memory
+{{- if .Values.bridge.networkPolicy.enabled }}
+---
+# Only ARIES harness pods may connect to the bridge. Sessions listen on random
+# ports, so the rule is by peer rather than by port. The control path is
+# `kubectl exec`, which reaches the container through the kubelet rather than
+# the pod network, so this policy does not affect it.
+#
+# Egress is left open: the bridge must reach the API server for kubectl exec,
+# and the API server's address is a node IP rather than a pod selector.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "aries.bridge.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aries.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "aries.bridge.selectorLabels" . | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/managed-by: aries
+              app.kubernetes.io/component: harness
+{{- end }}
+{{- end }}

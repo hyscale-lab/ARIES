@@ -1,0 +1,42 @@
+# The tool bridge pod's image: aries-bridge plus kubectl, which it uses to exec
+# into sandbox pods. Nothing else: no profiles, no model key, no runner. The
+# runner runs outside the cluster, so profile and runner changes never need
+# this image rebuilt; only bridge changes do.
+#
+#   make image-bridge BRIDGE_IMAGE=<registry>/aries-bridge:latest
+#
+# Run the builder on the host's native architecture and cross-compile to the
+# target arch, as the main Dockerfile does.
+FROM --platform=$BUILDPLATFORM golang:1.26 AS builder
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd/ cmd/
+COPY internal/ internal/
+COPY pkg/ pkg/
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -o /out/aries-bridge ./cmd/aries-bridge
+
+FROM debian:bookworm-slim
+ARG TARGETARCH=amd64
+# kubectl must be within one minor version of the cluster. Empty follows the
+# upstream stable release, which is what aries-setup installs by default;
+# pin it (e.g. --build-arg KUBECTL_VERSION=v1.34.2) when kube.json pins
+# k8s_version.
+ARG KUBECTL_VERSION=
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && version="${KUBECTL_VERSION:-$(curl -fsSL https://dl.k8s.io/release/stable.txt)}" \
+    && curl -fsSL "https://dl.k8s.io/release/${version}/bin/linux/${TARGETARCH}/kubectl" -o /usr/local/bin/kubectl \
+    && curl -fsSL "https://dl.k8s.io/release/${version}/bin/linux/${TARGETARCH}/kubectl.sha256" -o /tmp/kubectl.sha256 \
+    && echo "$(cat /tmp/kubectl.sha256)  /usr/local/bin/kubectl" | sha256sum -c - \
+    && chmod 0755 /usr/local/bin/kubectl \
+    && rm /tmp/kubectl.sha256 \
+    && apt-get purge -y curl && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /out/aries-bridge /usr/local/bin/aries-bridge
+# The chart runs the pod as 10001 with a read-only root filesystem; the
+# control socket and grant directories are emptyDir mounts.
+USER 10001:10001
+ENTRYPOINT ["/usr/local/bin/aries-bridge"]
+CMD ["serve"]

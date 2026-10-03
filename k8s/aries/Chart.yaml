@@ -1,10 +1,10 @@
 apiVersion: v2
 name: aries
-description: ARIES agent-serving experiment runner, with the OpenClaw harness gateway
+description: In-cluster side of ARIES — the tool bridge pod, the runner's RBAC, and the Grafana dashboard
 type: application
 
 # Chart version. Bump on template or values changes.
-version: 0.1.0
+version: 0.2.0
 
 # ARIES has no release tags yet; the image tag in values.yaml is what actually
 # pins the code that runs.

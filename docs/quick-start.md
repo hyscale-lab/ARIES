@@ -325,6 +325,24 @@ Artifacts land under `<run>/<task>/harness/`: the redacted `config.yaml`, the
 one-shot's `hermes_stdout.log` and `hermes_stderr.log`, `container.log`, and the
 exported message-level trajectory at `telemetry/sessions.jsonl`.
 
+### Tool bridge in its own container
+
+By default the bridge runs inside the runner. To run it as its own container,
+start it once and use a `-docker-bridge` profile:
+
+```sh
+docker compose -f docker/docker-compose.yml up -d aries-bridge
+./bin/aries profiles/hermes-tb2-fix-git-deepseek-docker-bridge.json
+```
+
+The container needs the Docker socket to exec into task containers. For each
+task the runner attaches it to that task's network and detaches it after
+revocation, so a grant is reachable only from its own task. A restart of the
+container ends tasks in flight: their access is provably revoked, but their
+tool-call logs are lost and their evaluation is blocked. See
+[Docker deployment](../docker/README.md) for running the runner in a container
+as well, and for the limits on Docker Desktop.
+
 ### Realtime OpenClaw mode
 
 OpenClaw uses text-agent mode when `harness.mode` is omitted. Set

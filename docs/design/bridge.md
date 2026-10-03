@@ -116,6 +116,51 @@ commands normally; because nothing was pushed, its teardown sync-back then
 suppresses itself. Refusals are recorded with a distinct `denied` status so
 evidence separates policy from a protocol violation.
 
+## Serving from a separate bridge
+
+With `bridge.deployment: "kubernetes"` or `"docker"`, the two SSH bridges serve
+from a long-running `aries-bridge` process in its own pod or container instead
+of the runner process (`pkg/bridge/remote`, `cmd/aries-bridge`). The runner
+stays a separate process, so the load generator and the component on every
+tool call's path no longer share a process, a Go runtime or a CPU limit.
+
+Nothing about the security contract changes; each piece of it moves to where it
+can still be proven:
+
+- **Keys.** The runner generates the client key and sends only its public half;
+  the bridge generates the host key per grant. The private key never leaves the
+  runner's host, and the harness reads the same `id_ed25519`, `known_hosts` and
+  `aries-ssh` files as before.
+- **Sandbox binding.** The bridge re-reads the named sandbox and refuses it
+  unless it is a live ARIES sandbox of the granted run and task — on
+  Kubernetes the pod with that generated ID, on Docker the task container with
+  that ID on its own task network — so a wrong request cannot point it at a
+  harness or another task's sandbox.
+- **Revocation.** `Stop` returns nil only when the bridge reports the grant
+  revoked or absent, or when the process that held it is provably gone: the
+  pod is gone or has a new UID, or the container is gone, stopped or
+  restarted. Grants live only in the daemon's memory. A present but silent
+  bridge blocks evaluation.
+- **Evidence.** Tool-call logs are released only after revocation, streamed
+  back into the runner's run directory at 0600, then deleted from the bridge.
+  If revocation was proven by absence, the logs are gone and `Stop` reports
+  that as an error, which blocks evaluation as a failed drain would.
+
+Only the transport differs between the two deployments:
+
+| | Kubernetes | Docker |
+|---|---|---|
+| Control path | `kubectl exec` into the pod | `docker exec` into the container (Moby SDK) |
+| Harness reaches the grant at | the pod IP, on the flat pod network | the container's address on that task's network |
+| Per-task reachability | NetworkPolicy admits only harness pods | the runner attaches the bridge to a task's network for the life of its grant, and the grant listens only on that address |
+| "Gone" means | pod absent or new UID | container absent, stopped or restarted |
+
+On Docker the runner owns the task networks, so it attaches the bridge
+container at grant and detaches it after revocation; a restarted container
+keeps its attachments, and the detach is what lets the sandbox's network be
+removed. Either way the control path is two calls per task, never on the
+tool-call path, and no port is exposed.
+
 ## Lifecycle position
 
 Bridge startup follows sandbox sanitization and precedes harness startup. On

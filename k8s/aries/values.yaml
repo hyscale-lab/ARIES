@@ -1,109 +1,83 @@
 # Defaults for the ARIES chart.
 #
-# These reproduce what the old Kustomize `base` rendered: a long-lived idling
-# pod with an emptyDir for run artifacts, no role pinning, and no OpenClaw
-# gateway. Pick an environment file on top:
+# The chart deploys what ARIES needs *inside* the cluster. The runner itself is
+# not here: it runs as a process on a host outside the cluster (see
+# `aries-setup setup_runner`) and reaches the cluster with kubectl.
 #
-#   values-local.yaml       kind/minikube, image loaded into the node
-#   values-incluster.yaml   remote kubeadm cluster, image pulled, PVC, role pins
+#   - the tool bridge pod (aries-bridge), which serves every task's SSH bridge
+#   - the runner's ServiceAccount, its namespaced Role and a token for it
+#   - the nodes/proxy ClusterRole for pod telemetry
+#   - the Grafana dashboard ConfigMap
 #
-# Credentials are NOT here. They go in secret.yaml, which is gitignored; copy
-# secret.yaml.example and fill it in. See that file for the trade-off.
+# Pick an environment file on top:
+#
+#   values-local.yaml       kind/minikube, bridge image loaded into the node
+#   values-cluster.yaml     remote kubeadm cluster, bridge image pulled
+#
+# The bridge image is public (docker.io/jingxiang212/aries-bridge), so no
+# credentials are needed. For a private registry, put the pull document in the
+# gitignored secret.yaml (see secret.yaml.example) and set registry.create.
 
 # Resource names are kept stable at "aries" regardless of the release name, so
-# `kubectl -n aries exec deploy/aries` and `svc/aries-openclaw` keep working and
-# the docs stay correct. Clear this to get standard release-prefixed names.
+# the ServiceAccount is always "aries" and the bridge "aries-bridge". Clear this
+# to get standard release-prefixed names.
 fullnameOverride: aries
 
-image:
-  repository: aries
-  tag: latest
-  # IfNotPresent suits an immutable tag. values-local sets Never (the image is
-  # side-loaded) and values-incluster sets Always (the :latest tag is mutable,
-  # so a redeploy must re-pull).
-  pullPolicy: IfNotPresent
-
-# Pull secret for a private ARIES image. Set registry.create to render it from
-# secret.yaml, or point this at a Secret you created yourself. Leave the list
-# empty for a public image: an absent pull secret is only a kubelet warning for
-# a public image, but ImagePullBackOff for a private one.
-imagePullSecrets:
-  - name: aries-registry
+# Pull secret for a private bridge image: [{name: aries-registry}] with
+# registry.create, or the name of a Secret you created yourself. Empty for the
+# public image.
+imagePullSecrets: []
 
 registry:
   # Render the aries-registry dockerconfigjson Secret from
-  # registry.dockerconfigjson in secret.yaml. Off by default because the local
-  # path never pulls from a registry.
+  # registry.dockerconfigjson in secret.yaml. Only for a private image.
   create: false
   # A full Docker config document. Set this in secret.yaml, never here.
   dockerconfigjson: ""
 
-model:
-  # Render the aries-model Secret holding the model API key.
-  create: true
-  secretName: aries-model
-  # The env var ARIES reads, and the key inside the Secret.
-  key: DEEPSEEK_API_KEY
-  # Set this in secret.yaml, never here.
-  apiKey: ""
-
-# The profile the documented `kubectl exec` line runs, exported as
-# $ARIES_PROFILE. The pod idles, so this starts nothing on its own.
-profile: profiles/openclaw-tb2-fix-git-deepseek-e2b.json
-
-# Expose the pod's own IP as $POD_IP, for a bridge advertise_host that has to
-# be reachable from agent pods. Only needed when ARIES runs in-cluster.
-podIP: false
-
-# Pin ARIES to a node the installer labelled and tainted aries.dev/role=aries.
-# Both halves are needed: nodeSelector pulls the pod onto that node, the
-# toleration gets it past the taint. Off by default so a cluster with no role
-# labels (kind/minikube) still schedules the pod.
-role:
-  enabled: false
-  name: aries
-
-resources:
-  requests:
-    cpu: "2"
-    memory: 4Gi
-  # Monitors shell out to kubectl on a 5s timeout; a limit low enough to get
-  # CFS-throttled makes them miss it and die. 8 CPU keeps throttling off the
-  # sampling path.
-  limits:
-    cpu: "8"
-    memory: 16Gi
-
-runs:
-  # Where run artifacts land. emptyDir survives between runs, because the pod
-  # is long-lived, but dies with the pod.
-  persistence:
-    enabled: false
-    claimName: aries-runs
-    size: 20Gi
-    storageClassName: aries-local
-
-# A StorageClass and node-local PersistentVolume for the claim above. A bare
-# kubeadm cluster has no dynamic provisioner and no default StorageClass, so a
-# plain PVC would stay Pending forever.
-storage:
-  create: false
-  hostPath: /var/lib/aries/runs
-  # The PV is pinned to nodes carrying aries.dev/role=<role.name>, which is the
-  # only node the ARIES pod ever schedules onto.
-  nodeRoleAffinity: true
+bridge:
+  # Off only for a Docker-only setup; every profile with
+  # bridge.deployment "kubernetes" needs it.
+  enabled: true
+  image:
+    # Built from Dockerfile.bridge and published with
+    #   make image-bridge BRIDGE_IMAGE=jingxiang212/aries-bridge:latest
+    #   docker push jingxiang212/aries-bridge:latest
+    # It holds only aries-bridge and kubectl, which is why it can be public.
+    repository: jingxiang212/aries-bridge
+    tag: latest
+    # :latest is mutable, so always re-pull or a redeploy silently keeps the
+    # old bridge. values-local sets Never for a side-loaded image.
+    pullPolicy: Always
+  # Admit connections only from ARIES harness pods. Needs a CNI that enforces
+  # NetworkPolicy (Calico does; flannel silently does not).
+  networkPolicy:
+    enabled: true
+  # The bridge's cost is one `kubectl exec` process per tool call. Keep the
+  # limit well clear of throttling: a throttled bridge adds latency to every
+  # tool call, which is exactly what experiments measure.
+  resources:
+    requests:
+      cpu: "1"
+      memory: 512Mi
+    limits:
+      cpu: "4"
+      memory: 2Gi
 
 rbac:
-  # The namespaced Role for sandbox pod lifecycle, exec, logs, services,
-  # configmaps/secrets and NetworkPolicies. ARIES cannot run without it.
+  # The runner's namespaced Role: sandbox and agent pod lifecycle, exec (into
+  # sandboxes and the bridge pod), logs, services, configmaps/secrets and
+  # NetworkPolicies. The runner cannot work without it.
   create: true
-  # The one privilege ARIES holds outside its namespace: `get` on nodes/proxy,
-  # so pod telemetry can read the kubelet Summary API through the API server.
-  # Read-only and confined to that subresource. Set false to drop it; the
-  # sandbox and harness still work and resources.jsonl is simply empty.
+  # The one privilege the runner holds outside its namespace: `get` on
+  # nodes/proxy, so pod telemetry can read the kubelet Summary API through the
+  # API server. Read-only and confined to that subresource. Set false to drop
+  # it; the sandbox and harness still work and resources.jsonl is simply empty.
   nodeMetrics: true
 
 serviceAccount:
+  # The runner's identity, plus a long-lived token Secret setup_runner builds
+  # the runner host's kubeconfig from.
   create: true
   name: aries
 
@@ -117,11 +91,6 @@ openclaw:
     repository: ghcr.io/openclaw/openclaw
     tag: "2026.7.1"
     pullPolicy: IfNotPresent
-  # Pin the gateway to the harness role pool, same two-halves reasoning as
-  # role above.
-  role:
-    enabled: true
-    name: harness
   service:
     # ClusterIP is deliberate: reach it with
     # `kubectl -n aries port-forward svc/aries-openclaw 18789:18789`, which
@@ -138,9 +107,10 @@ openclaw:
       memory: 2Gi
 
 # The ARIES Grafana dashboard, shipped as a ConfigMap for Grafana's dashboard
-# sidecar to pick up. It plots CPU, memory and CFS throttling for ARIES pods
-# from the kubelet's cAdvisor endpoint, which kube-prometheus-stack already
-# scrapes every 10s.
+# sidecar to pick up. It plots CPU, memory and CFS throttling for pods in this
+# namespace (bridge, harness and sandbox pods) from the kubelet's cAdvisor
+# endpoint, which kube-prometheus-stack already scrapes every 10s. The runner
+# is a host process, so it does not appear.
 #
 # On by default: the ConfigMap is inert without the monitoring stack. It does
 # need k8s/grafana/values.yaml's sidecar.dashboards.searchNamespace=ALL, since

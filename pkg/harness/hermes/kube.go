@@ -25,7 +25,7 @@ import (
 const (
 	defaultKubeNamespace = "aries"
 	defaultKubectl       = "kubectl"
-	// nodeRoleLabel is the label setup/ puts on each dedicated node pool, and
+	// nodeRoleLabel is the label k8s/setup/ puts on each dedicated node pool, and
 	// the key of the NoSchedule taint it pairs with.
 	nodeRoleLabel = "aries.dev/role"
 	// defaultKubeStartTimeout is larger than the Docker backend's 45s because

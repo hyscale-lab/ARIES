@@ -73,3 +73,22 @@ func TestDockerModeStillRequiresTheNetworkGateway(t *testing.T) {
 		t.Fatal("Docker mode started without a network gateway")
 	}
 }
+
+// With ListenHost the server binds that address only, not every interface:
+// the Docker bridge container is attached to many task networks at once, and
+// a grant must be reachable from its own task's network and no other.
+func TestListenHostBindsOnlyThatAddress(t *testing.T) {
+	manager, err := New(Options{OutputDir: t.TempDir(), CleanupTimeout: 5 * time.Second, AdvertiseHost: "127.0.0.1", ListenHost: "127.0.0.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if _, err := manager.Start(ctx, &gatewaylessSandbox{}); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop(ctx)
+	if bound := manager.active.listener.Addr().String(); !strings.HasPrefix(bound, "127.0.0.1:") {
+		t.Errorf("listener bound to %s, want 127.0.0.1 only", bound)
+	}
+}

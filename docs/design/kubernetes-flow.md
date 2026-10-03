@@ -1,5 +1,11 @@
 # Kubernetes run flow
 
+> **Historical.** This walkthrough records the earlier topology, with the
+> runner and the tool bridge together in one ARIES pod. The runner now runs
+> outside the cluster and the bridge in its own `aries-bridge` pod; see
+> [kubernetes.md](kubernetes.md#deployment) and
+> [The bridge pod](kubernetes.md#the-bridge-pod).
+
 This document traces one complete run on the Kubernetes backend
 (`harness.deployment: kubernetes`, `sandbox.type: kubernetes`,
 `bridge.type: openclaw-ssh`) from `kubectl apply` through task execution to

@@ -21,14 +21,22 @@
 #   /metrics/probes    liveness/readiness probe results
 #   /metrics/resource  a lighter-weight subset of cAdvisor
 #
-# cAdvisor is scraped every 10s regardless of the global scrapeInterval below,
-# which is finer than the kubelet Summary API that ARIES samples into
-# resources.jsonl — so Prometheus sees detail that ARIES's own telemetry
-# cannot.
+# cAdvisor is scraped every 1s, against the global scrapeInterval of 15s
+# below. A scrape is only as fresh as the kubelet's cAdvisor housekeeping, so
+# aries-setup lowers that from the kubelet's 10s default to 1s
+# (kubelet_housekeeping_interval in k8s/setup/configs/kube.json); without it a 1s
+# scrape mostly re-reads the same observation. cAdvisor still backs off
+# towards 15s for a container whose stats stop changing, so busy containers —
+# the ones under measurement — are the ones sampled every second.
+#
+# Only cAdvisor is this fine. Scraping every target at 1s would multiply the
+# sample volume for series no ARIES dashboard reads, and Prometheus keeps its
+# data in an emptyDir.
 kubelet:
   enabled: true
   serviceMonitor:
     cAdvisor: true
+    cAdvisorInterval: 1s
     probes: true
     # Left at the chart default. It duplicates cAdvisor's CPU and memory series
     # under different names, so enabling it doubles the sample volume for
@@ -51,8 +59,7 @@ kubeEtcd:
 
 prometheus:
   prometheusSpec:
-    # The kubelet refreshes cAdvisor stats every 10-25s, so a shorter interval
-    # mostly re-reads the same observation.
+    # Every target except cAdvisor (see kubelet above).
     scrapeInterval: 15s
     # Select ServiceMonitors and PodMonitors in any namespace without the
     # Helm release label, so monitors for ARIES itself can be added later.

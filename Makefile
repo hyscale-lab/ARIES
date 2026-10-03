@@ -1,4 +1,4 @@
-.PHONY: build test test-race lint integration run setup setup-tool charts-lint charts-template
+.PHONY: build test test-race lint integration run setup setup-tool image-bridge charts-lint charts-template
 
 PROFILE ?= profiles/openclaw-tb2-fix-git-deepseek.json
 
@@ -9,6 +9,7 @@ build:
 	mkdir -p bin
 	go build -o bin/aries ./cmd/aries
 	CGO_ENABLED=0 go build -o bin/aries-ssh ./cmd/aries-ssh
+	CGO_ENABLED=0 go build -o bin/aries-bridge ./cmd/aries-bridge
 
 test:
 	go test -v ./...
@@ -37,8 +38,16 @@ setup: build
 # binary to copy onto nodes when running the on-node subcommands by hand.
 setup-tool:
 	mkdir -p bin
-	go build -o bin/aries-setup ./setup/aries-setup
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/aries-setup-linux-amd64 ./setup/aries-setup
+	go build -o bin/aries-setup ./k8s/setup/aries-setup
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/aries-setup-linux-amd64 ./k8s/setup/aries-setup
+
+# The tool bridge pod's image. Only bridge changes need it rebuilt: the runner
+# and its profiles live on the runner host (aries-setup setup_runner).
+BRIDGE_IMAGE ?= aries-bridge:latest
+BRIDGE_PLATFORM ?= linux/amd64
+
+image-bridge:
+	docker buildx build --platform $(BRIDGE_PLATFORM) -f Dockerfile.bridge -t $(BRIDGE_IMAGE) --load .
 
 # Render the charts without a cluster. Catches template errors and, with
 # --dry-run, schema problems that only show up once values are merged.
@@ -46,15 +55,14 @@ setup-tool:
 HELM ?= helm
 
 charts-lint:
-	$(HELM) lint ./k8s/aries --set model.apiKey=lint-only
+	$(HELM) lint ./k8s/aries
 	$(HELM) lint ./k8s/prometheus/chart -f ./k8s/prometheus/values.yaml -f ./k8s/grafana/values.yaml
 
 charts-template:
 	$(HELM) template aries ./k8s/aries -n aries \
-	  -f ./k8s/aries/values-local.yaml --set model.apiKey=template-only >/dev/null
+	  -f ./k8s/aries/values-local.yaml >/dev/null
 	$(HELM) template aries ./k8s/aries -n aries \
-	  -f ./k8s/aries/values-incluster.yaml --set model.apiKey=template-only \
-	  --set registry.dockerconfigjson='{}' >/dev/null
+	  -f ./k8s/aries/values-cluster.yaml --set registry.dockerconfigjson='{}' >/dev/null
 	$(HELM) template prometheus ./k8s/prometheus/chart -n monitoring \
 	  -f ./k8s/prometheus/values.yaml -f ./k8s/grafana/values.yaml >/dev/null
 	@echo "charts render"

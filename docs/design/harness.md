@@ -100,7 +100,7 @@ it issues is `bash -c` on the remote.
 On Kubernetes, `hermes.KubeManager` runs the same one-shot in an idling pod and
 writes the same artifacts through the same code; the backend differences —
 `kubectl exec` staging, admitted-pod verification, and recovering the exit
-status past kubectl's own suffix — are described in `k8s/KUBERNETES.md`.
+status past kubectl's own suffix — are described in [the Kubernetes design](kubernetes.md#the-hermes-harness).
 
 ## Customization & Contribution Guide
 

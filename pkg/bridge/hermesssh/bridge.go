@@ -58,6 +58,22 @@ type Options struct {
 	// tool-calls.jsonl. The zero value retains it; setting this trades that
 	// evidence for disk.
 	OmitRawLog bool
+	// Keys, when set, supplies the session's keys instead of generating them.
+	// This is how the bridge serves in a different process from the runner: the
+	// runner holds the client's private key (see NewCredentials), so this side
+	// writes no identity file and the endpoint names none.
+	Keys *SessionKeys
+	// ListenHost, in advertised mode, binds the SSH server to this address
+	// instead of every interface. The bridge container sets it to its address
+	// on the task's Docker network, so the grant is reachable from that task
+	// and no other. Empty binds 0.0.0.0.
+	ListenHost string
+}
+
+// SessionKeys are the two keys one SSH session is served with.
+type SessionKeys struct {
+	Host       ssh.Signer
+	Authorized ssh.PublicKey
 }
 
 // Manager exposes one SSH endpoint at a time and proxies its exec requests to
@@ -70,6 +86,8 @@ type Manager struct {
 	afterStart     func(*bridgeSession) error
 	omitRawLog     bool
 	advertiseHost  string
+	listenHost     string
+	keys           *SessionKeys
 
 	mu       sync.Mutex
 	active   *bridgeSession
@@ -554,10 +572,13 @@ func New(options Options) (*Manager, error) {
 	if options.Logger == nil {
 		options.Logger = logrus.StandardLogger()
 	}
+	if options.Keys != nil && (options.Keys.Host == nil || options.Keys.Authorized == nil) {
+		return nil, errors.New("Hermes SSH session keys need both a host key and an authorized key")
+	}
 	return &Manager{
 		outputDir: outputDir, cleanupTimeout: options.CleanupTimeout,
 		logger: options.Logger, openAudit: openAuditFile, omitRawLog: options.OmitRawLog,
-		advertiseHost: options.AdvertiseHost,
+		advertiseHost: options.AdvertiseHost, keys: options.Keys, listenHost: options.ListenHost,
 	}, nil
 }
 
@@ -582,6 +603,8 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 			return core.ToolEndpoint{}, fmt.Errorf("resolve task network gateway: %w", err)
 		}
 		listenHost, advertiseHost = gateway, gateway
+	} else if manager.listenHost != "" {
+		listenHost = manager.listenHost
 	} else {
 		listenHost = "0.0.0.0"
 	}
@@ -609,18 +632,29 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 	if err := ensurePrivateDirectory(session.artifactDir); err != nil {
 		return fail(fmt.Errorf("create private Hermes SSH artifact directory: %w", err))
 	}
-	hostSigner, clientPEM, authorized, err := generateSessionKeys()
-	if err != nil {
-		return fail(err)
+	var (
+		hostSigner ssh.Signer
+		clientPEM  []byte
+		authorized ssh.PublicKey
+	)
+	if manager.keys != nil {
+		hostSigner, authorized = manager.keys.Host, manager.keys.Authorized
+	} else {
+		var err error
+		if hostSigner, clientPEM, authorized, err = generateSessionKeys(); err != nil {
+			return fail(err)
+		}
 	}
-	session.identitySource = filepath.Join(session.artifactDir, "id_ed25519")
 	session.knownSource = filepath.Join(session.artifactDir, "known_hosts")
 	session.toolLogPath = filepath.Join(session.artifactDir, "tool-calls.jsonl")
 	if !manager.omitRawLog {
 		session.rawLogPath = filepath.Join(session.artifactDir, "ssh_raw.log")
 	}
-	if err := writeExclusivePrivate(session.identitySource, clientPEM); err != nil {
-		return fail(fmt.Errorf("write Hermes SSH identity: %w", err))
+	if clientPEM != nil {
+		session.identitySource = filepath.Join(session.artifactDir, "id_ed25519")
+		if err := writeExclusivePrivate(session.identitySource, clientPEM); err != nil {
+			return fail(fmt.Errorf("write Hermes SSH identity: %w", err))
+		}
 	}
 	listener, err := net.Listen("tcp4", net.JoinHostPort(listenHost, "0"))
 	if err != nil {

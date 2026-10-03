@@ -1,16 +1,24 @@
 # Local cluster (kind/minikube).
 #
-#   docker build -t aries:latest .
-#   kind load docker-image aries:latest        # or: minikube image load aries:latest
-#   cp k8s/aries/secret.yaml.example k8s/aries/secret.yaml   # then edit it
+#   make image-bridge BRIDGE_IMAGE=aries-bridge:latest
+#   kind load docker-image aries-bridge:latest    # or: minikube image load aries-bridge:latest
 #   helm upgrade --install aries ./k8s/aries --namespace aries --create-namespace \
-#     -f ./k8s/aries/values-local.yaml -f ./k8s/aries/secret.yaml
+#     -f ./k8s/aries/values-local.yaml
 
-image:
-  repository: aries
-  tag: latest
-  # The image is side-loaded into the node, so never pull from a registry.
-  pullPolicy: Never
+bridge:
+  image:
+    repository: aries-bridge
+    tag: latest
+    # The image is side-loaded into the node, so never pull from a registry.
+    pullPolicy: Never
+  # A single-node local cluster usually cannot satisfy the cluster requests.
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "2"
+      memory: 1Gi
 
 # No registry to authenticate against: the node already holds the image. An
 # empty list is what makes this work — a pull secret referencing a Secret that
@@ -19,28 +27,3 @@ image:
 imagePullSecrets: []
 registry:
   create: false
-
-# kind/minikube nodes carry no aries.dev/role labels, so pinning would leave
-# every pod Pending.
-role:
-  enabled: false
-openclaw:
-  role:
-    enabled: false
-
-# No provisioner and no node-local volume: run artifacts live in the pod's
-# emptyDir and survive between runs but not a pod restart.
-runs:
-  persistence:
-    enabled: false
-storage:
-  create: false
-
-# A single-node local cluster usually cannot satisfy the production requests.
-resources:
-  requests:
-    cpu: "1"
-    memory: 2Gi
-  limits:
-    cpu: "4"
-    memory: 8Gi

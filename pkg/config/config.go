@@ -97,7 +97,7 @@ type HarnessConfig struct {
 	Deployment string `json:"deployment,omitempty"`
 	Namespace  string `json:"namespace,omitempty"`
 	// NodeRole pins agent pods to nodes labelled "aries.dev/role=<NodeRole>" and
-	// tolerates the matching NoSchedule taint that setup/ applies to a
+	// tolerates the matching NoSchedule taint that k8s/setup/ applies to a
 	// dedicated pool. Applies only to the "kubernetes" deployment. Empty leaves
 	// agent pods unpinned, which a cluster with no role labels needs.
 	NodeRole string                `json:"node_role,omitempty"`
@@ -143,7 +143,7 @@ type SandboxConfig struct {
 	// only to the "kubernetes" sandbox type and defaults to "aries".
 	Namespace string `json:"namespace,omitempty"`
 	// NodeRole pins task pods to nodes labelled "aries.dev/role=<NodeRole>" and
-	// tolerates the matching NoSchedule taint that setup/ applies to a
+	// tolerates the matching NoSchedule taint that k8s/setup/ applies to a
 	// dedicated pool. ARIES owns this value; the installer only labels and
 	// taints the nodes. Empty leaves task pods unpinned, which is what a cluster
 	// with no role labels needs.
@@ -177,6 +177,16 @@ type BridgeConfig struct {
 	// "host.docker.internal"; on a remote cluster it is the host's routable
 	// address.
 	AdvertiseHost string `json:"advertise_host,omitempty"`
+	// Deployment selects where the bridge serves: "" or "process" runs it inside
+	// the runner; "kubernetes" uses the long-running aries-bridge pod the ARIES
+	// chart deploys; "docker" uses the aries-bridge container from
+	// docker/docker-compose.yml. A separate bridge advertises its own address, so
+	// advertise_host must then be empty.
+	Deployment string `json:"deployment,omitempty"`
+	// Namespace is where the aries-bridge pod runs, for the "kubernetes"
+	// deployment. It must be the sandbox namespace, since the pod may only
+	// exec into sandboxes in its own namespace. Defaults to sandbox.namespace.
+	Namespace string `json:"namespace,omitempty"`
 }
 
 // RetainBridgeRawLog reports whether ssh_raw.log should be written, defaulting
@@ -404,6 +414,9 @@ func (c *Config) validate() error {
 	if err := c.Harness.validate(); err != nil {
 		return err
 	}
+	if err := c.validateBridgeDeployment(); err != nil {
+		return err
+	}
 	if err := c.Runtime.validate(); err != nil {
 		return err
 	}
@@ -436,6 +449,54 @@ func (c *Config) validate() error {
 	}
 	if !validEnvName(c.Model.APIKeyEnv) {
 		return errors.New("model.api_key_env must be an environment variable name")
+	}
+	return nil
+}
+
+// validateBridgeDeployment checks the pairings a separate bridge supports: an
+// SSH bridge between a harness and a sandbox on the same backend, as the
+// bridge itself. On Kubernetes all three share one namespace, which it fills
+// in from sandbox.namespace when unset.
+func (c *Config) validateBridgeDeployment() error {
+	deployment := c.Bridge.Deployment
+	switch deployment {
+	case "", "process":
+		if c.Bridge.Namespace != "" {
+			return errors.New("bridge.namespace applies only to bridge.deployment kubernetes")
+		}
+		return nil
+	case "kubernetes", "docker":
+	default:
+		return fmt.Errorf("unsupported bridge.deployment %q", deployment)
+	}
+	if c.Bridge.Type != "hermes-ssh" && c.Bridge.Type != "openclaw-ssh" {
+		return fmt.Errorf("bridge.deployment %s requires bridge.type hermes-ssh or openclaw-ssh", deployment)
+	}
+	if c.Bridge.AdvertiseHost != "" {
+		return fmt.Errorf("bridge.advertise_host must be empty with bridge.deployment %s; the bridge advertises its own address", deployment)
+	}
+	harnessDeployment := c.Harness.Deployment
+	if harnessDeployment == "" {
+		harnessDeployment = "docker"
+	}
+	if c.Sandbox.Type != deployment || harnessDeployment != deployment {
+		return fmt.Errorf("bridge.deployment %s requires sandbox.type %s and harness.deployment %s", deployment, deployment, deployment)
+	}
+	if deployment == "docker" {
+		if c.Bridge.Namespace != "" {
+			return errors.New("bridge.namespace applies only to bridge.deployment kubernetes")
+		}
+		return nil
+	}
+	sandboxNamespace := c.Sandbox.Namespace
+	if sandboxNamespace == "" {
+		sandboxNamespace = "aries"
+	}
+	if c.Bridge.Namespace == "" {
+		c.Bridge.Namespace = sandboxNamespace
+	}
+	if c.Bridge.Namespace != sandboxNamespace {
+		return fmt.Errorf("bridge.namespace %q must match the sandbox namespace %q; the bridge pod can only reach sandboxes in its own namespace", c.Bridge.Namespace, sandboxNamespace)
 	}
 	return nil
 }

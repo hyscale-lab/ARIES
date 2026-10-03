@@ -48,6 +48,7 @@
       "title": "CPU usage (cores)",
       "description": "rate() of the cAdvisor CPU counter. container!=\"\" drops the pod-level pause-container aggregate, which would otherwise double every series.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "interval": "1s",
       "gridPos": { "h": 9, "w": 12, "x": 0, "y": 0 },
       "fieldConfig": {
         "defaults": {
@@ -78,6 +79,7 @@
       "title": "CPU throttled (% of periods)",
       "description": "The share of CFS periods in which the container was throttled. This is the failure mode that killed the resource monitors: a low CPU limit throttles the process, kubectl calls miss their 5s timeout, and sampling stops. Sustained values above ~25% mean the limit is too low.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "interval": "1s",
       "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },
       "fieldConfig": {
         "defaults": {
@@ -111,6 +113,7 @@
       "title": "Memory working set",
       "description": "container_memory_working_set_bytes is what the kubelet compares against the limit when deciding to OOM-kill, so it is the number that matters — not RSS or cache.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "interval": "1s",
       "gridPos": { "h": 9, "w": 12, "x": 0, "y": 9 },
       "fieldConfig": {
         "defaults": {
@@ -140,6 +143,7 @@
       "title": "Memory used / limit",
       "description": "Approaching 1 means the pod is close to being OOM-killed.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "interval": "1s",
       "gridPos": { "h": 9, "w": 12, "x": 12, "y": 9 },
       "fieldConfig": {
         "defaults": {
@@ -172,6 +176,7 @@
       "title": "CPU by node",
       "description": "Which role node the load is on. cAdvisor series carry no node label, so this joins kube_pod_info from kube-state-metrics to attach one.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "interval": "1s",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
       "fieldConfig": {
         "defaults": {
@@ -196,6 +201,7 @@
       "title": "Task sandbox pods, by sandbox id",
       "description": "Task pods carry aries.dev/sandbox-id as a label, exported because kube-state-metrics is configured with metricLabelsAllowlist pods=[*]. Run and task IDs are pod annotations, not labels, so they are not exported and cannot be queried here.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "interval": "1s",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
       "fieldConfig": {
         "defaults": { "unit": "none", "decimals": 3 },

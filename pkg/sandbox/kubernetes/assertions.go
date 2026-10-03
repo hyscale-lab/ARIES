@@ -54,9 +54,22 @@ type sshBridgeSandbox interface {
 	ExecStream(context.Context, core.Command, io.Reader, io.Writer, io.Writer) (core.CommandResult, error)
 }
 
+// attachableSandbox mirrors the unexported attachableSandbox in
+// pkg/bridge/remote: what the runner tells the bridge pod so it can Attach.
+type attachableSandbox interface {
+	runner.Sandbox
+	Namespace() string
+	ContainerName() string
+	SandboxID() string
+	Workdir() string
+	RunID() string
+	TaskID() string
+}
+
 var (
 	_ grantSandbox      = (*Sandbox)(nil)
 	_ filesystemSandbox = (*Sandbox)(nil)
 	_ processSandbox    = (*Sandbox)(nil)
 	_ sshBridgeSandbox  = (*Sandbox)(nil)
+	_ attachableSandbox = (*Sandbox)(nil)
 )

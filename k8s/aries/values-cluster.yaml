@@ -1,0 +1,35 @@
+# A remote kubeadm cluster, with the runner on a host outside it.
+#
+# The bridge pod advertises its own pod IP to harness pods, so the agent's SSH
+# hop to the bridge is pod-to-pod and the runner host needs no route into the
+# pod network.
+#
+#   make image-bridge BRIDGE_IMAGE=jingxiang212/aries-bridge:latest
+#   docker push jingxiang212/aries-bridge:latest
+#   helm upgrade --install aries ./k8s/aries --namespace aries --create-namespace \
+#     -f ./k8s/aries/values-cluster.yaml
+#
+# aries-setup does exactly that on the control plane when cluster.json sets
+# deploy_aries.
+
+bridge:
+  image:
+    # Public, so the cluster needs no pull secret. For a private registry,
+    # point this at it, add `imagePullSecrets: [{name: aries-registry}]` and
+    # `registry.create: true`, and pass secret.yaml last.
+    repository: jingxiang212/aries-bridge
+    tag: latest
+    # The :latest tag is mutable, so always re-pull or a redeploy silently
+    # keeps running the old image.
+    pullPolicy: Always
+
+imagePullSecrets: []
+
+registry:
+  create: false
+
+# The harness backend creates its own per-task agent pods, so the static
+# gateway is not deployed. Set enabled: true to drive one long-lived gateway by
+# port-forward instead.
+openclaw:
+  enabled: false

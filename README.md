@@ -89,7 +89,7 @@ implementations:
 | Agent harness | OpenClaw (text and realtime voice modes); Hermes (text) |
 | Benchmark | Terminal-Bench 2 |
 | Tool sandbox | Docker, using the Moby Go SDK |
-| Tool bridge | Centralized OpenClaw E2B-like bridge; OpenClaw SSH bridge; Hermes SSH bridge (both on Docker or Kubernetes) |
+| Tool bridge | Centralized OpenClaw E2B-like bridge; OpenClaw SSH bridge; Hermes SSH bridge (both on Docker or Kubernetes, in the runner or in the `aries-bridge` pod) |
 | Model service | External DeepSeek; external or ARIES-managed SGLang |
 
 See [Supported implementations](docs/supported.md) for ownership,
@@ -115,6 +115,10 @@ contact an external model endpoint.
 The DeepSeek example requires an API key and can incur charges. The
 [Quick start](docs/quick-start.md) covers secure credential setup, the first
 run, SGLang alternatives, result inspection, and troubleshooting.
+
+To run the tool bridge, or the runner itself, as a container, see
+[Docker deployment](docker/README.md). To run on a Kubernetes cluster, see
+[`k8s/`](k8s/README.md), which also covers bootstrapping a cluster with `aries-setup`.
 
 ## Trace dataset
 

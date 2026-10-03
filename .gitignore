@@ -50,6 +50,7 @@ DEEPSEEK_API.key
 .codex/skills/.system/**
 !.codex/prompts/
 !.codex/prompts/**
+.claude
 
 # aries-setup writes a command log to the directory it runs in.
 aries-setup-*.log
@@ -69,3 +70,5 @@ aries-setup-*.log
 secret.env
 registry.json
 !**/registry.json.example
+
+kubeconfig
