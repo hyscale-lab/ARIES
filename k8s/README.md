@@ -48,13 +48,13 @@ committed here.
 
 ```
  runner host (not a node)            cluster
-┌────────────────────────┐          ┌──────────────────────────────────────────┐
+┌────────────────────────┐          ┌───────────────────────────────────────────┐
 │ bin/aries (runner)     │ kubectl  │ aries-bridge pod   harness pods           │
 │  sandbox / harness mgr ├─────────►│  (one per run)      (one per task)        │
 │  remote bridge client  │ API srv  │     ▲    │              │                 │
-└────────────────────────┘          │     │    └─kubectl exec─┼──► sandbox pods  │
-                                    │     └──── SSH ──────────┘   (one per task) │
-                                    └──────────────────────────────────────────┘
+└────────────────────────┘          │     │    └─kubectl exec─┼──► sandbox pods │
+                                    │     └──── SSH ──────────┘   (one per task)│
+                                    └───────────────────────────────────────────┘
 ```
 
 - **The runner** creates and deletes sandbox and harness pods and drives the
@@ -64,7 +64,7 @@ committed here.
   so its load stays out of the measurements.
 - **The tool bridge pod** serves every task's SSH bridge. Harness pods dial it
   on its pod IP; it runs each tool call in the task's sandbox with `kubectl
-  exec`. Its Role allows only `get pods` and `pods/exec`, and its
+exec`. Its Role allows only `get pods` and `pods/exec`, and its
   NetworkPolicy admits only ARIES harness pods.
 - **Revocation** is confirmed by the bridge pod, or proven by its absence:
   grants live only in the daemon's memory, so a bridge pod that is gone (or
@@ -74,16 +74,16 @@ committed here.
 
 ## `aries-setup`
 
-| Subcommand | Does | Runs on |
-|---|---|---|
-| `setup_node` | install containerd and kubelet/kubeadm/kubectl | every node, as root |
-| `setup_master_node` | `kubeadm init`, CNI, write a join command | control plane |
-| `setup_worker --join "<cmd>"` | `kubeadm join` | each worker |
-| `setup_prometheus` | install Prometheus + Grafana from the vendored chart | control plane |
-| `setup_aries` | install the ARIES chart: the tool bridge pod and the runner's RBAC | control plane |
-| `reset_node --yes` | tear the node back to a pre-kubeadm state | any node |
-| `create_cluster` | all of the above over SSH, then `setup_runner` | your machine |
-| `setup_runner` | prepare the runner host, which is **not** a cluster node | your machine |
+| Subcommand                    | Does                                                               | Runs on             |
+| ----------------------------- | ------------------------------------------------------------------ | ------------------- |
+| `setup_node`                  | install containerd and kubelet/kubeadm/kubectl                     | every node, as root |
+| `setup_master_node`           | `kubeadm init`, CNI, write a join command                          | control plane       |
+| `setup_worker --join "<cmd>"` | `kubeadm join`                                                     | each worker         |
+| `setup_prometheus`            | install Prometheus + Grafana from the vendored chart               | control plane       |
+| `setup_aries`                 | install the ARIES chart: the tool bridge pod and the runner's RBAC | control plane       |
+| `reset_node --yes`            | tear the node back to a pre-kubeadm state                          | any node            |
+| `create_cluster`              | all of the above over SSH, then `setup_runner`                     | your machine        |
+| `setup_runner`                | prepare the runner host, which is **not** a cluster node           | your machine        |
 
 There are two ways to use it. **From your machine** — describe the nodes in
 `cluster.json` and run one command
@@ -116,17 +116,17 @@ immediately rather than silently taking a default.
 
 #### `cluster.json`
 
-| Key | Meaning |
-|---|---|
-| `master` | SSH target of the control plane, e.g. `JXiang@hp030.utah.cloudlab.us` |
-| `workers` | joined as plain workers; see [No node roles](#no-node-roles) |
-| `runner` | the host the ARIES runner runs on; **never joined**. See [The runner host](#the-runner-host) |
-| `runner_dir` | where the runner is staged, relative to its home. Default `aries` |
-| `ssh_key` | identity file; empty uses your ssh-agent and `~/.ssh/config` |
-| `ssh_options` | extra ssh arguments, one per entry: `["-o", "ConnectTimeout=15"]` |
-| `fetch_kubeconfig` | copy the admin kubeconfig to `k8s/setup/kubeconfig` |
-| `deploy_prometheus` | run `setup_prometheus` once the workers have joined |
-| `deploy_aries` | run `setup_aries`, then `setup_runner` when `runner` is set; needs a bridge image the cluster can use |
+| Key                 | Meaning                                                                                               |
+| ------------------- | ----------------------------------------------------------------------------------------------------- |
+| `master`            | SSH target of the control plane, e.g. `JXiang@hp030.utah.cloudlab.us`                                 |
+| `workers`           | joined as plain workers; see [No node roles](#no-node-roles)                                          |
+| `runner`            | the host the ARIES runner runs on; **never joined**. See [The runner host](#the-runner-host)          |
+| `runner_dir`        | where the runner is staged, relative to its home. Default `aries`                                     |
+| `ssh_key`           | identity file; empty uses your ssh-agent and `~/.ssh/config`                                          |
+| `ssh_options`       | extra ssh arguments, one per entry: `["-o", "ConnectTimeout=15"]`                                     |
+| `fetch_kubeconfig`  | copy the admin kubeconfig to `k8s/setup/kubeconfig`                                                   |
+| `deploy_prometheus` | run `setup_prometheus` once the workers have joined                                                   |
+| `deploy_aries`      | run `setup_aries`, then `setup_runner` when `runner` is set; needs a bridge image the cluster can use |
 
 Every SSH target is validated as `[user@]host`: a value starting with `-` would
 be read by ssh as an option. Listing the master or a worker twice is harmless —
@@ -138,18 +138,18 @@ loudly: move those hosts into `workers`, and the old ARIES node into `runner`.
 
 #### `kube.json`
 
-| Key | Default | Meaning |
-|---|---|---|
-| `k8s_version` | stable | exact patch, e.g. `1.34.2` |
-| `k8s_minor` | derived | package channel, e.g. `v1.34` |
-| `cni` | `calico` | `calico`, `flannel` or `none`; read [why Calico](#why-the-cni-default-is-calico) first |
-| `pod_cidr` | per CNI | `192.168.0.0/16` for Calico, `10.244.0.0/16` otherwise |
-| `calico_version` | `v3.32.2` | pinned, so the CNI does not depend on the day the cluster was built |
-| `advertise_address` | detected | API server address workers dial; default is the master's default-route source address |
-| `control_plane_endpoint` | — | `host:port` when a load balancer fronts several control planes |
-| `single_node` | `false` | remove the control-plane taint so workloads schedule on the master |
-| `open_firewall` | `false` | open the kubeadm and CNI ports in an active `ufw` or `firewalld` |
-| `kubelet_housekeeping_interval` | `1s` | how often the kubelet's cAdvisor refreshes container stats; see [Deploying Prometheus and Grafana](#deploying-prometheus-and-grafana) |
+| Key                             | Default   | Meaning                                                                                                                               |
+| ------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `k8s_version`                   | stable    | exact patch, e.g. `1.34.2`                                                                                                            |
+| `k8s_minor`                     | derived   | package channel, e.g. `v1.34`                                                                                                         |
+| `cni`                           | `calico`  | `calico`, `flannel` or `none`; read [why Calico](#why-the-cni-default-is-calico) first                                                |
+| `pod_cidr`                      | per CNI   | `192.168.0.0/16` for Calico, `10.244.0.0/16` otherwise                                                                                |
+| `calico_version`                | `v3.32.2` | pinned, so the CNI does not depend on the day the cluster was built                                                                   |
+| `advertise_address`             | detected  | API server address workers dial; default is the master's default-route source address                                                 |
+| `control_plane_endpoint`        | —         | `host:port` when a load balancer fronts several control planes                                                                        |
+| `single_node`                   | `false`   | remove the control-plane taint so workloads schedule on the master                                                                    |
+| `open_firewall`                 | `false`   | open the kubeadm and CNI ports in an active `ufw` or `firewalld`                                                                      |
+| `kubelet_housekeeping_interval` | `1s`      | how often the kubelet's cAdvisor refreshes container stats; see [Deploying Prometheus and Grafana](#deploying-prometheus-and-grafana) |
 
 `system.json` holds the upstream URLs and the join-file path; every field has a
 default and the file may be omitted.
@@ -201,16 +201,16 @@ What it does:
    `fetch_kubeconfig` is set.
 8. Run `setup_runner` when `runner` is set and the ARIES chart was deployed.
 
-| Flag | Meaning |
-|---|---|
-| `--check` | Run preflight only, then stop without changing anything. |
-| `--reset` | Reset every node first. **Destroys all cluster state**, including hostPath volume contents. Needed to rebuild a live cluster: `kubeadm init` refuses an initialised control plane. |
-| `--skip-master` | Join workers to a control plane that already exists. |
-| `--skip-workers` | Leave the existing workers untouched — no preflight, no token, no join. With `--skip-master` a run reduces to the chart deployments and `setup_runner`, which is how the charts are re-installed on a live cluster. |
-| `--node-binary PATH` | Ship a prebuilt linux binary instead of building one. |
-| `--node-arch ARCH` | Node GOARCH. Default `amd64`. |
-| `--kubeconfig-out PATH` | Where `fetch_kubeconfig` writes. Default `k8s/setup/kubeconfig`. |
-| `--charts-dir DIR` | Where the Helm charts live. Default `k8s`. |
+| Flag                    | Meaning                                                                                                                                                                                                             |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--check`               | Run preflight only, then stop without changing anything.                                                                                                                                                            |
+| `--reset`               | Reset every node first. **Destroys all cluster state**, including hostPath volume contents. Needed to rebuild a live cluster: `kubeadm init` refuses an initialised control plane.                                  |
+| `--skip-master`         | Join workers to a control plane that already exists.                                                                                                                                                                |
+| `--skip-workers`        | Leave the existing workers untouched — no preflight, no token, no join. With `--skip-master` a run reduces to the chart deployments and `setup_runner`, which is how the charts are re-installed on a live cluster. |
+| `--node-binary PATH`    | Ship a prebuilt linux binary instead of building one.                                                                                                                                                               |
+| `--node-arch ARCH`      | Node GOARCH. Default `amd64`.                                                                                                                                                                                       |
+| `--kubeconfig-out PATH` | Where `fetch_kubeconfig` writes. Default `k8s/setup/kubeconfig`.                                                                                                                                                    |
+| `--charts-dir DIR`      | Where the Helm charts live. Default `k8s`.                                                                                                                                                                          |
 
 SSH runs with `BatchMode=yes`, so your key must work without a prompt. Nodes
 need passwordless `sudo`, since every step runs unattended. CloudLab nodes
@@ -232,7 +232,7 @@ go run ./k8s/setup/aries-setup create_cluster --skip-master --skip-workers
 ```
 
 `--skip-workers` matters here. Without it the run reaches the join step and
-`setup_worker` refuses every node with *this node already belongs to a cluster*
+`setup_worker` refuses every node with _this node already belongs to a cluster_
 — correctly, since re-running `kubeadm join` against a live worker would
 disrupt it. With both flags the run preflights only the master, re-stages it,
 and installs the charts.
@@ -409,12 +409,12 @@ Only `Chart.yaml`, `values.yaml` and the files in `values_files` are shipped to
 the master; any other `*.yaml` beside the chart, such as a `secret.yaml` that is
 not in use, stays on your machine. `aries_config.json` controls the rest:
 
-| Key | Default | Meaning |
-|---|---|---|
-| `namespace` | `aries` | Helm release namespace, created if absent |
-| `release` | `aries` | Helm release name |
+| Key            | Default               | Meaning                                                |
+| -------------- | --------------------- | ------------------------------------------------------ |
+| `namespace`    | `aries`               | Helm release namespace, created if absent              |
+| `release`      | `aries`               | Helm release name                                      |
 | `values_files` | `values-cluster.yaml` | applied in order; a `secret.yaml`, if added, goes last |
-| `timeout` | `10m` | passed to `helm --timeout` |
+| `timeout`      | `10m`                 | passed to `helm --timeout`                             |
 
 ### With Helm directly
 
@@ -447,15 +447,15 @@ helm upgrade --install aries ./k8s/aries --namespace aries --create-namespace \
 
 ### Useful values
 
-| Value | Default | What it does |
-|---|---|---|
-| `bridge.enabled` | `true` | The tool bridge pod; needed by every `bridge.deployment: "kubernetes"` profile |
-| `bridge.image.repository` / `.tag` | `jingxiang212/aries-bridge:latest` | The bridge image (public) |
-| `bridge.networkPolicy.enabled` | `true` | Admit only ARIES harness pods to the bridge |
-| `bridge.resources` | 1–4 CPU | Kept clear of throttling: a throttled bridge adds latency to every tool call |
-| `serviceAccount.create` | `true` | The runner's ServiceAccount and its token Secret |
-| `rbac.nodeMetrics` | `true` | The `nodes/proxy` ClusterRole for pod telemetry |
-| `openclaw.enabled` | `false` | The static OpenClaw gateway Deployment + Service |
+| Value                              | Default                            | What it does                                                                   |
+| ---------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------ |
+| `bridge.enabled`                   | `true`                             | The tool bridge pod; needed by every `bridge.deployment: "kubernetes"` profile |
+| `bridge.image.repository` / `.tag` | `jingxiang212/aries-bridge:latest` | The bridge image (public)                                                      |
+| `bridge.networkPolicy.enabled`     | `true`                             | Admit only ARIES harness pods to the bridge                                    |
+| `bridge.resources`                 | 1–4 CPU                            | Kept clear of throttling: a throttled bridge adds latency to every tool call   |
+| `serviceAccount.create`            | `true`                             | The runner's ServiceAccount and its token Secret                               |
+| `rbac.nodeMetrics`                 | `true`                             | The `nodes/proxy` ClusterRole for pod telemetry                                |
+| `openclaw.enabled`                 | `false`                            | The static OpenClaw gateway Deployment + Service                               |
 
 ## Deploying Prometheus and Grafana
 
@@ -555,17 +555,17 @@ the kubelet/cAdvisor scrapes this stack already performs. See
 
 ### Where this differs from the vHive loader
 
-| Loader step | Here |
-|---|---|
-| `curl …/helm/master/scripts/get-helm-3 \| bash` | A pinned Helm release whose tarball is checked against the SHA-256 in `prom_config.json` before it is unpacked. |
-| `helm install`, `kubectl create namespace` | `helm upgrade --install --create-namespace`, so a re-run does not fail. |
-| `helm repo add` then install by chart name | The chart is committed at `k8s/prometheus/chart` and installed from disk, with its version checked against `chart_version`. |
-| `loader-nodetype` node affinity | No placement; ARIES nodes carry no role labels. |
-| `perf_event_paranoid=-1` on every node | Not done. It would let task containers on the sandbox node read host-wide perf events, and the perf collector that needs it is commented out in the loader's values. |
-| Re-render controller-manager, scheduler, kube-proxy with `kubeadm init phase` | Not done; those scrapes (and etcd's) are disabled instead. The loader's `kubeadm_init.yaml` hardcodes a pod subnet and version that do not match an ARIES cluster. |
-| metrics-server, pushgateway, Knative monitors and dashboards | Not installed. ARIES has no Knative or Istio, and its own pod telemetry reads the kubelet Summary API. |
-| Port-forwards kept running in tmux on the master | Grafana is a NodePort on 30300, printed as a URL; Prometheus stays ClusterIP with a forward command. |
-| Grafana password `prom-operator` (chart default) | Generated by the chart and stored in the `prometheus-grafana` Secret. |
+| Loader step                                                                   | Here                                                                                                                                                                 |
+| ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `curl …/helm/master/scripts/get-helm-3 \| bash`                               | A pinned Helm release whose tarball is checked against the SHA-256 in `prom_config.json` before it is unpacked.                                                      |
+| `helm install`, `kubectl create namespace`                                    | `helm upgrade --install --create-namespace`, so a re-run does not fail.                                                                                              |
+| `helm repo add` then install by chart name                                    | The chart is committed at `k8s/prometheus/chart` and installed from disk, with its version checked against `chart_version`.                                          |
+| `loader-nodetype` node affinity                                               | No placement; ARIES nodes carry no role labels.                                                                                                                      |
+| `perf_event_paranoid=-1` on every node                                        | Not done. It would let task containers on the sandbox node read host-wide perf events, and the perf collector that needs it is commented out in the loader's values. |
+| Re-render controller-manager, scheduler, kube-proxy with `kubeadm init phase` | Not done; those scrapes (and etcd's) are disabled instead. The loader's `kubeadm_init.yaml` hardcodes a pod subnet and version that do not match an ARIES cluster.   |
+| metrics-server, pushgateway, Knative monitors and dashboards                  | Not installed. ARIES has no Knative or Istio, and its own pod telemetry reads the kubelet Summary API.                                                               |
+| Port-forwards kept running in tmux on the master                              | Grafana is a NodePort on 30300, printed as a URL; Prometheus stays ClusterIP with a forward command.                                                                 |
+| Grafana password `prom-operator` (chart default)                              | Generated by the chart and stored in the `prometheus-grafana` Secret.                                                                                                |
 
 ## The OpenClaw gateway
 
@@ -672,14 +672,14 @@ Overshoot and pods sit `Pending` on `Insufficient cpu`.
   Artifact Registry, which throttles by source IP. A throttled worker never
   starts kube-proxy, so Calico cannot reach the API server Service and the node
   stays NotReady with `cni plugin not initialized`. `kubectl -n kube-system
-  describe pod <kube-proxy pod>` shows `429 Too Many Requests`; deleting the
+describe pod <kube-proxy pod>` shows `429 Too Many Requests`; deleting the
   kube-proxy and then the calico-node pod on that node retries once the limit
   lifts.
 - **Copying the charts from macOS needs `COPYFILE_DISABLE=1`.** Every vendored
   chart file carries the unremovable `com.apple.provenance` xattr, and macOS
   `tar` turns each into a binary `._<file>` archive member. On the node those
   become real files, and `helm` parses one as a CRD, failing with `control
-  characters are not allowed` for a file you never created. `create_cluster`
+characters are not allowed` for a file you never created. `create_cluster`
   handles this, and `setup_prometheus` refuses a chart directory containing
   `._*` files; by hand, see [VENDORED.md](prometheus/VENDORED.md).
 - The Flannel manifest hard-codes `10.244.0.0/16`; a different `pod_cidr` needs
