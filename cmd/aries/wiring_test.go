@@ -10,12 +10,14 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/hyscale-lab/aries/internal/app"
 	runtimesglang "github.com/hyscale-lab/aries/internal/modelruntime/sglang"
+	"github.com/hyscale-lab/aries/pkg/benchmark/toolathlon"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
 	openclawharness "github.com/hyscale-lab/aries/pkg/harness/openclaw"
@@ -174,6 +176,104 @@ func TestValidateComponentsRequiresPairedHarnessAndBridge(t *testing.T) {
 				t.Fatalf("err=%v", err)
 			}
 		})
+	}
+}
+
+// The adapter starts Toolathlon's gateway at the sandbox's alias on the
+// gateway port and adds it to the harness's MCP servers itself, ahead of any
+// server the profile names; the profile may not name one after it, and a
+// harness without an MCP client is refused.
+// The harness scrubs Toolathlon's account credentials from what it saves:
+// every variable the profile names for a token field or a key file, once,
+// and nothing for another benchmark.
+func TestBenchmarkRedactEnvNamesToolathlonCredentials(t *testing.T) {
+	cfg := config.Config{Benchmark: config.BenchmarkConfig{Type: "toolathlon", Toolathlon: &config.ToolathlonConfig{
+		CredentialsEnv:     map[string]string{"github_token": "GITHUB_TOKEN", "huggingface_token": "HF_TOKEN", "notion_token": "GITHUB_TOKEN"},
+		CredentialFilesEnv: map[string]string{"configs/google_credentials.json": "GOOGLE_CREDENTIALS"},
+	}}}
+	if got := benchmarkRedactEnv(cfg); !slices.Equal(got, []string{"GITHUB_TOKEN", "GOOGLE_CREDENTIALS", "HF_TOKEN"}) {
+		t.Fatalf("redact env = %v", got)
+	}
+	if got := benchmarkRedactEnv(config.Config{Benchmark: config.BenchmarkConfig{Type: "toolathlon"}}); got != nil {
+		t.Fatalf("a profile without credentials: %v", got)
+	}
+	other := cfg
+	other.Benchmark.Type = "terminalbench2"
+	if got := benchmarkRedactEnv(other); got != nil {
+		t.Fatalf("another benchmark: %v", got)
+	}
+}
+
+func TestToolathlonGatewayIsAddedToTheHarness(t *testing.T) {
+	base := func(servers ...core.MCPServerConfig) config.Config {
+		return config.Config{
+			Benchmark: config.BenchmarkConfig{Type: "toolathlon"},
+			Harness:   config.HarnessConfig{Type: "hermes", MCPServers: servers},
+			Sandbox:   config.SandboxConfig{Type: "docker"},
+			Bridge:    config.BridgeConfig{Type: "hermes-ssh"},
+		}
+	}
+	docs := core.MCPServerConfig{Name: "docs", URL: "https://docs.example/mcp", Transport: "streamable-http", TimeoutSeconds: 30}
+	for _, tc := range []struct {
+		name string
+		cfg  config.Config
+		want string
+	}{
+		{name: "no profile servers", cfg: base()},
+		{name: "another server beside the gateway", cfg: base(docs)},
+		{name: "the gateway's name taken", cfg: base(core.MCPServerConfig{Name: "toolathlon", URL: "http://task-sandbox:10086/sse", Transport: "sse"}), want: `harness.mcp_servers may not name "toolathlon"`},
+		{name: "openclaw harness", cfg: func() config.Config {
+			cfg := base()
+			cfg.Harness.Type = "openclaw"
+			cfg.Bridge.Type = "openclaw-ssh"
+			return cfg
+		}()},
+		{name: "a harness without an MCP client", cfg: func() config.Config {
+			cfg := base()
+			cfg.Harness.Type = "other"
+			return cfg
+		}(), want: "requires a harness with an MCP client"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateComponents(tc.cfg)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("err=%v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err=%v, want %q", err, tc.want)
+			}
+		})
+	}
+
+	gateway := core.MCPServerConfig{Name: "toolathlon", URL: "http://task-sandbox:10086/sse", Transport: "sse", TimeoutSeconds: toolathlon.GatewayCallTimeoutSeconds}
+	if got := mcpServers(base()); !reflect.DeepEqual(got, []core.MCPServerConfig{gateway}) {
+		t.Fatalf("servers = %+v, want the gateway alone", got)
+	}
+	want := []core.MCPServerConfig{gateway, docs}
+	if got := mcpServers(base(docs)); !reflect.DeepEqual(got, want) {
+		t.Fatalf("servers = %+v, want the gateway then the profile's", got)
+	}
+	// A profile that moves the gateway port moves the entry with it.
+	moved := base()
+	moved.Benchmark.Toolathlon = &config.ToolathlonConfig{GatewayPort: 20086}
+	if got := mcpServers(moved); len(got) != 1 || got[0].URL != "http://task-sandbox:20086/sse" {
+		t.Fatalf("moved port: servers = %+v", got)
+	}
+	// Another benchmark gets only what its profile names.
+	other := base(docs)
+	other.Benchmark.Type = "terminalbench2"
+	if got := mcpServers(other); !reflect.DeepEqual(got, want[1:]) {
+		t.Fatalf("terminalbench2 servers = %+v, want the profile's alone", got)
+	}
+	// OpenClaw receives the same list.
+	openclaw := base(docs)
+	openclaw.Harness.Type = "openclaw"
+	openclaw.Bridge.Type = "openclaw-ssh"
+	if got := mcpServers(openclaw); !reflect.DeepEqual(got, want) {
+		t.Fatalf("openclaw servers = %+v", got)
 	}
 }
 

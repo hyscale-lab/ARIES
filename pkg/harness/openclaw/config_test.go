@@ -3,6 +3,7 @@ package openclaw
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -422,5 +423,76 @@ func TestRenderConfig_MCPServersAndSandboxAllowlist(t *testing.T) {
 	alsoAllow := configuration.Tools.Sandbox.Tools.AlsoAllow
 	if len(alsoAllow) != 1 || alsoAllow[0] != "bundle-mcp" {
 		t.Fatalf("tools.sandbox.tools.alsoAllow = %v, want [bundle-mcp]", alsoAllow)
+	}
+}
+
+func TestRenderConfig_MCPServerTransportAndTimeout(t *testing.T) {
+	content, err := renderConfig(testModel(), testEndpoint(), ModeAgent, false, false, false, 0, MCPOptions{
+		Servers: []core.MCPServerConfig{
+			{Name: "gateway", URL: "http://task-sandbox:10086/sse", Transport: "sse", TimeoutSeconds: 1200},
+			{Name: "streaming", URL: "https://mcp.example.com/mcp", Transport: "streamable-http"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("renderConfig failed: %v", err)
+	}
+	var configuration openClawConfig
+	if err := json.Unmarshal(content, &configuration); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	gateway := configuration.MCP.Servers["gateway"]
+	if gateway.Transport != "sse" || gateway.RequestTimeoutMs != 1200000 {
+		t.Fatalf("gateway = %#v, want sse with a 1200000 ms request timeout", gateway)
+	}
+	streaming := configuration.MCP.Servers["streaming"]
+	if streaming.Transport != "streamable-http" || streaming.RequestTimeoutMs != 0 {
+		t.Fatalf("streaming = %#v, want streamable-http with the default timeout", streaming)
+	}
+}
+
+// The sandbox gate names the web tools and bundle-mcp together when both are
+// on, and renders no mcp block when there are no servers.
+func TestRenderConfig_MCPServersBesideWebSearch(t *testing.T) {
+	servers := MCPOptions{Servers: []core.MCPServerConfig{{Name: "toolathlon", URL: "http://task-sandbox:10086/sse", Transport: "sse", TimeoutSeconds: 1200}}}
+	withWeb, err := renderConfig(testModel(), testEndpoint(), ModeAgent, true, false, false, 0, servers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var configuration openClawConfig
+	if err := json.Unmarshal(withWeb, &configuration); err != nil {
+		t.Fatal(err)
+	}
+	if got := configuration.Tools.Sandbox.Tools.AlsoAllow; strings.Join(got, ",") != "web_search,web_fetch,bundle-mcp" {
+		t.Fatalf("tools.sandbox.tools.alsoAllow with web search = %#v", got)
+	}
+	without, err := renderConfig(testModel(), testEndpoint(), ModeAgent, false, false, false, 0, MCPOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(without), `"mcp"`) {
+		t.Fatal("an mcp block was rendered with no servers")
+	}
+}
+
+// A task without sandbox tools also loses exec and process; the file tools
+// are denied either way, and the servers stay reachable through bundle-mcp.
+func TestRenderConfig_NoSandboxToolsDeniesExec(t *testing.T) {
+	servers := []core.MCPServerConfig{{Name: "toolathlon", URL: "http://task-sandbox:10086/sse", Transport: "sse"}}
+	for _, withheld := range []bool{false, true} {
+		rendered, err := renderConfig(testModel(), testEndpoint(), ModeAgent, false, false, false, 0, MCPOptions{Servers: servers, NoSandboxTools: withheld})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var configuration openClawConfig
+		if err := json.Unmarshal(rendered, &configuration); err != nil {
+			t.Fatal(err)
+		}
+		deny := configuration.Tools.Deny
+		if slices.Contains(deny, "exec") != withheld || slices.Contains(deny, "process") != withheld || !slices.Contains(deny, "read") {
+			t.Fatalf("withheld=%v: tools.deny = %v", withheld, deny)
+		}
+		if got := configuration.Tools.Sandbox.Tools.AlsoAllow; !slices.Contains(got, "bundle-mcp") {
+			t.Fatalf("withheld=%v: the servers' tools are no longer allowed: %v", withheld, got)
+		}
 	}
 }

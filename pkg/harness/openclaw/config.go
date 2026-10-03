@@ -53,16 +53,20 @@ type openClawMCP struct {
 }
 
 type openClawMCPServer struct {
-	Command   string            `json:"command,omitempty"`
-	Args      []string          `json:"args,omitempty"`
-	URL       string            `json:"url,omitempty"`
-	Transport string            `json:"transport,omitempty"`
-	Env       map[string]string `json:"env,omitempty"`
+	Command          string            `json:"command,omitempty"`
+	Args             []string          `json:"args,omitempty"`
+	URL              string            `json:"url,omitempty"`
+	Transport        string            `json:"transport,omitempty"`
+	RequestTimeoutMs int               `json:"requestTimeoutMs,omitempty"`
+	Env              map[string]string `json:"env,omitempty"`
 }
 
 // MCPOptions configures MCP servers and sandbox-allowlisted tools for OpenClaw.
+// NoSandboxTools (core.Task.NoSandboxTools) also denies exec and process, so
+// the agent acts only through the servers and the web tools.
 type MCPOptions struct {
-	Servers []core.MCPServerConfig
+	Servers        []core.MCPServerConfig
+	NoSandboxTools bool
 }
 
 type talkConfig struct {
@@ -238,12 +242,21 @@ func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, mode strin
 		}},
 		Tools: toolPolicy{Deny: denyToolList(subagentsEnabled)},
 	}
+	if len(mcp) > 0 && mcp[0].NoSandboxTools {
+		// read, write, edit and apply_patch are denied already; exec runs
+		// commands in the sandbox and process manages the ones it left
+		// running.
+		configuration.Tools.Deny = append(configuration.Tools.Deny, "exec", "process")
+	}
 	if mode == ModeRealtime {
 		configuration.Talk = &talkConfig{Realtime: realtimeTalkConfig{ConsultRouting: consultRoutingForceAgent}}
 	}
 	if subagentsEnabled && maxConcurrentSubagents > 0 {
 		configuration.Agents.Defaults.Subagents = &subagentsConfig{MaxConcurrent: maxConcurrentSubagents}
 	}
+	// Everything the sandbox gate must name for a sandboxed session to see
+	// it: the web tools when enabled, and configured MCP servers, which
+	// OpenClaw exposes as tools owned by its bundle-mcp plugin.
 	var alsoAllow []string
 	if webSearchEnabled {
 		configuration.Tools.Web = &webToolsConfig{Search: &webSearchToolConfig{Provider: "searxng"}}
@@ -267,9 +280,10 @@ func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, mode strin
 			servers := make(map[string]openClawMCPServer, len(opts.Servers))
 			for _, server := range opts.Servers {
 				entry := openClawMCPServer{
-					Command: server.Command,
-					Args:    server.Args,
-					URL:     server.URL,
+					Command:          server.Command,
+					Args:             server.Args,
+					URL:              server.URL,
+					RequestTimeoutMs: server.TimeoutSeconds * 1000,
 				}
 				if server.Command != "" {
 					entry.Transport = "stdio"
@@ -285,10 +299,17 @@ func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, mode strin
 					}
 				} else if server.URL != "" {
 					entry.Transport = "sse"
+					if server.Transport != "" {
+						entry.Transport = server.Transport
+					}
 				}
 				servers[server.Name] = entry
 			}
 			configuration.MCP = &openClawMCP{Servers: servers}
+			// Without this entry the servers load and their tools are
+			// filtered out before the model sees them (a session with only
+			// the built-in tools, as the first Toolathlon run on OpenClaw
+			// showed).
 			if !slices.Contains(alsoAllow, "bundle-mcp") {
 				alsoAllow = append(alsoAllow, "bundle-mcp")
 			}

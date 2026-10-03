@@ -8,6 +8,7 @@ import (
 	"io"
 	"maps"
 	"math"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -146,6 +147,32 @@ type BenchmarkConfig struct {
 	Environment *BenchmarkEnvironment `json:"environment,omitempty"`
 	Judge       *JudgeConfig          `json:"judge,omitempty"`
 	Fact        *FactConfig           `json:"fact,omitempty"`
+	Toolathlon  *ToolathlonConfig     `json:"toolathlon,omitempty"`
+}
+
+// ToolathlonConfig tunes the Toolathlon adapter (see BenchmarkConfig). All
+// fields are optional; the adapter's defaults are Toolathlon's own.
+type ToolathlonConfig struct {
+	// GatewayPort is the in-sandbox port of Toolathlon's MCP gateway; the
+	// harness's MCP client is pointed at it by the adapter.
+	GatewayPort int `json:"gateway_port,omitempty"`
+	// AppHost is where the self-hosted applications (Canvas, poste.io,
+	// WooCommerce) listen as seen from the Docker host; empty means the
+	// sandbox's default gateway.
+	AppHost string `json:"app_host,omitempty"`
+	// MaxSteps is Toolathlon's max_steps_under_single_turn_mode, recorded in
+	// its task bundle.
+	MaxSteps int `json:"max_steps,omitempty"`
+	// CredentialsEnv maps fields of Toolathlon's configs/token_key_session.py
+	// to the host environment variables holding their values, and
+	// CredentialFilesEnv maps the key files that file names (paths under
+	// configs/) to variables holding their contents. Like model.api_key_env
+	// they name variables only, so the values never enter a profile or a
+	// saved configuration. They make the tasks that need a third-party
+	// account (GitHub, Google, Hugging Face, Notion, Snowflake, W&B, YouTube)
+	// loadable; without them those tasks are refused at task load.
+	CredentialsEnv     map[string]string `json:"credentials_env,omitempty"`
+	CredentialFilesEnv map[string]string `json:"credential_files_env,omitempty"`
 }
 
 // BenchmarkEnvironment describes the task sandbox for benchmarks (currently
@@ -410,8 +437,17 @@ type Versions struct {
 	DeepResearchBench DeepResearchBenchVersions `json:"deepresearchbench"`
 	SWEAtlas          SWEAtlasVersions          `json:"sweatlasqa"`
 	SWEbenchPro       SWEbenchProVersions       `json:"swebenchpro"`
+	Toolathlon        ToolathlonVersions        `json:"toolathlon,omitempty"`
 	OpenClaw          OpenClawVersions          `json:"openclaw"`
 	Hermes            HermesVersions            `json:"hermes"`
+}
+
+// ToolathlonVersions pins the Toolathlon checkout. Like the Hermes image, a
+// catalog predating the adapter stays valid: the pin is required only when a
+// profile selects the toolathlon benchmark (see validateBenchmarkType).
+type ToolathlonVersions struct {
+	RepositoryURL string `json:"repository_url"`
+	Revision      string `json:"revision"`
 }
 
 type TerminalBench2Versions struct {
@@ -465,6 +501,13 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("load version pins: %w", err)
 	}
 	cfg.Versions = versions
+	// Versions are validated before the profile's benchmark type is known,
+	// so the optional Toolathlon pin is required here, once both are loaded.
+	if cfg.Benchmark.Type == "toolathlon" {
+		if err := validateRepositoryPin("toolathlon", versions.Toolathlon.RepositoryURL, versions.Toolathlon.Revision); err != nil {
+			return Config{}, fmt.Errorf("load version pins: %w", err)
+		}
+	}
 	if cfg.OverridesFile != "" {
 		overridesPath := cfg.OverridesFile
 		if !filepath.IsAbs(overridesPath) {
@@ -790,6 +833,9 @@ func (c *Config) validateBenchmarkType() error {
 				return errors.New("fact.jina_api_key_env must be an environment variable name")
 			}
 		}
+		if c.Benchmark.Toolathlon != nil {
+			return errors.New("benchmark.toolathlon must not be set for deepresearchbench")
+		}
 		return nil
 	case "terminalbench2":
 		if c.Benchmark.Environment != nil {
@@ -800,6 +846,9 @@ func (c *Config) validateBenchmarkType() error {
 		}
 		if c.Benchmark.Fact != nil {
 			return errors.New("fact must not be set for terminalbench2")
+		}
+		if c.Benchmark.Toolathlon != nil {
+			return errors.New("benchmark.toolathlon must not be set for terminalbench2")
 		}
 		return nil
 	case "sweatlasqa":
@@ -841,6 +890,47 @@ func (c *Config) validateBenchmarkType() error {
 		}
 		if c.Benchmark.Fact != nil {
 			return errors.New("fact must not be set for swebenchpro")
+		}
+		if c.Benchmark.Toolathlon != nil {
+			return errors.New("benchmark.toolathlon must not be set for swebenchpro")
+		}
+		return nil
+	case "toolathlon":
+		if c.Benchmark.Environment == nil || strings.TrimSpace(c.Benchmark.Environment.Image) == "" {
+			return errors.New("benchmark.environment.image is required for toolathlon")
+		}
+		if c.Benchmark.Judge != nil {
+			return errors.New("judge must not be set for toolathlon")
+		}
+		if c.Benchmark.Fact != nil {
+			return errors.New("fact must not be set for toolathlon")
+		}
+		if settings := c.Benchmark.Toolathlon; settings != nil {
+			if settings.GatewayPort != 0 && (settings.GatewayPort < 1024 || settings.GatewayPort > 65535) {
+				return errors.New("benchmark.toolathlon.gateway_port must be between 1024 and 65535")
+			}
+			if settings.MaxSteps < 0 {
+				return errors.New("benchmark.toolathlon.max_steps must be positive")
+			}
+			if settings.AppHost != "" && !validHostName(settings.AppHost) {
+				return errors.New("benchmark.toolathlon.app_host must be a hostname or IP address")
+			}
+			for field, variable := range settings.CredentialsEnv {
+				if !validEnvName(field) {
+					return fmt.Errorf("benchmark.toolathlon.credentials_env key %q must be a token field name", field)
+				}
+				if !validEnvName(variable) {
+					return fmt.Errorf("benchmark.toolathlon.credentials_env[%q] must name an environment variable", field)
+				}
+			}
+			for file, variable := range settings.CredentialFilesEnv {
+				if !strings.HasPrefix(file, "configs/") || strings.Contains(file, "..") {
+					return fmt.Errorf("benchmark.toolathlon.credential_files_env key %q must be a path under configs/", file)
+				}
+				if !validEnvName(variable) {
+					return fmt.Errorf("benchmark.toolathlon.credential_files_env[%q] must name an environment variable", file)
+				}
+			}
 		}
 		return nil
 	default:
@@ -1176,6 +1266,11 @@ func (c Versions) validate() error {
 	if err := validateRepositoryPin("swebenchpro.evaluator", c.SWEbenchPro.EvaluatorRepositoryURL, c.SWEbenchPro.EvaluatorRevision); err != nil {
 		return err
 	}
+	if c.Toolathlon != (ToolathlonVersions{}) {
+		if err := validateRepositoryPin("toolathlon", c.Toolathlon.RepositoryURL, c.Toolathlon.Revision); err != nil {
+			return err
+		}
+	}
 	if err := containerimage.ValidatePinnedTagOnly(c.OpenClaw.Image); err != nil {
 		return fmt.Errorf("openclaw.image: %w", err)
 	}
@@ -1208,6 +1303,39 @@ func (c Versions) HarnessImage(harnessType string) (string, error) {
 		return "", fmt.Errorf("%s is required for harness type %q", field, harnessType)
 	}
 	return image, nil
+}
+
+// validHostName accepts a bare IP literal, IPv6 included, or a DNS name
+// judged label by label -- the same rule as the adapter's own validator,
+// since the value reaches the sandbox's forwarder unchanged.
+func validHostName(value string) bool {
+	if net.ParseIP(value) != nil {
+		return true
+	}
+	if value == "" || len(value) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(value, ".") {
+		if !validHostLabel(label) {
+			return false
+		}
+	}
+	return true
+}
+
+// validHostLabel is one DNS label: 1-63 letters, digits or hyphens, not
+// starting or ending in a hyphen.
+func validHostLabel(label string) bool {
+	if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+		return false
+	}
+	for _, character := range label {
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func validateRepositoryPin(name, repositoryURL, revision string) error {

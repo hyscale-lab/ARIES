@@ -511,3 +511,57 @@ func TestAgentWrapperScriptExportsMCPHostVariables(t *testing.T) {
 		}
 	}
 }
+
+// A task without sandbox tools leaves terminal, file and code_execution out of
+// platform_toolsets and names them in disabled_toolsets, keeps web search when
+// the profile enables it, and keeps the MCP servers; the default is unchanged.
+func TestRenderConfig_NoSandboxToolsLeavesOnlyMCPAndWeb(t *testing.T) {
+	servers := []core.MCPServerConfig{{Name: "toolathlon", URL: "http://task-sandbox:10086/sse", Transport: "sse"}}
+	render := func(withheld, web bool) string {
+		t.Helper()
+		rendered, err := renderConfig(validModel(), renderSettings{maxTurns: 10, webSearchEnabled: web, mcpServers: servers, noSandboxTools: withheld}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(rendered)
+	}
+	text := render(true, false)
+	for _, want := range []string{
+		"\ndisabled_toolsets:\n  - delegation\n  - terminal\n  - file\n  - code_execution\n",
+		"\nplatform_toolsets:\n  cli: []\n",
+		"\nmcp_servers:\n  toolathlon:\n",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("rendered config lacks %q:\n%s", want, text)
+		}
+	}
+	if text := render(true, true); !strings.Contains(text, "\nplatform_toolsets:\n  cli:\n    - web\n\nweb:\n") {
+		t.Fatalf("web search not kept on its own:\n%s", text)
+	}
+	if text := render(false, false); !strings.Contains(text, "\ndisabled_toolsets:\n  - delegation\n\n") ||
+		!strings.Contains(text, "\nplatform_toolsets:\n  cli:\n    - terminal\n    - file\n    - code_execution\n") {
+		t.Fatalf("the default toolsets changed:\n%s", text)
+	}
+}
+
+func TestRenderConfig_MCPServerTransportAndTimeout(t *testing.T) {
+	rendered, err := renderConfig(validModel(), renderSettings{
+		maxTurns: 10,
+		mcpServers: []core.MCPServerConfig{
+			{Name: "gateway", URL: "http://task-sandbox:10086/sse", Transport: "sse", TimeoutSeconds: 1200},
+			{Name: "streaming", URL: "https://mcp.example.com/mcp", Transport: "streamable-http"},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("renderConfig failed: %v", err)
+	}
+	text := string(rendered)
+	want := "  gateway:\n    url: \"http://task-sandbox:10086/sse\"\n    transport: \"sse\"\n    timeout: 1200\n"
+	if !strings.Contains(text, want) {
+		t.Fatalf("rendered config missing the gateway entry %q:\n%s", want, text)
+	}
+	// streamable-http is Hermes's default, so it is left implicit.
+	if !strings.Contains(text, "  streaming:\n    url: \"https://mcp.example.com/mcp\"\n") || strings.Count(text, "transport:") != 1 {
+		t.Fatalf("streamable-http server rendered with an explicit transport:\n%s", text)
+	}
+}

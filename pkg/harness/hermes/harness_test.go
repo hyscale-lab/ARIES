@@ -626,6 +626,72 @@ func TestRunReturnsFinalResponseAndArtifacts(t *testing.T) {
 	}
 }
 
+// A benchmark's credentials that reach the sandbox are never given to Hermes,
+// but the agent can read them there and repeat them. The values RedactEnv
+// names, and the parts of a key file, are scrubbed from every artifact the
+// harness saves; an unset variable is skipped.
+func TestRunScrubsRedactEnvValuesFromSavedArtifacts(t *testing.T) {
+	fake := newFakeDocker()
+	token := "ghp_benchmarktoken123"
+	clientEmail := "agent@project.iam.example.com"
+	keyFile := `{"client_email": "` + clientEmail + `", "type": "service_account"}`
+	fake.sessionsStdout = `{"role":"tool","content":"github_token = \"` + token + `\""}` + "\n" +
+		`{"role":"tool","content":"client ` + clientEmail + `"}` + "\n"
+	fake.agentStdout = "used " + token + "\n"
+	manager, err := New(Options{
+		Image: testHermesImage, OutputDir: t.TempDir(), StartTimeout: 2 * time.Second, AgentTimeout: 2 * time.Second,
+		RedactEnv: []string{"TOOLATHLON_GITHUB_TOKEN", "TOOLATHLON_GOOGLE_KEY", "UNSET_TOKEN"},
+		APIKeyLookup: func(name string) ([]byte, bool) {
+			switch name {
+			case "TOOLATHLON_GITHUB_TOKEN":
+				return []byte(token), true
+			case "TOOLATHLON_GOOGLE_KEY":
+				return []byte(keyFile), true
+			case "UNSET_TOKEN":
+				return nil, false
+			}
+			return []byte("model-secret"), true
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.client = fake
+	manager.newID = func() (string, error) { return "attempt", nil }
+	request := testRequest(t)
+	if err := manager.Start(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Run(context.Background(), "fix the git repository"); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	artifacts := filepath.Join(manager.outputDir, request.TaskID, "harness")
+	scrubbed := false
+	err = filepath.WalkDir(artifacts, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil || entry.IsDir() {
+			return walkErr
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if bytes.Contains(content, []byte(token)) || bytes.Contains(content, []byte(clientEmail)) {
+			t.Errorf("%s kept a benchmark credential:\n%s", path, content)
+		}
+		scrubbed = scrubbed || bytes.Contains(content, []byte("[REDACTED]"))
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !scrubbed {
+		t.Fatal("no artifact carries the placeholder")
+	}
+}
+
 func TestVoiceTranscribeSynthesizesAudioAndRunsTranscriptAsAgentMessage(t *testing.T) {
 	modelSecret := []byte("model-secret")
 	voiceSecret := []byte("voice-secret")

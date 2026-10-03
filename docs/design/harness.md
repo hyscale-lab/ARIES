@@ -18,6 +18,15 @@ the harness only after the sandbox and bridge are ready. On success, failure, or
 cancellation, it stops the harness and confirms absence. Evaluation remains a
 separate Benchmark outcome rather than an interpretation of harness success.
 
+A task may withhold the harness's own tools that act in the sandbox: when
+`core.Task.NoSandboxTools` is set, the runner passes it in the
+`HarnessRequest`, and the harness renders none of its shell, code-execution or
+file tools (Hermes leaves `terminal`, `file` and `code_execution` out of
+`platform_toolsets` and disables them; OpenClaw also denies `exec` and
+`process`). The agent then acts through its MCP servers and the harness's web
+tools only. A benchmark whose tasks list their own tools sets it to keep to
+that list (Toolathlon); every other task keeps all of the harness's tools.
+
 OpenClaw container lifecycle, gateway protocol, and voice-session semantics are
 separate concrete responsibilities. `openclaw.Manager` owns the container and
 publishes one ephemeral host-loopback port. `openclaw/gateway.Client` owns one
@@ -127,13 +136,16 @@ registration, discovery, factory, reflection, DI, or generic plugin layer.
 
 ARIES supports configuring Model Context Protocol (`MCP`) servers for agent harnesses via `harness.mcp_servers`.
 
-`core.MCPServerConfig` defines the server configuration (name, command/`args` for `stdio`, or `url` for `SSE`/`HTTP`). Configuration validation is enforced by `core.ValidateMCPServer`:
+`core.MCPServerConfig` defines the server configuration (name, command/`args` for `stdio`, or `url` for `SSE`/`HTTP`). A `url` server may name its `transport` (`sse` or `streamable-http`; empty keeps the harness's default, which differs between harnesses) and any server a per-call `timeout_seconds` (zero keeps the harness's default). Configuration validation is enforced by `core.ValidateMCPServer`:
 - Server names must not contain `whitespace` or control characters.
 - Either an executable command or an absolute `HTTP`/`HTTPS` `url` must be specified, never both.
 - Environment variable mappings are split into benign plain text (`env`) and host credentials (`secret_env`):
   - `env` maps target variables to plain text values that do not contain control characters.
   - `secret_env` maps target variables to host environment variable names. Raw secrets are rejected at validation time; rendered configurations persist `${NAME}` placeholders, and harness session startup stages credentials into private key files (`0600`) exported by in-container launcher scripts rather than exposing them in container environment metadata.
   - Both `env` and `secret_env` are supported for command servers and rejected for `url` servers.
+- `transport` applies only to `url` servers; `timeout_seconds` must not be negative.
+
+Each harness scrubs the `secret_env` values from everything it saves (session exports, logs, the retained config) together with its own keys. A harness's `RedactEnv` option names further host variables whose values the harness is never given but scrubs the same way: a benchmark's credentials that reach the sandbox, where the agent can read them (wiring fills it from Toolathlon's `credentials_env` and `credential_files_env`). A multi-line or `JSON` value is scrubbed by its lines and string fields as well (`core.SecretParts`).
 
 Harnesses manage `MCP` execution and network boundaries as follows:
 - **Command servers (`stdio`)** execute directly inside the agent container environment.

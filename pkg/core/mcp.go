@@ -10,12 +10,19 @@ import (
 
 // MCPServerConfig defines the configuration for an external or in-harness MCP server.
 type MCPServerConfig struct {
-	Name      string            `json:"name"`
-	Command   string            `json:"command,omitempty"`
-	Args      []string          `json:"args,omitempty"`
-	URL       string            `json:"url,omitempty"`
-	Env       map[string]string `json:"env,omitempty"`
-	SecretEnv map[string]string `json:"secret_env,omitempty"`
+	Name    string   `json:"name"`
+	Command string   `json:"command,omitempty"`
+	Args    []string `json:"args,omitempty"`
+	URL     string   `json:"url,omitempty"`
+	// Transport is how a URL server is reached, "sse" or "streamable-http".
+	// Empty leaves the choice to the harness's own default, which differs
+	// between harnesses, so a server that speaks only one names it.
+	Transport string `json:"transport,omitempty"`
+	// TimeoutSeconds bounds one tool call to this server; zero keeps the
+	// harness's own default.
+	TimeoutSeconds int               `json:"timeout_seconds,omitempty"`
+	Env            map[string]string `json:"env,omitempty"`
+	SecretEnv      map[string]string `json:"secret_env,omitempty"`
 }
 
 // ValidateMCPServer verifies that an MCP server configuration specifies a valid name,
@@ -63,6 +70,17 @@ func ValidateMCPServer(cfg MCPServerConfig) error {
 	}
 	if hasCommand && hasURL {
 		return fmt.Errorf("MCP server %q cannot specify both command and url", name)
+	}
+	switch cfg.Transport {
+	case "", "sse", "streamable-http":
+	default:
+		return fmt.Errorf("MCP server %q transport must be sse or streamable-http", name)
+	}
+	if cfg.Transport != "" && !hasURL {
+		return fmt.Errorf("MCP server %q transport applies only to a url server", name)
+	}
+	if cfg.TimeoutSeconds < 0 {
+		return fmt.Errorf("MCP server %q timeout_seconds must not be negative", name)
 	}
 
 	if hasURL && len(cfg.Env) > 0 {

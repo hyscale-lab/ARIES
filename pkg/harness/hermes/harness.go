@@ -117,6 +117,12 @@ type Options struct {
 	ExtraBody  []byte
 	MCPServers []core.MCPServerConfig
 	Logger     *logrus.Logger
+	// RedactEnv names host environment variables whose values Hermes is never
+	// given but the harness still scrubs from what it saves: a benchmark's
+	// credentials that reach the sandbox, where the agent can read them and
+	// repeat them (Toolathlon's account tokens). They are read through
+	// APIKeyLookup at Start; an unset variable is skipped.
+	RedactEnv []string
 }
 
 type VoiceTranscribeOptions struct {
@@ -177,6 +183,7 @@ type Manager struct {
 	compaction             *CompactionSettings
 	extraBody              []byte
 	mcpServers             []core.MCPServerConfig
+	redactEnv              []string
 	logger                 *logrus.Logger
 	apiKeyLookup           func(string) ([]byte, bool)
 	newSpeech              func(audioinput.SpeechClientOptions) (speechSynthesizer, error)
@@ -206,6 +213,7 @@ type session struct {
 	voiceAPIKey    []byte
 	mcpSecrets     [][]byte
 	mcpSecretFiles map[string][]byte
+	redactValues   [][]byte
 	runAttempted   bool
 	logPaths       []string
 }
@@ -325,6 +333,7 @@ func New(options Options) (*Manager, error) {
 		subagentsEnabled: options.SubagentsEnabled, maxConcurrentSubagents: options.MaxConcurrentSubagents,
 		compaction: options.Compaction, extraBody: bytes.Clone(options.ExtraBody),
 		mcpServers:   append([]core.MCPServerConfig(nil), options.MCPServers...),
+		redactEnv:    slices.Clone(options.RedactEnv),
 		apiKeyLookup: options.APIKeyLookup, newSpeech: newSpeechClient, newID: randomID,
 	}, nil
 }
@@ -362,6 +371,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		maxTurns: manager.maxTurns, webSearchEnabled: manager.webSearchEnabled, extractEnabled: extractEnabled,
 		subagentsEnabled: manager.subagentsEnabled, maxConcurrentSubagents: manager.maxConcurrentSubagents,
 		compaction: manager.compaction, extraBody: manager.extraBody, mcpServers: manager.mcpServers,
+		noSandboxTools: request.NoSandboxTools,
 	}, voiceSTT)
 	if err != nil {
 		return err
@@ -512,6 +522,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		containerName: "aries-hermes-" + id, artifactDir: filepath.Join(manager.outputDir, request.TaskID, "harness"),
 		endpoint: request.Endpoint, model: request.Model,
 		agentTimeout: agentTimeout, apiKey: apiKey, extractAPIKey: extractAPIKey, voiceAPIKey: voiceAPIKey, mcpSecrets: mcpSecrets, mcpSecretFiles: mcpSecretFiles,
+		redactValues: core.LookupSecretParts(manager.apiKeyLookup, manager.redactEnv),
 	}
 	fail := func(primary error) error {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), manager.cleanupTimeout)
@@ -1495,7 +1506,7 @@ func (manager *Manager) collectArtifacts(ctx context.Context, active *session, s
 		if copyErr != nil || closeErr != nil || boundErr != nil {
 			errs = append(errs, errors.Join(copyErr, closeErr, boundErr))
 		} else {
-			content := allowContainerLogs(append(out.Bytes(), errBuffer.Bytes()...), active.apiKey, active.extractAPIKey, active.voiceAPIKey)
+			content := allowContainerLogs(append(out.Bytes(), errBuffer.Bytes()...), sessionSecrets(active)...)
 			path := filepath.Join(active.artifactDir, "container.log")
 			if err := writeArtifact(path, content); err != nil {
 				errs = append(errs, err)
@@ -1800,11 +1811,21 @@ func clearSessionSecrets(active *session) {
 		clear(active.mcpSecretFiles[k])
 	}
 	active.mcpSecretFiles = nil
+	for i := range active.redactValues {
+		clear(active.redactValues[i])
+	}
+	active.redactValues = nil
+}
+
+// sessionSecrets is everything scrubbed from what the harness saves: its own
+// keys, the MCP servers' secrets and the parts of the RedactEnv values.
+func sessionSecrets(active *session) [][]byte {
+	secrets := append([][]byte{active.apiKey, active.extractAPIKey, active.voiceAPIKey}, active.mcpSecrets...)
+	return append(secrets, active.redactValues...)
 }
 
 func redactSession(content []byte, active *session) []byte {
-	secrets := append([][]byte{active.apiKey, active.extractAPIKey, active.voiceAPIKey}, active.mcpSecrets...)
-	return redactSecrets(content, secrets...)
+	return redactSecrets(content, sessionSecrets(active)...)
 }
 
 type sessionRedactedError struct {

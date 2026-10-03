@@ -100,6 +100,42 @@ func TestValidateMCPServer(t *testing.T) {
 			},
 		},
 		{
+			name: "url server with transport and timeout",
+			cfg: MCPServerConfig{
+				Name:           "gateway",
+				URL:            "http://task-sandbox:10086/sse",
+				Transport:      "sse",
+				TimeoutSeconds: 1200,
+			},
+		},
+		{
+			name: "unknown transport",
+			cfg: MCPServerConfig{
+				Name:      "gateway",
+				URL:       "http://task-sandbox:10086/sse",
+				Transport: "websocket",
+			},
+			wantErr: "transport must be sse or streamable-http",
+		},
+		{
+			name: "transport on a command server",
+			cfg: MCPServerConfig{
+				Name:      "fetch",
+				Command:   "uvx",
+				Transport: "sse",
+			},
+			wantErr: "transport applies only to a url server",
+		},
+		{
+			name: "negative timeout",
+			cfg: MCPServerConfig{
+				Name:           "gateway",
+				URL:            "http://task-sandbox:10086/sse",
+				TimeoutSeconds: -1,
+			},
+			wantErr: "timeout_seconds must not be negative",
+		},
+		{
 			name: "invalid env key name",
 			cfg: MCPServerConfig{
 				Name:    "env-server",
