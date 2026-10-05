@@ -236,3 +236,68 @@ func TestRenderTemperatureUsesRequestExtraBody(t *testing.T) {
 		t.Fatal("unsupported DeepSeek temperature accepted")
 	}
 }
+
+func TestRenderReasoningUsesNativeRequestOverrides(t *testing.T) {
+	for _, test := range []struct {
+		provider, model, effort, wireEffort, thinking string
+	}{
+		{"deepseek", "deepseek-flash", "off", "", "disabled"},
+		{"deepseek", "deepseek-flash", "high", "high", "enabled"},
+		{"openai", "gpt-6-luna", "low", "low", ""},
+		{"sglang", "a-local-model", "off", "none", ""},
+	} {
+		t.Run(test.provider+"/"+test.effort, func(t *testing.T) {
+			model := vllmModel()
+			model.Provider, model.Model, model.ReasoningEffort = test.provider, test.model, test.effort
+			settings := baseSettings()
+			if test.provider != "deepseek" {
+				settings.extraBody = []byte(`{"request_id":9007199254740993}`)
+			}
+			rendered, err := renderConfig(model, settings, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded struct {
+				NativeModel map[string]any `yaml:"model"`
+				Custom      []struct {
+					BaseURL string         `yaml:"base_url"`
+					Extra   map[string]any `yaml:"extra_body"`
+				} `yaml:"custom_providers"`
+			}
+			if err := yaml.Unmarshal(rendered, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if decoded.NativeModel["provider"] != "custom" || decoded.NativeModel["default"] != test.model || len(decoded.Custom) != 1 || decoded.Custom[0].BaseURL != model.BaseURL {
+				t.Fatalf("reasoning changed model or route: %s", rendered)
+			}
+			body := decoded.Custom[0].Extra
+			if test.wireEffort == "" {
+				if _, exists := body["reasoning_effort"]; exists {
+					t.Fatal("disabled DeepSeek reasoning retained effort")
+				}
+			} else if body["reasoning_effort"] != test.wireEffort {
+				t.Fatalf("wire effort = %v", body["reasoning_effort"])
+			}
+			if test.thinking != "" {
+				thinking, _ := body["thinking"].(map[string]any)
+				if thinking["type"] != test.thinking {
+					t.Fatalf("thinking = %v", thinking)
+				}
+			} else if _, exists := body["thinking"]; exists {
+				t.Fatal("generic endpoint received DeepSeek thinking control")
+			}
+			if test.provider != "deepseek" && !strings.Contains(string(rendered), "9007199254740993") {
+				t.Fatal("request number lost precision")
+			}
+		})
+	}
+	model := vllmModel()
+	model.ReasoningEffort = "low"
+	for _, key := range []string{"reasoning_effort", "thinking", "reasoning"} {
+		settings := baseSettings()
+		settings.extraBody = []byte(`{"` + key + `":null}`)
+		if _, err := renderConfig(model, settings, nil); err == nil || !strings.Contains(err.Error(), "conflicts") {
+			t.Fatalf("accepted explicit reasoning conflict with %s: %v", key, err)
+		}
+	}
+}

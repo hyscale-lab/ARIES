@@ -790,15 +790,19 @@ func TestAgentRunUsesGatewayOnceWithExactParameters(t *testing.T) {
 	}
 }
 
-func TestDeepSeekAgentRequestsDisableThinking(t *testing.T) {
-	for _, modelID := range []string{"deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"} {
+func TestAgentRequestsPreserveReasoningSelection(t *testing.T) {
+	for _, tc := range []struct{ modelID, effort, thinking string }{
+		{"deepseek-flash", "", "off"}, {"deepseek-v4-flash", "", "off"}, {"deepseek-v4-pro", "", "off"},
+		{"deepseek-flash", "low", "low"}, {"deepseek-v4-pro", "max", "xhigh"},
+	} {
 		for _, mode := range []string{ModeAgent, ModeVoiceTranscribe} {
-			t.Run(modelID+"/"+mode, func(t *testing.T) {
+			t.Run(tc.modelID+"/"+tc.effort+"/"+mode, func(t *testing.T) {
 				manager := newTestManager(t, newFakeDeployment(), []byte("model-secret"))
 				gateway := &recordingGateway{summary: gatewayclient.ConnectSummary{Role: "operator", Scopes: []string{"operator.write"}}}
 				manager.newGateway = func(string, []byte) (gatewayConnection, error) { return gateway, nil }
 				model := testModel()
-				model.BaseURL, model.Model = "https://api.deepseek.com", modelID
+				model.BaseURL, model.Model = "https://api.deepseek.com", tc.modelID
+				model.ReasoningEffort = tc.effort
 				request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: model}
 				if err := manager.Start(context.Background(), request); err != nil {
 					t.Fatal(err)
@@ -818,8 +822,8 @@ func TestDeepSeekAgentRequestsDisableThinking(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				if gateway.agentCalls != 1 || gateway.request.Thinking != "off" {
-					t.Fatalf("agent calls=%d thinking=%q; want one request with thinking off", gateway.agentCalls, gateway.request.Thinking)
+				if gateway.agentCalls != 1 || gateway.request.Thinking != tc.thinking {
+					t.Fatalf("agent calls=%d thinking=%q; want %q", gateway.agentCalls, gateway.request.Thinking, tc.thinking)
 				}
 			})
 		}

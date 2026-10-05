@@ -3,6 +3,7 @@ package openclaw
 import (
 	"bytes"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -35,6 +36,9 @@ func TestRenderConfigLocksProviderSharedSSHAndPlaceholder(t *testing.T) {
 		t.Fatal(err)
 	}
 	provider := configuration.Models.Providers["aries"]
+	if provider.Models[0].Reasoning != nil || provider.Models[0].Compat != nil || configuration.Agents.Defaults.Models != nil {
+		t.Fatal("omitted reasoning changed native defaults")
+	}
 	sandbox := configuration.Agents.Defaults.Sandbox
 	if configuration.Gateway.Mode != "local" || configuration.Models.Mode != "merge" || provider.API != "openai-completions" || provider.BaseURL != testModel().BaseURL {
 		t.Fatalf("provider config = %#v", configuration)
@@ -432,5 +436,47 @@ func TestSearchRequiresResolvedEndpoint(t *testing.T) {
 	}
 	if _, err := renderConfig(testModel(), testEndpoint(), ModeAgent, "", false, false, false, 0); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRenderConfigExplicitReasoningUsesNativePayloadOverrides(t *testing.T) {
+	for _, tc := range []struct {
+		provider, model, effort, thinking string
+		body                              map[string]any
+	}{
+		{"deepseek", "deepseek-flash", "off", "off", map[string]any{"thinking": map[string]any{"type": "disabled"}}},
+		{"deepseek", "deepseek-flash", "low", "low", map[string]any{"thinking": map[string]any{"type": "enabled"}, "reasoning_effort": "low"}},
+		{"deepseek", "deepseek-v4-pro", "max", "xhigh", map[string]any{"thinking": map[string]any{"type": "enabled"}, "reasoning_effort": "max"}},
+		{"openai", "gpt-6-luna", "medium", "medium", map[string]any{"reasoning_effort": "medium"}},
+		{"openai", "gpt-6-luna", "none", "off", map[string]any{"reasoning_effort": "none"}},
+		{"sglang", "custom-reasoner", "xhigh", "xhigh", map[string]any{"reasoning_effort": "xhigh"}},
+	} {
+		t.Run(tc.provider+"/"+tc.effort, func(t *testing.T) {
+			model := testModel()
+			model.Provider, model.Model, model.ReasoningEffort = tc.provider, tc.model, tc.effort
+			content, err := renderConfig(model, testEndpoint(), ModeAgent, "", false, false, false, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var configuration openClawConfig
+			if err := json.Unmarshal(content, &configuration); err != nil {
+				t.Fatal(err)
+			}
+			providerID := "aries"
+			if tc.provider == "sglang" {
+				providerID = "sglang"
+			}
+			record := configuration.Models.Providers[providerID].Models[0]
+			if record.ID != tc.model || record.Reasoning == nil || !*record.Reasoning || record.Compat == nil || record.Compat.SupportsReasoningEffort {
+				t.Fatalf("reasoning capability = %+v", record)
+			}
+			if tc.provider == "deepseek" && record.Compat.ThinkingFormat != "deepseek" {
+				t.Fatal("missing DeepSeek replay format")
+			}
+			params := configuration.Agents.Defaults.Models[providerID+"/"+tc.model].Params
+			if params.Thinking != tc.thinking || !reflect.DeepEqual(params.ExtraBody, tc.body) {
+				t.Fatalf("native parameters = %+v", params)
+			}
+		})
 	}
 }

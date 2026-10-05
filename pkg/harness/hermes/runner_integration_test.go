@@ -107,20 +107,20 @@ func (b *hermesRunnerBenchmark) Evaluate(ctx context.Context, _ core.Task, s run
 }
 
 func TestRunnerThroughRealHermesSSHBridge(t *testing.T) {
-	runHermesBridgeScenario(t, false, 1)
+	runHermesBridgeScenario(t, false, 1, true)
 }
 
 func TestGatewayRepeatedAndConcurrentTaskOccurrences(t *testing.T) {
 	for _, name := range []string{"first", "second"} {
-		t.Run(name, func(t *testing.T) { t.Parallel(); runHermesBridgeScenario(t, false, 2) })
+		t.Run(name, func(t *testing.T) { t.Parallel(); runHermesBridgeScenario(t, false, 2, false) })
 	}
 }
 
 func TestGatewayCancelsDuringSandboxCommand(t *testing.T) {
-	runHermesBridgeScenario(t, true, 1)
+	runHermesBridgeScenario(t, true, 1, false)
 }
 
-func runHermesBridgeScenario(t *testing.T, cancelCommand bool, repetitions int, derivedImage ...string) {
+func runHermesBridgeScenario(t *testing.T, cancelCommand bool, repetitions int, reasoning bool, derivedImage ...string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	api, err := client.New(client.FromEnv)
@@ -154,16 +154,23 @@ func runHermesBridgeScenario(t *testing.T, cancelCommand bool, repetitions int, 
 	}
 	const key = "aries-hermes-runner-fake-key"
 	var toolResponses atomic.Int32
+	var reasoningReplays atomic.Int32
+	const reasoningMarker = "aries-reasoning-fixture"
 	model := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer "+key {
 			http.Error(w, "unexpected route or credentials", 400)
 			return
 		}
 		var body struct {
-			Stream   bool `json:"stream"`
+			Stream          bool   `json:"stream"`
+			ReasoningEffort string `json:"reasoning_effort"`
+			Thinking        struct {
+				Type string `json:"type"`
+			} `json:"thinking"`
 			Messages []struct {
-				Role    string          `json:"role"`
-				Content json.RawMessage `json:"content"`
+				Role             string          `json:"role"`
+				ReasoningContent string          `json:"reasoning_content"`
+				Content          json.RawMessage `json:"content"`
 			} `json:"messages"`
 			Tools []struct {
 				Function struct {
@@ -182,11 +189,28 @@ func runHermesBridgeScenario(t *testing.T, cancelCommand bool, repetitions int, 
 		message := map[string]any{"role": "assistant", "content": "Completed the sandbox mutation."}
 		finish := "stop"
 		if terminal {
+			if reasoning && (body.Thinking.Type != "enabled" || body.ReasoningEffort != "high") {
+				t.Errorf("missing explicit DeepSeek reasoning controls: thinking=%s effort=%s", body.Thinking.Type, body.ReasoningEffort)
+				http.Error(w, "missing reasoning controls", 400)
+				return
+			}
 			observed := false
+			replayed := false
 			for _, m := range body.Messages {
+				if m.Role == "assistant" && m.ReasoningContent == reasoningMarker {
+					replayed = true
+				}
 				if m.Role == "tool" && strings.Contains(string(m.Content), "ARIES_HERMES_BRIDGE_OK") {
 					observed = true
 				}
+			}
+			if reasoning && observed {
+				if !replayed {
+					t.Error("DeepSeek tool continuation lost reasoning_content")
+					http.Error(w, "missing reasoning replay", 400)
+					return
+				}
+				reasoningReplays.Add(1)
 			}
 			if !observed {
 				toolResponses.Add(1)
@@ -198,6 +222,9 @@ func runHermesBridgeScenario(t *testing.T, cancelCommand bool, repetitions int, 
 				message = map[string]any{"role": "assistant", "content": nil, "tool_calls": []any{map[string]any{"id": "aries-terminal", "type": "function", "function": map[string]any{"name": "terminal", "arguments": string(args)}}}}
 				finish = "tool_calls"
 			}
+		}
+		if reasoning {
+			message["reasoning_content"] = reasoningMarker
 		}
 		if body.Stream {
 			if calls, ok := message["tool_calls"].([]any); ok {
@@ -284,7 +311,11 @@ func runHermesBridgeScenario(t *testing.T, cancelCommand bool, repetitions int, 
 		t.Fatal(err)
 	}
 	benchmark := &hermesRunnerBenchmark{api: api, harness: harness, verifier: verifier, task: core.Task{ID: "hermes-bridge", Instruction: "Use the terminal tool to write ARIES_HERMES_BRIDGE_OK to /tmp/aries-hermes-proof, then report completion.", Timeout: taskTimeout, Environment: tasks[0].Environment}}
-	run, err := runner.New(benchmark, harness, sandbox, bridge, runner.Options{RunID: "hermes-runner-integration", OutputDir: output, Model: core.ModelConfig{Provider: "openai", BaseURL: "http://127.0.0.1/v1", Model: "aries-deterministic", APIKeyEnv: "ARIES_TEST_MODEL_KEY"}, CleanupTimeout: 60 * time.Second})
+	modelConfig := core.ModelConfig{Provider: "openai", BaseURL: "http://127.0.0.1/v1", Model: "aries-deterministic", APIKeyEnv: "ARIES_TEST_MODEL_KEY"}
+	if reasoning {
+		modelConfig.Provider, modelConfig.Model, modelConfig.ReasoningEffort = "deepseek", "deepseek-flash", "high"
+	}
+	run, err := runner.New(benchmark, harness, sandbox, bridge, runner.Options{RunID: "hermes-runner-integration", OutputDir: output, Model: modelConfig, CleanupTimeout: 60 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,6 +338,9 @@ func runHermesBridgeScenario(t *testing.T, cancelCommand bool, repetitions int, 
 		}
 		if task.Harness.Status != expectedStatus || task.Evaluation.Reward != 1 || !benchmark.evaluated || task.Isolation.Status != core.StatusConfirmed || task.Cleanup.Status != core.StatusSucceeded || toolResponses.Load() != int32(occurrence+1) {
 			t.Fatalf("Runner task: %#v; tool calls %d", task, toolResponses.Load())
+		}
+		if reasoning && reasoningReplays.Load() != int32(occurrence+1) {
+			t.Fatalf("reasoning replay count = %d", reasoningReplays.Load())
 		}
 		for _, id := range []string{harness.id, benchmark.containerID} {
 			if _, err := api.ContainerInspect(ctx, id, client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
