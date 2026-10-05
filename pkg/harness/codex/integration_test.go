@@ -99,7 +99,13 @@ func runNativeSSHScenario(t *testing.T, cancelTool bool, taskUser string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sandboxes.Close() })
-	live, err := sandboxes.Start(ctx, core.SandboxRequest{RunID: runID, TaskID: "native-ssh", Environment: core.Environment{Image: integrationImage, Workdir: "/app", MemoryMB: 1024, AllowNetwork: true, ExecUser: taskUser}})
+	live, err := sandboxes.Start(ctx, core.SandboxRequest{RunID: runID, TaskID: "native-ssh", Environment: core.Environment{
+		Image: integrationImage, Workdir: "/app", MemoryMB: 1024, AllowNetwork: true, ExecUser: taskUser,
+		Env: map[string]string{
+			"RUSTUP_HOME": "/opt/task-rustup", "CARGO_HOME": "/opt/task-cargo", "ARIES_TASK_VALUE": "task-only",
+			"PATH": "/opt/task-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		},
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,6 +122,10 @@ func runNativeSSHScenario(t *testing.T, cancelTool bool, taskUser string) {
 		if err != nil || prepared.ExitCode != 0 {
 			t.Fatalf("prepare nonroot task workspace: %#v, %v", prepared, err)
 		}
+	}
+	prepared, err := sandbox.Exec(ctx, core.Command{Path: "/bin/sh", Args: []string{"-c", `mkdir -p /opt/task-bin; printf '#!/bin/sh\nprintf TASK_TOOL_OK\n' > /opt/task-bin/task-tool; chmod 0755 /opt/task-bin/task-tool`}, User: "0:0"})
+	if err != nil || prepared.ExitCode != 0 {
+		t.Fatalf("prepare task toolchain: %#v, %v", prepared, err)
 	}
 	if cancelTool {
 		// This task-owned process predates the executor's subreaper and must
@@ -415,6 +425,9 @@ func (fixture *responsesFixture) ServeHTTP(writer http.ResponseWriter, request *
 		// The key name is deliberately visible; its value must be absent in
 		// the native tool environment and its private harness file unreachable.
 		command := `set -eu; test -z "${ARIES_CODEX_TEST_KEY+x}"; test ! -e /run/aries/codex/model.key; test "$PWD" = /app; `
+		// The task image's toolchain environment and PATH must survive into
+		// native commands, which run without a login shell.
+		command += `test "${RUSTUP_HOME-}" = /opt/task-rustup; test "${CARGO_HOME-}" = /opt/task-cargo; test "${ARIES_TASK_VALUE-}" = task-only; test "$(task-tool)" = TASK_TOOL_OK; `
 		if fixture.taskUser == "" {
 			command += `printf '#!/bin/sh\nprintf compromised > /app/cleanup-compromised\nexit 0\n' > /bin/rm; chmod 0755 /bin/rm; `
 		} else {
@@ -424,7 +437,7 @@ func (fixture *responsesFixture) ServeHTTP(writer http.ResponseWriter, request *
 		if fixture.cancelTool {
 			command = `set -eu; test -z "${ARIES_CODEX_TEST_KEY+x}"; echo $$ > /app/native.pid; setsid /bin/sh -c 'echo $$ > /app/escaped.pid; exec sleep 600' </dev/null >/dev/null 2>&1 & while [ ! -s /app/escaped.pid ]; do sleep 0.02; done; printf ready > /app/native.started; sleep 600`
 		}
-		arguments, _ := json.Marshal(map[string]any{"cmd": command, "workdir": "/app", "login": false, "yield_time_ms": 10000, "max_output_tokens": 1000})
+		arguments, _ := json.Marshal(map[string]any{"cmd": command, "workdir": "/app", "yield_time_ms": 10000, "max_output_tokens": 1000})
 		item = map[string]any{"type": "function_call", "call_id": "call-native-exec", "name": "exec_command", "arguments": string(arguments)}
 	case 2:
 		var body struct {

@@ -1,5 +1,19 @@
 # ARIES Tasks
 
+## Codex fixes backported from feat/codex-roadmapbench
+
+Backported only the Codex harness fixes, without RoadmapBench, native-subagent,
+trace-timeline, or experiment-profile features.
+
+- Native commands now inherit the task image environment (`inherit = "all"`,
+  model key still excluded) and run without login shells, so toolchain
+  variables such as `CARGO_HOME`/`RUSTUP_HOME` and the image `PATH` survive
+  (from `c9bd234`). The upstream regression exercised a child agent; here the
+  same assertions run in the parent native exec of the real-Codex integration.
+- HTTPS model endpoints stage the host's public system CA bundle into the
+  pinned slim harness image, keeping TLS verification (from `5604eea`, without
+  its DeepSeek profile).
+
 ## Shared SSH transport and audit
 
 Completed the recorded cleanup plan: moved concrete SSH clients/server,
