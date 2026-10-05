@@ -1,0 +1,66 @@
+{
+  "name": "openclaw-sbpro-twenty-deepseek",
+  "versions_file": "../../configs/versions.json",
+  "overrides_file": "no-limits-overrides.json",
+  "execution": {
+    "concurrency": 1
+  },
+  "benchmark": {
+    "type": "swebenchpro",
+    "root": ".cache/swe-bench-pro",
+    "tasks": [
+      "instance_ansible__ansible-3db08adbb1cc6aa9941be5e0fc810132c6e1fa4b-vba6da65a0f3baefda7a058ebbd0a8dcafb8512f5",
+      "instance_ansible__ansible-d9f1866249756efc264b00ff7497e92c11a9885f-v0f01c69f1e2528b935359cfe578530722bca2c59",
+      "instance_ansible__ansible-e0c91af45fa9af575d10fd3e724ebc59d2b2d6ac-v30a923fb5c164d6cd18280c02422f75e611e8fb2",
+      "instance_element-hq__element-web-f14374a51c153f64f313243f2df6ea4971db4e15",
+      "instance_flipt-io__flipt-507170da0f7f4da330f6732bffdf11c4df7fc192",
+      "instance_flipt-io__flipt-f808b4dd6e36b9dc8b011eb26b196f4e2cc64c41",
+      "instance_future-architect__vuls-2c84be80b65d022c262956cd26fc79d8bb2f7010",
+      "instance_future-architect__vuls-e4728e388120b311c4ed469e4f942e0347a2689b-v264a82e2f4818e30f5a25e4da53b27ba119f62b5",
+      "instance_gravitational__teleport-82185f232ae8974258397e121b3bc2ed0c3729ed-v626ec2a48416b10a88641359a169d99e935ff037",
+      "instance_gravitational__teleport-e6681abe6a7113cfd2da507f05581b7bdf398540-v626ec2a48416b10a88641359a169d99e935ff037",
+      "instance_internetarchive__openlibrary-d40ec88713dc95ea791b252f92d2f7b75e107440-v13642507b4fc1f8d234172bf8129942da2c2ca26",
+      "instance_internetarchive__openlibrary-d8162c226a9d576f094dc1830c4c1ffd0be2dd17-v76304ecdb3a5954fcf13feb710e8c40fcf24b73c",
+      "instance_navidrome__navidrome-23bebe4e06124becf1000e88472ae71a6ca7de4c",
+      "instance_navidrome__navidrome-6b3b4d83ffcf273b01985709c8bc5df12bbb8286",
+      "instance_NodeBB__NodeBB-2657804c1fb6b84dc76ad3b18ecf061aaab5f29f-vf2cf3cbd463b7ad942381f1c6d077626485a1e9e",
+      "instance_protonmail__webclients-428cd033fede5fd6ae9dbc7ab634e010b10e4209",
+      "instance_protonmail__webclients-708ed4a299711f0fa79a907cc5847cfd39c0fc71",
+      "instance_qutebrowser__qutebrowser-66cfa15c372fa9e613ea5a82d3b03e4609399fb6-v363c8a7e5ccdf6968fc7ab84a2053ac78036691d",
+      "instance_qutebrowser__qutebrowser-a25e8a09873838ca9efefd36ea8a45170bbeb95c-vc2f56a753b62a190ddb23cd330c257b9cf560d12",
+      "instance_tutao__tutanota-fbdb72a2bd39b05131ff905780d9d4a2a074de26-vbc0d9ba8f0071fbe982809910959a6ff8884dbbf"
+    ]
+  },
+  "harness": {
+    "type": "openclaw",
+    "deployment": {
+      "backend": "docker",
+      "docker": {
+        "socket": "/var/run/docker.sock"
+      }
+    }
+  },
+  "sandbox": {
+    "deployment": {
+      "backend": "docker",
+      "docker": {
+        "socket": "/var/run/docker.sock"
+      }
+    }
+  },
+  "bridge": {
+    "type": "openclaw-ssh",
+    "mode": "embedded"
+  },
+  "runtime": {
+    "backend": "deepseek",
+    "mode": "external"
+  },
+  "model": {
+    "base_url": "https://api.deepseek.com",
+    "api_key_env": "DEEPSEEK_API_KEY",
+    "id": "deepseek-flash",
+    "reasoning_effort": "high"
+  },
+  "output_dir": "runs"
+}

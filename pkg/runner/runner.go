@@ -335,8 +335,16 @@ func effectiveRuntime(original core.Task, overrides RuntimeOverrides) (core.Envi
 	if overrides.AgentSandboxResources.MemoryMB != nil {
 		environment.MemoryMB = *overrides.AgentSandboxResources.MemoryMB
 	}
+	// A zero harness dimension means unlimited, which the deployment
+	// request expresses by omission.
 	harnessCPU := cloneFloat(overrides.HarnessResources.CPU)
+	if harnessCPU != nil && *harnessCPU == 0 {
+		harnessCPU = nil
+	}
 	harnessMemory := cloneInt(overrides.HarnessResources.MemoryMB)
+	if harnessMemory != nil && *harnessMemory == 0 {
+		harnessMemory = nil
+	}
 	timeout := original.Timeout
 	if overrides.AgentTimeout != nil {
 		timeout = *overrides.AgentTimeout

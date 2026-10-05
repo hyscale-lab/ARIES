@@ -95,6 +95,7 @@ type RuntimeOverrides struct {
 }
 
 // ResourceOverrides changes only the named container resource dimensions.
+// Zero removes that dimension's limit.
 type ResourceOverrides struct {
 	CPU      *float64 `json:"cpu,omitempty"`
 	MemoryMB *int     `json:"memory_mb,omitempty"`
@@ -562,15 +563,17 @@ func secondsDuration(name string, seconds *float64) (*time.Duration, error) {
 	return &duration, nil
 }
 
+// validateResources checks one container's overrides. Zero removes that
+// dimension's limit.
 func validateResources(name string, resources ResourceOverrides) error {
 	if resources.CPU != nil {
 		scaled := *resources.CPU * 1e9
-		if *resources.CPU <= 0 || math.IsNaN(*resources.CPU) || math.IsInf(*resources.CPU, 0) || scaled >= math.Exp2(63) {
-			return fmt.Errorf("%s.cpu must be finite, positive, and convert to NanoCPUs below 2^63", name)
+		if *resources.CPU < 0 || math.IsNaN(*resources.CPU) || math.IsInf(*resources.CPU, 0) || scaled >= math.Exp2(63) {
+			return fmt.Errorf("%s.cpu must be finite, nonnegative (zero is unlimited), and convert to NanoCPUs below 2^63", name)
 		}
 	}
-	if resources.MemoryMB != nil && (*resources.MemoryMB <= 0 || int64(*resources.MemoryMB) > math.MaxInt64>>20) {
-		return fmt.Errorf("%s.memory_mb must be positive and no greater than %d", name, int64(math.MaxInt64)>>20)
+	if resources.MemoryMB != nil && (*resources.MemoryMB < 0 || int64(*resources.MemoryMB) > math.MaxInt64>>20) {
+		return fmt.Errorf("%s.memory_mb must be nonnegative (zero is unlimited) and no greater than %d", name, int64(math.MaxInt64)>>20)
 	}
 	return nil
 }

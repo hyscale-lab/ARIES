@@ -37,9 +37,15 @@ or inheritance layer. Never put credential values in profile JSON.
 The five-task profile additionally references
 `configs/runtime-overrides.json` relative to the profile. Its sparse
 `harness_resources` and `agent_sandbox_resources` blocks apply only to their
-respective containers and may specify different CPU and memory limits. An
-omitted harness dimension stays unlimited; an omitted sandbox dimension keeps
-the value in the task's `task.toml`. Neither block inherits from the other.
+respective containers and may specify different CPU and memory limits. A fresh
+evaluation sandbox, such as SWE-bench Pro's, uses the task's own resources.
+
+- In `harness_resources`, an omitted or zero `cpu` or `memory_mb` is unlimited.
+- In `agent_sandbox_resources`, an omitted `cpu` or `memory_mb` keeps the task's
+  declared value, and a zero one is unlimited.
+
+Neither block inherits from the other.
+
 The independent `agent_timeout_seconds` field changes only the agent deadline.
 The independent `verifier_timeout_floor_seconds` field raises a Terminal-Bench
 task's evaluation budget to at least that many seconds and never lowers one.
@@ -58,11 +64,23 @@ minimum verifier budget:
 
 Report the configured floor with benchmark results and use the same verifier
 budget policy across compared runs.
+
 Every checked-in profile explicitly contains `overrides_file`; the one-task
 profile uses `""`, which disables override loading without opening a file.
 Profiles and nonempty referenced override files reject unknown fields and
 trailing JSON; there is no profile merge or inheritance layer. SGLang is the
 exception only for its separate native launch configuration, described below.
+
+### Paper-reproduction profiles
+
+`profiles/experiments/` holds the twenty-task OpenClaw and Hermes profiles for
+Terminal-Bench 2, SWE-Bench Pro, and Deep Research Bench used to reproduce the
+paper. They run at concurrency 1 and share
+`profiles/experiments/no-limits-overrides.json`, which sets `cpu` and
+`memory_mb` to `0` in both `harness_resources` and `agent_sandbox_resources`,
+so neither container has a CPU or memory limit, and sets
+`agent_timeout_seconds` to 3600, a one-hour agent deadline. Run them from the
+repository root, as with the other profiles.
 
 ## Deployment configuration
 

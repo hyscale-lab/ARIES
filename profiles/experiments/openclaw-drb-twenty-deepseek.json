@@ -1,0 +1,87 @@
+{
+  "name": "openclaw-drb-twenty-deepseek",
+  "versions_file": "../../configs/versions.json",
+  "overrides_file": "no-limits-overrides.json",
+  "execution": {
+    "concurrency": 1
+  },
+  "benchmark": {
+    "type": "deepresearchbench",
+    "root": ".cache/deep-research-bench",
+    "tasks": [
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "10",
+      "11",
+      "12",
+      "13",
+      "14",
+      "15",
+      "16",
+      "17",
+      "18",
+      "19",
+      "20"
+    ],
+    "environment": {
+      "image": "ihasfarm/aries-deepresearchbench:latest",
+      "workdir": "/workspace"
+    },
+    "fact": {
+      "jina_api_key_env": "JINA_API_KEY"
+    },
+    "judge": {
+      "provider": "deepseek",
+      "base_url": "https://api.deepseek.com",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "id": "deepseek-flash",
+      "reasoning_effort": "high"
+    }
+  },
+  "harness": {
+    "type": "openclaw",
+    "web_search": {
+      "enabled": true,
+      "extract_api_key_env": "TAVILY_API_KEY"
+    },
+    "subagents": {
+      "enabled": false
+    },
+    "deployment": {
+      "backend": "docker",
+      "docker": {
+        "socket": "/var/run/docker.sock"
+      }
+    }
+  },
+  "sandbox": {
+    "deployment": {
+      "backend": "docker",
+      "docker": {
+        "socket": "/var/run/docker.sock"
+      }
+    }
+  },
+  "bridge": {
+    "type": "openclaw-ssh",
+    "mode": "embedded"
+  },
+  "runtime": {
+    "backend": "deepseek",
+    "mode": "external"
+  },
+  "model": {
+    "base_url": "https://api.deepseek.com",
+    "api_key_env": "DEEPSEEK_API_KEY",
+    "id": "deepseek-flash",
+    "reasoning_effort": "high"
+  },
+  "output_dir": "runs"
+}
