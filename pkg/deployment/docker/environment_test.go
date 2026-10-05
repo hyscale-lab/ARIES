@@ -76,7 +76,7 @@ func TestTaskEnvironmentOwnershipAndRetry(t *testing.T) {
 	}
 	next := m.NewTaskEnvironment()
 	second, err := next.Start(ctx, request)
-	if err != nil || first == second {
+	if err != nil || first.Placement.DockerNetwork == second.Placement.DockerNetwork {
 		t.Fatal("duplicate task reused network", first, second, err)
 	}
 	if err := next.Stop(ctx); err != nil {
@@ -111,5 +111,31 @@ func TestTaskEnvironmentRecoversAllocationWithoutReturnedIdentity(t *testing.T) 
 	f.networkOptions.Labels = labels
 	if err := e.Stop(context.Background()); err != nil || f.networkExists {
 		t.Fatal("lost allocation after missing identity", err)
+	}
+}
+
+func TestTaskEnvironmentResolvesDeclaredServices(t *testing.T) {
+	ctx := context.Background()
+	for _, test := range []struct {
+		port int
+		want string
+	}{{8123, "http://task-sandbox:8123"}, {0, ""}, {65536, ""}} {
+		f := &environmentClient{fakeClient: &fakeClient{}}
+		e := (&Manager{client: f}).NewTaskEnvironment()
+		request := core.SandboxRequest{RunID: "run", TaskID: "task", Environment: core.Environment{Services: core.TaskServices{SearchPort: test.port}}}
+		resolved, err := e.Start(ctx, request)
+		if test.port == 65536 {
+			if err == nil || f.networkExists {
+				t.Fatal("invalid service allocated a network", err)
+			}
+		} else if err != nil || resolved.SearchURL != test.want || resolved.Placement.DockerNetwork == "" {
+			t.Fatalf("port %d: resolved = %#v, %v", test.port, resolved, err)
+		}
+		if err := e.Stop(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.Start(ctx, request); err == nil {
+			t.Fatal("reused revoked attachment")
+		}
 	}
 }

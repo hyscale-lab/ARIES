@@ -369,6 +369,7 @@ func New(options Options) (*Benchmark, error) {
 	// Deep Research Bench tasks are open-ended web research; network access
 	// is not optional the way it is for a Terminal-Bench task.
 	environment.AllowNetwork = true
+	environment.Services.SearchPort = 8888
 
 	return &Benchmark{
 		root:             filepath.Clean(options.Root),

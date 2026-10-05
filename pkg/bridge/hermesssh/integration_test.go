@@ -98,7 +98,9 @@ type integrationSandbox struct {
 	workdir  string
 }
 
-func (sandbox *integrationSandbox) NetworkName() string { return "host" }
+func (sandbox *integrationSandbox) Connectivity() core.HarnessConnectivity {
+	return core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "host"}}
+}
 
 func (sandbox *integrationSandbox) Exec(context.Context, core.Command) (core.CommandResult, error) {
 	return core.CommandResult{}, errors.New("unused")

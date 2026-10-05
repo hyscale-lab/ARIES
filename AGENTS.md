@@ -19,6 +19,11 @@ against code and tests. When supported components or profile fields change,
 update `docs/supported.md` and `docs/configuration.md`, and check quick-start
 examples. Report code gaps without silently weakening principles.
 
+Keep agent pages to rules, ownership, and task-specific pointers. Update existing
+rules instead of appending implementation summaries, field inventories, or run
+reports. Put explanations in `docs/` and temporary plans/reviews in `.agents/scratch/`;
+read scratch files only when relevant to the task.
+
 Complete authorized work and relevant verification without permission handoffs
 for routine steps. Ask when scope is consequentially ambiguous or destructive.
 Keep edits and Git operations inside this repository; preserve unrelated work.

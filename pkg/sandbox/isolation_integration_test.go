@@ -63,7 +63,7 @@ func TestConcurrentOccurrencesKeepSeparateNetworks(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if sandboxes[0].NetworkName() == sandboxes[1].NetworkName() || sandboxes[0].ContainerID() == sandboxes[1].ContainerID() {
+	if sandboxes[0].Connectivity().Placement.DockerNetwork == sandboxes[1].Connectivity().Placement.DockerNetwork || sandboxes[0].ContainerID() == sandboxes[1].ContainerID() {
 		t.Fatal("duplicate task IDs shared resources")
 	}
 	var addresses, peers [2]string
@@ -85,13 +85,13 @@ func TestConcurrentOccurrencesKeepSeparateNetworks(t *testing.T) {
 			t.Fatal(err)
 		}
 		networks := inspection.Container.NetworkSettings.Networks
-		attachment := networks[sandbox.NetworkName()]
+		attachment := networks[sandbox.Connectivity().Placement.DockerNetwork]
 		if len(networks) != 1 || attachment == nil {
 			t.Fatalf("unexpected attachments: %#v", networks)
 		}
 		addresses[i] = attachment.IPAddress.String()
 		// A peer on each owned network is the positive reachability control.
-		peerRequest := deployment.Request{Name: sandbox.ContainerName() + "-peer", Image: fixtureImage, Network: sandbox.NetworkName(), Entrypoint: []string{"/bin/sleep"}, Args: []string{"infinity"}, Labels: map[string]string{"aries.managed": "true", "aries.kind": "isolation-peer", "aries.run": "concurrent-isolation", "aries.task": "duplicate"}}
+		peerRequest := deployment.Request{Name: sandbox.ContainerName() + "-peer", Image: fixtureImage, Placement: sandbox.Connectivity().Placement, Entrypoint: []string{"/bin/sleep"}, Args: []string{"infinity"}, Labels: map[string]string{"aries.managed": "true", "aries.kind": "isolation-peer", "aries.run": "concurrent-isolation", "aries.task": "duplicate"}}
 		peerIDs[i], err = managers[i].deployment.Create(ctx, peerRequest)
 		if err != nil {
 			t.Fatal(err)
@@ -106,7 +106,7 @@ func TestConcurrentOccurrencesKeepSeparateNetworks(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		peers[i] = peer.Container.NetworkSettings.Networks[sandbox.NetworkName()].IPAddress.String()
+		peers[i] = peer.Container.NetworkSettings.Networks[sandbox.Connectivity().Placement.DockerNetwork].IPAddress.String()
 		result := execForTest(t, ctx, sandbox, core.Command{Path: "/bin/sh", Args: []string{"-c", "printf '%s' \"$1\" > /work/state", "aries", fmt.Sprint(i)}})
 		if result.ExitCode != 0 {
 			t.Fatalf("write failed: %#v", result)
@@ -139,7 +139,7 @@ func TestConcurrentOccurrencesKeepSeparateNetworks(t *testing.T) {
 		if _, err := api.ContainerInspect(ctx, sandbox.ContainerID(), client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
 			t.Fatalf("container absence unconfirmed: %v", err)
 		}
-		if _, err := api.NetworkInspect(ctx, sandbox.NetworkName(), client.NetworkInspectOptions{}); !errdefs.IsNotFound(err) {
+		if _, err := api.NetworkInspect(ctx, sandbox.Connectivity().Placement.DockerNetwork, client.NetworkInspectOptions{}); !errdefs.IsNotFound(err) {
 			t.Fatalf("network absence unconfirmed: %v", err)
 		}
 	}

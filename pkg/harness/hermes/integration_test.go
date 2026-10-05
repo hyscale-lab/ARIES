@@ -3,7 +3,10 @@
 package hermes
 
 import (
+	harnesscommon "github.com/hyscale-lab/aries/pkg/harness"
+
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,7 +21,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-const integrationImage = "docker.io/nousresearch/hermes-agent:v2026.5.29.2"
+const integrationImage = "docker.io/nousresearch/hermes-agent:v2026.8.31"
 
 func requireDockerImage(t *testing.T) {
 	t.Helper()
@@ -39,11 +42,17 @@ func integrationManager(t *testing.T, outputDir string) *Manager {
 	t.Helper()
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
-	manager, err := New(Options{Deployment: integrationDeployment(t),
-		Image: integrationImage, OutputDir: outputDir, Logger: logger,
-		StartTimeout: 90 * time.Second, AgentTimeout: 90 * time.Second, CleanupTimeout: 60 * time.Second,
-		APIKeyLookup: func(string) ([]byte, bool) { return []byte("sk-integration-not-a-real-key"), true },
-	})
+	manager, err := New(Options{Runtime: harnesscommon.RuntimeOptions{
+
+		Deployment:     integrationDeployment(t),
+		Image:          integrationImage,
+		OutputDir:      outputDir,
+		Logger:         logger,
+		StartTimeout:   90 * time.Second,
+		AgentTimeout:   90 * time.Second,
+		CleanupTimeout: 60 * time.Second,
+		APIKeyLookup:   func(string) ([]byte, bool) { return []byte("sk-integration-not-a-real-key"), true },
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +69,7 @@ func integrationManager(t *testing.T, outputDir string) *Manager {
 
 // TestHarnessStartsRealHermesContainerAndStopsPositively drives the real
 // upstream image: the staged runtime must satisfy the readiness probe (Hermes
-// CLI present, ssh present, config and key readable), and Stop must confirm the
+// Gateway ready, ssh present, config and key readable), and Stop must confirm the
 // container is gone. No model is contacted.
 func TestHarnessStartsRealHermesContainerAndStopsPositively(t *testing.T) {
 	requireDockerImage(t)
@@ -75,13 +84,13 @@ func TestHarnessStartsRealHermesContainerAndStopsPositively(t *testing.T) {
 	if err := os.Chmod(identityPath, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	request := core.HarnessRequest{Network: "bridge",
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "bridge"}},
 		RunID: "integration-run", TaskID: "integration-task",
 		Endpoint: core.ToolEndpoint{
 			Protocol: "ssh", Address: "127.0.0.1:2222", Username: "aries",
 			IdentityFile: identityContainerFS, IdentitySourceFile: identityPath, Workdir: "/app",
 		},
-		Model: core.ModelConfig{Provider: "deepseek", BaseURL: "https://api.deepseek.com", Model: "deepseek-v4-flash", APIKeyEnv: "DEEPSEEK_API_KEY"},
+		Model: core.ModelConfig{Provider: "deepseek", BaseURL: "https://api.deepseek.com", Model: "deepseek-flash", APIKeyEnv: "DEEPSEEK_API_KEY"},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -89,7 +98,7 @@ func TestHarnessStartsRealHermesContainerAndStopsPositively(t *testing.T) {
 	if err := manager.Start(ctx, request); err != nil {
 		t.Fatalf("start real Hermes container: %v", err)
 	}
-	containerName := manager.active.containerName
+	containerName := manager.active.Name
 
 	// The staged runtime must be exactly what the container sees.
 	for _, check := range []struct {
@@ -98,9 +107,9 @@ func TestHarnessStartsRealHermesContainerAndStopsPositively(t *testing.T) {
 	}{
 		{configContainerPath, "${DEEPSEEK_API_KEY}"},
 		{modelKeyPath, "sk-integration-not-a-real-key"},
-		{agentWrapperPath, "exec hermes --ignore-rules --yolo"},
+		{gatewayLauncherPath, "hermes gateway"},
 	} {
-		result, err := manager.deployment.Exec(ctx, manager.active.containerID, core.Command{Path: "cat", Args: []string{check.path}})
+		result, err := manager.runtime.Options.Deployment.Exec(ctx, manager.active.ID, core.Command{Path: "cat", Args: []string{check.path}})
 		output := result.Stdout + result.Stderr
 		if err != nil || result.ExitCode != 0 {
 			t.Fatalf("read %s: %v (%s)", check.path, err, output)
@@ -110,7 +119,7 @@ func TestHarnessStartsRealHermesContainerAndStopsPositively(t *testing.T) {
 		}
 	}
 	// Hermes itself must accept the staged configuration.
-	result, err := manager.deployment.Exec(ctx, manager.active.containerID, core.Command{Path: "hermes", Args: []string{"--version"}})
+	result, err := manager.runtime.Options.Deployment.Exec(ctx, manager.active.ID, core.Command{Path: "hermes", Args: []string{"--version"}})
 	output := result.Stdout + result.Stderr
 	if err != nil || result.ExitCode != 0 {
 		t.Fatalf("hermes --version failed: %v (%s)", err, output)
@@ -152,4 +161,65 @@ func integrationDeployment(t *testing.T) deployment.Deployment {
 	}
 	t.Cleanup(func() { _ = d.Close() })
 	return d
+}
+
+// Fail after Docker has started the native service to exercise cleanup of a
+// partially successful startup, rather than an error before allocation.
+type failAfterStartDeployment struct {
+	deployment.Deployment
+	id string
+}
+
+func (d *failAfterStartDeployment) Create(ctx context.Context, request deployment.Request) (string, error) {
+	id, err := d.Deployment.Create(ctx, request)
+	d.id = id
+	return id, err
+}
+func (d *failAfterStartDeployment) Start(ctx context.Context, id string) error {
+	if err := d.Deployment.Start(ctx, id); err != nil {
+		return err
+	}
+	return errors.New("injected failure after real service startup")
+}
+
+func TestGatewayPartialStartupRemovesRuntime(t *testing.T) {
+	requireDockerImage(t)
+	backend := &failAfterStartDeployment{Deployment: integrationDeployment(t)}
+	manager, err := New(Options{Runtime: harnesscommon.RuntimeOptions{
+
+		Deployment:     backend,
+		Image:          integrationImage,
+		OutputDir:      t.TempDir(),
+		CleanupTimeout: time.Minute,
+		APIKeyLookup:   func(string) ([]byte, bool) { return []byte("sk-integration-not-a-real-key"), true },
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if err := manager.Stop(ctx); err != nil {
+			t.Error(err)
+		}
+		_ = manager.Close()
+	})
+	request := testRequest(t)
+	request.Connectivity.Placement = core.RuntimePlacement{DockerNetwork: "bridge"}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if err := manager.Start(ctx, request); err == nil || !strings.Contains(err.Error(), "injected failure") {
+		t.Fatalf("startup error = %v", err)
+	}
+	if backend.id == "" {
+		t.Fatal("failure did not exercise a real runtime")
+	}
+	api, err := client.New(client.FromEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer api.Close()
+	if _, err := api.ContainerInspect(ctx, backend.id, client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
+		t.Fatalf("partial startup runtime remains: %v", err)
+	}
 }

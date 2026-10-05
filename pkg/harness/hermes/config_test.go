@@ -171,13 +171,16 @@ func TestValidateModelRejectsControlCharactersInModelID(t *testing.T) {
 // Hermes selects its SSH backend purely from the environment, so this is the
 // contract that replaces Agent_Bench's exec-bridge patch.
 func TestContainerEnvironmentSelectsNativeSSHBackend(t *testing.T) {
-	environment, err := containerEnvironment(validEndpoint(), "/aries/workspace", 180, false, "run-1", "fix-git")
+	environment, err := containerEnvironment(validEndpoint(), "/aries/workspace", 180, false, "http://search.example:8123", "run-1", "fix-git")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := map[string]string{
 		"HERMES_HOME":                                stateContainerPath,
 		"TERMINAL_ENV":                               "ssh",
+		"API_SERVER_HOST":                            "0.0.0.0",
+		"API_SERVER_PORT":                            "8642",
+		"HERMES_YOLO_MODE":                           "true",
 		"TERMINAL_SSH_HOST":                          "172.17.0.1",
 		"TERMINAL_SSH_PORT":                          "41234",
 		"TERMINAL_SSH_USER":                          "aries",
@@ -236,16 +239,16 @@ func TestContainerEnvironmentRejectsUnusableEndpoints(t *testing.T) {
 	for name, mutate := range cases {
 		endpoint := validEndpoint()
 		mutate(&endpoint)
-		if _, err := containerEnvironment(endpoint, "/aries/workspace", 180, false, "run-1", "fix-git"); err == nil {
+		if _, err := containerEnvironment(endpoint, "/aries/workspace", 180, false, "http://search.example:8123", "run-1", "fix-git"); err == nil {
 			t.Fatalf("%s: invalid endpoint was accepted", name)
 		}
 	}
 	for _, workdir := range []string{"", "relative", "/has space", "/trailing/", "/a/../b"} {
-		if _, err := containerEnvironment(validEndpoint(), workdir, 180, false, "run-1", "fix-git"); err == nil {
+		if _, err := containerEnvironment(validEndpoint(), workdir, 180, false, "http://search.example:8123", "run-1", "fix-git"); err == nil {
 			t.Fatalf("workdir %q was accepted", workdir)
 		}
 	}
-	if _, err := containerEnvironment(validEndpoint(), "/aries/workspace", 0, false, "run-1", "fix-git"); err == nil {
+	if _, err := containerEnvironment(validEndpoint(), "/aries/workspace", 0, false, "http://search.example:8123", "run-1", "fix-git"); err == nil {
 		t.Fatal("non-positive terminal timeout was accepted")
 	}
 }
@@ -327,7 +330,7 @@ func TestRenderConfigDisablesDelegationToolsetWhenSubagentsDisabled(t *testing.T
 		t.Fatal(err)
 	}
 	text := string(rendered)
-	if !strings.Contains(text, "\ndisabled_toolsets:\n  - delegation\n") {
+	if !strings.Contains(text, "\n  disabled_toolsets:\n    - delegation\n") {
 		t.Fatalf("config is missing disabled_toolsets: [delegation]:\n%s", text)
 	}
 }
@@ -382,7 +385,7 @@ func TestRenderConfigIgnoresMaxConcurrentChildrenWhenSubagentsDisabled(t *testin
 }
 
 func TestContainerEnvironmentSetsSearXNGURLWhenWebSearchEnabled(t *testing.T) {
-	disabled, err := containerEnvironment(validEndpoint(), "/aries/workspace", 180, false, "run-1", "fix-git")
+	disabled, err := containerEnvironment(validEndpoint(), "/aries/workspace", 180, false, "http://search.example:8123", "run-1", "fix-git")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,11 +394,11 @@ func TestContainerEnvironmentSetsSearXNGURLWhenWebSearchEnabled(t *testing.T) {
 			t.Fatalf("SEARXNG_URL set despite web search being disabled: %v", disabled)
 		}
 	}
-	enabled, err := containerEnvironment(validEndpoint(), "/aries/workspace", 180, true, "run-1", "fix-git")
+	enabled, err := containerEnvironment(validEndpoint(), "/aries/workspace", 180, true, "http://search.example:8123", "run-1", "fix-git")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "SEARXNG_URL=" + searxngBaseURL
+	want := "SEARXNG_URL=" + "http://search.example:8123"
 	found := false
 	for _, entry := range enabled {
 		if entry == want {
@@ -407,29 +410,28 @@ func TestContainerEnvironmentSetsSearXNGURLWhenWebSearchEnabled(t *testing.T) {
 	}
 }
 
-// --toolsets is unusable on the pinned Hermes build, so the wrapper must not
-// pass it; toolsets come from the rendered config instead.
-func TestAgentWrapperExportsKeyAndAvoidsToolsetsFlag(t *testing.T) {
-	script := string(agentWrapperScript("DEEPSEEK_API_KEY", false))
+// Gateway launches without CLI-only toolset flags; config selects its tools.
+func TestGatewayLauncherExportsKeyAndAvoidsToolsetsFlag(t *testing.T) {
+	script := string(gatewayLauncherScript("DEEPSEEK_API_KEY", false))
 	for _, want := range []string{
 		"DEEPSEEK_API_KEY=\"$(cat " + modelKeyPath + ")\"",
 		"export DEEPSEEK_API_KEY",
-		`exec hermes --ignore-rules --yolo --model "$1" --provider "$2" -z "$3"`,
+		`exec hermes gateway run --no-supervise --external-supervisor`,
 	} {
 		if !strings.Contains(script, want) {
-			t.Fatalf("wrapper is missing %q:\n%s", want, script)
+			t.Fatalf("launcher is missing %q:\n%s", want, script)
 		}
 	}
 	if strings.Contains(script, "--toolsets") {
-		t.Fatalf("wrapper passes --toolsets:\n%s", script)
+		t.Fatalf("launcher passes --toolsets:\n%s", script)
 	}
 	if strings.Contains(script, tavilyAPIKeyEnv) || strings.Contains(script, extractKeyPath) {
-		t.Fatalf("wrapper exports the extract key despite extract being disabled:\n%s", script)
+		t.Fatalf("launcher exports the extract key despite extract being disabled:\n%s", script)
 	}
 }
 
-func TestAgentWrapperExportsExtractKeyWhenEnabled(t *testing.T) {
-	script := string(agentWrapperScript("DEEPSEEK_API_KEY", true))
+func TestGatewayLauncherExportsExtractKeyWhenEnabled(t *testing.T) {
+	script := string(gatewayLauncherScript("DEEPSEEK_API_KEY", true))
 	for _, want := range []string{
 		"DEEPSEEK_API_KEY=\"$(cat " + modelKeyPath + ")\"",
 		"export DEEPSEEK_API_KEY",
@@ -437,14 +439,12 @@ func TestAgentWrapperExportsExtractKeyWhenEnabled(t *testing.T) {
 		"export " + tavilyAPIKeyEnv,
 	} {
 		if !strings.Contains(script, want) {
-			t.Fatalf("wrapper is missing %q:\n%s", want, script)
+			t.Fatalf("launcher is missing %q:\n%s", want, script)
 		}
 	}
 }
 
-// Neither pinned Hermes version knows an "sglang" or plain "openai" provider,
-// and the one-shot rejects an unknown name, so both backends must render as
-// Hermes's generic "custom" provider. DeepSeek is built in and stays as written.
+// OpenAI-compatible backends use Hermes's "custom" provider; DeepSeek remains native.
 func TestRenderConfigMapsOpenAICompatibleBackendsToCustomProvider(t *testing.T) {
 	for _, provider := range []string{"sglang", "openai"} {
 		model := validModel()
@@ -517,8 +517,8 @@ func TestRenderConfig_MCPServers(t *testing.T) {
 	}
 }
 
-func TestAgentWrapperScriptExportsMCPHostVariables(t *testing.T) {
-	script := string(agentWrapperScript("DEEPSEEK_API_KEY", false, "TOOLATHLON_API_KEY", "OTHER_KEY"))
+func TestGatewayLauncherScriptExportsMCPHostVariables(t *testing.T) {
+	script := string(gatewayLauncherScript("DEEPSEEK_API_KEY", false, "TOOLATHLON_API_KEY", "OTHER_KEY"))
 	for _, required := range []string{
 		"TOOLATHLON_API_KEY=\"$(cat /run/aries/hermes/mcp_TOOLATHLON_API_KEY.key)\"",
 		"export TOOLATHLON_API_KEY",
@@ -526,7 +526,16 @@ func TestAgentWrapperScriptExportsMCPHostVariables(t *testing.T) {
 		"export OTHER_KEY",
 	} {
 		if !strings.Contains(script, required) {
-			t.Fatalf("agentWrapperScript missing MCP export %q: %s", required, script)
+			t.Fatalf("gatewayLauncherScript missing MCP export %q: %s", required, script)
 		}
+	}
+}
+
+func TestSearchRequiresResolvedEndpoint(t *testing.T) {
+	if _, err := containerEnvironment(validEndpoint(), "/aries/workspace", 180, true, "", "run-1", "fix-git"); err == nil {
+		t.Fatal("accepted search without a declared endpoint")
+	}
+	if _, err := containerEnvironment(validEndpoint(), "/aries/workspace", 180, false, "", "run-1", "fix-git"); err != nil {
+		t.Fatal(err)
 	}
 }

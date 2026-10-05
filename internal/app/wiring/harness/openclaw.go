@@ -7,6 +7,7 @@ import (
 	"github.com/hyscale-lab/aries/internal/app"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/deployment"
+	harnesscommon "github.com/hyscale-lab/aries/pkg/harness"
 	openclawharness "github.com/hyscale-lab/aries/pkg/harness/openclaw"
 	"github.com/sirupsen/logrus"
 )
@@ -17,13 +18,16 @@ func NewOpenClaw(cfg config.Config, outputRoot string, lookup func(string) ([]by
 		return app.HarnessInstance{}, errors.Join(err, transport.Close())
 	}
 	options := openclawharness.Options{
-		Deployment: transport, Image: cfg.Versions.OpenClaw.Image, OutputDir: outputRoot, APIKeyLookup: lookup, Logger: logger,
-		Mode: cfg.Harness.Mode, WebSearchEnabled: cfg.Harness.WebSearch.Enabled,
-		ExtractAPIKeyEnv:       cfg.Harness.WebSearch.ExtractAPIKeyEnv,
-		SubagentsEnabled:       cfg.Harness.Subagents.Enabled != nil && *cfg.Harness.Subagents.Enabled,
-		MaxConcurrentSubagents: cfg.Harness.Subagents.MaxConcurrent,
-		MCPServers:             cfg.Harness.MCPServers,
+		Runtime: harnesscommon.RuntimeOptions{
+			Deployment:   transport,
+			Image:        cfg.Versions.OpenClaw.Image,
+			OutputDir:    outputRoot,
+			APIKeyLookup: lookup,
+			Logger:       logger,
+		},
+		Common: commonOptions(cfg.Harness),
 	}
+
 	if cfg.Harness.Mode == openclawharness.ModeRealtime || cfg.Harness.Mode == openclawharness.ModeVoiceTranscribe {
 		options.Realtime = openClawVoiceOptions(cfg.Harness)
 	}
@@ -41,7 +45,7 @@ func openClawVoiceOptions(harness config.HarnessConfig) openclawharness.Realtime
 	}
 	return openclawharness.RealtimeOptions{
 		AgentQuestionTemplate: realtime.AgentQuestionTemplate,
-		TTS: openclawharness.RealtimeTTSOptions{
+		TTS: harnesscommon.TTSOptions{
 			Provider: realtime.TTS.Provider, BaseURL: realtime.TTS.BaseURL,
 			APIKeyEnv: realtime.TTS.APIKeyEnv, Model: realtime.TTS.Model,
 			Voice: realtime.TTS.Voice, Instructions: realtime.TTS.Instructions,

@@ -68,7 +68,14 @@ func TestRenderConfigEmitsCompactionBlockOnlyWhenSet(t *testing.T) {
 	settings := baseSettings()
 	settings.compaction = &CompactionSettings{ThresholdTokens: 65536}
 	text := mustRender(t, vllmModel(), settings)
-	if !strings.Contains(text, "\ncompression:\n  threshold_tokens: 65536\n") || strings.Contains(text, "\n  enabled: ") {
+	var parsed struct {
+		Compression map[string]any `yaml:"compression"`
+	}
+	if err := yaml.Unmarshal([]byte(text), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	_, hasEnabled := parsed.Compression["enabled"]
+	if !strings.Contains(text, "\ncompression:\n  threshold_tokens: 65536\n") || hasEnabled {
 		t.Fatalf("threshold-only compaction block is wrong:\n%s", text)
 	}
 	settings.compaction = &CompactionSettings{Enabled: boolPtr(false)}
@@ -140,7 +147,7 @@ func TestRenderConfigWritesExtraBodyAsYAMLReadableJSON(t *testing.T) {
 }
 
 func TestContainerEnvironmentExportsRunAndTaskIDs(t *testing.T) {
-	environment, err := containerEnvironment(validEndpoint(), "/aries/workspace", 180, false, "run-7", "fix-git-001")
+	environment, err := containerEnvironment(validEndpoint(), "/aries/workspace", 180, false, "", "run-7", "fix-git-001")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +158,7 @@ func TestContainerEnvironmentExportsRunAndTaskIDs(t *testing.T) {
 		}
 	}
 	for name, ids := range map[string][2]string{"empty run": {"", "fix-git"}, "unsafe run": {"run 7", "fix-git"}, "empty task": {"run-7", ""}, "unsafe task": {"run-7", "fix;git"}} {
-		if _, err := containerEnvironment(validEndpoint(), "/aries/workspace", 180, false, ids[0], ids[1]); err == nil {
+		if _, err := containerEnvironment(validEndpoint(), "/aries/workspace", 180, false, "", ids[0], ids[1]); err == nil {
 			t.Fatalf("%s: accepted", name)
 		}
 	}
@@ -162,8 +169,8 @@ func TestContainerEnvironmentExportsRunAndTaskIDs(t *testing.T) {
 func TestStartRendersContextBlocksAndExportsIDs(t *testing.T) {
 	fake := newFakeDeployment()
 	manager := newTestManager(t, fake, []byte("EMPTY-but-long-enough"))
-	manager.compaction = &CompactionSettings{ThresholdTokens: 65536}
-	manager.extraBody = []byte(`{"user": "${ARIES_RUN_ID}-${ARIES_TASK_ID}"}`)
+	manager.options.Compaction = &CompactionSettings{ThresholdTokens: 65536}
+	manager.options.ExtraBody = []byte(`{"user": "${ARIES_RUN_ID}-${ARIES_TASK_ID}"}`)
 	request := testRequest(t)
 	request.RunID = "run-7"
 	request.Model = vllmModel()
@@ -172,7 +179,7 @@ func TestStartRendersContextBlocksAndExportsIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Stop(context.Background())
-	retained, err := os.ReadFile(filepath.Join(manager.outputDir, request.TaskID, "harness", "config.yaml"))
+	retained, err := os.ReadFile(filepath.Join(manager.runtime.Options.OutputDir, request.TaskID, "harness", "config.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}

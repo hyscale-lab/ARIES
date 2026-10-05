@@ -1,40 +1,23 @@
-# Profiles and model runtimes
+# Profiles and credentials
 
-Start from an existing `profiles/*.json`. Schema: [config.go](../pkg/config/config.go);
-version pins: `configs/versions.json`; runtime/preflight: `internal/app`.
-Hermes runs a local image derived from `hermes.image` plus the
-`hermes.otel_plugin` pin; change either pin there, never in code.
+Start from `profiles/*.json`; consult the [schema](../pkg/config/config.go),
+[configuration reference](../docs/configuration.md), and [support matrix](../docs/supported.md).
+Use `configs/versions.json` for pins; do not duplicate the field inventory here.
+Hermes derives its local image from the catalog’s base image and OTel plugin pins.
 
-- `name` identifies the experiment; `benchmark.type`, `root`, and `tasks` select
-  pinned input and task occurrences. `versions_file` selects pins; `output_dir`
-  holds private artifacts. `execution.concurrency` caps admitted work;
-  `arrivals_file` with `arrival_rate_per_min` optionally schedules arrivals.
-- `harness.type` selects Hermes or OpenClaw independently of deployment.
-  `harness.deployment` and `sandbox.deployment` currently require Docker on the
-  same local Unix socket. Kubernetes is recognized but rejected before effects.
-- `bridge.mode` supports only `embedded`; use the matching harness/bridge pair.
-- Declare `overrides_file` explicitly; `""` disables overrides. Harness resource
-  limits and sandbox resource limits are independent. Omitted harness dimensions
-  stay unlimited; omitted sandbox dimensions retain benchmark values.
-- `runtime.backend` selects endpoint behavior; `runtime.mode` selects ownership.
-  DeepSeek and generic `openai` are external only. SGLang can be external or
-  managed; managed configuration validates native YAML model, port, and GPU
-  selection before starting one host process for the run.
-- `model.id` must match the served model. DeepSeek Flash profiles use
-  `deepseek-flash`; preflight checks the live catalog. Do not put keys in JSON.
-- Official DeepSeek can load ignored root `DEEPSEEK_API.key`: owner-readable,
-  current-user-owned regular file, no symlink or group/world permissions.
-  An invalid existing file fails closed; absence permits environment fallback.
-  Other credentials come from their configured environment variable names.
-- Remove the configured credential from managed SGLang's child environment.
-  Use HTTPS for remote/credentialed endpoints; trusted local HTTP uses a
-  non-secret placeholder. This is operator policy; URL validation does not yet
-  enforce locality (see [transport gap](../docs/implementation/model-runtime.md#implementation-gap-http-transport-policy)).
+- Harness selection and deployment selection are separate. Currently harness and
+  sandbox require the same local Docker daemon; only embedded bridges work.
+  Reject unsupported placement before effects; do not imply Kubernetes support.
+- Declare `overrides_file` explicitly (`""` disables overrides). Keep harness and
+  sandbox resource limits independent; preserve omission/default semantics.
+- Match model IDs to the served catalog. Keep credential values out of profiles,
+  metadata, logs, and results; use configured environment-variable references.
+- The ignored root `DEEPSEEK_API.key` must be a private, current-user-owned regular
+  file, never a symlink. Invalid files fail closed; absence allows env fallback.
+- Remove model credentials from managed SGLang's child environment. Use HTTPS for
+  remote/credentialed endpoints; local HTTP uses a non-secret placeholder. URL
+  validation does not enforce this [transport policy](../docs/implementation/model-runtime.md#implementation-gap-http-transport-policy).
+- `aries setup PROFILE` only prepares pinned data/images; it must not contact
+  model endpoints or start a model runtime. `aries PROFILE` runs the experiment.
 
-`./bin/aries PROFILE.json` prepares inputs and runs. `./bin/aries setup
-PROFILE.json` only prewarms pinned data/images; it neither contacts model endpoints
-nor starts a runtime. ARIES does not install SGLang or download model weights.
-
-Human references: [configuration](../docs/configuration.md),
-[quick start](../docs/quick-start.md),
-[runtime](../docs/design/runtime.md), [support matrix](../docs/supported.md).
+Usage: [quick start](../docs/quick-start.md), [runtime contract](../docs/design/runtime.md).

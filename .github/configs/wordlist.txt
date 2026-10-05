@@ -1,5 +1,6 @@
 agentharness
 agentic
+allowlist
 anonymized
 antgroup
 api
@@ -10,11 +11,13 @@ asr
 backend
 backends
 backoff
+basenames
 bursty
 cadvisor
 centric
 chengzhi
 cli
+CLI's
 cmd
 codebase
 config
@@ -27,6 +30,7 @@ ctrf
 deduplicates
 deepseek
 deepseek's
+disambiguates
 DNS
 docker
 dockerfile
@@ -104,6 +108,7 @@ reflogs
 reimplement
 relicense
 renderer
+renderers
 replayable
 roadmap
 runnable
@@ -112,6 +117,7 @@ runtimes
 sandbox
 sandboxes
 sanitization
+schemas
 scp
 sdk
 searxng
@@ -141,6 +147,7 @@ toml's
 toolbridge
 toolchain
 toolsandbox
+toolset
 toolsets
 tp
 tpot

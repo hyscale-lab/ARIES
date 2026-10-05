@@ -166,4 +166,6 @@ func TestPrepareSandboxRequiresLiveSandbox(t *testing.T) {
 	}
 }
 
-func (s *prepareSandboxFake) NetworkName() string { return "test-network" }
+func (s *prepareSandboxFake) Connectivity() core.HarnessConnectivity {
+	return core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "test-network"}}
+}

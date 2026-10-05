@@ -1,49 +1,31 @@
 # Component contracts
 
-| Role | Owns | Implementation |
-| --- | --- | --- |
-| Benchmark | Task data, sanitization, private verifier, independent evaluation | `pkg/benchmark/*` |
-| AgentHarness | Agent process/container, model configuration, private telemetry | `pkg/harness/{hermes,openclaw}` |
-| ToolSandbox | Live task environment through evaluation, task execution policy | `pkg/sandbox` |
-| ToolBridge | Temporary authenticated access to one exact sandbox; revocation | `pkg/bridge/{hermesssh,openclawssh}` |
+Follow [Runner interfaces](../pkg/runner/interfaces.go) and [lifecycle](architecture.md).
 
-Contracts: [runner/interfaces.go](../pkg/runner/interfaces.go) defines
-`Benchmark.Tasks/PrepareSandbox/Evaluate`, `AgentHarness.Start/Run/Stop`,
-`ToolSandbox.Start/Stop`, and `ToolBridge.Start/Stop`. `Sandbox` is a live
-capability, not another role. Its required `NetworkName()` returns the task
-attachment; current harnesses require a nonempty shared network name. Keep implementations independent; a paired bridge
-may use a narrow sandbox capability.
+| Role | Required boundary |
+| --- | --- |
+| Benchmark | Own tasks, sanitization, private verifier, and independent evaluation. |
+| AgentHarness | Own the agent runtime, model interaction, and private evidence; retain distinct telemetry entries. |
+| ToolSandbox | Keep the task environment alive through evaluation. |
+| ToolBridge | Grant temporary access to one exact sandbox; confirm revocation. |
 
-## Benchmark changes
+- Keep implementations independent; a paired bridge may consume a narrow sandbox
+  capability. Pair Hermes/OpenClaw with their corresponding SSH bridges.
+- Preserve exact argv/workdir and native protocol semantics. Never retry ambiguous
+  submissions, widen accepted payloads to hide failures, or enable Hermes credential sync.
+- Pass placement and resolved service URLs explicitly; deployment interprets
+  attachment details. Keep these separate from tool credentials.
+- Reuse shared harness ownership and credential mechanics. Retain ownership on
+  failed removal; Run snapshots survive Stop, which prevents new admission.
+  Keep native defaults and credential fallback policies intact; redacted errors
+  must not expose secrets through their cause chain.
+- Revoke bridges only after draining sessions, commands, and evidence. Keep replay
+  inputs private. Use Moby for Docker; remove runtimes before their attachments.
+  Command cancellation must preserve the sandbox needed for evaluation.
+- Preserve benchmark-specific isolation: pinned inputs, sanitized candidate state,
+  private test/reference material, and all required verifier checks. Do not change
+  score meaning when refactoring evaluation.
 
-- Terminal-Bench derives image/workdir from pinned task data; verifier inputs
-  remain private until isolation is confirmed.
-- SWE-bench Pro pins dataset and evaluator separately. Preserve sanitized Git
-  snapshots, candidate capture, private verifier staging, numeric execution
-  identity, and all required FAIL_TO_PASS/PASS_TO_PASS checks.
-- Deep Research Bench and SWE-Atlas QA keep rubrics/reference material host-side;
-  download the agent output only after isolation. DRB's optional FACT pass does
-  not change its RACE-derived score.
-
-## Harness and bridge changes
-
-Pair Hermes with `hermes-ssh`, OpenClaw with `openclaw-ssh`. Each bridge implements
-its harness's actual protocol. Preserve exact argv and workdir semantics; never
-concatenate user commands. Do not widen accepted payloads merely to silence a failure. Hermes credential-file sync is
-denied. OpenClaw's ambiguous agent requests must not be retried.
-
-Harnesses own their deployment transports, not task sandboxes or evaluation.
-Bridge revocation drains sessions, commands, and evidence and removes temporary
-credentials. Replayable input stays private. Attachment comes from
-`HarnessRequest.Network`, separately from `ToolEndpoint` credentials.
-
-## Sandbox and deployment changes
-
-Docker uses the Moby SDK; never shell out to Docker. Task environments own network identity,
-ownership checks, and bridge address resolution. Remove containers before their
-networks. Cancellation must terminate command processes without prematurely
-stopping the sandbox needed for evaluation.
-
-Human references: [benchmark](../docs/design/benchmark.md),
-[harness](../docs/design/harness.md), [bridge](../docs/design/bridge.md),
-[sandbox](../docs/design/sandbox.md), [deployment](../docs/design/deployment.md).
+Details: [benchmark](../docs/design/benchmark.md), [harness](../docs/design/harness.md),
+[bridge](../docs/design/bridge.md), [sandbox](../docs/design/sandbox.md),
+[deployment](../docs/design/deployment.md), [implementations](../docs/implementation/README.md).

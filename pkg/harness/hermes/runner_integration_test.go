@@ -3,6 +3,8 @@
 package hermes
 
 import (
+	harnesscommon "github.com/hyscale-lab/aries/pkg/harness"
+
 	"context"
 	"encoding/json"
 	"errors"
@@ -31,9 +33,10 @@ import (
 // deterministic host endpoint reachable through the task's Docker gateway.
 type runnerHermes struct {
 	*Manager
-	modelPort string
-	id        string
-	endpoint  string
+	modelPort    string
+	id           string
+	endpoint     string
+	identityPath string
 }
 
 func (h *runnerHermes) Start(ctx context.Context, request core.HarnessRequest) error {
@@ -43,10 +46,11 @@ func (h *runnerHermes) Start(ctx context.Context, request core.HarnessRequest) e
 	}
 	request.Model.BaseURL = "http://" + net.JoinHostPort(host, h.modelPort) + "/v1"
 	h.endpoint = request.Endpoint.Address
+	h.identityPath = request.Endpoint.IdentitySourceFile
 	if err := h.Manager.Start(ctx, request); err != nil {
 		return err
 	}
-	h.id = h.active.containerID
+	h.id = h.active.ID
 	return nil
 }
 
@@ -66,9 +70,9 @@ func (b *hermesRunnerBenchmark) PrepareSandbox(ctx context.Context, _ core.Task,
 	b.live = s
 	identity := s.(interface {
 		ContainerID() string
-		NetworkName() string
+		Connectivity() core.HarnessConnectivity
 	})
-	b.containerID, b.network = identity.ContainerID(), identity.NetworkName()
+	b.containerID, b.network = identity.ContainerID(), identity.Connectivity().Placement.DockerNetwork
 	result, err := s.Exec(ctx, core.Command{Path: "/bin/sh", Args: []string{"-c", "test ! -e /tmp/aries-private-verifier && test ! -e /tmp/aries-hermes-proof"}})
 	if err != nil {
 		return err
@@ -103,6 +107,20 @@ func (b *hermesRunnerBenchmark) Evaluate(ctx context.Context, _ core.Task, s run
 }
 
 func TestRunnerThroughRealHermesSSHBridge(t *testing.T) {
+	runHermesBridgeScenario(t, false, 1)
+}
+
+func TestGatewayRepeatedAndConcurrentTaskOccurrences(t *testing.T) {
+	for _, name := range []string{"first", "second"} {
+		t.Run(name, func(t *testing.T) { t.Parallel(); runHermesBridgeScenario(t, false, 2) })
+	}
+}
+
+func TestGatewayCancelsDuringSandboxCommand(t *testing.T) {
+	runHermesBridgeScenario(t, true, 1)
+}
+
+func runHermesBridgeScenario(t *testing.T, cancelCommand bool, repetitions int, derivedImage ...string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	api, err := client.New(client.FromEnv)
@@ -172,7 +190,11 @@ func TestRunnerThroughRealHermesSSHBridge(t *testing.T) {
 			}
 			if !observed {
 				toolResponses.Add(1)
-				args, _ := json.Marshal(map[string]any{"command": "test ! -e /tmp/aries-private-verifier && test ! -e " + modelKeyPath + " && printf 'ARIES_HERMES_BRIDGE_OK\\n' > /tmp/aries-hermes-proof && cat /tmp/aries-hermes-proof"})
+				command := "test ! -e /tmp/aries-private-verifier && test ! -e " + modelKeyPath + " && test \"$(pwd)\" = " + tasks[0].Environment.Workdir + " && printf 'ARIES_HERMES_BRIDGE_OK\\n' > /tmp/aries-hermes-proof && cat /tmp/aries-hermes-proof"
+				if cancelCommand {
+					command += "; sleep 600"
+				}
+				args, _ := json.Marshal(map[string]any{"command": command})
 				message = map[string]any{"role": "assistant", "content": nil, "tool_calls": []any{map[string]any{"id": "aries-terminal", "type": "function", "function": map[string]any{"name": "terminal", "arguments": string(args)}}}}
 				finish = "tool_calls"
 			}
@@ -222,9 +244,26 @@ func TestRunnerThroughRealHermesSSHBridge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, err := New(Options{Deployment: integrationDeployment(t), Image: versions.Hermes.Image, OutputDir: output, StartTimeout: 90 * time.Second, AgentTimeout: 90 * time.Second, CleanupTimeout: 45 * time.Second, APIKeyLookup: func(string) ([]byte, bool) { return []byte(key), true }})
+	image := versions.Hermes.Image
+	if len(derivedImage) > 0 {
+		image = derivedImage[0]
+	}
+	manager, err := New(Options{Runtime: harnesscommon.RuntimeOptions{
+
+		Deployment:     integrationDeployment(t),
+		Image:          image,
+		OutputDir:      output,
+		StartTimeout:   90 * time.Second,
+		AgentTimeout:   90 * time.Second,
+		CleanupTimeout: 45 * time.Second,
+		APIKeyLookup:   func(string) ([]byte, bool) { return []byte(key), true },
+	}})
 	if err != nil {
 		t.Fatal(err)
+	}
+	taskTimeout := 90 * time.Second
+	if cancelCommand {
+		taskTimeout = 8 * time.Second
 	}
 	harness := &runnerHermes{Manager: manager, modelPort: port}
 	t.Cleanup(func() {
@@ -244,35 +283,60 @@ func TestRunnerThroughRealHermesSSHBridge(t *testing.T) {
 	if err := os.WriteFile(verifier, []byte("test \"$(cat /tmp/aries-hermes-proof)\" = ARIES_HERMES_BRIDGE_OK\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	benchmark := &hermesRunnerBenchmark{api: api, harness: harness, verifier: verifier, task: core.Task{ID: "hermes-bridge", Instruction: "Use the terminal tool to write ARIES_HERMES_BRIDGE_OK to /tmp/aries-hermes-proof, then report completion.", Timeout: 90 * time.Second, Environment: tasks[0].Environment}}
+	benchmark := &hermesRunnerBenchmark{api: api, harness: harness, verifier: verifier, task: core.Task{ID: "hermes-bridge", Instruction: "Use the terminal tool to write ARIES_HERMES_BRIDGE_OK to /tmp/aries-hermes-proof, then report completion.", Timeout: taskTimeout, Environment: tasks[0].Environment}}
 	run, err := runner.New(benchmark, harness, sandbox, bridge, runner.Options{RunID: "hermes-runner-integration", OutputDir: output, Model: core.ModelConfig{Provider: "openai", BaseURL: "http://127.0.0.1/v1", Model: "aries-deterministic", APIKeyEnv: "ARIES_TEST_MODEL_KEY"}, CleanupTimeout: 60 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := run.Run(ctx)
-	if err != nil {
-		t.Fatalf("real Hermes Runner: %v; %#v", err, result)
-	}
-	if len(result.Tasks) != 1 {
-		t.Fatalf("results: %#v", result)
-	}
-	task := result.Tasks[0]
-	if task.Harness.Status != core.StatusSucceeded || task.Evaluation.Reward != 1 || !benchmark.evaluated || task.Isolation.Status != core.StatusConfirmed || task.Cleanup.Status != core.StatusSucceeded || toolResponses.Load() != 1 {
-		t.Fatalf("Runner task: %#v; tool calls %d", task, toolResponses.Load())
-	}
-	for _, id := range []string{harness.id, benchmark.containerID} {
-		if _, err := api.ContainerInspect(ctx, id, client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
-			t.Errorf("container %s not absent: %v", id, err)
+	for occurrence := 0; occurrence < repetitions; occurrence++ {
+		// Match internal/app.nextTaskOccurrence: repeated logical task IDs get
+		// distinct execution IDs, preserving every occurrence's evidence.
+		benchmark.task.ID = fmt.Sprintf("hermes-bridge-%03d", occurrence+1)
+		benchmark.evaluated = false
+		result, err := run.Run(ctx)
+		if err != nil && !cancelCommand {
+			t.Fatalf("real Hermes Runner: %v; %#v", err, result)
 		}
-	}
-	if _, err := api.NetworkInspect(ctx, benchmark.network, client.NetworkInspectOptions{}); !errdefs.IsNotFound(err) {
-		t.Errorf("network not absent: %v", err)
-	}
-	retained, err := os.ReadFile(filepath.Join(output, "hermes-bridge", "harness", "config.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(retained), key) {
-		t.Fatal("model credential leaked into retained configuration")
+		if len(result.Tasks) != 1 {
+			t.Fatalf("results: %#v", result)
+		}
+		task := result.Tasks[0]
+		expectedStatus := core.StatusSucceeded
+		if cancelCommand {
+			expectedStatus = core.StatusCanceled
+		}
+		if task.Harness.Status != expectedStatus || task.Evaluation.Reward != 1 || !benchmark.evaluated || task.Isolation.Status != core.StatusConfirmed || task.Cleanup.Status != core.StatusSucceeded || toolResponses.Load() != int32(occurrence+1) {
+			t.Fatalf("Runner task: %#v; tool calls %d", task, toolResponses.Load())
+		}
+		for _, id := range []string{harness.id, benchmark.containerID} {
+			if _, err := api.ContainerInspect(ctx, id, client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
+				t.Errorf("container %s not absent: %v", id, err)
+			}
+		}
+		if _, err := os.Stat(harness.identityPath); !os.IsNotExist(err) {
+			t.Errorf("bridge credential remains: %v", err)
+		}
+		if _, err := api.NetworkInspect(ctx, benchmark.network, client.NetworkInspectOptions{}); !errdefs.IsNotFound(err) {
+			t.Errorf("network not absent: %v", err)
+		}
+		if !cancelCommand {
+			if len(derivedImage) > 0 {
+				assertToolSpan(t, filepath.Join(output, benchmark.task.ID, "harness", "telemetry", "otel-spans.jsonl"), "tool.terminal", "aries-terminal")
+			}
+			trajectory, err := os.ReadFile(filepath.Join(output, benchmark.task.ID, "harness", "telemetry", "sessions.jsonl"))
+			if err != nil || !strings.Contains(string(trajectory), "ARIES_HERMES_BRIDGE_OK") {
+				t.Fatalf("missing task trajectory: %v (%s)", err, trajectory)
+			}
+			if !strings.Contains(task.Harness.FinalResponse, "Completed the sandbox mutation") {
+				t.Fatalf("final response = %q", task.Harness.FinalResponse)
+			}
+		}
+		retained, err := os.ReadFile(filepath.Join(output, benchmark.task.ID, "harness", "config.yaml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(retained), key) {
+			t.Fatal("model credential leaked into retained configuration")
+		}
 	}
 }

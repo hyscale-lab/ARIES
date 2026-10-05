@@ -588,4 +588,6 @@ func TestBinaryStdinNoteMatchesRawRetention(t *testing.T) {
 	}
 }
 
-func (s *testSandbox) NetworkName() string { return "test-network" }
+func (s *testSandbox) Connectivity() core.HarnessConnectivity {
+	return core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "test-network"}}
+}

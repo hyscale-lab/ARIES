@@ -1349,6 +1349,10 @@ func TestLoadTaskReadsTheTerminalBench21TasksLayout(t *testing.T) {
 	}
 }
 
-func (s *fakeSandbox) NetworkName() string { return "test-network" }
+func (s *fakeSandbox) Connectivity() core.HarnessConnectivity {
+	return core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "test-network"}}
+}
 
-func (s *prepareSandboxFake) NetworkName() string { return "test-network" }
+func (s *prepareSandboxFake) Connectivity() core.HarnessConnectivity {
+	return core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "test-network"}}
+}

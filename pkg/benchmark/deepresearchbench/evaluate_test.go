@@ -378,4 +378,6 @@ func TestEvaluateFactErrorDoesNotFailRaceDrivenOutcome(t *testing.T) {
 	}
 }
 
-func (s *evaluateFake) NetworkName() string { return "test-network" }
+func (s *evaluateFake) Connectivity() core.HarnessConnectivity {
+	return core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "test-network"}}
+}
