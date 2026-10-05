@@ -22,4 +22,9 @@ Hermes derives its local image from the catalog’s base image and OTel plugin p
 - `aries setup PROFILE` only prepares pinned data/images; it must not contact
   model endpoints or start a model runtime. `aries PROFILE` runs the experiment.
 
-Usage: [quick start](../docs/quick-start.md), [runtime contract](../docs/design/runtime.md).
+`profiles/experiments/` holds the paper-reproduction profiles; their settings are
+documented in [configuration](../docs/configuration.md#paper-reproduction-profiles).
+
+Human references: [configuration](../docs/configuration.md),
+[quick start](../docs/quick-start.md),
+[runtime](../docs/design/runtime.md), [support matrix](../docs/supported.md).

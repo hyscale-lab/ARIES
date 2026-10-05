@@ -128,6 +128,14 @@ For repository-level software-engineering tasks, see the
 requires Git LFS and access to the pinned public dataset, evaluator repository,
 and selected `linux/amd64` task images.
 
+## Reproducing the paper
+
+The [`profiles/experiments/`](profiles/experiments/) directory contains the profiles used to
+reproduce the results of the paper: twenty-task Terminal-Bench 2, SWE-Bench
+Pro, and Deep Research Bench runs for both OpenClaw and Hermes, at concurrency 1 with no container
+resource limits. Run them from the repository root, for example
+`./bin/aries profiles/experiments/openclaw-tb2-twenty-deepseek.json`.
+
 ## Trace dataset
 
 The repository includes the [Ant Group Agentic LLM Trace 2026](docs/ant-group-agent-LLM-trace.md)

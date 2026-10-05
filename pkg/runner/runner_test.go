@@ -470,6 +470,7 @@ func TestEffectiveRuntimeKeepsResourceSidesIndependent(t *testing.T) {
 	harnessCPU, harnessMemory := 1.25, 1024
 	sandboxCPU, sandboxMemory := 3.5, 6144
 	original := core.Task{Timeout: 5 * time.Minute, Environment: core.Environment{CPU: 2, MemoryMB: 2048, Env: map[string]string{"KEEP": "yes"}}}
+	zeroCPU, zeroMemory := 0.0, 0
 	tests := []struct {
 		name              string
 		overrides         RuntimeOverrides
@@ -480,6 +481,8 @@ func TestEffectiveRuntimeKeepsResourceSidesIndependent(t *testing.T) {
 	}{
 		{name: "neither", wantSandboxCPU: 2, wantSandboxMemory: 2048},
 		{name: "harness only", overrides: RuntimeOverrides{HarnessResources: ResourceOverrides{CPU: &harnessCPU, MemoryMB: &harnessMemory}}, wantSandboxCPU: 2, wantSandboxMemory: 2048, wantHarnessCPU: true, wantHarnessMemory: true},
+		{name: "sandbox unlimited", overrides: RuntimeOverrides{AgentSandboxResources: ResourceOverrides{CPU: &zeroCPU, MemoryMB: &zeroMemory}}},
+		{name: "harness unlimited", overrides: RuntimeOverrides{HarnessResources: ResourceOverrides{CPU: &zeroCPU, MemoryMB: &zeroMemory}}, wantSandboxCPU: 2, wantSandboxMemory: 2048},
 		{name: "sandbox only", overrides: RuntimeOverrides{AgentSandboxResources: ResourceOverrides{CPU: &sandboxCPU, MemoryMB: &sandboxMemory}}, wantSandboxCPU: sandboxCPU, wantSandboxMemory: sandboxMemory},
 		{name: "both different", overrides: RuntimeOverrides{HarnessResources: ResourceOverrides{CPU: &harnessCPU, MemoryMB: &harnessMemory}, AgentSandboxResources: ResourceOverrides{CPU: &sandboxCPU, MemoryMB: &sandboxMemory}}, wantSandboxCPU: sandboxCPU, wantSandboxMemory: sandboxMemory, wantHarnessCPU: true, wantHarnessMemory: true},
 	}

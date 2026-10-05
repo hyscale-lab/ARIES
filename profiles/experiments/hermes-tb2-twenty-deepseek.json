@@ -1,0 +1,66 @@
+{
+  "name": "hermes-tb2-twenty-deepseek",
+  "versions_file": "../../configs/versions.json",
+  "overrides_file": "no-limits-overrides.json",
+  "execution": {
+    "concurrency": 1
+  },
+  "benchmark": {
+    "type": "terminalbench2",
+    "root": ".cache/terminal-bench-2-1",
+    "tasks": [
+      "code-from-image",
+      "compile-compcert",
+      "crack-7z-hash",
+      "fix-code-vulnerability",
+      "hf-model-inference",
+      "kv-store-grpc",
+      "overfull-hbox",
+      "circuit-fibsqrt",
+      "protein-assembly",
+      "video-processing",
+      "break-filter-js-from-html",
+      "constraints-scheduling",
+      "count-dataset-tokens",
+      "dna-assembly",
+      "filter-js-from-html",
+      "financial-document-processor",
+      "git-leak-recovery",
+      "regex-log",
+      "sparql-university",
+      "torch-tensor-parallelism"
+    ]
+  },
+  "harness": {
+    "type": "hermes",
+    "deployment": {
+      "backend": "docker",
+      "docker": {
+        "socket": "/var/run/docker.sock"
+      }
+    }
+  },
+  "sandbox": {
+    "deployment": {
+      "backend": "docker",
+      "docker": {
+        "socket": "/var/run/docker.sock"
+      }
+    }
+  },
+  "bridge": {
+    "type": "hermes-ssh",
+    "mode": "embedded"
+  },
+  "runtime": {
+    "backend": "deepseek",
+    "mode": "external"
+  },
+  "model": {
+    "base_url": "https://api.deepseek.com",
+    "api_key_env": "DEEPSEEK_API_KEY",
+    "id": "deepseek-flash",
+    "reasoning_effort": "high"
+  },
+  "output_dir": "runs"
+}

@@ -634,11 +634,15 @@ func TestLoadRuntimeOverridesStrictSparseAndChecked(t *testing.T) {
 	if overrides.VerifierTimeoutFloor == nil || *overrides.VerifierTimeoutFloor != 15*time.Minute {
 		t.Fatalf("%#v", overrides)
 	}
+	unlimited, err := LoadRuntimeOverrides(write("unlimited.json", `{"harness_resources":{"cpu":0,"memory_mb":0},"agent_sandbox_resources":{"cpu":0,"memory_mb":0}}`))
+	if err != nil || unlimited.HarnessResources.CPU == nil || *unlimited.HarnessResources.CPU != 0 || unlimited.HarnessResources.MemoryMB == nil || *unlimited.HarnessResources.MemoryMB != 0 || unlimited.AgentSandboxResources.CPU == nil || *unlimited.AgentSandboxResources.CPU != 0 || unlimited.AgentSandboxResources.MemoryMB == nil || *unlimited.AgentSandboxResources.MemoryMB != 0 {
+		t.Fatalf("unlimited sandbox = %#v, err = %v", unlimited, err)
+	}
 	sparse, err := LoadRuntimeOverrides(write("sparse.json", `{"agent_timeout_seconds":12.5}`))
 	if err != nil || sparse.VerifierTimeoutFloor != nil {
 		t.Fatalf("sparse = %#v, err = %v", sparse, err)
 	}
-	for name, content := range map[string]string{"unknown": `{"future":1}`, "nested": `{"harness_resources":{"future":1}}`, "trailing": `{} {}`, "zero": `{"agent_sandbox_resources":{"cpu":0}}`, "overflow": `{"agent_timeout_seconds":1e999}`, "floor zero": `{"verifier_timeout_floor_seconds":0}`, "floor negative": `{"verifier_timeout_floor_seconds":-1}`} {
+	for name, content := range map[string]string{"unknown": `{"future":1}`, "nested": `{"harness_resources":{"future":1}}`, "trailing": `{} {}`, "harness negative": `{"harness_resources":{"cpu":-1}}`, "harness negative memory": `{"harness_resources":{"memory_mb":-1}}`, "sandbox negative": `{"agent_sandbox_resources":{"cpu":-1}}`, "sandbox negative memory": `{"agent_sandbox_resources":{"memory_mb":-1}}`, "overflow": `{"agent_timeout_seconds":1e999}`, "floor zero": `{"verifier_timeout_floor_seconds":0}`, "floor negative": `{"verifier_timeout_floor_seconds":-1}`} {
 		if _, err := LoadRuntimeOverrides(write(name+".json", content)); err == nil {
 			t.Fatalf("accepted %s", name)
 		}
