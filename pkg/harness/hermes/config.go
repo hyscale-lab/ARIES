@@ -91,7 +91,8 @@ type renderSettings struct {
 //   - custom_providers[0].extra_body is the profile's opaque JSON object.
 //     Hermes matches the entry by base_url and merges the object into every
 //     chat request; that merge happens only for provider "custom" (see
-//     hermesProvider), so the block is refused under DeepSeek.
+//     hermesProvider). Explicit reasoning also uses this native custom route
+//     because the pinned DeepSeek profile does not recognize deepseek-flash.
 func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *VoiceSTTOptions) ([]byte, error) {
 	if err := validateModel(model); err != nil {
 		return nil, err
@@ -127,6 +128,41 @@ func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *Voi
 		}
 	}
 	requestBody := settings.extraBody
+	if len(requestBody) != 0 && model.Provider == "deepseek" {
+		return nil, errors.New("Hermes merges user extra_body only for the custom provider, not deepseek")
+	}
+	provider := hermesProvider(model.Provider)
+	reasoningBody, err := harness.ReasoningBody(model)
+	if err != nil {
+		return nil, err
+	}
+	if reasoningBody != nil {
+		object := make(map[string]json.RawMessage)
+		if len(requestBody) != 0 {
+			if err := json.Unmarshal(requestBody, &object); err != nil || len(object) == 0 {
+				return nil, errors.New("Hermes extra_body must be a non-empty JSON object")
+			}
+		}
+		for _, key := range []string{"reasoning_effort", "thinking", "reasoning"} {
+			if _, exists := object[key]; exists {
+				return nil, fmt.Errorf("Hermes model.reasoning_effort conflicts with extra_body.%s", key)
+			}
+		}
+		for key, value := range reasoningBody {
+			content, err := json.Marshal(value)
+			if err != nil {
+				return nil, fmt.Errorf("Hermes reasoning request body: %w", err)
+			}
+			object[key] = content
+		}
+		requestBody, err = json.Marshal(object)
+		if err != nil {
+			return nil, fmt.Errorf("Hermes reasoning request body: %w", err)
+		}
+		// The pin's DeepSeek profile omits thinking controls for deepseek-flash.
+		// Native custom-provider extras preserve the exact requested wire fields.
+		provider = "custom"
+	}
 	if model.Temperature != nil {
 		if !harness.OpenAICompatible(model.Provider) {
 			return nil, errors.New("Hermes temperature requires the sglang or openai backend")
@@ -149,7 +185,7 @@ func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *Voi
 	}
 	var extraBody string
 	if len(requestBody) != 0 {
-		if hermesProvider(model.Provider) != "custom" {
+		if provider != "custom" {
 			return nil, errors.New("Hermes merges extra_body only for the custom provider, not " + model.Provider)
 		}
 		indented, err := indentedJSONObject(requestBody, "      ")
@@ -161,7 +197,7 @@ func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *Voi
 	var output bytes.Buffer
 	output.WriteString("model:\n")
 	output.WriteString("  default: " + yamlString(model.Model) + "\n")
-	output.WriteString("  provider: " + yamlString(hermesProvider(model.Provider)) + "\n")
+	output.WriteString("  provider: " + yamlString(provider) + "\n")
 	output.WriteString("  base_url: " + yamlString(model.BaseURL) + "\n")
 	output.WriteString("  api_key: " + yamlString("${"+model.APIKeyEnv+"}") + "\n")
 	output.WriteString("  api_mode: \"chat_completions\"\n")

@@ -142,8 +142,26 @@ type providerConfig struct {
 }
 
 type modelRecord struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID        string       `json:"id"`
+	Name      string       `json:"name"`
+	Reasoning *bool        `json:"reasoning,omitempty"`
+	Compat    *modelCompat `json:"compat,omitempty"`
+}
+
+// Explicit effort is serialized through native extra_body. This prevents the
+// pinned provider adapter from remapping DeepSeek low to high.
+type modelCompat struct {
+	ThinkingFormat            string   `json:"thinkingFormat,omitempty"`
+	SupportsReasoningEffort   bool     `json:"supportsReasoningEffort"`
+	SupportedReasoningEfforts []string `json:"supportedReasoningEfforts,omitempty"`
+}
+
+type modelDefaults struct {
+	Params modelParams `json:"params"`
+}
+type modelParams struct {
+	Thinking  string         `json:"thinking"`
+	ExtraBody map[string]any `json:"extra_body"`
 }
 
 type agentsConfig struct {
@@ -151,9 +169,10 @@ type agentsConfig struct {
 }
 
 type agentDefaults struct {
-	Model     primaryModel     `json:"model"`
-	Sandbox   sandboxConfig    `json:"sandbox"`
-	Subagents *subagentsConfig `json:"subagents,omitempty"`
+	Model     primaryModel             `json:"model"`
+	Models    map[string]modelDefaults `json:"models,omitempty"`
+	Sandbox   sandboxConfig            `json:"sandbox"`
+	Subagents *subagentsConfig         `json:"subagents,omitempty"`
 }
 
 // subagentsConfig bounds sessions_spawn concurrency. Omitted entirely when no
@@ -186,6 +205,10 @@ type sshConfig struct {
 
 func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, mode string, searchURL string, webSearchEnabled, extractEnabled, subagentsEnabled bool, maxConcurrentSubagents int, mcp ...MCPOptions) ([]byte, error) {
 	if err := validateModel(model); err != nil {
+		return nil, err
+	}
+	reasoningBody, err := harness.ReasoningBody(model)
+	if err != nil {
 		return nil, err
 	}
 	if harness.OpenAICompatible(model.Provider) {
@@ -231,6 +254,23 @@ func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, mode strin
 			},
 		}},
 		Tools: toolPolicy{Deny: denyToolList(subagentsEnabled)},
+	}
+	if reasoningBody != nil {
+		provider := configuration.Models.Providers[providerID]
+		capable := true
+		provider.Models[0].Reasoning = &capable
+		provider.Models[0].Compat = &modelCompat{
+			SupportsReasoningEffort:   false,
+			SupportedReasoningEfforts: []string{"minimal", "low", "medium", "high", "xhigh", "max"},
+		}
+		if model.Provider == "deepseek" {
+			provider.Models[0].Compat.ThinkingFormat = "deepseek"
+			provider.Models[0].Compat.SupportedReasoningEfforts = []string{"low", "high", "xhigh", "max"}
+		}
+		configuration.Models.Providers[providerID] = provider
+		configuration.Agents.Defaults.Models = map[string]modelDefaults{
+			providerID + "/" + model.Model: {Params: modelParams{Thinking: requestedThinking(model), ExtraBody: reasoningBody}},
+		}
 	}
 	if mode == ModeRealtime {
 		configuration.Talk = &talkConfig{Realtime: realtimeTalkConfig{ConsultRouting: consultRoutingForceAgent}}

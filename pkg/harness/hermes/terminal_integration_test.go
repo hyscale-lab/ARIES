@@ -16,8 +16,8 @@ import (
 // Exercise terminal workdir and spans through the native Gateway and real bridge.
 func TestTerminalCallWithoutWorkdirRunsInTheEndpointWorkdir(t *testing.T) {
 	const base = "docker.io/nousresearch/hermes-agent:v2026.8.31"
-	t.Run("base", func(t *testing.T) { runHermesBridgeScenario(t, false, 1) })
-	t.Run("derived", func(t *testing.T) { runHermesBridgeScenario(t, false, 1, preparedImage(t, base)) })
+	t.Run("base", func(t *testing.T) { runHermesBridgeScenario(t, false, 1, false) })
+	t.Run("derived", func(t *testing.T) { runHermesBridgeScenario(t, false, 1, true, preparedImage(t, base)) })
 }
 
 // preparedImage builds, or reuses from the local cache, the image ARIES runs

@@ -19,6 +19,7 @@ import (
 
 	"github.com/hyscale-lab/aries/pkg/containerimage"
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/harness"
 )
 
 const defaultOutputDir = "runs"
@@ -100,9 +101,10 @@ type ResourceOverrides struct {
 }
 
 type ProfileModel struct {
-	ID        string `json:"id"`
-	BaseURL   string `json:"base_url"`
-	APIKeyEnv string `json:"api_key_env"`
+	ID              string `json:"id"`
+	BaseURL         string `json:"base_url"`
+	APIKeyEnv       string `json:"api_key_env"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	// ContextLength, MaxTokens, and Temperature are optional. They reach the
 	// harness through core.ModelConfig. Only Hermes renders them, so a
 	// profile that sets one under another harness is rejected.
@@ -405,6 +407,7 @@ func (c Config) CoreModel() core.ModelConfig {
 	return core.ModelConfig{
 		Provider: c.Runtime.Backend, BaseURL: c.Model.BaseURL, Model: c.Model.ID, APIKeyEnv: c.Model.APIKeyEnv,
 		ContextLength: c.Model.ContextLength, MaxTokens: c.Model.MaxTokens, Temperature: c.Model.Temperature,
+		ReasoningEffort: c.Model.ReasoningEffort,
 	}
 }
 
@@ -680,6 +683,20 @@ func (c *Config) validate() error {
 	}
 	if err := c.Model.validateGeneration(c.Harness.Type); err != nil {
 		return err
+	}
+	if _, err := harness.ReasoningBody(c.CoreModel()); err != nil {
+		return err
+	}
+	if c.Model.ReasoningEffort != "" && c.Harness.Hermes != nil {
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal(c.Harness.Hermes.ExtraBody, &object); err != nil {
+			return fmt.Errorf("harness.hermes.extra_body: %w", err)
+		}
+		for _, key := range []string{"thinking", "reasoning", "reasoning_effort"} {
+			if _, exists := object[key]; exists {
+				return fmt.Errorf("model.reasoning_effort conflicts with harness.hermes.extra_body.%s", key)
+			}
+		}
 	}
 	if c.Harness.Compaction != nil && c.Model.ContextLength > 0 && c.Harness.Compaction.ThresholdTokens >= c.Model.ContextLength {
 		return errors.New("harness.compaction.threshold_tokens must be smaller than model.context_length")

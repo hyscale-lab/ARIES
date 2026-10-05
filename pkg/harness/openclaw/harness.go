@@ -331,10 +331,7 @@ func (manager *Manager) Run(ctx context.Context, instruction string) (core.Harne
 		err = errors.New("OpenClaw agent gateway requires operator.write scope")
 	}
 	if err == nil {
-		thinking := ""
-		if disablesThinking(active.Model) {
-			thinking = "off"
-		}
+		thinking := requestedThinking(active.Model)
 		agentResult, err = client.Agent(runCtx, gatewayclient.AgentRequest{
 			Message: instruction, SessionKey: "agent:main:aries-" + active.safeTaskID,
 			IdempotencyKey: active.agentIdempotency, Thinking: thinking,
@@ -469,10 +466,7 @@ func (manager *Manager) runAgentWithTranscript(ctx context.Context, active *sess
 		result.AppendError(err.Error())
 		return err
 	}
-	thinking := ""
-	if disablesThinking(active.Model) {
-		thinking = "off"
-	}
+	thinking := requestedThinking(active.Model)
 	connectSummary, err := client.Connect(ctx, gatewayclient.ConnectOptions{})
 	if err == nil && !connectSummary.HasScope("operator.write") {
 		err = errors.New("OpenClaw agent gateway requires operator.write scope")
@@ -528,8 +522,22 @@ func newSpeechClient(options audioinput.SpeechClientOptions) (speechSynthesizer,
 	return audioinput.NewSpeechClient(options)
 }
 
-func disablesThinking(model core.ModelConfig) bool {
-	return model.BaseURL == "https://api.deepseek.com" && (model.Model == "deepseek-flash" || model.Model == "deepseek-v4-flash" || model.Model == "deepseek-v4-pro")
+// Keep the Gateway's task-level choice consistent with native model params.
+// The custom provider exposes xhigh; extra_body translates DeepSeek max exactly.
+func requestedThinking(model core.ModelConfig) string {
+	switch model.ReasoningEffort {
+	case "off", "none":
+		return "off"
+	case "max":
+		return "xhigh"
+	case "":
+		if model.BaseURL == "https://api.deepseek.com" && (model.Model == "deepseek-flash" || model.Model == "deepseek-v4-flash" || model.Model == "deepseek-v4-pro") {
+			return "off"
+		}
+		return ""
+	default:
+		return model.ReasoningEffort
+	}
 }
 
 func (manager *Manager) gatewayURL(ctx context.Context, active *session) (string, error) {

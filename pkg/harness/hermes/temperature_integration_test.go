@@ -24,7 +24,9 @@ import (
 // Exercise the native Gateway configuration loader and actual model requests.
 func TestRequestSettingsReachRealHermes(t *testing.T) {
 	requireDockerImage(t)
-	for _, temperature := range []float64{0, 0.7} {
+	for index, temperature := range []float64{0, 0.7} {
+		reasoning := []string{"off", "high"}[index]
+		wireReasoning := []string{"none", "high"}[index]
 		t.Run(fmt.Sprint(temperature), func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 			defer cancel()
@@ -93,7 +95,7 @@ func TestRequestSettingsReachRealHermes(t *testing.T) {
 			if err := os.WriteFile(identity, []byte("integration identity"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			request := core.HarnessRequest{Connectivity: connectivity, RunID: "temperature-integration", TaskID: "temperature", Endpoint: core.ToolEndpoint{Protocol: "ssh", Address: "127.0.0.1:2222", Username: "aries", IdentitySourceFile: identity, Workdir: "/app"}, Model: core.ModelConfig{Provider: "openai", BaseURL: "http://" + net.JoinHostPort(endpoint.AdvertiseHost, port) + "/v1", Model: "aries-deterministic", APIKeyEnv: "ARIES_TEST_MODEL_KEY", ContextLength: 262144, MaxTokens: 32768, Temperature: &temperature}}
+			request := core.HarnessRequest{Connectivity: connectivity, RunID: "temperature-integration", TaskID: "temperature", Endpoint: core.ToolEndpoint{Protocol: "ssh", Address: "127.0.0.1:2222", Username: "aries", IdentitySourceFile: identity, Workdir: "/app"}, Model: core.ModelConfig{Provider: "openai", BaseURL: "http://" + net.JoinHostPort(endpoint.AdvertiseHost, port) + "/v1", Model: "aries-deterministic", APIKeyEnv: "ARIES_TEST_MODEL_KEY", ContextLength: 262144, MaxTokens: 32768, Temperature: &temperature, ReasoningEffort: reasoning}}
 			if err := manager.Start(ctx, request); err != nil {
 				t.Fatal(err)
 			}
@@ -134,6 +136,9 @@ func TestRequestSettingsReachRealHermes(t *testing.T) {
 				}
 				if string(body["user"]) != `"aries-temperature-regression"` {
 					t.Errorf("extra body user=%s", body["user"])
+				}
+				if string(body["reasoning_effort"]) != fmt.Sprintf("%q", wireReasoning) {
+					t.Errorf("reasoning_effort=%s, want %s", body["reasoning_effort"], wireReasoning)
 				}
 				if string(body["max_tokens"]) != "32768" {
 					t.Errorf("max_tokens=%s", body["max_tokens"])

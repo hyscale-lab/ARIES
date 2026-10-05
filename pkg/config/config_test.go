@@ -834,6 +834,34 @@ func TestOpenAIBackendIsExternalOnly(t *testing.T) {
 	}
 }
 
+func TestReasoningEffortProfile(t *testing.T) {
+	for _, backend := range []string{"deepseek", "openai", "sglang"} {
+		for _, effort := range []string{"", "off", "none", "minimal", "low", "medium", "high", "xhigh", "max", "invalid"} {
+			t.Run(backend+"/"+effort, func(t *testing.T) {
+				profile := strings.Replace(validConfig, `"backend":"deepseek"`, `"backend":"`+backend+`"`, 1)
+				profile = strings.Replace(profile, `http://127.0.0.1:8080`, `http://127.0.0.1:8080/v1`, 1)
+				profile = strings.Replace(profile, `"api_key_env":"DEEPSEEK_API_KEY"`, `"api_key_env":"DEEPSEEK_API_KEY","reasoning_effort":"`+effort+`"`, 1)
+				cfg, err := Decode(strings.NewReader(profile))
+				reject := effort == "invalid" || backend == "deepseek" && (effort == "minimal" || effort == "medium" || effort == "xhigh")
+				if reject {
+					if err == nil || !strings.Contains(err.Error(), "reasoning_effort") {
+						t.Fatalf("expected effort rejection, got %v", err)
+					}
+				} else if err != nil || cfg.CoreModel().ReasoningEffort != effort {
+					t.Fatalf("effort lost: %#v, %v", cfg.CoreModel(), err)
+				}
+			})
+		}
+	}
+	for _, key := range []string{"thinking", "reasoning", "reasoning_effort"} {
+		profile := strings.Replace(hermesContextConfig(), `"temperature":1.0`, `"temperature":1.0,"reasoning_effort":"high"`, 1)
+		profile = strings.Replace(profile, hermesExtraBody, `{"`+key+`":"high"}`, 1)
+		if _, err := Decode(strings.NewReader(profile)); err == nil || !strings.Contains(err.Error(), "conflicts") {
+			t.Fatalf("expected conflict for %s, got %v", key, err)
+		}
+	}
+}
+
 const hermesExtraBody = `{"user":"${ARIES_RUN_ID}-${ARIES_TASK_ID}","chat_template_kwargs":{"preserve_thinking":true},"metadata":{"trace":true}}`
 
 func TestHermesOnlyBlocksAndGenerationSettings(t *testing.T) {

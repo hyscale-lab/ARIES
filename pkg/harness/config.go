@@ -80,6 +80,38 @@ func OpenAICompatible(provider string) bool {
 	return provider == "sglang" || provider == "openai"
 }
 
+// ReasoningBody translates an explicit effort into Chat Completions fields.
+// Endpoint/model support is provider-owned; omitted settings preserve defaults.
+func ReasoningBody(model core.ModelConfig) (map[string]any, error) {
+	effort := model.ReasoningEffort
+	if effort == "" {
+		return nil, nil
+	}
+	if effort == "off" {
+		effort = "none"
+	}
+	if model.Provider == "deepseek" {
+		if effort == "none" {
+			return map[string]any{"thinking": map[string]any{"type": "disabled"}}, nil
+		}
+		switch effort {
+		case "low", "high", "max":
+			return map[string]any{"thinking": map[string]any{"type": "enabled"}, "reasoning_effort": effort}, nil
+		default:
+			return nil, errors.New("model.reasoning_effort for DeepSeek must be off, none, low, high, or max")
+		}
+	}
+	if !OpenAICompatible(model.Provider) {
+		return nil, errors.New("model.reasoning_effort requires deepseek, openai, or sglang")
+	}
+	switch effort {
+	case "none", "minimal", "low", "medium", "high", "xhigh", "max":
+		return map[string]any{"reasoning_effort": effort}, nil
+	default:
+		return nil, errors.New("model.reasoning_effort must be off, none, minimal, low, medium, high, xhigh, or max")
+	}
+}
+
 // NormalizeV1BaseURL requires a versioned endpoint and normalizes its trailing slash.
 func NormalizeV1BaseURL(baseURL string) (string, error) {
 	parsed, err := url.Parse(baseURL)
