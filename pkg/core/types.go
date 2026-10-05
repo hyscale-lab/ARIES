@@ -20,6 +20,7 @@ type Environment struct {
 	GPUs         int               `json:"gpus,omitempty"`
 	AllowNetwork bool              `json:"allow_network"`
 	Env          map[string]string `json:"env,omitempty"`
+	Services     TaskServices      `json:"services,omitempty"`
 	ExecUser     string            `json:"-"`
 }
 
@@ -120,18 +121,36 @@ type ToolEndpoint struct {
 	Workdir string `json:"workdir,omitempty"`
 }
 
+// RuntimePlacement carries the task attachment to the deployment implementation.
+// Only Docker is supported; other backends can extend this contract when implemented.
+type RuntimePlacement struct {
+	DockerNetwork string `json:"docker_network,omitempty"`
+}
+
+// TaskServices declares services the benchmark starts during preparation.
+// A zero port means that the task does not provide that service.
+type TaskServices struct {
+	SearchPort int `json:"search_port,omitempty"`
+}
+
+// HarnessConnectivity supplies placement and addresses resolved for that placement.
+// Service addresses contain no credentials.
+type HarnessConnectivity struct {
+	Placement RuntimePlacement `json:"placement"`
+	SearchURL string           `json:"search_url,omitempty"`
+}
+
 // HarnessRequest contains task-local runtime inputs supplied before Run.
 type HarnessRequest struct {
-	// Network is the task attachment supplied by the sandbox, independent of tool credentials.
-	Network   string        `json:"network,omitempty"`
-	RunID     string        `json:"run_id"`
-	TaskID    string        `json:"task_id"`
-	Endpoint  ToolEndpoint  `json:"tool_endpoint"`
-	Model     ModelConfig   `json:"model"`
-	Timeout   time.Duration `json:"timeout,omitempty"`
-	CPU       *float64      `json:"cpu,omitempty"`
-	MemoryMB  *int          `json:"memory_mb,omitempty"`
-	OutputDir string        `json:"output_dir"`
+	Connectivity HarnessConnectivity `json:"connectivity"`
+	RunID        string              `json:"run_id"`
+	TaskID       string              `json:"task_id"`
+	Endpoint     ToolEndpoint        `json:"tool_endpoint"`
+	Model        ModelConfig         `json:"model"`
+	Timeout      time.Duration       `json:"timeout,omitempty"`
+	CPU          *float64            `json:"cpu,omitempty"`
+	MemoryMB     *int                `json:"memory_mb,omitempty"`
+	OutputDir    string              `json:"output_dir"`
 }
 
 const (

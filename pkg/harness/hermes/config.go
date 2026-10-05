@@ -7,13 +7,13 @@ import (
 	"fmt"
 	"math"
 	"net"
-	"net/url"
 	"sort"
 	"strconv"
 	"strings"
 	"unicode"
 
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/harness"
 )
 
 const (
@@ -25,23 +25,13 @@ const (
 	voiceKeyPath        = stateContainerPath + "/voice.key"
 	voiceWAVPath        = stateContainerPath + "/voice-instruction.wav"
 	identityContainerFS = stagedRoot + "/ssh/id_ed25519"
-	agentWrapperPath    = stagedRoot + "/run-agent"
+	gatewayLauncherPath = stagedRoot + "/run-gateway"
 	workspaceRoot       = stagedRoot + "/workspace"
 
 	// tavilyAPIKeyEnv is the in-container environment variable name Hermes's
 	// Tavily plugin reads. It is fixed by Hermes itself, unlike the profile's
 	// (host-side) HarnessWebSearchConfig.ExtractAPIKeyEnv lookup name.
 	tavilyAPIKeyEnv = "TAVILY_API_KEY"
-
-	// searxngBaseURL matches the fixed network alias
-	// (pkg/sandbox/sandbox.go's `networkAlias = "task-sandbox"`) and
-	// port (images/deep-research-bench/Dockerfile) that the DRB task
-	// sandbox's built-in SearXNG instance is always reachable at from the
-	// Hermes harness container, which joins the same per-task Docker
-	// network. Mirrors pkg/harness/openclaw/config.go's constant of the same
-	// name and value.
-	searxngBaseURL = "http://task-sandbox:8888"
-
 	// otelPluginName is the hermes-otel plugin that LocalImage adds to the
 	// pinned Hermes image. It writes its spans to otelStorePath.
 	otelPluginName = "hermes_otel"
@@ -49,25 +39,14 @@ const (
 	otelMaxSpans   = 10000
 )
 
-// hermesProvider maps the profile's runtime backend onto a provider name
-// Hermes accepts. "deepseek" is a built-in Hermes provider. Neither pinned
-// Hermes version knows "sglang" or a plain "openai" provider
-// (hermes_cli/auth.py PROVIDER_REGISTRY), and the one-shot rejects an unknown
-// name before any request is made. The generic "custom" provider is the one
-// that routes to model.base_url with the configured key, so every
-// OpenAI-compatible backend renders as "custom". The same value is passed to
-// the one-shot as --provider, so the wrapper and the config never disagree.
+// hermesProvider maps the profile backend onto the pinned Hermes provider
+// registry. DeepSeek is built in; generic OpenAI-compatible endpoints use
+// "custom" so the Gateway resolves the configured base URL and credential.
 func hermesProvider(backend string) string {
-	if openAICompatible(backend) {
+	if harness.OpenAICompatible(backend) {
 		return "custom"
 	}
 	return backend
-}
-
-// openAICompatible reports whether the backend is a generic OpenAI-compatible
-// server whose base URL must be the versioned /v1 prefix.
-func openAICompatible(provider string) bool {
-	return provider == "sglang" || provider == "openai"
 }
 
 // CompactionSettings is the harness-side copy of the profile's
@@ -92,7 +71,7 @@ type renderSettings struct {
 
 // renderConfig produces the Hermes `config.yaml`. The credential is written as
 // a ${NAME} reference rather than a value: Hermes expands those from the process
-// environment (hermes_cli/config.py::_expand_env_vars), and the wrapper script
+// environment (hermes_cli/config.py::_expand_env_vars), and the Gateway launcher
 // exports the name from a private staged key file, so no credential ever reaches
 // the rendered config, Docker metadata, or results.
 //
@@ -105,7 +84,7 @@ type renderSettings struct {
 //
 //   - model.context_length and model.max_tokens feed Hermes's compressor
 //     window arithmetic and output budget. Temperature is merged into the
-//     custom provider extra_body because one-shot ignores model.temperature.
+//     custom provider extra_body to reach the native request-override path.
 //   - compression.enabled / compression.threshold_tokens set the compaction
 //     trigger. threshold_tokens is an absolute cap Hermes applies after its
 //     64K minimum and its 75% small-window floor.
@@ -120,12 +99,21 @@ func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *Voi
 	if err := validateGeneration(model); err != nil {
 		return nil, err
 	}
-	if openAICompatible(model.Provider) {
-		normalized, err := normalizeV1BaseURL(model.BaseURL)
+	if harness.OpenAICompatible(model.Provider) {
+		normalized, err := harness.NormalizeV1BaseURL(model.BaseURL)
 		if err != nil {
 			return nil, fmt.Errorf("Hermes %s base URL: %w", model.Provider, err)
 		}
 		model.BaseURL = normalized
+	}
+	// MCP source names are exported into the Gateway process. Child-only
+	// target names are safe aliases and do not configure the parent service.
+	for _, server := range settings.mcpServers {
+		for _, hostVar := range server.SecretEnv {
+			if strings.HasPrefix(hostVar, "API_SERVER_") {
+				return nil, errors.New("Hermes MCP credential source uses reserved API_SERVER_ namespace")
+			}
+		}
 	}
 	if settings.maxTurns <= 0 {
 		return nil, errors.New("Hermes max turns must be positive")
@@ -140,7 +128,7 @@ func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *Voi
 	}
 	requestBody := settings.extraBody
 	if model.Temperature != nil {
-		if !openAICompatible(model.Provider) {
+		if !harness.OpenAICompatible(model.Provider) {
 			return nil, errors.New("Hermes temperature requires the sglang or openai backend")
 		}
 		object := make(map[string]json.RawMessage)
@@ -185,6 +173,10 @@ func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *Voi
 	}
 	output.WriteString("\nagent:\n")
 	output.WriteString("  max_turns: " + strconv.Itoa(settings.maxTurns) + "\n")
+	if !settings.subagentsEnabled {
+		// The native API resolves this nested denylist after platform toolsets.
+		output.WriteString("  disabled_toolsets:\n    - delegation\n")
+	}
 	if settings.compaction != nil {
 		output.WriteString("\ncompression:\n")
 		if settings.compaction.Enabled != nil {
@@ -206,14 +198,7 @@ func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *Voi
 		output.WriteString("    base_url: " + yamlString(model.BaseURL) + "\n")
 		output.WriteString("    extra_body: " + extraBody + "\n")
 	}
-	if !settings.subagentsEnabled {
-		// delegation is Hermes's delegate_task toolset. Unlike
-		// platform_toolsets (an allowlist of toolset categories), delegation
-		// isn't gated by it and is on by default, so disabling it requires
-		// this separate top-level key.
-		output.WriteString("\ndisabled_toolsets:\n")
-		output.WriteString("  - delegation\n")
-	} else if settings.maxConcurrentSubagents > 0 {
+	if settings.subagentsEnabled && settings.maxConcurrentSubagents > 0 {
 		output.WriteString("\ndelegation:\n")
 		output.WriteString("  max_concurrent_children: " + strconv.Itoa(settings.maxConcurrentSubagents) + "\n")
 	}
@@ -238,15 +223,15 @@ func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *Voi
 	output.WriteString("\ndisplay:\n")
 	output.WriteString("  streaming: false\n")
 	output.WriteString("  compact: true\n")
-	// Toolsets are configured here rather than through `--toolsets`, which is
-	// unusable on the pinned version: _validate_explicit_toolsets can fall off
-	// its final branch and return a bare None, and the caller unpacks it, so
-	// the agent exits 1 before doing any work.
+	// Native API agent construction resolves this platform-specific toolset list.
 	output.WriteString("\nplatform_toolsets:\n")
-	output.WriteString("  cli:\n")
+	output.WriteString("  api_server:\n")
 	output.WriteString("    - terminal\n")
 	output.WriteString("    - file\n")
 	output.WriteString("    - code_execution\n")
+	if settings.subagentsEnabled {
+		output.WriteString("    - delegation\n")
+	}
 	if settings.webSearchEnabled {
 		output.WriteString("    - web\n")
 		// search_backend (not backend) is deliberate: the DRB task sandbox's
@@ -303,12 +288,8 @@ func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *Voi
 // is the call's own workdir or else the configured one (tools/terminal_tool.py),
 // so the configured directory must exist in the sandbox: it is the directory
 // the bridge runs commands in. The file has to carry it, not only
-// TERMINAL_CWD: without a terminal section the v2026.5.29.2 CLI takes the
-// backend to be local and exports its own process directory as TERMINAL_CWD
-// (cli.py load_cli_config). With a section present the CLI exports every key
-// of its terminal defaults over the environment, so the backend and the
-// timeout are written here too; the remaining defaults configure other
-// backends only.
+// TERMINAL_CWD: Gateway runtime refresh treats config.yaml as authoritative,
+// so backend, cwd, and timeout are supplied together in the terminal section.
 func renderTerminal(workdir string, timeout int) ([]byte, error) {
 	if workdir == "" {
 		return nil, errors.New("Hermes SSH endpoint does not name the sandbox workdir")
@@ -385,14 +366,14 @@ func yamlFloat(value float64) string {
 // true`, but it then wraps each command in `builtin cd -- <cwd> || exit 126`
 // with the call's workdir or else this directory, so a path the sandbox lacks
 // would fail every command that names no workdir before it runs.
-func containerEnvironment(endpoint core.ToolEndpoint, workdir string, terminalTimeout int, webSearchEnabled bool, runID, taskID string) ([]string, error) {
+func containerEnvironment(endpoint core.ToolEndpoint, workdir string, terminalTimeout int, webSearchEnabled bool, searchURL string, runID, taskID string) ([]string, error) {
 	if err := validateEndpoint(endpoint); err != nil {
 		return nil, err
 	}
-	if err := validateRunID(runID); err != nil {
+	if err := harness.ValidateRunID("Hermes", runID); err != nil {
 		return nil, err
 	}
-	if err := validateTaskID(taskID); err != nil {
+	if err := harness.ValidateTaskID("Hermes", taskID); err != nil {
 		return nil, err
 	}
 	if !validWorkdir(workdir) {
@@ -413,6 +394,9 @@ func containerEnvironment(endpoint core.ToolEndpoint, workdir string, terminalTi
 	}
 	environment := []string{
 		"HERMES_HOME=" + stateContainerPath,
+		"HERMES_YOLO_MODE=true",
+		"API_SERVER_HOST=0.0.0.0",
+		"API_SERVER_PORT=8642",
 		"TERMINAL_ENV=ssh",
 		"TERMINAL_SSH_HOST=" + host,
 		"TERMINAL_SSH_PORT=" + port,
@@ -439,17 +423,20 @@ func containerEnvironment(endpoint core.ToolEndpoint, workdir string, terminalTi
 		"HERMES_OTEL_CONTENT_CAPTURE=off",
 	}
 	if webSearchEnabled {
-		environment = append(environment, "SEARXNG_URL="+searxngBaseURL)
+		if err := harness.ValidateSearch(searchURL, true); err != nil {
+			return nil, err
+		}
+		environment = append(environment, "SEARXNG_URL="+searchURL)
 	}
 	return environment, nil
 }
 
-// agentWrapperScript exports the staged credential(s) under their required
-// names and replaces itself with the Hermes one-shot. Keeping the exports
+// gatewayLauncherScript exports the staged credential(s) under their required
+// names and replaces itself with the foreground Hermes Gateway. Keeping the exports
 // inside the container means no value ever appears in Docker's exec or
 // container config. extractEnabled additionally exports the Tavily key
 // staged at extractKeyPath, under Hermes's fixed tavilyAPIKeyEnv name.
-func agentWrapperScript(apiKeyEnv string, extractEnabled bool, mcpHostVars ...string) []byte {
+func gatewayLauncherScript(apiKeyEnv string, extractEnabled bool, mcpHostVars ...string) []byte {
 	script := `#!/bin/sh
 set -eu
 if [ ! -f ` + modelKeyPath + ` ]; then
@@ -478,51 +465,21 @@ fi
 export ` + hostVar + `
 `
 	}
-	script += `exec hermes --ignore-rules --yolo --model "$1" --provider "$2" -z "$3"
+	script += `API_SERVER_KEY="$(cat ` + gatewayKeyPath + `)"
+export API_SERVER_KEY
+exec hermes gateway run --no-supervise --external-supervisor
 `
 	return []byte(script)
 }
 
 func validateModel(model core.ModelConfig) error {
-	if model.Provider != "deepseek" && !openAICompatible(model.Provider) {
-		return errors.New("Hermes model provider must be deepseek, sglang, or openai")
+	if err := harness.ValidateModel("Hermes", model); err != nil {
+		return err
 	}
-	if openAICompatible(model.Provider) {
-		if _, err := normalizeV1BaseURL(model.BaseURL); err != nil {
-			return fmt.Errorf("Hermes %s base URL: %w", model.Provider, err)
-		}
-	} else {
-		parsed, err := url.Parse(model.BaseURL)
-		if err != nil || parsed.Host == "" || parsed.Scheme != "http" && parsed.Scheme != "https" {
-			return errors.New("Hermes model base URL must be absolute HTTP(S)")
-		}
-		if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-			return errors.New("Hermes model base URL must not contain credentials, query, or fragment")
-		}
-	}
-	// yamlString would render a control character as a numeric escape rather
-	// than break the document, but a model ID containing one is a configuration
-	// error. Rejecting it here fails immediately instead of at the readiness
-	// timeout, with an error that names the cause.
-	if strings.TrimSpace(model.Model) == "" || strings.ContainsFunc(model.Model, unicode.IsControl) {
-		return errors.New("Hermes model ID is invalid")
-	}
-	if !validEnvironmentName(model.APIKeyEnv) {
-		return errors.New("Hermes API-key environment name is invalid")
+	if strings.HasPrefix(model.APIKeyEnv, "API_SERVER_") {
+		return errors.New("Hermes model credential uses reserved API_SERVER_ namespace")
 	}
 	return nil
-}
-
-func normalizeV1BaseURL(baseURL string) (string, error) {
-	parsed, err := url.Parse(baseURL)
-	if err != nil || parsed.Scheme != "http" && parsed.Scheme != "https" || parsed.Host == "" || parsed.Opaque != "" || parsed.User != nil || parsed.RawPath != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || strings.Contains(baseURL, "#") {
-		return "", errors.New("must be an absolute HTTP(S) URL without credentials, escaped path, query, or fragment")
-	}
-	if parsed.Path != "/v1" && parsed.Path != "/v1/" {
-		return "", errors.New("path must be exactly /v1")
-	}
-	parsed.Path = "/v1"
-	return parsed.String(), nil
 }
 
 func validateEndpoint(endpoint core.ToolEndpoint) error {
@@ -539,16 +496,6 @@ func validateEndpoint(endpoint core.ToolEndpoint) error {
 		return errors.New("Hermes uses its own SSH client and accepts no bridge client command")
 	}
 	return nil
-}
-
-func validEnvironmentName(name string) bool {
-	for index, character := range name {
-		if character == '_' || character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z' || index > 0 && character >= '0' && character <= '9' {
-			continue
-		}
-		return false
-	}
-	return name != ""
 }
 
 // validWorkdir mirrors the bridge's rule so the value written into

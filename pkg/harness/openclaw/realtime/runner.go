@@ -1,6 +1,7 @@
 package realtime
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -572,7 +573,7 @@ func (runner *Runner) processChatEvent(event chatEvent, result *Result, state *r
 			return
 		}
 		delete(state.activeAgentRuns, event.RunID)
-		detail := firstNonEmpty(event.ErrorMessage, event.StopReason, event.State)
+		detail := cmp.Or(event.ErrorMessage, event.StopReason, event.State)
 		if event.ErrorKind != "" {
 			detail += " (" + event.ErrorKind + ")"
 		}
@@ -672,7 +673,7 @@ func (runner *Runner) consultAgent(ctx context.Context, toolCall toolCallEvent) 
 }
 
 func (runner *Runner) submitToolResult(ctx context.Context, toolCall toolCallEvent, toolResult any) error {
-	sessionID := firstNonEmpty(toolCall.RelaySessionID, toolCall.SessionID)
+	sessionID := cmp.Or(toolCall.RelaySessionID, toolCall.SessionID)
 	callCtx, cancel := context.WithTimeout(ctx, durationOrDefault(runner.options.SubmitToolResultTimeout, defaultSubmitToolResultTimeout))
 	response, err := runner.gateway.Call(callCtx, methodSubmitToolResult, map[string]any{
 		"sessionId": sessionID,
@@ -707,7 +708,7 @@ func (runner *Runner) finishActiveAgentRuns(ctx context.Context, result *Result,
 		if strings.EqualFold(status, "ok") {
 			continue
 		}
-		detail := firstNonEmpty(stringFromAny(payload["error"]), stringFromAny(payload["stopReason"]), status)
+		detail := cmp.Or(stringFromAny(payload["error"]), stringFromAny(payload["stopReason"]), status)
 		if detail == "" {
 			detail = "unknown status"
 		}
@@ -716,7 +717,7 @@ func (runner *Runner) finishActiveAgentRuns(ctx context.Context, result *Result,
 }
 
 func talkPayloadDiagnostic(eventType string, payload map[string]any) string {
-	detail := firstNonEmpty(
+	detail := cmp.Or(
 		boundedProtocolText(payload["message"]), boundedProtocolText(payload["error"]),
 		boundedProtocolText(payload["reason"]), boundedProtocolText(payload["code"]),
 	)
@@ -845,15 +846,6 @@ func intPointerOrDefault(value *int, fallback int) int {
 		return fallback
 	}
 	return *value
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func stringFromAny(value any) string {

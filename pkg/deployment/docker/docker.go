@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
+	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/deployment"
 	"github.com/hyscale-lab/aries/pkg/runner"
 	"github.com/moby/moby/api/pkg/stdcopy"
@@ -121,6 +122,9 @@ func resources(request deployment.Request) (container.Resources, error) {
 }
 
 func (manager *Manager) Create(ctx context.Context, request deployment.Request) (string, error) {
+	if err := validatePlacement(request.Placement); err != nil {
+		return "", err
+	}
 	limits, err := resources(request)
 	if err != nil {
 		return "", err
@@ -129,7 +133,7 @@ func (manager *Manager) Create(ctx context.Context, request deployment.Request) 
 		return "", errors.New("deployment service port is invalid")
 	}
 	config := &container.Config{Image: request.Image, WorkingDir: request.Workdir, Env: request.Env, Entrypoint: request.Entrypoint, Cmd: request.Args, Labels: request.Labels}
-	host := &container.HostConfig{NetworkMode: container.NetworkMode(request.Network), Resources: limits}
+	host := &container.HostConfig{NetworkMode: container.NetworkMode(request.Placement.DockerNetwork), Resources: limits}
 	if request.Init {
 		host.Init = boolPointer(true)
 	}
@@ -141,7 +145,7 @@ func (manager *Manager) Create(ctx context.Context, request deployment.Request) 
 	}
 	var networking *network.NetworkingConfig
 	if len(request.NetworkAliases) > 0 {
-		networking = &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{request.Network: {Aliases: request.NetworkAliases}}}
+		networking = &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{request.Placement.DockerNetwork: {Aliases: request.NetworkAliases}}}
 	}
 	if request.ServicePort != 0 {
 		port := network.MustParsePort(strconv.Itoa(request.ServicePort) + "/tcp")
@@ -186,6 +190,9 @@ func (manager *Manager) Create(ctx context.Context, request deployment.Request) 
 }
 
 func (manager *Manager) Validate(ctx context.Context, id string, request deployment.Request, secrets [][]byte) error {
+	if err := validatePlacement(request.Placement); err != nil {
+		return err
+	}
 	inspection, err := manager.client.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
 	if err != nil {
 		return err
@@ -227,11 +234,11 @@ func (manager *Manager) Validate(ctx context.Context, id string, request deploym
 		}
 	}
 	if len(request.NetworkAliases) > 0 && info.State != nil && info.State.Running {
-		if info.NetworkSettings == nil || info.NetworkSettings.Networks[request.Network] == nil {
+		if info.NetworkSettings == nil || info.NetworkSettings.Networks[request.Placement.DockerNetwork] == nil {
 			return errors.New("deployment task network is not attached")
 		}
 	}
-	if string(info.HostConfig.NetworkMode) != request.Network {
+	if string(info.HostConfig.NetworkMode) != request.Placement.DockerNetwork {
 		return errors.New("deployment must use only the task network")
 	}
 	if len(info.HostConfig.Binds) != 0 || len(info.HostConfig.Mounts) != 0 {
@@ -461,4 +468,11 @@ func (manager *Manager) StopNetwork(ctx context.Context, id string) error {
 		return errors.Join(removeErr, errors.New("deployment network remains after removal"))
 	}
 	return errors.Join(removeErr, fmt.Errorf("verify deployment network removal: %w", inspectErr))
+}
+
+func validatePlacement(placement core.RuntimePlacement) error {
+	if strings.TrimSpace(placement.DockerNetwork) == "" {
+		return errors.New("Docker deployment requires a nonempty Docker task attachment")
+	}
+	return nil
 }

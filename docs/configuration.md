@@ -527,13 +527,15 @@ so the task image must provide `/bin/bash`. Its `~/.hermes` file sync is refused
 the bridge to keep the evaluated sandbox free of harness scaffold and
 credentials; Hermes logs one `file_sync: sync failed` warning and continues.
 
+Hermes reserves environment names beginning with `API_SERVER_` for its Gateway.
+Do not use them as `model.api_key_env` or MCP `secret_env` source names. MCP
+child environment names may still use that prefix with a different source.
+
 Artifacts land under `<run>/<task>/harness/`: the redacted `config.yaml`, the
-one-shot's `hermes_stdout.log` and `hermes_stderr.log`, `container.log`, and the
+native Gateway's `gateway-output.txt`, `session-outcome.json`, `container.log`, and the
 exported message-level trajectory at `telemetry/sessions.jsonl`, and
-`telemetry/otel-spans.jsonl`: one OpenTelemetry span per tool call, model
-call, and API request, carrying its tool call id and the wall-clock time it
-started and ended. An image without the plugin runs unchanged and leaves no
-spans file.
+`telemetry/otel-spans.jsonl`: tool, model, and API spans with call IDs and wall-clock
+start/end times. An image without the plugin leaves no spans file.
 
 ### Hermes context window, compaction, and request extra body
 
@@ -545,7 +547,7 @@ renders the same file as before.
   window Hermes's compressor reasons about and the request sampling.
   Temperature (including `0.0`) requires the `sglang` or `openai` backend;
   ARIES places it in the custom provider's request `extra_body`, because the
-  pinned one-shot path ignores Hermes's `model.temperature` YAML field.
+  request body carries the configured temperature explicitly.
   Setting both `model.temperature` and `harness.hermes.extra_body.temperature`
   is rejected. Native DeepSeek temperature is unsupported by this path.
 - `harness.compaction.threshold_tokens` is an absolute compaction trigger.
@@ -603,16 +605,12 @@ export VLLM_API_KEY=unused-local-token
 ./bin/aries profiles/hermes-tb2-fix-git-vllm-compaction.json
 ```
 
-`compression.threshold_tokens` exists since Hermes v2026.8, so the pinned image
-moves to `v2026.8.31`. Profiles that omit that absolute compaction cap remain
-compatible with the previously pinned `v2026.5.29.2`: that release accepts
-`model.context_length`, `model.max_tokens`, and custom-provider `extra_body`
-(including the request-level temperature path), but silently ignores
-`compression.threshold_tokens`. The rendered `config.yaml` under
-`<run>/<task>/harness/` shows the block exactly as Hermes reads it. The
-`agent.max_turns` value in that
-file does not bound the one-shot; use `agent_timeout_seconds` in the overrides
-file to bound a run.
+The supported Hermes image is pinned to `v2026.8.31`. Its native Gateway and
+absolute compaction threshold are validated together; older image pins are not
+covered by this execution path. The rendered `config.yaml` under
+`<run>/<task>/harness/` shows the selected settings.
+The Gateway reads `agent.max_turns`; `agent_timeout_seconds` in the overrides
+file also bounds the wall-clock wait for the run.
 
 ### Realtime OpenClaw mode
 

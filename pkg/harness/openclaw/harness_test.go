@@ -1,6 +1,9 @@
 package openclaw
 
 import (
+	harnesscommon "github.com/hyscale-lab/aries/pkg/harness"
+	"slices"
+
 	"archive/tar"
 	"bytes"
 	"context"
@@ -33,6 +36,7 @@ type fakeDeployment struct {
 	validatedRequest                                                       deployment.Request
 	validatedSecrets                                                       [][]byte
 	created                                                                deployment.Request
+	logContent, telemetryContent                                           []byte
 	archive                                                                []byte
 	removed                                                                bool
 	copyToErr, containerLogsErr, copyFromErr, stopErr, closeErr            error
@@ -44,7 +48,7 @@ func TestManagerCloseIsIdempotent(t *testing.T) {
 	closeFailure := errors.New("close failed")
 	fake := newFakeDeployment()
 	fake.closeErr = closeFailure
-	manager := &Manager{deployment: fake}
+	manager := &Manager{runtime: &harnesscommon.Runtime{Options: harnesscommon.RuntimeOptions{Deployment: fake}}}
 	if err := manager.Close(); !errors.Is(err, closeFailure) {
 		t.Fatalf("error = %v", err)
 	}
@@ -60,7 +64,7 @@ func TestHarnessAppliesOnlyPresentCheckedResources(t *testing.T) {
 	fake := newFakeDeployment()
 	manager := newTestManager(t, fake, []byte("model-secret"))
 	cpu, memory := 2.5, 1536
-	request := core.HarnessRequest{Network: "aries-net-test", RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(), CPU: &cpu, MemoryMB: &memory}
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(), CPU: &cpu, MemoryMB: &memory}
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -74,6 +78,9 @@ func TestHarnessAppliesOnlyPresentCheckedResources(t *testing.T) {
 
 func newFakeDeployment() *fakeDeployment { return &fakeDeployment{} }
 func (f *fakeDeployment) Create(_ context.Context, r deployment.Request) (string, error) {
+	if strings.TrimSpace(r.Placement.DockerNetwork) == "" {
+		return "", errors.New("missing task network placement")
+	}
 	f.created = r
 	f.createCalls++
 	return "openclaw-id", f.createErr
@@ -98,6 +105,9 @@ func (f *fakeDeployment) Exec(ctx context.Context, _ string, _ core.Command) (co
 }
 func (f *fakeDeployment) Logs(context.Context, string, int) ([]byte, error) {
 	f.logsCalls++
+	if f.logContent != nil {
+		return f.logContent, f.containerLogsErr
+	}
 	return []byte("gateway ready\n"), f.containerLogsErr
 }
 func (f *fakeDeployment) Address(context.Context, string, int) (string, error) {
@@ -118,7 +128,10 @@ func (fake *fakeDeployment) DownloadArchive(context.Context, string, string) (io
 	}
 	var archive bytes.Buffer
 	writer := tar.NewWriter(&archive)
-	content := []byte("{\"event\":\"tool\"}\n")
+	content := fake.telemetryContent
+	if content == nil {
+		content = []byte("{\"event\":\"tool\"}\n")
+	}
 	_ = writer.WriteHeader(&tar.Header{Name: "sessions/run.trajectory.jsonl", Mode: 0o600, Size: int64(len(content))})
 	_, _ = writer.Write(content)
 	_ = writer.Close()
@@ -128,7 +141,7 @@ func (fake *fakeDeployment) DownloadArchive(context.Context, string, string) (io
 func TestCollectTelemetryIgnoresOnlyTypedMissingPath(t *testing.T) {
 	fake := newFakeDeployment()
 	manager := newTestManager(t, fake, []byte("model-secret"))
-	active := &session{containerID: "openclaw-id", artifactDir: t.TempDir()}
+	active := &session{Occurrence: &harnesscommon.Occurrence{ID: "openclaw-id", ArtifactDir: t.TempDir()}}
 
 	fake.copyFromErr = fmt.Errorf("session path absent: %w", runner.ErrNotFound)
 	if paths, err := manager.collectTelemetry(context.Background(), active); err != nil || len(paths) != 0 {
@@ -143,11 +156,15 @@ func TestCollectTelemetryIgnoresOnlyTypedMissingPath(t *testing.T) {
 
 func newTestManager(t *testing.T, fake *fakeDeployment, secret []byte) *Manager {
 	t.Helper()
-	manager, err := New(Options{
-		Deployment: fake,
-		Image:      testOpenClawImage, OutputDir: t.TempDir(), StartTimeout: time.Second, AgentTimeout: time.Second,
+	manager, err := New(Options{Runtime: harnesscommon.RuntimeOptions{
+
+		Deployment:   fake,
+		Image:        testOpenClawImage,
+		OutputDir:    t.TempDir(),
+		StartTimeout: time.Second,
+		AgentTimeout: time.Second,
 		APIKeyLookup: func(string) ([]byte, bool) { return secret, true },
-	})
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,17 +333,14 @@ type stubSpeechSynthesizer struct {
 }
 
 func TestRealtimeResultAndErrorsRedactEverySessionSecret(t *testing.T) {
-	active := &session{
-		artifactDir: t.TempDir(),
-		apiKey:      []byte(`model-"quoted"-secret`), realtimeAPIKey: []byte(`tts-\backslash-secret`),
-		gatewayToken: []byte(`gateway-"quote"-and-\slash-secret`),
-	}
-	secrets := []string{string(active.apiKey), string(active.realtimeAPIKey), string(active.gatewayToken)}
-	for _, secret := range [][]byte{active.apiKey, active.realtimeAPIKey, active.gatewayToken} {
-		if err := validateAPIKey(secret); err != nil {
+	credentials := harnesscommon.NewCredentials("OpenClaw")
+	for name, secret := range map[string]string{"model": `model-"quoted"-secret`, "voice": `tts-\backslash-secret`, "gateway": `gateway-"quote"-and-\slash-secret`} {
+		if _, err := credentials.Load(name, name, func(string) ([]byte, bool) { return []byte(secret), true }); err != nil {
 			t.Fatalf("distinctive canary must be a valid API key: %v", err)
 		}
 	}
+	active := &session{Occurrence: &harnesscommon.Occurrence{ArtifactDir: t.TempDir(), Credentials: credentials, Artifacts: &harnesscommon.Artifacts{}}}
+	secrets := []string{string(credentials.Get("model")), string(credentials.Get("voice")), string(credentials.Get("gateway"))}
 	result := realtimeclient.Result{
 		SchemaVersion:  realtimeclient.ResultSchemaVersion,
 		OriginalPrompt: strings.Join(secrets, " "), OutputText: secrets[0], Errors: append([]string(nil), secrets...),
@@ -350,7 +364,7 @@ func TestRealtimeResultAndErrorsRedactEverySessionSecret(t *testing.T) {
 	}
 	assertJSONValueHasNoSecrets(t, artifactValue, secrets)
 	rawErr := fmt.Errorf("operation contained model=%s tts=%s gateway=%s: %w", secrets[0], secrets[1], secrets[2], context.Canceled)
-	redactedErr := redactSessionError(rawErr, active)
+	redactedErr := active.Credentials.RedactErr(rawErr)
 	if !errors.Is(redactedErr, context.Canceled) {
 		t.Fatalf("redacted error lost classification or retained secret: %v", redactedErr)
 	}
@@ -359,7 +373,7 @@ func TestRealtimeResultAndErrorsRedactEverySessionSecret(t *testing.T) {
 			t.Fatalf("redacted error retained %q: %v", secret, redactedErr)
 		}
 	}
-	harnessResult := failedHarnessResult(active, time.Now(), rawErr)
+	harnessResult := active.FailedResult(time.Now(), rawErr)
 	if harnessResult.Status != core.StatusCanceled {
 		t.Fatalf("HarnessResult = %#v", harnessResult)
 	}
@@ -371,7 +385,7 @@ func TestRealtimeResultAndErrorsRedactEverySessionSecret(t *testing.T) {
 }
 
 func TestAgentResultAndErrorsRedactEverySessionSecret(t *testing.T) {
-	secrets := []string{`model-"quoted"-secret`, `tts-\backslash-secret`, `gateway-"quote"-and-\slash-secret`}
+	secrets := []string{`model-"quoted"-secret`, `tts-\backslash-secret`, `gateway-"quote"-and-\slash-secret`, "mcp-private-secret"}
 	for _, test := range []struct {
 		name    string
 		gateway *secretAgentGateway
@@ -388,15 +402,20 @@ func TestAgentResultAndErrorsRedactEverySessionSecret(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fake := newFakeDeployment()
+			fake.logContent = []byte("gateway tool: " + strings.Join(secrets, " ") + "\n")
+			fake.telemetryContent, _ = json.Marshal(map[string]string{"tool": strings.Join(secrets, " ")})
 			manager := newTestManager(t, fake, []byte("initial-model-key"))
 			manager.newGateway = func(string, []byte) (gatewayConnection, error) { return test.gateway, nil }
-			request := core.HarnessRequest{Network: "aries-net-test", RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(), Timeout: time.Second}
+			request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(), Timeout: time.Second}
 			if err := manager.Start(context.Background(), request); err != nil {
 				t.Fatal(err)
 			}
-			manager.active.apiKey = []byte(secrets[0])
-			manager.active.realtimeAPIKey = []byte(secrets[1])
-			manager.active.gatewayToken = []byte(secrets[2])
+			manager.active.Credentials.Set("model", []byte(secrets[0]))
+			manager.active.Credentials.Set("voice", []byte(secrets[1]))
+			manager.active.Credentials.Set("gateway", []byte(secrets[2]))
+			if err := manager.active.Credentials.LoadMCP([]core.MCPServerConfig{{Name: "fixture", SecretEnv: map[string]string{"TOKEN": "MCP_KEY"}}}, nil, func(string) ([]byte, bool) { return []byte(secrets[3]), true }); err != nil {
+				t.Fatal(err)
+			}
 			result, runErr := manager.Run(context.Background(), "repair git")
 			if result.Status != test.status {
 				t.Fatalf("result = %#v, error = %v", result, runErr)
@@ -409,7 +428,7 @@ func TestAgentResultAndErrorsRedactEverySessionSecret(t *testing.T) {
 					t.Fatalf("returned result retained %q: %#v / %v", secret, result, runErr)
 				}
 			}
-			artifact, err := os.ReadFile(filepath.Join(manager.active.artifactDir, "agent-result.json"))
+			artifact, err := os.ReadFile(filepath.Join(manager.active.ArtifactDir, "agent-result.json"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -418,6 +437,15 @@ func TestAgentResultAndErrorsRedactEverySessionSecret(t *testing.T) {
 				t.Fatal(err)
 			}
 			assertJSONValueHasNoSecrets(t, decoded, secrets)
+			for _, name := range []string{"gateway.log", "telemetry/run.trajectory.jsonl"} {
+				content, err := os.ReadFile(filepath.Join(manager.active.ArtifactDir, name))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if bytes.Contains(content, []byte(secrets[3])) || !bytes.Contains(content, []byte("[REDACTED]")) {
+					t.Fatalf("%s did not redact MCP credential: %s", name, content)
+				}
+			}
 		})
 	}
 }
@@ -471,7 +499,7 @@ func (synthesizer stubSpeechSynthesizer) Synthesize(_ context.Context, request a
 func (stubSpeechSynthesizer) Close() {}
 
 func TestNewRequiresExactNonLatestTaggedImage(t *testing.T) {
-	if manager, err := New(Options{Deployment: newFakeDeployment(), Image: testOpenClawImage, OutputDir: t.TempDir()}); err != nil {
+	if manager, err := New(Options{Runtime: harnesscommon.RuntimeOptions{Deployment: newFakeDeployment(), Image: testOpenClawImage, OutputDir: t.TempDir()}}); err != nil {
 		t.Fatal(err)
 	} else if err := manager.Close(); err != nil {
 		t.Fatal(err)
@@ -485,7 +513,12 @@ func TestNewRequiresExactNonLatestTaggedImage(t *testing.T) {
 		"example.invalid/openclaw:fixture@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
 		"not a valid image",
 	} {
-		if _, err := New(Options{Deployment: newFakeDeployment(), Image: image, OutputDir: t.TempDir()}); err == nil || !strings.Contains(err.Error(), "OpenClaw image") {
+		if _, err := New(Options{Runtime: harnesscommon.RuntimeOptions{
+
+			Deployment: newFakeDeployment(),
+			Image:      image,
+			OutputDir:  t.TempDir(),
+		}}); err == nil || !strings.Contains(err.Error(), "OpenClaw image") {
 			t.Fatalf("New(%q) error = %v", image, err)
 		}
 	}
@@ -516,7 +549,7 @@ func TestHarnessUsesInjectedDeploymentAndPrivateArchive(t *testing.T) {
 	fake := newFakeDeployment()
 	secret := []byte("model-secret")
 	manager := newTestManager(t, fake, secret)
-	request := core.HarnessRequest{Network: "aries-net-test", RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(), Timeout: 37 * time.Second}
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(), Timeout: 37 * time.Second}
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -536,13 +569,13 @@ func TestHarnessUsesInjectedDeploymentAndPrivateArchive(t *testing.T) {
 	if fake.created.Name != "aries-openclaw-attempt" || len(fake.created.Args) == 0 {
 		t.Fatalf("container create = %#v", fake.created)
 	}
-	if !equalStrings(fake.created.Args, []string{launcherPath, gatewayLauncherPath}) {
+	if !slices.Equal(fake.created.Args, []string{launcherPath, gatewayLauncherPath}) {
 		t.Fatalf("agent gateway command = %#v", fake.created.Args)
 	}
 	if fake.created.ServicePort != 18789 {
 		t.Fatalf("service port = %d", fake.created.ServicePort)
 	}
-	if _, err := os.Stat(filepath.Join(manager.outputDir, "fix-git", "harness", "agent-result.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(manager.runtime.Options.OutputDir, "fix-git", "harness", "agent-result.json")); err != nil {
 		t.Fatalf("agent result artifact: %v", err)
 	}
 	serialized := strings.Join(append(append([]string{}, fake.created.Env...), fake.created.Args...), "\n")
@@ -572,7 +605,7 @@ func TestHarnessUsesInjectedDeploymentAndPrivateArchive(t *testing.T) {
 			t.Fatalf("artifact %q: %v", path, err)
 		}
 	}
-	configPath := filepath.Join(manager.outputDir, "fix-git", "harness", "openclaw.json")
+	configPath := filepath.Join(manager.runtime.Options.OutputDir, "fix-git", "harness", "openclaw.json")
 	configArtifact, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatalf("retained OpenClaw config: %v", err)
@@ -594,23 +627,27 @@ func TestStartStagesExtractKeyWhenConfigured(t *testing.T) {
 	modelSecret := []byte("model-secret")
 	extractSecret := []byte("tvly-super-secret")
 	fake := newFakeDeployment()
-	manager, err := New(Options{
-		Deployment: fake,
-		Image:      testOpenClawImage, OutputDir: t.TempDir(), StartTimeout: time.Second, AgentTimeout: time.Second,
-		WebSearchEnabled: true, ExtractAPIKeyEnv: "TAVILY_API_KEY",
+	manager, err := New(Options{Runtime: harnesscommon.RuntimeOptions{
+
+		Deployment:   fake,
+		Image:        testOpenClawImage,
+		OutputDir:    t.TempDir(),
+		StartTimeout: time.Second,
+		AgentTimeout: time.Second,
 		APIKeyLookup: func(name string) ([]byte, bool) {
 			if name == "TAVILY_API_KEY" {
 				return bytes.Clone(extractSecret), true
 			}
 			return bytes.Clone(modelSecret), true
 		},
+	}, Common: harnesscommon.Options{WebSearchEnabled: true, ExtractAPIKeyEnv: "TAVILY_API_KEY"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	manager.newID = func() (string, error) { return "attempt", nil }
 
-	request := core.HarnessRequest{Network: "aries-net-test", RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(), Timeout: 37 * time.Second}
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(), Timeout: 37 * time.Second}
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -635,7 +672,7 @@ func TestStartStagesExtractKeyWhenConfigured(t *testing.T) {
 	if strings.Contains(serialized, string(extractSecret)) {
 		t.Fatal("extract secret entered Docker config")
 	}
-	retained, err := os.ReadFile(filepath.Join(manager.outputDir, request.TaskID, "harness", "openclaw.json"))
+	retained, err := os.ReadFile(filepath.Join(manager.runtime.Options.OutputDir, request.TaskID, "harness", "openclaw.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -662,23 +699,28 @@ func TestStartStagesExtractKeyWhenConfigured(t *testing.T) {
 func TestStartFallsBackToNativeWebFetchWhenExtractCredentialMissing(t *testing.T) {
 	fake := newFakeDeployment()
 	logger, hook := test.NewNullLogger()
-	manager, err := New(Options{
-		Deployment: fake,
-		Image:      testOpenClawImage, OutputDir: t.TempDir(), StartTimeout: time.Second, AgentTimeout: time.Second,
-		WebSearchEnabled: true, ExtractAPIKeyEnv: "TAVILY_API_KEY", Logger: logger,
+	manager, err := New(Options{Runtime: harnesscommon.RuntimeOptions{
+
+		Deployment:   fake,
+		Image:        testOpenClawImage,
+		OutputDir:    t.TempDir(),
+		StartTimeout: time.Second,
+		AgentTimeout: time.Second,
+		Logger:       logger,
 		APIKeyLookup: func(name string) ([]byte, bool) {
 			if name == "TAVILY_API_KEY" {
 				return nil, false
 			}
 			return []byte("model-secret"), true
 		},
+	}, Common: harnesscommon.Options{WebSearchEnabled: true, ExtractAPIKeyEnv: "TAVILY_API_KEY"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	manager.newID = func() (string, error) { return "attempt", nil }
 
-	request := core.HarnessRequest{Network: "aries-net-test", RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(), Timeout: 37 * time.Second}
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(), Timeout: 37 * time.Second}
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatalf("expected fallback instead of rejection, got: %v", err)
 	}
@@ -698,7 +740,7 @@ func TestStartFallsBackToNativeWebFetchWhenExtractCredentialMissing(t *testing.T
 		t.Fatalf("expected a fallback warning log entry, got %#v", hook.AllEntries())
 	}
 
-	retained, err := os.ReadFile(filepath.Join(manager.outputDir, request.TaskID, "harness", "openclaw.json"))
+	retained, err := os.ReadFile(filepath.Join(manager.runtime.Options.OutputDir, request.TaskID, "harness", "openclaw.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -732,7 +774,7 @@ func TestAgentRunUsesGatewayOnceWithExactParameters(t *testing.T) {
 		}
 		return gateway, nil
 	}
-	request := core.HarnessRequest{Network: "aries-net-test", RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(), Timeout: 37 * time.Second}
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(), Timeout: 37 * time.Second}
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -757,7 +799,7 @@ func TestDeepSeekAgentRequestsDisableThinking(t *testing.T) {
 				manager.newGateway = func(string, []byte) (gatewayConnection, error) { return gateway, nil }
 				model := testModel()
 				model.BaseURL, model.Model = "https://api.deepseek.com", modelID
-				request := core.HarnessRequest{Network: "aries-net-test", RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: model}
+				request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: model}
 				if err := manager.Start(context.Background(), request); err != nil {
 					t.Fatal(err)
 				}
@@ -801,7 +843,7 @@ func TestAgentRunRejectsMissingWriteScopeBeforeSubmission(t *testing.T) {
 	manager := newTestManager(t, fake, []byte("model-secret"))
 	gateway := &recordingGateway{summary: gatewayclient.ConnectSummary{Role: "operator", Scopes: []string{"operator.read"}}}
 	manager.newGateway = func(string, []byte) (gatewayConnection, error) { return gateway, nil }
-	if err := manager.Start(context.Background(), core.HarnessRequest{Network: "aries-net-test", RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}); err != nil {
+	if err := manager.Start(context.Background(), core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}); err != nil {
 		t.Fatal(err)
 	}
 	result, err := manager.Run(context.Background(), "repair git")
@@ -818,7 +860,7 @@ func TestStartFailureRemovesOnlyContainerAndClearsSecret(t *testing.T) {
 	fake.copyToErr = errors.New("copy failed")
 	secret := []byte("source-secret")
 	manager := newTestManager(t, fake, secret)
-	err := manager.Start(context.Background(), core.HarnessRequest{Network: "aries-net-test", RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()})
+	err := manager.Start(context.Background(), core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()})
 	if err == nil || fake.removeCalls != 1 || manager.active != nil {
 		t.Fatalf("Start = %v, remove=%d active=%v", err, fake.removeCalls, manager.active)
 	}
@@ -831,13 +873,13 @@ func TestRealtimeModePublishesGatewayAndRunsRunner(t *testing.T) {
 	fake := newFakeDeployment()
 	keys := map[string][]byte{"ARIES_FAKE_API_KEY": []byte("model-secret"), "OPENAI_API_KEY": []byte("speech-secret")}
 	manager := newTestManager(t, fake, keys["ARIES_FAKE_API_KEY"])
-	manager.apiKeyLookup = func(name string) ([]byte, bool) {
+	manager.runtime.Options.APIKeyLookup = func(name string) ([]byte, bool) {
 		value, ok := keys[name]
 		return append([]byte(nil), value...), ok
 	}
-	manager.mode = ModeRealtime
-	manager.realtime = RealtimeOptions{
-		TTS:            RealtimeTTSOptions{Provider: "openai", APIKeyEnv: "OPENAI_API_KEY", Model: "tts-model", Voice: "alloy"},
+	manager.options.Common.Mode = ModeRealtime
+	manager.options.Realtime = RealtimeOptions{
+		TTS:            harnesscommon.TTSOptions{Provider: "openai", APIKeyEnv: "OPENAI_API_KEY", Model: "tts-model", Voice: "alloy"},
 		ChunkDuration:  25 * time.Millisecond,
 		ListenDuration: 50 * time.Millisecond, QuietDuration: time.Millisecond,
 		AgentWaitDuration: 40 * time.Millisecond, ToolCallTimeout: 30 * time.Millisecond,
@@ -871,11 +913,11 @@ func TestRealtimeModePublishesGatewayAndRunsRunner(t *testing.T) {
 			TranscriptDoneParts: []string{},
 		}}, nil
 	}
-	request := core.HarnessRequest{Network: "aries-net-test", RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
-	if !equalStrings(fake.created.Args, []string{launcherPath, gatewayLauncherPath}) {
+	if !slices.Equal(fake.created.Args, []string{launcherPath, gatewayLauncherPath}) {
 		t.Fatalf("gateway command = %#v", fake.created.Args)
 	}
 
@@ -924,11 +966,11 @@ func TestRealtimeModePublishesGatewayAndRunsRunner(t *testing.T) {
 		t.Fatal("realtime secret entered Docker config")
 	}
 	for _, name := range []string{"voice-instruction.txt", "voice-instruction.wav", "voice-instruction.wav.meta.json"} {
-		if _, err := os.Stat(filepath.Join(manager.outputDir, "fix-git", "harness", name)); err != nil {
+		if _, err := os.Stat(filepath.Join(manager.runtime.Options.OutputDir, "fix-git", "harness", name)); err != nil {
 			t.Fatalf("missing %s: %v", name, err)
 		}
 	}
-	path := filepath.Join(manager.outputDir, "fix-git", "harness", "realtime-result.json")
+	path := filepath.Join(manager.runtime.Options.OutputDir, "fix-git", "harness", "realtime-result.json")
 	content, err := os.ReadFile(path)
 	if err != nil || !bytes.Contains(content, []byte(`"output_text": "spoken"`)) {
 		t.Fatalf("realtime result artifact = %s, %v", content, err)
@@ -945,13 +987,13 @@ func TestRealtimeTranscribeModeSendsTranscriptToAgent(t *testing.T) {
 	fake := newFakeDeployment()
 	keys := map[string][]byte{"ARIES_FAKE_API_KEY": []byte("model-secret"), "OPENAI_API_KEY": []byte("speech-secret")}
 	manager := newTestManager(t, fake, keys["ARIES_FAKE_API_KEY"])
-	manager.apiKeyLookup = func(name string) ([]byte, bool) {
+	manager.runtime.Options.APIKeyLookup = func(name string) ([]byte, bool) {
 		value, ok := keys[name]
 		return append([]byte(nil), value...), ok
 	}
-	manager.mode = ModeVoiceTranscribe
-	manager.realtime = RealtimeOptions{
-		TTS: RealtimeTTSOptions{Provider: "openai", APIKeyEnv: "OPENAI_API_KEY", Model: "tts-model", Voice: "alloy"},
+	manager.options.Common.Mode = ModeVoiceTranscribe
+	manager.options.Realtime = RealtimeOptions{
+		TTS: harnesscommon.TTSOptions{Provider: "openai", APIKeyEnv: "OPENAI_API_KEY", Model: "tts-model", Voice: "alloy"},
 	}
 	var speechRequest audioinput.SpeechRequest
 	manager.newSpeech = func(options audioinput.SpeechClientOptions) (speechSynthesizer, error) {
@@ -978,7 +1020,7 @@ func TestRealtimeTranscribeModeSendsTranscriptToAgent(t *testing.T) {
 			AgentRunIDs:         []string{},
 		}}, nil
 	}
-	request := core.HarnessRequest{Network: "aries-net-test", RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -995,7 +1037,7 @@ func TestRealtimeTranscribeModeSendsTranscriptToAgent(t *testing.T) {
 	if result.Status != core.StatusSucceeded || result.FinalResponse != "first\nsecond" {
 		t.Fatalf("result = %#v", result)
 	}
-	path := filepath.Join(manager.outputDir, "fix-git", "harness", "realtime-result.json")
+	path := filepath.Join(manager.runtime.Options.OutputDir, "fix-git", "harness", "realtime-result.json")
 	content, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -1014,13 +1056,13 @@ func TestRealtimeTranscribeErrorsDoNotStartAgent(t *testing.T) {
 	fake := newFakeDeployment()
 	keys := map[string][]byte{"ARIES_FAKE_API_KEY": []byte("model-secret"), "OPENAI_API_KEY": []byte("speech-secret")}
 	manager := newTestManager(t, fake, keys["ARIES_FAKE_API_KEY"])
-	manager.apiKeyLookup = func(name string) ([]byte, bool) {
+	manager.runtime.Options.APIKeyLookup = func(name string) ([]byte, bool) {
 		value, ok := keys[name]
 		return append([]byte(nil), value...), ok
 	}
-	manager.mode = ModeVoiceTranscribe
-	manager.realtime = RealtimeOptions{
-		TTS: RealtimeTTSOptions{Provider: "openai", APIKeyEnv: "OPENAI_API_KEY", Model: "tts-model", Voice: "alloy"},
+	manager.options.Common.Mode = ModeVoiceTranscribe
+	manager.options.Realtime = RealtimeOptions{
+		TTS: harnesscommon.TTSOptions{Provider: "openai", APIKeyEnv: "OPENAI_API_KEY", Model: "tts-model", Voice: "alloy"},
 	}
 	var speechRequest audioinput.SpeechRequest
 	manager.newSpeech = func(audioinput.SpeechClientOptions) (speechSynthesizer, error) {
@@ -1047,7 +1089,7 @@ func TestRealtimeTranscribeErrorsDoNotStartAgent(t *testing.T) {
 			AgentRunIDs:         []string{},
 		}}, nil
 	}
-	request := core.HarnessRequest{Network: "aries-net-test", RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -1061,7 +1103,7 @@ func TestRealtimeTranscribeErrorsDoNotStartAgent(t *testing.T) {
 	if agentGatewayCreated || agentGateway.agentCalls != 0 {
 		t.Fatalf("agent was called despite transcription errors: created=%v calls=%d", agentGatewayCreated, agentGateway.agentCalls)
 	}
-	path := filepath.Join(manager.outputDir, "fix-git", "harness", "realtime-result.json")
+	path := filepath.Join(manager.runtime.Options.OutputDir, "fix-git", "harness", "realtime-result.json")
 	content, readErr := os.ReadFile(path)
 	if readErr != nil {
 		t.Fatal(readErr)
@@ -1078,14 +1120,14 @@ func TestRealtimeTranscribeUsesSeparateSTTTimeoutAndFreshAgentTimeout(t *testing
 	fake := newFakeDeployment()
 	keys := map[string][]byte{"ARIES_FAKE_API_KEY": []byte("model-secret"), "OPENAI_API_KEY": []byte("speech-secret")}
 	manager := newTestManager(t, fake, keys["ARIES_FAKE_API_KEY"])
-	manager.agentTimeout = 20 * time.Millisecond
-	manager.apiKeyLookup = func(name string) ([]byte, bool) {
+	manager.runtime.Options.AgentTimeout = 20 * time.Millisecond
+	manager.runtime.Options.APIKeyLookup = func(name string) ([]byte, bool) {
 		value, ok := keys[name]
 		return append([]byte(nil), value...), ok
 	}
-	manager.mode = ModeVoiceTranscribe
-	manager.realtime = RealtimeOptions{
-		TTS: RealtimeTTSOptions{Provider: "openai", APIKeyEnv: "OPENAI_API_KEY", Model: "tts-model", Voice: "alloy"},
+	manager.options.Common.Mode = ModeVoiceTranscribe
+	manager.options.Realtime = RealtimeOptions{
+		TTS: harnesscommon.TTSOptions{Provider: "openai", APIKeyEnv: "OPENAI_API_KEY", Model: "tts-model", Voice: "alloy"},
 	}
 	var speechRequest audioinput.SpeechRequest
 	manager.newSpeech = func(audioinput.SpeechClientOptions) (speechSynthesizer, error) {
@@ -1136,7 +1178,7 @@ func TestRealtimeTranscribeUsesSeparateSTTTimeoutAndFreshAgentTimeout(t *testing
 			},
 		}, nil
 	}
-	request := core.HarnessRequest{Network: "aries-net-test", RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -1162,13 +1204,13 @@ func TestRealtimeTranscribeAgentUsesResponseOnlyGateway(t *testing.T) {
 	fake := newFakeDeployment()
 	keys := map[string][]byte{"ARIES_FAKE_API_KEY": []byte("model-secret"), "OPENAI_API_KEY": []byte("speech-secret")}
 	manager := newTestManager(t, fake, keys["ARIES_FAKE_API_KEY"])
-	manager.apiKeyLookup = func(name string) ([]byte, bool) {
+	manager.runtime.Options.APIKeyLookup = func(name string) ([]byte, bool) {
 		value, ok := keys[name]
 		return append([]byte(nil), value...), ok
 	}
-	manager.mode = ModeVoiceTranscribe
-	manager.realtime = RealtimeOptions{
-		TTS: RealtimeTTSOptions{Provider: "openai", APIKeyEnv: "OPENAI_API_KEY", Model: "tts-model", Voice: "alloy"},
+	manager.options.Common.Mode = ModeVoiceTranscribe
+	manager.options.Realtime = RealtimeOptions{
+		TTS: harnesscommon.TTSOptions{Provider: "openai", APIKeyEnv: "OPENAI_API_KEY", Model: "tts-model", Voice: "alloy"},
 	}
 	var speechRequest audioinput.SpeechRequest
 	manager.newSpeech = func(audioinput.SpeechClientOptions) (speechSynthesizer, error) {
@@ -1210,7 +1252,7 @@ func TestRealtimeTranscribeAgentUsesResponseOnlyGateway(t *testing.T) {
 			"result": map[string]any{"payloads": []any{map[string]any{"text": "complete"}}},
 		}})
 	}()
-	request := core.HarnessRequest{Network: "aries-net-test", RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -1257,7 +1299,7 @@ func testWAVBytes(rate int, pcm []byte) []byte {
 func TestArtifactCollectionFailureBelongsToRunNotStop(t *testing.T) {
 	fake := newFakeDeployment()
 	manager := newTestManager(t, fake, []byte("model-secret"))
-	request := core.HarnessRequest{Network: "aries-net-test", RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -1280,7 +1322,7 @@ func TestArtifactCollectionFailureBelongsToRunNotStop(t *testing.T) {
 func TestStopFailsUntilContainerAbsenceCanBeConfirmed(t *testing.T) {
 	fake := newFakeDeployment()
 	manager := newTestManager(t, fake, []byte("model-secret"))
-	request := core.HarnessRequest{Network: "aries-net-test", RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -1289,14 +1331,14 @@ func TestStopFailsUntilContainerAbsenceCanBeConfirmed(t *testing.T) {
 	if err := manager.Stop(context.Background()); err == nil {
 		t.Fatal("Stop succeeded without confirming container absence")
 	}
-	if manager.active != active || active.containerID == "" || len(active.apiKey) == 0 {
+	if manager.active != active || active.ID == "" || len(active.Credentials.Get("model")) == 0 {
 		t.Fatal("failed cleanup discarded retry state or secrets before confirmed removal")
 	}
 	fake.stopErr = nil
 	if err := manager.Stop(context.Background()); err != nil {
 		t.Fatalf("retry Stop: %v", err)
 	}
-	if manager.active != nil || active.containerID != "" || len(active.apiKey) != 0 {
+	if manager.active != nil || active.ID != "" || len(active.Credentials.Get("model")) != 0 {
 		t.Fatal("successful retry did not clear lifecycle state and secrets")
 	}
 }
@@ -1332,23 +1374,19 @@ func readArchive(t *testing.T, archive []byte) map[string]archiveFile {
 }
 
 func TestInputValidationAndSecretHelpers(t *testing.T) {
-	for _, value := range [][]byte{nil, {}, []byte("bad\nkey"), bytes.Repeat([]byte{'x'}, maxAPIKeyBytes+1)} {
-		if err := validateAPIKey(value); err == nil {
+	for _, value := range [][]byte{nil, {}, []byte("bad\nkey"), bytes.Repeat([]byte{'x'}, (16<<10)+1)} {
+		if _, err := harnesscommon.NewCredentials("OpenClaw").Load("model", "MODEL_KEY", func(string) ([]byte, bool) { return bytes.Clone(value), true }); err == nil {
 			t.Fatalf("validateAPIKey(%q) succeeded", value)
 		}
 	}
-	for _, id := range []string{"", "-bad", "bad/name"} {
-		if err := validateRunID(id); err == nil {
-			t.Fatalf("validateRunID(%q) succeeded", id)
-		}
-	}
+
 	if got := safeTaskID(" Fix / Git "); got != "fix---git" {
 		t.Fatalf("safeTaskID = %q", got)
 	}
 	t.Setenv("ARIES_TEST_KEY", "value")
-	first, _ := environmentAPIKeyLookup("ARIES_TEST_KEY")
+	first, _ := harnesscommon.EnvironmentAPIKeyLookup("ARIES_TEST_KEY")
 	first[0] = 'X'
-	second, _ := environmentAPIKeyLookup("ARIES_TEST_KEY")
+	second, _ := harnesscommon.EnvironmentAPIKeyLookup("ARIES_TEST_KEY")
 	if string(second) != "value" {
 		t.Fatalf("environment lookup aliased: %q", second)
 	}
@@ -1358,7 +1396,7 @@ func TestStartRollsBackDeploymentValidationFailure(t *testing.T) {
 	fake := newFakeDeployment()
 	fake.validateErr = errors.New("unsafe deployment")
 	manager := newTestManager(t, fake, []byte("model-secret"))
-	request := core.HarnessRequest{Network: "aries-net-test", RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
 	if err := manager.Start(context.Background(), request); !errors.Is(err, fake.validateErr) {
 		t.Fatalf("Start() = %v", err)
 	}
@@ -1366,30 +1404,19 @@ func TestStartRollsBackDeploymentValidationFailure(t *testing.T) {
 		t.Fatalf("removed=%v starts=%d", fake.removed, fake.startCalls)
 	}
 }
-func TestStartRollsBackPartialDeploymentCreate(t *testing.T) {
-	fake := newFakeDeployment()
-	fake.createErr = errors.New("partial create")
-	manager := newTestManager(t, fake, []byte("model-secret"))
-	request := core.HarnessRequest{Network: "aries-net-test", RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
-	if err := manager.Start(context.Background(), request); !errors.Is(err, fake.createErr) {
-		t.Fatalf("Start() = %v", err)
-	}
-	if !fake.removed || manager.active != nil {
-		t.Fatal("partial deployment was not cleaned up")
-	}
-}
+
 func TestDeploymentReceivesRuntimeConstraintsAndSecretValidation(t *testing.T) {
 	fake := newFakeDeployment()
 	manager := newTestManager(t, fake, []byte("model-secret"))
-	manager.extractAPIKeyEnv = "EXTRACT_KEY"
-	manager.webSearchEnabled = true
-	manager.apiKeyLookup = func(name string) ([]byte, bool) {
+	manager.options.Common.ExtractAPIKeyEnv = "EXTRACT_KEY"
+	manager.options.Common.WebSearchEnabled = true
+	manager.runtime.Options.APIKeyLookup = func(name string) ([]byte, bool) {
 		if name == "EXTRACT_KEY" {
 			return []byte("extract-secret"), true
 		}
 		return []byte("model-secret"), true
 	}
-	request := core.HarnessRequest{Network: "aries-net-test", RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
 	cpu, memory := 2.5, 1536
 	request.CPU, request.MemoryMB = &cpu, &memory
 	if err := manager.Start(context.Background(), request); err != nil {
@@ -1397,10 +1424,10 @@ func TestDeploymentReceivesRuntimeConstraintsAndSecretValidation(t *testing.T) {
 	}
 	defer manager.Stop(context.Background())
 	got := fake.validatedRequest
-	if got.Name != fake.created.Name || got.Image != testOpenClawImage || got.Network != request.Network || got.ServicePort != 18789 || len(got.ImageVolumes) != 0 || got.CPU == nil || *got.CPU != cpu || got.MemoryMB == nil || *got.MemoryMB != memory {
+	if got.Name != fake.created.Name || got.Image != testOpenClawImage || got.Placement.DockerNetwork != request.Connectivity.Placement.DockerNetwork || got.ServicePort != 18789 || len(got.ImageVolumes) != 0 || got.CPU == nil || *got.CPU != cpu || got.MemoryMB == nil || *got.MemoryMB != memory {
 		t.Fatalf("validation request = %#v", got)
 	}
-	for _, want := range []string{"model-secret", "extract-secret", string(manager.active.gatewayToken)} {
+	for _, want := range []string{"model-secret", "extract-secret", string(manager.active.Credentials.Get("gateway"))} {
 		found := false
 		for _, secret := range fake.validatedSecrets {
 			if string(secret) == want {
@@ -1424,11 +1451,52 @@ func TestStartRejectsMissingAttachmentBeforeAllocation(t *testing.T) {
 	fake := newFakeDeployment()
 	manager := newTestManager(t, fake, []byte("model-secret"))
 	request := core.HarnessRequest{RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
-	request.Network = " "
+	request.Connectivity.Placement = core.RuntimePlacement{}
 	if err := manager.Start(context.Background(), request); err == nil || !strings.Contains(err.Error(), "network") {
 		t.Fatalf("missing network = %v", err)
 	}
 	if fake.created.Name != "" {
 		t.Fatal("allocated runtime without network attachment")
+	}
+}
+
+func TestExtractTelemetryKeepsCollidingBasenames(t *testing.T) {
+	var archive bytes.Buffer
+	writer := tar.NewWriter(&archive)
+	names := []string{"sessions/a/run.jsonl", "sessions/b/run.jsonl", "sessions/c/1-run.jsonl"}
+	for i, name := range names {
+		content := fmt.Sprintf("record %d secret-value", i)
+		if err := writer.WriteHeader(&tar.Header{Name: name, Mode: 0600, Size: int64(len(content))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := writer.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	paths, err := extractTelemetry(root, archive.Bytes(), []byte("secret-value"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != len(names) {
+		t.Fatalf("paths = %v", paths)
+	}
+	seen := make(map[string]bool)
+	for i, path := range paths {
+		if seen[path] || filepath.Dir(path) != filepath.Join(root, "telemetry") {
+			t.Fatalf("unsafe or duplicate path: %s", path)
+		}
+		seen[path] = true
+		content, err := os.ReadFile(path)
+		want := []byte(fmt.Sprintf("record %d [REDACTED]", i))
+		if err != nil || !bytes.Equal(content, want) {
+			t.Fatalf("entry %d: content %q, error %v", i, content, err)
+		}
+	}
+	if filepath.Base(paths[0]) != "run.jsonl" {
+		t.Fatalf("noncolliding name changed: %s", paths[0])
 	}
 }

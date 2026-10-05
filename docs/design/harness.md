@@ -12,14 +12,18 @@ and result data live in [pkg/core](../../pkg/core).
 
 | Operation | Contract |
 | --- | --- |
-| `Start(context.Context, core.HarnessRequest) error` | Start the task-local runtime using model configuration, task network attachment, temporary tool endpoint, resource limits, timeout, and artifact directory. Roll back partial allocations; retain enough ownership state for `Stop` after a failed start. |
+| `Start(context.Context, core.HarnessRequest) error` | Start the task-local runtime using model configuration, typed runtime placement and resolved service endpoints, temporary tool endpoint, resource limits, timeout, and artifact directory. Roll back partial allocations; retain enough ownership state for `Stop` after a failed start. |
 | `Run(context.Context, string) (core.HarnessResult, error)` | Execute the task instruction within its deadline. Return harness status and private artifact references; do not interpret this result as benchmark correctness. |
 | `Stop(context.Context) error` | Idempotently stop the owned runtime and positively confirm absence. A failure prevents evaluation. |
 
-`HarnessRequest.Network` supplies the task attachment independently of
-`ToolEndpoint`, which carries tool connection identity, credentials, and artifact
-locations. The harness joins the supplied task network; an endpoint does not
-transfer ownership of the network or sandbox. Model credentials are runtime
+`HarnessRequest.Connectivity` supplies typed placement and resolved task service
+endpoints independently of `ToolEndpoint`, which carries tool connection identity,
+credentials, and artifact locations. Harnesses forward placement to `Deployment`
+and use the resolved search URL when search is enabled. The Docker provider
+interprets `RuntimePlacement.DockerNetwork`; the harness does not interpret
+network names. `TaskEnvironment.Start` supplies the complete connectivity value,
+including any declared search service URL. Neither input transfers ownership of the task environment or sandbox.
+Model credentials are runtime
 inputs and must not appear in profiles, Docker metadata, structured logs, or
 results. Retained configuration, trajectories, audio, and other task data remain
 private artifacts.
@@ -45,7 +49,22 @@ explicit constructor. Component behavior remains in its concrete package;
 implementation selection belongs in `cmd/aries`, while configuration translation,
 construction, and rollback belong in `internal/app/wiring/harness`.
 
-For OpenClaw, Runner calls `Start` to create the runtime, then `Run` to execute
+Both concrete managers compose a named `runtime *harness.Runtime` from
+[pkg/harness](../../pkg/harness/harness.go). This common implementation owns
+allocation, rollback, single-instruction admission, cleanup coordination, and
+credential/artifact mechanics. `RuntimeOptions` carries the shared deployment,
+image, output directory, timeouts, logger, and credential lookup. Common mode,
+web, subagent, and MCP inputs use `harness.Options`; each native constructor
+applies its own defaults and supported modes. The consumed `runner.AgentHarness`
+interface remains unchanged.
+
+Native managers retain configuration rendering, protocol readiness, request and
+cancellation behavior, voice handling, and result interpretation. Shared search
+validation lives in `pkg/harness/config.go`; connectivity data stays in `pkg/core`
+because it crosses component boundaries. A new implementation reuses the common
+runtime while supplying its native files, commands, and protocol operations.
+
+For both OpenClaw and Hermes, Runner calls `Start` to create the runtime, then `Run` to execute
 the instruction. The manager obtains a private service endpoint through
 deployment operations, and a Gateway client performs the agent protocol. Shutdown uses deployment operations to confirm absence.
 Changing hosting must preserve Gateway semantics, request correlation,

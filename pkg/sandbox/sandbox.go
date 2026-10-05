@@ -29,7 +29,7 @@ const (
 	defaultCleanupTimeout = 30 * time.Second
 	maxExecInput          = 16 << 20
 	maxConfiguredOutput   = 1 << 30
-	networkAlias          = "task-sandbox"
+	networkAlias          = deployment.TaskSandboxAlias
 )
 
 var (
@@ -70,7 +70,7 @@ type Sandbox struct {
 	deployment     deployment.Deployment
 	containerID    string
 	containerName  string
-	networkName    string
+	connectivity   core.HarnessConnectivity
 	environment    deployment.TaskEnvironment
 	workdir        string
 	execUser       string
@@ -188,12 +188,9 @@ func (m *Manager) Start(ctx context.Context, request core.SandboxRequest) (runne
 		return nil, errors.New("sandbox task environment constructor returned nil")
 	}
 	s.networkOwned = true
-	s.networkName, err = s.environment.Start(ctx, request)
+	s.connectivity, err = s.environment.Start(ctx, request)
 	if err != nil {
 		return nil, s.rollbackStart(ctx, fmt.Errorf("start task environment: %w", err))
-	}
-	if s.networkName == "" {
-		return nil, s.rollbackStart(ctx, errors.New("task environment returned an empty attachment"))
 	}
 	if err = s.environment.Validate(ctx); err != nil {
 		return nil, s.rollbackStart(ctx, err)
@@ -203,8 +200,8 @@ func (m *Manager) Start(ctx context.Context, request core.SandboxRequest) (runne
 		Name: s.containerName, Image: env.Image, Workdir: env.Workdir,
 		Env:        taskEnvironment(env.Env),
 		Entrypoint: []string{"/bin/sleep"}, Args: []string{"infinity"},
-		Labels:  ownershipLabels(request, "task-container"),
-		Network: s.networkName, NetworkAliases: []string{networkAlias},
+		Labels:    ownershipLabels(request, "task-container"),
+		Placement: s.connectivity.Placement, NetworkAliases: []string{networkAlias},
 		StorageMB: env.StorageMB, GPUs: env.GPUs,
 		Init: true, NoNewPrivileges: env.ExecUser != "", AllowImageVolumes: true,
 	}
@@ -241,7 +238,7 @@ func (m *Manager) Start(ctx context.Context, request core.SandboxRequest) (runne
 	if err = s.environment.Validate(ctx); err != nil {
 		return nil, s.rollbackStart(ctx, err)
 	}
-	m.logger.WithContext(ctx).WithFields(logrus.Fields{"container": s.containerName, "network": s.networkName}).Info("task sandbox started")
+	m.logger.WithContext(ctx).WithFields(logrus.Fields{"container": s.containerName, "placement": s.connectivity.Placement}).Info("task sandbox started")
 	m.mu.Lock()
 	m.active[s] = struct{}{}
 	m.mu.Unlock()
@@ -282,8 +279,8 @@ func (s *Sandbox) ContainerID() string { return s.containerID }
 // ContainerName returns the generated task container name.
 func (s *Sandbox) ContainerName() string { return s.containerName }
 
-// NetworkName returns the task-scoped deployment network.
-func (s *Sandbox) NetworkName() string { return s.networkName }
+// Connectivity returns placement and task service addresses for the harness.
+func (s *Sandbox) Connectivity() core.HarnessConnectivity { return s.connectivity }
 
 // Workdir returns the benchmark-declared container working directory.
 func (s *Sandbox) Workdir() string { return s.workdir }
@@ -600,6 +597,9 @@ func taskEnvironment(values map[string]string) []string {
 }
 
 func validateEnvironment(environment core.Environment) error {
+	if environment.Services.SearchPort < 0 || environment.Services.SearchPort > 65535 {
+		return errors.New("invalid task search service port")
+	}
 	if err := validatePullImage(environment.Image); err != nil {
 		return fmt.Errorf("invalid sandbox image: %w", err)
 	}

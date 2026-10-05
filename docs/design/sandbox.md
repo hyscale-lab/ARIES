@@ -14,7 +14,7 @@ The [Runner interfaces](../../pkg/runner/interfaces.go) define:
 | --- | --- |
 | `Start(ctx, SandboxRequest) (Sandbox, error)` | Create and validate a live task environment; clean up partial allocation on failure. |
 | `Stop(ctx, Sandbox) error` | Release the owned environment; success confirms absence. Repeated stops are safe. |
-| `Sandbox.NetworkName() string` | Return the task attachment created at startup; current harnesses require a nonempty shared deployment network name. Ownership stays with the sandbox. |
+| `Sandbox.Connectivity() core.HarnessConnectivity` | Return typed placement and resolved task service endpoints. Ownership of the task environment stays with the sandbox. |
 | `Sandbox.Exec(ctx, Command)` | Execute exact argv with context cancellation; return a command result separately from transport errors. |
 | `Sandbox.Upload(ctx, source, destination)` | Transfer a host file into the task environment. |
 | `Sandbox.Download(ctx, source, destination)` | Retrieve a task file into private run output; distinguish missing files from transport or runtime loss. |

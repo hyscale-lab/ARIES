@@ -38,10 +38,8 @@ type ToolSandbox interface {
 // Sandbox is the live capability returned by ToolSandbox, not a fifth
 // substitutable component role.
 type Sandbox interface {
-	// NetworkName returns the task attachment created during sandbox startup.
-	// Current harnesses require a nonempty shared deployment network name.
-	// The sandbox retains ownership; callers must not remove the attachment.
-	NetworkName() string
+	// Connectivity supplies explicit runtime placement and resolved task services.
+	Connectivity() core.HarnessConnectivity
 	Exec(context.Context, core.Command) (core.CommandResult, error)
 	Upload(context.Context, string, string) error
 	Download(context.Context, string, string) error

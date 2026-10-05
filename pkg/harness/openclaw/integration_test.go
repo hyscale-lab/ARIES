@@ -3,6 +3,8 @@
 package openclaw
 
 import (
+	harnesscommon "github.com/hyscale-lab/aries/pkg/harness"
+
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -108,9 +110,9 @@ func (bridge *modelBridge) Start(ctx context.Context, sandbox runner.Sandbox) (c
 			Cmd:    []string{"-e", deterministicModelScript(), hex.EncodeToString(digest[:])},
 			Labels: map[string]string{"aries.managed": "true", "aries.kind": "fake-model", "aries.run": bridge.runID},
 		},
-		HostConfig: &container.HostConfig{NetworkMode: container.NetworkMode(sandbox.(interface{ NetworkName() string }).NetworkName())},
+		HostConfig: &container.HostConfig{NetworkMode: container.NetworkMode(sandbox.Connectivity().Placement.DockerNetwork)},
 		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{
-			sandbox.(interface{ NetworkName() string }).NetworkName(): {Aliases: []string{"fake-model"}},
+			sandbox.Connectivity().Placement.DockerNetwork: {Aliases: []string{"fake-model"}},
 		}},
 	})
 	if err == nil {
@@ -233,7 +235,16 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 		t.Fatal(err)
 	}
 	bridge := &modelBridge{inner: sshBridge, api: api, runID: runID, key: key, image: versions.OpenClaw.Image}
-	harness, err := New(Options{Deployment: integrationDeployment(t), Image: versions.OpenClaw.Image, OutputDir: outputDir, CleanupTimeout: 30 * time.Second, StartTimeout: 60 * time.Second, AgentTimeout: 3 * time.Minute, Logger: logger})
+	harness, err := New(Options{Runtime: harnesscommon.RuntimeOptions{
+
+		Deployment:     integrationDeployment(t),
+		Image:          versions.OpenClaw.Image,
+		OutputDir:      outputDir,
+		CleanupTimeout: 30 * time.Second,
+		StartTimeout:   60 * time.Second,
+		AgentTimeout:   3 * time.Minute,
+		Logger:         logger,
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,11 +432,18 @@ func TestPinnedGatewayRealtimeProtocolSmoke(t *testing.T) {
 		KnownHostsFile: "/run/aries/ssh/known_hosts", KnownHostsSourceFile: writePrivate("known_hosts", "fixture-known-host", 0o600),
 	}
 	keys := map[string]string{"MODEL_KEY": "deterministic-model-key", "OPENAI_API_KEY": "deterministic-realtime-key"}
-	harness, err := New(Options{Deployment: integrationDeployment(t),
-		Image: versions.OpenClaw.Image, OutputDir: t.TempDir(), Mode: ModeRealtime,
-		CleanupTimeout: 30 * time.Second, StartTimeout: time.Minute, AgentTimeout: 10 * time.Second,
-		Realtime:     RealtimeOptions{TTS: RealtimeTTSOptions{APIKeyEnv: "OPENAI_API_KEY"}},
-		APIKeyLookup: func(name string) ([]byte, bool) { value, ok := keys[name]; return []byte(value), ok },
+	harness, err := New(Options{Runtime: harnesscommon.RuntimeOptions{
+
+		Deployment:     integrationDeployment(t),
+		Image:          versions.OpenClaw.Image,
+		OutputDir:      t.TempDir(),
+		CleanupTimeout: 30 * time.Second,
+		StartTimeout:   time.Minute,
+		AgentTimeout:   10 * time.Second,
+		APIKeyLookup:   func(name string) ([]byte, bool) { value, ok := keys[name]; return []byte(value), ok },
+	},
+
+		Realtime: RealtimeOptions{TTS: harnesscommon.TTSOptions{APIKeyEnv: "OPENAI_API_KEY"}}, Common: harnesscommon.Options{Mode: ModeRealtime},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -436,7 +454,7 @@ func TestPinnedGatewayRealtimeProtocolSmoke(t *testing.T) {
 		_ = harness.Stop(cleanupCtx)
 		_ = harness.Close()
 	})
-	if err := harness.Start(ctx, core.HarnessRequest{Network: networkName,
+	if err := harness.Start(ctx, core.HarnessRequest{Connectivity: core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: networkName}},
 		RunID: runID, TaskID: "realtime-smoke", Endpoint: endpoint, Timeout: 10 * time.Second,
 		Model: core.ModelConfig{Provider: "deepseek", BaseURL: "http://model.invalid/v1", Model: "deterministic-model", APIKeyEnv: "MODEL_KEY"},
 	}); err != nil {
@@ -445,7 +463,7 @@ func TestPinnedGatewayRealtimeProtocolSmoke(t *testing.T) {
 	harness.mu.Lock()
 	active := harness.active
 	clientURL := active.gatewayURL
-	token := append([]byte(nil), active.gatewayToken...)
+	token := append([]byte(nil), active.Credentials.Get("gateway")...)
 	harness.mu.Unlock()
 	connection, err := newGatewayClientWithDisposition(
 		clientURL,

@@ -562,4 +562,6 @@ func (b *cancelBridge) Stop(context.Context) error {
 	return nil
 }
 
-func (s *stubSandbox) NetworkName() string { return "test-network" }
+func (s *stubSandbox) Connectivity() core.HarnessConnectivity {
+	return core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "test-network"}}
+}

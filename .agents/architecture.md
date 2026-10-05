@@ -1,39 +1,31 @@
 # Architecture
 
-## Code ownership
-
-| Change | Location |
+| Ownership | Location |
 | --- | --- |
-| CLI grammar and implementation switches | `cmd/aries` |
-| Profile loading, preparation, scheduling, results | `internal/app` |
-| Configuration-to-constructor mapping and partial-construction cleanup | `internal/app/wiring/<role>/<implementation>.go` |
+| CLI and implementation switches | `cmd/aries` |
+| Profiles, preparation, scheduling, results | `internal/app` |
+| Configuration translation, constructors, rollback | `internal/app/wiring/<role>` |
 | Four role interfaces and task lifecycle | `pkg/runner` |
-| Small shared data | `pkg/core` |
-| Concrete behavior | `pkg/benchmark`, `pkg/harness`, `pkg/bridge`, `pkg/sandbox` |
-| Shared deployment contract and Docker provider | `pkg/deployment`, `pkg/deployment/docker` |
+| Shared data | `pkg/core` |
+| Concrete components | `pkg/{benchmark,harness,bridge,sandbox}` |
+| Deployment contract and providers | `pkg/deployment` |
 
-`cmd` injects selected constructors through `app.Wiring`. `internal/app` must not
-import its wiring subpackages. Keep selection out of wiring helpers; share
-benchmark constructors between preparation and execution. Harness and sandbox
-consume the neutral deployment contract, without importing the Docker provider.
+- `cmd` injects `app.Wiring`; `internal/app` must not import its wiring packages.
+- Harness and sandbox consume deployment contracts, not concrete providers.
+  Shared harness mechanics live in `pkg/harness`; it must not import native
+  harnesses. Keep native configuration, readiness, protocols, and results local.
+- Use explicit dependencies, concrete helpers, `context.Context` for external
+  work, and Logrus lifecycle logging. Add dependencies only when existing code
+  and the standard library are insufficient.
 
 ## Task lifecycle
 
-Load task → start sandbox → benchmark sanitizes sandbox → start bridge → start/run
-harness → positively stop harness → positively revoke bridge → benchmark evaluates
-the same live sandbox → remove sandbox container → remove owned network.
+Load → start sandbox → sanitize → start bridge → start/run harness → confirm
+harness stop → confirm bridge revocation → evaluate live sandbox → remove
+sandbox → remove task attachment.
 
-Failed isolation gates block verifier exposure and evaluation. Harness outcome
-and evaluation outcome are separate. Cleanup covers partial starts, runs in
-reverse ownership order, and uses fresh bounded contexts after cancellation.
-Closing a transport does not prove its resources are gone. Use `context.Context`
-for external work, idempotent stop methods, and Logrus lifecycle logging.
-Keep helpers concrete and package-private unless Runner substitutes them;
-prefer existing patterns. Add dependencies only when the standard library and
-existing dependencies are insufficient.
+Each admitted occurrence gets fresh owners, even for repeated task IDs. Drain
+admitted work through cleanup using fresh bounded contexts after cancellation.
+Model runtimes and monitoring surround Runner without adding component roles.
 
-Each admitted occurrence gets fresh components, identity, and network, including
-repeated task IDs. Concurrency bounds admissions; admitted work drains through
-cleanup. Managed model runtimes and monitoring surround Runner, adding no roles.
-
-Human reference: [architecture](../docs/design.md).
+Details: [design](../docs/design.md), [contracts](components.md).

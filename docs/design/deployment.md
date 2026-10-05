@@ -37,14 +37,14 @@ occurrence, including retries or repeated task IDs, requires a fresh owner.
 
 | Operation | Contract |
 | --- | --- |
-| `Start(ctx, SandboxRequest) (string, error)` | Allocate the task attachment and return its identifier. Call `Stop` even if startup fails after allocation. |
+| `Start(ctx, SandboxRequest) (core.HarnessConnectivity, error)` | Validate service declarations before allocation, allocate the task attachment, and return placement with resolved service URLs. Call `Stop` even if startup fails after allocation. |
 | `Validate(ctx)` | Confirm that the attachment still satisfies its ownership and isolation requirements. |
 | `BridgeListen(ctx)` | Resolve the listener bind address and harness destination for this exact task occurrence. |
 | `Stop(ctx)` | Remove the owned attachment and positively confirm absence. |
 
 The sandbox receives this owner through `Options.NewEnvironment`. It passes the
 attachment to its deployment request; Runner passes it separately to the harness
-as `HarnessRequest.Network`. Bridge credentials do not select the attachment.
+within `HarnessRequest.Connectivity`. Bridge credentials do not select the attachment.
 Composition supplies bridge `ResolveListen` callbacks without making bridge tool
 execution responsible for network discovery.
 
@@ -69,11 +69,22 @@ combination still needs explicit routing, identity, access, and cleanup semantic
 ## Current attachment handoff
 
 The live [`Sandbox`](../../pkg/runner/interfaces.go) contract requires
-`NetworkName() string`. [Runner](../../pkg/runner/runner.go) forwards it directly
-as `HarnessRequest.Network`. The [concrete sandbox](../../pkg/sandbox/sandbox.go)
-returns the attachment created by `TaskEnvironment.Start` and retains ownership.
-Current harnesses require a nonempty shared deployment network name; this
-explicit contract does not establish support for heterogeneous deployments.
+`Connectivity() core.HarnessConnectivity`. [Runner](../../pkg/runner/runner.go)
+forwards that value as `HarnessRequest.Connectivity`.
+
+The benchmark declares services in `Environment.Services` (currently a search
+port). `TaskEnvironment.Start` returns the complete
+`HarnessConnectivity{Placement, SearchURL}`. It rejects invalid service ports
+before allocating the attachment. The sandbox still calls `Validate` to confirm
+attachment ownership before creating its runtime, and retains environment
+ownership through evaluation. Search-enabled harnesses reject missing or invalid
+URLs; disabled search requires no endpoint.
+
+`RuntimePlacement{DockerNetwork}` names the task-owned Docker network. Docker
+validates and translates that field when creating runtimes. This preserves
+current local Docker profiles without imposing Docker network syntax on harness
+policy. Unsupported or missing placements fail explicitly. Separate profile
+deployment blocks do not imply heterogeneous deployment support.
 
 ## Substitution and current limits
 
@@ -83,7 +94,7 @@ support the concrete capabilities required by its consumer; a logical Benchmark
 or embedded ToolBridge need not be deployed as a service.
 
 **Current gap against full deployment independence:** the shared request still
-exposes network attachment strings, network aliases, image-declared volume
+exposes a Docker network field, network aliases, image-declared volume
 policy, and container-oriented resource settings. The
 [sandbox adapter](../../pkg/sandbox/sandbox.go) assumes a Linux environment with
 `/bin/sleep`, absolute paths, and numeric UID:GID execution. These are current

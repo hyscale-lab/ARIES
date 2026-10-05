@@ -4,24 +4,21 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	audioinput "github.com/hyscale-lab/aries/pkg/audio"
-	"github.com/hyscale-lab/aries/pkg/containerimage"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/deployment"
+	"github.com/hyscale-lab/aries/pkg/harness"
+	"github.com/hyscale-lab/aries/pkg/harness/internal/privatefiles"
 	gatewayclient "github.com/hyscale-lab/aries/pkg/harness/openclaw/gateway"
 	realtimeclient "github.com/hyscale-lab/aries/pkg/harness/openclaw/realtime"
 	"github.com/hyscale-lab/aries/pkg/runner"
@@ -29,12 +26,8 @@ import (
 )
 
 const (
-	defaultCleanupTimeout  = 30 * time.Second
-	defaultStartTimeout    = 45 * time.Second
-	defaultAgentTimeout    = 20 * time.Minute
 	defaultVoiceSTTTimeout = 5 * time.Minute
 	maxDockerOutput        = 16 << 20
-	maxAPIKeyBytes         = 16 << 10
 	gatewayListenPort      = "18789"
 	gatewayLauncherPath    = "/run/aries/gateway-launcher"
 	upstreamGatewayPort    = "18790"
@@ -52,26 +45,14 @@ func isRealtimeMode(mode string) bool {
 
 // Options are the host-local inputs to one upstream OpenClaw container.
 type Options struct {
-	Image                  string
-	OutputDir              string
-	Deployment             deployment.Deployment
-	APIKeyLookup           func(string) ([]byte, bool)
-	Mode                   string
-	Realtime               RealtimeOptions
-	WebSearchEnabled       bool
-	ExtractAPIKeyEnv       string
-	SubagentsEnabled       bool
-	MaxConcurrentSubagents int
-	MCPServers             []core.MCPServerConfig
-	CleanupTimeout         time.Duration
-	StartTimeout           time.Duration
-	AgentTimeout           time.Duration
-	Logger                 *logrus.Logger
+	Runtime  harness.RuntimeOptions
+	Common   harness.Options
+	Realtime RealtimeOptions
 }
 
 type RealtimeOptions struct {
 	AgentQuestionTemplate string
-	TTS                   RealtimeTTSOptions
+	TTS                   harness.TTSOptions
 	ChunkDuration         time.Duration
 	ListenDuration        time.Duration
 	QuietDuration         time.Duration
@@ -85,46 +66,17 @@ type RealtimeOptions struct {
 	IncludeEvents         bool
 }
 
-type RealtimeTTSOptions struct {
-	Provider     string
-	BaseURL      string
-	APIKeyEnv    string
-	Model        string
-	Voice        string
-	Instructions string
-	Speed        *float64
-	Timeout      time.Duration
-}
-
 type Manager struct {
-	deployment             deployment.Deployment
-	image                  string
-	outputDir              string
-	cleanupTimeout         time.Duration
-	startTimeout           time.Duration
-	agentTimeout           time.Duration
-	logger                 *logrus.Logger
-	apiKeyLookup           func(string) ([]byte, bool)
-	mode                   string
-	realtime               RealtimeOptions
-	webSearchEnabled       bool
-	extractAPIKeyEnv       string
-	subagentsEnabled       bool
-	maxConcurrentSubagents int
-	mcpServers             []core.MCPServerConfig
-	newID                  func() (string, error)
-	newGateway             func(string, []byte) (gatewayConnection, error)
-	newAgentGateway        func(string, []byte) (gatewayConnection, error)
-	newRealtime            func(realtimeclient.Gateway, realtimeclient.Options) (realtimeRunner, error)
-	newSpeech              func(audioinput.SpeechClientOptions) (speechSynthesizer, error)
+	options         Options
+	runtime         *harness.Runtime
+	newID           func() (string, error)
+	newGateway      func(string, []byte) (gatewayConnection, error)
+	newAgentGateway func(string, []byte) (gatewayConnection, error)
+	newRealtime     func(realtimeclient.Gateway, realtimeclient.Options) (realtimeRunner, error)
+	newSpeech       func(audioinput.SpeechClientOptions) (speechSynthesizer, error)
 
-	mu        sync.Mutex
-	active    *session
-	stopping  bool
-	stopDone  chan struct{}
-	stopErr   error
-	closeOnce sync.Once
-	closeErr  error
+	mu     sync.Mutex
+	active *session
 }
 
 type realtimeRunner interface {
@@ -146,77 +98,28 @@ func (manager *Manager) Close() error {
 	if manager == nil {
 		return nil
 	}
-	manager.closeOnce.Do(func() {
-		if closer, ok := manager.deployment.(interface{ Close() error }); ok {
-			manager.closeErr = closer.Close()
-		}
-	})
-	return manager.closeErr
+	return manager.runtime.Close()
 }
 
 type session struct {
-	runID             string
-	taskID            string
-	safeTaskID        string
-	attemptID         string
-	containerName     string
-	containerID       string
-	deploymentRequest deployment.Request
-	artifactDir       string
-	endpoint          core.ToolEndpoint
-	model             core.ModelConfig
-	agentTimeout      time.Duration
-	apiKey            []byte
-	realtimeAPIKey    []byte
-	extractAPIKey     []byte
-	gatewayToken      []byte
-	mcpSecrets        [][]byte
-	mcpSecretFiles    map[string][]byte
-	gatewayURL        string
-	agentIdempotency  string
-	runAttempted      bool
-	logPaths          []string
+	*harness.Occurrence
+	safeTaskID       string
+	gatewayURL       string
+	agentIdempotency string
 }
 
 var _ runner.AgentHarness = (*Manager)(nil)
 
 // New constructs a harness using the supplied deployment capability.
 func New(options Options) (*Manager, error) {
-	if err := containerimage.ValidatePinnedTagOnly(options.Image); err != nil {
-		return nil, fmt.Errorf("OpenClaw image: %w", err)
-	}
-	if strings.TrimSpace(options.OutputDir) == "" {
-		return nil, errors.New("OpenClaw output directory is required")
-	}
-	outputDir, err := filepath.Abs(options.OutputDir)
+	runtime, err := harness.NewRuntime("OpenClaw", options.Runtime)
 	if err != nil {
-		return nil, fmt.Errorf("resolve OpenClaw output directory: %w", err)
+		return nil, err
 	}
-	if err := ensurePrivateDirectory(outputDir); err != nil {
-		return nil, fmt.Errorf("prepare OpenClaw output directory: %w", err)
+	if options.Common.Mode == "" {
+		options.Common.Mode = ModeAgent
 	}
-	if options.Deployment == nil {
-		return nil, errors.New("OpenClaw deployment is required")
-	}
-	if options.CleanupTimeout <= 0 {
-		options.CleanupTimeout = defaultCleanupTimeout
-	}
-	if options.StartTimeout <= 0 {
-		options.StartTimeout = defaultStartTimeout
-	}
-	if options.AgentTimeout <= 0 {
-		options.AgentTimeout = defaultAgentTimeout
-	}
-	if options.Logger == nil {
-		options.Logger = logrus.StandardLogger()
-	}
-	if options.APIKeyLookup == nil {
-		options.APIKeyLookup = environmentAPIKeyLookup
-	}
-	if options.Mode == "" {
-		options.Mode = ModeAgent
-	}
-	switch options.Mode {
+	switch options.Common.Mode {
 	case ModeAgent:
 		if options.Realtime != (RealtimeOptions{}) {
 			return nil, errors.New("OpenClaw realtime options require realtime mode")
@@ -237,20 +140,15 @@ func New(options Options) (*Manager, error) {
 	default:
 		return nil, errors.New("OpenClaw mode must be agent, realtime, or voice-transcribe")
 	}
-	for _, server := range options.MCPServers {
+	for _, server := range options.Common.MCPServers {
 		if err := core.ValidateMCPServer(server); err != nil {
 			return nil, err
 		}
 	}
-	return &Manager{
-		deployment: options.Deployment, image: options.Image, outputDir: outputDir,
-		cleanupTimeout: options.CleanupTimeout, startTimeout: options.StartTimeout,
-		agentTimeout: options.AgentTimeout, logger: options.Logger,
-		apiKeyLookup: options.APIKeyLookup, mode: options.Mode, realtime: options.Realtime,
-		webSearchEnabled: options.WebSearchEnabled, extractAPIKeyEnv: options.ExtractAPIKeyEnv, subagentsEnabled: options.SubagentsEnabled,
-		maxConcurrentSubagents: options.MaxConcurrentSubagents, mcpServers: options.MCPServers, newID: randomID,
+	options.Runtime = runtime.Options
+	return &Manager{runtime: runtime, options: options, newID: privatefiles.RandomID,
 		newGateway: func(rawURL string, token []byte) (gatewayConnection, error) {
-			return newGatewayClientWithDisposition(rawURL, token, gatewayScopes(options.Mode), gatewayEventDisposition(options.Mode))
+			return newGatewayClientWithDisposition(rawURL, token, gatewayScopes(options.Common.Mode), gatewayEventDisposition(options.Common.Mode))
 		},
 		newAgentGateway: func(rawURL string, token []byte) (gatewayConnection, error) {
 			return newGatewayClientWithDisposition(rawURL, token, gatewayScopes(ModeAgent), gatewayclient.EventDispositionResponseOnly)
@@ -262,235 +160,132 @@ func New(options Options) (*Manager, error) {
 func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) error {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	if manager.active != nil || manager.stopping {
+	if manager.runtime.InUse() {
 		return errors.New("OpenClaw harness is already active")
 	}
-	if err := validateRunID(request.RunID); err != nil {
+	if err := harness.ValidateRunID("OpenClaw", request.RunID); err != nil {
 		return err
 	}
-	if err := validateTaskID(request.TaskID); err != nil {
+	if err := harness.ValidateTaskID("OpenClaw", request.TaskID); err != nil {
 		return err
 	}
-	if strings.TrimSpace(request.Network) == "" {
-		return errors.New("harness deployment network is required")
+	if err := harness.ValidateSearch(request.Connectivity.SearchURL, manager.options.Common.WebSearchEnabled); err != nil {
+		return err
 	}
 	if request.Timeout < 0 {
 		return errors.New("OpenClaw task timeout must not be negative")
 	}
 	agentTimeout := request.Timeout
 	if agentTimeout == 0 {
-		agentTimeout = manager.agentTimeout
+		agentTimeout = manager.runtime.Options.AgentTimeout
 	}
-	extractRequested := manager.webSearchEnabled && manager.extractAPIKeyEnv != ""
-	var extractAPIKey []byte
+	extractRequested := manager.options.Common.WebSearchEnabled && manager.options.Common.ExtractAPIKeyEnv != ""
+	credentials := harness.NewCredentials("OpenClaw")
+	defer func() {
+		if credentials != nil {
+			credentials.Clear()
+		}
+	}()
 	extractEnabled := false
 	if extractRequested {
-		extractSource, ok := manager.apiKeyLookup(manager.extractAPIKeyEnv)
-		if !ok {
-			clear(extractSource)
-			manager.logger.WithContext(ctx).WithFields(logrus.Fields{
-				"task_id": request.TaskID, "extract_api_key_env": manager.extractAPIKeyEnv,
+		found, err := credentials.Load("extract", manager.options.Common.ExtractAPIKeyEnv, manager.runtime.Options.APIKeyLookup)
+		if err != nil {
+			return fmt.Errorf("OpenClaw extract API key: %w", err)
+		}
+		extractEnabled = found
+		if !found {
+			manager.runtime.Options.Logger.WithContext(ctx).WithFields(logrus.Fields{
+				"task_id": request.TaskID, "extract_api_key_env": manager.options.Common.ExtractAPIKeyEnv,
 			}).Warn("OpenClaw extract API-key environment is not set; falling back to native web_fetch without Tavily extraction")
-		} else {
-			candidate := bytes.Clone(extractSource)
-			clear(extractSource)
-			if err := validateAPIKey(candidate); err != nil {
-				clear(candidate)
-				return fmt.Errorf("OpenClaw extract API key: %w", err)
-			}
-			extractAPIKey = candidate
-			extractEnabled = true
 		}
 	}
-	configuration, err := renderConfig(request.Model, request.Endpoint, manager.mode, manager.webSearchEnabled, extractEnabled, manager.subagentsEnabled, manager.maxConcurrentSubagents, MCPOptions{
-		Servers: manager.mcpServers,
+	configuration, err := renderConfig(request.Model, request.Endpoint, manager.options.Common.Mode, request.Connectivity.SearchURL, manager.options.Common.WebSearchEnabled, extractEnabled, manager.options.Common.SubagentsEnabled, manager.options.Common.MaxConcurrentSubagents, MCPOptions{
+		Servers: manager.options.Common.MCPServers,
 	})
 	if err != nil {
-		clear(extractAPIKey)
 		return err
 	}
-	apiKeySource, ok := manager.apiKeyLookup(request.Model.APIKeyEnv)
-	if !ok {
-		clear(apiKeySource)
-		clear(extractAPIKey)
+	if ok, err := credentials.Load("model", request.Model.APIKeyEnv, manager.runtime.Options.APIKeyLookup); err != nil {
+		return err
+	} else if !ok {
 		return fmt.Errorf("OpenClaw API-key environment %q is not set", request.Model.APIKeyEnv)
 	}
-	apiKey := bytes.Clone(apiKeySource)
-	clear(apiKeySource)
-	if err := validateAPIKey(apiKey); err != nil {
-		clear(apiKey)
-		clear(extractAPIKey)
-		return err
-	}
-	var realtimeAPIKey []byte
-	if isRealtimeMode(manager.mode) {
-		realtimeKeySource, ok := manager.apiKeyLookup(manager.realtime.TTS.APIKeyEnv)
-		if !ok {
-			clear(apiKey)
-			clear(realtimeKeySource)
-			clear(extractAPIKey)
-			return fmt.Errorf("OpenClaw realtime API-key environment %q is not set", manager.realtime.TTS.APIKeyEnv)
-		}
-		realtimeAPIKey = bytes.Clone(realtimeKeySource)
-		clear(realtimeKeySource)
-		if err := validateAPIKey(realtimeAPIKey); err != nil {
-			clear(apiKey)
-			clear(realtimeAPIKey)
-			clear(extractAPIKey)
+	if isRealtimeMode(manager.options.Common.Mode) {
+		if ok, err := credentials.Load("voice", manager.options.Realtime.TTS.APIKeyEnv, manager.runtime.Options.APIKeyLookup); err != nil {
 			return fmt.Errorf("OpenClaw realtime API key: %w", err)
+		} else if !ok {
+			return fmt.Errorf("OpenClaw realtime API-key environment %q is not set", manager.options.Realtime.TTS.APIKeyEnv)
 		}
 	}
-	if bytes.Contains(configuration, apiKey) {
-		clear(apiKey)
-		clear(realtimeAPIKey)
-		clear(extractAPIKey)
+	if value := credentials.Get("model"); len(value) != 0 && bytes.Contains(configuration, value) {
 		return errors.New("rendered OpenClaw config contains the API-key value")
 	}
-	if len(realtimeAPIKey) != 0 && bytes.Contains(configuration, realtimeAPIKey) {
-		clear(apiKey)
-		clear(realtimeAPIKey)
-		clear(extractAPIKey)
+	if value := credentials.Get("voice"); len(value) != 0 && bytes.Contains(configuration, value) {
 		return errors.New("rendered OpenClaw config contains the realtime API-key value")
 	}
-	if len(extractAPIKey) != 0 && bytes.Contains(configuration, extractAPIKey) {
-		clear(apiKey)
-		clear(realtimeAPIKey)
-		clear(extractAPIKey)
+	if value := credentials.Get("extract"); len(value) != 0 && bytes.Contains(configuration, value) {
 		return errors.New("rendered OpenClaw config contains the extract API-key value")
 	}
-	mcpSecretFiles := make(map[string][]byte)
-	var mcpSecrets [][]byte
-	for _, srv := range manager.mcpServers {
-		keys := make([]string, 0, len(srv.SecretEnv))
-		for k := range srv.SecretEnv {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			hostVar := srv.SecretEnv[k]
-			if _, exists := mcpSecretFiles[hostVar]; exists {
-				continue
-			}
-			secretSource, ok := manager.apiKeyLookup(hostVar)
-			if !ok {
-				clear(apiKey)
-				clear(realtimeAPIKey)
-				clear(extractAPIKey)
-				for _, s := range mcpSecrets {
-					clear(s)
-				}
-				return fmt.Errorf("OpenClaw MCP server %q secret environment variable %q (%q) is not set", srv.Name, hostVar, k)
-			}
-			secret := bytes.Clone(secretSource)
-			clear(secretSource)
-			if err := validateAPIKey(secret); err != nil {
-				clear(apiKey)
-				clear(realtimeAPIKey)
-				clear(extractAPIKey)
-				clear(secret)
-				for _, s := range mcpSecrets {
-					clear(s)
-				}
-				return fmt.Errorf("OpenClaw MCP server %q secret environment variable %q (%q): %w", srv.Name, hostVar, k, err)
-			}
-			if bytes.Contains(configuration, secret) {
-				clear(apiKey)
-				clear(realtimeAPIKey)
-				clear(extractAPIKey)
-				clear(secret)
-				for _, s := range mcpSecrets {
-					clear(s)
-				}
-				return fmt.Errorf("rendered OpenClaw config contains secret for MCP server %q (%q)", srv.Name, k)
-			}
-			mcpSecretFiles[hostVar] = secret
-			mcpSecrets = append(mcpSecrets, secret)
-		}
+	if err := credentials.LoadMCP(manager.options.Common.MCPServers, configuration, manager.runtime.Options.APIKeyLookup); err != nil {
+		return err
 	}
 	id, err := manager.newID()
 	if err != nil {
-		clear(apiKey)
-		clear(realtimeAPIKey)
-		clear(extractAPIKey)
-		for _, s := range mcpSecrets {
-			clear(s)
-		}
 		return fmt.Errorf("generate OpenClaw harness ID: %w", err)
 	}
-	gatewayToken, err := randomSecret(32)
+	gatewayToken, err := privatefiles.RandomSecret(32)
 	if err != nil {
-		clear(apiKey)
-		clear(realtimeAPIKey)
-		clear(extractAPIKey)
-		for _, s := range mcpSecrets {
-			clear(s)
-		}
 		return fmt.Errorf("generate OpenClaw gateway token: %w", err)
 	}
-	agentIdempotency, err := randomID()
+	credentials.Set("gateway", gatewayToken)
+	clear(gatewayToken)
+	agentIdempotency, err := privatefiles.RandomID()
 	if err != nil {
-		clear(apiKey)
-		clear(realtimeAPIKey)
-		clear(extractAPIKey)
-		clear(gatewayToken)
-		for _, s := range mcpSecrets {
-			clear(s)
-		}
 		return fmt.Errorf("generate OpenClaw agent idempotency key: %w", err)
 	}
 	active := &session{
-		runID: request.RunID, taskID: request.TaskID, safeTaskID: safeTaskID(request.TaskID), attemptID: id,
-		containerName: "aries-openclaw-" + id, artifactDir: filepath.Join(manager.outputDir, request.TaskID, "harness"),
-		endpoint: request.Endpoint, model: request.Model, agentTimeout: agentTimeout, apiKey: apiKey, realtimeAPIKey: realtimeAPIKey, extractAPIKey: extractAPIKey, gatewayToken: gatewayToken, mcpSecrets: mcpSecrets, mcpSecretFiles: mcpSecretFiles, agentIdempotency: agentIdempotency,
+		Occurrence: &harness.Occurrence{RunID: request.RunID, TaskID: request.TaskID, AttemptID: id, Name: "aries-openclaw-" + id, ArtifactDir: filepath.Join(manager.runtime.Options.OutputDir, request.TaskID, "harness"), Endpoint: request.Endpoint, Model: request.Model, AgentTimeout: agentTimeout},
+		safeTaskID: safeTaskID(request.TaskID),
+
+		agentIdempotency: agentIdempotency,
 	}
-	active.deploymentRequest = deployment.Request{
-		Name: active.containerName, Image: manager.image,
+	active.Credentials = credentials
+	active.Artifacts = &harness.Artifacts{Directory: active.ArtifactDir}
+	credentials = nil
+
+	if err := manager.runtime.Own(active.Occurrence); err != nil {
+		active.Credentials.Clear()
+		return err
+	}
+	active.DeploymentRequest = deployment.Request{
+		Name: active.Name, Image: manager.runtime.Options.Image,
 		Env: []string{"OPENCLAW_CONFIG_PATH=" + configContainerPath}, Args: []string{launcherPath, gatewayLauncherPath},
-		Labels:  map[string]string{"aries.managed": "true", "aries.kind": "openclaw-harness", "aries.component": "harness", "aries.run": request.RunID, "aries.task": request.TaskID, "aries.attempt": active.attemptID},
-		Network: request.Network, CPU: request.CPU, MemoryMB: request.MemoryMB, ServicePort: 18789,
+		Labels:    map[string]string{"aries.managed": "true", "aries.kind": "openclaw-harness", "aries.component": "harness", "aries.run": request.RunID, "aries.task": request.TaskID, "aries.attempt": active.AttemptID},
+		Placement: request.Connectivity.Placement, CPU: request.CPU, MemoryMB: request.MemoryMB, ServicePort: 18789,
 	}
 	fail := func(primary error) error {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), manager.cleanupTimeout)
-		cleanupErr := manager.stopSession(cleanupCtx, active)
-		cancel()
-		if cleanupErr != nil {
+		err := manager.runtime.Rollback(ctx, active.Occurrence, primary)
+		if manager.runtime.InUse() {
 			manager.active = active
-			manager.stopErr = cleanupErr
-			return errors.Join(primary, fmt.Errorf("rollback partial OpenClaw harness: %w", cleanupErr))
 		}
-		_ = os.RemoveAll(active.artifactDir)
-		return primary
+		return err
 	}
-	if err := ensurePrivateDirectory(active.artifactDir); err != nil {
+	if err := privatefiles.EnsureDirectory(active.ArtifactDir); err != nil {
 		return fail(fmt.Errorf("create OpenClaw artifact directory: %w", err))
 	}
-	configArtifact := filepath.Join(active.artifactDir, "openclaw.json")
-	if err := writeArtifact(configArtifact, configuration); err != nil {
+	if err := active.Artifacts.Write("openclaw.json", configuration); err != nil {
 		return fail(fmt.Errorf("retain rendered OpenClaw config: %w", err))
 	}
-	active.logPaths = appendUnique(active.logPaths, configArtifact)
 	archive, err := manager.runtimeArchive(active, configuration)
 	if err != nil {
 		return fail(err)
 	}
 	defer clear(archive)
-	active.containerID, err = manager.deployment.Create(ctx, active.deploymentRequest)
-	if err != nil {
-		return fail(fmt.Errorf("create OpenClaw deployment: %w", err))
-	}
-	if strings.TrimSpace(active.containerID) == "" {
-		return fail(errors.New("deployment returned an empty OpenClaw identity"))
-	}
-	if err := manager.deployment.UploadArchive(ctx, active.containerID, "/", bytes.NewReader(archive)); err != nil {
-		return fail(fmt.Errorf("copy private OpenClaw runtime: %w", err))
-	}
-	if err := manager.validateContainer(ctx, active); err != nil {
+	secrets := active.Credentials.Secrets()
+	if err := manager.runtime.Start(ctx, active.Occurrence, active.DeploymentRequest, archive, secrets); err != nil {
 		return fail(err)
 	}
-	if err := manager.deployment.Start(ctx, active.containerID); err != nil {
-		return fail(fmt.Errorf("start OpenClaw container: %w", err))
-	}
-	readyCtx, cancel := context.WithTimeout(ctx, manager.startTimeout)
+	readyCtx, cancel := context.WithTimeout(ctx, manager.runtime.Options.StartTimeout)
 	err = manager.waitReady(readyCtx, active)
 	cancel()
 	if err != nil {
@@ -502,39 +297,32 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	}
 	active.gatewayURL = gatewayURL
 	manager.active = active
-	manager.stopErr = nil
-	manager.logger.WithContext(ctx).WithFields(logrus.Fields{"task_id": active.taskID, "container": active.containerName}).Info("OpenClaw harness started")
+	manager.runtime.Ready()
+	manager.runtime.Options.Logger.WithContext(ctx).WithFields(logrus.Fields{"task_id": active.TaskID, "container": active.Name}).Info("OpenClaw harness started")
 	return nil
 }
 
 func (manager *Manager) Run(ctx context.Context, instruction string) (core.HarnessResult, error) {
 	started := time.Now()
 	manager.mu.Lock()
+	if err := manager.runtime.AdmitRun(instruction); err != nil {
+		manager.mu.Unlock()
+		return core.HarnessResult{Status: core.StatusFailed}, err
+	}
 	active := manager.active
-	if active == nil {
-		manager.mu.Unlock()
-		return core.HarnessResult{Status: core.StatusFailed}, errors.New("OpenClaw harness is not started")
-	}
-	if active.runAttempted {
-		manager.mu.Unlock()
-		return core.HarnessResult{Status: core.StatusFailed}, errors.New("OpenClaw harness accepts exactly one task instruction")
-	}
-	if strings.TrimSpace(instruction) == "" || strings.ContainsRune(instruction, 0) {
-		manager.mu.Unlock()
-		return core.HarnessResult{Status: core.StatusFailed}, errors.New("OpenClaw task instruction is invalid")
-	}
-	active.runAttempted = true
+	active = snapshotSession(active)
 	manager.mu.Unlock()
+	defer active.Credentials.Clear()
 
-	if isRealtimeMode(manager.mode) {
+	if isRealtimeMode(manager.options.Common.Mode) {
 		return manager.runRealtime(ctx, active, instruction, started)
 	}
-	runCtx, cancel := context.WithTimeout(ctx, active.agentTimeout)
-	client, err := manager.newGateway(active.gatewayURL, active.gatewayToken)
+	runCtx, cancel := context.WithTimeout(ctx, active.AgentTimeout)
+	client, err := manager.newGateway(active.gatewayURL, active.Credentials.Get("gateway"))
 	if err != nil {
 		cancel()
-		err = redactSessionError(err, active)
-		return failedHarnessResult(active, started, err), err
+		err = active.Credentials.RedactErr(err)
+		return active.FailedResult(started, err), err
 	}
 	defer client.Close()
 	connectSummary, err := client.Connect(runCtx, gatewayclient.ConnectOptions{})
@@ -544,7 +332,7 @@ func (manager *Manager) Run(ctx context.Context, instruction string) (core.Harne
 	}
 	if err == nil {
 		thinking := ""
-		if disablesThinking(active.model) {
+		if disablesThinking(active.Model) {
 			thinking = "off"
 		}
 		agentResult, err = client.Agent(runCtx, gatewayclient.AgentRequest{
@@ -555,65 +343,65 @@ func (manager *Manager) Run(ctx context.Context, instruction string) (core.Harne
 	cancel()
 	connectSummary = redactConnectSummary(connectSummary, active)
 	agentResult = redactAgentResult(agentResult, active)
-	err = redactSessionError(err, active)
+	err = active.Credentials.RedactErr(err)
 	resultPath, writeErr := manager.writeAgentResult(active, connectSummary, agentResult, err)
 	if writeErr == nil {
-		active.logPaths = appendUnique(active.logPaths, resultPath)
+		active.Artifacts.Add(resultPath)
 	}
 	err = errors.Join(err, writeErr)
-	artifactCtx, artifactCancel := context.WithTimeout(context.WithoutCancel(ctx), manager.cleanupTimeout)
+	artifactCtx, artifactCancel := context.WithTimeout(context.WithoutCancel(ctx), manager.runtime.Options.CleanupTimeout)
 	artifactErr := manager.collectArtifacts(artifactCtx, active)
 	artifactCancel()
 	err = errors.Join(err, artifactErr)
 	if err != nil {
-		return failedHarnessResult(active, started, err), err
+		return active.FailedResult(started, err), err
 	}
 	return core.HarnessResult{
 		Status: core.StatusSucceeded, FinalResponse: agentResult.Text, Duration: time.Since(started),
-		LogPaths: append([]string(nil), active.logPaths...),
+		LogPaths: active.Artifacts.Paths(),
 	}, nil
 }
 
 func (manager *Manager) runRealtime(ctx context.Context, active *session, instruction string, started time.Time) (core.HarnessResult, error) {
 	audioPath, speechPaths, synthErr := manager.synthesizeVoiceInstruction(ctx, active, instruction)
 	if len(speechPaths) != 0 {
-		active.logPaths = appendUnique(active.logPaths, speechPaths...)
+		active.Artifacts.Add(speechPaths...)
 	}
 	if synthErr != nil {
-		synthErr = redactSessionError(synthErr, active)
-		return failedHarnessResult(active, started, synthErr), synthErr
+		synthErr = active.Credentials.RedactErr(synthErr)
+		return active.FailedResult(started, synthErr), synthErr
 	}
-	client, err := manager.newGateway(active.gatewayURL, active.gatewayToken)
+	client, err := manager.newGateway(active.gatewayURL, active.Credentials.Get("gateway"))
 	if err != nil {
-		err = redactSessionError(err, active)
-		return failedHarnessResult(active, started, err), err
+		err = active.Credentials.RedactErr(err)
+		return active.FailedResult(started, err), err
 	}
-	closeGatewayInRunner := manager.mode == ModeRealtime
+	closeGatewayInRunner := manager.options.Common.Mode == ModeRealtime
 	runner, err := manager.newRealtime(client, realtimeclient.Options{
 		OriginalPrompt:        instruction,
-		SessionMode:           manager.mode,
+		SessionMode:           manager.options.Common.Mode,
 		SessionKey:            "agent:main:aries-" + active.safeTaskID,
-		Provider:              manager.realtime.Provider,
-		Model:                 manager.realtime.Model,
-		Voice:                 manager.realtime.Voice,
-		ReasoningEffort:       manager.realtime.ReasoningEffort,
+		Provider:              manager.options.Realtime.Provider,
+		Model:                 manager.options.Realtime.Model,
+		Voice:                 manager.options.Realtime.Voice,
+		ReasoningEffort:       manager.options.Realtime.ReasoningEffort,
 		AudioProvider:         manager.realtimeAudioProvider(audioPath),
-		ChunkDuration:         manager.realtime.ChunkDuration,
-		ListenDuration:        durationOrDefault(manager.realtime.ListenDuration, active.agentTimeout),
-		QuietDuration:         manager.realtime.QuietDuration,
-		AgentWaitDuration:     durationOrDefault(manager.realtime.AgentWaitDuration, active.agentTimeout),
-		ToolCallTimeout:       manager.realtime.ToolCallTimeout,
-		AgentQuestionTemplate: manager.realtime.AgentQuestionTemplate,
-		IncludeEvents:         manager.realtime.IncludeEvents,
+		ChunkDuration:         manager.options.Realtime.ChunkDuration,
+		ListenDuration:        durationOrDefault(manager.options.Realtime.ListenDuration, active.AgentTimeout),
+		QuietDuration:         manager.options.Realtime.QuietDuration,
+		AgentWaitDuration:     durationOrDefault(manager.options.Realtime.AgentWaitDuration, active.AgentTimeout),
+		ToolCallTimeout:       manager.options.Realtime.ToolCallTimeout,
+		AgentQuestionTemplate: manager.options.Realtime.AgentQuestionTemplate,
+		IncludeEvents:         manager.options.Realtime.IncludeEvents,
 		CloseGateway:          closeGatewayInRunner,
 	})
 	if err != nil {
 		_ = client.Close()
-		err = redactSessionError(err, active)
-		return failedHarnessResult(active, started, err), err
+		err = active.Credentials.RedactErr(err)
+		return active.FailedResult(started, err), err
 	}
 	var realtimeResult realtimeclient.Result
-	if manager.mode == ModeVoiceTranscribe {
+	if manager.options.Common.Mode == ModeVoiceTranscribe {
 		transcribeCtx, transcribeCancel := context.WithTimeout(ctx, defaultVoiceSTTTimeout)
 		realtimeResult, err = runner.Run(transcribeCtx)
 		transcribeCancel()
@@ -624,11 +412,11 @@ func (manager *Manager) runRealtime(ctx context.Context, active *session, instru
 			}
 		}
 		if err == nil {
-			agentClient, agentErr := manager.newAgentGateway(active.gatewayURL, active.gatewayToken)
+			agentClient, agentErr := manager.newAgentGateway(active.gatewayURL, active.Credentials.Get("gateway"))
 			if agentErr != nil {
 				err = agentErr
 			} else {
-				agentCtx, agentCancel := context.WithTimeout(ctx, active.agentTimeout)
+				agentCtx, agentCancel := context.WithTimeout(ctx, active.AgentTimeout)
 				err = manager.runAgentWithTranscript(agentCtx, active, agentClient, &realtimeResult)
 				agentCancel()
 				err = errors.Join(err, agentClient.Close())
@@ -636,30 +424,30 @@ func (manager *Manager) runRealtime(ctx context.Context, active *session, instru
 		}
 		err = errors.Join(err, closeErr)
 	} else {
-		runCtx, cancel := context.WithTimeout(ctx, active.agentTimeout)
+		runCtx, cancel := context.WithTimeout(ctx, active.AgentTimeout)
 		realtimeResult, err = runner.Run(runCtx)
 		cancel()
 	}
 	realtimeResult = redactRealtimeResult(realtimeResult, active)
-	err = redactSessionError(err, active)
+	err = active.Credentials.RedactErr(err)
 	resultPath, writeErr := manager.writeRealtimeResult(active, realtimeResult)
 	if writeErr == nil {
-		active.logPaths = appendUnique(active.logPaths, resultPath)
+		active.Artifacts.Add(resultPath)
 	}
 	err = errors.Join(err, writeErr)
-	if len(realtimeResult.Errors) != 0 && manager.mode != ModeVoiceTranscribe {
+	if len(realtimeResult.Errors) != 0 && manager.options.Common.Mode != ModeVoiceTranscribe {
 		err = errors.Join(err, errors.New(strings.Join(realtimeResult.Errors, "; ")))
 	}
-	artifactCtx, artifactCancel := context.WithTimeout(context.WithoutCancel(ctx), manager.cleanupTimeout)
+	artifactCtx, artifactCancel := context.WithTimeout(context.WithoutCancel(ctx), manager.runtime.Options.CleanupTimeout)
 	artifactErr := manager.collectArtifacts(artifactCtx, active)
 	artifactCancel()
 	err = errors.Join(err, artifactErr)
 	if err != nil {
-		return failedHarnessResult(active, started, err), err
+		return active.FailedResult(started, err), err
 	}
 	return core.HarnessResult{
 		Status: core.StatusSucceeded, FinalResponse: realtimeResult.FinalText(), Duration: time.Since(started),
-		LogPaths: append([]string(nil), active.logPaths...),
+		LogPaths: active.Artifacts.Paths(),
 	}, nil
 }
 
@@ -682,7 +470,7 @@ func (manager *Manager) runAgentWithTranscript(ctx context.Context, active *sess
 		return err
 	}
 	thinking := ""
-	if disablesThinking(active.model) {
+	if disablesThinking(active.Model) {
 		thinking = "off"
 	}
 	connectSummary, err := client.Connect(ctx, gatewayclient.ConnectOptions{})
@@ -745,7 +533,7 @@ func disablesThinking(model core.ModelConfig) bool {
 }
 
 func (manager *Manager) gatewayURL(ctx context.Context, active *session) (string, error) {
-	address, err := manager.deployment.Address(ctx, active.containerID, 18789)
+	address, err := manager.runtime.Options.Deployment.Address(ctx, active.ID, 18789)
 	if err != nil {
 		return "", fmt.Errorf("resolve OpenClaw gateway: %w", err)
 	}
@@ -753,47 +541,37 @@ func (manager *Manager) gatewayURL(ctx context.Context, active *session) (string
 }
 
 func (manager *Manager) synthesizeVoiceInstruction(ctx context.Context, active *session, instruction string) (string, []string, error) {
-	instructionPath := filepath.Join(active.artifactDir, audioinput.VoiceInstructionTextFile)
-	if err := writeArtifact(instructionPath, []byte(instruction)); err != nil {
+	instructionPath := filepath.Join(active.ArtifactDir, audioinput.VoiceInstructionTextFile)
+	if err := privatefiles.WriteArtifact(instructionPath, []byte(instruction)); err != nil {
 		return "", nil, fmt.Errorf("write realtime voice instruction: %w", err)
 	}
-	apiKeySource, ok := manager.apiKeyLookup(manager.realtime.TTS.APIKeyEnv)
-	if !ok {
-		clear(apiKeySource)
-		return "", []string{instructionPath}, fmt.Errorf("OpenClaw realtime TTS API-key environment %q is not set", manager.realtime.TTS.APIKeyEnv)
-	}
-	apiKey := bytes.Clone(apiKeySource)
-	clear(apiKeySource)
-	if err := validateAPIKey(apiKey); err != nil {
-		clear(apiKey)
+	voiceCredentials := harness.NewCredentials("OpenClaw")
+	defer voiceCredentials.Clear()
+	if ok, err := voiceCredentials.Load("voice", manager.options.Realtime.TTS.APIKeyEnv, manager.runtime.Options.APIKeyLookup); err != nil {
 		return "", []string{instructionPath}, fmt.Errorf("OpenClaw realtime TTS API key: %w", err)
+	} else if !ok {
+		return "", []string{instructionPath}, fmt.Errorf("OpenClaw realtime TTS API-key environment %q is not set", manager.options.Realtime.TTS.APIKeyEnv)
 	}
-	apiKeyCleared := false
-	defer func() {
-		if !apiKeyCleared {
-			clear(apiKey)
-		}
-	}()
+	apiKey := voiceCredentials.Get("voice")
 	return audioinput.SynthesizeVoiceInstruction(ctx, instruction, audioinput.VoiceInstructionOptions{
-		ArtifactDir:     active.artifactDir,
+		ArtifactDir:     active.ArtifactDir,
 		InstructionPath: instructionPath,
 		ErrorLabel:      "realtime",
 		TTSErrorLabel:   "realtime",
-		Provider:        manager.realtime.TTS.Provider,
-		BaseURL:         manager.realtime.TTS.BaseURL,
+		Provider:        manager.options.Realtime.TTS.Provider,
+		BaseURL:         manager.options.Realtime.TTS.BaseURL,
 		APIKey:          apiKey,
-		Model:           manager.realtime.TTS.Model,
-		Voice:           manager.realtime.TTS.Voice,
-		Instructions:    manager.realtime.TTS.Instructions,
-		Speed:           manager.realtime.TTS.Speed,
-		Timeout:         manager.realtime.TTS.Timeout,
+		Model:           manager.options.Realtime.TTS.Model,
+		Voice:           manager.options.Realtime.TTS.Voice,
+		Instructions:    manager.options.Realtime.TTS.Instructions,
+		Speed:           manager.options.Realtime.TTS.Speed,
+		Timeout:         manager.options.Realtime.TTS.Timeout,
 		NewSpeech: func(options audioinput.SpeechClientOptions) (audioinput.SpeechSynthesizer, error) {
 			synthesizer, err := manager.newSpeech(options)
-			clear(apiKey)
-			apiKeyCleared = true
+			voiceCredentials.Clear()
 			return synthesizer, err
 		},
-		WriteArtifact: writeArtifact,
+		WriteArtifact: privatefiles.WriteArtifact,
 	})
 }
 
@@ -803,8 +581,8 @@ func (manager *Manager) realtimeAudioProvider(audioPath string) realtimeclient.A
 		if err != nil {
 			return realtimeclient.Audio{}, fmt.Errorf("read realtime audio: %w", err)
 		}
-		if manager.realtime.TrailingSilenceMillis > 0 {
-			silence, err := audioinput.SilencePCM16(sourceRate, manager.realtime.TrailingSilenceMillis)
+		if manager.options.Realtime.TrailingSilenceMillis > 0 {
+			silence, err := audioinput.SilencePCM16(sourceRate, manager.options.Realtime.TrailingSilenceMillis)
 			if err != nil {
 				return realtimeclient.Audio{}, err
 			}
@@ -839,9 +617,9 @@ func (manager *Manager) writeRealtimeResult(active *session, result realtimeclie
 		return "", fmt.Errorf("encode realtime result: %w", err)
 	}
 	content = append(content, '\n')
-	content = redactSession(content, active)
-	path := filepath.Join(active.artifactDir, "realtime-result.json")
-	if err := writeArtifact(path, content); err != nil {
+	content = active.Credentials.Redact(content)
+	path := filepath.Join(active.ArtifactDir, "realtime-result.json")
+	if err := privatefiles.WriteArtifact(path, content); err != nil {
 		return "", fmt.Errorf("write realtime result: %w", err)
 	}
 	return path, nil
@@ -850,7 +628,7 @@ func (manager *Manager) writeRealtimeResult(active *session, result realtimeclie
 func (manager *Manager) writeAgentResult(active *session, summary gatewayclient.ConnectSummary, result gatewayclient.AgentResult, runErr error) (string, error) {
 	summary = redactConnectSummary(summary, active)
 	result = redactAgentResult(result, active)
-	runErr = redactSessionError(runErr, active)
+	runErr = active.Credentials.RedactErr(runErr)
 	errorText := ""
 	if runErr != nil {
 		errorText = runErr.Error()
@@ -866,9 +644,9 @@ func (manager *Manager) writeAgentResult(active *session, summary gatewayclient.
 		return "", fmt.Errorf("encode OpenClaw agent result: %w", err)
 	}
 	content = append(content, '\n')
-	content = redactSession(content, active)
-	path := filepath.Join(active.artifactDir, "agent-result.json")
-	if err := writeArtifact(path, content); err != nil {
+	content = active.Credentials.Redact(content)
+	path := filepath.Join(active.ArtifactDir, "agent-result.json")
+	if err := privatefiles.WriteArtifact(path, content); err != nil {
 		return "", fmt.Errorf("write OpenClaw agent result: %w", err)
 	}
 	return path, nil
@@ -883,57 +661,25 @@ func durationOrDefault(value, fallback time.Duration) time.Duration {
 
 func (manager *Manager) Stop(ctx context.Context) error {
 	manager.mu.Lock()
-	if manager.active == nil && !manager.stopping {
-		err := manager.stopErr
+	attempt, ownsCleanup := manager.runtime.BeginStop()
+	if !ownsCleanup {
 		manager.mu.Unlock()
-		return err
-	}
-	if manager.stopping {
-		done := manager.stopDone
-		manager.mu.Unlock()
-		select {
-		case <-done:
-			manager.mu.Lock()
-			err := manager.stopErr
-			manager.mu.Unlock()
-			return err
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+		return attempt.Wait(ctx)
 	}
 	active := manager.active
-	manager.stopping = true
-	manager.stopDone = make(chan struct{})
-	done := manager.stopDone
 	manager.mu.Unlock()
 
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), manager.cleanupTimeout)
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), manager.runtime.Options.CleanupTimeout)
 	err := manager.stopSession(cleanupCtx, active)
 	cancel()
 
 	manager.mu.Lock()
-	manager.stopErr = err
-	manager.stopping = false
-	if active == nil || active.containerID == "" {
+	if active == nil || active.ID == "" {
 		manager.active = nil
 	}
-	close(done)
+	manager.runtime.FinishStop(err)
 	manager.mu.Unlock()
 	return err
-}
-
-type execResult struct {
-	stdout   []byte
-	stderr   []byte
-	exitCode int
-}
-
-func (manager *Manager) execAttached(ctx context.Context, id string, argv []string, workdir string) (execResult, error) {
-	if len(argv) == 0 {
-		return execResult{exitCode: -1}, errors.New("OpenClaw command is empty")
-	}
-	result, err := manager.deployment.Exec(ctx, id, core.Command{Path: argv[0], Args: argv[1:], Dir: workdir})
-	return execResult{stdout: []byte(result.Stdout), stderr: []byte(result.Stderr), exitCode: result.ExitCode}, err
 }
 
 func (manager *Manager) waitReady(ctx context.Context, active *session) error {
@@ -942,12 +688,12 @@ func (manager *Manager) waitReady(ctx context.Context, active *session) error {
 	defer ticker.Stop()
 	for {
 		probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		result, err := manager.execAttached(probeCtx, active.containerID, []string{"node", "-e", probe, upstreamGatewayPort}, "/app")
+		result, err := manager.runtime.Options.Deployment.Exec(probeCtx, active.ID, core.Command{Path: "node", Args: []string{"-e", probe, upstreamGatewayPort}, Dir: "/app"})
 		cancel()
-		if err == nil && result.exitCode == 0 {
+		if err == nil && result.ExitCode == 0 {
 			return nil
 		}
-		running, inspectErr := manager.deployment.Running(ctx, active.containerID)
+		running, inspectErr := manager.runtime.Options.Deployment.Running(ctx, active.ID)
 		if inspectErr != nil {
 			return fmt.Errorf("inspect OpenClaw readiness: %w", inspectErr)
 		}
@@ -962,69 +708,67 @@ func (manager *Manager) waitReady(ctx context.Context, active *session) error {
 	}
 }
 
-func (manager *Manager) validateContainer(ctx context.Context, active *session) error {
-	secrets := append([][]byte{active.apiKey, active.realtimeAPIKey, active.extractAPIKey, active.gatewayToken}, active.mcpSecrets...)
-	return manager.deployment.Validate(ctx, active.containerID, active.deploymentRequest, secrets)
-}
-
 func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([]byte, error) {
-	clientBytes, err := readStablePrivateFile(active.endpoint.ClientSourceFile, 0o555)
+	clientBytes, err := privatefiles.Read(active.Endpoint.ClientSourceFile, 0o555)
 	if err != nil {
 		return nil, fmt.Errorf("read OpenClaw SSH client: %w", err)
 	}
 	defer clear(clientBytes)
-	identity, err := readStablePrivateFile(active.endpoint.IdentitySourceFile, 0o600)
+	identity, err := privatefiles.Read(active.Endpoint.IdentitySourceFile, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("read OpenClaw SSH identity: %w", err)
 	}
 	defer clear(identity)
-	knownHosts, err := readStablePrivateFile(active.endpoint.KnownHostsSourceFile, 0o600)
+	knownHosts, err := privatefiles.Read(active.Endpoint.KnownHostsSourceFile, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("read OpenClaw known-hosts: %w", err)
 	}
 	defer clear(knownHosts)
-	mcpHostVars := make([]string, 0, len(active.mcpSecretFiles))
-	for hostVar := range active.mcpSecretFiles {
+	mcpHostVars := make([]string, 0, len(active.Credentials.MCPFiles()))
+	for hostVar := range active.Credentials.MCPFiles() {
 		mcpHostVars = append(mcpHostVars, hostVar)
 	}
 	sort.Strings(mcpHostVars)
-	files := map[string]stagedFile{
-		"run/aries/openclaw.json":    {content: configuration, mode: 0o600},
-		"run/aries/model.key":        {content: active.apiKey, mode: 0o600},
-		"run/aries/gateway.key":      {content: active.gatewayToken, mode: 0o600},
-		"run/aries/launch":           {content: launcherScript(active.model.APIKeyEnv, manager.realtimeAPIKeyEnv(active), len(active.extractAPIKey) != 0, mcpHostVars...), mode: 0o555},
-		"run/aries/gateway-proxy.js": {content: gatewayProxyScript(), mode: 0o555},
-		"run/aries/gateway-launcher": {content: gatewayLauncherScript(), mode: 0o555},
-		"run/aries/ssh/id_ed25519":   {content: identity, mode: 0o600},
-		"run/aries/ssh/known_hosts":  {content: knownHosts, mode: 0o600},
-		"opt/aries/bin/aries-ssh":    {content: clientBytes, mode: 0o555},
+	files := map[string]harness.ArchiveFile{
+		"run/aries/openclaw.json":    {Content: configuration, Mode: 0o600},
+		"run/aries/model.key":        {Content: active.Credentials.Get("model"), Mode: 0o600},
+		"run/aries/gateway.key":      {Content: active.Credentials.Get("gateway"), Mode: 0o600},
+		"run/aries/launch":           {Content: launcherScript(active.Model.APIKeyEnv, manager.realtimeAPIKeyEnv(active), len(active.Credentials.Get("extract")) != 0, mcpHostVars...), Mode: 0o555},
+		"run/aries/gateway-proxy.js": {Content: gatewayProxyScript(), Mode: 0o555},
+		"run/aries/gateway-launcher": {Content: gatewayLauncherScript(), Mode: 0o555},
+		"run/aries/ssh/id_ed25519":   {Content: identity, Mode: 0o600},
+		"run/aries/ssh/known_hosts":  {Content: knownHosts, Mode: 0o600},
+		"opt/aries/bin/aries-ssh":    {Content: clientBytes, Mode: 0o555},
 	}
-	if len(active.realtimeAPIKey) != 0 {
-		files["run/aries/realtime.key"] = stagedFile{content: active.realtimeAPIKey, mode: 0o600}
+	if len(active.Credentials.Get("voice")) != 0 {
+		files["run/aries/realtime.key"] = harness.ArchiveFile{Content: active.Credentials.Get("voice"), Mode: 0o600}
 	}
-	if len(active.extractAPIKey) != 0 {
-		files["run/aries/tavily.key"] = stagedFile{content: active.extractAPIKey, mode: 0o600}
+	if len(active.Credentials.Get("extract")) != 0 {
+		files["run/aries/tavily.key"] = harness.ArchiveFile{Content: active.Credentials.Get("extract"), Mode: 0o600}
 	}
 	for _, hostVar := range mcpHostVars {
-		files["run/aries/mcp_"+hostVar+".key"] = stagedFile{content: active.mcpSecretFiles[hostVar], mode: 0o600}
+		files["run/aries/mcp_"+hostVar+".key"] = harness.ArchiveFile{Content: active.Credentials.MCPFiles()[hostVar], Mode: 0o600}
 	}
-	return stageArchive(files)
-}
-
-func containsSecret(value string, secrets ...[]byte) bool {
-	for _, secret := range secrets {
-		if len(secret) != 0 && strings.Contains(value, string(secret)) {
-			return true
-		}
+	for name, file := range files {
+		file.UID, file.GID = 1000, 1000
+		files[name] = file
 	}
-	return false
+	directories := []harness.ArchiveDirectory{
+		{Name: "run/aries", Mode: 0o700, UID: 1000, GID: 1000},
+		{Name: "run/aries/ssh", Mode: 0o700, UID: 1000, GID: 1000},
+		{Name: "opt/aries", Mode: 0o755, UID: 1000, GID: 1000},
+		{Name: "opt/aries/bin", Mode: 0o755, UID: 1000, GID: 1000},
+		{Name: "home/node/.openclaw", Mode: 0o700, UID: 1000, GID: 1000},
+		{Name: "home/node/.openclaw/.aries", Mode: 0o700, UID: 1000, GID: 1000},
+	}
+	return harness.StageArchive(directories, files)
 }
 
 func (manager *Manager) realtimeAPIKeyEnv(active *session) string {
-	if !isRealtimeMode(manager.mode) || len(active.realtimeAPIKey) == 0 {
+	if !isRealtimeMode(manager.options.Common.Mode) || len(active.Credentials.Get("voice")) == 0 {
 		return ""
 	}
-	return manager.realtime.TTS.APIKeyEnv
+	return manager.options.Realtime.TTS.APIKeyEnv
 }
 
 func gatewayLauncherScript() []byte {
@@ -1074,91 +818,45 @@ server.listen(listenPort, listenHost, () => {
 `)
 }
 
-type stagedFile struct {
-	content []byte
-	mode    int64
-}
-
-func stageArchive(files map[string]stagedFile) ([]byte, error) {
-	var output bytes.Buffer
-	writer := tar.NewWriter(&output)
-	directories := []string{"run/aries", "run/aries/ssh", "opt/aries", "opt/aries/bin", "home/node/.openclaw", "home/node/.openclaw/.aries"}
-	for _, name := range directories {
-		mode := int64(0o755)
-		if strings.HasPrefix(name, "run/aries") || strings.HasPrefix(name, "home/node/.openclaw") {
-			mode = 0o700
-		}
-		if err := writer.WriteHeader(&tar.Header{Name: name, Typeflag: tar.TypeDir, Mode: mode, Uid: 1000, Gid: 1000}); err != nil {
-			return nil, err
-		}
-	}
-	names := make([]string, 0, len(files))
-	for name := range files {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		file := files[name]
-		if name == "" || filepath.IsAbs(name) || filepath.Clean(name) != name || strings.HasPrefix(name, "../") {
-			return nil, fmt.Errorf("invalid staged OpenClaw path %q", name)
-		}
-		header := &tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: file.mode, Size: int64(len(file.content)), Uid: 1000, Gid: 1000}
-		if err := writer.WriteHeader(header); err != nil {
-			return nil, err
-		}
-		if _, err := writer.Write(file.content); err != nil {
-			return nil, err
-		}
-	}
-	if err := writer.Close(); err != nil {
-		return nil, err
-	}
-	return output.Bytes(), nil
-}
-
 func (manager *Manager) stopSession(ctx context.Context, active *session) error {
 	if active == nil {
 		return nil
 	}
-	if active.containerID != "" {
-		if err := manager.deployment.Stop(ctx, active.containerID); err != nil {
-			return err
-		}
+	if err := manager.runtime.Remove(ctx, active.Occurrence); err != nil {
+		return err
 	}
-	active.containerID = ""
-	clearSessionSecrets(active)
 	return nil
 }
 
 func (manager *Manager) collectArtifacts(ctx context.Context, active *session) error {
 	var errs []error
-	logs, err := manager.deployment.Logs(ctx, active.containerID, maxDockerOutput)
+	logs, err := manager.runtime.Options.Deployment.Logs(ctx, active.ID, maxDockerOutput)
 	if err != nil {
 		errs = append(errs, fmt.Errorf("collect OpenClaw gateway logs: %w", err))
 	} else {
-		content := allowGatewayLogs(logs, active.apiKey, active.realtimeAPIKey, active.extractAPIKey, active.gatewayToken)
-		path := filepath.Join(active.artifactDir, "gateway.log")
-		if err := writeArtifact(path, content); err != nil {
+		content := privatefiles.FilterLogs(logs, maxDockerOutput, active.Credentials.Secrets()...)
+		path := filepath.Join(active.ArtifactDir, "gateway.log")
+		if err := privatefiles.WriteArtifact(path, content); err != nil {
 			errs = append(errs, err)
 		} else {
-			active.logPaths = appendUnique(active.logPaths, path)
+			active.Artifacts.Add(path)
 		}
 	}
 	telemetryPaths, telemetryErr := manager.collectTelemetry(ctx, active)
 	if telemetryErr != nil {
 		errs = append(errs, telemetryErr)
 	} else {
-		active.logPaths = appendUnique(active.logPaths, telemetryPaths...)
+		active.Artifacts.Add(telemetryPaths...)
 	}
 	index, err := json.MarshalIndent(struct {
 		Paths []string `json:"paths"`
-	}{Paths: telemetryRelativePaths(active.artifactDir, active.logPaths)}, "", "  ")
+	}{Paths: active.Artifacts.TelemetryPaths()}, "", "  ")
 	if err == nil {
 		index = append(index, '\n')
-		path := filepath.Join(active.artifactDir, "telemetry.index.json")
-		err = writeArtifact(path, index)
+		path := filepath.Join(active.ArtifactDir, "telemetry.index.json")
+		err = privatefiles.WriteArtifact(path, index)
 		if err == nil {
-			active.logPaths = appendUnique(active.logPaths, path)
+			active.Artifacts.Add(path)
 		}
 	}
 	if err != nil {
@@ -1168,7 +866,7 @@ func (manager *Manager) collectArtifacts(ctx context.Context, active *session) e
 }
 
 func (manager *Manager) collectTelemetry(ctx context.Context, active *session) ([]string, error) {
-	archiveReader, _, err := manager.deployment.DownloadArchive(ctx, active.containerID, stateContainerPath+"/agents/main/sessions")
+	archiveReader, _, err := manager.runtime.Options.Deployment.DownloadArchive(ctx, active.ID, stateContainerPath+"/agents/main/sessions")
 	if err != nil {
 		if errors.Is(err, runner.ErrNotFound) {
 			return nil, nil
@@ -1180,47 +878,11 @@ func (manager *Manager) collectTelemetry(ctx context.Context, active *session) (
 	if err != nil || len(archive) > maxDockerOutput {
 		return nil, errors.New("OpenClaw telemetry archive exceeded its bound")
 	}
-	return extractTelemetry(active.artifactDir, archive, active.apiKey, active.realtimeAPIKey, active.extractAPIKey, active.gatewayToken)
-}
-
-func failedHarnessResult(active *session, started time.Time, err error) core.HarnessResult {
-	status := core.StatusFailed
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		status = core.StatusCanceled
-	}
-	errorText := ""
-	if err != nil {
-		errorText = string(redactSession([]byte(err.Error()), active))
-	}
-	return core.HarnessResult{Status: status, Duration: time.Since(started), LogPaths: append([]string(nil), active.logPaths...), Error: errorText}
-}
-
-func readStablePrivateFile(path string, mode os.FileMode) ([]byte, error) {
-	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
-	if err != nil {
-		return nil, err
-	}
-	file := os.NewFile(uintptr(fd), path)
-	defer file.Close()
-	before, err := file.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !before.Mode().IsRegular() || before.Mode().Perm() != mode || before.Size() < 1 || before.Size() > maxDockerOutput {
-		return nil, errors.New("private source is not one bounded regular file with the required mode")
-	}
-	content, err := io.ReadAll(io.LimitReader(file, maxDockerOutput+1))
-	if err != nil || len(content) > maxDockerOutput {
-		return nil, errors.New("read private source within bound")
-	}
-	after, err := file.Stat()
-	if err != nil || !os.SameFile(before, after) || before.Size() != after.Size() || before.ModTime() != after.ModTime() {
-		return nil, errors.New("private source changed while being read")
-	}
-	return content, nil
+	return extractTelemetry(active.ArtifactDir, archive, active.Credentials.Secrets()...)
 }
 
 func extractTelemetry(artifactDir string, archive []byte, secrets ...[]byte) ([]string, error) {
+	usedNames := make(map[string]bool)
 	reader := tar.NewReader(bytes.NewReader(archive))
 	var paths []string
 	for {
@@ -1240,149 +902,18 @@ func extractTelemetry(artifactDir string, archive []byte, secrets ...[]byte) ([]
 		if err != nil || int64(len(content)) != header.Size {
 			return paths, errors.New("OpenClaw telemetry archive is truncated")
 		}
-		path := filepath.Join(artifactDir, "telemetry", base)
-		if err := writeArtifact(path, redactSecrets(content, secrets...)); err != nil {
+		name := base
+		for index := 1; usedNames[name]; index++ {
+			name = fmt.Sprintf("%d-%s", index, base)
+		}
+		usedNames[name] = true
+		path := filepath.Join(artifactDir, "telemetry", name)
+		if err := privatefiles.WriteArtifact(path, privatefiles.RedactSecrets(content, secrets...)); err != nil {
 			return paths, err
 		}
 		paths = append(paths, path)
 	}
 	return paths, nil
-}
-
-func allowGatewayLogs(content []byte, secrets ...[]byte) []byte {
-	content = redactSecrets(content, secrets...)
-	lines := bytes.Split(content, []byte("\n"))
-	var output bytes.Buffer
-	for _, line := range lines {
-		lower := bytes.ToLower(line)
-		if len(line) > 4096 || bytes.ContainsRune(line, 0) || bytes.Contains(lower, []byte("authorization:")) || bytes.Contains(lower, []byte("bearer ")) {
-			continue
-		}
-		output.Write(line)
-		output.WriteByte('\n')
-		if output.Len() >= maxDockerOutput {
-			break
-		}
-	}
-	return output.Bytes()
-}
-
-func writeArtifact(path string, content []byte) error {
-	if err := ensurePrivateDirectory(filepath.Dir(path)); err != nil {
-		return err
-	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		if !errors.Is(err, os.ErrExist) {
-			return err
-		}
-		existing, readErr := readStablePrivateFile(path, 0o600)
-		if readErr == nil && bytes.Equal(existing, content) {
-			clear(existing)
-			return nil
-		}
-		clear(existing)
-		return fmt.Errorf("artifact %q already exists with different content", path)
-	}
-	if _, err := file.Write(content); err != nil {
-		file.Close()
-		_ = os.Remove(path)
-		return err
-	}
-	if err := file.Sync(); err != nil {
-		file.Close()
-		_ = os.Remove(path)
-		return err
-	}
-	return file.Close()
-}
-
-func appendUnique(paths []string, additions ...string) []string {
-	seen := make(map[string]struct{}, len(paths)+len(additions))
-	for _, path := range paths {
-		seen[path] = struct{}{}
-	}
-	for _, path := range additions {
-		if _, ok := seen[path]; ok {
-			continue
-		}
-		paths = append(paths, path)
-		seen[path] = struct{}{}
-	}
-	return paths
-}
-
-func telemetryRelativePaths(artifactDir string, paths []string) []string {
-	prefix := filepath.Join(artifactDir, "telemetry") + string(filepath.Separator)
-	var relative []string
-	for _, path := range paths {
-		if strings.HasPrefix(path, prefix) {
-			name, err := filepath.Rel(artifactDir, path)
-			if err == nil {
-				relative = append(relative, filepath.ToSlash(name))
-			}
-		}
-	}
-	return relative
-}
-
-func ensurePrivateDirectory(path string) error {
-	if err := os.MkdirAll(path, 0o700); err != nil {
-		return err
-	}
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return err
-	}
-	absolute, err := filepath.Abs(path)
-	if err != nil {
-		return err
-	}
-	if resolved != absolute {
-		return errors.New("private directory path contains a symbolic link")
-	}
-	return os.Chmod(path, 0o700)
-}
-
-func validateAPIKey(value []byte) error {
-	if len(value) == 0 || len(value) > maxAPIKeyBytes {
-		return errors.New("OpenClaw API key is empty or exceeds its bound")
-	}
-	if bytes.ContainsAny(value, "\x00\r\n") {
-		return errors.New("OpenClaw API key contains NUL or a line break")
-	}
-	return nil
-}
-
-func environmentAPIKeyLookup(name string) ([]byte, bool) {
-	value, ok := os.LookupEnv(name)
-	return []byte(value), ok
-}
-
-func validateRunID(value string) error {
-	if value == "" || len(value) > 128 {
-		return errors.New("OpenClaw run ID must contain 1 to 128 safe characters")
-	}
-	for index, character := range value {
-		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || index > 0 && (character == '-' || character == '_' || character == '.') {
-			continue
-		}
-		return errors.New("OpenClaw run ID contains an unsafe character")
-	}
-	return nil
-}
-
-func validateTaskID(value string) error {
-	if value == "" || len(value) > 149 {
-		return errors.New("OpenClaw task ID is invalid")
-	}
-	for index, character := range value {
-		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || index > 0 && (character == '-' || character == '_' || character == '.') {
-			continue
-		}
-		return errors.New("OpenClaw task ID is invalid")
-	}
-	return nil
 }
 
 func safeTaskID(value string) string {
@@ -1402,84 +933,6 @@ func safeTaskID(value string) string {
 		return "task"
 	}
 	return result
-}
-
-func randomID() (string, error) {
-	var content [8]byte
-	if _, err := rand.Read(content[:]); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(content[:]), nil
-}
-
-func randomSecret(size int) ([]byte, error) {
-	content := make([]byte, size)
-	if _, err := rand.Read(content); err != nil {
-		clear(content)
-		return nil, err
-	}
-	encoded := make([]byte, hex.EncodedLen(len(content)))
-	hex.Encode(encoded, content)
-	clear(content)
-	return encoded, nil
-}
-
-func equalStrings(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
-			return false
-		}
-	}
-	return true
-}
-
-func clearSessionSecrets(active *session) {
-	clear(active.apiKey)
-	active.apiKey = nil
-	clear(active.realtimeAPIKey)
-	active.realtimeAPIKey = nil
-	clear(active.extractAPIKey)
-	active.extractAPIKey = nil
-	clear(active.gatewayToken)
-	active.gatewayToken = nil
-	for i := range active.mcpSecrets {
-		clear(active.mcpSecrets[i])
-	}
-	active.mcpSecrets = nil
-	for k := range active.mcpSecretFiles {
-		clear(active.mcpSecretFiles[k])
-	}
-	active.mcpSecretFiles = nil
-	active.agentIdempotency = ""
-}
-
-func redactSession(content []byte, active *session) []byte {
-	secrets := append([][]byte{active.apiKey, active.realtimeAPIKey, active.extractAPIKey, active.gatewayToken}, active.mcpSecrets...)
-	return redactSecrets(content, secrets...)
-}
-
-type sessionRedactedError struct {
-	message string
-	cause   error
-}
-
-func (err *sessionRedactedError) Error() string { return err.message }
-func (err *sessionRedactedError) Unwrap() error { return err.cause }
-
-func redactSessionError(err error, active *session) error {
-	if err == nil {
-		return nil
-	}
-	var classification error
-	if errors.Is(err, context.Canceled) {
-		classification = context.Canceled
-	} else if errors.Is(err, context.DeadlineExceeded) {
-		classification = context.DeadlineExceeded
-	}
-	return &sessionRedactedError{message: string(redactSession([]byte(err.Error()), active)), cause: classification}
 }
 
 func redactRealtimeResult(result realtimeclient.Result, active *session) realtimeclient.Result {
@@ -1504,23 +957,23 @@ func redactRealtimeResult(result realtimeclient.Result, active *session) realtim
 }
 
 func redactConnectSummary(summary gatewayclient.ConnectSummary, active *session) gatewayclient.ConnectSummary {
-	summary.Role = string(redactSession([]byte(summary.Role), active))
+	summary.Role = string(active.Credentials.Redact([]byte(summary.Role)))
 	for index := range summary.Scopes {
-		summary.Scopes[index] = string(redactSession([]byte(summary.Scopes[index]), active))
+		summary.Scopes[index] = string(active.Credentials.Redact([]byte(summary.Scopes[index])))
 	}
 	return summary
 }
 
 func redactAgentResult(result gatewayclient.AgentResult, active *session) gatewayclient.AgentResult {
-	result.RunID = string(redactSession([]byte(result.RunID), active))
-	result.Text = string(redactSession([]byte(result.Text), active))
+	result.RunID = string(active.Credentials.Redact([]byte(result.RunID)))
+	result.Text = string(active.Credentials.Redact([]byte(result.Text)))
 	return result
 }
 
 func redactRealtimeJSON(value any, active *session) any {
 	switch typed := value.(type) {
 	case string:
-		return string(redactSession([]byte(typed), active))
+		return string(active.Credentials.Redact([]byte(typed)))
 	case []any:
 		for index := range typed {
 			typed[index] = redactRealtimeJSON(typed[index], active)
@@ -1529,7 +982,7 @@ func redactRealtimeJSON(value any, active *session) any {
 	case map[string]any:
 		redacted := make(map[string]any, len(typed))
 		for key, item := range typed {
-			redactedKey := string(redactSession([]byte(key), active))
+			redactedKey := string(active.Credentials.Redact([]byte(key)))
 			redacted[redactedKey] = redactRealtimeJSON(item, active)
 		}
 		return redacted

@@ -303,4 +303,6 @@ func resultCommandCall(path string, args []string, stdout, stderr string, exitCo
 	return prepareCall{command: core.Command{Path: path, Args: args, User: rootExecUser}, result: core.CommandResult{Stdout: stdout, Stderr: stderr, ExitCode: exitCode}}
 }
 
-func (s *prepareSandboxFake) NetworkName() string { return "test-network" }
+func (s *prepareSandboxFake) Connectivity() core.HarnessConnectivity {
+	return core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "test-network"}}
+}

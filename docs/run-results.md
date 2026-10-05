@@ -54,6 +54,25 @@ A successful task has:
 - reward `1`; and
 - completed tool calls in `bridge/tool-calls.jsonl`.
 
+## Hermes Gateway artifacts
+
+Hermes text and voice-transcribe now submit tasks through the native Gateway.
+Historical CLI artifacts map as follows:
+
+| Historical CLI artifact | Gateway artifact and meaning |
+| --- | --- |
+| `hermes_stdout.log` | `gateway-output.txt`: native run `output`, rather than process standard output. |
+| `hermes_stderr.log` | Removed; service diagnostics are retained in bounded, redacted `container.log`. |
+| `session-outcome.json` with `exit_code` | Same filename, with `run_id`, `session_id`, native `end_reason`, and ARIES `status`; no CLI exit code. Timing covers submission through terminal observation, separately from voice preparation. |
+| `telemetry/sessions.jsonl` | Retained native message-level session export. |
+| `telemetry/otel-spans.jsonl` | Tool, model, and API timing from the pinned `hermes-otel` plugin; see [collection limits](implementation/harnesses.md#hermes). |
+| `config.yaml`, voice artifacts | Retained private configuration, audio, transcript, and voice result. |
+
+A completed native run is a harness outcome. Check isolation, evaluation, and
+cleanup separately in `run-result.json`. Historical CLI runs used
+`--ignore-rules`; the [compatibility note](implementation/harnesses.md#pinned-gateway-compatibility)
+describes the Gateway differences relevant to comparisons.
+
 ## Bridge evidence
 
 `bridge/ssh_raw.log` is an opt-in mode-0600 sensitive audit. It is written only
@@ -99,11 +118,14 @@ bridge artifacts may contain task or model content; review them before sharing.
   limit, connectivity, or missing-model categories.
 - **Realtime TTS error:** confirm `OPENAI_API_KEY` is set and that the provider,
   model, and voice in `harness.realtime.tts` are available to that account.
-- **Gateway or realtime session error:** inspect the task's
+- **OpenClaw Gateway or realtime session error:** inspect the task's
   `harness/gateway.log`, `harness/realtime-result.json`, and
   `harness/telemetry.index.json`, then correlate the harness status in the run's
   `run-result.json`. Keep these private artifacts out of issue reports unless
   their task and model content has been reviewed.
+- **Hermes Gateway error:** inspect `harness/session-outcome.json`,
+  `harness/container.log`, and `harness/gateway-output.txt`, then compare the
+  independent harness, isolation, evaluation, and cleanup outcomes.
 - **SGLang configuration error:** confirm that the YAML uses only the supported
   fields and that its served model and port match the profile in managed mode.
   External mode does not validate the native YAML file.

@@ -53,7 +53,7 @@ type Request struct {
 	Entrypoint        []string
 	Args              []string
 	Labels            map[string]string
-	Network           string
+	Placement         core.RuntimePlacement
 	// Nil CPU and memory dimensions impose no runtime limit.
 	CPU      *float64
 	MemoryMB *int
@@ -73,8 +73,11 @@ type FileInfo struct {
 // Start may fail after allocation; callers must still call Stop. Stop succeeds
 // only after confirming absence. Each task occurrence requires a fresh owner.
 type TaskEnvironment interface {
-	Start(context.Context, core.SandboxRequest) (string, error)
+	Start(context.Context, core.SandboxRequest) (core.HarnessConnectivity, error)
 	Validate(context.Context) error
 	Stop(context.Context) error
 	BridgeListen(context.Context) (core.BridgeListen, error)
 }
+
+// TaskSandboxAlias names the sandbox service on the current task attachment.
+const TaskSandboxAlias = "task-sandbox"

@@ -49,9 +49,9 @@ type fakeEnvironment struct {
 	failValidationAt int
 }
 
-func (e *fakeEnvironment) Start(_ context.Context, r core.SandboxRequest) (string, error) {
+func (e *fakeEnvironment) Start(_ context.Context, r core.SandboxRequest) (core.HarnessConnectivity, error) {
 	e.f.environmentRequest = r
-	return "private-network", e.startErr
+	return core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "private-network"}}, e.startErr
 }
 func (e *fakeEnvironment) Validate(context.Context) error {
 	e.validations++
@@ -157,7 +157,7 @@ func TestSharedDeploymentReceivesSandboxPolicy(t *testing.T) {
 	if !reflect.DeepEqual(r.Entrypoint, []string{"/bin/sleep"}) || !reflect.DeepEqual(r.Args, []string{"infinity"}) || !reflect.DeepEqual(r.NetworkAliases, []string{networkAlias}) {
 		t.Fatalf("runtime: %+v", r)
 	}
-	if r.Network != s.NetworkName() || f.environmentRequest.Environment.AllowNetwork || r.Labels["aries.component"] != "sandbox" || f.environmentRequest.RunID != "run" {
+	if r.Placement.DockerNetwork != s.Connectivity().Placement.DockerNetwork || f.environmentRequest.Environment.AllowNetwork || r.Labels["aries.component"] != "sandbox" || f.environmentRequest.RunID != "run" {
 		t.Fatalf("ownership: %+v %+v", r, f.environmentRequest)
 	}
 	if !slices.Contains(r.Env, "TZ=Europe/Paris") || !slices.Contains(r.Env, "DEBIAN_FRONTEND=noninteractive") || !slices.Contains(r.Env, "KEEP=exact") {

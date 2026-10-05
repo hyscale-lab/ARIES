@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/containerd/errdefs"
@@ -34,22 +35,33 @@ func (manager *Manager) NewTaskEnvironment() deployment.TaskEnvironment {
 	return &taskEnvironment{manager: manager}
 }
 
-func (e *taskEnvironment) Start(ctx context.Context, request core.SandboxRequest) (string, error) {
+func (e *taskEnvironment) Start(ctx context.Context, request core.SandboxRequest) (core.HarnessConnectivity, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.started || e.stopped {
-		return "", errors.New("task environment cannot be reused")
+		return core.HarnessConnectivity{}, errors.New("task environment cannot be reused")
 	}
 	e.started = true
+	searchPort := request.Environment.Services.SearchPort
+	if searchPort < 0 || searchPort > 65535 {
+		return core.HarnessConnectivity{}, errors.New("invalid task search service port")
+	}
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
-		return "", err
+		return core.HarnessConnectivity{}, err
 	}
 	e.request = NetworkRequest{Name: "aries-net-" + hex.EncodeToString(nonce[:]), Internal: !request.Environment.AllowNetwork,
 		Labels: map[string]string{"aries.managed": "true", "aries.kind": "task-network", "aries.run": request.RunID, "aries.task": request.TaskID}}
 	var err error
 	e.id, err = e.manager.CreateNetwork(ctx, e.request)
-	return e.request.Name, err
+	if err != nil {
+		return core.HarnessConnectivity{}, err
+	}
+	result := core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: e.request.Name}}
+	if searchPort != 0 {
+		result.SearchURL = fmt.Sprintf("http://%s:%d", deployment.TaskSandboxAlias, searchPort)
+	}
+	return result, nil
 }
 func (e *taskEnvironment) Validate(ctx context.Context) error {
 	e.mu.Lock()

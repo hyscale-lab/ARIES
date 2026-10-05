@@ -8,6 +8,7 @@ import (
 	"github.com/hyscale-lab/aries/internal/app"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/deployment"
+	harnesscommon "github.com/hyscale-lab/aries/pkg/harness"
 	hermesharness "github.com/hyscale-lab/aries/pkg/harness/hermes"
 	"github.com/sirupsen/logrus"
 )
@@ -22,14 +23,16 @@ func NewHermes(cfg config.Config, outputRoot string, lookup func(string) ([]byte
 		return app.HarnessInstance{}, errors.Join(err, transport.Close())
 	}
 	options := hermesharness.Options{
-		Deployment: transport, Image: image, OutputDir: outputRoot, APIKeyLookup: lookup, Logger: logger,
-		Mode: cfg.Harness.Mode, WebSearchEnabled: cfg.Harness.WebSearch.Enabled,
-		ExtractAPIKeyEnv:       cfg.Harness.WebSearch.ExtractAPIKeyEnv,
-		SubagentsEnabled:       cfg.Harness.Subagents.Enabled != nil && *cfg.Harness.Subagents.Enabled,
-		MaxConcurrentSubagents: cfg.Harness.Subagents.MaxConcurrent,
-		Compaction:             hermesCompaction(cfg.Harness.Compaction),
-		ExtraBody:              hermesExtraBody(cfg.Harness.Hermes),
-		MCPServers:             cfg.Harness.MCPServers,
+		Runtime: harnesscommon.RuntimeOptions{
+			Deployment:   transport,
+			Image:        image,
+			OutputDir:    outputRoot,
+			APIKeyLookup: lookup,
+			Logger:       logger,
+		},
+		Common:     commonOptions(cfg.Harness),
+		Compaction: hermesCompaction(cfg.Harness.Compaction),
+		ExtraBody:  hermesExtraBody(cfg.Harness.Hermes),
 	}
 
 	if cfg.Harness.Mode == hermesharness.ModeVoiceTranscribe {
@@ -64,7 +67,7 @@ func hermesOTelPlugin(cfg config.Config) hermesharness.OTelPlugin {
 
 func hermesVoiceOptions(voice config.HarnessVoiceTranscribeConfig) hermesharness.VoiceTranscribeOptions {
 	return hermesharness.VoiceTranscribeOptions{
-		TTS: hermesharness.VoiceTTSOptions{
+		TTS: harnesscommon.TTSOptions{
 			Provider: voice.TTS.Provider, BaseURL: voice.TTS.BaseURL,
 			APIKeyEnv: voice.TTS.APIKeyEnv, Model: voice.TTS.Model,
 			Voice: voice.TTS.Voice, Instructions: voice.TTS.Instructions,

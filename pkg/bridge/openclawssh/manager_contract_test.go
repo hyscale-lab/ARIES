@@ -377,4 +377,6 @@ func assertLogNumber(t *testing.T, record map[string]any, key string, want int) 
 	}
 }
 
-func (s *contractSandbox) NetworkName() string { return "test-network" }
+func (s *contractSandbox) Connectivity() core.HarnessConnectivity {
+	return core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "test-network"}}
+}
