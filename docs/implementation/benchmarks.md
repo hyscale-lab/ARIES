@@ -5,6 +5,12 @@ Its [lifecycle contract](../design/benchmark.md#lifecycle-cancellation-and-failu
 defines when preparation and evaluation may run. User setup and
 result interpretation remain in the [benchmark guides](../design/benchmark.md#implementations-and-guides).
 
+Deep Research Bench and SWE-Atlas share the concrete
+[Chat Completions client](../../pkg/model/chat.go) for credentials, request
+settings, HTTP handling, response limits, and content extraction. Each benchmark
+supplies generation defaults and owns its prompts, parsing, scores, and retries.
+The shared client sends one request per call; it adds no retry policy.
+
 ## Terminal-Bench 2
 
 Task loading derives the image, workdir, limits, and verifier timeout from the

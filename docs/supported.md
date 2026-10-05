@@ -26,7 +26,8 @@ This page summarizes capabilities and limitations. Use the
 | Model service | **SGLang** — external endpoint or one ARIES-managed host process per run | [Model backends](configuration.md#model-backends) |
 | Model service | **OpenAI-compatible server** — external only, including vLLM, llama.cpp, gateways, and hosted endpoints | [Model backends](configuration.md#model-backends) |
 
-Both harnesses support explicit [model reasoning effort](configuration.md#reasoning-effort).
+Both harnesses and [LLM judges](configuration.md#judge-model-settings) support explicit
+[model reasoning effort](configuration.md#reasoning-effort).
 Available efforts and tool support depend on the model and API.
 
 Image and dataset revisions are pinned in [versions.json](../configs/versions.json).

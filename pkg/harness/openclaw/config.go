@@ -13,6 +13,7 @@ import (
 
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/harness"
+	modelconfig "github.com/hyscale-lab/aries/pkg/model"
 )
 
 const (
@@ -207,7 +208,7 @@ func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, mode strin
 	if err := validateModel(model); err != nil {
 		return nil, err
 	}
-	reasoningBody, err := harness.ReasoningBody(model)
+	reasoningBody, err := modelconfig.ReasoningBody(model)
 	if err != nil {
 		return nil, err
 	}

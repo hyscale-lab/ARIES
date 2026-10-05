@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/model"
 	"github.com/hyscale-lab/aries/pkg/runner"
 )
 
@@ -206,4 +207,16 @@ func extractFinalAnswer(content string) string {
 		}
 	}
 	return answer
+}
+
+// chatter keeps benchmark response parsing and retry policy independently testable.
+type chatter interface {
+	Chat(context.Context, string, string) (string, error)
+}
+
+func newJudgeClient(settings core.ModelConfig, lookup func(string) ([]byte, bool)) (*model.ChatClient, error) {
+	if settings.MaxTokens == 0 {
+		settings.MaxTokens = 2048
+	}
+	return model.NewChatClient(settings, lookup)
 }

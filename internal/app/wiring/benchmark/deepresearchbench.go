@@ -44,18 +44,21 @@ func SetupDeepResearchBench(ctx context.Context, cfg config.Config) error {
 }
 
 // deepresearchbenchModels defaults absent judge and FACT model settings to the
-// main model. FACT inputs remain available when grading is disabled so the
+// main model identity, retaining benchmark generation defaults. FACT inputs remain available when grading is disabled so the
 // benchmark can explain why it skipped FACT.
 func deepresearchbenchModels(cfg config.Config) (judge, fact core.ModelConfig, jinaAPIKeyEnv string, judgeDisabled bool) {
+	// Generation settings belong to each consumer. Historically these fallback
+	// clients used only model identity; preserve their benchmark defaults.
+	fallback := core.ModelConfig{Provider: cfg.Runtime.Backend, BaseURL: cfg.Model.BaseURL, Model: cfg.Model.ID, APIKeyEnv: cfg.Model.APIKeyEnv}
 	if judgeCfg := cfg.Benchmark.Judge; judgeCfg != nil && judgeCfg.Enabled != nil && !*judgeCfg.Enabled {
 		judgeDisabled = true
 	} else {
-		judge = cfg.CoreModel()
+		judge = fallback
 		if judgeCfg != nil {
 			judge = judgeCfg.CoreModel()
 		}
 	}
-	fact = cfg.CoreModel()
+	fact = fallback
 	if factCfg := cfg.Benchmark.Fact; factCfg != nil {
 		jinaAPIKeyEnv = factCfg.JinaAPIKeyEnv
 		if factCfg.Provider != "" || factCfg.BaseURL != "" || factCfg.ID != "" || factCfg.APIKeyEnv != "" {

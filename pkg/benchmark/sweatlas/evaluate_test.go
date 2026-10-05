@@ -50,7 +50,7 @@ type stubChat struct {
 	prompts   []string
 }
 
-func (s *stubChat) chat(_ context.Context, _ string, userPrompt string) (string, error) {
+func (s *stubChat) Chat(_ context.Context, _ string, userPrompt string) (string, error) {
 	index := s.calls
 	s.calls++
 	s.prompts = append(s.prompts, userPrompt)

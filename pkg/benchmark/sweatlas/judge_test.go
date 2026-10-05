@@ -1,4 +1,4 @@
-package deepresearchbench
+package sweatlas
 
 import (
 	"context"
@@ -11,33 +11,6 @@ import (
 	"github.com/hyscale-lab/aries/pkg/core"
 )
 
-// chatCompletionServer is a shared httptest fake OpenAI-compatible
-// chat-completions endpoint, reused by judge_test.go, race_test.go, and
-// fact_test.go: all three build on model.ChatClient.Chat, so they all exercise
-// the same request/response shape.
-func chatCompletionServer(t *testing.T, content string, statusCode int) *httptest.Server {
-	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/chat/completions" {
-			t.Errorf("unexpected path %q", r.URL.Path)
-			http.Error(w, "unexpected path", http.StatusBadRequest)
-			return
-		}
-		if r.Header.Get("Authorization") != "Bearer fake-key" {
-			t.Errorf("unexpected Authorization header %q", r.Header.Get("Authorization"))
-			http.Error(w, "unexpected authorization", http.StatusUnauthorized)
-			return
-		}
-		w.WriteHeader(statusCode)
-		response := map[string]any{
-			"choices": []map[string]any{
-				{"message": map[string]string{"content": content}},
-			},
-		}
-		_ = json.NewEncoder(w).Encode(response)
-	}))
-}
-
 func TestJudgeClientGenerationSettings(t *testing.T) {
 	temperature := 0.4
 	for _, tc := range []struct {
@@ -46,9 +19,8 @@ func TestJudgeClientGenerationSettings(t *testing.T) {
 		maxTokens              int
 		want                   map[string]any
 	}{
-		{name: "defaults", provider: "openai", want: map[string]any{"temperature": float64(0)}},
-		{name: "deepseek off", provider: "deepseek", effort: "off", want: map[string]any{"temperature": float64(0), "thinking": map[string]any{"type": "disabled"}}},
-		{name: "deepseek low", provider: "deepseek", effort: "low", want: map[string]any{"thinking": map[string]any{"type": "enabled"}, "reasoning_effort": "low"}},
+		{name: "defaults", provider: "openai", want: map[string]any{"max_tokens": float64(2048)}},
+		{name: "deepseek low", provider: "deepseek", effort: "low", want: map[string]any{"max_tokens": float64(2048), "thinking": map[string]any{"type": "enabled"}, "reasoning_effort": "low"}},
 		{name: "openai max with overrides", provider: "openai", effort: "max", temperature: &temperature, maxTokens: 4096, want: map[string]any{"reasoning_effort": "max", "temperature": 0.4, "max_tokens": float64(4096)}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

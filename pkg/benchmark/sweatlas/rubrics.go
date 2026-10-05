@@ -350,7 +350,7 @@ func evaluateSingleRubric(ctx context.Context, chat chatter, systemPrompt, userP
 
 	var lastErr error
 	for attempt := 0; attempt < maxRubricRetries; attempt++ {
-		content, err := chat.chat(ctx, systemPrompt, userPrompt)
+		content, err := chat.Chat(ctx, systemPrompt, userPrompt)
 		if err != nil {
 			lastErr = err
 			if attempt == maxRubricRetries-1 {

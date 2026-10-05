@@ -7,6 +7,7 @@
 | Configuration translation, constructors, rollback | `internal/app/wiring/<role>` |
 | Four role interfaces and task lifecycle | `pkg/runner` |
 | Shared data | `pkg/core` |
+| Model settings and shared Chat Completions transport | `pkg/model` |
 | Concrete components | `pkg/{benchmark,harness,bridge,sandbox}` |
 | Deployment contract and providers | `pkg/deployment` |
 
