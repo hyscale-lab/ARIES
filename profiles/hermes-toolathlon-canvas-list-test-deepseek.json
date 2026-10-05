@@ -19,13 +19,26 @@
     "type": "hermes",
     "subagents": {
       "enabled": false
+    },
+    "deployment": {
+      "backend": "docker",
+      "docker": {
+        "socket": "/var/run/docker.sock"
+      }
     }
   },
   "sandbox": {
-    "type": "docker"
+    "deployment": {
+      "backend": "docker",
+      "docker": {
+        "socket": "/var/run/docker.sock"
+      }
+    }
   },
   "bridge": {
-    "type": "hermes-ssh"
+    "deployment": { "backend": "docker" },
+    "type": "hermes-ssh",
+    "mode": "managed"
   },
   "runtime": {
     "backend": "deepseek",

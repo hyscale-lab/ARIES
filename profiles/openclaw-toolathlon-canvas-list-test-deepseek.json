@@ -16,13 +16,26 @@
     }
   },
   "harness": {
-    "type": "openclaw"
+    "type": "openclaw",
+    "deployment": {
+      "backend": "docker",
+      "docker": {
+        "socket": "/var/run/docker.sock"
+      }
+    }
   },
   "sandbox": {
-    "type": "docker"
+    "deployment": {
+      "backend": "docker",
+      "docker": {
+        "socket": "/var/run/docker.sock"
+      }
+    }
   },
   "bridge": {
-    "type": "openclaw-ssh"
+    "deployment": { "backend": "docker" },
+    "type": "openclaw-ssh",
+    "mode": "managed"
   },
   "runtime": {
     "backend": "deepseek",
