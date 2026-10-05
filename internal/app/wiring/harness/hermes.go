@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -16,8 +17,12 @@ func NewHermes(cfg config.Config, outputRoot string, lookup func(string) ([]byte
 	if err := ValidateMCPServers(cfg.Harness); err != nil {
 		return app.HarnessInstance{}, errors.Join(err, transport.Close())
 	}
+	image, err := hermesharness.LocalImage(cfg.Versions.Hermes.Image)
+	if err != nil {
+		return app.HarnessInstance{}, errors.Join(err, transport.Close())
+	}
 	options := hermesharness.Options{
-		Deployment: transport, Image: cfg.Versions.Hermes.Image, OutputDir: outputRoot, APIKeyLookup: lookup, Logger: logger,
+		Deployment: transport, Image: image, OutputDir: outputRoot, APIKeyLookup: lookup, Logger: logger,
 		Mode: cfg.Harness.Mode, WebSearchEnabled: cfg.Harness.WebSearch.Enabled,
 		ExtractAPIKeyEnv:       cfg.Harness.WebSearch.ExtractAPIKeyEnv,
 		SubagentsEnabled:       cfg.Harness.Subagents.Enabled != nil && *cfg.Harness.Subagents.Enabled,
@@ -35,6 +40,16 @@ func NewHermes(cfg config.Config, outputRoot string, lookup func(string) ([]byte
 		return app.HarnessInstance{}, errors.Join(fmt.Errorf("construct Hermes harness: %w", err), transport.Close())
 	}
 	return app.HarnessInstance{Harness: manager, Close: manager.Close}, nil
+}
+
+// PrepareHermesImage builds the image Hermes runs, the pinned one plus
+// hermes-otel, through the deployment's build-if-missing operation.
+func PrepareHermesImage(ctx context.Context, cfg config.Config, build func(ctx context.Context, image, dockerfile string, buildArgs map[string]string) error) error {
+	image, err := hermesharness.LocalImage(cfg.Versions.Hermes.Image)
+	if err != nil {
+		return err
+	}
+	return build(ctx, image, hermesharness.OTelDockerfile, map[string]string{"BASE": cfg.Versions.Hermes.Image})
 }
 
 func hermesVoiceOptions(voice config.HarnessVoiceTranscribeConfig) hermesharness.VoiceTranscribeOptions {

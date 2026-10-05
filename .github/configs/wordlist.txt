@@ -83,13 +83,16 @@ openclaw's
 openhands
 openrouter
 openssh
+opentelemetry
 orchestrator
+otlp
 parsers
 pid
 pre
 prefill
 preflight
 preload
+pypi
 qa's
 prewarm
 Qwen

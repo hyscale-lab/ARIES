@@ -34,7 +34,9 @@ type fakeDeployment struct {
 	sttStdout                        string
 	sttStderr                        string
 	sessionsStdout                   string
+	spansStdout                      string
 	agentExit, sttExit, sessionsExit int
+	spansExit                        int
 	removed                          bool
 	copyToErr                        error
 	logsErr                          error
@@ -49,7 +51,8 @@ type fakeDeployment struct {
 }
 
 func newFakeDeployment() *fakeDeployment {
-	return &fakeDeployment{agentStdout: "the task is complete\n", agentStderr: "hermes diagnostic\n", sessionsStdout: "{\"role\":\"user\",\"content\":\"do the task\"}\n"}
+	return &fakeDeployment{agentStdout: "the task is complete\n", agentStderr: "hermes diagnostic\n", sessionsStdout: "{\"role\":\"user\",\"content\":\"do the task\"}\n",
+		spansStdout: "{\"name\":\"tool.terminal\",\"start_time_unix_nano\":1,\"end_time_unix_nano\":2}\n"}
 }
 func (f *fakeDeployment) Create(_ context.Context, r deployment.Request) (string, error) {
 	f.created = r
@@ -84,6 +87,8 @@ func (f *fakeDeployment) Exec(ctx context.Context, _ string, c core.Command) (co
 		return core.CommandResult{Stdout: f.agentStdout, Stderr: f.agentStderr, ExitCode: f.agentExit}, nil
 	case "hermes":
 		return core.CommandResult{Stdout: f.sessionsStdout, ExitCode: f.sessionsExit}, nil
+	case "python3":
+		return core.CommandResult{Stdout: f.spansStdout, ExitCode: f.spansExit}, nil
 	case "/bin/sh":
 		if len(c.Args) > 2 && c.Args[2] == "aries-hermes-stt" {
 			return core.CommandResult{Stdout: f.sttStdout, Stderr: f.sttStderr, ExitCode: f.sttExit}, nil
@@ -437,7 +442,7 @@ func TestRunReturnsFinalResponseAndArtifacts(t *testing.T) {
 		t.Fatalf("result = %#v", result)
 	}
 	artifacts := filepath.Join(manager.outputDir, request.TaskID, "harness")
-	for _, name := range []string{"config.yaml", "hermes_stdout.log", "hermes_stderr.log", "container.log", "telemetry.index.json", filepath.Join("telemetry", "sessions.jsonl")} {
+	for _, name := range []string{"config.yaml", "hermes_stdout.log", "hermes_stderr.log", "container.log", "telemetry.index.json", filepath.Join("telemetry", "sessions.jsonl"), filepath.Join("telemetry", "otel-spans.jsonl")} {
 		if _, err := os.Stat(filepath.Join(artifacts, name)); err != nil {
 			t.Fatalf("missing artifact %s: %v", name, err)
 		}
@@ -720,6 +725,53 @@ func TestEmptySessionExportIsNotAFailure(t *testing.T) {
 	if _, statErr := os.Stat(filepath.Join(manager.outputDir, request.TaskID, "harness", "telemetry", "sessions.jsonl")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("unexpected sessions artifact: %v", statErr)
 	}
+}
+
+// An image without the hermes_otel plugin leaves no span store; the dump
+// exits 3 and the run must still succeed without a spans artifact.
+func TestMissingSpanStoreIsNotAFailure(t *testing.T) {
+	fake := newFakeDeployment()
+	fake.spansStdout = ""
+	fake.spansExit = 3
+	manager := newTestManager(t, fake, []byte("model-secret"))
+	request := testRequest(t)
+	if err := manager.Start(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop(context.Background())
+	result, err := manager.Run(context.Background(), "task")
+	if err != nil {
+		t.Fatalf("missing span store failed the run: %v", err)
+	}
+	if result.Status != core.StatusSucceeded {
+		t.Fatalf("status = %q", result.Status)
+	}
+	if _, statErr := os.Stat(filepath.Join(manager.outputDir, request.TaskID, "harness", "telemetry", "otel-spans.jsonl")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("unexpected spans artifact: %v", statErr)
+	}
+}
+
+// The span dump is a fixed argv: the store path is its own element, never
+// spliced into the script.
+func TestSpanDumpUsesFixedArgv(t *testing.T) {
+	fake := newFakeDeployment()
+	manager := newTestManager(t, fake, []byte("model-secret"))
+	if err := manager.Start(context.Background(), testRequest(t)); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop(context.Background())
+	if _, err := manager.Run(context.Background(), "task"); err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range fake.execs {
+		if command.Path == "python3" {
+			if !slices.Equal(command.Args, []string{"-c", spanDumpScript, otelStorePath}) {
+				t.Fatalf("span dump argv = %q", command.Args)
+			}
+			return
+		}
+	}
+	t.Fatal("no span dump exec")
 }
 
 func TestStopIsIdempotentAndConfirmsAbsence(t *testing.T) {

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/core"
+	dockerdeployment "github.com/hyscale-lab/aries/pkg/deployment/docker"
 )
 
 // A terminal call that names no workdir must run in the endpoint's workdir.
@@ -23,10 +24,27 @@ import (
 // a bridge; the test reads the directory that command cds into.
 func TestTerminalCallWithoutWorkdirRunsInTheEndpointWorkdir(t *testing.T) {
 	const workdir = "/workspace/aries-terminal-regression"
-	for _, image := range []string{integrationImage, "docker.io/nousresearch/hermes-agent:v2026.8.31"} {
-		t.Run(filepath.Base(image), func(t *testing.T) {
-			if image == integrationImage {
+	const current = "docker.io/nousresearch/hermes-agent:v2026.8.31"
+	cases := []struct {
+		name, base string
+		derived    bool // run the image ARIES builds rather than the base
+		wantSpans  bool
+	}{
+		{name: "v2026.5.29.2", base: integrationImage},
+		// Hermes 0.15.2 is too old for the plugin; ARIES still builds and
+		// runs a derived image for it, which must behave like the base.
+		{name: "v2026.5.29.2-derived", base: integrationImage, derived: true},
+		{name: "v2026.8.31", base: current},
+		{name: "v2026.8.31-derived", base: current, derived: true, wantSpans: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.base == integrationImage {
 				requireDockerImage(t)
+			}
+			image := tc.base
+			if tc.derived {
+				image = preparedImage(t, tc.base)
 			}
 			manager, err := New(Options{Deployment: integrationDeployment(t),
 				Image: image, OutputDir: t.TempDir(),
@@ -87,8 +105,70 @@ func TestTerminalCallWithoutWorkdirRunsInTheEndpointWorkdir(t *testing.T) {
 				t.Fatalf("the terminal call never reached ssh (one-shot exit %d); commands sent:\n%s\ntool results:\n%s\nstderr:\n%s",
 					outcome.Exit, strings.Join(outcome.Sent, "\n"), strings.Join(outcome.Results, "\n"), outcome.Stderr)
 			}
+			// Every image runs with hermes_otel enabled; only the derived
+			// v2026.8.31 image carries the plugin and must leave a span for
+			// the call.
+			paths, err := manager.collectSpans(ctx, manager.active)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !tc.wantSpans {
+				if len(paths) != 0 {
+					t.Fatalf("image without the plugin produced spans: %v", paths)
+				}
+				return
+			}
+			if len(paths) != 1 {
+				t.Fatalf("no spans retained; one-shot stderr:\n%s", outcome.Stderr)
+			}
+			assertToolSpan(t, paths[0], "tool.terminal", "call_terminal")
 		})
 	}
+}
+
+// preparedImage builds, or reuses from the local cache, the image ARIES runs
+// for base, exactly as preparation does before a run.
+func preparedImage(t *testing.T, base string) string {
+	t.Helper()
+	image, err := LocalImage(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	if err := dockerdeployment.BuildImage(ctx, "", image, OTelDockerfile, map[string]string{"BASE": base}); err != nil {
+		t.Fatal(err)
+	}
+	return image
+}
+
+// assertToolSpan requires a span named name for the tool call id whose
+// wall-clock window is well formed.
+func assertToolSpan(t *testing.T, path, name, callID string) {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(content)), "\n") {
+		var span struct {
+			Name       string         `json:"name"`
+			Start      int64          `json:"start_time_unix_nano"`
+			End        int64          `json:"end_time_unix_nano"`
+			Attributes map[string]any `json:"attributes"`
+		}
+		if err := json.Unmarshal([]byte(line), &span); err != nil {
+			t.Fatalf("decode span: %v\n%s", err, line)
+		}
+		if span.Name != name || span.Attributes["gen_ai.tool.call.id"] != callID {
+			continue
+		}
+		if span.Start <= 0 || span.End < span.Start {
+			t.Fatalf("span window is malformed: %s", line)
+		}
+		return
+	}
+	t.Fatalf("no %s span for %s in:\n%s", name, callID, content)
 }
 
 const terminalWorkdirDriver = `

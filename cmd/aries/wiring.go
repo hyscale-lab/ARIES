@@ -230,7 +230,17 @@ func pullImages(ctx context.Context, cfg config.Config, images []string) error {
 	// The supported embedded topology requires one daemon for both components.
 	switch cfg.Sandbox.Deployment.Backend {
 	case "docker":
-		return deploymentwiring.PullDockerImages(ctx, cfg.Sandbox.Deployment, images)
+		if err := deploymentwiring.PullDockerImages(ctx, cfg.Sandbox.Deployment, images); err != nil {
+			return err
+		}
+		if cfg.Harness.Type != "hermes" {
+			return nil
+		}
+		// Hermes runs a local image derived from the pinned one, built after
+		// the pull makes that base available.
+		return harnesswiring.PrepareHermesImage(ctx, cfg, func(ctx context.Context, image, dockerfile string, buildArgs map[string]string) error {
+			return deploymentwiring.BuildDockerImage(ctx, cfg.Sandbox.Deployment, image, dockerfile, buildArgs)
+		})
 	default:
 		return fmt.Errorf("unsupported image preparation backend %q", cfg.Sandbox.Deployment.Backend)
 	}

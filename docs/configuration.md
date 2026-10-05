@@ -125,7 +125,8 @@ Running a profile automatically loads `configs/versions.json`, creates or
 verifies the pinned Terminal-Bench checkout at `.cache/terminal-bench-2-1`, reads
 each selected task's explicit Docker image tag from its `task.toml`, and pulls
 only the configured harness image plus those selected images through the
-Docker Go SDK. Preparation
+Docker Go SDK. For Hermes it also builds, once, the local image that adds the
+`hermes-otel` plugin. Preparation
 happens before the run directory is created, a managed runtime is started,
 model weights load, an external endpoint is contacted, or task work is
 admitted. The Terminal-Bench Git revision and exact tag-pinned OpenClaw image
@@ -515,8 +516,10 @@ The Hermes profile is the same run with a different harness, so it needs the
 ./bin/aries profiles/hermes-tb2-fix-git-deepseek.json
 ```
 
-Hermes supports text and [voice-transcribe](voice_mode.md). It runs the pinned
-upstream image unmodified and is paired
+Hermes supports text and [voice-transcribe](voice_mode.md). Preparation builds
+a local image from the pinned upstream one with only the `hermes-otel` plugin
+added, once per machine (the first build needs GitHub and PyPI access and takes
+about 20 seconds), and Hermes runs it. It is paired
 with `bridge.type: "hermes-ssh"`; the two values must match, and a crossed pair
 is rejected before the run starts. Hermes issues every tool call as `bash -c`,
 so the task image must provide `/bin/bash`. Its `~/.hermes` file sync is refused by
@@ -525,7 +528,11 @@ credentials; Hermes logs one `file_sync: sync failed` warning and continues.
 
 Artifacts land under `<run>/<task>/harness/`: the redacted `config.yaml`, the
 one-shot's `hermes_stdout.log` and `hermes_stderr.log`, `container.log`, and the
-exported message-level trajectory at `telemetry/sessions.jsonl`.
+exported message-level trajectory at `telemetry/sessions.jsonl`, and
+`telemetry/otel-spans.jsonl`: one OpenTelemetry span per tool call, model
+call, and API request, carrying its tool call id and the wall-clock time it
+started and ended. An image without the plugin runs unchanged and leaves no
+spans file.
 
 ### Hermes context window, compaction, and request extra body
 

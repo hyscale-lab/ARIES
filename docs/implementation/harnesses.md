@@ -22,8 +22,8 @@ Realtime and voice-transcribe both convert the task instruction to staged audio 
 
 ## Hermes
 
-Hermes is the second supported harness and runs the pinned upstream image
-unmodified. It supports text and voice-transcribe modes; `harness.mode: "realtime"` remains OpenClaw's.
+Hermes is the second supported harness and runs a local image built from the
+pinned upstream image with only the `hermes-otel` plugin added. It supports text and voice-transcribe modes; `harness.mode: "realtime"` remains OpenClaw's.
 
 `hermes.Manager` owns one container held at an idle command, so ARIES decides
 when the agent starts rather than the image entrypoint. One task instruction is
@@ -99,6 +99,25 @@ literal key cannot reach the retained `config.yaml` or the request bodies. The `
 `HERMES_WRITE_SAFE_ROOT=/opt/data`, which makes `write_file` and `patch` refuse
 every sandbox path; the harness clears it, because the sandbox is the isolation
 boundary and the tools act on it over SSH.
+
+Every run enables the `hermes_otel` plugin. Image preparation derives
+`aries-local/hermes:<tag>-otel<version>-<hash>` from the pinned image with
+`hermes.OTelDockerfile` through the Docker deployment's build-if-missing
+operation, and the harness runs that tag. The hash covers the base reference
+and the recipe, so a change to either builds a new image; otherwise the cached
+one is reused. The build installs `hermes-otel` 1.19.0 (commit `9a0aed6`) into
+the Hermes virtual environment and copies it into Hermes's bundled plugin directory
+(`/opt/hermes/plugins/hermes_otel`), because ARIES relocates `HERMES_HOME` per
+task and the plugin's entry-point group is not one Hermes scans; a base older
+than Hermes 0.21 is left unchanged. No OTLP backend is configured, so the
+plugin makes no network calls; it keeps spans in SQLite under `HERMES_HOME`,
+with content capture off. After the harness stops, a fixed-argv `python3` exec
+dumps them to `telemetry/otel-spans.jsonl`; a missing store is not a failure.
+Each span carries the wall-clock start and end of one tool call, model call, or
+API request, which Hermes's session export does not record. The spans do not
+reach bridge execs: Hermes passes no trace context over SSH, so execs are
+attributed to a tool call by time only (the bridge record's `timestamp` is the
+exec's end), and background work is not linked.
 
 ## Model Context Protocol (`MCP`)
 

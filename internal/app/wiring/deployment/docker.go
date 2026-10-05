@@ -30,6 +30,11 @@ func NewDockerSandbox(cfg config.DeploymentConfig, runID, occurrenceID string, l
 	return transport, source, nil
 }
 
+// BuildDockerImage builds image from dockerfile unless the daemon already has it.
+func BuildDockerImage(ctx context.Context, cfg config.DeploymentConfig, image, dockerfile string, buildArgs map[string]string) error {
+	return dockerdeployment.BuildImage(ctx, cfg.Docker.Socket, image, dockerfile, buildArgs)
+}
+
 func PullDockerImages(ctx context.Context, cfg config.DeploymentConfig, images []string) error {
 	return dockerdeployment.PullImages(ctx, cfg.Docker.Socket, images)
 }

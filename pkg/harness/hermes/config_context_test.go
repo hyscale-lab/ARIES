@@ -68,7 +68,7 @@ func TestRenderConfigEmitsCompactionBlockOnlyWhenSet(t *testing.T) {
 	settings := baseSettings()
 	settings.compaction = &CompactionSettings{ThresholdTokens: 65536}
 	text := mustRender(t, vllmModel(), settings)
-	if !strings.Contains(text, "\ncompression:\n  threshold_tokens: 65536\n") || strings.Contains(text, "enabled:") {
+	if !strings.Contains(text, "\ncompression:\n  threshold_tokens: 65536\n") || strings.Contains(text, "\n  enabled: ") {
 		t.Fatalf("threshold-only compaction block is wrong:\n%s", text)
 	}
 	settings.compaction = &CompactionSettings{Enabled: boolPtr(false)}

@@ -176,17 +176,21 @@ func TestContainerEnvironmentSelectsNativeSSHBackend(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]string{
-		"HERMES_HOME":            stateContainerPath,
-		"TERMINAL_ENV":           "ssh",
-		"TERMINAL_SSH_HOST":      "172.17.0.1",
-		"TERMINAL_SSH_PORT":      "41234",
-		"TERMINAL_SSH_USER":      "aries",
-		"TERMINAL_SSH_KEY":       identityContainerFS,
-		"TERMINAL_CWD":           "/aries/workspace",
-		"TERMINAL_TIMEOUT":       "180",
-		"ARIES_RUN_ID":           "run-1",
-		"ARIES_TASK_ID":          "fix-git",
-		"HERMES_WRITE_SAFE_ROOT": "",
+		"HERMES_HOME":                                stateContainerPath,
+		"TERMINAL_ENV":                               "ssh",
+		"TERMINAL_SSH_HOST":                          "172.17.0.1",
+		"TERMINAL_SSH_PORT":                          "41234",
+		"TERMINAL_SSH_USER":                          "aries",
+		"TERMINAL_SSH_KEY":                           identityContainerFS,
+		"TERMINAL_CWD":                               "/aries/workspace",
+		"TERMINAL_TIMEOUT":                           "180",
+		"ARIES_RUN_ID":                               "run-1",
+		"ARIES_TASK_ID":                              "fix-git",
+		"HERMES_WRITE_SAFE_ROOT":                     "",
+		"HERMES_OTEL_DASHBOARD_LIVE":                 "true",
+		"HERMES_OTEL_DASHBOARD_LIVE_MAX_SPANS":       "10000",
+		"HERMES_OTEL_DASHBOARD_LIVE_RETENTION_HOURS": "0",
+		"HERMES_OTEL_CONTENT_CAPTURE":                "off",
 	}
 	got := map[string]string{}
 	for _, entry := range environment {
@@ -199,6 +203,16 @@ func TestContainerEnvironmentSelectsNativeSSHBackend(t *testing.T) {
 	for name, value := range want {
 		if got[name] != value {
 			t.Fatalf("%s=%q, want %q", name, got[name], value)
+		}
+	}
+}
+
+func TestRenderConfigAlwaysEnablesOTelPlugin(t *testing.T) {
+	for _, subagents := range []bool{false, true} {
+		settings := baseSettings()
+		settings.subagentsEnabled = subagents
+		if text := mustRender(t, vllmModel(), settings); !strings.Contains(text, "\nplugins:\n  enabled:\n    - hermes_otel\n") {
+			t.Fatalf("config does not enable hermes_otel:\n%s", text)
 		}
 	}
 }

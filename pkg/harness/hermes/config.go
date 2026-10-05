@@ -41,6 +41,12 @@ const (
 	// network. Mirrors pkg/harness/openclaw/config.go's constant of the same
 	// name and value.
 	searxngBaseURL = "http://task-sandbox:8888"
+
+	// otelPluginName is the hermes-otel plugin that LocalImage adds to the
+	// pinned Hermes image. It writes its spans to otelStorePath.
+	otelPluginName = "hermes_otel"
+	otelStorePath  = stateContainerPath + "/hermes_otel_live.db"
+	otelMaxSpans   = 10000
 )
 
 // hermesProvider maps the profile's runtime backend onto a provider name
@@ -211,6 +217,14 @@ func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *Voi
 		output.WriteString("\ndelegation:\n")
 		output.WriteString("  max_concurrent_children: " + strconv.Itoa(settings.maxConcurrentSubagents) + "\n")
 	}
+	// hermes_otel records each tool call, model call, and API request as a
+	// span stamped when it starts and ends. Hermes's own session store stamps
+	// messages when it saves the transcript on exit, so these spans are the
+	// only per-call timing. Hermes loads only listed plugins; an image
+	// without this one skips the name.
+	output.WriteString("\nplugins:\n")
+	output.WriteString("  enabled:\n")
+	output.WriteString("    - " + otelPluginName + "\n")
 	if voiceSTT != nil {
 		output.WriteString("\nstt:\n")
 		output.WriteString("  enabled: true\n")
@@ -414,6 +428,15 @@ func containerEnvironment(endpoint core.ToolEndpoint, workdir string, terminalTi
 		// boundary, so the prefix check only denies the agent its own
 		// workspace. An empty value turns the check off (agent/file_safety.py).
 		"HERMES_WRITE_SAFE_ROOT=",
+		// hermes_otel has no backend configured, so it sends nothing over the
+		// network and keeps every span in its SQLite store under HERMES_HOME,
+		// which collectSpans dumps after the run. The store would otherwise
+		// keep only the last 1000 rows of each kind. Content capture is off
+		// so prompts, tool arguments, and tool output stay out of the spans.
+		"HERMES_OTEL_DASHBOARD_LIVE=true",
+		"HERMES_OTEL_DASHBOARD_LIVE_MAX_SPANS=" + strconv.Itoa(otelMaxSpans),
+		"HERMES_OTEL_DASHBOARD_LIVE_RETENTION_HOURS=0",
+		"HERMES_OTEL_CONTENT_CAPTURE=off",
 	}
 	if webSearchEnabled {
 		environment = append(environment, "SEARXNG_URL="+searxngBaseURL)

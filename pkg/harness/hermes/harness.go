@@ -1089,11 +1089,13 @@ func (manager *Manager) collectArtifacts(ctx context.Context, active *session, s
 			active.logPaths = appendUnique(active.logPaths, path)
 		}
 	}
-	sessionPaths, sessionErr := manager.collectSessions(ctx, active)
-	if sessionErr != nil {
-		errs = append(errs, sessionErr)
-	} else {
-		active.logPaths = appendUnique(active.logPaths, sessionPaths...)
+	for _, collect := range []func(context.Context, *session) ([]string, error){manager.collectSessions, manager.collectSpans} {
+		paths, err := collect(ctx, active)
+		if err != nil {
+			errs = append(errs, err)
+		} else {
+			active.logPaths = appendUnique(active.logPaths, paths...)
+		}
 	}
 	index, err := json.MarshalIndent(struct {
 		Paths []string `json:"paths"`
@@ -1130,6 +1132,39 @@ func (manager *Manager) collectSessions(ctx context.Context, active *session) ([
 	path := filepath.Join(active.artifactDir, "telemetry", "sessions.jsonl")
 	if err := writeArtifact(path, redactSession(result.stdout, active)); err != nil {
 		return nil, fmt.Errorf("retain Hermes sessions: %w", err)
+	}
+	return []string{path}, nil
+}
+
+// spanDumpScript prints each span the hermes_otel plugin stored, one JSON
+// object per line in the order they ended. It exits 3 without output when the
+// store is absent, which is the case for an image without the plugin. The
+// store is opened read-only so the dump never creates it.
+const spanDumpScript = `import os, sqlite3, sys
+path = sys.argv[1]
+if not os.path.isfile(path):
+    sys.exit(3)
+db = sqlite3.connect("file:" + path + "?mode=ro", uri=True)
+for (data,) in db.execute("SELECT data FROM events WHERE kind = 'span' ORDER BY seq"):
+    sys.stdout.write(data + "\n")
+`
+
+// collectSpans retains the hermes_otel spans as telemetry/otel-spans.jsonl.
+// Each tool, model, and API span carries the wall-clock time its call started
+// and ended, which Hermes's own session export does not record.
+func (manager *Manager) collectSpans(ctx context.Context, active *session) ([]string, error) {
+	result, err := manager.execAttached(ctx, active.containerID,
+		[]string{"python3", "-c", spanDumpScript, otelStorePath}, workspaceRoot)
+	if err != nil {
+		return nil, fmt.Errorf("dump Hermes spans: %w", err)
+	}
+	if result.exitCode != 0 || len(bytes.TrimSpace(result.stdout)) == 0 {
+		manager.logger.WithContext(ctx).WithField("task_id", active.taskID).WithField("exit_code", result.exitCode).Debug("Hermes produced no spans")
+		return nil, nil
+	}
+	path := filepath.Join(active.artifactDir, "telemetry", "otel-spans.jsonl")
+	if err := writeArtifact(path, redactSession(result.stdout, active)); err != nil {
+		return nil, fmt.Errorf("retain Hermes spans: %w", err)
 	}
 	return []string{path}, nil
 }
