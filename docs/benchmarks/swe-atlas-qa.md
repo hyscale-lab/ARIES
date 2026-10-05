@@ -61,7 +61,7 @@ default judge.
     "provider": "deepseek",
     "base_url": "https://api.deepseek.com",
     "api_key_env": "DEEPSEEK_API_KEY",
-    "model": "deepseek-flash"
+    "id": "deepseek-flash"
   }
 }
 ```
@@ -75,7 +75,7 @@ collecting agent answers without paying for any judge calls, e.g. to grade
 them separately offline. Missing or empty answers still receive a failed
 zero-score result before the disabled-judge check. `judge.enabled: false`
 requires every other
-`judge` field (`provider`/`base_url`/`model`/`api_key_env`) to be left
+`judge` field (including identity and generation settings) to be left
 unset — they would otherwise name a judge that never gets used:
 
 ```json
@@ -92,13 +92,16 @@ environment — they are not literal secrets. Since grading no longer execs
 anything inside the sandbox, ARIES never reads or synthesizes a verifier
 environment from this block at all; it's decoded and ignored.
 
-`judge.model` must be a string format matching whatever `judge.base_url`
+Optional [judge generation settings](../configuration.md#judge-model-settings)
+include `reasoning_effort`, `temperature`, and `max_tokens`.
+
+`judge.id` must be a string format matching whatever `judge.base_url`
 endpoint expects — the sample task's own default
 (`anthropic/claude-opus-4-5-20251101`) is an OpenRouter-style composite
 string, which is not portable to every endpoint. The checked-in profile
 above uses DeepSeek's own API with a plain DeepSeek model ID, which is
 internally consistent for that endpoint; picking a different `judge.base_url`
-means picking a `judge.model` string that endpoint actually accepts.
+means picking a `judge.id` string that endpoint actually accepts.
 
 ### Setup
 

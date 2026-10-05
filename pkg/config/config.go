@@ -19,7 +19,7 @@ import (
 
 	"github.com/hyscale-lab/aries/pkg/containerimage"
 	"github.com/hyscale-lab/aries/pkg/core"
-	"github.com/hyscale-lab/aries/pkg/harness"
+	"github.com/hyscale-lab/aries/pkg/model"
 )
 
 const defaultOutputDir = "runs"
@@ -106,39 +106,16 @@ type ProfileModel struct {
 	APIKeyEnv       string `json:"api_key_env"`
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	// ContextLength, MaxTokens, and Temperature are optional. They reach the
-	// harness through core.ModelConfig. Only Hermes renders them, so a
-	// profile that sets one under another harness is rejected.
+	// consumer through core.ModelConfig. Support is validated per consumer.
 	ContextLength int      `json:"context_length,omitempty"`
 	MaxTokens     int      `json:"max_tokens,omitempty"`
 	Temperature   *float64 `json:"temperature,omitempty"`
 }
 
-// validateGeneration checks the optional generation settings against the
-// selected harness. Unset fields are always valid.
-func (m ProfileModel) validateGeneration(harnessType string) error {
-	set := m.ContextLength != 0 || m.MaxTokens != 0 || m.Temperature != nil
-	if !set {
-		return nil
-	}
-	if harnessType != "hermes" {
-		return errors.New("model.context_length, model.max_tokens, and model.temperature require Hermes")
-	}
-	if m.ContextLength < 0 {
-		return errors.New("model.context_length must be positive")
-	}
-	if m.MaxTokens < 0 {
-		return errors.New("model.max_tokens must be positive")
-	}
-	if m.ContextLength > 0 && m.MaxTokens > 0 && m.MaxTokens >= m.ContextLength {
-		return errors.New("model.max_tokens must be smaller than model.context_length")
-	}
-	if m.Temperature != nil {
-		t := *m.Temperature
-		if math.IsNaN(t) || math.IsInf(t, 0) || t < 0 || t > 2 {
-			return errors.New("model.temperature must be between 0 and 2")
-		}
-	}
-	return nil
+// validateGeneration checks common numeric bounds. Consumers separately reject
+// settings that they cannot apply.
+func (m ProfileModel) validateGeneration() error {
+	return model.ValidateGeneration(m.coreModel(""))
 }
 
 type BenchmarkConfig struct {
@@ -166,9 +143,7 @@ type BenchmarkEnvironment struct {
 }
 
 // JudgeConfig identifies the LLM used to grade Deep Research Bench reports
-// or SWE-Atlas QA answers (see BenchmarkConfig.Judge). It is intentionally a
-// distinct type from ProfileModel so judge-specific fields can be added
-// later without colliding with the harness model's shape.
+// or SWE-Atlas QA answers using the same model settings as the harness.
 //
 // Enabled is a master switch for all LLM-based grading. For
 // deepresearchbench, setting it to false also disables FACT (see
@@ -182,22 +157,51 @@ type BenchmarkEnvironment struct {
 // be left empty when Enabled is false, since they would otherwise be
 // meaningless.
 type JudgeConfig struct {
-	Enabled   *bool  `json:"enabled,omitempty"`
-	Provider  string `json:"provider"`
-	BaseURL   string `json:"base_url"`
-	ID        string `json:"model"`
-	APIKeyEnv string `json:"api_key_env"`
+	ProfileModel
+	Enabled  *bool  `json:"enabled,omitempty"`
+	Provider string `json:"provider"`
 }
 
 func (j JudgeConfig) CoreModel() core.ModelConfig {
-	return core.ModelConfig{Provider: j.Provider, BaseURL: j.BaseURL, Model: j.ID, APIKeyEnv: j.APIKeyEnv}
+	return j.ProfileModel.coreModel(j.Provider)
+}
+
+func (j JudgeConfig) validate() error {
+	if j.Enabled != nil && !*j.Enabled {
+		if j.Provider != "" || j.ProfileModel != (ProfileModel{}) {
+			return errors.New("judge model fields must not be set when judge.enabled is false")
+		}
+		return nil
+	}
+	if strings.TrimSpace(j.Provider) == "" {
+		return errors.New("judge.provider is required")
+	}
+	if err := validateHTTPBaseURL("judge.base_url", j.BaseURL); err != nil {
+		return err
+	}
+	if strings.TrimSpace(j.ID) == "" {
+		return errors.New("judge.id is required")
+	}
+	if !validEnvName(j.APIKeyEnv) {
+		return errors.New("judge.api_key_env must be an environment variable name")
+	}
+	if err := j.ProfileModel.validateGeneration(); err != nil {
+		return fmt.Errorf("judge: %w", err)
+	}
+	if j.ContextLength != 0 {
+		return errors.New("judge.context_length is unsupported by Chat Completions judges")
+	}
+	if _, err := model.ReasoningBody(j.CoreModel()); err != nil {
+		return fmt.Errorf("judge: %w", err)
+	}
+	return nil
 }
 
 // FactConfig identifies the LLM used for the FACT citation-extraction/
 // deduplication/validation pipeline, plus the Jina AI Reader API key used to
 // scrape cited URLs (see BenchmarkConfig.Fact). The model fields
 // (Provider/BaseURL/ID/APIKeyEnv) are optional as a group and default to the
-// profile's main model config when all left empty; JinaAPIKeyEnv is always
+// profile's main model identity when all left empty; JinaAPIKeyEnv is always
 // required to enable FACT at all.
 type FactConfig struct {
 	Provider      string `json:"provider"`
@@ -404,10 +408,14 @@ func (c BridgeConfig) RetainBridgeRawLog() bool {
 }
 
 func (c Config) CoreModel() core.ModelConfig {
+	return c.Model.coreModel(c.Runtime.Backend)
+}
+
+func (m ProfileModel) coreModel(provider string) core.ModelConfig {
 	return core.ModelConfig{
-		Provider: c.Runtime.Backend, BaseURL: c.Model.BaseURL, Model: c.Model.ID, APIKeyEnv: c.Model.APIKeyEnv,
-		ContextLength: c.Model.ContextLength, MaxTokens: c.Model.MaxTokens, Temperature: c.Model.Temperature,
-		ReasoningEffort: c.Model.ReasoningEffort,
+		Provider: provider, BaseURL: m.BaseURL, Model: m.ID, APIKeyEnv: m.APIKeyEnv,
+		ContextLength: m.ContextLength, MaxTokens: m.MaxTokens, Temperature: m.Temperature,
+		ReasoningEffort: m.ReasoningEffort,
 	}
 }
 
@@ -681,10 +689,13 @@ func (c *Config) validate() error {
 	if err := c.Harness.validate(); err != nil {
 		return err
 	}
-	if err := c.Model.validateGeneration(c.Harness.Type); err != nil {
+	if c.Harness.Type != "hermes" && (c.Model.ContextLength != 0 || c.Model.MaxTokens != 0 || c.Model.Temperature != nil) {
+		return errors.New("model.context_length, model.max_tokens, and model.temperature require Hermes")
+	}
+	if err := c.Model.validateGeneration(); err != nil {
 		return err
 	}
-	if _, err := harness.ReasoningBody(c.CoreModel()); err != nil {
+	if _, err := model.ReasoningBody(c.CoreModel()); err != nil {
 		return err
 	}
 	if c.Model.ReasoningEffort != "" && c.Harness.Hermes != nil {
@@ -780,23 +791,8 @@ func (c *Config) validateBenchmarkType() error {
 			return errors.New("benchmark.environment.image is required for deepresearchbench")
 		}
 		if judge := c.Benchmark.Judge; judge != nil {
-			if judge.Enabled != nil && !*judge.Enabled {
-				if judge.Provider != "" || judge.BaseURL != "" || judge.ID != "" || judge.APIKeyEnv != "" {
-					return errors.New("judge model fields must not be set when judge.enabled is false")
-				}
-			} else {
-				if strings.TrimSpace(judge.Provider) == "" {
-					return errors.New("judge.provider is required")
-				}
-				if err := validateHTTPBaseURL("judge.base_url", judge.BaseURL); err != nil {
-					return err
-				}
-				if strings.TrimSpace(judge.ID) == "" {
-					return errors.New("judge.model is required")
-				}
-				if !validEnvName(judge.APIKeyEnv) {
-					return errors.New("judge.api_key_env must be an environment variable name")
-				}
+			if err := judge.validate(); err != nil {
+				return err
 			}
 		}
 		if fact := c.Benchmark.Fact; fact != nil {
@@ -837,23 +833,8 @@ func (c *Config) validateBenchmarkType() error {
 		if judge == nil {
 			return errors.New("benchmark.judge is required for sweatlasqa")
 		}
-		if judge.Enabled != nil && !*judge.Enabled {
-			if judge.Provider != "" || judge.BaseURL != "" || judge.ID != "" || judge.APIKeyEnv != "" {
-				return errors.New("judge fields must not be set when judge.enabled is false for sweatlasqa")
-			}
-		} else {
-			if strings.TrimSpace(judge.Provider) == "" {
-				return errors.New("judge.provider is required for sweatlasqa")
-			}
-			if err := validateHTTPBaseURL("judge.base_url", judge.BaseURL); err != nil {
-				return err
-			}
-			if strings.TrimSpace(judge.ID) == "" {
-				return errors.New("judge.model is required for sweatlasqa")
-			}
-			if !validEnvName(judge.APIKeyEnv) {
-				return errors.New("judge.api_key_env must be an environment variable name")
-			}
+		if err := judge.validate(); err != nil {
+			return err
 		}
 		if c.Benchmark.Environment != nil {
 			return errors.New("benchmark.environment must not be set for sweatlasqa")

@@ -337,7 +337,7 @@ func TestDecodeExecutionAndURLValidation(t *testing.T) {
 const validDeepResearchBenchConfig = `{
   "name":"test-run","versions_file":"../configs/versions.json",
   "benchmark":{"type":"deepresearchbench","root":".cache/drb","tasks":["1"],"environment":{"image":"aries/drb:latest","workdir":"/workspace"},
-    "judge":{"provider":"openai","base_url":"https://api.openai.com/v1","model":"gpt-4.1","api_key_env":"OPENAI_API_KEY"}},
+    "judge":{"provider":"openai","base_url":"https://api.openai.com/v1","id":"gpt-4.1","api_key_env":"OPENAI_API_KEY"}},
   "harness":{"type":"openclaw"},"sandbox":{"type":"docker"},"bridge":{"type":"openclaw-ssh"},
   "runtime":{"backend":"deepseek","mode":"external"},
   "model":{"id":"fake","base_url":"http://127.0.0.1:8080","api_key_env":"DEEPSEEK_API_KEY"}
@@ -354,7 +354,7 @@ const noJudgeDeepResearchBenchConfig = `{
 const validDeepResearchBenchWithFactConfig = `{
   "name":"test-run","versions_file":"../configs/versions.json",
   "benchmark":{"type":"deepresearchbench","root":".cache/drb","tasks":["1"],"environment":{"image":"aries/drb:latest","workdir":"/workspace"},
-    "judge":{"provider":"openai","base_url":"https://api.openai.com/v1","model":"gpt-4.1","api_key_env":"OPENAI_API_KEY"},
+    "judge":{"provider":"openai","base_url":"https://api.openai.com/v1","id":"gpt-4.1","api_key_env":"OPENAI_API_KEY"},
     "fact":{"provider":"openai","base_url":"https://api.openai.com/v1","model":"gpt-4.1-mini","api_key_env":"OPENAI_API_KEY","jina_api_key_env":"JINA_API_KEY"}},
   "harness":{"type":"openclaw"},"sandbox":{"type":"docker"},"bridge":{"type":"openclaw-ssh"},
   "runtime":{"backend":"deepseek","mode":"external"},
@@ -382,7 +382,7 @@ func TestDeepResearchBenchRequiresEnvironmentAndValidatesJudgeWhenPresent(t *tes
 		"empty image":          strings.Replace(validDeepResearchBenchConfig, `"image":"aries/drb:latest"`, `"image":""`, 1),
 		"empty judge provider": strings.Replace(validDeepResearchBenchConfig, `"provider":"openai"`, `"provider":""`, 1),
 		"bad judge base_url":   strings.Replace(validDeepResearchBenchConfig, `"base_url":"https://api.openai.com/v1"`, `"base_url":"not-a-url"`, 1),
-		"empty judge model":    strings.Replace(validDeepResearchBenchConfig, `"model":"gpt-4.1"`, `"model":""`, 1),
+		"empty judge model":    strings.Replace(validDeepResearchBenchConfig, `"id":"gpt-4.1"`, `"id":""`, 1),
 		"bad judge env name":   strings.Replace(validDeepResearchBenchConfig, `"api_key_env":"OPENAI_API_KEY"`, `"api_key_env":"lower-case"`, 1),
 	}
 	for name, input := range cases {
@@ -395,7 +395,7 @@ func TestDeepResearchBenchRequiresEnvironmentAndValidatesJudgeWhenPresent(t *tes
 }
 
 func TestJudgeDisabledValidation(t *testing.T) {
-	judgeDisabled := strings.Replace(validDeepResearchBenchConfig, `"judge":{"provider":"openai","base_url":"https://api.openai.com/v1","model":"gpt-4.1","api_key_env":"OPENAI_API_KEY"}`, `"judge":{"enabled":false}`, 1)
+	judgeDisabled := strings.Replace(validDeepResearchBenchConfig, `"judge":{"provider":"openai","base_url":"https://api.openai.com/v1","id":"gpt-4.1","api_key_env":"OPENAI_API_KEY"}`, `"judge":{"enabled":false}`, 1)
 	if _, err := Decode(strings.NewReader(judgeDisabled)); err != nil {
 		t.Fatalf("judge.enabled:false alone rejected: %v", err)
 	}
@@ -409,7 +409,7 @@ func TestJudgeDisabledValidation(t *testing.T) {
 	// also configured: each block validates independently, and whether FACT
 	// actually runs when the judge is disabled is a deepresearchbench.New
 	// concern, not a config-validation one.
-	judgeDisabledWithFact := strings.Replace(validDeepResearchBenchWithFactConfig, `"judge":{"provider":"openai","base_url":"https://api.openai.com/v1","model":"gpt-4.1","api_key_env":"OPENAI_API_KEY"}`, `"judge":{"enabled":false}`, 1)
+	judgeDisabledWithFact := strings.Replace(validDeepResearchBenchWithFactConfig, `"judge":{"provider":"openai","base_url":"https://api.openai.com/v1","id":"gpt-4.1","api_key_env":"OPENAI_API_KEY"}`, `"judge":{"enabled":false}`, 1)
 	if _, err := Decode(strings.NewReader(judgeDisabledWithFact)); err != nil {
 		t.Fatalf("judge.enabled:false alongside a fact block rejected: %v", err)
 	}
@@ -418,7 +418,7 @@ func TestJudgeDisabledValidation(t *testing.T) {
 const validSweatlasqaConfig = `{
   "name":"test-run","versions_file":"../configs/versions.json",
   "benchmark":{"type":"sweatlasqa","root":".cache/swe-atlas-qa","tasks":["task-1"],
-    "judge":{"provider":"deepseek","base_url":"https://api.deepseek.com","model":"deepseek-v4-flash","api_key_env":"DEEPSEEK_API_KEY"}},
+    "judge":{"provider":"deepseek","base_url":"https://api.deepseek.com","id":"deepseek-v4-flash","api_key_env":"DEEPSEEK_API_KEY"}},
   "harness":{"type":"openclaw"},"sandbox":{"type":"docker"},"bridge":{"type":"openclaw-ssh"},
   "runtime":{"backend":"deepseek","mode":"external"},
   "model":{"id":"fake","base_url":"http://127.0.0.1:8080","api_key_env":"DEEPSEEK_API_KEY"}
@@ -429,7 +429,7 @@ func TestSweatlasqaJudgeDisabledValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	judgeDisabled := strings.Replace(validSweatlasqaConfig, `"judge":{"provider":"deepseek","base_url":"https://api.deepseek.com","model":"deepseek-v4-flash","api_key_env":"DEEPSEEK_API_KEY"}`, `"judge":{"enabled":false}`, 1)
+	judgeDisabled := strings.Replace(validSweatlasqaConfig, `"judge":{"provider":"deepseek","base_url":"https://api.deepseek.com","id":"deepseek-v4-flash","api_key_env":"DEEPSEEK_API_KEY"}`, `"judge":{"enabled":false}`, 1)
 	if _, err := Decode(strings.NewReader(judgeDisabled)); err != nil {
 		t.Fatalf("judge.enabled:false alone rejected: %v", err)
 	}
@@ -439,7 +439,7 @@ func TestSweatlasqaJudgeDisabledValidation(t *testing.T) {
 		t.Fatal("expected rejection of judge model fields set alongside judge.enabled:false")
 	}
 
-	missingJudge := strings.Replace(validSweatlasqaConfig, ",\n    \"judge\":{\"provider\":\"deepseek\",\"base_url\":\"https://api.deepseek.com\",\"model\":\"deepseek-v4-flash\",\"api_key_env\":\"DEEPSEEK_API_KEY\"}", ``, 1)
+	missingJudge := strings.Replace(validSweatlasqaConfig, ",\n    \"judge\":{\"provider\":\"deepseek\",\"base_url\":\"https://api.deepseek.com\",\"id\":\"deepseek-v4-flash\",\"api_key_env\":\"DEEPSEEK_API_KEY\"}", ``, 1)
 	if _, err := Decode(strings.NewReader(missingJudge)); err == nil {
 		t.Fatal("expected rejection of a missing judge block for sweatlasqa")
 	}
@@ -477,7 +477,7 @@ func TestTerminalBench2RejectsEnvironmentAndJudge(t *testing.T) {
 			wantErr: "environment",
 		},
 		"judge set": {
-			input:   strings.Replace(validConfig, `"benchmark":{"type":"terminalbench2","root":".cache/tb2","tasks":["fix-git"]}`, `"benchmark":{"type":"terminalbench2","root":".cache/tb2","tasks":["fix-git"],"judge":{"provider":"openai","base_url":"https://api.openai.com/v1","model":"gpt-4.1","api_key_env":"OPENAI_API_KEY"}}`, 1),
+			input:   strings.Replace(validConfig, `"benchmark":{"type":"terminalbench2","root":".cache/tb2","tasks":["fix-git"]}`, `"benchmark":{"type":"terminalbench2","root":".cache/tb2","tasks":["fix-git"],"judge":{"provider":"openai","base_url":"https://api.openai.com/v1","id":"gpt-4.1","api_key_env":"OPENAI_API_KEY"}}`, 1),
 			wantErr: "judge must not be set for terminalbench2",
 		},
 		"judge disabled": {
@@ -998,5 +998,45 @@ func TestHarnessMCPServerConfigValidation(t *testing.T) {
 		if _, err := Decode(strings.NewReader(text)); err == nil {
 			t.Fatalf("%s: expected rejection, but got nil error", name)
 		}
+	}
+}
+
+func TestJudgeSharedModelSettings(t *testing.T) {
+	for name, input := range map[string]string{"deepresearchbench": validDeepResearchBenchConfig, "sweatlasqa": validSweatlasqaConfig} {
+		t.Run(name, func(t *testing.T) {
+			configured := strings.Replace(input, `"judge":{`, `"judge":{"reasoning_effort":"low","max_tokens":2048,"temperature":0.25,`, 1)
+			cfg, err := Decode(strings.NewReader(configured))
+			if err != nil {
+				t.Fatal(err)
+			}
+			judge := cfg.Benchmark.Judge
+			got := judge.CoreModel()
+			if got.Model != judge.ID || got.Provider != judge.Provider || got.BaseURL != judge.BaseURL || got.APIKeyEnv != judge.APIKeyEnv || got.ReasoningEffort != "low" || got.MaxTokens != 2048 || got.Temperature == nil || *got.Temperature != 0.25 {
+				t.Fatalf("judge settings not preserved: %+v", got)
+			}
+			if cfg.CoreModel().ReasoningEffort != "" || cfg.CoreModel().MaxTokens != 0 || cfg.CoreModel().Temperature != nil {
+				t.Fatal("judge settings affected the harness model")
+			}
+			for _, fields := range []string{`"context_length":8192`, `"max_tokens":-1`, `"temperature":3`, `"reasoning_effort":"invalid"`, `"model":"old-id"`} {
+				if _, err := Decode(strings.NewReader(strings.Replace(input, `"judge":{`, `"judge":{`+fields+`,`, 1))); err == nil {
+					t.Errorf("accepted unsupported judge settings: %s", fields)
+				}
+			}
+			for _, fields := range []string{`"reasoning_effort":"low"`, `"context_length":8192`, `"max_tokens":2048`, `"temperature":0`} {
+				start := strings.Index(input, `"judge":{`)
+				end := start + strings.Index(input[start:], `}`) + 1
+				disabled := input[:start] + `"judge":{"enabled":false,` + fields + `}` + input[end:]
+				if _, err := Decode(strings.NewReader(disabled)); err == nil {
+					t.Errorf("accepted settings for disabled judge: %s", fields)
+				}
+			}
+		})
+	}
+	custom := strings.Replace(validDeepResearchBenchConfig, `"provider":"openai"`, `"provider":"custom"`, 1)
+	if _, err := Decode(strings.NewReader(custom)); err != nil {
+		t.Fatalf("legacy custom provider rejected without reasoning settings: %v", err)
+	}
+	if _, err := Decode(strings.NewReader(strings.Replace(custom, `"judge":{`, `"judge":{"reasoning_effort":"low",`, 1))); err == nil {
+		t.Fatal("accepted explicit reasoning for unsupported provider")
 	}
 }

@@ -13,15 +13,28 @@ func TestDeepResearchModelDefaultsAndDisabledJudge(t *testing.T) {
 		Runtime: config.RuntimeConfig{Backend: "openai"},
 		Model:   config.ProfileModel{ID: "main", BaseURL: "https://example.test/v1", APIKeyEnv: "MAIN_KEY"},
 	}
+	cfg.Model.ReasoningEffort = "high"
+	cfg.Model.MaxTokens = 100
+	cfg.Model.ContextLength = 200
+	temperature := 0.5
+	cfg.Model.Temperature = &temperature
+	fallback := core.ModelConfig{Provider: "openai", Model: "main", BaseURL: "https://example.test/v1", APIKeyEnv: "MAIN_KEY"}
 	cfg.Benchmark.Fact = &config.FactConfig{JinaAPIKeyEnv: "JINA_KEY"}
 	judge, fact, jina, disabled := deepresearchbenchModels(cfg)
-	if judge != cfg.CoreModel() || fact != cfg.CoreModel() || jina != "JINA_KEY" || disabled {
+	if judge != fallback || fact != fallback || jina != "JINA_KEY" || disabled {
 		t.Fatalf("default models: judge=%+v fact=%+v jina=%q disabled=%v", judge, fact, jina, disabled)
+	}
+	cfg.Benchmark.Judge = &config.JudgeConfig{Provider: "deepseek", ProfileModel: config.ProfileModel{
+		ID: "judge", BaseURL: "https://api.deepseek.com", APIKeyEnv: "JUDGE_KEY", ReasoningEffort: "low", MaxTokens: 400,
+	}}
+	judge, fact, _, disabled = deepresearchbenchModels(cfg)
+	if judge != cfg.Benchmark.Judge.CoreModel() || judge.ReasoningEffort != "low" || fact != fallback || disabled {
+		t.Fatalf("explicit judge settings lost: %+v", judge)
 	}
 	enabled := false
 	cfg.Benchmark.Judge = &config.JudgeConfig{Enabled: &enabled}
 	judge, fact, jina, disabled = deepresearchbenchModels(cfg)
-	if judge != (core.ModelConfig{}) || fact != cfg.CoreModel() || jina != "JINA_KEY" || !disabled {
+	if judge != (core.ModelConfig{}) || fact != fallback || jina != "JINA_KEY" || !disabled {
 		t.Fatal("disabled judge must retain FACT inputs for skip reporting")
 	}
 }

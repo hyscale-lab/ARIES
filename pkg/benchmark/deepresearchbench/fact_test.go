@@ -21,7 +21,7 @@ type fakeChatter struct {
 	err               error
 }
 
-func (f *fakeChatter) chat(_ context.Context, _, userPrompt string) (string, error) {
+func (f *fakeChatter) Chat(_ context.Context, _, userPrompt string) (string, error) {
 	if f.err != nil {
 		return "", f.err
 	}

@@ -297,7 +297,8 @@ configuration; it does not prove the provider honored it.
 
 This field controls the main agent model, including voice-transcribed tasks and
 OpenClaw realtime agent consultations. `harness.realtime.reasoning_effort` remains
-the separate Talk setting. Benchmark judge and fact-checker requests are unchanged.
+the separate Talk setting. Configure judge reasoning independently under
+`benchmark.judge.reasoning_effort`; FACT settings remain unchanged.
 
 Both harnesses currently use Chat Completions. GPT-6 Luna supports tool calls on
 that API only with `none`; reasoning with tools requires Responses API support.
@@ -672,12 +673,48 @@ these guides:
 - Terminal-Bench 2 uses pinned task metadata for images and verifier budgets;
   see [overrides](#resource-and-timeout-overrides).
 - [Deep Research Bench](benchmarks/deep-research-bench.md) requires an environment
-  image with its research services. An omitted `judge` reuses the harness model;
+  image with its research services. An omitted `judge` reuses the harness model identity;
   optional `fact` configures citation checking.
 - [SWE-Atlas QA](benchmarks/swe-atlas-qa.md) requires a `judge` block, which can
   explicitly disable grading. It rejects `environment` and `fact`.
 - [SWE-bench Pro](benchmarks/swe-bench-pro.md) derives environments from dataset
   rows and uses its pinned evaluator. It rejects `environment`, `judge`, and `fact`.
+
+### Judge model settings
+
+`benchmark.judge` embeds the same model settings as the main `model` block.
+It additionally declares its own `provider` and optional `enabled` switch:
+
+```json
+"judge": {
+  "provider": "deepseek",
+  "base_url": "https://api.deepseek.com",
+  "api_key_env": "DEEPSEEK_API_KEY",
+  "id": "deepseek-flash",
+  "reasoning_effort": "low"
+}
+```
+
+**Migration:** rename `judge.model` to `judge.id` in existing profiles. The old
+field is rejected. Checked-in profiles use explicit low judge reasoning effort;
+other omitted generation settings retain benchmark defaults.
+
+- `reasoning_effort` uses the same [values and provider mapping](#reasoning-effort)
+  as the harness model and reaches the judge's Chat Completions request.
+- `temperature` and `max_tokens` override benchmark request defaults. Endpoint
+  support remains model-dependent. `context_length` is rejected because judges
+  do not manage a conversation context window.
+- With omitted settings, Deep Research Bench sends temperature zero, while
+  SWE-Atlas QA retains its output-token limit of 2048. Explicit enabled reasoning
+  suppresses Deep Research Bench's implicit temperature; an explicit temperature
+  is forwarded as requested.
+- An omitted Deep Research Bench judge block reuses only the main model's
+  identity and credential reference, preserving benchmark generation defaults.
+  Configure judge generation settings explicitly; SWE-Atlas QA still requires
+  a judge block. `enabled: false` requires all other judge fields to be absent.
+
+FACT retains its separate schema, including its `model` field and Jina settings.
+Changing the main agent's generation settings does not change FACT requests.
 
 ## Other harness and evidence options
 

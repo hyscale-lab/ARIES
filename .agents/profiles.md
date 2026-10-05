@@ -10,7 +10,8 @@ Hermes derives its local image from the catalog’s base image and OTel plugin p
   Reject unsupported placement before effects; do not imply Kubernetes support.
 - Declare `overrides_file` explicitly (`""` disables overrides). Keep harness and
   sandbox resource limits independent; preserve omission/default semantics and
-  explicit model request settings without silently changing their meaning.
+  explicit model request settings without silently changing their meaning. Judges
+  share model fields; preserve independent evaluation defaults and validation.
 - Match model IDs to the served catalog. Keep credential values out of profiles,
   metadata, logs, and results; use configured environment-variable references.
 - The ignored root `DEEPSEEK_API.key` must be a private, current-user-owned regular

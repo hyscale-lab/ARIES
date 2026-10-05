@@ -15,7 +15,8 @@
       "provider": "deepseek",
       "base_url": "https://api.deepseek.com",
       "api_key_env": "DEEPSEEK_API_KEY",
-      "model": "deepseek-flash"
+      "id": "deepseek-flash",
+      "reasoning_effort": "low"
     }
   },
   "harness": {

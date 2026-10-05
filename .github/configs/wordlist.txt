@@ -44,6 +44,7 @@ gib
 gid
 github
 gpu
+GPT
 gRPC
 handoff
 hermes
@@ -75,6 +76,7 @@ ModelRuntime
 moe
 natively
 NCSpeech
+noncanonical
 nousresearch
 ntu
 nvidia

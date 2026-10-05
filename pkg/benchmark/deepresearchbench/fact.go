@@ -163,7 +163,7 @@ func removeURLs(fact string) string {
 
 func (p *factPipeline) extract(ctx context.Context, article string) ([]factCitation, error) {
 	prompt := fmt.Sprintf(factExtractPrompt, article)
-	content, err := p.chat.chat(ctx, "", prompt)
+	content, err := p.chat.Chat(ctx, "", prompt)
 	if err != nil {
 		return nil, err
 	}
@@ -239,7 +239,7 @@ func (p *factPipeline) deduplicateFacts(ctx context.Context, facts []string) ([]
 	}
 	prompt := fmt.Sprintf(factDedupPrompt, statements.String())
 
-	content, err := p.chat.chat(ctx, "", prompt)
+	content, err := p.chat.Chat(ctx, "", prompt)
 	if err != nil {
 		return facts, fmt.Sprintf("dedup call failed, keeping all facts: %v", err)
 	}
@@ -371,7 +371,7 @@ func (p *factPipeline) validateGroup(ctx context.Context, reference string, fact
 			case <-time.After(p.validateRetryDelay):
 			}
 		}
-		content, err := p.chat.chat(ctx, "", prompt)
+		content, err := p.chat.Chat(ctx, "", prompt)
 		if err != nil {
 			lastErr = err
 			continue

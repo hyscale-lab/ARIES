@@ -256,7 +256,7 @@ func (c *raceClient) Score(ctx context.Context, prompt, targetArticle, reference
 			case <-time.After(c.retryDelay):
 			}
 		}
-		content, err := c.chat.chat(ctx, system, user)
+		content, err := c.chat.Chat(ctx, system, user)
 		if err != nil {
 			lastErr = err
 			continue

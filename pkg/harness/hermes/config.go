@@ -14,6 +14,7 @@ import (
 
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/harness"
+	modelconfig "github.com/hyscale-lab/aries/pkg/model"
 )
 
 const (
@@ -132,7 +133,7 @@ func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *Voi
 		return nil, errors.New("Hermes merges user extra_body only for the custom provider, not deepseek")
 	}
 	provider := hermesProvider(model.Provider)
-	reasoningBody, err := harness.ReasoningBody(model)
+	reasoningBody, err := modelconfig.ReasoningBody(model)
 	if err != nil {
 		return nil, err
 	}

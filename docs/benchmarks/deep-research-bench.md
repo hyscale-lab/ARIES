@@ -12,7 +12,7 @@ the fixed paths described in the [implementation notes](../implementation/benchm
 an arbitrary network-enabled image is insufficient. Grading is by an LLM judge rather than a
 deterministic verifier script, configured with an optional `benchmark.judge`
 block naming a separate model. `benchmark.judge` is entirely optional: when
-omitted, the judge call reuses the profile's own `model` config, so grading
+omitted, the judge call reuses the profile's model ID, endpoint, provider, and credential reference, so grading
 with the same model that ran the task needs no extra configuration.
 
 To grade with a different (smarter, or cheaper) model than the one under
@@ -29,10 +29,14 @@ DeepSeek:
     "provider": "deepseek",
     "base_url": "https://api.deepseek.com",
     "api_key_env": "DEEPSEEK_API_KEY",
-    "model": "deepseek-flash"
+    "id": "deepseek-flash"
   }
 }
 ```
+
+Optional [judge generation settings](../configuration.md#judge-model-settings) use
+the same fields as the main model, including `reasoning_effort`. Omitted settings
+retain benchmark defaults; they do not inherit the main model’s generation settings.
 
 `judge.api_key_env` does not have to match `model.api_key_env` — the judge
 call is entirely separate from the harness's own model call, so it's normal
@@ -67,7 +71,7 @@ e.g. to grade them separately offline. A report download failure still returns
 a failed zero-score result; see the [known download-classification gap](../implementation/benchmarks.md#known-implementation-gap).
 
 `judge.enabled: false` requires every other `judge` field
-(`provider`/`base_url`/`model`/`api_key_env`) to be left unset — they would
+(including identity and generation settings) to be left unset — they would
 otherwise name a judge that never gets used. A `benchmark.fact` block left
 in place at the same time is not an error: it's silently ignored (RACE and
 FACT are both off), with a warning printed to stderr at startup explaining
@@ -86,7 +90,7 @@ Reader API) against its claim, using its own (typically cheaper) judge model.
 key, is always required to enable FACT at all — omit the whole `fact` block
 (or leave it unset) to skip FACT entirely, at zero extra cost. Its model
 fields (`provider`/`base_url`/`model`/`api_key_env`) are optional as a group,
-just like `benchmark.judge`: leave all four unset to grade citations with the
+leave all four unset to grade citations with the
 profile's own `model`, or set all four together to use a different model. The
 checked-in DRB profiles do the former — they enable FACT with only
 `jina_api_key_env` set:

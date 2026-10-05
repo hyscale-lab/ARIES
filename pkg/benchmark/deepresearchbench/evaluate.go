@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/model"
 	"github.com/hyscale-lab/aries/pkg/runner"
 )
 
@@ -215,4 +217,30 @@ func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner
 		evaluation.VerifierStatus = core.StatusNotEnabled
 	}
 	return finish(nil)
+}
+
+// chatter keeps benchmark response parsing and retry policy independently testable.
+type chatter interface {
+	Chat(context.Context, string, string) (string, error)
+}
+
+func newJudgeClient(settings core.ModelConfig, lookup func(string) ([]byte, bool)) (*model.ChatClient, error) {
+	if settings.Temperature == nil && (settings.ReasoningEffort == "" || settings.ReasoningEffort == "off" || settings.ReasoningEffort == "none") {
+		temperature := 0.0
+		settings.Temperature = &temperature
+	}
+	return model.NewChatClient(settings, lookup)
+}
+
+// stripJSONCodeFence removes a surrounding ```json ... ``` or ``` ... ```
+// markdown fence, if present, mirroring upstream's
+// `response.replace("```json", "").replace("```", "")` cleanup applied
+// before every JSON parse in the Python pipeline. Content without a fence
+// is returned unchanged.
+func stripJSONCodeFence(content string) string {
+	trimmed := strings.TrimSpace(content)
+	trimmed = strings.TrimPrefix(trimmed, "```json")
+	trimmed = strings.TrimPrefix(trimmed, "```")
+	trimmed = strings.TrimSuffix(trimmed, "```")
+	return strings.TrimSpace(trimmed)
 }

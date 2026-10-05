@@ -86,11 +86,11 @@ type ModelConfig struct {
 	BaseURL   string `json:"base_url"`
 	Model     string `json:"model"`
 	APIKeyEnv string `json:"api_key_env"`
-	// ReasoningEffort controls harness model requests; empty preserves native defaults.
+	// ReasoningEffort controls model requests; empty preserves consumer defaults.
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	// ContextLength, MaxTokens, and Temperature are optional generation
-	// settings the harness writes into its own model configuration. Zero or
-	// nil keeps the harness default. Only the Hermes harness renders them.
+	// settings. Zero or nil keeps the consumer default. Consumers validate
+	// which settings they support.
 	ContextLength int      `json:"context_length,omitempty"`
 	MaxTokens     int      `json:"max_tokens,omitempty"`
 	Temperature   *float64 `json:"temperature,omitempty"`
