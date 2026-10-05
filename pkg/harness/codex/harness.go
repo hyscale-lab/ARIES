@@ -35,6 +35,9 @@ type Options struct {
 	CodexVersion string
 	OutputDir    string
 	DockerSocket string
+	// CABundlePath overrides the host system trust bundle for HTTPS endpoints.
+	// HTTP endpoints never read it. An empty path uses fixed Linux system paths.
+	CABundlePath string
 	// APIKeyLookup transfers ownership of its returned buffer to the harness,
 	// which clones the key and clears that buffer before returning from Start.
 	APIKeyLookup   func(string) ([]byte, bool)
@@ -59,6 +62,7 @@ type dockerClient interface {
 type Manager struct {
 	client                                     dockerClient
 	image, codexSource, outputDir              string
+	caBundleSource                             string
 	cleanupTimeout, startTimeout, agentTimeout time.Duration
 	apiKeyLookup                               func(string) ([]byte, bool)
 	logger                                     *logrus.Logger
@@ -98,6 +102,16 @@ func New(options Options) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
+	caBundleSource := ""
+	if options.CABundlePath != "" {
+		if strings.TrimSpace(options.CABundlePath) == "" {
+			return nil, errors.New("Codex CA bundle path must not be blank")
+		}
+		caBundleSource, err = filepath.Abs(options.CABundlePath)
+		if err != nil {
+			return nil, err
+		}
+	}
 	output, err := filepath.Abs(options.OutputDir)
 	if err != nil {
 		return nil, err
@@ -131,7 +145,7 @@ func New(options Options) (*Manager, error) {
 	if options.AgentTimeout <= 0 {
 		options.AgentTimeout = 20 * time.Minute
 	}
-	return &Manager{client: api, image: options.Image, codexSource: source, outputDir: output, cleanupTimeout: options.CleanupTimeout, startTimeout: options.StartTimeout, agentTimeout: options.AgentTimeout, apiKeyLookup: options.APIKeyLookup, logger: options.Logger}, nil
+	return &Manager{client: api, image: options.Image, codexSource: source, outputDir: output, caBundleSource: caBundleSource, cleanupTimeout: options.CleanupTimeout, startTimeout: options.StartTimeout, agentTimeout: options.AgentTimeout, apiKeyLookup: options.APIKeyLookup, logger: options.Logger}, nil
 }
 
 func (manager *Manager) Close() error {

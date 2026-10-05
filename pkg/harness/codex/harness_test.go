@@ -159,13 +159,21 @@ func writeStaticELF(t *testing.T, path string) {
 	}
 }
 
-func testManager(t *testing.T) (*Manager, *fakeDocker, core.HarnessRequest, []byte) {
+func testManager(t *testing.T, settings ...Options) (*Manager, *fakeDocker, core.HarnessRequest, []byte) {
 	t.Helper()
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "codex")
 	writeStaticELF(t, bin)
 	key := []byte("test-model-secret")
-	manager, err := New(Options{Image: testImage, CodexPath: bin, CodexVersion: "0.157.1", OutputDir: filepath.Join(dir, "runs"), APIKeyLookup: func(string) ([]byte, bool) { return key, true }, StartTimeout: time.Second})
+	var options Options
+	if len(settings) != 0 {
+		options = settings[0]
+	}
+	options.Image, options.CodexPath, options.CodexVersion = testImage, bin, "0.157.1"
+	options.OutputDir = filepath.Join(dir, "runs")
+	options.APIKeyLookup = func(string) ([]byte, bool) { return key, true }
+	options.StartTimeout = time.Second
+	manager, err := New(options)
 	if err != nil {
 		t.Fatal(err)
 	}

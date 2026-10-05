@@ -3,10 +3,13 @@ package codex
 import (
 	"archive/tar"
 	"bytes"
+	"crypto/x509"
 	"debug/elf"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -16,6 +19,7 @@ import (
 )
 
 const maxBinaryBytes = 512 << 20
+const maxCABundleBytes = 4 << 20
 
 type stagedFile struct {
 	content []byte
@@ -23,6 +27,17 @@ type stagedFile struct {
 }
 
 func (manager *Manager) runtimeArchive(active *session, configuration, environments []byte) ([]byte, error) {
+	modelURL, err := url.Parse(active.model.BaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse Codex model URL: %w", err)
+	}
+	var caBundle []byte
+	if modelURL.Scheme == "https" {
+		caBundle, err = manager.readCABundle()
+		if err != nil {
+			return nil, fmt.Errorf("read Codex HTTPS CA bundle: %w", err)
+		}
+	}
 	identity, err := readSource(active.endpoint.IdentitySourceFile, 0o600, maxOutputBytes)
 	if err != nil {
 		return nil, fmt.Errorf("read Codex SSH identity: %w", err)
@@ -46,9 +61,17 @@ func (manager *Manager) runtimeArchive(active *session, configuration, environme
 		agentWrapperPath: {agentWrapperScript(active.model.APIKeyEnv), 0o500},
 		codexPath:        {binary, 0o500}, clientPath: {helper, 0o500},
 	}
+	if len(caBundle) != 0 {
+		files["/etc/ssl/certs/ca-certificates.crt"] = stagedFile{caBundle, 0o644}
+	}
 	var output bytes.Buffer
 	writer := tar.NewWriter(&output)
 	directories := map[string]int64{"run/aries": 0o700, "run/aries/codex": 0o700, "run/aries/codex/home": 0o700, "run/aries/ssh": 0o700}
+	if len(caBundle) != 0 {
+		for _, directory := range []string{"etc", "etc/ssl", "etc/ssl/certs"} {
+			directories[directory] = 0o755
+		}
+	}
 	for directory := strings.TrimPrefix(active.endpoint.Workdir, "/"); directory != "" && directory != "."; directory = path.Dir(directory) {
 		directories[directory] = 0o755
 	}
@@ -84,6 +107,76 @@ func (manager *Manager) runtimeArchive(active *session, configuration, environme
 		return nil, err
 	}
 	return output.Bytes(), nil
+}
+
+func (manager *Manager) readCABundle() ([]byte, error) {
+	if manager.caBundleSource != "" {
+		return readPublicCABundle(manager.caBundleSource)
+	}
+	// Fixed system trust locations; never consult SSL_CERT_FILE or SSL_CERT_DIR.
+	// Skip symlink aliases so distributions can use their canonical bundle path.
+	for _, filename := range []string{
+		"/etc/ssl/certs/ca-certificates.crt",
+		"/etc/pki/tls/certs/ca-bundle.crt",
+		"/etc/ssl/ca-bundle.pem",
+		"/etc/pki/tls/cacert.pem",
+		"/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+		"/etc/ssl/cert.pem",
+	} {
+		content, err := readPublicCABundle(filename)
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ELOOP) {
+			continue
+		}
+		return content, err
+	}
+	return nil, errors.New("no regular Linux system CA bundle found")
+}
+
+func readPublicCABundle(filename string) ([]byte, error) {
+	fd, err := syscall.Open(filename, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(fd), filename)
+	defer file.Close()
+	before, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !before.Mode().IsRegular() || before.Size() < 1 || before.Size() > maxCABundleBytes || before.Mode().Perm()&0o022 != 0 {
+		return nil, errors.New("CA bundle must be one bounded regular file without group or world write access")
+	}
+	content, err := io.ReadAll(io.LimitReader(file, maxCABundleBytes+1))
+	defer clear(content)
+	if err != nil || int64(len(content)) != before.Size() || len(content) > maxCABundleBytes {
+		return nil, errors.New("CA bundle read exceeded its bound or changed size")
+	}
+	after, err := file.Stat()
+	if err != nil || !os.SameFile(before, after) || before.Size() != after.Size() || before.ModTime() != after.ModTime() || before.Mode() != after.Mode() {
+		return nil, errors.New("CA bundle changed while being read")
+	}
+	var bundle []byte
+	for {
+		block, rest := pem.Decode(content)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
+			clear(block.Bytes)
+			return nil, errors.New("CA bundle must contain only public certificate PEM blocks")
+		}
+		certificate, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, errors.New("CA bundle contains an invalid X.509 certificate")
+		}
+		// Stage only public certificates, excluding surrounding comments or text.
+		bundle = append(bundle, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Raw})...)
+		content = rest
+	}
+	if len(bundle) == 0 {
+		return nil, errors.New("CA bundle contains no X.509 certificates")
+	}
+	return bundle, nil
 }
 
 // No interpreter or dynamic dependency may be required in either the generic

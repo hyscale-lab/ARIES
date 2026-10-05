@@ -85,8 +85,12 @@ Codex is a third concrete harness, pinned to the unmodified static CLI
 and the pinned native remote environment (`include_local = false`), keeping
 model credentials in the harness and tools in the task container. Native
 tools retain the task image environment while excluding the model key;
-non-login shells preserve the image PATH. Its SSH
-bridge permits one native stdio executor session. A root Go supervisor starts
+non-login shells preserve the image PATH.
+HTTPS model endpoints require a bounded, stable read of the host's public
+system CA certificates, staged in the harness at the standard Linux trust
+path with root-owned public read permissions. HTTP does not depend on CA
+availability; neither path changes TLS verification or the pinned image.
+Its SSH bridge permits one native stdio executor session. A root Go supervisor starts
 the native child with the benchmark's effective UID/GID, protects a private
 stdin nonce, reaps all descendants as a Linux subreaper, removes its stage with
 Go filesystem calls, and emits a terminal cleanup proof. The Docker sandbox's

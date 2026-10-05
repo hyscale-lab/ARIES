@@ -36,9 +36,11 @@ scripts, dynamic executables, symlinks, and a staged CLI that reports a
 different version. `make build` also builds the static `aries-codex-ssh`
 client and `aries-codex-exec` supervisor; keep both beside `bin/aries`.
 The version and base image are declared in `configs/versions.json`.
-The default Debian slim image supports local HTTP endpoints. For HTTPS, select
-a pinned harness image containing the required CA certificates; ARIES does not
-install packages into that image or disable TLS verification.
+For HTTPS endpoints, ARIES stages the host's public X.509 CA bundle into the
+pinned harness image at `/etc/ssl/certs/ca-certificates.crt`. The host must have
+a regular system CA bundle; invalid, oversized, or symlink inputs fail before
+container admission. HTTP endpoints do not require a CA bundle. ARIES does not
+install packages into the image or disable TLS verification.
 
 ## Configure and run
 
