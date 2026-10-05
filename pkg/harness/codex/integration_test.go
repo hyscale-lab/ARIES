@@ -123,7 +123,7 @@ func runNativeSSHScenario(t *testing.T, cancelTool bool, taskUser string) {
 			t.Fatalf("prepare nonroot task workspace: %#v, %v", prepared, err)
 		}
 	}
-	prepared, err := sandbox.Exec(ctx, core.Command{Path: "/bin/sh", Args: []string{"-c", `mkdir -p /opt/task-bin; printf '#!/bin/sh\nprintf TASK_TOOL_OK\n' > /opt/task-bin/task-tool; chmod 0755 /opt/task-bin/task-tool`}, User: "0:0"})
+	prepared, err := sandbox.Exec(ctx, core.Command{Path: "/bin/sh", Args: []string{"-c", `mkdir -m 0755 /opt/task-bin; printf '#!/bin/sh\nprintf TASK_TOOL_OK\n' > /opt/task-bin/task-tool; chmod 0755 /opt/task-bin/task-tool`}, User: "0:0"})
 	if err != nil || prepared.ExitCode != 0 {
 		t.Fatalf("prepare task toolchain: %#v, %v", prepared, err)
 	}
