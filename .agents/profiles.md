@@ -2,6 +2,8 @@
 
 Start from an existing `profiles/*.json`. Schema: [config.go](../pkg/config/config.go);
 version pins: `configs/versions.json`; runtime/preflight: `internal/app`.
+Hermes runs a local image derived from `hermes.image` plus the
+`hermes.otel_plugin` pin; change either pin there, never in code.
 
 - `name` identifies the experiment; `benchmark.type`, `root`, and `tasks` select
   pinned input and task occurrences. `versions_file` selects pins; `output_dir`

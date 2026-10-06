@@ -445,7 +445,14 @@ type OpenClawVersions struct {
 }
 
 type HermesVersions struct {
-	Image string `json:"image"`
+	Image      string                   `json:"image"`
+	OTelPlugin HermesOTelPluginVersions `json:"otel_plugin"`
+}
+
+type HermesOTelPluginVersions struct {
+	RepositoryURL string `json:"repository_url"`
+	Version       string `json:"version"`
+	Revision      string `json:"revision"`
 }
 
 // Load reads and strictly validates one JSON experiment file.
@@ -1194,7 +1201,25 @@ func (c Versions) validate() error {
 			return fmt.Errorf("hermes.image: %w", err)
 		}
 	}
+	if plugin := c.Hermes.OTelPlugin; plugin != (HermesOTelPluginVersions{}) {
+		if err := validateRepositoryPin("hermes.otel_plugin", plugin.RepositoryURL, plugin.Revision); err != nil {
+			return err
+		}
+		if !validPluginVersion(plugin.Version) {
+			return errors.New("hermes.otel_plugin.version must be a dotted release number")
+		}
+	}
 	return nil
+}
+
+func validPluginVersion(version string) bool {
+	parts := strings.Split(version, ".")
+	for _, part := range parts {
+		if part == "" || strings.Trim(part, "0123456789") != "" {
+			return false
+		}
+	}
+	return len(parts) >= 2
 }
 
 // HarnessImage returns the pinned image the named harness runs from. The set of

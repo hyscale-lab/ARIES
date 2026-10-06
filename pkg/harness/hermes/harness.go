@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -1136,30 +1137,58 @@ func (manager *Manager) collectSessions(ctx context.Context, active *session) ([
 	return []string{path}, nil
 }
 
+const (
+	spanStoreMissing = 3
+	spansTruncated   = 4
+	spanDumpLimit    = maxDockerOutput - 1<<20
+)
+
 // spanDumpScript prints each span the hermes_otel plugin stored, one JSON
-// object per line in the order they ended. It exits 3 without output when the
-// store is absent, which is the case for an image without the plugin. The
-// store is opened read-only so the dump never creates it.
+// object per line in the order they ended. The store is opened read-only so
+// the dump never creates it. Output stops before the byte limit in argv[2]
+// rather than cut a line; the dump then reports how many spans it kept and
+// exits spansTruncated.
 const spanDumpScript = `import os, sqlite3, sys
-path = sys.argv[1]
+path, limit = sys.argv[1], int(sys.argv[2])
 if not os.path.isfile(path):
     sys.exit(3)
 db = sqlite3.connect("file:" + path + "?mode=ro", uri=True)
-for (data,) in db.execute("SELECT data FROM events WHERE kind = 'span' ORDER BY seq"):
-    sys.stdout.write(data + "\n")
+written = kept = 0
+rows = db.execute("SELECT data FROM events WHERE kind = 'span' ORDER BY seq").fetchall()
+for (data,) in rows:
+    line = (data + "\n").encode()
+    if written + len(line) > limit:
+        sys.stderr.write("kept %d of %d spans\n" % (kept, len(rows)))
+        sys.exit(4)
+    sys.stdout.buffer.write(line)
+    written += len(line)
+    kept += 1
 `
 
 // collectSpans retains the hermes_otel spans as telemetry/otel-spans.jsonl.
 // Each tool, model, and API span carries the wall-clock time its call started
-// and ended, which Hermes's own session export does not record.
+// and ended, which Hermes's own session export does not record. A missing
+// store or an empty one is not a failure; a dump over spanDumpLimit keeps the
+// spans that fit and logs a warning; any other dump failure is an error.
 func (manager *Manager) collectSpans(ctx context.Context, active *session) ([]string, error) {
 	result, err := manager.execAttached(ctx, active.containerID,
-		[]string{"python3", "-c", spanDumpScript, otelStorePath}, workspaceRoot)
+		[]string{"python3", "-c", spanDumpScript, otelStorePath, strconv.Itoa(spanDumpLimit)}, workspaceRoot)
 	if err != nil {
 		return nil, fmt.Errorf("dump Hermes spans: %w", err)
 	}
-	if result.exitCode != 0 || len(bytes.TrimSpace(result.stdout)) == 0 {
-		manager.logger.WithContext(ctx).WithField("task_id", active.taskID).WithField("exit_code", result.exitCode).Debug("Hermes produced no spans")
+	logger := manager.logger.WithContext(ctx).WithField("task_id", active.taskID)
+	switch result.exitCode {
+	case 0:
+	case spanStoreMissing:
+		logger.Debug("Hermes has no span store")
+		return nil, nil
+	case spansTruncated:
+		logger.WithField("detail", strings.TrimSpace(string(redactSession(result.stderr, active)))).Warn("Hermes spans exceeded the dump limit; later spans were dropped")
+	default:
+		return nil, fmt.Errorf("dump Hermes spans exited with code %d: %s", result.exitCode, bytes.TrimSpace(redactSession(result.stderr, active)))
+	}
+	if len(bytes.TrimSpace(result.stdout)) == 0 {
+		logger.Debug("Hermes produced no spans")
 		return nil, nil
 	}
 	path := filepath.Join(active.artifactDir, "telemetry", "otel-spans.jsonl")

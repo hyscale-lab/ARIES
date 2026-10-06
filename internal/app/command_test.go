@@ -173,7 +173,8 @@ func failingRunWiring(runtime ModelRuntime, events *[]string, runErr error) Wiri
 		LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
 			return nil, nil
 		},
-		PullImages: func(context.Context, config.Config, []string) error { return nil },
+		BuildHarnessImage: func(context.Context, config.Config) error { return nil },
+		PullImages:        func(context.Context, config.Config, []string) error { return nil },
 		NewBenchmark: func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
 			*events = append(*events, "run")
 			return nil, runErr
@@ -232,7 +233,8 @@ func TestRunForwardsFreshPreparedGPUIndicesToEveryOccurrence(t *testing.T) {
 		LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
 			return nil, nil
 		},
-		PullImages: func(context.Context, config.Config, []string) error { return nil },
+		BuildHarnessImage: func(context.Context, config.Config) error { return nil },
+		PullImages:        func(context.Context, config.Config, []string) error { return nil },
 		NewBenchmark: func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
 			return &oneTaskBenchmark{}, nil
 		},
@@ -309,7 +311,8 @@ func TestUnsupportedComponentsAreRejectedImmediatelyOnRunAndSetup(t *testing.T) 
 						effects++
 						return nil, nil
 					},
-					PullImages: func(context.Context, config.Config, []string) error { effects++; return nil },
+					BuildHarnessImage: func(context.Context, config.Config) error { return nil },
+					PullImages:        func(context.Context, config.Config, []string) error { effects++; return nil },
 					NewBenchmark: func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
 						effects++
 						return nil, nil
@@ -463,7 +466,7 @@ func TestRuntimeExitCancelsAndDrainsRun(t *testing.T) {
 		return PreparedBackend{Model: cfg.CoreModel(), Runtime: runtime}, nil
 	}, SetupBenchmark: func(context.Context, config.Config) error { return nil }, LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
 		return nil, nil
-	}, PullImages: func(context.Context, config.Config, []string) error {
+	}, BuildHarnessImage: func(context.Context, config.Config) error { return nil }, PullImages: func(context.Context, config.Config, []string) error {
 		return nil
 	}, NewBenchmark: func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
 		constructed++

@@ -17,7 +17,7 @@ func NewHermes(cfg config.Config, outputRoot string, lookup func(string) ([]byte
 	if err := ValidateMCPServers(cfg.Harness); err != nil {
 		return app.HarnessInstance{}, errors.Join(err, transport.Close())
 	}
-	image, err := hermesharness.LocalImage(cfg.Versions.Hermes.Image)
+	image, err := hermesharness.LocalImage(cfg.Versions.Hermes.Image, hermesOTelPlugin(cfg))
 	if err != nil {
 		return app.HarnessInstance{}, errors.Join(err, transport.Close())
 	}
@@ -45,11 +45,21 @@ func NewHermes(cfg config.Config, outputRoot string, lookup func(string) ([]byte
 // PrepareHermesImage builds the image Hermes runs, the pinned one plus
 // hermes-otel, through the deployment's build-if-missing operation.
 func PrepareHermesImage(ctx context.Context, cfg config.Config, build func(ctx context.Context, image, dockerfile string, buildArgs map[string]string) error) error {
-	image, err := hermesharness.LocalImage(cfg.Versions.Hermes.Image)
+	plugin := hermesOTelPlugin(cfg)
+	image, err := hermesharness.LocalImage(cfg.Versions.Hermes.Image, plugin)
 	if err != nil {
 		return err
 	}
-	return build(ctx, image, hermesharness.OTelDockerfile, map[string]string{"BASE": cfg.Versions.Hermes.Image})
+	args, err := hermesharness.OTelBuildArgs(cfg.Versions.Hermes.Image, plugin)
+	if err != nil {
+		return err
+	}
+	return build(ctx, image, hermesharness.OTelDockerfile, args)
+}
+
+func hermesOTelPlugin(cfg config.Config) hermesharness.OTelPlugin {
+	pin := cfg.Versions.Hermes.OTelPlugin
+	return hermesharness.OTelPlugin{RepositoryURL: pin.RepositoryURL, Version: pin.Version, Revision: pin.Revision}
 }
 
 func hermesVoiceOptions(voice config.HarnessVoiceTranscribeConfig) hermesharness.VoiceTranscribeOptions {

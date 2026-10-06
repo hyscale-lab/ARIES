@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -35,6 +36,7 @@ type fakeDeployment struct {
 	sttStderr                        string
 	sessionsStdout                   string
 	spansStdout                      string
+	spansStderr                      string
 	agentExit, sttExit, sessionsExit int
 	spansExit                        int
 	removed                          bool
@@ -88,7 +90,7 @@ func (f *fakeDeployment) Exec(ctx context.Context, _ string, c core.Command) (co
 	case "hermes":
 		return core.CommandResult{Stdout: f.sessionsStdout, ExitCode: f.sessionsExit}, nil
 	case "python3":
-		return core.CommandResult{Stdout: f.spansStdout, ExitCode: f.spansExit}, nil
+		return core.CommandResult{Stdout: f.spansStdout, Stderr: f.spansStderr, ExitCode: f.spansExit}, nil
 	case "/bin/sh":
 		if len(c.Args) > 2 && c.Args[2] == "aries-hermes-stt" {
 			return core.CommandResult{Stdout: f.sttStdout, Stderr: f.sttStderr, ExitCode: f.sttExit}, nil
@@ -751,6 +753,48 @@ func TestMissingSpanStoreIsNotAFailure(t *testing.T) {
 	}
 }
 
+// A store that exists but cannot be read is a dump failure, not "no spans":
+// the run reports it instead of silently omitting the artifact.
+func TestBrokenSpanStoreFailsTheRun(t *testing.T) {
+	fake := newFakeDeployment()
+	fake.spansStdout = ""
+	fake.spansStderr = "sqlite3.DatabaseError: file is not a database\n"
+	fake.spansExit = 1
+	manager := newTestManager(t, fake, []byte("model-secret"))
+	if err := manager.Start(context.Background(), testRequest(t)); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop(context.Background())
+	result, err := manager.Run(context.Background(), "task")
+	if err == nil || !strings.Contains(err.Error(), "exited with code 1") || !strings.Contains(err.Error(), "file is not a database") {
+		t.Fatalf("Run error = %v", err)
+	}
+	if result.Status != core.StatusFailed {
+		t.Fatalf("status = %q", result.Status)
+	}
+}
+
+// A dump that stopped at its byte limit keeps the spans that fit and does not
+// fail the run.
+func TestTruncatedSpanDumpKeepsWhatFit(t *testing.T) {
+	fake := newFakeDeployment()
+	fake.spansStderr = "kept 1 of 2 spans\n"
+	fake.spansExit = spansTruncated
+	manager := newTestManager(t, fake, []byte("model-secret"))
+	request := testRequest(t)
+	if err := manager.Start(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop(context.Background())
+	if _, err := manager.Run(context.Background(), "task"); err != nil {
+		t.Fatalf("truncated dump failed the run: %v", err)
+	}
+	content, err := os.ReadFile(filepath.Join(manager.outputDir, request.TaskID, "harness", "telemetry", "otel-spans.jsonl"))
+	if err != nil || string(content) != fake.spansStdout {
+		t.Fatalf("spans artifact = %q, %v", content, err)
+	}
+}
+
 // The span dump is a fixed argv: the store path is its own element, never
 // spliced into the script.
 func TestSpanDumpUsesFixedArgv(t *testing.T) {
@@ -765,7 +809,7 @@ func TestSpanDumpUsesFixedArgv(t *testing.T) {
 	}
 	for _, command := range fake.execs {
 		if command.Path == "python3" {
-			if !slices.Equal(command.Args, []string{"-c", spanDumpScript, otelStorePath}) {
+			if !slices.Equal(command.Args, []string{"-c", spanDumpScript, otelStorePath, strconv.Itoa(spanDumpLimit)}) {
 				t.Fatalf("span dump argv = %q", command.Args)
 			}
 			return

@@ -130,13 +130,36 @@ func TestTerminalCallWithoutWorkdirRunsInTheEndpointWorkdir(t *testing.T) {
 // for base, exactly as preparation does before a run.
 func preparedImage(t *testing.T, base string) string {
 	t.Helper()
-	image, err := LocalImage(base)
+	// The plugin pin is the one the version catalog ships.
+	content, err := os.ReadFile(filepath.Join("..", "..", "..", "configs", "versions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var catalog struct {
+		Hermes struct {
+			OTelPlugin struct {
+				RepositoryURL string `json:"repository_url"`
+				Version       string `json:"version"`
+				Revision      string `json:"revision"`
+			} `json:"otel_plugin"`
+		} `json:"hermes"`
+	}
+	if err := json.Unmarshal(content, &catalog); err != nil {
+		t.Fatal(err)
+	}
+	pin := catalog.Hermes.OTelPlugin
+	plugin := OTelPlugin{RepositoryURL: pin.RepositoryURL, Version: pin.Version, Revision: pin.Revision}
+	image, err := LocalImage(base, plugin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args, err := OTelBuildArgs(base, plugin)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	if err := dockerdeployment.BuildImage(ctx, "", image, OTelDockerfile, map[string]string{"BASE": base}); err != nil {
+	if err := dockerdeployment.BuildImage(ctx, "", image, OTelDockerfile, args); err != nil {
 		t.Fatal(err)
 	}
 	return image

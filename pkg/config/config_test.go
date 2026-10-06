@@ -686,6 +686,30 @@ func TestLoadRuntimeOverridesNanosecondBoundary(t *testing.T) {
 	}
 }
 
+func TestDecodeVersionsValidatesHermesOTelPluginPin(t *testing.T) {
+	const pin = `"otel_plugin":{"repository_url":"https://github.com/briancaffey/hermes-otel","version":"1.19.0","revision":"9a0aed646611023c4d4aec5b7897a72511559956"}`
+	withPin := func(block string) string {
+		return strings.Replace(validVersions, `"hermes":{"image":"docker.io/nousresearch/hermes-agent:v2026.8.31"}`, `"hermes":{"image":"docker.io/nousresearch/hermes-agent:v2026.8.31",`+block+`}`, 1)
+	}
+	versions, err := DecodeVersions(strings.NewReader(withPin(pin)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := versions.Hermes.OTelPlugin; got.Version != "1.19.0" || got.Revision != "9a0aed646611023c4d4aec5b7897a72511559956" {
+		t.Fatalf("otel_plugin = %#v", got)
+	}
+	for name, block := range map[string]string{
+		"short revision":     strings.Replace(pin, "9a0aed646611023c4d4aec5b7897a72511559956", "9a0aed6", 1),
+		"http repository":    strings.Replace(pin, "https://", "http://", 1),
+		"missing version":    strings.Replace(pin, `"version":"1.19.0",`, ``, 1),
+		"tag-unsafe version": strings.Replace(pin, `"1.19.0"`, `"1.19.0+local"`, 1),
+	} {
+		if _, err := DecodeVersions(strings.NewReader(withPin(block))); err == nil {
+			t.Fatalf("%s: invalid otel_plugin pin was accepted", name)
+		}
+	}
+}
+
 func TestDecodeVersionsValidation(t *testing.T) {
 	if _, err := DecodeVersions(strings.NewReader(validVersions)); err != nil {
 		t.Fatal(err)

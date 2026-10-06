@@ -33,6 +33,7 @@ type Wiring struct {
 	SetupBenchmark       func(context.Context, config.Config) error
 	LoadPreparationTasks func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error)
 	PullImages           func(context.Context, config.Config, []string) error
+	BuildHarnessImage    func(context.Context, config.Config) error
 	NewBenchmark         func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error)
 	NewHarness           func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error)
 	NewSandbox           func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error)
@@ -252,7 +253,7 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 }
 
 func ensurePrepared(ctx context.Context, cfg config.Config, wiring Wiring, apiKeyLookup func(string) ([]byte, bool)) error {
-	if wiring.SetupBenchmark == nil || wiring.LoadPreparationTasks == nil || wiring.PullImages == nil {
+	if wiring.SetupBenchmark == nil || wiring.LoadPreparationTasks == nil || wiring.PullImages == nil || wiring.BuildHarnessImage == nil {
 		return errors.New("preparation wiring is incomplete")
 	}
 	if err := wiring.SetupBenchmark(ctx, cfg); err != nil {
@@ -270,7 +271,10 @@ func ensurePrepared(ctx context.Context, cfg config.Config, wiring Wiring, apiKe
 	for _, task := range tasks {
 		images = append(images, task.Environment.Image)
 	}
-	return wiring.PullImages(ctx, cfg, uniqueStrings(images))
+	if err := wiring.PullImages(ctx, cfg, uniqueStrings(images)); err != nil {
+		return err
+	}
+	return wiring.BuildHarnessImage(ctx, cfg)
 }
 
 func validateWiredComponents(cfg config.Config, wiring Wiring) error {

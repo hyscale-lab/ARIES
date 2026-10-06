@@ -125,12 +125,13 @@ Running a profile automatically loads `configs/versions.json`, creates or
 verifies the pinned Terminal-Bench checkout at `.cache/terminal-bench-2-1`, reads
 each selected task's explicit Docker image tag from its `task.toml`, and pulls
 only the configured harness image plus those selected images through the
-Docker Go SDK. For Hermes it also builds, once, the local image that adds the
-`hermes-otel` plugin. Preparation
+Docker Go SDK. For Hermes it then builds, once, the local image that adds the
+`hermes-otel` plugin pinned by `hermes.otel_plugin`. Preparation
 happens before the run directory is created, a managed runtime is started,
 model weights load, an external endpoint is contacted, or task work is
 admitted. The Terminal-Bench Git revision and exact tag-pinned OpenClaw image
-remain in `configs/versions.json`, alongside the tag-pinned Hermes image; task
+remain in `configs/versions.json`, alongside the tag-pinned Hermes image and
+the `hermes-otel` plugin's repository, release, and 40-character revision; task
 image digests are not duplicated there.
 Preparation is safe to repeat and refuses to replace a checkout at another
 revision.

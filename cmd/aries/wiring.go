@@ -26,6 +26,7 @@ func commandWiring() app.Wiring {
 		SetupBenchmark:       setupBenchmark,
 		LoadPreparationTasks: loadPreparationTasks,
 		PullImages:           pullImages,
+		BuildHarnessImage:    buildHarnessImage,
 		NewBenchmark:         newBenchmark,
 		NewHarness:           newHarness,
 		NewSandbox:           newSandbox,
@@ -230,14 +231,24 @@ func pullImages(ctx context.Context, cfg config.Config, images []string) error {
 	// The supported embedded topology requires one daemon for both components.
 	switch cfg.Sandbox.Deployment.Backend {
 	case "docker":
-		if err := deploymentwiring.PullDockerImages(ctx, cfg.Sandbox.Deployment, images); err != nil {
-			return err
-		}
-		if cfg.Harness.Type != "hermes" {
-			return nil
-		}
-		// Hermes runs a local image derived from the pinned one, built after
-		// the pull makes that base available.
+		return deploymentwiring.PullDockerImages(ctx, cfg.Sandbox.Deployment, images)
+	default:
+		return fmt.Errorf("unsupported image preparation backend %q", cfg.Sandbox.Deployment.Backend)
+	}
+}
+
+// buildHarnessImage builds the image the harness runs when it is derived from
+// the pinned one: Hermes runs its pinned image plus hermes-otel. It uses the
+// daemon pullImages prepared the base on.
+func buildHarnessImage(ctx context.Context, cfg config.Config) error {
+	if cfg.Harness.Type != "hermes" {
+		return nil
+	}
+	if err := validateDeployment(&cfg); err != nil {
+		return err
+	}
+	switch cfg.Sandbox.Deployment.Backend {
+	case "docker":
 		return harnesswiring.PrepareHermesImage(ctx, cfg, func(ctx context.Context, image, dockerfile string, buildArgs map[string]string) error {
 			return deploymentwiring.BuildDockerImage(ctx, cfg.Sandbox.Deployment, image, dockerfile, buildArgs)
 		})

@@ -100,19 +100,24 @@ literal key cannot reach the retained `config.yaml` or the request bodies. The `
 every sandbox path; the harness clears it, because the sandbox is the isolation
 boundary and the tools act on it over SSH.
 
-Every run enables the `hermes_otel` plugin. Image preparation derives
-`aries-local/hermes:<tag>-otel<version>-<hash>` from the pinned image with
-`hermes.OTelDockerfile` through the Docker deployment's build-if-missing
-operation, and the harness runs that tag. The hash covers the base reference
-and the recipe, so a change to either builds a new image; otherwise the cached
-one is reused. The build installs `hermes-otel` 1.19.0 (commit `9a0aed6`) into
+Every run enables the `hermes_otel` plugin. After images are pulled,
+preparation derives `aries-local/hermes:<tag>-otel<version>-<hash>` from the
+pinned image with `hermes.OTelDockerfile` through the Docker deployment's
+build-if-missing operation, and the harness runs that tag. The plugin is pinned
+in `configs/versions.json` under `hermes.otel_plugin` (repository, release, and
+revision). The hash covers the base reference, the plugin pin, and the recipe,
+so a change to any of them builds a new image; otherwise the cached one is
+reused. The build installs the pinned plugin revision into
 the Hermes virtual environment and copies it into Hermes's bundled plugin directory
 (`/opt/hermes/plugins/hermes_otel`), because ARIES relocates `HERMES_HOME` per
 task and the plugin's entry-point group is not one Hermes scans; a base older
 than Hermes 0.21 is left unchanged. No OTLP backend is configured, so the
 plugin makes no network calls; it keeps spans in SQLite under `HERMES_HOME`,
 with content capture off. After the harness stops, a fixed-argv `python3` exec
-dumps them to `telemetry/otel-spans.jsonl`; a missing store is not a failure.
+dumps them to `telemetry/otel-spans.jsonl`. A missing or empty store is not a
+failure; a dump that would exceed the exec output bound keeps the spans that
+fit, in end order, and logs a warning; any other dump failure fails the run,
+like a failed session export.
 Each span carries the wall-clock start and end of one tool call, model call, or
 API request, which Hermes's session export does not record. The spans do not
 reach bridge execs: Hermes passes no trace context over SSH, so execs are
