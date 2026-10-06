@@ -1,5 +1,23 @@
 # ARIES Tasks
 
+## Codex native session rollouts
+
+Codex now runs without `--ephemeral`. After the turn, the harness copies every
+`rollout-*.jsonl` under its private `CODEX_HOME/sessions` from the still-running
+harness container through the Moby archive API and retains each, key-redacted,
+as `harness/sessions/<name>`. PR reviewers can read the complete native session
+rather than only the `--json` event summary. A successful turn without a
+rollout fails; a failed exec does not additionally blame a missing one.
+
+- Regression-first: the three new and updated unit tests fail on the previous
+  implementation and pass after the change. The real-Codex integration test now
+  asserts a retained rollout with session metadata (and response items when not
+  canceled).
+- On `hpc-gaas-hn2` with Go `1.26.5`, gofmt, `go vet` (with and without the
+  integration tag), unit tests, and race tests pass for `cmd`, `internal`, and
+  `pkg`. Docker and dual-h100 were unavailable, so `make integration` and the
+  real Codex rollout path were not run here.
+
 ## Codex fixes backported from feat/codex-roadmapbench
 
 Backported only the Codex harness fixes, without RoadmapBench, native-subagent,

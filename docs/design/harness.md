@@ -111,10 +111,12 @@ boundary and the tools act on it over SSH.
 
 `codex.Manager` stages the unmodified static CLI `0.157.1` into a separate
 tag-pinned Linux container, checks its reported version, and invokes one
-`codex exec --json --ephemeral` turn. The instruction remains one argv element.
+`codex exec --json` turn. The instruction remains one argv element.
 The model provider uses the Responses API; the credential is read from a
 private file by the container wrapper and never enters Docker configuration.
 JSONL trajectory, stderr, and placeholder-only TOML are private artifacts.
+After the turn, the harness copies Codex's native session rollouts out of the
+still-running container through Docker's archive API, without executing in it.
 
 The pinned native `environments.toml` contract selects only the bridge-backed
 environment (`include_local = false`). Shell and filesystem operations use

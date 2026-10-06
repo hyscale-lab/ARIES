@@ -57,6 +57,7 @@ type dockerClient interface {
 	ContainerStop(context.Context, string, client.ContainerStopOptions) (client.ContainerStopResult, error)
 	ContainerKill(context.Context, string, client.ContainerKillOptions) (client.ContainerKillResult, error)
 	ContainerRemove(context.Context, string, client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
+	CopyFromContainer(context.Context, string, client.CopyFromContainerOptions) (client.CopyFromContainerResult, error)
 }
 
 type Manager struct {
@@ -217,10 +218,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	if bytes.Contains(metadata, key) || bytes.Contains(configuration, key) || bytes.Contains(environments, key) {
 		return fail(errors.New("Codex credential overlaps configuration or Docker metadata"))
 	}
-	for _, artifact := range []struct {
-		name string
-		data []byte
-	}{{"config.toml", configuration}, {"environments.toml", environments}} {
+	for _, artifact := range []namedFile{{"config.toml", configuration}, {"environments.toml", environments}} {
 		filename := filepath.Join(active.artifactDir, artifact.name)
 		if err := writeArtifact(filename, artifact.data); err != nil {
 			return fail(fmt.Errorf("retain Codex configuration: %w", err))
@@ -294,7 +292,7 @@ func (manager *Manager) Run(ctx context.Context, instruction string) (core.Harne
 	manager.mu.Unlock()
 	defer clear(active.apiKey)
 	runCtx, cancel := context.WithTimeout(ctx, active.agentTimeout)
-	output, runErr := manager.execAttached(runCtx, active.containerID, []string{agentWrapperPath, "exec", "--json", "--ephemeral", "--skip-git-repo-check", "--ignore-rules", "--color", "never", "--cd", active.endpoint.Workdir, "--", instruction}, active.endpoint.Workdir)
+	output, runErr := manager.execAttached(runCtx, active.containerID, []string{agentWrapperPath, "exec", "--json", "--skip-git-repo-check", "--ignore-rules", "--color", "never", "--cd", active.endpoint.Workdir, "--", instruction}, active.endpoint.Workdir)
 	cancel()
 	stdout, stderr := redact(output.stdout, active.apiKey), redact(output.stderr, active.apiKey)
 	if runErr == nil && output.exitCode != 0 {
@@ -304,10 +302,23 @@ func (manager *Manager) Run(ctx context.Context, instruction string) (core.Harne
 	if runErr == nil {
 		runErr = trajectoryErr
 	}
-	for _, artifact := range []struct {
-		name string
-		data []byte
-	}{{"trajectory.jsonl", stdout}, {"stderr.log", stderr}} {
+	// Codex's native rollout records the session, including model inputs and
+	// tool outputs that the --json event stream summarizes. A failed exec may
+	// end before Codex creates one.
+	copyCtx, cancelCopy := context.WithTimeout(context.WithoutCancel(ctx), manager.cleanupTimeout)
+	rollouts, rolloutErr := manager.copyRollouts(copyCtx, active.containerID)
+	cancelCopy()
+	if rolloutErr == nil && len(rollouts) == 0 && runErr == nil {
+		rolloutErr = errors.New("Codex wrote no rollout")
+	}
+	if rolloutErr != nil {
+		runErr = errors.Join(runErr, fmt.Errorf("retain Codex rollout: %w", rolloutErr))
+	}
+	artifacts := []namedFile{{"trajectory.jsonl", stdout}, {"stderr.log", stderr}}
+	for _, rollout := range rollouts {
+		artifacts = append(artifacts, namedFile{filepath.Join("sessions", rollout.name), redact(rollout.data, active.apiKey)})
+	}
+	for _, artifact := range artifacts {
 		filename := filepath.Join(active.artifactDir, artifact.name)
 		if err := writeArtifact(filename, artifact.data); err != nil {
 			runErr = errors.Join(runErr, fmt.Errorf("retain Codex output: %w", err))

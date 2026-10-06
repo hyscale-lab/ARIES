@@ -3,6 +3,7 @@ package codex
 import (
 	"archive/tar"
 	"bytes"
+	"context"
 	"crypto/x509"
 	"debug/elf"
 	"encoding/pem"
@@ -16,10 +17,19 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+
+	"github.com/containerd/errdefs"
+	"github.com/moby/moby/client"
 )
 
 const maxBinaryBytes = 512 << 20
 const maxCABundleBytes = 4 << 20
+const maxRolloutBytes = 256 << 20
+
+type namedFile struct {
+	name string
+	data []byte
+}
 
 type stagedFile struct {
 	content []byte
@@ -273,4 +283,45 @@ func writeArtifact(filename string, content []byte) error {
 		return err
 	}
 	return file.Close()
+}
+
+// copyRollouts reads every native rollout Codex wrote under its private home.
+// The container is ARIES-owned and still running, so Docker's archive API
+// reads it without executing anything inside. A missing sessions directory
+// yields no rollouts.
+func (manager *Manager) copyRollouts(ctx context.Context, containerID string) ([]namedFile, error) {
+	copied, err := manager.client.CopyFromContainer(ctx, containerID, client.CopyFromContainerOptions{SourcePath: codexHome + "/sessions"})
+	if errdefs.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer copied.Content.Close()
+	var rollouts []namedFile
+	total := int64(0)
+	reader := tar.NewReader(copied.Content)
+	for {
+		header, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read Codex sessions archive: %w", err)
+		}
+		name := path.Base(header.Name)
+		if header.Typeflag != tar.TypeReg || !strings.HasPrefix(name, "rollout-") || !strings.HasSuffix(name, ".jsonl") {
+			continue
+		}
+		total += header.Size
+		if header.Size < 0 || total > maxRolloutBytes {
+			return nil, errors.New("Codex rollouts exceed their bound")
+		}
+		content, err := io.ReadAll(io.LimitReader(reader, header.Size))
+		if err != nil || int64(len(content)) != header.Size {
+			return nil, errors.New("Codex rollout read was truncated")
+		}
+		rollouts = append(rollouts, namedFile{name, content})
+	}
+	return rollouts, nil
 }

@@ -25,6 +25,7 @@ import (
 )
 
 const testImage = "debian:bookworm-20260812-slim"
+const testRollout = "2026/10/06/rollout-2026-10-06T01-02-03-0199b6c1-aaaa-7bbb-8ccc-000000000001.jsonl"
 
 type fakeDocker struct {
 	mu                sync.Mutex
@@ -42,6 +43,8 @@ type fakeDocker struct {
 	stdout            string
 	stderr            string
 	exit              int
+	rollouts          map[string]string
+	copyFromPath      string
 }
 
 func (f *fakeDocker) ContainerCreate(_ context.Context, options client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
@@ -113,6 +116,29 @@ func (f *fakeDocker) ExecAttach(_ context.Context, id string, _ client.ExecAttac
 	return client.ExecAttachResult{HijackedResponse: client.NewHijackedResponse(read, "application/vnd.docker.multiplexed-stream")}, nil
 }
 
+func (f *fakeDocker) CopyFromContainer(_ context.Context, id string, options client.CopyFromContainerOptions) (client.CopyFromContainerResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.copyFromPath = options.SourcePath
+	if id != f.info.ID || f.rollouts == nil {
+		return client.CopyFromContainerResult{}, errdefs.ErrNotFound
+	}
+	var archive bytes.Buffer
+	writer := tar.NewWriter(&archive)
+	_ = writer.WriteHeader(&tar.Header{Name: "sessions/", Typeflag: tar.TypeDir, Mode: 0o700})
+	names := make([]string, 0, len(f.rollouts))
+	for name := range f.rollouts {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		_ = writer.WriteHeader(&tar.Header{Name: "sessions/" + name, Typeflag: tar.TypeReg, Mode: 0o600, Size: int64(len(f.rollouts[name]))})
+		_, _ = writer.Write([]byte(f.rollouts[name]))
+	}
+	_ = writer.Close()
+	return client.CopyFromContainerResult{Content: io.NopCloser(&archive)}, nil
+}
+
 func writeMux(writer io.Writer, stream stdcopy.StdType, content []byte) error {
 	var header [8]byte
 	header[0] = byte(stream)
@@ -178,7 +204,7 @@ func testManager(t *testing.T, settings ...Options) (*Manager, *fakeDocker, core
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = manager.Close() })
-	fake := &fakeDocker{stdout: "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"task done\"}}\n{\"type\":\"turn.completed\"}\n"}
+	fake := &fakeDocker{stdout: "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"task done\"}}\n{\"type\":\"turn.completed\"}\n", rollouts: map[string]string{testRollout: "{\"type\":\"session_meta\"}\n"}}
 	manager.client = fake
 	endpoint := testEndpoint(t)
 	endpoint.ClientSourceFile = filepath.Join(dir, "aries-codex-ssh")
@@ -298,7 +324,7 @@ func TestRunPreservesArgvAndRetainsRedactedNativeTrajectory(t *testing.T) {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
 	cmd := fake.execs[len(fake.execs)-1].Cmd
-	if cmd[len(cmd)-1] != instruction || cmd[len(cmd)-2] != "--" || slices.Contains(cmd, "--ignore-user-config") || !slices.Contains(cmd, "--ephemeral") || !slices.Contains(cmd, "--json") {
+	if cmd[len(cmd)-1] != instruction || cmd[len(cmd)-2] != "--" || slices.Contains(cmd, "--ignore-user-config") || slices.Contains(cmd, "--ephemeral") || !slices.Contains(cmd, "--json") {
 		t.Fatalf("unexpected argv: %#v", cmd)
 	}
 	for _, path := range result.LogPaths {
@@ -319,6 +345,68 @@ func TestRunPreservesArgvAndRetainsRedactedNativeTrajectory(t *testing.T) {
 	}
 	if err := manager.Stop(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRunRetainsCompleteRedactedNativeRollouts(t *testing.T) {
+	manager, fake, request, _ := testManager(t)
+	child := "2026/10/06/rollout-2026-10-06T01-02-04-0199b6c1-aaaa-7bbb-8ccc-000000000002.jsonl"
+	parent := "{\"type\":\"session_meta\",\"payload\":{\"base_instructions\":\"full prompt\"}}\n{\"type\":\"response_item\",\"payload\":{\"output\":\"tool said test-model-secret\"}}\n"
+	fake.rollouts = map[string]string{testRollout: parent, child: "{\"type\":\"session_meta\"}\n", "2026/10/06/notes.txt": "ignored"}
+	if err := manager.Start(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop(context.Background())
+	result, err := manager.Run(context.Background(), "do it")
+	if err != nil || result.Status != core.StatusSucceeded {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if fake.copyFromPath != codexHome+"/sessions" {
+		t.Fatalf("copied %q", fake.copyFromPath)
+	}
+	sessions := filepath.Join(manager.outputDir, request.TaskID, "harness", "sessions")
+	for name, want := range map[string]string{filepath.Base(testRollout): strings.ReplaceAll(parent, "test-model-secret", "[REDACTED]"), filepath.Base(child): "{\"type\":\"session_meta\"}\n"} {
+		filename := filepath.Join(sessions, name)
+		content, err := os.ReadFile(filename)
+		if err != nil || string(content) != want {
+			t.Fatalf("%s = %q, %v", name, content, err)
+		}
+		if !slices.Contains(result.LogPaths, filename) {
+			t.Fatalf("rollout %s missing from log paths %v", name, result.LogPaths)
+		}
+	}
+	if entries, _ := os.ReadDir(sessions); len(entries) != 2 {
+		t.Fatalf("unexpected session artifacts: %v", entries)
+	}
+}
+
+func TestRunRequiresRolloutOnlyAfterSuccessfulExec(t *testing.T) {
+	manager, fake, request, _ := testManager(t)
+	fake.rollouts = nil
+	if err := manager.Start(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	result, err := manager.Run(context.Background(), "do it")
+	if err == nil || result.Status != core.StatusFailed || !strings.Contains(err.Error(), "retain Codex rollout") {
+		t.Fatalf("missing rollout accepted: result=%#v err=%v", result, err)
+	}
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, rollouts := range map[string]map[string]string{"absent sessions": nil, "empty sessions": {}} {
+		t.Run(name, func(t *testing.T) {
+			manager, fake, request, _ := testManager(t)
+			fake.rollouts, fake.exit = rollouts, 1
+			if err := manager.Start(context.Background(), request); err != nil {
+				t.Fatal(err)
+			}
+			defer manager.Stop(context.Background())
+			_, err := manager.Run(context.Background(), "do it")
+			if err == nil || strings.Contains(err.Error(), "rollout") {
+				t.Fatalf("failed exec error should not blame an absent rollout: %v", err)
+			}
+		})
 	}
 }
 

@@ -304,6 +304,14 @@ func runNativeSSHScenario(t *testing.T, cancelTool bool, taskUser string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	rollouts, err := filepath.Glob(filepath.Join(output, "native-ssh", "harness", "sessions", "rollout-*.jsonl"))
+	if err != nil || len(rollouts) == 0 {
+		t.Fatalf("native rollout was not retained: %v %v", rollouts, err)
+	}
+	rollout, err := os.ReadFile(rollouts[0])
+	if err != nil || !bytes.Contains(rollout, []byte(`"type":"session_meta"`)) || !cancelTool && !bytes.Contains(rollout, []byte(`"type":"response_item"`)) {
+		t.Fatalf("native rollout lacks session evidence: %s %v", rollout, err)
+	}
 	if cancelTool {
 		// Native tool execution is established by the ready/PID gates above.
 		// Cancellation can precede its JSONL item and truncate the final record.

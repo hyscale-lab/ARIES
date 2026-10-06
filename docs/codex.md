@@ -83,7 +83,12 @@ excluded from native task commands.
 ## Evidence and validation
 
 Private harness artifacts include `config.toml`, `environments.toml`,
-`trajectory.jsonl`, `stderr.log`, and `container.log`. Bridge artifacts
+`trajectory.jsonl`, `stderr.log`, `container.log`, and
+`sessions/rollout-*.jsonl`. `trajectory.jsonl` is the `codex exec --json` event
+stream. Each rollout is Codex's own session record: session metadata and
+instructions, turn context, events, and the response items exchanged with the
+model, including tool calls and their outputs as Codex recorded them. Rollouts are retained byte for byte except that the model key is
+replaced by `[REDACTED]`; a successful turn without one fails. Bridge artifacts
 contain replayable native RPC inputs and must remain private. Revocation
 removes the task-side binaries, the host SSH identity, and the staged helper;
 the public known-hosts entry may remain as evidence.
