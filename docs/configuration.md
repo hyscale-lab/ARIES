@@ -696,7 +696,9 @@ these guides:
 - [SWE-Atlas QA](benchmarks/swe-atlas-qa.md) requires a `judge` block, which can
   explicitly disable grading. It rejects `environment` and `fact`.
 - [SWE-bench Pro](benchmarks/swe-bench-pro.md) derives environments from dataset
-  rows and uses its pinned evaluator. It rejects `environment`, `judge`, and `fact`.
+  rows and uses its pinned evaluator in a fresh sandbox from the task image, so
+  `agent_sandbox_resources` overrides do not apply to evaluation. It rejects
+  `environment`, `judge`, and `fact`.
 
 ### Judge model settings
 

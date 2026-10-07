@@ -46,7 +46,7 @@ type raceArtifact struct {
 // core.StatusNotEnabled (the same "intentionally off" signal used elsewhere
 // for a disabled Observer) and Score/Reward are 0, distinct from a run that
 // was graded and failed.
-func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner.Sandbox) (core.Evaluation, error) {
+func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner.Sandbox, _ runner.EvaluationSandboxes) (core.Evaluation, error) {
 	started := time.Now()
 	evaluation := core.Evaluation{Status: core.StatusFailed, VerifierStatus: core.StatusFailed}
 	finish := func(err error) (core.Evaluation, error) {

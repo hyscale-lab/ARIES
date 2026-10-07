@@ -14,11 +14,20 @@ import (
 // errors, disk issues, etc.).
 var ErrNotFound = errors.New("sandbox path not found")
 
-// Benchmark owns task discovery and evaluation.
+// Benchmark owns task discovery and evaluation. Evaluate receives the task
+// sandbox the agent used and may start fresh evaluation sandboxes when the
+// benchmark's original methodology evaluates in a clean environment.
 type Benchmark interface {
 	Tasks(context.Context) ([]core.Task, error)
 	PrepareSandbox(context.Context, core.Task, Sandbox) error
-	Evaluate(context.Context, core.Task, Sandbox) (core.Evaluation, error)
+	Evaluate(context.Context, core.Task, Sandbox, EvaluationSandboxes) (core.Evaluation, error)
+}
+
+// EvaluationSandboxes starts fresh sandboxes from a task environment for one
+// evaluation. The Runner owns every returned sandbox and stops it after
+// Evaluate returns, before the task sandbox.
+type EvaluationSandboxes interface {
+	Start(context.Context, core.Environment) (Sandbox, error)
 }
 
 // AgentHarness owns one task-local agent runtime.
@@ -28,8 +37,8 @@ type AgentHarness interface {
 	Stop(context.Context) error
 }
 
-// ToolSandbox owns the lifecycle of the live environment later inspected by
-// evaluation.
+// ToolSandbox owns the lifecycle of the task environment the agent uses and of
+// any fresh evaluation sandboxes requested through SandboxRequest.Purpose.
 type ToolSandbox interface {
 	Start(context.Context, core.SandboxRequest) (Sandbox, error)
 	Stop(context.Context, Sandbox) error

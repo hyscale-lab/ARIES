@@ -134,6 +134,7 @@ stdout
 stt
 subagent
 subagents
+submodule
 subpackages
 substitutable
 swe

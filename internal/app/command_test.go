@@ -513,7 +513,7 @@ func (*oneTaskBenchmark) Tasks(context.Context) ([]core.Task, error) {
 	return []core.Task{{ID: "task", Instruction: "do", Environment: core.Environment{Image: "img", Workdir: "/"}}}, nil
 }
 func (*oneTaskBenchmark) PrepareSandbox(context.Context, core.Task, runner.Sandbox) error { return nil }
-func (*oneTaskBenchmark) Evaluate(context.Context, core.Task, runner.Sandbox) (core.Evaluation, error) {
+func (*oneTaskBenchmark) Evaluate(context.Context, core.Task, runner.Sandbox, runner.EvaluationSandboxes) (core.Evaluation, error) {
 	return core.Evaluation{Status: core.StatusSucceeded}, nil
 }
 

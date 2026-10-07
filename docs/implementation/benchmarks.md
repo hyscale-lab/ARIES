@@ -102,27 +102,30 @@ See the [usage guide](../benchmarks/swe-atlas-qa.md) for profiles and judge sett
 
 ## SWE-bench Pro
 
+ARIES follows the upstream evaluator, `swe_bench_pro_eval.py` in the pinned
+evaluator checkout: the agent's patch is the only thing taken from the agent's
+sandbox, and tests run in a fresh container started from the same task image.
+
 The public task images contain repository history used to construct the
 benchmark. Before the harness receives bridge access, ARIES:
 
-1. resets the repository to the row's `base_commit` and proves it is clean;
-2. checks out exactly the official gold-commit verifier files and snapshots
-   them privately;
-3. privately snapshots ignored build artifacts already present in the image;
-4. restores the base worktree and removes verifier staging data;
-5. removes Git remotes, refs, reflogs, and unreachable future objects, then
-   proves the gold revision is not locally reachable;
-6. privately snapshots the sanitized Git metadata, transfers `/app` to the
-   numeric agent identity `65532:65532`, and proves the agent can write the
-   worktree but cannot write the trusted Git, shell, tar, or Python runtimes.
+1. runs the first three lines of the row's `before_repo_set_cmd`: reset to
+   `base_commit`, `git clean -fd`, and check out `base_commit`;
+2. removes Git remotes, refs, reflogs, and unreachable future objects, then
+   proves `HEAD` is the base commit and the gold revision is not locally
+   reachable;
+3. transfers `/app` to the numeric agent identity `65532:65532` and proves the
+   agent can write the worktree but cannot write the trusted Git, shell, tar, or
+   Python runtimes.
 
-The verifier, ignored-build, and sanitized-Git snapshots are host artifacts
-outside both the task and harness containers. They are mode `0600` under a
-mode `0700` private directory. The harness container has no bind mount to the
-run output directory. Docker applies `no-new-privileges` to task containers
-using the non-root agent identity and positively confirms the option through
-post-start container inspection before returning the live sandbox.
-Benchmark-owned preparation and evaluation commands explicitly use root.
+Preparation does not inspect or archive the rest of the image state. Ignored
+build output, submodule checkouts, and any other state the image ships stay as
+published, as they do upstream. Verifier files never enter the agent's sandbox.
+The harness container has no bind mount to the run output directory. Docker
+applies `no-new-privileges` to task containers using the non-root agent
+identity and positively confirms the option through post-start container
+inspection before returning the live sandbox. Benchmark-owned preparation
+commands explicitly use root.
 
 This is local hardening, not an embargo on public information. SWE-bench Pro is
 a public benchmark and the task network remains enabled so the harness can use
@@ -131,30 +134,39 @@ adversarial agent can add a remote or retrieve public upstream repositories,
 commits, datasets, or discussions. Do not use the public split as a confidential
 test set.
 
-Evaluation captures staged, tracked, and untracked candidate changes against
-the privately restored sanitized Git baseline. The raw download is bounded to
-16 MiB before host writes complete,
-and binary patch sections are removed to match the evaluator policy. Evaluation
-then restores the pinned base plus the image's initial ignored build artifacts,
-applies the candidate, and injects the private verifier files, task-specific
-script, and parser. Harness-created ignored artifacts are removed before the
-initial image snapshot is restored, which makes evaluation start from the
-fresh-image build baseline rather than agent-created caches.
+Evaluation starts after harness stop and bridge revocation are confirmed. In the
+agent's sandbox, ARIES kills and positively confirms the absence of every
+process owned by the agent UID, then, as the agent user, runs `git add -A` and
+streams `git diff --cached --binary <base_commit>` to a mode-`0600` host
+artifact, bounded to 16 MiB. The repository and its Git metadata are
+agent-controlled, so no privileged Git command runs on them. If Git cannot
+produce the patch, ARIES records why and evaluates an empty patch, as upstream
+would for an agent run that produced none. Binary patch sections are removed to
+match the upstream evaluator.
 
-Before any private verifier input is staged, and again after the test process
-returns, ARIES kills and positively confirms the absence of every process owned
-by the agent UID. Verifier paths are installed only through non-symlink parent
-directories and become root-owned read-only files. The test script runs as the
-non-root agent; its stdout and stderr stream directly to mode-`0600` host
-artifacts with a 256 MiB per-stream bound. The parser then runs as root with an
-empty environment, isolated Python mode, and a root-only script. Private
-container staging is removed and positively proved absent on every evaluation
-return path.
+ARIES then starts a fresh evaluation sandbox from the task environment with the
+image's default user, uploads the patch, the task's `run_script.sh`, and
+`parser.py` to `/workspace`, and runs upstream's entry script step by step in
+`/app`:
+
+1. `git reset --hard <base_commit>` and `git checkout <base_commit>`;
+2. `git apply -v /workspace/patch.diff`;
+3. the last line of `before_repo_set_cmd`, which checks out the gold-commit
+   verifier files;
+4. `bash /workspace/run_script.sh <selected tests>`;
+5. `python /workspace/parser.py` on the script's stdout and stderr.
+
+As upstream, a patch that does not apply does not stop evaluation; the tests run
+and the apply failure is recorded in `reason.txt`. The script's stdout and
+stderr stream directly to mode-`0600` host artifacts with a 256 MiB per-stream
+bound; the parser output download is bounded to 16 MiB. The Runner stops the
+evaluation sandbox after `Evaluate` returns.
 
 The selected official script and parser determine test records; ARIES requires
-all declared `FAIL_TO_PASS` and `PASS_TO_PASS` tests to pass. This implementation
-requires the optional `LimitedDownloader` and `StreamExecutor` sandbox
-capabilities. A sandbox without them is rejected before evaluation proceeds.
+all declared `FAIL_TO_PASS` and `PASS_TO_PASS` tests to pass. The agent's
+sandbox must provide the optional `StreamExecutor` capability, and the
+evaluation sandbox both `StreamExecutor` and `LimitedDownloader`. A sandbox
+without them is rejected before it is used.
 
 Sources: [preparation](../../pkg/benchmark/swebenchpro/sandbox.go),
 [evaluation](../../pkg/benchmark/swebenchpro/evaluate.go),

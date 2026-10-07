@@ -97,7 +97,7 @@ func TestEvaluateReportsNotEnabledWhenJudgeDisabled(t *testing.T) {
 	benchmark.judge = nil
 	sandbox := &evaluateFake{downloadContent: "<<FINAL_ANSWER>>\nthe answer\n"}
 
-	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox)
+	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestEvaluateReportsNotEnabledWhenJudgeDisabled(t *testing.T) {
 
 func TestEvaluateRequiresLiveSandbox(t *testing.T) {
 	benchmark, task := benchmarkWithFixtureAndChat(t, &stubChat{})
-	if _, err := benchmark.Evaluate(context.Background(), task, nil); err == nil {
+	if _, err := benchmark.Evaluate(context.Background(), task, nil, nil); err == nil {
 		t.Fatal("Evaluate accepted a nil sandbox")
 	}
 }
@@ -124,7 +124,7 @@ func TestEvaluateMissingAnswerScoresZeroWithoutError(t *testing.T) {
 	benchmark, task := benchmarkWithFixtureAndChat(t, chat)
 	sandbox := &evaluateFake{downloadErr: fmt.Errorf("no such file: %w", runner.ErrNotFound)}
 
-	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox)
+	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox, nil)
 	if err != nil {
 		t.Fatalf("Evaluate returned an error for a missing answer: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestEvaluateOrdinaryDownloadErrorFailsWithoutJudgingOrScoring(t *testing.T)
 	downloadErr := errors.New("sandbox daemon unreachable")
 	sandbox := &evaluateFake{downloadErr: downloadErr}
 
-	_, err := benchmark.Evaluate(context.Background(), task, sandbox)
+	_, err := benchmark.Evaluate(context.Background(), task, sandbox, nil)
 	if err == nil || !errors.Is(err, downloadErr) {
 		t.Fatalf("Evaluate() error = %v, want an error wrapping %v", err, downloadErr)
 	}
@@ -171,7 +171,7 @@ func TestEvaluateEmptyAnswerScoresZeroWithoutError(t *testing.T) {
 			benchmark, task := benchmarkWithFixtureAndChat(t, chat)
 			sandbox := &evaluateFake{downloadContent: content}
 
-			evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox)
+			evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox, nil)
 			if err != nil {
 				t.Fatalf("Evaluate() error = %v", err)
 			}
@@ -190,7 +190,7 @@ func TestEvaluateExtractsFinalAnswerTag(t *testing.T) {
 	benchmark, task := benchmarkWithFixtureAndChat(t, chat)
 	sandbox := &evaluateFake{downloadContent: "reasoning that should be discarded\n" + finalAnswerTag + "\nthe real answer\n"}
 
-	if _, err := benchmark.Evaluate(context.Background(), task, sandbox); err != nil {
+	if _, err := benchmark.Evaluate(context.Background(), task, sandbox, nil); err != nil {
 		t.Fatal(err)
 	}
 	for _, prompt := range chat.prompts {
@@ -208,7 +208,7 @@ func TestEvaluateAnswerWithLiteralBracesIsPreservedInJudgePrompt(t *testing.T) {
 	benchmark, task := benchmarkWithFixtureAndChat(t, chat)
 	sandbox := &evaluateFake{downloadContent: finalAnswerTag + "\n{{value}}\n"}
 
-	if _, err := benchmark.Evaluate(context.Background(), task, sandbox); err != nil {
+	if _, err := benchmark.Evaluate(context.Background(), task, sandbox, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(chat.prompts) == 0 {
@@ -228,7 +228,7 @@ func TestEvaluateAllMustHavesPassSucceeds(t *testing.T) {
 	benchmark, task := benchmarkWithFixtureAndChat(t, chat)
 	sandbox := &evaluateFake{downloadContent: finalAnswerTag + "\nthe answer\n"}
 
-	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox)
+	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +248,7 @@ func TestEvaluateMustHaveFailureFailsRegardlessOfOthers(t *testing.T) {
 	benchmark, task := benchmarkWithFixtureAndChat(t, chat)
 	sandbox := &evaluateFake{downloadContent: finalAnswerTag + "\nthe answer\n"}
 
-	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox)
+	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +267,7 @@ func TestEvaluateRetriesJudgeErrorsThenSucceeds(t *testing.T) {
 	benchmark, task := benchmarkWithFixtureAndChat(t, chat)
 	sandbox := &evaluateFake{downloadContent: finalAnswerTag + "\nthe answer\n"}
 
-	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox)
+	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +289,7 @@ func TestEvaluateUnscoredRubricAfterRetryExhaustionIsExcluded(t *testing.T) {
 	benchmark, task := benchmarkWithFixtureAndChat(t, chat)
 	sandbox := &evaluateFake{downloadContent: finalAnswerTag + "\nthe answer\n"}
 
-	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox)
+	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +321,7 @@ func TestEvaluateWritesJudgeErrorsLogWhenJudgeCallsConsistentlyFail(t *testing.T
 	benchmark, task := benchmarkWithFixtureAndChat(t, chat)
 	sandbox := &evaluateFake{downloadContent: finalAnswerTag + "\nthe answer\n"}
 
-	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox)
+	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -364,7 +364,7 @@ func TestEvaluatePartialTimeoutStillSurfacesErrorDespiteSucceeding(t *testing.T)
 	benchmark, task := benchmarkWithFixtureAndChat(t, chat)
 	sandbox := &evaluateFake{downloadContent: finalAnswerTag + "\nthe answer\n"}
 
-	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox)
+	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,7 +390,7 @@ func TestEvaluateWritesEvaluationResultsArtifact(t *testing.T) {
 	benchmark, task := benchmarkWithFixtureAndChat(t, chat)
 	sandbox := &evaluateFake{downloadContent: finalAnswerTag + "\nthe answer\n"}
 
-	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox)
+	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -415,7 +415,7 @@ func TestEvaluateNeverUploadsToSandbox(t *testing.T) {
 	benchmark, task := benchmarkWithFixtureAndChat(t, chat)
 	sandbox := &evaluateFake{downloadContent: finalAnswerTag + "\nthe answer\n"}
 
-	if _, err := benchmark.Evaluate(context.Background(), task, sandbox); err != nil {
+	if _, err := benchmark.Evaluate(context.Background(), task, sandbox, nil); err != nil {
 		t.Fatal(err)
 	}
 	if sandbox.uploads != 0 {

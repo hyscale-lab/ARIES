@@ -4,9 +4,9 @@ Follow [Runner interfaces](../pkg/runner/interfaces.go) and [lifecycle](architec
 
 | Role | Required boundary |
 | --- | --- |
-| Benchmark | Own tasks, sanitization, private verifier, and independent evaluation. |
+| Benchmark | Own tasks, sanitization, private verifier, and independent evaluation that follows the original methodology. |
 | AgentHarness | Own the agent runtime, model interaction, and private evidence; retain distinct telemetry entries. |
-| ToolSandbox | Keep the task environment alive through evaluation. |
+| ToolSandbox | Keep the task environment alive through evaluation; start fresh evaluation sandboxes on request. |
 | ToolBridge | Grant temporary access to one exact sandbox; confirm revocation. |
 
 - Keep implementations independent; a paired bridge may consume a narrow sandbox
@@ -25,6 +25,9 @@ Follow [Runner interfaces](../pkg/runner/interfaces.go) and [lifecycle](architec
 - Preserve benchmark-specific isolation: pinned inputs, sanitized candidate state,
   private test/reference material, and all required verifier checks. Do not change
   score meaning when refactoring evaluation.
+- Replicate the benchmark's upstream evaluation as closely as possible rather
+  than inventing equivalents. SWE-bench Pro captures the agent's patch, then runs
+  the upstream entry script in a fresh sandbox from the task image.
 
 Details: [benchmark](../docs/design/benchmark.md), [harness](../docs/design/harness.md),
 [bridge](../docs/design/bridge.md), [sandbox](../docs/design/sandbox.md),

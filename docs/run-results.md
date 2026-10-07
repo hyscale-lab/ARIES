@@ -54,6 +54,20 @@ A successful task has:
 - reward `1`; and
 - completed tool calls in `bridge/tool-calls.jsonl`.
 
+When a task fails, its `error` field in `run-result.json` joins every failure in
+that task, including a preparation failure that leaves the harness
+`not_started`; the task's `task finished` line in `aries.log` carries the same
+error. List failed tasks with:
+
+```sh
+jq -r '.tasks[] | select(.error) | "\(.task_id): \(.error)"' "$run_dir/run-result.json"
+```
+
+A benchmark that evaluates in a fresh sandbox, such as SWE-bench Pro, keeps that
+sandbox's container logs in the task's `evaluation-sandbox/` directory and its
+resource samples under the `evaluation-sandbox` component in
+`monitor/resources.jsonl`.
+
 ## Hermes Gateway artifacts
 
 Hermes text and voice-transcribe now submit tasks through the native Gateway.

@@ -1,7 +1,8 @@
 # Benchmark
 
 `Benchmark` owns task meaning: discovery, preparation of agent-visible inputs,
-private verifier material, and independent evaluation of the live task sandbox.
+private verifier material, and independent evaluation that follows the
+benchmark's original methodology.
 It does not own the sandbox lifecycle or decide whether isolation is confirmed.
 
 ## Operations and ownership
@@ -12,12 +13,14 @@ The [interface](../../pkg/runner/interfaces.go) has three operations:
 | --- | --- |
 | `Tasks(context.Context) ([]core.Task, error)` | Load task instructions, environment requirements, and timeouts. Keep verifier inputs out of returned agent-visible data. |
 | `PrepareSandbox(context.Context, core.Task, Sandbox) error` | Prepare and sanitize the started sandbox before bridge access. Confirm private or stale output paths are absent; fail closed if preparation cannot establish its conditions. |
-| `Evaluate(context.Context, core.Task, Sandbox) (core.Evaluation, error)` | Evaluate that same sandbox after confirmed harness termination and bridge revocation. Preserve benchmark scoring semantics and return infrastructure errors separately from ordinary failed outcomes. |
+| `Evaluate(context.Context, core.Task, Sandbox, EvaluationSandboxes) (core.Evaluation, error)` | Evaluate after confirmed harness termination and bridge revocation, in the live task sandbox or in fresh sandboxes started through `EvaluationSandboxes` when the original evaluator uses a clean environment. Preserve benchmark scoring semantics and return infrastructure errors separately from ordinary failed outcomes. |
 
 Concrete implementations own their loaded task metadata, pinned input validation,
 private verifier files, judge credentials, and evaluation artifacts. Runner owns
-ordering and passes the live `Sandbox` capability; the benchmark uses its
-execution and transfer operations rather than constructing a deployment.
+ordering and passes the live `Sandbox` capability and an `EvaluationSandboxes`
+starter; the benchmark uses their execution and transfer operations rather than
+constructing a deployment. Runner owns every evaluation sandbox it starts and
+stops them after `Evaluate` returns.
 
 ## Lifecycle, cancellation, and failures
 

@@ -124,7 +124,7 @@ func TestPinnedPrepareSandboxAndEvaluateAgainstFakeSandbox(t *testing.T) {
 	if err := benchmark.PrepareSandbox(context.Background(), task, sandbox); err != nil {
 		t.Fatalf("PrepareSandbox() error = %v", err)
 	}
-	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox)
+	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox, nil)
 	if err != nil {
 		t.Fatalf("Evaluate() error = %v", err)
 	}

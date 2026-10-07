@@ -16,8 +16,9 @@ an invariant; routine aligned work needs no additional approval.
 - Keep selection in `cmd/aries`, construction/rollback in `internal/app/wiring`,
   and behavior in `pkg`. Avoid registries and generic orchestration frameworks.
 - Withhold verifier material until harness termination and bridge revocation
-  are confirmed. Evaluate the same live sandbox independently of harness success;
-  record the two outcomes separately.
+  are confirmed. Evaluate independently of harness success, in the live task
+  sandbox or in fresh Runner-owned sandboxes from the task environment, following
+  the benchmark's original methodology; record the two outcomes separately.
 - Cleanup reverses ownership, covers partial failure and cancellation, and
   confirms resource absence. Closing a transport is insufficient. Never weaken
   ownership, credential, isolation, or cleanup checks to fit an implementation.

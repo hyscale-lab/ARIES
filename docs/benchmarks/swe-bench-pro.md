@@ -72,11 +72,16 @@ the normal ARIES command semantics.
 
 ## Isolation and evaluation
 
-ARIES prepares private verifier snapshots before granting harness access and
-runs evaluation only after harness stop and bridge revocation are confirmed.
-The candidate is tested against the pinned base and original build artifacts.
+ARIES follows the upstream evaluator. Before granting harness access, it resets
+the repository to the base commit and removes the history that contains the gold
+revision; it leaves the rest of the image as published. After harness stop and
+bridge revocation are confirmed, it captures the agent's changes as a patch and
+evaluates that patch in a fresh container started from the same task image, with
+upstream's entry script: reset to the base commit, apply the patch, check out
+the verifier files, run the task's script, and parse its output. Nothing else
+from the agent's container reaches evaluation.
 See [SWE-bench Pro implementation](../implementation/benchmarks.md#swe-bench-pro)
-for Git sanitation, process isolation, private staging, and output bounds.
+for Git sanitation, patch capture, process isolation, and output bounds.
 
 This is local hardening, not an embargo on public information. SWE-bench Pro is
 a public benchmark and the task network remains enabled so the harness can use
@@ -95,14 +100,17 @@ being silently treated as an unresolved task.
 
 Private evaluation artifacts are retained under each occurrence's
 `evaluation/` directory: raw and effective candidate patches, verifier stdout
-and stderr, parser output, and a resolution reason. Review these private run
-artifacts before sharing them.
+and stderr, parser output, and a resolution reason that also notes a patch that
+could not be captured or applied. The fresh evaluation container's logs are in
+`evaluation-sandbox/`. Review these private run artifacts before sharing them.
 
 ## Scope, architecture, and licensing
 
 The adapter uses the existing `Benchmark` role; it adds no fifth Runner role.
 Docker lifecycle and image pulls remain owned by the Docker sandbox through the
-Moby Go SDK, and evaluator execution remains independent of harness success.
+Moby Go SDK, including the fresh evaluation sandbox, which the Runner starts on
+the benchmark's request and stops after evaluation. Evaluator execution remains
+independent of harness success.
 
 ARIES's MIT code license does not relicense the benchmark dataset, evaluator,
 task images, or repositories represented by the tasks. The upstream evaluator

@@ -284,7 +284,7 @@ type stubBenchmark struct{}
 
 func (*stubBenchmark) Tasks(context.Context) ([]core.Task, error)                      { return nil, nil }
 func (*stubBenchmark) PrepareSandbox(context.Context, core.Task, runner.Sandbox) error { return nil }
-func (*stubBenchmark) Evaluate(context.Context, core.Task, runner.Sandbox) (core.Evaluation, error) {
+func (*stubBenchmark) Evaluate(context.Context, core.Task, runner.Sandbox, runner.EvaluationSandboxes) (core.Evaluation, error) {
 	return core.Evaluation{}, nil
 }
 

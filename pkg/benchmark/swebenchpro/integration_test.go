@@ -4,6 +4,7 @@ package swebenchpro
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
 	dockerdeployment "github.com/hyscale-lab/aries/pkg/deployment/docker"
+	"github.com/hyscale-lab/aries/pkg/runner"
 	tasksandbox "github.com/hyscale-lab/aries/pkg/sandbox"
 	"github.com/parquet-go/parquet-go"
 	"github.com/sirupsen/logrus"
@@ -111,8 +113,7 @@ func TestPinnedAllPublicTasksLoad(t *testing.T) {
 		if !ok || details.baseCommit == "" || details.goldCommit == "" ||
 			strings.TrimSpace(details.testPatch) == "" || len(details.failToPass) == 0 ||
 			len(details.selectedTests) == 0 || len(details.verifierFiles) == 0 ||
-			details.runScript == "" || details.parser == "" ||
-			details.snapshot != "" || details.ignoredSnapshot != "" {
+			details.runScript == "" || details.parser == "" {
 			t.Fatalf("task %q has incomplete private details", task.ID)
 		}
 	}
@@ -218,15 +219,19 @@ func TestPinnedDockerGoldAndEmptyPatch(t *testing.T) {
 			if backgroundErr != nil || background.ExitCode != 0 {
 				t.Fatalf("start background agent process: result=%#v error=%v", background, backgroundErr)
 			}
-			evaluation, evalErr := benchmark.Evaluate(ctx, tasks[0], live)
+			fresh := &managerEvaluationSandboxes{manager: manager, runID: "swebenchpro-e2e", taskID: tasks[0].ID}
+			evaluation, evalErr := benchmark.Evaluate(ctx, tasks[0], live, fresh)
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			stopErr := fresh.stop(cleanupCtx)
+			if err := manager.Stop(cleanupCtx, live); err != nil {
+				stopErr = errors.Join(stopErr, err)
+			}
+			cleanupCancel()
 			if evalErr != nil {
 				t.Fatal(evalErr)
 			}
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			err = manager.Stop(cleanupCtx, live)
-			cleanupCancel()
-			if err != nil {
-				t.Fatal(err)
+			if stopErr != nil {
+				t.Fatal(stopErr)
 			}
 			stopped = true
 			if evaluation.Score != testCase.wantScore || evaluation.Reward != testCase.wantScore || evaluation.Status != testCase.wantStatus || evaluation.VerifierStatus != testCase.wantVerifierStatus || evaluation.Error != "" {
@@ -242,6 +247,31 @@ func TestPinnedDockerGoldAndEmptyPatch(t *testing.T) {
 			}
 		})
 	}
+}
+
+// managerEvaluationSandboxes starts evaluation sandboxes as the Runner does.
+type managerEvaluationSandboxes struct {
+	manager *tasksandbox.Manager
+	runID   string
+	taskID  string
+	started []runner.Sandbox
+}
+
+func (s *managerEvaluationSandboxes) Start(ctx context.Context, environment core.Environment) (runner.Sandbox, error) {
+	live, err := s.manager.Start(ctx, core.SandboxRequest{RunID: s.runID, TaskID: s.taskID, Purpose: core.SandboxPurposeEvaluation, Environment: environment})
+	if err != nil {
+		return nil, err
+	}
+	s.started = append(s.started, live)
+	return live, nil
+}
+
+func (s *managerEvaluationSandboxes) stop(ctx context.Context) error {
+	var errs []error
+	for _, live := range s.started {
+		errs = append(errs, s.manager.Stop(ctx, live))
+	}
+	return errors.Join(errs...)
 }
 
 func requirePinnedSources(t *testing.T) (string, config.Versions) {

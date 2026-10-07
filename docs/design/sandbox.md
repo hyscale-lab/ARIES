@@ -1,9 +1,10 @@
 # ToolSandbox
 
 `ToolSandbox` owns the task environment. It starts one isolated environment for
-a task, returns the narrow live capability needed by the selected bridge and
-benchmark, and stops the environment with positive confirmation that owned
-resources are absent. It does not own harness policy, tool credentials, or
+a task, plus any fresh evaluation environments the benchmark requests, returns
+the narrow live capability needed by the selected bridge and benchmark, and
+stops each environment with positive confirmation that owned resources are
+absent. It does not own harness policy, tool credentials, or
 benchmark scoring.
 
 ## Operations and ownership
@@ -34,9 +35,17 @@ cleanup and closes the transport; it does not replace `Stop` for active tasks.
 ## Lifecycle, isolation, and failure
 
 The sandbox begins before bridge or harness startup. The benchmark sanitizes it
-before agent access and evaluates that same live environment after harness stop
-and bridge revocation are positively confirmed. Harness failure does not decide
-the evaluation outcome. See the [task lifecycle](../design.md#task-lifecycle-and-isolation-gates).
+before agent access and evaluates after harness stop and bridge revocation are
+positively confirmed, either in that same live environment or in fresh
+evaluation sandboxes. Harness failure does not decide the evaluation outcome.
+See the [task lifecycle](../design.md#task-lifecycle-and-isolation-gates).
+
+A fresh evaluation sandbox is a `SandboxRequest` with
+`Purpose: "evaluation"`. It gets its own task attachment, the
+`aries.component=evaluation-sandbox` label for resource monitoring, and its
+own `<task>/evaluation-sandbox/` artifact directory, so it never overwrites the
+task sandbox's evidence. Runner starts it on the benchmark's request during
+`Evaluate` and stops it before the task sandbox.
 
 The current adapter validates execution defaults, starts a fresh task attachment,
 creates and validates the runtime, starts it, and confirms it is running before
@@ -55,7 +64,7 @@ private artifacts, and missing-file semantics are part of the isolation boundary
 
 ## Substitution and validation
 
-A replacement must preserve task identity, isolation, live evaluation, command
+A replacement must preserve task identity, isolation, live and fresh evaluation sandboxes, command
 semantics, bounded cancellation cleanup, and positive absence checks. Implement
 provider-specific operations beneath the component policy and select them through
 explicit composition. Supporting the interface alone does not establish support

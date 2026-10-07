@@ -24,11 +24,17 @@ type Environment struct {
 	ExecUser     string            `json:"-"`
 }
 
+// SandboxPurposeEvaluation marks a fresh sandbox started for evaluation rather
+// than for agent access.
+const SandboxPurposeEvaluation = "evaluation"
+
 // SandboxRequest carries stable run and task identity separately from the
-// benchmark-defined execution environment.
+// benchmark-defined execution environment. An empty Purpose is the task
+// sandbox the agent uses.
 type SandboxRequest struct {
 	RunID       string      `json:"run_id"`
 	TaskID      string      `json:"task_id"`
+	Purpose     string      `json:"purpose,omitempty"`
 	Environment Environment `json:"environment"`
 }
 
@@ -219,6 +225,9 @@ type TaskResult struct {
 	Evaluation   Evaluation      `json:"evaluation"`
 	Observer     ObserverResult  `json:"observer"`
 	Cleanup      CleanupResult   `json:"cleanup"`
+	// Error joins every failure of the task, including sandbox preparation
+	// failures that leave the harness not started.
+	Error string `json:"error,omitempty"`
 	// StartedAt is when the runner began the task: with an arrival schedule
 	// it is the realised start, which an analysis sets against the offset the
 	// schedule asked for.

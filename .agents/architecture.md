@@ -22,8 +22,9 @@
 ## Task lifecycle
 
 Load → start sandbox → sanitize → start bridge → start/run harness → confirm
-harness stop → confirm bridge revocation → evaluate live sandbox → remove
-sandbox → remove task attachment.
+harness stop → confirm bridge revocation → evaluate (live sandbox and any fresh
+evaluation sandboxes) → remove evaluation sandboxes → remove sandbox → remove
+task attachment. Record every task failure in `TaskResult.Error`.
 
 Each admitted occurrence gets fresh owners, even for repeated task IDs. Drain
 admitted work through cleanup using fresh bounded contexts after cancellation.

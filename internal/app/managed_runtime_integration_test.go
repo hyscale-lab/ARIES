@@ -252,6 +252,6 @@ func (*managedIntegrationBenchmark) PrepareSandbox(context.Context, core.Task, r
 	return nil
 }
 
-func (*managedIntegrationBenchmark) Evaluate(context.Context, core.Task, runner.Sandbox) (core.Evaluation, error) {
+func (*managedIntegrationBenchmark) Evaluate(context.Context, core.Task, runner.Sandbox, runner.EvaluationSandboxes) (core.Evaluation, error) {
 	return core.Evaluation{Status: core.StatusSucceeded}, nil
 }

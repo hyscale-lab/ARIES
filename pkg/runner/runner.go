@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
+	"sync"
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/core"
@@ -137,6 +139,7 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		cleanupCtx    context.Context
 		cleanupCancel context.CancelFunc
 		cleanupUsed   bool
+		evaluation    = &evaluationSandboxes{toolSandbox: r.toolSandbox, runID: r.runID, taskID: task.ID}
 	)
 	defer func() {
 		if cleanupCancel != nil {
@@ -151,6 +154,12 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 	}
 	finish := func() (core.TaskResult, error) {
 		cleanup := ensureCleanupContext()
+		if evaluation.active() {
+			cleanupUsed = true
+			if err := evaluation.stop(cleanup); err != nil {
+				cleanupErrors = append(cleanupErrors, fmt.Errorf("cleanup evaluation sandbox: %w", err))
+			}
+		}
 		if harnessActive {
 			cleanupUsed = true
 			if err := r.harness.Stop(cleanup); err != nil {
@@ -188,11 +197,17 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 			allErrors = append(allErrors, fmt.Errorf("run context: %w", runContextErr))
 		}
 		result.Duration = time.Since(started)
-		r.logger.WithContext(context.WithoutCancel(ctx)).WithFields(logrus.Fields{
+		taskErr := errors.Join(allErrors...)
+		entry := r.logger.WithContext(context.WithoutCancel(ctx)).WithFields(logrus.Fields{
 			"task_id": task.ID, "harness_status": result.Harness.Status,
 			"evaluation_status": result.Evaluation.Status, "cleanup_status": result.Cleanup.Status,
-		}).Info("task finished")
-		return result, errors.Join(allErrors...)
+		})
+		if taskErr != nil {
+			result.Error = taskErr.Error()
+			entry = entry.WithError(taskErr)
+		}
+		entry.Info("task finished")
+		return result, taskErr
 	}
 
 	var err error
@@ -286,8 +301,8 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 	}
 
 	result.Isolation.Status = core.StatusConfirmed
-	evaluation, evaluationErr := r.benchmark.Evaluate(ctx, originalTask, sandbox)
-	result.Evaluation = evaluation
+	taskEvaluation, evaluationErr := r.benchmark.Evaluate(ctx, originalTask, sandbox, evaluation)
+	result.Evaluation = taskEvaluation
 	if evaluationErr == nil {
 		if result.Evaluation.Status == "" {
 			result.Evaluation.Status = core.StatusSucceeded
@@ -409,4 +424,52 @@ func summarize(tasks []core.TaskResult) core.RunSummary {
 		}
 	}
 	return summary
+}
+
+// evaluationSandboxes starts fresh sandboxes for one task evaluation. The
+// Runner stops them, newest first, before stopping the task sandbox.
+type evaluationSandboxes struct {
+	toolSandbox ToolSandbox
+	runID       string
+	taskID      string
+	mu          sync.Mutex
+	started     []Sandbox
+}
+
+func (e *evaluationSandboxes) Start(ctx context.Context, environment core.Environment) (Sandbox, error) {
+	sandbox, err := e.toolSandbox.Start(ctx, core.SandboxRequest{
+		RunID: e.runID, TaskID: e.taskID, Purpose: core.SandboxPurposeEvaluation, Environment: environment,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if sandbox == nil {
+		return nil, errors.New("start evaluation sandbox: returned a nil sandbox")
+	}
+	e.mu.Lock()
+	e.started = append(e.started, sandbox)
+	e.mu.Unlock()
+	return sandbox, nil
+}
+
+func (e *evaluationSandboxes) active() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return len(e.started) != 0
+}
+
+func (e *evaluationSandboxes) stop(ctx context.Context) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	var errs []error
+	var remaining []Sandbox
+	for index := len(e.started) - 1; index >= 0; index-- {
+		if err := e.toolSandbox.Stop(ctx, e.started[index]); err != nil {
+			errs = append(errs, err)
+			remaining = append(remaining, e.started[index])
+		}
+	}
+	slices.Reverse(remaining)
+	e.started = remaining
+	return errors.Join(errs...)
 }
