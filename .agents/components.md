@@ -22,7 +22,7 @@ Follow [Runner interfaces](../pkg/runner/interfaces.go) and [lifecycle](architec
   Keep native defaults and credential fallback policies intact; redacted errors
   must not expose secrets through their cause chain.
 - Revoke bridges only after draining sessions, commands, and evidence. Keep replay
-  inputs private. Use Moby for Docker; remove runtimes before their attachments.
+  inputs private. Use Moby for Docker.
   Command cancellation must preserve the sandbox needed for evaluation.
 - Preserve benchmark-specific isolation: pinned inputs, sanitized candidate state,
   private test/reference material, and all required verifier checks. Do not change

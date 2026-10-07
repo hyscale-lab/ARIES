@@ -1,7 +1,7 @@
 # Validation
 
-- Begin with focused tests. Reuse coverage; add regressions for uncovered changed
-  behavior, not trivial forwarding. Preserve behavior during refactors.
+- Choose checks for the changed behavior; reuse coverage and avoid tests of trivial
+  forwarding. The full suite is for release validation, not every edit.
 - Release checks: `make build`, `make test`, `make test-race`, `make lint`,
   `make integration`. Unit/race tests require neither Docker nor paid APIs;
   integration uses real containers and a deterministic fake model endpoint.
@@ -15,8 +15,7 @@
   insufficient.
 - After runtime work, check for leaked containers, networks, processes, listeners,
   and credential files. Scan private artifacts without printing secrets.
-- Preserve unrelated work and follow the user's staging/commit instructions.
-  Keep credentials, datasets, run artifacts, and OMX state ignored. Report actual
-  evidence and validation gaps; never infer success from intended behavior.
+- Keep credentials, datasets, and run artifacts ignored. Report actual evidence
+  and validation gaps.
 
 Details: [Makefile](../Makefile), [run/artifact guide](../docs/run-results.md).

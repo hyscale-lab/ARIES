@@ -16,6 +16,16 @@ profile, constructs a fresh Runner for each admitted task, and records results
 without changing the task lifecycle. Multiple task occurrences may run
 concurrently; every occurrence still receives its own components and sandbox.
 
+## Research scope
+
+ARIES is a research platform operated by trusted researchers in controlled
+environments. Prioritize experimental correctness, reproducibility, and simple
+implementations. Multi-tenant authorization, public-service hardening, and
+consumer-product safeguards are required only when explicitly requested.
+Operators and configuration are trusted; agent-generated commands remain
+untrusted. Credential confidentiality, verifier isolation, resource ownership,
+and confirmed cleanup remain necessary for valid experiments.
+
 ## System overview
 
 ```mermaid
