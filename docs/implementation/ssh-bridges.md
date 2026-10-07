@@ -15,6 +15,18 @@ executed-command records and lossless wire-side input follow the
 access ownership and revocation follow its
 [lifecycle contract](../design/bridge.md#lifecycle-cancellation-and-failure).
 
+In sandbox mode, OpenClaw's `exec` sets `HOME` to its sandbox workspace by
+default (`buildSandboxEnv` in the pinned 2026.7.1 build); sandbox and per-call
+environment can override that default. The bridge translates the
+virtual workspace to the task workdir, but maps the generated `HOME` to `/tmp`
+instead of the workdir. Otherwise per-user caches written under `HOME`, such as
+Go's `~/.cache/go-build` or `~/.npm`, land in the repository being evaluated and
+become part of the candidate's changes; SWE-bench Pro patch capture then
+exceeds its 16 MiB bound. `/tmp` exists and is writable in task images, so the
+bridge creates no state of its own. Each structured tool-call record names the
+mapped value in `workspace_home`. A `HOME` the agent exports inside its
+command script is unaffected.
+
 ## Hermes SSH bridge
 
 The Hermes pairing is a second, separate adapter rather than a reuse of the

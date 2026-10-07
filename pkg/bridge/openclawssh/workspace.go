@@ -13,6 +13,13 @@ const (
 	virtualWorkspace       = virtualRuntimeRoot + "/workspace"
 	virtualSkillsWorkspace = virtualWorkspace + "/.openclaw/sandbox-skills"
 
+	// generatedHome replaces OpenClaw's default HOME, which is its sandbox
+	// workspace. The workspace maps to the task workdir, the repository being
+	// evaluated, so per-user caches written under HOME (Go, npm, pip) would land
+	// in the candidate's changes. /tmp exists and is writable in task images, and
+	// keeps those caches outside the workdir without the bridge creating state.
+	generatedHome = "/tmp"
+
 	runtimeProbeScript      = `if [ -d "$1" ]; then printf "1\n"; else printf "0\n"; fi`
 	runtimeProbeSentinel    = "openclaw-sandbox-check"
 	workdirValidationScript = `set -e
@@ -143,7 +150,7 @@ func prepareRemoteCommand(remote remoteCommand, workdir string) (preparedRemoteC
 		return preparedFromArgv(remote.argv, workdir, "", false), nil
 	}
 
-	argv, err := mapGeneratedHome(remote.argv, shellIndex, workdir)
+	argv, err := mapGeneratedHome(remote.argv, shellIndex)
 	if err != nil {
 		return preparedRemoteCommand{}, err
 	}
@@ -153,7 +160,7 @@ func prepareRemoteCommand(remote remoteCommand, workdir string) (preparedRemoteC
 		return preparedRemoteCommand{}, err
 	}
 	argv[shellIndex+2] = translated
-	return preparedFromArgv(argv, workdir, workdir, false), nil
+	return preparedFromArgv(argv, workdir, generatedHome, false), nil
 }
 
 func preparedFromArgv(argv []string, workdir, workspaceHome string, suppressed bool) preparedRemoteCommand {
@@ -178,7 +185,7 @@ func matchesExactArgv(got []string, want ...string) bool {
 	return true
 }
 
-func mapGeneratedHome(argv []string, shellIndex int, workdir string) ([]string, error) {
+func mapGeneratedHome(argv []string, shellIndex int) ([]string, error) {
 	if shellIndex != 5 || len(argv) < 8 || argv[0] != remoteEnv {
 		return nil, errors.New("OpenClaw SSH generated environment has an unexpected shape")
 	}
@@ -200,7 +207,7 @@ func mapGeneratedHome(argv []string, shellIndex int, workdir string) ([]string, 
 		}
 	}
 	mapped := append([]string(nil), argv...)
-	mapped[2] = "HOME=" + workdir
+	mapped[2] = "HOME=" + generatedHome
 	return mapped, nil
 }
 
