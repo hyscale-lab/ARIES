@@ -261,7 +261,8 @@ func TestGeneratedWorkspaceCommandMapsHomePrefixAndBoundedReferences(t *testing.
 	if plan.command.Args[1] != wantScript || plan.command.Dir != "/app/personal-site" {
 		t.Fatalf("generated command = %#v", plan.command)
 	}
-	if plan.command.Env["HOME"] != "/app/personal-site" || plan.workspaceHome != "/app/personal-site" {
+	// HOME stays outside the workdir so per-user caches never join the candidate.
+	if plan.command.Env["HOME"] != generatedHome || plan.workspaceHome != generatedHome || strings.HasPrefix(generatedHome, "/app/personal-site") {
 		t.Fatalf("generated HOME = %#v / %q", plan.command.Env, plan.workspaceHome)
 	}
 	if plan.command.Env["PATH"] != "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin" || plan.command.Env["LANG"] != "C.UTF-8" || plan.command.Env["OPENCLAW_SHELL"] != "exec" {
@@ -401,11 +402,11 @@ func TestVirtualizedExecutionKeepsWireEvidenceAndRecordsExecutedState(t *testing
 		t.Fatal(err)
 	}
 	commands := sandbox.snapshot()
-	if len(commands) != 1 || commands[0].Args[1] != "cd /workspace && cat /workspace/input >/workspace/output" || commands[0].Env["HOME"] != "/workspace" {
+	if len(commands) != 1 || commands[0].Args[1] != "cd /workspace && cat /workspace/input >/workspace/output" || commands[0].Env["HOME"] != generatedHome {
 		t.Fatalf("executed commands = %#v", commands)
 	}
 	records := decodeAuditLines(t, structuredBytes.Bytes())
-	if len(records) != 1 || records[0]["workspace_home"] != "/workspace" || records[0]["command"] != commands[0].Args[1] {
+	if len(records) != 1 || records[0]["workspace_home"] != generatedHome || records[0]["command"] != commands[0].Args[1] {
 		t.Fatalf("structured record = %#v", records)
 	}
 	if records[0]["command_hash"] != commandHash(prepared.encoded) || records[0]["command_hash"] == commandHash(wire) {

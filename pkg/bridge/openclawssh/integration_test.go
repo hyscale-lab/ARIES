@@ -118,7 +118,7 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 		`"operation_class":"exec"`, `"exit_code":7`, `"status":"completed"`,
 		`"stdin":"streamed-input"`, `"stdin_encoding":"utf-8"`,
 		`"command":"cd /work; cat > /work/bridge-state; cat /work/bridge-state; printf tool-stderr >&2; exit 7"`,
-		`"workspace_home":"/work"`,
+		`"workspace_home":"` + generatedHome + `"`,
 	} {
 		if !bytes.Contains(content, []byte(evidence)) {
 			t.Fatalf("tool log lacks %s: %s", evidence, content)
@@ -214,7 +214,7 @@ func TestBridgeMapsVirtualWorkspaceToContainerRootWithoutAlias(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(structured, []byte(`"workspace_home":"/"`)) || !bytes.Contains(structured, []byte(`> /aries-root-mutation`)) && !bytes.Contains(structured, []byte(`>/aries-root-mutation`)) || bytes.Contains(structured, []byte("//aries-root-mutation")) {
+	if !bytes.Contains(structured, []byte(`"workspace_home":"`+generatedHome+`"`)) || !bytes.Contains(structured, []byte(`> /aries-root-mutation`)) && !bytes.Contains(structured, []byte(`>/aries-root-mutation`)) || bytes.Contains(structured, []byte("//aries-root-mutation")) {
 		t.Fatalf("root-safe structured evidence = %s", structured)
 	}
 }

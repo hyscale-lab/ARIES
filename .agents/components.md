@@ -11,6 +11,8 @@ Follow [Runner interfaces](../pkg/runner/interfaces.go) and [lifecycle](architec
 
 - Keep implementations independent; a paired bridge may consume a narrow sandbox
   capability. Pair Hermes/OpenClaw with their corresponding SSH bridges.
+  Keep harness-generated per-user state (such as `HOME`) out of the task workdir
+  so it never becomes part of the evaluated candidate.
 - Preserve exact argv/workdir and native protocol semantics. Never retry ambiguous
   submissions, widen accepted payloads to hide failures, or enable Hermes credential sync.
 - Pass placement and resolved service URLs explicitly; deployment interprets
