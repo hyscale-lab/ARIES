@@ -28,6 +28,5 @@ task attachment. Record every task failure in `TaskResult.Error`.
 
 Each admitted occurrence gets fresh owners, even for repeated task IDs. Drain
 admitted work through cleanup using fresh bounded contexts after cancellation.
-Model runtimes and monitoring surround Runner without adding component roles.
 
 Details: [design](../docs/design.md), [contracts](components.md).

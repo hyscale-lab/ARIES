@@ -3,6 +3,12 @@
 Obey these principles. Identify conflicts and obtain agreement before changing
 an invariant; routine aligned work needs no additional approval.
 
+- ARIES is a research platform for trusted researchers in controlled environments.
+  Prioritize experimental correctness, reproducibility, and simple implementations.
+  Add multi-tenant authorization, public-service hardening, or consumer-product
+  safeguards only when explicitly required. Trust operators and configuration,
+  but treat agent-generated commands as untrusted. Preserve credential
+  confidentiality, verifier isolation, resource ownership, and confirmed cleanup.
 - ARIES runs, evaluates, and measures agent workloads. Preserve measurement
   meaning; distinguish unsupported measurements from measured zero.
 - Runner composes exactly four replaceable roles: Benchmark, AgentHarness,
