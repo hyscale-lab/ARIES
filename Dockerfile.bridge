@@ -2,5 +2,5 @@
 ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
 COPY bin/aries-bridge /usr/local/bin/aries-bridge
-COPY bin/aries-ssh /usr/local/bin/aries-ssh
+COPY bin/aries-ssh-client /usr/local/bin/aries-ssh-client
 ENTRYPOINT ["/usr/local/bin/aries-bridge"]

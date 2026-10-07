@@ -539,7 +539,7 @@ func endpointFiles(t *testing.T) core.ToolEndpoint {
 	}
 	return core.ToolEndpoint{
 		Protocol: "ssh", Address: "172.22.0.1:39425", Username: "aries",
-		ClientCommand: "/opt/aries/bin/aries-ssh", ClientSourceFile: write("aries-ssh", 0o555, "client"),
+		ClientCommand: "/opt/aries/bin/aries-ssh-client", ClientSourceFile: write("aries-ssh-client", 0o555, "client"),
 		IdentityFile: "/run/aries/ssh/id_ed25519", IdentitySourceFile: write("id_ed25519", 0o600, "identity"),
 		KnownHostsFile: "/run/aries/ssh/known_hosts", KnownHostsSourceFile: write("known_hosts", 0o600, "known"),
 	}
@@ -590,7 +590,7 @@ func TestHarnessUsesInjectedDeploymentAndPrivateArchive(t *testing.T) {
 		"run/aries/openclaw.json": 0o600, "run/aries/model.key": 0o600, "run/aries/gateway.key": 0o600,
 		"run/aries/launch": 0o555, "run/aries/gateway-proxy.js": 0o555, "run/aries/gateway-launcher": 0o555,
 		"run/aries/ssh/id_ed25519": 0o600, "run/aries/ssh/known_hosts": 0o600,
-		"opt/aries/bin/aries-ssh": 0o555,
+		"opt/aries/bin/aries-ssh-client": 0o555,
 	} {
 		file, ok := files[path]
 		if !ok || file.mode != mode || file.uid != 1000 || file.gid != 1000 {

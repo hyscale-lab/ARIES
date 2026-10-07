@@ -738,15 +738,15 @@ func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([
 	}
 	sort.Strings(mcpHostVars)
 	files := map[string]harness.ArchiveFile{
-		"run/aries/openclaw.json":    {Content: configuration, Mode: 0o600},
-		"run/aries/model.key":        {Content: active.Credentials.Get("model"), Mode: 0o600},
-		"run/aries/gateway.key":      {Content: active.Credentials.Get("gateway"), Mode: 0o600},
-		"run/aries/launch":           {Content: launcherScript(active.Model.APIKeyEnv, manager.realtimeAPIKeyEnv(active), len(active.Credentials.Get("extract")) != 0, mcpHostVars...), Mode: 0o555},
-		"run/aries/gateway-proxy.js": {Content: gatewayProxyScript(), Mode: 0o555},
-		"run/aries/gateway-launcher": {Content: gatewayLauncherScript(), Mode: 0o555},
-		"run/aries/ssh/id_ed25519":   {Content: identity, Mode: 0o600},
-		"run/aries/ssh/known_hosts":  {Content: knownHosts, Mode: 0o600},
-		"opt/aries/bin/aries-ssh":    {Content: clientBytes, Mode: 0o555},
+		"run/aries/openclaw.json":        {Content: configuration, Mode: 0o600},
+		"run/aries/model.key":            {Content: active.Credentials.Get("model"), Mode: 0o600},
+		"run/aries/gateway.key":          {Content: active.Credentials.Get("gateway"), Mode: 0o600},
+		"run/aries/launch":               {Content: launcherScript(active.Model.APIKeyEnv, manager.realtimeAPIKeyEnv(active), len(active.Credentials.Get("extract")) != 0, mcpHostVars...), Mode: 0o555},
+		"run/aries/gateway-proxy.js":     {Content: gatewayProxyScript(), Mode: 0o555},
+		"run/aries/gateway-launcher":     {Content: gatewayLauncherScript(), Mode: 0o555},
+		"run/aries/ssh/id_ed25519":       {Content: identity, Mode: 0o600},
+		"run/aries/ssh/known_hosts":      {Content: knownHosts, Mode: 0o600},
+		"opt/aries/bin/aries-ssh-client": {Content: clientBytes, Mode: 0o555},
 	}
 	if len(active.Credentials.Get("voice")) != 0 {
 		files["run/aries/realtime.key"] = harness.ArchiveFile{Content: active.Credentials.Get("voice"), Mode: 0o600}

@@ -22,5 +22,5 @@ func Prepare(ctx context.Context, cfg config.Config) error {
 		return fmt.Errorf("read bridge image recipe: %w", err)
 	}
 	pins := cfg.Versions.Bridge
-	return docker.BuildBridgeImage(ctx, cfg.Bridge.Deployment.Docker.Socket, pins.Image, string(dockerfile), filepath.Join(filepath.Dir(executable), "aries-bridge"), filepath.Join(filepath.Dir(executable), "aries-ssh"), map[string]string{"BASE_IMAGE": pins.BaseImage})
+	return docker.BuildBridgeImage(ctx, cfg.Bridge.Deployment.Docker.Socket, pins.Image, string(dockerfile), filepath.Join(filepath.Dir(executable), "aries-bridge"), filepath.Join(filepath.Dir(executable), "aries-ssh-client"), map[string]string{"BASE_IMAGE": pins.BaseImage})
 }

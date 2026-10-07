@@ -16,6 +16,9 @@
   concrete providers. Bridge assignment control stays outside Runner.
   Shared harness mechanics live in `pkg/harness`; it must not import native
   harnesses. Keep native configuration, readiness, protocols, and results local.
+  Shared SSH mechanics live in `pkg/bridge/ssh`; dialects own grammar and workspace
+  policy. The forwarding client must not import dialects. Root bridge lifecycle
+  receives native factories through wiring and must not import concrete dialects.
 - Use explicit dependencies, concrete helpers, `context.Context` for external
   work, and Logrus lifecycle logging. Add dependencies only when existing code
   and the standard library are insufficient.

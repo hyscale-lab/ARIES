@@ -67,7 +67,7 @@ func managedQuote(value string) string { return "'" + strings.ReplaceAll(value, 
 // This matrix exercises borrowed Docker execution from actual independent
 // container runtimes. Concurrent occurrences deliberately share task IDs.
 func TestManagedBridgeRuntimeMatrix(t *testing.T) {
-	helper := managedBinary(t, "aries-ssh", "ARIES_SSH_BINARY")
+	helper := managedBinary(t, "aries-ssh-client", "ARIES_SSH_CLIENT")
 	versions, err := config.LoadVersions(filepath.Join(managedRoot(t), "configs", "versions.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -100,7 +100,7 @@ func TestManagedBridgeRuntimeMatrix(t *testing.T) {
 	})
 }
 func TestManagedContainerCrashBlocksIsolation(t *testing.T) {
-	helper := managedBinary(t, "aries-ssh", "ARIES_SSH_BINARY")
+	helper := managedBinary(t, "aries-ssh-client", "ARIES_SSH_CLIENT")
 	versions, err := config.LoadVersions(filepath.Join(managedRoot(t), "configs", "versions.json"))
 	if err != nil {
 		t.Fatal(err)

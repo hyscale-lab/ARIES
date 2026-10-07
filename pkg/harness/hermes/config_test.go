@@ -231,8 +231,8 @@ func TestContainerEnvironmentRejectsUnusableEndpoints(t *testing.T) {
 		"protocol":       func(e *core.ToolEndpoint) { e.Protocol = "http" },
 		"username":       func(e *core.ToolEndpoint) { e.Username = "root" },
 		"identity":       func(e *core.ToolEndpoint) { e.IdentitySourceFile = "" },
-		"client command": func(e *core.ToolEndpoint) { e.ClientCommand = "/opt/aries/bin/aries-ssh" },
-		"client source":  func(e *core.ToolEndpoint) { e.ClientSourceFile = "/tmp/aries-ssh" },
+		"client command": func(e *core.ToolEndpoint) { e.ClientCommand = "/opt/aries/bin/aries-ssh-client" },
+		"client source":  func(e *core.ToolEndpoint) { e.ClientSourceFile = "/tmp/aries-ssh-client" },
 		"address":        func(e *core.ToolEndpoint) { e.Address = "no-port" },
 		"port":           func(e *core.ToolEndpoint) { e.Address = "10.0.0.1:ssh" },
 	}

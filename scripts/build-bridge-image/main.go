@@ -34,7 +34,7 @@ func build(ctx context.Context, socket string) error {
 		return err
 	}
 	pins := versions.Bridge
-	return docker.BuildBridgeImage(ctx, socket, pins.Image, string(recipe), "bin/aries-bridge", "bin/aries-ssh", map[string]string{
+	return docker.BuildBridgeImage(ctx, socket, pins.Image, string(recipe), "bin/aries-bridge", "bin/aries-ssh-client", map[string]string{
 		"BASE_IMAGE": pins.BaseImage,
 	})
 }

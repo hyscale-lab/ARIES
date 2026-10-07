@@ -25,7 +25,7 @@ const maxBridgeBinary = 256 << 20
 // contains only these two bounded regular files and the supplied Dockerfile.
 func BuildBridgeImage(ctx context.Context, socket, image, dockerfile, bridgeBinary, sshBinary string, buildArgs map[string]string) error {
 	files := map[string][]byte{"Dockerfile": []byte(dockerfile)}
-	for name, path := range map[string]string{"bin/aries-bridge": bridgeBinary, "bin/aries-ssh": sshBinary} {
+	for name, path := range map[string]string{"bin/aries-bridge": bridgeBinary, "bin/aries-ssh-client": sshBinary} {
 		info, err := os.Lstat(path)
 		if err != nil {
 			return err
@@ -63,7 +63,7 @@ func BuildBridgeImage(ctx context.Context, socket, image, dockerfile, bridgeBina
 func bridgeBuildContext(files map[string][]byte, args map[string]string) ([]byte, string, error) {
 	var b bytes.Buffer
 	w := tar.NewWriter(&b)
-	for _, name := range []string{"Dockerfile", "bin/aries-bridge", "bin/aries-ssh"} {
+	for _, name := range []string{"Dockerfile", "bin/aries-bridge", "bin/aries-ssh-client"} {
 		content, ok := files[name]
 		if !ok || len(content) == 0 || len(content) > maxBridgeBinary {
 			return nil, "", errors.New("bridge context is incomplete or exceeds bounds")

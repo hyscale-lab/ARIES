@@ -3,11 +3,9 @@ package bridge
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -21,6 +19,7 @@ import (
 
 	"github.com/hyscale-lab/aries/pkg/bridge/control"
 	v1 "github.com/hyscale-lab/aries/pkg/bridge/control/v1"
+	sshcredentials "github.com/hyscale-lab/aries/pkg/bridge/ssh/credentials"
 	"github.com/hyscale-lab/aries/pkg/bridge/target"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/deployment"
@@ -91,18 +90,6 @@ func nonce() (string, error) {
 	var b [24]byte
 	_, err := rand.Read(b[:])
 	return hex.EncodeToString(b[:]), err
-}
-func sshIdentity() ([]byte, ssh.PublicKey, error) {
-	pub, key, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return nil, nil, err
-	}
-	block, err := ssh.MarshalPrivateKey(key, "")
-	if err != nil {
-		return nil, nil, err
-	}
-	public, err := ssh.NewPublicKey(pub)
-	return pem.EncodeToMemory(block), public, err
 }
 func (m *Manager) record() error {
 	b, err := json.MarshalIndent(struct{ Backend, RuntimeID, InstanceID, AssignmentID, ResourceMetrics string }{"docker", m.runtimeID, m.instance, m.assignment, "docker-stats"}, "", "  ")
@@ -178,15 +165,11 @@ func (m *Manager) Start(ctx context.Context, sandbox runner.Sandbox) (core.ToolE
 	if m.runtimeID == "" {
 		return endpoint, errors.New("bridge runtime returned empty identity")
 	}
-	clientKey, _, err := sshIdentity()
+	clientKey, clientPublic, err := sshcredentials.GenerateIdentity()
 	if err != nil {
 		return endpoint, err
 	}
-	clientSigner, err := ssh.ParsePrivateKey(clientKey)
-	if err != nil {
-		return endpoint, err
-	}
-	hostKey, hostPublic, err := sshIdentity()
+	hostKey, hostPublic, err := sshcredentials.GenerateIdentity()
 	if err != nil {
 		return endpoint, err
 	}
@@ -207,7 +190,7 @@ func (m *Manager) Start(ctx context.Context, sandbox runner.Sandbox) (core.ToolE
 	if err != nil {
 		return endpoint, err
 	}
-	archive, err := archiveFiles(map[string][]byte{"config.json": configJSON, "token": []byte(token), "ca.pem": controlKeys.CA, "server.pem": controlKeys.ServerCert, "server.key": controlKeys.ServerKey, "host.key": hostKey, "authorized.pub": ssh.MarshalAuthorizedKey(clientSigner.PublicKey())})
+	archive, err := archiveFiles(map[string][]byte{"config.json": configJSON, "token": []byte(token), "ca.pem": controlKeys.CA, "server.pem": controlKeys.ServerCert, "server.key": controlKeys.ServerKey, "host.key": hostKey, "authorized.pub": ssh.MarshalAuthorizedKey(clientPublic)})
 	if err != nil {
 		return endpoint, err
 	}
@@ -296,8 +279,8 @@ func (m *Manager) Start(ctx context.Context, sandbox runner.Sandbox) (core.ToolE
 	if m.options.BridgeType == "openclaw-ssh" {
 		endpoint.KnownHostsFile = "/run/aries/ssh/known_hosts"
 		endpoint.KnownHostsSourceFile = known
-		endpoint.ClientCommand = "/opt/aries/bin/aries-ssh"
-		endpoint.ClientSourceFile = filepath.Join(m.local, "aries-ssh")
+		endpoint.ClientCommand = "/opt/aries/bin/aries-ssh-client"
+		endpoint.ClientSourceFile = filepath.Join(m.local, "aries-ssh-client")
 		m.secretFiles = append(m.secretFiles, endpoint.ClientSourceFile)
 		if err := stageClientHelper(m.options.ClientPath, endpoint.ClientSourceFile); err != nil {
 			return core.ToolEndpoint{}, err
@@ -403,7 +386,11 @@ func (m *Manager) Stop(ctx context.Context) error {
 			return err
 		}
 		if a.State != v1.State_REVOKED || len(a.CleanupErrors) > 0 {
-			return errors.New("bridge assignment drain or evidence finalization unconfirmed")
+			err := fmt.Errorf("bridge assignment drain or evidence finalization unconfirmed (state %s)", a.State)
+			for _, failure := range a.CleanupErrors {
+				err = errors.Join(err, fmt.Errorf("%s: %s", failure.GetStage(), failure.GetMessage()))
+			}
+			return err
 		}
 		m.revoked = true
 		m.manifest = a.Artifacts

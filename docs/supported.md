@@ -41,7 +41,7 @@ guides above.
 - Each SSH bridge supports its corresponding harness. Crossed pairs are rejected
   before execution. Hermes requires `/bin/bash` in the task image; its bridge
   rejects Hermes's private `~/.hermes` file synchronization. OpenClaw requires
-  `bin/aries-ssh` beside `bin/aries`. Both bridges require the matched Docker bridge image built with
+  `bin/aries-ssh-client` beside `bin/aries`. Both bridges require the matched Docker bridge image built with
   `make bridge-image`.
 - Realtime mode is OpenClaw-only and needs a separate TTS credential. See the
   [realtime setup](configuration.md#realtime-openclaw-mode).

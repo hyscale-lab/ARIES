@@ -139,7 +139,7 @@ on the task network, use the same local daemon as the sandbox, and require the n
 the harness and sandbox never receive that socket. The bridge has daemon authority
 like Runner, even though its execution adapter validates one fixed target.
 
-The bridge runtime runs `aries-bridge` from the same build as `aries-ssh`.
+The bridge runtime runs `aries-bridge` from the same build as `aries-ssh-client`.
 `make build` produces both alongside Runner. `make bridge-image` builds the Docker
 image using `bridge.image` and `bridge.base_image` from the version catalog.
 Image preparation uses the selected daemon. Checked-in Docker bridge examples

@@ -26,6 +26,17 @@ lease, evidence, and revocation requirements.
 The endpoint conveys access details, not authority to select or own a task network.
 It must never expose verifier material or give the harness the deployment socket.
 
+The child's [NativeServer contract](../../pkg/bridge/bridge.go) accepts only a
+borrowed streaming executor. A shared SSH engine owns transport and execution
+mechanics; harness dialects own command grammar, workspace translation and refusal
+policy. The thin `aries-ssh-client` forwards commands without interpreting them.
+SSH credentials live outside the borrowed target package. Root bridge lifecycle
+code does not import native dialects; wiring supplies their implementations.
+
+This boundary permits another protocol server without duplicating the managed
+lifecycle. It does not make the current SSH credential bootstrap or control
+endpoint schema E2B-compatible; that requires a separate protocol design.
+
 ## Lifecycle, cancellation, and failure
 
 Bridge startup follows sandbox preparation and precedes harness startup. On

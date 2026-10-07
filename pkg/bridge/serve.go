@@ -13,22 +13,17 @@ import (
 
 	"github.com/hyscale-lab/aries/pkg/bridge/control"
 	v1 "github.com/hyscale-lab/aries/pkg/bridge/control/v1"
+	sshcredentials "github.com/hyscale-lab/aries/pkg/bridge/ssh/credentials"
 	"github.com/hyscale-lab/aries/pkg/bridge/target"
-	"github.com/hyscale-lab/aries/pkg/core"
 	"golang.org/x/crypto/ssh"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
 
-// NativeServer only owns temporary execution admission and evidence.
-type NativeServer interface {
-	StartTarget(context.Context, target.Executor) (core.ToolEndpoint, error)
-	Stop(context.Context) error
-}
 type ServeOptions struct {
 	Config            LaunchConfig
 	Backend           target.Backend
-	NewNative         func(*target.Credentials) (NativeServer, error)
+	NewNative         func(*sshcredentials.Credentials) (NativeServer, error)
 	CollectionTimeout time.Duration
 }
 
@@ -111,7 +106,7 @@ func serve(ctx context.Context, options ServeOptions, listener net.Listener) (re
 			if e != nil {
 				return nil, e
 			}
-			keys, e := target.ParseCredentials(hostKey, authorized)
+			keys, e := sshcredentials.ParseCredentials(hostKey, authorized)
 			if e != nil {
 				return nil, e
 			}
