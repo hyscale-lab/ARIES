@@ -1,7 +1,6 @@
 package openclawssh
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -14,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/sshbridge"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -165,6 +165,7 @@ func runSSHClient(ctx context.Context, configuration clientConfig, remote string
 		return 255, fmt.Errorf("read SSH identity: %w", err)
 	}
 	signer, err := ssh.ParsePrivateKey(identity)
+	clear(identity)
 	if err != nil {
 		return 255, errors.New("parse SSH identity")
 	}
@@ -176,81 +177,11 @@ func runSSHClient(ctx context.Context, configuration clientConfig, remote string
 	if err != nil {
 		return 255, err
 	}
-	address := net.JoinHostPort(configuration.hostName, strconv.Itoa(configuration.port))
-	dialer := net.Dialer{Timeout: lockedConnectTimeout}
-	connection, err := dialer.DialContext(ctx, "tcp", address)
-	if err != nil {
-		return 255, fmt.Errorf("connect %s: %w", address, err)
-	}
-	defer connection.Close()
-	_ = connection.SetDeadline(time.Now().Add(lockedConnectTimeout))
-	clientConfiguration := &ssh.ClientConfig{
-		User: lockedUsername,
-		Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: func(host string, remoteAddress net.Addr, presented ssh.PublicKey) error {
-			if host != address || !bytes.Equal(presented.Marshal(), hostKey.Marshal()) {
-				return errors.New("strict SSH host-key verification failed")
-			}
-			return nil
-		},
-		HostKeyAlgorithms: []string{ssh.KeyAlgoED25519},
-		Timeout:           lockedConnectTimeout,
-	}
-	sshConnection, channels, requests, err := ssh.NewClientConn(connection, address, clientConfiguration)
-	if err != nil {
-		return 255, fmt.Errorf("establish SSH connection: %w", err)
-	}
-	_ = connection.SetDeadline(time.Time{})
-	client := ssh.NewClient(sshConnection, channels, requests)
-	defer client.Close()
-	stopKeepalive := startKeepalive(client)
-	defer stopKeepalive()
-	session, err := client.NewSession()
-	if err != nil {
-		return 255, fmt.Errorf("open SSH session: %w", err)
-	}
-	defer session.Close()
-	session.Stdin = stdin
-	session.Stdout = stdout
-	session.Stderr = stderr
-	err = session.Run(remote)
-	if err == nil {
-		return 0, nil
-	}
-	var exitError *ssh.ExitError
-	if errors.As(err, &exitError) {
-		status := exitError.ExitStatus()
-		if status >= 0 && status <= 255 {
-			return status, nil
-		}
-	}
-	return 255, fmt.Errorf("run SSH command: %w", err)
-}
-
-func startKeepalive(client *ssh.Client) func() {
-	done := make(chan struct{})
-	go func() {
-		ticker := time.NewTicker(lockedKeepalive)
-		defer ticker.Stop()
-		failures := 0
-		for {
-			select {
-			case <-done:
-				return
-			case <-ticker.C:
-				if _, _, err := client.SendRequest("keepalive@openssh.com", true, nil); err != nil {
-					failures++
-					if failures >= 3 {
-						_ = client.Close()
-						return
-					}
-				} else {
-					failures = 0
-				}
-			}
-		}
-	}()
-	return func() { close(done) }
+	return sshbridge.RunClient(ctx, sshbridge.ClientConfig{
+		Address: net.JoinHostPort(configuration.hostName, strconv.Itoa(configuration.port)),
+		User:    lockedUsername, Signer: signer, HostKey: hostKey,
+		ConnectTimeout: lockedConnectTimeout, KeepaliveInterval: lockedKeepalive,
+	}, remote, stdin, stdout, stderr)
 }
 
 func parseLockedKnownHost(content []byte, host string, port int) (ssh.PublicKey, error) {

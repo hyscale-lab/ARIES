@@ -70,7 +70,7 @@ deployment operations, and a Gateway client performs the agent protocol. Shutdow
 Changing hosting must preserve Gateway semantics, request correlation,
 cancellation, credentials, artifacts, and isolation.
 
-Current implementations are [OpenClaw and Hermes](../implementation/harnesses.md).
+Current implementations are [OpenClaw, Hermes, and Codex](../implementation/harnesses.md).
 New harnesses must preserve these lifecycle and ownership guarantees, with tests
 for partial startup, run failure, cancellation, idempotent stop, positive absence,
 credentials, and artifacts. Concrete voice modes and MCP configuration do not

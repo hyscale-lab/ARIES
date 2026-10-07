@@ -57,10 +57,62 @@ commands normally; because nothing was pushed, its teardown sync-back then
 suppresses itself. Refusals are recorded with a distinct `denied` status so
 evidence separates policy from a protocol violation.
 
+## Codex SSH bridge
+
+Codex `0.157.1` provides an experimental native stdio executor. The separate
+`codexssh` adapter accepts one fixed SSH exec request and relays the native RPC
+bytes to `codex exec-server --listen stdio` in the same task container the
+benchmark evaluates. It preserves native shell and filesystem semantics;
+ARIES does not translate the RPC into shell scripts. Its small static SSH
+client verifies an exact ephemeral host key and accepts no forwarding, PTY,
+or environment grants. Only one executor session may be claimed per run.
+
+The bridge stages the static Codex binary and a Go descendant supervisor in an
+exclusive root-owned task directory. SSH credentials and model credentials
+stay outside the task container. The supervisor starts as root and launches
+the native executor with the task command user and environment. Because native
+commands can create independent process groups, the supervisor becomes a Linux
+child subreaper, disables memory inspection, and enforces `no_new_privs` with no
+capability that could bypass those restrictions. A private nonce arrives on
+nonseekable stdin before RPC; it is neither logged nor passed to child argv or
+environment.
+
+After executor shutdown, the supervisor kills and reaps its adopted
+descendants while preserving unrelated task processes. It emits a private
+terminal proof only after `ECHILD`. Revocation requires that proof, a zero
+supervisor exit, confirmed exec termination, drained audit records, and
+removal of the staged directory by the supervisor's Go filesystem operations.
+The sandbox's narrow `ExecSupervisedStream` capability runs the supervisor
+directly after the Docker deployment revalidates the exact task container; no
+task-owned shell or cleanup command runs after the proof. Disconnect, timeout,
+or missing proof fails closed and prevents evaluation. SSH closure allows a
+bounded cleanup interval; if it expires, sandbox removal remains the final
+containment step.
+
+Private bridge records retain the native RPC input (at most 16 MiB per session)
+and output counts. The combined audit budget is 256 MiB. The nonce and cleanup
+proof are stripped from evidence and remote stderr. These are transport
+records; Codex's JSONL trajectory carries the model's tool-call semantics.
+
+## Shared transport
+
+The three adapters share concrete SSH connection and session handling,
+ephemeral keys, private files, stream accounting, and bounded audit persistence
+in `pkg/bridge/internal/sshbridge`; the two ARIES SSH clients share connection,
+host-key verification, cancellation, and exit handling. Each adapter keeps its
+own command grammar, credential-file rules, workspace mapping, and
+execution/revocation policy. The package adds no Runner role or registration.
+
+OpenClaw and Hermes execution currently confirms cleanup of the original process
+group only: `setsid` and double-fork descendants can survive a successful Stop.
+This is a known revocation gap, not a guarantee of the shared transport. A fix
+must keep background services usable across calls, reap every agent descendant
+at Stop, and preserve unrelated benchmark services. Codex's descendant proof is
+independent of that gap.
 
 ## Source and limitations
 
-Both bridges are embedded in the runner process. They require streaming execution,
+All bridges are embedded in the runner process. They require streaming execution,
 validated task identity, and task workdir capabilities beyond the minimal
 `Sandbox` interface; arbitrary sandbox implementations are not automatically
 compatible. Network ownership follows the
@@ -68,8 +120,10 @@ compatible. Network ownership follows the
 
 See the [OpenClaw bridge](../../pkg/bridge/openclawssh/bridge.go),
 [OpenClaw grammar](../../pkg/bridge/openclawssh/grammar.go),
-[Hermes bridge](../../pkg/bridge/hermesssh/bridge.go), and
-[Hermes grammar](../../pkg/bridge/hermesssh/grammar.go).
+[Hermes bridge](../../pkg/bridge/hermesssh/bridge.go),
+[Hermes grammar](../../pkg/bridge/hermesssh/grammar.go),
+[Codex bridge](../../pkg/bridge/codexssh/bridge.go), and
+[Codex supervisor](../../pkg/bridge/codexssh/supervisor_linux.go).
 [OpenClaw contract tests](../../pkg/bridge/openclawssh/manager_contract_test.go)
 and [Hermes bridge tests](../../pkg/bridge/hermesssh/bridge_test.go) cover accepted
 commands, private evidence, revocation, cancellation, and denied sync.

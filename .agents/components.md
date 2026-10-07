@@ -10,7 +10,10 @@ Follow [Runner interfaces](../pkg/runner/interfaces.go) and [lifecycle](architec
 | ToolBridge | Grant temporary access to one exact sandbox; confirm revocation. |
 
 - Keep implementations independent; a paired bridge may consume a narrow sandbox
-  capability. Pair Hermes/OpenClaw with their corresponding SSH bridges.
+  capability. Pair Hermes/OpenClaw/Codex with their corresponding SSH bridges.
+- Codex revocation requires its supervisor's descendant proof, a zero supervisor
+  exit, and confirmed exec termination; supervised execution must revalidate the
+  exact task container and never run task-owned shell or cleanup commands.
 - Preserve exact argv/workdir and native protocol semantics. Never retry ambiguous
   submissions, widen accepted payloads to hide failures, or enable Hermes credential sync.
 - Pass placement and resolved service URLs explicitly; deployment interprets

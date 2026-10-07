@@ -159,6 +159,10 @@ func (r *Runtime) Start(ctx context.Context, o *Occurrence, request deployment.R
 	if strings.TrimSpace(id) == "" {
 		return fmt.Errorf("deployment returned an empty %s runtime ID", r.label)
 	}
+	// Confirm isolation before any private credential enters the runtime.
+	if err = r.Options.Deployment.Validate(ctx, id, request, secrets); err != nil {
+		return err
+	}
 	if err = r.Options.Deployment.UploadArchive(ctx, id, "/", bytes.NewReader(archive)); err != nil {
 		return fmt.Errorf("copy private %s runtime: %w", r.label, err)
 	}

@@ -562,32 +562,6 @@ func TestBridgeOmitsRawLogWhenConfigured(t *testing.T) {
 	}
 }
 
-// TestBinaryStdinNoteMatchesRawRetention keeps the structured log honest about
-// where omitted bytes went, in both retention modes.
-func TestBinaryStdinNoteMatchesRawRetention(t *testing.T) {
-	for _, testCase := range []struct {
-		name     string
-		retained bool
-		want     string
-	}{
-		{"retained", true, "retained in ssh_raw.log"},
-		{"omitted", false, "not retained"},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			input := &recordedInput{reader: bytes.NewReader(nil)}
-			input.data.Write([]byte{0x00, 0x01, 0x02})
-			input.n = 3
-			_, note, encoding, _, _ := input.record(testCase.retained)
-			if encoding != "binary-omitted" {
-				t.Fatalf("encoding = %q", encoding)
-			}
-			if !strings.Contains(note, testCase.want) {
-				t.Fatalf("note = %q, want it to mention %q", note, testCase.want)
-			}
-		})
-	}
-}
-
 func (s *testSandbox) Connectivity() core.HarnessConnectivity {
 	return core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "test-network"}}
 }

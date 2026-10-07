@@ -156,6 +156,8 @@ contain private task or model content; review them before sharing.
 ## Next experiments
 
 - **Hermes:** run `profiles/hermes-tb2-fix-git-deepseek.json` with the same key.
+- **Codex:** follow the [Codex guide](codex.md), then run
+  `profiles/codex-tb2-fix-git-openai.json` against a Responses API server.
 - **More tasks:** run `profiles/openclaw-tb2-five-deepseek.json`; it pulls more
   images, uses concurrent execution, and can incur more API charges.
 - **Local or other model services:** configure [external SGLang](configuration.md#external-sglang)

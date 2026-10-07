@@ -140,6 +140,9 @@ func (manager *Manager) Create(ctx context.Context, request deployment.Request) 
 	if request.NoNewPrivileges {
 		host.SecurityOpt = []string{"no-new-privileges=true"}
 	}
+	if request.DropCapabilities {
+		host.CapDrop = []string{"ALL"}
+	}
 	if request.StorageMB > 0 {
 		host.StorageOpt = map[string]string{"size": fmt.Sprintf("%dm", request.StorageMB)}
 	}
@@ -210,6 +213,9 @@ func (manager *Manager) Validate(ctx context.Context, id string, request deploym
 	}
 	if request.NoNewPrivileges && !noNewPrivilegesEnabled(info.HostConfig.SecurityOpt) {
 		return errors.New("deployment no-new-privileges is not enabled")
+	}
+	if request.DropCapabilities && (!slices.Contains(info.HostConfig.CapDrop, "ALL") || len(info.HostConfig.CapAdd) != 0 || info.HostConfig.Privileged) {
+		return errors.New("deployment must drop all capabilities without additions or privilege")
 	}
 	if request.Init && (info.HostConfig.Init == nil || !*info.HostConfig.Init) {
 		return errors.New("deployment init is not enabled")
@@ -372,10 +378,22 @@ func (manager *Manager) Stop(ctx context.Context, id string) error {
 }
 
 func boolPointer(value bool) *bool { return &value }
+
+// noNewPrivilegesEnabled requires an enabling option and rejects any disabled
+// or malformed no-new-privileges option alongside it.
 func noNewPrivilegesEnabled(options []string) bool {
-	return slices.ContainsFunc(options, func(option string) bool {
-		return option == "no-new-privileges" || option == "no-new-privileges=true" || option == "no-new-privileges:true"
-	})
+	enabled := false
+	for _, option := range options {
+		switch option {
+		case "no-new-privileges", "no-new-privileges=true", "no-new-privileges:true":
+			enabled = true
+		default:
+			if strings.HasPrefix(option, "no-new-privileges") {
+				return false
+			}
+		}
+	}
+	return enabled
 }
 func (manager *Manager) LogsStream(ctx context.Context, id string, stdout, stderr io.Writer) error {
 	logs, err := manager.client.ContainerLogs(ctx, id, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true})

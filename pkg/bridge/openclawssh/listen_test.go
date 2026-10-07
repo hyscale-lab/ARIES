@@ -29,7 +29,7 @@ func TestListenSeparatesBindingAndAdvertisement(t *testing.T) {
 	if err != nil || host != "127.0.0.2" || port == "0" {
 		t.Fatalf("advertised endpoint = %q, %v", endpoint.Address, err)
 	}
-	bound := manager.active.listener.Addr().String()
+	bound := manager.active.server.Addr().String()
 	_, boundPort, _ := net.SplitHostPort(bound)
 	if boundPort != port {
 		t.Fatalf("bound %s advertised %s", bound, endpoint.Address)

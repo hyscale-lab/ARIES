@@ -3,13 +3,8 @@ package hermesssh
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"crypto/sha256"
-	"crypto/x509"
 	"encoding/hex"
-	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -18,11 +13,9 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/sshbridge"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/runner"
 	"github.com/sirupsen/logrus"
@@ -30,13 +23,10 @@ import (
 )
 
 const (
-	defaultBridgeCleanup  = 20 * time.Second
-	maxRecordedInputBytes = 16 << 20
-	maxToolLogBytes       = 256 << 20
+	defaultBridgeCleanup = 20 * time.Second
 
 	identityContainerPath = "/run/aries/ssh/id_ed25519"
 	lockedUsername        = "aries"
-	lockedConnectTimeout  = 5 * time.Second
 )
 
 // Options are the host-local inputs to one Hermes SSH bridge.
@@ -62,7 +52,7 @@ type Manager struct {
 	outputDir      string
 	cleanupTimeout time.Duration
 	logger         *logrus.Logger
-	openAudit      func(string) (*auditFile, error)
+	openAudit      func(string) (*sshbridge.AuditFile, error)
 	afterStart     func(*bridgeSession) error
 	omitRawLog     bool
 
@@ -85,66 +75,18 @@ type bridgeSandbox interface {
 
 type bridgeSession struct {
 	sandbox        bridgeSandbox
-	listener       net.Listener
-	configuration  *ssh.ServerConfig
-	cancel         context.CancelFunc
+	server         *sshbridge.Server
 	artifactDir    string
 	identitySource string
 	knownSource    string
 	toolLogPath    string
 	rawLogPath     string
-	audit          *auditWriter
+	audit          *sshbridge.AuditWriter
 	partialStart   bool
 	replyRequest   func(*ssh.Request, bool) error
 
-	mu            sync.Mutex
-	connections   map[net.Conn]struct{}
 	revocationMu  sync.Mutex
 	revocationErr error
-	wait          sync.WaitGroup
-	revokeOnce    sync.Once
-}
-
-type toolCallRecord struct {
-	Sequence       uint64   `json:"sequence"`
-	Timestamp      string   `json:"timestamp"`
-	ContainerID    string   `json:"container_id"`
-	ContainerName  string   `json:"container_name"`
-	OperationClass string   `json:"operation_class"`
-	Path           string   `json:"path,omitempty"`
-	Workdir        string   `json:"workdir,omitempty"`
-	CommandHash    string   `json:"command_hash"`
-	Command        string   `json:"command,omitempty"`
-	Argv           []string `json:"argv,omitempty"`
-	Stdin          string   `json:"stdin"`
-	StdinEncoding  string   `json:"stdin_encoding"`
-	StdinBytes     int64    `json:"stdin_bytes"`
-	StdoutBytes    int64    `json:"stdout_bytes"`
-	StderrBytes    int64    `json:"stderr_bytes"`
-	ExitCode       int      `json:"exit_code"`
-	DurationMS     int64    `json:"duration_ms"`
-	Status         string   `json:"status"`
-	Error          string   `json:"error,omitempty"`
-	RunID          string   `json:"run_id,omitempty"`
-	TaskID         string   `json:"task_id,omitempty"`
-	RequestType    string   `json:"request_type"`
-	WantReply      bool     `json:"want_reply"`
-}
-
-type rawSSHRecord struct {
-	Sequence     uint64
-	Timestamp    string
-	RequestType  string
-	WantReply    bool
-	Status       string
-	RunID        string
-	TaskID       string
-	ContainerID  string
-	WireCommand  string
-	Payload      []byte
-	PayloadBytes int64
-	Stdin        []byte
-	StdinBytes   int64
 }
 
 type requestAudit struct {
@@ -152,380 +94,6 @@ type requestAudit struct {
 	wantReply     bool
 	payload       []byte
 	remoteCommand string
-}
-
-type auditFile struct {
-	write func([]byte) (int, error)
-	sync  func() error
-	close func() error
-}
-
-type auditEntry struct {
-	structured []byte
-	raw        []byte
-}
-
-type auditWriter struct {
-	structured *auditFile
-	raw        *auditFile
-
-	mu        sync.Mutex
-	pending   []auditEntry
-	sequence  uint64
-	bytes     int64
-	sealed    bool
-	err       error
-	wake      chan struct{}
-	done      chan struct{}
-	marshal   func(any) ([]byte, error)
-	renderRaw func(rawSSHRecord) ([]byte, error)
-	now       func() time.Time
-}
-
-type byteCounter struct {
-	reader io.Reader
-	writer io.Writer
-	n      atomic.Int64
-}
-
-func (counter *byteCounter) Read(content []byte) (int, error) {
-	n, err := counter.reader.Read(content)
-	counter.n.Add(int64(n))
-	return n, err
-}
-
-func (counter *byteCounter) Write(content []byte) (int, error) {
-	n, err := counter.writer.Write(content)
-	counter.n.Add(int64(n))
-	return n, err
-}
-
-func (counter *byteCounter) count() int64 { return counter.n.Load() }
-
-type recordedInput struct {
-	reader   io.Reader
-	mu       sync.Mutex
-	n        int64
-	data     bytes.Buffer
-	overflow bool
-}
-
-func (input *recordedInput) Read(content []byte) (int, error) {
-	n, err := input.reader.Read(content)
-	if n > 0 {
-		input.mu.Lock()
-		remaining := maxRecordedInputBytes - input.data.Len()
-		if n > remaining {
-			input.n += int64(n)
-			input.data.Reset()
-			input.overflow = true
-			input.mu.Unlock()
-			return n, fmt.Errorf("Hermes SSH stdin exceeds %d bytes", maxRecordedInputBytes)
-		}
-		_, _ = input.data.Write(content[:n])
-		input.n += int64(n)
-		input.mu.Unlock()
-	}
-	return n, err
-}
-
-func (input *recordedInput) record(retainedRaw bool) (int64, string, string, []byte, bool) {
-	input.mu.Lock()
-	count := input.n
-	content := bytes.Clone(input.data.Bytes())
-	overflow := input.overflow
-	input.mu.Unlock()
-	if safeStructuredText(content) {
-		return count, string(content), "utf-8", content, overflow
-	}
-	// Without the raw log the bytes are retained nowhere, so the note must not
-	// point at an artifact this run did not write.
-	note := fmt.Sprintf("[binary input omitted; %d bytes not retained]", count)
-	if retainedRaw {
-		note = fmt.Sprintf("[binary input omitted; %d bytes retained in ssh_raw.log]", count)
-	}
-	return count, note, "binary-omitted", content, overflow
-}
-
-func safeStructuredText(content []byte) bool {
-	if !utf8.Valid(content) {
-		return false
-	}
-	for _, value := range string(content) {
-		if unicode.IsControl(value) && value != '\t' && value != '\n' && value != '\r' {
-			return false
-		}
-	}
-	return true
-}
-
-func openAuditFile(path string) (*auditFile, error) {
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return nil, err
-	}
-	return &auditFile{write: file.Write, sync: file.Sync, close: file.Close}, nil
-}
-
-func newAuditWriter(structured, raw *auditFile) *auditWriter {
-	writer := &auditWriter{
-		structured: structured, raw: raw,
-		wake: make(chan struct{}, 1), done: make(chan struct{}),
-		marshal: marshalJSONLine, renderRaw: renderRawSSHRecord, now: time.Now,
-	}
-	go writer.run()
-	return writer
-}
-
-// retainsRaw reports whether this run writes ssh_raw.log, so callers can
-// describe where omitted bytes were kept without guessing.
-func (writer *auditWriter) retainsRaw() bool {
-	return writer != nil && writer.raw != nil
-}
-
-func (writer *auditWriter) enqueue(structured toolCallRecord, raw rawSSHRecord) {
-	writer.mu.Lock()
-	defer writer.mu.Unlock()
-	if writer.err != nil {
-		return
-	}
-	if writer.sealed {
-		writer.latchLocked(errors.New("enqueue Hermes SSH audit after seal"))
-		return
-	}
-	sequence := writer.sequence + 1
-	timestamp := writer.now().UTC().Format(time.RFC3339Nano)
-	structured.Sequence, structured.Timestamp = sequence, timestamp
-	raw.Sequence, raw.Timestamp = sequence, timestamp
-	structuredLine, err := writer.marshal(structured)
-	if err != nil {
-		writer.latchLocked(fmt.Errorf("marshal structured SSH audit: %w", err))
-		return
-	}
-	var rawLine []byte
-	if writer.raw != nil {
-		rawLine, err = writer.renderRaw(raw)
-		if err != nil {
-			writer.latchLocked(fmt.Errorf("render raw SSH audit: %w", err))
-			return
-		}
-	}
-	charge := int64(len(structuredLine) + len(rawLine))
-	if charge > maxToolLogBytes-writer.bytes {
-		writer.latchLocked(fmt.Errorf("Hermes SSH combined audit exceeds %d bytes", maxToolLogBytes))
-		return
-	}
-	writer.sequence = sequence
-	writer.bytes += charge
-	writer.pending = append(writer.pending, auditEntry{structured: structuredLine, raw: rawLine})
-	writer.signal()
-}
-
-func marshalJSONLine(value any) ([]byte, error) {
-	var output bytes.Buffer
-	encoder := json.NewEncoder(&output)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(value); err != nil {
-		return nil, err
-	}
-	return output.Bytes(), nil
-}
-
-func renderRawSSHRecord(record rawSSHRecord) ([]byte, error) {
-	var output bytes.Buffer
-	output.WriteString("--- ARIES SSH CALL BEGIN ---\n")
-	writeRawField(&output, "sequence", fmt.Sprint(record.Sequence))
-	writeRawField(&output, "timestamp", record.Timestamp)
-	writeRawField(&output, "request_type", record.RequestType)
-	writeRawField(&output, "want_reply", fmt.Sprint(record.WantReply))
-	writeRawField(&output, "status", record.Status)
-	writeRawField(&output, "run_id", record.RunID)
-	writeRawField(&output, "task_id", record.TaskID)
-	writeRawField(&output, "container_id", record.ContainerID)
-	writeRawField(&output, "wire_command", record.WireCommand)
-	writeRawField(&output, "payload_bytes", fmt.Sprint(record.PayloadBytes))
-	writeRawBytesField(&output, "payload", record.Payload)
-	writeRawField(&output, "stdin_bytes", fmt.Sprint(record.StdinBytes))
-	writeRawBytesField(&output, "stdin", record.Stdin)
-	output.WriteString("--- ARIES SSH CALL END ---\n")
-	return output.Bytes(), nil
-}
-
-func writeRawField(output *bytes.Buffer, key, value string) {
-	writeRawBytesField(output, key, []byte(value))
-}
-
-func writeRawBytesField(output *bytes.Buffer, key string, value []byte) {
-	output.WriteString(key)
-	output.WriteByte('=')
-	writeEscapedRaw(output, value)
-	output.WriteByte('\n')
-}
-
-func writeEscapedRaw(output *bytes.Buffer, value []byte) {
-	for len(value) > 0 {
-		switch value[0] {
-		case '\\':
-			output.WriteString(`\\`)
-			value = value[1:]
-			continue
-		case '\n':
-			output.WriteString(`\n`)
-			value = value[1:]
-			continue
-		case '\r':
-			output.WriteString(`\r`)
-			value = value[1:]
-			continue
-		case '\t':
-			output.WriteString(`\t`)
-			value = value[1:]
-			continue
-		}
-		runeValue, size := utf8.DecodeRune(value)
-		if runeValue != utf8.RuneError || size > 1 {
-			if unicode.IsPrint(runeValue) {
-				output.Write(value[:size])
-			} else {
-				writeHexEscapes(output, value[:size])
-			}
-			value = value[size:]
-			continue
-		}
-		writeHexEscapes(output, value[:1])
-		value = value[1:]
-	}
-}
-
-func writeHexEscapes(output *bytes.Buffer, value []byte) {
-	const uppercaseHex = "0123456789ABCDEF"
-	for _, item := range value {
-		output.WriteString(`\x`)
-		output.WriteByte(uppercaseHex[item>>4])
-		output.WriteByte(uppercaseHex[item&0x0f])
-	}
-}
-
-func (writer *auditWriter) signal() {
-	select {
-	case writer.wake <- struct{}{}:
-	default:
-	}
-}
-
-func (writer *auditWriter) latchLocked(err error) {
-	writer.err = errors.Join(writer.err, err)
-}
-
-func (writer *auditWriter) latch(err error) {
-	writer.mu.Lock()
-	writer.latchLocked(err)
-	writer.mu.Unlock()
-}
-
-func (writer *auditWriter) run() {
-	defer close(writer.done)
-	for {
-		<-writer.wake
-		for {
-			writer.mu.Lock()
-			if len(writer.pending) == 0 {
-				sealed := writer.sealed
-				writer.mu.Unlock()
-				if sealed {
-					writer.finish()
-					return
-				}
-				break
-			}
-			entry := writer.pending[0]
-			writer.pending[0] = auditEntry{}
-			writer.pending = writer.pending[1:]
-			writer.mu.Unlock()
-			writer.persist(entry)
-		}
-	}
-}
-
-func (writer *auditWriter) persist(entry auditEntry) {
-	writer.persistLine(writer.structured, entry.structured, "structured write")
-	writer.persistLine(writer.raw, entry.raw, "raw write")
-	writer.persistSync(writer.structured, "structured sync")
-	writer.persistSync(writer.raw, "raw sync")
-}
-
-func (writer *auditWriter) persistLine(file *auditFile, line []byte, operation string) {
-	if file == nil {
-		return
-	}
-	written, err := file.write(line)
-	if err == nil && written != len(line) {
-		err = io.ErrShortWrite
-	}
-	if err != nil {
-		writer.mu.Lock()
-		writer.latchLocked(fmt.Errorf("%s: %w", operation, err))
-		writer.mu.Unlock()
-	}
-}
-
-func (writer *auditWriter) persistSync(file *auditFile, operation string) {
-	if file == nil {
-		return
-	}
-	if err := file.sync(); err != nil {
-		writer.mu.Lock()
-		writer.latchLocked(fmt.Errorf("%s: %w", operation, err))
-		writer.mu.Unlock()
-	}
-}
-
-func (writer *auditWriter) finish() {
-	writer.persistSync(writer.structured, "final structured sync")
-	writer.persistSync(writer.raw, "final raw sync")
-	for _, item := range []struct {
-		name string
-		file *auditFile
-	}{{"structured close", writer.structured}, {"raw close", writer.raw}} {
-		if item.file == nil {
-			continue
-		}
-		if err := item.file.close(); err != nil {
-			writer.mu.Lock()
-			writer.latchLocked(fmt.Errorf("%s: %w", item.name, err))
-			writer.mu.Unlock()
-		}
-	}
-}
-
-func (writer *auditWriter) sealAndWait(ctx context.Context) error {
-	if writer == nil {
-		return nil
-	}
-	writer.mu.Lock()
-	writer.sealed = true
-	writer.signal()
-	writer.mu.Unlock()
-	select {
-	case <-writer.done:
-		writer.mu.Lock()
-		defer writer.mu.Unlock()
-		return writer.err
-	case <-ctx.Done():
-		return fmt.Errorf("drain Hermes SSH audit: %w", ctx.Err())
-	}
-}
-
-func (writer *auditWriter) finished() bool {
-	if writer == nil {
-		return true
-	}
-	select {
-	case <-writer.done:
-		return true
-	default:
-		return false
-	}
 }
 
 var _ runner.ToolBridge = (*Manager)(nil)
@@ -541,7 +109,7 @@ func New(options Options) (*Manager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve Hermes SSH output directory: %w", err)
 	}
-	if err := ensurePrivateDirectory(outputDir); err != nil {
+	if err := sshbridge.EnsurePrivateDirectory(outputDir); err != nil {
 		return nil, fmt.Errorf("prepare Hermes SSH output directory: %w", err)
 	}
 	if options.CleanupTimeout <= 0 {
@@ -553,7 +121,7 @@ func New(options Options) (*Manager, error) {
 	return &Manager{
 		resolveListen: options.ResolveListen,
 		outputDir:     outputDir, cleanupTimeout: options.CleanupTimeout,
-		logger: options.Logger, openAudit: openAuditFile, omitRawLog: options.OmitRawLog,
+		logger: options.Logger, openAudit: sshbridge.OpenAuditFile, omitRawLog: options.OmitRawLog,
 	}, nil
 }
 
@@ -576,16 +144,16 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 		return core.ToolEndpoint{}, errors.New("SSH bridge requires an IPv4 bind host and a unicast, non-wildcard IPv4 advertised host")
 	}
 	session := &bridgeSession{
-		sandbox: sandbox, connections: make(map[net.Conn]struct{}),
+		sandbox:      sandbox,
 		replyRequest: func(request *ssh.Request, accepted bool) error { return request.Reply(accepted, nil) },
 	}
 	session.artifactDir = filepath.Join(manager.outputDir, sandbox.TaskID(), "bridge")
 	fail := func(primary error) (core.ToolEndpoint, error) {
 		session.partialStart = true
-		session.revoke()
+		session.server.Revoke()
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), manager.cleanupTimeout)
 		defer cancel()
-		waitErr := session.waitFor(cleanupCtx)
+		waitErr := session.server.Wait(cleanupCtx)
 		if waitErr != nil {
 			manager.active = session
 			return core.ToolEndpoint{}, errors.Join(primary, waitErr)
@@ -596,10 +164,10 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 		}
 		return core.ToolEndpoint{}, errors.Join(primary, cleanupErr)
 	}
-	if err := ensurePrivateDirectory(session.artifactDir); err != nil {
+	if err := sshbridge.EnsurePrivateDirectory(session.artifactDir); err != nil {
 		return fail(fmt.Errorf("create private Hermes SSH artifact directory: %w", err))
 	}
-	hostSigner, clientPEM, authorized, err := generateSessionKeys()
+	hostSigner, clientPEM, authorized, err := sshbridge.GenerateSessionKeys()
 	if err != nil {
 		return fail(err)
 	}
@@ -609,14 +177,14 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 	if !manager.omitRawLog {
 		session.rawLogPath = filepath.Join(session.artifactDir, "ssh_raw.log")
 	}
-	if err := writeExclusivePrivate(session.identitySource, clientPEM); err != nil {
+	if err := sshbridge.WriteExclusivePrivate(session.identitySource, clientPEM); err != nil {
 		return fail(fmt.Errorf("write Hermes SSH identity: %w", err))
 	}
 	listener, err := net.Listen("tcp4", net.JoinHostPort(listen.BindHost, "0"))
 	if err != nil {
 		return fail(fmt.Errorf("listen on configured bridge host: %w", err))
 	}
-	session.listener = listener
+	session.server = sshbridge.NewServer(listener, hostSigner, authorized)
 	_, port, err := net.SplitHostPort(listener.Addr().String())
 	host := listen.AdvertiseHost
 	if err != nil {
@@ -626,26 +194,22 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 	// forces StrictHostKeyChecking=accept-new and offers no way to preload a
 	// known-hosts file, so this is not handed to the harness.
 	knownLine := fmt.Sprintf("[%s]:%s %s", host, port, ssh.MarshalAuthorizedKey(hostSigner.PublicKey()))
-	if err := writeExclusivePrivate(session.knownSource, []byte(knownLine)); err != nil {
+	if err := sshbridge.WriteExclusivePrivate(session.knownSource, []byte(knownLine)); err != nil {
 		return fail(fmt.Errorf("write Hermes SSH known-hosts file: %w", err))
 	}
 	structured, err := manager.openAudit(session.toolLogPath)
 	if err != nil {
 		return fail(fmt.Errorf("create Hermes SSH tool log: %w", err))
 	}
-	var raw *auditFile
+	var raw *sshbridge.AuditFile
 	if session.rawLogPath != "" {
 		raw, err = manager.openAudit(session.rawLogPath)
 		if err != nil {
-			return fail(errors.Join(fmt.Errorf("create Hermes SSH raw log: %w", err), structured.close()))
+			return fail(errors.Join(fmt.Errorf("create Hermes SSH raw log: %w", err), structured.Close()))
 		}
 	}
-	session.audit = newAuditWriter(structured, raw)
-	serveCtx, cancel := context.WithCancel(context.Background())
-	session.cancel = cancel
-	session.configuration = newServerConfig(hostSigner, authorized)
-	session.wait.Add(1)
-	go session.serve(serveCtx, manager.logger)
+	session.audit = sshbridge.NewAuditWriter("Hermes", structured, raw)
+	session.server.Start(session.handleSession, manager.logger)
 	if manager.afterStart != nil {
 		if err := manager.afterStart(session); err != nil {
 			return fail(err)
@@ -671,90 +235,6 @@ func (session *bridgeSession) logPaths() []string {
 		return []string{session.toolLogPath}
 	}
 	return []string{session.toolLogPath, session.rawLogPath}
-}
-
-func newServerConfig(hostSigner ssh.Signer, authorized ssh.PublicKey) *ssh.ServerConfig {
-	configuration := &ssh.ServerConfig{
-		MaxAuthTries: 3,
-		PublicKeyCallback: func(metadata ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
-			if metadata.User() != lockedUsername || !bytes.Equal(key.Marshal(), authorized.Marshal()) {
-				return nil, errors.New("public key rejected")
-			}
-			return &ssh.Permissions{}, nil
-		},
-	}
-	configuration.AddHostKey(hostSigner)
-	return configuration
-}
-
-func (session *bridgeSession) serve(ctx context.Context, logger *logrus.Logger) {
-	defer session.wait.Done()
-	for {
-		connection, err := session.listener.Accept()
-		if err != nil {
-			if ctx.Err() == nil && !errors.Is(err, net.ErrClosed) {
-				logger.WithError(err).Warn("Hermes SSH accept failed")
-			}
-			return
-		}
-		session.mu.Lock()
-		session.connections[connection] = struct{}{}
-		session.mu.Unlock()
-		session.wait.Add(1)
-		go session.handleConnection(ctx, connection)
-	}
-}
-
-func (session *bridgeSession) handleConnection(ctx context.Context, connection net.Conn) {
-	defer session.wait.Done()
-	defer func() {
-		_ = connection.Close()
-		session.mu.Lock()
-		delete(session.connections, connection)
-		session.mu.Unlock()
-	}()
-	_ = connection.SetDeadline(time.Now().Add(lockedConnectTimeout))
-	server, channels, requests, err := ssh.NewServerConn(connection, session.configuration)
-	if err != nil {
-		return
-	}
-	defer server.Close()
-	// Hermes holds one ControlMaster connection open for the whole run and
-	// multiplexes every later command onto it, so the handshake deadline must
-	// not survive into the session channels.
-	_ = connection.SetDeadline(time.Time{})
-	connectionCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	go func() {
-		_ = server.Wait()
-		cancel()
-	}()
-	go serveGlobalRequests(requests)
-	for incoming := range channels {
-		if incoming.ChannelType() != "session" || len(incoming.ExtraData()) != 0 {
-			_ = incoming.Reject(ssh.UnknownChannelType, "only session channels are supported")
-			continue
-		}
-		channel, channelRequests, err := incoming.Accept()
-		if err != nil {
-			continue
-		}
-		session.wait.Add(1)
-		go func() {
-			defer session.wait.Done()
-			defer channel.Close()
-			session.handleSession(connectionCtx, channel, channelRequests)
-		}()
-	}
-}
-
-func serveGlobalRequests(requests <-chan *ssh.Request) {
-	for request := range requests {
-		accepted := request.Type == "keepalive@openssh.com" && len(request.Payload) == 0
-		if request.WantReply {
-			_ = request.Reply(accepted, nil)
-		}
-	}
 }
 
 func (session *bridgeSession) handleSession(ctx context.Context, channel ssh.Channel, requests <-chan *ssh.Request) {
@@ -817,9 +297,9 @@ func (session *bridgeSession) reply(request *ssh.Request, accepted bool) error {
 
 func (session *bridgeSession) execute(ctx context.Context, channel ssh.Channel, prepared preparedRemoteCommand, audit requestAudit) int {
 	started := time.Now()
-	stdin := &recordedInput{reader: channel}
-	stdout := &byteCounter{writer: channel}
-	stderr := &byteCounter{writer: channel.Stderr()}
+	stdin := sshbridge.NewRecordedInput("Hermes", channel)
+	stdout := &sshbridge.ByteCounter{Writer: channel}
+	stderr := &sshbridge.ByteCounter{Writer: channel.Stderr()}
 	result, err := session.sandbox.ExecStream(ctx, prepared.command, stdin, stdout, stderr)
 	if contextErr := ctx.Err(); contextErr != nil && !hasCancellationCause(err) {
 		// A sandbox error returned after revocation is ambiguous unless it carries
@@ -844,19 +324,19 @@ func (session *bridgeSession) execute(ctx context.Context, channel ssh.Channel, 
 	if exitCode < 0 || exitCode > 255 {
 		exitCode = 255
 	}
-	stdinBytes, stdinContent, stdinEncoding, rawStdin, stdinOverflow := stdin.record(session.audit.retainsRaw())
+	stdinBytes, stdinContent, stdinEncoding, rawStdin, stdinOverflow := stdin.Record(session.audit.RetainsRaw())
 	if stdinOverflow {
-		session.audit.latch(fmt.Errorf("retain Hermes SSH stdin: input exceeds %d bytes", maxRecordedInputBytes))
+		session.audit.Latch(fmt.Errorf("retain Hermes SSH stdin: input exceeds %d bytes", sshbridge.MaxRecordedInputBytes))
 		return exitCode
 	}
-	session.writeRecord(toolCallRecord{
+	session.writeRecord(sshbridge.ToolCallRecord{
 		ContainerID: session.sandbox.ContainerID(), ContainerName: session.sandbox.ContainerName(),
 		OperationClass: prepared.kind, Path: prepared.command.Path, Workdir: prepared.command.Dir,
 		CommandHash: commandHash(prepared.encoded),
 		Command:     prepared.encoded,
 		Argv:        append([]string{prepared.command.Path}, prepared.command.Args...),
 		Stdin:       stdinContent, StdinEncoding: stdinEncoding,
-		StdinBytes: stdinBytes, StdoutBytes: stdout.count(), StderrBytes: stderr.count(),
+		StdinBytes: stdinBytes, StdoutBytes: stdout.Count(), StderrBytes: stderr.Count(),
 		ExitCode: exitCode, DurationMS: time.Since(started).Milliseconds(), Status: status, Error: message,
 		RequestType: audit.requestType, WantReply: audit.wantReply,
 	}, rawRecord(audit, stdinBytes, rawStdin, status))
@@ -872,7 +352,7 @@ func (session *bridgeSession) logRejected(audit requestAudit, kind string) {
 // is not filed as an agent command; kindUnknown marks a payload that never
 // decoded far enough to classify.
 func (session *bridgeSession) logRequestFailure(audit requestAudit, kind, status, message string) {
-	session.writeRecord(toolCallRecord{
+	session.writeRecord(sshbridge.ToolCallRecord{
 		ContainerID: session.sandbox.ContainerID(), ContainerName: session.sandbox.ContainerName(),
 		OperationClass: kind, CommandHash: commandHash(audit.remoteCommand),
 		StdinEncoding: "utf-8",
@@ -884,21 +364,21 @@ func (session *bridgeSession) logRequestFailure(audit requestAudit, kind, status
 	}, rawRecord(audit, 0, nil, status))
 }
 
-func rawRecord(audit requestAudit, stdinBytes int64, stdin []byte, status string) rawSSHRecord {
-	return rawSSHRecord{
+func rawRecord(audit requestAudit, stdinBytes int64, stdin []byte, status string) sshbridge.RawRecord {
+	return sshbridge.RawRecord{
 		RequestType: audit.requestType, WantReply: audit.wantReply,
 		WireCommand: audit.remoteCommand, Payload: bytes.Clone(audit.payload), PayloadBytes: int64(len(audit.payload)),
 		Stdin: bytes.Clone(stdin), StdinBytes: stdinBytes, Status: status,
 	}
 }
 
-func (session *bridgeSession) writeRecord(record toolCallRecord, raw rawSSHRecord) {
+func (session *bridgeSession) writeRecord(record sshbridge.ToolCallRecord, raw sshbridge.RawRecord) {
 	record.RunID = session.sandbox.RunID()
 	record.TaskID = session.sandbox.TaskID()
 	raw.RunID = session.sandbox.RunID()
 	raw.TaskID = session.sandbox.TaskID()
 	raw.ContainerID = session.sandbox.ContainerID()
-	session.audit.enqueue(record, raw)
+	session.audit.Enqueue(record, raw)
 }
 
 func (manager *Manager) Stop(ctx context.Context) error {
@@ -927,8 +407,8 @@ func (manager *Manager) Stop(ctx context.Context) error {
 	done := manager.stopDone
 	manager.mu.Unlock()
 
-	session.revoke()
-	err := session.waitFor(ctx)
+	session.server.Revoke()
+	err := session.server.Wait(ctx)
 	if err == nil {
 		err = session.finalize(ctx)
 	}
@@ -944,8 +424,8 @@ func (manager *Manager) Stop(ctx context.Context) error {
 }
 
 func (session *bridgeSession) finalize(ctx context.Context) error {
-	auditErr := session.closeAudit(ctx)
-	if session.audit != nil && !session.audit.finished() {
+	auditErr := session.audit.SealAndWait(ctx)
+	if session.audit != nil && !session.audit.Finished() {
 		return auditErr
 	}
 	// Only the private identity is removed; that is revocation. knownSource
@@ -953,7 +433,7 @@ func (session *bridgeSession) finalize(ctx context.Context) error {
 	// evidence of what Hermes pinned on first use.
 	cleanupErr := errors.Join(
 		session.revocationError(), auditErr,
-		removeIfPresent(session.identitySource),
+		sshbridge.RemoveIfPresent(session.identitySource),
 	)
 	if session.partialStart && cleanupErr == nil {
 		cleanupErr = os.RemoveAll(session.artifactDir)
@@ -1005,163 +485,7 @@ func isPureCancellation(err error) bool {
 	return err == context.Canceled || err == context.DeadlineExceeded
 }
 
-func (session *bridgeSession) revoke() {
-	session.revokeOnce.Do(func() {
-		if session.cancel != nil {
-			session.cancel()
-		}
-		if session.listener != nil {
-			_ = session.listener.Close()
-		}
-		session.mu.Lock()
-		for connection := range session.connections {
-			_ = connection.Close()
-		}
-		session.mu.Unlock()
-	})
-}
-
-func (session *bridgeSession) waitFor(ctx context.Context) error {
-	done := make(chan struct{})
-	go func() { session.wait.Wait(); close(done) }()
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func (session *bridgeSession) closeAudit(ctx context.Context) error {
-	if session.audit == nil {
-		return nil
-	}
-	return session.audit.sealAndWait(ctx)
-}
-
 func commandHash(command string) string {
 	sum := sha256.Sum256([]byte(command))
 	return hex.EncodeToString(sum[:])
-}
-
-func generateSessionKeys() (ssh.Signer, []byte, ssh.PublicKey, error) {
-	_, hostPrivate, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("generate SSH host key: %w", err)
-	}
-	hostSigner, err := ssh.NewSignerFromKey(hostPrivate)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("create SSH host signer: %w", err)
-	}
-	_, clientPrivate, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("generate SSH client key: %w", err)
-	}
-	clientSigner, err := ssh.NewSignerFromKey(clientPrivate)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("create SSH client signer: %w", err)
-	}
-	clientPEM, err := marshalEd25519PrivateKey(clientPrivate)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("marshal SSH client key: %w", err)
-	}
-	return hostSigner, clientPEM, clientSigner.PublicKey(), nil
-}
-
-func marshalEd25519PrivateKey(private ed25519.PrivateKey) ([]byte, error) {
-	der, err := x509.MarshalPKCS8PrivateKey(private)
-	if err != nil {
-		return nil, err
-	}
-	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), nil
-}
-
-func writeExclusivePrivate(path string, content []byte) error {
-	return writeExclusive(path, content, 0o600)
-}
-
-type exclusiveWriteFile interface {
-	Write([]byte) (int, error)
-	Sync() error
-	Chmod(os.FileMode) error
-	Close() error
-}
-
-type exclusiveWriteOperations struct {
-	open   func(string, int, os.FileMode) (exclusiveWriteFile, error)
-	remove func(string) error
-}
-
-func writeExclusive(path string, content []byte, mode os.FileMode) error {
-	return writeExclusiveWithOperations(path, content, mode, exclusiveWriteOperations{
-		open: func(path string, flags int, mode os.FileMode) (exclusiveWriteFile, error) {
-			return os.OpenFile(path, flags, mode)
-		},
-		remove: os.Remove,
-	})
-}
-
-func writeExclusiveWithOperations(path string, content []byte, mode os.FileMode, operations exclusiveWriteOperations) error {
-	file, err := operations.open(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return err
-	}
-	cleanup := func(primary error, needsClose bool) error {
-		var closeErr error
-		if needsClose {
-			if err := file.Close(); err != nil {
-				closeErr = fmt.Errorf("close exclusive file: %w", err)
-			}
-		}
-		removeErr := operations.remove(path)
-		if removeErr != nil {
-			removeErr = fmt.Errorf("remove failed exclusive file: %w", removeErr)
-		}
-		return errors.Join(primary, closeErr, removeErr)
-	}
-	written, err := file.Write(content)
-	if err == nil && written != len(content) {
-		err = io.ErrShortWrite
-	}
-	if err != nil {
-		return cleanup(fmt.Errorf("write exclusive file: %w", err), true)
-	}
-	if err := file.Sync(); err != nil {
-		return cleanup(fmt.Errorf("sync exclusive file data: %w", err), true)
-	}
-	if err := file.Chmod(mode); err != nil {
-		return cleanup(fmt.Errorf("chmod exclusive file: %w", err), true)
-	}
-	if err := file.Sync(); err != nil {
-		return cleanup(fmt.Errorf("sync exclusive file metadata: %w", err), true)
-	}
-	if err := file.Close(); err != nil {
-		return cleanup(fmt.Errorf("close exclusive file: %w", err), false)
-	}
-	return nil
-}
-
-func ensurePrivateDirectory(path string) error {
-	if err := os.MkdirAll(path, 0o700); err != nil {
-		return err
-	}
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return err
-	}
-	absolute, err := filepath.Abs(path)
-	if err != nil {
-		return err
-	}
-	if resolved != absolute {
-		return errors.New("directory path contains a symbolic link")
-	}
-	return os.Chmod(path, 0o700)
-}
-
-func removeIfPresent(path string) error {
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return nil
 }

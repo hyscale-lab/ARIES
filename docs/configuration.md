@@ -540,8 +540,9 @@ start/end times. An image without the plugin leaves no spans file.
 ### Hermes context window, compaction, and request extra body
 
 Three optional profile blocks reach the rendered Hermes `config.yaml`. Each is
-Hermes-only and is rejected under another harness. A profile without them
-renders the same file as before.
+Hermes-only and is rejected under another harness, except that Codex also
+accepts `model.context_length`. A profile without them renders the same file as
+before.
 
 - `model.context_length`, `model.max_tokens`, and `model.temperature` set the
   window Hermes's compressor reasons about and the request sampling.
@@ -649,6 +650,8 @@ these guides:
 
 ## Other harness and evidence options
 
+- `harness.codex.executable`: the pinned static Codex CLI, relative to the
+  profile; required for `harness.type: "codex"`. See the [Codex guide](codex.md).
 - `harness.web_search` and `harness.subagents`: see the
   [research benchmark guide](benchmarks/deep-research-bench.md#web-search-and-fetch).
 - `harness.mcp_servers`: see [MCP configuration and boundaries](implementation/harnesses.md#model-context-protocol-mcp).

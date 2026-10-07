@@ -30,6 +30,7 @@ const (
 	maxExecInput          = 16 << 20
 	maxConfiguredOutput   = 1 << 30
 	networkAlias          = deployment.TaskSandboxAlias
+	rootExecUser          = "0:0"
 )
 
 var (
@@ -72,6 +73,7 @@ type Sandbox struct {
 	containerName  string
 	connectivity   core.HarnessConnectivity
 	environment    deployment.TaskEnvironment
+	request        deployment.Request
 	workdir        string
 	execUser       string
 	artifactDir    string
@@ -211,6 +213,7 @@ func (m *Manager) Start(ctx context.Context, request core.SandboxRequest) (runne
 	if env.MemoryMB > 0 {
 		deploymentRequest.MemoryMB = &env.MemoryMB
 	}
+	s.request = deploymentRequest
 	s.containerID, err = m.deployment.Create(ctx, deploymentRequest)
 	s.containerOwned = s.containerID != ""
 	if err != nil {

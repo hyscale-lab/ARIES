@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/sshbridge"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -384,7 +385,7 @@ func TestVirtualizedExecutionKeepsWireEvidenceAndRecordsExecutedState(t *testing
 	structured, structuredBytes := memoryAuditFile()
 	raw, rawBytes := memoryAuditFile()
 	sandbox := &contractSandbox{acceptTools: true}
-	session := &bridgeSession{sandbox: sandbox, audit: newAuditWriter(structured, raw)}
+	session := &bridgeSession{sandbox: sandbox, audit: sshbridge.NewAuditWriter("OpenClaw", structured, raw)}
 	remote := remoteCommand{argv: generatedArgv("cd " + virtualWorkspace + " && cat " + virtualWorkspace + "/input >" + virtualWorkspace + "/output")}
 	wire := encodeCanonicalTokens(remote.argv)
 	prepared, err := prepareRemoteCommand(remote, sandbox.Workdir())
@@ -397,7 +398,7 @@ func TestVirtualizedExecutionKeepsWireEvidenceAndRecordsExecutedState(t *testing
 	}); exit != 0 {
 		t.Fatalf("virtualized exit = %d", exit)
 	}
-	if err := session.closeAudit(context.Background()); err != nil {
+	if err := session.audit.SealAndWait(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	commands := sandbox.snapshot()
@@ -425,7 +426,7 @@ func TestSuppressedTransportCleanupNeverExecutesSandbox(t *testing.T) {
 	structured, _ := memoryAuditFile()
 	raw, _ := memoryAuditFile()
 	sandbox := &contractSandbox{acceptTools: true}
-	session := &bridgeSession{sandbox: sandbox, audit: newAuditWriter(structured, raw)}
+	session := &bridgeSession{sandbox: sandbox, audit: sshbridge.NewAuditWriter("OpenClaw", structured, raw)}
 	remote := remoteCommand{argv: []string{remoteShell, "-c", directoryClearScript, directoryClearLabel, virtualSkillsWorkspace, virtualRuntimeRoot}}
 	prepared, err := prepareRemoteCommand(remote, sandbox.Workdir())
 	if err != nil {
@@ -435,7 +436,7 @@ func TestSuppressedTransportCleanupNeverExecutesSandbox(t *testing.T) {
 	if exit := session.execute(context.Background(), &stubSSHChannel{}, prepared, requestAudit{requestType: "exec", wantReply: true, remoteCommand: wire}); exit != 0 {
 		t.Fatalf("suppressed cleanup exit = %d", exit)
 	}
-	if err := session.closeAudit(context.Background()); err != nil {
+	if err := session.audit.SealAndWait(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if commands := sandbox.snapshot(); len(commands) != 0 {
@@ -447,7 +448,7 @@ func TestSuppressedSkillsUploadDrainsInputAndPreservesStructuredClassification(t
 	structured, structuredBytes := memoryAuditFile()
 	raw, rawBytes := memoryAuditFile()
 	sandbox := &contractSandbox{acceptTools: true}
-	session := &bridgeSession{sandbox: sandbox, audit: newAuditWriter(structured, raw)}
+	session := &bridgeSession{sandbox: sandbox, audit: sshbridge.NewAuditWriter("OpenClaw", structured, raw)}
 	remote := remoteCommand{argv: []string{remoteShell, "-c", directoryUploadScript, directoryUploadLabel, virtualSkillsWorkspace, virtualRuntimeRoot}}
 	prepared, err := prepareRemoteCommand(remote, sandbox.Workdir())
 	if err != nil {
@@ -459,7 +460,7 @@ func TestSuppressedSkillsUploadDrainsInputAndPreservesStructuredClassification(t
 	if exit := session.execute(context.Background(), channel, prepared, requestAudit{requestType: "exec", wantReply: true, remoteCommand: encodeCanonicalTokens(remote.argv)}); exit != 0 {
 		t.Fatalf("suppressed upload exit = %d", exit)
 	}
-	if err := session.closeAudit(context.Background()); err != nil {
+	if err := session.audit.SealAndWait(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if channel.Len() != 0 || len(sandbox.snapshot()) != 0 {

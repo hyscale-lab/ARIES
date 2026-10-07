@@ -395,3 +395,47 @@ func TestCreateRejectsMissingPlacementBeforeAllocation(t *testing.T) {
 		}
 	}
 }
+
+func TestDropCapabilitiesIsAppliedAndConfirmed(t *testing.T) {
+	fake := newFakeDocker()
+	manager := &Manager{client: fake}
+	request := deploymentRequest()
+	request.DropCapabilities = true
+	id, err := manager.Create(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(fake.created.HostConfig.CapDrop, []string{"ALL"}) || len(fake.created.HostConfig.CapAdd) != 0 {
+		t.Fatalf("capabilities = drop %q add %q", fake.created.HostConfig.CapDrop, fake.created.HostConfig.CapAdd)
+	}
+	if err := manager.Validate(context.Background(), id, request, nil); err != nil {
+		t.Fatal(err)
+	}
+	for name, weaken := range map[string]func(*container.HostConfig){
+		"no drop":    func(host *container.HostConfig) { host.CapDrop = nil },
+		"added":      func(host *container.HostConfig) { host.CapAdd = []string{"NET_ADMIN"} },
+		"privileged": func(host *container.HostConfig) { host.Privileged = true },
+	} {
+		host := *fake.container.HostConfig
+		weaken(&host)
+		original := fake.container.HostConfig
+		fake.container.HostConfig = &host
+		if err := manager.Validate(context.Background(), id, request, nil); err == nil {
+			t.Fatalf("%s capabilities were accepted", name)
+		}
+		fake.container.HostConfig = original
+	}
+}
+
+func TestNoNewPrivilegesRequiresOneConsistentEnablingOption(t *testing.T) {
+	for _, options := range [][]string{{"no-new-privileges"}, {"no-new-privileges=true"}, {"no-new-privileges:true"}, {"label=disable", "no-new-privileges=true"}} {
+		if !noNewPrivilegesEnabled(options) {
+			t.Errorf("%q was rejected", options)
+		}
+	}
+	for _, options := range [][]string{nil, {"no-new-privileges=false"}, {"no-new-privileges=true", "no-new-privileges:false"}, {"no-new-privileges=invalid"}} {
+		if noNewPrivilegesEnabled(options) {
+			t.Errorf("%q was accepted", options)
+		}
+	}
+}

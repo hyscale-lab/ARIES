@@ -22,8 +22,10 @@ The [Runner interfaces](../../pkg/runner/interfaces.go) define:
 `Sandbox` is the live capability returned by `ToolSandbox`, not another Runner
 role. Optional `StreamExecutor.ExecStream` and
 `LimitedDownloader.DownloadLimit` capabilities support streamed command I/O and
-bounded host downloads. A bridge or evaluator requiring an optional capability
-must check it before use.
+bounded host downloads. The Codex bridge additionally requires `TaskUser` and
+`ExecSupervisedStream`, which start its trusted supervisor directly without a
+task-owned shell or cancellation helper. A bridge or evaluator requiring an
+optional capability must check it before use.
 
 The current [sandbox implementation](../../pkg/sandbox/sandbox.go) separates task
 policy from its injected [deployment and task environment](deployment.md).

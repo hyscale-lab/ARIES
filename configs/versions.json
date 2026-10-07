@@ -27,5 +27,9 @@
       "version": "1.19.0",
       "revision": "9a0aed646611023c4d4aec5b7897a72511559956"
     }
+  },
+  "codex": {
+    "image": "docker.io/library/debian:12.12-slim",
+    "version": "0.157.1"
   }
 }

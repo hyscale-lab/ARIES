@@ -49,18 +49,27 @@ func validateComponents(cfg config.Config) error {
 	switch cfg.Harness.Type {
 	case "openclaw":
 	case "hermes":
+	case "codex":
+		if cfg.Runtime.Backend != "openai" && cfg.Runtime.Backend != "sglang" {
+			return errors.New("Codex requires runtime.backend openai or sglang with Responses API support")
+		}
 	default:
 		return fmt.Errorf("unsupported harness type %q", cfg.Harness.Type)
 	}
 	switch cfg.Bridge.Type {
 	case "openclaw-ssh":
 	case "hermes-ssh":
+	case "codex-ssh":
 	default:
 		return fmt.Errorf("unsupported bridge type %q", cfg.Bridge.Type)
 	}
 	// Each bridge speaks one harness's SSH grammar, so the pair is checked
 	// here rather than left to fail at the first tool call.
-	if (cfg.Harness.Type == "hermes") != (cfg.Bridge.Type == "hermes-ssh") {
+	switch {
+	case cfg.Harness.Type == "openclaw" && cfg.Bridge.Type == "openclaw-ssh":
+	case cfg.Harness.Type == "hermes" && cfg.Bridge.Type == "hermes-ssh":
+	case cfg.Harness.Type == "codex" && cfg.Bridge.Type == "codex-ssh":
+	default:
 		return fmt.Errorf("harness type %q requires its paired bridge, not %q", cfg.Harness.Type, cfg.Bridge.Type)
 	}
 	return nil
@@ -130,6 +139,8 @@ func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byt
 		return harnesswiring.NewOpenClaw(cfg, outputRoot, lookup, logger, transport)
 	case "hermes":
 		return harnesswiring.NewHermes(cfg, outputRoot, lookup, logger, transport)
+	case "codex":
+		return harnesswiring.NewCodex(cfg, outputRoot, lookup, logger, transport)
 	default:
 		return app.HarnessInstance{}, errors.Join(fmt.Errorf("unsupported harness type %q", cfg.Harness.Type), transport.Close())
 	}
@@ -160,6 +171,8 @@ func newBridge(cfg config.Config, outputRoot string, resolveListen func(context.
 		return bridgewiring.NewOpenClaw(cfg, outputRoot, resolveListen, logger)
 	case "hermes-ssh":
 		return bridgewiring.NewHermes(cfg, outputRoot, resolveListen, logger)
+	case "codex-ssh":
+		return bridgewiring.NewCodex(cfg, outputRoot, resolveListen, logger)
 	default:
 		return nil, fmt.Errorf("unsupported bridge type %q", cfg.Bridge.Type)
 	}

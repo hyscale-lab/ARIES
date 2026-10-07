@@ -155,6 +155,31 @@ reach bridge execs: Hermes passes no trace context over SSH, so execs are
 attributed to a tool call by time only (the bridge record's `timestamp` is the
 exec's end), and background work is not linked.
 
+## Codex
+
+`codex.Manager` uses the shared harness runtime to stage the unmodified static
+CLI `0.157.1` into a separate tag-pinned Linux runtime, checks its reported
+version, and invokes one `codex exec --json` turn through deployment execution.
+The instruction remains one argv element. The runtime request drops all Linux
+capabilities and enables no-new-privileges; the deployment confirms both before
+the private archive, which holds the model key, is uploaded. The model provider
+uses the Responses API; the container wrapper reads the credential from a
+private file, so it never enters runtime metadata. JSONL trajectory, stderr, and
+placeholder-only TOML are private artifacts. After the turn, the harness copies
+Codex's native session rollouts out of the still-running runtime through the
+deployment archive operation, without executing in it.
+
+The pinned native `environments.toml` selects only the bridge-backed
+environment (`include_local = false`). Shell and filesystem operations use
+Codex's native executor inside the task sandbox through the
+[Codex SSH bridge](ssh-bridges.md#codex-ssh-bridge). The harness contains an
+empty matching workdir for CLI path validation, not a copy of the task
+repository, and receives neither deployment access nor verifier material.
+Codex's internal sandbox mode permits remote tools; the separate runtimes and
+bridge enforce the ARIES isolation boundary. HTTPS endpoints receive the host's
+validated public CA bundle at the standard Linux trust path; TLS verification is
+unchanged. See the [Codex guide](../codex.md) for setup and model requirements.
+
 ## Model Context Protocol (`MCP`)
 
 ARIES supports configuring Model Context Protocol (`MCP`) servers for agent harnesses via `harness.mcp_servers`.
@@ -224,7 +249,8 @@ Sources: [OpenClaw manager](../../pkg/harness/openclaw/harness.go),
 [agent protocol](../../pkg/harness/openclaw/gateway/agent.go),
 [Hermes manager](../../pkg/harness/hermes/harness.go),
 [Hermes Gateway client](../../pkg/harness/hermes/gateway/client.go),
-[Hermes renderer](../../pkg/harness/hermes/config.go), and
+[Hermes renderer](../../pkg/harness/hermes/config.go),
+[Codex manager](../../pkg/harness/codex/harness.go), and
 [MCP validation](../../pkg/core/mcp.go).
 [OpenClaw tests](../../pkg/harness/openclaw/harness_test.go) and
 [Hermes tests](../../pkg/harness/hermes/harness_test.go) cover deployment injection,

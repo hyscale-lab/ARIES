@@ -152,7 +152,7 @@ func TestFailedStopPreventsFirstRunAndAllowsCleanupRetry(t *testing.T) {
 	if err != nil || runtime.InUse() || occurrence.ID != "" || occurrence.Credentials.Get("model") != nil {
 		t.Fatalf("cleanup retry incomplete: %v", err)
 	}
-	if !reflect.DeepEqual(provider.calls, []string{"create", "upload", "validate", "start", "stop", "stop"}) {
+	if !reflect.DeepEqual(provider.calls, []string{"create", "validate", "upload", "validate", "start", "stop", "stop"}) {
 		t.Fatalf("lifecycle order: %v", provider.calls)
 	}
 }

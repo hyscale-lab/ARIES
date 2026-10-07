@@ -103,9 +103,8 @@ type ProfileModel struct {
 	ID        string `json:"id"`
 	BaseURL   string `json:"base_url"`
 	APIKeyEnv string `json:"api_key_env"`
-	// ContextLength, MaxTokens, and Temperature are optional. They reach the
-	// harness through core.ModelConfig. Only Hermes renders them, so a
-	// profile that sets one under another harness is rejected.
+	// These optional settings reach the harness through core.ModelConfig.
+	// Hermes renders all three; Codex supports only ContextLength.
 	ContextLength int      `json:"context_length,omitempty"`
 	MaxTokens     int      `json:"max_tokens,omitempty"`
 	Temperature   *float64 `json:"temperature,omitempty"`
@@ -118,8 +117,11 @@ func (m ProfileModel) validateGeneration(harnessType string) error {
 	if !set {
 		return nil
 	}
-	if harnessType != "hermes" {
-		return errors.New("model.context_length, model.max_tokens, and model.temperature require Hermes")
+	if m.ContextLength != 0 && harnessType != "hermes" && harnessType != "codex" {
+		return errors.New("model.context_length requires Hermes or Codex")
+	}
+	if (m.MaxTokens != 0 || m.Temperature != nil) && harnessType != "hermes" {
+		return errors.New("model.max_tokens and model.temperature require Hermes")
 	}
 	if m.ContextLength < 0 {
 		return errors.New("model.context_length must be positive")
@@ -230,6 +232,14 @@ type HarnessConfig struct {
 	// configured and mean nothing to another harness. Such escape hatches go
 	// under this type-specific block rather than onto the shared fields.
 	Hermes *HarnessHermesConfig `json:"hermes,omitempty"`
+	Codex  *HarnessCodexConfig  `json:"codex,omitempty"`
+}
+
+// HarnessCodexConfig selects the installed, unmodified Codex CLI executable.
+// Load resolves its path relative to the experiment profile, without running it.
+type HarnessCodexConfig struct {
+	Executable         string `json:"executable"`
+	ResolvedExecutable string `json:"-"`
 }
 
 // HarnessHermesConfig is the harness.hermes block. It is valid only with
@@ -416,6 +426,7 @@ type Versions struct {
 	SWEbenchPro       SWEbenchProVersions       `json:"swebenchpro"`
 	OpenClaw          OpenClawVersions          `json:"openclaw"`
 	Hermes            HermesVersions            `json:"hermes"`
+	Codex             CodexVersions             `json:"codex"`
 }
 
 type TerminalBench2Versions struct {
@@ -455,6 +466,11 @@ type HermesOTelPluginVersions struct {
 	Revision      string `json:"revision"`
 }
 
+type CodexVersions struct {
+	Image   string `json:"image"`
+	Version string `json:"version"`
+}
+
 // Load reads and strictly validates one JSON experiment file.
 func Load(path string) (Config, error) {
 	f, err := os.Open(path)
@@ -476,6 +492,20 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("load version pins: %w", err)
 	}
 	cfg.Versions = versions
+	if cfg.Harness.Type == "codex" {
+		if _, err := versions.HarnessImage("codex"); err != nil {
+			return Config{}, fmt.Errorf("load Codex version pins: %w", err)
+		}
+		resolved := cfg.Harness.Codex.Executable
+		if !filepath.IsAbs(resolved) {
+			resolved = filepath.Join(filepath.Dir(path), resolved)
+		}
+		resolved, err = filepath.Abs(resolved)
+		if err != nil {
+			return Config{}, fmt.Errorf("resolve Codex executable: %w", err)
+		}
+		cfg.Harness.Codex.ResolvedExecutable = resolved
+	}
 	if cfg.OverridesFile != "" {
 		overridesPath := cfg.OverridesFile
 		if !filepath.IsAbs(overridesPath) {
@@ -677,6 +707,9 @@ func (c *Config) validate() error {
 	}
 	if err := c.Harness.validate(); err != nil {
 		return err
+	}
+	if c.Harness.Type == "codex" && c.Runtime.Backend != "openai" && c.Runtime.Backend != "sglang" {
+		return errors.New("Codex requires runtime.backend openai or sglang with Responses API support")
 	}
 	if err := c.Model.validateGeneration(c.Harness.Type); err != nil {
 		return err
@@ -902,6 +935,16 @@ func (h *HarnessConfig) validateHermesBlocks() error {
 func (h *HarnessConfig) validate() error {
 	if h.Mode == "" {
 		h.Mode = "agent"
+	}
+	if h.Codex != nil {
+		if h.Type != "codex" {
+			return errors.New("harness.codex requires Codex")
+		}
+		if strings.TrimSpace(h.Codex.Executable) == "" || strings.ContainsRune(h.Codex.Executable, 0) {
+			return errors.New("harness.codex.executable must name a nonempty, NUL-free executable path")
+		}
+	} else if h.Type == "codex" {
+		return errors.New("harness.codex.executable is required for Codex")
 	}
 	if err := h.validateHermesBlocks(); err != nil {
 		return err
@@ -1209,6 +1252,23 @@ func (c Versions) validate() error {
 			return errors.New("hermes.otel_plugin.version must be a dotted release number")
 		}
 	}
+	if c.Codex != (CodexVersions{}) {
+		if err := c.Codex.validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+var codexVersionPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
+
+func (c CodexVersions) validate() error {
+	if err := containerimage.ValidatePinnedTagOnly(c.Image); err != nil {
+		return fmt.Errorf("codex.image: %w", err)
+	}
+	if !codexVersionPattern.MatchString(c.Version) {
+		return errors.New("codex.version must be a pinned release in X.Y.Z form")
+	}
 	return nil
 }
 
@@ -1232,6 +1292,11 @@ func (c Versions) HarnessImage(harnessType string) (string, error) {
 		image, field = c.OpenClaw.Image, "openclaw.image"
 	case "hermes":
 		image, field = c.Hermes.Image, "hermes.image"
+	case "codex":
+		if err := c.Codex.validate(); err != nil {
+			return "", err
+		}
+		image, field = c.Codex.Image, "codex.image"
 	default:
 		return "", fmt.Errorf("unsupported harness type %q", harnessType)
 	}

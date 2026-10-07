@@ -57,6 +57,6 @@ specific pairing. Explicit constructors and role-specific wiring select the
 implementation; no registration or generic plugin layer is needed.
 
 Current pair-specific [SSH adapters](../implementation/ssh-bridges.md) support
-OpenClaw and Hermes. Their wire grammars, host-key limitations, denied file sync,
+OpenClaw, Hermes, and Codex. Their wire grammars, host-key limitations, denied file sync,
 and sandbox capabilities are implementation details. A common future protocol
 does not remove the need to adapt harnesses that do not natively speak it.

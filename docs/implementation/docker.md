@@ -27,12 +27,12 @@ failed create response from authorizing cleanup of an unrelated resource.
 The task environment supplies `core.BridgeListen` through each bridge's
 `ResolveListen` option. `BindHost` selects the local listener address;
 `AdvertiseHost` selects the harness destination. Docker defaults both to the
-owned task network's gateway. Both SSH adapters currently require IPv4 addresses
+owned task network's gateway. The SSH adapters currently require IPv4 addresses
 and reject DNS destinations and wildcard advertisement. Each listener uses an
 OS-selected port and advertises the actual port. Attachment and endpoint
 ownership follow the [task-environment contract](../design/deployment.md#taskenvironment-operations-and-ownership).
 
-`bridge.mode` is `embedded`: both bridges run inside the runner process.
+`bridge.mode` is `embedded`: all bridges run inside the runner process.
 `managed` and `external` are rejected. Kubernetes settings are recognized but
 rejected by preflight before side effects. Kubernetes deployment and a shared
 gRPC sandbox protocol with E2B compatibility are planned, unsupported targets;
@@ -50,6 +50,14 @@ supports streaming input/output and confirms command process-group termination
 after cancellation without stopping the task runtime. Commands preserve their
 argv boundaries. The sandbox applies task defaults; explicit evaluator root
 commands override the agent UID.
+
+For the Codex bridge only, the provider also offers a
+[supervised execution](../../pkg/deployment/docker/supervised.go) that runs one
+trusted helper directly, without the process-group wrapper or a cancellation
+helper, and reports the image-configured user. Each call first revalidates the
+exact task container against the sandbox's request. Its caller must prove
+descendant cleanup itself. A request may also drop all Linux capabilities;
+validation then confirms the drop, no additions, and no privileged mode.
 
 Archive transport returns source metadata so the sandbox can reject oversized or
 non-regular downloads before reading payloads. The sandbox checks destination
