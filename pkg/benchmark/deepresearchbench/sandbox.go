@@ -13,7 +13,7 @@ import (
 // searxngStartScript launches the SearXNG instance built into the DRB task
 // image (see images/deep-research-bench/Dockerfile) as a background process.
 // ARIES always overrides the task image's own entrypoint with
-// `/bin/sleep infinity` (pkg/sandbox/docker/docker.go), so nothing in the
+// `/bin/sleep infinity` (pkg/sandbox/sandbox.go), so nothing in the
 // image itself can autostart SearXNG; this is the only place it gets
 // launched. The backgrounded python process is reparented to the container's
 // PID 1 once this shell exits, which is standard POSIX orphan handling and

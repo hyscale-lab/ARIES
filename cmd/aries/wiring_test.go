@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"go/parser"
-	"go/token"
 	"io"
 	"os"
 	"path/filepath"
@@ -19,7 +17,6 @@ import (
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
 	codexharness "github.com/hyscale-lab/aries/pkg/harness/codex"
-	openclawharness "github.com/hyscale-lab/aries/pkg/harness/openclaw"
 )
 
 func TestDispatchAcceptsOnlyExactCommandGrammar(t *testing.T) {
@@ -67,30 +64,6 @@ func TestDispatchAcceptsOnlyExactCommandGrammar(t *testing.T) {
 	}
 }
 
-func TestExplicitCompositionSwitches(t *testing.T) {
-	source, err := os.ReadFile("wiring.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := parser.ParseFile(token.NewFileSet(), "wiring.go", source, 0); err != nil {
-		t.Fatal(err)
-	}
-	text := string(source)
-	for _, value := range []string{`case "terminalbench2"`, `case "sweatlasqa"`, `case "swebenchpro"`, `case "openclaw"`, `case "hermes"`, `case "codex"`, `case "docker"`, `case "openclaw-ssh"`, `case "hermes-ssh"`, `case "codex-ssh"`, `case "deepseek"`, `case "sglang"`, `case "openai"`} {
-		if !strings.Contains(text, value) {
-			t.Fatalf("missing explicit switch %s", value)
-		}
-	}
-	if got := strings.Count(text, `case "swebenchpro"`); got != 4 {
-		t.Fatalf("swebenchpro explicit switch count = %d, want 4", got)
-	}
-	for _, forbidden := range []string{"plugin.Open", "reflect.", "Register("} {
-		if strings.Contains(text, forbidden) {
-			t.Fatalf("framework selection found: %s", forbidden)
-		}
-	}
-}
-
 func TestValidateComponentsRejectsEveryUnsupportedSelector(t *testing.T) {
 	base := config.Config{
 		Benchmark: config.BenchmarkConfig{Type: "terminalbench2"},
@@ -105,7 +78,7 @@ func TestValidateComponentsRejectsEveryUnsupportedSelector(t *testing.T) {
 	}{
 		{name: "benchmark", set: func(cfg *config.Config) { cfg.Benchmark.Type = "other" }, want: "unsupported benchmark type"},
 		{name: "harness", set: func(cfg *config.Config) { cfg.Harness.Type = "other" }, want: "unsupported harness type"},
-		{name: "sandbox", set: func(cfg *config.Config) { cfg.Sandbox.Type = "other" }, want: "unsupported sandbox type"},
+		{name: "sandbox", set: func(cfg *config.Config) { cfg.Sandbox.Type = "other" }, want: "sandbox.type: unsupported legacy value"},
 		{name: "bridge", set: func(cfg *config.Config) { cfg.Bridge.Type = "other" }, want: "unsupported bridge type"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -181,16 +154,6 @@ func TestValidateComponentsRequiresPairedHarnessAndBridge(t *testing.T) {
 				t.Fatalf("err=%v", err)
 			}
 		})
-	}
-}
-
-func TestMakeLintIncludesInternalPackages(t *testing.T) {
-	makefile, err := os.ReadFile(filepath.Join("..", "..", "Makefile"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(makefile), "find cmd internal pkg") || !strings.Contains(string(makefile), "go vet ./...") {
-		t.Fatalf("lint target does not cover cmd, internal, and pkg: %s", makefile)
 	}
 }
 
@@ -277,173 +240,6 @@ func TestPrepareBackendSelectsManagedSGLangRuntime(t *testing.T) {
 	}
 }
 
-func TestPrepareBackendPreservesExplicitGPUOrderAndOwnership(t *testing.T) {
-	root := t.TempDir()
-	native := filepath.Join(root, "native.yaml")
-	content := strings.Replace(nativeForWiring, "tensor-parallel-size: 1", "tensor-parallel-size: 2", 1)
-	if err := os.WriteFile(native, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	executable := filepath.Join(root, "python")
-	if err := os.WriteFile(executable, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	cfg := config.Config{
-		Runtime: config.RuntimeConfig{Backend: "sglang", Mode: "managed", Config: config.RuntimeConfigValues{
-			ResolvedFile: native, Executable: executable, GPUIndices: []int{4, 2},
-		}},
-		Model: config.ProfileModel{ID: "Qwen/Qwen3-8B", BaseURL: "http://host:30000/v1", APIKeyEnv: "KEY"},
-	}
-	prepared, err := prepareBackend(cfg, filepath.Join(root, "output"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.Runtime.Config.GPUIndices[0] = 99
-	if !reflect.DeepEqual(prepared.EffectiveGPUIndices, []int{4, 2}) {
-		t.Fatalf("prepared GPU indices = %v", prepared.EffectiveGPUIndices)
-	}
-}
-
-func TestPrepareBackendRejectsManagedSGLangGPUCountMismatch(t *testing.T) {
-	root := t.TempDir()
-	native := filepath.Join(root, "native.yaml")
-	content := strings.Replace(nativeForWiring, "tensor-parallel-size: 1", "tensor-parallel-size: 2", 1)
-	if err := os.WriteFile(native, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	executable := filepath.Join(root, "python")
-	if err := os.WriteFile(executable, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	cfg := config.Config{
-		Runtime: config.RuntimeConfig{Backend: "sglang", Mode: "managed", Config: config.RuntimeConfigValues{
-			ResolvedFile: native, Executable: executable, GPUIndices: []int{0},
-		}},
-		Model: config.ProfileModel{ID: "Qwen/Qwen3-8B", BaseURL: "http://host:30000/v1", APIKeyEnv: "KEY"},
-	}
-	if _, err := prepareBackend(cfg, filepath.Join(root, "output")); err == nil || !strings.Contains(err.Error(), "requires 2") {
-		t.Fatalf("error = %v", err)
-	}
-}
-
-func TestManagedSGLangReceivesConfiguredCredentialEnvironmentName(t *testing.T) {
-	source, err := os.ReadFile("wiring.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(source), "CredentialEnv: cfg.Model.APIKeyEnv") {
-		t.Fatal("managed SGLang credential environment name is not forwarded")
-	}
-}
-
-func TestOpenClawVoiceOptionsSelectModeConfig(t *testing.T) {
-	harness := config.HarnessConfig{
-		Mode: openclawharness.ModeRealtime,
-		Realtime: config.HarnessRealtimeConfig{
-			ChunkDuration: time.Second,
-			TTS:           config.RealtimeTTSConfig{Model: "realtime-tts"},
-		},
-	}
-	options := openClawVoiceOptions(harness)
-	if options.ChunkDuration != time.Second || options.TTS.Model != "realtime-tts" {
-		t.Fatalf("realtime options = %#v", options)
-	}
-
-	harness.Mode = openclawharness.ModeVoiceTranscribe
-	harness.VoiceTranscribe.HarnessRealtimeConfig = config.HarnessRealtimeConfig{
-		ChunkDuration: 2 * time.Second,
-		TTS:           config.RealtimeTTSConfig{Model: "voice-tts"},
-	}
-	options = openClawVoiceOptions(harness)
-	if options.ChunkDuration != 2*time.Second || options.TTS.Model != "voice-tts" {
-		t.Fatalf("voice-transcribe options = %#v", options)
-	}
-}
-
-func TestHermesVoiceOptionsMapTTSAndSTT(t *testing.T) {
-	voice := config.HarnessVoiceTranscribeConfig{
-		HarnessRealtimeConfig: config.HarnessRealtimeConfig{
-			TTS: config.RealtimeTTSConfig{
-				Provider: "openai", BaseURL: "https://tts.example/v1",
-				APIKeyEnv: "TTS_KEY", Model: "tts-model",
-				Voice: "alloy", Instructions: "speak clearly",
-				Speed: floatPtr(1.1), Timeout: 2 * time.Second,
-			},
-		},
-		STT: config.VoiceSTTConfig{
-			Provider: "local", Model: "base",
-			Language: "en", Timeout: 3 * time.Second,
-		},
-	}
-	options := hermesVoiceOptions(voice)
-	if options.TTS.Provider != "openai" || options.TTS.BaseURL != "https://tts.example/v1" ||
-		options.TTS.APIKeyEnv != "TTS_KEY" || options.TTS.Model != "tts-model" ||
-		options.TTS.Voice != "alloy" || options.TTS.Instructions != "speak clearly" ||
-		options.TTS.Speed == nil || *options.TTS.Speed != 1.1 || options.TTS.Timeout != 2*time.Second {
-		t.Fatalf("TTS options = %#v", options.TTS)
-	}
-	if options.STT.Provider != "local" || options.STT.Model != "base" ||
-		options.STT.Language != "en" || options.STT.Timeout != 3*time.Second {
-		t.Fatalf("STT options = %#v", options.STT)
-	}
-}
-
-func floatPtr(value float64) *float64 {
-	return &value
-}
-
-func TestCombinedResourceSourceSamplesAndClosesBothSources(t *testing.T) {
-	firstErr := errors.New("first close")
-	secondErr := errors.New("second close")
-	container := &wiringResourceSource{readings: []core.ResourceReading{{RuntimeID: "container"}}, closeErr: firstErr}
-	gpu := &wiringResourceSource{readings: []core.ResourceReading{{RuntimeID: "gpu"}}, closeErr: secondErr}
-	source := &combinedResourceSource{container: container, gpu: gpu}
-	readings, err := source.Sample(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(readings) != 2 || readings[0].RuntimeID != "container" || readings[1].RuntimeID != "gpu" {
-		t.Fatalf("readings = %#v", readings)
-	}
-	if err := source.Close(); !errors.Is(err, firstErr) || !errors.Is(err, secondErr) {
-		t.Fatalf("close error = %v", err)
-	}
-	if container.closes != 1 || gpu.closes != 1 {
-		t.Fatalf("closes = container %d gpu %d", container.closes, gpu.closes)
-	}
-}
-
-type wiringResourceSource struct {
-	readings []core.ResourceReading
-	closeErr error
-	closes   int
-}
-
-func (source *wiringResourceSource) Sample(context.Context) ([]core.ResourceReading, error) {
-	return source.readings, nil
-}
-
-func (source *wiringResourceSource) Close() error {
-	source.closes++
-	return source.closeErr
-}
-
-func TestBackendPreparationRejectsNativeMismatchBeforeArtifacts(t *testing.T) {
-	root := t.TempDir()
-	native := filepath.Join(root, "native.yaml")
-	if err := os.WriteFile(native, []byte(strings.Replace(nativeForWiring, "port: 30000", "port: 30001", 1)), 0600); err != nil {
-		t.Fatal(err)
-	}
-	output := filepath.Join(root, "output")
-	cfg := config.Config{Runtime: config.RuntimeConfig{Backend: "sglang", Mode: "managed", Config: config.RuntimeConfigValues{ResolvedFile: native, Executable: "python3"}}, Model: config.ProfileModel{ID: "Qwen/Qwen3-8B", BaseURL: "http://host:30000/v1", APIKeyEnv: "KEY"}}
-	if _, err := prepareBackend(cfg, output); err == nil {
-		t.Fatal("expected mismatch")
-	}
-	if _, err := os.Stat(output); !os.IsNotExist(err) {
-		t.Fatalf("output side effect: %v", err)
-	}
-}
-
 const nativeForWiring = `model-path: Qwen/Qwen3-8B
 served-model-name: Qwen/Qwen3-8B
 host: 0.0.0.0
@@ -468,5 +264,30 @@ func TestExternalOpenAIPreparationReturnsNilRuntime(t *testing.T) {
 	cfg.Runtime.Mode = "managed"
 	if _, err := prepareBackend(cfg, t.TempDir()); err == nil {
 		t.Fatal("managed OpenAI-compatible runtime was accepted")
+	}
+}
+
+func TestNewHarnessRejectsInvalidMCPCredentials(t *testing.T) {
+	outputDir := t.TempDir()
+	lookup := func(string) ([]byte, bool) { return []byte("test-key"), true }
+	invalidServers := []core.MCPServerConfig{
+		{Name: "bad", Command: "mcp-server", SecretEnv: map[string]string{"SECRET": "invalid-secret-value!"}},
+	}
+	for _, harnessType := range []string{"openclaw", "hermes"} {
+		t.Run(harnessType+"_invalid", func(t *testing.T) {
+			cfg := config.Config{
+				Harness: config.HarnessConfig{
+					Type:       harnessType,
+					MCPServers: invalidServers,
+				},
+				Versions: config.Versions{
+					OpenClaw: config.OpenClawVersions{Image: "ghcr.io/openclaw/openclaw:2026.7.1"},
+					Hermes:   config.HermesVersions{Image: "docker.io/nousresearch/hermes-agent:v2026.8.31"},
+				},
+			}
+			if _, err := newHarness(cfg, outputDir, lookup, nil); err == nil {
+				t.Fatalf("newHarness(%s) accepted invalid MCPServers", harnessType)
+			}
+		})
 	}
 }

@@ -44,17 +44,29 @@ func nextTaskOccurrence(logicalID string, index *uint64) (taskOccurrence, error)
 
 type occurrenceRunner func(context.Context, taskOccurrence) (core.RunResult, error)
 
+// arrival is one scheduled task start, relative to the run start.
+type arrival struct {
+	logicalID string
+	at        time.Duration
+}
+
 type occurrenceSlot struct {
 	occurrence taskOccurrence
 	result     core.RunResult
 	err        error
 }
 
-func runProfile(ctx context.Context, name, runID string, taskIDs []string, concurrency int, loopDuration time.Duration, run occurrenceRunner) (core.RunResult, error) {
+func runProfile(ctx context.Context, name, runID string, taskIDs []string, concurrency int, loopDuration time.Duration, arrivals []arrival, run occurrenceRunner) (core.RunResult, error) {
 	started := time.Now()
 	result := core.RunResult{Name: name, RunID: runID}
 	if concurrency <= 0 || len(taskIDs) == 0 {
 		return result, errors.New("execution requires positive concurrency and at least one task")
+	}
+	if len(arrivals) > 0 && loopDuration > 0 {
+		return result, errors.New("execution cannot combine an arrival schedule with a loop duration")
+	}
+	if len(arrivals) > 0 && len(arrivals) != len(taskIDs) {
+		return result, fmt.Errorf("arrival schedule has %d entries for %d tasks", len(arrivals), len(taskIDs))
 	}
 	var deadline <-chan time.Time
 	var deadlineAt time.Time
@@ -100,13 +112,33 @@ func runProfile(ctx context.Context, name, runID string, taskIDs []string, concu
 		}()
 		return true
 	}
-	if loopDuration == 0 {
+	switch {
+	case len(arrivals) > 0:
+		// Open loop: every task starts at its scheduled offset, whatever the
+		// pool is doing. Admission still blocks on a full pool, and that wait is
+		// the closed-loop artifact the concurrency setting must be sized to
+		// avoid; the realised start is recorded on the task result either way.
+		for _, next := range arrivals {
+			wait := time.Until(started.Add(next.at))
+			if wait > 0 {
+				timer := time.NewTimer(wait)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+				case <-timer.C:
+				}
+			}
+			if ctx.Err() != nil || !admit(next.logicalID) {
+				break
+			}
+		}
+	case loopDuration == 0:
 		for _, logicalID := range taskIDs {
 			if !admit(logicalID) {
 				break
 			}
 		}
-	} else {
+	default:
 	admissions:
 		for {
 			for _, logicalID := range taskIDs {

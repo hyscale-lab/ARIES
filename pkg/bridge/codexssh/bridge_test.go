@@ -47,12 +47,13 @@ func (s *bridgeTestSandbox) Upload(_ context.Context, _, destination string) err
 func (*bridgeTestSandbox) Download(context.Context, string, string) error { return nil }
 func (*bridgeTestSandbox) ContainerID() string                            { return "sandbox-id" }
 func (*bridgeTestSandbox) ContainerName() string                          { return "sandbox-name" }
-func (*bridgeTestSandbox) NetworkName() string                            { return "sandbox-network" }
-func (*bridgeTestSandbox) NetworkGateway(context.Context) (string, error) { return "127.0.0.1", nil }
-func (*bridgeTestSandbox) RunID() string                                  { return "test-run" }
-func (*bridgeTestSandbox) TaskID() string                                 { return "test-task" }
-func (*bridgeTestSandbox) Workdir() string                                { return "/app" }
-func (*bridgeTestSandbox) TaskUser(context.Context) (string, error)       { return "65532:65532", nil }
+func (*bridgeTestSandbox) Connectivity() core.HarnessConnectivity {
+	return core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "aries-test-network"}}
+}
+func (*bridgeTestSandbox) RunID() string                            { return "test-run" }
+func (*bridgeTestSandbox) TaskID() string                           { return "test-task" }
+func (*bridgeTestSandbox) Workdir() string                          { return "/app" }
+func (*bridgeTestSandbox) TaskUser(context.Context) (string, error) { return "65532:65532", nil }
 func (s *bridgeTestSandbox) ExecStream(ctx context.Context, command core.Command, input io.Reader, stdout, stderr io.Writer) (core.CommandResult, error) {
 	return core.CommandResult{}, errors.New("native executor must not use a task-owned shell wrapper")
 }
@@ -105,7 +106,7 @@ func bridgeFixture(t *testing.T, sandbox *bridgeTestSandbox) (*Manager, core.Too
 	if err := os.WriteFile(file, []byte("fixture executable"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	m, err := New(Options{OutputDir: dir, ClientPath: file, CodexPath: file, SupervisorPath: file, CleanupTimeout: 3 * time.Second})
+	m, err := New(Options{ResolveListen: loopbackListen, OutputDir: dir, ClientPath: file, CodexPath: file, SupervisorPath: file, CleanupTimeout: 3 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,4 +248,8 @@ func TestBridgeDisconnectDrainsExecutorBeforeRevocation(t *testing.T) {
 	if err := manager.Stop(ctx); err != nil {
 		t.Fatalf("disconnect prevented cleanup proof: %v", err)
 	}
+}
+
+func loopbackListen(context.Context) (core.BridgeListen, error) {
+	return core.BridgeListen{BindHost: "127.0.0.1", AdvertiseHost: "127.0.0.1"}, nil
 }

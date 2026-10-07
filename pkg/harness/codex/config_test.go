@@ -25,7 +25,7 @@ func testEndpoint(t *testing.T) core.ToolEndpoint {
 			t.Fatal(err)
 		}
 	}
-	return core.ToolEndpoint{Protocol: "ssh", Address: "task-sandbox:2222", Username: "aries", Network: "aries-task-net", Workdir: "/app", ClientCommand: clientPath, ClientSourceFile: "/host/aries-codex-ssh", IdentityFile: identityPath, IdentitySourceFile: identity, KnownHostsFile: knownHostsPath, KnownHostsSourceFile: hosts}
+	return core.ToolEndpoint{Protocol: "ssh", Address: "task-sandbox:2222", Username: "aries", Workdir: "/app", ClientCommand: clientPath, ClientSourceFile: "/host/aries-codex-ssh", IdentityFile: identityPath, IdentitySourceFile: identity, KnownHostsFile: knownHostsPath, KnownHostsSourceFile: hosts}
 }
 
 func TestConfigUsesResponsesAndRemoteEnvironmentOnly(t *testing.T) {
@@ -61,7 +61,7 @@ func TestConfigUsesResponsesAndRemoteEnvironmentOnly(t *testing.T) {
 		t.Fatal("login shells may replace the task image's PATH")
 	}
 	endpoint := testEndpoint(t)
-	environments, err := renderEnvironments(endpoint)
+	environments, err := renderEnvironments(endpoint, core.RuntimePlacement{DockerNetwork: "aries-task-net"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -21,8 +21,10 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/hyscale-lab/aries/pkg/bridge/codexssh"
 	"github.com/hyscale-lab/aries/pkg/core"
+	dockerdeployment "github.com/hyscale-lab/aries/pkg/deployment/docker"
+	harnesscommon "github.com/hyscale-lab/aries/pkg/harness"
 	codexharness "github.com/hyscale-lab/aries/pkg/harness/codex"
-	dockersandbox "github.com/hyscale-lab/aries/pkg/sandbox/docker"
+	tasksandbox "github.com/hyscale-lab/aries/pkg/sandbox"
 	"github.com/moby/moby/client"
 	"github.com/sirupsen/logrus"
 )
@@ -94,8 +96,13 @@ func runNativeSSHScenario(t *testing.T, cancelTool bool, taskUser string) {
 			t.Errorf("owned network leak count=%d err=%v", len(networks.Items), err)
 		}
 	})
-	sandboxes, err := dockersandbox.New(dockersandbox.Options{OutputDir: output, Logger: logger})
+	provider, err := dockerdeployment.New(dockerdeployment.Options{Logger: logger})
 	if err != nil {
+		t.Fatal(err)
+	}
+	sandboxes, err := tasksandbox.New(tasksandbox.Options{Deployment: provider, NewEnvironment: provider.NewTaskEnvironment, OutputDir: output, Logger: logger})
+	if err != nil {
+		_ = provider.Close()
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sandboxes.Close() })
@@ -109,7 +116,7 @@ func runNativeSSHScenario(t *testing.T, cancelTool bool, taskUser string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sandbox := live.(*dockersandbox.Sandbox)
+	sandbox := live.(*tasksandbox.Sandbox)
 	t.Cleanup(func() {
 		cleanup, done := context.WithTimeout(context.Background(), 30*time.Second)
 		defer done()
@@ -135,7 +142,7 @@ func runNativeSSHScenario(t *testing.T, cancelTool bool, taskUser string) {
 			t.Fatalf("start preexisting task process: %#v, %v", other, err)
 		}
 	}
-	bridge, err := codexssh.New(codexssh.Options{ClientPath: helper, CodexPath: binary, SupervisorPath: supervisor, OutputDir: output, Logger: logger})
+	bridge, err := codexssh.New(codexssh.Options{ResolveListen: sandbox.BridgeListen, ClientPath: helper, CodexPath: binary, SupervisorPath: supervisor, OutputDir: output, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,19 +157,28 @@ func runNativeSSHScenario(t *testing.T, cancelTool bool, taskUser string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gateway, err := sandbox.NetworkGateway(ctx)
+	listen, err := sandbox.BridgeListen(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	listener, err := net.Listen("tcp", net.JoinHostPort(gateway, "0"))
+	listener, err := net.Listen("tcp4", net.JoinHostPort(listen.BindHost, "0"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	_, modelPort, _ := net.SplitHostPort(listener.Addr().String())
 	model := &responsesFixture{cancelTool: cancelTool, taskUser: taskUser}
 	server := &http.Server{Handler: model, ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() { _ = server.Close() })
-	harness, err := codexharness.New(codexharness.Options{Image: integrationImage, CodexPath: binary, CodexVersion: "0.157.1", OutputDir: output, Logger: logger, StartTimeout: 90 * time.Second, AgentTimeout: 90 * time.Second, APIKeyLookup: func(string) ([]byte, bool) { return []byte(integrationKey), true }})
+	harnessDeployment, err := dockerdeployment.New(dockerdeployment.Options{Logger: logger})
+	if err != nil {
+		t.Fatal(err)
+	}
+	harness, err := codexharness.New(codexharness.Options{CodexPath: binary, CodexVersion: "0.157.1", Runtime: harnesscommon.RuntimeOptions{
+		Deployment: harnessDeployment, Image: integrationImage, OutputDir: output, Logger: logger,
+		StartTimeout: 90 * time.Second, AgentTimeout: 90 * time.Second,
+		APIKeyLookup: func(string) ([]byte, bool) { return []byte(integrationKey), true },
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +190,7 @@ func runNativeSSHScenario(t *testing.T, cancelTool bool, taskUser string) {
 		}
 		_ = harness.Close()
 	})
-	request := core.HarnessRequest{RunID: runID, TaskID: "native-ssh", Endpoint: endpoint, Model: core.ModelConfig{Provider: "openai", BaseURL: "http://" + listener.Addr().String() + "/v1", Model: "aries-deterministic-codex", APIKeyEnv: "ARIES_CODEX_TEST_KEY"}}
+	request := core.HarnessRequest{RunID: runID, TaskID: "native-ssh", Endpoint: endpoint, Connectivity: sandbox.Connectivity(), Model: core.ModelConfig{Provider: "openai", BaseURL: "http://" + net.JoinHostPort(listen.AdvertiseHost, modelPort) + "/v1", Model: "aries-deterministic-codex", APIKeyEnv: "ARIES_CODEX_TEST_KEY"}}
 	if err := harness.Start(ctx, request); err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +353,7 @@ func runNativeSSHScenario(t *testing.T, cancelTool bool, taskUser string) {
 	}
 }
 
-func cancelNativeTool(t *testing.T, ctx context.Context, harness *codexharness.Manager, sandbox *dockersandbox.Sandbox) (core.HarnessResult, error) {
+func cancelNativeTool(t *testing.T, ctx context.Context, harness *codexharness.Manager, sandbox *tasksandbox.Sandbox) (core.HarnessResult, error) {
 	t.Helper()
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()

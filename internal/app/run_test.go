@@ -124,7 +124,7 @@ func TestSetupPreparesBackendBeforeSideEffects(t *testing.T) {
 		return nil
 	}, LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
 		return nil, nil
-	}, PullImages: func(context.Context, []string) error { return nil }}
+	}, BuildHarnessImage: func(context.Context, config.Config) error { return nil }, PullImages: func(context.Context, config.Config, []string) error { return nil }}
 	var out bytes.Buffer
 	if err := Setup(context.Background(), profile, &out, Dependencies{Wiring: wiring}); err != nil {
 		t.Fatal(err)
@@ -160,7 +160,8 @@ func TestRunEnsuresPreparationBeforeOutputAndRuntime(t *testing.T) {
 			events = append(events, "tasks:"+strings.Join(taskIDs, ","))
 			return []core.Task{{Environment: core.Environment{Image: "task:tag"}}}, nil
 		},
-		PullImages: func(_ context.Context, images []string) error {
+		BuildHarnessImage: func(context.Context, config.Config) error { return nil },
+		PullImages: func(_ context.Context, _ config.Config, images []string) error {
 			events = append(events, "images:"+strings.Join(images, ","))
 			return prepareErr
 		},
@@ -178,6 +179,38 @@ func TestRunEnsuresPreparationBeforeOutputAndRuntime(t *testing.T) {
 	}
 }
 
+// The harness image is built after every image is pulled, since it may be
+// derived from the pinned one, and its failure stops the run.
+func TestHarnessImageIsBuiltAfterPullAndFailureStopsRun(t *testing.T) {
+	profile := writeCommandProfile(t, filepath.Join(t.TempDir(), "runs"))
+	buildErr := errors.New("harness image build failed")
+	var events []string
+	wiring := Wiring{
+		ValidateComponents: func(config.Config) error { return nil },
+		PrepareBackend: func(cfg config.Config, _ string) (PreparedBackend, error) {
+			return PreparedBackend{Model: cfg.CoreModel()}, nil
+		},
+		SetupBenchmark: func(context.Context, config.Config) error { return nil },
+		LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
+			return nil, nil
+		},
+		PullImages: func(context.Context, config.Config, []string) error {
+			events = append(events, "pull")
+			return nil
+		},
+		BuildHarnessImage: func(context.Context, config.Config) error {
+			events = append(events, "build")
+			return buildErr
+		},
+	}
+	if err := Run(context.Background(), profile, io.Discard, Dependencies{Wiring: wiring}); !errors.Is(err, buildErr) {
+		t.Fatalf("Run error=%v", err)
+	}
+	if want := []string{"pull", "build"}; !reflect.DeepEqual(events, want) {
+		t.Fatalf("events=%v want=%v", events, want)
+	}
+}
+
 func TestSetupRetriesIncompletePreparationWithoutReadinessMarker(t *testing.T) {
 	profile := writeCommandProfile(t, filepath.Join(t.TempDir(), "runs"))
 	pullCalls := 0
@@ -190,7 +223,8 @@ func TestSetupRetriesIncompletePreparationWithoutReadinessMarker(t *testing.T) {
 		LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
 			return nil, nil
 		},
-		PullImages: func(context.Context, []string) error {
+		BuildHarnessImage: func(context.Context, config.Config) error { return nil },
+		PullImages: func(context.Context, config.Config, []string) error {
 			pullCalls++
 			if pullCalls == 1 {
 				return errors.New("partial pull")
@@ -226,7 +260,8 @@ func TestRunCancellationDuringPreparationHasNoDownstreamEffects(t *testing.T) {
 			downstream++
 			return nil, nil
 		},
-		PullImages: func(context.Context, []string) error { downstream++; return nil },
+		BuildHarnessImage: func(context.Context, config.Config) error { return nil },
+		PullImages:        func(context.Context, config.Config, []string) error { downstream++; return nil },
 		NewBenchmark: func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
 			downstream++
 			return nil, nil
@@ -297,7 +332,9 @@ func TestBuildTaskExperimentCreatesFreshFourRoleGraphs(t *testing.T) {
 			s := &stubToolSandbox{}
 			return SandboxInstance{Sandbox: s, Resources: &stubResources{}, Close: func() error { return nil }}, nil
 		},
-		NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) { return &stubBridge{}, nil },
+		NewBridge: func(config.Config, string, func(context.Context) (core.BridgeListen, error), *logrus.Logger) (runner.ToolBridge, error) {
+			return &stubBridge{}, nil
+		},
 	}
 	cfg := config.Config{Name: "x"}
 	model := core.ModelConfig{Provider: "deepseek", BaseURL: "https://example.invalid", Model: "m", APIKeyEnv: "KEY"}
@@ -336,7 +373,7 @@ func TestBuildTaskExperimentUnwindsPartialConstruction(t *testing.T) {
 		NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
 			return SandboxInstance{Sandbox: &stubToolSandbox{}, Resources: &stubResources{}, Close: func() error { events = append(events, "sandbox"); return errors.New("sandbox close") }}, nil
 		},
-		NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
+		NewBridge: func(config.Config, string, func(context.Context) (core.BridgeListen, error), *logrus.Logger) (runner.ToolBridge, error) {
 			return nil, errors.New("bridge construct")
 		},
 	}

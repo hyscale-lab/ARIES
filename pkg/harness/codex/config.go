@@ -66,8 +66,8 @@ func renderConfig(model core.ModelConfig) ([]byte, error) {
 	return output.Bytes(), nil
 }
 
-func renderEnvironments(endpoint core.ToolEndpoint) ([]byte, error) {
-	if err := validateEndpoint(endpoint); err != nil {
+func renderEnvironments(endpoint core.ToolEndpoint, placement core.RuntimePlacement) ([]byte, error) {
+	if err := validateEndpoint(endpoint, placement); err != nil {
 		return nil, err
 	}
 	args := []string{"--address", endpoint.Address, "--user", endpoint.Username, "--identity", endpoint.IdentityFile, "--known-hosts", endpoint.KnownHostsFile}
@@ -77,8 +77,8 @@ func renderEnvironments(endpoint core.ToolEndpoint) ([]byte, error) {
 	return []byte("default = \"aries\"\ninclude_local = false\n\n[[environments]]\nid = \"aries\"\nprogram = " + tomlString(endpoint.ClientCommand) + "\nargs = [" + strings.Join(args, ", ") + "]\ninitialize_timeout_sec = 30\n"), nil
 }
 
-func validateEndpoint(endpoint core.ToolEndpoint) error {
-	if endpoint.Protocol != "ssh" || endpoint.Username != "aries" || !strings.HasPrefix(endpoint.Network, "aries-") {
+func validateEndpoint(endpoint core.ToolEndpoint, placement core.RuntimePlacement) error {
+	if endpoint.Protocol != "ssh" || endpoint.Username != "aries" || !strings.HasPrefix(placement.DockerNetwork, "aries-") {
 		return errors.New("Codex requires a task-local SSH endpoint and task network")
 	}
 	host, port, err := net.SplitHostPort(endpoint.Address)

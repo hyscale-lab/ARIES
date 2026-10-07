@@ -132,7 +132,7 @@ func TestHTTPSRejectsInvalidCABundleBeforeContainerCreation(t *testing.T) {
 			if err := manager.Start(context.Background(), request); err == nil {
 				t.Fatal("accepted an invalid HTTPS CA source")
 			}
-			if fake.created.Config != nil || len(fake.archive) != 0 {
+			if len(fake.calls) != 0 || len(fake.archive) != 0 {
 				t.Fatal("invalid CA source reached the harness container")
 			}
 		})

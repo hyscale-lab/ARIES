@@ -7,23 +7,35 @@
   },
   "benchmark": {
     "type": "terminalbench2",
-    "root": ".cache/terminal-bench-2",
+    "root": ".cache/terminal-bench-2-1",
     "tasks": [
       "fix-git"
     ]
   },
   "harness": {
     "type": "codex",
+    "deployment": {
+      "backend": "docker",
+      "docker": {
+        "socket": "/var/run/docker.sock"
+      }
+    },
     "mode": "agent",
     "codex": {
       "executable": "../.cache/codex/0.157.1/codex"
     }
   },
   "sandbox": {
-    "type": "docker"
+    "deployment": {
+      "backend": "docker",
+      "docker": {
+        "socket": "/var/run/docker.sock"
+      }
+    }
   },
   "bridge": {
-    "type": "codex-ssh"
+    "type": "codex-ssh",
+    "mode": "embedded"
   },
   "runtime": {
     "backend": "openai",

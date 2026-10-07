@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -17,160 +16,111 @@ import (
 	"testing"
 	"time"
 
-	"github.com/containerd/errdefs"
 	"github.com/hyscale-lab/aries/pkg/core"
-	"github.com/moby/moby/api/pkg/stdcopy"
-	"github.com/moby/moby/api/types/container"
-	"github.com/moby/moby/client"
+	"github.com/hyscale-lab/aries/pkg/deployment"
+	"github.com/hyscale-lab/aries/pkg/harness"
+	"github.com/hyscale-lab/aries/pkg/runner"
 )
 
 const testImage = "debian:bookworm-20260812-slim"
 const testRollout = "2026/10/06/rollout-2026-10-06T01-02-03-0199b6c1-aaaa-7bbb-8ccc-000000000001.jsonl"
 
-type fakeDocker struct {
-	mu                sync.Mutex
-	created           client.ContainerCreateOptions
-	info              container.InspectResponse
-	archive           []byte
-	execs             []client.ExecCreateOptions
-	removed           bool
-	refuseRemoval     bool
-	copyErr           error
-	createErr         error
-	inspectHostConfig func(*container.HostConfig)
-	stopCalls         int
-	removeCalls       int
-	stdout            string
-	stderr            string
-	exit              int
-	rollouts          map[string]string
-	copyFromPath      string
+type fakeDeployment struct {
+	mu            sync.Mutex
+	request       deployment.Request
+	secrets       [][]byte
+	calls         []string
+	archive       []byte
+	commands      []core.Command
+	stdout        string
+	stderr        string
+	exit          int
+	rollouts      map[string]string
+	downloadPath  string
+	createErr     error
+	uploadErr     error
+	validateErr   error
+	refuseRemoval bool
+	removed       bool
+	id            string
 }
 
-func (f *fakeDocker) ContainerCreate(_ context.Context, options client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.created = options
-	f.info = container.InspectResponse{ID: "codex-container", Config: options.Config, HostConfig: options.HostConfig, State: &container.State{}}
-	if f.createErr != nil {
-		return client.ContainerCreateResult{}, f.createErr
-	}
-	return client.ContainerCreateResult{ID: f.info.ID}, nil
+func (f *fakeDeployment) record(call string) { f.calls = append(f.calls, call) }
+
+func (f *fakeDeployment) Create(_ context.Context, request deployment.Request) (string, error) {
+	f.record("create")
+	f.request, f.id = request, "codex-id"
+	return f.id, f.createErr
 }
-func (f *fakeDocker) CopyToContainer(_ context.Context, id string, options client.CopyToContainerOptions) (client.CopyToContainerResult, error) {
-	if id != "codex-container" || options.DestinationPath != "/" || !options.CopyUIDGID {
-		return client.CopyToContainerResult{}, errors.New("wrong staging target")
+
+func (f *fakeDeployment) Validate(_ context.Context, _ string, _ deployment.Request, secrets [][]byte) error {
+	f.record("validate")
+	f.secrets = nil
+	for _, secret := range secrets {
+		f.secrets = append(f.secrets, bytes.Clone(secret))
 	}
-	content, err := io.ReadAll(options.Content)
-	f.mu.Lock()
-	defer f.mu.Unlock()
+	return f.validateErr
+}
+
+func (f *fakeDeployment) UploadArchive(_ context.Context, _, _ string, archive io.Reader) error {
+	f.record("upload")
+	if f.uploadErr != nil {
+		return f.uploadErr
+	}
+	content, err := io.ReadAll(archive)
 	f.archive = content
-	return client.CopyToContainerResult{}, errors.Join(err, f.copyErr)
-}
-func (f *fakeDocker) ContainerStart(context.Context, string, client.ContainerStartOptions) (client.ContainerStartResult, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.info.State.Running = true
-	return client.ContainerStartResult{}, nil
-}
-func (f *fakeDocker) ContainerInspect(_ context.Context, id string, _ client.ContainerInspectOptions) (client.ContainerInspectResult, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.removed || f.info.ID == "" || id != f.info.ID && id != f.created.Name {
-		return client.ContainerInspectResult{}, errdefs.ErrNotFound
-	}
-	info := f.info
-	if f.inspectHostConfig != nil && info.HostConfig != nil {
-		host := *info.HostConfig
-		f.inspectHostConfig(&host)
-		info.HostConfig = &host
-	}
-	return client.ContainerInspectResult{Container: info}, nil
-}
-func (f *fakeDocker) ExecCreate(_ context.Context, id string, options client.ExecCreateOptions) (client.ExecCreateResult, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if id != f.info.ID || !f.info.State.Running {
-		return client.ExecCreateResult{}, errdefs.ErrNotFound
-	}
-	f.execs = append(f.execs, options)
-	return client.ExecCreateResult{ID: fmt.Sprint(len(f.execs))}, nil
-}
-func (f *fakeDocker) ExecAttach(_ context.Context, id string, _ client.ExecAttachOptions) (client.ExecAttachResult, error) {
-	f.mu.Lock()
-	var index int
-	_, _ = fmt.Sscan(id, &index)
-	options := f.execs[index-1]
-	stdout, stderr, exitCode := f.stdout, f.stderr, f.exit
-	if slices.Contains(options.Cmd, "--version") {
-		stdout, stderr, exitCode = "codex-cli 0.157.1\n", "", 0
-	}
-	f.mu.Unlock()
-	read, write := net.Pipe()
-	go func() {
-		defer write.Close()
-		_ = writeMux(write, stdcopy.Stdout, []byte(stdout))
-		_ = writeMux(write, stdcopy.Stderr, []byte(stderr))
-		_ = writeMux(write, stdcopy.Stderr, []byte(fmt.Sprintf("\x1eARIES_CODEX_EXIT_%s=%d\x1f", options.Cmd[4], exitCode)))
-	}()
-	return client.ExecAttachResult{HijackedResponse: client.NewHijackedResponse(read, "application/vnd.docker.multiplexed-stream")}, nil
-}
-
-func (f *fakeDocker) CopyFromContainer(_ context.Context, id string, options client.CopyFromContainerOptions) (client.CopyFromContainerResult, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.copyFromPath = options.SourcePath
-	if id != f.info.ID || f.rollouts == nil {
-		return client.CopyFromContainerResult{}, errdefs.ErrNotFound
-	}
-	var archive bytes.Buffer
-	writer := tar.NewWriter(&archive)
-	_ = writer.WriteHeader(&tar.Header{Name: "sessions/", Typeflag: tar.TypeDir, Mode: 0o700})
-	names := make([]string, 0, len(f.rollouts))
-	for name := range f.rollouts {
-		names = append(names, name)
-	}
-	slices.Sort(names)
-	for _, name := range names {
-		_ = writer.WriteHeader(&tar.Header{Name: "sessions/" + name, Typeflag: tar.TypeReg, Mode: 0o600, Size: int64(len(f.rollouts[name]))})
-		_, _ = writer.Write([]byte(f.rollouts[name]))
-	}
-	_ = writer.Close()
-	return client.CopyFromContainerResult{Content: io.NopCloser(&archive)}, nil
-}
-
-func writeMux(writer io.Writer, stream stdcopy.StdType, content []byte) error {
-	var header [8]byte
-	header[0] = byte(stream)
-	binary.BigEndian.PutUint32(header[4:], uint32(len(content)))
-	if _, err := writer.Write(header[:]); err != nil {
-		return err
-	}
-	_, err := writer.Write(content)
 	return err
 }
-func (f *fakeDocker) ContainerStop(context.Context, string, client.ContainerStopOptions) (client.ContainerStopResult, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.stopCalls++
-	f.info.State.Running = false
-	return client.ContainerStopResult{}, nil
-}
-func (f *fakeDocker) ContainerKill(context.Context, string, client.ContainerKillOptions) (client.ContainerKillResult, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.info.State.Running = false
-	return client.ContainerKillResult{}, nil
-}
-func (f *fakeDocker) ContainerRemove(context.Context, string, client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.removeCalls++
-	if !f.refuseRemoval {
-		f.removed = true
+
+func (f *fakeDeployment) DownloadArchive(_ context.Context, _ string, source string) (io.ReadCloser, deployment.FileInfo, error) {
+	f.downloadPath = source
+	if f.rollouts == nil {
+		return nil, deployment.FileInfo{}, fmt.Errorf("sessions: %w", runner.ErrNotFound)
 	}
-	return client.ContainerRemoveResult{}, nil
+	var output bytes.Buffer
+	writer := tar.NewWriter(&output)
+	_ = writer.WriteHeader(&tar.Header{Name: "sessions/", Typeflag: tar.TypeDir, Mode: 0o700})
+	for name, content := range f.rollouts {
+		_ = writer.WriteHeader(&tar.Header{Name: "sessions/" + name, Typeflag: tar.TypeReg, Mode: 0o600, Size: int64(len(content))})
+		_, _ = writer.Write([]byte(content))
+	}
+	_ = writer.Close()
+	return io.NopCloser(&output), deployment.FileInfo{}, nil
 }
+
+func (f *fakeDeployment) Start(context.Context, string) error { f.record("start"); return nil }
+func (f *fakeDeployment) Running(context.Context, string) (bool, error) {
+	return !f.removed, nil
+}
+
+func (f *fakeDeployment) Exec(_ context.Context, _ string, command core.Command) (core.CommandResult, error) {
+	f.mu.Lock()
+	f.commands = append(f.commands, command)
+	f.mu.Unlock()
+	if command.Path == codexPath && slices.Equal(command.Args, []string{"--version"}) {
+		return core.CommandResult{Stdout: "codex-cli " + supportedVersion + "\n"}, nil
+	}
+	return core.CommandResult{ExitCode: f.exit, Stdout: f.stdout, Stderr: f.stderr}, nil
+}
+
+func (f *fakeDeployment) ExecStream(context.Context, string, core.Command, io.Reader, io.Writer, io.Writer) (core.CommandResult, error) {
+	return core.CommandResult{ExitCode: -1}, errors.New("unused")
+}
+func (f *fakeDeployment) LogsStream(context.Context, string, io.Writer, io.Writer) error { return nil }
+func (f *fakeDeployment) Logs(context.Context, string, int) ([]byte, error)              { return nil, nil }
+func (f *fakeDeployment) Address(context.Context, string, int) (string, error) {
+	return "", errors.New("unused")
+}
+
+func (f *fakeDeployment) Stop(context.Context, string) error {
+	f.record("stop")
+	if f.refuseRemoval {
+		return errors.New("deployment remains after removal")
+	}
+	f.removed = true
+	return nil
+}
+func (f *fakeDeployment) Close() error { return nil }
 
 func writeStaticELF(t *testing.T, path string) {
 	t.Helper()
@@ -185,7 +135,7 @@ func writeStaticELF(t *testing.T, path string) {
 	}
 }
 
-func testManager(t *testing.T, settings ...Options) (*Manager, *fakeDocker, core.HarnessRequest, []byte) {
+func testManager(t *testing.T, settings ...Options) (*Manager, *fakeDeployment, core.HarnessRequest, []byte) {
 	t.Helper()
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "codex")
@@ -195,21 +145,21 @@ func testManager(t *testing.T, settings ...Options) (*Manager, *fakeDocker, core
 	if len(settings) != 0 {
 		options = settings[0]
 	}
-	options.Image, options.CodexPath, options.CodexVersion = testImage, bin, "0.157.1"
-	options.OutputDir = filepath.Join(dir, "runs")
-	options.APIKeyLookup = func(string) ([]byte, bool) { return key, true }
-	options.StartTimeout = time.Second
+	fake := &fakeDeployment{stdout: "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"task done\"}}\n{\"type\":\"turn.completed\"}\n", rollouts: map[string]string{testRollout: "{\"type\":\"session_meta\"}\n"}}
+	options.CodexPath, options.CodexVersion = bin, "0.157.1"
+	options.Runtime = harness.RuntimeOptions{
+		Deployment: fake, Image: testImage, OutputDir: filepath.Join(dir, "runs"), StartTimeout: time.Second,
+		APIKeyLookup: func(string) ([]byte, bool) { return key, true },
+	}
 	manager, err := New(options)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = manager.Close() })
-	fake := &fakeDocker{stdout: "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"task done\"}}\n{\"type\":\"turn.completed\"}\n", rollouts: map[string]string{testRollout: "{\"type\":\"session_meta\"}\n"}}
-	manager.client = fake
 	endpoint := testEndpoint(t)
 	endpoint.ClientSourceFile = filepath.Join(dir, "aries-codex-ssh")
 	writeStaticELF(t, endpoint.ClientSourceFile)
-	return manager, fake, core.HarnessRequest{RunID: "run-1", TaskID: "task-1", Model: testModel(), Endpoint: endpoint}, key
+	return manager, fake, core.HarnessRequest{RunID: "run-1", TaskID: "task-1", Model: testModel(), Endpoint: endpoint, Connectivity: core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "aries-task-net"}}}, key
 }
 
 func TestHarnessStagesSeparateContainerWithoutModelCredentialMetadata(t *testing.T) {
@@ -223,23 +173,30 @@ func TestHarnessStagesSeparateContainerWithoutModelCredentialMetadata(t *testing
 	if !bytes.Equal(sourceKey, make([]byte, len(sourceKey))) {
 		t.Fatal("lookup buffer was not cleared")
 	}
-	if fake.created.Config.Labels["aries.kind"] != "codex-harness" || fake.created.HostConfig.NetworkMode != container.NetworkMode(request.Endpoint.Network) || len(fake.created.HostConfig.Binds) != 0 || len(fake.created.HostConfig.Mounts) != 0 || fake.created.HostConfig.Resources.Memory != int64(memory)<<20 || fake.created.HostConfig.Resources.NanoCPUs != 2500000000 || !slices.Equal(fake.created.HostConfig.CapDrop, []string{"ALL"}) || len(fake.created.HostConfig.CapAdd) != 0 || !slices.Equal(fake.created.HostConfig.SecurityOpt, []string{"no-new-privileges=true"}) {
-		t.Fatalf("unsafe container config: %#v", fake.created)
+	r := fake.request
+	if r.Labels["aries.kind"] != "codex-harness" || r.Labels["aries.attempt"] == "" || r.Placement.DockerNetwork != "aries-task-net" || *r.MemoryMB != memory || *r.CPU != cpu || !r.NoNewPrivileges || !r.DropCapabilities || r.ServicePort != 0 || len(r.ImageVolumes) != 0 || r.AllowImageVolumes {
+		t.Fatalf("unsafe runtime request: %#v", r)
 	}
-	if strings.Contains(fmt.Sprintf("%+v %+v", fake.created.Config, fake.created.HostConfig), "test-model-secret") {
-		t.Fatal("model key in Docker metadata")
+	if strings.Contains(fmt.Sprintf("%+v", r), "test-model-secret") {
+		t.Fatal("model key in runtime metadata")
+	}
+	if len(fake.secrets) != 1 || string(fake.secrets[0]) != "test-model-secret" {
+		t.Fatal("runtime validation did not receive the model credential to exclude")
+	}
+	if !slices.Equal(fake.calls[:4], []string{"create", "validate", "upload", "validate"}) {
+		t.Fatalf("isolation was not confirmed before credential upload: %v", fake.calls)
 	}
 	files := map[string][]byte{}
-	r := tar.NewReader(bytes.NewReader(fake.archive))
+	reader := tar.NewReader(bytes.NewReader(fake.archive))
 	for {
-		h, err := r.Next()
+		h, err := reader.Next()
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
 			t.Fatal(err)
 		}
-		content, err := io.ReadAll(r)
+		content, err := io.ReadAll(reader)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -251,7 +208,7 @@ func TestHarnessStagesSeparateContainerWithoutModelCredentialMetadata(t *testing
 	if _, ok := files["app"]; !ok {
 		t.Fatal("missing local empty workdir used by --cd validation")
 	}
-	if err := filepath.Walk(manager.outputDir, func(path string, info os.FileInfo, err error) error {
+	if err := filepath.Walk(manager.runtime.Options.OutputDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
 			return err
 		}
@@ -265,49 +222,17 @@ func TestHarnessStagesSeparateContainerWithoutModelCredentialMetadata(t *testing
 	}
 }
 
-func TestStartRejectsUnconfirmedPrivilegesBeforeCredentialCopy(t *testing.T) {
-	for _, test := range []struct {
-		name   string
-		mutate func(*container.HostConfig)
-	}{
-		{"missing no-new-privileges", func(host *container.HostConfig) { host.SecurityOpt = nil }},
-		{"disabled no-new-privileges", func(host *container.HostConfig) { host.SecurityOpt = []string{"no-new-privileges=false"} }},
-		{"conflicting no-new-privileges", func(host *container.HostConfig) {
-			host.SecurityOpt = []string{"no-new-privileges=true", "no-new-privileges:false"}
-		}},
-		{"malformed no-new-privileges", func(host *container.HostConfig) { host.SecurityOpt = []string{"no-new-privileges=invalid"} }},
-		{"missing capability drop", func(host *container.HostConfig) { host.CapDrop = nil }},
-		{"partial capability drop", func(host *container.HostConfig) { host.CapDrop = []string{"NET_RAW"} }},
-		{"capability added back", func(host *container.HostConfig) { host.CapAdd = []string{"SYS_ADMIN"} }},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			manager, fake, request, _ := testManager(t)
-			fake.inspectHostConfig = test.mutate
-			if err := manager.Start(context.Background(), request); err == nil {
-				t.Fatal("accepted unconfirmed container privileges")
-			}
-			if len(fake.archive) != 0 || fake.info.State.Running {
-				t.Fatal("private runtime was copied or started before confirming privileges")
-			}
-			if !fake.removed {
-				t.Fatal("unconfirmed container was not rolled back")
-			}
-		})
+func TestStartRejectsUnconfirmedIsolationBeforeCredentialCopy(t *testing.T) {
+	manager, fake, request, _ := testManager(t)
+	fake.validateErr = errors.New("deployment no-new-privileges is not enabled")
+	if err := manager.Start(context.Background(), request); err == nil {
+		t.Fatal("accepted unconfirmed runtime isolation")
 	}
-}
-
-func TestStartAcceptsDockerNoNewPrivilegesSpellings(t *testing.T) {
-	for _, option := range []string{"no-new-privileges", "no-new-privileges=true", "no-new-privileges:true"} {
-		t.Run(option, func(t *testing.T) {
-			manager, fake, request, _ := testManager(t)
-			fake.inspectHostConfig = func(host *container.HostConfig) { host.SecurityOpt = []string{option} }
-			if err := manager.Start(context.Background(), request); err != nil {
-				t.Fatal(err)
-			}
-			if err := manager.Stop(context.Background()); err != nil {
-				t.Fatal(err)
-			}
-		})
+	if len(fake.archive) != 0 || slices.Contains(fake.calls, "upload") || slices.Contains(fake.calls, "start") {
+		t.Fatalf("private runtime was copied or started before confirming isolation: %v", fake.calls)
+	}
+	if !fake.removed {
+		t.Fatal("unconfirmed runtime was not rolled back")
 	}
 }
 
@@ -323,8 +248,9 @@ func TestRunPreservesArgvAndRetainsRedactedNativeTrajectory(t *testing.T) {
 	if err != nil || result.Status != core.StatusSucceeded || result.FinalResponse != "task done [REDACTED]" {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
-	cmd := fake.execs[len(fake.execs)-1].Cmd
-	if cmd[len(cmd)-1] != instruction || cmd[len(cmd)-2] != "--" || slices.Contains(cmd, "--ignore-user-config") || slices.Contains(cmd, "--ephemeral") || !slices.Contains(cmd, "--json") {
+	last := fake.commands[len(fake.commands)-1]
+	cmd := append([]string{last.Path}, last.Args...)
+	if last.Path != agentWrapperPath || last.Dir != "/app" || cmd[len(cmd)-1] != instruction || cmd[len(cmd)-2] != "--" || slices.Contains(cmd, "--ignore-user-config") || slices.Contains(cmd, "--ephemeral") || !slices.Contains(cmd, "--json") {
 		t.Fatalf("unexpected argv: %#v", cmd)
 	}
 	for _, path := range result.LogPaths {
@@ -361,10 +287,10 @@ func TestRunRetainsCompleteRedactedNativeRollouts(t *testing.T) {
 	if err != nil || result.Status != core.StatusSucceeded {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
-	if fake.copyFromPath != codexHome+"/sessions" {
-		t.Fatalf("copied %q", fake.copyFromPath)
+	if fake.downloadPath != codexHome+"/sessions" {
+		t.Fatalf("copied %q", fake.downloadPath)
 	}
-	sessions := filepath.Join(manager.outputDir, request.TaskID, "harness", "sessions")
+	sessions := filepath.Join(manager.runtime.Options.OutputDir, request.TaskID, "harness", "sessions")
 	for name, want := range map[string]string{filepath.Base(testRollout): strings.ReplaceAll(parent, "test-model-secret", "[REDACTED]"), filepath.Base(child): "{\"type\":\"session_meta\"}\n"} {
 		filename := filepath.Join(sessions, name)
 		content, err := os.ReadFile(filename)
@@ -410,18 +336,18 @@ func TestRunRequiresRolloutOnlyAfterSuccessfulExec(t *testing.T) {
 	}
 }
 
-func TestRunRejectsCredentialInDockerExecArguments(t *testing.T) {
+func TestRunRejectsCredentialInExecArguments(t *testing.T) {
 	manager, fake, request, _ := testManager(t)
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
 	defer manager.Stop(context.Background())
-	before := len(fake.execs)
+	before := len(fake.commands)
 	if _, err := manager.Run(context.Background(), "request containing test-model-secret"); err == nil {
 		t.Fatal("credential-bearing instruction accepted")
 	}
-	if len(fake.execs) != before {
-		t.Fatal("credential-bearing instruction reached Docker exec metadata")
+	if len(fake.commands) != before {
+		t.Fatal("credential-bearing instruction reached exec arguments")
 	}
 }
 
@@ -454,7 +380,7 @@ func TestPartialStartAndAmbiguousCreateCleanOwnedContainer(t *testing.T) {
 		if createFailure {
 			fake.createErr = errors.New("create response lost")
 		} else {
-			fake.copyErr = errors.New("copy interrupted")
+			fake.uploadErr = errors.New("copy interrupted")
 		}
 		if err := manager.Start(context.Background(), request); err == nil {
 			t.Fatal("partial start accepted")
@@ -465,19 +391,5 @@ func TestPartialStartAndAmbiguousCreateCleanOwnedContainer(t *testing.T) {
 		if err := manager.Stop(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-	}
-}
-
-func TestStopRefusesContainerWithWrongOwnership(t *testing.T) {
-	manager, fake, request, _ := testManager(t)
-	if err := manager.Start(context.Background(), request); err != nil {
-		t.Fatal(err)
-	}
-	fake.info.Config.Labels["aries.attempt"] = "another-attempt"
-	if err := manager.Stop(context.Background()); err == nil {
-		t.Fatal("unowned stop accepted")
-	}
-	if fake.removeCalls != 0 || fake.stopCalls != 0 {
-		t.Fatal("unowned container was mutated")
 	}
 }

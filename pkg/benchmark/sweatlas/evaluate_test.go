@@ -435,3 +435,7 @@ func rubricRetryCapForTest(t *testing.T) func() {
 	rubricRetryCap = 10 * time.Millisecond
 	return func() { rubricRetryBaseDelay, rubricRetryCap = restoreDelay, restoreCap }
 }
+
+func (s *evaluateFake) Connectivity() core.HarnessConnectivity {
+	return core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "test-network"}}
+}

@@ -38,6 +38,8 @@ type ToolSandbox interface {
 // Sandbox is the live capability returned by ToolSandbox, not a fifth
 // substitutable component role.
 type Sandbox interface {
+	// Connectivity supplies explicit runtime placement and resolved task services.
+	Connectivity() core.HarnessConnectivity
 	Exec(context.Context, core.Command) (core.CommandResult, error)
 	Upload(context.Context, string, string) error
 	Download(context.Context, string, string) error

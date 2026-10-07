@@ -64,8 +64,6 @@ func (*testSandbox) Upload(context.Context, string, string) error   { return nil
 func (*testSandbox) Download(context.Context, string, string) error { return nil }
 func (*testSandbox) ContainerID() string                            { return "sandbox-container-id" }
 func (*testSandbox) ContainerName() string                          { return "sandbox-container-name" }
-func (*testSandbox) NetworkName() string                            { return "sandbox-network-name" }
-func (*testSandbox) NetworkGateway(context.Context) (string, error) { return "127.0.0.1", nil }
 func (*testSandbox) Workdir() string                                { return "/app" }
 func (*testSandbox) RunID() string                                  { return "test-run" }
 func (*testSandbox) TaskID() string                                 { return "test-task" }
@@ -78,7 +76,7 @@ func (sandbox *testSandbox) snapshot() []core.Command {
 
 func newTestManager(t *testing.T, outputDir string) *Manager {
 	t.Helper()
-	manager, err := New(Options{OutputDir: outputDir, CleanupTimeout: 5 * time.Second})
+	manager, err := New(Options{ResolveListen: loopbackListen, OutputDir: outputDir, CleanupTimeout: 5 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,6 +181,10 @@ func TestBridgeProxiesHermesCommandsAndRetainsEvidence(t *testing.T) {
 	}
 	if endpoint.Protocol != "ssh" || endpoint.Username != "aries" || endpoint.IdentitySourceFile == "" {
 		t.Fatalf("endpoint = %+v", endpoint)
+	}
+	// Hermes's terminal must be told the directory the bridge runs commands in.
+	if endpoint.Workdir != sandbox.Workdir() {
+		t.Fatalf("endpoint workdir = %q, want the sandbox's %q", endpoint.Workdir, sandbox.Workdir())
 	}
 	host, port, err := net.SplitHostPort(endpoint.Address)
 	if err != nil || host != "127.0.0.1" || port == "" || port == "22" {
@@ -501,7 +503,7 @@ func TestStopCancelsInFlightCommand(t *testing.T) {
 	}
 }
 
-func TestStartRejectsSecondSessionAndNonDockerSandbox(t *testing.T) {
+func TestStartRejectsSecondSessionAndNonStreamingSandbox(t *testing.T) {
 	manager := newTestManager(t, t.TempDir())
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -514,19 +516,13 @@ func TestStartRejectsSecondSessionAndNonDockerSandbox(t *testing.T) {
 	}
 }
 
-func TestNewRequiresOutputDirectory(t *testing.T) {
-	if _, err := New(Options{OutputDir: "  "}); err == nil {
-		t.Fatal("blank output directory was accepted")
-	}
-}
-
 // TestBridgeOmitsRawLogWhenConfigured proves the opt-out drops only
 // ssh_raw.log: the structured tool log still records the call, the endpoint
 // stops advertising the raw path, and the stdin note no longer points at an
 // artifact this run never wrote.
 func TestBridgeOmitsRawLogWhenConfigured(t *testing.T) {
 	outputDir := t.TempDir()
-	manager, err := New(Options{OutputDir: outputDir, CleanupTimeout: 5 * time.Second, OmitRawLog: true})
+	manager, err := New(Options{ResolveListen: loopbackListen, OutputDir: outputDir, CleanupTimeout: 5 * time.Second, OmitRawLog: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -564,4 +560,8 @@ func TestBridgeOmitsRawLogWhenConfigured(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(outputDir, sandbox.TaskID(), "bridge", "ssh_raw.log")); !os.IsNotExist(err) {
 		t.Fatalf("ssh_raw.log still written: %v", err)
 	}
+}
+
+func (s *testSandbox) Connectivity() core.HarnessConnectivity {
+	return core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "test-network"}}
 }

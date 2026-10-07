@@ -165,6 +165,9 @@ func TestTasksLoadsSelectedPromptsInOrder(t *testing.T) {
 		if task.Instruction != wantPrompts[index] {
 			t.Fatalf("tasks[%d].Instruction = %q, want %q", index, task.Instruction, wantPrompts[index])
 		}
+		if task.Environment.Services.SearchPort != 8888 {
+			t.Fatalf("search declaration = %#v", task.Environment.Services)
+		}
 		if !task.Environment.AllowNetwork {
 			t.Fatalf("tasks[%d].Environment.AllowNetwork = false, want true", index)
 		}

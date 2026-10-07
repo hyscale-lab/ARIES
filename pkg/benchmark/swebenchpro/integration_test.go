@@ -13,7 +13,8 @@ import (
 
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
-	dockersandbox "github.com/hyscale-lab/aries/pkg/sandbox/docker"
+	dockerdeployment "github.com/hyscale-lab/aries/pkg/deployment/docker"
+	tasksandbox "github.com/hyscale-lab/aries/pkg/sandbox"
 	"github.com/parquet-go/parquet-go"
 	"github.com/sirupsen/logrus"
 )
@@ -150,7 +151,7 @@ func TestPinnedDockerGoldAndEmptyPatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := dockersandbox.PullImages(ctx, []string{probeTasks[0].Environment.Image}); err != nil {
+	if err := dockerdeployment.PullImages(ctx, "/var/run/docker.sock", []string{probeTasks[0].Environment.Image}); err != nil {
 		t.Fatalf("pull pinned SWE-bench Pro image: %v", err)
 	}
 
@@ -177,7 +178,8 @@ func TestPinnedDockerGoldAndEmptyPatch(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			manager, err := dockersandbox.New(dockersandbox.Options{
+			deployment := integrationDeployment(t)
+			manager, err := tasksandbox.New(tasksandbox.Options{Deployment: deployment, NewEnvironment: deployment.NewTaskEnvironment,
 				OutputDir: outputDir, CleanupTimeout: 2 * time.Minute, Logger: logrus.New(),
 			})
 			if err != nil {
@@ -266,4 +268,14 @@ func requirePinnedSources(t *testing.T) (string, config.Versions) {
 		t.Fatal(err)
 	}
 	return root, versions
+}
+
+func integrationDeployment(t *testing.T) *dockerdeployment.Manager {
+	t.Helper()
+	deployment, err := dockerdeployment.New(dockerdeployment.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = deployment.Close() })
+	return deployment
 }

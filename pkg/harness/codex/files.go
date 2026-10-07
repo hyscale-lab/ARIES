@@ -13,13 +13,12 @@ import (
 	"net/url"
 	"os"
 	"path"
-	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
 
-	"github.com/containerd/errdefs"
-	"github.com/moby/moby/client"
+	"github.com/hyscale-lab/aries/pkg/harness"
+	"github.com/hyscale-lab/aries/pkg/runner"
 )
 
 const maxBinaryBytes = 512 << 20
@@ -36,8 +35,8 @@ type stagedFile struct {
 	mode    int64
 }
 
-func (manager *Manager) runtimeArchive(active *session, configuration, environments []byte) ([]byte, error) {
-	modelURL, err := url.Parse(active.model.BaseURL)
+func (manager *Manager) runtimeArchive(active *harness.Occurrence, configuration, environments []byte) ([]byte, error) {
+	modelURL, err := url.Parse(active.Model.BaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse Codex model URL: %w", err)
 	}
@@ -48,16 +47,16 @@ func (manager *Manager) runtimeArchive(active *session, configuration, environme
 			return nil, fmt.Errorf("read Codex HTTPS CA bundle: %w", err)
 		}
 	}
-	identity, err := readSource(active.endpoint.IdentitySourceFile, 0o600, maxOutputBytes)
+	identity, err := readSource(active.Endpoint.IdentitySourceFile, 0o600, maxOutputBytes)
 	if err != nil {
 		return nil, fmt.Errorf("read Codex SSH identity: %w", err)
 	}
 	defer clear(identity)
-	hosts, err := readSource(active.endpoint.KnownHostsSourceFile, 0o600, maxOutputBytes)
+	hosts, err := readSource(active.Endpoint.KnownHostsSourceFile, 0o600, maxOutputBytes)
 	if err != nil {
 		return nil, fmt.Errorf("read Codex SSH known hosts: %w", err)
 	}
-	helper, err := readStaticExecutable(active.endpoint.ClientSourceFile)
+	helper, err := readStaticExecutable(active.Endpoint.ClientSourceFile)
 	if err != nil {
 		return nil, fmt.Errorf("read Codex SSH helper: %w", err)
 	}
@@ -67,8 +66,8 @@ func (manager *Manager) runtimeArchive(active *session, configuration, environme
 	}
 	files := map[string]stagedFile{
 		configPath: {configuration, 0o600}, environmentsPath: {environments, 0o600},
-		modelKeyPath: {active.apiKey, 0o600}, identityPath: {identity, 0o600}, knownHostsPath: {hosts, 0o600},
-		agentWrapperPath: {agentWrapperScript(active.model.APIKeyEnv), 0o500},
+		modelKeyPath: {active.Credentials.Get("model"), 0o600}, identityPath: {identity, 0o600}, knownHostsPath: {hosts, 0o600},
+		agentWrapperPath: {agentWrapperScript(active.Model.APIKeyEnv), 0o500},
 		codexPath:        {binary, 0o500}, clientPath: {helper, 0o500},
 	}
 	if len(caBundle) != 0 {
@@ -82,7 +81,7 @@ func (manager *Manager) runtimeArchive(active *session, configuration, environme
 			directories[directory] = 0o755
 		}
 	}
-	for directory := strings.TrimPrefix(active.endpoint.Workdir, "/"); directory != "" && directory != "."; directory = path.Dir(directory) {
+	for directory := strings.TrimPrefix(active.Endpoint.Workdir, "/"); directory != "" && directory != "."; directory = path.Dir(directory) {
 		directories[directory] = 0o755
 	}
 	names := make([]string, 0, len(directories))
@@ -246,61 +245,22 @@ func readSource(filename string, mode os.FileMode, limit int64) ([]byte, error) 
 	return content, nil
 }
 
-func ensurePrivateDirectory(directory string) error {
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		return err
-	}
-	resolved, err := filepath.EvalSymlinks(directory)
-	if err != nil {
-		return err
-	}
-	absolute, err := filepath.Abs(directory)
-	if err != nil {
-		return err
-	}
-	if resolved != absolute {
-		return errors.New("private directory contains a symbolic link")
-	}
-	return os.Chmod(directory, 0o700)
-}
-
-func writeArtifact(filename string, content []byte) error {
-	if err := ensurePrivateDirectory(filepath.Dir(filename)); err != nil {
-		return err
-	}
-	file, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return err
-	}
-	if _, err := file.Write(content); err != nil {
-		file.Close()
-		_ = os.Remove(filename)
-		return err
-	}
-	if err := file.Sync(); err != nil {
-		file.Close()
-		_ = os.Remove(filename)
-		return err
-	}
-	return file.Close()
-}
-
 // copyRollouts reads every native rollout Codex wrote under its private home.
-// The container is ARIES-owned and still running, so Docker's archive API
-// reads it without executing anything inside. A missing sessions directory
+// The runtime is ARIES-owned and still running, so the deployment archive
+// operation reads it without executing anything inside. A missing sessions directory
 // yields no rollouts.
-func (manager *Manager) copyRollouts(ctx context.Context, containerID string) ([]namedFile, error) {
-	copied, err := manager.client.CopyFromContainer(ctx, containerID, client.CopyFromContainerOptions{SourcePath: codexHome + "/sessions"})
-	if errdefs.IsNotFound(err) {
+func (manager *Manager) copyRollouts(ctx context.Context, id string) ([]namedFile, error) {
+	content, _, err := manager.runtime.Options.Deployment.DownloadArchive(ctx, id, codexHome+"/sessions")
+	if errors.Is(err, runner.ErrNotFound) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	defer copied.Content.Close()
+	defer content.Close()
 	var rollouts []namedFile
 	total := int64(0)
-	reader := tar.NewReader(copied.Content)
+	reader := tar.NewReader(content)
 	for {
 		header, err := reader.Next()
 		if errors.Is(err, io.EOF) {

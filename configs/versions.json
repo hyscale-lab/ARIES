@@ -1,7 +1,7 @@
 {
   "terminalbench2": {
-    "repository_url": "https://github.com/harbor-framework/terminal-bench-2.git",
-    "revision": "2fd12b88aafdd04a52c298e3940bcb189f9766d6"
+    "repository_url": "https://github.com/harbor-framework/terminal-bench-2-1.git",
+    "revision": "7131e4375048a0e408a8fb404b5f499d726b695b"
   },
   "deepresearchbench": {
     "repository_url": "https://github.com/Ayanami0730/deep_research_bench.git",
@@ -21,7 +21,12 @@
     "image": "ghcr.io/openclaw/openclaw:2026.7.1"
   },
   "hermes": {
-    "image": "docker.io/nousresearch/hermes-agent:v2026.8.31"
+    "image": "docker.io/nousresearch/hermes-agent:v2026.8.31",
+    "otel_plugin": {
+      "repository_url": "https://github.com/briancaffey/hermes-otel",
+      "version": "1.19.0",
+      "revision": "9a0aed646611023c4d4aec5b7897a72511559956"
+    }
   },
   "codex": {
     "image": "docker.io/library/debian:12.12-slim",

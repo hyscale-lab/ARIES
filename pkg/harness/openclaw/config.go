@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/url"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/harness"
 )
 
 const (
@@ -23,14 +25,7 @@ const (
 	agentWrapperPath    = "/run/aries/run-agent"
 	stateContainerPath  = "/home/node/.openclaw"
 	workspaceRoot       = "/aries/openclaw"
-	// searxngBaseURL matches the fixed network alias
-	// (pkg/sandbox/docker/docker.go's `networkAlias = "task-sandbox"`) and
-	// port (images/deep-research-bench/Dockerfile) that the DRB task
-	// sandbox's built-in SearXNG instance is always reachable at from the
-	// OpenClaw harness container, which joins the same per-task Docker
-	// network. Not profile-configurable: it's an internal wiring detail, not
-	// something a user should need to know or vary.
-	searxngBaseURL  = "http://task-sandbox:8888"
+
 	tavilyKeyPath   = "/run/aries/tavily.key"
 	tavilyAPIKeyEnv = "TAVILY_API_KEY"
 
@@ -44,6 +39,24 @@ type openClawConfig struct {
 	Tools   toolPolicy     `json:"tools"`
 	Talk    *talkConfig    `json:"talk,omitempty"`
 	Plugins *pluginsConfig `json:"plugins,omitempty"`
+	MCP     *openClawMCP   `json:"mcp,omitempty"`
+}
+
+type openClawMCP struct {
+	Servers map[string]openClawMCPServer `json:"servers"`
+}
+
+type openClawMCPServer struct {
+	Command   string            `json:"command,omitempty"`
+	Args      []string          `json:"args,omitempty"`
+	URL       string            `json:"url,omitempty"`
+	Transport string            `json:"transport,omitempty"`
+	Env       map[string]string `json:"env,omitempty"`
+}
+
+// MCPOptions configures MCP servers and sandbox-allowlisted tools for OpenClaw.
+type MCPOptions struct {
+	Servers []core.MCPServerConfig
 }
 
 type talkConfig struct {
@@ -171,12 +184,12 @@ type sshConfig struct {
 	KnownHostsFile        string `json:"knownHostsFile"`
 }
 
-func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, mode string, webSearchEnabled, extractEnabled, subagentsEnabled bool, maxConcurrentSubagents int) ([]byte, error) {
+func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, mode string, searchURL string, webSearchEnabled, extractEnabled, subagentsEnabled bool, maxConcurrentSubagents int, mcp ...MCPOptions) ([]byte, error) {
 	if err := validateModel(model); err != nil {
 		return nil, err
 	}
-	if openAICompatible(model.Provider) {
-		model.BaseURL, _ = normalizeV1BaseURL(model.BaseURL)
+	if harness.OpenAICompatible(model.Provider) {
+		model.BaseURL, _ = harness.NormalizeV1BaseURL(model.BaseURL)
 	}
 	if err := validateEndpoint(endpoint); err != nil {
 		return nil, err
@@ -225,11 +238,15 @@ func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, mode strin
 	if subagentsEnabled && maxConcurrentSubagents > 0 {
 		configuration.Agents.Defaults.Subagents = &subagentsConfig{MaxConcurrent: maxConcurrentSubagents}
 	}
+	var alsoAllow []string
 	if webSearchEnabled {
+		if err := harness.ValidateSearch(searchURL, true); err != nil {
+			return nil, err
+		}
 		configuration.Tools.Web = &webToolsConfig{Search: &webSearchToolConfig{Provider: "searxng"}}
-		alsoAllow := []string{"web_search", "web_fetch"}
+		alsoAllow = append(alsoAllow, "web_search", "web_fetch")
 		entries := map[string]pluginEntry{
-			"searxng": {Config: &pluginConfigBlock{WebSearch: webSearchPluginConfig{BaseURL: searxngBaseURL}}},
+			"searxng": {Config: &pluginConfigBlock{WebSearch: webSearchPluginConfig{BaseURL: searchURL}}},
 		}
 		if extractEnabled {
 			// tavily_extract only: the entry deliberately carries no apiKey
@@ -239,8 +256,43 @@ func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, mode strin
 			alsoAllow = append(alsoAllow, "tavily_extract")
 			entries["tavily"] = pluginEntry{Enabled: true}
 		}
-		configuration.Tools.Sandbox = &sandboxToolsGate{Tools: sandboxToolsAllowList{AlsoAllow: alsoAllow}}
 		configuration.Plugins = &pluginsConfig{Entries: entries}
+	}
+	if len(mcp) > 0 {
+		opts := mcp[0]
+		if len(opts.Servers) > 0 {
+			servers := make(map[string]openClawMCPServer, len(opts.Servers))
+			for _, server := range opts.Servers {
+				entry := openClawMCPServer{
+					Command: server.Command,
+					Args:    server.Args,
+					URL:     server.URL,
+				}
+				if server.Command != "" {
+					entry.Transport = "stdio"
+					if len(server.Env) > 0 || len(server.SecretEnv) > 0 {
+						envMap := make(map[string]string, len(server.Env)+len(server.SecretEnv))
+						for targetKey, val := range server.Env {
+							envMap[targetKey] = val
+						}
+						for targetKey, hostVar := range server.SecretEnv {
+							envMap[targetKey] = "${" + hostVar + "}"
+						}
+						entry.Env = envMap
+					}
+				} else if server.URL != "" {
+					entry.Transport = "sse"
+				}
+				servers[server.Name] = entry
+			}
+			configuration.MCP = &openClawMCP{Servers: servers}
+			if !slices.Contains(alsoAllow, "bundle-mcp") {
+				alsoAllow = append(alsoAllow, "bundle-mcp")
+			}
+		}
+	}
+	if len(alsoAllow) > 0 {
+		configuration.Tools.Sandbox = &sandboxToolsGate{Tools: sandboxToolsAllowList{AlsoAllow: alsoAllow}}
 	}
 	var output bytes.Buffer
 	encoder := json.NewEncoder(&output)
@@ -274,56 +326,19 @@ func denyToolList(subagentsEnabled bool) []string {
 }
 
 func validateModel(model core.ModelConfig) error {
-	if model.Provider != "deepseek" && !openAICompatible(model.Provider) {
-		return errors.New("OpenClaw model provider must be deepseek, sglang, or openai")
-	}
-	if openAICompatible(model.Provider) {
-		if _, err := normalizeV1BaseURL(model.BaseURL); err != nil {
-			return fmt.Errorf("OpenClaw %s base URL: %w", model.Provider, err)
-		}
-	} else {
-		parsed, err := url.Parse(model.BaseURL)
-		if err != nil || parsed.Host == "" || parsed.Scheme != "http" && parsed.Scheme != "https" {
-			return errors.New("OpenClaw model base URL must be absolute HTTP(S)")
-		}
-		if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-			return errors.New("OpenClaw model base URL must not contain credentials, query, or fragment")
-		}
-	}
-	if strings.TrimSpace(model.Model) == "" || strings.ContainsAny(model.Model, "\x00\r\n") {
-		return errors.New("OpenClaw model ID is invalid")
-	}
-	if !validEnvironmentName(model.APIKeyEnv) {
-		return errors.New("OpenClaw API-key environment name is invalid")
-	}
-	return nil
-}
-
-// openAICompatible reports whether the backend is a generic OpenAI-compatible
-// server whose base URL must be the versioned /v1 prefix.
-func openAICompatible(provider string) bool {
-	return provider == "sglang" || provider == "openai"
-}
-
-func normalizeV1BaseURL(baseURL string) (string, error) {
-	parsed, err := url.Parse(baseURL)
-	if err != nil || parsed.Scheme != "http" && parsed.Scheme != "https" || parsed.Host == "" || parsed.Opaque != "" || parsed.User != nil || parsed.RawPath != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || strings.Contains(baseURL, "#") {
-		return "", errors.New("must be an absolute HTTP(S) URL without credentials, escaped path, query, or fragment")
-	}
-	if parsed.Path != "/v1" && parsed.Path != "/v1/" {
-		return "", errors.New("path must be exactly /v1")
-	}
-	parsed.Path = "/v1"
-	return parsed.String(), nil
+	return harness.ValidateModel("OpenClaw", model)
 }
 
 func validateEndpoint(endpoint core.ToolEndpoint) error {
-	if endpoint.Protocol != "ssh" || endpoint.Username != "aries" || strings.TrimSpace(endpoint.Network) == "" {
+	if endpoint.Protocol != "ssh" || endpoint.Username != "aries" {
 		return errors.New("OpenClaw requires a task-local SSH endpoint")
 	}
 	host, port, err := net.SplitHostPort(endpoint.Address)
-	if err != nil || net.ParseIP(host) == nil || port == "" {
+	if err != nil || net.ParseIP(host) == nil || net.ParseIP(host).To4() == nil || net.ParseIP(host).IsUnspecified() || net.ParseIP(host).IsMulticast() || port == "" {
 		return errors.New("OpenClaw SSH address must be an IP host and port")
+	}
+	if number, err := strconv.Atoi(port); err != nil || number < 1 || number > 65535 {
+		return errors.New("OpenClaw SSH endpoint port is invalid")
 	}
 	paths := map[string]string{
 		"client command": endpoint.ClientCommand, "client source": endpoint.ClientSourceFile,
@@ -341,23 +356,16 @@ func validateEndpoint(endpoint core.ToolEndpoint) error {
 	return nil
 }
 
-func validEnvironmentName(value string) bool {
-	for index, r := range value {
-		if r == '_' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || index > 0 && r >= '0' && r <= '9' {
-			continue
-		}
-		return false
-	}
-	return value != ""
-}
-
-func launcherScript(apiKeyEnv, realtimeAPIKeyEnv string, extractEnabled bool) []byte {
+func launcherScript(apiKeyEnv, realtimeAPIKeyEnv string, extractEnabled bool, mcpHostVars ...string) []byte {
 	script := "#!/bin/sh\nset -eu\nmodel_key=$(cat " + modelKeyPath + ")\ngateway_key=$(cat " + gatewayKeyPath + ")\nexport " + apiKeyEnv + "=\"$model_key\"\nexport " + gatewayTokenEnv + "=\"$gateway_key\"\n"
 	if realtimeAPIKeyEnv != "" {
 		script += "realtime_key=$(cat " + realtimeKeyPath + ")\nexport " + realtimeAPIKeyEnv + "=\"$realtime_key\"\nunset realtime_key\n"
 	}
 	if extractEnabled {
 		script += "tavily_key=$(cat " + tavilyKeyPath + ")\nexport " + tavilyAPIKeyEnv + "=\"$tavily_key\"\nunset tavily_key\n"
+	}
+	for _, hostVar := range mcpHostVars {
+		script += hostVar + "=\"$(cat /run/aries/mcp_" + hostVar + ".key)\"\nexport " + hostVar + "\n"
 	}
 	script += "unset model_key gateway_key\nexec \"$@\"\n"
 	return []byte(script)

@@ -1,138 +1,78 @@
 # AgentHarness
 
-`AgentHarness` owns agent execution. It receives a task instruction, model
-configuration, and temporary bridge connection details, then starts the agent,
-runs it within the configured deadline, and stops it positively before bridge
-revocation or evaluation can proceed.
+`AgentHarness` owns one task-local agent runtime and its interaction with the
+model. It does not own the task sandbox, bridge listener, benchmark evaluation,
+or verifier material. The [design principles](../design.md) apply to every
+implementation.
 
-## Boundary and lifecycle
+## Operations and ownership
 
-The harness does not own the benchmark task container, verifier material,
-bridge listener, or evaluation. It may retain its own logs, telemetry, and
-rendered configuration as private run artifacts. Model credentials are supplied
-at runtime and must not be written into profiles, structured logs, Docker
-metadata, or results.
+The interface is defined in [pkg/runner](../../pkg/runner/interfaces.go); request
+and result data live in [pkg/core](../../pkg/core).
 
-The supported implementations are OpenClaw, Hermes, and Codex. ARIES starts
-the harness only after the sandbox and bridge are ready. On success, failure, or
-cancellation, it stops the harness and confirms absence. Evaluation remains a
-separate Benchmark outcome rather than an interpretation of harness success.
+| Operation | Contract |
+| --- | --- |
+| `Start(context.Context, core.HarnessRequest) error` | Start the task-local runtime using model configuration, typed runtime placement and resolved service endpoints, temporary tool endpoint, resource limits, timeout, and artifact directory. Roll back partial allocations; retain enough ownership state for `Stop` after a failed start. |
+| `Run(context.Context, string) (core.HarnessResult, error)` | Execute the task instruction within its deadline. Return harness status and private artifact references; do not interpret this result as benchmark correctness. |
+| `Stop(context.Context) error` | Idempotently stop the owned runtime and positively confirm absence. A failure prevents evaluation. |
 
-OpenClaw container lifecycle, gateway protocol, and voice-session semantics are
-separate concrete responsibilities. `openclaw.Manager` owns the container and
-publishes one ephemeral host-loopback port. `openclaw/gateway.Client` owns one
-authenticated WebSocket protocol connection and bounded fail-closed frame
-dispatch. `openclaw/realtime.Runner` consumes that client for talk/chat/tool
-session semantics; the gateway package intentionally contains no voice event
-parsers or Docker lifecycle.
+`HarnessRequest.Connectivity` supplies typed placement and resolved task service
+endpoints independently of `ToolEndpoint`, which carries tool connection identity,
+credentials, and artifact locations. Harnesses forward placement to `Deployment`
+and use the resolved search URL when search is enabled. The Docker provider
+interprets `RuntimePlacement.DockerNetwork`; the harness does not interpret
+network names. `TaskEnvironment.Start` supplies the complete connectivity value,
+including any declared search service URL. Neither input transfers ownership of the task environment or sandbox.
+Model credentials are runtime
+inputs and must not appear in profiles, Docker metadata, structured logs, or
+results. Retained configuration, trajectories, audio, and other task data remain
+private artifacts.
 
-Text, realtime and voice-transcribe modes share the authenticated Gateway transport. Text sends exactly one pinned-version `agent` request and correlates accepted and terminal responses by both frame request ID and non-empty run ID; an ambiguous send, disconnect, timeout, or protocol mismatch is never retried. Realtime and voice-transcribe require read and write scopes, while text requires write scope. Only sanitized role and
-sorted scope metadata may leave the authentication boundary.
+## Lifecycle, cancellation, and failure
 
-Realtime and voice-transcribe both convert the task instruction to staged audio and stream it through an authenticated OpenClaw Gateway Talk session. Realtime owns one `realtime` talk session and may invoke nested agent runs through the same authenticated client. Voice-transcribe owns one `transcription` session only for streaming speech recognition. After the final transcript is accepted, ARIES closes that realtime gateway connection and opens a response-only gateway connection with agent write scope for the OpenClaw agent request. Their audio, transcript, result, and optional event records remain private harness artifacts. The separate realtime/TTS credential is staged privately for voice mode and is not part of model configuration, Gateway authentication, or structured results. All modes remain concrete behavior of the single`AgentHarness` role; realtime does not create a fifth Runner role or take ownership from the benchmark, sandbox, or bridge.
+[Runner](../../pkg/runner/runner.go) starts the harness after sandbox preparation
+and bridge startup. Every attempted harness start is followed by `Stop`, including
+partial startup failures. After `Run` succeeds, fails, or is canceled, Runner uses
+a fresh bounded context to stop the harness, then revoke the bridge. Verifier
+material remains withheld unless both confirmations succeed. Evaluation then
+inspects the same live sandbox and records an independent outcome.
 
-OpenClaw `voice-transcribe` deliberately separates speech recognition from agent execution. Once the final transcript is received, it closes the transcription session, then invokes the agent with the transcript as a normal text input. This preserves the standard text-mode agent behavior while still using OpenClaw's streaming speech recognition path.
+Implementations must propagate cancellation to external work, preserve error
+meaning, and clean up partially acquired resources. A timed-out request does not
+prove that the agent runtime has stopped. Closing a deployment transport is also
+separate from confirming runtime absence.
 
-## Hermes
+## Deployment and substitution
 
-Hermes is the second supported harness and runs the pinned upstream image
-unmodified. It supports text and voice-transcribe modes; `harness.mode: "realtime"` remains OpenClaw's.
+A harness receives the shared [Deployment contract](deployment.md) through an
+explicit constructor. Component behavior remains in its concrete package;
+implementation selection belongs in `cmd/aries`, while configuration translation,
+construction, and rollback belong in `internal/app/wiring/harness`.
 
-`hermes.Manager` owns one container held at an idle command, so ARIES decides
-when the agent starts rather than the image entrypoint. One task instruction is
-delivered by executing a staged wrapper that runs the Hermes one-shot
-(`hermes --ignore-rules --yolo --model … --provider … -z …`) and reports its
-status through a delimited exit trailer. The instruction is passed as a single
-argument vector element, never interpolated into a shell string. `--toolsets` is
-deliberately not passed: on the pinned version its validator can return a bare
-`None` that the caller unpacks, so the agent would exit before doing any work.
-Toolsets come from the rendered configuration instead.
+Both concrete managers compose a named `runtime *harness.Runtime` from
+[pkg/harness](../../pkg/harness/harness.go). This common implementation owns
+allocation, rollback, single-instruction admission, cleanup coordination, and
+credential/artifact mechanics. `RuntimeOptions` carries the shared deployment,
+image, output directory, timeouts, logger, and credential lookup. Common mode,
+web, subagent, and MCP inputs use `harness.Options`; each native constructor
+applies its own defaults and supported modes. The consumed `runner.AgentHarness`
+interface remains unchanged.
 
-In voice-transcribe mode, unlike OpenClaw, Hermes exposes no realtime gateway session. It synthesizes the task prompt into audio, sends the whole recording to the configured Hermes ASR provider, stores the transcript, and then starts the same Hermes one-shot agent flow with the transcript as the text instruction.
+Native managers retain configuration rendering, protocol readiness, request and
+cancellation behavior, voice handling, and result interpretation. Shared search
+validation lives in `pkg/harness/config.go`; connectivity data stays in `pkg/core`
+because it crosses component boundaries. A new implementation reuses the common
+runtime while supplying its native files, commands, and protocol operations.
 
-Hermes exposes no control protocol, so there is no gateway client. The final
-response is the one-shot's standard output, and the message-level trajectory is
-Hermes's own SQLite session store exported to standard output. Container logs,
-both output streams, the redacted configuration, and the session export are
-private harness artifacts.
+For both OpenClaw and Hermes, Runner calls `Start` to create the runtime, then `Run` to execute
+the instruction. The manager obtains a private service endpoint through
+deployment operations, and a Gateway client performs the agent protocol. Shutdown uses deployment operations to confirm absence.
+Changing hosting must preserve Gateway semantics, request correlation,
+cancellation, credentials, artifacts, and isolation.
 
-Hermes reads its tool backend only from environment variables, so ARIES sets
-`TERMINAL_ENV=ssh` with the bridge's host, port, user, and identity path; this
-is upstream's native SSH environment, not an ARIES modification. `HERMES_HOME`
-is relocated to a staged private directory so the image's declared `/opt/data`
-volume holds no run state; that one anonymous volume is still created by Docker
-and is the only mount the harness tolerates. The model credential is written to
-the rendered configuration as a `${NAME}` reference, staged separately as a
-private key file, and exported by the wrapper inside the container, so no
-credential value reaches the configuration, Docker metadata, or results.
-
-Two upstream details are load-bearing. First, `/opt/hermes/bin/hermes` sits
-earliest on `PATH` and is a privilege-drop shim: invoked as root it re-execs the
-real binary as the image's unprivileged `hermes` user. Everything ARIES stages
-is therefore owned by that user, asserted by the container's own start command
-because the Engine's copy API resets archive ownership to root. Staging as root
-instead leaves the agent unable to read its own configuration, and the failure
-surfaces far from its cause. The readiness probe runs `hermes --version` rather
-than only stat-ing the staged files, because those checks run as root and pass
-regardless of ownership.
-
-Second, Hermes requires `/bin/bash` in the task image, because every tool call
-it issues is `bash -c` on the remote.
-
-Third, Hermes accepts only provider names in its own registry, and the one-shot
-rejects an unknown name before any request. Neither pinned version knows
-`sglang` or a plain `openai` provider, so the renderer maps both backends to
-Hermes's generic `custom` provider, which routes to `model.base_url`, in the
-rendered config and in the one-shot's `--provider` argument. DeepSeek is a
-built-in provider and stays as written.
-
-Fourth, three optional profile blocks render into `config.yaml` only when set:
-`model.context_length` / `max_tokens` / `temperature`, `harness.compaction`,
-and `harness.hermes.extra_body`. Compaction is a general harness capability and
-stays on the shared `harness` block; `extra_body` is a Hermes escape hatch, so
-it lives under the type-specific `harness.hermes` block. It is a non-empty JSON
-object written as the `extra_body` of one `custom_providers` entry, which
-Hermes merges into every chat request for its `custom` provider. Explicit
-`model.temperature`, including zero, uses this same request path on `sglang`
-and `openai`; the pinned one-shot ignores the model YAML temperature field.
-Native DeepSeek temperature and duplicate temperature settings in the profile
-and extra body are rejected. Hermes expands
-`${NAME}` references in its configuration from the process environment, so the
-harness exports `ARIES_RUN_ID` and `ARIES_TASK_ID` into the container and a
-profile can tag every request with the task; a profile may reference only those
-two, which keeps the credential reference out of request bodies. The profile
-loader also rejects any field, at any depth, named like a credential, so a
-literal key cannot reach the retained `config.yaml` or the request bodies. The `v2026.8.31` image also sets
-`HERMES_WRITE_SAFE_ROOT=/opt/data`, which makes `write_file` and `patch` refuse
-every sandbox path; the harness clears it, because the sandbox is the isolation
-boundary and the tools act on it over SSH.
-
-## Codex
-
-`codex.Manager` stages the unmodified static CLI `0.157.1` into a separate
-tag-pinned Linux container, checks its reported version, and invokes one
-`codex exec --json` turn. The instruction remains one argv element.
-The model provider uses the Responses API; the credential is read from a
-private file by the container wrapper and never enters Docker configuration.
-JSONL trajectory, stderr, and placeholder-only TOML are private artifacts.
-After the turn, the harness copies Codex's native session rollouts out of the
-still-running container through Docker's archive API, without executing in it.
-
-The pinned native `environments.toml` contract selects only the bridge-backed
-environment (`include_local = false`). Shell and filesystem operations use
-Codex's native executor inside the task sandbox. The harness contains an empty
-matching workdir for CLI path validation, not a copy of the task repository.
-It receives neither the Docker socket nor verifier material. Codex's internal
-sandbox mode permits remote tools; the separate containers and bridge enforce
-ARIES's isolation boundary. See the [Codex guide](../codex.md) for setup and
-supported model configuration.
-
-## Customization & Contribution Guide
-
-Add a harness only when it can implement the existing `AgentHarness` lifecycle
-without taking ownership from the other roles. Keep the implementation in a
-concrete harness package with an explicit constructor, add its explicit switch
-to the command wiring, and provide focused tests for start, run, cancellation,
-idempotent stop, positive absence, credential handling, and artifacts. Update
-the supported reference and this guide with evidenced behavior; do not add a
-registration, discovery, factory, reflection, DI, or generic plugin layer.
+Current implementations are [OpenClaw, Hermes, and Codex](../implementation/harnesses.md).
+New harnesses must preserve these lifecycle and ownership guarantees, with tests
+for partial startup, run failure, cancellation, idempotent stop, positive absence,
+credentials, and artifacts. Concrete voice modes and MCP configuration do not
+add Runner roles; MCP server placement has its own execution boundary described
+in the implementation page.

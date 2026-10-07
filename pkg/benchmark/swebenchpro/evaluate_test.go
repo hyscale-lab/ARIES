@@ -507,3 +507,11 @@ func commitEvaluationFixture(t *testing.T, root string) string {
 	}
 	return strings.TrimSpace(string(output))
 }
+
+func (s *evaluationSandboxFake) Connectivity() core.HarnessConnectivity {
+	return core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "test-network"}}
+}
+
+func (s *basicEvaluationSandboxFake) Connectivity() core.HarnessConnectivity {
+	return core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "test-network"}}
+}

@@ -1,0 +1,491 @@
+//go:build integration
+
+package sandbox
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/containerd/errdefs"
+	"github.com/hyscale-lab/aries/pkg/core"
+	deploymentdocker "github.com/hyscale-lab/aries/pkg/deployment/docker"
+	"github.com/hyscale-lab/aries/pkg/monitor"
+	"github.com/moby/moby/client"
+	"github.com/sirupsen/logrus"
+)
+
+const fixtureImage = "docker.io/library/busybox:1.37.0-musl@sha256:222ad6d973c0d198014546a65cd02c5fdedcc172123c5b4c2bf0af636550bd94"
+
+func TestDockerResourceMonitorRecordsBusyCPU(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	api, err := client.New(client.FromEnv, client.WithUserAgent("aries-resource-integration-test/1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.Ping(ctx, client.PingOptions{}); err != nil {
+		t.Fatalf("Docker daemon is required for integration tests: %v", err)
+	}
+	ensureFixtureImage(t, ctx, api)
+
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
+	outputDir := t.TempDir()
+	manager, err := newIntegrationManager(t, Options{OutputDir: outputDir, CleanupTimeout: 10 * time.Second, Logger: logger})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const runID, taskID = "resource-integration", "busy-task"
+	source, err := deploymentdocker.NewResourceSource(deploymentdocker.ResourceOptions{RunID: runID, TaskIDs: []string{taskID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder, err := monitor.New(monitor.Options{
+		RunID: runID, TaskIDs: []string{taskID}, OutputDir: outputDir, Source: source,
+		Interval: 250 * time.Millisecond, RequestTimeout: 2 * time.Second, StopTimeout: 5 * time.Second, Logger: logger,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	live, err := manager.Start(ctx, core.SandboxRequest{
+		RunID: runID, TaskID: taskID,
+		Environment: core.Environment{Image: fixtureImage, Workdir: "/work", CPU: 1, MemoryMB: 32, StorageMB: 64},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Stop(context.Background(), live) })
+	sandbox := live.(*Sandbox)
+	execDone := make(chan error, 1)
+	go func() {
+		_, err := sandbox.Exec(ctx, core.Command{Path: "/bin/sh", Args: []string{"-c", "while :; do :; done"}, Timeout: 2 * time.Second})
+		execDone <- err
+	}()
+	time.Sleep(1500 * time.Millisecond)
+	reports, monitorErr := recorder.Stop(ctx)
+	if monitorErr != nil {
+		t.Fatal(monitorErr)
+	}
+	if err := <-execDone; !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("busy exec error = %v", err)
+	}
+	if err := manager.Stop(ctx, live); err != nil {
+		t.Fatal(err)
+	}
+	report := reports[taskID]
+	file, err := os.Open(report.LogPaths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	positive := false
+	var previous uint64
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		var sample monitor.ResourceSample
+		if err := json.Unmarshal(scanner.Bytes(), &sample); err != nil {
+			t.Fatal(err)
+		}
+		if sample.Component != "sandbox" {
+			continue
+		}
+		if sample.CPUUsageNanoseconds < previous {
+			t.Fatalf("CPU counter decreased: %d < %d", sample.CPUUsageNanoseconds, previous)
+		}
+		previous = sample.CPUUsageNanoseconds
+		positive = positive || sample.CPUPercent > 0
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !positive {
+		t.Fatalf("busy container produced no positive CPU sample in %s", report.LogPaths[0])
+	}
+	if _, err := api.ContainerInspect(ctx, sandbox.ContainerID(), client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
+		t.Fatalf("resource test container remains: %v", err)
+	}
+}
+
+func TestDockerSandboxRealLifecycle(t *testing.T) {
+	t.Setenv("TZ", "America/Los_Angeles")
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	api, err := client.New(client.FromEnv, client.WithUserAgent("aries-sandbox-integration-test/1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.Ping(ctx, client.PingOptions{}); err != nil {
+		t.Fatalf("Docker daemon is required for integration tests: %v", err)
+	}
+	ensureFixtureImage(t, ctx, api)
+
+	outputDir := t.TempDir()
+	manager, err := newIntegrationManager(t, Options{
+		OutputDir: outputDir, CleanupTimeout: 20 * time.Second,
+		Logger: logrus.New(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := manager.Start(ctx, core.SandboxRequest{
+		RunID: "integration-run", TaskID: "integration-task",
+		Environment: core.Environment{
+			Image: fixtureImage, Workdir: "/work", CPU: 0.5, MemoryMB: 32,
+			StorageMB: 64, Env: map[string]string{
+				"TASK_ENV": "task-value", "TZ": "task-zone", "DEBIAN_FRONTEND": "dialog",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	sandbox := live.(*Sandbox)
+	t.Cleanup(func() { _ = manager.Stop(context.Background(), live) })
+
+	inspection, err := api.ContainerInspect(ctx, sandbox.ContainerID(), client.ContainerInspectOptions{})
+	if err != nil || inspection.Container.State == nil || !inspection.Container.State.Running {
+		t.Fatalf("container inspection = %#v, %v", inspection.Container, err)
+	}
+	if inspection.Container.Config.WorkingDir != "/work" || inspection.Container.HostConfig.NanoCPUs != 500_000_000 || inspection.Container.HostConfig.Memory != 32<<20 {
+		t.Fatalf("container configuration = %#v / %#v", inspection.Container.Config, inspection.Container.HostConfig)
+	}
+	containerEnv := make(map[string]string, len(inspection.Container.Config.Env))
+	for _, entry := range inspection.Container.Config.Env {
+		key, value, found := strings.Cut(entry, "=")
+		if found {
+			containerEnv[key] = value
+		}
+	}
+	if containerEnv["TZ"] != "America/Los_Angeles" || containerEnv["DEBIAN_FRONTEND"] != "noninteractive" || containerEnv["TASK_ENV"] != "task-value" {
+		t.Fatalf("container environment = %#v, want ARIES precedence and unrelated task value", containerEnv)
+	}
+	networkInspection, err := api.NetworkInspect(ctx, sandbox.Connectivity().Placement.DockerNetwork, client.NetworkInspectOptions{})
+	if err != nil || !networkInspection.Network.Internal || networkInspection.Network.Labels["aries.task"] != "integration-task" {
+		t.Fatalf("network inspection = %#v, %v", networkInspection.Network, err)
+	}
+	if gateway, err := sandbox.BridgeListen(ctx); err != nil || gateway.AdvertiseHost == "" {
+		t.Fatalf("BridgeListen() = %+v, %v", gateway, err)
+	}
+
+	assertExec(t, ctx, sandbox, core.Command{Path: "/bin/pwd"}, 0, "/work\n", "")
+	environment := execForTest(t, ctx, sandbox, core.Command{Path: "/usr/bin/env", Env: map[string]string{"EXEC_ENV": "exec-value", "ARIES_VALID": "value"}})
+	if !strings.Contains(environment.Stdout, "TASK_ENV=task-value\n") || !strings.Contains(environment.Stdout, "EXEC_ENV=exec-value\n") || !strings.Contains(environment.Stdout, "ARIES_VALID=value\n") {
+		t.Fatalf("exec environment = %q", environment.Stdout)
+	}
+	assertExec(t, ctx, sandbox, core.Command{Path: "/bin/cat", Stdin: []byte("stdin-bytes")}, 0, "stdin-bytes", "")
+	assertExec(t, ctx, sandbox, core.Command{Path: "/bin/sh", Args: []string{"-c", "printf stdout; printf stderr >&2; exit 7"}}, 7, "stdout", "stderr")
+
+	uploadSource := filepath.Join(t.TempDir(), "upload.bin")
+	wantBytes := []byte{0, 1, 2, 3, 255, '\n'}
+	if err := os.WriteFile(uploadSource, wantBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := sandbox.Upload(ctx, uploadSource, "/work/upload.bin"); err != nil {
+		t.Fatalf("Upload() error = %v", err)
+	}
+	if got := execForTest(t, ctx, sandbox, core.Command{Path: "/bin/cat", Args: []string{"/work/upload.bin"}}).Stdout; got != string(wantBytes) {
+		t.Fatalf("uploaded bytes = %v", []byte(got))
+	}
+	assertExec(t, ctx, sandbox, core.Command{Path: "/bin/sh", Args: []string{"-c", "cat > /work/download.bin"}, Stdin: wantBytes}, 0, "", "")
+	downloadDestination := filepath.Join(outputDir, "evaluation", "download.bin")
+	if err := sandbox.Download(ctx, "/work/download.bin", downloadDestination); err != nil {
+		t.Fatalf("Download() error = %v", err)
+	}
+	if downloaded, err := os.ReadFile(downloadDestination); err != nil || string(downloaded) != string(wantBytes) {
+		t.Fatalf("downloaded bytes = %v, %v", downloaded, err)
+	}
+
+	const callers = 8
+	var wait sync.WaitGroup
+	errorsByCaller := make(chan error, callers)
+	for range callers {
+		wait.Add(1)
+		go func() { defer wait.Done(); errorsByCaller <- manager.Stop(ctx, live) }()
+	}
+	wait.Wait()
+	close(errorsByCaller)
+	for stopErr := range errorsByCaller {
+		if stopErr != nil {
+			t.Fatalf("concurrent Stop() error = %v", stopErr)
+		}
+	}
+	if _, err := api.ContainerInspect(ctx, sandbox.ContainerID(), client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
+		t.Fatalf("container remains after Stop: %v", err)
+	}
+	if _, err := api.NetworkInspect(ctx, sandbox.Connectivity().Placement.DockerNetwork, client.NetworkInspectOptions{}); !errdefs.IsNotFound(err) {
+		t.Fatalf("network remains after Stop: %v", err)
+	}
+	for _, name := range []string{"container.stdout.log", "container.stderr.log"} {
+		if info, err := os.Stat(filepath.Join(sandbox.artifactDir, name)); err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("log %q = %v, %v", name, info, err)
+		}
+	}
+
+	t.Setenv("TZ", "")
+	fallbackLive, err := manager.Start(ctx, core.SandboxRequest{
+		RunID: "integration-run", TaskID: "timezone-fallback",
+		Environment: core.Environment{Image: fixtureImage, Workdir: "/work", CPU: 0.5, MemoryMB: 32, StorageMB: 64},
+	})
+	if err != nil {
+		t.Fatalf("fallback Start() error = %v", err)
+	}
+	fallback := fallbackLive.(*Sandbox)
+	t.Cleanup(func() { _ = manager.Stop(context.Background(), fallbackLive) })
+	fallbackInspection, err := api.ContainerInspect(ctx, fallback.ContainerID(), client.ContainerInspectOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsEnvironment(fallbackInspection.Container.Config.Env, "TZ=UTC") || !containsEnvironment(fallbackInspection.Container.Config.Env, "DEBIAN_FRONTEND=noninteractive") {
+		t.Fatalf("fallback container environment = %#v", fallbackInspection.Container.Config.Env)
+	}
+	if err := manager.Stop(ctx, fallbackLive); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDockerSandboxVerifiesNoNewPrivileges(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	api, err := client.New(client.FromEnv, client.WithUserAgent("aries-no-new-privileges-integration-test/1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.Ping(ctx, client.PingOptions{}); err != nil {
+		t.Fatalf("Docker daemon is required for integration tests: %v", err)
+	}
+	ensureFixtureImage(t, ctx, api)
+
+	manager, err := newIntegrationManager(t, Options{OutputDir: t.TempDir(), CleanupTimeout: 20 * time.Second, Logger: logrus.New()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := manager.Start(ctx, core.SandboxRequest{
+		RunID: "no-new-privileges-integration", TaskID: "non-root-task",
+		Environment: core.Environment{
+			Image: fixtureImage, Workdir: "/", CPU: 0.5, MemoryMB: 32, StorageMB: 64,
+			ExecUser: "65532:65532",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	sandbox := live.(*Sandbox)
+	t.Cleanup(func() { _ = manager.Stop(context.Background(), live) })
+
+	inspection, err := api.ContainerInspect(ctx, sandbox.ContainerID(), client.ContainerInspectOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspection.Container.HostConfig == nil || !noNewPrivilegesEnabled(inspection.Container.HostConfig.SecurityOpt) {
+		t.Fatalf("container security options = %#v", inspection.Container.HostConfig)
+	}
+	assertExec(t, ctx, sandbox, core.Command{
+		Path: "/bin/sh", Args: []string{"-c", "grep -Eq '^NoNewPrivs:[[:space:]]*1$' /proc/self/status"},
+	}, 0, "", "")
+	if err := manager.Stop(ctx, live); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.ContainerInspect(ctx, sandbox.ContainerID(), client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
+		t.Fatalf("container remains after Stop: %v", err)
+	}
+}
+
+func TestDockerSandboxRootWorkdirLifecycle(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	api, err := client.New(client.FromEnv, client.WithUserAgent("aries-root-workdir-integration-test/1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.Ping(ctx, client.PingOptions{}); err != nil {
+		t.Fatalf("Docker daemon is required for integration tests: %v", err)
+	}
+	ensureFixtureImage(t, ctx, api)
+
+	manager, err := newIntegrationManager(t, Options{OutputDir: t.TempDir(), CleanupTimeout: 20 * time.Second, Logger: logrus.New()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := manager.Start(ctx, core.SandboxRequest{
+		RunID: "root-workdir-integration", TaskID: "root-task",
+		Environment: core.Environment{Image: fixtureImage, Workdir: "/", CPU: 0.5, MemoryMB: 32, StorageMB: 64},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sandbox := live.(*Sandbox)
+	t.Cleanup(func() { _ = manager.Stop(context.Background(), live) })
+
+	assertExec(t, ctx, sandbox, core.Command{Path: "/bin/pwd", Dir: "/"}, 0, "/\n", "")
+	const descendant = "/aries-root-workdir-descendant"
+	assertExec(t, ctx, sandbox, core.Command{
+		Path: "/bin/sh", Dir: "/", Args: []string{"-c", "printf root-workdir > \"$1\"", "aries-root-workdir", descendant},
+	}, 0, "", "")
+	assertExec(t, ctx, sandbox, core.Command{Path: "/bin/cat", Dir: "/", Args: []string{descendant}}, 0, "root-workdir", "")
+
+	if err := manager.Stop(ctx, live); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.ContainerInspect(ctx, sandbox.ContainerID(), client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
+		t.Fatalf("root-workdir container remains after Stop: %v", err)
+	}
+	if _, err := api.NetworkInspect(ctx, sandbox.Connectivity().Placement.DockerNetwork, client.NetworkInspectOptions{}); !errdefs.IsNotFound(err) {
+		t.Fatalf("root-workdir network remains after Stop: %v", err)
+	}
+}
+
+func containsEnvironment(environment []string, want string) bool {
+	for _, entry := range environment {
+		if entry == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestExecCancellationKillsOnlyItsProcessGroup(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	api, err := client.New(client.FromEnv, client.WithUserAgent("aries-sandbox-integration-test/1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.Ping(ctx, client.PingOptions{}); err != nil {
+		t.Fatalf("Docker daemon is required for integration tests: %v", err)
+	}
+	ensureFixtureImage(t, ctx, api)
+
+	manager, err := newIntegrationManager(t, Options{
+		OutputDir: t.TempDir(), CleanupTimeout: 8 * time.Second,
+		Logger: logrus.New(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := manager.Start(ctx, core.SandboxRequest{
+		RunID: "cancel-run", TaskID: "cancel-task",
+		Environment: core.Environment{Image: fixtureImage, Workdir: "/work", CPU: 0.5, MemoryMB: 32, StorageMB: 64},
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	sandbox := live.(*Sandbox)
+	t.Cleanup(func() { _ = manager.Stop(context.Background(), live) })
+
+	before, err := api.ContainerInspect(ctx, sandbox.ContainerID(), client.ContainerInspectOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertExec(t, ctx, sandbox, core.Command{Path: "/bin/sh", Args: []string{"-c", "setsid sleep 60 >/dev/null 2>&1 & echo $! > /work/unrelated.pid; printf preserved > /work/unrelated.state"}}, 0, "", "")
+	unrelatedPID := strings.TrimSpace(execForTest(t, ctx, sandbox, core.Command{Path: "/bin/cat", Args: []string{"/work/unrelated.pid"}}).Stdout)
+
+	started := time.Now()
+	_, err = sandbox.Exec(ctx, core.Command{
+		Path:    "/bin/sh",
+		Args:    []string{"-c", "echo $$ > /work/canceled.pid; trap '' TERM; while :; do sleep 1; done"},
+		Timeout: 400 * time.Millisecond,
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("timed-out Exec() error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 8*time.Second {
+		t.Fatalf("timed-out Exec() returned after %s: %v", elapsed, err)
+	}
+
+	after, err := api.ContainerInspect(ctx, sandbox.ContainerID(), client.ContainerInspectOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Container.ID != before.Container.ID || after.Container.State.StartedAt != before.Container.State.StartedAt || !after.Container.State.Running {
+		t.Fatalf("task container changed across exec cancellation: before=%s/%s after=%s/%s running=%v", before.Container.ID, before.Container.State.StartedAt, after.Container.ID, after.Container.State.StartedAt, after.Container.State.Running)
+	}
+	assertExec(t, ctx, sandbox, core.Command{Path: "/bin/cat", Args: []string{"/work/unrelated.state"}}, 0, "preserved", "")
+	assertExec(t, ctx, sandbox, core.Command{Path: "/bin/sh", Args: []string{"-c", "test -d /proc/$1", "aries-check", unrelatedPID}}, 0, "", "")
+	canceledPID := strings.TrimSpace(execForTest(t, ctx, sandbox, core.Command{Path: "/bin/cat", Args: []string{"/work/canceled.pid"}}).Stdout)
+	assertExec(t, ctx, sandbox, core.Command{Path: "/bin/sh", Args: []string{"-c", "test ! -d /proc/$1", "aries-check", canceledPID}}, 0, "", "")
+
+	if err := manager.Stop(ctx, live); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	if _, err := api.ContainerInspect(ctx, sandbox.ContainerID(), client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
+		t.Fatalf("container remains after Stop: %v", err)
+	}
+	if _, err := api.NetworkInspect(ctx, sandbox.Connectivity().Placement.DockerNetwork, client.NetworkInspectOptions{}); !errdefs.IsNotFound(err) {
+		t.Fatalf("network remains after Stop: %v", err)
+	}
+}
+
+func ensureFixtureImage(t *testing.T, ctx context.Context, api *client.Client) {
+	t.Helper()
+	if _, err := api.ImageInspect(ctx, fixtureImage); err == nil {
+		return
+	}
+	pull, err := api.ImagePull(ctx, fixtureImage, client.ImagePullOptions{})
+	if err != nil {
+		t.Fatalf("pull digest-pinned fixture: %v", err)
+	}
+	defer pull.Close()
+	if err := pull.Wait(ctx); err != nil {
+		t.Fatalf("wait for fixture pull: %v", err)
+	}
+}
+
+func execForTest(t *testing.T, ctx context.Context, sandbox *Sandbox, command core.Command) core.CommandResult {
+	t.Helper()
+	result, err := sandbox.Exec(ctx, command)
+	if err != nil {
+		t.Fatalf("Exec(%s) error = %v", command.Path, err)
+	}
+	return result
+}
+
+func assertExec(t *testing.T, ctx context.Context, sandbox *Sandbox, command core.Command, exitCode int, stdout, stderr string) {
+	t.Helper()
+	result := execForTest(t, ctx, sandbox, command)
+	if result.ExitCode != exitCode || result.Stdout != stdout || result.Stderr != stderr || result.Duration <= 0 {
+		t.Fatalf("Exec(%s) = %#v", command.Path, result)
+	}
+}
+
+func integrationDeployment(t *testing.T) *deploymentdocker.Manager {
+	t.Helper()
+	backend, err := deploymentdocker.New(deploymentdocker.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := backend.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return backend
+}
+
+func noNewPrivilegesEnabled(options []string) bool {
+	for _, option := range options {
+		switch option {
+		case "no-new-privileges", "no-new-privileges=true", "no-new-privileges:true":
+			return true
+		}
+	}
+	return false
+}
+
+func newIntegrationManager(t *testing.T, options Options) (*Manager, error) {
+	backend := integrationDeployment(t)
+	options.Deployment = backend
+	options.NewEnvironment = backend.NewTaskEnvironment
+	return New(options)
+}

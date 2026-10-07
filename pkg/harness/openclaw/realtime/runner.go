@@ -1,6 +1,7 @@
 package realtime
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -206,11 +207,25 @@ func (runner *Runner) Run(ctx context.Context) (out Result, err error) {
 		result.AppendError(err.Error())
 		return result.WithoutEvents(), err
 	}
-	if err := runner.appendAudio(ctx, session); err != nil {
-		result.AppendError(err.Error())
-		return result.WithoutEvents(), err
+	audioDone := make(chan struct{})
+	eventCtx, cancelEvents := context.WithCancel(ctx)
+	eventErr := make(chan error, 1)
+	go func() {
+		eventErr <- runner.processEvents(eventCtx, &result, audioDone)
+	}()
+	appendErr := runner.appendAudio(ctx, session)
+	close(audioDone)
+	if appendErr != nil {
+		cancelEvents()
+		if err := <-eventErr; err != nil && !errors.Is(err, context.Canceled) {
+			appendErr = errors.Join(appendErr, err)
+		}
+		result.AppendError(appendErr.Error())
+		return result.WithoutEvents(), appendErr
 	}
-	if err := runner.processEvents(ctx, &result); err != nil {
+	err = <-eventErr
+	cancelEvents()
+	if err != nil {
 		result.AppendError(err.Error())
 		return scrubRealtimeEvents(result, runner.options.IncludeEvents), err
 	}
@@ -343,24 +358,41 @@ func realtimeAudioTimestampMillis(audio Audio, offset int) int {
 	return offset * 1000 / max(1, audio.Rate*audio.BytesPerSample)
 }
 
-func (runner *Runner) processEvents(ctx context.Context, result *Result) error {
+func (runner *Runner) processEvents(ctx context.Context, result *Result, audioDone <-chan struct{}) error {
 	state := realtimeEventState{
 		activeAgentRuns:    map[string]struct{}{},
 		completedAgentRuns: map[string]struct{}{},
 		failedAgentRuns:    map[string]string{},
-		deadline:           time.Now().Add(durationOrDefault(runner.options.ListenDuration, defaultTrailingListenDuration)),
 	}
-	for time.Now().Before(state.deadline) {
-		waitUntil := state.deadline
-		if !state.hasActiveRuns() && !state.quietDeadline.IsZero() && state.quietDeadline.Before(waitUntil) {
-			waitUntil = state.quietDeadline
+	listening := false
+	for {
+		if !listening {
+			select {
+			case <-audioDone:
+				listening = true
+				state.deadline = time.Now().Add(durationOrDefault(runner.options.ListenDuration, defaultTrailingListenDuration))
+			default:
+			}
+		}
+		waitUntil := time.Now().Add(100 * time.Millisecond)
+		if listening {
+			if !time.Now().Before(state.deadline) {
+				break
+			}
+			waitUntil = state.deadline
+			if !state.hasActiveRuns() && !state.quietDeadline.IsZero() && state.quietDeadline.Before(waitUntil) {
+				waitUntil = state.quietDeadline
+			}
 		}
 		recvCtx, cancel := context.WithDeadline(ctx, waitUntil)
 		frame, err := runner.gateway.RecvEvent(recvCtx)
 		cancel()
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
-				if !state.quietDeadline.IsZero() && !state.hasActiveRuns() && !time.Now().Before(state.quietDeadline) {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return ctxErr
+				}
+				if listening && !state.quietDeadline.IsZero() && !state.hasActiveRuns() && !time.Now().Before(state.quietDeadline) {
 					break
 				}
 				continue
@@ -541,7 +573,7 @@ func (runner *Runner) processChatEvent(event chatEvent, result *Result, state *r
 			return
 		}
 		delete(state.activeAgentRuns, event.RunID)
-		detail := firstNonEmpty(event.ErrorMessage, event.StopReason, event.State)
+		detail := cmp.Or(event.ErrorMessage, event.StopReason, event.State)
 		if event.ErrorKind != "" {
 			detail += " (" + event.ErrorKind + ")"
 		}
@@ -641,7 +673,7 @@ func (runner *Runner) consultAgent(ctx context.Context, toolCall toolCallEvent) 
 }
 
 func (runner *Runner) submitToolResult(ctx context.Context, toolCall toolCallEvent, toolResult any) error {
-	sessionID := firstNonEmpty(toolCall.RelaySessionID, toolCall.SessionID)
+	sessionID := cmp.Or(toolCall.RelaySessionID, toolCall.SessionID)
 	callCtx, cancel := context.WithTimeout(ctx, durationOrDefault(runner.options.SubmitToolResultTimeout, defaultSubmitToolResultTimeout))
 	response, err := runner.gateway.Call(callCtx, methodSubmitToolResult, map[string]any{
 		"sessionId": sessionID,
@@ -676,7 +708,7 @@ func (runner *Runner) finishActiveAgentRuns(ctx context.Context, result *Result,
 		if strings.EqualFold(status, "ok") {
 			continue
 		}
-		detail := firstNonEmpty(stringFromAny(payload["error"]), stringFromAny(payload["stopReason"]), status)
+		detail := cmp.Or(stringFromAny(payload["error"]), stringFromAny(payload["stopReason"]), status)
 		if detail == "" {
 			detail = "unknown status"
 		}
@@ -685,7 +717,7 @@ func (runner *Runner) finishActiveAgentRuns(ctx context.Context, result *Result,
 }
 
 func talkPayloadDiagnostic(eventType string, payload map[string]any) string {
-	detail := firstNonEmpty(
+	detail := cmp.Or(
 		boundedProtocolText(payload["message"]), boundedProtocolText(payload["error"]),
 		boundedProtocolText(payload["reason"]), boundedProtocolText(payload["code"]),
 	)
@@ -814,15 +846,6 @@ func intPointerOrDefault(value *int, fallback int) int {
 		return fallback
 	}
 	return *value
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func stringFromAny(value any) string {

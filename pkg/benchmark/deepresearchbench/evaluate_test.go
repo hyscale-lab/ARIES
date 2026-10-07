@@ -377,3 +377,7 @@ func TestEvaluateFactErrorDoesNotFailRaceDrivenOutcome(t *testing.T) {
 		t.Fatalf("fact error artifact = %q, err = %v", factErrorArtifact, err)
 	}
 }
+
+func (s *evaluateFake) Connectivity() core.HarnessConnectivity {
+	return core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "test-network"}}
+}

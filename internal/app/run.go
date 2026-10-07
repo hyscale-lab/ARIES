@@ -21,9 +21,10 @@ type HarnessInstance struct {
 }
 
 type SandboxInstance struct {
-	Sandbox   runner.ToolSandbox
-	Resources monitor.ResourceSource
-	Close     func() error
+	BridgeListen func(context.Context) (core.BridgeListen, error)
+	Sandbox      runner.ToolSandbox
+	Resources    monitor.ResourceSource
+	Close        func() error
 }
 
 type Wiring struct {
@@ -31,11 +32,12 @@ type Wiring struct {
 	ValidateComponents   func(config.Config) error
 	SetupBenchmark       func(context.Context, config.Config) error
 	LoadPreparationTasks func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error)
-	PullImages           func(context.Context, []string) error
+	PullImages           func(context.Context, config.Config, []string) error
+	BuildHarnessImage    func(context.Context, config.Config) error
 	NewBenchmark         func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error)
 	NewHarness           func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error)
 	NewSandbox           func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error)
-	NewBridge            func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error)
+	NewBridge            func(config.Config, string, func(context.Context) (core.BridgeListen, error), *logrus.Logger) (runner.ToolBridge, error)
 }
 
 type Dependencies struct {
@@ -213,12 +215,24 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 		runtimeEntry.WithField("runtime_state", "healthy").Info("model runtime lifecycle")
 	}
 
+	var schedule []arrival
+	if cfg.Execution.ArrivalsFile != "" {
+		loaded, err := config.LoadArrivals(cfg.Execution.ArrivalsFile, cfg.Execution.ArrivalRatePerMin, cfg.Benchmark.Tasks)
+		if err != nil {
+			return fmt.Errorf("load arrival schedule: %w", err)
+		}
+		for _, entry := range loaded {
+			schedule = append(schedule, arrival{logicalID: entry.TaskID, at: entry.At})
+		}
+		logger.WithFields(logrus.Fields{"arrivals": len(schedule), "rate_per_min": cfg.Execution.ArrivalRatePerMin, "last_offset": schedule[len(schedule)-1].at.String()}).Info("open-loop arrival schedule loaded")
+	}
+
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
 	completed := make(chan error, 1)
 	go func() {
 		completed <- executeAndRecord(runCtx, func(executionCtx context.Context) (core.RunResult, error) {
-			return runProfile(executionCtx, cfg.Name, runID, cfg.Benchmark.Tasks, cfg.Execution.Concurrency, cfg.Execution.Loop,
+			return runProfile(executionCtx, cfg.Name, runID, cfg.Benchmark.Tasks, cfg.Execution.Concurrency, cfg.Execution.Loop, schedule,
 				func(taskCtx context.Context, occurrence taskOccurrence) (core.RunResult, error) {
 					experiment, err := buildTaskExperiment(cfg, prepared.Model, prepared.EffectiveGPUIndices, runID, outputRoot, occurrence.logicalID, occurrence.executionID, harnessLookup, logger, dependencies.Wiring)
 					if err != nil {
@@ -239,7 +253,7 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 }
 
 func ensurePrepared(ctx context.Context, cfg config.Config, wiring Wiring, apiKeyLookup func(string) ([]byte, bool)) error {
-	if wiring.SetupBenchmark == nil || wiring.LoadPreparationTasks == nil || wiring.PullImages == nil {
+	if wiring.SetupBenchmark == nil || wiring.LoadPreparationTasks == nil || wiring.PullImages == nil || wiring.BuildHarnessImage == nil {
 		return errors.New("preparation wiring is incomplete")
 	}
 	if err := wiring.SetupBenchmark(ctx, cfg); err != nil {
@@ -257,7 +271,10 @@ func ensurePrepared(ctx context.Context, cfg config.Config, wiring Wiring, apiKe
 	for _, task := range tasks {
 		images = append(images, task.Environment.Image)
 	}
-	return wiring.PullImages(ctx, uniqueStrings(images))
+	if err := wiring.PullImages(ctx, cfg, uniqueStrings(images)); err != nil {
+		return err
+	}
+	return wiring.BuildHarnessImage(ctx, cfg)
 }
 
 func validateWiredComponents(cfg config.Config, wiring Wiring) error {
@@ -306,7 +323,7 @@ func buildTaskExperiment(cfg config.Config, model core.ModelConfig, effectiveGPU
 	if err != nil {
 		return nil, errors.Join(err, closeOccurrenceClients(nil, harness.Close))
 	}
-	bridge, err := wiring.NewBridge(cfg, outputRoot, logger)
+	bridge, err := wiring.NewBridge(cfg, outputRoot, sandbox.BridgeListen, logger)
 	if err != nil {
 		return nil, errors.Join(err, sandbox.Resources.Close(), closeOccurrenceClients(sandbox.Close, harness.Close))
 	}

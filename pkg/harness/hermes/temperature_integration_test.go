@@ -3,134 +3,165 @@
 package hermes
 
 import (
+	harnesscommon "github.com/hyscale-lab/aries/pkg/harness"
+
 	"context"
 	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/core"
+	dockerdeployment "github.com/hyscale-lab/aries/pkg/deployment/docker"
 )
 
-// Exercise the real one-shot configuration loader and OpenAI SDK serialization,
-// not merely the YAML shape. The legacy case locks compatibility for the
-// request settings supported by v2026.5.29.2; compression.threshold_tokens is
-// intentionally excluded because that release ignores it. The fake endpoint
-// stays inside each task container.
+// Exercise the native Gateway configuration loader and actual model requests.
 func TestRequestSettingsReachRealHermes(t *testing.T) {
-	tests := []struct {
-		name        string
-		image       string
-		temperature float64
-	}{
-		{name: "current-zero", image: "docker.io/nousresearch/hermes-agent:v2026.8.31", temperature: 0},
-		{name: "current-nonzero", image: "docker.io/nousresearch/hermes-agent:v2026.8.31", temperature: 0.7},
-		{name: "legacy-v2026.5.29.2", image: integrationImage, temperature: 0.7},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			temperature := test.temperature
-			if test.image == integrationImage {
-				requireDockerImage(t)
+	requireDockerImage(t)
+	for _, temperature := range []float64{0, 0.7} {
+		t.Run(fmt.Sprint(temperature), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
+			provider, err := dockerdeployment.New(dockerdeployment.Options{})
+			if err != nil {
+				t.Fatal(err)
 			}
-			manager, err := New(Options{
-				Image: test.image, OutputDir: t.TempDir(),
-				StartTimeout: 90 * time.Second, CleanupTimeout: 60 * time.Second,
-				ExtraBody:    []byte(`{"user":"aries-temperature-regression"}`),
-				APIKeyLookup: func(string) ([]byte, bool) { return []byte("sk-integration-not-a-real-key"), true },
+			environment := provider.NewTaskEnvironment()
+			t.Cleanup(func() {
+				cleanup, cancel := context.WithTimeout(context.Background(), time.Minute)
+				defer cancel()
+				if err := environment.Stop(cleanup); err != nil {
+					t.Error(err)
+				}
+				_ = provider.Close()
 			})
+			connectivity, err := environment.Start(ctx, core.SandboxRequest{RunID: "temperature-integration", TaskID: "temperature", Environment: core.Environment{AllowNetwork: true}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			endpoint, err := environment.BridgeListen(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var mu sync.Mutex
+			var bodies []map[string]json.RawMessage
+			listener, err := net.Listen("tcp4", "0.0.0.0:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := &http.Server{ReadHeaderTimeout: 5 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]json.RawMessage
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					http.Error(w, err.Error(), 400)
+					return
+				}
+				mu.Lock()
+				bodies = append(bodies, body)
+				mu.Unlock()
+				replyFakeCompletion(w, body["stream"], map[string]any{"role": "assistant", "content": "done"}, "stop")
+			})}
+			go func() { _ = server.Serve(listener) }()
+			t.Cleanup(func() { _ = server.Close() })
+			_, port, _ := net.SplitHostPort(listener.Addr().String())
+			manager, err := New(Options{Runtime: harnesscommon.RuntimeOptions{
+
+				Deployment:     integrationDeployment(t),
+				Image:          integrationImage,
+				OutputDir:      t.TempDir(),
+				StartTimeout:   90 * time.Second,
+				CleanupTimeout: 60 * time.Second,
+				APIKeyLookup:   func(string) ([]byte, bool) { return []byte("sk-integration-not-a-real-key"), true },
+			}, ExtraBody: []byte(`{"user":"aries-temperature-regression"}`)})
 			if err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+				cleanup, cancel := context.WithTimeout(context.Background(), time.Minute)
 				defer cancel()
-				if err := manager.Stop(ctx); err != nil {
-					t.Errorf("stop Hermes: %v", err)
+				if err := manager.Stop(cleanup); err != nil {
+					t.Error(err)
 				}
-				if err := manager.Close(); err != nil {
-					t.Errorf("close Hermes: %v", err)
-				}
+				_ = manager.Close()
 			})
-			identity := filepath.Join(t.TempDir(), "id_ed25519")
+			identity := filepath.Join(t.TempDir(), "identity")
 			if err := os.WriteFile(identity, []byte("integration identity"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			request := core.HarnessRequest{
-				RunID: "temperature-integration", TaskID: "temperature",
-				Endpoint: core.ToolEndpoint{Protocol: "ssh", Address: "127.0.0.1:2222", Username: "aries", Network: "bridge", IdentitySourceFile: identity},
-				Model: core.ModelConfig{
-					Provider: "openai", BaseURL: "http://127.0.0.1:18080/v1", Model: "aries-deterministic",
-					APIKeyEnv: "ARIES_TEST_MODEL_KEY", ContextLength: 262144, MaxTokens: 32768, Temperature: &temperature,
-				},
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-			defer cancel()
+			request := core.HarnessRequest{Connectivity: connectivity, RunID: "temperature-integration", TaskID: "temperature", Endpoint: core.ToolEndpoint{Protocol: "ssh", Address: "127.0.0.1:2222", Username: "aries", IdentitySourceFile: identity, Workdir: "/app"}, Model: core.ModelConfig{Provider: "openai", BaseURL: "http://" + net.JoinHostPort(endpoint.AdvertiseHost, port) + "/v1", Model: "aries-deterministic", APIKeyEnv: "ARIES_TEST_MODEL_KEY", ContextLength: 262144, MaxTokens: 32768, Temperature: &temperature}}
 			if err := manager.Start(ctx, request); err != nil {
 				t.Fatal(err)
 			}
-			result, err := manager.execAttached(ctx, manager.active.containerID, []string{"python3", "-c", temperatureRequestDriver}, workspaceRoot)
-			if err != nil || result.exitCode != 0 {
-				t.Fatalf("real one-shot: %v, exit=%d\n%s\n%s", err, result.exitCode, result.stdout, result.stderr)
+			result, err := manager.Run(ctx, "Reply with done without using tools.")
+			if err != nil || result.Status != core.StatusSucceeded {
+				t.Fatalf("Gateway run: %#v, %v", result, err)
 			}
-			var bodies []map[string]json.RawMessage
-			if err := json.Unmarshal(result.stdout, &bodies); err != nil {
-				t.Fatalf("decode requests: %v\n%s", err, result.stdout)
-			}
-			if len(bodies) == 0 {
-				t.Fatal("Hermes sent no completion requests")
-			}
+			mu.Lock()
+			defer mu.Unlock()
 			mainRequests := 0
+			systemMessages := 0
 			for _, body := range bodies {
-				// Hermes may also issue auxiliary probes without profile overrides.
+				var messages []struct {
+					Role    string          `json:"role"`
+					Content json.RawMessage `json:"content"`
+				}
+				if err := json.Unmarshal(body["messages"], &messages); err != nil {
+					t.Fatal(err)
+				}
+				for _, message := range messages {
+					if message.Role != "system" {
+						continue
+					}
+					systemMessages++
+					for _, marker := range []string{"Hermes Agent - Development Guide", "Contribution Rubric", "Per-conversation prompt caching is sacred"} {
+						if strings.Contains(string(message.Content), marker) {
+							t.Errorf("system prompt unexpectedly contains repository guidance marker %q", marker)
+						}
+					}
+				}
 				if len(body["user"]) == 0 {
 					continue
 				}
 				mainRequests++
 				var actual *float64
 				if err := json.Unmarshal(body["temperature"], &actual); err != nil || actual == nil || *actual != temperature {
-					t.Errorf("request temperature=%s, want %v", body["temperature"], temperature)
+					t.Errorf("temperature=%s, want %v", body["temperature"], temperature)
 				}
 				if string(body["user"]) != `"aries-temperature-regression"` {
-					t.Errorf("extra_body user=%s", body["user"])
+					t.Errorf("extra body user=%s", body["user"])
 				}
 				if string(body["max_tokens"]) != "32768" {
-					t.Errorf("request max_tokens=%s", body["max_tokens"])
+					t.Errorf("max_tokens=%s", body["max_tokens"])
 				}
 			}
+			if systemMessages == 0 {
+				t.Fatal("no captured system prompt")
+			}
 			if mainRequests == 0 {
-				t.Fatal("no request preserved the extra_body user field")
+				t.Fatal("no request preserved configured generation settings")
 			}
 		})
 	}
 }
 
-const temperatureRequestDriver = `
-import http.server, json, subprocess, threading
-bodies = []
-class Handler(http.server.BaseHTTPRequestHandler):
-    def log_message(self, *args): pass
-    def do_POST(self):
-        assert self.path == "/v1/chat/completions", self.path
-        bodies.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
-        payload = json.dumps({"id":"aries-test", "object":"chat.completion", "created":0,
-            "model":"aries-deterministic", "choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}],
-            "usage":{"prompt_tokens":10,"completion_tokens":1,"total_tokens":11}}).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(payload)))
-        self.end_headers()
-        self.wfile.write(payload)
-server = http.server.HTTPServer(("127.0.0.1", 18080), Handler)
-thread = threading.Thread(target=server.serve_forever, daemon=True)
-thread.start()
-try:
-    result = subprocess.run(["/run/aries/run-agent", "aries-deterministic", "custom", "Reply with done without using tools."], capture_output=True, text=True, timeout=90)
-    assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
-    print(json.dumps(bodies))
-finally:
-    server.shutdown()
-    server.server_close()
-    thread.join()
-`
+func replyFakeCompletion(w http.ResponseWriter, stream json.RawMessage, message map[string]any, finish string) {
+	if string(stream) == "true" {
+		if calls, ok := message["tool_calls"].([]any); ok {
+			calls[0].(map[string]any)["index"] = 0
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, choice := range []map[string]any{{"index": 0, "delta": message, "finish_reason": nil}, {"index": 0, "delta": map[string]any{}, "finish_reason": finish}} {
+			data, _ := json.Marshal(map[string]any{"id": "aries-test", "object": "chat.completion.chunk", "created": 1, "model": "aries-deterministic", "choices": []any{choice}})
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+		}
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"id": "aries-test", "object": "chat.completion", "created": 1, "model": "aries-deterministic", "choices": []any{map[string]any{"index": 0, "message": message, "finish_reason": finish}}, "usage": map[string]int{"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20}})
+}

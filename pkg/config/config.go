@@ -46,6 +46,13 @@ type ExecutionConfig struct {
 	Concurrency  int           `json:"concurrency"`
 	LoopDuration string        `json:"loop_duration,omitempty"`
 	Loop         time.Duration `json:"-"`
+	// ArrivalsFile and ArrivalRatePerMin turn the run into an open loop: each
+	// task starts at the offset the trace gives it, scaled from the trace's
+	// base rate to ArrivalRatePerMin, instead of as soon as a worker is free.
+	// Concurrency still caps the tasks in flight; set it at or above the task
+	// count so the schedule, not the pool, decides when a task starts.
+	ArrivalsFile      string  `json:"arrivals_file,omitempty"`
+	ArrivalRatePerMin float64 `json:"arrival_rate_per_min,omitempty"`
 }
 
 // RuntimeConfig selects the model service. Mode is the ownership distinction:
@@ -205,12 +212,16 @@ func (f FactConfig) CoreModel() core.ModelConfig {
 }
 
 type HarnessConfig struct {
+	Deployment      DeploymentConfig             `json:"deployment,omitempty"`
 	Type            string                       `json:"type"`
 	Mode            string                       `json:"mode,omitempty"`
 	Realtime        HarnessRealtimeConfig        `json:"realtime,omitempty"`
 	VoiceTranscribe HarnessVoiceTranscribeConfig `json:"voice_transcribe,omitempty"`
 	WebSearch       HarnessWebSearchConfig       `json:"web_search,omitempty"`
 	Subagents       HarnessSubagentsConfig       `json:"subagents,omitempty"`
+	// MCPServers configures external or in-harness Model Context Protocol (MCP) servers
+	// for Hermes and OpenClaw harnesses.
+	MCPServers []core.MCPServerConfig `json:"mcp_servers,omitempty"`
 	// Compaction is rendered only by Hermes today (see
 	// (*HarnessConfig).validateHermesBlocks) but names a general harness
 	// capability, so it lives on the shared struct and is gated by an
@@ -379,10 +390,13 @@ type VoiceSTTConfig struct {
 }
 
 type SandboxConfig struct {
-	Type string `json:"type"`
+	// Type accepts the legacy Docker selector during normalization.
+	Type       string           `json:"type,omitempty"`
+	Deployment DeploymentConfig `json:"deployment,omitempty"`
 }
 
 type BridgeConfig struct {
+	Mode string `json:"mode,omitempty"`
 	Type string `json:"type"`
 	// RetainRawLog keeps the bridge's byte-level ssh_raw.log. It defaults to
 	// false because that log is the largest artifact a run writes and captures
@@ -442,7 +456,14 @@ type OpenClawVersions struct {
 }
 
 type HermesVersions struct {
-	Image string `json:"image"`
+	Image      string                   `json:"image"`
+	OTelPlugin HermesOTelPluginVersions `json:"otel_plugin"`
+}
+
+type HermesOTelPluginVersions struct {
+	RepositoryURL string `json:"repository_url"`
+	Version       string `json:"version"`
+	Revision      string `json:"revision"`
 }
 
 type CodexVersions struct {
@@ -632,6 +653,9 @@ func decodeStrictJSON(r io.Reader, destination any, name string) error {
 }
 
 func (c *Config) validate() error {
+	if err := c.NormalizeDeployment(); err != nil {
+		return err
+	}
 	if c.Execution.Concurrency <= 0 {
 		return errors.New("execution.concurrency must be positive")
 	}
@@ -642,6 +666,17 @@ func (c *Config) validate() error {
 		}
 		c.Execution.Loop = loop
 	}
+	if (c.Execution.ArrivalsFile != "") != (c.Execution.ArrivalRatePerMin != 0) {
+		return errors.New("execution.arrivals_file and execution.arrival_rate_per_min must be set together")
+	}
+	if c.Execution.ArrivalsFile != "" {
+		if !(c.Execution.ArrivalRatePerMin > 0) || math.IsInf(c.Execution.ArrivalRatePerMin, 0) {
+			return errors.New("execution.arrival_rate_per_min must be finite and positive")
+		}
+		if c.Execution.LoopDuration != "" {
+			return errors.New("execution.arrivals_file cannot be combined with execution.loop_duration")
+		}
+	}
 	checks := []struct {
 		name  string
 		value string
@@ -651,7 +686,6 @@ func (c *Config) validate() error {
 		{"benchmark.type", c.Benchmark.Type},
 		{"benchmark.root", c.Benchmark.Root},
 		{"harness.type", c.Harness.Type},
-		{"sandbox.type", c.Sandbox.Type},
 		{"bridge.type", c.Bridge.Type},
 		{"runtime.backend", c.Runtime.Backend},
 		{"runtime.mode", c.Runtime.Mode},
@@ -944,6 +978,21 @@ func (h *HarnessConfig) validate() error {
 		enabled := true
 		h.Subagents.Enabled = &enabled
 	}
+	if len(h.MCPServers) > 0 {
+		if h.Type != "openclaw" && h.Type != "hermes" {
+			return errors.New("harness.mcp_servers requires OpenClaw or Hermes")
+		}
+		seenMCPServers := make(map[string]bool, len(h.MCPServers))
+		for _, server := range h.MCPServers {
+			if seenMCPServers[server.Name] {
+				return fmt.Errorf("duplicate MCP server name %q", server.Name)
+			}
+			seenMCPServers[server.Name] = true
+			if err := core.ValidateMCPServer(server); err != nil {
+				return fmt.Errorf("harness.mcp_servers: %w", err)
+			}
+		}
+	}
 	switch h.Mode {
 	case "agent":
 		if h.Realtime != (HarnessRealtimeConfig{}) {
@@ -1195,6 +1244,14 @@ func (c Versions) validate() error {
 			return fmt.Errorf("hermes.image: %w", err)
 		}
 	}
+	if plugin := c.Hermes.OTelPlugin; plugin != (HermesOTelPluginVersions{}) {
+		if err := validateRepositoryPin("hermes.otel_plugin", plugin.RepositoryURL, plugin.Revision); err != nil {
+			return err
+		}
+		if !validPluginVersion(plugin.Version) {
+			return errors.New("hermes.otel_plugin.version must be a dotted release number")
+		}
+	}
 	if c.Codex != (CodexVersions{}) {
 		if err := c.Codex.validate(); err != nil {
 			return err
@@ -1213,6 +1270,16 @@ func (c CodexVersions) validate() error {
 		return errors.New("codex.version must be a pinned release in X.Y.Z form")
 	}
 	return nil
+}
+
+func validPluginVersion(version string) bool {
+	parts := strings.Split(version, ".")
+	for _, part := range parts {
+		if part == "" || strings.Trim(part, "0123456789") != "" {
+			return false
+		}
+	}
+	return len(parts) >= 2
 }
 
 // HarnessImage returns the pinned image the named harness runs from. The set of

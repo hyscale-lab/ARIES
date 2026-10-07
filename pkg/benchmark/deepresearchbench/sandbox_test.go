@@ -165,3 +165,7 @@ func TestPrepareSandboxRequiresLiveSandbox(t *testing.T) {
 		t.Fatal("PrepareSandbox accepted a nil sandbox")
 	}
 }
+
+func (s *prepareSandboxFake) Connectivity() core.HarnessConnectivity {
+	return core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "test-network"}}
+}

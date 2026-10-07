@@ -32,6 +32,8 @@ const (
 
 // Options are the host-local inputs to one Codex SSH bridge.
 type Options struct {
+	// ResolveListen supplies task-local listener and harness destination settings.
+	ResolveListen  func(context.Context) (core.BridgeListen, error)
 	ClientPath     string
 	CodexPath      string
 	SupervisorPath string
@@ -48,8 +50,9 @@ type Options struct {
 }
 
 // Manager exposes one SSH endpoint at a time and proxies its exec requests to
-// the exact Docker sandbox passed to Start.
+// the exact sandbox passed to Start.
 type Manager struct {
+	resolveListen  func(context.Context) (core.BridgeListen, error)
 	clientPath     string
 	codexPath      string
 	supervisorPath string
@@ -71,8 +74,6 @@ type bridgeSandbox interface {
 	runner.Sandbox
 	ContainerID() string
 	ContainerName() string
-	NetworkName() string
-	NetworkGateway(context.Context) (string, error)
 	RunID() string
 	TaskID() string
 	Workdir() string
@@ -115,6 +116,9 @@ type requestAudit struct {
 var _ runner.ToolBridge = (*Manager)(nil)
 
 func New(options Options) (*Manager, error) {
+	if options.ResolveListen == nil {
+		return nil, errors.New("SSH bridge listen resolver is required")
+	}
 	for name, path := range map[string]string{"client": options.ClientPath, "Codex": options.CodexPath, "supervisor": options.SupervisorPath} {
 		info, err := os.Lstat(path)
 		if err != nil || !info.Mode().IsRegular() || info.Mode()&0111 == 0 {
@@ -138,7 +142,8 @@ func New(options Options) (*Manager, error) {
 		options.Logger = logrus.StandardLogger()
 	}
 	return &Manager{
-		outputDir: outputDir, cleanupTimeout: options.CleanupTimeout,
+		resolveListen: options.ResolveListen,
+		outputDir:     outputDir, cleanupTimeout: options.CleanupTimeout,
 		clientPath: options.ClientPath, codexPath: options.CodexPath, supervisorPath: options.SupervisorPath,
 		logger: options.Logger, openAudit: sshbridge.OpenAuditFile, omitRawLog: options.OmitRawLog,
 	}, nil
@@ -152,7 +157,7 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 	}
 	sandbox, ok := generic.(bridgeSandbox)
 	if !ok {
-		return core.ToolEndpoint{}, errors.New("Codex SSH bridge requires the local Docker sandbox capability")
+		return core.ToolEndpoint{}, errors.New("Codex SSH bridge requires the supervised sandbox capability")
 	}
 	if !validWorkdir(sandbox.Workdir()) {
 		return core.ToolEndpoint{}, errors.New("Codex SSH requires an absolute task workdir")
@@ -161,9 +166,13 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 	if err != nil {
 		return core.ToolEndpoint{}, fmt.Errorf("resolve Codex task user: %w", err)
 	}
-	gateway, err := sandbox.NetworkGateway(ctx)
+	listen, err := manager.resolveListen(ctx)
 	if err != nil {
-		return core.ToolEndpoint{}, fmt.Errorf("resolve task network gateway: %w", err)
+		return core.ToolEndpoint{}, fmt.Errorf("resolve bridge listener: %w", err)
+	}
+	bindIP, advertiseIP := net.ParseIP(listen.BindHost), net.ParseIP(listen.AdvertiseHost)
+	if bindIP == nil || bindIP.To4() == nil || advertiseIP == nil || advertiseIP.To4() == nil || advertiseIP.IsUnspecified() || advertiseIP.IsMulticast() {
+		return core.ToolEndpoint{}, errors.New("SSH bridge requires an IPv4 bind host and a unicast, non-wildcard IPv4 advertised host")
 	}
 	session := &bridgeSession{
 		sandbox: sandbox, taskUser: taskUser,
@@ -209,12 +218,13 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 	if err := sshbridge.WriteExclusivePrivate(session.identitySource, clientPEM); err != nil {
 		return fail(fmt.Errorf("write Codex SSH identity: %w", err))
 	}
-	listener, err := net.Listen("tcp4", net.JoinHostPort(gateway, "0"))
+	listener, err := net.Listen("tcp4", net.JoinHostPort(listen.BindHost, "0"))
 	if err != nil {
-		return fail(fmt.Errorf("listen on task network gateway: %w", err))
+		return fail(fmt.Errorf("listen on configured bridge host: %w", err))
 	}
 	session.server = sshbridge.NewServer(listener, hostSigner, authorized)
-	host, port, err := net.SplitHostPort(listener.Addr().String())
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	host := listen.AdvertiseHost
 	if err != nil {
 		return fail(fmt.Errorf("parse Codex SSH listener address: %w", err))
 	}
@@ -243,10 +253,9 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 	manager.active = session
 	manager.stopErr = nil
 	address := net.JoinHostPort(host, port)
-	network := sandbox.NetworkName()
-	manager.logger.WithContext(ctx).WithFields(logrus.Fields{"address": address, "network": network, "container": sandbox.ContainerName()}).Info("Codex SSH bridge started")
+	manager.logger.WithContext(ctx).WithFields(logrus.Fields{"address": address, "container": sandbox.ContainerName()}).Info("Codex SSH bridge started")
 	return core.ToolEndpoint{
-		Protocol: "ssh", Address: address, Username: lockedUsername, Network: network,
+		Protocol: "ssh", Address: address, Username: lockedUsername,
 		IdentityFile: identityContainerPath, IdentitySourceFile: session.identitySource,
 		KnownHostsFile: "/run/aries/ssh/known_hosts", KnownHostsSourceFile: session.knownSource,
 		ClientCommand: "/run/aries/ssh/aries-codex-ssh", ClientSourceFile: session.clientSource,

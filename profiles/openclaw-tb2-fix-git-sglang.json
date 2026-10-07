@@ -7,19 +7,31 @@
   },
   "benchmark": {
     "type": "terminalbench2",
-    "root": ".cache/terminal-bench-2",
+    "root": ".cache/terminal-bench-2-1",
     "tasks": [
       "fix-git"
     ]
   },
   "harness": {
-    "type": "openclaw"
+    "type": "openclaw",
+    "deployment": {
+      "backend": "docker",
+      "docker": {
+        "socket": "/var/run/docker.sock"
+      }
+    }
   },
   "sandbox": {
-    "type": "docker"
+    "deployment": {
+      "backend": "docker",
+      "docker": {
+        "socket": "/var/run/docker.sock"
+      }
+    }
   },
   "bridge": {
-    "type": "openclaw-ssh"
+    "type": "openclaw-ssh",
+    "mode": "embedded"
   },
   "runtime": {
     "backend": "sglang",

@@ -20,6 +20,7 @@ type Environment struct {
 	GPUs         int               `json:"gpus,omitempty"`
 	AllowNetwork bool              `json:"allow_network"`
 	Env          map[string]string `json:"env,omitempty"`
+	Services     TaskServices      `json:"services,omitempty"`
 	ExecUser     string            `json:"-"`
 }
 
@@ -94,6 +95,13 @@ type ModelConfig struct {
 	Temperature   *float64 `json:"temperature,omitempty"`
 }
 
+// BridgeListen separates a local listener address from the address reached by the harness.
+// Embedded SSH bridges currently require IPv4 hosts and allocate the port themselves.
+type BridgeListen struct {
+	BindHost      string
+	AdvertiseHost string
+}
+
 // ToolEndpoint is the bridge endpoint and task-local file contract given to a
 // harness. Credential bytes are never carried in this value. The harness stages
 // the source files into its container before start; source paths are not bind
@@ -102,8 +110,6 @@ type ToolEndpoint struct {
 	Protocol             string   `json:"protocol"`
 	Address              string   `json:"address"`
 	Username             string   `json:"username,omitempty"`
-	Network              string   `json:"network,omitempty"`
-	Workdir              string   `json:"workdir,omitempty"`
 	ClientCommand        string   `json:"client_command,omitempty"`
 	ClientSourceFile     string   `json:"client_source_file,omitempty"`
 	IdentityFile         string   `json:"identity_file,omitempty"`
@@ -111,18 +117,41 @@ type ToolEndpoint struct {
 	KnownHostsFile       string   `json:"known_hosts_file,omitempty"`
 	KnownHostsSourceFile string   `json:"known_hosts_source_file,omitempty"`
 	LogPaths             []string `json:"log_paths,omitempty"`
+	// Workdir is the sandbox directory the endpoint runs agent commands in,
+	// for a harness that must name it to its own tool layer.
+	Workdir string `json:"workdir,omitempty"`
+}
+
+// RuntimePlacement carries the task attachment to the deployment implementation.
+// Only Docker is supported; other backends can extend this contract when implemented.
+type RuntimePlacement struct {
+	DockerNetwork string `json:"docker_network,omitempty"`
+}
+
+// TaskServices declares services the benchmark starts during preparation.
+// A zero port means that the task does not provide that service.
+type TaskServices struct {
+	SearchPort int `json:"search_port,omitempty"`
+}
+
+// HarnessConnectivity supplies placement and addresses resolved for that placement.
+// Service addresses contain no credentials.
+type HarnessConnectivity struct {
+	Placement RuntimePlacement `json:"placement"`
+	SearchURL string           `json:"search_url,omitempty"`
 }
 
 // HarnessRequest contains task-local runtime inputs supplied before Run.
 type HarnessRequest struct {
-	RunID     string        `json:"run_id"`
-	TaskID    string        `json:"task_id"`
-	Endpoint  ToolEndpoint  `json:"tool_endpoint"`
-	Model     ModelConfig   `json:"model"`
-	Timeout   time.Duration `json:"timeout,omitempty"`
-	CPU       *float64      `json:"cpu,omitempty"`
-	MemoryMB  *int          `json:"memory_mb,omitempty"`
-	OutputDir string        `json:"output_dir"`
+	Connectivity HarnessConnectivity `json:"connectivity"`
+	RunID        string              `json:"run_id"`
+	TaskID       string              `json:"task_id"`
+	Endpoint     ToolEndpoint        `json:"tool_endpoint"`
+	Model        ModelConfig         `json:"model"`
+	Timeout      time.Duration       `json:"timeout,omitempty"`
+	CPU          *float64            `json:"cpu,omitempty"`
+	MemoryMB     *int                `json:"memory_mb,omitempty"`
+	OutputDir    string              `json:"output_dir"`
 }
 
 const (
@@ -189,7 +218,11 @@ type TaskResult struct {
 	Evaluation   Evaluation      `json:"evaluation"`
 	Observer     ObserverResult  `json:"observer"`
 	Cleanup      CleanupResult   `json:"cleanup"`
-	Duration     time.Duration   `json:"duration"`
+	// StartedAt is when the runner began the task: with an arrival schedule
+	// it is the realised start, which an analysis sets against the offset the
+	// schedule asked for.
+	StartedAt time.Time     `json:"started_at,omitempty"`
+	Duration  time.Duration `json:"duration"`
 }
 
 // RunSummary is a direct count of task outcomes.

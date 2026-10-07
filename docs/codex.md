@@ -6,11 +6,9 @@ shell and filesystem tools over SSH into the task container. The harness and
 evaluator therefore operate on the same task files, with the usual harness
 stop and bridge revocation gates before evaluation.
 
-This adds a harness and bridge, not a benchmark adapter. RoadmapBench is not
-implemented. A particular Qwen checkpoint is usable only when its serving
-stack implements the Responses API and the native tool-call formats expected
-by this Codex version; no live Qwen result is implied by the deterministic
-integration test.
+A particular model is usable only when its serving stack implements the
+Responses API and the native tool-call formats expected by this Codex version;
+the deterministic integration test implies no live model result.
 
 ## Prepare the pinned CLI
 
@@ -83,8 +81,7 @@ excluded from native task commands.
 ## Evidence and validation
 
 Private harness artifacts include `config.toml`, `environments.toml`,
-`trajectory.jsonl`, `stderr.log`, `container.log`, and
-`sessions/rollout-*.jsonl`. `trajectory.jsonl` is the `codex exec --json` event
+`trajectory.jsonl`, `stderr.log`, and `sessions/rollout-*.jsonl`. `trajectory.jsonl` is the `codex exec --json` event
 stream. Each rollout is Codex's own session record: session metadata and
 instructions, turn context, events, and the response items exchanged with the
 model, including tool calls and their outputs as Codex recorded them. Rollouts are retained byte for byte except that the model key is
@@ -103,6 +100,6 @@ The integration is tied to the
 [Codex `rust-v0.157.1` source](https://github.com/openai/codex/tree/rust-v0.157.1),
 including `environments.toml` and `exec-server --listen stdio`. Review that
 native contract before changing the pin. See the
-[bridge design](design/bridge.md#codex-ssh-bridge) for descendant cleanup and
+[Codex SSH bridge](implementation/ssh-bridges.md#codex-ssh-bridge) for descendant cleanup and
 the [official configuration reference](https://developers.openai.com/codex/config-reference/)
 for custom Responses providers.
