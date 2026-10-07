@@ -20,7 +20,7 @@ fields from your chosen profile.
 | `benchmark` | Benchmark type, checkout root, selected task occurrences, and supported evaluator options. |
 | `harness` | Agent implementation, mode, placement, and optional tool/model settings. |
 | `sandbox.deployment` | Task runtime placement. |
-| `bridge` | Paired tool adapter, embedded mode, and optional raw evidence retention. |
+| `bridge` | Paired tool adapter, managed deployment, and optional raw evidence retention. |
 | `runtime` | Model service backend and external/managed ownership. |
 | `model` | Served model ID, endpoint, and credential environment-variable name. |
 | `execution` | Concurrency, looping, or arrival schedule. |
@@ -101,7 +101,11 @@ Checked-in profiles select harness identity and placement separately:
       "docker": { "socket": "/var/run/docker.sock" }
     }
   },
-  "bridge": { "type": "hermes-ssh", "mode": "embedded" }
+  "bridge": {
+    "type": "hermes-ssh",
+    "mode": "managed",
+    "deployment": { "backend": "docker" }
+  }
 }
 ```
 
@@ -116,26 +120,37 @@ They do not establish support for mixed backends today. A heterogeneous setup
 will also need compatible connectivity, identity, isolation, and cleanup semantics;
 see the [deployment contract](design/deployment.md).
 
-Both components currently must use the same supported local Docker daemon. `socket`
+For Docker placement, both components must use the same local daemon. `socket`
 accepts an absolute Unix socket path or `unix:///absolute/path`; normalization
 cleans the path before comparing the two settings. Remote Docker endpoints are
 rejected. Image preparation and resource monitoring use the selected socket.
 The supported topology remains native Linux Docker with one network per task
 occurrence, including repeated task IDs.
 
-Compatibility normalization supplies Docker with `/var/run/docker.sock` when a
-deployment block is omitted, defaults an omitted Docker socket to that path,
-and defaults omitted `bridge.mode` to `embedded`. Legacy `sandbox.type:
-"docker"` maps to Docker deployment; conflicting explicit settings are rejected.
-Unknown backends, options from a different backend, and unsupported bridge modes
-fail validation. `embedded` means the listener runs inside ARIES. Bridge modes
-`managed` and `external` are not implemented.
+Compatibility normalization supplies Docker with `/var/run/docker.sock` for omitted
+harness/sandbox deployment blocks. An omitted bridge mode becomes `managed`, and
+an omitted bridge deployment becomes `docker`. Explicit `embedded` mode now
+fails with a migration message; update it to `managed` and choose placement
+explicitly. `external` remains unsupported. Legacy `sandbox.type: "docker"`
+still maps to Docker deployment; conflicting explicit settings are rejected.
 
-Bridge addresses come from task composition, with separate local bind and
-harness destination addresses; they are not profile fields. Docker uses the
-task network gateway for both. The current adapters accept IPv4 addresses,
-reject DNS and wildcard destinations, and advertise the port the OS actually
-assigned. One authenticated listener grant remains bound to each task.
+`bridge.deployment.backend` must be `docker`. Bridges run in a separate container
+on the task network, use the same local daemon as the sandbox, and require the narrowly scoped trusted infrastructure socket attachment;
+the harness and sandbox never receive that socket. The bridge has daemon authority
+like Runner, even though its execution adapter validates one fixed target.
+
+The bridge runtime runs `aries-bridge` from the same build as `aries-ssh`.
+`make build` produces both alongside Runner. `make bridge-image` builds the Docker
+image using `bridge.image` and `bridge.base_image` from the version catalog.
+Image preparation uses the selected daemon. Checked-in Docker bridge examples
+include [Hermes](../profiles/hermes-tb2-fix-git-deepseek.json) and
+[OpenClaw](../profiles/openclaw-tb2-fix-git-deepseek.json).
+
+Bridge addresses come from task composition, not profile fields. Private gRPC
+control and harness-facing SSH use separate endpoints. Bridge containers advertise
+their address
+on the task network. Each runtime accepts one immutable sandbox assignment with
+a bounded lease. Control health alone does not establish assignment readiness.
 
 ## Preparation and task selection
 
@@ -143,7 +158,7 @@ Running a profile automatically loads `configs/versions.json`, creates or
 verifies the pinned Terminal-Bench checkout at `.cache/terminal-bench-2-1`, reads
 each selected task's explicit Docker image tag from its `task.toml`, and pulls
 only the configured harness image plus those selected images through the
-Docker Go SDK. For Hermes it then builds, once, the local image that adds the
+Docker Go SDK for Docker placement. For Hermes it then builds, once, the local image that adds the
 `hermes-otel` plugin pinned by `hermes.otel_plugin`. Preparation
 happens before the run directory is created, a managed runtime is started,
 model weights load, an external endpoint is contacted, or task work is
@@ -744,4 +759,3 @@ Changing the main agent's generation settings does not change FACT requests.
 - `harness.voice_transcribe`: see the [voice guide](voice_mode.md).
 - `bridge.retain_raw_log`: defaults to false. Enabling it retains sensitive,
   replayable SSH input; see [run artifacts](run-results.md#bridge-evidence).
-

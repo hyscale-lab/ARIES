@@ -3,6 +3,8 @@
 package hermes
 
 import (
+	"github.com/hyscale-lab/aries/internal/testutil/dockerroute"
+	"github.com/hyscale-lab/aries/pkg/deployment"
 	harnesscommon "github.com/hyscale-lab/aries/pkg/harness"
 
 	"context"
@@ -257,7 +259,10 @@ func runHermesBridgeScenario(t *testing.T, cancelCommand bool, repetitions int, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	sandbox, err := tasksandbox.New(tasksandbox.Options{Deployment: provider, NewEnvironment: provider.NewTaskEnvironment, OutputDir: output})
+	var taskNetwork string
+	sandbox, err := tasksandbox.New(tasksandbox.Options{Deployment: provider, NewEnvironment: func() deployment.TaskEnvironment {
+		return dockerroute.Capture(provider.NewTaskEnvironment(), &taskNetwork)
+	}, OutputDir: output})
 	if err != nil {
 		_ = provider.Close()
 		t.Fatal(err)
@@ -267,7 +272,7 @@ func runHermesBridgeScenario(t *testing.T, cancelCommand bool, repetitions int, 
 			t.Error(err)
 		}
 	})
-	bridge, err := hermesssh.New(hermesssh.Options{ResolveListen: sandbox.BridgeListen, OutputDir: output})
+	bridge, err := hermesssh.New(hermesssh.Options{ResolveListen: func(ctx context.Context) (core.BridgeListen, error) { return dockerroute.Listen(ctx, taskNetwork) }, OutputDir: output})
 	if err != nil {
 		t.Fatal(err)
 	}

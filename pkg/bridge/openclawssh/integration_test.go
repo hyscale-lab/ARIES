@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/hyscale-lab/aries/internal/testutil/dockerroute"
 	"io"
 	"net"
 	"os"
@@ -57,7 +58,9 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 	})
 
 	bridge := newIntegrationBridge(t, outputDir, logger)
-	bridge.resolveListen = sandboxes.BridgeListen
+	bridge.resolveListen = func(ctx context.Context) (core.BridgeListen, error) {
+		return dockerroute.Listen(ctx, live.(*tasksandbox.Sandbox).Connectivity().Placement.DockerNetwork)
+	}
 	endpoint, err := bridge.Start(ctx, sandbox)
 	if err != nil {
 		t.Fatal(err)
@@ -181,7 +184,9 @@ func TestBridgeMapsVirtualWorkspaceToContainerRootWithoutAlias(t *testing.T) {
 	})
 
 	bridge := newIntegrationBridge(t, outputDir, logger)
-	bridge.resolveListen = sandboxes.BridgeListen
+	bridge.resolveListen = func(ctx context.Context) (core.BridgeListen, error) {
+		return dockerroute.Listen(ctx, live.(*tasksandbox.Sandbox).Connectivity().Placement.DockerNetwork)
+	}
 	endpoint, err := bridge.Start(ctx, sandbox)
 	if err != nil {
 		t.Fatal(err)
@@ -248,7 +253,9 @@ func TestBridgeRunsConcurrentCallsWithoutAConvoy(t *testing.T) {
 	})
 
 	bridge := newIntegrationBridge(t, outputDir, logger)
-	bridge.resolveListen = sandboxes.BridgeListen
+	bridge.resolveListen = func(ctx context.Context) (core.BridgeListen, error) {
+		return dockerroute.Listen(ctx, live.(*tasksandbox.Sandbox).Connectivity().Placement.DockerNetwork)
+	}
 	endpoint, err := bridge.Start(ctx, live)
 	if err != nil {
 		t.Fatal(err)

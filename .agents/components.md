@@ -21,8 +21,11 @@ Follow [Runner interfaces](../pkg/runner/interfaces.go) and [lifecycle](architec
   failed removal; Run snapshots survive Stop, which prevents new admission.
   Keep native defaults and credential fallback policies intact; redacted errors
   must not expose secrets through their cause chain.
-- Revoke bridges only after draining sessions, commands, and evidence. Keep replay
-  inputs private. Use Moby for Docker.
+- Give each managed bridge occurrence its own runtime and immutable assignment.
+  Native tool execution must not call back into Runner or own sandbox lifecycle.
+  Confirm native drain, collect finalized evidence, then confirm runtime removal.
+  A child crash alone never proves revocation. Keep replay inputs private; use
+  Moby for Docker.
   Command cancellation must preserve the sandbox needed for evaluation.
 - Preserve benchmark-specific isolation: pinned inputs, sanitized candidate state,
   private test/reference material, and all required verifier checks. Do not change

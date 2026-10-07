@@ -4,9 +4,9 @@ Start from `profiles/*.json`; consult the [schema](../pkg/config/config.go),
 [configuration reference](../docs/configuration.md), and [support matrix](../docs/supported.md).
 Use `configs/versions.json` for pins; do not duplicate the field inventory here.
 
-- Harness selection and deployment selection are separate. Currently harness and
-  sandbox require the same local Docker daemon; only embedded bridges work.
-  Reject unsupported placement before effects; do not imply Kubernetes support.
+- Keep role selection separate from placement. Harness and sandbox share a local
+  Docker daemon; bridges use a separate managed Docker container.
+  Reject unsupported backends and explicit embedded mode before effects.
 - Declare `overrides_file` explicitly (`""` disables overrides). Keep harness and
   sandbox resource limits independent; preserve omission/default semantics and
   explicit model request settings without silently changing their meaning. Judges

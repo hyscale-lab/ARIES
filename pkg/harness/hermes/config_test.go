@@ -222,7 +222,7 @@ func TestRenderConfigAlwaysEnablesOTelPlugin(t *testing.T) {
 
 func TestContainerEnvironmentRejectsUnusableEndpoints(t *testing.T) {
 	cases := map[string]func(*core.ToolEndpoint){
-		"DNS":            func(endpoint *core.ToolEndpoint) { endpoint.Address = "example.test:2222" },
+		"DNS":            func(endpoint *core.ToolEndpoint) { endpoint.Address = "bad..test:2222" },
 		"IPv6":           func(endpoint *core.ToolEndpoint) { endpoint.Address = "[::1]:2222" },
 		"wildcard":       func(endpoint *core.ToolEndpoint) { endpoint.Address = "0.0.0.0:2222" },
 		"multicast":      func(endpoint *core.ToolEndpoint) { endpoint.Address = "224.0.0.1:2222" },

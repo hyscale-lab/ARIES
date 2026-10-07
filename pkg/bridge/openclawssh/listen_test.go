@@ -55,7 +55,7 @@ func TestListenSeparatesBindingAndAdvertisement(t *testing.T) {
 func TestListenRejectsInvalidSettingsBeforeGrant(t *testing.T) {
 	for _, setting := range []core.BridgeListen{
 		{BindHost: "localhost", AdvertiseHost: "127.0.0.1"},
-		{BindHost: "127.0.0.1", AdvertiseHost: "localhost"},
+		{BindHost: "127.0.0.1", AdvertiseHost: "-invalid.example"},
 		{BindHost: "127.0.0.1", AdvertiseHost: "0.0.0.0"},
 		{BindHost: "::1", AdvertiseHost: "::1"},
 		{BindHost: "192.0.2.1", AdvertiseHost: "192.0.2.1"},

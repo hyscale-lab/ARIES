@@ -24,19 +24,15 @@ validates a randomly named, labeled bridge network. `AllowNetwork` controls
 whether Docker creates it as an internal network. Ownership checks prevent a
 failed create response from authorizing cleanup of an unrelated resource.
 
-The task environment supplies `core.BridgeListen` through each bridge's
-`ResolveListen` option. `BindHost` selects the local listener address;
-`AdvertiseHost` selects the harness destination. Docker defaults both to the
-owned task network's gateway. Both SSH adapters currently require IPv4 addresses
-and reject DNS destinations and wildcard advertisement. Each listener uses an
-OS-selected port and advertises the actual port. Attachment and endpoint
-ownership follow the [task-environment contract](../design/deployment.md#taskenvironment-operations-and-ownership).
+The bridge container joins the task-owned network. Its SSH endpoint uses its
+address on that network and an explicit service port; the private control endpoint
+is published on loopback for Runner. Attachment and endpoint ownership follow the
+[task-environment contract](../design/deployment.md#taskenvironment-operations-and-ownership).
 
-`bridge.mode` is `embedded`: both bridges run inside the runner process.
-`managed` and `external` are rejected. Kubernetes settings are recognized but
-rejected by preflight before side effects. Kubernetes deployment and a shared
-gRPC sandbox protocol with E2B compatibility are planned, unsupported targets;
-see [supported combinations and roadmap](../supported.md).
+`bridge.mode` is `managed`: native listeners run in a separate Docker container.
+Explicit embedded/external modes are rejected. Bridge containers receive only
+the explicit trusted infrastructure socket attachment needed to reach the exact
+sandbox. See [supported combinations](../supported.md) for deployment boundaries.
 
 ## Runtime creation and execution
 

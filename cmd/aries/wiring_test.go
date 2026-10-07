@@ -69,6 +69,7 @@ func TestValidateComponentsRejectsEveryUnsupportedSelector(t *testing.T) {
 		Harness:   config.HarnessConfig{Type: "openclaw"},
 		Sandbox:   config.SandboxConfig{Type: "docker"},
 		Bridge:    config.BridgeConfig{Type: "openclaw-ssh"},
+		Versions:  config.Versions{Bridge: config.BridgeVersions{Image: "aries-bridge:v1"}},
 	}
 	for _, tc := range []struct {
 		name string
@@ -96,6 +97,7 @@ func TestValidateComponentsAcceptsSWEAtlasQA(t *testing.T) {
 		Harness:   config.HarnessConfig{Type: "openclaw"},
 		Sandbox:   config.SandboxConfig{Type: "docker"},
 		Bridge:    config.BridgeConfig{Type: "openclaw-ssh"},
+		Versions:  config.Versions{Bridge: config.BridgeVersions{Image: "aries-bridge:v1"}},
 	}
 	if err := validateComponents(cfg); err != nil {
 		t.Fatalf("err=%v", err)
@@ -135,6 +137,7 @@ func TestValidateComponentsRequiresPairedHarnessAndBridge(t *testing.T) {
 				Harness:   config.HarnessConfig{Type: tc.harness},
 				Sandbox:   config.SandboxConfig{Type: "docker"},
 				Bridge:    config.BridgeConfig{Type: tc.bridge},
+				Versions:  config.Versions{Bridge: config.BridgeVersions{Image: "aries-bridge:v1"}},
 			}
 			err := validateComponents(cfg)
 			if tc.wantErr {

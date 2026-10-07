@@ -13,6 +13,7 @@ import (
 	runtimewiring "github.com/hyscale-lab/aries/internal/app/wiring/runtime"
 	sandboxwiring "github.com/hyscale-lab/aries/internal/app/wiring/sandbox"
 	"github.com/hyscale-lab/aries/pkg/config"
+	"github.com/hyscale-lab/aries/pkg/containerimage"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/deployment"
 	"github.com/hyscale-lab/aries/pkg/runner"
@@ -22,6 +23,7 @@ import (
 func commandWiring() app.Wiring {
 	return app.Wiring{
 		PrepareBackend:       prepareBackend,
+		PrepareBridge:        bridgewiring.Prepare,
 		ValidateComponents:   validateComponents,
 		SetupBenchmark:       setupBenchmark,
 		LoadPreparationTasks: loadPreparationTasks,
@@ -121,7 +123,7 @@ func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byt
 	if err := harnesswiring.ValidateMCPServers(cfg.Harness); err != nil {
 		return app.HarnessInstance{}, err
 	}
-	transport, err := newDeployment(cfg.Harness.Deployment, logger)
+	transport, err := newDeployment(cfg.Harness.Deployment, cfg.Versions, logger)
 	if err != nil {
 		return app.HarnessInstance{}, fmt.Errorf("construct harness deployment: %w", err)
 	}
@@ -151,15 +153,15 @@ func newSandbox(cfg config.Config, outputRoot, runID, occurrenceID string, gpuIn
 	}
 }
 
-func newBridge(cfg config.Config, outputRoot string, resolveListen func(context.Context) (core.BridgeListen, error), logger *logrus.Logger) (runner.ToolBridge, error) {
+func newBridge(cfg config.Config, outputRoot string, logger *logrus.Logger) (runner.ToolBridge, error) {
 	if err := validateDeployment(&cfg); err != nil {
 		return nil, err
 	}
 	switch cfg.Bridge.Type {
 	case "openclaw-ssh":
-		return bridgewiring.NewOpenClaw(cfg, outputRoot, resolveListen, logger)
+		return bridgewiring.NewOpenClaw(cfg, outputRoot, logger)
 	case "hermes-ssh":
-		return bridgewiring.NewHermes(cfg, outputRoot, resolveListen, logger)
+		return bridgewiring.NewHermes(cfg, outputRoot, logger)
 	default:
 		return nil, fmt.Errorf("unsupported bridge type %q", cfg.Bridge.Type)
 	}
@@ -196,6 +198,13 @@ func validateDeployment(cfg *config.Config) error {
 	if err := cfg.NormalizeDeployment(); err != nil {
 		return err
 	}
+	if cfg.Harness.Deployment.Backend != cfg.Sandbox.Deployment.Backend {
+		return errors.New("harness and sandbox must use the same deployment backend")
+	}
+
+	if err := containerimage.ValidatePinnedTagOnly(cfg.Versions.Bridge.Image); err != nil {
+		return fmt.Errorf("bridge deployment requires pinned versions.bridge.image: %w", err)
+	}
 	for _, component := range []struct {
 		path      string
 		placement config.DeploymentConfig
@@ -204,8 +213,6 @@ func validateDeployment(cfg *config.Config) error {
 	} {
 		switch component.placement.Backend {
 		case "docker":
-		case "kubernetes":
-			return fmt.Errorf("%s: Kubernetes deployment is not implemented", component.path)
 		default:
 			return fmt.Errorf("%s: unsupported backend %q", component.path, component.placement.Backend)
 		}
@@ -213,12 +220,10 @@ func validateDeployment(cfg *config.Config) error {
 	return nil
 }
 
-func newDeployment(cfg config.DeploymentConfig, logger *logrus.Logger) (deployment.Deployment, error) {
+func newDeployment(cfg config.DeploymentConfig, versions config.Versions, logger *logrus.Logger) (deployment.Deployment, error) {
 	switch cfg.Backend {
 	case "docker":
 		return deploymentwiring.NewDocker(cfg, logger)
-	case "kubernetes":
-		return nil, errors.New("Kubernetes deployment is not implemented")
 	default:
 		return nil, fmt.Errorf("unsupported deployment backend %q", cfg.Backend)
 	}
@@ -228,7 +233,7 @@ func pullImages(ctx context.Context, cfg config.Config, images []string) error {
 	if err := validateDeployment(&cfg); err != nil {
 		return err
 	}
-	// The supported embedded topology requires one daemon for both components.
+	// Docker task components share one selected daemon.
 	switch cfg.Sandbox.Deployment.Backend {
 	case "docker":
 		return deploymentwiring.PullDockerImages(ctx, cfg.Sandbox.Deployment, images)

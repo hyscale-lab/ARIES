@@ -4,27 +4,17 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
-	"regexp"
 	"strings"
-	"unicode"
 )
 
 // DeploymentConfig selects placement independently of the component identity.
-// Kubernetes settings are recognized for preflight's not-implemented error.
 type DeploymentConfig struct {
-	Backend    string                      `json:"backend"`
-	Docker     *DockerDeploymentConfig     `json:"docker,omitempty"`
-	Kubernetes *KubernetesDeploymentConfig `json:"kubernetes,omitempty"`
+	Backend string                  `json:"backend"`
+	Docker  *DockerDeploymentConfig `json:"docker,omitempty"`
 }
 
 type DockerDeploymentConfig struct {
 	Socket string `json:"socket,omitempty"`
-}
-
-type KubernetesDeploymentConfig struct {
-	Context          string `json:"context,omitempty"`
-	Namespace        string `json:"namespace,omitempty"`
-	RuntimeClassName string `json:"runtime_class_name,omitempty"`
 }
 
 // NormalizeDeployment applies compatibility defaults and validates placement.
@@ -47,10 +37,19 @@ func (c *Config) NormalizeDeployment() error {
 		return fmt.Errorf("harness.deployment.docker.socket and sandbox.deployment.docker.socket must select the same local Docker daemon")
 	}
 	if c.Bridge.Mode == "" {
-		c.Bridge.Mode = "embedded"
+		c.Bridge.Mode = "managed"
 	}
-	if c.Bridge.Mode != "embedded" {
-		return fmt.Errorf("bridge.mode %q is unsupported; only embedded is implemented", c.Bridge.Mode)
+	if c.Bridge.Mode == "embedded" {
+		return fmt.Errorf("bridge.mode embedded is no longer supported; migrate to mode managed with bridge.deployment.backend docker")
+	}
+	if c.Bridge.Mode != "managed" {
+		return fmt.Errorf("bridge.mode %q is unsupported; use managed", c.Bridge.Mode)
+	}
+	if err := c.Bridge.Deployment.normalize("bridge.deployment"); err != nil {
+		return err
+	}
+	if c.Bridge.Deployment.Backend == "docker" && c.Sandbox.Deployment.Backend == "docker" && c.Bridge.Deployment.Docker.Socket != c.Sandbox.Deployment.Docker.Socket {
+		return fmt.Errorf("bridge.deployment.docker.socket and sandbox.deployment.docker.socket must select the same local Docker daemon")
 	}
 	c.Sandbox.Type = ""
 	return nil
@@ -58,16 +57,13 @@ func (c *Config) NormalizeDeployment() error {
 
 func (d *DeploymentConfig) normalize(path string) error {
 	if d.Backend == "" {
-		if d.Docker != nil || d.Kubernetes != nil {
+		if d.Docker != nil {
 			return fmt.Errorf("%s.backend is required with backend options", path)
 		}
 		d.Backend = "docker"
 	}
 	switch d.Backend {
 	case "docker":
-		if d.Kubernetes != nil {
-			return fmt.Errorf("%s.kubernetes requires backend kubernetes", path)
-		}
 		socket := ""
 		if d.Docker != nil {
 			socket = d.Docker.Socket
@@ -86,34 +82,8 @@ func (d *DeploymentConfig) normalize(path string) error {
 			return fmt.Errorf("%s.docker.socket must be a local absolute Unix socket path", path)
 		}
 		d.Docker = &DockerDeploymentConfig{Socket: filepath.Clean(socket)}
-	case "kubernetes":
-		if d.Docker != nil {
-			return fmt.Errorf("%s.docker requires backend docker", path)
-		}
-		if d.Kubernetes == nil {
-			d.Kubernetes = &KubernetesDeploymentConfig{}
-		}
-		k := d.Kubernetes
-		if strings.TrimSpace(k.Context) != k.Context || strings.ContainsFunc(k.Context, unicode.IsControl) {
-			return fmt.Errorf("%s.kubernetes.context must not contain surrounding whitespace or control characters", path)
-		}
-		if k.Namespace != "" && (len(k.Namespace) > 63 || !kubernetesLabel.MatchString(k.Namespace)) {
-			return fmt.Errorf("%s.kubernetes.namespace must be a DNS label", path)
-		}
-		if k.RuntimeClassName != "" {
-			if len(k.RuntimeClassName) > 253 {
-				return fmt.Errorf("%s.kubernetes.runtime_class_name must be a DNS subdomain", path)
-			}
-			for _, label := range strings.Split(k.RuntimeClassName, ".") {
-				if !kubernetesLabel.MatchString(label) {
-					return fmt.Errorf("%s.kubernetes.runtime_class_name must be a DNS subdomain", path)
-				}
-			}
-		}
 	default:
 		return fmt.Errorf("%s.backend %q is unsupported", path, d.Backend)
 	}
 	return nil
 }
-
-var kubernetesLabel = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)

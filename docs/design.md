@@ -167,8 +167,12 @@ structured logs, Docker metadata, or results.
 
 Measurements must identify their boundary and retain the same meaning across
 implementations. Unsupported or unavailable measurements must be distinguishable
-from measured zero. This is a requirement, not a guarantee of every current
-artifact field.
+from measured zero. Sources without measurement capability return
+`monitor.ErrUnsupported` during initial discovery. The observer then records
+`status: "unsupported"`, a reason, and zero samples without inventing resource
+readings. Ordinary source failures remain failures. Docker bridge measurements
+use their own `bridge` component. An explicitly unsupported observer does not
+prevent functional execution or independent evaluation.
 
 **Known implementation gap:** the first CPU observation establishes a baseline,
 but [`cpuPercent`](../pkg/monitor/recorder.go) returns zero before a rate can be
@@ -178,8 +182,8 @@ scalar fields without availability markers. Thus a numeric zero alone is not
 proof of measured idle CPU or measured zero memory. Consumers must use component
 identity and sampling context; the schema does not fully express this design
 requirement. Optional GPU gauges do use pointers in
-[`GPUResourceReading`](../pkg/core/types.go). No code change accompanies this
-documentation reorganization.
+[`GPUResourceReading`](../pkg/core/types.go). Source-level unsupported status does
+not resolve these separate per-field schema limitations.
 
 Lifecycle and isolation behavior is implemented in
 [`Runner`](../pkg/runner/runner.go), with cancellation, failed-start, blocked
@@ -239,4 +243,3 @@ flowchart TB
 - [Model runtime platform service](design/runtime.md)
 - [Supported implementations](supported.md)
 - [Quick start](quick-start.md)
-

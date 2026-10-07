@@ -303,24 +303,6 @@ func (s *Sandbox) RunID() string { return s.runID }
 // TaskID returns the owning benchmark task identity for bridge tool logs.
 func (s *Sandbox) TaskID() string { return s.taskID }
 
-// BridgeListen resolves the exact occurrence's owned task endpoint.
-func (s *Sandbox) BridgeListen(ctx context.Context) (core.BridgeListen, error) {
-	return s.environment.BridgeListen(ctx)
-}
-
-// BridgeListen resolves the sole active occurrence composed with this manager.
-func (m *Manager) BridgeListen(ctx context.Context) (core.BridgeListen, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if len(m.active) != 1 {
-		return core.BridgeListen{}, errors.New("bridge resolution requires exactly one active task environment")
-	}
-	for s := range m.active {
-		return s.BridgeListen(ctx)
-	}
-	panic("unreachable")
-}
-
 // Exec runs one argv directly through deployment's typed exec API. Nonzero exits
 // are returned as results, not transport errors.
 func (s *Sandbox) Exec(ctx context.Context, command core.Command) (core.CommandResult, error) {
@@ -341,14 +323,10 @@ func (s *Sandbox) Exec(ctx context.Context, command core.Command) (core.CommandR
 
 // ExecStream preserves benchmark execution defaults while the deployment owns execution and cancellation.
 func (s *Sandbox) ExecStream(ctx context.Context, command core.Command, stdin io.Reader, stdout, stderr io.Writer) (core.CommandResult, error) {
-	if err := validateCommand(command); err != nil {
+	var err error
+	command, err = PrepareCommand(command, s.workdir, s.execUser)
+	if err != nil {
 		return core.CommandResult{ExitCode: -1}, err
-	}
-	if command.Dir == "" {
-		command.Dir = s.workdir
-	}
-	if command.User == "" {
-		command.User = s.execUser
 	}
 	return s.deployment.ExecStream(ctx, s.containerID, command, stdin, stdout, stderr)
 }

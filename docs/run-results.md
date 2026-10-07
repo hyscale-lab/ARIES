@@ -50,7 +50,8 @@ A successful task has:
 - successful model validation;
 - successful harness, confirmed isolation, successful evaluation and cleanup
   outcomes in `run-result.json`; inspect the independent observer status too
-  (a disabled observer reports `not_enabled`);
+  (a disabled observer reports `not_enabled`; an unavailable measurement capability
+  reports `unsupported` with a reason and zero samples);
 - reward `1`; and
 - completed tool calls in `bridge/tool-calls.jsonl`.
 
@@ -67,6 +68,21 @@ A benchmark that evaluates in a fresh sandbox, such as SWE-bench Pro, keeps that
 sandbox's container logs in the task's `evaluation-sandbox/` directory and its
 resource samples under the `evaluation-sandbox` component in
 `monitor/resources.jsonl`.
+
+## Measurement availability
+
+Read observer status and `monitor/index.json` before interpreting resource data.
+An initial deployment capability gap is recorded as `unsupported` with a `reason`
+and `sample_count: 0`; `resources.jsonl` contains no fabricated zero measurements.
+This allows task execution and evaluation to continue. Discovery errors,
+permission errors, and later sampling failures remain failures rather than being
+reclassified as unsupported. A successful observation whose counters are zero is
+still a real sample with status `succeeded`.
+
+Docker bridge samples use component `bridge`, separate from `harness` and
+`sandbox`. See the
+[measurement schema limits](design.md#measurement-meaning-and-current-gaps) for
+first CPU baselines and GPU-only fields.
 
 ## Hermes Gateway artifacts
 

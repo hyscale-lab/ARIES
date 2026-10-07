@@ -16,6 +16,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,6 +24,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/hyscale-lab/aries/pkg/bridge/target"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/runner"
 	"github.com/sirupsen/logrus"
@@ -41,6 +43,8 @@ const (
 
 // Options are the host-local inputs to one Hermes SSH bridge.
 type Options struct {
+	// Credentials selects serving with controller-staged keys. No client private key enters the server.
+	Credentials *target.Credentials
 	// ResolveListen supplies task-local listener and harness destination settings.
 	ResolveListen  func(context.Context) (core.BridgeListen, error)
 	OutputDir      string
@@ -58,6 +62,7 @@ type Options struct {
 // Manager exposes one SSH endpoint at a time and proxies its exec requests to
 // the exact sandbox passed to Start.
 type Manager struct {
+	credentials    *target.Credentials
 	resolveListen  func(context.Context) (core.BridgeListen, error)
 	outputDir      string
 	cleanupTimeout time.Duration
@@ -73,15 +78,7 @@ type Manager struct {
 	stopErr  error
 }
 
-type bridgeSandbox interface {
-	runner.Sandbox
-	ContainerID() string
-	ContainerName() string
-	RunID() string
-	TaskID() string
-	Workdir() string
-	ExecStream(context.Context, core.Command, io.Reader, io.Writer, io.Writer) (core.CommandResult, error)
-}
+type bridgeSandbox = target.Executor
 
 type bridgeSession struct {
 	sandbox        bridgeSandbox
@@ -551,29 +548,37 @@ func New(options Options) (*Manager, error) {
 		options.Logger = logrus.StandardLogger()
 	}
 	return &Manager{
-		resolveListen: options.ResolveListen,
-		outputDir:     outputDir, cleanupTimeout: options.CleanupTimeout,
+		resolveListen: options.ResolveListen, credentials: options.Credentials,
+		outputDir: outputDir, cleanupTimeout: options.CleanupTimeout,
 		logger: options.Logger, openAudit: openAuditFile, omitRawLog: options.OmitRawLog,
 	}, nil
 }
 
 func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core.ToolEndpoint, error) {
+	sandbox, ok := generic.(bridgeSandbox)
+	if !ok {
+		return core.ToolEndpoint{}, errors.New("Hermes SSH bridge requires the streaming sandbox capability")
+	}
+	return manager.StartTarget(ctx, sandbox)
+}
+
+// StartTarget serves a borrowed execution capability without sandbox lifecycle authority.
+func (manager *Manager) StartTarget(ctx context.Context, sandbox target.Executor) (core.ToolEndpoint, error) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	if manager.active != nil || manager.stopping {
 		return core.ToolEndpoint{}, errors.New("Hermes SSH bridge is already active")
 	}
-	sandbox, ok := generic.(bridgeSandbox)
-	if !ok {
-		return core.ToolEndpoint{}, errors.New("Hermes SSH bridge requires the streaming sandbox capability")
+	if sandbox == nil {
+		return core.ToolEndpoint{}, errors.New("SSH target is required")
 	}
 	listen, err := manager.resolveListen(ctx)
 	if err != nil {
 		return core.ToolEndpoint{}, fmt.Errorf("resolve bridge listener: %w", err)
 	}
-	bindIP, advertiseIP := net.ParseIP(listen.BindHost), net.ParseIP(listen.AdvertiseHost)
-	if bindIP == nil || bindIP.To4() == nil || advertiseIP == nil || advertiseIP.To4() == nil || advertiseIP.IsUnspecified() || advertiseIP.IsMulticast() {
-		return core.ToolEndpoint{}, errors.New("SSH bridge requires an IPv4 bind host and a unicast, non-wildcard IPv4 advertised host")
+	bindIP := net.ParseIP(listen.BindHost)
+	if bindIP == nil || bindIP.To4() == nil || !core.ValidEndpointHost(listen.AdvertiseHost) || listen.BindPort < 0 || listen.BindPort > 65535 || listen.AdvertisePort < 0 || listen.AdvertisePort > 65535 {
+		return core.ToolEndpoint{}, errors.New("SSH bridge requires an IPv4 bind host, valid advertised host and valid ports")
 	}
 	session := &bridgeSession{
 		sandbox: sandbox, connections: make(map[net.Conn]struct{}),
@@ -599,9 +604,19 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 	if err := ensurePrivateDirectory(session.artifactDir); err != nil {
 		return fail(fmt.Errorf("create private Hermes SSH artifact directory: %w", err))
 	}
-	hostSigner, clientPEM, authorized, err := generateSessionKeys()
-	if err != nil {
-		return fail(err)
+	var hostSigner ssh.Signer
+	var authorized ssh.PublicKey
+	var clientPEM []byte
+	if manager.credentials != nil {
+		hostSigner, authorized = manager.credentials.HostSigner, manager.credentials.AuthorizedKey
+		if hostSigner == nil || authorized == nil {
+			return fail(errors.New("staged SSH credentials are incomplete"))
+		}
+	} else {
+		hostSigner, clientPEM, authorized, err = generateSessionKeys()
+		if err != nil {
+			return fail(err)
+		}
 	}
 	session.identitySource = filepath.Join(session.artifactDir, "id_ed25519")
 	session.knownSource = filepath.Join(session.artifactDir, "known_hosts")
@@ -609,16 +624,23 @@ func (manager *Manager) Start(ctx context.Context, generic runner.Sandbox) (core
 	if !manager.omitRawLog {
 		session.rawLogPath = filepath.Join(session.artifactDir, "ssh_raw.log")
 	}
-	if err := writeExclusivePrivate(session.identitySource, clientPEM); err != nil {
-		return fail(fmt.Errorf("write Hermes SSH identity: %w", err))
+	if manager.credentials == nil {
+		if err := writeExclusivePrivate(session.identitySource, clientPEM); err != nil {
+			return fail(fmt.Errorf("write Hermes SSH identity: %w", err))
+		}
+	} else {
+		session.identitySource = ""
 	}
-	listener, err := net.Listen("tcp4", net.JoinHostPort(listen.BindHost, "0"))
+	listener, err := net.Listen("tcp4", net.JoinHostPort(listen.BindHost, strconv.Itoa(listen.BindPort)))
 	if err != nil {
 		return fail(fmt.Errorf("listen on configured bridge host: %w", err))
 	}
 	session.listener = listener
 	_, port, err := net.SplitHostPort(listener.Addr().String())
 	host := listen.AdvertiseHost
+	if listen.AdvertisePort != 0 {
+		port = strconv.Itoa(listen.AdvertisePort)
+	}
 	if err != nil {
 		return fail(fmt.Errorf("parse Hermes SSH listener address: %w", err))
 	}
@@ -937,6 +959,7 @@ func (manager *Manager) Stop(ctx context.Context) error {
 	manager.stopping = false
 	if err == nil {
 		manager.active = nil
+		manager.credentials = nil
 	}
 	close(done)
 	manager.mu.Unlock()
@@ -951,6 +974,7 @@ func (session *bridgeSession) finalize(ctx context.Context) error {
 	// Only the private identity is removed; that is revocation. knownSource
 	// holds nothing but the ephemeral host public key and is retained as the
 	// evidence of what Hermes pinned on first use.
+	session.configuration = nil
 	cleanupErr := errors.Join(
 		session.revocationError(), auditErr,
 		removeIfPresent(session.identitySource),
@@ -1160,6 +1184,9 @@ func ensurePrivateDirectory(path string) error {
 }
 
 func removeIfPresent(path string) error {
+	if path == "" {
+		return nil
+	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}

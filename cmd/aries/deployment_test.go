@@ -14,26 +14,26 @@ import (
 	"github.com/hyscale-lab/aries/pkg/config"
 )
 
-func TestDeploymentPreflightRejectsKubernetesByComponent(t *testing.T) {
-	for _, component := range []string{"harness", "sandbox"} {
+func TestDeploymentPreflightRejectsUnsupportedBackends(t *testing.T) {
+	for _, component := range []string{"harness", "sandbox", "bridge"} {
 		t.Run(component, func(t *testing.T) {
 			var cfg config.Config
-			if err := json.Unmarshal([]byte(`{"benchmark":{"type":"terminalbench2"},"harness":{"type":"hermes"},"sandbox":{},"bridge":{"type":"hermes-ssh","mode":"embedded"}}`), &cfg); err != nil {
+			if err := json.Unmarshal([]byte(`{"benchmark":{"type":"terminalbench2"},"harness":{"type":"hermes"},"sandbox":{},"bridge":{"type":"hermes-ssh","mode":"managed"}}`), &cfg); err != nil {
 				t.Fatal(err)
 			}
-			if err := json.Unmarshal([]byte(`{"`+component+`":{"deployment":{"backend":"kubernetes","kubernetes":{"context":"test","namespace":"aries","runtime_class_name":"kata"}}}}`), &cfg); err != nil {
+			if err := json.Unmarshal([]byte(`{"`+component+`":{"deployment":{"backend":"remote"}}}`), &cfg); err != nil {
 				t.Fatal(err)
 			}
 			err := validateComponents(cfg)
-			if err == nil || !strings.Contains(err.Error(), component+".deployment") || !strings.Contains(err.Error(), "not implemented") {
+			if err == nil || !strings.Contains(err.Error(), "unsupported") {
 				t.Fatalf("error = %v", err)
 			}
 		})
 	}
 }
 
-func TestKubernetesStopsRunAndSetupBeforeSideEffects(t *testing.T) {
-	for _, component := range []string{"harness", "sandbox"} {
+func TestUnsupportedBackendsStopRunAndSetupBeforeSideEffects(t *testing.T) {
+	for _, component := range []string{"harness", "sandbox", "bridge"} {
 		for _, command := range []struct {
 			name string
 			run  func(context.Context, string, io.Writer, app.Dependencies) error
@@ -54,7 +54,7 @@ func TestKubernetesStopsRunAndSetupBeforeSideEffects(t *testing.T) {
 				profile["versions_file"] = versions
 				output := filepath.Join(t.TempDir(), "never-created")
 				profile["output_dir"] = output
-				profile[component].(map[string]any)["deployment"] = map[string]any{"backend": "kubernetes", "kubernetes": map[string]any{"namespace": "aries"}}
+				profile[component].(map[string]any)["deployment"] = map[string]any{"backend": "remote"}
 				data, err := json.Marshal(profile)
 				if err != nil {
 					t.Fatal(err)
@@ -71,7 +71,7 @@ func TestKubernetesStopsRunAndSetupBeforeSideEffects(t *testing.T) {
 					return app.PreparedBackend{}, errors.New("unexpected preparation")
 				}
 				err = command.run(context.Background(), path, io.Discard, app.Dependencies{Wiring: wiring})
-				if err == nil || !strings.Contains(err.Error(), component+".deployment") || !strings.Contains(err.Error(), "not implemented") || effects != 0 {
+				if err == nil || !strings.Contains(err.Error(), "unsupported") || effects != 0 {
 					t.Fatalf("error=%v effects=%d", err, effects)
 				}
 				if _, err := os.Stat(output); !errors.Is(err, os.ErrNotExist) {
@@ -79,5 +79,23 @@ func TestKubernetesStopsRunAndSetupBeforeSideEffects(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestSupportedBridgePlacements(t *testing.T) {
+	for _, backend := range []string{"docker"} {
+		t.Run(backend, func(t *testing.T) {
+			cfg := config.Config{
+				Benchmark: config.BenchmarkConfig{Type: "terminalbench2"},
+				Harness:   config.HarnessConfig{Type: "hermes"},
+				Bridge:    config.BridgeConfig{Type: "hermes-ssh", Deployment: config.DeploymentConfig{Backend: backend}},
+				Versions:  config.Versions{Bridge: config.BridgeVersions{Image: "aries-bridge:v1"}},
+			}
+
+			if err := validateComponents(cfg); err != nil {
+				t.Fatalf("supported placement rejected: %v", err)
+			}
+
+		})
 	}
 }

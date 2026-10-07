@@ -42,16 +42,9 @@ func TestTaskEnvironmentOwnershipAndRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	endpoint, err := e.BridgeListen(ctx)
-	if err != nil || endpoint.BindHost != "172.30.0.1" || endpoint.AdvertiseHost != endpoint.BindHost {
-		t.Fatal(endpoint, err)
-	}
 	f.networkOptions.Labels = map[string]string{"aries.task": "foreign"}
 	if e.Validate(ctx) == nil {
 		t.Fatal("accepted changed ownership")
-	}
-	if _, err := e.BridgeListen(ctx); err == nil {
-		t.Fatal("resolved foreign endpoint")
 	}
 	if e.Stop(ctx) == nil || f.removeCalls != 0 {
 		t.Fatal("removed foreign network")
@@ -70,9 +63,6 @@ func TestTaskEnvironmentOwnershipAndRetry(t *testing.T) {
 	}
 	if _, err := e.Start(ctx, request); err == nil {
 		t.Fatal("reused occurrence")
-	}
-	if _, err := e.BridgeListen(ctx); err == nil {
-		t.Fatal("resolved revoked environment")
 	}
 	next := m.NewTaskEnvironment()
 	second, err := next.Start(ctx, request)

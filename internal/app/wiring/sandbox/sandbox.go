@@ -29,7 +29,7 @@ func New(outputRoot, occurrenceID string, gpuIndices []int, logger *logrus.Logge
 		}
 		resources = &combinedResourceSource{container: resources, gpu: gpuSource}
 	}
-	return app.SandboxInstance{Sandbox: manager, Resources: resources, Close: manager.Close, BridgeListen: manager.BridgeListen}, nil
+	return app.SandboxInstance{Sandbox: manager, Resources: resources, Close: manager.Close}, nil
 }
 
 type combinedResourceSource struct {

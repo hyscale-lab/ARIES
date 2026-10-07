@@ -44,8 +44,9 @@
     }
   },
   "bridge": {
+    "deployment": { "backend": "docker" },
     "type": "hermes-ssh",
-    "mode": "embedded"
+    "mode": "managed"
   },
   "runtime": {
     "backend": "deepseek",

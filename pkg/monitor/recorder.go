@@ -57,22 +57,23 @@ type Recorder struct {
 	now               func() time.Time
 	writeIndex        func(string, Index) error
 
-	mu              sync.Mutex
-	starting        bool
-	started         bool
-	startTime       time.Time
-	stopTime        time.Time
-	artifacts       map[string]*taskArtifact
-	sampleCancel    context.CancelFunc
-	sampleDone      chan struct{}
-	backgroundErr   error
-	filesClosed     bool
-	stopAttempt     *stopAttempt
-	completed       bool
-	reports         map[string]core.ObserverResult
-	baselines       map[string]cpuBaseline
-	sourceCloseOnce sync.Once
-	sourceCloseErr  error
+	mu                sync.Mutex
+	starting          bool
+	started           bool
+	startTime         time.Time
+	stopTime          time.Time
+	artifacts         map[string]*taskArtifact
+	sampleCancel      context.CancelFunc
+	sampleDone        chan struct{}
+	backgroundErr     error
+	unsupportedReason string
+	filesClosed       bool
+	stopAttempt       *stopAttempt
+	completed         bool
+	reports           map[string]core.ObserverResult
+	baselines         map[string]cpuBaseline
+	sourceCloseOnce   sync.Once
+	sourceCloseErr    error
 }
 
 type stopAttempt struct {
@@ -211,8 +212,12 @@ func (recorder *Recorder) Start(ctx context.Context) error {
 		}
 		return errors.Join(cause, rollbackErr, recorder.closeSource())
 	}
+	unsupportedReason := ""
 	if err := recorder.sample(ctx, 0, startedAt); err != nil {
-		return startFailure(err)
+		if !errors.Is(err, ErrUnsupported) {
+			return startFailure(err)
+		}
+		unsupportedReason = err.Error()
 	}
 	if err := ctx.Err(); err != nil {
 		return startFailure(err)
@@ -221,12 +226,19 @@ func (recorder *Recorder) Start(ctx context.Context) error {
 	sampleContext, cancel := context.WithCancel(base)
 	done := make(chan struct{})
 	recorder.mu.Lock()
+	recorder.unsupportedReason = unsupportedReason
 	recorder.sampleCancel = cancel
 	recorder.sampleDone = done
 	recorder.starting = false
 	recorder.started = true
 	recorder.mu.Unlock()
-	go recorder.sampleLoop(sampleContext, done)
+	if unsupportedReason == "" {
+		go recorder.sampleLoop(sampleContext, done)
+	} else {
+		cancel()
+		close(done)
+		recorder.logger.WithContext(base).WithField("reason", unsupportedReason).Info("resource monitoring unsupported")
+	}
 	recorder.logger.WithContext(base).WithFields(logrus.Fields{"run": recorder.runID, "tasks": len(recorder.taskIDs)}).Info("resource monitoring started")
 	return nil
 }
@@ -449,6 +461,7 @@ func (recorder *Recorder) finishStop(attempt *stopAttempt) {
 	stoppedAt := recorder.stopTime
 	startedAt := recorder.startTime
 	backgroundErr := recorder.backgroundErr
+	unsupportedReason := recorder.unsupportedReason
 	artifacts := recorder.artifacts
 	filesClosed := recorder.filesClosed
 	recorder.mu.Unlock()
@@ -466,6 +479,9 @@ func (recorder *Recorder) finishStop(attempt *stopAttempt) {
 
 	status := core.StatusSucceeded
 	errorText := ""
+	if unsupportedReason != "" {
+		status = core.StatusUnsupported
+	}
 	if backgroundErr != nil {
 		status = core.StatusFailed
 		errorText = backgroundErr.Error()
@@ -482,6 +498,7 @@ func (recorder *Recorder) finishStop(attempt *stopAttempt) {
 			RunID:                recorder.runID,
 			TaskID:               taskID,
 			Status:               status,
+			Reason:               unsupportedReason,
 			Error:                errorText,
 			StartedAt:            formatArtifactTime(startedAt),
 			StoppedAt:            formatArtifactTime(stoppedAt),
@@ -497,6 +514,7 @@ func (recorder *Recorder) finishStop(attempt *stopAttempt) {
 		}
 		reports[taskID] = core.ObserverResult{
 			Status:      status,
+			Reason:      unsupportedReason,
 			Error:       errorText,
 			Duration:    duration,
 			SampleCount: int(artifact.sequence),

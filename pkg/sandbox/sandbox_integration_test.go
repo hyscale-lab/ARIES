@@ -175,9 +175,6 @@ func TestDockerSandboxRealLifecycle(t *testing.T) {
 	if err != nil || !networkInspection.Network.Internal || networkInspection.Network.Labels["aries.task"] != "integration-task" {
 		t.Fatalf("network inspection = %#v, %v", networkInspection.Network, err)
 	}
-	if gateway, err := sandbox.BridgeListen(ctx); err != nil || gateway.AdvertiseHost == "" {
-		t.Fatalf("BridgeListen() = %+v, %v", gateway, err)
-	}
 
 	assertExec(t, ctx, sandbox, core.Command{Path: "/bin/pwd"}, 0, "/work\n", "")
 	environment := execForTest(t, ctx, sandbox, core.Command{Path: "/usr/bin/env", Env: map[string]string{"EXEC_ENV": "exec-value", "ARIES_VALID": "value"}})

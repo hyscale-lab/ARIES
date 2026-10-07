@@ -12,7 +12,8 @@
 | Deployment contract and providers | `pkg/deployment` |
 
 - `cmd` injects `app.Wiring`; `internal/app` must not import its wiring packages.
-- Harness and sandbox consume deployment contracts, not concrete providers.
+- Harness, sandbox, and bridge controllers consume deployment contracts, not
+  concrete providers. Bridge assignment control stays outside Runner.
   Shared harness mechanics live in `pkg/harness`; it must not import native
   harnesses. Keep native configuration, readiness, protocols, and results local.
 - Use explicit dependencies, concrete helpers, `context.Context` for external

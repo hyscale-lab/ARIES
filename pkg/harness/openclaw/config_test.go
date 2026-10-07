@@ -129,14 +129,14 @@ func TestRenderConfigRejectsInvalidInputs(t *testing.T) {
 		"model":         func(model *core.ModelConfig, _ *core.ToolEndpoint) { model.Model = "\n" },
 		"model control": func(model *core.ModelConfig, _ *core.ToolEndpoint) { model.Model = "model\u0085id" },
 		"key env":       func(model *core.ModelConfig, _ *core.ToolEndpoint) { model.APIKeyEnv = "bad-name" },
-		"DNS":           func(_ *core.ModelConfig, endpoint *core.ToolEndpoint) { endpoint.Address = "example.test:2222" },
+		"DNS":           func(_ *core.ModelConfig, endpoint *core.ToolEndpoint) { endpoint.Address = "bad..test:2222" },
 		"IPv6":          func(_ *core.ModelConfig, endpoint *core.ToolEndpoint) { endpoint.Address = "[::1]:2222" },
 		"wildcard":      func(_ *core.ModelConfig, endpoint *core.ToolEndpoint) { endpoint.Address = "0.0.0.0:2222" },
 		"multicast":     func(_ *core.ModelConfig, endpoint *core.ToolEndpoint) { endpoint.Address = "224.0.0.1:2222" },
 		"zero port":     func(_ *core.ModelConfig, endpoint *core.ToolEndpoint) { endpoint.Address = "127.0.0.1:0" },
 		"overflow port": func(_ *core.ModelConfig, endpoint *core.ToolEndpoint) { endpoint.Address = "127.0.0.1:65536" },
 		"protocol":      func(_ *core.ModelConfig, endpoint *core.ToolEndpoint) { endpoint.Protocol = "http" },
-		"address":       func(_ *core.ModelConfig, endpoint *core.ToolEndpoint) { endpoint.Address = "task-sandbox:2222" },
+		"address":       func(_ *core.ModelConfig, endpoint *core.ToolEndpoint) { endpoint.Address = "-task-sandbox:2222" },
 		"identity":      func(_ *core.ModelConfig, endpoint *core.ToolEndpoint) { endpoint.IdentityFile = "/wrong" },
 	} {
 		t.Run(name, func(t *testing.T) {

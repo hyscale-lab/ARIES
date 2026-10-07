@@ -3,6 +3,7 @@
 package hermes
 
 import (
+	"github.com/hyscale-lab/aries/internal/testutil/dockerroute"
 	harnesscommon "github.com/hyscale-lab/aries/pkg/harness"
 
 	"context"
@@ -47,7 +48,7 @@ func TestRequestSettingsReachRealHermes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			endpoint, err := environment.BridgeListen(ctx)
+			endpoint, err := dockerroute.Listen(ctx, connectivity.Placement.DockerNetwork)
 			if err != nil {
 				t.Fatal(err)
 			}

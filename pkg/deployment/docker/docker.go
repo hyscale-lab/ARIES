@@ -6,10 +6,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/moby/moby/api/types/mount"
 	"io"
 	"math"
 	"net"
 	"net/netip"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -122,7 +124,7 @@ func resources(request deployment.Request) (container.Resources, error) {
 }
 
 func (manager *Manager) Create(ctx context.Context, request deployment.Request) (string, error) {
-	if err := validatePlacement(request.Placement); err != nil {
+	if err := validateRuntimeRequest(request); err != nil {
 		return "", err
 	}
 	limits, err := resources(request)
@@ -134,6 +136,9 @@ func (manager *Manager) Create(ctx context.Context, request deployment.Request) 
 	}
 	config := &container.Config{Image: request.Image, WorkingDir: request.Workdir, Env: request.Env, Entrypoint: request.Entrypoint, Cmd: request.Args, Labels: request.Labels}
 	host := &container.HostConfig{NetworkMode: container.NetworkMode(request.Placement.DockerNetwork), Resources: limits}
+	if request.TrustedDockerSocket != "" {
+		host.Mounts = []mount.Mount{{Type: mount.TypeBind, Source: request.TrustedDockerSocket, Target: "/var/run/docker.sock"}}
+	}
 	if request.Init {
 		host.Init = boolPointer(true)
 	}
@@ -151,6 +156,12 @@ func (manager *Manager) Create(ctx context.Context, request deployment.Request) 
 		port := network.MustParsePort(strconv.Itoa(request.ServicePort) + "/tcp")
 		config.ExposedPorts = network.PortSet{port: struct{}{}}
 		host.PortBindings = network.PortMap{port: []network.PortBinding{{HostIP: netip.MustParseAddr("127.0.0.1")}}}
+	}
+	if request.HarnessPort != 0 {
+		if config.ExposedPorts == nil {
+			config.ExposedPorts = network.PortSet{}
+		}
+		config.ExposedPorts[network.MustParsePort(strconv.Itoa(request.HarnessPort)+"/tcp")] = struct{}{}
 	}
 	created, err := manager.client.ContainerCreate(ctx, client.ContainerCreateOptions{Name: request.Name, Config: config, HostConfig: host, NetworkingConfig: networking})
 	if strings.TrimSpace(created.ID) != "" {
@@ -190,7 +201,7 @@ func (manager *Manager) Create(ctx context.Context, request deployment.Request) 
 }
 
 func (manager *Manager) Validate(ctx context.Context, id string, request deployment.Request, secrets [][]byte) error {
-	if err := validatePlacement(request.Placement); err != nil {
+	if err := validateRuntimeRequest(request); err != nil {
 		return err
 	}
 	inspection, err := manager.client.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
@@ -241,13 +252,31 @@ func (manager *Manager) Validate(ctx context.Context, id string, request deploym
 	if string(info.HostConfig.NetworkMode) != request.Placement.DockerNetwork {
 		return errors.New("deployment must use only the task network")
 	}
-	if len(info.HostConfig.Binds) != 0 || len(info.HostConfig.Mounts) != 0 {
+	expectedMounts := 0
+	if request.TrustedDockerSocket != "" {
+		expectedMounts = 1
+	}
+	if len(info.HostConfig.Binds) != 0 || len(info.HostConfig.Mounts) != expectedMounts {
 		return errors.New("deployment must not request binds or mounts")
 	}
+	if expectedMounts == 1 {
+		m := info.HostConfig.Mounts[0]
+		if m.Type != "bind" || m.Source != request.TrustedDockerSocket || m.Target != "/var/run/docker.sock" || m.ReadOnly {
+			return errors.New("trusted bridge socket differs from request")
+		}
+	}
+	socketFound := false
 	for _, mount := range info.Mounts {
+		if request.TrustedDockerSocket != "" && mount.Type == "bind" && mount.Source == request.TrustedDockerSocket && mount.Destination == "/var/run/docker.sock" && mount.RW {
+			socketFound = true
+			continue
+		}
 		if mount.Type != "volume" || mount.Name == "" || (!request.AllowImageVolumes && !slices.Contains(request.ImageVolumes, mount.Destination)) {
 			return errors.New("deployment has a mount beyond image-declared volumes")
 		}
+	}
+	if expectedMounts == 1 && !socketFound {
+		return errors.New("trusted bridge socket is missing")
 	}
 	return nil
 }
@@ -277,6 +306,9 @@ func (manager *Manager) Start(ctx context.Context, id string) error {
 
 func (manager *Manager) Running(ctx context.Context, id string) (bool, error) {
 	result, err := manager.client.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
+	if errdefs.IsNotFound(err) {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}
@@ -311,7 +343,22 @@ func (manager *Manager) Address(ctx context.Context, id string, port int) (strin
 	if inspection.Container.NetworkSettings == nil {
 		return "", errors.New("deployment service port binding is missing")
 	}
-	bindings := inspection.Container.NetworkSettings.Ports[network.MustParsePort(strconv.Itoa(port)+"/tcp")]
+	servicePort := network.MustParsePort(strconv.Itoa(port) + "/tcp")
+	bindings := inspection.Container.NetworkSettings.Ports[servicePort]
+	// Docker suppresses host publication on internal task networks. The host
+	// still reaches the container's task-interface IP; managed bridges use
+	// mandatory mTLS there, independently of the native SSH service port.
+	c := inspection.Container
+	if len(bindings) == 0 && c.ID == id && c.Config != nil && c.Config.Labels["aries.component"] == "bridge" && c.HostConfig != nil && c.State != nil && c.State.Running {
+		requested := c.HostConfig.PortBindings[servicePort]
+		if len(requested) == 1 && requested[0].HostIP.String() == "127.0.0.1" && len(c.NetworkSettings.Networks) == 1 {
+			for _, endpoint := range c.NetworkSettings.Networks {
+				if endpoint != nil && endpoint.IPAddress.IsValid() {
+					return net.JoinHostPort(endpoint.IPAddress.String(), strconv.Itoa(port)), nil
+				}
+			}
+		}
+	}
 	if len(bindings) != 1 {
 		return "", fmt.Errorf("deployment service requires exactly one host port binding, got %d", len(bindings))
 	}
@@ -440,21 +487,6 @@ func (manager *Manager) ValidateNetwork(ctx context.Context, id string, request 
 	}
 	return validateNetwork(result, id, request)
 }
-func (manager *Manager) NetworkGateway(ctx context.Context, id string, request NetworkRequest) (string, error) {
-	result, err := manager.client.NetworkInspect(ctx, id, client.NetworkInspectOptions{})
-	if err != nil {
-		return "", err
-	}
-	if err := validateNetwork(result, id, request); err != nil {
-		return "", err
-	}
-	for _, config := range result.Network.IPAM.Config {
-		if config.Gateway.Is4() {
-			return config.Gateway.String(), nil
-		}
-	}
-	return "", errors.New("deployment network has no IPv4 gateway")
-}
 func (manager *Manager) StopNetwork(ctx context.Context, id string) error {
 	if id == "" {
 		return nil
@@ -475,4 +507,41 @@ func validatePlacement(placement core.RuntimePlacement) error {
 		return errors.New("Docker deployment requires a nonempty Docker task attachment")
 	}
 	return nil
+}
+
+func validateRuntimeRequest(request deployment.Request) error {
+	if err := validatePlacement(request.Placement); err != nil {
+		return err
+	}
+	if request.HarnessPort < 0 || request.HarnessPort > 65535 {
+		return errors.New("invalid harness service port")
+	}
+	if request.TrustedDockerSocket != "" {
+		if request.Labels["aries.component"] != "bridge" || !filepath.IsAbs(request.TrustedDockerSocket) || filepath.Clean(request.TrustedDockerSocket) != request.TrustedDockerSocket {
+			return errors.New("daemon socket attachment requires a trusted bridge and an absolute local socket path")
+		}
+	}
+	return nil
+}
+
+// HarnessAddress resolves the immutable runtime on its sole task network.
+func (manager *Manager) HarnessAddress(ctx context.Context, id string, port int) (string, error) {
+	if port < 1 || port > 65535 {
+		return "", errors.New("invalid harness service port")
+	}
+	result, err := manager.client.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
+	if err != nil {
+		return "", err
+	}
+	c := result.Container
+	if c.ID != id || c.State == nil || !c.State.Running || c.NetworkSettings == nil || len(c.NetworkSettings.Networks) != 1 {
+		return "", errors.New("bridge runtime task attachment is not ready")
+	}
+	for _, endpoint := range c.NetworkSettings.Networks {
+		if endpoint == nil || !endpoint.IPAddress.IsValid() {
+			return "", errors.New("bridge runtime task address is missing")
+		}
+		return net.JoinHostPort(endpoint.IPAddress.String(), strconv.Itoa(port)), nil
+	}
+	return "", errors.New("bridge runtime task attachment is missing")
 }

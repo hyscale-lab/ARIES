@@ -41,6 +41,7 @@ type ResourceSample struct {
 
 // Index is the bounded summary written beside a task's resource samples.
 type Index struct {
+	Reason               string              `json:"reason,omitempty"`
 	SchemaVersion        int                 `json:"schema_version"`
 	RunID                string              `json:"run_id"`
 	TaskID               string              `json:"task_id"`

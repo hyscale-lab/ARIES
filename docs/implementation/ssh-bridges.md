@@ -1,6 +1,6 @@
 # SSH bridge implementations
 
-The embedded bridges implement the [ToolBridge contract](../design/bridge.md).
+The managed bridges implement the [ToolBridge contract](../design/bridge.md).
 They authenticate temporary SSH clients and forward accepted commands through
 the sandbox streaming capability; Docker execution is supplied by the sandbox
 deployment through the Moby SDK.
@@ -72,11 +72,47 @@ evidence separates policy from a protocol violation.
 
 ## Source and limitations
 
-Both bridges are embedded in the runner process. They require streaming execution,
-validated task identity, and task workdir capabilities beyond the minimal
-`Sandbox` interface; arbitrary sandbox implementations are not automatically
-compatible. Network ownership follows the
+Runner owns a managed bridge controller. Each occurrence gets a separate
+`aries-bridge` container, and that child owns the native SSH server.
+The sandbox exports a versioned fixed-target descriptor. Its borrowed adapter
+opens its own deployment client, validates immutable runtime identity and task
+ownership, and exposes streaming execution without sandbox creation or deletion.
+Tool traffic never calls back into Runner. Command validation, user defaults,
+and workdir defaults use the same sandbox helper as direct sandbox execution.
+Network ownership follows the
 [task-environment contract](../design/deployment.md#taskenvironment-operations-and-ownership).
+
+The controller stages the authorized client public key and server private key;
+the client private key stays local for staging into the harness. Authenticated
+gRPC assignment control is separate from SSH tool traffic. One instance accepts
+one assignment, retains its identity after failed admission or revocation, and
+cannot be reused. Lease expiry starts revocation; renewals cannot revive an
+expired grant. Caller timeouts do not cancel the service's ownership of admission
+or cleanup. A lost response is reconciled using the original assignment ID.
+If authenticated status confirms that assignment was never reserved, the controller
+resubmits the identical request on the same instance. Authentication, identity,
+validation, and other definitive errors do not trigger replay.
+Historical admission and cleanup diagnostics remain available separately from
+active cleanup errors, so a confirmed cleanup retry can finish successfully.
+The bounded collection/exit interval starts when revocation begins, including
+failed drains; exiting without confirmed drain never grants evaluation permission.
+SSH bootstrap files are erased on revocation
+attempts, and private control/bootstrap files are erased on every service exit,
+including failed-drain timeouts. Evidence remains available for collection.
+
+Stop requires native drain and evidence finalization, validated artifact collection,
+and confirmed runtime removal. A crashed child without a drain acknowledgment
+blocks evaluation even when its container has disappeared. Remote
+artifact names are checked and mapped into local bridge evidence paths; remote
+absolute paths are never exposed as local files. Failed cleanup retains ownership
+for retry.
+The controller retains the public host key as local `known_hosts` evidence for
+both protocols; Hermes still uses its native first-use trust behavior.
+
+The wire contract is [control.proto](../../pkg/bridge/control/v1/control.proto).
+`make proto-tools` installs the pinned compiler/plugins and verifies the compiler
+archive checksum. `make proto` invokes protoc to regenerate checked-in bindings;
+never edit generated binding files manually.
 
 See the [OpenClaw bridge](../../pkg/bridge/openclawssh/bridge.go),
 [OpenClaw grammar](../../pkg/bridge/openclawssh/grammar.go),
@@ -85,5 +121,5 @@ See the [OpenClaw bridge](../../pkg/bridge/openclawssh/bridge.go),
 [OpenClaw contract tests](../../pkg/bridge/openclawssh/manager_contract_test.go)
 and [Hermes bridge tests](../../pkg/bridge/hermesssh/bridge_test.go) cover accepted
 commands, private evidence, revocation, cancellation, and denied sync.
-The shared protocol and deployment roadmap is listed under
+The shared harness protocol and remaining deployment roadmap is listed under
 [planned targets](../supported.md#roadmap); it is not current bridge support.

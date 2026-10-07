@@ -1,0 +1,50 @@
+syntax = "proto3";
+package aries.bridge.control.v1;
+option go_package = "github.com/hyscale-lab/aries/pkg/bridge/control/v1;controlv1";
+
+service BridgeControl {
+  rpc AssignSandbox(AssignSandboxRequest) returns (Assignment);
+  rpc GetAssignment(AssignmentRequest) returns (Assignment);
+  rpc RevokeAssignment(AssignmentRequest) returns (Assignment);
+  rpc RenewLease(RenewLeaseRequest) returns (Assignment);
+}
+enum State { STATE_UNSPECIFIED = 0; ASSIGNING = 1; READY = 2; REVOKING = 3; REVOKED = 4; }
+message Target {
+  uint32 version = 1;
+  string run_id = 2;
+  string task_id = 3;
+  string occurrence_id = 4;
+  string backend = 5;
+  string runtime_id = 6;
+  string runtime_name = 7;
+  reserved 8 to 10;
+  map<string,string> expected_labels = 11;
+  string workdir = 12;
+  string exec_user = 13;
+  int64 max_input_bytes = 14;
+  int64 max_output_bytes = 15;
+}
+message AssignSandboxRequest {
+  string instance_id = 1;
+  string assignment_id = 2;
+  uint32 protocol_version = 3;
+  Target target = 4;
+  int64 lease_millis = 5;
+  string credential_id = 6;
+}
+message AssignmentRequest { string instance_id = 1; string assignment_id = 2; }
+message RenewLeaseRequest { string instance_id = 1; string assignment_id = 2; int64 lease_millis = 3; }
+message Endpoint { string host = 1; uint32 port = 2; string user = 3; string transport = 4; string host_key = 5; }
+message Artifact { string name = 1; string status = 2; int64 size = 3; string sha256 = 4; }
+message CleanupError { string stage = 1; string message = 2; }
+message Assignment {
+  string instance_id = 1;
+  string assignment_id = 2;
+  State state = 3;
+  Target target = 4;
+  Endpoint endpoint = 5;
+  int64 lease_remaining_millis = 6;
+  repeated CleanupError cleanup_errors = 7;
+  repeated Artifact artifacts = 8;
+  repeated CleanupError diagnostics = 9;
+}
