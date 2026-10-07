@@ -93,8 +93,11 @@ For every task the Runner performs this order:
 5. start and run the harness;
 6. positively stop the harness;
 7. revoke the bridge and positively confirm access is gone;
-8. evaluate the still-running sandbox;
-9. stop the sandbox container, then remove its task network, confirming both are absent.
+8. evaluate: the benchmark inspects the still-running sandbox and, when its
+   original methodology evaluates in a clean environment, asks the Runner for
+   fresh evaluation sandboxes from the task environment;
+9. stop any evaluation sandboxes, newest first;
+10. stop the sandbox container, then remove its task network, confirming both are absent.
 
 Cleanup follows reverse ownership order and uses bounded cleanup work even when
 the run context has been cancelled. Partial starts still trigger cleanup, and
@@ -108,6 +111,16 @@ Harness execution can fail while evaluation still reports the state that was
 left behind; ARIES records harness and evaluation outcomes separately. The
 sandbox remains live only long enough for that independent evaluation, then is
 positively removed.
+
+Evaluation follows the benchmark's original methodology rather than an ARIES
+equivalent. Terminal-Bench, Deep Research Bench, and SWE-Atlas QA grade the live
+task sandbox. SWE-bench Pro, like its upstream evaluator, takes only the agent's
+patch from the task sandbox and runs the tests in a fresh sandbox started from
+the task image. Fresh evaluation sandboxes are started through the same
+`ToolSandbox` and owned by the Runner, which stops them before the task sandbox.
+Every task failure, including a preparation failure that leaves the harness
+not started, is recorded in the task result's `error` field and in the task's
+`task finished` log line.
 
 ## Explicit composition, concurrency, and artifacts
 

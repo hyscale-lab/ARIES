@@ -167,6 +167,36 @@ func TestSharedDeploymentReceivesSandboxPolicy(t *testing.T) {
 		t.Fatal(gateway, err)
 	}
 }
+func TestEvaluationSandboxKeepsSeparateEvidenceAndComponent(t *testing.T) {
+	f := &fakeDeployment{}
+	m := testManager(t, f)
+	request := testRequest()
+	request.Purpose = core.SandboxPurposeEvaluation
+	live, err := m.Start(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := live.(*Sandbox)
+	if f.request.Labels["aries.component"] != "evaluation-sandbox" || f.request.Labels["aries.task"] != request.TaskID {
+		t.Fatalf("labels = %v", f.request.Labels)
+	}
+	if filepath.Base(s.artifactDir) != "evaluation-sandbox" || filepath.Base(filepath.Dir(s.artifactDir)) != request.TaskID {
+		t.Fatalf("artifact directory = %q", s.artifactDir)
+	}
+}
+
+func TestStartRejectsUnknownSandboxPurpose(t *testing.T) {
+	f := &fakeDeployment{}
+	request := testRequest()
+	request.Purpose = "debug"
+	if _, err := testManager(t, f).Start(context.Background(), request); err == nil || !strings.Contains(err.Error(), "unsupported sandbox purpose") {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if f.request.Name != "" {
+		t.Fatalf("unknown purpose reached deployment: %+v", f.request)
+	}
+}
+
 func TestPartialCreationAndValidationFailureRollbackWithFreshContext(t *testing.T) {
 	for _, validation := range []bool{false, true} {
 		t.Run(map[bool]string{false: "create", true: "validate"}[validation], func(t *testing.T) {

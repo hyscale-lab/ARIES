@@ -283,7 +283,7 @@ func TestPrepareSandboxAndEvaluateRequireLiveSandbox(t *testing.T) {
 	if err := benchmark.PrepareSandbox(context.Background(), core.Task{ID: "1"}, nil); err == nil {
 		t.Fatal("PrepareSandbox accepted a nil sandbox")
 	}
-	if _, err := benchmark.Evaluate(context.Background(), core.Task{ID: "1"}, nil); err == nil {
+	if _, err := benchmark.Evaluate(context.Background(), core.Task{ID: "1"}, nil, nil); err == nil {
 		t.Fatal("Evaluate accepted a nil sandbox")
 	}
 }

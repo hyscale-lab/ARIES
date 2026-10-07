@@ -35,7 +35,7 @@ flowchart TB
     H[Stop harness and confirm absence]
     R[Revoke bridge and drain active work]
     P[Confirm access is revoked]
-    E[Evaluate the live sandbox]
+    E[Evaluate]
     H --> R --> P --> E
 ```
 

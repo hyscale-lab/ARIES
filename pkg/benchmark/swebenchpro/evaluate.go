@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -18,24 +19,17 @@ import (
 )
 
 const (
-	evaluationContainerPath                = privateContainerPath + "/evaluation"
-	candidateRawContainerPath              = evaluationContainerPath + "/candidate.raw.patch"
-	candidateEffectiveContainerPath        = evaluationContainerPath + "/candidate.patch"
-	verifierSnapshotContainerPath          = evaluationContainerPath + "/verifier-tests.tar"
-	evaluationIgnoredSnapshotContainerPath = evaluationContainerPath + "/ignored-baseline.tar"
-	evaluationGitSnapshotContainerPath     = evaluationContainerPath + "/git-baseline.tar"
-	runScriptContainerPath                 = evaluationContainerPath + "/run_script.sh"
-	parserContainerPath                    = evaluationContainerPath + "/parser.py"
-	verifierStdoutContainerPath            = evaluationContainerPath + "/stdout.log"
-	verifierStderrContainerPath            = evaluationContainerPath + "/stderr.log"
-	parserOutputContainerPath              = evaluationContainerPath + "/output.json"
-	quiesceAgentPredicate                  = `target=$1; attempts=0; while :; do found=0; for status in /proc/[0-9]*/status; do [ -r "$status" ] || continue; uid=; while IFS=' ' read -r key value rest; do [ "$key" = "Uid:" ] || continue; uid=$value; break; done <"$status"; [ "$uid" = "$target" ] || continue; pid=${status#/proc/}; pid=${pid%/status}; case "$pid" in ''|*[!0-9]*|0|1) exit 71;; esac; /bin/kill -KILL "$pid" 2>/dev/null || :; found=1; done; [ "$found" -eq 0 ] && exit 0; attempts=$((attempts+1)); [ "$attempts" -lt 100 ] || exit 70; done`
-	restoreAgentWorktreePredicate          = `root=$1; agent=$2; /bin/chown -R -- "$agent" "$root" || exit 1; /bin/chown -R -- 0:0 "$root/.git" || exit 1; /bin/chmod -R go-w "$root/.git" || exit 1; /bin/chown 0:0 "$root" || exit 1; /bin/chmod 1777 "$root" || exit 1`
-	installVerifierPredicate               = `root=$1; shift; for relative do current=$root; remaining=$relative; while [ "$remaining" != "${remaining#*/}" ]; do component=${remaining%%/*}; remaining=${remaining#*/}; current=$current/$component; if [ -e "$current" ] || [ -L "$current" ]; then [ -d "$current" ] && [ ! -L "$current" ] || exit 1; else /bin/mkdir -m 0755 -- "$current" || exit 1; fi; done; target=$current/$remaining; /bin/rm -rf -- "$target" || exit 1; done`
-	secureVerifierPredicate                = `root=$1; shift; /bin/chown 0:0 "$root" || exit 1; /bin/chmod 1777 "$root" || exit 1; for relative do current=$root; remaining=$relative; while [ "$remaining" != "${remaining#*/}" ]; do component=${remaining%%/*}; remaining=${remaining#*/}; current=$current/$component; [ -d "$current" ] && [ ! -L "$current" ] || exit 1; /bin/chown 0:0 "$current" || exit 1; /bin/chmod 1777 "$current" || exit 1; done; target=$current/$remaining; [ -f "$target" ] && [ ! -L "$target" ] || exit 1; /bin/chown 0:0 "$target" || exit 1; /bin/chmod 0444 "$target" || exit 1; done`
-	maxCandidatePatchSize                  = 16 << 20
-	maxParserOutputSize                    = 16 << 20
-	maxVerifierLogSize                     = 256 << 20
+	workspaceContainerPath = "/workspace"
+	patchContainerPath     = workspaceContainerPath + "/patch.diff"
+	runScriptContainerPath = workspaceContainerPath + "/run_script.sh"
+	parserContainerPath    = workspaceContainerPath + "/parser.py"
+	stdoutContainerPath    = workspaceContainerPath + "/stdout.log"
+	stderrContainerPath    = workspaceContainerPath + "/stderr.log"
+	outputContainerPath    = workspaceContainerPath + "/output.json"
+	quiesceAgentPredicate  = `target=$1; attempts=0; while :; do found=0; for status in /proc/[0-9]*/status; do [ -r "$status" ] || continue; uid=; while IFS=' ' read -r key value rest; do [ "$key" = "Uid:" ] || continue; uid=$value; break; done <"$status"; [ "$uid" = "$target" ] || continue; pid=${status#/proc/}; pid=${pid%/status}; case "$pid" in ''|*[!0-9]*|0|1) exit 71;; esac; /bin/kill -KILL "$pid" 2>/dev/null || :; found=1; done; [ "$found" -eq 0 ] && exit 0; attempts=$((attempts+1)); [ "$attempts" -lt 100 ] || exit 70; done`
+	maxCandidatePatchSize  = 16 << 20
+	maxParserOutputSize    = 16 << 20
+	maxVerifierLogSize     = 256 << 20
 )
 
 var evaluationArtifactNames = []string{
@@ -47,32 +41,28 @@ var evaluationArtifactNames = []string{
 	"reason.txt",
 }
 
-// Evaluate captures the agent's patch before restoring the pinned base, then
-// injects the private verifier snapshot and pinned evaluator only after the
-// Runner has stopped the harness and revoked its bridge.
-func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner.Sandbox) (core.Evaluation, error) {
+// Evaluate follows the upstream SWE-bench Pro evaluator. After the Runner has
+// stopped the harness and revoked its bridge, it captures the agent's patch
+// from the task sandbox, then runs upstream's entry script in a fresh sandbox
+// from the same image: reset and check out the base commit, apply the patch,
+// check out the gold verifier files, run the pinned script, and parse its
+// output. The agent sandbox contributes nothing but the patch.
+func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner.Sandbox, sandboxes runner.EvaluationSandboxes) (core.Evaluation, error) {
 	started := time.Now()
 	evaluation := core.Evaluation{Status: core.StatusFailed, VerifierStatus: core.StatusFailed}
-	privateStaged := false
 	finish := func(err error) (core.Evaluation, error) {
-		finishErr := err
-		if privateStaged {
-			cleanupCtx, cancel := context.WithTimeout(context.Background(), preparationCleanupTimeout)
-			cleanupErr := removeAndProvePrivatePathAbsent(cleanupCtx, sandbox)
-			cancel()
-			if cleanupErr != nil {
-				finishErr = errors.Join(finishErr, fmt.Errorf("scrub SWE-bench Pro evaluator staging: %w", cleanupErr))
-			}
-		}
 		evaluation.Duration = time.Since(started)
-		if finishErr != nil {
-			evaluation.Error = finishErr.Error()
+		if err != nil {
+			evaluation.Error = err.Error()
 		}
-		return evaluation, finishErr
+		return evaluation, err
 	}
 
 	if sandbox == nil {
-		return finish(errors.New("SWE-bench Pro evaluator requires a live sandbox"))
+		return finish(errors.New("SWE-bench Pro evaluator requires the task sandbox"))
+	}
+	if sandboxes == nil {
+		return finish(errors.New("SWE-bench Pro evaluator requires fresh evaluation sandboxes"))
 	}
 	b.mu.RLock()
 	details, loaded := b.details[task.ID]
@@ -83,30 +73,9 @@ func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner
 	if err := b.verifySources(ctx); err != nil {
 		return finish(fmt.Errorf("reverify SWE-bench Pro sources before evaluation: %w", err))
 	}
-	if _, ok := sandbox.(runner.LimitedDownloader); !ok {
-		return finish(errors.New("SWE-bench Pro evaluation requires bounded sandbox downloads"))
-	}
-	streamer, ok := sandbox.(runner.StreamExecutor)
+	agentStreamer, ok := sandbox.(runner.StreamExecutor)
 	if !ok {
-		return finish(errors.New("SWE-bench Pro evaluation requires streaming sandbox execution"))
-	}
-	if details.snapshot == "" {
-		return finish(fmt.Errorf("SWE-bench Pro task %q was not prepared before evaluation", task.ID))
-	}
-	if err := requireRegularPrivateFileSize(details.snapshot, "private verifier snapshot", maxVerifierSnapshotSize); err != nil {
-		return finish(err)
-	}
-	if details.ignoredSnapshot == "" {
-		return finish(fmt.Errorf("SWE-bench Pro task %q has no prepared ignored baseline", task.ID))
-	}
-	if err := requireRegularPrivateFileSize(details.ignoredSnapshot, "ignored baseline snapshot", maxIgnoredSnapshotSize); err != nil {
-		return finish(err)
-	}
-	if details.gitSnapshot == "" {
-		return finish(fmt.Errorf("SWE-bench Pro task %q has no prepared Git baseline", task.ID))
-	}
-	if err := requireRegularPrivateFileSize(details.gitSnapshot, "Git baseline snapshot", maxGitSnapshotSize); err != nil {
-		return finish(err)
+		return finish(errors.New("SWE-bench Pro patch capture requires streaming sandbox execution"))
 	}
 	for name, source := range map[string]string{"pinned run script": details.runScript, "pinned parser": details.parser} {
 		if err := requireRegularPrivateFile(source, name); err != nil {
@@ -125,61 +94,17 @@ func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner
 	evaluation.LogPaths = paths
 	rawPatchPath, effectivePatchPath := paths[0], paths[1]
 	stdoutPath, stderrPath, outputPath, reasonPath := paths[2], paths[3], paths[4], paths[5]
+	var reasons []string
 
 	if err := quiesceAgentProcesses(ctx, sandbox); err != nil {
 		return finish(err)
 	}
-	if _, err := execOK(ctx, sandbox, "remove agent-controlled SWE-bench Pro staging root", core.Command{
-		Path: "/bin/rm", Args: []string{"-rf", "--", privateContainerPath}, User: rootExecUser,
-	}); err != nil {
+	captureNote, err := captureCandidatePatch(ctx, sandbox, agentStreamer, details.baseCommit, rawPatchPath)
+	if err != nil {
 		return finish(err)
 	}
-	if _, err := execOK(ctx, sandbox, "confirm agent-controlled staging root absent", core.Command{
-		Path: "/bin/sh", Args: []string{"-c", absencePredicate, "aries-swebenchpro-absence", privateContainerPath}, User: rootExecUser,
-	}); err != nil {
-		return finish(err)
-	}
-	if _, err := execOK(ctx, sandbox, "create SWE-bench Pro evaluator path", core.Command{
-		Path: "/bin/mkdir", Args: []string{"-m", "0700", "-p", "--", evaluationContainerPath}, User: rootExecUser,
-	}); err != nil {
-		return finish(err)
-	}
-	privateStaged = true
-	if err := sandbox.Upload(ctx, details.gitSnapshot, evaluationGitSnapshotContainerPath); err != nil {
-		return finish(fmt.Errorf("upload Git baseline snapshot: %w", err))
-	}
-	if _, err := execOK(ctx, sandbox, "remove agent-controlled Git metadata", core.Command{
-		Path: "/bin/rm", Args: []string{"-rf", "--", repositoryPath + "/.git"}, User: rootExecUser,
-	}); err != nil {
-		return finish(err)
-	}
-	if _, err := execOK(ctx, sandbox, "restore sanitized Git baseline", core.Command{
-		Path: "/bin/tar", Args: []string{"-xf", evaluationGitSnapshotContainerPath, "-C", repositoryPath}, User: rootExecUser,
-	}); err != nil {
-		return finish(err)
-	}
-	if _, err := execOK(ctx, sandbox, "restore trusted repository-root ownership", core.Command{
-		Path: "/bin/chown", Args: []string{"0:0", repositoryPath}, User: rootExecUser,
-	}); err != nil {
-		return finish(err)
-	}
-	if err := proveRepositoryAtBase(ctx, sandbox, details.baseCommit); err != nil {
-		return finish(err)
-	}
-	if err := proveRepositoryHistoryIsolated(ctx, sandbox, details.goldCommit); err != nil {
-		return finish(err)
-	}
-
-	if _, err := execOK(ctx, sandbox, "stage candidate worktree", gitCommand("add", "-A")); err != nil {
-		return finish(err)
-	}
-	if _, err := execOK(ctx, sandbox, "capture candidate patch", gitCommand(
-		"diff", "--cached", "--no-ext-diff", "--binary", "--output="+candidateRawContainerPath, details.baseCommit,
-	)); err != nil {
-		return finish(err)
-	}
-	if err := downloadLimited(ctx, sandbox, candidateRawContainerPath, rawPatchPath, maxCandidatePatchSize); err != nil {
-		return finish(fmt.Errorf("download raw candidate patch: %w", err))
+	if captureNote != "" {
+		reasons = append(reasons, captureNote)
 	}
 	if err := secureDownloadedFile(rawPatchPath, maxCandidatePatchSize, "raw candidate patch"); err != nil {
 		return finish(err)
@@ -192,100 +117,59 @@ func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner
 	if err != nil {
 		return finish(fmt.Errorf("sanitize candidate patch: %w", err))
 	}
-	if len(effectivePatch) > maxCandidatePatchSize {
-		return finish(fmt.Errorf("effective candidate patch exceeds %d bytes", maxCandidatePatchSize))
-	}
 	if err := writePrivateArtifact(effectivePatchPath, effectivePatch); err != nil {
 		return finish(fmt.Errorf("write effective candidate patch: %w", err))
 	}
 
-	if _, err := execOK(ctx, sandbox, "restore base before evaluation", gitCommand("reset", "--hard", details.baseCommit)); err != nil {
-		return finish(err)
+	fresh, err := sandboxes.Start(ctx, evaluationEnvironment(task.Environment))
+	if err != nil {
+		return finish(fmt.Errorf("start fresh SWE-bench Pro evaluation sandbox: %w", err))
 	}
-	if _, err := execOK(ctx, sandbox, "clean candidate worktree before evaluation", gitCommand("clean", "-ffd")); err != nil {
-		return finish(err)
+	if _, ok := fresh.(runner.LimitedDownloader); !ok {
+		return finish(errors.New("SWE-bench Pro evaluation requires bounded sandbox downloads"))
 	}
-	if _, err := execOK(ctx, sandbox, "remove candidate ignored artifacts", gitCommand("clean", "-ffdX")); err != nil {
-		return finish(err)
+	streamer, ok := fresh.(runner.StreamExecutor)
+	if !ok {
+		return finish(errors.New("SWE-bench Pro evaluation requires streaming sandbox execution"))
 	}
-	if err := sandbox.Upload(ctx, details.ignoredSnapshot, evaluationIgnoredSnapshotContainerPath); err != nil {
-		return finish(fmt.Errorf("upload ignored baseline snapshot: %w", err))
-	}
-	if _, err := execOK(ctx, sandbox, "restore ignored build baseline", core.Command{
-		Path: "/bin/tar", Args: []string{"-xf", evaluationIgnoredSnapshotContainerPath, "-C", repositoryPath}, User: rootExecUser,
+	if _, err := execOK(ctx, fresh, "create evaluator workspace", core.Command{
+		Path: "/bin/mkdir", Args: []string{"-p", "--", workspaceContainerPath},
 	}); err != nil {
 		return finish(err)
 	}
-	if err := sandbox.Upload(ctx, effectivePatchPath, candidateEffectiveContainerPath); err != nil {
-		return finish(fmt.Errorf("upload effective candidate patch: %w", err))
-	}
-	applyResult, applyErr := sandbox.Exec(ctx, gitCommand("apply", candidateEffectiveContainerPath))
-	if applyErr != nil {
-		return finish(fmt.Errorf("apply effective candidate patch: %w", applyErr))
-	}
-	if applyResult.ExitCode != 0 {
-		for _, artifact := range []string{stdoutPath, stderrPath, outputPath} {
-			if err := writePrivateArtifact(artifact, nil); err != nil {
-				return finish(fmt.Errorf("initialize skipped verifier artifact: %w", err))
-			}
-		}
-		reason := fmt.Sprintf("candidate patch did not apply: exit code %d", applyResult.ExitCode)
-		if strings.TrimSpace(applyResult.Stderr) != "" {
-			reason += ": " + strings.TrimSpace(applyResult.Stderr)
-		}
-		if err := writePrivateArtifact(reasonPath, []byte(reason+"\n")); err != nil {
-			return finish(fmt.Errorf("write candidate rejection reason: %w", err))
-		}
-		return finish(nil)
-	}
-
-	if _, err := execOK(ctx, sandbox, "restore non-root verifier worktree access", core.Command{
-		Path: "/bin/sh", Args: []string{"-c", restoreAgentWorktreePredicate, "aries-swebenchpro-agent-worktree", repositoryPath, agentExecUser}, User: rootExecUser,
-	}); err != nil {
-		return finish(err)
-	}
-
 	for _, file := range []struct {
 		name        string
 		source      string
 		destination string
 	}{
-		{name: "private verifier snapshot", source: details.snapshot, destination: verifierSnapshotContainerPath},
+		{name: "candidate patch", source: effectivePatchPath, destination: patchContainerPath},
 		{name: "pinned run script", source: details.runScript, destination: runScriptContainerPath},
 		{name: "pinned parser", source: details.parser, destination: parserContainerPath},
 	} {
-		if err := sandbox.Upload(ctx, file.source, file.destination); err != nil {
+		if err := fresh.Upload(ctx, file.source, file.destination); err != nil {
 			return finish(fmt.Errorf("upload %s: %w", file.name, err))
 		}
 	}
-	if _, err := execOK(ctx, sandbox, "prepare symlink-safe verifier destinations", core.Command{
-		Path: "/bin/sh", Args: append([]string{"-c", installVerifierPredicate, "aries-swebenchpro-install-verifier", repositoryPath}, details.verifierFiles...), User: rootExecUser,
-	}); err != nil {
+
+	if _, err := execOK(ctx, fresh, "reset repository to base commit", evaluatorGitCommand("reset", "--hard", details.baseCommit)); err != nil {
 		return finish(err)
 	}
-	if _, err := execOK(ctx, sandbox, "extract private verifier snapshot", core.Command{
-		Path: "/bin/tar", Args: []string{"-xf", verifierSnapshotContainerPath, "-C", repositoryPath}, User: rootExecUser,
-	}); err != nil {
+	if _, err := execOK(ctx, fresh, "check out base commit", evaluatorGitCommand("checkout", details.baseCommit)); err != nil {
 		return finish(err)
 	}
-	if _, err := execOK(ctx, sandbox, "protect verifier files from candidate mutation", core.Command{
-		Path: "/bin/sh", Args: append([]string{"-c", secureVerifierPredicate, "aries-swebenchpro-protect-verifier", repositoryPath}, details.verifierFiles...), User: rootExecUser,
-	}); err != nil {
-		return finish(err)
+	applyResult, err := fresh.Exec(ctx, evaluatorGitCommand("apply", "-v", patchContainerPath))
+	if err != nil {
+		return finish(fmt.Errorf("apply candidate patch: %w", err))
 	}
-	if _, err := execOK(ctx, sandbox, "expose only executable evaluator inputs", core.Command{
-		Path: "/bin/chmod", Args: []string{"0711", privateContainerPath, evaluationContainerPath}, User: rootExecUser,
-	}); err != nil {
-		return finish(err)
+	if applyResult.ExitCode != 0 {
+		reason := fmt.Sprintf("candidate patch did not apply: exit code %d", applyResult.ExitCode)
+		if detail := strings.TrimSpace(applyResult.Stderr); detail != "" {
+			reason += ": " + detail
+		}
+		reasons = append(reasons, reason)
 	}
-	if _, err := execOK(ctx, sandbox, "make verifier script read-only executable", core.Command{
-		Path: "/bin/chmod", Args: []string{"0555", runScriptContainerPath}, User: rootExecUser,
-	}); err != nil {
-		return finish(err)
-	}
-	if _, err := execOK(ctx, sandbox, "make parser root-only", core.Command{
-		Path: "/bin/chmod", Args: []string{"0500", parserContainerPath}, User: rootExecUser,
-	}); err != nil {
+	checkoutArgs := append([]string{"checkout", details.goldCommit, "--"}, details.verifierFiles...)
+	if _, err := execOK(ctx, fresh, "check out verifier files", evaluatorGitCommand(checkoutArgs...)); err != nil {
 		return finish(err)
 	}
 
@@ -300,32 +184,24 @@ func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner
 	}
 	_, testErr := streamer.ExecStream(ctx, core.Command{
 		Path: "/bin/bash", Args: []string{runScriptContainerPath, strings.Join(details.selectedTests, ",")},
-		Dir: repositoryPath, Env: map[string]string{"PYTHONDONTWRITEBYTECODE": "1"}, Timeout: defaultVerifierTimeout, User: agentExecUser,
-		OutputLimitBytes: maxVerifierLogSize,
+		Dir: repositoryPath, Timeout: defaultVerifierTimeout, OutputLimitBytes: maxVerifierLogSize,
 	}, nil, stdoutFile, stderrFile)
-	testErr = errors.Join(testErr, stdoutFile.Close(), stderrFile.Close())
-	quiesceErr := quiesceAgentProcesses(ctx, sandbox)
-	if testErr != nil || quiesceErr != nil {
-		return finish(fmt.Errorf("run SWE-bench Pro verifier: %w", errors.Join(testErr, quiesceErr)))
+	if testErr = errors.Join(testErr, stdoutFile.Close(), stderrFile.Close()); testErr != nil {
+		return finish(fmt.Errorf("run SWE-bench Pro verifier: %w", testErr))
 	}
-	if err := sandbox.Upload(ctx, stdoutPath, verifierStdoutContainerPath); err != nil {
+	if err := fresh.Upload(ctx, stdoutPath, stdoutContainerPath); err != nil {
 		return finish(fmt.Errorf("upload verifier stdout for parser: %w", err))
 	}
-	if err := sandbox.Upload(ctx, stderrPath, verifierStderrContainerPath); err != nil {
+	if err := fresh.Upload(ctx, stderrPath, stderrContainerPath); err != nil {
 		return finish(fmt.Errorf("upload verifier stderr for parser: %w", err))
 	}
-	parserResult, parserErr := sandbox.Exec(ctx, core.Command{
-		Path: "/usr/bin/env",
-		Args: []string{"-i", "PATH=/usr/local/bin:/usr/bin:/bin", "PYTHONNOUSERSITE=1", "python", "-I", parserContainerPath, verifierStdoutContainerPath, verifierStderrContainerPath, parserOutputContainerPath},
-		Dir:  "/", Timeout: defaultVerifierTimeout, User: rootExecUser,
-	})
-	if parserErr != nil {
-		return finish(fmt.Errorf("run SWE-bench Pro parser: %w", parserErr))
+	if _, err := execOK(ctx, fresh, "run SWE-bench Pro parser", core.Command{
+		Path: "/usr/bin/env", Args: []string{"python", parserContainerPath, stdoutContainerPath, stderrContainerPath, outputContainerPath},
+		Dir: repositoryPath, Timeout: defaultVerifierTimeout,
+	}); err != nil {
+		return finish(err)
 	}
-	if parserResult.ExitCode != 0 {
-		return finish(fmt.Errorf("run SWE-bench Pro parser: exit code %d", parserResult.ExitCode))
-	}
-	if err := downloadLimited(ctx, sandbox, parserOutputContainerPath, outputPath, maxParserOutputSize); err != nil {
+	if err := downloadLimited(ctx, fresh, outputContainerPath, outputPath, maxParserOutputSize); err != nil {
 		return finish(fmt.Errorf("download SWE-bench Pro parser output: %w", err))
 	}
 	if err := secureDownloadedFile(outputPath, maxParserOutputSize, "SWE-bench Pro parser output"); err != nil {
@@ -337,12 +213,14 @@ func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner
 	}
 	missing := missingRequiredTests(details, passed)
 	if len(missing) != 0 {
-		if err := writePrivateArtifact(reasonPath, []byte("unresolved: missing required passing tests: "+strings.Join(missing, ", ")+"\n")); err != nil {
+		reasons = append(reasons, "unresolved: missing required passing tests: "+strings.Join(missing, ", "))
+		if err := writePrivateArtifact(reasonPath, []byte(strings.Join(reasons, "\n")+"\n")); err != nil {
 			return finish(fmt.Errorf("write unresolved reason: %w", err))
 		}
 		return finish(nil)
 	}
-	if err := writePrivateArtifact(reasonPath, []byte("resolved: all FAIL_TO_PASS and PASS_TO_PASS tests passed\n")); err != nil {
+	reasons = append(reasons, "resolved: all FAIL_TO_PASS and PASS_TO_PASS tests passed")
+	if err := writePrivateArtifact(reasonPath, []byte(strings.Join(reasons, "\n")+"\n")); err != nil {
 		return finish(fmt.Errorf("write resolved reason: %w", err))
 	}
 	evaluation.Score = 1
@@ -350,6 +228,72 @@ func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner
 	evaluation.Status = core.StatusSucceeded
 	evaluation.VerifierStatus = core.StatusSucceeded
 	return finish(nil)
+}
+
+// captureCandidatePatch stages the agent's worktree and streams its diff
+// against the base commit to the host, as the agent user: the repository and
+// its Git metadata are agent-controlled, so no privileged Git runs on them. A
+// Git failure leaves an empty patch, as an upstream agent run that produced no
+// patch would; the returned note records why.
+func captureCandidatePatch(ctx context.Context, sandbox runner.Sandbox, streamer runner.StreamExecutor, baseCommit, rawPatchPath string) (string, error) {
+	rawFile, err := openPrivateArtifact(rawPatchPath)
+	if err != nil {
+		return "", fmt.Errorf("open raw candidate patch: %w", err)
+	}
+	stage, err := sandbox.Exec(ctx, agentGitCommand("add", "-A"))
+	if err != nil {
+		_ = rawFile.Close()
+		return "", fmt.Errorf("stage candidate worktree: %w", err)
+	}
+	if stage.ExitCode != 0 {
+		return candidateCaptureNote("stage", stage.ExitCode, stage.Stderr), rawFile.Close()
+	}
+	var stderr bytes.Buffer
+	command := agentGitCommand("diff", "--cached", "--no-ext-diff", "--binary", baseCommit)
+	command.OutputLimitBytes = maxCandidatePatchSize
+	diff, err := streamer.ExecStream(ctx, command, nil, rawFile, &stderr)
+	if err = errors.Join(err, rawFile.Close()); err != nil {
+		return "", fmt.Errorf("capture candidate patch: %w", err)
+	}
+	if diff.ExitCode != 0 {
+		if err := writePrivateArtifact(rawPatchPath, nil); err != nil {
+			return "", fmt.Errorf("discard partial candidate patch: %w", err)
+		}
+		return candidateCaptureNote("diff", diff.ExitCode, stderr.String()), nil
+	}
+	return "", nil
+}
+
+func candidateCaptureNote(step string, exitCode int, stderr string) string {
+	note := fmt.Sprintf("candidate patch could not be captured (git %s exit code %d); evaluating an empty patch", step, exitCode)
+	if detail := strings.TrimSpace(stderr); detail != "" {
+		note += ": " + detail
+	}
+	return note
+}
+
+// evaluationEnvironment is the task environment without the agent identity:
+// upstream runs its entry script as the image's default user.
+func evaluationEnvironment(environment core.Environment) core.Environment {
+	environment.Env = maps.Clone(environment.Env)
+	environment.ExecUser = ""
+	return environment
+}
+
+func agentGitCommand(args ...string) core.Command {
+	return core.Command{Path: "/usr/bin/git", Args: append([]string{"-C", repositoryPath}, args...), User: agentExecUser}
+}
+
+func evaluatorGitCommand(args ...string) core.Command {
+	return core.Command{Path: "/usr/bin/git", Args: args, Dir: repositoryPath}
+}
+
+func downloadLimited(ctx context.Context, sandbox runner.Sandbox, source, destination string, limit int64) error {
+	downloader, ok := sandbox.(runner.LimitedDownloader)
+	if !ok {
+		return errors.New("sandbox does not support bounded downloads")
+	}
+	return downloader.DownloadLimit(ctx, source, destination, limit)
 }
 
 func quiesceAgentProcesses(ctx context.Context, sandbox runner.Sandbox) error {
@@ -408,20 +352,6 @@ func requireRegularPrivateFile(path, name string) error {
 	}
 	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("%s is not a regular file", name)
-	}
-	return nil
-}
-
-func requireRegularPrivateFileSize(path, name string, limit int64) error {
-	if err := requireRegularPrivateFile(path, name); err != nil {
-		return err
-	}
-	info, err := os.Lstat(path)
-	if err != nil {
-		return fmt.Errorf("inspect %s size: %w", name, err)
-	}
-	if info.Size() > limit {
-		return fmt.Errorf("%s exceeds %d bytes", name, limit)
 	}
 	return nil
 }

@@ -28,7 +28,7 @@ const finalAnswerTag = "<<FINAL_ANSWER>>"
 // When the judge is disabled, no LLM grading happens at all: Status and
 // VerifierStatus become core.StatusNotEnabled and Score/Reward are 0,
 // distinct from a run that was graded and failed.
-func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner.Sandbox) (core.Evaluation, error) {
+func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner.Sandbox, _ runner.EvaluationSandboxes) (core.Evaluation, error) {
 	started := time.Now()
 	evaluation := core.Evaluation{Status: core.StatusFailed, VerifierStatus: core.StatusFailed}
 	finish := func(err error) (core.Evaluation, error) {

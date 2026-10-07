@@ -22,7 +22,6 @@ const (
 	DefaultRoot = ".cache/swe-bench-pro"
 
 	repositoryPath         = "/app"
-	privateContainerPath   = "/tmp/aries-swebenchpro"
 	agentExecUser          = "65532:65532"
 	agentUID               = "65532"
 	rootExecUser           = "0:0"
@@ -55,18 +54,15 @@ type Benchmark struct {
 }
 
 type taskDetails struct {
-	baseCommit      string
-	goldCommit      string
-	testPatch       string
-	failToPass      []string
-	passToPass      []string
-	selectedTests   []string
-	verifierFiles   []string
-	runScript       string
-	parser          string
-	snapshot        string
-	ignoredSnapshot string
-	gitSnapshot     string
+	baseCommit    string
+	goldCommit    string
+	testPatch     string
+	failToPass    []string
+	passToPass    []string
+	selectedTests []string
+	verifierFiles []string
+	runScript     string
+	parser        string
 }
 
 var _ runner.Benchmark = (*Benchmark)(nil)

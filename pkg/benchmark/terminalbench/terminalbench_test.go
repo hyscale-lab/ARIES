@@ -90,7 +90,7 @@ func TestConcurrentOccurrencesEvaluateToDisjointArtifacts(t *testing.T) {
 		group.Add(1)
 		go func(index int) {
 			defer group.Done()
-			outcomes[index].evaluation, outcomes[index].err = benchmark.Evaluate(context.Background(), tasks[0], sandbox)
+			outcomes[index].evaluation, outcomes[index].err = benchmark.Evaluate(context.Background(), tasks[0], sandbox, nil)
 		}(index)
 	}
 	for range 2 {
@@ -408,7 +408,7 @@ func TestRecursiveVerifierTreeStaysPrivateUntilEvaluate(t *testing.T) {
 		t.Fatal("private verifier material appeared before Evaluate")
 	}
 
-	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox)
+	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox, nil)
 	if err != nil {
 		t.Fatalf("Evaluate() error = %v", err)
 	}
@@ -662,7 +662,7 @@ func TestEvaluateInjectsTestsOnlyWhenCalledAndRetainsArtifacts(t *testing.T) {
 		t.Fatal("verifier material appeared before Evaluate")
 	}
 
-	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox)
+	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox, nil)
 	if err != nil {
 		t.Fatalf("Evaluate() error = %v", err)
 	}
@@ -747,7 +747,7 @@ func TestEvaluateRewardStates(t *testing.T) {
 			}
 			sandbox := &fakeSandbox{verifierOutputs: downloads}
 
-			evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox)
+			evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox, nil)
 			if evaluation.Status != test.wantStatus || evaluation.Reward != test.wantReward {
 				t.Fatalf("Evaluation = %#v, want status %s reward %v", evaluation, test.wantStatus, test.wantReward)
 			}
@@ -777,7 +777,7 @@ func TestEvaluateAcceptsLegitimateRewardZeroFailedReport(t *testing.T) {
 		filepath.Join(verifierLogPath, "reward.txt"): []byte("0\n"),
 	}}
 
-	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox)
+	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox, nil)
 	if err != nil {
 		t.Fatalf("Evaluate() rejected a legitimate reward-0 verifier report: %v", err)
 	}
@@ -803,7 +803,7 @@ func TestEvaluateDoesNotAcceptRewardOneWithoutValidCTRF(t *testing.T) {
 			filepath.Join(verifierLogPath, "reward.txt"): []byte("1\n"),
 		}}
 
-		evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox)
+		evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox, nil)
 		if err == nil || !strings.Contains(err.Error(), "validate verifier CTRF") {
 			t.Fatalf("Evaluate() error = %v, want invalid CTRF", err)
 		}
@@ -832,7 +832,7 @@ func TestEvaluateRejectsNonzeroVerifierCommand(t *testing.T) {
 		},
 	}
 
-	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox)
+	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox, nil)
 	if err == nil || !strings.Contains(err.Error(), "exit code 7") {
 		t.Fatalf("Evaluate() error = %v, want verifier exit code", err)
 	}
@@ -884,7 +884,7 @@ func TestEvaluateRejectsChangedVerifierFiles(t *testing.T) {
 			test.change(t, details.verifierFiles[0].source)
 			sandbox := &fakeSandbox{}
 
-			_, err = benchmark.Evaluate(context.Background(), task, sandbox)
+			_, err = benchmark.Evaluate(context.Background(), task, sandbox, nil)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("Evaluate() error = %v, want %q", err, test.want)
 			}
@@ -920,7 +920,7 @@ func TestEvaluateDoesNotAcceptStaleSandboxOrHostReward(t *testing.T) {
 		},
 	}
 
-	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox)
+	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox, nil)
 	if err == nil || !strings.Contains(err.Error(), "download verifier reward") {
 		t.Fatalf("Evaluate() error = %v, want missing fresh reward", err)
 	}

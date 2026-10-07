@@ -165,7 +165,7 @@ func (benchmark mutationCheckingBenchmark) PrepareSandbox(ctx context.Context, t
 	return benchmark.inner.PrepareSandbox(ctx, task, sandbox)
 }
 
-func (benchmark mutationCheckingBenchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner.Sandbox) (core.Evaluation, error) {
+func (benchmark mutationCheckingBenchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner.Sandbox, sandboxes runner.EvaluationSandboxes) (core.Evaluation, error) {
 	mutation, err := sandbox.Exec(ctx, core.Command{Path: "/bin/cat", Args: []string{".git/aries-bridge-probe"}, Dir: task.Environment.Workdir})
 	if err != nil {
 		return core.Evaluation{}, fmt.Errorf("observe bridge mutation during evaluation: %w", err)
@@ -173,7 +173,7 @@ func (benchmark mutationCheckingBenchmark) Evaluate(ctx context.Context, task co
 	if mutation.ExitCode != 0 || mutation.Stdout != "bridge write reached sandbox\n" {
 		return core.Evaluation{}, fmt.Errorf("bridge mutation missing during evaluation: exit %d output %q", mutation.ExitCode, mutation.Stdout)
 	}
-	return benchmark.inner.Evaluate(ctx, task, sandbox)
+	return benchmark.inner.Evaluate(ctx, task, sandbox, sandboxes)
 }
 
 func (bridge *modelBridge) removeModel(ctx context.Context) error {

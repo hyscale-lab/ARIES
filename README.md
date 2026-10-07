@@ -70,8 +70,9 @@ fifth Runner role.
 
 The lifecycle is deliberately fail-closed: ARIES stops the harness and confirms
 that the bridge has been revoked before exposing private verifier material for
-evaluation. Evaluation runs against the still-live sandbox and remains separate
-from the harness outcome; ARIES then removes the sandbox. This keeps agent
+evaluation. Evaluation follows each benchmark's original methodology, against
+the still-live sandbox or in a fresh sandbox from the task image, and remains
+separate from the harness outcome; ARIES then removes the sandboxes. This keeps agent
 execution, tool access, and scoring under distinct ownership while retaining
 replayable private evidence for a run.
 

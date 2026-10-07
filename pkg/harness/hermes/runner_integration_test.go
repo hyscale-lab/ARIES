@@ -82,7 +82,7 @@ func (b *hermesRunnerBenchmark) PrepareSandbox(ctx context.Context, _ core.Task,
 	}
 	return nil
 }
-func (b *hermesRunnerBenchmark) Evaluate(ctx context.Context, _ core.Task, s runner.Sandbox) (core.Evaluation, error) {
+func (b *hermesRunnerBenchmark) Evaluate(ctx context.Context, _ core.Task, s runner.Sandbox, _ runner.EvaluationSandboxes) (core.Evaluation, error) {
 	if s != b.live {
 		return core.Evaluation{}, errors.New("evaluation received a different sandbox")
 	}

@@ -109,7 +109,7 @@ func newJudgeDisabledTestBenchmark(t *testing.T) *Benchmark {
 func TestEvaluateReportsNotEnabledWhenJudgeDisabled(t *testing.T) {
 	benchmark := newJudgeDisabledTestBenchmark(t)
 	sandbox := &evaluateFake{downloadContent: "candidate report"}
-	evaluation, err := benchmark.Evaluate(context.Background(), core.Task{ID: "1"}, sandbox)
+	evaluation, err := benchmark.Evaluate(context.Background(), core.Task{ID: "1"}, sandbox, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestEvaluateReportsNotEnabledWhenJudgeDisabled(t *testing.T) {
 
 func TestEvaluateRequiresLiveSandbox(t *testing.T) {
 	benchmark, _ := newTestBenchmark(t, nil)
-	if _, err := benchmark.Evaluate(context.Background(), core.Task{ID: "1"}, nil); err == nil {
+	if _, err := benchmark.Evaluate(context.Background(), core.Task{ID: "1"}, nil, nil); err == nil {
 		t.Fatal("Evaluate accepted a nil sandbox")
 	}
 }
@@ -145,7 +145,7 @@ func TestEvaluateMissingReportScoresZeroWithoutError(t *testing.T) {
 	race := &stubRace{}
 	benchmark, _ := newTestBenchmark(t, race)
 	sandbox := &evaluateFake{downloadErr: errors.New("no such file")}
-	evaluation, err := benchmark.Evaluate(context.Background(), core.Task{ID: "1"}, sandbox)
+	evaluation, err := benchmark.Evaluate(context.Background(), core.Task{ID: "1"}, sandbox, nil)
 	if err != nil {
 		t.Fatalf("Evaluate returned an error for a missing report: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestEvaluateNeverUploadsReferenceArticle(t *testing.T) {
 	race := &stubRace{result: raceResult{Overall: 0.8}}
 	benchmark, _ := newTestBenchmark(t, race)
 	sandbox := &evaluateFake{downloadContent: "candidate report"}
-	if _, err := benchmark.Evaluate(context.Background(), core.Task{ID: "1"}, sandbox); err != nil {
+	if _, err := benchmark.Evaluate(context.Background(), core.Task{ID: "1"}, sandbox, nil); err != nil {
 		t.Fatal(err)
 	}
 	if sandbox.uploads != 0 {
@@ -179,7 +179,7 @@ func TestEvaluateDownloadsFromFixedReportPath(t *testing.T) {
 	race := &stubRace{result: raceResult{Overall: 0.8}}
 	benchmark, _ := newTestBenchmark(t, race)
 	sandbox := &evaluateFake{downloadContent: "candidate report"}
-	if _, err := benchmark.Evaluate(context.Background(), core.Task{ID: "1"}, sandbox); err != nil {
+	if _, err := benchmark.Evaluate(context.Background(), core.Task{ID: "1"}, sandbox, nil); err != nil {
 		t.Fatal(err)
 	}
 	if sandbox.downloads != 1 || sandbox.downloadSource != reportPath {
@@ -194,7 +194,7 @@ func TestEvaluateAboveThresholdSucceeds(t *testing.T) {
 	race := &stubRace{result: raceResult{Overall: 0.75}}
 	benchmark, _ := newTestBenchmark(t, race)
 	sandbox := &evaluateFake{downloadContent: "candidate report"}
-	evaluation, err := benchmark.Evaluate(context.Background(), core.Task{ID: "1"}, sandbox)
+	evaluation, err := benchmark.Evaluate(context.Background(), core.Task{ID: "1"}, sandbox, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestEvaluateBelowThresholdFails(t *testing.T) {
 	race := &stubRace{result: raceResult{Overall: 0.40}}
 	benchmark, _ := newTestBenchmark(t, race)
 	sandbox := &evaluateFake{downloadContent: "candidate report"}
-	evaluation, err := benchmark.Evaluate(context.Background(), core.Task{ID: "1"}, sandbox)
+	evaluation, err := benchmark.Evaluate(context.Background(), core.Task{ID: "1"}, sandbox, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +226,7 @@ func TestEvaluateAtExactThresholdSucceeds(t *testing.T) {
 	race := &stubRace{result: raceResult{Overall: defaultRewardThreshold / 100.0}}
 	benchmark, _ := newTestBenchmark(t, race)
 	sandbox := &evaluateFake{downloadContent: "candidate report"}
-	evaluation, err := benchmark.Evaluate(context.Background(), core.Task{ID: "1"}, sandbox)
+	evaluation, err := benchmark.Evaluate(context.Background(), core.Task{ID: "1"}, sandbox, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestEvaluateWritesFullRaceDimensionBreakdownArtifact(t *testing.T) {
 	race := &stubRace{result: raceResult{Overall: 0.8, Comprehensiveness: 0.7, Insight: 0.6, InstructionFollowing: 0.9, Readability: 0.5}}
 	benchmark, _ := newTestBenchmark(t, race)
 	sandbox := &evaluateFake{downloadContent: "candidate report"}
-	evaluation, err := benchmark.Evaluate(context.Background(), core.Task{ID: "1"}, sandbox)
+	evaluation, err := benchmark.Evaluate(context.Background(), core.Task{ID: "1"}, sandbox, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +267,7 @@ func TestEvaluateWritesArtifacts(t *testing.T) {
 	benchmark, root := newTestBenchmark(t, race)
 	_ = root
 	sandbox := &evaluateFake{downloadContent: "candidate report"}
-	evaluation, err := benchmark.Evaluate(context.Background(), core.Task{ID: "1"}, sandbox)
+	evaluation, err := benchmark.Evaluate(context.Background(), core.Task{ID: "1"}, sandbox, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +301,7 @@ func TestEvaluateFailsClosedOnRaceError(t *testing.T) {
 	race := &stubRace{err: errors.New("race judge unavailable")}
 	benchmark, _ := newTestBenchmark(t, race)
 	sandbox := &evaluateFake{downloadContent: "candidate report"}
-	if _, err := benchmark.Evaluate(context.Background(), core.Task{ID: "1"}, sandbox); err == nil {
+	if _, err := benchmark.Evaluate(context.Background(), core.Task{ID: "1"}, sandbox, nil); err == nil {
 		t.Fatal("Evaluate accepted a failing race judge call")
 	}
 }
@@ -312,7 +312,7 @@ func TestEvaluateWithFactEnabledWritesFactArtifact(t *testing.T) {
 	fact := &stubFact{report: factReport{HasCitations: true, TotalCitations: 4, EffectiveCitations: 3}}
 	benchmark.fact = fact
 	sandbox := &evaluateFake{downloadContent: "candidate report"}
-	evaluation, err := benchmark.Evaluate(context.Background(), core.Task{ID: "1"}, sandbox)
+	evaluation, err := benchmark.Evaluate(context.Background(), core.Task{ID: "1"}, sandbox, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +340,7 @@ func TestEvaluateWithFactZeroCitationsStillWritesArtifact(t *testing.T) {
 	benchmark, _ := newTestBenchmark(t, race)
 	benchmark.fact = &stubFact{report: factReport{HasCitations: false}}
 	sandbox := &evaluateFake{downloadContent: "candidate report"}
-	evaluation, err := benchmark.Evaluate(context.Background(), core.Task{ID: "1"}, sandbox)
+	evaluation, err := benchmark.Evaluate(context.Background(), core.Task{ID: "1"}, sandbox, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,7 +362,7 @@ func TestEvaluateFactErrorDoesNotFailRaceDrivenOutcome(t *testing.T) {
 	benchmark, _ := newTestBenchmark(t, race)
 	benchmark.fact = &stubFact{err: errors.New("fact pipeline unavailable")}
 	sandbox := &evaluateFake{downloadContent: "candidate report"}
-	evaluation, err := benchmark.Evaluate(context.Background(), core.Task{ID: "1"}, sandbox)
+	evaluation, err := benchmark.Evaluate(context.Background(), core.Task{ID: "1"}, sandbox, nil)
 	if err != nil {
 		t.Fatalf("Evaluate returned an error when only FACT failed: %v", err)
 	}

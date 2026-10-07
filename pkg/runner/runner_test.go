@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -93,6 +94,7 @@ type fakeBenchmark struct {
 	evaluatedTasks  []core.Task
 	evaluationDelay time.Duration
 	afterTasks      func()
+	freshStarts     int
 }
 
 func (f *fakeBenchmark) PrepareSandbox(ctx context.Context, task core.Task, _ Sandbox) error {
@@ -117,13 +119,18 @@ func (f *fakeBenchmark) Tasks(ctx context.Context) ([]core.Task, error) {
 	return f.tasks, f.tasksErr
 }
 
-func (f *fakeBenchmark) Evaluate(ctx context.Context, task core.Task, _ Sandbox) (core.Evaluation, error) {
+func (f *fakeBenchmark) Evaluate(ctx context.Context, task core.Task, _ Sandbox, sandboxes EvaluationSandboxes) (core.Evaluation, error) {
 	f.log.add("benchmark.evaluate", ctx)
 	f.mu.Lock()
 	f.evaluatedTasks = append(f.evaluatedTasks, task)
 	f.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return core.Evaluation{}, err
+	}
+	for range f.freshStarts {
+		if _, err := sandboxes.Start(ctx, task.Environment); err != nil {
+			return core.Evaluation{}, err
+		}
 	}
 	if f.evaluationDelay > 0 {
 		timer := time.NewTimer(f.evaluationDelay)
@@ -153,6 +160,7 @@ type fakeToolSandbox struct {
 	stops      int
 	sandbox    *fakeSandbox
 	requests   []core.SandboxRequest
+	stopped    []Sandbox
 }
 
 func (f *fakeToolSandbox) Start(ctx context.Context, request core.SandboxRequest) (Sandbox, error) {
@@ -168,11 +176,17 @@ func (f *fakeToolSandbox) Start(ctx context.Context, request core.SandboxRequest
 		f.log.addRollback("sandbox.rollback", ctx)
 		return nil, f.startErr
 	}
+	if request.Purpose == core.SandboxPurposeEvaluation {
+		return &fakeSandbox{name: fmt.Sprintf("evaluation-%d", len(f.requests))}, nil
+	}
 	return f.sandbox, nil
 }
 
-func (f *fakeToolSandbox) Stop(ctx context.Context, _ Sandbox) error {
+func (f *fakeToolSandbox) Stop(ctx context.Context, sandbox Sandbox) error {
 	f.log.add("sandbox.stop", ctx)
+	f.mu.Lock()
+	f.stopped = append(f.stopped, sandbox)
+	f.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -195,6 +209,7 @@ func (f *fakeToolSandbox) stopCount() int {
 }
 
 type fakeSandbox struct {
+	name string
 }
 
 func (f *fakeSandbox) Connectivity() core.HarnessConnectivity {
@@ -388,6 +403,81 @@ func TestRunnerSuccessOrdering(t *testing.T) {
 	rig.harness.mu.Unlock()
 	if len(harnessRequests) != 1 || harnessRequests[0].Connectivity.Placement.DockerNetwork != "occurrence-network" || harnessRequests[0].Connectivity.SearchURL != "http://search.example:8123" || harnessRequests[0].RunID != "test-run" || harnessRequests[0].TaskID != "a" || harnessRequests[0].OutputDir != "runs" || harnessRequests[0].Timeout != 37*time.Minute {
 		t.Fatalf("harness requests = %#v", harnessRequests)
+	}
+}
+
+func TestRunnerRecordsAndLogsTaskErrorWhenHarnessNeverStarts(t *testing.T) {
+	rig := newRig(t, 1)
+	var logs bytes.Buffer
+	rig.runner.logger.SetOutput(&logs)
+	rig.benchmark.prepareErr = errInjected
+	result, err := rig.runner.Run(context.Background())
+	if !errors.Is(err, errInjected) {
+		t.Fatalf("Run() error = %v", err)
+	}
+	task := result.Tasks[0]
+	if task.Harness.Status != core.StatusNotStarted || task.Error != "prepare sandbox: injected failure" {
+		t.Fatalf("task result = %#v", task)
+	}
+	if !strings.Contains(logs.String(), `error="prepare sandbox: injected failure"`) || !strings.Contains(logs.String(), "task finished") {
+		t.Fatalf("task finished log lacks the error: %s", logs.String())
+	}
+}
+
+func TestRunnerStopsEvaluationSandboxesBeforeTaskSandbox(t *testing.T) {
+	rig := newRig(t, 1)
+	rig.benchmark.freshStarts = 2
+	result, err := rig.runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	wantCalls := []string{
+		"benchmark.tasks", "sandbox.start", "benchmark.prepare", "bridge.start", "harness.start", "harness.run",
+		"harness.stop", "bridge.stop", "benchmark.evaluate", "sandbox.start", "sandbox.start",
+		"sandbox.stop", "sandbox.stop", "sandbox.stop",
+	}
+	if got := rig.log.snapshot(); !reflect.DeepEqual(got, wantCalls) {
+		t.Fatalf("calls = %v, want %v", got, wantCalls)
+	}
+	rig.factory.mu.Lock()
+	requests := append([]core.SandboxRequest(nil), rig.factory.requests...)
+	stopped := append([]Sandbox(nil), rig.factory.stopped...)
+	rig.factory.mu.Unlock()
+	for index, request := range requests {
+		wantPurpose := ""
+		if index > 0 {
+			wantPurpose = core.SandboxPurposeEvaluation
+		}
+		if request.Purpose != wantPurpose || request.TaskID != "a" || request.RunID != "test-run" {
+			t.Fatalf("sandbox request %d = %#v", index, request)
+		}
+	}
+	names := make([]string, len(stopped))
+	for index, sandbox := range stopped {
+		names[index] = sandbox.(*fakeSandbox).name
+	}
+	if !reflect.DeepEqual(names, []string{"evaluation-3", "evaluation-2", ""}) {
+		t.Fatalf("stop order = %v, want newest evaluation sandbox first and task sandbox last", names)
+	}
+	if result.Tasks[0].Cleanup.Status != core.StatusSucceeded || result.Tasks[0].Error != "" {
+		t.Fatalf("task result = %#v", result.Tasks[0])
+	}
+}
+
+func TestRunnerReportsEvaluationSandboxCleanupFailure(t *testing.T) {
+	rig := newRig(t, 1)
+	rig.benchmark.freshStarts = 1
+	rig.factory.stopErrors = []error{errInjected}
+	result, err := rig.runner.Run(context.Background())
+	if !errors.Is(err, errInjected) || !strings.Contains(err.Error(), "cleanup evaluation sandbox") {
+		t.Fatalf("Run() error = %v", err)
+	}
+	task := result.Tasks[0]
+	if task.Cleanup.Status != core.StatusFailed || !strings.Contains(task.Error, "cleanup evaluation sandbox") || task.Evaluation.Status != core.StatusSucceeded {
+		t.Fatalf("task result = %#v", task)
+	}
+	if rig.factory.stopCount() != 2 {
+		t.Fatalf("stop calls = %d, want evaluation then task sandbox", rig.factory.stopCount())
 	}
 }
 

@@ -165,6 +165,9 @@ func (m *Manager) Start(ctx context.Context, request core.SandboxRequest) (runne
 	if err := validateIdentity("task", request.TaskID); err != nil {
 		return nil, err
 	}
+	if request.Purpose != "" && request.Purpose != core.SandboxPurposeEvaluation {
+		return nil, fmt.Errorf("unsupported sandbox purpose %q", request.Purpose)
+	}
 	if err := validateEnvironment(request.Environment); err != nil {
 		return nil, err
 	}
@@ -176,7 +179,7 @@ func (m *Manager) Start(ctx context.Context, request core.SandboxRequest) (runne
 		owner: m, deployment: m.deployment,
 		containerName: "aries-task-" + id,
 		workdir:       request.Environment.Workdir, execUser: request.Environment.ExecUser,
-		artifactDir: filepath.Join(m.outputDir, request.TaskID, "sandbox"),
+		artifactDir: filepath.Join(m.outputDir, request.TaskID, sandboxComponent(request)),
 		outputDir:   m.outputDir, cleanupTimeout: m.cleanupTimeout,
 		runID: request.RunID, taskID: request.TaskID,
 	}
@@ -268,9 +271,18 @@ func ownershipLabels(request core.SandboxRequest, kind string) map[string]string
 		"aries.task":    request.TaskID,
 	}
 	if kind == "task-container" {
-		labels["aries.component"] = "sandbox"
+		labels["aries.component"] = sandboxComponent(request)
 	}
 	return labels
+}
+
+// sandboxComponent names the artifact directory and resource component, so a
+// fresh evaluation sandbox never overwrites the agent sandbox's evidence.
+func sandboxComponent(request core.SandboxRequest) string {
+	if request.Purpose == core.SandboxPurposeEvaluation {
+		return "evaluation-sandbox"
+	}
+	return "sandbox"
 }
 
 // ContainerID returns the immutable deployment container identifier.

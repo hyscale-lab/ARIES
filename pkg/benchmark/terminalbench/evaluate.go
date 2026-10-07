@@ -17,7 +17,7 @@ import (
 
 // Evaluate injects private tests into the still-live sandbox and runs the
 // verifier independently of the harness.
-func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner.Sandbox) (core.Evaluation, error) {
+func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner.Sandbox, _ runner.EvaluationSandboxes) (core.Evaluation, error) {
 	started := time.Now()
 	evaluation := core.Evaluation{Status: core.StatusFailed, VerifierStatus: core.StatusFailed}
 	finish := func(err error) (core.Evaluation, error) {

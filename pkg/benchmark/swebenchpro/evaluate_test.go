@@ -12,48 +12,83 @@ import (
 	"testing"
 
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/runner"
 )
 
 const (
 	evaluationCandidatePatch = "diff --git a/source.py b/source.py\n--- a/source.py\n+++ b/source.py\n@@ -1 +1 @@\n-old\n+new\n"
 	evaluationBinaryPatch    = "diff --git a/image.bin b/image.bin\nnew file mode 100644\nindex 0000000..1111111\nGIT binary patch\nliteral 1\nA0000\n\n"
+	evaluationPassingOutput  = `{"tests":[{"name":"tests.regression_test::test_fix","status":"PASSED"},{"name":"tests.existing_test::test_ok","status":"PASSED"}]}`
 )
 
-func TestEvaluateResolvedUsesPinnedPrivateVerifierAfterCandidateCapture(t *testing.T) {
-	benchmark, task, _ := newEvaluationFixture(t)
-	sandbox := &evaluationSandboxFake{
-		candidate: []byte(evaluationCandidatePatch + evaluationBinaryPatch),
-		output:    []byte(`{"tests":[{"name":"tests.regression_test::test_fix","status":"PASSED"},{"name":"tests.existing_test::test_ok","status":"PASSED"},{"name":"extra","status":"UNKNOWN"}]}`),
-		commandResults: map[string]core.CommandResult{
-			"/bin/bash": {ExitCode: 7, Stdout: "test stdout\n", Stderr: "test stderr\n"},
-		},
+func TestEvaluateCapturesPatchThenRunsUpstreamEntryScriptInFreshSandbox(t *testing.T) {
+	benchmark, task, details := newEvaluationFixture(t)
+	agent := &agentSandboxFake{candidate: evaluationCandidatePatch + evaluationBinaryPatch}
+	fresh := &freshSandboxFake{
+		output:     evaluationPassingOutput + "\n",
+		testResult: core.CommandResult{ExitCode: 7, Stdout: "test stdout\n", Stderr: "test stderr\n"},
 	}
-	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox)
+	sandboxes := &sandboxesFake{fresh: fresh}
+	evaluation, err := benchmark.Evaluate(context.Background(), task, agent, sandboxes)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if evaluation.Status != core.StatusSucceeded || evaluation.VerifierStatus != core.StatusSucceeded || evaluation.Score != 1 || evaluation.Reward != 1 {
 		t.Fatalf("evaluation = %+v", evaluation)
 	}
-	if len(evaluation.LogPaths) != 6 {
+
+	// The agent sandbox only yields the patch, captured as the agent user.
+	wantAgent := []commandShape{
+		{path: "/bin/sh", args: []string{"-c", quiesceAgentPredicate, "aries-swebenchpro-quiesce", agentUID}, user: rootExecUser},
+		{path: "/usr/bin/git", args: []string{"-C", repositoryPath, "add", "-A"}, user: agentExecUser},
+		{path: "/usr/bin/git", args: []string{"-C", repositoryPath, "diff", "--cached", "--no-ext-diff", "--binary", details.baseCommit}, user: agentExecUser, limit: maxCandidatePatchSize},
+	}
+	if got := shapes(agent.commands); !reflect.DeepEqual(got, wantAgent) {
+		t.Fatalf("agent commands = %#v, want %#v", got, wantAgent)
+	}
+	if agent.uploads != 0 || agent.downloads != 0 {
+		t.Fatalf("agent sandbox transfers: uploads=%d downloads=%d", agent.uploads, agent.downloads)
+	}
+
+	// The fresh sandbox comes from the task image without the agent identity.
+	if len(sandboxes.environments) != 1 {
+		t.Fatalf("fresh sandboxes started = %d, want 1", len(sandboxes.environments))
+	}
+	wantEnvironment := task.Environment
+	wantEnvironment.ExecUser = ""
+	if !reflect.DeepEqual(sandboxes.environments[0], wantEnvironment) {
+		t.Fatalf("fresh environment = %#v, want %#v", sandboxes.environments[0], wantEnvironment)
+	}
+	wantFresh := []commandShape{
+		{path: "/bin/mkdir", args: []string{"-p", "--", workspaceContainerPath}},
+		{path: "/usr/bin/git", args: []string{"reset", "--hard", details.baseCommit}, dir: repositoryPath},
+		{path: "/usr/bin/git", args: []string{"checkout", details.baseCommit}, dir: repositoryPath},
+		{path: "/usr/bin/git", args: []string{"apply", "-v", patchContainerPath}, dir: repositoryPath},
+		{path: "/usr/bin/git", args: append([]string{"checkout", details.goldCommit, "--"}, details.verifierFiles...), dir: repositoryPath},
+		{path: "/bin/bash", args: []string{runScriptContainerPath, strings.Join(details.selectedTests, ",")}, dir: repositoryPath, limit: maxVerifierLogSize, timeout: true},
+		{path: "/usr/bin/env", args: []string{"python", parserContainerPath, stdoutContainerPath, stderrContainerPath, outputContainerPath}, dir: repositoryPath, timeout: true},
+	}
+	if got := shapes(fresh.commands); !reflect.DeepEqual(got, wantFresh) {
+		t.Fatalf("fresh commands = %#v, want %#v", got, wantFresh)
+	}
+	wantUploads := []string{patchContainerPath, runScriptContainerPath, parserContainerPath, stdoutContainerPath, stderrContainerPath}
+	if !reflect.DeepEqual(fresh.uploadDestinations, wantUploads) {
+		t.Fatalf("uploads = %v, want %v", fresh.uploadDestinations, wantUploads)
+	}
+	if fresh.uploadedPatch != evaluationCandidatePatch {
+		t.Fatalf("uploaded patch = %q, want binary hunks stripped", fresh.uploadedPatch)
+	}
+
+	if len(evaluation.LogPaths) != len(evaluationArtifactNames) {
 		t.Fatalf("log paths = %v", evaluation.LogPaths)
 	}
-	raw, err := os.ReadFile(evaluation.LogPaths[0])
-	if err != nil {
-		t.Fatal(err)
+	for index, want := range []string{evaluationCandidatePatch + evaluationBinaryPatch, evaluationCandidatePatch, "test stdout\n", "test stderr\n", evaluationPassingOutput + "\n"} {
+		if content, err := os.ReadFile(evaluation.LogPaths[index]); err != nil || string(content) != want {
+			t.Fatalf("artifact %s = %q, %v; want %q", evaluation.LogPaths[index], content, err, want)
+		}
 	}
-	effective, err := os.ReadFile(evaluation.LogPaths[1])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(raw) != evaluationCandidatePatch+evaluationBinaryPatch || string(effective) != evaluationCandidatePatch {
-		t.Fatalf("raw/effective patches = %q / %q", raw, effective)
-	}
-	if content, err := os.ReadFile(evaluation.LogPaths[2]); err != nil || string(content) != "test stdout\n" {
-		t.Fatalf("stdout = %q, %v", content, err)
-	}
-	if content, err := os.ReadFile(evaluation.LogPaths[3]); err != nil || string(content) != "test stderr\n" {
-		t.Fatalf("stderr = %q, %v", content, err)
+	if reason, err := os.ReadFile(evaluation.LogPaths[5]); err != nil || string(reason) != "resolved: all FAIL_TO_PASS and PASS_TO_PASS tests passed\n" {
+		t.Fatalf("reason = %q, %v", reason, err)
 	}
 	for _, path := range evaluation.LogPaths {
 		info, err := os.Lstat(path)
@@ -61,69 +96,15 @@ func TestEvaluateResolvedUsesPinnedPrivateVerifierAfterCandidateCapture(t *testi
 			t.Fatalf("artifact %q = %#v, %v", path, info, err)
 		}
 	}
-
-	var testCommand, parserCommand *core.Command
-	for index := range sandbox.commands {
-		command := &sandbox.commands[index]
-		if command.Path == "/bin/bash" && len(command.Args) > 0 && command.Args[0] == runScriptContainerPath {
-			testCommand = command
-			continue
-		}
-		if command.Path == "/usr/bin/env" {
-			parserCommand = command
-		}
-		if command.User != rootExecUser {
-			t.Fatalf("privileged evaluator command ran as %q: %#v", command.User, command)
-		}
-	}
-	if testCommand == nil || testCommand.User != agentExecUser || testCommand.Timeout != defaultVerifierTimeout || testCommand.OutputLimitBytes != maxVerifierLogSize {
-		t.Fatalf("verifier command = %#v", testCommand)
-	}
-	if parserCommand == nil || parserCommand.User != rootExecUser || parserCommand.Dir != "/" ||
-		parserCommand.Timeout != defaultVerifierTimeout || !slicesEqual(parserCommand.Args[:5], []string{"-i", "PATH=/usr/local/bin:/usr/bin:/bin", "PYTHONNOUSERSITE=1", "python", "-I"}) {
-		t.Fatalf("isolated parser command = %#v", parserCommand)
-	}
-	if len(sandbox.commands) < 2 || sandbox.commands[0].Args[1] != quiesceAgentPredicate ||
-		sandbox.commands[len(sandbox.commands)-2].Path != "/bin/rm" || sandbox.commands[len(sandbox.commands)-1].Args[1] != absencePredicate {
-		t.Fatalf("process isolation or final staging cleanup missing: %#v", shapes(sandbox.commands))
-	}
-	wantUploadDestinations := []string{
-		evaluationGitSnapshotContainerPath,
-		evaluationIgnoredSnapshotContainerPath,
-		candidateEffectiveContainerPath,
-		verifierSnapshotContainerPath,
-		runScriptContainerPath,
-		parserContainerPath,
-		verifierStdoutContainerPath,
-		verifierStderrContainerPath,
-	}
-	if !reflect.DeepEqual(sandbox.uploadDestinations, wantUploadDestinations) {
-		t.Fatalf("uploads = %v, want %v", sandbox.uploadDestinations, wantUploadDestinations)
-	}
-	for _, source := range sandbox.uploadSources {
-		content, err := os.ReadFile(source)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.Contains(string(content), fixtureTestPatch) || strings.Contains(string(content), fixtureGoldPatch) {
-			t.Fatalf("uploaded source %q exposed dataset patch material", source)
-		}
-	}
-	if sandbox.downloadSources[0] != candidateRawContainerPath || sandbox.downloadSources[1] != parserOutputContainerPath {
-		t.Fatalf("downloads = %v", sandbox.downloadSources)
-	}
 }
 
 func TestEvaluateUnresolvedAndDuplicateParserResultsAreCompatible(t *testing.T) {
 	benchmark, task, _ := newEvaluationFixture(t)
-	sandbox := &evaluationSandboxFake{
-		candidate: []byte(evaluationCandidatePatch),
-		output: []byte(`{"tests":[` +
-			`{"name":"tests.regression_test::test_fix","status":"FAILED"},` +
-			`{"name":"tests.regression_test::test_fix","status":"PASSED"},` +
-			`{"name":"tests.existing_test::test_ok","status":"SKIPPED"}]}`),
-	}
-	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox)
+	fresh := &freshSandboxFake{output: `{"tests":[` +
+		`{"name":"tests.regression_test::test_fix","status":"FAILED"},` +
+		`{"name":"tests.regression_test::test_fix","status":"PASSED"},` +
+		`{"name":"tests.existing_test::test_ok","status":"SKIPPED"}]}`}
+	evaluation, err := benchmark.Evaluate(context.Background(), task, &agentSandboxFake{candidate: evaluationCandidatePatch}, &sandboxesFake{fresh: fresh})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,46 +112,53 @@ func TestEvaluateUnresolvedAndDuplicateParserResultsAreCompatible(t *testing.T) 
 		t.Fatalf("evaluation = %+v", evaluation)
 	}
 	reason, err := os.ReadFile(evaluation.LogPaths[5])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(reason), "tests.existing_test::test_ok") {
-		t.Fatalf("reason = %q", reason)
+	if err != nil || !strings.Contains(string(reason), "tests.existing_test::test_ok") {
+		t.Fatalf("reason = %q, %v", reason, err)
 	}
 }
 
-func TestEvaluateCandidateApplyFailureIsAZeroRewardOutcome(t *testing.T) {
+func TestEvaluateRunsTestsAfterCandidateApplyFailureLikeUpstream(t *testing.T) {
 	benchmark, task, _ := newEvaluationFixture(t)
-	sandbox := &evaluationSandboxFake{
-		candidate: []byte(evaluationCandidatePatch),
-		commandResults: map[string]core.CommandResult{
-			"git apply": {ExitCode: 1, Stderr: "does not apply"},
-		},
+	fresh := &freshSandboxFake{
+		output:      `{"tests":[{"name":"tests.existing_test::test_ok","status":"PASSED"}]}`,
+		applyResult: core.CommandResult{ExitCode: 1, Stderr: "does not apply"},
 	}
-	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox)
+	evaluation, err := benchmark.Evaluate(context.Background(), task, &agentSandboxFake{candidate: evaluationCandidatePatch}, &sandboxesFake{fresh: fresh})
 	if err != nil {
 		t.Fatalf("candidate apply failure returned plumbing error: %v", err)
 	}
 	if evaluation.Reward != 0 || evaluation.Status != core.StatusFailed {
 		t.Fatalf("evaluation = %+v", evaluation)
 	}
-	for _, command := range sandbox.commands {
-		if command.Path == "/usr/bin/env" || slicesEqual(command.Args, []string{"-xf", verifierSnapshotContainerPath, "-C", repositoryPath}) {
-			t.Fatalf("rejected candidate reached private verifier execution: %#v", command)
-		}
-	}
-	if sandbox.commands[len(sandbox.commands)-2].Path != "/bin/rm" || sandbox.commands[len(sandbox.commands)-1].Args[1] != absencePredicate {
-		t.Fatalf("rejected candidate did not scrub evaluator staging: %#v", shapes(sandbox.commands))
+	if !fresh.parserRan {
+		t.Fatal("verifier did not run after the patch failed to apply")
 	}
 	reason, err := os.ReadFile(evaluation.LogPaths[5])
-	if err != nil || !strings.Contains(string(reason), "candidate patch did not apply") {
+	if err != nil || !strings.Contains(string(reason), "candidate patch did not apply: exit code 1: does not apply") ||
+		!strings.Contains(string(reason), "unresolved: missing required passing tests: tests.regression_test::test_fix") {
 		t.Fatalf("reason = %q, %v", reason, err)
 	}
-	for _, path := range evaluation.LogPaths {
-		info, err := os.Lstat(path)
-		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
-			t.Fatalf("rejected candidate artifact %q = %#v, %v", path, info, err)
+}
+
+func TestEvaluateUsesEmptyPatchWhenCaptureFails(t *testing.T) {
+	benchmark, task, _ := newEvaluationFixture(t)
+	agent := &agentSandboxFake{candidate: evaluationCandidatePatch, stageResult: core.CommandResult{ExitCode: 128, Stderr: "not a git repository"}}
+	fresh := &freshSandboxFake{output: evaluationPassingOutput}
+	evaluation, err := benchmark.Evaluate(context.Background(), task, agent, &sandboxesFake{fresh: fresh})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.uploadedPatch != "" {
+		t.Fatalf("uploaded patch = %q, want empty", fresh.uploadedPatch)
+	}
+	for _, command := range agent.commands {
+		if slicesEqual(command.Args[2:3], []string{"diff"}) {
+			t.Fatalf("diff ran after staging failed: %#v", command)
 		}
+	}
+	reason, err := os.ReadFile(evaluation.LogPaths[5])
+	if err != nil || !strings.Contains(string(reason), "candidate patch could not be captured (git stage exit code 128); evaluating an empty patch: not a git repository") {
+		t.Fatalf("reason = %q, %v", reason, err)
 	}
 }
 
@@ -189,73 +177,71 @@ func TestEvaluateRejectsMalformedParserOutput(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			benchmark, task, _ := newEvaluationFixture(t)
-			sandbox := &evaluationSandboxFake{candidate: []byte(evaluationCandidatePatch), output: []byte(test.output)}
-			if _, err := benchmark.Evaluate(context.Background(), task, sandbox); err == nil {
+			fresh := &freshSandboxFake{output: test.output}
+			if _, err := benchmark.Evaluate(context.Background(), task, &agentSandboxFake{candidate: evaluationCandidatePatch}, &sandboxesFake{fresh: fresh}); err == nil {
 				t.Fatal("malformed parser output accepted")
 			}
 		})
 	}
 }
 
-func TestEvaluateFailsBeforeSandboxForInvalidInputsAndSources(t *testing.T) {
+func TestEvaluateFailsParserErrorAsEvaluatorError(t *testing.T) {
 	benchmark, task, _ := newEvaluationFixture(t)
-	if _, err := benchmark.Evaluate(context.Background(), task, nil); err == nil {
-		t.Fatal("nil sandbox accepted")
+	fresh := &freshSandboxFake{output: evaluationPassingOutput, parserResult: core.CommandResult{ExitCode: 1}}
+	if _, err := benchmark.Evaluate(context.Background(), task, &agentSandboxFake{candidate: evaluationCandidatePatch}, &sandboxesFake{fresh: fresh}); err == nil ||
+		!strings.Contains(err.Error(), "run SWE-bench Pro parser: exit code 1") {
+		t.Fatalf("parser failure error = %v", err)
 	}
-	sandbox := &evaluationSandboxFake{}
-	if _, err := benchmark.Evaluate(context.Background(), core.Task{ID: "missing"}, sandbox); err == nil || len(sandbox.commands) != 0 {
-		t.Fatalf("unloaded task error = %v, commands = %v", err, sandbox.commands)
+}
+
+func TestEvaluateFailsBeforeSandboxesForInvalidInputsAndSources(t *testing.T) {
+	benchmark, task, _ := newEvaluationFixture(t)
+	agent := &agentSandboxFake{}
+	sandboxes := &sandboxesFake{fresh: &freshSandboxFake{}}
+	if _, err := benchmark.Evaluate(context.Background(), task, nil, sandboxes); err == nil {
+		t.Fatal("nil task sandbox accepted")
+	}
+	if _, err := benchmark.Evaluate(context.Background(), task, agent, nil); err == nil {
+		t.Fatal("missing evaluation sandboxes accepted")
+	}
+	if _, err := benchmark.Evaluate(context.Background(), core.Task{ID: "missing"}, agent, sandboxes); err == nil {
+		t.Fatal("unloaded task accepted")
 	}
 	if err := os.WriteFile(filepath.Join(benchmark.datasetRoot(), "dirty"), []byte("dirty"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := benchmark.Evaluate(context.Background(), task, sandbox); err == nil || len(sandbox.commands) != 0 {
-		t.Fatalf("dirty source error = %v, commands = %v", err, sandbox.commands)
+	if _, err := benchmark.Evaluate(context.Background(), task, agent, sandboxes); err == nil {
+		t.Fatal("dirty source accepted")
+	}
+	if len(agent.commands) != 0 || len(sandboxes.environments) != 0 {
+		t.Fatalf("invalid inputs reached sandboxes: agent=%v fresh=%d", agent.commands, len(sandboxes.environments))
 	}
 }
 
-func TestEvaluateRejectsMissingOrSymlinkSnapshotBeforeSandbox(t *testing.T) {
-	for _, snapshotKind := range []string{"verifier", "ignored"} {
-		for _, symlink := range []bool{false, true} {
-			t.Run(snapshotKind+"/"+map[bool]string{false: "missing", true: "symlink"}[symlink], func(t *testing.T) {
-				benchmark, task, details := newEvaluationFixture(t)
-				path := details.snapshot
-				if snapshotKind == "ignored" {
-					path = details.ignoredSnapshot
-				}
-				if err := os.Remove(path); err != nil {
-					t.Fatal(err)
-				}
-				if symlink {
-					target := filepath.Join(t.TempDir(), "target.tar")
-					if err := os.WriteFile(target, []byte("private snapshot"), 0o600); err != nil {
-						t.Fatal(err)
-					}
-					if err := os.Symlink(target, path); err != nil {
-						t.Fatal(err)
-					}
-				}
-				sandbox := &evaluationSandboxFake{}
-				if _, err := benchmark.Evaluate(context.Background(), task, sandbox); err == nil || len(sandbox.commands) != 0 {
-					t.Fatalf("snapshot error = %v, commands = %v", err, sandbox.commands)
-				}
-			})
-		}
+func TestEvaluateReportsFreshSandboxStartFailure(t *testing.T) {
+	benchmark, task, _ := newEvaluationFixture(t)
+	failure := errors.New("image pull failed")
+	_, err := benchmark.Evaluate(context.Background(), task, &agentSandboxFake{candidate: evaluationCandidatePatch}, &sandboxesFake{err: failure})
+	if !errors.Is(err, failure) || !strings.Contains(err.Error(), "start fresh SWE-bench Pro evaluation sandbox") {
+		t.Fatalf("start failure error = %v", err)
 	}
 }
 
-func TestEvaluateRejectsOversizedIgnoredSnapshotBeforeSandbox(t *testing.T) {
-	benchmark, task, details := newEvaluationFixture(t)
-	if err := os.Truncate(details.ignoredSnapshot, maxIgnoredSnapshotSize+1); err != nil {
-		t.Fatal(err)
+func TestEvaluateRequiresSandboxCapabilities(t *testing.T) {
+	benchmark, task, _ := newEvaluationFixture(t)
+	basic := &basicSandboxFake{}
+	sandboxes := &sandboxesFake{fresh: &freshSandboxFake{}}
+	if _, err := benchmark.Evaluate(context.Background(), task, basic, sandboxes); err == nil || !strings.Contains(err.Error(), "streaming sandbox execution") || basic.calls != 0 {
+		t.Fatalf("basic task sandbox error = %v, calls = %d", err, basic.calls)
 	}
-	sandbox := &evaluationSandboxFake{}
-	if _, err := benchmark.Evaluate(context.Background(), task, sandbox); err == nil || len(sandbox.commands) != 0 {
-		t.Fatalf("oversized ignored snapshot error = %v, commands = %v", err, sandbox.commands)
+	freshBasic := &basicSandboxFake{}
+	if _, err := benchmark.Evaluate(context.Background(), task, &agentSandboxFake{candidate: evaluationCandidatePatch}, &sandboxesFake{fresh: freshBasic}); err == nil ||
+		!strings.Contains(err.Error(), "bounded sandbox downloads") || freshBasic.calls != 0 {
+		t.Fatalf("basic fresh sandbox error = %v, calls = %d", err, freshBasic.calls)
 	}
 }
 
-func TestEvaluateClearsStaleArtifactsAndContainerOutput(t *testing.T) {
+func TestEvaluateClearsStaleArtifacts(t *testing.T) {
 	benchmark, task, _ := newEvaluationFixture(t)
 	artifactDir := filepath.Join(benchmark.outputDir, task.ID, "evaluation")
 	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
@@ -266,12 +252,7 @@ func TestEvaluateClearsStaleArtifactsAndContainerOutput(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	sandbox := &evaluationSandboxFake{
-		candidate: []byte(evaluationCandidatePatch),
-		output: []byte(`{"tests":[{"name":"tests.regression_test::test_fix","status":"PASSED"},` +
-			`{"name":"tests.existing_test::test_ok","status":"PASSED"}]}`),
-	}
-	evaluation, err := benchmark.Evaluate(context.Background(), task, sandbox)
+	evaluation, err := benchmark.Evaluate(context.Background(), task, &agentSandboxFake{candidate: evaluationCandidatePatch}, &sandboxesFake{fresh: &freshSandboxFake{output: evaluationPassingOutput}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,44 +261,6 @@ func TestEvaluateClearsStaleArtifactsAndContainerOutput(t *testing.T) {
 		if err != nil || strings.Contains(string(content), "STALE PRIVATE DATA") {
 			t.Fatalf("artifact %q = %q, %v", path, content, err)
 		}
-	}
-	if len(sandbox.commands) < 4 || sandbox.commands[0].Args[1] != quiesceAgentPredicate ||
-		sandbox.commands[1].Path != "/bin/rm" || sandbox.commands[2].Args[1] != absencePredicate ||
-		sandbox.commands[3].Path != "/bin/mkdir" {
-		t.Fatalf("initial cleanup commands = %#v", shapes(sandbox.commands))
-	}
-}
-
-func TestEvaluateRejectsVerifierSymlinkTraversalBeforeExtraction(t *testing.T) {
-	benchmark, task, _ := newEvaluationFixture(t)
-	sandbox := &evaluationSandboxFake{
-		candidate: []byte(evaluationCandidatePatch),
-		predicateResults: map[string]core.CommandResult{
-			installVerifierPredicate: {ExitCode: 1},
-		},
-	}
-	if _, err := benchmark.Evaluate(context.Background(), task, sandbox); err == nil {
-		t.Fatal("symlink-unsafe verifier destination was accepted")
-	}
-	for _, command := range sandbox.commands {
-		if command.Path == "/usr/bin/env" || slicesEqual(command.Args, []string{"-xf", verifierSnapshotContainerPath, "-C", repositoryPath}) {
-			t.Fatalf("private verifier reached extraction or parser after destination rejection: %#v", command)
-		}
-	}
-	if sandbox.commands[len(sandbox.commands)-2].Path != "/bin/rm" || sandbox.commands[len(sandbox.commands)-1].Args[1] != absencePredicate {
-		t.Fatalf("failed verifier install did not scrub private staging: %#v", shapes(sandbox.commands))
-	}
-}
-
-func TestEvaluateRequiresBoundedDownloadAndStreamingBeforeSandbox(t *testing.T) {
-	benchmark, task, _ := newEvaluationFixture(t)
-	basic := &basicEvaluationSandboxFake{}
-	if _, err := benchmark.Evaluate(context.Background(), task, basic); err == nil || !strings.Contains(err.Error(), "bounded sandbox downloads") || basic.calls != 0 {
-		t.Fatalf("basic sandbox error = %v, calls = %d", err, basic.calls)
-	}
-	limited := &limitedEvaluationSandboxFake{basicEvaluationSandboxFake: &basicEvaluationSandboxFake{}}
-	if _, err := benchmark.Evaluate(context.Background(), task, limited); err == nil || !strings.Contains(err.Error(), "streaming sandbox execution") || limited.calls != 0 {
-		t.Fatalf("limited-only sandbox error = %v, calls = %d", err, limited.calls)
 	}
 }
 
@@ -334,114 +277,146 @@ func TestStripBinaryPatchSections(t *testing.T) {
 }
 
 type commandShape struct {
-	path string
-	args []string
-	dir  string
+	path    string
+	args    []string
+	dir     string
+	user    string
+	limit   int
+	timeout bool
 }
 
 func shapes(commands []core.Command) []commandShape {
 	result := make([]commandShape, len(commands))
 	for index, command := range commands {
-		result[index] = commandShape{path: command.Path, args: command.Args, dir: command.Dir}
+		result[index] = commandShape{path: command.Path, args: command.Args, dir: command.Dir, user: command.User, limit: command.OutputLimitBytes, timeout: command.Timeout == defaultVerifierTimeout}
 	}
 	return result
 }
 
-type basicEvaluationSandboxFake struct{ calls int }
+type sandboxesFake struct {
+	fresh        runner.Sandbox
+	err          error
+	environments []core.Environment
+}
 
-func (s *basicEvaluationSandboxFake) Exec(context.Context, core.Command) (core.CommandResult, error) {
+func (s *sandboxesFake) Start(_ context.Context, environment core.Environment) (runner.Sandbox, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	s.environments = append(s.environments, environment)
+	return s.fresh, nil
+}
+
+type basicSandboxFake struct{ calls int }
+
+func (s *basicSandboxFake) Exec(context.Context, core.Command) (core.CommandResult, error) {
 	s.calls++
 	return core.CommandResult{}, nil
 }
-func (s *basicEvaluationSandboxFake) Upload(context.Context, string, string) error {
+func (s *basicSandboxFake) Upload(context.Context, string, string) error {
 	s.calls++
 	return nil
 }
-func (s *basicEvaluationSandboxFake) Download(context.Context, string, string) error {
+func (s *basicSandboxFake) Download(context.Context, string, string) error {
 	s.calls++
 	return nil
 }
+func (s *basicSandboxFake) Connectivity() core.HarnessConnectivity { return core.HarnessConnectivity{} }
 
-type limitedEvaluationSandboxFake struct{ *basicEvaluationSandboxFake }
+type agentSandboxFake struct {
+	candidate   string
+	stageResult core.CommandResult
+	commands    []core.Command
+	uploads     int
+	downloads   int
+}
 
-func (s *limitedEvaluationSandboxFake) DownloadLimit(context.Context, string, string, int64) error {
-	s.calls++
+func (s *agentSandboxFake) Exec(_ context.Context, command core.Command) (core.CommandResult, error) {
+	s.commands = append(s.commands, command)
+	if command.Path == "/usr/bin/git" && slicesEqual(command.Args[2:], []string{"add", "-A"}) {
+		return s.stageResult, nil
+	}
+	return core.CommandResult{}, nil
+}
+
+func (s *agentSandboxFake) ExecStream(_ context.Context, command core.Command, _ io.Reader, stdout, _ io.Writer) (core.CommandResult, error) {
+	s.commands = append(s.commands, command)
+	_, err := io.WriteString(stdout, s.candidate)
+	return core.CommandResult{}, err
+}
+
+func (s *agentSandboxFake) Upload(context.Context, string, string) error {
+	s.uploads++
 	return nil
 }
 
-type evaluationSandboxFake struct {
-	candidate          []byte
-	output             []byte
+func (s *agentSandboxFake) Download(context.Context, string, string) error {
+	s.downloads++
+	return nil
+}
+
+func (s *agentSandboxFake) Connectivity() core.HarnessConnectivity {
+	return core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "agent-network"}}
+}
+
+type freshSandboxFake struct {
+	output             string
+	applyResult        core.CommandResult
+	parserResult       core.CommandResult
+	testResult         core.CommandResult
 	commands           []core.Command
-	commandResults     map[string]core.CommandResult
-	commandErrors      map[string]error
-	predicateResults   map[string]core.CommandResult
-	uploadSources      []string
 	uploadDestinations []string
-	downloadSources    []string
+	uploadedPatch      string
 	parserRan          bool
 }
 
-func (s *evaluationSandboxFake) Exec(_ context.Context, command core.Command) (core.CommandResult, error) {
+func (s *freshSandboxFake) Exec(_ context.Context, command core.Command) (core.CommandResult, error) {
 	s.commands = append(s.commands, command)
-	key := command.Path
-	if command.Path == "/bin/sh" && len(command.Args) >= 2 {
-		if result, ok := s.predicateResults[command.Args[1]]; ok {
-			return result, nil
-		}
-	}
-	if command.Path == "/usr/bin/git" && len(command.Args) >= 3 {
-		switch command.Args[2] {
-		case "rev-parse":
-			return core.CommandResult{Stdout: strings.Repeat("a", 40) + "\n"}, nil
-		case "cat-file":
-			return core.CommandResult{ExitCode: 1}, nil
-		}
-	}
-	if command.Path == "/usr/bin/git" && len(command.Args) >= 4 && command.Args[2] == "apply" {
-		key = "git apply"
-	}
-	if command.Path == "/usr/bin/env" {
+	switch {
+	case command.Path == "/usr/bin/git" && len(command.Args) > 0 && command.Args[0] == "apply":
+		return s.applyResult, nil
+	case command.Path == "/usr/bin/env":
 		s.parserRan = true
+		return s.parserResult, nil
 	}
-	return s.commandResults[key], s.commandErrors[key]
+	return core.CommandResult{}, nil
 }
 
-func (s *evaluationSandboxFake) ExecStream(_ context.Context, command core.Command, _ io.Reader, stdout, stderr io.Writer) (core.CommandResult, error) {
+func (s *freshSandboxFake) ExecStream(_ context.Context, command core.Command, _ io.Reader, stdout, stderr io.Writer) (core.CommandResult, error) {
 	s.commands = append(s.commands, command)
-	result := s.commandResults[command.Path]
-	if stdout != nil {
-		_, _ = io.WriteString(stdout, result.Stdout)
-	}
-	if stderr != nil {
-		_, _ = io.WriteString(stderr, result.Stderr)
-	}
-	return result, s.commandErrors[command.Path]
+	_, _ = io.WriteString(stdout, s.testResult.Stdout)
+	_, _ = io.WriteString(stderr, s.testResult.Stderr)
+	return s.testResult, nil
 }
 
-func (s *evaluationSandboxFake) Upload(_ context.Context, source, destination string) error {
-	s.uploadSources = append(s.uploadSources, source)
+func (s *freshSandboxFake) Upload(_ context.Context, source, destination string) error {
 	s.uploadDestinations = append(s.uploadDestinations, destination)
+	if destination == patchContainerPath {
+		content, err := os.ReadFile(source)
+		if err != nil {
+			return err
+		}
+		s.uploadedPatch = string(content)
+	}
 	return nil
 }
 
-func (s *evaluationSandboxFake) Download(_ context.Context, source, destination string) error {
-	s.downloadSources = append(s.downloadSources, source)
-	switch source {
-	case candidateRawContainerPath:
-		return os.WriteFile(destination, s.candidate, 0o600)
-	case parserOutputContainerPath:
-		if !s.parserRan {
-			return errors.New("parser output requested before parser ran")
-		}
-		return os.WriteFile(destination, s.output, 0o600)
-	default:
-		return errors.New("unexpected download")
-	}
+func (s *freshSandboxFake) Download(context.Context, string, string) error {
+	return errors.New("evaluation must use bounded downloads")
 }
 
-func (s *evaluationSandboxFake) DownloadLimit(ctx context.Context, source, destination string, _ int64) error {
-	return s.Download(ctx, source, destination)
+func (s *freshSandboxFake) DownloadLimit(_ context.Context, source, destination string, _ int64) error {
+	if source != outputContainerPath {
+		return errors.New("unexpected download")
+	}
+	if !s.parserRan {
+		return errors.New("parser output requested before parser ran")
+	}
+	return os.WriteFile(destination, []byte(s.output), 0o600)
+}
+
+func (s *freshSandboxFake) Connectivity() core.HarnessConnectivity {
+	return core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "evaluation-network"}}
 }
 
 func newEvaluationFixture(t *testing.T) (*Benchmark, core.Task, taskDetails) {
@@ -461,31 +436,26 @@ func newEvaluationFixture(t *testing.T) (*Benchmark, core.Task, taskDetails) {
 	writeTestFile(t, filepath.Join(datasetRoot, "README.md"), "dataset\n")
 	datasetRevision := commitEvaluationFixture(t, datasetRoot)
 	evaluatorRevision := commitEvaluationFixture(t, evaluatorRoot)
-	output := t.TempDir()
-	snapshot := filepath.Join(output, fixtureInstanceID, "private", "verifier-tests.tar")
-	ignoredSnapshot := filepath.Join(output, fixtureInstanceID, "private", "ignored-baseline.tar")
-	gitSnapshot := filepath.Join(output, fixtureInstanceID, "private", "git-baseline.tar")
-	writeTestFile(t, snapshot, "PRIVATE SNAPSHOT WITHOUT DATASET PATCH SENTINELS")
-	writeTestFile(t, ignoredSnapshot, "PINNED IGNORED BUILD BASELINE")
-	writeTestFile(t, gitSnapshot, "PINNED SANITIZED GIT BASELINE")
 	details := taskDetails{
-		baseCommit:      strings.Repeat("a", 40),
-		testPatch:       fixtureTestPatch,
-		failToPass:      []string{"tests.regression_test::test_fix"},
-		passToPass:      []string{"tests.existing_test::test_ok"},
-		selectedTests:   []string{"tests/regression_test.py"},
-		verifierFiles:   []string{"tests/regression_test.py"},
-		runScript:       runScript,
-		parser:          parser,
-		snapshot:        snapshot,
-		ignoredSnapshot: ignoredSnapshot,
-		gitSnapshot:     gitSnapshot,
+		baseCommit:    strings.Repeat("a", 40),
+		goldCommit:    strings.Repeat("b", 40),
+		testPatch:     fixtureTestPatch,
+		failToPass:    []string{"tests.regression_test::test_fix"},
+		passToPass:    []string{"tests.existing_test::test_ok"},
+		selectedTests: []string{"tests/regression_test.py", "tests/existing_test.py"},
+		verifierFiles: []string{"tests/regression_test.py"},
+		runScript:     runScript,
+		parser:        parser,
 	}
 	benchmark := &Benchmark{
-		root: root, outputDir: output, datasetRevision: datasetRevision, evaluatorRevision: evaluatorRevision,
+		root: root, outputDir: t.TempDir(), datasetRevision: datasetRevision, evaluatorRevision: evaluatorRevision,
 		details: map[string]taskDetails{fixtureInstanceID: details},
 	}
-	return benchmark, core.Task{ID: fixtureInstanceID}, details
+	task := core.Task{ID: fixtureInstanceID, Environment: core.Environment{
+		Image: "docker.io/jefzda/sweap-images:fixture", Workdir: repositoryPath, CPU: 4, MemoryMB: 1024,
+		AllowNetwork: true, ExecUser: agentExecUser,
+	}}
+	return benchmark, task, details
 }
 
 func commitEvaluationFixture(t *testing.T, root string) string {
@@ -506,12 +476,4 @@ func commitEvaluationFixture(t *testing.T, root string) string {
 		t.Fatal(err)
 	}
 	return strings.TrimSpace(string(output))
-}
-
-func (s *evaluationSandboxFake) Connectivity() core.HarnessConnectivity {
-	return core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "test-network"}}
-}
-
-func (s *basicEvaluationSandboxFake) Connectivity() core.HarnessConnectivity {
-	return core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "test-network"}}
 }
