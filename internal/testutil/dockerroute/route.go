@@ -9,7 +9,6 @@ import (
 	"errors"
 
 	"github.com/hyscale-lab/aries/pkg/core"
-	"github.com/hyscale-lab/aries/pkg/deployment"
 	"github.com/moby/moby/client"
 )
 
@@ -37,22 +36,4 @@ func Listen(ctx context.Context, network string) (core.BridgeListen, error) {
 		}
 	}
 	return core.BridgeListen{}, errors.New("test network has no IPv4 gateway")
-}
-
-// Capture records the exact attachment created for a test occurrence.
-func Capture(inner deployment.TaskEnvironment, network *string) deployment.TaskEnvironment {
-	return &environment{TaskEnvironment: inner, network: network}
-}
-
-type environment struct {
-	deployment.TaskEnvironment
-	network *string
-}
-
-func (e *environment) Start(ctx context.Context, request core.SandboxRequest) (core.HarnessConnectivity, error) {
-	connectivity, err := e.TaskEnvironment.Start(ctx, request)
-	if err == nil {
-		*e.network = connectivity.Placement.DockerNetwork
-	}
-	return connectivity, err
 }

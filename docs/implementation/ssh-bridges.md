@@ -5,6 +5,30 @@ They authenticate temporary SSH clients and forward accepted commands through
 the sandbox streaming capability; Docker execution is supplied by the sandbox
 deployment through the Moby SDK.
 
+The [native-serving contract](../../pkg/bridge/bridge.go) separates protocol
+serving from the managed controller. One [SSH engine](../../pkg/bridge/ssh/bridge.go)
+owns listener authentication, connections, streams, audit persistence and cleanup.
+The OpenClaw and Hermes dialects only interpret native requests and prepare
+commands; neither owns sandbox lifecycle or a separate SSH server implementation.
+
+OpenClaw's pinned container lacks an SSH binary, so ARIES stages the static Go
+`aries-ssh-client` at `/opt/aries/bin/aries-ssh-client`. The
+[client](../../pkg/bridge/ssh/client) verifies the assigned host key and forwards
+the remote command and streams unchanged. It validates its supported invocation
+and private configuration, but does not parse shell grammar or translate paths.
+The server dialect is authoritative for command acceptance. Previously client-side
+grammar refusals now reach the server and produce rejection evidence without
+executing in the sandbox. Hermes continues using its image's native OpenSSH.
+
+The bridge runs the SSH server; `aries-ssh-client` is the separate client inside
+the OpenClaw harness. Its argument parser recognizes the pinned invocation
+`-F CONFIG -T -o RequestTTY=no openclaw-sandbox REMOTE_COMMAND`. This exact order
+is a limitation of the supported client CLI, not an SSH protocol requirement.
+The parser extracts the remote command unchanged. Configuration loading checks
+the endpoint and private files; the server dialect validates the command after
+receiving the SSH exec request. Unsupported client options are rejected rather
+than silently ignored.
+
 ## OpenClaw SSH bridge
 
 The current pair-specific OpenClaw SSH bridge adapts OpenClaw's pinned SSH
@@ -29,8 +53,8 @@ command script is unaffected.
 
 ## Hermes SSH bridge
 
-The Hermes pairing is a second, separate adapter rather than a reuse of the
-OpenClaw one, because the two harnesses put different bytes on the wire. Hermes
+The Hermes dialect shares the SSH engine with OpenClaw while retaining its
+different command grammar and request policy. Hermes
 runs OpenSSH itself, so this bridge stages no client helper and supplies no
 client command; it hands over only a generated identity. Hermes forces
 `StrictHostKeyChecking=accept-new` and offers no way to preload a known-hosts
@@ -114,12 +138,11 @@ The wire contract is [control.proto](../../pkg/bridge/control/v1/control.proto).
 archive checksum. `make proto` invokes protoc to regenerate checked-in bindings;
 never edit generated binding files manually.
 
-See the [OpenClaw bridge](../../pkg/bridge/openclawssh/bridge.go),
-[OpenClaw grammar](../../pkg/bridge/openclawssh/grammar.go),
-[Hermes bridge](../../pkg/bridge/hermesssh/bridge.go), and
-[Hermes grammar](../../pkg/bridge/hermesssh/grammar.go).
-[OpenClaw contract tests](../../pkg/bridge/openclawssh/manager_contract_test.go)
-and [Hermes bridge tests](../../pkg/bridge/hermesssh/bridge_test.go) cover accepted
-commands, private evidence, revocation, cancellation, and denied sync.
+See the [OpenClaw dialect](../../pkg/bridge/ssh/openclaw/dialect.go),
+[OpenClaw grammar](../../pkg/bridge/ssh/openclaw/grammar.go),
+[Hermes dialect](../../pkg/bridge/ssh/hermes/dialect.go), and
+[Hermes grammar](../../pkg/bridge/ssh/hermes/grammar.go).
+Shared engine and dialect tests cover accepted commands, private evidence,
+revocation, cancellation, and denied sync.
 The shared harness protocol and remaining deployment roadmap is listed under
 [planned targets](../supported.md#roadmap); it is not current bridge support.

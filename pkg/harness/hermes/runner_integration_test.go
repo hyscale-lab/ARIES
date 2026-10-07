@@ -3,8 +3,6 @@
 package hermes
 
 import (
-	"github.com/hyscale-lab/aries/internal/testutil/dockerroute"
-	"github.com/hyscale-lab/aries/pkg/deployment"
 	harnesscommon "github.com/hyscale-lab/aries/pkg/harness"
 
 	"context"
@@ -21,10 +19,12 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
+	"github.com/hyscale-lab/aries/internal/testutil/dockerroute"
 	"github.com/hyscale-lab/aries/pkg/benchmark/terminalbench"
-	"github.com/hyscale-lab/aries/pkg/bridge/hermesssh"
+	managedbridge "github.com/hyscale-lab/aries/pkg/bridge"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/deployment"
 	dockerdeployment "github.com/hyscale-lab/aries/pkg/deployment/docker"
 	"github.com/hyscale-lab/aries/pkg/runner"
 	tasksandbox "github.com/hyscale-lab/aries/pkg/sandbox"
@@ -42,11 +42,11 @@ type runnerHermes struct {
 }
 
 func (h *runnerHermes) Start(ctx context.Context, request core.HarnessRequest) error {
-	host, _, err := net.SplitHostPort(request.Endpoint.Address)
+	gateway, err := dockerroute.Listen(ctx, request.Connectivity.Placement.DockerNetwork)
 	if err != nil {
 		return err
 	}
-	request.Model.BaseURL = "http://" + net.JoinHostPort(host, h.modelPort) + "/v1"
+	request.Model.BaseURL = "http://" + net.JoinHostPort(gateway.AdvertiseHost, h.modelPort) + "/v1"
 	h.endpoint = request.Endpoint.Address
 	h.identityPath = request.Endpoint.IdentitySourceFile
 	if err := h.Manager.Start(ctx, request); err != nil {
@@ -259,10 +259,7 @@ func runHermesBridgeScenario(t *testing.T, cancelCommand bool, repetitions int, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	var taskNetwork string
-	sandbox, err := tasksandbox.New(tasksandbox.Options{Deployment: provider, NewEnvironment: func() deployment.TaskEnvironment {
-		return dockerroute.Capture(provider.NewTaskEnvironment(), &taskNetwork)
-	}, OutputDir: output})
+	sandbox, err := tasksandbox.New(tasksandbox.Options{Deployment: provider, NewEnvironment: provider.NewTaskEnvironment, OutputDir: output})
 	if err != nil {
 		_ = provider.Close()
 		t.Fatal(err)
@@ -272,10 +269,6 @@ func runHermesBridgeScenario(t *testing.T, cancelCommand bool, repetitions int, 
 			t.Error(err)
 		}
 	})
-	bridge, err := hermesssh.New(hermesssh.Options{ResolveListen: func(ctx context.Context) (core.BridgeListen, error) { return dockerroute.Listen(ctx, taskNetwork) }, OutputDir: output})
-	if err != nil {
-		t.Fatal(err)
-	}
 	image := versions.Hermes.Image
 	if len(derivedImage) > 0 {
 		image = derivedImage[0]
@@ -304,9 +297,6 @@ func runHermesBridgeScenario(t *testing.T, cancelCommand bool, repetitions int, 
 		if err := harness.Stop(cleanup); err != nil {
 			t.Error(err)
 		}
-		if err := bridge.Stop(cleanup); err != nil {
-			t.Error(err)
-		}
 		if err := manager.Close(); err != nil {
 			t.Error(err)
 		}
@@ -320,11 +310,27 @@ func runHermesBridgeScenario(t *testing.T, cancelCommand bool, repetitions int, 
 	if reasoning {
 		modelConfig.Provider, modelConfig.Model, modelConfig.ReasoningEffort = "deepseek", "deepseek-flash", "high"
 	}
-	run, err := runner.New(benchmark, harness, sandbox, bridge, runner.Options{RunID: "hermes-runner-integration", OutputDir: output, Model: modelConfig, CleanupTimeout: 60 * time.Second})
-	if err != nil {
-		t.Fatal(err)
-	}
 	for occurrence := 0; occurrence < repetitions; occurrence++ {
+		// A managed bridge owns exactly one occurrence, as in application wiring.
+		bridgeRuntime, err := dockerdeployment.New(dockerdeployment.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		bridge, err := managedbridge.New(managedbridge.Options{Runtime: bridgeRuntime, Request: deployment.Request{Image: versions.Bridge.Image}, BridgeType: "hermes-ssh", RetainRawLog: true, OutputDir: output})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			cleanup, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			if err := bridge.Stop(cleanup); err != nil {
+				t.Error(err)
+			}
+		})
+		run, err := runner.New(benchmark, harness, sandbox, bridge, runner.Options{RunID: "hermes-runner-integration", OutputDir: output, Model: modelConfig, CleanupTimeout: 60 * time.Second})
+		if err != nil {
+			t.Fatal(err)
+		}
 		// Match internal/app.nextTaskOccurrence: repeated logical task IDs get
 		// distinct execution IDs, preserving every occurrence's evidence.
 		benchmark.task.ID = fmt.Sprintf("hermes-bridge-%03d", occurrence+1)

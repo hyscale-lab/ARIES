@@ -70,22 +70,6 @@ func TestBorrowedRejectsMismatchedIdentityAndOwnership(t *testing.T) {
 		t.Fatal("unsupported backend accepted")
 	}
 }
-func TestControllerCredentialsSeparateClientPrivateKey(t *testing.T) {
-	b, err := GenerateCredentials()
-	if err != nil {
-		t.Fatal(err)
-	}
-	c, err := ParseCredentials(b.HostPrivate, b.AuthorizedKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.HostSigner == nil || c.AuthorizedKey == nil {
-		t.Fatal("missing SSH server authority")
-	}
-	if _, err := ParseCredentials(b.HostPrivate, append(b.AuthorizedKey, b.AuthorizedKey...)); err == nil {
-		t.Fatal("multiple authorized keys accepted")
-	}
-}
 
 func (b *backendStub) SnapshotBridgeProcesses(context.Context, string) ([]deployment.ProcessIdentity, error) {
 	return []deployment.ProcessIdentity{{PID: 1, StartTime: 2}}, b.snapshotErr

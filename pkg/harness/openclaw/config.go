@@ -391,7 +391,7 @@ func validateEndpoint(endpoint core.ToolEndpoint) error {
 			return fmt.Errorf("OpenClaw %s path must be absolute and clean", name)
 		}
 	}
-	if endpoint.ClientCommand != "/opt/aries/bin/aries-ssh" || endpoint.IdentityFile != "/run/aries/ssh/id_ed25519" || endpoint.KnownHostsFile != "/run/aries/ssh/known_hosts" {
+	if endpoint.ClientCommand != "/opt/aries/bin/aries-ssh-client" || endpoint.IdentityFile != "/run/aries/ssh/id_ed25519" || endpoint.KnownHostsFile != "/run/aries/ssh/known_hosts" {
 		return errors.New("OpenClaw endpoint paths do not match the pinned bridge contract")
 	}
 	return nil

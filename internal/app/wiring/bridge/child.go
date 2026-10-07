@@ -6,8 +6,10 @@ import (
 	"net"
 
 	managed "github.com/hyscale-lab/aries/pkg/bridge"
-	"github.com/hyscale-lab/aries/pkg/bridge/hermesssh"
-	"github.com/hyscale-lab/aries/pkg/bridge/openclawssh"
+	sshbridge "github.com/hyscale-lab/aries/pkg/bridge/ssh"
+	sshcredentials "github.com/hyscale-lab/aries/pkg/bridge/ssh/credentials"
+	"github.com/hyscale-lab/aries/pkg/bridge/ssh/hermes"
+	"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw"
 	"github.com/hyscale-lab/aries/pkg/bridge/target"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/deployment/docker"
@@ -51,14 +53,18 @@ func ServeChild(ctx context.Context, c managed.LaunchConfig, logger *logrus.Logg
 		}
 		return value, nil
 	}
-	return managed.Serve(ctx, managed.ServeOptions{Config: c, Backend: backend, NewNative: func(keys *target.Credentials) (managed.NativeServer, error) {
+	return managed.Serve(ctx, managed.ServeOptions{Config: c, Backend: backend, NewNative: func(keys *sshcredentials.Credentials) (managed.NativeServer, error) {
+		var dialect sshbridge.Dialect
 		switch c.BridgeType {
 		case "hermes-ssh":
-			return hermesssh.New(hermesssh.Options{Credentials: keys, ResolveListen: listen, OutputDir: c.OutputDir, Logger: logger, OmitRawLog: !c.RetainRawLog})
+			dialect = hermes.Dialect{}
 		case "openclaw-ssh":
-			return openclawssh.New(openclawssh.Options{Credentials: keys, ResolveListen: listen, OutputDir: c.OutputDir, Logger: logger, OmitRawLog: !c.RetainRawLog})
+			dialect = openclaw.Dialect{}
 		default:
 			return nil, errors.New("unsupported bridge protocol")
 		}
+		return sshbridge.New(sshbridge.Options{Dialect: dialect, Credentials: keys, ResolveListen: listen, OutputDir: c.OutputDir, Logger: logger, OmitRawLog: !c.RetainRawLog})
 	}})
 }
+
+var _ managed.NativeServer = (*sshbridge.Manager)(nil)

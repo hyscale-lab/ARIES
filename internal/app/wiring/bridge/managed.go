@@ -30,7 +30,7 @@ func newManaged(cfg config.Config, outputRoot string, logger *logrus.Logger) (ru
 	if cfg.Sandbox.Deployment.Docker != nil {
 		socket = cfg.Sandbox.Deployment.Docker.Socket
 	}
-	manager, err := managed.New(managed.Options{Runtime: runtime, Request: request, OutputDir: outputRoot, ClientPath: filepath.Join(filepath.Dir(executable), "aries-ssh"), DockerSocket: socket, BridgeType: cfg.Bridge.Type, RetainRawLog: cfg.Bridge.RetainBridgeRawLog()})
+	manager, err := managed.New(managed.Options{Runtime: runtime, Request: request, OutputDir: outputRoot, ClientPath: filepath.Join(filepath.Dir(executable), "aries-ssh-client"), DockerSocket: socket, BridgeType: cfg.Bridge.Type, RetainRawLog: cfg.Bridge.RetainBridgeRawLog()})
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}

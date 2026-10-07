@@ -140,7 +140,7 @@ bridge artifacts may contain task or model content; review them before sharing.
 
 - **Docker permission or socket error:** run `docker info` against the configured
   daemon. ARIES requires a local Unix socket; the default is `/var/run/docker.sock`.
-- **Missing `aries-ssh` error:** rebuild with `make build` and keep the helper
+- **Missing `aries-ssh-client` error:** rebuild with `make build` and keep the helper
   beside the main binary.
 - **Credential error:** check ownership, owner read access, absence of group or
   world permissions, and one-line formatting of `DEEPSEEK_API.key`.

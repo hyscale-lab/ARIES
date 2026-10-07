@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hyscale-lab/aries/pkg/bridge/control"
@@ -86,6 +87,19 @@ func TestStopRequiresPositiveDrainBeforeCollectAndRemove(t *testing.T) {
 	}
 	if r.stops != 0 {
 		t.Fatal("cleanup erased collection ownership")
+	}
+}
+
+func TestStopReportsUnconfirmedDrainCause(t *testing.T) {
+	m, r, c := fixtureManager(t)
+	c.assignment.State = v1.State_REVOKING
+	c.assignment.CleanupErrors = []*v1.CleanupError{{Stage: "revocation", Message: "target process drain failed"}}
+	err := m.Stop(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "REVOKING") || !strings.Contains(err.Error(), "revocation: target process drain failed") {
+		t.Fatalf("missing drain diagnostic: %v", err)
+	}
+	if r.stops != 0 || r.downloads != 0 {
+		t.Fatal("unconfirmed drain released evidence ownership")
 	}
 }
 func TestStopCollectsEvidenceThenRemovesAndErasesCredentials(t *testing.T) {
@@ -210,7 +224,7 @@ func TestAbsentEvidenceAllowedOnlyBeforeReady(t *testing.T) {
 
 func TestClientHelperStagingMatchesNativeHarnessPermissions(t *testing.T) {
 	root := t.TempDir()
-	source, destination := filepath.Join(root, "installed-helper"), filepath.Join(root, "aries-ssh")
+	source, destination := filepath.Join(root, "installed-helper"), filepath.Join(root, "aries-ssh-client")
 	content := []byte("matched-native-helper")
 	if err := os.WriteFile(source, content, 0755); err != nil {
 		t.Fatal(err)

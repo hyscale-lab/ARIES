@@ -3,8 +3,6 @@
 package openclaw
 
 import (
-	"github.com/hyscale-lab/aries/internal/testutil/dockerroute"
-	"github.com/hyscale-lab/aries/pkg/deployment"
 	harnesscommon "github.com/hyscale-lab/aries/pkg/harness"
 
 	"bytes"
@@ -14,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -24,15 +23,17 @@ import (
 
 	"github.com/containerd/errdefs"
 	"github.com/hyscale-lab/aries/pkg/benchmark/terminalbench"
-	"github.com/hyscale-lab/aries/pkg/bridge/openclawssh"
+	managedbridge "github.com/hyscale-lab/aries/pkg/bridge"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/deployment"
 	dockerdeployment "github.com/hyscale-lab/aries/pkg/deployment/docker"
 	gatewayclient "github.com/hyscale-lab/aries/pkg/harness/openclaw/gateway"
 	realtimeclient "github.com/hyscale-lab/aries/pkg/harness/openclaw/realtime"
 	"github.com/hyscale-lab/aries/pkg/monitor"
 	"github.com/hyscale-lab/aries/pkg/runner"
 	tasksandbox "github.com/hyscale-lab/aries/pkg/sandbox"
+	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
@@ -48,13 +49,14 @@ const (
 // real SSH bridge has made that network available. Runner ordering then stops
 // OpenClaw before this bridge removes the model and revokes SSH.
 type modelBridge struct {
-	inner   *openclawssh.Manager
-	api     *client.Client
-	runID   string
-	key     string
-	image   string
-	id      string
-	sandbox runner.Sandbox
+	inner            *managedbridge.Manager
+	api              *client.Client
+	runID            string
+	key              string
+	image            string
+	id               string
+	sandbox          runner.Sandbox
+	modelDiagnostics string
 }
 
 // preloadedSandboxManager proves the benchmark preparation boundary against a
@@ -182,6 +184,13 @@ func (bridge *modelBridge) removeModel(ctx context.Context) error {
 	if bridge.id == "" {
 		return nil
 	}
+	// Preserve deterministic-fixture failures before removing its container.
+	if logs, err := bridge.api.ContainerLogs(ctx, bridge.id, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true}); err == nil {
+		var output bytes.Buffer
+		_, _ = stdcopy.StdCopy(&output, &output, io.LimitReader(logs, 64<<10))
+		_ = logs.Close()
+		bridge.modelDiagnostics = output.String()
+	}
 
 	_, err := bridge.api.ContainerRemove(ctx, bridge.id, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
 	if errdefs.IsNotFound(err) {
@@ -229,14 +238,15 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 	key := "deterministic-integration-key"
 	t.Setenv(integrationAPIKeyEnv, key)
 	logger := logrus.New()
-	var taskNetwork string
-	sandbox, err := tasksandbox.New(tasksandbox.Options{Deployment: integrationDeployment(t), NewEnvironment: func() deployment.TaskEnvironment {
-		return dockerroute.Capture(integrationDeployment(t).NewTaskEnvironment(), &taskNetwork)
-	}, OutputDir: outputDir, CleanupTimeout: 30 * time.Second, Logger: logger})
+	sandbox, err := tasksandbox.New(tasksandbox.Options{Deployment: integrationDeployment(t), NewEnvironment: integrationDeployment(t).NewTaskEnvironment, OutputDir: outputDir, CleanupTimeout: 30 * time.Second, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}
-	sshBridge, err := openclawssh.New(openclawssh.Options{ResolveListen: func(ctx context.Context) (core.BridgeListen, error) { return dockerroute.Listen(ctx, taskNetwork) }, OutputDir: outputDir, ClientPath: requiredIntegrationFile(t, "ARIES_SSH_CLIENT"), CleanupTimeout: 30 * time.Second, Logger: logger})
+	bridgeRuntime, err := dockerdeployment.New(dockerdeployment.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshBridge, err := managedbridge.New(managedbridge.Options{Runtime: bridgeRuntime, Request: deployment.Request{Image: versions.Bridge.Image}, BridgeType: "openclaw-ssh", RetainRawLog: true, OutputDir: outputDir, ClientPath: requiredIntegrationFile(t, "ARIES_SSH_CLIENT")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,6 +303,7 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 	reports, monitorErr := resourceMonitor.Stop(monitorCtx)
 	monitorCancel()
 	if err != nil {
+		t.Logf("deterministic model diagnostics: %s", bridge.modelDiagnostics)
 		logFailedRunArtifacts(t, result)
 		t.Fatalf("Runner = %#v, %v", result, err)
 	}
@@ -433,7 +444,7 @@ func TestPinnedGatewayRealtimeProtocolSmoke(t *testing.T) {
 	}
 	endpoint := core.ToolEndpoint{
 		Protocol: "ssh", Address: "127.0.0.1:1", Username: "aries",
-		ClientCommand: "/opt/aries/bin/aries-ssh", ClientSourceFile: writePrivate("aries-ssh", string(clientContent), 0o555),
+		ClientCommand: "/opt/aries/bin/aries-ssh-client", ClientSourceFile: writePrivate("aries-ssh-client", string(clientContent), 0o555),
 		IdentityFile: "/run/aries/ssh/id_ed25519", IdentitySourceFile: writePrivate("id_ed25519", "fixture-identity", 0o600),
 		KnownHostsFile: "/run/aries/ssh/known_hosts", KnownHostsSourceFile: writePrivate("known_hosts", "fixture-known-host", 0o600),
 	}
@@ -686,7 +697,7 @@ if(step===2){const head=(out.match(/ARIES_HEAD\s+([0-9a-f]{40})/)||[])[1],hashes
 if(step===3){if(!out.includes(candidate.slice(0,7)))throw Error("inspect");step++;return call(res,"merge","exec",{command:"git checkout master && git -c user.name='ARIES Benchmark' -c user.email='aries@example.invalid' merge -X theirs --no-edit "+candidate})}
 if(step===4){if(!/fast-forward|merge made|already up.to.date/i.test(out))throw Error("merge");step++;return call(res,"verify","exec",{command:"git merge-base --is-ancestor "+candidate+" HEAD && test -z \"$(git status --porcelain)\" && git status --short --branch && git log --oneline -5"})}
 if(step===5){if(!out.includes(candidate.slice(0,7))||!out.includes("master"))throw Error("verify");step++;return stream(res,{role:"assistant",content:"Recovered lost commit "+candidate+" and verified a clean master branch."},"stop")}
-throw Error("extra request")}catch(error){res.writeHead(400,{"content-type":"application/json"});res.end(JSON.stringify({error:{message:error.message}}))}})}).listen(8080,"0.0.0.0");`
+throw Error("extra request")}catch(error){console.error(JSON.stringify({step,error:error.message}));res.writeHead(400,{"content-type":"application/json"});res.end(JSON.stringify({error:{message:error.message}}))}})}).listen(8080,"0.0.0.0");`
 }
 
 func integrationDeployment(t *testing.T) *dockerdeployment.Manager {

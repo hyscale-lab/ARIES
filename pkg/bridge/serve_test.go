@@ -12,9 +12,11 @@ import (
 
 	"github.com/hyscale-lab/aries/pkg/bridge/control"
 	v1 "github.com/hyscale-lab/aries/pkg/bridge/control/v1"
+	sshcredentials "github.com/hyscale-lab/aries/pkg/bridge/ssh/credentials"
 	"github.com/hyscale-lab/aries/pkg/bridge/target"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/deployment"
+	"golang.org/x/crypto/ssh"
 	"google.golang.org/grpc/credentials"
 )
 
@@ -114,12 +116,16 @@ func TestFailedDrainErasesCredentialsAfterBoundedServiceExit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sshKeys, err := target.GenerateCredentials()
+	hostPrivate, _, err := sshcredentials.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, clientPublic, err := sshcredentials.GenerateIdentity()
 	if err != nil {
 		t.Fatal(err)
 	}
 	token := strings.Repeat("t", 32)
-	for name, contents := range map[string][]byte{"ca.pem": keys.CA, "server.pem": keys.ServerCert, "server.key": keys.ServerKey, "token": []byte(token), "host.key": sshKeys.HostPrivate, "authorized.pub": sshKeys.AuthorizedKey, "tool-calls.jsonl": []byte("evidence")} {
+	for name, contents := range map[string][]byte{"ca.pem": keys.CA, "server.pem": keys.ServerCert, "server.key": keys.ServerKey, "token": []byte(token), "host.key": hostPrivate, "authorized.pub": ssh.MarshalAuthorizedKey(clientPublic), "tool-calls.jsonl": []byte("evidence")} {
 		if err := os.WriteFile(name, contents, 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -133,7 +139,7 @@ func TestFailedDrainErasesCredentialsAfterBoundedServiceExit(t *testing.T) {
 	address := listener.Addr().String()
 	done := make(chan error, 1)
 	go func() {
-		done <- serve(ctx, ServeOptions{Config: LaunchConfig{InstanceID: "instance", OutputDir: "evidence"}, Backend: bootstrapBackend{}, NewNative: func(*target.Credentials) (NativeServer, error) { return failedDrainNative{}, nil }, CollectionTimeout: 100 * time.Millisecond}, listener)
+		done <- serve(ctx, ServeOptions{Config: LaunchConfig{InstanceID: "instance", OutputDir: "evidence"}, Backend: bootstrapBackend{}, NewNative: func(*sshcredentials.Credentials) (NativeServer, error) { return failedDrainNative{}, nil }, CollectionTimeout: 100 * time.Millisecond}, listener)
 	}()
 	t.Cleanup(func() {
 		cancel()
