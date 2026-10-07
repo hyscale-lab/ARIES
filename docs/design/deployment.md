@@ -39,14 +39,11 @@ occurrence, including retries or repeated task IDs, requires a fresh owner.
 | --- | --- |
 | `Start(ctx, SandboxRequest) (core.HarnessConnectivity, error)` | Validate service declarations before allocation, allocate the task attachment, and return placement with resolved service URLs. Call `Stop` even if startup fails after allocation. |
 | `Validate(ctx)` | Confirm that the attachment still satisfies its ownership and isolation requirements. |
-| `BridgeListen(ctx)` | Resolve the listener bind address and harness destination for this exact task occurrence. |
 | `Stop(ctx)` | Remove the owned attachment and positively confirm absence. |
 
 The sandbox receives this owner through `Options.NewEnvironment`. It passes the
 attachment to its deployment request; Runner passes it separately to the harness
 within `HarnessRequest.Connectivity`. Bridge credentials do not select the attachment.
-Composition supplies bridge `ResolveListen` callbacks without making bridge tool
-execution responsible for network discovery.
 
 The sandbox owns attachment cleanup after runtime removal. Harnesses own their
 own runtimes and deployment transports. Tool bridges own temporary access, not
@@ -56,15 +53,15 @@ the task attachment. Docker-specific network operations stay outside
 ## Why the contracts remain separate
 
 `Deployment` operates a runtime; `TaskEnvironment` owns the attachment shared
-by one task's runtimes and resolves bridge connectivity. Today these correspond
-to a Docker container and its task network. Their cleanup is ordered separately:
+by one task's runtimes. Docker uses containers
+and a task network. Their cleanup is ordered separately:
 remove runtimes before removing the attachment. Combining them would tie runtime
 operations to a particular attachment lifecycle.
 
 Keeping separate dependencies allows a future sandbox implementation to combine
 an execution service with independently managed task connectivity. It does not
-by itself make a Docker harness interoperable with a Kubernetes sandbox; that
-combination still needs explicit routing, identity, access, and cleanup semantics.
+by itself establish heterogeneous deployment support; another composition still
+needs explicit routing, identity, access, and cleanup semantics.
 
 ## Current attachment handoff
 
@@ -91,7 +88,8 @@ deployment blocks do not imply heterogeneous deployment support.
 A provider must preserve ownership, private access, archive permissions,
 cancellation behavior, error distinctions, and confirmed cleanup. It must also
 support the concrete capabilities required by its consumer; a logical Benchmark
-or embedded ToolBridge need not be deployed as a service.
+need not be deployed as a service. ToolBridge controllers own a separate native
+bridge container through the lifecycle/transfer/addressing subset of Deployment.
 
 **Current gap against full deployment independence:** the shared request still
 exposes a Docker network field, network aliases, image-declared volume
@@ -102,7 +100,7 @@ contract constraints, not proof of arbitrary backend portability. Another backen
 requires explicit decisions about these semantics, staging, execution identity,
 and cancellation rather than silently weakening them.
 
-Docker is the implemented provider. Kubernetes is a planned, unsupported target;
-see the [support and roadmap reference](../supported.md). Current CLI selection
-rejects it before model services, image preparation, or resource allocation in
-[`cmd/aries/wiring.go`](../../cmd/aries/wiring.go).
+Docker bridge runtimes are implemented. Runtime identity and ownership remain
+bound through cleanup. Private staging preserves evidence after
+the bridge application exits until the controller removes the runtime. See
+[supported compositions](../supported.md).

@@ -375,8 +375,8 @@ func validateEndpoint(endpoint core.ToolEndpoint) error {
 		return errors.New("OpenClaw requires a task-local SSH endpoint")
 	}
 	host, port, err := net.SplitHostPort(endpoint.Address)
-	if err != nil || net.ParseIP(host) == nil || net.ParseIP(host).To4() == nil || net.ParseIP(host).IsUnspecified() || net.ParseIP(host).IsMulticast() || port == "" {
-		return errors.New("OpenClaw SSH address must be an IP host and port")
+	if err != nil || !core.ValidEndpointHost(host) || port == "" {
+		return errors.New("OpenClaw SSH address must be a valid host and port")
 	}
 	if number, err := strconv.Atoi(port); err != nil || number < 1 || number > 65535 {
 		return errors.New("OpenClaw SSH endpoint port is invalid")

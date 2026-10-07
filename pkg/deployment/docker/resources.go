@@ -193,7 +193,7 @@ func (source *DockerResourceSource) read(ctx context.Context, runtime resourceRu
 
 func resourceComponent(component string) (string, bool) {
 	switch component {
-	case "sandbox", "evaluation-sandbox", "harness":
+	case "sandbox", "evaluation-sandbox", "harness", "bridge":
 		return component, true
 	default:
 		return "", false

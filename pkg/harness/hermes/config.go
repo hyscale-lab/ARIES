@@ -423,8 +423,8 @@ func containerEnvironment(endpoint core.ToolEndpoint, workdir string, terminalTi
 	if err != nil {
 		return nil, fmt.Errorf("parse Hermes SSH endpoint address: %w", err)
 	}
-	if ip := net.ParseIP(host); ip == nil || ip.To4() == nil || ip.IsUnspecified() || ip.IsMulticast() {
-		return nil, errors.New("Hermes SSH endpoint host must be a unicast, non-wildcard IPv4 address")
+	if !core.ValidEndpointHost(host) {
+		return nil, errors.New("Hermes SSH endpoint host must be a unicast IPv4 address or DNS name")
 	}
 	if number, err := strconv.Atoi(port); err != nil || number < 1 || number > 65535 {
 		return nil, errors.New("Hermes SSH endpoint port is invalid")

@@ -3,6 +3,8 @@
 package openclaw
 
 import (
+	"github.com/hyscale-lab/aries/internal/testutil/dockerroute"
+	"github.com/hyscale-lab/aries/pkg/deployment"
 	harnesscommon "github.com/hyscale-lab/aries/pkg/harness"
 
 	"bytes"
@@ -227,11 +229,14 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 	key := "deterministic-integration-key"
 	t.Setenv(integrationAPIKeyEnv, key)
 	logger := logrus.New()
-	sandbox, err := tasksandbox.New(tasksandbox.Options{Deployment: integrationDeployment(t), NewEnvironment: integrationDeployment(t).NewTaskEnvironment, OutputDir: outputDir, CleanupTimeout: 30 * time.Second, Logger: logger})
+	var taskNetwork string
+	sandbox, err := tasksandbox.New(tasksandbox.Options{Deployment: integrationDeployment(t), NewEnvironment: func() deployment.TaskEnvironment {
+		return dockerroute.Capture(integrationDeployment(t).NewTaskEnvironment(), &taskNetwork)
+	}, OutputDir: outputDir, CleanupTimeout: 30 * time.Second, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}
-	sshBridge, err := openclawssh.New(openclawssh.Options{ResolveListen: sandbox.BridgeListen, OutputDir: outputDir, ClientPath: requiredIntegrationFile(t, "ARIES_SSH_CLIENT"), CleanupTimeout: 30 * time.Second, Logger: logger})
+	sshBridge, err := openclawssh.New(openclawssh.Options{ResolveListen: func(ctx context.Context) (core.BridgeListen, error) { return dockerroute.Listen(ctx, taskNetwork) }, OutputDir: outputDir, ClientPath: requiredIntegrationFile(t, "ARIES_SSH_CLIENT"), CleanupTimeout: 30 * time.Second, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}

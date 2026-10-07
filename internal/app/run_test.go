@@ -332,7 +332,7 @@ func TestBuildTaskExperimentCreatesFreshFourRoleGraphs(t *testing.T) {
 			s := &stubToolSandbox{}
 			return SandboxInstance{Sandbox: s, Resources: &stubResources{}, Close: func() error { return nil }}, nil
 		},
-		NewBridge: func(config.Config, string, func(context.Context) (core.BridgeListen, error), *logrus.Logger) (runner.ToolBridge, error) {
+		NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
 			return &stubBridge{}, nil
 		},
 	}
@@ -373,7 +373,7 @@ func TestBuildTaskExperimentUnwindsPartialConstruction(t *testing.T) {
 		NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
 			return SandboxInstance{Sandbox: &stubToolSandbox{}, Resources: &stubResources{}, Close: func() error { events = append(events, "sandbox"); return errors.New("sandbox close") }}, nil
 		},
-		NewBridge: func(config.Config, string, func(context.Context) (core.BridgeListen, error), *logrus.Logger) (runner.ToolBridge, error) {
+		NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
 			return nil, errors.New("bridge construct")
 		},
 	}
@@ -383,5 +383,22 @@ func TestBuildTaskExperimentUnwindsPartialConstruction(t *testing.T) {
 	}
 	if !reflect.DeepEqual(events, []string{"sandbox", "harness"}) {
 		t.Fatalf("events=%v", events)
+	}
+}
+
+func TestBridgePreparationFailurePrecedesBenchmarkEffects(t *testing.T) {
+	sentinel := errors.New("bridge binary unavailable")
+	touched := false
+	wiring := Wiring{
+		PrepareBridge:  func(context.Context, config.Config) error { return sentinel },
+		SetupBenchmark: func(context.Context, config.Config) error { touched = true; return nil },
+		LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
+			return nil, nil
+		},
+		PullImages:        func(context.Context, config.Config, []string) error { return nil },
+		BuildHarnessImage: func(context.Context, config.Config) error { return nil },
+	}
+	if err := ensurePrepared(context.Background(), config.Config{}, wiring, nil); !errors.Is(err, sentinel) || touched {
+		t.Fatalf("preparation order/error lost: %v touched=%v", err, touched)
 	}
 }

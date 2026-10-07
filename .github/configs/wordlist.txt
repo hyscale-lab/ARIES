@@ -61,7 +61,6 @@ jooyoung
 json
 jsonl
 kimi
-kubernetes
 kondrashov
 lfs
 lifecycle

@@ -71,18 +71,6 @@ func (e *taskEnvironment) Validate(ctx context.Context) error {
 	}
 	return e.manager.ValidateNetwork(ctx, e.id, e.request)
 }
-func (e *taskEnvironment) BridgeListen(ctx context.Context) (core.BridgeListen, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.id == "" || e.stopped {
-		return core.BridgeListen{}, errors.New("task environment is not active")
-	}
-	gateway, err := e.manager.NetworkGateway(ctx, e.id, e.request)
-	if err != nil {
-		return core.BridgeListen{}, err
-	}
-	return core.BridgeListen{BindHost: gateway, AdvertiseHost: gateway}, nil
-}
 func (e *taskEnvironment) Stop(ctx context.Context) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()

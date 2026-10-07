@@ -185,7 +185,7 @@ func failingRunWiring(runtime ModelRuntime, events *[]string, runErr error) Wiri
 		NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
 			return SandboxInstance{}, nil
 		},
-		NewBridge: func(config.Config, string, func(context.Context) (core.BridgeListen, error), *logrus.Logger) (runner.ToolBridge, error) {
+		NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
 			return nil, nil
 		},
 	}
@@ -249,7 +249,7 @@ func TestRunForwardsFreshPreparedGPUIndicesToEveryOccurrence(t *testing.T) {
 			gpuIndices[0] = 99
 			return SandboxInstance{Sandbox: &managedIntegrationSandbox{}, Resources: &stubResources{}, Close: func() error { return nil }}, nil
 		},
-		NewBridge: func(config.Config, string, func(context.Context) (core.BridgeListen, error), *logrus.Logger) (runner.ToolBridge, error) {
+		NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
 			return &stubBridge{}, nil
 		},
 	}
@@ -325,7 +325,7 @@ func TestUnsupportedComponentsAreRejectedImmediatelyOnRunAndSetup(t *testing.T) 
 						effects++
 						return SandboxInstance{}, nil
 					},
-					NewBridge: func(config.Config, string, func(context.Context) (core.BridgeListen, error), *logrus.Logger) (runner.ToolBridge, error) {
+					NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
 						effects++
 						return nil, nil
 					},
@@ -475,7 +475,7 @@ func TestRuntimeExitCancelsAndDrainsRun(t *testing.T) {
 		return HarnessInstance{Harness: h, Close: func() error { return nil }}, nil
 	}, NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
 		return SandboxInstance{Sandbox: &cancelSandbox{events: &events}, Resources: &stubResources{}, Close: func() error { return nil }}, nil
-	}, NewBridge: func(config.Config, string, func(context.Context) (core.BridgeListen, error), *logrus.Logger) (runner.ToolBridge, error) {
+	}, NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
 		return &cancelBridge{events: &events}, nil
 	}}
 	doer := &preflightDoer{t: t, replies: []preflightReply{{status: 200, body: `{"data":[{"id":"deepseek-v4-flash"}]}`}}}

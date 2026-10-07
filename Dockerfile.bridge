@@ -1,0 +1,6 @@
+# Inputs come from configs/versions.json through make bridge-image.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+COPY bin/aries-bridge /usr/local/bin/aries-bridge
+COPY bin/aries-ssh /usr/local/bin/aries-ssh
+ENTRYPOINT ["/usr/local/bin/aries-bridge"]

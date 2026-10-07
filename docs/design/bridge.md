@@ -17,6 +17,12 @@ The interface is defined in [pkg/runner](../../pkg/runner/interfaces.go).
 
 A bridge may consume a narrow capability of its paired sandbox beyond the minimal
 `Sandbox` interface. It must validate that capability before exposing access.
+Runner owns a controller; the controller owns a separate native bridge runtime
+for each occurrence. The child borrows a fixed execution target and never owns
+the sandbox or task attachment. Assignment control uses authenticated versioned
+gRPC; harness tool traffic retains native SSH and goes directly to the child.
+Docker bridge containers pair with Docker sandboxes and preserve assignment,
+lease, evidence, and revocation requirements.
 The endpoint conveys access details, not authority to select or own a task network.
 It must never expose verifier material or give the harness the deployment socket.
 
@@ -28,7 +34,9 @@ stops the harness, then revokes the bridge, then evaluates the still-running
 sandbox. Every attempted bridge start is followed by `Stop`, even if startup
 fails after allocating resources. Stop must be idempotent and preserve evidence
 of failures; a timeout or closed listener alone does not prove that active tool
-commands are gone.
+commands are gone. A confirmed native revocation precedes artifact collection
+and positive removal of the owned runtime. Crashes without a drain/finalization
+acknowledgment block evaluation.
 
 ```mermaid
 flowchart TB

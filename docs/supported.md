@@ -1,9 +1,9 @@
 # Supported implementations
 
-**Harnesses and tool sandboxes currently require the same local Docker daemon.**
-Remote Docker servers and mixed deployment backends are not supported. See the
-[deployment configuration](configuration.md#deployment-configuration) for socket
-settings and supported topology.
+**Docker harnesses and sandboxes use the same local daemon**, with a separate
+managed Docker bridge. Runner stays on the host. Remote Docker
+servers and mixed deployment backends are unsupported. See the
+[deployment configuration](configuration.md#deployment-configuration).
 
 This page summarizes capabilities and limitations. Use the
 [quick start](quick-start.md) for a first run, the
@@ -21,7 +21,7 @@ This page summarizes capabilities and limitations. Use the
 | Benchmark | **SWE-Atlas QA** — codebase Q&A with host-side rubric grading; grading can be disabled; only the QA track is implemented | [Benchmark guide](benchmarks/swe-atlas-qa.md) |
 | Benchmark | **SWE-bench Pro** — public issue-resolution split with pinned task scripts and parser | [Benchmark guide](benchmarks/swe-bench-pro.md) |
 | Tool sandbox and deployment | **Docker** — local containers managed through the Moby Go SDK | [Deployment configuration](configuration.md#deployment-configuration), [Docker implementation](implementation/docker.md) |
-| Tool bridge | **OpenClaw SSH** and **Hermes SSH** — embedded, harness-specific adapters | [SSH bridge implementation](implementation/ssh-bridges.md) |
+| Tool bridge | **OpenClaw SSH** and **Hermes SSH** — managed Docker container; harness-specific SSH adapters | [SSH bridge implementation](implementation/ssh-bridges.md) |
 | Model service | **DeepSeek** — external endpoint | [Model backends](configuration.md#model-backends) |
 | Model service | **SGLang** — external endpoint or one ARIES-managed host process per run | [Model backends](configuration.md#model-backends) |
 | Model service | **OpenAI-compatible server** — external only, including vLLM, llama.cpp, gateways, and hosted endpoints | [Model backends](configuration.md#model-backends) |
@@ -41,7 +41,8 @@ guides above.
 - Each SSH bridge supports its corresponding harness. Crossed pairs are rejected
   before execution. Hermes requires `/bin/bash` in the task image; its bridge
   rejects Hermes's private `~/.hermes` file synchronization. OpenClaw requires
-  `bin/aries-ssh` beside `bin/aries`.
+  `bin/aries-ssh` beside `bin/aries`. Both bridges require the matched Docker bridge image built with
+  `make bridge-image`.
 - Realtime mode is OpenClaw-only and needs a separate TTS credential. See the
   [realtime setup](configuration.md#realtime-openclaw-mode).
 - External model servers are operated separately from ARIES. ARIES does not
@@ -56,13 +57,11 @@ guides above.
 
 ## Roadmap
 
-Kubernetes deployment and a shared gRPC sandbox protocol with E2B compatibility
-are planned targets, **not currently supported capabilities**. E2B compatibility
-is a target, not a specified or verified API/version contract, and does not imply
-support in every harness. Kubernetes placement is recognized by configuration
-but rejected before runtime effects. Docker is the current deployment provider;
-bridges currently run embedded and use pair-specific SSH protocols.
+A shared harness-facing gRPC sandbox protocol with E2B compatibility remains a
+planned target, not a specified or verified API/version contract. The implemented
+versioned gRPC bridge control API assigns and revokes borrowed sandbox access;
+harness tool traffic retains its native SSH protocol.
 
 See the [deployment contract](design/deployment.md),
-[Docker implementation](implementation/docker.md), and
+[Docker implementation](implementation/docker.md),
 [SSH bridge implementation](implementation/ssh-bridges.md) for current boundaries.

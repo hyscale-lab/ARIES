@@ -103,8 +103,10 @@ type ModelConfig struct {
 }
 
 // BridgeListen separates a local listener address from the address reached by the harness.
-// Embedded SSH bridges currently require IPv4 hosts and allocate the port themselves.
+// Zero ports request dynamic allocation; an omitted advertised port follows the bound port.
 type BridgeListen struct {
+	BindPort      int
+	AdvertisePort int
 	BindHost      string
 	AdvertiseHost string
 }
@@ -130,7 +132,7 @@ type ToolEndpoint struct {
 }
 
 // RuntimePlacement carries the task attachment to the deployment implementation.
-// Only Docker is supported; other backends can extend this contract when implemented.
+// Backend-specific attachment identities remain owned by TaskEnvironment.
 type RuntimePlacement struct {
 	DockerNetwork string `json:"docker_network,omitempty"`
 }
@@ -171,6 +173,7 @@ const (
 	StatusBlockedIsolation = "blocked_isolation"
 	StatusNotEnabled       = "not_enabled"
 	StatusNotNeeded        = "not_needed"
+	StatusUnsupported      = "unsupported"
 )
 
 // HarnessResult is independent from evaluation and cleanup outcomes.
@@ -203,6 +206,7 @@ type Evaluation struct {
 
 // ObserverResult records observer-only evidence composed outside the Runner.
 type ObserverResult struct {
+	Reason      string        `json:"reason,omitempty"`
 	Status      string        `json:"status"`
 	Duration    time.Duration `json:"duration"`
 	SampleCount int           `json:"sample_count"`

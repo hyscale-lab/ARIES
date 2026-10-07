@@ -393,8 +393,9 @@ type SandboxConfig struct {
 }
 
 type BridgeConfig struct {
-	Mode string `json:"mode,omitempty"`
-	Type string `json:"type"`
+	Deployment DeploymentConfig `json:"deployment,omitempty"`
+	Mode       string           `json:"mode,omitempty"`
+	Type       string           `json:"type"`
 	// RetainRawLog keeps the bridge's byte-level ssh_raw.log. It defaults to
 	// false because that log is the largest artifact a run writes and captures
 	// raw wire commands, request payloads, and binary stdin; profiles that need
@@ -422,6 +423,7 @@ func (m ProfileModel) coreModel(provider string) core.ModelConfig {
 
 // Versions contains the upstream version selections shared by profiles.
 type Versions struct {
+	Bridge            BridgeVersions            `json:"bridge"`
 	TerminalBench2    TerminalBench2Versions    `json:"terminalbench2"`
 	DeepResearchBench DeepResearchBenchVersions `json:"deepresearchbench"`
 	SWEAtlas          SWEAtlasVersions          `json:"sweatlasqa"`
@@ -450,6 +452,11 @@ type SWEbenchProVersions struct {
 	DatasetRevision        string `json:"dataset_revision"`
 	EvaluatorRepositoryURL string `json:"evaluator_repository_url"`
 	EvaluatorRevision      string `json:"evaluator_revision"`
+}
+
+type BridgeVersions struct {
+	Image     string `json:"image"`
+	BaseImage string `json:"base_image"`
 }
 
 type OpenClawVersions struct {
@@ -1172,6 +1179,16 @@ func (stt *VoiceSTTConfig) validate() error {
 }
 
 func (c Versions) validate() error {
+	if c.Bridge.Image != "" {
+		if err := containerimage.ValidatePinnedTagOnly(c.Bridge.Image); err != nil {
+			return fmt.Errorf("bridge.image: %w", err)
+		}
+	}
+	if c.Bridge.BaseImage != "" {
+		if err := containerimage.ValidatePinnedTagOnly(c.Bridge.BaseImage); err != nil {
+			return fmt.Errorf("bridge.base_image: %w", err)
+		}
+	}
 	if strings.TrimSpace(c.OpenClaw.Image) == "" {
 		return errors.New("openclaw.image is required")
 	}

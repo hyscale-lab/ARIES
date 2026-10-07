@@ -1,4 +1,8 @@
 {
+  "bridge": {
+    "image": "aries-bridge:v1",
+    "base_image": "alpine:3.21.3"
+  },
   "terminalbench2": {
     "repository_url": "https://github.com/harbor-framework/terminal-bench-2-1.git",
     "revision": "7131e4375048a0e408a8fb404b5f499d726b695b"

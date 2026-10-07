@@ -577,3 +577,57 @@ func waitFor(t *testing.T, timeout time.Duration, condition func() bool) {
 		time.Sleep(time.Millisecond)
 	}
 }
+
+func TestUnsupportedMeasurementIsNotMeasuredZero(t *testing.T) {
+	for _, unsupported := range []bool{true, false} {
+		name := "measured zero"
+		if unsupported {
+			name = "unsupported"
+		}
+		t.Run(name, func(t *testing.T) {
+			source := &fakeSource{sample: func(context.Context, int) ([]core.ResourceReading, error) {
+				if unsupported {
+					return nil, errors.Join(ErrUnsupported, errors.New("backend metrics unavailable"))
+				}
+				r := testReading("sandbox", "runtime", time.Now(), 0)
+				r.MemoryUsageBytes = 0
+				r.MemoryLimitBytes = 0
+				return []core.ResourceReading{r}, nil
+			}}
+			recorder := newTestRecorder(t, source, filepath.Join(t.TempDir(), "run"), time.Hour)
+			if err := recorder.Start(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			reports, err := recorder.Stop(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			report := reports["fix-git"]
+			var index Index
+			data, err := os.ReadFile(report.LogPaths[1])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = json.Unmarshal(data, &index); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(report.LogPaths[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if unsupported {
+				if report.Status != core.StatusUnsupported || !strings.Contains(report.Reason, "backend") || report.SampleCount != 0 || report.Error != "" || index.Status != core.StatusUnsupported || index.Reason != report.Reason || index.SampleCount != 0 || len(raw) != 0 {
+					t.Fatalf("unsupported evidence: report=%+v index=%+v samples=%s", report, index, raw)
+				}
+			} else {
+				if report.Status != core.StatusSucceeded || report.Reason != "" || report.SampleCount != 1 || index.SampleCount != 1 || len(raw) == 0 {
+					t.Fatalf("measured zero evidence: %+v %+v %s", report, index, raw)
+				}
+			}
+			calls, closes := source.counts()
+			if calls != 1 || closes != 1 {
+				t.Fatalf("calls=%d closes=%d", calls, closes)
+			}
+		})
+	}
+}

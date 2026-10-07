@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/hyscale-lab/aries/internal/testutil/dockerroute"
 	"io"
 	"net"
 	"os"
@@ -379,7 +380,9 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 	})
 
 	manager := newTestManager(t, outputDir)
-	manager.resolveListen = sandbox.BridgeListen
+	manager.resolveListen = func(ctx context.Context) (core.BridgeListen, error) {
+		return dockerroute.Listen(ctx, sandbox.Connectivity().Placement.DockerNetwork)
+	}
 	endpoint, err := manager.Start(ctx, sandbox)
 	if err != nil {
 		t.Fatal(err)

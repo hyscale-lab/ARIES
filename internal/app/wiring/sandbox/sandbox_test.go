@@ -40,7 +40,7 @@ func TestConstructionTransfersResourceOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if instance.Resources != resources || instance.BridgeListen == nil {
+	if instance.Resources != resources {
 		t.Fatal("missing selected resource source or bridge resolver")
 	}
 	if err := instance.Close(); err != nil {

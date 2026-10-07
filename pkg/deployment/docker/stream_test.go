@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"net"
-	"net/netip"
 	"reflect"
 	"strconv"
 	"strings"
@@ -113,7 +112,6 @@ func (f *fakeClient) NetworkInspect(context.Context, string, client.NetworkInspe
 	}
 	return client.NetworkInspectResult{Network: network.Inspect{Network: network.Network{
 		ID: "network-id", Name: f.networkName, Labels: f.networkOptions.Labels, Driver: f.networkOptions.Driver, Internal: f.networkOptions.Internal,
-		IPAM: network.IPAM{Config: []network.IPAMConfig{{Gateway: netip.MustParseAddr("172.30.0.1")}}},
 	}}}, nil
 }
 

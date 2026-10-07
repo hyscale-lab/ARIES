@@ -395,3 +395,17 @@ func TestCreateRejectsMissingPlacementBeforeAllocation(t *testing.T) {
 		}
 	}
 }
+
+func TestRunningDistinguishesRemovedContainerFromDaemonFailure(t *testing.T) {
+	fake := newFakeDocker()
+	manager := &Manager{client: fake}
+	fake.inspectErr = fakeNotFound{"container"}
+	if running, err := manager.Running(context.Background(), fake.container.ID); running || err != nil {
+		t.Fatalf("removed container: running=%v err=%v", running, err)
+	}
+	failure := errors.New("daemon unavailable")
+	fake.inspectErr = failure
+	if running, err := manager.Running(context.Background(), fake.container.ID); running || !errors.Is(err, failure) {
+		t.Fatalf("unknown container: running=%v err=%v", running, err)
+	}
+}

@@ -65,9 +65,6 @@ func (e *fakeEnvironment) Stop(ctx context.Context) error {
 	e.f.cleanupCanceled = ctx.Err() != nil
 	return nil
 }
-func (e *fakeEnvironment) BridgeListen(context.Context) (core.BridgeListen, error) {
-	return core.BridgeListen{BindHost: "10.0.0.1", AdvertiseHost: "10.0.0.1"}, nil
-}
 func (f *fakeDeployment) Create(_ context.Context, r deployment.Request) (string, error) {
 	f.request = r
 	f.calls = append(f.calls, "create")
@@ -162,9 +159,6 @@ func TestSharedDeploymentReceivesSandboxPolicy(t *testing.T) {
 	}
 	if !slices.Contains(r.Env, "TZ=Europe/Paris") || !slices.Contains(r.Env, "DEBIAN_FRONTEND=noninteractive") || !slices.Contains(r.Env, "KEEP=exact") {
 		t.Fatal(r.Env)
-	}
-	if gateway, err := s.BridgeListen(context.Background()); err != nil || gateway.AdvertiseHost != "10.0.0.1" {
-		t.Fatal(gateway, err)
 	}
 }
 func TestEvaluationSandboxKeepsSeparateEvidenceAndComponent(t *testing.T) {
@@ -559,45 +553,7 @@ func TestEnvironmentFailuresRollbackAndBlockRuntimeExposure(t *testing.T) {
 			} else if f.stopCalls != 0 || len(f.calls) != 0 {
 				t.Fatal("runtime allocated before environment validated")
 			}
-			if _, err := m.BridgeListen(context.Background()); err == nil {
-				t.Fatal("failed startup became bridge-visible")
-			}
 		})
-	}
-}
-
-func TestBridgeResolutionRejectsAmbiguousOccurrences(t *testing.T) {
-	f := &fakeDeployment{}
-	m := testManager(t, f)
-	ctx := context.Background()
-	if _, err := m.BridgeListen(ctx); err == nil {
-		t.Fatal("resolved without occurrence")
-	}
-	first, err := m.Start(ctx, testRequest())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := m.BridgeListen(ctx); err != nil {
-		t.Fatal(err)
-	}
-	second, err := m.Start(ctx, testRequest())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := m.BridgeListen(ctx); err == nil {
-		t.Fatal("selected arbitrary occurrence")
-	}
-	if err := m.Stop(ctx, first); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := m.BridgeListen(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := m.Stop(ctx, second); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := m.BridgeListen(ctx); err == nil {
-		t.Fatal("resolved after cleanup")
 	}
 }
 

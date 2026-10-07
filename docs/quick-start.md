@@ -1,7 +1,8 @@
 # Quick start: OpenClaw + Terminal-Bench 2
 
 Run one checked-in task with either DeepSeek or a local SGLang model. Choose
-one option below, then inspect its result. Run commands from the repository root.
+one option below, then inspect its result. The commands below use Docker for the
+harness, sandbox, and bridge. Run commands from the repository root.
 
 ## Prerequisites
 
@@ -16,10 +17,11 @@ From your ARIES checkout:
 
 ```sh
 docker info >/dev/null
-make build
+make bridge-image
 ```
 
-Keep `bin/aries-ssh` beside `bin/aries`; the build produces both.
+Keep `bin/aries-ssh` beside `bin/aries`. `make bridge-image` builds the binaries
+and the pinned bridge image from the same source.
 
 ## Option A: DeepSeek
 

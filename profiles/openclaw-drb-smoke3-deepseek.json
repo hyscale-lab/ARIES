@@ -53,8 +53,9 @@
     }
   },
   "bridge": {
+    "deployment": { "backend": "docker" },
     "type": "openclaw-ssh",
-    "mode": "embedded"
+    "mode": "managed"
   },
   "runtime": {
     "backend": "deepseek",

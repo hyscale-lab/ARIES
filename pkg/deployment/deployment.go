@@ -18,6 +18,14 @@ import (
 // Exec and ExecStream preserve argv and confirm targeted process termination on cancellation.
 // Address returns a host-reachable private service address, without a scheme.
 type Deployment interface {
+	Runtime
+	Exec(context.Context, string, core.Command) (core.CommandResult, error)
+	ExecStream(context.Context, string, core.Command, io.Reader, io.Writer, io.Writer) (core.CommandResult, error)
+}
+
+// Runtime manages lifecycle, private transfers and runner-facing control addresses.
+// It deliberately does not require sandbox execution capabilities.
+type Runtime interface {
 	Create(context.Context, Request) (string, error)
 	// Validate confirms identity, ownership, isolation and absence of supplied
 	// secret values from runtime metadata before exposing the runtime. It must not retain secrets.
@@ -26,8 +34,6 @@ type Deployment interface {
 	DownloadArchive(context.Context, string, string) (io.ReadCloser, FileInfo, error)
 	Start(context.Context, string) error
 	Running(context.Context, string) (bool, error)
-	Exec(context.Context, string, core.Command) (core.CommandResult, error)
-	ExecStream(context.Context, string, core.Command, io.Reader, io.Writer, io.Writer) (core.CommandResult, error)
 	LogsStream(context.Context, string, io.Writer, io.Writer) error
 	Logs(context.Context, string, int) ([]byte, error)
 	Address(context.Context, string, int) (string, error)
@@ -39,12 +45,17 @@ type Deployment interface {
 // separately to validation and must never enter environment, argv, or labels.
 // Entrypoint nil preserves the image's entrypoint; an explicit value replaces it.
 type Request struct {
-	Workdir         string
-	StorageMB       int
-	GPUs            int
-	Init            bool
-	NoNewPrivileges bool
-	NetworkAliases  []string
+	// HarnessPort is exposed only on the task attachment, separately from control.
+	HarnessPort int
+	// TrustedDockerSocket grants bridge infrastructure the selected local daemon.
+	// Providers must reject it outside a bridge runtime; it is not a profile mount API.
+	TrustedDockerSocket string
+	Workdir             string
+	StorageMB           int
+	GPUs                int
+	Init                bool
+	NoNewPrivileges     bool
+	NetworkAliases      []string
 	// AllowImageVolumes permits anonymous volumes declared by the image.
 	AllowImageVolumes bool
 	Name              string
@@ -76,8 +87,12 @@ type TaskEnvironment interface {
 	Start(context.Context, core.SandboxRequest) (core.HarnessConnectivity, error)
 	Validate(context.Context) error
 	Stop(context.Context) error
-	BridgeListen(context.Context) (core.BridgeListen, error)
 }
 
 // TaskSandboxAlias names the sandbox service on the current task attachment.
 const TaskSandboxAlias = "task-sandbox"
+
+// ServiceRuntime resolves a task-attachment address independently of host control.
+type ServiceRuntime interface {
+	HarnessAddress(context.Context, string, int) (string, error)
+}
