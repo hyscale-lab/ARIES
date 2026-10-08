@@ -26,7 +26,7 @@ func Listen(ctx context.Context, network string) (core.BridgeListen, error) {
 		return core.BridgeListen{}, err
 	}
 	n := result.Network
-	if n.Name != network || n.Driver != "bridge" || n.Labels["aries.managed"] != "true" || n.Labels["aries.kind"] != "task-network" {
+	if n.Name != network || n.Driver != "bridge" || n.Labels["aries.managed"] != "true" || n.Labels["aries.kind"] != "run-network" {
 		return core.BridgeListen{}, errors.New("test task network ownership mismatch")
 	}
 	for _, config := range n.IPAM.Config {

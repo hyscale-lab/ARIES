@@ -14,7 +14,6 @@ func validModel() core.ModelConfig {
 func validEndpoint() core.ToolEndpoint {
 	return core.ToolEndpoint{
 		Protocol: "ssh", Address: "172.17.0.1:41234", Username: "aries",
-		IdentityFile: identityContainerFS, IdentitySourceFile: "/tmp/id_ed25519",
 	}
 }
 
@@ -184,7 +183,6 @@ func TestContainerEnvironmentSelectsNativeSSHBackend(t *testing.T) {
 		"TERMINAL_SSH_HOST":                          "172.17.0.1",
 		"TERMINAL_SSH_PORT":                          "41234",
 		"TERMINAL_SSH_USER":                          "aries",
-		"TERMINAL_SSH_KEY":                           identityContainerFS,
 		"TERMINAL_CWD":                               "/aries/workspace",
 		"TERMINAL_TIMEOUT":                           "180",
 		"ARIES_RUN_ID":                               "run-1",
@@ -230,7 +228,6 @@ func TestContainerEnvironmentRejectsUnusableEndpoints(t *testing.T) {
 		"overflow port":  func(endpoint *core.ToolEndpoint) { endpoint.Address = "127.0.0.1:65536" },
 		"protocol":       func(e *core.ToolEndpoint) { e.Protocol = "http" },
 		"username":       func(e *core.ToolEndpoint) { e.Username = "root" },
-		"identity":       func(e *core.ToolEndpoint) { e.IdentitySourceFile = "" },
 		"client command": func(e *core.ToolEndpoint) { e.ClientCommand = "/opt/aries/bin/aries-ssh-client" },
 		"client source":  func(e *core.ToolEndpoint) { e.ClientSourceFile = "/tmp/aries-ssh-client" },
 		"address":        func(e *core.ToolEndpoint) { e.Address = "no-port" },

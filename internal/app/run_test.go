@@ -166,7 +166,7 @@ func TestRunEnsuresPreparationBeforeOutputAndRuntime(t *testing.T) {
 			return prepareErr
 		},
 	}
-	err = Run(context.Background(), profile, io.Discard, Dependencies{Wiring: wiring})
+	err = runCommandForTest(context.Background(), profile, io.Discard, Dependencies{Wiring: wiring})
 	if !errors.Is(err, prepareErr) {
 		t.Fatalf("Run error=%v", err)
 	}
@@ -203,7 +203,7 @@ func TestHarnessImageIsBuiltAfterPullAndFailureStopsRun(t *testing.T) {
 			return buildErr
 		},
 	}
-	if err := Run(context.Background(), profile, io.Discard, Dependencies{Wiring: wiring}); !errors.Is(err, buildErr) {
+	if err := runCommandForTest(context.Background(), profile, io.Discard, Dependencies{Wiring: wiring}); !errors.Is(err, buildErr) {
 		t.Fatalf("Run error=%v", err)
 	}
 	if want := []string{"pull", "build"}; !reflect.DeepEqual(events, want) {
@@ -269,7 +269,7 @@ func TestRunCancellationDuringPreparationHasNoDownstreamEffects(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := Run(ctx, profile, io.Discard, Dependencies{Wiring: wiring}); !errors.Is(err, context.Canceled) {
+	if err := runCommandForTest(ctx, profile, io.Discard, Dependencies{Wiring: wiring}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run error=%v", err)
 	}
 	if downstream != 0 {

@@ -31,7 +31,6 @@ import (
 	"github.com/moby/moby/client"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/crypto/ssh"
-	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 // bridgeFixtureImage backs the deterministic end-to-end test. It is pinned by
@@ -194,14 +193,6 @@ func TestUpstreamHermesDrivesTheBridgeWithoutPatches(t *testing.T) {
 	if err := os.WriteFile(driverPath, []byte(driverScript), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	identityPath := filepath.Join(t.TempDir(), "id_ed25519")
-	identity, err := os.ReadFile(endpoint.IdentitySourceFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(identityPath, identity, 0o600); err != nil {
-		t.Fatal(err)
-	}
 	host, port, err := net.SplitHostPort(endpoint.Address)
 	if err != nil {
 		t.Fatal(err)
@@ -224,9 +215,9 @@ func TestUpstreamHermesDrivesTheBridgeWithoutPatches(t *testing.T) {
 		Config: &container.Config{Image: image, Entrypoint: []string{"/opt/hermes/.venv/bin/python"}, Cmd: []string{"/driver.py"}, Env: []string{
 			"HERMES_HOME=/run/aries/hermes", "TERMINAL_ENV=ssh", "TERMINAL_SSH_HOST=" + host,
 			"TERMINAL_SSH_PORT=" + port, "TERMINAL_SSH_USER=" + endpoint.Username,
-			"TERMINAL_SSH_KEY=/run/aries/ssh/id_ed25519", "TERMINAL_CWD=" + sandboxRoot, "TERMINAL_TIMEOUT=60",
+			"TERMINAL_CWD=" + sandboxRoot, "TERMINAL_TIMEOUT=60",
 		}},
-		HostConfig: &container.HostConfig{NetworkMode: "host", Binds: []string{driverPath + ":/driver.py:ro", identityPath + ":/run/aries/ssh/id_ed25519:ro", skillDir + ":/run/aries/hermes/skills/demo:ro"}},
+		HostConfig: &container.HostConfig{NetworkMode: "host", Binds: []string{driverPath + ":/driver.py:ro", skillDir + ":/run/aries/hermes/skills/demo:ro"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -327,7 +318,7 @@ func TestUpstreamHermesDrivesTheBridgeWithoutPatches(t *testing.T) {
 	}
 
 	// Evidence must show both the executed commands and the refusals.
-	records := readToolCalls(t, filepath.Join(outputDir, "integration-task", "bridge", "tool-calls.jsonl"))
+	records := readToolCalls(t, filepath.Join(outputDir, "tool-calls.jsonl"))
 	var denied, completed int
 	for _, record := range records {
 		switch record["status"] {
@@ -361,7 +352,7 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 	if err := dockerdeployment.PullImages(ctx, "", []string{bridgeFixtureImage}); err != nil {
 		t.Fatalf("prepare pinned bridge fixture image: %v", err)
 	}
-	sandboxes, err := tasksandbox.New(tasksandbox.Options{Deployment: integrationDeployment(t), NewEnvironment: integrationDeployment(t).NewTaskEnvironment, OutputDir: outputDir, Logger: logger})
+	sandboxes, err := tasksandbox.New(tasksandbox.Options{Deployment: integrationDeployment(t), NewEnvironment: dockerroute.Environment(t, "hermes-bridge-integration").NewTaskEnvironment, OutputDir: outputDir, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -395,8 +386,8 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 			t.Errorf("bridge cleanup: %v", err)
 		}
 	})
-	artifactDir := filepath.Join(outputDir, "same-state", "bridge")
-	client, err := ssh.Dial("tcp", endpoint.Address, pinnedClientConfig(t, endpoint, filepath.Join(artifactDir, "known_hosts")))
+	artifactDir := outputDir
+	client, err := ssh.Dial("tcp", endpoint.Address, clientConfig(t, endpoint))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -441,9 +432,6 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 
 	if err := manager.Stop(ctx); err != nil {
 		t.Fatal(err)
-	}
-	if _, err := os.Stat(endpoint.IdentitySourceFile); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("identity remains after Stop: %v", err)
 	}
 	if connection, err := net.DialTimeout("tcp", endpoint.Address, 200*time.Millisecond); err == nil {
 		_ = connection.Close()
@@ -534,19 +522,6 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 	if strings.Count(raw, "ARIES SSH CALL BEGIN") != len(records) {
 		t.Fatalf("raw and structured audits are uncorrelated: %d raw of %d structured", strings.Count(raw, "ARIES SSH CALL BEGIN"), len(records))
 	}
-}
-
-// pinnedClientConfig verifies the host key against the known_hosts file the
-// bridge retains, which is the evidence of what Hermes pins on first use.
-func pinnedClientConfig(t *testing.T, endpoint core.ToolEndpoint, knownHostsPath string) *ssh.ClientConfig {
-	t.Helper()
-	configuration := clientConfig(t, endpoint)
-	callback, err := knownhosts.New(knownHostsPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	configuration.HostKeyCallback = callback
-	return configuration
 }
 
 func integrationDeployment(t *testing.T) *dockerdeployment.Manager {

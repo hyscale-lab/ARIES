@@ -115,7 +115,7 @@ func TestRecorderDerivesCPUAndWritesPortablePrivateArtifacts(t *testing.T) {
 		t.Fatalf("positive CPU components = %#v", seenPositive)
 	}
 	index := readIndexStrict(t, report.LogPaths[1])
-	if index.SchemaVersion != 3 || index.SampleCount != uint64(len(samples)) || len(index.Components) != 2 {
+	if index.SchemaVersion != 4 || index.SampleCount != uint64(len(samples)) || len(index.Components) != 2 {
 		t.Fatalf("index = %+v", index)
 	}
 	for _, path := range append([]string{filepath.Dir(report.LogPaths[0])}, report.LogPaths...) {

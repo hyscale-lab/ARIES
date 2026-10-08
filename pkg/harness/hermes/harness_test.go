@@ -229,17 +229,8 @@ func (stubSpeechSynthesizer) Close() {}
 
 func endpointFiles(t *testing.T) core.ToolEndpoint {
 	t.Helper()
-	root := t.TempDir()
-	path := filepath.Join(root, "id_ed25519")
-	if err := os.WriteFile(path, []byte("identity"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		t.Fatal(err)
-	}
 	return core.ToolEndpoint{
-		Protocol: "ssh", Address: "172.22.0.1:39425", Username: "aries",
-		IdentityFile: identityContainerFS, IdentitySourceFile: path, Workdir: "/app",
+		Protocol: "ssh", Address: "172.22.0.1:39425", Username: "aries", Workdir: "/app",
 	}
 }
 
@@ -326,11 +317,15 @@ func TestStartStagesPrivateRuntimeAndPinsGatewayService(t *testing.T) {
 	}
 
 	entries := archiveEntries(t, fake.archive)
+	for name := range entries {
+		if strings.HasPrefix(name, "run/aries/ssh/") {
+			t.Fatalf("staged obsolete SSH credential: %s", name)
+		}
+	}
 	for name, mode := range map[string]int64{
 		strings.TrimPrefix(configContainerPath, "/"): 0o600,
 		strings.TrimPrefix(gatewayKeyPath, "/"):      0o600,
 		strings.TrimPrefix(modelKeyPath, "/"):        0o600,
-		strings.TrimPrefix(identityContainerFS, "/"): 0o600,
 		strings.TrimPrefix(gatewayLauncherPath, "/"): 0o555,
 	} {
 		header, ok := entries[name]

@@ -22,12 +22,13 @@ func (manager *Manager) ValidateBridgeTarget(ctx context.Context, d core.BridgeT
 		return fmt.Errorf("inspect borrowed sandbox: %w", err)
 	}
 	c := result.Container
-	if c.ID != d.RuntimeID || strings.TrimPrefix(c.Name, "/") != d.RuntimeName || c.Config == nil || c.State == nil || !c.State.Running {
+	name := strings.TrimPrefix(c.Name, "/")
+	if c.ID != d.RuntimeID || name != d.SandboxID || c.Config == nil || c.State == nil || !c.State.Running {
 		return errors.New("borrowed sandbox identity or running state differs")
 	}
-	for k, v := range d.ExpectedLabels {
-		if c.Config.Labels[k] != v {
-			return fmt.Errorf("borrowed sandbox ownership label %s differs", k)
+	for key, value := range map[string]string{"aries.managed": "true", "aries.kind": "task-container", "aries.component": "sandbox", "aries.run": d.RunID, "aries.task": d.TaskID} {
+		if value == "" || c.Config.Labels[key] != value {
+			return fmt.Errorf("borrowed sandbox ownership label %s differs", key)
 		}
 	}
 	return nil

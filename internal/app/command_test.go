@@ -63,7 +63,7 @@ func TestInjectedModelRuntimeWrapsPreflightAndRunFailure(t *testing.T) {
 	runtime := &recordingRuntime{events: &events, done: make(chan struct{})}
 	wiring := failingRunWiring(runtime, &events, errors.New("run canary"))
 	doer := &preflightDoer{t: t, replies: []preflightReply{{status: 200, body: `{"data":[{"id":"deepseek-v4-flash"}]}`}}}
-	err := Run(context.Background(), profile, io.Discard, Dependencies{PreflightClient: doer, PreflightSleep: func(context.Context, time.Duration) error { return nil }, Wiring: wiring})
+	err := runCommandForTest(context.Background(), profile, io.Discard, Dependencies{PreflightClient: doer, PreflightSleep: func(context.Context, time.Duration) error { return nil }, Wiring: wiring})
 	if err == nil || !strings.Contains(err.Error(), "run canary") {
 		t.Fatalf("err=%v", err)
 	}
@@ -82,7 +82,7 @@ func TestInjectedModelRuntimeStopFailureIsReturned(t *testing.T) {
 	runtime := &recordingRuntime{events: &events, done: make(chan struct{}), stopErr: errors.New("stop canary")}
 	wiring := failingRunWiring(runtime, &events, errors.New("run canary"))
 	doer := &preflightDoer{t: t, replies: []preflightReply{{status: 200, body: `{"data":[{"id":"deepseek-v4-flash"}]}`}}}
-	err := Run(context.Background(), profile, io.Discard, Dependencies{PreflightClient: doer, Wiring: wiring})
+	err := runCommandForTest(context.Background(), profile, io.Discard, Dependencies{PreflightClient: doer, Wiring: wiring})
 	if err == nil || !strings.Contains(err.Error(), "run canary") || !strings.Contains(err.Error(), "stop canary") {
 		t.Fatalf("joined err=%v", err)
 	}
@@ -98,7 +98,7 @@ func TestManagedRuntimeLifecycleOrder(t *testing.T) {
 		events = append(events, "preflight")
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"data":[{"id":"deepseek-v4-flash"}]}`))}, nil
 	})
-	err := Run(context.Background(), profile, io.Discard, Dependencies{PreflightClient: doer, PreflightSleep: func(context.Context, time.Duration) error { return nil }, Wiring: wiring})
+	err := runCommandForTest(context.Background(), profile, io.Discard, Dependencies{PreflightClient: doer, PreflightSleep: func(context.Context, time.Duration) error { return nil }, Wiring: wiring})
 	if err == nil || !strings.Contains(err.Error(), "run complete canary") {
 		t.Fatalf("err=%v", err)
 	}
@@ -135,7 +135,7 @@ func TestRuntimeLifecycleLogsAreStructuredAndSanitized(t *testing.T) {
 			logger.SetOutput(&logs)
 			logger.SetFormatter(&logrus.JSONFormatter{})
 			doer := &preflightDoer{t: t, replies: []preflightReply{{status: 200, body: `{"data":[{"id":"deepseek-v4-flash"}]}`}}}
-			err := Run(context.Background(), profile, io.Discard, Dependencies{Logger: logger, PreflightClient: doer, Wiring: wiring})
+			err := runCommandForTest(context.Background(), profile, io.Discard, Dependencies{Logger: logger, PreflightClient: doer, Wiring: wiring})
 			if err == nil {
 				t.Fatal("expected run error")
 			}
@@ -202,7 +202,7 @@ func TestBackendPreparationPrecedesAllEffects(t *testing.T) {
 		called = true
 		return nil, nil
 	}}
-	err := Run(context.Background(), profile, io.Discard, Dependencies{Wiring: wiring})
+	err := runCommandForTest(context.Background(), profile, io.Discard, Dependencies{Wiring: wiring})
 	if err == nil || !strings.Contains(err.Error(), "prepare canary") || called {
 		t.Fatalf("err=%v called=%t", err, called)
 	}
@@ -256,7 +256,7 @@ func TestRunForwardsFreshPreparedGPUIndicesToEveryOccurrence(t *testing.T) {
 	doer := &preflightDoer{t: t, replies: []preflightReply{{status: 200, body: `{"data":[{"id":"deepseek-v4-flash"}]}`}}}
 	logger := logrus.New()
 	logger.SetOutput(io.Discard)
-	if err := Run(context.Background(), profile, io.Discard, Dependencies{Logger: logger, PreflightClient: doer, Wiring: wiring}); err == nil || !strings.Contains(err.Error(), "observer report missing") {
+	if err := runCommandForTest(context.Background(), profile, io.Discard, Dependencies{Logger: logger, PreflightClient: doer, Wiring: wiring}); err == nil || !strings.Contains(err.Error(), "observer report missing") {
 		t.Fatalf("run error = %v", err)
 	}
 	if sandboxCalls != 2 || !reflect.DeepEqual(preparedGPUIndices, []int{4, 2}) {
@@ -280,7 +280,7 @@ func TestUnsupportedComponentsAreRejectedImmediatelyOnRunAndSetup(t *testing.T) 
 			call func(string, io.Writer, Dependencies) error
 		}{
 			{name: "run", call: func(profile string, stdout io.Writer, dependencies Dependencies) error {
-				return Run(context.Background(), profile, stdout, dependencies)
+				return runCommandForTest(context.Background(), profile, stdout, dependencies)
 			}},
 			{name: "setup", call: func(profile string, stdout io.Writer, dependencies Dependencies) error {
 				return Setup(context.Background(), profile, stdout, dependencies)
@@ -407,7 +407,7 @@ func assertCommandAuthorization(t *testing.T, exe, want string) {
 	runtime := &recordingRuntime{events: &events, done: make(chan struct{})}
 	w := failingRunWiring(runtime, &events, errors.New("done"))
 	doer := &preflightDoer{t: t, replies: []preflightReply{{status: 200, body: `{"data":[{"id":"deepseek-v4-flash"}]}`}}}
-	_ = Run(context.Background(), profile, io.Discard, Dependencies{ExecutablePath: exe, PreflightClient: doer, Wiring: w})
+	_ = runCommandForTest(context.Background(), profile, io.Discard, Dependencies{ExecutablePath: exe, PreflightClient: doer, Wiring: w})
 	if len(doer.authorizations) != 1 || doer.authorizations[0] != "Bearer "+want {
 		t.Fatalf("authorization=%v", doer.authorizations)
 	}
@@ -481,7 +481,7 @@ func TestRuntimeExitCancelsAndDrainsRun(t *testing.T) {
 	doer := &preflightDoer{t: t, replies: []preflightReply{{status: 200, body: `{"data":[{"id":"deepseek-v4-flash"}]}`}}}
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(context.Background(), profile, io.Discard, Dependencies{PreflightClient: doer, Wiring: wiring})
+		done <- runCommandForTest(context.Background(), profile, io.Discard, Dependencies{PreflightClient: doer, Wiring: wiring})
 	}()
 	<-started
 	close(runtime.done)

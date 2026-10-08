@@ -62,6 +62,8 @@ type CommandResult struct {
 // cumulative; memory and optional GPU values are gauges. Concrete deployment
 // packages collect readings while monitor derives rates and writes artifacts.
 type ResourceReading struct {
+	Scope               string
+	RunID               string
 	TaskID              string
 	Component           string
 	RuntimeID           string
@@ -111,28 +113,21 @@ type BridgeListen struct {
 	AdvertiseHost string
 }
 
-// ToolEndpoint is the bridge endpoint and task-local file contract given to a
-// harness. Credential bytes are never carried in this value. The harness stages
-// the source files into its container before start; source paths are not bind
-// mounts and are removed when the bridge is revoked.
+// ToolEndpoint supplies a reachable protocol endpoint and optional client binary.
 type ToolEndpoint struct {
-	Protocol             string   `json:"protocol"`
-	Address              string   `json:"address"`
-	Username             string   `json:"username,omitempty"`
-	ClientCommand        string   `json:"client_command,omitempty"`
-	ClientSourceFile     string   `json:"client_source_file,omitempty"`
-	IdentityFile         string   `json:"identity_file,omitempty"`
-	IdentitySourceFile   string   `json:"identity_source_file,omitempty"`
-	KnownHostsFile       string   `json:"known_hosts_file,omitempty"`
-	KnownHostsSourceFile string   `json:"known_hosts_source_file,omitempty"`
-	LogPaths             []string `json:"log_paths,omitempty"`
+	Protocol         string   `json:"protocol"`
+	Address          string   `json:"address"`
+	Username         string   `json:"username,omitempty"`
+	ClientCommand    string   `json:"client_command,omitempty"`
+	ClientSourceFile string   `json:"client_source_file,omitempty"`
+	LogPaths         []string `json:"log_paths,omitempty"`
 	// Workdir is the sandbox directory the endpoint runs agent commands in,
 	// for a harness that must name it to its own tool layer.
 	Workdir string `json:"workdir,omitempty"`
 }
 
 // RuntimePlacement carries the task attachment to the deployment implementation.
-// Backend-specific attachment identities remain owned by TaskEnvironment.
+// Backend-specific attachment identities remain owned by RunEnvironment.
 type RuntimePlacement struct {
 	AttachmentID string `json:"attachment_id,omitempty"`
 }
@@ -253,9 +248,24 @@ type RunSummary struct {
 
 // RunResult contains all task results and their aggregate counts.
 type RunResult struct {
-	Name     string        `json:"name"`
-	RunID    string        `json:"run_id"`
-	Tasks    []TaskResult  `json:"tasks"`
-	Summary  RunSummary    `json:"summary"`
-	Duration time.Duration `json:"duration"`
+	Infrastructure *InfrastructureResult `json:"infrastructure,omitempty"`
+	Name           string                `json:"name"`
+	RunID          string                `json:"run_id"`
+	Tasks          []TaskResult          `json:"tasks"`
+	Summary        RunSummary            `json:"summary"`
+	Duration       time.Duration         `json:"duration"`
+}
+
+// InfrastructureResult records shared costs and failures without adding a task.
+type InfrastructureResult struct {
+	NetworkID         string         `json:"network_id,omitempty"`
+	NetworkName       string         `json:"network_name,omitempty"`
+	NetworkPolicy     string         `json:"network_policy"`
+	BridgeRuntimeID   string         `json:"bridge_runtime_id,omitempty"`
+	BridgeRuntimeName string         `json:"bridge_runtime_name,omitempty"`
+	Observer          ObserverResult `json:"observer"`
+	Cleanup           CleanupResult  `json:"cleanup"`
+	Error             string         `json:"error,omitempty"`
+	StartupDuration   time.Duration  `json:"startup_duration"`
+	CleanupDuration   time.Duration  `json:"cleanup_duration"`
 }

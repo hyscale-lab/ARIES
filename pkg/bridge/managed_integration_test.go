@@ -12,21 +12,21 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/containerd/errdefs"
 	bridgewiring "github.com/hyscale-lab/aries/internal/app/wiring/bridge"
 	deploymentwiring "github.com/hyscale-lab/aries/internal/app/wiring/deployment"
+	"github.com/hyscale-lab/aries/internal/testutil/dockerroute"
 	managed "github.com/hyscale-lab/aries/pkg/bridge"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
 	docker "github.com/hyscale-lab/aries/pkg/deployment/docker"
+	"github.com/hyscale-lab/aries/pkg/runner"
 	tasksandbox "github.com/hyscale-lab/aries/pkg/sandbox"
 	"github.com/moby/moby/client"
 	"golang.org/x/crypto/ssh"
-	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 const managedFixtureImage = "docker.io/library/debian:12-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241"
@@ -63,268 +63,302 @@ func managedBinary(t *testing.T, name, env string) string {
 	}
 	return path
 }
-func managedQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'" }
+func managedQuote(v string) string { return "'" + strings.ReplaceAll(v, "'", `'"'"'`) + "'" }
 
-// This matrix exercises borrowed Docker execution from actual independent
-// container runtimes. Concurrent occurrences deliberately share task IDs.
-func TestManagedBridgeRuntimeMatrix(t *testing.T) {
-	helper := managedBinary(t, "aries-ssh-client", "ARIES_SSH_CLIENT")
+type managedFixture struct {
+	service        *managed.Service
+	runtime        *docker.Manager
+	sandboxes      *tasksandbox.Manager
+	environment    *docker.RunEnvironment
+	protocol, root string
+	ctx            context.Context
+}
+
+func newManagedFixture(t *testing.T, protocol string) *managedFixture {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	t.Cleanup(cancel)
 	versions, err := config.LoadVersions(filepath.Join(managedRoot(t), "configs", "versions.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
 	if err = docker.PullImages(ctx, "", []string{managedFixtureImage}); err != nil {
 		t.Fatal(err)
 	}
-	var mu sync.Mutex
-	identities := map[string]bool{}
-	t.Run("docker", func(t *testing.T) {
-		for _, protocol := range []string{"hermes-ssh", "openclaw-ssh"} {
-			t.Run(protocol, func(t *testing.T) {
-				for occurrence := range 2 {
-					t.Run(fmt.Sprint(occurrence), func(t *testing.T) {
-						t.Parallel()
-						runManagedOccurrence(t, protocol, helper, versions.Bridge.Image, func(identity string) {
-							mu.Lock()
-							defer mu.Unlock()
-							if identities[identity] {
-								t.Errorf("runtime reused for repeated task occurrence: %s", identity)
-							}
-							identities[identity] = true
-						})
-					})
-				}
-			})
-		}
-	})
-}
-func TestManagedContainerCrashReportsMissingEvidence(t *testing.T) {
-	helper := managedBinary(t, "aries-ssh-client", "ARIES_SSH_CLIENT")
-	versions, err := config.LoadVersions(filepath.Join(managedRoot(t), "configs", "versions.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	runManagedOccurrence(t, "openclaw-ssh", helper, versions.Bridge.Image, func(string) {}, true)
-}
-
-func runManagedOccurrence(t *testing.T, protocol, helper, image string, remember func(string), crash ...bool) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-	root := t.TempDir()
+	env := dockerroute.Environment(t, "managed-integration")
 	sandboxRuntime, err := docker.New(docker.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	sandboxes, err := tasksandbox.New(tasksandbox.Options{Deployment: sandboxRuntime, NewEnvironment: sandboxRuntime.NewTaskEnvironment, OutputDir: root})
+	root := t.TempDir()
+	sandboxes, err := tasksandbox.New(tasksandbox.Options{Deployment: sandboxRuntime, NewEnvironment: env.NewTaskEnvironment, OutputDir: root})
 	if err != nil {
 		t.Fatal(err)
 	}
-	live, err := sandboxes.Start(ctx, core.SandboxRequest{RunID: "managed-integration", TaskID: "repeated-task", Environment: core.Environment{Image: managedFixtureImage, Workdir: "/work", MemoryMB: 64}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sandbox := live.(*tasksandbox.Sandbox)
 	t.Cleanup(func() {
-		cleanup, done := context.WithTimeout(context.Background(), 30*time.Second)
-		defer done()
-		if err := sandboxes.Stop(cleanup, live); err != nil {
-			t.Errorf("sandbox cleanup: %v", err)
-		}
 		if err := sandboxes.Close(); err != nil {
-			t.Errorf("sandbox transport: %v", err)
+			t.Error(err)
 		}
 	})
-	// Benchmark services may already be running before the bridge is admitted.
-	benchmarkProcess, err := sandbox.Exec(ctx, core.Command{Path: "/bin/sh", Args: []string{"-c", "setsid sleep 120 </dev/null >/dev/null 2>&1 & echo $! > /work/benchmark.pid"}})
-	if err != nil || benchmarkProcess.ExitCode != 0 {
-		t.Fatalf("start benchmark process: %+v %v", benchmarkProcess, err)
-	}
 	runtime, err := docker.New(docker.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	clientConfig, err := bridgewiring.SSHClientConfig(protocol, helper)
+	cc, err := bridgewiring.SSHClientConfig(protocol, managedBinary(t, "aries-ssh-client", "ARIES_SSH_CLIENT"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	launch := bridgewiring.Launch(image)
+	launch := bridgewiring.Launch(versions.Bridge.Image)
 	launch.RuntimeBackend, launch.ResourceMetrics = "docker", "docker-stats"
 	launch.Config.Backend = "docker"
 	launch.Config.BackendEndpoint, launch.Request.Mounts = deploymentwiring.DockerExecutionAccess("")
-	bridge, err := managed.New(managed.Options{Runtime: runtime, Launch: launch, OutputDir: root, Client: clientConfig, BridgeType: protocol, RetainRawLog: true})
+	service, err := managed.NewService(managed.Options{Runtime: runtime, Launch: launch, RunID: "managed-integration", Placement: core.RuntimePlacement{AttachmentID: env.NetworkName()}, OutputDir: filepath.Join(root, "infrastructure", "bridge"), Client: cc, BridgeType: protocol, RetainRawLog: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	expectEvidenceFailure := false
 	t.Cleanup(func() {
 		cleanup, done := context.WithTimeout(context.Background(), 30*time.Second)
 		defer done()
-		if err := bridge.Stop(cleanup); err != nil && !expectEvidenceFailure {
-			t.Errorf("bridge cleanup: %v", err)
-		}
-		if err := runtime.Close(); err != nil {
-			t.Errorf("bridge transport: %v", err)
+		_ = service.Stop(cleanup)
+	})
+	if err = service.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	return &managedFixture{service: service, runtime: runtime, sandboxes: sandboxes, environment: env, protocol: protocol, root: root, ctx: ctx}
+}
+
+type managedSession struct {
+	sandbox  *tasksandbox.Sandbox
+	session  runner.ToolBridge
+	endpoint core.ToolEndpoint
+	root, id string
+}
+
+func (f *managedFixture) newSession(t *testing.T, index string) *managedSession {
+	t.Helper()
+	live, err := f.sandboxes.Start(f.ctx, core.SandboxRequest{RunID: "managed-integration", TaskID: "repeated-task", Environment: core.Environment{Image: managedFixtureImage, Workdir: "/work", MemoryMB: 64, Services: core.TaskServices{SearchPort: 8123}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := f.sandboxes.Stop(ctx, live); err != nil {
+			t.Error(err)
 		}
 	})
-	endpoint, err := bridge.Start(ctx, live)
+	root := filepath.Join(f.root, index)
+	bridge, err := f.service.NewSession(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if protocol == "openclaw-ssh" {
-		if info, err := os.Lstat(endpoint.ClientSourceFile); err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0555 || endpoint.ClientSourceFile == helper {
-			t.Fatal("OpenClaw helper did not satisfy the task-local harness staging contract")
-		}
-	}
-	metadata, err := os.ReadFile(filepath.Join(root, "repeated-task", "bridge", "runtime.json"))
+	endpoint, err := bridge.Start(f.ctx, live)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var owner struct{ RuntimeID, InstanceID, AssignmentID string }
-	if err = json.Unmarshal(metadata, &owner); err != nil || owner.RuntimeID == "" {
-		t.Fatalf("runtime ownership record: %s %v", metadata, err)
-	}
-	remember(owner.RuntimeID)
-	key, err := os.ReadFile(endpoint.IdentitySourceFile)
+	sandbox := live.(*tasksandbox.Sandbox)
+	d, err := sandbox.ExportBridgeTarget()
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer, err := ssh.ParsePrivateKey(key)
+	if sandbox.Connectivity().Placement.AttachmentID != f.environment.NetworkName() {
+		t.Fatal("sandbox did not borrow run attachment")
+	}
+	data, err := os.ReadFile(filepath.Join(root, "repeated-task", "bridge", "runtime.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Hermes's documented first-use host-key behavior is intentionally preserved.
-	hostKey := ssh.InsecureIgnoreHostKey()
-	if protocol == "openclaw-ssh" {
-		hostKey, err = knownhosts.New(endpoint.KnownHostsSourceFile)
-		if err != nil {
-			t.Fatal(err)
-		}
+	var record struct{ RuntimeID, SandboxID, TargetRuntimeID string }
+	if json.Unmarshal(data, &record) != nil || record.RuntimeID != f.service.RuntimeID() || record.SandboxID != d.SandboxID || record.TargetRuntimeID != sandbox.ContainerID() {
+		t.Fatalf("wrong session binding %s", data)
 	}
-	connection, err := ssh.Dial("tcp", endpoint.Address, &ssh.ClientConfig{User: endpoint.Username, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyCallback: hostKey, Timeout: 10 * time.Second})
+	return &managedSession{sandbox: sandbox, session: bridge, endpoint: endpoint, root: root, id: d.SandboxID}
+}
+func (f *managedFixture) wire(script string) string {
+	if f.protocol == "hermes-ssh" {
+		return "bash -l -c " + managedQuote(script)
+	}
+	return managedQuote("/bin/sh") + " " + managedQuote("-c") + " " + managedQuote(script)
+}
+func connectManaged(t *testing.T, e core.ToolEndpoint) (*ssh.Client, string) {
+	t.Helper()
+	var key string
+	c, err := ssh.Dial("tcp", e.Address, &ssh.ClientConfig{User: e.Username, HostKeyCallback: func(_ string, _ net.Addr, k ssh.PublicKey) error {
+		key = string(ssh.MarshalAuthorizedKey(k))
+		return nil
+	}, Timeout: 10 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err := connection.NewSession()
+	t.Cleanup(func() { c.Close() })
+	return c, key
+}
+func runManagedCommand(c *ssh.Client, command string, input []byte) ([]byte, []byte, int, error) {
+	session, err := c.NewSession()
 	if err != nil {
-		connection.Close()
-		t.Fatal(err)
+		return nil, nil, -1, err
 	}
-	payload := "managed-" + owner.AssignmentID
-	// A completed tool call can intentionally leave a background service running.
-	script := "setsid sleep 120 </dev/null >/dev/null 2>&1 & echo $! > /work/tool.pid; cat > /work/managed-state; cat /work/managed-state; printf managed-stderr >&2; exit 7"
-	wire := managedQuote("/bin/sh") + " " + managedQuote("-c") + " " + managedQuote(script)
-	if protocol == "hermes-ssh" {
-		wire = "bash -l -c " + managedQuote(script)
-	}
-	var stdout, stderr bytes.Buffer
-	session.Stdin = strings.NewReader(payload)
-	session.Stdout = &stdout
+	defer session.Close()
+	var out, stderr bytes.Buffer
+	session.Stdin = bytes.NewReader(input)
+	session.Stdout = &out
 	session.Stderr = &stderr
-	err = session.Run(wire)
-	session.Close()
-	defer connection.Close()
-	var status *ssh.ExitError
-	if !errors.As(err, &status) || status.ExitStatus() != 7 || stdout.String() != payload || stderr.String() != "managed-stderr" {
-		t.Fatalf("native exec err=%v stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+	err = session.Run(command)
+	code := 0
+	var exit *ssh.ExitError
+	if errors.As(err, &exit) {
+		code = exit.ExitStatus()
+		err = nil
 	}
-	binarySession, err := connection.NewSession()
-	if err != nil {
-		t.Fatal(err)
-	}
-	binaryPayload := []byte{0, 1, 255, 'b', 'i', 'n'}
-	binaryScript := "cat > /work/managed-binary; cat /work/managed-binary"
-	binaryWire := managedQuote("/bin/sh") + " " + managedQuote("-c") + " " + managedQuote(binaryScript)
-	if protocol == "hermes-ssh" {
-		binaryWire = "bash -l -c " + managedQuote(binaryScript)
-	}
-	var binaryOutput bytes.Buffer
-	binarySession.Stdin = bytes.NewReader(binaryPayload)
-	binarySession.Stdout = &binaryOutput
-	if err = binarySession.Run(binaryWire); err != nil || !bytes.Equal(binaryOutput.Bytes(), binaryPayload) {
-		t.Fatalf("binary stream differs: %x %v", binaryOutput.Bytes(), err)
-	}
-	binarySession.Close()
-	connection.Close()
-	assertSandboxProcessesAlive := func() {
-		t.Helper()
-		result, err := sandbox.Exec(ctx, core.Command{Path: "/bin/sh", Args: []string{"-c", `for source in /work/benchmark.pid /work/tool.pid; do pid=$(cat "$source") || exit; kill -0 "$pid" || exit; test -e "/proc/$pid/exe" || exit 1; done`}})
-		if err != nil || result.ExitCode != 0 {
-			t.Fatalf("bridge cleanup changed live sandbox processes: %+v %v", result, err)
-		}
-	}
-	assertSandboxProcessesAlive()
-	if len(crash) != 0 && crash[0] {
-		expectEvidenceFailure = true
-		if err = runtime.Stop(ctx, owner.RuntimeID); err != nil {
-			t.Fatal(err)
-		}
-		for range 2 {
-			if err = bridge.Stop(ctx); err == nil || !strings.Contains(err.Error(), "bridge exited without finalized evidence") {
-				t.Fatalf("child crash did not report missing finalized evidence: %v", err)
+	return out.Bytes(), stderr.Bytes(), code, err
+}
+func TestManagedBridgeRuntimeMatrix(t *testing.T) {
+	for _, protocol := range []string{"hermes-ssh", "openclaw-ssh"} {
+		t.Run(protocol, func(t *testing.T) {
+			f := newManagedFixture(t, protocol)
+			a, b := f.newSession(t, "a"), f.newSession(t, "b")
+			ca, ka := connectManaged(t, a.endpoint)
+			cb, kb := connectManaged(t, b.endpoint)
+			if a.endpoint.Address == b.endpoint.Address || a.id == b.id || ka != kb {
+				t.Fatal("sessions did not share signer with distinct identity/listener")
 			}
-		}
-		if _, err = os.Stat(endpoint.IdentitySourceFile); !errors.Is(err, os.ErrNotExist) {
-			t.Fatal("crashed container client key remains")
-		}
-		assertSandboxProcessesAlive()
-		return
+			if a.sandbox.Connectivity().SearchURL == b.sandbox.Connectivity().SearchURL {
+				t.Fatal("repeated task IDs collided in service resolution")
+			}
+			for _, pair := range []struct {
+				s *managedSession
+				c *ssh.Client
+			}{{a, ca}, {b, cb}} {
+				result, err := pair.s.sandbox.Exec(f.ctx, core.Command{Path: "/bin/sh", Args: []string{"-c", "setsid sleep 120 </dev/null >/dev/null 2>&1 & echo $! > /work/benchmark.pid"}})
+				if err != nil || result.ExitCode != 0 {
+					t.Fatal(result, err)
+				}
+				script := "setsid sleep 120 </dev/null >/dev/null 2>&1 & echo $! > /work/tool.pid; cat > /work/state; cat /work/state; printf stderr >&2; exit 7"
+				payload := []byte("managed-" + pair.s.id)
+				out, stderr, code, err := runManagedCommand(pair.c, f.wire(script), payload)
+				if err != nil || code != 7 || !bytes.Equal(out, payload) || string(stderr) != "stderr" {
+					t.Fatal(string(out), string(stderr), code, err)
+				}
+				binary := []byte{0, 1, 255, 'b', 'i', 'n'}
+				out, _, code, err = runManagedCommand(pair.c, f.wire("cat > /work/binary; cat /work/binary"), binary)
+				if err != nil || code != 0 || !bytes.Equal(out, binary) {
+					t.Fatal(out, code, err)
+				}
+			}
+			// B remains in an active tool call while A releases and independently evaluates.
+			bDone := make(chan error, 1)
+			go func() {
+				out, _, code, err := runManagedCommand(cb, f.wire("touch /work/busy; sleep 2; printf peer-complete"), nil)
+				if err == nil && (code != 0 || string(out) != "peer-complete") {
+					err = fmt.Errorf("peer command changed: %q %d", out, code)
+				}
+				bDone <- err
+			}()
+			for {
+				result, err := b.sandbox.Exec(f.ctx, core.Command{Path: "/bin/test", Args: []string{"-f", "/work/busy"}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if result.ExitCode == 0 {
+					break
+				}
+				if f.ctx.Err() != nil {
+					t.Fatal(f.ctx.Err())
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if err := a.session.Stop(f.ctx); err != nil {
+				t.Fatal(err)
+			}
+			if conn, err := net.DialTimeout("tcp", a.endpoint.Address, 200*time.Millisecond); err == nil {
+				conn.Close()
+				t.Fatal("released listener remained open")
+			}
+			evaluation, err := a.sandbox.Exec(f.ctx, core.Command{Path: "/bin/sh", Args: []string{"-c", `for file in /work/benchmark.pid /work/tool.pid; do kill -0 "$(cat "$file")" || exit; done; cat /work/state`}})
+			if err != nil || evaluation.ExitCode != 0 || evaluation.Stdout != "managed-"+a.id {
+				t.Fatal(evaluation, err)
+			}
+			// Fresh evaluation sandboxes borrow the same network while live peers remain.
+			fresh, err := f.sandboxes.Start(f.ctx, core.SandboxRequest{RunID: "managed-integration", TaskID: "repeated-task", Environment: core.Environment{Image: managedFixtureImage, Workdir: "/work", Services: core.TaskServices{SearchPort: 8123}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fresh.Connectivity().Placement != b.sandbox.Connectivity().Placement || fresh.Connectivity().SearchURL == b.sandbox.Connectivity().SearchURL {
+				t.Fatal("fresh evaluation attachment/name collision")
+			}
+			if err := f.sandboxes.Stop(f.ctx, fresh); err != nil {
+				t.Fatal(err)
+			}
+			if err := <-bDone; err != nil {
+				t.Fatal(err)
+			}
+			if err := f.sandboxes.Stop(f.ctx, a.sandbox); err != nil {
+				t.Fatal(err)
+			}
+			if err := b.session.Stop(f.ctx); err != nil {
+				t.Fatal(err)
+			}
+			// Fully idle service admits a later occurrence without replacing the runtime.
+			c := f.newSession(t, "c")
+			cc, kc := connectManaged(t, c.endpoint)
+			if kc != ka {
+				t.Fatal("service host key changed")
+			}
+			out, _, code, err := runManagedCommand(cc, f.wire("printf later"), nil)
+			if err != nil || code != 0 || string(out) != "later" {
+				t.Fatal(string(out), code, err)
+			}
+			if err := c.session.Stop(f.ctx); err != nil {
+				t.Fatal(err)
+			}
+			for _, s := range []*managedSession{a, b, c} {
+				for _, path := range s.endpoint.LogPaths {
+					info, err := os.Stat(path)
+					if err != nil || info.Mode().Perm() != 0600 {
+						t.Fatal(path, err)
+					}
+				}
+				for _, name := range []string{"id_ed25519", "known_hosts", "host.key", "authorized.pub"} {
+					if _, err := os.Stat(filepath.Join(s.root, "repeated-task", "bridge", name)); !errors.Is(err, os.ErrNotExist) {
+						t.Fatal("credential staged", name, err)
+					}
+				}
+				if s.endpoint.ClientSourceFile != "" {
+					if _, err := os.Stat(s.endpoint.ClientSourceFile); !errors.Is(err, os.ErrNotExist) {
+						t.Fatal("helper retained", err)
+					}
+				}
+			}
+			api, err := client.New(client.FromEnv, client.WithAPIVersionNegotiation())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer api.Close()
+			inspection, err := api.ContainerInspect(f.ctx, f.service.RuntimeID(), client.ContainerInspectOptions{})
+			if err != nil || !inspection.Container.State.Running || inspection.Container.Config.Labels["aries.task"] != "" {
+				t.Fatal("shared bridge lost or task-owned", err)
+			}
+			if err := f.service.Stop(f.ctx); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := api.ContainerInspect(f.ctx, f.service.RuntimeID(), client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
+				t.Fatal("bridge removal unconfirmed", err)
+			}
+		})
 	}
-	if err = bridge.Stop(ctx); err != nil {
+}
+func TestManagedContainerCrashReportsMissingEvidence(t *testing.T) {
+	f := newManagedFixture(t, "openclaw-ssh")
+	s := f.newSession(t, "crash")
+	if err := f.runtime.Stop(f.ctx, f.service.RuntimeID()); err != nil {
 		t.Fatal(err)
 	}
-	assertSandboxProcessesAlive()
-	result, err := sandbox.Exec(ctx, core.Command{Path: "/bin/cat", Args: []string{"/work/managed-state"}})
-	if err != nil || result.ExitCode != 0 || result.Stdout != payload {
-		t.Fatalf("independent evaluation of same live sandbox: %+v %v", result, err)
-	}
-	binaryResult, binaryErr := sandbox.Exec(ctx, core.Command{Path: "/usr/bin/base64", Args: []string{"/work/managed-binary"}})
-	if binaryErr != nil || binaryResult.ExitCode != 0 || binaryResult.Stdout != "AAH/Ymlu\n" {
-		t.Fatalf("independent binary evaluation: %+v %v", binaryResult, binaryErr)
-	}
-	if _, err = os.Stat(endpoint.IdentitySourceFile); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("bridge client key remains")
-	}
-	if endpoint.ClientSourceFile != "" {
-		if _, err := os.Stat(endpoint.ClientSourceFile); !errors.Is(err, os.ErrNotExist) {
-			t.Fatal("private helper staging remains")
+	for range 2 {
+		if err := s.session.Stop(f.ctx); err == nil || !strings.Contains(err.Error(), "without finalized evidence") {
+			t.Fatal("crash lost evidence error", err)
 		}
 	}
-	if endpoint.KnownHostsSourceFile != "" {
-		if info, err := os.Stat(endpoint.KnownHostsSourceFile); err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
-			t.Fatal("public bridge host-key evidence is missing or has unsafe permissions")
-		}
-	}
-	if info, err := os.Stat(filepath.Join(root, "repeated-task", "bridge", "known_hosts")); err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
-		t.Fatal("public host-key evidence missing after revocation")
-	}
-	api, err := client.New(client.FromEnv, client.WithAPIVersionNegotiation())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer api.Close()
-	if _, err := api.ContainerInspect(ctx, owner.RuntimeID, client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
-		t.Fatalf("container removal unconfirmed: %v", err)
-	}
-	if c, err := net.DialTimeout("tcp", endpoint.Address, 200*time.Millisecond); err == nil {
-		c.Close()
-		t.Fatal("tool listener remains after revocation")
-	}
-	for _, path := range endpoint.LogPaths {
-		info, err := os.Stat(path)
-		if err != nil || info.Mode().Perm() != 0600 {
-			t.Fatalf("local finalized evidence %s: %v", path, err)
-		}
-	}
-	evidence, err := os.ReadFile(endpoint.LogPaths[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, value := range []string{sandbox.ContainerID(), `"task_id":"repeated-task"`, `"exit_code":7`, payload} {
-		if !bytes.Contains(evidence, []byte(value)) {
-			t.Fatalf("finalized evidence missing %q: %s", value, evidence)
-		}
+	if err := f.service.Stop(f.ctx); err == nil || !strings.Contains(err.Error(), "without finalized evidence") {
+		t.Fatal("run lost evidence error", err)
 	}
 }

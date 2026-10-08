@@ -16,7 +16,6 @@ import (
 	"github.com/hyscale-lab/aries/pkg/bridge/ssh/internal/testfixture"
 	"github.com/hyscale-lab/aries/pkg/core"
 	gossh "golang.org/x/crypto/ssh"
-	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 type recordingExecutor struct {
@@ -49,19 +48,7 @@ func executeAndAudit(t *testing.T, wire string, input []byte) ([]core.Command, [
 	if err != nil {
 		t.Fatal(err)
 	}
-	identity, err := os.ReadFile(endpoint.IdentitySourceFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := gossh.ParsePrivateKey(identity)
-	if err != nil {
-		t.Fatal(err)
-	}
-	callback, err := knownhosts.New(endpoint.KnownHostsSourceFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	client, err := gossh.Dial("tcp", endpoint.Address, &gossh.ClientConfig{User: endpoint.Username, Auth: []gossh.AuthMethod{gossh.PublicKeys(signer)}, HostKeyCallback: callback})
+	client, err := gossh.Dial("tcp", endpoint.Address, &gossh.ClientConfig{User: endpoint.Username, HostKeyCallback: gossh.InsecureIgnoreHostKey()})
 	if err != nil {
 		t.Fatal(err)
 	}

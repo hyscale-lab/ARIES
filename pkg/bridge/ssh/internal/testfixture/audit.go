@@ -41,7 +41,7 @@ func DecodeRawAuditRecords(t *testing.T, content []byte) []map[string]string {
 	t.Helper()
 	const begin = "--- ARIES SSH CALL BEGIN ---\n"
 	const end = "--- ARIES SSH CALL END ---\n"
-	fields := []string{"sequence", "timestamp", "request_type", "want_reply", "status", "run_id", "task_id", "container_id", "wire_command", "payload_bytes", "payload", "stdin_bytes", "stdin"}
+	fields := []string{"sequence", "sandbox_id", "timestamp", "request_type", "want_reply", "status", "run_id", "task_id", "container_id", "wire_command", "payload_bytes", "payload", "stdin_bytes", "stdin"}
 	var records []map[string]string
 	for len(content) > 0 {
 		if !bytes.HasPrefix(content, []byte(begin)) {

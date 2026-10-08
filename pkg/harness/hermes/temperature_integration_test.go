@@ -11,14 +11,13 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/deployment"
 	dockerdeployment "github.com/hyscale-lab/aries/pkg/deployment/docker"
 )
 
@@ -35,7 +34,8 @@ func TestRequestSettingsReachRealHermes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			environment := provider.NewTaskEnvironment()
+			runEnvironment := dockerroute.Environment(t, "temperature-integration")
+			environment := runEnvironment.NewTaskEnvironment()
 			t.Cleanup(func() {
 				cleanup, cancel := context.WithTimeout(context.Background(), time.Minute)
 				defer cancel()
@@ -44,7 +44,7 @@ func TestRequestSettingsReachRealHermes(t *testing.T) {
 				}
 				_ = provider.Close()
 			})
-			connectivity, err := environment.Start(ctx, core.SandboxRequest{RunID: "temperature-integration", TaskID: "temperature", Environment: core.Environment{AllowNetwork: true}})
+			connectivity, err := environment.Start(ctx, deployment.TaskEnvironmentRequest{SandboxRequest: core.SandboxRequest{RunID: "temperature-integration", TaskID: "temperature", Environment: core.Environment{AllowNetwork: true}}, RuntimeName: "temperature-fixture"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -92,11 +92,7 @@ func TestRequestSettingsReachRealHermes(t *testing.T) {
 				}
 				_ = manager.Close()
 			})
-			identity := filepath.Join(t.TempDir(), "identity")
-			if err := os.WriteFile(identity, []byte("integration identity"), 0600); err != nil {
-				t.Fatal(err)
-			}
-			request := core.HarnessRequest{Connectivity: connectivity, RunID: "temperature-integration", TaskID: "temperature", Endpoint: core.ToolEndpoint{Protocol: "ssh", Address: "127.0.0.1:2222", Username: "aries", IdentitySourceFile: identity, Workdir: "/app"}, Model: core.ModelConfig{Provider: "openai", BaseURL: "http://" + net.JoinHostPort(endpoint.AdvertiseHost, port) + "/v1", Model: "aries-deterministic", APIKeyEnv: "ARIES_TEST_MODEL_KEY", ContextLength: 262144, MaxTokens: 32768, Temperature: &temperature, ReasoningEffort: reasoning}}
+			request := core.HarnessRequest{Connectivity: connectivity, RunID: "temperature-integration", TaskID: "temperature", Endpoint: core.ToolEndpoint{Protocol: "ssh", Address: "127.0.0.1:2222", Username: "aries", Workdir: "/app"}, Model: core.ModelConfig{Provider: "openai", BaseURL: "http://" + net.JoinHostPort(endpoint.AdvertiseHost, port) + "/v1", Model: "aries-deterministic", APIKeyEnv: "ARIES_TEST_MODEL_KEY", ContextLength: 262144, MaxTokens: 32768, Temperature: &temperature, ReasoningEffort: reasoning}}
 			if err := manager.Start(ctx, request); err != nil {
 				t.Fatal(err)
 			}

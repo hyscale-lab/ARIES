@@ -1,16 +1,12 @@
 package client
 
 import (
-	"crypto/ed25519"
-	"crypto/rand"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"testing"
-
-	"golang.org/x/crypto/ssh"
 )
 
 const (
@@ -123,32 +119,6 @@ func TestLoadClientConfigAcceptsOpenClawUserTemporaryRoot(t *testing.T) {
 	}
 }
 
-func TestKnownHostsRequiresExactHostAndEd25519Key(t *testing.T) {
-	t.Parallel()
-	public, _, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	key, err := ssh.NewPublicKey(public)
-	if err != nil {
-		t.Fatal(err)
-	}
-	content := []byte("[" + lockedHostName + "]:" + "2222 " + string(ssh.MarshalAuthorizedKey(key)))
-	if _, err := parseLockedKnownHost(content, lockedHostName, lockedPort); err != nil {
-		t.Fatal(err)
-	}
-	for _, invalid := range [][]byte{
-		[]byte("task-sandbox ssh-ed25519 bad\n"),
-		append(content, '\n'),
-		[]byte(strings.Replace(string(content), "2222", "22", 1)),
-		[]byte(strings.TrimSuffix(string(content), "\n") + " comment\n"),
-	} {
-		if _, err := parseLockedKnownHost(invalid, lockedHostName, lockedPort); err == nil {
-			t.Errorf("known-hosts bytes %q unexpectedly accepted", invalid)
-		}
-	}
-}
-
 func lockedConfigContent() string {
 	return strings.Join([]string{
 		"Host " + lockedHostAlias,
@@ -158,12 +128,10 @@ func lockedConfigContent() string {
 		"  ConnectTimeout 5",
 		"  ServerAliveInterval 15",
 		"  ServerAliveCountMax 3",
-		"  StrictHostKeyChecking yes",
+		"  StrictHostKeyChecking no",
 		"  UpdateHostKeys no",
 		"  User " + lockedUsername,
-		"  UserKnownHostsFile " + knownHostsContainerPath,
-		"  IdentityFile " + identityContainerPath,
-		"  IdentitiesOnly yes",
+		"  UserKnownHostsFile /dev/null",
 	}, "\n") + "\n"
 }
 

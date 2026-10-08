@@ -33,7 +33,7 @@ func (b *backendStub) ExecStream(_ context.Context, id string, c core.Command, i
 	return core.CommandResult{ExitCode: 7}, nil
 }
 func validDescriptor() core.BridgeTarget {
-	return core.BridgeTarget{Version: 1, RunID: "run", TaskID: "task", OccurrenceID: "occurrence", Backend: "docker", RuntimeID: "immutable-id", RuntimeName: "runtime", Workdir: "/app", ExecUser: "1000:1000", MaxInputBytes: 16 << 20, MaxOutputBytes: 1 << 30, ExpectedLabels: map[string]string{"aries.managed": "true", "aries.kind": "task-container", "aries.component": "sandbox", "aries.run": "run", "aries.task": "task"}}
+	return core.BridgeTarget{RunID: "run", TaskID: "task", SandboxID: "occurrence", Backend: "docker", RuntimeID: "immutable-id", Workdir: "/app", ExecUser: "1000:1000"}
 }
 func TestBorrowedPreservesDefaultsAndRejectsInvalidCommands(t *testing.T) {
 	backend := &backendStub{}
@@ -58,7 +58,7 @@ func TestBorrowedRejectsMismatchedIdentityAndOwnership(t *testing.T) {
 	for _, backendName := range []string{"docker", "remote-exec"} {
 		d := validDescriptor()
 		d.Backend = backendName
-		d.ExpectedLabels["aries.task"] = "other"
+		d.TaskID = "../other"
 		backend := &backendStub{}
 		if _, err := New(context.Background(), d, backend); err == nil || len(backend.validated) != 0 {
 			t.Fatalf("cross-task descriptor reached %s backend: %v", backendName, err)

@@ -722,16 +722,6 @@ func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([
 		return nil, fmt.Errorf("read OpenClaw SSH client: %w", err)
 	}
 	defer clear(clientBytes)
-	identity, err := privatefiles.Read(active.Endpoint.IdentitySourceFile, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("read OpenClaw SSH identity: %w", err)
-	}
-	defer clear(identity)
-	knownHosts, err := privatefiles.Read(active.Endpoint.KnownHostsSourceFile, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("read OpenClaw known-hosts: %w", err)
-	}
-	defer clear(knownHosts)
 	mcpHostVars := make([]string, 0, len(active.Credentials.MCPFiles()))
 	for hostVar := range active.Credentials.MCPFiles() {
 		mcpHostVars = append(mcpHostVars, hostVar)
@@ -744,8 +734,6 @@ func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([
 		"run/aries/launch":               {Content: launcherScript(active.Model.APIKeyEnv, manager.realtimeAPIKeyEnv(active), len(active.Credentials.Get("extract")) != 0, mcpHostVars...), Mode: 0o555},
 		"run/aries/gateway-proxy.js":     {Content: gatewayProxyScript(), Mode: 0o555},
 		"run/aries/gateway-launcher":     {Content: gatewayLauncherScript(), Mode: 0o555},
-		"run/aries/ssh/id_ed25519":       {Content: identity, Mode: 0o600},
-		"run/aries/ssh/known_hosts":      {Content: knownHosts, Mode: 0o600},
 		"opt/aries/bin/aries-ssh-client": {Content: clientBytes, Mode: 0o555},
 	}
 	if len(active.Credentials.Get("voice")) != 0 {

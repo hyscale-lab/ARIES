@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hyscale-lab/aries/internal/testutil/dockerroute"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
 	dockerdeployment "github.com/hyscale-lab/aries/pkg/deployment/docker"
@@ -180,7 +181,7 @@ func TestPinnedDockerGoldAndEmptyPatch(t *testing.T) {
 				t.Fatal(err)
 			}
 			deployment := integrationDeployment(t)
-			manager, err := tasksandbox.New(tasksandbox.Options{Deployment: deployment, NewEnvironment: deployment.NewTaskEnvironment,
+			manager, err := tasksandbox.New(tasksandbox.Options{Deployment: deployment, NewEnvironment: dockerroute.Environment(t, "swebenchpro-e2e").NewTaskEnvironment,
 				OutputDir: outputDir, CleanupTimeout: 2 * time.Minute, Logger: logrus.New(),
 			})
 			if err != nil {

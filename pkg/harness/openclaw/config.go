@@ -200,8 +200,6 @@ type sshConfig struct {
 	WorkspaceRoot         string `json:"workspaceRoot"`
 	StrictHostKeyChecking bool   `json:"strictHostKeyChecking"`
 	UpdateHostKeys        bool   `json:"updateHostKeys"`
-	IdentityFile          string `json:"identityFile"`
-	KnownHostsFile        string `json:"knownHostsFile"`
 }
 
 func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, mode string, searchURL string, webSearchEnabled, extractEnabled, subagentsEnabled bool, maxConcurrentSubagents int, mcp ...MCPOptions) ([]byte, error) {
@@ -249,8 +247,7 @@ func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, mode strin
 				Mode: "all", Scope: "shared", Backend: "ssh", WorkspaceAccess: "rw",
 				SSH: sshConfig{
 					Target: endpoint.Username + "@" + endpoint.Address, Command: endpoint.ClientCommand,
-					WorkspaceRoot: workspaceRoot, StrictHostKeyChecking: true, UpdateHostKeys: false,
-					IdentityFile: endpoint.IdentityFile, KnownHostsFile: endpoint.KnownHostsFile,
+					WorkspaceRoot: workspaceRoot, StrictHostKeyChecking: false, UpdateHostKeys: false,
 				},
 			},
 		}},
@@ -383,15 +380,13 @@ func validateEndpoint(endpoint core.ToolEndpoint) error {
 	}
 	paths := map[string]string{
 		"client command": endpoint.ClientCommand, "client source": endpoint.ClientSourceFile,
-		"identity": endpoint.IdentityFile, "identity source": endpoint.IdentitySourceFile,
-		"known-hosts": endpoint.KnownHostsFile, "known-hosts source": endpoint.KnownHostsSourceFile,
 	}
 	for name, path := range paths {
 		if path == "" || strings.ContainsRune(path, 0) || !filepath.IsAbs(path) || filepath.Clean(path) != path {
 			return fmt.Errorf("OpenClaw %s path must be absolute and clean", name)
 		}
 	}
-	if endpoint.ClientCommand != "/opt/aries/bin/aries-ssh-client" || endpoint.IdentityFile != "/run/aries/ssh/id_ed25519" || endpoint.KnownHostsFile != "/run/aries/ssh/known_hosts" {
+	if endpoint.ClientCommand != "/opt/aries/bin/aries-ssh-client" {
 		return errors.New("OpenClaw endpoint paths do not match the pinned bridge contract")
 	}
 	return nil

@@ -1,7 +1,7 @@
 # Supported implementations
 
 **Docker harnesses and sandboxes use the same local daemon**, with a separate
-managed Docker bridge. Runner stays on the host. Remote Docker
+managed Docker bridge and shared network per run. Runner stays on the host. Remote Docker
 servers and mixed deployment backends are unsupported. See the
 [deployment configuration](configuration.md#deployment-configuration).
 
@@ -62,10 +62,14 @@ deployment contracts accept explicit runtime placement and access settings;
 a new provider must implement their execution, connectivity, and cleanup semantics
 and be selected in composition wiring.
 
-A shared harness-facing gRPC sandbox protocol with E2B compatibility remains a
-planned target, not a specified or verified API/version contract. The implemented
-versioned gRPC bridge control API assigns and revokes borrowed sandbox access;
-harness tool traffic retains its native SSH protocol.
+The [bridge service](design/bridge.md) hosts independent sessions with one sandbox
+ID each and deployment-resolved endpoints. gRPC control and SSH clients are
+unauthenticated; one service host key is retained for the SSH handshake.
+
+E2B lifecycle semantics and a future E2B-compatible harness protocol are separate
+from the internal gRPC control transport. No E2B wire compatibility is implemented
+or verified. Current harness tool traffic retains its native SSH protocol; the
+existing control API registers, looks up and releases borrowed sandbox access.
 
 See the [deployment contract](design/deployment.md),
 [Docker implementation](implementation/docker.md),

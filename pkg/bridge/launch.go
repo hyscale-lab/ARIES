@@ -5,26 +5,21 @@ import (
 	"github.com/hyscale-lab/aries/pkg/deployment"
 )
 
-// LaunchSpec is supplied by composition wiring. Request describes bridge runtime
-// placement; Config describes the child and its independent sandbox backend.
-// Request.Workdir is the private bootstrap directory containing config.json.
-// The manager adds occurrence identity, ownership labels and task attachment.
+// LaunchSpec separates bridge placement from the borrowed sandbox backend.
+// The service supplies run identity and labels; Request.Workdir holds config.json.
 type LaunchSpec struct {
-	Request deployment.Request
-	Config  LaunchConfig
-	// RuntimeBackend and ResourceMetrics describe the bridge runtime, not the
-	// borrowed sandbox. Use "unsupported" when resource measurement is unavailable.
+	Request         deployment.Request
+	Config          LaunchConfig
 	RuntimeBackend  string
 	ResourceMetrics string
 }
 
-// LaunchConfig describes a single-use bridge runtime. Secrets reside in fixed,
-// privately staged files beside this configuration, never argv or environment.
+// LaunchConfig describes the run-owned bridge. Its host key is generated in memory.
 type LaunchConfig struct {
-	InstanceID      string            `json:"instance_id"`
+	RunID           string            `json:"run_id"`
 	BridgeType      string            `json:"bridge_type"`
-	Backend         string            `json:"backend"`                    // Sandbox execution backend, not bridge runtime placement.
-	BackendEndpoint string            `json:"backend_endpoint,omitempty"` // Interpreted by the selected execution provider.
+	Backend         string            `json:"backend"`
+	BackendEndpoint string            `json:"backend_endpoint,omitempty"`
 	Listen          core.BridgeListen `json:"listen"`
 	ControlAddress  string            `json:"control_address"`
 	OutputDir       string            `json:"output_dir"`

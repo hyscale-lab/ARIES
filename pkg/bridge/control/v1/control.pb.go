@@ -25,27 +25,27 @@ type State int32
 
 const (
 	State_STATE_UNSPECIFIED State = 0
-	State_ASSIGNING         State = 1
+	State_REGISTERING       State = 1
 	State_READY             State = 2
-	State_REVOKING          State = 3
-	State_REVOKED           State = 4
+	State_RELEASING         State = 3
+	State_RELEASED          State = 4
 )
 
 // Enum value maps for State.
 var (
 	State_name = map[int32]string{
 		0: "STATE_UNSPECIFIED",
-		1: "ASSIGNING",
+		1: "REGISTERING",
 		2: "READY",
-		3: "REVOKING",
-		4: "REVOKED",
+		3: "RELEASING",
+		4: "RELEASED",
 	}
 	State_value = map[string]int32{
 		"STATE_UNSPECIFIED": 0,
-		"ASSIGNING":         1,
+		"REGISTERING":       1,
 		"READY":             2,
-		"REVOKING":          3,
-		"REVOKED":           4,
+		"RELEASING":         3,
+		"RELEASED":          4,
 	}
 )
 
@@ -77,21 +77,12 @@ func (State) EnumDescriptor() ([]byte, []int) {
 }
 
 type Target struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	Version        uint32                 `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
-	RunId          string                 `protobuf:"bytes,2,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
-	TaskId         string                 `protobuf:"bytes,3,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
-	OccurrenceId   string                 `protobuf:"bytes,4,opt,name=occurrence_id,json=occurrenceId,proto3" json:"occurrence_id,omitempty"`
-	Backend        string                 `protobuf:"bytes,5,opt,name=backend,proto3" json:"backend,omitempty"`
-	RuntimeId      string                 `protobuf:"bytes,6,opt,name=runtime_id,json=runtimeId,proto3" json:"runtime_id,omitempty"`
-	RuntimeName    string                 `protobuf:"bytes,7,opt,name=runtime_name,json=runtimeName,proto3" json:"runtime_name,omitempty"`
-	ExpectedLabels map[string]string      `protobuf:"bytes,11,rep,name=expected_labels,json=expectedLabels,proto3" json:"expected_labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	Workdir        string                 `protobuf:"bytes,12,opt,name=workdir,proto3" json:"workdir,omitempty"`
-	ExecUser       string                 `protobuf:"bytes,13,opt,name=exec_user,json=execUser,proto3" json:"exec_user,omitempty"`
-	MaxInputBytes  int64                  `protobuf:"varint,14,opt,name=max_input_bytes,json=maxInputBytes,proto3" json:"max_input_bytes,omitempty"`
-	MaxOutputBytes int64                  `protobuf:"varint,15,opt,name=max_output_bytes,json=maxOutputBytes,proto3" json:"max_output_bytes,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RuntimeId     string                 `protobuf:"bytes,6,opt,name=runtime_id,json=runtimeId,proto3" json:"runtime_id,omitempty"`
+	Workdir       string                 `protobuf:"bytes,12,opt,name=workdir,proto3" json:"workdir,omitempty"`
+	ExecUser      string                 `protobuf:"bytes,13,opt,name=exec_user,json=execUser,proto3" json:"exec_user,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Target) Reset() {
@@ -124,60 +115,11 @@ func (*Target) Descriptor() ([]byte, []int) {
 	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *Target) GetVersion() uint32 {
-	if x != nil {
-		return x.Version
-	}
-	return 0
-}
-
-func (x *Target) GetRunId() string {
-	if x != nil {
-		return x.RunId
-	}
-	return ""
-}
-
-func (x *Target) GetTaskId() string {
-	if x != nil {
-		return x.TaskId
-	}
-	return ""
-}
-
-func (x *Target) GetOccurrenceId() string {
-	if x != nil {
-		return x.OccurrenceId
-	}
-	return ""
-}
-
-func (x *Target) GetBackend() string {
-	if x != nil {
-		return x.Backend
-	}
-	return ""
-}
-
 func (x *Target) GetRuntimeId() string {
 	if x != nil {
 		return x.RuntimeId
 	}
 	return ""
-}
-
-func (x *Target) GetRuntimeName() string {
-	if x != nil {
-		return x.RuntimeName
-	}
-	return ""
-}
-
-func (x *Target) GetExpectedLabels() map[string]string {
-	if x != nil {
-		return x.ExpectedLabels
-	}
-	return nil
 }
 
 func (x *Target) GetWorkdir() string {
@@ -194,45 +136,27 @@ func (x *Target) GetExecUser() string {
 	return ""
 }
 
-func (x *Target) GetMaxInputBytes() int64 {
-	if x != nil {
-		return x.MaxInputBytes
-	}
-	return 0
+type Metadata struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
-func (x *Target) GetMaxOutputBytes() int64 {
-	if x != nil {
-		return x.MaxOutputBytes
-	}
-	return 0
-}
-
-type AssignSandboxRequest struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	InstanceId      string                 `protobuf:"bytes,1,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
-	AssignmentId    string                 `protobuf:"bytes,2,opt,name=assignment_id,json=assignmentId,proto3" json:"assignment_id,omitempty"`
-	ProtocolVersion uint32                 `protobuf:"varint,3,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
-	Target          *Target                `protobuf:"bytes,4,opt,name=target,proto3" json:"target,omitempty"`
-	CredentialId    string                 `protobuf:"bytes,6,opt,name=credential_id,json=credentialId,proto3" json:"credential_id,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
-}
-
-func (x *AssignSandboxRequest) Reset() {
-	*x = AssignSandboxRequest{}
+func (x *Metadata) Reset() {
+	*x = Metadata{}
 	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *AssignSandboxRequest) String() string {
+func (x *Metadata) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*AssignSandboxRequest) ProtoMessage() {}
+func (*Metadata) ProtoMessage() {}
 
-func (x *AssignSandboxRequest) ProtoReflect() protoreflect.Message {
+func (x *Metadata) ProtoReflect() protoreflect.Message {
 	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -244,69 +168,100 @@ func (x *AssignSandboxRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use AssignSandboxRequest.ProtoReflect.Descriptor instead.
-func (*AssignSandboxRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use Metadata.ProtoReflect.Descriptor instead.
+func (*Metadata) Descriptor() ([]byte, []int) {
 	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *AssignSandboxRequest) GetInstanceId() string {
+func (x *Metadata) GetTaskId() string {
 	if x != nil {
-		return x.InstanceId
+		return x.TaskId
 	}
 	return ""
 }
 
-func (x *AssignSandboxRequest) GetAssignmentId() string {
+type RegisterSandboxRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SandboxId     string                 `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
+	Target        *Target                `protobuf:"bytes,2,opt,name=target,proto3" json:"target,omitempty"`
+	Metadata      *Metadata              `protobuf:"bytes,3,opt,name=metadata,proto3" json:"metadata,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RegisterSandboxRequest) Reset() {
+	*x = RegisterSandboxRequest{}
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RegisterSandboxRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RegisterSandboxRequest) ProtoMessage() {}
+
+func (x *RegisterSandboxRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[2]
 	if x != nil {
-		return x.AssignmentId
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RegisterSandboxRequest.ProtoReflect.Descriptor instead.
+func (*RegisterSandboxRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *RegisterSandboxRequest) GetSandboxId() string {
+	if x != nil {
+		return x.SandboxId
 	}
 	return ""
 }
 
-func (x *AssignSandboxRequest) GetProtocolVersion() uint32 {
-	if x != nil {
-		return x.ProtocolVersion
-	}
-	return 0
-}
-
-func (x *AssignSandboxRequest) GetTarget() *Target {
+func (x *RegisterSandboxRequest) GetTarget() *Target {
 	if x != nil {
 		return x.Target
 	}
 	return nil
 }
 
-func (x *AssignSandboxRequest) GetCredentialId() string {
+func (x *RegisterSandboxRequest) GetMetadata() *Metadata {
 	if x != nil {
-		return x.CredentialId
+		return x.Metadata
 	}
-	return ""
+	return nil
 }
 
-type AssignmentRequest struct {
+type SandboxRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	InstanceId    string                 `protobuf:"bytes,1,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
-	AssignmentId  string                 `protobuf:"bytes,2,opt,name=assignment_id,json=assignmentId,proto3" json:"assignment_id,omitempty"`
+	SandboxId     string                 `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *AssignmentRequest) Reset() {
-	*x = AssignmentRequest{}
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[2]
+func (x *SandboxRequest) Reset() {
+	*x = SandboxRequest{}
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *AssignmentRequest) String() string {
+func (x *SandboxRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*AssignmentRequest) ProtoMessage() {}
+func (*SandboxRequest) ProtoMessage() {}
 
-func (x *AssignmentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[2]
+func (x *SandboxRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -317,39 +272,30 @@ func (x *AssignmentRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use AssignmentRequest.ProtoReflect.Descriptor instead.
-func (*AssignmentRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{2}
+// Deprecated: Use SandboxRequest.ProtoReflect.Descriptor instead.
+func (*SandboxRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{3}
 }
 
-func (x *AssignmentRequest) GetInstanceId() string {
+func (x *SandboxRequest) GetSandboxId() string {
 	if x != nil {
-		return x.InstanceId
-	}
-	return ""
-}
-
-func (x *AssignmentRequest) GetAssignmentId() string {
-	if x != nil {
-		return x.AssignmentId
+		return x.SandboxId
 	}
 	return ""
 }
 
 type Endpoint struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Host          string                 `protobuf:"bytes,1,opt,name=host,proto3" json:"host,omitempty"`
 	Port          uint32                 `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
 	User          string                 `protobuf:"bytes,3,opt,name=user,proto3" json:"user,omitempty"`
 	Transport     string                 `protobuf:"bytes,4,opt,name=transport,proto3" json:"transport,omitempty"`
-	HostKey       string                 `protobuf:"bytes,5,opt,name=host_key,json=hostKey,proto3" json:"host_key,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Endpoint) Reset() {
 	*x = Endpoint{}
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[3]
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -361,7 +307,7 @@ func (x *Endpoint) String() string {
 func (*Endpoint) ProtoMessage() {}
 
 func (x *Endpoint) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[3]
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -374,14 +320,7 @@ func (x *Endpoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Endpoint.ProtoReflect.Descriptor instead.
 func (*Endpoint) Descriptor() ([]byte, []int) {
-	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{3}
-}
-
-func (x *Endpoint) GetHost() string {
-	if x != nil {
-		return x.Host
-	}
-	return ""
+	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *Endpoint) GetPort() uint32 {
@@ -405,13 +344,6 @@ func (x *Endpoint) GetTransport() string {
 	return ""
 }
 
-func (x *Endpoint) GetHostKey() string {
-	if x != nil {
-		return x.HostKey
-	}
-	return ""
-}
-
 type Artifact struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
@@ -424,7 +356,7 @@ type Artifact struct {
 
 func (x *Artifact) Reset() {
 	*x = Artifact{}
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[4]
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -436,7 +368,7 @@ func (x *Artifact) String() string {
 func (*Artifact) ProtoMessage() {}
 
 func (x *Artifact) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[4]
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -449,7 +381,7 @@ func (x *Artifact) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Artifact.ProtoReflect.Descriptor instead.
 func (*Artifact) Descriptor() ([]byte, []int) {
-	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{4}
+	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *Artifact) GetName() string {
@@ -480,86 +412,32 @@ func (x *Artifact) GetSha256() string {
 	return ""
 }
 
-type CleanupError struct {
+type SandboxAccess struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Stage         string                 `protobuf:"bytes,1,opt,name=stage,proto3" json:"stage,omitempty"`
-	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	SandboxId     string                 `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
+	State         State                  `protobuf:"varint,2,opt,name=state,proto3,enum=aries.bridge.control.v1.State" json:"state,omitempty"`
+	Endpoint      *Endpoint              `protobuf:"bytes,3,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
+	Artifacts     []*Artifact            `protobuf:"bytes,4,rep,name=artifacts,proto3" json:"artifacts,omitempty"`
+	Error         string                 `protobuf:"bytes,5,opt,name=error,proto3" json:"error,omitempty"`
+	CleanupError  string                 `protobuf:"bytes,6,opt,name=cleanup_error,json=cleanupError,proto3" json:"cleanup_error,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *CleanupError) Reset() {
-	*x = CleanupError{}
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[5]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CleanupError) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CleanupError) ProtoMessage() {}
-
-func (x *CleanupError) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[5]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CleanupError.ProtoReflect.Descriptor instead.
-func (*CleanupError) Descriptor() ([]byte, []int) {
-	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{5}
-}
-
-func (x *CleanupError) GetStage() string {
-	if x != nil {
-		return x.Stage
-	}
-	return ""
-}
-
-func (x *CleanupError) GetMessage() string {
-	if x != nil {
-		return x.Message
-	}
-	return ""
-}
-
-type Assignment struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	InstanceId    string                 `protobuf:"bytes,1,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
-	AssignmentId  string                 `protobuf:"bytes,2,opt,name=assignment_id,json=assignmentId,proto3" json:"assignment_id,omitempty"`
-	State         State                  `protobuf:"varint,3,opt,name=state,proto3,enum=aries.bridge.control.v1.State" json:"state,omitempty"`
-	Target        *Target                `protobuf:"bytes,4,opt,name=target,proto3" json:"target,omitempty"`
-	Endpoint      *Endpoint              `protobuf:"bytes,5,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
-	CleanupErrors []*CleanupError        `protobuf:"bytes,7,rep,name=cleanup_errors,json=cleanupErrors,proto3" json:"cleanup_errors,omitempty"`
-	Artifacts     []*Artifact            `protobuf:"bytes,8,rep,name=artifacts,proto3" json:"artifacts,omitempty"`
-	Diagnostics   []*CleanupError        `protobuf:"bytes,9,rep,name=diagnostics,proto3" json:"diagnostics,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *Assignment) Reset() {
-	*x = Assignment{}
+func (x *SandboxAccess) Reset() {
+	*x = SandboxAccess{}
 	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *Assignment) String() string {
+func (x *SandboxAccess) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*Assignment) ProtoMessage() {}
+func (*SandboxAccess) ProtoMessage() {}
 
-func (x *Assignment) ProtoReflect() protoreflect.Message {
+func (x *SandboxAccess) ProtoReflect() protoreflect.Message {
 	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -571,135 +449,101 @@ func (x *Assignment) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use Assignment.ProtoReflect.Descriptor instead.
-func (*Assignment) Descriptor() ([]byte, []int) {
+// Deprecated: Use SandboxAccess.ProtoReflect.Descriptor instead.
+func (*SandboxAccess) Descriptor() ([]byte, []int) {
 	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{6}
 }
 
-func (x *Assignment) GetInstanceId() string {
+func (x *SandboxAccess) GetSandboxId() string {
 	if x != nil {
-		return x.InstanceId
+		return x.SandboxId
 	}
 	return ""
 }
 
-func (x *Assignment) GetAssignmentId() string {
-	if x != nil {
-		return x.AssignmentId
-	}
-	return ""
-}
-
-func (x *Assignment) GetState() State {
+func (x *SandboxAccess) GetState() State {
 	if x != nil {
 		return x.State
 	}
 	return State_STATE_UNSPECIFIED
 }
 
-func (x *Assignment) GetTarget() *Target {
-	if x != nil {
-		return x.Target
-	}
-	return nil
-}
-
-func (x *Assignment) GetEndpoint() *Endpoint {
+func (x *SandboxAccess) GetEndpoint() *Endpoint {
 	if x != nil {
 		return x.Endpoint
 	}
 	return nil
 }
 
-func (x *Assignment) GetCleanupErrors() []*CleanupError {
-	if x != nil {
-		return x.CleanupErrors
-	}
-	return nil
-}
-
-func (x *Assignment) GetArtifacts() []*Artifact {
+func (x *SandboxAccess) GetArtifacts() []*Artifact {
 	if x != nil {
 		return x.Artifacts
 	}
 	return nil
 }
 
-func (x *Assignment) GetDiagnostics() []*CleanupError {
+func (x *SandboxAccess) GetError() string {
 	if x != nil {
-		return x.Diagnostics
+		return x.Error
 	}
-	return nil
+	return ""
+}
+
+func (x *SandboxAccess) GetCleanupError() string {
+	if x != nil {
+		return x.CleanupError
+	}
+	return ""
 }
 
 var File_pkg_bridge_control_v1_control_proto protoreflect.FileDescriptor
 
 const file_pkg_bridge_control_v1_control_proto_rawDesc = "" +
 	"\n" +
-	"#pkg/bridge/control/v1/control.proto\x12\x17aries.bridge.control.v1\"\x83\x04\n" +
-	"\x06Target\x12\x18\n" +
-	"\aversion\x18\x01 \x01(\rR\aversion\x12\x15\n" +
-	"\x06run_id\x18\x02 \x01(\tR\x05runId\x12\x17\n" +
-	"\atask_id\x18\x03 \x01(\tR\x06taskId\x12#\n" +
-	"\roccurrence_id\x18\x04 \x01(\tR\foccurrenceId\x12\x18\n" +
-	"\abackend\x18\x05 \x01(\tR\abackend\x12\x1d\n" +
+	"#pkg/bridge/control/v1/control.proto\x12\x17aries.bridge.control.v1\"\xea\x01\n" +
+	"\x06Target\x12\x1d\n" +
 	"\n" +
-	"runtime_id\x18\x06 \x01(\tR\truntimeId\x12!\n" +
-	"\fruntime_name\x18\a \x01(\tR\vruntimeName\x12\\\n" +
-	"\x0fexpected_labels\x18\v \x03(\v23.aries.bridge.control.v1.Target.ExpectedLabelsEntryR\x0eexpectedLabels\x12\x18\n" +
+	"runtime_id\x18\x06 \x01(\tR\truntimeId\x12\x18\n" +
 	"\aworkdir\x18\f \x01(\tR\aworkdir\x12\x1b\n" +
-	"\texec_user\x18\r \x01(\tR\bexecUser\x12&\n" +
-	"\x0fmax_input_bytes\x18\x0e \x01(\x03R\rmaxInputBytes\x12(\n" +
-	"\x10max_output_bytes\x18\x0f \x01(\x03R\x0emaxOutputBytes\x1aA\n" +
-	"\x13ExpectedLabelsEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\b\x10\v\"\xeb\x01\n" +
-	"\x14AssignSandboxRequest\x12\x1f\n" +
-	"\vinstance_id\x18\x01 \x01(\tR\n" +
-	"instanceId\x12#\n" +
-	"\rassignment_id\x18\x02 \x01(\tR\fassignmentId\x12)\n" +
-	"\x10protocol_version\x18\x03 \x01(\rR\x0fprotocolVersion\x127\n" +
-	"\x06target\x18\x04 \x01(\v2\x1f.aries.bridge.control.v1.TargetR\x06target\x12#\n" +
-	"\rcredential_id\x18\x06 \x01(\tR\fcredentialIdJ\x04\b\x05\x10\x06\"Y\n" +
-	"\x11AssignmentRequest\x12\x1f\n" +
-	"\vinstance_id\x18\x01 \x01(\tR\n" +
-	"instanceId\x12#\n" +
-	"\rassignment_id\x18\x02 \x01(\tR\fassignmentId\"\x7f\n" +
+	"\texec_user\x18\r \x01(\tR\bexecUserJ\x04\b\x01\x10\x06J\x04\b\a\x10\fJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10R\aversionR\x06run_idR\atask_idR\roccurrence_idR\abackendR\fruntime_nameR\x0fexpected_labelsR\x0fmax_input_bytesR\x10max_output_bytes\"#\n" +
+	"\bMetadata\x12\x17\n" +
+	"\atask_id\x18\x01 \x01(\tR\x06taskId\"\xaf\x01\n" +
+	"\x16RegisterSandboxRequest\x12\x1d\n" +
+	"\n" +
+	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\x127\n" +
+	"\x06target\x18\x02 \x01(\v2\x1f.aries.bridge.control.v1.TargetR\x06target\x12=\n" +
+	"\bmetadata\x18\x03 \x01(\v2!.aries.bridge.control.v1.MetadataR\bmetadata\"/\n" +
+	"\x0eSandboxRequest\x12\x1d\n" +
+	"\n" +
+	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\"l\n" +
 	"\bEndpoint\x12\x12\n" +
-	"\x04host\x18\x01 \x01(\tR\x04host\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\rR\x04port\x12\x12\n" +
 	"\x04user\x18\x03 \x01(\tR\x04user\x12\x1c\n" +
-	"\ttransport\x18\x04 \x01(\tR\ttransport\x12\x19\n" +
-	"\bhost_key\x18\x05 \x01(\tR\ahostKey\"b\n" +
+	"\ttransport\x18\x04 \x01(\tR\ttransportJ\x04\b\x01\x10\x02J\x04\b\x05\x10\x06R\x04hostR\bhost_key\"b\n" +
 	"\bArtifact\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x12\n" +
 	"\x04size\x18\x03 \x01(\x03R\x04size\x12\x16\n" +
-	"\x06sha256\x18\x04 \x01(\tR\x06sha256\">\n" +
-	"\fCleanupError\x12\x14\n" +
-	"\x05stage\x18\x01 \x01(\tR\x05stage\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\xde\x03\n" +
+	"\x06sha256\x18\x04 \x01(\tR\x06sha256\"\x9f\x02\n" +
+	"\rSandboxAccess\x12\x1d\n" +
 	"\n" +
-	"Assignment\x12\x1f\n" +
-	"\vinstance_id\x18\x01 \x01(\tR\n" +
-	"instanceId\x12#\n" +
-	"\rassignment_id\x18\x02 \x01(\tR\fassignmentId\x124\n" +
-	"\x05state\x18\x03 \x01(\x0e2\x1e.aries.bridge.control.v1.StateR\x05state\x127\n" +
-	"\x06target\x18\x04 \x01(\v2\x1f.aries.bridge.control.v1.TargetR\x06target\x12=\n" +
-	"\bendpoint\x18\x05 \x01(\v2!.aries.bridge.control.v1.EndpointR\bendpoint\x12L\n" +
-	"\x0ecleanup_errors\x18\a \x03(\v2%.aries.bridge.control.v1.CleanupErrorR\rcleanupErrors\x12?\n" +
-	"\tartifacts\x18\b \x03(\v2!.aries.bridge.control.v1.ArtifactR\tartifacts\x12G\n" +
-	"\vdiagnostics\x18\t \x03(\v2%.aries.bridge.control.v1.CleanupErrorR\vdiagnosticsJ\x04\b\x06\x10\a*S\n" +
+	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\x124\n" +
+	"\x05state\x18\x02 \x01(\x0e2\x1e.aries.bridge.control.v1.StateR\x05state\x12=\n" +
+	"\bendpoint\x18\x03 \x01(\v2!.aries.bridge.control.v1.EndpointR\bendpoint\x12?\n" +
+	"\tartifacts\x18\x04 \x03(\v2!.aries.bridge.control.v1.ArtifactR\tartifacts\x12\x14\n" +
+	"\x05error\x18\x05 \x01(\tR\x05error\x12#\n" +
+	"\rcleanup_error\x18\x06 \x01(\tR\fcleanupError*W\n" +
 	"\x05State\x12\x15\n" +
-	"\x11STATE_UNSPECIFIED\x10\x00\x12\r\n" +
-	"\tASSIGNING\x10\x01\x12\t\n" +
-	"\x05READY\x10\x02\x12\f\n" +
-	"\bREVOKING\x10\x03\x12\v\n" +
-	"\aREVOKED\x10\x042\xbb\x02\n" +
-	"\rBridgeControl\x12c\n" +
-	"\rAssignSandbox\x12-.aries.bridge.control.v1.AssignSandboxRequest\x1a#.aries.bridge.control.v1.Assignment\x12`\n" +
-	"\rGetAssignment\x12*.aries.bridge.control.v1.AssignmentRequest\x1a#.aries.bridge.control.v1.Assignment\x12c\n" +
-	"\x10RevokeAssignment\x12*.aries.bridge.control.v1.AssignmentRequest\x1a#.aries.bridge.control.v1.AssignmentB>Z<github.com/hyscale-lab/aries/pkg/bridge/control/v1;controlv1b\x06proto3"
+	"\x11STATE_UNSPECIFIED\x10\x00\x12\x0f\n" +
+	"\vREGISTERING\x10\x01\x12\t\n" +
+	"\x05READY\x10\x02\x12\r\n" +
+	"\tRELEASING\x10\x03\x12\f\n" +
+	"\bRELEASED\x10\x042\xbd\x02\n" +
+	"\rBridgeControl\x12j\n" +
+	"\x0fRegisterSandbox\x12/.aries.bridge.control.v1.RegisterSandboxRequest\x1a&.aries.bridge.control.v1.SandboxAccess\x12]\n" +
+	"\n" +
+	"GetSandbox\x12'.aries.bridge.control.v1.SandboxRequest\x1a&.aries.bridge.control.v1.SandboxAccess\x12a\n" +
+	"\x0eReleaseSandbox\x12'.aries.bridge.control.v1.SandboxRequest\x1a&.aries.bridge.control.v1.SandboxAccessB>Z<github.com/hyscale-lab/aries/pkg/bridge/control/v1;controlv1b\x06proto3"
 
 var (
 	file_pkg_bridge_control_v1_control_proto_rawDescOnce sync.Once
@@ -714,38 +558,34 @@ func file_pkg_bridge_control_v1_control_proto_rawDescGZIP() []byte {
 }
 
 var file_pkg_bridge_control_v1_control_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_pkg_bridge_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_pkg_bridge_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_pkg_bridge_control_v1_control_proto_goTypes = []any{
-	(State)(0),                   // 0: aries.bridge.control.v1.State
-	(*Target)(nil),               // 1: aries.bridge.control.v1.Target
-	(*AssignSandboxRequest)(nil), // 2: aries.bridge.control.v1.AssignSandboxRequest
-	(*AssignmentRequest)(nil),    // 3: aries.bridge.control.v1.AssignmentRequest
-	(*Endpoint)(nil),             // 4: aries.bridge.control.v1.Endpoint
-	(*Artifact)(nil),             // 5: aries.bridge.control.v1.Artifact
-	(*CleanupError)(nil),         // 6: aries.bridge.control.v1.CleanupError
-	(*Assignment)(nil),           // 7: aries.bridge.control.v1.Assignment
-	nil,                          // 8: aries.bridge.control.v1.Target.ExpectedLabelsEntry
+	(State)(0),                     // 0: aries.bridge.control.v1.State
+	(*Target)(nil),                 // 1: aries.bridge.control.v1.Target
+	(*Metadata)(nil),               // 2: aries.bridge.control.v1.Metadata
+	(*RegisterSandboxRequest)(nil), // 3: aries.bridge.control.v1.RegisterSandboxRequest
+	(*SandboxRequest)(nil),         // 4: aries.bridge.control.v1.SandboxRequest
+	(*Endpoint)(nil),               // 5: aries.bridge.control.v1.Endpoint
+	(*Artifact)(nil),               // 6: aries.bridge.control.v1.Artifact
+	(*SandboxAccess)(nil),          // 7: aries.bridge.control.v1.SandboxAccess
 }
 var file_pkg_bridge_control_v1_control_proto_depIdxs = []int32{
-	8,  // 0: aries.bridge.control.v1.Target.expected_labels:type_name -> aries.bridge.control.v1.Target.ExpectedLabelsEntry
-	1,  // 1: aries.bridge.control.v1.AssignSandboxRequest.target:type_name -> aries.bridge.control.v1.Target
-	0,  // 2: aries.bridge.control.v1.Assignment.state:type_name -> aries.bridge.control.v1.State
-	1,  // 3: aries.bridge.control.v1.Assignment.target:type_name -> aries.bridge.control.v1.Target
-	4,  // 4: aries.bridge.control.v1.Assignment.endpoint:type_name -> aries.bridge.control.v1.Endpoint
-	6,  // 5: aries.bridge.control.v1.Assignment.cleanup_errors:type_name -> aries.bridge.control.v1.CleanupError
-	5,  // 6: aries.bridge.control.v1.Assignment.artifacts:type_name -> aries.bridge.control.v1.Artifact
-	6,  // 7: aries.bridge.control.v1.Assignment.diagnostics:type_name -> aries.bridge.control.v1.CleanupError
-	2,  // 8: aries.bridge.control.v1.BridgeControl.AssignSandbox:input_type -> aries.bridge.control.v1.AssignSandboxRequest
-	3,  // 9: aries.bridge.control.v1.BridgeControl.GetAssignment:input_type -> aries.bridge.control.v1.AssignmentRequest
-	3,  // 10: aries.bridge.control.v1.BridgeControl.RevokeAssignment:input_type -> aries.bridge.control.v1.AssignmentRequest
-	7,  // 11: aries.bridge.control.v1.BridgeControl.AssignSandbox:output_type -> aries.bridge.control.v1.Assignment
-	7,  // 12: aries.bridge.control.v1.BridgeControl.GetAssignment:output_type -> aries.bridge.control.v1.Assignment
-	7,  // 13: aries.bridge.control.v1.BridgeControl.RevokeAssignment:output_type -> aries.bridge.control.v1.Assignment
-	11, // [11:14] is the sub-list for method output_type
-	8,  // [8:11] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	1, // 0: aries.bridge.control.v1.RegisterSandboxRequest.target:type_name -> aries.bridge.control.v1.Target
+	2, // 1: aries.bridge.control.v1.RegisterSandboxRequest.metadata:type_name -> aries.bridge.control.v1.Metadata
+	0, // 2: aries.bridge.control.v1.SandboxAccess.state:type_name -> aries.bridge.control.v1.State
+	5, // 3: aries.bridge.control.v1.SandboxAccess.endpoint:type_name -> aries.bridge.control.v1.Endpoint
+	6, // 4: aries.bridge.control.v1.SandboxAccess.artifacts:type_name -> aries.bridge.control.v1.Artifact
+	3, // 5: aries.bridge.control.v1.BridgeControl.RegisterSandbox:input_type -> aries.bridge.control.v1.RegisterSandboxRequest
+	4, // 6: aries.bridge.control.v1.BridgeControl.GetSandbox:input_type -> aries.bridge.control.v1.SandboxRequest
+	4, // 7: aries.bridge.control.v1.BridgeControl.ReleaseSandbox:input_type -> aries.bridge.control.v1.SandboxRequest
+	7, // 8: aries.bridge.control.v1.BridgeControl.RegisterSandbox:output_type -> aries.bridge.control.v1.SandboxAccess
+	7, // 9: aries.bridge.control.v1.BridgeControl.GetSandbox:output_type -> aries.bridge.control.v1.SandboxAccess
+	7, // 10: aries.bridge.control.v1.BridgeControl.ReleaseSandbox:output_type -> aries.bridge.control.v1.SandboxAccess
+	8, // [8:11] is the sub-list for method output_type
+	5, // [5:8] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_pkg_bridge_control_v1_control_proto_init() }
@@ -759,7 +599,7 @@ func file_pkg_bridge_control_v1_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_bridge_control_v1_control_proto_rawDesc), len(file_pkg_bridge_control_v1_control_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   8,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

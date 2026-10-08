@@ -142,7 +142,7 @@ func TestTaskAddressUsesTaskAttachment(t *testing.T) {
 	}
 }
 
-func TestServiceAddressOnInternalTaskNetworkIsRoleIndependent(t *testing.T) {
+func TestServiceAddressRequiresPublishedEndpoint(t *testing.T) {
 	fake := newFakeDocker()
 	m := &Manager{client: fake}
 	request := deploymentRequest()
@@ -154,12 +154,12 @@ func TestServiceAddressOnInternalTaskNetworkIsRoleIndependent(t *testing.T) {
 	fake.container.State = &container.State{Running: true}
 	fake.container.NetworkSettings = &container.NetworkSettings{Networks: map[string]*network.EndpointSettings{"task-network": {IPAddress: netip.MustParseAddr("172.22.0.4")}}}
 	got, err := m.Address(context.Background(), id, request.ServicePort)
-	if err != nil || got != "172.22.0.4:18789" {
-		t.Fatalf("private service address=%q err=%v", got, err)
+	if err == nil {
+		t.Fatalf("unpublished service was inferred from an interface: %q", got)
 	}
 	delete(fake.container.Config.Labels, "aries.component")
-	if got, err = m.Address(context.Background(), id, request.ServicePort); err != nil || got != "172.22.0.4:18789" {
-		t.Fatalf("unlabeled service address=%q err=%v", got, err)
+	if got, err = m.Address(context.Background(), id, request.ServicePort); err == nil {
+		t.Fatalf("unpublished service without labels was inferred: %q", got)
 	}
 	delete(fake.container.HostConfig.PortBindings, network.MustParsePort("18789/tcp"))
 	if _, err = m.Address(context.Background(), id, request.ServicePort); err == nil {

@@ -36,10 +36,9 @@ import (
 // deterministic host endpoint reachable through the task's Docker gateway.
 type runnerHermes struct {
 	*Manager
-	modelPort    string
-	id           string
-	endpoint     string
-	identityPath string
+	modelPort string
+	id        string
+	endpoint  string
 }
 
 func (h *runnerHermes) Start(ctx context.Context, request core.HarnessRequest) error {
@@ -49,7 +48,6 @@ func (h *runnerHermes) Start(ctx context.Context, request core.HarnessRequest) e
 	}
 	request.Model.BaseURL = "http://" + net.JoinHostPort(gateway.AdvertiseHost, h.modelPort) + "/v1"
 	h.endpoint = request.Endpoint.Address
-	h.identityPath = request.Endpoint.IdentitySourceFile
 	if err := h.Manager.Start(ctx, request); err != nil {
 		return err
 	}
@@ -260,7 +258,8 @@ func runHermesBridgeScenario(t *testing.T, cancelCommand bool, repetitions int, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	sandbox, err := tasksandbox.New(tasksandbox.Options{Deployment: provider, NewEnvironment: provider.NewTaskEnvironment, OutputDir: output})
+	runEnvironment := dockerroute.Environment(t, "hermes-runner-integration")
+	sandbox, err := tasksandbox.New(tasksandbox.Options{Deployment: provider, NewEnvironment: runEnvironment.NewTaskEnvironment, OutputDir: output})
 	if err != nil {
 		_ = provider.Close()
 		t.Fatal(err)
@@ -311,31 +310,37 @@ func runHermesBridgeScenario(t *testing.T, cancelCommand bool, repetitions int, 
 	if reasoning {
 		modelConfig.Provider, modelConfig.Model, modelConfig.ReasoningEffort = "deepseek", "deepseek-flash", "high"
 	}
+	bridgeRuntime, err := dockerdeployment.New(dockerdeployment.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientConfig, err := bridgewiring.SSHClientConfig("hermes-ssh", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	launch := bridgewiring.Launch(versions.Bridge.Image)
+	launch.RuntimeBackend, launch.ResourceMetrics = "docker", "docker-stats"
+	launch.Config.Backend = "docker"
+	launch.Config.BackendEndpoint, launch.Request.Mounts = deploymentwiring.DockerExecutionAccess("")
+	service, err := managedbridge.NewService(managedbridge.Options{RunID: "hermes-runner-integration", Placement: core.RuntimePlacement{AttachmentID: runEnvironment.NetworkName()}, Runtime: bridgeRuntime, Launch: launch, Client: clientConfig, BridgeType: "hermes-ssh", RetainRawLog: true, OutputDir: filepath.Join(output, "infrastructure", "bridge")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		if err := service.Stop(cleanup); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := service.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
 	for occurrence := 0; occurrence < repetitions; occurrence++ {
-		// A managed bridge owns exactly one occurrence, as in application wiring.
-		bridgeRuntime, err := dockerdeployment.New(dockerdeployment.Options{})
+		bridge, err := service.NewSession(output)
 		if err != nil {
 			t.Fatal(err)
 		}
-		clientConfig, err := bridgewiring.SSHClientConfig("hermes-ssh", "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		launch := bridgewiring.Launch(versions.Bridge.Image)
-		launch.RuntimeBackend, launch.ResourceMetrics = "docker", "docker-stats"
-		launch.Config.Backend = "docker"
-		launch.Config.BackendEndpoint, launch.Request.Mounts = deploymentwiring.DockerExecutionAccess("")
-		bridge, err := managedbridge.New(managedbridge.Options{Runtime: bridgeRuntime, Launch: launch, Client: clientConfig, BridgeType: "hermes-ssh", RetainRawLog: true, OutputDir: output})
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() {
-			cleanup, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-			defer cancel()
-			if err := bridge.Stop(cleanup); err != nil {
-				t.Error(err)
-			}
-		})
 		run, err := runner.New(benchmark, harness, sandbox, bridge, runner.Options{RunID: "hermes-runner-integration", OutputDir: output, Model: modelConfig, CleanupTimeout: 60 * time.Second})
 		if err != nil {
 			t.Fatal(err)
@@ -367,11 +372,8 @@ func runHermesBridgeScenario(t *testing.T, cancelCommand bool, repetitions int, 
 				t.Errorf("container %s not absent: %v", id, err)
 			}
 		}
-		if _, err := os.Stat(harness.identityPath); !os.IsNotExist(err) {
-			t.Errorf("bridge credential remains: %v", err)
-		}
-		if _, err := api.NetworkInspect(ctx, benchmark.network, client.NetworkInspectOptions{}); !errdefs.IsNotFound(err) {
-			t.Errorf("network not absent: %v", err)
+		if _, err := api.NetworkInspect(ctx, benchmark.network, client.NetworkInspectOptions{}); err != nil {
+			t.Errorf("shared run network disappeared between tasks: %v", err)
 		}
 		if !cancelCommand {
 			if len(derivedImage) > 0 {

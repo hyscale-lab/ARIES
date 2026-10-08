@@ -18,7 +18,11 @@
   Bridge runtime placement and borrowed sandbox execution are separate dependencies.
   Backend-specific execution and runtime removal belong in deployment providers;
   the shared deployment package holds contracts.
-  Bridge assignment control stays outside Runner.
+  Deployment resolves addresses for the consuming process. Protocol code consumes
+  supplied endpoints; it must not discover interfaces, construct Docker DNS names,
+  or assume that host loopback is reachable from a harness. Forward placement
+  handles opaquely. See [endpoint handoff](../docs/design/deployment.md#endpoint-handoff).
+  Shared bridge control stays outside Runner; Runner receives per-sandbox sessions.
   Shared harness mechanics live in `pkg/harness`; it must not import native
   harnesses. Keep native configuration, readiness, protocols, and results local.
   Shared SSH mechanics live in `pkg/bridge/ssh`; dialects own grammar and workspace
@@ -35,8 +39,14 @@
 
 Load → start sandbox → sanitize → start bridge → start/run harness → confirm
 harness stop → confirm bridge revocation → evaluate (live sandbox and any fresh
-evaluation sandboxes) → remove evaluation sandboxes → remove sandbox → remove
-task attachment. Record every task failure in `TaskResult.Error`.
+evaluation sandboxes) → remove evaluation sandboxes → remove sandbox → release
+logical task attachment. Record every task failure in `TaskResult.Error`.
+
+The application owns one shared bridge service and network per run. Start them
+after model preflight, before task admission. After all task cleanup, stop the
+service, finalize shared observation, remove shared connectivity and close
+transports before persisting the run result. Record shared outcomes separately
+from task counts and measurements.
 
 Each admitted occurrence gets fresh owners, even for repeated task IDs. Release
 owned resources using fresh bounded cleanup contexts after cancellation. Bridge

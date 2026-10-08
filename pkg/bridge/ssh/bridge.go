@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hyscale-lab/aries/pkg/bridge/ssh/credentials"
 	"github.com/hyscale-lab/aries/pkg/bridge/target"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/sirupsen/logrus"
@@ -31,9 +30,10 @@ const (
 // Options are the host-local inputs to one SSH bridge.
 type Options struct {
 	Dialect Dialect
-	// Credentials selects serving with controller-staged keys. No client private key enters the server.
-	Credentials *credentials.Credentials
-	// ResolveListen supplies task-local listener and harness destination settings.
+	// HostSigner is owned by the service and shared by its SSH listeners.
+	HostSigner gossh.Signer
+	SandboxID  string
+	// ResolveListen supplies the local binding. Deployment resolves reachable endpoints.
 	ResolveListen  func(context.Context) (core.BridgeListen, error)
 	OutputDir      string
 	CleanupTimeout time.Duration
@@ -51,7 +51,8 @@ type Options struct {
 type Manager struct {
 	dialect        Dialect
 	used           bool
-	credentials    *credentials.Credentials
+	hostSigner     gossh.Signer
+	sandboxID      string
 	resolveListen  func(context.Context) (core.BridgeListen, error)
 	outputDir      string
 	cleanupTimeout time.Duration
@@ -74,7 +75,7 @@ type bridgeSession struct {
 	configuration *gossh.ServerConfig
 	cancel        context.CancelFunc
 	artifactDir   string
-	knownSource   string
+	sandboxID     string
 	toolLogPath   string
 	rawLogPath    string
 	audit         *auditWriter
@@ -95,8 +96,11 @@ func New(options Options) (*Manager, error) {
 	if options.Dialect == nil {
 		return nil, errors.New("SSH dialect is required")
 	}
-	if options.Credentials == nil || options.Credentials.HostSigner == nil || options.Credentials.AuthorizedKey == nil {
-		return nil, errors.New("staged SSH credentials are required")
+	if options.HostSigner == nil {
+		return nil, errors.New("SSH host signer is required")
+	}
+	if options.SandboxID == "" {
+		return nil, errors.New("SSH sandbox ID is required")
 	}
 	if options.ResolveListen == nil {
 		return nil, errors.New("SSH bridge listen resolver is required")
@@ -118,7 +122,7 @@ func New(options Options) (*Manager, error) {
 		options.Logger = logrus.StandardLogger()
 	}
 	return &Manager{dialect: options.Dialect,
-		resolveListen: options.ResolveListen, credentials: options.Credentials,
+		resolveListen: options.ResolveListen, hostSigner: options.HostSigner, sandboxID: options.SandboxID,
 		outputDir: outputDir, cleanupTimeout: options.CleanupTimeout,
 		logger: options.Logger, openAudit: openAuditFile, omitRawLog: options.OmitRawLog,
 	}, nil
@@ -139,15 +143,15 @@ func (manager *Manager) StartTarget(ctx context.Context, sandbox target.Executor
 		return core.ToolEndpoint{}, fmt.Errorf("resolve bridge listener: %w", err)
 	}
 	bindIP := net.ParseIP(listen.BindHost)
-	if bindIP == nil || bindIP.To4() == nil || !core.ValidEndpointHost(listen.AdvertiseHost) || listen.BindPort < 0 || listen.BindPort > 65535 || listen.AdvertisePort < 0 || listen.AdvertisePort > 65535 {
-		return core.ToolEndpoint{}, errors.New("SSH bridge requires an IPv4 bind host, valid advertised host and valid ports")
+	if bindIP == nil || listen.BindPort < 0 || listen.BindPort > 65535 {
+		return core.ToolEndpoint{}, errors.New("SSH bridge requires a bind IP and valid port")
 	}
 	manager.used = true
 	session := &bridgeSession{dialect: manager.dialect,
-		sandbox: sandbox, connections: make(map[net.Conn]struct{}),
+		sandbox: sandbox, sandboxID: manager.sandboxID, connections: make(map[net.Conn]struct{}),
 		replyRequest: func(request *gossh.Request, accepted bool) error { return request.Reply(accepted, nil) },
 	}
-	session.artifactDir = filepath.Join(manager.outputDir, sandbox.TaskID(), "bridge")
+	session.artifactDir = manager.outputDir
 	fail := func(primary error) (core.ToolEndpoint, error) {
 		session.partialStart = true
 		session.revoke()
@@ -167,31 +171,15 @@ func (manager *Manager) StartTarget(ctx context.Context, sandbox target.Executor
 	if err := ensurePrivateDirectory(session.artifactDir); err != nil {
 		return fail(fmt.Errorf("create private SSH artifact directory: %w", err))
 	}
-	hostSigner, authorized := manager.credentials.HostSigner, manager.credentials.AuthorizedKey
-	session.knownSource = filepath.Join(session.artifactDir, "known_hosts")
 	session.toolLogPath = filepath.Join(session.artifactDir, "tool-calls.jsonl")
 	if !manager.omitRawLog {
 		session.rawLogPath = filepath.Join(session.artifactDir, "ssh_raw.log")
 	}
-	listener, err := net.Listen("tcp4", net.JoinHostPort(listen.BindHost, strconv.Itoa(listen.BindPort)))
+	listener, err := net.Listen("tcp", net.JoinHostPort(listen.BindHost, strconv.Itoa(listen.BindPort)))
 	if err != nil {
 		return fail(fmt.Errorf("listen on configured bridge host: %w", err))
 	}
 	session.listener = listener
-	_, port, err := net.SplitHostPort(listener.Addr().String())
-	host := listen.AdvertiseHost
-	if listen.AdvertisePort != 0 {
-		port = strconv.Itoa(listen.AdvertisePort)
-	}
-	if err != nil {
-		return fail(fmt.Errorf("parse SSH listener address: %w", err))
-	}
-	// Retain the public host key as native evidence. Harness credential locations
-	// and whether to preload this key are supplied to the controller by wiring.
-	knownLine := fmt.Sprintf("[%s]:%s %s", host, port, gossh.MarshalAuthorizedKey(hostSigner.PublicKey()))
-	if err := writeExclusivePrivate(session.knownSource, []byte(knownLine)); err != nil {
-		return fail(fmt.Errorf("write SSH known-hosts file: %w", err))
-	}
 	structured, err := manager.openAudit(session.toolLogPath)
 	if err != nil {
 		return fail(fmt.Errorf("create SSH tool log: %w", err))
@@ -206,7 +194,7 @@ func (manager *Manager) StartTarget(ctx context.Context, sandbox target.Executor
 	session.audit = newAuditWriter(structured, raw)
 	serveCtx, cancel := context.WithCancel(context.Background())
 	session.cancel = cancel
-	session.configuration = newServerConfig(hostSigner, authorized)
+	session.configuration = newServerConfig(manager.hostSigner)
 	session.wait.Add(1)
 	go session.serve(serveCtx, manager.logger)
 	if manager.afterStart != nil {
@@ -216,9 +204,9 @@ func (manager *Manager) StartTarget(ctx context.Context, sandbox target.Executor
 	}
 	manager.active = session
 	manager.stopErr = nil
-	address := net.JoinHostPort(host, port)
+	address := listener.Addr().String()
 	manager.logger.WithContext(ctx).WithFields(logrus.Fields{"address": address, "container": sandbox.ContainerName()}).Info("SSH bridge started")
-	endpoint := core.ToolEndpoint{Protocol: "ssh", Address: address, Username: lockedUsername, Workdir: sandbox.Workdir(), LogPaths: session.logPaths(), KnownHostsSourceFile: session.knownSource}
+	endpoint := core.ToolEndpoint{Protocol: "ssh", Address: address, Username: lockedUsername, Workdir: sandbox.Workdir(), LogPaths: session.logPaths()}
 	return endpoint, nil
 }
 
@@ -235,7 +223,7 @@ func (manager *Manager) Stop(ctx context.Context) error {
 	manager.mu.Lock()
 	if manager.active == nil && !manager.stopping {
 		manager.used = true
-		manager.credentials = nil
+		manager.hostSigner = nil
 		err := manager.stopErr
 		manager.mu.Unlock()
 		return err
@@ -269,7 +257,7 @@ func (manager *Manager) Stop(ctx context.Context) error {
 	manager.stopping = false
 	if err == nil {
 		manager.active = nil
-		manager.credentials = nil
+		manager.hostSigner = nil
 	}
 	close(done)
 	manager.mu.Unlock()
@@ -281,8 +269,7 @@ func (session *bridgeSession) finalize(ctx context.Context) error {
 	if session.audit != nil && !session.audit.finished() {
 		return auditErr
 	}
-	// The controller owns private client material. Retain the public host key
-	// as evidence; closing admission and joining execution happens before here.
+	// Closing admission and joining execution happens before releasing the signer.
 	session.configuration = nil
 	cleanupErr := errors.Join(
 		session.revocationError(), auditErr,

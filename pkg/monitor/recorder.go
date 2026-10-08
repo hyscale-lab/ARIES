@@ -28,6 +28,8 @@ const (
 
 // Options are the explicit inputs to one run-scoped Recorder.
 type Options struct {
+	// Scope is task (default) or run. Run scope has no task IDs.
+	Scope             string
 	RunID             string
 	TaskIDs           []string
 	OutputDir         string
@@ -40,8 +42,9 @@ type Options struct {
 	Logger            *logrus.Logger
 }
 
-// Recorder observes ARIES-owned task and harness containers without controlling them.
+// Recorder observes ARIES-owned runtimes without controlling them.
 type Recorder struct {
+	scope             string
 	runID             string
 	taskIDs           []string
 	taskSet           map[string]struct{}
@@ -93,7 +96,16 @@ func New(options Options) (*Recorder, error) {
 	if err := validateIdentity("run", options.RunID); err != nil {
 		return nil, err
 	}
-	if len(options.TaskIDs) == 0 {
+	if options.Scope == "" {
+		options.Scope = "task"
+	}
+	if options.Scope != "task" && options.Scope != "run" {
+		return nil, errors.New("invalid monitor scope")
+	}
+	if options.Scope == "run" && len(options.TaskIDs) != 0 {
+		return nil, errors.New("run monitor cannot select task IDs")
+	}
+	if options.Scope == "task" && len(options.TaskIDs) == 0 {
 		return nil, errors.New("monitor requires at least one task ID")
 	}
 	tasks := append([]string(nil), options.TaskIDs...)
@@ -107,6 +119,11 @@ func New(options Options) (*Recorder, error) {
 			return nil, fmt.Errorf("monitor task ID %q is repeated", taskID)
 		}
 		taskSet[taskID] = struct{}{}
+	}
+	if options.Scope == "run" {
+		// The empty key represents the absent task, never a fabricated task identity.
+		tasks = []string{""}
+		taskSet[""] = struct{}{}
 	}
 	if strings.TrimSpace(options.OutputDir) == "" {
 		return nil, errors.New("monitor output directory is required")
@@ -152,6 +169,7 @@ func New(options Options) (*Recorder, error) {
 		options.Logger = logrus.StandardLogger()
 	}
 	return &Recorder{
+		scope:             options.Scope,
 		runID:             options.RunID,
 		taskIDs:           tasks,
 		taskSet:           taskSet,
@@ -239,7 +257,11 @@ func (recorder *Recorder) Start(ctx context.Context) error {
 		close(done)
 		recorder.logger.WithContext(base).WithField("reason", unsupportedReason).Info("resource monitoring unsupported")
 	}
-	recorder.logger.WithContext(base).WithFields(logrus.Fields{"run": recorder.runID, "tasks": len(recorder.taskIDs)}).Info("resource monitoring started")
+	fields := logrus.Fields{"run": recorder.runID, "scope": recorder.scope}
+	if recorder.scope == "task" {
+		fields["tasks"] = len(recorder.taskIDs)
+	}
+	recorder.logger.WithContext(base).WithFields(fields).Info("resource monitoring started")
 	return nil
 }
 
@@ -314,6 +336,7 @@ func (recorder *Recorder) sample(ctx context.Context, second uint64, sampleTime 
 			return fmt.Errorf("sampled unexpected task %q", reading.TaskID)
 		}
 		sample := ResourceSample{
+			Scope: recorder.scope, RunID: recorder.runID,
 			Second: second, Time: formatArtifactTime(reading.ObservedAt), TaskID: reading.TaskID,
 			Component: reading.Component, RuntimeID: reading.RuntimeID, RuntimeName: reading.RuntimeName,
 			CPUUsageNanoseconds: reading.CPUUsageNanoseconds, CPUPercent: cpuPercent,
@@ -329,6 +352,13 @@ func (recorder *Recorder) sample(ctx context.Context, second uint64, sampleTime 
 }
 
 func (recorder *Recorder) validateReading(reading core.ResourceReading) error {
+	scope := reading.Scope
+	if scope == "" {
+		scope = "task"
+	}
+	if scope != recorder.scope || (reading.RunID != "" && reading.RunID != recorder.runID) || (scope == "run" && reading.RunID != recorder.runID) {
+		return errors.New("sampled unexpected resource scope or run")
+	}
 	if _, ok := recorder.taskSet[reading.TaskID]; !ok {
 		return fmt.Errorf("sampled unexpected task %q", reading.TaskID)
 	}
@@ -494,6 +524,7 @@ func (recorder *Recorder) finishStop(attempt *stopAttempt) {
 	for _, taskID := range recorder.taskIDs {
 		artifact := artifacts[taskID]
 		index := Index{
+			Scope:                recorder.scope,
 			SchemaVersion:        indexSchemaVersion,
 			RunID:                recorder.runID,
 			TaskID:               taskID,

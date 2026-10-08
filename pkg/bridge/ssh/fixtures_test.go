@@ -6,10 +6,8 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"strings"
-	"sync"
 	"testing"
 
-	"github.com/hyscale-lab/aries/pkg/bridge/ssh/credentials"
 	"github.com/hyscale-lab/aries/pkg/core"
 	gossh "golang.org/x/crypto/ssh"
 )
@@ -17,15 +15,9 @@ import (
 const remoteShell = "/bin/sh"
 const remoteEnv = "env"
 
-var fixtureSigners sync.Map
-
-func fixtureCredentials(t *testing.T) (*credentials.Credentials, gossh.Signer) {
+func fixtureHostSigner(t *testing.T) gossh.Signer {
 	t.Helper()
 	_, host, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, client, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,14 +25,10 @@ func fixtureCredentials(t *testing.T) (*credentials.Credentials, gossh.Signer) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer, err := gossh.NewSignerFromKey(client)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return &credentials.Credentials{HostSigner: hostSigner, AuthorizedKey: signer.PublicKey()}, signer
+	return hostSigner
 }
 func loopbackListen(context.Context) (core.BridgeListen, error) {
-	return core.BridgeListen{BindHost: "127.0.0.1", AdvertiseHost: "127.0.0.1"}, nil
+	return core.BridgeListen{BindHost: "127.0.0.1"}, nil
 }
 
 // Lifecycle fixtures use a deliberately synthetic JSON dialect; actual native

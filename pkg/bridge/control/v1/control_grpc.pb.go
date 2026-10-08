@@ -19,18 +19,18 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	BridgeControl_AssignSandbox_FullMethodName    = "/aries.bridge.control.v1.BridgeControl/AssignSandbox"
-	BridgeControl_GetAssignment_FullMethodName    = "/aries.bridge.control.v1.BridgeControl/GetAssignment"
-	BridgeControl_RevokeAssignment_FullMethodName = "/aries.bridge.control.v1.BridgeControl/RevokeAssignment"
+	BridgeControl_RegisterSandbox_FullMethodName = "/aries.bridge.control.v1.BridgeControl/RegisterSandbox"
+	BridgeControl_GetSandbox_FullMethodName      = "/aries.bridge.control.v1.BridgeControl/GetSandbox"
+	BridgeControl_ReleaseSandbox_FullMethodName  = "/aries.bridge.control.v1.BridgeControl/ReleaseSandbox"
 )
 
 // BridgeControlClient is the client API for BridgeControl service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type BridgeControlClient interface {
-	AssignSandbox(ctx context.Context, in *AssignSandboxRequest, opts ...grpc.CallOption) (*Assignment, error)
-	GetAssignment(ctx context.Context, in *AssignmentRequest, opts ...grpc.CallOption) (*Assignment, error)
-	RevokeAssignment(ctx context.Context, in *AssignmentRequest, opts ...grpc.CallOption) (*Assignment, error)
+	RegisterSandbox(ctx context.Context, in *RegisterSandboxRequest, opts ...grpc.CallOption) (*SandboxAccess, error)
+	GetSandbox(ctx context.Context, in *SandboxRequest, opts ...grpc.CallOption) (*SandboxAccess, error)
+	ReleaseSandbox(ctx context.Context, in *SandboxRequest, opts ...grpc.CallOption) (*SandboxAccess, error)
 }
 
 type bridgeControlClient struct {
@@ -41,30 +41,30 @@ func NewBridgeControlClient(cc grpc.ClientConnInterface) BridgeControlClient {
 	return &bridgeControlClient{cc}
 }
 
-func (c *bridgeControlClient) AssignSandbox(ctx context.Context, in *AssignSandboxRequest, opts ...grpc.CallOption) (*Assignment, error) {
+func (c *bridgeControlClient) RegisterSandbox(ctx context.Context, in *RegisterSandboxRequest, opts ...grpc.CallOption) (*SandboxAccess, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Assignment)
-	err := c.cc.Invoke(ctx, BridgeControl_AssignSandbox_FullMethodName, in, out, cOpts...)
+	out := new(SandboxAccess)
+	err := c.cc.Invoke(ctx, BridgeControl_RegisterSandbox_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *bridgeControlClient) GetAssignment(ctx context.Context, in *AssignmentRequest, opts ...grpc.CallOption) (*Assignment, error) {
+func (c *bridgeControlClient) GetSandbox(ctx context.Context, in *SandboxRequest, opts ...grpc.CallOption) (*SandboxAccess, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Assignment)
-	err := c.cc.Invoke(ctx, BridgeControl_GetAssignment_FullMethodName, in, out, cOpts...)
+	out := new(SandboxAccess)
+	err := c.cc.Invoke(ctx, BridgeControl_GetSandbox_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *bridgeControlClient) RevokeAssignment(ctx context.Context, in *AssignmentRequest, opts ...grpc.CallOption) (*Assignment, error) {
+func (c *bridgeControlClient) ReleaseSandbox(ctx context.Context, in *SandboxRequest, opts ...grpc.CallOption) (*SandboxAccess, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Assignment)
-	err := c.cc.Invoke(ctx, BridgeControl_RevokeAssignment_FullMethodName, in, out, cOpts...)
+	out := new(SandboxAccess)
+	err := c.cc.Invoke(ctx, BridgeControl_ReleaseSandbox_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -75,9 +75,9 @@ func (c *bridgeControlClient) RevokeAssignment(ctx context.Context, in *Assignme
 // All implementations must embed UnimplementedBridgeControlServer
 // for forward compatibility.
 type BridgeControlServer interface {
-	AssignSandbox(context.Context, *AssignSandboxRequest) (*Assignment, error)
-	GetAssignment(context.Context, *AssignmentRequest) (*Assignment, error)
-	RevokeAssignment(context.Context, *AssignmentRequest) (*Assignment, error)
+	RegisterSandbox(context.Context, *RegisterSandboxRequest) (*SandboxAccess, error)
+	GetSandbox(context.Context, *SandboxRequest) (*SandboxAccess, error)
+	ReleaseSandbox(context.Context, *SandboxRequest) (*SandboxAccess, error)
 	mustEmbedUnimplementedBridgeControlServer()
 }
 
@@ -88,14 +88,14 @@ type BridgeControlServer interface {
 // pointer dereference when methods are called.
 type UnimplementedBridgeControlServer struct{}
 
-func (UnimplementedBridgeControlServer) AssignSandbox(context.Context, *AssignSandboxRequest) (*Assignment, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method AssignSandbox not implemented")
+func (UnimplementedBridgeControlServer) RegisterSandbox(context.Context, *RegisterSandboxRequest) (*SandboxAccess, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RegisterSandbox not implemented")
 }
-func (UnimplementedBridgeControlServer) GetAssignment(context.Context, *AssignmentRequest) (*Assignment, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetAssignment not implemented")
+func (UnimplementedBridgeControlServer) GetSandbox(context.Context, *SandboxRequest) (*SandboxAccess, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetSandbox not implemented")
 }
-func (UnimplementedBridgeControlServer) RevokeAssignment(context.Context, *AssignmentRequest) (*Assignment, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RevokeAssignment not implemented")
+func (UnimplementedBridgeControlServer) ReleaseSandbox(context.Context, *SandboxRequest) (*SandboxAccess, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReleaseSandbox not implemented")
 }
 func (UnimplementedBridgeControlServer) mustEmbedUnimplementedBridgeControlServer() {}
 func (UnimplementedBridgeControlServer) testEmbeddedByValue()                       {}
@@ -118,56 +118,56 @@ func RegisterBridgeControlServer(s grpc.ServiceRegistrar, srv BridgeControlServe
 	s.RegisterService(&BridgeControl_ServiceDesc, srv)
 }
 
-func _BridgeControl_AssignSandbox_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(AssignSandboxRequest)
+func _BridgeControl_RegisterSandbox_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RegisterSandboxRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(BridgeControlServer).AssignSandbox(ctx, in)
+		return srv.(BridgeControlServer).RegisterSandbox(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: BridgeControl_AssignSandbox_FullMethodName,
+		FullMethod: BridgeControl_RegisterSandbox_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BridgeControlServer).AssignSandbox(ctx, req.(*AssignSandboxRequest))
+		return srv.(BridgeControlServer).RegisterSandbox(ctx, req.(*RegisterSandboxRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BridgeControl_GetAssignment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(AssignmentRequest)
+func _BridgeControl_GetSandbox_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SandboxRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(BridgeControlServer).GetAssignment(ctx, in)
+		return srv.(BridgeControlServer).GetSandbox(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: BridgeControl_GetAssignment_FullMethodName,
+		FullMethod: BridgeControl_GetSandbox_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BridgeControlServer).GetAssignment(ctx, req.(*AssignmentRequest))
+		return srv.(BridgeControlServer).GetSandbox(ctx, req.(*SandboxRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BridgeControl_RevokeAssignment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(AssignmentRequest)
+func _BridgeControl_ReleaseSandbox_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SandboxRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(BridgeControlServer).RevokeAssignment(ctx, in)
+		return srv.(BridgeControlServer).ReleaseSandbox(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: BridgeControl_RevokeAssignment_FullMethodName,
+		FullMethod: BridgeControl_ReleaseSandbox_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BridgeControlServer).RevokeAssignment(ctx, req.(*AssignmentRequest))
+		return srv.(BridgeControlServer).ReleaseSandbox(ctx, req.(*SandboxRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -180,16 +180,16 @@ var BridgeControl_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*BridgeControlServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "AssignSandbox",
-			Handler:    _BridgeControl_AssignSandbox_Handler,
+			MethodName: "RegisterSandbox",
+			Handler:    _BridgeControl_RegisterSandbox_Handler,
 		},
 		{
-			MethodName: "GetAssignment",
-			Handler:    _BridgeControl_GetAssignment_Handler,
+			MethodName: "GetSandbox",
+			Handler:    _BridgeControl_GetSandbox_Handler,
 		},
 		{
-			MethodName: "RevokeAssignment",
-			Handler:    _BridgeControl_RevokeAssignment_Handler,
+			MethodName: "ReleaseSandbox",
+			Handler:    _BridgeControl_ReleaseSandbox_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

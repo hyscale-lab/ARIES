@@ -32,7 +32,7 @@ func testSigner(t *testing.T) gossh.Signer {
 
 func serveClientTest(t *testing.T, handle func(gossh.Channel, <-chan *gossh.Request)) Config {
 	t.Helper()
-	host, identity := testSigner(t), testSigner(t)
+	host := testSigner(t)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -48,12 +48,7 @@ func serveClientTest(t *testing.T, handle func(gossh.Channel, <-chan *gossh.Requ
 		defer raw.Close()
 		stop := context.AfterFunc(ctx, func() { _ = raw.Close() })
 		defer stop()
-		config := &gossh.ServerConfig{PublicKeyCallback: func(_ gossh.ConnMetadata, key gossh.PublicKey) (*gossh.Permissions, error) {
-			if !bytes.Equal(key.Marshal(), identity.PublicKey().Marshal()) {
-				return nil, errors.New("wrong identity")
-			}
-			return nil, nil
-		}}
+		config := &gossh.ServerConfig{NoClientAuth: true}
 		config.AddHostKey(host)
 		conn, channels, requests, err := gossh.NewServerConn(raw, config)
 		if err != nil {
@@ -79,7 +74,7 @@ func serveClientTest(t *testing.T, handle func(gossh.Channel, <-chan *gossh.Requ
 			t.Error("SSH fixture did not stop")
 		}
 	})
-	return Config{Address: listener.Addr().String(), User: "aries", Identity: identity, HostKey: host.PublicKey()}
+	return Config{Address: listener.Addr().String(), User: "aries"}
 }
 
 func TestRunForwardsExactCommandAndBinaryStreamsThroughEOF(t *testing.T) {
@@ -124,15 +119,6 @@ func TestRunForwardsExactCommandAndBinaryStreamsThroughEOF(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("remote command executed locally: %v", err)
-	}
-}
-
-func TestRunRejectsWrongHostKey(t *testing.T) {
-	config := serveClientTest(t, func(gossh.Channel, <-chan *gossh.Request) { t.Error("exec admitted with wrong host key") })
-	config.HostKey = testSigner(t).PublicKey()
-	code, err := Run(context.Background(), config, "true", io.NopCloser(strings.NewReader("")), io.Discard, io.Discard)
-	if code != 255 || err == nil || !strings.Contains(err.Error(), "host-key") {
-		t.Fatalf("code=%d err=%v", code, err)
 	}
 }
 
@@ -234,9 +220,8 @@ func TestRunCancellationDuringHandshake(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	returned := make(chan error, 1)
-	key := testSigner(t)
 	go func() {
-		_, err := Run(ctx, Config{Address: listener.Addr().String(), User: "aries", Identity: key, HostKey: key.PublicKey()}, "x", io.NopCloser(strings.NewReader("")), io.Discard, io.Discard)
+		_, err := Run(ctx, Config{Address: listener.Addr().String(), User: "aries"}, "x", io.NopCloser(strings.NewReader("")), io.Discard, io.Discard)
 		returned <- err
 	}()
 	<-connected

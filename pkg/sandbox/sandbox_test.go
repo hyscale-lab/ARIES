@@ -49,8 +49,8 @@ type fakeEnvironment struct {
 	failValidationAt int
 }
 
-func (e *fakeEnvironment) Start(_ context.Context, r core.SandboxRequest) (core.HarnessConnectivity, error) {
-	e.f.environmentRequest = r
+func (e *fakeEnvironment) Start(_ context.Context, r deployment.TaskEnvironmentRequest) (core.HarnessConnectivity, error) {
+	e.f.environmentRequest = r.SandboxRequest
 	return core.HarnessConnectivity{Placement: core.RuntimePlacement{AttachmentID: "private-network"}}, e.startErr
 }
 func (e *fakeEnvironment) Validate(context.Context) error {
@@ -151,7 +151,7 @@ func TestSharedDeploymentReceivesSandboxPolicy(t *testing.T) {
 	if r.Workdir != "/work" || !r.Init || !r.NoNewPrivileges || !r.AllowImageVolumes || r.StorageMB != 64 || r.GPUs != 1 || *r.CPU != 0.5 || *r.MemoryMB != 32 {
 		t.Fatalf("lost policy: %+v", r)
 	}
-	if !reflect.DeepEqual(r.Entrypoint, []string{"/bin/sleep"}) || !reflect.DeepEqual(r.Args, []string{"infinity"}) || !reflect.DeepEqual(r.NetworkAliases, []string{networkAlias}) {
+	if !reflect.DeepEqual(r.Entrypoint, []string{"/bin/sleep"}) || !reflect.DeepEqual(r.Args, []string{"infinity"}) || len(r.NetworkAliases) != 0 {
 		t.Fatalf("runtime: %+v", r)
 	}
 	if r.Placement.AttachmentID != s.Connectivity().Placement.AttachmentID || f.environmentRequest.Environment.AllowNetwork || r.Labels["aries.component"] != "sandbox" || f.environmentRequest.RunID != "run" {
@@ -224,7 +224,7 @@ func TestStopConcurrentRetryAndOwnership(t *testing.T) {
 	if s.owner.Stop(context.Background(), s) == nil {
 		t.Fatal("lost stop failure")
 	}
-	if !s.containerOwned || !s.networkOwned || f.networkStops != 0 {
+	if !s.containerOwned || !s.environmentOwned || f.networkStops != 0 {
 		t.Fatal("lost ownership")
 	}
 	f.stopErr = nil

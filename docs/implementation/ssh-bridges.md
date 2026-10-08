@@ -1,40 +1,41 @@
 # SSH bridge implementations
 
 The managed bridges implement the [ToolBridge contract](../design/bridge.md).
-They authenticate temporary SSH clients and forward accepted commands through
+They accept unauthenticated SSH clients and forward accepted commands through
 the sandbox streaming capability; Docker execution is supplied by the sandbox
 deployment through the Moby SDK.
 
 The [native-serving contract](../../pkg/bridge/bridge.go) separates protocol
 serving from the managed controller. One [SSH engine](../../pkg/bridge/ssh/bridge.go)
-owns listener authentication, connections, streams, audit persistence and cleanup.
+owns listeners, connections, streams, audit persistence and cleanup. The run's
+shared bridge service generates one in-memory host key for the SSH handshake
+and uses it across all sandbox listeners; clients need no keys or passwords.
 The OpenClaw and Hermes dialects only interpret native requests and prepare
 commands; neither owns sandbox lifecycle or a separate SSH server implementation.
 
 OpenClaw's pinned container lacks an SSH binary, so ARIES stages the static Go
 `aries-ssh-client` at `/opt/aries/bin/aries-ssh-client`. The
-[OpenClaw client](../../pkg/bridge/ssh/openclaw/client) verifies the assigned host
-key and forwards the remote command and streams unchanged. It validates its supported invocation
+[OpenClaw client](../../pkg/bridge/ssh/openclaw/client) forwards the remote command
+and streams unchanged without client authentication or host-key pinning. It validates its supported invocation
 and private configuration, but does not parse shell grammar or translate paths.
 The client owns OpenClaw's invocation/configuration subset and does not import
 the server's command grammar. Shared SSH serving and root bridge lifecycle do not
 import this harness-specific client. The server dialect is authoritative for
-command acceptance. Previously client-side grammar refusals now reach the server
-and produce rejection evidence without
-executing in the sandbox. Hermes continues using its image's native OpenSSH.
+command acceptance. Refused commands produce server-side rejection evidence
+without executing in the sandbox. Hermes uses its image's native OpenSSH.
 
 The bridge runs the SSH server; `aries-ssh-client` is the separate client inside
 the OpenClaw harness. Its argument parser recognizes the pinned invocation
 `-F CONFIG -T -o RequestTTY=no openclaw-sandbox REMOTE_COMMAND`. This exact order
 is a limitation of the supported client CLI, not an SSH protocol requirement.
 The parser extracts the remote command unchanged. Configuration loading checks
-the endpoint and private files; the server dialect validates the command after
+the endpoint and OpenClaw's generated private config; the server dialect validates the command after
 receiving the SSH exec request. Unsupported client options are rejected rather
 than silently ignored.
 
 ## OpenClaw SSH bridge
 
-The current pair-specific OpenClaw SSH bridge adapts OpenClaw's pinned SSH
+The OpenClaw SSH dialect adapts OpenClaw's pinned SSH
 behavior to a narrow streaming capability of the Docker sandbox. It does not
 create a persistent workspace alias in the evaluated environment. Structured
 executed-command records and lossless wire-side input follow the
@@ -59,13 +60,15 @@ command script is unaffected.
 The Hermes dialect shares the SSH engine with OpenClaw while retaining its
 different command grammar and request policy. Hermes
 runs OpenSSH itself, so this bridge stages no client helper and supplies no
-client command; it hands over only a generated identity. Hermes forces
+client command. ARIES sets no `TERMINAL_SSH_KEY` and stages no client identity.
+The pinned Hermes implementation adds `-i` only when a key path is configured.
+Hermes retains its native
 `StrictHostKeyChecking=accept-new` and offers no way to preload a known-hosts
-file, so it pins the generated host key on first use; the bridge retains that
-key as evidence rather than implying a guarantee it cannot enforce.
+file. That first-use behavior works with the service's stable host key, including
+reconnections. ARIES supplies no known-hosts file and keeps no host-key artifact.
 
 Recorded against Hermes v2026.5.29.2 and re-verified unchanged against
-v2026.8.3, the accepted grammar is exactly four payload shapes: the two fixed
+v2026.8.31, the accepted grammar is exactly four payload shapes: the two fixed
 bootstrap probes `echo 'SSH connection established'` and `echo $HOME`, and
 `bash -c` / `bash -l -c` with one canonically `shlex.quote`-encoded script.
 A harness may open more than one SSH session per run — v2026.8.3 opens two —
@@ -99,52 +102,55 @@ evidence separates policy from a protocol violation.
 
 ## Source and limitations
 
-Runner owns a managed bridge controller. Each occurrence gets a separate
-`aries-bridge` container, and that child owns the native SSH server.
-The sandbox exports a versioned fixed-target descriptor. Its borrowed adapter
-opens its own deployment client, validates immutable runtime identity and task
-ownership, and exposes streaming execution without sandbox creation or deletion.
+The application owns one `aries-bridge` service and one shared Docker network
+per run. Each Runner receives a fresh bridge session. Registering a sandbox
+creates its own SSH listener, borrowed executor, audit writer, and evidence
+directory inside that service. Releasing it leaves other sessions and the
+service available, including when there are no active sessions.
+
+The sandbox exports its stable `sandbox_id` and exact deployment binding. Its
+borrowed adapter validates immutable runtime identity and task ownership through
+the service's injected deployment backend and exposes streaming execution
+without sandbox creation or deletion. Child wiring owns that backend client.
 Tool traffic never calls back into Runner. Command validation, user defaults,
 and workdir defaults use the same sandbox helper as direct sandbox execution.
-Network ownership follows the
+Deployment resolves the harness-facing endpoint from the shared runtime and the
+listener's actual port. The native server reports its local binding without
+discovering a container IP or choosing Docker routing. Network ownership follows the
 [task-environment contract](../design/deployment.md#taskenvironment-operations-and-ownership).
 
-The controller stages the authorized SSH client public key and SSH server private
-key; the client private key stays local for staging into the harness. Assignment
-control uses plaintext, unauthenticated gRPC, without TLS certificates or bearer
-tokens. It remains separate from authenticated SSH tool traffic. One instance
-accepts one assignment, retains its identity after failed admission or revocation, and
-cannot be reused. Runner explicitly revokes the assignment during task cleanup;
-the bridge does not expire assignments or monitor controller liveness. Caller
-timeouts do not cancel the service's ownership of admission or cleanup. A lost
-response is reconciled using the original assignment ID.
-If status confirms that assignment was never reserved, the controller resubmits
-the identical request on the same instance. Instance, assignment, and target
-validation errors and other definitive errors do not trigger replay.
-Historical admission and cleanup diagnostics remain available separately from
-active cleanup errors, so a confirmed cleanup retry can finish successfully.
-The bounded collection/exit interval starts when revocation begins, including
-failed cleanup attempts. SSH bootstrap files are erased on revocation attempts
-and every service exit, including cleanup timeouts. Evidence remains available
-for collection.
-An abrupt Runner crash can leave owned containers and credentials behind and
-may require operator cleanup. There is no heartbeat or parent-death replacement
-for explicit lifecycle cleanup.
+Control uses plaintext, unauthenticated gRPC with three operations:
+`RegisterSandbox`, `GetSandbox`, and `ReleaseSandbox`. Registration supplies the
+target binding and task metadata once; subsequent calls use only `sandbox_id`.
+The service keeps independent registration and release state for each sandbox.
+Caller timeouts do not cancel service-owned admission or cleanup. A lost
+registration response is reconciled by looking up the same sandbox; only a
+confirmed absent registration permits resubmission of the identical request.
+Definitive target or registration errors do not trigger replay.
+
+There are no SSH client credential files, leases, or controller-liveness checks.
+Runner explicitly releases its session during task cleanup. The run owner stops
+the shared service after tasks finish and removes the network after its
+containers are gone. An abrupt controller crash can leave owned runtimes and
+networks requiring operator cleanup.
 
 Stop closes tool admission and bridge-owned listeners/connections/handlers,
-finalizes and collects evidence, and confirms bridge runtime removal. Harness
+finalizes and collects that sandbox's evidence. Service shutdown separately
+confirms shared runtime removal. Harness
 completion is authoritative for completed tool calls; revocation neither scans
 nor kills sandbox processes. The live sandbox remains available for evaluation.
 If a child exits before any harness receives access, the controller can confirm
-access closure from its stopped state and finish cleaning up its runtime and
-credentials. If access was exposed, an exit without finalized evidence remains
+access closure from its stopped state. If access was exposed, an exit without finalized evidence remains
 an error even after runtime removal. This is an evidence failure, not a requirement
 to prove sandbox processes have stopped. Remote artifact names are checked and
 mapped into local bridge evidence paths; remote
 absolute paths are never exposed as local files. Failed cleanup retains ownership
 for retry.
-The controller retains the public host key as local `known_hosts` evidence for
-both protocols; Hermes still uses its native first-use trust behavior.
+Each structured and raw tool record carries `sandbox_id` and that sandbox's
+local sequence number, alongside run/task and exact runtime metadata. Evidence
+is collected into the task's `bridge/` directory. Shared runtime ownership is
+recorded under `infrastructure/bridge/`; per-task `bridge/runtime.json` records
+the session's sandbox and target binding to that shared runtime.
 
 The wire contract is [control.proto](../../pkg/bridge/control/v1/control.proto).
 `make proto-tools` installs the pinned compiler/plugins and verifies the compiler
@@ -157,5 +163,3 @@ See the [OpenClaw dialect](../../pkg/bridge/ssh/openclaw/dialect.go),
 [Hermes grammar](../../pkg/bridge/ssh/hermes/grammar.go).
 Shared engine and dialect tests cover accepted commands, private evidence,
 revocation, cancellation, and denied sync.
-The shared harness protocol and remaining deployment roadmap is listed under
-[planned targets](../supported.md#roadmap); it is not current bridge support.

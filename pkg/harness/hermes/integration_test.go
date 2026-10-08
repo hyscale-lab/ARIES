@@ -76,19 +76,11 @@ func TestHarnessStartsRealHermesContainerAndStopsPositively(t *testing.T) {
 	outputDir := t.TempDir()
 	manager := integrationManager(t, outputDir)
 
-	identityDir := t.TempDir()
-	identityPath := filepath.Join(identityDir, "id_ed25519")
-	if err := os.WriteFile(identityPath, []byte("-----BEGIN PRIVATE KEY-----\nintegration\n-----END PRIVATE KEY-----\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(identityPath, 0o600); err != nil {
-		t.Fatal(err)
-	}
 	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{Placement: core.RuntimePlacement{AttachmentID: "bridge"}},
 		RunID: "integration-run", TaskID: "integration-task",
 		Endpoint: core.ToolEndpoint{
 			Protocol: "ssh", Address: "127.0.0.1:2222", Username: "aries",
-			IdentityFile: identityContainerFS, IdentitySourceFile: identityPath, Workdir: "/app",
+			Workdir: "/app",
 		},
 		Model: core.ModelConfig{Provider: "deepseek", BaseURL: "https://api.deepseek.com", Model: "deepseek-flash", APIKeyEnv: "DEEPSEEK_API_KEY"},
 	}

@@ -172,6 +172,8 @@ func rawRecord(audit requestAudit, stdinBytes int64, stdin []byte, status string
 }
 
 func (session *bridgeSession) writeRecord(record toolCallRecord, raw rawSSHRecord) {
+	record.SandboxID = session.sandboxID
+	raw.SandboxID = session.sandboxID
 	record.RunID = session.sandbox.RunID()
 	record.TaskID = session.sandbox.TaskID()
 	raw.RunID = session.sandbox.RunID()

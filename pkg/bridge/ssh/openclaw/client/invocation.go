@@ -18,13 +18,11 @@ import (
 )
 
 const (
-	identityContainerPath   = "/run/aries/ssh/id_ed25519"
-	knownHostsContainerPath = "/run/aries/ssh/known_hosts"
-	lockedHostAlias         = "openclaw-sandbox"
-	lockedUsername          = "aries"
-	lockedConnectTimeout    = 5 * time.Second
-	lockedKeepalive         = 15 * time.Second
-	maxClientFile           = 64 << 10
+	lockedHostAlias      = "openclaw-sandbox"
+	lockedUsername       = "aries"
+	lockedConnectTimeout = 5 * time.Second
+	lockedKeepalive      = 15 * time.Second
+	maxClientFile        = 64 << 10
 )
 
 type clientInvocation struct {
@@ -118,7 +116,7 @@ func loadClientConfig(path string) (clientConfig, error) {
 		return clientConfig{}, fmt.Errorf("read SSH config: %w", err)
 	}
 	lines := strings.Split(strings.TrimSuffix(string(content), "\n"), "\n")
-	if !strings.HasSuffix(string(content), "\n") || len(lines) != 13 {
+	if !strings.HasSuffix(string(content), "\n") || len(lines) != 11 {
 		return clientConfig{}, errors.New("SSH config does not exactly match the pinned directive count")
 	}
 	const hostPrefix = "  HostName "
@@ -142,12 +140,10 @@ func loadClientConfig(path string) (clientConfig, error) {
 		"  ConnectTimeout 5",
 		"  ServerAliveInterval 15",
 		"  ServerAliveCountMax 3",
-		"  StrictHostKeyChecking yes",
+		"  StrictHostKeyChecking no",
 		"  UpdateHostKeys no",
 		"  User " + lockedUsername,
-		"  UserKnownHostsFile " + knownHostsContainerPath,
-		"  IdentityFile " + identityContainerPath,
-		"  IdentitiesOnly yes",
+		"  UserKnownHostsFile /dev/null",
 	}
 	if string(content) != strings.Join(want, "\n")+"\n" {
 		return clientConfig{}, errors.New("SSH config does not exactly match the pinned OpenClaw directive order and values")

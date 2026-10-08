@@ -27,6 +27,7 @@ type SandboxInstance struct {
 }
 
 type Wiring struct {
+	NewInfrastructure    func(config.Config, string, string, *logrus.Logger) (*RunInfrastructure, error)
 	PrepareBridge        func(context.Context, config.Config) error
 	PrepareBackend       func(config.Config, string) (PreparedBackend, error)
 	ValidateComponents   func(config.Config) error
@@ -232,14 +233,16 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 	completed := make(chan error, 1)
 	go func() {
 		completed <- executeAndRecord(runCtx, func(executionCtx context.Context) (core.RunResult, error) {
-			return runProfile(executionCtx, cfg.Name, runID, cfg.Benchmark.Tasks, cfg.Execution.Concurrency, cfg.Execution.Loop, schedule,
-				func(taskCtx context.Context, occurrence taskOccurrence) (core.RunResult, error) {
-					experiment, err := buildTaskExperiment(cfg, prepared.Model, prepared.EffectiveGPUIndices, runID, outputRoot, occurrence.logicalID, occurrence.executionID, harnessLookup, logger, dependencies.Wiring)
-					if err != nil {
-						return core.RunResult{}, err
-					}
-					return experiment.Run(taskCtx)
-				})
+			return runWithInfrastructure(executionCtx, cfg, runID, outputRoot, logger, dependencies.Wiring, func(executionCtx context.Context, taskWiring Wiring) (core.RunResult, error) {
+				return runProfile(executionCtx, cfg.Name, runID, cfg.Benchmark.Tasks, cfg.Execution.Concurrency, cfg.Execution.Loop, schedule,
+					func(taskCtx context.Context, occurrence taskOccurrence) (core.RunResult, error) {
+						experiment, err := buildTaskExperiment(cfg, prepared.Model, prepared.EffectiveGPUIndices, runID, outputRoot, occurrence.logicalID, occurrence.executionID, harnessLookup, logger, taskWiring)
+						if err != nil {
+							return core.RunResult{}, err
+						}
+						return experiment.Run(taskCtx)
+					})
+			})
 		}, outputRoot, stdout)
 	}()
 	if runtime == nil {

@@ -3,46 +3,34 @@ package aries.bridge.control.v1;
 option go_package = "github.com/hyscale-lab/aries/pkg/bridge/control/v1;controlv1";
 
 service BridgeControl {
-  rpc AssignSandbox(AssignSandboxRequest) returns (Assignment);
-  rpc GetAssignment(AssignmentRequest) returns (Assignment);
-  rpc RevokeAssignment(AssignmentRequest) returns (Assignment);
+  rpc RegisterSandbox(RegisterSandboxRequest) returns (SandboxAccess);
+  rpc GetSandbox(SandboxRequest) returns (SandboxAccess);
+  rpc ReleaseSandbox(SandboxRequest) returns (SandboxAccess);
 }
-enum State { STATE_UNSPECIFIED = 0; ASSIGNING = 1; READY = 2; REVOKING = 3; REVOKED = 4; }
+enum State { STATE_UNSPECIFIED = 0; REGISTERING = 1; READY = 2; RELEASING = 3; RELEASED = 4; }
 message Target {
-  uint32 version = 1;
-  string run_id = 2;
-  string task_id = 3;
-  string occurrence_id = 4;
-  string backend = 5;
+  reserved 1 to 5, 7 to 11, 14, 15;
+  reserved "version", "run_id", "task_id", "occurrence_id", "backend", "runtime_name", "expected_labels", "max_input_bytes", "max_output_bytes";
   string runtime_id = 6;
-  string runtime_name = 7;
-  reserved 8 to 10;
-  map<string,string> expected_labels = 11;
   string workdir = 12;
   string exec_user = 13;
-  int64 max_input_bytes = 14;
-  int64 max_output_bytes = 15;
 }
-message AssignSandboxRequest {
-  string instance_id = 1;
-  string assignment_id = 2;
-  uint32 protocol_version = 3;
-  Target target = 4;
-  reserved 5;
-  string credential_id = 6;
+message Metadata { string task_id = 1; }
+message RegisterSandboxRequest { string sandbox_id = 1; Target target = 2; Metadata metadata = 3; }
+message SandboxRequest { string sandbox_id = 1; }
+message Endpoint {
+  reserved 1, 5;
+  reserved "host", "host_key";
+  uint32 port = 2;
+  string user = 3;
+  string transport = 4;
 }
-message AssignmentRequest { string instance_id = 1; string assignment_id = 2; }
-message Endpoint { string host = 1; uint32 port = 2; string user = 3; string transport = 4; string host_key = 5; }
 message Artifact { string name = 1; string status = 2; int64 size = 3; string sha256 = 4; }
-message CleanupError { string stage = 1; string message = 2; }
-message Assignment {
-  string instance_id = 1;
-  string assignment_id = 2;
-  State state = 3;
-  Target target = 4;
-  Endpoint endpoint = 5;
-  reserved 6;
-  repeated CleanupError cleanup_errors = 7;
-  repeated Artifact artifacts = 8;
-  repeated CleanupError diagnostics = 9;
+message SandboxAccess {
+  string sandbox_id = 1;
+  State state = 2;
+  Endpoint endpoint = 3;
+  repeated Artifact artifacts = 4;
+  string error = 5;
+  string cleanup_error = 6;
 }

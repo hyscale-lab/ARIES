@@ -6,12 +6,12 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"syscall"
 	"testing"
 	"time"
 
-	"github.com/hyscale-lab/aries/pkg/bridge/ssh/credentials"
+	"crypto/ed25519"
+	"crypto/rand"
 	sshclient "github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw/client"
 	gossh "golang.org/x/crypto/ssh"
 )
@@ -22,15 +22,7 @@ func TestInheritedStdinCanCloseWhileHarnessKeepsInputOpen(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		key, err := os.ReadFile(os.Getenv("ARIES_STDIN_KEY"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		signer, err := gossh.ParsePrivateKey(key)
-		if err != nil {
-			t.Fatal(err)
-		}
-		code, err := sshclient.Run(context.Background(), sshclient.Config{Address: os.Getenv("ARIES_STDIN_SERVER"), User: "aries", Identity: signer, HostKey: signer.PublicKey()}, "exit without consuming stdin", input, io.Discard, io.Discard)
+		code, err := sshclient.Run(context.Background(), sshclient.Config{Address: os.Getenv("ARIES_STDIN_SERVER"), User: "aries"}, "exit without consuming stdin", input, io.Discard, io.Discard)
 		if err != nil || code != 9 {
 			t.Fatalf("early remote exit: code=%d err=%v", code, err)
 		}
@@ -42,8 +34,8 @@ func TestInheritedStdinCanCloseWhileHarnessKeepsInputOpen(t *testing.T) {
 			defer cancel()
 			command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestInheritedStdinCanCloseWhileHarnessKeepsInputOpen$")
 			command.Env = append(os.Environ(), "ARIES_STDIN_SUBPROCESS=1")
-			key, address := earlyExitServer(t, ctx)
-			command.Env = append(command.Env, "ARIES_STDIN_KEY="+key, "ARIES_STDIN_SERVER="+address)
+			address := earlyExitServer(t, ctx)
+			command.Env = append(command.Env, "ARIES_STDIN_SERVER="+address)
 			var input, writer *os.File
 			if kind == "pipe" {
 				var err error
@@ -70,18 +62,14 @@ func TestInheritedStdinCanCloseWhileHarnessKeepsInputOpen(t *testing.T) {
 	}
 }
 
-func earlyExitServer(t *testing.T, ctx context.Context) (string, string) {
+func earlyExitServer(t *testing.T, ctx context.Context) string {
 	t.Helper()
-	hostPrivate, _, err := credentials.GenerateIdentity()
+	_, hostPrivate, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer, err := gossh.ParsePrivateKey(hostPrivate)
+	signer, err := gossh.NewSignerFromKey(hostPrivate)
 	if err != nil {
-		t.Fatal(err)
-	}
-	key := filepath.Join(t.TempDir(), "key")
-	if err := os.WriteFile(key, hostPrivate, 0600); err != nil {
 		t.Fatal(err)
 	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -127,5 +115,5 @@ func earlyExitServer(t *testing.T, ctx context.Context) (string, string) {
 			t.Error("SSH fixture did not stop")
 		}
 	})
-	return key, listener.Addr().String()
+	return listener.Addr().String()
 }
