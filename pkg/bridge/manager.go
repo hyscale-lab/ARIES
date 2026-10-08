@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -32,10 +33,10 @@ import (
 )
 
 type Options struct {
-	Runtime                                         deployment.Runtime
-	Request                                         deployment.Request
-	OutputDir, ClientPath, DockerSocket, BridgeType string
-	RetainRawLog                                    bool
+	Runtime                           deployment.Runtime
+	Launch                            LaunchSpec
+	OutputDir, ClientPath, BridgeType string
+	RetainRawLog                      bool
 }
 type targetExporter interface {
 	ExportBridgeTarget() (core.BridgeTarget, error)
@@ -67,6 +68,19 @@ func New(options Options) (*Manager, error) {
 	if options.Runtime == nil || options.OutputDir == "" {
 		return nil, errors.New("managed bridge requires runtime and output directory")
 	}
+	if _, ok := options.Runtime.(deployment.ServiceRuntime); !ok {
+		return nil, errors.New("managed bridge runtime requires harness addressing")
+	}
+	launch := options.Launch
+	if launch.RuntimeBackend == "" || launch.ResourceMetrics == "" || launch.Config.Backend == "" {
+		return nil, errors.New("managed bridge requires explicit runtime metadata and execution backend")
+	}
+	if launch.Request.Workdir == "" || launch.Config.OutputDir == "" || launch.Config.ControlAddress == "" || launch.Request.ServicePort <= 0 || launch.Request.ServicePort > 65535 || launch.Request.HarnessPort <= 0 || launch.Request.HarnessPort > 65535 {
+		return nil, errors.New("managed bridge requires explicit staging, evidence and service addresses")
+	}
+	if launch.Config.InstanceID != "" {
+		return nil, errors.New("managed bridge instance identity is assigned per occurrence")
+	}
 	if options.BridgeType != "hermes-ssh" && options.BridgeType != "openclaw-ssh" {
 		return nil, errors.New("unsupported native bridge type")
 	}
@@ -92,7 +106,7 @@ func nonce() (string, error) {
 	return hex.EncodeToString(b[:]), err
 }
 func (m *Manager) record() error {
-	b, err := json.MarshalIndent(struct{ Backend, RuntimeID, InstanceID, AssignmentID, ResourceMetrics string }{"docker", m.runtimeID, m.instance, m.assignment, "docker-stats"}, "", "  ")
+	b, err := json.MarshalIndent(struct{ Backend, RuntimeID, InstanceID, AssignmentID, ResourceMetrics string }{m.options.Launch.RuntimeBackend, m.runtimeID, m.instance, m.assignment, m.options.Launch.ResourceMetrics}, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -119,8 +133,8 @@ func (m *Manager) Start(ctx context.Context, sandbox runner.Sandbox) (core.ToolE
 	if err = target.Validate(d); err != nil {
 		return endpoint, err
 	}
-	if d.Backend != "docker" {
-		return endpoint, errors.New("unsupported bridge and sandbox deployment pairing")
+	if d.Backend != m.options.Launch.Config.Backend {
+		return endpoint, errors.New("bridge execution backend does not match sandbox target")
 	}
 	m.descriptor = d
 	m.instance, err = nonce()
@@ -135,25 +149,18 @@ func (m *Manager) Start(ctx context.Context, sandbox runner.Sandbox) (core.ToolE
 	if err = os.MkdirAll(m.local, 0700); err != nil {
 		return endpoint, err
 	}
-	req := m.options.Request
+	req := m.options.Launch.Request
 	req.Name = "aries-bridge-" + m.instance[:24]
-	req.Labels = map[string]string{"aries.managed": "true", "aries.component": "bridge", "aries.kind": "tool-bridge", "aries.run": d.RunID, "aries.task": d.TaskID, "aries.attempt": d.OccurrenceID}
-	req.Placement = sandbox.Connectivity().Placement
-	config := LaunchConfig{InstanceID: m.instance, BridgeType: m.options.BridgeType, Backend: d.Backend, DockerSocket: m.options.DockerSocket, RetainRawLog: m.options.RetainRawLog}
-	destination := "/tmp/aries-bridge"
-	req.Workdir = destination
-	req.Entrypoint = []string{"/usr/local/bin/aries-bridge"}
-	req.Args = []string{"config.json"}
-	req.ServicePort = 8443
-	req.HarnessPort = 2222
-	config.ControlAddress = "0.0.0.0:8443"
-	config.OutputDir = destination + "/evidence"
-	config.Listen = core.BridgeListen{BindHost: "0.0.0.0", BindPort: 2222, AdvertisePort: 2222}
-	req.TrustedDockerSocket = strings.TrimPrefix(m.options.DockerSocket, "unix://")
-	if req.TrustedDockerSocket == "" {
-		req.TrustedDockerSocket = "/var/run/docker.sock"
+	req.Labels = maps.Clone(req.Labels)
+	if req.Labels == nil {
+		req.Labels = make(map[string]string)
 	}
-	config.DockerSocket = "/var/run/docker.sock"
+	maps.Copy(req.Labels, map[string]string{"aries.managed": "true", "aries.component": "bridge", "aries.kind": "tool-bridge", "aries.run": d.RunID, "aries.task": d.TaskID, "aries.attempt": d.OccurrenceID})
+	req.Placement = sandbox.Connectivity().Placement
+	config := m.options.Launch.Config
+	config.InstanceID = m.instance
+	config.BridgeType = m.options.BridgeType
+	config.RetainRawLog = m.options.RetainRawLog
 	m.remote = filepath.Join(config.OutputDir, d.TaskID, "bridge")
 	m.runtimeID, err = m.options.Runtime.Create(ctx, req)
 	if recordErr := m.record(); recordErr != nil {
@@ -194,7 +201,7 @@ func (m *Manager) Start(ctx context.Context, sandbox runner.Sandbox) (core.ToolE
 	if err != nil {
 		return endpoint, err
 	}
-	if err = m.options.Runtime.UploadArchive(ctx, m.runtimeID, destination, bytes.NewReader(archive)); err != nil {
+	if err = m.options.Runtime.UploadArchive(ctx, m.runtimeID, req.Workdir, bytes.NewReader(archive)); err != nil {
 		return endpoint, err
 	}
 	if err = m.options.Runtime.Validate(ctx, m.runtimeID, req, [][]byte{clientKey, hostKey, controlKeys.ServerKey, controlKeys.ClientKey, []byte(token)}); err != nil {

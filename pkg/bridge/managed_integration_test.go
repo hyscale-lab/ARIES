@@ -17,10 +17,10 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
+	bridgewiring "github.com/hyscale-lab/aries/internal/app/wiring/bridge"
 	managed "github.com/hyscale-lab/aries/pkg/bridge"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
-	"github.com/hyscale-lab/aries/pkg/deployment"
 	docker "github.com/hyscale-lab/aries/pkg/deployment/docker"
 	tasksandbox "github.com/hyscale-lab/aries/pkg/sandbox"
 	"github.com/moby/moby/client"
@@ -137,11 +137,10 @@ func runManagedOccurrence(t *testing.T, protocol, helper, image string, remember
 		}
 	})
 	runtime, err := docker.New(docker.Options{})
-	request := deployment.Request{Image: image}
 	if err != nil {
 		t.Fatal(err)
 	}
-	bridge, err := managed.New(managed.Options{Runtime: runtime, Request: request, OutputDir: root, ClientPath: helper, BridgeType: protocol, RetainRawLog: true})
+	bridge, err := managed.New(managed.Options{Runtime: runtime, Launch: bridgewiring.DockerLaunch(image, ""), OutputDir: root, ClientPath: helper, BridgeType: protocol, RetainRawLog: true})
 	if err != nil {
 		t.Fatal(err)
 	}

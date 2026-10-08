@@ -22,11 +22,11 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
+	bridgewiring "github.com/hyscale-lab/aries/internal/app/wiring/bridge"
 	"github.com/hyscale-lab/aries/pkg/benchmark/terminalbench"
 	managedbridge "github.com/hyscale-lab/aries/pkg/bridge"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
-	"github.com/hyscale-lab/aries/pkg/deployment"
 	dockerdeployment "github.com/hyscale-lab/aries/pkg/deployment/docker"
 	gatewayclient "github.com/hyscale-lab/aries/pkg/harness/openclaw/gateway"
 	realtimeclient "github.com/hyscale-lab/aries/pkg/harness/openclaw/realtime"
@@ -246,7 +246,7 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sshBridge, err := managedbridge.New(managedbridge.Options{Runtime: bridgeRuntime, Request: deployment.Request{Image: versions.Bridge.Image}, BridgeType: "openclaw-ssh", RetainRawLog: true, OutputDir: outputDir, ClientPath: requiredIntegrationFile(t, "ARIES_SSH_CLIENT")})
+	sshBridge, err := managedbridge.New(managedbridge.Options{Runtime: bridgeRuntime, Launch: bridgewiring.DockerLaunch(versions.Bridge.Image, ""), BridgeType: "openclaw-ssh", RetainRawLog: true, OutputDir: outputDir, ClientPath: requiredIntegrationFile(t, "ARIES_SSH_CLIENT")})
 	if err != nil {
 		t.Fatal(err)
 	}

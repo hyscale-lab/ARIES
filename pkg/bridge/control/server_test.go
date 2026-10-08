@@ -219,6 +219,43 @@ func TestAdmissionFailureRetainsIdentityAndCannotExposeEndpoint(t *testing.T) {
 	}
 }
 
+func TestAdmissionDelegatesAlternativeBackendValidation(t *testing.T) {
+	for _, reject := range []bool{false, true} {
+		name := "accepted"
+		if reject {
+			name = "rejected"
+		}
+		t.Run(name, func(t *testing.T) {
+			r := request()
+			r.Target.Backend = "remote-exec"
+			c := config()
+			var calls atomic.Int32
+			c.Assign = func(_ context.Context, received *v1.AssignSandboxRequest) (*v1.Endpoint, error) {
+				calls.Add(1)
+				if !proto.Equal(received.Target, r.Target) {
+					return nil, errors.New("provider received a different grant")
+				}
+				if reject {
+					return nil, errors.New("provider rejected resource ownership")
+				}
+				return &v1.Endpoint{Host: "127.0.0.1", Port: 22}, nil
+			}
+			s := server(t, c)
+			a, err := s.AssignSandbox(context.Background(), r)
+			if err != nil || calls.Load() != 1 || !proto.Equal(a.Target, r.Target) {
+				t.Fatalf("alternative backend did not reach provider admission: assignment=%v calls=%d err=%v", a, calls.Load(), err)
+			}
+			if reject {
+				if a.State == v1.State_READY || a.Endpoint != nil || len(a.Diagnostics) != 1 || a.Diagnostics[0].Message != "provider rejected resource ownership" {
+					t.Fatalf("provider rejection lost or exposed endpoint: %v", a)
+				}
+			} else if a.State != v1.State_READY || a.Endpoint == nil {
+				t.Fatalf("provider approval did not admit target: %v", a)
+			}
+		})
+	}
+}
+
 func TestRenewalChecksMonotonicExpiryBeforeTimerRuns(t *testing.T) {
 	s := server(t, config())
 	if _, err := s.AssignSandbox(context.Background(), request()); err != nil {

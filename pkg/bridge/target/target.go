@@ -10,6 +10,7 @@ import (
 	"github.com/hyscale-lab/aries/pkg/sandbox"
 	"io"
 	"maps"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -41,6 +42,10 @@ type Borrowed struct {
 	backend    Backend
 }
 
+var backendIdentifier = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
+
+// Validate checks the shared grant contract. The selected backend must verify
+// support and the actual resource's immutable identity and ownership.
 func Validate(d core.BridgeTarget) error {
 	if d.Version != 1 {
 		return errors.New("unsupported bridge target protocol version")
@@ -53,8 +58,8 @@ func Validate(d core.BridgeTarget) error {
 	if d.RuntimeID == "" || len(d.RuntimeID) > 1024 || strings.ContainsAny(d.RuntimeID, "\x00\r\n") {
 		return errors.New("invalid immutable runtime identity")
 	}
-	if d.Backend != "docker" {
-		return errors.New("unsupported borrowed target backend")
+	if !backendIdentifier.MatchString(d.Backend) {
+		return errors.New("invalid bridge target backend identifier")
 	}
 	if d.ExpectedLabels["aries.managed"] != "true" || d.ExpectedLabels["aries.kind"] != "task-container" || d.ExpectedLabels["aries.component"] != "sandbox" || d.ExpectedLabels["aries.run"] != d.RunID || d.ExpectedLabels["aries.task"] != d.TaskID {
 		return errors.New("bridge target ownership does not match task")

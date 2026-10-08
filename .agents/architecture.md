@@ -13,7 +13,12 @@
 
 - `cmd` injects `app.Wiring`; `internal/app` must not import its wiring packages.
 - Harness, sandbox, and bridge controllers consume deployment contracts, not
-  concrete providers. Bridge assignment control stays outside Runner.
+  concrete providers. Wiring supplies bridge launch settings and runtime metadata;
+  controllers must not select providers or inject backend-specific defaults.
+  Bridge runtime placement and borrowed sandbox execution are separate dependencies.
+  Backend-specific execution and process cleanup belong in deployment providers;
+  the shared deployment package holds contracts.
+  Bridge assignment control stays outside Runner.
   Shared harness mechanics live in `pkg/harness`; it must not import native
   harnesses. Keep native configuration, readiness, protocols, and results local.
   Shared SSH mechanics live in `pkg/bridge/ssh`; dialects own grammar and workspace

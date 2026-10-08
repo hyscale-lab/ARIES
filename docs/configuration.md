@@ -141,7 +141,9 @@ like Runner, even though its execution adapter validates one fixed target.
 
 The bridge runtime runs `aries-bridge` from the same build as `aries-ssh-client`.
 `make build` produces both alongside Runner. `make bridge-image` builds the Docker
-image using `bridge.image` and `bridge.base_image` from the version catalog.
+image containing only `aries-bridge`, using `bridge.image` and `bridge.base_image`
+from the version catalog. Runner stages the separate `aries-ssh-client` binary
+directly into the OpenClaw harness; the bridge container does not need that client.
 Image preparation uses the selected daemon. Checked-in Docker bridge examples
 include [Hermes](../profiles/hermes-tb2-fix-git-deepseek.json) and
 [OpenClaw](../profiles/openclaw-tb2-fix-git-deepseek.json).

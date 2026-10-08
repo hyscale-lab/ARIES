@@ -1,4 +1,4 @@
-// build-bridge-image builds the matched bridge/client image using catalog pins.
+// build-bridge-image packages the bridge server using catalog pins.
 package main
 
 import (
@@ -34,7 +34,7 @@ func build(ctx context.Context, socket string) error {
 		return err
 	}
 	pins := versions.Bridge
-	return docker.BuildBridgeImage(ctx, socket, pins.Image, string(recipe), "bin/aries-bridge", "bin/aries-ssh-client", map[string]string{
+	return docker.BuildBridgeImage(ctx, socket, pins.Image, string(recipe), "bin/aries-bridge", map[string]string{
 		"BASE_IMAGE": pins.BaseImage,
 	})
 }

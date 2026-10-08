@@ -19,12 +19,12 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
+	bridgewiring "github.com/hyscale-lab/aries/internal/app/wiring/bridge"
 	"github.com/hyscale-lab/aries/internal/testutil/dockerroute"
 	"github.com/hyscale-lab/aries/pkg/benchmark/terminalbench"
 	managedbridge "github.com/hyscale-lab/aries/pkg/bridge"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
-	"github.com/hyscale-lab/aries/pkg/deployment"
 	dockerdeployment "github.com/hyscale-lab/aries/pkg/deployment/docker"
 	"github.com/hyscale-lab/aries/pkg/runner"
 	tasksandbox "github.com/hyscale-lab/aries/pkg/sandbox"
@@ -316,7 +316,7 @@ func runHermesBridgeScenario(t *testing.T, cancelCommand bool, repetitions int, 
 		if err != nil {
 			t.Fatal(err)
 		}
-		bridge, err := managedbridge.New(managedbridge.Options{Runtime: bridgeRuntime, Request: deployment.Request{Image: versions.Bridge.Image}, BridgeType: "hermes-ssh", RetainRawLog: true, OutputDir: output})
+		bridge, err := managedbridge.New(managedbridge.Options{Runtime: bridgeRuntime, Launch: bridgewiring.DockerLaunch(versions.Bridge.Image, ""), BridgeType: "hermes-ssh", RetainRawLog: true, OutputDir: output})
 		if err != nil {
 			t.Fatal(err)
 		}

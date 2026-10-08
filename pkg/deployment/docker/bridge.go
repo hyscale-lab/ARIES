@@ -33,9 +33,13 @@ func (manager *Manager) ValidateBridgeTarget(ctx context.Context, d core.BridgeT
 	return nil
 }
 
+// SnapshotBridgeProcesses records the sandbox baseline before tool access.
 func (manager *Manager) SnapshotBridgeProcesses(ctx context.Context, id string) ([]deployment.ProcessIdentity, error) {
-	return deployment.SnapshotBridgeProcesses(ctx, manager, id)
+	return snapshotSandboxProcesses(ctx, manager, id)
 }
+
+// RevokeBridgeProcesses drains new sandbox processes, preserving the live
+// container and its preexisting benchmark processes for independent evaluation.
 func (manager *Manager) RevokeBridgeProcesses(ctx context.Context, id string, baseline []deployment.ProcessIdentity) error {
-	return deployment.RevokeBridgeProcesses(ctx, manager, id, baseline)
+	return revokeSandboxProcesses(ctx, manager, id, baseline)
 }
