@@ -47,7 +47,7 @@ func (s *prepareSandboxFake) Download(context.Context, string, string) error {
 }
 
 func (s *prepareSandboxFake) Connectivity() core.HarnessConnectivity {
-	return core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "test-network"}}
+	return core.HarnessConnectivity{Placement: core.RuntimePlacement{AttachmentID: "test-network"}}
 }
 
 const (

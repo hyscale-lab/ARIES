@@ -64,8 +64,8 @@ func productionImports(t *testing.T, root string, recursive bool) map[string][]s
 	return result
 }
 
-func TestBridgeLifecycleEngineAndClientDoNotImportDialects(t *testing.T) {
-	for _, component := range []string{"pkg/bridge", "pkg/bridge/ssh", "pkg/bridge/ssh/client", "cmd/aries-ssh-client"} {
+func TestBridgeLifecycleAndEngineDoNotImportDialects(t *testing.T) {
+	for _, component := range []string{"pkg/bridge", "pkg/bridge/ssh"} {
 		root := filepath.Join("..", "..", filepath.FromSlash(component))
 		for path, imports := range productionImports(t, root, false) {
 			for _, imported := range imports {
@@ -75,6 +75,24 @@ func TestBridgeLifecycleEngineAndClientDoNotImportDialects(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestOpenClawClientDoesNotImportServerDialects(t *testing.T) {
+	for _, component := range []string{"pkg/bridge/ssh/openclaw/client", "cmd/aries-ssh-client"} {
+		root := filepath.Join("..", "..", filepath.FromSlash(component))
+		for path, imports := range productionImports(t, root, true) {
+			for _, imported := range imports {
+				if dialectImport(imported) && !openclawClientImport(imported) {
+					t.Errorf("%s imports server dialect %s; the client must forward commands unchanged", path, imported)
+				}
+			}
+		}
+	}
+}
+
+func openclawClientImport(path string) bool {
+	const prefix = "github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw/client"
+	return path == prefix || strings.HasPrefix(path, prefix+"/")
 }
 
 func dialectImport(path string) bool {
@@ -92,6 +110,7 @@ func TestBridgeBoundaryRecognizesDialectImports(t *testing.T) {
 		"github.com/hyscale-lab/aries/pkg/bridge/ssh/hermes",
 		"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw",
 		"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw/internal/grammar",
+		"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw/client",
 	} {
 		if !dialectImport(path) {
 			t.Fatalf("concrete dialect import accepted: %s", path)
@@ -101,11 +120,31 @@ func TestBridgeBoundaryRecognizesDialectImports(t *testing.T) {
 		"github.com/hyscale-lab/aries/pkg/bridge",
 		"github.com/hyscale-lab/aries/pkg/bridge/target",
 		"github.com/hyscale-lab/aries/pkg/bridge/ssh",
-		"github.com/hyscale-lab/aries/pkg/bridge/ssh/client",
 		"github.com/hyscale-lab/aries/pkg/bridge/ssh/credentials",
 	} {
 		if dialectImport(path) {
 			t.Fatalf("shared contract/helper rejected: %s", path)
+		}
+	}
+}
+
+func TestOpenClawClientImportExceptionExcludesServerGrammar(t *testing.T) {
+	for _, path := range []string{
+		"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw/client",
+		"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw/client/internal/helper",
+	} {
+		if !openclawClientImport(path) {
+			t.Fatalf("client adapter rejected: %s", path)
+		}
+	}
+	for _, path := range []string{
+		"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw",
+		"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw/internal/grammar",
+		"github.com/hyscale-lab/aries/pkg/bridge/ssh/hermes",
+		"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw/clientgrammar",
+	} {
+		if !dialectImport(path) || openclawClientImport(path) {
+			t.Fatalf("server dialect accepted as client adapter: %s", path)
 		}
 	}
 }

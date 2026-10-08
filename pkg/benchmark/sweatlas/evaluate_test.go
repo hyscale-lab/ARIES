@@ -437,5 +437,5 @@ func rubricRetryCapForTest(t *testing.T) func() {
 }
 
 func (s *evaluateFake) Connectivity() core.HarnessConnectivity {
-	return core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "test-network"}}
+	return core.HarnessConnectivity{Placement: core.RuntimePlacement{AttachmentID: "test-network"}}
 }

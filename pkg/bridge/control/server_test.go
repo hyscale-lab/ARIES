@@ -17,13 +17,13 @@ import (
 )
 
 func request() *v1.AssignSandboxRequest {
-	return &v1.AssignSandboxRequest{InstanceId: "instance", AssignmentId: "assignment", ProtocolVersion: 1, CredentialId: "ssh", LeaseMillis: 1000, Target: &v1.Target{Version: 1, RunId: "run", TaskId: "task", OccurrenceId: "occurrence", Backend: "docker", RuntimeId: "immutable", RuntimeName: "sandbox", Workdir: "/app", MaxInputBytes: 16 << 20, MaxOutputBytes: 1 << 30, ExpectedLabels: map[string]string{"aries.managed": "true", "aries.kind": "task-container", "aries.component": "sandbox", "aries.run": "run", "aries.task": "task"}}}
+	return &v1.AssignSandboxRequest{InstanceId: "instance", AssignmentId: "assignment", ProtocolVersion: 1, CredentialId: "ssh", Target: &v1.Target{Version: 1, RunId: "run", TaskId: "task", OccurrenceId: "occurrence", Backend: "docker", RuntimeId: "immutable", RuntimeName: "sandbox", Workdir: "/app", MaxInputBytes: 16 << 20, MaxOutputBytes: 1 << 30, ExpectedLabels: map[string]string{"aries.managed": "true", "aries.kind": "task-container", "aries.component": "sandbox", "aries.run": "run", "aries.task": "task"}}}
 }
 func ref() *v1.AssignmentRequest {
 	return &v1.AssignmentRequest{InstanceId: "instance", AssignmentId: "assignment"}
 }
 func config() Config {
-	return Config{InstanceID: "instance", Token: strings.Repeat("t", 32), MaxLease: time.Second, OperationTimeout: time.Second, Assign: func(context.Context, *v1.AssignSandboxRequest) (*v1.Endpoint, error) {
+	return Config{InstanceID: "instance", Token: strings.Repeat("t", 32), OperationTimeout: time.Second, Assign: func(context.Context, *v1.AssignSandboxRequest) (*v1.Endpoint, error) {
 		return &v1.Endpoint{Host: "127.0.0.1", Port: 22}, nil
 	}, Revoke: func(context.Context) ([]*v1.Artifact, error) {
 		return []*v1.Artifact{{Name: "tool-calls.jsonl", Status: "complete"}}, nil
@@ -91,7 +91,7 @@ func TestRevokeContinuesAfterCallerTimeoutAndRetriesFailure(t *testing.T) {
 		if calls.Add(1) == 1 {
 			close(entered)
 			<-release
-			return nil, errors.New("drain unconfirmed")
+			return nil, errors.New("native cleanup unconfirmed")
 		}
 		return []*v1.Artifact{{Name: "tool-calls.jsonl", Status: "complete"}}, nil
 	}
@@ -128,23 +128,6 @@ func TestRevokeContinuesAfterCallerTimeoutAndRetriesFailure(t *testing.T) {
 	case <-s.Done():
 	default:
 		t.Fatal("terminal signal absent")
-	}
-}
-func TestLeaseExpiryCannotRevive(t *testing.T) {
-	s := server(t, config())
-	r := request()
-	r.LeaseMillis = 20
-	if _, err := s.AssignSandbox(context.Background(), r); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-s.Done():
-	case <-time.After(time.Second):
-		t.Fatal("expired lease did not revoke")
-	}
-	_, err := s.RenewLease(context.Background(), &v1.RenewLeaseRequest{InstanceId: "instance", AssignmentId: "assignment", LeaseMillis: 1000})
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatal("expired lease revived", err)
 	}
 }
 func TestAuthenticatedGRPCAndIdentity(t *testing.T) {
@@ -189,6 +172,44 @@ func TestAuthenticatedGRPCAndIdentity(t *testing.T) {
 	}
 	if _, _, err = NewClient("192.0.2.1:1234", "instance", config().Token, nil); err == nil {
 		t.Fatal("unauthenticated remote transport accepted")
+	}
+	if err = conn2.Close(); err != nil {
+		t.Fatal(err)
+	}
+	conn3, client3, err := NewClient(l.Addr().String(), "instance", config().Token, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn3.Close()
+	a, err = client3.GetAssignment(context.Background(), ref())
+	if err != nil || a.State != v1.State_READY || a.Endpoint == nil {
+		t.Fatalf("control disconnect changed the explicit assignment lifecycle: %v %v", a, err)
+	}
+	a, err = client3.RevokeAssignment(context.Background(), ref())
+	if err != nil || a.State != v1.State_REVOKED || a.Endpoint != nil || len(a.Artifacts) != 1 {
+		t.Fatalf("explicit revocation did not finalize assignment: %v %v", a, err)
+	}
+}
+
+func TestAdmissionTimeoutStillCleansPartialNativeState(t *testing.T) {
+	c := config()
+	c.OperationTimeout = 10 * time.Millisecond
+	c.Assign = func(ctx context.Context, _ *v1.AssignSandboxRequest) (*v1.Endpoint, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	var cleanups atomic.Int32
+	c.Revoke = func(context.Context) ([]*v1.Artifact, error) {
+		cleanups.Add(1)
+		return nil, nil
+	}
+	s := server(t, c)
+	if _, err := s.AssignSandbox(context.Background(), request()); err != nil {
+		t.Fatal(err)
+	}
+	a, err := s.RevokeAssignment(context.Background(), ref())
+	if err != nil || a.State != v1.State_REVOKED || a.Endpoint != nil || cleanups.Load() != 1 || len(a.Diagnostics) != 1 || a.Diagnostics[0].Stage != "admission" || a.Diagnostics[0].Message != context.DeadlineExceeded.Error() {
+		t.Fatalf("admission timeout lost cleanup or diagnostics: assignment=%v cleanups=%d err=%v", a, cleanups.Load(), err)
 	}
 }
 
@@ -253,25 +274,5 @@ func TestAdmissionDelegatesAlternativeBackendValidation(t *testing.T) {
 				t.Fatalf("provider approval did not admit target: %v", a)
 			}
 		})
-	}
-}
-
-func TestRenewalChecksMonotonicExpiryBeforeTimerRuns(t *testing.T) {
-	s := server(t, config())
-	if _, err := s.AssignSandbox(context.Background(), request()); err != nil {
-		t.Fatal(err)
-	}
-	s.mu.Lock()
-	s.timer.Stop()
-	s.expiry = time.Now().Add(-time.Millisecond)
-	s.mu.Unlock()
-	_, err := s.RenewLease(context.Background(), &v1.RenewLeaseRequest{InstanceId: "instance", AssignmentId: "assignment", LeaseMillis: 1000})
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatal("renewal revived expired grant", err)
-	}
-	select {
-	case <-s.Done():
-	case <-time.After(time.Second):
-		t.Fatal("renewal did not initiate expired cleanup")
 	}
 }

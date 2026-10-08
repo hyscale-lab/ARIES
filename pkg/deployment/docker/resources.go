@@ -179,7 +179,21 @@ func (source *DockerResourceSource) read(ctx context.Context, runtime resourceRu
 		return core.ResourceReading{}, fmt.Errorf("decode Docker resource stats for %s: %w", runtime.id, err)
 	}
 	if document.Read.IsZero() {
-		return core.ResourceReading{}, fmt.Errorf("Docker resource stats for %s omit observation time", runtime.id)
+		invalid := fmt.Errorf("Docker resource stats for %s omit observation time", runtime.id)
+		// The runtime can stop after discovery while the stats request is in
+		// flight. Confirm that race instead of treating an empty response as a
+		// failed measurement or silently ignoring malformed live-runtime data.
+		inspection, err := source.api.ContainerInspect(ctx, runtime.id, client.ContainerInspectOptions{})
+		if errdefs.IsNotFound(err) {
+			return core.ResourceReading{}, errResourceRuntimeGone
+		}
+		if err != nil {
+			return core.ResourceReading{}, errors.Join(invalid, fmt.Errorf("recheck Docker resource runtime %s: %w", runtime.id, err))
+		}
+		if inspection.Container.ID == runtime.id && inspection.Container.State != nil && !inspection.Container.State.Running {
+			return core.ResourceReading{}, errResourceRuntimeGone
+		}
+		return core.ResourceReading{}, invalid
 	}
 	if document.MemoryStats.Usage == 0 && document.MemoryStats.Limit == 0 {
 		return core.ResourceReading{}, errResourceRuntimeGone

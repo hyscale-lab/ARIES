@@ -9,10 +9,12 @@ logs, and positive removal. ARIES does not shell out to Docker for these operati
 ## Composition and topology
 
 Explicit command switches select separate Docker clients for
-`harness.deployment` and `sandbox.deployment`; both must name the same local Unix
+`harness.deployment`, `sandbox.deployment`, and `bridge.deployment`; all must name the same local Unix
 socket. Image preparation and resource sampling use that selected daemon too.
 Configuration translation lives
-in [deployment wiring](../../internal/app/wiring/deployment/docker.go).
+in [deployment wiring](../../internal/app/wiring/deployment/docker.go), with
+[bridge image preparation and execution access](../../internal/app/wiring/deployment/bridge.go)
+alongside it.
 See [deployment configuration](../configuration.md#deployment-configuration) for
 the profile shape and compatibility defaults.
 
@@ -30,16 +32,21 @@ is published on loopback for Runner. Attachment and endpoint ownership follow th
 [task-environment contract](../design/deployment.md#taskenvironment-operations-and-ownership).
 
 `bridge.mode` is `managed`: native listeners run in a separate Docker container.
-Explicit embedded/external modes are rejected. Bridge containers receive only
-the explicit trusted infrastructure socket attachment needed to reach the exact
-sandbox. See [supported combinations](../supported.md) for deployment boundaries.
+Explicit embedded/external modes are rejected. Composition supplies the bridge's
+Docker socket as an explicit mount. Deployment validates declared mounts without
+granting access based on component labels. Harness and sandbox requests contain
+no host mounts. See [supported combinations](../supported.md) for deployment boundaries.
 
 ## Runtime creation and execution
 
 The sandbox chooses task labels, default workdir and numeric execution identity,
 and private artifact paths. Docker translates deployment requests into container
 configuration, validates ownership and isolation, and publishes requested services
-only on loopback. `Address` checks for one loopback binding.
+only on loopback. `Address` checks for one loopback binding. When Docker suppresses
+publication on an internal network, it resolves the running container's sole task
+interface, requiring an explicit loopback publication request. This applies to
+every component. `TaskAddress` resolves the address used by task peers.
+Mount validation checks the exact declared source, destination, and permissions.
 
 The common [execution implementation](../../pkg/deployment/docker/exec.go)
 supports streaming input/output and confirms command process-group termination

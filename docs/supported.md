@@ -57,6 +57,11 @@ guides above.
 
 ## Roadmap
 
+Additional deployment providers are unimplemented. Shared bridge lifecycle and
+deployment contracts accept explicit runtime placement and access settings;
+a new provider must implement their execution, connectivity, and cleanup semantics
+and be selected in composition wiring.
+
 A shared harness-facing gRPC sandbox protocol with E2B compatibility remains a
 planned target, not a specified or verified API/version contract. The implemented
 versioned gRPC bridge control API assigns and revokes borrowed sandbox access;

@@ -17,6 +17,7 @@ interface per role.
 | `Exec`, `ExecStream` | Execute exact argv, with buffered or streamed I/O; cancellation must confirm targeted process termination. |
 | `Logs`, `LogsStream` | Retrieve bounded or streamed runtime output. |
 | `Address(ctx, id, port)` | Return a private service address reachable by the host, without a URL scheme. |
+| `ServiceRuntime.TaskAddress(ctx, id, port)` | Optional capability returning an address reachable by peers on the task attachment. |
 | `Stop(ctx, id)` | Remove owned resources; success requires positive confirmation of absence and repeated calls must be safe. |
 | `Close()` | Close the deployment transport; this is not runtime removal. |
 
@@ -34,7 +35,7 @@ different failure. Missing log runtimes also wrap `ErrNotFound`.
 
 ## TaskEnvironment operations and ownership
 
-`TaskEnvironment` owns the attachment shared by task sandbox and harness. Each
+`TaskEnvironment` owns the attachment shared by task sandbox, harness, and bridge. Each
 occurrence, including retries or repeated task IDs, requires a fresh owner.
 
 | Operation | Contract |
@@ -79,10 +80,10 @@ attachment ownership before creating its runtime, and retains environment
 ownership through evaluation. Search-enabled harnesses reject missing or invalid
 URLs; disabled search requires no endpoint.
 
-`RuntimePlacement{DockerNetwork}` names the task-owned Docker network. Docker
-validates and translates that field when creating runtimes. This preserves
-current local Docker profiles without imposing Docker network syntax on harness
-policy. Unsupported or missing placements fail explicitly. Separate profile
+`RuntimePlacement{AttachmentID}` carries the provider-owned task attachment.
+Components forward this handle without interpreting it; Docker maps it to the
+task network when creating runtimes. Unsupported or missing placements fail
+explicitly. Separate profile
 deployment blocks do not imply heterogeneous deployment support.
 
 ## Substitution and current limits
@@ -100,9 +101,15 @@ the shared deployment package holds contracts. Bridge revocation leaves sandbox
 processes untouched. Harness completion defines completed tool work; the sandbox
 owner removes the entire runtime after evaluation.
 
-**Current gap against full deployment independence:** the shared request still
-exposes a Docker network field, a trusted bridge daemon mount, network aliases,
-image-declared volume policy, and container-oriented resource settings. The
+Runtime access is explicit: `Request.Mounts` declares source paths, target paths,
+and read-only settings, with no default host access. `InternalPort` exposes a
+service to task peers; `ServicePort` requests host access. Deployment applies
+these settings independently of component labels. Composition selects the
+sandbox execution backend and its `BackendEndpoint` separately from bridge
+placement; Docker socket access is supplied by Docker wiring.
+
+**Current limits:** network aliases, host-path mounts, image-declared volume
+policy, and container-oriented resource settings still require provider support. The
 [sandbox adapter](../../pkg/sandbox/sandbox.go) assumes a Linux environment with
 `/bin/sleep`, absolute paths, and numeric UID:GID execution. These are current
 contract constraints, not proof of arbitrary backend portability. Another backend

@@ -84,7 +84,7 @@ func TestHarnessStartsRealHermesContainerAndStopsPositively(t *testing.T) {
 	if err := os.Chmod(identityPath, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "bridge"}},
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{Placement: core.RuntimePlacement{AttachmentID: "bridge"}},
 		RunID: "integration-run", TaskID: "integration-task",
 		Endpoint: core.ToolEndpoint{
 			Protocol: "ssh", Address: "127.0.0.1:2222", Username: "aries",
@@ -205,7 +205,7 @@ func TestGatewayPartialStartupRemovesRuntime(t *testing.T) {
 		_ = manager.Close()
 	})
 	request := testRequest(t)
-	request.Connectivity.Placement = core.RuntimePlacement{DockerNetwork: "bridge"}
+	request.Connectivity.Placement = core.RuntimePlacement{AttachmentID: "bridge"}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	if err := manager.Start(ctx, request); err == nil || !strings.Contains(err.Error(), "injected failure") {

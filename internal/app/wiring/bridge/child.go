@@ -22,7 +22,7 @@ func ServeChild(ctx context.Context, c managed.LaunchConfig, logger *logrus.Logg
 	var closeBackend func() error
 	switch c.Backend {
 	case "docker":
-		d, err := docker.New(docker.Options{Socket: c.DockerSocket, Logger: logger})
+		d, err := docker.New(docker.Options{Socket: c.BackendEndpoint, Logger: logger})
 		if err != nil {
 			return err
 		}

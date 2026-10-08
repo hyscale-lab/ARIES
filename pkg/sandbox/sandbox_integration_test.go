@@ -171,7 +171,7 @@ func TestDockerSandboxRealLifecycle(t *testing.T) {
 	if containerEnv["TZ"] != "America/Los_Angeles" || containerEnv["DEBIAN_FRONTEND"] != "noninteractive" || containerEnv["TASK_ENV"] != "task-value" {
 		t.Fatalf("container environment = %#v, want ARIES precedence and unrelated task value", containerEnv)
 	}
-	networkInspection, err := api.NetworkInspect(ctx, sandbox.Connectivity().Placement.DockerNetwork, client.NetworkInspectOptions{})
+	networkInspection, err := api.NetworkInspect(ctx, sandbox.Connectivity().Placement.AttachmentID, client.NetworkInspectOptions{})
 	if err != nil || !networkInspection.Network.Internal || networkInspection.Network.Labels["aries.task"] != "integration-task" {
 		t.Fatalf("network inspection = %#v, %v", networkInspection.Network, err)
 	}
@@ -221,7 +221,7 @@ func TestDockerSandboxRealLifecycle(t *testing.T) {
 	if _, err := api.ContainerInspect(ctx, sandbox.ContainerID(), client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
 		t.Fatalf("container remains after Stop: %v", err)
 	}
-	if _, err := api.NetworkInspect(ctx, sandbox.Connectivity().Placement.DockerNetwork, client.NetworkInspectOptions{}); !errdefs.IsNotFound(err) {
+	if _, err := api.NetworkInspect(ctx, sandbox.Connectivity().Placement.AttachmentID, client.NetworkInspectOptions{}); !errdefs.IsNotFound(err) {
 		t.Fatalf("network remains after Stop: %v", err)
 	}
 	for _, name := range []string{"container.stdout.log", "container.stderr.log"} {
@@ -338,7 +338,7 @@ func TestDockerSandboxRootWorkdirLifecycle(t *testing.T) {
 	if _, err := api.ContainerInspect(ctx, sandbox.ContainerID(), client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
 		t.Fatalf("root-workdir container remains after Stop: %v", err)
 	}
-	if _, err := api.NetworkInspect(ctx, sandbox.Connectivity().Placement.DockerNetwork, client.NetworkInspectOptions{}); !errdefs.IsNotFound(err) {
+	if _, err := api.NetworkInspect(ctx, sandbox.Connectivity().Placement.AttachmentID, client.NetworkInspectOptions{}); !errdefs.IsNotFound(err) {
 		t.Fatalf("root-workdir network remains after Stop: %v", err)
 	}
 }
@@ -419,7 +419,7 @@ func TestExecCancellationKillsOnlyItsProcessGroup(t *testing.T) {
 	if _, err := api.ContainerInspect(ctx, sandbox.ContainerID(), client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
 		t.Fatalf("container remains after Stop: %v", err)
 	}
-	if _, err := api.NetworkInspect(ctx, sandbox.Connectivity().Placement.DockerNetwork, client.NetworkInspectOptions{}); !errdefs.IsNotFound(err) {
+	if _, err := api.NetworkInspect(ctx, sandbox.Connectivity().Placement.AttachmentID, client.NetworkInspectOptions{}); !errdefs.IsNotFound(err) {
 		t.Fatalf("network remains after Stop: %v", err)
 	}
 }

@@ -59,7 +59,7 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 		}
 	})
 
-	bridge := newIntegrationBridge(t, outputDir, logger, live.(*tasksandbox.Sandbox).Connectivity().Placement.DockerNetwork)
+	bridge := newIntegrationBridge(t, outputDir, logger, live.(*tasksandbox.Sandbox).Connectivity().Placement.AttachmentID)
 	endpoint, err := bridge.StartTarget(ctx, sandbox)
 	if err != nil {
 		t.Fatal(err)
@@ -182,7 +182,7 @@ func TestBridgeMapsVirtualWorkspaceToContainerRootWithoutAlias(t *testing.T) {
 		}
 	})
 
-	bridge := newIntegrationBridge(t, outputDir, logger, live.(*tasksandbox.Sandbox).Connectivity().Placement.DockerNetwork)
+	bridge := newIntegrationBridge(t, outputDir, logger, live.(*tasksandbox.Sandbox).Connectivity().Placement.AttachmentID)
 	endpoint, err := bridge.StartTarget(ctx, sandbox)
 	if err != nil {
 		t.Fatal(err)
@@ -248,7 +248,7 @@ func TestBridgeRunsConcurrentCallsWithoutAConvoy(t *testing.T) {
 		}
 	})
 
-	bridge := newIntegrationBridge(t, outputDir, logger, live.(*tasksandbox.Sandbox).Connectivity().Placement.DockerNetwork)
+	bridge := newIntegrationBridge(t, outputDir, logger, live.(*tasksandbox.Sandbox).Connectivity().Placement.AttachmentID)
 	endpoint, err := bridge.StartTarget(ctx, live.(*tasksandbox.Sandbox))
 	if err != nil {
 		t.Fatal(err)

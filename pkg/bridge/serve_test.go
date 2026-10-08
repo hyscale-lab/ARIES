@@ -20,8 +20,8 @@ import (
 	"google.golang.org/grpc/credentials"
 )
 
-func TestLeaseFailureStillBoundsChildCollectionAndExit(t *testing.T) {
-	service, err := control.NewServer(control.Config{InstanceID: "instance", Token: strings.Repeat("x", 32), MaxLease: time.Second,
+func TestRevocationFailureStillBoundsChildCollectionAndExit(t *testing.T) {
+	service, err := control.NewServer(control.Config{InstanceID: "instance", Token: strings.Repeat("x", 32),
 		Assign: func(context.Context, *v1.AssignSandboxRequest) (*v1.Endpoint, error) {
 			return &v1.Endpoint{Host: "127.0.0.1", Port: 22}, nil
 		},
@@ -31,14 +31,15 @@ func TestLeaseFailureStillBoundsChildCollectionAndExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := core.BridgeTarget{Version: 1, RunID: "run", TaskID: "task", OccurrenceID: "occurrence", Backend: "docker", RuntimeID: "runtime", RuntimeName: "sandbox", Workdir: "/app", MaxInputBytes: 16 << 20, MaxOutputBytes: 1 << 30, ExpectedLabels: map[string]string{"aries.managed": "true", "aries.kind": "task-container", "aries.component": "sandbox", "aries.run": "run", "aries.task": "task"}}
-	_, err = service.AssignSandbox(context.Background(), &v1.AssignSandboxRequest{InstanceId: "instance", AssignmentId: "assignment", ProtocolVersion: 1, Target: control.TargetToProto(d), LeaseMillis: 10, CredentialId: "ssh"})
+	_, err = service.AssignSandbox(context.Background(), &v1.AssignSandboxRequest{InstanceId: "instance", AssignmentId: "assignment", ProtocolVersion: 1, Target: control.TargetToProto(d), CredentialId: "ssh"})
 	if err != nil {
 		t.Fatal(err)
 	}
+	service.Revoke()
 	select {
 	case <-service.Revoking():
-	case <-time.After(time.Second):
-		t.Fatal("lease did not close admission")
+	default:
+		t.Fatal("explicit revocation did not close admission")
 	}
 	if err = awaitCollectionExit(service, 10*time.Millisecond, make(chan error)); err == nil {
 		t.Fatal("failed native cleanup became successful child exit")
@@ -180,7 +181,7 @@ func TestNativeCleanupClosesAdmissionFinalizesEvidenceAndErasesCredentials(t *te
 			d := core.BridgeTarget{Version: 1, RunID: "run", TaskID: "task", OccurrenceID: "occurrence", Backend: "docker", RuntimeID: "runtime", RuntimeName: "sandbox", Workdir: "/app", MaxInputBytes: 16 << 20, MaxOutputBytes: 1 << 30, ExpectedLabels: map[string]string{"aries.managed": "true", "aries.kind": "task-container", "aries.component": "sandbox", "aries.run": "run", "aries.task": "task"}}
 			call, stop := context.WithTimeout(context.Background(), time.Second)
 			defer stop()
-			a, err := client.AssignSandbox(call, &v1.AssignSandboxRequest{InstanceId: "instance", AssignmentId: "assignment", ProtocolVersion: 1, Target: control.TargetToProto(d), LeaseMillis: 1000, CredentialId: "ssh"})
+			a, err := client.AssignSandbox(call, &v1.AssignSandboxRequest{InstanceId: "instance", AssignmentId: "assignment", ProtocolVersion: 1, Target: control.TargetToProto(d), CredentialId: "ssh"})
 			if err != nil || a.State != v1.State_READY {
 				t.Fatalf("assignment failed: %v %v", a, err)
 			}

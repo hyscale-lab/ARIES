@@ -79,6 +79,11 @@ permission errors, and later sampling failures remain failures rather than being
 reclassified as unsupported. A successful observation whose counters are zero is
 still a real sample with status `succeeded`.
 
+Docker sampling can overlap runtime teardown. If a stats response lacks its
+observation timestamp, ARIES checks the same runtime again and skips that sample
+only when the runtime is confirmed stopped or removed. Invalid stats from a
+running runtime, or failure to confirm its state, remain observer errors.
+
 Docker bridge samples use component `bridge`, separate from `harness` and
 `sandbox`. See the
 [measurement schema limits](design.md#measurement-meaning-and-current-gaps) for

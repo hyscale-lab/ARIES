@@ -23,9 +23,10 @@
   harnesses. Keep native configuration, readiness, protocols, and results local.
   Shared SSH mechanics live in `pkg/bridge/ssh`; dialects own grammar and workspace
   policy. Wiring owns endpoint/client-staging policy; shared lifecycle applies it.
-  The forwarding client and shared SSH engine must not import dialects. Root
-  bridge lifecycle receives native factories through wiring and must not import
-  concrete dialects.
+  Shared SSH serving and root bridge lifecycle must not import concrete dialects
+  or harness clients. Root lifecycle receives native factories through wiring.
+  OpenClaw's forwarding client lives in `pkg/bridge/ssh/openclaw/client` and must
+  not import server grammar.
 - Use explicit dependencies, concrete helpers, `context.Context` for external
   work, and Logrus lifecycle logging. Add dependencies only when existing code
   and the standard library are insufficient.
@@ -40,5 +41,7 @@ task attachment. Record every task failure in `TaskResult.Error`.
 Each admitted occurrence gets fresh owners, even for repeated task IDs. Release
 owned resources using fresh bounded cleanup contexts after cancellation. Bridge
 revocation closes access and leaves sandbox processes intact for evaluation.
+Runner owns explicit bridge revocation; do not add assignment leases or
+controller-liveness supervision. Abrupt Runner crashes may need operator cleanup.
 
 Details: [design](../docs/design.md), [contracts](components.md).

@@ -41,9 +41,13 @@ It must never expose verifier material or give the harness the deployment socket
 The child's [NativeServer contract](../../pkg/bridge/bridge.go) accepts only a
 borrowed streaming executor. A shared SSH engine owns transport and execution
 mechanics; harness dialects own command grammar, workspace translation and refusal
-policy. The thin `aries-ssh-client` forwards commands without interpreting them.
+policy. The thin `aries-ssh-client` forwards commands without interpreting them;
+its OpenClaw invocation/configuration adapter lives in
+[`ssh/openclaw/client`](../../pkg/bridge/ssh/openclaw/client).
 SSH credentials live outside the borrowed target package. Root bridge lifecycle
-code does not import native dialects; wiring supplies their implementations.
+and the shared SSH engine import neither native dialects nor harness-specific
+clients; wiring supplies native implementations. The OpenClaw client does not
+import server grammar.
 Wiring also supplies client endpoint and file-staging policy once through
 `ClientConfig`; the controller applies it without harness-name branches. Native
 dialects do not duplicate helper paths, known-hosts paths, or endpoint workdir policy.
@@ -62,6 +66,12 @@ fails after allocating resources. Stop must be idempotent and preserve actual
 cleanup and evidence failures. A confirmed native revocation precedes artifact
 collection and positive removal of the owned runtime. Missing finalized evidence
 after a child crash remains an error.
+
+Runner owns explicit assignment revocation and runtime cleanup. Assignments have
+no leases, renewal RPCs, or controller-liveness watchdogs. An abrupt Runner crash
+may require operator cleanup of its owned containers and credentials. Operation
+deadlines still bound admission and revocation work, and the child retains
+finalized evidence for a bounded collection interval after revocation begins.
 
 Harness completion is authoritative for completed tool calls. Revocation closes
 the harness's access and releases the bridge's listeners, connections, handlers,
@@ -100,9 +110,10 @@ addressing, and confirmed removal. A non-Docker runtime fixture exercises these
 contracts without adding another supported deployment method. The borrowed
 execution contract requires target identity/ownership validation and streaming
 command execution, without sandbox lifecycle or process-supervision authority.
-The launch configuration still carries Docker's
-sandbox socket option, and shared placement/request types retain the limitations
-documented in [deployment](deployment.md#substitution-and-current-limits).
+Wiring supplies the sandbox backend endpoint, explicit runtime mounts, and task
+attachment through deployment contracts. Providers interpret these values;
+remaining container-oriented contract limits are documented in
+[deployment](deployment.md#substitution-and-current-limits).
 
 Current pair-specific [SSH adapters](../implementation/ssh-bridges.md) support
 OpenClaw and Hermes. Their wire grammars, host-key limitations, denied file sync,

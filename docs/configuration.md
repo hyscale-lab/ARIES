@@ -135,8 +135,9 @@ explicitly. `external` remains unsupported. Legacy `sandbox.type: "docker"`
 still maps to Docker deployment; conflicting explicit settings are rejected.
 
 `bridge.deployment.backend` must be `docker`. Bridges run in a separate container
-on the task network, use the same local daemon as the sandbox, and require the narrowly scoped trusted infrastructure socket attachment;
-the harness and sandbox never receive that socket. The bridge has daemon authority
+on the task network and use the same local daemon as the sandbox. Composition
+supplies the required Docker socket mount explicitly; component labels do not
+grant access. The harness and sandbox never receive that socket. The bridge has daemon authority
 like Runner, even though its execution adapter validates one fixed target.
 
 The bridge runtime runs `aries-bridge` from the same build as `aries-ssh-client`.
@@ -151,8 +152,10 @@ include [Hermes](../profiles/hermes-tb2-fix-git-deepseek.json) and
 Bridge addresses come from task composition, not profile fields. Private gRPC
 control and harness-facing SSH use separate endpoints. Bridge containers advertise
 their address
-on the task network. Each runtime accepts one immutable sandbox assignment with
-a bounded lease. Control health alone does not establish assignment readiness.
+on the task network. Each runtime accepts one immutable sandbox assignment that
+remains active until Runner explicitly revokes it and removes the bridge runtime.
+There are no leases or renewal timers. Control health alone does not establish
+assignment readiness.
 
 ## Preparation and task selection
 

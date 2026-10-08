@@ -22,7 +22,6 @@ const (
 	BridgeControl_AssignSandbox_FullMethodName    = "/aries.bridge.control.v1.BridgeControl/AssignSandbox"
 	BridgeControl_GetAssignment_FullMethodName    = "/aries.bridge.control.v1.BridgeControl/GetAssignment"
 	BridgeControl_RevokeAssignment_FullMethodName = "/aries.bridge.control.v1.BridgeControl/RevokeAssignment"
-	BridgeControl_RenewLease_FullMethodName       = "/aries.bridge.control.v1.BridgeControl/RenewLease"
 )
 
 // BridgeControlClient is the client API for BridgeControl service.
@@ -32,7 +31,6 @@ type BridgeControlClient interface {
 	AssignSandbox(ctx context.Context, in *AssignSandboxRequest, opts ...grpc.CallOption) (*Assignment, error)
 	GetAssignment(ctx context.Context, in *AssignmentRequest, opts ...grpc.CallOption) (*Assignment, error)
 	RevokeAssignment(ctx context.Context, in *AssignmentRequest, opts ...grpc.CallOption) (*Assignment, error)
-	RenewLease(ctx context.Context, in *RenewLeaseRequest, opts ...grpc.CallOption) (*Assignment, error)
 }
 
 type bridgeControlClient struct {
@@ -73,16 +71,6 @@ func (c *bridgeControlClient) RevokeAssignment(ctx context.Context, in *Assignme
 	return out, nil
 }
 
-func (c *bridgeControlClient) RenewLease(ctx context.Context, in *RenewLeaseRequest, opts ...grpc.CallOption) (*Assignment, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Assignment)
-	err := c.cc.Invoke(ctx, BridgeControl_RenewLease_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // BridgeControlServer is the server API for BridgeControl service.
 // All implementations must embed UnimplementedBridgeControlServer
 // for forward compatibility.
@@ -90,7 +78,6 @@ type BridgeControlServer interface {
 	AssignSandbox(context.Context, *AssignSandboxRequest) (*Assignment, error)
 	GetAssignment(context.Context, *AssignmentRequest) (*Assignment, error)
 	RevokeAssignment(context.Context, *AssignmentRequest) (*Assignment, error)
-	RenewLease(context.Context, *RenewLeaseRequest) (*Assignment, error)
 	mustEmbedUnimplementedBridgeControlServer()
 }
 
@@ -109,9 +96,6 @@ func (UnimplementedBridgeControlServer) GetAssignment(context.Context, *Assignme
 }
 func (UnimplementedBridgeControlServer) RevokeAssignment(context.Context, *AssignmentRequest) (*Assignment, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RevokeAssignment not implemented")
-}
-func (UnimplementedBridgeControlServer) RenewLease(context.Context, *RenewLeaseRequest) (*Assignment, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RenewLease not implemented")
 }
 func (UnimplementedBridgeControlServer) mustEmbedUnimplementedBridgeControlServer() {}
 func (UnimplementedBridgeControlServer) testEmbeddedByValue()                       {}
@@ -188,24 +172,6 @@ func _BridgeControl_RevokeAssignment_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BridgeControl_RenewLease_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RenewLeaseRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BridgeControlServer).RenewLease(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: BridgeControl_RenewLease_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BridgeControlServer).RenewLease(ctx, req.(*RenewLeaseRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 // BridgeControl_ServiceDesc is the grpc.ServiceDesc for BridgeControl service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -224,10 +190,6 @@ var BridgeControl_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RevokeAssignment",
 			Handler:    _BridgeControl_RevokeAssignment_Handler,
-		},
-		{
-			MethodName: "RenewLease",
-			Handler:    _BridgeControl_RenewLease_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/moby/moby/api/types/mount"
 	"io"
 	"math"
 	"net"
@@ -24,6 +23,7 @@ import (
 	"github.com/hyscale-lab/aries/pkg/runner"
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
 	"github.com/sirupsen/logrus"
@@ -135,9 +135,9 @@ func (manager *Manager) Create(ctx context.Context, request deployment.Request) 
 		return "", errors.New("deployment service port is invalid")
 	}
 	config := &container.Config{Image: request.Image, WorkingDir: request.Workdir, Env: request.Env, Entrypoint: request.Entrypoint, Cmd: request.Args, Labels: request.Labels}
-	host := &container.HostConfig{NetworkMode: container.NetworkMode(request.Placement.DockerNetwork), Resources: limits}
-	if request.TrustedDockerSocket != "" {
-		host.Mounts = []mount.Mount{{Type: mount.TypeBind, Source: request.TrustedDockerSocket, Target: "/var/run/docker.sock"}}
+	host := &container.HostConfig{NetworkMode: container.NetworkMode(request.Placement.AttachmentID), Resources: limits}
+	for _, declared := range request.Mounts {
+		host.Mounts = append(host.Mounts, mount.Mount{Type: mount.TypeBind, Source: declared.Source, Target: declared.Target, ReadOnly: declared.ReadOnly})
 	}
 	if request.Init {
 		host.Init = boolPointer(true)
@@ -150,18 +150,18 @@ func (manager *Manager) Create(ctx context.Context, request deployment.Request) 
 	}
 	var networking *network.NetworkingConfig
 	if len(request.NetworkAliases) > 0 {
-		networking = &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{request.Placement.DockerNetwork: {Aliases: request.NetworkAliases}}}
+		networking = &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{request.Placement.AttachmentID: {Aliases: request.NetworkAliases}}}
 	}
 	if request.ServicePort != 0 {
 		port := network.MustParsePort(strconv.Itoa(request.ServicePort) + "/tcp")
 		config.ExposedPorts = network.PortSet{port: struct{}{}}
 		host.PortBindings = network.PortMap{port: []network.PortBinding{{HostIP: netip.MustParseAddr("127.0.0.1")}}}
 	}
-	if request.HarnessPort != 0 {
+	if request.InternalPort != 0 {
 		if config.ExposedPorts == nil {
 			config.ExposedPorts = network.PortSet{}
 		}
-		config.ExposedPorts[network.MustParsePort(strconv.Itoa(request.HarnessPort)+"/tcp")] = struct{}{}
+		config.ExposedPorts[network.MustParsePort(strconv.Itoa(request.InternalPort)+"/tcp")] = struct{}{}
 	}
 	created, err := manager.client.ContainerCreate(ctx, client.ContainerCreateOptions{Name: request.Name, Config: config, HostConfig: host, NetworkingConfig: networking})
 	if strings.TrimSpace(created.ID) != "" {
@@ -245,38 +245,47 @@ func (manager *Manager) Validate(ctx context.Context, id string, request deploym
 		}
 	}
 	if len(request.NetworkAliases) > 0 && info.State != nil && info.State.Running {
-		if info.NetworkSettings == nil || info.NetworkSettings.Networks[request.Placement.DockerNetwork] == nil {
+		if info.NetworkSettings == nil || info.NetworkSettings.Networks[request.Placement.AttachmentID] == nil {
 			return errors.New("deployment task network is not attached")
 		}
 	}
-	if string(info.HostConfig.NetworkMode) != request.Placement.DockerNetwork {
+	if string(info.HostConfig.NetworkMode) != request.Placement.AttachmentID {
 		return errors.New("deployment must use only the task network")
 	}
-	expectedMounts := 0
-	if request.TrustedDockerSocket != "" {
-		expectedMounts = 1
+	return validateMounts(info, request)
+}
+
+func validateMounts(info container.InspectResponse, request deployment.Request) error {
+	if len(info.HostConfig.Binds) != 0 || len(info.HostConfig.Mounts) != len(request.Mounts) {
+		return errors.New("deployment host mounts differ from request")
 	}
-	if len(info.HostConfig.Binds) != 0 || len(info.HostConfig.Mounts) != expectedMounts {
-		return errors.New("deployment must not request binds or mounts")
+	requested := make(map[string]deployment.Mount, len(request.Mounts))
+	for _, declared := range request.Mounts {
+		requested[declared.Target] = declared
 	}
-	if expectedMounts == 1 {
-		m := info.HostConfig.Mounts[0]
-		if m.Type != "bind" || m.Source != request.TrustedDockerSocket || m.Target != "/var/run/docker.sock" || m.ReadOnly {
-			return errors.New("trusted bridge socket differs from request")
+	configured := make(map[string]bool, len(requested))
+	for _, actual := range info.HostConfig.Mounts {
+		declared, ok := requested[actual.Target]
+		if !ok || configured[actual.Target] || actual.Type != mount.TypeBind || actual.Source != declared.Source || actual.ReadOnly != declared.ReadOnly {
+			return errors.New("deployment host mount differs from request")
 		}
+		configured[actual.Target] = true
 	}
-	socketFound := false
-	for _, mount := range info.Mounts {
-		if request.TrustedDockerSocket != "" && mount.Type == "bind" && mount.Source == request.TrustedDockerSocket && mount.Destination == "/var/run/docker.sock" && mount.RW {
-			socketFound = true
+	present := make(map[string]bool, len(requested))
+	for _, actual := range info.Mounts {
+		if declared, ok := requested[actual.Destination]; ok {
+			if present[actual.Destination] || actual.Type != mount.TypeBind || actual.Source != declared.Source || actual.RW == declared.ReadOnly {
+				return errors.New("deployment mounted path differs from request")
+			}
+			present[actual.Destination] = true
 			continue
 		}
-		if mount.Type != "volume" || mount.Name == "" || (!request.AllowImageVolumes && !slices.Contains(request.ImageVolumes, mount.Destination)) {
-			return errors.New("deployment has a mount beyond image-declared volumes")
+		if actual.Type != mount.TypeVolume || actual.Name == "" || (!request.AllowImageVolumes && !slices.Contains(request.ImageVolumes, actual.Destination)) {
+			return errors.New("deployment has a mount beyond requested paths and image-declared volumes")
 		}
 	}
-	if expectedMounts == 1 && !socketFound {
-		return errors.New("trusted bridge socket is missing")
+	if len(present) != len(requested) {
+		return errors.New("deployment requested mount is missing")
 	}
 	return nil
 }
@@ -346,10 +355,10 @@ func (manager *Manager) Address(ctx context.Context, id string, port int) (strin
 	servicePort := network.MustParsePort(strconv.Itoa(port) + "/tcp")
 	bindings := inspection.Container.NetworkSettings.Ports[servicePort]
 	// Docker suppresses host publication on internal task networks. The host
-	// still reaches the container's task-interface IP; managed bridges use
-	// mandatory mTLS there, independently of the native SSH service port.
+	// still reaches the container's task-interface IP. This fallback requires the
+	// same explicit loopback publication request, regardless of component role.
 	c := inspection.Container
-	if len(bindings) == 0 && c.ID == id && c.Config != nil && c.Config.Labels["aries.component"] == "bridge" && c.HostConfig != nil && c.State != nil && c.State.Running {
+	if len(bindings) == 0 && c.ID == id && c.HostConfig != nil && c.State != nil && c.State.Running {
 		requested := c.HostConfig.PortBindings[servicePort]
 		if len(requested) == 1 && requested[0].HostIP.String() == "127.0.0.1" && len(c.NetworkSettings.Networks) == 1 {
 			for _, endpoint := range c.NetworkSettings.Networks {
@@ -503,7 +512,7 @@ func (manager *Manager) StopNetwork(ctx context.Context, id string) error {
 }
 
 func validatePlacement(placement core.RuntimePlacement) error {
-	if strings.TrimSpace(placement.DockerNetwork) == "" {
+	if strings.TrimSpace(placement.AttachmentID) == "" {
 		return errors.New("Docker deployment requires a nonempty Docker task attachment")
 	}
 	return nil
@@ -513,21 +522,26 @@ func validateRuntimeRequest(request deployment.Request) error {
 	if err := validatePlacement(request.Placement); err != nil {
 		return err
 	}
-	if request.HarnessPort < 0 || request.HarnessPort > 65535 {
-		return errors.New("invalid harness service port")
+	if request.InternalPort < 0 || request.InternalPort > 65535 {
+		return errors.New("invalid internal service port")
 	}
-	if request.TrustedDockerSocket != "" {
-		if request.Labels["aries.component"] != "bridge" || !filepath.IsAbs(request.TrustedDockerSocket) || filepath.Clean(request.TrustedDockerSocket) != request.TrustedDockerSocket {
-			return errors.New("daemon socket attachment requires a trusted bridge and an absolute local socket path")
+	targets := make(map[string]bool, len(request.Mounts))
+	for _, declared := range request.Mounts {
+		if !filepath.IsAbs(declared.Source) || filepath.Clean(declared.Source) != declared.Source || !filepath.IsAbs(declared.Target) || filepath.Clean(declared.Target) != declared.Target || strings.ContainsRune(declared.Source+declared.Target, 0) {
+			return errors.New("deployment mounts require absolute clean source and target paths")
 		}
+		if targets[declared.Target] {
+			return errors.New("deployment mount targets must be distinct")
+		}
+		targets[declared.Target] = true
 	}
 	return nil
 }
 
-// HarnessAddress resolves the immutable runtime on its sole task network.
-func (manager *Manager) HarnessAddress(ctx context.Context, id string, port int) (string, error) {
+// TaskAddress resolves the immutable runtime on its sole task network.
+func (manager *Manager) TaskAddress(ctx context.Context, id string, port int) (string, error) {
 	if port < 1 || port > 65535 {
-		return "", errors.New("invalid harness service port")
+		return "", errors.New("invalid task service port")
 	}
 	result, err := manager.client.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
 	if err != nil {
@@ -535,13 +549,13 @@ func (manager *Manager) HarnessAddress(ctx context.Context, id string, port int)
 	}
 	c := result.Container
 	if c.ID != id || c.State == nil || !c.State.Running || c.NetworkSettings == nil || len(c.NetworkSettings.Networks) != 1 {
-		return "", errors.New("bridge runtime task attachment is not ready")
+		return "", errors.New("runtime task attachment is not ready")
 	}
 	for _, endpoint := range c.NetworkSettings.Networks {
 		if endpoint == nil || !endpoint.IPAddress.IsValid() {
-			return "", errors.New("bridge runtime task address is missing")
+			return "", errors.New("runtime task address is missing")
 		}
 		return net.JoinHostPort(endpoint.IPAddress.String(), strconv.Itoa(port)), nil
 	}
-	return "", errors.New("bridge runtime task attachment is missing")
+	return "", errors.New("runtime task attachment is missing")
 }

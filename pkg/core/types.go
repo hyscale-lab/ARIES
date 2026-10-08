@@ -134,7 +134,7 @@ type ToolEndpoint struct {
 // RuntimePlacement carries the task attachment to the deployment implementation.
 // Backend-specific attachment identities remain owned by TaskEnvironment.
 type RuntimePlacement struct {
-	DockerNetwork string `json:"docker_network,omitempty"`
+	AttachmentID string `json:"attachment_id,omitempty"`
 }
 
 // TaskServices declares services the benchmark starts during preparation.

@@ -11,6 +11,8 @@ an invariant; routine aligned work needs no additional approval.
   confidentiality, verifier isolation, resource ownership, and confirmed cleanup.
 - ARIES runs, evaluates, and measures agent workloads. Preserve measurement
   meaning; distinguish unsupported measurements from measured zero.
+  Confirmed runtime teardown must not fail observation of remaining runtimes;
+  preserve genuine measurement failures.
 - Runner composes exactly four replaceable roles: Benchmark, AgentHarness,
   ToolSandbox, and ToolBridge. Preserve their behavior, ownership, and isolation
   [contracts](components.md). Model runtime infrastructure adds no role.

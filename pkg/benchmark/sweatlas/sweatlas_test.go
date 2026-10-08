@@ -351,5 +351,5 @@ func (s *prepareSandboxFake) Upload(context.Context, string, string) error {
 func (*prepareSandboxFake) Download(context.Context, string, string) error { return nil }
 
 func (s *prepareSandboxFake) Connectivity() core.HarnessConnectivity {
-	return core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "test-network"}}
+	return core.HarnessConnectivity{Placement: core.RuntimePlacement{AttachmentID: "test-network"}}
 }

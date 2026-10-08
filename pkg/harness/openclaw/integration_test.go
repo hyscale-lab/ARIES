@@ -23,6 +23,7 @@ import (
 
 	"github.com/containerd/errdefs"
 	bridgewiring "github.com/hyscale-lab/aries/internal/app/wiring/bridge"
+	deploymentwiring "github.com/hyscale-lab/aries/internal/app/wiring/deployment"
 	"github.com/hyscale-lab/aries/pkg/benchmark/terminalbench"
 	managedbridge "github.com/hyscale-lab/aries/pkg/bridge"
 	"github.com/hyscale-lab/aries/pkg/config"
@@ -114,9 +115,9 @@ func (bridge *modelBridge) Start(ctx context.Context, sandbox runner.Sandbox) (c
 			Cmd:    []string{"-e", deterministicModelScript(), hex.EncodeToString(digest[:])},
 			Labels: map[string]string{"aries.managed": "true", "aries.kind": "fake-model", "aries.run": bridge.runID},
 		},
-		HostConfig: &container.HostConfig{NetworkMode: container.NetworkMode(sandbox.Connectivity().Placement.DockerNetwork)},
+		HostConfig: &container.HostConfig{NetworkMode: container.NetworkMode(sandbox.Connectivity().Placement.AttachmentID)},
 		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{
-			sandbox.Connectivity().Placement.DockerNetwork: {Aliases: []string{"fake-model"}},
+			sandbox.Connectivity().Placement.AttachmentID: {Aliases: []string{"fake-model"}},
 		}},
 	})
 	if err == nil {
@@ -250,7 +251,11 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sshBridge, err := managedbridge.New(managedbridge.Options{Runtime: bridgeRuntime, Launch: bridgewiring.DockerLaunch(versions.Bridge.Image, ""), Client: clientConfig, BridgeType: "openclaw-ssh", RetainRawLog: true, OutputDir: outputDir})
+	launch := bridgewiring.Launch(versions.Bridge.Image)
+	launch.RuntimeBackend, launch.ResourceMetrics = "docker", "docker-stats"
+	launch.Config.Backend = "docker"
+	launch.Config.BackendEndpoint, launch.Request.Mounts = deploymentwiring.DockerExecutionAccess("")
+	sshBridge, err := managedbridge.New(managedbridge.Options{Runtime: bridgeRuntime, Launch: launch, Client: clientConfig, BridgeType: "openclaw-ssh", RetainRawLog: true, OutputDir: outputDir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -475,7 +480,7 @@ func TestPinnedGatewayRealtimeProtocolSmoke(t *testing.T) {
 		_ = harness.Stop(cleanupCtx)
 		_ = harness.Close()
 	})
-	if err := harness.Start(ctx, core.HarnessRequest{Connectivity: core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: networkName}},
+	if err := harness.Start(ctx, core.HarnessRequest{Connectivity: core.HarnessConnectivity{Placement: core.RuntimePlacement{AttachmentID: networkName}},
 		RunID: runID, TaskID: "realtime-smoke", Endpoint: endpoint, Timeout: 10 * time.Second,
 		Model: core.ModelConfig{Provider: "deepseek", BaseURL: "http://model.invalid/v1", Model: "deterministic-model", APIKeyEnv: "MODEL_KEY"},
 	}); err != nil {

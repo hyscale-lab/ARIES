@@ -23,7 +23,7 @@ import (
 func commandWiring() app.Wiring {
 	return app.Wiring{
 		PrepareBackend:       prepareBackend,
-		PrepareBridge:        bridgewiring.Prepare,
+		PrepareBridge:        prepareBridge,
 		ValidateComponents:   validateComponents,
 		SetupBenchmark:       setupBenchmark,
 		LoadPreparationTasks: loadPreparationTasks,
@@ -159,9 +159,39 @@ func newBridge(cfg config.Config, outputRoot string, logger *logrus.Logger) (run
 	}
 	switch cfg.Bridge.Type {
 	case "openclaw-ssh", "hermes-ssh":
-		return bridgewiring.New(cfg, outputRoot, logger)
 	default:
 		return nil, fmt.Errorf("unsupported bridge type %q", cfg.Bridge.Type)
+	}
+	runtime, err := newDeployment(cfg.Bridge.Deployment, cfg.Versions, logger)
+	if err != nil {
+		return nil, fmt.Errorf("construct bridge deployment: %w", err)
+	}
+	launch := bridgewiring.Launch(cfg.Versions.Bridge.Image)
+	launch.RuntimeBackend = cfg.Bridge.Deployment.Backend
+	launch.ResourceMetrics = "unsupported"
+	if cfg.Bridge.Deployment.Backend == "docker" {
+		launch.ResourceMetrics = "docker-stats"
+	}
+	// Sandbox execution access is selected independently of bridge placement.
+	launch.Config.Backend = cfg.Sandbox.Deployment.Backend
+	switch cfg.Sandbox.Deployment.Backend {
+	case "docker":
+		launch.Config.BackendEndpoint, launch.Request.Mounts = deploymentwiring.DockerExecutionAccess(cfg.Sandbox.Deployment.Docker.Socket)
+	default:
+		return nil, errors.Join(fmt.Errorf("unsupported bridge execution backend %q", cfg.Sandbox.Deployment.Backend), runtime.Close())
+	}
+	return bridgewiring.New(cfg, outputRoot, runtime, launch)
+}
+
+func prepareBridge(ctx context.Context, cfg config.Config) error {
+	if err := validateDeployment(&cfg); err != nil {
+		return err
+	}
+	switch cfg.Bridge.Deployment.Backend {
+	case "docker":
+		return deploymentwiring.PrepareDockerBridge(ctx, cfg)
+	default:
+		return fmt.Errorf("unsupported bridge preparation backend %q", cfg.Bridge.Deployment.Backend)
 	}
 }
 
