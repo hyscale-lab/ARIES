@@ -2,7 +2,6 @@ package bridge
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 
@@ -40,7 +39,7 @@ func TestAdmissionReconcilesDroppedRequestAndLostResponse(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			grants := 0
-			server, err := control.NewServer(control.Config{InstanceID: "instance", Token: strings.Repeat("x", 32), Assign: func(context.Context, *v1.AssignSandboxRequest) (*v1.Endpoint, error) {
+			server, err := control.NewServer(control.Config{InstanceID: "instance", Assign: func(context.Context, *v1.AssignSandboxRequest) (*v1.Endpoint, error) {
 				grants++
 				return &v1.Endpoint{Host: "127.0.0.1", Port: 22}, nil
 			}, Revoke: func(context.Context) ([]*v1.Artifact, error) { return nil, nil }})

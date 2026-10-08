@@ -109,23 +109,24 @@ and workdir defaults use the same sandbox helper as direct sandbox execution.
 Network ownership follows the
 [task-environment contract](../design/deployment.md#taskenvironment-operations-and-ownership).
 
-The controller stages the authorized client public key and server private key;
-the client private key stays local for staging into the harness. Authenticated
-gRPC assignment control is separate from SSH tool traffic. One instance accepts
-one assignment, retains its identity after failed admission or revocation, and
+The controller stages the authorized SSH client public key and SSH server private
+key; the client private key stays local for staging into the harness. Assignment
+control uses plaintext, unauthenticated gRPC, without TLS certificates or bearer
+tokens. It remains separate from authenticated SSH tool traffic. One instance
+accepts one assignment, retains its identity after failed admission or revocation, and
 cannot be reused. Runner explicitly revokes the assignment during task cleanup;
 the bridge does not expire assignments or monitor controller liveness. Caller
 timeouts do not cancel the service's ownership of admission or cleanup. A lost
 response is reconciled using the original assignment ID.
-If authenticated status confirms that assignment was never reserved, the controller
-resubmits the identical request on the same instance. Authentication, identity,
-validation, and other definitive errors do not trigger replay.
+If status confirms that assignment was never reserved, the controller resubmits
+the identical request on the same instance. Instance, assignment, and target
+validation errors and other definitive errors do not trigger replay.
 Historical admission and cleanup diagnostics remain available separately from
 active cleanup errors, so a confirmed cleanup retry can finish successfully.
 The bounded collection/exit interval starts when revocation begins, including
-failed cleanup attempts. SSH bootstrap files are erased on revocation attempts,
-and private control/bootstrap files are erased on every service exit, including
-cleanup timeouts. Evidence remains available for collection.
+failed cleanup attempts. SSH bootstrap files are erased on revocation attempts
+and every service exit, including cleanup timeouts. Evidence remains available
+for collection.
 An abrupt Runner crash can leave owned containers and credentials behind and
 may require operator cleanup. There is no heartbeat or parent-death replacement
 for explicit lifecycle cleanup.

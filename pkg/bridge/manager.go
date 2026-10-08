@@ -27,7 +27,6 @@ import (
 	"github.com/hyscale-lab/aries/pkg/runner"
 	"golang.org/x/crypto/ssh"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/protobuf/proto"
 )
@@ -197,39 +196,27 @@ func (m *Manager) Start(ctx context.Context, sandbox runner.Sandbox) (core.ToolE
 	if err = os.WriteFile(identityPath, clientKey, 0600); err != nil {
 		return endpoint, err
 	}
-	controlKeys, err := newControlCredentials()
-	if err != nil {
-		return endpoint, err
-	}
-	token, err := nonce()
-	if err != nil {
-		return endpoint, err
-	}
 	configJSON, err := json.Marshal(config)
 	if err != nil {
 		return endpoint, err
 	}
-	archive, err := archiveFiles(map[string][]byte{"config.json": configJSON, "token": []byte(token), "ca.pem": controlKeys.CA, "server.pem": controlKeys.ServerCert, "server.key": controlKeys.ServerKey, "host.key": hostKey, "authorized.pub": ssh.MarshalAuthorizedKey(clientPublic)})
+	archive, err := archiveFiles(map[string][]byte{"config.json": configJSON, "host.key": hostKey, "authorized.pub": ssh.MarshalAuthorizedKey(clientPublic)})
 	if err != nil {
 		return endpoint, err
 	}
 	if err = m.options.Runtime.UploadArchive(ctx, m.runtimeID, req.Workdir, bytes.NewReader(archive)); err != nil {
 		return endpoint, err
 	}
-	if err = m.options.Runtime.Validate(ctx, m.runtimeID, req, [][]byte{clientKey, hostKey, controlKeys.ServerKey, controlKeys.ClientKey, []byte(token)}); err != nil {
+	if err = m.options.Runtime.Validate(ctx, m.runtimeID, req, [][]byte{clientKey, hostKey}); err != nil {
 		return endpoint, err
 	}
 	if err = m.options.Runtime.Start(ctx, m.runtimeID); err != nil {
 		return endpoint, err
 	}
-	tlsConfig, err := controlTLS(controlKeys.CA, controlKeys.ClientCert, controlKeys.ClientKey, false)
-	if err != nil {
-		return endpoint, err
-	}
 	for {
 		address, addressErr := m.options.Runtime.Address(ctx, m.runtimeID, req.ServicePort)
 		if addressErr == nil {
-			m.connection, m.client, err = control.NewClient(address, m.instance, token, credentials.NewTLS(tlsConfig))
+			m.connection, m.client, err = control.NewClient(address)
 			if err != nil {
 				return endpoint, err
 			}

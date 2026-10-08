@@ -17,7 +17,6 @@ import (
 	"github.com/hyscale-lab/aries/pkg/bridge/target"
 	"golang.org/x/crypto/ssh"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 )
 
 type ServeOptions struct {
@@ -41,7 +40,7 @@ func serve(ctx context.Context, options ServeOptions, listener net.Listener) (re
 		}
 	}()
 	defer func() {
-		returnErr = errors.Join(returnErr, eraseStagedCredentials("host.key", "authorized.pub", "server.key", "token"))
+		returnErr = errors.Join(returnErr, eraseStagedCredentials("host.key", "authorized.pub"))
 	}()
 	config := options.Config
 	read := func(name string) ([]byte, error) {
@@ -54,26 +53,6 @@ func serve(ctx context.Context, options ServeOptions, listener net.Listener) (re
 		}
 		return os.ReadFile(name)
 	}
-	ca, err := read("ca.pem")
-	if err != nil {
-		return err
-	}
-	cert, err := read("server.pem")
-	if err != nil {
-		return err
-	}
-	key, err := read("server.key")
-	if err != nil {
-		return err
-	}
-	token, err := read("token")
-	if err != nil {
-		return err
-	}
-	tlsConfig, err := controlTLS(ca, cert, key, true)
-	if err != nil {
-		return err
-	}
 	var mu sync.Mutex
 	var native NativeServer
 	var borrowedTarget *target.Borrowed
@@ -85,7 +64,7 @@ func serve(ctx context.Context, options ServeOptions, listener net.Listener) (re
 		names = append(names, "ssh_raw.log")
 	}
 	service, err := control.NewServer(control.Config{
-		InstanceID: config.InstanceID, Token: string(token), OperationTimeout: time.Minute,
+		InstanceID: config.InstanceID, OperationTimeout: time.Minute,
 		Assign: func(call context.Context, request *v1.AssignSandboxRequest) (*v1.Endpoint, error) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -185,7 +164,7 @@ func serve(ctx context.Context, options ServeOptions, listener net.Listener) (re
 			return err
 		}
 	}
-	server := grpc.NewServer(grpc.Creds(credentials.NewTLS(tlsConfig)), grpc.UnaryInterceptor(service.UnaryInterceptor), grpc.StreamInterceptor(service.StreamInterceptor))
+	server := grpc.NewServer()
 	service.Register(server)
 	defer server.Stop()
 	serveDone := make(chan error, 1)

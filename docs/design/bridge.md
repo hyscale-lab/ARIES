@@ -19,8 +19,11 @@ A bridge may consume a narrow capability of its paired sandbox beyond the minima
 `Sandbox` interface. It must validate that capability before exposing access.
 Runner owns a controller; the controller owns a separate native bridge runtime
 for each occurrence. The child borrows a fixed execution target and never owns
-the sandbox or task attachment. Assignment control uses authenticated versioned
-gRPC; harness tool traffic retains native SSH and goes directly to the child.
+the sandbox or task attachment. Assignment control uses plaintext, unauthenticated
+versioned gRPC in the trusted research environment, without TLS certificates or
+bearer tokens. Instance, assignment, and exact-target checks remain part of the
+control protocol. Harness tool traffic retains native SSH authentication and goes
+directly to the child.
 The supported composition pairs Docker bridge containers with Docker sandboxes.
 Bridge runtime placement and sandbox execution are separate dependencies:
 [wiring](../../internal/app/wiring/bridge/launch.go) supplies an explicit
@@ -100,10 +103,10 @@ data and remain private. Model credentials and SSH private-key bytes do not
 belong in those records. Raw input retention is configurable in current bridges;
 recording limitations must remain distinguishable from successful execution.
 
-A replacement bridge must preserve authentication, workspace mapping, argument
-boundaries, stream behavior, exit status, cancellation, and revocation for its
-specific pairing. Explicit constructors and role-specific wiring select the
-implementation; no registration or generic plugin layer is needed.
+A replacement bridge must preserve its native protocol's authentication, workspace
+mapping, argument boundaries, stream behavior, exit status, cancellation, and
+revocation for its specific pairing. Explicit constructors and role-specific wiring
+select the implementation; no registration or generic plugin layer is needed.
 
 Runtime substitution also requires private archive transfer, control and harness
 addressing, and confirmed removal. A non-Docker runtime fixture exercises these

@@ -23,6 +23,8 @@ Follow [Runner interfaces](../pkg/runner/interfaces.go) and [lifecycle](architec
   must not expose secrets through their cause chain.
 - Give each managed bridge occurrence its own runtime and immutable assignment.
   Native tool execution must not call back into Runner or own sandbox lifecycle.
+  Use plaintext, unauthenticated gRPC control in the trusted research environment;
+  retain SSH authentication and instance, assignment, and exact-target checks.
   Runner explicitly revokes assignments; retain operation deadlines and bounded
   evidence collection without leases or controller-liveness supervision.
   Close bridge-owned access/handlers, collect finalized evidence, then confirm

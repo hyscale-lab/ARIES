@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,6 +11,7 @@ import (
 	v1 "github.com/hyscale-lab/aries/pkg/bridge/control/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
@@ -23,7 +23,7 @@ func ref() *v1.AssignmentRequest {
 	return &v1.AssignmentRequest{InstanceId: "instance", AssignmentId: "assignment"}
 }
 func config() Config {
-	return Config{InstanceID: "instance", Token: strings.Repeat("t", 32), OperationTimeout: time.Second, Assign: func(context.Context, *v1.AssignSandboxRequest) (*v1.Endpoint, error) {
+	return Config{InstanceID: "instance", OperationTimeout: time.Second, Assign: func(context.Context, *v1.AssignSandboxRequest) (*v1.Endpoint, error) {
 		return &v1.Endpoint{Host: "127.0.0.1", Port: 22}, nil
 	}, Revoke: func(context.Context) ([]*v1.Artifact, error) {
 		return []*v1.Artifact{{Name: "tool-calls.jsonl", Status: "complete"}}, nil
@@ -130,9 +130,9 @@ func TestRevokeContinuesAfterCallerTimeoutAndRetriesFailure(t *testing.T) {
 		t.Fatal("terminal signal absent")
 	}
 }
-func TestAuthenticatedGRPCAndIdentity(t *testing.T) {
+func TestPlaintextGRPCAndIdentity(t *testing.T) {
 	s := server(t, config())
-	g := grpc.NewServer(grpc.UnaryInterceptor(s.UnaryInterceptor), grpc.StreamInterceptor(s.StreamInterceptor))
+	g := grpc.NewServer()
 	s.Register(g)
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -140,55 +140,63 @@ func TestAuthenticatedGRPCAndIdentity(t *testing.T) {
 	}
 	go func() { _ = g.Serve(l) }()
 	t.Cleanup(g.Stop)
-	conn, client, err := NewClient(l.Addr().String(), "instance", strings.Repeat("x", 32), nil)
+	conn, client, err := NewClient(l.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	_, err = client.AssignSandbox(context.Background(), request())
-	if status.Code(err) != codes.Unauthenticated {
-		t.Fatal(err)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	health, err := healthpb.NewHealthClient(conn).Check(ctx, &healthpb.HealthCheckRequest{})
+	if err != nil || health.Status != healthpb.HealthCheckResponse_SERVING {
+		t.Fatalf("plaintext health: %v %v", health, err)
 	}
-	conn2, client2, err := NewClient(l.Addr().String(), "instance", config().Token, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn2.Close()
 	r := request()
 	r.ProtocolVersion = 2
-	_, err = client2.AssignSandbox(context.Background(), r)
+	_, err = client.AssignSandbox(ctx, r)
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatal(err)
 	}
-	a, err := client2.AssignSandbox(context.Background(), request())
+	a, err := client.AssignSandbox(ctx, request())
 	if err != nil || a.State != v1.State_READY {
 		t.Fatalf("%v %v", a, err)
 	}
 	bad := ref()
 	bad.InstanceId = "replacement"
-	_, err = client2.GetAssignment(context.Background(), bad)
+	_, err = client.GetAssignment(ctx, bad)
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatal(err)
 	}
-	if _, _, err = NewClient("192.0.2.1:1234", "instance", config().Token, nil); err == nil {
-		t.Fatal("unauthenticated remote transport accepted")
-	}
-	if err = conn2.Close(); err != nil {
+	bad = ref()
+	bad.AssignmentId = "missing"
+	if _, err = client.GetAssignment(ctx, bad); status.Code(err) != codes.NotFound {
 		t.Fatal(err)
 	}
-	conn3, client3, err := NewClient(l.Addr().String(), "instance", config().Token, nil)
+	if err = conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reconnected, nextClient, err := NewClient(l.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn3.Close()
-	a, err = client3.GetAssignment(context.Background(), ref())
+	defer reconnected.Close()
+	a, err = nextClient.GetAssignment(ctx, ref())
 	if err != nil || a.State != v1.State_READY || a.Endpoint == nil {
 		t.Fatalf("control disconnect changed the explicit assignment lifecycle: %v %v", a, err)
 	}
-	a, err = client3.RevokeAssignment(context.Background(), ref())
+	a, err = nextClient.RevokeAssignment(ctx, ref())
 	if err != nil || a.State != v1.State_REVOKED || a.Endpoint != nil || len(a.Artifacts) != 1 {
 		t.Fatalf("explicit revocation did not finalize assignment: %v %v", a, err)
 	}
+}
+
+func TestClientAcceptsDeploymentAddress(t *testing.T) {
+	// NewClient constructs a lazy channel; no remote listener is required.
+	conn, _, err := NewClient("192.0.2.1:8443")
+	if err != nil {
+		t.Fatalf("deployment address rejected: %v", err)
+	}
+	defer conn.Close()
 }
 
 func TestAdmissionTimeoutStillCleansPartialNativeState(t *testing.T) {
