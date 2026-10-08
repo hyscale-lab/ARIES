@@ -67,7 +67,7 @@ func fixtureManager(t *testing.T) (*Manager, *lifecycleRuntime, *revokeClient) {
 	m := &Manager{options: Options{Runtime: r}, runtimeID: "runtime", instance: "instance", assignment: "assignment", descriptor: d, client: c, assigned: true, local: t.TempDir(), remote: "evidence/task/bridge"}
 	return m, r, c
 }
-func TestStopRequiresPositiveDrainBeforeCollectAndRemove(t *testing.T) {
+func TestStopRequiresRevocationBeforeCollectAndRemove(t *testing.T) {
 	for _, state := range []v1.State{v1.State_ASSIGNING, v1.State_READY, v1.State_REVOKING} {
 		t.Run(state.String(), func(t *testing.T) {
 			m, r, c := fixtureManager(t)
@@ -76,30 +76,30 @@ func TestStopRequiresPositiveDrainBeforeCollectAndRemove(t *testing.T) {
 				t.Fatal("unconfirmed revocation succeeded")
 			}
 			if r.stops != 0 || r.downloads != 0 {
-				t.Fatal("runtime removed before drain")
+				t.Fatal("runtime removed before revocation")
 			}
 		})
 	}
 	m, r, c := fixtureManager(t)
-	c.err = errors.New("child crashed")
+	c.err = errors.New("control connection lost")
 	if err := m.Stop(context.Background()); err == nil {
-		t.Fatal("crash treated as confirmed drain")
+		t.Fatal("control failure treated as confirmed revocation while child is running")
 	}
 	if r.stops != 0 {
 		t.Fatal("cleanup erased collection ownership")
 	}
 }
 
-func TestStopReportsUnconfirmedDrainCause(t *testing.T) {
+func TestStopReportsNativeCleanupFailure(t *testing.T) {
 	m, r, c := fixtureManager(t)
 	c.assignment.State = v1.State_REVOKING
-	c.assignment.CleanupErrors = []*v1.CleanupError{{Stage: "revocation", Message: "target process drain failed"}}
+	c.assignment.CleanupErrors = []*v1.CleanupError{{Stage: "revocation", Message: "native handler cleanup failed"}}
 	err := m.Stop(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "REVOKING") || !strings.Contains(err.Error(), "revocation: target process drain failed") {
-		t.Fatalf("missing drain diagnostic: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "REVOKING") || !strings.Contains(err.Error(), "revocation: native handler cleanup failed") {
+		t.Fatalf("missing cleanup diagnostic: %v", err)
 	}
 	if r.stops != 0 || r.downloads != 0 {
-		t.Fatal("unconfirmed drain released evidence ownership")
+		t.Fatal("unconfirmed cleanup released evidence ownership")
 	}
 }
 func TestStopCollectsEvidenceThenRemovesAndErasesCredentials(t *testing.T) {
@@ -185,8 +185,9 @@ func TestPartialStartBeforeAdmissionRemovesOwnedRuntime(t *testing.T) {
 	}
 }
 
-func TestCrashedChildDisposedWithoutClaimingIsolation(t *testing.T) {
+func TestExposedChildCrashReportsMissingEvidenceAfterDisposal(t *testing.T) {
 	m, r, c := fixtureManager(t)
+	m.exposed = true
 	r.running = false
 	c.err = errors.New("control connection lost")
 	key := filepath.Join(m.local, "id_ed25519")
@@ -195,8 +196,8 @@ func TestCrashedChildDisposedWithoutClaimingIsolation(t *testing.T) {
 	}
 	m.secretFiles = []string{key}
 	for range 2 {
-		if err := m.Stop(context.Background()); err == nil {
-			t.Fatal("crashed child incorrectly proved sandbox drain")
+		if err := m.Stop(context.Background()); err == nil || !strings.Contains(err.Error(), "finalized evidence") {
+			t.Fatalf("missing evidence after crash not reported: %v", err)
 		}
 	}
 	if r.stops != 1 || r.downloads != 0 {
@@ -204,6 +205,20 @@ func TestCrashedChildDisposedWithoutClaimingIsolation(t *testing.T) {
 	}
 	if _, err := os.Stat(key); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("crashed runtime credential remains")
+	}
+}
+
+func TestUnexposedChildExitAllowsOwnedCleanup(t *testing.T) {
+	m, r, c := fixtureManager(t)
+	r.running = false
+	c.err = errors.New("child exited before access was exposed")
+	for range 2 {
+		if err := m.Stop(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if r.stops != 1 || r.downloads != 0 || r.closes != 1 || c.calls != 1 {
+		t.Fatalf("unexpected failed-start cleanup: %+v", r)
 	}
 }
 

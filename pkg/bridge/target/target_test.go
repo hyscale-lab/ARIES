@@ -3,25 +3,20 @@ package target
 import (
 	"context"
 	"errors"
-	"github.com/hyscale-lab/aries/pkg/core"
-	"github.com/hyscale-lab/aries/pkg/deployment"
 	"io"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/hyscale-lab/aries/pkg/core"
 )
 
 type backendStub struct {
-	command         core.Command
-	id              string
-	validationErr   error
-	validated       []core.BridgeTarget
-	calls           int
-	snapshotErr     error
-	snapshotCalls   int
-	revokeErr       error
-	revokeCalls     int
-	revokedBaseline []deployment.ProcessIdentity
+	command       core.Command
+	id            string
+	validationErr error
+	validated     []core.BridgeTarget
+	calls         int
 }
 
 func (b *backendStub) ValidateBridgeTarget(_ context.Context, d core.BridgeTarget) error {
@@ -75,16 +70,6 @@ func TestBorrowedRejectsMismatchedIdentityAndOwnership(t *testing.T) {
 	}
 }
 
-func (b *backendStub) SnapshotBridgeProcesses(context.Context, string) ([]deployment.ProcessIdentity, error) {
-	b.snapshotCalls++
-	return []deployment.ProcessIdentity{{PID: 1, StartTime: 2}}, b.snapshotErr
-}
-func (b *backendStub) RevokeBridgeProcesses(_ context.Context, _ string, baseline []deployment.ProcessIdentity) error {
-	b.revokeCalls++
-	b.revokedBaseline = append([]deployment.ProcessIdentity(nil), baseline...)
-	return b.revokeErr
-}
-
 func TestBorrowedDelegatesBackendSupportAndResourceIdentity(t *testing.T) {
 	for _, validationErr := range []error{nil, errors.New("resource belongs to a different task")} {
 		name := "accepted"
@@ -100,17 +85,13 @@ func TestBorrowedDelegatesBackendSupportAndResourceIdentity(t *testing.T) {
 				t.Fatalf("provider did not receive the immutable grant: %+v", backend.validated)
 			}
 			if validationErr != nil {
-				if !errors.Is(err, validationErr) || borrowed != nil || backend.snapshotCalls != 0 {
-					t.Fatalf("failed provider validation admitted target: borrowed=%v snapshots=%d err=%v", borrowed, backend.snapshotCalls, err)
+				if !errors.Is(err, validationErr) || borrowed != nil {
+					t.Fatalf("failed provider validation admitted target: borrowed=%v err=%v", borrowed, err)
 				}
 				return
 			}
-			if err != nil || borrowed == nil || backend.snapshotCalls != 1 {
-				t.Fatalf("valid alternative backend denied: snapshots=%d err=%v", backend.snapshotCalls, err)
-			}
-			backend.validationErr = errors.New("resource identity changed before revocation")
-			if err = borrowed.Revoke(context.Background()); !errors.Is(err, backend.validationErr) || backend.revokeCalls != 0 {
-				t.Fatalf("revocation bypassed provider ownership check: calls=%d err=%v", backend.revokeCalls, err)
+			if err != nil || borrowed == nil {
+				t.Fatalf("valid alternative backend denied: %v", err)
 			}
 		})
 	}
@@ -129,31 +110,20 @@ func TestBorrowedRejectsMalformedBackendBeforeProviderAdmission(t *testing.T) {
 	}
 }
 
-func TestBorrowedRequiresBaselineAndRetriesOriginalRevocation(t *testing.T) {
-	backend := &backendStub{snapshotErr: errors.New("snapshot uncertain")}
-	if _, err := New(context.Background(), validDescriptor(), backend); err == nil {
-		t.Fatal("admission without process baseline accepted")
-	}
-	backend.snapshotErr = nil
+func TestBorrowedRevocationClosesAdmissionWithoutBackendOperations(t *testing.T) {
+	backend := &backendStub{}
 	borrowed, err := New(context.Background(), validDescriptor(), backend)
 	if err != nil {
 		t.Fatal(err)
 	}
-	backend.revokeErr = errors.New("backend unavailable")
-	if err := borrowed.Revoke(context.Background()); err == nil {
-		t.Fatal("uncertain process sweep accepted")
-	}
+	// Closing bridge access does not depend on sandbox availability or mutate it.
+	backend.validationErr = errors.New("backend unavailable")
+	borrowed.Revoke()
 	if _, err := borrowed.ExecStream(context.Background(), core.Command{Path: "/bin/true"}, nil, io.Discard, io.Discard); err == nil {
-		t.Fatal("command admitted after revocation began")
+		t.Fatal("command admitted after revocation")
 	}
-	backend.revokeErr = nil
-	if err := borrowed.Revoke(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if backend.revokeCalls != 2 || len(backend.revokedBaseline) != 1 || backend.revokedBaseline[0].StartTime != 2 {
-		t.Fatal("retry replaced baseline")
-	}
-	if err := borrowed.Revoke(context.Background()); err != nil || backend.revokeCalls != 2 {
-		t.Fatal("terminal revocation repeated backend mutation")
+	borrowed.Revoke()
+	if backend.calls != 0 || len(backend.validated) != 1 {
+		t.Fatalf("revocation reached sandbox backend: executions=%d validations=%d", backend.calls, len(backend.validated))
 	}
 }

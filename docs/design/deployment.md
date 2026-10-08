@@ -10,7 +10,7 @@ interface per role.
 
 | Operations | Semantics |
 | --- | --- |
-| `Create(ctx, Request) (string, error)` | Allocate a runtime and return its identity, including on partial failure when cleanup is required. |
+| `Create(ctx, Request) (string, error)` | Allocate a runtime, retaining an owned identity on partial failure when known. Report `ErrAllocationUnconfirmed` when allocation absence/ownership remains unresolved and no cleanup identity is available. |
 | `Validate(ctx, id, Request, secrets)` | Confirm identity, ownership, isolation, and absence of supplied secrets from metadata before exposing the runtime; do not retain secrets. |
 | `UploadArchive`, `DownloadArchive` | Transfer tar content with modes and ownership. Downloads return source size and mode for policy checks. |
 | `Start`, `Running` | Start the allocated runtime and inspect whether it is running. Readiness beyond that is component policy. |
@@ -23,7 +23,9 @@ interface per role.
 External operations accept `context.Context`. Owners must perform cancellation
 cleanup with a fresh bounded context. A failed allocation can still own resources;
 callers must retain returned identities and attempt cleanup. Failure to establish
-absence is a cleanup failure, even when the transport has closed.
+absence is a cleanup failure, even when the transport has closed. An empty Create
+identity alone is not evidence of absence: callers retain and report
+`ErrAllocationUnconfirmed` rather than recording cleanup success.
 
 Archives carry permissions, but harness readiness must verify their effective
 permissions inside the runtime. A download wraps `runner.ErrNotFound` only when
@@ -93,10 +95,10 @@ bridge runtime through the lifecycle/transfer/addressing subset of Deployment.
 Composition wiring supplies launch settings and runtime/measurement metadata;
 controllers must not infer a deployment method from the sandbox backend or inject
 Docker launch defaults. Docker is currently the only supported composition.
-Backend-specific execution and process cleanup live in the provider package;
-the shared deployment package holds contracts. Docker's sandbox process cleanup
-uses Linux `/proc` identities to preserve the pre-assignment baseline and remove
-detached agent commands before evaluation.
+Backend-specific execution and runtime removal live in the provider package;
+the shared deployment package holds contracts. Bridge revocation leaves sandbox
+processes untouched. Harness completion defines completed tool work; the sandbox
+owner removes the entire runtime after evaluation.
 
 **Current gap against full deployment independence:** the shared request still
 exposes a Docker network field, a trusted bridge daemon mount, network aliases,

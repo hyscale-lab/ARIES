@@ -21,6 +21,10 @@ func New(cfg config.Config, outputRoot string, logger *logrus.Logger) (runner.To
 	if err != nil {
 		return nil, err
 	}
+	client, err := SSHClientConfig(cfg.Bridge.Type, filepath.Join(filepath.Dir(executable), "aries-ssh-client"))
+	if err != nil {
+		return nil, err
+	}
 	runtime, err := docker.New(docker.Options{Socket: cfg.Bridge.Deployment.Docker.Socket, Logger: logger})
 	if err != nil {
 		return nil, err
@@ -29,7 +33,7 @@ func New(cfg config.Config, outputRoot string, logger *logrus.Logger) (runner.To
 	if cfg.Sandbox.Deployment.Docker != nil {
 		socket = cfg.Sandbox.Deployment.Docker.Socket
 	}
-	manager, err := managed.New(managed.Options{Runtime: runtime, Launch: DockerLaunch(cfg.Versions.Bridge.Image, socket), OutputDir: outputRoot, ClientPath: filepath.Join(filepath.Dir(executable), "aries-ssh-client"), BridgeType: cfg.Bridge.Type, RetainRawLog: cfg.Bridge.RetainBridgeRawLog()})
+	manager, err := managed.New(managed.Options{Runtime: runtime, Launch: DockerLaunch(cfg.Versions.Bridge.Image, socket), Client: client, OutputDir: outputRoot, BridgeType: cfg.Bridge.Type, RetainRawLog: cfg.Bridge.RetainBridgeRawLog()})
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}

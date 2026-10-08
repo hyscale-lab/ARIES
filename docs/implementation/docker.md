@@ -64,14 +64,15 @@ its anonymous volumes, and inspects again to confirm absence. Earlier lifecycle
 errors may be logged as recovered only after that final absence confirmation.
 Network cleanup also confirms absence. Lost allocation responses are recovered
 through generated names and verified ownership before removing anything.
+If recovery cannot establish absence or an owned identity, Create returns
+`deployment.ErrAllocationUnconfirmed`; bridge cleanup retains that uncertainty
+and the requested runtime name for diagnosis. No unverified handle is removed.
 
-Bridge revocation happens earlier, while the sandbox must remain available for
-evaluation. [Sandbox process cleanup](../../pkg/deployment/docker/sandbox_processes.go)
-records PID/start-time identities before access is granted, then removes newly
-created processes after native sessions stop. It preserves existing benchmark
-processes and refuses to confirm cleanup when termination is uncertain. The
-[live regression](../../pkg/deployment/docker/sandbox_processes_integration_test.go)
-checks detached-process termination, baseline preservation, and repeated cleanup.
+Bridge revocation happens earlier, while the sandbox remains available for
+evaluation. It closes bridge access, finalizes evidence, and removes the bridge
+runtime and credentials. Harness completion is authoritative; revocation leaves
+sandbox processes intact without PID snapshots or a process sweep. The sandbox
+owner later removes that container after evaluation.
 
 The [provider tests](../../pkg/deployment/docker/docker_test.go),
 [allocation recovery tests](../../pkg/deployment/docker/create_recovery_test.go),

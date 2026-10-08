@@ -205,7 +205,7 @@ func launchFixture(t *testing.T, sandboxBackend string) (*Manager, *launchRuntim
 		Request: deployment.Request{Image: "fixture-artifact", Workdir: "/private/bootstrap", Entrypoint: []string{"/opt/fixture/bridge"}, Args: []string{"--config", "config.json"}, Env: []string{"FIXTURE=true"}, ServicePort: 9443, HarnessPort: 3022, Labels: map[string]string{"fixture.owner": "composition"}},
 		Config:  LaunchConfig{Backend: sandboxBackend, ControlAddress: "127.0.0.1:0", OutputDir: "/private/results", Listen: core.BridgeListen{BindHost: "127.0.0.1", BindPort: 3022, AdvertiseHost: "bridge.fixture", AdvertisePort: 13022}},
 	}
-	m, err := New(Options{Runtime: runtime, Launch: launch, OutputDir: t.TempDir(), BridgeType: "hermes-ssh"})
+	m, err := New(Options{Runtime: runtime, Launch: launch, Client: ClientConfig{IdentityFile: "/fixture/ssh/id_ed25519"}, OutputDir: t.TempDir(), BridgeType: "fixture-ssh"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,11 +242,11 @@ func TestManagerUsesInjectedRuntimeLaunch(t *testing.T) {
 				t.Fatal("manager mutated the wiring's launch labels")
 			}
 			wantConfig := m.options.Launch.Config
-			wantConfig.InstanceID, wantConfig.BridgeType = m.instance, "hermes-ssh"
+			wantConfig.InstanceID, wantConfig.BridgeType = m.instance, "fixture-ssh"
 			if !reflect.DeepEqual(runtime.config, wantConfig) || runtime.uploadDestination != "/private/bootstrap" || runtime.controlPort != 9443 || runtime.harnessPort != 3022 {
 				t.Fatalf("runtime configuration, staging or address mapping replaced: %+v", runtime.config)
 			}
-			if endpoint.Address != "bridge.fixture:13022" || endpoint.Workdir != "/workspace" {
+			if endpoint.Address != "bridge.fixture:13022" || endpoint.Workdir != "/workspace" || endpoint.IdentityFile != "/fixture/ssh/id_ed25519" {
 				t.Fatalf("endpoint ignored independent task addressing: %+v", endpoint)
 			}
 			runtime.mu.Lock()

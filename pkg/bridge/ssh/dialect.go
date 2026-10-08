@@ -39,10 +39,4 @@ type Policy struct {
 	UnsupportedRequests   UnsupportedRequests
 	InvalidOperationClass string
 	RefusedExitCode       int
-	Endpoint              EndpointPolicy
-}
-
-type EndpointPolicy struct {
-	ClientCommand, KnownHostsFile string
-	UseSandboxWorkdir             bool
 }

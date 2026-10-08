@@ -171,7 +171,7 @@ func (manager *Manager) Create(ctx context.Context, request deployment.Request) 
 		err = errors.New("Docker returned an empty deployment identity")
 	}
 	if request.Name == "" {
-		return "", errors.Join(err, errors.New("deployment allocation absence unconfirmed: no requested name"))
+		return "", errors.Join(err, fmt.Errorf("%w: no requested name", deployment.ErrAllocationUnconfirmed))
 	}
 	// A canceled/lost create response can hide an allocated container. Recover an
 	// immutable cleanup identity only after checking this occurrence's ownership.
@@ -186,15 +186,15 @@ func (manager *Manager) Create(ctx context.Context, request deployment.Request) 
 		return "", err
 	}
 	if lookupErr != nil {
-		return "", errors.Join(err, fmt.Errorf("deployment allocation absence unconfirmed: %w", lookupErr))
+		return "", errors.Join(err, fmt.Errorf("%w: %w", deployment.ErrAllocationUnconfirmed, lookupErr))
 	}
 	info := inspection.Container
 	if info.ID == "" || info.Name != "/"+request.Name || info.Config == nil || len(request.Labels) == 0 {
-		return "", errors.Join(err, errors.New("deployment allocation identity or ownership unconfirmed"))
+		return "", errors.Join(err, fmt.Errorf("%w: identity or ownership could not be verified", deployment.ErrAllocationUnconfirmed))
 	}
 	for key, value := range request.Labels {
 		if info.Config.Labels[key] != value {
-			return "", errors.Join(err, errors.New("deployment allocation ownership differs from request"))
+			return "", errors.Join(err, fmt.Errorf("%w: ownership differs from request", deployment.ErrAllocationUnconfirmed))
 		}
 	}
 	return info.ID, err

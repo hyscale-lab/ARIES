@@ -18,7 +18,6 @@ func (Dialect) Policy() ssh.Policy {
 		UnsupportedRequests:   ssh.RejectAndContinue,
 		InvalidOperationClass: kindUnknown,
 		RefusedExitCode:       -1,
-		Endpoint:              ssh.EndpointPolicy{UseSandboxWorkdir: true},
 	}
 }
 

@@ -119,15 +119,20 @@ validation, and other definitive errors do not trigger replay.
 Historical admission and cleanup diagnostics remain available separately from
 active cleanup errors, so a confirmed cleanup retry can finish successfully.
 The bounded collection/exit interval starts when revocation begins, including
-failed drains; exiting without confirmed drain never grants evaluation permission.
-SSH bootstrap files are erased on revocation
-attempts, and private control/bootstrap files are erased on every service exit,
-including failed-drain timeouts. Evidence remains available for collection.
+failed cleanup attempts. SSH bootstrap files are erased on revocation attempts,
+and private control/bootstrap files are erased on every service exit, including
+cleanup timeouts. Evidence remains available for collection.
 
-Stop requires native drain and evidence finalization, validated artifact collection,
-and confirmed runtime removal. A crashed child without a drain acknowledgment
-blocks evaluation even when its container has disappeared. Remote
-artifact names are checked and mapped into local bridge evidence paths; remote
+Stop closes tool admission and bridge-owned listeners/connections/handlers,
+finalizes and collects evidence, and confirms bridge runtime removal. Harness
+completion is authoritative for completed tool calls; revocation neither scans
+nor kills sandbox processes. The live sandbox remains available for evaluation.
+If a child exits before any harness receives access, the controller can confirm
+access closure from its stopped state and finish cleaning up its runtime and
+credentials. If access was exposed, an exit without finalized evidence remains
+an error even after runtime removal. This is an evidence failure, not a requirement
+to prove sandbox processes have stopped. Remote artifact names are checked and
+mapped into local bridge evidence paths; remote
 absolute paths are never exposed as local files. Failed cleanup retains ownership
 for retry.
 The controller retains the public host key as local `known_hosts` evidence for

@@ -316,7 +316,11 @@ func runHermesBridgeScenario(t *testing.T, cancelCommand bool, repetitions int, 
 		if err != nil {
 			t.Fatal(err)
 		}
-		bridge, err := managedbridge.New(managedbridge.Options{Runtime: bridgeRuntime, Launch: bridgewiring.DockerLaunch(versions.Bridge.Image, ""), BridgeType: "hermes-ssh", RetainRawLog: true, OutputDir: output})
+		clientConfig, err := bridgewiring.SSHClientConfig("hermes-ssh", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		bridge, err := managedbridge.New(managedbridge.Options{Runtime: bridgeRuntime, Launch: bridgewiring.DockerLaunch(versions.Bridge.Image, ""), Client: clientConfig, BridgeType: "hermes-ssh", RetainRawLog: true, OutputDir: output})
 		if err != nil {
 			t.Fatal(err)
 		}

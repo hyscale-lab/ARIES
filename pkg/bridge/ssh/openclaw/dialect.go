@@ -20,10 +20,6 @@ func (Dialect) Policy() ssh.Policy {
 	return ssh.Policy{
 		UnsupportedRequests:   ssh.RejectAndClose,
 		InvalidOperationClass: "exec",
-		Endpoint: ssh.EndpointPolicy{
-			ClientCommand:  "/opt/aries/bin/aries-ssh-client",
-			KnownHostsFile: "/run/aries/ssh/known_hosts",
-		},
 	}
 }
 

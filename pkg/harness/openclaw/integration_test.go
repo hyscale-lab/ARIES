@@ -246,7 +246,11 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sshBridge, err := managedbridge.New(managedbridge.Options{Runtime: bridgeRuntime, Launch: bridgewiring.DockerLaunch(versions.Bridge.Image, ""), BridgeType: "openclaw-ssh", RetainRawLog: true, OutputDir: outputDir, ClientPath: requiredIntegrationFile(t, "ARIES_SSH_CLIENT")})
+	clientConfig, err := bridgewiring.SSHClientConfig("openclaw-ssh", requiredIntegrationFile(t, "ARIES_SSH_CLIENT"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshBridge, err := managedbridge.New(managedbridge.Options{Runtime: bridgeRuntime, Launch: bridgewiring.DockerLaunch(versions.Bridge.Image, ""), Client: clientConfig, BridgeType: "openclaw-ssh", RetainRawLog: true, OutputDir: outputDir})
 	if err != nil {
 		t.Fatal(err)
 	}

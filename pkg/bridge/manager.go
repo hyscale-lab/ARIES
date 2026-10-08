@@ -33,33 +33,42 @@ import (
 )
 
 type Options struct {
-	Runtime                           deployment.Runtime
-	Launch                            LaunchSpec
-	OutputDir, ClientPath, BridgeType string
-	RetainRawLog                      bool
+	Runtime               deployment.Runtime
+	Launch                LaunchSpec
+	Client                ClientConfig
+	OutputDir, BridgeType string
+	RetainRawLog          bool
+}
+
+// ClientConfig supplies harness-side credential and optional helper locations.
+// Composition wiring owns these choices; the manager owns private staging.
+type ClientConfig struct {
+	IdentityFile, KnownHostsFile string
+	Command, SourcePath          string
 }
 type targetExporter interface {
 	ExportBridgeTarget() (core.BridgeTarget, error)
 }
 type Manager struct {
-	runtimeClosed                                  bool
-	mu                                             sync.Mutex
-	options                                        Options
-	started                                        bool
-	runtimeID, instance, assignment, local, remote string
-	descriptor                                     core.BridgeTarget
-	connection                                     *grpc.ClientConn
-	client                                         v1.BridgeControlClient
-	exposed                                        bool
-	assigned                                       bool
-	revoked                                        bool
-	collected                                      bool
-	removed                                        bool
-	manifest                                       []*v1.Artifact
-	renewCancel                                    context.CancelFunc
-	renewDone                                      chan struct{}
-	isolationErr                                   error
-	secretFiles                                    []string
+	runtimeClosed                                               bool
+	mu                                                          sync.Mutex
+	options                                                     Options
+	started                                                     bool
+	runtimeID, runtimeName, instance, assignment, local, remote string
+	descriptor                                                  core.BridgeTarget
+	connection                                                  *grpc.ClientConn
+	client                                                      v1.BridgeControlClient
+	exposed                                                     bool
+	assigned                                                    bool
+	revoked                                                     bool
+	collected                                                   bool
+	removed                                                     bool
+	manifest                                                    []*v1.Artifact
+	renewCancel                                                 context.CancelFunc
+	renewDone                                                   chan struct{}
+	evidenceErr                                                 error
+	allocationErr                                               error
+	secretFiles                                                 []string
 }
 
 var _ runner.ToolBridge = (*Manager)(nil)
@@ -81,19 +90,19 @@ func New(options Options) (*Manager, error) {
 	if launch.Config.InstanceID != "" {
 		return nil, errors.New("managed bridge instance identity is assigned per occurrence")
 	}
-	if options.BridgeType != "hermes-ssh" && options.BridgeType != "openclaw-ssh" {
-		return nil, errors.New("unsupported native bridge type")
+	if options.BridgeType == "" || options.Client.IdentityFile == "" {
+		return nil, errors.New("managed bridge requires native type and client identity location")
 	}
-	if options.BridgeType == "openclaw-ssh" && options.ClientPath == "" {
-		return nil, errors.New("OpenClaw bridge requires local client helper")
+	if (options.Client.Command == "") != (options.Client.SourcePath == "") {
+		return nil, errors.New("bridge client helper requires both source and destination")
 	}
 	root, err := filepath.Abs(options.OutputDir)
 	if err != nil {
 		return nil, err
 	}
 	options.OutputDir = root
-	if options.ClientPath != "" {
-		options.ClientPath, err = filepath.Abs(options.ClientPath)
+	if options.Client.SourcePath != "" {
+		options.Client.SourcePath, err = filepath.Abs(options.Client.SourcePath)
 		if err != nil {
 			return nil, err
 		}
@@ -106,7 +115,7 @@ func nonce() (string, error) {
 	return hex.EncodeToString(b[:]), err
 }
 func (m *Manager) record() error {
-	b, err := json.MarshalIndent(struct{ Backend, RuntimeID, InstanceID, AssignmentID, ResourceMetrics string }{m.options.Launch.RuntimeBackend, m.runtimeID, m.instance, m.assignment, m.options.Launch.ResourceMetrics}, "", "  ")
+	b, err := json.MarshalIndent(struct{ Backend, RuntimeID, RuntimeName, InstanceID, AssignmentID, ResourceMetrics string }{m.options.Launch.RuntimeBackend, m.runtimeID, m.runtimeName, m.instance, m.assignment, m.options.Launch.ResourceMetrics}, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -151,6 +160,7 @@ func (m *Manager) Start(ctx context.Context, sandbox runner.Sandbox) (core.ToolE
 	}
 	req := m.options.Launch.Request
 	req.Name = "aries-bridge-" + m.instance[:24]
+	m.runtimeName = req.Name
 	req.Labels = maps.Clone(req.Labels)
 	if req.Labels == nil {
 		req.Labels = make(map[string]string)
@@ -163,6 +173,9 @@ func (m *Manager) Start(ctx context.Context, sandbox runner.Sandbox) (core.ToolE
 	config.RetainRawLog = m.options.RetainRawLog
 	m.remote = filepath.Join(config.OutputDir, d.TaskID, "bridge")
 	m.runtimeID, err = m.options.Runtime.Create(ctx, req)
+	if errors.Is(err, deployment.ErrAllocationUnconfirmed) {
+		m.allocationErr = err
+	}
 	if recordErr := m.record(); recordErr != nil {
 		return endpoint, errors.Join(err, recordErr)
 	}
@@ -170,7 +183,8 @@ func (m *Manager) Start(ctx context.Context, sandbox runner.Sandbox) (core.ToolE
 		return endpoint, err
 	}
 	if m.runtimeID == "" {
-		return endpoint, errors.New("bridge runtime returned empty identity")
+		m.allocationErr = fmt.Errorf("bridge runtime returned empty identity: %w", deployment.ErrAllocationUnconfirmed)
+		return endpoint, m.allocationErr
 	}
 	clientKey, clientPublic, err := sshcredentials.GenerateIdentity()
 	if err != nil {
@@ -273,7 +287,7 @@ func (m *Manager) Start(ctx context.Context, sandbox runner.Sandbox) (core.ToolE
 	if address != expected {
 		return endpoint, errors.New("bridge advertised a different task attachment")
 	}
-	endpoint = core.ToolEndpoint{Protocol: "ssh", Address: address, Username: native.User, IdentityFile: "/run/aries/ssh/id_ed25519", IdentitySourceFile: identityPath, Workdir: d.Workdir, LogPaths: []string{filepath.Join(m.local, "tool-calls.jsonl")}}
+	endpoint = core.ToolEndpoint{Protocol: "ssh", Address: address, Username: native.User, IdentityFile: m.options.Client.IdentityFile, IdentitySourceFile: identityPath, Workdir: d.Workdir, LogPaths: []string{filepath.Join(m.local, "tool-calls.jsonl")}}
 	if m.options.RetainRawLog {
 		endpoint.LogPaths = append(endpoint.LogPaths, filepath.Join(m.local, "ssh_raw.log"))
 	}
@@ -283,13 +297,15 @@ func (m *Manager) Start(ctx context.Context, sandbox runner.Sandbox) (core.ToolE
 	if err = os.WriteFile(known, []byte(line), 0600); err != nil {
 		return endpoint, err
 	}
-	if m.options.BridgeType == "openclaw-ssh" {
-		endpoint.KnownHostsFile = "/run/aries/ssh/known_hosts"
+	if m.options.Client.KnownHostsFile != "" {
+		endpoint.KnownHostsFile = m.options.Client.KnownHostsFile
 		endpoint.KnownHostsSourceFile = known
-		endpoint.ClientCommand = "/opt/aries/bin/aries-ssh-client"
-		endpoint.ClientSourceFile = filepath.Join(m.local, "aries-ssh-client")
+	}
+	if m.options.Client.SourcePath != "" {
+		endpoint.ClientCommand = m.options.Client.Command
+		endpoint.ClientSourceFile = filepath.Join(m.local, filepath.Base(m.options.Client.Command))
 		m.secretFiles = append(m.secretFiles, endpoint.ClientSourceFile)
-		if err := stageClientHelper(m.options.ClientPath, endpoint.ClientSourceFile); err != nil {
+		if err := stageClientHelper(m.options.Client.SourcePath, endpoint.ClientSourceFile); err != nil {
 			return core.ToolEndpoint{}, err
 		}
 	}
@@ -378,10 +394,10 @@ func (m *Manager) Stop(ctx context.Context) error {
 		<-m.renewDone
 		m.renewCancel = nil
 	}
+	if m.evidenceErr != nil {
+		return m.disposeFailed(ctx)
+	}
 	if m.assigned && !m.revoked {
-		if m.isolationErr != nil {
-			return m.disposeFailed(ctx)
-		}
 		if m.client == nil {
 			return m.handleRevocationFailure(ctx, errors.New("bridge assignment revocation unconfirmed: control unavailable"))
 		}
@@ -393,7 +409,7 @@ func (m *Manager) Stop(ctx context.Context) error {
 			return err
 		}
 		if a.State != v1.State_REVOKED || len(a.CleanupErrors) > 0 {
-			err := fmt.Errorf("bridge assignment drain or evidence finalization unconfirmed (state %s)", a.State)
+			err := fmt.Errorf("bridge access closure or evidence finalization unconfirmed (state %s)", a.State)
 			for _, failure := range a.CleanupErrors {
 				err = errors.Join(err, fmt.Errorf("%s: %s", failure.GetStage(), failure.GetMessage()))
 			}
@@ -454,17 +470,22 @@ func (m *Manager) Stop(ctx context.Context) error {
 		}
 		m.runtimeClosed = true
 	}
-	return nil
+	return m.allocationErr
 }
 
-// A positively observed child exit cannot prove sandbox execution drain. Dispose
-// failed-run resources but preserve that isolation failure across every retry.
+// A stopped child no longer serves tool access. Dispose its owned runtime and
+// credentials; an exposed bridge still owes finalized evidence to the run.
 func (m *Manager) handleRevocationFailure(ctx context.Context, failure error) error {
 	running, err := m.options.Runtime.Running(ctx, m.runtimeID)
 	if err != nil || running {
 		return errors.Join(failure, err)
 	}
-	m.isolationErr = failure
+	m.revoked = true
+	if m.exposed {
+		m.evidenceErr = errors.New("bridge exited without finalized evidence")
+	} else {
+		m.collected = true // No harness received access or an evidence promise.
+	}
 	return m.disposeFailed(ctx)
 }
 func (m *Manager) disposeFailed(ctx context.Context) error {
@@ -494,5 +515,5 @@ func (m *Manager) disposeFailed(ctx context.Context) error {
 			m.runtimeClosed = true
 		}
 	}
-	return errors.Join(append([]error{m.isolationErr}, failures...)...)
+	return errors.Join(append([]error{m.evidenceErr, m.allocationErr}, failures...)...)
 }

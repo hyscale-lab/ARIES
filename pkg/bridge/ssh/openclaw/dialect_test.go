@@ -13,7 +13,7 @@ func TestDialectRejectsHermesAndUnknownVirtualControls(t *testing.T) {
 		}
 	}
 	policy := (Dialect{}).Policy()
-	if policy.UnsupportedRequests != bridgessh.RejectAndClose || policy.RefusedExitCode != 0 || policy.Endpoint.UseSandboxWorkdir || policy.Endpoint.ClientCommand != "/opt/aries/bin/aries-ssh-client" || policy.Endpoint.KnownHostsFile != "/run/aries/ssh/known_hosts" {
+	if policy.UnsupportedRequests != bridgessh.RejectAndClose || policy.RefusedExitCode != 0 {
 		t.Fatalf("policy = %#v", policy)
 	}
 }
