@@ -584,7 +584,17 @@ func TestLoadResolvesRuntimeConfigAndVersions(t *testing.T) {
 }
 
 func TestCheckedInProfilesLoad(t *testing.T) {
-	paths, err := filepath.Glob(filepath.Join("..", "..", "profiles", "*.json"))
+	root := filepath.Join("..", "..", "profiles")
+	var paths []string
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() && filepath.Ext(path) == ".json" {
+			paths = append(paths, path)
+		}
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -593,25 +603,35 @@ func TestCheckedInProfilesLoad(t *testing.T) {
 		t.Fatalf("profiles=%v", paths)
 	}
 	for _, path := range paths {
-		cfg, err := Load(path)
-		if err != nil {
-			t.Fatalf("%s: %v", path, err)
-		}
-		if strings.Contains(path, "realtime") {
-			if cfg.Harness.Mode != "realtime" || cfg.Harness.Realtime.TTS.APIKeyEnv != "OPENAI_API_KEY" || cfg.Harness.Realtime.ChunkDuration != 50*time.Millisecond {
-				t.Fatalf("%s realtime harness: %#v", path, cfg.Harness)
+		t.Run(strings.TrimPrefix(path, root+string(filepath.Separator)), func(t *testing.T) {
+			// Resource override documents accompany the experiment profiles and
+			// use their own schema rather than the experiment schema.
+			if strings.HasSuffix(path, "-overrides.json") {
+				if _, err := LoadRuntimeOverrides(path); err != nil {
+					t.Fatal(err)
+				}
+				return
 			}
-		}
-		if strings.Contains(path, "openclaw") && strings.Contains(path, "voice-transcribe") {
-			if cfg.Harness.Type != "openclaw" || cfg.Harness.Mode != "voice-transcribe" || cfg.Harness.VoiceTranscribe.TTS.APIKeyEnv != "OPENAI_API_KEY" || cfg.Harness.VoiceTranscribe.ChunkDuration != 50*time.Millisecond {
-				t.Fatalf("%s OpenClaw voice harness: %#v", path, cfg.Harness)
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatal(err)
 			}
-		}
-		if strings.Contains(path, "hermes") && strings.Contains(path, "voice-transcribe") {
-			if cfg.Harness.Type != "hermes" || cfg.Harness.Mode != "voice-transcribe" || cfg.Harness.VoiceTranscribe.TTS.APIKeyEnv != "OPENAI_API_KEY" || cfg.Harness.VoiceTranscribe.STT.Model != "gpt-4o-mini-transcribe" {
-				t.Fatalf("%s voice harness: %#v", path, cfg.Harness)
+			if strings.Contains(path, "realtime") {
+				if cfg.Harness.Mode != "realtime" || cfg.Harness.Realtime.TTS.APIKeyEnv != "OPENAI_API_KEY" || cfg.Harness.Realtime.ChunkDuration != 50*time.Millisecond {
+					t.Fatalf("%s realtime harness: %#v", path, cfg.Harness)
+				}
 			}
-		}
+			if strings.Contains(path, "openclaw") && strings.Contains(path, "voice-transcribe") {
+				if cfg.Harness.Type != "openclaw" || cfg.Harness.Mode != "voice-transcribe" || cfg.Harness.VoiceTranscribe.TTS.APIKeyEnv != "OPENAI_API_KEY" || cfg.Harness.VoiceTranscribe.ChunkDuration != 50*time.Millisecond {
+					t.Fatalf("%s OpenClaw voice harness: %#v", path, cfg.Harness)
+				}
+			}
+			if strings.Contains(path, "hermes") && strings.Contains(path, "voice-transcribe") {
+				if cfg.Harness.Type != "hermes" || cfg.Harness.Mode != "voice-transcribe" || cfg.Harness.VoiceTranscribe.TTS.APIKeyEnv != "OPENAI_API_KEY" || cfg.Harness.VoiceTranscribe.STT.Model != "gpt-4o-mini-transcribe" {
+					t.Fatalf("%s voice harness: %#v", path, cfg.Harness)
+				}
+			}
+		})
 	}
 }
 

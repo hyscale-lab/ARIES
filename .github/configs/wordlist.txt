@@ -65,6 +65,7 @@ kimi
 kondrashov
 lfs
 lifecycle
+liveness
 llm
 logrus
 loopback
@@ -95,6 +96,7 @@ orchestrator
 otlp
 parsers
 pid
+plaintext
 pre
 prefill
 preflight
@@ -106,6 +108,7 @@ qa's
 prewarm
 Qwen
 Realtime
+reconnections
 reproducibility
 retryable
 RuntimeClass
@@ -116,9 +119,12 @@ relicense
 renderer
 renderers
 replayable
+resubmission
 roadmap
+RPCs
 runnable
 runtime
+runtime's
 runtimes
 sandbox
 sandboxes
@@ -131,6 +137,7 @@ sg
 sglang
 sglang's
 ssh
+SSH's
 stateful
 stderr
 stdin
@@ -149,6 +156,7 @@ tavily
 tbd
 tcp
 teardown
+TLS
 toml
 toml's
 toolbridge
