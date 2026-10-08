@@ -7,7 +7,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -17,11 +16,10 @@ import (
 	"github.com/hyscale-lab/aries/pkg/bridge/target"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"golang.org/x/crypto/ssh"
-	"google.golang.org/grpc/credentials"
 )
 
 func TestRevocationFailureStillBoundsChildCollectionAndExit(t *testing.T) {
-	service, err := control.NewServer(control.Config{InstanceID: "instance", Token: strings.Repeat("x", 32),
+	service, err := control.NewServer(control.Config{InstanceID: "instance",
 		Assign: func(context.Context, *v1.AssignSandboxRequest) (*v1.Endpoint, error) {
 			return &v1.Endpoint{Host: "127.0.0.1", Port: 22}, nil
 		},
@@ -57,16 +55,16 @@ func TestRevocationFailureStillBoundsChildCollectionAndExit(t *testing.T) {
 
 func TestServeExitErasesPrivateBootstrapAndPreservesEvidence(t *testing.T) {
 	t.Chdir(t.TempDir())
-	for _, name := range []string{"host.key", "authorized.pub", "server.key", "token", "tool-calls.jsonl"} {
+	for _, name := range []string{"host.key", "authorized.pub", "tool-calls.jsonl"} {
 		if err := os.WriteFile(name, []byte("private"), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	// Missing CA fails before exposing control, exercising unconditional exit cleanup.
+	// Missing instance ID fails before serving, exercising unconditional exit cleanup.
 	if err := Serve(context.Background(), ServeOptions{}); err == nil {
-		t.Fatal("missing bootstrap CA accepted")
+		t.Fatal("missing instance ID accepted")
 	}
-	for _, name := range []string{"host.key", "authorized.pub", "server.key", "token"} {
+	for _, name := range []string{"host.key", "authorized.pub"} {
 		if _, err := os.Lstat(name); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("credential %s survived exit: %v", name, err)
 		}
@@ -84,13 +82,13 @@ func TestCredentialEraseAttemptsAllFilesAndReportsFailure(t *testing.T) {
 	if err := os.WriteFile(filepath.Join("host.key", "unexpected"), nil, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile("token", []byte("secret"), 0600); err != nil {
+	if err := os.WriteFile("authorized.pub", []byte("public key"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := eraseStagedCredentials("host.key", "token"); err == nil {
+	if err := eraseStagedCredentials("host.key", "authorized.pub"); err == nil {
 		t.Fatal("credential cleanup failure hidden")
 	}
-	if _, err := os.Lstat("token"); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Lstat("authorized.pub"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("later credential not erased: %v", err)
 	}
 }
@@ -131,10 +129,6 @@ func TestNativeCleanupClosesAdmissionFinalizesEvidenceAndErasesCredentials(t *te
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Chdir(t.TempDir())
-			keys, err := newControlCredentials()
-			if err != nil {
-				t.Fatal(err)
-			}
 			hostPrivate, _, err := sshcredentials.GenerateIdentity()
 			if err != nil {
 				t.Fatal(err)
@@ -143,8 +137,7 @@ func TestNativeCleanupClosesAdmissionFinalizesEvidenceAndErasesCredentials(t *te
 			if err != nil {
 				t.Fatal(err)
 			}
-			token := strings.Repeat("t", 32)
-			for name, contents := range map[string][]byte{"ca.pem": keys.CA, "server.pem": keys.ServerCert, "server.key": keys.ServerKey, "token": []byte(token), "host.key": hostPrivate, "authorized.pub": ssh.MarshalAuthorizedKey(clientPublic), "tool-calls.jsonl": []byte("evidence")} {
+			for name, contents := range map[string][]byte{"host.key": hostPrivate, "authorized.pub": ssh.MarshalAuthorizedKey(clientPublic), "tool-calls.jsonl": []byte("evidence")} {
 				if err := os.WriteFile(name, contents, 0600); err != nil {
 					t.Fatal(err)
 				}
@@ -169,11 +162,7 @@ func TestNativeCleanupClosesAdmissionFinalizesEvidenceAndErasesCredentials(t *te
 				case <-time.After(time.Second):
 				}
 			})
-			tls, err := controlTLS(keys.CA, keys.ClientCert, keys.ClientKey, false)
-			if err != nil {
-				t.Fatal(err)
-			}
-			conn, client, err := control.NewClient(address, "instance", token, credentials.NewTLS(tls))
+			conn, client, err := control.NewClient(address)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -209,11 +198,6 @@ func TestNativeCleanupClosesAdmissionFinalizesEvidenceAndErasesCredentials(t *te
 				done <- err
 			case <-time.After(time.Second):
 				t.Fatal("native cleanup did not bound service exit")
-			}
-			for _, name := range []string{"server.key", "token"} {
-				if _, err := os.Lstat(name); !errors.Is(err, os.ErrNotExist) {
-					t.Fatalf("control credential survived exit: %s %v", name, err)
-				}
 			}
 			if contents, err := os.ReadFile("tool-calls.jsonl"); err != nil || string(contents) != "evidence" {
 				t.Fatalf("evidence lost: %q %v", contents, err)

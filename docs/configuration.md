@@ -149,10 +149,11 @@ Image preparation uses the selected daemon. Checked-in Docker bridge examples
 include [Hermes](../profiles/hermes-tb2-fix-git-deepseek.json) and
 [OpenClaw](../profiles/openclaw-tb2-fix-git-deepseek.json).
 
-Bridge addresses come from task composition, not profile fields. Private gRPC
-control and harness-facing SSH use separate endpoints. Bridge containers advertise
-their address
-on the task network. Each runtime accepts one immutable sandbox assignment that
+Bridge addresses come from task composition, not profile fields. Plaintext,
+unauthenticated gRPC control and harness-facing SSH use separate endpoints.
+Control has no TLS certificates or bearer tokens; SSH retains its credentials.
+Bridge containers advertise their address on the task network. Each runtime
+accepts one immutable sandbox assignment that
 remains active until Runner explicitly revokes it and removes the bridge runtime.
 There are no leases or renewal timers. Control health alone does not establish
 assignment readiness.

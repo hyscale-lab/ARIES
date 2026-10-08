@@ -26,7 +26,6 @@ import (
 	"github.com/hyscale-lab/aries/pkg/runner"
 	"golang.org/x/crypto/ssh"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -41,7 +40,7 @@ func (launchSandbox) Connectivity() core.HarnessConnectivity {
 }
 
 // launchRuntime models an independently deployed service. Bootstrap transfers stay
-// in memory, and the real authenticated control protocol owns assignment/revocation.
+// in memory, and the real control protocol owns assignment/revocation.
 // Its paths, commands, port mapping and metadata deliberately differ from Docker's.
 type launchRuntime struct {
 	deployment.Runtime
@@ -100,23 +99,19 @@ func (r *launchRuntime) UploadArchive(_ context.Context, _ string, destination s
 }
 func (r *launchRuntime) Validate(_ context.Context, id string, request deployment.Request, secrets [][]byte) error {
 	r.event("validate")
-	if id != "service-fixture-123" || !reflect.DeepEqual(request, r.request) || len(secrets) != 5 {
+	if id != "service-fixture-123" || !reflect.DeepEqual(request, r.request) || len(secrets) != 2 {
 		return errors.New("validation lost runtime identity, launch request or credentials")
 	}
 	return nil
 }
 func (r *launchRuntime) Start(context.Context, string) error {
 	r.event("start")
-	tls, err := controlTLS(r.files["ca.pem"], r.files["server.pem"], r.files["server.key"], true)
-	if err != nil {
-		return err
-	}
 	host, err := ssh.ParsePrivateKey(r.files["host.key"])
 	if err != nil {
 		return err
 	}
 	service, err := control.NewServer(control.Config{
-		InstanceID: r.config.InstanceID, Token: string(r.files["token"]),
+		InstanceID: r.config.InstanceID,
 		Assign: func(_ context.Context, request *v1.AssignSandboxRequest) (*v1.Endpoint, error) {
 			r.mu.Lock()
 			defer r.mu.Unlock()
@@ -145,7 +140,7 @@ func (r *launchRuntime) Start(context.Context, string) error {
 		return err
 	}
 	r.controlAddress = r.listener.Addr().String()
-	r.server = grpc.NewServer(grpc.Creds(credentials.NewTLS(tls)), grpc.UnaryInterceptor(service.UnaryInterceptor), grpc.StreamInterceptor(service.StreamInterceptor))
+	r.server = grpc.NewServer()
 	service.Register(r.server)
 	r.done = make(chan struct{})
 	go func() {
@@ -245,6 +240,9 @@ func TestManagerUsesInjectedRuntimeLaunch(t *testing.T) {
 			wantConfig.InstanceID, wantConfig.BridgeType = m.instance, "fixture-ssh"
 			if !reflect.DeepEqual(runtime.config, wantConfig) || runtime.uploadDestination != "/private/bootstrap" || runtime.controlPort != 9443 || runtime.harnessPort != 3022 {
 				t.Fatalf("runtime configuration, staging or address mapping replaced: %+v", runtime.config)
+			}
+			if len(runtime.files) != 3 || len(runtime.files["config.json"]) == 0 || len(runtime.files["host.key"]) == 0 || len(runtime.files["authorized.pub"]) == 0 {
+				t.Fatal("bootstrap must contain only configuration and SSH credentials")
 			}
 			if endpoint.Address != "bridge.fixture:13022" || endpoint.Workdir != "/workspace" || endpoint.IdentityFile != "/fixture/ssh/id_ed25519" {
 				t.Fatalf("endpoint ignored independent task addressing: %+v", endpoint)

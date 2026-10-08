@@ -10,7 +10,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// assignSandbox reconciles an uncertain submission on the same authenticated
+// assignSandbox reconciles an uncertain submission on the same control
 // connection. Only an explicit NotFound permits resubmitting the identical grant.
 func (m *Manager) assignSandbox(ctx context.Context, request *v1.AssignSandboxRequest) (*v1.Assignment, error) {
 	immutable := proto.Clone(request).(*v1.AssignSandboxRequest)

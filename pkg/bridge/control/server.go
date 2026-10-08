@@ -1,9 +1,8 @@
-// Package control manages one authenticated sandbox assignment per runtime.
+// Package control manages one sandbox assignment per runtime.
 package control
 
 import (
 	"context"
-	"crypto/subtle"
 	"errors"
 	"regexp"
 	"sync"
@@ -15,16 +14,15 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
 type Config struct {
-	InstanceID, Token string
-	OperationTimeout  time.Duration
-	Assign            func(context.Context, *v1.AssignSandboxRequest) (*v1.Endpoint, error)
-	Revoke            func(context.Context) ([]*v1.Artifact, error)
+	InstanceID       string
+	OperationTimeout time.Duration
+	Assign           func(context.Context, *v1.AssignSandboxRequest) (*v1.Endpoint, error)
+	Revoke           func(context.Context) ([]*v1.Artifact, error)
 }
 type Server struct {
 	revoking     chan struct{}
@@ -43,7 +41,7 @@ type Server struct {
 var identifier = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
 
 func NewServer(cfg Config) (*Server, error) {
-	if !identifier.MatchString(cfg.InstanceID) || len(cfg.Token) < 32 || cfg.Assign == nil || cfg.Revoke == nil {
+	if !identifier.MatchString(cfg.InstanceID) || cfg.Assign == nil || cfg.Revoke == nil {
 		return nil, errors.New("invalid bridge control configuration")
 	}
 	if cfg.OperationTimeout <= 0 {
@@ -66,28 +64,6 @@ func (s *Server) Register(reg grpc.ServiceRegistrar) {
 	healthpb.RegisterHealthServer(reg, h)
 }
 
-// UnaryInterceptor authenticates control and health, including the bootstrap instance.
-func (s *Server) UnaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-	if err := s.authenticate(ctx); err != nil {
-		return nil, err
-	}
-	return handler(ctx, req)
-}
-func (s *Server) StreamInterceptor(srv any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-	if err := s.authenticate(stream.Context()); err != nil {
-		return err
-	}
-	return handler(srv, stream)
-}
-func (s *Server) authenticate(ctx context.Context) error {
-	md, _ := metadata.FromIncomingContext(ctx)
-	token := md.Get("authorization")
-	instance := md.Get("x-aries-instance")
-	if len(token) != 1 || subtle.ConstantTimeCompare([]byte(token[0]), []byte("Bearer "+s.cfg.Token)) != 1 || len(instance) != 1 || instance[0] != s.cfg.InstanceID {
-		return status.Error(codes.Unauthenticated, "invalid bridge control credentials")
-	}
-	return nil
-}
 func (s *Server) identity(instance, id string) error {
 	if instance != s.cfg.InstanceID {
 		return status.Error(codes.FailedPrecondition, "bridge instance mismatch")

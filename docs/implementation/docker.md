@@ -27,8 +27,9 @@ whether Docker creates it as an internal network. Ownership checks prevent a
 failed create response from authorizing cleanup of an unrelated resource.
 
 The bridge container joins the task-owned network. Its SSH endpoint uses its
-address on that network and an explicit service port; the private control endpoint
-is published on loopback for Runner. Attachment and endpoint ownership follow the
+address on that network and an explicit service port; the plaintext, unauthenticated
+gRPC control endpoint is published on loopback for Runner. Attachment and endpoint
+ownership follow the
 [task-environment contract](../design/deployment.md#taskenvironment-operations-and-ownership).
 
 `bridge.mode` is `managed`: native listeners run in a separate Docker container.
