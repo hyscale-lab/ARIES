@@ -54,17 +54,17 @@ type Runtime interface {
 // separately to validation and must never enter environment, argv, or labels.
 // Entrypoint nil preserves the image's entrypoint; an explicit value replaces it.
 type Request struct {
-	// HarnessPort is exposed only on the task attachment, separately from control.
-	HarnessPort int
-	// TrustedDockerSocket grants bridge infrastructure the selected local daemon.
-	// Providers must reject it outside a bridge runtime; it is not a profile mount API.
-	TrustedDockerSocket string
-	Workdir             string
-	StorageMB           int
-	GPUs                int
-	Init                bool
-	NoNewPrivileges     bool
-	NetworkAliases      []string
+	// InternalPort is exposed only on the task attachment, without host publication.
+	InternalPort int
+	// Mounts grants access only to the host paths explicitly supplied by wiring.
+	// The default grants no host filesystem access.
+	Mounts          []Mount
+	Workdir         string
+	StorageMB       int
+	GPUs            int
+	Init            bool
+	NoNewPrivileges bool
+	NetworkAliases  []string
 	// AllowImageVolumes permits anonymous volumes declared by the image.
 	AllowImageVolumes bool
 	Name              string
@@ -82,6 +82,13 @@ type Request struct {
 	ImageVolumes []string
 	// ServicePort publishes a private TCP service; zero publishes none.
 	ServicePort int
+}
+
+// Mount declares one host path made available at a runtime path.
+// The provider preserves Source, Target, and read-only semantics exactly.
+type Mount struct {
+	Source, Target string
+	ReadOnly       bool
 }
 
 type FileInfo struct {
@@ -103,5 +110,5 @@ const TaskSandboxAlias = "task-sandbox"
 
 // ServiceRuntime resolves a task-attachment address independently of host control.
 type ServiceRuntime interface {
-	HarnessAddress(context.Context, string, int) (string, error)
+	TaskAddress(context.Context, string, int) (string, error)
 }

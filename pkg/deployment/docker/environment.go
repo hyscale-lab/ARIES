@@ -57,7 +57,7 @@ func (e *taskEnvironment) Start(ctx context.Context, request core.SandboxRequest
 	if err != nil {
 		return core.HarnessConnectivity{}, err
 	}
-	result := core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: e.request.Name}}
+	result := core.HarnessConnectivity{Placement: core.RuntimePlacement{AttachmentID: e.request.Name}}
 	if searchPort != 0 {
 		result.SearchURL = fmt.Sprintf("http://%s:%d", deployment.TaskSandboxAlias, searchPort)
 	}

@@ -17,10 +17,10 @@ import (
 	"time"
 
 	bridgessh "github.com/hyscale-lab/aries/pkg/bridge/ssh"
-	sshclient "github.com/hyscale-lab/aries/pkg/bridge/ssh/client"
 	"github.com/hyscale-lab/aries/pkg/bridge/ssh/hermes"
 	"github.com/hyscale-lab/aries/pkg/bridge/ssh/internal/testfixture"
 	"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw"
+	sshclient "github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw/client"
 	"github.com/hyscale-lab/aries/pkg/core"
 	gossh "golang.org/x/crypto/ssh"
 )

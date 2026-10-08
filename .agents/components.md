@@ -23,6 +23,8 @@ Follow [Runner interfaces](../pkg/runner/interfaces.go) and [lifecycle](architec
   must not expose secrets through their cause chain.
 - Give each managed bridge occurrence its own runtime and immutable assignment.
   Native tool execution must not call back into Runner or own sandbox lifecycle.
+  Runner explicitly revokes assignments; retain operation deadlines and bounded
+  evidence collection without leases or controller-liveness supervision.
   Close bridge-owned access/handlers, collect finalized evidence, then confirm
   runtime removal. Harness completion is authoritative for completed tool calls;
   leave sandbox processes intact for evaluation. Keep replay inputs private;

@@ -174,6 +174,11 @@ readings. Ordinary source failures remain failures. Docker bridge measurements
 use their own `bridge` component. An explicitly unsupported observer does not
 prevent functional execution or independent evaluation.
 
+Confirmed runtime teardown ends that runtime's samples without failing observation
+of the task's remaining runtimes. Docker rechecks runtime state when stats omit
+their timestamp; malformed stats from a running runtime remain an error. See
+[measurement availability](run-results.md#measurement-availability).
+
 **Known implementation gap:** the first CPU observation establishes a baseline,
 but [`cpuPercent`](../pkg/monitor/recorder.go) returns zero before a rate can be
 computed. GPU rows also serialize zero CPU/memory fields that do not describe

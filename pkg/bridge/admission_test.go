@@ -49,7 +49,7 @@ func TestAdmissionReconcilesDroppedRequestAndLostResponse(t *testing.T) {
 			}
 			defer server.Revoke()
 			d := core.BridgeTarget{Version: 1, RunID: "run", TaskID: "task", OccurrenceID: "occurrence", Backend: "docker", RuntimeID: "runtime", RuntimeName: "sandbox", Workdir: "/app", MaxInputBytes: 16 << 20, MaxOutputBytes: 1 << 30, ExpectedLabels: map[string]string{"aries.managed": "true", "aries.kind": "task-container", "aries.component": "sandbox", "aries.run": "run", "aries.task": "task"}}
-			request := &v1.AssignSandboxRequest{InstanceId: "instance", AssignmentId: "assignment", ProtocolVersion: 1, Target: control.TargetToProto(d), LeaseMillis: 1000, CredentialId: "ssh"}
+			request := &v1.AssignSandboxRequest{InstanceId: "instance", AssignmentId: "assignment", ProtocolVersion: 1, Target: control.TargetToProto(d), CredentialId: "ssh"}
 			client := &admissionClient{get: server.GetAssignment}
 			client.assign = func(ctx context.Context, r *v1.AssignSandboxRequest) (*v1.Assignment, error) {
 				if len(client.requests) == 1 {

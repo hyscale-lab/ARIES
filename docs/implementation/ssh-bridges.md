@@ -13,11 +13,14 @@ commands; neither owns sandbox lifecycle or a separate SSH server implementation
 
 OpenClaw's pinned container lacks an SSH binary, so ARIES stages the static Go
 `aries-ssh-client` at `/opt/aries/bin/aries-ssh-client`. The
-[client](../../pkg/bridge/ssh/client) verifies the assigned host key and forwards
-the remote command and streams unchanged. It validates its supported invocation
+[OpenClaw client](../../pkg/bridge/ssh/openclaw/client) verifies the assigned host
+key and forwards the remote command and streams unchanged. It validates its supported invocation
 and private configuration, but does not parse shell grammar or translate paths.
-The server dialect is authoritative for command acceptance. Previously client-side
-grammar refusals now reach the server and produce rejection evidence without
+The client owns OpenClaw's invocation/configuration subset and does not import
+the server's command grammar. Shared SSH serving and root bridge lifecycle do not
+import this harness-specific client. The server dialect is authoritative for
+command acceptance. Previously client-side grammar refusals now reach the server
+and produce rejection evidence without
 executing in the sandbox. Hermes continues using its image's native OpenSSH.
 
 The bridge runs the SSH server; `aries-ssh-client` is the separate client inside
@@ -110,9 +113,10 @@ The controller stages the authorized client public key and server private key;
 the client private key stays local for staging into the harness. Authenticated
 gRPC assignment control is separate from SSH tool traffic. One instance accepts
 one assignment, retains its identity after failed admission or revocation, and
-cannot be reused. Lease expiry starts revocation; renewals cannot revive an
-expired grant. Caller timeouts do not cancel the service's ownership of admission
-or cleanup. A lost response is reconciled using the original assignment ID.
+cannot be reused. Runner explicitly revokes the assignment during task cleanup;
+the bridge does not expire assignments or monitor controller liveness. Caller
+timeouts do not cancel the service's ownership of admission or cleanup. A lost
+response is reconciled using the original assignment ID.
 If authenticated status confirms that assignment was never reserved, the controller
 resubmits the identical request on the same instance. Authentication, identity,
 validation, and other definitive errors do not trigger replay.
@@ -122,6 +126,9 @@ The bounded collection/exit interval starts when revocation begins, including
 failed cleanup attempts. SSH bootstrap files are erased on revocation attempts,
 and private control/bootstrap files are erased on every service exit, including
 cleanup timeouts. Evidence remains available for collection.
+An abrupt Runner crash can leave owned containers and credentials behind and
+may require operator cleanup. There is no heartbeat or parent-death replacement
+for explicit lifecycle cleanup.
 
 Stop closes tool admission and bridge-owned listeners/connections/handlers,
 finalizes and collects evidence, and confirms bridge runtime removal. Harness

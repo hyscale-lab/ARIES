@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	sshclient "github.com/hyscale-lab/aries/pkg/bridge/ssh/client"
 	"github.com/hyscale-lab/aries/pkg/bridge/ssh/credentials"
+	sshclient "github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw/client"
 	gossh "golang.org/x/crypto/ssh"
 )
 

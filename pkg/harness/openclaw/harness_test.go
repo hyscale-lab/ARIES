@@ -64,7 +64,7 @@ func TestHarnessAppliesOnlyPresentCheckedResources(t *testing.T) {
 	fake := newFakeDeployment()
 	manager := newTestManager(t, fake, []byte("model-secret"))
 	cpu, memory := 2.5, 1536
-	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(), CPU: &cpu, MemoryMB: &memory}
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{AttachmentID: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(), CPU: &cpu, MemoryMB: &memory}
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestHarnessAppliesOnlyPresentCheckedResources(t *testing.T) {
 
 func newFakeDeployment() *fakeDeployment { return &fakeDeployment{} }
 func (f *fakeDeployment) Create(_ context.Context, r deployment.Request) (string, error) {
-	if strings.TrimSpace(r.Placement.DockerNetwork) == "" {
+	if strings.TrimSpace(r.Placement.AttachmentID) == "" {
 		return "", errors.New("missing task network placement")
 	}
 	f.created = r
@@ -406,7 +406,7 @@ func TestAgentResultAndErrorsRedactEverySessionSecret(t *testing.T) {
 			fake.telemetryContent, _ = json.Marshal(map[string]string{"tool": strings.Join(secrets, " ")})
 			manager := newTestManager(t, fake, []byte("initial-model-key"))
 			manager.newGateway = func(string, []byte) (gatewayConnection, error) { return test.gateway, nil }
-			request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(), Timeout: time.Second}
+			request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{AttachmentID: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(), Timeout: time.Second}
 			if err := manager.Start(context.Background(), request); err != nil {
 				t.Fatal(err)
 			}
@@ -549,7 +549,7 @@ func TestHarnessUsesInjectedDeploymentAndPrivateArchive(t *testing.T) {
 	fake := newFakeDeployment()
 	secret := []byte("model-secret")
 	manager := newTestManager(t, fake, secret)
-	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(), Timeout: 37 * time.Second}
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{AttachmentID: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(), Timeout: 37 * time.Second}
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -647,7 +647,7 @@ func TestStartStagesExtractKeyWhenConfigured(t *testing.T) {
 	}
 	manager.newID = func() (string, error) { return "attempt", nil }
 
-	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(), Timeout: 37 * time.Second}
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{AttachmentID: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(), Timeout: 37 * time.Second}
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -720,7 +720,7 @@ func TestStartFallsBackToNativeWebFetchWhenExtractCredentialMissing(t *testing.T
 	}
 	manager.newID = func() (string, error) { return "attempt", nil }
 
-	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(), Timeout: 37 * time.Second}
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{AttachmentID: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(), Timeout: 37 * time.Second}
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatalf("expected fallback instead of rejection, got: %v", err)
 	}
@@ -774,7 +774,7 @@ func TestAgentRunUsesGatewayOnceWithExactParameters(t *testing.T) {
 		}
 		return gateway, nil
 	}
-	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(), Timeout: 37 * time.Second}
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{AttachmentID: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(), Timeout: 37 * time.Second}
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -803,7 +803,7 @@ func TestAgentRequestsPreserveReasoningSelection(t *testing.T) {
 				model := testModel()
 				model.BaseURL, model.Model = "https://api.deepseek.com", tc.modelID
 				model.ReasoningEffort = tc.effort
-				request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: model}
+				request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{AttachmentID: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: model}
 				if err := manager.Start(context.Background(), request); err != nil {
 					t.Fatal(err)
 				}
@@ -847,7 +847,7 @@ func TestAgentRunRejectsMissingWriteScopeBeforeSubmission(t *testing.T) {
 	manager := newTestManager(t, fake, []byte("model-secret"))
 	gateway := &recordingGateway{summary: gatewayclient.ConnectSummary{Role: "operator", Scopes: []string{"operator.read"}}}
 	manager.newGateway = func(string, []byte) (gatewayConnection, error) { return gateway, nil }
-	if err := manager.Start(context.Background(), core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}); err != nil {
+	if err := manager.Start(context.Background(), core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{AttachmentID: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}); err != nil {
 		t.Fatal(err)
 	}
 	result, err := manager.Run(context.Background(), "repair git")
@@ -864,7 +864,7 @@ func TestStartFailureRemovesOnlyContainerAndClearsSecret(t *testing.T) {
 	fake.copyToErr = errors.New("copy failed")
 	secret := []byte("source-secret")
 	manager := newTestManager(t, fake, secret)
-	err := manager.Start(context.Background(), core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()})
+	err := manager.Start(context.Background(), core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{AttachmentID: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()})
 	if err == nil || fake.removeCalls != 1 || manager.active != nil {
 		t.Fatalf("Start = %v, remove=%d active=%v", err, fake.removeCalls, manager.active)
 	}
@@ -917,7 +917,7 @@ func TestRealtimeModePublishesGatewayAndRunsRunner(t *testing.T) {
 			TranscriptDoneParts: []string{},
 		}}, nil
 	}
-	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{AttachmentID: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -1024,7 +1024,7 @@ func TestRealtimeTranscribeModeSendsTranscriptToAgent(t *testing.T) {
 			AgentRunIDs:         []string{},
 		}}, nil
 	}
-	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{AttachmentID: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -1093,7 +1093,7 @@ func TestRealtimeTranscribeErrorsDoNotStartAgent(t *testing.T) {
 			AgentRunIDs:         []string{},
 		}}, nil
 	}
-	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{AttachmentID: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -1182,7 +1182,7 @@ func TestRealtimeTranscribeUsesSeparateSTTTimeoutAndFreshAgentTimeout(t *testing
 			},
 		}, nil
 	}
-	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{AttachmentID: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -1256,7 +1256,7 @@ func TestRealtimeTranscribeAgentUsesResponseOnlyGateway(t *testing.T) {
 			"result": map[string]any{"payloads": []any{map[string]any{"text": "complete"}}},
 		}})
 	}()
-	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{AttachmentID: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -1303,7 +1303,7 @@ func testWAVBytes(rate int, pcm []byte) []byte {
 func TestArtifactCollectionFailureBelongsToRunNotStop(t *testing.T) {
 	fake := newFakeDeployment()
 	manager := newTestManager(t, fake, []byte("model-secret"))
-	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{AttachmentID: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -1326,7 +1326,7 @@ func TestArtifactCollectionFailureBelongsToRunNotStop(t *testing.T) {
 func TestStopFailsUntilContainerAbsenceCanBeConfirmed(t *testing.T) {
 	fake := newFakeDeployment()
 	manager := newTestManager(t, fake, []byte("model-secret"))
-	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{AttachmentID: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -1400,7 +1400,7 @@ func TestStartRollsBackDeploymentValidationFailure(t *testing.T) {
 	fake := newFakeDeployment()
 	fake.validateErr = errors.New("unsafe deployment")
 	manager := newTestManager(t, fake, []byte("model-secret"))
-	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{AttachmentID: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
 	if err := manager.Start(context.Background(), request); !errors.Is(err, fake.validateErr) {
 		t.Fatalf("Start() = %v", err)
 	}
@@ -1420,7 +1420,7 @@ func TestDeploymentReceivesRuntimeConstraintsAndSecretValidation(t *testing.T) {
 		}
 		return []byte("model-secret"), true
 	}
-	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{AttachmentID: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
 	cpu, memory := 2.5, 1536
 	request.CPU, request.MemoryMB = &cpu, &memory
 	if err := manager.Start(context.Background(), request); err != nil {
@@ -1428,7 +1428,7 @@ func TestDeploymentReceivesRuntimeConstraintsAndSecretValidation(t *testing.T) {
 	}
 	defer manager.Stop(context.Background())
 	got := fake.validatedRequest
-	if got.Name != fake.created.Name || got.Image != testOpenClawImage || got.Placement.DockerNetwork != request.Connectivity.Placement.DockerNetwork || got.ServicePort != 18789 || len(got.ImageVolumes) != 0 || got.CPU == nil || *got.CPU != cpu || got.MemoryMB == nil || *got.MemoryMB != memory {
+	if got.Name != fake.created.Name || got.Image != testOpenClawImage || got.Placement.AttachmentID != request.Connectivity.Placement.AttachmentID || got.ServicePort != 18789 || len(got.ImageVolumes) != 0 || got.CPU == nil || *got.CPU != cpu || got.MemoryMB == nil || *got.MemoryMB != memory {
 		t.Fatalf("validation request = %#v", got)
 	}
 	for _, want := range []string{"model-secret", "extract-secret", string(manager.active.Credentials.Get("gateway"))} {

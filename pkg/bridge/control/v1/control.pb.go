@@ -214,7 +214,6 @@ type AssignSandboxRequest struct {
 	AssignmentId    string                 `protobuf:"bytes,2,opt,name=assignment_id,json=assignmentId,proto3" json:"assignment_id,omitempty"`
 	ProtocolVersion uint32                 `protobuf:"varint,3,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
 	Target          *Target                `protobuf:"bytes,4,opt,name=target,proto3" json:"target,omitempty"`
-	LeaseMillis     int64                  `protobuf:"varint,5,opt,name=lease_millis,json=leaseMillis,proto3" json:"lease_millis,omitempty"`
 	CredentialId    string                 `protobuf:"bytes,6,opt,name=credential_id,json=credentialId,proto3" json:"credential_id,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
@@ -278,13 +277,6 @@ func (x *AssignSandboxRequest) GetTarget() *Target {
 	return nil
 }
 
-func (x *AssignSandboxRequest) GetLeaseMillis() int64 {
-	if x != nil {
-		return x.LeaseMillis
-	}
-	return 0
-}
-
 func (x *AssignSandboxRequest) GetCredentialId() string {
 	if x != nil {
 		return x.CredentialId
@@ -344,66 +336,6 @@ func (x *AssignmentRequest) GetAssignmentId() string {
 	return ""
 }
 
-type RenewLeaseRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	InstanceId    string                 `protobuf:"bytes,1,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
-	AssignmentId  string                 `protobuf:"bytes,2,opt,name=assignment_id,json=assignmentId,proto3" json:"assignment_id,omitempty"`
-	LeaseMillis   int64                  `protobuf:"varint,3,opt,name=lease_millis,json=leaseMillis,proto3" json:"lease_millis,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RenewLeaseRequest) Reset() {
-	*x = RenewLeaseRequest{}
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[3]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RenewLeaseRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RenewLeaseRequest) ProtoMessage() {}
-
-func (x *RenewLeaseRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[3]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RenewLeaseRequest.ProtoReflect.Descriptor instead.
-func (*RenewLeaseRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{3}
-}
-
-func (x *RenewLeaseRequest) GetInstanceId() string {
-	if x != nil {
-		return x.InstanceId
-	}
-	return ""
-}
-
-func (x *RenewLeaseRequest) GetAssignmentId() string {
-	if x != nil {
-		return x.AssignmentId
-	}
-	return ""
-}
-
-func (x *RenewLeaseRequest) GetLeaseMillis() int64 {
-	if x != nil {
-		return x.LeaseMillis
-	}
-	return 0
-}
-
 type Endpoint struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Host          string                 `protobuf:"bytes,1,opt,name=host,proto3" json:"host,omitempty"`
@@ -417,7 +349,7 @@ type Endpoint struct {
 
 func (x *Endpoint) Reset() {
 	*x = Endpoint{}
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[4]
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -429,7 +361,7 @@ func (x *Endpoint) String() string {
 func (*Endpoint) ProtoMessage() {}
 
 func (x *Endpoint) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[4]
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -442,7 +374,7 @@ func (x *Endpoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Endpoint.ProtoReflect.Descriptor instead.
 func (*Endpoint) Descriptor() ([]byte, []int) {
-	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{4}
+	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *Endpoint) GetHost() string {
@@ -492,7 +424,7 @@ type Artifact struct {
 
 func (x *Artifact) Reset() {
 	*x = Artifact{}
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[5]
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -504,7 +436,7 @@ func (x *Artifact) String() string {
 func (*Artifact) ProtoMessage() {}
 
 func (x *Artifact) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[5]
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -517,7 +449,7 @@ func (x *Artifact) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Artifact.ProtoReflect.Descriptor instead.
 func (*Artifact) Descriptor() ([]byte, []int) {
-	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{5}
+	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *Artifact) GetName() string {
@@ -558,7 +490,7 @@ type CleanupError struct {
 
 func (x *CleanupError) Reset() {
 	*x = CleanupError{}
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[6]
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -570,7 +502,7 @@ func (x *CleanupError) String() string {
 func (*CleanupError) ProtoMessage() {}
 
 func (x *CleanupError) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[6]
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -583,7 +515,7 @@ func (x *CleanupError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CleanupError.ProtoReflect.Descriptor instead.
 func (*CleanupError) Descriptor() ([]byte, []int) {
-	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{6}
+	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *CleanupError) GetStage() string {
@@ -601,23 +533,22 @@ func (x *CleanupError) GetMessage() string {
 }
 
 type Assignment struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	InstanceId           string                 `protobuf:"bytes,1,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
-	AssignmentId         string                 `protobuf:"bytes,2,opt,name=assignment_id,json=assignmentId,proto3" json:"assignment_id,omitempty"`
-	State                State                  `protobuf:"varint,3,opt,name=state,proto3,enum=aries.bridge.control.v1.State" json:"state,omitempty"`
-	Target               *Target                `protobuf:"bytes,4,opt,name=target,proto3" json:"target,omitempty"`
-	Endpoint             *Endpoint              `protobuf:"bytes,5,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
-	LeaseRemainingMillis int64                  `protobuf:"varint,6,opt,name=lease_remaining_millis,json=leaseRemainingMillis,proto3" json:"lease_remaining_millis,omitempty"`
-	CleanupErrors        []*CleanupError        `protobuf:"bytes,7,rep,name=cleanup_errors,json=cleanupErrors,proto3" json:"cleanup_errors,omitempty"`
-	Artifacts            []*Artifact            `protobuf:"bytes,8,rep,name=artifacts,proto3" json:"artifacts,omitempty"`
-	Diagnostics          []*CleanupError        `protobuf:"bytes,9,rep,name=diagnostics,proto3" json:"diagnostics,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	InstanceId    string                 `protobuf:"bytes,1,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	AssignmentId  string                 `protobuf:"bytes,2,opt,name=assignment_id,json=assignmentId,proto3" json:"assignment_id,omitempty"`
+	State         State                  `protobuf:"varint,3,opt,name=state,proto3,enum=aries.bridge.control.v1.State" json:"state,omitempty"`
+	Target        *Target                `protobuf:"bytes,4,opt,name=target,proto3" json:"target,omitempty"`
+	Endpoint      *Endpoint              `protobuf:"bytes,5,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
+	CleanupErrors []*CleanupError        `protobuf:"bytes,7,rep,name=cleanup_errors,json=cleanupErrors,proto3" json:"cleanup_errors,omitempty"`
+	Artifacts     []*Artifact            `protobuf:"bytes,8,rep,name=artifacts,proto3" json:"artifacts,omitempty"`
+	Diagnostics   []*CleanupError        `protobuf:"bytes,9,rep,name=diagnostics,proto3" json:"diagnostics,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Assignment) Reset() {
 	*x = Assignment{}
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[7]
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -629,7 +560,7 @@ func (x *Assignment) String() string {
 func (*Assignment) ProtoMessage() {}
 
 func (x *Assignment) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[7]
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -642,7 +573,7 @@ func (x *Assignment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Assignment.ProtoReflect.Descriptor instead.
 func (*Assignment) Descriptor() ([]byte, []int) {
-	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{7}
+	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Assignment) GetInstanceId() string {
@@ -678,13 +609,6 @@ func (x *Assignment) GetEndpoint() *Endpoint {
 		return x.Endpoint
 	}
 	return nil
-}
-
-func (x *Assignment) GetLeaseRemainingMillis() int64 {
-	if x != nil {
-		return x.LeaseRemainingMillis
-	}
-	return 0
 }
 
 func (x *Assignment) GetCleanupErrors() []*CleanupError {
@@ -729,24 +653,18 @@ const file_pkg_bridge_control_v1_control_proto_rawDesc = "" +
 	"\x10max_output_bytes\x18\x0f \x01(\x03R\x0emaxOutputBytes\x1aA\n" +
 	"\x13ExpectedLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\b\x10\v\"\x88\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\b\x10\v\"\xeb\x01\n" +
 	"\x14AssignSandboxRequest\x12\x1f\n" +
 	"\vinstance_id\x18\x01 \x01(\tR\n" +
 	"instanceId\x12#\n" +
 	"\rassignment_id\x18\x02 \x01(\tR\fassignmentId\x12)\n" +
 	"\x10protocol_version\x18\x03 \x01(\rR\x0fprotocolVersion\x127\n" +
-	"\x06target\x18\x04 \x01(\v2\x1f.aries.bridge.control.v1.TargetR\x06target\x12!\n" +
-	"\flease_millis\x18\x05 \x01(\x03R\vleaseMillis\x12#\n" +
-	"\rcredential_id\x18\x06 \x01(\tR\fcredentialId\"Y\n" +
+	"\x06target\x18\x04 \x01(\v2\x1f.aries.bridge.control.v1.TargetR\x06target\x12#\n" +
+	"\rcredential_id\x18\x06 \x01(\tR\fcredentialIdJ\x04\b\x05\x10\x06\"Y\n" +
 	"\x11AssignmentRequest\x12\x1f\n" +
 	"\vinstance_id\x18\x01 \x01(\tR\n" +
 	"instanceId\x12#\n" +
-	"\rassignment_id\x18\x02 \x01(\tR\fassignmentId\"|\n" +
-	"\x11RenewLeaseRequest\x12\x1f\n" +
-	"\vinstance_id\x18\x01 \x01(\tR\n" +
-	"instanceId\x12#\n" +
-	"\rassignment_id\x18\x02 \x01(\tR\fassignmentId\x12!\n" +
-	"\flease_millis\x18\x03 \x01(\x03R\vleaseMillis\"\x7f\n" +
+	"\rassignment_id\x18\x02 \x01(\tR\fassignmentId\"\x7f\n" +
 	"\bEndpoint\x12\x12\n" +
 	"\x04host\x18\x01 \x01(\tR\x04host\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\rR\x04port\x12\x12\n" +
@@ -760,7 +678,7 @@ const file_pkg_bridge_control_v1_control_proto_rawDesc = "" +
 	"\x06sha256\x18\x04 \x01(\tR\x06sha256\">\n" +
 	"\fCleanupError\x12\x14\n" +
 	"\x05stage\x18\x01 \x01(\tR\x05stage\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\x8e\x04\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xde\x03\n" +
 	"\n" +
 	"Assignment\x12\x1f\n" +
 	"\vinstance_id\x18\x01 \x01(\tR\n" +
@@ -768,23 +686,20 @@ const file_pkg_bridge_control_v1_control_proto_rawDesc = "" +
 	"\rassignment_id\x18\x02 \x01(\tR\fassignmentId\x124\n" +
 	"\x05state\x18\x03 \x01(\x0e2\x1e.aries.bridge.control.v1.StateR\x05state\x127\n" +
 	"\x06target\x18\x04 \x01(\v2\x1f.aries.bridge.control.v1.TargetR\x06target\x12=\n" +
-	"\bendpoint\x18\x05 \x01(\v2!.aries.bridge.control.v1.EndpointR\bendpoint\x124\n" +
-	"\x16lease_remaining_millis\x18\x06 \x01(\x03R\x14leaseRemainingMillis\x12L\n" +
+	"\bendpoint\x18\x05 \x01(\v2!.aries.bridge.control.v1.EndpointR\bendpoint\x12L\n" +
 	"\x0ecleanup_errors\x18\a \x03(\v2%.aries.bridge.control.v1.CleanupErrorR\rcleanupErrors\x12?\n" +
 	"\tartifacts\x18\b \x03(\v2!.aries.bridge.control.v1.ArtifactR\tartifacts\x12G\n" +
-	"\vdiagnostics\x18\t \x03(\v2%.aries.bridge.control.v1.CleanupErrorR\vdiagnostics*S\n" +
+	"\vdiagnostics\x18\t \x03(\v2%.aries.bridge.control.v1.CleanupErrorR\vdiagnosticsJ\x04\b\x06\x10\a*S\n" +
 	"\x05State\x12\x15\n" +
 	"\x11STATE_UNSPECIFIED\x10\x00\x12\r\n" +
 	"\tASSIGNING\x10\x01\x12\t\n" +
 	"\x05READY\x10\x02\x12\f\n" +
 	"\bREVOKING\x10\x03\x12\v\n" +
-	"\aREVOKED\x10\x042\x9a\x03\n" +
+	"\aREVOKED\x10\x042\xbb\x02\n" +
 	"\rBridgeControl\x12c\n" +
 	"\rAssignSandbox\x12-.aries.bridge.control.v1.AssignSandboxRequest\x1a#.aries.bridge.control.v1.Assignment\x12`\n" +
 	"\rGetAssignment\x12*.aries.bridge.control.v1.AssignmentRequest\x1a#.aries.bridge.control.v1.Assignment\x12c\n" +
-	"\x10RevokeAssignment\x12*.aries.bridge.control.v1.AssignmentRequest\x1a#.aries.bridge.control.v1.Assignment\x12]\n" +
-	"\n" +
-	"RenewLease\x12*.aries.bridge.control.v1.RenewLeaseRequest\x1a#.aries.bridge.control.v1.AssignmentB>Z<github.com/hyscale-lab/aries/pkg/bridge/control/v1;controlv1b\x06proto3"
+	"\x10RevokeAssignment\x12*.aries.bridge.control.v1.AssignmentRequest\x1a#.aries.bridge.control.v1.AssignmentB>Z<github.com/hyscale-lab/aries/pkg/bridge/control/v1;controlv1b\x06proto3"
 
 var (
 	file_pkg_bridge_control_v1_control_proto_rawDescOnce sync.Once
@@ -799,38 +714,35 @@ func file_pkg_bridge_control_v1_control_proto_rawDescGZIP() []byte {
 }
 
 var file_pkg_bridge_control_v1_control_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_pkg_bridge_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_pkg_bridge_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_pkg_bridge_control_v1_control_proto_goTypes = []any{
 	(State)(0),                   // 0: aries.bridge.control.v1.State
 	(*Target)(nil),               // 1: aries.bridge.control.v1.Target
 	(*AssignSandboxRequest)(nil), // 2: aries.bridge.control.v1.AssignSandboxRequest
 	(*AssignmentRequest)(nil),    // 3: aries.bridge.control.v1.AssignmentRequest
-	(*RenewLeaseRequest)(nil),    // 4: aries.bridge.control.v1.RenewLeaseRequest
-	(*Endpoint)(nil),             // 5: aries.bridge.control.v1.Endpoint
-	(*Artifact)(nil),             // 6: aries.bridge.control.v1.Artifact
-	(*CleanupError)(nil),         // 7: aries.bridge.control.v1.CleanupError
-	(*Assignment)(nil),           // 8: aries.bridge.control.v1.Assignment
-	nil,                          // 9: aries.bridge.control.v1.Target.ExpectedLabelsEntry
+	(*Endpoint)(nil),             // 4: aries.bridge.control.v1.Endpoint
+	(*Artifact)(nil),             // 5: aries.bridge.control.v1.Artifact
+	(*CleanupError)(nil),         // 6: aries.bridge.control.v1.CleanupError
+	(*Assignment)(nil),           // 7: aries.bridge.control.v1.Assignment
+	nil,                          // 8: aries.bridge.control.v1.Target.ExpectedLabelsEntry
 }
 var file_pkg_bridge_control_v1_control_proto_depIdxs = []int32{
-	9,  // 0: aries.bridge.control.v1.Target.expected_labels:type_name -> aries.bridge.control.v1.Target.ExpectedLabelsEntry
+	8,  // 0: aries.bridge.control.v1.Target.expected_labels:type_name -> aries.bridge.control.v1.Target.ExpectedLabelsEntry
 	1,  // 1: aries.bridge.control.v1.AssignSandboxRequest.target:type_name -> aries.bridge.control.v1.Target
 	0,  // 2: aries.bridge.control.v1.Assignment.state:type_name -> aries.bridge.control.v1.State
 	1,  // 3: aries.bridge.control.v1.Assignment.target:type_name -> aries.bridge.control.v1.Target
-	5,  // 4: aries.bridge.control.v1.Assignment.endpoint:type_name -> aries.bridge.control.v1.Endpoint
-	7,  // 5: aries.bridge.control.v1.Assignment.cleanup_errors:type_name -> aries.bridge.control.v1.CleanupError
-	6,  // 6: aries.bridge.control.v1.Assignment.artifacts:type_name -> aries.bridge.control.v1.Artifact
-	7,  // 7: aries.bridge.control.v1.Assignment.diagnostics:type_name -> aries.bridge.control.v1.CleanupError
+	4,  // 4: aries.bridge.control.v1.Assignment.endpoint:type_name -> aries.bridge.control.v1.Endpoint
+	6,  // 5: aries.bridge.control.v1.Assignment.cleanup_errors:type_name -> aries.bridge.control.v1.CleanupError
+	5,  // 6: aries.bridge.control.v1.Assignment.artifacts:type_name -> aries.bridge.control.v1.Artifact
+	6,  // 7: aries.bridge.control.v1.Assignment.diagnostics:type_name -> aries.bridge.control.v1.CleanupError
 	2,  // 8: aries.bridge.control.v1.BridgeControl.AssignSandbox:input_type -> aries.bridge.control.v1.AssignSandboxRequest
 	3,  // 9: aries.bridge.control.v1.BridgeControl.GetAssignment:input_type -> aries.bridge.control.v1.AssignmentRequest
 	3,  // 10: aries.bridge.control.v1.BridgeControl.RevokeAssignment:input_type -> aries.bridge.control.v1.AssignmentRequest
-	4,  // 11: aries.bridge.control.v1.BridgeControl.RenewLease:input_type -> aries.bridge.control.v1.RenewLeaseRequest
-	8,  // 12: aries.bridge.control.v1.BridgeControl.AssignSandbox:output_type -> aries.bridge.control.v1.Assignment
-	8,  // 13: aries.bridge.control.v1.BridgeControl.GetAssignment:output_type -> aries.bridge.control.v1.Assignment
-	8,  // 14: aries.bridge.control.v1.BridgeControl.RevokeAssignment:output_type -> aries.bridge.control.v1.Assignment
-	8,  // 15: aries.bridge.control.v1.BridgeControl.RenewLease:output_type -> aries.bridge.control.v1.Assignment
-	12, // [12:16] is the sub-list for method output_type
-	8,  // [8:12] is the sub-list for method input_type
+	7,  // 11: aries.bridge.control.v1.BridgeControl.AssignSandbox:output_type -> aries.bridge.control.v1.Assignment
+	7,  // 12: aries.bridge.control.v1.BridgeControl.GetAssignment:output_type -> aries.bridge.control.v1.Assignment
+	7,  // 13: aries.bridge.control.v1.BridgeControl.RevokeAssignment:output_type -> aries.bridge.control.v1.Assignment
+	11, // [11:14] is the sub-list for method output_type
+	8,  // [8:11] is the sub-list for method input_type
 	8,  // [8:8] is the sub-list for extension type_name
 	8,  // [8:8] is the sub-list for extension extendee
 	0,  // [0:8] is the sub-list for field type_name
@@ -847,7 +759,7 @@ func file_pkg_bridge_control_v1_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_bridge_control_v1_control_proto_rawDesc), len(file_pkg_bridge_control_v1_control_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   9,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

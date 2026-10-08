@@ -20,7 +20,7 @@ and result data live in [pkg/core](../../pkg/core).
 endpoints independently of `ToolEndpoint`, which carries tool connection identity,
 credentials, and artifact locations. Harnesses forward placement to `Deployment`
 and use the resolved search URL when search is enabled. The Docker provider
-interprets `RuntimePlacement.DockerNetwork`; the harness does not interpret
+interprets `RuntimePlacement.AttachmentID`; the harness does not interpret
 network names. `TaskEnvironment.Start` supplies the complete connectivity value,
 including any declared search service URL. Neither input transfers ownership of the task environment or sandbox.
 Model credentials are runtime

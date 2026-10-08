@@ -20,6 +20,7 @@ import (
 
 	"github.com/containerd/errdefs"
 	bridgewiring "github.com/hyscale-lab/aries/internal/app/wiring/bridge"
+	deploymentwiring "github.com/hyscale-lab/aries/internal/app/wiring/deployment"
 	"github.com/hyscale-lab/aries/internal/testutil/dockerroute"
 	"github.com/hyscale-lab/aries/pkg/benchmark/terminalbench"
 	managedbridge "github.com/hyscale-lab/aries/pkg/bridge"
@@ -42,7 +43,7 @@ type runnerHermes struct {
 }
 
 func (h *runnerHermes) Start(ctx context.Context, request core.HarnessRequest) error {
-	gateway, err := dockerroute.Listen(ctx, request.Connectivity.Placement.DockerNetwork)
+	gateway, err := dockerroute.Listen(ctx, request.Connectivity.Placement.AttachmentID)
 	if err != nil {
 		return err
 	}
@@ -74,7 +75,7 @@ func (b *hermesRunnerBenchmark) PrepareSandbox(ctx context.Context, _ core.Task,
 		ContainerID() string
 		Connectivity() core.HarnessConnectivity
 	})
-	b.containerID, b.network = identity.ContainerID(), identity.Connectivity().Placement.DockerNetwork
+	b.containerID, b.network = identity.ContainerID(), identity.Connectivity().Placement.AttachmentID
 	result, err := s.Exec(ctx, core.Command{Path: "/bin/sh", Args: []string{"-c", "test ! -e /tmp/aries-private-verifier && test ! -e /tmp/aries-hermes-proof"}})
 	if err != nil {
 		return err
@@ -320,7 +321,11 @@ func runHermesBridgeScenario(t *testing.T, cancelCommand bool, repetitions int, 
 		if err != nil {
 			t.Fatal(err)
 		}
-		bridge, err := managedbridge.New(managedbridge.Options{Runtime: bridgeRuntime, Launch: bridgewiring.DockerLaunch(versions.Bridge.Image, ""), Client: clientConfig, BridgeType: "hermes-ssh", RetainRawLog: true, OutputDir: output})
+		launch := bridgewiring.Launch(versions.Bridge.Image)
+		launch.RuntimeBackend, launch.ResourceMetrics = "docker", "docker-stats"
+		launch.Config.Backend = "docker"
+		launch.Config.BackendEndpoint, launch.Request.Mounts = deploymentwiring.DockerExecutionAccess("")
+		bridge, err := managedbridge.New(managedbridge.Options{Runtime: bridgeRuntime, Launch: launch, Client: clientConfig, BridgeType: "hermes-ssh", RetainRawLog: true, OutputDir: output})
 		if err != nil {
 			t.Fatal(err)
 		}

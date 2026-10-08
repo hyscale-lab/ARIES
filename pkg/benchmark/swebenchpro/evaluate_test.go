@@ -356,7 +356,7 @@ func (s *agentSandboxFake) Download(context.Context, string, string) error {
 }
 
 func (s *agentSandboxFake) Connectivity() core.HarnessConnectivity {
-	return core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "agent-network"}}
+	return core.HarnessConnectivity{Placement: core.RuntimePlacement{AttachmentID: "agent-network"}}
 }
 
 type freshSandboxFake struct {
@@ -416,7 +416,7 @@ func (s *freshSandboxFake) DownloadLimit(_ context.Context, source, destination 
 }
 
 func (s *freshSandboxFake) Connectivity() core.HarnessConnectivity {
-	return core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "evaluation-network"}}
+	return core.HarnessConnectivity{Placement: core.RuntimePlacement{AttachmentID: "evaluation-network"}}
 }
 
 func newEvaluationFixture(t *testing.T) (*Benchmark, core.Task, taskDetails) {

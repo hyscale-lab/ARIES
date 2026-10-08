@@ -64,8 +64,6 @@ type Manager struct {
 	collected                                                   bool
 	removed                                                     bool
 	manifest                                                    []*v1.Artifact
-	renewCancel                                                 context.CancelFunc
-	renewDone                                                   chan struct{}
 	evidenceErr                                                 error
 	allocationErr                                               error
 	secretFiles                                                 []string
@@ -84,7 +82,7 @@ func New(options Options) (*Manager, error) {
 	if launch.RuntimeBackend == "" || launch.ResourceMetrics == "" || launch.Config.Backend == "" {
 		return nil, errors.New("managed bridge requires explicit runtime metadata and execution backend")
 	}
-	if launch.Request.Workdir == "" || launch.Config.OutputDir == "" || launch.Config.ControlAddress == "" || launch.Request.ServicePort <= 0 || launch.Request.ServicePort > 65535 || launch.Request.HarnessPort <= 0 || launch.Request.HarnessPort > 65535 {
+	if launch.Request.Workdir == "" || launch.Config.OutputDir == "" || launch.Config.ControlAddress == "" || launch.Request.ServicePort <= 0 || launch.Request.ServicePort > 65535 || launch.Request.InternalPort <= 0 || launch.Request.InternalPort > 65535 {
 		return nil, errors.New("managed bridge requires explicit staging, evidence and service addresses")
 	}
 	if launch.Config.InstanceID != "" {
@@ -254,7 +252,7 @@ func (m *Manager) Start(ctx context.Context, sandbox runner.Sandbox) (core.ToolE
 		}
 	}
 	m.assigned = true // A lost admission response still owns this exact assignment.
-	assignment, err := m.assignSandbox(ctx, &v1.AssignSandboxRequest{InstanceId: m.instance, AssignmentId: m.assignment, ProtocolVersion: 1, Target: control.TargetToProto(d), LeaseMillis: 60000, CredentialId: "ssh"})
+	assignment, err := m.assignSandbox(ctx, &v1.AssignSandboxRequest{InstanceId: m.instance, AssignmentId: m.assignment, ProtocolVersion: 1, Target: control.TargetToProto(d), CredentialId: "ssh"})
 	if err != nil {
 		return endpoint, err
 	}
@@ -280,7 +278,7 @@ func (m *Manager) Start(ctx context.Context, sandbox runner.Sandbox) (core.ToolE
 	if !ok {
 		return endpoint, errors.New("runtime has no harness address")
 	}
-	expected, err := services.HarnessAddress(ctx, m.runtimeID, req.HarnessPort)
+	expected, err := services.TaskAddress(ctx, m.runtimeID, req.InternalPort)
 	if err != nil {
 		return endpoint, err
 	}
@@ -309,10 +307,6 @@ func (m *Manager) Start(ctx context.Context, sandbox runner.Sandbox) (core.ToolE
 			return core.ToolEndpoint{}, err
 		}
 	}
-	renewCtx, cancel := context.WithCancel(context.Background())
-	m.renewCancel = cancel
-	m.renewDone = make(chan struct{})
-	go m.renew(renewCtx)
 	m.exposed = true
 	return endpoint, nil
 }
@@ -371,29 +365,9 @@ func (m *Manager) validateAssignment(a *v1.Assignment) error {
 	}
 	return nil
 }
-func (m *Manager) renew(ctx context.Context) {
-	defer close(m.renewDone)
-	ticker := time.NewTicker(20 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			call, cancel := context.WithTimeout(ctx, 5*time.Second)
-			_, _ = m.client.RenewLease(call, &v1.RenewLeaseRequest{InstanceId: m.instance, AssignmentId: m.assignment, LeaseMillis: 60000})
-			cancel()
-		}
-	}
-}
 func (m *Manager) Stop(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.renewCancel != nil {
-		m.renewCancel()
-		<-m.renewDone
-		m.renewCancel = nil
-	}
 	if m.evidenceErr != nil {
 		return m.disposeFailed(ctx)
 	}

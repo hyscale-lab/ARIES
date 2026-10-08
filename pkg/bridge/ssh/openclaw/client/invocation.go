@@ -1,3 +1,5 @@
+// Package client implements the SSH client invocation emitted by OpenClaw.
+// Remote commands are forwarded unchanged for the server dialect to interpret.
 package client
 
 import (

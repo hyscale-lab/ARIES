@@ -66,7 +66,7 @@ func TestTaskEnvironmentOwnershipAndRetry(t *testing.T) {
 	}
 	next := m.NewTaskEnvironment()
 	second, err := next.Start(ctx, request)
-	if err != nil || first.Placement.DockerNetwork == second.Placement.DockerNetwork {
+	if err != nil || first.Placement.AttachmentID == second.Placement.AttachmentID {
 		t.Fatal("duplicate task reused network", first, second, err)
 	}
 	if err := next.Stop(ctx); err != nil {
@@ -118,7 +118,7 @@ func TestTaskEnvironmentResolvesDeclaredServices(t *testing.T) {
 			if err == nil || f.networkExists {
 				t.Fatal("invalid service allocated a network", err)
 			}
-		} else if err != nil || resolved.SearchURL != test.want || resolved.Placement.DockerNetwork == "" {
+		} else if err != nil || resolved.SearchURL != test.want || resolved.Placement.AttachmentID == "" {
 			t.Fatalf("port %d: resolved = %#v, %v", test.port, resolved, err)
 		}
 		if err := e.Stop(ctx); err != nil {

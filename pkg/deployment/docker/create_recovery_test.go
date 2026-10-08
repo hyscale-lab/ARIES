@@ -98,7 +98,7 @@ func TestCreateRecoveryRefusesForeignOrUnconfirmedAllocation(t *testing.T) {
 func TestCreateRejectedBeforeAllocationHasNoCleanupUncertainty(t *testing.T) {
 	f := &createRecoveryClient{fakeDocker: newFakeDocker()}
 	request := deploymentRequest()
-	request.Placement.DockerNetwork = ""
+	request.Placement.AttachmentID = ""
 	id, err := (&Manager{client: f}).Create(context.Background(), request)
 	if id != "" || err == nil || errors.Is(err, deployment.ErrAllocationUnconfirmed) || f.createCalls != 0 {
 		t.Fatalf("pre-allocation rejection returned identity=%q, error=%v, create calls=%d", id, err, f.createCalls)

@@ -48,7 +48,7 @@ func TestRequestSettingsReachRealHermes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			endpoint, err := dockerroute.Listen(ctx, connectivity.Placement.DockerNetwork)
+			endpoint, err := dockerroute.Listen(ctx, connectivity.Placement.AttachmentID)
 			if err != nil {
 				t.Fatal(err)
 			}

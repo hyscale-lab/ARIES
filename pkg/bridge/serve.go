@@ -85,7 +85,7 @@ func serve(ctx context.Context, options ServeOptions, listener net.Listener) (re
 		names = append(names, "ssh_raw.log")
 	}
 	service, err := control.NewServer(control.Config{
-		InstanceID: config.InstanceID, Token: string(token), MaxLease: 2 * time.Minute, OperationTimeout: time.Minute,
+		InstanceID: config.InstanceID, Token: string(token), OperationTimeout: time.Minute,
 		Assign: func(call context.Context, request *v1.AssignSandboxRequest) (*v1.Endpoint, error) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -190,26 +190,10 @@ func serve(ctx context.Context, options ServeOptions, listener net.Listener) (re
 	defer server.Stop()
 	serveDone := make(chan error, 1)
 	go func() { serveDone <- server.Serve(listener) }()
-	// Admission itself is bounded even when a controller dies before assignment.
-	bootstrap := time.NewTimer(2 * time.Minute)
-	defer bootstrap.Stop()
 	select {
 	case <-ctx.Done():
 		service.Revoke()
 	case <-service.Revoking():
-	case <-bootstrap.C:
-		active := service.HasAssignment()
-		if active {
-			select {
-			case <-ctx.Done():
-				service.Revoke()
-			case <-service.Revoking():
-			case e := <-serveDone:
-				return e
-			}
-		} else {
-			service.Revoke()
-		}
 	case e := <-serveDone:
 		return fmt.Errorf("bridge control serving stopped: %w", e)
 	}

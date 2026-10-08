@@ -63,7 +63,7 @@ func TestConcurrentOccurrencesKeepSeparateNetworks(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if sandboxes[0].Connectivity().Placement.DockerNetwork == sandboxes[1].Connectivity().Placement.DockerNetwork || sandboxes[0].ContainerID() == sandboxes[1].ContainerID() {
+	if sandboxes[0].Connectivity().Placement.AttachmentID == sandboxes[1].Connectivity().Placement.AttachmentID || sandboxes[0].ContainerID() == sandboxes[1].ContainerID() {
 		t.Fatal("duplicate task IDs shared resources")
 	}
 	var addresses, peers [2]string
@@ -85,7 +85,7 @@ func TestConcurrentOccurrencesKeepSeparateNetworks(t *testing.T) {
 			t.Fatal(err)
 		}
 		networks := inspection.Container.NetworkSettings.Networks
-		attachment := networks[sandbox.Connectivity().Placement.DockerNetwork]
+		attachment := networks[sandbox.Connectivity().Placement.AttachmentID]
 		if len(networks) != 1 || attachment == nil {
 			t.Fatalf("unexpected attachments: %#v", networks)
 		}
@@ -106,7 +106,7 @@ func TestConcurrentOccurrencesKeepSeparateNetworks(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		peers[i] = peer.Container.NetworkSettings.Networks[sandbox.Connectivity().Placement.DockerNetwork].IPAddress.String()
+		peers[i] = peer.Container.NetworkSettings.Networks[sandbox.Connectivity().Placement.AttachmentID].IPAddress.String()
 		result := execForTest(t, ctx, sandbox, core.Command{Path: "/bin/sh", Args: []string{"-c", "printf '%s' \"$1\" > /work/state", "aries", fmt.Sprint(i)}})
 		if result.ExitCode != 0 {
 			t.Fatalf("write failed: %#v", result)
@@ -139,7 +139,7 @@ func TestConcurrentOccurrencesKeepSeparateNetworks(t *testing.T) {
 		if _, err := api.ContainerInspect(ctx, sandbox.ContainerID(), client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
 			t.Fatalf("container absence unconfirmed: %v", err)
 		}
-		if _, err := api.NetworkInspect(ctx, sandbox.Connectivity().Placement.DockerNetwork, client.NetworkInspectOptions{}); !errdefs.IsNotFound(err) {
+		if _, err := api.NetworkInspect(ctx, sandbox.Connectivity().Placement.AttachmentID, client.NetworkInspectOptions{}); !errdefs.IsNotFound(err) {
 			t.Fatalf("network absence unconfirmed: %v", err)
 		}
 	}

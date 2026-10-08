@@ -20,7 +20,7 @@ import (
 )
 
 func deploymentRequest() deployment.Request {
-	return deployment.Request{Name: "aries-test-attempt", Image: "example/agent:v1", Args: []string{"/launcher", "one two", "$(literal)"}, Env: []string{"CONFIG=/private/config"}, Placement: core.RuntimePlacement{DockerNetwork: "task-network"}, Labels: map[string]string{"aries.managed": "true", "aries.kind": "test-harness", "aries.component": "harness", "aries.run": "run", "aries.task": "task", "aries.attempt": "attempt"}, ServicePort: 18789}
+	return deployment.Request{Name: "aries-test-attempt", Image: "example/agent:v1", Args: []string{"/launcher", "one two", "$(literal)"}, Env: []string{"CONFIG=/private/config"}, Placement: core.RuntimePlacement{AttachmentID: "task-network"}, Labels: map[string]string{"aries.managed": "true", "aries.kind": "test-harness", "aries.component": "harness", "aries.run": "run", "aries.task": "task", "aries.attempt": "attempt"}, ServicePort: 18789}
 }
 
 func TestCreatePreservesArgumentsResourcesAndPrivateService(t *testing.T) {
@@ -350,7 +350,7 @@ func TestSandboxConfigurationUsesSharedDeployment(t *testing.T) {
 	if host.Init == nil || !*host.Init || !noNewPrivilegesEnabled(host.SecurityOpt) || host.StorageOpt["size"] != "128m" || len(host.DeviceRequests) != 1 || host.DeviceRequests[0].Count != 2 {
 		t.Fatalf("host configuration=%+v", host)
 	}
-	if !slices.Equal(fake.created.NetworkingConfig.EndpointsConfig[request.Placement.DockerNetwork].Aliases, request.NetworkAliases) {
+	if !slices.Equal(fake.created.NetworkingConfig.EndpointsConfig[request.Placement.AttachmentID].Aliases, request.NetworkAliases) {
 		t.Fatal("network aliases missing")
 	}
 	host.SecurityOpt = nil
@@ -388,7 +388,7 @@ func TestLogsTranslateOnlyTypedContainerAbsence(t *testing.T) {
 func TestCreateRejectsMissingPlacementBeforeAllocation(t *testing.T) {
 	manager := &Manager{} // No client: a bad placement must fail before any backend operation.
 	request := deploymentRequest()
-	for _, placement := range []core.RuntimePlacement{{}, {DockerNetwork: " "}} {
+	for _, placement := range []core.RuntimePlacement{{}, {AttachmentID: " "}} {
 		request.Placement = placement
 		if _, err := manager.Create(context.Background(), request); err == nil {
 			t.Fatal("accepted missing Docker attachment")

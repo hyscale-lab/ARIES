@@ -102,7 +102,7 @@ type integrationSandbox struct {
 }
 
 func (sandbox *integrationSandbox) Connectivity() core.HarnessConnectivity {
-	return core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "host"}}
+	return core.HarnessConnectivity{Placement: core.RuntimePlacement{AttachmentID: "host"}}
 }
 
 func (sandbox *integrationSandbox) Exec(context.Context, core.Command) (core.CommandResult, error) {
@@ -382,7 +382,7 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 	})
 
 	manager := testfixture.New(t, bridgessh.Options{Dialect: Dialect{}, OutputDir: outputDir, CleanupTimeout: 5 * time.Second, ResolveListen: func(ctx context.Context) (core.BridgeListen, error) {
-		return dockerroute.Listen(ctx, sandbox.Connectivity().Placement.DockerNetwork)
+		return dockerroute.Listen(ctx, sandbox.Connectivity().Placement.AttachmentID)
 	}})
 	endpoint, err := manager.StartTarget(ctx, sandbox)
 	if err != nil {

@@ -595,5 +595,5 @@ func TestBinaryStdinNoteMatchesRawRetention(t *testing.T) {
 }
 
 func (s *testSandbox) Connectivity() core.HarnessConnectivity {
-	return core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "test-network"}}
+	return core.HarnessConnectivity{Placement: core.RuntimePlacement{AttachmentID: "test-network"}}
 }

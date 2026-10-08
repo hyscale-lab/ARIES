@@ -31,6 +31,7 @@ type fakeResourceAPI struct {
 	statsError   map[string]error
 	listOptions  []client.ContainerListOptions
 	statsOptions []client.ContainerStatsOptions
+	afterStats   func(string)
 	closes       int
 }
 
@@ -60,6 +61,9 @@ func (fake *fakeResourceAPI) ContainerStats(_ context.Context, id string, option
 	content, err := json.Marshal(fake.stats[id])
 	if err != nil {
 		return client.ContainerStatsResult{}, err
+	}
+	if fake.afterStats != nil {
+		fake.afterStats(id)
 	}
 	return client.ContainerStatsResult{Body: io.NopCloser(bytes.NewReader(content))}, nil
 }
@@ -215,4 +219,58 @@ func TestDockerResourceSourceRejectsChangedIdentityAndInvalidStats(t *testing.T)
 			t.Fatalf("error = %v", err)
 		}
 	})
+}
+
+func TestDockerResourceSourceRechecksRuntimeAfterEmptyStats(t *testing.T) {
+	inspectFailure := errors.New("Docker inspect unavailable")
+	for _, tc := range []struct {
+		name   string
+		change func(*fakeResourceAPI)
+		gone   bool
+	}{
+		{"stopped during stats", func(fake *fakeResourceAPI) {
+			inspection := fake.inspections[resourceSandboxID]
+			inspection.State = &containertypes.State{Status: containertypes.StateExited}
+			fake.inspections[resourceSandboxID] = inspection
+		}, true},
+		{"removed during stats", func(fake *fakeResourceAPI) {
+			fake.inspectError[resourceSandboxID] = errdefs.ErrNotFound
+		}, true},
+		{"still running", func(*fakeResourceAPI) {}, false},
+		{"inspection failed", func(fake *fakeResourceAPI) {
+			fake.inspectError[resourceSandboxID] = inspectFailure
+		}, false},
+		{"wrong identity", func(fake *fakeResourceAPI) {
+			inspection := fake.inspections[resourceSandboxID]
+			inspection.ID = resourceHarnessID
+			inspection.State = &containertypes.State{Status: containertypes.StateExited}
+			fake.inspections[resourceSandboxID] = inspection
+		}, false},
+		{"missing state", func(fake *fakeResourceAPI) {
+			inspection := fake.inspections[resourceSandboxID]
+			inspection.State = nil
+			fake.inspections[resourceSandboxID] = inspection
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source, fake := newFakeResourceSource()
+			fake.stats[resourceSandboxID] = containertypes.StatsResponse{}
+			fake.afterStats = func(id string) {
+				if id == resourceSandboxID {
+					tc.change(fake)
+				}
+			}
+			readings, err := source.Sample(context.Background())
+			if tc.gone {
+				if err != nil || len(readings) != 1 || readings[0].RuntimeID != resourceHarnessID {
+					t.Fatalf("stopped runtime must not discard the other sample: %+v, %v", readings, err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), "omit observation time") {
+				t.Fatalf("unconfirmed stop must retain invalid-stats error: %+v, %v", readings, err)
+			}
+			if tc.name == "inspection failed" && !errors.Is(err, inspectFailure) {
+				t.Fatalf("inspection error was lost: %v", err)
+			}
+		})
+	}
 }

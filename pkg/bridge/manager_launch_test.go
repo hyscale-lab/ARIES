@@ -37,7 +37,7 @@ type launchSandbox struct {
 
 func (s launchSandbox) ExportBridgeTarget() (core.BridgeTarget, error) { return s.descriptor, nil }
 func (launchSandbox) Connectivity() core.HarnessConnectivity {
-	return core.HarnessConnectivity{Placement: core.RuntimePlacement{DockerNetwork: "fixture-task-attachment"}}
+	return core.HarnessConnectivity{Placement: core.RuntimePlacement{AttachmentID: "fixture-task-attachment"}}
 }
 
 // launchRuntime models an independently deployed service. Bootstrap transfers stay
@@ -59,7 +59,7 @@ type launchRuntime struct {
 	mu                       sync.Mutex
 	events                   []string
 	assignment               *v1.AssignSandboxRequest
-	drainErr                 error
+	revokeErr                error
 }
 
 func (r *launchRuntime) event(name string) {
@@ -127,9 +127,9 @@ func (r *launchRuntime) Start(context.Context, string) error {
 		Revoke: func(context.Context) ([]*v1.Artifact, error) {
 			r.mu.Lock()
 			defer r.mu.Unlock()
-			r.events = append(r.events, "drain")
-			if r.drainErr != nil {
-				return nil, r.drainErr
+			r.events = append(r.events, "revoke")
+			if r.revokeErr != nil {
+				return nil, r.revokeErr
 			}
 			r.events = append(r.events, "finalize")
 			content := launchEvidence()
@@ -158,7 +158,7 @@ func (r *launchRuntime) Address(_ context.Context, _ string, port int) (string, 
 	r.controlPort = port
 	return r.controlAddress, nil
 }
-func (r *launchRuntime) HarnessAddress(_ context.Context, _ string, port int) (string, error) {
+func (r *launchRuntime) TaskAddress(_ context.Context, _ string, port int) (string, error) {
 	r.harnessPort = port
 	return net.JoinHostPort(r.config.Listen.AdvertiseHost, strconv.Itoa(r.config.Listen.AdvertisePort)), nil
 }
@@ -202,8 +202,8 @@ func launchFixture(t *testing.T, sandboxBackend string) (*Manager, *launchRuntim
 	runtime := &launchRuntime{}
 	launch := LaunchSpec{
 		RuntimeBackend: "service-fixture", ResourceMetrics: "unsupported",
-		Request: deployment.Request{Image: "fixture-artifact", Workdir: "/private/bootstrap", Entrypoint: []string{"/opt/fixture/bridge"}, Args: []string{"--config", "config.json"}, Env: []string{"FIXTURE=true"}, ServicePort: 9443, HarnessPort: 3022, Labels: map[string]string{"fixture.owner": "composition"}},
-		Config:  LaunchConfig{Backend: sandboxBackend, ControlAddress: "127.0.0.1:0", OutputDir: "/private/results", Listen: core.BridgeListen{BindHost: "127.0.0.1", BindPort: 3022, AdvertiseHost: "bridge.fixture", AdvertisePort: 13022}},
+		Request: deployment.Request{Image: "fixture-artifact", Workdir: "/private/bootstrap", Entrypoint: []string{"/opt/fixture/bridge"}, Args: []string{"--config", "config.json"}, Env: []string{"FIXTURE=true"}, ServicePort: 9443, InternalPort: 3022, Labels: map[string]string{"fixture.owner": "composition"}},
+		Config:  LaunchConfig{Backend: sandboxBackend, BackendEndpoint: "fixture-api://sandbox-execution", ControlAddress: "127.0.0.1:0", OutputDir: "/private/results", Listen: core.BridgeListen{BindHost: "127.0.0.1", BindPort: 3022, AdvertiseHost: "bridge.fixture", AdvertisePort: 13022}},
 	}
 	m, err := New(Options{Runtime: runtime, Launch: launch, Client: ClientConfig{IdentityFile: "/fixture/ssh/id_ed25519"}, OutputDir: t.TempDir(), BridgeType: "fixture-ssh"})
 	if err != nil {
@@ -266,25 +266,25 @@ func TestManagerUsesInjectedRuntimeLaunch(t *testing.T) {
 			if record["Backend"] != "service-fixture" || record["ResourceMetrics"] != "unsupported" || record["RuntimeID"] != "service-fixture-123" {
 				t.Fatalf("metadata misrepresented runtime or measurement support: %s", metadata)
 			}
-			// A real control response with an unconfirmed drain must retain the
+			// A real control response with an unconfirmed revocation must retain the
 			// runtime and evidence ownership; a later confirmed retry may collect.
 			runtime.mu.Lock()
-			runtime.drainErr = errors.New("fixture target drain not confirmed")
+			runtime.revokeErr = errors.New("fixture access closure not confirmed")
 			runtime.mu.Unlock()
 			if err := m.Stop(ctx); err == nil {
-				t.Fatal("unconfirmed drain accepted")
+				t.Fatal("unconfirmed revocation accepted")
 			}
 			runtime.mu.Lock()
 			firstStop := append([]string(nil), runtime.events...)
-			runtime.drainErr = nil
+			runtime.revokeErr = nil
 			runtime.mu.Unlock()
-			if !reflect.DeepEqual(firstStop, []string{"create", "upload", "validate", "start", "assign", "drain"}) {
-				t.Fatalf("unconfirmed drain collected or removed runtime: %v", firstStop)
+			if !reflect.DeepEqual(firstStop, []string{"create", "upload", "validate", "start", "assign", "revoke"}) {
+				t.Fatalf("unconfirmed revocation collected or removed runtime: %v", firstStop)
 			}
 			if err := m.Stop(ctx); err != nil {
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual(runtime.events, []string{"create", "upload", "validate", "start", "assign", "drain", "drain", "finalize", "download", "stop", "close"}) {
+			if !reflect.DeepEqual(runtime.events, []string{"create", "upload", "validate", "start", "assign", "revoke", "revoke", "finalize", "download", "stop", "close"}) {
 				t.Fatalf("cleanup ownership order changed: %v", runtime.events)
 			}
 			if runtime.downloadSource != "/private/results/task/bridge/tool-calls.jsonl" {

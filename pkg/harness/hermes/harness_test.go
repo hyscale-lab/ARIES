@@ -73,7 +73,7 @@ func newFakeDeployment(tests ...*testing.T) *fakeDeployment {
 	return f
 }
 func (f *fakeDeployment) Create(_ context.Context, r deployment.Request) (string, error) {
-	if strings.TrimSpace(r.Placement.DockerNetwork) == "" {
+	if strings.TrimSpace(r.Placement.AttachmentID) == "" {
 		return "", errors.New("missing task network placement")
 	}
 	f.created = r
@@ -245,7 +245,7 @@ func endpointFiles(t *testing.T) core.ToolEndpoint {
 
 func testRequest(t *testing.T) core.HarnessRequest {
 	t.Helper()
-	return core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{DockerNetwork: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: validModel()}
+	return core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{AttachmentID: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: validModel()}
 }
 
 func archiveEntries(t *testing.T, archive []byte) map[string]*tar.Header {
@@ -321,8 +321,8 @@ func TestStartStagesPrivateRuntimeAndPinsGatewayService(t *testing.T) {
 	if config.Labels["aries.component"] != "harness" || config.Labels["aries.kind"] != "hermes-harness" || config.Labels["aries.managed"] != "true" {
 		t.Fatalf("labels = %v", config.Labels)
 	}
-	if string(fake.created.Placement.DockerNetwork) != "aries-net-test" {
-		t.Fatalf("network = %v", fake.created.Placement.DockerNetwork)
+	if string(fake.created.Placement.AttachmentID) != "aries-net-test" {
+		t.Fatalf("network = %v", fake.created.Placement.AttachmentID)
 	}
 
 	entries := archiveEntries(t, fake.archive)
@@ -1157,7 +1157,7 @@ func TestDeploymentReceivesRuntimeConstraintsAndSecretValidation(t *testing.T) {
 	if fake.created.CPU == nil || *fake.created.CPU != cpu || fake.created.MemoryMB == nil || *fake.created.MemoryMB != memory {
 		t.Fatalf("resources = %#v", fake.created)
 	}
-	if got := fake.validatedRequest; got.Name != fake.created.Name || got.Image != testHermesImage || got.Placement.DockerNetwork != request.Connectivity.Placement.DockerNetwork || !slices.Equal(got.Args, gatewayCommand) || !slices.Equal(got.Entrypoint, gatewayEntrypoint) {
+	if got := fake.validatedRequest; got.Name != fake.created.Name || got.Image != testHermesImage || got.Placement.AttachmentID != request.Connectivity.Placement.AttachmentID || !slices.Equal(got.Args, gatewayCommand) || !slices.Equal(got.Entrypoint, gatewayEntrypoint) {
 		t.Fatalf("validation request = %#v", got)
 	}
 	if !slices.Equal(fake.created.ImageVolumes, []string{imageDeclaredVolume}) {
