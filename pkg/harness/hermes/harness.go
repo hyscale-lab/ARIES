@@ -646,11 +646,6 @@ func (manager *Manager) waitReady(ctx context.Context, active *session) error {
 }
 
 func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([]byte, error) {
-	identity, err := privatefiles.Read(active.Endpoint.IdentitySourceFile, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("read Hermes SSH identity: %w", err)
-	}
-	defer clear(identity)
 	extractEnabled := len(active.Credentials.Get("extract")) != 0
 	mcpHostVars := make([]string, 0, len(active.Credentials.MCPFiles()))
 	for hostVar := range active.Credentials.MCPFiles() {
@@ -660,7 +655,6 @@ func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([
 	files := map[string]harness.ArchiveFile{
 		strings.TrimPrefix(configContainerPath, "/"): {Content: configuration, Mode: 0o600},
 		strings.TrimPrefix(modelKeyPath, "/"):        {Content: active.Credentials.Get("model"), Mode: 0o600},
-		strings.TrimPrefix(identityContainerFS, "/"): {Content: identity, Mode: 0o600},
 		strings.TrimPrefix(gatewayKeyPath, "/"):      {Content: active.Credentials.Get("gateway"), Mode: 0o600},
 		strings.TrimPrefix(gatewayLauncherPath, "/"): {Content: gatewayLauncherScript(active.Model.APIKeyEnv, extractEnabled, mcpHostVars...), Mode: 0o555},
 	}

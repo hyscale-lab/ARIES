@@ -18,7 +18,6 @@ import (
 
 	"github.com/hyscale-lab/aries/pkg/core"
 	"golang.org/x/crypto/ssh"
-	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 const (
@@ -102,8 +101,8 @@ func TestManagerProxiesSSHExecToSandboxAndRetainsReplayableToolLog(t *testing.T)
 	}
 	assertDynamicLoopbackEndpoint(t, endpoint)
 	wantLogPaths := []string{
-		filepath.Join(outputDir, "contract-task", "bridge", "tool-calls.jsonl"),
-		filepath.Join(outputDir, "contract-task", "bridge", "ssh_raw.log"),
+		filepath.Join(outputDir, "tool-calls.jsonl"),
+		filepath.Join(outputDir, "ssh_raw.log"),
 	}
 	if !reflect.DeepEqual(endpoint.LogPaths, wantLogPaths) {
 		t.Fatalf("tool log path = %q", endpoint.LogPaths)
@@ -162,6 +161,7 @@ func TestManagerProxiesSSHExecToSandboxAndRetainsReplayableToolLog(t *testing.T)
 	assertLogString(t, record, "operation_class", "exec")
 	assertLogString(t, record, "run_id", sandbox.RunID())
 	assertLogString(t, record, "task_id", sandbox.TaskID())
+	assertLogString(t, record, "sandbox_id", "contract-sandbox")
 	assertLogString(t, record, "container_id", sandbox.ContainerID())
 	assertLogString(t, record, "container_name", sandbox.ContainerName())
 	assertLogString(t, record, "path", remoteShell)
@@ -192,7 +192,7 @@ func TestManagerProxiesSSHExecToSandboxAndRetainsReplayableToolLog(t *testing.T)
 	if len(rawRecords) != 1 {
 		t.Fatalf("raw records = %d: %s", len(rawRecords), rawContent)
 	}
-	if rawRecords[0]["sequence"] != "1" || rawRecords[0]["request_type"] != "exec" {
+	if rawRecords[0]["sequence"] != "1" || rawRecords[0]["request_type"] != "exec" || rawRecords[0]["sandbox_id"] != "contract-sandbox" {
 		t.Fatalf("raw identity = %#v", rawRecords[0])
 	}
 	payload := unescapeRawValue(t, rawRecords[0]["payload"])
@@ -274,9 +274,7 @@ func TestManagerRejectsMalformedSSHExecWithoutSandboxExecution(t *testing.T) {
 
 func newContractManager(t *testing.T, outputDir string) *Manager {
 	t.Helper()
-	creds, signer := fixtureCredentials(t)
-	fixtureSigners.Store(outputDir, signer)
-	manager, err := New(Options{Dialect: testDialect{}, Credentials: creds, ResolveListen: loopbackListen, OutputDir: outputDir, CleanupTimeout: time.Second})
+	manager, err := New(Options{Dialect: testDialect{}, HostSigner: fixtureHostSigner(t), SandboxID: "contract-sandbox", ResolveListen: loopbackListen, OutputDir: outputDir, CleanupTimeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,20 +283,7 @@ func newContractManager(t *testing.T, outputDir string) *Manager {
 
 func bridgeClientConfig(t *testing.T, endpoint core.ToolEndpoint) *ssh.ClientConfig {
 	t.Helper()
-	value, ok := fixtureSigners.Load(filepath.Dir(filepath.Dir(filepath.Dir(endpoint.LogPaths[0]))))
-	if !ok {
-		t.Fatal("fixture signer not registered")
-	}
-	signer := value.(ssh.Signer)
-	hostKeyCallback, err := knownhosts.New(endpoint.KnownHostsSourceFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return &ssh.ClientConfig{
-		User: endpoint.Username, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyAlgorithms: []string{ssh.KeyAlgoED25519}, HostKeyCallback: hostKeyCallback,
-		Timeout: time.Second,
-	}
+	return &ssh.ClientConfig{User: endpoint.Username, HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: time.Second}
 }
 
 func assertDynamicLoopbackEndpoint(t *testing.T, endpoint core.ToolEndpoint) {
@@ -310,7 +295,7 @@ func assertDynamicLoopbackEndpoint(t *testing.T, endpoint core.ToolEndpoint) {
 	if host != "127.0.0.1" || port == "" || port == "2222" {
 		t.Fatalf("endpoint address = %q, want dynamic 127.0.0.1 port", endpoint.Address)
 	}
-	if endpoint.Protocol != "ssh" || endpoint.Username == "" || endpoint.KnownHostsSourceFile == "" {
+	if endpoint.Protocol != "ssh" || endpoint.Username == "" {
 		t.Fatalf("incomplete SSH endpoint: %#v", endpoint)
 	}
 }

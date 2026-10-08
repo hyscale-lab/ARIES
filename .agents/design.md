@@ -18,7 +18,8 @@ an invariant; routine aligned work needs no additional approval.
   [contracts](components.md). Model runtime infrastructure adds no role.
 - Separate component behavior from execution mechanisms through explicit
   deployment dependencies. Deployment owns runtime operations; TaskEnvironment
-  separately owns task attachment. Logical components need not be services.
+  borrows task attachment from run-owned connectivity. Logical components need
+  not be services.
 - Bridges adapt native protocols while preserving operation semantics,
   cancellation, errors, and ownership.
 - Keep selection in `cmd/aries`, construction/rollback in `internal/app/wiring`,

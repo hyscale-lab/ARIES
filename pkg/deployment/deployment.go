@@ -96,17 +96,29 @@ type FileInfo struct {
 	Mode fs.FileMode
 }
 
-// TaskEnvironment owns the task attachment beneath the four Runner roles.
-// Start may fail after allocation; callers must still call Stop. Stop succeeds
-// only after confirming absence. Each task occurrence requires a fresh owner.
-type TaskEnvironment interface {
-	Start(context.Context, core.SandboxRequest) (core.HarnessConnectivity, error)
-	Validate(context.Context) error
+// RunEnvironment owns connectivity shared by all runtimes in a run. It is
+// stopped after the last runtime, independently of logical task handles.
+type RunEnvironment interface {
+	Start(context.Context) (core.RuntimePlacement, error)
+	NewTaskEnvironment() TaskEnvironment
+	NetworkID() string
+	NetworkName() string
 	Stop(context.Context) error
 }
 
-// TaskSandboxAlias names the sandbox service on the current task attachment.
-const TaskSandboxAlias = "task-sandbox"
+// TaskEnvironmentRequest supplies the unique runtime service identity.
+type TaskEnvironmentRequest struct {
+	core.SandboxRequest
+	RuntimeName string
+}
+
+// TaskEnvironment is a fresh logical attachment for one sandbox. Stop releases
+// the handle without removing infrastructure owned by the run.
+type TaskEnvironment interface {
+	Start(context.Context, TaskEnvironmentRequest) (core.HarnessConnectivity, error)
+	Validate(context.Context) error
+	Stop(context.Context) error
+}
 
 // ServiceRuntime resolves a task-attachment address independently of host control.
 type ServiceRuntime interface {

@@ -29,7 +29,6 @@ const (
 	defaultCleanupTimeout = 30 * time.Second
 	maxExecInput          = 16 << 20
 	maxConfiguredOutput   = 1 << 30
-	networkAlias          = deployment.TaskSandboxAlias
 )
 
 var (
@@ -80,13 +79,13 @@ type Sandbox struct {
 	runID          string
 	taskID         string
 
-	mu             sync.Mutex
-	containerOwned bool
-	networkOwned   bool
-	stopped        bool
-	stopping       bool
-	stopDone       chan struct{}
-	stopErr        error
+	mu               sync.Mutex
+	containerOwned   bool
+	environmentOwned bool
+	stopped          bool
+	stopping         bool
+	stopDone         chan struct{}
+	stopErr          error
 }
 
 // Close releases the deployment transport after all sandboxes have stopped.
@@ -190,8 +189,8 @@ func (m *Manager) Start(ctx context.Context, request core.SandboxRequest) (runne
 	if s.environment == nil {
 		return nil, errors.New("sandbox task environment constructor returned nil")
 	}
-	s.networkOwned = true
-	s.connectivity, err = s.environment.Start(ctx, request)
+	s.environmentOwned = true
+	s.connectivity, err = s.environment.Start(ctx, deployment.TaskEnvironmentRequest{SandboxRequest: request, RuntimeName: s.containerName})
 	if err != nil {
 		return nil, s.rollbackStart(ctx, fmt.Errorf("start task environment: %w", err))
 	}
@@ -204,7 +203,7 @@ func (m *Manager) Start(ctx context.Context, request core.SandboxRequest) (runne
 		Env:        taskEnvironment(env.Env),
 		Entrypoint: []string{"/bin/sleep"}, Args: []string{"infinity"},
 		Labels:    ownershipLabels(request, "task-container"),
-		Placement: s.connectivity.Placement, NetworkAliases: []string{networkAlias},
+		Placement: s.connectivity.Placement,
 		StorageMB: env.StorageMB, GPUs: env.GPUs,
 		Init: true, NoNewPrivileges: env.ExecUser != "", AllowImageVolumes: true,
 	}
@@ -478,7 +477,7 @@ func (s *Sandbox) stop(ctx context.Context) error {
 	s.mu.Lock()
 	s.stopErr = err
 	s.stopping = false
-	s.stopped = !s.containerOwned && !s.networkOwned
+	s.stopped = !s.containerOwned && !s.environmentOwned
 	close(done)
 	stopped := s.stopped
 	s.mu.Unlock()
@@ -492,7 +491,7 @@ func (s *Sandbox) stop(ctx context.Context) error {
 
 func (s *Sandbox) stopOnce(ctx context.Context, collectLogs bool) error {
 	s.mu.Lock()
-	containerOwned, networkOwned := s.containerOwned, s.networkOwned
+	containerOwned, environmentOwned := s.containerOwned, s.environmentOwned
 	s.mu.Unlock()
 	var errs []error
 	if containerOwned {
@@ -510,12 +509,12 @@ func (s *Sandbox) stopOnce(ctx context.Context, collectLogs bool) error {
 	s.mu.Lock()
 	containerRemoved := !s.containerOwned
 	s.mu.Unlock()
-	if networkOwned && containerRemoved {
+	if environmentOwned && containerRemoved {
 		if err := s.environment.Stop(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("stop task network: %w", err))
 		} else {
 			s.mu.Lock()
-			s.networkOwned = false
+			s.environmentOwned = false
 			s.mu.Unlock()
 		}
 	}

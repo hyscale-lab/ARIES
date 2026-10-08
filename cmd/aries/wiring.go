@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 
 	"github.com/hyscale-lab/aries/internal/app"
 	benchmarkwiring "github.com/hyscale-lab/aries/internal/app/wiring/benchmark"
@@ -31,8 +32,7 @@ func commandWiring() app.Wiring {
 		BuildHarnessImage:    buildHarnessImage,
 		NewBenchmark:         newBenchmark,
 		NewHarness:           newHarness,
-		NewSandbox:           newSandbox,
-		NewBridge:            newBridge,
+		NewInfrastructure:    newInfrastructure,
 	}
 }
 
@@ -137,7 +137,7 @@ func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byt
 	}
 }
 
-func newSandbox(cfg config.Config, outputRoot, runID, occurrenceID string, gpuIndices []int, logger *logrus.Logger) (app.SandboxInstance, error) {
+func newSandbox(cfg config.Config, outputRoot, runID, occurrenceID string, gpuIndices []int, logger *logrus.Logger, environment deployment.RunEnvironment) (app.SandboxInstance, error) {
 	if err := validateDeployment(&cfg); err != nil {
 		return app.SandboxInstance{}, err
 	}
@@ -147,13 +147,13 @@ func newSandbox(cfg config.Config, outputRoot, runID, occurrenceID string, gpuIn
 		if err != nil {
 			return app.SandboxInstance{}, err
 		}
-		return sandboxwiring.New(outputRoot, occurrenceID, gpuIndices, logger, transport, transport.NewTaskEnvironment, resources)
+		return sandboxwiring.New(outputRoot, occurrenceID, gpuIndices, logger, transport, environment.NewTaskEnvironment, resources)
 	default:
 		return app.SandboxInstance{}, fmt.Errorf("unsupported sandbox.deployment.backend %q", cfg.Sandbox.Deployment.Backend)
 	}
 }
 
-func newBridge(cfg config.Config, outputRoot string, logger *logrus.Logger) (runner.ToolBridge, error) {
+func newSharedBridge(cfg config.Config, runID, outputRoot string, placement core.RuntimePlacement, logger *logrus.Logger) (app.SharedBridge, error) {
 	if err := validateDeployment(&cfg); err != nil {
 		return nil, err
 	}
@@ -180,7 +180,7 @@ func newBridge(cfg config.Config, outputRoot string, logger *logrus.Logger) (run
 	default:
 		return nil, errors.Join(fmt.Errorf("unsupported bridge execution backend %q", cfg.Sandbox.Deployment.Backend), runtime.Close())
 	}
-	return bridgewiring.New(cfg, outputRoot, runtime, launch)
+	return bridgewiring.NewService(cfg, runID, filepath.Join(outputRoot, "infrastructure", "bridge"), placement, runtime, launch)
 }
 
 func prepareBridge(ctx context.Context, cfg config.Config) error {
@@ -287,5 +287,34 @@ func buildHarnessImage(ctx context.Context, cfg config.Config) error {
 		})
 	default:
 		return fmt.Errorf("unsupported image preparation backend %q", cfg.Sandbox.Deployment.Backend)
+	}
+}
+
+func newInfrastructure(cfg config.Config, runID, outputRoot string, logger *logrus.Logger) (*app.RunInfrastructure, error) {
+	if err := validateDeployment(&cfg); err != nil {
+		return nil, err
+	}
+	switch cfg.Sandbox.Deployment.Backend {
+	case "docker":
+		owner, err := deploymentwiring.NewDocker(cfg.Sandbox.Deployment, logger)
+		if err != nil {
+			return nil, err
+		}
+		environment := owner.NewRunEnvironment(runID)
+		resources, err := deploymentwiring.NewDockerRunResources(cfg.Bridge.Deployment, runID)
+		if err != nil {
+			return nil, errors.Join(err, owner.Close())
+		}
+		return &app.RunInfrastructure{
+			Environment: environment, Resources: resources, Close: owner.Close, NetworkPolicy: "shared-egress",
+			NewSandbox: func(cfg config.Config, root, run, occurrence string, gpus []int, log *logrus.Logger) (app.SandboxInstance, error) {
+				return newSandbox(cfg, root, run, occurrence, gpus, log, environment)
+			},
+			NewBridge: func(placement core.RuntimePlacement) (app.SharedBridge, error) {
+				return newSharedBridge(cfg, runID, outputRoot, placement, logger)
+			},
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported run environment backend %q", cfg.Sandbox.Deployment.Backend)
 	}
 }

@@ -81,21 +81,11 @@ func newTestManager(t *testing.T, outputDir string) *testfixture.Server {
 	return testfixture.New(t, bridgessh.Options{Dialect: Dialect{}, OutputDir: outputDir, CleanupTimeout: 5 * time.Second})
 }
 
-// clientConfig mirrors how Hermes actually authenticates: the generated
-// identity, and TOFU on the host key because Hermes forces
-// StrictHostKeyChecking=accept-new with no way to preload known_hosts.
+// clientConfig uses the native unauthenticated handshake.
 func clientConfig(t *testing.T, endpoint core.ToolEndpoint) *ssh.ClientConfig {
 	t.Helper()
-	identity, err := os.ReadFile(endpoint.IdentitySourceFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := ssh.ParsePrivateKey(identity)
-	if err != nil {
-		t.Fatal(err)
-	}
 	return &ssh.ClientConfig{
-		User: endpoint.Username, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		User:              endpoint.Username,
 		HostKeyAlgorithms: []string{ssh.KeyAlgoED25519},
 		HostKeyCallback:   ssh.InsecureIgnoreHostKey(),
 		Timeout:           5 * time.Second,
@@ -177,7 +167,7 @@ func TestBridgeProxiesHermesCommandsAndRetainsEvidence(t *testing.T) {
 	if endpoint.ClientCommand != "" || endpoint.ClientSourceFile != "" {
 		t.Fatalf("bridge advertised a client helper: %+v", endpoint)
 	}
-	if endpoint.Protocol != "ssh" || endpoint.Username != "aries" || endpoint.IdentitySourceFile == "" {
+	if endpoint.Protocol != "ssh" || endpoint.Username != "aries" {
 		t.Fatalf("endpoint = %+v", endpoint)
 	}
 	// Hermes's terminal must be told the directory the bridge runs commands in.
@@ -225,7 +215,7 @@ func TestBridgeProxiesHermesCommandsAndRetainsEvidence(t *testing.T) {
 	if err := manager.Stop(ctx); err != nil {
 		t.Fatal(err)
 	}
-	records := readToolCalls(t, filepath.Join(outputDir, "test-task", "bridge", "tool-calls.jsonl"))
+	records := readToolCalls(t, filepath.Join(outputDir, "tool-calls.jsonl"))
 	execs := recordsOfType(records, "exec")
 	if len(execs) != 1 {
 		t.Fatalf("exec records = %#v", records)
@@ -234,7 +224,7 @@ func TestBridgeProxiesHermesCommandsAndRetainsEvidence(t *testing.T) {
 	if record["status"] != "completed" || record["operation_class"] != kindAgent || record["exit_code"].(float64) != 7 {
 		t.Fatalf("record = %#v", record)
 	}
-	if record["container_id"] != "sandbox-container-id" || record["run_id"] != "test-run" || record["task_id"] != "test-task" {
+	if record["container_id"] != "sandbox-container-id" || record["run_id"] != "test-run" || record["task_id"] != "test-task" || record["sandbox_id"] != "test-sandbox" {
 		t.Fatalf("record identity = %#v", record)
 	}
 	// The audit is only lossless if the requests ARIES refuses appear too.
@@ -247,7 +237,7 @@ func TestBridgeProxiesHermesCommandsAndRetainsEvidence(t *testing.T) {
 			t.Fatalf("env record = %#v", env)
 		}
 	}
-	raw, err := os.ReadFile(filepath.Join(outputDir, "test-task", "bridge", "ssh_raw.log"))
+	raw, err := os.ReadFile(filepath.Join(outputDir, "ssh_raw.log"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +314,7 @@ func TestBridgeDeniesFileSyncAndRecordsItAsPolicy(t *testing.T) {
 	if err := manager.Stop(ctx); err != nil {
 		t.Fatal(err)
 	}
-	records := recordsOfType(readToolCalls(t, filepath.Join(outputDir, "test-task", "bridge", "tool-calls.jsonl")), "exec")
+	records := recordsOfType(readToolCalls(t, filepath.Join(outputDir, "tool-calls.jsonl")), "exec")
 	if len(records) != 2 {
 		t.Fatalf("records = %#v", records)
 	}
@@ -337,41 +327,6 @@ func TestBridgeDeniesFileSyncAndRecordsItAsPolicy(t *testing.T) {
 		if record["operation_class"] != kindSync {
 			t.Fatalf("denied sync recorded as %q, want %q", record["operation_class"], kindSync)
 		}
-	}
-}
-
-// The private identity is revoked on Stop, but known_hosts holds only the
-// ephemeral host public key and is the evidence of what Hermes pinned.
-func TestStopRevokesIdentityAndRetainsKnownHosts(t *testing.T) {
-	outputDir := t.TempDir()
-	manager := newTestManager(t, outputDir)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	endpoint, err := manager.StartTarget(ctx, &testSandbox{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	bridgeDir := filepath.Join(outputDir, "test-task", "bridge")
-	knownHosts := filepath.Join(bridgeDir, "known_hosts")
-	before, err := os.ReadFile(knownHosts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(before) == 0 {
-		t.Fatal("known_hosts is empty during the run")
-	}
-	if err := manager.Stop(ctx); err != nil {
-		t.Fatal(err)
-	}
-	after, err := os.ReadFile(knownHosts)
-	if err != nil {
-		t.Fatalf("known_hosts did not survive Stop: %v", err)
-	}
-	if !bytes.Equal(before, after) {
-		t.Fatalf("known_hosts changed across Stop: %q -> %q", before, after)
-	}
-	if _, err := os.Stat(endpoint.IdentitySourceFile); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("private identity survived Stop: %v", err)
 	}
 }
 
@@ -450,7 +405,6 @@ func TestStopRevokesListenerAndIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Capture the client config first: revocation deletes the identity file.
 	configuration := clientConfig(t, endpoint)
 	for attempt := range 3 {
 		if err := manager.Stop(ctx); err != nil {
@@ -459,10 +413,6 @@ func TestStopRevokesListenerAndIsIdempotent(t *testing.T) {
 	}
 	if _, err := ssh.Dial("tcp", endpoint.Address, configuration); err == nil {
 		t.Fatal("bridge still accepts connections after revocation")
-	}
-	// Private credential material must not survive revocation.
-	if _, err := os.Stat(endpoint.IdentitySourceFile); !os.IsNotExist(err) {
-		t.Fatalf("identity survived revocation: %v", err)
 	}
 }
 
@@ -544,7 +494,7 @@ func TestBridgeOmitsRawLogWhenConfigured(t *testing.T) {
 	if err := manager.Stop(ctx); err != nil {
 		t.Fatal(err)
 	}
-	toolLog := filepath.Join(outputDir, sandbox.TaskID(), "bridge", "tool-calls.jsonl")
+	toolLog := filepath.Join(outputDir, "tool-calls.jsonl")
 	content, err := os.ReadFile(toolLog)
 	if err != nil {
 		t.Fatalf("structured tool log must survive the opt-out: %v", err)
@@ -552,7 +502,7 @@ func TestBridgeOmitsRawLogWhenConfigured(t *testing.T) {
 	if len(bytes.TrimSpace(content)) == 0 {
 		t.Fatal("structured tool log is empty")
 	}
-	if _, err := os.Stat(filepath.Join(outputDir, sandbox.TaskID(), "bridge", "ssh_raw.log")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(outputDir, "ssh_raw.log")); !os.IsNotExist(err) {
 		t.Fatalf("ssh_raw.log still written: %v", err)
 	}
 }

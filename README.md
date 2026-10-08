@@ -92,7 +92,7 @@ implementations:
 | Agent harness | OpenClaw (text and realtime voice modes); Hermes (text) |
 | Benchmark | Terminal-Bench 2; Deep Research Bench; SWE-Atlas QA; the 731-task public SWE-bench Pro split |
 | Tool sandbox | Shared Docker deployment through the Moby Go SDK |
-| Tool bridge | Embedded OpenClaw SSH bridge; embedded Hermes SSH bridge |
+| Tool bridge | One managed SSH service per run, with OpenClaw or Hermes dialect and independent sandbox sessions |
 | Model service | External DeepSeek; external OpenAI-compatible servers such as vLLM; external or ARIES-managed SGLang |
 
 See [Supported implementations](docs/supported.md) for ownership,
@@ -111,7 +111,7 @@ ARIES requires Linux, a local Docker Engine, Go, Git, Make, network access to
 the configured model service, and access to required image registries.
 
 ```sh
-make build
+make bridge-image
 ./bin/aries profiles/openclaw-tb2-fix-git-deepseek.json
 ```
 

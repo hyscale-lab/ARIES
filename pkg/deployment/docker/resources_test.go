@@ -274,3 +274,69 @@ func TestDockerResourceSourceRechecksRuntimeAfterEmptyStats(t *testing.T) {
 		})
 	}
 }
+
+func TestSharedBridgeMeasuredOnlyByRunSource(t *testing.T) {
+	task, fake := newFakeResourceSource()
+	task.scope = "task"
+	bridge := resourceSummary("shared-bridge-id", "aries-bridge-shared", "tool-bridge")
+	bridge.Labels["aries.component"] = "bridge"
+	delete(bridge.Labels, "aries.task")
+	// A task-labeled bridge cannot be counted by either source after migration.
+	stale := resourceSummary("stale-task-bridge", "aries-bridge-stale", "tool-bridge")
+	stale.Labels["aries.component"] = "bridge"
+	for _, item := range []containertypes.Summary{bridge, stale} {
+		fake.items = append(fake.items, item)
+		fake.inspections[item.ID] = resourceInspection(item)
+		fake.stats[item.ID] = resourceStats(time.Now(), 99, 512, 1024)
+	}
+	taskReadings, err := task.Sample(context.Background())
+	if err != nil || len(taskReadings) != 2 {
+		t.Fatalf("task readings = %#v, %v", taskReadings, err)
+	}
+	for _, reading := range taskReadings {
+		if reading.Component == "bridge" || reading.Scope != "task" || reading.RunID != "run-1" || reading.TaskID != "fix-git" {
+			t.Fatalf("task metadata = %#v", reading)
+		}
+	}
+	run := &DockerResourceSource{api: fake, scope: "run", runID: "run-1"}
+	runReadings, err := run.Sample(context.Background())
+	if err != nil || len(runReadings) != 1 {
+		t.Fatalf("run readings = %#v, %v", runReadings, err)
+	}
+	reading := runReadings[0]
+	if reading.Scope != "run" || reading.RunID != "run-1" || reading.TaskID != "" || reading.Component != "bridge" || reading.RuntimeID != bridge.ID || reading.CPUUsageNanoseconds != 99 {
+		t.Fatalf("run metadata = %#v", reading)
+	}
+	if len(fake.statsOptions) != 3 {
+		t.Fatalf("bridge sampled more than once: %d total stats calls", len(fake.statsOptions))
+	}
+	// A second discovery while the bridge is idle still observes the same run resource.
+	idle, err := run.Sample(context.Background())
+	if err != nil || len(idle) != 1 || idle[0].RuntimeID != bridge.ID {
+		t.Fatalf("idle run readings = %#v, %v", idle, err)
+	}
+	// Confirmed shared-runtime removal is absence, with task sampling continuing.
+	fake.inspectError[bridge.ID] = errdefs.ErrNotFound
+	removed, err := run.Sample(context.Background())
+	if err != nil || len(removed) != 0 {
+		t.Fatalf("removed bridge = %#v, %v", removed, err)
+	}
+	remaining, err := task.Sample(context.Background())
+	if err != nil || len(remaining) != 2 {
+		t.Fatalf("remaining task runtimes = %#v, %v", remaining, err)
+	}
+}
+
+func TestRunResourceScopeRequiresNoTaskSelection(t *testing.T) {
+	if _, err := NewResourceSource(ResourceOptions{Scope: "run", RunID: "run-1", TaskIDs: []string{"bridge"}}); err == nil {
+		t.Fatal("run source accepted fabricated task")
+	}
+	source, err := NewResourceSource(ResourceOptions{Scope: "run", RunID: "run-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	if source.scope != "run" || len(source.tasks) != 0 {
+		t.Fatalf("run scope = %#v", source)
+	}
+}

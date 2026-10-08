@@ -5,7 +5,7 @@ Start from `profiles/*.json`; consult the [schema](../pkg/config/config.go),
 Use `configs/versions.json` for pins; do not duplicate the field inventory here.
 
 - Keep role selection separate from placement. Harness and sandbox share a local
-  Docker daemon; bridges use a separate managed Docker container.
+  Docker daemon and one run network; each run has one managed Docker bridge container.
   Reject unsupported backends and explicit embedded mode before effects.
 - Declare `overrides_file` explicitly (`""` disables overrides). Keep harness and
   sandbox resource limits independent; preserve omission/default semantics and

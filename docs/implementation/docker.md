@@ -1,90 +1,78 @@
 # Docker resource management
 
-The [deployment contracts](../design/deployment.md) separate component policy from
-execution and task attachment ownership. Their current Docker provider is
-[`pkg/deployment/docker`](../../pkg/deployment/docker/docker.go), which uses the
-Moby Go SDK for creation, validation, archive transport, streaming execution,
-logs, and positive removal. ARIES does not shell out to Docker for these operations.
+The [deployment contracts](../design/deployment.md) separate component policy,
+runtime operations and shared connectivity. [`pkg/deployment/docker`](../../pkg/deployment/docker/docker.go)
+uses the Moby Go SDK for runtime creation, validation, archives, execution, logs,
+network operations and confirmed removal.
 
 ## Composition and topology
 
-Explicit command switches select separate Docker clients for
-`harness.deployment`, `sandbox.deployment`, and `bridge.deployment`; all must name the same local Unix
-socket. Image preparation and resource sampling use that selected daemon too.
-Configuration translation lives
-in [deployment wiring](../../internal/app/wiring/deployment/docker.go), with
-[bridge image preparation and execution access](../../internal/app/wiring/deployment/bridge.go)
-alongside it.
-See [deployment configuration](../configuration.md#deployment-configuration) for
-the profile shape and compatibility defaults.
+Explicit command switches select Docker clients for harness, sandbox and bridge;
+all use the same local Unix socket. Configuration translation and execution
+access live in [deployment wiring](../../internal/app/wiring/deployment/docker.go)
+and [bridge wiring](../../internal/app/wiring/deployment/bridge.go).
 
-Network operations are outside `Deployment`. Wiring supplies the Docker
-task-environment constructor as `sandbox.Options.NewEnvironment`. Each occurrence
-gets a fresh owner, including duplicate task IDs and retries. The
-[task environment](../../pkg/deployment/docker/environment.go) creates and
-validates a randomly named, labeled bridge network. `AllowNetwork` controls
-whether Docker creates it as an internal network. Ownership checks prevent a
-failed create response from authorizing cleanup of an unrelated resource.
+Each run owns one randomly named, labeled Docker bridge network with
+`Internal:false`. All harnesses, live/evaluation sandboxes and the shared bridge
+container join it. Task handles borrow the network. Unique runtime names identify
+sandbox services, including separate sandboxes for repeated task IDs. Effective
+`shared-egress` policy is recorded alongside preserved benchmark environment
+metadata; `AllowNetwork` does not create per-task isolated networks.
 
-The bridge container joins the task-owned network. Its SSH endpoint uses its
-address on that network and an explicit service port; the plaintext, unauthenticated
-gRPC control endpoint is published on loopback for Runner. Attachment and endpoint
-ownership follow the
-[task-environment contract](../design/deployment.md#taskenvironment-operations-and-ownership).
+One managed bridge container serves the run, with a dynamic SSH listener per live
+sandbox. gRPC control is plaintext and unauthenticated, published on host loopback.
+SSH clients also connect without authentication; one in-memory service host key
+is retained for the protocol. Neither client keys nor known-hosts files are staged.
 
-`bridge.mode` is `managed`: native listeners run in a separate Docker container.
-Explicit embedded/external modes are rejected. Composition supplies the bridge's
-Docker socket as an explicit mount. Deployment validates declared mounts without
-granting access based on component labels. Harness and sandbox requests contain
-no host mounts. See [supported combinations](../supported.md) for deployment boundaries.
+Composition supplies the bridge's Docker socket as an explicit mount. Deployment
+validates the declared source, destination and permissions; component labels do
+not grant mounts. Harness and sandbox runtimes do not receive the socket. See
+[deployment configuration](../configuration.md#deployment-configuration).
 
 ## Runtime creation and execution
 
-The sandbox chooses task labels, default workdir and numeric execution identity,
-and private artifact paths. Docker translates deployment requests into container
-configuration, validates ownership and isolation, and publishes requested services
-only on loopback. `Address` checks for one loopback binding. When Docker suppresses
-publication on an internal network, it resolves the running container's sole task
-interface, requiring an explicit loopback publication request. This applies to
-every component. `TaskAddress` resolves the address used by task peers.
-Mount validation checks the exact declared source, destination, and permissions.
+The sandbox supplies ownership labels, unique runtime name, default workdir,
+numeric execution user and private evidence paths. Docker validates those values
+and resolves addresses. `Address` requires exactly one published loopback binding;
+`TaskAddress` resolves the bridge's peer-reachable address using its actual dynamic
+listener port. Protocol code does not probe interfaces or assume SSH port 2222.
+Search URLs use unique sandbox runtime names. Provider-specific address inspection
+stays in Docker, as described in [endpoint handoff](../design/deployment.md#endpoint-handoff).
 
-The common [execution implementation](../../pkg/deployment/docker/exec.go)
-supports streaming input/output and confirms command process-group termination
-after cancellation without stopping the task runtime. Commands preserve their
-argv boundaries. The sandbox applies task defaults; explicit evaluator root
-commands override the agent UID.
+[Streaming execution](../../pkg/deployment/docker/exec.go) preserves argv and
+confirms targeted process-group termination on command cancellation without
+stopping the sandbox. The sandbox applies agent defaults; explicit evaluator root
+commands retain their requested execution identity.
 
-Archive transport returns source metadata so the sandbox can reject oversized or
-non-regular downloads before reading payloads. The sandbox checks destination
-paths against the run output root, checks archive sizes, and publishes private
-files atomically. Missing-source errors require evidence that the deployment
-still exists. This policy lives in [`pkg/sandbox`](../../pkg/sandbox/sandbox.go),
-while Docker owns tar transfer through Moby.
+Archive transport returns source metadata for bounded, regular-file checks.
+The sandbox confines downloads to its output root, validates tar content, and
+publishes private files atomically. Missing-source errors require an existing
+runtime. Harnesses check effective staged file permissions during readiness.
 
-## Removal and failure recovery
+## Removal and observation
 
-The [sandbox lifecycle contract](../design/sandbox.md#lifecycle-isolation-and-failure)
-defines cleanup ordering and partial-start obligations.
+Container cleanup inspects, stops or kills as needed, removes the runtime and
+anonymous volumes, then confirms absence. Network removal also confirms absence.
+Lost allocation responses are recovered through generated names and verified
+ownership. Unresolved allocation returns `deployment.ErrAllocationUnconfirmed`;
+cleanup retains that uncertainty instead of treating an empty ID as success.
 
-Container cleanup inspects, stops or kills as needed, removes the container and
-its anonymous volumes, and inspects again to confirm absence. Earlier lifecycle
-errors may be logged as recovered only after that final absence confirmation.
-Network cleanup also confirms absence. Lost allocation responses are recovered
-through generated names and verified ownership before removing anything.
-If recovery cannot establish absence or an owned identity, Create returns
-`deployment.ErrAllocationUnconfirmed`; bridge cleanup retains that uncertainty
-and the requested runtime name for diagnosis. No unverified handle is removed.
+Task revocation closes only its bridge listener and handlers and collects evidence.
+Benchmark services and background work remain intact for evaluation. Task cleanup
+removes harness/sandbox runtimes and releases logical attachment handles. Once all
+tasks finish, run cleanup removes the shared bridge, finalizes observation, removes
+the shared network and closes transports. Failures remain in the persisted run
+infrastructure result.
 
-Bridge revocation happens earlier, while the sandbox remains available for
-evaluation. It closes bridge access, finalizes evidence, and removes the bridge
-runtime and credentials. Harness completion is authoritative; revocation leaves
-sandbox processes intact without PID snapshots or a process sweep. The sandbox
-owner later removes that container after evaluation.
+The bridge resource source is selected from `bridge.deployment`, independently of
+the sandbox source. Run-scoped discovery selects the shared bridge by run ownership
+without inventing a task ID. Task sources select their harness and live/evaluation
+sandboxes and exclude the bridge. Confirmed runtime disappearance during sampling
+is skipped; genuine measurement failures remain visible. The common recorder
+calculates rates and writes [resource evidence](../run-results.md).
 
-The [provider tests](../../pkg/deployment/docker/docker_test.go),
-[allocation recovery tests](../../pkg/deployment/docker/create_recovery_test.go),
-[task environment tests](../../pkg/deployment/docker/environment_test.go), and
-[stream cancellation tests](../../pkg/deployment/docker/stream_test.go) record
-these intended behaviors. The [deployment design](../design/deployment.md#substitution-and-current-limits)
-records portability gaps; this page does not claim support for other providers.
+[Provider tests](../../pkg/deployment/docker/docker_test.go),
+[allocation recovery](../../pkg/deployment/docker/create_recovery_test.go),
+[shared environment tests](../../pkg/deployment/docker/environment_test.go), and
+[stream cancellation](../../pkg/deployment/docker/stream_test.go) cover these
+boundaries. Additional providers and remote Docker remain unsupported.

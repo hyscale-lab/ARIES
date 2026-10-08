@@ -15,20 +15,26 @@ Follow [Runner interfaces](../pkg/runner/interfaces.go) and [lifecycle](architec
   so it never becomes part of the evaluated candidate.
 - Preserve exact argv/workdir and native protocol semantics. Never retry ambiguous
   submissions, widen accepted payloads to hide failures, or enable Hermes credential sync.
-- Pass placement and resolved service URLs explicitly; deployment interprets
-  attachment details. Keep these separate from tool credentials.
+- Pass resolved tool/service endpoints to consumers and opaque placement handles
+  to deployment. Deployment owns attachment, publication, and address resolution;
+  a component must not require a private network per harness/sandbox pair.
+  Fresh task/evaluation handles borrow run connectivity; releasing one must not
+  remove the network or close peers' transports.
 - Reuse shared harness ownership and credential mechanics. Retain ownership on
   failed removal; Run snapshots survive Stop, which prevents new admission.
   Keep native defaults and credential fallback policies intact; redacted errors
   must not expose secrets through their cause chain.
-- Give each managed bridge occurrence its own runtime and immutable assignment.
+- Share one bridge service per run; give each sandbox its own listener, immutable
+  execution binding and recorder, addressed by one stable sandbox ID.
   Native tool execution must not call back into Runner or own sandbox lifecycle.
-  Use plaintext, unauthenticated gRPC control in the trusted research environment;
-  retain SSH authentication and instance, assignment, and exact-target checks.
-  Runner explicitly revokes assignments; retain operation deadlines and bounded
+  Use plaintext unauthenticated gRPC and unauthenticated SSH in the trusted
+  research environment, with one in-memory service host key and no client-key
+  staging. Preserve exact-target and ownership validation.
+  Runner explicitly releases sessions; retain operation deadlines and bounded
   evidence collection without leases or controller-liveness supervision.
-  Close bridge-owned access/handlers, collect finalized evidence, then confirm
-  runtime removal. Harness completion is authoritative for completed tool calls;
+  Close session-owned access/handlers and collect finalized evidence; remove the
+  shared runtime at run cleanup. Harness completion is authoritative for completed
+  tool calls;
   leave sandbox processes intact for evaluation. Keep replay inputs private;
   use Moby for Docker.
   Command cancellation must preserve the sandbox needed for evaluation.

@@ -93,7 +93,7 @@ func TestConcreteManagedRuntimeWrapsPreflightAndTaskLifecycle(t *testing.T) {
 	logger := logrus.New()
 	logger.SetOutput(&logs)
 	logger.SetFormatter(&logrus.JSONFormatter{})
-	if err := Run(context.Background(), profile, io.Discard, Dependencies{Logger: logger, PreflightClient: server.Client(), Wiring: wiring}); err != nil {
+	if err := runCommandForTest(context.Background(), profile, io.Discard, Dependencies{Logger: logger, PreflightClient: server.Client(), Wiring: wiring}); err != nil {
 		t.Fatal(err)
 	}
 	if concrete == nil {
@@ -191,7 +191,7 @@ func TestConcreteManagedRuntimeNaturalExitLogsStoppedAfterUnexpectedExit(t *test
 	logger := logrus.New()
 	logger.SetOutput(&logs)
 	logger.SetFormatter(&logrus.JSONFormatter{})
-	err := Run(context.Background(), profile, io.Discard, Dependencies{Logger: logger, PreflightClient: server.Client(), Wiring: wiring})
+	err := runCommandForTest(context.Background(), profile, io.Discard, Dependencies{Logger: logger, PreflightClient: server.Client(), Wiring: wiring})
 	if concrete == nil {
 		t.Fatal("concrete runtime was not constructed")
 	}

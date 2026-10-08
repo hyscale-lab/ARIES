@@ -66,9 +66,16 @@ surround the four-role task composition rather than expanding it.
 
 Component interfaces define what a component does. The shared
 [Deployment contract](design/deployment.md) defines how its execution environment
-is created, started, accessed, inspected, and removed. `TaskEnvironment` separately
-owns task attachment. Components receive these dependencies explicitly; a logical
+is created, started, accessed, inspected, and removed. `RunEnvironment` owns shared
+connectivity; fresh `TaskEnvironment` handles borrow it. Components receive these
+dependencies explicitly; a logical
 component need not be a separately deployed service.
+
+Protocol clients consume endpoints resolved for their location. Providers own
+network allocation, publication, and routing; components forward placement handles
+without interpreting them. The supported composition uses one run-owned Docker
+network and bridge service with independent per-sandbox sessions; see
+[endpoint handoff](design/deployment.md#endpoint-handoff).
 
 Deployment independence is a design requirement, not a claim that any backend can
 already be substituted. Placements must provide the component's required
@@ -82,7 +89,7 @@ Tool bridges adapt harness protocols to sandbox capabilities so both can evolve
 independently. Substitution must preserve operation semantics, cancellation,
 errors, and ownership; matching a transport name is insufficient. Harness-specific
 adaptation is required wherever the harness does not speak the chosen protocol.
-Current pair-specific SSH mechanisms are described in
+Current harness-specific dialects and the shared SSH service are described in
 [SSH bridges](implementation/ssh-bridges.md); future targets are listed separately
 in the [roadmap](supported.md#roadmap).
 
@@ -107,7 +114,12 @@ For every task the Runner performs this order:
    original methodology evaluates in a clean environment, asks the Runner for
    fresh evaluation sandboxes from the task environment;
 9. stop any evaluation sandboxes, newest first;
-10. stop the sandbox container, then remove its task network, confirming both are absent.
+10. stop the sandbox container and release its logical attachment handle.
+
+Shared connectivity and the bridge service start before task admission. After all
+tasks finish cleanup, the application removes the bridge, finalizes run-scoped
+observation, removes the shared network, and persists infrastructure outcomes
+separately from task counts. Task cleanup never removes a peer's infrastructure.
 
 Cleanup follows reverse ownership order and uses bounded cleanup work even when
 the run context has been cancelled. Partial starts still trigger cleanup, and
@@ -171,7 +183,8 @@ from measured zero. Sources without measurement capability return
 `monitor.ErrUnsupported` during initial discovery. The observer then records
 `status: "unsupported"`, a reason, and zero samples without inventing resource
 readings. Ordinary source failures remain failures. Docker bridge measurements
-use their own `bridge` component. An explicitly unsupported observer does not
+use their own `bridge` component with run scope and no task ID; task observations
+exclude the shared service. An explicitly unsupported observer does not
 prevent functional execution or independent evaluation.
 
 Confirmed runtime teardown ends that runtime's samples without failing observation

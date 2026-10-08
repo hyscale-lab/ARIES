@@ -2,213 +2,141 @@ package bridge
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/bridge/control"
 	v1 "github.com/hyscale-lab/aries/pkg/bridge/control/v1"
-	sshcredentials "github.com/hyscale-lab/aries/pkg/bridge/ssh/credentials"
 	"github.com/hyscale-lab/aries/pkg/bridge/target"
 	"golang.org/x/crypto/ssh"
 	"google.golang.org/grpc"
 )
 
 type ServeOptions struct {
-	Config            LaunchConfig
-	Backend           target.Backend
-	NewNative         func(*sshcredentials.Credentials) (NativeServer, error)
-	CollectionTimeout time.Duration
+	Config    LaunchConfig
+	Backend   target.Backend
+	NewNative func(ssh.Signer, string, string) (NativeServer, error)
 }
 
-// Serve runs the control service in the bridge child. It never obtains a Runner
-// callback or ownership of the target sandbox.
-func Serve(ctx context.Context, options ServeOptions) error {
-	return serve(ctx, options, nil)
-}
-
-// serve owns listener when supplied; otherwise it opens the configured address.
-func serve(ctx context.Context, options ServeOptions, listener net.Listener) (returnErr error) {
-	defer func() {
+// Serve owns the run service's host signer and independent native sandbox access.
+func Serve(ctx context.Context, options ServeOptions) error { return serve(ctx, options, nil) }
+func serve(ctx context.Context, options ServeOptions, listener net.Listener) error {
+	if options.Config.RunID == "" || options.Backend == nil || options.NewNative == nil {
 		if listener != nil {
 			listener.Close()
 		}
-	}()
-	defer func() {
-		returnErr = errors.Join(returnErr, eraseStagedCredentials("host.key", "authorized.pub"))
-	}()
-	config := options.Config
-	read := func(name string) ([]byte, error) {
-		info, err := os.Lstat(name)
-		if err != nil {
-			return nil, err
-		}
-		if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || info.Size() > 1<<20 {
-			return nil, errors.New("invalid private bridge bootstrap file")
-		}
-		return os.ReadFile(name)
+		return errors.New("bridge requires run identity, backend and native factory")
 	}
-	var mu sync.Mutex
-	var native NativeServer
-	var borrowedTarget *target.Borrowed
-	var artifactRoot string
-	var publicKey string
-	ready := false
-	names := []string{"tool-calls.jsonl"}
-	if config.RetainRawLog {
-		names = append(names, "ssh_raw.log")
+	_, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return err
 	}
-	service, err := control.NewServer(control.Config{
-		InstanceID: config.InstanceID, OperationTimeout: time.Minute,
-		Assign: func(call context.Context, request *v1.AssignSandboxRequest) (*v1.Endpoint, error) {
-			mu.Lock()
-			defer mu.Unlock()
-			if request.CredentialId != "ssh" {
-				return nil, errors.New("unknown staged SSH credentials")
-			}
-			descriptor := control.TargetFromProto(request.Target)
-			borrowed, e := target.New(call, descriptor, options.Backend)
-			if e != nil {
-				return nil, e
-			}
-			borrowedTarget = borrowed
-			hostKey, e := read("host.key")
-			if e != nil {
-				return nil, e
-			}
-			authorized, e := read("authorized.pub")
-			if e != nil {
-				return nil, e
-			}
-			keys, e := sshcredentials.ParseCredentials(hostKey, authorized)
-			if e != nil {
-				return nil, e
-			}
-			publicKey = string(ssh.MarshalAuthorizedKey(keys.HostSigner.PublicKey()))
-			native, e = options.NewNative(keys)
-			if e != nil {
-				return nil, e
-			}
-			artifactRoot = filepath.Join(config.OutputDir, descriptor.TaskID, "bridge")
-			endpoint, e := native.StartTarget(call, borrowed)
-			if e != nil {
-				return nil, e
-			}
-			ready = true
-			host, port, e := net.SplitHostPort(endpoint.Address)
-			if e != nil {
-				return nil, e
-			}
-			number, e := strconv.Atoi(port)
-			if e != nil {
-				return nil, e
-			}
-			return &v1.Endpoint{Host: host, Port: uint32(number), User: endpoint.Username, Transport: endpoint.Protocol, HostKey: publicKey}, nil
-		},
-		Revoke: func(call context.Context) (artifacts []*v1.Artifact, returnErr error) {
-			mu.Lock()
-			defer mu.Unlock()
-			defer func() {
-				returnErr = errors.Join(returnErr, eraseStagedCredentials("host.key", "authorized.pub"))
-			}()
-			if borrowedTarget != nil {
-				borrowedTarget.Revoke()
-			}
-			if native != nil {
-				if e := native.Stop(call); e != nil {
-					return nil, e
-				}
-			}
-			if !ready {
-				result := make([]*v1.Artifact, 0, len(names))
-				for _, name := range names {
-					if artifactRoot == "" {
-						result = append(result, &v1.Artifact{Name: name, Status: "absent"})
-						continue
-					}
-					entries, e := finalizeArtifacts(artifactRoot, []string{name})
-					if errors.Is(e, os.ErrNotExist) {
-						result = append(result, &v1.Artifact{Name: name, Status: "absent"})
-						continue
-					}
-					if e != nil {
-						return nil, e
-					}
-					a := entries[0]
-					result = append(result, &v1.Artifact{Name: a.Name, Status: "complete", Size: a.Size, Sha256: a.SHA256})
-				}
-				return result, nil
-			}
-			finalized, e := finalizeArtifacts(artifactRoot, names)
-			if e != nil {
-				return nil, e
-			}
-			result := make([]*v1.Artifact, 0, len(finalized))
-			for _, a := range finalized {
-				result = append(result, &v1.Artifact{Name: a.Name, Status: "complete", Size: a.Size, Sha256: a.SHA256})
-			}
-			return result, nil
-		},
-	})
+	signer, err := ssh.NewSignerFromKey(key)
+	if err != nil {
+		return err
+	}
+	service, err := control.NewServer(control.Config{NewSandbox: func(request *v1.RegisterSandboxRequest) control.Sandbox {
+		return &nativeSandbox{options: options, request: request, signer: signer, root: filepath.Join(options.Config.OutputDir, request.SandboxId)}
+	}})
 	if err != nil {
 		return err
 	}
 	if listener == nil {
-		listener, err = net.Listen("tcp", config.ControlAddress)
+		listener, err = net.Listen("tcp", options.Config.ControlAddress)
 		if err != nil {
 			return err
 		}
 	}
+	defer listener.Close()
 	server := grpc.NewServer()
 	service.Register(server)
 	defer server.Stop()
-	serveDone := make(chan error, 1)
-	go func() { serveDone <- server.Serve(listener) }()
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(listener) }()
+	var serveErr error
 	select {
 	case <-ctx.Done():
-		service.Revoke()
-	case <-service.Revoking():
-	case e := <-serveDone:
-		return fmt.Errorf("bridge control serving stopped: %w", e)
+	case err := <-done:
+		serveErr = fmt.Errorf("bridge control serving stopped: %w", err)
 	}
-	// Failed native cleanup remains visible through the bounded collection period.
-	timeout := options.CollectionTimeout
-	if timeout <= 0 {
-		timeout = 2 * time.Minute
-	}
-	return awaitCollectionExit(service, timeout, serveDone)
+	cleanup, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	return errors.Join(serveErr, service.Close(cleanup))
 }
 
-func eraseStagedCredentials(names ...string) error {
-	var failures []error
+// This object belongs to one control entry; no second assignment registry exists.
+type nativeSandbox struct {
+	options  ServeOptions
+	request  *v1.RegisterSandboxRequest
+	signer   ssh.Signer
+	native   NativeServer
+	borrowed *target.Borrowed
+	root     string
+	ready    bool
+}
+
+func (s *nativeSandbox) Register(ctx context.Context) (*v1.Endpoint, error) {
+	descriptor := control.TargetFromRegistration(s.request, s.options.Config.RunID, s.options.Config.Backend)
+	var err error
+	s.borrowed, err = target.New(ctx, descriptor, s.options.Backend)
+	if err != nil {
+		return nil, err
+	}
+	s.native, err = s.options.NewNative(s.signer, s.request.SandboxId, s.root)
+	if err != nil {
+		return nil, err
+	}
+	endpoint, err := s.native.StartTarget(ctx, s.borrowed)
+	if err != nil {
+		return nil, err
+	}
+	_, port, err := net.SplitHostPort(endpoint.Address)
+	if err != nil {
+		return nil, err
+	}
+	number, err := strconv.Atoi(port)
+	if err != nil {
+		return nil, err
+	}
+	s.ready = true
+	return &v1.Endpoint{Port: uint32(number), User: endpoint.Username, Transport: endpoint.Protocol}, nil
+}
+func (s *nativeSandbox) Release(ctx context.Context) ([]*v1.Artifact, error) {
+	if s.borrowed != nil {
+		s.borrowed.Revoke()
+	}
+	if s.native != nil {
+		if err := s.native.Stop(ctx); err != nil {
+			return nil, err
+		}
+	}
+	names := []string{"tool-calls.jsonl"}
+	if s.options.Config.RetainRawLog {
+		names = append(names, "ssh_raw.log")
+	}
+	result := make([]*v1.Artifact, 0, len(names))
 	for _, name := range names {
-		if err := os.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
-			failures = append(failures, fmt.Errorf("erase bridge credential %s: %w", name, err))
+		entries, err := finalizeArtifacts(s.root, []string{name})
+		if errors.Is(err, os.ErrNotExist) && !s.ready {
+			result = append(result, &v1.Artifact{Name: name, Status: "absent"})
+			continue
 		}
-	}
-	return errors.Join(failures...)
-}
-
-func awaitCollectionExit(service *control.Server, timeout time.Duration, serveDone <-chan error) error {
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		select {
-		case <-service.Done():
-			return nil
-		default:
-			if service.HasAssignment() {
-				return errors.New("bridge exit without confirmed native revocation")
-			}
-			return nil
+		if err != nil {
+			return nil, err
 		}
-	case e := <-serveDone:
-		return e
+		a := entries[0]
+		result = append(result, &v1.Artifact{Name: a.Name, Status: "complete", Size: a.Size, Sha256: a.SHA256})
 	}
+	// The control entry retains only the immutable request and terminal manifest.
+	s.native = nil
+	s.borrowed = nil
+	s.signer = nil
+	return result, nil
 }

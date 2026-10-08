@@ -24,6 +24,14 @@ OpenClaw retains selected session archive files under `telemetry/`, redacting
 credentials. Files keep their basenames; a numeric prefix disambiguates collisions
 so distinct entries are retained.
 
+Its native SSH sandbox receives the resolved per-sandbox listener endpoint on
+the shared bridge service. Because the pinned image has no `ssh` executable,
+ARIES stages `aries-ssh-client` and configures OpenClaw to use it. SSH requires
+no client identity or password. OpenClaw emits `StrictHostKeyChecking no`,
+`UpdateHostKeys no`, and `UserKnownHostsFile /dev/null`; no SSH key or
+known-hosts file is staged. Model and Gateway credentials retain their separate
+native roles.
+
 ## Hermes
 
 Hermes is the second supported harness and runs a local image built from the
@@ -77,10 +85,12 @@ Bundled skills are synchronized by Gateway startup; the API toolset allowlist
 remains explicit, including delegation only when enabled. No CLI fallback is retained.
 
 Hermes reads its SSH target from environment variables, so ARIES sets
-`TERMINAL_ENV=ssh` with the bridge's host, port, user, and identity path; this
-is upstream's native SSH environment, not an ARIES modification. The working
-directory is the sandbox workdir the bridge reports on its endpoint, the
-directory every agent command runs in. Hermes prefixes each command with
+`TERMINAL_ENV=ssh` with the bridge's resolved host, port, and user.
+`TERMINAL_SSH_KEY` is omitted; native OpenSSH connects without client credentials.
+Hermes keeps its own ControlMaster reuse and `StrictHostKeyChecking=accept-new`
+behavior. Every listener in the run shares the bridge service's host key.
+The default working directory is the sandbox workdir the bridge reports on its
+endpoint. Individual terminal calls may select another workdir. Hermes prefixes each command with
 `builtin cd -- <dir> || exit 126`, so ARIES names that directory both in
 `TERMINAL_CWD` and in a `terminal:` section of the rendered configuration
 (backend, directory, timeout). `HERMES_HOME`
@@ -211,7 +221,7 @@ its search service; the task environment resolves the URL. Both native renderers
 use `harness.ValidateSearch`, including when called independently of a manager.
 Connectivity data remains in `pkg/core`; no renderer embeds a sandbox DNS name.
 The typed placement handoff is documented in the
-[deployment contract](../design/deployment.md#current-attachment-handoff).
+[deployment contract](../design/deployment.md#endpoint-handoff).
 
 ## Deployment and evidence
 

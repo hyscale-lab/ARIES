@@ -38,3 +38,11 @@ func BuildDockerImage(ctx context.Context, cfg config.DeploymentConfig, image, d
 func PullDockerImages(ctx context.Context, cfg config.DeploymentConfig, images []string) error {
 	return dockerdeployment.PullImages(ctx, cfg.Docker.Socket, images)
 }
+
+// NewDockerRunResources observes the bridge using its selected deployment.
+func NewDockerRunResources(cfg config.DeploymentConfig, runID string) (monitor.ResourceSource, error) {
+	if cfg.Backend != "docker" {
+		return nil, fmt.Errorf("unsupported bridge resource backend %q", cfg.Backend)
+	}
+	return dockerdeployment.NewResourceSource(dockerdeployment.ResourceOptions{Scope: "run", DockerSocket: cfg.Docker.Socket, RunID: runID})
+}

@@ -3,9 +3,11 @@ package docker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/deployment"
 	"github.com/moby/moby/client"
 )
 
@@ -32,24 +34,46 @@ func (f *environmentClient) NetworkRemove(ctx context.Context, id string, option
 	return f.fakeClient.NetworkRemove(ctx, id, options)
 }
 
-func TestTaskEnvironmentOwnershipAndRetry(t *testing.T) {
+func TestRunEnvironmentOwnsNetworkAndTaskHandlesBorrow(t *testing.T) {
 	ctx := context.Background()
 	f := &environmentClient{fakeClient: &fakeClient{}}
-	m := &Manager{client: f}
-	e := m.NewTaskEnvironment()
-	request := core.SandboxRequest{RunID: "run", TaskID: "duplicate"}
-	first, err := e.Start(ctx, request)
+	e := (&Manager{client: f}).NewRunEnvironment("run")
+	placement, err := e.Start(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.networkOptions.Labels = map[string]string{"aries.task": "foreign"}
-	if e.Validate(ctx) == nil {
-		t.Fatal("accepted changed ownership")
+	if f.networkOptions.Internal || f.networkOptions.Labels["aries.kind"] != "run-network" || f.networkOptions.Labels["aries.task"] != "" {
+		t.Fatal("network must be run-owned with shared egress", f.networkOptions)
 	}
-	if e.Stop(ctx) == nil || f.removeCalls != 0 {
-		t.Fatal("removed foreign network")
+	first, second := e.NewTaskEnvironment(), e.NewTaskEnvironment()
+	req := deployment.TaskEnvironmentRequest{SandboxRequest: core.SandboxRequest{RunID: "run", TaskID: "same", Environment: core.Environment{Services: core.TaskServices{SearchPort: 8123}}}, RuntimeName: "sandbox-a"}
+	a, err := first.Start(ctx, req)
+	if err != nil {
+		t.Fatal(err)
 	}
-	f.networkOptions.Labels = map[string]string{"aries.managed": "true", "aries.kind": "task-network", "aries.run": "run", "aries.task": "duplicate"}
+	req.RuntimeName = "evaluation-b"
+	b, err := second.Start(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Placement != placement || b.Placement != placement || a.SearchURL != "http://sandbox-a:8123" || b.SearchURL != "http://evaluation-b:8123" {
+		t.Fatal(a, b, placement)
+	}
+	if err := first.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if f.removeCalls != 0 || second.Validate(ctx) != nil {
+		t.Fatal("task stop removed shared network")
+	}
+	if _, err := first.Start(ctx, req); err == nil {
+		t.Fatal("reused task handle")
+	}
+	labels := f.networkOptions.Labels
+	f.networkOptions.Labels = map[string]string{"aries.run": "foreign"}
+	if second.Validate(ctx) == nil || e.Stop(ctx) == nil || f.removeCalls != 0 {
+		t.Fatal("accepted foreign network")
+	}
+	f.networkOptions.Labels = labels
 	f.removeFailure = errors.New("network remains")
 	if e.Stop(ctx) == nil || !f.networkExists {
 		t.Fatal("unconfirmed removal succeeded")
@@ -61,71 +85,55 @@ func TestTaskEnvironmentOwnershipAndRetry(t *testing.T) {
 	if err := e.Stop(ctx); err != nil || f.removeCalls != 2 {
 		t.Fatal(err, f.removeCalls)
 	}
-	if _, err := e.Start(ctx, request); err == nil {
-		t.Fatal("reused occurrence")
-	}
-	next := m.NewTaskEnvironment()
-	second, err := next.Start(ctx, request)
-	if err != nil || first.Placement.AttachmentID == second.Placement.AttachmentID {
-		t.Fatal("duplicate task reused network", first, second, err)
-	}
-	if err := next.Stop(ctx); err != nil {
-		t.Fatal(err)
+	if second.Validate(ctx) == nil {
+		t.Fatal("borrower accepted removed network")
 	}
 }
 
-func TestTaskEnvironmentRetainsPartialAllocationForCleanup(t *testing.T) {
-	ctx := context.Background()
-	failure := errors.New("create response failed")
-	f := &environmentClient{fakeClient: &fakeClient{}, createFailure: failure}
-	e := (&Manager{client: f}).NewTaskEnvironment()
-	if _, err := e.Start(ctx, core.SandboxRequest{RunID: "run", TaskID: "task"}); !errors.Is(err, failure) {
-		t.Fatal(err)
-	}
-	if err := e.Stop(ctx); err != nil || f.networkExists {
-		t.Fatal("partial network leaked", err)
-	}
-}
-
-func TestTaskEnvironmentRecoversAllocationWithoutReturnedIdentity(t *testing.T) {
-	f := &environmentClient{fakeClient: &fakeClient{}, omitIdentity: true}
-	e := (&Manager{client: f}).NewTaskEnvironment()
-	if _, err := e.Start(context.Background(), core.SandboxRequest{RunID: "run", TaskID: "task"}); err == nil {
-		t.Fatal("accepted missing network identity")
-	}
-	labels := f.networkOptions.Labels
-	f.networkOptions.Labels = map[string]string{"aries.task": "foreign"}
-	if err := e.Stop(context.Background()); err == nil || f.removeCalls != 0 {
-		t.Fatal("removed foreign network during identity recovery", err)
-	}
-	f.networkOptions.Labels = labels
-	if err := e.Stop(context.Background()); err != nil || f.networkExists {
-		t.Fatal("lost allocation after missing identity", err)
-	}
-}
-
-func TestTaskEnvironmentResolvesDeclaredServices(t *testing.T) {
-	ctx := context.Background()
-	for _, test := range []struct {
-		port int
-		want string
-	}{{8123, "http://task-sandbox:8123"}, {0, ""}, {65536, ""}} {
-		f := &environmentClient{fakeClient: &fakeClient{}}
-		e := (&Manager{client: f}).NewTaskEnvironment()
-		request := core.SandboxRequest{RunID: "run", TaskID: "task", Environment: core.Environment{Services: core.TaskServices{SearchPort: test.port}}}
-		resolved, err := e.Start(ctx, request)
-		if test.port == 65536 {
-			if err == nil || f.networkExists {
-				t.Fatal("invalid service allocated a network", err)
+func TestRunEnvironmentRetainsPartialAllocationForCleanup(t *testing.T) {
+	for _, omit := range []bool{false, true} {
+		t.Run(fmt.Sprint(omit), func(t *testing.T) {
+			f := &environmentClient{fakeClient: &fakeClient{}, omitIdentity: omit, createFailure: errors.New("lost response")}
+			e := (&Manager{client: f}).NewRunEnvironment("run")
+			if _, err := e.Start(context.Background()); err == nil {
+				t.Fatal("accepted failed allocation")
 			}
-		} else if err != nil || resolved.SearchURL != test.want || resolved.Placement.AttachmentID == "" {
-			t.Fatalf("port %d: resolved = %#v, %v", test.port, resolved, err)
+			labels := f.networkOptions.Labels
+			f.networkOptions.Labels = map[string]string{"aries.run": "foreign"}
+			if e.Stop(context.Background()) == nil || f.removeCalls != 0 {
+				t.Fatal("removed foreign network")
+			}
+			f.networkOptions.Labels = labels
+			if err := e.Stop(context.Background()); err != nil || f.networkExists {
+				t.Fatal("partial allocation leaked", err)
+			}
+		})
+	}
+}
+
+func TestTaskEnvironmentRejectsWrongRunAndInvalidService(t *testing.T) {
+	f := &environmentClient{fakeClient: &fakeClient{}}
+	e := (&Manager{client: f}).NewRunEnvironment("run")
+	if _, err := e.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, request := range []deployment.TaskEnvironmentRequest{
+		{SandboxRequest: core.SandboxRequest{RunID: "foreign"}, RuntimeName: "a"},
+		{SandboxRequest: core.SandboxRequest{RunID: "run"}},
+		{SandboxRequest: core.SandboxRequest{RunID: "run", Environment: core.Environment{Services: core.TaskServices{SearchPort: 65536}}}, RuntimeName: "a"},
+	} {
+		handle := e.NewTaskEnvironment()
+		if _, err := handle.Start(context.Background(), request); err == nil {
+			t.Fatal("accepted invalid request", request)
 		}
-		if err := e.Stop(ctx); err != nil {
+		if err := handle.Stop(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := e.Start(ctx, request); err == nil {
-			t.Fatal("reused revoked attachment")
-		}
+	}
+	if f.removeCalls != 0 {
+		t.Fatal("invalid task removed shared network")
+	}
+	if err := e.Stop(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }

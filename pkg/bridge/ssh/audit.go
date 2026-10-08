@@ -15,6 +15,7 @@ import (
 )
 
 type toolCallRecord struct {
+	SandboxID      string   `json:"sandbox_id"`
 	Sequence       uint64   `json:"sequence"`
 	Timestamp      string   `json:"timestamp"`
 	ContainerID    string   `json:"container_id"`
@@ -43,6 +44,7 @@ type toolCallRecord struct {
 }
 
 type rawSSHRecord struct {
+	SandboxID    string
 	Sequence     uint64
 	Timestamp    string
 	RequestType  string
@@ -353,6 +355,7 @@ func renderRawSSHRecord(record rawSSHRecord) ([]byte, error) {
 	var output bytes.Buffer
 	output.WriteString("--- ARIES SSH CALL BEGIN ---\n")
 	writeRawField(&output, "sequence", fmt.Sprint(record.Sequence))
+	writeRawField(&output, "sandbox_id", record.SandboxID)
 	writeRawField(&output, "timestamp", record.Timestamp)
 	writeRawField(&output, "request_type", record.RequestType)
 	writeRawField(&output, "want_reply", fmt.Sprint(record.WantReply))

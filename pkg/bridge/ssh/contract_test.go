@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -84,33 +83,11 @@ func startNative(t *testing.T, tc nativeCase) *nativeFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	private, err := os.ReadFile(endpoint.IdentitySourceFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := gossh.ParsePrivateKey(private)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Hermes advertises accept-new semantics rather than a preloaded client
-	// file; the controller still retains its public host-key evidence locally.
-	knownPath := endpoint.KnownHostsSourceFile
-	if knownPath == "" {
-		knownPath = filepath.Join(filepath.Dir(endpoint.LogPaths[0]), "known_hosts")
-	}
-	known, err := os.ReadFile(knownPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, _, key, _, _, err := gossh.ParseKnownHosts(known)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return &nativeFixture{ctx, server, endpoint, target, sshclient.Config{Address: endpoint.Address, User: endpoint.Username, Identity: signer, HostKey: key}}
+	return &nativeFixture{ctx, server, endpoint, target, sshclient.Config{Address: endpoint.Address, User: endpoint.Username}}
 }
 func (f *nativeFixture) dial(t *testing.T) *gossh.Client {
 	t.Helper()
-	client, err := gossh.Dial("tcp", f.config.Address, &gossh.ClientConfig{User: f.config.User, Auth: []gossh.AuthMethod{gossh.PublicKeys(f.config.Identity)}, HostKeyCallback: gossh.FixedHostKey(f.config.HostKey), Timeout: time.Second})
+	client, err := gossh.Dial("tcp", f.config.Address, &gossh.ClientConfig{User: f.config.User, HostKeyCallback: gossh.InsecureIgnoreHostKey(), Timeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}

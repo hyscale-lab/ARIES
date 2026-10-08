@@ -21,6 +21,7 @@ var errResourceRuntimeGone = errors.New("resource runtime disappeared during sam
 
 // ResourceOptions scope one Docker resource source to a single ARIES run.
 type ResourceOptions struct {
+	Scope        string
 	RunID        string
 	TaskIDs      []string
 	DockerSocket string
@@ -37,6 +38,7 @@ type resourceAPI interface {
 // Engine SDK. Rate calculation and artifact writing stay deployment-neutral in
 // pkg/monitor.
 type DockerResourceSource struct {
+	scope string
 	api   resourceAPI
 	runID string
 	tasks map[string]struct{}
@@ -53,7 +55,16 @@ func NewResourceSource(options ResourceOptions) (*DockerResourceSource, error) {
 	if err := validateIdentity("run", options.RunID); err != nil {
 		return nil, err
 	}
-	if len(options.TaskIDs) == 0 {
+	if options.Scope == "" {
+		options.Scope = "task"
+	}
+	if options.Scope != "task" && options.Scope != "run" {
+		return nil, errors.New("invalid Docker resource scope")
+	}
+	if options.Scope == "run" && len(options.TaskIDs) != 0 {
+		return nil, errors.New("run resources cannot select task IDs")
+	}
+	if options.Scope == "task" && len(options.TaskIDs) == 0 {
 		return nil, errors.New("Docker resource source requires at least one task ID")
 	}
 	tasks := make(map[string]struct{}, len(options.TaskIDs))
@@ -81,7 +92,7 @@ func NewResourceSource(options ResourceOptions) (*DockerResourceSource, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create Docker resource client: %w", err)
 	}
-	return &DockerResourceSource{api: api, runID: options.RunID, tasks: tasks}, nil
+	return &DockerResourceSource{api: api, runID: options.RunID, tasks: tasks, scope: options.Scope}, nil
 }
 
 func (source *DockerResourceSource) Sample(ctx context.Context) ([]core.ResourceReading, error) {
@@ -125,6 +136,11 @@ func (source *DockerResourceSource) discover(ctx context.Context) ([]resourceRun
 		taskID := summary.Labels["aries.task"]
 		component, supported := resourceComponent(summary.Labels["aries.component"])
 		_, selected := source.tasks[taskID]
+		if source.scope == "run" {
+			selected = taskID == "" && component == "bridge" && summary.Labels["aries.kind"] == "tool-bridge"
+		} else if component == "bridge" {
+			selected = false
+		}
 		if !selected || !supported || summary.State != containertypes.StateRunning {
 			continue
 		}
@@ -199,7 +215,7 @@ func (source *DockerResourceSource) read(ctx context.Context, runtime resourceRu
 		return core.ResourceReading{}, errResourceRuntimeGone
 	}
 	return core.ResourceReading{
-		TaskID: runtime.taskID, Component: runtime.component, RuntimeID: runtime.id, RuntimeName: runtime.name,
+		Scope: source.scope, RunID: source.runID, TaskID: runtime.taskID, Component: runtime.component, RuntimeID: runtime.id, RuntimeName: runtime.name,
 		ObservedAt: document.Read, CPUUsageNanoseconds: document.CPUStats.CPUUsage.TotalUsage,
 		MemoryUsageBytes: document.MemoryStats.Usage, MemoryLimitBytes: document.MemoryStats.Limit,
 	}, nil

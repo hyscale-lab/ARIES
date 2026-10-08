@@ -50,7 +50,8 @@ For environment credentials and other model backends, see
 ```
 
 ARIES prepares the pinned benchmark checkout and required images, validates the
-model, and runs the task. The first run can take longer because of downloads.
+model, and starts one shared network and bridge service for the run. Each task
+uses a separate sandbox session. The first run can take longer because of downloads.
 After agent execution it confirms harness stop and bridge revocation, evaluates
 the same sandbox, and cleans up. Preparation refuses to replace a checkout at a
 different revision.

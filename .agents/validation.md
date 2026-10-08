@@ -11,8 +11,8 @@
 - Paid runs require authorization. Use the existing
   `profiles/{hermes,openclaw}-tb2-fix-git-deepseek.json` smoke profiles when relevant.
   Inspect `runs/<run-id>/run-result.json`: harness outcome, evaluation score,
-  confirmed isolation, cleanup, and each task's `error`. Exit status alone is
-  insufficient.
+  confirmed isolation, task cleanup/errors, and shared infrastructure observation
+  and cleanup/errors. Exit status alone is insufficient.
 - After runtime work, check for leaked containers, networks, processes, listeners,
   and credential files. Scan private artifacts without printing secrets.
 - Keep credentials, datasets, and run artifacts ignored. Report actual evidence

@@ -12,16 +12,8 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 )
 
-func newServerConfig(hostSigner gossh.Signer, authorized gossh.PublicKey) *gossh.ServerConfig {
-	configuration := &gossh.ServerConfig{
-		MaxAuthTries: 3,
-		PublicKeyCallback: func(metadata gossh.ConnMetadata, key gossh.PublicKey) (*gossh.Permissions, error) {
-			if metadata.User() != lockedUsername || !bytes.Equal(key.Marshal(), authorized.Marshal()) {
-				return nil, errors.New("public key rejected")
-			}
-			return &gossh.Permissions{}, nil
-		},
-	}
+func newServerConfig(hostSigner gossh.Signer) *gossh.ServerConfig {
+	configuration := &gossh.ServerConfig{NoClientAuth: true}
 	configuration.AddHostKey(hostSigner)
 	return configuration
 }

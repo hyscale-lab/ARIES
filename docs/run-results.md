@@ -18,6 +18,7 @@ cat "$task_dir/evaluation/reward.txt"
 cat "$task_dir/bridge/tool-calls.jsonl"
 test ! -f "$task_dir/bridge/ssh_raw.log" || cat "$task_dir/bridge/ssh_raw.log"
 cat "$task_dir/harness/openclaw.json"
+cat "$run_dir/infrastructure/bridge/monitor/index.json"
 cat "$run_dir/aries.log"
 ```
 
@@ -64,6 +65,13 @@ error. List failed tasks with:
 jq -r '.tasks[] | select(.error) | "\(.task_id): \(.error)"' "$run_dir/run-result.json"
 ```
 
+Also inspect the run's `infrastructure` object. It records shared bridge and
+network identities, the effective network policy, the bridge observer outcome,
+startup/cleanup durations, and confirmed shared cleanup. Shared failures remain
+visible there even when individual tasks succeed or startup admits no tasks.
+These results are finalized before `run-result.json` is written; shared
+infrastructure does not appear as a fabricated task or alter task counts.
+
 A benchmark that evaluates in a fresh sandbox, such as SWE-bench Pro, keeps that
 sandbox's container logs in the task's `evaluation-sandbox/` directory and its
 resource samples under the `evaluation-sandbox` component in
@@ -84,8 +92,15 @@ observation timestamp, ARIES checks the same runtime again and skips that sample
 only when the runtime is confirmed stopped or removed. Invalid stats from a
 running runtime, or failure to confirm its state, remain observer errors.
 
-Docker bridge samples use component `bridge`, separate from `harness` and
-`sandbox`. See the
+The shared bridge is measured once for the run, including idle periods between
+tasks. Its samples and index are under
+`infrastructure/bridge/monitor/`, with component `bridge`, `scope: "run"`, and
+`run_id`; they contain no `task_id`. Per-task monitor files contain only that
+task's harness, sandbox, evaluation sandbox, and configured GPU observations,
+with `scope: "task"`, `run_id`, and `task_id`. Index schema version 4 distinguishes
+the two scopes. CPU percentages use differences between cumulative CPU usage
+and observation times; the first sample for each runtime is a zero baseline.
+Shared costs are not duplicated or apportioned across tasks. See the
 [measurement schema limits](design.md#measurement-meaning-and-current-gaps) for
 first CPU baselines and GPU-only fields.
 
@@ -130,13 +145,21 @@ inline; binary or control-bearing stdin is replaced by a concise
 in `ssh_raw.log`. Structured lifecycle logs and tool-call records continue to
 omit environment values and stdout/stderr bodies.
 
-Each task directory contains the exact placeholder-only rendered
+Both bridge logs identify the `sandbox_id` and a sequence number local to that
+sandbox's writer, with run/task and exact backend runtime metadata. One harness
+tool call may produce several SSH requests. Each session has its own listener
+and logs even though the service container is shared. Releasing one sandbox
+closes its bridge access and finalizes its evidence without stopping the service
+or other sessions. `bridge/runtime.json` records that sandbox's binding;
+`infrastructure/bridge/runtime.json` records the shared service runtime.
+
+Each OpenClaw task directory contains the exact placeholder-only rendered
 `harness/openclaw.json`, OpenClaw logs and telemetry when available, replayable
 SSH tool inputs, Docker sandbox logs, one-second CPU and memory samples,
 verifier stdout/stderr, and CTRF output. `aries.log` is the structured Logrus
 run log.
 
-Text mode writes `harness/agent-result.json`. Realtime mode instead writes the
+OpenClaw text mode writes `harness/agent-result.json`. Realtime mode instead writes the
 private `harness/voice-instruction.txt`, `harness/voice-instruction.wav`, its
 metadata, and `harness/realtime-result.json`. These mode-specific harness and
 bridge artifacts may contain task or model content; review them before sharing.
@@ -180,7 +203,7 @@ bridge artifacts may contain task or model content; review them before sharing.
 - **Terminal-Bench revision mismatch:** move the stale checkout aside, then
   rerun the profile command (or the optional setup prewarm). ARIES never
   deletes it automatically.
-- **SSH timeout:** confirm the harness and bridge containers share the task
+- **SSH timeout:** confirm the harness and bridge containers share the run
   network and the harness can reach the bridge container's advertised SSH address
   and port. SSH traffic uses that container address; control uses host loopback.
 - **Suspected leak:** inspect `docker ps -a --filter label=aries.managed=true`

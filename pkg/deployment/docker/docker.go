@@ -354,20 +354,6 @@ func (manager *Manager) Address(ctx context.Context, id string, port int) (strin
 	}
 	servicePort := network.MustParsePort(strconv.Itoa(port) + "/tcp")
 	bindings := inspection.Container.NetworkSettings.Ports[servicePort]
-	// Docker suppresses host publication on internal task networks. The host
-	// still reaches the container's task-interface IP. This fallback requires the
-	// same explicit loopback publication request, regardless of component role.
-	c := inspection.Container
-	if len(bindings) == 0 && c.ID == id && c.HostConfig != nil && c.State != nil && c.State.Running {
-		requested := c.HostConfig.PortBindings[servicePort]
-		if len(requested) == 1 && requested[0].HostIP.String() == "127.0.0.1" && len(c.NetworkSettings.Networks) == 1 {
-			for _, endpoint := range c.NetworkSettings.Networks {
-				if endpoint != nil && endpoint.IPAddress.IsValid() {
-					return net.JoinHostPort(endpoint.IPAddress.String(), strconv.Itoa(port)), nil
-				}
-			}
-		}
-	}
 	if len(bindings) != 1 {
 		return "", fmt.Errorf("deployment service requires exactly one host port binding, got %d", len(bindings))
 	}

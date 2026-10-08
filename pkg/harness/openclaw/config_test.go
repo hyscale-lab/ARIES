@@ -14,8 +14,6 @@ func testEndpoint() core.ToolEndpoint {
 	return core.ToolEndpoint{
 		Protocol: "ssh", Address: "172.22.0.1:39425", Username: "aries",
 		ClientCommand: "/opt/aries/bin/aries-ssh-client", ClientSourceFile: "/host/aries-ssh-client",
-		IdentityFile: "/run/aries/ssh/id_ed25519", IdentitySourceFile: "/host/id_ed25519",
-		KnownHostsFile: "/run/aries/ssh/known_hosts", KnownHostsSourceFile: "/host/known_hosts",
 	}
 }
 
@@ -49,7 +47,7 @@ func TestRenderConfigLocksProviderSharedSSHAndPlaceholder(t *testing.T) {
 	if configuration.Agents.Defaults.Model.Primary != "aries/deterministic-model" || sandbox.Mode != "all" || sandbox.Scope != "shared" || sandbox.Backend != "ssh" || sandbox.WorkspaceAccess != "rw" {
 		t.Fatalf("agent config = %#v", configuration.Agents.Defaults)
 	}
-	if sandbox.SSH.Target != "aries@172.22.0.1:39425" || sandbox.SSH.Command != "/opt/aries/bin/aries-ssh-client" || sandbox.SSH.WorkspaceRoot != workspaceRoot || !sandbox.SSH.StrictHostKeyChecking || sandbox.SSH.UpdateHostKeys {
+	if sandbox.SSH.Target != "aries@172.22.0.1:39425" || sandbox.SSH.Command != "/opt/aries/bin/aries-ssh-client" || sandbox.SSH.WorkspaceRoot != workspaceRoot || sandbox.SSH.StrictHostKeyChecking || sandbox.SSH.UpdateHostKeys {
 		t.Fatalf("SSH config = %#v", sandbox.SSH)
 	}
 	if got := strings.Join(configuration.Tools.Deny, ","); got != "read,write,edit,apply_patch,sessions_spawn,sessions_yield" {
@@ -137,7 +135,6 @@ func TestRenderConfigRejectsInvalidInputs(t *testing.T) {
 		"overflow port": func(_ *core.ModelConfig, endpoint *core.ToolEndpoint) { endpoint.Address = "127.0.0.1:65536" },
 		"protocol":      func(_ *core.ModelConfig, endpoint *core.ToolEndpoint) { endpoint.Protocol = "http" },
 		"address":       func(_ *core.ModelConfig, endpoint *core.ToolEndpoint) { endpoint.Address = "-task-sandbox:2222" },
-		"identity":      func(_ *core.ModelConfig, endpoint *core.ToolEndpoint) { endpoint.IdentityFile = "/wrong" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			model, endpoint := testModel(), testEndpoint()

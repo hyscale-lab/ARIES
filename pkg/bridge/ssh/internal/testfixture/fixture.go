@@ -1,55 +1,46 @@
-// Package testfixture stages controller-owned credentials for native SSH tests.
-// Production construction must remain in application wiring.
+// Package testfixture supplies a service host signer for native SSH tests.
 package testfixture
 
 import (
 	"context"
-	"os"
-	"path/filepath"
+	"crypto/ed25519"
+	"crypto/rand"
 	"testing"
 	"time"
 
 	bridgessh "github.com/hyscale-lab/aries/pkg/bridge/ssh"
-	"github.com/hyscale-lab/aries/pkg/bridge/ssh/credentials"
 	"github.com/hyscale-lab/aries/pkg/bridge/target"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"golang.org/x/crypto/ssh"
 )
 
-// Server separates controller-owned client credentials from server authority.
-type Server struct {
-	Manager  *bridgessh.Manager
-	identity string
-}
+type Server struct{ Manager *bridgessh.Manager }
 
 func New(t *testing.T, options bridgessh.Options) *Server {
 	t.Helper()
-	clientPrivate, clientPublic, err := credentials.GenerateIdentity()
-	if err != nil {
-		t.Fatal(err)
+	if options.HostSigner == nil {
+		_, key, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		options.HostSigner, err = ssh.NewSignerFromKey(key)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
-	hostPrivate, _, err := credentials.GenerateIdentity()
-	if err != nil {
-		t.Fatal(err)
-	}
-	options.Credentials, err = credentials.ParseCredentials(hostPrivate, ssh.MarshalAuthorizedKey(clientPublic))
-	if err != nil {
-		t.Fatal(err)
+	if options.SandboxID == "" {
+		options.SandboxID = "test-sandbox"
 	}
 	if options.ResolveListen == nil {
 		options.ResolveListen = func(context.Context) (core.BridgeListen, error) {
-			return core.BridgeListen{BindHost: "127.0.0.1", AdvertiseHost: "127.0.0.1"}, nil
+			return core.BridgeListen{BindHost: "127.0.0.1"}, nil
 		}
 	}
 	manager, err := bridgessh.New(options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	identity := filepath.Join(t.TempDir(), "id_ed25519")
-	if err := os.WriteFile(identity, clientPrivate, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	server := &Server{Manager: manager, identity: identity}
+	server := &Server{Manager: manager}
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
@@ -61,20 +52,6 @@ func New(t *testing.T, options bridgessh.Options) *Server {
 }
 
 func (server *Server) StartTarget(ctx context.Context, executor target.Executor) (core.ToolEndpoint, error) {
-	endpoint, err := server.Manager.StartTarget(ctx, executor)
-	if err == nil {
-		endpoint.IdentitySourceFile = server.identity
-	}
-	return endpoint, err
+	return server.Manager.StartTarget(ctx, executor)
 }
-
-func (server *Server) Stop(ctx context.Context) error {
-	if err := server.Manager.Stop(ctx); err != nil {
-		return err
-	}
-	// Like the controller, retain the identity until native shutdown is confirmed.
-	if err := os.Remove(server.identity); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return nil
-}
+func (server *Server) Stop(ctx context.Context) error { return server.Manager.Stop(ctx) }

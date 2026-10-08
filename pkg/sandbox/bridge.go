@@ -33,6 +33,6 @@ func (s *Sandbox) ExportBridgeTarget() (core.BridgeTarget, error) {
 	if !ok {
 		return core.BridgeTarget{}, errors.New("sandbox deployment does not support borrowed execution")
 	}
-	descriptor := core.BridgeTarget{Version: 1, RunID: s.runID, TaskID: s.taskID, OccurrenceID: s.containerName, Backend: backend.BridgeBackend(), RuntimeID: s.containerID, RuntimeName: s.containerName, Workdir: s.workdir, ExecUser: s.execUser, MaxInputBytes: maxExecInput, MaxOutputBytes: maxConfiguredOutput, ExpectedLabels: ownershipLabels(core.SandboxRequest{RunID: s.runID, TaskID: s.taskID}, "task-container")}
+	descriptor := core.BridgeTarget{RunID: s.runID, TaskID: s.taskID, SandboxID: s.containerName, Backend: backend.BridgeBackend(), RuntimeID: s.containerID, Workdir: s.workdir, ExecUser: s.execUser}
 	return descriptor, nil
 }

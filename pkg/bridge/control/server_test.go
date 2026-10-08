@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
-	"sync/atomic"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,274 +13,208 @@ import (
 	"google.golang.org/grpc/codes"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
 )
 
-func request() *v1.AssignSandboxRequest {
-	return &v1.AssignSandboxRequest{InstanceId: "instance", AssignmentId: "assignment", ProtocolVersion: 1, CredentialId: "ssh", Target: &v1.Target{Version: 1, RunId: "run", TaskId: "task", OccurrenceId: "occurrence", Backend: "docker", RuntimeId: "immutable", RuntimeName: "sandbox", Workdir: "/app", MaxInputBytes: 16 << 20, MaxOutputBytes: 1 << 30, ExpectedLabels: map[string]string{"aries.managed": "true", "aries.kind": "task-container", "aries.component": "sandbox", "aries.run": "run", "aries.task": "task"}}}
+type testSandbox struct {
+	register func(context.Context) (*v1.Endpoint, error)
+	release  func(context.Context) ([]*v1.Artifact, error)
 }
-func ref() *v1.AssignmentRequest {
-	return &v1.AssignmentRequest{InstanceId: "instance", AssignmentId: "assignment"}
+
+func (s testSandbox) Register(ctx context.Context) (*v1.Endpoint, error) {
+	if s.register != nil {
+		return s.register(ctx)
+	}
+	return &v1.Endpoint{Port: 2222, Transport: "ssh", User: "aries"}, nil
 }
-func config() Config {
-	return Config{InstanceID: "instance", OperationTimeout: time.Second, Assign: func(context.Context, *v1.AssignSandboxRequest) (*v1.Endpoint, error) {
-		return &v1.Endpoint{Host: "127.0.0.1", Port: 22}, nil
-	}, Revoke: func(context.Context) ([]*v1.Artifact, error) {
-		return []*v1.Artifact{{Name: "tool-calls.jsonl", Status: "complete"}}, nil
-	}}
+func (s testSandbox) Release(ctx context.Context) ([]*v1.Artifact, error) {
+	if s.release != nil {
+		return s.release(ctx)
+	}
+	return nil, nil
 }
-func server(t *testing.T, c Config) *Server {
-	t.Helper()
-	s, err := NewServer(c)
+func request(id string) *v1.RegisterSandboxRequest {
+	return &v1.RegisterSandboxRequest{SandboxId: id, Target: &v1.Target{RuntimeId: "runtime-" + id, Workdir: "/work"}, Metadata: &v1.Metadata{TaskId: "repeated-task"}}
+}
+func TestIndependentSandboxLifecycle(t *testing.T) {
+	blocked := make(chan struct{})
+	releaseStarted := make(chan struct{})
+	var once sync.Once
+	s, err := NewServer(Config{NewSandbox: func(r *v1.RegisterSandboxRequest) Sandbox {
+		return testSandbox{release: func(ctx context.Context) ([]*v1.Artifact, error) {
+			if r.SandboxId == "a" {
+				once.Do(func() { close(releaseStarted) })
+				select {
+				case <-blocked:
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			}
+			return nil, nil
+		}}
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(s.Revoke)
-	return s
-}
-func TestReservationAndLostAdmissionResponse(t *testing.T) {
-	c := config()
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	var calls atomic.Int32
-	c.Assign = func(context.Context, *v1.AssignSandboxRequest) (*v1.Endpoint, error) {
-		calls.Add(1)
-		close(entered)
-		<-release
-		return &v1.Endpoint{Host: "127.0.0.1", Port: 22}, nil
-	}
-	s := server(t, c)
-	ctx, cancel := context.WithCancel(context.Background())
-	result := make(chan error, 1)
-	go func() { _, err := s.AssignSandbox(ctx, request()); result <- err }()
-	<-entered
-	cancel()
-	if status.Code(<-result) != codes.Canceled {
-		t.Fatal("RPC did not time out")
-	}
-	a, err := s.AssignSandbox(context.Background(), request())
-	if err != nil || a.State != v1.State_ASSIGNING || calls.Load() != 1 {
-		t.Fatalf("duplicate admission: %v %v", a, err)
-	}
-	changed := proto.Clone(request()).(*v1.AssignSandboxRequest)
-	changed.Target.Workdir = "/other"
-	if _, err = s.AssignSandbox(context.Background(), changed); status.Code(err) != codes.AlreadyExists {
-		t.Fatal(err)
-	}
-	changed = request()
-	changed.AssignmentId = "another"
-	if _, err = s.AssignSandbox(context.Background(), changed); status.Code(err) != codes.AlreadyExists {
-		t.Fatal(err)
-	}
-	close(release)
-	a, err = s.RevokeAssignment(context.Background(), ref())
-	if err != nil || a.State != v1.State_REVOKED {
-		t.Fatalf("%v %v", a, err)
-	}
-	a, err = s.AssignSandbox(context.Background(), request())
-	if err != nil || a.State != v1.State_REVOKED || calls.Load() != 1 {
-		t.Fatal("terminal identity reused")
-	}
-}
-func TestRevokeContinuesAfterCallerTimeoutAndRetriesFailure(t *testing.T) {
-	c := config()
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	var calls atomic.Int32
-	c.Revoke = func(context.Context) ([]*v1.Artifact, error) {
-		if calls.Add(1) == 1 {
-			close(entered)
-			<-release
-			return nil, errors.New("native cleanup unconfirmed")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for _, id := range []string{"a", "b"} {
+		a, err := s.RegisterSandbox(ctx, request(id))
+		if err != nil || a.State != v1.State_READY || a.SandboxId != id {
+			t.Fatalf("registration %+v %v", a, err)
 		}
-		return []*v1.Artifact{{Name: "tool-calls.jsonl", Status: "complete"}}, nil
 	}
-	s := server(t, c)
-	if _, err := s.AssignSandbox(context.Background(), request()); err != nil {
+	if a, err := s.RegisterSandbox(ctx, request("a")); err != nil || a.State != v1.State_READY {
+		t.Fatal(a, err)
+	}
+	conflict := request("a")
+	conflict.Target.RuntimeId = "different"
+	if _, err := s.RegisterSandbox(ctx, conflict); status.Code(err) != codes.AlreadyExists {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	result := make(chan error, 1)
-	go func() { _, err := s.RevokeAssignment(ctx, ref()); result <- err }()
-	<-entered
-	cancel()
-	if status.Code(<-result) != codes.Canceled {
-		t.Fatal("RPC not canceled")
+	done := make(chan error, 1)
+	go func() { _, err := s.ReleaseSandbox(ctx, &v1.SandboxRequest{SandboxId: "a"}); done <- err }()
+	<-releaseStarted
+	b, err := s.GetSandbox(ctx, &v1.SandboxRequest{SandboxId: "b"})
+	if err != nil || b.State != v1.State_READY {
+		t.Fatal(b, err)
 	}
-	a, _ := s.GetAssignment(context.Background(), ref())
-	if a.State != v1.State_REVOKING || a.Endpoint != nil {
-		t.Fatal("revoking exposed endpoint")
+	c, err := s.RegisterSandbox(ctx, request("c"))
+	if err != nil || c.State != v1.State_READY {
+		t.Fatal(c, err)
 	}
-	close(release)
-	s.mu.Lock()
-	done := s.operation
-	s.mu.Unlock()
-	<-done
-	a, _ = s.GetAssignment(context.Background(), ref())
-	if a.State != v1.State_REVOKING || len(a.CleanupErrors) != 1 {
-		t.Fatalf("failed cleanup lost: %v", a)
+	close(blocked)
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
-	a, err := s.RevokeAssignment(context.Background(), ref())
-	if err != nil || a.State != v1.State_REVOKED || len(a.Artifacts) != 1 || len(a.CleanupErrors) != 0 || len(a.Diagnostics) != 1 {
-		t.Fatalf("retry: %v %v", a, err)
+	if a, err := s.RegisterSandbox(ctx, request("a")); err != nil || a.State != v1.State_RELEASED {
+		t.Fatal("release reopened", a, err)
 	}
-	select {
-	case <-s.Done():
-	default:
-		t.Fatal("terminal signal absent")
+	if err := s.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RegisterSandbox(ctx, request("later")); status.Code(err) != codes.FailedPrecondition {
+		t.Fatal(err)
 	}
 }
-func TestPlaintextGRPCAndIdentity(t *testing.T) {
-	s := server(t, config())
-	g := grpc.NewServer()
-	s.Register(g)
+func TestCanceledWaitRetainsRegistrationAndReleaseOwnership(t *testing.T) {
+	entered := make(chan struct{})
+	done := make(chan struct{})
+	releases := 0
+	s, _ := NewServer(Config{NewSandbox: func(*v1.RegisterSandboxRequest) Sandbox {
+		return testSandbox{register: func(ctx context.Context) (*v1.Endpoint, error) {
+			close(entered)
+			<-done
+			return &v1.Endpoint{Port: 2222}, nil
+		}, release: func(context.Context) ([]*v1.Artifact, error) { releases++; return nil, nil }}
+	}})
+	ctx, cancel := context.WithCancel(context.Background())
+	out := make(chan error, 1)
+	go func() { _, err := s.RegisterSandbox(ctx, request("a")); out <- err }()
+	<-entered
+	cancel()
+	if status.Code(<-out) != codes.Canceled {
+		t.Fatal("canceled waiter accepted")
+	}
+	close(done)
+	bounded, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+	a, err := s.ReleaseSandbox(bounded, &v1.SandboxRequest{SandboxId: "a"})
+	if err != nil || a.State != v1.State_RELEASED || releases != 1 {
+		t.Fatal(a, err, releases)
+	}
+}
+func TestReleaseBeforeLateRegistrationClosesSandboxID(t *testing.T) {
+	starts := 0
+	s, _ := NewServer(Config{NewSandbox: func(*v1.RegisterSandboxRequest) Sandbox { starts++; return testSandbox{} }})
+	ctx := context.Background()
+	a, err := s.ReleaseSandbox(ctx, &v1.SandboxRequest{SandboxId: "late"})
+	if err != nil || a.State != v1.State_RELEASED {
+		t.Fatal(a, err)
+	}
+	a, err = s.RegisterSandbox(ctx, request("late"))
+	if err != nil || a.State != v1.State_RELEASED || starts != 0 {
+		t.Fatal(a, err, starts)
+	}
+}
+func TestFailedRegistrationCleansOnlyItsOwnNativeState(t *testing.T) {
+	mu := sync.Mutex{}
+	calls := 0
+	s, _ := NewServer(Config{NewSandbox: func(r *v1.RegisterSandboxRequest) Sandbox {
+		return testSandbox{register: func(context.Context) (*v1.Endpoint, error) {
+			if r.SandboxId == "bad" {
+				return nil, errors.New("admission failed")
+			}
+			return &v1.Endpoint{Port: 3333}, nil
+		}, release: func(context.Context) ([]*v1.Artifact, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			calls++
+			if r.SandboxId == "bad" && calls == 1 {
+				return nil, errors.New("cleanup failed")
+			}
+			return nil, nil
+		}}
+	}})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _ = s.RegisterSandbox(ctx, request("good"))
+	_, _ = s.RegisterSandbox(ctx, request("bad"))
+	for {
+		a, _ := s.GetSandbox(ctx, &v1.SandboxRequest{SandboxId: "bad"})
+		if a.CleanupError != "" {
+			break
+		}
+		if ctx.Err() != nil {
+			t.Fatal(ctx.Err())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	a, err := s.ReleaseSandbox(ctx, &v1.SandboxRequest{SandboxId: "bad"})
+	if err != nil || a.State != v1.State_RELEASED || a.Error != "admission failed" || a.CleanupError != "" {
+		t.Fatal(a, err)
+	}
+	good, _ := s.GetSandbox(ctx, &v1.SandboxRequest{SandboxId: "good"})
+	if good.State != v1.State_READY {
+		t.Fatal(good)
+	}
+	if err := s.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestPlaintextGRPCSandboxIdentity(t *testing.T) {
+	s, _ := NewServer(Config{NewSandbox: func(*v1.RegisterSandboxRequest) Sandbox { return testSandbox{} }})
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	go func() { _ = g.Serve(l) }()
-	t.Cleanup(g.Stop)
-	conn, client, err := NewClient(l.Addr().String())
+	g := grpc.NewServer()
+	s.Register(g)
+	go g.Serve(l)
+	defer g.Stop()
+	conn, c, err := NewClient(l.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	health, err := healthpb.NewHealthClient(conn).Check(ctx, &healthpb.HealthCheckRequest{})
-	if err != nil || health.Status != healthpb.HealthCheckResponse_SERVING {
-		t.Fatalf("plaintext health: %v %v", health, err)
-	}
-	r := request()
-	r.ProtocolVersion = 2
-	_, err = client.AssignSandbox(ctx, r)
-	if status.Code(err) != codes.InvalidArgument {
+	if _, err := healthpb.NewHealthClient(conn).Check(ctx, &healthpb.HealthCheckRequest{}); err != nil {
 		t.Fatal(err)
 	}
-	a, err := client.AssignSandbox(ctx, request())
-	if err != nil || a.State != v1.State_READY {
-		t.Fatalf("%v %v", a, err)
+	if a, err := c.RegisterSandbox(ctx, request("a")); err != nil || a.SandboxId != "a" {
+		t.Fatal(a, err)
 	}
-	bad := ref()
-	bad.InstanceId = "replacement"
-	_, err = client.GetAssignment(ctx, bad)
-	if status.Code(err) != codes.FailedPrecondition {
+	if _, err := c.GetSandbox(ctx, &v1.SandboxRequest{SandboxId: "missing"}); status.Code(err) != codes.NotFound {
 		t.Fatal(err)
 	}
-	bad = ref()
-	bad.AssignmentId = "missing"
-	if _, err = client.GetAssignment(ctx, bad); status.Code(err) != codes.NotFound {
-		t.Fatal(err)
-	}
-	if err = conn.Close(); err != nil {
-		t.Fatal(err)
-	}
-	reconnected, nextClient, err := NewClient(l.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer reconnected.Close()
-	a, err = nextClient.GetAssignment(ctx, ref())
-	if err != nil || a.State != v1.State_READY || a.Endpoint == nil {
-		t.Fatalf("control disconnect changed the explicit assignment lifecycle: %v %v", a, err)
-	}
-	a, err = nextClient.RevokeAssignment(ctx, ref())
-	if err != nil || a.State != v1.State_REVOKED || a.Endpoint != nil || len(a.Artifacts) != 1 {
-		t.Fatalf("explicit revocation did not finalize assignment: %v %v", a, err)
+	if a, err := c.ReleaseSandbox(ctx, &v1.SandboxRequest{SandboxId: "a"}); err != nil || a.State != v1.State_RELEASED {
+		t.Fatal(a, err)
 	}
 }
-
 func TestClientAcceptsDeploymentAddress(t *testing.T) {
-	// NewClient constructs a lazy channel; no remote listener is required.
-	conn, _, err := NewClient("192.0.2.1:8443")
-	if err != nil {
-		t.Fatalf("deployment address rejected: %v", err)
-	}
-	defer conn.Close()
-}
-
-func TestAdmissionTimeoutStillCleansPartialNativeState(t *testing.T) {
-	c := config()
-	c.OperationTimeout = 10 * time.Millisecond
-	c.Assign = func(ctx context.Context, _ *v1.AssignSandboxRequest) (*v1.Endpoint, error) {
-		<-ctx.Done()
-		return nil, ctx.Err()
-	}
-	var cleanups atomic.Int32
-	c.Revoke = func(context.Context) ([]*v1.Artifact, error) {
-		cleanups.Add(1)
-		return nil, nil
-	}
-	s := server(t, c)
-	if _, err := s.AssignSandbox(context.Background(), request()); err != nil {
-		t.Fatal(err)
-	}
-	a, err := s.RevokeAssignment(context.Background(), ref())
-	if err != nil || a.State != v1.State_REVOKED || a.Endpoint != nil || cleanups.Load() != 1 || len(a.Diagnostics) != 1 || a.Diagnostics[0].Stage != "admission" || a.Diagnostics[0].Message != context.DeadlineExceeded.Error() {
-		t.Fatalf("admission timeout lost cleanup or diagnostics: assignment=%v cleanups=%d err=%v", a, cleanups.Load(), err)
-	}
-}
-
-func TestAdmissionFailureRetainsIdentityAndCannotExposeEndpoint(t *testing.T) {
-	c := config()
-	var admitted atomic.Int32
-	c.Assign = func(context.Context, *v1.AssignSandboxRequest) (*v1.Endpoint, error) {
-		admitted.Add(1)
-		return nil, errors.New("target identity changed")
-	}
-	s := server(t, c)
-	_, err := s.AssignSandbox(context.Background(), request())
+	conn, _, err := NewClient("bridge.fixture:8443")
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, err := s.RevokeAssignment(context.Background(), ref())
-	if err != nil || a.State != v1.State_REVOKED || a.Endpoint != nil {
-		t.Fatalf("%v %v", a, err)
-	}
-	a, err = s.AssignSandbox(context.Background(), request())
-	if err != nil || a.State != v1.State_REVOKED || admitted.Load() != 1 {
-		t.Fatal("failed admission was replayed")
-	}
-	r := request()
-	r.AssignmentId = "next"
-	if _, err = s.AssignSandbox(context.Background(), r); status.Code(err) != codes.AlreadyExists {
-		t.Fatal(err)
-	}
-}
-
-func TestAdmissionDelegatesAlternativeBackendValidation(t *testing.T) {
-	for _, reject := range []bool{false, true} {
-		name := "accepted"
-		if reject {
-			name = "rejected"
-		}
-		t.Run(name, func(t *testing.T) {
-			r := request()
-			r.Target.Backend = "remote-exec"
-			c := config()
-			var calls atomic.Int32
-			c.Assign = func(_ context.Context, received *v1.AssignSandboxRequest) (*v1.Endpoint, error) {
-				calls.Add(1)
-				if !proto.Equal(received.Target, r.Target) {
-					return nil, errors.New("provider received a different grant")
-				}
-				if reject {
-					return nil, errors.New("provider rejected resource ownership")
-				}
-				return &v1.Endpoint{Host: "127.0.0.1", Port: 22}, nil
-			}
-			s := server(t, c)
-			a, err := s.AssignSandbox(context.Background(), r)
-			if err != nil || calls.Load() != 1 || !proto.Equal(a.Target, r.Target) {
-				t.Fatalf("alternative backend did not reach provider admission: assignment=%v calls=%d err=%v", a, calls.Load(), err)
-			}
-			if reject {
-				if a.State == v1.State_READY || a.Endpoint != nil || len(a.Diagnostics) != 1 || a.Diagnostics[0].Message != "provider rejected resource ownership" {
-					t.Fatalf("provider rejection lost or exposed endpoint: %v", a)
-				}
-			} else if a.State != v1.State_READY || a.Endpoint == nil {
-				t.Fatalf("provider approval did not admit target: %v", a)
-			}
-		})
-	}
+	conn.Close()
 }

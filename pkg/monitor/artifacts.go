@@ -19,16 +19,18 @@ import (
 const (
 	artifactDirectoryMode = 0o700
 	artifactFileMode      = 0o600
-	indexSchemaVersion    = 3
+	indexSchemaVersion    = 4
 	maxCoverageEntries    = 32
 )
 
 // ResourceSample is one bounded resource observation written to resources.jsonl.
 type ResourceSample struct {
+	Scope               string                   `json:"scope"`
+	RunID               string                   `json:"run_id"`
 	Sequence            uint64                   `json:"sequence"`
 	Second              uint64                   `json:"second"`
 	Time                string                   `json:"time"`
-	TaskID              string                   `json:"task_id"`
+	TaskID              string                   `json:"task_id,omitempty"`
 	Component           string                   `json:"component"`
 	RuntimeID           string                   `json:"runtime_id"`
 	RuntimeName         string                   `json:"runtime_name"`
@@ -39,12 +41,13 @@ type ResourceSample struct {
 	GPU                 *core.GPUResourceReading `json:"gpu,omitempty"`
 }
 
-// Index is the bounded summary written beside a task's resource samples.
+// Index is the bounded summary written beside resource samples for one scope.
 type Index struct {
+	Scope                string              `json:"scope"`
 	Reason               string              `json:"reason,omitempty"`
 	SchemaVersion        int                 `json:"schema_version"`
 	RunID                string              `json:"run_id"`
-	TaskID               string              `json:"task_id"`
+	TaskID               string              `json:"task_id,omitempty"`
 	Status               string              `json:"status"`
 	Error                string              `json:"error,omitempty"`
 	StartedAt            string              `json:"started_at"`

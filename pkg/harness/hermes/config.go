@@ -25,7 +25,6 @@ const (
 	extractKeyPath      = stateContainerPath + "/tavily.key"
 	voiceKeyPath        = stateContainerPath + "/voice.key"
 	voiceWAVPath        = stateContainerPath + "/voice-instruction.wav"
-	identityContainerFS = stagedRoot + "/ssh/id_ed25519"
 	gatewayLauncherPath = stagedRoot + "/run-gateway"
 	workspaceRoot       = stagedRoot + "/workspace"
 
@@ -438,7 +437,6 @@ func containerEnvironment(endpoint core.ToolEndpoint, workdir string, terminalTi
 		"TERMINAL_SSH_HOST=" + host,
 		"TERMINAL_SSH_PORT=" + port,
 		"TERMINAL_SSH_USER=" + endpoint.Username,
-		"TERMINAL_SSH_KEY=" + identityContainerFS,
 		"TERMINAL_CWD=" + workdir,
 		"TERMINAL_TIMEOUT=" + strconv.Itoa(terminalTimeout),
 		"ARIES_RUN_ID=" + runID,
@@ -523,12 +521,6 @@ func validateEndpoint(endpoint core.ToolEndpoint) error {
 	if endpoint.Protocol != "ssh" || endpoint.Username != "aries" {
 		return errors.New("Hermes requires a task-local SSH endpoint")
 	}
-	if strings.TrimSpace(endpoint.IdentitySourceFile) == "" {
-		return errors.New("Hermes requires a staged SSH identity file")
-	}
-	// Hermes builds its own ssh argv and offers no way to preload a known-hosts
-	// file, so a bridge-supplied one would be silently ignored. Refuse rather
-	// than imply a host-key guarantee the harness cannot honour.
 	if endpoint.ClientCommand != "" || endpoint.ClientSourceFile != "" {
 		return errors.New("Hermes uses its own SSH client and accepts no bridge client command")
 	}

@@ -124,8 +124,12 @@ For Docker placement, both components must use the same local daemon. `socket`
 accepts an absolute Unix socket path or `unix:///absolute/path`; normalization
 cleans the path before comparing the two settings. Remote Docker endpoints are
 rejected. Image preparation and resource monitoring use the selected socket.
-The supported topology remains native Linux Docker with one network per task
-occurrence, including repeated task IDs.
+The supported topology is native Linux Docker with one network and bridge service
+per run. Every live sandbox has its own bridge session/listener and unique service
+name, including repeated task IDs. Fresh evaluation sandboxes borrow the same
+network. Effective network policy is `shared-egress`, recorded in run infrastructure;
+benchmark `AllowNetwork` declarations remain metadata. No network-per-task option
+or additional provider is implemented. See the [bridge contract](design/bridge.md).
 
 Compatibility normalization supplies Docker with `/var/run/docker.sock` for omitted
 harness/sandbox deployment blocks. An omitted bridge mode becomes `managed`, and
@@ -135,10 +139,10 @@ explicitly. `external` remains unsupported. Legacy `sandbox.type: "docker"`
 still maps to Docker deployment; conflicting explicit settings are rejected.
 
 `bridge.deployment.backend` must be `docker`. Bridges run in a separate container
-on the task network and use the same local daemon as the sandbox. Composition
+on the run network and use the same local daemon as the sandbox. Composition
 supplies the required Docker socket mount explicitly; component labels do not
 grant access. The harness and sandbox never receive that socket. The bridge has daemon authority
-like Runner, even though its execution adapter validates one fixed target.
+like Runner, even though each session's execution adapter validates one fixed target.
 
 The bridge runtime runs `aries-bridge` from the same build as `aries-ssh-client`.
 `make build` produces both alongside Runner. `make bridge-image` builds the Docker
@@ -149,14 +153,15 @@ Image preparation uses the selected daemon. Checked-in Docker bridge examples
 include [Hermes](../profiles/hermes-tb2-fix-git-deepseek.json) and
 [OpenClaw](../profiles/openclaw-tb2-fix-git-deepseek.json).
 
-Bridge addresses come from task composition, not profile fields. Plaintext,
+Bridge addresses come from deployment resolution, not profile fields. Plaintext,
 unauthenticated gRPC control and harness-facing SSH use separate endpoints.
-Control has no TLS certificates or bearer tokens; SSH retains its credentials.
-Bridge containers advertise their address on the task network. Each runtime
-accepts one immutable sandbox assignment that
-remains active until Runner explicitly revokes it and removes the bridge runtime.
+Control has no TLS certificates or bearer tokens. SSH accepts unauthenticated
+clients, retaining one in-memory service host key for the handshake. No SSH client
+keys or known-hosts files are staged. The shared service creates a dynamic listener
+per sandbox and deployment resolves its harness-reachable endpoint. Runner
+explicitly releases each sandbox session; run cleanup removes the service.
 There are no leases or renewal timers. Control health alone does not establish
-assignment readiness.
+session readiness.
 
 ## Preparation and task selection
 

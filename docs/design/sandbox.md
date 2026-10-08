@@ -41,18 +41,19 @@ evaluation sandboxes. Harness failure does not decide the evaluation outcome.
 See the [task lifecycle](../design.md#task-lifecycle-and-isolation-gates).
 
 A fresh evaluation sandbox is a `SandboxRequest` with
-`Purpose: "evaluation"`. It gets its own task attachment, the
+`Purpose: "evaluation"`. It gets a fresh logical attachment on the run network, the
 `aries.component=evaluation-sandbox` label for resource monitoring, and its
 own `<task>/evaluation-sandbox/` artifact directory, so it never overwrites the
 task sandbox's evidence. Runner starts it on the benchmark's request during
 `Evaluate` and stops it before the task sandbox.
 
-The current adapter validates execution defaults, starts a fresh task attachment,
+The current adapter validates execution defaults, borrows a fresh task attachment,
 creates and validates the runtime, starts it, and confirms it is running before
 returning the capability. Partial startup uses a fresh bounded cleanup context;
 unconfirmed cleanup is retained for retry. Stop rejects another manager's
 sandbox, supports concurrent/repeated callers, and removes the runtime before
-its task attachment. A cleanup error remains visible rather than being treated
+releasing its task handle. The run retains shared network ownership until all
+runtimes are removed. A cleanup error remains visible rather than being treated
 as confirmed absence.
 
 Commands retain absolute executable paths and exact argument boundaries. The

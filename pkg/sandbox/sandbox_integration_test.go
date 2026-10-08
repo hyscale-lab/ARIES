@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
+	"github.com/hyscale-lab/aries/internal/testutil/dockerroute"
 	"github.com/hyscale-lab/aries/pkg/core"
 	deploymentdocker "github.com/hyscale-lab/aries/pkg/deployment/docker"
 	"github.com/hyscale-lab/aries/pkg/monitor"
@@ -40,7 +41,7 @@ func TestDockerResourceMonitorRecordsBusyCPU(t *testing.T) {
 	logger := logrus.New()
 	logger.SetOutput(io.Discard)
 	outputDir := t.TempDir()
-	manager, err := newIntegrationManager(t, Options{OutputDir: outputDir, CleanupTimeout: 10 * time.Second, Logger: logger})
+	manager, err := newIntegrationManager(t, "resource-integration", Options{OutputDir: outputDir, CleanupTimeout: 10 * time.Second, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +133,7 @@ func TestDockerSandboxRealLifecycle(t *testing.T) {
 	ensureFixtureImage(t, ctx, api)
 
 	outputDir := t.TempDir()
-	manager, err := newIntegrationManager(t, Options{
+	manager, err := newIntegrationManager(t, "integration-run", Options{
 		OutputDir: outputDir, CleanupTimeout: 20 * time.Second,
 		Logger: logrus.New(),
 	})
@@ -172,7 +173,7 @@ func TestDockerSandboxRealLifecycle(t *testing.T) {
 		t.Fatalf("container environment = %#v, want ARIES precedence and unrelated task value", containerEnv)
 	}
 	networkInspection, err := api.NetworkInspect(ctx, sandbox.Connectivity().Placement.AttachmentID, client.NetworkInspectOptions{})
-	if err != nil || !networkInspection.Network.Internal || networkInspection.Network.Labels["aries.task"] != "integration-task" {
+	if err != nil || networkInspection.Network.Internal || networkInspection.Network.Labels["aries.kind"] != "run-network" {
 		t.Fatalf("network inspection = %#v, %v", networkInspection.Network, err)
 	}
 
@@ -221,8 +222,8 @@ func TestDockerSandboxRealLifecycle(t *testing.T) {
 	if _, err := api.ContainerInspect(ctx, sandbox.ContainerID(), client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
 		t.Fatalf("container remains after Stop: %v", err)
 	}
-	if _, err := api.NetworkInspect(ctx, sandbox.Connectivity().Placement.AttachmentID, client.NetworkInspectOptions{}); !errdefs.IsNotFound(err) {
-		t.Fatalf("network remains after Stop: %v", err)
+	if _, err := api.NetworkInspect(ctx, sandbox.Connectivity().Placement.AttachmentID, client.NetworkInspectOptions{}); err != nil {
+		t.Fatalf("network removed by task Stop: %v", err)
 	}
 	for _, name := range []string{"container.stdout.log", "container.stderr.log"} {
 		if info, err := os.Stat(filepath.Join(sandbox.artifactDir, name)); err != nil || info.Mode().Perm() != 0o600 {
@@ -264,7 +265,7 @@ func TestDockerSandboxVerifiesNoNewPrivileges(t *testing.T) {
 	}
 	ensureFixtureImage(t, ctx, api)
 
-	manager, err := newIntegrationManager(t, Options{OutputDir: t.TempDir(), CleanupTimeout: 20 * time.Second, Logger: logrus.New()})
+	manager, err := newIntegrationManager(t, "no-new-privileges-integration", Options{OutputDir: t.TempDir(), CleanupTimeout: 20 * time.Second, Logger: logrus.New()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +312,7 @@ func TestDockerSandboxRootWorkdirLifecycle(t *testing.T) {
 	}
 	ensureFixtureImage(t, ctx, api)
 
-	manager, err := newIntegrationManager(t, Options{OutputDir: t.TempDir(), CleanupTimeout: 20 * time.Second, Logger: logrus.New()})
+	manager, err := newIntegrationManager(t, "root-workdir-integration", Options{OutputDir: t.TempDir(), CleanupTimeout: 20 * time.Second, Logger: logrus.New()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,8 +339,8 @@ func TestDockerSandboxRootWorkdirLifecycle(t *testing.T) {
 	if _, err := api.ContainerInspect(ctx, sandbox.ContainerID(), client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
 		t.Fatalf("root-workdir container remains after Stop: %v", err)
 	}
-	if _, err := api.NetworkInspect(ctx, sandbox.Connectivity().Placement.AttachmentID, client.NetworkInspectOptions{}); !errdefs.IsNotFound(err) {
-		t.Fatalf("root-workdir network remains after Stop: %v", err)
+	if _, err := api.NetworkInspect(ctx, sandbox.Connectivity().Placement.AttachmentID, client.NetworkInspectOptions{}); err != nil {
+		t.Fatalf("root-workdir network removed by task Stop: %v", err)
 	}
 }
 
@@ -364,7 +365,7 @@ func TestExecCancellationKillsOnlyItsProcessGroup(t *testing.T) {
 	}
 	ensureFixtureImage(t, ctx, api)
 
-	manager, err := newIntegrationManager(t, Options{
+	manager, err := newIntegrationManager(t, "cancel-run", Options{
 		OutputDir: t.TempDir(), CleanupTimeout: 8 * time.Second,
 		Logger: logrus.New(),
 	})
@@ -419,8 +420,8 @@ func TestExecCancellationKillsOnlyItsProcessGroup(t *testing.T) {
 	if _, err := api.ContainerInspect(ctx, sandbox.ContainerID(), client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
 		t.Fatalf("container remains after Stop: %v", err)
 	}
-	if _, err := api.NetworkInspect(ctx, sandbox.Connectivity().Placement.AttachmentID, client.NetworkInspectOptions{}); !errdefs.IsNotFound(err) {
-		t.Fatalf("network remains after Stop: %v", err)
+	if _, err := api.NetworkInspect(ctx, sandbox.Connectivity().Placement.AttachmentID, client.NetworkInspectOptions{}); err != nil {
+		t.Fatalf("network removed by task Stop: %v", err)
 	}
 }
 
@@ -480,9 +481,9 @@ func noNewPrivilegesEnabled(options []string) bool {
 	return false
 }
 
-func newIntegrationManager(t *testing.T, options Options) (*Manager, error) {
+func newIntegrationManager(t *testing.T, runID string, options Options) (*Manager, error) {
 	backend := integrationDeployment(t)
 	options.Deployment = backend
-	options.NewEnvironment = backend.NewTaskEnvironment
+	options.NewEnvironment = dockerroute.Environment(t, runID).NewTaskEnvironment
 	return New(options)
 }

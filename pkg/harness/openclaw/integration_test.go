@@ -24,6 +24,7 @@ import (
 	"github.com/containerd/errdefs"
 	bridgewiring "github.com/hyscale-lab/aries/internal/app/wiring/bridge"
 	deploymentwiring "github.com/hyscale-lab/aries/internal/app/wiring/deployment"
+	"github.com/hyscale-lab/aries/internal/testutil/dockerroute"
 	"github.com/hyscale-lab/aries/pkg/benchmark/terminalbench"
 	managedbridge "github.com/hyscale-lab/aries/pkg/bridge"
 	"github.com/hyscale-lab/aries/pkg/config"
@@ -50,7 +51,7 @@ const (
 // real SSH bridge has made that network available. Runner ordering then stops
 // OpenClaw before this bridge removes the model and revokes SSH.
 type modelBridge struct {
-	inner            *managedbridge.Manager
+	inner            runner.ToolBridge
 	api              *client.Client
 	runID            string
 	key              string
@@ -239,7 +240,8 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 	key := "deterministic-integration-key"
 	t.Setenv(integrationAPIKeyEnv, key)
 	logger := logrus.New()
-	sandbox, err := tasksandbox.New(tasksandbox.Options{Deployment: integrationDeployment(t), NewEnvironment: integrationDeployment(t).NewTaskEnvironment, OutputDir: outputDir, CleanupTimeout: 30 * time.Second, Logger: logger})
+	runEnvironment := dockerroute.Environment(t, runID)
+	sandbox, err := tasksandbox.New(tasksandbox.Options{Deployment: integrationDeployment(t), NewEnvironment: runEnvironment.NewTaskEnvironment, OutputDir: outputDir, CleanupTimeout: 30 * time.Second, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +257,21 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 	launch.RuntimeBackend, launch.ResourceMetrics = "docker", "docker-stats"
 	launch.Config.Backend = "docker"
 	launch.Config.BackendEndpoint, launch.Request.Mounts = deploymentwiring.DockerExecutionAccess("")
-	sshBridge, err := managedbridge.New(managedbridge.Options{Runtime: bridgeRuntime, Launch: launch, Client: clientConfig, BridgeType: "openclaw-ssh", RetainRawLog: true, OutputDir: outputDir})
+	service, err := managedbridge.NewService(managedbridge.Options{RunID: runID, Placement: core.RuntimePlacement{AttachmentID: runEnvironment.NetworkName()}, Runtime: bridgeRuntime, Launch: launch, Client: clientConfig, BridgeType: "openclaw-ssh", RetainRawLog: true, OutputDir: filepath.Join(outputDir, "infrastructure", "bridge")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if err := service.Stop(cleanup); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := service.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	sshBridge, err := service.NewSession(outputDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -400,6 +416,12 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 			t.Fatalf("obsolete exec artifact %q still exists: %v", obsolete, err)
 		}
 	}
+	if err := service.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := runEnvironment.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
 	assertNoRunResources(t, ctx, api, runID)
 	assertSecretAbsent(t, outputDir, key)
 }
@@ -454,8 +476,6 @@ func TestPinnedGatewayRealtimeProtocolSmoke(t *testing.T) {
 	endpoint := core.ToolEndpoint{
 		Protocol: "ssh", Address: "127.0.0.1:1", Username: "aries",
 		ClientCommand: "/opt/aries/bin/aries-ssh-client", ClientSourceFile: writePrivate("aries-ssh-client", string(clientContent), 0o555),
-		IdentityFile: "/run/aries/ssh/id_ed25519", IdentitySourceFile: writePrivate("id_ed25519", "fixture-identity", 0o600),
-		KnownHostsFile: "/run/aries/ssh/known_hosts", KnownHostsSourceFile: writePrivate("known_hosts", "fixture-known-host", 0o600),
 	}
 	keys := map[string]string{"MODEL_KEY": "deterministic-model-key", "OPENAI_API_KEY": "deterministic-realtime-key"}
 	harness, err := New(Options{Runtime: harnesscommon.RuntimeOptions{
@@ -531,7 +551,7 @@ func parseRawBridgeAudit(t *testing.T, content []byte) []map[string]string {
 	const begin = "--- ARIES SSH CALL BEGIN ---\n"
 	const end = "--- ARIES SSH CALL END ---\n"
 	fields := []string{
-		"sequence", "timestamp", "request_type", "want_reply", "status", "run_id", "task_id",
+		"sequence", "sandbox_id", "timestamp", "request_type", "want_reply", "status", "run_id", "task_id",
 		"container_id", "wire_command", "payload_bytes", "payload", "stdin_bytes", "stdin",
 	}
 	var records []map[string]string

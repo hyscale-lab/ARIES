@@ -10,12 +10,13 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
+	"github.com/hyscale-lab/aries/internal/testutil/dockerroute"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/deployment"
 	"github.com/moby/moby/client"
 )
 
-func TestConcurrentOccurrencesKeepSeparateNetworks(t *testing.T) {
+func TestConcurrentOccurrencesShareNetworkAndKeepSeparateSandboxes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	api, err := client.New(client.FromEnv)
@@ -24,11 +25,12 @@ func TestConcurrentOccurrencesKeepSeparateNetworks(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = api.Close() })
 	ensureFixtureImage(t, ctx, api)
+	environment := dockerroute.Environment(t, "concurrent-isolation")
 	var managers [2]*Manager
 	var sandboxes [2]*Sandbox
 	var failures [2]error
 	for i := range managers {
-		managers[i], err = newIntegrationManager(t, Options{OutputDir: t.TempDir(), CleanupTimeout: 10 * time.Second})
+		managers[i], err = New(Options{Deployment: integrationDeployment(t), NewEnvironment: environment.NewTaskEnvironment, OutputDir: t.TempDir(), CleanupTimeout: 10 * time.Second})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -63,8 +65,8 @@ func TestConcurrentOccurrencesKeepSeparateNetworks(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if sandboxes[0].Connectivity().Placement.AttachmentID == sandboxes[1].Connectivity().Placement.AttachmentID || sandboxes[0].ContainerID() == sandboxes[1].ContainerID() {
-		t.Fatal("duplicate task IDs shared resources")
+	if sandboxes[0].Connectivity().Placement.AttachmentID != sandboxes[1].Connectivity().Placement.AttachmentID || sandboxes[0].ContainerID() == sandboxes[1].ContainerID() {
+		t.Fatal("task occurrences must share attachment but have separate runtimes")
 	}
 	var addresses, peers [2]string
 	var peerIDs [2]string
@@ -118,8 +120,8 @@ func TestConcurrentOccurrencesKeepSeparateNetworks(t *testing.T) {
 			t.Fatalf("own network unreachable: %#v", own)
 		}
 		other := execForTest(t, ctx, sandbox, core.Command{Path: "/bin/ping", Args: []string{"-c", "1", "-w", "2", addresses[1-i]}, Timeout: 5 * time.Second})
-		if other.ExitCode != 1 {
-			t.Fatalf("cross-task traffic was not denied: %#v", other)
+		if other.ExitCode != 0 {
+			t.Fatalf("shared run network was unreachable: %#v", other)
 		}
 		assertExec(t, ctx, sandbox, core.Command{Path: "/bin/cat", Args: []string{"/work/state"}}, 0, fmt.Sprint(i), "")
 	}
@@ -133,6 +135,9 @@ func TestConcurrentOccurrencesKeepSeparateNetworks(t *testing.T) {
 	}
 	assertExec(t, ctx, sandboxes[1], core.Command{Path: "/bin/cat", Args: []string{"/work/state"}}, 0, "1", "")
 	if err := managers[1].Stop(ctx, sandboxes[1]); err != nil {
+		t.Fatal(err)
+	}
+	if err := environment.Stop(ctx); err != nil {
 		t.Fatal(err)
 	}
 	for _, sandbox := range sandboxes {

@@ -26,7 +26,6 @@ import (
 	tasksandbox "github.com/hyscale-lab/aries/pkg/sandbox"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/crypto/ssh"
-	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 const bridgeFixtureImage = "docker.io/library/busybox:1.37.0-musl@sha256:222ad6d973c0d198014546a65cd02c5fdedcc172123c5b4c2bf0af636550bd94"
@@ -39,7 +38,7 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 	if err := dockerdeployment.PullImages(ctx, "", []string{bridgeFixtureImage}); err != nil {
 		t.Fatalf("prepare pinned bridge fixture image: %v", err)
 	}
-	sandboxes, err := tasksandbox.New(tasksandbox.Options{Deployment: integrationDeployment(t), NewEnvironment: integrationDeployment(t).NewTaskEnvironment, OutputDir: outputDir, Logger: logger})
+	sandboxes, err := tasksandbox.New(tasksandbox.Options{Deployment: integrationDeployment(t), NewEnvironment: dockerroute.Environment(t, "bridge-integration").NewTaskEnvironment, OutputDir: outputDir, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,16 +90,13 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertFormerAliasAbsent(t, ctx, sandbox, "after bridge revocation")
-	if _, err := os.Stat(endpoint.IdentitySourceFile); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("identity remains after Stop: %v", err)
-	}
 	if connection, err := net.DialTimeout("tcp", endpoint.Address, 200*time.Millisecond); err == nil {
 		_ = connection.Close()
 		t.Fatal("bridge listener still accepts connections after Stop")
 	}
 	wantLogPaths := []string{
-		filepath.Join(outputDir, "same-state", "bridge", "tool-calls.jsonl"),
-		filepath.Join(outputDir, "same-state", "bridge", "ssh_raw.log"),
+		filepath.Join(outputDir, "tool-calls.jsonl"),
+		filepath.Join(outputDir, "ssh_raw.log"),
 	}
 	if !slices.Equal(endpoint.LogPaths, wantLogPaths) {
 		t.Fatalf("log paths = %q, want %q", endpoint.LogPaths, wantLogPaths)
@@ -162,7 +158,7 @@ func TestBridgeMapsVirtualWorkspaceToContainerRootWithoutAlias(t *testing.T) {
 	if err := dockerdeployment.PullImages(ctx, "", []string{bridgeFixtureImage}); err != nil {
 		t.Fatalf("prepare pinned bridge fixture image: %v", err)
 	}
-	sandboxes, err := tasksandbox.New(tasksandbox.Options{Deployment: integrationDeployment(t), NewEnvironment: integrationDeployment(t).NewTaskEnvironment, OutputDir: outputDir, Logger: logger})
+	sandboxes, err := tasksandbox.New(tasksandbox.Options{Deployment: integrationDeployment(t), NewEnvironment: dockerroute.Environment(t, "bridge-root-integration").NewTaskEnvironment, OutputDir: outputDir, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +225,7 @@ func TestBridgeRunsConcurrentCallsWithoutAConvoy(t *testing.T) {
 	if err := dockerdeployment.PullImages(ctx, "", []string{bridgeFixtureImage}); err != nil {
 		t.Fatalf("prepare pinned bridge fixture image: %v", err)
 	}
-	sandboxes, err := tasksandbox.New(tasksandbox.Options{Deployment: integrationDeployment(t), NewEnvironment: integrationDeployment(t).NewTaskEnvironment, OutputDir: outputDir, Logger: logger})
+	sandboxes, err := tasksandbox.New(tasksandbox.Options{Deployment: integrationDeployment(t), NewEnvironment: dockerroute.Environment(t, "bridge-concurrent").NewTaskEnvironment, OutputDir: outputDir, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,21 +395,9 @@ func newIntegrationBridge(t *testing.T, outputDir string, logger *logrus.Logger,
 
 func dialIntegrationBridge(t *testing.T, endpoint core.ToolEndpoint) *ssh.Client {
 	t.Helper()
-	identity, err := os.ReadFile(endpoint.IdentitySourceFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := ssh.ParsePrivateKey(identity)
-	if err != nil {
-		t.Fatal(err)
-	}
-	hostKey, err := knownhosts.New(endpoint.KnownHostsSourceFile)
-	if err != nil {
-		t.Fatal(err)
-	}
 	client, err := ssh.Dial("tcp", endpoint.Address, &ssh.ClientConfig{
-		User: endpoint.Username, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: hostKey, HostKeyAlgorithms: []string{ssh.KeyAlgoED25519}, Timeout: 5 * time.Second,
+		User:            endpoint.Username,
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(), HostKeyAlgorithms: []string{ssh.KeyAlgoED25519}, Timeout: 5 * time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)

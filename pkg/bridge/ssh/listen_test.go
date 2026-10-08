@@ -3,19 +3,16 @@ package ssh
 import (
 	"context"
 	"errors"
-	"net"
-	"os"
-	"strings"
-	"testing"
-
 	"github.com/hyscale-lab/aries/pkg/core"
 	"golang.org/x/crypto/ssh"
+	"net"
+	"testing"
 )
 
-func TestListenSeparatesBindingAndAdvertisement(t *testing.T) {
+func TestListenReturnsLocalBindingForDeploymentResolution(t *testing.T) {
 	manager := newContractManager(t, t.TempDir())
 	manager.resolveListen = func(context.Context) (core.BridgeListen, error) {
-		return core.BridgeListen{BindHost: "127.0.0.1", AdvertiseHost: "127.0.0.2"}, nil
+		return core.BridgeListen{BindHost: "127.0.0.1"}, nil
 	}
 	endpoint, err := manager.StartTarget(context.Background(), &contractSandbox{})
 	if err != nil {
@@ -23,27 +20,16 @@ func TestListenSeparatesBindingAndAdvertisement(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = manager.Stop(context.Background()) })
 	host, port, err := net.SplitHostPort(endpoint.Address)
-	if err != nil || host != "127.0.0.2" || port == "0" {
-		t.Fatalf("advertised endpoint = %q, %v", endpoint.Address, err)
+	if err != nil || host != "127.0.0.1" || port == "0" {
+		t.Fatalf("local endpoint = %q, %v", endpoint.Address, err)
 	}
-	bound := manager.active.listener.Addr().String()
-	_, boundPort, _ := net.SplitHostPort(bound)
-	if boundPort != port {
-		t.Fatalf("bound %s advertised %s", bound, endpoint.Address)
+	if endpoint.Address != manager.active.listener.Addr().String() {
+		t.Fatal("endpoint does not report actual local binding")
 	}
-	known, err := os.ReadFile(manager.active.knownSource)
-	if err != nil || !strings.HasPrefix(string(known), "[127.0.0.2]:"+port+" ") {
-		t.Fatalf("known hosts = %q, %v", known, err)
-	}
-	conn, err := net.Dial("tcp4", bound)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = conn.Close()
 	if err := manager.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if conn, err := net.Dial("tcp4", bound); err == nil {
+	if conn, err := net.Dial("tcp", endpoint.Address); err == nil {
 		_ = conn.Close()
 		t.Fatal("listener remained reachable")
 	}
@@ -51,20 +37,17 @@ func TestListenSeparatesBindingAndAdvertisement(t *testing.T) {
 
 func TestListenRejectsInvalidSettingsBeforeGrant(t *testing.T) {
 	for _, setting := range []core.BridgeListen{
-		{BindHost: "localhost", AdvertiseHost: "127.0.0.1"},
-		{BindHost: "127.0.0.1", AdvertiseHost: "-invalid.example"},
-		{BindHost: "127.0.0.1", AdvertiseHost: "0.0.0.0"},
-		{BindHost: "::1", AdvertiseHost: "::1"},
-		{BindHost: "192.0.2.1", AdvertiseHost: "192.0.2.1"},
+		{BindHost: "localhost"}, {BindHost: "127.0.0.1", BindPort: -1},
+		{BindHost: "127.0.0.1", BindPort: 65536}, {BindHost: "192.0.2.1"},
 	} {
-		t.Run(setting.BindHost+"/"+setting.AdvertiseHost, func(t *testing.T) {
+		t.Run(setting.BindHost, func(t *testing.T) {
 			manager := newContractManager(t, t.TempDir())
 			manager.resolveListen = func(context.Context) (core.BridgeListen, error) { return setting, nil }
 			if _, err := manager.StartTarget(context.Background(), &contractSandbox{}); err == nil {
 				t.Fatal("invalid settings accepted")
 			}
 			if manager.active != nil {
-				t.Fatal("failed settings left an active grant")
+				t.Fatal("failed settings left active grant")
 			}
 			if err := manager.Stop(context.Background()); err != nil {
 				t.Fatal(err)
@@ -73,8 +56,9 @@ func TestListenRejectsInvalidSettingsBeforeGrant(t *testing.T) {
 	}
 }
 
-func TestConcurrentGrantsRejectAnotherTasksKey(t *testing.T) {
+func TestConcurrentListenersAcceptNoCredentialsAndRevokeIndependently(t *testing.T) {
 	first, second := newContractManager(t, t.TempDir()), newContractManager(t, t.TempDir())
+	second.hostSigner = first.hostSigner
 	one, err := first.StartTarget(context.Background(), &contractSandbox{})
 	if err != nil {
 		t.Fatal(err)
@@ -94,26 +78,30 @@ func TestConcurrentGrantsRejectAnotherTasksKey(t *testing.T) {
 		}
 	})
 	if one.Address == two.Address {
-		t.Fatal("tasks share a listener")
+		t.Fatal("sandboxes share a listener")
 	}
-	own, other := bridgeClientConfig(t, one), bridgeClientConfig(t, two)
-	wrong := *own
-	wrong.Auth = other.Auth
-	if conn, err := ssh.Dial("tcp", one.Address, &wrong); err == nil {
+	var presented []string
+	for _, endpoint := range []core.ToolEndpoint{one, two, one} {
+		config := bridgeClientConfig(t, endpoint)
+		config.HostKeyCallback = func(_ string, _ net.Addr, key ssh.PublicKey) error {
+			presented = append(presented, string(key.Marshal()))
+			return nil
+		}
+		conn, err := ssh.Dial("tcp", endpoint.Address, config)
+		if err != nil {
+			t.Fatal(err)
+		}
 		_ = conn.Close()
-		t.Fatal("another task key authenticated")
 	}
-	conn, err := ssh.Dial("tcp", one.Address, own)
-	if err != nil {
-		t.Fatal(err)
+	if presented[0] != presented[1] || presented[1] != presented[2] {
+		t.Fatal("service host key changed between listeners or reconnect")
 	}
-	_ = conn.Close()
 	if err := first.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	conn, err = ssh.Dial("tcp", two.Address, other)
+	conn, err := ssh.Dial("tcp", two.Address, bridgeClientConfig(t, two))
 	if err != nil {
-		t.Fatalf("revoking first task revoked second: %v", err)
+		t.Fatalf("revoking first revoked second: %v", err)
 	}
 	_ = conn.Close()
 }
