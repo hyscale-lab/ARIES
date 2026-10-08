@@ -5,15 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/hyscale-lab/aries/pkg/core"
-	"github.com/hyscale-lab/aries/pkg/deployment"
-	"github.com/hyscale-lab/aries/pkg/sandbox"
 	"io"
 	"maps"
 	"regexp"
-	"slices"
 	"strings"
 	"sync"
+
+	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/sandbox"
 )
 
 // Executor deliberately grants no creation, deletion, transfer or network ownership.
@@ -27,17 +26,13 @@ type Executor interface {
 }
 
 type Backend interface {
-	SnapshotBridgeProcesses(context.Context, string) ([]deployment.ProcessIdentity, error)
-	RevokeBridgeProcesses(context.Context, string, []deployment.ProcessIdentity) error
 	ValidateBridgeTarget(context.Context, core.BridgeTarget) error
 	ExecStream(context.Context, string, core.Command, io.Reader, io.Writer, io.Writer) (core.CommandResult, error)
 }
 
 type Borrowed struct {
 	mu         sync.Mutex
-	baseline   []deployment.ProcessIdentity
 	revoked    bool
-	revoking   bool
 	descriptor core.BridgeTarget
 	backend    Backend
 }
@@ -85,14 +80,7 @@ func New(ctx context.Context, d core.BridgeTarget, backend Backend) (*Borrowed, 
 	if err := backend.ValidateBridgeTarget(ctx, d); err != nil {
 		return nil, err
 	}
-	baseline, err := backend.SnapshotBridgeProcesses(ctx, d.RuntimeID)
-	if err != nil {
-		return nil, err
-	}
-	if len(baseline) == 0 {
-		return nil, errors.New("bridge target process baseline is empty")
-	}
-	return &Borrowed{descriptor: d, backend: backend, baseline: slices.Clone(baseline)}, nil
+	return &Borrowed{descriptor: d, backend: backend}, nil
 }
 func (b *Borrowed) ContainerID() string   { return b.descriptor.RuntimeID }
 func (b *Borrowed) ContainerName() string { return b.descriptor.RuntimeName }
@@ -101,7 +89,7 @@ func (b *Borrowed) TaskID() string        { return b.descriptor.TaskID }
 func (b *Borrowed) Workdir() string       { return b.descriptor.Workdir }
 func (b *Borrowed) ExecStream(ctx context.Context, c core.Command, in io.Reader, out, errout io.Writer) (core.CommandResult, error) {
 	b.mu.Lock()
-	closed := b.revoking
+	closed := b.revoked
 	b.mu.Unlock()
 	if closed {
 		return core.CommandResult{ExitCode: -1}, errors.New("bridge target admission closed")
@@ -113,21 +101,10 @@ func (b *Borrowed) ExecStream(ctx context.Context, c core.Command, in io.Reader,
 	return b.backend.ExecStream(ctx, b.descriptor.RuntimeID, c, in, out, errout)
 }
 
-// Revoke must follow the native bridge's confirmed session drain. Ownership of
-// the original baseline persists across failed cleanup attempts.
-func (b *Borrowed) Revoke(ctx context.Context) error {
+// Revoke closes admission without changing the independently owned sandbox.
+// The native bridge owns cancellation and joining of its active handlers.
+func (b *Borrowed) Revoke() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.revoking = true
-	if b.revoked {
-		return nil
-	}
-	if err := b.backend.ValidateBridgeTarget(ctx, b.descriptor); err != nil {
-		return err
-	}
-	if err := b.backend.RevokeBridgeProcesses(ctx, b.descriptor.RuntimeID, b.baseline); err != nil {
-		return err
-	}
 	b.revoked = true
-	return nil
 }

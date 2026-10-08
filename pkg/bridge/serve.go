@@ -137,13 +137,11 @@ func serve(ctx context.Context, options ServeOptions, listener net.Listener) (re
 			defer func() {
 				returnErr = errors.Join(returnErr, eraseStagedCredentials("host.key", "authorized.pub"))
 			}()
+			if borrowedTarget != nil {
+				borrowedTarget.Revoke()
+			}
 			if native != nil {
 				if e := native.Stop(call); e != nil {
-					return nil, e
-				}
-			}
-			if borrowedTarget != nil {
-				if e := borrowedTarget.Revoke(call); e != nil {
 					return nil, e
 				}
 			}
@@ -215,7 +213,7 @@ func serve(ctx context.Context, options ServeOptions, listener net.Listener) (re
 	case e := <-serveDone:
 		return fmt.Errorf("bridge control serving stopped: %w", e)
 	}
-	// A failed drain remains visible; never manufacture success on process exit.
+	// Failed native cleanup remains visible through the bounded collection period.
 	timeout := options.CollectionTimeout
 	if timeout <= 0 {
 		timeout = 2 * time.Minute

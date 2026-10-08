@@ -18,7 +18,7 @@ func TestDialectPreservesRefusalClassification(t *testing.T) {
 		}
 	}
 	policy := (Dialect{}).Policy()
-	if policy.UnsupportedRequests != bridgessh.RejectAndContinue || policy.RefusedExitCode != -1 || !policy.Endpoint.UseSandboxWorkdir || policy.Endpoint.ClientCommand != "" || policy.Endpoint.KnownHostsFile != "" {
+	if policy.UnsupportedRequests != bridgessh.RejectAndContinue || policy.RefusedExitCode != -1 {
 		t.Fatalf("policy = %#v", policy)
 	}
 }

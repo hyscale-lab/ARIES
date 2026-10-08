@@ -99,7 +99,7 @@ func TestManagedBridgeRuntimeMatrix(t *testing.T) {
 		}
 	})
 }
-func TestManagedContainerCrashBlocksIsolation(t *testing.T) {
+func TestManagedContainerCrashReportsMissingEvidence(t *testing.T) {
 	helper := managedBinary(t, "aries-ssh-client", "ARIES_SSH_CLIENT")
 	versions, err := config.LoadVersions(filepath.Join(managedRoot(t), "configs", "versions.json"))
 	if err != nil {
@@ -136,19 +136,28 @@ func runManagedOccurrence(t *testing.T, protocol, helper, image string, remember
 			t.Errorf("sandbox transport: %v", err)
 		}
 	})
+	// Benchmark services may already be running before the bridge is admitted.
+	benchmarkProcess, err := sandbox.Exec(ctx, core.Command{Path: "/bin/sh", Args: []string{"-c", "setsid sleep 120 </dev/null >/dev/null 2>&1 & echo $! > /work/benchmark.pid"}})
+	if err != nil || benchmarkProcess.ExitCode != 0 {
+		t.Fatalf("start benchmark process: %+v %v", benchmarkProcess, err)
+	}
 	runtime, err := docker.New(docker.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	bridge, err := managed.New(managed.Options{Runtime: runtime, Launch: bridgewiring.DockerLaunch(image, ""), OutputDir: root, ClientPath: helper, BridgeType: protocol, RetainRawLog: true})
+	clientConfig, err := bridgewiring.SSHClientConfig(protocol, helper)
 	if err != nil {
 		t.Fatal(err)
 	}
-	expectIsolationFailure := false
+	bridge, err := managed.New(managed.Options{Runtime: runtime, Launch: bridgewiring.DockerLaunch(image, ""), OutputDir: root, Client: clientConfig, BridgeType: protocol, RetainRawLog: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectEvidenceFailure := false
 	t.Cleanup(func() {
 		cleanup, done := context.WithTimeout(context.Background(), 30*time.Second)
 		defer done()
-		if err := bridge.Stop(cleanup); err != nil && !expectIsolationFailure {
+		if err := bridge.Stop(cleanup); err != nil && !expectEvidenceFailure {
 			t.Errorf("bridge cleanup: %v", err)
 		}
 		if err := runtime.Close(); err != nil {
@@ -199,7 +208,8 @@ func runManagedOccurrence(t *testing.T, protocol, helper, image string, remember
 		t.Fatal(err)
 	}
 	payload := "managed-" + owner.AssignmentID
-	script := "cat > /work/managed-state; cat /work/managed-state; printf managed-stderr >&2; exit 7"
+	// A completed tool call can intentionally leave a background service running.
+	script := "setsid sleep 120 </dev/null >/dev/null 2>&1 & echo $! > /work/tool.pid; cat > /work/managed-state; cat /work/managed-state; printf managed-stderr >&2; exit 7"
 	wire := managedQuote("/bin/sh") + " " + managedQuote("-c") + " " + managedQuote(script)
 	if protocol == "hermes-ssh" {
 		wire = "bash -l -c " + managedQuote(script)
@@ -233,24 +243,34 @@ func runManagedOccurrence(t *testing.T, protocol, helper, image string, remember
 	}
 	binarySession.Close()
 	connection.Close()
+	assertSandboxProcessesAlive := func() {
+		t.Helper()
+		result, err := sandbox.Exec(ctx, core.Command{Path: "/bin/sh", Args: []string{"-c", `for source in /work/benchmark.pid /work/tool.pid; do pid=$(cat "$source") || exit; kill -0 "$pid" || exit; test -e "/proc/$pid/exe" || exit 1; done`}})
+		if err != nil || result.ExitCode != 0 {
+			t.Fatalf("bridge cleanup changed live sandbox processes: %+v %v", result, err)
+		}
+	}
+	assertSandboxProcessesAlive()
 	if len(crash) != 0 && crash[0] {
-		expectIsolationFailure = true
+		expectEvidenceFailure = true
 		if err = runtime.Stop(ctx, owner.RuntimeID); err != nil {
 			t.Fatal(err)
 		}
 		for range 2 {
-			if err = bridge.Stop(ctx); err == nil {
-				t.Fatal("child crash incorrectly proved sandbox isolation")
+			if err = bridge.Stop(ctx); err == nil || !strings.Contains(err.Error(), "bridge exited without finalized evidence") {
+				t.Fatalf("child crash did not report missing finalized evidence: %v", err)
 			}
 		}
 		if _, err = os.Stat(endpoint.IdentitySourceFile); !errors.Is(err, os.ErrNotExist) {
 			t.Fatal("crashed container client key remains")
 		}
-		return // No independent evaluation is allowed after uncertain revocation.
+		assertSandboxProcessesAlive()
+		return
 	}
 	if err = bridge.Stop(ctx); err != nil {
 		t.Fatal(err)
 	}
+	assertSandboxProcessesAlive()
 	result, err := sandbox.Exec(ctx, core.Command{Path: "/bin/cat", Args: []string{"/work/managed-state"}})
 	if err != nil || result.ExitCode != 0 || result.Stdout != payload {
 		t.Fatalf("independent evaluation of same live sandbox: %+v %v", result, err)

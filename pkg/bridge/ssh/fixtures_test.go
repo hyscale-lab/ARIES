@@ -48,7 +48,7 @@ func loopbackListen(context.Context) (core.BridgeListen, error) {
 type testDialect struct{}
 
 func (testDialect) Policy() Policy {
-	return Policy{InvalidOperationClass: "exec", Endpoint: EndpointPolicy{KnownHostsFile: "/run/aries/ssh/known_hosts"}}
+	return Policy{InvalidOperationClass: "exec"}
 }
 func (testDialect) Prepare(encoded, workdir string) (Prepared, *Refusal) {
 	var argv []string

@@ -14,8 +14,8 @@ import (
 // closes admission, cancels and joins handlers, and finalizes evidence; a timeout
 // leaves cleanup pending and retryable. A revoked server cannot be reused.
 //
-// Successful Stop is only the native drain proof. Serve must also revoke the
-// borrowed target before the controller collects evidence and removes the runtime.
+// Serve also closes borrowed execution admission before the controller collects
+// evidence and removes the bridge runtime. Sandbox processes are left intact.
 type NativeServer interface {
 	StartTarget(context.Context, target.Executor) (core.ToolEndpoint, error)
 	Stop(context.Context) error

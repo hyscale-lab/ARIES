@@ -13,7 +13,7 @@ The interface is defined in [pkg/runner](../../pkg/runner/interfaces.go).
 | Operation | Contract |
 | --- | --- |
 | `Start(context.Context, Sandbox) (core.ToolEndpoint, error)` | Establish a temporary access grant for the supplied sandbox and return connection details and private evidence locations. Own listeners, credentials, sessions, and helpers created for the grant. |
-| `Stop(context.Context) error` | Revoke the grant, cancel and drain active work, finalize evidence, and remove private credentials. A nil error is positive revocation confirmation; any error prevents evaluation. |
+| `Stop(context.Context) error` | Close admission and bridge-owned connections/handlers, finalize evidence, remove private credentials, and confirm bridge runtime removal. Leave sandbox processes intact. A nil error is positive revocation confirmation; any error prevents evaluation. |
 
 A bridge may consume a narrow capability of its paired sandbox beyond the minimal
 `Sandbox` interface. It must validate that capability before exposing access.
@@ -44,6 +44,9 @@ mechanics; harness dialects own command grammar, workspace translation and refus
 policy. The thin `aries-ssh-client` forwards commands without interpreting them.
 SSH credentials live outside the borrowed target package. Root bridge lifecycle
 code does not import native dialects; wiring supplies their implementations.
+Wiring also supplies client endpoint and file-staging policy once through
+`ClientConfig`; the controller applies it without harness-name branches. Native
+dialects do not duplicate helper paths, known-hosts paths, or endpoint workdir policy.
 
 This boundary permits another protocol server without duplicating the managed
 lifecycle. It does not make the current SSH credential bootstrap or control
@@ -55,33 +58,30 @@ Bridge startup follows sandbox preparation and precedes harness startup. On
 completion, failure, or cancellation, [Runner](../../pkg/runner/runner.go) first
 stops the harness, then revokes the bridge, then evaluates the still-running
 sandbox. Every attempted bridge start is followed by `Stop`, even if startup
-fails after allocating resources. Stop must be idempotent and preserve evidence
-of failures; a timeout or closed listener alone does not prove that active tool
-commands are gone. A confirmed native revocation precedes artifact collection
-and positive removal of the owned runtime. Crashes without a drain/finalization
-acknowledgment block evaluation.
+fails after allocating resources. Stop must be idempotent and preserve actual
+cleanup and evidence failures. A confirmed native revocation precedes artifact
+collection and positive removal of the owned runtime. Missing finalized evidence
+after a child crash remains an error.
 
-The bridge container and the task sandbox have separate process namespaces.
-Removing the bridge does not terminate commands it started inside the sandbox.
-Before granting access, the Docker provider records the sandbox's existing
-processes. After SSH sessions drain, it terminates processes created since that
-baseline, including detached descendants, while preserving benchmark services.
-This [sandbox process cleanup](../../pkg/deployment/docker/sandbox_processes.go)
-must finish before evaluation; the sandbox container itself remains alive.
+Harness completion is authoritative for completed tool calls. Revocation closes
+the harness's access and releases the bridge's listeners, connections, handlers,
+credentials, and runtime. It does not snapshot, classify, or kill sandbox
+processes. The same live sandbox, including its services and background work,
+remains available for benchmark evaluation; its owner removes it afterward.
 
 ```mermaid
 flowchart TB
     H[Stop harness and confirm absence]
-    R[Revoke bridge and drain active work]
+    R[Close bridge access and clean up bridge resources]
     P[Confirm access is revoked]
     E[Evaluate]
     H --> R --> P --> E
 ```
 
-Runner supplies a fresh bounded cleanup context after task cancellation. A bridge
-must cancel its commands and await their termination within that cleanup attempt.
-Unconfirmed execution termination or evidence finalization failures must remain
-visible, so evaluation cannot race ongoing harness work.
+Runner supplies a fresh bounded cleanup context after task cancellation. Existing
+execution cancellation remains part of transport handling; revocation adds no
+sandbox-wide process supervision or process-quiescence proof. Failures to release
+owned bridge resources or finalize evidence remain visible.
 
 ## Evidence and substitution
 
@@ -97,10 +97,10 @@ implementation; no registration or generic plugin layer is needed.
 
 Runtime substitution also requires private archive transfer, control and harness
 addressing, and confirmed removal. A non-Docker runtime fixture exercises these
-contracts without adding another supported deployment method. The current borrowed
-execution contract requires process baseline capture and confirmed process drain;
-an alternative sandbox provider must satisfy that contract or explicitly redesign
-it with equivalent isolation. The launch configuration still carries Docker's
+contracts without adding another supported deployment method. The borrowed
+execution contract requires target identity/ownership validation and streaming
+command execution, without sandbox lifecycle or process-supervision authority.
+The launch configuration still carries Docker's
 sandbox socket option, and shared placement/request types retain the limitations
 documented in [deployment](deployment.md#substitution-and-current-limits).
 

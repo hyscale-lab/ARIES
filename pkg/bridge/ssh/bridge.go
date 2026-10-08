@@ -24,9 +24,8 @@ const (
 	maxRecordedInputBytes = 16 << 20
 	maxToolLogBytes       = 256 << 20
 
-	identityContainerPath = "/run/aries/ssh/id_ed25519"
-	lockedUsername        = "aries"
-	lockedConnectTimeout  = 5 * time.Second
+	lockedUsername       = "aries"
+	lockedConnectTimeout = 5 * time.Second
 )
 
 // Options are the host-local inputs to one SSH bridge.
@@ -187,8 +186,8 @@ func (manager *Manager) StartTarget(ctx context.Context, sandbox target.Executor
 	if err != nil {
 		return fail(fmt.Errorf("parse SSH listener address: %w", err))
 	}
-	// Retain the public host key as evidence. The dialect decides whether the
-	// harness receives a preloaded known-hosts file or pins the key on first use.
+	// Retain the public host key as native evidence. Harness credential locations
+	// and whether to preload this key are supplied to the controller by wiring.
 	knownLine := fmt.Sprintf("[%s]:%s %s", host, port, gossh.MarshalAuthorizedKey(hostSigner.PublicKey()))
 	if err := writeExclusivePrivate(session.knownSource, []byte(knownLine)); err != nil {
 		return fail(fmt.Errorf("write SSH known-hosts file: %w", err))
@@ -219,14 +218,7 @@ func (manager *Manager) StartTarget(ctx context.Context, sandbox target.Executor
 	manager.stopErr = nil
 	address := net.JoinHostPort(host, port)
 	manager.logger.WithContext(ctx).WithFields(logrus.Fields{"address": address, "container": sandbox.ContainerName()}).Info("SSH bridge started")
-	policy := manager.dialect.Policy().Endpoint
-	endpoint := core.ToolEndpoint{Protocol: "ssh", Address: address, Username: lockedUsername, IdentityFile: identityContainerPath, LogPaths: session.logPaths(), ClientCommand: policy.ClientCommand, KnownHostsFile: policy.KnownHostsFile}
-	if policy.UseSandboxWorkdir {
-		endpoint.Workdir = sandbox.Workdir()
-	}
-	if policy.KnownHostsFile != "" {
-		endpoint.KnownHostsSourceFile = session.knownSource
-	}
+	endpoint := core.ToolEndpoint{Protocol: "ssh", Address: address, Username: lockedUsername, Workdir: sandbox.Workdir(), LogPaths: session.logPaths(), KnownHostsSourceFile: session.knownSource}
 	return endpoint, nil
 }
 

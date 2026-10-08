@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/hyscale-lab/aries/pkg/core"
-	"github.com/hyscale-lab/aries/pkg/deployment"
-	"github.com/moby/moby/client"
 	"strings"
+
+	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/moby/moby/client"
 )
 
 func (manager *Manager) BridgeBackend() string { return "docker" }
@@ -31,15 +31,4 @@ func (manager *Manager) ValidateBridgeTarget(ctx context.Context, d core.BridgeT
 		}
 	}
 	return nil
-}
-
-// SnapshotBridgeProcesses records the sandbox baseline before tool access.
-func (manager *Manager) SnapshotBridgeProcesses(ctx context.Context, id string) ([]deployment.ProcessIdentity, error) {
-	return snapshotSandboxProcesses(ctx, manager, id)
-}
-
-// RevokeBridgeProcesses drains new sandbox processes, preserving the live
-// container and its preexisting benchmark processes for independent evaluation.
-func (manager *Manager) RevokeBridgeProcesses(ctx context.Context, id string, baseline []deployment.ProcessIdentity) error {
-	return revokeSandboxProcesses(ctx, manager, id, baseline)
 }

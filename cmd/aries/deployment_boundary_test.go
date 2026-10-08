@@ -12,38 +12,100 @@ import (
 
 // Components consume the same neutral deployment contract. Keeping provider
 // imports here would make adding a provider require rewriting each component.
-func TestHarnessAndSandboxUseNeutralDeploymentBoundary(t *testing.T) {
-	for _, component := range []string{"harness", "sandbox"} {
-		count := 0
+func TestComponentsUseNeutralDeploymentBoundary(t *testing.T) {
+	for _, component := range []string{"harness", "sandbox", "bridge"} {
 		root := filepath.Join("..", "..", "pkg", component)
-		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-				return nil
-			}
-			count++
-			parsed, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
-			if err != nil {
-				return err
-			}
-			for _, spec := range parsed.Imports {
-				imported, err := strconv.Unquote(spec.Path.Value)
-				if err != nil {
-					return err
-				}
+		for path, imports := range productionImports(t, root, true) {
+			for _, imported := range imports {
 				if providerImport(imported) {
 					t.Errorf("%s imports provider implementation %s", path, imported)
 				}
 			}
-			return nil
-		})
-		if err != nil {
-			t.Fatal(err)
 		}
-		if count == 0 {
-			t.Fatalf("no production files inspected for %s", component)
+	}
+}
+
+func productionImports(t *testing.T, root string, recursive bool) map[string][]string {
+	t.Helper()
+	result := make(map[string][]string)
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if !recursive && path != root {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		parsed, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		if err != nil {
+			return err
+		}
+		result[path] = nil
+		for _, spec := range parsed.Imports {
+			imported, err := strconv.Unquote(spec.Path.Value)
+			if err != nil {
+				return err
+			}
+			result[path] = append(result[path], imported)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result) == 0 {
+		t.Fatalf("no production files inspected in %s", root)
+	}
+	return result
+}
+
+func TestBridgeLifecycleEngineAndClientDoNotImportDialects(t *testing.T) {
+	for _, component := range []string{"pkg/bridge", "pkg/bridge/ssh", "pkg/bridge/ssh/client", "cmd/aries-ssh-client"} {
+		root := filepath.Join("..", "..", filepath.FromSlash(component))
+		for path, imports := range productionImports(t, root, false) {
+			for _, imported := range imports {
+				if dialectImport(imported) {
+					t.Errorf("%s imports concrete dialect %s; supply policy through wiring", path, imported)
+				}
+			}
+		}
+	}
+}
+
+func dialectImport(path string) bool {
+	for _, dialect := range []string{"openclaw", "hermes"} {
+		prefix := "github.com/hyscale-lab/aries/pkg/bridge/ssh/" + dialect
+		if path == prefix || strings.HasPrefix(path, prefix+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func TestBridgeBoundaryRecognizesDialectImports(t *testing.T) {
+	for _, path := range []string{
+		"github.com/hyscale-lab/aries/pkg/bridge/ssh/hermes",
+		"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw",
+		"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw/internal/grammar",
+	} {
+		if !dialectImport(path) {
+			t.Fatalf("concrete dialect import accepted: %s", path)
+		}
+	}
+	for _, path := range []string{
+		"github.com/hyscale-lab/aries/pkg/bridge",
+		"github.com/hyscale-lab/aries/pkg/bridge/target",
+		"github.com/hyscale-lab/aries/pkg/bridge/ssh",
+		"github.com/hyscale-lab/aries/pkg/bridge/ssh/client",
+		"github.com/hyscale-lab/aries/pkg/bridge/ssh/credentials",
+	} {
+		if dialectImport(path) {
+			t.Fatalf("shared contract/helper rejected: %s", path)
 		}
 	}
 }

@@ -23,9 +23,10 @@ Follow [Runner interfaces](../pkg/runner/interfaces.go) and [lifecycle](architec
   must not expose secrets through their cause chain.
 - Give each managed bridge occurrence its own runtime and immutable assignment.
   Native tool execution must not call back into Runner or own sandbox lifecycle.
-  Confirm native drain, collect finalized evidence, then confirm runtime removal.
-  A child crash alone never proves revocation. Keep replay inputs private; use
-  Moby for Docker.
+  Close bridge-owned access/handlers, collect finalized evidence, then confirm
+  runtime removal. Harness completion is authoritative for completed tool calls;
+  leave sandbox processes intact for evaluation. Keep replay inputs private;
+  use Moby for Docker.
   Command cancellation must preserve the sandbox needed for evaluation.
 - Preserve benchmark-specific isolation: pinned inputs, sanitized candidate state,
   private test/reference material, and all required verifier checks. Do not change

@@ -175,8 +175,9 @@ bridge artifacts may contain task or model content; review them before sharing.
 - **Terminal-Bench revision mismatch:** move the stale checkout aside, then
   rerun the profile command (or the optional setup prewarm). ARIES never
   deletes it automatically.
-- **SSH timeout:** check host firewall rules and confirm containers can reach
-  the Docker bridge gateway.
+- **SSH timeout:** confirm the harness and bridge containers share the task
+  network and the harness can reach the bridge container's advertised SSH address
+  and port. SSH traffic uses that container address; control uses host loopback.
 - **Suspected leak:** inspect `docker ps -a --filter label=aries.managed=true`
   and `docker network ls --filter label=aries.managed=true`.
 

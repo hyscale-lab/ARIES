@@ -3,14 +3,20 @@ package deployment
 
 import (
 	"context"
+	"errors"
 	"io"
 	"io/fs"
 
 	"github.com/hyscale-lab/aries/pkg/core"
 )
 
+// ErrAllocationUnconfirmed means Create could not establish allocation absence
+// or return an owned runtime identity. Callers must not report successful cleanup
+// when Create returns this error without an identity.
+var ErrAllocationUnconfirmed = errors.New("deployment allocation unconfirmed")
+
 // Deployment is infrastructure shared by harnesses and tool sandboxes, not a Runner component.
-// Create returns an identity even on partial failure when cleanup is required.
+// Create preserves known cleanup identities and reports unresolved allocations.
 // Stop succeeds only after positively confirming absence. Archive operations
 // carry tar modes and ownership to the backend; harness readiness must verify
 // effective runtime permissions. Downloads return runner.ErrNotFound only for a missing
@@ -26,6 +32,9 @@ type Deployment interface {
 // Runtime manages lifecycle, private transfers and runner-facing control addresses.
 // It deliberately does not require sandbox execution capabilities.
 type Runtime interface {
+	// Create returns an owned identity even on partial failure when available.
+	// An empty identity with ErrAllocationUnconfirmed leaves allocation absence
+	// unresolved; other empty-identity failures confirm no allocation to clean up.
 	Create(context.Context, Request) (string, error)
 	// Validate confirms identity, ownership, isolation and absence of supplied
 	// secret values from runtime metadata before exposing the runtime. It must not retain secrets.
@@ -78,14 +87,6 @@ type Request struct {
 type FileInfo struct {
 	Size int64
 	Mode fs.FileMode
-}
-
-// ProcessIdentity identifies a process in a sandbox, not the bridge runtime.
-// StartTime distinguishes a preserved process from a recycled PID; Docker uses
-// Linux /proc stat field 22. Providers own snapshot and termination mechanics.
-type ProcessIdentity struct {
-	PID       uint64
-	StartTime uint64
 }
 
 // TaskEnvironment owns the task attachment beneath the four Runner roles.
