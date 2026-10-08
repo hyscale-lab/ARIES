@@ -80,6 +80,14 @@ type FileInfo struct {
 	Mode fs.FileMode
 }
 
+// ProcessIdentity identifies a process in a sandbox, not the bridge runtime.
+// StartTime distinguishes a preserved process from a recycled PID; Docker uses
+// Linux /proc stat field 22. Providers own snapshot and termination mechanics.
+type ProcessIdentity struct {
+	PID       uint64
+	StartTime uint64
+}
+
 // TaskEnvironment owns the task attachment beneath the four Runner roles.
 // Start may fail after allocation; callers must still call Stop. Stop succeeds
 // only after confirming absence. Each task occurrence requires a fresh owner.

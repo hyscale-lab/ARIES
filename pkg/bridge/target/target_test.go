@@ -6,6 +6,8 @@ import (
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/deployment"
 	"io"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -13,14 +15,17 @@ type backendStub struct {
 	command         core.Command
 	id              string
 	validationErr   error
+	validated       []core.BridgeTarget
 	calls           int
 	snapshotErr     error
+	snapshotCalls   int
 	revokeErr       error
 	revokeCalls     int
 	revokedBaseline []deployment.ProcessIdentity
 }
 
-func (b *backendStub) ValidateBridgeTarget(context.Context, core.BridgeTarget) error {
+func (b *backendStub) ValidateBridgeTarget(_ context.Context, d core.BridgeTarget) error {
+	b.validated = append(b.validated, d)
 	return b.validationErr
 }
 func (b *backendStub) ExecStream(_ context.Context, id string, c core.Command, in io.Reader, out, stderr io.Writer) (core.CommandResult, error) {
@@ -55,29 +60,73 @@ func TestBorrowedPreservesDefaultsAndRejectsInvalidCommands(t *testing.T) {
 	}
 }
 func TestBorrowedRejectsMismatchedIdentityAndOwnership(t *testing.T) {
-	d := validDescriptor()
-	d.ExpectedLabels["aries.task"] = "other"
-	if _, err := New(context.Background(), d, &backendStub{}); err == nil {
-		t.Fatal("cross-task descriptor accepted")
+	for _, backendName := range []string{"docker", "remote-exec"} {
+		d := validDescriptor()
+		d.Backend = backendName
+		d.ExpectedLabels["aries.task"] = "other"
+		backend := &backendStub{}
+		if _, err := New(context.Background(), d, backend); err == nil || len(backend.validated) != 0 {
+			t.Fatalf("cross-task descriptor reached %s backend: %v", backendName, err)
+		}
 	}
-	d = validDescriptor()
+	d := validDescriptor()
 	if _, err := New(context.Background(), d, &backendStub{validationErr: errors.New("wrong immutable runtime")}); err == nil {
 		t.Fatal("failed backend validation accepted")
-	}
-	d = validDescriptor()
-	d.Backend = "unsupported"
-	if err := Validate(d); err == nil {
-		t.Fatal("unsupported backend accepted")
 	}
 }
 
 func (b *backendStub) SnapshotBridgeProcesses(context.Context, string) ([]deployment.ProcessIdentity, error) {
+	b.snapshotCalls++
 	return []deployment.ProcessIdentity{{PID: 1, StartTime: 2}}, b.snapshotErr
 }
 func (b *backendStub) RevokeBridgeProcesses(_ context.Context, _ string, baseline []deployment.ProcessIdentity) error {
 	b.revokeCalls++
 	b.revokedBaseline = append([]deployment.ProcessIdentity(nil), baseline...)
 	return b.revokeErr
+}
+
+func TestBorrowedDelegatesBackendSupportAndResourceIdentity(t *testing.T) {
+	for _, validationErr := range []error{nil, errors.New("resource belongs to a different task")} {
+		name := "accepted"
+		if validationErr != nil {
+			name = "rejected"
+		}
+		t.Run(name, func(t *testing.T) {
+			d := validDescriptor()
+			d.Backend = "remote-exec"
+			backend := &backendStub{validationErr: validationErr}
+			borrowed, err := New(context.Background(), d, backend)
+			if len(backend.validated) != 1 || !reflect.DeepEqual(backend.validated[0], d) {
+				t.Fatalf("provider did not receive the immutable grant: %+v", backend.validated)
+			}
+			if validationErr != nil {
+				if !errors.Is(err, validationErr) || borrowed != nil || backend.snapshotCalls != 0 {
+					t.Fatalf("failed provider validation admitted target: borrowed=%v snapshots=%d err=%v", borrowed, backend.snapshotCalls, err)
+				}
+				return
+			}
+			if err != nil || borrowed == nil || backend.snapshotCalls != 1 {
+				t.Fatalf("valid alternative backend denied: snapshots=%d err=%v", backend.snapshotCalls, err)
+			}
+			backend.validationErr = errors.New("resource identity changed before revocation")
+			if err = borrowed.Revoke(context.Background()); !errors.Is(err, backend.validationErr) || backend.revokeCalls != 0 {
+				t.Fatalf("revocation bypassed provider ownership check: calls=%d err=%v", backend.revokeCalls, err)
+			}
+		})
+	}
+}
+
+func TestBorrowedRejectsMalformedBackendBeforeProviderAdmission(t *testing.T) {
+	for _, name := range []string{"", "../remote", "remote exec", "remote\nexec", strings.Repeat("x", 129)} {
+		t.Run(name, func(t *testing.T) {
+			d := validDescriptor()
+			d.Backend = name
+			backend := &backendStub{}
+			if _, err := New(context.Background(), d, backend); err == nil || len(backend.validated) != 0 {
+				t.Fatalf("invalid backend reached provider: validations=%d err=%v", len(backend.validated), err)
+			}
+		})
+	}
 }
 
 func TestBorrowedRequiresBaselineAndRetriesOriginalRevocation(t *testing.T) {

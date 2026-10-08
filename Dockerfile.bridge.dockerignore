@@ -2,4 +2,3 @@
 !Dockerfile.bridge
 !bin/
 !bin/aries-bridge
-!bin/aries-ssh-client

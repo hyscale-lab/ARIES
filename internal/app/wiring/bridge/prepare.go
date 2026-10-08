@@ -10,7 +10,7 @@ import (
 	"github.com/hyscale-lab/aries/pkg/deployment/docker"
 )
 
-// Prepare builds matched binaries into the selected infrastructure image. It
+// Prepare builds the bridge server into the selected infrastructure image. It
 // stages a closed build context and never accesses the configured model service.
 func Prepare(ctx context.Context, cfg config.Config) error {
 	executable, err := os.Executable()
@@ -22,5 +22,5 @@ func Prepare(ctx context.Context, cfg config.Config) error {
 		return fmt.Errorf("read bridge image recipe: %w", err)
 	}
 	pins := cfg.Versions.Bridge
-	return docker.BuildBridgeImage(ctx, cfg.Bridge.Deployment.Docker.Socket, pins.Image, string(dockerfile), filepath.Join(filepath.Dir(executable), "aries-bridge"), filepath.Join(filepath.Dir(executable), "aries-ssh-client"), map[string]string{"BASE_IMAGE": pins.BaseImage})
+	return docker.BuildBridgeImage(ctx, cfg.Bridge.Deployment.Docker.Socket, pins.Image, string(dockerfile), filepath.Join(filepath.Dir(executable), "aries-bridge"), map[string]string{"BASE_IMAGE": pins.BaseImage})
 }

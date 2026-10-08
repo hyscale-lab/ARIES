@@ -7,13 +7,13 @@ import (
 
 	managed "github.com/hyscale-lab/aries/pkg/bridge"
 	"github.com/hyscale-lab/aries/pkg/config"
-	"github.com/hyscale-lab/aries/pkg/deployment"
 	"github.com/hyscale-lab/aries/pkg/deployment/docker"
 	"github.com/hyscale-lab/aries/pkg/runner"
 	"github.com/sirupsen/logrus"
 )
 
-func newManaged(cfg config.Config, outputRoot string, logger *logrus.Logger) (runner.ToolBridge, error) {
+// New constructs a managed Docker bridge; the child selects the native dialect.
+func New(cfg config.Config, outputRoot string, logger *logrus.Logger) (runner.ToolBridge, error) {
 	if err := cfg.NormalizeDeployment(); err != nil {
 		return nil, err
 	}
@@ -22,7 +22,6 @@ func newManaged(cfg config.Config, outputRoot string, logger *logrus.Logger) (ru
 		return nil, err
 	}
 	runtime, err := docker.New(docker.Options{Socket: cfg.Bridge.Deployment.Docker.Socket, Logger: logger})
-	request := deployment.Request{Image: cfg.Versions.Bridge.Image}
 	if err != nil {
 		return nil, err
 	}
@@ -30,7 +29,7 @@ func newManaged(cfg config.Config, outputRoot string, logger *logrus.Logger) (ru
 	if cfg.Sandbox.Deployment.Docker != nil {
 		socket = cfg.Sandbox.Deployment.Docker.Socket
 	}
-	manager, err := managed.New(managed.Options{Runtime: runtime, Request: request, OutputDir: outputRoot, ClientPath: filepath.Join(filepath.Dir(executable), "aries-ssh-client"), DockerSocket: socket, BridgeType: cfg.Bridge.Type, RetainRawLog: cfg.Bridge.RetainBridgeRawLog()})
+	manager, err := managed.New(managed.Options{Runtime: runtime, Launch: DockerLaunch(cfg.Versions.Bridge.Image, socket), OutputDir: outputRoot, ClientPath: filepath.Join(filepath.Dir(executable), "aries-ssh-client"), BridgeType: cfg.Bridge.Type, RetainRawLog: cfg.Bridge.RetainBridgeRawLog()})
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}

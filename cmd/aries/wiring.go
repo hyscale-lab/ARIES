@@ -158,10 +158,8 @@ func newBridge(cfg config.Config, outputRoot string, logger *logrus.Logger) (run
 		return nil, err
 	}
 	switch cfg.Bridge.Type {
-	case "openclaw-ssh":
-		return bridgewiring.NewOpenClaw(cfg, outputRoot, logger)
-	case "hermes-ssh":
-		return bridgewiring.NewHermes(cfg, outputRoot, logger)
+	case "openclaw-ssh", "hermes-ssh":
+		return bridgewiring.New(cfg, outputRoot, logger)
 	default:
 		return nil, fmt.Errorf("unsupported bridge type %q", cfg.Bridge.Type)
 	}

@@ -65,6 +65,14 @@ errors may be logged as recovered only after that final absence confirmation.
 Network cleanup also confirms absence. Lost allocation responses are recovered
 through generated names and verified ownership before removing anything.
 
+Bridge revocation happens earlier, while the sandbox must remain available for
+evaluation. [Sandbox process cleanup](../../pkg/deployment/docker/sandbox_processes.go)
+records PID/start-time identities before access is granted, then removes newly
+created processes after native sessions stop. It preserves existing benchmark
+processes and refuses to confirm cleanup when termination is uncertain. The
+[live regression](../../pkg/deployment/docker/sandbox_processes_integration_test.go)
+checks detached-process termination, baseline preservation, and repeated cleanup.
+
 The [provider tests](../../pkg/deployment/docker/docker_test.go),
 [allocation recovery tests](../../pkg/deployment/docker/create_recovery_test.go),
 [task environment tests](../../pkg/deployment/docker/environment_test.go), and

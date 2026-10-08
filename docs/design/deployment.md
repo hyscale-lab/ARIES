@@ -89,11 +89,18 @@ A provider must preserve ownership, private access, archive permissions,
 cancellation behavior, error distinctions, and confirmed cleanup. It must also
 support the concrete capabilities required by its consumer; a logical Benchmark
 need not be deployed as a service. ToolBridge controllers own a separate native
-bridge container through the lifecycle/transfer/addressing subset of Deployment.
+bridge runtime through the lifecycle/transfer/addressing subset of Deployment.
+Composition wiring supplies launch settings and runtime/measurement metadata;
+controllers must not infer a deployment method from the sandbox backend or inject
+Docker launch defaults. Docker is currently the only supported composition.
+Backend-specific execution and process cleanup live in the provider package;
+the shared deployment package holds contracts. Docker's sandbox process cleanup
+uses Linux `/proc` identities to preserve the pre-assignment baseline and remove
+detached agent commands before evaluation.
 
 **Current gap against full deployment independence:** the shared request still
-exposes a Docker network field, network aliases, image-declared volume
-policy, and container-oriented resource settings. The
+exposes a Docker network field, a trusted bridge daemon mount, network aliases,
+image-declared volume policy, and container-oriented resource settings. The
 [sandbox adapter](../../pkg/sandbox/sandbox.go) assumes a Linux environment with
 `/bin/sleep`, absolute paths, and numeric UID:GID execution. These are current
 contract constraints, not proof of arbitrary backend portability. Another backend

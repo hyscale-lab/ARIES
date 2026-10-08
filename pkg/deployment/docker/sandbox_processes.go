@@ -1,4 +1,4 @@
-package deployment
+package docker
 
 import (
 	"context"
@@ -9,14 +9,8 @@ import (
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/deployment"
 )
-
-// ProcessIdentity distinguishes a preserved process from a recycled PID in the
-// sandbox's own PID namespace. StartTime is Linux /proc stat field 22.
-type ProcessIdentity struct {
-	PID       uint64
-	StartTime uint64
-}
 
 type processExecutor interface {
 	Exec(context.Context, string, core.Command) (core.CommandResult, error)
@@ -26,7 +20,7 @@ type processExecutor interface {
 // Exclude the current scanner and its ancestors, which are deployment exec
 // wrappers; PID 1 is always preserved and additionally binds the baseline to the
 // original process namespace. Process names may contain spaces and parentheses.
-const bridgeProcessScript = `mode=$1
+const sandboxProcessScript = `mode=$1
 identity() {
  pid=$1
  if ! IFS= read -r stat <"/proc/$pid/stat"; then [ ! -d "/proc/$pid" ] && return 1; exit 125; fi
@@ -94,17 +88,17 @@ $pid $started
 done
 `
 
-// SnapshotBridgeProcesses must precede bridge exposure. A lost snapshot cannot
+// snapshotSandboxProcesses must precede bridge exposure. A lost snapshot cannot
 // be reconstructed after agent execution and is never replaced during retries.
-func SnapshotBridgeProcesses(ctx context.Context, executor processExecutor, id string) ([]ProcessIdentity, error) {
-	result, err := executor.Exec(ctx, id, core.Command{Path: "/bin/sh", Args: []string{"-c", bridgeProcessScript, "aries-process-baseline", "snapshot"}, User: "0:0", Timeout: 30 * time.Second, OutputLimitBytes: 4 << 20})
+func snapshotSandboxProcesses(ctx context.Context, executor processExecutor, id string) ([]deployment.ProcessIdentity, error) {
+	result, err := executor.Exec(ctx, id, core.Command{Path: "/bin/sh", Args: []string{"-c", sandboxProcessScript, "aries-process-baseline", "snapshot"}, User: "0:0", Timeout: 30 * time.Second, OutputLimitBytes: 4 << 20})
 	if err != nil {
 		return nil, fmt.Errorf("snapshot sandbox processes: %w", err)
 	}
 	if result.ExitCode != 0 {
 		return nil, errors.New("snapshot sandbox processes failed")
 	}
-	var identities []ProcessIdentity
+	var identities []deployment.ProcessIdentity
 	seen := map[uint64]bool{}
 	hasInit := false
 	for _, line := range strings.Split(strings.TrimSpace(result.Stdout), "\n") {
@@ -119,7 +113,7 @@ func SnapshotBridgeProcesses(ctx context.Context, executor processExecutor, id s
 		}
 		seen[pid] = true
 		hasInit = hasInit || pid == 1
-		identities = append(identities, ProcessIdentity{pid, start})
+		identities = append(identities, deployment.ProcessIdentity{PID: pid, StartTime: start})
 		if len(identities) > 65536 {
 			return nil, errors.New("sandbox process snapshot exceeds process limit")
 		}
@@ -130,11 +124,11 @@ func SnapshotBridgeProcesses(ctx context.Context, executor processExecutor, id s
 	return identities, nil
 }
 
-// RevokeBridgeProcesses removes every live process created since admission,
+// revokeSandboxProcesses removes every live process created since admission,
 // including setsid/double-fork descendants that escaped individual exec groups.
 // Existing benchmark processes survive. The caller must first close admission
 // and drain native sessions; ctx must bound repeated scans and backend cleanup.
-func RevokeBridgeProcesses(ctx context.Context, executor processExecutor, id string, baseline []ProcessIdentity) error {
+func revokeSandboxProcesses(ctx context.Context, executor processExecutor, id string, baseline []deployment.ProcessIdentity) error {
 	if len(baseline) == 0 || len(baseline) > 65536 {
 		return errors.New("sandbox process baseline is missing or too large")
 	}
@@ -152,7 +146,7 @@ func RevokeBridgeProcesses(ctx context.Context, executor processExecutor, id str
 	if !hasInit {
 		return errors.New("preserved sandbox process baseline has no PID 1")
 	}
-	result, err := executor.Exec(ctx, id, core.Command{Path: "/bin/sh", Args: []string{"-c", bridgeProcessScript, "aries-process-revoke", "drain"}, Stdin: []byte(input.String()), User: "0:0", Timeout: 30 * time.Second, OutputLimitBytes: 1 << 20})
+	result, err := executor.Exec(ctx, id, core.Command{Path: "/bin/sh", Args: []string{"-c", sandboxProcessScript, "aries-process-revoke", "drain"}, Stdin: []byte(input.String()), User: "0:0", Timeout: 30 * time.Second, OutputLimitBytes: 1 << 20})
 	if err != nil {
 		return fmt.Errorf("confirm assignment process termination: %w", err)
 	}
