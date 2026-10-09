@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/hyscale-lab/aries/pkg/core"
@@ -58,6 +59,9 @@ func TestRunEnvironmentOwnsNetworkAndTaskHandlesBorrow(t *testing.T) {
 	}
 	if a.Placement != placement || b.Placement != placement || a.SearchURL != "http://sandbox-a:8123" || b.SearchURL != "http://evaluation-b:8123" {
 		t.Fatal(a, b, placement)
+	}
+	if len(a.MCPServers) != 0 {
+		t.Fatal("a task without MCP services got servers", a.MCPServers)
 	}
 	if err := first.Stop(ctx); err != nil {
 		t.Fatal(err)
@@ -135,5 +139,31 @@ func TestTaskEnvironmentRejectsWrongRunAndInvalidService(t *testing.T) {
 	}
 	if err := e.Stop(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A task's in-sandbox MCP servers are resolved like its search service: the
+// sandbox's own runtime name on the run's network, the declared port and path.
+func TestTaskEnvironmentResolvesTaskMCPServices(t *testing.T) {
+	ctx := context.Background()
+	e := (&Manager{client: &environmentClient{fakeClient: &fakeClient{}}}).NewRunEnvironment("run")
+	if _, err := e.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	gateway := core.TaskMCPService{Name: "toolathlon", Port: 10086, Path: "/sse", Transport: "sse", TimeoutSeconds: 1200}
+	request := deployment.TaskEnvironmentRequest{SandboxRequest: core.SandboxRequest{RunID: "run", TaskID: "task",
+		Environment: core.Environment{Services: core.TaskServices{MCP: []core.TaskMCPService{gateway}}}}, RuntimeName: "sandbox-a"}
+	got, err := e.NewTaskEnvironment().Start(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []core.MCPServerConfig{{Name: "toolathlon", URL: "http://sandbox-a:10086/sse", Transport: "sse", TimeoutSeconds: 1200}}
+	if !reflect.DeepEqual(got.MCPServers, want) {
+		t.Fatalf("MCP servers = %+v, want %+v", got.MCPServers, want)
+	}
+	gateway.Port = 0
+	request.Environment.Services.MCP = []core.TaskMCPService{gateway}
+	if _, err := e.NewTaskEnvironment().Start(ctx, request); err == nil {
+		t.Fatal("accepted a task MCP service without a port")
 	}
 }

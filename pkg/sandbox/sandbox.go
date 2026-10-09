@@ -589,6 +589,11 @@ func validateEnvironment(environment core.Environment) error {
 	if environment.Services.SearchPort < 0 || environment.Services.SearchPort > 65535 {
 		return errors.New("invalid task search service port")
 	}
+	for _, service := range environment.Services.MCP {
+		if service.Name == "" || service.Port <= 0 || service.Port > 65535 || (service.Path != "" && !strings.HasPrefix(service.Path, "/")) {
+			return fmt.Errorf("invalid task MCP service %q", service.Name)
+		}
+	}
 	if err := validatePullImage(environment.Image); err != nil {
 		return fmt.Errorf("invalid sandbox image: %w", err)
 	}

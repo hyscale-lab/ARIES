@@ -226,28 +226,6 @@ func TestExternalOpenAIPreparationReturnsNilRuntime(t *testing.T) {
 	}
 }
 
-// Only a benchmark that serves its tools over MCP adds a server to the
-// harness; another gets only what its profile names.
-func TestHarnessMCPServersAddOnlyToolathlonsGateway(t *testing.T) {
-	docs := core.MCPServerConfig{Name: "docs", URL: "https://docs.example/mcp", Transport: "streamable-http", TimeoutSeconds: 30}
-	cfg := config.Config{
-		Benchmark: config.BenchmarkConfig{Type: "toolathlon"},
-		Harness:   config.HarnessConfig{Type: "hermes", MCPServers: []core.MCPServerConfig{docs}},
-	}
-	if got := harnessMCPServers(cfg); len(got) != 2 || got[0].Name != "toolathlon" || !reflect.DeepEqual(got[1], docs) {
-		t.Fatalf("toolathlon servers = %+v, want the gateway then the profile's", got)
-	}
-	// OpenClaw receives the same list.
-	cfg.Harness.Type = "openclaw"
-	if got := harnessMCPServers(cfg); len(got) != 2 || got[0].Name != "toolathlon" || !reflect.DeepEqual(got[1], docs) {
-		t.Fatalf("openclaw servers = %+v", got)
-	}
-	cfg.Benchmark.Type = "terminalbench2"
-	if got := harnessMCPServers(cfg); !reflect.DeepEqual(got, []core.MCPServerConfig{docs}) {
-		t.Fatalf("terminalbench2 servers = %+v, want the profile's alone", got)
-	}
-}
-
 func TestNewHarnessRejectsInvalidMCPCredentials(t *testing.T) {
 	outputDir := t.TempDir()
 	lookup := func(string) ([]byte, bool) { return []byte("test-key"), true }

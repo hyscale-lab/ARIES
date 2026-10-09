@@ -181,7 +181,8 @@ Toolathlon's own decoupled runner already splits a task the way ARIES does.
 Preparation installs the pinned project tree and the task directory in the
 task image, runs Toolathlon's `container_preprocess`, and starts its
 `container_tool_gateway`: one MCP-over-SSE server in front of every MCP server
-the task declares, which the harness reaches at the sandbox's network alias.
+the task declares. Each task declares it as a sandbox service; the deployment
+resolves its address and the harness adds it as an MCP server.
 For tasks backed by Toolathlon's self-hosted applications, a loopback forwarder
 inside the sandbox carries the applications' fixed ports to the Docker host.
 Before bridge access, preparation archives the grader and ground truth

@@ -7,9 +7,10 @@
 // grader runs inside it again after the agent is gone. This package drives
 // exactly those in-container pieces through the Sandbox capability, and lets
 // the ARIES harness be the agent loop. The gateway is an MCP-over-SSE server
-// on a fixed port; the harness reaches it through the sandbox's fixed
-// `task-sandbox` network alias, the same way Deep Research Bench's SearXNG is
-// reached.
+// on a fixed port, which every task declares as a service of its sandbox
+// (core.TaskServices.MCP); the deployment resolves its address and the
+// harness adds it as an MCP server, the way Deep Research Bench's search
+// service reaches the harness.
 //
 // Two upstream assumptions do not hold in an ARIES sandbox and are handled
 // here rather than by weakening the sandbox:
@@ -111,27 +112,19 @@ const (
 	modelPlaceholderURL = "http://model-not-used-by-aries.invalid/v1"
 )
 
-// GatewayServer is the gateway described as the MCP server a harness
-// connects to: plain HTTP over SSE at the sandbox's alias on the gateway
-// port. The adapter derives it from the profile, so a profile does not
-// spell out an endpoint the adapter already fixes.
-type GatewayServer struct {
-	Name           string
-	URL            string
-	Transport      string
-	TimeoutSeconds int
-}
-
-// Gateway describes the gateway as reached from the harness, where host is
-// the sandbox's network alias and port the gateway port (zero for the
-// default). The gateway speaks no TLS, so the scheme is fixed to http.
-func Gateway(host string, port int) GatewayServer {
+// GatewayService is the gateway as a service of the task's sandbox: plain
+// HTTP over SSE on the gateway port (zero for the default). The deployment
+// resolves its address and the harness registers it as the MCP server named
+// GatewayServerName, so a profile does not spell out an endpoint the adapter
+// already fixes.
+func GatewayService(port int) core.TaskMCPService {
 	if port == 0 {
 		port = DefaultGatewayPort
 	}
-	return GatewayServer{
+	return core.TaskMCPService{
 		Name:           GatewayServerName,
-		URL:            fmt.Sprintf("http://%s/sse", net.JoinHostPort(host, strconv.Itoa(port))),
+		Port:           port,
+		Path:           "/sse",
 		Transport:      "sse",
 		TimeoutSeconds: GatewayCallTimeoutSeconds,
 	}
@@ -497,6 +490,7 @@ func New(options Options) (*Benchmark, error) {
 	// and the loopback forwarder's path to the Docker host both need a
 	// non-internal network, so the policy is fixed rather than configurable.
 	environment.AllowNetwork = true
+	environment.Services.MCP = []core.TaskMCPService{GatewayService(options.GatewayPort)}
 
 	benchmark := &Benchmark{
 		root:             filepath.Clean(options.Root),
@@ -659,6 +653,7 @@ func loadTask(root, id string, environment core.Environment, harnessWebSearch bo
 		Environment: environment,
 	}
 	task.Environment.Env = maps.Clone(environment.Env)
+	task.Environment.Services.MCP = slices.Clone(environment.Services.MCP)
 	task.NoSandboxTools = !sandboxToolsGranted(servers, tools)
 	return task, details, nil
 }

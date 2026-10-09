@@ -1250,3 +1250,34 @@ func TestRunScrubsRedactEnvValuesFromSavedArtifacts(t *testing.T) {
 		t.Fatal("no artifact carries the placeholder")
 	}
 }
+
+// The task's in-sandbox MCP servers, resolved by the deployment, are
+// rendered ahead of the profile's; a clash with a profile server's name
+// fails Start before anything is created.
+func TestStartRendersTheTaskMCPServers(t *testing.T) {
+	fake := newFakeDeployment(t)
+	manager := newTestManager(t, fake, []byte("model-secret"))
+	request := testRequest(t)
+	request.Connectivity.MCPServers = []core.MCPServerConfig{{Name: "toolathlon", URL: "http://sandbox-a:10086/sse", Transport: "sse", TimeoutSeconds: 1200}}
+	if err := manager.Start(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop(context.Background())
+	retained, err := os.ReadFile(filepath.Join(manager.runtime.Options.OutputDir, request.TaskID, "harness", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "  toolathlon:\n    url: \"http://sandbox-a:10086/sse\"\n    transport: \"sse\"\n    timeout: 1200\n"; !strings.Contains(string(retained), want) {
+		t.Fatalf("config.yaml lacks the task's server %q:\n%s", want, retained)
+	}
+
+	clash := newFakeDeployment(t)
+	other := newTestManager(t, clash, []byte("model-secret"))
+	other.options.Common.MCPServers = []core.MCPServerConfig{{Name: "toolathlon", URL: "https://example.invalid/mcp"}}
+	if err := other.Start(context.Background(), request); err == nil || !strings.Contains(err.Error(), "toolathlon") {
+		t.Fatalf("a name clash was accepted: %v", err)
+	}
+	if clash.createCalls != 0 {
+		t.Fatalf("a runtime was created despite the clash: %d", clash.createCalls)
+	}
+}

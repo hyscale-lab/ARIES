@@ -1,11 +1,9 @@
 package benchmark
 
 import (
-	"reflect"
 	"strings"
 	"testing"
 
-	"github.com/hyscale-lab/aries/pkg/benchmark/toolathlon"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
 )
@@ -53,19 +51,5 @@ func TestToolathlonGatewayIsAddedToTheHarness(t *testing.T) {
 				t.Fatalf("err=%v, want %q", err, tc.want)
 			}
 		})
-	}
-
-	gateway := core.MCPServerConfig{Name: "toolathlon", URL: "http://task-sandbox:10086/sse", Transport: "sse", TimeoutSeconds: toolathlon.GatewayCallTimeoutSeconds}
-	if got := ToolathlonMCPServers(base()); !reflect.DeepEqual(got, []core.MCPServerConfig{gateway}) {
-		t.Fatalf("servers = %+v, want the gateway alone", got)
-	}
-	if got := ToolathlonMCPServers(base(docs)); !reflect.DeepEqual(got, []core.MCPServerConfig{gateway, docs}) {
-		t.Fatalf("servers = %+v, want the gateway then the profile's", got)
-	}
-	// A profile that moves the gateway port moves the entry with it.
-	moved := base()
-	moved.Benchmark.Toolathlon = &config.ToolathlonConfig{GatewayPort: 20086}
-	if got := ToolathlonMCPServers(moved); len(got) != 1 || got[0].URL != "http://task-sandbox:20086/sse" {
-		t.Fatalf("moved port: servers = %+v", got)
 	}
 }

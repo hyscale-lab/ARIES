@@ -172,6 +172,10 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	if err := harness.ValidateSearch(request.Connectivity.SearchURL, manager.options.Common.WebSearchEnabled); err != nil {
 		return err
 	}
+	mcpServers, err := harness.MCPServers(request.Connectivity.MCPServers, manager.options.Common.MCPServers)
+	if err != nil {
+		return fmt.Errorf("OpenClaw %w", err)
+	}
 	if request.Timeout < 0 {
 		return errors.New("OpenClaw task timeout must not be negative")
 	}
@@ -201,7 +205,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		}
 	}
 	configuration, err := renderConfig(request.Model, request.Endpoint, manager.options.Common.Mode, request.Connectivity.SearchURL, manager.options.Common.WebSearchEnabled, extractEnabled, manager.options.Common.SubagentsEnabled, manager.options.Common.MaxConcurrentSubagents, MCPOptions{
-		Servers:        manager.options.Common.MCPServers,
+		Servers:        mcpServers,
 		NoSandboxTools: request.NoSandboxTools,
 	})
 	if err != nil {
@@ -228,7 +232,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	if value := credentials.Get("extract"); len(value) != 0 && bytes.Contains(configuration, value) {
 		return errors.New("rendered OpenClaw config contains the extract API-key value")
 	}
-	if err := credentials.LoadMCP(manager.options.Common.MCPServers, configuration, manager.runtime.Options.APIKeyLookup); err != nil {
+	if err := credentials.LoadMCP(mcpServers, configuration, manager.runtime.Options.APIKeyLookup); err != nil {
 		return err
 	}
 	id, err := manager.newID()

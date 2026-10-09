@@ -836,3 +836,37 @@ func TestWriteCredentialsArchiveOverlaysConfigs(t *testing.T) {
 		t.Fatalf("members = %v, want %v", members, want)
 	}
 }
+
+// Every task declares the gateway as a service of its sandbox, on the
+// profile's gateway port, so the deployment can resolve its address.
+func TestTasksDeclareTheGatewayAsASandboxService(t *testing.T) {
+	root := writeFixture(t)
+	for _, port := range []int{0, 20086} {
+		options := baseOptions(t, root)
+		options.TaskIDs = []string{"canvas-list-test", "excel-only"}
+		options.GatewayPort = port
+		benchmark, err := New(options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tasks, err := benchmark.Tasks(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := DefaultGatewayPort
+		if port != 0 {
+			want = port
+		}
+		for _, task := range tasks {
+			services := task.Environment.Services.MCP
+			if len(services) != 1 || services[0].Name != GatewayServerName || services[0].Port != want || services[0].Path != "/sse" ||
+				services[0].Transport != "sse" || services[0].TimeoutSeconds != GatewayCallTimeoutSeconds {
+				t.Fatalf("%s (gateway port %d): services = %+v", task.ID, port, services)
+			}
+		}
+		tasks[0].Environment.Services.MCP[0].Port = 1
+		if tasks[1].Environment.Services.MCP[0].Port == 1 {
+			t.Fatal("tasks share one service list")
+		}
+	}
+}

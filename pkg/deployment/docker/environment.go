@@ -138,12 +138,23 @@ func (e *taskEnvironment) Start(ctx context.Context, request deployment.TaskEnvi
 	if port < 0 || port > 65535 {
 		return core.HarnessConnectivity{}, errors.New("invalid task search service port")
 	}
+	for _, service := range request.Environment.Services.MCP {
+		if service.Port <= 0 || service.Port > 65535 {
+			return core.HarnessConnectivity{}, fmt.Errorf("invalid port for task MCP service %q", service.Name)
+		}
+	}
 	if err := e.owner.validate(ctx); err != nil {
 		return core.HarnessConnectivity{}, err
 	}
 	result := core.HarnessConnectivity{Placement: core.RuntimePlacement{AttachmentID: e.owner.NetworkName()}}
 	if port != 0 {
 		result.SearchURL = fmt.Sprintf("http://%s:%d", request.RuntimeName, port)
+	}
+	for _, service := range request.Environment.Services.MCP {
+		result.MCPServers = append(result.MCPServers, core.MCPServerConfig{
+			Name: service.Name, URL: fmt.Sprintf("http://%s:%d%s", request.RuntimeName, service.Port, service.Path),
+			Transport: service.Transport, TimeoutSeconds: service.TimeoutSeconds,
+		})
 	}
 	return result, nil
 }

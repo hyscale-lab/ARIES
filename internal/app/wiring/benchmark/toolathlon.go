@@ -6,11 +6,7 @@ import (
 
 	"github.com/hyscale-lab/aries/pkg/benchmark/toolathlon"
 	"github.com/hyscale-lab/aries/pkg/config"
-	"github.com/hyscale-lab/aries/pkg/core"
 )
-
-// taskSandboxAlias is the sandbox's name on its task network.
-const taskSandboxAlias = "task-sandbox"
 
 // NewToolathlon constructs the benchmark for preparation or execution.
 func NewToolathlon(cfg config.Config, outputRoot string, taskIDs, executionIDs []string, lookup func(string) ([]byte, bool)) (*toolathlon.Benchmark, error) {
@@ -24,9 +20,10 @@ func SetupToolathlon(ctx context.Context, cfg config.Config) error {
 
 // ValidateToolathlon checks the components a Toolathlon profile needs.
 // Toolathlon's tools reach the harness only as an MCP server; both
-// harnesses have an MCP client. The gateway itself is added to their MCP
-// servers by ToolathlonMCPServers, so a profile's own harness.mcp_servers
-// entries are extra servers and may not take its name.
+// harnesses have an MCP client. The gateway itself is a service of each
+// task's sandbox that the harness adds to its MCP servers when it starts,
+// so a profile's own harness.mcp_servers entries are extra servers and may
+// not take its name.
 func ValidateToolathlon(cfg config.Config) error {
 	if cfg.Harness.Type != "hermes" && cfg.Harness.Type != "openclaw" {
 		return fmt.Errorf("benchmark type \"toolathlon\" requires a harness with an MCP client (hermes or openclaw), not %q", cfg.Harness.Type)
@@ -37,25 +34,6 @@ func ValidateToolathlon(cfg config.Config) error {
 		}
 	}
 	return nil
-}
-
-// ToolathlonMCPServers is the harness's MCP server list for a Toolathlon
-// profile: the gateway the adapter starts, at the sandbox's alias on the
-// gateway port, then the profile's harness.mcp_servers entries.
-func ToolathlonMCPServers(cfg config.Config) []core.MCPServerConfig {
-	gateway := toolathlon.Gateway(taskSandboxAlias, toolathlonGatewayPort(cfg))
-	out := make([]core.MCPServerConfig, 0, len(cfg.Harness.MCPServers)+1)
-	out = append(out, core.MCPServerConfig{Name: gateway.Name, URL: gateway.URL, Transport: gateway.Transport, TimeoutSeconds: gateway.TimeoutSeconds})
-	return append(out, cfg.Harness.MCPServers...)
-}
-
-// toolathlonGatewayPort is the port the adapter will start the gateway on
-// for this profile.
-func toolathlonGatewayPort(cfg config.Config) int {
-	if settings := cfg.Benchmark.Toolathlon; settings != nil && settings.GatewayPort != 0 {
-		return settings.GatewayPort
-	}
-	return toolathlon.DefaultGatewayPort
 }
 
 // toolathlonOptions maps the profile onto the adapter. The model ID is

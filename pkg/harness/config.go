@@ -138,3 +138,26 @@ func safeIdentifierChars(value string) bool {
 	}
 	return true
 }
+
+// MCPServers is the server list a harness renders for one occurrence: the
+// task's own in-sandbox servers, at the addresses the deployment resolved
+// (core.HarnessConnectivity.MCPServers), then the profile's. A task server
+// may not take a profile server's name.
+func MCPServers(task, profile []core.MCPServerConfig) ([]core.MCPServerConfig, error) {
+	names := make(map[string]bool, len(task)+len(profile))
+	for _, server := range profile {
+		names[server.Name] = true
+	}
+	out := make([]core.MCPServerConfig, 0, len(task)+len(profile))
+	for _, server := range task {
+		if err := core.ValidateMCPServer(server); err != nil {
+			return nil, fmt.Errorf("task MCP server: %w", err)
+		}
+		if names[server.Name] {
+			return nil, fmt.Errorf("task MCP server %q has the name of another MCP server", server.Name)
+		}
+		names[server.Name] = true
+		out = append(out, server)
+	}
+	return append(out, profile...), nil
+}

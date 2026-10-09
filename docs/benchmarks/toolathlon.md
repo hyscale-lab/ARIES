@@ -21,9 +21,10 @@ pieces through the sandbox and leaves the agent loop to the ARIES harness.
   starts Toolathlon's `container_tool_gateway`, an MCP-over-SSE server on a
   fixed port. Every MCP server the task declares, plus Toolathlon's own
   `claim_done`, is one tool behind that gateway.
-- **The harness** reaches the gateway at `http://task-sandbox:<port>/sse`,
-  the sandbox's fixed network alias. The adapter adds that endpoint to the
-  harness's MCP client itself, as the server named `toolathlon`, so the
+- **The harness** reaches the gateway as the MCP server named `toolathlon`.
+  Every task declares the gateway as a service of its sandbox (SSE at `/sse`
+  on the gateway port); the deployment resolves its address on the run's
+  network, and the harness adds it to its MCP client when it starts, so the
   profile names no server for it (which MCP servers a task needs is the
   task's business, and they all sit behind the one gateway). Both harnesses
   have an MCP client: Hermes renders the entry under its `mcp_servers`,
@@ -319,8 +320,8 @@ Tasks with neither run at any concurrency. Isolating application state per
 occurrence would need one deployment per sandbox (Toolathlon's instance
 prefixes) and per-occurrence ports, which the adapter does not manage.
 
-The gateway needs no `harness.mcp_servers` entry: the adapter registers it
-with the harness as `toolathlon` (SSE at `task-sandbox` on `gateway_port`,
+The gateway needs no `harness.mcp_servers` entry: every task declares it as a
+sandbox service the harness registers as `toolathlon` (SSE on `gateway_port`,
 with a per-call timeout above every backend timeout in Toolathlon's own
 server configuration files, so Toolathlon's timeouts are the ones that fire).
 Entries

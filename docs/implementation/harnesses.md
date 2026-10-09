@@ -192,6 +192,12 @@ Harnesses manage `MCP` execution and network boundaries as follows:
 - **OpenClaw**: Configures `MCP` servers in the rendered `openclaw.json` under `mcp.servers`. In `sandboxed` execution, `MCP` tool access is gated by appending `"bundle-mcp"` to `tools.sandbox.tools.alsoAllow`.
 - **Hermes**: Renders configured `MCP` servers into `config.yaml` under `mcp_servers`, enabling in-container agent discovery and invocation.
 
+A benchmark can also serve MCP servers from inside the sandbox: it declares
+them in `core.TaskServices.MCP` (Toolathlon's gateway), the deployment resolves
+their addresses for the sandbox's placement into `HarnessConnectivity.MCPServers`,
+and each harness puts them ahead of the profile's servers when it starts
+(`harness.MCPServers`, which refuses a name used twice).
+
 MCP tools do not automatically pass through the SSH ToolBridge or inherit
 task-sandbox isolation.
 

@@ -54,3 +54,25 @@ func TestValidateModelRequiresHostname(t *testing.T) {
 		}
 	}
 }
+
+// The task's in-sandbox servers come first; a name clash with the profile's
+// servers, or with another task server, is refused.
+func TestMCPServersPutsTheTaskServersFirst(t *testing.T) {
+	gateway := core.MCPServerConfig{Name: "toolathlon", URL: "http://sandbox-a:10086/sse", Transport: "sse", TimeoutSeconds: 1200}
+	docs := core.MCPServerConfig{Name: "docs", URL: "https://docs.example/mcp"}
+	got, err := MCPServers([]core.MCPServerConfig{gateway}, []core.MCPServerConfig{docs})
+	if err != nil || len(got) != 2 || got[0].Name != "toolathlon" || got[1].Name != "docs" {
+		t.Fatalf("servers = %+v, err = %v", got, err)
+	}
+	if got, err := MCPServers(nil, []core.MCPServerConfig{docs}); err != nil || len(got) != 1 {
+		t.Fatalf("profile only: %+v, %v", got, err)
+	}
+	clash := docs
+	clash.Name = "toolathlon"
+	if _, err := MCPServers([]core.MCPServerConfig{gateway}, []core.MCPServerConfig{clash}); err == nil {
+		t.Fatal("accepted a task server with a profile server's name")
+	}
+	if _, err := MCPServers([]core.MCPServerConfig{gateway, gateway}, nil); err == nil {
+		t.Fatal("accepted two task servers with one name")
+	}
+}
