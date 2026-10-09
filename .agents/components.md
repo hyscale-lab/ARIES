@@ -6,8 +6,8 @@ Follow [Runner interfaces](../pkg/runner/interfaces.go) and [lifecycle](architec
 | --- | --- |
 | Benchmark | Own tasks, sanitization, private verifier, and independent evaluation. |
 | AgentHarness | Own the agent runtime, model interaction, and private evidence; retain distinct telemetry entries. |
-| ToolSandbox | Keep the task environment alive through evaluation. |
-| ToolBridge | Grant temporary access to one exact sandbox; confirm revocation. |
+| ToolSandbox | Create the task environment for its owning bridge and keep it available through evaluation. |
+| ToolBridge | Own the sandbox lifecycle through the composed ToolSandbox; grant temporary access to that exact sandbox; confirm revocation. |
 
 - Keep implementations independent; a paired bridge may consume a narrow sandbox
   capability. Pair Hermes/OpenClaw with their corresponding SSH bridges.
@@ -19,6 +19,12 @@ Follow [Runner interfaces](../pkg/runner/interfaces.go) and [lifecycle](architec
   failed removal; Run snapshots survive Stop, which prevents new admission.
   Keep native defaults and credential fallback policies intact; redacted errors
   must not expose secrets through their cause chain.
+- Bridge sandbox lifecycle is `persistent` or `checkpoint`. Persistent mode passes
+  the owned sandbox through unchanged. Checkpoint mode suspends the sandbox
+  whenever access is granted and no operation is active, restores it before each
+  operation, never resumes from an older checkpoint, drains pending checkpoints
+  before confirming revocation, records every checkpoint and restore, and rejects
+  tasks whose services or GPUs cannot be suspended before allocation.
 - Revoke bridges only after draining sessions, commands, and evidence. Keep replay
   inputs private. Use Moby for Docker; remove runtimes before their attachments.
   Command cancellation must preserve the sandbox needed for evaluation.

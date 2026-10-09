@@ -37,6 +37,7 @@ var (
 	_ runner.Sandbox           = (*Sandbox)(nil)
 	_ runner.LimitedDownloader = (*Sandbox)(nil)
 	_ runner.StreamExecutor    = (*Sandbox)(nil)
+	_ runner.Checkpointer      = (*Sandbox)(nil)
 )
 
 // Options configures benchmark policy and the shared runtime deployment.
@@ -79,6 +80,13 @@ type Sandbox struct {
 	cleanupTimeout time.Duration
 	runID          string
 	taskID         string
+
+	// checkpointMu serializes checkpoint and restore. checkpoint names the
+	// only checkpoint that may resume the task; it is empty whenever the
+	// latest checkpoint attempt was not confirmed.
+	checkpointMu       sync.Mutex
+	checkpoint         string
+	checkpointSequence int
 
 	mu             sync.Mutex
 	containerOwned bool
@@ -454,6 +462,71 @@ func (s *Sandbox) download(ctx context.Context, source, destination string, maxB
 	}
 	if err := os.Rename(temporaryName, destination); err != nil {
 		return fmt.Errorf("publish deployment download: %w", err)
+	}
+	return nil
+}
+
+// Checkpoint saves the task container's state and stops it. On failure the
+// container may be left stopped, but no older checkpoint can resume it.
+func (s *Sandbox) Checkpoint(ctx context.Context) error {
+	checkpointer, ok := s.deployment.(deployment.Checkpointer)
+	if !ok {
+		return errors.New("sandbox deployment does not support checkpoints")
+	}
+	s.checkpointMu.Lock()
+	defer s.checkpointMu.Unlock()
+	previous := s.checkpoint
+	s.checkpoint = ""
+	s.checkpointSequence++
+	name := fmt.Sprintf("aries-%d", s.checkpointSequence)
+	if err := checkpointer.Checkpoint(ctx, s.containerID, name); err != nil {
+		return fmt.Errorf("checkpoint task container: %w", err)
+	}
+	running, err := s.deployment.Running(ctx, s.containerID)
+	if err != nil {
+		return fmt.Errorf("confirm task container checkpoint: %w", err)
+	}
+	if running {
+		return errors.New("task container is still running after checkpoint")
+	}
+	s.checkpoint = name
+	if previous != "" {
+		// Container removal reclaims a checkpoint whose deletion fails.
+		if err := checkpointer.DeleteCheckpoint(ctx, s.containerID, previous); err != nil {
+			s.owner.logger.WithContext(ctx).WithError(err).WithField("checkpoint", previous).Warn("superseded task checkpoint not deleted")
+		}
+	}
+	return nil
+}
+
+// Restore resumes the task container from its latest confirmed checkpoint.
+// A running container is left unchanged.
+func (s *Sandbox) Restore(ctx context.Context) error {
+	checkpointer, ok := s.deployment.(deployment.Checkpointer)
+	if !ok {
+		return errors.New("sandbox deployment does not support checkpoints")
+	}
+	s.checkpointMu.Lock()
+	defer s.checkpointMu.Unlock()
+	running, err := s.deployment.Running(ctx, s.containerID)
+	if err != nil {
+		return fmt.Errorf("inspect task container before restore: %w", err)
+	}
+	if running {
+		return nil
+	}
+	if s.checkpoint == "" {
+		return errors.New("task container is stopped without a confirmed checkpoint")
+	}
+	if err := checkpointer.Restore(ctx, s.containerID, s.checkpoint); err != nil {
+		return fmt.Errorf("restore task container: %w", err)
+	}
+	running, err = s.deployment.Running(ctx, s.containerID)
+	if err != nil {
+		return fmt.Errorf("confirm task container restore: %w", err)
+	}
+	if !running {
+		return errors.New("task container is not running after restore")
 	}
 	return nil
 }

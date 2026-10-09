@@ -399,6 +399,10 @@ type BridgeConfig struct {
 	// raw wire commands, request payloads, and binary stdin; profiles that need
 	// that forensic record must opt in by setting it true.
 	RetainRawLog *bool `json:"retain_raw_log,omitempty"`
+	// SandboxLifecycle selects whether the bridge keeps the task sandbox
+	// running ("persistent", the default) or checkpoints it after each tool
+	// call and restores it before the next ("checkpoint").
+	SandboxLifecycle string `json:"sandbox_lifecycle,omitempty"`
 }
 
 // RetainBridgeRawLog reports whether ssh_raw.log should be written, defaulting

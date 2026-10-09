@@ -209,15 +209,47 @@ func (f *fakeSandbox) Upload(context.Context, string, string) error { return nil
 
 func (f *fakeSandbox) Download(context.Context, string, string) error { return nil }
 
+// fakeBridge owns its sandbox through the composed fakeToolSandbox, as the
+// real bridge does, so the sandbox calls keep their own log names.
 type fakeBridge struct {
 	mu         sync.Mutex
 	log        *callLog
+	sandbox    *fakeToolSandbox
+	live       Sandbox
+	openErr    error
 	startErr   error
 	stopErrors []error
 	stops      int
 }
 
-func (f *fakeBridge) Start(ctx context.Context, _ Sandbox) (core.ToolEndpoint, error) {
+func (f *fakeBridge) Open(ctx context.Context, request core.SandboxRequest) (Sandbox, error) {
+	live, err := f.sandbox.Start(ctx, request)
+	f.mu.Lock()
+	f.live = live
+	f.mu.Unlock()
+	if err == nil {
+		err = f.openErr
+	}
+	return live, err
+}
+
+func (f *fakeBridge) Close(ctx context.Context) error {
+	f.mu.Lock()
+	live := f.live
+	f.mu.Unlock()
+	if live == nil {
+		return nil
+	}
+	if err := f.sandbox.Stop(ctx, live); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	f.live = nil
+	f.mu.Unlock()
+	return nil
+}
+
+func (f *fakeBridge) Start(ctx context.Context) (core.ToolEndpoint, error) {
 	f.log.add("bridge.start", ctx)
 	if err := ctx.Err(); err != nil {
 		f.log.addRollback("bridge.rollback", ctx)
@@ -333,9 +365,9 @@ func newRig(t *testing.T, tasks int) *rig {
 	sandbox := &fakeSandbox{}
 	benchmark := &fakeBenchmark{log: log, tasks: taskList, evaluation: core.Evaluation{Reward: 1}}
 	factory := &fakeToolSandbox{log: log, sandbox: sandbox}
-	bridge := &fakeBridge{log: log}
+	bridge := &fakeBridge{log: log, sandbox: factory}
 	harness := &fakeHarness{log: log}
-	runner, err := New(benchmark, harness, factory, bridge, Options{
+	runner, err := New(benchmark, harness, bridge, Options{
 		Name:           "test",
 		RunID:          "test-run",
 		OutputDir:      "runs",
@@ -456,7 +488,7 @@ func TestNewClonesRuntimeOverridePointers(t *testing.T) {
 		AgentSandboxResources: ResourceOverrides{MemoryMB: &memory},
 		AgentTimeout:          &timeout,
 	}
-	created, err := New(rig.benchmark, rig.harness, rig.factory, rig.bridge, Options{RunID: "clone", RuntimeOverrides: overrides})
+	created, err := New(rig.benchmark, rig.harness, rig.bridge, Options{RunID: "clone", RuntimeOverrides: overrides})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -846,6 +878,23 @@ func TestRunnerStopsBridgeAfterFailedStartBeforeCleaningSandbox(t *testing.T) {
 	}
 }
 
+func TestRunnerClosesSandboxAfterOpenFailsWithAllocation(t *testing.T) {
+	rig := newRig(t, 1)
+	rig.bridge.openErr = errInjected
+
+	result, err := rig.runner.Run(context.Background())
+	if !errors.Is(err, errInjected) {
+		t.Fatalf("Run() error = %v, want open failure", err)
+	}
+	wantCalls := []string{"benchmark.tasks", "sandbox.start", "sandbox.stop"}
+	if got := rig.log.snapshot(); !reflect.DeepEqual(got, wantCalls) {
+		t.Fatalf("calls = %v, want %v", got, wantCalls)
+	}
+	if result.Tasks[0].Evaluation.Status != core.StatusNotRun || result.Tasks[0].Cleanup.Status != core.StatusSucceeded {
+		t.Fatalf("task = %#v, want no evaluation and confirmed sandbox removal", result.Tasks[0])
+	}
+}
+
 func TestRunnerBlocksEvaluationWhenFailedHarnessStartCannotBeStopped(t *testing.T) {
 	rig := newRig(t, 1)
 	startErr := errors.New("harness start failed")
@@ -920,17 +969,15 @@ func TestNewRejectsMissingRoles(t *testing.T) {
 		name      string
 		benchmark Benchmark
 		harness   AgentHarness
-		sandbox   ToolSandbox
 		bridge    ToolBridge
 	}{
-		{"benchmark", nil, rig.harness, rig.factory, rig.bridge},
-		{"harness", rig.benchmark, nil, rig.factory, rig.bridge},
-		{"sandbox", rig.benchmark, rig.harness, nil, rig.bridge},
-		{"bridge", rig.benchmark, rig.harness, rig.factory, nil},
+		{"benchmark", nil, rig.harness, rig.bridge},
+		{"harness", rig.benchmark, nil, rig.bridge},
+		{"bridge", rig.benchmark, rig.harness, nil},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := New(test.benchmark, test.harness, test.sandbox, test.bridge, Options{}); err == nil {
+			if _, err := New(test.benchmark, test.harness, test.bridge, Options{}); err == nil {
 				t.Fatal("New() error = nil")
 			}
 		})
@@ -939,7 +986,7 @@ func TestNewRejectsMissingRoles(t *testing.T) {
 
 func TestNewRejectsMissingRunID(t *testing.T) {
 	rig := newRig(t, 0)
-	if _, err := New(rig.benchmark, rig.harness, rig.factory, rig.bridge, Options{}); err == nil || !strings.Contains(err.Error(), "run ID") {
+	if _, err := New(rig.benchmark, rig.harness, rig.bridge, Options{}); err == nil || !strings.Contains(err.Error(), "run ID") {
 		t.Fatalf("New() error = %v, want missing run ID", err)
 	}
 }

@@ -28,8 +28,8 @@ type AgentHarness interface {
 	Stop(context.Context) error
 }
 
-// ToolSandbox owns the lifecycle of the live environment later inspected by
-// evaluation.
+// ToolSandbox creates and removes the live environment later inspected by
+// evaluation. The ToolBridge that exposes the environment owns its lifecycle.
 type ToolSandbox interface {
 	Start(context.Context, core.SandboxRequest) (Sandbox, error)
 	Stop(context.Context, Sandbox) error
@@ -57,9 +57,24 @@ type StreamExecutor interface {
 	ExecStream(ctx context.Context, command core.Command, stdin io.Reader, stdout, stderr io.Writer) (core.CommandResult, error)
 }
 
-// ToolBridge grants and then positively revokes harness access to a sandbox.
-// A nil Stop error is the positive revocation confirmation.
+// Checkpointer is an optional sandbox capability that saves the live
+// environment's process and filesystem state, stops it, and later restores it
+// in place. Restore is a no-op for a running environment and fails rather than
+// resuming from an older state.
+type Checkpointer interface {
+	Checkpoint(context.Context) error
+	Restore(context.Context) error
+}
+
+// ToolBridge owns the task sandbox through its composed ToolSandbox, grants
+// the harness temporary access to it, and positively revokes that access.
+// Open creates the sandbox for preparation; Start grants access; a nil Stop
+// error is the positive revocation confirmation and leaves the sandbox live
+// for evaluation; Close removes the sandbox and a nil error confirms absence.
+// Every Open attempt must be followed by Close, and every Start attempt by Stop.
 type ToolBridge interface {
-	Start(context.Context, Sandbox) (core.ToolEndpoint, error)
+	Open(context.Context, core.SandboxRequest) (Sandbox, error)
+	Start(context.Context) (core.ToolEndpoint, error)
 	Stop(context.Context) error
+	Close(context.Context) error
 }

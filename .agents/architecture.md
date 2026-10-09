@@ -9,6 +9,7 @@
 | Shared data | `pkg/core` |
 | Model settings and shared Chat Completions transport | `pkg/model` |
 | Concrete components | `pkg/{benchmark,harness,bridge,sandbox}` |
+| Bridge sandbox ownership and checkpoint lifecycle | `pkg/bridge/lifecycle` |
 | Deployment contract and providers | `pkg/deployment` |
 
 - `cmd` injects `app.Wiring`; `internal/app` must not import its wiring packages.
@@ -21,9 +22,9 @@
 
 ## Task lifecycle
 
-Load → start sandbox → sanitize → start bridge → start/run harness → confirm
-harness stop → confirm bridge revocation → evaluate live sandbox → remove
-sandbox → remove task attachment.
+Load → bridge opens sandbox → sanitize → bridge grants access → start/run
+harness → confirm harness stop → confirm bridge revocation → evaluate live
+sandbox → bridge removes sandbox → remove task attachment.
 
 Each admitted occurrence gets fresh owners, even for repeated task IDs. Drain
 admitted work through cleanup using fresh bounded contexts after cancellation.

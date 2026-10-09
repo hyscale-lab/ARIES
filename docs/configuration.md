@@ -20,7 +20,7 @@ fields from your chosen profile.
 | `benchmark` | Benchmark type, checkout root, selected task occurrences, and supported evaluator options. |
 | `harness` | Agent implementation, mode, placement, and optional tool/model settings. |
 | `sandbox.deployment` | Task runtime placement. |
-| `bridge` | Paired tool adapter, embedded mode, and optional raw evidence retention. |
+| `bridge` | Paired tool adapter, embedded mode, sandbox lifecycle, and optional raw evidence retention. |
 | `runtime` | Model service backend and external/managed ownership. |
 | `model` | Served model ID, endpoint, and credential environment-variable name. |
 | `execution` | Concurrency, looping, or arrival schedule. |
@@ -722,6 +722,13 @@ Changing the main agent's generation settings does not change FACT requests.
   [research benchmark guide](benchmarks/deep-research-bench.md#web-search-and-fetch).
 - `harness.mcp_servers`: see [MCP configuration and boundaries](implementation/harnesses.md#model-context-protocol-mcp).
 - `harness.voice_transcribe`: see the [voice guide](voice_mode.md).
+- `bridge.sandbox_lifecycle`: `persistent` (default) keeps the task sandbox
+  running for the whole task. `checkpoint` has the bridge checkpoint the sandbox
+  with CRIU whenever no tool call is active and restore it before the next one.
+  It requires `sandbox.deployment.backend: "docker"` on a daemon with
+  experimental features and CRIU, and rejects tasks that serve the harness
+  directly (Deep Research Bench search) or request GPUs. See
+  [sandbox lifecycle modes](design/bridge.md#sandbox-lifecycle-modes).
 - `bridge.retain_raw_log`: defaults to false. Enabling it retains sensitive,
   replayable SSH input; see [run artifacts](run-results.md#bridge-evidence).
 

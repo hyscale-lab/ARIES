@@ -12,7 +12,7 @@ func TestDeploymentNormalization(t *testing.T) {
 		if err := cfg.NormalizeDeployment(); err != nil {
 			t.Fatal(err)
 		}
-		if cfg.Harness.Deployment.Backend != "docker" || cfg.Sandbox.Deployment.Docker.Socket != "/var/run/docker.sock" || cfg.Bridge.Mode != "embedded" || cfg.Sandbox.Type != "" {
+		if cfg.Harness.Deployment.Backend != "docker" || cfg.Sandbox.Deployment.Docker.Socket != "/var/run/docker.sock" || cfg.Bridge.Mode != "embedded" || cfg.Bridge.SandboxLifecycle != "persistent" || cfg.Sandbox.Type != "" {
 			t.Fatalf("normalization: %#v", cfg)
 		}
 		before := cfg
@@ -67,6 +67,29 @@ func TestDeploymentDecodeAndValidation(t *testing.T) {
 			}
 			if tc.name == "independent Kubernetes" && (cfg.Harness.Deployment.Kubernetes.RuntimeClassName != "kata" || cfg.Sandbox.Deployment.Backend != "docker") {
 				t.Fatalf("independent settings lost: %#v", cfg)
+			}
+		})
+	}
+}
+
+func TestBridgeSandboxLifecycle(t *testing.T) {
+	for _, tc := range []struct{ lifecycle, sandboxBackend, want string }{
+		{"persistent", "docker", ""},
+		{"checkpoint", "docker", ""},
+		{"checkpoint", "kubernetes", "requires sandbox.deployment.backend docker"},
+		{"restore", "docker", "bridge.sandbox_lifecycle"},
+	} {
+		t.Run(tc.lifecycle+"/"+tc.sandboxBackend, func(t *testing.T) {
+			cfg := Config{Sandbox: SandboxConfig{Deployment: DeploymentConfig{Backend: tc.sandboxBackend}}, Bridge: BridgeConfig{SandboxLifecycle: tc.lifecycle}}
+			err := cfg.NormalizeDeployment()
+			if tc.want == "" {
+				if err != nil || cfg.Bridge.SandboxLifecycle != tc.lifecycle {
+					t.Fatalf("NormalizeDeployment() = %v, lifecycle %q", err, cfg.Bridge.SandboxLifecycle)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("NormalizeDeployment() error = %v, want %q", err, tc.want)
 			}
 		})
 	}

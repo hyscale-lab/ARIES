@@ -21,7 +21,7 @@ This page summarizes capabilities and limitations. Use the
 | Benchmark | **SWE-Atlas QA** — codebase Q&A with host-side rubric grading; grading can be disabled; only the QA track is implemented | [Benchmark guide](benchmarks/swe-atlas-qa.md) |
 | Benchmark | **SWE-bench Pro** — public issue-resolution split with pinned task scripts and parser | [Benchmark guide](benchmarks/swe-bench-pro.md) |
 | Tool sandbox and deployment | **Docker** — local containers managed through the Moby Go SDK | [Deployment configuration](configuration.md#deployment-configuration), [Docker implementation](implementation/docker.md) |
-| Tool bridge | **OpenClaw SSH** and **Hermes SSH** — embedded, harness-specific adapters | [SSH bridge implementation](implementation/ssh-bridges.md) |
+| Tool bridge | **OpenClaw SSH** and **Hermes SSH** — embedded, harness-specific adapters that own the task sandbox; `persistent` or per-tool-call `checkpoint` sandbox lifecycle | [SSH bridge implementation](implementation/ssh-bridges.md), [sandbox lifecycle modes](design/bridge.md#sandbox-lifecycle-modes) |
 | Model service | **DeepSeek** — external endpoint | [Model backends](configuration.md#model-backends) |
 | Model service | **SGLang** — external endpoint or one ARIES-managed host process per run | [Model backends](configuration.md#model-backends) |
 | Model service | **OpenAI-compatible server** — external only, including vLLM, llama.cpp, gateways, and hosted endpoints | [Model backends](configuration.md#model-backends) |
@@ -42,6 +42,9 @@ guides above.
   before execution. Hermes requires `/bin/bash` in the task image; its bridge
   rejects Hermes's private `~/.hermes` file synchronization. OpenClaw requires
   `bin/aries-ssh` beside `bin/aries`.
+- Checkpoint sandbox lifecycle needs Docker experimental mode and CRIU on the
+  host, and cannot run Deep Research Bench tasks with their search service or GPU
+  tasks. It has unit coverage only; no CRIU-backed integration run is recorded.
 - Realtime mode is OpenClaw-only and needs a separate TTS credential. See the
   [realtime setup](configuration.md#realtime-openclaw-mode).
 - External model servers are operated separately from ARIES. ARIES does not

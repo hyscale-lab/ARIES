@@ -37,7 +37,9 @@ type Wiring struct {
 	NewBenchmark         func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error)
 	NewHarness           func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error)
 	NewSandbox           func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error)
-	NewBridge            func(config.Config, string, func(context.Context) (core.BridgeListen, error), *logrus.Logger) (runner.ToolBridge, error)
+	// NewBridge composes the bridge with the occurrence's tool sandbox, whose
+	// task lifecycle the bridge then owns.
+	NewBridge func(config.Config, string, SandboxInstance, *logrus.Logger) (runner.ToolBridge, error)
 }
 
 type Dependencies struct {
@@ -323,11 +325,11 @@ func buildTaskExperiment(cfg config.Config, model core.ModelConfig, effectiveGPU
 	if err != nil {
 		return nil, errors.Join(err, closeOccurrenceClients(nil, harness.Close))
 	}
-	bridge, err := wiring.NewBridge(cfg, outputRoot, sandbox.BridgeListen, logger)
+	bridge, err := wiring.NewBridge(cfg, outputRoot, sandbox, logger)
 	if err != nil {
 		return nil, errors.Join(err, sandbox.Resources.Close(), closeOccurrenceClients(sandbox.Close, harness.Close))
 	}
-	benchmarkRunner, err := runner.New(benchmark, harness.Harness, sandbox.Sandbox, bridge, runner.Options{
+	benchmarkRunner, err := runner.New(benchmark, harness.Harness, bridge, runner.Options{
 		Name: cfg.Name, RunID: runID, OutputDir: outputRoot, Model: model, Logger: logger,
 		RuntimeOverrides: runner.RuntimeOverrides{
 			HarnessResources:      runner.ResourceOverrides{CPU: cfg.Overrides.HarnessResources.CPU, MemoryMB: cfg.Overrides.HarnessResources.MemoryMB},

@@ -5,9 +5,11 @@ an invariant; routine aligned work needs no additional approval.
 
 - ARIES runs, evaluates, and measures agent workloads. Preserve measurement
   meaning; distinguish unsupported measurements from measured zero.
-- Runner composes exactly four replaceable roles: Benchmark, AgentHarness,
-  ToolSandbox, and ToolBridge. Preserve their behavior, ownership, and isolation
-  [contracts](components.md). Model runtime infrastructure adds no role.
+- ARIES composes exactly four replaceable roles: Benchmark, AgentHarness,
+  ToolSandbox, and ToolBridge. Runner drives Benchmark, AgentHarness, and
+  ToolBridge; ToolBridge owns its composed ToolSandbox's task lifecycle.
+  Preserve their behavior, ownership, and isolation [contracts](components.md).
+  Model runtime infrastructure adds no role.
 - Separate component behavior from execution mechanisms through explicit
   deployment dependencies. Deployment owns runtime operations; TaskEnvironment
   separately owns task attachment. Logical components need not be services.

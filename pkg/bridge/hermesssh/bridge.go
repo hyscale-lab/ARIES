@@ -23,6 +23,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/hyscale-lab/aries/pkg/bridge/lifecycle"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/runner"
 	"github.com/sirupsen/logrus"
@@ -55,8 +56,9 @@ type Options struct {
 	OmitRawLog bool
 }
 
-// Manager exposes one SSH endpoint at a time and proxies its exec requests to
-// the exact sandbox passed to Start.
+// Manager is the access adapter of a lifecycle.Bridge: it exposes one SSH
+// endpoint at a time and proxies its exec requests to the exact sandbox passed
+// to Start.
 type Manager struct {
 	resolveListen  func(context.Context) (core.BridgeListen, error)
 	outputDir      string
@@ -528,7 +530,7 @@ func (writer *auditWriter) finished() bool {
 	}
 }
 
-var _ runner.ToolBridge = (*Manager)(nil)
+var _ lifecycle.Access = (*Manager)(nil)
 
 func New(options Options) (*Manager, error) {
 	if options.ResolveListen == nil {

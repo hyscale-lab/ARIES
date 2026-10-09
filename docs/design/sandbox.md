@@ -1,9 +1,9 @@
 # ToolSandbox
 
-`ToolSandbox` owns the task environment. It starts one isolated environment for
-a task, returns the narrow live capability needed by the selected bridge and
-benchmark, and stops the environment with positive confirmation that owned
-resources are absent. It does not own harness policy, tool credentials, or
+`ToolSandbox` creates and removes the task environment for the bridge that owns
+it. It starts one isolated environment for a task, returns the narrow live
+capability needed by the selected bridge and benchmark, and stops the
+environment with positive confirmation that owned resources are absent. It does not own harness policy, tool credentials, or
 benchmark scoring.
 
 ## Operations and ownership
@@ -22,13 +22,15 @@ The [Runner interfaces](../../pkg/runner/interfaces.go) define:
 `Sandbox` is the live capability returned by `ToolSandbox`, not another Runner
 role. Optional `StreamExecutor.ExecStream` and
 `LimitedDownloader.DownloadLimit` capabilities support streamed command I/O and
-bounded host downloads. A bridge or evaluator requiring an optional capability
+bounded host downloads. Optional `Checkpointer.Checkpoint` and `Restore` save
+the environment's state and stop it, then resume it in place; they back the
+bridge's [checkpoint lifecycle](bridge.md#sandbox-lifecycle-modes). A bridge or evaluator requiring an optional capability
 must check it before use.
 
 The current [sandbox implementation](../../pkg/sandbox/sandbox.go) separates task
 policy from its injected [deployment and task environment](deployment.md).
 Successful construction transfers deployment transport ownership to the manager;
-Runner owns the sandbox lifecycle. `Manager.Close` retries failed startup
+the composed bridge owns the sandbox lifecycle. `Manager.Close` retries failed startup
 cleanup and closes the transport; it does not replace `Stop` for active tasks.
 
 ## Lifecycle, isolation, and failure
@@ -45,6 +47,13 @@ unconfirmed cleanup is retained for retry. Stop rejects another manager's
 sandbox, supports concurrent/repeated callers, and removes the runtime before
 its task attachment. A cleanup error remains visible rather than being treated
 as confirmed absence.
+
+Checkpoints are named in sequence. A checkpoint counts only after the
+deployment confirms the runtime stopped. Each confirmed checkpoint supersedes
+and deletes the previous one; a deletion failure is logged and left for runtime
+removal. After a failed checkpoint, restore refuses to resume until a new one
+is confirmed, so an older state is never resumed. Restore leaves a running
+environment unchanged and confirms that a restored one is running.
 
 Commands retain absolute executable paths and exact argument boundaries. The
 sandbox supplies default workdir and numeric execution identity; explicit

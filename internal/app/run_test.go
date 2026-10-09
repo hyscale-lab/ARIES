@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hyscale-lab/aries/pkg/bridge/lifecycle"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/runner"
@@ -332,8 +333,8 @@ func TestBuildTaskExperimentCreatesFreshFourRoleGraphs(t *testing.T) {
 			s := &stubToolSandbox{}
 			return SandboxInstance{Sandbox: s, Resources: &stubResources{}, Close: func() error { return nil }}, nil
 		},
-		NewBridge: func(config.Config, string, func(context.Context) (core.BridgeListen, error), *logrus.Logger) (runner.ToolBridge, error) {
-			return &stubBridge{}, nil
+		NewBridge: func(_ config.Config, _ string, sandbox SandboxInstance, _ *logrus.Logger) (runner.ToolBridge, error) {
+			return lifecycle.New(lifecycle.Options{ToolSandbox: sandbox.Sandbox, Access: &stubBridge{}})
 		},
 	}
 	cfg := config.Config{Name: "x"}
@@ -373,7 +374,7 @@ func TestBuildTaskExperimentUnwindsPartialConstruction(t *testing.T) {
 		NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
 			return SandboxInstance{Sandbox: &stubToolSandbox{}, Resources: &stubResources{}, Close: func() error { events = append(events, "sandbox"); return errors.New("sandbox close") }}, nil
 		},
-		NewBridge: func(config.Config, string, func(context.Context) (core.BridgeListen, error), *logrus.Logger) (runner.ToolBridge, error) {
+		NewBridge: func(config.Config, string, SandboxInstance, *logrus.Logger) (runner.ToolBridge, error) {
 			return nil, errors.New("bridge construct")
 		},
 	}

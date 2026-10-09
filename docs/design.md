@@ -36,16 +36,18 @@ The arrows show logical paths; Runner coordinates the ordered safety gates below
 
 ## Component contracts
 
-The Runner composes exactly four substitutable roles. Each has an explicit
-[interface](../pkg/runner/interfaces.go). Implementations must preserve behavior,
+ARIES composes exactly four substitutable roles. Runner drives the Benchmark,
+Agent Harness, and Tool Bridge; the Tool Bridge owns its composed Tool Sandbox,
+so the component that exposes the task environment also controls its lifecycle.
+Each role has an explicit [interface](../pkg/runner/interfaces.go). Implementations must preserve behavior,
 resource ownership, and isolation, not merely satisfy Go method signatures:
 
 | Role | Responsibility |
 | --- | --- |
 | [`Benchmark`](design/benchmark.md) | Loads tasks, sanitizes the live sandbox, keeps verifier material private, and evaluates final task state. |
 | [`Agent Harness`](design/harness.md) | Runs the configured agent and model interaction without owning the task environment or evaluator. |
-| [`Tool Sandbox`](design/sandbox.md) | Starts, exposes a narrow live capability for, and positively stops the task environment. |
-| [`Tool Bridge`](design/bridge.md) | Grants one harness temporary access to one sandbox and positively revokes that access. |
+| [`Tool Sandbox`](design/sandbox.md) | Creates, exposes a narrow live capability for, and positively removes the task environment on behalf of its bridge. |
+| [`Tool Bridge`](design/bridge.md) | Owns the task sandbox from creation to removal, grants one harness temporary access to it, positively revokes that access, and decides whether the sandbox stays running between tool calls. |
 
 The [model runtime](design/runtime.md) is a surrounding platform service. It may
 be external or managed by ARIES for the duration of a run, but it is
@@ -87,14 +89,15 @@ Gateway protocol owned by the harness. See [harness implementation](implementati
 For every task the Runner performs this order:
 
 1. load the benchmark task;
-2. start the task sandbox;
+2. have the bridge open the task sandbox from the run and task identity and
+   the benchmark's environment;
 3. let the benchmark sanitize the live sandbox and confirm verifier paths are absent;
-4. start the bridge for that exact sandbox;
+4. have the bridge grant access to that exact sandbox;
 5. start and run the harness;
 6. positively stop the harness;
 7. revoke the bridge and positively confirm access is gone;
-8. evaluate the still-running sandbox;
-9. stop the sandbox container, then remove its task network, confirming both are absent.
+8. evaluate the sandbox, which the bridge keeps available;
+9. have the bridge remove the sandbox container, then its task network, confirming both are absent.
 
 Cleanup follows reverse ownership order and uses bounded cleanup work even when
 the run context has been cancelled. Partial starts still trigger cleanup, and

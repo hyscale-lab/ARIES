@@ -35,6 +35,16 @@ type Deployment interface {
 	Close() error
 }
 
+// Checkpointer is an optional Deployment capability. Checkpoint saves a
+// runtime's process and filesystem state under checkpointID and stops it;
+// Restore starts the stopped runtime from that checkpoint; DeleteCheckpoint
+// releases a superseded checkpoint. Removing the runtime releases the rest.
+type Checkpointer interface {
+	Checkpoint(ctx context.Context, id, checkpointID string) error
+	Restore(ctx context.Context, id, checkpointID string) error
+	DeleteCheckpoint(ctx context.Context, id, checkpointID string) error
+}
+
 // Request describes one private runtime. Secrets are passed
 // separately to validation and must never enter environment, argv, or labels.
 // Entrypoint nil preserves the image's entrypoint; an explicit value replaces it.

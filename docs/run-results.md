@@ -87,6 +87,11 @@ controls, and invalid UTF-8 use explicit escapes. The file is neither JSON nor
 base64. It may contain exact wire-supplied values; keep the run directory
 private and do not publish this artifact without review.
 
+With `bridge.sandbox_lifecycle: "checkpoint"`, `checkpoint/events.jsonl` records
+each sandbox checkpoint and restore as one JSON line, with its sequence, start
+timestamp, `duration_ns`, whether access was granted, status, and error. Tool-call
+`duration_ms` includes restore time; checkpoint time appears only in this file.
+
 `bridge/tool-calls.jsonl` remains valid line-delimited JSON. Printable Unicode
 and HTML characters such as `&&`, `<`, and `>` appear literally, while quotes,
 backslashes, and newlines retain required JSON escaping. Printable stdin stays

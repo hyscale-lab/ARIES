@@ -1,9 +1,14 @@
 # SSH bridge implementations
 
-The embedded bridges implement the [ToolBridge contract](../design/bridge.md).
-They authenticate temporary SSH clients and forward accepted commands through
-the sandbox streaming capability; Docker execution is supplied by the sandbox
-deployment through the Moby SDK.
+The embedded bridges implement the [ToolBridge contract](../design/bridge.md)
+as access adapters composed by the shared
+[lifecycle bridge](../../pkg/bridge/lifecycle/lifecycle.go), which owns the
+sandbox and applies `bridge.sandbox_lifecycle`. They authenticate temporary SSH
+clients and forward accepted commands through the sandbox streaming capability.
+In checkpoint mode that capability restores the sandbox before each command and
+checkpoints it afterward. The adapters' records include restore time in
+`duration_ms`. Docker execution is supplied by the sandbox deployment through
+the Moby SDK.
 
 ## OpenClaw SSH bridge
 

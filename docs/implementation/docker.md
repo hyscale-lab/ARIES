@@ -58,6 +58,18 @@ files atomically. Missing-source errors require evidence that the deployment
 still exists. This policy lives in [`pkg/sandbox`](../../pkg/sandbox/sandbox.go),
 while Docker owns tar transfer through Moby.
 
+## Checkpoint and restore
+
+The Docker provider implements the optional deployment `Checkpointer` used by
+the bridge's checkpoint lifecycle. A checkpoint is created through Moby's
+checkpoint API with `exit` set, in the container's default checkpoint directory.
+Restore starts the stopped container from a named checkpoint. Removing the
+container also deletes its remaining checkpoints. The daemon must run with
+experimental features enabled and have CRIU installed. ARIES does not check
+for either before the first checkpoint, so a missing prerequisite fails the
+bridge grant before harness start. Resource sampling skips containers that are
+not running, so a suspended sandbox produces no samples rather than zero usage.
+
 ## Removal and failure recovery
 
 The [sandbox lifecycle contract](../design/sandbox.md#lifecycle-isolation-and-failure)

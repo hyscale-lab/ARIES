@@ -36,11 +36,11 @@ type RuntimeOverrides struct {
 	AgentTimeout          *time.Duration
 }
 
-// Runner composes exactly the benchmark, harness, sandbox, and bridge roles.
+// Runner composes the benchmark, harness, and bridge roles; the bridge owns the
+// sandbox role.
 type Runner struct {
 	benchmark        Benchmark
 	harness          AgentHarness
-	toolSandbox      ToolSandbox
 	bridge           ToolBridge
 	name             string
 	runID            string
@@ -52,15 +52,12 @@ type Runner struct {
 }
 
 // New constructs a Runner explicitly and rejects missing roles.
-func New(benchmark Benchmark, harness AgentHarness, toolSandbox ToolSandbox, bridge ToolBridge, options Options) (*Runner, error) {
+func New(benchmark Benchmark, harness AgentHarness, bridge ToolBridge, options Options) (*Runner, error) {
 	if benchmark == nil {
 		return nil, errors.New("benchmark is required")
 	}
 	if harness == nil {
 		return nil, errors.New("agent harness is required")
-	}
-	if toolSandbox == nil {
-		return nil, errors.New("tool sandbox is required")
 	}
 	if bridge == nil {
 		return nil, errors.New("tool bridge is required")
@@ -77,7 +74,6 @@ func New(benchmark Benchmark, harness AgentHarness, toolSandbox ToolSandbox, bri
 	return &Runner{
 		benchmark:        benchmark,
 		harness:          harness,
-		toolSandbox:      toolSandbox,
 		bridge:           bridge,
 		name:             options.Name,
 		runID:            options.RunID,
@@ -169,7 +165,7 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		}
 		if sandboxActive {
 			cleanupUsed = true
-			if err := r.toolSandbox.Stop(cleanup, sandbox); err != nil {
+			if err := r.bridge.Close(cleanup); err != nil {
 				cleanupErrors = append(cleanupErrors, fmt.Errorf("cleanup sandbox: %w", err))
 			} else {
 				sandboxActive = false
@@ -196,11 +192,14 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 	}
 
 	var err error
-	sandbox, err = r.toolSandbox.Start(ctx, core.SandboxRequest{
+	sandbox, err = r.bridge.Open(ctx, core.SandboxRequest{
 		RunID:       r.runID,
 		TaskID:      task.ID,
 		Environment: sandboxEnvironment,
 	})
+	// Open may fail after its sandbox allocated resources that it could not
+	// release. Close is idempotent, so every Open attempt is followed by it.
+	sandboxActive = true
 	if err != nil {
 		allErrors = append(allErrors, fmt.Errorf("start sandbox: %w", err))
 		return finish()
@@ -209,13 +208,12 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		allErrors = append(allErrors, errors.New("start sandbox: returned a nil sandbox"))
 		return finish()
 	}
-	sandboxActive = true
 	if err := r.benchmark.PrepareSandbox(ctx, task, sandbox); err != nil {
 		allErrors = append(allErrors, fmt.Errorf("prepare sandbox: %w", err))
 		return finish()
 	}
 
-	endpoint, err := r.bridge.Start(ctx, sandbox)
+	endpoint, err := r.bridge.Start(ctx)
 	// Start may fail after allocating task-local resources or after its internal
 	// rollback fails. Stop is idempotent, so every Start attempt must be followed
 	// by a positive revocation confirmation before sandbox cleanup.

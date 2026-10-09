@@ -45,6 +45,8 @@ type dockerClient interface {
 	ContainerStop(context.Context, string, client.ContainerStopOptions) (client.ContainerStopResult, error)
 	ContainerKill(context.Context, string, client.ContainerKillOptions) (client.ContainerKillResult, error)
 	ContainerRemove(context.Context, string, client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
+	CheckpointCreate(context.Context, string, client.CheckpointCreateOptions) (client.CheckpointCreateResult, error)
+	CheckpointRemove(context.Context, string, client.CheckpointRemoveOptions) (client.CheckpointRemoveResult, error)
 }
 
 // Options configures a per-harness Docker transport.
@@ -63,7 +65,10 @@ type Manager struct {
 	timeout   time.Duration
 }
 
-var _ deployment.Deployment = (*Manager)(nil)
+var (
+	_ deployment.Deployment   = (*Manager)(nil)
+	_ deployment.Checkpointer = (*Manager)(nil)
+)
 
 // New configures a transport without contacting the Docker daemon.
 func New(options Options) (*Manager, error) {
@@ -272,6 +277,35 @@ func (manager *Manager) DownloadArchive(ctx context.Context, id, path string) (i
 
 func (manager *Manager) Start(ctx context.Context, id string) error {
 	_, err := manager.client.ContainerStart(ctx, id, client.ContainerStartOptions{})
+	return err
+}
+
+// Checkpoint saves the container through CRIU and stops it. The daemon must
+// run with experimental features and CRIU installed.
+func (manager *Manager) Checkpoint(ctx context.Context, id, checkpointID string) error {
+	if checkpointID == "" {
+		return errors.New("deployment checkpoint ID is required")
+	}
+	_, err := manager.client.CheckpointCreate(ctx, id, client.CheckpointCreateOptions{CheckpointID: checkpointID, Exit: true})
+	return err
+}
+
+// Restore starts a stopped container from one of its checkpoints.
+func (manager *Manager) Restore(ctx context.Context, id, checkpointID string) error {
+	if checkpointID == "" {
+		return errors.New("deployment checkpoint ID is required")
+	}
+	_, err := manager.client.ContainerStart(ctx, id, client.ContainerStartOptions{CheckpointID: checkpointID})
+	return err
+}
+
+// DeleteCheckpoint removes one checkpoint kept in the container's default
+// checkpoint directory, which container removal also deletes.
+func (manager *Manager) DeleteCheckpoint(ctx context.Context, id, checkpointID string) error {
+	if checkpointID == "" {
+		return errors.New("deployment checkpoint ID is required")
+	}
+	_, err := manager.client.CheckpointRemove(ctx, id, client.CheckpointRemoveOptions{CheckpointID: checkpointID})
 	return err
 }
 

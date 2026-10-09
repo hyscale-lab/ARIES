@@ -21,6 +21,7 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/hyscale-lab/aries/pkg/benchmark/terminalbench"
 	"github.com/hyscale-lab/aries/pkg/bridge/hermesssh"
+	"github.com/hyscale-lab/aries/pkg/bridge/lifecycle"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
 	dockerdeployment "github.com/hyscale-lab/aries/pkg/deployment/docker"
@@ -315,7 +316,11 @@ func runHermesBridgeScenario(t *testing.T, cancelCommand bool, repetitions int, 
 	if reasoning {
 		modelConfig.Provider, modelConfig.Model, modelConfig.ReasoningEffort = "deepseek", "deepseek-flash", "high"
 	}
-	run, err := runner.New(benchmark, harness, sandbox, bridge, runner.Options{RunID: "hermes-runner-integration", OutputDir: output, Model: modelConfig, CleanupTimeout: 60 * time.Second})
+	ownedBridge, err := lifecycle.New(lifecycle.Options{ToolSandbox: sandbox, Access: bridge})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := runner.New(benchmark, harness, ownedBridge, runner.Options{RunID: "hermes-runner-integration", OutputDir: output, Model: modelConfig, CleanupTimeout: 60 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}

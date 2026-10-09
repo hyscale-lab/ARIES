@@ -22,6 +22,7 @@ import (
 
 	"github.com/containerd/errdefs"
 	"github.com/hyscale-lab/aries/pkg/benchmark/terminalbench"
+	"github.com/hyscale-lab/aries/pkg/bridge/lifecycle"
 	"github.com/hyscale-lab/aries/pkg/bridge/openclawssh"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
@@ -266,7 +267,11 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 		t.Fatal(err)
 	}
 	preloadedSandbox := &preloadedSandboxManager{inner: sandbox}
-	composed, err := runner.New(mutationCheckingBenchmark{inner: benchmark}, harness, preloadedSandbox, bridge, runner.Options{
+	ownedBridge, err := lifecycle.New(lifecycle.Options{ToolSandbox: preloadedSandbox, Access: bridge, Logger: logger})
+	if err != nil {
+		t.Fatal(err)
+	}
+	composed, err := runner.New(mutationCheckingBenchmark{inner: benchmark}, harness, ownedBridge, runner.Options{
 		Name: "openclaw-tb2-fix-git-deterministic", RunID: runID, OutputDir: outputDir,
 		Model:          core.ModelConfig{Provider: "deepseek", BaseURL: "http://fake-model:8080/v1", Model: "deepseek-flash", APIKeyEnv: integrationAPIKeyEnv, ReasoningEffort: "low"},
 		CleanupTimeout: 45 * time.Second, Logger: logger,

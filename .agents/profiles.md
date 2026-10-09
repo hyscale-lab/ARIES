@@ -7,6 +7,8 @@ Hermes derives its local image from the catalog’s base image and OTel plugin p
 
 - Harness selection and deployment selection are separate. Currently harness and
   sandbox require the same local Docker daemon; only embedded bridges work.
+  `bridge.sandbox_lifecycle: checkpoint` needs an experimental Docker daemon
+  with CRIU; ARIES does not install or verify either before the first checkpoint.
   Reject unsupported placement before effects; do not imply Kubernetes support.
 - Declare `overrides_file` explicitly (`""` disables overrides). Keep harness and
   sandbox resource limits independent; preserve omission/default semantics and

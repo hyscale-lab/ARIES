@@ -52,6 +52,17 @@ func (c *Config) NormalizeDeployment() error {
 	if c.Bridge.Mode != "embedded" {
 		return fmt.Errorf("bridge.mode %q is unsupported; only embedded is implemented", c.Bridge.Mode)
 	}
+	switch c.Bridge.SandboxLifecycle {
+	case "":
+		c.Bridge.SandboxLifecycle = "persistent"
+	case "persistent":
+	case "checkpoint":
+		if c.Sandbox.Deployment.Backend != "docker" {
+			return fmt.Errorf("bridge.sandbox_lifecycle checkpoint requires sandbox.deployment.backend docker")
+		}
+	default:
+		return fmt.Errorf("bridge.sandbox_lifecycle %q is unsupported; use persistent or checkpoint", c.Bridge.SandboxLifecycle)
+	}
 	c.Sandbox.Type = ""
 	return nil
 }

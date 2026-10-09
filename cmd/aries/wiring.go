@@ -151,15 +151,15 @@ func newSandbox(cfg config.Config, outputRoot, runID, occurrenceID string, gpuIn
 	}
 }
 
-func newBridge(cfg config.Config, outputRoot string, resolveListen func(context.Context) (core.BridgeListen, error), logger *logrus.Logger) (runner.ToolBridge, error) {
+func newBridge(cfg config.Config, outputRoot string, sandbox app.SandboxInstance, logger *logrus.Logger) (runner.ToolBridge, error) {
 	if err := validateDeployment(&cfg); err != nil {
 		return nil, err
 	}
 	switch cfg.Bridge.Type {
 	case "openclaw-ssh":
-		return bridgewiring.NewOpenClaw(cfg, outputRoot, resolveListen, logger)
+		return bridgewiring.NewOpenClaw(cfg, outputRoot, sandbox, logger)
 	case "hermes-ssh":
-		return bridgewiring.NewHermes(cfg, outputRoot, resolveListen, logger)
+		return bridgewiring.NewHermes(cfg, outputRoot, sandbox, logger)
 	default:
 		return nil, fmt.Errorf("unsupported bridge type %q", cfg.Bridge.Type)
 	}

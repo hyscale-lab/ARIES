@@ -18,6 +18,7 @@ import (
 	"time"
 
 	runtimesglang "github.com/hyscale-lab/aries/internal/modelruntime/sglang"
+	"github.com/hyscale-lab/aries/pkg/bridge/lifecycle"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/runner"
@@ -85,8 +86,8 @@ func TestConcreteManagedRuntimeWrapsPreflightAndTaskLifecycle(t *testing.T) {
 		NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
 			return SandboxInstance{Sandbox: &managedIntegrationSandbox{}, Resources: &stubResources{}, Close: func() error { return nil }}, nil
 		},
-		NewBridge: func(config.Config, string, func(context.Context) (core.BridgeListen, error), *logrus.Logger) (runner.ToolBridge, error) {
-			return &stubBridge{}, nil
+		NewBridge: func(_ config.Config, _ string, sandbox SandboxInstance, _ *logrus.Logger) (runner.ToolBridge, error) {
+			return lifecycle.New(lifecycle.Options{ToolSandbox: sandbox.Sandbox, Access: &stubBridge{}})
 		},
 	}
 	var logs strings.Builder
@@ -183,8 +184,8 @@ func TestConcreteManagedRuntimeNaturalExitLogsStoppedAfterUnexpectedExit(t *test
 		NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
 			return SandboxInstance{Sandbox: &managedIntegrationSandbox{}, Resources: &stubResources{}, Close: func() error { return nil }}, nil
 		},
-		NewBridge: func(config.Config, string, func(context.Context) (core.BridgeListen, error), *logrus.Logger) (runner.ToolBridge, error) {
-			return &stubBridge{}, nil
+		NewBridge: func(_ config.Config, _ string, sandbox SandboxInstance, _ *logrus.Logger) (runner.ToolBridge, error) {
+			return lifecycle.New(lifecycle.Options{ToolSandbox: sandbox.Sandbox, Access: &stubBridge{}})
 		},
 	}
 	var logs strings.Builder

@@ -25,6 +25,7 @@ controlmaster
 cpp
 cpu
 cpus
+criu
 csv
 ctrf
 deduplicates
