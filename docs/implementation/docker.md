@@ -29,6 +29,18 @@ validates the declared source, destination and permissions; component labels do
 not grant mounts. Harness and sandbox runtimes do not receive the socket. See
 [deployment configuration](../configuration.md#deployment-configuration).
 
+## Image preparation
+
+Hermes plugin images and bridge images share the Docker
+[build implementation](../../pkg/deployment/docker/build.go): explicit build
+contexts, client setup, build arguments, progress/error handling, and image
+confirmation. Hermes supplies only its Dockerfile and reuses its derived image
+tag, which includes the base, plugin pin, and recipe. The
+[bridge builder](../../pkg/deployment/docker/build_bridge.go) also supplies the
+bounded server executable and requires a matching content label before reusing
+an image. Changes to the executable, recipe, or build arguments trigger a rebuild.
+Neither build context includes other files from the working directory.
+
 ## Runtime creation and execution
 
 The sandbox supplies ownership labels, unique runtime name, default workdir,

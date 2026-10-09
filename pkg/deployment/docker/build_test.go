@@ -22,11 +22,14 @@ type fakeImageBuilder struct {
 	present    bool
 	inspectErr error
 	stream     string
+	body       io.ReadCloser
 	builds     []client.ImageBuildOptions
+	inspects   int
 	dockerfile string
 }
 
 func (fake *fakeImageBuilder) ImageInspect(context.Context, string, ...client.ImageInspectOption) (client.ImageInspectResult, error) {
+	fake.inspects++
 	if fake.inspectErr != nil {
 		return client.ImageInspectResult{}, fake.inspectErr
 	}
@@ -45,8 +48,14 @@ func (fake *fakeImageBuilder) ImageBuild(_ context.Context, buildContext io.Read
 	}
 	content, _ := io.ReadAll(archive)
 	fake.dockerfile = string(content)
+	if _, err := archive.Next(); err != io.EOF {
+		return client.ImageBuildResult{}, errors.New("Dockerfile-only context contains extra files")
+	}
 	if !strings.Contains(fake.stream, "error") {
 		fake.present = true
+	}
+	if fake.body != nil {
+		return client.ImageBuildResult{Body: fake.body}, nil
 	}
 	return client.ImageBuildResult{Body: io.NopCloser(strings.NewReader(fake.stream))}, nil
 }
@@ -73,8 +82,37 @@ func TestBuildImageBuildsMissingImageFromBase(t *testing.T) {
 	if len(build.Tags) != 1 || build.Tags[0] != testImage || build.BuildArgs["BASE"] == nil || *build.BuildArgs["BASE"] != testBase {
 		t.Fatalf("build options = %#v", build)
 	}
+	if !build.Remove || !build.ForceRemove || build.Dockerfile != "Dockerfile" || len(build.Labels) != 0 {
+		t.Fatalf("build cleanup or cache policy changed: %#v", build)
+	}
 	if fake.dockerfile != testDockerfile {
 		t.Fatalf("Dockerfile = %q", fake.dockerfile)
+	}
+}
+
+type buildResponseBody struct {
+	io.Reader
+	closeErr error
+	closed   bool
+}
+
+func (body *buildResponseBody) Close() error {
+	body.closed = true
+	return body.closeErr
+}
+
+func TestBuildImageClosesFailedStreamAndPreservesCloseError(t *testing.T) {
+	closeErr := errors.New("close build response")
+	body := &buildResponseBody{
+		Reader: strings.NewReader(`{"errorDetail":{"message":"build failed"}}`), closeErr: closeErr,
+	}
+	fake := &fakeImageBuilder{body: body}
+	err := buildImage(context.Background(), fake, testImage, testDockerfile, nil)
+	if err == nil || !strings.Contains(err.Error(), "build failed") || !errors.Is(err, closeErr) {
+		t.Fatalf("build error = %v", err)
+	}
+	if !body.closed || fake.inspects != 1 {
+		t.Fatalf("stream closed=%t, inspections=%d; failed build must not be confirmed", body.closed, fake.inspects)
 	}
 }
 
