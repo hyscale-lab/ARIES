@@ -27,6 +27,14 @@ type imageBuilder interface {
 // buildArgs fill its ARG values. Any base it names must already be present;
 // network access during the build is the host's, never a task's.
 func BuildImage(ctx context.Context, socket, image, dockerfile string, buildArgs map[string]string) error {
+	api, err := newImageBuildClient(socket)
+	if err != nil {
+		return err
+	}
+	return errors.Join(buildImage(ctx, api, image, dockerfile, buildArgs), api.Close())
+}
+
+func newImageBuildClient(socket string) (*client.Client, error) {
 	host := socket
 	if host == "" {
 		host = defaultDockerSocket
@@ -36,23 +44,31 @@ func BuildImage(ctx context.Context, socket, image, dockerfile string, buildArgs
 	}
 	api, err := client.New(client.WithHost(host), client.WithUserAgent("aries-setup/1"))
 	if err != nil {
-		return fmt.Errorf("create Docker client: %w", err)
+		return nil, fmt.Errorf("create Docker client: %w", err)
 	}
-	return errors.Join(buildImage(ctx, api, image, dockerfile, buildArgs), api.Close())
+	return api, nil
 }
 
 func buildImage(ctx context.Context, api imageBuilder, image, dockerfile string, buildArgs map[string]string) error {
+	archive, err := imageBuildArchive([]buildFile{{name: "Dockerfile", mode: 0o644, content: []byte(dockerfile)}})
+	if err != nil {
+		return err
+	}
+	return buildImageArchive(ctx, api, image, archive, buildArgs, nil)
+}
+
+// buildImageArchive reuses an existing image when all requested labels match.
+// Without labels, the caller's image tag is the complete cache identity.
+func buildImageArchive(ctx context.Context, api imageBuilder, image string, archive []byte, buildArgs, labels map[string]string) error {
 	if err := containerimage.ValidatePinnedTagOnly(image); err != nil {
 		return fmt.Errorf("build Docker image %q: %w", image, err)
 	}
-	if _, err := api.ImageInspect(ctx, image); err == nil {
+	existing, err := api.ImageInspect(ctx, image)
+	if err == nil && imageBuildLabelsMatch(existing, labels) {
 		return nil
-	} else if !cerrdefs.IsNotFound(err) {
-		return fmt.Errorf("inspect Docker image %q: %w", image, err)
 	}
-	buildContext, err := dockerfileArchive(dockerfile)
-	if err != nil {
-		return err
+	if err != nil && !cerrdefs.IsNotFound(err) {
+		return fmt.Errorf("inspect Docker image %q: %w", image, err)
 	}
 	args := make(map[string]*string, len(buildArgs))
 	for name, value := range buildArgs {
@@ -61,8 +77,8 @@ func buildImage(ctx context.Context, api imageBuilder, image, dockerfile string,
 	logger := logrus.WithContext(ctx).WithField("image", image)
 	logger.Info("building Docker image")
 	started := time.Now()
-	result, err := api.ImageBuild(ctx, buildContext, client.ImageBuildOptions{
-		Tags: []string{image}, Dockerfile: "Dockerfile", BuildArgs: args, Remove: true, ForceRemove: true,
+	result, err := api.ImageBuild(ctx, bytes.NewReader(archive), client.ImageBuildOptions{
+		Tags: []string{image}, Dockerfile: "Dockerfile", BuildArgs: args, Labels: labels, Remove: true, ForceRemove: true,
 	})
 	if err != nil {
 		return fmt.Errorf("build Docker image %q: %w", image, err)
@@ -72,27 +88,49 @@ func buildImage(ctx context.Context, api imageBuilder, image, dockerfile string,
 	if streamErr != nil || closeErr != nil {
 		return fmt.Errorf("build Docker image %q: %w", image, errors.Join(streamErr, closeErr))
 	}
-	if _, err := api.ImageInspect(ctx, image); err != nil {
+	built, err := api.ImageInspect(ctx, image)
+	if err != nil {
 		return fmt.Errorf("confirm Docker image %q after build: %w", image, err)
+	}
+	if !imageBuildLabelsMatch(built, labels) {
+		return fmt.Errorf("built Docker image %q does not match requested build labels", image)
 	}
 	logger.WithField("duration", time.Since(started).Round(time.Second).String()).Info("built Docker image")
 	return nil
 }
 
-// dockerfileArchive is a build context holding only the Dockerfile.
-func dockerfileArchive(content string) (io.Reader, error) {
+func imageBuildLabelsMatch(image client.ImageInspectResult, labels map[string]string) bool {
+	for name, value := range labels {
+		if image.Config == nil || image.Config.Labels[name] != value {
+			return false
+		}
+	}
+	return true
+}
+
+type buildFile struct {
+	name    string
+	mode    int64
+	content []byte
+}
+
+// imageBuildArchive packages only the explicitly supplied files, in their given
+// order, with fixed metadata so content fingerprints remain reproducible.
+func imageBuildArchive(files []buildFile) ([]byte, error) {
 	var archive bytes.Buffer
 	writer := tar.NewWriter(&archive)
-	if err := writer.WriteHeader(&tar.Header{Name: "Dockerfile", Mode: 0o644, Size: int64(len(content))}); err != nil {
-		return nil, fmt.Errorf("write Docker build context: %w", err)
-	}
-	if _, err := writer.Write([]byte(content)); err != nil {
-		return nil, fmt.Errorf("write Docker build context: %w", err)
+	for _, file := range files {
+		if err := writer.WriteHeader(&tar.Header{Name: file.name, Mode: file.mode, Size: int64(len(file.content)), Typeflag: tar.TypeReg}); err != nil {
+			return nil, fmt.Errorf("write Docker build context: %w", err)
+		}
+		if _, err := writer.Write(file.content); err != nil {
+			return nil, fmt.Errorf("write Docker build context: %w", err)
+		}
 	}
 	if err := writer.Close(); err != nil {
 		return nil, fmt.Errorf("write Docker build context: %w", err)
 	}
-	return &archive, nil
+	return archive.Bytes(), nil
 }
 
 // buildStreamError reads the Engine's build progress to the end and returns
