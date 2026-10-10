@@ -213,8 +213,9 @@ type taskDetails struct {
 	// needsApplications is true when any MCP server is backed by one of the
 	// self-hosted applications, so the loopback forwarder must run.
 	needsApplications bool
-	// needsCredentials is true when any MCP server is account-backed, so
-	// the credentials are overlaid on the sandbox's configs/.
+	// needsCredentials is true when any MCP server is account-backed or the
+	// task's own code reads an account key file (taskKeyFiles), so the
+	// credentials are overlaid on the sandbox's configs/.
 	needsCredentials bool
 	// extraEntries are checkout paths the project archive must carry for
 	// this task beyond the project code (serverBinaries).
@@ -620,6 +621,13 @@ func loadTask(root, id string, environment core.Environment, harnessWebSearch bo
 		case kind == serverApplication:
 			details.needsApplications = true
 		}
+	}
+	needsKeyFiles, err := requireTaskKeyFiles(taskDir, id, creds)
+	if err != nil {
+		return core.Task{}, taskDetails{}, err
+	}
+	if needsKeyFiles {
+		details.needsCredentials = true
 	}
 	tools, err := serverNames(parsed.NeededLocalTools)
 	if err != nil {

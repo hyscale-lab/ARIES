@@ -3,7 +3,9 @@ package toolathlon
 import (
 	"archive/tar"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -52,6 +54,18 @@ const (
 // the GitHub server is a Go binary committed under local_binary.
 var serverBinaries = map[string][]string{
 	"github": {"local_binary/github-mcp-server"},
+}
+
+// taskKeyFiles are key files under configs/ that a task's own preprocess or
+// evaluation reads itself, not through an MCP server, so its server list
+// does not show the account. At the pinned revision one task does:
+// fillout-online-forms creates and grades a Google Form through
+// utils/app_specific/google_oauth with configs/google_credentials.json,
+// while its servers (playwright_with_chunk, memory, filesystem) need no
+// account. Such a task loads only when credential_files_env provides the
+// file, and is then account-backed like a task with an account server.
+var taskKeyFiles = map[string][]string{
+	"fillout-online-forms": {"configs/google_credentials.json"},
 }
 
 var (
@@ -277,6 +291,64 @@ func (c *credentials) missing(keys []string, taskOverrides map[string]tokenValue
 		}
 	}
 	return missing
+}
+
+// requireTaskKeyFiles refuses a task whose own code reads a key file the
+// environment does not provide, and reports whether the task needs the
+// credentials overlaid. It also checks that the task's code still names
+// each listed file, so a re-pin that changes the task fails here.
+func requireTaskKeyFiles(taskDir, id string, creds *credentials) (bool, error) {
+	files := taskKeyFiles[id]
+	for _, file := range files {
+		named, err := taskCodeNames(taskDir, file)
+		if err != nil {
+			return false, err
+		}
+		if !named {
+			return false, fmt.Errorf("the adapter lists %s as read by this task's own code, but neither its preprocess nor its evaluation names it at the pinned revision", file)
+		}
+		relative, _ := configsRelative(file)
+		if creds != nil && creds.files[relative] != nil {
+			continue
+		}
+		reason := "map it to an environment variable in benchmark.toolathlon.credential_files_env"
+		if creds != nil {
+			if variable, unset := creds.unset[file]; unset {
+				reason = "environment variable " + variable + " is not set"
+			}
+		}
+		return false, fmt.Errorf("the task's own preprocess and evaluation read %s, a third-party account's key file, not through an MCP server: %s", file, reason)
+	}
+	return len(files) != 0, nil
+}
+
+// taskCodeNames reports whether a Python file under the task's preprocess/
+// or evaluation/ contains file.
+func taskCodeNames(taskDir, file string) (bool, error) {
+	named := false
+	for _, dir := range []string{"preprocess", "evaluation"} {
+		err := filepath.WalkDir(filepath.Join(taskDir, dir), func(path string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				if errors.Is(err, fs.ErrNotExist) {
+					return nil
+				}
+				return err
+			}
+			if named || entry.IsDir() || filepath.Ext(path) != ".py" {
+				return nil
+			}
+			content, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			named = strings.Contains(string(content), file)
+			return nil
+		})
+		if err != nil {
+			return false, fmt.Errorf("read the task's %s code: %w", dir, err)
+		}
+	}
+	return named, nil
 }
 
 // serverTokenKeys lists the token fields one server file substitutes,

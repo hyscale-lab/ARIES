@@ -122,15 +122,20 @@ Two smaller differences are deliberate:
   applications, 9 reach the public internet without an account, 12 need a
   credentialed third-party account (GitHub, Google ×6, Hugging Face,
   Notion ×2, Snowflake, W&B, YouTube), and `k8s` needs a `kind` cluster on
-  the Docker socket with host networking. At the pinned revision **53 of
+  the Docker socket with host networking. At the pinned revision **52 of
   the 108 tasks load with no account**: 28 need nothing outside the sandbox
-  and the applications, 25 more also reach the public internet (the
-  sandbox network is on for them). **50 more load once the profile maps
-  their token fields to environment variables** (see [the account-backed
-  tasks](#running-the-account-backed-tasks); 11 of them also list
-  `web_search`, so need `harness.web_search` like the public ones); without
-  that they are refused at task load with a message naming the server and
-  the setting. The 5
+  and the applications, 24 more also reach the public internet (the
+  sandbox network is on for them). **51 more load once the profile maps
+  their token fields or key files to environment variables** (see [the
+  account-backed tasks](#running-the-account-backed-tasks); 11 of them also
+  list `web_search`, so need `harness.web_search` like the public ones);
+  without that they are refused at task load with a message naming the
+  server, or the file, and the setting. One of the 51,
+  `fillout-online-forms`, lists only servers that need no account, but its
+  own preprocess and evaluation create and grade a Google Form with
+  `configs/google_credentials.json`; the adapter lists such tasks with the
+  file they read and loads them only when `credential_files_env` provides
+  it. The 5
   `k8s` tasks are refused whatever the profile says; running them would mean
   giving the sandbox a Docker socket, which the adapter will not do.
 - A task also lists "local tools": tools of Toolathlon's own agent loop,
@@ -142,7 +147,7 @@ Two smaller differences are deliberate:
   executes them on its host). `web_search` has no stand-in but the
   harness's own: a task that lists it loads only when the profile enables
   `harness.web_search`, and is otherwise refused with that message — 14 of
-  the 53, all public-internet tasks. A local tool the adapter has no
+  the 52, all public-internet tasks. A local tool the adapter has no
   mapping for is refused like an unknown server.
 - Toolathlon's own loop gives the agent exactly the listed tools, so the
   harness's own shell, code-execution and file tools are given only to a

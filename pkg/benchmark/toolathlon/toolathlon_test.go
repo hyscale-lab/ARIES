@@ -30,6 +30,9 @@ var fixtureTasks = map[string]string{
 	"bad-server-name":  `{"needed_mcp_servers": ["../etc"], "max_turns": 10}`,
 	"no-evaluation":    `{"needed_mcp_servers": ["memory"], "max_turns": 10}`,
 	"empty-task":       `{"needed_mcp_servers": ["memory"], "max_turns": 10}`,
+	// Its servers need no account, but its own code reads a Google key file
+	// (taskKeyFiles), as the real task's does.
+	"fillout-online-forms": `{"needed_mcp_servers": ["playwright_with_chunk", "memory", "filesystem"], "max_turns": 10}`,
 }
 
 // fixtureTaskEntries are the direct children of the canvas-list-test task
@@ -93,6 +96,7 @@ func writeFixture(t *testing.T) string {
 	writeFile(t, root, base+"initial_workspace/todo.csv", "a,b\n")
 	writeFile(t, root, base+"preprocess/main.py", "print('seed')\n")
 	writeFile(t, root, base+"token_key_session.py", "canvas_domain = 'localhost:20001'\n")
+	writeFile(t, root, "tasks/"+taskPool+"/fillout-online-forms/preprocess/main.py", "GOOGLE_CREDENTIAL_FILE = \"configs/google_credentials.json\"\n")
 	// The GitHub task names its repository the way the real ones do; the
 	// token itself must come from the environment.
 	writeFile(t, root, "tasks/"+taskPool+"/github-task/token_key_session.py", "all_token_key_session = Dict(\n    github_allowed_repos = \"Annoy-DataSync\", # only this repo\n    github_read_only = \"0\",\n)\n")
@@ -678,19 +682,25 @@ func TestTasksRunsAccountTasksWithCredentials(t *testing.T) {
 	sheets := map[string]string{"google_sheets_folder_id": "SHEETS_FOLDER"}
 	sheetsFile := map[string]string{"configs/google_credentials.json": "GOOGLE_CREDENTIALS"}
 	folder := map[string]string{"SHEETS_FOLDER": "1abc"}
+	details, err = load(t, nil, sheetsFile, map[string]string{"GOOGLE_CREDENTIALS": "{}"}, "fillout-online-forms")
+	if err != nil || !details.needsCredentials {
+		t.Fatalf("a task whose own code reads a key file must load with the file and carry the credentials: %+v, %v", details, err)
+	}
 	refusals := map[string]struct {
 		fields, files, values map[string]string
 		id, want              string
 	}{
-		"no mapping":    {nil, nil, nil, "github-task", "third-party account: map the fields"},
-		"not mapped":    {map[string]string{"huggingface_token": "HF_TOKEN"}, nil, map[string]string{"HF_TOKEN": "hf_example"}, "github-task", "github_token (not in benchmark.toolathlon.credentials_env)"},
-		"unset":         {github, nil, nil, "github-task", "github_token (environment variable GITHUB_TOKEN is not set)"},
-		"empty":         {github, nil, map[string]string{"GITHUB_TOKEN": ""}, "github-task", "github_token (environment variable GITHUB_TOKEN is not set)"},
-		"file unmapped": {sheets, nil, folder, "sheets-task", "google_oauth2_credentials_path (file configs/google_credentials.json is not in benchmark.toolathlon.credential_files_env)"},
-		"file unset":    {sheets, sheetsFile, folder, "sheets-task", "google_oauth2_credentials_path (file configs/google_credentials.json: environment variable GOOGLE_CREDENTIALS is not set)"},
-		"escaping path": {map[string]string{"google_oauth2_credentials_path": "CREDS_PATH", "google_sheets_folder_id": "SHEETS_FOLDER"}, nil, map[string]string{"CREDS_PATH": "configs/../../etc/passwd", "SHEETS_FOLDER": "1abc"}, "sheets-task", "google_oauth2_credentials_path (not a file under configs/)"},
-		"computed":      {map[string]string{"google_client_id": "CLIENT_ID"}, nil, map[string]string{"CLIENT_ID": "id"}, "excel-only", `token field "google_client_id" is not assigned a string`},
-		"k8s":           {github, nil, token, "k8s-task", "host runtime the sandbox does not provide"},
+		"no mapping":      {nil, nil, nil, "github-task", "third-party account: map the fields"},
+		"not mapped":      {map[string]string{"huggingface_token": "HF_TOKEN"}, nil, map[string]string{"HF_TOKEN": "hf_example"}, "github-task", "github_token (not in benchmark.toolathlon.credentials_env)"},
+		"unset":           {github, nil, nil, "github-task", "github_token (environment variable GITHUB_TOKEN is not set)"},
+		"empty":           {github, nil, map[string]string{"GITHUB_TOKEN": ""}, "github-task", "github_token (environment variable GITHUB_TOKEN is not set)"},
+		"file unmapped":   {sheets, nil, folder, "sheets-task", "google_oauth2_credentials_path (file configs/google_credentials.json is not in benchmark.toolathlon.credential_files_env)"},
+		"file unset":      {sheets, sheetsFile, folder, "sheets-task", "google_oauth2_credentials_path (file configs/google_credentials.json: environment variable GOOGLE_CREDENTIALS is not set)"},
+		"escaping path":   {map[string]string{"google_oauth2_credentials_path": "CREDS_PATH", "google_sheets_folder_id": "SHEETS_FOLDER"}, nil, map[string]string{"CREDS_PATH": "configs/../../etc/passwd", "SHEETS_FOLDER": "1abc"}, "sheets-task", "google_oauth2_credentials_path (not a file under configs/)"},
+		"computed":        {map[string]string{"google_client_id": "CLIENT_ID"}, nil, map[string]string{"CLIENT_ID": "id"}, "excel-only", `token field "google_client_id" is not assigned a string`},
+		"k8s":             {github, nil, token, "k8s-task", "host runtime the sandbox does not provide"},
+		"own code":        {nil, nil, nil, "fillout-online-forms", "own preprocess and evaluation read configs/google_credentials.json, a third-party account's key file, not through an MCP server: map it"},
+		"own code, unset": {nil, sheetsFile, nil, "fillout-online-forms", "configs/google_credentials.json, a third-party account's key file, not through an MCP server: environment variable GOOGLE_CREDENTIALS is not set"},
 	}
 	for name, testCase := range refusals {
 		t.Run(name, func(t *testing.T) {
@@ -814,6 +824,26 @@ all_token_key_session = Dict(
 	}
 	if _, present := values["if os"]; present {
 		t.Fatal("a statement was read as an assignment")
+	}
+}
+
+func TestTasksRefusesATaskKeyFileItsCodeNoLongerNames(t *testing.T) {
+	root := writeFixture(t)
+	writeFile(t, root, "tasks/"+taskPool+"/fillout-online-forms/preprocess/main.py", "print('no form')\n")
+	commit := exec.Command("git", "-C", root, "-c", "user.name=ARIES Test", "-c", "user.email=aries@example.invalid", "commit", "--quiet", "-am", "drop the key file")
+	if output, err := commit.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v: %s", err, output)
+	}
+	options := baseOptions(t, root)
+	options.TaskIDs = []string{"fillout-online-forms"}
+	options.CredentialFilesEnv = map[string]string{"configs/google_credentials.json": "GOOGLE_CREDENTIALS"}
+	options.SecretLookup = envLookup(map[string]string{"GOOGLE_CREDENTIALS": "{}"})
+	benchmark, err := New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := benchmark.Tasks(context.Background()); err == nil || !strings.Contains(err.Error(), "neither its preprocess nor its evaluation names it") {
+		t.Fatalf("err = %v, want the stale taskKeyFiles entry named", err)
 	}
 }
 
