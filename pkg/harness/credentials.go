@@ -100,6 +100,19 @@ func (c *Credentials) LoadMCP(servers []core.MCPServerConfig, configuration []by
 	return nil
 }
 
+// AddRedactions adds values the harness is never given but scrubs, with its
+// own credentials, from everything it saves: a benchmark's credentials that
+// reach the sandbox, where the agent can read and repeat them. names are host
+// environment variables read through lookup; an unset one is skipped, and a
+// multi-line or JSON value is scrubbed by its lines and string fields as well
+// (core.SecretParts). Nothing added here is staged into the runtime.
+func (c *Credentials) AddRedactions(names []string, lookup func(string) ([]byte, bool)) {
+	for _, part := range core.LookupSecretParts(lookup, names) {
+		c.Set(fmt.Sprintf("redact:%d", len(c.order)), part)
+		clear(part)
+	}
+}
+
 // MCPFiles borrows the credential buffers to stage their native filenames.
 func (c *Credentials) MCPFiles() map[string][]byte { return c.mcp }
 

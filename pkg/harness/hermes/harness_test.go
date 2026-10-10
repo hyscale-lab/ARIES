@@ -1182,3 +1182,102 @@ func TestStartRejectsMissingAttachmentBeforeAllocation(t *testing.T) {
 		t.Fatal("allocated runtime without network attachment")
 	}
 }
+
+// A benchmark's credentials that reach the sandbox are never given to Hermes,
+// but the agent can read them there and repeat them. The values RedactEnv
+// names, and the parts of a key file, are scrubbed from every artifact the
+// harness saves; an unset variable is skipped.
+func TestRunScrubsRedactEnvValuesFromSavedArtifacts(t *testing.T) {
+	fake := newFakeDeployment(t)
+	token := "ghp_benchmarktoken123"
+	clientEmail := "agent@project.iam.example.com"
+	keyFile := `{"client_email": "` + clientEmail + `", "type": "service_account"}`
+	fake.sessionsStdout = `{"role":"tool","content":"github_token = \"` + token + `\""}` + "\n" +
+		`{"role":"tool","content":"client ` + clientEmail + `"}` + "\n"
+	fake.agentStdout = "used " + token + "\n"
+	manager, err := New(Options{Runtime: harnesscommon.RuntimeOptions{
+		Deployment:   fake,
+		Image:        testHermesImage,
+		OutputDir:    t.TempDir(),
+		StartTimeout: 2 * time.Second,
+		AgentTimeout: 2 * time.Second,
+		APIKeyLookup: func(name string) ([]byte, bool) {
+			switch name {
+			case "TOOLATHLON_GITHUB_TOKEN":
+				return []byte(token), true
+			case "TOOLATHLON_GOOGLE_KEY":
+				return []byte(keyFile), true
+			case "UNSET_TOKEN":
+				return nil, false
+			}
+			return []byte("model-secret"), true
+		},
+	}, Common: harnesscommon.Options{RedactEnv: []string{"TOOLATHLON_GITHUB_TOKEN", "TOOLATHLON_GOOGLE_KEY", "UNSET_TOKEN"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.newID = func() (string, error) { return "attempt", nil }
+	request := testRequest(t)
+	if err := manager.Start(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Run(context.Background(), "fix the git repository"); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	artifacts := filepath.Join(manager.runtime.Options.OutputDir, request.TaskID, "harness")
+	scrubbed := false
+	err = filepath.WalkDir(artifacts, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil || entry.IsDir() {
+			return walkErr
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if bytes.Contains(content, []byte(token)) || bytes.Contains(content, []byte(clientEmail)) {
+			t.Errorf("%s kept a benchmark credential:\n%s", path, content)
+		}
+		scrubbed = scrubbed || bytes.Contains(content, []byte("[REDACTED]"))
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !scrubbed {
+		t.Fatal("no artifact carries the placeholder")
+	}
+}
+
+// The task's in-sandbox MCP servers, resolved by the deployment, are
+// rendered ahead of the profile's; a clash with a profile server's name
+// fails Start before anything is created.
+func TestStartRendersTheTaskMCPServers(t *testing.T) {
+	fake := newFakeDeployment(t)
+	manager := newTestManager(t, fake, []byte("model-secret"))
+	request := testRequest(t)
+	request.Connectivity.MCPServers = []core.MCPServerConfig{{Name: "toolathlon", URL: "http://sandbox-a:10086/sse", Transport: "sse", TimeoutSeconds: 1200}}
+	if err := manager.Start(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop(context.Background())
+	retained, err := os.ReadFile(filepath.Join(manager.runtime.Options.OutputDir, request.TaskID, "harness", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "  toolathlon:\n    url: \"http://sandbox-a:10086/sse\"\n    transport: \"sse\"\n    timeout: 1200\n"; !strings.Contains(string(retained), want) {
+		t.Fatalf("config.yaml lacks the task's server %q:\n%s", want, retained)
+	}
+
+	clash := newFakeDeployment(t)
+	other := newTestManager(t, clash, []byte("model-secret"))
+	other.options.Common.MCPServers = []core.MCPServerConfig{{Name: "toolathlon", URL: "https://example.invalid/mcp"}}
+	if err := other.Start(context.Background(), request); err == nil || !strings.Contains(err.Error(), "toolathlon") {
+		t.Fatalf("a name clash was accepted: %v", err)
+	}
+	if clash.createCalls != 0 {
+		t.Fatalf("a runtime was created despite the clash: %d", clash.createCalls)
+	}
+}

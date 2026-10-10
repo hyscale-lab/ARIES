@@ -195,10 +195,16 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		voiceSTT = &manager.options.VoiceTranscribe.STT
 	}
 
+	mcpServers, err := harness.MCPServers(request.Connectivity.MCPServers, manager.options.Common.MCPServers)
+	if err != nil {
+		return fmt.Errorf("Hermes %w", err)
+	}
+
 	configuration, err := renderConfig(request.Model, renderSettings{
 		maxTurns: manager.options.MaxTurns, webSearchEnabled: manager.options.Common.WebSearchEnabled, extractEnabled: extractEnabled,
 		subagentsEnabled: manager.options.Common.SubagentsEnabled, maxConcurrentSubagents: manager.options.Common.MaxConcurrentSubagents,
-		compaction: manager.options.Compaction, extraBody: manager.options.ExtraBody, mcpServers: manager.options.Common.MCPServers,
+		compaction: manager.options.Compaction, extraBody: manager.options.ExtraBody, mcpServers: mcpServers,
+		noSandboxTools: request.NoSandboxTools,
 	}, voiceSTT)
 	if err != nil {
 		return err
@@ -218,6 +224,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 			credentials.Clear()
 		}
 	}()
+	credentials.AddRedactions(manager.options.Common.RedactEnv, manager.runtime.Options.APIKeyLookup)
 	if ok, err := credentials.Load("model", request.Model.APIKeyEnv, manager.runtime.Options.APIKeyLookup); err != nil {
 		return err
 	} else if !ok {
@@ -246,7 +253,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 			return errors.New("rendered Hermes config contains the voice API-key value")
 		}
 	}
-	if err := credentials.LoadMCP(manager.options.Common.MCPServers, configuration, manager.runtime.Options.APIKeyLookup); err != nil {
+	if err := credentials.LoadMCP(mcpServers, configuration, manager.runtime.Options.APIKeyLookup); err != nil {
 		return err
 	}
 	id, err := manager.newID()

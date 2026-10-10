@@ -725,6 +725,18 @@ these guides:
   rows and uses its pinned evaluator in a fresh sandbox from the task image, so
   `agent_sandbox_resources` overrides do not apply to evaluation. It rejects
   `environment`, `judge`, and `fact`.
+- [Toolathlon](benchmarks/toolathlon.md) requires `environment.image` (Toolathlon's
+  task image) and a harness with an MCP client, Hermes or OpenClaw. The adapter
+  adds its gateway to the harness's MCP servers, so `harness.mcp_servers` may
+  not name `toolathlon`.
+  Tasks backed by Toolathlon's self-hosted applications or by a third-party
+  account share state outside the sandbox, so they load only at
+  `execution.concurrency` 1. The optional `toolathlon` block sets the gateway
+  port, the application host, `max_steps`, which Toolathlon records in its task
+  bundle but which does not bound the agent, and `credentials_env` and
+  `credential_files_env`, which map the token fields and key files of the
+  account-backed tasks to environment variables; the profile names variables,
+  never values.
 
 ### Judge model settings
 

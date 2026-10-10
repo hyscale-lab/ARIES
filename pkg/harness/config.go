@@ -20,6 +20,12 @@ type Options struct {
 	SubagentsEnabled       bool
 	MaxConcurrentSubagents int
 	MCPServers             []core.MCPServerConfig
+	// RedactEnv names host environment variables whose values the harness is
+	// never given but scrubs from what it saves: a benchmark's credentials
+	// that reach the sandbox, where the agent can read them and repeat them
+	// (Toolathlon's account tokens). They are read through the API-key lookup
+	// at Start; an unset variable is skipped.
+	RedactEnv []string
 }
 
 // TTSOptions are the common speech synthesis inputs. Native transcription and
@@ -131,4 +137,27 @@ func safeIdentifierChars(value string) bool {
 		return false
 	}
 	return true
+}
+
+// MCPServers is the server list a harness renders for one occurrence: the
+// task's own in-sandbox servers, at the addresses the deployment resolved
+// (core.HarnessConnectivity.MCPServers), then the profile's. A task server
+// may not take a profile server's name.
+func MCPServers(task, profile []core.MCPServerConfig) ([]core.MCPServerConfig, error) {
+	names := make(map[string]bool, len(task)+len(profile))
+	for _, server := range profile {
+		names[server.Name] = true
+	}
+	out := make([]core.MCPServerConfig, 0, len(task)+len(profile))
+	for _, server := range task {
+		if err := core.ValidateMCPServer(server); err != nil {
+			return nil, fmt.Errorf("task MCP server: %w", err)
+		}
+		if names[server.Name] {
+			return nil, fmt.Errorf("task MCP server %q has the name of another MCP server", server.Name)
+		}
+		names[server.Name] = true
+		out = append(out, server)
+	}
+	return append(out, profile...), nil
 }

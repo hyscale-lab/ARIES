@@ -67,7 +67,12 @@ type renderSettings struct {
 	compaction             *CompactionSettings
 	extraBody              []byte
 	mcpServers             []core.MCPServerConfig
+	noSandboxTools         bool
 }
+
+// sandboxToolsets are Hermes's toolsets that act in the sandbox: the shell,
+// file access and code execution (core.Task.NoSandboxTools withholds them).
+var sandboxToolsets = []string{"terminal", "file", "code_execution"}
 
 // renderConfig produces the Hermes `config.yaml`. The credential is written as
 // a ${NAME} reference rather than a value: Hermes expands those from the process
@@ -209,9 +214,21 @@ func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *Voi
 	}
 	output.WriteString("\nagent:\n")
 	output.WriteString("  max_turns: " + strconv.Itoa(settings.maxTurns) + "\n")
+	var disabled []string
 	if !settings.subagentsEnabled {
+		disabled = append(disabled, "delegation")
+	}
+	if settings.noSandboxTools {
+		// Left out of platform_toolsets below as well; naming them here too
+		// keeps them off whatever a toolset's own default is.
+		disabled = append(disabled, sandboxToolsets...)
+	}
+	if len(disabled) > 0 {
 		// The native API resolves this nested denylist after platform toolsets.
-		output.WriteString("  disabled_toolsets:\n    - delegation\n")
+		output.WriteString("  disabled_toolsets:\n")
+		for _, toolset := range disabled {
+			output.WriteString("    - " + toolset + "\n")
+		}
 	}
 	if settings.compaction != nil {
 		output.WriteString("\ncompression:\n")
@@ -260,16 +277,27 @@ func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *Voi
 	output.WriteString("  streaming: false\n")
 	output.WriteString("  compact: true\n")
 	// Native API agent construction resolves this platform-specific toolset list.
-	output.WriteString("\nplatform_toolsets:\n")
-	output.WriteString("  api_server:\n")
-	output.WriteString("    - terminal\n")
-	output.WriteString("    - file\n")
-	output.WriteString("    - code_execution\n")
+	var toolsets []string
+	if !settings.noSandboxTools {
+		toolsets = append(toolsets, sandboxToolsets...)
+	}
 	if settings.subagentsEnabled {
-		output.WriteString("    - delegation\n")
+		toolsets = append(toolsets, "delegation")
 	}
 	if settings.webSearchEnabled {
-		output.WriteString("    - web\n")
+		toolsets = append(toolsets, "web")
+	}
+	output.WriteString("\nplatform_toolsets:\n")
+	if len(toolsets) == 0 {
+		// An explicit empty list: the agent's only tools are its MCP servers'.
+		output.WriteString("  api_server: []\n")
+	} else {
+		output.WriteString("  api_server:\n")
+		for _, toolset := range toolsets {
+			output.WriteString("    - " + toolset + "\n")
+		}
+	}
+	if settings.webSearchEnabled {
 		// search_backend (not backend) is deliberate: the DRB task sandbox's
 		// SearXNG instance is search-only. extract_backend is only added when
 		// a Tavily key is staged (extractEnabled); otherwise a web_extract
@@ -281,12 +309,21 @@ func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *Voi
 			output.WriteString("  extract_backend: \"tavily\"\n")
 		}
 	}
+	// Hermes registers every tool a server lists -- directly as
+	// mcp_<name>_<tool> up to v2026.8.3, and as mcp__<name>__<tool> behind
+	// its tool_describe/tool_call pair from v2026.8.31; with no MCP server
+	// named in platform_toolsets, all configured servers are enabled
+	// (hermes_cli/tools_config.py).
 	if len(settings.mcpServers) > 0 {
 		output.WriteString("\nmcp_servers:\n")
 		for _, server := range settings.mcpServers {
 			output.WriteString("  " + server.Name + ":\n")
 			if server.URL != "" {
 				output.WriteString("    url: " + yamlString(server.URL) + "\n")
+				// streamable-http is Hermes's default when the key is absent.
+				if server.Transport == "sse" {
+					output.WriteString("    transport: \"sse\"\n")
+				}
 			} else if server.Command != "" {
 				output.WriteString("    command: " + yamlString(server.Command) + "\n")
 				if len(server.Args) > 0 {
@@ -313,6 +350,9 @@ func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *Voi
 						}
 					}
 				}
+			}
+			if server.TimeoutSeconds > 0 {
+				output.WriteString("    timeout: " + strconv.Itoa(server.TimeoutSeconds) + "\n")
 			}
 		}
 	}

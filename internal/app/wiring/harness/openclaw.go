@@ -25,7 +25,7 @@ func NewOpenClaw(cfg config.Config, outputRoot string, lookup func(string) ([]by
 			APIKeyLookup: lookup,
 			Logger:       logger,
 		},
-		Common: commonOptions(cfg.Harness),
+		Common: commonOptions(cfg),
 	}
 
 	if cfg.Harness.Mode == openclawharness.ModeRealtime || cfg.Harness.Mode == openclawharness.ModeVoiceTranscribe {

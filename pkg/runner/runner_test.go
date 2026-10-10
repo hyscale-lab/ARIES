@@ -538,6 +538,21 @@ func TestRunnerWithoutOverridesLeavesHarnessResourcesAbsent(t *testing.T) {
 	}
 }
 
+// A task that withholds the harness's sandbox tools says so in the request
+// the harness starts from; a task that does not leaves them on.
+func TestRunnerPassesTheTaskSandboxToolsToTheHarness(t *testing.T) {
+	for _, withheld := range []bool{true, false} {
+		rig := newRig(t, 1)
+		rig.benchmark.tasks[0].NoSandboxTools = withheld
+		if _, err := rig.runner.Run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if got := rig.harness.requests[0].NoSandboxTools; got != withheld {
+			t.Fatalf("harness request NoSandboxTools = %v, want %v", got, withheld)
+		}
+	}
+}
+
 func TestNewClonesRuntimeOverridePointers(t *testing.T) {
 	rig := newRig(t, 0)
 	cpu, memory, timeout := 1.5, 768, 2*time.Minute

@@ -62,5 +62,6 @@ implementation. Do not introduce registration or generic plugin frameworks.
 - Deep Research Bench: [usage](../benchmarks/deep-research-bench.md), [host-side RACE and FACT](../implementation/benchmarks.md#deep-research-bench).
 - SWE-Atlas QA: [usage](../benchmarks/swe-atlas-qa.md), [rubric scoring](../implementation/benchmarks.md#swe-atlas-qa).
 - SWE-bench Pro public split: [usage](../benchmarks/swe-bench-pro.md), [private snapshots and evaluation](../implementation/benchmarks.md#swe-bench-pro).
+- Toolathlon: [usage](../benchmarks/toolathlon.md), [in-sandbox preparation and grading](../implementation/benchmarks.md#toolathlon).
 
 See [design principles](../design.md) for the obligations shared by all roles.

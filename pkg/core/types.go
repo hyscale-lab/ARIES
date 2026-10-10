@@ -8,6 +8,13 @@ type Task struct {
 	Instruction string        `json:"instruction"`
 	Timeout     time.Duration `json:"timeout,omitempty"`
 	Environment Environment   `json:"environment"`
+	// NoSandboxTools withholds the harness's own tools that act in the
+	// sandbox (a shell, code execution, file access) for this task, so the
+	// agent acts only through its MCP servers and the harness's other tools
+	// (web search). A benchmark whose tasks list their own tools sets it for
+	// a task that lists none of these, to keep to the benchmark (Toolathlon).
+	// False keeps every harness tool.
+	NoSandboxTools bool `json:"no_sandbox_tools,omitempty"`
 }
 
 // Environment describes the task sandbox requested by a benchmark.
@@ -136,6 +143,19 @@ type RuntimePlacement struct {
 // A zero port means that the task does not provide that service.
 type TaskServices struct {
 	SearchPort int `json:"search_port,omitempty"`
+	// MCP lists MCP servers the benchmark serves from inside the sandbox.
+	// The deployment resolves each to an address the harness can reach
+	// (HarnessConnectivity.MCPServers).
+	MCP []TaskMCPService `json:"mcp,omitempty"`
+}
+
+// TaskMCPService is one MCP server listening inside the task sandbox.
+type TaskMCPService struct {
+	Name           string `json:"name"`
+	Port           int    `json:"port"`
+	Path           string `json:"path,omitempty"`
+	Transport      string `json:"transport,omitempty"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
 }
 
 // HarnessConnectivity supplies placement and addresses resolved for that placement.
@@ -143,6 +163,9 @@ type TaskServices struct {
 type HarnessConnectivity struct {
 	Placement RuntimePlacement `json:"placement"`
 	SearchURL string           `json:"search_url,omitempty"`
+	// MCPServers are the task's in-sandbox MCP servers at the addresses
+	// resolved for this placement; the harness adds them to its own.
+	MCPServers []MCPServerConfig `json:"mcp_servers,omitempty"`
 }
 
 // HarnessRequest contains task-local runtime inputs supplied before Run.
@@ -156,6 +179,9 @@ type HarnessRequest struct {
 	CPU          *float64            `json:"cpu,omitempty"`
 	MemoryMB     *int                `json:"memory_mb,omitempty"`
 	OutputDir    string              `json:"output_dir"`
+	// NoSandboxTools is the task's Task.NoSandboxTools: the harness renders
+	// none of its own shell, code-execution or file tools.
+	NoSandboxTools bool `json:"no_sandbox_tools,omitempty"`
 }
 
 const (
