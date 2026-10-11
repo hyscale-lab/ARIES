@@ -168,6 +168,12 @@ func (s *flowSandbox) Exec(_ context.Context, command core.Command) (core.Comman
 			return core.CommandResult{}, nil
 		case "aries-toolathlon-uv":
 			return s.execUV(command, args[3:])
+		case "aries-toolathlon-calendar":
+			if !s.credentialsInstalled || s.gatewayStarted {
+				s.t.Error("Calendar credentials must be staged after the overlay and before the gateway")
+			}
+			s.events = append(s.events, "calendar")
+			return core.CommandResult{}, nil
 		case "aries-toolathlon-runtime":
 			if args[3] != workspaceRoot || args[4] != runtimeManifestContainerPath {
 				s.t.Errorf("runtime inventory arguments = %v", args[3:])
@@ -602,6 +608,10 @@ func TestEvaluateRefusesAnAlteredRuntime(t *testing.T) {
 			manifest: pristineRuntimeManifest + "4444444444444444444444444444444444444444444444444444444444444444  ./sitecustomize.py\n",
 			want:     []string{"added 1", "./sitecustomize.py"},
 		},
+		"sourceless startup bytecode": {
+			manifest: pristineRuntimeManifest + "4444444444444444444444444444444444444444444444444444444444444444  .venv/lib/python3.12/site-packages/sitecustomize.pyc\n",
+			want:     []string{"added 1", "sitecustomize.pyc"},
+		},
 		"uv removed": {
 			manifest: strings.Replace(pristineRuntimeManifest, "2222222222222222222222222222222222222222222222222222222222222222  /root/.local/bin/uv\n", "", 1),
 			want:     []string{"removed 1", "/root/.local/bin/uv"},
@@ -788,5 +798,49 @@ func tarMember(t *testing.T, archive, name string) []byte {
 			}
 			return content
 		}
+	}
+}
+
+func TestCalendarRequiresAndStagesBothCredentialFiles(t *testing.T) {
+	root := writeFixture(t)
+	for _, missing := range []string{"", "gcp-oauth.keys.json", "google_credentials.json"} {
+		t.Run("missing="+missing, func(t *testing.T) {
+			options := baseOptions(t, root)
+			options.TaskIDs = []string{"calendar-task"}
+			options.CredentialFilesEnv = map[string]string{
+				"configs/gcp-oauth.keys.json":     "CALENDAR_OAUTH",
+				"configs/google_credentials.json": "CALENDAR_CREDENTIALS",
+			}
+			values := map[string]string{"CALENDAR_OAUTH": "{}", "CALENDAR_CREDENTIALS": "{}"}
+			if missing != "" {
+				delete(values, options.CredentialFilesEnv["configs/"+missing])
+			}
+			options.SecretLookup = envLookup(values)
+			benchmark, err := New(options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tasks, err := benchmark.Tasks(context.Background())
+			if missing != "" {
+				if err == nil || !strings.Contains(err.Error(), "configs/"+missing) {
+					t.Fatalf("missing Calendar credential: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			sandbox := newFlowSandbox(t, "calendar-task", false)
+			sandbox.bundleServers = []string{"google_calendar"}
+			if err := benchmark.PrepareSandbox(context.Background(), tasks[0], sandbox); err != nil {
+				t.Fatal(err)
+			}
+			calendar := slices.Index(sandbox.events, "calendar")
+			preprocess := slices.Index(sandbox.events, "preprocess")
+			gateway := slices.Index(sandbox.events, "gateway")
+			if calendar < 0 || preprocess <= calendar || gateway <= preprocess {
+				t.Fatalf("Calendar startup order: %v", sandbox.events)
+			}
+		})
 	}
 }

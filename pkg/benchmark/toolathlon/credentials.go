@@ -437,3 +437,15 @@ func sortedKeys[V any](values map[string]V) []string {
 	sort.Strings(keys)
 	return keys
 }
+
+// Calendar's launcher reads these files from the user's home rather than
+// interpolating token fields in its server configuration.
+func requireCalendarCredentials(creds *credentials) error {
+	for _, file := range []string{"gcp-oauth.keys.json", "google_credentials.json"} {
+		if creds != nil && len(creds.files[file]) != 0 {
+			continue
+		}
+		return fmt.Errorf("MCP server google_calendar requires configs/%s: supply a nonempty value through benchmark.toolathlon.credential_files_env", file)
+	}
+	return nil
+}

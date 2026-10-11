@@ -21,6 +21,7 @@ var fixtureTasks = map[string]string{
 	"web-search-task":  `{"needed_mcp_servers": ["fetch"], "needed_local_tools": ["claim_done", "web_search", "python_execute"], "max_turns": 10}`,
 	"odd-local-tool":   `{"needed_mcp_servers": ["memory"], "needed_local_tools": ["ai_webpage_summary"], "max_turns": 10}`,
 	"object-form":      `{"needed_mcp_servers": {"memory": {"enabled": true}}, "max_turns": 10}`,
+	"calendar-task":    `{"needed_mcp_servers": ["google_calendar"], "max_turns": 10}`,
 	"github-task":      `{"needed_mcp_servers": ["github", "filesystem"], "max_turns": 10}`,
 	"sheets-task":      `{"needed_mcp_servers": ["google_sheet"], "max_turns": 10}`,
 	"k8s-task":         `{"needed_mcp_servers": ["k8s"], "max_turns": 10}`,

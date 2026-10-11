@@ -598,6 +598,11 @@ func loadTask(root, id string, environment core.Environment, harnessWebSearch bo
 		case kind == serverHostRuntime:
 			return core.Task{}, taskDetails{}, fmt.Errorf("MCP server %q needs a host runtime the sandbox does not provide (a kind cluster on the Docker socket with host networking)", server)
 		case kind == serverAccount:
+			if server == "google_calendar" {
+				if err := requireCalendarCredentials(creds); err != nil {
+					return core.Task{}, taskDetails{}, err
+				}
+			}
 			if creds == nil {
 				return core.Task{}, taskDetails{}, fmt.Errorf("MCP server %q needs a third-party account: map the fields of Toolathlon's %s it reads to environment variables in benchmark.toolathlon.credentials_env", server, credentialsFileName)
 			}

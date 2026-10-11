@@ -116,6 +116,13 @@ func (b *Benchmark) PrepareSandbox(ctx context.Context, task core.Task, sandbox 
 			return err
 		}
 	}
+	if slices.Contains(details.servers, "google_calendar") {
+		if err := execOK(ctx, sandbox, core.Command{
+			Path: "/bin/sh", Args: []string{"-ceu", calendarCredentialsScript, "aries-toolathlon-calendar", workspaceRoot},
+		}, "stage Google Calendar credentials"); err != nil {
+			return err
+		}
+	}
 	if details.needsApplications {
 		if err := b.startForwarder(ctx, sandbox); err != nil {
 			return err
@@ -373,3 +380,16 @@ func execOK(ctx context.Context, sandbox runner.Sandbox, command core.Command, w
 	}
 	return nil
 }
+
+// Match the pinned launcher's Calendar auth paths before preprocessing and
+// gateway startup. Refuse missing files rather than starting an auth flow.
+const calendarCredentialsScript = `
+: "${HOME:?HOME is required for Calendar credentials}"
+test -s "$1/configs/gcp-oauth.keys.json"
+test -s "$1/configs/google_credentials.json"
+umask 077
+mkdir -p "$HOME/.calendar-mcp"
+cp "$1/configs/gcp-oauth.keys.json" "$HOME/.calendar-mcp/gcp-oauth.keys.json"
+cp "$1/configs/google_credentials.json" "$HOME/.calendar-mcp/credentials.json"
+chmod 600 "$HOME/.calendar-mcp/gcp-oauth.keys.json" "$HOME/.calendar-mcp/credentials.json"
+`

@@ -64,7 +64,9 @@ pieces through the sandbox and leaves the agent loop to the ARIES harness.
     again before the grader runs; any change refuses the evaluation, naming
     the paths, and the verdict is "failed" with that reason. The grader runs
     with a private `.pyc` cache prefix and without the user site directory,
-    so a planted `.pyc` or user-site `.pth` is never loaded; `.log` files are
+    so existing `__pycache__` directories and user-site `.pth` files are not
+    loaded. Standalone `.pyc` files are inventoried: Python can import them
+    without source even with a private cache prefix. `.log` files are
     not inventoried (an MCP server logs into the virtual environment while the
     agent works). The inventory
     runs on the image's system Python, not on the virtual environment it
@@ -255,6 +257,13 @@ credentials and not with whatever the agent left in the file. The archive that
 carries them exists on the host only for the upload and is not kept in the run
 directory. The GitHub server's binary, `local_binary/github-mcp-server` in the
 checkout, rides in the project archive for the tasks that need it.
+
+Google Calendar tasks also require both `configs/gcp-oauth.keys.json` and
+`configs/google_credentials.json` through `credential_files_env`. Task loading
+refuses missing or empty values. Before preprocess and gateway startup, the
+adapter copies them to `~/.calendar-mcp/gcp-oauth.keys.json` and
+`~/.calendar-mcp/credentials.json`, matching Toolathlon's launcher. Both copies
+are private to the sandbox and use file mode `0600`.
 
 Toolathlon's servers and scripts log what they send and print what they read,
 so a token can reach the adapter's artifacts. Every value taken from the

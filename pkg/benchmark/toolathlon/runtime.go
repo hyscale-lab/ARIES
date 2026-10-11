@@ -21,10 +21,10 @@ import (
 // carry: uv, the interpreter uv manages, the project's virtualenv, and the
 // files uv and Python read before any project code runs. Those are
 // inventoried file by file before the bridge exists and again before the
-// grader runs; any difference refuses the evaluation. Bytecode caches are
-// left out of the inventory because the grader never loads them: it runs
-// with a fresh cache prefix and without the user site directory, so a
-// planted .pyc or a user-site .pth is inert. The image's system programs
+// grader runs; any difference refuses the evaluation. Standalone .pyc files
+// are inventoried because Python can import them without source. Only
+// __pycache__ directories are skipped: the grader uses a fresh cache prefix
+// and disables the user site directory. The image's system programs
 // (the shell, tar, find, sha256sum, libc) are outside this inventory: an
 // agent that replaces those is beyond what a same-container grader can
 // defend against, the limit ARIES's other benchmarks share.
@@ -42,7 +42,7 @@ var runtimeManifestTimeout = 10 * time.Minute
 // and the files uv reads for its configuration, every symbolic link under
 // the first two with its target, and every regular file at the top of the
 // project directory, where Python would find a planted sitecustomize;
-// bytecode caches and .log files skipped (see above and inventory.py). It runs on the image's system
+// __pycache__ directories and .log files skipped (see above and inventory.py). It runs on the image's system
 // Python, never on the virtualenv it inventories, and releases every file
 // it read from the page cache afterwards: ARIES's monitor reports the
 // sandbox cgroup's usage, cache included, and a 1.5 GB read would otherwise

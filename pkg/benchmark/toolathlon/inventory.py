@@ -5,10 +5,12 @@ inventories): python3 - <workspace> <manifest>. Writes one line per regular
 file ("<sha256>  <path>") under the virtualenv, the interpreter's home, the
 uv binary, the files uv reads for its configuration, and the top level of the
 project directory; one line per symbolic link ("link <path> -> <target>")
-under the first two; and prints the manifest's own digest. Bytecode caches
-are skipped (the evaluator runs with a private cache prefix and never loads
-them), and so are .log files: Toolathlon's excel MCP server writes its log
-into the virtual environment while the agent works. Every file read is released from the page cache afterwards
+under the first two; and prints the manifest's own digest. PEP 3147
+__pycache__ directories are skipped (the evaluator uses a private cache
+prefix). Standalone .pyc files are inventoried because Python can import
+them without source. The .log files are skipped: Toolathlon's excel MCP
+server writes its log into the virtual environment while the agent works.
+Every file read is released from the page cache afterwards
 (posix_fadvise DONTNEED), so the inventory does not raise the sandbox's
 memory figure -- ARIES's monitor counts the cgroup's cache -- by the size of
 the runtime it reads. Standard library only.
@@ -74,8 +76,8 @@ for root in roots:
                 if root in (".venv", python_home):
                     links.append((path, os.readlink(path)))
                 continue
-            if name.endswith((".pyc", ".log")):
-                continue  # bytecode is never loaded (cache prefix); MCP servers log into the venv
+            if name.endswith(".log"):
+                continue  # MCP servers log into the venv
             if os.path.isfile(path):
                 files.append(path)
 top = sorted(entry for entry in os.listdir(".") if os.path.isfile(entry) and not os.path.islink(entry))
