@@ -223,6 +223,9 @@ type taskDetails struct {
 	// stashed names the task-directory entries PrepareSandbox moved to the
 	// host, for Evaluate to restore.
 	stashed []string
+	// bundle is the task bundle as preprocess wrote it, kept in memory for
+	// Evaluate to inject; the run directory holds only a scrubbed copy.
+	bundle []byte
 }
 
 // taskConfigFile is the subset of tasks/<pool>/<task>/task_config.json the

@@ -30,6 +30,7 @@ type flowSandbox struct {
 	commands []core.Command
 	events   []string
 	uploads  map[string]string // container path -> host source
+	uploaded map[string][]byte // container path -> content when uploaded
 	files    map[string]bool   // private and grader files that exist
 	taskDir  map[string]byte   // task directory children -> kind
 	stash    []dirEntry        // what the last `tar -cf` archived
@@ -67,7 +68,7 @@ type flowSandbox struct {
 func newFlowSandbox(t *testing.T, taskName string, needsApplication bool) *flowSandbox {
 	return &flowSandbox{
 		t: t, taskName: taskName, needsApplication: needsApplication,
-		uploads: map[string]string{}, files: map[string]bool{}, taskDir: map[string]byte{},
+		uploads: map[string]string{}, uploaded: map[string][]byte{}, files: map[string]bool{}, taskDir: map[string]byte{},
 		evalResult:      `{"pass": true, "details": "All evaluation checks passed"}`,
 		runtimeManifest: pristineRuntimeManifest,
 		bundleServers:   []string{"canvas", "memory"},
@@ -320,6 +321,11 @@ func (s *flowSandbox) Upload(_ context.Context, source, destination string) erro
 		return err
 	}
 	s.uploads[destination] = source
+	content, err := os.ReadFile(source)
+	if err != nil {
+		return err
+	}
+	s.uploaded[destination] = content
 	s.files[destination] = true
 	s.events = append(s.events, "upload:"+path.Base(destination))
 	return nil
@@ -719,6 +725,15 @@ func TestPrepareAndEvaluateOverlayTheCredentials(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(hostDir, "credentials.tar")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("the credentials archive was left in the run directory")
 	}
+	// The saved bundle is scrubbed at preparation, so a run that fails at any
+	// later step leaves no value from the environment in it.
+	saved, err := os.ReadFile(filepath.Join(hostDir, "task_bundle.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(saved), "ghp_example123") || !strings.Contains(string(saved), redactedValue) {
+		t.Fatalf("task_bundle.json after preparation:\n%s", saved)
+	}
 
 	// The agent replaced the token file; evaluation must not grade with it.
 	sandbox.credentialsInstalled = false
@@ -735,6 +750,14 @@ func TestPrepareAndEvaluateOverlayTheCredentials(t *testing.T) {
 	}
 	if !sandbox.credentialsInstalled || evaluation.Score != 1 {
 		t.Fatalf("evaluation = %+v, credentials installed %v", evaluation, sandbox.credentialsInstalled)
+	}
+	// The grader reads the trusted bundle, values included, from a copy that
+	// does not outlive the upload.
+	if !strings.Contains(string(sandbox.uploaded[bundleContainerPath]), "ghp_example123") {
+		t.Fatalf("the grader was given %q, not the trusted bundle", sandbox.uploaded[bundleContainerPath])
+	}
+	if _, err := os.Stat(sandbox.uploads[bundleContainerPath]); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the bundle's upload copy %s was left behind", sandbox.uploads[bundleContainerPath])
 	}
 	for _, member := range sandbox.projectMembers {
 		if strings.HasPrefix(member, "local_binary/") {

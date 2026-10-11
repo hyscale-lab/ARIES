@@ -26,6 +26,22 @@ var evalTimeout = 15 * time.Minute
 const trajectoryStub = `{"config": {}, "status": "success", "messages": [], "tool_calls": {},` +
 	` "aries": "trajectory stub written by the ARIES Toolathlon adapter; the agent ran in the harness"}` + "\n"
 
+// injectBundle uploads the trusted bundle kept in memory since preparation
+// through a private temporary file, removed as soon as the upload returns:
+// the run directory holds only the scrubbed copy.
+func injectBundle(ctx context.Context, sandbox runner.Sandbox, bundle []byte) error {
+	dir, err := os.MkdirTemp("", "aries-toolathlon-bundle-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "task_bundle.json")
+	if err := os.WriteFile(path, bundle, 0o600); err != nil {
+		return err
+	}
+	return sandbox.Upload(ctx, path, bundleContainerPath)
+}
+
 // evalResult is Toolathlon's eval_res.json.
 type evalResult struct {
 	Pass    *bool  `json:"pass"`
@@ -71,7 +87,6 @@ func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner
 	}
 
 	hostDir := filepath.Join(b.outputDir, task.ID, "toolathlon")
-	bundleHostPath := filepath.Join(hostDir, "task_bundle.json")
 	stashHostPath := filepath.Join(hostDir, "artifact-stash.tar")
 	manifestBeforePath := filepath.Join(hostDir, runtimeManifestHostName)
 	manifestAfterPath := filepath.Join(hostDir, "runtime-manifest-after.txt")
@@ -84,7 +99,10 @@ func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner
 			return finish(fmt.Errorf("remove stale evaluator artifact %q: %w", path, err))
 		}
 	}
-	for _, path := range []string{bundleHostPath, stashHostPath, manifestBeforePath} {
+	if len(details.bundle) == 0 {
+		return finish(fmt.Errorf("toolathlon task %q has no trusted task bundle from preparation", task.ID))
+	}
+	for _, path := range []string{stashHostPath, manifestBeforePath} {
 		if _, err := os.Stat(path); err != nil {
 			return finish(fmt.Errorf("trusted preparation artifact missing: %w", err))
 		}
@@ -137,7 +155,7 @@ func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner
 	if err := sandbox.Upload(ctx, stubHostPath, trajectoryPath); err != nil {
 		return finish(fmt.Errorf("inject trajectory stub: %w", err))
 	}
-	if err := sandbox.Upload(ctx, bundleHostPath, bundleContainerPath); err != nil {
+	if err := injectBundle(ctx, sandbox, details.bundle); err != nil {
 		return finish(fmt.Errorf("inject trusted task bundle: %w", err))
 	}
 
@@ -162,11 +180,6 @@ func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner
 		artifactErrors = append(artifactErrors, fmt.Errorf("download evaluator result: %w", err))
 	} else if err := scrub.file(evalResultHostPath); err != nil {
 		artifactErrors = append(artifactErrors, fmt.Errorf("scrub evaluator result: %w", err))
-	}
-	// The grader has read the trusted bundle; the copy kept in the run
-	// directory is scrubbed like every other artifact.
-	if err := scrub.file(bundleHostPath); err != nil {
-		artifactErrors = append(artifactErrors, fmt.Errorf("scrub task bundle: %w", err))
 	}
 	if execErr != nil {
 		artifactErrors = append(artifactErrors, fmt.Errorf("run toolathlon evaluator: %w", execErr))

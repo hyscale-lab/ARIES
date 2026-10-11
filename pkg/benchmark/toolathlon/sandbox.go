@@ -70,7 +70,8 @@ func uvCommand(args ...string) core.Command {
 //  2. start the loopback forwarder if the task uses a self-hosted application;
 //  3. run Toolathlon's preprocess, which seeds the workspace and the
 //     applications and writes the task bundle;
-//  4. keep a trusted copy of the bundle on the host and check its layout;
+//  4. keep the bundle in memory for Evaluate, save only a scrubbed copy,
+//     and check its layout;
 //  5. stash the grader and ground truth on the host, and prove them absent;
 //  6. start the MCP gateway and wait for its health endpoint;
 //  7. inventory the evaluator's runtime (runtime.go), the last thing before
@@ -135,7 +136,19 @@ func (b *Benchmark) PrepareSandbox(ctx context.Context, task core.Task, sandbox 
 	if err := sandbox.Download(ctx, bundleContainerPath, bundleHostPath); err != nil {
 		return fmt.Errorf("download task bundle: %w", err)
 	}
-	if err := validateBundleFile(bundleHostPath, details); err != nil {
+	// The trusted bytes stay in memory for Evaluate. The run directory keeps
+	// only a scrubbed copy from here on, so a failure at any later step,
+	// here or in Evaluate, cannot leave a credential in it.
+	trustedBundle, err := os.ReadFile(bundleHostPath)
+	if err != nil {
+		_ = os.Remove(bundleHostPath)
+		return fmt.Errorf("read task bundle: %w", err)
+	}
+	if err := b.scrubber().file(bundleHostPath); err != nil {
+		_ = os.Remove(bundleHostPath)
+		return fmt.Errorf("scrub task bundle: %w", err)
+	}
+	if err := validateBundle(trustedBundle, details); err != nil {
 		return fmt.Errorf("validate task bundle: %w", err)
 	}
 	stashed, err := stashArtifacts(ctx, sandbox, details.name, filepath.Join(hostDir, "artifact-stash.tar"))
@@ -144,6 +157,7 @@ func (b *Benchmark) PrepareSandbox(ctx context.Context, task core.Task, sandbox 
 	}
 	b.mu.Lock()
 	details.stashed = stashed
+	details.bundle = trustedBundle
 	b.details[task.ID] = details
 	b.mu.Unlock()
 
@@ -328,17 +342,9 @@ type bundlePaths struct {
 	LogFile        string `json:"log_file"`
 }
 
-// validateBundleFile is the adapter's equivalent of the checks the decoupled
+// validateBundle is the adapter's equivalent of the checks the decoupled
 // runner makes on the bundle it preserves outside the container: the layout
 // Evaluate relies on must be the one preprocess actually produced.
-func validateBundleFile(hostPath string, details taskDetails) error {
-	content, err := os.ReadFile(hostPath)
-	if err != nil {
-		return err
-	}
-	return validateBundle(content, details)
-}
-
 func validateBundle(content []byte, details taskDetails) error {
 	var bundle taskBundle
 	if err := json.Unmarshal(content, &bundle); err != nil {

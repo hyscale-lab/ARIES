@@ -344,8 +344,10 @@ reuse the name `toolathlon`.
 
 ## Artifacts
 
-Under `<output_dir>/<task>/toolathlon/`: `task_bundle.json` (the trusted
-task bundle preprocess produced), `artifact-stash.tar` (the hidden grader),
+Under `<output_dir>/<task>/toolathlon/`: `task_bundle.json` (the task bundle
+preprocess produced, scrubbed as soon as it is saved; the adapter keeps the
+trusted bytes in memory and gives the grader a temporary copy that is removed
+after the upload), `artifact-stash.tar` (the hidden grader),
 `preprocess.log`, `gateway.log` (every tool call the gateway served),
 `eval.log`, and `eval_res.json` (Toolathlon's verdict, with its own
 `details` or `failure` text). The trajectory stub Toolathlon's evaluator
