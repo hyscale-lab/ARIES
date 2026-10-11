@@ -19,8 +19,8 @@ pieces through the sandbox and leaves the agent loop to the ARIES harness.
   into the task image, runs Toolathlon's `container_preprocess` (which seeds
   the workspace and, for application-backed tasks, the application), and
   starts Toolathlon's `container_tool_gateway`, an MCP-over-SSE server on a
-  fixed port. Every MCP server the task declares, plus Toolathlon's own
-  `claim_done`, is one tool behind that gateway.
+  fixed port. The gateway exposes the tools of every MCP server the task
+  declares, plus Toolathlon's own `claim_done`, behind that one endpoint.
 - **The harness** reaches the gateway as the MCP server named `toolathlon`.
   Every task declares the gateway as a service of its sandbox (SSE at `/sse`
   on the gateway port); the deployment resolves its address on the run's
@@ -95,7 +95,9 @@ the adapter rather than by weakening the sandbox.
 **Host networking.** Toolathlon starts its task container with
 `--network host`, so its MCP servers and preprocess scripts reach the
 self-hosted applications at `localhost` on fixed ports. An ARIES task
-container is on a private per-task network. For tasks that use an
+container is on the run's Docker network: one bridge network that ARIES
+creates for each run (`aries-net-<id>`) and shares among that run's task
+sandboxes, not the host's network. For tasks that use an
 application-backed server (`canvas`, `emails`, `woocommerce`), the adapter
 starts a small loopback forwarder inside the container that carries those
 ports (`1143`, `1587`, `2525`, `10001`, `10003`, `10005`, `20001`) to the
@@ -122,7 +124,7 @@ Two smaller differences are deliberate:
   34 MCP servers: 9 run inside the sandbox (files, terminal, git,
   spreadsheets, documents, memory, time), 3 are the self-hosted
   applications, 9 reach the public internet without an account, 12 need a
-  credentialed third-party account (GitHub, Google ×6, Hugging Face,
+  credentialed third-party account (GitHub, Google ×5, Hugging Face,
   Notion ×2, Snowflake, W&B, YouTube), and `k8s` needs a `kind` cluster on
   the Docker socket with host networking. At the pinned revision **52 of
   the 108 tasks load with no account**: 28 need nothing outside the sandbox
@@ -175,12 +177,17 @@ Prerequisites beyond the normal ARIES requirements are:
 - outbound network access from the task container, which the adapter turns
   on unconditionally because several servers reach the public internet.
 
-Build and prewarm the checked-in profile from the repository root:
+Build ARIES and the bridge image, then prewarm the checked-in profile, from
+the repository root:
 
 ```sh
-make build
+make bridge-image
 ./bin/aries setup profiles/hermes-toolathlon-canvas-list-test-deepseek.json
 ```
+
+`make bridge-image` builds the binaries, as `make build` does, and then the
+pinned bridge image the managed bridge runs, as in the
+[quick start](../quick-start.md); `make build` alone builds only the binaries.
 
 `setup` installs or verifies the pinned checkout, materializes the two
 site configuration files Toolathlon derives from its checked-in examples,
@@ -269,18 +276,19 @@ Toolathlon's servers and scripts log what they send and print what they read,
 so a token can reach the adapter's artifacts. Every value taken from the
 environment is replaced with `<redacted>` in what the adapter saves —
 `preprocess.log`, `gateway.log`, `eval.log`, `eval_res.json`,
-`task_bundle.json` — and in the errors and evaluation details it returns;
-a value is matched as it is, JSON-escaped, and by its lines and the string
-fields of a JSON value (a key file), and values shorter than 8 characters are
-settings, left as they are. The agent has root in the sandbox and can read the
-token file, and agents do: in runs of this adapter they read the Canvas tasks'
-token files and wrote those test tokens into `curl` commands. So the harness
-scrubs the same values from what it saves (its session, logs and config);
-wiring gives it the variables' names as `RedactEnv`, never the values. Not
-scrubbed: the model bridge's log, which records the agent's commands as they
-were sent, and the containers' output. No scrubbing undoes what the agent sends
-to the model: a token it reads goes to the model provider with its next
-request.
+`task_bundle.json` — and in the errors and evaluation details it returns; a
+value is matched as it is and JSON-escaped, and so are its individual lines
+and the string fields of a JSON value (a key file). A whole value shorter than
+8 bytes is taken for a setting and left as it is, and a line or JSON string
+field shorter than 16 bytes is not matched on its own. The agent has root in
+the sandbox and can read the token file, and agents do: in runs of this
+adapter they read the Canvas tasks' token files and wrote those test tokens
+into `curl` commands. So the harness scrubs the same values from what it saves
+(its session, logs and config); wiring gives it the variables' names as
+`RedactEnv`, never the values. Not scrubbed: the command log of the SSH
+ToolBridge, which records the agent's commands as they were sent, and the
+containers' output. No scrubbing undoes what the agent sends to the model: a
+token it reads goes to the model provider with its next request.
 
 What to know before running them:
 
@@ -310,11 +318,13 @@ What to know before running them:
 "harness": {"type": "hermes"}
 ```
 
-`benchmark.environment.workdir` is fixed to Toolathlon's agent workspace and
-`allow_network` to true; a profile that sets them otherwise is rejected. The
-`benchmark.toolathlon` block is optional and its values above are the
-defaults. `credentials_env` and `credential_files_env` unlock the
-account-backed tasks (above).
+`benchmark.environment.workdir` is fixed to Toolathlon's agent workspace; a
+profile that sets another is rejected. Outbound network access is not a
+profile setting: the adapter always turns it on, and `allow_network` is not a
+field of `benchmark.environment`, so a profile that names it is rejected by
+schema validation, even with `true`. The `benchmark.toolathlon` block is
+optional and its values above are the defaults. `credentials_env` and
+`credential_files_env` unlock the account-backed tasks (above).
 `max_steps` does **not** bound the agent: it is Toolathlon's
 `max_steps_under_single_turn_mode`, handed to its preprocess for the task
 bundle, where it is bookkeeping for Toolathlon's own loop — which does not

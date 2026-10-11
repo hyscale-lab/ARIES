@@ -203,8 +203,10 @@ task container.
 
 Account credentials come from the environment variables the profile names. The
 adapter writes them into Toolathlon's token file in the sandbox, and replaces
-every value taken from the environment with `<redacted>` in the logs, bundle
-and results it saves.
+each value taken from the environment with `<redacted>` in the logs, bundle
+and results it saves: a whole value from 8 bytes, and its individual lines and
+JSON string fields from 16 bytes. The command log of the SSH ToolBridge is not
+scrubbed (see the [Toolathlon guide](../benchmarks/toolathlon.md)).
 
 Sources: [task loading](../../pkg/benchmark/toolathlon/toolathlon.go),
 [preparation](../../pkg/benchmark/toolathlon/sandbox.go),
