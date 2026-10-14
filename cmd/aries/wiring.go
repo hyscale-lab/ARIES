@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 
 	"github.com/hyscale-lab/aries/internal/app"
 	benchmarkwiring "github.com/hyscale-lab/aries/internal/app/wiring/benchmark"
@@ -38,6 +39,16 @@ func commandWiring() app.Wiring {
 func validateComponents(cfg config.Config) error {
 	if err := validateDeployment(&cfg); err != nil {
 		return err
+	}
+	// Every runtime of an Apptainer run shares one loopback, so two tasks'
+	// fixed service ports would collide.
+	if cfg.Sandbox.Deployment.Backend == "apptainer" && cfg.Execution.Concurrency > 1 {
+		return errors.New("an Apptainer run executes one task at a time; set execution.concurrency to 1")
+	}
+	// Apptainer runs every command as the instance's root, and SWE-bench Pro
+	// runs the agent's commands as UID 65532.
+	if cfg.Sandbox.Deployment.Backend == "apptainer" && cfg.Benchmark.Type == "swebenchpro" {
+		return errors.New("SWE-bench Pro runs commands as a non-root user, which the Apptainer backend cannot; use Docker or Kubernetes")
 	}
 	switch cfg.Benchmark.Type {
 	case "terminalbench2":
@@ -154,6 +165,12 @@ func newSandbox(cfg config.Config, outputRoot, runID, occurrenceID string, gpuIn
 			return app.SandboxInstance{}, err
 		}
 		return sandboxwiring.New(outputRoot, occurrenceID, gpuIndices, logger, transport, environment.NewTaskEnvironment, resources)
+	case "apptainer":
+		transport, resources, err := deploymentwiring.NewApptainerSandbox(cfg.Sandbox.Deployment, logger)
+		if err != nil {
+			return app.SandboxInstance{}, err
+		}
+		return sandboxwiring.New(outputRoot, occurrenceID, gpuIndices, logger, transport, environment.NewTaskEnvironment, resources)
 	default:
 		return app.SandboxInstance{}, fmt.Errorf("unsupported sandbox.deployment.backend %q", cfg.Sandbox.Deployment.Backend)
 	}
@@ -167,6 +184,9 @@ func newSharedBridge(cfg config.Config, runID, outputRoot string, placement core
 	case "openclaw-ssh", "hermes-ssh":
 	default:
 		return nil, fmt.Errorf("unsupported bridge type %q", cfg.Bridge.Type)
+	}
+	if cfg.Bridge.Deployment.Backend == "apptainer" {
+		return newApptainerBridge(cfg, runID, outputRoot, placement)
 	}
 	runtime, err := newDeployment(cfg.Bridge.Deployment, logger)
 	if err != nil {
@@ -198,6 +218,25 @@ func newSharedBridge(cfg config.Config, runID, outputRoot string, placement core
 	return bridgewiring.NewService(cfg, runID, filepath.Join(outputRoot, "infrastructure", "bridge"), placement, runtime, launch)
 }
 
+// newApptainerBridge runs the bridge as a process in the run's namespace: from
+// inside an instance it could not execute in the sandboxes. Its paths are host
+// paths, and its ports are on the run's private loopback.
+func newApptainerBridge(cfg config.Config, runID, outputRoot string, placement core.RuntimePlacement) (app.SharedBridge, error) {
+	runtime, workdir, endpoint, err := deploymentwiring.ApptainerBridge(cfg.Bridge.Deployment, runID)
+	if err != nil {
+		return nil, fmt.Errorf("construct bridge deployment: %w", err)
+	}
+	launch := bridgewiring.Launch(cfg.Versions.Bridge.Image)
+	launch.RuntimeBackend = "apptainer"
+	launch.ResourceMetrics = "unsupported"
+	launch.Request.Workdir = workdir
+	launch.Config.OutputDir = filepath.Join(workdir, "evidence")
+	launch.Config.ControlAddress = "127.0.0.1:" + strconv.Itoa(launch.Request.ServicePort)
+	launch.Config.Listen.BindHost = "127.0.0.1"
+	launch.Config.Backend, launch.Config.BackendEndpoint = "apptainer", endpoint
+	return bridgewiring.NewService(cfg, runID, filepath.Join(outputRoot, "infrastructure", "bridge"), placement, runtime, launch)
+}
+
 func prepareBridge(ctx context.Context, cfg config.Config) error {
 	if err := validateDeployment(&cfg); err != nil {
 		return err
@@ -208,6 +247,8 @@ func prepareBridge(ctx context.Context, cfg config.Config) error {
 	case "kubernetes":
 		// The cluster pulls the bridge image; ARIES cannot build into it.
 		return nil
+	case "apptainer":
+		return deploymentwiring.PrepareApptainerBridge()
 	default:
 		return fmt.Errorf("unsupported bridge preparation backend %q", cfg.Bridge.Deployment.Backend)
 	}
@@ -260,7 +301,7 @@ func validateDeployment(cfg *config.Config) error {
 		{"harness.deployment", cfg.Harness.Deployment}, {"sandbox.deployment", cfg.Sandbox.Deployment},
 	} {
 		switch component.placement.Backend {
-		case "docker", "kubernetes":
+		case "docker", "kubernetes", "apptainer":
 		default:
 			return fmt.Errorf("%s: unsupported backend %q", component.path, component.placement.Backend)
 		}
@@ -274,6 +315,8 @@ func newDeployment(cfg config.DeploymentConfig, logger *logrus.Logger) (deployme
 		return deploymentwiring.NewDocker(cfg, logger)
 	case "kubernetes":
 		return deploymentwiring.NewKubernetes(cfg, logger)
+	case "apptainer":
+		return deploymentwiring.NewApptainer(cfg, logger)
 	default:
 		return nil, fmt.Errorf("unsupported deployment backend %q", cfg.Backend)
 	}
@@ -299,9 +342,28 @@ func pullImages(ctx context.Context, cfg config.Config, images []string) error {
 	case "kubernetes":
 		// Each node's kubelet pulls images when it first schedules a pod.
 		return nil
+	case "apptainer":
+		return deploymentwiring.PullApptainerImages(ctx, cfg.Sandbox.Deployment, apptainerImages(cfg, images))
 	default:
 		return fmt.Errorf("unsupported image preparation backend %q", cfg.Sandbox.Deployment.Backend)
 	}
+}
+
+// apptainerImages leaves out Hermes's base image. It is pulled only for the
+// Docker build that derives the image Hermes runs; Apptainer cannot perform
+// that build and unpacks the derived image from the SIF mapped to it instead.
+// Unpacking it anyway would add minutes to every setup.
+func apptainerImages(cfg config.Config, images []string) []string {
+	if cfg.Harness.Type != "hermes" {
+		return images
+	}
+	kept := make([]string, 0, len(images))
+	for _, image := range images {
+		if image != cfg.Versions.Hermes.Image {
+			kept = append(kept, image)
+		}
+	}
+	return kept
 }
 
 // buildHarnessImage builds the image the harness runs when it is derived from
@@ -323,6 +385,12 @@ func buildHarnessImage(ctx context.Context, cfg config.Config) error {
 		// The derived Hermes image must already be in a registry the cluster
 		// pulls from; harness.deployment.kubernetes.images names it.
 		return nil
+	case "apptainer":
+		// Apptainer cannot run the Docker build; the derived image is built
+		// elsewhere and mapped to its SIF.
+		return harnesswiring.PrepareHermesImage(ctx, cfg, func(ctx context.Context, image, _ string, _ map[string]string) error {
+			return deploymentwiring.PrepareApptainerImage(ctx, cfg.Sandbox.Deployment, image)
+		})
 	default:
 		return fmt.Errorf("unsupported image preparation backend %q", cfg.Sandbox.Deployment.Backend)
 	}
@@ -364,6 +432,21 @@ func newInfrastructure(cfg config.Config, runID, outputRoot string, logger *logr
 		}
 		return &app.RunInfrastructure{
 			Environment: environment, Resources: resources, Close: owner.Close, NetworkPolicy: "per-sandbox-policy",
+			NewSandbox: func(cfg config.Config, root, run, occurrence string, gpus []int, log *logrus.Logger) (app.SandboxInstance, error) {
+				return newSandbox(cfg, root, run, occurrence, gpus, log, environment)
+			},
+			NewBridge: func(placement core.RuntimePlacement) (app.SharedBridge, error) {
+				return newSharedBridge(cfg, runID, outputRoot, placement, logger)
+			},
+		}, nil
+	case "apptainer":
+		owner, err := deploymentwiring.NewApptainer(cfg.Sandbox.Deployment, logger)
+		if err != nil {
+			return nil, err
+		}
+		environment := owner.NewRunEnvironment(runID)
+		return &app.RunInfrastructure{
+			Environment: environment, Resources: deploymentwiring.NewApptainerRunResources(), Close: owner.Close, NetworkPolicy: deploymentwiring.ApptainerNetworkPolicy,
 			NewSandbox: func(cfg config.Config, root, run, occurrence string, gpus []int, log *logrus.Logger) (app.SandboxInstance, error) {
 				return newSandbox(cfg, root, run, occurrence, gpus, log, environment)
 			},
