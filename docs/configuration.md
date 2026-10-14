@@ -211,6 +211,49 @@ Checked-in examples are
 [Kubernetes implementation](implementation/kubernetes.md) for its constraints
 and [`k8s/`](../k8s/README.md) for cluster setup.
 
+### Apptainer placement
+
+On a host where a normal user cannot run Docker, such as an HPC cluster,
+harness, sandbox and bridge can all select Apptainer 1.5 or newer. The three
+blocks must be identical:
+
+```json
+"deployment": {
+  "backend": "apptainer",
+  "apptainer": {
+    "state_dir": "/scratch/users/me/aries/state",
+    "image_dir": "/scratch/users/me/aries/images",
+    "overlay_dir": "/tmp/aries-overlays",
+    "images": { "aries-local/hermes:TAG": "/scratch/users/me/aries/hermes.sif" },
+    "unenforced_limits": false
+  }
+}
+```
+
+`state_dir` holds each runtime's ownership record, environment files, logs and
+the bridge's working directory. `image_dir` holds the images that `aries setup`
+unpacks from the pinned references. `overlay_dir`, optional, holds each
+runtime's writable layer; node-local disk is much faster than a parallel
+filesystem, and `state_dir` is used when it is omitted. `images` maps an image
+reference to a SIF prepared elsewhere, which setup unpacks instead of pulling:
+Hermes runs an image derived with a Docker build, which Apptainer cannot
+perform, so build it on a Docker host, convert it with `apptainer build
+NAME.sif docker-archive://ARCHIVE.tar`, and map its tag here; `aries setup`
+reports the tag it needs. `binary`, optional, names the `apptainer` executable.
+
+Apptainer cannot enforce CPU or memory limits without cgroups v2. A runtime that
+requests them, as every Terminal-Bench 2 task does, is refused unless
+`unenforced_limits` is `true`; the limits are then not applied. Storage limits
+are enforced with a fixed-size overlay. An Apptainer run executes one task at a
+time (`execution.concurrency: 1`), needs `slirp4netns` on `PATH`, and records
+the network policy `run-namespace`; `aries PROFILE` enters the run's private
+namespace by itself. Resource measurement is reported unsupported. Package
+installs inside the sandbox, such as a test script's `apt-get install`, need a
+`fakeroot-sysv` command on `PATH` with `faked-sysv` beside it, built against a
+glibc no newer than the task images'. See the
+[Apptainer implementation](implementation/apptainer.md) for the topology and limits.
+
+
 Bridge addresses come from deployment resolution, not profile fields. Plaintext,
 unauthenticated gRPC control and harness-facing SSH use separate endpoints.
 Control has no TLS certificates or bearer tokens. SSH accepts unauthenticated

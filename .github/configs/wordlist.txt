@@ -233,3 +233,15 @@ jitter
 lowercased
 debian
 typescript
+apparmor
+apptainer
+cgroups
+epel
+fakeroot
+glibc
+hpc
+lookups
+runscript
+sif
+slirp
+apptainer's

@@ -9,6 +9,7 @@ import (
 	"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw"
 	"github.com/hyscale-lab/aries/pkg/bridge/target"
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/deployment/apptainer"
 	"github.com/hyscale-lab/aries/pkg/deployment/docker"
 	"github.com/hyscale-lab/aries/pkg/deployment/kubernetes"
 	"github.com/sirupsen/logrus"
@@ -37,6 +38,14 @@ func ServeChild(ctx context.Context, c managed.LaunchConfig, logger *logrus.Logg
 		}
 		backend = k
 		closeBackend = k.Close
+	case "apptainer":
+		// The endpoint is the state directory holding the sandboxes' records.
+		a, err := apptainer.New(apptainer.Options{StateDir: c.BackendEndpoint, Logger: logger})
+		if err != nil {
+			return err
+		}
+		backend = a
+		closeBackend = a.Close
 	default:
 		return errors.New("unsupported bridge execution backend")
 	}

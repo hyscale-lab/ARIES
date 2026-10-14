@@ -3,7 +3,9 @@
 **Docker harnesses and sandboxes use the same local daemon**, with a separate
 managed Docker bridge and shared network per run. Runner stays on the host. Remote Docker
 servers and mixed deployment backends are unsupported. **Kubernetes** places the
-same three components as pods in one namespace, for a narrower set of runs. See the
+same three components as pods in one namespace, for a narrower set of runs. On hosts
+without Docker, harness, sandbox and bridge can all run on
+[Apptainer](implementation/apptainer.md). See the
 [deployment configuration](configuration.md#deployment-configuration).
 
 This page summarizes capabilities and limitations. Use the
@@ -24,7 +26,8 @@ This page summarizes capabilities and limitations. Use the
 | Benchmark | **Toolathlon** — tool-use tasks over MCP servers that are local, public, or backed by Toolathlon's self-hosted applications (Canvas, poste.io, WooCommerce), and, given your account credentials, by third-party services; the `k8s` tasks are not supported | [Benchmark guide](benchmarks/toolathlon.md) |
 | Tool sandbox and deployment | **Docker** — local containers managed through the Moby Go SDK | [Deployment configuration](configuration.md#deployment-configuration), [Docker implementation](implementation/docker.md) |
 | Tool sandbox and deployment | **Kubernetes** — one pod per runtime, driven through `kubectl`; Terminal-Bench 2, SWE-bench Pro and Deep Research Bench with OpenClaw or Hermes in text mode | [Kubernetes deployment](configuration.md#kubernetes-deployment), [Kubernetes implementation](implementation/kubernetes.md), [cluster setup](../k8s/README.md) |
-| Tool bridge | **OpenClaw SSH** and **Hermes SSH** — managed Docker container or Kubernetes pod; harness-specific SSH adapters | [SSH bridge implementation](implementation/ssh-bridges.md) |
+| Tool sandbox and deployment | **Apptainer** 1.5 or newer — unprivileged instances for hosts without Docker, such as HPC clusters; harness, sandbox and bridge all on Apptainer, one task at a time | [Apptainer placement](configuration.md#apptainer-placement), [Apptainer implementation](implementation/apptainer.md) |
+| Tool bridge | **OpenClaw SSH** and **Hermes SSH** — managed Docker container, Kubernetes pod, or a process in an Apptainer run's namespace; harness-specific SSH adapters | [SSH bridge implementation](implementation/ssh-bridges.md) |
 | Model service | **DeepSeek** — external endpoint | [Model backends](configuration.md#model-backends) |
 | Model service | **SGLang** — external endpoint or one ARIES-managed host process per run | [Model backends](configuration.md#model-backends) |
 | Model service | **OpenAI-compatible server** — external only, including vLLM, llama.cpp, gateways, and hosted endpoints | [Model backends](configuration.md#model-backends) |
@@ -44,8 +47,9 @@ guides above.
 - Each SSH bridge supports its corresponding harness. Crossed pairs are rejected
   before execution. Hermes requires `/bin/bash` in the task image; its bridge
   rejects Hermes's private `~/.hermes` file synchronization. OpenClaw requires
-  `bin/aries-ssh-client` beside `bin/aries`. Both bridges require the matched Docker bridge image built with
-  `make bridge-image`.
+  `bin/aries-ssh-client` beside `bin/aries`. With Docker or Kubernetes placement, both bridges
+  require the matched bridge image built with `make bridge-image`; on Apptainer the bridge runs
+  `bin/aries-bridge`, which `make build` builds beside `bin/aries`.
 - On the Kubernetes backend, a task that executes as a non-root user, as
   SWE-bench Pro does, needs `setpriv` from `util-linux` in its image and a root container
   user for per-command UID/GID switching. The upstream SWE-bench Pro images
@@ -61,6 +65,11 @@ guides above.
   server-specific extension.
 - SWE-bench Pro has additional image-architecture, isolation, and licensing
   requirements; consult its [benchmark guide](benchmarks/swe-bench-pro.md).
+- Apptainer runs execute one task at a time, cannot enforce CPU or memory limits
+  without cgroups v2, report resource measurement unsupported, and run the bridge
+  as a process rather than a container. Package installs inside the sandbox need a
+  user-installed `fakeroot`. SWE-bench Pro is refused, because its commands run as a
+  non-root user; see the [Apptainer implementation](implementation/apptainer.md#limits).
 - Toolathlon's application-backed tasks need Toolathlon's own Canvas,
   poste.io and WooCommerce deployments running on the Docker host; consult its
   [benchmark guide](benchmarks/toolathlon.md).
@@ -70,7 +79,7 @@ guides above.
 
 ## Roadmap
 
-Deployment providers beyond Docker and Kubernetes are unimplemented. Shared bridge lifecycle and
+Deployment providers beyond Docker, Kubernetes and Apptainer are unimplemented. Shared bridge lifecycle and
 deployment contracts accept explicit runtime placement and access settings;
 a new provider must implement their execution, connectivity, and cleanup semantics
 and be selected in composition wiring.
@@ -87,4 +96,5 @@ existing control API registers, looks up and releases borrowed sandbox access.
 See the [deployment contract](design/deployment.md),
 [Docker implementation](implementation/docker.md),
 [Kubernetes implementation](implementation/kubernetes.md),
+[Apptainer implementation](implementation/apptainer.md),
 [SSH bridge implementation](implementation/ssh-bridges.md) for current boundaries.
