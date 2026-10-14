@@ -20,37 +20,98 @@ reasoning-parser: qwen3
 tool-call-parser: qwen
 `
 
-func TestSGLangNativeConfigAcceptsCompleteAndOptionalReasoningParser(t *testing.T) {
-	cfg, err := LoadNativeConfig(writeNativeConfig(t, nativeConfig), "Qwen/Qwen3-8B", "http://host:30000/v1")
-	if err != nil || cfg.Port != 30000 || cfg.ReasoningParser != "qwen3" {
-		t.Fatalf("cfg=%#v err=%v", cfg, err)
+func TestSGLangNativeConfigAllowsNativeOptionsAndDefaults(t *testing.T) {
+	withoutOptional := strings.NewReplacer(
+		"context-length: 32768\n", "",
+		"mem-fraction-static: 0.85\n", "",
+		"reasoning-parser: qwen3\n", "",
+		"tool-call-parser: qwen\n", "",
+	).Replace(nativeConfig)
+	for name, content := range map[string]string{
+		"complete":        nativeConfig,
+		"native options":  nativeConfig + "enable-metrics: true\nlog-requests: true\nquantization: fp8\n",
+		"native defaults": withoutOptional,
+		"native values":   nativeConfig + "lora-paths: [adapter=/models/my-adapter]\njson-model-override-args: '{\"text\": \"--tp=2\"}'\n",
+		"nested values":   nativeConfig + "json-model-override-args: {text: --tp=2}\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := LoadNativeConfig(writeNativeConfig(t, content), "Qwen/Qwen3-8B", "http://host:30000/v1")
+			if err != nil || cfg.Port != 30000 {
+				t.Fatalf("cfg=%#v err=%v", cfg, err)
+			}
+		})
 	}
-	withoutReasoning := strings.Replace(nativeConfig, "reasoning-parser: qwen3\n", "", 1)
-	if _, err := LoadNativeConfig(writeNativeConfig(t, withoutReasoning), "Qwen/Qwen3-8B", "http://host:30000/v1"); err != nil {
-		t.Fatalf("optional reasoning parser rejected: %v", err)
+}
+
+func TestSGLangNativeConfigRejectsMeasurementAliases(t *testing.T) {
+	base := strings.Replace(nativeConfig, "tensor-parallel-size: 1", "tensor-parallel-size: 2", 1)
+	for _, option := range []string{
+		"tp-size", "tp", "tp-s", "tensor-parallel-siz",
+		"pp-size", "pp", "dp-size", "dp", "ep-size", "ep",
+		"attn-cp-size", "moe-dp-size", "enable-dp-attentio",
+		"served-model", "hos", "por", "dev", "nnode", "node-ran",
+	} {
+		t.Run(option, func(t *testing.T) {
+			content := base + option + ": 1\n"
+			if _, err := LoadNativeConfig(writeNativeConfig(t, content), "Qwen/Qwen3-8B", "http://host:30000/v1"); err == nil || !strings.Contains(err.Error(), option) {
+				t.Fatalf("measurement alias %q must be rejected explicitly, got %v", option, err)
+			}
+		})
+	}
+	for name, content := range map[string]string{
+		"alias first": "tp-size: 1\n" + base,
+		"alias only":  strings.Replace(base, "tensor-parallel-size: 2", "tp-size: 1", 1),
+		"yaml merge":  base + "<<: {tp-size: 1}\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := LoadNativeConfig(writeNativeConfig(t, content), "Qwen/Qwen3-8B", "http://host:30000/v1"); err == nil || !strings.Contains(err.Error(), "tp-size") {
+				t.Fatalf("alias bypassed measurement validation: %v", err)
+			}
+		})
+	}
+}
+
+func TestSGLangNativeConfigRejectsArgumentOverrides(t *testing.T) {
+	for name, content := range map[string]string{
+		"full name with equals": nativeConfig + "tensor-parallel-size=2: true\n",
+		"alias with equals":     nativeConfig + "tp=2: true\n",
+		"merged key":            nativeConfig + "<<: {'tp=2': true}\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := LoadNativeConfig(writeNativeConfig(t, content), "Qwen/Qwen3-8B", "http://host:30000/v1"); err == nil || !strings.Contains(err.Error(), "must not contain '='") {
+				t.Fatalf("argument key bypassed validation: %v", err)
+			}
+		})
+	}
+	for name, content := range map[string]string{
+		"scalar":        nativeConfig + "lora-target-modules: --tp=2\n",
+		"list":          nativeConfig + "lora-target-modules: [q_proj, --tp=2]\n",
+		"split list":    nativeConfig + "lora-target-modules: [--tp, 2]\n",
+		"merged value":  nativeConfig + "<<: {lora-target-modules: [--tp=2]}\n",
+		"aliased value": nativeConfig + "json-model-override-args: {text: &arg --tp=2}\nlora-target-modules: [*arg]\n",
+		"host":          strings.Replace(nativeConfig, "host: 0.0.0.0", "host: --tp=2", 1),
+		"device":        strings.Replace(nativeConfig, "device: cuda", "device: --tp=2", 1),
+		"served model":  strings.Replace(nativeConfig, "served-model-name: Qwen/Qwen3-8B", "served-model-name: --tp=2", 1),
+		"negative":      nativeConfig + "watchdog-timeout: -1\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := LoadNativeConfig(writeNativeConfig(t, content), "Qwen/Qwen3-8B", "http://host:30000/v1"); err == nil || !strings.Contains(err.Error(), "must not start with '-'") {
+				t.Fatalf("argument value bypassed validation: %v", err)
+			}
+		})
 	}
 }
 
 func TestSGLangNativeConfigRejectsEveryInvalidLaunchValue(t *testing.T) {
 	cases := map[string]string{
-		"model path whitespace":    strings.Replace(nativeConfig, "model-path: Qwen/Qwen3-8B", "model-path: '   '", 1),
 		"served model whitespace":  strings.Replace(nativeConfig, "served-model-name: Qwen/Qwen3-8B", "served-model-name: '   '", 1),
 		"host whitespace":          strings.Replace(nativeConfig, "host: 0.0.0.0", "host: '   '", 1),
 		"device whitespace":        strings.Replace(nativeConfig, "device: cuda", "device: '   '", 1),
-		"tool parser whitespace":   strings.Replace(nativeConfig, "tool-call-parser: qwen", "tool-call-parser: '   '", 1),
 		"port zero":                strings.Replace(nativeConfig, "port: 30000", "port: 0", 1),
 		"port negative":            strings.Replace(nativeConfig, "port: 30000", "port: -1", 1),
 		"port overflow":            strings.Replace(nativeConfig, "port: 30000", "port: 65536", 1),
 		"tensor parallel zero":     strings.Replace(nativeConfig, "tensor-parallel-size: 1", "tensor-parallel-size: 0", 1),
 		"tensor parallel negative": strings.Replace(nativeConfig, "tensor-parallel-size: 1", "tensor-parallel-size: -1", 1),
-		"context zero":             strings.Replace(nativeConfig, "context-length: 32768", "context-length: 0", 1),
-		"context negative":         strings.Replace(nativeConfig, "context-length: 32768", "context-length: -1", 1),
-		"memory zero":              strings.Replace(nativeConfig, "mem-fraction-static: 0.85", "mem-fraction-static: 0", 1),
-		"memory negative":          strings.Replace(nativeConfig, "mem-fraction-static: 0.85", "mem-fraction-static: -0.1", 1),
-		"memory above one":         strings.Replace(nativeConfig, "mem-fraction-static: 0.85", "mem-fraction-static: 1.01", 1),
-		"memory nan":               strings.Replace(nativeConfig, "mem-fraction-static: 0.85", "mem-fraction-static: .nan", 1),
-		"memory positive infinity": strings.Replace(nativeConfig, "mem-fraction-static: 0.85", "mem-fraction-static: .inf", 1),
-		"memory negative infinity": strings.Replace(nativeConfig, "mem-fraction-static: 0.85", "mem-fraction-static: -.inf", 1),
 	}
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -66,7 +127,6 @@ func TestSGLangNativeConfigRejectsInvalidDocumentsAndCrossChecks(t *testing.T) {
 		name, content, model, endpoint string
 	}{
 		{name: "malformed", content: "[", model: "Qwen/Qwen3-8B", endpoint: "http://host:30000/v1"},
-		{name: "unknown field", content: nativeConfig + "future: true\n", model: "Qwen/Qwen3-8B", endpoint: "http://host:30000/v1"},
 		{name: "multiple documents", content: nativeConfig + "---\nhost: other\n", model: "Qwen/Qwen3-8B", endpoint: "http://host:30000/v1"},
 		{name: "model mismatch", content: nativeConfig, model: "other", endpoint: "http://host:30000/v1"},
 		{name: "port mismatch", content: nativeConfig, model: "Qwen/Qwen3-8B", endpoint: "http://host:30001/v1"},

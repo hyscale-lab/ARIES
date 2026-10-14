@@ -613,6 +613,19 @@ the SGLang environment, and both timeout values must be positive Go durations.
 `model.id` must equal the YAML `served-model-name`; and `model.api_key_env`
 names the environment variable read by ARIES and rendered into OpenClaw.
 
+ARIES passes the native YAML file to SGLang unchanged. It checks the endpoint
+settings and GPU topology it consumes, while SGLang validates its other options.
+Use full names for these checked fields: for example, `tensor-parallel-size`,
+`pipeline-parallel-size`, `data-parallel-size`, and `expert-parallel-size`.
+Aliases such as `tp-size` or `tp`, and abbreviations of checked fields, are
+rejected before startup so native execution and GPU measurement cannot disagree
+because they read different spellings of the same setting.
+ARIES also rejects option keys containing `=` and scalar values or list items
+starting with `-` (including negative numbers): SGLang converts these YAML entries
+to command-line arguments, where they could override the checked settings.
+For example, `enable-metrics`, quantization, context length, memory settings, and
+parser options use SGLang's own configuration and defaults.
+
 `runtime.config.gpu_indices` is optional and valid only for managed SGLang.
 For YAML `device: cuda`, ARIES derives the number of local workers from the
 tensor, pipeline, and multi-node topology and selects physical devices
