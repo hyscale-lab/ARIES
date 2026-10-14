@@ -69,6 +69,14 @@ type Options struct {
 	// Compaction and ExtraBody render optional native config blocks.
 	Compaction *CompactionSettings
 	ExtraBody  []byte
+	// KeepRoot keeps Hermes running as the runtime's root instead of dropping
+	// to its hermes user, through the image's documented opt-outs: the CLI
+	// shim's HERMES_DOCKER_EXEC_AS_ROOT and the gateway's
+	// HERMES_ALLOW_ROOT_GATEWAY. A deployment that cannot switch users, such
+	// as Apptainer without subordinate IDs, needs it; there, root is the
+	// invoking user. The gateway's warning, root-owned files breaking later
+	// non-root runs, does not apply to a fresh runtime per task.
+	KeepRoot bool
 }
 
 type VoiceTranscribeOptions struct {
@@ -217,6 +225,9 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	environment, err := containerEnvironment(request.Endpoint, request.Endpoint.Workdir, manager.options.TerminalTimeout, manager.options.Common.WebSearchEnabled, request.Connectivity.SearchURL, request.RunID, request.TaskID)
 	if err != nil {
 		return err
+	}
+	if manager.options.KeepRoot {
+		environment = append(environment, "HERMES_DOCKER_EXEC_AS_ROOT=1", "HERMES_ALLOW_ROOT_GATEWAY=1")
 	}
 	credentials := harness.NewCredentials("Hermes")
 	defer func() {
