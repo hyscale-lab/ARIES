@@ -47,9 +47,34 @@ export DEEPSEEK_API_KEY=...   # judge, and (for this profile) the harness model
 ./bin/aries profiles/openclaw-drb-smoke1-sglang.json
 ```
 
-The agent is instructed to write its final report to a fixed in-container path
-before finishing; ARIES downloads it after the harness stops and the bridge is
-revoked, then grades it against the pinned dataset's reference report using
+### Harness task prompt
+
+Deep Research Bench is designed to evaluate research agents. Its
+[upstream workflow](https://github.com/Ayanami0730/deep_research_bench/blob/469cce54ea7f6a63c163d3d9fec879cf289ec484/README.md#quick-start)
+asks users to run their own agent on the dataset questions and submit completed
+reports as JSONL records containing `id`, `prompt`, and `article`. It does not
+provide an OpenClaw or Hermes execution adapter.
+
+ARIES supplies a short, fixed [task wrapper](../../pkg/benchmark/deepresearchbench/deepresearchbench.go)
+for these general-purpose harnesses. It preserves the dataset question verbatim,
+asks the agent to research it using available tools, follow its requested language
+and deliverables, cite sources in the report body, and create
+`/tmp/aries-report.md` with an actual file-writing or shell tool call. A final
+chat response alone is not collected as the report. Native web tools are preferred,
+with other retrieval methods allowed when those tools fail or are unavailable.
+
+This wrapper is an ARIES execution convention, not an upstream scoring rule.
+It requires inline Markdown links to source URLs next to the claims they support,
+without numbered footnotes or a separate reference list. It imposes no fixed
+report length or `DONE` response.
+The judge still receives the original dataset question without the wrapper.
+The short wrapper was restored on 14 October 2026 after briefly using only a
+report-path suffix. Prompt changes can affect quality, runtime, and tool use;
+compare results using the same ARIES revision and prompt protocol. No improvement
+over the suffix-only prompt has been established by a paid comparison.
+
+ARIES downloads the report from `/tmp/aries-report.md` after the harness stops
+and the bridge is revoked, then grades it against the pinned dataset's reference report using
 the RACE metric across four dimensions (comprehensiveness, insight,
 instruction following, readability). Judge artifacts land in
 `runs/<run>/<task_id>/evaluation/{report.md,judge_response.json}`;
@@ -86,6 +111,10 @@ A `benchmark.fact` block additionally grades citation trustworthiness with the
 FACT metric: it extracts claim/citation pairs from the report, deduplicates
 them, and validates each cited URL's content (fetched through the Jina AI
 Reader API) against its claim, using its own (typically cheaper) judge model.
+The [pinned citation extractor](https://github.com/Ayanami0730/deep_research_bench/blob/469cce54ea7f6a63c163d3d9fec879cf289ec484/utils/extract.py#L39)
+accepts in-text numeric references, bracketed numbers, source locators, and
+Markdown links. A reference list without citation locations in the report body
+does not yield claim/citation pairs.
 `fact.jina_api_key_env`, naming the host environment variable holding the Jina
 key, is always required to enable FACT at all — omit the whole `fact` block
 (or leave it unset) to skip FACT entirely, at zero extra cost. Its model
@@ -135,10 +164,9 @@ SearXNG instance as the search backend:
 For either harness, export the key before the run, e.g.
 `export TAVILY_API_KEY=...`, matching the name given in the profile.
 
-The task prompt itself nudges the agent to call `web_fetch`/`web_extract`
-rather than reimplement page retrieval with `curl`/`wget`/a custom parser over
-the terminal tool, since models don't reliably prefer the dedicated tool on
-their own even when it's in their function-calling schema.
+The task prompt prefers native search and page-reading tools while allowing
+other available retrieval methods. In particular, it does not prohibit shell
+retrieval when a page-reading backend is unavailable.
 
 #### Obtain a Tavily API key
 
@@ -161,3 +189,11 @@ harness's own concurrency knob — OpenClaw's
 `agents.defaults.subagents.maxConcurrent` (default 5 per parent) or Hermes's
 `delegation.max_concurrent_children` (default 3) — and is ignored when
 `enabled` is `false`.
+
+### Dataset setup
+
+`configs/versions.json` pins Deep Research Bench to
+`469cce54ea7f6a63c163d3d9fec879cf289ec484`. Its query, reference, and criteria
+JSONL inputs are ordinary Git blobs; this pin uses no Git LFS attributes.
+Setup verifies the exact clean revision and installs the checkout atomically.
+Recheck the input storage requirements when changing the dataset pin.

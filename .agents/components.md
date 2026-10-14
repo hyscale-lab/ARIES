@@ -35,6 +35,9 @@ and [lifecycle](architecture.md#task-lifecycle).
 - Preserve benchmark pins, candidate sanitization, verifier privacy, required checks,
   and score meaning. Follow upstream evaluation, including fresh-sandbox methods
   where required; see [benchmark contracts](../docs/design/benchmark.md).
+- Keep DRB's [harness task adaptation](../docs/benchmarks/deep-research-bench.md#harness-task-prompt)
+  separate from its unchanged dataset question supplied to the judge; record prompt
+  changes as experimental method changes.
 
 Details: [harness](../docs/design/harness.md), [bridge](../docs/design/bridge.md),
 [sandbox](../docs/design/sandbox.md), [deployment](../docs/design/deployment.md),
