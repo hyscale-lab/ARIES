@@ -10,6 +10,7 @@ and [benchmark guides](../design/benchmark.md) for setup and execution.
 - [gRPC transport, client, and revocation](grpc-bridge.md)
 - [Docker runtime and run-network management](docker.md)
 - [Kubernetes pods, staging gate, and network policies](kubernetes.md)
+- [Apptainer runtime and run namespace](apptainer.md)
 - [Benchmark evaluation mechanisms](benchmarks.md)
 - [Model runtime mechanisms](model-runtime.md)
 
