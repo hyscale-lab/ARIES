@@ -65,7 +65,13 @@ func TestExecutionTaskIDLoadsLogicalTaskAndKeysPrivateDetails(t *testing.T) {
 func TestConcurrentOccurrencesEvaluateToDisjointArtifacts(t *testing.T) {
 	root := writeFixture(t)
 	output := filepath.Join(t.TempDir(), "runs")
-	revision := fixtureGitRevision(root)
+	catalog, err := New(Options{Root: root, TaskIDs: []string{fixGitID}, OutputDir: output, Revision: fixtureGitRevision(root)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.Tasks(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	type outcome struct {
 		evaluation core.Evaluation
 		err        error
@@ -75,7 +81,7 @@ func TestConcurrentOccurrencesEvaluateToDisjointArtifacts(t *testing.T) {
 	release := make(chan struct{})
 	var group sync.WaitGroup
 	for index, executionID := range []string{"fix-git-001", "fix-git-002"} {
-		benchmark, err := New(Options{Root: root, TaskIDs: []string{fixGitID}, ExecutionTaskIDs: []string{executionID}, OutputDir: output, Revision: revision})
+		benchmark, err := catalog.ForTask(fixGitID, executionID)
 		if err != nil {
 			t.Fatal(err)
 		}

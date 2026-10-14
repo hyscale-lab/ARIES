@@ -29,6 +29,16 @@ private `tests/` directory (`rubrics.json`, `system_prompt.txt`,
 `user_prompt_template.txt`, optional `prompt.txt`) that ARIES reads directly
 from the host checkout — none of it is ever uploaded into the sandbox.
 
+QA tasks start in `/`. At the supported revision
+`6de82c3603fb9e254170b440d7560441eb257176`, all 124 QA Dockerfiles
+(11 distinct blobs) contain only a `FROM` instruction, as in the
+[wp-calypso task](https://github.com/scaleapi/SWE-Atlas/blob/6de82c3603fb9e254170b440d7560441eb257176/data/qa/task-6905333b74f22949d97ba998/environment/Dockerfile)
+and the
+[k6 task](https://github.com/scaleapi/SWE-Atlas/blob/6de82c3603fb9e254170b440d7560441eb257176/data/qa/task-6905333b74f22949d97baa26/environment/Dockerfile).
+The adapter keeps its existing `/` working directory explicitly. Check this
+assumption when changing the dataset pin; using an image's inherited working
+directory would be a separate behavior change.
+
 The agent is expected to write its final answer, wrapped in
 `<<FINAL_ANSWER>>` tags, to `/logs/agent/answer.txt` inside the sandbox —
 `instruction.md` itself instructs this, so ARIES does not need to augment the

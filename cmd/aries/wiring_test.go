@@ -106,14 +106,14 @@ func TestValidateComponentsAcceptsSWEAtlasQA(t *testing.T) {
 
 func TestBenchmarkDispatchersFailClosed(t *testing.T) {
 	cfg := config.Config{Benchmark: config.BenchmarkConfig{Type: "unsupported"}}
-	if _, err := newBenchmark(cfg, t.TempDir(), "task", "task", nil); err == nil || !strings.Contains(err.Error(), "unsupported benchmark type") {
-		t.Fatalf("newBenchmark error = %v", err)
+	if _, err := benchmarkForTasks(cfg, t.TempDir(), []string{"task"}, nil, nil); err == nil || !strings.Contains(err.Error(), "unsupported benchmark type") {
+		t.Fatalf("benchmarkForTasks error = %v", err)
 	}
 	if err := setupBenchmark(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "unsupported benchmark type") {
 		t.Fatalf("setupBenchmark error = %v", err)
 	}
-	if _, err := loadPreparationTasks(context.Background(), cfg, []string{"task"}, nil); err == nil || !strings.Contains(err.Error(), "unsupported benchmark type") {
-		t.Fatalf("loadPreparationTasks error = %v", err)
+	if _, err := loadBenchmark(context.Background(), cfg, t.TempDir(), []string{"task"}, nil); err == nil || !strings.Contains(err.Error(), "unsupported benchmark type") {
+		t.Fatalf("loadBenchmark error = %v", err)
 	}
 }
 

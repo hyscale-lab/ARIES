@@ -43,6 +43,7 @@ type Options struct {
 // Benchmark discovers selected Terminal-Bench tasks and retains their private
 // verifier trees until evaluation.
 type Benchmark struct {
+	tasks                []core.Task
 	root                 string
 	taskIDs              []string
 	executionTaskIDs     []string
@@ -161,7 +162,45 @@ func New(options Options) (*Benchmark, error) {
 	}, nil
 }
 
+// ForTask creates fresh occurrence state from the catalog loaded by Tasks.
+// Private verifier inputs stay inside the benchmark; runtime owners remain per occurrence.
+func (b *Benchmark) ForTask(logicalID, occurrenceID string) (runner.Benchmark, error) {
+	if occurrenceID != logicalID && !safeExecutionTaskID(logicalID, occurrenceID) {
+		return nil, fmt.Errorf("invalid terminalbench execution task ID %q", occurrenceID)
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	for _, task := range b.tasks {
+		if task.ID != logicalID {
+			continue
+		}
+		private, ok := b.details[logicalID]
+		if !ok {
+			break
+		}
+		task.ID = occurrenceID
+		return &Benchmark{
+			root:                 b.root,
+			outputDir:            b.outputDir,
+			revision:             b.revision,
+			verifierTimeoutFloor: b.verifierTimeoutFloor,
+			tasks:                core.CloneTasks([]core.Task{task}),
+			details:              map[string]taskDetails{occurrenceID: private},
+		}, nil
+	}
+	return nil, fmt.Errorf("terminalbench task %q was not loaded by Tasks", logicalID)
+}
+
 func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if b.tasks != nil {
+		return core.CloneTasks(b.tasks), nil
+	}
+
 	if err := VerifyRevision(ctx, b.root, b.revision); err != nil {
 		return nil, err
 	}
@@ -185,9 +224,8 @@ func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
 		details[executionID] = private
 	}
 
-	b.mu.Lock()
 	b.details = details
-	b.mu.Unlock()
+	b.tasks = core.CloneTasks(tasks)
 	return tasks, nil
 }
 

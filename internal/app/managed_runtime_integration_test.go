@@ -70,15 +70,15 @@ func TestConcreteManagedRuntimeWrapsPreflightAndTaskLifecycle(t *testing.T) {
 			return PreparedBackend{Model: cfg.CoreModel(), Runtime: concrete}, err
 		},
 		SetupBenchmark: func(context.Context, config.Config) error { record("prepare"); return nil },
-		LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
+		LoadBenchmark: testBenchmarkLoader(func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
 			return nil, nil
-		},
-		BuildHarnessImage: func(context.Context, config.Config) error { return nil },
-		PullImages:        func(context.Context, config.Config, []string) error { return nil },
-		NewBenchmark: func(_ config.Config, _, _, occurrenceID string, _ func(string) ([]byte, bool)) (runner.Benchmark, error) {
+		}, func(_ config.Config, _, _, occurrenceID string, _ func(string) ([]byte, bool)) (runner.Benchmark, error) {
 			record("compose")
 			return &managedIntegrationBenchmark{id: occurrenceID}, nil
-		},
+		}),
+		BuildHarnessImage: func(context.Context, config.Config) error { return nil },
+		PullImages:        func(context.Context, config.Config, []string) error { return nil },
+
 		NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
 			return HarnessInstance{Harness: &stubHarness{}, Close: func() error { return nil }}, nil
 		},
@@ -161,12 +161,9 @@ func TestConcreteManagedRuntimeNaturalExitLogsStoppedAfterUnexpectedExit(t *test
 			return PreparedBackend{Model: cfg.CoreModel(), Runtime: concrete}, err
 		},
 		SetupBenchmark: func(context.Context, config.Config) error { return nil },
-		LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
+		LoadBenchmark: testBenchmarkLoader(func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
 			return nil, nil
-		},
-		BuildHarnessImage: func(context.Context, config.Config) error { return nil },
-		PullImages:        func(context.Context, config.Config, []string) error { return nil },
-		NewBenchmark: func(_ config.Config, _, _, occurrenceID string, _ func(string) ([]byte, bool)) (runner.Benchmark, error) {
+		}, func(_ config.Config, _, _, occurrenceID string, _ func(string) ([]byte, bool)) (runner.Benchmark, error) {
 			if err := os.WriteFile(exitNow, []byte("exit"), 0o600); err != nil {
 				return nil, err
 			}
@@ -176,7 +173,10 @@ func TestConcreteManagedRuntimeNaturalExitLogsStoppedAfterUnexpectedExit(t *test
 				return nil, errors.New("managed runtime did not exit")
 			}
 			return &managedIntegrationBenchmark{id: occurrenceID}, nil
-		},
+		}),
+		BuildHarnessImage: func(context.Context, config.Config) error { return nil },
+		PullImages:        func(context.Context, config.Config, []string) error { return nil },
+
 		NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
 			return HarnessInstance{Harness: &stubHarness{}, Close: func() error { return nil }}, nil
 		},

@@ -43,8 +43,10 @@ After task cleanup, stop and remove the shared bridge runtime, finalize shared
 observation, remove connectivity, and close transports before persisting results.
 Record shared outcomes separately from task counts and measurements.
 
-Give every occurrence fresh owners. Runner explicitly revokes sessions; use fresh
-bounded cleanup contexts after cancellation. No assignment leases or
-controller-liveness supervision.
+Load the selected catalog once per run; keep shared metadata immutable and
+verifier inputs benchmark-private. Give every occurrence fresh mutable benchmark
+state and runtime owners, including repeated task IDs. Runner explicitly revokes
+sessions; use fresh bounded cleanup contexts after cancellation. No assignment
+leases or controller-liveness supervision.
 
 Details: [design](../docs/design.md), [contracts](components.md).

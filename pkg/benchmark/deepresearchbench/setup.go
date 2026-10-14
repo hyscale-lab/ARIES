@@ -1,7 +1,6 @@
 package deepresearchbench
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -12,8 +11,6 @@ import (
 )
 
 var renameCheckout = os.Rename
-
-const lfsPointerPrefix = "version https://git-lfs.github.com/spec"
 
 // DefaultRoot is the conventional local checkout path for Deep Research Bench.
 const DefaultRoot = ".cache/deep-research-bench"
@@ -66,60 +63,7 @@ func Setup(ctx context.Context, root, repositoryURL, revision string) error {
 	if err := VerifyRevision(ctx, temporary, revision); err != nil {
 		return err
 	}
-	if err := pullLFSIfNeeded(ctx, temporary); err != nil {
-		return err
-	}
 	return installCheckout(ctx, temporary, root, revision)
-}
-
-// pullLFSIfNeeded runs `git lfs pull` only when the checkout actually
-// contains unresolved Git LFS pointer files. The upstream Hugging Face
-// dataset repository does not currently LFS-track its JSONL files, so this
-// is a defensive no-op guard rather than a hard requirement.
-func pullLFSIfNeeded(ctx context.Context, dir string) error {
-	needsLFS := false
-	err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() {
-			if entry.Name() == ".git" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if needsLFS {
-			return nil
-		}
-		pointer, err := isLFSPointerFile(path)
-		if err != nil {
-			return err
-		}
-		if pointer {
-			needsLFS = true
-		}
-		return nil
-	})
-	if err != nil {
-		return fmt.Errorf("scan deepresearchbench checkout for LFS pointers: %w", err)
-	}
-	if !needsLFS {
-		return nil
-	}
-	return runGit(ctx, dir, "lfs", "pull")
-}
-
-func isLFSPointerFile(path string) (bool, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return false, fmt.Errorf("open %q: %w", path, err)
-	}
-	defer file.Close()
-	scanner := bufio.NewScanner(file)
-	if !scanner.Scan() {
-		return false, nil
-	}
-	return strings.HasPrefix(scanner.Text(), lfsPointerPrefix), nil
 }
 
 func installCheckout(ctx context.Context, temporary, root, revision string) error {

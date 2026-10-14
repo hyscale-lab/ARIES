@@ -213,11 +213,11 @@ type Options struct {
 	RewardThreshold  float64
 }
 
-// Benchmark discovers selected Deep Research Bench tasks. Unlike
-// Terminal-Bench 2, Deep Research Bench has no private verifier material, but
-// it does retain a mapping from each occurrence's execution ID back to its
-// numeric task ID, populated by Tasks() and read by Evaluate.
+// Benchmark discovers selected Deep Research Bench tasks and retains their
+// private host-side judge inputs. Each occurrence maps its execution ID back
+// to the numeric task ID used by the dataset.
 type Benchmark struct {
+	tasks            []core.Task
 	root             string
 	taskIDs          []string
 	executionTaskIDs []string
@@ -238,8 +238,16 @@ type Benchmark struct {
 	factSkipReason  string
 	rewardThreshold float64
 
-	mu         sync.RWMutex
-	numericIDs map[string]int
+	mu          sync.RWMutex
+	numericIDs  map[string]int
+	judgeInputs map[int]judgeInput
+}
+
+// judgeInput retains the selected row's private scoring inputs for this run.
+type judgeInput struct {
+	prompt    string
+	reference string
+	criteria  taskCriteria
 }
 
 var _ runner.Benchmark = (*Benchmark)(nil)
@@ -419,7 +427,49 @@ type referenceRow struct {
 	Article string `json:"article"`
 }
 
+// ForTask creates fresh occurrence state from the catalog loaded by Tasks.
+// Private verifier inputs stay inside the benchmark; runtime owners remain per occurrence.
+func (b *Benchmark) ForTask(logicalID, occurrenceID string) (runner.Benchmark, error) {
+	if occurrenceID != logicalID && !safeExecutionTaskID(logicalID, occurrenceID) {
+		return nil, fmt.Errorf("invalid deepresearchbench execution task ID %q", occurrenceID)
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	for _, task := range b.tasks {
+		if task.ID != logicalID {
+			continue
+		}
+		private, ok := b.numericIDs[logicalID]
+		if !ok {
+			break
+		}
+		task.ID = occurrenceID
+		return &Benchmark{
+			root:            b.root,
+			outputDir:       b.outputDir,
+			revision:        b.revision,
+			race:            b.race,
+			fact:            b.fact,
+			factSkipReason:  b.factSkipReason,
+			rewardThreshold: b.rewardThreshold,
+			judgeInputs:     b.judgeInputs,
+			tasks:           core.CloneTasks([]core.Task{task}),
+			numericIDs:      map[string]int{occurrenceID: private},
+		}, nil
+	}
+	return nil, fmt.Errorf("deepresearchbench task %q was not loaded by Tasks", logicalID)
+}
+
 func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if b.tasks != nil {
+		return core.CloneTasks(b.tasks), nil
+	}
+
 	if err := VerifyRevision(ctx, b.root, b.revision); err != nil {
 		return nil, err
 	}
@@ -429,6 +479,19 @@ func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
 		return nil, fmt.Errorf("load deepresearchbench query file %q: %w", b.queryFile, err)
 	}
 
+	var references map[int]string
+	var criteria map[int]taskCriteria
+	if b.race != nil {
+		references, err = loadReferenceArticles(filepath.Join(b.root, b.referenceFile))
+		if err != nil {
+			return nil, fmt.Errorf("load deepresearchbench reference articles: %w", err)
+		}
+		criteria, err = loadCriteria(filepath.Join(b.root, b.criteriaFile))
+		if err != nil {
+			return nil, fmt.Errorf("load deepresearchbench criteria: %w", err)
+		}
+	}
+	judgeInputs := make(map[int]judgeInput, len(b.taskIDs))
 	tasks := make([]core.Task, 0, len(b.taskIDs))
 	numericIDs := make(map[string]int, len(b.taskIDs))
 	for index, id := range b.taskIDs {
@@ -443,6 +506,17 @@ func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
 		if !ok {
 			return nil, fmt.Errorf("deepresearchbench task %q not found in %q", id, b.queryFile)
 		}
+		if b.race != nil {
+			reference, ok := references[numericID]
+			if !ok {
+				return nil, fmt.Errorf("no reference article for deepresearchbench task %q", id)
+			}
+			rubric, ok := criteria[numericID]
+			if !ok {
+				return nil, fmt.Errorf("no criteria for deepresearchbench task %q", id)
+			}
+			judgeInputs[numericID] = judgeInput{prompt: prompt, reference: reference, criteria: rubric}
+		}
 		executionID := b.executionTaskIDs[index]
 		numericIDs[executionID] = numericID
 		tasks = append(tasks, core.Task{
@@ -453,9 +527,9 @@ func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
 		})
 	}
 
-	b.mu.Lock()
 	b.numericIDs = numericIDs
-	b.mu.Unlock()
+	b.judgeInputs = judgeInputs
+	b.tasks = core.CloneTasks(tasks)
 	return tasks, nil
 }
 
