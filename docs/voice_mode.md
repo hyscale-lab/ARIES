@@ -86,7 +86,7 @@ Use:
 }
 ```
 
-This mode follows Hermes’ voice interaction pipeline. The synthesized audio is passed as a complete utterance to the configured Hermes ASR engine for transcription. The resulting transcript is then used as input to a Hermes agent run.
+This mode follows Hermes’ voice interaction pipeline. The synthesized audio is passed as a complete utterance to the configured Hermes ASR engine for transcription. The resulting transcript is then used as input to a Hermes agent run. ARIES calls the pinned `transcribe_recording(wav_path, model=None)` API directly and retains its dictionary result. Hermes configuration selects the provider and local language; native hallucination filtering remains active.
 
 **Timeout semantics:** `harness.voice_transcribe.stt.timeout` bounds only the speech-to-text step: the time ARIES waits for Hermes to transcribe the synthesized audio before starting the agent. It does not limit the later agent run; that is still controlled by the task/harness agent timeout. This matches OpenClaw `voice-transcribe` semantics: speech recognition and agent execution have separate budgets.
 

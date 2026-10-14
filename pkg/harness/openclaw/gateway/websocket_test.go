@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha1"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -12,9 +14,10 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"sync"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 func TestWebSocketDialerConnectsAndCarriesGatewayFrames(t *testing.T) {
@@ -91,7 +94,7 @@ func acceptTestWebSocket(t *testing.T, writer http.ResponseWriter, request *http
 	if key == "" {
 		t.Fatal("missing Sec-WebSocket-Key")
 	}
-	if !headerToken(request.Header, "Connection", "upgrade") || !headerToken(request.Header, "Upgrade", "websocket") {
+	if !strings.EqualFold(request.Header.Get("Connection"), "upgrade") || !strings.EqualFold(request.Header.Get("Upgrade"), "websocket") {
 		t.Fatalf("missing upgrade headers: %#v", request.Header)
 	}
 	hijacker, ok := writer.(http.Hijacker)
@@ -106,7 +109,7 @@ func acceptTestWebSocket(t *testing.T, writer http.ResponseWriter, request *http
 	fmt.Fprintf(response, "HTTP/1.1 101 Switching Protocols\r\n")
 	fmt.Fprintf(response, "Upgrade: websocket\r\n")
 	fmt.Fprintf(response, "Connection: Upgrade\r\n")
-	fmt.Fprintf(response, "Sec-WebSocket-Accept: %s\r\n", websocketAccept(key))
+	fmt.Fprintf(response, "Sec-WebSocket-Accept: %s\r\n", testWebSocketAccept(key))
 	fmt.Fprintf(response, "\r\n")
 	if _, err := connection.Write(response.Bytes()); err != nil {
 		connection.Close()
@@ -160,263 +163,344 @@ func encodeServerTextFrame(payload []byte) []byte {
 	return frame.Bytes()
 }
 
-func TestWebSocketFrameEncodingMasksClientPayload(t *testing.T) {
-	payload := []byte(`{"type":"req"}`)
-	frame, err := encodeClientWebSocketFrame(1, payload)
-	if err != nil {
-		t.Fatalf("encodeClientWebSocketFrame returned error: %v", err)
+// Raw peers exercise the library adapter independently, including messages
+// fragmented at a UTF-8 boundary and control frames between continuations.
+func TestWebSocketFragmentationAndPingPong(t *testing.T) {
+	transport, peer, reader := newPipeWebSocket(t)
+	want := []byte("hello 世界")
+	serverDone := make(chan error, 1)
+	go func() {
+		first := encodeServerTextFrame(want[:7])
+		first[0] = 0x01
+		_, err := peer.Write(append(first, 0x89, 0x02, 'h', 'i'))
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		opcode, payload, err := readWebSocketFrame(reader)
+		if err == nil && (opcode != 10 || string(payload) != "hi") {
+			err = fmt.Errorf("pong = %d %q", opcode, payload)
+		}
+		if err == nil {
+			last := encodeServerTextFrame(want[7:])
+			last[0] = 0x80
+			_, err = peer.Write(append([]byte{0x8a, 0}, last...))
+		}
+		serverDone <- err
+	}()
+	ctx, cancel := contextWithTestTimeout()
+	defer cancel()
+	got, err := transport.Receive(ctx)
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("Receive = %q, %v", got, err)
 	}
-	if len(frame) < 6 || frame[0] != 0x81 || frame[1]&0x80 == 0 {
-		t.Fatalf("client frame header = %#v", frame[:2])
-	}
-	reader := bufio.NewReader(bytes.NewReader(frame))
-	opcode, decoded, err := readWebSocketFrame(reader)
-	if err != nil {
-		t.Fatalf("readWebSocketFrame returned error: %v", err)
-	}
-	if opcode != 1 || string(decoded) != string(payload) {
-		t.Fatalf("opcode=%d decoded=%s", opcode, decoded)
-	}
-	if _, err := reader.Peek(1); err != io.EOF {
-		t.Fatalf("trailing frame data err = %v", err)
+	if err := <-serverDone; err != nil {
+		t.Fatal(err)
 	}
 }
 
-func TestWebSocketRejectsHostileServerFrames(t *testing.T) {
-	tests := []struct {
-		name      string
-		frame     []byte
-		violation webSocketProtocolViolation
-	}{
-		{name: "reserved-bits", frame: []byte{0xc1, 0x00}, violation: webSocketReservedBits},
-		{name: "fragmented", frame: []byte{0x01, 0x00}, violation: webSocketFragmentation},
-		{name: "masked-server-frame", frame: []byte{0x81, 0x80, 0, 0, 0, 0}, violation: webSocketMaskDirection},
-		{name: "invalid-opcode", frame: []byte{0x83, 0x00}, violation: webSocketInvalidOpcode},
-		{name: "truncated-header", frame: []byte{0x81}, violation: webSocketInvalidFraming},
-		{name: "non-minimal-16-bit-length", frame: []byte{0x81, 126, 0, 1, 'x'}, violation: webSocketInvalidFraming},
-		{name: "non-minimal-64-bit-length", frame: []byte{0x81, 127, 0, 0, 0, 0, 0, 0, 0, 1, 'x'}, violation: webSocketInvalidFraming},
-		{name: "oversized-message", frame: []byte{0x81, 0x7f, 0, 0, 0, 0, 4, 0, 0, 1}, violation: webSocketMessageTooLarge},
-		{name: "oversized-control", frame: []byte{0x89, 126}, violation: webSocketInvalidControl},
-		{name: "invalid-text", frame: []byte{0x81, 0x01, 0xff}, violation: webSocketInvalidFraming},
+func TestWebSocketReadLimitCoversAggregateFragments(t *testing.T) {
+	transport, peer, reader := newPipeWebSocket(t)
+	// A smaller limit exercises the same library setting without allocating 64 MiB.
+	transport.connection.SetReadLimit(8)
+	go func() {
+		_, _ = peer.Write([]byte{0x01, 5, '1', '2', '3', '4', '5', 0x80, 4})
+		_, _, _ = readWebSocketFrame(reader) // Consume the library's close frame.
+	}()
+	ctx, cancel := contextWithTestTimeout()
+	defer cancel()
+	if _, err := transport.Receive(ctx); !isWebSocketProtocolError(err) {
+		t.Fatalf("oversized fragmented message error = %v", err)
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			_, _, err := readWebSocketFrameWithMask(bufio.NewReader(bytes.NewReader(test.frame)), false)
-			var protocolErr *webSocketProtocolError
-			if !errors.As(err, &protocolErr) || protocolErr.violation != test.violation {
-				t.Fatalf("protocol error = %#v, want %q", err, test.violation)
+}
+
+func TestWebSocketTruncatedMessageIsFatal(t *testing.T) {
+	transport, peer, _ := newPipeWebSocket(t)
+	go func() {
+		_, _ = peer.Write([]byte{0x81, 4, 'a'})
+		_ = peer.Close()
+	}()
+	ctx, cancel := contextWithTestTimeout()
+	defer cancel()
+	if content, err := transport.Receive(ctx); content != nil || !isWebSocketProtocolError(err) {
+		t.Fatalf("truncated message = %q, %v", content, err)
+	}
+}
+
+func TestWebSocketProtocolFailuresAreSecretFree(t *testing.T) {
+	for _, frame := range [][]byte{
+		{0xc1, 0},                // Reserved bit.
+		{0x81, 0x80, 0, 0, 0, 0}, // Wrong mask direction.
+		{0x83, 0},                // Unknown opcode.
+		{0x09, 0},                // Fragmented ping.
+		{0x81, 1, 0xff},          // Invalid UTF-8.
+		{0x88, 3, 0, 1, 'x'},     // Invalid close code.
+	} {
+		t.Run(fmt.Sprintf("%x", frame), func(t *testing.T) {
+			transport, peer, reader := newPipeWebSocket(t)
+			go func() {
+				_, _ = peer.Write(frame)
+				_, _, _ = readWebSocketFrame(reader)
+			}()
+			ctx, cancel := contextWithTestTimeout()
+			defer cancel()
+			if _, err := transport.Receive(ctx); !isWebSocketProtocolError(err) || err.Error() != errWebSocketProtocol.Error() {
+				t.Fatalf("error = %v", err)
 			}
 		})
-	}
-}
-
-func TestWebSocketRejectsInvalidCloseFrames(t *testing.T) {
-	tests := [][]byte{
-		{0},
-		{0, 1},
-		{0x03, 0xed},
-		{0x07, 0xd0},
-		{0x03, 0xe8, 0xff},
-	}
-	for _, payload := range tests {
-		err := validateClosePayload(payload)
-		var protocolErr *webSocketProtocolError
-		if !errors.As(err, &protocolErr) || protocolErr.violation != webSocketInvalidClose {
-			t.Fatalf("close payload %x error = %#v", payload, err)
-		}
-	}
-	for _, payload := range [][]byte{nil, {0x03, 0xe8}, {0x0b, 0xb8, 'o', 'k'}} {
-		if err := validateClosePayload(payload); err != nil {
-			t.Fatalf("valid close payload %x rejected: %v", payload, err)
-		}
 	}
 }
 
 func TestClientWebSocketProtocolViolationDominatesQueuedDelivery(t *testing.T) {
-	t.Run("response", func(t *testing.T) {
-		reader, writer := io.Pipe()
-		websocket := &webSocketTransport{connection: discardNetConn{}, reader: bufio.NewReader(reader)}
-		release := make(chan struct{})
-		transport := &heldSendTransport{Transport: websocket, sent: make(chan []byte, 1), release: release}
-		client, err := New(func(context.Context) (Transport, error) { return transport, nil }, Options{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		client.transport = transport
-		go client.readLoop(context.Background(), transport)
-
-		done := make(chan error, 1)
-		go func() { _, err := client.Call(context.Background(), "status", nil); done <- err }()
-		request := decodeGatewayFrame(t, <-transport.sent)
-		response, err := json.Marshal(Frame{"type": "res", "id": request.String("id"), "ok": true})
-		if err != nil {
-			t.Fatal(err)
-		}
-		writeDone := make(chan error, 1)
-		go func() {
-			_, err := writer.Write(append(encodeServerTextFrame(response), 0xc1, 0x00))
-			writeDone <- err
-		}()
-		fatal := waitForFatalError(t, client)
-		close(release)
-		if err := <-done; !errors.Is(err, fatal) {
-			t.Fatalf("Call accepted queued response over protocol failure: %v", err)
-		}
-		if err := <-writeDone; err != nil {
-			t.Fatal(err)
-		}
-	})
-
-	t.Run("event", func(t *testing.T) {
-		event, err := json.Marshal(Frame{"type": "event", "event": "partial", "payload": map[string]any{"text": "safe"}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		secret := "auth-secret-must-not-leak"
-		hostile := append([]byte{0xc1, byte(len(secret))}, secret...)
-		content := append(encodeServerTextFrame(event), hostile...)
-		transport := &webSocketTransport{connection: discardNetConn{}, reader: bufio.NewReader(bytes.NewReader(content))}
-		client, err := New(func(context.Context) (Transport, error) { return transport, nil }, Options{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		client.transport = transport
-		go client.readLoop(context.Background(), transport)
-		fatal := waitForFatalError(t, client)
-		if strings.Contains(fatal.Error(), secret) {
-			t.Fatalf("protocol error leaked hostile frame content: %v", fatal)
-		}
-		frame, err := client.RecvEvent(context.Background())
-		if frame != nil || !errors.Is(err, fatal) {
-			t.Fatalf("RecvEvent accepted queued event %#v over protocol failure: %v", frame, err)
-		}
-	})
-}
-
-func TestClientWebSocketEOFLeavesQueuedCompleteEventNonfatal(t *testing.T) {
-	event, err := json.Marshal(Frame{"type": "event", "event": "complete"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	transport := &webSocketTransport{connection: discardNetConn{}, reader: bufio.NewReader(bytes.NewReader(encodeServerTextFrame(event)))}
-	client, err := New(func(context.Context) (Transport, error) { return transport, nil }, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	client.transport = transport
-	client.readLoop(context.Background(), transport)
-	if err := client.FatalError(); err != nil {
-		t.Fatalf("normal EOF reported fatal: %v", err)
-	}
-	frame, err := client.RecvEvent(context.Background())
-	if err != nil || frame.String("event") != "complete" {
-		t.Fatalf("queued complete event = %#v, %v", frame, err)
-	}
-}
-
-func TestWebSocketCloseUnblocksWritesWithoutWaitingForWriterLock(t *testing.T) {
-	t.Run("direct-and-repeated", func(t *testing.T) {
-		connection := newBlockingWriteConn()
-		transport := &webSocketTransport{connection: connection, reader: bufio.NewReader(connection)}
-		done := make(chan error, 1)
-		go func() { done <- transport.Close() }()
-		if err := waitForClose(t, connection, done); err != nil {
-			t.Fatal(err)
-		}
-		select {
-		case <-connection.writeStarted:
-			t.Fatal("Close attempted a graceful control-frame write before closing the connection")
-		default:
-		}
-		if err := transport.Close(); err != nil {
-			t.Fatalf("repeated Close returned error: %v", err)
-		}
-	})
-
-	tests := []struct {
-		name   string
-		reader []byte
-		write  func(*webSocketTransport) error
-	}{
-		{name: "normal-write", write: func(transport *webSocketTransport) error {
-			return transport.Send(context.Background(), []byte("request"))
-		}},
-		{name: "pong-control-write", reader: []byte{0x89, 0x04, 'p', 'i', 'n', 'g'}, write: func(transport *webSocketTransport) error {
-			_, err := transport.Receive(context.Background())
-			return err
-		}},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			connection := newBlockingWriteConn()
-			reader := io.Reader(connection)
-			if test.reader != nil {
-				reader = bytes.NewReader(test.reader)
-			}
-			transport := &webSocketTransport{connection: connection, reader: bufio.NewReader(reader)}
-			writeDone := make(chan error, 1)
-			go func() { writeDone <- test.write(transport) }()
-			select {
-			case <-connection.writeStarted:
-			case <-time.After(time.Second):
-				t.Fatal("write did not start")
-			}
-			closeDone := make(chan error, 1)
-			go func() { closeDone <- transport.Close() }()
-			if err := waitForClose(t, connection, closeDone); err != nil {
+	for _, kind := range []string{"response", "event"} {
+		t.Run(kind, func(t *testing.T) {
+			wire, peer, reader := newPipeWebSocket(t)
+			release := make(chan struct{})
+			transport := &heldSendTransport{Transport: wire, sent: make(chan []byte, 1), release: release}
+			client, err := New(func(context.Context) (Transport, error) { return transport, nil }, Options{})
+			if err != nil {
 				t.Fatal(err)
 			}
-			select {
-			case err := <-writeDone:
-				if err == nil || !errors.Is(err, net.ErrClosed) {
-					t.Fatalf("blocked write error = %v", err)
+			client.transport = transport
+			go client.readLoop(context.Background(), transport)
+			ctx, cancel := contextWithTestTimeout()
+			defer cancel()
+			done := make(chan error, 1)
+			frame := Frame{"type": "event", "event": "partial"}
+			if kind == "response" {
+				go func() { _, err := client.Call(ctx, "status", nil); done <- err }()
+				var request Frame
+				if err := json.Unmarshal(<-transport.sent, &request); err != nil {
+					t.Fatal(err)
 				}
-			case <-time.After(time.Second):
-				t.Fatal("blocked write goroutine was not released")
+				frame = Frame{"type": "res", "id": request["id"], "ok": true}
+			}
+			content, err := json.Marshal(frame)
+			if err != nil {
+				t.Fatal(err)
+			}
+			go func() {
+				_, _ = peer.Write(append(encodeServerTextFrame(content), 0xc1, 0))
+				_, _, _ = readWebSocketFrame(reader)
+			}()
+			select {
+			case <-client.readerFailed:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			fatal := client.FatalError()
+			if !isWebSocketProtocolError(fatal) {
+				t.Fatalf("fatal error = %v", fatal)
+			}
+			close(release)
+			if kind == "response" {
+				if err := <-done; !errors.Is(err, fatal) {
+					t.Fatalf("queued response error = %v", err)
+				}
+			} else {
+				if frame, err := client.RecvEvent(ctx); frame != nil || !errors.Is(err, fatal) {
+					t.Fatalf("queued event = %#v, %v", frame, err)
+				}
 			}
 		})
 	}
 }
 
-func waitForClose(t *testing.T, connection *blockingWriteConn, done <-chan error) error {
-	t.Helper()
-	select {
-	case err := <-done:
-		return err
-	case <-time.After(100 * time.Millisecond):
-		connection.forceClose()
-		<-done
-		t.Fatal("Close waited for a blocked WebSocket write")
-		return nil
-	}
-}
-
-func waitForFatalError(t *testing.T, client *Client) error {
-	t.Helper()
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if err := client.FatalError(); err != nil {
-			if !isWebSocketProtocolError(err) {
-				t.Fatalf("fatal error is not classified: %v", err)
+func TestClientWebSocketEOFLeavesQueuedCompleteEventNonfatal(t *testing.T) {
+	for _, closeFrame := range [][]byte{nil, append([]byte{0x88, 8, 0x03, 0xe8}, []byte("secret")...)} {
+		transport, peer, reader := newPipeWebSocket(t)
+		go func() {
+			_, _ = peer.Write(append(encodeServerTextFrame([]byte(`{"type":"event","event":"complete"}`)), closeFrame...))
+			if closeFrame != nil {
+				_, _, _ = readWebSocketFrame(reader)
 			}
-			if strings.Contains(err.Error(), "safe") {
-				t.Fatalf("protocol error leaked frame content: %v", err)
-			}
-			return err
+			_ = peer.Close()
+		}()
+		client, err := New(func(context.Context) (Transport, error) { return transport, nil }, Options{})
+		if err != nil {
+			t.Fatal(err)
 		}
-		time.Sleep(time.Microsecond)
+		client.transport = transport
+		ctx, cancel := contextWithTestTimeout()
+		client.readLoop(ctx, transport)
+		cancel()
+		if err := client.FatalError(); err != nil {
+			t.Fatalf("EOF reported fatal: %v", err)
+		}
+		frame, err := client.RecvEvent(context.Background())
+		if err != nil || frame.String("event") != "complete" {
+			t.Fatalf("queued event = %#v, %v", frame, err)
+		}
+		_, err = client.RecvEvent(context.Background())
+		if !errors.Is(err, io.EOF) || strings.Contains(err.Error(), "secret") {
+			t.Fatalf("close error = %v", err)
+		}
 	}
-	t.Fatal("protocol violation did not become fatal")
-	return nil
 }
 
-func decodeGatewayFrame(t *testing.T, content []byte) Frame {
-	t.Helper()
-	var frame Frame
-	if err := json.Unmarshal(content, &frame); err != nil {
+func TestWebSocketCancellationAndCloseUnblockIO(t *testing.T) {
+	for _, operation := range []string{"read", "write", "pong"} {
+		for _, shutdown := range []string{"cancel", "close"} {
+			t.Run(operation+"/"+shutdown, func(t *testing.T) {
+				transport, peer, _ := newPipeWebSocket(t)
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				done := make(chan error, 1)
+				started := make(chan struct{})
+				go func() {
+					if operation == "write" {
+						done <- transport.Send(ctx, []byte("request"))
+						return
+					}
+					close(started)
+					_, err := transport.Receive(ctx)
+					done <- err
+				}()
+				if operation == "pong" {
+					if _, err := peer.Write([]byte{0x89, 1, 'x'}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if operation != "read" {
+					// Read only a byte: the remaining write is blocked on net.Pipe.
+					if _, err := peer.Read(make([]byte, 1)); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					<-started
+				}
+				if shutdown == "cancel" {
+					cancel()
+				} else {
+					closed := make(chan error, 1)
+					go func() { closed <- transport.Close() }()
+					select {
+					case err := <-closed:
+						if err != nil {
+							t.Fatal(err)
+						}
+					case <-time.After(time.Second):
+						t.Fatal("Close blocked")
+					}
+					if err := transport.Close(); err != nil {
+						t.Fatalf("repeated Close: %v", err)
+					}
+				}
+				select {
+				case err := <-done:
+					if err == nil || (shutdown == "cancel" && !errors.Is(err, context.Canceled)) {
+						t.Fatalf("operation error = %v", err)
+					}
+				case <-time.After(time.Second):
+					t.Fatal("operation remained blocked")
+				}
+			})
+		}
+	}
+}
+
+func TestWebSocketDialCancellationDuringUpgrade(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("loopback listener unavailable: %v", err)
+	}
+	defer listener.Close()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		connection, err := listener.Accept()
+		if err == nil {
+			accepted <- connection
+		}
+	}()
+	dial, err := NewWebSocketDialer(WebSocketOptions{URL: "ws://" + listener.Addr().String()})
+	if err != nil {
 		t.Fatal(err)
 	}
-	return frame
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { _, err := dial(ctx); done <- err }()
+	connection := <-accepted
+	defer connection.Close()
+	if _, err := http.ReadRequest(bufio.NewReader(connection)); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("upgrade ignored cancellation")
+	}
+}
+
+func newPipeWebSocket(t *testing.T) (*webSocketTransport, net.Conn, *bufio.Reader) {
+	t.Helper()
+	client, peer := net.Pipe()
+	t.Cleanup(func() { _ = client.Close(); _ = peer.Close() })
+	_ = peer.SetDeadline(time.Now().Add(5 * time.Second))
+	reader := bufio.NewReader(peer)
+	go func() {
+		request, err := http.ReadRequest(reader)
+		if err != nil {
+			return
+		}
+		_, _ = fmt.Fprintf(peer, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", testWebSocketAccept(request.Header.Get("Sec-WebSocket-Key")))
+	}()
+	dialer := websocket.Dialer{NetDialContext: func(context.Context, string, string) (net.Conn, error) { return client, nil }}
+	ctx, cancel := contextWithTestTimeout()
+	defer cancel()
+	connection, response, err := dialer.DialContext(ctx, "ws://test", nil)
+	if response != nil {
+		_ = response.Body.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection.SetReadLimit(maxMessageBytes)
+	transport := &webSocketTransport{connection: connection}
+	t.Cleanup(func() { _ = transport.Close() })
+	return transport, peer, reader
+}
+
+func testWebSocketAccept(key string) string {
+	sum := sha1.Sum([]byte(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+	return base64.StdEncoding.EncodeToString(sum[:])
+}
+
+// Only reads small masked client frames emitted by these tests.
+func readWebSocketFrame(reader *bufio.Reader) (byte, []byte, error) {
+	var header [2]byte
+	if _, err := io.ReadFull(reader, header[:]); err != nil {
+		return 0, nil, err
+	}
+	if header[1]&0x80 == 0 {
+		return 0, nil, errors.New("client frame is not masked")
+	}
+	length := int(header[1] & 0x7f)
+	if length == 126 {
+		var encoded [2]byte
+		if _, err := io.ReadFull(reader, encoded[:]); err != nil {
+			return 0, nil, err
+		}
+		length = int(binary.BigEndian.Uint16(encoded[:]))
+	} else if length == 127 {
+		return 0, nil, errors.New("test peer only supports small messages")
+	}
+	var mask [4]byte
+	if _, err := io.ReadFull(reader, mask[:]); err != nil {
+		return 0, nil, err
+	}
+	payload := make([]byte, length)
+	if _, err := io.ReadFull(reader, payload); err != nil {
+		return 0, nil, err
+	}
+	for i := range payload {
+		payload[i] ^= mask[i%4]
+	}
+	return header[0] & 0x0f, payload, nil
 }
 
 type heldSendTransport struct {
@@ -438,56 +522,3 @@ func (transport *heldSendTransport) Send(ctx context.Context, content []byte) er
 		return ctx.Err()
 	}
 }
-
-type discardNetConn struct{}
-
-func (discardNetConn) Read([]byte) (int, error)          { return 0, io.EOF }
-func (discardNetConn) Write(content []byte) (int, error) { return len(content), nil }
-func (discardNetConn) Close() error                      { return nil }
-func (discardNetConn) LocalAddr() net.Addr               { return discardAddr("local") }
-func (discardNetConn) RemoteAddr() net.Addr              { return discardAddr("remote") }
-func (discardNetConn) SetDeadline(time.Time) error       { return nil }
-func (discardNetConn) SetReadDeadline(time.Time) error   { return nil }
-func (discardNetConn) SetWriteDeadline(time.Time) error  { return nil }
-
-type discardAddr string
-
-func (address discardAddr) Network() string { return "discard" }
-func (address discardAddr) String() string  { return string(address) }
-
-type blockingWriteConn struct {
-	writeStarted chan struct{}
-	closed       chan struct{}
-	writeOnce    sync.Once
-	closeOnce    sync.Once
-}
-
-func newBlockingWriteConn() *blockingWriteConn {
-	return &blockingWriteConn{writeStarted: make(chan struct{}), closed: make(chan struct{})}
-}
-
-func (connection *blockingWriteConn) Read([]byte) (int, error) {
-	<-connection.closed
-	return 0, net.ErrClosed
-}
-
-func (connection *blockingWriteConn) Write([]byte) (int, error) {
-	connection.writeOnce.Do(func() { close(connection.writeStarted) })
-	<-connection.closed
-	return 0, net.ErrClosed
-}
-
-func (connection *blockingWriteConn) Close() error {
-	connection.forceClose()
-	return nil
-}
-
-func (connection *blockingWriteConn) forceClose() {
-	connection.closeOnce.Do(func() { close(connection.closed) })
-}
-
-func (*blockingWriteConn) LocalAddr() net.Addr              { return discardAddr("local") }
-func (*blockingWriteConn) RemoteAddr() net.Addr             { return discardAddr("remote") }
-func (*blockingWriteConn) SetDeadline(time.Time) error      { return nil }
-func (*blockingWriteConn) SetReadDeadline(time.Time) error  { return nil }
-func (*blockingWriteConn) SetWriteDeadline(time.Time) error { return nil }

@@ -1,10 +1,14 @@
 package hermes
 
 import (
+	"encoding/json"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/hyscale-lab/aries/pkg/core"
+	"go.yaml.in/yaml/v3"
 )
 
 func validModel() core.ModelConfig {
@@ -22,9 +26,10 @@ func TestRenderTerminalNamesTheSandboxWorkdir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "\nterminal:\n  backend: \"ssh\"\n  cwd: \"/workspace/dumps/workspace\"\n  timeout: 180\n"
-	if string(rendered) != want {
-		t.Fatalf("terminal section = %q, want %q", rendered, want)
+	terminal := decodeConfigYAML(t, rendered)["terminal"]
+	want := map[string]any{"backend": "ssh", "cwd": "/workspace/dumps/workspace", "timeout": 180}
+	if !reflect.DeepEqual(terminal, want) {
+		t.Fatalf("terminal = %#v, want %#v", terminal, want)
 	}
 	for _, workdir := range []string{"", "relative", "/app/", "/a b", "/a/../b", "/a;b"} {
 		if _, err := renderTerminal(workdir, 180); err == nil {
@@ -39,22 +44,22 @@ func TestRenderTerminalNamesTheSandboxWorkdir(t *testing.T) {
 // The credential must reach the container as a ${NAME} reference that Hermes
 // expands at run time, never as a value written into the rendered config.
 func TestRenderConfigReferencesCredentialByName(t *testing.T) {
-	rendered, err := renderConfig(validModel(), renderSettings{maxTurns: 90, webSearchEnabled: false, extractEnabled: false, subagentsEnabled: true, maxConcurrentSubagents: 0}, nil)
-
+	rendered, err := renderConfig(validModel(), baseSettings(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := string(rendered)
-	if !strings.Contains(text, `api_key: "${DEEPSEEK_API_KEY}"`) {
-		t.Fatalf("config does not reference the credential by name:\n%s", text)
+	config := decodeConfigYAML(t, rendered)
+	model := config["model"].(map[string]any)
+	if model["api_key"] != "${DEEPSEEK_API_KEY}" {
+		t.Fatalf("credential reference = %#v", model)
 	}
 	for _, forbidden := range []string{"sk-", "terminal:", "backend:"} {
-		if strings.Contains(text, forbidden) {
-			t.Fatalf("config unexpectedly contains %q:\n%s", forbidden, text)
+		if strings.Contains(string(rendered), forbidden) {
+			t.Fatalf("config unexpectedly contains %q:\n%s", forbidden, rendered)
 		}
 	}
-	if !strings.Contains(text, "max_turns: 90") || !strings.Contains(text, "- terminal") {
-		t.Fatalf("config is missing agent or toolset settings:\n%s", text)
+	if config["agent"].(map[string]any)["max_turns"] != 90 || !slices.Contains(config["platform_toolsets"].(map[string]any)["api_server"].([]any), any("terminal")) {
+		t.Fatalf("missing agent or toolset settings: %#v", config)
 	}
 }
 
@@ -67,7 +72,7 @@ func TestRenderConfigNormalizesSGLangAndRejectsBadInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(rendered), `base_url: "http://host:30000/v1"`) {
+	if decodeConfigYAML(t, rendered)["model"].(map[string]any)["base_url"] != "http://host:30000/v1" {
 		t.Fatalf("SGLang base URL was not normalized:\n%s", rendered)
 	}
 	bad := map[string]func(*core.ModelConfig){
@@ -94,64 +99,49 @@ func TestRenderConfigNormalizesSGLangAndRejectsBadInput(t *testing.T) {
 func TestRenderConfigQuotesInjectionAttempts(t *testing.T) {
 	model := validModel()
 	model.Model = `x" \nevil: true`
-	rendered, err := renderConfig(model, renderSettings{maxTurns: 10, webSearchEnabled: false, extractEnabled: false, subagentsEnabled: true, maxConcurrentSubagents: 0}, nil)
-
+	rendered, err := renderConfig(model, baseSettings(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The model ID carries a literal backslash-n. It must reach the file as a
-	// doubled backslash, not as the `\n` escape a YAML parser would decode
-	// into a line break that starts a new key.
-	if !strings.Contains(string(rendered), `\\nevil: true`) {
-		t.Fatalf("model ID escaped its scalar:\n%s", rendered)
+	config := decodeConfigYAML(t, rendered)
+	nativeModel := config["model"].(map[string]any)
+	if nativeModel["default"] != model.Model {
+		t.Fatalf("model ID changed: %#v", nativeModel)
 	}
-	if !strings.Contains(string(rendered), `\"`) {
-		t.Fatalf("model ID quote was not escaped:\n%s", rendered)
+	if _, exists := nativeModel["evil"]; exists {
+		t.Fatal("model ID injected a field")
+	}
+	if _, exists := config["evil"]; exists {
+		t.Fatal("model ID injected a section")
 	}
 }
 
 func TestRenderConfigAddsVoiceSTTProvider(t *testing.T) {
 	voiceSTT := VoiceSTTOptions{Provider: "openai", Model: "gpt-4o-mini-transcribe", Language: "en"}
-	rendered, err := renderConfig(validModel(), renderSettings{maxTurns: 90, webSearchEnabled: false, extractEnabled: false, subagentsEnabled: true, maxConcurrentSubagents: 0}, &voiceSTT)
+	rendered, err := renderConfig(validModel(), baseSettings(), &voiceSTT)
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := string(rendered)
-	for _, want := range []string{
-		"\nstt:\n",
-		"  enabled: true\n",
-		"  provider: \"openai\"\n",
-		"  openai:\n    model: \"gpt-4o-mini-transcribe\"\n",
-		"  local:\n    model: \"gpt-4o-mini-transcribe\"\n    language: \"en\"\n",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("config is missing %q:\n%s", want, text)
-		}
+	want := map[string]any{
+		"enabled": true, "provider": "openai",
+		"openai": map[string]any{"model": "gpt-4o-mini-transcribe"},
+		"local":  map[string]any{"model": "gpt-4o-mini-transcribe", "language": "en"},
+	}
+	if got := decodeConfigYAML(t, rendered)["stt"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("stt = %#v, want %#v", got, want)
 	}
 }
 
-// A control byte cannot reach yamlString through renderConfig because
-// validateModel rejects it first, so the renderer is covered directly: a raw
-// control byte in a double-quoted scalar is invalid YAML, and Hermes would fail
-// to parse its own config well after the cause.
-func TestYAMLStringEscapesControlCharacters(t *testing.T) {
-	for _, test := range []struct{ name, value, want string }{
-		{"nul", "a\x00b", `"a\x00b"`},
-		{"bell", "a\x07b", `"a\x07b"`},
-		{"vertical tab", "a\x0bb", `"a\x0Bb"`},
-		{"escape", "a\x1bb", `"a\x1Bb"`},
-		{"delete", "a\x7fb", `"a\x7Fb"`},
-		{"next line", "a\u0085b", `"a\x85b"`},
-		{"line separator", "a\u2028b", `"a\Lb"`},
-		{"paragraph separator", "a\u2029b", `"a\Pb"`},
-		{"short forms retained", "a\n\r\tb", `"a\n\r\tb"`},
-		{"printable untouched", "deepseek-v4/flash_1", `"deepseek-v4/flash_1"`},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			if got := yamlString(test.value); got != test.want {
-				t.Fatalf("yamlString(%q) = %s, want %s", test.value, got, test.want)
-			}
-		})
+// Opaque JSON strings must survive the YAML boundary without restructuring it.
+func TestRenderConfigPreservesControlCharactersInExtraBody(t *testing.T) {
+	for _, value := range []string{"a\x00b", "a\x07b", "a\x0bb", "a\x1bb", "a\x7fb", "a\u0085b", "a\u2028b", "a\u2029b", "a\n\r\tb", "deepseek-v4/flash_1"} {
+		settings := baseSettings()
+		settings.extraBody, _ = json.Marshal(map[string]string{"value": value})
+		config := decodeConfigYAML(t, []byte(mustRender(t, vllmModel(), settings)))
+		body := config["custom_providers"].([]any)[0].(map[string]any)["extra_body"].(map[string]any)
+		if body["value"] != value {
+			t.Fatalf("JSON string %q changed to %#v", value, body["value"])
+		}
 	}
 }
 
@@ -212,8 +202,9 @@ func TestRenderConfigAlwaysEnablesOTelPlugin(t *testing.T) {
 	for _, subagents := range []bool{false, true} {
 		settings := baseSettings()
 		settings.subagentsEnabled = subagents
-		if text := mustRender(t, vllmModel(), settings); !strings.Contains(text, "\nplugins:\n  enabled:\n    - hermes_otel\n") {
-			t.Fatalf("config does not enable hermes_otel:\n%s", text)
+		config := decodeConfigYAML(t, []byte(mustRender(t, vllmModel(), settings)))
+		if got := config["plugins"].(map[string]any)["enabled"]; !reflect.DeepEqual(got, []any{"hermes_otel"}) {
+			t.Fatalf("enabled plugins = %#v", got)
 		}
 	}
 }
@@ -265,16 +256,11 @@ func TestRenderConfigOmitsWebToolsetWhenDisabled(t *testing.T) {
 }
 
 func TestRenderConfigAddsWebToolsetWhenEnabled(t *testing.T) {
-	rendered, err := renderConfig(validModel(), renderSettings{maxTurns: 90, webSearchEnabled: true, extractEnabled: false, subagentsEnabled: true, maxConcurrentSubagents: 0}, nil)
-
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(rendered)
-	for _, want := range []string{"    - web\n", "\nweb:\n  search_backend: \"searxng\"\n"} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("config is missing %q:\n%s", want, text)
-		}
+	settings := baseSettings()
+	settings.webSearchEnabled = true
+	config := decodeConfigYAML(t, []byte(mustRender(t, validModel(), settings)))
+	if !slices.Contains(config["platform_toolsets"].(map[string]any)["api_server"].([]any), any("web")) || config["web"].(map[string]any)["search_backend"] != "searxng" {
+		t.Fatalf("web settings = %#v", config)
 	}
 }
 
@@ -293,16 +279,11 @@ func TestRenderConfigOmitsExtractBackendWithoutExtractKey(t *testing.T) {
 }
 
 func TestRenderConfigAddsExtractBackendWhenEnabled(t *testing.T) {
-	rendered, err := renderConfig(validModel(), renderSettings{maxTurns: 90, webSearchEnabled: true, extractEnabled: true, subagentsEnabled: true, maxConcurrentSubagents: 0}, nil)
-
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(rendered)
-	for _, want := range []string{"    - web\n", "  search_backend: \"searxng\"\n", "  extract_backend: \"tavily\"\n"} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("config is missing %q:\n%s", want, text)
-		}
+	settings := baseSettings()
+	settings.webSearchEnabled, settings.extractEnabled = true, true
+	config := decodeConfigYAML(t, []byte(mustRender(t, validModel(), settings)))
+	if !slices.Contains(config["platform_toolsets"].(map[string]any)["api_server"].([]any), any("web")) || !reflect.DeepEqual(config["web"], map[string]any{"search_backend": "searxng", "extract_backend": "tavily"}) {
+		t.Fatalf("web settings = %#v", config)
 	}
 }
 
@@ -321,14 +302,9 @@ func TestRenderConfigOmitsExtractBackendWhenWebSearchDisabled(t *testing.T) {
 }
 
 func TestRenderConfigDisablesDelegationToolsetWhenSubagentsDisabled(t *testing.T) {
-	rendered, err := renderConfig(validModel(), renderSettings{maxTurns: 90, webSearchEnabled: false, extractEnabled: false, subagentsEnabled: false, maxConcurrentSubagents: 0}, nil)
-
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(rendered)
-	if !strings.Contains(text, "\n  disabled_toolsets:\n    - delegation\n") {
-		t.Fatalf("config is missing disabled_toolsets: [delegation]:\n%s", text)
+	config := decodeConfigYAML(t, []byte(mustRender(t, validModel(), renderSettings{maxTurns: 90})))
+	if got := config["agent"].(map[string]any)["disabled_toolsets"]; !reflect.DeepEqual(got, []any{"delegation"}) {
+		t.Fatalf("disabled toolsets = %#v", got)
 	}
 }
 
@@ -345,14 +321,11 @@ func TestRenderConfigOmitsDisabledToolsetsWhenSubagentsEnabled(t *testing.T) {
 }
 
 func TestRenderConfigSetsMaxConcurrentChildrenWhenLimited(t *testing.T) {
-	rendered, err := renderConfig(validModel(), renderSettings{maxTurns: 90, webSearchEnabled: false, extractEnabled: false, subagentsEnabled: true, maxConcurrentSubagents: 2}, nil)
-
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(rendered)
-	if !strings.Contains(text, "\ndelegation:\n  max_concurrent_children: 2\n") {
-		t.Fatalf("config is missing delegation.max_concurrent_children:\n%s", text)
+	settings := baseSettings()
+	settings.maxConcurrentSubagents = 2
+	config := decodeConfigYAML(t, []byte(mustRender(t, validModel(), settings)))
+	if got := config["delegation"]; !reflect.DeepEqual(got, map[string]any{"max_concurrent_children": 2}) {
+		t.Fatalf("delegation = %#v", got)
 	}
 }
 
@@ -444,73 +417,38 @@ func TestGatewayLauncherExportsExtractKeyWhenEnabled(t *testing.T) {
 // OpenAI-compatible backends use Hermes's "custom" provider; DeepSeek remains native.
 func TestRenderConfigMapsOpenAICompatibleBackendsToCustomProvider(t *testing.T) {
 	for _, provider := range []string{"sglang", "openai"} {
-		model := validModel()
+		model := vllmModel()
 		model.Provider = provider
-		model.BaseURL = "http://vllm.local:8000/v1"
-		rendered, err := renderConfig(model, renderSettings{maxTurns: 10, webSearchEnabled: false, extractEnabled: false, subagentsEnabled: true, maxConcurrentSubagents: 0}, nil)
-
-		if err != nil {
-			t.Fatal(err)
-		}
-		text := string(rendered)
-		if !strings.Contains(text, `provider: "custom"`) || strings.Contains(text, `provider: "`+provider+`"`) {
-			t.Fatalf("%s backend was not rendered as the custom provider:\n%s", provider, text)
-		}
-		if got := hermesProvider(provider); got != "custom" {
-			t.Fatalf("hermesProvider(%s) = %q", provider, got)
+		config := decodeConfigYAML(t, []byte(mustRender(t, model, baseSettings())))
+		if config["model"].(map[string]any)["provider"] != "custom" || hermesProvider(provider) != "custom" {
+			t.Fatalf("%s provider = %#v", provider, config["model"])
 		}
 	}
-	rendered, err := renderConfig(validModel(), renderSettings{maxTurns: 10, webSearchEnabled: false, extractEnabled: false, subagentsEnabled: true, maxConcurrentSubagents: 0}, nil)
-
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(rendered), `provider: "deepseek"`) || hermesProvider("deepseek") != "deepseek" {
-		t.Fatal("deepseek provider was rewritten")
+	config := decodeConfigYAML(t, []byte(mustRender(t, validModel(), baseSettings())))
+	if config["model"].(map[string]any)["provider"] != "deepseek" || hermesProvider("deepseek") != "deepseek" {
+		t.Fatal("DeepSeek provider was rewritten")
 	}
 }
 
 func TestRenderConfig_MCPServers(t *testing.T) {
 	servers := []core.MCPServerConfig{
-		{
-			Name:      "filesystem",
-			Command:   "npx",
-			Args:      []string{"-y", "@modelcontextprotocol/server-filesystem", "/workspace"},
-			Env:       map[string]string{"DEBUG": "1"},
-			SecretEnv: map[string]string{"API_KEY": "TOOLATHLON_API_KEY"},
-		},
-		{
-			Name: "remote-sse",
-			URL:  "https://mcp.example.com/sse",
-		},
+		{Name: "filesystem", Command: "npx", Args: []string{"-y", "@modelcontextprotocol/server-filesystem", "/workspace"}, Env: map[string]string{"DEBUG": "1"}, SecretEnv: map[string]string{"API_KEY": "TOOLATHLON_API_KEY"}},
+		{Name: "remote-sse", URL: "https://mcp.example.com/sse"},
 	}
-
-	rendered, err := renderConfig(validModel(), renderSettings{
-		maxTurns:   10,
-		mcpServers: servers,
-	}, nil)
+	rendered, err := renderConfig(validModel(), renderSettings{maxTurns: 10, mcpServers: servers}, nil)
 	if err != nil {
-		t.Fatalf("renderConfig failed: %v", err)
+		t.Fatal(err)
 	}
-
-	text := string(rendered)
-	if strings.Contains(text, "custom_tools") {
-		t.Fatalf("rendered config contains invalid custom_tools field:\n%s", text)
+	config := decodeConfigYAML(t, rendered)
+	if _, exists := config["custom_tools"]; exists {
+		t.Fatal("rendered invalid custom_tools field")
 	}
-	if !strings.Contains(text, "mcp_servers:") {
-		t.Fatalf("rendered config missing mcp_servers block:\n%s", text)
+	want := map[string]any{
+		"filesystem": map[string]any{"command": "npx", "args": []any{"-y", "@modelcontextprotocol/server-filesystem", "/workspace"}, "env": map[string]any{"DEBUG": "1", "API_KEY": "${TOOLATHLON_API_KEY}"}},
+		"remote-sse": map[string]any{"url": "https://mcp.example.com/sse"},
 	}
-	if !strings.Contains(text, "filesystem:") || !strings.Contains(text, `command: "npx"`) {
-		t.Fatalf("rendered config missing filesystem command:\n%s", text)
-	}
-	if !strings.Contains(text, `- "-y"`) || !strings.Contains(text, `- "@modelcontextprotocol/server-filesystem"`) {
-		t.Fatalf("rendered config missing filesystem arguments:\n%s", text)
-	}
-	if !strings.Contains(text, "env:") || !strings.Contains(text, `API_KEY: "${TOOLATHLON_API_KEY}"`) || !strings.Contains(text, `DEBUG: "1"`) {
-		t.Fatalf("rendered config missing filesystem env mapping:\n%s", text)
-	}
-	if !strings.Contains(text, "remote-sse:") || !strings.Contains(text, `url: "https://mcp.example.com/sse"`) {
-		t.Fatalf("rendered config missing remote-sse url:\n%s", text)
+	if got := config["mcp_servers"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("MCP servers = %#v, want %#v", got, want)
 	}
 }
 
@@ -538,24 +476,19 @@ func TestSearchRequiresResolvedEndpoint(t *testing.T) {
 }
 
 func TestRenderConfig_MCPServerTransportAndTimeout(t *testing.T) {
-	rendered, err := renderConfig(validModel(), renderSettings{
-		maxTurns: 10,
-		mcpServers: []core.MCPServerConfig{
-			{Name: "gateway", URL: "http://task-sandbox:10086/sse", Transport: "sse", TimeoutSeconds: 1200},
-			{Name: "streaming", URL: "https://mcp.example.com/mcp", Transport: "streamable-http"},
-		},
-	}, nil)
+	rendered, err := renderConfig(validModel(), renderSettings{maxTurns: 10, mcpServers: []core.MCPServerConfig{
+		{Name: "gateway", URL: "http://task-sandbox:10086/sse", Transport: "sse", TimeoutSeconds: 1200},
+		{Name: "streaming", URL: "https://mcp.example.com/mcp", Transport: "streamable-http"},
+	}}, nil)
 	if err != nil {
-		t.Fatalf("renderConfig failed: %v", err)
+		t.Fatal(err)
 	}
-	text := string(rendered)
-	want := "  gateway:\n    url: \"http://task-sandbox:10086/sse\"\n    transport: \"sse\"\n    timeout: 1200\n"
-	if !strings.Contains(text, want) {
-		t.Fatalf("rendered config missing the gateway entry %q:\n%s", want, text)
+	want := map[string]any{
+		"gateway":   map[string]any{"url": "http://task-sandbox:10086/sse", "transport": "sse", "timeout": 1200},
+		"streaming": map[string]any{"url": "https://mcp.example.com/mcp"},
 	}
-	// streamable-http is Hermes's default, so it is left implicit.
-	if !strings.Contains(text, "  streaming:\n    url: \"https://mcp.example.com/mcp\"\n") || strings.Count(text, "transport:") != 1 {
-		t.Fatalf("streamable-http server rendered with an explicit transport:\n%s", text)
+	if got := decodeConfigYAML(t, rendered)["mcp_servers"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("MCP servers = %#v, want %#v", got, want)
 	}
 }
 
@@ -565,29 +498,38 @@ func TestRenderConfig_MCPServerTransportAndTimeout(t *testing.T) {
 // the MCP servers; the default is unchanged.
 func TestRenderConfig_NoSandboxToolsLeavesOnlyMCPAndWeb(t *testing.T) {
 	servers := []core.MCPServerConfig{{Name: "toolathlon", URL: "http://task-sandbox:10086/sse", Transport: "sse"}}
-	render := func(withheld, web bool) string {
-		t.Helper()
-		rendered, err := renderConfig(validModel(), renderSettings{maxTurns: 10, webSearchEnabled: web, mcpServers: servers, noSandboxTools: withheld}, nil)
+	for _, test := range []struct {
+		withheld, web      bool
+		toolsets, disabled []any
+	}{
+		{true, false, []any{}, []any{"delegation", "terminal", "file", "code_execution"}},
+		{true, true, []any{"web"}, []any{"delegation", "terminal", "file", "code_execution"}},
+		{false, false, []any{"terminal", "file", "code_execution"}, []any{"delegation"}},
+	} {
+		rendered, err := renderConfig(validModel(), renderSettings{maxTurns: 10, webSearchEnabled: test.web, mcpServers: servers, noSandboxTools: test.withheld}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return string(rendered)
-	}
-	text := render(true, false)
-	for _, want := range []string{
-		"\n  disabled_toolsets:\n    - delegation\n    - terminal\n    - file\n    - code_execution\n",
-		"\nplatform_toolsets:\n  api_server: []\n",
-		"\nmcp_servers:\n  toolathlon:\n",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("rendered config lacks %q:\n%s", want, text)
+		config := decodeConfigYAML(t, rendered)
+		tools := config["platform_toolsets"].(map[string]any)["api_server"]
+		disabled := config["agent"].(map[string]any)["disabled_toolsets"]
+		if !reflect.DeepEqual(tools, test.toolsets) || !reflect.DeepEqual(disabled, test.disabled) {
+			t.Fatalf("tools/denylist = %#v / %#v", tools, disabled)
+		}
+		if _, ok := config["mcp_servers"].(map[string]any)["toolathlon"]; !ok {
+			t.Fatal("missing task MCP server")
+		}
+		if _, ok := config["web"]; ok != test.web {
+			t.Fatalf("web selection = %#v", config["web"])
 		}
 	}
-	if text := render(true, true); !strings.Contains(text, "\nplatform_toolsets:\n  api_server:\n    - web\n\nweb:\n") {
-		t.Fatalf("web search not kept on its own:\n%s", text)
+}
+
+func decodeConfigYAML(t *testing.T, rendered []byte) map[string]any {
+	t.Helper()
+	var config map[string]any
+	if err := yaml.Unmarshal(rendered, &config); err != nil {
+		t.Fatalf("invalid YAML: %v\n%s", err, rendered)
 	}
-	if text := render(false, false); !strings.Contains(text, "\n  disabled_toolsets:\n    - delegation\n\n") ||
-		!strings.Contains(text, "\nplatform_toolsets:\n  api_server:\n    - terminal\n    - file\n    - code_execution\n") {
-		t.Fatalf("the default toolsets changed:\n%s", text)
-	}
+	return config
 }

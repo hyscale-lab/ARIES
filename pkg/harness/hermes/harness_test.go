@@ -8,11 +8,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -370,9 +370,9 @@ func TestStartNamesTheBridgeWorkdirToTheTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := fmt.Sprintf("\nterminal:\n  backend: \"ssh\"\n  cwd: \"/app\"\n  timeout: %d\n", manager.options.TerminalTimeout)
-	if !strings.Contains(string(retained), want) {
-		t.Fatalf("config.yaml lacks the terminal section %q:\n%s", want, retained)
+	terminal := decodeConfigYAML(t, retained)["terminal"].(map[string]any)
+	if terminal["backend"] != "ssh" || terminal["cwd"] != "/app" || terminal["timeout"] != manager.options.TerminalTimeout {
+		t.Fatalf("terminal settings = %#v", terminal)
 	}
 	if !slices.Contains(fake.created.Env, "TERMINAL_CWD=/app") {
 		t.Fatalf("TERMINAL_CWD does not name the bridge's workdir: %v", fake.created.Env)
@@ -485,7 +485,7 @@ func TestStartStagesExtractKeyWhenConfigured(t *testing.T) {
 	if bytes.Contains(retained, extractSecret) {
 		t.Fatalf("extract secret leaked into the retained config:\n%s", retained)
 	}
-	if !bytes.Contains(retained, []byte(`extract_backend: "tavily"`)) {
+	if decodeConfigYAML(t, retained)["web"].(map[string]any)["extract_backend"] != "tavily" {
 		t.Fatalf("retained config is missing extract_backend:\n%s", retained)
 	}
 }
@@ -562,7 +562,7 @@ func TestVoiceTranscribeSynthesizesAudioAndRunsTranscriptAsAgentMessage(t *testi
 	modelSecret := []byte("model-secret")
 	voiceSecret := []byte("voice-secret")
 	fake := newFakeDeployment(t)
-	fake.sttStdout = `{"transcript":"fix the repository from speech","signature":"transcribe_recording(wav_path, provider=None, model=None)"}` + "\n"
+	fake.sttStdout = `{"success":true,"transcript":"fix the repository from speech"}` + "\n"
 	manager, err := New(Options{Runtime: harnesscommon.RuntimeOptions{
 
 		Deployment:   fake,
@@ -616,8 +616,9 @@ func TestVoiceTranscribeSynthesizesAudioAndRunsTranscriptAsAgentMessage(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(retainedConfig, []byte("provider: \"openai\"")) || !bytes.Contains(retainedConfig, []byte("model: \"gpt-4o-mini-transcribe\"")) {
-		t.Fatalf("config is missing voice STT settings:\n%s", retainedConfig)
+	sttConfig := decodeConfigYAML(t, retainedConfig)["stt"].(map[string]any)
+	if sttConfig["provider"] != "openai" || sttConfig["openai"].(map[string]any)["model"] != "gpt-4o-mini-transcribe" || sttConfig["local"].(map[string]any)["language"] != "en" {
+		t.Fatalf("voice STT settings = %#v", sttConfig)
 	}
 
 	runtimeEntries := archiveContents(t, runtimeArchive)
@@ -639,7 +640,7 @@ func TestVoiceTranscribeSynthesizesAudioAndRunsTranscriptAsAgentMessage(t *testi
 			sttCmd = append([]string{options.Path}, options.Args...)
 		}
 	}
-	if len(sttCmd) != 9 || sttCmd[5] != voiceWAVPath || sttCmd[6] != "gpt-4o-mini-transcribe" || sttCmd[7] != "openai" || sttCmd[8] != "en" {
+	if len(sttCmd) != 7 || sttCmd[5] != voiceWAVPath || sttCmd[6] != "gpt-4o-mini-transcribe" {
 		t.Fatalf("stt exec argv = %#v", sttCmd)
 	}
 	if !slices.Equal(fake.gatewayInputs, []string{"fix the repository from speech"}) {
@@ -681,7 +682,7 @@ func TestVoiceTranscribeMapsOpenAICompatibleAgentProvider(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := newFakeDeployment(t)
-			fake.sttStdout = `{"transcript":"fix from speech"}` + "\n"
+			fake.sttStdout = `{"success":true,"transcript":"fix from speech"}` + "\n"
 			manager, err := New(Options{Runtime: harnesscommon.RuntimeOptions{
 
 				Deployment:   fake,
@@ -721,13 +722,104 @@ func TestVoiceTranscribeMapsOpenAICompatibleAgentProvider(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !bytes.Contains(config, []byte(`provider: "custom"`)) {
+			if decodeConfigYAML(t, config)["model"].(map[string]any)["provider"] != "custom" {
 				t.Fatalf("Gateway model provider not mapped: %s", config)
 			}
 			if err := manager.Stop(context.Background()); err != nil {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestHermesSTTScriptUsesPinnedSignature(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 is required to exercise the embedded native STT adapter")
+	}
+	root := t.TempDir()
+	toolsDir := filepath.Join(root, "tools")
+	if err := os.Mkdir(toolsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stub := `def transcribe_recording(wav_path, model=None):
+    assert wav_path == "/recording.wav"
+    assert model == "gpt-4o-mini-transcribe"
+    return {"success": True, "transcript": "fix from speech", "provider": "openai"}
+`
+	if err := os.WriteFile(filepath.Join(toolsDir, "voice_mode.py"), []byte(stub), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(python, "-c", hermesSTTScript, "/recording.wav", "gpt-4o-mini-transcribe")
+	command.Dir = root
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("STT adapter: %v\n%s", err, output)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(output, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["success"] != true || payload["transcript"] != "fix from speech" || payload["provider"] != "openai" || len(payload) != 3 {
+		t.Fatalf("native result was changed: %#v", payload)
+	}
+}
+
+func TestVoiceTranscribeRejectsInvalidNativeResults(t *testing.T) {
+	for _, test := range []struct{ name, payload, wantError string }{
+		{"missing success", `{"transcript":"invented result"}`, "stt_invalid_result"},
+		{"invalid success", `{"success":"true","transcript":"invented result"}`, "stt_invalid_result"},
+		{"object transcript", `{"success":true,"transcript":{"text":"invented result"}}`, "stt_invalid_result"},
+		{"numeric transcript", `{"success":true,"transcript":123}`, "stt_invalid_result"},
+		{"string result", `"invented result"`, "stt_no_json_result"},
+		{"filtered hallucination", `{"success":true,"transcript":"","filtered":true}`, "stt_empty_transcript"},
+		{"native failure", `{"success":false,"transcript":"","error":"provider failed"}`, "provider failed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fake := newFakeDeployment(t)
+			fake.sttStdout = test.payload + "\n"
+			manager, err := New(Options{
+				Runtime: harnesscommon.RuntimeOptions{
+					Deployment: fake, Image: testHermesImage, OutputDir: t.TempDir(),
+					StartTimeout: 2 * time.Second, AgentTimeout: 2 * time.Second,
+					APIKeyLookup: func(string) ([]byte, bool) { return []byte("private-key"), true },
+				},
+				Common:          harnesscommon.Options{Mode: ModeVoiceTranscribe},
+				VoiceTranscribe: VoiceTranscribeOptions{STT: VoiceSTTOptions{Timeout: time.Second}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			manager.newSpeech = func(audioinput.SpeechClientOptions) (speechSynthesizer, error) {
+				return stubSpeechSynthesizer{}, nil
+			}
+			if err := manager.Start(context.Background(), testRequest(t)); err != nil {
+				t.Fatal(err)
+			}
+			defer manager.Stop(context.Background())
+			result, err := manager.Run(context.Background(), "original task instruction")
+			if err == nil || !strings.Contains(err.Error(), test.wantError) || result.Status != core.StatusFailed {
+				t.Fatalf("STT result = %#v, error = %v", result, err)
+			}
+			if len(fake.gatewayInputs) != 0 {
+				t.Fatalf("failed STT started an agent: %#v", fake.gatewayInputs)
+			}
+		})
+	}
+}
+
+func TestVoiceTranscribePreservesCancellation(t *testing.T) {
+	fake := newFakeDeployment(t)
+	manager := newTestManager(t, fake, []byte("private-key"))
+	if err := manager.Start(context.Background(), testRequest(t)); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result := manager.transcribeVoice(ctx, manager.active)
+	if result.OK || result.Error != context.Canceled.Error() {
+		t.Fatalf("canceled STT result = %#v", result)
 	}
 }
 
@@ -1267,8 +1359,9 @@ func TestStartRendersTheTaskMCPServers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "  toolathlon:\n    url: \"http://sandbox-a:10086/sse\"\n    transport: \"sse\"\n    timeout: 1200\n"; !strings.Contains(string(retained), want) {
-		t.Fatalf("config.yaml lacks the task's server %q:\n%s", want, retained)
+	server := decodeConfigYAML(t, retained)["mcp_servers"].(map[string]any)["toolathlon"].(map[string]any)
+	if server["url"] != "http://sandbox-a:10086/sse" || server["transport"] != "sse" || server["timeout"] != 1200 {
+		t.Fatalf("task MCP server = %#v", server)
 	}
 
 	clash := newFakeDeployment(t)
