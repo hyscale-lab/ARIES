@@ -6,6 +6,11 @@ import (
 	"testing"
 )
 
+const (
+	runtimeProbeScript   = `if [ -d "$1" ]; then printf "1\n"; else printf "0\n"; fi`
+	runtimeProbeSentinel = "openclaw-sandbox-check"
+)
+
 func TestVirtualWorkspaceProtocolConstants(t *testing.T) {
 	if virtualRuntimeRoot != "/aries/openclaw/openclaw-ssh-shared-8198076c" {
 		t.Fatalf("virtualRuntimeRoot = %q", virtualRuntimeRoot)
@@ -120,260 +125,73 @@ done` {
 	}
 }
 
-func TestOpenClaw202671WorkdirValidationReturnsVirtualWorkspaceWithoutAlias(t *testing.T) {
-	remote := remoteCommand{argv: []string{remoteShell, "-c", workdirValidationScript, workdirValidationLabel, virtualWorkspace, virtualWorkspace}}
-	plan, err := prepareRemoteCommand(remote, "/app/personal-site")
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{remoteShell, "-c", virtualWorkdirResponseScript, workdirValidationLabel, virtualWorkspace}
-	if got := append([]string{plan.command.Path}, plan.command.Args...); !reflect.DeepEqual(got, want) {
-		t.Fatalf("validation argv = %#v, want %#v", got, want)
-	}
-	if plan.command.Dir != "/app/personal-site" || plan.suppressed {
-		t.Fatalf("validation plan = %#v", plan)
-	}
-}
-
-func TestOpenClaw202671SkillsControlsAreDrainedOnlyOnExactArgv(t *testing.T) {
-	skills := virtualWorkspace + "/.openclaw/sandbox-skills"
-	controls := [][]string{
-		{remoteShell, "-c", directoryClearScript, directoryClearLabel, skills, virtualRuntimeRoot},
-		{remoteShell, "-c", directoryUploadScript, directoryUploadLabel, skills, virtualRuntimeRoot},
-	}
-	for _, argv := range controls {
-		plan, err := prepareRemoteCommand(remoteCommand{argv: argv}, "/workspace")
-		if err != nil || !plan.suppressed {
-			t.Fatalf("exact control = %#v, %v", plan, err)
-		}
-		if got := append([]string{plan.command.Path}, plan.command.Args...); !reflect.DeepEqual(got, argv) {
-			t.Fatalf("suppressed control argv = %#v, want %#v", got, argv)
-		}
-	}
-
-	near := append([]string(nil), controls[1]...)
-	near[2] += " "
-	plan, err := prepareRemoteCommand(remoteCommand{argv: near}, "/workspace")
-	if err == nil && plan.suppressed {
-		t.Fatal("near-match upload was suppressed")
-	}
-}
-
-func TestRuntimeProbeSubstitutesOnlyItsExactFinalRootArgument(t *testing.T) {
-	want := []string{remoteShell, "-c", runtimeProbeScript, runtimeProbeSentinel, "/app/personal-site"}
-	plan, err := prepareRemoteCommand(remoteCommand{argv: []string{remoteShell, "-c", runtimeProbeScript, runtimeProbeSentinel, virtualRuntimeRoot}}, "/app/personal-site")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := append([]string{plan.command.Path}, plan.command.Args...); !reflect.DeepEqual(got, want) {
-		t.Fatalf("probe argv = %#v, want %#v", got, want)
-	}
-	if plan.command.Dir != "/app/personal-site" || plan.suppressed {
-		t.Fatalf("probe plan = %#v", plan)
-	}
-
-	nearMatches := [][]string{
-		{remoteShell, "-c", runtimeProbeScript + " ", runtimeProbeSentinel, virtualRuntimeRoot},
-		{remoteShell, "-c", runtimeProbeScript, runtimeProbeSentinel + "-near", virtualRuntimeRoot},
-		{remoteShell, "-c", runtimeProbeScript, runtimeProbeSentinel, virtualWorkspace},
-		{remoteShell, "-c", runtimeProbeScript, runtimeProbeSentinel, virtualRuntimeRoot + "/"},
-		{remoteShell, "-c", runtimeProbeScript, virtualRuntimeRoot, runtimeProbeSentinel},
-		{remoteShell, "-c", runtimeProbeScript, runtimeProbeSentinel, virtualRuntimeRoot, "extra"},
-	}
-	for _, argv := range nearMatches {
-		plan, err := prepareRemoteCommand(remoteCommand{argv: argv}, "/workspace")
-		if err != nil {
-			continue
-		}
-		got := append([]string{plan.command.Path}, plan.command.Args...)
-		if reflect.DeepEqual(got, []string{remoteShell, "-c", runtimeProbeScript, runtimeProbeSentinel, "/workspace"}) {
-			t.Fatalf("near-match probe was substituted: %#v", argv)
+func TestWorkdirValidationMapsOnlyPositionalPaths(t *testing.T) {
+	for _, root := range []string{"/app/personal site", "/"} {
+		for _, suffix := range []string{"", "/subdir", "/sub dir", "/missing", "/../escape"} {
+			argv := []string{remoteShell, "-c", workdirValidationScript, workdirValidationLabel, virtualWorkspace + suffix, virtualWorkspace}
+			plan := prepareRemoteCommand(remoteCommand{argv: argv}, root)
+			wantTarget := strings.TrimSuffix(root, "/") + suffix
+			if wantTarget == "" {
+				wantTarget = "/"
+			}
+			want := []string{remoteShell, "-c", workdirValidationScript, workdirValidationLabel, wantTarget, root}
+			if got := append([]string{plan.command.Path}, plan.command.Args...); !reflect.DeepEqual(got, want) || plan.suppressed {
+				t.Fatalf("validation argv = %#v, want %#v", got, want)
+			}
 		}
 	}
 }
 
-func TestTransportCleanupControlsAreClassifiedBeforeMapping(t *testing.T) {
-	controls := [][]string{
+func TestTransportControlsAreSuppressedOnlyOnExactArgv(t *testing.T) {
+	for _, argv := range [][]string{
 		{remoteShell, "-c", directoryClearScript, directoryClearLabel, virtualSkillsWorkspace, virtualRuntimeRoot},
 		{remoteShell, "-c", directoryUploadScript, directoryUploadLabel, virtualSkillsWorkspace, virtualRuntimeRoot},
 		{remoteShell, "-c", runtimeRemoveScript, runtimeRemoveLabel, virtualRuntimeRoot},
-	}
-	for index, argv := range controls {
-		plan, err := prepareRemoteCommand(remoteCommand{argv: argv}, "/workspace")
-		if err != nil {
-			t.Fatalf("control %d: %v", index, err)
-		}
-		if !plan.suppressed {
-			t.Fatalf("transport cleanup was not suppressed: %#v", argv)
-		}
-	}
-
-	near := []string{remoteShell, "-c", directoryClearScript, directoryClearLabel + "-agent", virtualSkillsWorkspace, virtualRuntimeRoot}
-	plan, err := prepareRemoteCommand(remoteCommand{argv: near}, "/workspace")
-	if err == nil || plan.suppressed {
-		t.Fatalf("near-match transport cleanup = %#v, %v", plan, err)
-	}
-}
-
-func TestTransportCleanupNearMatchesAreNeverSuppressed(t *testing.T) {
-	controls := []struct {
-		name, script, sentinel, path, root, alternatePath string
-	}{
-		{name: "skills clear", script: directoryClearScript, sentinel: directoryClearLabel, path: virtualSkillsWorkspace, root: virtualRuntimeRoot, alternatePath: virtualWorkspace},
-		{name: "skills upload", script: directoryUploadScript, sentinel: directoryUploadLabel, path: virtualSkillsWorkspace, root: virtualRuntimeRoot, alternatePath: virtualWorkspace},
-	}
-	for _, control := range controls {
-		t.Run(control.name, func(t *testing.T) {
-			nearMatches := map[string][]string{
-				"wrong script":   {remoteShell, "-c", control.script + " ", control.sentinel, control.path, control.root},
-				"wrong sentinel": {remoteShell, "-c", control.script, control.sentinel + "-near", control.path, control.root},
-				"missing path":   {remoteShell, "-c", control.script, control.sentinel},
-				"extra argument": {remoteShell, "-c", control.script, control.sentinel, control.path, control.root, "extra"},
-				"wrong order":    {remoteShell, "-c", control.script, control.path, control.sentinel, control.root},
-				"wrong path":     {remoteShell, "-c", control.script, control.sentinel, control.alternatePath, control.root},
-				"wrong root":     {remoteShell, "-c", control.script, control.sentinel, control.path, virtualWorkspace},
-				"path suffix":    {remoteShell, "-c", control.script, control.sentinel, control.path + "/", control.root},
-			}
-			for name, argv := range nearMatches {
-				t.Run(name, func(t *testing.T) {
-					plan, err := prepareRemoteCommand(remoteCommand{argv: argv}, "/workspace")
-					if err == nil && plan.suppressed {
-						t.Fatalf("near-match control was suppressed: %#v", argv)
-					}
-				})
-			}
-		})
-	}
-}
-
-func TestGeneratedWorkspaceCommandMapsHomePrefixAndBoundedReferences(t *testing.T) {
-	remainder := "cd " + virtualWorkspace + " && cat '" + virtualWorkspace + "/input' > \"" + virtualWorkspace + "/output\""
-	remote := remoteCommand{argv: generatedArgv(remainder)}
-	plan, err := prepareRemoteCommand(remote, "/app/personal-site")
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantScript := "cd /app/personal-site && cat '/app/personal-site/input' > \"/app/personal-site/output\""
-	if plan.command.Args[1] != wantScript || plan.command.Dir != "/app/personal-site" {
-		t.Fatalf("generated command = %#v", plan.command)
-	}
-	// HOME stays outside the workdir so per-user caches never join the candidate.
-	if plan.command.Env["HOME"] != generatedHome || plan.workspaceHome != generatedHome || strings.HasPrefix(generatedHome, "/app/personal-site") {
-		t.Fatalf("generated HOME = %#v / %q", plan.command.Env, plan.workspaceHome)
-	}
-	if plan.command.Env["PATH"] != "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin" || plan.command.Env["LANG"] != "C.UTF-8" || plan.command.Env["OPENCLAW_SHELL"] != "exec" {
-		t.Fatalf("unrelated generated environment changed: %#v", plan.command.Env)
-	}
-	if strings.Contains(plan.command.Args[1], virtualRuntimeRoot) || plan.encoded == encodeCanonicalTokens(remote.argv) {
-		t.Fatalf("translation did not change only executed evidence: %#v", plan)
-	}
-}
-
-func TestGeneratedWorkspaceHomeShapeFailsClosed(t *testing.T) {
-	tests := map[string]func([]string) []string{
-		"missing":     func(argv []string) []string { return append(argv[:2], argv[3:]...) },
-		"wrong value": func(argv []string) []string { argv[2] = "HOME=/near"; return argv },
-		"wrong case":  func(argv []string) []string { argv[2] = "Home=" + virtualWorkspace; return argv },
-		"duplicate": func(argv []string) []string {
-			return append(argv[:3], append([]string{"HOME=" + virtualWorkspace}, argv[3:]...)...)
-		},
-		"reordered":      func(argv []string) []string { argv[1], argv[2] = argv[2], argv[1]; return argv },
-		"after sentinel": func(argv []string) []string { argv[2], argv[4] = argv[4], argv[2]; return argv },
-		"extra":          func(argv []string) []string { return append(argv[:4], append([]string{"EXTRA=1"}, argv[4:]...)...) },
-	}
-	for name, mutate := range tests {
-		t.Run(name, func(t *testing.T) {
-			argv := mutate(generatedArgv("true"))
-			if _, err := prepareRemoteCommand(remoteCommand{argv: argv}, "/workspace"); err == nil {
-				t.Fatalf("generated argv unexpectedly accepted: %#v", argv)
-			}
-		})
-	}
-
-	ordinary := remoteCommand{argv: []string{remoteEnv, "HOME=" + virtualWorkspace, remoteShell, "-c", "true"}}
-	if _, err := prepareRemoteCommand(ordinary, "/workspace"); err == nil {
-		t.Fatal("ordinary command leaked exact virtual HOME")
-	}
-	unrelated := remoteCommand{argv: []string{remoteEnv, "HOME=/ordinary", remoteShell, "-c", "true"}}
-	plan, err := prepareRemoteCommand(unrelated, "/workspace")
-	if err != nil || plan.command.Env["HOME"] != "/ordinary" {
-		t.Fatalf("ordinary HOME changed: %#v, %v", plan, err)
-	}
-}
-
-func TestTranslateVirtualWorkspaceUsesExactBoundariesAndRootSafeJoin(t *testing.T) {
-	delimiters := []byte(" \t\n\r'\"`(){}[];|&<>=:,")
-	for _, delimiter := range delimiters {
-		input := string(delimiter) + virtualWorkspace + string(delimiter)
-		got, err := translateVirtualWorkspace(input, "/work")
-		if err != nil || got != string(delimiter)+"/work"+string(delimiter) {
-			t.Fatalf("delimiter %q = %q, %v", delimiter, got, err)
-		}
-	}
-
-	tests := []struct {
-		name, input, workdir, want string
-	}{
-		{name: "standalone", input: virtualWorkspace, workdir: "/work", want: "/work"},
-		{name: "descendant", input: "cat " + virtualWorkspace + "/a", workdir: "/work", want: "cat /work/a"},
-		{name: "root standalone", input: "'" + virtualWorkspace + "'", workdir: "/", want: "'/'"},
-		{name: "root descendant", input: ">" + virtualWorkspace + "/a", workdir: "/", want: ">/a"},
-		{name: "multiple nested", input: "printf '%s' \"" + virtualWorkspace + "/a\"; cat `echo " + virtualWorkspace + "`", workdir: "/safe", want: "printf '%s' \"/safe/a\"; cat `echo /safe`"},
-		{name: "heredoc", input: "cat <<'EOF'\n" + virtualWorkspace + "/body\nEOF", workdir: "/safe", want: "cat <<'EOF'\n/safe/body\nEOF"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got, err := translateVirtualWorkspace(test.input, test.workdir)
-			if err != nil || got != test.want || strings.Contains(got, "//") {
-				t.Fatalf("translate = %q, %v; want %q", got, err, test.want)
-			}
-		})
-	}
-}
-
-func TestTranslateVirtualWorkspaceRejectsNearAmbiguousAndRuntimeRoot(t *testing.T) {
-	for _, input := range []string{
-		"prefix" + virtualWorkspace,
-		virtualWorkspace + "suffix",
-		"/near" + virtualWorkspace + "/child",
-		virtualRuntimeRoot,
-		"cat " + virtualRuntimeRoot + "/other",
-		"cat " + virtualWorkspace + "-near",
 	} {
-		if got, err := translateVirtualWorkspace(input, "/work"); err == nil || got != "" {
-			t.Fatalf("ambiguous namespace %q = %q, %v", input, got, err)
+		plan := prepareRemoteCommand(remoteCommand{argv: argv}, "/workspace")
+		if !plan.suppressed {
+			t.Fatalf("control was not suppressed: %#v", plan)
+		}
+		for index := range argv {
+			near := append([]string(nil), argv...)
+			near[index] += "-near"
+			// The decoder rejects invalid executable/shell flags; path/script
+			// near matches must not be mistaken for native transport controls.
+			if index < 2 {
+				continue
+			}
+			plan := prepareRemoteCommand(remoteCommand{argv: near}, "/workspace")
+			if plan.suppressed {
+				t.Fatalf("near control suppressed: %#v", near)
+			}
 		}
 	}
 }
 
-func TestTranslateVirtualWorkspaceRejectsRepeatedSlashDescendantsWithoutNormalization(t *testing.T) {
-	for _, workdir := range []string{"/work", "/"} {
-		for name, input := range map[string]string{
-			"plain":    virtualWorkspace + "//child",
-			"quoted":   "cat '" + virtualWorkspace + "//child'",
-			"multiple": "cat " + virtualWorkspace + "/valid " + virtualWorkspace + "//child",
-			"redirect": "printf x >\"" + virtualWorkspace + "//child\"",
-		} {
-			t.Run(workdir+"/"+name, func(t *testing.T) {
-				if got, err := translateVirtualWorkspace(input, workdir); err == nil || got != "" {
-					t.Fatalf("repeated-slash descendant normalized or accepted: got %q, err %v", got, err)
-				}
-			})
+func TestOrdinaryCommandsPreserveBodiesAndEnvironment(t *testing.T) {
+	for _, body := range []string{
+		"printf '%s' '" + virtualWorkspace + "suffix'",
+		"cat <<'EOF'\n" + virtualWorkspace + "/body\n" + virtualRuntimeRoot + "\nEOF",
+		"cd " + virtualWorkspace + "/subdir && cat " + virtualWorkspace + "//input",
+		"printf x > /app/output",
+		"rm -rf -- " + virtualRuntimeRoot,
+	} {
+		for _, home := range []string{"/tmp", "/custom home", virtualWorkspace} {
+			argv := []string{remoteEnv, "LANG=en_US.UTF-8", "EXTRA=value", "HOME=" + home, "OPENCLAW_SHELL=exec", remoteShell, "-c", body}
+			remote, err := decodeRemoteCommand(encodeCanonicalTokens(argv))
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan := prepareRemoteCommand(remote, "/app")
+			if plan.command.Args[1] != body || plan.command.Env["HOME"] != home || plan.command.Env["EXTRA"] != "value" || plan.encoded != encodeCanonicalTokens(argv) {
+				t.Fatalf("command changed: %#v", plan)
+			}
 		}
 	}
-}
-
-func TestGeneratedOrdinaryMutationMapsButExactTransportCleanupDoesNot(t *testing.T) {
-	mutation, err := prepareRemoteCommand(remoteCommand{argv: generatedArgv("rm -f " + virtualWorkspace + "/agent-file")}, "/workspace")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mutation.suppressed || mutation.command.Args[1] != "rm -f /workspace/agent-file" {
-		t.Fatalf("ordinary mutation = %#v", mutation)
-	}
-	cleanup, err := prepareRemoteCommand(remoteCommand{argv: []string{remoteShell, "-c", directoryClearScript, directoryClearLabel, virtualSkillsWorkspace, virtualRuntimeRoot}}, "/workspace")
-	if err != nil || !cleanup.suppressed {
-		t.Fatalf("transport cleanup = %#v, %v", cleanup, err)
+	probe := []string{remoteShell, "-c", runtimeProbeScript, runtimeProbeSentinel, virtualRuntimeRoot}
+	plan := prepareRemoteCommand(remoteCommand{argv: probe}, "/app")
+	if got := append([]string{plan.command.Path}, plan.command.Args...); !reflect.DeepEqual(got, probe) {
+		t.Fatalf("probe changed: %#v", got)
 	}
 }
 
@@ -381,11 +199,11 @@ func generatedArgv(remainder string) []string {
 	return []string{
 		remoteEnv,
 		"PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin",
-		"HOME=" + virtualWorkspace,
+		"HOME=/tmp",
 		"LANG=C.UTF-8",
 		"OPENCLAW_SHELL=exec",
 		remoteShell,
 		"-c",
-		generatedWorkspacePrefix + remainder,
+		"cd '" + virtualWorkspace + "' && " + remainder,
 	}
 }

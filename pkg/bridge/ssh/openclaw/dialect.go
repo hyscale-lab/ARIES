@@ -12,7 +12,9 @@ import (
 
 // Dialect preserves OpenClaw's pinned workspace controls and quoting grammar.
 // It owns no transport or execution lifecycle.
-type Dialect struct{}
+type Dialect struct {
+	validationRoot string
+}
 
 var _ ssh.Dialect = Dialect{}
 
@@ -23,15 +25,17 @@ func (Dialect) Policy() ssh.Policy {
 	}
 }
 
-func (Dialect) Prepare(encoded, workdir string) (ssh.Prepared, *ssh.Refusal) {
+func (dialect Dialect) Prepare(encoded, workdir string) (ssh.Prepared, *ssh.Refusal) {
 	remote, err := decodeRemoteCommand(encoded)
 	if err != nil {
 		return ssh.Prepared{}, rejected()
 	}
-	prepared, err := prepareRemoteCommand(remote, workdir)
-	if err != nil {
-		return ssh.Prepared{}, rejected()
+	validationRoot := workdir
+	if dialect.validationRoot != "" {
+		validationRoot = dialect.validationRoot
 	}
+	prepared := prepareRemoteCommand(remote, validationRoot)
+	prepared.command.Dir = workdir
 	action := ssh.Execute
 	if prepared.suppressed {
 		action = ssh.DrainOnly

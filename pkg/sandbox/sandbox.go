@@ -52,7 +52,6 @@ type Manager struct {
 	deployment     deployment.Deployment
 	newEnvironment func() deployment.TaskEnvironment
 	mu             sync.Mutex
-	active         map[*Sandbox]struct{}
 	pending        map[*Sandbox]struct{}
 	closeMu        sync.Mutex
 	outputDir      string
@@ -148,7 +147,6 @@ func New(options Options) (*Manager, error) {
 	return &Manager{
 		deployment:     options.Deployment,
 		newEnvironment: options.NewEnvironment,
-		active:         make(map[*Sandbox]struct{}),
 		pending:        make(map[*Sandbox]struct{}),
 		outputDir:      outputDir,
 		cleanupTimeout: options.CleanupTimeout,
@@ -240,10 +238,23 @@ func (m *Manager) Start(ctx context.Context, request core.SandboxRequest) (runne
 	if err = s.environment.Validate(ctx); err != nil {
 		return nil, s.rollbackStart(ctx, err)
 	}
+	if s.workdir == "" {
+		result, err := m.deployment.Exec(ctx, s.containerID, core.Command{
+			Path: "/bin/sh", Args: []string{"-c", "pwd -P"}, User: s.execUser,
+		})
+		if err != nil {
+			return nil, s.rollbackStart(ctx, fmt.Errorf("resolve image working directory: %w", err))
+		}
+		workdir, newline := strings.CutSuffix(result.Stdout, "\n")
+		if result.ExitCode != 0 || !newline {
+			return nil, s.rollbackStart(ctx, errors.New("resolve image working directory: pwd failed or returned incomplete output"))
+		}
+		if _, err := cleanContainerWorkdir(workdir); err != nil {
+			return nil, s.rollbackStart(ctx, fmt.Errorf("resolve image working directory: %w", err))
+		}
+		s.workdir = workdir
+	}
 	m.logger.WithContext(ctx).WithFields(logrus.Fields{"container": s.containerName, "placement": s.connectivity.Placement}).Info("task sandbox started")
-	m.mu.Lock()
-	m.active[s] = struct{}{}
-	m.mu.Unlock()
 	return s, nil
 }
 
@@ -293,7 +304,7 @@ func (s *Sandbox) ContainerName() string { return s.containerName }
 // Connectivity returns placement and task service addresses for the harness.
 func (s *Sandbox) Connectivity() core.HarnessConnectivity { return s.connectivity }
 
-// Workdir returns the benchmark-declared container working directory.
+// Workdir returns the explicit or image-derived container working directory.
 func (s *Sandbox) Workdir() string { return s.workdir }
 
 // RunID returns the owning experiment run identity for bridge tool logs.
@@ -479,13 +490,7 @@ func (s *Sandbox) stop(ctx context.Context) error {
 	s.stopping = false
 	s.stopped = !s.containerOwned && !s.environmentOwned
 	close(done)
-	stopped := s.stopped
 	s.mu.Unlock()
-	if stopped {
-		s.owner.mu.Lock()
-		delete(s.owner.active, s)
-		s.owner.mu.Unlock()
-	}
 	return err
 }
 
@@ -597,8 +602,10 @@ func validateEnvironment(environment core.Environment) error {
 	if err := validatePullImage(environment.Image); err != nil {
 		return fmt.Errorf("invalid sandbox image: %w", err)
 	}
-	if _, err := cleanContainerWorkdir(environment.Workdir); err != nil {
-		return fmt.Errorf("invalid sandbox workdir: %w", err)
+	if environment.Workdir != "" {
+		if _, err := cleanContainerWorkdir(environment.Workdir); err != nil {
+			return fmt.Errorf("invalid sandbox workdir: %w", err)
+		}
 	}
 	if err := validateExecUser(environment.ExecUser); err != nil {
 		return fmt.Errorf("invalid sandbox exec user: %w", err)

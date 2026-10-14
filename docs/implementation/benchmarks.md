@@ -13,8 +13,11 @@ The shared client sends one request per call; it adds no retry policy.
 
 ## Terminal-Bench 2
 
-Task loading derives the image, workdir, limits, and verifier timeout from the
-pinned task checkout. Preparation removes private paths and confirms their
+Task loading derives the image, limits, and verifier timeout from the pinned
+task checkout. It leaves the working directory unspecified so sandbox startup
+can discover the running image's actual directory, including inherited metadata
+and expanded image variables. No Dockerfile parser or root fallback is used.
+Preparation removes private paths and confirms their
 absence before bridge access. After the isolation gates, evaluation clears stale
 verifier paths, uploads the private test files, and runs `/bin/bash /tests/test.sh`
 in the task workdir. It retains stdout, stderr, `ctrf.json`, and `reward.txt`.

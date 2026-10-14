@@ -96,7 +96,6 @@ func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner
 	commandResult, commandErr := sandbox.Exec(ctx, core.Command{
 		Path:    "/bin/bash",
 		Args:    []string{filepath.Join(testsPath, "test.sh")},
-		Dir:     details.workdir,
 		Env:     cloneMap(details.verifierEnv),
 		Timeout: details.timeout,
 	})

@@ -284,7 +284,6 @@ func TestLoadFixGitMapsGenericTaskAndKeepsVerifierPrivate(t *testing.T) {
 	}
 	wantEnvironment := core.Environment{
 		Image:        fixtureImageSource,
-		Workdir:      fixGitWorkdir,
 		CPU:          1,
 		MemoryMB:     2048,
 		StorageMB:    10240,
@@ -363,7 +362,6 @@ func TestLoadArbitraryTaskMapsGenericFieldsWithoutTaskSpecificRules(t *testing.T
 	}
 	wantEnvironment := core.Environment{
 		Image:        arbitraryImage,
-		Workdir:      arbitraryWorkdir,
 		CPU:          2,
 		MemoryMB:     4096,
 		StorageMB:    20480,
@@ -374,7 +372,7 @@ func TestLoadArbitraryTaskMapsGenericFieldsWithoutTaskSpecificRules(t *testing.T
 	if !reflect.DeepEqual(task.Environment, wantEnvironment) {
 		t.Fatalf("Environment = %#v, want %#v", task.Environment, wantEnvironment)
 	}
-	if task.Timeout != 750*time.Second || details.timeout != 6*time.Minute || details.workdir != arbitraryWorkdir || !reflect.DeepEqual(details.verifierEnv, map[string]string{"CHECK_MODE": "strict"}) {
+	if task.Timeout != 750*time.Second || details.timeout != 6*time.Minute || !reflect.DeepEqual(details.verifierEnv, map[string]string{"CHECK_MODE": "strict"}) {
 		t.Fatalf("private details = %#v", details)
 	}
 }
@@ -609,17 +607,17 @@ func TestLoadFixGitMissingFiles(t *testing.T) {
 	}
 }
 
-func TestLoadTaskMissingDockerfileUsesRootWorkdir(t *testing.T) {
+func TestLoadTaskUsesImageWorkdirWithoutReadingDockerfile(t *testing.T) {
 	root := writeFixture(t)
 	if err := os.Remove(filepath.Join(root, fixGitID, "environment", "Dockerfile")); err != nil {
 		t.Fatal(err)
 	}
-	task, details, err := loadTask(root, fixGitID)
+	task, _, err := loadTask(root, fixGitID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if task.Environment.Workdir != "/" || details.workdir != "/" {
-		t.Fatalf("missing Dockerfile workdirs = task %q, details %q; want root fallback", task.Environment.Workdir, details.workdir)
+	if task.Environment.Workdir != "" {
+		t.Fatalf("workdir = %q; want image default", task.Environment.Workdir)
 	}
 }
 
@@ -694,7 +692,7 @@ func TestEvaluateInjectsTestsOnlyWhenCalledAndRetainsArtifacts(t *testing.T) {
 			t.Fatalf("solution path uploaded: %q", source)
 		}
 	}
-	if sandbox.verifierCommand.Path != "/bin/bash" || !reflect.DeepEqual(sandbox.verifierCommand.Args, []string{"/tests/test.sh"}) || sandbox.verifierCommand.Dir != fixGitWorkdir || sandbox.verifierCommand.Timeout != 15*time.Minute {
+	if sandbox.verifierCommand.Path != "/bin/bash" || !reflect.DeepEqual(sandbox.verifierCommand.Args, []string{"/tests/test.sh"}) || sandbox.verifierCommand.Dir != "" || sandbox.verifierCommand.Timeout != 15*time.Minute {
 		t.Fatalf("verifier command = %#v", sandbox.verifierCommand)
 	}
 	if len(sandbox.verifierCommand.Env) != 0 {
@@ -1100,94 +1098,6 @@ func writeFixture(t *testing.T) string {
 	writeFile(t, filepath.Join(taskDir, "solution", "solve.sh"), "#!/bin/bash\n")
 	commitFixture(t, root)
 	return root
-}
-
-func TestFinalWorkdir(t *testing.T) {
-	tests := []struct {
-		name       string
-		dockerfile string
-		want       string
-	}{
-		{name: "standalone absolute", dockerfile: "WORKDIR /workspace\n", want: "/workspace"},
-		{name: "standalone relative", dockerfile: "WORKDIR app\nWORKDIR personal-site\n", want: "/app/personal-site"},
-		{name: "absolute", dockerfile: "FROM base\nWORKDIR /workspace\n", want: "/workspace"},
-		{name: "case and whitespace", dockerfile: "  FrOm base\n\tworkdir\t/app/personal-site  \n", want: "/app/personal-site"},
-		{name: "relative chain", dockerfile: "FROM base\nWORKDIR /app\nWORKDIR personal-site\n", want: "/app/personal-site"},
-		{name: "relative from root", dockerfile: "FROM base\nWORKDIR work\n", want: "/work"},
-		{name: "cleaned traversal", dockerfile: "FROM base\nWORKDIR /discarded\nWORKDIR /app\nWORKDIR ../safe\n", want: "/safe"},
-		{name: "comments and blanks", dockerfile: "# syntax=docker/dockerfile:1\n\nFROM base\n  # comment\nWORKDIR /safe\n", want: "/safe"},
-		{name: "continued non-workdir instruction", dockerfile: "FROM base\nRUN printf x \\\n  WORKDIR /not-a-directive\nWORKDIR /safe\n", want: "/safe"},
-		{name: "continued comment and blank", dockerfile: "FROM base\nRUN printf x \\\n\n # ignored continuation comment\n && printf y\nWORKDIR /safe\n", want: "/safe"},
-		{name: "multiple stages reset", dockerfile: "FROM first AS build\nWORKDIR /one\nFROM --platform=linux/amd64 second AS final\nWORKDIR relative\n", want: "/relative"},
-		{name: "final stage default", dockerfile: "FROM first\nWORKDIR /one\nFROM second\n", want: "/"},
-		{name: "root", dockerfile: "FROM base\nWORKDIR /\n", want: "/"},
-		{name: "shell neutral", dockerfile: "FROM base\nWORKDIR /safe/A_z-0.9/path\n", want: "/safe/A_z-0.9/path"},
-		{name: "no workdir", dockerfile: "FROM base\nRUN true\n", want: "/"},
-		{name: "inline comment", dockerfile: "FROM base\nWORKDIR /app # ambiguous\n", want: "/"},
-		{name: "multiple tokens", dockerfile: "FROM base\nWORKDIR /app extra\n", want: "/"},
-		{name: "variable", dockerfile: "FROM base\nWORKDIR ${ROOT}/app\n", want: "/"},
-		{name: "json form", dockerfile: "FROM base\nWORKDIR [\"/app\"]\n", want: "/"},
-		{name: "backslash path", dockerfile: "FROM base\nWORKDIR /app\\\\child\n", want: "/"},
-		{name: "space", dockerfile: "FROM base\nWORKDIR /app child\n", want: "/"},
-		{name: "quote", dockerfile: "FROM base\nWORKDIR /app'child\n", want: "/"},
-		{name: "shell metacharacter", dockerfile: "FROM base\nWORKDIR /app;id\n", want: "/"},
-		{name: "non ascii", dockerfile: "FROM base\nWORKDIR /café\n", want: "/"},
-		{name: "nul", dockerfile: "FROM base\nWORKDIR /app\x00child\n", want: "/"},
-		{name: "dangling continuation", dockerfile: "FROM base\nWORKDIR /app \\", want: "/"},
-		{name: "malformed from", dockerfile: "FROM base unexpected\nWORKDIR /app\n", want: "/"},
-		{name: "from resets standalone workdir", dockerfile: "WORKDIR /app\nFROM base\n", want: "/"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			file := filepath.Join(t.TempDir(), "Dockerfile")
-			if err := os.WriteFile(file, []byte(test.dockerfile), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			got, err := finalWorkdir(file)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got != test.want {
-				t.Fatalf("finalWorkdir() = %q, want %q", got, test.want)
-			}
-		})
-	}
-}
-
-func TestFinalWorkdirMissingFileFallsBackToRoot(t *testing.T) {
-	got, err := finalWorkdir(filepath.Join(t.TempDir(), "missing", "Dockerfile"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != "/" {
-		t.Fatalf("finalWorkdir() = %q, want root fallback", got)
-	}
-}
-
-func TestFinalWorkdirPropagatesIOErrors(t *testing.T) {
-	t.Run("directory", func(t *testing.T) {
-		if _, err := finalWorkdir(t.TempDir()); err == nil || !strings.Contains(err.Error(), "read environment/Dockerfile") {
-			t.Fatalf("finalWorkdir(directory) error = %v, want read error", err)
-		}
-	})
-	t.Run("scanner", func(t *testing.T) {
-		file := filepath.Join(t.TempDir(), "Dockerfile")
-		if err := os.WriteFile(file, []byte("FROM base\nRUN "+strings.Repeat("x", 128<<10)+"\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := finalWorkdir(file); err == nil || !strings.Contains(err.Error(), "read environment/Dockerfile") {
-			t.Fatalf("finalWorkdir(overlong line) error = %v, want scanner error", err)
-		}
-	})
-	t.Run("open", func(t *testing.T) {
-		file := filepath.Join(t.TempDir(), "Dockerfile")
-		if err := os.Symlink("Dockerfile", file); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := finalWorkdir(file); err == nil || !strings.Contains(err.Error(), "open environment/Dockerfile") {
-			t.Fatalf("finalWorkdir(symlink loop) error = %v, want open error", err)
-		}
-	})
 }
 
 func commitFixture(t *testing.T, root string) {

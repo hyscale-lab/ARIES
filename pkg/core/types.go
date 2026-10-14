@@ -19,7 +19,8 @@ type Task struct {
 
 // Environment describes the task sandbox requested by a benchmark.
 type Environment struct {
-	Image        string            `json:"image"`
+	Image string `json:"image"`
+	// An empty Workdir uses the image's working directory, resolved at sandbox startup.
 	Workdir      string            `json:"workdir"`
 	CPU          float64           `json:"cpu,omitempty"`
 	MemoryMB     int               `json:"memory_mb,omitempty"`

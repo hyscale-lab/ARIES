@@ -215,7 +215,7 @@ func runHermesBridgeScenario(t *testing.T, cancelCommand bool, repetitions int, 
 			}
 			if !observed {
 				toolResponses.Add(1)
-				command := "test ! -e /tmp/aries-private-verifier && test ! -e " + modelKeyPath + " && test \"$(pwd)\" = " + tasks[0].Environment.Workdir + " && printf 'ARIES_HERMES_BRIDGE_OK\\n' > /tmp/aries-hermes-proof && cat /tmp/aries-hermes-proof"
+				command := "test ! -e /tmp/aries-private-verifier && test ! -e " + modelKeyPath + " && test \"$(pwd)\" = /app/personal-site && printf 'ARIES_HERMES_BRIDGE_OK\\n' > /tmp/aries-hermes-proof && cat /tmp/aries-hermes-proof"
 				if cancelCommand {
 					command += "; sleep 600"
 				}

@@ -1,8 +1,6 @@
 package openclaw
 
 import (
-	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/hyscale-lab/aries/pkg/core"
@@ -13,15 +11,6 @@ const (
 	virtualWorkspace       = virtualRuntimeRoot + "/workspace"
 	virtualSkillsWorkspace = virtualWorkspace + "/.openclaw/sandbox-skills"
 
-	// generatedHome replaces OpenClaw's default HOME, which is its sandbox
-	// workspace. The workspace maps to the task workdir, the repository being
-	// evaluated, so per-user caches written under HOME (Go, npm, pip) would land
-	// in the candidate's changes. /tmp exists and is writable in task images, and
-	// keeps those caches outside the workdir without the bridge creating state.
-	generatedHome = "/tmp"
-
-	runtimeProbeScript      = `if [ -d "$1" ]; then printf "1\n"; else printf "0\n"; fi`
-	runtimeProbeSentinel    = "openclaw-sandbox-check"
 	workdirValidationScript = `set -e
 target="$1"
 root="$2"
@@ -59,8 +48,7 @@ while [ -n "$relative" ]; do
   current="$next"
 done
 printf "%s\n" "$current"`
-	workdirValidationLabel       = "openclaw-validate-workdir"
-	virtualWorkdirResponseScript = `printf "%s\n" "$1"`
+	workdirValidationLabel = "openclaw-validate-workdir"
 
 	ensureRemoteDirectoryScript = `set -e
 target="$1"
@@ -108,8 +96,6 @@ tar -xf - -C "$1"`
 	directoryUploadLabel = "openclaw-sandbox-upload"
 	runtimeRemoveScript  = `rm -rf -- "$1"`
 	runtimeRemoveLabel   = "openclaw-sandbox-remove"
-
-	generatedWorkspacePrefix = "cd '" + virtualWorkspace + "' && "
 )
 
 type preparedRemoteCommand struct {
@@ -119,56 +105,37 @@ type preparedRemoteCommand struct {
 	suppressed    bool
 }
 
-func prepareRemoteCommand(remote remoteCommand, workdir string) (preparedRemoteCommand, error) {
-	if !validVirtualizationWorkdir(workdir) {
-		return preparedRemoteCommand{}, fmt.Errorf("OpenClaw SSH sandbox workdir %q is not shell-neutral", workdir)
-	}
-	if matchesExactArgv(remote.argv, remoteShell, "-c", runtimeProbeScript, runtimeProbeSentinel, virtualRuntimeRoot) {
-		argv := append([]string(nil), remote.argv...)
-		argv[len(argv)-1] = workdir
-		return preparedFromArgv(argv, workdir, "", false), nil
-	}
-	if matchesExactArgv(remote.argv, remoteShell, "-c", workdirValidationScript, workdirValidationLabel, virtualWorkspace, virtualWorkspace) {
-		return preparedFromArgv([]string{remoteShell, "-c", virtualWorkdirResponseScript, workdirValidationLabel, virtualWorkspace}, workdir, "", false), nil
+func prepareRemoteCommand(remote remoteCommand, workdir string) preparedRemoteCommand {
+	if len(remote.argv) == 6 && matchesExactArgv(remote.argv[:4], remoteShell, "-c", workdirValidationScript, workdirValidationLabel) && remote.argv[5] == virtualWorkspace {
+		// These are provider-owned positional paths, not text in the agent's
+		// shell body. Validate the real task root and retain native rejection
+		// of missing directories, symlinks, and unsafe descendant components.
+		target := remote.argv[4]
+		if target == virtualWorkspace || strings.HasPrefix(target, virtualWorkspace+"/") {
+			argv := append([]string(nil), remote.argv...)
+			argv[4] = strings.TrimSuffix(workdir, "/") + strings.TrimPrefix(target, virtualWorkspace)
+			if argv[4] == "" {
+				argv[4] = "/"
+			}
+			argv[5] = workdir
+			return preparedFromArgv(argv, workdir, false)
+		}
 	}
 	if matchesExactArgv(remote.argv, remoteShell, "-c", directoryClearScript, directoryClearLabel, virtualSkillsWorkspace, virtualRuntimeRoot) ||
 		matchesExactArgv(remote.argv, remoteShell, "-c", directoryUploadScript, directoryUploadLabel, virtualSkillsWorkspace, virtualRuntimeRoot) ||
 		matchesExactArgv(remote.argv, remoteShell, "-c", runtimeRemoveScript, runtimeRemoveLabel, virtualRuntimeRoot) {
-		return preparedFromArgv(remote.argv, workdir, "", true), nil
+		return preparedFromArgv(remote.argv, workdir, true)
 	}
-	shellIndex := remote.shellIndex()
-	script := remote.argv[shellIndex+2]
-	if !strings.HasPrefix(script, generatedWorkspacePrefix) {
-		for _, token := range remote.argv {
-			if strings.Contains(token, virtualRuntimeRoot) {
-				return preparedRemoteCommand{}, errors.New("OpenClaw SSH command contains an unrecognized virtual namespace control")
-			}
-		}
-		if remote.hasExactAssignment("HOME", virtualWorkspace) {
-			return preparedRemoteCommand{}, errors.New("OpenClaw SSH virtual HOME is outside the generated command shape")
-		}
-		return preparedFromArgv(remote.argv, workdir, "", false), nil
-	}
-
-	argv, err := mapGeneratedHome(remote.argv, shellIndex)
-	if err != nil {
-		return preparedRemoteCommand{}, err
-	}
-	remainder := script[len(generatedWorkspacePrefix):]
-	translated, err := translateVirtualWorkspace(remainder, workdir)
-	if err != nil {
-		return preparedRemoteCommand{}, err
-	}
-	argv[shellIndex+2] = translated
-	return preparedFromArgv(argv, workdir, generatedHome, false), nil
+	return preparedFromArgv(remote.argv, workdir, false)
 }
 
-func preparedFromArgv(argv []string, workdir, workspaceHome string, suppressed bool) preparedRemoteCommand {
+func preparedFromArgv(argv []string, workdir string, suppressed bool) preparedRemoteCommand {
 	remote := remoteCommand{argv: append([]string(nil), argv...)}
+	command := remote.command(workdir)
 	return preparedRemoteCommand{
-		command:       remote.command(workdir),
+		command:       command,
 		encoded:       encodeCanonicalTokens(argv),
-		workspaceHome: workspaceHome,
+		workspaceHome: command.Env["HOME"],
 		suppressed:    suppressed,
 	}
 }
@@ -179,100 +146,6 @@ func matchesExactArgv(got []string, want ...string) bool {
 	}
 	for index := range want {
 		if got[index] != want[index] {
-			return false
-		}
-	}
-	return true
-}
-
-func mapGeneratedHome(argv []string, shellIndex int) ([]string, error) {
-	if shellIndex != 5 || len(argv) < 8 || argv[0] != remoteEnv {
-		return nil, errors.New("OpenClaw SSH generated environment has an unexpected shape")
-	}
-	wantNames := [...]string{"PATH", "HOME", "LANG", "OPENCLAW_SHELL"}
-	for offset, wantName := range wantNames {
-		name, value, found := strings.Cut(argv[offset+1], "=")
-		if !found || name != wantName {
-			return nil, errors.New("OpenClaw SSH generated environment order is invalid")
-		}
-		switch wantName {
-		case "HOME":
-			if value != virtualWorkspace {
-				return nil, errors.New("OpenClaw SSH generated HOME does not match the virtual workspace")
-			}
-		case "OPENCLAW_SHELL":
-			if value != "exec" {
-				return nil, errors.New("OpenClaw SSH generated shell sentinel is invalid")
-			}
-		}
-	}
-	mapped := append([]string(nil), argv...)
-	mapped[2] = "HOME=" + generatedHome
-	return mapped, nil
-}
-
-func translateVirtualWorkspace(command, workdir string) (string, error) {
-	var output strings.Builder
-	for position := 0; position < len(command); {
-		workspaceOffset := strings.Index(command[position:], virtualWorkspace)
-		runtimeOffset := strings.Index(command[position:], virtualRuntimeRoot)
-		if workspaceOffset < 0 && runtimeOffset < 0 {
-			output.WriteString(command[position:])
-			break
-		}
-		if runtimeOffset >= 0 && (workspaceOffset < 0 || runtimeOffset < workspaceOffset) {
-			return "", errors.New("OpenClaw SSH ordinary command contains the virtual runtime root")
-		}
-		match := position + workspaceOffset
-		output.WriteString(command[position:match])
-		end := match + len(virtualWorkspace)
-		if !validWorkspaceLeftBoundary(command, match) || !validWorkspaceRightBoundary(command, end) {
-			return "", errors.New("OpenClaw SSH command contains an ambiguous virtual workspace reference")
-		}
-		if end+1 < len(command) && command[end] == '/' && command[end+1] == '/' {
-			return "", errors.New("OpenClaw SSH command contains an ambiguous repeated-slash workspace descendant")
-		}
-		if workdir == "/" && end < len(command) && command[end] == '/' {
-			// The untouched descendant suffix already begins at container root.
-		} else {
-			output.WriteString(workdir)
-		}
-		position = end
-	}
-	translated := output.String()
-	if strings.Contains(translated, virtualWorkspace) || strings.Contains(translated, virtualRuntimeRoot) {
-		return "", errors.New("OpenClaw SSH command retains an unresolved virtual namespace")
-	}
-	return translated, nil
-}
-
-func validWorkspaceLeftBoundary(command string, position int) bool {
-	return position == 0 || isWorkspaceDelimiter(command[position-1])
-}
-
-func validWorkspaceRightBoundary(command string, position int) bool {
-	return position == len(command) || command[position] == '/' || isWorkspaceDelimiter(command[position])
-}
-
-func isWorkspaceDelimiter(value byte) bool {
-	return strings.ContainsRune(" \t\n\r'\"`(){}[];|&<>=:,", rune(value))
-}
-
-func validVirtualizationWorkdir(value string) bool {
-	if value == "/" {
-		return true
-	}
-	if len(value) < 2 || value[0] != '/' || value[len(value)-1] == '/' {
-		return false
-	}
-	for _, component := range strings.Split(value[1:], "/") {
-		if component == "" {
-			return false
-		}
-		for _, character := range component {
-			if character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z' || character >= '0' && character <= '9' || strings.ContainsRune("._-", character) {
-				continue
-			}
 			return false
 		}
 	}

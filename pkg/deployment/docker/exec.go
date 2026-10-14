@@ -222,17 +222,6 @@ func decimalDigits(value string) bool {
 	return true
 }
 
-func cleanContainerPath(path string) (string, error) {
-	clean, err := cleanContainerWorkdir(path)
-	if err != nil {
-		return "", err
-	}
-	if clean == "/" {
-		return "", errors.New("path must not be the container root")
-	}
-	return clean, nil
-}
-
 func cleanContainerWorkdir(path string) (string, error) {
 	if path == "" || strings.ContainsRune(path, 0) || !strings.HasPrefix(path, "/") {
 		return "", errors.New("path must be absolute, nonempty, and NUL-free")

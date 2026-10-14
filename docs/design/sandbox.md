@@ -57,11 +57,13 @@ runtimes are removed. A cleanup error remains visible rather than being treated
 as confirmed absence.
 
 Commands retain absolute executable paths and exact argument boundaries. The
-sandbox supplies default workdir and numeric execution identity; explicit
-evaluator identity overrides remain possible. Cancellation closes the execution
-transport and may leave the command running, matching native backend behavior.
-The sandbox stays alive for evaluation; Stop removes its remaining processes.
-Transfer limits,
+sandbox supplies default workdir and numeric execution identity. An empty
+environment workdir preserves the image default; startup resolves it with
+`/bin/sh -c 'pwd -P'` before exposing the sandbox or bridge target. Failed
+discovery rolls back startup. Explicit evaluator identity overrides remain possible.
+Cancellation closes the execution transport and may leave the command running,
+matching native backend behavior. The sandbox stays alive for evaluation;
+Stop removes its remaining processes. Transfer limits,
 private artifacts, and missing-file semantics are part of the isolation boundary.
 [Docker mechanisms](../implementation/docker.md) explain the current realization.
 

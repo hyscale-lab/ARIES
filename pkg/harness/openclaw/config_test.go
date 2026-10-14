@@ -39,6 +39,9 @@ func TestRenderConfigLocksProviderSharedSSHAndPlaceholder(t *testing.T) {
 		t.Fatal("omitted reasoning changed native defaults")
 	}
 	sandbox := configuration.Agents.Defaults.Sandbox
+	if len(sandbox.Docker.Env) != 1 || sandbox.Docker.Env["HOME"] != "/tmp" {
+		t.Fatalf("native sandbox environment = %#v", sandbox.Docker.Env)
+	}
 	if configuration.Gateway.Mode != "local" || configuration.Models.Mode != "merge" || provider.API != "openai-completions" || provider.BaseURL != testModel().BaseURL {
 		t.Fatalf("provider config = %#v", configuration)
 	}

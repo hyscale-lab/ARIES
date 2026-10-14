@@ -57,7 +57,6 @@ func TestPinnedSelectedTasksLoadInRequestedOrder(t *testing.T) {
 		"schemelike-metacircular-eval",
 	}
 	type expectation struct {
-		workdir       string
 		cpu           float64
 		memoryMB      int
 		agentTimeout  string
@@ -65,11 +64,11 @@ func TestPinnedSelectedTasksLoadInRequestedOrder(t *testing.T) {
 		verifierFiles int
 	}
 	want := map[string]expectation{
-		"fix-git":                      {workdir: "/app/personal-site", cpu: 1, memoryMB: 2048, agentTimeout: "15m0s", verifyTimeout: "15m0s", verifierFiles: 2},
-		"prove-plus-comm":              {workdir: "/workspace", cpu: 1, memoryMB: 2048, agentTimeout: "15m0s", verifyTimeout: "15m0s", verifierFiles: 2},
-		"overfull-hbox":                {workdir: "/app", cpu: 2, memoryMB: 4096, agentTimeout: "12m30s", verifyTimeout: "6m0s", verifierFiles: 5},
-		"rstan-to-pystan":              {workdir: "/app", cpu: 4, memoryMB: 8192, agentTimeout: "30m0s", verifyTimeout: "30m0s", verifierFiles: 2},
-		"schemelike-metacircular-eval": {workdir: "/app", cpu: 1, memoryMB: 2048, agentTimeout: "40m0s", verifyTimeout: "40m0s", verifierFiles: 67},
+		"fix-git":                      {cpu: 1, memoryMB: 2048, agentTimeout: "15m0s", verifyTimeout: "15m0s", verifierFiles: 2},
+		"prove-plus-comm":              {cpu: 1, memoryMB: 2048, agentTimeout: "15m0s", verifyTimeout: "15m0s", verifierFiles: 2},
+		"overfull-hbox":                {cpu: 2, memoryMB: 4096, agentTimeout: "12m30s", verifyTimeout: "6m0s", verifierFiles: 5},
+		"rstan-to-pystan":              {cpu: 4, memoryMB: 8192, agentTimeout: "30m0s", verifyTimeout: "30m0s", verifierFiles: 2},
+		"schemelike-metacircular-eval": {cpu: 1, memoryMB: 2048, agentTimeout: "40m0s", verifyTimeout: "40m0s", verifierFiles: 67},
 	}
 
 	benchmark, err := New(Options{
@@ -90,7 +89,7 @@ func TestPinnedSelectedTasksLoadInRequestedOrder(t *testing.T) {
 		details := benchmark.details[id]
 		image := pinnedTaskImage(t, root, id)
 		expected := want[id]
-		if task.Environment.Image != image || task.Environment.Workdir != expected.workdir || task.Environment.CPU != expected.cpu || task.Environment.MemoryMB != expected.memoryMB || task.Environment.StorageMB != 10240 || task.Environment.GPUs != 0 || !task.Environment.AllowNetwork {
+		if task.Environment.Image != image || task.Environment.Workdir != "" || task.Environment.CPU != expected.cpu || task.Environment.MemoryMB != expected.memoryMB || task.Environment.StorageMB != 10240 || task.Environment.GPUs != 0 || !task.Environment.AllowNetwork {
 			t.Fatalf("task %q environment = %#v, expected %+v with image %q", id, task.Environment, expected, image)
 		}
 		if task.Timeout.String() != expected.agentTimeout || details.timeout.String() != expected.verifyTimeout || len(details.verifierFiles) != expected.verifierFiles {
@@ -132,14 +131,14 @@ func TestEveryTaskInPinnedDatasetLoadsAtGenericBoundary(t *testing.T) {
 		if task.ID != id || strings.TrimSpace(task.Instruction) == "" {
 			t.Fatalf("task %q generic identity/instruction = %#v", id, task)
 		}
-		if task.Environment.Image != image || !filepath.IsAbs(task.Environment.Workdir) || task.Environment.CPU <= 0 || task.Environment.MemoryMB <= 0 || task.Environment.StorageMB <= 0 || task.Environment.GPUs < 0 {
+		if task.Environment.Image != image || task.Environment.Workdir != "" || task.Environment.CPU <= 0 || task.Environment.MemoryMB <= 0 || task.Environment.StorageMB <= 0 || task.Environment.GPUs < 0 {
 			t.Fatalf("task %q invalid generic environment = %#v", id, task.Environment)
 		}
 		wantVerifierFiles := countRegularVerifierFiles(t, filepath.Join(taskDirectory(root, id), "tests"))
 		if len(details.verifierFiles) != wantVerifierFiles {
 			t.Fatalf("task %q captured %d verifier files, want recursive tree of %d", id, len(details.verifierFiles), wantVerifierFiles)
 		}
-		if details.workdir != task.Environment.Workdir || details.timeout <= 0 {
+		if details.timeout <= 0 {
 			t.Fatalf("task %q private details = %#v", id, details)
 		}
 	}
