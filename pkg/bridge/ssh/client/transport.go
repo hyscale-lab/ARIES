@@ -1,3 +1,7 @@
+// Package client is the SSH transport shared by the ARIES client helpers
+// staged into harness containers. It forwards one remote command and the
+// caller's streams unchanged; invocation and configuration policy belong to
+// each harness-specific adapter.
 package client
 
 import (
@@ -12,6 +16,11 @@ import (
 	"time"
 
 	gossh "golang.org/x/crypto/ssh"
+)
+
+const (
+	connectTimeout = 5 * time.Second
+	keepalive      = 15 * time.Second
 )
 
 // Config supplies an already validated destination.
@@ -34,7 +43,7 @@ func Run(ctx context.Context, configuration Config, remote string, stdin io.Read
 		return 255, errors.New("SSH user is required")
 	}
 	address := configuration.Address
-	dialer := net.Dialer{Timeout: lockedConnectTimeout}
+	dialer := net.Dialer{Timeout: connectTimeout}
 	connection, err := dialer.DialContext(ctx, "tcp", address)
 	if err != nil {
 		return 255, fmt.Errorf("connect %s: %w", address, err)
@@ -42,11 +51,11 @@ func Run(ctx context.Context, configuration Config, remote string, stdin io.Read
 	defer connection.Close()
 	stopCancellation := context.AfterFunc(ctx, func() { _ = connection.Close() })
 	defer stopCancellation()
-	_ = connection.SetDeadline(time.Now().Add(lockedConnectTimeout))
+	_ = connection.SetDeadline(time.Now().Add(connectTimeout))
 	clientConfiguration := &gossh.ClientConfig{
 		User:            configuration.User,
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
-		Timeout:         lockedConnectTimeout,
+		Timeout:         connectTimeout,
 	}
 	sshConnection, channels, requests, err := gossh.NewClientConn(connection, address, clientConfiguration)
 	if err != nil {
@@ -123,7 +132,7 @@ func startKeepalive(client *gossh.Client, connection net.Conn) func() {
 	joined := make(chan struct{})
 	go func() {
 		defer close(joined)
-		ticker := time.NewTicker(lockedKeepalive)
+		ticker := time.NewTicker(keepalive)
 		defer ticker.Stop()
 		for {
 			select {
@@ -131,7 +140,7 @@ func startKeepalive(client *gossh.Client, connection net.Conn) func() {
 				return
 			case <-ticker.C:
 				// Bound an unanswered request; SendRequest itself has no timeout.
-				_ = connection.SetDeadline(time.Now().Add(3 * lockedKeepalive))
+				_ = connection.SetDeadline(time.Now().Add(3 * keepalive))
 				if _, _, err := client.SendRequest("keepalive@openssh.com", true, nil); err != nil {
 					_ = client.Close()
 					return

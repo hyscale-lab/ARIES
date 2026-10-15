@@ -12,17 +12,14 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/hyscale-lab/aries/pkg/core"
 )
 
 const (
-	lockedHostAlias      = "openclaw-sandbox"
-	lockedUsername       = "aries"
-	lockedConnectTimeout = 5 * time.Second
-	lockedKeepalive      = 15 * time.Second
-	maxClientFile        = 64 << 10
+	lockedHostAlias = "openclaw-sandbox"
+	lockedUsername  = "aries"
+	maxClientFile   = 64 << 10
 )
 
 type clientInvocation struct {
