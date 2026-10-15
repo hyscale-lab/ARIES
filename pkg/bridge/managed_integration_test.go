@@ -104,7 +104,7 @@ func newManagedFixture(t *testing.T, protocol string) *managedFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cc, err := bridgewiring.SSHClientConfig(protocol, managedBinary(t, "aries-ssh-client", "ARIES_SSH_CLIENT"))
+	cc, err := bridgewiring.SSHClientConfig(protocol, filepath.Dir(managedBinary(t, "aries-ssh-client", "ARIES_SSH_CLIENT")))
 	if err != nil {
 		t.Fatal(err)
 	}

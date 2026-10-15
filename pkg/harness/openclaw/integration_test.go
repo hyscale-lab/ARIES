@@ -249,7 +249,7 @@ func TestRunnerFixGitThroughOpenClawSSHBridge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	clientConfig, err := bridgewiring.SSHClientConfig("openclaw-ssh", requiredIntegrationFile(t, "ARIES_SSH_CLIENT"))
+	clientConfig, err := bridgewiring.SSHClientConfig("openclaw-ssh", filepath.Dir(requiredIntegrationFile(t, "ARIES_SSH_CLIENT")))
 	if err != nil {
 		t.Fatal(err)
 	}

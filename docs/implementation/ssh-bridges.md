@@ -119,6 +119,42 @@ commands normally; because nothing was pushed, its teardown sync-back then
 suppresses itself. Refusals are recorded with a distinct `denied` status so
 evidence separates policy from a protocol violation.
 
+## Codex SSH bridge
+
+Codex `0.157.1` has no SSH client of its own. Its native `environments.toml`
+names a program that Codex spawns and speaks exec-server JSON-RPC to over
+stdio. ARIES points that entry at `aries-codex-ssh`, a static helper staged
+into the Codex harness like OpenClaw's client. The helper carries the byte
+stream over one SSH exec request with the fixed remote command
+`aries-codex-exec-server-v1` and interprets none of it, so Codex stays
+unmodified and its shell and filesystem semantics stay native.
+
+The [Codex dialect](../../pkg/bridge/ssh/codex/dialect.go) accepts only that
+command, admits exactly one executor session per sandbox, and runs
+`codex exec-server --listen stdio` in the task workdir as the task's exec user.
+The task image does not carry Codex, so the Runner-side session stages the
+pinned static CLI into a root-level directory derived from the sandbox ID
+before registration, and removes it with confirmed absence after release is
+confirmed and before evidence collection. Staging is an optional
+`SandboxStaging` dependency that wiring selects for `codex-ssh`; the shared
+lifecycle never imports the dialect. Staging runs before the agent acts, so it
+uses the image's own `/bin/sh`, `mkdir`, and `chmod`; removal runs the task's
+`/bin/sh` and `rm` like any other sandbox exec, and a sabotaged `rm` fails Stop
+rather than leaving the executor silently.
+
+When the stream ends, the stdio exec-server shuts down and terminates the
+processes it started (`exec-server/src/server/transport.rs` in the pinned
+source). As for the other bridges, revocation does not scan or kill sandbox
+processes beyond that.
+
+Codex keeps one stdin open for the whole run, so the engine relays input
+without bound and bounds only what it retains: past 16 MiB a record keeps the
+prefix, the exact `stdin_bytes`, and `stdin_truncated: true`. This applies to
+every dialect; earlier versions ended the stream and failed the audit instead.
+
+Codex also accepts a `url` (WebSocket) environment. A WebSocket bridge would
+drop the client helper but needs a second protocol engine with its own
+admission, evidence, and revocation; reusing the shared SSH engine is smaller.
 
 ## Source and limitations
 

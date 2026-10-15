@@ -233,3 +233,9 @@ jitter
 lowercased
 debian
 typescript
+Codex
+stdio
+exec
+rollout
+rollouts
+musl
