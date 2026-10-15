@@ -14,7 +14,7 @@ func TestPrepareMapsAgentCommandsToTheSandboxWorkdir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if prepared.command.Path != remoteShellPath || prepared.command.Dir != "/testbed" {
+	if prepared.command.Path != RemoteShellPath || prepared.command.Dir != "/testbed" {
 		t.Fatalf("prepared = %#v", prepared.command)
 	}
 	if len(prepared.command.Args) != 2 || prepared.command.Args[0] != "-c" || prepared.command.Args[1] != "echo hi" {

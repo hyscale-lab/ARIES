@@ -9,6 +9,7 @@ build:
 	mkdir -p bin
 	go build -o bin/aries ./cmd/aries
 	CGO_ENABLED=0 go build -o bin/aries-ssh-client ./cmd/aries-ssh-client
+	CGO_ENABLED=0 go build -o bin/aries-grpc-client ./cmd/aries-grpc-client
 	CGO_ENABLED=0 go build -o bin/aries-bridge ./cmd/aries-bridge
 
 test:
@@ -22,7 +23,7 @@ lint:
 	go vet ./...
 
 integration: bridge-image
-	ARIES_SSH_CLIENT=$(CURDIR)/bin/aries-ssh-client go test -p=1 -count=1 -tags=integration ./...
+	ARIES_SSH_CLIENT=$(CURDIR)/bin/aries-ssh-client ARIES_GRPC_CLIENT=$(CURDIR)/bin/aries-grpc-client go test -p=1 -count=1 -tags=integration ./...
 
 run: build
 	./bin/aries $(PROFILE)
@@ -50,7 +51,7 @@ proto:
 	test "$$($(CURDIR)/.cache/protobuf/bin/protoc-gen-go --version)" = 'protoc-gen-go $(PROTOC_GEN_GO_VERSION)'
 	test "$$($(CURDIR)/.cache/protobuf/bin/protoc-gen-go-grpc --version)" = 'protoc-gen-go-grpc $(patsubst v%,%,$(PROTOC_GEN_GO_GRPC_VERSION))'
 	test "$$($(PROTOC) --version)" = 'libprotoc $(PROTOC_VERSION)'
-	PATH=$(CURDIR)/.cache/protobuf/bin:$$PATH $(PROTOC) --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative pkg/bridge/control/v1/control.proto
+	PATH=$(CURDIR)/.cache/protobuf/bin:$$PATH $(PROTOC) --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative pkg/bridge/control/v1/control.proto pkg/bridge/grpc/v1/sandbox.proto
 
 .PHONY: bridge-image
 bridge-image: build

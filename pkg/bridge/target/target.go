@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"regexp"
 	"strings"
 	"sync"
@@ -14,7 +15,10 @@ import (
 	"github.com/hyscale-lab/aries/pkg/sandbox"
 )
 
-// Executor deliberately grants no creation, deletion, transfer or network ownership.
+// Executor grants file stat, read and write in the bound runtime. It still
+// grants no creation, deletion or network ownership of runtimes. File errors use
+// fs.ErrNotExist, fs.ErrPermission, syscall.EISDIR and syscall.ENOTDIR, so a
+// bridge never imports backend types.
 type Executor interface {
 	ContainerID() string
 	ContainerName() string
@@ -22,11 +26,24 @@ type Executor interface {
 	TaskID() string
 	Workdir() string
 	ExecStream(context.Context, core.Command, io.Reader, io.Writer, io.Writer) (core.CommandResult, error)
+	// StatFile follows a symlink.
+	StatFile(ctx context.Context, path string) (fs.FileInfo, error)
+	// OpenFile follows a symlink. Closing the stream early stops the transfer;
+	// a non-regular path gives its info and an empty stream.
+	OpenFile(ctx context.Context, path string) (io.ReadCloser, fs.FileInfo, error)
+	// WriteFile lands the write only if content gives exactly size bytes and
+	// then io.EOF.
+	WriteFile(ctx context.Context, path string, content io.Reader, size int64) (created bool, err error)
 }
 
 type Backend interface {
 	ValidateBridgeTarget(context.Context, core.BridgeTarget) error
 	ExecStream(context.Context, string, core.Command, io.Reader, io.Writer, io.Writer) (core.CommandResult, error)
+	StatFile(ctx context.Context, id, path string) (fs.FileInfo, error)
+	OpenFile(ctx context.Context, id, path string) (io.ReadCloser, fs.FileInfo, error)
+	// WriteFile gives new files and parents to user, a numeric uid:gid; root
+	// when it is empty.
+	WriteFile(ctx context.Context, id, path string, content io.Reader, size int64, user string) (created bool, err error)
 }
 
 type Borrowed struct {
@@ -88,6 +105,36 @@ func (b *Borrowed) ExecStream(ctx context.Context, c core.Command, in io.Reader,
 		return core.CommandResult{ExitCode: -1}, err
 	}
 	return b.backend.ExecStream(ctx, b.descriptor.RuntimeID, c, in, out, errout)
+}
+
+func (b *Borrowed) StatFile(ctx context.Context, path string) (fs.FileInfo, error) {
+	b.mu.Lock()
+	closed := b.revoked
+	b.mu.Unlock()
+	if closed {
+		return nil, errors.New("bridge target admission closed")
+	}
+	return b.backend.StatFile(ctx, b.descriptor.RuntimeID, path)
+}
+
+func (b *Borrowed) OpenFile(ctx context.Context, path string) (io.ReadCloser, fs.FileInfo, error) {
+	b.mu.Lock()
+	closed := b.revoked
+	b.mu.Unlock()
+	if closed {
+		return nil, nil, errors.New("bridge target admission closed")
+	}
+	return b.backend.OpenFile(ctx, b.descriptor.RuntimeID, path)
+}
+
+func (b *Borrowed) WriteFile(ctx context.Context, path string, content io.Reader, size int64) (bool, error) {
+	b.mu.Lock()
+	closed := b.revoked
+	b.mu.Unlock()
+	if closed {
+		return false, errors.New("bridge target admission closed")
+	}
+	return b.backend.WriteFile(ctx, b.descriptor.RuntimeID, path, content, size, b.descriptor.ExecUser)
 }
 
 // Revoke closes admission without changing the independently owned sandbox.

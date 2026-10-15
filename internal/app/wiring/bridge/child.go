@@ -2,8 +2,11 @@ package bridge
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	managed "github.com/hyscale-lab/aries/pkg/bridge"
+	grpcbridge "github.com/hyscale-lab/aries/pkg/bridge/grpc"
 	sshbridge "github.com/hyscale-lab/aries/pkg/bridge/ssh"
 	"github.com/hyscale-lab/aries/pkg/bridge/ssh/hermes"
 	"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw"
@@ -31,18 +34,33 @@ func ServeChild(ctx context.Context, c managed.LaunchConfig, logger *logrus.Logg
 		return errors.New("unsupported bridge execution backend")
 	}
 	defer closeBackend()
-	return managed.Serve(ctx, managed.ServeOptions{Config: c, Backend: backend, NewNative: func(signer ssh.Signer, sandboxID, outputDir string) (managed.NativeServer, error) {
-		var dialect sshbridge.Dialect
-		switch c.BridgeType {
-		case "hermes-ssh":
-			dialect = hermes.Dialect{}
-		case "openclaw-ssh":
-			dialect = openclaw.Dialect{}
-		default:
-			return nil, errors.New("unsupported bridge protocol")
-		}
-		return sshbridge.New(sshbridge.Options{Dialect: dialect, HostSigner: signer, SandboxID: sandboxID, ResolveListen: func(context.Context) (core.BridgeListen, error) { return c.Listen, nil }, OutputDir: outputDir, Logger: logger, OmitRawLog: !c.RetainRawLog})
+	resolveListen := func(context.Context) (core.BridgeListen, error) { return c.Listen, nil }
+	var dialect sshbridge.Dialect
+	switch c.BridgeType {
+	case "hermes-ssh":
+		dialect = hermes.Dialect{}
+	case "openclaw-ssh":
+		dialect = openclaw.Dialect{}
+	case "hermes-grpc":
+		return managed.Serve(ctx, managed.ServeOptions{Config: c, Backend: backend, NewNative: func(sandboxID, outputDir string) (managed.NativeServer, error) {
+			return grpcbridge.New(grpcbridge.Options{SandboxID: sandboxID, ResolveListen: resolveListen, OutputDir: outputDir, Logger: logger, OmitRawLog: !c.RetainRawLog})
+		}})
+	default:
+		return errors.New("unsupported bridge protocol")
+	}
+	// One host key per child process: every SSH listener of the run presents it.
+	_, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return err
+	}
+	signer, err := ssh.NewSignerFromKey(key)
+	if err != nil {
+		return err
+	}
+	return managed.Serve(ctx, managed.ServeOptions{Config: c, Backend: backend, NewNative: func(sandboxID, outputDir string) (managed.NativeServer, error) {
+		return sshbridge.New(sshbridge.Options{Dialect: dialect, HostSigner: signer, SandboxID: sandboxID, ResolveListen: resolveListen, OutputDir: outputDir, Logger: logger, OmitRawLog: !c.RetainRawLog})
 	}})
 }
 
 var _ managed.NativeServer = (*sshbridge.Manager)(nil)
+var _ managed.NativeServer = (*grpcbridge.Manager)(nil)

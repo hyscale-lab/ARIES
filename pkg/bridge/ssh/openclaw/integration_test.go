@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"github.com/hyscale-lab/aries/internal/testutil/dockerroute"
 	"io"
+	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
@@ -59,7 +60,7 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 	})
 
 	bridge := newIntegrationBridge(t, outputDir, logger, live.(*tasksandbox.Sandbox).Connectivity().Placement.AttachmentID)
-	endpoint, err := bridge.StartTarget(ctx, sandbox)
+	endpoint, err := bridge.StartTarget(ctx, sandboxTarget{sandbox})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +180,7 @@ func TestBridgeMapsVirtualWorkspaceToContainerRootWithoutAlias(t *testing.T) {
 	})
 
 	bridge := newIntegrationBridge(t, outputDir, logger, live.(*tasksandbox.Sandbox).Connectivity().Placement.AttachmentID)
-	endpoint, err := bridge.StartTarget(ctx, sandbox)
+	endpoint, err := bridge.StartTarget(ctx, sandboxTarget{sandbox})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +246,7 @@ func TestBridgeRunsConcurrentCallsWithoutAConvoy(t *testing.T) {
 	})
 
 	bridge := newIntegrationBridge(t, outputDir, logger, live.(*tasksandbox.Sandbox).Connectivity().Placement.AttachmentID)
-	endpoint, err := bridge.StartTarget(ctx, live.(*tasksandbox.Sandbox))
+	endpoint, err := bridge.StartTarget(ctx, sandboxTarget{live.(*tasksandbox.Sandbox)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -413,4 +414,18 @@ func integrationDeployment(t *testing.T) *dockerdeployment.Manager {
 	}
 	t.Cleanup(func() { _ = deployment.Close() })
 	return deployment
+}
+
+// sandboxTarget passes a task sandbox to an SSH bridge, which never uses file
+// operations.
+type sandboxTarget struct{ *tasksandbox.Sandbox }
+
+func (sandboxTarget) StatFile(context.Context, string) (fs.FileInfo, error) {
+	return nil, errors.ErrUnsupported
+}
+func (sandboxTarget) OpenFile(context.Context, string) (io.ReadCloser, fs.FileInfo, error) {
+	return nil, nil, errors.ErrUnsupported
+}
+func (sandboxTarget) WriteFile(context.Context, string, io.Reader, int64) (bool, error) {
+	return false, errors.ErrUnsupported
 }

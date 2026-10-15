@@ -54,7 +54,7 @@ func TestPrivateFileRejectsUnsafeSources(t *testing.T) {
 	if err := os.Chmod(original, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Truncate(original, maxPrivateFileBytes+1); err != nil {
+	if err := os.Truncate(original, MaxPrivateFileBytes+1); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Read(original, 0o600); err == nil {
@@ -65,6 +65,31 @@ func TestPrivateFileRejectsUnsafeSources(t *testing.T) {
 	}
 	if _, err := Read(original, 0o600); err == nil {
 		t.Fatal("accepted empty credential")
+	}
+}
+
+// A staged binary may exceed the credential bound only through an explicit
+// larger limit; Read keeps the credential bound.
+func TestReadBoundedAcceptsAFileOverTheCredentialBound(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "client")
+	if err := os.WriteFile(path, []byte("binary"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(path, MaxPrivateFileBytes+1); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(path, 0o555); err == nil {
+		t.Fatal("Read accepted a file over the credential bound")
+	}
+	content, err := ReadBounded(path, 0o555, MaxPrivateFileBytes+1)
+	if err != nil || len(content) != MaxPrivateFileBytes+1 {
+		t.Fatalf("ReadBounded = %d bytes, %v", len(content), err)
+	}
+	if _, err := ReadBounded(path, 0o555, MaxPrivateFileBytes); err == nil {
+		t.Fatal("ReadBounded accepted a file over its limit")
 	}
 }
 

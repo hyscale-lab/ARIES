@@ -13,11 +13,11 @@ import (
 const (
 	bootstrapShell = "/bin/sh"
 
-	// remoteShellPath is where the bare `remoteShell` token Hermes puts on the
+	// RemoteShellPath is where the bare `remoteShell` token Hermes puts on the
 	// wire is resolved to. The sandbox requires an absolute command path and
 	// performs no PATH lookup of its own, so the mapping has to happen here.
 	// This is why a Hermes task image must provide /bin/bash.
-	remoteShellPath = "/bin/bash"
+	RemoteShellPath = "/bin/bash"
 )
 
 type preparedRemoteCommand struct {
@@ -27,7 +27,7 @@ type preparedRemoteCommand struct {
 }
 
 func prepareRemoteCommand(remote remoteCommand, workdir string) (preparedRemoteCommand, error) {
-	if !validWorkdir(workdir) {
+	if !ValidWorkdir(workdir) {
 		return preparedRemoteCommand{}, fmt.Errorf("Hermes SSH sandbox workdir %q is not shell-neutral", workdir)
 	}
 	switch remote.kind {
@@ -45,7 +45,7 @@ func prepareRemoteCommand(remote remoteCommand, workdir string) (preparedRemoteC
 		}, nil
 	case kindAgent:
 		return preparedRemoteCommand{
-			command: core.Command{Path: remoteShellPath, Args: append([]string(nil), remote.argv[1:]...), Dir: workdir},
+			command: core.Command{Path: RemoteShellPath, Args: append([]string(nil), remote.argv[1:]...), Dir: workdir},
 			encoded: encodeRemoteCommand(remote),
 			kind:    remote.kind,
 		}, nil
@@ -61,9 +61,9 @@ func encodeRemoteCommand(remote remoteCommand) string {
 	return strings.Join(parts, " ") + " " + shlexQuote(remote.script)
 }
 
-// validWorkdir keeps the sandbox workdir free of characters that would change
+// ValidWorkdir keeps the sandbox workdir free of characters that would change
 // meaning once it becomes a process working directory or appears in evidence.
-func validWorkdir(value string) bool {
+func ValidWorkdir(value string) bool {
 	if value == "/" {
 		return true
 	}

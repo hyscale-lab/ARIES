@@ -95,7 +95,7 @@ func (s *Session) Start(ctx context.Context, sandbox runner.Sandbox) (core.ToolE
 		return endpoint, fmt.Errorf("bridge sandbox registration failed: state %s: %s", access.State, access.Error)
 	}
 	native := access.Endpoint
-	if native.Transport != "ssh" || native.User != "aries" || native.Port == 0 || native.Port > 65535 {
+	if native.Transport != s.service.transport || native.User != "aries" || native.Port == 0 || native.Port > 65535 {
 		return endpoint, errors.New("invalid native bridge endpoint")
 	}
 	// Binding is reported by the child; deployment resolves the consumer address.
@@ -111,9 +111,9 @@ func (s *Session) Start(ctx context.Context, sandbox runner.Sandbox) (core.ToolE
 	if err != nil || n < 1 || n > 65535 {
 		return endpoint, errors.New("invalid resolved native endpoint port")
 	}
-	endpoint = core.ToolEndpoint{Protocol: "ssh", Address: address, Username: native.User, Workdir: d.Workdir, LogPaths: []string{filepath.Join(s.local, "tool-calls.jsonl")}}
+	endpoint = core.ToolEndpoint{Protocol: s.service.transport, Address: address, Username: native.User, Workdir: d.Workdir, LogPaths: []string{filepath.Join(s.local, "tool-calls.jsonl")}}
 	if s.service.options.RetainRawLog {
-		endpoint.LogPaths = append(endpoint.LogPaths, filepath.Join(s.local, "ssh_raw.log"))
+		endpoint.LogPaths = append(endpoint.LogPaths, filepath.Join(s.local, rawLogName(s.service.transport)))
 	}
 	client := s.service.options.Client
 	if client.SourcePath != "" {
@@ -173,7 +173,7 @@ func (s *Session) Stop(ctx context.Context) error {
 	if s.released && !s.collected {
 		expected := map[string]bool{"tool-calls.jsonl": false}
 		if s.service.options.RetainRawLog {
-			expected["ssh_raw.log"] = false
+			expected[rawLogName(s.service.transport)] = false
 		}
 		for _, entry := range s.manifest {
 			seen, ok := expected[entry.Name]
@@ -187,7 +187,7 @@ func (s *Session) Stop(ctx context.Context) error {
 			if entry.Status != "complete" {
 				return errors.New("bridge evidence manifest is incomplete or unexpected")
 			}
-			if err := collectArtifact(ctx, s.service.options.Runtime, s.service.runtimeID, s.remote, s.local, Artifact{Name: entry.Name, Size: entry.Size, SHA256: entry.Sha256}); err != nil {
+			if err := collectArtifact(ctx, s.service.options.Runtime, s.service.runtimeID, s.remote, s.local, s.service.transport, Artifact{Name: entry.Name, Size: entry.Size, SHA256: entry.Sha256}); err != nil {
 				return err
 			}
 			expected[entry.Name] = true

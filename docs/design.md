@@ -89,8 +89,9 @@ Tool bridges adapt harness protocols to sandbox capabilities so both can evolve
 independently. Substitution must preserve operation semantics, cancellation,
 errors, and ownership; matching a transport name is insufficient. Harness-specific
 adaptation is required wherever the harness does not speak the chosen protocol.
-Current harness-specific dialects and the shared SSH service are described in
-[SSH bridges](implementation/ssh-bridges.md); future targets are listed separately
+Current harness-specific SSH dialects are described in
+[SSH bridges](implementation/ssh-bridges.md), and the typed gRPC transport in
+[gRPC bridge](implementation/grpc-bridge.md); future targets are listed separately
 in the [roadmap](supported.md#roadmap).
 
 For example, Runner calls `AgentHarness.Start`, `Run`, and `Stop`. OpenClaw uses

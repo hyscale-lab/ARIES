@@ -117,8 +117,8 @@ func TestBenchmarkDispatchersFailClosed(t *testing.T) {
 	}
 }
 
-// Each bridge implements exactly one harness's SSH grammar, so a crossed pair
-// must be refused before the run starts rather than at the first tool call.
+// Each bridge serves exactly one harness, so a crossed pair must be refused
+// before the run starts rather than at the first tool call.
 func TestValidateComponentsRequiresPairedHarnessAndBridge(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -128,8 +128,10 @@ func TestValidateComponentsRequiresPairedHarnessAndBridge(t *testing.T) {
 	}{
 		{name: "openclaw pair", harness: "openclaw", bridge: "openclaw-ssh"},
 		{name: "hermes pair", harness: "hermes", bridge: "hermes-ssh"},
+		{name: "hermes gRPC pair", harness: "hermes", bridge: "hermes-grpc"},
 		{name: "hermes with openclaw bridge", harness: "hermes", bridge: "openclaw-ssh", wantErr: true},
 		{name: "openclaw with hermes bridge", harness: "openclaw", bridge: "hermes-ssh", wantErr: true},
+		{name: "openclaw with hermes gRPC bridge", harness: "openclaw", bridge: "hermes-grpc", wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := config.Config{

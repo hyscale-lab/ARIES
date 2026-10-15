@@ -111,7 +111,9 @@ Checked-in profiles select harness identity and placement separately:
 
 This is a profile fragment; keep the benchmark, model, runtime, and other
 settings from a complete checked-in profile. OpenClaw uses `harness.type:
-"openclaw"` with `bridge.type: "openclaw-ssh"`. Pairing is checked independently
+"openclaw"` with `bridge.type: "openclaw-ssh"`. Hermes uses `hermes-ssh` or
+`hermes-grpc`; the bridge type also selects the run's
+[transport](design/bridge.md#transports). Pairing is checked independently
 of placement.
 
 The separate blocks express independent component placement, so the schema does
@@ -144,19 +146,23 @@ supplies the required Docker socket mount explicitly; component labels do not
 grant access. The harness and sandbox never receive that socket. The bridge has daemon authority
 like Runner, even though each session's execution adapter validates one fixed target.
 
-The bridge runtime runs `aries-bridge` from the same build as `aries-ssh-client`.
-`make build` produces both alongside Runner. `make bridge-image` builds the Docker
+The bridge runtime runs `aries-bridge` from the same build as `aries-ssh-client`
+and `aries-grpc-client`. `make build` produces all three alongside Runner.
+`make bridge-image` builds the Docker
 image containing only `aries-bridge`, using `bridge.image` and `bridge.base_image`
 from the version catalog. Runner stages the separate `aries-ssh-client` binary
-directly into the OpenClaw harness; the bridge container does not need that client.
+directly into the OpenClaw harness, and `aries-grpc-client` into the Hermes
+harness on `hermes-grpc` runs; the bridge container does not need either client.
 Image preparation uses the selected daemon. Checked-in Docker bridge examples
-include [Hermes](../profiles/hermes-tb2-fix-git-deepseek.json) and
+include [Hermes](../profiles/hermes-tb2-fix-git-deepseek.json),
+[Hermes over gRPC](../profiles/hermes-tb2-fix-git-grpc-deepseek.json), and
 [OpenClaw](../profiles/openclaw-tb2-fix-git-deepseek.json).
 
 Bridge addresses come from deployment resolution, not profile fields. Plaintext,
-unauthenticated gRPC control and harness-facing SSH use separate endpoints.
-Control has no TLS certificates or bearer tokens. SSH accepts unauthenticated
-clients, retaining one in-memory service host key for the handshake. No SSH client
+unauthenticated gRPC control and the harness-facing transport (SSH or gRPC)
+use separate endpoints. Control has no TLS certificates or bearer tokens. Both
+transports accept unauthenticated clients. SSH retains one in-memory service
+host key for the handshake. No SSH client
 keys or known-hosts files are staged. The shared service creates a dynamic listener
 per sandbox and deployment resolves its harness-reachable endpoint. Runner
 explicitly releases each sandbox session; run cleanup removes the service.
@@ -598,11 +604,24 @@ Hermes supports text and [voice-transcribe](voice_mode.md). Preparation builds
 a local image from the pinned upstream one with only the `hermes-otel` plugin
 added, once per machine (the first build needs GitHub and PyPI access and takes
 about 20 seconds), and Hermes runs it. It is paired
-with `bridge.type: "hermes-ssh"`; the two values must match, and a crossed pair
-is rejected before the run starts. Hermes issues every tool call as `bash -c`,
-so the task image must provide `/bin/bash`. Its `~/.hermes` file sync is refused by
+with `bridge.type: "hermes-ssh"` or `"hermes-grpc"`; a crossed pair with
+OpenClaw is rejected before the run starts. Hermes issues every tool call as `bash -c`,
+so the task image must provide `/bin/bash`. On SSH, its `~/.hermes` file sync is refused by
 the bridge to keep the evaluated sandbox free of harness scaffold and
 credentials; Hermes logs one `file_sync: sync failed` warning and continues.
+On gRPC, Hermes uses the ARIES terminal backend, which syncs nothing; see
+[Hermes over gRPC](implementation/harnesses.md#hermes-over-grpc). Three
+`-grpc` profiles are copies of Hermes SSH profiles with only `bridge.type` and
+`name` changed. The Terminal-Bench 2 one needs the same setup as above:
+
+```sh
+./bin/aries profiles/hermes-tb2-fix-git-grpc-deepseek.json
+```
+
+`hermes-sbpro-smoke1-grpc-deepseek.json` and `hermes-drb-smoke1-grpc-deepseek.json`
+need the setup of their benchmark guides:
+[SWE-bench Pro](benchmarks/swe-bench-pro.md) and
+[Deep Research Bench](benchmarks/deep-research-bench.md).
 
 Hermes reserves environment names beginning with `API_SERVER_` for its Gateway.
 Do not use them as `model.api_key_env` or MCP `secret_env` source names. MCP
@@ -781,4 +800,5 @@ Changing the main agent's generation settings does not change FACT requests.
 - `harness.mcp_servers`: see [MCP configuration and boundaries](implementation/harnesses.md#model-context-protocol-mcp).
 - `harness.voice_transcribe`: see the [voice guide](voice_mode.md).
 - `bridge.retain_raw_log`: defaults to false. Enabling it retains sensitive,
-  replayable SSH input; see [run artifacts](run-results.md#bridge-evidence).
+  replayable tool-call input in `<transport>_raw.log` (`ssh_raw.log` or
+  `grpc_raw.log`); see [run artifacts](run-results.md#bridge-evidence).

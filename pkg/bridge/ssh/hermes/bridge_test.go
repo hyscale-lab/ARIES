@@ -18,16 +18,18 @@ import (
 
 	bridgessh "github.com/hyscale-lab/aries/pkg/bridge/ssh"
 	"github.com/hyscale-lab/aries/pkg/bridge/ssh/internal/testfixture"
+	"github.com/hyscale-lab/aries/pkg/bridge/target"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"golang.org/x/crypto/ssh"
 )
 
 type testSandbox struct {
-	mu       sync.Mutex
-	commands []core.Command
-	stdins   [][]byte
-	result   core.CommandResult
-	block    chan struct{}
+	target.Executor // file operations are unused by SSH
+	mu              sync.Mutex
+	commands        []core.Command
+	stdins          [][]byte
+	result          core.CommandResult
+	block           chan struct{}
 }
 
 func (sandbox *testSandbox) Exec(_ context.Context, command core.Command) (core.CommandResult, error) {
@@ -202,7 +204,7 @@ func TestBridgeProxiesHermesCommandsAndRetainsEvidence(t *testing.T) {
 		t.Fatalf("commands = %#v", commands)
 	}
 	command := commands[0]
-	if command.Path != remoteShellPath || len(command.Args) != 2 || command.Args[0] != "-c" {
+	if command.Path != RemoteShellPath || len(command.Args) != 2 || command.Args[0] != "-c" {
 		t.Fatalf("command = %#v", command)
 	}
 	if command.Dir != "/app" {

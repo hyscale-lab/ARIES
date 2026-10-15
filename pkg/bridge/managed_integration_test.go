@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -71,7 +72,9 @@ type managedFixture struct {
 	sandboxes      *tasksandbox.Manager
 	environment    *docker.RunEnvironment
 	protocol, root string
-	ctx            context.Context
+	// client is the built helper the session stages; gRPC calls run it.
+	client string
+	ctx    context.Context
 }
 
 func newManagedFixture(t *testing.T, protocol string) *managedFixture {
@@ -104,7 +107,11 @@ func newManagedFixture(t *testing.T, protocol string) *managedFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cc, err := bridgewiring.SSHClientConfig(protocol, managedBinary(t, "aries-ssh-client", "ARIES_SSH_CLIENT"))
+	helper := managedBinary(t, "aries-ssh-client", "ARIES_SSH_CLIENT")
+	if protocol == "hermes-grpc" {
+		helper = managedBinary(t, "aries-grpc-client", "ARIES_GRPC_CLIENT")
+	}
+	cc, err := bridgewiring.ClientConfig(protocol, filepath.Dir(helper))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +131,7 @@ func newManagedFixture(t *testing.T, protocol string) *managedFixture {
 	if err = service.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	return &managedFixture{service: service, runtime: runtime, sandboxes: sandboxes, environment: env, protocol: protocol, root: root, ctx: ctx}
+	return &managedFixture{service: service, runtime: runtime, sandboxes: sandboxes, environment: env, protocol: protocol, root: root, client: helper, ctx: ctx}
 }
 
 type managedSession struct {
@@ -212,13 +219,54 @@ func runManagedCommand(c *ssh.Client, command string, input []byte) ([]byte, []b
 	}
 	return out.Bytes(), stderr.Bytes(), code, err
 }
+
+// managedRun runs one tool call over a session's transport.
+type managedRun func(script string, input []byte) ([]byte, []byte, int, error)
+
+// connect returns the session's tool call runner and its SSH host key. gRPC has
+// no host key, so its key is "" and the host-key checks hold trivially.
+func (f *managedFixture) connect(t *testing.T, s *managedSession) (managedRun, string) {
+	t.Helper()
+	if f.protocol != "hermes-grpc" {
+		c, key := connectManaged(t, s.endpoint)
+		return func(script string, input []byte) ([]byte, []byte, int, error) {
+			return runManagedCommand(c, f.wire(script), input)
+		}, key
+	}
+	return func(script string, input []byte) ([]byte, []byte, int, error) {
+		return runManagedClient(f.client, s.endpoint, script, input)
+	}, ""
+}
+
+// runManagedClient runs the built gRPC client as the harness does. Every proxy
+// variable points at a port with no listener, so the call fails if the client
+// honours a proxy: the bridge address is not loopback, and Go proxies it.
+func runManagedClient(path string, e core.ToolEndpoint, script string, input []byte) ([]byte, []byte, int, error) {
+	command := exec.Command(path, "exec", "--", script)
+	command.Env = append(os.Environ(), "ARIES_GRPC_TARGET="+e.Address, "NO_PROXY=", "no_proxy=")
+	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
+		command.Env = append(command.Env, name+"=http://127.0.0.1:1")
+	}
+	var out, stderr bytes.Buffer
+	command.Stdin = bytes.NewReader(input)
+	command.Stdout = &out
+	command.Stderr = &stderr
+	err := command.Run()
+	code := 0
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		code = exit.ExitCode()
+		err = nil
+	}
+	return out.Bytes(), stderr.Bytes(), code, err
+}
 func TestManagedBridgeRuntimeMatrix(t *testing.T) {
-	for _, protocol := range []string{"hermes-ssh", "openclaw-ssh"} {
+	for _, protocol := range []string{"hermes-ssh", "openclaw-ssh", "hermes-grpc"} {
 		t.Run(protocol, func(t *testing.T) {
 			f := newManagedFixture(t, protocol)
 			a, b := f.newSession(t, "a"), f.newSession(t, "b")
-			ca, ka := connectManaged(t, a.endpoint)
-			cb, kb := connectManaged(t, b.endpoint)
+			ca, ka := f.connect(t, a)
+			cb, kb := f.connect(t, b)
 			if a.endpoint.Address == b.endpoint.Address || a.id == b.id || ka != kb {
 				t.Fatal("sessions did not share signer with distinct identity/listener")
 			}
@@ -226,8 +274,8 @@ func TestManagedBridgeRuntimeMatrix(t *testing.T) {
 				t.Fatal("repeated task IDs collided in service resolution")
 			}
 			for _, pair := range []struct {
-				s *managedSession
-				c *ssh.Client
+				s   *managedSession
+				run managedRun
 			}{{a, ca}, {b, cb}} {
 				result, err := pair.s.sandbox.Exec(f.ctx, core.Command{Path: "/bin/sh", Args: []string{"-c", "setsid sleep 120 </dev/null >/dev/null 2>&1 & echo $! > /work/benchmark.pid"}})
 				if err != nil || result.ExitCode != 0 {
@@ -235,12 +283,12 @@ func TestManagedBridgeRuntimeMatrix(t *testing.T) {
 				}
 				script := "setsid sleep 120 </dev/null >/dev/null 2>&1 & echo $! > /work/tool.pid; cat > /work/state; cat /work/state; printf stderr >&2; exit 7"
 				payload := []byte("managed-" + pair.s.id)
-				out, stderr, code, err := runManagedCommand(pair.c, f.wire(script), payload)
+				out, stderr, code, err := pair.run(script, payload)
 				if err != nil || code != 7 || !bytes.Equal(out, payload) || string(stderr) != "stderr" {
 					t.Fatal(string(out), string(stderr), code, err)
 				}
 				binary := []byte{0, 1, 255, 'b', 'i', 'n'}
-				out, _, code, err = runManagedCommand(pair.c, f.wire("cat > /work/binary; cat /work/binary"), binary)
+				out, _, code, err = pair.run("cat > /work/binary; cat /work/binary", binary)
 				if err != nil || code != 0 || !bytes.Equal(out, binary) {
 					t.Fatal(out, code, err)
 				}
@@ -248,7 +296,7 @@ func TestManagedBridgeRuntimeMatrix(t *testing.T) {
 			// B remains in an active tool call while A releases and independently evaluates.
 			bDone := make(chan error, 1)
 			go func() {
-				out, _, code, err := runManagedCommand(cb, f.wire("touch /work/busy; sleep 2; printf peer-complete"), nil)
+				out, _, code, err := cb("touch /work/busy; sleep 2; printf peer-complete", nil)
 				if err == nil && (code != 0 || string(out) != "peer-complete") {
 					err = fmt.Errorf("peer command changed: %q %d", out, code)
 				}
@@ -300,11 +348,11 @@ func TestManagedBridgeRuntimeMatrix(t *testing.T) {
 			}
 			// Fully idle service admits a later occurrence without replacing the runtime.
 			c := f.newSession(t, "c")
-			cc, kc := connectManaged(t, c.endpoint)
+			cc, kc := f.connect(t, c)
 			if kc != ka {
 				t.Fatal("service host key changed")
 			}
-			out, _, code, err := runManagedCommand(cc, f.wire("printf later"), nil)
+			out, _, code, err := cc("printf later", nil)
 			if err != nil || code != 0 || string(out) != "later" {
 				t.Fatal(string(out), code, err)
 			}

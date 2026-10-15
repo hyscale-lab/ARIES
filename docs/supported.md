@@ -23,6 +23,7 @@ This page summarizes capabilities and limitations. Use the
 | Benchmark | **Toolathlon** — tool-use tasks over MCP servers that are local, public, or backed by Toolathlon's self-hosted applications (Canvas, poste.io, WooCommerce), and, given your account credentials, by third-party services; the `k8s` tasks are not supported | [Benchmark guide](benchmarks/toolathlon.md) |
 | Tool sandbox and deployment | **Docker** — local containers managed through the Moby Go SDK | [Deployment configuration](configuration.md#deployment-configuration), [Docker implementation](implementation/docker.md) |
 | Tool bridge | **OpenClaw SSH** and **Hermes SSH** — managed Docker container; harness-specific SSH adapters | [SSH bridge implementation](implementation/ssh-bridges.md) |
+| Tool bridge | **Hermes gRPC** — same managed container; typed `Exec` and file procedures through the ARIES Hermes plugin | [gRPC bridge implementation](implementation/grpc-bridge.md) |
 | Model service | **DeepSeek** — external endpoint | [Model backends](configuration.md#model-backends) |
 | Model service | **SGLang** — external endpoint or one ARIES-managed host process per run | [Model backends](configuration.md#model-backends) |
 | Model service | **OpenAI-compatible server** — external only, including vLLM, llama.cpp, gateways, and hosted endpoints | [Model backends](configuration.md#model-backends) |
@@ -39,10 +40,13 @@ guides above.
 
 ## Current limitations
 
-- Each SSH bridge supports its corresponding harness. Crossed pairs are rejected
-  before execution. Hermes requires `/bin/bash` in the task image; its bridge
+- Each bridge type supports its corresponding harness: OpenClaw uses
+  `openclaw-ssh`, and Hermes uses `hermes-ssh` or `hermes-grpc`. Crossed pairs
+  are rejected before execution. One run uses one transport. OpenClaw over gRPC
+  is not implemented. Hermes requires `/bin/bash` in the task image; its SSH bridge
   rejects Hermes's private `~/.hermes` file synchronization. OpenClaw requires
-  `bin/aries-ssh-client` beside `bin/aries`. Both bridges require the matched Docker bridge image built with
+  `bin/aries-ssh-client` beside `bin/aries`, and `hermes-grpc` requires
+  `bin/aries-grpc-client` there. All bridges require the matched Docker bridge image built with
   `make bridge-image`.
 - Realtime mode is OpenClaw-only and needs a separate TTS credential. See the
   [realtime setup](configuration.md#realtime-openclaw-mode).
@@ -67,14 +71,16 @@ a new provider must implement their execution, connectivity, and cleanup semanti
 and be selected in composition wiring.
 
 The [bridge service](design/bridge.md) hosts independent sessions with one sandbox
-ID each and deployment-resolved endpoints. gRPC control and SSH clients are
-unauthenticated; one service host key is retained for the SSH handshake.
+ID each and deployment-resolved endpoints. gRPC control and the SSH and gRPC
+transports are unauthenticated; one service host key is retained for the SSH handshake.
 
 E2B lifecycle semantics and a future E2B-compatible harness protocol are separate
-from the internal gRPC control transport. No E2B wire compatibility is implemented
-or verified. Current harness tool traffic retains its native SSH protocol; the
-existing control API registers, looks up and releases borrowed sandbox access.
+from the internal gRPC control plane. No E2B wire compatibility is implemented
+or verified. Harness tool traffic uses SSH or the ARIES gRPC transport, whose
+messages have the ARIES shape, not the E2B shape. The existing control API
+registers, looks up and releases borrowed sandbox access.
 
 See the [deployment contract](design/deployment.md),
 [Docker implementation](implementation/docker.md),
-[SSH bridge implementation](implementation/ssh-bridges.md) for current boundaries.
+[SSH bridge implementation](implementation/ssh-bridges.md), and
+[gRPC bridge implementation](implementation/grpc-bridge.md) for current boundaries.

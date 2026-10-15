@@ -61,12 +61,13 @@ func validateComponents(cfg config.Config) error {
 	switch cfg.Bridge.Type {
 	case "openclaw-ssh":
 	case "hermes-ssh":
+	case "hermes-grpc":
 	default:
 		return fmt.Errorf("unsupported bridge type %q", cfg.Bridge.Type)
 	}
-	// Each bridge speaks one harness's SSH grammar, so the pair is checked
-	// here rather than left to fail at the first tool call.
-	if (cfg.Harness.Type == "hermes") != (cfg.Bridge.Type == "hermes-ssh") {
+	// Each bridge serves one harness, so the pair is checked here rather than
+	// left to fail at the first tool call.
+	if (cfg.Harness.Type == "hermes") != (cfg.Bridge.Type == "hermes-ssh" || cfg.Bridge.Type == "hermes-grpc") {
 		return fmt.Errorf("harness type %q requires its paired bridge, not %q", cfg.Harness.Type, cfg.Bridge.Type)
 	}
 	return nil
@@ -164,7 +165,7 @@ func newSharedBridge(cfg config.Config, runID, outputRoot string, placement core
 		return nil, err
 	}
 	switch cfg.Bridge.Type {
-	case "openclaw-ssh", "hermes-ssh":
+	case "openclaw-ssh", "hermes-ssh", "hermes-grpc":
 	default:
 		return nil, fmt.Errorf("unsupported bridge type %q", cfg.Bridge.Type)
 	}

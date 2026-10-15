@@ -30,6 +30,11 @@ const (
 	defaultTerminalTimeout = 180
 	maxDockerOutput        = 16 << 20
 
+	// maxStagedClientBytes bounds the staged gRPC client. It is a linked Go
+	// binary, not a credential: aries-grpc-client is already ~16 MB and varies
+	// with the toolchain, so the credential bound is the wrong order of magnitude.
+	maxStagedClientBytes = 128 << 20
+
 	// imageDeclaredVolume is the upstream image's own VOLUME. ARIES does not
 	// use it — HERMES_HOME is relocated to a staged private directory — but
 	// Docker creates it regardless.
@@ -204,12 +209,16 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		maxTurns: manager.options.MaxTurns, webSearchEnabled: manager.options.Common.WebSearchEnabled, extractEnabled: extractEnabled,
 		subagentsEnabled: manager.options.Common.SubagentsEnabled, maxConcurrentSubagents: manager.options.Common.MaxConcurrentSubagents,
 		compaction: manager.options.Compaction, extraBody: manager.options.ExtraBody, mcpServers: mcpServers,
-		noSandboxTools: request.NoSandboxTools,
+		noSandboxTools: request.NoSandboxTools, ariesBackend: request.Endpoint.Protocol == "grpc",
 	}, voiceSTT)
 	if err != nil {
 		return err
 	}
-	terminal, err := renderTerminal(request.Endpoint.Workdir, manager.options.TerminalTimeout)
+	backend := "ssh"
+	if request.Endpoint.Protocol == "grpc" {
+		backend = "aries"
+	}
+	terminal, err := renderTerminal(backend, request.Endpoint.Workdir, manager.options.TerminalTimeout)
 	if err != nil {
 		return err
 	}
@@ -653,6 +662,7 @@ func (manager *Manager) waitReady(ctx context.Context, active *session) error {
 }
 
 func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([]byte, error) {
+	grpc := active.Endpoint.Protocol == "grpc"
 	extractEnabled := len(active.Credentials.Get("extract")) != 0
 	mcpHostVars := make([]string, 0, len(active.Credentials.MCPFiles()))
 	for hostVar := range active.Credentials.MCPFiles() {
@@ -663,7 +673,18 @@ func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([
 		strings.TrimPrefix(configContainerPath, "/"): {Content: configuration, Mode: 0o600},
 		strings.TrimPrefix(modelKeyPath, "/"):        {Content: active.Credentials.Get("model"), Mode: 0o600},
 		strings.TrimPrefix(gatewayKeyPath, "/"):      {Content: active.Credentials.Get("gateway"), Mode: 0o600},
-		strings.TrimPrefix(gatewayLauncherPath, "/"): {Content: gatewayLauncherScript(active.Model.APIKeyEnv, extractEnabled, mcpHostVars...), Mode: 0o555},
+		strings.TrimPrefix(gatewayLauncherPath, "/"): {Content: gatewayLauncherScript(active.Model.APIKeyEnv, extractEnabled, grpc, mcpHostVars...), Mode: 0o555},
+	}
+	if grpc {
+		client, err := privatefiles.ReadBounded(active.Endpoint.ClientSourceFile, 0o555, maxStagedClientBytes)
+		if err != nil {
+			return nil, fmt.Errorf("read Hermes gRPC client: %w", err)
+		}
+		defer clear(client)
+		files[strings.TrimPrefix(clientContainerFS, "/")] = harness.ArchiveFile{Content: client, Mode: 0o555}
+		files[strings.TrimPrefix(pluginContainerFS, "/")+"/plugin.yaml"] = harness.ArchiveFile{Content: pluginManifest, Mode: 0o400}
+		files[strings.TrimPrefix(pluginContainerFS, "/")+"/__init__.py"] = harness.ArchiveFile{Content: pluginModule, Mode: 0o400}
+		files[strings.TrimPrefix(seamContainerFS, "/")] = harness.ArchiveFile{Content: seamScript, Mode: 0o400}
 	}
 	if extractEnabled {
 		files[strings.TrimPrefix(extractKeyPath, "/")] = harness.ArchiveFile{Content: active.Credentials.Get("extract"), Mode: 0o600}
@@ -686,6 +707,14 @@ func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([
 		{Name: "run/aries/hermes", Mode: 0o700, UID: runtimeUID, GID: runtimeGID},
 		{Name: "run/aries/ssh", Mode: 0o700, UID: runtimeUID, GID: runtimeGID},
 		{Name: "run/aries/workspace", Mode: 0o755, UID: runtimeUID, GID: runtimeGID},
+	}
+	if grpc {
+		directories = append(directories,
+			harness.ArchiveDirectory{Name: "run/aries/hermes/plugins", Mode: 0o700, UID: runtimeUID, GID: runtimeGID},
+			harness.ArchiveDirectory{Name: "run/aries/hermes/plugins/aries", Mode: 0o700, UID: runtimeUID, GID: runtimeGID},
+			harness.ArchiveDirectory{Name: "opt/aries", Mode: 0o755, UID: runtimeUID, GID: runtimeGID},
+			harness.ArchiveDirectory{Name: "opt/aries/bin", Mode: 0o755, UID: runtimeUID, GID: runtimeGID},
+		)
 	}
 	return harness.StageArchive(directories, files)
 }
