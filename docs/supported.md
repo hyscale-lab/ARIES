@@ -66,8 +66,8 @@ guides above.
 - SWE-bench Pro has additional image-architecture, isolation, and licensing
   requirements; consult its [benchmark guide](benchmarks/swe-bench-pro.md).
 - Apptainer runs execute one task at a time, cannot enforce CPU or memory limits
-  without cgroups v2, report resource measurement unsupported, and run the bridge
-  as a process rather than a container. Package installs inside the sandbox need a
+  without cgroups v2, measure resources from `/proc` rather than a cgroup (memory
+  excludes the page cache), and run the bridge as a process rather than a container. Package installs inside the sandbox need a
   user-installed `fakeroot`. SWE-bench Pro is refused, because its commands run as a
   non-root user; see the [Apptainer implementation](implementation/apptainer.md#limits).
 - Toolathlon's application-backed tasks need Toolathlon's own Canvas,

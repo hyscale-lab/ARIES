@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -284,7 +285,19 @@ func (p *ProcessRuntime) Start(_ context.Context, id string) error {
 	p.mu.Lock()
 	current.pid, current.started = pid, started
 	p.mu.Unlock()
+	// The run's resource source finds the process through this record.
+	raw, err := json.Marshal(processFile{Name: current.request.Name, Labels: current.request.Labels, PID: pid, Start: started})
+	if err == nil {
+		err = writePrivate(processRecordPath(workdir), raw)
+	}
+	if err != nil {
+		return errors.Join(fmt.Errorf("record process runtime: %w", err), p.end(current))
+	}
 	return nil
+}
+
+func processRecordPath(workdir string) string {
+	return filepath.Join(filepath.Dir(workdir), filepath.Base(workdir)+processRecordSuffix)
 }
 
 func (p *ProcessRuntime) alive(current *processRecord) (bool, error) {
@@ -397,7 +410,7 @@ func (p *ProcessRuntime) Stop(_ context.Context, id string) error {
 	}
 	workdir := current.request.Workdir
 	var errs []error
-	for _, path := range []string{workdir, filepath.Join(filepath.Dir(workdir), filepath.Base(workdir)+".stdout.log"), filepath.Join(filepath.Dir(workdir), filepath.Base(workdir)+".stderr.log")} {
+	for _, path := range []string{workdir, filepath.Join(filepath.Dir(workdir), filepath.Base(workdir)+".stdout.log"), filepath.Join(filepath.Dir(workdir), filepath.Base(workdir)+".stderr.log"), processRecordPath(workdir)} {
 		if err := os.RemoveAll(path); err != nil {
 			errs = append(errs, err)
 		}

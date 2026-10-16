@@ -166,7 +166,7 @@ func newSandbox(cfg config.Config, outputRoot, runID, occurrenceID string, gpuIn
 		}
 		return sandboxwiring.New(outputRoot, occurrenceID, gpuIndices, logger, transport, environment.NewTaskEnvironment, resources)
 	case "apptainer":
-		transport, resources, err := deploymentwiring.NewApptainerSandbox(cfg.Sandbox.Deployment, logger)
+		transport, resources, err := deploymentwiring.NewApptainerSandbox(cfg.Sandbox.Deployment, runID, occurrenceID, logger)
 		if err != nil {
 			return app.SandboxInstance{}, err
 		}
@@ -228,7 +228,7 @@ func newApptainerBridge(cfg config.Config, runID, outputRoot string, placement c
 	}
 	launch := bridgewiring.Launch(cfg.Versions.Bridge.Image)
 	launch.RuntimeBackend = "apptainer"
-	launch.ResourceMetrics = "unsupported"
+	launch.ResourceMetrics = "proc"
 	launch.Request.Workdir = workdir
 	launch.Config.OutputDir = filepath.Join(workdir, "evidence")
 	launch.Config.ControlAddress = "127.0.0.1:" + strconv.Itoa(launch.Request.ServicePort)
@@ -445,8 +445,12 @@ func newInfrastructure(cfg config.Config, runID, outputRoot string, logger *logr
 			return nil, err
 		}
 		environment := owner.NewRunEnvironment(runID)
+		resources, err := deploymentwiring.NewApptainerRunResources(cfg.Bridge.Deployment, runID)
+		if err != nil {
+			return nil, errors.Join(err, owner.Close())
+		}
 		return &app.RunInfrastructure{
-			Environment: environment, Resources: deploymentwiring.NewApptainerRunResources(), Close: owner.Close, NetworkPolicy: deploymentwiring.ApptainerNetworkPolicy,
+			Environment: environment, Resources: resources, Close: owner.Close, NetworkPolicy: deploymentwiring.ApptainerNetworkPolicy,
 			NewSandbox: func(cfg config.Config, root, run, occurrence string, gpus []int, log *logrus.Logger) (app.SandboxInstance, error) {
 				return newSandbox(cfg, root, run, occurrence, gpus, log, environment)
 			},
