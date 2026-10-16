@@ -137,14 +137,15 @@ func newTestProcessRuntime(t *testing.T) (*ProcessRuntime, *fakeProgram, deploym
 	if err := os.WriteFile(program, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	runtime, err := NewProcessRuntime(map[string]string{"/usr/local/bin/aries-bridge": program})
+	state := filepath.Join(t.TempDir(), "state")
+	runtime, err := NewProcessRuntime(state, map[string]string{"/usr/local/bin/aries-bridge": program})
 	if err != nil {
 		t.Fatal(err)
 	}
 	fake := &fakeProgram{alive: map[int]bool{}, lingering: map[int]bool{}}
 	runtime.start, runtime.processStart, runtime.signalGroup = fake.start, fake.processStart, fake.signal
 	request := deployment.Request{
-		Name: "aries-bridge-abc", Image: "example.test/bridge:1", Workdir: filepath.Join(t.TempDir(), "state", "bridge-run-1"),
+		Name: "aries-bridge-abc", Image: "example.test/bridge:1", Workdir: filepath.Join(state, "bridge-run-1"),
 		Entrypoint: []string{"/usr/local/bin/aries-bridge"}, Args: []string{"config.json"}, ServicePort: 8443,
 		Labels: map[string]string{"aries.managed": "true", "aries.component": "bridge", "aries.run": "run-1"},
 	}

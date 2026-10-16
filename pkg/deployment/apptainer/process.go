@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -32,8 +33,11 @@ var processEnvironment = []string{"PATH", "HOME", "USER", "LOGNAME", "LANG", "TM
 // sandboxes with apptainer, which cannot enter their user namespaces from
 // inside another instance. Requests name an entrypoint that Executables maps
 // to a host program; their paths are host paths confined to the workdir,
-// which Create makes and Stop removes.
+// which Create makes and Stop removes. The process has no tie to the one that
+// started it and outlives it after a crash, so a record beside the workdir lets
+// a later ProcessRuntime find and stop it.
 type ProcessRuntime struct {
+	stateDir     string
 	executables  map[string]string
 	processStart func(pid int) (uint64, bool, error)
 	signalGroup  func(pgid int, signal syscall.Signal) error
@@ -56,15 +60,19 @@ var (
 )
 
 // NewProcessRuntime maps container entrypoints to host programs, such as
-// /usr/local/bin/aries-bridge to the aries-bridge built beside aries.
-func NewProcessRuntime(executables map[string]string) (*ProcessRuntime, error) {
+// /usr/local/bin/aries-bridge to the aries-bridge built beside aries. Workdirs
+// and their records live directly under stateDir.
+func NewProcessRuntime(stateDir string, executables map[string]string) (*ProcessRuntime, error) {
+	if !cleanAbsolutePath(stateDir) {
+		return nil, errors.New("process runtime state directory must be an absolute clean path")
+	}
 	for entrypoint, program := range executables {
 		if !filepath.IsAbs(entrypoint) || !filepath.IsAbs(program) {
 			return nil, errors.New("process runtime executables must map absolute paths")
 		}
 	}
 	return &ProcessRuntime{
-		executables: executables, processStart: procStart,
+		stateDir: stateDir, executables: executables, processStart: procStart,
 		signalGroup: func(pgid int, signal syscall.Signal) error { return syscall.Kill(-pgid, signal) },
 		start:       startProcess,
 		runtimes:    make(map[string]*processRecord),
@@ -84,8 +92,8 @@ func (p *ProcessRuntime) validateRequest(request deployment.Request) (string, er
 	if program == "" {
 		return "", fmt.Errorf("process runtime has no program for %q", request.Entrypoint[0])
 	}
-	if !cleanAbsolutePath(request.Workdir) {
-		return "", errors.New("process runtime requires an absolute clean host workdir")
+	if !cleanAbsolutePath(request.Workdir) || filepath.Dir(request.Workdir) != p.stateDir {
+		return "", errors.New("process runtime requires an absolute clean host workdir directly under its state directory")
 	}
 	if len(request.Mounts) != 0 || len(request.NetworkAliases) != 0 || len(request.Env) != 0 || request.GPUs != 0 || request.StorageMB != 0 || request.CPU != nil || request.MemoryMB != nil {
 		return "", errors.New("process runtime supports no mounts, aliases, environment or resource settings")
@@ -105,26 +113,90 @@ func (p *ProcessRuntime) Create(_ context.Context, request deployment.Request) (
 	if info, err := os.Stat(program); err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
 		return "", fmt.Errorf("process runtime program %s is not an executable file", program)
 	}
-	if err := os.MkdirAll(filepath.Dir(request.Workdir), 0o700); err != nil {
+	if err := os.MkdirAll(p.stateDir, 0o700); err != nil {
 		return "", err
 	}
 	if err := os.Mkdir(request.Workdir, 0o700); err != nil {
 		return "", fmt.Errorf("reserve process runtime workdir: %w", err)
 	}
+	current := &processRecord{request: request, program: program}
+	if err := p.saveRecord(current); err != nil {
+		return "", errors.Join(fmt.Errorf("record process runtime: %w", err), os.RemoveAll(request.Workdir))
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.runtimes[request.Name] = &processRecord{request: request, program: program}
+	p.runtimes[request.Name] = current
 	return request.Name, nil
 }
 
+// record returns the runtime's record. One this process did not create comes
+// from the file beside the workdir; it can be inspected and stopped, but holds
+// nothing to start or validate it with.
 func (p *ProcessRuntime) record(id string) (*processRecord, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	current := p.runtimes[id]
-	if current == nil {
-		return nil, fmt.Errorf("process runtime %s: %w", id, errMissing)
+	if current := p.runtimes[id]; current != nil {
+		return current, nil
 	}
+	current, err := p.readRecord(id)
+	if err != nil {
+		return nil, err
+	}
+	p.runtimes[id] = current
 	return current, nil
+}
+
+// readRecord finds the runtime's file in the state directory. A file that cannot
+// be read fails the lookup, since it may be this runtime's: reporting the runtime
+// as missing would let Stop report success while it keeps running.
+func (p *ProcessRuntime) readRecord(id string) (*processRecord, error) {
+	missing := fmt.Errorf("process runtime %s: %w", id, errMissing)
+	entries, err := os.ReadDir(p.stateDir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, missing
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read process runtime records: %w", err)
+	}
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), processRecordSuffix) {
+			continue
+		}
+		path := filepath.Join(p.stateDir, entry.Name())
+		raw, err := os.ReadFile(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read process runtime record: %w", err)
+		}
+		var file processFile
+		if err := json.Unmarshal(raw, &file); err != nil {
+			return nil, fmt.Errorf("decode process runtime record %s: %w", entry.Name(), err)
+		}
+		if file.Name != id {
+			continue
+		}
+		// Stop removes the workdir, so it must be the one this record belongs to.
+		if !cleanAbsolutePath(file.Workdir) || processRecordPath(file.Workdir) != path {
+			return nil, fmt.Errorf("process runtime record %s names another workdir", entry.Name())
+		}
+		return &processRecord{request: deployment.Request{Name: file.Name, Labels: file.Labels, Workdir: file.Workdir}, pid: file.PID, started: file.Start}, nil
+	}
+	return nil, missing
+}
+
+// saveRecord writes the file that readRecord finds, and through which the run's
+// resource source finds the process.
+func (p *ProcessRuntime) saveRecord(current *processRecord) error {
+	p.mu.Lock()
+	file := processFile{Name: current.request.Name, Labels: current.request.Labels, Workdir: current.request.Workdir, PID: current.pid, Start: current.started}
+	p.mu.Unlock()
+	raw, err := json.Marshal(file)
+	if err != nil {
+		return err
+	}
+	return writePrivate(processRecordPath(current.request.Workdir), raw)
 }
 
 func (p *ProcessRuntime) Validate(_ context.Context, id string, request deployment.Request, secrets [][]byte) error {
@@ -284,7 +356,14 @@ func (p *ProcessRuntime) Start(_ context.Context, id string) error {
 	p.mu.Lock()
 	current.pid, current.started = pid, started
 	p.mu.Unlock()
+	if err := p.saveRecord(current); err != nil {
+		return errors.Join(fmt.Errorf("record process runtime: %w", err), p.end(current))
+	}
 	return nil
+}
+
+func processRecordPath(workdir string) string {
+	return filepath.Join(filepath.Dir(workdir), filepath.Base(workdir)+processRecordSuffix)
 }
 
 func (p *ProcessRuntime) alive(current *processRecord) (bool, error) {
@@ -397,7 +476,7 @@ func (p *ProcessRuntime) Stop(_ context.Context, id string) error {
 	}
 	workdir := current.request.Workdir
 	var errs []error
-	for _, path := range []string{workdir, filepath.Join(filepath.Dir(workdir), filepath.Base(workdir)+".stdout.log"), filepath.Join(filepath.Dir(workdir), filepath.Base(workdir)+".stderr.log")} {
+	for _, path := range []string{workdir, filepath.Join(filepath.Dir(workdir), filepath.Base(workdir)+".stdout.log"), filepath.Join(filepath.Dir(workdir), filepath.Base(workdir)+".stderr.log"), processRecordPath(workdir)} {
 		if err := os.RemoveAll(path); err != nil {
 			errs = append(errs, err)
 		}
