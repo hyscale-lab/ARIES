@@ -189,7 +189,8 @@ requests them, as every Terminal-Bench 2 task does, is refused unless
 are enforced with a fixed-size overlay. An Apptainer run executes one task at a
 time (`execution.concurrency: 1`), needs `slirp4netns` on `PATH`, and records
 the network policy `run-namespace`; `aries PROFILE` enters the run's private
-namespace by itself. Resource measurement is reported unsupported. Package
+namespace by itself. Resources are measured from `/proc`, since there is no
+cgroup per instance, and memory excludes the page cache. Package
 installs inside the sandbox, such as a test script's `apt-get install`, need a
 `fakeroot-sysv` command on `PATH` with `faked-sysv` beside it, built against a
 glibc no newer than the task images'. See the

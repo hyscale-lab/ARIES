@@ -28,14 +28,18 @@ func NewApptainer(cfg config.DeploymentConfig, logger *logrus.Logger) (*apptaine
 	})
 }
 
-// NewApptainerSandbox constructs the transport and its resource source, which
-// reports measurement unsupported.
-func NewApptainerSandbox(cfg config.DeploymentConfig, logger *logrus.Logger) (*apptainer.Manager, monitor.ResourceSource, error) {
+// NewApptainerSandbox constructs the transport and the resource source for one
+// occurrence's instances, measured from /proc.
+func NewApptainerSandbox(cfg config.DeploymentConfig, runID, occurrenceID string, logger *logrus.Logger) (*apptainer.Manager, monitor.ResourceSource, error) {
 	transport, err := NewApptainer(cfg, logger)
 	if err != nil {
 		return nil, nil, fmt.Errorf("construct sandbox deployment: %w", err)
 	}
-	return transport, apptainer.NewResourceSource(), nil
+	source, err := apptainer.NewResourceSource(apptainer.ResourceOptions{StateDir: cfg.Apptainer.StateDir, RunID: runID, TaskIDs: []string{occurrenceID}})
+	if err != nil {
+		return nil, nil, fmt.Errorf("construct sandbox resources: %w", err)
+	}
+	return transport, source, nil
 }
 
 // PullApptainerImages checks the Apptainer version and unpacks each image,
@@ -103,8 +107,13 @@ func PrepareApptainerBridge() error {
 // ApptainerNetworkPolicy is recorded as an Apptainer run's network policy.
 const ApptainerNetworkPolicy = apptainer.NetworkPolicy
 
-// NewApptainerRunResources observes the bridge, which reports measurement unsupported.
-func NewApptainerRunResources() monitor.ResourceSource { return apptainer.NewResourceSource() }
+// NewApptainerRunResources observes the run's bridge process.
+func NewApptainerRunResources(cfg config.DeploymentConfig, runID string) (monitor.ResourceSource, error) {
+	if cfg.Apptainer == nil {
+		return nil, errors.New("bridge.deployment.apptainer is required")
+	}
+	return apptainer.NewResourceSource(apptainer.ResourceOptions{StateDir: cfg.Apptainer.StateDir, Scope: "run", RunID: runID})
+}
 
 // WaitForApptainerRunNamespace holds a run that RunApptainerInNamespace started
 // until its namespace has internet access; anything else returns false.
