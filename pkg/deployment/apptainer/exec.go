@@ -31,8 +31,10 @@ const (
 	// apptainer's own failures also exit nonzero; a working directory that does
 	// not exist is exit 126, as on Kubernetes. The command's shell, not
 	// this one, reads the environment file, so a variable cannot overwrite the
-	// wrapper's own.
-	execShell    = `token=$1; dir=$2; envfile=$3; shift 3; if [ -n "$dir" ] && ! cd "$dir"; then printf '\036ARIES_EXEC_EXIT_%s=126\037' "$token" >&2; exit 126; fi; /bin/sh -c 'set -a; . "$1"; set +a; shift; exec "$@"' aries-env "$envfile" "$@"; status=$?; printf '\036ARIES_EXEC_EXIT_%s=%d\037' "$token" "$status" >&2; exit "$status"`
+	// wrapper's own. The trailer also carries the CPU ticks the command used,
+	// which the wrapper reads from its own reaped children, so a command
+	// shorter than the resource sampling interval is still measured.
+	execShell    = `token=$1; dir=$2; envfile=$3; shift 3; if [ -n "$dir" ] && ! cd "$dir"; then printf '\036ARIES_EXEC_EXIT_%s=126:0\037' "$token" >&2; exit 126; fi; /bin/sh -c 'set -a; . "$1"; set +a; shift; exec "$@"' aries-env "$envfile" "$@"; status=$?; ticks=0; if read -r line </proc/$$/stat 2>/dev/null; then set -- ${line##*) }; ticks=$((${14} + ${15})); fi; printf '\036ARIES_EXEC_EXIT_%s=%d:%d\037' "$token" "$status" "$ticks" >&2; exit "$status"`
 	rootExecUser = "0:0"
 )
 
@@ -115,16 +117,45 @@ func (manager *Manager) ExecStream(ctx context.Context, id string, command core.
 	if execCtx.Err() != nil {
 		return failure(), context.Cause(execCtx)
 	}
-	exitCode, err := trailer.Finish()
+	exitCode, ticks, err := trailer.Finish()
 	if err != nil {
 		return failure(), errors.Join(err, runErr)
 	}
+	manager.recordExitedCPU(id, ticks)
 	// The trailer reports how the command ended; its output may still have failed
 	// to reach the caller.
 	if err := errors.Join(stdoutWriter.err(), stderrWriter.err()); err != nil {
 		return failure(), fmt.Errorf("deliver Apptainer exec output: %w", err)
 	}
 	return core.CommandResult{ExitCode: exitCode, Duration: time.Since(started)}, nil
+}
+
+// recordExitedCPU adds a finished command's CPU ticks to its runtime's total,
+// which ResourceSource reads. One short appended line is written atomically, so
+// Runner and the bridge can both record. A runtime removed meanwhile has
+// nothing left to measure. When the line cannot be written, an empty marker,
+// which needs no data block, makes the runtime's later samples fail rather
+// than undercount; the command's own result stands.
+func (manager *Manager) recordExitedCPU(id string, ticks uint64) {
+	if ticks == 0 {
+		return
+	}
+	directory := manager.runtimeDir(id)
+	file, err := os.OpenFile(filepath.Join(directory, exitedCPUFile), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err == nil {
+		_, err = file.WriteString(strconv.FormatUint(ticks, 10) + "\n")
+		err = errors.Join(err, file.Close())
+	}
+	if err == nil || errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	marker, markErr := os.OpenFile(filepath.Join(directory, exitedCPULostFile), os.O_WRONLY|os.O_CREATE, 0o600)
+	if markErr == nil {
+		markErr = marker.Close()
+	}
+	if manager.logger != nil {
+		manager.logger.WithError(errors.Join(err, markErr)).WithField("runtime", id).Error("record a finished command's CPU time")
+	}
 }
 
 // commandEnvironment writes the runtime's environment followed by the
@@ -264,25 +295,34 @@ func (w *exitTrailerWriter) Write(content []byte) (int, error) {
 	return written, nil
 }
 
-func (w *exitTrailerWriter) Finish() (int, error) {
+// Finish returns the command's exit code and the CPU ticks the wrapper
+// reported for it, zero when the trailer carries none.
+func (w *exitTrailerWriter) Finish() (int, uint64, error) {
 	content := w.buffer.Bytes()
 	start := bytes.LastIndex(content, w.prefix)
 	if start < 0 {
-		return -1, fmt.Errorf("Apptainer exec output is missing its exit trailer: %s", strings.TrimSpace(string(content)))
+		return -1, 0, fmt.Errorf("Apptainer exec output is missing its exit trailer: %s", strings.TrimSpace(string(content)))
 	}
 	rest := content[start+len(w.prefix):]
 	end := bytes.IndexByte(rest, '\x1f')
 	if end < 0 {
-		return -1, errors.New("Apptainer exec output has an invalid exit trailer")
+		return -1, 0, errors.New("Apptainer exec output has an invalid exit trailer")
 	}
-	exitCode, err := strconv.Atoi(string(rest[:end]))
+	status, cpu, hasCPU := strings.Cut(string(rest[:end]), ":")
+	exitCode, err := strconv.Atoi(status)
 	if err != nil || exitCode < 0 || exitCode > 255 {
-		return -1, errors.New("Apptainer exec output has an invalid exit code")
+		return -1, 0, errors.New("Apptainer exec output has an invalid exit code")
+	}
+	var ticks uint64
+	if hasCPU {
+		if ticks, err = strconv.ParseUint(cpu, 10, 64); err != nil {
+			return -1, 0, errors.New("Apptainer exec output has an invalid CPU time")
+		}
 	}
 	if _, err := w.destination.Write(content[:start]); err != nil {
-		return -1, fmt.Errorf("write Apptainer exec stderr: %w", err)
+		return -1, 0, fmt.Errorf("write Apptainer exec stderr: %w", err)
 	}
-	return exitCode, nil
+	return exitCode, ticks, nil
 }
 
 type limitedWriter struct {

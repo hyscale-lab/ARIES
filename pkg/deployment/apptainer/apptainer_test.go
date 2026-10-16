@@ -17,7 +17,6 @@ import (
 
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/deployment"
-	"github.com/hyscale-lab/aries/pkg/monitor"
 	"github.com/hyscale-lab/aries/pkg/runner"
 )
 
@@ -775,13 +774,6 @@ func TestParseProcStatReadsStartTimeAndZombies(t *testing.T) {
 	zombie := strings.Replace(line, ") S ", ") Z ", 1)
 	if _, alive, err := parseProcStat([]byte(zombie)); err != nil || alive {
 		t.Fatalf("zombie = %v, %v", alive, err)
-	}
-}
-
-func TestResourceSourceReportsUnsupportedRatherThanZero(t *testing.T) {
-	readings, err := NewResourceSource().Sample(context.Background())
-	if readings != nil || !errors.Is(err, monitor.ErrUnsupported) {
-		t.Fatalf("Sample = %v, %v", readings, err)
 	}
 }
 

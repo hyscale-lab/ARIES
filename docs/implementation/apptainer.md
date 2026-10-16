@@ -83,14 +83,36 @@ as EPEL 8's `fakeroot` (glibc 2.28), unpacked into a user directory, suits
 Debian- and Ubuntu-based images; a newer host build makes every command of an
 older image fail.
 
+## Resource measurement
+
+Without cgroups v2 an unprivileged user has no cgroup per instance, so the
+resource source measures each runtime from `/proc` at every sample. An
+instance's CPU is the time of every live process in its PID namespace,
+including the children they have reaped, and of its starter's storage helpers.
+An instance in the host's PID namespace, as when an administrator disables PID
+namespaces, cannot be told apart from other processes, and its samples fail.
+A command that ends between two samples is still counted: as it ends, its
+wrapper reads the CPU the command used from its own `/proc` entry and reports
+it in the exit trailer, and the provider adds it to the runtime's total. A
+process that a command leaves running is reaped by the instance's init, whose
+time then includes it. Memory is the processes' proportional set size, so a
+page they share counts once; unlike a cgroup's usage, it excludes the page
+cache. The reported memory limit is the host's memory. As with Docker,
+apptainer's own launcher, about 0.06 CPU-seconds per command outside the
+instance, and archive transfers are not charged to the instance. The bridge is
+measured by its own process; the commands it runs count for the sandbox that
+runs them. The [resource tests](../../pkg/deployment/apptainer/resources_integration_test.go)
+run commands shorter than a sample, and a process left behind, and check the
+measurement against the CPU each of them reports for itself.
+
 ## Limits
 
 - CPU and memory limits need cgroups v2 with delegation, which HPC hosts often
   lack. A request with limits is refused unless `unenforced_limits` accepts them;
   the limits are then recorded but not applied.
-- Resource measurement reports unsupported: without cgroups there is no
-  per-instance accounting, and sampling `/proc` would lose the CPU time of
-  commands that exit between samples.
+- Resources are measured from processes, not from a cgroup: memory excludes the
+  page cache, and the CPU apptainer's launcher uses outside the instance is not
+  counted.
 - Network aliases, mixed backends, concurrency above one and SWE-bench Pro, whose
   commands run as a non-root user, are rejected before any effect.
 - Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor
