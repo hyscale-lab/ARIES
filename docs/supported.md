@@ -2,7 +2,8 @@
 
 **Docker harnesses and sandboxes use the same local daemon**, with a separate
 managed Docker bridge and shared network per run. Runner stays on the host. Remote Docker
-servers and mixed deployment backends are unsupported. See the
+servers and mixed deployment backends are unsupported. On hosts without Docker,
+harness, sandbox and bridge can all run on [Apptainer](implementation/apptainer.md). See the
 [deployment configuration](configuration.md#deployment-configuration).
 
 This page summarizes capabilities and limitations. Use the
@@ -22,6 +23,7 @@ This page summarizes capabilities and limitations. Use the
 | Benchmark | **SWE-bench Pro** — public issue-resolution split with pinned task scripts and parser | [Benchmark guide](benchmarks/swe-bench-pro.md) |
 | Benchmark | **Toolathlon** — tool-use tasks over MCP servers that are local, public, or backed by Toolathlon's self-hosted applications (Canvas, poste.io, WooCommerce), and, given your account credentials, by third-party services; the `k8s` tasks are not supported | [Benchmark guide](benchmarks/toolathlon.md) |
 | Tool sandbox and deployment | **Docker** — local containers managed through the Moby Go SDK | [Deployment configuration](configuration.md#deployment-configuration), [Docker implementation](implementation/docker.md) |
+| Tool sandbox and deployment | **Apptainer** 1.5 or newer — unprivileged instances for hosts without Docker, such as HPC clusters; harness, sandbox and bridge all on Apptainer, one task at a time | [Apptainer placement](configuration.md#apptainer-placement), [Apptainer implementation](implementation/apptainer.md) |
 | Tool bridge | **OpenClaw SSH** and **Hermes SSH** — managed Docker container; harness-specific SSH adapters | [SSH bridge implementation](implementation/ssh-bridges.md) |
 | Model service | **DeepSeek** — external endpoint | [Model backends](configuration.md#model-backends) |
 | Model service | **SGLang** — external endpoint or one ARIES-managed host process per run | [Model backends](configuration.md#model-backends) |
@@ -52,6 +54,10 @@ guides above.
   server-specific extension.
 - SWE-bench Pro has additional image-architecture, isolation, and licensing
   requirements; consult its [benchmark guide](benchmarks/swe-bench-pro.md).
+- Apptainer runs execute one task at a time, cannot enforce CPU or memory limits
+  without cgroups v2, measure resources from `/proc` rather than a cgroup (memory
+  excludes the page cache), and run the bridge as a process rather than a container. Package installs inside the sandbox need a
+  user-installed `fakeroot`; see the [Apptainer implementation](implementation/apptainer.md#limits).
 - Toolathlon's application-backed tasks need Toolathlon's own Canvas,
   poste.io and WooCommerce deployments running on the Docker host; consult its
   [benchmark guide](benchmarks/toolathlon.md).
@@ -61,7 +67,7 @@ guides above.
 
 ## Roadmap
 
-Additional deployment providers are unimplemented. Shared bridge lifecycle and
+Deployment providers beyond Docker and Apptainer are unimplemented. Shared bridge lifecycle and
 deployment contracts accept explicit runtime placement and access settings;
 a new provider must implement their execution, connectivity, and cleanup semantics
 and be selected in composition wiring.

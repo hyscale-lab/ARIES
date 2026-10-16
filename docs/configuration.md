@@ -138,7 +138,7 @@ fails with a migration message; update it to `managed` and choose placement
 explicitly. `external` remains unsupported. Legacy `sandbox.type: "docker"`
 still maps to Docker deployment; conflicting explicit settings are rejected.
 
-`bridge.deployment.backend` must be `docker`. Bridges run in a separate container
+With Docker placement, `bridge.deployment.backend` must be `docker`. Bridges run in a separate container
 on the run network and use the same local daemon as the sandbox. Composition
 supplies the required Docker socket mount explicitly; component labels do not
 grant access. The harness and sandbox never receive that socket. The bridge has daemon authority
@@ -152,6 +152,49 @@ directly into the OpenClaw harness; the bridge container does not need that clie
 Image preparation uses the selected daemon. Checked-in Docker bridge examples
 include [Hermes](../profiles/hermes-tb2-fix-git-deepseek.json) and
 [OpenClaw](../profiles/openclaw-tb2-fix-git-deepseek.json).
+
+### Apptainer placement
+
+On a host where a normal user cannot run Docker, such as an HPC cluster,
+harness, sandbox and bridge can all select Apptainer 1.5 or newer. The three
+blocks must be identical:
+
+```json
+"deployment": {
+  "backend": "apptainer",
+  "apptainer": {
+    "state_dir": "/scratch/users/me/aries/state",
+    "image_dir": "/scratch/users/me/aries/images",
+    "overlay_dir": "/tmp/aries-overlays",
+    "images": { "aries-local/hermes:TAG": "/scratch/users/me/aries/hermes.sif" },
+    "unenforced_limits": false
+  }
+}
+```
+
+`state_dir` holds each runtime's ownership record, environment files, logs and
+the bridge's working directory. `image_dir` holds the images that `aries setup`
+unpacks from the pinned references. `overlay_dir`, optional, holds each
+runtime's writable layer; node-local disk is much faster than a parallel
+filesystem, and `state_dir` is used when it is omitted. `images` maps an image
+reference to a SIF prepared elsewhere, which setup unpacks instead of pulling:
+Hermes runs an image derived with a Docker build, which Apptainer cannot
+perform, so build it on a Docker host, convert it with `apptainer build
+NAME.sif docker-archive:ARCHIVE.tar`, and map its tag here; `aries setup`
+reports the tag it needs. `binary`, optional, names the `apptainer` executable.
+
+Apptainer cannot enforce CPU or memory limits without cgroups v2. A runtime that
+requests them, as every Terminal-Bench 2 task does, is refused unless
+`unenforced_limits` is `true`; the limits are then not applied. Storage limits
+are enforced with a fixed-size overlay. An Apptainer run executes one task at a
+time (`execution.concurrency: 1`), needs `slirp4netns` on `PATH`, and records
+the network policy `run-namespace`; `aries PROFILE` enters the run's private
+namespace by itself. Resources are measured from `/proc`, since there is no
+cgroup per instance, and memory excludes the page cache. Package
+installs inside the sandbox, such as a test script's `apt-get install`, need a
+`fakeroot-sysv` command on `PATH` with `faked-sysv` beside it, built against a
+glibc no newer than the task images'. See the
+[Apptainer implementation](implementation/apptainer.md) for the topology and limits.
 
 Bridge addresses come from deployment resolution, not profile fields. Plaintext,
 unauthenticated gRPC control and harness-facing SSH use separate endpoints.

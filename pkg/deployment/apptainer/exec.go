@@ -1,0 +1,406 @@
+package apptainer
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"path"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/deployment"
+	"github.com/hyscale-lab/aries/pkg/runner"
+)
+
+const (
+	maxExecInput        = 16 << 20
+	maxExecOutput       = 16 << 20
+	maxConfiguredOutput = 1 << 30
+	execTrailerKeep     = 512
+	// Exec state lives in the instance's private /tmp.
+	execStatePrefix = "/tmp/.aries-exec-"
+	// execShell mirrors the Docker provider's wrapper: the command runs
+	// in its own session so cancellation can signal the whole group, and its
+	// exit status travels in a trailer because apptainer's own failures also
+	// exit nonzero. The command's shell, not this one, reads the environment
+	// file, so a variable cannot overwrite the wrapper's own. The trailer also
+	// carries the CPU ticks the command used, which the wrapper reads from its
+	// own reaped children, so a command shorter than the resource sampling
+	// interval is still measured.
+	execShell       = `state=$1; token=$2; dir=$3; envfile=$4; shift 4; umask 077; trap 'rm -f "$state" "$state.tmp"' EXIT; if [ -n "$dir" ]; then cd "$dir" || exit 126; fi; exec 3<&0; setsid /bin/sh -c 'set -a; . "$1"; set +a; shift; exec "$@"' aries-env "$envfile" "$@" <&3 & pid=$!; printf '%s\n' "$pid" >"$state.tmp" || exit 125; mv "$state.tmp" "$state" || exit 125; wait "$pid"; status=$?; rm -f "$state" "$state.tmp"; trap - EXIT; ticks=0; if read -r line </proc/$$/stat 2>/dev/null; then set -- ${line##*) }; ticks=$((${14} + ${15})); fi; printf '\036ARIES_EXEC_EXIT_%s=%d:%d\037' "$token" "$status" "$ticks" >&2; exit "$status"`
+	cancelExecShell = `state=$1; attempts=0; while [ ! -r "$state" ]; do attempts=$((attempts+1)); [ "$attempts" -ge 200 ] && exit 70; sleep 0.01; done; IFS= read -r pgid <"$state" || exit 71; case "$pgid" in ''|*[!0-9]*|0|1) exit 71;; esac; kill -TERM "-$pgid" 2>/dev/null || :; sleep 0.2; kill -KILL "-$pgid" 2>/dev/null || :; attempts=0; while kill -0 "-$pgid" 2>/dev/null; do attempts=$((attempts+1)); [ "$attempts" -ge 100 ] && exit 72; sleep 0.05; done; rm -f "$state"; exit 0`
+	// cancelNoState is cancelExecShell's status when the wrapper left no state:
+	// the command had already finished, or never started.
+	cancelNoState = 70
+	rootExecUser  = "0:0"
+)
+
+// Exec runs one argv to completion with buffered output. Nonzero exits are
+// returned as results, not transport errors.
+func (manager *Manager) Exec(ctx context.Context, id string, command core.Command) (core.CommandResult, error) {
+	started := time.Now()
+	if len(command.Stdin) > maxExecInput {
+		return core.CommandResult{ExitCode: -1, Duration: time.Since(started)}, fmt.Errorf("Apptainer exec stdin exceeds %d bytes", maxExecInput)
+	}
+	var stdout, stderr bytes.Buffer
+	var stdin io.Reader
+	if len(command.Stdin) > 0 {
+		stdin = bytes.NewReader(command.Stdin)
+	}
+	result, err := manager.ExecStream(ctx, id, command, stdin, &stdout, &stderr)
+	result.Stdout = stdout.String()
+	result.Stderr = stderr.String()
+	return result, err
+}
+
+// ExecStream preserves the exact argv and streams I/O. Cancellation and
+// timeouts terminate the command's process group and confirm it is gone.
+//
+// Every command runs as the instance's root, which is the invoking user with
+// the appearance of root: without subordinate IDs an unprivileged user cannot
+// switch to another UID, so a command for any other user is refused.
+func (manager *Manager) ExecStream(ctx context.Context, id string, command core.Command, stdin io.Reader, stdout, stderr io.Writer) (core.CommandResult, error) {
+	started := time.Now()
+	failure := func() core.CommandResult { return core.CommandResult{ExitCode: -1, Duration: time.Since(started)} }
+	if err := validateCommand(command); err != nil {
+		return failure(), err
+	}
+	current, _, err := manager.loadRecord(id)
+	if err != nil {
+		return failure(), err
+	}
+	outputLimit := command.OutputLimitBytes
+	if outputLimit == 0 {
+		outputLimit = maxExecOutput
+	}
+	if stdout == nil {
+		stdout = io.Discard
+	}
+	if stderr == nil {
+		stderr = io.Discard
+	}
+	execCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	if command.Timeout > 0 {
+		var cancelTimeout context.CancelFunc
+		execCtx, cancelTimeout = context.WithTimeout(execCtx, command.Timeout)
+		defer cancelTimeout()
+	}
+	token, err := randomID()
+	if err != nil {
+		return failure(), fmt.Errorf("generate Apptainer exec token: %w", err)
+	}
+	statePath := execStatePrefix + token
+	// The runtime's environment and the command's own travel in a private file:
+	// on apptainer's command line, values would be visible to every user of the
+	// host.
+	environment, err := manager.commandEnvironment(id, token, command.Env)
+	if err != nil {
+		return failure(), err
+	}
+	defer func() { _ = os.Remove(environment) }()
+
+	args := append(execPrefix(id, current.Workdir), "/bin/sh", "-c", execShell, "aries-exec", statePath, token, command.Dir, shareTarget+"/"+filepath.Base(environment), command.Path)
+	args = append(args, command.Args...)
+
+	// An exceeded limit cancels apptainer; otherwise it would block on a pipe
+	// that nobody reads.
+	exceeded := func() { cancel(fmt.Errorf("Apptainer exec output exceeds %d bytes", outputLimit)) }
+	trailer := newExitTrailer(&limitedWriter{writer: stderr, limit: outputLimit, onExceed: exceeded}, token)
+	runErr := manager.apptainer.Run(execCtx, stdin, &limitedWriter{writer: stdout, limit: outputLimit, onExceed: exceeded}, trailer, args...)
+
+	if execCtx.Err() != nil {
+		cause := context.Cause(execCtx)
+		terminateCtx, terminateCancel := context.WithTimeout(context.WithoutCancel(ctx), manager.options.CleanupTimeout)
+		defer terminateCancel()
+		if terminateErr := manager.terminateExec(terminateCtx, id, statePath); terminateErr != nil {
+			return failure(), errors.Join(cause, terminateErr)
+		}
+		return failure(), cause
+	}
+	exitCode, ticks, err := trailer.Finish()
+	if err != nil {
+		return failure(), errors.Join(err, runErr)
+	}
+	manager.recordExitedCPU(id, ticks)
+	return core.CommandResult{ExitCode: exitCode, Duration: time.Since(started)}, nil
+}
+
+// recordExitedCPU adds a finished command's CPU ticks to its runtime's total,
+// which ResourceSource reads. One short appended line is written atomically, so
+// Runner and the bridge can both record. A runtime removed meanwhile has
+// nothing left to measure.
+func (manager *Manager) recordExitedCPU(id string, ticks uint64) {
+	if ticks == 0 {
+		return
+	}
+	file, err := os.OpenFile(filepath.Join(manager.runtimeDir(id), exitedCPUFile), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err == nil {
+		_, err = file.WriteString(strconv.FormatUint(ticks, 10) + "\n")
+		err = errors.Join(err, file.Close())
+	}
+	if err != nil && !errors.Is(err, fs.ErrNotExist) && manager.logger != nil {
+		manager.logger.WithError(err).WithField("runtime", id).Warn("record a finished command's CPU time")
+	}
+}
+
+// commandEnvironment writes the runtime's environment followed by the
+// command's, as Docker gives an exec the container's environment plus its own,
+// and returns the file's host path.
+func (manager *Manager) commandEnvironment(id, token string, overrides map[string]string) (string, error) {
+	base, err := os.ReadFile(filepath.Join(manager.sharePath(id), environmentFile))
+	if err != nil {
+		return "", fmt.Errorf("read deployment environment: %w", err)
+	}
+	path := filepath.Join(manager.sharePath(id), "exec-"+token+".env")
+	if err := writePrivate(path, append(base, environmentScript(nil, overrides)...)); err != nil {
+		return "", fmt.Errorf("write exec environment: %w", err)
+	}
+	return path, nil
+}
+
+func (manager *Manager) terminateExec(ctx context.Context, id, statePath string) error {
+	var stderr bytes.Buffer
+	err := manager.apptainer.Run(ctx, nil, io.Discard, &stderr, append(execPrefix(id, "/"), "/bin/sh", "-c", cancelExecShell, "aries-cancel", statePath)...)
+	if err == nil {
+		return nil
+	}
+	var exit interface{ ExitCode() int }
+	if errors.As(err, &exit) && exit.ExitCode() == cancelNoState {
+		return nil
+	}
+	// An instance that is already gone has no process left to confirm.
+	if _, found, listErr := manager.instance(ctx, id); listErr == nil && !found {
+		return nil
+	}
+	return fmt.Errorf("confirm terminated Apptainer exec process-group exit: %w: %s", err, strings.TrimSpace(stderr.String()))
+}
+
+// UploadArchive extracts a tar stream beneath destination. Without subordinate
+// IDs the instance's root cannot give files to other users, so extracted files
+// belong to root; modes are kept. Harnesses verify effective permissions.
+func (manager *Manager) UploadArchive(ctx context.Context, id, destination string, archive io.Reader) error {
+	if destination == "" || !strings.HasPrefix(destination, "/") || strings.ContainsRune(destination, 0) {
+		return errors.New("deployment upload destination must be absolute")
+	}
+	if _, _, err := manager.loadRecord(id); err != nil {
+		return err
+	}
+	if _, err := manager.run(ctx, archive, append(execPrefix(id, "/"), "tar", "-x", "-o", "-f", "-", "-C", destination)...); err != nil {
+		return fmt.Errorf("extract archive in Apptainer instance: %w", err)
+	}
+	return nil
+}
+
+// DownloadArchive returns a tar stream of source, named by its base, with the
+// source's own metadata.
+func (manager *Manager) DownloadArchive(ctx context.Context, id, source string) (io.ReadCloser, deployment.FileInfo, error) {
+	if source == "" || !strings.HasPrefix(source, "/") || strings.ContainsRune(source, 0) || path.Clean(source) != source || source == "/" {
+		return nil, deployment.FileInfo{}, errors.New("invalid deployment download source: path must be absolute, clean and not the root")
+	}
+	stat, err := manager.Exec(ctx, id, core.Command{Path: "stat", Args: []string{"-c", "%s %f", source}})
+	if err != nil {
+		return nil, deployment.FileInfo{}, fmt.Errorf("inspect deployment archive source: %w", err)
+	}
+	if stat.ExitCode != 0 {
+		// Exec succeeded, so the instance exists and only the source is missing.
+		if strings.Contains(stat.Stderr, "No such file") {
+			return nil, deployment.FileInfo{}, fmt.Errorf("deployment archive: %w: %s", runner.ErrNotFound, strings.TrimSpace(stat.Stderr))
+		}
+		return nil, deployment.FileInfo{}, fmt.Errorf("inspect deployment archive source: %s", strings.TrimSpace(stat.Stderr))
+	}
+	info, err := parseStat(stat.Stdout)
+	if err != nil {
+		return nil, deployment.FileInfo{}, err
+	}
+	streamCtx, cancel := context.WithCancel(ctx)
+	reader, writer := io.Pipe()
+	go func() {
+		var stderr bytes.Buffer
+		err := manager.apptainer.Run(streamCtx, nil, writer, &stderr, append(execPrefix(id, "/"), "tar", "-c", "-f", "-", "-C", path.Dir(source), path.Base(source))...)
+		if err != nil {
+			err = fmt.Errorf("archive Apptainer instance path: %w: %s", err, strings.TrimSpace(stderr.String()))
+		}
+		_ = writer.CloseWithError(err)
+	}()
+	return &archiveStream{PipeReader: reader, cancel: cancel}, info, nil
+}
+
+// execPrefix runs a command in the instance with a clean environment and an
+// explicit working directory: without one, apptainer tries the host's current
+// directory and prints a warning into the command's stderr.
+func execPrefix(id, workdir string) []string {
+	if workdir == "" {
+		workdir = "/"
+	}
+	return []string{"exec", "--cleanenv", "--pwd", workdir, "instance://" + id}
+}
+
+type archiveStream struct {
+	*io.PipeReader
+	cancel context.CancelFunc
+}
+
+func (stream *archiveStream) Close() error {
+	stream.cancel()
+	return stream.PipeReader.Close()
+}
+
+// parseStat reads `stat -c '%s %f'`: a decimal size and the raw mode in hex.
+func parseStat(output string) (deployment.FileInfo, error) {
+	fields := strings.Fields(output)
+	if len(fields) != 2 {
+		return deployment.FileInfo{}, fmt.Errorf("unexpected stat output %q", output)
+	}
+	size, err := strconv.ParseInt(fields[0], 10, 64)
+	if err != nil {
+		return deployment.FileInfo{}, fmt.Errorf("parse stat size: %w", err)
+	}
+	raw, err := strconv.ParseUint(fields[1], 16, 32)
+	if err != nil {
+		return deployment.FileInfo{}, fmt.Errorf("parse stat mode: %w", err)
+	}
+	mode := fs.FileMode(raw & 0o777)
+	switch raw & 0o170000 {
+	case 0o100000:
+	case 0o040000:
+		mode |= fs.ModeDir
+	case 0o120000:
+		mode |= fs.ModeSymlink
+	default:
+		mode |= fs.ModeIrregular
+	}
+	return deployment.FileInfo{Size: size, Mode: mode}, nil
+}
+
+// exitTrailerWriter forwards stderr while withholding the wrapper's trailer.
+// apptainer may append its own message after the trailer; that text is dropped.
+type exitTrailerWriter struct {
+	destination io.Writer
+	prefix      []byte
+	buffer      bytes.Buffer
+}
+
+func newExitTrailer(destination io.Writer, token string) *exitTrailerWriter {
+	return &exitTrailerWriter{destination: destination, prefix: []byte("\x1eARIES_EXEC_EXIT_" + token + "=")}
+}
+
+func (w *exitTrailerWriter) Write(content []byte) (int, error) {
+	written, _ := w.buffer.Write(content)
+	if excess := w.buffer.Len() - execTrailerKeep; excess > 0 {
+		chunk := w.buffer.Next(excess)
+		if n, err := w.destination.Write(chunk); err != nil {
+			return 0, err
+		} else if n != len(chunk) {
+			return 0, io.ErrShortWrite
+		}
+	}
+	return written, nil
+}
+
+// Finish returns the command's exit code and the CPU ticks the wrapper
+// reported for it, zero when the trailer carries none.
+func (w *exitTrailerWriter) Finish() (int, uint64, error) {
+	content := w.buffer.Bytes()
+	start := bytes.LastIndex(content, w.prefix)
+	if start < 0 {
+		return -1, 0, fmt.Errorf("Apptainer exec output is missing its exit trailer: %s", strings.TrimSpace(string(content)))
+	}
+	rest := content[start+len(w.prefix):]
+	end := bytes.IndexByte(rest, '\x1f')
+	if end < 0 {
+		return -1, 0, errors.New("Apptainer exec output has an invalid exit trailer")
+	}
+	status, cpu, hasCPU := strings.Cut(string(rest[:end]), ":")
+	exitCode, err := strconv.Atoi(status)
+	if err != nil || exitCode < 0 || exitCode > 255 {
+		return -1, 0, errors.New("Apptainer exec output has an invalid exit code")
+	}
+	var ticks uint64
+	if hasCPU {
+		if ticks, err = strconv.ParseUint(cpu, 10, 64); err != nil {
+			return -1, 0, errors.New("Apptainer exec output has an invalid CPU time")
+		}
+	}
+	if _, err := w.destination.Write(content[:start]); err != nil {
+		return -1, 0, fmt.Errorf("write Apptainer exec stderr: %w", err)
+	}
+	return exitCode, ticks, nil
+}
+
+type limitedWriter struct {
+	writer   io.Writer
+	wrote    int
+	limit    int
+	once     sync.Once
+	onExceed func()
+}
+
+func (w *limitedWriter) Write(content []byte) (int, error) {
+	if len(content) > w.limit-w.wrote {
+		w.once.Do(w.onExceed)
+		return 0, fmt.Errorf("Apptainer exec output exceeds %d bytes", w.limit)
+	}
+	written, err := w.writer.Write(content)
+	w.wrote += written
+	return written, err
+}
+
+func validateCommand(command core.Command) error {
+	if command.Path == "" || strings.ContainsRune(command.Path, 0) {
+		return errors.New("command path must be nonempty and NUL-free")
+	}
+	if command.Dir != "" {
+		if !strings.HasPrefix(command.Dir, "/") || strings.ContainsRune(command.Dir, 0) || path.Clean(command.Dir) != command.Dir {
+			return errors.New("invalid command workdir: path must be absolute, clean, and NUL-free")
+		}
+	}
+	if command.User != "" && command.User != rootExecUser {
+		return fmt.Errorf("Apptainer runs every command as the instance's root and cannot run one as %q", command.User)
+	}
+	if command.Timeout < 0 {
+		return errors.New("command timeout must be nonnegative")
+	}
+	if command.OutputLimitBytes < 0 || command.OutputLimitBytes > maxConfiguredOutput {
+		return fmt.Errorf("command output limit must be between 0 and %d bytes", maxConfiguredOutput)
+	}
+	for _, argument := range command.Args {
+		if strings.ContainsRune(argument, 0) {
+			return errors.New("command argument contains NUL")
+		}
+	}
+	for key, value := range command.Env {
+		if !validEnvName(key) || strings.ContainsRune(value, 0) {
+			return fmt.Errorf("invalid command environment %q", key)
+		}
+	}
+	return nil
+}
+
+func validEnvName(value string) bool {
+	for index, r := range value {
+		if r == '_' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || index > 0 && r >= '0' && r <= '9' {
+			continue
+		}
+		return false
+	}
+	return value != ""
+}
+
+func randomID() (string, error) {
+	var value [8]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(value[:]), nil
+}

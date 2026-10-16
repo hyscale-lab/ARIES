@@ -4,9 +4,11 @@ Start from `profiles/*.json`; consult the [schema](../pkg/config/config.go),
 [configuration reference](../docs/configuration.md), and [support matrix](../docs/supported.md).
 Use `configs/versions.json` for pins; do not duplicate the field inventory here.
 
-- Keep role selection separate from placement. Harness and sandbox share a local
-  Docker daemon and one run network; each run has one managed Docker bridge container.
-  Reject unsupported backends and explicit embedded mode before effects.
+- Keep role selection separate from placement. With Docker, harness and sandbox share
+  a local daemon and one run network; each run has one managed Docker bridge container.
+  With Apptainer, harness, sandbox and bridge share one configuration and the run's
+  private namespace, and the bridge is a process. Reject unsupported backends, mixed
+  backends and explicit embedded mode before effects.
 - Declare `overrides_file` explicitly (`""` disables overrides). Keep harness and
   sandbox resource limits independent; preserve omission/default semantics and
   explicit model request settings without silently changing their meaning. Judges
