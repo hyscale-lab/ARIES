@@ -180,7 +180,7 @@ filesystem, and `state_dir` is used when it is omitted. `images` maps an image
 reference to a SIF prepared elsewhere, which setup unpacks instead of pulling:
 Hermes runs an image derived with a Docker build, which Apptainer cannot
 perform, so build it on a Docker host, convert it with `apptainer build
-NAME.sif docker-archive://ARCHIVE.tar`, and map its tag here; `aries setup`
+NAME.sif docker-archive:ARCHIVE.tar`, and map its tag here; `aries setup`
 reports the tag it needs. `binary`, optional, names the `apptainer` executable.
 
 Apptainer cannot enforce CPU or memory limits without cgroups v2. A runtime that

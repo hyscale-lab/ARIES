@@ -101,8 +101,8 @@ measurement against the CPU each of them reports for itself.
   lack. A request with limits is refused unless `unenforced_limits` accepts them;
   the limits are then recorded but not applied.
 - Resources are measured from processes, not from a cgroup: memory excludes the
-  page cache, and the CPU apptainer's launcher uses outside the instance is not
-  counted.
+  page cache, and CPU time used by Apptainer's launcher outside the instance is
+  not counted.
 - Network aliases, mixed backends and concurrency above one are rejected before
   any effect.
 - Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor
