@@ -63,7 +63,7 @@ func PrepareApptainerImage(ctx context.Context, cfg config.DeploymentConfig, ima
 		source = cfg.Apptainer.Images[image]
 	}
 	if source == "" {
-		return fmt.Errorf("Apptainer cannot build %s; build it on a Docker host (aries setup there), save it with docker save, convert it with apptainer build NAME.sif docker-archive://ARCHIVE.tar, and map %s to the SIF in deployment.apptainer.images", image, image)
+		return fmt.Errorf("Apptainer cannot build %s; build it on a Docker host (aries setup there), save it with docker save, convert it with apptainer build NAME.sif docker-archive:ARCHIVE.tar, and map %s to the SIF in deployment.apptainer.images", image, image)
 	}
 	if _, err := os.Stat(source); err != nil {
 		return fmt.Errorf("Apptainer image %s maps to %s: %w", image, source, err)

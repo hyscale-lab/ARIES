@@ -41,7 +41,7 @@ user, which is root inside the instance. Run from a SIF instead, files that
 belong to other users in the image, such as the partial-download directories of `apt`,
 cannot be changed by that root, and `apt-get` fails. Hermes runs an image
 derived with a Docker build, which Apptainer cannot perform; build it on a
-Docker host, convert it (`apptainer build hermes.sif docker-archive://hermes.tar`),
+Docker host, convert it (`apptainer build hermes.sif docker-archive:hermes.tar`),
 and map its tag to the SIF.
 
 An unpacked image keeps none of the OCI image's configuration, but a SIF built
@@ -111,8 +111,8 @@ measurement against the CPU each of them reports for itself.
   lack. A request with limits is refused unless `unenforced_limits` accepts them;
   the limits are then recorded but not applied.
 - Resources are measured from processes, not from a cgroup: memory excludes the
-  page cache, and the CPU apptainer's launcher uses outside the instance is not
-  counted.
+  page cache, and CPU time used by Apptainer's launcher outside the instance is
+  not counted.
 - Network aliases, mixed backends, concurrency above one and SWE-bench Pro, whose
   commands run as a non-root user, are rejected before any effect.
 - Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor
