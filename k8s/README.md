@@ -26,8 +26,8 @@ k8s/
 | kube-prometheus-stack, only for the Grafana dashboard | Optional (`DEPLOY_PROMETHEUS`) |
 
 Invitro also installs components for its own serverless experiments, which
-ARIES does not use. `--prune-invitro` removes them; see
-[Removing Invitro's unused components](#removing-invitros-unused-components).
+ARIES does not use. `create-cluster.sh` removes them unless told to keep them;
+see [Removing Invitro's unused components](#removing-invitros-unused-components).
 
 ## Quick start: build the cluster and apply ARIES with one command
 
@@ -57,7 +57,7 @@ k8s/create-cluster.sh
 | `runner_dir` | Directory under the runner's home that receives ARIES; default `aries` |
 | `ssh_key`, `ssh_options` | Identity file and extra `ssh` options, applied to every connection including Invitro's |
 | `deploy_prometheus` | Same as `--prometheus` |
-| `prune_invitro` | Same as `--prune-invitro` |
+| `prune_invitro` | `false` is the same as `--keep-invitro`; removing is the default |
 | `kubelet_housekeeping_interval` | Same as `--housekeeping`; `1s` gives one-second pod measurements |
 | `node_setup` | Same as `--node-setup` |
 
@@ -76,7 +76,7 @@ The script:
 | --- | --- |
 | `--prometheus` | Sets Invitro's `DEPLOY_PROMETHEUS` and applies the ARIES monitoring overlay |
 | `--node-setup FILE` | Uses your own Invitro `node_setup.json`; needed when the nodes' internal addresses are not Invitro's default `10.0.1.x` layout |
-| `--prune-invitro` | Removes Invitro's unused components before applying ARIES |
+| `--keep-invitro` | Keeps Invitro's unused components, which are otherwise removed before ARIES is applied |
 | `--housekeeping DUR` | Sets the kubelet's `--housekeeping-interval` on every node and restarts it. Invitro leaves the 10-second default, which caps how fine pod measurements can be |
 | `--skip-cluster` | The cluster exists already; only apply ARIES and restage the runner |
 | `--no-runner` | Do not build or stage the runner |
@@ -118,22 +118,27 @@ for each run and removes them afterwards.
 ## Removing Invitro's unused components
 
 `prune-invitro.sh` frees the cluster of what Invitro installs for running
-serverless functions. `apply-aries.sh --prune-invitro` runs it first. To run it
+serverless functions. `create-cluster.sh` runs it by default, through
+`apply-aries.sh --prune-invitro`; `apply-aries.sh` on its own leaves the
+cluster's components alone unless given that option. To run it
 on its own where `kubectl` reaches the cluster as an admin, use `make k8s-prune`;
 `make k8s-prune K8S_PRUNE_FLAGS="--dry-run"` lists what it would remove without
 changing anything.
 
 | Removed | What Invitro uses it for |
 | --- | --- |
-| Knative Serving (`knative-serving`) | Running the loader's functions |
+| Knative Serving and Eventing (`knative-serving`, `knative-eventing`) | Running the loader's functions |
 | Istio (`istio-system`) | Knative's ingress |
 | MetalLB (`metallb-system`) | Load-balancer addresses for Istio's gateway |
 | vHive's image registry (`registry`) and its volume | Caching function images |
 | The `prometheus-pushgateway` release and the Knative dashboards | Loader metrics |
 
 It removes their admission webhooks first, so pod creation never calls a
-webhook that has gone, then the namespaces, then their cluster-wide roles and
-custom resource definitions. Calico, containerd, metrics-server and
+webhook that has gone, then the namespaces, then what they left elsewhere: the
+root certificate Istio copies into every namespace, and their cluster-wide roles
+and custom resource definitions. Those are found by each component's labels, as
+many Knative Eventing roles do not carry its name, and by name for MetalLB,
+which labels nothing. Calico, containerd, metrics-server and
 kube-prometheus-stack stay. The registry's data stays on the node's disk.
 
 Afterwards the cluster can no longer run Invitro's own experiments. It is safe

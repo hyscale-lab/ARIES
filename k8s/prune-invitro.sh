@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Removes what Invitro's create_multinode_cluster installs for its serverless
-# experiments and ARIES does not use: Knative Serving, Istio, MetalLB, vHive's
-# in-cluster image registry, the Prometheus pushgateway and the Knative
-# monitors and dashboards. Calico, containerd, metrics-server and
+# experiments and ARIES does not use: Knative Serving and Eventing, Istio,
+# MetalLB, vHive's in-cluster image registry, the Prometheus pushgateway and the
+# Knative monitors and dashboards. Calico, containerd, metrics-server and
 # kube-prometheus-stack stay.
 #
 # Run it where kubectl and helm reach the cluster as an admin, such as the
@@ -40,7 +40,15 @@ kubectl auth can-i delete namespaces >/dev/null 2>&1 ||
 
 namespaces=(knative-serving knative-eventing istio-system metallb-system registry)
 # Cluster-scoped objects these components leave behind once their namespaces
-# are gone. No Calico, kubeadm, Prometheus or ARIES object carries these words.
+# are gone. Most carry their component's label; many Knative Eventing roles,
+# such as addressable-resolver, carry no component name. MetalLB's webhook and
+# resource definitions carry no label at all, so names and API groups catch
+# those. No Calico, kubeadm, Prometheus or ARIES object matches either.
+selectors=(
+  'app.kubernetes.io/name in (knative-serving,knative-eventing)'
+  'app.kubernetes.io/part-of=istio'
+  'app=metallb'
+)
 names='knative|istio|metallb'
 groups='\.(knative\.dev|istio\.io|metallb\.io)$'
 
@@ -61,14 +69,21 @@ remove() {
 # does not serve, such as ServiceMonitor without Prometheus, lists nothing.
 list() { kubectl get "$@" -o name 2>/dev/null || true; }
 
-matching() { list "$@" | grep -E "/.*($names)" || true; }
+# owned KIND prints the objects of KIND that belong to these components, by
+# label or by name.
+owned() {
+  {
+    for selector in "${selectors[@]}"; do list "$1" -l "$selector"; done
+    list "$1" | grep -E "/.*($names)" || true
+  } | sort -u
+}
 
 echo "==> Removing admission webhooks"
 # First, so nothing calls a webhook whose service is about to disappear.
 # Istio's sidecar injector would otherwise block pod creation in any labelled
 # namespace.
 # shellcheck disable=SC2046
-remove "" $(matching mutatingwebhookconfigurations) $(matching validatingwebhookconfigurations)
+remove "" $(owned mutatingwebhookconfigurations) $(owned validatingwebhookconfigurations)
 
 echo "==> Removing Istio sidecar injection labels"
 for label in istio-injection istio.io/rev; do
@@ -89,10 +104,11 @@ if command -v helm >/dev/null && helm status -n "$monitoring_namespace" "$pushga
     helm uninstall -n "$monitoring_namespace" "$pushgateway_release"
   fi
 fi
-# Invitro moves the Knative dashboards into the monitoring namespace; its
-# ServiceMonitors and PodMonitors live in the Knative namespaces.
+# Invitro applies Knative's dashboards, as ConfigMap serving-dashboards, into
+# the monitoring namespace; its ServiceMonitors live in the Knative namespaces.
+# The dashboards' only label is the one every Grafana dashboard carries.
 # shellcheck disable=SC2046
-remove "$monitoring_namespace" $(list configmaps -n "$monitoring_namespace" | grep -i knative || true)
+remove "$monitoring_namespace" $(list configmaps -n "$monitoring_namespace" | grep -E '^configmap/(serving-dashboards$|.*knative)' || true)
 
 echo "==> Removing namespaces"
 present=()
@@ -107,14 +123,26 @@ if [ "$dry_run" = false ] && [ ${#present[@]} -gt 0 ]; then
   done
 fi
 
-echo "==> Removing cluster-scoped leftovers"
+echo "==> Removing leftovers outside those namespaces"
+# Istiod copies its root certificate into every namespace. With istiod gone
+# nothing recreates them.
+if [ "$dry_run" = true ]; then
+  kubectl get configmaps -A -l istio.io/config=true --field-selector metadata.name=istio-ca-root-cert \
+    --no-headers -o custom-columns=NS:.metadata.namespace 2>/dev/null |
+    while read -r ns; do echo "  would delete configmap/istio-ca-root-cert in $ns"; done
+else
+  kubectl delete configmaps -A -l istio.io/config=true --field-selector metadata.name=istio-ca-root-cert \
+    --ignore-not-found --wait=false
+fi
 # The registry's volume is cluster-scoped; its data stays on the node's disk.
-registry_volumes=$(kubectl get persistentvolumes \
-  -o jsonpath='{range .items[?(@.spec.claimRef.namespace=="registry")]}persistentvolume/{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
+registry_volumes=$({ list persistentvolumes -l usage=registry
+  kubectl get persistentvolumes \
+    -o jsonpath='{range .items[?(@.spec.claimRef.namespace=="registry")]}persistentvolume/{.metadata.name}{"\n"}{end}' 2>/dev/null || true
+} | sort -u)
 # shellcheck disable=SC2046
-remove "" $(matching clusterrolebindings) $(matching clusterroles) $registry_volumes
+remove "" $(owned clusterrolebindings) $(owned clusterroles) $registry_volumes
 # shellcheck disable=SC2046
-remove "" $(list customresourcedefinitions | grep -E "$groups" || true)
+remove "" $({ owned customresourcedefinitions; list customresourcedefinitions | grep -E "$groups"; } | sort -u)
 
 echo
 if [ "$dry_run" = true ]; then

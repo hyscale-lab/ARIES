@@ -23,7 +23,8 @@ runner_dir=aries
 ssh_key=""
 ssh_options=()
 housekeeping=""
-prune=false
+# Empty until an option or the file decides; the default is to prune.
+prune=""
 
 usage() {
   cat <<'USAGE'
@@ -43,8 +44,9 @@ k8s/cluster.json.example. Command-line options win over the file.
                       addresses are not Invitro's default 10.0.1.x layout
   --housekeeping DUR  set the kubelet's --housekeeping-interval on every node,
                       such as 1s; Invitro leaves the 10s default
-  --prune-invitro     remove the Invitro components ARIES does not use, such
-                      as Knative, Istio and MetalLB
+  --keep-invitro      keep the Invitro components ARIES does not use, such as
+                      Knative, Istio and MetalLB; by default they are removed
+  --prune-invitro     remove them even if the config file says to keep them
   --skip-cluster      the cluster already exists; only apply ARIES
   --no-runner         do not build and stage the runner on the loader node
   -h, --help          show this help
@@ -61,6 +63,7 @@ while [ $# -gt 0 ]; do
     --node-setup) node_setup=$2; shift 2 ;;
     --housekeeping) housekeeping=$2; shift 2 ;;
     --prune-invitro) prune=true; shift ;;
+    --keep-invitro) prune=false; shift ;;
     --skip-cluster) skip_cluster=true; shift ;;
     --no-runner) stage_runner=false; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -108,7 +111,7 @@ print("file_ssh_options=(" + " ".join(shlex.quote(option) for option in strings(
 for key in ("runner_dir", "ssh_key", "node_setup", "kubelet_housekeeping_interval"):
     print(f"file_{key}={shlex.quote(text(key))}")
 print("file_prometheus=" + ("true" if cfg.get("deploy_prometheus") is True else "false"))
-print("file_prune=" + ("true" if cfg.get("prune_invitro") is True else "false"))
+print("file_prune=" + ("false" if cfg.get("prune_invitro") is False else "true"))
 PY
   ) || exit 1
   eval "$parsed"
@@ -118,9 +121,10 @@ PY
   ssh_key=$file_ssh_key
   [ -n "$node_setup" ] || node_setup=$file_node_setup
   [ "$prometheus" = true ] || prometheus=$file_prometheus
-  [ "$prune" = true ] || prune=$file_prune
+  [ -n "$prune" ] || prune=$file_prune
   [ -n "$housekeeping" ] || housekeeping=$file_kubelet_housekeeping_interval
 fi
+[ -n "$prune" ] || prune=true
 case "$housekeeping" in
   ""|[1-9]s|[1-9][0-9]s|[1-9][0-9][0-9]ms) ;;
   *) echo "kubelet housekeeping interval must look like 1s or 500ms" >&2; exit 1 ;;
