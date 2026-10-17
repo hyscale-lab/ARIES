@@ -176,6 +176,8 @@ func commitFixture(t *testing.T, root string) {
 	t.Helper()
 	commands := [][]string{
 		{"init", "--quiet"},
+		// Background maintenance can race with TempDir cleanup on recent Git.
+		{"config", "maintenance.auto", "false"},
 		{"add", "."},
 		{"-c", "user.name=ARIES Test", "-c", "user.email=aries@example.invalid", "commit", "--quiet", "-m", "fixture"},
 	}

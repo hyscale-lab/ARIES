@@ -1,0 +1,49 @@
+{
+  "name": "dsh-tb2-fix-git-deepseek",
+  "versions_file": "../configs/versions.json",
+  "overrides_file": "",
+  "execution": {
+    "concurrency": 1
+  },
+  "benchmark": {
+    "type": "terminalbench2",
+    "root": ".cache/terminal-bench-2-1",
+    "tasks": [
+      "fix-git"
+    ]
+  },
+  "harness": {
+    "type": "dsh",
+    "deployment": {
+      "backend": "docker",
+      "docker": {
+        "socket": "/var/run/docker.sock"
+      }
+    }
+  },
+  "sandbox": {
+    "deployment": {
+      "backend": "docker",
+      "docker": {
+        "socket": "/var/run/docker.sock"
+      }
+    }
+  },
+  "bridge": {
+    "deployment": {
+      "backend": "docker"
+    },
+    "type": "dsh-ssh",
+    "mode": "managed"
+  },
+  "runtime": {
+    "backend": "deepseek",
+    "mode": "external"
+  },
+  "model": {
+    "base_url": "https://api.deepseek.com",
+    "api_key_env": "DEEPSEEK_API_KEY",
+    "id": "deepseek-flash"
+  },
+  "output_dir": "runs"
+}

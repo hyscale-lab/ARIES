@@ -367,6 +367,10 @@ func renderRawSSHRecord(record rawSSHRecord) ([]byte, error) {
 	writeRawField(&output, "payload_bytes", fmt.Sprint(record.PayloadBytes))
 	writeRawBytesField(&output, "payload", record.Payload)
 	writeRawField(&output, "stdin_bytes", fmt.Sprint(record.StdinBytes))
+	if int64(len(record.Stdin)) < record.StdinBytes {
+		writeRawField(&output, "stdin_retained_bytes", fmt.Sprint(len(record.Stdin)))
+		writeRawField(&output, "stdin_truncated", "true")
+	}
 	writeRawBytesField(&output, "stdin", record.Stdin)
 	output.WriteString("--- ARIES SSH CALL END ---\n")
 	return output.Bytes(), nil

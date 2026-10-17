@@ -11,7 +11,7 @@ import (
 func SSHClientConfig(bridgeType, helperPath string) (managed.ClientConfig, error) {
 	client := managed.ClientConfig{}
 	switch bridgeType {
-	case "hermes-ssh":
+	case "hermes-ssh", "dsh-ssh":
 		return client, nil
 	case "openclaw-ssh":
 		if helperPath == "" {

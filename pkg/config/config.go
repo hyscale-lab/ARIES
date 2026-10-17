@@ -477,6 +477,13 @@ type Versions struct {
 	Toolathlon        ToolathlonVersions        `json:"toolathlon,omitempty"`
 	OpenClaw          OpenClawVersions          `json:"openclaw"`
 	Hermes            HermesVersions            `json:"hermes"`
+	DSH               DSHVersions               `json:"dsh,omitempty"`
+}
+
+// DSHVersions pins the Node base and matching published harness/provider version.
+type DSHVersions struct {
+	Image   string `json:"image"`
+	Version string `json:"version"`
 }
 
 // ToolathlonVersions pins the Toolathlon checkout. Like the Hermes image, a
@@ -761,8 +768,11 @@ func (c *Config) validate() error {
 	if err := c.Harness.validate(); err != nil {
 		return err
 	}
-	if c.Harness.Type != "hermes" && (c.Model.ContextLength != 0 || c.Model.MaxTokens != 0 || c.Model.Temperature != nil) {
-		return errors.New("model.context_length, model.max_tokens, and model.temperature require Hermes")
+	if c.Harness.Type != "hermes" && c.Harness.Type != "dsh" && (c.Model.ContextLength != 0 || c.Model.MaxTokens != 0 || c.Model.Temperature != nil) {
+		return errors.New("model.context_length, model.max_tokens, and model.temperature require Hermes or DSH")
+	}
+	if c.Harness.Type == "dsh" && (c.Model.Temperature != nil || (c.Runtime.Backend != "deepseek" && c.Model.ReasoningEffort != "")) {
+		return errors.New("DSH does not support explicit temperature or OpenAI-compatible reasoning effort")
 	}
 	if err := c.Model.validateGeneration(); err != nil {
 		return err
@@ -1037,8 +1047,8 @@ func (h *HarnessConfig) validate() error {
 			return errors.New("harness.web_search.extract_api_key_env must be an environment variable name")
 		}
 	}
-	if h.Subagents.Enabled != nil && h.Type != "openclaw" && h.Type != "hermes" {
-		return errors.New("harness.subagents requires OpenClaw or Hermes")
+	if h.Subagents.Enabled != nil && h.Type != "openclaw" && h.Type != "hermes" && h.Type != "dsh" {
+		return errors.New("harness.subagents requires OpenClaw, Hermes, or DSH")
 	}
 	if h.Subagents.MaxConcurrent != 0 {
 		if h.Type != "openclaw" && h.Type != "hermes" {
@@ -1048,7 +1058,7 @@ func (h *HarnessConfig) validate() error {
 			return errors.New("harness.subagents.max_concurrent must be positive")
 		}
 	}
-	if h.Subagents.Enabled == nil && (h.Type == "openclaw" || h.Type == "hermes") {
+	if h.Subagents.Enabled == nil && (h.Type == "openclaw" || h.Type == "hermes" || h.Type == "dsh") {
 		enabled := true
 		h.Subagents.Enabled = &enabled
 	}
@@ -1333,6 +1343,11 @@ func (c Versions) validate() error {
 			return fmt.Errorf("hermes.image: %w", err)
 		}
 	}
+	if c.DSH.Image != "" {
+		if err := containerimage.ValidatePinnedTagOnly(c.DSH.Image); err != nil {
+			return fmt.Errorf("dsh.image: %w", err)
+		}
+	}
 	if plugin := c.Hermes.OTelPlugin; plugin != (HermesOTelPluginVersions{}) {
 		if err := validateRepositoryPin("hermes.otel_plugin", plugin.RepositoryURL, plugin.Revision); err != nil {
 			return err
@@ -1364,6 +1379,11 @@ func (c Versions) HarnessImage(harnessType string) (string, error) {
 		image, field = c.OpenClaw.Image, "openclaw.image"
 	case "hermes":
 		image, field = c.Hermes.Image, "hermes.image"
+	case "dsh":
+		image, field = c.DSH.Image, "dsh.image"
+		if !regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$`).MatchString(c.DSH.Version) {
+			return "", errors.New("dsh.version must name an explicit published release")
+		}
 	default:
 		return "", fmt.Errorf("unsupported harness type %q", harnessType)
 	}

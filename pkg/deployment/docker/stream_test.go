@@ -371,6 +371,25 @@ func TestExecStreamHonorsConfiguredOutputLimit(t *testing.T) {
 	}
 }
 
+func TestExecStreamCarriesNativeProtocolBeyondCommandCaps(t *testing.T) {
+	payload := bytes.Repeat([]byte("x"), maxExecInput+1)
+	fake := &fakeClient{}
+	fake.attach = func(conn net.Conn) {
+		if _, err := io.CopyN(io.Discard, conn, int64(len(payload))); err != nil {
+			return
+		}
+		writeFrame(conn, stdcopy.Stdout, payload)
+	}
+	sandbox := startSandbox(t, fake)
+	var output bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := sandbox.ExecStream(ctx, core.Command{Path: "/bin/native-helper", StreamProtocol: true}, bytes.NewReader(payload), &output, io.Discard)
+	if err != nil || !bytes.Equal(output.Bytes(), payload) {
+		t.Fatalf("native protocol was cut: output=%d error=%v", output.Len(), err)
+	}
+}
+
 func TestCommandOutputLimitValidation(t *testing.T) {
 	for _, limit := range []int{-1, maxConfiguredOutput + 1} {
 		if err := validateCommand(core.Command{Path: "/bin/true", OutputLimitBytes: limit}); err == nil {

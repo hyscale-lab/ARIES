@@ -137,9 +137,12 @@ func (s *execution) ExecStream(ctx context.Context, command core.Command, stdin 
 	closeDockerInput := func() { closeWrite.Do(func() { _ = attached.CloseWrite() }) }
 	writeDone := make(chan error, 1)
 	go func() {
-		limited := io.LimitReader(stdin, maxExecInput+1)
+		limited := stdin
+		if !command.StreamProtocol {
+			limited = io.LimitReader(stdin, maxExecInput+1)
+		}
 		written, writeErr := io.Copy(attached.Conn, limited)
-		if writeErr == nil && written > maxExecInput {
+		if writeErr == nil && !command.StreamProtocol && written > maxExecInput {
 			writeErr = fmt.Errorf("Docker exec stdin exceeds %d bytes", maxExecInput)
 		}
 		closeDockerInput()
@@ -147,10 +150,15 @@ func (s *execution) ExecStream(ctx context.Context, command core.Command, stdin 
 	}()
 
 	copyDone := make(chan error, 1)
-	exitTrailer := newExitTrailer(&limitedWriter{writer: stderr, limit: outputLimit}, token)
+	stdoutWriter, stderrWriter := stdout, stderr
+	if !command.StreamProtocol {
+		stdoutWriter = &limitedWriter{writer: stdout, limit: outputLimit}
+		stderrWriter = &limitedWriter{writer: stderr, limit: outputLimit}
+	}
+	exitTrailer := newExitTrailer(stderrWriter, token)
 	go func() {
 		_, copyErr := stdcopy.StdCopy(
-			&limitedWriter{writer: stdout, limit: outputLimit},
+			stdoutWriter,
 			exitTrailer,
 			attached.Reader,
 		)

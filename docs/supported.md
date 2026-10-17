@@ -16,19 +16,21 @@ This page summarizes capabilities and limitations. Use the
 | --- | --- | --- |
 | Agent harness | **OpenClaw** — text, realtime, and voice-transcribe modes; web tools and configurable subagent spawning | [Harness configuration](configuration.md), [realtime mode](configuration.md#realtime-openclaw-mode), [voice guide](voice_mode.md) |
 | Agent harness | **Hermes** — text and voice-transcribe modes through its native Gateway; web tools, context compaction, and custom request bodies for compatible backends | [Hermes configuration](configuration.md#hermes-context-window-compaction-and-request-extra-body), [voice guide](voice_mode.md) |
+| Agent harness | **DeepSeek Harness (DSH)** — native headless CLI and matching SSH providers | [DSH configuration](configuration.md#deepseek-harness-dsh) |
 | Benchmark | **Terminal-Bench 2** — verifier-based terminal tasks | [Quick start](quick-start.md) |
 | Benchmark | **Deep Research Bench** — open-ended research reports with RACE grading and optional FACT citation checking; grading can be disabled | [Benchmark guide](benchmarks/deep-research-bench.md) |
 | Benchmark | **SWE-Atlas QA** — codebase Q&A with host-side rubric grading; grading can be disabled; only the QA track is implemented | [Benchmark guide](benchmarks/swe-atlas-qa.md) |
 | Benchmark | **SWE-bench Pro** — public issue-resolution split with pinned task scripts and parser | [Benchmark guide](benchmarks/swe-bench-pro.md) |
 | Benchmark | **Toolathlon** — tool-use tasks over MCP servers that are local, public, or backed by Toolathlon's self-hosted applications (Canvas, poste.io, WooCommerce), and, given your account credentials, by third-party services; the `k8s` tasks are not supported | [Benchmark guide](benchmarks/toolathlon.md) |
 | Tool sandbox and deployment | **Docker** — local containers managed through the Moby Go SDK | [Deployment configuration](configuration.md#deployment-configuration), [Docker implementation](implementation/docker.md) |
-| Tool bridge | **OpenClaw SSH** and **Hermes SSH** — managed Docker container; harness-specific SSH adapters | [SSH bridge implementation](implementation/ssh-bridges.md) |
+| Tool bridge | **OpenClaw SSH**, **Hermes SSH**, and **DSH SSH** — managed Docker container; harness-specific SSH adapters | [SSH bridge implementation](implementation/ssh-bridges.md) |
 | Model service | **DeepSeek** — external endpoint | [Model backends](configuration.md#model-backends) |
 | Model service | **SGLang** — external endpoint or one ARIES-managed host process per run | [Model backends](configuration.md#model-backends) |
 | Model service | **OpenAI-compatible server** — external only, including vLLM, llama.cpp, gateways, and hosted endpoints | [Model backends](configuration.md#model-backends) |
 
-Both harnesses and [LLM judges](configuration.md#judge-model-settings) support explicit
+OpenClaw, Hermes and [LLM judges](configuration.md#judge-model-settings) support explicit
 [model reasoning effort](configuration.md#reasoning-effort).
+DSH supports explicit reasoning through its native DeepSeek provider.
 Available efforts and tool support depend on the model and API.
 
 Image and dataset revisions are pinned in [versions.json](../configs/versions.json).
@@ -39,11 +41,17 @@ guides above.
 
 ## Current limitations
 
+- DSH supports agent mode and native subagents. Its helper requires Linux glibc,
+  `sh`, `tar`, and Bash; Alpine/musl images are unsupported. The task workdir must
+  neither contain nor be inside `/tmp/aries-dsh-runtime`. Unsupported profile
+  settings are listed in [DSH configuration](configuration.md#deepseek-harness-dsh).
 - Each SSH bridge supports its corresponding harness. Crossed pairs are rejected
   before execution. Hermes requires `/bin/bash` in the task image; its bridge
   rejects Hermes's private `~/.hermes` file synchronization. OpenClaw requires
-  `bin/aries-ssh-client` beside `bin/aries`. Both bridges require the matched Docker bridge image built with
-  `make bridge-image`.
+  `bin/aries-ssh-client` beside `bin/aries`. OpenClaw and Hermes use the standard
+  Docker bridge image (`make bridge-image`). DSH preparation builds a separate
+  bridge image from its derived DSH image, including the native helper runtime;
+  see [DSH configuration](configuration.md#deepseek-harness-dsh).
 - Realtime mode is OpenClaw-only and needs a separate TTS credential. See the
   [realtime setup](configuration.md#realtime-openclaw-mode).
 - External model servers are operated separately from ARIES. ARIES does not

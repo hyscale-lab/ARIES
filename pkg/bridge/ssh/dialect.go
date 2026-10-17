@@ -8,6 +8,12 @@ type Dialect interface {
 	Policy() Policy
 }
 
+// StreamLocalDialect optionally carries native Unix socket streams through the
+// exact same sandbox execution capability as exec channels.
+type StreamLocalDialect interface {
+	PrepareStreamLocal(socket, workdir string) (Prepared, *Refusal)
+}
+
 type Action uint8
 
 const (
@@ -39,4 +45,7 @@ type Policy struct {
 	UnsupportedRequests   UnsupportedRequests
 	InvalidOperationClass string
 	RefusedExitCode       int
+	// StreamingInput retains a bounded prefix without limiting the total bytes
+	// of a long-lived native protocol or binary stream.
+	StreamingInput bool
 }

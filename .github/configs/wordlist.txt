@@ -36,6 +36,8 @@ docker
 Docker's
 dockerfile
 drb
+dsh
+dsh's
 durations
 edu
 entrypoint
@@ -44,6 +46,7 @@ ghcr
 gib
 gid
 github
+glibc
 gpu
 GPT
 gRPC
@@ -75,6 +78,7 @@ mib
 moby
 ModelRuntime
 moe
+musl
 natively
 NativeServer
 NCSpeech

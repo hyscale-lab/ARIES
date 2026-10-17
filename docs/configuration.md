@@ -616,9 +616,9 @@ start/end times. An image without the plugin leaves no spans file.
 
 ### Hermes context window, compaction, and request extra body
 
-Three optional profile blocks reach the rendered Hermes `config.yaml`. Each is
-Hermes-only and is rejected under another harness. A profile without them
-renders the same file as before.
+Three optional profile blocks reach the rendered Hermes `config.yaml`.
+Compaction and extra body are Hermes-only; generation fields have
+harness-specific support. Omitting these settings preserves native defaults.
 
 - `model.context_length`, `model.max_tokens`, and `model.temperature` set the
   window Hermes's compressor reasons about and the request sampling.
@@ -688,6 +688,29 @@ covered by this execution path. The rendered `config.yaml` under
 `<run>/<task>/harness/` shows the selected settings.
 The Gateway reads `agent.max_turns`; `agent_timeout_seconds` in the overrides
 file also bounds the wall-clock wait for the run.
+
+### DeepSeek Harness (DSH)
+
+Use `harness.type: "dsh"` with `bridge.type: "dsh-ssh"` and the example
+[dsh-tb2-fix-git-deepseek.json](../profiles/dsh-tb2-fix-git-deepseek.json).
+Preparation builds the native CLI and matching helper providers using
+`dsh.image` (Node base) and `dsh.version` from the version catalog. It then builds
+the DSH bridge from that derived image with a matching tag, including the native
+helper runtime. The standard bridge image built by `make bridge-image` does not
+contain DSH's helper runtime.
+
+DSH accepts `model.context_length`, `model.max_tokens`, and native DeepSeek
+`model.reasoning_effort` (`off`/`none`, `low`, `high`, `max`). For local models,
+use external `openai` or `sglang` with a Docker-reachable `/v1` endpoint and a
+matching model ID. The native DeepSeek adapter uses Messages: official roots
+map to `/anthropic`; custom DeepSeek endpoints must name a Messages API root.
+
+`harness.subagents.enabled` defaults to true; false removes delegation tools.
+Voice, search/extract, MCP, compaction, explicit temperature, generic model
+reasoning effort and `max_concurrent` overrides are unsupported. The native
+sandbox uses `danger-full-access` with approvals disabled; ARIES's separate
+task container supplies isolation. See the [implementation](implementation/harnesses.md#deepseek-harness-dsh)
+for private state and trajectory formats.
 
 ### Realtime OpenClaw mode
 

@@ -82,6 +82,12 @@ func (session *bridgeSession) handleConnection(ctx context.Context, connection n
 		serveGlobalRequests(requests)
 	}()
 	for incoming := range channels {
+		if incoming.ChannelType() == "direct-streamlocal@openssh.com" {
+			if dialect, ok := session.dialect.(StreamLocalDialect); ok {
+				session.handleStreamLocal(connectionCtx, incoming, dialect)
+				continue
+			}
+		}
 		if incoming.ChannelType() != "session" || len(incoming.ExtraData()) != 0 {
 			_ = incoming.Reject(gossh.UnknownChannelType, "only session channels are supported")
 			continue
@@ -104,6 +110,41 @@ func (session *bridgeSession) handleConnection(ctx context.Context, connection n
 			session.handleSession(connectionCtx, channel, channelRequests)
 		}()
 	}
+}
+
+func (session *bridgeSession) handleStreamLocal(ctx context.Context, incoming gossh.NewChannel, dialect StreamLocalDialect) {
+	var payload struct {
+		Socket   string
+		Reserved string
+		Port     uint32
+	}
+	if err := gossh.Unmarshal(incoming.ExtraData(), &payload); err != nil || payload.Reserved != "" || payload.Port != 0 {
+		_ = incoming.Reject(gossh.Prohibited, "invalid Unix stream request")
+		return
+	}
+	prepared, refusal := dialect.PrepareStreamLocal(payload.Socket, session.sandbox.Workdir())
+	if refusal != nil {
+		_ = incoming.Reject(gossh.Prohibited, refusal.Message)
+		return
+	}
+	channel, requests, err := incoming.Accept()
+	if err != nil {
+		return
+	}
+	session.mu.Lock()
+	if session.revoked || ctx.Err() != nil {
+		session.mu.Unlock()
+		_ = channel.Close()
+		return
+	}
+	session.wait.Add(1)
+	session.mu.Unlock()
+	go func() {
+		defer session.wait.Done()
+		defer channel.Close()
+		go gossh.DiscardRequests(requests)
+		session.execute(ctx, channel, prepared, requestAudit{requestType: incoming.ChannelType(), payload: bytes.Clone(incoming.ExtraData())})
+	}()
 }
 
 func serveGlobalRequests(requests <-chan *gossh.Request) {

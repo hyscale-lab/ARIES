@@ -10,8 +10,8 @@ serving from the managed controller. One [SSH engine](../../pkg/bridge/ssh/bridg
 owns listeners, connections, streams, audit persistence and cleanup. The run's
 shared bridge service generates one in-memory host key for the SSH handshake
 and uses it across all sandbox listeners; clients need no keys or passwords.
-The OpenClaw and Hermes dialects only interpret native requests and prepare
-commands; neither owns sandbox lifecycle or a separate SSH server implementation.
+The OpenClaw, Hermes and DSH dialects interpret native requests and prepare
+commands; none owns sandbox lifecycle or a separate SSH server implementation.
 
 OpenClaw's pinned container lacks an SSH binary, so ARIES stages the static Go
 `aries-ssh-client` at `/opt/aries/bin/aries-ssh-client`. The
@@ -22,7 +22,7 @@ The client owns OpenClaw's invocation/configuration subset and does not import
 the server's command grammar. Shared SSH serving and root bridge lifecycle do not
 import this harness-specific client. The server dialect is authoritative for
 command acceptance. Refused commands produce server-side rejection evidence
-without executing in the sandbox. Hermes uses its image's native OpenSSH.
+without executing in the sandbox. Hermes and DSH use native OpenSSH.
 
 The bridge runs the SSH server; `aries-ssh-client` is the separate client inside
 the OpenClaw harness. Its argument parser recognizes the pinned invocation
@@ -100,6 +100,27 @@ suppresses itself. Refusals are recorded with a distinct `denied` status so
 evidence separates policy from a protocol violation.
 
 
+## DSH SSH bridge
+
+The [DSH adapter](../../pkg/bridge/ssh/dsh/bridge.go) installs the version-matched,
+credential-free helper runtime at `/tmp/aries-dsh-runtime` inside the borrowed
+sandbox before opening its listener. DSH's native OpenSSH uses a ControlMaster
+connection and a pinned helper invocation, rather than one shell command per
+tool call. Its private known-hosts file contains the service's scanned public key.
+
+The [dialect](../../pkg/bridge/ssh/dsh/dialect.go) accepts only that helper command
+and `direct-streamlocal@openssh.com` channels for native helper sockets. Socket
+connections execute inside the same sandbox, never on the bridge host. DSH
+retains authentication of individual forwarded streams and its native helper
+heartbeat/lease; the ARIES control plane adds no assignment lease.
+
+Helper transfers and protocol streams use `StreamProtocol`, preserving the
+native frame limits without a cumulative exec byte cap. SSH auditing retains
+a bounded input prefix and marks truncation. These records describe transport
+operations; model-facing tool calls and timing remain in DSH's durable sessions.
+The harness CLI's stdout/stderr and collected sessions have separate
+[evidence bounds](harnesses.md#deepseek-harness-dsh).
+
 ## Source and limitations
 
 The application owns one `aries-bridge` service and one shared Docker network
@@ -128,7 +149,8 @@ registration response is reconciled by looking up the same sandbox; only a
 confirmed absent registration permits resubmission of the identical request.
 Definitive target or registration errors do not trigger replay.
 
-There are no SSH client credential files, leases, or controller-liveness checks.
+The ARIES control plane stages no SSH client credentials and adds no assignment
+leases or controller-liveness checks.
 Runner explicitly releases its session during task cleanup. The run owner stops
 the shared service after tasks finish and removes the network after its
 containers are gone. An abrupt controller crash can leave owned runtimes and
@@ -159,7 +181,8 @@ never edit generated binding files manually.
 
 See the [OpenClaw dialect](../../pkg/bridge/ssh/openclaw/dialect.go),
 [OpenClaw grammar](../../pkg/bridge/ssh/openclaw/grammar.go),
-[Hermes dialect](../../pkg/bridge/ssh/hermes/dialect.go), and
-[Hermes grammar](../../pkg/bridge/ssh/hermes/grammar.go).
+[Hermes dialect](../../pkg/bridge/ssh/hermes/dialect.go),
+[Hermes grammar](../../pkg/bridge/ssh/hermes/grammar.go), and
+[DSH dialect](../../pkg/bridge/ssh/dsh/dialect.go).
 Shared engine and dialect tests cover accepted commands, private evidence,
 revocation, cancellation, and denied sync.

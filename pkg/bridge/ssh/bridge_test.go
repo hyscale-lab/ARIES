@@ -926,6 +926,17 @@ func TestRecordedInputKeepsRawAndUsesSafeStructuredEncoding(t *testing.T) {
 			}
 		})
 	}
+	t.Run("streaming prefix", func(t *testing.T) {
+		want := int64(maxRecordedInputBytes + 123)
+		input := &recordedInput{reader: io.LimitReader(zeroReader{}, want), streaming: true}
+		if n, err := io.Copy(io.Discard, input); err != nil || n != want {
+			t.Fatalf("protocol cut at %d: %v", n, err)
+		}
+		count, _, _, prefix, overflow := input.record(true)
+		if count != want || len(prefix) != maxRecordedInputBytes || !overflow {
+			t.Fatalf("incorrect prefix accounting: %d %d %v", count, len(prefix), overflow)
+		}
+	})
 	t.Run("bounded", func(t *testing.T) {
 		input := &recordedInput{reader: io.LimitReader(zeroReader{}, maxRecordedInputBytes+1)}
 		if _, err := io.Copy(io.Discard, input); err == nil || !strings.Contains(err.Error(), "stdin exceeds") {

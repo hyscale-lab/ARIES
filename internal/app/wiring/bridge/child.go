@@ -5,6 +5,7 @@ import (
 	"errors"
 	managed "github.com/hyscale-lab/aries/pkg/bridge"
 	sshbridge "github.com/hyscale-lab/aries/pkg/bridge/ssh"
+	"github.com/hyscale-lab/aries/pkg/bridge/ssh/dsh"
 	"github.com/hyscale-lab/aries/pkg/bridge/ssh/hermes"
 	"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw"
 	"github.com/hyscale-lab/aries/pkg/bridge/target"
@@ -38,10 +39,19 @@ func ServeChild(ctx context.Context, c managed.LaunchConfig, logger *logrus.Logg
 			dialect = hermes.Dialect{}
 		case "openclaw-ssh":
 			dialect = openclaw.Dialect{}
+		case "dsh-ssh":
+			dialect = dsh.Dialect{}
 		default:
 			return nil, errors.New("unsupported bridge protocol")
 		}
-		return sshbridge.New(sshbridge.Options{Dialect: dialect, HostSigner: signer, SandboxID: sandboxID, ResolveListen: func(context.Context) (core.BridgeListen, error) { return c.Listen, nil }, OutputDir: outputDir, Logger: logger, OmitRawLog: !c.RetainRawLog})
+		manager, err := sshbridge.New(sshbridge.Options{Dialect: dialect, HostSigner: signer, SandboxID: sandboxID, ResolveListen: func(context.Context) (core.BridgeListen, error) { return c.Listen, nil }, OutputDir: outputDir, Logger: logger, OmitRawLog: !c.RetainRawLog})
+		if err != nil {
+			return nil, err
+		}
+		if c.BridgeType == "dsh-ssh" {
+			return &dsh.Manager{Manager: manager}, nil
+		}
+		return manager, nil
 	}})
 }
 

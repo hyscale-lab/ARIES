@@ -55,6 +55,10 @@ type Command struct {
 	Timeout          time.Duration     `json:"timeout,omitempty"`
 	User             string            `json:"-"`
 	OutputLimitBytes int               `json:"-"`
+	// StreamProtocol lets ExecStream carry a long-lived framed protocol or a
+	// trusted runtime archive without command-total byte caps. The native
+	// protocol owns frame limits; context cancellation still owns execution.
+	StreamProtocol bool `json:"-"`
 }
 
 // CommandResult records a completed sandbox process.

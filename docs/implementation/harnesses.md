@@ -4,6 +4,35 @@ These mechanisms implement the [AgentHarness contract](../design/harness.md).
 Supported modes and image pins are listed in [supported components](../supported.md);
 voice setup remains in the [voice guide](../voice_mode.md).
 
+## DeepSeek Harness (DSH)
+
+[`dsh.Manager`](../../pkg/harness/dsh/harness.go) composes the shared harness runtime
+and sends the benchmark instruction unchanged on stdin to one native headless
+invocation. Completion requires exit zero, a final root turn ending as
+`completed`, a `final` event whose text is not blank, and no pending root tool calls.
+
+The native `fs-ssh`, `subprocess-ssh` and `sandbox-ssh` providers replace their
+local counterparts. The matching helper runs under `/tmp/aries-dsh-runtime`
+inside the borrowed task sandbox, outside the task workdir. The paired `dsh-ssh`
+bridge forwards native control and Unix socket streams into that exact sandbox.
+Headless admission waits for the remote execution services to activate.
+
+Model credentials, generated HOME/config, sessions and CLI profile state stay
+under `/run/aries/dsh` in the separate harness container. OpenSSH reads
+`/root/.ssh/config` independently of `HOME`; its known-hosts file contains the
+run bridge's scanned public key. Stop uses shared ownership and cleanup gates.
+
+Private artifacts retain instruction, configuration, headless events, stderr,
+timing and native root/child sessions. Persistence uses `compression: none`
+for readable, redacted JSONL. Full tool calls and request context are in the
+sessions; headless events are a bounded projection. SSH audit records describe
+transport operations and mark truncated input prefixes explicitly.
+CLI stdout/stderr and each session file are capped at 16 MiB; the complete
+session archive is capped at 64 MiB, including metadata and skipped entries.
+Exceeding a bound fails the harness with an evidence error and preserves
+already-collected artifacts. CLI output overflow also terminates that exec
+through deployment's existing cancellation path.
+
 ## OpenClaw Gateway and voice
 
 OpenClaw container lifecycle, gateway protocol, and voice-session semantics are

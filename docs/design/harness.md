@@ -56,7 +56,7 @@ explicit constructor. Component behavior remains in its concrete package;
 implementation selection belongs in `cmd/aries`, while configuration translation,
 construction, and rollback belong in `internal/app/wiring/harness`.
 
-Both concrete managers compose a named `runtime *harness.Runtime` from
+Concrete managers compose a named `runtime *harness.Runtime` from
 [pkg/harness](../../pkg/harness/harness.go). This common implementation owns
 allocation, rollback, single-instruction admission, cleanup coordination, and
 credential/artifact mechanics. `RuntimeOptions` carries the shared deployment,
@@ -77,7 +77,7 @@ deployment operations, and a Gateway client performs the agent protocol. Shutdow
 Changing hosting must preserve Gateway semantics, request correlation,
 cancellation, credentials, artifacts, and isolation.
 
-Current implementations are [OpenClaw and Hermes](../implementation/harnesses.md).
+Current implementations are [OpenClaw, Hermes and DSH](../implementation/harnesses.md).
 New harnesses must preserve these lifecycle and ownership guarantees, with tests
 for partial startup, run failure, cancellation, idempotent stop, positive absence,
 credentials, and artifacts. Concrete voice modes and MCP configuration do not
