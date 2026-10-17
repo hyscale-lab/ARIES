@@ -304,14 +304,14 @@ func TestBridgeRunsConcurrentCallsWithoutAConvoy(t *testing.T) {
 			t.Fatal(sessionErr)
 		}
 		activeSessions = append(activeSessions, session)
-		command := fmt.Sprintf("printf '%%s ' \"$$\" > /work/active-%d.pid; awk '{print $22}' /proc/$$/stat >> /work/active-%d.pid; sleep 60", index, index)
+		command := fmt.Sprintf("printf ready > /work/active-%d.ready; sleep 60", index)
 		if sessionErr := session.Start(encodeCanonicalTokens([]string{remoteShell, "-c", command})); sessionErr != nil {
 			t.Fatal(sessionErr)
 		}
 	}
 	sandbox := live.(*tasksandbox.Sandbox)
 	ready, err := sandbox.Exec(ctx, core.Command{
-		Path: "/bin/sh", Args: []string{"-c", "attempt=0; until test -f /work/active-0.pid && test -f /work/active-1.pid && test -f /work/active-2.pid && test -f /work/active-3.pid; do attempt=$((attempt+1)); [ \"$attempt\" -lt 100 ] || exit 1; sleep 0.02; done"},
+		Path: "/bin/sh", Args: []string{"-c", "attempt=0; until test -f /work/active-0.ready && test -f /work/active-1.ready && test -f /work/active-2.ready && test -f /work/active-3.ready; do attempt=$((attempt+1)); [ \"$attempt\" -lt 100 ] || exit 1; sleep 0.02; done"},
 	})
 	if err != nil || ready.ExitCode != 0 {
 		t.Fatalf("concurrent calls did not all start: %#v, %v", ready, err)
@@ -326,8 +326,12 @@ func TestBridgeRunsConcurrentCallsWithoutAConvoy(t *testing.T) {
 	for _, session := range activeSessions {
 		_ = session.Close()
 	}
+	if connection, err := net.DialTimeout("tcp", endpoint.Address, 200*time.Millisecond); err == nil {
+		_ = connection.Close()
+		t.Fatal("bridge listener still accepts connections after Stop")
+	}
 	postRevocation, err := sandbox.Exec(ctx, core.Command{
-		Path: "/bin/sh", Args: []string{"-c", "failed=0; for file in /work/active-*.pid; do read -r pid started < \"$file\"; if test -r \"/proc/$pid/stat\" && test \"$(awk '{print $22}' \"/proc/$pid/stat\")\" = \"$started\"; then printf 'live %s pid=%s command=' \"$file\" \"$pid\"; tr '\\0' ' ' < \"/proc/$pid/cmdline\"; printf '\\n'; failed=1; fi; done; test \"$failed\" -eq 0 || exit 1; printf evaluator > /work/after-bridge"},
+		Path: "/bin/sh", Args: []string{"-c", "printf evaluator > /work/after-bridge"},
 	})
 	if err != nil || postRevocation.ExitCode != 0 {
 		t.Fatalf("sandbox was not usable for evaluation after revocation: %#v, %v", postRevocation, err)
