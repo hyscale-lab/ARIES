@@ -620,9 +620,11 @@ Use full names for these checked fields: for example, `tensor-parallel-size`,
 Aliases such as `tp-size` or `tp`, and abbreviations of checked fields, are
 rejected before startup so native execution and GPU measurement cannot disagree
 because they read different spellings of the same setting.
-ARIES also rejects option keys containing `=` and scalar values or list items
-starting with `-` (including negative numbers): SGLang converts these YAML entries
-to command-line arguments, where they could override the checked settings.
+ARIES also rejects option keys containing `=`. Scalar values and list items
+starting with `-` must be numeric, so they cannot introduce command-line options
+that override the checked settings.
+Negative numeric values such as `chunked-prefill-size: -1` pass through for
+SGLang to validate; endpoint and GPU topology limits remain enforced by ARIES.
 For example, `enable-metrics`, quantization, context length, memory settings, and
 parser options use SGLang's own configuration and defaults.
 

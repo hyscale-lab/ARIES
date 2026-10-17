@@ -89,8 +89,12 @@ func validateNativeOptions(options map[string]any) error {
 			values = []any{value}
 		}
 		for _, value := range values {
-			if strings.HasPrefix(fmt.Sprint(value), "-") {
-				return fmt.Errorf("SGLang option %q values must not start with '-'", option)
+			argument := fmt.Sprint(value)
+			if strings.HasPrefix(argument, "-") {
+				// SGLang uses negative numeric sentinels, such as chunked-prefill-size: -1.
+				if _, err := strconv.ParseFloat(argument, 64); err != nil {
+					return fmt.Errorf("SGLang option %q values must not start with '-' unless numeric", option)
+				}
 			}
 		}
 		if option == "" {

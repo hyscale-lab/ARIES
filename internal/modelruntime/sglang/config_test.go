@@ -28,11 +28,15 @@ func TestSGLangNativeConfigAllowsNativeOptionsAndDefaults(t *testing.T) {
 		"tool-call-parser: qwen\n", "",
 	).Replace(nativeConfig)
 	for name, content := range map[string]string{
-		"complete":        nativeConfig,
-		"native options":  nativeConfig + "enable-metrics: true\nlog-requests: true\nquantization: fp8\n",
-		"native defaults": withoutOptional,
-		"native values":   nativeConfig + "lora-paths: [adapter=/models/my-adapter]\njson-model-override-args: '{\"text\": \"--tp=2\"}'\n",
-		"nested values":   nativeConfig + "json-model-override-args: {text: --tp=2}\n",
+		"complete":          nativeConfig,
+		"native options":    nativeConfig + "enable-metrics: true\nlog-requests: true\nquantization: fp8\n",
+		"native defaults":   withoutOptional,
+		"native values":     nativeConfig + "lora-paths: [adapter=/models/my-adapter]\njson-model-override-args: '{\"text\": \"--tp=2\"}'\n",
+		"nested values":     nativeConfig + "json-model-override-args: {text: --tp=2}\n",
+		"negative sentinel": nativeConfig + "chunked-prefill-size: -1\nexpert-distribution-recorder-buffer-size: -1\n",
+		"quoted negative":   nativeConfig + "chunked-prefill-size: '-1'\n",
+		"negative list":     nativeConfig + "custom-weight-loader: [-1, -0.5, '-.5']\n",
+		"merged negative":   nativeConfig + "<<: {chunked-prefill-size: -1}\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg, err := LoadNativeConfig(writeNativeConfig(t, content), "Qwen/Qwen3-8B", "http://host:30000/v1")
@@ -84,15 +88,15 @@ func TestSGLangNativeConfigRejectsArgumentOverrides(t *testing.T) {
 		})
 	}
 	for name, content := range map[string]string{
-		"scalar":        nativeConfig + "lora-target-modules: --tp=2\n",
-		"list":          nativeConfig + "lora-target-modules: [q_proj, --tp=2]\n",
-		"split list":    nativeConfig + "lora-target-modules: [--tp, 2]\n",
-		"merged value":  nativeConfig + "<<: {lora-target-modules: [--tp=2]}\n",
-		"aliased value": nativeConfig + "json-model-override-args: {text: &arg --tp=2}\nlora-target-modules: [*arg]\n",
-		"host":          strings.Replace(nativeConfig, "host: 0.0.0.0", "host: --tp=2", 1),
-		"device":        strings.Replace(nativeConfig, "device: cuda", "device: --tp=2", 1),
-		"served model":  strings.Replace(nativeConfig, "served-model-name: Qwen/Qwen3-8B", "served-model-name: --tp=2", 1),
-		"negative":      nativeConfig + "watchdog-timeout: -1\n",
+		"scalar":         nativeConfig + "lora-target-modules: --tp=2\n",
+		"list":           nativeConfig + "lora-target-modules: [q_proj, --tp=2]\n",
+		"split list":     nativeConfig + "lora-target-modules: [--tp, 2]\n",
+		"merged value":   nativeConfig + "<<: {lora-target-modules: [--tp=2]}\n",
+		"aliased value":  nativeConfig + "json-model-override-args: {text: &arg --tp=2}\nlora-target-modules: [*arg]\n",
+		"host":           strings.Replace(nativeConfig, "host: 0.0.0.0", "host: --tp=2", 1),
+		"device":         strings.Replace(nativeConfig, "device: cuda", "device: --tp=2", 1),
+		"served model":   strings.Replace(nativeConfig, "served-model-name: Qwen/Qwen3-8B", "served-model-name: --tp=2", 1),
+		"numeric prefix": nativeConfig + "custom-weight-loader: [-1--tp=2]\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := LoadNativeConfig(writeNativeConfig(t, content), "Qwen/Qwen3-8B", "http://host:30000/v1"); err == nil || !strings.Contains(err.Error(), "must not start with '-'") {

@@ -17,7 +17,7 @@ import (
 
 const (
 	qaTaskID        = "task-6905333b74f22949d97ba998"
-	qaTaskWorkdir   = "/"
+	qaTaskWorkdir   = "/app"
 	qaTaskImage     = "example.invalid/swe-atlas-qa:fixture"
 	qaInstruction   = "I am onboarding on a codebase. Write your answer to /logs/agent/answer.txt.\n"
 	fixtureRevision = "cccccccccccccccccccccccccccccccccccccccc"

@@ -43,7 +43,7 @@ func TestPinnedQATaskCheckout(t *testing.T) {
 	if len(tasks) != 1 || tasks[0].ID != qaTaskID {
 		t.Fatalf("Tasks() = %#v", tasks)
 	}
-	if tasks[0].Environment.Workdir != "/" {
-		t.Fatalf("Workdir = %q, want / at the pinned QA revision", tasks[0].Environment.Workdir)
+	if tasks[0].Environment.Workdir != "/app" {
+		t.Fatalf("Workdir = %q, want /app as required by the QA methodology", tasks[0].Environment.Workdir)
 	}
 }

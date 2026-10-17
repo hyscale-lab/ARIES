@@ -353,10 +353,10 @@ func loadTask(root, id string) (core.Task, taskDetails, error) {
 			ID:          id,
 			Instruction: instruction,
 			Timeout:     agentTimeout,
-			// The pinned QA Dockerfiles contain only FROM; retain the adapter's / default.
+			// Upstream QA places the repository and starts the agent in /app.
 			Environment: core.Environment{
 				Image:        image,
-				Workdir:      "/",
+				Workdir:      "/app",
 				CPU:          parsed.Environment.CPUs,
 				MemoryMB:     parsed.Environment.MemoryMB,
 				StorageMB:    parsed.Environment.StorageMB,
