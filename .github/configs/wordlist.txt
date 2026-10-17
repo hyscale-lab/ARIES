@@ -27,6 +27,7 @@ cpu
 cpus
 csv
 ctrf
+cwd
 deduplicates
 deepseek
 deepseek's
@@ -35,6 +36,7 @@ DNS
 docker
 Docker's
 dockerfile
+dockerfiles
 drb
 durations
 edu
@@ -50,6 +52,7 @@ gRPC
 handoff
 hermes
 hermes's
+heredocs
 hostname
 html
 http
@@ -80,6 +83,7 @@ NativeServer
 NCSpeech
 noncanonical
 nousresearch
+npm
 ntu
 nvidia
 OAuth
@@ -145,6 +149,7 @@ stdout
 stt
 subagent
 subagents
+subdirectory
 submodule
 subpackages
 substitutable

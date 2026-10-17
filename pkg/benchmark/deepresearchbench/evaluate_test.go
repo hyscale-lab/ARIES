@@ -264,12 +264,18 @@ func TestEvaluateWritesFullRaceDimensionBreakdownArtifact(t *testing.T) {
 
 func TestEvaluateWritesArtifacts(t *testing.T) {
 	race := &stubRace{result: raceResult{Overall: 0.8}}
-	benchmark, root := newTestBenchmark(t, race)
-	_ = root
-	sandbox := &evaluateFake{downloadContent: "candidate report"}
-	evaluation, err := benchmark.Evaluate(context.Background(), core.Task{ID: "1"}, sandbox, nil)
+	benchmark, _ := newTestBenchmark(t, race)
+	tasks, err := benchmark.Tasks(context.Background())
 	if err != nil {
 		t.Fatal(err)
+	}
+	sandbox := &evaluateFake{downloadContent: "candidate report"}
+	evaluation, err := benchmark.Evaluate(context.Background(), tasks[0], sandbox, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if race.prompt != "research prompt 1" {
+		t.Fatalf("judge received harness instructions instead of the dataset question: %q", race.prompt)
 	}
 	if len(evaluation.LogPaths) != 3 {
 		t.Fatalf("LogPaths = %v", evaluation.LogPaths)

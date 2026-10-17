@@ -10,10 +10,14 @@ and [lifecycle](architecture.md#task-lifecycle).
 | ToolSandbox | Keep the task environment live through evaluation; create fresh Runner-owned evaluation sandboxes from it on request. |
 | ToolBridge | Grant temporary access to one exact sandbox; confirm revocation. |
 
-- Keep implementations independent; paired bridges may borrow narrow sandbox
-  capabilities. Pair Hermes/OpenClaw with their respective SSH dialects. Keep
-  harness-generated per-user state, including `HOME`, outside the task workdir.
-- Preserve exact argv/workdir and native semantics. Never retry ambiguous
+- Keep implementations independent; a paired bridge may consume a narrow sandbox
+  capability. Pair Hermes/OpenClaw with their corresponding SSH bridges.
+  Configure harness-generated per-user state (such as default `HOME`) outside
+  the task workdir; preserve explicit native per-call overrides.
+- Preserve shell bodies and native protocol semantics; adapt provider-owned path
+  arguments or filesystem mappings without rewriting agent command text. Honor
+  benchmark-defined workdirs; resolve unspecified workdirs from the running image
+  before exposing access. Never retry ambiguous
   submissions, widen accepted payloads to hide failures, or enable Hermes credential sync.
 - Task/evaluation handles borrow run connectivity. Releasing one must not remove
   the network or close peers' transports. Do not require a private network per pair.
@@ -32,6 +36,9 @@ and [lifecycle](architecture.md#task-lifecycle).
 - Preserve benchmark pins, candidate sanitization, verifier privacy, required checks,
   and score meaning. Follow upstream evaluation, including fresh-sandbox methods
   where required; see [benchmark contracts](../docs/design/benchmark.md).
+- Keep DRB's [harness task adaptation](../docs/benchmarks/deep-research-bench.md#harness-task-prompt)
+  separate from its unchanged dataset question supplied to the judge; record prompt
+  changes as experimental method changes.
 
 Details: [harness](../docs/design/harness.md), [bridge](../docs/design/bridge.md),
 [sandbox](../docs/design/sandbox.md), [deployment](../docs/design/deployment.md),

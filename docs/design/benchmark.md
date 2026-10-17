@@ -22,6 +22,14 @@ starter; the benchmark uses their execution and transfer operations rather than
 constructing a deployment. Runner owns every evaluation sandbox it starts and
 stops them after `Evaluate` returns.
 
+The application loads the selected catalog once during run preparation and uses
+that same snapshot to pull images and create task occurrences. Concrete adapters
+retain private metadata and expose `ForTask` to command wiring, which returns a
+fresh benchmark owner with the occurrence ID. Public environment maps and service
+lists are copied; mutable preparation state belongs to that occurrence. Harness,
+sandbox, and bridge owners are also fresh. Runner still receives the same four
+roles and obtains the occurrence's cached task through `Tasks`.
+
 ## Lifecycle, cancellation, and failures
 
 [Runner](../../pkg/runner/runner.go) loads tasks, starts the sandbox, prepares it,

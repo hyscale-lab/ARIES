@@ -76,13 +76,14 @@ func executeAndAudit(t *testing.T, wire string, input []byte) ([]core.Command, [
 	return sandbox.snapshot(), testfixture.ReadToolCalls(t, endpoint.LogPaths[0]), structured, raw
 }
 
-func TestVirtualizedExecutionKeepsWireEvidenceAndRecordsExecutedState(t *testing.T) {
-	wire := encodeCanonicalTokens(generatedArgv("cd " + virtualWorkspace + " && cat " + virtualWorkspace + "/input >" + virtualWorkspace + "/output"))
+func TestExecutionKeepsWireEvidenceAndShellBody(t *testing.T) {
+	argv := generatedArgv("cd " + virtualWorkspace + " && cat " + virtualWorkspace + "/input >" + virtualWorkspace + "/output")
+	wire := encodeCanonicalTokens(argv)
 	commands, records, _, raw := executeAndAudit(t, wire, nil)
-	if len(commands) != 1 || commands[0].Args[1] != "cd /workspace && cat /workspace/input >/workspace/output" || commands[0].Env["HOME"] != generatedHome {
+	if len(commands) != 1 || commands[0].Args[1] != argv[len(argv)-1] || commands[0].Env["HOME"] != "/tmp" {
 		t.Fatalf("executed commands = %#v", commands)
 	}
-	if len(records) != 1 || records[0]["workspace_home"] != generatedHome || records[0]["command"] != commands[0].Args[1] {
+	if len(records) != 1 || records[0]["workspace_home"] != "/tmp" || records[0]["command"] != commands[0].Args[1] {
 		t.Fatalf("structured record = %#v", records)
 	}
 	prepared, refusal := (Dialect{}).Prepare(wire, "/workspace")
@@ -90,7 +91,7 @@ func TestVirtualizedExecutionKeepsWireEvidenceAndRecordsExecutedState(t *testing
 		t.Fatal(refusal)
 	}
 	hash := func(value string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(value))) }
-	if records[0]["command_hash"] != hash(prepared.HashInput) || records[0]["command_hash"] == hash(wire) {
+	if records[0]["command_hash"] != hash(prepared.HashInput) || records[0]["command_hash"] != hash(wire) {
 		t.Fatalf("hash = %#v", records[0])
 	}
 	if !reflect.DeepEqual(records[0]["env_names"], []any{"HOME", "LANG", "OPENCLAW_SHELL", "PATH"}) {

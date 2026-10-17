@@ -57,9 +57,13 @@ do not remove exact sandbox binding, verifier isolation, or resource ownership.
 The child's [NativeServer](../../pkg/bridge/bridge.go) receives a borrowed streaming
 executor, with no sandbox lifecycle authority. Shared SSH code owns serving,
 streams, cancellation and recording; OpenClaw and Hermes dialects own grammar,
-workspace translation and refusal policy. The thin `aries-ssh-client` forwards
+workspace adaptation and refusal policy. The thin `aries-ssh-client` forwards
 OpenClaw's command bytes without interpreting server grammar. Wiring supplies
-native factories and optional client staging. See [SSH bridges](../implementation/ssh-bridges.md).
+native factories and optional client staging. OpenClaw's concrete server prepares
+its workspace alias before starting the shared SSH manager; the alias remains
+sandbox-owned through evaluation and disappears with sandbox removal. Native
+cwd-validation arguments are mapped to the task root, while shell bodies pass
+through unchanged. See [SSH bridges](../implementation/ssh-bridges.md).
 
 ## Lifecycle, cancellation, and failure
 

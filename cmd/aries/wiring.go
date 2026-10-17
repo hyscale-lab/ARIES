@@ -23,16 +23,15 @@ import (
 
 func commandWiring() app.Wiring {
 	return app.Wiring{
-		PrepareBackend:       prepareBackend,
-		PrepareBridge:        prepareBridge,
-		ValidateComponents:   validateComponents,
-		SetupBenchmark:       setupBenchmark,
-		LoadPreparationTasks: loadPreparationTasks,
-		PullImages:           pullImages,
-		BuildHarnessImage:    buildHarnessImage,
-		NewBenchmark:         newBenchmark,
-		NewHarness:           newHarness,
-		NewInfrastructure:    newInfrastructure,
+		PrepareBackend:     prepareBackend,
+		PrepareBridge:      prepareBridge,
+		ValidateComponents: validateComponents,
+		SetupBenchmark:     setupBenchmark,
+		LoadBenchmark:      loadBenchmark,
+		PullImages:         pullImages,
+		BuildHarnessImage:  buildHarnessImage,
+		NewHarness:         newHarness,
+		NewInfrastructure:  newInfrastructure,
 	}
 }
 
@@ -93,19 +92,14 @@ func prepareBackend(cfg config.Config, outputDir string) (app.PreparedBackend, e
 	}
 }
 
-func newBenchmark(cfg config.Config, outputRoot, logicalID, occurrenceID string, lookup func(string) ([]byte, bool)) (runner.Benchmark, error) {
-	var executionIDs []string
-	if occurrenceID != logicalID {
-		executionIDs = []string{occurrenceID}
-	}
-	benchmark, err := benchmarkForTasks(cfg, outputRoot, []string{logicalID}, executionIDs, lookup)
-	if err != nil {
-		return nil, fmt.Errorf("construct %s benchmark: %w", cfg.Benchmark.Type, err)
-	}
-	return benchmark, nil
+// preparedTaskBenchmark is a concrete adapter capability used only by command wiring.
+// Runner continues to consume the four standard roles.
+type preparedTaskBenchmark interface {
+	runner.Benchmark
+	ForTask(string, string) (runner.Benchmark, error)
 }
 
-func benchmarkForTasks(cfg config.Config, outputRoot string, taskIDs, executionIDs []string, lookup func(string) ([]byte, bool)) (runner.Benchmark, error) {
+func benchmarkForTasks(cfg config.Config, outputRoot string, taskIDs, executionIDs []string, lookup func(string) ([]byte, bool)) (preparedTaskBenchmark, error) {
 	switch cfg.Benchmark.Type {
 	case "terminalbench2":
 		return benchmarkwiring.NewTerminalBench(cfg, outputRoot, taskIDs, executionIDs, lookup)
@@ -236,16 +230,16 @@ func setupBenchmark(ctx context.Context, cfg config.Config) error {
 	}
 }
 
-func loadPreparationTasks(ctx context.Context, cfg config.Config, taskIDs []string, lookup func(string) ([]byte, bool)) ([]core.Task, error) {
-	benchmark, err := benchmarkForTasks(cfg, cfg.OutputDir, taskIDs, nil, lookup)
+func loadBenchmark(ctx context.Context, cfg config.Config, outputRoot string, taskIDs []string, lookup func(string) ([]byte, bool)) (app.PreparedBenchmark, error) {
+	benchmark, err := benchmarkForTasks(cfg, outputRoot, taskIDs, nil, lookup)
 	if err != nil {
-		return nil, fmt.Errorf("validate %s profile: %w", cfg.Benchmark.Type, err)
+		return app.PreparedBenchmark{}, fmt.Errorf("validate %s profile: %w", cfg.Benchmark.Type, err)
 	}
 	tasks, err := benchmark.Tasks(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("load %s tasks: %w", cfg.Benchmark.Type, err)
+		return app.PreparedBenchmark{}, fmt.Errorf("load %s tasks: %w", cfg.Benchmark.Type, err)
 	}
-	return tasks, nil
+	return app.PreparedBenchmark{Tasks: tasks, NewOccurrence: benchmark.ForTask}, nil
 }
 
 func validateDeployment(cfg *config.Config) error {

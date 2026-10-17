@@ -15,6 +15,10 @@ Use `configs/versions.json` for pins; do not duplicate the field inventory here.
 - Match model IDs to the served catalog. Keep credential values out of profiles,
   metadata, logs, and results; use configured environment-variable references.
 - Preserve [DeepSeek credential-file validation and fallback](../docs/configuration.md#external-deepseek).
+- For managed SGLang, validate endpoint and measurement settings using full option
+  names; reject aliases and abbreviations that bypass those checks, keys containing
+  `=`, and scalar values or list items starting with `-` unless numeric. Pass other
+  native options through for SGLang to validate.
 - Remove model credentials from managed SGLang's child environment. Use HTTPS for
   remote/credentialed endpoints; local HTTP uses a non-secret placeholder. URL
   validation does not enforce this [transport policy](../docs/implementation/model-runtime.md#implementation-gap-http-transport-policy).

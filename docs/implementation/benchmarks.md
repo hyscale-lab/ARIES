@@ -5,6 +5,14 @@ Its [lifecycle contract](../design/benchmark.md#lifecycle-cancellation-and-failu
 defines when preparation and evaluation may run. User setup and
 result interpretation remain in the [benchmark guides](../design/benchmark.md#implementations-and-guides).
 
+Run preparation loads each selected task once after validating the pinned
+checkout. The resulting catalog serves image preparation and every occurrence,
+including repeated task IDs and looped or scheduled arrivals. Each occurrence
+gets its own task ID and benchmark state, so artifacts and Toolathlon's private
+stash and grader bundle cannot overlap. Task snapshots carry no verifier data.
+Existing preparation and evaluation revision checks remain in place where the
+adapter consumes checkout files.
+
 Deep Research Bench and SWE-Atlas share the concrete
 [Chat Completions client](../../pkg/model/chat.go) for credentials, request
 settings, HTTP handling, response limits, and content extraction. Each benchmark
@@ -13,8 +21,11 @@ The shared client sends one request per call; it adds no retry policy.
 
 ## Terminal-Bench 2
 
-Task loading derives the image, workdir, limits, and verifier timeout from the
-pinned task checkout. Preparation removes private paths and confirms their
+Task loading derives the image, limits, and verifier timeout from the pinned
+task checkout. It leaves the working directory unspecified so sandbox startup
+can discover the running image's actual directory, including inherited metadata
+and expanded image variables. No Dockerfile parser or root fallback is used.
+Preparation removes private paths and confirms their
 absence before bridge access. After the isolation gates, evaluation clears stale
 verifier paths, uploads the private test files, and runs `/bin/bash /tests/test.sh`
 in the task workdir. It retains stdout, stderr, `ctrf.json`, and `reward.txt`.
@@ -32,7 +43,9 @@ Sources: [task loading and preparation](../../pkg/benchmark/terminalbench/termin
 Deep Research Bench has no sandbox-resident private verifier tree. Its private
 material is a reference report and RACE-dimension rubric compared by an
 LLM judge entirely host-side; that material is never uploaded into the
-sandbox. `PrepareSandbox` instead confirms the agent's designated report-output
+sandbox. With RACE enabled, catalog loading reads the prompt, reference, and
+criteria files once and retains only selected judge inputs. Invalid or missing
+judge inputs fail preparation before task execution. `PrepareSandbox` confirms the agent's designated report-output
 path starts absent, and `Evaluate` downloads the report before invoking the judge.
 
 An optional FACT pass layers citation-trustworthiness checking on top of RACE:

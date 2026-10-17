@@ -125,10 +125,10 @@ func TestRuntimeLifecycleLogsAreStructuredAndSanitized(t *testing.T) {
 			runtime := &recordingRuntime{events: &events, done: make(chan struct{}), err: errors.New("runtime secret body canary"), stopErr: tc.stopErr}
 			wiring := failingRunWiring(runtime, &events, errors.New("run body canary"))
 			if tc.unexpected {
-				wiring.NewBenchmark = func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
+				wiring.LoadBenchmark = replaceTestOccurrence(wiring.LoadBenchmark, func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
 					close(runtime.done)
 					return nil, errors.New("run body canary")
-				}
+				})
 			}
 			var logs bytes.Buffer
 			logger := logrus.New()
@@ -170,15 +170,15 @@ func failingRunWiring(runtime ModelRuntime, events *[]string, runErr error) Wiri
 			return PreparedBackend{Model: cfg.CoreModel(), Runtime: runtime}, nil
 		},
 		SetupBenchmark: func(context.Context, config.Config) error { return nil },
-		LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
+		LoadBenchmark: testBenchmarkLoader(func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
 			return nil, nil
-		},
-		BuildHarnessImage: func(context.Context, config.Config) error { return nil },
-		PullImages:        func(context.Context, config.Config, []string) error { return nil },
-		NewBenchmark: func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
+		}, func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
 			*events = append(*events, "run")
 			return nil, runErr
-		},
+		}),
+		BuildHarnessImage: func(context.Context, config.Config) error { return nil },
+		PullImages:        func(context.Context, config.Config, []string) error { return nil },
+
 		NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
 			return HarnessInstance{}, nil
 		},
@@ -198,10 +198,10 @@ func TestBackendPreparationPrecedesAllEffects(t *testing.T) {
 	called := false
 	wiring := Wiring{ValidateComponents: func(config.Config) error { return nil }, PrepareBackend: func(config.Config, string) (PreparedBackend, error) {
 		return PreparedBackend{}, errors.New("prepare canary")
-	}, NewBenchmark: func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
+	}, LoadBenchmark: testBenchmarkLoader(nil, func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
 		called = true
 		return nil, nil
-	}}
+	})}
 	err := runCommandForTest(context.Background(), profile, io.Discard, Dependencies{Wiring: wiring})
 	if err == nil || !strings.Contains(err.Error(), "prepare canary") || called {
 		t.Fatalf("err=%v called=%t", err, called)
@@ -224,20 +224,36 @@ func TestRunForwardsFreshPreparedGPUIndicesToEveryOccurrence(t *testing.T) {
 	}
 	preparedGPUIndices := []int{4, 2}
 	sandboxCalls := 0
+	catalogLoads := 0
+	var occurrenceIDs []string
 	wiring := Wiring{
 		ValidateComponents: func(config.Config) error { return nil },
 		PrepareBackend: func(cfg config.Config, _ string) (PreparedBackend, error) {
 			return PreparedBackend{Model: cfg.CoreModel(), EffectiveGPUIndices: preparedGPUIndices}, nil
 		},
 		SetupBenchmark: func(context.Context, config.Config) error { return nil },
-		LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
-			return nil, nil
+		LoadBenchmark: func(_ context.Context, _ config.Config, output string, ids []string, _ func(string) ([]byte, bool)) (PreparedBenchmark, error) {
+			catalogLoads++
+			if !reflect.DeepEqual(ids, []string{"a"}) {
+				t.Fatalf("catalog selected IDs = %v", ids)
+			}
+			if filepath.Base(output) == "runs" {
+				t.Fatal("catalog did not receive the run output directory")
+			}
+			return PreparedBenchmark{
+				Tasks: []core.Task{{ID: "a", Environment: core.Environment{Image: "image:tag"}}},
+				NewOccurrence: func(logicalID, occurrenceID string) (runner.Benchmark, error) {
+					if logicalID != "a" {
+						t.Fatalf("logical ID = %s", logicalID)
+					}
+					occurrenceIDs = append(occurrenceIDs, occurrenceID)
+					return &managedIntegrationBenchmark{id: occurrenceID}, nil
+				},
+			}, nil
 		},
 		BuildHarnessImage: func(context.Context, config.Config) error { return nil },
 		PullImages:        func(context.Context, config.Config, []string) error { return nil },
-		NewBenchmark: func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
-			return &oneTaskBenchmark{}, nil
-		},
+
 		NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
 			return HarnessInstance{Harness: &stubHarness{}, Close: func() error { return nil }}, nil
 		},
@@ -256,8 +272,11 @@ func TestRunForwardsFreshPreparedGPUIndicesToEveryOccurrence(t *testing.T) {
 	doer := &preflightDoer{t: t, replies: []preflightReply{{status: 200, body: `{"data":[{"id":"deepseek-v4-flash"}]}`}}}
 	logger := logrus.New()
 	logger.SetOutput(io.Discard)
-	if err := runCommandForTest(context.Background(), profile, io.Discard, Dependencies{Logger: logger, PreflightClient: doer, Wiring: wiring}); err == nil || !strings.Contains(err.Error(), "observer report missing") {
+	if err := runCommandForTest(context.Background(), profile, io.Discard, Dependencies{Logger: logger, PreflightClient: doer, Wiring: wiring}); err != nil {
 		t.Fatalf("run error = %v", err)
+	}
+	if catalogLoads != 1 || len(occurrenceIDs) != 2 || occurrenceIDs[0] == occurrenceIDs[1] {
+		t.Fatalf("catalog loads = %d, occurrences = %v", catalogLoads, occurrenceIDs)
 	}
 	if sandboxCalls != 2 || !reflect.DeepEqual(preparedGPUIndices, []int{4, 2}) {
 		t.Fatalf("sandbox calls = %d, prepared GPU indices = %v", sandboxCalls, preparedGPUIndices)
@@ -307,16 +326,16 @@ func TestUnsupportedComponentsAreRejectedImmediatelyOnRunAndSetup(t *testing.T) 
 					},
 					PrepareBackend: func(config.Config, string) (PreparedBackend, error) { effects++; return PreparedBackend{}, nil },
 					SetupBenchmark: func(context.Context, config.Config) error { effects++; return nil },
-					LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
+					LoadBenchmark: testBenchmarkLoader(func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
 						effects++
 						return nil, nil
-					},
+					}, func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
+						effects++
+						return nil, nil
+					}),
 					BuildHarnessImage: func(context.Context, config.Config) error { return nil },
 					PullImages:        func(context.Context, config.Config, []string) error { effects++; return nil },
-					NewBenchmark: func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
-						effects++
-						return nil, nil
-					},
+
 					NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
 						effects++
 						return HarnessInstance{}, nil
@@ -464,13 +483,13 @@ func TestRuntimeExitCancelsAndDrainsRun(t *testing.T) {
 	constructed := 0
 	wiring := Wiring{ValidateComponents: func(config.Config) error { return nil }, PrepareBackend: func(cfg config.Config, _ string) (PreparedBackend, error) {
 		return PreparedBackend{Model: cfg.CoreModel(), Runtime: runtime}, nil
-	}, SetupBenchmark: func(context.Context, config.Config) error { return nil }, LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
+	}, SetupBenchmark: func(context.Context, config.Config) error { return nil }, LoadBenchmark: testBenchmarkLoader(func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
 		return nil, nil
-	}, BuildHarnessImage: func(context.Context, config.Config) error { return nil }, PullImages: func(context.Context, config.Config, []string) error {
-		return nil
-	}, NewBenchmark: func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
+	}, func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
 		constructed++
 		return &oneTaskBenchmark{}, nil
+	}), BuildHarnessImage: func(context.Context, config.Config) error { return nil }, PullImages: func(context.Context, config.Config, []string) error {
+		return nil
 	}, NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
 		return HarnessInstance{Harness: h, Close: func() error { return nil }}, nil
 	}, NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {

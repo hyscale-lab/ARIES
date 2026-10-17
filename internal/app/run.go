@@ -26,19 +26,24 @@ type SandboxInstance struct {
 	Close     func() error
 }
 
+// PreparedBenchmark keeps one run's selected catalog and creates fresh occurrence state.
+type PreparedBenchmark struct {
+	Tasks         []core.Task
+	NewOccurrence func(logicalID, occurrenceID string) (runner.Benchmark, error)
+}
+
 type Wiring struct {
-	NewInfrastructure    func(config.Config, string, string, *logrus.Logger) (*RunInfrastructure, error)
-	PrepareBridge        func(context.Context, config.Config) error
-	PrepareBackend       func(config.Config, string) (PreparedBackend, error)
-	ValidateComponents   func(config.Config) error
-	SetupBenchmark       func(context.Context, config.Config) error
-	LoadPreparationTasks func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error)
-	PullImages           func(context.Context, config.Config, []string) error
-	BuildHarnessImage    func(context.Context, config.Config) error
-	NewBenchmark         func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error)
-	NewHarness           func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error)
-	NewSandbox           func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error)
-	NewBridge            func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error)
+	NewInfrastructure  func(config.Config, string, string, *logrus.Logger) (*RunInfrastructure, error)
+	PrepareBridge      func(context.Context, config.Config) error
+	PrepareBackend     func(config.Config, string) (PreparedBackend, error)
+	ValidateComponents func(config.Config) error
+	SetupBenchmark     func(context.Context, config.Config) error
+	LoadBenchmark      func(context.Context, config.Config, string, []string, func(string) ([]byte, bool)) (PreparedBenchmark, error)
+	PullImages         func(context.Context, config.Config, []string) error
+	BuildHarnessImage  func(context.Context, config.Config) error
+	NewHarness         func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error)
+	NewSandbox         func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error)
+	NewBridge          func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error)
 }
 
 type Dependencies struct {
@@ -69,7 +74,7 @@ func Setup(ctx context.Context, profilePath string, stdout io.Writer, dependenci
 		return fmt.Errorf("load local API key: %w", err)
 	}
 	defer releaseAPIKeys()
-	if err := ensurePrepared(ctx, cfg, dependencies.Wiring, apiKeyLookup); err != nil {
+	if _, err := ensurePrepared(ctx, cfg, cfg.OutputDir, dependencies.Wiring, apiKeyLookup); err != nil {
 		return err
 	}
 	_, err = fmt.Fprintf(stdout, "profile ready: %s\n", profilePath)
@@ -114,7 +119,8 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 	defer releaseAPIKeys()
 	preparationEntry := logger.WithFields(logrus.Fields{"run_id": runID, "profile": cfg.Name, "backend": cfg.Runtime.Backend, "mode": cfg.Runtime.Mode, "component": "preparation"})
 	preparationEntry.WithField("preparation_state", "preparing").Info("profile preparation")
-	if err := ensurePrepared(ctx, cfg, dependencies.Wiring, apiKeyLookup); err != nil {
+	catalog, err := ensurePrepared(ctx, cfg, outputRoot, dependencies.Wiring, apiKeyLookup)
+	if err != nil {
 		preparationEntry.WithFields(logrus.Fields{"preparation_state": "not_prepared", "error_category": "preparation_failed"}).Error("profile preparation")
 		return err
 	}
@@ -236,7 +242,7 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 			return runWithInfrastructure(executionCtx, cfg, runID, outputRoot, logger, dependencies.Wiring, func(executionCtx context.Context, taskWiring Wiring) (core.RunResult, error) {
 				return runProfile(executionCtx, cfg.Name, runID, cfg.Benchmark.Tasks, cfg.Execution.Concurrency, cfg.Execution.Loop, schedule,
 					func(taskCtx context.Context, occurrence taskOccurrence) (core.RunResult, error) {
-						experiment, err := buildTaskExperiment(cfg, prepared.Model, prepared.EffectiveGPUIndices, runID, outputRoot, occurrence.logicalID, occurrence.executionID, harnessLookup, logger, taskWiring)
+						experiment, err := buildTaskExperiment(cfg, prepared.Model, prepared.EffectiveGPUIndices, runID, outputRoot, occurrence.logicalID, occurrence.executionID, harnessLookup, logger, catalog, taskWiring)
 						if err != nil {
 							return core.RunResult{}, err
 						}
@@ -255,34 +261,37 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 	return returnErr
 }
 
-func ensurePrepared(ctx context.Context, cfg config.Config, wiring Wiring, apiKeyLookup func(string) ([]byte, bool)) error {
-	if wiring.SetupBenchmark == nil || wiring.LoadPreparationTasks == nil || wiring.PullImages == nil || wiring.BuildHarnessImage == nil {
-		return errors.New("preparation wiring is incomplete")
+func ensurePrepared(ctx context.Context, cfg config.Config, outputRoot string, wiring Wiring, apiKeyLookup func(string) ([]byte, bool)) (PreparedBenchmark, error) {
+	if wiring.SetupBenchmark == nil || wiring.LoadBenchmark == nil || wiring.PullImages == nil || wiring.BuildHarnessImage == nil {
+		return PreparedBenchmark{}, errors.New("preparation wiring is incomplete")
 	}
 	if wiring.PrepareBridge != nil {
 		if err := wiring.PrepareBridge(ctx, cfg); err != nil {
-			return err
+			return PreparedBenchmark{}, err
 		}
 	}
 	if err := wiring.SetupBenchmark(ctx, cfg); err != nil {
-		return err
+		return PreparedBenchmark{}, err
 	}
-	tasks, err := wiring.LoadPreparationTasks(ctx, cfg, uniqueStrings(cfg.Benchmark.Tasks), apiKeyLookup)
+	catalog, err := wiring.LoadBenchmark(ctx, cfg, outputRoot, uniqueStrings(cfg.Benchmark.Tasks), apiKeyLookup)
 	if err != nil {
-		return err
+		return PreparedBenchmark{}, err
 	}
 	harnessImage, err := cfg.Versions.HarnessImage(cfg.Harness.Type)
 	if err != nil {
-		return err
+		return PreparedBenchmark{}, err
 	}
 	images := []string{harnessImage}
-	for _, task := range tasks {
+	for _, task := range catalog.Tasks {
 		images = append(images, task.Environment.Image)
 	}
 	if err := wiring.PullImages(ctx, cfg, uniqueStrings(images)); err != nil {
-		return err
+		return PreparedBenchmark{}, err
 	}
-	return wiring.BuildHarnessImage(ctx, cfg)
+	if err := wiring.BuildHarnessImage(ctx, cfg); err != nil {
+		return PreparedBenchmark{}, err
+	}
+	return catalog, nil
 }
 
 func validateWiredComponents(cfg config.Config, wiring Wiring) error {
@@ -312,14 +321,14 @@ func resolveOutputRoot(root, runID string) (string, error) {
 	return outputRoot, nil
 }
 
-func buildTaskExperiment(cfg config.Config, model core.ModelConfig, effectiveGPUIndices []int, runID, outputRoot, logicalID, occurrenceID string, apiKeyLookup func(string) ([]byte, bool), logger *logrus.Logger, wiring Wiring) (*experiment, error) {
+func buildTaskExperiment(cfg config.Config, model core.ModelConfig, effectiveGPUIndices []int, runID, outputRoot, logicalID, occurrenceID string, apiKeyLookup func(string) ([]byte, bool), logger *logrus.Logger, catalog PreparedBenchmark, wiring Wiring) (*experiment, error) {
 	if logger == nil {
 		logger = logrus.StandardLogger()
 	}
-	if wiring.NewBenchmark == nil || wiring.NewHarness == nil || wiring.NewSandbox == nil || wiring.NewBridge == nil {
+	if catalog.NewOccurrence == nil || wiring.NewHarness == nil || wiring.NewSandbox == nil || wiring.NewBridge == nil {
 		return nil, errors.New("component wiring is incomplete")
 	}
-	benchmark, err := wiring.NewBenchmark(cfg, outputRoot, logicalID, occurrenceID, apiKeyLookup)
+	benchmark, err := catalog.NewOccurrence(logicalID, occurrenceID)
 	if err != nil {
 		return nil, err
 	}

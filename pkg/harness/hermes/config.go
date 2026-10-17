@@ -5,16 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net"
-	"sort"
 	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/harness"
 	modelconfig "github.com/hyscale-lab/aries/pkg/model"
+	"go.yaml.in/yaml/v3"
 )
 
 const (
@@ -84,8 +84,8 @@ var sandboxToolsets = []string{"terminal", "file", "code_execution"}
 // the sandbox's workdir, which comes from the bridge's endpoint rather than the
 // profile; the SSH target itself is supplied through containerEnvironment.
 //
-// Optional blocks are written only when the profile set them, so a profile
-// without them renders the same file as before they existed:
+// Optional blocks are written only when the profile sets them, preserving
+// native omission and default semantics:
 //
 //   - model.context_length and model.max_tokens feed Hermes's compressor
 //     window arithmetic and output budget. Temperature is merged into the
@@ -132,8 +132,7 @@ func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *Voi
 			return nil, errors.New("Hermes compaction threshold must be smaller than the context length")
 		}
 	}
-	requestBody := settings.extraBody
-	if len(requestBody) != 0 && model.Provider == "deepseek" {
+	if len(settings.extraBody) != 0 && model.Provider == "deepseek" {
 		return nil, errors.New("Hermes merges user extra_body only for the custom provider, not deepseek")
 	}
 	provider := hermesProvider(model.Provider)
@@ -141,28 +140,25 @@ func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *Voi
 	if err != nil {
 		return nil, err
 	}
-	if reasoningBody != nil {
-		object := make(map[string]json.RawMessage)
-		if len(requestBody) != 0 {
-			if err := json.Unmarshal(requestBody, &object); err != nil || len(object) == 0 {
-				return nil, errors.New("Hermes extra_body must be a non-empty JSON object")
-			}
+	requestBody := make(map[string]any)
+	if len(settings.extraBody) != 0 {
+		decoder := json.NewDecoder(bytes.NewReader(settings.extraBody))
+		decoder.UseNumber()
+		if err := decoder.Decode(&requestBody); err != nil || len(requestBody) == 0 {
+			return nil, errors.New("Hermes extra_body must be a non-empty JSON object")
 		}
+		if err := decoder.Decode(new(any)); err != io.EOF {
+			return nil, errors.New("Hermes extra_body must be a non-empty JSON object")
+		}
+	}
+	if reasoningBody != nil {
 		for _, key := range []string{"reasoning_effort", "thinking", "reasoning"} {
-			if _, exists := object[key]; exists {
+			if _, exists := requestBody[key]; exists {
 				return nil, fmt.Errorf("Hermes model.reasoning_effort conflicts with extra_body.%s", key)
 			}
 		}
 		for key, value := range reasoningBody {
-			content, err := json.Marshal(value)
-			if err != nil {
-				return nil, fmt.Errorf("Hermes reasoning request body: %w", err)
-			}
-			object[key] = content
-		}
-		requestBody, err = json.Marshal(object)
-		if err != nil {
-			return nil, fmt.Errorf("Hermes reasoning request body: %w", err)
+			requestBody[key] = value
 		}
 		// The pin's DeepSeek profile omits thinking controls for deepseek-flash.
 		// Native custom-provider extras preserve the exact requested wire fields.
@@ -172,112 +168,88 @@ func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *Voi
 		if !harness.OpenAICompatible(model.Provider) {
 			return nil, errors.New("Hermes temperature requires the sglang or openai backend")
 		}
-		object := make(map[string]json.RawMessage)
-		if len(requestBody) != 0 {
-			if err := json.Unmarshal(requestBody, &object); err != nil || len(object) == 0 {
-				return nil, errors.New("Hermes extra_body must be a non-empty JSON object")
-			}
-		}
-		if _, exists := object["temperature"]; exists {
+		if _, exists := requestBody["temperature"]; exists {
 			return nil, errors.New("Hermes model.temperature conflicts with extra_body.temperature")
 		}
-		object["temperature"] = json.RawMessage(yamlFloat(*model.Temperature))
-		var err error
-		requestBody, err = json.Marshal(object)
-		if err != nil {
-			return nil, fmt.Errorf("Hermes request body: %w", err)
+		// The explicit tag keeps a whole temperature, including zero, a float
+		// when Hermes reads it with PyYAML.
+		requestBody["temperature"] = &yaml.Node{
+			Kind: yaml.ScalarNode, Tag: "!!float", Style: yaml.TaggedStyle,
+			Value: strconv.FormatFloat(*model.Temperature, 'g', -1, 64),
 		}
 	}
-	var extraBody string
-	if len(requestBody) != 0 {
-		if provider != "custom" {
-			return nil, errors.New("Hermes merges extra_body only for the custom provider, not " + model.Provider)
-		}
-		indented, err := indentedJSONObject(requestBody, "      ")
-		if err != nil {
-			return nil, fmt.Errorf("Hermes extra_body: %w", err)
-		}
-		extraBody = indented
+	modelConfig := map[string]any{
+		"default":  model.Model,
+		"provider": provider,
+		"base_url": model.BaseURL,
+		"api_key":  "${" + model.APIKeyEnv + "}",
+		"api_mode": "chat_completions",
 	}
-	var output bytes.Buffer
-	output.WriteString("model:\n")
-	output.WriteString("  default: " + yamlString(model.Model) + "\n")
-	output.WriteString("  provider: " + yamlString(provider) + "\n")
-	output.WriteString("  base_url: " + yamlString(model.BaseURL) + "\n")
-	output.WriteString("  api_key: " + yamlString("${"+model.APIKeyEnv+"}") + "\n")
-	output.WriteString("  api_mode: \"chat_completions\"\n")
 	if model.ContextLength > 0 {
-		output.WriteString("  context_length: " + strconv.Itoa(model.ContextLength) + "\n")
+		modelConfig["context_length"] = model.ContextLength
 	}
 	if model.MaxTokens > 0 {
-		output.WriteString("  max_tokens: " + strconv.Itoa(model.MaxTokens) + "\n")
+		modelConfig["max_tokens"] = model.MaxTokens
 	}
-	output.WriteString("\nagent:\n")
-	output.WriteString("  max_turns: " + strconv.Itoa(settings.maxTurns) + "\n")
+	agentConfig := map[string]any{"max_turns": settings.maxTurns}
 	var disabled []string
 	if !settings.subagentsEnabled {
 		disabled = append(disabled, "delegation")
 	}
 	if settings.noSandboxTools {
-		// Left out of platform_toolsets below as well; naming them here too
-		// keeps them off whatever a toolset's own default is.
+		// Keep these off whatever a toolset's own default is, as well as
+		// leaving them out of platform_toolsets below.
 		disabled = append(disabled, sandboxToolsets...)
 	}
 	if len(disabled) > 0 {
-		// The native API resolves this nested denylist after platform toolsets.
-		output.WriteString("  disabled_toolsets:\n")
-		for _, toolset := range disabled {
-			output.WriteString("    - " + toolset + "\n")
-		}
+		agentConfig["disabled_toolsets"] = disabled
+	}
+	config := map[string]any{
+		"model": modelConfig,
+		"agent": agentConfig,
+		// Listed plugins supply the per-call timing absent from the native
+		// session store. Images without hermes_otel skip the name.
+		"plugins": map[string]any{"enabled": []string{otelPluginName}},
+		"display": map[string]any{"streaming": false, "compact": true},
 	}
 	if settings.compaction != nil {
-		output.WriteString("\ncompression:\n")
+		compression := make(map[string]any)
 		if settings.compaction.Enabled != nil {
-			output.WriteString("  enabled: " + strconv.FormatBool(*settings.compaction.Enabled) + "\n")
+			compression["enabled"] = *settings.compaction.Enabled
 		}
 		if settings.compaction.ThresholdTokens > 0 {
-			output.WriteString("  threshold_tokens: " + strconv.Itoa(settings.compaction.ThresholdTokens) + "\n")
+			compression["threshold_tokens"] = settings.compaction.ThresholdTokens
+		}
+		if len(compression) == 0 {
+			config["compression"] = nil
+		} else {
+			config["compression"] = compression
 		}
 	}
-	if extraBody != "" {
-		// One entry, matched by base_url only (no model key), so it acts as
-		// the base_url fallback in Hermes's lookup and never shadows the
-		// credential or route already set in the model block above. YAML is
-		// a superset of JSON, so the object is written as an indented JSON
-		// flow mapping; Hermes then expands the ${ARIES_*} references inside
-		// it from the container environment (see containerEnvironment).
-		output.WriteString("\ncustom_providers:\n")
-		output.WriteString("  - name: \"aries\"\n")
-		output.WriteString("    base_url: " + yamlString(model.BaseURL) + "\n")
-		output.WriteString("    extra_body: " + extraBody + "\n")
+	if len(requestBody) > 0 {
+		if provider != "custom" {
+			return nil, errors.New("Hermes merges extra_body only for the custom provider, not " + model.Provider)
+		}
+		// The base_url fallback adds native request overrides without
+		// shadowing the model route or credential. Hermes expands any
+		// registered ${NAME} placeholders from its process environment.
+		config["custom_providers"] = []map[string]any{{
+			"name": "aries", "base_url": model.BaseURL,
+			"extra_body": yamlJSONNumbers(requestBody),
+		}}
 	}
 	if settings.subagentsEnabled && settings.maxConcurrentSubagents > 0 {
-		output.WriteString("\ndelegation:\n")
-		output.WriteString("  max_concurrent_children: " + strconv.Itoa(settings.maxConcurrentSubagents) + "\n")
+		config["delegation"] = map[string]any{"max_concurrent_children": settings.maxConcurrentSubagents}
 	}
-	// hermes_otel records each tool call, model call, and API request as a
-	// span stamped when it starts and ends. Hermes's own session store stamps
-	// messages when it saves the transcript on exit, so these spans are the
-	// only per-call timing. Hermes loads only listed plugins; an image
-	// without this one skips the name.
-	output.WriteString("\nplugins:\n")
-	output.WriteString("  enabled:\n")
-	output.WriteString("    - " + otelPluginName + "\n")
 	if voiceSTT != nil {
-		output.WriteString("\nstt:\n")
-		output.WriteString("  enabled: true\n")
-		output.WriteString("  provider: " + yamlString(voiceSTT.Provider) + "\n")
-		output.WriteString("  openai:\n")
-		output.WriteString("    model: " + yamlString(voiceSTT.Model) + "\n")
-		output.WriteString("  local:\n")
-		output.WriteString("    model: " + yamlString(voiceSTT.Model) + "\n")
-		output.WriteString("    language: " + yamlString(voiceSTT.Language) + "\n")
+		config["stt"] = map[string]any{
+			"enabled": true, "provider": voiceSTT.Provider,
+			"openai": map[string]any{"model": voiceSTT.Model},
+			"local":  map[string]any{"model": voiceSTT.Model, "language": voiceSTT.Language},
+		}
 	}
-	output.WriteString("\ndisplay:\n")
-	output.WriteString("  streaming: false\n")
-	output.WriteString("  compact: true\n")
-	// Native API agent construction resolves this platform-specific toolset list.
-	var toolsets []string
+	// Native API agent construction resolves this platform-specific list.
+	toolsets := []string{}
 	if !settings.noSandboxTools {
 		toolsets = append(toolsets, sandboxToolsets...)
 	}
@@ -287,76 +259,52 @@ func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *Voi
 	if settings.webSearchEnabled {
 		toolsets = append(toolsets, "web")
 	}
-	output.WriteString("\nplatform_toolsets:\n")
-	if len(toolsets) == 0 {
-		// An explicit empty list: the agent's only tools are its MCP servers'.
-		output.WriteString("  api_server: []\n")
-	} else {
-		output.WriteString("  api_server:\n")
-		for _, toolset := range toolsets {
-			output.WriteString("    - " + toolset + "\n")
-		}
-	}
+	config["platform_toolsets"] = map[string]any{"api_server": toolsets}
 	if settings.webSearchEnabled {
-		// search_backend (not backend) is deliberate: the DRB task sandbox's
-		// SearXNG instance is search-only. extract_backend is only added when
-		// a Tavily key is staged (extractEnabled); otherwise a web_extract
-		// call fails with Hermes's own explicit "no extract backend" error
-		// rather than an ambiguous one.
-		output.WriteString("\nweb:\n")
-		output.WriteString("  search_backend: \"searxng\"\n")
+		// The sandbox's SearXNG service is search-only. Only select Tavily
+		// extraction when its private credential file is staged.
+		web := map[string]any{"search_backend": "searxng"}
 		if settings.extractEnabled {
-			output.WriteString("  extract_backend: \"tavily\"\n")
+			web["extract_backend"] = "tavily"
 		}
+		config["web"] = web
 	}
-	// Hermes registers every tool a server lists -- directly as
-	// mcp_<name>_<tool> up to v2026.8.3, and as mcp__<name>__<tool> behind
-	// its tool_describe/tool_call pair from v2026.8.31; with no MCP server
-	// named in platform_toolsets, all configured servers are enabled
-	// (hermes_cli/tools_config.py).
+	// With no MCP server named in platform_toolsets, Hermes enables all
+	// configured servers through its native tool_describe/tool_call pair.
 	if len(settings.mcpServers) > 0 {
-		output.WriteString("\nmcp_servers:\n")
+		servers := make(map[string]any, len(settings.mcpServers))
 		for _, server := range settings.mcpServers {
-			output.WriteString("  " + server.Name + ":\n")
+			entry := make(map[string]any)
 			if server.URL != "" {
-				output.WriteString("    url: " + yamlString(server.URL) + "\n")
-				// streamable-http is Hermes's default when the key is absent.
+				entry["url"] = server.URL
+				// streamable-http is Hermes's default when this key is absent.
 				if server.Transport == "sse" {
-					output.WriteString("    transport: \"sse\"\n")
+					entry["transport"] = "sse"
 				}
 			} else if server.Command != "" {
-				output.WriteString("    command: " + yamlString(server.Command) + "\n")
+				entry["command"] = server.Command
 				if len(server.Args) > 0 {
-					output.WriteString("    args:\n")
-					for _, arg := range server.Args {
-						output.WriteString("      - " + yamlString(arg) + "\n")
-					}
+					entry["args"] = server.Args
 				}
 				if len(server.Env) > 0 || len(server.SecretEnv) > 0 {
-					output.WriteString("    env:\n")
-					keys := make([]string, 0, len(server.Env)+len(server.SecretEnv))
-					for k := range server.Env {
-						keys = append(keys, k)
+					environment := make(map[string]string, len(server.Env)+len(server.SecretEnv))
+					for key, value := range server.Env {
+						environment[key] = value
 					}
-					for k := range server.SecretEnv {
-						keys = append(keys, k)
+					for key, hostVar := range server.SecretEnv {
+						environment[key] = "${" + hostVar + "}"
 					}
-					sort.Strings(keys)
-					for _, k := range keys {
-						if hostVar, ok := server.SecretEnv[k]; ok {
-							output.WriteString("      " + k + ": " + yamlString("${"+hostVar+"}") + "\n")
-						} else {
-							output.WriteString("      " + k + ": " + yamlString(server.Env[k]) + "\n")
-						}
-					}
+					entry["env"] = environment
 				}
 			}
 			if server.TimeoutSeconds > 0 {
-				output.WriteString("    timeout: " + strconv.Itoa(server.TimeoutSeconds) + "\n")
+				entry["timeout"] = server.TimeoutSeconds
 			}
+			servers[server.Name] = entry
 		}
+		config["mcp_servers"] = servers
 	}
-	return output.Bytes(), nil
+	return yaml.Marshal(config)
 }
 
 // renderTerminal is the `terminal:` section appended to config.yaml. Hermes
@@ -376,12 +324,10 @@ func renderTerminal(workdir string, timeout int) ([]byte, error) {
 	if timeout <= 0 {
 		return nil, errors.New("Hermes terminal timeout must be positive")
 	}
-	var output bytes.Buffer
-	output.WriteString("\nterminal:\n")
-	output.WriteString("  backend: \"ssh\"\n")
-	output.WriteString("  cwd: " + yamlString(workdir) + "\n")
-	output.WriteString("  timeout: " + strconv.Itoa(timeout) + "\n")
-	return output.Bytes(), nil
+	rendered, err := yaml.Marshal(map[string]any{
+		"terminal": map[string]any{"backend": "ssh", "cwd": workdir, "timeout": timeout},
+	})
+	return append([]byte("\n"), rendered...), err
 }
 
 // validateGeneration mirrors pkg/config's checks so a caller that bypasses the
@@ -402,30 +348,27 @@ func validateGeneration(model core.ModelConfig) error {
 	return nil
 }
 
-// indentedJSONObject checks that raw is a non-empty JSON object and re-indents
-// it so every continuation line sits under the YAML key that owns it. The
-// bytes are re-indented, not re-encoded, so key order and number lexemes stay
-// exactly as the profile wrote them.
-func indentedJSONObject(raw []byte, prefix string) (string, error) {
-	var object map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &object); err != nil || len(object) == 0 {
-		return "", errors.New("must be a non-empty JSON object")
+// yamlJSONNumbers preserves JSON number precision in the request-body subtree.
+// Explicit float tags also make exponent-only literals numeric in Hermes's
+// YAML 1.1 reader; decoding through float64 would round large integers first.
+func yamlJSONNumbers(value any) any {
+	switch value := value.(type) {
+	case json.Number:
+		node := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: value.String()}
+		if strings.ContainsAny(value.String(), ".eE") {
+			node.Tag, node.Style = "!!float", yaml.TaggedStyle
+		}
+		return node
+	case map[string]any:
+		for key, child := range value {
+			value[key] = yamlJSONNumbers(child)
+		}
+	case []any:
+		for index, child := range value {
+			value[index] = yamlJSONNumbers(child)
+		}
 	}
-	var indented bytes.Buffer
-	if err := json.Indent(&indented, raw, prefix, "  "); err != nil {
-		return "", err
-	}
-	return indented.String(), nil
-}
-
-// yamlFloat writes a finite float as a YAML float scalar. A whole number keeps
-// a trailing ".0" so YAML does not read it as an integer.
-func yamlFloat(value float64) string {
-	text := strconv.FormatFloat(value, 'f', -1, 64)
-	if !strings.ContainsAny(text, ".eE") {
-		text += ".0"
-	}
-	return text
+	return value
 }
 
 // containerEnvironment is the non-secret environment given to the Hermes
@@ -588,39 +531,4 @@ func validWorkdir(value string) bool {
 		}
 	}
 	return true
-}
-
-// yamlString emits a double-quoted YAML scalar. Every character that could
-// terminate the scalar or be read as a line break is escaped, so no rendered
-// value can restructure the document: the quote and backslash, the three
-// whitespace controls with short forms, and any remaining control character or
-// Unicode line/paragraph separator as a numeric escape.
-func yamlString(value string) string {
-	var output strings.Builder
-	output.WriteByte('"')
-	for _, character := range value {
-		switch {
-		case character == '"':
-			output.WriteString(`\"`)
-		case character == '\\':
-			output.WriteString(`\\`)
-		case character == '\n':
-			output.WriteString(`\n`)
-		case character == '\r':
-			output.WriteString(`\r`)
-		case character == '\t':
-			output.WriteString(`\t`)
-		case character == '\u2028':
-			output.WriteString(`\L`)
-		case character == '\u2029':
-			output.WriteString(`\P`)
-		case unicode.IsControl(character):
-			// IsControl covers C0, DEL, and C1; all fit the two-digit form.
-			fmt.Fprintf(&output, `\x%02X`, character)
-		default:
-			output.WriteRune(character)
-		}
-	}
-	output.WriteByte('"')
-	return output.String()
 }

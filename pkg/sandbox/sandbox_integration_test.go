@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -317,6 +318,63 @@ func TestDockerSandboxVerifiesNoNewPrivileges(t *testing.T) {
 	}
 	if _, err := api.ContainerInspect(ctx, sandbox.ContainerID(), client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
 		t.Fatalf("container remains after Stop: %v", err)
+	}
+}
+
+func TestDockerSandboxUsesInheritedImageWorkdir(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	api, err := client.New(client.FromEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = api.Close() })
+	ensureFixtureImage(t, ctx, api)
+	base := fmt.Sprintf("aries-test/workdir-base:%d", time.Now().UnixNano())
+	image := base + "-child"
+	t.Cleanup(func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		for _, name := range []string{image, base} {
+			if _, err := api.ImageRemove(cleanup, name, client.ImageRemoveOptions{}); err != nil && !errdefs.IsNotFound(err) {
+				t.Errorf("remove test image %s: %v", name, err)
+			}
+		}
+	})
+	const workdir = "/image-default/project"
+	if err := deploymentdocker.BuildImage(ctx, "", base, "FROM "+fixtureImage+"\nENV PROJECT_DIR="+workdir+"\nWORKDIR ${PROJECT_DIR}\n", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := deploymentdocker.BuildImage(ctx, "", image, "FROM "+base+"\n", nil); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := newIntegrationManager(t, "inherited-workdir", Options{OutputDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := manager.Start(ctx, core.SandboxRequest{
+		RunID: "inherited-workdir", TaskID: "task",
+		Environment: core.Environment{Image: image, CPU: 0.5, MemoryMB: 32},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := manager.Stop(context.Background(), live); err != nil {
+			t.Errorf("remove test sandbox: %v", err)
+		}
+	})
+	sandbox := live.(*Sandbox)
+	if sandbox.Workdir() != workdir {
+		t.Fatalf("resolved workdir = %q, want %q", sandbox.Workdir(), workdir)
+	}
+	assertExec(t, ctx, sandbox, core.Command{Path: "/bin/sh", Args: []string{"-c", "pwd -P"}}, 0, workdir+"\n", "")
+	target, err := sandbox.ExportBridgeTarget()
+	if err != nil || target.Workdir != workdir {
+		t.Fatalf("bridge workdir = %q, err=%v", target.Workdir, err)
+	}
+	if err := manager.Stop(ctx, live); err != nil {
+		t.Fatal(err)
 	}
 }
 

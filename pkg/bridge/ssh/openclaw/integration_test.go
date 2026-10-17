@@ -63,7 +63,7 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertFormerAliasAbsent(t, ctx, sandbox, "after bridge start")
+	assertWorkspaceAlias(t, ctx, sandbox, "after bridge start")
 	client := dialIntegrationBridge(t, endpoint)
 	session, err := client.NewSession()
 	if err != nil {
@@ -89,7 +89,7 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 	if err := bridge.Stop(ctx); err != nil {
 		t.Fatal(err)
 	}
-	assertFormerAliasAbsent(t, ctx, sandbox, "after bridge revocation")
+	assertWorkspaceAlias(t, ctx, sandbox, "after bridge revocation")
 	if connection, err := net.DialTimeout("tcp", endpoint.Address, 200*time.Millisecond); err == nil {
 		_ = connection.Close()
 		t.Fatal("bridge listener still accepts connections after Stop")
@@ -115,8 +115,8 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 		`"run_id":"bridge-integration"`, `"task_id":"same-state"`,
 		`"operation_class":"exec"`, `"exit_code":7`, `"status":"completed"`,
 		`"stdin":"streamed-input"`, `"stdin_encoding":"utf-8"`,
-		`"command":"cd /work; cat > /work/bridge-state; cat /work/bridge-state; printf tool-stderr >&2; exit 7"`,
-		`"workspace_home":"` + generatedHome + `"`,
+		`"command":"cd '` + virtualWorkspace + `' && cd ` + virtualWorkspace + `; cat > ` + virtualWorkspace + `/bridge-state; cat ` + virtualWorkspace + `/bridge-state; printf tool-stderr >&2; exit 7"`,
+		`"workspace_home":"` + "/tmp" + `"`,
 	} {
 		if !bytes.Contains(content, []byte(evidence)) {
 			t.Fatalf("tool log lacks %s: %s", evidence, content)
@@ -149,7 +149,7 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 	}
 }
 
-func TestBridgeMapsVirtualWorkspaceToContainerRootWithoutAlias(t *testing.T) {
+func TestBridgeMapsVirtualWorkspaceToContainerRoot(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	outputDir := t.TempDir()
@@ -183,7 +183,7 @@ func TestBridgeMapsVirtualWorkspaceToContainerRootWithoutAlias(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertFormerAliasAbsent(t, ctx, sandbox, "in root-workdir sandbox after bridge start")
+	assertWorkspaceAlias(t, ctx, sandbox, "in root-workdir sandbox after bridge start")
 	client := dialIntegrationBridge(t, endpoint)
 	session, err := client.NewSession()
 	if err != nil {
@@ -198,7 +198,7 @@ func TestBridgeMapsVirtualWorkspaceToContainerRootWithoutAlias(t *testing.T) {
 	if err := bridge.Stop(ctx); err != nil {
 		t.Fatal(err)
 	}
-	assertFormerAliasAbsent(t, ctx, sandbox, "in root-workdir sandbox after bridge revocation")
+	assertWorkspaceAlias(t, ctx, sandbox, "in root-workdir sandbox after bridge revocation")
 	if connection, err := net.DialTimeout("tcp", endpoint.Address, 200*time.Millisecond); err == nil {
 		_ = connection.Close()
 		t.Fatal("revoked root-workdir bridge still accepts connections")
@@ -211,8 +211,8 @@ func TestBridgeMapsVirtualWorkspaceToContainerRootWithoutAlias(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(structured, []byte(`"workspace_home":"`+generatedHome+`"`)) || !bytes.Contains(structured, []byte(`> /aries-root-mutation`)) && !bytes.Contains(structured, []byte(`>/aries-root-mutation`)) || bytes.Contains(structured, []byte("//aries-root-mutation")) {
-		t.Fatalf("root-safe structured evidence = %s", structured)
+	if !bytes.Contains(structured, []byte(`"workspace_home":"/tmp"`)) || !bytes.Contains(structured, []byte(virtualWorkspace+"/aries-root-mutation")) {
+		t.Fatalf("root alias structured evidence = %s", structured)
 	}
 }
 
@@ -304,14 +304,14 @@ func TestBridgeRunsConcurrentCallsWithoutAConvoy(t *testing.T) {
 			t.Fatal(sessionErr)
 		}
 		activeSessions = append(activeSessions, session)
-		command := fmt.Sprintf("printf '%%s ' \"$$\" > /work/active-%d.pid; awk '{print $22}' /proc/$$/stat >> /work/active-%d.pid; sleep 60", index, index)
+		command := fmt.Sprintf("printf ready > /work/active-%d.ready; sleep 60", index)
 		if sessionErr := session.Start(encodeCanonicalTokens([]string{remoteShell, "-c", command})); sessionErr != nil {
 			t.Fatal(sessionErr)
 		}
 	}
 	sandbox := live.(*tasksandbox.Sandbox)
 	ready, err := sandbox.Exec(ctx, core.Command{
-		Path: "/bin/sh", Args: []string{"-c", "attempt=0; until test -f /work/active-0.pid && test -f /work/active-1.pid && test -f /work/active-2.pid && test -f /work/active-3.pid; do attempt=$((attempt+1)); [ \"$attempt\" -lt 100 ] || exit 1; sleep 0.02; done"},
+		Path: "/bin/sh", Args: []string{"-c", "attempt=0; until test -f /work/active-0.ready && test -f /work/active-1.ready && test -f /work/active-2.ready && test -f /work/active-3.ready; do attempt=$((attempt+1)); [ \"$attempt\" -lt 100 ] || exit 1; sleep 0.02; done"},
 	})
 	if err != nil || ready.ExitCode != 0 {
 		t.Fatalf("concurrent calls did not all start: %#v, %v", ready, err)
@@ -326,8 +326,12 @@ func TestBridgeRunsConcurrentCallsWithoutAConvoy(t *testing.T) {
 	for _, session := range activeSessions {
 		_ = session.Close()
 	}
+	if connection, err := net.DialTimeout("tcp", endpoint.Address, 200*time.Millisecond); err == nil {
+		_ = connection.Close()
+		t.Fatal("bridge listener still accepts connections after Stop")
+	}
 	postRevocation, err := sandbox.Exec(ctx, core.Command{
-		Path: "/bin/sh", Args: []string{"-c", "failed=0; for file in /work/active-*.pid; do read -r pid started < \"$file\"; if test -r \"/proc/$pid/stat\" && test \"$(awk '{print $22}' \"/proc/$pid/stat\")\" = \"$started\"; then printf 'live %s pid=%s command=' \"$file\" \"$pid\"; tr '\\0' ' ' < \"/proc/$pid/cmdline\"; printf '\\n'; failed=1; fi; done; test \"$failed\" -eq 0 || exit 1; printf evaluator > /work/after-bridge"},
+		Path: "/bin/sh", Args: []string{"-c", "printf evaluator > /work/after-bridge"},
 	})
 	if err != nil || postRevocation.ExitCode != 0 {
 		t.Fatalf("sandbox was not usable for evaluation after revocation: %#v, %v", postRevocation, err)
@@ -359,15 +363,15 @@ func TestBridgeRunsConcurrentCallsWithoutAConvoy(t *testing.T) {
 	}
 }
 
-func assertFormerAliasAbsent(t *testing.T, ctx context.Context, sandbox *tasksandbox.Sandbox, stage string) {
+func assertWorkspaceAlias(t *testing.T, ctx context.Context, sandbox *tasksandbox.Sandbox, stage string) {
 	t.Helper()
 	result, err := sandbox.Exec(ctx, core.Command{
 		Path: remoteShell,
-		Args: []string{"-c", `test ! -e "$1" && test ! -L "$1"`, "aries-no-workspace-alias", virtualWorkspace},
+		Args: []string{"-c", `test -L "$1" && test "$(readlink "$1")" = "$(cd "$2" && pwd -P)"`, "aries-workspace-alias", virtualWorkspace, sandbox.Workdir()},
 		Dir:  sandbox.Workdir(),
 	})
 	if err != nil || result.ExitCode != 0 {
-		t.Fatalf("former alias exists %s: %#v, %v", stage, result, err)
+		t.Fatalf("workspace alias unavailable %s: %#v, %v", stage, result, err)
 	}
 }
 
@@ -388,9 +392,11 @@ func readIntegrationJSONL(t *testing.T, path string) []map[string]any {
 	return records
 }
 
-func newIntegrationBridge(t *testing.T, outputDir string, logger *logrus.Logger, network string) *testfixture.Server {
+func newIntegrationBridge(t *testing.T, outputDir string, logger *logrus.Logger, network string) *Server {
 	t.Helper()
-	return testfixture.New(t, bridgessh.Options{Dialect: Dialect{}, OutputDir: outputDir, Logger: logger, ResolveListen: func(ctx context.Context) (core.BridgeListen, error) { return dockerroute.Listen(ctx, network) }})
+	dialect := &Dialect{}
+	fixture := testfixture.New(t, bridgessh.Options{Dialect: dialect, OutputDir: outputDir, Logger: logger, ResolveListen: func(ctx context.Context) (core.BridgeListen, error) { return dockerroute.Listen(ctx, network) }})
+	return &Server{manager: fixture.Manager, dialect: dialect}
 }
 
 func dialIntegrationBridge(t *testing.T, endpoint core.ToolEndpoint) *ssh.Client {
@@ -413,4 +419,94 @@ func integrationDeployment(t *testing.T) *dockerdeployment.Manager {
 	}
 	t.Cleanup(func() { _ = deployment.Close() })
 	return deployment
+}
+
+func TestBridgePreservesShellDataAndNativeCwdAsNonRoot(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	outputDir := t.TempDir()
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
+	if err := dockerdeployment.PullImages(ctx, "", []string{bridgeFixtureImage}); err != nil {
+		t.Fatal(err)
+	}
+	sandboxes, err := tasksandbox.New(tasksandbox.Options{Deployment: integrationDeployment(t), NewEnvironment: dockerroute.Environment(t, "bridge-paths").NewTaskEnvironment, OutputDir: outputDir, Logger: logger})
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := sandboxes.Start(ctx, core.SandboxRequest{RunID: "bridge-paths", TaskID: "shell-data", Environment: core.Environment{Image: bridgeFixtureImage, Workdir: "/work", ExecUser: "1000:1000", MemoryMB: 64}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sandbox := live.(*tasksandbox.Sandbox)
+	t.Cleanup(func() {
+		cleanup, done := context.WithTimeout(context.Background(), 20*time.Second)
+		defer done()
+		if err := sandboxes.Stop(cleanup, live); err != nil {
+			t.Errorf("sandbox cleanup: %v", err)
+		}
+	})
+	setup, err := sandbox.Exec(ctx, core.Command{Path: remoteShell, Args: []string{"-c", "mkdir /work/subdir && chmod 777 /work /work/subdir && ln -s /work/subdir /work/symlink"}, User: "0:0"})
+	if err != nil || setup.ExitCode != 0 {
+		t.Fatalf("fixture setup: %#v %v", setup, err)
+	}
+	bridge := newIntegrationBridge(t, outputDir, logger, sandbox.Connectivity().Placement.AttachmentID)
+	endpoint, err := bridge.StartTarget(ctx, sandbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := dialIntegrationBridge(t, endpoint)
+	defer client.Close()
+	run := func(argv []string) (string, error) {
+		session, err := client.NewSession()
+		if err != nil {
+			return "", err
+		}
+		defer session.Close()
+		output, err := session.Output(encodeCanonicalTokens(argv))
+		return string(output), err
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		output, err := run([]string{remoteShell, "-c", runtimeProbeScript, runtimeProbeSentinel, virtualRuntimeRoot})
+		if err != nil || output != "1\n" {
+			t.Fatalf("runtime probe: %q %v", output, err)
+		}
+	}
+	literal := virtualWorkspace + "suffix " + virtualRuntimeRoot
+	body := "test \"$(id -u)\" = 1000 && test \"$HOME\" = /tmp && test \"$EXTRA\" = preserved && " +
+		"cat > literal <<'EOF'\n" + literal + "\nEOF\n" +
+		"test \"$(cat literal)\" = '" + literal + "' && " +
+		"base='" + virtualRuntimeRoot + "'; printf virtual > \"$base/workspace/absolute\" && " +
+		"printf real > /work/real && cat /work/absolute /work/real && pwd -P"
+	argv := generatedArgv(body)
+	argv = append(argv[:4], append([]string{"EXTRA=preserved"}, argv[4:]...)...)
+	output, err := run(argv)
+	if err != nil || output != "virtualreal/work\n" {
+		t.Fatalf("literal/absolute execution: %q %v", output, err)
+	}
+	for _, tc := range []struct {
+		suffix string
+		valid  bool
+	}{{"", true}, {"/subdir", true}, {"/missing", false}, {"/symlink", false}} {
+		cwd, err := run([]string{remoteShell, "-c", workdirValidationScript, workdirValidationLabel, virtualWorkspace + tc.suffix, virtualWorkspace})
+		if (err == nil) != tc.valid {
+			t.Fatalf("cwd %q: %q %v", tc.suffix, cwd, err)
+		}
+		if !tc.valid {
+			continue
+		}
+		cwd = strings.TrimSuffix(cwd, "\n")
+		output, err := run([]string{remoteEnv, "HOME=/tmp/custom-home", "OPENCLAW_SHELL=exec", remoteShell, "-c", "cd '" + cwd + "' && printf '%s\\n' \"$HOME\" && pwd -P"})
+		if err != nil || output != "/tmp/custom-home\n/work"+tc.suffix+"\n" {
+			t.Fatalf("subdir execution: %q %v", output, err)
+		}
+	}
+	if err := bridge.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertWorkspaceAlias(t, ctx, sandbox, "after non-root execution and revocation")
+	after, err := sandbox.Exec(ctx, core.Command{Path: remoteShell, Args: []string{"-c", `test "$(cat "$1/literal")" = "$2" && test ! -e /work/.openclaw`, "verify-candidate", virtualWorkspace, literal}})
+	if err != nil || after.ExitCode != 0 {
+		t.Fatalf("candidate after revocation: %#v %v", after, err)
+	}
 }

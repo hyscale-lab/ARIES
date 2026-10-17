@@ -154,16 +154,19 @@ func TestTasksLoadsSelectedPromptsInOrder(t *testing.T) {
 	}
 	wantIDs := []string{"3", "1", "100"}
 	wantPrompts := []string{
-		applyPromptTemplate(taskPromptTemplate, "research prompt 3") + reportInstruction,
-		applyPromptTemplate(taskPromptTemplate, "research prompt 1") + reportInstruction,
-		applyPromptTemplate(taskPromptTemplate, "research prompt 100") + reportInstruction,
+		"research prompt 3",
+		"research prompt 1",
+		"research prompt 100",
 	}
 	for index, task := range tasks {
 		if task.ID != wantIDs[index] {
 			t.Fatalf("tasks[%d].ID = %q, want %q", index, task.ID, wantIDs[index])
 		}
-		if task.Instruction != wantPrompts[index] {
-			t.Fatalf("tasks[%d].Instruction = %q, want %q", index, task.Instruction, wantPrompts[index])
+		if !strings.Contains(task.Instruction, "## Research question\n\n"+wantPrompts[index]+"\n\n") {
+			t.Fatalf("tasks[%d].Instruction = %q, want dataset question %q", index, task.Instruction, wantPrompts[index])
+		}
+		if !strings.Contains(task.Instruction, "/tmp/aries-report.md") {
+			t.Fatalf("tasks[%d].Instruction = %q, want the report output path", index, task.Instruction)
 		}
 		if task.Environment.Services.SearchPort != 8888 {
 			t.Fatalf("search declaration = %#v", task.Environment.Services)
@@ -174,8 +177,11 @@ func TestTasksLoadsSelectedPromptsInOrder(t *testing.T) {
 	}
 }
 
-func TestTasksAppliesTaskPromptTemplate(t *testing.T) {
-	root := writeFixture(t, defaultFixtureRows(t))
+func TestTasksAdaptsResearchToHarnessAndPreservesQuestion(t *testing.T) {
+	rows := defaultFixtureRows(t)
+	const question = "研究问题：\nCompare {question} with the dataset evidence.\n"
+	rows[0].Prompt = question
+	root := writeFixture(t, rows)
 	options := baseOptions(root)
 	benchmark, err := New(options)
 	if err != nil {
@@ -185,12 +191,21 @@ func TestTasksAppliesTaskPromptTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := applyPromptTemplate(taskPromptTemplate, "research prompt 1") + reportInstruction
-	if tasks[0].Instruction != want {
-		t.Fatalf("Instruction = %q, want %q", tasks[0].Instruction, want)
+	instruction := tasks[0].Instruction
+	if strings.Count(instruction, question) != 1 || !strings.Contains(instruction, "## Research question\n\n"+question+"\n\n## Research and report instructions") {
+		t.Fatalf("Instruction did not preserve the question verbatim: %q", instruction)
 	}
-	if !strings.Contains(tasks[0].Instruction, "research prompt 1") {
-		t.Fatalf("Instruction = %q, want it to contain the task's research prompt", tasks[0].Instruction)
+	for _, want := range []string{
+		"searching the web and reading sources",
+		"if they fail or are unavailable, use another available method",
+		"inline Markdown links to the source URL, e.g. NIH 2025, placed next to the claim",
+		"Do not use numbered footnotes or a separate reference list",
+		"Write the final report to /tmp/aries-report.md by actually invoking a file-writing or shell tool",
+		"A chat reply alone does not create the report file",
+	} {
+		if !strings.Contains(instruction, want) {
+			t.Errorf("Instruction is missing harness guidance %q", want)
+		}
 	}
 }
 

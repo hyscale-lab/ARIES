@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net/url"
 	"os"
 	"strconv"
@@ -13,27 +12,22 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// NativeConfig contains only launch-critical SGLang settings that ARIES
-// validates before allowing setup or process side effects.
+// NativeConfig contains the SGLang settings ARIES needs for endpoint routing
+// and GPU measurement. SGLang validates the rest of the original config.
 type NativeConfig struct {
-	ModelPath                    string  `yaml:"model-path"`
-	ServedModelName              string  `yaml:"served-model-name"`
-	Host                         string  `yaml:"host"`
-	Port                         int     `yaml:"port"`
-	Device                       string  `yaml:"device"`
-	TensorParallelSize           int     `yaml:"tensor-parallel-size"`
-	PipelineParallelSize         *int    `yaml:"pipeline-parallel-size"`
-	DataParallelSize             *int    `yaml:"data-parallel-size"`
-	EnableDPAttention            bool    `yaml:"enable-dp-attention"`
-	ExpertParallelSize           *int    `yaml:"expert-parallel-size"`
-	AttentionContextParallelSize *int    `yaml:"attention-context-parallel-size"`
-	MoEDataParallelSize          *int    `yaml:"moe-data-parallel-size"`
-	Nodes                        *int    `yaml:"nnodes"`
-	NodeRank                     *int    `yaml:"node-rank"`
-	ContextLength                int     `yaml:"context-length"`
-	MemFractionStatic            float64 `yaml:"mem-fraction-static"`
-	ReasoningParser              string  `yaml:"reasoning-parser"`
-	ToolCallParser               string  `yaml:"tool-call-parser"`
+	ServedModelName              string `yaml:"served-model-name"`
+	Host                         string `yaml:"host"`
+	Port                         int    `yaml:"port"`
+	Device                       string `yaml:"device"`
+	TensorParallelSize           int    `yaml:"tensor-parallel-size"`
+	PipelineParallelSize         *int   `yaml:"pipeline-parallel-size"`
+	DataParallelSize             *int   `yaml:"data-parallel-size"`
+	EnableDPAttention            bool   `yaml:"enable-dp-attention"`
+	ExpertParallelSize           *int   `yaml:"expert-parallel-size"`
+	AttentionContextParallelSize *int   `yaml:"attention-context-parallel-size"`
+	MoEDataParallelSize          *int   `yaml:"moe-data-parallel-size"`
+	Nodes                        *int   `yaml:"nnodes"`
+	NodeRank                     *int   `yaml:"node-rank"`
 }
 
 func LoadNativeConfig(path, modelID, baseURL string) (NativeConfig, error) {
@@ -43,9 +37,8 @@ func LoadNativeConfig(path, modelID, baseURL string) (NativeConfig, error) {
 	}
 	defer f.Close()
 	decoder := yaml.NewDecoder(f)
-	decoder.KnownFields(true)
-	var cfg NativeConfig
-	if err := decoder.Decode(&cfg); err != nil {
+	var document yaml.Node
+	if err := decoder.Decode(&document); err != nil {
 		return NativeConfig{}, fmt.Errorf("decode SGLang config: %w", err)
 	}
 	var trailing any
@@ -53,6 +46,17 @@ func LoadNativeConfig(path, modelID, baseURL string) (NativeConfig, error) {
 		if err == nil {
 			return NativeConfig{}, errors.New("decode SGLang config: multiple YAML documents")
 		}
+		return NativeConfig{}, fmt.Errorf("decode SGLang config: %w", err)
+	}
+	var options map[string]any
+	if err := document.Decode(&options); err != nil {
+		return NativeConfig{}, fmt.Errorf("decode SGLang options: %w", err)
+	}
+	if err := validateNativeOptions(options); err != nil {
+		return NativeConfig{}, err
+	}
+	var cfg NativeConfig
+	if err := document.Decode(&cfg); err != nil {
 		return NativeConfig{}, fmt.Errorf("decode SGLang config: %w", err)
 	}
 	if err := cfg.validate(); err != nil {
@@ -72,10 +76,58 @@ func LoadNativeConfig(path, modelID, baseURL string) (NativeConfig, error) {
 	return cfg, nil
 }
 
+// SGLang turns YAML keys, scalar values, and list items into CLI arguments.
+// Reject embedded flags and require full names for fields ARIES consumes so
+// native execution cannot override the endpoint or GPU topology we validate.
+func validateNativeOptions(options map[string]any) error {
+	for option, value := range options {
+		if strings.Contains(option, "=") {
+			return errors.New("SGLang option keys must not contain '='")
+		}
+		values, ok := value.([]any)
+		if !ok {
+			values = []any{value}
+		}
+		for _, value := range values {
+			argument := fmt.Sprint(value)
+			if strings.HasPrefix(argument, "-") {
+				// SGLang uses negative numeric sentinels, such as chunked-prefill-size: -1.
+				if _, err := strconv.ParseFloat(argument, 64); err != nil {
+					return fmt.Errorf("SGLang option %q values must not start with '-' unless numeric", option)
+				}
+			}
+		}
+		if option == "" {
+			continue
+		}
+		for _, names := range [][]string{
+			{"served-model-name"}, {"host"}, {"port"}, {"device"},
+			{"tensor-parallel-size", "tp-size"},
+			{"pipeline-parallel-size", "pp-size"},
+			{"data-parallel-size", "dp-size"},
+			{"enable-dp-attention"},
+			{"expert-parallel-size", "ep-size"},
+			{"attention-context-parallel-size", "attn-cp-size"},
+			{"moe-data-parallel-size", "moe-dp-size"},
+			{"nnodes"}, {"node-rank"},
+		} {
+			if option == names[0] {
+				continue
+			}
+			for _, name := range names {
+				if strings.HasPrefix(name, option) {
+					return fmt.Errorf("SGLang option %q must use the full name %q for ARIES endpoint and GPU validation", option, names[0])
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func (c NativeConfig) validate() error {
 	required := []struct{ name, value string }{
-		{"model-path", c.ModelPath}, {"served-model-name", c.ServedModelName},
-		{"host", c.Host}, {"device", c.Device}, {"tool-call-parser", c.ToolCallParser},
+		{"served-model-name", c.ServedModelName},
+		{"host", c.Host}, {"device", c.Device},
 	}
 	for _, field := range required {
 		if strings.TrimSpace(field.value) == "" {
@@ -107,12 +159,6 @@ func (c NativeConfig) validate() error {
 	}
 	if nodeRank < 0 || nodeRank >= nodes {
 		return errors.New("node-rank must be non-negative and less than nnodes")
-	}
-	if c.ContextLength <= 0 {
-		return errors.New("context-length must be positive")
-	}
-	if c.MemFractionStatic <= 0 || c.MemFractionStatic > 1 || math.IsNaN(c.MemFractionStatic) || math.IsInf(c.MemFractionStatic, 0) {
-		return errors.New("mem-fraction-static must be finite, positive, and no greater than 1")
 	}
 	return nil
 }

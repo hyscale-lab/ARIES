@@ -35,25 +35,45 @@ than silently ignored.
 
 ## OpenClaw SSH bridge
 
-The OpenClaw SSH dialect adapts OpenClaw's pinned SSH
-behavior to a narrow streaming capability of the Docker sandbox. It does not
-create a persistent workspace alias in the evaluated environment. Structured
-executed-command records and lossless wire-side input follow the
-[bridge evidence contract](../design/bridge.md#evidence-and-substitution);
-access ownership and revocation follow its
-[lifecycle contract](../design/bridge.md#lifecycle-cancellation-and-failure).
+The OpenClaw SSH dialect adapts the pinned native SSH backend to the live
+sandbox. Before exposing its listener, its concrete server creates
+`/aries/openclaw/openclaw-ssh-shared-8198076c/workspace` as a symlink to the
+canonical task workdir. Setup uses a fixed root command so ordinary task
+execution can retain its configured user. It refuses any preexisting workspace
+entry and any symlink or non-directory ancestor; it never replaces task files or
+changes existing directory permissions. The root workdir is supported by linking
+the workspace to `/`.
 
-In sandbox mode, OpenClaw's `exec` sets `HOME` to its sandbox workspace by
-default (`buildSandboxEnv` in the pinned 2026.7.1 build); sandbox and per-call
-environment can override that default. The bridge translates the
-virtual workspace to the task workdir, but maps the generated `HOME` to `/tmp`
-instead of the workdir. Otherwise per-user caches written under `HOME`, such as
-Go's `~/.cache/go-build` or `~/.npm`, land in the repository being evaluated and
-become part of the candidate's changes; SWE-bench Pro patch capture then
-exceeds its 16 MiB bound. `/tmp` exists and is writable in task images, so the
-bridge creates no state of its own. Each structured tool-call record names the
-mapped value in `workspace_home`. A `HOME` the agent exports inside its
-command script is unaffected.
+OpenClaw's native runtime probe sees the prepared runtime directory and skips
+workspace copying. The bridge still drains the exact native skills upload and
+suppresses native skills clearing and runtime removal. These operations must not
+copy harness scaffold into the candidate or delete sandbox-owned state.
+
+Ordinary shell scripts and environment assignments pass through unchanged,
+including literal strings, heredocs, and dynamically constructed paths. Absolute
+native workspace paths resolve through the real alias; absolute task paths keep
+their original meaning. For the exact native cwd-validation command, the bridge
+maps only the separate target/root arguments to the task directory, then runs
+OpenClaw's own validation script. This supports existing relative and virtual
+absolute subdirectory workdirs and retains native missing-directory and symlink
+checks. OpenClaw uses the resulting canonical directory for execution. Its
+upstream tool still rejects an explicit absolute `workdir` outside its native
+workspace roots before contacting SSH.
+
+The alias remains after bridge revocation so background sandbox processes can
+continue using it. Runner removes it with the sandbox. This adds a small visible
+filesystem scaffold, including for tasks whose workdir is `/`; bridge teardown
+does not recursively delete it. Structured executed-command records and lossless
+wire-side input follow the [bridge evidence contract](../design/bridge.md#evidence-and-substitution).
+
+OpenClaw defaults `HOME` to its sandbox cwd. ARIES instead configures
+`agents.defaults.sandbox.docker.env.HOME` as `/tmp`: at pin 2026.7.1 the SSH
+backend also consumes this native environment setting. This keeps Go/npm/pip
+caches outside ordinary task repositories without creating a home directory.
+Native per-call environment overrides remain supported, including an explicit
+`HOME` override. The bridge does not rewrite HOME or require four ordered
+assignments. Each structured tool-call record names the actual HOME assignment
+in `workspace_home` when present.
 
 ## Hermes SSH bridge
 

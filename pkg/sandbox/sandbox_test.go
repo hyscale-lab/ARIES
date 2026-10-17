@@ -35,6 +35,8 @@ type fakeDeployment struct {
 	stopCalls, networkStops                      int
 	cleanupCanceled                              bool
 	command                                      core.Command
+	execResult                                   core.CommandResult
+	execErr                                      error
 	input, upload                                []byte
 	uploadDir                                    string
 	archive                                      []byte
@@ -79,6 +81,10 @@ func (f *fakeDeployment) Start(context.Context, string) error {
 	return nil
 }
 func (f *fakeDeployment) Running(context.Context, string) (bool, error) { return true, nil }
+func (f *fakeDeployment) Exec(_ context.Context, _ string, c core.Command) (core.CommandResult, error) {
+	f.command = c
+	return f.execResult, f.execErr
+}
 func (f *fakeDeployment) Stop(ctx context.Context, _ string) error {
 	f.stopCalls++
 	f.cleanupCanceled = ctx.Err() != nil
@@ -161,6 +167,60 @@ func TestSharedDeploymentReceivesSandboxPolicy(t *testing.T) {
 		t.Fatal(r.Env)
 	}
 }
+func TestImageWorkdirBecomesTheSandboxExecutionDefault(t *testing.T) {
+	for _, workdir := range []string{"/", "/inherited/project", "/space and café ", "/line\nbreak"} {
+		t.Run(workdir, func(t *testing.T) {
+			f := &fakeDeployment{execResult: core.CommandResult{Stdout: workdir + "\n"}}
+			request := testRequest()
+			request.Environment.Workdir = ""
+			live, err := testManager(t, f).Start(context.Background(), request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s := live.(*Sandbox)
+			if f.request.Workdir != "" || f.command.Dir != "" || f.command.User != request.Environment.ExecUser {
+				t.Fatalf("image workdir probe overrides defaults: request=%+v command=%+v", f.request, f.command)
+			}
+			if s.Workdir() != workdir {
+				t.Fatalf("Workdir() = %q, want %q", s.Workdir(), workdir)
+			}
+			if _, err := s.Exec(context.Background(), core.Command{Path: "/bin/true"}); err != nil {
+				t.Fatal(err)
+			}
+			if f.command.Dir != workdir {
+				t.Fatalf("default execution dir = %q, want %q", f.command.Dir, workdir)
+			}
+		})
+	}
+}
+
+func TestImageWorkdirProbeFailureRollsBackSandbox(t *testing.T) {
+	for name, test := range map[string]struct {
+		result core.CommandResult
+		err    error
+	}{
+		"transport":  {err: errors.New("exec transport failed")},
+		"exit":       {result: core.CommandResult{ExitCode: 1, Stdout: "/work\n"}},
+		"empty":      {},
+		"incomplete": {result: core.CommandResult{Stdout: "/work"}},
+		"relative":   {result: core.CommandResult{Stdout: "work\n"}},
+		"unclean":    {result: core.CommandResult{Stdout: "/work/../other\n"}},
+		"nul":        {result: core.CommandResult{Stdout: "/work\x00dir\n"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := &fakeDeployment{execResult: test.result, execErr: test.err}
+			request := testRequest()
+			request.Environment.Workdir = ""
+			if _, err := testManager(t, f).Start(context.Background(), request); err == nil {
+				t.Fatal("expected workdir discovery failure")
+			}
+			if f.stopCalls != 1 || f.networkStops != 1 || f.cleanupCanceled {
+				t.Fatalf("failed discovery did not clean up: runtime=%d attachment=%d canceled=%v", f.stopCalls, f.networkStops, f.cleanupCanceled)
+			}
+		})
+	}
+}
+
 func TestEvaluationSandboxKeepsSeparateEvidenceAndComponent(t *testing.T) {
 	f := &fakeDeployment{}
 	m := testManager(t, f)

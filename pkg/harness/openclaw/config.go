@@ -191,11 +191,17 @@ type primaryModel struct {
 }
 
 type sandboxConfig struct {
-	Mode            string    `json:"mode"`
-	Scope           string    `json:"scope"`
-	Backend         string    `json:"backend"`
-	WorkspaceAccess string    `json:"workspaceAccess"`
-	SSH             sshConfig `json:"ssh"`
+	Mode            string             `json:"mode"`
+	Scope           string             `json:"scope"`
+	Backend         string             `json:"backend"`
+	WorkspaceAccess string             `json:"workspaceAccess"`
+	SSH             sshConfig          `json:"ssh"`
+	Docker          sandboxEnvironment `json:"docker"`
+}
+
+// OpenClaw uses docker.env for every sandbox backend, including SSH.
+type sandboxEnvironment struct {
+	Env map[string]string `json:"env"`
 }
 
 type sshConfig struct {
@@ -249,6 +255,7 @@ func renderConfig(model core.ModelConfig, endpoint core.ToolEndpoint, mode strin
 			Model: primaryModel{Primary: providerID + "/" + model.Model},
 			Sandbox: sandboxConfig{
 				Mode: "all", Scope: "shared", Backend: "ssh", WorkspaceAccess: "rw",
+				Docker: sandboxEnvironment{Env: map[string]string{"HOME": "/tmp"}},
 				SSH: sshConfig{
 					Target: endpoint.Username + "@" + endpoint.Address, Command: endpoint.ClientCommand,
 					WorkspaceRoot: workspaceRoot, StrictHostKeyChecking: false, UpdateHostKeys: false,

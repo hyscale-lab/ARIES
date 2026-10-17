@@ -63,18 +63,27 @@ func TestPrepareBackendRejectsManagedSGLangGPUCountMismatch(t *testing.T) {
 }
 
 func TestBackendPreparationRejectsNativeMismatchBeforeArtifacts(t *testing.T) {
-	root := t.TempDir()
-	native := filepath.Join(root, "native.yaml")
-	if err := os.WriteFile(native, []byte(strings.Replace(nativeForWiring, "port: 30000", "port: 30001", 1)), 0600); err != nil {
-		t.Fatal(err)
-	}
-	output := filepath.Join(root, "output")
-	cfg := config.Config{Runtime: config.RuntimeConfig{Backend: "sglang", Mode: "managed", Config: config.RuntimeConfigValues{ResolvedFile: native, Executable: "python3"}}, Model: config.ProfileModel{ID: "Qwen/Qwen3-8B", BaseURL: "http://host:30000/v1", APIKeyEnv: "KEY"}}
-	if _, err := NewSGLang(cfg, output); err == nil {
-		t.Fatal("expected mismatch")
-	}
-	if _, err := os.Stat(output); !os.IsNotExist(err) {
-		t.Fatalf("output side effect: %v", err)
+	for name, content := range map[string]string{
+		"port mismatch":  strings.Replace(nativeForWiring, "port: 30000", "port: 30001", 1),
+		"GPU alias":      strings.Replace(nativeForWiring, "tensor-parallel-size: 1", "tensor-parallel-size: 2\ntp-size: 1", 1),
+		"argument key":   nativeForWiring + "tp=2: true\n",
+		"argument value": nativeForWiring + "lora-target-modules: [--tp=2]\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			native := filepath.Join(root, "native.yaml")
+			if err := os.WriteFile(native, []byte(content), 0600); err != nil {
+				t.Fatal(err)
+			}
+			output := filepath.Join(root, "output")
+			cfg := config.Config{Runtime: config.RuntimeConfig{Backend: "sglang", Mode: "managed", Config: config.RuntimeConfigValues{ResolvedFile: native, Executable: "python3"}}, Model: config.ProfileModel{ID: "Qwen/Qwen3-8B", BaseURL: "http://host:30000/v1", APIKeyEnv: "KEY"}}
+			if _, err := NewSGLang(cfg, output); err == nil {
+				t.Fatal("expected mismatch")
+			}
+			if _, err := os.Stat(output); !os.IsNotExist(err) {
+				t.Fatalf("output side effect: %v", err)
+			}
+		})
 	}
 }
 

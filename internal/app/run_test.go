@@ -122,9 +122,9 @@ func TestSetupPreparesBackendBeforeSideEffects(t *testing.T) {
 	}, ValidateComponents: func(config.Config) error { return nil }, SetupBenchmark: func(context.Context, config.Config) error {
 		events = append(events, "setup")
 		return nil
-	}, LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
+	}, LoadBenchmark: testBenchmarkLoader(func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
 		return nil, nil
-	}, BuildHarnessImage: func(context.Context, config.Config) error { return nil }, PullImages: func(context.Context, config.Config, []string) error { return nil }}
+	}, nil), BuildHarnessImage: func(context.Context, config.Config) error { return nil }, PullImages: func(context.Context, config.Config, []string) error { return nil }}
 	var out bytes.Buffer
 	if err := Setup(context.Background(), profile, &out, Dependencies{Wiring: wiring}); err != nil {
 		t.Fatal(err)
@@ -156,10 +156,10 @@ func TestRunEnsuresPreparationBeforeOutputAndRuntime(t *testing.T) {
 			events = append(events, "benchmark")
 			return nil
 		},
-		LoadPreparationTasks: func(_ context.Context, _ config.Config, taskIDs []string, _ func(string) ([]byte, bool)) ([]core.Task, error) {
+		LoadBenchmark: testBenchmarkLoader(func(_ context.Context, _ config.Config, taskIDs []string, _ func(string) ([]byte, bool)) ([]core.Task, error) {
 			events = append(events, "tasks:"+strings.Join(taskIDs, ","))
 			return []core.Task{{Environment: core.Environment{Image: "task:tag"}}}, nil
-		},
+		}, nil),
 		BuildHarnessImage: func(context.Context, config.Config) error { return nil },
 		PullImages: func(_ context.Context, _ config.Config, images []string) error {
 			events = append(events, "images:"+strings.Join(images, ","))
@@ -191,9 +191,9 @@ func TestHarnessImageIsBuiltAfterPullAndFailureStopsRun(t *testing.T) {
 			return PreparedBackend{Model: cfg.CoreModel()}, nil
 		},
 		SetupBenchmark: func(context.Context, config.Config) error { return nil },
-		LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
+		LoadBenchmark: testBenchmarkLoader(func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
 			return nil, nil
-		},
+		}, nil),
 		PullImages: func(context.Context, config.Config, []string) error {
 			events = append(events, "pull")
 			return nil
@@ -220,9 +220,9 @@ func TestSetupRetriesIncompletePreparationWithoutReadinessMarker(t *testing.T) {
 			return PreparedBackend{Model: cfg.CoreModel()}, nil
 		},
 		SetupBenchmark: func(context.Context, config.Config) error { return nil },
-		LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
+		LoadBenchmark: testBenchmarkLoader(func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
 			return nil, nil
-		},
+		}, nil),
 		BuildHarnessImage: func(context.Context, config.Config) error { return nil },
 		PullImages: func(context.Context, config.Config, []string) error {
 			pullCalls++
@@ -256,16 +256,15 @@ func TestRunCancellationDuringPreparationHasNoDownstreamEffects(t *testing.T) {
 			return PreparedBackend{Model: cfg.CoreModel()}, nil
 		},
 		SetupBenchmark: func(ctx context.Context, _ config.Config) error { return ctx.Err() },
-		LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
+		LoadBenchmark: testBenchmarkLoader(func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
 			downstream++
 			return nil, nil
-		},
+		}, func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
+			downstream++
+			return nil, nil
+		}),
 		BuildHarnessImage: func(context.Context, config.Config) error { return nil },
 		PullImages:        func(context.Context, config.Config, []string) error { downstream++; return nil },
-		NewBenchmark: func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
-			downstream++
-			return nil, nil
-		},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -317,9 +316,9 @@ func (*stubResources) Close() error                                           { 
 
 func TestBuildTaskExperimentCreatesFreshFourRoleGraphs(t *testing.T) {
 	wiring := Wiring{
-		NewBenchmark: func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
+		LoadBenchmark: testBenchmarkLoader(nil, func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
 			return &stubBenchmark{}, nil
-		},
+		}),
 		NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
 			h := &stubHarness{}
 			return HarnessInstance{Harness: h, Close: func() error { return nil }}, nil
@@ -339,11 +338,12 @@ func TestBuildTaskExperimentCreatesFreshFourRoleGraphs(t *testing.T) {
 	cfg := config.Config{Name: "x"}
 	model := core.ModelConfig{Provider: "deepseek", BaseURL: "https://example.invalid", Model: "m", APIKeyEnv: "KEY"}
 	preparedGPUIndices := []int{4, 2}
-	first, err := buildTaskExperiment(cfg, model, preparedGPUIndices, "run", t.TempDir(), "a", "a-001", nil, nil, wiring)
+	catalog := testPreparedBenchmark(t, wiring)
+	first, err := buildTaskExperiment(cfg, model, preparedGPUIndices, "run", t.TempDir(), "a", "a-001", nil, nil, catalog, wiring)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := buildTaskExperiment(cfg, model, preparedGPUIndices, "run", t.TempDir(), "a", "a-002", nil, nil, wiring)
+	second, err := buildTaskExperiment(cfg, model, preparedGPUIndices, "run", t.TempDir(), "a", "a-002", nil, nil, catalog, wiring)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -364,9 +364,9 @@ func TestBuildTaskExperimentCreatesFreshFourRoleGraphs(t *testing.T) {
 func TestBuildTaskExperimentUnwindsPartialConstruction(t *testing.T) {
 	var events []string
 	wiring := Wiring{
-		NewBenchmark: func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
+		LoadBenchmark: testBenchmarkLoader(nil, func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
 			return &stubBenchmark{}, nil
-		},
+		}),
 		NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
 			return HarnessInstance{Harness: &stubHarness{}, Close: func() error { events = append(events, "harness"); return errors.New("harness close") }}, nil
 		},
@@ -377,7 +377,7 @@ func TestBuildTaskExperimentUnwindsPartialConstruction(t *testing.T) {
 			return nil, errors.New("bridge construct")
 		},
 	}
-	_, err := buildTaskExperiment(config.Config{Name: "x"}, core.ModelConfig{}, nil, "run", t.TempDir(), "a", "a-001", nil, nil, wiring)
+	_, err := buildTaskExperiment(config.Config{Name: "x"}, core.ModelConfig{}, nil, "run", t.TempDir(), "a", "a-001", nil, nil, testPreparedBenchmark(t, wiring), wiring)
 	if err == nil || !strings.Contains(err.Error(), "bridge construct") || !strings.Contains(err.Error(), "sandbox close") || !strings.Contains(err.Error(), "harness close") {
 		t.Fatalf("err=%v", err)
 	}
@@ -392,13 +392,13 @@ func TestBridgePreparationFailurePrecedesBenchmarkEffects(t *testing.T) {
 	wiring := Wiring{
 		PrepareBridge:  func(context.Context, config.Config) error { return sentinel },
 		SetupBenchmark: func(context.Context, config.Config) error { touched = true; return nil },
-		LoadPreparationTasks: func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
+		LoadBenchmark: testBenchmarkLoader(func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
 			return nil, nil
-		},
+		}, nil),
 		PullImages:        func(context.Context, config.Config, []string) error { return nil },
 		BuildHarnessImage: func(context.Context, config.Config) error { return nil },
 	}
-	if err := ensurePrepared(context.Background(), config.Config{}, wiring, nil); !errors.Is(err, sentinel) || touched {
+	if _, err := ensurePrepared(context.Background(), config.Config{}, t.TempDir(), wiring, nil); !errors.Is(err, sentinel) || touched {
 		t.Fatalf("preparation order/error lost: %v touched=%v", err, touched)
 	}
 }

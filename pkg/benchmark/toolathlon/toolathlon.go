@@ -181,6 +181,7 @@ type Options struct {
 // Benchmark discovers selected Toolathlon tasks and retains their private
 // grader archives until evaluation.
 type Benchmark struct {
+	tasks            []core.Task
 	root             string
 	taskIDs          []string
 	executionTaskIDs []string
@@ -517,7 +518,55 @@ func New(options Options) (*Benchmark, error) {
 	return benchmark, nil
 }
 
+// ForTask creates fresh occurrence state from the catalog loaded by Tasks.
+// Private verifier inputs stay inside the benchmark; runtime owners remain per occurrence.
+func (b *Benchmark) ForTask(logicalID, occurrenceID string) (runner.Benchmark, error) {
+	if occurrenceID != logicalID && !safeExecutionTaskID(logicalID, occurrenceID) {
+		return nil, fmt.Errorf("invalid toolathlon execution task ID %q", occurrenceID)
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	for _, task := range b.tasks {
+		if task.ID != logicalID {
+			continue
+		}
+		private, ok := b.details[logicalID]
+		if !ok {
+			break
+		}
+		private.stashed = nil
+		private.bundle = nil
+		task.ID = occurrenceID
+		return &Benchmark{
+			root:             b.root,
+			outputDir:        b.outputDir,
+			revision:         b.revision,
+			environment:      b.environment,
+			gatewayPort:      b.gatewayPort,
+			appHost:          b.appHost,
+			maxSteps:         b.maxSteps,
+			modelName:        b.modelName,
+			harnessWebSearch: b.harnessWebSearch,
+			concurrency:      b.concurrency,
+			creds:            b.creds,
+			scrub:            b.scrub,
+			tasks:            core.CloneTasks([]core.Task{task}),
+			details:          map[string]taskDetails{occurrenceID: private},
+		}, nil
+	}
+	return nil, fmt.Errorf("toolathlon task %q was not loaded by Tasks", logicalID)
+}
+
 func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if b.tasks != nil {
+		return core.CloneTasks(b.tasks), nil
+	}
+
 	if err := VerifyRevision(ctx, b.root, b.revision); err != nil {
 		return nil, err
 	}
@@ -562,14 +611,13 @@ func (b *Benchmark) Tasks(ctx context.Context) ([]core.Task, error) {
 		return nil, fmt.Errorf("application-backed and account-backed tasks share state outside the sandbox and must run at execution.concurrency 1 (concurrency %d with %s)", b.concurrency, strings.Join(sharedStateTasks, ", "))
 	}
 
-	b.mu.Lock()
 	b.details = details
 	b.creds = creds
 	b.scrub = nil
 	if creds != nil {
 		b.scrub = newScrubber(creds.secrets)
 	}
-	b.mu.Unlock()
+	b.tasks = core.CloneTasks(tasks)
 	return tasks, nil
 }
 

@@ -41,10 +41,11 @@ func TestRenderConfigEmitsGenerationSettingsOnlyWhenSet(t *testing.T) {
 	model := vllmModel()
 	model.ContextLength, model.MaxTokens, model.Temperature = 262144, 32768, floatPtr(1)
 	text := mustRender(t, model, baseSettings())
-	for _, line := range []string{"  context_length: 262144\n", "  max_tokens: 32768\n", `"temperature": 1.0`} {
-		if !strings.Contains(text, line) {
-			t.Fatalf("missing %q:\n%s", line, text)
-		}
+	config := decodeConfigYAML(t, []byte(text))
+	nativeModel := config["model"].(map[string]any)
+	body := config["custom_providers"].([]any)[0].(map[string]any)["extra_body"].(map[string]any)
+	if nativeModel["context_length"] != 262144 || nativeModel["max_tokens"] != 32768 || body["temperature"] != float64(1) {
+		t.Fatalf("generation settings = %#v / %#v", nativeModel, body)
 	}
 	bad := map[string]func(*core.ModelConfig){
 		"max tokens fills window": func(m *core.ModelConfig) { m.ContextLength, m.MaxTokens = 1000, 1000 },
@@ -75,12 +76,18 @@ func TestRenderConfigEmitsCompactionBlockOnlyWhenSet(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, hasEnabled := parsed.Compression["enabled"]
-	if !strings.Contains(text, "\ncompression:\n  threshold_tokens: 65536\n") || hasEnabled {
+	if parsed.Compression["threshold_tokens"] != 65536 || hasEnabled {
 		t.Fatalf("threshold-only compaction block is wrong:\n%s", text)
 	}
 	settings.compaction = &CompactionSettings{Enabled: boolPtr(false)}
-	if !strings.Contains(mustRender(t, vllmModel(), settings), "\ncompression:\n  enabled: false\n") {
-		t.Fatal("disabled compaction was not rendered")
+	disabled := decodeConfigYAML(t, []byte(mustRender(t, vllmModel(), settings)))["compression"].(map[string]any)
+	if disabled["enabled"] != false || len(disabled) != 1 {
+		t.Fatalf("disabled compaction = %#v", disabled)
+	}
+	settings.compaction = &CompactionSettings{}
+	empty := decodeConfigYAML(t, []byte(mustRender(t, vllmModel(), settings)))
+	if value, exists := empty["compression"]; !exists || value != nil {
+		t.Fatalf("empty compaction = %#v", empty)
 	}
 	model := vllmModel()
 	model.ContextLength = 65536
@@ -94,8 +101,7 @@ func TestRenderConfigEmitsCompactionBlockOnlyWhenSet(t *testing.T) {
 	}
 }
 
-// The profile's extra_body is written verbatim as an indented JSON flow
-// mapping. A YAML reader must recover the same object, with the ${ARIES_*}
+// A YAML reader must recover the opaque JSON object, with the ${ARIES_*}
 // references left for Hermes to expand.
 func TestRenderConfigWritesExtraBodyAsYAMLReadableJSON(t *testing.T) {
 	if strings.Contains(mustRender(t, vllmModel(), baseSettings()), "custom_providers:") {
@@ -131,10 +137,10 @@ func TestRenderConfigWritesExtraBodyAsYAMLReadableJSON(t *testing.T) {
 		t.Fatalf("metadata = %#v", meta)
 	}
 	odd, _ := entry.ExtraBody["odd"].([]any)
-	if len(odd) != 7 || odd[0] != "a: b" || odd[1] != "x<y #z" || odd[2] != nil || odd[4] != "tab\tchar" || odd[5] != `q"q` || odd[6] != "brace }" {
+	if len(odd) != 7 || odd[0] != "a: b" || odd[1] != "x<y #z" || odd[2] != nil || odd[3] != float64(1000) || odd[4] != "tab\tchar" || odd[5] != `q"q` || odd[6] != "brace }" {
 		t.Fatalf("odd = %#v", odd)
 	}
-	for _, bad := range []string{`[1]`, `"x"`, `{}`, `null`, `{"a":`, ``} {
+	for _, bad := range []string{`[1]`, `"x"`, `{}`, `null`, `{"a":`, `{"a":1} {"b":2}`, `{"a":1} trailing`, ``} {
 		settings.extraBody = []byte(bad)
 		if _, err := renderConfig(vllmModel(), settings, nil); err == nil && bad != "" {
 			t.Fatalf("accepted extra_body %q", bad)
@@ -183,11 +189,11 @@ func TestStartRendersContextBlocksAndExportsIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := string(retained)
-	for _, line := range []string{`"user": "${ARIES_RUN_ID}-${ARIES_TASK_ID}"`, `provider: "custom"`, "threshold_tokens: 65536", "context_length: 262144", `${VLLM_API_KEY}`} {
-		if !strings.Contains(text, line) {
-			t.Fatalf("retained config lacks %q:\n%s", line, text)
-		}
+	config := decodeConfigYAML(t, retained)
+	nativeModel := config["model"].(map[string]any)
+	body := config["custom_providers"].([]any)[0].(map[string]any)["extra_body"].(map[string]any)
+	if nativeModel["provider"] != "custom" || nativeModel["api_key"] != "${VLLM_API_KEY}" || nativeModel["context_length"] != 262144 || config["compression"].(map[string]any)["threshold_tokens"] != 65536 || body["user"] != "${ARIES_RUN_ID}-${ARIES_TASK_ID}" {
+		t.Fatalf("retained config = %#v", config)
 	}
 	joined := strings.Join(fake.created.Env, "\n")
 	for _, want := range []string{"ARIES_RUN_ID=run-7", "ARIES_TASK_ID=fix-git"} {
@@ -234,6 +240,43 @@ func TestRenderTemperatureUsesRequestExtraBody(t *testing.T) {
 	model.Temperature = floatPtr(0)
 	if _, err := renderConfig(model, baseSettings(), nil); err == nil {
 		t.Fatal("unsupported DeepSeek temperature accepted")
+	}
+}
+
+func TestRenderConfigPreservesJSONNumericPrecision(t *testing.T) {
+	settings := baseSettings()
+	settings.extraBody = []byte(`{"integer":9007199254740993,"huge":18446744073709551617,"decimal":0.1234567890123456789012345,"scientific":1e3,"nested":[0.0,"1e3"]}`)
+	text := mustRender(t, vllmModel(), settings)
+	var parsed struct {
+		Providers []struct {
+			Body yaml.Node `yaml:"extra_body"`
+		} `yaml:"custom_providers"`
+	}
+	if err := yaml.Unmarshal([]byte(text), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	body := parsed.Providers[0].Body
+	want := map[string][2]string{
+		"integer":    {"!!int", "9007199254740993"},
+		"huge":       {"!!int", "18446744073709551617"},
+		"decimal":    {"!!float", "0.1234567890123456789012345"},
+		"scientific": {"!!float", "1e3"},
+	}
+	for index := 0; index < len(body.Content); index += 2 {
+		key, value := body.Content[index].Value, body.Content[index+1]
+		if key == "nested" {
+			if len(value.Content) != 2 || value.Content[0].Tag != "!!float" || value.Content[0].Value != "0.0" || value.Content[1].Tag != "!!str" || value.Content[1].Value != "1e3" {
+				t.Fatalf("nested numbers changed: %#v", value.Content)
+			}
+			continue
+		}
+		if got := [2]string{value.Tag, value.Value}; got != want[key] {
+			t.Fatalf("%s = %#v, want %#v", key, got, want[key])
+		}
+		delete(want, key)
+	}
+	if len(want) != 0 {
+		t.Fatalf("request numbers omitted: %#v", want)
 	}
 }
 

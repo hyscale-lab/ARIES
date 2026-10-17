@@ -29,6 +29,13 @@ private `tests/` directory (`rubrics.json`, `system_prompt.txt`,
 `user_prompt_template.txt`, optional `prompt.txt`) that ARIES reads directly
 from the host checkout — none of it is ever uploaded into the sandbox.
 
+QA tasks start in `/app`, where the upstream images contain the repository.
+This follows the pinned [QA agent configuration](https://github.com/scaleapi/SWE-Atlas/blob/6de82c3603fb9e254170b440d7560441eb257176/run_config/qa/mswea_qa_config.yaml)
+and the [dataset's execution instructions](https://huggingface.co/datasets/ScaleAI/SWE-Atlas-QnA/blob/main/README.md).
+The adapter sets this directory explicitly. A Dockerfile containing only `FROM`
+inherits its base image's working directory; it does not establish `/` as the
+benchmark's intended starting directory.
+
 The agent is expected to write its final answer, wrapped in
 `<<FINAL_ANSWER>>` tags, to `/logs/agent/answer.txt` inside the sandbox —
 `instruction.md` itself instructs this, so ARIES does not need to augment the

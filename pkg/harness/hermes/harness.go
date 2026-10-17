@@ -424,7 +424,6 @@ type voiceSTTResult struct {
 	RawResult     map[string]any `json:"raw_result,omitempty"`
 	Stdout        string         `json:"stdout"`
 	Stderr        string         `json:"stderr"`
-	Signature     string         `json:"signature,omitempty"`
 	Error         string         `json:"error,omitempty"`
 }
 
@@ -492,13 +491,23 @@ func (manager *Manager) transcribeVoice(ctx context.Context, active *session) vo
 		return stt
 	}
 	stt.RawResult = payload
-	if success, ok := payload["success"].(bool); ok && !success {
-		stt.Error = cmp.Or(normalizeTranscript(payload["error"]), "stt_failed")
+	success, ok := payload["success"].(bool)
+	if !ok {
+		stt.Error = "stt_invalid_result"
 		return stt
 	}
-	stt.Transcript = strings.TrimSpace(normalizeTranscript(payload["transcript"]))
+	if !success {
+		nativeError, _ := payload["error"].(string)
+		stt.Error = cmp.Or(nativeError, "stt_failed")
+		return stt
+	}
+	transcript, ok := payload["transcript"].(string)
+	if !ok {
+		stt.Error = "stt_invalid_result"
+		return stt
+	}
+	stt.Transcript = strings.TrimSpace(transcript)
 	stt.RawTranscript = stt.Transcript
-	stt.Signature, _ = payload["signature"].(string)
 	if stt.Transcript == "" {
 		stt.Error = "stt_empty_transcript"
 		return stt
@@ -508,67 +517,22 @@ func (manager *Manager) transcribeVoice(ctx context.Context, active *session) vo
 }
 
 func hermesSTTCommand(options VoiceSTTOptions) []string {
-	provider := options.Provider
-	if provider == "" {
-		provider = "openai"
-	}
-	model := options.Model
-	if model == "" {
-		if provider == "local" {
-			model = "base"
-		} else {
-			model = "gpt-4o-mini-transcribe"
-		}
-	}
 	script := `set -eu
 if [ -f ` + voiceKeyPath + ` ]; then
   OPENAI_API_KEY="$(cat ` + voiceKeyPath + `)"
   export OPENAI_API_KEY
 fi
-exec python3 -c "$1" "$2" "$3" "$4" "$5"
+exec python3 -c "$1" "$2" "$3"
 `
-	return []string{"/bin/sh", "-c", script, "aries-hermes-stt", hermesSTTScript, voiceWAVPath, model, provider, options.Language}
+	return []string{"/bin/sh", "-c", script, "aries-hermes-stt", hermesSTTScript, voiceWAVPath, options.Model}
 }
 
 const hermesSTTScript = `
-import inspect
 import json
-import os
 import sys
 from tools.voice_mode import transcribe_recording
-wav_path = sys.argv[1]
-model = sys.argv[2]
-provider = sys.argv[3] if len(sys.argv) > 3 else os.environ.get("HERMES_STT_PROVIDER", "openai")
-language = sys.argv[4] if len(sys.argv) > 4 else os.environ.get("HERMES_STT_LANGUAGE", "")
-os.environ["HERMES_STT_PROVIDER"] = provider
-os.environ["HERMES_STT_MODEL"] = model
-os.environ["OPENAI_STT_MODEL"] = model
-os.environ["OPENAI_TRANSCRIBE_MODEL"] = model
-if language:
-    os.environ["HERMES_STT_LANGUAGE"] = language
-sig = inspect.signature(transcribe_recording)
-kwargs = {}
-params = list(sig.parameters.values())
-if not params:
-    result = transcribe_recording()
-else:
-    first = params[0].name
-    kwargs[first] = wav_path
-    if "provider" in sig.parameters:
-        kwargs["provider"] = provider
-    if "model" in sig.parameters:
-        kwargs["model"] = model
-    if "language" in sig.parameters and language:
-        kwargs["language"] = language
-    result = transcribe_recording(**kwargs)
-if isinstance(result, str):
-    payload = {"transcript": result}
-elif isinstance(result, dict):
-    payload = result
-else:
-    payload = {"transcript": getattr(result, "text", None) or getattr(result, "transcript", None) or str(result)}
-payload.setdefault("signature", str(sig))
-print(json.dumps(payload, ensure_ascii=False))
+result = transcribe_recording(sys.argv[1], model=sys.argv[2])
+print(json.dumps(result, ensure_ascii=False))
 `
 
 func (manager *Manager) writeVoiceResult(active *session, originalPrompt string, stt voiceSTTResult, agentOutput string) error {
@@ -862,23 +826,6 @@ func lastJSONObject(text string) (map[string]any, bool) {
 		}
 	}
 	return nil, false
-}
-
-func normalizeTranscript(value any) string {
-	switch typed := value.(type) {
-	case string:
-		return typed
-	case map[string]any:
-		for _, key := range []string{"text", "transcript", "output_text"} {
-			if text, ok := typed[key].(string); ok {
-				return text
-			}
-		}
-	}
-	if value == nil {
-		return ""
-	}
-	return fmt.Sprint(value)
 }
 
 func tailString(content []byte, limit int) string {

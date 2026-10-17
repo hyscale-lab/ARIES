@@ -42,17 +42,19 @@ func ServeChild(ctx context.Context, c managed.LaunchConfig, logger *logrus.Logg
 	}
 	defer closeBackend()
 	return managed.Serve(ctx, managed.ServeOptions{Config: c, Backend: backend, NewNative: func(signer ssh.Signer, sandboxID, outputDir string) (managed.NativeServer, error) {
-		var dialect sshbridge.Dialect
+		options := sshbridge.Options{HostSigner: signer, SandboxID: sandboxID, ResolveListen: func(context.Context) (core.BridgeListen, error) { return c.Listen, nil }, OutputDir: outputDir, Logger: logger, OmitRawLog: !c.RetainRawLog}
 		switch c.BridgeType {
 		case "hermes-ssh":
-			dialect = hermes.Dialect{}
+			options.Dialect = hermes.Dialect{}
+			return sshbridge.New(options)
 		case "openclaw-ssh":
-			dialect = openclaw.Dialect{}
+			return openclaw.New(options)
 		default:
 			return nil, errors.New("unsupported bridge protocol")
 		}
-		return sshbridge.New(sshbridge.Options{Dialect: dialect, HostSigner: signer, SandboxID: sandboxID, ResolveListen: func(context.Context) (core.BridgeListen, error) { return c.Listen, nil }, OutputDir: outputDir, Logger: logger, OmitRawLog: !c.RetainRawLog})
 	}})
 }
 
 var _ managed.NativeServer = (*sshbridge.Manager)(nil)
+
+var _ managed.NativeServer = (*openclaw.Server)(nil)

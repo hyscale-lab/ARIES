@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-func TestDialectRejectsHermesAndUnknownVirtualControls(t *testing.T) {
-	for _, wire := range []string{"bash -c true", "echo $HOME", encodeCanonicalTokens([]string{remoteShell, "-c", "rm -rf -- " + virtualRuntimeRoot})} {
+func TestDialectRejectsOtherShellGrammars(t *testing.T) {
+	for _, wire := range []string{"bash -c true", "echo $HOME"} {
 		prepared, refusal := (Dialect{}).Prepare(wire, "/work")
 		if refusal == nil || refusal.OperationClass != "exec" || refusal.Status != "rejected" || refusal.Message != "invalid remote command" || prepared.Command.Path != "" {
 			t.Fatalf("Prepare(%q) = %#v,%#v", wire, prepared, refusal)

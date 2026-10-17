@@ -80,7 +80,7 @@ func TestRequestSettingsReachRealHermes(t *testing.T) {
 				StartTimeout:   90 * time.Second,
 				CleanupTimeout: 60 * time.Second,
 				APIKeyLookup:   func(string) ([]byte, bool) { return []byte("sk-integration-not-a-real-key"), true },
-			}, ExtraBody: []byte(`{"user":"aries-temperature-regression"}`)})
+			}, ExtraBody: []byte(`{"user":"aries-temperature-regression","metadata":{"integer":9007199254740993,"huge":18446744073709551617,"scientific":1e3,"run":"${ARIES_RUN_ID}","nested":["a: b","line\nbreak",null]}}`)})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -133,6 +133,22 @@ func TestRequestSettingsReachRealHermes(t *testing.T) {
 				}
 				if string(body["user"]) != `"aries-temperature-regression"` {
 					t.Errorf("extra body user=%s", body["user"])
+				}
+				var metadata map[string]json.RawMessage
+				if err := json.Unmarshal(body["metadata"], &metadata); err != nil {
+					t.Fatal(err)
+				}
+				for key, want := range map[string]string{
+					"integer": "9007199254740993", "huge": "18446744073709551617",
+					"scientific": "1000.0", "run": `"temperature-integration"`,
+				} {
+					if string(metadata[key]) != want {
+						t.Errorf("metadata.%s=%s, want %s", key, metadata[key], want)
+					}
+				}
+				var nested []any
+				if err := json.Unmarshal(metadata["nested"], &nested); err != nil || len(nested) != 3 || nested[0] != "a: b" || nested[1] != "line\nbreak" || nested[2] != nil {
+					t.Errorf("nested extra body=%s (%v)", metadata["nested"], err)
 				}
 				if string(body["reasoning_effort"]) != fmt.Sprintf("%q", wireReasoning) {
 					t.Errorf("reasoning_effort=%s, want %s", body["reasoning_effort"], wireReasoning)

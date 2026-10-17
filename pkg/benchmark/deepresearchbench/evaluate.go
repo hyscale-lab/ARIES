@@ -114,30 +114,11 @@ func (b *Benchmark) Evaluate(ctx context.Context, task core.Task, sandbox runner
 	var wg sync.WaitGroup
 
 	if b.race != nil {
-		references, err := loadReferenceArticles(filepath.Join(b.root, b.referenceFile))
-		if err != nil {
-			return finish(fmt.Errorf("load deepresearchbench reference articles: %w", err))
-		}
-		reference, ok := references[numericID]
+		input, ok := b.judgeInputs[numericID]
 		if !ok {
-			return finish(fmt.Errorf("no reference article for deepresearchbench task %q", task.ID))
+			return finish(fmt.Errorf("no judge inputs for deepresearchbench task %q", task.ID))
 		}
-		prompts, err := loadPrompts(filepath.Join(b.root, b.queryFile))
-		if err != nil {
-			return finish(fmt.Errorf("load deepresearchbench prompts: %w", err))
-		}
-		prompt, ok := prompts[numericID]
-		if !ok {
-			return finish(fmt.Errorf("no prompt for deepresearchbench task %q", task.ID))
-		}
-		criteria, err := loadCriteria(filepath.Join(b.root, b.criteriaFile))
-		if err != nil {
-			return finish(fmt.Errorf("load deepresearchbench criteria: %w", err))
-		}
-		taskRubric, ok := criteria[numericID]
-		if !ok {
-			return finish(fmt.Errorf("no criteria for deepresearchbench task %q", task.ID))
-		}
+		prompt, reference, taskRubric := input.prompt, input.reference, input.criteria
 
 		if err := os.WriteFile(promptArtifactPath, []byte(prompt), 0o600); err != nil {
 			return finish(fmt.Errorf("write judge prompt artifact: %w", err))

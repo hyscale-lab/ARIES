@@ -15,6 +15,11 @@ dispatch. `openclaw/realtime.Runner` consumes that client for talk/chat/tool
 session semantics; the gateway package intentionally contains no voice event
 parsers or Docker lifecycle.
 
+The transport uses Gorilla WebSocket for connection and frame handling, including
+legal fragmented messages and interleaved control frames. The 64 MiB limit applies
+to the assembled message; cancellation closes the connection. Gateway request
+correlation and ambiguous-admission handling remain in the existing client.
+
 Text, realtime and voice-transcribe modes share the authenticated Gateway transport. Text sends exactly one pinned-version `agent` request and correlates accepted and terminal responses by both frame request ID and non-empty run ID; an ambiguous send, disconnect, timeout, or protocol mismatch is never retried. Realtime and voice-transcribe require read and write scopes, while text requires write scope. Only sanitized role and
 sorted scope metadata may leave the authentication boundary.
 
@@ -118,6 +123,11 @@ Third, Hermes accepts only provider names in its own registry, and rejects unkno
 Hermes's generic `custom` provider, which routes to `model.base_url`, in the
 rendered config. DeepSeek is a
 built-in provider and stays as written.
+
+Hermes configuration uses the repository's YAML encoder. Optional native fields
+stay omitted unless configured; explicit zero temperature remains present.
+Opaque request-body numbers retain their precision, and placeholders remain
+strings until native expansion.
 
 Fourth, three optional profile blocks render into `config.yaml` only when set:
 `model.context_length` / `max_tokens` / `temperature`, `harness.compaction`,

@@ -11,8 +11,14 @@ only, has no native configuration file, adds no preparation step, and receives
 the same bounded model discovery as external SGLang. SGLang may also be
 external, or ARIES may manage one host process across a profile run.
 Managed SGLang uses a native YAML file, explicit executable and timeouts, and
-optional GPU indices; ARIES validates model, port, and GPU topology before side
-effects. Service ownership and teardown follow the
+optional GPU indices; ARIES validates endpoint settings and GPU topology before
+side effects. It requires full names for those fields and rejects their native
+aliases and abbreviations, including values supplied through YAML merges.
+It also rejects keys containing `=` and requires scalar values or list items
+starting with `-` to be numeric. This blocks embedded command-line options while
+preserving native negative numeric values.
+Other native options pass through unchanged for SGLang to validate,
+including metrics, quantization, memory settings, and parsers. Service ownership and teardown follow the
 [model runtime contract](../design/runtime.md#managed-service-operations).
 
 Both direct run and the optional `aries setup PROFILE.json` command share one

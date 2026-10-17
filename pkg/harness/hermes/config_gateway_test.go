@@ -3,9 +3,12 @@ package hermes
 import (
 	"context"
 	"errors"
-	"github.com/hyscale-lab/aries/pkg/core"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/hyscale-lab/aries/pkg/core"
 )
 
 func TestGatewayConfigPreservesNativeDefaultsAndExplicitDelegationPolicy(t *testing.T) {
@@ -18,8 +21,9 @@ func TestGatewayConfigPreservesNativeDefaultsAndExplicitDelegationPolicy(t *test
 			t.Errorf("overrode native default %q", section)
 		}
 	}
-	if !strings.Contains(string(rendered), "\nagent:\n  max_turns: 10\n  disabled_toolsets:\n    - delegation\n") {
-		t.Fatal("missing explicit delegation policy")
+	config := decodeConfigYAML(t, rendered)
+	if !reflect.DeepEqual(config["agent"], map[string]any{"max_turns": 10, "disabled_toolsets": []any{"delegation"}}) {
+		t.Fatalf("agent settings = %#v", config["agent"])
 	}
 	if strings.Contains(string(rendered), "\ndisabled_toolsets:") {
 		t.Fatal("API ignores top-level disabled_toolsets")
@@ -32,8 +36,9 @@ func TestGatewayConfigExplicitlyEnablesDelegation(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(rendered)
-	if !strings.Contains(text, "    - delegation\n") || !strings.Contains(text, "\ndelegation:\n  max_concurrent_children: 2\n") {
-		t.Fatal("delegation not enabled and bounded")
+	config := decodeConfigYAML(t, rendered)
+	if !slices.Contains(config["platform_toolsets"].(map[string]any)["api_server"].([]any), any("delegation")) || config["delegation"].(map[string]any)["max_concurrent_children"] != 2 {
+		t.Fatalf("delegation settings = %#v", config)
 	}
 	if strings.Contains(text, "disabled_toolsets:") {
 		t.Fatal("enabled delegation has denylist")
@@ -71,7 +76,9 @@ func TestGatewayAllowsReservedMCPChildAlias(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(rendered), `API_SERVER_KEY: "${SERVICE_TOKEN}"`) {
+	config := decodeConfigYAML(t, rendered)
+	service := config["mcp_servers"].(map[string]any)["service"].(map[string]any)
+	if service["env"].(map[string]any)["API_SERVER_KEY"] != "${SERVICE_TOKEN}" {
 		t.Fatal("MCP child alias was not preserved")
 	}
 }
