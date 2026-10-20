@@ -92,7 +92,7 @@ const (
 	FileType_FILE_TYPE_UNSPECIFIED FileType = 0
 	FileType_FILE_TYPE_REGULAR     FileType = 1
 	FileType_FILE_TYPE_DIRECTORY   FileType = 2
-	// OTHER covers symlinks that do not resolve, devices, sockets, and fifos.
+	// OTHER covers devices, sockets, and fifos. A symlink reports its target.
 	FileType_FILE_TYPE_OTHER FileType = 3
 )
 
@@ -335,7 +335,8 @@ func (x *StatRequest) GetPath() string {
 
 type StatResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// exists is false when nothing is at path; every other field is then zero.
+	// exists is false when nothing is at path, or when path is a symlink whose
+	// target is missing, as `[ -e ]` reports; every other field is then zero.
 	Exists bool `protobuf:"varint,1,opt,name=exists,proto3" json:"exists,omitempty"`
 	// type classifies what is there. Only REGULAR files can be read or written.
 	Type FileType `protobuf:"varint,2,opt,name=type,proto3,enum=aries.sandbox.v1.FileType" json:"type,omitempty"`
@@ -838,7 +839,8 @@ func (x *ReadLinesSummary) GetMore() bool {
 
 // WriteFileRequest is one message of the WriteFile stream: exactly one header
 // first, then chunks whose lengths sum to header.size. Fewer or more bytes is
-// INVALID_ARGUMENT, and the file is left as it was.
+// INVALID_ARGUMENT, and the file is left as it was. Parent directories created
+// for a write remain if the write fails.
 type WriteFileRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Part:
@@ -983,7 +985,8 @@ type WriteFileResponse struct {
 	BytesWritten int64 `protobuf:"varint,1,opt,name=bytes_written,json=bytesWritten,proto3" json:"bytes_written,omitempty"`
 	// created is true when no file existed at path before the call. A replaced
 	// file keeps its mode; a created one gets the sandbox's default mode, and
-	// either way the owner is the sandbox's exec user.
+	// either way the owner is the user of the agent's shell: the sandbox's exec
+	// user, or the image USER when none is set.
 	Created       bool `protobuf:"varint,2,opt,name=created,proto3" json:"created,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

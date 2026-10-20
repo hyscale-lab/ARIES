@@ -57,6 +57,9 @@ type SandboxClient interface {
 	// bytes: a header, then chunks, then the client half-closes. A reader sees
 	// the old file or the new one, never a prefix; missing parent directories
 	// are created. The file changes only if exactly header.size bytes arrived.
+	// Parent directories created for a write remain if the write fails. A path
+	// that the user of the agent's shell could not write gives
+	// PERMISSION_DENIED.
 	WriteFile(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[WriteFileRequest, WriteFileResponse], error)
 }
 
@@ -166,6 +169,9 @@ type SandboxServer interface {
 	// bytes: a header, then chunks, then the client half-closes. A reader sees
 	// the old file or the new one, never a prefix; missing parent directories
 	// are created. The file changes only if exactly header.size bytes arrived.
+	// Parent directories created for a write remain if the write fails. A path
+	// that the user of the agent's shell could not write gives
+	// PERMISSION_DENIED.
 	WriteFile(grpc.ClientStreamingServer[WriteFileRequest, WriteFileResponse]) error
 	mustEmbedUnimplementedSandboxServer()
 }

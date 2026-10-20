@@ -30,6 +30,9 @@ service Sandbox {
   // bytes: a header, then chunks, then the client half-closes. A reader sees
   // the old file or the new one, never a prefix; missing parent directories
   // are created. The file changes only if exactly header.size bytes arrived.
+  // Parent directories created for a write remain if the write fails. A path
+  // that the user of the agent's shell could not write gives
+  // PERMISSION_DENIED.
   rpc WriteFile(stream WriteFileRequest) returns (WriteFileResponse);
 }
 
@@ -82,7 +85,8 @@ message StatRequest {
 }
 
 message StatResponse {
-  // exists is false when nothing is at path; every other field is then zero.
+  // exists is false when nothing is at path, or when path is a symlink whose
+  // target is missing, as `[ -e ]` reports; every other field is then zero.
   bool exists = 1;
   // type classifies what is there. Only REGULAR files can be read or written.
   FileType type = 2;
@@ -97,7 +101,7 @@ enum FileType {
   FILE_TYPE_UNSPECIFIED = 0;
   FILE_TYPE_REGULAR = 1;
   FILE_TYPE_DIRECTORY = 2;
-  // OTHER covers symlinks that do not resolve, devices, sockets, and fifos.
+  // OTHER covers devices, sockets, and fifos. A symlink reports its target.
   FILE_TYPE_OTHER = 3;
 }
 
@@ -170,7 +174,8 @@ message ReadLinesSummary {
 
 // WriteFileRequest is one message of the WriteFile stream: exactly one header
 // first, then chunks whose lengths sum to header.size. Fewer or more bytes is
-// INVALID_ARGUMENT, and the file is left as it was.
+// INVALID_ARGUMENT, and the file is left as it was. Parent directories created
+// for a write remain if the write fails.
 message WriteFileRequest {
   oneof part {
     WriteFileHeader header = 1;
@@ -192,6 +197,7 @@ message WriteFileResponse {
   int64 bytes_written = 1;
   // created is true when no file existed at path before the call. A replaced
   // file keeps its mode; a created one gets the sandbox's default mode, and
-  // either way the owner is the sandbox's exec user.
+  // either way the owner is the user of the agent's shell: the sandbox's exec
+  // user, or the image USER when none is set.
   bool created = 2;
 }
