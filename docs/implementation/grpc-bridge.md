@@ -33,8 +33,8 @@ with the control API. The service has five procedures:
 - `Stat` reports existence, type (regular, directory, other), size, and
   permission bits. A missing path gives `exists=false` with status OK.
 - `ReadFile` streams a header (file size and `truncated`), then content chunks
-  of the range that `offset` and `max_bytes` select. Zero `max_bytes` reads to
-  the end of the file.
+  of the first `max_bytes` bytes. Zero `max_bytes` reads to the end of the
+  file.
 - `ReadLines` streams a window of lines from `first_line` (1-based) for
   `max_lines` lines, and cuts each line at `max_line_bytes`. A summary comes
   last: `total_lines`, `size`, `ends_with_newline`, and `more`.
@@ -113,7 +113,7 @@ ARIES stages the static `aries-grpc-client` into the Hermes container at
 ```text
 aries-grpc-client exec [--login] [--] SCRIPT
 aries-grpc-client file stat PATH
-aries-grpc-client file read [--offset N] [--max-bytes N] PATH
+aries-grpc-client file read [--max-bytes N] PATH
 aries-grpc-client file lines --first N --max N [--max-line-bytes N] PATH
 aries-grpc-client file write --size N PATH < content
 ```

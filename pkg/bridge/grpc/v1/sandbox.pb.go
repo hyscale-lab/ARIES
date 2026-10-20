@@ -411,9 +411,6 @@ type ReadFileRequest struct {
 	// path is absolute and must name a regular file (FAILED_PRECONDITION
 	// otherwise, NOT_FOUND when absent).
 	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
-	// offset is the first byte to return, counted from the start of the file.
-	// Negative is INVALID_ARGUMENT; past the end yields empty content.
-	Offset int64 `protobuf:"varint,2,opt,name=offset,proto3" json:"offset,omitempty"`
 	// max_bytes bounds the returned content. Zero reads to the end of the file;
 	// negative is INVALID_ARGUMENT. Probes pass small values (3, 1000, 4096).
 	MaxBytes      int64 `protobuf:"varint,3,opt,name=max_bytes,json=maxBytes,proto3" json:"max_bytes,omitempty"`
@@ -458,13 +455,6 @@ func (x *ReadFileRequest) GetPath() string {
 	return ""
 }
 
-func (x *ReadFileRequest) GetOffset() int64 {
-	if x != nil {
-		return x.Offset
-	}
-	return 0
-}
-
 func (x *ReadFileRequest) GetMaxBytes() int64 {
 	if x != nil {
 		return x.MaxBytes
@@ -473,8 +463,8 @@ func (x *ReadFileRequest) GetMaxBytes() int64 {
 }
 
 // ReadFileResponse is one message of the ReadFile stream: exactly one header
-// first, then zero or more chunks. The chunks concatenated are bytes
-// [offset, offset+n) of the file.
+// first, then zero or more chunks. The chunks concatenated are the first n
+// bytes of the file.
 type ReadFileResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Part:
@@ -1064,11 +1054,10 @@ const file_pkg_bridge_grpc_v1_sandbox_proto_rawDesc = "" +
 	"\x06exists\x18\x01 \x01(\bR\x06exists\x12.\n" +
 	"\x04type\x18\x02 \x01(\x0e2\x1a.aries.sandbox.v1.FileTypeR\x04type\x12\x12\n" +
 	"\x04size\x18\x03 \x01(\x03R\x04size\x12\x12\n" +
-	"\x04mode\x18\x04 \x01(\rR\x04mode\"Z\n" +
+	"\x04mode\x18\x04 \x01(\rR\x04mode\"P\n" +
 	"\x0fReadFileRequest\x12\x12\n" +
-	"\x04path\x18\x01 \x01(\tR\x04path\x12\x16\n" +
-	"\x06offset\x18\x02 \x01(\x03R\x06offset\x12\x1b\n" +
-	"\tmax_bytes\x18\x03 \x01(\x03R\bmaxBytes\"n\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x1b\n" +
+	"\tmax_bytes\x18\x03 \x01(\x03R\bmaxBytesJ\x04\b\x02\x10\x03R\x06offset\"n\n" +
 	"\x10ReadFileResponse\x12:\n" +
 	"\x06header\x18\x01 \x01(\v2 .aries.sandbox.v1.ReadFileHeaderH\x00R\x06header\x12\x16\n" +
 	"\x05chunk\x18\x02 \x01(\fH\x00R\x05chunkB\x06\n" +

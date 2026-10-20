@@ -5,7 +5,7 @@ package grpc
 //
 //	aries-grpc-client exec [--login] [--] SCRIPT
 //	aries-grpc-client file stat PATH
-//	aries-grpc-client file read [--offset N] [--max-bytes N] PATH
+//	aries-grpc-client file read [--max-bytes N] PATH
 //	aries-grpc-client file lines --first N --max N [--max-line-bytes N] PATH
 //	aries-grpc-client file write --size N PATH < content
 //
@@ -113,10 +113,10 @@ func execMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 func fileMain(operation string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet(operation, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	var offset, maxBytes, first, count, lineBytes, size *int64
+	var maxBytes, first, count, lineBytes, size *int64
 	switch operation {
 	case "read":
-		offset, maxBytes = flags.Int64("offset", 0, ""), flags.Int64("max-bytes", 0, "")
+		maxBytes = flags.Int64("max-bytes", 0, "")
 	case "lines":
 		first, count, lineBytes = flags.Int64("first", 0, ""), flags.Int64("max", 0, ""), flags.Int64("max-line-bytes", 0, "")
 	case "write":
@@ -150,7 +150,7 @@ func fileMain(operation string, args []string, stdin io.Reader, stdout, stderr i
 			_, err = fmt.Fprintf(stdout, "%s\n", report)
 		}
 	case "read":
-		metadata, err = receiveRead(ctx, client, &sandboxv1.ReadFileRequest{Path: path, Offset: *offset, MaxBytes: *maxBytes}, stdout)
+		metadata, err = receiveRead(ctx, client, &sandboxv1.ReadFileRequest{Path: path, MaxBytes: *maxBytes}, stdout)
 	case "lines":
 		metadata, err = receiveLines(ctx, client, &sandboxv1.ReadLinesRequest{Path: path, FirstLine: *first, MaxLines: *count, MaxLineBytes: *lineBytes}, stdout)
 	case "write":

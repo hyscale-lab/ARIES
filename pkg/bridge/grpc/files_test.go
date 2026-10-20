@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -56,9 +57,13 @@ func TestFileProceduresMoveBytesThroughTheSandbox(t *testing.T) {
 	if err != nil || string(whole) != "one\ntwo\n" || header.GetSize() != 8 || header.GetTruncated() {
 		t.Fatalf("read whole = %q %v, %v", whole, header, err)
 	}
-	probe, header, err := readFile(client, &sandboxv1.ReadFileRequest{Path: "/app/new.txt", Offset: 1, MaxBytes: 3})
-	if err != nil || string(probe) != "ne\n" || header.GetSize() != 8 || !header.GetTruncated() {
-		t.Fatalf("read range = %q %v, %v", probe, header, err)
+	probe, header, err := readFile(client, &sandboxv1.ReadFileRequest{Path: "/app/new.txt", MaxBytes: 3})
+	if err != nil || string(probe) != "one" || header.GetSize() != 8 || !header.GetTruncated() {
+		t.Fatalf("read head = %q %v, %v", probe, header, err)
+	}
+	unbounded, header, err := readFile(client, &sandboxv1.ReadFileRequest{Path: "/app/new.txt", MaxBytes: math.MaxInt64})
+	if err != nil || string(unbounded) != "one\ntwo\n" || header.GetTruncated() {
+		t.Fatalf("read with the largest bound = %q %v, %v", unbounded, header, err)
 	}
 	lines, summary, err := readWindow(client, &sandboxv1.ReadLinesRequest{Path: "/app/new.txt", FirstLine: 2, MaxLines: 5})
 	if err != nil || string(lines) != "two\n" || summary.GetTotalLines() != 2 || summary.GetSize() != 8 || !summary.GetEndsWithNewline() || summary.GetMore() {
@@ -374,5 +379,33 @@ func TestConfirmedWriteIsCompletedWhenTheResponseIsLost(t *testing.T) {
 	stop(t, manager)
 	if records := readToolCalls(t, endpoint.LogPaths[0]); len(records) != 1 || records[0]["status"] != "completed" {
 		t.Fatalf("records = %v", records)
+	}
+}
+
+// The window arithmetic must not overflow at the edges of int64.
+func TestReadLinesWindowNeverOverflows(t *testing.T) {
+	for _, test := range []struct {
+		first, count int64
+		window       string
+		more         bool
+	}{
+		{first: 2, count: math.MaxInt64, window: "b\n"},
+		{first: math.MaxInt64, count: 2, window: ""},
+	} {
+		var out bytes.Buffer
+		summary, err := readLines(strings.NewReader("a\nb\n"), &out, test.first, test.count, 0)
+		if err != nil || out.String() != test.window || summary.GetMore() != test.more || summary.GetTotalLines() != 2 {
+			t.Fatalf("readLines(first=%d, count=%d) = %q %v, %v", test.first, test.count, out.String(), summary, err)
+		}
+	}
+}
+
+// ReadFile had an offset field with no caller. Its number and name stay
+// reserved, so an old client cannot reuse them with another meaning.
+func TestReadFileRequestReservesTheRemovedOffset(t *testing.T) {
+	const offsetField = 2 // the removed field's number in sandbox.proto
+	descriptor := (&sandboxv1.ReadFileRequest{}).ProtoReflect().Descriptor()
+	if !descriptor.ReservedRanges().Has(offsetField) || !descriptor.ReservedNames().Has("offset") {
+		t.Fatal("ReadFileRequest does not reserve the removed offset field")
 	}
 }

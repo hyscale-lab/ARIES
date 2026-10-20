@@ -215,10 +215,10 @@ func (svc *service) Stat(ctx context.Context, request *sandboxv1.StatRequest) (*
 }
 
 func (svc *service) ReadFile(request *sandboxv1.ReadFileRequest, stream grpc.ServerStreamingServer[sandboxv1.ReadFileResponse]) error {
-	offset, limit := request.GetOffset(), request.GetMaxBytes()
+	limit := request.GetMaxBytes()
 	invalid := ""
-	if offset < 0 || limit < 0 {
-		invalid = "offset or max_bytes out of range"
+	if limit < 0 {
+		invalid = "max_bytes out of range"
 	}
 	call, err := svc.beginFile(stream.Context(), kindFileRead, request.GetPath(), invalid)
 	if err != nil {
@@ -228,16 +228,16 @@ func (svc *service) ReadFile(request *sandboxv1.ReadFileRequest, stream grpc.Ser
 		return call.streamErr(stream.Send(&sandboxv1.ReadFileResponse{Part: &sandboxv1.ReadFileResponse_Chunk{Chunk: chunk}}))
 	}}
 	sink := newSink(chunks, false)
-	truncated, err := readRange(call, stream, offset, limit, sink)
+	truncated, err := readRange(call, stream, limit, sink)
 	if err == nil {
 		err = chunks.flush()
 	}
 	return call.finish(err, sink, truncated)
 }
 
-// readRange sends the header, then bytes [offset, offset+limit) of the file
-// through sink; limit zero reads to the end.
-func readRange(call *fileCall, stream grpc.ServerStreamingServer[sandboxv1.ReadFileResponse], offset, limit int64, sink io.Writer) (bool, error) {
+// readRange sends the header, then the first limit bytes of the file through
+// sink; limit zero reads to the end.
+func readRange(call *fileCall, stream grpc.ServerStreamingServer[sandboxv1.ReadFileResponse], limit int64, sink io.Writer) (bool, error) {
 	reader, info, err := call.session.sandbox.OpenFile(call.ctx, call.path)
 	if err != nil {
 		return false, err
@@ -246,12 +246,9 @@ func readRange(call *fileCall, stream grpc.ServerStreamingServer[sandboxv1.ReadF
 	if !info.Mode().IsRegular() {
 		return false, errNotRegular
 	}
-	truncated := limit > 0 && offset+limit < info.Size()
+	truncated := limit > 0 && limit < info.Size()
 	header := &sandboxv1.ReadFileHeader{Size: info.Size(), Truncated: truncated}
 	if err := call.streamErr(stream.Send(&sandboxv1.ReadFileResponse{Part: &sandboxv1.ReadFileResponse_Header{Header: header}})); err != nil {
-		return false, err
-	}
-	if _, err := io.CopyN(io.Discard, reader, offset); err != nil && !errors.Is(err, io.EOF) {
 		return false, err
 	}
 	var source io.Reader = reader
@@ -308,7 +305,8 @@ func readLines(reader io.Reader, window io.Writer, first, count, clamp int64) (*
 		if len(chunk) > 0 {
 			last = chunk[len(chunk)-1]
 			line := total + 1
-			if line >= first && line < first+count {
+			// Differences, not sums, so no bound near MaxInt64 overflows.
+			if line >= first && line-first < count {
 				body, newline := bytes.CutSuffix(chunk, []byte{'\n'})
 				if clamp > 0 && int64(len(body)) > clamp-written {
 					body = body[:max(clamp-written, 0)]
@@ -338,7 +336,7 @@ func readLines(reader io.Reader, window io.Writer, first, count, clamp int64) (*
 			return nil, err
 		}
 	}
-	return &sandboxv1.ReadLinesSummary{TotalLines: total, EndsWithNewline: last == '\n', More: total > first+count-1}, nil
+	return &sandboxv1.ReadLinesSummary{TotalLines: total, EndsWithNewline: last == '\n', More: total-first >= count}, nil
 }
 
 func (svc *service) WriteFile(stream grpc.ClientStreamingServer[sandboxv1.WriteFileRequest, sandboxv1.WriteFileResponse]) error {

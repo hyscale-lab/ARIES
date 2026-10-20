@@ -44,9 +44,9 @@ type SandboxClient interface {
 	// Stat reports what is at a path without reading it. Absence is a normal
 	// answer (exists=false), not an error, so callers can probe cheaply.
 	Stat(ctx context.Context, in *StatRequest, opts ...grpc.CallOption) (*StatResponse, error)
-	// ReadFile streams a byte range of a regular file: a header, then chunks.
-	// It serves whole-file reads and the small probes (binary sample, BOM, line
-	// ending). File content has no size bound.
+	// ReadFile streams a regular file, or its first max_bytes bytes: a header,
+	// then chunks. It serves whole-file reads and the small probes (binary
+	// sample, BOM, line ending). File content has no size bound.
 	ReadFile(ctx context.Context, in *ReadFileRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ReadFileResponse], error)
 	// ReadLines streams a window of lines, then the counts a paginated text read
 	// needs, computed next to the data so only the window crosses the wire. It
@@ -153,9 +153,9 @@ type SandboxServer interface {
 	// Stat reports what is at a path without reading it. Absence is a normal
 	// answer (exists=false), not an error, so callers can probe cheaply.
 	Stat(context.Context, *StatRequest) (*StatResponse, error)
-	// ReadFile streams a byte range of a regular file: a header, then chunks.
-	// It serves whole-file reads and the small probes (binary sample, BOM, line
-	// ending). File content has no size bound.
+	// ReadFile streams a regular file, or its first max_bytes bytes: a header,
+	// then chunks. It serves whole-file reads and the small probes (binary
+	// sample, BOM, line ending). File content has no size bound.
 	ReadFile(*ReadFileRequest, grpc.ServerStreamingServer[ReadFileResponse]) error
 	// ReadLines streams a window of lines, then the counts a paginated text read
 	// needs, computed next to the data so only the window crosses the wire. It

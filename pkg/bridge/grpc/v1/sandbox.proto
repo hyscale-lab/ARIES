@@ -17,9 +17,9 @@ service Sandbox {
   // Stat reports what is at a path without reading it. Absence is a normal
   // answer (exists=false), not an error, so callers can probe cheaply.
   rpc Stat(StatRequest) returns (StatResponse);
-  // ReadFile streams a byte range of a regular file: a header, then chunks.
-  // It serves whole-file reads and the small probes (binary sample, BOM, line
-  // ending). File content has no size bound.
+  // ReadFile streams a regular file, or its first max_bytes bytes: a header,
+  // then chunks. It serves whole-file reads and the small probes (binary
+  // sample, BOM, line ending). File content has no size bound.
   rpc ReadFile(ReadFileRequest) returns (stream ReadFileResponse);
   // ReadLines streams a window of lines, then the counts a paginated text read
   // needs, computed next to the data so only the window crosses the wire. It
@@ -105,17 +105,17 @@ message ReadFileRequest {
   // path is absolute and must name a regular file (FAILED_PRECONDITION
   // otherwise, NOT_FOUND when absent).
   string path = 1;
-  // offset is the first byte to return, counted from the start of the file.
-  // Negative is INVALID_ARGUMENT; past the end yields empty content.
-  int64 offset = 2;
+  // offset had no caller; its number and name stay unused.
+  reserved 2;
+  reserved "offset";
   // max_bytes bounds the returned content. Zero reads to the end of the file;
   // negative is INVALID_ARGUMENT. Probes pass small values (3, 1000, 4096).
   int64 max_bytes = 3;
 }
 
 // ReadFileResponse is one message of the ReadFile stream: exactly one header
-// first, then zero or more chunks. The chunks concatenated are bytes
-// [offset, offset+n) of the file.
+// first, then zero or more chunks. The chunks concatenated are the first n
+// bytes of the file.
 message ReadFileResponse {
   oneof part {
     ReadFileHeader header = 1;

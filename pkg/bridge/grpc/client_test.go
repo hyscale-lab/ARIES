@@ -30,6 +30,7 @@ func TestClientRejectsMalformedInvocations(t *testing.T) {
 		{"exec"},
 		{"exec", "true", "extra"},
 		{"exec", "--unknown", "true"},
+		{"file", "read", "--offset", "1", "/app/f"},
 	} {
 		var stdout, stderr bytes.Buffer
 		if code := ClientMain(args, strings.NewReader(""), &stdout, &stderr); code != transportFailureExit {
@@ -130,8 +131,8 @@ func TestClientFileModesRoundTripBytes(t *testing.T) {
 	if code, out, meta := run("", "file", "read", "/app/f"); code != 0 || out != binary || meta != fmt.Sprintf(`{"size":%s,"truncated":false}`+"\n", size) {
 		t.Fatalf("read: %d %q %q", code, out, meta)
 	}
-	if code, out, _ := run("", "file", "read", "--offset", "1", "--max-bytes", "2", "/app/f"); code != 0 || out != "\x00b" {
-		t.Fatalf("read range: %d %q", code, out)
+	if code, out, meta := run("", "file", "read", "--max-bytes", "2", "/app/f"); code != 0 || out != "a\x00" || meta != fmt.Sprintf(`{"size":%s,"truncated":true}`+"\n", size) {
+		t.Fatalf("read head: %d %q %q", code, out, meta)
 	}
 	if code, out, meta := run("", "file", "lines", "--first", "2", "--max", "1", "--max-line-bytes", "4", "/app/f"); code != 0 || out != "line\n" ||
 		meta != fmt.Sprintf(`{"ends_with_newline":false,"more":false,"size":%s,"total_lines":2}`+"\n", size) {

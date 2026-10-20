@@ -49,11 +49,10 @@ if not os.path.isfile(path):
     sys.exit(5)
 data = open(path, "rb").read()
 if operation == "read":
-    offset = int(flags.get("--offset", 0))
     limit = int(flags.get("--max-bytes", 0)) or len(data)
-    chunk = data[offset:offset + limit]
+    chunk = data[:limit]
     sys.stdout.buffer.write(chunk)
-    print(json.dumps({"size": len(data), "truncated": offset + len(chunk) < len(data)}), file=sys.stderr)
+    print(json.dumps({"size": len(data), "truncated": len(chunk) < len(data)}), file=sys.stderr)
 elif operation == "lines":
     first, count, clamp = int(flags["--first"]), int(flags["--max"]), int(flags.get("--max-line-bytes", 0))
     window = []
