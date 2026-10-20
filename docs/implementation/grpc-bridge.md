@@ -24,7 +24,8 @@ with the control API. The service has five procedures:
 - `Exec` takes `script`, `stdin`, and `login`. The server runs the exact argv
   `/bin/bash -c SCRIPT`, or `/bin/bash -l -c SCRIPT` when `login` is set, in the
   sandbox workdir. It uses the absolute `/bin/bash` path and the shell-neutral
-  workdir rule of the [Hermes SSH dialect](../../pkg/bridge/ssh/hermes/workspace.go).
+  workdir rule that the Hermes SSH dialect also uses
+  ([shared bridge kit](../../pkg/bridge/internal/bridgekit/workdir.go)).
   The request carries no environment and no directory. There is no dialect: the
   server does not parse the script. The reply holds the exit code, a `Reason`,
   separate stdout and stderr, and `truncated`. A non-zero exit code is a normal

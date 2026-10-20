@@ -3,6 +3,8 @@ package hermes
 import (
 	"strings"
 	"testing"
+
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgekit"
 )
 
 func TestPrepareMapsAgentCommandsToTheSandboxWorkdir(t *testing.T) {
@@ -14,7 +16,7 @@ func TestPrepareMapsAgentCommandsToTheSandboxWorkdir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if prepared.command.Path != RemoteShellPath || prepared.command.Dir != "/testbed" {
+	if prepared.command.Path != bridgekit.RemoteShellPath || prepared.command.Dir != "/testbed" {
 		t.Fatalf("prepared = %#v", prepared.command)
 	}
 	if len(prepared.command.Args) != 2 || prepared.command.Args[0] != "-c" || prepared.command.Args[1] != "echo hi" {

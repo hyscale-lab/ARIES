@@ -19,7 +19,6 @@ import (
 
 	sandboxv1 "github.com/hyscale-lab/aries/pkg/bridge/grpc/v1"
 	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgekit"
-	"github.com/hyscale-lab/aries/pkg/bridge/ssh/hermes"
 	"github.com/hyscale-lab/aries/pkg/bridge/target"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/sirupsen/logrus"
@@ -360,7 +359,7 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 	if request.GetLogin() {
 		args = []string{"-l", "-c", script}
 	}
-	command := core.Command{Path: hermes.RemoteShellPath, Args: args, Dir: session.sandbox.Workdir()}
+	command := core.Command{Path: bridgekit.RemoteShellPath, Args: args, Dir: session.sandbox.Workdir()}
 	raw := rawGRPCRecord{OperationClass: kindAgent, Script: script, Login: request.GetLogin()}
 	refuse := func(code codes.Code, message string) (*sandboxv1.ExecResponse, error) {
 		session.writeRecord(toolCallRecord{ToolCallRecord: bridgekit.ToolCallRecord{
@@ -377,7 +376,7 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 	if len(input) > bridgekit.MaxRecordedInputBytes {
 		return refuse(codes.ResourceExhausted, "stdin exceeds the retained bound")
 	}
-	if !hermes.ValidWorkdir(command.Dir) {
+	if !bridgekit.ValidWorkdir(command.Dir) {
 		return refuse(codes.FailedPrecondition, "sandbox workdir is not shell-neutral")
 	}
 

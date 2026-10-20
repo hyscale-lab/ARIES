@@ -4,21 +4,14 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgekit"
 	"github.com/hyscale-lab/aries/pkg/core"
 )
 
 // Hermes has no virtual workspace namespace: it addresses the sandbox with
 // ordinary absolute paths, so the sandbox workdir is used verbatim and the
 // decoded command runs as-is.
-const (
-	bootstrapShell = "/bin/sh"
-
-	// RemoteShellPath is where the bare `remoteShell` token Hermes puts on the
-	// wire is resolved to. The sandbox requires an absolute command path and
-	// performs no PATH lookup of its own, so the mapping has to happen here.
-	// This is why a Hermes task image must provide /bin/bash.
-	RemoteShellPath = "/bin/bash"
-)
+const bootstrapShell = "/bin/sh"
 
 type preparedRemoteCommand struct {
 	command core.Command
@@ -27,7 +20,7 @@ type preparedRemoteCommand struct {
 }
 
 func prepareRemoteCommand(remote remoteCommand, workdir string) (preparedRemoteCommand, error) {
-	if !ValidWorkdir(workdir) {
+	if !bridgekit.ValidWorkdir(workdir) {
 		return preparedRemoteCommand{}, fmt.Errorf("Hermes SSH sandbox workdir %q is not shell-neutral", workdir)
 	}
 	switch remote.kind {
@@ -45,7 +38,7 @@ func prepareRemoteCommand(remote remoteCommand, workdir string) (preparedRemoteC
 		}, nil
 	case kindAgent:
 		return preparedRemoteCommand{
-			command: core.Command{Path: RemoteShellPath, Args: append([]string(nil), remote.argv[1:]...), Dir: workdir},
+			command: core.Command{Path: bridgekit.RemoteShellPath, Args: append([]string(nil), remote.argv[1:]...), Dir: workdir},
 			encoded: encodeRemoteCommand(remote),
 			kind:    remote.kind,
 		}, nil
@@ -59,27 +52,4 @@ func prepareRemoteCommand(remote remoteCommand, workdir string) (preparedRemoteC
 func encodeRemoteCommand(remote remoteCommand) string {
 	parts := append([]string(nil), remote.argv[:len(remote.argv)-1]...)
 	return strings.Join(parts, " ") + " " + shlexQuote(remote.script)
-}
-
-// ValidWorkdir keeps the sandbox workdir free of characters that would change
-// meaning once it becomes a process working directory or appears in evidence.
-func ValidWorkdir(value string) bool {
-	if value == "/" {
-		return true
-	}
-	if len(value) < 2 || value[0] != '/' || value[len(value)-1] == '/' {
-		return false
-	}
-	for _, component := range strings.Split(value[1:], "/") {
-		if component == "" || component == "." || component == ".." {
-			return false
-		}
-		for _, character := range component {
-			if character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z' || character >= '0' && character <= '9' || strings.ContainsRune("._-", character) {
-				continue
-			}
-			return false
-		}
-	}
-	return true
 }

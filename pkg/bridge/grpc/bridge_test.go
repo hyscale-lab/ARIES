@@ -14,7 +14,6 @@ import (
 
 	sandboxv1 "github.com/hyscale-lab/aries/pkg/bridge/grpc/v1"
 	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgekit"
-	"github.com/hyscale-lab/aries/pkg/bridge/ssh/hermes"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -48,7 +47,7 @@ func TestExecRunsBashInTheSandboxWorkdir(t *testing.T) {
 		t.Fatalf("sandbox saw %d commands", len(commands))
 	}
 	for index, command := range commands {
-		if command.Path != hermes.RemoteShellPath || command.Dir != testWorkdir || !slices.Equal(command.Args, want[index]) || command.Env != nil {
+		if command.Path != bridgekit.RemoteShellPath || command.Dir != testWorkdir || !slices.Equal(command.Args, want[index]) || command.Env != nil {
 			t.Fatalf("command %d = %#v", index, command)
 		}
 	}
@@ -59,7 +58,7 @@ func TestExecRunsBashInTheSandboxWorkdir(t *testing.T) {
 		t.Fatalf("records = %d, want %d", len(records), len(want))
 	}
 	for field, value := range map[string]any{
-		"operation_class": "agent", "status": "completed", "path": hermes.RemoteShellPath,
+		"operation_class": "agent", "status": "completed", "path": bridgekit.RemoteShellPath,
 		"workdir": testWorkdir, "command": "echo hi", "command_hash": bridgekit.CommandHash("echo hi"),
 		"run_id": "test-run", "task_id": "test-task", "sandbox_id": "test-sandbox",
 		"container_id": "sandbox-container-id", "container_name": "sandbox-container-name",
