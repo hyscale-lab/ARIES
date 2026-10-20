@@ -71,13 +71,14 @@ func (svc *service) beginFile(ctx context.Context, kind, filePath, invalid strin
 	return &fileCall{session: session, kind: kind, path: filePath, ctx: callCtx, cancel: cancel, started: time.Now()}, nil
 }
 
-// finish records the outcome and converts a target error to a status.
+// finish records the outcome and converts a target error to a status. A call
+// the target completed is recorded as completed even after a cancellation.
 func (call *fileCall) finish(err error, sink *contentSink, truncated bool) error {
 	defer call.cancel()
-	err = bridgekit.WithCancellation(call.ctx, err)
 	statusText, message := "completed", ""
 	var result error
 	if err != nil {
+		err = bridgekit.WithCancellation(call.ctx, err)
 		call.session.recordRevocationError(err)
 		result = fileStatus(err)
 		statusText, message = "failed", status.Convert(result).Message()
@@ -87,6 +88,16 @@ func (call *fileCall) finish(err error, sink *contentSink, truncated bool) error
 	}
 	call.session.recordFile(call.kind, call.path, sink, truncated, time.Since(call.started).Milliseconds(), statusText, message)
 	return result
+}
+
+// streamErr reports a failed stream operation as the call's cancellation when
+// the call has ended. The client going away then reads as a pure
+// cancellation, not as a transport error that revocation cannot confirm.
+func (call *fileCall) streamErr(err error) error {
+	if err != nil && call.ctx.Err() != nil {
+		return call.ctx.Err()
+	}
+	return err
 }
 
 func fileStatus(err error) error {
@@ -214,7 +225,7 @@ func (svc *service) ReadFile(request *sandboxv1.ReadFileRequest, stream grpc.Ser
 		return err
 	}
 	chunks := &chunkWriter{send: func(chunk []byte) error {
-		return stream.Send(&sandboxv1.ReadFileResponse{Part: &sandboxv1.ReadFileResponse_Chunk{Chunk: chunk}})
+		return call.streamErr(stream.Send(&sandboxv1.ReadFileResponse{Part: &sandboxv1.ReadFileResponse_Chunk{Chunk: chunk}}))
 	}}
 	sink := newSink(chunks, false)
 	truncated, err := readRange(call, stream, offset, limit, sink)
@@ -237,7 +248,7 @@ func readRange(call *fileCall, stream grpc.ServerStreamingServer[sandboxv1.ReadF
 	}
 	truncated := limit > 0 && offset+limit < info.Size()
 	header := &sandboxv1.ReadFileHeader{Size: info.Size(), Truncated: truncated}
-	if err := stream.Send(&sandboxv1.ReadFileResponse{Part: &sandboxv1.ReadFileResponse_Header{Header: header}}); err != nil {
+	if err := call.streamErr(stream.Send(&sandboxv1.ReadFileResponse{Part: &sandboxv1.ReadFileResponse_Header{Header: header}})); err != nil {
 		return false, err
 	}
 	if _, err := io.CopyN(io.Discard, reader, offset); err != nil && !errors.Is(err, io.EOF) {
@@ -270,7 +281,7 @@ func (svc *service) ReadLines(request *sandboxv1.ReadLinesRequest, stream grpc.S
 	}
 	defer reader.Close()
 	chunks := &chunkWriter{send: func(chunk []byte) error {
-		return stream.Send(&sandboxv1.ReadLinesResponse{Part: &sandboxv1.ReadLinesResponse_Chunk{Chunk: chunk}})
+		return call.streamErr(stream.Send(&sandboxv1.ReadLinesResponse{Part: &sandboxv1.ReadLinesResponse_Chunk{Chunk: chunk}}))
 	}}
 	sink := newSink(chunks, false)
 	summary, err := readLines(reader, sink, request.GetFirstLine(), request.GetMaxLines(), request.GetMaxLineBytes())
@@ -279,7 +290,7 @@ func (svc *service) ReadLines(request *sandboxv1.ReadLinesRequest, stream grpc.S
 	}
 	if err == nil {
 		summary.Size = info.Size()
-		err = stream.Send(&sandboxv1.ReadLinesResponse{Part: &sandboxv1.ReadLinesResponse_Summary{Summary: summary}})
+		err = call.streamErr(stream.Send(&sandboxv1.ReadLinesResponse{Part: &sandboxv1.ReadLinesResponse_Summary{Summary: summary}}))
 	}
 	return call.finish(err, sink, summary.GetMore())
 }
@@ -342,10 +353,16 @@ func (svc *service) WriteFile(stream grpc.ClientStreamingServer[sandboxv1.WriteF
 		return err
 	}
 	sink := newSink(nil, true)
-	content := &streamReader{recv: stream.Recv, remaining: header.GetSize(), sink: sink}
+	recv := func() (*sandboxv1.WriteFileRequest, error) {
+		message, err := stream.Recv()
+		return message, call.streamErr(err)
+	}
+	content := &streamReader{recv: recv, remaining: header.GetSize(), sink: sink}
 	created, err := svc.session.sandbox.WriteFile(call.ctx, call.path, content, header.GetSize())
 	if err == nil {
-		err = stream.SendAndClose(&sandboxv1.WriteFileResponse{BytesWritten: header.GetSize(), Created: created})
+		// The file changed, so a response the client is no longer there to
+		// receive does not change the record.
+		_ = stream.SendAndClose(&sandboxv1.WriteFileResponse{BytesWritten: header.GetSize(), Created: created})
 	}
 	return call.finish(err, sink, false)
 }

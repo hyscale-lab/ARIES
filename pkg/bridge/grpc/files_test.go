@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	sandboxv1 "github.com/hyscale-lab/aries/pkg/bridge/grpc/v1"
 	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgekit"
@@ -267,4 +269,110 @@ func shell(t *testing.T, script, input string) string {
 		t.Fatalf("%s: %v", script, err)
 	}
 	return output.String()
+}
+
+// streamedBytes is far above gRPC's flow-control window, so a read handler is
+// still sending when its client goes away.
+const streamedBytes = 32 << 20
+
+// waitForFileOps polls until the target has seen count file calls.
+func waitForFileOps(executor *fakeExecutor, count int) {
+	for {
+		if _, _, ops := executor.snapshot(); ops >= count {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// A client that goes away mid-stream ends the call as a pure cancellation: the
+// failed stream operation must not make revocation look unconfirmed.
+func TestClientCancelMidStreamStillConfirmsRevocation(t *testing.T) {
+	for name, start := range map[string]func(context.Context, sandboxv1.SandboxClient, *fakeExecutor) error{
+		"ReadFile": func(ctx context.Context, client sandboxv1.SandboxClient, _ *fakeExecutor) error {
+			stream, err := client.ReadFile(ctx, &sandboxv1.ReadFileRequest{Path: "/big"})
+			if err == nil {
+				_, err = stream.Recv()
+			}
+			return err
+		},
+		"ReadLines": func(ctx context.Context, client sandboxv1.SandboxClient, _ *fakeExecutor) error {
+			stream, err := client.ReadLines(ctx, &sandboxv1.ReadLinesRequest{Path: "/big", FirstLine: 1, MaxLines: streamedBytes})
+			if err == nil {
+				_, err = stream.Recv()
+			}
+			return err
+		},
+		"WriteFile": func(ctx context.Context, client sandboxv1.SandboxClient, executor *fakeExecutor) error {
+			stream, err := client.WriteFile(ctx)
+			if err == nil {
+				// The header promises more than is sent, so the handler waits
+				// for the rest.
+				err = stream.Send(&sandboxv1.WriteFileRequest{Part: &sandboxv1.WriteFileRequest_Header{Header: &sandboxv1.WriteFileHeader{Path: "/new", Size: 2}}})
+			}
+			if err == nil {
+				err = stream.Send(&sandboxv1.WriteFileRequest{Part: &sandboxv1.WriteFileRequest_Chunk{Chunk: []byte("x")}})
+			}
+			waitForFileOps(executor, 1)
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			executor := newFakeExecutor(fstest.MapFS{"big": {Data: bytes.Repeat([]byte("line\n"), streamedBytes/len("line\n")), Mode: 0o644}})
+			manager, client, endpoint := startBridge(t, executor, Options{})
+			ctx, cancel := context.WithCancel(context.Background())
+			if err := start(ctx, client, executor); err != nil {
+				t.Fatal(err)
+			}
+			cancel()
+			if err := manager.Stop(context.Background()); err != nil {
+				t.Fatalf("Stop() = %v, want revocation confirmed", err)
+			}
+			if records := readToolCalls(t, endpoint.LogPaths[0]); len(records) != 1 || records[0]["status"] != "canceled" {
+				t.Fatalf("records = %v", records)
+			}
+		})
+	}
+}
+
+// A target error after cancellation is not a pure cancellation: it may hide
+// an unconfirmed write, so revocation fails closed.
+func TestTargetErrorAfterCancelFailsRevocation(t *testing.T) {
+	executor := newFakeExecutor(nil)
+	executor.writeHook = func(ctx context.Context) error {
+		<-ctx.Done()
+		return errors.New("rename not confirmed")
+	}
+	manager, client, _ := startBridge(t, executor, Options{})
+	go func() { _, _ = writeFile(client, "/new", 1, []byte("x")) }()
+	waitForFileOps(executor, 1)
+	if err := manager.Stop(context.Background()); err == nil || !strings.Contains(err.Error(), "rename not confirmed") {
+		t.Fatalf("Stop() = %v, want the target error", err)
+	}
+}
+
+// A write the target confirmed is completed even when its client is gone
+// before the response: the record says what happened in the sandbox.
+func TestConfirmedWriteIsCompletedWhenTheResponseIsLost(t *testing.T) {
+	executor := newFakeExecutor(nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	executor.writeHook = func(callCtx context.Context) error {
+		cancel()
+		<-callCtx.Done()
+		return nil
+	}
+	manager, client, endpoint := startBridge(t, executor, Options{})
+	stream, err := client.WriteFile(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = stream.Send(&sandboxv1.WriteFileRequest{Part: &sandboxv1.WriteFileRequest_Header{Header: &sandboxv1.WriteFileHeader{Path: "/new", Size: 1}}})
+	_ = stream.Send(&sandboxv1.WriteFileRequest{Part: &sandboxv1.WriteFileRequest_Chunk{Chunk: []byte("x")}})
+	if _, err := stream.CloseAndRecv(); status.Code(err) != codes.Canceled {
+		t.Fatalf("CloseAndRecv() = %v, want the client's own cancellation", err)
+	}
+	stop(t, manager)
+	if records := readToolCalls(t, endpoint.LogPaths[0]); len(records) != 1 || records[0]["status"] != "completed" {
+		t.Fatalf("records = %v", records)
+	}
 }

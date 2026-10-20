@@ -32,6 +32,9 @@ type fakeExecutor struct {
 	// return, as a sandbox does while it confirms termination.
 	block bool
 	lag   time.Duration
+	// writeHook runs after WriteFile stores the file, as the Docker target
+	// confirms its rename; its error is the target's.
+	writeHook func(context.Context) error
 
 	mu       sync.Mutex
 	commands []core.Command
@@ -97,7 +100,7 @@ func (executor *fakeExecutor) OpenFile(_ context.Context, path string) (io.ReadC
 
 // WriteFile holds the whole body before it touches the file, and reads to
 // io.EOF as the Docker backend does, so a malformed stream changes nothing.
-func (executor *fakeExecutor) WriteFile(_ context.Context, path string, content io.Reader, size int64) (bool, error) {
+func (executor *fakeExecutor) WriteFile(ctx context.Context, path string, content io.Reader, size int64) (bool, error) {
 	executor.mu.Lock()
 	executor.fileOps++
 	executor.mu.Unlock()
@@ -109,17 +112,21 @@ func (executor *fakeExecutor) WriteFile(_ context.Context, path string, content 
 		return false, io.ErrUnexpectedEOF
 	}
 	executor.mu.Lock()
-	defer executor.mu.Unlock()
 	name := strings.TrimPrefix(path, "/")
 	mode := fs.FileMode(0o644)
 	info, err := fs.Stat(executor.files, name)
 	if err == nil && info.IsDir() {
+		executor.mu.Unlock()
 		return false, syscall.EISDIR
 	}
 	if err == nil {
 		mode = info.Mode()
 	}
 	executor.files[name] = &fstest.MapFile{Data: data, Mode: mode}
+	executor.mu.Unlock()
+	if executor.writeHook != nil {
+		return err != nil, executor.writeHook(ctx)
+	}
 	return err != nil, nil
 }
 
