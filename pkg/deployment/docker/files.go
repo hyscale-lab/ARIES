@@ -5,10 +5,12 @@ package docker
 // archive API, which needs no binaries in the task image and no process per
 // read.
 //
-// Known weakness, accepted for performance: the archive API acts as the
-// daemon, i.e. root, not as the runtime's exec user, so these methods can
-// reach paths the agent's own shell cannot. It is accepted because verifier
-// material arrives only after revocation. docs/design/bridge.md records it.
+// A write acts as the user of the agent's shell: the exec user, or the image
+// USER when none is set. That user creates the parents, passes the access
+// check and renames the file into place; the daemon only uploads the
+// temporary file. Reads (stat, open) still act as the daemon, i.e. root, so
+// they can reach files the agent's own shell cannot. docs/design/bridge.md
+// records it.
 
 import (
 	"archive/tar"
@@ -28,6 +30,15 @@ import (
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
+)
+
+// writeAccess runs as the agent's user before a write: it refuses with
+// writeRefused (sysexits' EX_NOPERM) what that user could not write, and
+// creates the missing parents 0755, despite the exec wrapper's umask 077.
+// Arguments: nearest existing directory, target directory, target.
+const (
+	writeAccess  = `umask 022; [ -w "$1" ] && [ -x "$1" ] || exit 77; mkdir -p -- "$2" || exit 1; [ ! -e "$3" ] || [ -w "$3" ] || exit 77`
+	writeRefused = 77
 )
 
 // StatFile reports what is at a container path, following a symlink.
@@ -85,7 +96,8 @@ func (manager *Manager) OpenFile(ctx context.Context, id, name string) (io.ReadC
 // land under a temporary name in the target's directory and one rename makes
 // them visible, because Docker's own extraction deletes the old file and
 // writes in place: a reader sees the old file or the new one, and a failed
-// write leaves the original intact.
+// write leaves the original intact. What the agent's shell could not write
+// gives fs.ErrPermission. Parents created before a failed write remain.
 func (manager *Manager) WriteFile(ctx context.Context, id, name string, content io.Reader, size int64, execUser string) (bool, error) {
 	clean, err := cleanContainerPath(path.Clean(name))
 	if err != nil {
@@ -105,7 +117,7 @@ func (manager *Manager) WriteFile(ctx context.Context, id, name string, content 
 	}
 
 	// Walk up to the nearest existing directory; everything below it is
-	// created by the archive, and nothing at or above it is touched.
+	// created by `mkdir -p`, and nothing at or above it is touched.
 	base, missing := path.Dir(target), []string(nil)
 	for {
 		resolved, stat, err := manager.resolvePath(ctx, id, base)
@@ -123,11 +135,26 @@ func (manager *Manager) WriteFile(ctx context.Context, id, name string, content 
 		base = path.Dir(base)
 	}
 
+	directory := path.Join(append([]string{base}, missing...)...)
+	access, err := manager.Exec(ctx, id, core.Command{
+		Path: "/bin/sh", User: execUser, Timeout: manager.cleanupTimeout(),
+		Args: []string{"-c", writeAccess, "aries-write", base, directory, target},
+	})
+	// An exec error stands alone, so a cancel stays a pure cancellation.
+	if err != nil {
+		return false, fmt.Errorf("prepare Docker file directory: %w", err)
+	}
+	if access.ExitCode == writeRefused {
+		return false, fs.ErrPermission
+	}
+	if access.ExitCode != 0 {
+		return false, fmt.Errorf("prepare Docker file directory: exit %d: %s", access.ExitCode, strings.TrimSpace(access.Stderr))
+	}
+
 	token, err := randomID()
 	if err != nil {
 		return false, fmt.Errorf("generate Docker write name: %w", err)
 	}
-	directory := path.Join(append([]string{base}, missing...)...)
 	temporary := path.Join(directory, ".aries-tmp-"+token)
 	uid, gid := fileOwner(execUser)
 
@@ -135,22 +162,10 @@ func (manager *Manager) WriteFile(ctx context.Context, id, name string, content 
 	archiveErr := make(chan error, 1)
 	go func() {
 		writer := tar.NewWriter(archiveWriter)
-		var writeErr error
-		for index := range missing {
-			writeErr = writer.WriteHeader(&tar.Header{
-				Name: path.Join(missing[:index+1]...) + "/", Typeflag: tar.TypeDir, Mode: 0o755,
-				Uid: uid, Gid: gid, ModTime: time.Now(),
-			})
-			if writeErr != nil {
-				break
-			}
-		}
-		if writeErr == nil {
-			writeErr = writer.WriteHeader(&tar.Header{
-				Name: path.Join(append(append([]string(nil), missing...), path.Base(temporary))...), Typeflag: tar.TypeReg,
-				Mode: mode, Size: size, Uid: uid, Gid: gid, ModTime: time.Now(),
-			})
-		}
+		writeErr := writer.WriteHeader(&tar.Header{
+			Name: path.Base(temporary), Typeflag: tar.TypeReg,
+			Mode: mode, Size: size, Uid: uid, Gid: gid, ModTime: time.Now(),
+		})
 		if writeErr == nil {
 			var written int64
 			written, writeErr = io.CopyN(writer, content, size)
@@ -174,36 +189,43 @@ func (manager *Manager) WriteFile(ctx context.Context, id, name string, content 
 		archiveErr <- writeErr
 	}()
 	_, copyErr := manager.client.CopyToContainer(ctx, id, client.CopyToContainerOptions{
-		DestinationPath: base, Content: archiveReader, CopyUIDGID: true,
+		// Without an exec user the daemon gives the file to the image USER.
+		DestinationPath: directory, Content: archiveReader, CopyUIDGID: execUser == "",
 	})
 	_ = archiveReader.Close()
-	if err := errors.Join(copyErr, <-archiveErr); err != nil {
-		manager.removeTemporary(id, temporary)
-		return false, fmt.Errorf("write Docker file: %w", err)
-	}
+	copyErr = errors.Join(copyErr, <-archiveErr)
 	if err := ctx.Err(); err != nil {
-		// Cancelled between the copy and the rename, e.g. by revocation: the
-		// write must not land.
-		manager.removeTemporary(id, temporary)
+		// Cancelled during the copy or before the rename, e.g. by revocation:
+		// the write must not land. The pipe errors a cancel causes are not
+		// reported, so the result stays a pure cancellation.
+		manager.removeTemporary(id, temporary, execUser)
 		return false, err
 	}
+	if copyErr != nil {
+		manager.removeTemporary(id, temporary, execUser)
+		return false, fmt.Errorf("write Docker file: %w", copyErr)
+	}
 	result, err := manager.Exec(ctx, id, core.Command{
-		Path: "/bin/sh", User: rootExecUser, Timeout: manager.cleanupTimeout(),
+		Path: "/bin/sh", User: execUser, Timeout: manager.cleanupTimeout(),
 		Args: []string{"-c", `mv -f -- "$1" "$2" || { rm -f -- "$1"; exit 1; }`, "aries-write", temporary, target},
 	})
-	if err != nil || result.ExitCode != 0 {
-		manager.removeTemporary(id, temporary)
-		return false, fmt.Errorf("rename Docker file into place: %w", errors.Join(err, fmt.Errorf("exit %d: %s", result.ExitCode, strings.TrimSpace(result.Stderr))))
+	if err != nil {
+		manager.removeTemporary(id, temporary, execUser)
+		return false, fmt.Errorf("rename Docker file into place: %w", err)
+	}
+	if result.ExitCode != 0 {
+		manager.removeTemporary(id, temporary, execUser)
+		return false, fmt.Errorf("rename Docker file into place: exit %d: %s", result.ExitCode, strings.TrimSpace(result.Stderr))
 	}
 	return created, nil
 }
 
 // removeTemporary deletes a write's temporary file with a fresh bounded
 // context, since the caller's may already be cancelled.
-func (manager *Manager) removeTemporary(id, name string) {
+func (manager *Manager) removeTemporary(id, name, execUser string) {
 	ctx, cancel := context.WithTimeout(context.Background(), manager.cleanupTimeout())
 	defer cancel()
-	_, _ = manager.Exec(ctx, id, core.Command{Path: "/bin/rm", Args: []string{"-f", "--", name}, User: rootExecUser})
+	_, _ = manager.Exec(ctx, id, core.Command{Path: "/bin/rm", Args: []string{"-f", "--", name}, User: execUser})
 }
 
 // resolvePath stats a path and, when it is a symlink, its target. Docker

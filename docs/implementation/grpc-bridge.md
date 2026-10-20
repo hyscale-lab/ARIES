@@ -40,8 +40,9 @@ with the control API. The service has five procedures:
   last: `total_lines`, `size`, `ends_with_newline`, and `more`.
 - `WriteFile` receives a header (path and size), then chunks. The file changes
   only if exactly `size` bytes arrive. A reader sees the old file or the new
-  one. Missing parent directories are created. The reply holds `bytes_written`
-  and `created`.
+  one. Missing parent directories are created. Parent directories that a
+  failed write created remain, as with the `mkdir -p` of stock Hermes. The
+  reply holds `bytes_written` and `created`.
 
 File calls follow a symlink, and need an absolute path. The server maps
 errors to gRPC codes ([file procedures](../../pkg/bridge/grpc/files.go)):
@@ -56,11 +57,18 @@ errors to gRPC codes ([file procedures](../../pkg/bridge/grpc/files.go)):
 | Any other sandbox failure | `INTERNAL` |
 
 The file procedures use the typed file operations of the borrowed target. The
-Docker deployment implements them on the archive API, which acts as root, not as
-the exec user; see [transports](../design/bridge.md#transports). A write also
-runs one `/bin/sh` rename exec as root, so the task image must supply
-`/bin/sh`. tmpfs mounts, for example `/dev/shm`, are not visible to the archive
-API and read as missing ([Docker files](../../pkg/deployment/docker/files.go)).
+Docker deployment implements them on the archive API; see
+[transports](../design/bridge.md#transports). Reads act as root. A write acts
+as the user of the agent's shell (the exec user, or the image `USER`): it runs
+two `/bin/sh` execs as that user, one that creates the missing parents and
+checks write access, and one that renames the file into place. So the task
+image must supply `/bin/sh`. A path that this user cannot write, or an existing
+file that it cannot write, gives `PERMISSION_DENIED`, and nothing changes. The
+access check and the upload are separate steps: an agent that owns an ancestor
+directory can swap the target directory for a symlink between them, and so
+leave a dot-named temporary file in a directory it cannot write. tmpfs
+mounts, for example `/dev/shm`, are not visible to the archive API and read as
+missing ([Docker files](../../pkg/deployment/docker/files.go)).
 
 ## Limits
 

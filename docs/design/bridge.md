@@ -90,13 +90,18 @@ posture is the same for both: plaintext, no client authentication, and one
 shared run network. The gRPC transport adds no isolation that SSH does not have.
 
 The typed file operations of the gRPC transport use the Docker archive API
-([Docker files](../../pkg/deployment/docker/files.go)). A write uploads to a
-temporary name in the target directory, and one root exec renames it into
-place. The archive API acts as the Docker daemon, that is as root, not as the
-sandbox's exec user. Thus a file call can reach paths that the agent's own
-shell cannot. ARIES accepts this weakness for performance, because verifier
-material arrives only after revocation. New files and parents get the exec
-user as owner.
+([Docker files](../../pkg/deployment/docker/files.go)). A write acts as the
+user of the agent's shell: the sandbox's exec user, or the image `USER` when
+no exec user is set. One exec as that user creates the missing parents and
+refuses a path that the user cannot write. The archive API uploads only a
+temporary file into the target directory, and one exec as that user renames
+it into place. New files and parents get that user as owner. Thus a typed
+write reaches only what the agent's own shell can write, as on SSH.
+
+Typed reads (stat and read) still act as the Docker daemon, that is as root.
+A file read can thus see files that the agent's own shell cannot read. This
+weakness is lower: a read changes nothing in the sandbox, and verifier
+material arrives only after revocation.
 
 ## Lifecycle, cancellation, and failure
 

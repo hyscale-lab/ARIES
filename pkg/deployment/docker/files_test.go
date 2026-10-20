@@ -28,6 +28,8 @@ type fileDocker struct {
 	upload      client.CopyToContainerOptions
 	uploadBytes []byte
 	uploadErr   error
+	onUpload    func()
+	onExec      func(argv []string)
 }
 
 func newFileDocker() (*fileDocker, *Manager) {
@@ -55,6 +57,9 @@ func (fake *fileDocker) CopyFromContainer(_ context.Context, id string, options 
 
 func (fake *fileDocker) CopyToContainer(_ context.Context, _ string, options client.CopyToContainerOptions) (client.CopyToContainerResult, error) {
 	fake.upload = options
+	if fake.onUpload != nil {
+		fake.onUpload()
+	}
 	content, err := io.ReadAll(options.Content)
 	if fake.uploadErr != nil {
 		return client.CopyToContainerResult{}, fake.uploadErr
@@ -69,6 +74,9 @@ func (fake *fileDocker) CopyToContainer(_ context.Context, _ string, options cli
 // ExecCreate refuses a done context, as the daemon client does, so a cleanup
 // on the caller's cancelled context records no exec.
 func (fake *fileDocker) ExecCreate(ctx context.Context, id string, options client.ExecCreateOptions) (client.ExecCreateResult, error) {
+	if fake.onExec != nil {
+		fake.onExec(commandArgs(options.Cmd))
+	}
 	if err := ctx.Err(); err != nil {
 		return client.ExecCreateResult{}, err
 	}
@@ -171,7 +179,8 @@ func TestStatAndOpenFollowSymlinksAndMapAbsence(t *testing.T) {
 
 // WriteFile mirrors Hermes's _atomic_write: `mkdir -p` for missing parents
 // only, the kept mode on replace, 0644 on create, the exec user as owner, and
-// a temporary name renamed into place by one exec with exact argv.
+// a temporary name renamed into place. The parents, the access check and the
+// rename are execs with exact argv; the archive carries only the temporary.
 func TestWriteFileStagesATemporaryAndRenamesIt(t *testing.T) {
 	fake, manager := newFileDocker()
 	fake.stats = map[string]container.PathStat{"/": directory(0o755), "/work": directory(0o700)}
@@ -180,31 +189,27 @@ func TestWriteFileStagesATemporaryAndRenamesIt(t *testing.T) {
 	if err != nil || !created {
 		t.Fatalf("WriteFile = %v, %v", created, err)
 	}
-	if fake.upload.DestinationPath != "/work" || !fake.upload.CopyUIDGID {
+	// The exec user owns the file through the header, not the image USER.
+	if fake.upload.DestinationPath != "/work/a/b" || fake.upload.CopyUIDGID {
 		t.Fatalf("upload = %+v", fake.upload)
 	}
 	headers := uploadedEntries(t, fake)
-	if len(headers) != 3 || headers[0].Name != "a/" || headers[1].Name != "a/b/" {
+	if len(headers) != 1 {
 		t.Fatalf("entries = %v", headers)
 	}
-	for _, header := range headers[:2] {
-		if header.Typeflag != tar.TypeDir || header.Mode != 0o755 || header.Uid != 65532 || header.Gid != 65532 {
-			t.Fatalf("directory entry = %+v", header)
-		}
-	}
-	file := headers[2]
-	if !strings.HasPrefix(file.Name, "a/b/.aries-tmp-") || file.Mode != 0o644 || file.Size != 4 || file.Uid != 65532 {
+	file := headers[0]
+	if !strings.HasPrefix(file.Name, ".aries-tmp-") || file.Typeflag != tar.TypeReg || file.Mode != 0o644 || file.Size != 4 || file.Uid != 65532 || file.Gid != 65532 {
 		t.Fatalf("file entry = %+v", file)
 	}
 	commands := fake.execCommands()
-	rename := commands[len(commands)-1]
-	want := []string{"/bin/sh", "-c", `mv -f -- "$1" "$2" || { rm -f -- "$1"; exit 1; }`, "aries-write", "/work/" + file.Name, "/work/a/b/f.txt"}
-	if !reflect.DeepEqual(rename, want) || fake.execs[fmt.Sprintf("exec-%d", fake.nextExec)].User != rootExecUser {
-		t.Fatalf("rename = %q", rename)
+	access := []string{"/bin/sh", "-c", `umask 022; [ -w "$1" ] && [ -x "$1" ] || exit 77; mkdir -p -- "$2" || exit 1; [ ! -e "$3" ] || [ -w "$3" ] || exit 77`, "aries-write", "/work", "/work/a/b", "/work/a/b/f.txt"}
+	rename := []string{"/bin/sh", "-c", `mv -f -- "$1" "$2" || { rm -f -- "$1"; exit 1; }`, "aries-write", "/work/a/b/" + file.Name, "/work/a/b/f.txt"}
+	if !reflect.DeepEqual(commands, [][]string{access, rename}) {
+		t.Fatalf("execs = %q", commands)
 	}
 
-	// Replacing keeps the existing mode, special bits included, and adds no
-	// directory entries. Without an exec user, root owns the file.
+	// Replacing keeps the existing mode, special bits included. Without an
+	// exec user, the daemon gives the file to the image USER.
 	fake.stats["/work/a"], fake.stats["/work/a/b"] = directory(0o755), directory(0o755)
 	fake.stats["/work/a/b/f.txt"] = regular(4, 0o750|fs.ModeSetuid)
 	created, err = manager.WriteFile(context.Background(), "container", "/work/a/b/f.txt", strings.NewReader("new"), 3, "")
@@ -212,8 +217,31 @@ func TestWriteFileStagesATemporaryAndRenamesIt(t *testing.T) {
 		t.Fatalf("replace = %v, %v", created, err)
 	}
 	headers = uploadedEntries(t, fake)
-	if len(headers) != 1 || headers[0].Mode != 0o4750 || headers[0].Uid != 0 || headers[0].Gid != 0 || fake.upload.DestinationPath != "/work/a/b" {
-		t.Fatalf("replace entries = %+v to %s", headers, fake.upload.DestinationPath)
+	if len(headers) != 1 || headers[0].Mode != 0o4750 || headers[0].Uid != 0 || headers[0].Gid != 0 || fake.upload.DestinationPath != "/work/a/b" || !fake.upload.CopyUIDGID {
+		t.Fatalf("replace entries = %+v to %+v", headers, fake.upload)
+	}
+}
+
+// No exec of a typed write runs as root when the exec user is set: not the
+// access check, not the rename, not the cleanup of a failed copy.
+func TestWriteFileExecsRunAsTheExecUser(t *testing.T) {
+	for _, uploadErr := range []error{nil, errors.New("daemon went away")} {
+		fake, manager := newFileDocker()
+		fake.stats = map[string]container.PathStat{"/": directory(0o755), "/work": directory(0o755)}
+		fake.uploadErr = uploadErr
+
+		_, err := manager.WriteFile(context.Background(), "container", "/work/f", strings.NewReader("x"), 1, "65532:65532")
+		if (err != nil) != (uploadErr != nil) {
+			t.Fatalf("WriteFile = %v with upload error %v", err, uploadErr)
+		}
+		if fake.nextExec == 0 {
+			t.Fatal("no exec ran")
+		}
+		for execID, options := range fake.execs {
+			if options.User != "65532:65532" {
+				t.Fatalf("%s %q ran as %q", execID, commandArgs(options.Cmd), options.User)
+			}
+		}
 	}
 }
 
@@ -233,23 +261,23 @@ func TestWriteFileRefusesDirectoriesWithoutWriting(t *testing.T) {
 }
 
 // A failed copy must never rename: the temporary is removed and the original
-// stays as it was. The caller's context is already cancelled, so the cleanup
-// must use its own.
+// stays as it was. The caller's context is cancelled during the copy, so the
+// cleanup must use its own.
 func TestWriteFileCleansUpAFailedCopy(t *testing.T) {
 	fake, manager := newFileDocker()
 	fake.stats = map[string]container.PathStat{"/": directory(0o755), "/work": directory(0o755)}
 	fake.uploadErr = errors.New("daemon went away")
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	fake.onUpload = cancel
 
 	if _, err := manager.WriteFile(ctx, "container", "/work/f", strings.NewReader("x"), 1, ""); err == nil {
 		t.Fatal("a failed copy was reported as written")
 	}
 	commands := fake.execCommands()
-	if len(commands) != 1 {
-		t.Fatalf("execs = %q, want only the cleanup", commands)
+	if len(commands) != 2 {
+		t.Fatalf("execs = %q, want the access check and the cleanup", commands)
 	}
-	cleanup := commands[0]
+	cleanup := commands[1]
 	if cleanup[0] != "/bin/rm" || !strings.HasPrefix(cleanup[3], "/work/.aries-tmp-") {
 		t.Fatalf("cleanup = %q", cleanup)
 	}
@@ -268,9 +296,59 @@ func TestWriteFileRefusesContentOfAnotherSize(t *testing.T) {
 				t.Fatal("content of another size was written")
 			}
 			for _, command := range fake.execCommands() {
-				if command[0] != "/bin/rm" {
-					t.Fatalf("exec %q ran; only the cleanup may", command)
+				if len(command) > 2 && strings.HasPrefix(command[2], "mv ") {
+					t.Fatalf("exec %q renamed a malformed body into place", command)
 				}
+			}
+		})
+	}
+}
+
+// pureCancellation follows bridgekit.IsPureCancellation, which this package
+// cannot import: every leaf of the error tree is a context error.
+func pureCancellation(err error) bool {
+	switch e := err.(type) {
+	case nil:
+		return false
+	case interface{ Unwrap() []error }:
+		for _, child := range e.Unwrap() {
+			if !pureCancellation(child) {
+				return false
+			}
+		}
+		return len(e.Unwrap()) > 0
+	case interface{ Unwrap() error }:
+		return pureCancellation(e.Unwrap())
+	}
+	return err == context.Canceled || err == context.DeadlineExceeded
+}
+
+// A cancel during a write gives a pure cancellation, so revocation can tell it
+// from a sandbox failure: at the access check, during the copy, and at the
+// rename. Nothing is renamed into place.
+func TestWriteFileCancelIsAPureCancellation(t *testing.T) {
+	for _, stage := range []string{"access", "copy", "rename"} {
+		t.Run(stage, func(t *testing.T) {
+			fake, manager := newFileDocker()
+			fake.stats = map[string]container.PathStat{"/": directory(0o755), "/work": directory(0o755)}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			switch stage {
+			case "access":
+				cancel()
+			case "copy":
+				// The archive goroutine sees the reader closed under it.
+				fake.uploadErr, fake.onUpload = io.ErrClosedPipe, cancel
+			case "rename":
+				fake.onExec = func(argv []string) {
+					if strings.HasPrefix(argv[2], "mv ") {
+						cancel()
+					}
+				}
+			}
+
+			if _, err := manager.WriteFile(ctx, "container", "/work/f", strings.NewReader("x"), 1, "65532:65532"); !pureCancellation(err) {
+				t.Fatalf("WriteFile = %v, want a pure cancellation", err)
 			}
 		})
 	}

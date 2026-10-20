@@ -41,8 +41,9 @@ type Backend interface {
 	ExecStream(context.Context, string, core.Command, io.Reader, io.Writer, io.Writer) (core.CommandResult, error)
 	StatFile(ctx context.Context, id, path string) (fs.FileInfo, error)
 	OpenFile(ctx context.Context, id, path string) (io.ReadCloser, fs.FileInfo, error)
-	// WriteFile gives new files and parents to user, a numeric uid:gid; root
-	// when it is empty.
+	// WriteFile acts as user, a numeric uid:gid, or as the image USER when it
+	// is empty: new files and parents belong to that user, and a path it could
+	// not write gives fs.ErrPermission.
 	WriteFile(ctx context.Context, id, path string, content io.Reader, size int64, user string) (created bool, err error)
 }
 
