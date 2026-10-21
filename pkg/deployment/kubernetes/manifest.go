@@ -183,15 +183,8 @@ func (manager *Manager) podManifest(request deployment.Request) ([]byte, error) 
 	if limits := resourceLimits(request); len(limits) != 0 {
 		container["resources"] = map[string]any{"limits": limits, "requests": limits}
 	}
-	security := map[string]any{}
 	if request.NoNewPrivileges {
-		security["allowPrivilegeEscalation"] = false
-	}
-	if request.DropCapabilities {
-		security["capabilities"] = map[string]any{"drop": []string{"ALL"}}
-	}
-	if len(security) != 0 {
-		container["securityContext"] = security
+		container["securityContext"] = map[string]any{"allowPrivilegeEscalation": false}
 	}
 	spec := map[string]any{
 		"restartPolicy":                 "Never",
@@ -267,10 +260,6 @@ type podObject struct {
 			SecurityContext *struct {
 				AllowPrivilegeEscalation *bool `json:"allowPrivilegeEscalation"`
 				Privileged               *bool `json:"privileged"`
-				Capabilities             *struct {
-					Add  []string `json:"add"`
-					Drop []string `json:"drop"`
-				} `json:"capabilities"`
 			} `json:"securityContext"`
 			Resources struct {
 				Limits map[string]string `json:"limits"`

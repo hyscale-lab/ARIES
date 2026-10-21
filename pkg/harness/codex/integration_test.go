@@ -143,7 +143,7 @@ func runNativeSSHScenario(t *testing.T, cancelTool bool, taskUser string, subage
 	if err != nil {
 		t.Fatal(err)
 	}
-	clientConfig, err := bridgewiring.SSHClientConfig("codex-ssh", filepath.Dir(helper))
+	clientConfig, err := bridgewiring.SSHClientConfig("codex-ssh", helper)
 	if err != nil {
 		t.Fatal(err)
 	}

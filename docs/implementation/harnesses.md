@@ -180,9 +180,9 @@ exec's end), and background work is not linked.
 `codex.Manager` uses the shared harness runtime to stage the unmodified static
 CLI `0.157.1` into a separate tag-pinned Linux runtime, checks its reported
 version, and invokes one `codex exec --json` turn through deployment execution.
-The instruction remains one argv element. The runtime drops all Linux
-capabilities and enables no-new-privileges; the deployment confirms both before
-start. The model provider uses the Responses API; a wrapper reads the credential
+The instruction remains one argv element. The runtime enables
+no-new-privileges, as for the other harnesses, and the deployment confirms it
+before start. The model provider uses the Responses API; a wrapper reads the credential
 from a private file, so it never enters runtime metadata. JSONL trajectory,
 stderr, and placeholder-only TOML are private artifacts. After the turn, the
 harness copies Codex's native session rollouts out of the still-running runtime

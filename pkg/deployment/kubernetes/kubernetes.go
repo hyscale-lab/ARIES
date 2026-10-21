@@ -20,7 +20,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -262,9 +261,6 @@ func (manager *Manager) Validate(ctx context.Context, id string, request deploym
 	}
 	if request.NoNewPrivileges && (container.SecurityContext == nil || container.SecurityContext.AllowPrivilegeEscalation == nil || *container.SecurityContext.AllowPrivilegeEscalation) {
 		return errors.New("deployment no-new-privileges is not enabled")
-	}
-	if request.DropCapabilities && (container.SecurityContext == nil || container.SecurityContext.Capabilities == nil || !slices.Contains(container.SecurityContext.Capabilities.Drop, "ALL") || len(container.SecurityContext.Capabilities.Add) != 0) {
-		return errors.New("deployment must drop all capabilities without additions")
 	}
 	if container.SecurityContext != nil && container.SecurityContext.Privileged != nil && *container.SecurityContext.Privileged {
 		return errors.New("deployment must not be privileged")

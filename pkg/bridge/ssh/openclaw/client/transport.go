@@ -1,7 +1,3 @@
-// Package client is the SSH transport shared by the ARIES client helpers
-// staged into harness containers. It forwards one remote command and the
-// caller's streams unchanged; invocation and configuration policy belong to
-// each harness-specific adapter.
 package client
 
 import (
@@ -11,17 +7,11 @@ import (
 	"io"
 	"net"
 	"os"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
 	gossh "golang.org/x/crypto/ssh"
-)
-
-const (
-	connectTimeout = 5 * time.Second
-	keepalive      = 15 * time.Second
 )
 
 // Config supplies an already validated destination.
@@ -40,14 +30,33 @@ func Run(ctx context.Context, configuration Config, remote string, stdin io.Read
 		return 255, errors.New("SSH stdin is required")
 	}
 	defer stdin.Close()
-	connection, err := Dial(ctx, configuration)
+	if configuration.User == "" {
+		return 255, errors.New("SSH user is required")
+	}
+	address := configuration.Address
+	dialer := net.Dialer{Timeout: lockedConnectTimeout}
+	connection, err := dialer.DialContext(ctx, "tcp", address)
 	if err != nil {
-		return 255, err
+		return 255, fmt.Errorf("connect %s: %w", address, err)
 	}
 	defer connection.Close()
 	stopCancellation := context.AfterFunc(ctx, func() { _ = connection.Close() })
 	defer stopCancellation()
-	client := connection.Client
+	_ = connection.SetDeadline(time.Now().Add(lockedConnectTimeout))
+	clientConfiguration := &gossh.ClientConfig{
+		User:            configuration.User,
+		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
+		Timeout:         lockedConnectTimeout,
+	}
+	sshConnection, channels, requests, err := gossh.NewClientConn(connection, address, clientConfiguration)
+	if err != nil {
+		return 255, fmt.Errorf("establish SSH connection: %w", err)
+	}
+	_ = connection.SetDeadline(time.Time{})
+	client := gossh.NewClient(sshConnection, channels, requests)
+	defer client.Close()
+	stopKeepalive := startKeepalive(client, connection)
+	defer stopKeepalive()
 	session, err := client.NewSession()
 	if err != nil {
 		return 255, fmt.Errorf("open SSH session: %w", err)
@@ -93,54 +102,6 @@ func Run(ctx context.Context, configuration Config, remote string, stdin io.Read
 	return 255, fmt.Errorf("run SSH command: %w", err)
 }
 
-// Connection is one keepalive-supervised SSH connection. A helper that opens
-// several sessions over it, as OpenSSH's ControlMaster does, owns Close.
-type Connection struct {
-	Client *gossh.Client
-	stop   func()
-	once   sync.Once
-}
-
-// Dial connects without client authentication or host-key pinning; the
-// bridge accepts only unauthenticated clients on the run's private network.
-func Dial(ctx context.Context, configuration Config) (*Connection, error) {
-	if configuration.User == "" {
-		return nil, errors.New("SSH user is required")
-	}
-	address := configuration.Address
-	dialer := net.Dialer{Timeout: connectTimeout}
-	connection, err := dialer.DialContext(ctx, "tcp", address)
-	if err != nil {
-		return nil, fmt.Errorf("connect %s: %w", address, err)
-	}
-	// The handshake itself takes no context; closing the socket aborts it.
-	stopHandshakeCancellation := context.AfterFunc(ctx, func() { _ = connection.Close() })
-	_ = connection.SetDeadline(time.Now().Add(connectTimeout))
-	clientConfiguration := &gossh.ClientConfig{
-		User:            configuration.User,
-		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
-		Timeout:         connectTimeout,
-	}
-	sshConnection, channels, requests, err := gossh.NewClientConn(connection, address, clientConfiguration)
-	if !stopHandshakeCancellation() && err == nil {
-		err = ctx.Err()
-		_ = sshConnection.Close()
-	}
-	if err != nil {
-		_ = connection.Close()
-		return nil, fmt.Errorf("establish SSH connection: %w", err)
-	}
-	_ = connection.SetDeadline(time.Time{})
-	client := gossh.NewClient(sshConnection, channels, requests)
-	return &Connection{Client: client, stop: startKeepalive(client, connection)}, nil
-}
-
-// Close stops keepalive and closes the connection; it is safe to repeat.
-func (connection *Connection) Close() error {
-	connection.once.Do(connection.stop)
-	return nil
-}
-
 // Capture source failures separately from writes rejected by an early remote
 // exit. Closing our owned source after completion is not an input failure.
 type inputReader struct {
@@ -162,7 +123,7 @@ func startKeepalive(client *gossh.Client, connection net.Conn) func() {
 	joined := make(chan struct{})
 	go func() {
 		defer close(joined)
-		ticker := time.NewTicker(keepalive)
+		ticker := time.NewTicker(lockedKeepalive)
 		defer ticker.Stop()
 		for {
 			select {
@@ -170,7 +131,7 @@ func startKeepalive(client *gossh.Client, connection net.Conn) func() {
 				return
 			case <-ticker.C:
 				// Bound an unanswered request; SendRequest itself has no timeout.
-				_ = connection.SetDeadline(time.Now().Add(3 * keepalive))
+				_ = connection.SetDeadline(time.Now().Add(3 * lockedKeepalive))
 				if _, _, err := client.SendRequest("keepalive@openssh.com", true, nil); err != nil {
 					_ = client.Close()
 					return

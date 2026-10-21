@@ -9,12 +9,11 @@ import (
 	"os/signal"
 	"syscall"
 
-	sshclient "github.com/hyscale-lab/aries/pkg/bridge/ssh/client"
 	"github.com/hyscale-lab/aries/pkg/harness/codex/executor"
 )
 
 func main() {
-	stdin, err := sshclient.OpenStdin()
+	stdin, err := executor.OpenStdin()
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "aries-codex-ssh: open owned stdin: %v\n", err)
 		os.Exit(255)

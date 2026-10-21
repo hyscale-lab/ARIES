@@ -65,9 +65,7 @@ type Request struct {
 	GPUs            int
 	Init            bool
 	NoNewPrivileges bool
-	// DropCapabilities drops every Linux capability and forbids privilege.
-	DropCapabilities bool
-	NetworkAliases   []string
+	NetworkAliases  []string
 	// AllowImageVolumes permits anonymous volumes declared by the image.
 	AllowImageVolumes bool
 	Name              string

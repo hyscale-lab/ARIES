@@ -137,7 +137,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		Placement: request.Connectivity.Placement, CPU: request.CPU, MemoryMB: request.MemoryMB,
 		Env:        []string{"HOME=" + codexHome, "CODEX_HOME=" + codexHome, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
 		Entrypoint: append([]string(nil), runtimeEntrypoint...), Args: append([]string(nil), runtimeCommand...),
-		NoNewPrivileges: true, DropCapabilities: true,
+		NoNewPrivileges: true,
 		Labels: map[string]string{
 			"aries.managed": "true", "aries.kind": "codex-harness", "aries.component": "harness",
 			"aries.run": request.RunID, "aries.task": request.TaskID, "aries.attempt": id,

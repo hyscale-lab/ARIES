@@ -80,12 +80,12 @@ func TestBridgeLifecycleAndEngineDoNotImportDialects(t *testing.T) {
 	}
 }
 
-func TestClientHelpersDoNotImportServerDialects(t *testing.T) {
-	for _, component := range []string{"pkg/bridge/ssh/openclaw/client", "cmd/aries-ssh-client", "pkg/harness/codex/executor", "cmd/aries-codex-ssh"} {
+func TestOpenClawClientDoesNotImportServerDialects(t *testing.T) {
+	for _, component := range []string{"pkg/bridge/ssh/openclaw/client", "cmd/aries-ssh-client"} {
 		root := filepath.Join("..", "..", filepath.FromSlash(component))
 		for path, imports := range productionImports(t, root, true) {
 			for _, imported := range imports {
-				if dialectImport(imported) && !clientImport(imported) {
+				if dialectImport(imported) && !openclawClientImport(imported) {
 					t.Errorf("%s imports server dialect %s; the client must forward commands unchanged", path, imported)
 				}
 			}
@@ -93,14 +93,9 @@ func TestClientHelpersDoNotImportServerDialects(t *testing.T) {
 	}
 }
 
-func clientImport(path string) bool {
-	for _, dialect := range []string{"openclaw"} {
-		prefix := "github.com/hyscale-lab/aries/pkg/bridge/ssh/" + dialect + "/client"
-		if path == prefix || strings.HasPrefix(path, prefix+"/") {
-			return true
-		}
-	}
-	return false
+func openclawClientImport(path string) bool {
+	const prefix = "github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw/client"
+	return path == prefix || strings.HasPrefix(path, prefix+"/")
 }
 
 func dialectImport(path string) bool {
@@ -119,7 +114,6 @@ func TestBridgeBoundaryRecognizesDialectImports(t *testing.T) {
 		"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw",
 		"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw/internal/grammar",
 		"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw/client",
-		"github.com/hyscale-lab/aries/pkg/bridge/ssh/codex",
 	} {
 		if !dialectImport(path) {
 			t.Fatalf("concrete dialect import accepted: %s", path)
@@ -129,7 +123,7 @@ func TestBridgeBoundaryRecognizesDialectImports(t *testing.T) {
 		"github.com/hyscale-lab/aries/pkg/bridge",
 		"github.com/hyscale-lab/aries/pkg/bridge/target",
 		"github.com/hyscale-lab/aries/pkg/bridge/ssh",
-		"github.com/hyscale-lab/aries/pkg/bridge/ssh/client",
+		"github.com/hyscale-lab/aries/pkg/bridge/ssh/credentials",
 	} {
 		if dialectImport(path) {
 			t.Fatalf("shared contract/helper rejected: %s", path)
@@ -137,12 +131,12 @@ func TestBridgeBoundaryRecognizesDialectImports(t *testing.T) {
 	}
 }
 
-func TestClientImportExceptionExcludesServerGrammar(t *testing.T) {
+func TestOpenClawClientImportExceptionExcludesServerGrammar(t *testing.T) {
 	for _, path := range []string{
 		"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw/client",
 		"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw/client/internal/helper",
 	} {
-		if !clientImport(path) {
+		if !openclawClientImport(path) {
 			t.Fatalf("client adapter rejected: %s", path)
 		}
 	}
@@ -151,9 +145,8 @@ func TestClientImportExceptionExcludesServerGrammar(t *testing.T) {
 		"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw/internal/grammar",
 		"github.com/hyscale-lab/aries/pkg/bridge/ssh/hermes",
 		"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw/clientgrammar",
-		"github.com/hyscale-lab/aries/pkg/bridge/ssh/codex",
 	} {
-		if !dialectImport(path) || clientImport(path) {
+		if !dialectImport(path) || openclawClientImport(path) {
 			t.Fatalf("server dialect accepted as client adapter: %s", path)
 		}
 	}
@@ -205,6 +198,24 @@ func TestCommandUsesWiringForConcreteConstruction(t *testing.T) {
 			}
 			if providerImport(imported) {
 				t.Errorf("%s imports deployment provider %s; use internal/app/wiring", path, imported)
+			}
+		}
+	}
+}
+
+// The Codex executor runs in the harness container, outside the bridge, and
+// must forward calls without importing any server dialect.
+func TestCodexExecutorDoesNotImportServerDialects(t *testing.T) {
+	if !dialectImport("github.com/hyscale-lab/aries/pkg/bridge/ssh/codex") {
+		t.Fatal("Codex dialect import accepted")
+	}
+	for _, component := range []string{"pkg/harness/codex/executor", "cmd/aries-codex-ssh"} {
+		root := filepath.Join("..", "..", filepath.FromSlash(component))
+		for path, imports := range productionImports(t, root, true) {
+			for _, imported := range imports {
+				if dialectImport(imported) {
+					t.Errorf("%s imports server dialect %s; the executor must forward calls unchanged", path, imported)
+				}
 			}
 		}
 	}

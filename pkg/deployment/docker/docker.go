@@ -143,9 +143,6 @@ func (manager *Manager) Create(ctx context.Context, request deployment.Request) 
 	if request.NoNewPrivileges {
 		host.SecurityOpt = []string{"no-new-privileges=true"}
 	}
-	if request.DropCapabilities {
-		host.CapDrop = []string{"ALL"}
-	}
 	if request.StorageMB > 0 {
 		host.StorageOpt = map[string]string{"size": fmt.Sprintf("%dm", request.StorageMB)}
 	}
@@ -222,9 +219,6 @@ func (manager *Manager) Validate(ctx context.Context, id string, request deploym
 	}
 	if request.NoNewPrivileges && !noNewPrivilegesEnabled(info.HostConfig.SecurityOpt) {
 		return errors.New("deployment no-new-privileges is not enabled")
-	}
-	if request.DropCapabilities && (!slices.Contains(info.HostConfig.CapDrop, "ALL") || len(info.HostConfig.CapAdd) != 0 || info.HostConfig.Privileged) {
-		return errors.New("deployment must drop all capabilities without additions or privilege")
 	}
 	if request.Init && (info.HostConfig.Init == nil || !*info.HostConfig.Init) {
 		return errors.New("deployment init is not enabled")

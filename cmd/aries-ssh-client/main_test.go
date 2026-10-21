@@ -12,13 +12,13 @@ import (
 
 	"crypto/ed25519"
 	"crypto/rand"
-	sshclient "github.com/hyscale-lab/aries/pkg/bridge/ssh/client"
+	sshclient "github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw/client"
 	gossh "golang.org/x/crypto/ssh"
 )
 
 func TestInheritedStdinCanCloseWhileHarnessKeepsInputOpen(t *testing.T) {
 	if os.Getenv("ARIES_STDIN_SUBPROCESS") == "1" {
-		input, err := sshclient.OpenStdin()
+		input, err := openStdin()
 		if err != nil {
 			t.Fatal(err)
 		}

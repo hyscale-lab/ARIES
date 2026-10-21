@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	sshclient "github.com/hyscale-lab/aries/pkg/bridge/ssh/client"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -24,11 +23,7 @@ func Main(ctx context.Context, args []string, stdin io.ReadCloser, stdout, stder
 		return 255
 	}
 	opener := &SSHOpener{Stderr: stderr, Dial: func(ctx context.Context) (*gossh.Client, func() error, error) {
-		connection, err := sshclient.Dial(ctx, sshclient.Config{Address: address, User: lockedUsername})
-		if err != nil {
-			return nil, nil, err
-		}
-		return connection.Client, connection.Close, nil
+		return dial(ctx, address)
 	}}
 	// Cancellation ends Codex's input and every channel, so Serve returns.
 	stop := context.AfterFunc(ctx, func() { _ = stdin.Close(); _ = opener.Close() })

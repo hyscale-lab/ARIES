@@ -18,7 +18,11 @@ func NewService(cfg config.Config, runID, outputRoot string, placement core.Runt
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}
-	client, err := SSHClientConfig(cfg.Bridge.Type, filepath.Dir(executable))
+	helper := "aries-ssh-client"
+	if cfg.Bridge.Type == "codex-ssh" {
+		helper = "aries-codex-ssh"
+	}
+	client, err := SSHClientConfig(cfg.Bridge.Type, filepath.Join(filepath.Dir(executable), helper))
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}
