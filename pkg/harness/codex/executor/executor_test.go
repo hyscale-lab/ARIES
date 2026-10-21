@@ -9,6 +9,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -415,6 +416,49 @@ func TestStaleProcessChannelAnswersInsteadOfQueueing(t *testing.T) {
 			}
 			if !strings.Contains(got, `{"id":7,"result":{"running":false}}`) || !strings.Contains(got, `{"id":8,"result":{"status":"unknownProcess"}}`) {
 				t.Fatalf("replies = %s", got)
+			}
+		})
+	}
+}
+
+// Codex's initialize must be registered on its channel before the channel's
+// worker starts: a worker that opens and reads its handshake reply, or fails
+// to open, before the caller's next statement would leave it unanswered. The
+// race is rare, so many routers run at once (bounded for the race detector's
+// goroutine limit).
+func TestInitializeIsAnsweredHoweverFastItsChannelRuns(t *testing.T) {
+	for name, opener := range map[string]func() Opener{
+		"open fails":     func() Opener { return &fakeOpener{fail: errors.New("bridge unreachable")} },
+		"server answers": func() Opener { return &fakeOpener{} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			var lost atomic.Int32
+			var wg sync.WaitGroup
+			live := make(chan struct{}, 500)
+			for range 2000 {
+				wg.Add(1)
+				live <- struct{}{}
+				go func() {
+					defer func() { <-live; wg.Done() }()
+					out := &lockedBuffer{}
+					router := NewRouter(context.Background(), opener(), out, io.Discard)
+					router.dispatch([]byte(`{"id":1,"method":"initialize","params":{"clientName":"codex-environment"}}`))
+					done := make(chan struct{})
+					go func() { router.channels.Wait(); close(done) }()
+					select {
+					case <-done:
+					case <-time.After(5 * time.Second):
+						lost.Add(1) // A channel left waiting for an answer.
+						return
+					}
+					if !strings.Contains(out.String(), `"id":1,`) {
+						lost.Add(1)
+					}
+				}()
+			}
+			wg.Wait()
+			if lost.Load() != 0 {
+				t.Fatalf("%d of 2000 initialize requests were never answered", lost.Load())
 			}
 		})
 	}

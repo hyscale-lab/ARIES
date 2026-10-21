@@ -149,9 +149,8 @@ func (r *Router) routeRequest(m message, line []byte) {
 		// initialize is the handshake of its channel and gets that answer.
 		r.mu.Lock()
 		r.initialize = append(json.RawMessage(nil), m.Params...)
-		channel := r.newChannel("")
+		r.newChannel(channelState{handshakeFor: m.ID})
 		r.mu.Unlock()
-		channel.answerHandshake(m.ID)
 	case processStart:
 		id, ok := processID(m.Params)
 		if !ok {
@@ -164,8 +163,7 @@ func (r *Router) routeRequest(m message, line []byte) {
 			r.replyError(m.ID, -32600, "process id already in use: "+id)
 			return
 		}
-		channel := r.newChannel(id)
-		channel.startID = string(m.ID)
+		channel := r.newChannel(channelState{process: id, startID: string(m.ID)})
 		r.processes[id] = channel
 		r.mu.Unlock()
 		channel.send(m.ID, line)
@@ -200,7 +198,7 @@ func (r *Router) replyClosedProcess(m message) {
 
 func (r *Router) oneShot(m message, line []byte) {
 	r.mu.Lock()
-	channel := r.newChannel("")
+	channel := r.newChannel(channelState{})
 	r.mu.Unlock()
 	channel.send(m.ID, line)
 }
@@ -322,8 +320,20 @@ type callChannel struct {
 	wake     chan struct{}
 }
 
-func (r *Router) newChannel(process string) *callChannel {
-	channel := &callChannel{router: r, process: process, pending: map[string]bool{}, wake: make(chan struct{}, 1)}
+// channelState is everything a channel's worker reads about its call. It is
+// set before the worker starts: a fast worker can open, read its handshake
+// reply, or fail before the caller's next statement runs.
+type channelState struct {
+	process, startID string
+	handshakeFor     json.RawMessage // Codex's initialize ID, answered by the handshake
+}
+
+func (r *Router) newChannel(state channelState) *callChannel {
+	channel := &callChannel{router: r, process: state.process, startID: state.startID, pending: map[string]bool{}, wake: make(chan struct{}, 1)}
+	if state.handshakeFor != nil {
+		channel.handshakeFor = append(json.RawMessage(nil), state.handshakeFor...)
+		channel.pending[string(state.handshakeFor)] = true
+	}
 	r.channels.Add(1)
 	go channel.run()
 	return channel
@@ -358,16 +368,6 @@ func (c *callChannel) send(id json.RawMessage, line []byte) {
 		c.pending[string(id)] = true
 	}
 	c.queue = append(c.queue, append([]byte(nil), line...))
-	c.mu.Unlock()
-	c.signal()
-}
-
-// answerHandshake makes this channel's handshake response the answer to
-// Codex's initialize request id.
-func (c *callChannel) answerHandshake(id json.RawMessage) {
-	c.mu.Lock()
-	c.handshakeFor = append(json.RawMessage(nil), id...)
-	c.pending[string(id)] = true
 	c.mu.Unlock()
 	c.signal()
 }
