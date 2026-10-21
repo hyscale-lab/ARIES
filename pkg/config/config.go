@@ -810,6 +810,10 @@ func (c *Config) validate() error {
 	if c.Harness.Type == "codex" && c.Runtime.Backend != "openai" && c.Runtime.Backend != "sglang" {
 		return errors.New("Codex requires runtime.backend openai or sglang with Responses API support")
 	}
+	// Codex's executor staging and per-call exec have run only on Docker.
+	if c.Harness.Type == "codex" && (c.Harness.Deployment.Backend == "kubernetes" || c.Sandbox.Deployment.Backend == "kubernetes" || c.Bridge.Deployment.Backend == "kubernetes") {
+		return errors.New("Codex is supported only with the docker deployment backend")
+	}
 	if err := c.Model.validateGeneration(); err != nil {
 		return err
 	}

@@ -856,7 +856,8 @@ Changing the main agent's generation settings does not change FACT requests.
 - `harness.voice_transcribe`: see the [voice guide](voice_mode.md).
 - `harness.codex.executable`: the pinned static Codex CLI, relative to the
   profile; required for `harness.type: "codex"`, which pairs with
-  `bridge.type: "codex-ssh"`. `versions.codex` pins its image and CLI version.
+  `bridge.type: "codex-ssh"` and the Docker deployment backend. `versions.codex`
+  pins its image and CLI version.
   See the [Codex guide](codex.md).
 - `bridge.retain_raw_log`: defaults to false. Enabling it retains sensitive,
   replayable SSH input; see [run artifacts](run-results.md#bridge-evidence).

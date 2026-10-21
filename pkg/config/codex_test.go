@@ -58,6 +58,21 @@ func TestDecodeCodexRejectsUnsupportedSettings(t *testing.T) {
 	}
 }
 
+func TestDecodeCodexRejectsKubernetes(t *testing.T) {
+	input := strings.NewReplacer(
+		`"type":"codex",`, `"type":"codex","deployment":{"backend":"kubernetes"},`,
+		`"sandbox":{"type":"docker"}`, `"sandbox":{"deployment":{"backend":"kubernetes"}}`,
+		`"bridge":{"type":"codex-ssh"}`, `"bridge":{"type":"codex-ssh","deployment":{"backend":"kubernetes"}}`,
+	).Replace(codexProfileJSON())
+	if _, err := Decode(strings.NewReader(input)); err == nil || !strings.Contains(err.Error(), "Codex is supported only with the docker deployment backend") {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	hermes := strings.NewReplacer(`"type":"codex","codex":{"executable":"../.cache/codex/0.157.1/codex"}`, `"type":"hermes"`, `"codex-ssh"`, `"hermes-ssh"`, `"backend":"openai"`, `"backend":"deepseek"`).Replace(input)
+	if _, err := Decode(strings.NewReader(hermes)); err != nil && strings.Contains(err.Error(), "docker deployment backend") {
+		t.Fatalf("guard applied to another harness: %v", err)
+	}
+}
+
 func TestCodexVersionCatalogRemainsOptionalAndPinned(t *testing.T) {
 	legacy, err := DecodeVersions(strings.NewReader(validVersions))
 	if err != nil {

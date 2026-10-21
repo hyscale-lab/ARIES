@@ -50,7 +50,8 @@ Edit `profiles/codex-tb2-fix-git-openai.json`:
 - Set `model.id` to the exact served model ID and export the credential under
   `model.api_key_env` (`MODEL_API_KEY` in the example). For an unauthenticated
   local server, use a non-secret placeholder if the server accepts one.
-- Keep `harness.type: "codex"` paired with `bridge.type: "codex-ssh"`.
+- Keep `harness.type: "codex"` paired with `bridge.type: "codex-ssh"`. Codex
+  runs only on the Docker deployment backend; a Kubernetes profile is rejected.
   `harness.codex.executable` is relative to the profile file. Optionally set
   `model.context_length` to the model's actual window.
 
