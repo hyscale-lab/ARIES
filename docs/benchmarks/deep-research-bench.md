@@ -177,17 +177,18 @@ Check the provider dashboard for current account limits and pricing.
 
 ### Disabling or limiting subagents (Optional)
 
-`harness.subagents.enabled: false` turns off nested agent sessions for either
-harness: OpenClaw's `sessions_spawn`/`sessions_yield` tools, or Hermes's
-`delegate_task` tool. The checked-in DRB profiles set this explicitly, since
+`harness.subagents.enabled: false` turns off nested agent sessions for each
+harness: OpenClaw's `sessions_spawn`/`sessions_yield` tools, Hermes's
+`delegate_task` tool, or Codex's native multi-agent tools. The checked-in DRB profiles set this explicitly, since
 subagent spawning is not useful for this benchmark's single-report task shape
 and adds uncontrolled cost.
 
 To bound fan-out instead of disabling it outright, set
 `harness.subagents.max_concurrent` to a positive integer. It maps to each
 harness's own concurrency knob — OpenClaw's
-`agents.defaults.subagents.maxConcurrent` (default 5 per parent) or Hermes's
-`delegation.max_concurrent_children` (default 3) — and is ignored when
+`agents.defaults.subagents.maxConcurrent` (default 5 per parent), Hermes's
+`delegation.max_concurrent_children` (default 3), or Codex's
+`agents.max_concurrent_threads_per_session` — and is ignored when
 `enabled` is `false`.
 
 ### Dataset setup

@@ -196,8 +196,11 @@ sandbox, one call per bridge record, through the
 [Codex SSH bridge](ssh-bridges.md#codex-ssh-bridge). The harness holds an empty
 matching workdir for CLI path validation, not a copy of the task repository.
 HTTPS endpoints receive the host's validated public CA bundle at the standard
-Linux trust path. Codex rejects task MCP servers rather than ignoring them. See
-the [Codex guide](../codex.md) for setup and model requirements.
+Linux trust path. Codex rejects task MCP servers rather than ignoring them.
+Sub-agents use Codex's multi-agent V2 with its bundled proactive delegation
+text as the mode hint, so the profile's reasoning effort is sent unchanged;
+see [sub-agents](../codex.md#sub-agents). See the [Codex guide](../codex.md)
+for setup and model requirements.
 
 ## Model Context Protocol (`MCP`)
 

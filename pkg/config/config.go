@@ -374,23 +374,26 @@ type HarnessWebSearchConfig struct {
 	ExtractAPIKeyEnv string `json:"extract_api_key_env,omitempty"`
 }
 
-// HarnessSubagentsConfig is an OpenClaw/Hermes-only concept (see
-// (*HarnessConfig).validate), same as WebSearch above. Under OpenClaw,
+// HarnessSubagentsConfig controls native delegation (see
+// (*HarnessConfig).validate). Under OpenClaw,
 // disabling denies its sessions_spawn/sessions_yield tools, because ARIES's
 // harness protocol has no continuation mechanism to relay async sub-agent
 // completions back to a single-turn request. Under Hermes, disabling removes
 // its delegate_task tool via disabled_toolsets; Hermes's delegation blocks
 // and returns within the same tool call, so it has no equivalent protocol
-// hazard — disabling it there is purely a cost/determinism control.
-// Enabled is a pointer so "unset" (defaults to enabled, matching both
-// harnesses' own defaults) is distinguishable from an explicit "false" (e.g.
+// hazard — disabling it there is purely a cost/determinism control. Under
+// Codex, enabling turns on multi-agent V2 with Codex's own proactive
+// delegation prompt, and children inherit the parent model and remote tools.
+// Enabled is a pointer so "unset" (defaults to enabled, matching each
+// harness's own default) is distinguishable from an explicit "false" (e.g.
 // Deep Research Bench, which opts out since subagent spawning isn't useful
 // for its single-report task shape and adds uncontrolled cost).
 //
 // MaxConcurrent bounds how many subagents may run at once without disabling
-// subagents outright: OpenClaw's agents.defaults.subagents.maxConcurrent, or
-// Hermes's delegation.max_concurrent_children. Zero leaves each harness's own
-// built-in default in place.
+// subagents outright: OpenClaw's agents.defaults.subagents.maxConcurrent,
+// Hermes's delegation.max_concurrent_children, or Codex's
+// agents.max_concurrent_threads_per_session (children, excluding the parent).
+// Zero leaves each harness's own built-in default in place.
 type HarnessSubagentsConfig struct {
 	Enabled       *bool `json:"enabled,omitempty"`
 	MaxConcurrent int   `json:"max_concurrent,omitempty"`
@@ -807,6 +810,15 @@ func (c *Config) validate() error {
 	if c.Harness.Type != "hermes" && (c.Model.MaxTokens != 0 || c.Model.Temperature != nil) {
 		return errors.New("model.max_tokens and model.temperature require Hermes")
 	}
+	if c.Harness.Type == "codex" {
+		// Codex sends the effort as-is; ultra and persistent are selection
+		// modes that Codex rewrites from model metadata.
+		switch c.Model.ReasoningEffort {
+		case "", "off", "none", "minimal", "low", "medium", "high", "xhigh", "max":
+		default:
+			return errors.New("Codex model.reasoning_effort must be off, none, minimal, low, medium, high, xhigh, or max")
+		}
+	}
 	if c.Harness.Type == "codex" && c.Runtime.Backend != "openai" && c.Runtime.Backend != "sglang" {
 		return errors.New("Codex requires runtime.backend openai or sglang with Responses API support")
 	}
@@ -1100,18 +1112,18 @@ func (h *HarnessConfig) validate() error {
 			return errors.New("harness.web_search.extract_api_key_env must be an environment variable name")
 		}
 	}
-	if h.Subagents.Enabled != nil && h.Type != "openclaw" && h.Type != "hermes" {
-		return errors.New("harness.subagents requires OpenClaw or Hermes")
+	if h.Subagents.Enabled != nil && h.Type != "openclaw" && h.Type != "hermes" && h.Type != "codex" {
+		return errors.New("harness.subagents requires OpenClaw, Hermes, or Codex")
 	}
 	if h.Subagents.MaxConcurrent != 0 {
-		if h.Type != "openclaw" && h.Type != "hermes" {
-			return errors.New("harness.subagents.max_concurrent requires OpenClaw or Hermes")
+		if h.Type != "openclaw" && h.Type != "hermes" && h.Type != "codex" {
+			return errors.New("harness.subagents.max_concurrent requires OpenClaw, Hermes, or Codex")
 		}
 		if h.Subagents.MaxConcurrent < 0 {
 			return errors.New("harness.subagents.max_concurrent must be positive")
 		}
 	}
-	if h.Subagents.Enabled == nil && (h.Type == "openclaw" || h.Type == "hermes") {
+	if h.Subagents.Enabled == nil && (h.Type == "openclaw" || h.Type == "hermes" || h.Type == "codex") {
 		enabled := true
 		h.Subagents.Enabled = &enabled
 	}

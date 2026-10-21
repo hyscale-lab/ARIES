@@ -20,8 +20,11 @@ func TestDecodeCodexSupportsResponsesBackendsAndContextLength(t *testing.T) {
 		if cfg.Harness.Mode != "agent" || cfg.Harness.Codex == nil || cfg.Harness.Codex.Executable != "../.cache/codex/0.157.1/codex" {
 			t.Fatalf("Codex harness = %#v", cfg.Harness)
 		}
-		if cfg.Harness.Subagents.Enabled != nil || cfg.Harness.WebSearch.Enabled {
+		if cfg.Harness.WebSearch.Enabled {
 			t.Fatal("Codex inherited unsupported harness features")
+		}
+		if cfg.Harness.Subagents.Enabled == nil || !*cfg.Harness.Subagents.Enabled {
+			t.Fatal("Codex sub-agents should default to enabled, as Codex does")
 		}
 		if model := cfg.CoreModel(); model.Provider != backend || model.ContextLength != 32768 || model.MaxTokens != 0 || model.Temperature != nil {
 			t.Fatalf("Codex model = %#v", model)
@@ -41,7 +44,10 @@ func TestDecodeCodexRejectsUnsupportedSettings(t *testing.T) {
 		"max tokens":          strings.Replace(base, `"context_length":32768`, `"context_length":32768,"max_tokens":512`, 1),
 		"zero temperature":    strings.Replace(base, `"context_length":32768`, `"context_length":32768,"temperature":0`, 1),
 		"web search":          strings.Replace(base, `"type":"codex"`, `"type":"codex","web_search":{"enabled":true}`, 1),
-		"subagents":           strings.Replace(base, `"type":"codex"`, `"type":"codex","subagents":{"enabled":false}`, 1),
+		"ultra effort":        strings.Replace(base, `"context_length":32768`, `"context_length":32768,"reasoning_effort":"ultra"`, 1),
+		"persistent effort":   strings.Replace(base, `"context_length":32768`, `"context_length":32768,"reasoning_effort":"persistent"`, 1),
+		"unknown effort":      strings.Replace(base, `"context_length":32768`, `"context_length":32768,"reasoning_effort":"extreme"`, 1),
+		"negative subagents":  strings.Replace(base, `"type":"codex"`, `"type":"codex","subagents":{"max_concurrent":-1}`, 1),
 		"compaction":          strings.Replace(base, `"type":"codex"`, `"type":"codex","compaction":{"enabled":false}`, 1),
 		"realtime mode":       strings.Replace(base, `"type":"codex"`, `"type":"codex","mode":"realtime"`, 1),
 		"voice mode":          strings.Replace(base, `"type":"codex"`, `"type":"codex","mode":"voice-transcribe"`, 1),
@@ -55,6 +61,20 @@ func TestDecodeCodexRejectsUnsupportedSettings(t *testing.T) {
 				t.Fatal("unsupported Codex profile was accepted")
 			}
 		})
+	}
+}
+
+func TestDecodeCodexSubagentsAndReasoningEffort(t *testing.T) {
+	input := strings.Replace(codexProfileJSON(), `"type":"codex"`, `"type":"codex","subagents":{"enabled":false}`, 1)
+	cfg, err := Decode(strings.NewReader(input))
+	if err != nil || cfg.Harness.Subagents.Enabled == nil || *cfg.Harness.Subagents.Enabled {
+		t.Fatalf("explicit false = %#v, %v", cfg.Harness.Subagents, err)
+	}
+	input = strings.Replace(codexProfileJSON(), `"type":"codex"`, `"type":"codex","subagents":{"enabled":true,"max_concurrent":4}`, 1)
+	input = strings.Replace(input, `"context_length":32768`, `"context_length":32768,"reasoning_effort":"xhigh"`, 1)
+	cfg, err = Decode(strings.NewReader(input))
+	if err != nil || cfg.Harness.Subagents.MaxConcurrent != 4 || cfg.CoreModel().ReasoningEffort != "xhigh" {
+		t.Fatalf("enabled = %#v effort=%q, %v", cfg.Harness.Subagents, cfg.CoreModel().ReasoningEffort, err)
 	}
 }
 

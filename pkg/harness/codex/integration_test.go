@@ -41,21 +41,28 @@ const integrationKey = "sk-codex-integration-not-a-real-model-key"
 // call, its native exec-server receives it over the SSH bridge, and evaluation
 // sees that exact task container only after both isolation gates succeed.
 func TestCodexNativeSSHMutatesEvaluatorSandbox(t *testing.T) {
-	runNativeSSHScenario(t, false, "")
+	runNativeSSHScenario(t, false, "", false)
 }
 
 // Cancellation ends the native turn and still revokes access and removes the
 // staged executor. Process reaping belongs to Codex's own exec-server, which
 // terminates its processes when its stdio connection closes.
 func TestCodexNativeSSHCancelRevokesAndRemovesStaging(t *testing.T) {
-	runNativeSSHScenario(t, true, "")
+	runNativeSSHScenario(t, true, "", false)
 }
 
 func TestCodexNativeSSHRetainsNonrootTaskIdentity(t *testing.T) {
-	runNativeSSHScenario(t, false, "65532:65532")
+	runNativeSSHScenario(t, false, "65532:65532", false)
 }
 
-func runNativeSSHScenario(t *testing.T, cancelTool bool, taskUser string) {
+// With sub-agents on, real Codex must accept the rendered multi-agent V2
+// config, offer its spawn tool, carry the proactive delegation hint, and still
+// send the profile's reasoning effort rather than an Ultra rewrite.
+func TestCodexNativeSSHProactiveSubagentsKeepRequestedEffort(t *testing.T) {
+	runNativeSSHScenario(t, false, "", true)
+}
+
+func runNativeSSHScenario(t *testing.T, cancelTool bool, taskUser string, subagents bool) {
 	t.Helper()
 	root, err := filepath.Abs("../../..")
 	if err != nil {
@@ -189,7 +196,7 @@ func runNativeSSHScenario(t *testing.T, cancelTool bool, taskUser string) {
 		t.Fatal(err)
 	}
 	_, modelPort, _ := net.SplitHostPort(listener.Addr().String())
-	model := &responsesFixture{cancelTool: cancelTool, taskUser: taskUser}
+	model := &responsesFixture{cancelTool: cancelTool, taskUser: taskUser, subagents: subagents}
 	server := &http.Server{Handler: model, ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() { _ = server.Close() })
@@ -197,7 +204,7 @@ func runNativeSSHScenario(t *testing.T, cancelTool bool, taskUser string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	harness, err := codexharness.New(codexharness.Options{CodexPath: binary, CodexVersion: "0.157.1", Runtime: harnesscommon.RuntimeOptions{
+	harness, err := codexharness.New(codexharness.Options{CodexPath: binary, CodexVersion: "0.157.1", Subagents: codexharness.Subagents{Enabled: subagents, MaxConcurrent: 2}, Runtime: harnesscommon.RuntimeOptions{
 		Deployment: harnessDeployment, Image: integrationImage, OutputDir: output, Logger: logger,
 		StartTimeout: 90 * time.Second, AgentTimeout: 90 * time.Second,
 		APIKeyLookup: func(string) ([]byte, bool) { return []byte(integrationKey), true },
@@ -213,7 +220,7 @@ func runNativeSSHScenario(t *testing.T, cancelTool bool, taskUser string) {
 		}
 		_ = harness.Close()
 	})
-	request := core.HarnessRequest{RunID: runID, TaskID: "native-ssh", Endpoint: endpoint, Connectivity: sandbox.Connectivity(), Model: core.ModelConfig{Provider: "openai", BaseURL: "http://" + net.JoinHostPort(gateway, modelPort) + "/v1", Model: "aries-deterministic-codex", APIKeyEnv: "ARIES_CODEX_TEST_KEY"}}
+	request := core.HarnessRequest{RunID: runID, TaskID: "native-ssh", Endpoint: endpoint, Connectivity: sandbox.Connectivity(), Model: core.ModelConfig{Provider: "openai", BaseURL: "http://" + net.JoinHostPort(gateway, modelPort) + "/v1", Model: "aries-deterministic-codex", APIKeyEnv: "ARIES_CODEX_TEST_KEY", ReasoningEffort: "xhigh"}}
 	if err := harness.Start(ctx, request); err != nil {
 		t.Fatal(err)
 	}
@@ -449,6 +456,32 @@ type responsesFixture struct {
 	err        error
 	cancelTool bool
 	taskUser   string
+	subagents  bool
+}
+
+// checkDelegation inspects Codex's first request: the effort it sends and
+// whether native delegation is offered with the proactive hint.
+func (fixture *responsesFixture) checkDelegation(content []byte) error {
+	var body struct {
+		Reasoning *struct {
+			Effort string `json:"effort"`
+		} `json:"reasoning"`
+	}
+	if err := json.Unmarshal(content, &body); err != nil {
+		return err
+	}
+	if body.Reasoning == nil || body.Reasoning.Effort != "xhigh" {
+		return fmt.Errorf("Codex sent reasoning %+v, want effort xhigh", body.Reasoning)
+	}
+	proactive := bytes.Contains(content, []byte("Proactive multi-agent delegation is active"))
+	spawn := bytes.Contains(content, []byte("spawn_agent"))
+	if fixture.subagents && (!proactive || !spawn) {
+		return fmt.Errorf("sub-agents enabled but proactive hint=%t spawn tool=%t", proactive, spawn)
+	}
+	if !fixture.subagents && (proactive || spawn) {
+		return fmt.Errorf("sub-agents disabled but proactive hint=%t spawn tool=%t", proactive, spawn)
+	}
+	return nil
 }
 
 func (fixture *responsesFixture) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -475,6 +508,11 @@ func (fixture *responsesFixture) ServeHTTP(writer http.ResponseWriter, request *
 		return
 	}
 	fixture.calls++
+	if fixture.calls == 1 {
+		if err := fixture.checkDelegation(content); err != nil {
+			fixture.err = err
+		}
+	}
 	var item map[string]any
 	switch fixture.calls {
 	case 1:

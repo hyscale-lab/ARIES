@@ -58,8 +58,9 @@ guides above.
 - Codex requires an `openai` or `sglang` endpoint implementing streaming
   `/v1/responses` with tool calls; `/v1/models` discovery does not establish
   that. Chat Completions-only endpoints, including native DeepSeek, cannot serve
-  it. Codex accepts `model.context_length` but no other generation, voice, web,
-  MCP, compaction, or subagent settings.
+  it. Codex accepts `model.context_length`, `model.reasoning_effort`, and
+  `harness.subagents`, but no other generation, voice, web, MCP, or compaction
+  settings.
 - Realtime mode is OpenClaw-only and needs a separate TTS credential. See the
   [realtime setup](configuration.md#realtime-openclaw-mode).
 - External model servers are operated separately from ARIES. ARIES does not

@@ -60,7 +60,29 @@ the existing SGLang runtime path. Both require streaming `/v1/responses` with
 tool calls. Model discovery checks `/v1/models`; it does not test Responses
 compatibility. This integration has no Chat Completions translation and
 rejects the native DeepSeek backend, `max_tokens`, `temperature`, voice, web,
-compaction, and subagent configuration overrides.
+MCP, and compaction settings. `model.reasoning_effort` is sent unchanged
+(`off` becomes `none`); Codex's own `ultra` and `persistent` selections are
+not accepted.
+
+### Sub-agents
+
+Codex enables native sub-agents by default, so ARIES always renders the
+choice. `harness.subagents.enabled` defaults to `true`, as for the other
+harnesses; `false` writes `[agents] enabled = false`.
+
+When enabled, ARIES turns on Codex's multi-agent V2 backend and sets its mode
+hint to Codex's own bundled proactive delegation text. Codex otherwise
+injects that text only under reasoning effort `ultra`, and on models it has no
+catalog metadata for, which includes self-hosted servers, `ultra` also
+rewrites the requested effort to `medium`. The hint gives the same prompt
+while the profile keeps control of the effort. Without it, V2's default mode
+tells the model not to delegate unless asked. A unit test keeps the text
+byte-identical to the pinned source.
+
+`harness.subagents.max_concurrent` maps to
+`agents.max_concurrent_threads_per_session` and counts children. Children
+inherit the parent model and use the same bridge-backed environment, so
+their tool calls are bridge records like the parent's.
 
 ```sh
 ./bin/aries setup profiles/codex-tb2-fix-git-openai.json

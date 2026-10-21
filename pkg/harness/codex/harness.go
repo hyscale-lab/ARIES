@@ -34,11 +34,13 @@ type Options struct {
 	// CABundlePath overrides the host system trust bundle for HTTPS endpoints.
 	// HTTP endpoints never read it. An empty path uses fixed Linux system paths.
 	CABundlePath string
+	Subagents    Subagents
 }
 
 type Manager struct {
 	runtime                     *harness.Runtime
 	codexSource, caBundleSource string
+	subagents                   Subagents
 	newID                       func() (string, error)
 
 	mu     sync.Mutex
@@ -73,7 +75,10 @@ func New(options Options) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Manager{runtime: runtime, codexSource: source, caBundleSource: caBundleSource, newID: privatefiles.RandomID}, nil
+	if options.Subagents.MaxConcurrent < 0 {
+		return nil, errors.New("Codex sub-agent concurrency must not be negative")
+	}
+	return &Manager{runtime: runtime, codexSource: source, caBundleSource: caBundleSource, subagents: options.Subagents, newID: privatefiles.RandomID}, nil
 }
 
 // Close releases the deployment transport after lifecycle cleanup.
@@ -102,7 +107,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	if len(request.Connectivity.MCPServers) != 0 {
 		return errors.New("Codex does not support task MCP servers")
 	}
-	configuration, err := renderConfig(request.Model)
+	configuration, err := renderConfig(request.Model, manager.subagents)
 	if err != nil {
 		return err
 	}

@@ -27,6 +27,10 @@ func NewCodex(cfg config.Config, outputRoot string, lookup func(string) ([]byte,
 		},
 		CodexPath:    cfg.Harness.Codex.ResolvedExecutable,
 		CodexVersion: cfg.Versions.Codex.Version,
+		Subagents: codexharness.Subagents{
+			Enabled:       cfg.Harness.Subagents.Enabled != nil && *cfg.Harness.Subagents.Enabled,
+			MaxConcurrent: cfg.Harness.Subagents.MaxConcurrent,
+		},
 	})
 	if err != nil {
 		return app.HarnessInstance{}, errors.Join(fmt.Errorf("construct Codex harness: %w", err), transport.Close())

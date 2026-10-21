@@ -27,9 +27,25 @@ const (
 	clientPath       = stagedRoot + "/codex/aries-codex-ssh"
 )
 
+// proactiveDelegationText is Codex 0.157.1's bundled proactive multi-agent
+// mode text (PROACTIVE_MULTI_AGENT_MODE_TEXT in
+// codex-rs/prompts/src/model_messages/multi_agent.rs). Codex injects it only
+// under reasoning effort "ultra", which on models without catalog metadata
+// (self-hosted servers) also rewrites the requested effort to "medium".
+// Configuring it as the multi-agent mode hint injects the same text while the
+// profile keeps control of the effort.
+const proactiveDelegationText = "Proactive multi-agent delegation is active. Any earlier developer instruction requiring an explicit user request before spawning sub-agents no longer applies. This mode remains active until a later multi-agent mode developer message changes it. User requests override this hint.\n\nIf at any point you can parallelize work by delegating tasks to another agent (no matter if you are root or subagent), you should do so using collaboration tools if it could save time or improve quality."
+
+// Subagents selects Codex's native delegation. Codex enables it by default,
+// so it is always rendered explicitly. MaxConcurrent counts children.
+type Subagents struct {
+	Enabled       bool
+	MaxConcurrent int
+}
+
 // Codex 0.157.1 speaks Responses to custom providers. Chat Completions-only
 // providers and unsupported generation knobs must fail before any side effect.
-func renderConfig(model core.ModelConfig) ([]byte, error) {
+func renderConfig(model core.ModelConfig, subagents Subagents) ([]byte, error) {
 	if model.Provider != "openai" && model.Provider != "sglang" {
 		return nil, errors.New("Codex requires an openai or sglang backend with the Responses API")
 	}
@@ -50,10 +66,24 @@ func renderConfig(model core.ModelConfig) ([]byte, error) {
 	if model.MaxTokens != 0 || model.Temperature != nil {
 		return nil, errors.New("Codex does not support profile max_tokens or temperature")
 	}
+	effort := model.ReasoningEffort
+	switch effort {
+	case "off":
+		effort = "none" // ARIES's spelling; Codex sends Responses values as-is.
+	case "", "none", "minimal", "low", "medium", "high", "xhigh", "max":
+	default:
+		return nil, errors.New("Codex reasoning effort must be off, none, minimal, low, medium, high, xhigh, or max")
+	}
+	if subagents.MaxConcurrent < 0 {
+		return nil, errors.New("Codex sub-agent concurrency must not be negative")
+	}
 	var output bytes.Buffer
 	fmt.Fprintf(&output, "model = %s\nmodel_provider = \"aries\"\napproval_policy = \"never\"\nsandbox_mode = \"danger-full-access\"\nweb_search = \"disabled\"\nallow_login_shell = false\n", tomlString(model.Model))
 	if model.ContextLength > 0 {
 		fmt.Fprintf(&output, "model_context_window = %d\n", model.ContextLength)
+	}
+	if effort != "" {
+		fmt.Fprintf(&output, "model_reasoning_effort = %s\n", tomlString(effort))
 	}
 	// Native exec-server applies this policy to its own remote environment;
 	// Codex removes unchanged local environment values before sending the
@@ -61,6 +91,15 @@ func renderConfig(model core.ModelConfig) ([]byte, error) {
 	// CARGO_HOME and RUSTUP_HOME), while excluding the harness-only model key.
 	fmt.Fprintf(&output, "\n[shell_environment_policy]\ninherit = \"all\"\nexclude = [%s]\n", tomlString(model.APIKeyEnv))
 	fmt.Fprintf(&output, "\n[model_providers.aries]\nname = \"ARIES\"\nbase_url = %s\nwire_api = \"responses\"\nenv_key = %s\nrequires_openai_auth = false\n", tomlString(parsed.String()), tomlString(model.APIKeyEnv))
+	fmt.Fprintf(&output, "\n[agents]\nenabled = %t\n", subagents.Enabled)
+	if subagents.Enabled && subagents.MaxConcurrent > 0 {
+		fmt.Fprintf(&output, "max_concurrent_threads_per_session = %d\n", subagents.MaxConcurrent)
+	}
+	if subagents.Enabled {
+		// V2 is Codex's current multi-agent backend; without the hint its
+		// default mode tells the model not to delegate unless asked.
+		fmt.Fprintf(&output, "\n[features.multi_agent_v2]\nenabled = true\nmulti_agent_mode_hint_text = %s\n", tomlString(proactiveDelegationText))
+	}
 	return output.Bytes(), nil
 }
 

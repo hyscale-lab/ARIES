@@ -377,13 +377,13 @@ locality. See the [transport-policy gap](implementation/model-runtime.md#impleme
 
 ### Reasoning effort
 
-Set `model.reasoning_effort` to control the harness model in either OpenClaw or
-Hermes. For example, add `"reasoning_effort": "low"` to the existing `model` block.
+Set `model.reasoning_effort` to control the harness model in OpenClaw, Hermes,
+or Codex. For example, add `"reasoning_effort": "low"` to the existing `model` block.
 Use `"off"` (or the OpenAI spelling `"none"`) to disable reasoning.
 
 | Backend | Explicit values | Request mapping |
 | --- | --- | --- |
-| `openai`, `sglang` | `off`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` | Chat Completions `reasoning_effort`; `off` becomes `none` |
+| `openai`, `sglang` | `off`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` | Chat Completions `reasoning_effort` (Codex: Responses `reasoning.effort`); `off` becomes `none` |
 | `deepseek` | `off`, `none`, `low`, `high`, `max` | `thinking.type` disables/enables thinking; enabled requests include the exact effort |
 
 Model support varies: accepting a profile does not prove that an endpoint supports
