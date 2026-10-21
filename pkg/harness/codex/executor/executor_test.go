@@ -374,3 +374,48 @@ func TestMainRejectsAnyOtherInvocation(t *testing.T) {
 		}
 	}
 }
+
+type lockedBuffer struct {
+	mu   sync.Mutex
+	data strings.Builder
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.data.Write(p)
+}
+
+func (b *lockedBuffer) String() string { b.mu.Lock(); defer b.mu.Unlock(); return b.data.String() }
+
+// A request routed through a channel pointer taken before the channel was
+// forgotten must still be answered, never queued where nothing reads it.
+func TestStaleProcessChannelAnswersInsteadOfQueueing(t *testing.T) {
+	for name, state := range map[string]func(*callChannel){
+		"process closed":   func(c *callChannel) { c.closed = true },
+		"channel finished": func(c *callChannel) { c.finished = true },
+		"channel failed":   func(c *callChannel) { c.failed = errors.New("stream lost") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			out := &lockedBuffer{}
+			router := NewRouter(context.Background(), &fakeOpener{}, out, io.Discard)
+			channel := &callChannel{router: router, process: "p", pending: map[string]bool{}, wake: make(chan struct{}, 1)}
+			state(channel)
+			channel.send(json.RawMessage("7"), []byte(`{"id":7,"method":"process/terminate","params":{"processId":"p"}}`))
+			channel.send(json.RawMessage("8"), []byte(`{"id":8,"method":"process/write","params":{"processId":"p","chunk":"","writeId":"w"}}`))
+			if len(channel.queue) != 0 || len(channel.pending) != 0 {
+				t.Fatalf("request queued on a gone channel: queue=%d pending=%d", len(channel.queue), len(channel.pending))
+			}
+			got := out.String()
+			if name == "channel failed" {
+				if !strings.Contains(got, `"id":7`) || !strings.Contains(got, "stream lost") || !strings.Contains(got, `"id":8`) {
+					t.Fatalf("failed channel replies = %s", got)
+				}
+				return
+			}
+			if !strings.Contains(got, `{"id":7,"result":{"running":false}}`) || !strings.Contains(got, `{"id":8,"result":{"status":"unknownProcess"}}`) {
+				t.Fatalf("replies = %s", got)
+			}
+		})
+	}
+}

@@ -73,6 +73,13 @@ func (input *recordedInput) record(retainedRaw bool) (int64, string, string, []b
 	if safeStructuredText(content) {
 		return count, string(content), "utf-8", content, truncated
 	}
+	// The cap may split a multibyte character. Only that incomplete suffix is
+	// dropped from the readable text; the raw record keeps the exact bytes.
+	if truncated {
+		if text := trimIncompleteRune(content); len(text) != len(content) && safeStructuredText(text) {
+			return count, string(text), "utf-8", content, truncated
+		}
+	}
 	// Without the raw log the bytes are retained nowhere, so the note must not
 	// point at an artifact this run did not write.
 	note := fmt.Sprintf("[binary input omitted; %d bytes not retained]", count)
@@ -82,6 +89,22 @@ func (input *recordedInput) record(retainedRaw bool) (int64, string, string, []b
 		note = fmt.Sprintf("[binary input omitted; %d bytes retained in ssh_raw.log]", count)
 	}
 	return count, note, "binary-omitted", content, truncated
+}
+
+// trimIncompleteRune drops a trailing partial UTF-8 sequence, at most three
+// bytes, and leaves any other content unchanged.
+func trimIncompleteRune(content []byte) []byte {
+	for back := 1; back <= 3 && back <= len(content); back++ {
+		start := len(content) - back
+		if !utf8.RuneStart(content[start]) {
+			continue
+		}
+		if !utf8.FullRune(content[start:]) {
+			return content[:start]
+		}
+		break
+	}
+	return content
 }
 
 func safeStructuredText(content []byte) bool {

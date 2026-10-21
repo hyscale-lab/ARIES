@@ -329,18 +329,29 @@ func (r *Router) newChannel(process string) *callChannel {
 	return channel
 }
 
+// A caller may hold this channel from before it was forgotten, so a send can
+// arrive after the process closed or the channel ended; it is answered here
+// rather than queued where nothing would read it.
 func (c *callChannel) send(id json.RawMessage, line []byte) {
 	c.mu.Lock()
-	if c.failed != nil || c.finished {
+	if c.failed != nil || c.finished || c.process != "" && c.closed {
 		failed := c.failed
 		c.mu.Unlock()
-		if len(id) != 0 {
-			reason := "aries executor channel already closed"
-			if failed != nil {
-				reason = "aries executor channel failed: " + failed.Error()
-			}
-			c.router.replyError(id, -32603, reason)
+		if len(id) == 0 {
+			return
 		}
+		if failed == nil && c.process != "" {
+			var m message
+			_ = json.Unmarshal(line, &m)
+			m.ID = id
+			c.router.replyClosedProcess(m)
+			return
+		}
+		reason := "aries executor channel already closed"
+		if failed != nil {
+			reason = "aries executor channel failed: " + failed.Error()
+		}
+		c.router.replyError(id, -32603, reason)
 		return
 	}
 	if len(id) != 0 {
@@ -432,6 +443,7 @@ func (c *callChannel) run() {
 			waitErr := channel.Wait()
 			c.forget()
 			c.mu.Lock()
+			c.finished = true // Later sends are answered by send, not queued.
 			unanswered := len(c.pending) != 0
 			c.mu.Unlock()
 			if unanswered {

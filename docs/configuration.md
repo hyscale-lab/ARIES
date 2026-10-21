@@ -405,18 +405,20 @@ DeepSeek's noncanonical effort aliases are rejected. Explicit settings conflict
 with `thinking`, `reasoning`, or `reasoning_effort` in `harness.hermes.extra_body`.
 
 Omitting the field preserves existing harness behavior. OpenClaw asks its Gateway
-for thinking off for the official DeepSeek Flash/V4 models; Hermes leaves reasoning
-to its native/provider defaults. Set the field explicitly for comparable runs.
-The generated private `openclaw.json` or Hermes `config.yaml` records the request
-configuration; it does not prove the provider honored it.
+for thinking off for the official DeepSeek Flash/V4 models; Hermes and Codex leave
+reasoning to their native/provider defaults. Set the field explicitly for comparable
+runs. The generated private `openclaw.json`, Hermes `config.yaml`, or Codex
+`config.toml` records the request configuration; it does not prove the provider
+honored it.
 
 This field controls the main agent model, including voice-transcribed tasks and
 OpenClaw realtime agent consultations. `harness.realtime.reasoning_effort` remains
 the separate Talk setting. Configure judge reasoning independently under
 `benchmark.judge.reasoning_effort`; FACT settings remain unchanged.
 
-Both harnesses currently use Chat Completions. GPT-6 Luna supports tool calls on
-that API only with `none`; reasoning with tools requires Responses API support.
+OpenClaw and Hermes use Chat Completions. GPT-6 Luna supports tool calls on
+that API only with `none`; reasoning with tools requires the Responses API, which
+Codex uses.
 See the [OpenAI model documentation](https://developers.openai.com/api/docs/models/gpt-6-luna)
 and [DeepSeek thinking guide](https://api-docs.deepseek.com/guides/thinking_mode/).
 

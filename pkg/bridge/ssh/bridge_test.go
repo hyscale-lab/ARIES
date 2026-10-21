@@ -928,6 +928,27 @@ func TestRecordedInputKeepsRawAndUsesSafeStructuredEncoding(t *testing.T) {
 	})
 }
 
+// A cap that splits a multibyte character keeps the readable prefix; only the
+// partial character leaves the structured text, and raw keeps every byte.
+func TestTruncatedInputKeepsTextWhenTheCapSplitsACharacter(t *testing.T) {
+	prefix := bytes.Repeat([]byte{'x'}, maxRecordedInputBytes-1)
+	input := &recordedInput{reader: io.MultiReader(bytes.NewReader(prefix), strings.NewReader("\u00e9tail"))}
+	if _, err := io.Copy(io.Discard, input); err != nil {
+		t.Fatal(err)
+	}
+	count, content, encoding, raw, truncated := input.record(false)
+	if !truncated || encoding != "utf-8" || content != string(prefix) || len(raw) != maxRecordedInputBytes || count != int64(len(prefix))+6 {
+		t.Fatalf("record = count %d content %d encoding %q raw %d truncated %v", count, len(content), encoding, len(raw), truncated)
+	}
+	for _, test := range []struct{ in, want string }{
+		{"abc", "abc"}, {"ab\xc3", "ab"}, {"a\xe2\x82", "a"}, {"\xf0\x9f\x98", ""}, {"ok\u00e9", "ok\u00e9"}, {"\xff", "\xff"},
+	} {
+		if got := string(trimIncompleteRune([]byte(test.in))); got != test.want {
+			t.Fatalf("trimIncompleteRune(%q) = %q, want %q", test.in, got, test.want)
+		}
+	}
+}
+
 func TestRecordedInputSnapshotsCountAndContentTogether(t *testing.T) {
 	input := &recordedInput{reader: &singleByteReader{remaining: 1 << 16}}
 	done := make(chan error, 1)
