@@ -27,6 +27,7 @@ type Options struct {
 	Runtime                      deployment.Runtime
 	Launch                       LaunchSpec
 	Client                       ClientConfig
+	Staging                      SandboxStaging
 	OutputDir, BridgeType, RunID string
 	Placement                    core.RuntimePlacement
 	RetainRawLog                 bool

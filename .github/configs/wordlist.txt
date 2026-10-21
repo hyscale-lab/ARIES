@@ -233,3 +233,15 @@ jitter
 lowercased
 debian
 typescript
+Codex
+stdio
+exec
+rollout
+rollouts
+musl
+OpenSSH's
+RPC
+resumable
+executables
+symlinks
+multibyte

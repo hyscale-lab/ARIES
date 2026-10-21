@@ -11,7 +11,7 @@ and [lifecycle](architecture.md#task-lifecycle).
 | ToolBridge | Grant temporary access to one exact sandbox; confirm revocation. |
 
 - Keep implementations independent; a paired bridge may consume a narrow sandbox
-  capability. Pair Hermes/OpenClaw with their corresponding SSH bridges.
+  capability. Pair Hermes/OpenClaw/Codex with their corresponding SSH bridges.
   Configure harness-generated per-user state (such as default `HOME`) outside
   the task workdir; preserve explicit native per-call overrides.
 - Preserve shell bodies and native protocol semantics; adapt provider-owned path
