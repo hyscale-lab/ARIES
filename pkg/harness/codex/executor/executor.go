@@ -145,10 +145,13 @@ func (r *Router) dispatch(line []byte) {
 func (r *Router) routeRequest(m message, line []byte) {
 	switch m.Method {
 	case initializeMethod:
+		// A server accepts initialize once per connection, so Codex's own
+		// initialize is the handshake of its channel and gets that answer.
 		r.mu.Lock()
 		r.initialize = append(json.RawMessage(nil), m.Params...)
+		channel := r.newChannel("")
 		r.mu.Unlock()
-		r.oneShot(m, line)
+		channel.answerHandshake(m.ID)
 	case processStart:
 		id, ok := processID(m.Params)
 		if !ok {
@@ -308,6 +311,7 @@ func isProcessMethod(method string) bool {
 type callChannel struct {
 	router           *Router
 	process, startID string
+	handshakeFor     json.RawMessage // Codex's initialize ID, when this channel answers it
 
 	mu       sync.Mutex
 	queue    [][]byte
@@ -343,6 +347,16 @@ func (c *callChannel) send(id json.RawMessage, line []byte) {
 		c.pending[string(id)] = true
 	}
 	c.queue = append(c.queue, append([]byte(nil), line...))
+	c.mu.Unlock()
+	c.signal()
+}
+
+// answerHandshake makes this channel's handshake response the answer to
+// Codex's initialize request id.
+func (c *callChannel) answerHandshake(id json.RawMessage) {
+	c.mu.Lock()
+	c.handshakeFor = append(json.RawMessage(nil), id...)
+	c.pending[string(id)] = true
 	c.mu.Unlock()
 	c.signal()
 }
@@ -461,9 +475,27 @@ func (c *callChannel) forward(line []byte) {
 	}
 	switch {
 	case m.response() && string(m.ID) == handshakeID:
-		if len(m.Error) != 0 {
-			c.router.logf("native executor rejected initialize: %s", m.Error)
+		c.mu.Lock()
+		answer := c.handshakeFor
+		if answer != nil {
+			delete(c.pending, string(answer))
+			c.closed = true
 		}
+		c.mu.Unlock()
+		if answer == nil {
+			if len(m.Error) != 0 {
+				c.router.logf("native executor rejected initialize: %s", m.Error)
+			}
+			return
+		}
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(line, &fields) == nil {
+			fields["id"] = answer
+			if rewritten, err := json.Marshal(fields); err == nil {
+				c.router.write(rewritten)
+			}
+		}
+		c.signal()
 	case m.response():
 		// A one-shot call is done once answered; a process that failed to
 		// start will never report process/closed. Forget a finished process

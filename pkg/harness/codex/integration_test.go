@@ -312,9 +312,28 @@ func runNativeSSHScenario(t *testing.T, cancelTool bool, taskUser string) {
 		connection.Close()
 		t.Fatal("revoked bridge still accepts connections")
 	}
+	// Every executor call is its own exec: Codex's initialize, its filesystem
+	// probes, and each process are separate records, each with its handshake.
 	evidence, err := os.ReadFile(filepath.Join(output, "native-ssh", "bridge", "tool-calls.jsonl"))
-	if err != nil || !bytes.Contains(evidence, []byte(`"operation_class":"executor"`)) {
+	if err != nil {
 		t.Fatalf("bridge executor evidence missing: %v", err)
+	}
+	records, processes := 0, 0
+	for _, line := range bytes.Split(bytes.TrimSpace(evidence), []byte{'\n'}) {
+		var record struct {
+			OperationClass string `json:"operation_class"`
+			Stdin          string `json:"stdin"`
+		}
+		if err := json.Unmarshal(line, &record); err != nil || record.OperationClass != "executor" || !strings.Contains(record.Stdin, `"aries-initialize"`) {
+			t.Fatalf("bridge record is not one executor call: %s", line)
+		}
+		records++
+		if strings.Contains(record.Stdin, `"process/start"`) {
+			processes++
+		}
+	}
+	if records < 3 || processes != 1 {
+		t.Fatalf("bridge records = %d with %d process calls, want one record per call", records, processes)
 	}
 	for _, filename := range result.LogPaths {
 		content, err := os.ReadFile(filename)

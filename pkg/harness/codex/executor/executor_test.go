@@ -33,7 +33,7 @@ func (s *fakeServer) eof() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.saw
 func (s *fakeServer) serve(in io.Reader, out io.Writer) {
 	reader := bufio.NewReader(in)
 	write := func(format string, args ...any) { _, _ = fmt.Fprintf(out, format+"\n", args...) }
-	initialized := false
+	initialized, initializeSeen := false, false
 	process := ""
 	for {
 		line, err := reader.ReadString('\n')
@@ -50,7 +50,11 @@ func (s *fakeServer) serve(in io.Reader, out io.Writer) {
 		var m message
 		_ = json.Unmarshal([]byte(line), &m)
 		switch {
+		case m.Method == "initialize" && initializeSeen:
+			// The real server accepts initialize once per connection.
+			write(`{"id":%s,"error":{"code":-32600,"message":"initialize may only be sent once per connection"}}`, m.ID)
 		case m.Method == "initialize":
+			initializeSeen = true
 			write(`{"id":%s,"result":{"sessionId":"native-session"}}`, m.ID)
 		case m.Method == "initialized":
 			initialized = true
@@ -226,11 +230,16 @@ func TestEveryOneShotCallGetsItsOwnHandshakenChannel(t *testing.T) {
 	if len(servers) != 3 {
 		t.Fatalf("channels = %d, want one per call", len(servers))
 	}
-	for _, server := range servers {
+	for index, server := range servers {
 		waitFor(t, server.eof)
 		lines := server.lines()
-		if len(lines) != 3 || !strings.Contains(lines[0], `"id":"aries-initialize"`) || !strings.Contains(lines[0], "codex-environment") || !strings.Contains(lines[1], `"initialized"`) {
-			t.Fatalf("channel did not start with its own handshake: %q", lines)
+		// Codex's initialize is answered by its channel's own handshake.
+		want := 3
+		if index == 0 {
+			want = 2
+		}
+		if len(lines) != want || !strings.Contains(lines[0], `"id":"aries-initialize"`) || !strings.Contains(lines[0], "codex-environment") || !strings.Contains(lines[1], `"initialized"`) {
+			t.Fatalf("channel %d did not start with exactly one handshake: %q", index, lines)
 		}
 	}
 	if !strings.Contains(servers[1].lines()[2], "file:///app/.git") {
