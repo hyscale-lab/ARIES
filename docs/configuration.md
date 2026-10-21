@@ -82,6 +82,19 @@ so neither container has a CPU or memory limit, and sets
 `agent_timeout_seconds` to 3600, a one-hour agent deadline. Run them from the
 repository root, as with the other profiles.
 
+The same directory holds two Codex SWE-Bench Pro profiles,
+`codex-sbpro-subset20-deepseek-flash.json` and
+`codex-sbpro-subset70-deepseek-flash.json`, with the same overrides. Their
+tasks come from one fixed selection of the 731 public instance IDs at
+the pinned dataset revision: the IDs are sorted, permuted with
+`numpy.random.default_rng(42)`, and the 20-task subset is positions 1-20. The
+70-task subset is positions 1-20 plus 24-73; positions 21-23 were smoke tasks
+and stay excluded, so it starts with the 20-task subset, in order. Both
+run deepseek-flash with sub-agents enabled (`max_concurrent` 5) and reasoning
+effort `xhigh`. DeepSeek's own API has no Responses endpoint, so `base_url`
+is a placeholder for a Responses-compatible proxy; see the
+[Codex guide](codex.md).
+
 ## Deployment configuration
 
 Checked-in profiles select harness identity and placement separately:

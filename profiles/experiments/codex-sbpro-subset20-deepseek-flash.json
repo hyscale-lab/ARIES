@@ -1,0 +1,78 @@
+{
+  "name": "codex-sbpro-subset20-deepseek-flash",
+  "versions_file": "../../configs/versions.json",
+  "overrides_file": "no-limits-overrides.json",
+  "execution": {
+    "concurrency": 1
+  },
+  "benchmark": {
+    "type": "swebenchpro",
+    "root": ".cache/swe-bench-pro",
+    "tasks": [
+      "instance_internetarchive__openlibrary-1351c59fd43689753de1fca32c78d539a116ffc1-v29f82c9cf21d57b242f8d8b0e541525d259e2d63",
+      "instance_NodeBB__NodeBB-a917210c5b2c20637094545401f85783905c074c-vf2cf3cbd463b7ad942381f1c6d077626485a1e9e",
+      "instance_element-hq__element-web-18c03daa865d3c5b10e52b669cd50be34c67b2e5-vnan",
+      "instance_gravitational__teleport-bb69574e02bd62e5ccd3cebb25e1c992641afb2a",
+      "instance_ansible__ansible-189fcb37f973f0b1d52b555728208eeb9a6fce83-v906c969b551b346ef54a2c0b41e04f632b7b73c2",
+      "instance_gravitational__teleport-3ff75e29fb2153a2637fe7f83e49dc04b1c99c9f",
+      "instance_qutebrowser__qutebrowser-3d01c201b8aa54dd71d4f801b1dd12feb4c0a08a-v5fc38aaf22415ab0b70567368332beee7955b367",
+      "instance_ansible__ansible-949c503f2ef4b2c5d668af0492a5c0db1ab86140-v0f01c69f1e2528b935359cfe578530722bca2c59",
+      "instance_element-hq__element-web-f3534b42df3dcfe36dc48bddbf14034085af6d30-vnan",
+      "instance_tutao__tutanota-40e94dee2bcec2b63f362da283123e9df1874cc1-vc4e41fd0029957297843cb9dec4a25c7c756f029",
+      "instance_qutebrowser__qutebrowser-fea33d607fde83cf505b228238cf365936437a63-v9f8e9d96c85c85a605e382f1510bd08563afc566",
+      "instance_flipt-io__flipt-524f277313606f8cd29b299617d6565c01642e15",
+      "instance_qutebrowser__qutebrowser-96b997802e942937e81d2b8a32d08f00d3f4bc4e-v5fc38aaf22415ab0b70567368332beee7955b367",
+      "instance_internetarchive__openlibrary-3c48b4bb782189e0858e6c3fc7956046cf3e1cfb-v2d9a6c849c60ed19fd0858ce9e40b7cc8e097e59",
+      "instance_future-architect__vuls-e1fab805afcfc92a2a615371d0ec1e667503c254-v264a82e2f4818e30f5a25e4da53b27ba119f62b5",
+      "instance_protonmail__webclients-32ff10999a06455cb2147f6873d627456924ae13",
+      "instance_element-hq__element-web-9bf77963ee5e036d54b2a3ca202fbf6378464a5e-vnan",
+      "instance_flipt-io__flipt-9d25c18b79bc7829a6fb08ec9e8793d5d17e2868",
+      "instance_navidrome__navidrome-d0dceae0943b8df16e579c2d9437e11760a0626a",
+      "instance_protonmail__webclients-c6f65d205c401350a226bb005f42fac1754b0b5b"
+    ]
+  },
+  "harness": {
+    "type": "codex",
+    "deployment": {
+      "backend": "docker",
+      "docker": {
+        "socket": "/var/run/docker.sock"
+      }
+    },
+    "mode": "agent",
+    "codex": {
+      "executable": "../../.cache/codex/0.157.1/codex"
+    },
+    "subagents": {
+      "enabled": true,
+      "max_concurrent": 5
+    }
+  },
+  "sandbox": {
+    "deployment": {
+      "backend": "docker",
+      "docker": {
+        "socket": "/var/run/docker.sock"
+      }
+    }
+  },
+  "bridge": {
+    "deployment": {
+      "backend": "docker"
+    },
+    "type": "codex-ssh",
+    "mode": "managed"
+  },
+  "runtime": {
+    "backend": "openai",
+    "mode": "external"
+  },
+  "model": {
+    "base_url": "http://responses-proxy.local:8000/v1",
+    "api_key_env": "MODEL_API_KEY",
+    "id": "deepseek-flash",
+    "context_length": 1000000,
+    "reasoning_effort": "xhigh"
+  },
+  "output_dir": "runs"
+}
