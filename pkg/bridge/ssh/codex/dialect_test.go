@@ -10,26 +10,25 @@ import (
 	"testing"
 
 	"github.com/hyscale-lab/aries/pkg/bridge/ssh"
-	"github.com/hyscale-lab/aries/pkg/bridge/ssh/codex/client"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/runner"
 )
 
-func TestDialectAdmitsExactlyOneExecutorSession(t *testing.T) {
+// Every executor call is its own exec, so the dialect admits each one.
+func TestDialectRunsTheStagedExecutorForEveryCall(t *testing.T) {
 	dialect := NewDialect("sandbox-1")
 	if _, refusal := dialect.Prepare("/bin/sh -c id", "/app"); refusal == nil || refusal.Status != "rejected" {
 		t.Fatalf("shell command accepted: %#v", refusal)
 	}
-	prepared, refusal := dialect.Prepare(client.RemoteCommand, "/app")
-	if refusal != nil {
-		t.Fatal(refusal.Message)
-	}
 	stage := StageDir("sandbox-1")
-	if prepared.Action != ssh.Execute || prepared.Command.Path != stage+"/codex" || !slices.Equal(prepared.Command.Args, []string{"exec-server", "--listen", "stdio"}) || prepared.Command.Dir != "/app" || prepared.Command.Env["CODEX_HOME"] != stage+"/home" || prepared.Command.User != "" || prepared.OperationClass != OperationClass {
-		t.Fatalf("prepared = %#v", prepared)
-	}
-	if _, refusal := dialect.Prepare(client.RemoteCommand, "/app"); refusal == nil || !strings.Contains(refusal.Message, "already claimed") {
-		t.Fatalf("second executor session admitted: %#v", refusal)
+	for range 3 {
+		prepared, refusal := dialect.Prepare(RemoteCommand, "/app")
+		if refusal != nil {
+			t.Fatal(refusal.Message)
+		}
+		if prepared.Action != ssh.Execute || prepared.Command.Path != stage+"/codex" || !slices.Equal(prepared.Command.Args, []string{"exec-server", "--listen", "stdio"}) || prepared.Command.Dir != "/app" || prepared.Command.Env["CODEX_HOME"] != stage+"/home" || prepared.Command.User != "" || prepared.OperationClass != OperationClass {
+			t.Fatalf("prepared = %#v", prepared)
+		}
 	}
 }
 

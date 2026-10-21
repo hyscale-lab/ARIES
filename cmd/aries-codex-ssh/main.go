@@ -1,5 +1,5 @@
 // aries-codex-ssh is the program Codex's native remote environment spawns in
-// the harness container. It relays the executor's stdio to the bridge over SSH.
+// the harness container. It gives each executor call its own SSH channel.
 package main
 
 import (
@@ -10,7 +10,7 @@ import (
 	"syscall"
 
 	sshclient "github.com/hyscale-lab/aries/pkg/bridge/ssh/client"
-	"github.com/hyscale-lab/aries/pkg/bridge/ssh/codex/client"
+	"github.com/hyscale-lab/aries/pkg/harness/codex/executor"
 )
 
 func main() {
@@ -20,7 +20,7 @@ func main() {
 		os.Exit(255)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	code := client.Main(ctx, os.Args[1:], stdin, os.Stdout, os.Stderr)
+	code := executor.Main(ctx, os.Args[1:], stdin, os.Stdout, os.Stderr)
 	stop()
 	_ = stdin.Close()
 	os.Exit(code)

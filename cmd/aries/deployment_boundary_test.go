@@ -8,6 +8,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	bridgecodex "github.com/hyscale-lab/aries/pkg/bridge/ssh/codex"
+	"github.com/hyscale-lab/aries/pkg/harness/codex/executor"
 )
 
 // Components consume the same neutral deployment contract. Keeping provider
@@ -78,7 +81,7 @@ func TestBridgeLifecycleAndEngineDoNotImportDialects(t *testing.T) {
 }
 
 func TestClientHelpersDoNotImportServerDialects(t *testing.T) {
-	for _, component := range []string{"pkg/bridge/ssh/openclaw/client", "cmd/aries-ssh-client", "pkg/bridge/ssh/codex/client", "cmd/aries-codex-ssh"} {
+	for _, component := range []string{"pkg/bridge/ssh/openclaw/client", "cmd/aries-ssh-client", "pkg/harness/codex/executor", "cmd/aries-codex-ssh"} {
 		root := filepath.Join("..", "..", filepath.FromSlash(component))
 		for path, imports := range productionImports(t, root, true) {
 			for _, imported := range imports {
@@ -91,7 +94,7 @@ func TestClientHelpersDoNotImportServerDialects(t *testing.T) {
 }
 
 func clientImport(path string) bool {
-	for _, dialect := range []string{"openclaw", "codex"} {
+	for _, dialect := range []string{"openclaw"} {
 		prefix := "github.com/hyscale-lab/aries/pkg/bridge/ssh/" + dialect + "/client"
 		if path == prefix || strings.HasPrefix(path, prefix+"/") {
 			return true
@@ -117,7 +120,6 @@ func TestBridgeBoundaryRecognizesDialectImports(t *testing.T) {
 		"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw/internal/grammar",
 		"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw/client",
 		"github.com/hyscale-lab/aries/pkg/bridge/ssh/codex",
-		"github.com/hyscale-lab/aries/pkg/bridge/ssh/codex/client",
 	} {
 		if !dialectImport(path) {
 			t.Fatalf("concrete dialect import accepted: %s", path)
@@ -139,7 +141,6 @@ func TestClientImportExceptionExcludesServerGrammar(t *testing.T) {
 	for _, path := range []string{
 		"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw/client",
 		"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw/client/internal/helper",
-		"github.com/hyscale-lab/aries/pkg/bridge/ssh/codex/client",
 	} {
 		if !clientImport(path) {
 			t.Fatalf("client adapter rejected: %s", path)
@@ -206,5 +207,13 @@ func TestCommandUsesWiringForConcreteConstruction(t *testing.T) {
 				t.Errorf("%s imports deployment provider %s; use internal/app/wiring", path, imported)
 			}
 		}
+	}
+}
+
+// The harness-side executor and the bridge dialect live on opposite sides of
+// the boundary, so only this test, which may import both, keeps them in step.
+func TestCodexExecutorAndDialectAgreeOnRemoteCommand(t *testing.T) {
+	if executor.RemoteCommand != bridgecodex.RemoteCommand {
+		t.Fatalf("executor sends %q, dialect accepts %q", executor.RemoteCommand, bridgecodex.RemoteCommand)
 	}
 }

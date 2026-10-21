@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -39,33 +40,14 @@ func Run(ctx context.Context, configuration Config, remote string, stdin io.Read
 		return 255, errors.New("SSH stdin is required")
 	}
 	defer stdin.Close()
-	if configuration.User == "" {
-		return 255, errors.New("SSH user is required")
-	}
-	address := configuration.Address
-	dialer := net.Dialer{Timeout: connectTimeout}
-	connection, err := dialer.DialContext(ctx, "tcp", address)
+	connection, err := Dial(ctx, configuration)
 	if err != nil {
-		return 255, fmt.Errorf("connect %s: %w", address, err)
+		return 255, err
 	}
 	defer connection.Close()
 	stopCancellation := context.AfterFunc(ctx, func() { _ = connection.Close() })
 	defer stopCancellation()
-	_ = connection.SetDeadline(time.Now().Add(connectTimeout))
-	clientConfiguration := &gossh.ClientConfig{
-		User:            configuration.User,
-		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
-		Timeout:         connectTimeout,
-	}
-	sshConnection, channels, requests, err := gossh.NewClientConn(connection, address, clientConfiguration)
-	if err != nil {
-		return 255, fmt.Errorf("establish SSH connection: %w", err)
-	}
-	_ = connection.SetDeadline(time.Time{})
-	client := gossh.NewClient(sshConnection, channels, requests)
-	defer client.Close()
-	stopKeepalive := startKeepalive(client, connection)
-	defer stopKeepalive()
+	client := connection.Client
 	session, err := client.NewSession()
 	if err != nil {
 		return 255, fmt.Errorf("open SSH session: %w", err)
@@ -109,6 +91,54 @@ func Run(ctx context.Context, configuration Config, remote string, stdin io.Read
 		}
 	}
 	return 255, fmt.Errorf("run SSH command: %w", err)
+}
+
+// Connection is one keepalive-supervised SSH connection. A helper that opens
+// several sessions over it, as OpenSSH's ControlMaster does, owns Close.
+type Connection struct {
+	Client *gossh.Client
+	stop   func()
+	once   sync.Once
+}
+
+// Dial connects without client authentication or host-key pinning; the
+// bridge accepts only unauthenticated clients on the run's private network.
+func Dial(ctx context.Context, configuration Config) (*Connection, error) {
+	if configuration.User == "" {
+		return nil, errors.New("SSH user is required")
+	}
+	address := configuration.Address
+	dialer := net.Dialer{Timeout: connectTimeout}
+	connection, err := dialer.DialContext(ctx, "tcp", address)
+	if err != nil {
+		return nil, fmt.Errorf("connect %s: %w", address, err)
+	}
+	// The handshake itself takes no context; closing the socket aborts it.
+	stopHandshakeCancellation := context.AfterFunc(ctx, func() { _ = connection.Close() })
+	_ = connection.SetDeadline(time.Now().Add(connectTimeout))
+	clientConfiguration := &gossh.ClientConfig{
+		User:            configuration.User,
+		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
+		Timeout:         connectTimeout,
+	}
+	sshConnection, channels, requests, err := gossh.NewClientConn(connection, address, clientConfiguration)
+	if !stopHandshakeCancellation() && err == nil {
+		err = ctx.Err()
+		_ = sshConnection.Close()
+	}
+	if err != nil {
+		_ = connection.Close()
+		return nil, fmt.Errorf("establish SSH connection: %w", err)
+	}
+	_ = connection.SetDeadline(time.Time{})
+	client := gossh.NewClient(sshConnection, channels, requests)
+	return &Connection{Client: client, stop: startKeepalive(client, connection)}, nil
+}
+
+// Close stops keepalive and closes the connection; it is safe to repeat.
+func (connection *Connection) Close() error {
+	connection.once.Do(connection.stop)
+	return nil
 }
 
 // Capture source failures separately from writes rejected by an early remote

@@ -87,11 +87,10 @@ stream. Each rollout is Codex's own session record: session metadata and
 instructions, turn context, events, and the response items exchanged with the
 model, including tool calls and their outputs as Codex recorded them. Rollouts are retained byte for byte except that the model key is
 replaced by `[REDACTED]`; a successful turn without one fails. Bridge artifacts
-contain replayable native RPC inputs and must remain private. The executor's
-whole session is one bridge record; past 16 MiB of input it keeps the first
-16 MiB, the exact byte count, and `stdin_truncated: true`, while the stream
-itself continues. Release removes the staged executor from the task sandbox
-before evaluation.
+contain replayable native RPC inputs and must remain private. Each executor
+call (a process, a filesystem request, or a handshake) is its own bridge
+record, whose stdin holds that call's JSON-RPC requests. Release removes the
+staged executor from the task sandbox before evaluation.
 
 With the pinned CLI installed, `make integration` includes a real Codex
 container, a deterministic local Responses endpoint, and the actual native

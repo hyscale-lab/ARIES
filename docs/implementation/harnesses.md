@@ -190,8 +190,9 @@ through the deployment archive operation.
 
 The pinned `environments.toml` selects only the bridge-backed environment
 (`include_local = false`) and spawns the staged `aries-codex-ssh` helper with
-the endpoint address. Shell and filesystem operations use Codex's native
-executor inside the task sandbox through the
+the endpoint address. The helper gives each executor call its own SSH exec, so
+shell and filesystem operations use Codex's native executor inside the task
+sandbox, one call per bridge record, through the
 [Codex SSH bridge](ssh-bridges.md#codex-ssh-bridge). The harness holds an empty
 matching workdir for CLI path validation, not a copy of the task repository.
 HTTPS endpoints receive the host's validated public CA bundle at the standard

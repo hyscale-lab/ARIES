@@ -124,37 +124,51 @@ evidence separates policy from a protocol violation.
 Codex `0.157.1` has no SSH client of its own. Its native `environments.toml`
 names a program that Codex spawns and speaks exec-server JSON-RPC to over
 stdio. ARIES points that entry at `aries-codex-ssh`, a static helper staged
-into the Codex harness like OpenClaw's client. The helper carries the byte
-stream over one SSH exec request with the fixed remote command
-`aries-codex-exec-server-v1` and interprets none of it, so Codex stays
-unmodified and its shell and filesystem semantics stay native.
+into the Codex harness like OpenClaw's client. The helper's
+[executor](../../pkg/harness/codex/executor) keeps Codex's one logical session
+and gives every call its own SSH exec with the fixed remote command
+`aries-codex-exec-server-v1`, over one SSH connection, as OpenSSH's
+ControlMaster does for Hermes. Each exec runs a fresh native
+`codex exec-server --listen stdio` in the task sandbox:
+
+- One-shot requests (`initialize`, `fs/*`, environment queries) open a
+  channel, complete that server's handshake, send the request, and close the
+  channel once the response arrives.
+- `process/start` opens a channel that stays open until the server reports
+  `process/closed`. Writes, signals, and `process/terminate` for that process
+  go to the same server, so tty, signals, process-group termination, and the
+  environment policy stay native. A request for a process whose server has
+  closed gets the answer an exited process would get.
+- Server-originated requests are renumbered so IDs from different servers
+  cannot collide, and their responses return to the right server.
+
+The executor reads only routing fields (`id`, `method`, `processId`) and
+forwards every message unchanged. Each call is therefore one bridge record,
+with ordinary per-command admission, evidence, and revocation as for OpenClaw
+and Hermes. Every call starts a new executor process in the sandbox; the
+binary is static and served from the page cache.
 
 The [Codex dialect](../../pkg/bridge/ssh/codex/dialect.go) accepts only that
-command, admits exactly one executor session per sandbox, and runs
-`codex exec-server --listen stdio` in the task workdir as the task's exec user.
-The task image does not carry Codex, so the Runner-side session stages the
-pinned static CLI into a root-level directory derived from the sandbox ID
-before registration, and removes it with confirmed absence after release is
-confirmed and before evidence collection. Staging is an optional
+command and runs `codex exec-server --listen stdio` in the task workdir as the
+task's exec user. The task image does not carry Codex, so the Runner-side
+session stages the pinned static CLI into a root-level directory derived from
+the sandbox ID before registration, and removes it with confirmed absence after
+release is confirmed and before evidence collection. Staging is an optional
 `SandboxStaging` dependency that wiring selects for `codex-ssh`; the shared
 lifecycle never imports the dialect. Staging runs before the agent acts, so it
 uses the image's own `/bin/sh`, `mkdir`, and `chmod`; removal runs the task's
 `/bin/sh` and `rm` like any other sandbox exec, and a sabotaged `rm` fails Stop
 rather than leaving the executor silently.
 
-When the stream ends, the stdio exec-server shuts down and terminates the
+When a channel's input ends, its exec-server shuts down and terminates the
 processes it started (`exec-server/src/server/transport.rs` in the pinned
-source). As for the other bridges, revocation does not scan or kill sandbox
-processes beyond that.
+source). When Codex exits, the executor closes every open channel. As for the
+other bridges, revocation does not scan or kill sandbox processes beyond that.
 
-Codex keeps one stdin open for the whole run, so the engine relays input
-without bound and bounds only what it retains: past 16 MiB a record keeps the
-prefix, the exact `stdin_bytes`, and `stdin_truncated: true`. This applies to
-every dialect; earlier versions ended the stream and failed the audit instead.
-
-Codex also accepts a `url` (WebSocket) environment. A WebSocket bridge would
-drop the client helper but needs a second protocol engine with its own
-admission, evidence, and revocation; reusing the shared SSH engine is smaller.
+Codex also accepts a `url` (WebSocket) environment with session resume. A
+WebSocket bridge would need a second protocol engine with its own admission,
+evidence, and revocation, and resumable sessions would keep processes alive
+across disconnects; the per-call executor reuses the shared SSH engine instead.
 
 ## Source and limitations
 

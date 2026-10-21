@@ -2,26 +2,27 @@
 //
 // Codex 0.157.1 has no SSH of its own. Its environments.toml names a program
 // that it spawns and talks exec-server JSON-RPC to over stdio; ARIES points
-// that at aries-codex-ssh, which carries the stream over one SSH exec request.
-// This dialect accepts only that request and runs the staged native
-// exec-server inside the exact task sandbox. It translates nothing: shell and
-// filesystem semantics stay native to Codex, and the one stream is the
-// session's whole tool traffic.
+// that at aries-codex-ssh in the harness container, which opens one SSH exec
+// per call. Each exec runs a fresh native `codex exec-server --listen stdio`
+// staged in the exact task sandbox, so every call is one bridge record, as
+// for the other harnesses. The dialect accepts only that fixed command and
+// translates nothing: shell, process, and filesystem semantics stay native.
 package codex
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"sync"
 
 	"github.com/hyscale-lab/aries/pkg/bridge/ssh"
-	"github.com/hyscale-lab/aries/pkg/bridge/ssh/codex/client"
 	"github.com/hyscale-lab/aries/pkg/core"
 )
 
-// OperationClass labels the executor session in bridge evidence. The
-// structured record counts the RPC bytes; Codex's own rollout carries the
-// tool-call semantics.
+// RemoteCommand is the only exec request the dialect accepts. The harness-side
+// executor sends exactly this value; wiring tests keep the two in step.
+const RemoteCommand = "aries-codex-exec-server-v1"
+
+// OperationClass labels executor calls in bridge evidence. The record's stdin
+// holds the call's JSON-RPC request; Codex's rollout holds tool semantics.
 const OperationClass = "executor"
 
 const stagePrefix = "/.aries-codex-"
@@ -35,23 +36,14 @@ func StageDir(sandboxID string) string {
 	return stagePrefix + hex.EncodeToString(sum[:16])
 }
 
-// Dialect owns one sandbox's executor admission. Codex spawns its environment
-// program once per run, so exactly one executor session is admitted; a second
-// request is refused and recorded rather than silently given a fresh executor.
-type Dialect struct {
-	stage string
+// Dialect maps the fixed command onto one sandbox's staged executor.
+type Dialect struct{ stage string }
 
-	mu      sync.Mutex
-	claimed bool
-}
+var _ ssh.Dialect = Dialect{}
 
-var _ ssh.Dialect = (*Dialect)(nil)
+func NewDialect(sandboxID string) Dialect { return Dialect{stage: StageDir(sandboxID)} }
 
-func NewDialect(sandboxID string) *Dialect {
-	return &Dialect{stage: StageDir(sandboxID)}
-}
-
-func (*Dialect) Policy() ssh.Policy {
+func (Dialect) Policy() ssh.Policy {
 	return ssh.Policy{
 		UnsupportedRequests:   ssh.RejectAndClose,
 		InvalidOperationClass: OperationClass,
@@ -59,19 +51,12 @@ func (*Dialect) Policy() ssh.Policy {
 	}
 }
 
-// Prepare maps the fixed remote command onto the native executor. The command
-// user is left to the borrowed target, which applies the task's exec user, so
-// native commands run as the task identity exactly as a shell command would.
-func (dialect *Dialect) Prepare(encoded, workdir string) (ssh.Prepared, *ssh.Refusal) {
-	if encoded != client.RemoteCommand {
+// Prepare leaves the command user to the borrowed target, which applies the
+// task's exec user, so native commands run as the task identity exactly as a
+// shell command would.
+func (dialect Dialect) Prepare(encoded, workdir string) (ssh.Prepared, *ssh.Refusal) {
+	if encoded != RemoteCommand {
 		return ssh.Prepared{}, &ssh.Refusal{OperationClass: OperationClass, Status: "rejected", Message: "invalid remote command"}
-	}
-	dialect.mu.Lock()
-	claimed := dialect.claimed
-	dialect.claimed = true
-	dialect.mu.Unlock()
-	if claimed {
-		return ssh.Prepared{}, &ssh.Refusal{OperationClass: OperationClass, Status: "rejected", Message: "executor session already claimed"}
 	}
 	return ssh.Prepared{
 		Command: core.Command{

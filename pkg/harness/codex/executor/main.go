@@ -1,8 +1,4 @@
-// Package client is the stdio program Codex's native remote environment
-// spawns. Codex 0.157.1 speaks its exec-server JSON-RPC over the program's
-// stdin and stdout; this helper carries those bytes over one SSH exec request
-// to the bridge and interprets none of them.
-package client
+package executor
 
 import (
 	"context"
@@ -14,11 +10,8 @@ import (
 	"strings"
 
 	sshclient "github.com/hyscale-lab/aries/pkg/bridge/ssh/client"
+	gossh "golang.org/x/crypto/ssh"
 )
-
-// RemoteCommand is the only exec request the Codex dialect accepts. It names
-// the native executor rather than a shell command.
-const RemoteCommand = "aries-codex-exec-server-v1"
 
 const lockedUsername = "aries"
 
@@ -30,12 +23,23 @@ func Main(ctx context.Context, args []string, stdin io.ReadCloser, stdout, stder
 		_, _ = fmt.Fprintf(stderr, "aries-codex-ssh: %v\n", err)
 		return 255
 	}
-	code, err := sshclient.Run(ctx, sshclient.Config{Address: address, User: lockedUsername}, RemoteCommand, stdin, stdout, stderr)
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "aries-codex-ssh: %v\n", err)
+	opener := &SSHOpener{Stderr: stderr, Dial: func(ctx context.Context) (*gossh.Client, func() error, error) {
+		connection, err := sshclient.Dial(ctx, sshclient.Config{Address: address, User: lockedUsername})
+		if err != nil {
+			return nil, nil, err
+		}
+		return connection.Client, connection.Close, nil
+	}}
+	// Cancellation ends Codex's input and every channel, so Serve returns.
+	stop := context.AfterFunc(ctx, func() { _ = stdin.Close(); _ = opener.Close() })
+	defer stop()
+	err = NewRouter(ctx, opener, stdout, stderr).Serve(stdin)
+	_ = opener.Close()
+	if err != nil && ctx.Err() == nil {
+		_, _ = fmt.Fprintf(stderr, "aries-codex-ssh: read Codex input: %v\n", err)
 		return 255
 	}
-	return code
+	return 0
 }
 
 func parseArguments(args []string) (string, error) {
