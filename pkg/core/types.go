@@ -242,6 +242,27 @@ type CleanupResult struct {
 	Error  string `json:"error,omitempty"`
 }
 
+// Phase is one step of a task's lifecycle as the runner saw it: when the step
+// began and how long the call took, whether or not it succeeded.
+type Phase struct {
+	Name      string        `json:"name"`
+	StartedAt time.Time     `json:"started_at"`
+	Duration  time.Duration `json:"duration"`
+}
+
+// Phase names, in the order the runner enters them. A task that fails early
+// records only the phases it reached.
+const (
+	PhaseSandboxStart   = "sandbox_start"
+	PhaseSandboxPrepare = "sandbox_prepare"
+	PhaseBridgeStart    = "bridge_start"
+	PhaseHarnessStart   = "harness_start"
+	PhaseHarnessRun     = "harness_run"
+	PhaseIsolation      = "isolation"
+	PhaseEvaluation     = "evaluation"
+	PhaseCleanup        = "cleanup"
+)
+
 // TaskResult preserves each outcome even when several operations fail.
 type TaskResult struct {
 	TaskID       string          `json:"task_id"`
@@ -259,6 +280,9 @@ type TaskResult struct {
 	// schedule asked for.
 	StartedAt time.Time     `json:"started_at,omitempty"`
 	Duration  time.Duration `json:"duration"`
+	// Phases is the task's timeline, so a latency can be split into
+	// provisioning, harness setup, the agent's run, evaluation and cleanup.
+	Phases []Phase `json:"phases,omitempty"`
 }
 
 // RunSummary is a direct count of task outcomes.

@@ -65,6 +65,17 @@ error. List failed tasks with:
 jq -r '.tasks[] | select(.error) | "\(.task_id): \(.error)"' "$run_dir/run-result.json"
 ```
 
+Each task's `phases` list is its timeline as the runner saw it: one entry per
+lifecycle step, with its name, `started_at` and `duration`, in the order
+`sandbox_start`, `sandbox_prepare`, `bridge_start`, `harness_start`,
+`harness_run`, `isolation`, `evaluation` and `cleanup`. A task that fails early
+lists only the steps it reached. Shared startup, such as the run's bridge, is in
+`infrastructure.startup_duration` instead. To split a task's latency:
+
+```sh
+jq -r '.tasks[] | .task_id as $t | .phases[] | "\($t)\t\(.name)\t\(.duration / 1e9)s"' "$run_dir/run-result.json"
+```
+
 Also inspect the run's `infrastructure` object. It records shared bridge and
 network identities, the effective network policy, the bridge observer outcome,
 startup/cleanup durations, and confirmed shared cleanup. Shared failures remain

@@ -406,6 +406,51 @@ func TestRunnerSuccessOrdering(t *testing.T) {
 	}
 }
 
+func phaseNames(phases []core.Phase) []string {
+	names := make([]string, 0, len(phases))
+	for _, phase := range phases {
+		names = append(names, phase.Name)
+	}
+	return names
+}
+
+func TestRunnerRecordsEachLifecyclePhaseInOrder(t *testing.T) {
+	rig := newRig(t, 1)
+	result, err := rig.runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	task := result.Tasks[0]
+	want := []string{
+		core.PhaseSandboxStart, core.PhaseSandboxPrepare, core.PhaseBridgeStart, core.PhaseHarnessStart,
+		core.PhaseHarnessRun, core.PhaseIsolation, core.PhaseEvaluation, core.PhaseCleanup,
+	}
+	if got := phaseNames(task.Phases); !reflect.DeepEqual(got, want) {
+		t.Fatalf("phases = %v, want %v", got, want)
+	}
+	for index, phase := range task.Phases {
+		if phase.StartedAt.Before(task.StartedAt) || phase.Duration < 0 {
+			t.Fatalf("phase %s = %#v, task started %v", phase.Name, phase, task.StartedAt)
+		}
+		if index > 0 {
+			previous := task.Phases[index-1]
+			if phase.StartedAt.Before(previous.StartedAt.Add(previous.Duration)) {
+				t.Fatalf("phase %s starts before %s ends", phase.Name, previous.Name)
+			}
+		}
+	}
+}
+
+func TestRunnerRecordsOnlyThePhasesATaskReached(t *testing.T) {
+	rig := newRig(t, 1)
+	rig.benchmark.prepareErr = errInjected
+	result, _ := rig.runner.Run(context.Background())
+	want := []string{core.PhaseSandboxStart, core.PhaseSandboxPrepare, core.PhaseCleanup}
+	if got := phaseNames(result.Tasks[0].Phases); !reflect.DeepEqual(got, want) {
+		t.Fatalf("phases = %v, want %v", got, want)
+	}
+}
+
 func TestRunnerRecordsAndLogsTaskErrorWhenHarnessNeverStarts(t *testing.T) {
 	rig := newRig(t, 1)
 	var logs bytes.Buffer

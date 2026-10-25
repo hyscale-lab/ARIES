@@ -146,6 +146,14 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 			cleanupCancel()
 		}
 	}()
+	// phase starts timing one lifecycle step; calling the returned function
+	// records it.
+	phase := func(name string) func() {
+		began := time.Now()
+		return func() {
+			result.Phases = append(result.Phases, core.Phase{Name: name, StartedAt: began, Duration: time.Since(began)})
+		}
+	}
 	ensureCleanupContext := func() context.Context {
 		if cleanupCtx == nil {
 			cleanupCtx, cleanupCancel = context.WithTimeout(context.WithoutCancel(ctx), r.cleanupTimeout)
@@ -154,6 +162,7 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 	}
 	finish := func() (core.TaskResult, error) {
 		cleanup := ensureCleanupContext()
+		endCleanup := phase(core.PhaseCleanup)
 		if evaluation.active() {
 			cleanupUsed = true
 			if err := evaluation.stop(cleanup); err != nil {
@@ -184,6 +193,9 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 				sandboxActive = false
 			}
 		}
+		if cleanupUsed {
+			endCleanup()
+		}
 		if !cleanupUsed {
 			result.Cleanup.Status = core.StatusNotNeeded
 		} else if len(cleanupErrors) == 0 {
@@ -211,11 +223,13 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 	}
 
 	var err error
+	endPhase := phase(core.PhaseSandboxStart)
 	sandbox, err = r.toolSandbox.Start(ctx, core.SandboxRequest{
 		RunID:       r.runID,
 		TaskID:      task.ID,
 		Environment: sandboxEnvironment,
 	})
+	endPhase()
 	if err != nil {
 		allErrors = append(allErrors, fmt.Errorf("start sandbox: %w", err))
 		return finish()
@@ -225,12 +239,17 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		return finish()
 	}
 	sandboxActive = true
-	if err := r.benchmark.PrepareSandbox(ctx, task, sandbox); err != nil {
+	endPhase = phase(core.PhaseSandboxPrepare)
+	err = r.benchmark.PrepareSandbox(ctx, task, sandbox)
+	endPhase()
+	if err != nil {
 		allErrors = append(allErrors, fmt.Errorf("prepare sandbox: %w", err))
 		return finish()
 	}
 
+	endPhase = phase(core.PhaseBridgeStart)
 	endpoint, err := r.bridge.Start(ctx, sandbox)
+	endPhase()
 	// Start may fail after allocating task-local resources or after its internal
 	// rollback fails. Stop is idempotent, so every Start attempt must be followed
 	// by a positive revocation confirmation before sandbox cleanup.
@@ -253,7 +272,9 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		OutputDir:    r.outputDir,
 	}
 	request.NoSandboxTools = task.NoSandboxTools
+	endPhase = phase(core.PhaseHarnessStart)
 	err = r.harness.Start(ctx, request)
+	endPhase()
 	// Start may fail after allocating task-local resources. Stop is idempotent,
 	// so every Start attempt must be followed by a positive stop confirmation
 	// before the evaluator can inspect the sandbox.
@@ -263,7 +284,9 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		result.Harness.Error = err.Error()
 		allErrors = append(allErrors, fmt.Errorf("start harness: %w", err))
 	} else {
+		endPhase = phase(core.PhaseHarnessRun)
 		harnessResult, runErr := r.harness.Run(ctx, task.Instruction)
+		endPhase()
 		result.Harness = harnessResult
 		if runErr == nil {
 			if result.Harness.Status == "" {
@@ -278,6 +301,7 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 
 	isolationErrors := make([]error, 0, 2)
 	isolationCtx, cancelIsolation := context.WithTimeout(context.WithoutCancel(ctx), r.cleanupTimeout)
+	endPhase = phase(core.PhaseIsolation)
 	if err := r.harness.Stop(isolationCtx); err != nil {
 		isolationErrors = append(isolationErrors, fmt.Errorf("confirm harness stopped: %w", err))
 	} else {
@@ -291,6 +315,7 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		result.Isolation.BridgeRevoked = true
 	}
 	cancelIsolation()
+	endPhase()
 
 	if len(isolationErrors) != 0 {
 		isolationErr := errors.Join(isolationErrors...)
@@ -303,7 +328,9 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 	}
 
 	result.Isolation.Status = core.StatusConfirmed
+	endPhase = phase(core.PhaseEvaluation)
 	taskEvaluation, evaluationErr := r.benchmark.Evaluate(ctx, originalTask, sandbox, evaluation)
+	endPhase()
 	result.Evaluation = taskEvaluation
 	if evaluationErr == nil {
 		if result.Evaluation.Status == "" {
