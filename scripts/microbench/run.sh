@@ -12,10 +12,12 @@
 # ARIES checkout on the node the comparison measures, with bin/ built, the
 # tasks packed (scripts/microbench/pack.sh) and, for record mode, the model key
 # in DEEPSEEK_API_KEY or DEEPSEEK_API.key. Kubernetes runs use $KUBECONFIG.
+# --bridge-repository maps the Kubernetes bridge image to another repository,
+# such as one loaded onto the node, keeping the commit tag ARIES requests.
 set -euo pipefail
 
-harness="" backend="" mode="" runs=1 address="" prometheus="" pace=recorded port=8090
-usage() { sed -n '2,16s/^# \{0,1\}//p' "$0"; }
+harness="" backend="" mode="" runs=1 address="" prometheus="" pace=recorded port=8090 bridge_repository=""
+usage() { sed -n '2,18s/^# \{0,1\}//p' "$0"; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --harness) harness=$2; shift 2 ;;
@@ -26,6 +28,7 @@ while [ $# -gt 0 ]; do
     --prometheus) prometheus=$2; shift 2 ;;
     --pace) pace=$2; shift 2 ;;
     --port) port=$2; shift 2 ;;
+    --bridge-repository) bridge_repository=$2; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -60,9 +63,9 @@ fi
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 name=$harness-microbench-$backend-$mode
 profile=.cache/microbench-runs/$name.json
-python3 - "profiles/comparison/$harness-microbench-$backend.json" "$profile" "$name" "$address:$port" "$prometheus" "$root" <<'PY'
+python3 - "profiles/comparison/$harness-microbench-$backend.json" "$profile" "$name" "$address:$port" "$prometheus" "$root" "$bridge_repository" <<'PY'
 import json, sys
-source, target, name, address, prometheus, root = sys.argv[1:]
+source, target, name, address, prometheus, root, bridge_repository = sys.argv[1:]
 profile = json.load(open(source))
 profile["name"] = name
 # The written profile lives elsewhere, so its relative paths become absolute.
@@ -71,6 +74,11 @@ profile["overrides_file"] = root + "/profiles/comparison/" + profile["overrides_
 profile["model"]["base_url"] = "http://%s/v1" % address
 placement = profile["sandbox"]["deployment"]
 placement[placement["backend"]]["prometheus_url"] = prometheus
+if bridge_repository:
+    bridge = profile["bridge"]["deployment"]
+    if bridge["backend"] != "kubernetes":
+        sys.exit("--bridge-repository applies only to Kubernetes runs")
+    bridge["kubernetes"]["images"] = {"aries-bridge": bridge_repository}
 json.dump(profile, open(target, "w"), indent=2)
 PY
 
