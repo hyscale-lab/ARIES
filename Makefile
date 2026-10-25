@@ -1,4 +1,4 @@
-.PHONY: build test test-race lint integration run setup k8s-cluster k8s-images k8s-clean k8s-prune charts-lint charts-template
+.PHONY: build test test-race lint integration run setup microbench k8s-cluster k8s-images k8s-clean k8s-prune charts-lint charts-template
 
 PROFILE ?= profiles/openclaw-tb2-fix-git-deepseek.json
 
@@ -59,6 +59,11 @@ proto:
 	test "$$($(CURDIR)/.cache/protobuf/bin/protoc-gen-go-grpc --version)" = 'protoc-gen-go-grpc $(patsubst v%,%,$(PROTOC_GEN_GO_GRPC_VERSION))'
 	test "$$($(PROTOC) --version)" = 'libprotoc $(PROTOC_VERSION)'
 	PATH=$(CURDIR)/.cache/protobuf/bin:$$PATH $(PROTOC) --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative pkg/bridge/control/v1/control.proto
+
+# Pack the committed microbenchmark tasks into .cache/microbench, the checkout
+# the profiles in profiles/comparison/ run from.
+microbench:
+	./scripts/microbench/pack.sh
 
 .PHONY: bridge-image
 bridge-image: build

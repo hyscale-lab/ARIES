@@ -1,0 +1,55 @@
+{
+  "name": "hermes-microbench-docker",
+  "versions_file": "../../configs/microbench-versions.json",
+  "overrides_file": "fixed-2cpu-4gib-overrides.json",
+  "execution": {
+    "concurrency": 1
+  },
+  "benchmark": {
+    "type": "terminalbench2",
+    "root": ".cache/microbench",
+    "tasks": [
+      "mb-noop",
+      "mb-one-call",
+      "mb-ten-calls",
+      "mb-cpu",
+      "mb-output"
+    ]
+  },
+  "harness": {
+    "type": "hermes",
+    "deployment": {
+      "backend": "docker",
+      "docker": {
+        "socket": "/var/run/docker.sock"
+      }
+    }
+  },
+  "sandbox": {
+    "deployment": {
+      "backend": "docker",
+      "docker": {
+        "socket": "/var/run/docker.sock",
+        "prometheus_url": "http://prometheus.local:9090"
+      }
+    }
+  },
+  "bridge": {
+    "deployment": {
+      "backend": "docker"
+    },
+    "type": "hermes-ssh",
+    "mode": "managed"
+  },
+  "runtime": {
+    "backend": "openai",
+    "mode": "external"
+  },
+  "model": {
+    "base_url": "http://replay.local:8090/v1",
+    "api_key_env": "DEEPSEEK_API_KEY",
+    "id": "deepseek-flash",
+    "reasoning_effort": "low"
+  },
+  "output_dir": "runs"
+}

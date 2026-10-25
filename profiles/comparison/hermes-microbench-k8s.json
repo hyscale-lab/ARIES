@@ -1,0 +1,76 @@
+{
+  "name": "hermes-microbench-k8s",
+  "versions_file": "../../configs/microbench-versions.json",
+  "overrides_file": "fixed-2cpu-4gib-overrides.json",
+  "execution": {
+    "concurrency": 1
+  },
+  "benchmark": {
+    "type": "terminalbench2",
+    "root": ".cache/microbench",
+    "tasks": [
+      "mb-noop",
+      "mb-one-call",
+      "mb-ten-calls",
+      "mb-cpu",
+      "mb-output"
+    ]
+  },
+  "harness": {
+    "type": "hermes",
+    "deployment": {
+      "backend": "kubernetes",
+      "kubernetes": {
+        "namespace": "aries",
+        "node_selector": {
+          "loader-nodetype": "worker"
+        },
+        "images": {
+          "aries-local/hermes": "ghcr.io/hyscale-lab/aries-hermes"
+        }
+      }
+    }
+  },
+  "sandbox": {
+    "deployment": {
+      "backend": "kubernetes",
+      "kubernetes": {
+        "namespace": "aries",
+        "pod_cidr": "10.168.0.0/16",
+        "service_cidr": "10.96.0.0/12",
+        "node_selector": {
+          "loader-nodetype": "worker"
+        },
+        "prometheus_url": "http://prometheus.local:9090"
+      }
+    }
+  },
+  "bridge": {
+    "deployment": {
+      "backend": "kubernetes",
+      "kubernetes": {
+        "namespace": "aries",
+        "service_account": "aries-bridge",
+        "images": {
+          "aries-bridge": "ghcr.io/hyscale-lab/aries-bridge"
+        },
+        "node_selector": {
+          "loader-nodetype": "worker"
+        }
+      }
+    },
+    "type": "hermes-ssh",
+    "mode": "managed"
+  },
+  "runtime": {
+    "backend": "openai",
+    "mode": "external"
+  },
+  "model": {
+    "base_url": "http://replay.local:8090/v1",
+    "api_key_env": "DEEPSEEK_API_KEY",
+    "id": "deepseek-flash",
+    "reasoning_effort": "low"
+  },
+  "output_dir": "runs"
+}

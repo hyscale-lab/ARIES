@@ -84,6 +84,43 @@ same resources. The disk limit is removed because Docker cannot enforce one
 unless its storage is on XFS with project quotas, and giving it such storage
 through a loopback file would slow its disk I/O against the Kubernetes runs.
 
+### Microbenchmark profiles
+
+`benchmarks/microbench/` holds five Terminal-Bench-format tasks that each
+isolate one cost of running an agent against a tool sandbox: no tool call, one
+call, ten calls, one CPU-bound call, and one call with 64 KB of output (see its
+[README](../benchmarks/microbench/README.md)). The profiles
+`profiles/comparison/{openclaw,hermes}-microbench-{docker,k8s}.json` run all
+five with the comparison resources above.
+
+ARIES loads such tasks only from a clean checkout at a pinned revision, so
+`make microbench` packs the committed tasks into `.cache/microbench` as a git
+repository with a fixed author, date and message. Its commit hash depends only
+on the tasks' contents, and `configs/microbench-versions.json` pins it; a test
+fails when a task changes without the pin. That file is otherwise a copy of
+`configs/versions.json`, which another test keeps in step.
+
+The profiles point the model at `aries-replay` and Prometheus through the
+placeholders `replay.local` and `prometheus.local`.
+`scripts/microbench/run.sh` fills them in, starts `aries-replay`, and runs a
+profile repeatedly, listing each run in `.cache/microbench-runs/manifest.tsv`:
+
+```sh
+make build microbench
+scripts/microbench/run.sh --harness openclaw --backend docker --mode record \
+  --address <this node's IP> --prometheus <Prometheus URL>
+scripts/microbench/run.sh --harness openclaw --backend k8s --mode replay --runs 10 \
+  --address <this node's IP> --prometheus <Prometheus URL>
+python3 scripts/microbench/analyze.py
+```
+
+Record once per harness against the real model, then replay on every backend.
+`analyze.py` splits each task's time into the runner's phases, and the agent's
+run into model time, tool execution as the bridge measured it, and the rest,
+which is the harness's own work plus the transport between harness, bridge and
+sandbox. It writes one row per task run to `tasks.csv` and prints medians with
+the Kubernetes minus Docker difference.
+
 ### Paper-reproduction profiles
 
 `profiles/experiments/` holds the twenty-task OpenClaw and Hermes profiles for

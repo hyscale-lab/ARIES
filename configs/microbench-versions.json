@@ -1,0 +1,40 @@
+{
+  "bridge": {
+    "image": "aries-bridge:v1",
+    "base_image": "alpine:3.21.3",
+    "kubernetes_base_image": "alpine/k8s:1.34.3"
+  },
+  "terminalbench2": {
+    "repository_url": "https://github.com/hyscale-lab/ARIES.git",
+    "revision": "c70efe8c333384954626a89bcbaa554e05bf9676"
+  },
+  "deepresearchbench": {
+    "repository_url": "https://github.com/Ayanami0730/deep_research_bench.git",
+    "revision": "469cce54ea7f6a63c163d3d9fec879cf289ec484"
+  },
+  "sweatlasqa": {
+    "repository_url": "https://github.com/scaleapi/SWE-Atlas",
+    "revision": "6de82c3603fb9e254170b440d7560441eb257176"
+  },
+  "swebenchpro": {
+    "dataset_repository_url": "https://huggingface.co/datasets/ScaleAI/SWE-bench_Pro.git",
+    "dataset_revision": "7ab5114912baf22bb098818e604c02fe7ad2c11f",
+    "evaluator_repository_url": "https://github.com/scaleapi/SWE-bench_Pro-os.git",
+    "evaluator_revision": "ca10a60a5fcae51e6948ffe1485d4153d421e6c5"
+  },
+  "toolathlon": {
+    "repository_url": "https://github.com/hkust-nlp/Toolathlon.git",
+    "revision": "9be8d8fe07a497b18ee61e3f2ae694e9797f39eb"
+  },
+  "openclaw": {
+    "image": "ghcr.io/openclaw/openclaw:2026.7.1"
+  },
+  "hermes": {
+    "image": "docker.io/nousresearch/hermes-agent:v2026.8.31",
+    "otel_plugin": {
+      "repository_url": "https://github.com/briancaffey/hermes-otel",
+      "version": "1.19.0",
+      "revision": "9a0aed646611023c4d4aec5b7897a72511559956"
+    }
+  }
+}
