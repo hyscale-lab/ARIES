@@ -18,6 +18,7 @@ cluster nodes.
 
 import csv
 import datetime
+import glob
 import json
 import os
 import statistics
@@ -44,6 +45,23 @@ def read_jsonl(path):
         return []
     with open(path) as handle:
         return [json.loads(line) for line in handle if line.strip()]
+
+
+def harness_tool_calls(task_dir):
+    """Tool calls as the harness saw them, from OpenClaw's session log: each
+    tool result records how long the call took on the harness's side. The same
+    log exists with and without ARIES, so this compares all deployments alike."""
+    durations = []
+    for path in glob.glob(os.path.join(task_dir, "harness", "telemetry", "*.jsonl")):
+        if "trajectory" in os.path.basename(path):
+            continue
+        for entry in read_jsonl(path):
+            message = entry.get("message") or {}
+            if message.get("role") == "toolResult":
+                duration = (message.get("details") or {}).get("durationMs")
+                if isinstance(duration, (int, float)):
+                    durations.append(duration)
+    return durations
 
 
 def resource_stats(samples):
@@ -86,6 +104,10 @@ def task_rows(entry, requests):
         for name in PHASES:
             row[name + "_s"] = phases[name]["duration"] / 1e9 if name in phases else None
         row["task_s"] = task["duration"] / 1e9
+        # OpenClaw's own measure of the agent's run, which the native baseline
+        # records; its wall-clock harness_run also includes starting the CLI.
+        if task.get("agent_internal_ms") is not None:
+            row["agent_internal_s"] = task["agent_internal_ms"] / 1000
 
         calls = read_jsonl(os.path.join(run_dir, task["task_id"], "bridge", "tool-calls.jsonl"))
         row["tool_calls"] = len(calls)
@@ -104,6 +126,10 @@ def task_rows(entry, requests):
             row["model_misses"] = sum(1 for r in chat if r.get("hit") is False)
             row["model_s"] = model_s
             row["harness_other_s"] = phases["harness_run"]["duration"] / 1e9 - model_s - row["tool_exec_s"]
+        harness_calls = harness_tool_calls(os.path.join(run_dir, task["task_id"]))
+        row["harness_tool_calls"] = len(harness_calls)
+        row["harness_tool_s"] = sum(harness_calls) / 1000
+        row["harness_tool_mean_ms"] = statistics.mean(harness_calls) if harness_calls else None
         samples = read_jsonl(os.path.join(run_dir, task["task_id"], "monitor", "resources.jsonl"))
         for component, values in resource_stats(samples).items():
             for key, value in values.items():
@@ -136,8 +162,9 @@ def main():
         writer.writeheader()
         writer.writerows(rows)
 
-    shown = ["task_s", "sandbox_start_s", "harness_start_s", "harness_run_s", "model_s",
+    shown = ["task_s", "sandbox_start_s", "harness_start_s", "harness_run_s", "agent_internal_s", "model_s",
              "tool_exec_s", "harness_other_s", "cleanup_s", "tool_exec_mean_ms",
+             "harness_tool_calls", "harness_tool_mean_ms",
              "sandbox_cpu_mean", "sandbox_cpu_peak", "harness_cpu_peak", "harness_memory_peak_mib"]
     groups = defaultdict(list)
     for row in rows:
@@ -146,19 +173,20 @@ def main():
     print("Medians over replayed runs; times in seconds, CPU in percent of one core.\n")
     for harness in sorted({key[0] for key in groups}):
         for task in sorted({key[1] for key in groups if key[0] == harness}):
+            native = groups.get((harness, task, "native"), [])
             docker = groups.get((harness, task, "docker"), [])
             k8s = groups.get((harness, task, "k8s"), [])
-            rewards = "docker %s/%d solved, k8s %s/%d solved" % (
-                sum(1 for r in docker if r["reward"] == 1), len(docker),
-                sum(1 for r in k8s if r["reward"] == 1), len(k8s))
-            print("### %s, %s (%s)\n" % (harness, task, rewards))
-            print("| Measure | Docker | Kubernetes | Kubernetes − Docker |")
-            print("| --- | --- | --- | --- |")
+            solved = lambda rows: "%d/%d" % (sum(1 for r in rows if r["reward"] == 1), len(rows))
+            print("### %s, %s (solved: native %s, ARIES Docker %s, ARIES Kubernetes %s)\n" % (
+                harness, task, solved(native), solved(docker), solved(k8s)))
+            print("| Measure | Native | ARIES Docker | ARIES Kubernetes | Kubernetes − Docker |")
+            print("| --- | --- | --- | --- | --- |")
+            fmt = lambda v: "" if v is None else "%.2f" % v
             for column in shown:
+                n = median(r.get(column) for r in native)
                 d, k = median(r.get(column) for r in docker), median(r.get(column) for r in k8s)
-                fmt = lambda v: "" if v is None else "%.2f" % v
                 diff = "" if d is None or k is None else "%+.2f" % (k - d)
-                print("| %s | %s | %s | %s |" % (column, fmt(d), fmt(k), diff))
+                print("| %s | %s | %s | %s | %s |" % (column, fmt(n), fmt(d), fmt(k), diff))
             print()
     print("Per-run rows: " + output)
 
