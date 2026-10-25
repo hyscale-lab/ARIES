@@ -278,6 +278,7 @@ type podObject struct {
 }
 
 type containerStatus struct {
+	Image string `json:"image"`
 	State struct {
 		Waiting *struct {
 			Reason string `json:"reason"`

@@ -211,10 +211,24 @@ func (manager *Manager) waitingReason(ctx context.Context, name string) string {
 	if err != nil || !found {
 		return ""
 	}
+	return describeWaiting(pod)
+}
+
+// describeWaiting names why a pod's containers are waiting. A pull failure
+// names the image too: it is usually one that was never published, such as a
+// bridge image for a commit nobody pushed.
+func describeWaiting(pod podObject) string {
 	var reasons []string
 	for _, status := range append(pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses...) {
-		if waiting := status.State.Waiting; waiting != nil && waiting.Reason != "" {
-			reasons = append(reasons, waiting.Reason)
+		waiting := status.State.Waiting
+		if waiting == nil || waiting.Reason == "" {
+			continue
+		}
+		switch reason := waiting.Reason; {
+		case (reason == "ErrImagePull" || reason == "ImagePullBackOff" || reason == "InvalidImageName") && status.Image != "":
+			reasons = append(reasons, reason+" for "+status.Image)
+		default:
+			reasons = append(reasons, reason)
 		}
 	}
 	if len(reasons) == 0 {

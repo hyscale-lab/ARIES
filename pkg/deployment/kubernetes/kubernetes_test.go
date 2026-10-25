@@ -529,3 +529,22 @@ func TestNewRejectsInvalidOptions(t *testing.T) {
 		}
 	}
 }
+
+func TestDescribeWaitingNamesTheImageAPullFailedFor(t *testing.T) {
+	var pod podObject
+	if err := json.Unmarshal([]byte(`{"status":{"phase":"Pending","containerStatuses":[
+		{"image":"ghcr.io/hyscale-lab/aries-bridge:v1-0123456789ab","state":{"waiting":{"reason":"ErrImagePull"}}}]}}`), &pod); err != nil {
+		t.Fatal(err)
+	}
+	if got := describeWaiting(pod); got != " (ErrImagePull for ghcr.io/hyscale-lab/aries-bridge:v1-0123456789ab)" {
+		t.Fatalf("pull failure = %q", got)
+	}
+	pod.Status.ContainerStatuses[0].State.Waiting.Reason = "ContainerCreating"
+	if got := describeWaiting(pod); got != " (ContainerCreating)" {
+		t.Fatalf("other reason = %q", got)
+	}
+	pod.Status.ContainerStatuses = nil
+	if got := describeWaiting(pod); got != " (phase Pending)" {
+		t.Fatalf("no reason = %q", got)
+	}
+}
