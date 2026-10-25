@@ -166,7 +166,7 @@ def main():
         writer.writerows(rows)
 
     shown = ["task_s", "sandbox_start_s", "harness_start_s", "harness_run_s", "agent_internal_s", "model_s",
-             "tool_exec_s", "harness_other_s", "cleanup_s", "tool_exec_mean_ms",
+             "tool_exec_s", "harness_other_s", "isolation_s", "evaluation_s", "cleanup_s", "tool_exec_mean_ms",
              "harness_tool_calls", "harness_tool_mean_ms",
              "sandbox_cpu_mean", "sandbox_cpu_peak", "harness_cpu_peak", "harness_memory_peak_mib"]
     groups = defaultdict(list)
