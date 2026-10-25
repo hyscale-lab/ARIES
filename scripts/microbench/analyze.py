@@ -33,7 +33,7 @@ def parse_time(text):
     text = text.replace("Z", "+00:00")
     if "." in text:
         head, rest = text.split(".", 1)
-        digits = "".join(c for c in rest if c.isdigit())
+        digits = rest[:len(rest) - len(rest.lstrip("0123456789"))]
         zone = rest[len(digits):]
         text = "%s.%s%s" % (head, digits[:6].ljust(6, "0"), zone)
     return datetime.datetime.fromisoformat(text).timestamp()
