@@ -773,21 +773,31 @@ func (manager *Manager) realtimeAPIKeyEnv(active *session) string {
 	return manager.options.Realtime.TTS.APIKeyEnv
 }
 
+// gatewayLauncherScript runs the gateway in the background so a stop signal
+// reaches it: a shell defers its traps while a foreground child runs, which left
+// the gateway to be killed only after the stop grace period.
 func gatewayLauncherScript() []byte {
 	return []byte(`#!/bin/sh
 set -eu
 node /run/aries/gateway-proxy.js &
 proxy_pid=$!
-cleanup() {
-  kill "$proxy_pid" 2>/dev/null || true
-  wait "$proxy_pid" 2>/dev/null || true
+openclaw gateway run --port ` + upstreamGatewayPort + ` --auth token --bind loopback &
+gateway_pid=$!
+forward() {
+  kill -TERM "$gateway_pid" 2>/dev/null || true
 }
-trap cleanup EXIT INT TERM
+trap forward INT TERM
 set +e
-openclaw gateway run --port ` + upstreamGatewayPort + ` --auth token --bind loopback
+wait "$gateway_pid"
 status=$?
+# A trapped signal interrupts wait before the gateway has exited.
+while kill -0 "$gateway_pid" 2>/dev/null; do
+  wait "$gateway_pid"
+  status=$?
+done
 set -e
-cleanup
+kill "$proxy_pid" 2>/dev/null || true
+wait "$proxy_pid" 2>/dev/null || true
 exit "$status"
 `)
 }

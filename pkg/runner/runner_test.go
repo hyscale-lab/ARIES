@@ -422,7 +422,7 @@ func TestRunnerRecordsEachLifecyclePhaseInOrder(t *testing.T) {
 	}
 	task := result.Tasks[0]
 	want := []string{
-		core.PhaseSandboxStart, core.PhaseSandboxPrepare, core.PhaseBridgeStart, core.PhaseHarnessStart,
+		core.PhaseSandboxStart, core.PhaseSandboxPrepare, core.PhaseBridgeRegister, core.PhaseHarnessStart,
 		core.PhaseHarnessRun, core.PhaseIsolation, core.PhaseEvaluation, core.PhaseCleanup,
 	}
 	if got := phaseNames(task.Phases); !reflect.DeepEqual(got, want) {

@@ -249,7 +249,7 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		return finish()
 	}
 
-	endPhase = phase(core.PhaseBridgeStart)
+	endPhase = phase(core.PhaseBridgeRegister)
 	endpoint, err := r.bridge.Start(ctx, sandbox)
 	endPhase()
 	// Start may fail after allocating task-local resources or after its internal

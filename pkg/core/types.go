@@ -255,7 +255,7 @@ type Phase struct {
 const (
 	PhaseSandboxStart   = "sandbox_start"
 	PhaseSandboxPrepare = "sandbox_prepare"
-	PhaseBridgeStart    = "bridge_start"
+	PhaseBridgeRegister = "bridge_register"
 	PhaseHarnessStart   = "harness_start"
 	PhaseHarnessRun     = "harness_run"
 	PhaseIsolation      = "isolation"

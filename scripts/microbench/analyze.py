@@ -25,7 +25,7 @@ import statistics
 import sys
 from collections import defaultdict
 
-PHASES = ["sandbox_start", "sandbox_prepare", "bridge_start", "harness_start",
+PHASES = ["sandbox_start", "sandbox_prepare", "bridge_register", "harness_start",
           "harness_run", "isolation", "evaluation", "cleanup"]
 
 
@@ -97,6 +97,9 @@ def task_rows(entry, requests):
     rows = []
     for task in result["tasks"]:
         phases = {phase["name"]: phase for phase in task.get("phases", [])}
+        # Runs before the rename called bridge registration bridge_start.
+        if "bridge_start" in phases:
+            phases.setdefault("bridge_register", phases.pop("bridge_start"))
         row = {key: entry[key] for key in ("harness", "backend", "mode", "repetition")}
         row["task"] = task["task_id"].rsplit("-", 1)[0]
         row["reward"] = task["evaluation"].get("reward")
