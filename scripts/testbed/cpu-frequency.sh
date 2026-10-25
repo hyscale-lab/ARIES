@@ -26,7 +26,15 @@ turbo_control() {
   fi
 }
 
-policies() { ls -d "$cpus"/cpufreq/policy* 2>/dev/null; }
+# policies lists the cpufreq policies of online CPUs; an offline CPU's, such as
+# a hyper-thread sibling Invitro's setup turns off, cannot be read or set.
+policies() {
+  local policy
+  for policy in "$cpus"/cpufreq/policy*; do
+    [ -n "$(cat "$policy/affected_cpus" 2>/dev/null)" ] && echo "$policy"
+  done
+  return 0
+}
 
 distinct() { for policy in $(policies); do cat "$policy/$1"; done | sort -u | tr '\n' ' '; }
 
