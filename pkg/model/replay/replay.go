@@ -114,6 +114,7 @@ type Timing struct {
 	// Hit is false when replay had no recording for the request.
 	Hit   *bool  `json:"hit,omitempty"`
 	Error string `json:"error,omitempty"`
+	Note  string `json:"note,omitempty"`
 }
 
 // Server is an http.Handler. Close releases its files.
@@ -319,6 +320,13 @@ func (server *Server) forward(w http.ResponseWriter, r *http.Request, body []byt
 		if readErr != nil {
 			if !errors.Is(readErr, io.EOF) {
 				timing.Error = "read upstream: " + readErr.Error()
+				// A client may hang up once it has the whole reply, before
+				// the upstream ends the stream, which cancels this request.
+				// That reply is complete and is kept.
+				if r.Context().Err() != nil && complete(recording) {
+					timing.Error = ""
+					timing.Note = "client closed after the complete reply"
+				}
 			}
 			break
 		}
@@ -385,6 +393,19 @@ func (server *Server) replay(w http.ResponseWriter, r *http.Request, received ti
 		}
 	}
 	timing.DurationMS = milliseconds(server.options.Now().Sub(received))
+}
+
+// complete reports whether a relayed reply was whole: a stream that reached
+// its end marker, or a body that is one complete JSON value.
+func complete(recording Recording) bool {
+	var body []byte
+	for _, chunk := range recording.Chunks {
+		body = append(body, chunk.Data...)
+	}
+	if strings.HasPrefix(recording.ContentType, "text/event-stream") {
+		return bytes.Contains(body, []byte("data: [DONE]"))
+	}
+	return json.Valid(bytes.TrimSpace(body))
 }
 
 var digits = regexp.MustCompile(`[0-9]+`)

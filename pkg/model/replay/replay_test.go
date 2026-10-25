@@ -226,3 +226,61 @@ func TestNewRejectsBadOptions(t *testing.T) {
 		}
 	}
 }
+
+// A client may close the connection as soon as it has the whole reply, while
+// the upstream keeps the stream open. That reply is complete and must be
+// stored; one the client abandoned before the end marker must not be.
+func TestRecordKeepsACompleteReplyTheClientClosedEarly(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		reply  string
+		stored bool
+	}{
+		{"complete", "data: {\"choices\":[]}\n\ndata: [DONE]\n\n", true},
+		{"cut short", "data: {\"choices\":[]}\n\n", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			release := make(chan struct{})
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(w, test.reply)
+				w.(http.Flusher).Flush()
+				// Hold the stream open until the client has gone.
+				select {
+				case <-r.Context().Done():
+				case <-release:
+				}
+			}))
+			defer upstream.Close()
+			defer close(release)
+			store := filepath.Join(t.TempDir(), "recordings.jsonl")
+			logPath := filepath.Join(t.TempDir(), "requests.jsonl")
+			recorder, err := New(Options{Mode: ModeRecord, Upstream: upstream.URL, StorePath: store, LogPath: logPath})
+			if err != nil {
+				t.Fatal(err)
+			}
+			proxy := httptest.NewServer(recorder)
+			response, err := http.Post(proxy.URL+chatPath, "application/json", strings.NewReader(chatBody("task", 0, 1)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			buffer := make([]byte, len(test.reply))
+			if _, err := io.ReadFull(response.Body, buffer); err != nil {
+				t.Fatal(err)
+			}
+			// Hang up without waiting for the upstream to end the stream.
+			response.Body.Close()
+			proxy.CloseClientConnections()
+			deadline := time.Now().Add(5 * time.Second)
+			for len(readLines(t, logPath)) == 0 && time.Now().Before(deadline) {
+				time.Sleep(10 * time.Millisecond)
+			}
+			proxy.Close()
+			recorder.Close()
+			content, _ := os.ReadFile(store)
+			if stored := len(strings.TrimSpace(string(content))) > 0; stored != test.stored {
+				t.Fatalf("stored = %v, want %v; log %v", stored, test.stored, readLines(t, logPath))
+			}
+		})
+	}
+}
