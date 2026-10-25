@@ -251,7 +251,8 @@ if [ "$stage_runner" = true ]; then
     remote "$runner" "python3 - ~/$runner_dir/profiles $prometheus_url" <<'PY'
 import glob, json, os, sys
 
-for path in sorted(glob.glob(os.path.join(sys.argv[1], "*.json"))):
+# Profiles live in subfolders too, such as profiles/kubernetes/.
+for path in sorted(glob.glob(os.path.join(sys.argv[1], "**", "*.json"), recursive=True)):
     with open(path) as handle:
         profile = json.load(handle)
     placement = profile.get("sandbox", {}).get("deployment", {})
