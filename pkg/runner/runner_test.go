@@ -547,11 +547,13 @@ func TestRunnerAppliesSparseOverridesWithoutMutatingBenchmarkTask(t *testing.T) 
 	originalEnv := map[string]string{"KEEP": "value"}
 	rig.benchmark.tasks[0].Environment.CPU = 1.5
 	rig.benchmark.tasks[0].Environment.MemoryMB = 512
+	rig.benchmark.tasks[0].Environment.StorageMB = 10240
 	rig.benchmark.tasks[0].Environment.Env = originalEnv
 	harnessCPU, sandboxCPU, sandboxMemory, timeout := 1.25, 2.25, 4096, 90*time.Second
+	unlimitedStorage := 0
 	rig.runner.runtimeOverrides = RuntimeOverrides{
 		HarnessResources:      ResourceOverrides{CPU: &harnessCPU},
-		AgentSandboxResources: ResourceOverrides{CPU: &sandboxCPU, MemoryMB: &sandboxMemory},
+		AgentSandboxResources: ResourceOverrides{CPU: &sandboxCPU, MemoryMB: &sandboxMemory, StorageMB: &unlimitedStorage},
 		AgentTimeout:          &timeout,
 	}
 	if _, err := rig.runner.Run(context.Background()); err != nil {
@@ -559,11 +561,11 @@ func TestRunnerAppliesSparseOverridesWithoutMutatingBenchmarkTask(t *testing.T) 
 	}
 	request := rig.factory.requests[0]
 	harness := rig.harness.requests[0]
-	if request.Environment.CPU != sandboxCPU || request.Environment.MemoryMB != sandboxMemory || harness.CPU == nil || *harness.CPU != harnessCPU || harness.MemoryMB != nil || harness.Timeout != timeout {
+	if request.Environment.CPU != sandboxCPU || request.Environment.MemoryMB != sandboxMemory || request.Environment.StorageMB != 0 || harness.CPU == nil || *harness.CPU != harnessCPU || harness.MemoryMB != nil || harness.Timeout != timeout {
 		t.Fatalf("sandbox = %#v, harness = %#v", request, harness)
 	}
 	request.Environment.Env["KEEP"] = "changed"
-	if originalEnv["KEEP"] != "value" || rig.benchmark.tasks[0].Environment.CPU != 1.5 || rig.benchmark.tasks[0].Timeout != 37*time.Minute {
+	if originalEnv["KEEP"] != "value" || rig.benchmark.tasks[0].Environment.CPU != 1.5 || rig.benchmark.tasks[0].Environment.StorageMB != 10240 || rig.benchmark.tasks[0].Timeout != 37*time.Minute {
 		t.Fatalf("benchmark task mutated: %#v", rig.benchmark.tasks[0])
 	}
 	if !reflect.DeepEqual(rig.benchmark.preparedTasks, rig.benchmark.tasks) || !reflect.DeepEqual(rig.benchmark.evaluatedTasks, rig.benchmark.tasks) {

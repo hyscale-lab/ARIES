@@ -29,6 +29,8 @@ type Options struct {
 type ResourceOverrides struct {
 	CPU      *float64
 	MemoryMB *int
+	// StorageMB applies to the agent sandbox only.
+	StorageMB *int
 }
 
 // RuntimeOverrides contains independent sparse harness and sandbox changes.
@@ -367,6 +369,7 @@ func cloneResourceOverrides(resources ResourceOverrides) ResourceOverrides {
 		value := *resources.MemoryMB
 		cloned.MemoryMB = &value
 	}
+	cloned.StorageMB = cloneInt(resources.StorageMB)
 	return cloned
 }
 
@@ -378,6 +381,9 @@ func effectiveRuntime(original core.Task, overrides RuntimeOverrides) (core.Envi
 	}
 	if overrides.AgentSandboxResources.MemoryMB != nil {
 		environment.MemoryMB = *overrides.AgentSandboxResources.MemoryMB
+	}
+	if overrides.AgentSandboxResources.StorageMB != nil {
+		environment.StorageMB = *overrides.AgentSandboxResources.StorageMB
 	}
 	// A zero harness dimension means unlimited, which the deployment
 	// request expresses by omission.

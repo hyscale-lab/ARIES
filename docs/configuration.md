@@ -41,8 +41,12 @@ respective containers and may specify different CPU and memory limits. A fresh
 evaluation sandbox, such as SWE-bench Pro's, uses the task's own resources.
 
 - In `harness_resources`, an omitted or zero `cpu` or `memory_mb` is unlimited.
-- In `agent_sandbox_resources`, an omitted `cpu` or `memory_mb` keeps the task's
-  declared value, and a zero one is unlimited.
+- In `agent_sandbox_resources`, an omitted `cpu`, `memory_mb` or `storage_mb`
+  keeps the task's declared value, and a zero one is unlimited. `storage_mb` is
+  the sandbox's disk limit, which `harness_resources` does not accept. Docker
+  enforces it only on XFS mounted with project quotas, and fails the sandbox
+  otherwise; Kubernetes enforces it by evicting a pod that exceeds it. Set it to
+  `0` to compare the two on a node whose Docker storage is not on XFS.
 
 Neither block inherits from the other.
 
@@ -70,6 +74,15 @@ profile uses `""`, which disables override loading without opening a file.
 Profiles and nonempty referenced override files reject unknown fields and
 trailing JSON; there is no profile merge or inheritance layer. SGLang is the
 exception only for its separate native launch configuration, described below.
+
+### Tool sandbox comparison profiles
+
+`profiles/comparison/fixed-2cpu-4gib-overrides.json` gives the harness and the
+agent sandbox 2 CPUs and 4 GiB each, removes the sandbox's disk limit, and sets
+a one-hour agent deadline, so runs compared across deployment backends get the
+same resources. The disk limit is removed because Docker cannot enforce one
+unless its storage is on XFS with project quotas, and giving it such storage
+through a loopback file would slow its disk I/O against the Kubernetes runs.
 
 ### Paper-reproduction profiles
 

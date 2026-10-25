@@ -348,7 +348,7 @@ func buildTaskExperiment(cfg config.Config, model core.ModelConfig, effectiveGPU
 		Name: cfg.Name, RunID: runID, OutputDir: outputRoot, Model: model, Logger: logger,
 		RuntimeOverrides: runner.RuntimeOverrides{
 			HarnessResources:      runner.ResourceOverrides{CPU: cfg.Overrides.HarnessResources.CPU, MemoryMB: cfg.Overrides.HarnessResources.MemoryMB},
-			AgentSandboxResources: runner.ResourceOverrides{CPU: cfg.Overrides.AgentSandboxResources.CPU, MemoryMB: cfg.Overrides.AgentSandboxResources.MemoryMB},
+			AgentSandboxResources: runner.ResourceOverrides{CPU: cfg.Overrides.AgentSandboxResources.CPU, MemoryMB: cfg.Overrides.AgentSandboxResources.MemoryMB, StorageMB: cfg.Overrides.AgentSandboxResources.StorageMB},
 			AgentTimeout:          cfg.Overrides.AgentTimeout,
 		},
 	})

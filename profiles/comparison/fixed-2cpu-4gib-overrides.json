@@ -1,0 +1,12 @@
+{
+  "harness_resources": {
+    "cpu": 2,
+    "memory_mb": 4096
+  },
+  "agent_sandbox_resources": {
+    "cpu": 2,
+    "memory_mb": 4096,
+    "storage_mb": 0
+  },
+  "agent_timeout_seconds": 3600
+}

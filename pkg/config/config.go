@@ -100,6 +100,9 @@ type RuntimeOverrides struct {
 type ResourceOverrides struct {
 	CPU      *float64 `json:"cpu,omitempty"`
 	MemoryMB *int     `json:"memory_mb,omitempty"`
+	// StorageMB applies to agent_sandbox_resources only: harness containers
+	// carry no disk limit.
+	StorageMB *int `json:"storage_mb,omitempty"`
 }
 
 type ProfileModel struct {
@@ -608,6 +611,9 @@ func (o *RuntimeOverrides) validate() error {
 	if err := validateResources("harness_resources", o.HarnessResources); err != nil {
 		return err
 	}
+	if o.HarnessResources.StorageMB != nil {
+		return errors.New("harness_resources.storage_mb is unsupported; only agent_sandbox_resources sets a disk limit")
+	}
 	if err := validateResources("agent_sandbox_resources", o.AgentSandboxResources); err != nil {
 		return err
 	}
@@ -648,6 +654,9 @@ func validateResources(name string, resources ResourceOverrides) error {
 	}
 	if resources.MemoryMB != nil && (*resources.MemoryMB < 0 || int64(*resources.MemoryMB) > math.MaxInt64>>20) {
 		return fmt.Errorf("%s.memory_mb must be nonnegative (zero is unlimited) and no greater than %d", name, int64(math.MaxInt64)>>20)
+	}
+	if resources.StorageMB != nil && *resources.StorageMB < 0 {
+		return fmt.Errorf("%s.storage_mb must be nonnegative (zero is unlimited)", name)
 	}
 	return nil
 }
