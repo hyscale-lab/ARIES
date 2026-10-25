@@ -39,6 +39,14 @@ app.kubernetes.io/part-of: aries
 {{- end }}
 
 {{/*
+Labels a workload's selector matches on: stable across chart upgrades.
+*/}}
+{{- define "aries.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "aries.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+
+{{/*
 Tool bridge ServiceAccount name. Profiles refer to it by this name.
 */}}
 {{- define "aries.bridge.fullname" -}}

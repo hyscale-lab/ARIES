@@ -23,7 +23,7 @@ func NewDockerSandbox(cfg config.DeploymentConfig, runID, occurrenceID string, l
 	if err != nil {
 		return nil, nil, fmt.Errorf("construct sandbox deployment: %w", err)
 	}
-	source, err := dockerdeployment.NewResourceSource(dockerdeployment.ResourceOptions{DockerSocket: cfg.Docker.Socket, RunID: runID, TaskIDs: []string{occurrenceID}})
+	source, err := newDockerResources(cfg, dockerdeployment.ResourceOptions{DockerSocket: cfg.Docker.Socket, RunID: runID, TaskIDs: []string{occurrenceID}})
 	if err != nil {
 		return nil, nil, errors.Join(fmt.Errorf("construct Docker resource source: %w", err), transport.Close())
 	}
@@ -40,9 +40,20 @@ func PullDockerImages(ctx context.Context, cfg config.DeploymentConfig, images [
 }
 
 // NewDockerRunResources observes the bridge using its selected deployment.
-func NewDockerRunResources(cfg config.DeploymentConfig, runID string) (monitor.ResourceSource, error) {
+// The sandbox placement chooses where measurements come from for the whole run.
+func NewDockerRunResources(cfg, sandbox config.DeploymentConfig, runID string) (monitor.ResourceSource, error) {
 	if cfg.Backend != "docker" {
 		return nil, fmt.Errorf("unsupported bridge resource backend %q", cfg.Backend)
 	}
-	return dockerdeployment.NewResourceSource(dockerdeployment.ResourceOptions{Scope: "run", DockerSocket: cfg.Docker.Socket, RunID: runID})
+	options := dockerdeployment.ResourceOptions{Scope: "run", DockerSocket: cfg.Docker.Socket, RunID: runID}
+	return newDockerResources(sandbox, options)
+}
+
+// newDockerResources reads measurements from Prometheus when the sandbox
+// placement names one, and from the Docker stats API otherwise.
+func newDockerResources(sandbox config.DeploymentConfig, options dockerdeployment.ResourceOptions) (monitor.ResourceSource, error) {
+	if sandbox.Docker != nil && sandbox.Docker.PrometheusURL != "" {
+		return dockerdeployment.NewPrometheusResourceSource(options, sandbox.Docker.PrometheusURL)
+	}
+	return dockerdeployment.NewResourceSource(options)
 }

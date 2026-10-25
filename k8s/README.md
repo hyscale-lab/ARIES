@@ -112,8 +112,12 @@ The script ends by printing the cluster's Kubernetes version, its pod and
 service CIDRs, and the Prometheus address, which the next two steps need. It is
 safe to run again.
 
-The chart ships no workload. ARIES creates the harness, sandbox and bridge pods
-for each run and removes them afterwards.
+The chart's only workload is a cAdvisor DaemonSet, one pod per node, which
+Prometheus scrapes for the pod measurements ARIES records (see
+[the Kubernetes implementation](../docs/implementation/kubernetes.md#where-the-readings-come-from)).
+Set `cadvisor.enabled: false` to leave it out; measurements then fail rather
+than read as idle. ARIES creates the harness, sandbox and bridge pods for each
+run and removes them afterwards.
 
 ## Removing Invitro's unused components
 
@@ -260,11 +264,10 @@ kubectl -n aries get pods -l app.kubernetes.io/managed-by=aries -o wide
   does; under flannel the policies are created and silently ignored.
 - **Pod resource metrics** are read from Prometheus, so they need the
   monitoring stack and a `prometheus_url` in the profile; without one they are
-  recorded as unsupported and the run continues. The kubelet refreshes these
-  figures every 10 seconds unless it runs with `--housekeeping-interval`, so
-  that is their resolution on a stock Invitro cluster. Set
-  `kubelet_housekeeping_interval` to `1s` for one-second data, in the dashboard
-  and in `resources.jsonl` alike.
+  recorded as unsupported and the run continues. They come from the chart's
+  cAdvisor, which samples every container every second. The Grafana dashboard
+  still plots the kubelet's own cAdvisor series, whose resolution is set by
+  `kubelet_housekeeping_interval`.
 - **One bridge pod per run.** If it dies mid-run, the tasks in flight lose
   their tool access and their evidence, and evaluation is blocked for them.
 - **An interrupted runner can leave pods behind.** `make k8s-clean` removes

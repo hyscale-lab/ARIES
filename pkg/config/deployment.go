@@ -17,6 +17,11 @@ type DeploymentConfig struct {
 
 type DockerDeploymentConfig struct {
 	Socket string `json:"socket,omitempty"`
+	// PrometheusURL, set on sandbox.deployment only, reads every runtime's
+	// measurements from Prometheus, which scrapes the ARIES chart's standalone
+	// cAdvisor on the Docker host, instead of from the Docker stats API. That is
+	// how the Kubernetes backend is measured, so the two can be compared.
+	PrometheusURL string `json:"prometheus_url,omitempty"`
 }
 
 // KubernetesDeploymentConfig places a component's runtimes as pods. ARIES
@@ -79,6 +84,14 @@ func (c *Config) NormalizeDeployment() error {
 	}
 	if c.Bridge.Deployment.Backend == "docker" && c.Sandbox.Deployment.Backend == "docker" && c.Bridge.Deployment.Docker.Socket != c.Sandbox.Deployment.Docker.Socket {
 		return fmt.Errorf("bridge.deployment.docker.socket and sandbox.deployment.docker.socket must select the same local Docker daemon")
+	}
+	for _, placement := range []struct {
+		path string
+		cfg  *DeploymentConfig
+	}{{"harness.deployment", &c.Harness.Deployment}, {"bridge.deployment", &c.Bridge.Deployment}} {
+		if placement.cfg.Docker != nil && placement.cfg.Docker.PrometheusURL != "" {
+			return fmt.Errorf("%s.docker: prometheus_url applies only to sandbox.deployment", placement.path)
+		}
 	}
 	if err := c.normalizeKubernetes(); err != nil {
 		return err
@@ -188,7 +201,17 @@ func (d *DeploymentConfig) normalize(path string) error {
 		if !filepath.IsAbs(socket) || strings.ContainsAny(socket, "\x00\r\n") || strings.TrimSpace(socket) != socket || filepath.Clean(socket) == "/" {
 			return fmt.Errorf("%s.docker.socket must be a local absolute Unix socket path", path)
 		}
-		d.Docker = &DockerDeploymentConfig{Socket: filepath.Clean(socket)}
+		prometheus := ""
+		if d.Docker != nil {
+			prometheus = d.Docker.PrometheusURL
+		}
+		if prometheus != "" {
+			u, err := url.Parse(prometheus)
+			if err != nil || u.Host == "" || u.Scheme != "http" && u.Scheme != "https" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+				return fmt.Errorf("%s.docker.prometheus_url must be an http or https URL", path)
+			}
+		}
+		d.Docker = &DockerDeploymentConfig{Socket: filepath.Clean(socket), PrometheusURL: prometheus}
 	default:
 		return fmt.Errorf("%s.backend %q is unsupported", path, d.Backend)
 	}

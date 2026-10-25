@@ -1,0 +1,102 @@
+{{- if .Values.cadvisor.enabled }}
+# A standalone cAdvisor on every node, scraped by Prometheus, is where ARIES
+# reads container CPU and memory from on both deployment backends. It watches
+# containerd, for Kubernetes pods, and Docker, for Docker runs on the same node,
+# so both are measured by the same code at the same rate.
+#
+# The kubelet's built-in cAdvisor cannot serve this: it samples an idle
+# container less and less often, and the kubelet exposes no flag to stop that,
+# so its samples arrive unevenly. This one samples every container on a fixed
+# interval, short enough that each scrape finds a fresh sample (values.yaml).
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "aries.fullname" . }}-cadvisor
+  labels:
+    {{- include "aries.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cadvisor
+spec:
+  selector:
+    matchLabels:
+      {{- include "aries.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: cadvisor
+  template:
+    metadata:
+      labels:
+        {{- include "aries.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: cadvisor
+    spec:
+      automountServiceAccountToken: false
+      {{- with .Values.cadvisor.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.cadvisor.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: cadvisor
+          image: {{ .Values.cadvisor.image | quote }}
+          args:
+            - --port=8080
+            - --housekeeping_interval={{ .Values.cadvisor.housekeepingInterval }}
+            # Keep sampling idle containers at the same rate.
+            - --allow_dynamic_housekeeping=false
+            - --enable_metrics=cpu,memory
+            - --containerd=/var/run/containerd/containerd.sock
+            - --docker=unix:///var/run/docker.sock
+            # Only the labels a measurement is attributed by, so a series
+            # carries no task content.
+            - --store_container_labels=false
+            - --whitelisted_container_labels=io.kubernetes.pod.name,io.kubernetes.pod.namespace,io.kubernetes.container.name,aries.managed,aries.run,aries.task,aries.component,aries.kind
+            - --storage_duration=2m
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          resources:
+            {{- toYaml .Values.cadvisor.resources | nindent 12 }}
+          securityContext:
+            # cAdvisor reads every container's cgroup and the runtimes' state.
+            privileged: true
+          volumeMounts:
+            - { name: rootfs, mountPath: /rootfs, readOnly: true }
+            - { name: var-run, mountPath: /var/run, readOnly: true }
+            - { name: sys, mountPath: /sys, readOnly: true }
+            - { name: docker, mountPath: /var/lib/docker, readOnly: true }
+            - { name: containerd, mountPath: /var/lib/containerd, readOnly: true }
+            - { name: disk, mountPath: /dev/disk, readOnly: true }
+      volumes:
+        - { name: rootfs, hostPath: { path: / } }
+        - { name: var-run, hostPath: { path: /var/run } }
+        - { name: sys, hostPath: { path: /sys } }
+        - { name: docker, hostPath: { path: /var/lib/docker } }
+        - { name: containerd, hostPath: { path: /var/lib/containerd } }
+        - { name: disk, hostPath: { path: /dev/disk } }
+{{- if .Capabilities.APIVersions.Has "monitoring.coreos.com/v1/PodMonitor" }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "aries.fullname" . }}-cadvisor
+  labels:
+    {{- include "aries.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cadvisor
+spec:
+  selector:
+    matchLabels:
+      {{- include "aries.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: cadvisor
+  podMetricsEndpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.cadvisor.scrapeInterval }}
+      # Each series keeps the time cAdvisor sampled it, not the scrape time.
+      honorTimestamps: true
+{{- end }}
+{{- end }}

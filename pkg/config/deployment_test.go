@@ -41,6 +41,9 @@ func TestDeploymentDecodeAndValidation(t *testing.T) {
 		{"unix host", `{"backend":"docker","docker":{"socket":"unix://remote/run/docker.sock"}}`, `{}`, "managed", "harness.deployment.docker.socket"},
 		{"different daemons", `{"backend":"docker","docker":{"socket":"/other/docker.sock"}}`, `{}`, "managed", "same local Docker daemon"},
 		{"unknown field", `{"backend":"docker","docker":{"host":"localhost"}}`, `{}`, "managed", "unknown field"},
+		{"docker Prometheus", `{}`, `{"deployment":{"backend":"docker","docker":{"prometheus_url":"http://10.96.1.2:9090"}}}`, "managed", ""},
+		{"harness docker Prometheus", `{"backend":"docker","docker":{"prometheus_url":"http://10.96.1.2:9090"}}`, `{}`, "managed", "prometheus_url applies only to sandbox.deployment"},
+		{"malformed docker Prometheus", `{}`, `{"deployment":{"backend":"docker","docker":{"prometheus_url":"10.96.1.2:9090"}}}`, "managed", "docker.prometheus_url must be an http or https URL"},
 		{"embedded bridge", `{}`, `{}`, "embedded", "migrate"},
 		{"external bridge", `{}`, `{}`, "external", "bridge.mode"},
 	}

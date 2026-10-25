@@ -6,10 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math"
-	"net/http"
-	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,11 +14,15 @@ import (
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/deployment/internal/promquery"
 )
 
-// Pod telemetry is read from a Prometheus server that already scrapes the
-// kubelet's cAdvisor endpoint, such as the kube-prometheus-stack that Invitro's
-// setup installs. ARIES keeps no collection path of its own beside it.
+// Pod telemetry is read from a Prometheus server that scrapes the standalone
+// cAdvisor the ARIES chart runs on every node (templates/cadvisor.yaml), not
+// the kubelet's built-in one: the kubelet's samples an idle container less and
+// less often, so its readings arrive unevenly. The standalone one's series are
+// told apart by the container labels it copies from containerd, which the
+// kubelet's lack.
 //
 // Prometheus knows a pod by name only. Which run and task a pod belongs to is
 // held in its annotations, so the source lists pods through kubectl, but only
@@ -38,10 +39,14 @@ const (
 	// all remaining telemetry. The budget stays small so revoked RBAC still
 	// surfaces as an error.
 	discoveryFailureBudget = 3
-	maxPrometheusResponse  = 8 << 20
 	// A pod can appear in Prometheus a moment before it reports Running. It is
 	// looked up again after this long rather than ignored for good.
 	unknownPodRetry = 15 * time.Second
+	// podLabel and namespaceLabel are where cAdvisor puts containerd's pod
+	// identity labels.
+	podLabel       = "container_label_io_kubernetes_pod_name"
+	namespaceLabel = "container_label_io_kubernetes_pod_namespace"
+	containerLabel = "container_label_io_kubernetes_container_name"
 )
 
 // ResourceOptions scope one resource source to a single ARIES run.
@@ -60,18 +65,20 @@ type ResourceOptions struct {
 // ResourceSource collects raw cumulative counters for one run's pods. Rate
 // calculation and artifact writing stay deployment-neutral in pkg/monitor.
 type ResourceSource struct {
-	kubectl   commandRunner
-	client    *http.Client
-	base      *url.URL
-	namespace string
-	scope     string
-	runID     string
-	tasks     map[string]struct{}
+	kubectl    commandRunner
+	prometheus *promquery.Client
+	namespace  string
+	scope      string
+	runID      string
+	tasks      map[string]struct{}
 
 	mu sync.Mutex
 	// lastObserved is the newest scrape time already emitted per pod.
 	lastObserved      map[string]time.Time
 	discoveryFailures int
+	// collectorSeen is set once Prometheus has returned any series for the
+	// namespace, which always holds the chart's own cAdvisor pods.
+	collectorSeen bool
 	// known maps a pod name to its identity. A pod that is not this source's
 	// is remembered in unknownUntil so it is not listed again on every sample.
 	known        map[string]resourceTarget
@@ -106,9 +113,9 @@ func NewResourceSource(options ResourceOptions) (*ResourceSource, error) {
 		}
 		tasks[taskID] = struct{}{}
 	}
-	base, err := url.Parse(options.PrometheusURL)
-	if err != nil || base.Host == "" || base.Scheme != "http" && base.Scheme != "https" || base.User != nil || base.RawQuery != "" || base.Fragment != "" {
-		return nil, fmt.Errorf("Prometheus address %q must be an http or https URL", options.PrometheusURL)
+	prometheus, err := promquery.New(options.PrometheusURL)
+	if err != nil {
+		return nil, err
 	}
 	if options.Namespace == "" {
 		options.Namespace = defaultNamespace
@@ -117,7 +124,7 @@ func NewResourceSource(options ResourceOptions) (*ResourceSource, error) {
 		options.KubectlPath = defaultKubectl
 	}
 	return &ResourceSource{
-		kubectl: execKubectl{path: options.KubectlPath}, client: &http.Client{}, base: base,
+		kubectl: execKubectl{path: options.KubectlPath}, prometheus: prometheus,
 		namespace: options.Namespace, scope: options.Scope, runID: options.RunID, tasks: tasks,
 		lastObserved: make(map[string]time.Time),
 		known:        make(map[string]resourceTarget), unknownUntil: make(map[string]time.Time),
@@ -125,14 +132,14 @@ func NewResourceSource(options ResourceOptions) (*ResourceSource, error) {
 }
 
 func (source *ResourceSource) Close() error {
-	source.client.CloseIdleConnections()
+	source.prometheus.Close()
 	return nil
 }
 
 // BaselineGracePeriod implements monitor.BaselineTolerantSource. A reading is
-// emitted only when the scraped sample is new, and the kubelet refreshes
-// container counters on its housekeeping interval (10 seconds by default), so a
-// live pod is absent from most one-second samples.
+// emitted only when the scraped sample is new, so a pod is absent from a
+// sample whenever cAdvisor's housekeeping and Prometheus's scrape have not both
+// advanced since the last one, and until its first scrape.
 func (source *ResourceSource) BaselineGracePeriod() int { return 30 }
 
 // resourceTarget is the identity of one ARIES-owned pod, which Prometheus does
@@ -147,26 +154,38 @@ type resourceTarget struct {
 // Sample reads every pod in the namespace from Prometheus and keeps the ones
 // that belong to this source's run and tasks.
 func (source *ResourceSource) Sample(ctx context.Context) ([]core.ResourceReading, error) {
-	// container!="" drops the pod-level and pause-container series, leaving the
-	// containers ARIES started.
-	selector := fmt.Sprintf(`{namespace=%q,container!=""}`, source.namespace)
-	cpu, err := source.query(ctx, "sum by (pod) (container_cpu_usage_seconds_total"+selector+")")
+	// The container-name matchers drop the pod-level cgroup and the pause
+	// container, leaving the containers that were started in the pod.
+	selector := fmt.Sprintf(`{%s=%q,%s!="",%s!="POD"}`, namespaceLabel, source.namespace, containerLabel, containerLabel)
+	byPod := "sum by (" + podLabel + ") "
+	cpu, err := source.query(ctx, byPod+"(container_cpu_usage_seconds_total"+selector+")")
 	if err != nil {
 		return nil, err
 	}
 	if len(cpu) == 0 {
+		// The chart's cAdvisor pods live in this namespace, so no series at
+		// all means nothing is collecting, which must not read as idle pods.
+		source.mu.Lock()
+		seen := source.collectorSeen
+		source.mu.Unlock()
+		if !seen {
+			return nil, fmt.Errorf("Prometheus has no standalone cAdvisor series for namespace %q; install the ARIES chart with cadvisor.enabled", source.namespace)
+		}
 		return nil, nil
 	}
+	source.mu.Lock()
+	source.collectorSeen = true
+	source.mu.Unlock()
 	if err := source.identify(ctx, cpu); err != nil {
 		return nil, err
 	}
-	memory, err := source.query(ctx, "sum by (pod) (container_memory_working_set_bytes"+selector+")")
+	memory, err := source.query(ctx, byPod+"(container_memory_working_set_bytes"+selector+")")
 	if err != nil {
 		return nil, err
 	}
 	// An instant query is stamped with its evaluation time. The time the
 	// counter was scraped is what the rate arithmetic needs.
-	scraped, err := source.query(ctx, "max by (pod) (timestamp(container_cpu_usage_seconds_total"+selector+"))")
+	scraped, err := source.query(ctx, "max by ("+podLabel+") (timestamp(container_cpu_usage_seconds_total"+selector+"))")
 	if err != nil {
 		return nil, err
 	}
@@ -305,57 +324,9 @@ func (source *ResourceSource) discover(ctx context.Context) ([]resourceTarget, e
 	return targets, nil
 }
 
-// query runs one instant query and returns its vector keyed by the pod label.
+// query runs one instant query and returns its vector keyed by pod name.
 func (source *ResourceSource) query(ctx context.Context, expression string) (map[string]float64, error) {
-	endpoint := source.base.JoinPath("api", "v1", "query")
-	endpoint.RawQuery = url.Values{"query": {expression}}.Encode()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-	response, err := source.client.Do(request)
-	if err != nil {
-		return nil, fmt.Errorf("query Prometheus: %w", err)
-	}
-	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, maxPrometheusResponse))
-	if err != nil {
-		return nil, fmt.Errorf("read Prometheus response: %w", err)
-	}
-	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Prometheus returned %s: %s", response.Status, strings.TrimSpace(string(body[:min(len(body), 200)])))
-	}
-	var decoded struct {
-		Status string `json:"status"`
-		Error  string `json:"error"`
-		Data   struct {
-			ResultType string `json:"resultType"`
-			Result     []struct {
-				Metric map[string]string `json:"metric"`
-				Value  [2]any            `json:"value"`
-			} `json:"result"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &decoded); err != nil {
-		return nil, fmt.Errorf("decode Prometheus response: %w", err)
-	}
-	if decoded.Status != "success" || decoded.Data.ResultType != "vector" {
-		return nil, errors.New("Prometheus query failed: " + decoded.Error)
-	}
-	values := make(map[string]float64, len(decoded.Data.Result))
-	for _, sample := range decoded.Data.Result {
-		pod := sample.Metric["pod"]
-		text, ok := sample.Value[1].(string)
-		if pod == "" || !ok {
-			continue
-		}
-		value, err := strconv.ParseFloat(text, 64)
-		if err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
-			continue
-		}
-		values[pod] = value
-	}
-	return values, nil
+	return source.prometheus.Vector(ctx, expression, podLabel)
 }
 
 // parseMemoryQuantity reads the memory quantities this provider writes. An

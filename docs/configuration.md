@@ -124,6 +124,10 @@ For Docker placement, both components must use the same local daemon. `socket`
 accepts an absolute Unix socket path or `unix:///absolute/path`; normalization
 cleans the path before comparing the two settings. Remote Docker endpoints are
 rejected. Image preparation and resource monitoring use the selected socket.
+`sandbox.deployment.docker.prometheus_url` reads the run's measurements from
+Prometheus and the ARIES chart's cAdvisor instead of the Docker stats API, the
+way the Kubernetes backend is measured; see
+[Docker observation](implementation/docker.md#removal-and-observation).
 The supported topology is native Linux Docker with one network and bridge service
 per run. Every live sandbox has its own bridge session/listener and unique service
 name, including repeated task IDs. Fresh evaluation sandboxes borrow the same

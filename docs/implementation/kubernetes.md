@@ -275,10 +275,17 @@ is in [`resources.go`](../../pkg/deployment/kubernetes/resources.go).
 
 ### Where the readings come from
 
-Readings are cAdvisor data, read from Prometheus. cAdvisor is built into the
-kubelet on every node and reads each pod's cgroup counters; Prometheus scrapes
-them from the kubelet's `/metrics/cadvisor` endpoint, and the same series feed
-the Grafana dashboard. ARIES keeps no collection path of its own beside that.
+Readings are cAdvisor data, read from Prometheus. They come from a standalone
+cAdvisor that the ARIES chart runs on every node as a DaemonSet, not from the
+cAdvisor built into the kubelet. The kubelet's samples an idle container less
+and less often, up to about 15 seconds, and the kubelet offers no setting to
+stop that, so its readings arrive unevenly. The standalone one runs with
+`--allow_dynamic_housekeeping=false` and samples every container on a fixed
+housekeeping interval, 250 milliseconds by default. It watches both containerd and
+Docker, so Kubernetes pods and Docker runs on the same node are measured by the
+same code at the same rate, which is what lets the two backends be compared.
+A PodMonitor has Prometheus scrape it every second and keep the time cAdvisor
+took each sample.
 
 On each sample the source runs three instant queries against the server named
 by `prometheus_url`, summed per pod over the namespace:
@@ -287,7 +294,13 @@ by `prometheus_url`, summed per pod over the namespace:
 | --- | --- |
 | Cumulative CPU | `container_cpu_usage_seconds_total` |
 | Memory | `container_memory_working_set_bytes` |
-| Observation time | `timestamp()` of the CPU series, the moment it was scraped |
+| Observation time | `timestamp()` of the CPU series, the moment cAdvisor sampled it |
+
+The standalone cAdvisor's series are told apart from the kubelet's by the labels
+it copies from containerd, `container_label_io_kubernetes_pod_name` and
+`container_label_io_kubernetes_pod_namespace`, which the kubelet's lack. Only
+those identity labels and ARIES's own `aries.*` labels are kept, so a series
+carries no task content.
 
 Prometheus identifies a pod by name only, while the run and task it belongs to
 are in its annotations. The source therefore lists pods through `kubectl`, but
@@ -299,8 +312,11 @@ ones.
 
 ### What it depends on
 
-- **The monitoring stack.** Without a `prometheus_url` the measurements are
-  recorded as unsupported and the run continues; nothing is fabricated.
+- **The monitoring stack and the chart's cAdvisor.** Without a `prometheus_url`
+  the measurements are recorded as unsupported and the run continues; nothing
+  is fabricated. With one, but no standalone cAdvisor series for the namespace,
+  the first sample fails: the chart's own cAdvisor pods live there, so an empty
+  answer means nothing is collecting, not that the pods are idle.
 - **A reachable address.** `k8s/apply-aries.sh` prints the Prometheus Service's
   cluster address. A cluster node reaches it directly, which is why the runner
   on Invitro's loader node needs no port-forward. A runner outside the cluster
@@ -308,26 +324,26 @@ ones.
 
 ### Freshness
 
-Two intervals bound how fine the data is, and the coarser one wins:
+Two intervals bound how fine the data is: cAdvisor's housekeeping, when it
+samples the cgroup counters, and Prometheus's scrape, which keeps the newest
+sample it finds (`cadvisor.housekeepingInterval` and `cadvisor.scrapeInterval`
+in the chart). cAdvisor waits a random one to two housekeeping intervals between
+samples, a jitter no flag removes, so the housekeeping interval is set well
+below the scrape's:
 
-| Interval | Stock Invitro cluster | With ARIES applied |
-| --- | --- | --- |
-| Kubelet housekeeping, when cAdvisor refreshes the counters | 10 seconds | `kubelet_housekeeping_interval` in `cluster.json`, such as `1s` |
-| Prometheus scrape of cAdvisor | 15 seconds | 1 second, from the monitoring overlay |
+| Housekeeping, with a 1-second scrape | Gap between stored samples | Gaps over 1.5 s | cAdvisor CPU per node |
+| --- | --- | --- | --- |
+| 1 second | 1.0–2.0 s, median 1.5 s | about half | |
+| 500 milliseconds | mean 1.0 s, 5th–95th percentile 0.56–1.61 s | 11% | about 0.14 cores |
+| 250 milliseconds, the default | mean 1.0 s, 5th–95th percentile 0.72–1.28 s, at most 1.44 s | none | about 0.2 cores |
 
-Scraping every second does not help while the kubelet refreshes every ten, so
-one-second measurements need both. A dashboard panel drawn at a one-second step
-only interpolates between whatever samples exist.
-
-Even with both set to one second, samples do not land on a one-second grid. The
-kubelet's cAdvisor adds up to one interval of jitter to every refresh, so an
-active pod is observed every one to two seconds. It also backs off while a
-container's counters are not changing, up to about 15 seconds before jitter, so
-an idle pod is observed far less often. Neither behaviour is configurable in the
-kubelet. Each line of `resources.jsonl` is one real observation at its own
-timestamp; nothing is repeated to fill the gaps, and because the CPU counter is
-cumulative, the rate between two observations stays exact however far apart
-they are.
+Measured on a three-node Invitro cluster over 90 seconds and about 1,300 gaps
+per setting. A stored sample keeps the time cAdvisor took it, so the spread is
+real spacing between observations, not timestamp error. cAdvisor's own CPU use
+is the same on every node and under both backends. Each line of
+`resources.jsonl` is one real observation at its own timestamp; nothing is
+repeated to fill a gap, and because the CPU counter is cumulative, the rate
+between two observations stays exact however far apart they are.
 
 The source records a reading only when the scrape time has advanced, so a
 repeated value is never counted twice, and asks the Recorder to keep a pod's CPU

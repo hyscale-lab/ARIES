@@ -178,6 +178,9 @@ func newSharedBridge(cfg config.Config, runID, outputRoot string, placement core
 	switch cfg.Bridge.Deployment.Backend {
 	case "docker":
 		launch.ResourceMetrics = "docker-stats"
+		if cfg.Sandbox.Deployment.Docker != nil && cfg.Sandbox.Deployment.Docker.PrometheusURL != "" {
+			launch.ResourceMetrics = "prometheus"
+		}
 	case "kubernetes":
 		launch.ResourceMetrics = "unsupported"
 		if cfg.Sandbox.Deployment.Kubernetes.PrometheusURL != "" {
@@ -339,7 +342,7 @@ func newInfrastructure(cfg config.Config, runID, outputRoot string, logger *logr
 			return nil, err
 		}
 		environment := owner.NewRunEnvironment(runID)
-		resources, err := deploymentwiring.NewDockerRunResources(cfg.Bridge.Deployment, runID)
+		resources, err := deploymentwiring.NewDockerRunResources(cfg.Bridge.Deployment, cfg.Sandbox.Deployment, runID)
 		if err != nil {
 			return nil, errors.Join(err, owner.Close())
 		}

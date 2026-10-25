@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/hyscale-lab/aries/internal/app"
 	"io"
 	"os"
@@ -154,5 +155,31 @@ func TestKubernetesBackendSelectsItsProviderForEveryComponent(t *testing.T) {
 	cfg.Bridge.Deployment = config.DeploymentConfig{Backend: "docker"}
 	if err := validateComponents(cfg); err == nil || !strings.Contains(err.Error(), "all use the kubernetes deployment backend") {
 		t.Fatalf("mixed backends = %v", err)
+	}
+}
+
+// Naming a Prometheus server on the Docker sandbox moves the run's
+// measurements, bridge included, onto the cAdvisor series the Kubernetes
+// backend is measured from.
+func TestDockerPrometheusURLSelectsTheCAdvisorSource(t *testing.T) {
+	for _, test := range []struct {
+		prometheus string
+		want       string
+	}{{"", "*docker.DockerResourceSource"}, {"http://10.96.1.2:9090", "*docker.PrometheusResourceSource"}} {
+		cfg := config.Config{Versions: config.Versions{Bridge: config.BridgeVersions{Image: "aries-bridge:v1"}}}
+		cfg.Sandbox.Deployment = config.DeploymentConfig{Backend: "docker", Docker: &config.DockerDeploymentConfig{PrometheusURL: test.prometheus}}
+		if err := cfg.NormalizeDeployment(); err != nil {
+			t.Fatal(err)
+		}
+		infrastructure, err := newInfrastructure(cfg, "run-1", t.TempDir(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := fmt.Sprintf("%T", infrastructure.Resources); got != test.want {
+			t.Fatalf("prometheus %q: resources %s, want %s", test.prometheus, got, test.want)
+		}
+		if err := errors.Join(infrastructure.Resources.Close(), infrastructure.Close()); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

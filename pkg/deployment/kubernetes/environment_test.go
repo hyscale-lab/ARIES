@@ -247,7 +247,8 @@ func (f *fakePrometheus) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	expression := r.URL.Query().Get("query")
-	if r.URL.Path != "/api/v1/query" || !strings.Contains(expression, `namespace="aries",container!=""`) {
+	if r.URL.Path != "/api/v1/query" || !strings.Contains(expression, `{container_label_io_kubernetes_pod_namespace="aries",container_label_io_kubernetes_container_name!="",container_label_io_kubernetes_container_name!="POD"}`) ||
+		!strings.Contains(expression, "by (container_label_io_kubernetes_pod_name)") {
 		http.Error(w, "unexpected query "+r.URL.String(), http.StatusBadRequest)
 		return
 	}
@@ -260,7 +261,7 @@ func (f *fakePrometheus) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var result []map[string]any
 	for pod, value := range values {
-		result = append(result, map[string]any{"metric": map[string]string{"pod": pod}, "value": []any{1.0, strconv.FormatFloat(value, 'f', -1, 64)}})
+		result = append(result, map[string]any{"metric": map[string]string{"container_label_io_kubernetes_pod_name": pod}, "value": []any{1.0, strconv.FormatFloat(value, 'f', -1, 64)}})
 	}
 	_ = json.NewEncoder(w).Encode(map[string]any{"status": "success", "data": map[string]any{"resultType": "vector", "result": result}})
 }
@@ -304,7 +305,7 @@ func TestResourceSourceReadsPodCountersFromPrometheus(t *testing.T) {
 		r.CPUUsageNanoseconds != 1_500_000_000 || r.MemoryUsageBytes != 4096 || r.MemoryLimitBytes != 512<<20 || !r.ObservedAt.Equal(time.Unix(1000, 500_000_000)) {
 		t.Fatalf("task reading = %+v", r)
 	}
-	// Prometheus serves the same scrape until the kubelet refreshes: that is
+	// Prometheus serves the same scrape until cAdvisor samples again: that is
 	// not a new sample, and known pods are not listed again.
 	if repeated, err := task.Sample(context.Background()); err != nil || len(repeated) != 0 {
 		t.Fatalf("repeated readings = %+v, %v", repeated, err)
@@ -368,5 +369,36 @@ func TestResourceSourceReportsPrometheusAndDiscoveryFailures(t *testing.T) {
 	}
 	if _, err := NewResourceSource(ResourceOptions{Scope: "run", RunID: "run-1", TaskIDs: []string{"task-1"}, PrometheusURL: server.URL}); err == nil {
 		t.Fatal("run scope accepted task IDs")
+	}
+}
+
+func TestResourceSourceReportsAMissingCollectorButNotAnEmptyNamespace(t *testing.T) {
+	prometheus := &fakePrometheus{cpu: map[string]float64{}, memory: map[string]float64{}, scraped: map[string]float64{}}
+	server := httptest.NewServer(prometheus)
+	defer server.Close()
+	source, err := NewResourceSource(ResourceOptions{RunID: "run-1", TaskIDs: []string{"task-1"}, PrometheusURL: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.kubectl = &fakeKubectl{respond: func(_ context.Context, _ []string, _ []byte, stdout, _ io.Writer) error {
+		_, _ = io.WriteString(stdout, `{"items":[]}`)
+		return nil
+	}}
+	// No series at all: the chart's cAdvisor is not being scraped.
+	if _, err := source.Sample(context.Background()); err == nil || !strings.Contains(err.Error(), "cadvisor.enabled") {
+		t.Fatalf("missing collector = %v", err)
+	}
+	// Once its own pods have been seen, an empty answer is only a quiet moment.
+	prometheus.mu.Lock()
+	prometheus.cpu["aries-cadvisor-x1"], prometheus.memory["aries-cadvisor-x1"], prometheus.scraped["aries-cadvisor-x1"] = 1, 1, 1000
+	prometheus.mu.Unlock()
+	if readings, err := source.Sample(context.Background()); err != nil || len(readings) != 0 {
+		t.Fatalf("collector only = %+v, %v", readings, err)
+	}
+	prometheus.mu.Lock()
+	prometheus.cpu, prometheus.memory, prometheus.scraped = map[string]float64{}, map[string]float64{}, map[string]float64{}
+	prometheus.mu.Unlock()
+	if readings, err := source.Sample(context.Background()); err != nil || len(readings) != 0 {
+		t.Fatalf("empty after collector seen = %+v, %v", readings, err)
 	}
 }

@@ -79,11 +79,27 @@ the shared network and closes transports. Failures remain in the persisted run
 infrastructure result.
 
 The bridge resource source is selected from `bridge.deployment`, independently of
-the sandbox source. Run-scoped discovery selects the shared bridge by run ownership
+the sandbox source, except for where the counters come from, which
+`sandbox.deployment.docker.prometheus_url` decides for the whole run. Run-scoped discovery selects the shared bridge by run ownership
 without inventing a task ID. Task sources select their harness and live/evaluation
 sandboxes and exclude the bridge. Confirmed runtime disappearance during sampling
 is skipped; genuine measurement failures remain visible. The common recorder
 calculates rates and writes [resource evidence](../run-results.md).
+
+By default the counters come from the Docker stats API, one request per
+container per sample. With `prometheus_url` set they come from Prometheus
+instead, which scrapes the standalone cAdvisor that the ARIES chart runs on
+every cluster node: the same series, collector and rate the
+[Kubernetes backend](kubernetes.md#where-the-readings-come-from) is measured
+from, so the two backends can be compared. Containers are still discovered
+through the Docker API; only CPU, memory and the sample time are read from
+cAdvisor's series, found by the container ID in their cgroup path. A reading is
+recorded only when cAdvisor's sample time advances, and a container with no
+memory limit reports `memory_limit_bytes` 0, as a pod without one does. If the
+run's running containers have no series at all for 30 consecutive samples,
+nothing is collecting them and the measurement fails rather than reading as
+idle. The Docker host must be a cluster node running that cAdvisor, and the
+runner must reach the Prometheus address.
 
 [Provider tests](../../pkg/deployment/docker/docker_test.go),
 [allocation recovery](../../pkg/deployment/docker/create_recovery_test.go),

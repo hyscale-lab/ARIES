@@ -5,7 +5,9 @@
 #
 #   - the runner's ServiceAccount, its namespaced Role and a token for it
 #   - the tool bridge's ServiceAccount and Role (the runner creates one bridge
-#     pod per run; the chart ships no workload)
+#     pod per run)
+#   - a cAdvisor DaemonSet that pod measurements are read from, and the
+#     PodMonitor that has Prometheus scrape it
 #   - the Grafana dashboard ConfigMap
 #
 # Pick an environment file on top:
@@ -64,6 +66,25 @@ grafanaDashboard:
   labelValue: "1"
   # Grafana folder to file it under. Empty puts it in the sidecar's default.
   folder: ARIES
+
+# A standalone cAdvisor on every node, which Prometheus scrapes and ARIES reads
+# container CPU and memory from, for Kubernetes and Docker runs alike. See
+# templates/cadvisor.yaml for why the kubelet's own cAdvisor is not used.
+cadvisor:
+  enabled: true
+  image: ghcr.io/google/cadvisor:v0.57.0
+  # cAdvisor waits a random 1-2x this between samples, so a 1s interval gives
+  # a sample every 1.5s on average. At 250ms every 1s scrape finds a fresh one:
+  # measured gaps were 0.72-1.28s (5th-95th percentile), none over 1.5s, for
+  # about 0.2 CPU per node.
+  housekeepingInterval: 250ms
+  scrapeInterval: 1s
+  # Empty runs it on every node. Docker runs need it on the node they use.
+  nodeSelector: {}
+  tolerations: []
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 512Mi }
 
 # Extra labels applied to every resource.
 commonLabels: {}

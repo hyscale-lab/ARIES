@@ -101,9 +101,8 @@ still a real sample with status `succeeded`.
 Each sample's `second`, and the index's `first_second` and `last_second`, are
 whole seconds elapsed since monitoring started, not a count of samples
 (`schema_version` 5). Docker is sampled every second. The Kubernetes source
-reads Prometheus, whose figures the kubelet refreshes on its housekeeping
-interval (10 seconds by default), and records a sample only when the scraped
-observation advances. See
+reads Prometheus, which scrapes a standalone cAdvisor every second, and records
+a sample only when that observation advances, about once a second. See
 [Kubernetes resource measurements](implementation/kubernetes.md#resource-measurements).
 
 Docker sampling can overlap runtime teardown. If a stats response lacks its
