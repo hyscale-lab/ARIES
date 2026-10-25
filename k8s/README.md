@@ -69,7 +69,7 @@ The script:
    `.cache/invitro` and runs its `create_multinode_cluster` against the nodes;
 2. copies the committed `k8s/` tree to the master and runs `apply-aries.sh`
    there;
-3. builds `bin/aries` and `bin/aries-ssh-client` for the loader node and stages
+3. builds `bin/aries`, `bin/aries-ssh-client` and `bin/aries-replay` for the loader node and stages
    them with `profiles/`, `configs/` and a namespaced kubeconfig under `~/aries`.
 
 | Option | Effect |

@@ -580,6 +580,66 @@ Hermes has no `sglang` or plain `openai` provider, so for both backends ARIES
 renders Hermes's generic `custom` provider, which routes to `model.base_url`.
 OpenClaw receives the server as a `models.providers` entry named `aries`.
 
+### Recorded and replayed model output
+
+To compare tool sandboxes, every run should see the same model output and the
+same model latency. `bin/aries-replay` is an OpenAI-compatible server that
+does this in two steps.
+
+1. **Record.** It forwards each request to a real endpoint unchanged, returns
+   the reply as it arrives, and stores it with the time each part arrived:
+
+   ```sh
+   ./bin/aries-replay -mode record -upstream https://api.deepseek.com \
+     -store recordings.jsonl -log record-requests.jsonl
+   ```
+
+2. **Replay.** It answers from the store without contacting a model:
+
+   ```sh
+   ./bin/aries-replay -mode replay -store recordings.jsonl -log replay-requests.jsonl
+   ```
+
+   `-pace recorded`, the default, sends each part of a reply at the offset it
+   arrived at when recorded, so the model's latency is reproduced. `-pace none`
+   answers at once, leaving only the harness and the sandbox.
+
+Point the profile at it with the `openai` backend and the upstream's model ID,
+for example:
+
+```json
+"runtime": { "backend": "openai", "mode": "external" },
+"model": {
+  "base_url": "http://<runner address>:8090/v1",
+  "api_key_env": "DEEPSEEK_API_KEY",
+  "id": "deepseek-flash",
+  "reasoning_effort": "low"
+}
+```
+
+The address must be reachable from the harness containers or pods: on a
+cluster, the runner node's own IP. In record mode the harness's API key is
+passed through to the upstream and is never stored; in replay mode any value
+works. Set `reasoning_effort` explicitly: OpenClaw picks a DeepSeek-specific
+default only when the base URL is DeepSeek's own. Hermes renders its generic
+`custom` provider for this backend rather than its DeepSeek one, so compare
+replayed runs with replayed runs, recording included.
+
+A reply is found by the conversation it belongs to and how far that
+conversation has progressed, not by the whole request, because tool output
+differs slightly between sandboxes. The key is a hash of the first user message
+(the task instruction, with digit runs folded so a timestamp does not split
+it), the number of assistant turns so far, and the number of tools offered.
+The first successful recording of a key is served; a request with no recording
+gets `404`, which fails the task visibly. If the agent takes a different path
+from the recording, as it may when a tool's output really differs, replay can
+only serve the recorded turn, so treat a replayed task whose outcome differs
+from its recording's as suspect.
+
+Each line of the `-log` file is one request: `received_at`, `first_byte_ms`,
+`duration_ms`, status, sizes, the key and, in replay mode, whether it was a
+hit. That is the model's share of a task's latency.
+
 ### Managed SGLang
 
 To let ARIES own one SGLang process for the entire profile run, use the

@@ -10,6 +10,7 @@ build:
 	go build -o bin/aries ./cmd/aries
 	CGO_ENABLED=0 go build -o bin/aries-ssh-client ./cmd/aries-ssh-client
 	CGO_ENABLED=0 go build -o bin/aries-bridge ./cmd/aries-bridge
+	CGO_ENABLED=0 go build -o bin/aries-replay ./cmd/aries-replay
 
 test:
 	go test -v ./...

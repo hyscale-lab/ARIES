@@ -28,6 +28,7 @@ This page summarizes capabilities and limitations. Use the
 | Model service | **DeepSeek** — external endpoint | [Model backends](configuration.md#model-backends) |
 | Model service | **SGLang** — external endpoint or one ARIES-managed host process per run | [Model backends](configuration.md#model-backends) |
 | Model service | **OpenAI-compatible server** — external only, including vLLM, llama.cpp, gateways, and hosted endpoints | [Model backends](configuration.md#model-backends) |
+| Model service | **Recorded replay** — `aries-replay` records a real endpoint's replies and serves them back with their original timing, so runs compared across sandboxes see the same model | [Recorded and replayed model output](configuration.md#recorded-and-replayed-model-output) |
 
 Both harnesses and [LLM judges](configuration.md#judge-model-settings) support explicit
 [model reasoning effort](configuration.md#reasoning-effort).
