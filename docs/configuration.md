@@ -206,9 +206,9 @@ directly into the OpenClaw harness; the bridge container does not need that clie
 For the Kubernetes backend, `make k8s-images` builds the bridge on
 `bridge.kubernetes_base_image` instead, which supplies `kubectl`; bump it with
 the Kubernetes version the pinned Invitro installs. On that backend the
-requested tag also carries the commit `bin/aries` was built from, such as
+requested tag also carries the last commit that changed the bridge, such as
 `aries-bridge:v1-0123456789ab`, so a cluster never runs a bridge built from
-other code; see
+other code and commits that leave the bridge alone keep the tag; see
 [publishing the images](../k8s/README.md#3-publish-the-images-the-cluster-pulls).
 A Docker run needs no such tag: it rebuilds the bridge image whenever its
 contents change.

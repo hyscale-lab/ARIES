@@ -174,7 +174,7 @@ func newSharedBridge(cfg config.Config, runID, outputRoot string, placement core
 	}
 	image := cfg.Versions.Bridge.Image
 	if cfg.Bridge.Deployment.Backend == "kubernetes" {
-		if image, err = bridgewiring.KubernetesImage(image); err != nil {
+		if image, err = kubernetesBridgeImage(image); err != nil {
 			return nil, errors.Join(err, runtime.Close())
 		}
 	}
@@ -218,7 +218,7 @@ func prepareBridge(ctx context.Context, cfg config.Config) error {
 		// The cluster pulls the bridge image; ARIES cannot build into it, but
 		// it checks here, before any run artifact, that it can name the image
 		// for the code it was built from.
-		_, err := bridgewiring.KubernetesImage(cfg.Versions.Bridge.Image)
+		_, err := kubernetesBridgeImage(cfg.Versions.Bridge.Image)
 		return err
 	default:
 		return fmt.Errorf("unsupported bridge preparation backend %q", cfg.Bridge.Deployment.Backend)

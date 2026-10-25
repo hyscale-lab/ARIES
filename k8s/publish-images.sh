@@ -4,7 +4,7 @@
 #
 # Image names and the Hermes tag come from configs/versions.json through
 # scripts/k8s-image-pins, so they match what ARIES requests; the bridge's tag
-# also carries the commit, which must be clean. The bridge is built
+# also carries the last commit that changed it, which must be clean. The bridge is built
 # on bridge.kubernetes_base_image, whose kubectl follows the Kubernetes version
 # the pinned Invitro checkout installs; no cluster access is needed. Log in to
 # the registry with `docker login` first.
@@ -116,16 +116,18 @@ done <<<"$pins"
 # is pushed under the tag ARIES asks for.
 bridge_repo=${bridge_image%:*}
 bridge_tag=${bridge_image##*:}
-# ARIES requests the bridge tagged with the commit it was built from
-# (internal/app/wiring/bridge/image.go), so an image built for other code is
-# never pulled under its name. An image built from uncommitted changes would
-# not match its commit, so the bridge is published only from a clean tree.
+# ARIES requests the bridge tagged with the last commit that changed it
+# (scripts/bridge-revision.sh), so an image built for other bridge code is
+# never pulled under its name. An image built from uncommitted bridge changes
+# would not match that commit, so it is published only from a clean tree.
 if [ "$build_bridge" = true ]; then
-  if ! git -C "$root" diff --quiet HEAD --; then
-    echo "tracked files have uncommitted changes; commit them first, since the bridge image is tagged with the commit" >&2
-    [ "$dry_run" = true ] || exit 1
-  fi
-  bridge_tag="$bridge_tag-$(git -C "$root" rev-parse --short=12 HEAD)"
+  revision=$("$root/scripts/bridge-revision.sh")
+  case "$revision" in
+    *-dirty)
+      echo "the bridge's files have uncommitted changes; commit them first, since the bridge image is tagged with the commit" >&2
+      [ "$dry_run" = true ] || exit 1 ;;
+  esac
+  bridge_tag="$bridge_tag-${revision%-dirty}"
 fi
 hermes_repo=${hermes_image%:*}
 hermes_tag=${hermes_image##*:}
