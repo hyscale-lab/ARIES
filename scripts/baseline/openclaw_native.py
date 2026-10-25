@@ -11,7 +11,10 @@ through the Docker socket (agents.defaults.sandbox.backend "docker"), and runs
 every tool there. Everything else is held equal: the configuration is the one
 ARIES generated for the same task with only the sandbox and workspace changed,
 the model is aries-replay serving the same recordings, and the sandbox runs the
-task's image with the same CPU and memory limits and no network.
+task's image with the same CPU and memory limits and no network. Each task is
+submitted as ARIES submits it, through ARIES's gateway client
+(scripts/baseline/openclaw-agent) run inside the gateway's container, so the
+agent's run is not inflated by the openclaw CLI's startup.
 
 Each task run is written in the layout of an ARIES run (run-result.json with
 phases, the harness's session log, monitor/resources.jsonl from the same
@@ -40,6 +43,7 @@ import urllib.request
 IMAGE = "ghcr.io/openclaw/openclaw:2026.7.1"
 TASKS = ["mb-noop", "mb-one-call", "mb-ten-calls", "mb-cpu", "mb-output"]
 SANDBOX = "openclaw-sbx-shared"
+AGENT = "/opt/aries-baseline/openclaw-agent"
 GATEWAY_PORT = 18789
 
 
@@ -124,6 +128,12 @@ def prometheus_samples(prometheus, name, start, end):
     return samples
 
 
+def build_agent(root):
+    path = os.path.join(root, ".cache", "baseline-bin", "openclaw-agent")
+    run(["go", "build", "-o", path, "./scripts/baseline/openclaw-agent"], env=dict(os.environ, CGO_ENABLED="0"))
+    return path
+
+
 def run_task(args, root, run_dir, task, occurrence, template):
     task_id = "%s-%03d" % (task, occurrence)
     work = os.path.join(root, ".cache", "baseline-work", task_id)
@@ -147,7 +157,7 @@ def run_task(args, root, run_dir, task, occurrence, template):
     run(["docker", "run", "-d", "--name", gateway, "--cpus", "2", "--memory", "4g",
          "-u", "%d:%d" % (os.getuid(), os.getgid()), "--group-add", socket_group,
          "-v", "/var/run/docker.sock:/var/run/docker.sock", "-v", "/usr/local/bin/docker:/usr/local/bin/docker:ro",
-         "-v", "%s:%s" % (work, work), "-e", "HOME=" + os.path.join(work, "home"),
+         "-v", "%s:%s" % (work, work), "-v", "%s:%s:ro" % (args.agent, AGENT), "-e", "HOME=" + os.path.join(work, "home"),
          "-e", "OPENCLAW_CONFIG_PATH=" + os.path.join(work, "openclaw.json"),
          "-e", "OPENCLAW_GATEWAY_TOKEN=baseline", "-e", "DEEPSEEK_API_KEY=unused",
          "--entrypoint", "openclaw", IMAGE, "gateway", "run", "--port", str(GATEWAY_PORT), "--auth", "token", "--bind", "loopback"])
@@ -160,8 +170,9 @@ def run_task(args, root, run_dir, task, occurrence, template):
     else:
         # The agent's run. OpenClaw creates its sandbox container on the first tool call.
         began = now()
-        result = subprocess.run(["docker", "exec", gateway, "openclaw", "agent", "--session-key", "agent:main:aries-" + task_id,
-                                 "--message-file", os.path.join(work, "task.md"), "--json"], capture_output=True, text=True)
+        result = subprocess.run(["docker", "exec", gateway, AGENT, "-url", "ws://127.0.0.1:%d" % GATEWAY_PORT,
+                                 "-session-key", "agent:main:aries-" + task_id, "-message-file", os.path.join(work, "task.md")],
+                                capture_output=True, text=True)
         phase("harness_run", began)
         try:
             agent = json.loads(result.stdout)
@@ -223,7 +234,7 @@ def run_task(args, root, run_dir, task, occurrence, template):
         "evaluation": {"status": "succeeded", "reward": reward}, "phases": phases,
         "duration": int((finished - started) * 1e9), "error": error,
         "sandbox_container": sandbox_created,
-        "agent_internal_ms": (agent.get("result") or {}).get("meta", {}).get("durationMs"),
+        "agent_internal_ms": agent.get("duration_ms"),
     }
 
 
@@ -236,6 +247,7 @@ def main():
     args = parser.parse_args()
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     os.chdir(root)
+    args.agent = build_agent(root)
 
     template, source = config_template(root)
     template["models"]["providers"]["aries"]["baseUrl"] = "http://%s:%d/v1" % (args.address, args.port)
