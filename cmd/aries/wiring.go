@@ -172,7 +172,13 @@ func newSharedBridge(cfg config.Config, runID, outputRoot string, placement core
 	if err != nil {
 		return nil, fmt.Errorf("construct bridge deployment: %w", err)
 	}
-	launch := bridgewiring.Launch(cfg.Versions.Bridge.Image)
+	image := cfg.Versions.Bridge.Image
+	if cfg.Bridge.Deployment.Backend == "kubernetes" {
+		if image, err = bridgewiring.KubernetesImage(image); err != nil {
+			return nil, errors.Join(err, runtime.Close())
+		}
+	}
+	launch := bridgewiring.Launch(image)
 	launch.RuntimeBackend = cfg.Bridge.Deployment.Backend
 	launch.ResourceMetrics = "unsupported"
 	switch cfg.Bridge.Deployment.Backend {
@@ -209,8 +215,11 @@ func prepareBridge(ctx context.Context, cfg config.Config) error {
 	case "docker":
 		return deploymentwiring.PrepareDockerBridge(ctx, cfg)
 	case "kubernetes":
-		// The cluster pulls the bridge image; ARIES cannot build into it.
-		return nil
+		// The cluster pulls the bridge image; ARIES cannot build into it, but
+		// it checks here, before any run artifact, that it can name the image
+		// for the code it was built from.
+		_, err := bridgewiring.KubernetesImage(cfg.Versions.Bridge.Image)
+		return err
 	default:
 		return fmt.Errorf("unsupported bridge preparation backend %q", cfg.Bridge.Deployment.Backend)
 	}

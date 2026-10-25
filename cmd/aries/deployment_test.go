@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	bridgewiring "github.com/hyscale-lab/aries/internal/app/wiring/bridge"
 	"github.com/hyscale-lab/aries/pkg/config"
 )
 
@@ -113,6 +114,10 @@ func TestKubernetesBackendSelectsItsProviderForEveryComponent(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.Versions.Bridge.Image = "aries-bridge:v1"
+	// A test binary carries no commit; the bridge image tag needs one.
+	previous := bridgewiring.Revision
+	bridgewiring.Revision = "0123456789ab"
+	t.Cleanup(func() { bridgewiring.Revision = previous })
 	if err := validateComponents(cfg); err != nil {
 		t.Fatal(err)
 	}

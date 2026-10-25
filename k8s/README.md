@@ -177,6 +177,20 @@ and pushes them under the tags ARIES requests:
   installs. The script needs no cluster access. For a cluster on another
   version, add `K8S_IMAGES_FLAGS="--kube-version <version>"` with the version
   `apply-aries.sh` printed.
+
+  Its tag carries the commit, such as `aries-bridge:v1-0123456789ab`: the runner
+  requests the bridge tagged with the commit `bin/aries` was built from
+  (`make build` and `create-cluster.sh` stamp it in). A node keeps whatever
+  image it already holds under a name, so with a fixed tag a cluster would go
+  on running an old bridge after the code changed, and the bridge would reject
+  or misread the harness's commands. Now a bridge not published for the
+  runner's commit cannot be pulled, and the pod fails with `ErrImagePull`.
+  Publish again after every commit you run on the cluster. The script refuses
+  to publish while tracked files have uncommitted changes, because the image
+  would not match its commit. A runner built from such a tree requests a
+  `-dirty` tag that is never published, so it fails the same way; to try
+  uncommitted bridge code, load the image onto the node yourself and map
+  `aries-bridge` to it in the profile's `images`.
 - **`<registry>/aries-hermes`** is the pinned upstream Hermes image plus
   `hermes-otel`, the same image `aries setup` builds for Docker.
 

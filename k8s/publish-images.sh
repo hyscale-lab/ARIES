@@ -3,7 +3,8 @@
 # the derived Hermes image, for the cluster's platform, and pushes them.
 #
 # Image names and the Hermes tag come from configs/versions.json through
-# scripts/k8s-image-pins, so they match what ARIES requests. The bridge is built
+# scripts/k8s-image-pins, so they match what ARIES requests; the bridge's tag
+# also carries the commit, which must be clean. The bridge is built
 # on bridge.kubernetes_base_image, whose kubectl follows the Kubernetes version
 # the pinned Invitro checkout installs; no cluster access is needed. Log in to
 # the registry with `docker login` first.
@@ -61,7 +62,7 @@ case "$platform" in
 esac
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
-for tool in go docker; do
+for tool in go docker git; do
   command -v "$tool" >/dev/null || { echo "$tool is required on PATH" >&2; exit 1; }
 done
 docker buildx version >/dev/null 2>&1 || { echo "docker buildx is required" >&2; exit 1; }
@@ -115,6 +116,17 @@ done <<<"$pins"
 # is pushed under the tag ARIES asks for.
 bridge_repo=${bridge_image%:*}
 bridge_tag=${bridge_image##*:}
+# ARIES requests the bridge tagged with the commit it was built from
+# (internal/app/wiring/bridge/image.go), so an image built for other code is
+# never pulled under its name. An image built from uncommitted changes would
+# not match its commit, so the bridge is published only from a clean tree.
+if [ "$build_bridge" = true ]; then
+  if ! git -C "$root" diff --quiet HEAD --; then
+    echo "tracked files have uncommitted changes; commit them first, since the bridge image is tagged with the commit" >&2
+    [ "$dry_run" = true ] || exit 1
+  fi
+  bridge_tag="$bridge_tag-$(git -C "$root" rev-parse --short=12 HEAD)"
+fi
 hermes_repo=${hermes_image%:*}
 hermes_tag=${hermes_image##*:}
 

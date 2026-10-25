@@ -236,9 +236,18 @@ if [ "$stage_runner" = true ]; then
   echo "==> Building the runner for linux/$arch and staging it to $runner:~/$runner_dir"
   stage=$(mktemp -d)
   mkdir -p "$stage/bin"
+  # The commit tags the Kubernetes bridge image the runner requests, as in
+  # `make build`; k8s/publish-images.sh pushes it under the same tag.
+  revision=$(git -C "$root" rev-parse --short=12 HEAD)
+  git -C "$root" diff --quiet HEAD -- || revision="$revision-dirty"
   for command in aries aries-ssh-client aries-replay; do
-    (cd "$root" && CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -o "$stage/bin/$command" "./cmd/$command")
+    (cd "$root" && CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath \
+      -ldflags "-X github.com/hyscale-lab/aries/internal/app/wiring/bridge.Revision=$revision" \
+      -o "$stage/bin/$command" "./cmd/$command")
   done
+  bridge_image=$(sed -n 's/.*"image": *"\(aries-bridge:[^"]*\)".*/\1/p' "$root/configs/versions.json" | head -1)
+  echo "    the runner requests the bridge image ${bridge_image}-$revision;"
+  echo "    publish it with: make k8s-images REGISTRY=<registry>"
   git -C "$root" archive HEAD profiles configs | tar -xf - -C "$stage"
   # Only bin/, profiles/ and configs/ are replaced; runs/, .cache/ and the
   # model key on the runner are kept.

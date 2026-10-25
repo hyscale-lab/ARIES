@@ -2,12 +2,19 @@
 
 PROFILE ?= profiles/openclaw-tb2-fix-git-deepseek.json
 
+# The commit stamped into bin/aries, which tags the Kubernetes bridge image it
+# requests (see internal/app/wiring/bridge/image.go). -dirty marks uncommitted
+# changes to tracked files; untracked files are ignored.
+COMMIT := $(shell git rev-parse --short=12 HEAD 2>/dev/null)
+REVISION := $(if $(COMMIT),$(COMMIT)$(shell git diff --quiet HEAD -- || echo -dirty))
+ARIES_LDFLAGS := $(if $(REVISION),-X github.com/hyscale-lab/aries/internal/app/wiring/bridge.Revision=$(REVISION))
+
 export GOCACHE ?= $(CURDIR)/.cache/go-build
 export GOMODCACHE ?= $(CURDIR)/.cache/go-mod
 
 build:
 	mkdir -p bin
-	go build -o bin/aries ./cmd/aries
+	go build -ldflags "$(ARIES_LDFLAGS)" -o bin/aries ./cmd/aries
 	CGO_ENABLED=0 go build -o bin/aries-ssh-client ./cmd/aries-ssh-client
 	CGO_ENABLED=0 go build -o bin/aries-bridge ./cmd/aries-bridge
 	CGO_ENABLED=0 go build -o bin/aries-replay ./cmd/aries-replay
