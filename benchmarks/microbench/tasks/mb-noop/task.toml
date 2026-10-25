@@ -2,7 +2,7 @@ schema_version = "1.1"
 artifacts = []
 
 [task]
-name = "aries-microbench/mb-noop"
+name = "terminal-bench/mb-noop"
 description = "Measures a task that uses no tool: harness, model and lifecycle cost alone."
 keywords = ["microbenchmark"]
 

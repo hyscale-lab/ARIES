@@ -2,7 +2,7 @@ schema_version = "1.1"
 artifacts = []
 
 [task]
-name = "aries-microbench/mb-cpu"
+name = "terminal-bench/mb-cpu"
 description = "Measures one CPU-bound tool call: a fixed SHA-256 chain of about two seconds on one core."
 keywords = ["microbenchmark"]
 

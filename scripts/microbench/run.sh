@@ -95,7 +95,9 @@ requests=$store_dir/requests-$backend-$mode-$stamp.jsonl
 server=$!
 trap 'kill "$server" 2>/dev/null || true; wait "$server" 2>/dev/null || true' EXIT
 for _ in $(seq 50); do
-  curl -sf "http://127.0.0.1:$port/v1/models" >/dev/null 2>&1 && break
+  # Any HTTP answer will do: in record mode an unauthenticated probe is passed
+  # to the upstream, which refuses it.
+  curl -s -o /dev/null "http://127.0.0.1:$port/v1/models" && break
   kill -0 "$server" 2>/dev/null || { cat "$store_dir/server-$stamp.log" >&2; exit 1; }
   sleep 0.2
 done

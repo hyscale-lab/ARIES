@@ -2,7 +2,7 @@ schema_version = "1.1"
 artifacts = []
 
 [task]
-name = "aries-microbench/mb-output"
+name = "terminal-bench/mb-output"
 description = "Measures one tool call whose output is about 64 KB, carried back through the bridge."
 keywords = ["microbenchmark"]
 

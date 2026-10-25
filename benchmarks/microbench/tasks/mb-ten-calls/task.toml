@@ -2,7 +2,7 @@ schema_version = "1.1"
 artifacts = []
 
 [task]
-name = "aries-microbench/mb-ten-calls"
+name = "terminal-bench/mb-ten-calls"
 description = "Measures the cost per tool call over ten sequential trivial calls."
 keywords = ["microbenchmark"]
 
