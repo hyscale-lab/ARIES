@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgekit"
 	bridgessh "github.com/hyscale-lab/aries/pkg/bridge/ssh"
 	"github.com/hyscale-lab/aries/pkg/bridge/ssh/internal/testfixture"
 	"github.com/hyscale-lab/aries/pkg/config"
@@ -278,7 +279,7 @@ func TestUpstreamHermesDrivesTheBridgeWithoutPatches(t *testing.T) {
 		// the bridge may run, so any other path — a future tar, scp, or mkdir
 		// file-sync leak included — fails here.
 		switch item.Path {
-		case remoteShellPath:
+		case bridgekit.RemoteShellPath:
 			sawAgentCommand = true
 		case bootstrapShell:
 			if len(item.Args) != 2 || item.Args[0] != "-c" || (item.Args[1] != connectionProbePayload && item.Args[1] != remoteHomePayload) {
@@ -482,7 +483,7 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 			t.Fatalf("exec record %d identity = %#v", index, record)
 		}
 	}
-	if execs[2]["stdin"] != "streamed-input" || execs[2]["stdin_encoding"] != "utf-8" || execs[2]["workdir"] != "/work" || execs[2]["path"] != remoteShellPath {
+	if execs[2]["stdin"] != "streamed-input" || execs[2]["stdin_encoding"] != "utf-8" || execs[2]["workdir"] != "/work" || execs[2]["path"] != bridgekit.RemoteShellPath {
 		t.Fatalf("agent record = %#v", execs[2])
 	}
 	// Every request Hermes sent must appear, including the env request OpenSSH

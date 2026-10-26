@@ -44,6 +44,8 @@ type launchRuntime struct {
 	server                         *grpc.Server
 	done                           chan struct{}
 	uploadErr, revokeErr           error
+	transport                      string
+	artifacts                      []*v1.Artifact
 }
 
 func (r *launchRuntime) event(v string) {
@@ -93,7 +95,7 @@ type launchAccess struct{ runtime *launchRuntime }
 
 func (a launchAccess) Register(context.Context) (*v1.Endpoint, error) {
 	a.runtime.event("register")
-	return &v1.Endpoint{Port: 3022, User: "aries", Transport: "ssh"}, nil
+	return &v1.Endpoint{Port: 3022, User: "aries", Transport: a.runtime.transport}, nil
 }
 func (a launchAccess) Release(context.Context) ([]*v1.Artifact, error) {
 	r := a.runtime
@@ -103,7 +105,7 @@ func (a launchAccess) Release(context.Context) ([]*v1.Artifact, error) {
 	if r.revokeErr != nil {
 		return nil, r.revokeErr
 	}
-	return evidenceManifest(), nil
+	return r.artifacts, nil
 }
 func (r *launchRuntime) Start(context.Context, string) error {
 	r.event("start")
@@ -132,15 +134,19 @@ func (r *launchRuntime) TaskAddress(_ context.Context, _ string, p int) (string,
 }
 func (r *launchRuntime) Running(context.Context, string) (bool, error) { return true, nil }
 func evidenceContent() []byte                                          { return []byte("{\"command\":\"fixture\"}\n") }
-func evidenceManifest() []*v1.Artifact {
+func evidenceManifest(names ...string) []*v1.Artifact {
 	content := evidenceContent()
 	sum := sha256.Sum256(content)
-	return []*v1.Artifact{{Name: "tool-calls.jsonl", Status: "complete", Size: int64(len(content)), Sha256: hex.EncodeToString(sum[:])}}
+	var manifest []*v1.Artifact
+	for _, name := range names {
+		manifest = append(manifest, &v1.Artifact{Name: name, Status: "complete", Size: int64(len(content)), Sha256: hex.EncodeToString(sum[:])})
+	}
+	return manifest
 }
-func evidenceArchive() io.ReadCloser {
+func evidenceArchive(name string) io.ReadCloser {
 	var b bytes.Buffer
 	w := tar.NewWriter(&b)
-	_ = w.WriteHeader(&tar.Header{Name: "tool-calls.jsonl", Typeflag: tar.TypeReg, Mode: 0600, Size: int64(len(evidenceContent()))})
+	_ = w.WriteHeader(&tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0600, Size: int64(len(evidenceContent()))})
 	_, _ = w.Write(evidenceContent())
 	_ = w.Close()
 	return io.NopCloser(&b)
@@ -148,7 +154,7 @@ func evidenceArchive() io.ReadCloser {
 func (r *launchRuntime) DownloadArchive(_ context.Context, _ string, path string) (io.ReadCloser, deployment.FileInfo, error) {
 	r.event("download")
 	r.downloadSource = path
-	return evidenceArchive(), deployment.FileInfo{Size: int64(len(evidenceContent())), Mode: 0600}, nil
+	return evidenceArchive(filepath.Base(path)), deployment.FileInfo{Size: int64(len(evidenceContent())), Mode: 0600}, nil
 }
 func (r *launchRuntime) shutdown() {
 	if r.server != nil {
@@ -164,9 +170,13 @@ func (r *launchRuntime) Stop(context.Context, string) error {
 func (r *launchRuntime) Close() error { r.event("close"); return nil }
 func launchFixture(t *testing.T, backend string) (*Service, *launchRuntime, launchSandbox) {
 	t.Helper()
-	runtime := &launchRuntime{}
+	return launchFixtureWith(t, backend, "hermes-ssh", false)
+}
+func launchFixtureWith(t *testing.T, backend, bridgeType string, retainRawLog bool) (*Service, *launchRuntime, launchSandbox) {
+	t.Helper()
+	runtime := &launchRuntime{transport: "ssh", artifacts: evidenceManifest("tool-calls.jsonl")}
 	launch := LaunchSpec{RuntimeBackend: "service-fixture", ResourceMetrics: "unsupported", Request: deployment.Request{Image: "fixture", Workdir: "/private/bootstrap", Entrypoint: []string{"/fixture/bridge"}, ServicePort: 9443, Labels: map[string]string{"fixture.owner": "composition"}}, Config: LaunchConfig{Backend: backend, ControlAddress: "127.0.0.1:0", OutputDir: "/private/results"}}
-	s, err := NewService(Options{Runtime: runtime, Launch: launch, RunID: "run", Placement: core.RuntimePlacement{AttachmentID: "fixture-run"}, OutputDir: t.TempDir(), BridgeType: "fixture-ssh"})
+	s, err := NewService(Options{Runtime: runtime, Launch: launch, RunID: "run", Placement: core.RuntimePlacement{AttachmentID: "fixture-run"}, OutputDir: t.TempDir(), BridgeType: bridgeType, RetainRawLog: retainRawLog})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,5 +278,72 @@ func TestSessionMismatchDoesNotRemoveSharedRuntime(t *testing.T) {
 	}
 	if len(r.events) != 4 {
 		t.Fatal(r.events)
+	}
+}
+func TestSessionAcceptsOnlyTheRunTransport(t *testing.T) {
+	for _, bridgeType := range []string{"hermes-ssh", "openclaw-ssh"} {
+		for _, wire := range []string{"ssh", "grpc"} {
+			t.Run(bridgeType+"/"+wire, func(t *testing.T) {
+				s, r, sandbox := launchFixtureWith(t, "docker", bridgeType, false)
+				r.transport = wire
+				if err := s.Start(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				b, err := s.NewSession(t.TempDir())
+				if err != nil {
+					t.Fatal(err)
+				}
+				endpoint, err := b.Start(context.Background(), sandbox)
+				if wire != "ssh" {
+					if err == nil {
+						t.Fatal("foreign transport accepted")
+					}
+					return
+				}
+				if err != nil || endpoint.Protocol != "ssh" {
+					t.Fatal(endpoint, err)
+				}
+			})
+		}
+	}
+}
+func TestRawLogNameFollowsTransport(t *testing.T) {
+	for _, retain := range []bool{false, true} {
+		s, r, sandbox := launchFixtureWith(t, "docker", "hermes-ssh", retain)
+		names := []string{"tool-calls.jsonl"}
+		if retain {
+			names = append(names, "ssh_raw.log")
+		}
+		r.artifacts = evidenceManifest(names...)
+		if err := s.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		session, endpoint := startSession(t, s, sandbox)
+		var want []string
+		for _, name := range names {
+			want = append(want, filepath.Join(session.local, name))
+		}
+		if !reflect.DeepEqual(endpoint.LogPaths, want) {
+			t.Fatal(endpoint.LogPaths)
+		}
+		if err := session.Stop(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if !retain {
+			continue
+		}
+		// A retained run requires the raw log in the manifest.
+		r.artifacts = evidenceManifest("tool-calls.jsonl")
+		sandbox.descriptor.SandboxID = "sandbox-b"
+		later, _ := startSession(t, s, sandbox)
+		if err := later.Stop(context.Background()); err == nil {
+			t.Fatal("manifest without raw log accepted")
+		}
+	}
+}
+func TestServiceRejectsBridgeTypeWithoutTransport(t *testing.T) {
+	launch := LaunchSpec{RuntimeBackend: "service-fixture", ResourceMetrics: "unsupported", Request: deployment.Request{Workdir: "/private/bootstrap", ServicePort: 9443}, Config: LaunchConfig{Backend: "docker", ControlAddress: "127.0.0.1:0", OutputDir: "/private/results"}}
+	if _, err := NewService(Options{Runtime: &launchRuntime{}, Launch: launch, RunID: "run", OutputDir: t.TempDir(), BridgeType: "fixture-ssh"}); err == nil {
+		t.Fatal("bridge type without transport accepted")
 	}
 }

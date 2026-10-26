@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgekit"
 	"github.com/hyscale-lab/aries/pkg/bridge/target"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/sirupsen/logrus"
@@ -19,9 +20,7 @@ import (
 )
 
 const (
-	defaultBridgeCleanup  = 20 * time.Second
-	maxRecordedInputBytes = 16 << 20
-	maxToolLogBytes       = 256 << 20
+	defaultBridgeCleanup = 20 * time.Second
 
 	lockedUsername       = "aries"
 	lockedConnectTimeout = 5 * time.Second
@@ -57,7 +56,7 @@ type Manager struct {
 	outputDir      string
 	cleanupTimeout time.Duration
 	logger         *logrus.Logger
-	openAudit      func(string) (*auditFile, error)
+	openAudit      func(string) (*bridgekit.AuditFile, error)
 	afterStart     func(*bridgeSession) error
 	omitRawLog     bool
 
@@ -78,7 +77,7 @@ type bridgeSession struct {
 	sandboxID     string
 	toolLogPath   string
 	rawLogPath    string
-	audit         *auditWriter
+	audit         *bridgekit.AuditWriter
 	partialStart  bool
 	replyRequest  func(*gossh.Request, bool) error
 
@@ -110,7 +109,7 @@ func New(options Options) (*Manager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve SSH output directory: %w", err)
 	}
-	if err := ensurePrivateDirectory(outputDir); err != nil {
+	if err := bridgekit.EnsurePrivateDirectory(outputDir); err != nil {
 		return nil, fmt.Errorf("prepare SSH output directory: %w", err)
 	}
 	if options.CleanupTimeout <= 0 {
@@ -122,7 +121,7 @@ func New(options Options) (*Manager, error) {
 	return &Manager{dialect: options.Dialect,
 		resolveListen: options.ResolveListen, hostSigner: options.HostSigner, sandboxID: options.SandboxID,
 		outputDir: outputDir, cleanupTimeout: options.CleanupTimeout,
-		logger: options.Logger, openAudit: openAuditFile, omitRawLog: options.OmitRawLog,
+		logger: options.Logger, openAudit: bridgekit.OpenAuditFile, omitRawLog: options.OmitRawLog,
 	}, nil
 }
 
@@ -166,7 +165,7 @@ func (manager *Manager) StartTarget(ctx context.Context, sandbox target.Executor
 		}
 		return core.ToolEndpoint{}, errors.Join(primary, cleanupErr)
 	}
-	if err := ensurePrivateDirectory(session.artifactDir); err != nil {
+	if err := bridgekit.EnsurePrivateDirectory(session.artifactDir); err != nil {
 		return fail(fmt.Errorf("create private SSH artifact directory: %w", err))
 	}
 	session.toolLogPath = filepath.Join(session.artifactDir, "tool-calls.jsonl")
@@ -182,14 +181,14 @@ func (manager *Manager) StartTarget(ctx context.Context, sandbox target.Executor
 	if err != nil {
 		return fail(fmt.Errorf("create SSH tool log: %w", err))
 	}
-	var raw *auditFile
+	var raw *bridgekit.AuditFile
 	if session.rawLogPath != "" {
 		raw, err = manager.openAudit(session.rawLogPath)
 		if err != nil {
-			return fail(errors.Join(fmt.Errorf("create SSH raw log: %w", err), structured.close()))
+			return fail(errors.Join(fmt.Errorf("create SSH raw log: %w", err), structured.Close()))
 		}
 	}
-	session.audit = newAuditWriter(structured, raw)
+	session.audit = bridgekit.NewAuditWriter(structured, raw)
 	serveCtx, cancel := context.WithCancel(context.Background())
 	session.cancel = cancel
 	session.configuration = newServerConfig(manager.hostSigner)
@@ -264,7 +263,7 @@ func (manager *Manager) Stop(ctx context.Context) error {
 
 func (session *bridgeSession) finalize(ctx context.Context) error {
 	auditErr := session.closeAudit(ctx)
-	if session.audit != nil && !session.audit.finished() {
+	if session.audit != nil && !session.audit.Finished() {
 		return auditErr
 	}
 	// Closing admission and joining execution happens before releasing the signer.

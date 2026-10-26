@@ -2,6 +2,8 @@ package bridge
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	managed "github.com/hyscale-lab/aries/pkg/bridge"
 	sshbridge "github.com/hyscale-lab/aries/pkg/bridge/ssh"
@@ -41,7 +43,25 @@ func ServeChild(ctx context.Context, c managed.LaunchConfig, logger *logrus.Logg
 		return errors.New("unsupported bridge execution backend")
 	}
 	defer closeBackend()
-	return managed.Serve(ctx, managed.ServeOptions{Config: c, Backend: backend, NewNative: func(signer ssh.Signer, sandboxID, outputDir string) (managed.NativeServer, error) {
+	native, err := newNative(c, logger)
+	if err != nil {
+		return err
+	}
+	return managed.Serve(ctx, managed.ServeOptions{Config: c, Backend: backend, NewNative: native})
+}
+
+// newNative makes one host key per child process: every SSH listener of the
+// run presents it.
+func newNative(c managed.LaunchConfig, logger *logrus.Logger) (func(string, string) (managed.NativeServer, error), error) {
+	_, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	signer, err := ssh.NewSignerFromKey(key)
+	if err != nil {
+		return nil, err
+	}
+	return func(sandboxID, outputDir string) (managed.NativeServer, error) {
 		options := sshbridge.Options{HostSigner: signer, SandboxID: sandboxID, ResolveListen: func(context.Context) (core.BridgeListen, error) { return c.Listen, nil }, OutputDir: outputDir, Logger: logger, OmitRawLog: !c.RetainRawLog}
 		switch c.BridgeType {
 		case "hermes-ssh":
@@ -52,7 +72,7 @@ func ServeChild(ctx context.Context, c managed.LaunchConfig, logger *logrus.Logg
 		default:
 			return nil, errors.New("unsupported bridge protocol")
 		}
-	}})
+	}, nil
 }
 
 var _ managed.NativeServer = (*sshbridge.Manager)(nil)

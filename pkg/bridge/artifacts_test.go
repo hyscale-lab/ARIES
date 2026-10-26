@@ -61,7 +61,7 @@ func TestArtifactCollectionRejectsSubstitutionAndUnexpectedEntries(t *testing.T)
 			if tc.badHash {
 				expected.SHA256 = "bad"
 			}
-			err := collectArtifact(context.Background(), archiveRuntime{data: data.Bytes(), size: entry.Size}, "runtime", "remote", t.TempDir(), expected)
+			err := collectArtifact(context.Background(), archiveRuntime{data: data.Bytes(), size: entry.Size}, "runtime", "remote", t.TempDir(), "ssh", expected)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("err=%v wantErr=%v", err, tc.wantErr)
 			}
@@ -70,14 +70,14 @@ func TestArtifactCollectionRejectsSubstitutionAndUnexpectedEntries(t *testing.T)
 }
 func TestFinalizeArtifactsRejectsMissingAndSymlinkEvidence(t *testing.T) {
 	root := t.TempDir()
-	if _, err := finalizeArtifacts(root, []string{"tool-calls.jsonl"}); err == nil {
+	if _, err := finalizeArtifacts(root, "ssh", []string{"tool-calls.jsonl"}); err == nil {
 		t.Fatal("missing evidence accepted")
 	}
 	path := filepath.Join(root, "tool-calls.jsonl")
 	if err := os.Symlink("/etc/passwd", path); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := finalizeArtifacts(root, []string{"tool-calls.jsonl"}); err == nil {
+	if _, err := finalizeArtifacts(root, "ssh", []string{"tool-calls.jsonl"}); err == nil {
 		t.Fatal("symlink evidence accepted")
 	}
 }
