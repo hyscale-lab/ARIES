@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -58,7 +59,7 @@ func TestExecRunsBashInTheSandboxWorkdir(t *testing.T) {
 		t.Fatalf("records = %d, want %d", len(records), len(want))
 	}
 	for field, value := range map[string]any{
-		"operation_class": "agent", "status": "completed", "path": bridgekit.RemoteShellPath,
+		"operation_class": "exec", "status": "completed", "path": bridgekit.RemoteShellPath,
 		"workdir": testWorkdir, "command": "echo hi", "command_hash": bridgekit.CommandHash("echo hi"),
 		"run_id": "test-run", "task_id": "test-task", "sandbox_id": "test-sandbox",
 		"container_id": "sandbox-container-id", "container_name": "sandbox-container-name",
@@ -176,19 +177,16 @@ func TestTruncationBindsBeforeTheTransportCap(t *testing.T) {
 
 // TestRevokedSessionRefusesEveryRPC marks the session revoked but keeps the
 // transport up, so each call reaches the guard. Through a stopped server a
-// call fails at the connection and proves nothing about the guard.
+// call fails at the connection and proves nothing about the guard. A refused
+// call still records the tool call id it was sent with.
 func TestRevokedSessionRefusesEveryRPC(t *testing.T) {
 	executor := newFakeExecutor(nil)
-	manager, client, endpoint := startBridge(t, executor, Options{})
+	manager, _, endpoint := startBridge(t, executor, Options{})
+	client := dial(t, endpoint, withToolCallID(testToolCallID)...)
 	manager.active.revoked.Store(true)
 
-	ctx := context.Background()
-	_, execErr := client.Exec(ctx, &sandboxv1.ExecRequest{Script: "true"})
-	_, statErr := client.Stat(ctx, &sandboxv1.StatRequest{Path: "/app/f"})
-	_, _, readErr := readFile(client, &sandboxv1.ReadFileRequest{Path: "/app/f"})
-	_, _, linesErr := readWindow(client, &sandboxv1.ReadLinesRequest{Path: "/app/f", FirstLine: 1, MaxLines: 1})
-	_, writeErr := writeFile(client, "/app/f", 1, []byte("x"))
-	for name, err := range map[string]error{"Exec": execErr, "Stat": statErr, "ReadFile": readErr, "ReadLines": linesErr, "WriteFile": writeErr} {
+	sent := time.Now()
+	for name, err := range callEveryRPC(client) {
 		if status.Code(err) != codes.Unavailable {
 			t.Fatalf("%s after revocation = %v, want Unavailable", name, err)
 		}
@@ -204,10 +202,83 @@ func TestRevokedSessionRefusesEveryRPC(t *testing.T) {
 		if record["status"] != "rejected" || record["error"] != "session revoked" {
 			t.Fatalf("record = %#v", record)
 		}
+		if started := recordStartedAt(t, record); started.Before(sent) {
+			t.Fatalf("refusal started_at %v is before the send at %v", started, sent)
+		}
+		if record["tool_call_id"] != testToolCallID {
+			t.Fatalf("refusal tool_call_id = %v, want %q", record["tool_call_id"], testToolCallID)
+		}
 		classes = append(classes, record["operation_class"].(string))
 	}
-	if !slices.Equal(classes, []string{"agent", "Stat", "ReadFile", "ReadLines", "WriteFile"}) {
+	if !slices.Equal(classes, []string{"exec", "stat", "read", "read", "write"}) {
 		t.Fatalf("refusals recorded = %v", classes)
+	}
+}
+
+// testToolCallID is a tool call id of the form Hermes sends.
+const testToolCallID = "call_1"
+
+// TestRecordsCarryTheToolCallID pins that each RPC records the tool call id
+// it was sent with, up to the bound, and records no key without one.
+func TestRecordsCarryTheToolCallID(t *testing.T) {
+	executor := newFakeExecutor(fstest.MapFS{"app/f": &fstest.MapFile{Data: []byte("x\n"), Mode: 0o644}})
+	manager, plain, endpoint := startBridge(t, executor, Options{})
+	longest := strings.Repeat("a", maxToolCallIDBytes)
+	ids := []string{testToolCallID, toolCallIDChars, longest, ""}
+	var rpcs int
+	for _, id := range ids {
+		client := plain
+		if id != "" {
+			client = dial(t, endpoint, withToolCallID(id)...)
+		}
+		errs := callEveryRPC(client)
+		rpcs = len(errs)
+		for name, err := range errs {
+			if err != nil {
+				t.Fatalf("%s with tool call id %q: %v", name, id, err)
+			}
+		}
+	}
+	stop(t, manager)
+
+	records := readToolCalls(t, endpoint.LogPaths[0])
+	if len(records) != len(ids)*rpcs {
+		t.Fatalf("records = %d, want %d", len(records), len(ids)*rpcs)
+	}
+	for index, record := range records {
+		id, present := record["tool_call_id"]
+		if want := ids[index/rpcs]; want == "" && present || want != "" && id != want {
+			t.Fatalf("record %d tool_call_id = %v (present %t), want %q", index, id, present, want)
+		}
+	}
+}
+
+// TestMalformedToolCallIDIsRefused pins the bound on the wire-supplied id:
+// more than one value, too many bytes, or a character outside the set
+// refuses the call before it reaches the sandbox, and the id is not recorded.
+func TestMalformedToolCallIDIsRefused(t *testing.T) {
+	executor := newFakeExecutor(fstest.MapFS{"app/f": &fstest.MapFile{Data: []byte("x\n"), Mode: 0o644}})
+	manager, _, endpoint := startBridge(t, executor, Options{})
+	for _, values := range [][]string{
+		{testToolCallID, testToolCallID},
+		{strings.Repeat("a", maxToolCallIDBytes+1)},
+		{"call 1"},
+		{"call/1"},
+	} {
+		for name, err := range callEveryRPC(dial(t, endpoint, withToolCallID(values...)...)) {
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("%s with tool call id %q = %v, want InvalidArgument", name, values, err)
+			}
+		}
+	}
+	if commands, _, fileOps := executor.snapshot(); len(commands) != 0 || fileOps != 0 {
+		t.Fatalf("a malformed id reached the sandbox: %d commands, %d file operations", len(commands), fileOps)
+	}
+	stop(t, manager)
+	for _, record := range readToolCalls(t, endpoint.LogPaths[0]) {
+		if _, present := record["tool_call_id"]; present || record["status"] != "rejected" {
+			t.Fatalf("record = %#v", record)
+		}
 	}
 }
 
@@ -369,14 +440,14 @@ func TestRawLogIsRetainedOnlyWhenAsked(t *testing.T) {
 			t.Fatalf("raw records = %#v", records)
 		}
 		exec, write, read, lines := records[0], records[1], records[2], records[3]
-		if exec["operation_class"] != "agent" || exec["script"] != "cat > /tmp/x" || exec["login"] != "true" || exec["stdin"] != "exec-stdin" || exec["stdin_bytes"] != strconv.Itoa(len("exec-stdin")) {
+		if exec["operation_class"] != "exec" || exec["script"] != "cat > /tmp/x" || exec["login"] != "true" || exec["stdin"] != "exec-stdin" || exec["stdin_bytes"] != strconv.Itoa(len("exec-stdin")) {
 			t.Fatalf("raw exec = %#v", exec)
 		}
-		if write["operation_class"] != "WriteFile" || write["path"] != "/app/f" || write["stdin"] != "written-content" || write["sha256"] == "" {
+		if write["operation_class"] != "write" || write["path"] != "/app/f" || write["stdin"] != "written-content" || write["sha256"] == "" {
 			t.Fatalf("raw write = %#v", write)
 		}
 		for _, record := range []map[string]string{read, lines} {
-			if record["path"] != "/app/secret" || record["read_bytes"] != strconv.Itoa(len("read-content")) || record["sha256"] == "" || record["stdin"] != "" {
+			if record["operation_class"] != "read" || record["path"] != "/app/secret" || record["read_bytes"] != strconv.Itoa(len("read-content")) || record["sha256"] == "" || record["stdin"] != "" {
 				t.Fatalf("raw read = %#v", record)
 			}
 		}

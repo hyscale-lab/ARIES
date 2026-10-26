@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"maps"
 	"net"
@@ -35,6 +36,8 @@ type contractSandbox struct {
 	preparations    []core.Command
 	toolCommands    []core.Command
 	result          core.CommandResult
+	// entered is when the last tool command reached the sandbox.
+	entered time.Time
 }
 
 func (sandbox *contractSandbox) Exec(_ context.Context, command core.Command) (core.CommandResult, error) {
@@ -48,6 +51,7 @@ func (sandbox *contractSandbox) Exec(_ context.Context, command core.Command) (c
 		return core.CommandResult{}, nil
 	}
 	sandbox.toolCommands = append(sandbox.toolCommands, command)
+	sandbox.entered = time.Now()
 	return sandbox.result, nil
 }
 
@@ -126,6 +130,7 @@ func TestManagerProxiesSSHExecToSandboxAndRetainsReplayableToolLog(t *testing.T)
 	session.Stdout = &stdout
 	session.Stderr = &stderr
 	encoded := encodeCanonicalTokens([]string{remoteEnv, "LANG=" + contractEnv, remoteShell, "-c", "ignored-by-fake"})
+	sent := time.Now()
 	err = session.Run(encoded)
 	_ = client.Close()
 	var exitError *ssh.ExitError
@@ -181,6 +186,14 @@ func TestManagerProxiesSSHExecToSandboxAndRetainsReplayableToolLog(t *testing.T)
 	if _, ok := record["duration_ms"].(float64); !ok {
 		t.Fatalf("duration_ms missing or not numeric: %#v", record)
 	}
+	sandbox.mu.Lock()
+	entered := sandbox.entered
+	sandbox.mu.Unlock()
+	// The start is the real start of the call, so it lies between the send
+	// and the arrival at the sandbox, well before the record is enqueued.
+	if started := recordStartedAt(t, record); started.Before(sent) || started.After(entered) {
+		t.Fatalf("started_at = %v, want between send %v and sandbox entry %v", started, sent, entered)
+	}
 	for _, secret := range []string{contractStdout, contractStderr, contractEnv} {
 		if bytes.Contains(content, []byte(secret)) {
 			t.Fatalf("tool log contains secret %q: %s", secret, content)
@@ -233,6 +246,7 @@ func TestManagerRejectsMalformedSSHExecWithoutSandboxExecution(t *testing.T) {
 		t.Fatal(err)
 	}
 	const malformed = "rejection-command-secret"
+	sent := time.Now()
 	if err := session.Run(malformed); err == nil {
 		t.Fatal("malformed SSH exec unexpectedly succeeded")
 	}
@@ -249,6 +263,9 @@ func TestManagerRejectsMalformedSSHExecWithoutSandboxExecution(t *testing.T) {
 		t.Fatalf("tool log records = %d, want one rejection: %s", len(records), content)
 	}
 	assertLogString(t, records[0], "status", "rejected")
+	if started := recordStartedAt(t, records[0]); started.Before(sent) {
+		t.Fatalf("refusal started_at = %v, before the send at %v", started, sent)
+	}
 	assertLogString(t, records[0], "container_id", sandbox.ContainerID())
 	assertLogString(t, records[0], "container_name", sandbox.ContainerName())
 	if message, _ := records[0]["error"].(string); message == "" {
@@ -300,6 +317,24 @@ func assertDynamicLoopbackEndpoint(t *testing.T, endpoint core.ToolEndpoint) {
 	if endpoint.Protocol != "ssh" || endpoint.Username == "" {
 		t.Fatalf("incomplete SSH endpoint: %#v", endpoint)
 	}
+}
+
+// recordStartedAt returns the started_at of a tool-calls.jsonl record. It
+// fails unless the value is RFC 3339 and not after the record's timestamp.
+func recordStartedAt(t *testing.T, record map[string]any) time.Time {
+	t.Helper()
+	started, err := time.Parse(time.RFC3339Nano, fmt.Sprint(record["started_at"]))
+	if err != nil {
+		t.Fatalf("started_at: %v in %#v", err, record)
+	}
+	stamped, err := time.Parse(time.RFC3339Nano, fmt.Sprint(record["timestamp"]))
+	if err != nil {
+		t.Fatalf("timestamp: %v in %#v", err, record)
+	}
+	if started.After(stamped) {
+		t.Fatalf("started_at %v is after timestamp %v", started, stamped)
+	}
+	return started
 }
 
 func readToolCallRecords(t *testing.T, outputDir string) ([]map[string]any, []byte) {

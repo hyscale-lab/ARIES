@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"math"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -107,7 +108,7 @@ func TestFileProceduresMapFailuresToStatuses(t *testing.T) {
 		"app/dir":  &fstest.MapFile{Mode: fs.ModeDir | 0o755},
 		"app/kept": &fstest.MapFile{Data: []byte("old"), Mode: 0o644},
 	})
-	_, client, _ := startBridge(t, executor, Options{})
+	manager, client, endpoint := startBridge(t, executor, Options{})
 	ctx := context.Background()
 	for name, test := range map[string]struct {
 		call func() error
@@ -116,6 +117,10 @@ func TestFileProceduresMapFailuresToStatuses(t *testing.T) {
 		"relative path": {func() error { _, err := client.Stat(ctx, &sandboxv1.StatRequest{Path: "app/dir"}); return err }, codes.InvalidArgument},
 		"missing file": {func() error {
 			_, _, err := readFile(client, &sandboxv1.ReadFileRequest{Path: "/app/none"})
+			return err
+		}, codes.NotFound},
+		"missing file by lines": {func() error {
+			_, _, err := readWindow(client, &sandboxv1.ReadLinesRequest{Path: "/app/none", FirstLine: 1, MaxLines: 1})
 			return err
 		}, codes.NotFound},
 		"read a directory": {func() error {
@@ -161,6 +166,17 @@ func TestFileProceduresMapFailuresToStatuses(t *testing.T) {
 	if kept := string(executor.files["app/kept"].Data); kept != "old" {
 		t.Fatalf("a malformed write stream changed the file to %q", kept)
 	}
+	stop(t, manager)
+	// Failed and rejected calls also record an E2B operation, and a line read
+	// that returned no summary records no total_lines.
+	for _, record := range readToolCalls(t, endpoint.LogPaths[0]) {
+		if !slices.Contains(e2bOperations, record["operation_class"].(string)) {
+			t.Fatalf("record outside the E2B operations: %#v", record)
+		}
+		if _, present := record["total_lines"]; present {
+			t.Fatalf("a failed call records total_lines: %#v", record)
+		}
+	}
 }
 
 // The container root is a directory, as the backends report it: Stat finds a
@@ -179,14 +195,30 @@ func TestContainerRootIsADirectory(t *testing.T) {
 	}
 }
 
+// e2bOperations is the operation_class set of gRPC records.
+var e2bOperations = []string{"exec", "stat", "read", "write"}
+
 // TestToolCallRecordsFollowTheSSHRules pins the shared record rules: clean
 // UTF-8 inline, a binary-omitted note for binary, no base64 field, WriteFile
 // content as stdin, and reads with a digest and a byte count but no content.
+// Each started_at is the real start: after the send, before the sandbox work.
+// Both read procedures record as read with their window; other calls have none.
 func TestToolCallRecordsFollowTheSSHRules(t *testing.T) {
-	executor := newFakeExecutor(fstest.MapFS{"app/r": &fstest.MapFile{Data: []byte("read-me\n"), Mode: 0o644}})
+	// The window values differ from each other, so a swapped field shows.
+	const firstLine, maxLines, maxLineBytes, maxBytes = 1, 2, 3, 4
+	executor := newFakeExecutor(fstest.MapFS{
+		"app/r":     &fstest.MapFile{Data: []byte("read-me\n"), Mode: 0o644},
+		"app/empty": &fstest.MapFile{Mode: 0o644},
+	})
+	var written []time.Time
+	executor.writeHook = func(context.Context) error {
+		written = append(written, time.Now())
+		return nil
+	}
 	manager, client, endpoint := startBridge(t, executor, Options{OmitRawLog: true})
 	ctx := context.Background()
 	binary := []byte{0, 1, 2, 0xff}
+	sent := time.Now()
 	_, _ = client.Exec(ctx, &sandboxv1.ExecRequest{Script: "cat", Stdin: []byte("text-stdin")})
 	_, _ = client.Exec(ctx, &sandboxv1.ExecRequest{Script: "cat", Stdin: binary})
 	if _, err := writeFile(client, "/app/w", int64(len("text-file")), []byte("text-file")); err != nil {
@@ -204,32 +236,60 @@ func TestToolCallRecordsFollowTheSSHRules(t *testing.T) {
 	if _, err := client.Stat(ctx, &sandboxv1.StatRequest{Path: "/app/r"}); err != nil {
 		t.Fatal(err)
 	}
+	if _, _, err := readFile(client, &sandboxv1.ReadFileRequest{Path: "/app/r", MaxBytes: maxBytes}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := readWindow(client, &sandboxv1.ReadLinesRequest{Path: "/app/empty", FirstLine: firstLine, MaxLines: maxLines, MaxLineBytes: maxLineBytes}); err != nil {
+		t.Fatal(err)
+	}
 	stop(t, manager)
 
 	records := readToolCalls(t, endpoint.LogPaths[0])
-	if len(records) != 7 {
+	if len(records) != 9 {
 		t.Fatalf("records = %#v", records)
 	}
 	textDigest := sha256.Sum256([]byte("text-file"))
 	readDigest := sha256.Sum256([]byte("read-me\n"))
 	for index, want := range []map[string]any{
-		{"operation_class": "agent", "stdin": "text-stdin", "stdin_encoding": "utf-8"},
-		{"operation_class": "agent", "stdin": fmt.Sprintf("[binary input omitted; %d bytes not retained]", len(binary)), "stdin_encoding": "binary-omitted", "stdin_bytes": float64(len(binary))},
-		{"operation_class": "WriteFile", "path": "/app/w", "stdin": "text-file", "stdin_encoding": "utf-8", "sha256": hex.EncodeToString(textDigest[:]), "exit_code": float64(-1)},
-		{"operation_class": "WriteFile", "path": "/app/b", "stdin_encoding": "binary-omitted", "stdin_bytes": float64(len(binary))},
-		{"operation_class": "ReadFile", "path": "/app/r", "stdin": "", "stdout_bytes": float64(len("read-me\n")), "sha256": hex.EncodeToString(readDigest[:])},
-		{"operation_class": "ReadLines", "path": "/app/r", "stdin": "", "stdout_bytes": float64(len("read-me\n")), "sha256": hex.EncodeToString(readDigest[:])},
-		{"operation_class": "Stat", "path": "/app/r", "status": "completed", "exit_code": float64(-1)},
+		{"operation_class": "exec", "stdin": "text-stdin", "stdin_encoding": "utf-8"},
+		{"operation_class": "exec", "stdin": fmt.Sprintf("[binary input omitted; %d bytes not retained]", len(binary)), "stdin_encoding": "binary-omitted", "stdin_bytes": float64(len(binary))},
+		{"operation_class": "write", "path": "/app/w", "stdin": "text-file", "stdin_encoding": "utf-8", "sha256": hex.EncodeToString(textDigest[:]), "exit_code": float64(-1)},
+		{"operation_class": "write", "path": "/app/b", "stdin_encoding": "binary-omitted", "stdin_bytes": float64(len(binary))},
+		{"operation_class": "read", "path": "/app/r", "stdin": "", "stdout_bytes": float64(len("read-me\n")), "sha256": hex.EncodeToString(readDigest[:])},
+		{"operation_class": "read", "path": "/app/r", "stdin": "", "stdout_bytes": float64(len("read-me\n")), "sha256": hex.EncodeToString(readDigest[:]),
+			"first_line": float64(1), "max_lines": float64(1), "total_lines": float64(1)},
+		{"operation_class": "stat", "path": "/app/r", "status": "completed", "exit_code": float64(-1)},
+		{"operation_class": "read", "path": "/app/r", "stdout_bytes": float64(maxBytes), "truncated": true, "max_bytes": float64(maxBytes)},
+		{"operation_class": "read", "path": "/app/empty", "stdout_bytes": float64(0),
+			"first_line": float64(firstLine), "max_lines": float64(maxLines), "max_line_bytes": float64(maxLineBytes), "total_lines": float64(0)},
 	} {
 		for field, value := range want {
 			if records[index][field] != value {
 				t.Fatalf("record %d [%q] = %v, want %v", index, field, records[index][field], value)
 			}
 		}
+		for _, field := range []string{"max_bytes", "first_line", "max_lines", "max_line_bytes", "total_lines"} {
+			if _, wanted := want[field]; !wanted {
+				if _, present := records[index][field]; present {
+					t.Fatalf("record %d carries window field %q: %#v", index, field, records[index])
+				}
+			}
+		}
 		for _, forbidden := range []string{"stdin_raw", "content_raw", "request_type", "want_reply"} {
 			if _, present := records[index][forbidden]; present {
 				t.Fatalf("record %d carries %q", index, forbidden)
 			}
+		}
+	}
+	sandboxEntries := slices.Concat(executor.entered, written)
+	for index, record := range records {
+		started := recordStartedAt(t, record)
+		if started.Before(sent) {
+			t.Fatalf("record %d started_at %v is before the send at %v", index, started, sent)
+		}
+		// Records 0-1 are the Exec calls and 2-3 the writes, in sandbox order.
+		if index < len(sandboxEntries) && started.After(sandboxEntries[index]) {
+			t.Fatalf("record %d started_at %v is after the sandbox work at %v", index, started, sandboxEntries[index])
 		}
 	}
 	for _, record := range records {

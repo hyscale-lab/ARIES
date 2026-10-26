@@ -16,6 +16,20 @@ type toolCallRecord struct {
 	SHA256 string `json:"sha256,omitempty"`
 	// Truncated reports that the reply holds less than the sandbox produced.
 	Truncated bool `json:"truncated,omitempty"`
+	fileWindow
+}
+
+// fileWindow is the part of a file that a read asked for. A whole-file read,
+// Stat and WriteFile have none of its fields.
+type fileWindow struct {
+	// MaxBytes is the ReadFile limit; zero reads the whole file.
+	MaxBytes     int64 `json:"max_bytes,omitempty"`
+	FirstLine    int64 `json:"first_line,omitempty"`
+	MaxLines     int64 `json:"max_lines,omitempty"`
+	MaxLineBytes int64 `json:"max_line_bytes,omitempty"`
+	// TotalLines is set only when ReadLines produced a summary, so an empty
+	// file records 0 and a failed call records nothing.
+	TotalLines *int64 `json:"total_lines,omitempty"`
 }
 
 // rawGRPCRecord is one entry of grpc_raw.log. It keeps the Exec script and

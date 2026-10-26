@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/hyscale-lab/aries/pkg/core"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 )
 
 const testWorkdir = "/app"
@@ -39,6 +41,7 @@ type fakeExecutor struct {
 	mu       sync.Mutex
 	commands []core.Command
 	stdins   [][]byte
+	entered  []time.Time
 	fileOps  int
 	files    fstest.MapFS
 }
@@ -64,6 +67,7 @@ func (executor *fakeExecutor) ExecStream(ctx context.Context, command core.Comma
 	executor.mu.Lock()
 	executor.commands = append(executor.commands, command)
 	executor.stdins = append(executor.stdins, input)
+	executor.entered = append(executor.entered, time.Now())
 	executor.mu.Unlock()
 	if executor.block {
 		<-ctx.Done()
@@ -170,15 +174,46 @@ func newTestManager(t *testing.T, options Options) *Manager {
 
 // dial connects as the shipped client does: plaintext, no credentials. The
 // proxy is skipped so a host proxy setting cannot divert a loopback dial.
-func dial(t *testing.T, endpoint core.ToolEndpoint) sandboxv1.SandboxClient {
+func dial(t *testing.T, endpoint core.ToolEndpoint, options ...grpc.DialOption) sandboxv1.SandboxClient {
 	t.Helper()
-	connection, err := grpc.NewClient(endpoint.Address, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithNoProxy(),
+	options = append(options, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithNoProxy(),
 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(maxMessageBytes)))
+	connection, err := grpc.NewClient(endpoint.Address, options...)
 	if err != nil {
 		t.Fatalf("dial bridge: %v", err)
 	}
 	t.Cleanup(func() { _ = connection.Close() })
 	return sandboxv1.NewSandboxClient(connection)
+}
+
+// withToolCallID makes every call of a client carry values as its tool call
+// id metadata, one metadata value per element.
+func withToolCallID(values ...string) []grpc.DialOption {
+	tag := func(ctx context.Context) context.Context {
+		for _, value := range values {
+			ctx = metadata.AppendToOutgoingContext(ctx, toolCallIDKey, value)
+		}
+		return ctx
+	}
+	return []grpc.DialOption{
+		grpc.WithUnaryInterceptor(func(ctx context.Context, method string, request, reply any, connection *grpc.ClientConn, invoker grpc.UnaryInvoker, options ...grpc.CallOption) error {
+			return invoker(tag(ctx), method, request, reply, connection, options...)
+		}),
+		grpc.WithStreamInterceptor(func(ctx context.Context, description *grpc.StreamDesc, connection *grpc.ClientConn, method string, streamer grpc.Streamer, options ...grpc.CallOption) (grpc.ClientStream, error) {
+			return streamer(tag(ctx), description, connection, method, options...)
+		}),
+	}
+}
+
+// callEveryRPC makes one call of each RPC on /app/f, in the order Exec, Stat,
+// ReadFile, ReadLines, WriteFile, and returns the errors by RPC name.
+func callEveryRPC(client sandboxv1.SandboxClient) map[string]error {
+	_, execErr := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "true"})
+	_, statErr := client.Stat(context.Background(), &sandboxv1.StatRequest{Path: "/app/f"})
+	_, _, readErr := readFile(client, &sandboxv1.ReadFileRequest{Path: "/app/f"})
+	_, _, linesErr := readWindow(client, &sandboxv1.ReadLinesRequest{Path: "/app/f", FirstLine: 1, MaxLines: 1})
+	_, writeErr := writeFile(client, "/app/f", 1, []byte("x"))
+	return map[string]error{"Exec": execErr, "Stat": statErr, "ReadFile": readErr, "ReadLines": linesErr, "WriteFile": writeErr}
 }
 
 func startBridge(t *testing.T, executor *fakeExecutor, options Options) (*Manager, sandboxv1.SandboxClient, core.ToolEndpoint) {
@@ -196,6 +231,24 @@ func stop(t *testing.T, manager *Manager) {
 	if err := manager.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop() error = %v", err)
 	}
+}
+
+// recordStartedAt returns the started_at of a tool-calls.jsonl record. It
+// fails unless the value is RFC 3339 and not after the record's timestamp.
+func recordStartedAt(t *testing.T, record map[string]any) time.Time {
+	t.Helper()
+	started, err := time.Parse(time.RFC3339Nano, fmt.Sprint(record["started_at"]))
+	if err != nil {
+		t.Fatalf("started_at: %v in %#v", err, record)
+	}
+	stamped, err := time.Parse(time.RFC3339Nano, fmt.Sprint(record["timestamp"]))
+	if err != nil {
+		t.Fatalf("timestamp: %v in %#v", err, record)
+	}
+	if started.After(stamped) {
+		t.Fatalf("started_at %v is after timestamp %v", started, stamped)
+	}
+	return started
 }
 
 func readToolCalls(t *testing.T, path string) []map[string]any {

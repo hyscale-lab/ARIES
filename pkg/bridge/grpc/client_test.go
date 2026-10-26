@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -100,6 +101,49 @@ func TestClientMainReportsRevocationAsTransportFailure(t *testing.T) {
 	}
 	if commands, _, _ := executor.snapshot(); len(commands) != 0 {
 		t.Fatal("a call after revocation reached the sandbox")
+	}
+}
+
+// TestClientSendsTheToolCallID pins that every client operation sends the id
+// from the environment, and sends none when the variable is not set.
+func TestClientSendsTheToolCallID(t *testing.T) {
+	executor := newFakeExecutor(fstest.MapFS{"app/f": &fstest.MapFile{Data: []byte("x\n"), Mode: 0o644}})
+	manager, _, endpoint := startBridge(t, executor, Options{})
+	t.Setenv(targetEnv, endpoint.Address)
+	t.Setenv(toolCallIDEnv, testToolCallID)
+	operations := [][]string{
+		{"exec", "true"},
+		{"file", "stat", "/app/f"},
+		{"file", "read", "/app/f"},
+		{"file", "lines", "--first", "1", "--max", "1", "/app/f"},
+		{"file", "write", "--size", "1", "/app/f"},
+	}
+	runAll := func() {
+		for _, args := range operations {
+			var stdout, stderr bytes.Buffer
+			if code := ClientMain(args, strings.NewReader("x"), &stdout, &stderr); code != 0 {
+				t.Fatalf("ClientMain(%q) = %d (stderr: %s)", args, code, stderr.String())
+			}
+		}
+	}
+	runAll()
+	if err := os.Unsetenv(toolCallIDEnv); err != nil {
+		t.Fatal(err)
+	}
+	runAll()
+	stop(t, manager)
+
+	// One round with the variable and one without.
+	const rounds = 2
+	records := readToolCalls(t, endpoint.LogPaths[0])
+	if len(records) != rounds*len(operations) {
+		t.Fatalf("records = %d, want %d", len(records), rounds*len(operations))
+	}
+	for index, record := range records {
+		id, present := record["tool_call_id"]
+		if index < len(operations) && id != testToolCallID || index >= len(operations) && present {
+			t.Fatalf("record %d tool_call_id = %v (present %t)", index, id, present)
+		}
 	}
 }
 

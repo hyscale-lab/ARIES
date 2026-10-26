@@ -33,12 +33,17 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	grpcmetadata "google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
 // targetEnv names the bridge address, which the harness sets in the
 // environment rather than in argv.
 const targetEnv = "ARIES_GRPC_TARGET"
+
+// toolCallIDEnv names the harness tool call that this operation serves. The
+// plugin sets it per operation; the client sends it to the bridge as is.
+const toolCallIDEnv = "ARIES_TOOL_CALL_ID"
 
 // transportFailureExit means the operation did not run at all: a usage error,
 // a transport failure, or a bridge refusal. It is OpenSSH's value for the same
@@ -90,7 +95,7 @@ func execMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	defer done()
 
-	response, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: flags.Arg(0), Stdin: input, Login: *login})
+	response, err := client.Exec(outgoingContext(), &sandboxv1.ExecRequest{Script: flags.Arg(0), Stdin: input, Login: *login})
 	if err != nil {
 		// The command did not run, and the caller must not read this as an
 		// exit code the command produced.
@@ -138,7 +143,7 @@ func fileMain(operation string, args []string, stdin io.Reader, stdout, stderr i
 	}
 	defer done()
 
-	ctx := context.Background()
+	ctx := outgoingContext()
 	var metadata any
 	switch operation {
 	case "stat":
@@ -255,6 +260,16 @@ func sendWrite(ctx context.Context, client sandboxv1.SandboxClient, header *sand
 		return nil, err
 	}
 	return map[string]any{"bytes_written": response.GetBytesWritten(), "created": response.GetCreated()}, nil
+}
+
+// outgoingContext carries the tool call id from the environment, if any, to
+// the bridge. The bridge, not the client, checks the value.
+func outgoingContext() context.Context {
+	ctx := context.Background()
+	if id := os.Getenv(toolCallIDEnv); id != "" {
+		ctx = grpcmetadata.AppendToOutgoingContext(ctx, toolCallIDKey, id)
+	}
+	return ctx
 }
 
 // connect dials the bridge named by the harness environment.

@@ -4,8 +4,10 @@ Registers the `aries` backend, selected by `terminal.backend: aries` in
 config.yaml (the Gateway exports it as TERMINAL_ENV). Every command runs
 through the staged ARIES gRPC client, which carries it to the task sandbox
 over the ARIES tool bridge; the client reads its target from
-ARIES_GRPC_TARGET. Nothing is synced into the sandbox: this backend never
-constructs a FileSyncManager.
+ARIES_GRPC_TARGET. Each client run also gets ARIES_TOOL_CALL_ID, the id of
+the Hermes tool call it serves, so the bridge records name their tool call.
+Nothing is synced into the sandbox: this backend never constructs a
+FileSyncManager.
 
 File tools reach the environment through BaseEnvironment.get_file_operations(),
 the seam ARIES adds to the pinned Hermes before it starts.
@@ -19,6 +21,7 @@ import subprocess
 
 CLIENT = "/opt/aries/bin/aries-grpc-client"
 CLIENT_ENV = ("ARIES_GRPC_TARGET",)
+TOOL_CALL_ID_ENV = "ARIES_TOOL_CALL_ID"
 
 
 def register(ctx):
@@ -32,6 +35,16 @@ def register(ctx):
         describe_binary_file, normalize_read_pagination,
     )
     from tools.tool_output_limits import get_max_line_length
+    # Hermes binds the id of the running tool call here, also on the threads
+    # that run a command, and leaves it empty outside a tool call.
+    from tools.approval import _approval_tool_call_id
+
+    def client_env():
+        env = {key: value for key, value in os.environ.items() if key != TOOL_CALL_ID_ENV}
+        tool_call_id = _approval_tool_call_id.get()
+        if tool_call_id:
+            env[TOOL_CALL_ID_ENV] = tool_call_id
+        return env
 
     class AriesFileOperations(ShellFileOperations):
         """Reads, probes and the atomic write go through the bridge's typed
@@ -45,7 +58,7 @@ def register(ctx):
         silent fallback to the shell."""
 
         def _file(self, *args, data=None, accept=(0,)):
-            proc = subprocess.run([CLIENT, "file", *args], input=data, capture_output=True)
+            proc = subprocess.run([CLIENT, "file", *args], input=data, capture_output=True, env=client_env())
             if proc.returncode not in accept:
                 message = proc.stderr.decode("utf-8", "replace").strip()
                 raise RuntimeError(message or f"aries-grpc-client file {args[0]} exited {proc.returncode}")
@@ -182,6 +195,7 @@ def register(ctx):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
+                env=client_env(),
                 text=True,
                 encoding="utf-8",
                 errors="replace",

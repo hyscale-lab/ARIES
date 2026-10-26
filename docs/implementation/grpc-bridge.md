@@ -160,6 +160,12 @@ times out, and the closed connection cancels the call on the bridge. The
 command may keep running in the sandbox until it exits or the sandbox is
 removed.
 
+When `ARIES_TOOL_CALL_ID` is set and not empty, the client sends its value as
+the gRPC metadata `aries-tool-call-id` on each call. The client does not check
+the value. The bridge accepts one value of at most 128 bytes, made of the
+characters `A-Z`, `a-z`, `0-9`, `.`, `_`, `:`, and `-`. It refuses any other
+value with `INVALID_ARGUMENT` before the call reaches the sandbox.
+
 ## Evidence
 
 The gRPC transport writes `tool-calls.jsonl` with the same rules as SSH,
@@ -167,8 +173,8 @@ through the shared [audit writer](../../pkg/bridge/internal/bridgekit/audit.go);
 see [bridge evidence](../run-results.md#bridge-evidence). The
 [gRPC records](../../pkg/bridge/grpc/audit.go) have these differences:
 
-- `operation_class` is `agent` for `Exec`, and the procedure name (`Stat`,
-  `ReadFile`, `ReadLines`, `WriteFile`) for a file call.
+- `operation_class` is an E2B operation: `exec` for `Exec`, `stat` for `Stat`,
+  `read` for `ReadFile` and `ReadLines`, and `write` for `WriteFile`.
 - An `Exec` record has `path` `/bin/bash`, the exact `argv`, the script as
   `command`, and the SHA-256 of the script as `command_hash`.
 - A file call has no exit code, so its record has exit code -1 and an empty
@@ -176,11 +182,18 @@ see [bridge evidence](../run-results.md#bridge-evidence). The
 - `WriteFile` content follows the stdin rules: printable UTF-8 is inline as
   `stdin`, and binary content is a `binary-omitted` marker.
 - `ReadFile` and `ReadLines` record the path and the bytes sent as
-  `stdout_bytes`, never the content.
+  `stdout_bytes`, never the content. Both are a `read`; the read window tells
+  them apart. A `ReadFile` with a limit records `max_bytes`, and a whole-file
+  read records no window. A `ReadLines` records `first_line`, `max_lines`, and
+  `max_line_bytes` when it is not zero. It records `total_lines` (also 0 for an
+  empty file) only when it returned a summary.
 - `sha256` is the hex digest of the content that a completed file call moved.
 - `truncated` is set when `Exec` output was cut (never with the Docker backend,
   see above), when a `ReadFile` range ends before the end of the file, or when
   `ReadLines` has more lines.
+- `tool_call_id` is the `aries-tool-call-id` metadata of the call, also on a
+  refused call. A call without the metadata has no `tool_call_id`. A call
+  refused for a bad id has none either.
 - gRPC records have no `request_type` or `want_reply`. Those fields are SSH only.
 
 `grpc_raw.log` is opt-in through `bridge.retain_raw_log` and has mode 0600. Each

@@ -23,8 +23,9 @@ import (
 )
 
 // TestToolCallRecordKeepsTheSSHKeyOrder pins the SSH record layout: the
-// common fields come first in their old order, request_type and want_reply
-// stay the last two keys, and no gRPC-only key appears.
+// common fields come first in their old order, started_at is the only new
+// key, request_type and want_reply stay the last two keys, and no gRPC-only
+// or empty tool_call_id key appears.
 func TestToolCallRecordKeepsTheSSHKeyOrder(t *testing.T) {
 	structured, structuredBytes := memoryAuditFile()
 	session := &bridgeSession{dialect: testDialect{},
@@ -57,7 +58,7 @@ func TestToolCallRecordKeepsTheSSHKeyOrder(t *testing.T) {
 	}
 	want := []string{"sandbox_id", "sequence", "timestamp", "container_id", "container_name", "operation_class",
 		"path", "workdir", "command_hash", "command", "argv", "stdin", "stdin_encoding", "stdin_bytes",
-		"stdout_bytes", "stderr_bytes", "exit_code", "duration_ms", "status", "run_id", "task_id", "request_type", "want_reply"}
+		"stdout_bytes", "stderr_bytes", "exit_code", "started_at", "duration_ms", "status", "run_id", "task_id", "request_type", "want_reply"}
 	if !slices.Equal(keys, want) {
 		t.Fatalf("SSH record keys = %v, want %v", keys, want)
 	}

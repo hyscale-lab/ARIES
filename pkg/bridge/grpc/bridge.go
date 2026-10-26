@@ -24,6 +24,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -61,7 +62,16 @@ const (
 	// refusedExitCode marks a record for a call that never ran, as Hermes's SSH
 	// dialect does.
 	refusedExitCode = -1
-	kindAgent       = "agent"
+	kindExec        = "exec"
+
+	// toolCallIDKey is the metadata key that names the harness tool call a
+	// sandbox call serves. The value is wire-supplied, so the bridge records
+	// only one value of at most maxToolCallIDBytes from toolCallIDChars.
+	toolCallIDKey      = "aries-tool-call-id"
+	maxToolCallIDBytes = 128
+	toolCallIDChars    = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:-"
+	// invalidToolCallID is the refusal message for an id outside the bound.
+	invalidToolCallID = "malformed tool call id"
 )
 
 // Options are the host-local inputs to one gRPC bridge.
@@ -341,16 +351,21 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 		args = []string{"-l", "-c", script}
 	}
 	command := core.Command{Path: bridgekit.RemoteShellPath, Args: args, Dir: session.sandbox.Workdir()}
-	raw := rawGRPCRecord{OperationClass: kindAgent, Script: script, Login: request.GetLogin()}
+	raw := rawGRPCRecord{OperationClass: kindExec, Script: script, Login: request.GetLogin()}
+	toolCallID, validID := incomingToolCallID(ctx)
 	refuse := func(code codes.Code, message string) (*sandboxv1.ExecResponse, error) {
 		session.writeRecord(toolCallRecord{ToolCallRecord: bridgekit.ToolCallRecord{
-			OperationClass: kindAgent, CommandHash: bridgekit.CommandHash(script), Command: script,
-			StdinEncoding: "utf-8", ExitCode: refusedExitCode, Status: "rejected", Error: message,
+			OperationClass: kindExec, CommandHash: bridgekit.CommandHash(script), Command: script,
+			StdinEncoding: "utf-8", ExitCode: refusedExitCode, StartedAt: bridgekit.FormatTime(time.Now()),
+			Status: "rejected", Error: message, ToolCallID: toolCallID,
 		}}, raw)
 		return nil, status.Error(code, message)
 	}
 	if session.revoked.Load() {
 		return refuse(codes.Unavailable, "session revoked")
+	}
+	if !validID {
+		return refuse(codes.InvalidArgument, invalidToolCallID)
 	}
 	// The whole input is in hand, so the call is refused before anything runs
 	// and the refusal is the evidence.
@@ -393,17 +408,33 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 	stdinContent, stdinEncoding := session.describeInput(input, int64(len(input)))
 	raw.Stdin, raw.StdinBytes = input, int64(len(input))
 	session.writeRecord(toolCallRecord{ToolCallRecord: bridgekit.ToolCallRecord{
-		OperationClass: kindAgent, Path: command.Path, Workdir: command.Dir,
+		OperationClass: kindExec, Path: command.Path, Workdir: command.Dir,
 		CommandHash: bridgekit.CommandHash(script), Command: script,
 		Argv:  append([]string{command.Path}, command.Args...),
 		Stdin: stdinContent, StdinEncoding: stdinEncoding, StdinBytes: int64(len(input)),
 		StdoutBytes: stdout.count(), StderrBytes: stderr.count(),
-		ExitCode: exitCode, DurationMS: time.Since(started).Milliseconds(), Status: statusText, Error: message,
+		ExitCode: exitCode, StartedAt: bridgekit.FormatTime(started), DurationMS: time.Since(started).Milliseconds(),
+		Status: statusText, Error: message, ToolCallID: toolCallID,
 	}, Truncated: truncated}, raw)
 	return &sandboxv1.ExecResponse{
 		ExitCode: int32(exitCode), Reason: reason,
 		Stdout: stdoutBuffer.Bytes(), Stderr: stderrBuffer.Bytes(), Truncated: truncated,
 	}, nil
+}
+
+// incomingToolCallID returns the tool call id the client sent, or "" when it
+// sent none. A value outside the bound is not valid and returns "", so the
+// refusal record does not hold it.
+func incomingToolCallID(ctx context.Context) (string, bool) {
+	values := metadata.ValueFromIncomingContext(ctx, toolCallIDKey)
+	if len(values) == 0 {
+		return "", true
+	}
+	// Trim leaves nothing only when every character is in the set.
+	if len(values) > 1 || len(values[0]) > maxToolCallIDBytes || strings.Trim(values[0], toolCallIDChars) != "" {
+		return "", false
+	}
+	return values[0], true
 }
 
 func (session *bridgeSession) writeRecord(record toolCallRecord, raw rawGRPCRecord) {

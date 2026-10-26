@@ -34,9 +34,13 @@ env.execute = lambda command, *a, **k: executed.append(command) or original(comm
 log = os.environ["FAKE_CLIENT_LOG"]
 
 
-def client_calls():
+def client_entries():
     with open(log) as handle:
         return [json.loads(line) for line in handle]
+
+
+def client_calls():
+    return [entry["argv"] for entry in client_entries()]
 
 
 def fresh():
@@ -96,6 +100,35 @@ assert ops.read_file("/work/sub").error
 # The container root is a directory: stock Hermes gives its not-regular error.
 assert "Cannot read '/': not a regular file" in ops.read_file("/").error, ops.read_file("/").error
 assert ops.read_file_bytes("/work/none").error == "File not found: /work/none"
+
+# The client gets the id of the tool call it serves from the ContextVar that
+# Hermes sets per tool call, also on the thread that runs a command, and no
+# variable outside a tool call.
+from tools.approval import _approval_tool_call_id  # noqa: E402
+token = _approval_tool_call_id.set("call_1")
+fresh()
+ops.read_file("/work/sub/a.txt")
+env.execute("true")
+_approval_tool_call_id.reset(token)
+entries = client_entries()
+assert {entry["argv"][0] for entry in entries} == {"exec", "file"}, entries
+assert all(entry["tool_call_id"] == "call_1" for entry in entries), entries
+fresh()
+ops.read_file("/work/sub/a.txt")
+env.execute("true")
+assert all(entry["tool_call_id"] is None for entry in client_entries()), client_entries()
+
+# A Hermes without the ContextVar fails the plugin at load, not per call.
+import tools.approval  # noqa: E402
+del tools.approval._approval_tool_call_id
+try:
+    plugin.register(Context())
+except ImportError:
+    pass
+else:
+    raise AssertionError("register() accepted a Hermes without the tool call id ContextVar")
+finally:
+    tools.approval._approval_tool_call_id = _approval_tool_call_id
 
 # A broken client surfaces as an error, never as a shell fallback.
 plugin.CLIENT = "/nonexistent/aries-grpc"

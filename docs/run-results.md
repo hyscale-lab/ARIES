@@ -161,11 +161,20 @@ inline; binary or control-bearing stdin is replaced by a concise
 `binary-omitted` marker and exact byte count, with lossless bytes retained only
 in the raw log. Structured lifecycle logs and tool-call records continue to
 omit environment values and stdout/stderr bodies. Both transports use these
-rules. gRPC records also have `sha256` and `truncated`, and keep written file
-content as `stdin`; see [gRPC evidence](implementation/grpc-bridge.md#evidence).
+rules. gRPC records also have `sha256`, `truncated`, and the read window fields
+`max_bytes`, `first_line`, `max_lines`, `max_line_bytes`, and `total_lines`, and
+keep written file content as `stdin`; see
+[gRPC evidence](implementation/grpc-bridge.md#evidence). The `operation_class`
+values differ by transport: gRPC uses the E2B operations `exec`, `stat`,
+`read`, and `write`, and SSH keeps the classes of its dialect. Only gRPC
+records can have `tool_call_id`, the id of the harness tool call that the
+sandbox call serves. It is absent when the id is not known.
 
 Both bridge logs identify the `sandbox_id` and a sequence number local to that
-sandbox's writer, with run/task and exact backend runtime metadata. One harness
+sandbox's writer, with run/task and exact backend runtime metadata. In
+`tool-calls.jsonl`, `started_at` is the time the bridge started the call, and
+`timestamp` is the time it recorded the call after the call ended. A refused
+call has a `started_at` at the time of the refusal. One harness
 tool call may produce several SSH requests or gRPC calls. Each session has its own listener
 and logs even though the service container is shared. Releasing one sandbox
 closes its bridge access and finalizes its evidence without stopping the service
