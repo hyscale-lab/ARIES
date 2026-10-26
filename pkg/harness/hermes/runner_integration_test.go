@@ -108,20 +108,26 @@ func (b *hermesRunnerBenchmark) Evaluate(ctx context.Context, _ core.Task, s run
 }
 
 func TestRunnerThroughRealHermesSSHBridge(t *testing.T) {
-	runHermesBridgeScenario(t, false, 1, true)
+	runHermesBridgeScenario(t, "hermes-ssh", false, 1, true)
+}
+
+// The same task over the gRPC transport: Hermes runs the terminal call through
+// the ARIES plugin and the staged client.
+func TestRunnerThroughRealHermesGRPCBridge(t *testing.T) {
+	runHermesBridgeScenario(t, "hermes-grpc", false, 1, true)
 }
 
 func TestGatewayRepeatedAndConcurrentTaskOccurrences(t *testing.T) {
 	for _, name := range []string{"first", "second"} {
-		t.Run(name, func(t *testing.T) { t.Parallel(); runHermesBridgeScenario(t, false, 2, false) })
+		t.Run(name, func(t *testing.T) { t.Parallel(); runHermesBridgeScenario(t, "hermes-ssh", false, 2, false) })
 	}
 }
 
 func TestGatewayCancelsDuringSandboxCommand(t *testing.T) {
-	runHermesBridgeScenario(t, true, 1, false)
+	runHermesBridgeScenario(t, "hermes-ssh", true, 1, false)
 }
 
-func runHermesBridgeScenario(t *testing.T, cancelCommand bool, repetitions int, reasoning bool, derivedImage ...string) {
+func runHermesBridgeScenario(t *testing.T, bridgeType string, cancelCommand bool, repetitions int, reasoning bool, derivedImage ...string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	api, err := client.New(client.FromEnv)
@@ -310,32 +316,7 @@ func runHermesBridgeScenario(t *testing.T, cancelCommand bool, repetitions int, 
 	if reasoning {
 		modelConfig.Provider, modelConfig.Model, modelConfig.ReasoningEffort = "deepseek", "deepseek-flash", "high"
 	}
-	bridgeRuntime, err := dockerdeployment.New(dockerdeployment.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	clientConfig, err := bridgewiring.ClientConfig("hermes-ssh", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	launch := bridgewiring.Launch(versions.Bridge.Image)
-	launch.RuntimeBackend, launch.ResourceMetrics = "docker", "docker-stats"
-	launch.Config.Backend = "docker"
-	launch.Config.BackendEndpoint, launch.Request.Mounts = deploymentwiring.DockerExecutionAccess("")
-	service, err := managedbridge.NewService(managedbridge.Options{RunID: "hermes-runner-integration", Placement: core.RuntimePlacement{AttachmentID: runEnvironment.NetworkName()}, Runtime: bridgeRuntime, Launch: launch, Client: clientConfig, BridgeType: "hermes-ssh", RetainRawLog: true, OutputDir: filepath.Join(output, "infrastructure", "bridge")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		cleanup, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-		if err := service.Stop(cleanup); err != nil {
-			t.Error(err)
-		}
-	})
-	if err := service.Start(ctx); err != nil {
-		t.Fatal(err)
-	}
+	service := startBridgeService(ctx, t, versions.Bridge.Image, bridgeType, "hermes-runner-integration", runEnvironment.NetworkName(), output)
 	for occurrence := 0; occurrence < repetitions; occurrence++ {
 		bridge, err := service.NewSession(output)
 		if err != nil {
@@ -395,4 +376,59 @@ func runHermesBridgeScenario(t *testing.T, cancelCommand bool, repetitions int, 
 			t.Fatal("model credential leaked into retained configuration")
 		}
 	}
+}
+
+// startBridgeService starts the run's managed tool bridge of bridgeType on the
+// run network, as wiring does for a profile.
+func startBridgeService(ctx context.Context, t *testing.T, image, bridgeType, runID, network, output string) *managedbridge.Service {
+	t.Helper()
+	bridgeRuntime, err := dockerdeployment.New(dockerdeployment.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	helperDir := ""
+	if bridgeType == "hermes-grpc" {
+		helperDir = filepath.Dir(grpcClientPath(t))
+	}
+	clientConfig, err := bridgewiring.ClientConfig(bridgeType, helperDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launch := bridgewiring.Launch(image)
+	launch.RuntimeBackend, launch.ResourceMetrics = "docker", "docker-stats"
+	launch.Config.Backend = "docker"
+	launch.Config.BackendEndpoint, launch.Request.Mounts = deploymentwiring.DockerExecutionAccess("")
+	service, err := managedbridge.NewService(managedbridge.Options{RunID: runID, Placement: core.RuntimePlacement{AttachmentID: network}, Runtime: bridgeRuntime, Launch: launch, Client: clientConfig, BridgeType: bridgeType, RetainRawLog: true, OutputDir: filepath.Join(output, "infrastructure", "bridge")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		if err := service.Stop(cleanup); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := service.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	return service
+}
+
+// grpcClientPath is the built aries-grpc-client the bridge stages for each
+// session: ARIES_GRPC_CLIENT as make integration sets it, else bin/.
+func grpcClientPath(t *testing.T) string {
+	t.Helper()
+	path := os.Getenv("ARIES_GRPC_CLIENT")
+	if path == "" {
+		path = filepath.Join("..", "..", "..", "bin", "aries-grpc-client")
+	}
+	path, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("build aries-grpc-client before integration: %v", err)
+	}
+	return path
 }

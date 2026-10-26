@@ -25,6 +25,7 @@ This page summarizes capabilities and limitations. Use the
 | Tool sandbox and deployment | **Docker** — local containers managed through the Moby Go SDK | [Deployment configuration](configuration.md#deployment-configuration), [Docker implementation](implementation/docker.md) |
 | Tool sandbox and deployment | **Kubernetes** — one pod per runtime, driven through `kubectl`; Terminal-Bench 2, SWE-bench Pro and Deep Research Bench with OpenClaw or Hermes in text mode | [Kubernetes deployment](configuration.md#kubernetes-deployment), [Kubernetes implementation](implementation/kubernetes.md), [cluster setup](../k8s/README.md) |
 | Tool bridge | **OpenClaw SSH** and **Hermes SSH** — managed Docker container or Kubernetes pod; harness-specific SSH adapters | [SSH bridge implementation](implementation/ssh-bridges.md) |
+| Tool bridge | **Hermes gRPC** — same managed Docker container or Kubernetes pod; typed `Exec` and file procedures through the ARIES Hermes plugin | [gRPC bridge implementation](implementation/grpc-bridge.md) |
 | Model service | **DeepSeek** — external endpoint | [Model backends](configuration.md#model-backends) |
 | Model service | **SGLang** — external endpoint or one ARIES-managed host process per run | [Model backends](configuration.md#model-backends) |
 | Model service | **OpenAI-compatible server** — external only, including vLLM, llama.cpp, gateways, and hosted endpoints | [Model backends](configuration.md#model-backends) |
@@ -41,10 +42,13 @@ guides above.
 
 ## Current limitations
 
-- Each SSH bridge supports its corresponding harness. Crossed pairs are rejected
-  before execution. Hermes requires `/bin/bash` in the task image; its bridge
+- Each bridge type supports its corresponding harness: OpenClaw uses
+  `openclaw-ssh`, and Hermes uses `hermes-ssh` or `hermes-grpc`. Crossed pairs
+  are rejected before execution. One run uses one transport. OpenClaw over gRPC
+  is not implemented. Hermes requires `/bin/bash` in the task image; its SSH bridge
   rejects Hermes's private `~/.hermes` file synchronization. OpenClaw requires
-  `bin/aries-ssh-client` beside `bin/aries`. Both bridges require the matched Docker bridge image built with
+  `bin/aries-ssh-client` beside `bin/aries`, and `hermes-grpc` requires
+  `bin/aries-grpc-client` there. All bridges require the matched Docker bridge image built with
   `make bridge-image`.
 - On the Kubernetes backend, a task that executes as a non-root user, as
   SWE-bench Pro does, needs `setpriv` from `util-linux` in its image and a root container
@@ -76,15 +80,17 @@ a new provider must implement their execution, connectivity, and cleanup semanti
 and be selected in composition wiring.
 
 The [bridge service](design/bridge.md) hosts independent sessions with one sandbox
-ID each and deployment-resolved endpoints. gRPC control and SSH clients are
-unauthenticated; one service host key is retained for the SSH handshake.
+ID each and deployment-resolved endpoints. gRPC control and the SSH and gRPC
+transports are unauthenticated; one service host key is retained for the SSH handshake.
 
 E2B lifecycle semantics and a future E2B-compatible harness protocol are separate
-from the internal gRPC control transport. No E2B wire compatibility is implemented
-or verified. Current harness tool traffic retains its native SSH protocol; the
-existing control API registers, looks up and releases borrowed sandbox access.
+from the internal gRPC control plane. No E2B wire compatibility is implemented
+or verified. Harness tool traffic uses SSH or the ARIES gRPC transport, whose
+messages have the ARIES shape, not the E2B shape. The existing control API
+registers, looks up and releases borrowed sandbox access.
 
 See the [deployment contract](design/deployment.md),
 [Docker implementation](implementation/docker.md),
 [Kubernetes implementation](implementation/kubernetes.md),
-[SSH bridge implementation](implementation/ssh-bridges.md) for current boundaries.
+[SSH bridge implementation](implementation/ssh-bridges.md), and
+[gRPC bridge implementation](implementation/grpc-bridge.md) for current boundaries.

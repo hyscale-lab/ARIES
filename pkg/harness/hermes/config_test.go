@@ -22,7 +22,7 @@ func validEndpoint() core.ToolEndpoint {
 }
 
 func TestRenderTerminalNamesTheSandboxWorkdir(t *testing.T) {
-	rendered, err := renderTerminal("/workspace/dumps/workspace", 180)
+	rendered, err := renderTerminal("ssh", "/workspace/dumps/workspace", 180)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,12 +32,26 @@ func TestRenderTerminalNamesTheSandboxWorkdir(t *testing.T) {
 		t.Fatalf("terminal = %#v, want %#v", terminal, want)
 	}
 	for _, workdir := range []string{"", "relative", "/app/", "/a b", "/a/../b", "/a;b"} {
-		if _, err := renderTerminal(workdir, 180); err == nil {
+		if _, err := renderTerminal("ssh", workdir, 180); err == nil {
 			t.Fatalf("accepted workdir %q", workdir)
 		}
 	}
-	if _, err := renderTerminal("/app", 0); err == nil {
+	if _, err := renderTerminal("ssh", "/app", 0); err == nil {
 		t.Fatal("accepted a zero terminal timeout")
+	}
+}
+
+// The gRPC endpoint selects the ARIES plugin backend in config.yaml, which the
+// Gateway treats as authoritative.
+func TestRenderTerminalSelectsTheAriesBackend(t *testing.T) {
+	rendered, err := renderTerminal("aries", "/app", 180)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminal := decodeConfigYAML(t, rendered)["terminal"]
+	want := map[string]any{"backend": "aries", "cwd": "/app", "timeout": 180}
+	if !reflect.DeepEqual(terminal, want) {
+		t.Fatalf("terminal = %#v, want %#v", terminal, want)
 	}
 }
 
@@ -382,7 +396,7 @@ func TestContainerEnvironmentSetsSearXNGURLWhenWebSearchEnabled(t *testing.T) {
 
 // Gateway launches without CLI-only toolset flags; config selects its tools.
 func TestGatewayLauncherExportsKeyAndAvoidsToolsetsFlag(t *testing.T) {
-	script := string(gatewayLauncherScript("DEEPSEEK_API_KEY", false))
+	script := string(gatewayLauncherScript("DEEPSEEK_API_KEY", false, false))
 	for _, want := range []string{
 		"DEEPSEEK_API_KEY=\"$(cat " + modelKeyPath + ")\"",
 		"export DEEPSEEK_API_KEY",
@@ -400,8 +414,27 @@ func TestGatewayLauncherExportsKeyAndAvoidsToolsetsFlag(t *testing.T) {
 	}
 }
 
+// The SSH launcher must not change with the gRPC support.
+func TestGatewayLauncherForSSHIsUnchanged(t *testing.T) {
+	want := `#!/bin/sh
+set -eu
+if [ ! -f /run/aries/hermes/model.key ]; then
+  echo "ARIES: Hermes model key is missing" >&2
+  exit 1
+fi
+DEEPSEEK_API_KEY="$(cat /run/aries/hermes/model.key)"
+export DEEPSEEK_API_KEY
+API_SERVER_KEY="$(cat /run/aries/gateway.key)"
+export API_SERVER_KEY
+exec hermes gateway run --no-supervise --external-supervisor
+`
+	if script := string(gatewayLauncherScript("DEEPSEEK_API_KEY", false, false)); script != want {
+		t.Fatalf("SSH launcher changed:\n%s", script)
+	}
+}
+
 func TestGatewayLauncherExportsExtractKeyWhenEnabled(t *testing.T) {
-	script := string(gatewayLauncherScript("DEEPSEEK_API_KEY", true))
+	script := string(gatewayLauncherScript("DEEPSEEK_API_KEY", true, false))
 	for _, want := range []string{
 		"DEEPSEEK_API_KEY=\"$(cat " + modelKeyPath + ")\"",
 		"export DEEPSEEK_API_KEY",
@@ -453,7 +486,7 @@ func TestRenderConfig_MCPServers(t *testing.T) {
 }
 
 func TestGatewayLauncherScriptExportsMCPHostVariables(t *testing.T) {
-	script := string(gatewayLauncherScript("DEEPSEEK_API_KEY", false, "TOOLATHLON_API_KEY", "OTHER_KEY"))
+	script := string(gatewayLauncherScript("DEEPSEEK_API_KEY", false, false, "TOOLATHLON_API_KEY", "OTHER_KEY"))
 	for _, required := range []string{
 		"TOOLATHLON_API_KEY=\"$(cat /run/aries/hermes/mcp_TOOLATHLON_API_KEY.key)\"",
 		"export TOOLATHLON_API_KEY",
@@ -522,6 +555,102 @@ func TestRenderConfig_NoSandboxToolsLeavesOnlyMCPAndWeb(t *testing.T) {
 		if _, ok := config["web"]; ok != test.web {
 			t.Fatalf("web selection = %#v", config["web"])
 		}
+	}
+}
+
+func validGRPCEndpoint() core.ToolEndpoint {
+	return core.ToolEndpoint{
+		Protocol: "grpc", Address: "172.17.0.1:41234", Username: "aries",
+		ClientCommand: clientContainerFS, ClientSourceFile: "/tmp/aries-grpc-client",
+	}
+}
+
+// The gRPC endpoint selects the ARIES plugin backend and carries no SSH target:
+// the plugin's client reads its target from ARIES_GRPC_TARGET.
+func TestContainerEnvironmentSelectsTheAriesBackendUnderGRPC(t *testing.T) {
+	environment, err := containerEnvironment(validGRPCEndpoint(), "/aries/workspace", 180, false, "", "run-1", "fix-git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"HERMES_HOME":                                stateContainerPath,
+		"TERMINAL_ENV":                               "aries",
+		"API_SERVER_HOST":                            "0.0.0.0",
+		"API_SERVER_PORT":                            "8642",
+		"HERMES_YOLO_MODE":                           "true",
+		"ARIES_GRPC_TARGET":                          "172.17.0.1:41234",
+		"TERMINAL_CWD":                               "/aries/workspace",
+		"TERMINAL_TIMEOUT":                           "180",
+		"ARIES_RUN_ID":                               "run-1",
+		"ARIES_TASK_ID":                              "fix-git",
+		"HERMES_WRITE_SAFE_ROOT":                     "",
+		"HERMES_OTEL_DASHBOARD_LIVE":                 "true",
+		"HERMES_OTEL_DASHBOARD_LIVE_MAX_SPANS":       "10000",
+		"HERMES_OTEL_DASHBOARD_LIVE_RETENTION_HOURS": "0",
+		"HERMES_OTEL_CONTENT_CAPTURE":                "off",
+	}
+	got := map[string]string{}
+	for _, entry := range environment {
+		name, value, _ := strings.Cut(entry, "=")
+		got[name] = value
+	}
+	if len(got) != len(want) {
+		t.Fatalf("environment=%v", environment)
+	}
+	for name, value := range want {
+		if got[name] != value {
+			t.Fatalf("%s=%q, want %q", name, got[name], value)
+		}
+	}
+}
+
+func TestContainerEnvironmentRejectsUnusableGRPCEndpoints(t *testing.T) {
+	cases := map[string]func(*core.ToolEndpoint){
+		"missing client command": func(e *core.ToolEndpoint) { e.ClientCommand = "" },
+		"client command moved":   func(e *core.ToolEndpoint) { e.ClientCommand = "/usr/bin/ssh" },
+		"missing client source":  func(e *core.ToolEndpoint) { e.ClientSourceFile = "" },
+		"username":               func(e *core.ToolEndpoint) { e.Username = "root" },
+		"unknown protocol":       func(e *core.ToolEndpoint) { e.Protocol = "quic" },
+		"address":                func(e *core.ToolEndpoint) { e.Address = "no-port" },
+	}
+	for name, mutate := range cases {
+		endpoint := validGRPCEndpoint()
+		mutate(&endpoint)
+		if _, err := containerEnvironment(endpoint, "/aries/workspace", 180, false, "", "run-1", "fix-git"); err == nil {
+			t.Fatalf("%s: invalid endpoint was accepted", name)
+		}
+	}
+}
+
+// The seam and the staged-file checks run before Hermes starts, and only on
+// the gRPC route: the SSH route runs the pinned image unmodified.
+func TestGatewayLauncherAppliesTheSeamOnlyForGRPC(t *testing.T) {
+	patched := string(gatewayLauncherScript("DEEPSEEK_API_KEY", false, true))
+	hermes := strings.Index(patched, "exec hermes ")
+	for _, want := range []string{
+		"[ ! -x " + clientContainerFS + " ]",
+		"[ ! -r " + pluginContainerFS + "/plugin.yaml ]",
+		"[ ! -r " + pluginContainerFS + "/__init__.py ]",
+		"if ! python3 " + seamContainerFS + "; then",
+	} {
+		if index := strings.Index(patched, want); index < 0 || index > hermes {
+			t.Fatalf("launcher does not run %q before Hermes:\n%s", want, patched)
+		}
+	}
+	plain := string(gatewayLauncherScript("DEEPSEEK_API_KEY", false, false))
+	if strings.Contains(plain, seamContainerFS) || strings.Contains(plain, clientContainerFS) {
+		t.Fatalf("SSH launcher was modified:\n%s", plain)
+	}
+}
+
+// Hermes loads a user plugin only when plugins.enabled names it, and must not
+// load it on the SSH route (TestRenderConfigAlwaysEnablesOTelPlugin).
+func TestRenderConfigEnablesThePluginOnlyForTheAriesBackend(t *testing.T) {
+	settings := baseSettings()
+	settings.ariesBackend = true
+	config := decodeConfigYAML(t, []byte(mustRender(t, validModel(), settings)))
+	if got := config["plugins"].(map[string]any)["enabled"]; !reflect.DeepEqual(got, []any{otelPluginName, "aries"}) {
+		t.Fatalf("enabled plugins = %#v", got)
 	}
 }
 

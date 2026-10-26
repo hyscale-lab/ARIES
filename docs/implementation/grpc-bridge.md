@@ -14,8 +14,9 @@ protocol `grpc`, user `aries`, and the sandbox workdir. The server is
 plaintext and authenticates no caller, as SSH and control do. It makes no
 SSH host key. The task container serves nothing and runs no daemon: every call
 reaches it through the execution backend of the run, the Docker Engine API or
-`kubectl exec` on Kubernetes. Profile validation does not yet accept a harness
-for `hermes-grpc`.
+`kubectl exec` on Kubernetes. Hermes is the harness of this transport: its
+ARIES plugin runs the tool calls through the client; see
+[Hermes over gRPC](harnesses.md#hermes-over-grpc).
 
 ## Service
 
@@ -199,3 +200,6 @@ holds output or read content.
 [client tests](../../pkg/bridge/grpc/client_test.go) use a fake executor.
 The [managed integration test](../../pkg/bridge/managed_integration_test.go)
 runs `hermes-grpc` through the real bridge image with the built client.
+The [Hermes tools test](../../pkg/harness/hermes/tools_integration_test.go)
+runs real Hermes tools over the gRPC transport; see
+[Hermes over gRPC](harnesses.md#hermes-over-grpc).

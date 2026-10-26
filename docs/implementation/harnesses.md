@@ -82,14 +82,14 @@ with `--ignore-rules` omitted; they are not disabled to emulate the CLI. Each ta
 The Gateway seeds its default `SOUL.md`, whose identity text matches the old
 CLI fallback in this pin. Its API constructor does not forward the general
 Gateway context-file suppression setting. Context discovery reads local harness
-files, not sandbox files over SSH. ARIES starts in a private workspace; if a
+files, not sandbox files through the bridge. ARIES starts in a private workspace; if a
 sandbox workdir also exists in the harness image, native discovery can consult
 that local path. This remaining difference matters when comparing historical
 CLI runs with unusual workdirs.
 Bundled skills are synchronized by Gateway startup; the API toolset allowlist
 remains explicit, including delegation only when enabled. No CLI fallback is retained.
 
-Hermes reads its SSH target from environment variables, so ARIES sets
+On SSH runs, Hermes reads its SSH target from environment variables, so ARIES sets
 `TERMINAL_ENV=ssh` with the bridge's resolved host, port, and user.
 `TERMINAL_SSH_KEY` is omitted; native OpenSSH connects without client credentials.
 Hermes keeps its own ControlMaster reuse and `StrictHostKeyChecking=accept-new`
@@ -148,7 +148,7 @@ loader also rejects any field, at any depth, named like a credential, so a
 literal key cannot reach the retained `config.yaml` or the request bodies. The `v2026.8.31` image also sets
 `HERMES_WRITE_SAFE_ROOT=/opt/data`, which makes `write_file` and `patch` refuse
 every sandbox path; the harness clears it, because the sandbox is the isolation
-boundary and the tools act on it over SSH.
+boundary and the tools act on it through the bridge.
 
 Every run enables the `hermes_otel` plugin. After images are pulled,
 preparation derives `aries-local/hermes:<tag>-otel<version>-<hash>` from the
@@ -171,9 +171,77 @@ fit, in end order, and logs a warning; any other dump failure fails the run,
 like other artifact collection failures.
 Each span carries the wall-clock start and end of one tool call, model call, or
 API request, which Hermes's session export does not record. The spans do not
-reach bridge execs: Hermes passes no trace context over SSH, so execs are
+reach bridge execs: Hermes passes no trace context to the bridge, so execs are
 attributed to a tool call by time only (the bridge record's `timestamp` is the
 exec's end), and background work is not linked.
+
+### Hermes over gRPC
+
+With `bridge.type: "hermes-grpc"`, Hermes runs its terminal and file tools
+through the [gRPC transport](grpc-bridge.md). ARIES uses the same local Hermes
+image and builds no other image. Three parts are staged for each task: the
+`aries-grpc-client`, the ARIES Hermes plugin, and a seam script.
+
+The rendered `config.yaml` sets `terminal.backend: "aries"` and adds `aries` to
+`plugins.enabled` after `hermes_otel`. The Gateway takes the backend from
+`config.yaml` before `TERMINAL_ENV`. The environment also sets
+`TERMINAL_ENV=aries`, because some Hermes paths read that variable directly,
+and `ARIES_GRPC_TARGET` with the bridge address. It sets no `TERMINAL_SSH_*`
+values. The workdir, `TERMINAL_CWD`, and timeout rules are the same as on SSH.
+
+The [plugin](../../pkg/harness/hermes/plugin/__init__.py) registers the `aries`
+terminal backend. The backend is available only when the client is executable
+and `ARIES_GRPC_TARGET` is set. Each command runs as one
+`aries-grpc-client exec [--login] -- SCRIPT` process. The backend creates no
+`FileSyncManager`, so Hermes syncs nothing into the sandbox, and there is no
+`~/.hermes` sync for the bridge to refuse. Its file operations send reads, the
+small probes (binary sample, byte order mark, line ending), and the atomic
+write through the typed file procedures. Hermes's own tool logic above them
+does not change. Search, patch reads, delete, move, similar-name suggestions,
+the UTF-16 fallback, and the `write_file` digest check and lint still run as
+shell commands through `Exec`. A bridge failure is a tool error, never a
+silent fallback to the shell.
+
+The pinned Hermes creates `ShellFileOperations` for every backend, so a backend
+cannot supply typed file operations. The [seam script](../../pkg/harness/hermes/seam.py)
+adds `BaseEnvironment.get_file_operations()`, which gives `None` by default, to
+`tools/environments/base.py`. It also makes `tools/file_tools.py` ask the
+environment first. The anchors of these edits are tied to the pinned
+`v2026.8.31` source. The script checks every anchor before it writes, and a
+missing anchor stops it with a non-zero exit. A second run changes nothing.
+Remove the script when the upstream pin carries the seam.
+
+The Gateway launcher runs as root before the `hermes` shim drops privileges,
+so it can patch the image's own files. On gRPC runs only, it first checks that
+the client is executable and that the plugin files are readable. Then it runs
+`python3 /run/aries/seam.py`. If a check or the seam fails, the launcher prints
+an `ARIES:` reason to the container log and exits before Hermes starts. Thus
+the file tools never stay on the shell without notice.
+
+The runtime archive stages these files only on gRPC runs. The Hermes runtime
+user owns all of them:
+
+| Container path | Mode |
+| --- | --- |
+| `/opt/aries/bin/aries-grpc-client` | 0555 |
+| `/run/aries/hermes/plugins/aries/plugin.yaml` | 0400 |
+| `/run/aries/hermes/plugins/aries/__init__.py` | 0400 |
+| `/run/aries/seam.py` | 0400 |
+
+The plugin directories have mode 0700, and `/opt/aries` and `/opt/aries/bin`
+have mode 0755. The plugin is under `HERMES_HOME`, where Hermes looks for user
+plugins. SSH runs stage none of these files.
+
+The built client is about 16 MB, near the 16 MiB bound for credential files,
+and its size changes with the Go toolchain. Hermes reads the client with its
+own 128 MiB bound
+([private files](../../pkg/harness/internal/privatefiles/files.go)), and the
+credential bound does not change. Before that, the bridge session copies the
+helper with a 64 MiB bound ([session](../../pkg/bridge/session.go)), so the
+effective bound for the client is 64 MiB.
+
+The harness accepts a gRPC endpoint only for user `aries`, with the client
+command `/opt/aries/bin/aries-grpc-client` and a staged client source file.
 
 ## Model Context Protocol (`MCP`)
 
@@ -208,7 +276,7 @@ their addresses for the sandbox's placement into `HarnessConnectivity.MCPServers
 and each harness puts them ahead of the profile's servers when it starts
 (`harness.MCPServers`, which refuses a name used twice).
 
-MCP tools do not automatically pass through the SSH ToolBridge or inherit
+MCP tools do not automatically pass through the ToolBridge or inherit
 task-sandbox isolation.
 
 ## Shared mechanics and connectivity
