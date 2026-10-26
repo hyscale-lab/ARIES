@@ -24,6 +24,7 @@ k8s/
 | containerd | Yes |
 | `kubectl` and `helm` on the machine that applies ARIES | On the master node; `helm` is installed with Prometheus |
 | kube-prometheus-stack, only for the Grafana dashboard | Optional (`DEPLOY_PROMETHEUS`) |
+| A master node with at least 2 CPUs and about 2 GB of memory | `kubeadm init` preflight requires them; workers have no such minimum. With less, `create-cluster.sh` stops at "Waiting for master key to be generated..." |
 | No KVM: pods run as plain containers | Invitro's `stabilize.sh` loads `kvm_intel`; `create-cluster.sh` accepts that failure on nodes without `/dev/kvm` |
 
 Invitro also installs components for its own serverless experiments, which
