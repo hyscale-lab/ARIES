@@ -170,10 +170,14 @@ failure; a dump that would exceed the exec output bound keeps the spans that
 fit, in end order, and logs a warning; any other dump failure fails the run,
 like other artifact collection failures.
 Each span carries the wall-clock start and end of one tool call, model call, or
-API request, which Hermes's session export does not record. The spans do not
-reach bridge execs: Hermes passes no trace context to the bridge, so execs are
-attributed to a tool call by time only (the bridge record's `timestamp` is the
-exec's end), and background work is not linked.
+API request, which Hermes's session export does not record. On `hermes-ssh`,
+Hermes passes no trace context to the bridge, so execs are attributed to a tool
+call by time only (the bridge record's `started_at` is the exec's start and its
+`timestamp` is the exec's end), and background work is not linked. On
+`hermes-grpc`, the plugin passes the id of the running tool call to the bridge,
+so each record names its tool call in `tool_call_id`. Two kinds of sandbox
+calls have no id: the polls of a background process, and the tools that
+`execute_code` runs.
 
 ### Hermes over gRPC
 
@@ -191,7 +195,10 @@ values. The workdir, `TERMINAL_CWD`, and timeout rules are the same as on SSH.
 
 The [plugin](../../pkg/harness/hermes/plugin/__init__.py) registers the `aries`
 terminal backend. The backend is available only when the client is executable
-and `ARIES_GRPC_TARGET` is set. Each command runs as one
+and `ARIES_GRPC_TARGET` is set. Each client process gets `ARIES_TOOL_CALL_ID`
+from the Hermes context variable that holds the id of the running tool call;
+it is not set outside a tool call. The plugin fails to load if the pinned
+Hermes does not have that variable. Each command runs as one
 `aries-grpc-client exec [--login] -- SCRIPT` process. The backend creates no
 `FileSyncManager`, so Hermes syncs nothing into the sandbox, and there is no
 `~/.hermes` sync for the bridge to refuse. Its file operations send reads, the

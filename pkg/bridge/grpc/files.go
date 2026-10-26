@@ -29,11 +29,11 @@ import (
 )
 
 const (
-	// The operation class of a file call is its RPC name.
-	kindFileStat  = "Stat"
-	kindFileRead  = "ReadFile"
-	kindFileLines = "ReadLines"
-	kindFileWrite = "WriteFile"
+	// The operation class of a file call is its E2B operation. ReadFile and
+	// ReadLines are both a read; the read window tells them apart.
+	kindFileStat  = "stat"
+	kindFileRead  = "read"
+	kindFileWrite = "write"
 
 	// chunkBytes is the content carried by one stream message.
 	chunkBytes = 64 << 10
@@ -48,18 +48,27 @@ type fileCall struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 	started time.Time
+	window  fileWindow
+	// toolCallID is the harness tool call the file call serves, or "".
+	toolCallID string
 }
 
 // beginFile admits a file call. invalid, when set, is the reason the request
-// arguments are refused; revocation is checked first.
-func (svc *service) beginFile(ctx context.Context, kind, filePath, invalid string) (*fileCall, error) {
+// arguments are refused; revocation is checked first. A refused call is
+// recorded with started at the time of the refusal.
+func (svc *service) beginFile(ctx context.Context, kind, filePath, invalid string, window fileWindow) (*fileCall, error) {
 	session := svc.session
+	toolCallID, validID := incomingToolCallID(ctx)
+	call := &fileCall{session: session, kind: kind, path: filePath, started: time.Now(), window: window, toolCallID: toolCallID}
 	reject := func(code codes.Code, message string) (*fileCall, error) {
-		session.recordFile(kind, filePath, nil, false, 0, "rejected", message)
+		call.recordFile(nil, false, 0, "rejected", message)
 		return nil, status.Error(code, message)
 	}
 	if session.revoked.Load() {
 		return reject(codes.Unavailable, "session revoked")
+	}
+	if !validID {
+		return reject(codes.InvalidArgument, invalidToolCallID)
 	}
 	if invalid != "" {
 		return reject(codes.InvalidArgument, invalid)
@@ -67,8 +76,8 @@ func (svc *service) beginFile(ctx context.Context, kind, filePath, invalid strin
 	if !path.IsAbs(filePath) || strings.ContainsRune(filePath, 0) {
 		return reject(codes.InvalidArgument, "path must be absolute")
 	}
-	callCtx, cancel := session.callContext(ctx)
-	return &fileCall{session: session, kind: kind, path: filePath, ctx: callCtx, cancel: cancel, started: time.Now()}, nil
+	call.ctx, call.cancel = session.callContext(ctx)
+	return call, nil
 }
 
 // finish records the outcome and converts a target error to a status. A call
@@ -84,7 +93,7 @@ func (call *fileCall) finish(err error, sink *contentSink, truncated bool) error
 			statusText = "canceled"
 		}
 	}
-	call.session.recordFile(call.kind, call.path, sink, truncated, time.Since(call.started).Milliseconds(), statusText, message)
+	call.recordFile(sink, truncated, time.Since(call.started).Milliseconds(), statusText, message)
 	return result
 }
 
@@ -191,7 +200,7 @@ func (writer *chunkWriter) flush() error {
 }
 
 func (svc *service) Stat(ctx context.Context, request *sandboxv1.StatRequest) (*sandboxv1.StatResponse, error) {
-	call, err := svc.beginFile(ctx, kindFileStat, request.GetPath(), "")
+	call, err := svc.beginFile(ctx, kindFileStat, request.GetPath(), "", fileWindow{})
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +227,7 @@ func (svc *service) ReadFile(request *sandboxv1.ReadFileRequest, stream grpc.Ser
 	if limit < 0 {
 		invalid = "max_bytes out of range"
 	}
-	call, err := svc.beginFile(stream.Context(), kindFileRead, request.GetPath(), invalid)
+	call, err := svc.beginFile(stream.Context(), kindFileRead, request.GetPath(), invalid, fileWindow{MaxBytes: limit})
 	if err != nil {
 		return err
 	}
@@ -262,7 +271,9 @@ func (svc *service) ReadLines(request *sandboxv1.ReadLinesRequest, stream grpc.S
 	if request.GetFirstLine() < 1 || request.GetMaxLines() < 1 || request.GetMaxLineBytes() < 0 {
 		invalid = "line window out of range"
 	}
-	call, err := svc.beginFile(stream.Context(), kindFileLines, request.GetPath(), invalid)
+	call, err := svc.beginFile(stream.Context(), kindFileRead, request.GetPath(), invalid, fileWindow{
+		FirstLine: request.GetFirstLine(), MaxLines: request.GetMaxLines(), MaxLineBytes: request.GetMaxLineBytes(),
+	})
 	if err != nil {
 		return err
 	}
@@ -280,6 +291,10 @@ func (svc *service) ReadLines(request *sandboxv1.ReadLinesRequest, stream grpc.S
 	}}
 	sink := newSink(chunks, false)
 	summary, err := readLines(reader, sink, request.GetFirstLine(), request.GetMaxLines(), request.GetMaxLineBytes())
+	if summary != nil {
+		total := summary.GetTotalLines()
+		call.window.TotalLines = &total
+	}
 	if err == nil {
 		err = chunks.flush()
 	}
@@ -344,7 +359,7 @@ func (svc *service) WriteFile(stream grpc.ClientStreamingServer[sandboxv1.WriteF
 	if err != nil || header == nil || header.GetSize() < 0 {
 		invalid = errWriteStream.Error()
 	}
-	call, err := svc.beginFile(stream.Context(), kindFileWrite, header.GetPath(), invalid)
+	call, err := svc.beginFile(stream.Context(), kindFileWrite, header.GetPath(), invalid, fileWindow{})
 	if err != nil {
 		return err
 	}
@@ -403,13 +418,14 @@ func (reader *streamReader) Read(buffer []byte) (int, error) {
 // no exit code, so the field carries refusedExitCode; status says what
 // happened. Written content follows the stdin rules; a read records only its
 // size and, when completed, the digest of what was sent.
-func (session *bridgeSession) recordFile(kind, filePath string, sink *contentSink, truncated bool, duration int64, statusText, message string) {
+func (call *fileCall) recordFile(sink *contentSink, truncated bool, duration int64, statusText, message string) {
+	session, kind := call.session, call.kind
 	record := toolCallRecord{ToolCallRecord: bridgekit.ToolCallRecord{
-		OperationClass: kind, Path: filePath,
-		ExitCode: refusedExitCode, DurationMS: duration, Status: statusText, Error: message,
-		StdinEncoding: "utf-8",
-	}, Truncated: truncated}
-	raw := rawGRPCRecord{OperationClass: kind, Path: filePath}
+		OperationClass: kind, Path: call.path,
+		ExitCode: refusedExitCode, StartedAt: bridgekit.FormatTime(call.started), DurationMS: duration, Status: statusText, Error: message,
+		StdinEncoding: "utf-8", ToolCallID: call.toolCallID,
+	}, Truncated: truncated, fileWindow: call.window}
+	raw := rawGRPCRecord{OperationClass: kind, Path: call.path}
 	if sink != nil {
 		if statusText == "completed" {
 			record.SHA256 = hex.EncodeToString(sink.hash.Sum(nil))

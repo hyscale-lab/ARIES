@@ -45,11 +45,18 @@ type ToolCallRecord struct {
 	StdoutBytes    int64    `json:"stdout_bytes"`
 	StderrBytes    int64    `json:"stderr_bytes"`
 	ExitCode       int      `json:"exit_code"`
+	StartedAt      string   `json:"started_at"`
 	DurationMS     int64    `json:"duration_ms"`
 	Status         string   `json:"status"`
 	Error          string   `json:"error,omitempty"`
 	RunID          string   `json:"run_id,omitempty"`
 	TaskID         string   `json:"task_id,omitempty"`
+	ToolCallID     string   `json:"tool_call_id,omitempty"`
+}
+
+// FormatTime gives started_at and timestamp one format.
+func FormatTime(at time.Time) string {
+	return at.UTC().Format(time.RFC3339Nano)
 }
 
 // Stamp is promoted to each transport's record, which embeds ToolCallRecord
@@ -131,7 +138,7 @@ func (writer *AuditWriter) Enqueue(structured Record, raw RawRecord) {
 		return
 	}
 	sequence := writer.sequence + 1
-	timestamp := writer.now().UTC().Format(time.RFC3339Nano)
+	timestamp := FormatTime(writer.now())
 	structured.Stamp(sequence, timestamp)
 	structuredLine, err := writer.marshal(structured)
 	if err != nil {

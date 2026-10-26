@@ -24,8 +24,15 @@ The command grammar one harness speaks for tool calls over SSH. The gRPC transpo
 calls and no dialect.
 _Avoid_: wire grammar
 
+**Tool call**:
+One model-level tool invocation by the agent harness, such as a Hermes `read_file`.
+
+**Sandbox call**:
+One operation the tool bridge carries into the sandbox: an exec, a stat, a read or a write. One
+tool call gives one or more sandbox calls.
+
 **Tool-call record**:
-One structured line of `tool-calls.jsonl` per tool call. Its format is the same for every
+One structured line of `tool-calls.jsonl` per sandbox call. Its format is the same for every
 transport.
 
 **Raw log**:

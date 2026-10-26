@@ -110,7 +110,8 @@ func (session *bridgeSession) execute(ctx context.Context, channel gossh.Channel
 		Argv:  append([]string{prepared.Command.Path}, prepared.Command.Args...),
 		Stdin: stdinContent, StdinEncoding: stdinEncoding,
 		StdinBytes: stdinBytes, StdoutBytes: stdout.count(), StderrBytes: stderr.count(),
-		ExitCode: exitCode, DurationMS: time.Since(started).Milliseconds(), Status: status, Error: message,
+		ExitCode: exitCode, StartedAt: bridgekit.FormatTime(started), DurationMS: time.Since(started).Milliseconds(),
+		Status: status, Error: message,
 	}, RequestType: audit.requestType, WantReply: audit.wantReply,
 	}, rawRecord(audit, stdinBytes, rawStdin, status))
 	return exitCode
@@ -131,8 +132,9 @@ func (session *bridgeSession) logRequestFailure(audit requestAudit, kind, status
 		StdinEncoding: "utf-8",
 		// The request never ran, so the record must not carry the exit code of
 		// a successful command.
-		ExitCode: session.dialect.Policy().RefusedExitCode,
-		Status:   status, Error: message,
+		ExitCode:  session.dialect.Policy().RefusedExitCode,
+		StartedAt: bridgekit.FormatTime(time.Now()),
+		Status:    status, Error: message,
 	}, RequestType: audit.requestType, WantReply: audit.wantReply,
 	}, rawRecord(audit, 0, nil, status))
 }

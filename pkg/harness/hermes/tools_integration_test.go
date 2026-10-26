@@ -45,9 +45,17 @@ print("TOOL", terminal_tool(command="echo aries-tool-ok && pwd", task_id="tool-p
 from tools.file_tools import read_file_tool, write_file_tool
 print("WRITE", write_file_tool(path="/work/e2e/note.txt", content="first line\nsecond line\n", task_id="tool-probe"))
 print("READ", read_file_tool(path="/work/e2e/note.txt", offset=2, limit=1, task_id="tool-probe"))
+from model_tools import handle_function_call
+print("DISPATCHED_READ", handle_function_call("read_file", {"path": "/work/e2e/note.txt", "offset": 2, "limit": 2},
+    task_id="tool-probe", tool_call_id="` + probeToolCallID + `"))
 print("CHECK", terminal_tool(command="cat /work/e2e/note.txt", task_id="tool-probe"))
 print("ROOT", read_file_tool(path="/", task_id="tool-probe"))
 `
+
+// probeToolCallID is the id the probe gives its one dispatched read_file, as
+// the model's tool call would. That read asks for another window than the
+// direct read, so Hermes's read dedup does not answer it from memory.
+const probeToolCallID = "call_probe_read"
 
 // syncPrefixes are the commands Hermes's FileSyncManager sends to a remote
 // backend (tools/environments/file_sync.py, ssh.py). The gRPC backend builds
@@ -170,12 +178,22 @@ func TestPluginRunsHermesToolsThroughTheGRPCBridge(t *testing.T) {
 			Path           string `json:"path"`
 			Command        string `json:"command"`
 			Status         string `json:"status"`
+			FirstLine      int64  `json:"first_line"`
+			ToolCallID     string `json:"tool_call_id"`
 		}
 		if err := json.Unmarshal(line, &record); err != nil {
 			t.Fatalf("decode record: %v\n%s", err, line)
 		}
 		if record.Status == "rejected" {
 			t.Fatalf("the bridge rejected a call: %s", line)
+		}
+		// Only the dispatched read_file runs inside a Hermes tool call, so it
+		// alone gives its sandbox calls an id, and all of them share it.
+		if record.ToolCallID != "" {
+			if record.ToolCallID != probeToolCallID || record.Path != "/work/e2e/note.txt" {
+				t.Fatalf("a sandbox call has a wrong tool call id: %s", line)
+			}
+			seen["dispatched "+record.OperationClass] = true
 		}
 		for _, prefix := range syncPrefixes {
 			if strings.HasPrefix(record.Command, prefix) {
@@ -186,17 +204,21 @@ func TestPluginRunsHermesToolsThroughTheGRPCBridge(t *testing.T) {
 			t.Fatalf("a Hermes home path reached the bridge: %s", line)
 		}
 		switch {
-		case record.OperationClass == "agent" && strings.Contains(record.Command, "echo aries-tool-ok"):
+		case record.OperationClass == "exec" && strings.Contains(record.Command, "echo aries-tool-ok"):
 			seen["terminal"] = true
-		case record.OperationClass == "agent" && strings.Contains(record.Command, "cat /work/e2e/note.txt"):
+		case record.OperationClass == "exec" && strings.Contains(record.Command, "cat /work/e2e/note.txt"):
 			seen["check"] = true
+		// Only a line read records a window, so first_line tells it from a
+		// whole read.
+		case record.Path == "/work/e2e/note.txt" && record.OperationClass == "read" && record.FirstLine > 0:
+			seen["line read"] = true
 		case record.Path == "/work/e2e/note.txt":
 			seen[record.OperationClass] = true
-		case record.Path == "/" && record.OperationClass == "Stat" && record.Status == "completed":
+		case record.Path == "/" && record.OperationClass == "stat" && record.Status == "completed":
 			seen["root stat"] = true
 		}
 	}
-	for _, want := range []string{"terminal", "check", "WriteFile", "ReadLines", "root stat"} {
+	for _, want := range []string{"terminal", "check", "write", "line read", "root stat", "dispatched stat", "dispatched read"} {
 		if !seen[want] {
 			t.Fatalf("no %s record in tool-calls.jsonl:\n%s", want, log)
 		}

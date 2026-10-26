@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Stand-in for aries-grpc in the plugin test: the same argv, stdout, stderr
 and exit-code contract, served from the local filesystem instead of a bridge.
-Every invocation is appended to $FAKE_CLIENT_LOG."""
+Every invocation is appended to $FAKE_CLIENT_LOG with its argv and its
+ARIES_TOOL_CALL_ID (null when the variable is not set)."""
 import json
 import os
 import subprocess
@@ -9,7 +10,7 @@ import sys
 
 args = sys.argv[1:]
 with open(os.environ["FAKE_CLIENT_LOG"], "a") as log:
-    log.write(json.dumps(args) + "\n")
+    log.write(json.dumps({"argv": args, "tool_call_id": os.environ.get("ARIES_TOOL_CALL_ID")}) + "\n")
 
 if args[0] == "exec":
     login = "--login" in args
