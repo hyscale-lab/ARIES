@@ -168,7 +168,20 @@ if [ "$skip_cluster" = false ]; then
   fi
   echo "==> Checking out Invitro $INVITRO_REVISION"
   git -C "$invitro" fetch -q origin
+  stabilize_go=scripts/setup/cluster/setup_knative.go
+  git -C "$invitro" checkout -q -- "$stabilize_go"
   git -C "$invitro" checkout -q --detach "$INVITRO_REVISION"
+
+  # Invitro's stabilize.sh ends with `modprobe kvm_intel` for its Firecracker
+  # mode, and its exit status is that of this last line. ARIES runs plain
+  # containers and needs no KVM, so accept a failure on nodes without
+  # /dev/kvm. Nodes with KVM still fail on any error.
+  stabilize='"~/loader/scripts/setup/stabilize.sh"'
+  sed "s#$stabilize#\"~/loader/scripts/setup/stabilize.sh || test ! -e /dev/kvm\"#" \
+    "$invitro/$stabilize_go" >"$invitro/$stabilize_go.new"
+  mv "$invitro/$stabilize_go.new" "$invitro/$stabilize_go"
+  grep -q 'stabilize.sh || test ! -e /dev/kvm' "$invitro/$stabilize_go" ||
+    { echo "could not patch the stabilize step in Invitro's $stabilize_go" >&2; exit 1; }
 
   # Invitro reads its settings from a config directory. Work on a private copy
   # of its own defaults so the checkout stays pristine.
