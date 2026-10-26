@@ -29,7 +29,7 @@ func (r *lifecycleRuntime) DownloadArchive(context.Context, string, string) (io.
 	if r.downloadErr != nil {
 		return nil, deployment.FileInfo{}, r.downloadErr
 	}
-	return evidenceArchive(), deployment.FileInfo{Size: int64(len(evidenceContent())), Mode: 0600}, nil
+	return evidenceArchive("tool-calls.jsonl"), deployment.FileInfo{Size: int64(len(evidenceContent())), Mode: 0600}, nil
 }
 
 type releaseClient struct {
@@ -46,8 +46,8 @@ func (c *releaseClient) ReleaseSandbox(context.Context, *v1.SandboxRequest, ...g
 func fixtureSession(t *testing.T) (*Session, *lifecycleRuntime, *releaseClient) {
 	t.Helper()
 	r := &lifecycleRuntime{running: true}
-	c := &releaseClient{access: &v1.SandboxAccess{SandboxId: "sandbox", State: v1.State_RELEASED, Artifacts: evidenceManifest()}}
-	service := &Service{options: Options{Runtime: r}, runtimeID: "runtime", client: c, state: "running"}
+	c := &releaseClient{access: &v1.SandboxAccess{SandboxId: "sandbox", State: v1.State_RELEASED, Artifacts: evidenceManifest("tool-calls.jsonl")}}
+	service := &Service{options: Options{Runtime: r}, runtimeID: "runtime", client: c, state: "running", transport: "ssh"}
 	s := &Session{service: service, descriptor: core.BridgeTarget{SandboxID: "sandbox"}, registered: true, local: t.TempDir(), remote: "remote"}
 	service.sessions = []*Session{s}
 	return s, r, c

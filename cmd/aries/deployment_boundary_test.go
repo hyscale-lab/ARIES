@@ -65,7 +65,7 @@ func productionImports(t *testing.T, root string, recursive bool) map[string][]s
 }
 
 func TestBridgeLifecycleAndEngineDoNotImportDialects(t *testing.T) {
-	for _, component := range []string{"pkg/bridge", "pkg/bridge/ssh"} {
+	for _, component := range []string{"pkg/bridge", "pkg/bridge/ssh", "pkg/bridge/internal/bridgekit"} {
 		root := filepath.Join("..", "..", filepath.FromSlash(component))
 		for path, imports := range productionImports(t, root, false) {
 			for _, imported := range imports {

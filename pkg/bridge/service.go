@@ -47,6 +47,7 @@ type Service struct {
 	sessions                   []*Session
 	removed, runtimeClosed     bool
 	allocationErr, shutdownErr error
+	transport                  string
 }
 
 func NewService(options Options) (*Service, error) {
@@ -63,8 +64,9 @@ func NewService(options Options) (*Service, error) {
 	if launch.Request.Workdir == "" || launch.Config.OutputDir == "" || launch.Config.ControlAddress == "" || launch.Request.ServicePort <= 0 || launch.Request.ServicePort > 65535 {
 		return nil, errors.New("bridge requires explicit staging, evidence and control addresses")
 	}
-	if options.BridgeType == "" {
-		return nil, errors.New("bridge native type is required")
+	transport := transportOf(options.BridgeType)
+	if transport == "" {
+		return nil, errors.New("bridge native type has no known transport")
 	}
 	if (options.Client.Command == "") != (options.Client.SourcePath == "") {
 		return nil, errors.New("bridge client helper requires source and destination")
@@ -80,7 +82,7 @@ func NewService(options Options) (*Service, error) {
 			return nil, err
 		}
 	}
-	return &Service{options: options, state: "new"}, nil
+	return &Service{options: options, state: "new", transport: transport}, nil
 }
 func nonce() (string, error) {
 	var b [12]byte

@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgekit"
 	bridgessh "github.com/hyscale-lab/aries/pkg/bridge/ssh"
 	"github.com/hyscale-lab/aries/pkg/bridge/ssh/internal/testfixture"
 	"github.com/hyscale-lab/aries/pkg/core"
@@ -202,7 +203,7 @@ func TestBridgeProxiesHermesCommandsAndRetainsEvidence(t *testing.T) {
 		t.Fatalf("commands = %#v", commands)
 	}
 	command := commands[0]
-	if command.Path != remoteShellPath || len(command.Args) != 2 || command.Args[0] != "-c" {
+	if command.Path != bridgekit.RemoteShellPath || len(command.Args) != 2 || command.Args[0] != "-c" {
 		t.Fatalf("command = %#v", command)
 	}
 	if command.Dir != "/app" {

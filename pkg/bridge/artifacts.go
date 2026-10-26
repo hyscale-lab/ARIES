@@ -25,11 +25,13 @@ type Artifact struct {
 	SHA256 string
 }
 
-func evidenceName(name string) bool { return name == "tool-calls.jsonl" || name == "ssh_raw.log" }
-func finalizeArtifacts(root string, names []string) ([]Artifact, error) {
+func evidenceName(name, transport string) bool {
+	return name == "tool-calls.jsonl" || name == rawLogName(transport)
+}
+func finalizeArtifacts(root, transport string, names []string) ([]Artifact, error) {
 	result := make([]Artifact, 0, len(names))
 	for _, name := range names {
-		if !evidenceName(name) {
+		if !evidenceName(name, transport) {
 			return nil, errors.New("unexpected evidence name")
 		}
 		f, err := os.OpenRoot(root)
@@ -74,8 +76,8 @@ func archiveFiles(files map[string][]byte) ([]byte, error) {
 	}
 	return buffer.Bytes(), nil
 }
-func collectArtifact(ctx context.Context, runtime deployment.Runtime, id, remote, local string, entry Artifact) error {
-	if !evidenceName(entry.Name) || entry.Size < 0 || entry.Size > maxArtifactBytes {
+func collectArtifact(ctx context.Context, runtime deployment.Runtime, id, remote, local, transport string, entry Artifact) error {
+	if !evidenceName(entry.Name, transport) || entry.Size < 0 || entry.Size > maxArtifactBytes {
 		return errors.New("invalid evidence manifest")
 	}
 	stream, info, err := runtime.DownloadArchive(ctx, id, filepath.Join(remote, entry.Name))

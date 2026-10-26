@@ -7,7 +7,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
@@ -15,7 +14,6 @@ import (
 	v1 "github.com/hyscale-lab/aries/pkg/bridge/control/v1"
 	"github.com/hyscale-lab/aries/pkg/bridge/target"
 	"github.com/hyscale-lab/aries/pkg/core"
-	"golang.org/x/crypto/ssh"
 )
 
 type bootstrapBackend struct{ target.Backend }
@@ -44,7 +42,7 @@ func (n *cleanupNative) Stop(ctx context.Context) error {
 	}
 	return os.WriteFile(filepath.Join(n.root, "tool-calls.jsonl"), []byte("finalized evidence"), 0600)
 }
-func TestServeSharesHostSignerAndSurvivesIndependentReleases(t *testing.T) {
+func TestServeSurvivesIndependentReleases(t *testing.T) {
 	root := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -52,14 +50,9 @@ func TestServeSharesHostSignerAndSurvivesIndependentReleases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var mu sync.Mutex
-	var keys []string
 	done := make(chan error, 1)
 	go func() {
-		done <- serve(ctx, ServeOptions{Config: LaunchConfig{RunID: "run", Backend: "fixture", OutputDir: root}, Backend: bootstrapBackend{}, NewNative: func(signer ssh.Signer, id, output string) (NativeServer, error) {
-			mu.Lock()
-			keys = append(keys, string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
-			mu.Unlock()
+		done <- serve(ctx, ServeOptions{Config: LaunchConfig{RunID: "run", BridgeType: "hermes-ssh", Backend: "fixture", OutputDir: root}, Backend: bootstrapBackend{}, NewNative: func(id, output string) (NativeServer, error) {
 			if output != filepath.Join(root, id) {
 				return nil, errors.New("cross-sandbox evidence path")
 			}
@@ -102,11 +95,6 @@ func TestServeSharesHostSignerAndSurvivesIndependentReleases(t *testing.T) {
 		t.Fatal("idle service exited", err)
 	default:
 	}
-	mu.Lock()
-	if len(keys) != 3 || keys[0] != keys[1] || keys[1] != keys[2] {
-		t.Fatal("signer changed across sessions")
-	}
-	mu.Unlock()
 	cancel()
 	select {
 	case err := <-done:
@@ -126,5 +114,28 @@ func TestServeSharesHostSignerAndSurvivesIndependentReleases(t *testing.T) {
 func TestServeRequiresRunAndInjectedFactory(t *testing.T) {
 	if err := Serve(context.Background(), ServeOptions{}); err == nil {
 		t.Fatal("missing run/factory admitted")
+	}
+}
+func TestReleaseNamesRawLogByTransport(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"tool-calls.jsonl", "ssh_raw.log"} {
+		if err := os.WriteFile(filepath.Join(root, name), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := &nativeSandbox{options: ServeOptions{Config: LaunchConfig{RetainRawLog: true}}, transport: "ssh", root: root, ready: true}
+	artifacts, err := s.Release(context.Background())
+	if err != nil || len(artifacts) != 2 || artifacts[1].Name != "ssh_raw.log" {
+		t.Fatal(artifacts, err)
+	}
+}
+func TestServeRejectsBridgeTypeWithoutTransport(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := Serve(ctx, ServeOptions{Config: LaunchConfig{RunID: "run", BridgeType: "fixture-ssh", ControlAddress: "127.0.0.1:0"}, Backend: bootstrapBackend{}, NewNative: func(string, string) (NativeServer, error) {
+		return nil, errors.New("unused")
+	}})
+	if err == nil {
+		t.Fatal("bridge type without transport accepted")
 	}
 }

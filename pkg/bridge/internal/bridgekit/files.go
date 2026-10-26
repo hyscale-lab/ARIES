@@ -1,4 +1,4 @@
-package ssh
+package bridgekit
 
 import (
 	"errors"
@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 )
 
-func ensurePrivateDirectory(path string) error {
+func EnsurePrivateDirectory(path string) error {
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		return err
 	}
