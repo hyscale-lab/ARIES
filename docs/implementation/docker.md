@@ -63,6 +63,23 @@ The sandbox confines downloads to its output root, validates tar content, and
 publishes private files atomically. Missing-source errors require an existing
 runtime. Harnesses check effective staged file permissions during readiness.
 
+[Typed file operations](../../pkg/deployment/docker/files.go) give a borrowed
+bridge target stat, read and atomic write of one file. Stat and read use the
+archive API and act as the daemon, so as root. A read stats first: the container
+root and any other directory give their info and an empty stream, and no archive
+starts. A path under a file and a dangling symlink do not exist. A write acts as
+the user of the agent's shell (the exec user, or the image `USER`). One `/bin/sh`
+exec as that user creates the missing parents and checks write access, the
+daemon uploads a dot-named temporary file, and a second exec renames it into
+place. A path that the user cannot write gives a permission error. A directory,
+the root included, is refused before any exec or upload. A cancel before the
+rename never lands the write and removes the temporary file. A rename that has
+started runs to its end on its own bounded context, and the call reports its
+real result. Parents created by a failed write remain. The access check and the
+upload are separate steps, so an agent that owns an ancestor directory can swap
+a directory for a symlink between them. tmpfs mounts, for example `/dev/shm`,
+are not visible to the archive API and read as missing.
+
 ## Removal and observation
 
 Container cleanup inspects, stops or kills as needed, removes the runtime and

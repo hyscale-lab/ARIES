@@ -19,16 +19,18 @@ import (
 	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgekit"
 	bridgessh "github.com/hyscale-lab/aries/pkg/bridge/ssh"
 	"github.com/hyscale-lab/aries/pkg/bridge/ssh/internal/testfixture"
+	"github.com/hyscale-lab/aries/pkg/bridge/target"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"golang.org/x/crypto/ssh"
 )
 
 type testSandbox struct {
-	mu       sync.Mutex
-	commands []core.Command
-	stdins   [][]byte
-	result   core.CommandResult
-	block    chan struct{}
+	target.Executor // file operations are unused by SSH
+	mu              sync.Mutex
+	commands        []core.Command
+	stdins          [][]byte
+	result          core.CommandResult
+	block           chan struct{}
 }
 
 func (sandbox *testSandbox) Exec(_ context.Context, command core.Command) (core.CommandResult, error) {

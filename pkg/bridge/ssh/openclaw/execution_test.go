@@ -14,13 +14,15 @@ import (
 
 	bridgessh "github.com/hyscale-lab/aries/pkg/bridge/ssh"
 	"github.com/hyscale-lab/aries/pkg/bridge/ssh/internal/testfixture"
+	"github.com/hyscale-lab/aries/pkg/bridge/target"
 	"github.com/hyscale-lab/aries/pkg/core"
 	gossh "golang.org/x/crypto/ssh"
 )
 
 type recordingExecutor struct {
-	mu       sync.Mutex
-	commands []core.Command
+	target.Executor // file operations are unused by SSH
+	mu              sync.Mutex
+	commands        []core.Command
 }
 
 func (*recordingExecutor) ContainerID() string   { return "container" }
