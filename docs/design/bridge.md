@@ -83,8 +83,10 @@ harness an endpoint with that transport as its protocol
   unchanged. See [SSH bridges](../implementation/ssh-bridges.md).
 - **gRPC.** The `aries.sandbox.v1` service has typed calls and no dialect:
   `Exec` carries a script, stdin, and a login flag, and four file procedures
-  carry a path and bytes. A staged `aries-grpc-client` carries the calls. See
-  [gRPC bridge](../implementation/grpc-bridge.md).
+  carry a path and bytes. Hermes is its harness: the ARIES Hermes plugin runs a
+  staged `aries-grpc-client`, which carries the calls. See
+  [gRPC bridge](../implementation/grpc-bridge.md) and
+  [Hermes over gRPC](../implementation/harnesses.md#hermes-over-grpc).
 
 Both transports write the same tool-call record rules to `tool-calls.jsonl`
 (see [evidence](#evidence-and-substitution)), and each writes its optional raw

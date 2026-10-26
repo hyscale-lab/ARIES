@@ -1,0 +1,92 @@
+{
+  "name": "hermes-drb-smoke1-grpc-deepseek-k8s-pods",
+  "versions_file": "../../configs/versions.json",
+  "overrides_file": "",
+  "execution": {
+    "concurrency": 1
+  },
+  "benchmark": {
+    "type": "deepresearchbench",
+    "root": ".cache/deep-research-bench",
+    "tasks": [
+      "1"
+    ],
+    "environment": {
+      "image": "ihasfarm/aries-deepresearchbench:latest",
+      "workdir": "/workspace"
+    },
+    "fact": {
+      "jina_api_key_env": "JINA_API_KEY"
+    },
+    "judge": {
+      "provider": "deepseek",
+      "base_url": "https://api.deepseek.com",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "id": "deepseek-flash",
+      "reasoning_effort": "low"
+    }
+  },
+  "harness": {
+    "type": "hermes",
+    "web_search": {
+      "enabled": true,
+      "extract_api_key_env": "TAVILY_API_KEY"
+    },
+    "subagents": {
+      "enabled": false
+    },
+    "deployment": {
+      "backend": "kubernetes",
+      "kubernetes": {
+        "namespace": "aries",
+        "images": {
+          "aries-local/hermes": "ghcr.io/hyscale-lab/aries-hermes"
+        },
+        "node_selector": {
+          "loader-nodetype": "worker"
+        }
+      }
+    }
+  },
+  "sandbox": {
+    "deployment": {
+      "backend": "kubernetes",
+      "kubernetes": {
+        "namespace": "aries",
+        "pod_cidr": "10.168.0.0/16",
+        "service_cidr": "10.96.0.0/12",
+        "node_selector": {
+          "loader-nodetype": "worker"
+        }
+      }
+    }
+  },
+  "bridge": {
+    "deployment": {
+      "backend": "kubernetes",
+      "kubernetes": {
+        "namespace": "aries",
+        "service_account": "aries-bridge",
+        "images": {
+          "aries-bridge": "ghcr.io/hyscale-lab/aries-bridge"
+        },
+        "node_selector": {
+          "loader-nodetype": "worker"
+        }
+      }
+    },
+    "type": "hermes-grpc",
+    "mode": "managed"
+  },
+  "runtime": {
+    "backend": "deepseek",
+    "mode": "external"
+  },
+  "model": {
+    "base_url": "https://api.deepseek.com",
+    "api_key_env": "DEEPSEEK_API_KEY",
+    "id": "deepseek-flash",
+    "reasoning_effort": "low"
+  },
+  "output_dir": "runs"
+}

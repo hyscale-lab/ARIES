@@ -111,7 +111,9 @@ Checked-in profiles select harness identity and placement separately:
 
 This is a profile fragment; keep the benchmark, model, runtime, and other
 settings from a complete checked-in profile. OpenClaw uses `harness.type:
-"openclaw"` with `bridge.type: "openclaw-ssh"`. Pairing is checked independently
+"openclaw"` with `bridge.type: "openclaw-ssh"`. Hermes uses `hermes-ssh` or
+`hermes-grpc`; the bridge type also selects the run's
+[transport](design/bridge.md#transports). Pairing is checked independently
 of placement.
 
 The separate blocks express independent component placement, so the schema does
@@ -155,7 +157,8 @@ For the Kubernetes backend, `make k8s-images` builds the bridge on
 `bridge.kubernetes_base_image` instead, which supplies `kubectl`; bump it with
 the Kubernetes version the pinned Invitro installs.
 Image preparation uses the selected daemon. Checked-in Docker bridge examples
-include [Hermes](../profiles/hermes-tb2-fix-git-deepseek.json) and
+include [Hermes](../profiles/hermes-tb2-fix-git-deepseek.json),
+[Hermes over gRPC](../profiles/hermes-tb2-fix-git-grpc-deepseek.json), and
 [OpenClaw](../profiles/openclaw-tb2-fix-git-deepseek.json).
 
 ### Kubernetes deployment
@@ -208,7 +211,8 @@ sandbox gets its own NetworkPolicy and the effective run policy is
 as SWE-bench Pro, must start as root and provide `setpriv` from `util-linux`;
 the upstream SWE-bench Pro images already do, so it needs no extra step.
 Checked-in examples are
-[Hermes](../profiles/kubernetes/hermes-tb2-fix-git-deepseek-k8s-pods.json) and
+[Hermes](../profiles/kubernetes/hermes-tb2-fix-git-deepseek-k8s-pods.json),
+[Hermes over gRPC](../profiles/kubernetes/hermes-tb2-fix-git-grpc-deepseek-k8s-pods.json), and
 [OpenClaw](../profiles/kubernetes/openclaw-tb2-fix-git-deepseek-k8s-pods.json). See the
 [Kubernetes implementation](implementation/kubernetes.md) for its constraints
 and [`k8s/`](../k8s/README.md) for cluster setup.
@@ -674,11 +678,26 @@ Hermes supports text and [voice-transcribe](voice_mode.md). Preparation builds
 a local image from the pinned upstream one with only the `hermes-otel` plugin
 added, once per machine (the first build needs GitHub and PyPI access and takes
 about 20 seconds), and Hermes runs it. It is paired
-with `bridge.type: "hermes-ssh"`; the two values must match, and a crossed pair
-is rejected before the run starts. Hermes issues every tool call as `bash -c`,
-so the task image must provide `/bin/bash`. Its `~/.hermes` file sync is refused by
+with `bridge.type: "hermes-ssh"` or `"hermes-grpc"`; a crossed pair with
+OpenClaw is rejected before the run starts. Hermes issues every tool call as `bash -c`,
+so the task image must provide `/bin/bash`. On SSH, its `~/.hermes` file sync is refused by
 the bridge to keep the evaluated sandbox free of harness scaffold and
 credentials; Hermes logs one `file_sync: sync failed` warning and continues.
+On gRPC, Hermes uses the ARIES terminal backend, which syncs nothing; see
+[Hermes over gRPC](implementation/harnesses.md#hermes-over-grpc). The `-grpc`
+profiles are copies of Hermes SSH profiles with only `bridge.type` and `name`
+changed. The Terminal-Bench 2 one needs the same setup as above:
+
+```sh
+./bin/aries profiles/hermes-tb2-fix-git-grpc-deepseek.json
+```
+
+`hermes-sbpro-smoke1-grpc-deepseek.json` and `hermes-drb-smoke1-grpc-deepseek.json`
+need the setup of their benchmark guides:
+[SWE-bench Pro](benchmarks/swe-bench-pro.md) and
+[Deep Research Bench](benchmarks/deep-research-bench.md). The same three
+benchmarks have Kubernetes `-grpc` profiles in `profiles/kubernetes/`, beside
+the Hermes SSH ones.
 
 Hermes reserves environment names beginning with `API_SERVER_` for its Gateway.
 Do not use them as `model.api_key_env` or MCP `secret_env` source names. MCP
