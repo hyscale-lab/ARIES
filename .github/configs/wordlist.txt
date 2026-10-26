@@ -237,3 +237,8 @@ busybox
 coreutils
 tmpfs
 posix
+kib
+mb
+sha
+stat
+unary

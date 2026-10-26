@@ -144,11 +144,13 @@ supplies the required Docker socket mount explicitly; component labels do not
 grant access. The harness and sandbox never receive that socket. The bridge has daemon authority
 like Runner, even though each session's execution adapter validates one fixed target.
 
-The bridge runtime runs `aries-bridge` from the same build as `aries-ssh-client`.
-`make build` produces both alongside Runner. `make bridge-image` builds the Docker
+The bridge runtime runs `aries-bridge` from the same build as `aries-ssh-client`
+and `aries-grpc-client`. `make build` produces all three alongside Runner.
+`make bridge-image` builds the Docker
 image containing only `aries-bridge`, using `bridge.image` and `bridge.base_image`
 from the version catalog. Runner stages the separate `aries-ssh-client` binary
-directly into the OpenClaw harness; the bridge container does not need that client.
+directly into the OpenClaw harness, and `aries-grpc-client` into the harness of
+a `hermes-grpc` run; the bridge container does not need either client.
 For the Kubernetes backend, `make k8s-images` builds the bridge on
 `bridge.kubernetes_base_image` instead, which supplies `kubectl`; bump it with
 the Kubernetes version the pinned Invitro installs.
@@ -212,9 +214,10 @@ Checked-in examples are
 and [`k8s/`](../k8s/README.md) for cluster setup.
 
 Bridge addresses come from deployment resolution, not profile fields. Plaintext,
-unauthenticated gRPC control and harness-facing SSH use separate endpoints.
-Control has no TLS certificates or bearer tokens. SSH accepts unauthenticated
-clients, retaining one in-memory service host key for the handshake. No SSH client
+unauthenticated gRPC control and the harness-facing transport (SSH or gRPC)
+use separate endpoints. Control has no TLS certificates or bearer tokens. Both
+transports accept unauthenticated clients. SSH retains one in-memory service
+host key for the handshake. No SSH client
 keys or known-hosts files are staged. The shared service creates a dynamic listener
 per sandbox and deployment resolves its harness-reachable endpoint. Runner
 explicitly releases each sandbox session; run cleanup removes the service.
@@ -854,4 +857,5 @@ Changing the main agent's generation settings does not change FACT requests.
 - `harness.mcp_servers`: see [MCP configuration and boundaries](implementation/harnesses.md#model-context-protocol-mcp).
 - `harness.voice_transcribe`: see the [voice guide](voice_mode.md).
 - `bridge.retain_raw_log`: defaults to false. Enabling it retains sensitive,
-  replayable SSH input; see [run artifacts](run-results.md#bridge-evidence).
+  replayable tool-call input in `<transport>_raw.log` (`ssh_raw.log` or
+  `grpc_raw.log`); see [run artifacts](run-results.md#bridge-evidence).

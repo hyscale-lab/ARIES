@@ -42,7 +42,7 @@ flowchart LR
     R -. "port-forward: gRPC control" .-> B
     R -. "pod metrics" .-> PROM
     H -- "model requests" --> M
-    H -- "SSH tool calls" --> B
+    H -- "SSH or gRPC tool calls" --> B
     B -- "kubectl exec" --> S
     NP -.- S
 ```
@@ -58,7 +58,7 @@ ingress.
 | --- | --- | --- |
 | Sandbox pod | One per task occurrence, plus fresh evaluation sandboxes | Runner and bridge, through `kubectl exec` |
 | Harness pod | One per task occurrence | Runner, through a port-forward to its gateway |
-| Bridge pod | One per run | Runner (gRPC control, port-forward); harness pods (SSH, pod address) |
+| Bridge pod | One per run | Runner (gRPC control, port-forward); harness pods (SSH or gRPC, pod address) |
 
 Harness, sandbox and bridge must all select the Kubernetes backend and the same
 namespace. The bridge pod execs into sandbox pods and harness pods dial the
@@ -174,7 +174,7 @@ remaining parents behave as on Docker.
 `kubectl port-forward` on a reserved loopback port, restarted on that same port
 if kubectl loses its connection. When the Runner itself runs in a pod it is the
 target's pod address. `TaskAddress` is always the pod address, which is how
-harness pods reach the bridge's per-sandbox SSH listeners.
+harness pods reach the bridge's per-sandbox SSH or gRPC listeners.
 
 ## Network isolation
 
@@ -196,8 +196,8 @@ cannot be reached by another task. The bridge needs none, because exec goes
 through the API server. Leaving the CIDRs unset only widens what a
 network-allowed task may dial out to.
 
-The run environment owns one more policy, on the bridge pod. Its SSH listeners
-accept clients without authentication, so the policy admits only pods in the
+The run environment owns one more policy, on the bridge pod. Its SSH and gRPC
+tool listeners accept clients without authentication, so the policy admits only pods in the
 namespace that are not sandboxes. The reported run policy is
 `per-sandbox-policy`.
 

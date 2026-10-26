@@ -31,6 +31,8 @@ func transportOf(bridgeType string) string {
 	switch bridgeType {
 	case "hermes-ssh", "openclaw-ssh":
 		return "ssh"
+	case "hermes-grpc":
+		return "grpc"
 	}
 	return ""
 }

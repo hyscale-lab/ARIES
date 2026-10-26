@@ -7,6 +7,7 @@ and [benchmark guides](../design/benchmark.md) for setup and execution.
 
 - [Harness execution and configuration](harnesses.md)
 - [SSH protocol adaptation and revocation](ssh-bridges.md)
+- [gRPC transport, client, and revocation](grpc-bridge.md)
 - [Docker runtime and run-network management](docker.md)
 - [Kubernetes pods, staging gate, and network policies](kubernetes.md)
 - [Benchmark evaluation mechanisms](benchmarks.md)

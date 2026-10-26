@@ -442,15 +442,16 @@ type BridgeConfig struct {
 	Deployment DeploymentConfig `json:"deployment,omitempty"`
 	Mode       string           `json:"mode,omitempty"`
 	Type       string           `json:"type"`
-	// RetainRawLog keeps the bridge's byte-level ssh_raw.log. It defaults to
-	// false because that log is the largest artifact a run writes and captures
-	// raw wire commands, request payloads, and binary stdin; profiles that need
-	// that forensic record must opt in by setting it true.
+	// RetainRawLog keeps the bridge's byte-level <transport>_raw.log
+	// (ssh_raw.log or grpc_raw.log). It defaults to false because that log is
+	// the largest artifact a run writes and captures raw wire commands, request
+	// payloads, and binary stdin; profiles that need that forensic record must
+	// opt in by setting it true.
 	RetainRawLog *bool `json:"retain_raw_log,omitempty"`
 }
 
-// RetainBridgeRawLog reports whether ssh_raw.log should be written, defaulting
-// to false when a profile does not mention it.
+// RetainBridgeRawLog reports whether <transport>_raw.log should be written,
+// defaulting to false when a profile does not mention it.
 func (c BridgeConfig) RetainBridgeRawLog() bool {
 	return c.RetainRawLog != nil && *c.RetainRawLog
 }

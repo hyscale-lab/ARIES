@@ -314,7 +314,7 @@ func runHermesBridgeScenario(t *testing.T, cancelCommand bool, repetitions int, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	clientConfig, err := bridgewiring.SSHClientConfig("hermes-ssh", "")
+	clientConfig, err := bridgewiring.ClientConfig("hermes-ssh", "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -117,16 +117,18 @@ func TestServeRequiresRunAndInjectedFactory(t *testing.T) {
 	}
 }
 func TestReleaseNamesRawLogByTransport(t *testing.T) {
-	root := t.TempDir()
-	for _, name := range []string{"tool-calls.jsonl", "ssh_raw.log"} {
-		if err := os.WriteFile(filepath.Join(root, name), nil, 0600); err != nil {
-			t.Fatal(err)
+	for transport, rawLog := range map[string]string{"ssh": "ssh_raw.log", "grpc": "grpc_raw.log"} {
+		root := t.TempDir()
+		for _, name := range []string{"tool-calls.jsonl", rawLog} {
+			if err := os.WriteFile(filepath.Join(root, name), nil, 0600); err != nil {
+				t.Fatal(err)
+			}
 		}
-	}
-	s := &nativeSandbox{options: ServeOptions{Config: LaunchConfig{RetainRawLog: true}}, transport: "ssh", root: root, ready: true}
-	artifacts, err := s.Release(context.Background())
-	if err != nil || len(artifacts) != 2 || artifacts[1].Name != "ssh_raw.log" {
-		t.Fatal(artifacts, err)
+		s := &nativeSandbox{options: ServeOptions{Config: LaunchConfig{RetainRawLog: true}}, transport: transport, root: root, ready: true}
+		artifacts, err := s.Release(context.Background())
+		if err != nil || len(artifacts) != 2 || artifacts[1].Name != rawLog {
+			t.Fatal(artifacts, err)
+		}
 	}
 }
 func TestServeRejectsBridgeTypeWithoutTransport(t *testing.T) {

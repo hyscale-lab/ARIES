@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	managed "github.com/hyscale-lab/aries/pkg/bridge"
+	grpcbridge "github.com/hyscale-lab/aries/pkg/bridge/grpc"
 	sshbridge "github.com/hyscale-lab/aries/pkg/bridge/ssh"
 	"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw"
 	"github.com/hyscale-lab/aries/pkg/bridge/target"
@@ -89,7 +90,7 @@ func TestChildPresentsOneHostKeyOnEverySSHListener(t *testing.T) {
 }
 
 func TestChildSelectsTheNativeServerOfTheBridgeType(t *testing.T) {
-	for _, bridgeType := range []string{"hermes-ssh", "openclaw-ssh"} {
+	for _, bridgeType := range []string{"hermes-ssh", "openclaw-ssh", "hermes-grpc"} {
 		child, err := newNative(managed.LaunchConfig{BridgeType: bridgeType}, logrus.New())
 		if err != nil {
 			t.Fatal(err)
@@ -100,7 +101,8 @@ func TestChildSelectsTheNativeServerOfTheBridgeType(t *testing.T) {
 		}
 		_, manager := native.(*sshbridge.Manager)
 		_, server := native.(*openclaw.Server)
-		if manager != (bridgeType == "hermes-ssh") || server != (bridgeType == "openclaw-ssh") {
+		_, grpcManager := native.(*grpcbridge.Manager)
+		if manager != (bridgeType == "hermes-ssh") || server != (bridgeType == "openclaw-ssh") || grpcManager != (bridgeType == "hermes-grpc") {
 			t.Fatalf("%s selected %T", bridgeType, native)
 		}
 	}
