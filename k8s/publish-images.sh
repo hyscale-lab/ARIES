@@ -74,7 +74,8 @@ case "$host" in *.*|*:*|localhost) ;; *) host=docker.io ;; esac
 logged_in() {
   local config=${DOCKER_CONFIG:-$HOME/.docker}/config.json servers="" store=""
   [ -f "$config" ] || return 1
-  servers=$(sed -n 's/^ *"\([^"]*\)": *[{"].*/\1/p' "$config")
+  # The config can be a single line, so match keys anywhere on a line.
+  servers=$(grep -oE '"[^"]+"[[:space:]]*:[[:space:]]*[{"]' "$config" | sed 's/^"\([^"]*\)".*/\1/')
   store=$(sed -n 's/.*"credsStore": *"\([^"]*\)".*/\1/p' "$config")
   if [ -n "$store" ] && command -v "docker-credential-$store" >/dev/null; then
     servers="$servers
