@@ -1,6 +1,7 @@
 package bridgekit
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -22,4 +23,8 @@ func EnsurePrivateDirectory(path string) error {
 		return errors.New("directory path contains a symbolic link")
 	}
 	return os.Chmod(path, 0o700)
+}
+
+func HasCancellationCause(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }

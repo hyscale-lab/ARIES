@@ -4,6 +4,8 @@ The managed bridges implement the [ToolBridge contract](../design/bridge.md).
 They accept unauthenticated SSH clients and forward accepted commands through
 the sandbox streaming capability; Docker execution is supplied by the sandbox
 deployment through the Moby SDK.
+The `hermes-grpc` bridge type uses the gRPC transport instead; see
+[gRPC bridge](grpc-bridge.md).
 
 The [native-serving contract](../../pkg/bridge/bridge.go) separates protocol
 serving from the managed controller. One [SSH engine](../../pkg/bridge/ssh/bridge.go)

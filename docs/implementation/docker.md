@@ -19,10 +19,11 @@ sandbox services, including separate sandboxes for repeated task IDs. Effective
 `shared-egress` policy is recorded alongside preserved benchmark environment
 metadata; `AllowNetwork` does not create per-task isolated networks.
 
-One managed bridge container serves the run, with a dynamic SSH listener per live
-sandbox. gRPC control is plaintext and unauthenticated, published on host loopback.
-SSH clients also connect without authentication; one in-memory service host key
-is retained for the protocol. Neither client keys nor known-hosts files are staged.
+One managed bridge container serves the run, with a dynamic SSH or gRPC tool
+listener per live sandbox. gRPC control is plaintext and unauthenticated,
+published on host loopback. SSH and gRPC tool clients also connect without
+authentication; for SSH, one in-memory service host key is retained for the
+protocol. Neither client keys nor known-hosts files are staged.
 
 Composition supplies the bridge's Docker socket as an explicit mount. Deployment
 validates the declared source, destination and permissions; component labels do

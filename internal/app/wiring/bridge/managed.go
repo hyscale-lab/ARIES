@@ -17,7 +17,7 @@ func NewService(cfg config.Config, runID, outputRoot string, placement core.Runt
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}
-	client, err := SSHClientConfig(cfg.Bridge.Type, filepath.Join(filepath.Dir(executable), "aries-ssh-client"))
+	client, err := ClientConfig(cfg.Bridge.Type, filepath.Dir(executable))
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}

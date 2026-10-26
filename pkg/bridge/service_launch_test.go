@@ -280,8 +280,12 @@ func TestSessionMismatchDoesNotRemoveSharedRuntime(t *testing.T) {
 		t.Fatal(r.events)
 	}
 }
+
+// runTransports is the transport each bridge type gives its run.
+var runTransports = map[string]string{"hermes-ssh": "ssh", "openclaw-ssh": "ssh", "hermes-grpc": "grpc"}
+
 func TestSessionAcceptsOnlyTheRunTransport(t *testing.T) {
-	for _, bridgeType := range []string{"hermes-ssh", "openclaw-ssh"} {
+	for bridgeType, transport := range runTransports {
 		for _, wire := range []string{"ssh", "grpc"} {
 			t.Run(bridgeType+"/"+wire, func(t *testing.T) {
 				s, r, sandbox := launchFixtureWith(t, "docker", bridgeType, false)
@@ -294,13 +298,13 @@ func TestSessionAcceptsOnlyTheRunTransport(t *testing.T) {
 					t.Fatal(err)
 				}
 				endpoint, err := b.Start(context.Background(), sandbox)
-				if wire != "ssh" {
+				if wire != transport {
 					if err == nil {
 						t.Fatal("foreign transport accepted")
 					}
 					return
 				}
-				if err != nil || endpoint.Protocol != "ssh" {
+				if err != nil || endpoint.Protocol != transport {
 					t.Fatal(endpoint, err)
 				}
 			})
@@ -308,36 +312,39 @@ func TestSessionAcceptsOnlyTheRunTransport(t *testing.T) {
 	}
 }
 func TestRawLogNameFollowsTransport(t *testing.T) {
-	for _, retain := range []bool{false, true} {
-		s, r, sandbox := launchFixtureWith(t, "docker", "hermes-ssh", retain)
-		names := []string{"tool-calls.jsonl"}
-		if retain {
-			names = append(names, "ssh_raw.log")
-		}
-		r.artifacts = evidenceManifest(names...)
-		if err := s.Start(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		session, endpoint := startSession(t, s, sandbox)
-		var want []string
-		for _, name := range names {
-			want = append(want, filepath.Join(session.local, name))
-		}
-		if !reflect.DeepEqual(endpoint.LogPaths, want) {
-			t.Fatal(endpoint.LogPaths)
-		}
-		if err := session.Stop(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		if !retain {
-			continue
-		}
-		// A retained run requires the raw log in the manifest.
-		r.artifacts = evidenceManifest("tool-calls.jsonl")
-		sandbox.descriptor.SandboxID = "sandbox-b"
-		later, _ := startSession(t, s, sandbox)
-		if err := later.Stop(context.Background()); err == nil {
-			t.Fatal("manifest without raw log accepted")
+	for bridgeType, rawLog := range map[string]string{"hermes-ssh": "ssh_raw.log", "hermes-grpc": "grpc_raw.log"} {
+		for _, retain := range []bool{false, true} {
+			s, r, sandbox := launchFixtureWith(t, "docker", bridgeType, retain)
+			r.transport = runTransports[bridgeType]
+			names := []string{"tool-calls.jsonl"}
+			if retain {
+				names = append(names, rawLog)
+			}
+			r.artifacts = evidenceManifest(names...)
+			if err := s.Start(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			session, endpoint := startSession(t, s, sandbox)
+			var want []string
+			for _, name := range names {
+				want = append(want, filepath.Join(session.local, name))
+			}
+			if !reflect.DeepEqual(endpoint.LogPaths, want) {
+				t.Fatal(endpoint.LogPaths)
+			}
+			if err := session.Stop(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if !retain {
+				continue
+			}
+			// A retained run requires the raw log in the manifest.
+			r.artifacts = evidenceManifest("tool-calls.jsonl")
+			sandbox.descriptor.SandboxID = "sandbox-b"
+			later, _ := startSession(t, s, sandbox)
+			if err := later.Stop(context.Background()); err == nil {
+				t.Fatal("manifest without raw log accepted")
+			}
 		}
 	}
 }
