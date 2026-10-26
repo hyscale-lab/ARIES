@@ -78,3 +78,7 @@ func newNative(c managed.LaunchConfig, logger *logrus.Logger) (func(string, stri
 var _ managed.NativeServer = (*sshbridge.Manager)(nil)
 
 var _ managed.NativeServer = (*openclaw.Server)(nil)
+
+var _ target.Backend = (*docker.Manager)(nil)
+
+var _ target.Backend = (*kubernetes.Manager)(nil)

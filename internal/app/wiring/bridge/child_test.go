@@ -11,6 +11,7 @@ import (
 	managed "github.com/hyscale-lab/aries/pkg/bridge"
 	sshbridge "github.com/hyscale-lab/aries/pkg/bridge/ssh"
 	"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw"
+	"github.com/hyscale-lab/aries/pkg/bridge/target"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/crypto/ssh"
@@ -18,7 +19,9 @@ import (
 
 // childTarget accepts every command. OpenClaw reads the canonical workspace
 // root from its setup command before it starts SSH.
-type childTarget struct{}
+type childTarget struct {
+	target.Executor // file operations are unused by SSH
+}
 
 func (childTarget) ContainerID() string   { return "container" }
 func (childTarget) ContainerName() string { return "sandbox" }

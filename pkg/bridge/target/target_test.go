@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"reflect"
 	"strings"
 	"testing"
@@ -17,6 +18,8 @@ type backendStub struct {
 	validationErr error
 	validated     []core.BridgeTarget
 	calls         int
+	path          string
+	user          string
 }
 
 func (b *backendStub) ValidateBridgeTarget(_ context.Context, d core.BridgeTarget) error {
@@ -31,6 +34,21 @@ func (b *backendStub) ExecStream(_ context.Context, id string, c core.Command, i
 		_, _ = io.Copy(out, in)
 	}
 	return core.CommandResult{ExitCode: 7}, nil
+}
+func (b *backendStub) StatFile(_ context.Context, id, path string) (fs.FileInfo, error) {
+	b.calls++
+	b.id, b.path = id, path
+	return nil, nil
+}
+func (b *backendStub) OpenFile(_ context.Context, id, path string) (io.ReadCloser, fs.FileInfo, error) {
+	b.calls++
+	b.id, b.path = id, path
+	return io.NopCloser(strings.NewReader("")), nil, nil
+}
+func (b *backendStub) WriteFile(_ context.Context, id, path string, _ io.Reader, _ int64, user string) (bool, error) {
+	b.calls++
+	b.id, b.path, b.user = id, path, user
+	return true, nil
 }
 func validDescriptor() core.BridgeTarget {
 	return core.BridgeTarget{RunID: "run", TaskID: "task", SandboxID: "occurrence", Backend: "docker", RuntimeID: "immutable-id", Workdir: "/app", ExecUser: "1000:1000"}
@@ -122,8 +140,31 @@ func TestBorrowedRevocationClosesAdmissionWithoutBackendOperations(t *testing.T)
 	if _, err := borrowed.ExecStream(context.Background(), core.Command{Path: "/bin/true"}, nil, io.Discard, io.Discard); err == nil {
 		t.Fatal("command admitted after revocation")
 	}
+	if _, err := borrowed.StatFile(context.Background(), "/app/f"); err == nil {
+		t.Fatal("stat admitted after revocation")
+	}
+	if _, _, err := borrowed.OpenFile(context.Background(), "/app/f"); err == nil {
+		t.Fatal("read admitted after revocation")
+	}
+	if _, err := borrowed.WriteFile(context.Background(), "/app/f", strings.NewReader("x"), 1); err == nil {
+		t.Fatal("write admitted after revocation")
+	}
 	borrowed.Revoke()
 	if backend.calls != 0 || len(backend.validated) != 1 {
 		t.Fatalf("revocation reached sandbox backend: executions=%d validations=%d", backend.calls, len(backend.validated))
+	}
+}
+
+// New files and parents belong to the exec user, so a write carries the
+// descriptor's user together with its immutable runtime.
+func TestBorrowedWriteFilePassesRuntimeAndExecUser(t *testing.T) {
+	backend := &backendStub{}
+	borrowed, err := New(context.Background(), validDescriptor(), backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := borrowed.WriteFile(context.Background(), "/app/f", strings.NewReader("x"), 1)
+	if err != nil || !created || backend.id != "immutable-id" || backend.path != "/app/f" || backend.user != "1000:1000" {
+		t.Fatalf("write reached %q %q as %q: %v %v", backend.id, backend.path, backend.user, created, err)
 	}
 }

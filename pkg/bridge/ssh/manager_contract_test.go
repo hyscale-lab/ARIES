@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hyscale-lab/aries/pkg/bridge/target"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"golang.org/x/crypto/ssh"
 )
@@ -28,11 +29,12 @@ const (
 )
 
 type contractSandbox struct {
-	mu           sync.Mutex
-	acceptTools  bool
-	preparations []core.Command
-	toolCommands []core.Command
-	result       core.CommandResult
+	target.Executor // file operations are unused by SSH
+	mu              sync.Mutex
+	acceptTools     bool
+	preparations    []core.Command
+	toolCommands    []core.Command
+	result          core.CommandResult
 }
 
 func (sandbox *contractSandbox) Exec(_ context.Context, command core.Command) (core.CommandResult, error) {

@@ -233,3 +233,7 @@ jitter
 lowercased
 debian
 typescript
+busybox
+coreutils
+tmpfs
+posix
