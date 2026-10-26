@@ -24,6 +24,7 @@ k8s/
 | containerd | Yes |
 | `kubectl` and `helm` on the machine that applies ARIES | On the master node; `helm` is installed with Prometheus |
 | kube-prometheus-stack, only for the Grafana dashboard | Optional (`DEPLOY_PROMETHEUS`) |
+| No KVM: pods run as plain containers | Invitro's `stabilize.sh` loads `kvm_intel`; `create-cluster.sh` accepts that failure on nodes without `/dev/kvm` |
 
 Invitro also installs components for its own serverless experiments, which
 ARIES does not use. `create-cluster.sh` removes them unless told to keep them;
@@ -66,7 +67,8 @@ k8s/create-cluster.sh
 The script:
 
 1. checks out Invitro at the revision pinned at the top of the script into
-   `.cache/invitro` and runs its `create_multinode_cluster` against the nodes;
+   `.cache/invitro`, patches its stabilize step to accept nodes without KVM,
+   and runs its `create_multinode_cluster` against the nodes;
 2. copies the committed `k8s/` tree to the master and runs `apply-aries.sh`
    there;
 3. builds `bin/aries` and `bin/aries-ssh-client` for the loader node and stages
