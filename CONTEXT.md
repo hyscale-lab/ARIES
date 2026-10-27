@@ -36,8 +36,9 @@ One structured line of `tool-calls.jsonl` per sandbox call. Its format is the sa
 transport.
 
 **Raw log**:
-The opt-in, private, lossless record of request bytes for one transport (`<transport>_raw.log`).
-It keeps commands, stdin and written content, never output or read content.
+The opt-in, private record of request bytes for one transport (`<transport>_raw.log`).
+It keeps commands, stdin and written content, never output or read content. It is lossless up to
+16 MiB per input. A gRPC `WriteFile` above that bound keeps only its byte count and sha256.
 
 ## Relationships
 
