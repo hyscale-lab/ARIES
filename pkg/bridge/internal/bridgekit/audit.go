@@ -246,6 +246,17 @@ func (writer *AuditWriter) Latch(err error) {
 	writer.mu.Unlock()
 }
 
+// Err reports the latched error. After an error the writer drops each record,
+// so a transport must refuse new sandbox calls.
+func (writer *AuditWriter) Err() error {
+	if writer == nil {
+		return nil
+	}
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+	return writer.err
+}
+
 func (writer *AuditWriter) run() {
 	defer close(writer.done)
 	for {

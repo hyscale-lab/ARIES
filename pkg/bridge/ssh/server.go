@@ -152,6 +152,12 @@ func (session *bridgeSession) handleSession(ctx context.Context, channel gossh.C
 			session.logRejected(audit, policy.InvalidOperationClass)
 			return
 		}
+		// A failed audit drops every record, so the command must not run.
+		if session.audit.Err() != nil {
+			_ = session.reply(request, false)
+			session.logRequestFailure(audit, prepared.RefusalClass, "rejected", "bridge audit failed")
+			return
+		}
 		if err := session.reply(request, true); err != nil {
 			session.logRequestFailure(audit, prepared.RefusalClass, "failed", "SSH accept reply failed")
 			return

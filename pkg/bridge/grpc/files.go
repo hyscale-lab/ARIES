@@ -67,6 +67,9 @@ func (svc *service) beginFile(ctx context.Context, kind, filePath, invalid strin
 	if session.revoked.Load() {
 		return reject(codes.Unavailable, "session revoked")
 	}
+	if session.audit.Err() != nil {
+		return reject(codes.Unavailable, auditFailed)
+	}
 	if !validID {
 		return reject(codes.InvalidArgument, invalidToolCallID)
 	}
