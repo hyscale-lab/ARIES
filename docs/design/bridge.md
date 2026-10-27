@@ -6,6 +6,41 @@ ownership of the sandbox. The implementation builds on baseline
 `ec941cbece53df3022946a8502dab3f938f4e5ca`; this page describes the current shared
 service, not the topology at that earlier revision.
 
+## Terms
+
+- **Tool bridge.** The run-shared machinery that gives one harness temporary,
+  narrow access to one sandbox and revokes it before evaluation. It is the same
+  for every transport. _Avoid_: bridge process, per-task bridge.
+- **Control plane.** The Runner-to-bridge API that registers, inspects and
+  releases a sandbox. "gRPC bridge" meant both the control plane and the gRPC
+  transport: the control plane uses gRPC internally; "gRPC" alone names the
+  transport. _Avoid_: bridge gRPC (gRPC is also a transport).
+- **Transport.** The interchangeable wire between a harness and the tool bridge
+  for tool calls: SSH or gRPC. One transport serves a whole run. _Avoid_: route,
+  protocol (when the transport is meant).
+- **Dialect.** The command grammar one harness speaks for tool calls over SSH.
+  The gRPC transport has typed calls and no dialect. _Avoid_: wire grammar.
+- **Tool call.** One model-level tool invocation by the agent harness, such as
+  a Hermes `read_file`.
+- **Sandbox call.** One operation the tool bridge carries into the sandbox: an
+  exec, a stat, a read or a write. One tool call gives one or more sandbox
+  calls.
+- **Tool-call record.** One structured line of `tool-calls.jsonl` per sandbox
+  call. Its format is the same for every transport.
+- **Raw log.** The opt-in, private record of request bytes for one transport
+  (`<transport>_raw.log`). It keeps commands, stdin and written content, never
+  output or read content. It is lossless up to 16 MiB per input. A gRPC
+  `WriteFile` above that bound keeps only its byte count and sha256.
+
+Relationships:
+
+- A **Run** has exactly one **Tool bridge** and exactly one **Transport**.
+- A **Tool bridge** registers many sandboxes over the **Control plane**, one per
+  task.
+- A **Harness** speaks one **Dialect** over SSH, or typed calls over gRPC.
+- A **Transport** writes **Tool-call records** and, when the profile opts in, a
+  **Raw log**.
+
 ## Operations and ownership
 
 Runner still composes four roles. Its [ToolBridge interface](../../pkg/runner/interfaces.go)
