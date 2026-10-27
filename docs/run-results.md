@@ -139,19 +139,22 @@ bridge types and `bridge/grpc_raw.log` for `hermes-grpc`.
 `bridge/ssh_raw.log` is an opt-in mode-0600 sensitive audit. It is written only
 when a profile sets `bridge.retain_raw_log` to `true`; an omitted or `false`
 value drops it, so the file is absent by default. When retained it contains
-lossless, human-readable text records between full-line
+human-readable text records between full-line
 `--- ARIES SSH CALL BEGIN ---` and `--- ARIES SSH CALL END ---` delimiters.
 Fixed-order `key=value` lines include the decoded wire command when available,
 exact payload and stdin byte counts, and escaped exact payload/stdin. Printable
 UTF-8 appears literally; backslash, newline, carriage return, tab, other
 controls, and invalid UTF-8 use explicit escapes. The file is neither JSON nor
-base64. It may contain exact wire-supplied values; keep the run directory
-private and do not publish this artifact without review.
+base64. Records are lossless up to 16 MiB per input. SSH stdin above that
+bound fails the command. It may contain exact wire-supplied values; keep the
+run directory private and do not publish this artifact without review.
 
 `bridge/grpc_raw.log` has the same opt-in, mode, escapes, and privacy rules.
 Its records are between `--- ARIES GRPC CALL BEGIN ---` and
 `--- ARIES GRPC CALL END ---`. They keep the `Exec` script and stdin and the
-`WriteFile` content, but only the path, byte count, and digest of a read. See
+`WriteFile` content, but only the path, byte count, and digest of a read. An
+`Exec` with stdin above 16 MiB is refused. A `WriteFile` above 16 MiB runs, but
+its record keeps only the byte count and sha256. See
 [gRPC evidence](implementation/grpc-bridge.md#evidence) for its fields.
 
 `bridge/tool-calls.jsonl` remains valid line-delimited JSON. Printable Unicode
