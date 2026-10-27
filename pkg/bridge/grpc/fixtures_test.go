@@ -34,6 +34,9 @@ type fakeExecutor struct {
 	// return, as a backend does that is slow to return after a cancel.
 	block bool
 	lag   time.Duration
+	// execErr, when set, is the error ExecStream returns after it records the
+	// command, as a backend that fails to run it.
+	execErr error
 	// writeHook runs after WriteFile stores the file, as the Docker target
 	// confirms its rename; its error is the target's.
 	writeHook func(context.Context) error
@@ -73,6 +76,9 @@ func (executor *fakeExecutor) ExecStream(ctx context.Context, command core.Comma
 		<-ctx.Done()
 		time.Sleep(executor.lag)
 		return core.CommandResult{ExitCode: -1}, ctx.Err()
+	}
+	if executor.execErr != nil {
+		return core.CommandResult{ExitCode: -1}, executor.execErr
 	}
 	if _, err := stdout.Write(executor.stdout); err != nil {
 		return core.CommandResult{ExitCode: -1}, err
