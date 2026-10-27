@@ -112,6 +112,11 @@ func execMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if response.GetTruncated() {
 		fmt.Fprintln(stderr, "aries: output truncated at the bridge's limit")
 	}
+	// The bridge then reports exit 255 too; the reason tells it apart from a
+	// command that exits 255.
+	if reason := response.GetReason(); reason != sandboxv1.Reason_REASON_COMPLETED {
+		fmt.Fprintf(stderr, "aries: %s\n", reason)
+	}
 	return int(response.GetExitCode())
 }
 

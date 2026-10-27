@@ -139,8 +139,11 @@ The client reads the bridge address from `ARIES_GRPC_TARGET`. It dials in
 plaintext and ignores the `*_PROXY` variables, because a proxy outside the run
 network cannot reach the bridge. `exec` reads all of stdin before it dials. It
 writes the command's stdout and stderr unchanged and exits with the command's
-exit code. When the output was cut, it adds one line on stderr. A usage error,
-a transport failure, or a refusal by the bridge exits 255, as OpenSSH does.
+exit code. When the output was cut, it adds one line on stderr. When the
+bridge reports that the command did not complete, the client exits 255 and
+adds the reason on stderr, for example `aries: REASON_SANDBOX_ERROR`. A usage
+error, a transport failure, or a refusal by the bridge exits 255, as OpenSSH
+does.
 
 For `file`, stdout holds only the payload. `stat` writes one JSON line on
 stdout. `read`, `lines`, and `write` write one JSON metadata line on stderr on

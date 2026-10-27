@@ -3,6 +3,7 @@ package grpc
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -101,6 +102,23 @@ func TestClientMainReportsRevocationAsTransportFailure(t *testing.T) {
 	}
 	if commands, _, _ := executor.snapshot(); len(commands) != 0 {
 		t.Fatal("a call after revocation reached the sandbox")
+	}
+}
+
+// TestClientReportsAnExecThatDidNotComplete pins that a sandbox failure exits
+// 255 with the reason on stderr, so it does not read as the command's exit.
+func TestClientReportsAnExecThatDidNotComplete(t *testing.T) {
+	executor := newFakeExecutor(nil)
+	executor.execErr = errors.New("backend failed in test")
+	_, _, endpoint := startBridge(t, executor, Options{})
+	t.Setenv(targetEnv, endpoint.Address)
+
+	var stdout, stderr bytes.Buffer
+	if code := ClientMain([]string{"exec", "true"}, strings.NewReader(""), &stdout, &stderr); code != transportFailureExit {
+		t.Fatalf("exit code = %d, want %d", code, transportFailureExit)
+	}
+	if want := "aries: REASON_SANDBOX_ERROR\n"; stderr.String() != want {
+		t.Fatalf("stderr = %q, want %q", stderr.String(), want)
 	}
 }
 
