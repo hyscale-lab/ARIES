@@ -25,7 +25,7 @@ k8s/
 | `kubectl` and `helm` on the machine that applies ARIES | On the master node; `helm` is installed with Prometheus |
 | kube-prometheus-stack, only for the Grafana dashboard | Optional (`DEPLOY_PROMETHEUS`) |
 | A master node with at least 2 CPUs and about 2 GB of memory | `kubeadm init` preflight requires them; workers have no such minimum. With less, `create-cluster.sh` stops at "Waiting for master key to be generated..." |
-| No KVM: pods run as plain containers | Invitro's `stabilize.sh` loads `kvm_intel`; `create-cluster.sh` accepts that failure on nodes without `/dev/kvm` |
+| No KVM: pods run as plain containers | Invitro's `stabilize.sh` sets up KVM for its Firecracker mode. On nodes without KVM, such as CloudLab nodes without VT-x, pass `--skip-kvm-setup` to `create-cluster.sh`; without it, setup stops at the stabilize step |
 
 Invitro also installs components for its own serverless experiments, which
 ARIES does not use. `create-cluster.sh` removes them unless told to keep them;
@@ -68,8 +68,10 @@ k8s/create-cluster.sh
 The script:
 
 1. checks out Invitro at the revision pinned at the top of the script into
-   `.cache/invitro`, patches its stabilize step to accept nodes without KVM,
-   and runs its `create_multinode_cluster` against the nodes;
+   `.cache/invitro` and runs its `create_multinode_cluster` against the nodes.
+   On nodes without KVM, such as CloudLab nodes without VT-x, pass
+   `--skip-kvm-setup`: it removes the KVM lines from Invitro's stabilize step.
+   Without it, setup stops at that step;
 2. copies the committed `k8s/` tree to the master and runs `apply-aries.sh`
    there;
 3. builds `bin/aries` and `bin/aries-ssh-client` for the loader node and stages
@@ -82,6 +84,7 @@ The script:
 | `--keep-invitro` | Keeps Invitro's unused components, which are otherwise removed before ARIES is applied |
 | `--housekeeping DUR` | Sets the kubelet's `--housekeeping-interval` on every node and restarts it. Invitro leaves the 10-second default, which caps how fine pod measurements can be |
 | `--skip-cluster` | The cluster exists already; only apply ARIES and restage the runner |
+| `--skip-kvm-setup` | Removes the lines that set up KVM from Invitro's `stabilize.sh` on every node; needed on nodes without KVM |
 | `--no-runner` | Do not build or stage the runner |
 
 ARIES holds no copy of Invitro's scripts: only the pinned revision, which

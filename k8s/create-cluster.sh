@@ -18,6 +18,7 @@ config=""
 prometheus=false
 node_setup=""
 skip_cluster=false
+skip_kvm_setup=false
 stage_runner=true
 runner_dir=aries
 ssh_key=""
@@ -48,6 +49,8 @@ k8s/cluster.json.example. Command-line options win over the file.
                       Knative, Istio and MetalLB; by default they are removed
   --prune-invitro     remove them even if the config file says to keep them
   --skip-cluster      the cluster already exists; only apply ARIES
+  --skip-kvm-setup    skip the KVM lines of Invitro's stabilize step, for
+                      nodes without KVM; without it, setup stops there
   --no-runner         do not build and stage the runner on the loader node
   -h, --help          show this help
 
@@ -65,6 +68,7 @@ while [ $# -gt 0 ]; do
     --prune-invitro) prune=true; shift ;;
     --keep-invitro) prune=false; shift ;;
     --skip-cluster) skip_cluster=true; shift ;;
+    --skip-kvm-setup) skip_kvm_setup=true; shift ;;
     --no-runner) stage_runner=false; shift ;;
     -h|--help) usage; exit 0 ;;
     -*) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -172,16 +176,16 @@ if [ "$skip_cluster" = false ]; then
   git -C "$invitro" checkout -q -- "$stabilize_go"
   git -C "$invitro" checkout -q --detach "$INVITRO_REVISION"
 
-  # Invitro's stabilize.sh ends with `modprobe kvm_intel` for its Firecracker
-  # mode, and its exit status is that of this last line. ARIES runs plain
-  # containers and needs no KVM, so accept a failure on nodes without
-  # /dev/kvm. Nodes with KVM still fail on any error.
-  stabilize='"~/loader/scripts/setup/stabilize.sh"'
-  sed "s#$stabilize#\"~/loader/scripts/setup/stabilize.sh || test ! -e /dev/kvm\"#" \
-    "$invitro/$stabilize_go" >"$invitro/$stabilize_go.new"
-  mv "$invitro/$stabilize_go.new" "$invitro/$stabilize_go"
-  grep -q 'stabilize.sh || test ! -e /dev/kvm' "$invitro/$stabilize_go" ||
-    { echo "could not patch the stabilize step in Invitro's $stabilize_go" >&2; exit 1; }
+  if [ "$skip_kvm_setup" = true ]; then
+    # Only Invitro's Firecracker mode needs the kvm lines in stabilize.sh. Each
+    # node clones Invitro itself, so only the node command can remove them.
+    stabilize='"~/loader/scripts/setup/stabilize.sh"'
+    sed "s#$stabilize#\"sed -i '/kvm/d' ~/loader/scripts/setup/stabilize.sh \\&\\& ~/loader/scripts/setup/stabilize.sh\"#" \
+      "$invitro/$stabilize_go" >"$invitro/$stabilize_go.new"
+    mv "$invitro/$stabilize_go.new" "$invitro/$stabilize_go"
+    grep -qF "sed -i '/kvm/d' ~/loader/scripts/setup/stabilize.sh && ~/loader/scripts/setup/stabilize.sh" "$invitro/$stabilize_go" ||
+      { echo "could not patch the stabilize step in Invitro's $stabilize_go" >&2; exit 1; }
+  fi
 
   # Invitro reads its settings from a config directory. Work on a private copy
   # of its own defaults so the checkout stays pristine.
