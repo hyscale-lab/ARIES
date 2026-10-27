@@ -104,7 +104,10 @@ its end, and the call reports its real result.
 
 `Stop` first marks the session revoked. After that, every procedure is refused
 with `UNAVAILABLE`, nothing reaches the executor, and the refusal is recorded
-as `rejected`. `Stop` then cancels the running calls and stops the server.
+as `rejected`. After the audit latches an error, for example at its size cap,
+every procedure is also refused with `UNAVAILABLE`, because the bridge can no
+longer record a call.
+`Stop` then cancels the running calls and stops the server.
 The server waits for its handlers (`WaitForHandlers`), and `Stop` seals the
 audit only after every handler returned. Thus no record arrives after the
 seal. If the context of `Stop` expires first, the session stays pending, and a

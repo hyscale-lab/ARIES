@@ -3,6 +3,7 @@ package grpc
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -212,6 +213,27 @@ func TestRevokedSessionRefusesEveryRPC(t *testing.T) {
 	}
 	if !slices.Equal(classes, []string{"exec", "stat", "read", "read", "write"}) {
 		t.Fatalf("refusals recorded = %v", classes)
+	}
+}
+
+// TestFailedAuditRefusesEveryRPC pins that after the audit latches an error,
+// no call reaches the sandbox, because the call could not be recorded.
+func TestFailedAuditRefusesEveryRPC(t *testing.T) {
+	executor := newFakeExecutor(nil)
+	manager, client, _ := startBridge(t, executor, Options{})
+	auditErr := errors.New("audit failed in test")
+	manager.active.audit.Latch(auditErr)
+
+	for name, err := range callEveryRPC(client) {
+		if status.Code(err) != codes.Unavailable {
+			t.Fatalf("%s after an audit failure = %v, want Unavailable", name, err)
+		}
+	}
+	if commands, _, fileOps := executor.snapshot(); len(commands) != 0 || fileOps != 0 {
+		t.Fatalf("a call reached the sandbox after an audit failure: %d commands, %d file operations", len(commands), fileOps)
+	}
+	if err := manager.Stop(context.Background()); !errors.Is(err, auditErr) {
+		t.Fatalf("Stop() error = %v, want the audit error", err)
 	}
 }
 

@@ -72,6 +72,8 @@ const (
 	toolCallIDChars    = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:-"
 	// invalidToolCallID is the refusal message for an id outside the bound.
 	invalidToolCallID = "malformed tool call id"
+	// auditFailed is the refusal message after the audit latched an error.
+	auditFailed = "bridge audit failed"
 )
 
 // Options are the host-local inputs to one gRPC bridge.
@@ -363,6 +365,9 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 	}
 	if session.revoked.Load() {
 		return refuse(codes.Unavailable, "session revoked")
+	}
+	if session.audit.Err() != nil {
+		return refuse(codes.Unavailable, auditFailed)
 	}
 	if !validID {
 		return refuse(codes.InvalidArgument, invalidToolCallID)

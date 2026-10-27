@@ -24,7 +24,9 @@ The client owns OpenClaw's invocation/configuration subset and does not import
 the server's command grammar. Shared SSH serving and root bridge lifecycle do not
 import this harness-specific client. The server dialect is authoritative for
 command acceptance. Refused commands produce server-side rejection evidence
-without executing in the sandbox. Hermes uses its image's native OpenSSH.
+without executing in the sandbox. After the audit latches an error, the bridge
+refuses every new exec request, because it can no longer record the command;
+the client then exits 255. Hermes uses its image's native OpenSSH.
 
 The bridge runs the SSH server; `aries-ssh-client` is the separate client inside
 the OpenClaw harness. Its argument parser recognizes the pinned invocation

@@ -816,3 +816,25 @@ func TestInvalidPreparedActionCannotExecute(t *testing.T) {
 		t.Fatalf("refusal evidence = %#v", records)
 	}
 }
+
+// TestFailedAuditRefusesExecution pins that after the audit latches an error,
+// an exec request is refused and does not reach the sandbox, because the
+// call could not be recorded. The refused request makes OpenSSH exit 255.
+func TestFailedAuditRefusesExecution(t *testing.T) {
+	structured, _ := memoryAuditFile()
+	sandbox := &contractSandbox{acceptTools: true}
+	accepted := false
+	session := &bridgeSession{dialect: testDialect{}, sandbox: sandbox, audit: bridgekit.NewAuditWriter(structured, nil), replyRequest: func(_ *ssh.Request, ok bool) error { accepted = ok; return nil }}
+	auditErr := errors.New("audit failed in test")
+	session.audit.Latch(auditErr)
+	requests := make(chan *ssh.Request, 1)
+	requests <- &ssh.Request{Type: "exec", WantReply: true, Payload: ssh.Marshal(struct{ Command string }{encodeCanonicalTokens([]string{remoteShell, "-c", "true"})})}
+	close(requests)
+	session.handleSession(context.Background(), &stubSSHChannel{}, requests)
+	if accepted || len(sandbox.snapshot()) != 0 {
+		t.Fatal("exec was admitted after an audit failure")
+	}
+	if err := session.closeAudit(context.Background()); !errors.Is(err, auditErr) {
+		t.Fatalf("closeAudit() error = %v, want the audit error", err)
+	}
+}
