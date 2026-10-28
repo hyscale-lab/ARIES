@@ -321,17 +321,25 @@ func TestStoppedTransportIsRefused(t *testing.T) {
 	}
 }
 
-// A call that passes its deadline ends on the client with DeadlineExceeded
-// and is recorded as canceled, as any canceled call.
+// A call that passes its deadline ends on the client with DeadlineExceeded,
+// or the server deadline fires first and the server answers OK with
+// REASON_TIMED_OUT and exit code 255. In both cases the call is recorded as
+// canceled, as any canceled call.
 func TestExecPastItsDeadlineIsRecordedAsCanceled(t *testing.T) {
 	const deadline = 50 * time.Millisecond
+	// canceledExitCode is the exit code the bridge gives a call that did not complete.
+	const canceledExitCode = 255
 	executor := newFakeExecutor(nil)
 	executor.block = true
 	manager, client, endpoint := startBridge(t, executor, Options{})
 	ctx, cancel := context.WithTimeout(context.Background(), deadline)
 	defer cancel()
-	if _, err := client.Exec(ctx, &sandboxv1.ExecRequest{Script: "sleep infinity"}); status.Code(err) != codes.DeadlineExceeded {
-		t.Fatalf("Exec = %v, want DeadlineExceeded", err)
+	// gRPC sends the deadline to the server, so the server timer can fire first.
+	// Then the server sees DeadlineExceeded and returns REASON_TIMED_OUT before the client timer fires.
+	response, err := client.Exec(ctx, &sandboxv1.ExecRequest{Script: "sleep infinity"})
+	serverTimedOut := err == nil && response.GetReason() == sandboxv1.Reason_REASON_TIMED_OUT && response.GetExitCode() == canceledExitCode
+	if status.Code(err) != codes.DeadlineExceeded && !serverTimedOut {
+		t.Fatalf("Exec = %v, %v, want DeadlineExceeded or REASON_TIMED_OUT with exit code %d", response, err, canceledExitCode)
 	}
 	stop(t, manager)
 	records := readToolCalls(t, endpoint.LogPaths[0])
