@@ -245,6 +245,77 @@ worker and command, not fixed backend costs. The command succeeded, and the run
 confirmed isolation and task/shared cleanup; diagnostic commands left the Git
 benchmark reward at zero.
 
+## Comparing exec overhead
+
+The existing deployment `Exec`/`ExecStream` and `UploadArchive` APIs support a
+comparative microbenchmark without an LLM or new sandbox backend. Build the
+comparison driver and a static native-reference helper:
+
+```sh
+CGO_ENABLED=0 go build -o bin/aries-exec-reference ./scripts/exec-reference
+go build -o bin/aries-compare-exec ./scripts/compare-exec
+sudo bin/aries-compare-exec \
+  -namespace aries \
+  -reference-binary "$PWD/bin/aries-exec-reference" \
+  -output-dir "$PWD/runs/exec-comparison"
+```
+
+The output directory must be new. Prepare the same image in Docker and the
+selected native containerd namespace first. The driver checks their image
+manifest/config identity. Flags `-socket`, `-io-dir`, `-checkpoint-dir` and
+`-shim-dir` select a nondefault worker setup; `-image` selects the prepared image,
+and `-workdir` must exist in it. The helper must be built for the worker/guest
+architecture.
+
+The driver seeds a background process and state file in each fresh sandbox,
+then runs the same diagnostic shell body used in the checkpoint smoke. Its
+native reference runs repeated local `/bin/sh -c` children inside each sandbox
+in one outer exec call. A monotonic timer brackets each child's spawn, stdout
+and stderr capture, and wait. Helper startup, JSON encoding and the outer
+Docker/containerd/vsock exec are excluded. This is a native spawn/capture/wait
+reference, not exact command CPU time or a host-native deployment backend.
+
+Defaults are two excluded warmups, 30 measured Docker samples, 30 persistent VM
+samples, five checkpoint samples, and 50 native-reference samples per sandbox.
+Docker/persistent rounds alternate order. Every measured checkpoint call must
+restore and finish suspended. All paths use the same host-local SSH bridge and
+OpenClaw dialect, image, command, cwd, environment, UID/GID, requested CPU count
+and memory. This isolates provider overhead; it excludes a full harness/LLM,
+managed bridge container placement, and OpenClaw's additional workspace calls.
+The native vsock retry interval remains unchanged at 100 ms.
+
+The smoke-worker comparison measured these medians:
+
+| Path | Local native reference | Bridge receipt to command done | Bridge receipt to response sent |
+| --- | ---: | ---: | ---: |
+| Docker exec API (30 calls) | 6.64 ms | 75.18 ms | 75.28 ms |
+| Persistent vHive (30 calls) | 4.59 ms | 175.66 ms | 194.18 ms |
+| Checkpoint vHive (5 calls) | 4.24 ms | 447.87 ms | 17,941.38 ms |
+
+The persistent VM's exec RPC median was 112.44 ms, its start RPC 53.94 ms, and
+completed-process deletion 17.95 ms. Docker spent most of its elapsed time
+waiting for output/process completion (72.35 ms median); that interval includes
+native runtime process launch, so it is not pure command runtime. The checkpoint
+path added a 143.32 ms median restore RPC and 17.49 s median checkpoint phase.
+One checkpoint sample spent 153.71 ms persisting its restoring state before the
+CreateVM request; its command-done latency rose to 608.57 ms. This shows why
+pre-worker disk synchronization is measured separately from Firecracker restore.
+
+The image manifest was identical (`389b9c824761` prefix), with requested 1 CPU
+and 2048 MiB memory. Docker shared host kernel `6.8.0-147-generic`; both VM paths
+used `5.10.239`. CPU quotas/vCPUs are different scheduling mechanisms, and Docker
+had no disk quota while the worker used a fixed 10 GiB devmapper device. The
+small workload used only seeded files and kernel metadata; this experiment does
+not compare storage capacity or general workload performance. The native
+reference remains environment-specific rather than implying identical kernels.
+
+Evidence includes `metadata.json`, native samples in that metadata, raw
+`client-samples.jsonl`, joined `samples.jsonl`, per-provider `tool-calls.jsonl`,
+`summary.json` and `cleanup.json`. Summaries include median/range and p95 only
+for sample counts of at least 20; five checkpoint calls do not establish a
+reliable p95. All diagnostic outputs and exit statuses must match their native
+reference, and cleanup failures fail the driver.
+
 ## Limits and verification
 
 Terminal-Bench 2, SWE-Atlas QA and SWE-bench Pro fit the sandbox API when their

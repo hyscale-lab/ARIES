@@ -58,6 +58,8 @@ func (s *execution) Exec(ctx context.Context, command core.Command) (core.Comman
 // ExecStream streams a native Docker exec. Cancellation closes the attachment;
 // the remote command may continue until it exits or the sandbox is removed.
 func (s *execution) ExecStream(ctx context.Context, command core.Command, stdin io.Reader, stdout, stderr io.Writer) (core.CommandResult, error) {
+	endCommand := core.TimeCommandStage(ctx, "command.total")
+	defer endCommand()
 	started := time.Now()
 	failure := func() core.CommandResult { return core.CommandResult{ExitCode: -1, Duration: time.Since(started)} }
 	if err := validateCommand(command); err != nil {
@@ -80,18 +82,23 @@ func (s *execution) ExecStream(ctx context.Context, command core.Command, stdin 
 		execCtx, cancelTimeout = context.WithTimeout(execCtx, command.Timeout)
 		defer cancelTimeout()
 	}
+	endStage := core.TimeCommandStage(ctx, "command.create_exec")
 	created, err := s.client.ExecCreate(execCtx, s.containerID, client.ExecCreateOptions{
 		AttachStdin: stdin != nil, AttachStdout: true, AttachStderr: true,
 		Cmd: append([]string{command.Path}, command.Args...),
 		Env: dockerEnvironment(command.Env), WorkingDir: command.Dir, User: command.User,
 	})
+	endStage()
 	if err != nil {
 		return failure(), fmt.Errorf("create Docker exec: %w", err)
 	}
+	endStage = core.TimeCommandStage(ctx, "command.attach_exec")
 	attached, err := s.client.ExecAttach(execCtx, created.ID, client.ExecAttachOptions{})
+	endStage()
 	if err != nil {
 		return failure(), fmt.Errorf("attach Docker exec: %w", err)
 	}
+	core.MarkCommandTiming(ctx, "command.started")
 	defer attached.Close()
 	stopCancellation := context.AfterFunc(execCtx, attached.Close)
 	defer stopCancellation()
@@ -108,11 +115,13 @@ func (s *execution) ExecStream(ctx context.Context, command core.Command, stdin 
 		}
 		_ = attached.CloseWrite()
 	}()
+	endStage = core.TimeCommandStage(ctx, "command.output_drain")
 	_, err = stdcopy.StdCopy(
 		&limitedWriter{writer: stdout, limit: outputLimit},
 		&limitedWriter{writer: stderr, limit: outputLimit},
 		attached.Reader,
 	)
+	endStage()
 	attached.Close()
 	if cause := context.Cause(execCtx); cause != nil {
 		return failure(), cause
@@ -120,9 +129,18 @@ func (s *execution) ExecStream(ctx context.Context, command core.Command, stdin 
 	if err != nil {
 		return failure(), err
 	}
+	endStage = core.TimeCommandStage(ctx, "command.inspect_exec")
 	inspection, err := s.client.ExecInspect(execCtx, created.ID, client.ExecInspectOptions{})
+	endStage()
 	if err != nil {
 		return failure(), fmt.Errorf("inspect Docker exec: %w", err)
+	}
+	// Output EOF alone does not prove process exit: an exec may close its
+	// streams while remaining alive. Keep the native result semantics and mark
+	// completion only when inspection confirms the process has exited.
+	if !inspection.Running {
+		core.MarkCommandTiming(ctx, "command.exited")
+		core.MarkCommandTiming(ctx, "command.completed")
 	}
 	return core.CommandResult{ExitCode: inspection.ExitCode, Duration: time.Since(started)}, nil
 }

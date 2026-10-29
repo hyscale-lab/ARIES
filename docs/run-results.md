@@ -177,8 +177,8 @@ receipt, completion or provider stage is unknown, rather than a zero duration.
 
 The bridge records `bridge.received`, `bridge.prepared`, `bridge.dispatch`,
 `backend.completed`, `bridge.response_sent` and `bridge.channel_closed` when
-those boundaries succeed. vHive also records `command.started`, `command.exited`
-and `command.completed`; the last means that the guest has exited and its output
+those boundaries succeed. vHive and Docker also record `command.started`, `command.exited`
+and `command.completed`; the last means that the sandbox process has exited and its output
 has drained, before completed-process deletion or checkpointing. `runtime.ready`
 separates VM acquisition/restore from command setup, while `checkpoint.started`
 and `checkpoint.completed` bound the checkpoint work. The `command.completed`
@@ -209,7 +209,11 @@ allow correlation with worker logs; when logs come from different hosts, their
 clocks must agree. The bridge and Docker harness on one worker share its clock.
 
 See [vHive latency stages](implementation/vhive.md#latency-breakdown) for restore,
-execution and checkpoint spans.
+execution and checkpoint spans. Docker adds `command.create_exec`,
+`command.attach_exec`, `command.output_drain` and `command.inspect_exec`; output
+drain includes waiting for native process launch and execution. Completion is
+recorded only after drained output and inspection confirming that exec is no
+longer running. These spans are not exact guest CPU runtime.
 
 Each OpenClaw task directory contains the exact placeholder-only rendered
 `harness/openclaw.json`, OpenClaw logs and telemetry when available, replayable
