@@ -39,6 +39,9 @@ func validateComponents(cfg config.Config) error {
 	if err := validateDeployment(&cfg); err != nil {
 		return err
 	}
+	if cfg.Sandbox.Deployment.Backend == "vhive" && (cfg.Benchmark.Type == "deepresearchbench" || cfg.Benchmark.Type == "toolathlon") {
+		return errors.New("vhive does not yet support benchmarks requiring in-sandbox services")
+	}
 	switch cfg.Benchmark.Type {
 	case "terminalbench2":
 	case "deepresearchbench":
@@ -142,6 +145,14 @@ func newSandbox(cfg config.Config, outputRoot, runID, occurrenceID string, gpuIn
 		return app.SandboxInstance{}, err
 	}
 	switch cfg.Sandbox.Deployment.Backend {
+	case "vhive":
+		transport, resources, err := deploymentwiring.NewVHiveSandbox(cfg, logger)
+		if err != nil {
+			return app.SandboxInstance{}, err
+		}
+		return sandboxwiring.New(outputRoot, occurrenceID, gpuIndices, logger, transport, func() deployment.TaskEnvironment {
+			return deploymentwiring.VHiveTaskEnvironment(environment.NewTaskEnvironment())
+		}, resources)
 	case "docker":
 		transport, resources, err := deploymentwiring.NewDockerSandbox(cfg.Sandbox.Deployment, runID, occurrenceID, logger)
 		if err != nil {
@@ -187,6 +198,11 @@ func newSharedBridge(cfg config.Config, runID, outputRoot string, placement core
 	// Sandbox execution access is selected independently of bridge placement.
 	launch.Config.Backend = cfg.Sandbox.Deployment.Backend
 	switch cfg.Sandbox.Deployment.Backend {
+	case "vhive":
+		launch.Config.BackendEndpoint, launch.Request.Mounts, err = deploymentwiring.VHiveExecutionAccess(cfg.Sandbox.Deployment)
+		if err != nil {
+			return nil, errors.Join(err, runtime.Close())
+		}
 	case "docker":
 		launch.Config.BackendEndpoint, launch.Request.Mounts = deploymentwiring.DockerExecutionAccess(cfg.Sandbox.Deployment.Docker.Socket)
 	case "kubernetes":
@@ -246,7 +262,7 @@ func validateDeployment(cfg *config.Config) error {
 	if err := cfg.NormalizeDeployment(); err != nil {
 		return err
 	}
-	if cfg.Harness.Deployment.Backend != cfg.Sandbox.Deployment.Backend {
+	if cfg.Harness.Deployment.Backend != cfg.Sandbox.Deployment.Backend && cfg.Sandbox.Deployment.Backend != "vhive" {
 		return errors.New("harness and sandbox must use the same deployment backend")
 	}
 
@@ -260,7 +276,7 @@ func validateDeployment(cfg *config.Config) error {
 		{"harness.deployment", cfg.Harness.Deployment}, {"sandbox.deployment", cfg.Sandbox.Deployment},
 	} {
 		switch component.placement.Backend {
-		case "docker", "kubernetes":
+		case "docker", "kubernetes", "vhive":
 		default:
 			return fmt.Errorf("%s: unsupported backend %q", component.path, component.placement.Backend)
 		}
@@ -293,9 +309,9 @@ func pullImages(ctx context.Context, cfg config.Config, images []string) error {
 		return err
 	}
 	// Docker task components share one selected daemon.
-	switch cfg.Sandbox.Deployment.Backend {
+	switch cfg.Harness.Deployment.Backend {
 	case "docker":
-		return deploymentwiring.PullDockerImages(ctx, cfg.Sandbox.Deployment, images)
+		return deploymentwiring.PullDockerImages(ctx, cfg.Harness.Deployment, images)
 	case "kubernetes":
 		// Each node's kubelet pulls images when it first schedules a pod.
 		return nil
@@ -314,10 +330,10 @@ func buildHarnessImage(ctx context.Context, cfg config.Config) error {
 	if err := validateDeployment(&cfg); err != nil {
 		return err
 	}
-	switch cfg.Sandbox.Deployment.Backend {
+	switch cfg.Harness.Deployment.Backend {
 	case "docker":
 		return harnesswiring.PrepareHermesImage(ctx, cfg, func(ctx context.Context, image, dockerfile string, buildArgs map[string]string) error {
-			return deploymentwiring.BuildDockerImage(ctx, cfg.Sandbox.Deployment, image, dockerfile, buildArgs)
+			return deploymentwiring.BuildDockerImage(ctx, cfg.Harness.Deployment, image, dockerfile, buildArgs)
 		})
 	case "kubernetes":
 		// The derived Hermes image must already be in a registry the cluster
@@ -333,8 +349,8 @@ func newInfrastructure(cfg config.Config, runID, outputRoot string, logger *logr
 		return nil, err
 	}
 	switch cfg.Sandbox.Deployment.Backend {
-	case "docker":
-		owner, err := deploymentwiring.NewDocker(cfg.Sandbox.Deployment, logger)
+	case "docker", "vhive":
+		owner, err := deploymentwiring.NewDocker(cfg.Harness.Deployment, logger)
 		if err != nil {
 			return nil, err
 		}
@@ -343,8 +359,12 @@ func newInfrastructure(cfg config.Config, runID, outputRoot string, logger *logr
 		if err != nil {
 			return nil, errors.Join(err, owner.Close())
 		}
+		networkPolicy := "shared-egress"
+		if cfg.Sandbox.Deployment.Backend == "vhive" {
+			networkPolicy = "benchmark-controlled-cni"
+		}
 		return &app.RunInfrastructure{
-			Environment: environment, Resources: resources, Close: owner.Close, NetworkPolicy: "shared-egress",
+			Environment: environment, Resources: resources, Close: owner.Close, NetworkPolicy: networkPolicy,
 			NewSandbox: func(cfg config.Config, root, run, occurrence string, gpus []int, log *logrus.Logger) (app.SandboxInstance, error) {
 				return newSandbox(cfg, root, run, occurrence, gpus, log, environment)
 			},

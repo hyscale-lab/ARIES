@@ -109,6 +109,8 @@ capabilities and safety guarantees. The Docker provider and its remaining
 portability limits are described in [Docker implementation](implementation/docker.md);
 the Kubernetes provider and the constraints it adds are in
 [Kubernetes implementation](implementation/kubernetes.md).
+The [vHive implementation](implementation/vhive.md) combines local
+Firecracker/containerd tool sandboxes with Docker harness and bridge placement.
 Profile syntax stays in the [deployment guide](configuration.md#deployment-configuration).
 
 ## Protocol independence

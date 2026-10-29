@@ -94,8 +94,9 @@ start, evaluation and stop. Independent dependencies preserve these boundaries.
 ## Substitution and current limits
 
 The reference composition is local Docker on one daemon. Bridge runtime placement
-and sandbox execution are separately injected, and both must use the same
-provider. Backend endpoints and socket mounts come from provider wiring. A
+and sandbox execution are separately injected. The
+[vHive provider](../implementation/vhive.md) uses a Docker bridge with native
+Firecracker/containerd guest execution. Backend endpoints and socket mounts come from provider wiring. A
 [Kubernetes provider](../implementation/kubernetes.md) implements the same
 contracts on pods for a narrower set of runs.
 

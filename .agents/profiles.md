@@ -4,10 +4,12 @@ Start from `profiles/*.json`; consult the [schema](../pkg/config/config.go),
 [configuration reference](../docs/configuration.md), and [support matrix](../docs/supported.md).
 Use `configs/versions.json` for pins; do not duplicate the field inventory here.
 
-- Keep role selection separate from placement. Harness and sandbox share a local
-  Docker daemon and one run network; each run has one managed Docker bridge container.
-  On Kubernetes all three components share one namespace and backend.
-  Reject unsupported or mixed backends and explicit embedded mode before effects.
+- Keep role selection separate from placement. Docker components share one local
+  daemon and run network. vHive tool sandboxes use the local Firecracker/containerd
+  stack with Docker harnesses and a managed Docker bridge; see its
+  [constraints](../docs/implementation/vhive.md). On Kubernetes all three
+  components share one namespace and backend. Reject other mixed compositions
+  and explicit embedded mode before effects.
 - Declare `overrides_file` explicitly (`""` disables overrides). Keep harness and
   sandbox resource limits independent; preserve omission/default semantics and
   explicit model request settings without silently changing their meaning. Judges

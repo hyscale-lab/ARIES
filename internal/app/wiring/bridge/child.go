@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	managed "github.com/hyscale-lab/aries/pkg/bridge"
 	sshbridge "github.com/hyscale-lab/aries/pkg/bridge/ssh"
@@ -11,6 +12,7 @@ import (
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/deployment/docker"
 	"github.com/hyscale-lab/aries/pkg/deployment/kubernetes"
+	"github.com/hyscale-lab/aries/pkg/deployment/vhive"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/crypto/ssh"
 )
@@ -21,6 +23,17 @@ func ServeChild(ctx context.Context, c managed.LaunchConfig, logger *logrus.Logg
 	var backend target.Backend
 	var closeBackend func() error
 	switch c.Backend {
+	case "vhive":
+		var options vhive.ExecutionOptions
+		if err := json.Unmarshal([]byte(c.BackendEndpoint), &options); err != nil {
+			return err
+		}
+		d, err := vhive.New(vhive.Options{Socket: options.Socket, Namespace: options.Namespace, IODir: options.IODir, Logger: logger})
+		if err != nil {
+			return err
+		}
+		backend = d
+		closeBackend = d.Close
 	case "docker":
 		d, err := docker.New(docker.Options{Socket: c.BackendEndpoint, Logger: logger})
 		if err != nil {

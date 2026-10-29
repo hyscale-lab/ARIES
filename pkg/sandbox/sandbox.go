@@ -197,7 +197,8 @@ func (m *Manager) Start(ctx context.Context, request core.SandboxRequest) (runne
 	}
 	env := request.Environment
 	deploymentRequest := deployment.Request{
-		Name: s.containerName, Image: env.Image, Workdir: env.Workdir,
+		AllowNetwork: env.AllowNetwork,
+		Name:         s.containerName, Image: env.Image, Workdir: env.Workdir,
 		Env:        taskEnvironment(env.Env),
 		Entrypoint: []string{"/bin/sleep"}, Args: []string{"infinity"},
 		Labels:    ownershipLabels(request, "task-container"),

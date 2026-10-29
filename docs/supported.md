@@ -2,7 +2,8 @@
 
 **Docker harnesses and sandboxes use the same local daemon**, with a separate
 managed Docker bridge and shared network per run. Runner stays on the host. Remote Docker
-servers and mixed deployment backends are unsupported. **Kubernetes** places the
+servers are unsupported. **vHive** runs tool sandboxes on the local
+Firecracker/containerd stack with Docker harnesses and bridge. **Kubernetes** places the
 same three components as pods in one namespace, for a narrower set of runs. See the
 [deployment configuration](configuration.md#deployment-configuration).
 
@@ -23,6 +24,7 @@ This page summarizes capabilities and limitations. Use the
 | Benchmark | **SWE-bench Pro** — public issue-resolution split with pinned task scripts and parser | [Benchmark guide](benchmarks/swe-bench-pro.md) |
 | Benchmark | **Toolathlon** — tool-use tasks over MCP servers that are local, public, or backed by Toolathlon's self-hosted applications (Canvas, poste.io, WooCommerce), and, given your account credentials, by third-party services; the `k8s` tasks are not supported | [Benchmark guide](benchmarks/toolathlon.md) |
 | Tool sandbox and deployment | **Docker** — local containers managed through the Moby Go SDK | [Deployment configuration](configuration.md#deployment-configuration), [Docker implementation](implementation/docker.md) |
+| Tool sandbox and deployment | **vHive** — a Firecracker microVM per task and fresh evaluation sandbox, using native containerd guest exec; Docker harness and bridge | [vHive deployment](configuration.md#vhive-deployment), [worker setup and limitations](implementation/vhive.md) |
 | Tool sandbox and deployment | **Kubernetes** — one pod per runtime, driven through `kubectl`; Terminal-Bench 2, SWE-bench Pro and Deep Research Bench with OpenClaw or Hermes in text mode | [Kubernetes deployment](configuration.md#kubernetes-deployment), [Kubernetes implementation](implementation/kubernetes.md), [cluster setup](../k8s/README.md) |
 | Tool bridge | **OpenClaw SSH** and **Hermes SSH** — managed Docker container or Kubernetes pod; harness-specific SSH adapters | [SSH bridge implementation](implementation/ssh-bridges.md) |
 | Model service | **DeepSeek** — external endpoint | [Model backends](configuration.md#model-backends) |
@@ -41,6 +43,11 @@ guides above.
 
 ## Current limitations
 
+- vHive requires a prepared local Linux worker, its devmapper disk capacity to
+  match the task's requested storage, and CNI configuration for network-enabled
+  tasks. GPUs and in-sandbox benchmark services are unsupported. Occurrence
+  resource measurements are reported as unsupported. Real microVM execution
+  requires the opt-in worker integration test; it is not covered by Docker tests.
 - Each SSH bridge supports its corresponding harness. Crossed pairs are rejected
   before execution. Hermes requires `/bin/bash` in the task image; its bridge
   rejects Hermes's private `~/.hermes` file synchronization. OpenClaw requires
@@ -70,7 +77,7 @@ guides above.
 
 ## Roadmap
 
-Deployment providers beyond Docker and Kubernetes are unimplemented. Shared bridge lifecycle and
+Deployment providers beyond Docker, Kubernetes and vHive are unimplemented. Shared bridge lifecycle and
 deployment contracts accept explicit runtime placement and access settings;
 a new provider must implement their execution, connectivity, and cleanup semantics
 and be selected in composition wiring.

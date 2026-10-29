@@ -32,6 +32,27 @@ func TestDeploymentPreflightRejectsUnsupportedBackends(t *testing.T) {
 	}
 }
 
+func TestVHiveProfilesAndServiceBenchmarkPreflight(t *testing.T) {
+	for _, harness := range []string{"hermes", "openclaw"} {
+		cfg, err := config.Load("../../profiles/vhive/" + harness + "-tb2-fix-git-deepseek-vhive.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = validateComponents(cfg); err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Sandbox.Deployment.Backend != "vhive" || cfg.Harness.Deployment.Backend != "docker" || cfg.Bridge.Deployment.Backend != "docker" {
+			t.Fatal("wrong provider composition")
+		}
+		for _, benchmark := range []string{"deepresearchbench", "toolathlon"} {
+			cfg.Benchmark.Type = benchmark
+			if err = validateComponents(cfg); err == nil || !strings.Contains(err.Error(), "in-sandbox services") {
+				t.Fatalf("benchmark %s: %v", benchmark, err)
+			}
+		}
+	}
+}
+
 func TestUnsupportedBackendsStopRunAndSetupBeforeSideEffects(t *testing.T) {
 	for _, component := range []string{"harness", "sandbox", "bridge"} {
 		for _, command := range []struct {

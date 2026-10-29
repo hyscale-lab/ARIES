@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -13,7 +14,23 @@ type DeploymentConfig struct {
 	Backend    string                      `json:"backend"`
 	Docker     *DockerDeploymentConfig     `json:"docker,omitempty"`
 	Kubernetes *KubernetesDeploymentConfig `json:"kubernetes,omitempty"`
+	VHive      *VHiveDeploymentConfig      `json:"vhive,omitempty"`
 }
+
+// VHiveDeploymentConfig uses vHive's Firecracker/containerd worker stack.
+// Harness and bridge placement remains on the same local Docker daemon.
+type VHiveDeploymentConfig struct {
+	Socket      string `json:"socket,omitempty"`
+	Namespace   string `json:"namespace,omitempty"`
+	Snapshotter string `json:"snapshotter,omitempty"`
+	IODir       string `json:"io_dir,omitempty"`
+	// CNI network name for tasks allowing network access. Empty rejects them.
+	CNINetwork string `json:"cni_network,omitempty"`
+	VCPUs      int    `json:"vcpus,omitempty"`
+	MemoryMB   int    `json:"memory_mb,omitempty"`
+}
+
+var vhiveIdentifier = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
 
 type DockerDeploymentConfig struct {
 	Socket string `json:"socket,omitempty"`
@@ -83,6 +100,14 @@ func (c *Config) NormalizeDeployment() error {
 	if err := c.normalizeKubernetes(); err != nil {
 		return err
 	}
+	if c.Harness.Deployment.Backend == "vhive" || c.Bridge.Deployment.Backend == "vhive" {
+		return fmt.Errorf("vhive is supported only for sandbox.deployment; use Docker for harness and bridge")
+	}
+	if c.Sandbox.Deployment.Backend == "vhive" {
+		if c.Harness.Deployment.Backend != "docker" || c.Bridge.Deployment.Backend != "docker" || c.Harness.Deployment.Docker.Socket != c.Bridge.Deployment.Docker.Socket {
+			return fmt.Errorf("vhive sandboxes require harness and bridge on the same local Docker daemon")
+		}
+	}
 	c.Sandbox.Type = ""
 	return nil
 }
@@ -132,13 +157,58 @@ func (c *Config) normalizeKubernetes() error {
 
 func (d *DeploymentConfig) normalize(path string) error {
 	if d.Backend == "" {
-		if d.Docker != nil || d.Kubernetes != nil {
+		if d.Docker != nil || d.Kubernetes != nil || d.VHive != nil {
 			return fmt.Errorf("%s.backend is required with backend options", path)
 		}
 		d.Backend = "docker"
 	}
 	switch d.Backend {
+	case "vhive":
+		if d.Docker != nil || d.Kubernetes != nil {
+			return fmt.Errorf("%s: Docker and Kubernetes options do not apply to vhive", path)
+		}
+		if d.VHive == nil {
+			d.VHive = &VHiveDeploymentConfig{}
+		}
+		v := d.VHive
+		if v.Socket == "" {
+			v.Socket = "/run/firecracker-containerd/containerd.sock"
+		}
+		if v.Namespace == "" {
+			v.Namespace = "aries"
+		}
+		if v.Snapshotter == "" {
+			v.Snapshotter = "devmapper"
+		}
+		if v.IODir == "" {
+			v.IODir = "/run/firecracker-containerd/aries-io"
+		}
+		if v.VCPUs == 0 {
+			v.VCPUs = 1
+		}
+		if v.MemoryMB == 0 {
+			v.MemoryMB = 1024
+		}
+		for _, value := range []string{v.Socket, v.IODir} {
+			if !filepath.IsAbs(value) || filepath.Clean(value) != value || strings.ContainsRune(value, 0) || value == "/" {
+				return fmt.Errorf("%s.vhive: socket and io_dir must be clean absolute paths", path)
+			}
+		}
+		if v.VCPUs < 1 || v.VCPUs > 32 || v.MemoryMB < 128 || uint64(v.MemoryMB) > 1<<32-1 {
+			return fmt.Errorf("%s.vhive: vcpus must be 1..32 and memory_mb at least 128", path)
+		}
+		if v.Snapshotter != "devmapper" {
+			return fmt.Errorf("%s.vhive.snapshotter must be devmapper", path)
+		}
+		for _, value := range []string{v.Namespace, v.CNINetwork} {
+			if value != "" && !vhiveIdentifier.MatchString(value) {
+				return fmt.Errorf("%s.vhive: namespace and cni_network must be identifiers", path)
+			}
+		}
 	case "kubernetes":
+		if d.VHive != nil {
+			return fmt.Errorf("%s.vhive does not apply to backend kubernetes", path)
+		}
 		if d.Docker != nil {
 			return fmt.Errorf("%s.docker does not apply to backend kubernetes", path)
 		}
@@ -168,6 +238,9 @@ func (d *DeploymentConfig) normalize(path string) error {
 			}
 		}
 	case "docker":
+		if d.VHive != nil {
+			return fmt.Errorf("%s.vhive does not apply to backend docker", path)
+		}
 		if d.Kubernetes != nil {
 			return fmt.Errorf("%s.kubernetes does not apply to backend docker", path)
 		}

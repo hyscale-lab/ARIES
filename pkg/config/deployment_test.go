@@ -29,6 +29,45 @@ func TestDeploymentNormalization(t *testing.T) {
 	}
 }
 
+func TestVHiveDeploymentComposition(t *testing.T) {
+	newConfig := func() Config { return Config{Sandbox: SandboxConfig{Deployment: DeploymentConfig{Backend: "vhive"}}} }
+	c := newConfig()
+	if err := c.NormalizeDeployment(); err != nil {
+		t.Fatal(err)
+	}
+	if c.Sandbox.Deployment.VHive.Socket != "/run/firecracker-containerd/containerd.sock" || c.Sandbox.Deployment.VHive.MemoryMB != 1024 || c.Harness.Deployment.Backend != "docker" || c.Bridge.Deployment.Backend != "docker" {
+		t.Fatalf("normalization=%#v", c)
+	}
+	before := c
+	if err := c.NormalizeDeployment(); err != nil || !reflect.DeepEqual(before, c) {
+		t.Fatalf("not idempotent: %v", err)
+	}
+	for _, tc := range []struct {
+		name   string
+		change func(*Config)
+	}{
+		{"harness VM", func(c *Config) { c.Harness.Deployment = DeploymentConfig{Backend: "vhive"} }},
+		{"bridge VM", func(c *Config) { c.Bridge.Deployment = DeploymentConfig{Backend: "vhive"} }},
+		{"different Docker daemon", func(c *Config) {
+			c.Bridge.Deployment = DeploymentConfig{Backend: "docker", Docker: &DockerDeploymentConfig{Socket: "/other/docker.sock"}}
+		}},
+		{"cluster harness", func(c *Config) { c.Harness.Deployment = DeploymentConfig{Backend: "kubernetes"} }},
+		{"wrong backend options", func(c *Config) { c.Sandbox.Deployment.Docker = &DockerDeploymentConfig{} }},
+		{"relative socket", func(c *Config) { c.Sandbox.Deployment.VHive = &VHiveDeploymentConfig{Socket: "containerd.sock"} }},
+		{"unsafe namespace", func(c *Config) { c.Sandbox.Deployment.VHive = &VHiveDeploymentConfig{Namespace: "bad!namespace"} }},
+		{"snapshotter", func(c *Config) { c.Sandbox.Deployment.VHive = &VHiveDeploymentConfig{Snapshotter: "overlayfs"} }},
+		{"CPU capacity", func(c *Config) { c.Sandbox.Deployment.VHive = &VHiveDeploymentConfig{VCPUs: -1} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newConfig()
+			tc.change(&c)
+			if err := c.NormalizeDeployment(); err == nil {
+				t.Fatal("accepted unsupported vHive composition")
+			}
+		})
+	}
+}
+
 func TestDeploymentDecodeAndValidation(t *testing.T) {
 	cases := []struct{ name, harness, sandbox, mode, want string }{
 		{"legacy compatible", `{"backend":"docker"}`, `{"type":"docker","deployment":{"backend":"docker"}}`, "managed", ""},

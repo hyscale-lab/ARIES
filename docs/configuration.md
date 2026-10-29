@@ -114,11 +114,10 @@ settings from a complete checked-in profile. OpenClaw uses `harness.type:
 "openclaw"` with `bridge.type: "openclaw-ssh"`. Pairing is checked independently
 of placement.
 
-The separate blocks express independent component placement, so the schema does
-not require a future harness and sandbox to share a deployment implementation.
-They do not establish support for mixed backends today. A heterogeneous setup
-will also need compatible connectivity, identity, isolation, and cleanup semantics;
-see the [deployment contract](design/deployment.md).
+The separate blocks express independent component placement. Supported
+compositions are all-Docker, all-Kubernetes, and vHive tool sandboxes with
+Docker harnesses and bridge. Other mixed backends are rejected; see the
+[deployment contract](design/deployment.md).
 
 For Docker placement, both components must use the same local daemon. `socket`
 accepts an absolute Unix socket path or `unix:///absolute/path`; normalization
@@ -155,6 +154,52 @@ the Kubernetes version the pinned Invitro installs.
 Image preparation uses the selected daemon. Checked-in Docker bridge examples
 include [Hermes](../profiles/hermes-tb2-fix-git-deepseek.json) and
 [OpenClaw](../profiles/openclaw-tb2-fix-git-deepseek.json).
+
+### vHive deployment
+
+Set `sandbox.deployment.backend` to `vhive` to run each task and fresh evaluation
+sandbox in a separate Firecracker microVM. The harness and bridge use Docker on
+the same local daemon. This targets the Firecracker/containerd worker stack
+directly; it does not use Knative. See the [worker setup and limitations](implementation/vhive.md).
+
+```json
+{
+  "sandbox": {
+    "deployment": {
+      "backend": "vhive",
+      "vhive": {
+        "socket": "/run/firecracker-containerd/containerd.sock",
+        "namespace": "aries",
+        "snapshotter": "devmapper",
+        "io_dir": "/run/firecracker-containerd/aries-io",
+        "cni_network": "fcnet",
+        "vcpus": 1,
+        "memory_mb": 1024
+      }
+    }
+  }
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `socket` | Local firecracker-containerd socket; defaults to `/run/firecracker-containerd/containerd.sock`. VM control uses the adjacent `.ttrpc` socket. |
+| `namespace` | Containerd namespace; defaults to `aries`. |
+| `snapshotter` | `devmapper` only, the default. |
+| `io_dir` | Host directory for native exec FIFOs, mounted at the same path into the bridge; defaults to `/run/firecracker-containerd/aries-io`. |
+| `cni_network` | Native CNI network name for tasks permitting network access. Omitted means those tasks fail; network-disabled tasks boot without a NIC and verify that inside the guest. |
+| `vcpus` | VM capacity when the task omits a CPU limit; defaults to `1`, accepts `1..32`. Explicit task CPUs choose the ceiling for VM vCPUs and retain their fractional CPU quota. |
+| `memory_mb` | VM memory capacity when the task omits a memory limit; defaults to `1024`, minimum `128`. An explicit task limit selects VM memory instead. |
+
+Nonzero task storage must exactly match the worker's devmapper block capacity,
+checked before boot and during validation. Configure `base_image_size` on the
+worker accordingly. GPUs and benchmark services inside sandboxes are unsupported;
+Deep Research Bench and Toolathlon are rejected during component validation.
+VM resource measurements are unsupported, so occurrence resource observation is
+reported as unsupported; the shared Docker bridge keeps its native measurements.
+
+Examples: [OpenClaw](../profiles/vhive/openclaw-tb2-fix-git-deepseek-vhive.json)
+and [Hermes](../profiles/vhive/hermes-tb2-fix-git-deepseek-vhive.json).
 
 ### Kubernetes deployment
 

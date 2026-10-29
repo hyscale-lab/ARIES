@@ -55,6 +55,9 @@ type Runtime interface {
 // separately to validation and must never enter environment, argv, or labels.
 // Entrypoint nil preserves the image's entrypoint; an explicit value replaces it.
 type Request struct {
+	// AllowNetwork carries benchmark policy to VM providers. Container providers
+	// enforce it through their task attachment instead.
+	AllowNetwork bool
 	// InternalPort is exposed only on the task attachment, without host publication.
 	InternalPort int
 	// Mounts grants access only to the host paths explicitly supplied by wiring.
