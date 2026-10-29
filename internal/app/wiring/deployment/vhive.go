@@ -19,7 +19,7 @@ import (
 
 func vhiveOptions(cfg config.DeploymentConfig, logger *logrus.Logger) vhive.Options {
 	v := cfg.VHive
-	return vhive.Options{Socket: v.Socket, Namespace: v.Namespace, Snapshotter: v.Snapshotter, IODir: v.IODir, CNINetwork: v.CNINetwork, VCPUs: v.VCPUs, MemoryMB: v.MemoryMB, Logger: logger}
+	return vhive.Options{Socket: v.Socket, Namespace: v.Namespace, Snapshotter: v.Snapshotter, IODir: v.IODir, CNINetwork: v.CNINetwork, CNIBinPaths: v.CNIBinPaths, CNIConfDir: v.CNIConfDir, CNICacheDir: v.CNICacheDir, VCPUs: v.VCPUs, MemoryMB: v.MemoryMB, Logger: logger}
 }
 
 func NewVHiveSandbox(cfg config.Config, logger *logrus.Logger) (*vhive.Manager, monitor.ResourceSource, error) {

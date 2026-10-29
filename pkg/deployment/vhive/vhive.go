@@ -53,6 +53,8 @@ var identifier = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
 
 type Options struct {
 	Socket, Namespace, Snapshotter, IODir, CNINetwork string
+	CNIBinPaths                                       []string
+	CNIConfDir, CNICacheDir                           string
 	VCPUs, MemoryMB                                   int
 	// ImageArchive supplies the prepared image (including local benchmark builds).
 	// The provider imports it into its own containerd namespace.
@@ -135,6 +137,11 @@ func validateOptions(o Options) error {
 	if !identifier.MatchString(o.Namespace) || o.CNINetwork != "" && !identifier.MatchString(o.CNINetwork) {
 		return errors.New("vHive namespace and CNI network must be identifiers")
 	}
+	for _, value := range append(append([]string{}, o.CNIBinPaths...), o.CNIConfDir, o.CNICacheDir) {
+		if value != "" && (!filepath.IsAbs(value) || filepath.Clean(value) != value || value == "/" || strings.ContainsRune(value, 0)) {
+			return errors.New("vHive CNI paths must be clean absolute paths")
+		}
+	}
 	if o.Snapshotter != "devmapper" {
 		return errors.New("vHive supports the devmapper snapshotter only")
 	}
@@ -206,7 +213,7 @@ func (m *Manager) vmRequest(r deployment.Request) *proto.CreateVMRequest {
 		ExitAfterAllTasksDeleted: false,
 	}
 	if r.AllowNetwork {
-		request.NetworkInterfaces = []*proto.FirecrackerNetworkInterface{{CNIConfig: &proto.CNIConfiguration{NetworkName: m.options.CNINetwork, InterfaceName: "veth0"}}}
+		request.NetworkInterfaces = []*proto.FirecrackerNetworkInterface{{CNIConfig: &proto.CNIConfiguration{NetworkName: m.options.CNINetwork, InterfaceName: "veth0", BinPath: m.options.CNIBinPaths, ConfDir: m.options.CNIConfDir, CacheDir: m.options.CNICacheDir}}}
 	}
 	return request
 }
@@ -550,6 +557,17 @@ func (m *Manager) Stop(ctx context.Context, id string) error {
 		return errors.New("refusing to remove unowned vHive runtime")
 	}
 	state := info.Labels[stateLabel]
+	// Stop and delete the guest task before shutting down its agent. Otherwise
+	// native outstanding Wait RPCs keep the agent's graceful shutdown open.
+	if state != "stopped" {
+		if task, taskErr := c.Task(ctx, nil); taskErr == nil {
+			if _, err = task.Delete(ctx, containerd.WithProcessKill); err != nil && !errdefs.IsNotFound(err) {
+				return err
+			}
+		} else if !errdefs.IsNotFound(taskErr) {
+			return taskErr
+		}
+	}
 	if state != "reserved" && state != "stopped" {
 		control, err := m.vmControl()
 		if err != nil {
@@ -565,13 +583,6 @@ func (m *Manager) Stop(ctx context.Context, id string) error {
 	// In the pinned vHive fork StopVM waits for the VM's shim process to exit.
 	// A successful response is the native confirmation; GetVMInfo after removal
 	// returns an untyped socket-dial error rather than NotFound.
-	if task, taskErr := c.Task(ctx, nil); taskErr == nil {
-		if _, err = task.Delete(ctx); err != nil && !errdefs.IsNotFound(err) {
-			return err
-		}
-	} else if !errdefs.IsNotFound(taskErr) {
-		return taskErr
-	}
 	// The snapshot name is reserved even if its metadata Update response was
 	// lost. Remove it explicitly rather than relying on info.SnapshotKey.
 	snapshotter := m.client.SnapshotService(m.options.Snapshotter)

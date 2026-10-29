@@ -12,5 +12,6 @@ and [benchmark guides](../design/benchmark.md) for setup and execution.
 - [Kubernetes pods, staging gate, and network policies](kubernetes.md)
 - [Benchmark evaluation mechanisms](benchmarks.md)
 - [Model runtime mechanisms](model-runtime.md)
+- [Mock LLM and tool-call smoke experiments](mock-llm.md)
 
 Future capabilities are listed separately in the [roadmap](../supported.md#roadmap).

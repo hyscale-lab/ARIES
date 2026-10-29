@@ -30,6 +30,7 @@ This page summarizes capabilities and limitations. Use the
 | Model service | **DeepSeek** — external endpoint | [Model backends](configuration.md#model-backends) |
 | Model service | **SGLang** — external endpoint or one ARIES-managed host process per run | [Model backends](configuration.md#model-backends) |
 | Model service | **OpenAI-compatible server** — external only, including vLLM, llama.cpp, gateways, and hosted endpoints | [Model backends](configuration.md#model-backends) |
+| Model service | **Mock LLM** — local `aries-echo` server; request echo or one OpenClaw exec tool call and its result, without paid inference | [Mock smoke experiments](implementation/mock-llm.md) |
 
 Both harnesses and [LLM judges](configuration.md#judge-model-settings) support explicit
 [model reasoning effort](configuration.md#reasoning-effort).

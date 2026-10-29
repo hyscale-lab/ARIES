@@ -33,8 +33,8 @@ func TestDeploymentPreflightRejectsUnsupportedBackends(t *testing.T) {
 }
 
 func TestVHiveProfilesAndServiceBenchmarkPreflight(t *testing.T) {
-	for _, harness := range []string{"hermes", "openclaw"} {
-		cfg, err := config.Load("../../profiles/vhive/" + harness + "-tb2-fix-git-deepseek-vhive.json")
+	for _, name := range []string{"hermes-tb2-fix-git-deepseek-vhive", "openclaw-tb2-fix-git-deepseek-vhive", "openclaw-tb2-fix-git-echo-vhive"} {
+		cfg, err := config.Load("../../profiles/vhive/" + name + ".json")
 		if err != nil {
 			t.Fatal(err)
 		}

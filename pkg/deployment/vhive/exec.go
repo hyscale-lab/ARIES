@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/containerd/containerd"
 	"github.com/containerd/containerd/cio"
 	"github.com/hyscale-lab/aries/pkg/core"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
@@ -90,6 +91,11 @@ func (m *Manager) ExecStream(ctx context.Context, id string, command core.Comman
 		stderr = io.Discard
 	}
 	bounded := func(w io.Writer) io.Writer { return &boundedWriter{out: w, limit: limit, cancel: cancel} }
+	var input *execInput
+	if stdin != nil {
+		input = &execInput{reader: stdin, done: make(chan error, 1)}
+		stdin = input
+	}
 	proc, err := task.Exec(ctx, "aries-"+hex.EncodeToString(nonce[:]), &process,
 		cio.NewCreator(cio.WithFIFODir(m.options.IODir), cio.WithStreams(stdin, bounded(stdout), bounded(stderr))))
 	if err != nil {
@@ -113,6 +119,27 @@ func (m *Manager) ExecStream(ctx context.Context, id string, command core.Comman
 	if err = proc.Start(ctx); err != nil {
 		return failure(err)
 	}
+	// Like ctr's stdinCloser, signal native CloseIO when the local reader
+	// reaches EOF. Closing only the host FIFO leaves guest tar/cat waiting.
+	if input != nil {
+		stdinCtx, stopStdin := context.WithCancel(ctx)
+		stdinDone := make(chan struct{})
+		go func() {
+			defer close(stdinDone)
+			select {
+			case <-stdinCtx.Done():
+			case err := <-input.done:
+				if err != io.EOF {
+					cancel(err)
+					return
+				}
+				if err = proc.CloseIO(stdinCtx, containerd.WithStdinCloser); err != nil && stdinCtx.Err() == nil {
+					cancel(fmt.Errorf("close vHive exec stdin: %w", err))
+				}
+			}
+		}()
+		defer func() { stopStdin(); <-stdinDone }()
+	}
 	select {
 	case <-ctx.Done():
 		return failure(context.Cause(ctx))
@@ -134,6 +161,31 @@ func (m *Manager) ExecStream(ctx context.Context, id string, command core.Comman
 		}
 		return core.CommandResult{ExitCode: int(status.ExitCode()), Duration: time.Since(started)}, nil
 	}
+}
+
+// Delay a terminal read error accompanying data until the next read: cio must
+// write the final bytes before the native CloseIO notification is sent.
+type execInput struct {
+	reader   io.Reader
+	done     chan error
+	terminal error
+	once     sync.Once
+}
+
+func (r *execInput) Read(p []byte) (int, error) {
+	if r.terminal != nil {
+		r.once.Do(func() { r.done <- r.terminal })
+		return 0, r.terminal
+	}
+	n, err := r.reader.Read(p)
+	if err != nil {
+		r.terminal = err
+		if n > 0 {
+			return n, nil
+		}
+		r.once.Do(func() { r.done <- err })
+	}
+	return n, err
 }
 
 func execProcess(base specs.Process, c core.Command) (specs.Process, error) {

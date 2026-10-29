@@ -25,9 +25,12 @@ type VHiveDeploymentConfig struct {
 	Snapshotter string `json:"snapshotter,omitempty"`
 	IODir       string `json:"io_dir,omitempty"`
 	// CNI network name for tasks allowing network access. Empty rejects them.
-	CNINetwork string `json:"cni_network,omitempty"`
-	VCPUs      int    `json:"vcpus,omitempty"`
-	MemoryMB   int    `json:"memory_mb,omitempty"`
+	CNINetwork  string   `json:"cni_network,omitempty"`
+	CNIBinPaths []string `json:"cni_bin_paths,omitempty"`
+	CNIConfDir  string   `json:"cni_conf_dir,omitempty"`
+	CNICacheDir string   `json:"cni_cache_dir,omitempty"`
+	VCPUs       int      `json:"vcpus,omitempty"`
+	MemoryMB    int      `json:"memory_mb,omitempty"`
 }
 
 var vhiveIdentifier = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
@@ -203,6 +206,11 @@ func (d *DeploymentConfig) normalize(path string) error {
 		for _, value := range []string{v.Namespace, v.CNINetwork} {
 			if value != "" && !vhiveIdentifier.MatchString(value) {
 				return fmt.Errorf("%s.vhive: namespace and cni_network must be identifiers", path)
+			}
+		}
+		for _, value := range append(append([]string{}, v.CNIBinPaths...), v.CNIConfDir, v.CNICacheDir) {
+			if value != "" && (!filepath.IsAbs(value) || filepath.Clean(value) != value || value == "/" || strings.ContainsRune(value, 0)) {
+				return fmt.Errorf("%s.vhive: CNI paths must be clean absolute paths", path)
 			}
 		}
 	case "kubernetes":

@@ -24,6 +24,14 @@ and [native stack setup](https://github.com/vhive-serverless/firecracker-contain
 describe installing those components. The Knative control plane and vHive CRI
 daemon are not required for ARIES.
 
+A verified smoke stack uses the pinned daemon/shim with Firecracker `1.13.1`,
+vHive's guest root image, and the published
+[Firecracker CI kernel 5.10.239](https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.13/x86_64/vmlinux-5.10.239).
+Configure `kernel_image_path` in the worker's runtime JSON and include `acpi=off`
+with its normal overlay-init boot arguments. The kernel named `vmlinux-5.10.186`
+in the tested vHive asset bundle reported `5.10.0` and failed device probing on
+the smoke worker; it was not used for the successful run.
+
 The worker must provide:
 
 - The containerd socket at `/run/firecracker-containerd/containerd.sock` and
@@ -48,6 +56,8 @@ For network-enabled tasks, install a CNI configuration and its plugins, includin
 is an example; choose a subnet that does not overlap the worker's other networks.
 Set `cni_network` to its network name. The shim must be able to find that
 configuration and its binaries through its native CNI configuration paths.
+The profile's optional `cni_bin_paths`, `cni_conf_dir` and `cni_cache_dir` pass
+those paths directly to the native API, allowing a separate experiment setup.
 Use DNS resolvers reachable from the guest; a host resolver bound only to
 loopback is not reachable through the guest's loopback address.
 
@@ -101,8 +111,10 @@ The bridge validates the exact runtime, guest VM binding, component, run, task
 and running state before granting borrowed execution. It has no VM control
 socket. Session revocation precedes verifier injection as on other deployments.
 
-Cleanup uses native `StopVM`, which in the pinned fork waits for the VM shim to
-exit. It then removes task metadata and the writable snapshot, and confirms
+Cleanup first kills all processes in the owned guest container and deletes the
+task through containerd's native `WithProcessKill` path. This releases outstanding
+agent `Wait` calls before native `StopVM`, which waits for the VM shim to exit.
+It then removes container metadata and the writable snapshot, and confirms
 container absence. A persistent stopped marker lets snapshot cleanup retry
 without trying to stop the VM again. Removal failures retain ownership.
 Ambiguous VM-control failures remain cleanup errors: the native API can return
@@ -114,7 +126,7 @@ metadata. Containerd's cached image content is shared and is not task-owned.
 
 Terminal-Bench 2, SWE-Atlas QA and SWE-bench Pro fit the sandbox API when their
 images, requested disk capacity and network policy meet the requirements above.
-These combinations still require validation on a prepared worker. GPUs, host
+Each combination still requires validation on its target worker. GPUs, host
 mounts, network aliases, published services, remote workers and remote
 snapshotters are unsupported. Deep Research Bench and Toolathlon are rejected
 because their in-sandbox services need address routing this backend does not
@@ -123,8 +135,8 @@ implement.
 A VM always has finite hardware capacity. Omitted task CPU and memory limits use
 the configured default VM capacity; explicit limits select vCPU count and guest
 memory. Task CPU requests must be in `0.01..32`; fractional requests additionally
-set the guest process quota. Guest
-memory includes kernel overhead. Nonzero disk limits are enforced by checking
+set the guest process quota. Guest memory includes kernel overhead.
+Nonzero disk limits are enforced by checking
 the fixed devmapper capacity, rather than treating the setting as metadata.
 
 Occurrence resource observation is explicitly reported as unsupported, including

@@ -7,6 +7,7 @@ import (
 	"io"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -133,6 +134,7 @@ type fakeVM struct {
 	stopErr error
 	stops   int
 	wrongID bool
+	onStop  func()
 }
 
 func (v *fakeVM) GetVMInfo(_ context.Context, r *proto.GetVMInfoRequest) (*proto.GetVMInfoResponse, error) {
@@ -144,8 +146,56 @@ func (v *fakeVM) GetVMInfo(_ context.Context, r *proto.GetVMInfoRequest) (*proto
 }
 
 func (v *fakeVM) StopVM(context.Context, *proto.StopVMRequest) (*emptypb.Empty, error) {
+	if v.onStop != nil {
+		v.onStop()
+	}
 	v.stops++
 	return &emptypb.Empty{}, v.stopErr
+}
+
+type cleanupTask struct {
+	containerd.Task
+	events *[]string
+	exit   chan containerd.ExitStatus
+}
+
+func (*cleanupTask) Pid() uint32                                                  { return 1 }
+func (t *cleanupTask) Wait(context.Context) (<-chan containerd.ExitStatus, error) { return t.exit, nil }
+func (t *cleanupTask) Kill(ctx context.Context, _ syscall.Signal, opts ...containerd.KillOpts) error {
+	var info containerd.KillInfo
+	for _, opt := range opts {
+		if err := opt(ctx, &info); err != nil {
+			return err
+		}
+	}
+	if !info.All {
+		return errors.New("cleanup must kill all guest processes")
+	}
+	*t.events = append(*t.events, "kill")
+	t.exit <- *containerd.NewExitStatus(137, time.Now(), nil)
+	return nil
+}
+func (t *cleanupTask) Delete(ctx context.Context, opts ...containerd.ProcessDeleteOpts) (*containerd.ExitStatus, error) {
+	for _, opt := range opts {
+		if err := opt(ctx, t); err != nil {
+			return nil, err
+		}
+	}
+	*t.events = append(*t.events, "delete-task")
+	return containerd.NewExitStatus(137, time.Now(), nil), nil
+}
+
+func TestStopTerminatesGuestTaskBeforeAgentShutdown(t *testing.T) {
+	var events []string
+	c := ownedContainer()
+	c.task = &cleanupTask{events: &events, exit: make(chan containerd.ExitStatus, 1)}
+	m := &Manager{options: Options{Namespace: "aries", Snapshotter: "devmapper"}, client: &fakeClient{container: c}, vm: &fakeVM{onStop: func() { events = append(events, "stop-vm") }}}
+	if err := m.Stop(t.Context(), "sandbox"); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(events, []string{"kill", "delete-task", "stop-vm"}) {
+		t.Fatalf("teardown order=%v", events)
+	}
 }
 
 func ownedContainer() *fakeContainer {
@@ -426,7 +476,7 @@ func TestExecDeadlineClosesOutputInheritedByBackgroundProcesses(t *testing.T) {
 }
 
 func TestVMRequestAndUnsupportedSettings(t *testing.T) {
-	m := &Manager{options: Options{VCPUs: 1, MemoryMB: 1024, CNINetwork: "fcnet"}}
+	m := &Manager{options: Options{VCPUs: 1, MemoryMB: 1024, CNINetwork: "fcnet", CNIBinPaths: []string{"/experiment/cni/bin"}, CNIConfDir: "/experiment/cni/conf", CNICacheDir: "/experiment/cni/cache"}}
 	cpu, memory := 1.5, 4096
 	r := deployment.Request{Name: "sandbox", Image: "image:tag", Entrypoint: []string{"/bin/sleep"}, Labels: ownedContainer().info.Labels, CPU: &cpu, MemoryMB: &memory}
 	if err := m.validateRequest(r); err != nil {
@@ -439,6 +489,10 @@ func TestVMRequestAndUnsupportedSettings(t *testing.T) {
 	r.AllowNetwork = true
 	if m.vmRequest(r).NetworkInterfaces[0].CNIConfig.NetworkName != "fcnet" {
 		t.Fatal("missing CNI network")
+	}
+	cni := m.vmRequest(r).NetworkInterfaces[0].CNIConfig
+	if !reflect.DeepEqual(cni.BinPath, m.options.CNIBinPaths) || cni.ConfDir != m.options.CNIConfDir || cni.CacheDir != m.options.CNICacheDir {
+		t.Fatalf("CNI path handoff=%v", cni)
 	}
 	m.options.CNINetwork = ""
 	if err := m.validateRequest(r); err == nil {
@@ -461,5 +515,26 @@ func TestOutputLimitCancelsTransport(t *testing.T) {
 	}
 	if _, err := w.Write([]byte("d")); err == nil || ctx.Err() == nil || out.String() != "abc" {
 		t.Fatal("unbounded exec output")
+	}
+}
+
+type finalRead struct{}
+
+func (finalRead) Read(p []byte) (int, error) { return copy(p, "payload"), io.EOF }
+func TestExecInputDefersEOFUntilFinalBytesAreWritten(t *testing.T) {
+	input := &execInput{reader: finalRead{}, done: make(chan error, 1)}
+	buf := make([]byte, 16)
+	n, err := input.Read(buf)
+	if err != nil || string(buf[:n]) != "payload" {
+		t.Fatalf("final input bytes=%q err=%v", buf[:n], err)
+	}
+	select {
+	case <-input.done:
+		t.Fatal("stdin closed before final bytes were copied")
+	default:
+	}
+	n, err = input.Read(buf)
+	if n != 0 || err != io.EOF || <-input.done != io.EOF {
+		t.Fatalf("EOF result=%d %v", n, err)
 	}
 }

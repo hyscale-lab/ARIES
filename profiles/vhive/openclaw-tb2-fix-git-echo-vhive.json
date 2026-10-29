@@ -1,0 +1,53 @@
+{
+  "name": "openclaw-tb2-fix-git-echo-vhive",
+  "versions_file": "../../configs/versions.json",
+  "overrides_file": "",
+  "execution": {
+    "concurrency": 1
+  },
+  "benchmark": {
+    "type": "terminalbench2",
+    "root": ".cache/terminal-bench-2-1",
+    "tasks": [
+      "fix-git"
+    ]
+  },
+  "harness": {
+    "type": "openclaw",
+    "deployment": {
+      "backend": "docker",
+      "docker": {
+        "socket": "/var/run/docker.sock"
+      }
+    }
+  },
+  "sandbox": {
+    "deployment": {
+      "backend": "vhive",
+      "vhive": {
+        "socket": "/run/firecracker-containerd/containerd.sock",
+        "namespace": "aries",
+        "snapshotter": "devmapper",
+        "io_dir": "/run/firecracker-containerd/aries-io",
+        "cni_network": "fcnet"
+      }
+    }
+  },
+  "bridge": {
+    "deployment": {
+      "backend": "docker"
+    },
+    "type": "openclaw-ssh",
+    "mode": "managed"
+  },
+  "runtime": {
+    "backend": "openai",
+    "mode": "external"
+  },
+  "model": {
+    "base_url": "http://172.17.0.1:18080/v1",
+    "api_key_env": "ECHO_API_KEY",
+    "id": "aries-echo"
+  },
+  "output_dir": "runs"
+}

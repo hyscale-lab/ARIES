@@ -57,6 +57,7 @@ func TestVHiveDeploymentComposition(t *testing.T) {
 		{"unsafe namespace", func(c *Config) { c.Sandbox.Deployment.VHive = &VHiveDeploymentConfig{Namespace: "bad!namespace"} }},
 		{"snapshotter", func(c *Config) { c.Sandbox.Deployment.VHive = &VHiveDeploymentConfig{Snapshotter: "overlayfs"} }},
 		{"CPU capacity", func(c *Config) { c.Sandbox.Deployment.VHive = &VHiveDeploymentConfig{VCPUs: -1} }},
+		{"relative CNI directory", func(c *Config) { c.Sandbox.Deployment.VHive = &VHiveDeploymentConfig{CNIConfDir: "relative/cni"} }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := newConfig()

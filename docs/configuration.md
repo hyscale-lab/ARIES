@@ -188,6 +188,7 @@ directly; it does not use Knative. See the [worker setup and limitations](implem
 | `snapshotter` | `devmapper` only, the default. |
 | `io_dir` | Host directory for native exec FIFOs, mounted at the same path into the bridge; defaults to `/run/firecracker-containerd/aries-io`. |
 | `cni_network` | Native CNI network name for tasks permitting network access. Omitted means those tasks fail; network-disabled tasks boot without a NIC and verify that inside the guest. |
+| `cni_bin_paths`, `cni_conf_dir`, `cni_cache_dir` | Optional native CNI plugin search paths, configuration directory, and result cache directory. Omitted values retain native worker defaults. Use these to keep an experiment's CNI setup in its own directories. |
 | `vcpus` | VM capacity when the task omits a CPU limit; defaults to `1`, accepts `1..32`. Explicit task CPUs choose the ceiling for VM vCPUs and retain their fractional CPU quota. |
 | `memory_mb` | VM memory capacity when the task omits a memory limit; defaults to `1024`, minimum `128`. An explicit task limit selects VM memory instead. |
 
