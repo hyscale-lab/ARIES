@@ -3,10 +3,12 @@ package echo
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -318,6 +320,125 @@ func TestToolModeRequiresTheNativeExecTool(t *testing.T) {
 		server.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body)))
 		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "exec function") {
 			t.Fatalf("response=%d %s", response.Code, response.Body)
+		}
+	}
+}
+
+func TestFollowupToolCommandReturnsBothResults(t *testing.T) {
+	tools := []any{map[string]any{"type": "function", "function": map[string]any{"name": "exec"}}}
+	commands := []string{`printf 'first\n'; cat /proc/sys/kernel/random/boot_id`, `printf 'second\n'; cat /proc/sys/kernel/random/boot_id`}
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%v", stream), func(t *testing.T) {
+			server, err := New(Options{ToolCommand: commands[0], ToolFollowupCommand: commands[1]})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer server.Close()
+			initial := []any{map[string]string{"role": "user", "content": "Probe suspend and restore."}}
+			messages := append([]any{}, initial...)
+			ids := map[string]bool{}
+			outputs := []string{"FIRST_BOOT=same-boot\nPID=123", "SECOND_BOOT=same-boot\nPID=123"}
+			for step, command := range commands {
+				got := requestCompletion(t, server, stream, messages, tools)
+				if got.Finish != "tool_calls" || len(got.Calls) != 1 {
+					t.Fatalf("step=%d completion=%+v", step, got)
+				}
+				call := got.Calls[0]
+				if ids[call.ID] {
+					t.Fatalf("step=%d reused ID %q", step, call.ID)
+				}
+				for _, r := range call.ID {
+					if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
+						t.Fatalf("non-alphanumeric call ID %q", call.ID)
+					}
+				}
+				ids[call.ID] = true
+				var args map[string]string
+				if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil || args["command"] != command {
+					t.Fatalf("step=%d arguments=%v error=%v", step, args, err)
+				}
+				replay := requestCompletion(t, server, stream, messages, tools)
+				if !reflect.DeepEqual(replay, got) {
+					t.Fatalf("replay changed step %d: %+v vs %+v", step, got, replay)
+				}
+				// Another conversation must still start with its first command.
+				parallel := requestCompletion(t, server, stream, initial, tools)
+				var firstArgs map[string]string
+				if err := json.Unmarshal([]byte(parallel.Calls[0].Function.Arguments), &firstArgs); err != nil || firstArgs["command"] != commands[0] {
+					t.Fatalf("parallel chat skipped command: %+v %v", parallel, err)
+				}
+				messages = append(messages, map[string]any{"role": "assistant", "tool_calls": []any{map[string]any{"id": call.ID, "type": "function", "function": map[string]string{"name": "exec", "arguments": call.Function.Arguments}}}}, map[string]string{"role": "tool", "tool_call_id": call.ID, "content": outputs[step]})
+			}
+			final := requestCompletion(t, server, stream, messages, tools)
+			want := "Mock exec tool result:\n" + outputs[0] + "\nMock followup exec tool result:\n" + outputs[1]
+			if final.Finish != "stop" || len(final.Calls) != 0 || final.Content != want {
+				t.Fatalf("final=%+v", final)
+			}
+			messages = append(messages, map[string]string{"role": "user", "content": "Repeat probe."})
+			next := requestCompletion(t, server, stream, messages, tools)
+			if next.Finish != "tool_calls" || len(next.Calls) != 1 || ids[next.Calls[0].ID] {
+				t.Fatalf("next turn=%+v", next)
+			}
+		})
+	}
+}
+
+func TestFollowupToolCommandValidation(t *testing.T) {
+	for _, options := range []Options{{ToolFollowupCommand: "uname -r"}, {ToolCommand: "uname -r", ToolFollowupCommand: "bad\x00command"}} {
+		if server, err := New(options); err == nil {
+			server.Close()
+			t.Fatalf("accepted invalid options %+v", options)
+		}
+	}
+}
+
+func TestToolYieldMillisecondsIsOptionalNativeNumericArgument(t *testing.T) {
+	tools := []any{map[string]any{"type": "function", "function": map[string]any{"name": "exec"}}}
+	for _, stream := range []bool{false, true} {
+		for _, yieldMS := range []int{0, 300000} {
+			t.Run(fmt.Sprintf("stream=%v/yield=%d", stream, yieldMS), func(t *testing.T) {
+				server, err := New(Options{ToolCommand: "first", ToolFollowupCommand: "second", ToolYieldMS: yieldMS})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer server.Close()
+				messages := []any{map[string]string{"role": "user", "content": "probe"}}
+				for _, command := range []string{"first", "second"} {
+					completion := requestCompletion(t, server, stream, messages, tools)
+					if len(completion.Calls) != 1 {
+						t.Fatalf("completion=%+v", completion)
+					}
+					call := completion.Calls[0]
+					var args map[string]json.RawMessage
+					if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+						t.Fatal(err)
+					}
+					var gotCommand string
+					if err := json.Unmarshal(args["command"], &gotCommand); err != nil || gotCommand != command {
+						t.Fatalf("command=%q error=%v", gotCommand, err)
+					}
+					if yieldMS == 0 {
+						if _, ok := args["yieldMs"]; ok || len(args) != 1 {
+							t.Fatalf("native default overwritten: %v", args)
+						}
+					} else {
+						var gotYield int
+						if err := json.Unmarshal(args["yieldMs"], &gotYield); err != nil || gotYield != yieldMS || len(args) != 2 {
+							t.Fatalf("yieldMs must be numeric: %v error=%v", args, err)
+						}
+					}
+					messages = append(messages, map[string]string{"role": "tool", "tool_call_id": call.ID, "content": "completed"})
+				}
+			})
+		}
+	}
+}
+
+func TestToolYieldMillisecondsValidation(t *testing.T) {
+	for _, options := range []Options{{ToolYieldMS: 1}, {ToolCommand: "probe", ToolYieldMS: -1}} {
+		if server, err := New(options); err == nil {
+			server.Close()
+			t.Fatalf("accepted invalid options %+v", options)
 		}
 	}
 }

@@ -41,7 +41,7 @@ func TestMicroVMLifecycleIntegration(t *testing.T) {
 			t.Fatal("ARIES_VHIVE_STORAGE_MB must be a positive size matching devmapper")
 		}
 	}
-	m, err := New(Options{Socket: os.Getenv("ARIES_VHIVE_SOCKET"), Namespace: namespace, IODir: os.Getenv("ARIES_VHIVE_IO_DIR")})
+	m, err := New(Options{Socket: os.Getenv("ARIES_VHIVE_SOCKET"), Namespace: namespace, IODir: os.Getenv("ARIES_VHIVE_IO_DIR"), IdleMode: os.Getenv("ARIES_VHIVE_IDLE_MODE"), CheckpointDir: os.Getenv("ARIES_VHIVE_CHECKPOINT_DIR"), ShimDir: os.Getenv("ARIES_VHIVE_SHIM_DIR")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,6 +96,14 @@ func TestMicroVMLifecycleIntegration(t *testing.T) {
 	}
 	if err = m.UploadArchive(ctx, id, "/tmp", &input); err != nil {
 		t.Fatal(err)
+	}
+	if m.options.IdleMode == "checkpoint" {
+		if err = m.Suspend(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+		if err = m.Resume(ctx, id); err != nil {
+			t.Fatal(err)
+		}
 	}
 	stream, info, err := m.DownloadArchive(ctx, id, "/tmp/aries-state")
 	if err != nil {

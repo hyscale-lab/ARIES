@@ -56,6 +56,10 @@ type Options struct {
 	CNIBinPaths                                       []string
 	CNIConfDir, CNICacheDir                           string
 	VCPUs, MemoryMB                                   int
+	IdleMode, CheckpointDir, ShimDir                  string
+	// CheckpointAfterExec parks borrowed bridge calls. Runner operations restore
+	// on demand and leave preparation/evaluation processes running.
+	CheckpointAfterExec bool
 	// ImageArchive supplies the prepared image (including local benchmark builds).
 	// The provider imports it into its own containerd namespace.
 	ImageArchive func(context.Context, string) (io.ReadCloser, error)
@@ -63,7 +67,7 @@ type Options struct {
 }
 
 // ExecutionOptions is the non-secret connection contract handed to the bridge.
-type ExecutionOptions struct{ Socket, Namespace, IODir string }
+type ExecutionOptions struct{ Socket, Namespace, IODir, IdleMode, CheckpointDir, ShimDir string }
 
 type vmClient interface {
 	CreateVM(context.Context, *proto.CreateVMRequest) (*proto.CreateVMResponse, error)
@@ -93,7 +97,7 @@ type Manager struct {
 var _ deployment.Deployment = (*Manager)(nil)
 
 // New constructs containerd transport. VM control is connected on first use;
-// the bridge's borrowed executor needs only containerd and the shared FIFO path.
+// checkpoint bridges also use VM control and the existing guest agent.
 func New(options Options) (*Manager, error) {
 	if options.Socket == "" {
 		options.Socket = "/run/firecracker-containerd/containerd.sock"
@@ -106,6 +110,15 @@ func New(options Options) (*Manager, error) {
 	}
 	if options.IODir == "" {
 		options.IODir = "/run/firecracker-containerd/aries-io"
+	}
+	if options.IdleMode == "" {
+		options.IdleMode = "persistent"
+	}
+	if options.CheckpointDir == "" {
+		options.CheckpointDir = "/var/lib/firecracker-containerd/aries-checkpoints"
+	}
+	if options.ShimDir == "" {
+		options.ShimDir = "/var/lib/firecracker-containerd/shim-base"
 	}
 	if options.VCPUs == 0 {
 		options.VCPUs = 1
@@ -129,9 +142,19 @@ func New(options Options) (*Manager, error) {
 }
 
 func validateOptions(o Options) error {
+	if o.IdleMode != "" && o.IdleMode != "persistent" && o.IdleMode != "checkpoint" {
+		return errors.New("vHive idle_mode must be persistent or checkpoint")
+	}
 	for _, p := range []string{o.Socket, o.IODir} {
 		if !filepath.IsAbs(p) || filepath.Clean(p) != p || p == "/" || strings.ContainsRune(p, 0) {
 			return errors.New("vHive socket and IO directory must be clean absolute paths")
+		}
+	}
+	if o.IdleMode == "checkpoint" {
+		for _, p := range []string{o.CheckpointDir, o.ShimDir} {
+			if !filepath.IsAbs(p) || filepath.Clean(p) != p || p == "/" || strings.ContainsRune(p, 0) {
+				return errors.New("vHive checkpoint and shim directories must be clean absolute paths")
+			}
 		}
 	}
 	if !identifier.MatchString(o.Namespace) || o.CNINetwork != "" && !identifier.MatchString(o.CNINetwork) {
@@ -169,6 +192,9 @@ func (m *Manager) ctx(ctx context.Context) context.Context {
 }
 
 func (m *Manager) validateRequest(r deployment.Request) error {
+	if r.HostPID {
+		return errors.New("vHive guests do not support host PID access")
+	}
 	if !identifier.MatchString(r.Name) || r.Image == "" {
 		return errors.New("vHive requires a runtime name and image")
 	}
@@ -269,7 +295,24 @@ func (m *Manager) Create(ctx context.Context, r deployment.Request) (_ string, r
 	if _, err = container.SetLabels(ctx, map[string]string{stateLabel: "starting"}); err != nil {
 		return r.Name, err
 	}
-	if _, err = control.CreateVM(ctx, m.vmRequest(r)); err != nil {
+	request := m.vmRequest(r)
+	if m.options.IdleMode == "checkpoint" {
+		if err = os.MkdirAll(m.runtimeDir(r.Name), 0700); err != nil {
+			return r.Name, err
+		}
+		if r.AllowNetwork {
+			iface, ns, netErr := m.prepareCheckpointNetwork(ctx, r.Name)
+			if netErr != nil {
+				return r.Name, netErr
+			}
+			request.NetworkInterfaces = []*proto.FirecrackerNetworkInterface{iface}
+			request.NetNS = ns
+		}
+		if err = m.saveCheckpoint(r.Name, &checkpointState{Phase: "starting", Request: request}); err != nil {
+			return r.Name, err
+		}
+	}
+	if _, err = control.CreateVM(ctx, request); err != nil {
 		return r.Name, fmt.Errorf("boot vHive microVM: %w", err)
 	}
 	if err = os.MkdirAll(m.options.IODir, 0o700); err != nil {
@@ -283,6 +326,11 @@ func (m *Manager) Create(ctx context.Context, r deployment.Request) (_ string, r
 	}
 	if err = task.Start(ctx); err != nil {
 		return r.Name, fmt.Errorf("start idle guest task: %w", err)
+	}
+	if m.options.IdleMode == "checkpoint" {
+		if err = m.saveCheckpoint(r.Name, &checkpointState{Phase: "running", Request: request}); err != nil {
+			return r.Name, err
+		}
 	}
 	m.options.Logger.WithContext(ctx).WithField("vm", r.Name).Info("vHive microVM created")
 	return r.Name, nil
@@ -408,6 +456,13 @@ func (m *Manager) Validate(ctx context.Context, id string, r deployment.Request,
 		return errors.New("vHive runtime identity differs")
 	}
 	ctx = m.ctx(ctx)
+	if m.options.IdleMode == "checkpoint" {
+		f, err := m.acquireCheckpoint(ctx, id)
+		if err != nil {
+			return err
+		}
+		defer unlockCheckpoint(f)
+	}
 	c, err := m.client.LoadContainer(ctx, id)
 	if err != nil {
 		return err
@@ -525,6 +580,9 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 }
 
 func (m *Manager) Running(ctx context.Context, id string) (bool, error) {
+	if m.options.IdleMode == "checkpoint" {
+		return m.checkpointRunning(ctx, id)
+	}
 	c, err := m.client.LoadContainer(m.ctx(ctx), id)
 	if err != nil {
 		return false, err
@@ -547,6 +605,19 @@ func (m *Manager) Stop(ctx context.Context, id string) error {
 	}
 	// Metadata is allocated before the VM and removed only after confirmed stop.
 	if errdefs.IsNotFound(err) {
+		if m.options.IdleMode == "checkpoint" {
+			state, stateErr := m.loadCheckpoint(id)
+			if os.IsNotExist(stateErr) {
+				return nil
+			}
+			if stateErr != nil {
+				return stateErr
+			}
+			if state.Phase != "removed" {
+				return errors.New("checkpoint ownership metadata missing before confirmed removal")
+			}
+			return os.RemoveAll(m.runtimeDir(id))
+		}
 		return nil
 	}
 	info, err := c.Info(ctx)
@@ -557,6 +628,15 @@ func (m *Manager) Stop(ctx context.Context, id string) error {
 		return errors.New("refusing to remove unowned vHive runtime")
 	}
 	state := info.Labels[stateLabel]
+	if m.options.IdleMode == "checkpoint" {
+		if err = m.stopCheckpoint(ctx, id); err != nil {
+			return err
+		}
+		state = "stopped"
+		if _, err = c.SetLabels(ctx, map[string]string{stateLabel: "stopped"}); err != nil {
+			return err
+		}
+	}
 	// Stop and delete the guest task before shutting down its agent. Otherwise
 	// native outstanding Wait RPCs keep the agent's graceful shutdown open.
 	if state != "stopped" {
@@ -603,6 +683,9 @@ func (m *Manager) Stop(ctx context.Context, id string) error {
 			return errors.New("vHive container metadata remains after removal")
 		}
 		return err
+	}
+	if m.options.IdleMode == "checkpoint" {
+		return os.RemoveAll(m.runtimeDir(id))
 	}
 	return nil
 }

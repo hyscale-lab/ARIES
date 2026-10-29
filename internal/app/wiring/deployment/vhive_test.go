@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -38,6 +39,43 @@ func TestVHiveExecutionAccessSharesOnlyExecutionSocketAndFIFOs(t *testing.T) {
 	_, err = (vhiveResources{}).Sample(t.Context())
 	if !errors.Is(err, monitor.ErrUnsupported) {
 		t.Fatalf("VM metrics must not be reported as zero: %v", err)
+	}
+}
+
+func TestVHiveCheckpointExecutionAccessSharesLifecycleState(t *testing.T) {
+	dir := t.TempDir()
+	shimDir := filepath.Join(dir, "shims")
+	if err := os.Mkdir(shimDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	v := &config.VHiveDeploymentConfig{Socket: "/run/custom/containerd.sock", Namespace: "experiment", IODir: filepath.Join(dir, "io"), IdleMode: "checkpoint", CheckpointDir: filepath.Join(dir, "checkpoints"), ShimDir: shimDir}
+	endpoint, mounts, err := VHiveExecutionAccess(config.DeploymentConfig{Backend: "vhive", VHive: v})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got vhive.ExecutionOptions
+	if err := json.Unmarshal([]byte(endpoint), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.IdleMode != "checkpoint" || got.CheckpointDir != v.CheckpointDir || got.ShimDir != v.ShimDir {
+		t.Fatalf("checkpoint handoff=%+v", got)
+	}
+	want := []string{v.Socket, v.IODir, v.Socket + ".ttrpc", v.CheckpointDir, v.ShimDir}
+	if len(mounts) != len(want) {
+		t.Fatalf("mounts=%v", mounts)
+	}
+	for i, path := range want {
+		if mounts[i].Source != path || mounts[i].Target != path || mounts[i].ReadOnly {
+			t.Errorf("mount[%d]=%+v", i, mounts[i])
+		}
+	}
+	info, err := os.Stat(v.CheckpointDir)
+	if err != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("checkpoint permissions: %v %v", info, err)
+	}
+	v.ShimDir = filepath.Join(dir, "missing")
+	if _, _, err := VHiveExecutionAccess(config.DeploymentConfig{Backend: "vhive", VHive: v}); err == nil {
+		t.Fatal("missing worker shim directory accepted")
 	}
 }
 

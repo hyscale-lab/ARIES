@@ -6,7 +6,7 @@ task occurrence and each fresh evaluation sandbox owns a separate VM and image
 snapshot. OpenClaw or Hermes and the managed SSH bridge remain Docker containers
 on one local Docker daemon and one run network. Runner runs on that same worker.
 
-This integration uses native containerd APIs for guest execution and tar streams,
+This integration uses native containerd guest APIs for execution and tar streams,
 and the native Firecracker control API for VM lifecycle. It does not deploy
 Knative functions. vHive's Knative CRI exec forwards to a host-side placeholder,
 so that endpoint cannot provide guest tool execution. See upstream
@@ -47,8 +47,9 @@ The worker must provide:
 - An exec FIFO directory, by default `/run/firecracker-containerd/aries-io`,
   writable by Runner and accessible by the daemon. Wiring creates it before
   starting the bridge and mounts it at the same path into that container.
-  Only the execution socket and FIFO directory are mounted into the bridge;
-  the guest receives neither.
+  Persistent mode mounts the execution socket and FIFO directory into the bridge.
+  Checkpoint mode adds the control socket and directories described below.
+  The guest receives none of these host mounts.
 
 For network-enabled tasks, install a CNI configuration and its plugins, including
 `tc-redirect-tap`. The upstream
@@ -108,11 +109,13 @@ normal deadlines and output bounds. File transfers use guest `tar` and `stat`;
 images must provide these, `/bin/sh` and `/bin/sleep`.
 
 The bridge validates the exact runtime, guest VM binding, component, run, task
-and running state before granting borrowed execution. It has no VM control
-socket. Session revocation precedes verifier injection as on other deployments.
+and logical running state before granting borrowed execution. Persistent mode
+needs only containerd execution access. Checkpoint mode also needs VM control
+access to suspend and restore the borrowed target. Session revocation precedes
+verifier injection as on other deployments.
 
-Cleanup first kills all processes in the owned guest container and deletes the
-task through containerd's native `WithProcessKill` path. This releases outstanding
+In persistent mode, cleanup first kills all processes in the owned guest
+container and deletes the task through containerd's native `WithProcessKill` path. This releases outstanding
 agent `Wait` calls before native `StopVM`, which waits for the VM shim to exit.
 It then removes container metadata and the writable snapshot, and confirms
 container absence. A persistent stopped marker lets snapshot cleanup retry
@@ -121,6 +124,52 @@ Ambiguous VM-control failures remain cleanup errors: the native API can return
 an untyped socket error after a lost response, and ARIES does not infer VM
 absence from that error. Inspect the worker before manually removing retained
 metadata. Containerd's cached image content is shared and is not task-owned.
+
+## Suspend and resume
+
+Set `sandbox.deployment.vhive.idle_mode` to `persistent` or `checkpoint`.
+Omission selects `persistent`, which keeps each guest running through task
+execution and evaluation. In `checkpoint` mode, a completed bridge command
+parks the VM once concurrent operations have finished. ARIES pauses the guest,
+saves its memory and VMM state to disk, and removes the VMM. The next command
+restores that checkpoint before execution. The logical sandbox ID, guest boot,
+process memory and writable filesystem remain the same. Background processes
+are suspended with the VM and continue after restore; they do not run while the
+VM is on disk.
+
+Checkpoints live under `checkpoint_dir`, defaulting to
+`/var/lib/firecracker-containerd/aries-checkpoints`, separated by containerd
+namespace and sandbox ID. Use disk storage with sufficient room for guest memory;
+checkpoint files contain private task state. The writable devmapper device stays
+allocated while suspended. Network-enabled sandboxes also retain their original
+CNI allocation, namespace, tap device, MAC and IP across VMM removal. Task cleanup
+removes these owned allocations and checkpoint files. A checkpoint is temporary
+state for the current sandbox, rather than a portable image or a new evaluation
+sandbox.
+
+Set `shim_dir` to the worker runtime's `shim_base_dir`; its default is
+`/var/lib/firecracker-containerd/shim-base`. Checkpoint mode mounts that directory,
+`checkpoint_dir` and the adjacent containerd `.ttrpc` control socket into the
+Docker bridge at their host paths. Keep these paths consistent between Runner,
+daemon and bridge. The checkpoint bridge also uses the host PID namespace so it
+can confirm removal of the exact VMM and shim processes. Persistent mode retains
+its smaller execution socket and FIFO mounts.
+
+Stopping a paused VMM can produce the native force-termination error even when
+termination succeeds. ARIES does not treat that error text as proof of absence.
+Before stopping, it identifies the VMM through credentials on its Unix socket
+and records its parent shim identity from host process metadata. It confirms
+those exact processes have exited before marking the checkpoint suspended; an
+unconfirmed exit retains ownership and reports an error.
+
+The native snapshot loader restores the guest agent's process state, but does
+not rebuild the host shim's task table. Checkpoint execution therefore calls the
+native guest task API over vsock directly, preserving argv, streams and process
+exit semantics after restore. Concurrent commands share access to the running
+VM; checkpointing waits until they release it. Runner preparation and evaluation
+operations restore the sandbox when needed without parking after every file
+transfer. A restore or checkpoint error remains an operation error and retains
+ownership for cleanup; an ambiguous command submission is never retried.
 
 ## Limits and verification
 
@@ -158,7 +207,44 @@ go test -tags=integration -run TestMicroVMLifecycleIntegration -v ./pkg/deployme
 
 Optional test settings are `ARIES_VHIVE_SOCKET`, `ARIES_VHIVE_NAMESPACE`,
 `ARIES_VHIVE_IO_DIR` and `ARIES_VHIVE_STORAGE_MB` (default `10240`, matching a
-10 GiB devmapper device). The test boots real VMs, checks storage capacity and network-disabled validation,
-guest I/O, archive permissions, cancellation, borrowed-target validation, fresh
-evaluation state and removal. It does not contact a model API. Without the
-opt-in variable it skips; a skip is not execution evidence.
+10 GiB devmapper device). Set `ARIES_VHIVE_IDLE_MODE=checkpoint`,
+`ARIES_VHIVE_CHECKPOINT_DIR` and, when needed, `ARIES_VHIVE_SHIM_DIR` to exercise
+the lifecycle test with an explicit suspend/restore after archive upload. The
+test covers guest I/O, archive permissions, nonzero exits, cancellation with
+commands surviving, borrowed-target validation, fresh evaluation state and
+removal.
+
+The dedicated checkpoint test uses a 10 GiB devmapper device and requires a
+checkpoint directory:
+
+```sh
+ARIES_VHIVE_INTEGRATION=1 \
+ARIES_VHIVE_IMAGE=docker.io/library/alpine:3.21.3 \
+ARIES_VHIVE_CHECKPOINT_DIR=/var/lib/firecracker-containerd/aries-checkpoints \
+go test -tags=integration -run TestMicroVMCheckpointIntegration -v ./pkg/deployment/vhive
+```
+
+It accepts the socket, namespace, IO directory and shim directory settings above.
+To include networking, set `ARIES_VHIVE_CNI_NETWORK`, and optionally
+`ARIES_VHIVE_CNI_BIN_PATHS`, `ARIES_VHIVE_CNI_CONF_DIR` and
+`ARIES_VHIVE_CNI_CACHE_DIR`. The binary path list uses the host's path-list
+separator (`:` on Linux). Without a CNI network the test creates a network-disabled
+sandbox. It checks three checkpoint/removal/restore cycles, private nonempty
+checkpoint files, VMM/shim absence while suspended, the same guest boot ID and
+background PID after restore, preserved disk content, stable interface addresses
+and routes, and final removal of checkpoint files.
+
+These native tests passed on the smoke worker in checkpoint mode, including the
+dedicated test with and without CNI networking. They do not contact a model API.
+Without the opt-in variable they skip; a skip is not execution evidence.
+
+An OpenClaw end-to-end smoke run also passed using the mock LLM's
+[two-command checkpoint example](mock-llm.md): both diagnostic tools completed
+with exit zero, and the restored guest retained its boot ID, live background
+process, file and network identity. HTTPS requests succeeded before and after
+restore. Harness execution, isolation checks, task cleanup and shared cleanup
+succeeded; the benchmark verifier ran and returned zero reward because the
+diagnostic commands did not fix the benchmark task. Use `-tool-yield-ms 300000`
+for this smoke run: checkpoint latency can exceed OpenClaw's default ten-second
+yield, causing its native tool response to report that the command is still
+running before the diagnostic result is available.

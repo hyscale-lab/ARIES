@@ -28,7 +28,7 @@ func ServeChild(ctx context.Context, c managed.LaunchConfig, logger *logrus.Logg
 		if err := json.Unmarshal([]byte(c.BackendEndpoint), &options); err != nil {
 			return err
 		}
-		d, err := vhive.New(vhive.Options{Socket: options.Socket, Namespace: options.Namespace, IODir: options.IODir, Logger: logger})
+		d, err := vhive.New(vhive.Options{Socket: options.Socket, Namespace: options.Namespace, IODir: options.IODir, IdleMode: options.IdleMode, CheckpointDir: options.CheckpointDir, ShimDir: options.ShimDir, CheckpointAfterExec: options.IdleMode == "checkpoint", Logger: logger})
 		if err != nil {
 			return err
 		}

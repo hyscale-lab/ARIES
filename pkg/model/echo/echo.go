@@ -29,6 +29,10 @@ type Options struct {
 	// ToolCommand makes each user turn issue one exec call, then return its
 	// tool result. Empty preserves the request-echo behavior.
 	ToolCommand string
+	// ToolFollowupCommand issues a second exec after the first result.
+	ToolFollowupCommand string
+	// ToolYieldMS forwards OpenClaw's yieldMs; zero preserves its native default.
+	ToolYieldMS int
 }
 
 // Record is one received request. It is both the assistant message content and
@@ -44,18 +48,29 @@ type Record struct {
 
 // Server is an http.Handler. Close releases the request log.
 type Server struct {
-	model       string
-	toolCommand string
+	model               string
+	toolCommand         string
+	toolFollowupCommand string
+	toolYieldMS         int
 
 	mu  sync.Mutex
 	log *os.File
 }
 
 func New(options Options) (*Server, error) {
-	if strings.ContainsRune(options.ToolCommand, 0) {
+	if strings.ContainsRune(options.ToolCommand, 0) || strings.ContainsRune(options.ToolFollowupCommand, 0) {
 		return nil, fmt.Errorf("tool command contains NUL")
 	}
-	server := &Server{model: options.Model, toolCommand: options.ToolCommand}
+	if options.ToolFollowupCommand != "" && options.ToolCommand == "" {
+		return nil, fmt.Errorf("tool followup command requires a tool command")
+	}
+	if options.ToolYieldMS < 0 {
+		return nil, fmt.Errorf("tool yield milliseconds must be nonnegative")
+	}
+	if options.ToolYieldMS != 0 && options.ToolCommand == "" {
+		return nil, fmt.Errorf("tool yield milliseconds requires a tool command")
+	}
+	server := &Server{model: options.Model, toolCommand: options.ToolCommand, toolFollowupCommand: options.ToolFollowupCommand, toolYieldMS: options.ToolYieldMS}
 	if server.model == "" {
 		server.model = DefaultModel
 	}
@@ -178,26 +193,39 @@ func (server *Server) chat(w http.ResponseWriter, record Record) {
 				userTurns++
 			}
 		}
-		callID := fmt.Sprintf("callariesechoexec%d", userTurns)
-		// History belongs to the request, not to server-global state. Parallel
-		// conversations each get one call and replaying a request is stable.
-		var result *chatMessage
+		callIDs := []string{fmt.Sprintf("callariesechoexec%d", userTurns)}
+		commands := []string{server.toolCommand}
+		if server.toolFollowupCommand != "" {
+			callIDs = append(callIDs, fmt.Sprintf("callariesechoexec%dfollowup", userTurns))
+			commands = append(commands, server.toolFollowupCommand)
+		}
+		// Request history controls each step, independently of parallel chats.
+		results := make(map[string]*chatMessage)
 		for i := len(request.Messages) - 1; i >= 0; i-- {
 			m := &request.Messages[i]
 			if m.Role == "user" {
 				break
 			}
-			if m.Role == "tool" && m.ToolCallID == callID {
-				result = m
-				break
+			if m.Role == "tool" && results[m.ToolCallID] == nil {
+				results[m.ToolCallID] = m
 			}
 		}
-		if result != nil {
+		step := 0
+		var outputs []string
+		for step < len(callIDs) {
+			result := results[callIDs[step]]
+			if result == nil {
+				break
+			}
 			var output string
 			if err := json.Unmarshal(result.Content, &output); err != nil {
 				output = string(result.Content)
 			}
-			message["content"] = "Mock exec tool result:\n" + output
+			outputs = append(outputs, output)
+			step++
+		}
+		if step == len(callIDs) {
+			message["content"] = "Mock exec tool result:\n" + strings.Join(outputs, "\nMock followup exec tool result:\n")
 		} else {
 			execOffered := false
 			for _, tool := range request.Tools {
@@ -210,9 +238,13 @@ func (server *Server) chat(w http.ResponseWriter, record Record) {
 				writeError(w, http.StatusBadRequest, "tool-command mode requires an offered exec function")
 				return
 			}
-			arguments, _ := json.Marshal(map[string]string{"command": server.toolCommand})
+			args := map[string]any{"command": commands[step]}
+			if server.toolYieldMS > 0 {
+				args["yieldMs"] = server.toolYieldMS
+			}
+			arguments, _ := json.Marshal(args)
 			message["content"] = nil
-			message["tool_calls"] = []map[string]any{{"id": callID, "type": "function", "function": map[string]any{"name": "exec", "arguments": string(arguments)}}}
+			message["tool_calls"] = []map[string]any{{"id": callIDs[step], "type": "function", "function": map[string]any{"name": "exec", "arguments": string(arguments)}}}
 			finishReason = "tool_calls"
 		}
 	}

@@ -172,6 +172,7 @@ directly; it does not use Knative. See the [worker setup and limitations](implem
         "namespace": "aries",
         "snapshotter": "devmapper",
         "io_dir": "/run/firecracker-containerd/aries-io",
+        "idle_mode": "persistent",
         "cni_network": "fcnet",
         "vcpus": 1,
         "memory_mb": 1024
@@ -187,10 +188,20 @@ directly; it does not use Knative. See the [worker setup and limitations](implem
 | `namespace` | Containerd namespace; defaults to `aries`. |
 | `snapshotter` | `devmapper` only, the default. |
 | `io_dir` | Host directory for native exec FIFOs, mounted at the same path into the bridge; defaults to `/run/firecracker-containerd/aries-io`. |
+| `idle_mode` | `persistent` (default) keeps the VM running. `checkpoint` saves guest memory and VMM state to disk after completed bridge commands, removes the VMM, and restores the same sandbox before its next command. |
+| `checkpoint_dir` | Host directory for private checkpoint files; defaults to `/var/lib/firecracker-containerd/aries-checkpoints`. Use disk storage with room for each suspended VM's memory. |
+| `shim_dir` | Native worker `shim_base_dir`; defaults to `/var/lib/firecracker-containerd/shim-base`. Checkpoint execution needs the guest vsock sockets beneath it. Match the worker runtime configuration. |
 | `cni_network` | Native CNI network name for tasks permitting network access. Omitted means those tasks fail; network-disabled tasks boot without a NIC and verify that inside the guest. |
 | `cni_bin_paths`, `cni_conf_dir`, `cni_cache_dir` | Optional native CNI plugin search paths, configuration directory, and result cache directory. Omitted values retain native worker defaults. Use these to keep an experiment's CNI setup in its own directories. |
 | `vcpus` | VM capacity when the task omits a CPU limit; defaults to `1`, accepts `1..32`. Explicit task CPUs choose the ceiling for VM vCPUs and retain their fractional CPU quota. |
 | `memory_mb` | VM memory capacity when the task omits a memory limit; defaults to `1024`, minimum `128`. An explicit task limit selects VM memory instead. |
+
+For checkpoint mode, the bridge also receives the VM control socket, checkpoint
+directory and shim directory, and uses the host PID namespace to confirm the
+exact VMM and shim processes have exited. Checkpointed sandboxes retain their writable devmapper
+device and, when network-enabled, the original CNI namespace and interface.
+They release VMM memory between calls; they still consume disk and network
+allocations until task cleanup. See [suspend and resume](implementation/vhive.md#suspend-and-resume).
 
 Nonzero task storage must exactly match the worker's devmapper block capacity,
 checked before boot and during validation. Configure `base_image_size` on the

@@ -62,7 +62,10 @@ type Request struct {
 	InternalPort int
 	// Mounts grants access only to the host paths explicitly supplied by wiring.
 	// The default grants no host filesystem access.
-	Mounts          []Mount
+	Mounts []Mount
+	// HostPID grants Docker host process visibility for provider-owned process
+	// absence verification. Other providers reject it; the default is private.
+	HostPID         bool
 	Workdir         string
 	StorageMB       int
 	GPUs            int

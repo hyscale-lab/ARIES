@@ -29,9 +29,11 @@ func run() error {
 	model := flag.String("model", echo.DefaultModel, "model id served by /v1/models")
 	logPath := flag.String("log", "", "append each received request to this JSONL file")
 	toolCommand := flag.String("tool-command", "", "issue one exec call per user turn with this shell command, then return its tool result")
+	toolFollowupCommand := flag.String("tool-followup-command", "", "issue a second exec after the first tool result, then return both results")
+	toolYieldMS := flag.Int("tool-yield-ms", 0, "forward exec yieldMs; zero preserves the native backgrounding default")
 	flag.Parse()
 
-	handler, err := echo.New(echo.Options{Model: *model, LogPath: *logPath, ToolCommand: *toolCommand})
+	handler, err := echo.New(echo.Options{Model: *model, LogPath: *logPath, ToolCommand: *toolCommand, ToolFollowupCommand: *toolFollowupCommand, ToolYieldMS: *toolYieldMS})
 	if err != nil {
 		return err
 	}

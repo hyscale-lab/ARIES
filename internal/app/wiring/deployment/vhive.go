@@ -19,7 +19,7 @@ import (
 
 func vhiveOptions(cfg config.DeploymentConfig, logger *logrus.Logger) vhive.Options {
 	v := cfg.VHive
-	return vhive.Options{Socket: v.Socket, Namespace: v.Namespace, Snapshotter: v.Snapshotter, IODir: v.IODir, CNINetwork: v.CNINetwork, CNIBinPaths: v.CNIBinPaths, CNIConfDir: v.CNIConfDir, CNICacheDir: v.CNICacheDir, VCPUs: v.VCPUs, MemoryMB: v.MemoryMB, Logger: logger}
+	return vhive.Options{Socket: v.Socket, Namespace: v.Namespace, Snapshotter: v.Snapshotter, IODir: v.IODir, IdleMode: v.IdleMode, CheckpointDir: v.CheckpointDir, ShimDir: v.ShimDir, CNINetwork: v.CNINetwork, CNIBinPaths: v.CNIBinPaths, CNIConfDir: v.CNIConfDir, CNICacheDir: v.CNICacheDir, VCPUs: v.VCPUs, MemoryMB: v.MemoryMB, Logger: logger}
 }
 
 func NewVHiveSandbox(cfg config.Config, logger *logrus.Logger) (*vhive.Manager, monitor.ResourceSource, error) {
@@ -62,14 +62,30 @@ func (vhiveResources) Close() error { return nil }
 // proxy opens exactly the paths supplied by the independent bridge process.
 func VHiveExecutionAccess(cfg config.DeploymentConfig) (string, []deployment.Mount, error) {
 	o := vhiveOptions(cfg, nil)
-	data, err := json.Marshal(vhive.ExecutionOptions{Socket: o.Socket, Namespace: o.Namespace, IODir: o.IODir})
+	data, err := json.Marshal(vhive.ExecutionOptions{Socket: o.Socket, Namespace: o.Namespace, IODir: o.IODir, IdleMode: o.IdleMode, CheckpointDir: o.CheckpointDir, ShimDir: o.ShimDir})
 	if err != nil {
 		return "", nil, err
 	}
 	if err = os.MkdirAll(o.IODir, 0o700); err != nil {
 		return "", nil, err
 	}
-	return string(data), []deployment.Mount{{Source: o.Socket, Target: o.Socket}, {Source: o.IODir, Target: o.IODir}}, nil
+	mounts := []deployment.Mount{{Source: o.Socket, Target: o.Socket}, {Source: o.IODir, Target: o.IODir}}
+	if o.IdleMode == "checkpoint" {
+		info, err := os.Stat(o.ShimDir)
+		if err != nil {
+			return "", nil, fmt.Errorf("inspect vHive shim_dir: %w", err)
+		}
+		if !info.IsDir() {
+			return "", nil, errors.New("vHive shim_dir must be an existing directory")
+		}
+		if err := os.MkdirAll(o.CheckpointDir, 0o700); err != nil {
+			return "", nil, err
+		}
+		for _, path := range []string{o.Socket + ".ttrpc", o.CheckpointDir, o.ShimDir} {
+			mounts = append(mounts, deployment.Mount{Source: path, Target: path})
+		}
+	}
+	return string(data), mounts, nil
 }
 
 // VHiveTaskEnvironment rejects service address contracts the VM backend cannot

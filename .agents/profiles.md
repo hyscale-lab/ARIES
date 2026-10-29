@@ -6,7 +6,8 @@ Use `configs/versions.json` for pins; do not duplicate the field inventory here.
 
 - Keep role selection separate from placement. Docker components share one local
   daemon and run network. vHive tool sandboxes use the local Firecracker/containerd
-  stack with Docker harnesses and a managed Docker bridge; see its
+  stack with Docker harnesses and a managed Docker bridge. Preserve the selected
+  idle behavior and the same guest identity across checkpoint restore; see its
   [constraints](../docs/implementation/vhive.md). On Kubernetes all three
   components share one namespace and backend. Reject other mixed compositions
   and explicit embedded mode before effects.

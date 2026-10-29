@@ -164,6 +164,7 @@ func TestPodManifestStagingAndBridgeIdentity(t *testing.T) {
 func TestValidateRequestRejectsWhatTheProviderCannotHonor(t *testing.T) {
 	manager, _ := newTestManager(t, Options{})
 	for name, mutate := range map[string]func(*deployment.Request){
+		"host PID":  func(r *deployment.Request) { r.HostPID = true },
 		"name":      func(r *deployment.Request) { r.Name = "Aries_Task" },
 		"placement": func(r *deployment.Request) { r.Placement.AttachmentID = "other" },
 		"host mount": func(r *deployment.Request) {

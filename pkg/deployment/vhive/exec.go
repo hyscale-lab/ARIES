@@ -36,9 +36,16 @@ func (m *Manager) Exec(ctx context.Context, id string, command core.Command) (co
 	return result, err
 }
 
-// ExecStream submits argv through containerd into the guest. Cancellation
+// ExecStream submits argv through the native guest task API. Cancellation
 // releases local IO without killing guest processes needed for evaluation.
 func (m *Manager) ExecStream(ctx context.Context, id string, command core.Command, stdin io.Reader, stdout, stderr io.Writer) (core.CommandResult, error) {
+	if m.options.IdleMode == "checkpoint" {
+		return m.execCheckpoint(ctx, id, command, stdin, stdout, stderr)
+	}
+	return m.execContainerStream(ctx, id, command, stdin, stdout, stderr)
+}
+
+func (m *Manager) execContainerStream(ctx context.Context, id string, command core.Command, stdin io.Reader, stdout, stderr io.Writer) (core.CommandResult, error) {
 	started := time.Now()
 	failure := func(err error) (core.CommandResult, error) {
 		if ctx.Err() != nil {

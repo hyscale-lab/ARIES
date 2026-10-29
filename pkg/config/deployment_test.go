@@ -38,6 +38,9 @@ func TestVHiveDeploymentComposition(t *testing.T) {
 	if c.Sandbox.Deployment.VHive.Socket != "/run/firecracker-containerd/containerd.sock" || c.Sandbox.Deployment.VHive.MemoryMB != 1024 || c.Harness.Deployment.Backend != "docker" || c.Bridge.Deployment.Backend != "docker" {
 		t.Fatalf("normalization=%#v", c)
 	}
+	if v := c.Sandbox.Deployment.VHive; v.IdleMode != "persistent" || v.CheckpointDir != "/var/lib/firecracker-containerd/aries-checkpoints" || v.ShimDir != "/var/lib/firecracker-containerd/shim-base" {
+		t.Fatalf("VM lifecycle defaults=%+v", v)
+	}
 	before := c
 	if err := c.NormalizeDeployment(); err != nil || !reflect.DeepEqual(before, c) {
 		t.Fatalf("not idempotent: %v", err)
@@ -58,6 +61,12 @@ func TestVHiveDeploymentComposition(t *testing.T) {
 		{"snapshotter", func(c *Config) { c.Sandbox.Deployment.VHive = &VHiveDeploymentConfig{Snapshotter: "overlayfs"} }},
 		{"CPU capacity", func(c *Config) { c.Sandbox.Deployment.VHive = &VHiveDeploymentConfig{VCPUs: -1} }},
 		{"relative CNI directory", func(c *Config) { c.Sandbox.Deployment.VHive = &VHiveDeploymentConfig{CNIConfDir: "relative/cni"} }},
+		{"unknown idle mode", func(c *Config) { c.Sandbox.Deployment.VHive = &VHiveDeploymentConfig{IdleMode: "pause"} }},
+		{"relative checkpoint directory", func(c *Config) { c.Sandbox.Deployment.VHive = &VHiveDeploymentConfig{CheckpointDir: "checkpoints"} }},
+		{"unclean checkpoint directory", func(c *Config) {
+			c.Sandbox.Deployment.VHive = &VHiveDeploymentConfig{CheckpointDir: "/var/lib/../checkpoints"}
+		}},
+		{"root shim directory", func(c *Config) { c.Sandbox.Deployment.VHive = &VHiveDeploymentConfig{ShimDir: "/"} }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := newConfig()
@@ -66,6 +75,18 @@ func TestVHiveDeploymentComposition(t *testing.T) {
 				t.Fatal("accepted unsupported vHive composition")
 			}
 		})
+	}
+}
+
+func TestVHiveCheckpointConfigurationDecode(t *testing.T) {
+	input := strings.Replace(validConfig, `"sandbox":{"type":"docker"}`, `"sandbox":{"deployment":{"backend":"vhive","vhive":{"idle_mode":"checkpoint","checkpoint_dir":"/var/lib/experiment/checkpoints","shim_dir":"/var/lib/experiment/shims"}}}`, 1)
+	c, err := Decode(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := c.Sandbox.Deployment.VHive
+	if v.IdleMode != "checkpoint" || v.CheckpointDir != "/var/lib/experiment/checkpoints" || v.ShimDir != "/var/lib/experiment/shims" {
+		t.Fatalf("checkpoint configuration=%+v", v)
 	}
 }
 

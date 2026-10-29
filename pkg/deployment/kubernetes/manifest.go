@@ -83,6 +83,9 @@ func cleanContainerPath(value string) (string, error) {
 // validateRequest rejects settings this provider cannot honor instead of
 // silently dropping them.
 func (manager *Manager) validateRequest(request deployment.Request) error {
+	if request.HostPID {
+		return errors.New("Kubernetes deployment does not support host PID access")
+	}
 	if !validName(request.Name) {
 		return fmt.Errorf("Kubernetes deployment requires a DNS-label runtime name, got %q", request.Name)
 	}

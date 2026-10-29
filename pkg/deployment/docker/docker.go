@@ -134,6 +134,9 @@ func (manager *Manager) Create(ctx context.Context, request deployment.Request) 
 	}
 	config := &container.Config{Image: request.Image, WorkingDir: request.Workdir, Env: request.Env, Entrypoint: request.Entrypoint, Cmd: request.Args, Labels: request.Labels}
 	host := &container.HostConfig{NetworkMode: container.NetworkMode(request.Placement.AttachmentID), Resources: limits}
+	if request.HostPID {
+		host.PidMode = "host"
+	}
 	for _, declared := range request.Mounts {
 		host.Mounts = append(host.Mounts, mount.Mount{Type: mount.TypeBind, Source: declared.Source, Target: declared.Target, ReadOnly: declared.ReadOnly})
 	}
@@ -216,6 +219,13 @@ func (manager *Manager) Validate(ctx context.Context, id string, request deploym
 	}
 	if request.Workdir != "" && config.WorkingDir != request.Workdir {
 		return errors.New("deployment workdir differs from request")
+	}
+	wantPIDMode := container.PidMode("")
+	if request.HostPID {
+		wantPIDMode = "host"
+	}
+	if info.HostConfig.PidMode != wantPIDMode {
+		return errors.New("deployment PID namespace differs from request")
 	}
 	if request.NoNewPrivileges && !noNewPrivilegesEnabled(info.HostConfig.SecurityOpt) {
 		return errors.New("deployment no-new-privileges is not enabled")

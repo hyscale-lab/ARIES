@@ -200,6 +200,7 @@ func newSharedBridge(cfg config.Config, runID, outputRoot string, placement core
 	switch cfg.Sandbox.Deployment.Backend {
 	case "vhive":
 		launch.Config.BackendEndpoint, launch.Request.Mounts, err = deploymentwiring.VHiveExecutionAccess(cfg.Sandbox.Deployment)
+		launch.Request.HostPID = cfg.Sandbox.Deployment.VHive.IdleMode == "checkpoint"
 		if err != nil {
 			return nil, errors.Join(err, runtime.Close())
 		}

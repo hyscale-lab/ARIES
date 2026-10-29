@@ -24,7 +24,7 @@ This page summarizes capabilities and limitations. Use the
 | Benchmark | **SWE-bench Pro** — public issue-resolution split with pinned task scripts and parser | [Benchmark guide](benchmarks/swe-bench-pro.md) |
 | Benchmark | **Toolathlon** — tool-use tasks over MCP servers that are local, public, or backed by Toolathlon's self-hosted applications (Canvas, poste.io, WooCommerce), and, given your account credentials, by third-party services; the `k8s` tasks are not supported | [Benchmark guide](benchmarks/toolathlon.md) |
 | Tool sandbox and deployment | **Docker** — local containers managed through the Moby Go SDK | [Deployment configuration](configuration.md#deployment-configuration), [Docker implementation](implementation/docker.md) |
-| Tool sandbox and deployment | **vHive** — a Firecracker microVM per task and fresh evaluation sandbox, using native containerd guest exec; Docker harness and bridge | [vHive deployment](configuration.md#vhive-deployment), [worker setup and limitations](implementation/vhive.md) |
+| Tool sandbox and deployment | **vHive** — a Firecracker microVM per task and fresh evaluation sandbox, using native guest exec with persistent or disk checkpoint idle behavior; Docker harness and bridge | [vHive deployment](configuration.md#vhive-deployment), [worker setup and limitations](implementation/vhive.md) |
 | Tool sandbox and deployment | **Kubernetes** — one pod per runtime, driven through `kubectl`; Terminal-Bench 2, SWE-bench Pro and Deep Research Bench with OpenClaw or Hermes in text mode | [Kubernetes deployment](configuration.md#kubernetes-deployment), [Kubernetes implementation](implementation/kubernetes.md), [cluster setup](../k8s/README.md) |
 | Tool bridge | **OpenClaw SSH** and **Hermes SSH** — managed Docker container or Kubernetes pod; harness-specific SSH adapters | [SSH bridge implementation](implementation/ssh-bridges.md) |
 | Model service | **DeepSeek** — external endpoint | [Model backends](configuration.md#model-backends) |
@@ -46,7 +46,10 @@ guides above.
 
 - vHive requires a prepared local Linux worker, its devmapper disk capacity to
   match the task's requested storage, and CNI configuration for network-enabled
-  tasks. GPUs and in-sandbox benchmark services are unsupported. Occurrence
+  tasks. Optional checkpoint mode removes the VMM between commands while retaining
+  guest process state, disk and network allocations for restore; it needs private
+  disk storage and shared native control/vsock paths. GPUs and in-sandbox benchmark
+  services are unsupported. Occurrence
   resource measurements are reported as unsupported. Real microVM execution
   requires the opt-in worker integration test; it is not covered by Docker tests.
 - Each SSH bridge supports its corresponding harness. Crossed pairs are rejected

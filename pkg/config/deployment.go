@@ -20,10 +20,13 @@ type DeploymentConfig struct {
 // VHiveDeploymentConfig uses vHive's Firecracker/containerd worker stack.
 // Harness and bridge placement remains on the same local Docker daemon.
 type VHiveDeploymentConfig struct {
-	Socket      string `json:"socket,omitempty"`
-	Namespace   string `json:"namespace,omitempty"`
-	Snapshotter string `json:"snapshotter,omitempty"`
-	IODir       string `json:"io_dir,omitempty"`
+	Socket        string `json:"socket,omitempty"`
+	Namespace     string `json:"namespace,omitempty"`
+	Snapshotter   string `json:"snapshotter,omitempty"`
+	IODir         string `json:"io_dir,omitempty"`
+	IdleMode      string `json:"idle_mode,omitempty"`
+	CheckpointDir string `json:"checkpoint_dir,omitempty"`
+	ShimDir       string `json:"shim_dir,omitempty"`
 	// CNI network name for tasks allowing network access. Empty rejects them.
 	CNINetwork  string   `json:"cni_network,omitempty"`
 	CNIBinPaths []string `json:"cni_bin_paths,omitempty"`
@@ -186,15 +189,27 @@ func (d *DeploymentConfig) normalize(path string) error {
 		if v.IODir == "" {
 			v.IODir = "/run/firecracker-containerd/aries-io"
 		}
+		if v.IdleMode == "" {
+			v.IdleMode = "persistent"
+		}
+		if v.IdleMode != "persistent" && v.IdleMode != "checkpoint" {
+			return fmt.Errorf("%s.vhive.idle_mode must be persistent or checkpoint", path)
+		}
+		if v.CheckpointDir == "" {
+			v.CheckpointDir = "/var/lib/firecracker-containerd/aries-checkpoints"
+		}
+		if v.ShimDir == "" {
+			v.ShimDir = "/var/lib/firecracker-containerd/shim-base"
+		}
 		if v.VCPUs == 0 {
 			v.VCPUs = 1
 		}
 		if v.MemoryMB == 0 {
 			v.MemoryMB = 1024
 		}
-		for _, value := range []string{v.Socket, v.IODir} {
+		for _, value := range []string{v.Socket, v.IODir, v.CheckpointDir, v.ShimDir} {
 			if !filepath.IsAbs(value) || filepath.Clean(value) != value || strings.ContainsRune(value, 0) || value == "/" {
-				return fmt.Errorf("%s.vhive: socket and io_dir must be clean absolute paths", path)
+				return fmt.Errorf("%s.vhive: socket, io_dir, checkpoint_dir and shim_dir must be clean absolute paths", path)
 			}
 		}
 		if v.VCPUs < 1 || v.VCPUs > 32 || v.MemoryMB < 128 || uint64(v.MemoryMB) > 1<<32-1 {
