@@ -166,3 +166,6 @@ contain private task or model content; review them before sharing.
 - **Custom experiments:** use the [configuration reference](configuration.md)
   for deployment, resource limits, task arrivals, and harness settings.
 - **Other benchmarks and modes:** see [supported implementations](supported.md).
+
+For a model smoke run without a paid API or model weights, use the
+[mock LLM guide](implementation/mock-llm.md).

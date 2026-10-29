@@ -8,6 +8,7 @@ export GOMODCACHE ?= $(CURDIR)/.cache/go-mod
 build:
 	mkdir -p bin
 	go build -o bin/aries ./cmd/aries
+	CGO_ENABLED=0 go build -o bin/aries-echo ./cmd/aries-echo
 	CGO_ENABLED=0 go build -o bin/aries-ssh-client ./cmd/aries-ssh-client
 	CGO_ENABLED=0 go build -o bin/aries-bridge ./cmd/aries-bridge
 
@@ -22,7 +23,7 @@ lint:
 	go vet ./...
 
 integration: bridge-image
-	ARIES_SSH_CLIENT=$(CURDIR)/bin/aries-ssh-client go test -p=1 -count=1 -tags=integration ./...
+	ARIES_SSH_CLIENT=$(CURDIR)/bin/aries-ssh-client ARIES_ECHO_SERVER=$(CURDIR)/bin/aries-echo go test -p=1 -count=1 -tags=integration ./...
 
 run: build
 	./bin/aries $(PROFILE)

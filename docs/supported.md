@@ -29,6 +29,10 @@ This page summarizes capabilities and limitations. Use the
 | Model service | **SGLang** — external endpoint or one ARIES-managed host process per run | [Model backends](configuration.md#model-backends) |
 | Model service | **OpenAI-compatible server** — external only, including vLLM, llama.cpp, gateways, and hosted endpoints | [Model backends](configuration.md#model-backends) |
 
+The [mock LLM service](implementation/mock-llm.md) exercises real harness model
+requests through the external `openai` backend without model weights or a paid API.
+Its optional tool-command mode emits OpenClaw `exec` calls and returns their results.
+
 Both harnesses and [LLM judges](configuration.md#judge-model-settings) support explicit
 [model reasoning effort](configuration.md#reasoning-effort).
 Available efforts and tool support depend on the model and API.
