@@ -26,8 +26,7 @@ service, not the topology at that earlier revision.
   exec, a stat, a read or a write. One tool call gives one or more sandbox
   calls.
 - **Tool-call record.** One structured line of `tool-calls.jsonl` per sandbox
-  call. Its format is the same for every transport. A gRPC record also has an
-  _E2B operation class_.
+  call. A gRPC record also has an _E2B operation class_.
 - **E2B operation class.** The operation class of a gRPC tool-call record:
   `exec`, `stat`, `read` or `write`. Each one maps to one E2B envd call. It is
   a label, not E2B wire or log compatibility. _Avoid_: E2B-compatible log.
