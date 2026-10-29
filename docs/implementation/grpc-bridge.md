@@ -164,7 +164,10 @@ check the exit code before you use stdout. The `file` exit codes are:
 The client has no timeout flag. Hermes stops the client process when a command
 times out, and the closed connection cancels the call on the bridge. The
 command may keep running in the sandbox until it exits or the sandbox is
-removed.
+removed. The Hermes plugin stops a `file` client after three times the Hermes
+terminal timeout (540 s with the default 180 s) and reports a tool error. One
+file call can run several operations in the sandbox, but Hermes gives each
+single shell command only the terminal timeout.
 
 When `ARIES_TOOL_CALL_ID` is set and not empty, the client sends its value as
 the gRPC metadata `aries-tool-call-id` on each call. The client does not check
