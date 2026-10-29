@@ -122,19 +122,62 @@ as the container user on Kubernetes, which is root on every current benchmark
 image. A write acts as the user of the agent's shell (the exec user, or the
 image `USER`). It checks write access and creates the missing parents as that
 user, and renames the file into place as that user. So the task image must
-supply `/bin/sh`. A path that this user cannot write, or an existing file that
-it cannot write, gives `PERMISSION_DENIED`, and nothing changes. A write that
-is canceled before its rename never lands. A rename that has started runs to
-its end, and the call reports its real result.
+supply `/bin/sh` and the commands that a write runs; see [Limits](#limits). A
+path that this user cannot write, or an existing file that it cannot write,
+gives `PERMISSION_DENIED`, and nothing changes. A write that is canceled before
+its rename never lands. A rename that has started runs to its end, and the call
+reports its real result.
 
 ## Limits
 
 - `Exec` is unary and does not stream output, unlike SSH. The client gets no
   stdout or stderr until the command ends. A call that is canceled or times out
-  gives the client no output. Stdout and stderr come back as two separate
-  buffers, so their relative order is lost. Thus an agent that polls the output
-  of a long or background process sees nothing until the command returns. This
-  is a known limitation that we accept for now.
+  gives the client no output. Thus an agent sees no output of a long foreground
+  command until it ends. Hermes runs a background process with its output in a
+  log file, and polls the log with short commands, so polling works. This is a
+  known limitation that we accept for now.
+- The agent sees output in a different order than on SSH. The plugin merges the
+  client's stderr into its stdout, but the
+  [client](../../pkg/bridge/grpc/client.go) writes all of stdout, then all of
+  stderr. So error lines come at the end, not next to the line that caused
+  them. The client's own lines, for example
+  `aries: REASON_SANDBOX_ERROR`, also come in the agent's output. SSH streams
+  both outputs, so their lines stay near the order the command wrote them.
+- On Docker, an `Exec` ends only when the output of the command closes
+  ([Docker exec](../../pkg/deployment/docker/exec.go)). A background child that
+  keeps the output open, for example `cmd &` with no redirect, thus blocks the
+  call until the child exits. SSH uses the same backend and does the same.
+- On Docker, typed stat, read and line reads use the archive API of the daemon.
+  This API cannot see `/proc`, `/sys`, `/dev` or tmpfs mounts (`/dev/shm`,
+  `--tmpfs`); see [Docker](docker.md#runtime-creation-and-execution). A typed
+  read reports a file there as missing, also through a symlink such as
+  `/etc/mtab`, while `cat` in the shell reads it. A typed write into a tmpfs
+  path fails with `INTERNAL` "sandbox file access failed": the upload goes into
+  the directory under the mount, and the rename cannot find it.
+- On Kubernetes, `stat` reports size 0 for a `/proc` file. So `read_file` of
+  such a file returns "File is empty (0 bytes)", while `cat` in the shell reads
+  it ([Kubernetes files](../../pkg/deployment/kubernetes/files.go)).
+- Typed calls and the shell see the filesystem differently. Typed stat and read
+  act as root (on Docker, through the daemon). Search, patch reads, delete and
+  move run in the shell as the agent's user. So `read_file` can report a file
+  as missing that `search_files` finds, and can read a file that the shell
+  cannot. See [transports](../design/bridge.md#transports) and
+  [Hermes over gRPC](harnesses.md#hermes-over-grpc).
+- On Docker, an agent that owns a parent directory can swap it for a symlink
+  between the access check and the upload of a write. The daemon then puts the
+  temporary file, as root, in the symlink target; see
+  [Docker](docker.md#runtime-creation-and-execution).
+- On Docker, a typed write needs `/bin/sh`, `mkdir`, `mv` and `/bin/rm` in the
+  task image ([Docker files](../../pkg/deployment/docker/files.go)). On
+  Kubernetes, the file scripts also need `stat`, `readlink`, `cat`, `chmod` and
+  `wc`.
+- The service has no PTY, signal, reattach, list, move or remove call; see
+  [Comparison with E2B](#comparison-with-e2b). Hermes does list, move and
+  remove with shell commands through `Exec`.
+- Each operation starts a new client process and a new HTTP/2 connection, and
+  the client has no retry policy. One `read_file` of a text file makes three
+  calls: a stat, a read of the first 1000 bytes, and the line read. Hermes over
+  SSH reuses one ControlMaster connection.
 - `Exec` stdin above 16 MiB is refused with `RESOURCE_EXHAUSTED` before
   anything runs. A workdir that is not shell-neutral is refused with
   `FAILED_PRECONDITION`. Both refusals are recorded with status `rejected` and
@@ -155,6 +198,12 @@ its end, and the call reports its real result.
   record holds a size note with `stdin_encoding` `size-omitted`, and the true
   `stdin_bytes` and `sha256`. SSH is different: stdin above 16 MiB fails the
   SSH command and latches an audit error, so that session's evidence fails.
+- The [audit](../../pkg/bridge/internal/bridgekit/audit.go) of one sandbox
+  session is at most 256 MiB, for `tool-calls.jsonl` and the raw log together.
+  Printable written content up to 16 MiB and printable `Exec` stdin are inline
+  and count toward this cap. After the cap, every later call gets `UNAVAILABLE`,
+  `Stop` returns the latched error, release fails, and the task is not
+  evaluated; see [Revocation](#revocation).
 
 ## Revocation
 

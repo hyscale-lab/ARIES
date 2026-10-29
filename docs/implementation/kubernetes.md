@@ -155,8 +155,11 @@ stream, so they arrive on stdout only.
 
 [Typed file operations](../../pkg/deployment/kubernetes/files.go) give a
 borrowed bridge target stat, read and atomic write of one file, with the same
-results as on Docker. Each one is a short POSIX script over `kubectl exec`,
-because exec is the bridge's only access to the pod. The scripts test their
+results as on Docker. Paths under `/proc`, `/sys`, `/dev` and tmpfs mounts are
+the exceptions: Docker's archive API cannot see them, and here `stat` reports
+size 0 for a `/proc` file; see [gRPC limits](grpc-bridge.md#limits). Each
+operation is a short POSIX script over `kubectl exec`, because exec is the
+bridge's only access to the pod. The scripts test their
 conditions with `[ -e ]`, `[ -d ]`, `[ -r ]` and `[ -w ]` and report through
 their own exit codes, with `LC_ALL=C`; stderr text is only a fallback. Stat and
 read act as the container user, as other commands without a user do. That is
