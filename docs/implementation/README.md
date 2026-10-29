@@ -9,6 +9,7 @@ and [benchmark guides](../design/benchmark.md) for setup and execution.
 - [SSH protocol adaptation and revocation](ssh-bridges.md)
 - [Docker runtime and run-network management](docker.md)
 - [Kubernetes pods, staging gate, and network policies](kubernetes.md)
+- [Apptainer runtime and run namespace](apptainer.md)
 - [Benchmark evaluation mechanisms](benchmarks.md)
 - [Model runtime mechanisms](model-runtime.md)
 
