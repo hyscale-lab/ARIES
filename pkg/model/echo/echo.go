@@ -1,7 +1,6 @@
-// Package echo implements a deterministic OpenAI-compatible server whose only
-// answer is the request it received. It lets a harness run exercise its real
-// request path (tool definitions, serving parameters, message history) without
-// a model: the assistant message is the JSON-encoded request.
+// Package echo implements a deterministic OpenAI-compatible server for testing
+// a harness's real request path without a model. By default it echoes the
+// request; an explicit tool command exercises a complete exec tool round trip.
 package echo
 
 import (
@@ -27,6 +26,13 @@ const (
 type Options struct {
 	Model   string
 	LogPath string
+	// ToolCommand makes each user turn issue one exec call, then return its
+	// tool result. Empty preserves the request-echo behavior.
+	ToolCommand string
+	// ToolFollowupCommand issues a second exec after the first result.
+	ToolFollowupCommand string
+	// ToolYieldMS forwards OpenClaw's yieldMs; zero preserves its native default.
+	ToolYieldMS int
 }
 
 // Record is one received request. It is both the assistant message content and
@@ -42,14 +48,29 @@ type Record struct {
 
 // Server is an http.Handler. Close releases the request log.
 type Server struct {
-	model string
+	model               string
+	toolCommand         string
+	toolFollowupCommand string
+	toolYieldMS         int
 
 	mu  sync.Mutex
 	log *os.File
 }
 
 func New(options Options) (*Server, error) {
-	server := &Server{model: options.Model}
+	if strings.ContainsRune(options.ToolCommand, 0) || strings.ContainsRune(options.ToolFollowupCommand, 0) {
+		return nil, fmt.Errorf("tool command contains NUL")
+	}
+	if options.ToolFollowupCommand != "" && options.ToolCommand == "" {
+		return nil, fmt.Errorf("tool followup command requires a tool command")
+	}
+	if options.ToolYieldMS < 0 {
+		return nil, fmt.Errorf("tool yield milliseconds must be nonnegative")
+	}
+	if options.ToolYieldMS != 0 && options.ToolCommand == "" {
+		return nil, fmt.Errorf("tool yield milliseconds requires a tool command")
+	}
+	server := &Server{model: options.Model, toolCommand: options.ToolCommand, toolFollowupCommand: options.ToolFollowupCommand, toolYieldMS: options.ToolYieldMS}
 	if server.model == "" {
 		server.model = DefaultModel
 	}
@@ -142,15 +163,90 @@ func (server *Server) chat(w http.ResponseWriter, record Record) {
 		StreamOptions struct {
 			IncludeUsage bool `json:"include_usage"`
 		} `json:"stream_options"`
+		Messages []chatMessage `json:"messages"`
+		Tools    []struct {
+			Type     string `json:"type"`
+			Function struct {
+				Name string `json:"name"`
+			} `json:"function"`
+		} `json:"tools"`
 	}
 	if err := json.Unmarshal(record.Body, &request); err != nil {
 		writeError(w, http.StatusBadRequest, "chat completion body must be a JSON object")
 		return
 	}
-	content, err := json.MarshalIndent(record, "", "  ")
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+	message := map[string]any{"role": "assistant"}
+	finishReason := "stop"
+	if server.toolCommand == "" {
+		content, err := json.MarshalIndent(record, "", "  ")
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		message["content"] = string(content)
+	} else {
+		// OpenClaw normalizes tool IDs to alphanumeric characters. Emit that
+		// native spelling and give each user turn its own stable identifier.
+		userTurns := 0
+		for _, message := range request.Messages {
+			if message.Role == "user" {
+				userTurns++
+			}
+		}
+		callIDs := []string{fmt.Sprintf("callariesechoexec%d", userTurns)}
+		commands := []string{server.toolCommand}
+		if server.toolFollowupCommand != "" {
+			callIDs = append(callIDs, fmt.Sprintf("callariesechoexec%dfollowup", userTurns))
+			commands = append(commands, server.toolFollowupCommand)
+		}
+		// Request history controls each step, independently of parallel chats.
+		results := make(map[string]*chatMessage)
+		for i := len(request.Messages) - 1; i >= 0; i-- {
+			m := &request.Messages[i]
+			if m.Role == "user" {
+				break
+			}
+			if m.Role == "tool" && results[m.ToolCallID] == nil {
+				results[m.ToolCallID] = m
+			}
+		}
+		step := 0
+		var outputs []string
+		for step < len(callIDs) {
+			result := results[callIDs[step]]
+			if result == nil {
+				break
+			}
+			var output string
+			if err := json.Unmarshal(result.Content, &output); err != nil {
+				output = string(result.Content)
+			}
+			outputs = append(outputs, output)
+			step++
+		}
+		if step == len(callIDs) {
+			message["content"] = "Mock exec tool result:\n" + strings.Join(outputs, "\nMock followup exec tool result:\n")
+		} else {
+			execOffered := false
+			for _, tool := range request.Tools {
+				if tool.Type == "function" && tool.Function.Name == "exec" {
+					execOffered = true
+					break
+				}
+			}
+			if !execOffered {
+				writeError(w, http.StatusBadRequest, "tool-command mode requires an offered exec function")
+				return
+			}
+			args := map[string]any{"command": commands[step]}
+			if server.toolYieldMS > 0 {
+				args["yieldMs"] = server.toolYieldMS
+			}
+			arguments, _ := json.Marshal(args)
+			message["content"] = nil
+			message["tool_calls"] = []map[string]any{{"id": callIDs[step], "type": "function", "function": map[string]any{"name": "exec", "arguments": string(arguments)}}}
+			finishReason = "tool_calls"
+		}
 	}
 	model := request.Model
 	if model == "" {
@@ -162,8 +258,8 @@ func (server *Server) chat(w http.ResponseWriter, record Record) {
 		writeJSON(w, map[string]any{
 			"id": id, "object": "chat.completion", "created": 0, "model": model,
 			"choices": []map[string]any{{
-				"index": 0, "finish_reason": "stop",
-				"message": map[string]any{"role": "assistant", "content": string(content)},
+				"index": 0, "finish_reason": finishReason,
+				"message": message,
 			}},
 			"usage": usage,
 		})
@@ -179,12 +275,23 @@ func (server *Server) chat(w http.ResponseWriter, record Record) {
 		line, _ := json.Marshal(payload)
 		fmt.Fprintf(w, "data: %s\n\n", line)
 	}
-	chunk([]map[string]any{{"index": 0, "delta": map[string]any{"role": "assistant", "content": string(content)}, "finish_reason": nil}}, nil)
-	chunk([]map[string]any{{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}}, nil)
+	if calls, ok := message["tool_calls"].([]map[string]any); ok {
+		for index, call := range calls {
+			call["index"] = index
+		}
+	}
+	chunk([]map[string]any{{"index": 0, "delta": message, "finish_reason": nil}}, nil)
+	chunk([]map[string]any{{"index": 0, "delta": map[string]any{}, "finish_reason": finishReason}}, nil)
 	if request.StreamOptions.IncludeUsage {
 		chunk([]map[string]any{}, usage)
 	}
 	io.WriteString(w, "data: [DONE]\n\n")
+}
+
+type chatMessage struct {
+	Role       string          `json:"role"`
+	ToolCallID string          `json:"tool_call_id"`
+	Content    json.RawMessage `json:"content"`
 }
 
 func writeJSON(w http.ResponseWriter, value any) {
