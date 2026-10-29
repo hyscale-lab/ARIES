@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/sirupsen/logrus"
 	gossh "golang.org/x/crypto/ssh"
 )
@@ -118,7 +119,9 @@ func serveGlobalRequests(requests <-chan *gossh.Request) {
 func (session *bridgeSession) handleSession(ctx context.Context, channel gossh.Channel, requests <-chan *gossh.Request) {
 	policy := session.dialect.Policy()
 	for request := range requests {
-		audit := requestAudit{requestType: request.Type, wantReply: request.WantReply, payload: bytes.Clone(request.Payload)}
+		requestCtx, timings := core.WithCommandTimings(ctx)
+		core.MarkCommandTiming(requestCtx, "bridge.received")
+		audit := requestAudit{timings: timings, requestType: request.Type, wantReply: request.WantReply, payload: bytes.Clone(request.Payload)}
 		if request.Type != "exec" {
 			if request.WantReply {
 				_ = session.reply(request, false)
@@ -134,14 +137,18 @@ func (session *bridgeSession) handleSession(ctx context.Context, channel gossh.C
 			session.logRejected(audit, policy.InvalidOperationClass)
 			return
 		}
+		finishPrepare := core.TimeCommandStage(requestCtx, "bridge.prepare")
 		var payload struct{ Command string }
 		if err := gossh.Unmarshal(request.Payload, &payload); err != nil {
+			finishPrepare()
 			_ = session.reply(request, false)
 			session.logRejected(audit, policy.InvalidOperationClass)
 			return
 		}
 		audit.remoteCommand = payload.Command
 		prepared, refusal := session.dialect.Prepare(payload.Command, session.sandbox.Workdir())
+		finishPrepare()
+		core.MarkCommandTiming(requestCtx, "bridge.prepared")
 		if refusal != nil {
 			_ = session.reply(request, false)
 			session.logRequestFailure(audit, refusal.OperationClass, refusal.Status, refusal.Message)
@@ -152,12 +159,43 @@ func (session *bridgeSession) handleSession(ctx context.Context, channel gossh.C
 			session.logRejected(audit, policy.InvalidOperationClass)
 			return
 		}
+		finishReply := core.TimeCommandStage(requestCtx, "bridge.accept_reply")
 		if err := session.reply(request, true); err != nil {
+			finishReply()
+			core.MarkCommandTiming(requestCtx, "bridge.accept_reply_failed")
 			session.logRequestFailure(audit, prepared.RefusalClass, "failed", "SSH accept reply failed")
 			return
 		}
-		exitCode := session.execute(ctx, channel, prepared, audit)
-		_, _ = channel.SendRequest("exit-status", false, gossh.Marshal(struct{ Status uint32 }{uint32(exitCode)}))
+		finishReply()
+		exitCode, record, raw := session.executeRecord(requestCtx, channel, prepared, audit)
+		finishResponse := core.TimeCommandStage(requestCtx, "bridge.send_exit_status")
+		_, responseErr := channel.SendRequest("exit-status", false, gossh.Marshal(struct{ Status uint32 }{uint32(exitCode)}))
+		finishResponse()
+		if responseErr == nil {
+			core.MarkCommandTiming(requestCtx, "bridge.response_sent")
+		} else {
+			core.MarkCommandTiming(requestCtx, "bridge.response_send_failed")
+		}
+		finishClose := core.TimeCommandStage(requestCtx, "bridge.close_channel")
+		closeErr := channel.Close()
+		finishClose()
+		if closeErr == nil {
+			core.MarkCommandTiming(requestCtx, "bridge.channel_closed")
+		} else {
+			core.MarkCommandTiming(requestCtx, "bridge.channel_close_failed")
+		}
+		if record != nil {
+			if responseErr != nil {
+				record.ResponseError = "SSH exit-status send failed"
+			}
+			if closeErr != nil {
+				if record.ResponseError != "" {
+					record.ResponseError += "; "
+				}
+				record.ResponseError += "SSH channel close failed"
+			}
+			session.writeTimedRecord(*record, raw, audit)
+		}
 		return
 	}
 }

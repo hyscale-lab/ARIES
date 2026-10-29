@@ -161,6 +161,56 @@ closes its bridge access and finalizes its evidence without stopping the service
 or other sessions. `bridge/runtime.json` records that sandbox's binding;
 `infrastructure/bridge/runtime.json` records the shared service runtime.
 
+### Command latency
+
+New structured SSH records have a `timing` object with:
+
+- `received_at`: the UTC time when the bridge received the SSH channel request;
+- `stages`: `{name, offset_ms, duration_ms}` spans relative to that receipt; and
+- `milestones`: named `{at, offset_ms}` observations, with UTC `at` timestamps.
+
+Offsets and durations use the recording process's monotonic clock. Parent spans
+include their children, and stdin/stdout/stderr setup can run concurrently. Read
+the timeline by offsets; summing every stage double-counts those intervals.
+Stages and milestones are present only when that path was observed. A missing
+receipt, completion or provider stage is unknown, rather than a zero duration.
+
+The bridge records `bridge.received`, `bridge.prepared`, `bridge.dispatch`,
+`backend.completed`, `bridge.response_sent` and `bridge.channel_closed` when
+those boundaries succeed. vHive also records `command.started`, `command.exited`
+and `command.completed`; the last means that the guest has exited and its output
+has drained, before completed-process deletion or checkpointing. `runtime.ready`
+separates VM acquisition/restore from command setup, while `checkpoint.started`
+and `checkpoint.completed` bound the checkpoint work. The `command.completed`
+offset is the bridge-to-command-done latency. `backend.completed` and response delivery can
+be later. The current checkpoint mode waits for checkpoint creation and confirmed
+VMM/shim exit before sending final completion, so command completion alone does
+not yet unblock a synchronous agent call.
+
+The existing top-level `timestamp` remains the audit completion/enqueue time,
+not request arrival. `duration_ms` retains its execution-boundary meaning for
+compatibility; it starts after SSH command preparation and includes synchronous
+provider checkpointing. Use the explicit timing observations for new analyses:
+
+```sh
+jq -c 'select(.timing) | {
+  sequence,
+  received_at: .timing.received_at,
+  command_done_ms: .timing.milestones["command.completed"].offset_ms,
+  response_sent_ms: .timing.milestones["bridge.response_sent"].offset_ms,
+  stages: .timing.stages
+}' "$task_dir/bridge/tool-calls.jsonl"
+```
+
+`bridge.response_sent` records completion of the bridge's local SSH exit-status
+send. `bridge.channel_closed` records successful local channel closure. The
+breakdown covers bridge receipt through those local boundaries. UTC timestamps
+allow correlation with worker logs; when logs come from different hosts, their
+clocks must agree. The bridge and Docker harness on one worker share its clock.
+
+See [vHive latency stages](implementation/vhive.md#latency-breakdown) for restore,
+execution and checkpoint spans.
+
 Each OpenClaw task directory contains the exact placeholder-only rendered
 `harness/openclaw.json`, OpenClaw logs and telemetry when available, replayable
 SSH tool inputs, Docker sandbox logs, one-second CPU and memory samples,

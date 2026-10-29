@@ -171,6 +171,80 @@ operations restore the sandbox when needed without parking after every file
 transfer. A restore or checkpoint error remains an operation error and retains
 ownership for cleanup; an ambiguous command submission is never retried.
 
+## Latency breakdown
+
+The bridge's `tool-calls.jsonl` records the request's UTC receipt, monotonic
+stage offsets/durations and observed milestones. See
+[command latency](../run-results.md#command-latency) for the schema. Use
+`command.completed` for arrival through guest exit and output drainage, and
+`bridge.response_sent` for completion of the bridge's local response send.
+Checkpointing remains on the synchronous final-response path; the measurements
+separate that cost so its possible overlap with a later LLM turn can be assessed.
+
+The main spans are:
+
+| Stages | Work measured |
+| --- | --- |
+| `bridge.prepare`, `bridge.accept_reply` | Decode/adapt the native command and accept the SSH request before provider dispatch. |
+| `runtime.acquire`, `runtime.lock.shared`, `runtime.lock.exclusive` | Read retained state and wait for competing execution, checkpoint or restore operations. |
+| `restore.total` and its child spans | Validate retained state, then confirm previous process absence, prepare devmapper mounts, persist the restoring state, connect control, call `restore.create_vm`, and persist running state. The total starts after state validation. |
+| `command.total` and its child spans | Load container/spec, prepare the OCI process, resolve VM/vsock information, connect the agent and streams, submit exec/start, wait for exit, drain output and delete the completed process. |
+| `checkpoint.total` and its child spans | Read state, inspect the task and VMM/shim identity, publish state transitions, pause, create the snapshot, sync files, stop the VM, confirm absence, and remove old snapshots. |
+| `bridge.send_exit_status`, `bridge.close_channel` | Send final completion and close the SSH channel after the backend returns. |
+
+Before guest execution, inspect `restore.prepare_mounts`,
+`restore.persist_restoring`, `restore.connect_control`, `restore.create_vm`,
+`command.load_container`, `command.load_spec`, `command.vm_info`,
+`command.connect_agent`, the stream connection spans, `command.exec_rpc` and
+`command.start_rpc`. A fast Firecracker snapshot-load event alone does not
+account for these calls or lock waits. `restore.requested` marks submission of
+CreateVM to the worker; its offset exposes the elapsed time before that RPC.
+`restore.total` appears only when restoration is needed. `runtime.ready` marks
+completion of VM acquisition, before command setup. `command.started`, `command.exited` and
+`command.completed` distinguish guest runtime from transport/output drainage;
+start and exit are observations of native Start acknowledgement and Wait completion,
+rather than guest CPU timestamps.
+Completed-process deletion follows `command.completed`. Persistent mode has no
+restore/checkpoint work. Concurrent calls can produce `checkpoint.skipped_busy`
+when another operation retains the VM, leaving checkpointing to the last caller.
+Do not sum parent spans and their children, or concurrent stream spans.
+
+The earlier two-command mock smoke illustrates why the boundaries matter. Its
+final tool record's `timestamp` was `13:25:08.746` UTC, after execution and
+checkpointing; its 18.181-second duration placed execution entry near
+`13:24:50.565`. The worker received mount preparation at `13:24:50.565` and
+CreateVM at `13:24:50.567`, roughly 2 ms later. Snapshot creation took about
+11.93 seconds and native stop about 5.01 seconds. The worker's next restore at
+`13:25:15.216` belonged to evaluation after harness stop and bridge revocation.
+The apparent seven-second interval was therefore between completed tool work
+and evaluation, rather than a measured pre-restore delay for that tool. These
+are historical run measurements; new runs should use the explicit receipt and
+completion observations.
+
+An instrumented two-command mock run on the smoke worker with a 2 GiB guest
+measured the following for its second diagnostic command:
+
+| Observation | Time |
+| --- | ---: |
+| Receipt to restore RPC submission | 2.27 ms |
+| Prepare devmapper mounts (part of the interval above) | 0.75 ms |
+| Native `CreateVM` restore RPC | 139.58 ms |
+| Command setup after the VM is ready | 286.46 ms |
+| Start acknowledgement to observed process exit | 9.28 ms |
+| Receipt to command exit and drained output | 439.01 ms |
+| Checkpoint work after command completion | 17,414.46 ms |
+| Receipt to response sent | 17,854.83 ms |
+
+The setup spans attributed about 101 ms to connecting the guest agent, 113 ms to
+the exec RPC with concurrent stream setup, and 70 ms to the start RPC. The pinned
+SDK waits for its first 100 ms retry tick before attempting a vsock connection;
+agent and stream connections therefore show separate waits even for a ready VM.
+The checkpoint included about 11.88 s creating the snapshot, 5.01 s stopping the
+VM/shim, and 0.41 s removing the old snapshot. These are measurements of one
+worker and command, not fixed backend costs. The command succeeded, and the run
+confirmed isolation and task/shared cleanup; diagnostic commands left the Git
+benchmark reward at zero.
+
 ## Limits and verification
 
 Terminal-Bench 2, SWE-Atlas QA and SWE-bench Pro fit the sandbox API when their

@@ -12,35 +12,39 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/hyscale-lab/aries/pkg/core"
 )
 
 type toolCallRecord struct {
-	SandboxID      string   `json:"sandbox_id"`
-	Sequence       uint64   `json:"sequence"`
-	Timestamp      string   `json:"timestamp"`
-	ContainerID    string   `json:"container_id"`
-	ContainerName  string   `json:"container_name"`
-	OperationClass string   `json:"operation_class"`
-	WorkspaceHome  string   `json:"workspace_home,omitempty"`
-	Environment    []string `json:"env_names,omitempty"`
-	Path           string   `json:"path,omitempty"`
-	Workdir        string   `json:"workdir,omitempty"`
-	CommandHash    string   `json:"command_hash"`
-	Command        string   `json:"command,omitempty"`
-	Argv           []string `json:"argv,omitempty"`
-	Stdin          string   `json:"stdin"`
-	StdinEncoding  string   `json:"stdin_encoding"`
-	StdinBytes     int64    `json:"stdin_bytes"`
-	StdoutBytes    int64    `json:"stdout_bytes"`
-	StderrBytes    int64    `json:"stderr_bytes"`
-	ExitCode       int      `json:"exit_code"`
-	DurationMS     int64    `json:"duration_ms"`
-	Status         string   `json:"status"`
-	Error          string   `json:"error,omitempty"`
-	RunID          string   `json:"run_id,omitempty"`
-	TaskID         string   `json:"task_id,omitempty"`
-	RequestType    string   `json:"request_type"`
-	WantReply      bool     `json:"want_reply"`
+	ResponseError  string              `json:"response_error,omitempty"`
+	Timing         *core.CommandTiming `json:"timing,omitempty"`
+	SandboxID      string              `json:"sandbox_id"`
+	Sequence       uint64              `json:"sequence"`
+	Timestamp      string              `json:"timestamp"`
+	ContainerID    string              `json:"container_id"`
+	ContainerName  string              `json:"container_name"`
+	OperationClass string              `json:"operation_class"`
+	WorkspaceHome  string              `json:"workspace_home,omitempty"`
+	Environment    []string            `json:"env_names,omitempty"`
+	Path           string              `json:"path,omitempty"`
+	Workdir        string              `json:"workdir,omitempty"`
+	CommandHash    string              `json:"command_hash"`
+	Command        string              `json:"command,omitempty"`
+	Argv           []string            `json:"argv,omitempty"`
+	Stdin          string              `json:"stdin"`
+	StdinEncoding  string              `json:"stdin_encoding"`
+	StdinBytes     int64               `json:"stdin_bytes"`
+	StdoutBytes    int64               `json:"stdout_bytes"`
+	StderrBytes    int64               `json:"stderr_bytes"`
+	ExitCode       int                 `json:"exit_code"`
+	DurationMS     int64               `json:"duration_ms"`
+	Status         string              `json:"status"`
+	Error          string              `json:"error,omitempty"`
+	RunID          string              `json:"run_id,omitempty"`
+	TaskID         string              `json:"task_id,omitempty"`
+	RequestType    string              `json:"request_type"`
+	WantReply      bool                `json:"want_reply"`
 }
 
 type rawSSHRecord struct {
@@ -61,6 +65,7 @@ type rawSSHRecord struct {
 }
 
 type requestAudit struct {
+	timings       *core.CommandTimings
 	requestType   string
 	wantReply     bool
 	payload       []byte

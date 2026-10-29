@@ -99,6 +99,17 @@ Release finalizes an artifact manifest; collection validates it before publishin
 private task evidence. Missing finalized evidence after a child crash remains an
 error. See [bridge evidence](../run-results.md#bridge-evidence).
 
+Latency recording starts when the bridge receives an SSH channel request and
+continues through preparation, provider execution, response send and channel
+close. Deployment providers add their own stages to that command's context;
+protocol code keeps no dependency on a provider's lifecycle implementation.
+Command-exit/output-drained observations remain separate from checkpoint work
+and final completion. Parent spans and concurrent I/O spans overlap. UTC
+milestones correlate processes; durations and offsets use local monotonic time.
+The response boundary is successful local SSH send completion. The existing audit
+`timestamp` continues to identify completion/enqueue, and `duration_ms` preserves
+its earlier execution boundary. See [command latency](../run-results.md#command-latency).
+
 Structured calls record command semantics, status, timing and output byte counts;
 they do not contain stdout/stderr bodies. Raw wire input may contain sensitive
 task data and stays private. Model credentials do not belong in these records.
@@ -107,7 +118,9 @@ each task retains its own harness/sandbox observations.
 
 Another bridge protocol can reuse service/session ownership and borrowed execution.
 Endpoint handoff and a stable sandbox identity simplify that extension, but do
-not provide E2B wire compatibility. Snapshot, restore, suspend, other providers,
-and mixed protocols are unimplemented. Additional providers must satisfy explicit
-execution, staging, addressing, cancellation and confirmed cleanup contracts;
+not provide E2B wire compatibility. The vHive provider implements VM checkpoint
+and restore behind borrowed execution; see its
+[lifecycle and latency boundaries](../implementation/vhive.md#suspend-and-resume).
+Other providers and mixed protocols must satisfy explicit execution, staging,
+addressing, cancellation and confirmed cleanup contracts;
 see [current deployment limits](deployment.md#substitution-and-current-limits).

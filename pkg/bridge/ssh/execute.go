@@ -88,18 +88,42 @@ func safeStructuredText(content []byte) bool {
 	return true
 }
 
+// execute is used by direct execution callers; the SSH server records after
+// sending completion and closing the channel through executeRecord instead.
 func (session *bridgeSession) execute(ctx context.Context, channel gossh.Channel, prepared Prepared, audit requestAudit) int {
+	if audit.timings == nil {
+		ctx, audit.timings = core.WithCommandTimings(ctx)
+		core.MarkCommandTiming(ctx, "bridge.received")
+	}
+	exitCode, record, raw := session.executeRecord(ctx, channel, prepared, audit)
+	if record != nil {
+		session.writeTimedRecord(*record, raw, audit)
+	}
+	return exitCode
+}
+
+func (session *bridgeSession) executeRecord(ctx context.Context, channel gossh.Channel, prepared Prepared, audit requestAudit) (int, *toolCallRecord, rawSSHRecord) {
 	started := time.Now()
 	stdin := &recordedInput{reader: channel}
 	stdout := &byteCounter{writer: channel}
 	stderr := &byteCounter{writer: channel.Stderr()}
 	var result core.CommandResult
 	var err error
+	core.MarkCommandTiming(ctx, "bridge.dispatch")
+	finishBackend := core.TimeCommandStage(ctx, "bridge.backend")
 	if prepared.Action == DrainOnly {
+		finishDrain := core.TimeCommandStage(ctx, "bridge.drain_input")
 		_, err = io.Copy(io.Discard, stdin)
+		finishDrain()
+		if err == nil {
+			core.MarkCommandTiming(ctx, "command.completed")
+		}
 	} else {
 		result, err = session.sandbox.ExecStream(ctx, prepared.Command, stdin, stdout, stderr)
 	}
+	finishBackend()
+	core.MarkCommandTiming(ctx, "backend.completed")
+
 	exitCode := result.ExitCode
 	status, message := "completed", ""
 	if err != nil {
@@ -115,9 +139,9 @@ func (session *bridgeSession) execute(ctx context.Context, channel gossh.Channel
 	stdinBytes, stdinContent, stdinEncoding, rawStdin, stdinOverflow := stdin.record(session.audit.retainsRaw())
 	if stdinOverflow {
 		session.audit.latch(fmt.Errorf("retain SSH stdin: input exceeds %d bytes", maxRecordedInputBytes))
-		return exitCode
+		return exitCode, nil, rawSSHRecord{}
 	}
-	session.writeRecord(toolCallRecord{
+	record := &toolCallRecord{
 		ContainerID: session.sandbox.ContainerID(), ContainerName: session.sandbox.ContainerName(),
 		OperationClass: prepared.OperationClass, Path: prepared.Command.Path, Workdir: prepared.Command.Dir,
 		CommandHash: commandHash(prepared.HashInput),
@@ -127,8 +151,8 @@ func (session *bridgeSession) execute(ctx context.Context, channel gossh.Channel
 		StdinBytes: stdinBytes, StdoutBytes: stdout.count(), StderrBytes: stderr.count(),
 		ExitCode: exitCode, DurationMS: time.Since(started).Milliseconds(), Status: status, Error: message,
 		RequestType: audit.requestType, WantReply: audit.wantReply,
-	}, rawRecord(audit, stdinBytes, rawStdin, status))
-	return exitCode
+	}
+	return exitCode, record, rawRecord(audit, stdinBytes, rawStdin, status)
 }
 
 func (session *bridgeSession) logRejected(audit requestAudit, kind string) {
@@ -140,7 +164,7 @@ func (session *bridgeSession) logRejected(audit requestAudit, kind string) {
 // is not filed as an agent command; kindUnknown marks a payload that never
 // decoded far enough to classify.
 func (session *bridgeSession) logRequestFailure(audit requestAudit, kind, status, message string) {
-	session.writeRecord(toolCallRecord{
+	session.writeTimedRecord(toolCallRecord{
 		ContainerID: session.sandbox.ContainerID(), ContainerName: session.sandbox.ContainerName(),
 		OperationClass: kind, CommandHash: commandHash(audit.remoteCommand),
 		StdinEncoding: "utf-8",
@@ -149,7 +173,7 @@ func (session *bridgeSession) logRequestFailure(audit requestAudit, kind, status
 		ExitCode: session.dialect.Policy().RefusedExitCode,
 		Status:   status, Error: message,
 		RequestType: audit.requestType, WantReply: audit.wantReply,
-	}, rawRecord(audit, 0, nil, status))
+	}, rawRecord(audit, 0, nil, status), audit)
 }
 
 func rawRecord(audit requestAudit, stdinBytes int64, stdin []byte, status string) rawSSHRecord {
@@ -158,6 +182,14 @@ func rawRecord(audit requestAudit, stdinBytes int64, stdin []byte, status string
 		WireCommand: audit.remoteCommand, Payload: bytes.Clone(audit.payload), PayloadBytes: int64(len(audit.payload)),
 		Stdin: bytes.Clone(stdin), StdinBytes: stdinBytes, Status: status,
 	}
+}
+
+func (session *bridgeSession) writeTimedRecord(record toolCallRecord, raw rawSSHRecord, audit requestAudit) {
+	if audit.timings != nil {
+		timing := audit.timings.Snapshot()
+		record.Timing = &timing
+	}
+	session.writeRecord(record, raw)
 }
 
 func (session *bridgeSession) writeRecord(record toolCallRecord, raw rawSSHRecord) {

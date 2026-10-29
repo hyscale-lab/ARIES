@@ -9,12 +9,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/containerd/containerd/mount"
 	"github.com/containerd/containerd/snapshots"
 	"github.com/firecracker-microvm/firecracker-containerd/proto"
+	"github.com/hyscale-lab/aries/pkg/core"
 	"golang.org/x/sys/unix"
 )
 
@@ -332,5 +334,41 @@ func TestCheckpointStopFailedBootRequiresNativeConfirmation(t *testing.T) {
 				t.Fatalf("repeat cleanup replayed completed native calls: info=%d stop=%d", vm.infos, vm.stops)
 			}
 		})
+	}
+}
+
+func TestCheckpointTimingExposesLockWaitBeforeRestore(t *testing.T) {
+	m := checkpointFixture(t)
+	held, err := m.checkpointLock(t.Context(), "sandbox", true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlockCheckpoint(held)
+	ctx, timings := core.WithCommandTimings(t.Context())
+	ctx, cancel := context.WithTimeout(ctx, 25*time.Millisecond)
+	defer cancel()
+	f, err := m.acquireCheckpoint(ctx, "sandbox")
+	unlockCheckpoint(f)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected lock deadline: %v", err)
+	}
+	trace := timings.Snapshot()
+	waits := 0
+	for _, stage := range trace.Stages {
+		if stage.Name == "runtime.lock.shared" {
+			waits++
+			if stage.DurationMS < 10 {
+				t.Fatalf("missing blocked lock time: %+v", stage)
+			}
+		}
+		if strings.HasPrefix(stage.Name, "restore.") {
+			t.Fatalf("restore measured before lock admission: %+v", stage)
+		}
+	}
+	if waits != 1 {
+		t.Fatalf("lock wait spans=%d", waits)
+	}
+	if _, ok := trace.Milestones["command.completed"]; ok {
+		t.Fatal("canceled admission invented completion")
 	}
 }

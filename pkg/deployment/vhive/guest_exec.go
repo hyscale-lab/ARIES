@@ -25,6 +25,8 @@ import (
 // Use the guest's existing native task service rather than creating its running
 // container again through the host shim.
 func (m *Manager) execGuestStream(ctx context.Context, id string, command core.Command, stdin io.Reader, stdout, stderr io.Writer) (core.CommandResult, error) {
+	endCommand := core.TimeCommandStage(ctx, "command.total")
+	defer endCommand()
 	started := time.Now()
 	failure := func(err error) (core.CommandResult, error) {
 		if ctx.Err() != nil {
@@ -43,17 +45,23 @@ func (m *Manager) execGuestStream(ctx context.Context, id string, command core.C
 	}
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
+	endStage := core.TimeCommandStage(ctx, "command.load_container")
 	container, err := m.client.LoadContainer(ctx, id)
+	endStage()
 	if err != nil {
 		return failure(err)
 	}
+	endStage = core.TimeCommandStage(ctx, "command.load_spec")
 	spec, err := container.Spec(ctx)
+	endStage()
 	if err != nil {
 		return failure(err)
 	}
 	if spec.Annotations[vmAnnotation] != id || spec.Process == nil {
 		return failure(errors.New("vHive exec target is not a guest container"))
 	}
+	endPrepare := core.TimeCommandStage(ctx, "command.prepare_process")
+	defer endPrepare()
 	process, err := execProcess(*spec.Process, command)
 	if err != nil {
 		return failure(err)
@@ -77,20 +85,29 @@ func (m *Manager) execGuestStream(ctx context.Context, id string, command core.C
 	if stdin != nil {
 		request.Stdin = "stdin"
 	}
+	endPrepare()
+	endStage = core.TimeCommandStage(ctx, "command.connect_control")
 	control, err := m.vmControl()
+	endStage()
 	if err != nil {
 		return failure(err)
 	}
+	endStage = core.TimeCommandStage(ctx, "command.vm_info")
 	info, err := control.GetVMInfo(ctx, &proto.GetVMInfoRequest{VMID: id})
+	endStage()
 	if err != nil {
 		return failure(err)
 	}
+	endStage = core.TimeCommandStage(ctx, "command.socket_path")
 	socketPath, closeSocketDir, err := shortUnixSocketPath(info.VSockPath)
+	endStage()
 	if err != nil {
 		return failure(err)
 	}
 	defer closeSocketDir()
+	endStage = core.TimeCommandStage(ctx, "command.connect_agent")
 	conn, err := vsock.DialContext(ctx, socketPath, 10789)
+	endStage()
 	if err != nil {
 		return failure(fmt.Errorf("connect vHive guest agent: %w", err))
 	}
@@ -147,7 +164,16 @@ func runGuestExec(ctx context.Context, cancel context.CancelCauseFunc, client ta
 	}()
 	outputs := make(chan struct{})
 	stream := func(port uint32, input io.Reader, output io.Writer) {
+		name := "command.connect_stdout"
+		if port == extra.StdinPort {
+			name = "command.connect_stdin"
+		}
+		if port == extra.StderrPort {
+			name = "command.connect_stderr"
+		}
+		endDial := core.TimeCommandStage(ctx, name)
 		conn, err := dial(streamCtx, port)
+		endDial()
 		if err != nil {
 			if streamCtx.Err() == nil {
 				cancel(fmt.Errorf("connect vHive exec stream: %w", err))
@@ -186,7 +212,10 @@ func runGuestExec(ctx context.Context, cancel context.CancelCauseFunc, client ta
 	if stdin != nil {
 		go stream(extra.StdinPort, stdin, nil)
 	}
-	if _, err := client.Exec(ctx, request); err != nil {
+	endStage := core.TimeCommandStage(ctx, "command.exec_rpc")
+	_, err := client.Exec(ctx, request)
+	endStage()
+	if err != nil {
 		return 0, err
 	}
 	type exitResult struct {
@@ -198,22 +227,32 @@ func runGuestExec(ctx context.Context, cancel context.CancelCauseFunc, client ta
 		response, err := client.Wait(ctx, &taskAPI.WaitRequest{ID: request.ID, ExecID: request.ExecID})
 		exited <- exitResult{response, err}
 	}()
-	if _, err := client.Start(ctx, &taskAPI.StartRequest{ID: request.ID, ExecID: request.ExecID}); err != nil {
+	endStage = core.TimeCommandStage(ctx, "command.start_rpc")
+	_, err = client.Start(ctx, &taskAPI.StartRequest{ID: request.ID, ExecID: request.ExecID})
+	endStage()
+	if err != nil {
 		return 0, err
 	}
+	core.MarkCommandTiming(ctx, "command.started")
 	close(started)
+	endRun := core.TimeCommandStage(ctx, "command.run")
+	defer endRun()
 	var exit exitResult
 	select {
 	case <-ctx.Done():
 		return 0, context.Cause(ctx)
 	case exit = <-exited:
 	}
+	endRun()
 	if exit.err != nil {
 		if ctx.Err() != nil {
 			return 0, context.Cause(ctx)
 		}
 		return 0, exit.err
 	}
+	core.MarkCommandTiming(ctx, "command.exited")
+	endDrain := core.TimeCommandStage(ctx, "command.output_drain")
+	defer endDrain()
 	select {
 	case <-ctx.Done():
 		return 0, context.Cause(ctx)
@@ -222,9 +261,14 @@ func runGuestExec(ctx context.Context, cancel context.CancelCauseFunc, client ta
 	if ctx.Err() != nil {
 		return 0, context.Cause(ctx)
 	}
+	endDrain()
+	core.MarkCommandTiming(ctx, "command.completed")
 	cleanup, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancelCleanup()
-	if _, err := client.Delete(cleanup, &taskAPI.DeleteRequest{ID: request.ID, ExecID: request.ExecID}); err != nil {
+	endStage = core.TimeCommandStage(ctx, "command.delete_process")
+	_, err = client.Delete(cleanup, &taskAPI.DeleteRequest{ID: request.ID, ExecID: request.ExecID})
+	endStage()
+	if err != nil {
 		return 0, fmt.Errorf("release completed vHive guest exec: %w", err)
 	}
 	return exit.response.ExitStatus, nil

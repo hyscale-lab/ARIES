@@ -18,6 +18,8 @@
 - After runtime work, check for leaked containers, networks, processes, listeners,
   and credential files. Scan private artifacts without printing secrets.
 - Keep credentials, datasets, and run artifacts ignored. Report actual evidence
-  and validation gaps.
+  and validation gaps. Keep latency observations tied to their recording boundary;
+  preserve unknown timings and overlapping stages. See
+  [command latency](../docs/run-results.md#command-latency).
 
 Details: [Makefile](../Makefile), [run/artifact guide](../docs/run-results.md).

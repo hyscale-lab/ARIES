@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,7 +18,6 @@ import (
 	"golang.org/x/sys/unix"
 	pb "google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
-	"strconv"
 )
 
 type snapshotControl interface {
@@ -90,6 +90,12 @@ func (m *Manager) checkpointLock(ctx context.Context, id string, exclusive, nonb
 	if !identifier.MatchString(id) {
 		return nil, errors.New("invalid checkpoint identity")
 	}
+	stage := "runtime.lock.shared"
+	if exclusive {
+		stage = "runtime.lock.exclusive"
+	}
+	endWait := core.TimeCommandStage(ctx, stage)
+	defer endWait()
 	f, err := os.OpenFile(filepath.Join(m.runtimeDir(id), "lock"), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, err
@@ -123,11 +129,15 @@ func unlockCheckpoint(f *os.File) {
 }
 
 func (m *Manager) acquireCheckpoint(ctx context.Context, id string) (*os.File, error) {
+	endAcquire := core.TimeCommandStage(ctx, "runtime.acquire")
+	defer endAcquire()
 	f, err := m.checkpointLock(ctx, id, false, false)
 	if err != nil {
 		return nil, err
 	}
+	endRead := core.TimeCommandStage(ctx, "runtime.read_state")
 	s, err := m.loadCheckpoint(id)
+	endRead()
 	if err != nil {
 		unlockCheckpoint(f)
 		return nil, err
@@ -144,11 +154,16 @@ func (m *Manager) acquireCheckpoint(ctx context.Context, id string) (*os.File, e
 		unlockCheckpoint(f)
 		return nil, err
 	}
-	if err = unix.Flock(int(f.Fd()), unix.LOCK_SH); err != nil {
+	endDowngrade := core.TimeCommandStage(ctx, "runtime.lock_downgrade")
+	err = unix.Flock(int(f.Fd()), unix.LOCK_SH)
+	endDowngrade()
+	if err != nil {
 		unlockCheckpoint(f)
 		return nil, err
 	}
+	endRead = core.TimeCommandStage(ctx, "runtime.read_state")
 	s, err = m.loadCheckpoint(id)
+	endRead()
 	if err != nil {
 		unlockCheckpoint(f)
 		return nil, err
@@ -165,15 +180,23 @@ func (m *Manager) execCheckpoint(ctx context.Context, id string, c core.Command,
 	if err != nil {
 		return core.CommandResult{ExitCode: -1}, err
 	}
+	core.MarkCommandTiming(ctx, "runtime.ready")
 	result, execErr := m.execGuestStream(ctx, id, c, in, out, stderr)
 	unlockCheckpoint(f)
 	if m.options.CheckpointAfterExec && execErr == nil {
+		core.MarkCommandTiming(ctx, "checkpoint.started")
+		endCheckpoint := core.TimeCommandStage(ctx, "checkpoint.total")
+		defer endCheckpoint()
 		f, err = m.checkpointLock(ctx, id, true, true)
 		if errors.Is(err, unix.EWOULDBLOCK) {
+			core.MarkCommandTiming(ctx, "checkpoint.skipped_busy")
 			return result, execErr
 		}
 		if err == nil {
 			err = m.suspendCheckpoint(ctx, id)
+			if err == nil {
+				core.MarkCommandTiming(ctx, "checkpoint.completed")
+			}
 			unlockCheckpoint(f)
 		}
 		execErr = errors.Join(execErr, err)
@@ -207,7 +230,9 @@ func (m *Manager) Resume(ctx context.Context, id string) error {
 }
 func (m *Manager) suspendCheckpoint(ctx context.Context, id string) error {
 	ctx = m.ctx(ctx)
+	endRead := core.TimeCommandStage(ctx, "checkpoint.read_state")
 	s, err := m.loadCheckpoint(id)
+	endRead()
 	if err != nil {
 		return err
 	}
@@ -225,12 +250,16 @@ func (m *Manager) suspendCheckpoint(ctx context.Context, id string) error {
 	if !ok {
 		return errors.New("native VM control lacks snapshot operations")
 	}
+	endStage := core.TimeCommandStage(ctx, "checkpoint.inspect_task")
 	running, err := m.guestTaskRunning(ctx, id)
+	endStage()
 	if err != nil {
 		return err
 	}
 	s.TaskRunning = running
+	endStage = core.TimeCommandStage(ctx, "checkpoint.identify_processes")
 	processes, err := m.checkpointProcesses(ctx, id)
+	endStage()
 	if err != nil {
 		return err
 	}
@@ -243,19 +272,33 @@ func (m *Manager) suspendCheckpoint(ctx context.Context, id string) error {
 	s.Snapshot = filepath.Join(dir, "vmstate")
 	s.Processes = processes
 	s.Phase = "pausing"
-	if err = m.saveCheckpoint(id, s); err != nil {
+	endStage = core.TimeCommandStage(ctx, "checkpoint.persist_pausing")
+	err = m.saveCheckpoint(id, s)
+	endStage()
+	if err != nil {
 		return err
 	}
-	if _, err = snap.PauseVM(ctx, &proto.PauseVMRequest{VMID: id}); err != nil {
+	endStage = core.TimeCommandStage(ctx, "checkpoint.pause_vm")
+	_, err = snap.PauseVM(ctx, &proto.PauseVMRequest{VMID: id})
+	endStage()
+	if err != nil {
 		return err
 	}
 	s.Phase = "paused"
-	if err = m.saveCheckpoint(id, s); err != nil {
+	endStage = core.TimeCommandStage(ctx, "checkpoint.persist_paused")
+	err = m.saveCheckpoint(id, s)
+	endStage()
+	if err != nil {
 		return err
 	}
-	if _, err = snap.CreateSnapshot(ctx, &proto.CreateSnapshotRequest{VMID: id, MemFilePath: s.Memory, SnapshotPath: s.Snapshot}); err != nil {
+	endStage = core.TimeCommandStage(ctx, "checkpoint.create_snapshot")
+	_, err = snap.CreateSnapshot(ctx, &proto.CreateSnapshotRequest{VMID: id, MemFilePath: s.Memory, SnapshotPath: s.Snapshot})
+	endStage()
+	if err != nil {
 		return err
 	}
+	endSync := core.TimeCommandStage(ctx, "checkpoint.sync_files")
+	defer endSync()
 	for _, p := range []string{s.Memory, s.Snapshot} {
 		if err = os.Chmod(p, 0600); err != nil {
 			return err
@@ -268,17 +311,26 @@ func (m *Manager) suspendCheckpoint(ctx context.Context, id string) error {
 			return e
 		}
 	}
+	endSync()
 	s.Phase = "stopping"
-	if err = m.saveCheckpoint(id, s); err != nil {
+	endStage = core.TimeCommandStage(ctx, "checkpoint.persist_stopping")
+	err = m.saveCheckpoint(id, s)
+	endStage()
+	if err != nil {
 		return err
 	}
 	if err = m.stopCheckpointProcesses(ctx, id, s); err != nil {
 		return err
 	}
 	s.Phase = "suspended"
-	if err = m.saveCheckpoint(id, s); err != nil {
+	endStage = core.TimeCommandStage(ctx, "checkpoint.persist_suspended")
+	err = m.saveCheckpoint(id, s)
+	endStage()
+	if err != nil {
 		return err
 	}
+	endGC := core.TimeCommandStage(ctx, "checkpoint.remove_old_snapshots")
+	defer endGC()
 	entries, readErr := os.ReadDir(m.runtimeDir(id))
 	if readErr != nil {
 		return readErr
@@ -294,7 +346,9 @@ func (m *Manager) suspendCheckpoint(ctx context.Context, id string) error {
 	return nil
 }
 func (m *Manager) resumeCheckpoint(ctx context.Context, id string) error {
+	endStage := core.TimeCommandStage(ctx, "restore.read_state")
 	s, err := m.loadCheckpoint(id)
+	endStage()
 	if err != nil {
 		return err
 	}
@@ -304,14 +358,21 @@ func (m *Manager) resumeCheckpoint(ctx context.Context, id string) error {
 	if s.Phase != "suspended" {
 		return fmt.Errorf("cannot restore checkpoint in %s state; cleanup required", s.Phase)
 	}
-	if err = confirmCheckpointProcesses(s.Processes); err != nil {
+	endRestore := core.TimeCommandStage(ctx, "restore.total")
+	defer endRestore()
+	endStage = core.TimeCommandStage(ctx, "restore.confirm_absence")
+	err = confirmCheckpointProcesses(s.Processes)
+	endStage()
+	if err != nil {
 		return err
 	}
 	request := pb.Clone(s.Request).(*proto.CreateVMRequest)
 	request.LoadSnapshot = true
 	request.SnapshotPath = s.Snapshot
 	request.MemBackend = &proto.MemoryBackend{BackendType: "File", BackendPath: s.Memory}
+	endStage = core.TimeCommandStage(ctx, "restore.prepare_mounts")
 	mounts, err := m.client.SnapshotService(m.options.Snapshotter).Mounts(m.ctx(ctx), id)
+	endStage()
 	if err != nil {
 		return err
 	}
@@ -324,21 +385,34 @@ func (m *Manager) resumeCheckpoint(ctx context.Context, id string) error {
 	// The previous VMM and shim have exited; a failed restore may own new
 	// processes whose absence must be established independently during cleanup.
 	s.Processes = nil
-	if err = m.saveCheckpoint(id, s); err != nil {
-		return err
-	}
-	control, err := m.vmControl()
+	endStage = core.TimeCommandStage(ctx, "restore.persist_restoring")
+	err = m.saveCheckpoint(id, s)
+	endStage()
 	if err != nil {
 		return err
 	}
-	if _, err = control.CreateVM(m.ctx(ctx), request); err != nil {
+	endStage = core.TimeCommandStage(ctx, "restore.connect_control")
+	control, err := m.vmControl()
+	endStage()
+	if err != nil {
+		return err
+	}
+	endStage = core.TimeCommandStage(ctx, "restore.create_vm")
+	core.MarkCommandTiming(ctx, "restore.requested")
+	_, err = control.CreateVM(m.ctx(ctx), request)
+	endStage()
+	if err != nil {
 		return fmt.Errorf("restore vHive microVM: %w", err)
 	}
 	s.Phase = "running"
 	s.Processes = nil
-	if err = m.saveCheckpoint(id, s); err != nil {
+	endStage = core.TimeCommandStage(ctx, "restore.persist_running")
+	err = m.saveCheckpoint(id, s)
+	endStage()
+	if err != nil {
 		return err
 	}
+	core.MarkCommandTiming(ctx, "restore.completed")
 	m.options.Logger.WithField("vm", id).Info("vHive microVM restored")
 	return nil
 }
@@ -471,7 +545,11 @@ func (m *Manager) stopCheckpointProcesses(ctx context.Context, id string, s *che
 	if err != nil {
 		return err
 	}
+	endStop := core.TimeCommandStage(ctx, "checkpoint.stop_vm")
 	_, stopErr := control.StopVM(m.ctx(ctx), &proto.StopVMRequest{VMID: id, TimeoutSeconds: 2})
+	endStop()
+	endAbsence := core.TimeCommandStage(ctx, "checkpoint.confirm_absence")
+	defer endAbsence()
 	// The native paused-VM stop returns Internal after force termination. Accept
 	// it only once both recorded process identities are positively absent.
 	waitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)

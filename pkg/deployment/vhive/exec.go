@@ -46,6 +46,8 @@ func (m *Manager) ExecStream(ctx context.Context, id string, command core.Comman
 }
 
 func (m *Manager) execContainerStream(ctx context.Context, id string, command core.Command, stdin io.Reader, stdout, stderr io.Writer) (core.CommandResult, error) {
+	endCommand := core.TimeCommandStage(ctx, "command.total")
+	defer endCommand()
 	started := time.Now()
 	failure := func(err error) (core.CommandResult, error) {
 		if ctx.Err() != nil {
@@ -64,22 +66,30 @@ func (m *Manager) execContainerStream(ctx context.Context, id string, command co
 	}
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
+	endStage := core.TimeCommandStage(ctx, "command.load_container")
 	c, err := m.client.LoadContainer(ctx, id)
+	endStage()
 	if err != nil {
 		return failure(err)
 	}
+	endStage = core.TimeCommandStage(ctx, "command.load_spec")
 	spec, err := c.Spec(ctx)
+	endStage()
 	if err != nil {
 		return failure(err)
 	}
 	if spec.Annotations[vmAnnotation] != id || spec.Process == nil {
 		return failure(errors.New("vHive exec target is not a guest container"))
 	}
+	endStage = core.TimeCommandStage(ctx, "command.prepare_process")
 	process, err := execProcess(*spec.Process, command)
+	endStage()
 	if err != nil {
 		return failure(err)
 	}
+	endStage = core.TimeCommandStage(ctx, "command.load_task")
 	task, err := c.Task(ctx, nil)
+	endStage()
 	if err != nil {
 		return failure(err)
 	}
@@ -103,8 +113,10 @@ func (m *Manager) execContainerStream(ctx context.Context, id string, command co
 		input = &execInput{reader: stdin, done: make(chan error, 1)}
 		stdin = input
 	}
+	endStage = core.TimeCommandStage(ctx, "command.exec_rpc")
 	proc, err := task.Exec(ctx, "aries-"+hex.EncodeToString(nonce[:]), &process,
 		cio.NewCreator(cio.WithFIFODir(m.options.IODir), cio.WithStreams(stdin, bounded(stdout), bounded(stderr))))
+	endStage()
 	if err != nil {
 		return failure(err)
 	}
@@ -119,13 +131,21 @@ func (m *Manager) execContainerStream(ctx context.Context, id string, command co
 	}
 	stopClose := context.AfterFunc(ctx, closeIO)
 	defer func() { stopClose(); closeIO() }()
+	endStage = core.TimeCommandStage(ctx, "command.register_wait")
 	exit, err := proc.Wait(ctx)
+	endStage()
 	if err != nil {
 		return failure(err)
 	}
-	if err = proc.Start(ctx); err != nil {
+	endStage = core.TimeCommandStage(ctx, "command.start_rpc")
+	err = proc.Start(ctx)
+	endStage()
+	if err != nil {
 		return failure(err)
 	}
+	core.MarkCommandTiming(ctx, "command.started")
+	endRun := core.TimeCommandStage(ctx, "command.run")
+	defer endRun()
 	// Like ctr's stdinCloser, signal native CloseIO when the local reader
 	// reaches EOF. Closing only the host FIFO leaves guest tar/cat waiting.
 	if input != nil {
@@ -151,9 +171,13 @@ func (m *Manager) execContainerStream(ctx context.Context, id string, command co
 	case <-ctx.Done():
 		return failure(context.Cause(ctx))
 	case status := <-exit:
+		endRun()
 		if status.Error() != nil {
 			return failure(status.Error())
 		}
+		core.MarkCommandTiming(ctx, "command.exited")
+		endDrain := core.TimeCommandStage(ctx, "command.output_drain")
+		defer endDrain()
 		// Drain stdout/stderr before returning or deleting the process's FIFOs.
 		if pipes := proc.IO(); pipes != nil {
 			pipes.Wait()
@@ -161,9 +185,14 @@ func (m *Manager) execContainerStream(ctx context.Context, id string, command co
 		if ctx.Err() != nil {
 			return failure(context.Cause(ctx))
 		}
+		endDrain()
+		core.MarkCommandTiming(ctx, "command.completed")
 		cleanup, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancelCleanup()
-		if _, err = proc.Delete(cleanup); err != nil {
+		endStage = core.TimeCommandStage(ctx, "command.delete_process")
+		_, err = proc.Delete(cleanup)
+		endStage()
+		if err != nil {
 			return failure(fmt.Errorf("release completed vHive exec: %w", err))
 		}
 		return core.CommandResult{ExitCode: int(status.ExitCode()), Duration: time.Since(started)}, nil

@@ -12,6 +12,7 @@ import (
 
 	taskAPI "github.com/containerd/containerd/api/runtime/task/v2"
 	"github.com/firecracker-microvm/firecracker-containerd/proto"
+	"github.com/hyscale-lab/aries/pkg/core"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -41,7 +42,8 @@ func (f *fakeGuestExec) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*
 }
 
 func TestGuestExecConnectsBeforeExecReturnsAndClosesStdin(t *testing.T) {
-	ctx, cancel := context.WithCancelCause(context.Background())
+	traceCtx, timings := core.WithCommandTimings(context.Background())
+	ctx, cancel := context.WithCancelCause(traceCtx)
 	defer cancel(nil)
 	extra := &proto.ExtraData{StdinPort: 12000, StdoutPort: 12001, StderrPort: 12002}
 	request := &taskAPI.ExecProcessRequest{ID: "sandbox", ExecID: "command", Stdin: "stdin", Stdout: "stdout", Stderr: "stderr"}
@@ -112,6 +114,13 @@ func TestGuestExecConnectsBeforeExecReturnsAndClosesStdin(t *testing.T) {
 	}
 	var stdout, stderr bytes.Buffer
 	client.delete = func(context.Context, *taskAPI.DeleteRequest) (*taskAPI.DeleteResponse, error) {
+		marks := timings.Snapshot().Milestones
+		if _, ok := marks["command.completed"]; !ok {
+			t.Error("command completion must be observed before deletion")
+		}
+		if marks["command.exited"].OffsetMS > marks["command.completed"].OffsetMS {
+			t.Error("completion preceded process exit")
+		}
 		if stdout.String() != "result" || stderr.String() != "warning" {
 			t.Error("deleted before output drain")
 		}
