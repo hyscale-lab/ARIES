@@ -18,6 +18,56 @@ reaches it through the execution backend of the run, the Docker Engine API or
 ARIES plugin runs the tool calls through the client; see
 [Hermes over gRPC](harnesses.md#hermes-over-grpc).
 
+## Origin
+
+The typed operations of this transport are modeled on the process and
+filesystem services of E2B. E2B runs a daemon, `envd`, inside each sandbox, and
+its SDK gives an agent typed calls to run a command, stat a path, and read or
+write a file. ARIES keeps the idea of typed sandbox calls. It serves them from
+outside the sandbox, from the bridge. The messages are not the E2B messages;
+see [Comparison with E2B](#comparison-with-e2b).
+
+### E2B design
+
+The E2B facts here are for SDK release 2.62.0
+([`3a90417`](https://github.com/e2b-dev/E2B/tree/3a904178b2f1d1c40fd2ba1c2ad9a10f43896bf1))
+and `envd` 0.8.0 in the infrastructure release 2026.30
+([`f32ee8a`](https://github.com/e2b-dev/infra/tree/f32ee8a2a50052f32e3632ceb451111a98dd5104)).
+
+- `envd` is one Go daemon. It runs as root in each sandbox, a Firecracker
+  microVM, and listens on port 49983
+  ([unit file](https://github.com/e2b-dev/infra/blob/f32ee8a2a50052f32e3632ceb451111a98dd5104/packages/orchestrator/pkg/template/build/core/rootfs/files/envd.service.tpl#L26-L52)).
+  An orchestrator on each node runs the microVMs, and sandbox traffic goes
+  through E2B proxies
+  ([architecture](https://github.com/e2b-dev/infra/blob/f32ee8a2a50052f32e3632ceb451111a98dd5104/docs/ARCHITECTURE.md#L15-L27)).
+- The process service has `Start`, `Connect`, `List`, `SendInput`,
+  `StreamInput`, `CloseStdin`, `SendSignal`, and `Update`
+  ([process.proto](https://github.com/e2b-dev/infra/blob/f32ee8a2a50052f32e3632ceb451111a98dd5104/packages/envd/spec/process/process.proto#L5-L21)).
+  `Start` streams events: start, output data, end, and keepalive. The
+  filesystem service has `Stat`, `ListDir`, `MakeDir`, `Move`, `Remove`, and
+  watch calls
+  ([filesystem.proto](https://github.com/e2b-dev/infra/blob/f32ee8a2a50052f32e3632ceb451111a98dd5104/packages/envd/spec/filesystem/filesystem.proto#L7-L20)).
+  It has no read or write call.
+- File content moves over plain HTTP, not over RPC. `GET /files` returns a
+  whole file, and it honours the HTTP `Range` header
+  ([download](https://github.com/e2b-dev/infra/blob/f32ee8a2a50052f32e3632ceb451111a98dd5104/packages/envd/internal/api/download.go#L120-L172)).
+  `POST /files` creates the parents and overwrites the file. It is not atomic:
+  `envd` truncates the file in place as root, then writes
+  ([upload](https://github.com/e2b-dev/infra/blob/f32ee8a2a50052f32e3632ceb451111a98dd5104/packages/envd/internal/api/upload.go#L54-L95)).
+- Both SDKs use the Connect protocol with the JSON codec, not binary protobuf
+  ([Python](https://github.com/e2b-dev/E2B/blob/3a904178b2f1d1c40fd2ba1c2ad9a10f43896bf1/packages/python-sdk/e2b/envd/client_shared.py#L29-L60)).
+  `envd` itself serves plain HTTP/1.1
+  ([server](https://github.com/e2b-dev/infra/blob/f32ee8a2a50052f32e3632ceb451111a98dd5104/packages/envd/main.go#L305-L319)).
+- A caller proves access with an access token in the `X-Access-Token` header.
+  The `/files` routes also accept a signed URL, with an optional expiry
+  ([auth](https://github.com/e2b-dev/infra/blob/f32ee8a2a50052f32e3632ceb451111a98dd5104/packages/envd/internal/api/auth.go#L88-L160)).
+- The SDK is a library in the process of the agent. `commands.run` starts
+  `/bin/bash -l -c` with the command
+  ([SDK](https://github.com/e2b-dev/E2B/blob/3a904178b2f1d1c40fd2ba1c2ad9a10f43896bf1/packages/python-sdk/e2b/sandbox_sync/commands/command.py#L448-L481)).
+  The `files` object has `read`, `write`, `list`, `exists`, `get_info`,
+  `remove`, `rename`, and `make_dir`
+  ([SDK](https://github.com/e2b-dev/E2B/blob/3a904178b2f1d1c40fd2ba1c2ad9a10f43896bf1/packages/python-sdk/e2b/sandbox_sync/filesystem/filesystem.py#L118-L700)).
+
 ## Service
 
 The wire contract is [sandbox.proto](../../pkg/bridge/grpc/v1/sandbox.proto),
@@ -182,8 +232,8 @@ through the shared [audit writer](../../pkg/bridge/internal/bridgekit/audit.go);
 see [bridge evidence](../run-results.md#bridge-evidence). The
 [gRPC records](../../pkg/bridge/grpc/audit.go) have these differences:
 
-- `operation_class` is an E2B operation: `exec` for `Exec`, `stat` for `Stat`,
-  `read` for `ReadFile` and `ReadLines`, and `write` for `WriteFile`.
+- `operation_class` is an [E2B operation class](#e2b-operation-classes): `exec`,
+  `stat`, `read`, or `write`.
 - An `Exec` record has `path` `/bin/bash`, the exact `argv`, the script as
   `command`, and the SHA-256 of the script as `command_hash`.
 - A file call has no exit code, so its record has exit code -1 and an empty
@@ -214,6 +264,100 @@ call is one record between `--- ARIES GRPC CALL BEGIN ---` and
 the `Exec` script and stdin and the `WriteFile` content (or the size note above
 16 MiB). A read keeps only its path, byte count, and digest. The log never
 holds output or read content.
+
+### E2B operation classes
+
+Each gRPC record names the E2B operation of its call in `operation_class`.
+The mapping is one-to-one:
+
+| `operation_class` | ARIES procedure | E2B `envd` call |
+| --- | --- | --- |
+| `exec` | `Exec` | `process.Process/Start` |
+| `stat` | `Stat` | `filesystem.Filesystem/Stat` |
+| `read` | `ReadFile` and `ReadLines` | `GET /files` |
+| `write` | `WriteFile` | `POST /files` |
+
+E2B has no call that reads lines. `ReadLines` is a `read` too, and the read
+window fields tell the two ARIES procedures apart.
+
+This is a label mapping. It is not E2B wire compatibility and not E2B log
+compatibility. E2B publishes no format for a tool-call log, so there is no
+format to match. The `envd` log is a free-form operational log for E2B. It
+does have a `process_end` line with `stdout_bytes` and `stderr_bytes` for a
+process
+([source](https://github.com/e2b-dev/infra/blob/f32ee8a2a50052f32e3632ceb451111a98dd5104/packages/envd/internal/services/process/handler/handler.go#L560-L618)).
+
+These fields of a gRPC record have no E2B counterpart:
+
+- `sha256`, the digest of the content that a file call moved.
+- `stdin_bytes`, `stdout_bytes`, and `stderr_bytes`, the byte counts. Only the
+  `process_end` log line above has a similar count.
+- The read window: `max_bytes`, `first_line`, `max_lines`, `max_line_bytes`,
+  and `total_lines`.
+- `truncated`.
+- `tool_call_id`, the id of the harness tool call.
+- `started_at`, the time the bridge started the call.
+
+## Comparison with E2B
+
+The E2B column is for the revisions in [E2B design](#e2b-design). The ARIES
+column is this transport.
+
+| Axis | E2B | ARIES gRPC transport |
+| --- | --- | --- |
+| Server place | `envd` in each microVM, as root | The shared bridge child, outside the sandbox; the task container runs nothing |
+| Wire | Connect protocol, JSON codec; HTTP/2 to the E2B edge, HTTP/1.1 into the microVM | gRPC, protobuf binary, plaintext |
+| Commands | Long-lived processes with streamed events, PTY, signals, and reattach | One unary `Exec` with `script`, `stdin`, and `login`; no PTY, no signal, no reattach |
+| Caller controls | Command, arguments, environment, directory, user | Script, stdin, and login only; the bridge sets the workdir and passes no environment |
+| File calls | `Stat`, `ListDir`, `MakeDir`, `Move`, `Remove`, watch, and `/files` | `Stat`, `ReadFile`, `ReadLines`, and `WriteFile`; list, move, and delete stay on the shell |
+| File content | Separate HTTP route, whole file, `Range` supported | The same gRPC service in 64 KiB chunks, with a byte limit or a line window |
+| Write | Truncates in place as root; no size check | Exact size, temporary file and rename as the agent's user |
+| Missing path | An error | `exists=false` for `Stat`, with status OK |
+| Authentication | Access token or signed URL | None; plaintext on the run network |
+| Revocation | None for one session; access ends with the sandbox | Every call is refused with `UNAVAILABLE`, handlers are joined, and the audit is sealed before evaluation |
+| Timeouts | A request header can limit a process; closing the stream does not stop it | No server deadline; the harness stops the client and the closed connection cancels the call |
+| Output limits | No byte limit found | 16 MiB for each of stdout and stderr; 64 MiB for a message |
+| Evidence | Operational log for E2B; no tool-call format | `tool-calls.jsonl` for each sandbox call, and an optional raw log |
+| Sandbox runtime | Firecracker microVM | Docker or Kubernetes container |
+
+### Common to both
+
+- A typed call for each file operation. Stat, read, and write are separate from
+  command execution.
+- The command runs as `/bin/bash -l -c SCRIPT`. ARIES uses `-l` only when
+  `login` is set.
+- Stdout and stderr are separate. A non-zero exit code is a result, not a
+  transport error.
+- A write creates the missing parent directories.
+- A file read acts as root on Docker.
+- A canceled call can leave its command running in the sandbox.
+- A protobuf schema defines the calls. The codec is a free choice.
+
+### Different on purpose, and why
+
+- **No daemon in the task container.** The bridge is outside the sandbox. It
+  owns the access to the sandbox, so it can revoke the access before
+  evaluation; see
+  [lifecycle](../design/bridge.md#lifecycle-cancellation-and-failure).
+- **ARIES messages, not E2B messages.** No E2B wire compatibility is
+  implemented or verified; see [supported](../supported.md) and
+  [deployment](../design/deployment.md).
+- **A narrow request.** `Exec` carries only the fields that ARIES honours. It
+  has no directory, environment, PTY, or reattach.
+- **No authentication, but revocation for each session.** The research network
+  is trusted. Isolation comes from the exact sandbox binding and from
+  revocation before evaluation; see
+  [control and native protocols](../design/bridge.md#control-and-native-protocols).
+- **Atomic write as the agent's user.** A reader sees the old file or the new
+  one. A typed write reaches only what the agent's own shell can write; see
+  [transports](../design/bridge.md#transports).
+- **`ReadLines` and `max_bytes`.** Only the requested window crosses the wire.
+- **Unary `Exec` with bounded output.** The bridge process is shared, so a
+  unary reply must fit in memory; see [Limits](#limits).
+- **No server deadline.** The harness owns the timeout; see [Client](#client).
+- **Evidence for each call.** Each sandbox call has a record with `sandbox_id`
+  and a sequence number; see
+  [evidence](../design/bridge.md#evidence-and-substitution).
 
 ## Tests
 
