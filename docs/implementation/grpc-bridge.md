@@ -129,6 +129,12 @@ its end, and the call reports its real result.
 
 ## Limits
 
+- `Exec` is unary and does not stream output, unlike SSH. The client gets no
+  stdout or stderr until the command ends. A call that is canceled or times out
+  gives the client no output. Stdout and stderr come back as two separate
+  buffers, so their relative order is lost. Thus an agent that polls the output
+  of a long or background process sees nothing until the command returns. This
+  is a known limitation that we accept for now.
 - `Exec` stdin above 16 MiB is refused with `RESOURCE_EXHAUSTED` before
   anything runs. A workdir that is not shell-neutral is refused with
   `FAILED_PRECONDITION`. Both refusals are recorded with status `rejected` and
