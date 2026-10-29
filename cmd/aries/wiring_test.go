@@ -117,8 +117,10 @@ func TestBenchmarkDispatchersFailClosed(t *testing.T) {
 	}
 }
 
-// Each bridge serves exactly one harness, so a crossed pair must be refused
-// before the run starts rather than at the first tool call.
+// One run-shared bridge serves several harness instances at a time, all of one
+// harness type: `openclaw-ssh` serves only OpenClaw, and `hermes-ssh` or
+// `hermes-grpc` serves only Hermes. Thus a crossed pair must be refused before
+// the run starts rather than at the first tool call.
 func TestValidateComponentsRequiresPairedHarnessAndBridge(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
