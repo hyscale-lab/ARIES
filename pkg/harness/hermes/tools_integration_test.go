@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,7 +51,28 @@ print("DISPATCHED_READ", handle_function_call("read_file", {"path": "/work/e2e/n
     task_id="tool-probe", tool_call_id="` + probeToolCallID + `"))
 print("CHECK", terminal_tool(command="cat /work/e2e/note.txt", task_id="tool-probe"))
 print("ROOT", read_file_tool(path="/", task_id="tool-probe"))
+import base64, hashlib, os, sys, time
+large_path, large_size = sys.argv[1], int(sys.argv[2])
+# write_file takes text: base64 of random bytes is ASCII of exactly large_size bytes.
+large = base64.b64encode(os.urandom(large_size // 4 * 3)).decode()
+started = time.monotonic()
+written = ops.write_file(large_path, large)
+print("LARGE_WRITE", written.bytes_written, written.verified, written.error, f"{time.monotonic() - started:.1f}s")
+started = time.monotonic()
+back = ops.read_file_bytes(large_path)
+content = base64.b64decode(back.base64_content or "")
+print("LARGE_READ", len(content), back.error, f"{time.monotonic() - started:.1f}s")
+print("LARGE_SHA", hashlib.sha256(large.encode()).hexdigest(), hashlib.sha256(content).hexdigest())
 `
+
+// largeFileBytes equals the gRPC message limit (maxMessageBytes in
+// pkg/bridge/grpc), so the file moves only in chunks. It is also above the
+// audit's retained input bound and the probe's output limit, so the probe
+// prints only sizes and digests.
+const (
+	largeFilePath  = "/work/e2e/large.txt"
+	largeFileBytes = 64 << 20
+)
 
 // probeToolCallID is the id the probe gives its one dispatched read_file, as
 // the model's tool call would. That read asks for another window than the
@@ -131,7 +153,7 @@ func TestPluginRunsHermesToolsThroughTheGRPCBridge(t *testing.T) {
 	// The launcher has already applied the seam as root; the probe runs as the
 	// unprivileged user, with the container's own environment.
 	result, err := manager.runtime.Options.Deployment.Exec(ctx, manager.active.ID, core.Command{
-		Path: "python3", Args: []string{"-c", toolProbe}, Dir: "/opt/hermes", User: "10000:10000", OutputLimitBytes: maxDockerOutput,
+		Path: "python3", Args: []string{"-c", toolProbe, largeFilePath, fmt.Sprint(largeFileBytes)}, Dir: "/opt/hermes", User: "10000:10000", OutputLimitBytes: maxDockerOutput,
 	})
 	text := result.Stdout + result.Stderr
 	if err != nil || result.ExitCode != 0 {
@@ -158,6 +180,26 @@ func TestPluginRunsHermesToolsThroughTheGRPCBridge(t *testing.T) {
 	if !strings.Contains(text, "Cannot read '/': not a regular file") {
 		t.Fatalf("read_file(/) did not give the stock not-regular error:\n%s", text)
 	}
+	// Hermes's write_file checks the sandbox copy with sha256sum itself, so
+	// True here is its own verification of the write.
+	if !strings.Contains(text, fmt.Sprintf("LARGE_WRITE %d True None ", largeFileBytes)) ||
+		!strings.Contains(text, fmt.Sprintf("LARGE_READ %d None ", largeFileBytes)) {
+		t.Fatalf("the large file did not move through the plugin:\n%s", text)
+	}
+	var largeSHA string
+	for _, line := range strings.Split(text, "\n") {
+		if fields := strings.Fields(line); len(fields) == 3 && fields[0] == "LARGE_SHA" && fields[1] == fields[2] {
+			largeSHA = fields[1]
+		}
+	}
+	if largeSHA == "" {
+		t.Fatalf("the large file read back differs from the written one:\n%s", text)
+	}
+	// The sandbox copy, checked past the bridge.
+	sum, err := live.Exec(ctx, core.Command{Path: "/usr/bin/sha256sum", Args: []string{largeFilePath}})
+	if err != nil || sum.ExitCode != 0 || !strings.HasPrefix(sum.Stdout, largeSHA+" ") {
+		t.Fatalf("sandbox sha256sum %v (exit %d): %q, want %s", err, sum.ExitCode, sum.Stdout+sum.Stderr, largeSHA)
+	}
 
 	// Revocation order as the Runner: harness first, then the bridge, which
 	// finalizes and collects the audit.
@@ -171,7 +213,7 @@ func TestPluginRunsHermesToolsThroughTheGRPCBridge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	seen := map[string]bool{}
+	seen, largeRecords := map[string]bool{}, map[string]int{}
 	for _, line := range bytes.Split(bytes.TrimSpace(log), []byte("\n")) {
 		var record struct {
 			OperationClass string `json:"operation_class"`
@@ -180,6 +222,10 @@ func TestPluginRunsHermesToolsThroughTheGRPCBridge(t *testing.T) {
 			Status         string `json:"status"`
 			FirstLine      int64  `json:"first_line"`
 			ToolCallID     string `json:"tool_call_id"`
+			StdinEncoding  string `json:"stdin_encoding"`
+			StdinBytes     int64  `json:"stdin_bytes"`
+			StdoutBytes    int64  `json:"stdout_bytes"`
+			SHA256         string `json:"sha256"`
 		}
 		if err := json.Unmarshal(line, &record); err != nil {
 			t.Fatalf("decode record: %v\n%s", err, line)
@@ -203,6 +249,15 @@ func TestPluginRunsHermesToolsThroughTheGRPCBridge(t *testing.T) {
 		if strings.Contains(record.Command, ".hermes/") || strings.Contains(record.Path, ".hermes/") {
 			t.Fatalf("a Hermes home path reached the bridge: %s", line)
 		}
+		// Input past the retained bound keeps only its size and digest.
+		if record.Path == largeFilePath && record.Status == "completed" && record.SHA256 == largeSHA {
+			switch {
+			case record.OperationClass == "write" && record.StdinBytes == largeFileBytes && record.StdinEncoding == "size-omitted":
+				largeRecords["write"]++
+			case record.OperationClass == "read" && record.StdoutBytes == largeFileBytes:
+				largeRecords["read"]++
+			}
+		}
 		switch {
 		case record.OperationClass == "exec" && strings.Contains(record.Command, "echo aries-tool-ok"):
 			seen["terminal"] = true
@@ -222,6 +277,9 @@ func TestPluginRunsHermesToolsThroughTheGRPCBridge(t *testing.T) {
 		if !seen[want] {
 			t.Fatalf("no %s record in tool-calls.jsonl:\n%s", want, log)
 		}
+	}
+	if largeRecords["write"] != 1 || largeRecords["read"] != 1 {
+		t.Fatalf("want one large write and one large read record, got %v:\n%s", largeRecords, log)
 	}
 }
 
