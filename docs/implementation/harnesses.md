@@ -207,7 +207,9 @@ write through the typed file procedures. Hermes's own tool logic above them
 does not change. Search, patch reads, delete, move, similar-name suggestions,
 the UTF-16 fallback, and the `write_file` digest check and lint still run as
 shell commands through `Exec`. A bridge failure is a tool error, never a
-silent fallback to the shell.
+silent fallback to the shell. A typed file call that does not end in three
+times the Hermes terminal timeout (540 s with the default 180 s) is also a
+tool error.
 
 The pinned Hermes creates `ShellFileOperations` for every backend, so a backend
 cannot supply typed file operations. The [seam script](../../pkg/harness/hermes/seam.py)

@@ -22,6 +22,11 @@ import subprocess
 CLIENT = "/opt/aries/bin/aries-grpc-client"
 CLIENT_ENV = ("ARIES_GRPC_TARGET",)
 TOOL_CALL_ID_ENV = "ARIES_TOOL_CALL_ID"
+# A typed file call has a timeout of the Hermes terminal timeout multiplied by
+# this factor. One call can run several Docker or Kubernetes operations in the
+# sandbox (for example access check, transfer and rename), but Hermes gives
+# each single shell command only the terminal timeout.
+FILE_TIMEOUT_FACTOR = 3
 
 
 def register(ctx):
@@ -58,7 +63,13 @@ def register(ctx):
         silent fallback to the shell."""
 
         def _file(self, *args, data=None, accept=(0,)):
-            proc = subprocess.run([CLIENT, "file", *args], input=data, capture_output=True, env=client_env())
+            timeout = self.env.timeout * FILE_TIMEOUT_FACTOR
+            try:
+                proc = subprocess.run([CLIENT, "file", *args], input=data, capture_output=True,
+                                      env=client_env(), timeout=timeout)
+            except subprocess.TimeoutExpired:
+                # subprocess.run kills the client; its closed connection cancels the call on the bridge.
+                raise RuntimeError(f"aries-grpc-client file {args[0]} timed out after {timeout}s") from None
             if proc.returncode not in accept:
                 message = proc.stderr.decode("utf-8", "replace").strip()
                 raise RuntimeError(message or f"aries-grpc-client file {args[0]} exited {proc.returncode}")

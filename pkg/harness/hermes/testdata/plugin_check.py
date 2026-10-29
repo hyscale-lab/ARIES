@@ -138,4 +138,25 @@ except Exception:
     pass
 else:
     raise AssertionError("a missing client did not raise")
+
+# A stalled client is killed at the file-call timeout and raises. A short
+# terminal timeout keeps the check fast. The stall outlasts the file-call
+# timeout many times, so an unbounded call returns empty instead of raising.
+env.timeout = 1
+with open("/fake/stall", "w") as handle:
+    handle.write(f"#!/bin/sh\necho $$ > /tmp/stall.pid\nexec sleep {10 * env.timeout * plugin.FILE_TIMEOUT_FACTOR}\n")
+os.chmod("/fake/stall", 0o755)
+plugin.CLIENT = "/fake/stall"
+try:
+    ops._sample_file_bytes("/work/sub/a.txt")
+except RuntimeError as error:
+    assert str(error) == "aries-grpc-client file read timed out after 3s", error
+else:
+    raise AssertionError("a stalled client did not time out")
+try:
+    os.kill(int(open("/tmp/stall.pid").read()), 0)
+except ProcessLookupError:
+    pass
+else:
+    raise AssertionError("the stalled client still runs")
 print("PLUGIN_CHECK_OK")
