@@ -168,8 +168,10 @@ rules. gRPC records also have `sha256`, `truncated`, and the read window fields
 `max_bytes`, `first_line`, `max_lines`, `max_line_bytes`, and `total_lines`, and
 keep written file content as `stdin`; see
 [gRPC evidence](implementation/grpc-bridge.md#evidence). The `operation_class`
-values differ by transport: gRPC uses the E2B operations `exec`, `stat`,
-`read`, and `write`, and SSH keeps the classes of its dialect. Only gRPC
+values differ by transport: gRPC uses the
+[E2B operation classes](implementation/grpc-bridge.md#e2b-operation-classes)
+`exec`, `stat`, `read`, and `write` (a label, not E2B compatibility), and SSH
+keeps the classes of its dialect. Only gRPC
 records can have `tool_call_id`, the id of the harness tool call that the
 sandbox call serves. It is absent when the id is not known.
 
