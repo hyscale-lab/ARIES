@@ -434,8 +434,14 @@ func TestStartDoesNotStageTheGRPCClient(t *testing.T) {
 	if enabled := config["plugins"].(map[string]any)["enabled"]; !reflect.DeepEqual(enabled, []any{otelPluginName, "aries"}) {
 		t.Fatalf("enabled plugins = %#v", enabled)
 	}
-	if !slices.Contains(fake.created.Env, "ARIES_GRPC_TARGET=172.22.0.1:39425") {
-		t.Fatalf("environment = %v", fake.created.Env)
+	wantEntry := map[string]any{"aries": map[string]any{"settings": map[string]any{"grpc_target": request.Endpoint.Address}}}
+	if got := config["plugins"].(map[string]any)["entries"]; !reflect.DeepEqual(got, wantEntry) {
+		t.Fatalf("plugin entries = %#v, want %#v", got, wantEntry)
+	}
+	for _, entry := range fake.created.Env {
+		if strings.HasPrefix(entry, "ARIES_GRPC_TARGET=") {
+			t.Fatalf("gRPC target in container environment: %v", fake.created.Env)
+		}
 	}
 }
 

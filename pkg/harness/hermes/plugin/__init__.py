@@ -20,7 +20,6 @@ if grpc is not None:
     from . import sandbox_pb2 as pb
     from . import sandbox_pb2_grpc
 
-GRPC_TARGET_ENV = "ARIES_GRPC_TARGET"
 FILE_CHUNK_BYTES = 64 << 10
 MAX_MESSAGE_BYTES = 64 << 20
 TRANSPORT_FAILURE_EXIT = 255
@@ -52,6 +51,8 @@ def register(ctx):
     # Hermes binds the id of the running tool call here, also on the threads
     # that run a command, and leaves it empty outside a tool call.
     from tools.approval import _approval_tool_call_id
+
+    grpc_target = ctx.get_config("grpc_target")
 
     def call_metadata():
         tool_call_id = _approval_tool_call_id.get()
@@ -263,10 +264,9 @@ def register(ctx):
         def _client(self):
             with self._channel_lock:
                 if self._channel is None:
-                    target = os.environ.get(GRPC_TARGET_ENV, "")
-                    if not target.strip():
-                        raise RuntimeError(f"{GRPC_TARGET_ENV} is not set")
-                    self._channel = grpc.insecure_channel(target, options=(
+                    if not isinstance(grpc_target, str) or not grpc_target.strip():
+                        raise RuntimeError("gRPC target is not set")
+                    self._channel = grpc.insecure_channel(grpc_target, options=(
                         ("grpc.enable_http_proxy", 0),
                         ("grpc.max_send_message_length", MAX_MESSAGE_BYTES),
                         ("grpc.max_receive_message_length", MAX_MESSAGE_BYTES),
@@ -311,7 +311,7 @@ def register(ctx):
         name = "aries"
 
         def is_available(self):
-            return grpc is not None and bool(os.environ.get(GRPC_TARGET_ENV))
+            return grpc is not None and isinstance(grpc_target, str) and bool(grpc_target.strip())
 
         def create_environment(self, *, cwd, timeout, task_id="default", image=None,
                                container_config=None, **kwargs):
