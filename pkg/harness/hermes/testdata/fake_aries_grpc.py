@@ -1,68 +1,109 @@
-#!/usr/bin/env python3
-"""Stand-in for aries-grpc in the plugin test: the same argv, stdout, stderr
-and exit-code contract, served from the local filesystem instead of a bridge.
-Every invocation is appended to $FAKE_CLIENT_LOG with its argv and its
-ARIES_TOOL_CALL_ID (null when the variable is not set)."""
-import json
+"""Local fake gRPC bridge for the Hermes plugin check."""
 import os
 import subprocess
-import sys
+import threading
+from concurrent import futures
 
-args = sys.argv[1:]
-with open(os.environ["FAKE_CLIENT_LOG"], "a") as log:
-    log.write(json.dumps({"argv": args, "tool_call_id": os.environ.get("ARIES_TOOL_CALL_ID")}) + "\n")
+import grpc
+from aries_plugin import sandbox_pb2 as pb
+from aries_plugin import sandbox_pb2_grpc
 
-if args[0] == "exec":
-    login = "--login" in args
-    script = args[-1]
-    sys.exit(subprocess.run(["bash", "-l" if login else "--norc", "-c", script]).returncode)
+CHUNK_BYTES = 64 << 10
 
-operation, rest = args[1], args[2:]
-flags = dict(zip(rest[:-1:2], rest[1:-1:2]))
-path = rest[-1]
-if not os.path.isabs(path):
-    print("path must be absolute", file=sys.stderr)
-    sys.exit(3)
-if operation == "stat":
-    if not os.path.lexists(path):
-        print(json.dumps({"exists": False, "type": "", "size": 0, "mode": "0000"}))
-    else:
-        info = os.stat(path)
-        kind = "regular" if os.path.isfile(path) else "directory" if os.path.isdir(path) else "other"
-        print(json.dumps({"exists": True, "type": kind, "size": info.st_size if kind == "regular" else 0, "mode": "%04o" % (info.st_mode & 0o7777)}))
-    sys.exit(0)
-if operation == "write":
-    data = sys.stdin.buffer.read()
-    if len(data) != int(flags["--size"]):
-        print("write stream does not match its header", file=sys.stderr)
-        sys.exit(3)
-    created = not os.path.exists(path)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "wb") as target:
-        target.write(data)
-    print(json.dumps({"bytes_written": len(data), "created": created}), file=sys.stderr)
-    sys.exit(0)
-if not os.path.exists(path):
-    print("no such file", file=sys.stderr)
-    sys.exit(1)
-if not os.path.isfile(path):
-    print("not a regular file", file=sys.stderr)
-    sys.exit(5)
-data = open(path, "rb").read()
-if operation == "read":
-    limit = int(flags.get("--max-bytes", 0)) or len(data)
-    chunk = data[:limit]
-    sys.stdout.buffer.write(chunk)
-    print(json.dumps({"size": len(data), "truncated": len(chunk) < len(data)}), file=sys.stderr)
-elif operation == "lines":
-    first, count, clamp = int(flags["--first"]), int(flags["--max"]), int(flags.get("--max-line-bytes", 0))
-    window = []
-    parts = data.split(b"\n")
-    lines = [part + b"\n" for part in parts[:-1]] + ([parts[-1]] if parts[-1] else [])
-    for number, line in enumerate(lines, start=1):
-        if first <= number < first + count:
-            body, newline = (line[:-1], b"\n") if line.endswith(b"\n") else (line, b"")
-            window.append((body[:clamp] if clamp else body) + newline)
-    total = data.count(b"\n")
-    sys.stdout.buffer.write(b"".join(window))
-    print(json.dumps({"total_lines": total, "size": len(data), "ends_with_newline": data.endswith(b"\n"), "more": total > first + count - 1}), file=sys.stderr)
+
+class Sandbox(sandbox_pb2_grpc.SandboxServicer):
+    def __init__(self):
+        self.calls = []
+        self.cancelled = threading.Event()
+        self.running = threading.Event()
+        self.stall = False
+        self.response = None
+        self.refusal = None
+        self.summaryless = False
+
+    def record(self, context, operation, **fields):
+        self.calls.append((operation, dict(context.invocation_metadata()).get("aries-tool-call-id"), fields))
+
+    def Exec(self, request, context):
+        self.record(context, "exec", script=request.script, stdin=request.stdin, login=request.login)
+        if self.refusal is not None:
+            context.abort(self.refusal, "bridge refused the call")
+        if self.response is not None:
+            return self.response
+        command = ["bash", "-l" if request.login else "--norc", "-c", request.script]
+        proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        context.add_callback(lambda: (self.cancelled.set(), proc.kill()) if proc.poll() is None else None)
+        self.running.set()
+        stdout, stderr = proc.communicate(request.stdin)
+        return pb.ExecResponse(stdout=stdout, stderr=stderr, exit_code=proc.returncode, reason=pb.REASON_COMPLETED)
+
+    def Stat(self, request, context):
+        self.record(context, "stat", path=request.path)
+        if not os.path.isabs(request.path):
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "path must be absolute")
+        if not os.path.lexists(request.path):
+            return pb.StatResponse()
+        info = os.stat(request.path)
+        kind = pb.FILE_TYPE_REGULAR if os.path.isfile(request.path) else pb.FILE_TYPE_DIRECTORY if os.path.isdir(request.path) else pb.FILE_TYPE_OTHER
+        return pb.StatResponse(exists=True, type=kind, size=info.st_size if kind == pb.FILE_TYPE_REGULAR else 0, mode=info.st_mode & 0o7777)
+
+    def read(self, path, context):
+        if self.refusal is not None:
+            context.abort(self.refusal, "bridge refused the call")
+        if not os.path.isabs(path):
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "path must be absolute")
+        if not os.path.exists(path):
+            context.abort(grpc.StatusCode.NOT_FOUND, "no such file")
+        if not os.path.isfile(path):
+            context.abort(grpc.StatusCode.FAILED_PRECONDITION, "not a regular file")
+        if self.stall:
+            threading.Event().wait(10)
+        with open(path, "rb") as handle:
+            return handle.read()
+
+    def ReadFile(self, request, context):
+        self.record(context, "read", path=request.path, max_bytes=request.max_bytes)
+        data = self.read(request.path, context)
+        limit = request.max_bytes or len(data)
+        yield pb.ReadFileResponse(header=pb.ReadFileHeader(size=len(data), truncated=limit < len(data)))
+        content = data[:limit]
+        for offset in range(0, len(content), CHUNK_BYTES):
+            yield pb.ReadFileResponse(chunk=content[offset:offset + CHUNK_BYTES])
+
+    def ReadLines(self, request, context):
+        self.record(context, "lines", path=request.path, first=request.first_line, max=request.max_lines, max_line_bytes=request.max_line_bytes)
+        data = self.read(request.path, context)
+        parts = data.split(b"\n")
+        lines = [part + b"\n" for part in parts[:-1]] + ([parts[-1]] if parts[-1] else [])
+        for number, line in enumerate(lines, start=1):
+            if request.first_line <= number < request.first_line + request.max_lines:
+                body, newline = (line[:-1], b"\n") if line.endswith(b"\n") else (line, b"")
+                body = body[:request.max_line_bytes] if request.max_line_bytes else body
+                yield pb.ReadLinesResponse(chunk=body + newline)
+        total = data.count(b"\n")
+        if not self.summaryless:
+            yield pb.ReadLinesResponse(summary=pb.ReadLinesSummary(total_lines=total, size=len(data), ends_with_newline=data.endswith(b"\n"), more=total > request.first_line + request.max_lines - 1))
+
+    def WriteFile(self, requests, context):
+        iterator = iter(requests)
+        header = next(iterator).header
+        self.record(context, "write", path=header.path, size=header.size)
+        if not os.path.isabs(header.path):
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "path must be absolute")
+        data = b"".join(message.chunk for message in iterator)
+        if len(data) != header.size:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "write stream does not match its header")
+        created = not os.path.exists(header.path)
+        os.makedirs(os.path.dirname(header.path), exist_ok=True)
+        with open(header.path, "wb") as target:
+            target.write(data)
+        return pb.WriteFileResponse(bytes_written=len(data), created=created)
+
+
+def start():
+    sandbox = Sandbox()
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=8))
+    sandbox_pb2_grpc.add_SandboxServicer_to_server(sandbox, server)
+    port = server.add_insecure_port("127.0.0.1:0")
+    server.start()
+    return sandbox, server, f"127.0.0.1:{port}"

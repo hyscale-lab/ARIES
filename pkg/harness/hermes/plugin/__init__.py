@@ -1,32 +1,41 @@
 """ARIES terminal backend for Hermes.
 
-Registers the `aries` backend, selected by `terminal.backend: aries` in
-config.yaml (the Gateway exports it as TERMINAL_ENV). Every command runs
-through the staged ARIES gRPC client, which carries it to the task sandbox
-over the ARIES tool bridge; the client reads its target from
-ARIES_GRPC_TARGET. Each client run also gets ARIES_TOOL_CALL_ID, the id of
-the Hermes tool call it serves, so the bridge records name their tool call.
-Nothing is synced into the sandbox: this backend never constructs a
-FileSyncManager.
-
-File tools reach the environment through BaseEnvironment.get_file_operations(),
-the seam ARIES adds to the pinned Hermes before it starts.
+The plugin runs commands and file calls through the ARIES gRPC tool bridge.
+File tools use the seam in BaseEnvironment.get_file_operations().
+Nothing is synced into the task sandbox.
 """
 
 import base64
 import json
 import os
 import posixpath
-import subprocess
+import threading
+from types import SimpleNamespace
 
-CLIENT = "/opt/aries/bin/aries-grpc-client"
-CLIENT_ENV = ("ARIES_GRPC_TARGET",)
-TOOL_CALL_ID_ENV = "ARIES_TOOL_CALL_ID"
+try:
+    import grpc
+except ImportError:
+    grpc = None
+if grpc is not None:
+    from . import sandbox_pb2 as pb
+    from . import sandbox_pb2_grpc
+
+GRPC_TARGET_ENV = "ARIES_GRPC_TARGET"
+FILE_CHUNK_BYTES = 64 << 10
+MAX_MESSAGE_BYTES = 64 << 20
+TRANSPORT_FAILURE_EXIT = 255
 # A typed file call has a timeout of the Hermes terminal timeout multiplied by
 # this factor. One call can run several Docker or Kubernetes operations in the
 # sandbox (for example access check, transfer and rename), but Hermes gives
 # each single shell command only the terminal timeout.
 FILE_TIMEOUT_FACTOR = 3
+FILE_EXIT = {
+    grpc.StatusCode.NOT_FOUND: 1,
+    grpc.StatusCode.PERMISSION_DENIED: 2,
+    grpc.StatusCode.INVALID_ARGUMENT: 3,
+    grpc.StatusCode.RESOURCE_EXHAUSTED: 4,
+    grpc.StatusCode.FAILED_PRECONDITION: 5,
+} if grpc else {}
 
 
 def register(ctx):
@@ -34,7 +43,7 @@ def register(ctx):
     # line instead of breaking the loader.
     from agent.terminal_env_provider import TerminalEnvironmentProvider
     from tools.binary_extensions import BINARY_EXTENSIONS
-    from tools.environments.base import BaseEnvironment
+    from tools.environments.base import BaseEnvironment, _ThreadedProcessHandle
     from tools.file_operations import (
         ExecuteResult, ReadResult, ShellFileOperations, _detect_line_ending, _strip_bom,
         describe_binary_file, normalize_read_pagination,
@@ -44,12 +53,13 @@ def register(ctx):
     # that run a command, and leaves it empty outside a tool call.
     from tools.approval import _approval_tool_call_id
 
-    def client_env():
-        env = {key: value for key, value in os.environ.items() if key != TOOL_CALL_ID_ENV}
+    def call_metadata():
         tool_call_id = _approval_tool_call_id.get()
-        if tool_call_id:
-            env[TOOL_CALL_ID_ENV] = tool_call_id
-        return env
+        return (("aries-tool-call-id", tool_call_id),) if tool_call_id else ()
+
+    def rpc_error(error):
+        code = error.code().name.title().replace("_", "")
+        return f"aries: rpc error: code = {code} desc = {error.details()}\n"
 
     class AriesFileOperations(ShellFileOperations):
         """Reads, probes and the atomic write go through the bridge's typed
@@ -62,17 +72,68 @@ def register(ctx):
         instead, so a broken bridge surfaces as a tool error and never as a
         silent fallback to the shell."""
 
-        def _file(self, *args, data=None, accept=(0,)):
+        def _file(self, operation, *args, data=None, accept=(0,)):
             timeout = self.env.timeout * FILE_TIMEOUT_FACTOR
+            path = args[-1]
+            flags = dict(zip(args[:-1:2], args[1:-1:2]))
+            metadata = call_metadata()
+            output, report, code = b"", None, 0
+            client = self.env._client()
             try:
-                proc = subprocess.run([CLIENT, "file", *args], input=data, capture_output=True,
-                                      env=client_env(), timeout=timeout)
-            except subprocess.TimeoutExpired:
-                # subprocess.run kills the client; its closed connection cancels the call on the bridge.
-                raise RuntimeError(f"aries-grpc-client file {args[0]} timed out after {timeout}s") from None
-            if proc.returncode not in accept:
-                message = proc.stderr.decode("utf-8", "replace").strip()
-                raise RuntimeError(message or f"aries-grpc-client file {args[0]} exited {proc.returncode}")
+                if operation == "stat":
+                    reply = client.Stat(pb.StatRequest(path=path), timeout=timeout, metadata=metadata)
+                    types = {pb.FILE_TYPE_REGULAR: "regular", pb.FILE_TYPE_DIRECTORY: "directory", pb.FILE_TYPE_OTHER: "other"}
+                    report = {"exists": reply.exists, "type": types.get(reply.type, ""),
+                              "size": reply.size, "mode": f"{reply.mode:04o}"}
+                    output = (json.dumps(report) + "\n").encode()
+                    report = None
+                elif operation == "read":
+                    stream = client.ReadFile(pb.ReadFileRequest(path=path, max_bytes=int(flags.get("--max-bytes", 0))),
+                                             timeout=timeout, metadata=metadata)
+                    chunks = []
+                    for message in stream:
+                        if message.WhichOneof("part") == "header":
+                            report = {"size": message.header.size, "truncated": message.header.truncated}
+                        else:
+                            chunks.append(message.chunk)
+                    if report is None:
+                        raise RuntimeError("aries: stream ended without a header")
+                    output = b"".join(chunks)
+                elif operation == "lines":
+                    stream = client.ReadLines(pb.ReadLinesRequest(
+                        path=path, first_line=int(flags["--first"]), max_lines=int(flags["--max"]),
+                        max_line_bytes=int(flags.get("--max-line-bytes", 0))), timeout=timeout, metadata=metadata)
+                    chunks = []
+                    for message in stream:
+                        if message.WhichOneof("part") == "summary":
+                            summary = message.summary
+                            report = {"total_lines": summary.total_lines, "size": summary.size,
+                                      "ends_with_newline": summary.ends_with_newline, "more": summary.more}
+                        else:
+                            chunks.append(message.chunk)
+                    if report is None:
+                        raise RuntimeError("aries: stream ended without a summary")
+                    output = b"".join(chunks)
+                elif operation == "write":
+                    size = int(flags["--size"])
+                    def requests():
+                        yield pb.WriteFileRequest(header=pb.WriteFileHeader(path=path, size=size))
+                        for offset in range(0, len(data), FILE_CHUNK_BYTES):
+                            yield pb.WriteFileRequest(chunk=data[offset:offset + FILE_CHUNK_BYTES])
+                    reply = client.WriteFile(requests(), timeout=timeout, metadata=metadata)
+                    report = {"bytes_written": reply.bytes_written, "created": reply.created}
+                else:
+                    raise ValueError(f"unknown file operation: {operation}")
+            except grpc.RpcError as error:
+                if error.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
+                    raise RuntimeError(f"aries: file {operation} timed out after {timeout}s") from None
+                code = FILE_EXIT.get(error.code(), TRANSPORT_FAILURE_EXIT)
+                report = f"aries: {error.details()}\n".encode()
+            if isinstance(report, dict):
+                report = (json.dumps(report) + "\n").encode()
+            proc = SimpleNamespace(stdout=output, stderr=report or b"", returncode=code)
+            if code not in accept:
+                raise RuntimeError(proc.stderr.decode("utf-8", "replace").strip())
             return proc
 
         def _absolute(self, path):
@@ -195,34 +256,53 @@ def register(ctx):
     class AriesEnvironment(BaseEnvironment):
         def __init__(self, cwd, timeout):
             super().__init__(cwd=cwd, timeout=timeout)
+            self._channel = None
+            self._channel_lock = threading.Lock()
             self.init_session()
 
+        def _client(self):
+            with self._channel_lock:
+                if self._channel is None:
+                    target = os.environ.get(GRPC_TARGET_ENV, "")
+                    if not target.strip():
+                        raise RuntimeError(f"{GRPC_TARGET_ENV} is not set")
+                    self._channel = grpc.insecure_channel(target, options=(
+                        ("grpc.enable_http_proxy", 0),
+                        ("grpc.max_send_message_length", MAX_MESSAGE_BYTES),
+                        ("grpc.max_receive_message_length", MAX_MESSAGE_BYTES),
+                    ))
+                return sandbox_pb2_grpc.SandboxStub(self._channel)
+
         def _run_bash(self, cmd_string, *, login=False, timeout=120, stdin_data=None):
-            # Hermes enforces the timeout itself by killing this process; the
-            # closed connection then cancels the call on the bridge.
-            argv = [CLIENT, "exec"] + (["--login"] if login else []) + ["--", cmd_string]
-            proc = subprocess.Popen(
-                argv,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
-                env=client_env(),
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-            )
-            if stdin_data is not None:
-                # The client reads all of stdin before it writes anything, so a
-                # blocking write cannot deadlock against its output.
+            # Hermes bounds the call and kills this handle when the command times out.
+            request = pb.ExecRequest(script=cmd_string,
+                                     stdin=stdin_data.encode("utf-8", "surrogateescape") if stdin_data is not None else b"",
+                                     login=login)
+            try:
+                call = self._client().Exec.future(request, metadata=call_metadata())
+            except Exception as error:
+                message = f"aries: {error}\n"
+                return _ThreadedProcessHandle(lambda: (message, TRANSPORT_FAILURE_EXIT))
+
+            def execute():
                 try:
-                    proc.stdin.write(stdin_data)
-                    proc.stdin.close()
-                except BrokenPipeError:
-                    pass  # the client exited early; its exit code says why
-            return proc
+                    reply = call.result()
+                except grpc.FutureCancelledError:
+                    return "aries: rpc error: code = Canceled desc = context canceled\n", TRANSPORT_FAILURE_EXIT
+                except grpc.RpcError as error:
+                    return rpc_error(error), TRANSPORT_FAILURE_EXIT
+                output = reply.stdout + reply.stderr
+                if reply.truncated:
+                    output += b"aries: output truncated at the bridge's limit\n"
+                if reply.reason != pb.REASON_COMPLETED:
+                    output += f"aries: {pb.Reason.Name(reply.reason)}\n".encode()
+                return output.decode("utf-8", "replace"), reply.exit_code
+
+            return _ThreadedProcessHandle(execute, cancel_fn=call.cancel)
 
         def cleanup(self):
-            pass  # the bridge and the sandbox belong to ARIES, not to Hermes
+            if self._channel is not None:
+                self._channel.close()
 
         def get_file_operations(self):
             return AriesFileOperations(self)
@@ -231,7 +311,7 @@ def register(ctx):
         name = "aries"
 
         def is_available(self):
-            return os.access(CLIENT, os.X_OK) and all(os.environ.get(key) for key in CLIENT_ENV)
+            return grpc is not None and bool(os.environ.get(GRPC_TARGET_ENV))
 
         def create_environment(self, *, cwd, timeout, task_id="default", image=None,
                                container_config=None, **kwargs):
