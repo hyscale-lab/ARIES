@@ -74,7 +74,7 @@ The script:
    Without it, setup stops at that step;
 2. copies the committed `k8s/` tree to the master and runs `apply-aries.sh`
    there;
-3. builds `bin/aries`, `bin/aries-ssh-client` and `bin/aries-grpc-client` for the
+3. builds `bin/aries` and `bin/aries-ssh-client` for the
    loader node and stages them with `profiles/`, `configs/` and a namespaced
    kubeconfig under `~/aries`.
 

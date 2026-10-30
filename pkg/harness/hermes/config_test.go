@@ -396,7 +396,7 @@ func TestContainerEnvironmentSetsSearXNGURLWhenWebSearchEnabled(t *testing.T) {
 
 // Gateway launches without CLI-only toolset flags; config selects its tools.
 func TestGatewayLauncherExportsKeyAndAvoidsToolsetsFlag(t *testing.T) {
-	script := string(gatewayLauncherScript("DEEPSEEK_API_KEY", false, false))
+	script := string(gatewayLauncherScript("DEEPSEEK_API_KEY", false))
 	for _, want := range []string{
 		"DEEPSEEK_API_KEY=\"$(cat " + modelKeyPath + ")\"",
 		"export DEEPSEEK_API_KEY",
@@ -428,13 +428,13 @@ API_SERVER_KEY="$(cat /run/aries/gateway.key)"
 export API_SERVER_KEY
 exec hermes gateway run --no-supervise --external-supervisor
 `
-	if script := string(gatewayLauncherScript("DEEPSEEK_API_KEY", false, false)); script != want {
+	if script := string(gatewayLauncherScript("DEEPSEEK_API_KEY", false)); script != want {
 		t.Fatalf("SSH launcher changed:\n%s", script)
 	}
 }
 
 func TestGatewayLauncherExportsExtractKeyWhenEnabled(t *testing.T) {
-	script := string(gatewayLauncherScript("DEEPSEEK_API_KEY", true, false))
+	script := string(gatewayLauncherScript("DEEPSEEK_API_KEY", true))
 	for _, want := range []string{
 		"DEEPSEEK_API_KEY=\"$(cat " + modelKeyPath + ")\"",
 		"export DEEPSEEK_API_KEY",
@@ -486,7 +486,7 @@ func TestRenderConfig_MCPServers(t *testing.T) {
 }
 
 func TestGatewayLauncherScriptExportsMCPHostVariables(t *testing.T) {
-	script := string(gatewayLauncherScript("DEEPSEEK_API_KEY", false, false, "TOOLATHLON_API_KEY", "OTHER_KEY"))
+	script := string(gatewayLauncherScript("DEEPSEEK_API_KEY", false, "TOOLATHLON_API_KEY", "OTHER_KEY"))
 	for _, required := range []string{
 		"TOOLATHLON_API_KEY=\"$(cat /run/aries/hermes/mcp_TOOLATHLON_API_KEY.key)\"",
 		"export TOOLATHLON_API_KEY",
@@ -561,7 +561,6 @@ func TestRenderConfig_NoSandboxToolsLeavesOnlyMCPAndWeb(t *testing.T) {
 func validGRPCEndpoint() core.ToolEndpoint {
 	return core.ToolEndpoint{
 		Protocol: "grpc", Address: "172.17.0.1:41234", Username: "aries",
-		ClientCommand: clientContainerFS, ClientSourceFile: "/tmp/aries-grpc-client",
 	}
 }
 
@@ -606,12 +605,11 @@ func TestContainerEnvironmentSelectsTheAriesBackendUnderGRPC(t *testing.T) {
 
 func TestContainerEnvironmentRejectsUnusableGRPCEndpoints(t *testing.T) {
 	cases := map[string]func(*core.ToolEndpoint){
-		"missing client command": func(e *core.ToolEndpoint) { e.ClientCommand = "" },
-		"client command moved":   func(e *core.ToolEndpoint) { e.ClientCommand = "/usr/bin/ssh" },
-		"missing client source":  func(e *core.ToolEndpoint) { e.ClientSourceFile = "" },
-		"username":               func(e *core.ToolEndpoint) { e.Username = "root" },
-		"unknown protocol":       func(e *core.ToolEndpoint) { e.Protocol = "quic" },
-		"address":                func(e *core.ToolEndpoint) { e.Address = "no-port" },
+		"staged client command": func(e *core.ToolEndpoint) { e.ClientCommand = "/usr/bin/ssh" },
+		"staged client source":  func(e *core.ToolEndpoint) { e.ClientSourceFile = "/tmp/client" },
+		"username":              func(e *core.ToolEndpoint) { e.Username = "root" },
+		"unknown protocol":      func(e *core.ToolEndpoint) { e.Protocol = "quic" },
+		"address":               func(e *core.ToolEndpoint) { e.Address = "no-port" },
 	}
 	for name, mutate := range cases {
 		endpoint := validGRPCEndpoint()
@@ -622,23 +620,14 @@ func TestContainerEnvironmentRejectsUnusableGRPCEndpoints(t *testing.T) {
 	}
 }
 
-// The gRPC launcher checks the staged client before Hermes starts. It no
-// longer patches Hermes or checks the plugin: the ARIES Hermes image carries
-// both. The SSH launcher does not change.
-func TestGatewayLauncherChecksOnlyTheClientForGRPC(t *testing.T) {
-	launcher := string(gatewayLauncherScript("DEEPSEEK_API_KEY", false, true))
-	hermes := strings.Index(launcher, "exec hermes ")
-	if index := strings.Index(launcher, "[ ! -x "+clientContainerFS+" ]"); index < 0 || index > hermes {
-		t.Fatalf("launcher does not check the client before Hermes:\n%s", launcher)
-	}
-	for _, unwanted := range []string{"seam", "python3", "plugins/aries"} {
+// The gRPC launcher uses the plugin baked into the image and stages no client.
+// The SSH launcher remains unchanged.
+func TestGatewayLauncherDoesNotCheckAStagedClient(t *testing.T) {
+	launcher := string(gatewayLauncherScript("DEEPSEEK_API_KEY", false))
+	for _, unwanted := range []string{"seam", "python3", "plugins/aries", "gRPC client"} {
 		if strings.Contains(launcher, unwanted) {
 			t.Fatalf("gRPC launcher contains %q:\n%s", unwanted, launcher)
 		}
-	}
-	plain := string(gatewayLauncherScript("DEEPSEEK_API_KEY", false, false))
-	if strings.Contains(plain, clientContainerFS) {
-		t.Fatalf("SSH launcher was modified:\n%s", plain)
 	}
 }
 

@@ -253,7 +253,7 @@ if [ "$stage_runner" = true ]; then
   echo "==> Building the runner for linux/$arch and staging it to $runner:~/$runner_dir"
   stage=$(mktemp -d)
   mkdir -p "$stage/bin"
-  for command in aries aries-ssh-client aries-grpc-client; do
+  for command in aries aries-ssh-client; do
     (cd "$root" && CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -o "$stage/bin/$command" "./cmd/$command")
   done
   git -C "$root" archive HEAD profiles configs | tar -xf - -C "$stage"

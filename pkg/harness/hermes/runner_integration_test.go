@@ -387,11 +387,7 @@ func startBridgeService(ctx context.Context, t *testing.T, image, bridgeType, ru
 	if err != nil {
 		t.Fatal(err)
 	}
-	helperDir := ""
-	if bridgeType == "hermes-grpc" {
-		helperDir = filepath.Dir(grpcClientPath(t))
-	}
-	clientConfig, err := bridgewiring.ClientConfig(bridgeType, helperDir)
+	clientConfig, err := bridgewiring.ClientConfig(bridgeType, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -414,22 +410,4 @@ func startBridgeService(ctx context.Context, t *testing.T, image, bridgeType, ru
 		t.Fatal(err)
 	}
 	return service
-}
-
-// grpcClientPath is the built aries-grpc-client the bridge stages for each
-// session: ARIES_GRPC_CLIENT as make integration sets it, else bin/.
-func grpcClientPath(t *testing.T) string {
-	t.Helper()
-	path := os.Getenv("ARIES_GRPC_CLIENT")
-	if path == "" {
-		path = filepath.Join("..", "..", "..", "bin", "aries-grpc-client")
-	}
-	path, err := filepath.Abs(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
-		t.Fatalf("build aries-grpc-client before integration: %v", err)
-	}
-	return path
 }

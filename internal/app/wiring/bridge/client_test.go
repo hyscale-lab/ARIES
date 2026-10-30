@@ -11,14 +11,14 @@ func TestClientConfigSelectsTheHelperOfTheBridgeType(t *testing.T) {
 	for bridgeType, want := range map[string]managed.ClientConfig{
 		"hermes-ssh":   {},
 		"openclaw-ssh": {Command: "/opt/aries/bin/aries-ssh-client", SourcePath: "/opt/build/bin/aries-ssh-client"},
-		"hermes-grpc":  {Command: "/opt/aries/bin/aries-grpc-client", SourcePath: "/opt/build/bin/aries-grpc-client"},
+		"hermes-grpc":  {},
 	} {
 		got, err := ClientConfig(bridgeType, helperDir)
 		if err != nil || got != want {
 			t.Fatalf("ClientConfig(%q) = %#v, %v; want %#v", bridgeType, got, err, want)
 		}
 	}
-	for _, bridgeType := range []string{"openclaw-ssh", "hermes-grpc"} {
+	for _, bridgeType := range []string{"openclaw-ssh"} {
 		if _, err := ClientConfig(bridgeType, ""); err == nil {
 			t.Fatalf("ClientConfig(%q) accepted a missing helper directory", bridgeType)
 		}

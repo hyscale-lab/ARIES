@@ -26,7 +26,6 @@ import (
 	audioinput "github.com/hyscale-lab/aries/pkg/audio"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/deployment"
-	"github.com/hyscale-lab/aries/pkg/harness/internal/privatefiles"
 )
 
 const testHermesImage = "docker.io/nousresearch/hermes-agent:v2026.5.29.2"
@@ -388,41 +387,27 @@ func TestStartStagesTheSameArchiveForSSH(t *testing.T) {
 	}
 }
 
-// The gRPC route stages only the client: the plugin and the seam are in the
-// ARIES Hermes image. The client is a linked binary larger than any
-// credential, so the credential bound must not apply to it.
-func TestStartStagesOnlyTheGRPCClient(t *testing.T) {
-	client := filepath.Join(t.TempDir(), "aries-grpc-client")
-	if err := os.WriteFile(client, []byte("\x7fELF"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Truncate(client, privatefiles.MaxPrivateFileBytes+1); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(client, 0o555); err != nil {
-		t.Fatal(err)
-	}
+// The gRPC route stages credentials and runtime configuration, not the plugin
+// or a client. Both are part of the ARIES Hermes image.
+func TestStartDoesNotStageTheGRPCClient(t *testing.T) {
 	fake := newFakeDeployment(t)
 	manager := newTestManager(t, fake, []byte("model-secret"))
 	request := testRequest(t)
-	request.Endpoint = core.ToolEndpoint{Protocol: "grpc", Address: "172.22.0.1:39425", Username: "aries", Workdir: "/app", ClientCommand: clientContainerFS, ClientSourceFile: client}
+	request.Endpoint = core.ToolEndpoint{Protocol: "grpc", Address: "172.22.0.1:39425", Username: "aries", Workdir: "/app"}
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
 	defer manager.Stop(context.Background())
 
 	want := map[string]int64{
-		"run/aries":                       0o700,
-		"run/aries/hermes":                0o700,
-		"run/aries/ssh":                   0o700,
-		"run/aries/workspace":             0o755,
-		"run/aries/hermes/config.yaml":    0o600,
-		"run/aries/hermes/model.key":      0o600,
-		"run/aries/gateway.key":           0o600,
-		"run/aries/run-gateway":           0o555,
-		"opt/aries":                       0o755,
-		"opt/aries/bin":                   0o755,
-		"opt/aries/bin/aries-grpc-client": 0o555,
+		"run/aries":                    0o700,
+		"run/aries/hermes":             0o700,
+		"run/aries/ssh":                0o700,
+		"run/aries/workspace":          0o755,
+		"run/aries/hermes/config.yaml": 0o600,
+		"run/aries/hermes/model.key":   0o600,
+		"run/aries/gateway.key":        0o600,
+		"run/aries/run-gateway":        0o555,
 	}
 	entries := archiveEntries(t, fake.archive)
 	if len(entries) != len(want) {
@@ -433,9 +418,6 @@ func TestStartStagesOnlyTheGRPCClient(t *testing.T) {
 		if !ok || header.Mode != mode || header.Uid != runtimeUID || header.Gid != runtimeGID {
 			t.Fatalf("gRPC archive entry %s = %+v, want mode %o owned by %d", name, header, mode, runtimeUID)
 		}
-	}
-	if size := entries["opt/aries/bin/aries-grpc-client"].Size; size != privatefiles.MaxPrivateFileBytes+1 {
-		t.Fatalf("staged client size = %d", size)
 	}
 	contents := archiveContents(t, fake.archive)
 	if launcher := string(contents["run/aries/run-gateway"]); strings.Contains(launcher, "seam") {
