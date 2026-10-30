@@ -82,6 +82,19 @@ so neither container has a CPU or memory limit, and sets
 `agent_timeout_seconds` to 3600, a one-hour agent deadline. Run them from the
 repository root, as with the other profiles.
 
+The same directory holds two Codex SWE-Bench Pro profiles,
+`codex-sbpro-subset20-deepseek-flash.json` and
+`codex-sbpro-subset70-deepseek-flash.json`, with the same overrides. Their
+tasks come from one fixed selection of the 731 public instance IDs at
+the pinned dataset revision: the IDs are sorted, permuted with
+`numpy.random.default_rng(42)`, and the 20-task subset is positions 1-20. The
+70-task subset is positions 1-20 plus 24-73; positions 21-23 were smoke tasks
+and stay excluded, so it starts with the 20-task subset, in order. Both
+run deepseek-flash with sub-agents enabled (`max_concurrent` 5) and reasoning
+effort `xhigh`. DeepSeek's own API has no Responses endpoint, so `base_url`
+is a placeholder for a Responses-compatible proxy; see the
+[Codex guide](codex.md).
+
 ## Deployment configuration
 
 Checked-in profiles select harness identity and placement separately:
@@ -377,13 +390,13 @@ locality. See the [transport-policy gap](implementation/model-runtime.md#impleme
 
 ### Reasoning effort
 
-Set `model.reasoning_effort` to control the harness model in either OpenClaw or
-Hermes. For example, add `"reasoning_effort": "low"` to the existing `model` block.
+Set `model.reasoning_effort` to control the harness model in OpenClaw, Hermes,
+or Codex. For example, add `"reasoning_effort": "low"` to the existing `model` block.
 Use `"off"` (or the OpenAI spelling `"none"`) to disable reasoning.
 
 | Backend | Explicit values | Request mapping |
 | --- | --- | --- |
-| `openai`, `sglang` | `off`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` | Chat Completions `reasoning_effort`; `off` becomes `none` |
+| `openai`, `sglang` | `off`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` | Chat Completions `reasoning_effort` (Codex: Responses `reasoning.effort`); `off` becomes `none` |
 | `deepseek` | `off`, `none`, `low`, `high`, `max` | `thinking.type` disables/enables thinking; enabled requests include the exact effort |
 
 Model support varies: accepting a profile does not prove that an endpoint supports
@@ -392,18 +405,20 @@ DeepSeek's noncanonical effort aliases are rejected. Explicit settings conflict
 with `thinking`, `reasoning`, or `reasoning_effort` in `harness.hermes.extra_body`.
 
 Omitting the field preserves existing harness behavior. OpenClaw asks its Gateway
-for thinking off for the official DeepSeek Flash/V4 models; Hermes leaves reasoning
-to its native/provider defaults. Set the field explicitly for comparable runs.
-The generated private `openclaw.json` or Hermes `config.yaml` records the request
-configuration; it does not prove the provider honored it.
+for thinking off for the official DeepSeek Flash/V4 models; Hermes and Codex leave
+reasoning to their native/provider defaults. Set the field explicitly for comparable
+runs. The generated private `openclaw.json`, Hermes `config.yaml`, or Codex
+`config.toml` records the request configuration; it does not prove the provider
+honored it.
 
 This field controls the main agent model, including voice-transcribed tasks and
 OpenClaw realtime agent consultations. `harness.realtime.reasoning_effort` remains
 the separate Talk setting. Configure judge reasoning independently under
 `benchmark.judge.reasoning_effort`; FACT settings remain unchanged.
 
-Both harnesses currently use Chat Completions. GPT-6 Luna supports tool calls on
-that API only with `none`; reasoning with tools requires Responses API support.
+OpenClaw and Hermes use Chat Completions. GPT-6 Luna supports tool calls on
+that API only with `none`; reasoning with tools requires the Responses API, which
+Codex uses.
 See the [OpenAI model documentation](https://developers.openai.com/api/docs/models/gpt-6-luna)
 and [DeepSeek thinking guide](https://api-docs.deepseek.com/guides/thinking_mode/).
 
@@ -690,8 +705,9 @@ start/end times. An image without the plugin leaves no spans file.
 ### Hermes context window, compaction, and request extra body
 
 Three optional profile blocks reach the rendered Hermes `config.yaml`. Each is
-Hermes-only and is rejected under another harness. A profile without them
-renders the same file as before.
+Hermes-only and is rejected under another harness, except that Codex also
+accepts `model.context_length`. A profile without them renders the same file as
+before.
 
 - `model.context_length`, `model.max_tokens`, and `model.temperature` set the
   window Hermes's compressor reasons about and the request sampling.
@@ -853,5 +869,10 @@ Changing the main agent's generation settings does not change FACT requests.
   [research benchmark guide](benchmarks/deep-research-bench.md#web-search-and-fetch).
 - `harness.mcp_servers`: see [MCP configuration and boundaries](implementation/harnesses.md#model-context-protocol-mcp).
 - `harness.voice_transcribe`: see the [voice guide](voice_mode.md).
+- `harness.codex.executable`: the pinned static Codex CLI, relative to the
+  profile; required for `harness.type: "codex"`, which pairs with
+  `bridge.type: "codex-ssh"` and the Docker deployment backend. `versions.codex`
+  pins its image and CLI version.
+  See the [Codex guide](codex.md).
 - `bridge.retain_raw_log`: defaults to false. Enabling it retains sensitive,
   replayable SSH input; see [run artifacts](run-results.md#bridge-evidence).

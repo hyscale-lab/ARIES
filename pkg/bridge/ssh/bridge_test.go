@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -373,24 +374,34 @@ func TestManagerStopPropagatesAuditFailure(t *testing.T) {
 	}
 }
 
-func TestOversizedStdinEmitsNoPartialPairAndFailsAudit(t *testing.T) {
+// A native executor keeps one stdin open for its whole session, so input past
+// the retention cap must keep flowing and the record must say it was truncated.
+func TestOversizedStdinKeepsRelayingAndRecordsTruncation(t *testing.T) {
 	structured, structuredBytes := memoryAuditFile()
 	raw, rawBytes := memoryAuditFile()
 	sandbox := &contractSandbox{acceptTools: true}
 	session := &bridgeSession{dialect: testDialect{}, sandbox: sandbox, audit: newAuditWriter(structured, raw)}
-	channel := &stubSSHChannel{Buffer: *bytes.NewBuffer(bytes.Repeat([]byte{'x'}, maxRecordedInputBytes+1))}
+	total := maxRecordedInputBytes + 4096
+	channel := &stubSSHChannel{Buffer: *bytes.NewBuffer(bytes.Repeat([]byte{'x'}, total))}
 	encoded := encodeCanonicalTokens([]string{remoteShell, "-c", "cat"})
 	prepared, _ := (testDialect{}).Prepare(encoded, sandbox.Workdir())
-	if exit := session.execute(context.Background(), channel, prepared, requestAudit{requestType: "exec", wantReply: true, payload: ssh.Marshal(struct{ Command string }{encoded})}); exit != 255 {
+	if exit := session.execute(context.Background(), channel, prepared, requestAudit{requestType: "exec", wantReply: true, payload: ssh.Marshal(struct{ Command string }{encoded})}); exit != 0 {
 		t.Fatalf("exit = %d", exit)
 	}
 	session.connections = make(map[net.Conn]struct{})
 	manager := &Manager{active: session}
-	if err := manager.Stop(context.Background()); err == nil || !strings.Contains(err.Error(), "stdin") {
-		t.Fatalf("Stop() audit error = %v", err)
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop() = %v", err)
 	}
-	if structuredBytes.Len() != 0 || rawBytes.Len() != 0 {
-		t.Fatalf("oversized stdin emitted partial pair: %q / %q", structuredBytes.Bytes(), rawBytes.Bytes())
+	var record toolCallRecord
+	if err := json.Unmarshal(bytes.TrimSpace(structuredBytes.Bytes()), &record); err != nil {
+		t.Fatal(err)
+	}
+	if !record.StdinTruncated || record.StdinBytes != int64(total) || len(record.Stdin) != maxRecordedInputBytes || record.StdinEncoding != "utf-8" {
+		t.Fatalf("record truncated=%v bytes=%d retained=%d encoding=%q", record.StdinTruncated, record.StdinBytes, len(record.Stdin), record.StdinEncoding)
+	}
+	if rawBytes.Len() == 0 {
+		t.Fatal("raw record missing")
 	}
 }
 
@@ -902,14 +913,40 @@ func TestRecordedInputKeepsRawAndUsesSafeStructuredEncoding(t *testing.T) {
 	}
 	t.Run("bounded", func(t *testing.T) {
 		input := &recordedInput{reader: io.LimitReader(zeroReader{}, maxRecordedInputBytes+1)}
-		if _, err := io.Copy(io.Discard, input); err == nil || !strings.Contains(err.Error(), "stdin exceeds") {
-			t.Fatalf("oversized stdin error = %v", err)
+		relayed, err := io.Copy(io.Discard, input)
+		if err != nil || relayed != maxRecordedInputBytes+1 {
+			t.Fatalf("oversized stdin relayed %d bytes, error = %v", relayed, err)
 		}
-		count, content, encoding, raw, overflow := input.record(true)
-		if count <= maxRecordedInputBytes || content != "" || encoding != "utf-8" || len(raw) != 0 || !overflow {
-			t.Fatalf("bounded record = count %d content %d encoding %q", count, len(content), encoding)
+		count, content, encoding, raw, truncated := input.record(true)
+		want := fmt.Sprintf("[binary input omitted; first %d of %d bytes retained in ssh_raw.log]", maxRecordedInputBytes, maxRecordedInputBytes+1)
+		if count != maxRecordedInputBytes+1 || content != want || encoding != "binary-omitted" || len(raw) != maxRecordedInputBytes || !truncated {
+			t.Fatalf("bounded record = count %d content %q encoding %q", count, content, encoding)
+		}
+		if _, content, _, _, _ := input.record(false); content != fmt.Sprintf("[binary input omitted; %d bytes not retained]", maxRecordedInputBytes+1) {
+			t.Fatalf("record without raw log = %q", content)
 		}
 	})
+}
+
+// A cap that splits a multibyte character keeps the readable prefix; only the
+// partial character leaves the structured text, and raw keeps every byte.
+func TestTruncatedInputKeepsTextWhenTheCapSplitsACharacter(t *testing.T) {
+	prefix := bytes.Repeat([]byte{'x'}, maxRecordedInputBytes-1)
+	input := &recordedInput{reader: io.MultiReader(bytes.NewReader(prefix), strings.NewReader("\u00e9tail"))}
+	if _, err := io.Copy(io.Discard, input); err != nil {
+		t.Fatal(err)
+	}
+	count, content, encoding, raw, truncated := input.record(false)
+	if !truncated || encoding != "utf-8" || content != string(prefix) || len(raw) != maxRecordedInputBytes || count != int64(len(prefix))+6 {
+		t.Fatalf("record = count %d content %d encoding %q raw %d truncated %v", count, len(content), encoding, len(raw), truncated)
+	}
+	for _, test := range []struct{ in, want string }{
+		{"abc", "abc"}, {"ab\xc3", "ab"}, {"a\xe2\x82", "a"}, {"\xf0\x9f\x98", ""}, {"ok\u00e9", "ok\u00e9"}, {"\xff", "\xff"},
+	} {
+		if got := string(trimIncompleteRune([]byte(test.in))); got != test.want {
+			t.Fatalf("trimIncompleteRune(%q) = %q, want %q", test.in, got, test.want)
+		}
+	}
 }
 
 func TestRecordedInputSnapshotsCountAndContentTogether(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	managed "github.com/hyscale-lab/aries/pkg/bridge"
+	"github.com/hyscale-lab/aries/pkg/bridge/ssh/codex"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/deployment"
@@ -17,13 +18,35 @@ func NewService(cfg config.Config, runID, outputRoot string, placement core.Runt
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}
-	client, err := SSHClientConfig(cfg.Bridge.Type, filepath.Join(filepath.Dir(executable), "aries-ssh-client"))
+	helper := "aries-ssh-client"
+	if cfg.Bridge.Type == "codex-ssh" {
+		helper = "aries-codex-ssh"
+	}
+	client, err := SSHClientConfig(cfg.Bridge.Type, filepath.Join(filepath.Dir(executable), helper))
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}
-	service, err := managed.NewService(managed.Options{Runtime: runtime, Launch: launch, Client: client, RunID: runID, Placement: placement, OutputDir: outputRoot, BridgeType: cfg.Bridge.Type, RetainRawLog: cfg.Bridge.RetainBridgeRawLog()})
+	staging, err := SandboxStaging(cfg)
+	if err != nil {
+		return nil, errors.Join(err, runtime.Close())
+	}
+	service, err := managed.NewService(managed.Options{Runtime: runtime, Launch: launch, Client: client, Staging: staging, RunID: runID, Placement: placement, OutputDir: outputRoot, BridgeType: cfg.Bridge.Type, RetainRawLog: cfg.Bridge.RetainBridgeRawLog()})
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}
 	return service, nil
+}
+
+// SandboxStaging selects what the session places into the task sandbox. Only
+// Codex needs an executor that its task images do not carry.
+func SandboxStaging(cfg config.Config) (managed.SandboxStaging, error) {
+	switch cfg.Bridge.Type {
+	case "codex-ssh":
+		if cfg.Harness.Codex == nil {
+			return nil, errors.New("Codex bridge requires harness.codex")
+		}
+		return codex.NewStaging(cfg.Harness.Codex.ResolvedExecutable)
+	default:
+		return nil, nil
+	}
 }

@@ -149,8 +149,13 @@ private and do not publish this artifact without review.
 and HTML characters such as `&&`, `<`, and `>` appear literally, while quotes,
 backslashes, and newlines retain required JSON escaping. Printable stdin stays
 inline; binary or control-bearing stdin is replaced by a concise
-`binary-omitted` marker and exact byte count, with lossless bytes retained only
-in `ssh_raw.log`. Structured lifecycle logs and tool-call records continue to
+`binary-omitted` marker and exact byte count, with the retained bytes kept only
+in `ssh_raw.log`. Stdin is always relayed in full, but both files retain at most
+16 MiB of it per record: a longer stream keeps that prefix in each, with its exact
+`stdin_bytes` and `stdin_truncated: true`, so neither file is then a complete
+input record. If the cut splits a multibyte character, only that partial
+character is left out of the readable `tool-calls.jsonl` text.
+Structured lifecycle logs and tool-call records continue to
 omit environment values and stdout/stderr bodies.
 
 Both bridge logs identify the `sandbox_id` and a sequence number local to that

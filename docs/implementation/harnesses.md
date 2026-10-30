@@ -175,6 +175,33 @@ reach bridge execs: Hermes passes no trace context over SSH, so execs are
 attributed to a tool call by time only (the bridge record's `timestamp` is the
 exec's end), and background work is not linked.
 
+## Codex
+
+`codex.Manager` uses the shared harness runtime to stage the unmodified static
+CLI `0.157.1` into a separate tag-pinned Linux runtime, checks its reported
+version, and invokes one `codex exec --json` turn through deployment execution.
+The instruction remains one argv element. The runtime enables
+no-new-privileges, as for the other harnesses, and the deployment confirms it
+before start. The model provider uses the Responses API; a wrapper reads the credential
+from a private file, so it never enters runtime metadata. JSONL trajectory,
+stderr, and placeholder-only TOML are private artifacts. After the turn, the
+harness copies Codex's native session rollouts out of the still-running runtime
+through the deployment archive operation.
+
+The pinned `environments.toml` selects only the bridge-backed environment
+(`include_local = false`) and spawns the staged `aries-codex-ssh` helper with
+the endpoint address. The helper gives each executor call its own SSH exec, so
+shell and filesystem operations use Codex's native executor inside the task
+sandbox, one call per bridge record, through the
+[Codex SSH bridge](ssh-bridges.md#codex-ssh-bridge). The harness holds an empty
+matching workdir for CLI path validation, not a copy of the task repository.
+HTTPS endpoints receive the host's validated public CA bundle at the standard
+Linux trust path. Codex rejects task MCP servers rather than ignoring them.
+Sub-agents use Codex's multi-agent V2 with its bundled proactive delegation
+text as the mode hint, so the profile's reasoning effort is sent unchanged;
+see [sub-agents](../codex.md#sub-agents). See the [Codex guide](../codex.md)
+for setup and model requirements.
+
 ## Model Context Protocol (`MCP`)
 
 ARIES supports configuring Model Context Protocol (`MCP`) servers for agent harnesses via `harness.mcp_servers`.

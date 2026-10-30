@@ -9,6 +9,7 @@ build:
 	mkdir -p bin
 	go build -o bin/aries ./cmd/aries
 	CGO_ENABLED=0 go build -o bin/aries-ssh-client ./cmd/aries-ssh-client
+	CGO_ENABLED=0 go build -o bin/aries-codex-ssh ./cmd/aries-codex-ssh
 	CGO_ENABLED=0 go build -o bin/aries-bridge ./cmd/aries-bridge
 
 test:
@@ -22,7 +23,7 @@ lint:
 	go vet ./...
 
 integration: bridge-image
-	ARIES_SSH_CLIENT=$(CURDIR)/bin/aries-ssh-client go test -p=1 -count=1 -tags=integration ./...
+	ARIES_SSH_CLIENT=$(CURDIR)/bin/aries-ssh-client ARIES_CODEX_SSH_CLIENT=$(CURDIR)/bin/aries-codex-ssh go test -p=1 -count=1 -tags=integration ./...
 
 run: build
 	./bin/aries $(PROFILE)

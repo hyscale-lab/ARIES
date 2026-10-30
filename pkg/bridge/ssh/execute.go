@@ -31,49 +31,80 @@ func (counter *byteCounter) Write(content []byte) (int, error) {
 
 func (counter *byteCounter) count() int64 { return counter.n.Load() }
 
+// recordedInput relays task stdin and retains a bounded snapshot of it for
+// evidence. Retention is bounded; relaying is not. A native executor such as
+// Codex's exec-server keeps one stdin open for the whole session, so failing
+// the read at the cap would end the agent's tool access rather than its
+// evidence. Past the cap the record keeps the retained prefix, the exact total
+// byte count, and a truncation mark.
 type recordedInput struct {
-	reader   io.Reader
-	mu       sync.Mutex
-	n        int64
-	data     bytes.Buffer
-	overflow bool
+	reader    io.Reader
+	mu        sync.Mutex
+	n         int64
+	data      bytes.Buffer
+	truncated bool
 }
 
 func (input *recordedInput) Read(content []byte) (int, error) {
 	n, err := input.reader.Read(content)
 	if n > 0 {
 		input.mu.Lock()
-		remaining := maxRecordedInputBytes - input.data.Len()
-		if n > remaining {
-			input.n += int64(n)
-			input.data.Reset()
-			input.overflow = true
-			input.mu.Unlock()
-			return n, fmt.Errorf("SSH stdin exceeds %d bytes", maxRecordedInputBytes)
-		}
-		_, _ = input.data.Write(content[:n])
 		input.n += int64(n)
+		if remaining := maxRecordedInputBytes - input.data.Len(); n > remaining {
+			_, _ = input.data.Write(content[:remaining])
+			input.truncated = true
+		} else {
+			_, _ = input.data.Write(content[:n])
+		}
 		input.mu.Unlock()
 	}
 	return n, err
 }
 
+// record snapshots the count, the retained bytes and the truncation mark
+// together. The structured text is the retained prefix when it is printable
+// UTF-8; otherwise a note says how many bytes were retained and where.
 func (input *recordedInput) record(retainedRaw bool) (int64, string, string, []byte, bool) {
 	input.mu.Lock()
 	count := input.n
 	content := bytes.Clone(input.data.Bytes())
-	overflow := input.overflow
+	truncated := input.truncated
 	input.mu.Unlock()
 	if safeStructuredText(content) {
-		return count, string(content), "utf-8", content, overflow
+		return count, string(content), "utf-8", content, truncated
+	}
+	// The cap may split a multibyte character. Only that incomplete suffix is
+	// dropped from the readable text; the raw record keeps the exact bytes.
+	if truncated {
+		if text := trimIncompleteRune(content); len(text) != len(content) && safeStructuredText(text) {
+			return count, string(text), "utf-8", content, truncated
+		}
 	}
 	// Without the raw log the bytes are retained nowhere, so the note must not
 	// point at an artifact this run did not write.
 	note := fmt.Sprintf("[binary input omitted; %d bytes not retained]", count)
-	if retainedRaw {
+	if retainedRaw && truncated {
+		note = fmt.Sprintf("[binary input omitted; first %d of %d bytes retained in ssh_raw.log]", len(content), count)
+	} else if retainedRaw {
 		note = fmt.Sprintf("[binary input omitted; %d bytes retained in ssh_raw.log]", count)
 	}
-	return count, note, "binary-omitted", content, overflow
+	return count, note, "binary-omitted", content, truncated
+}
+
+// trimIncompleteRune drops a trailing partial UTF-8 sequence, at most three
+// bytes, and leaves any other content unchanged.
+func trimIncompleteRune(content []byte) []byte {
+	for back := 1; back <= 3 && back <= len(content); back++ {
+		start := len(content) - back
+		if !utf8.RuneStart(content[start]) {
+			continue
+		}
+		if !utf8.FullRune(content[start:]) {
+			return content[:start]
+		}
+		break
+	}
+	return content
 }
 
 func safeStructuredText(content []byte) bool {
@@ -112,18 +143,14 @@ func (session *bridgeSession) execute(ctx context.Context, channel gossh.Channel
 	if exitCode < 0 || exitCode > 255 {
 		exitCode = 255
 	}
-	stdinBytes, stdinContent, stdinEncoding, rawStdin, stdinOverflow := stdin.record(session.audit.retainsRaw())
-	if stdinOverflow {
-		session.audit.latch(fmt.Errorf("retain SSH stdin: input exceeds %d bytes", maxRecordedInputBytes))
-		return exitCode
-	}
+	stdinBytes, stdinContent, stdinEncoding, rawStdin, stdinTruncated := stdin.record(session.audit.retainsRaw())
 	session.writeRecord(toolCallRecord{
 		ContainerID: session.sandbox.ContainerID(), ContainerName: session.sandbox.ContainerName(),
 		OperationClass: prepared.OperationClass, Path: prepared.Command.Path, Workdir: prepared.Command.Dir,
 		CommandHash: commandHash(prepared.HashInput),
 		Command:     prepared.Display, WorkspaceHome: prepared.WorkspaceHome, Environment: prepared.Environment,
 		Argv:  append([]string{prepared.Command.Path}, prepared.Command.Args...),
-		Stdin: stdinContent, StdinEncoding: stdinEncoding,
+		Stdin: stdinContent, StdinEncoding: stdinEncoding, StdinTruncated: stdinTruncated,
 		StdinBytes: stdinBytes, StdoutBytes: stdout.count(), StderrBytes: stderr.count(),
 		ExitCode: exitCode, DurationMS: time.Since(started).Milliseconds(), Status: status, Error: message,
 		RequestType: audit.requestType, WantReply: audit.wantReply,

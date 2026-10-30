@@ -30,17 +30,20 @@ type toolCallRecord struct {
 	Argv           []string `json:"argv,omitempty"`
 	Stdin          string   `json:"stdin"`
 	StdinEncoding  string   `json:"stdin_encoding"`
-	StdinBytes     int64    `json:"stdin_bytes"`
-	StdoutBytes    int64    `json:"stdout_bytes"`
-	StderrBytes    int64    `json:"stderr_bytes"`
-	ExitCode       int      `json:"exit_code"`
-	DurationMS     int64    `json:"duration_ms"`
-	Status         string   `json:"status"`
-	Error          string   `json:"error,omitempty"`
-	RunID          string   `json:"run_id,omitempty"`
-	TaskID         string   `json:"task_id,omitempty"`
-	RequestType    string   `json:"request_type"`
-	WantReply      bool     `json:"want_reply"`
+	// StdinTruncated marks a record whose stdin exceeded the retention cap:
+	// Stdin (and the raw record) hold the retained prefix, StdinBytes the total.
+	StdinTruncated bool   `json:"stdin_truncated,omitempty"`
+	StdinBytes     int64  `json:"stdin_bytes"`
+	StdoutBytes    int64  `json:"stdout_bytes"`
+	StderrBytes    int64  `json:"stderr_bytes"`
+	ExitCode       int    `json:"exit_code"`
+	DurationMS     int64  `json:"duration_ms"`
+	Status         string `json:"status"`
+	Error          string `json:"error,omitempty"`
+	RunID          string `json:"run_id,omitempty"`
+	TaskID         string `json:"task_id,omitempty"`
+	RequestType    string `json:"request_type"`
+	WantReply      bool   `json:"want_reply"`
 }
 
 type rawSSHRecord struct {
