@@ -87,6 +87,23 @@ echo IMAGE_CHECK_OK
 	}
 }
 
+// The venv imports the bundled plugin as a package. The generated stubs must
+// pass their grpcio and protobuf runtime checks there.
+func TestARIESHermesImageImportsGeneratedStubs(t *testing.T) {
+	requireDockerImage(t)
+	image := preparedImage(t, integrationImage)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	const script = `cd /opt/hermes && /opt/hermes/.venv/bin/python -c '
+from plugins.aries import sandbox_pb2, sandbox_pb2_grpc
+print("STUB_IMPORT_OK", sandbox_pb2.DESCRIPTOR.name)
+'`
+	status, output := runScriptInImage(ctx, t, image, fmt.Sprintf("%d:%d", runtimeUID, runtimeGID), script, nil, nil)
+	if status != 0 || !strings.Contains(output, "STUB_IMPORT_OK sandbox.proto") {
+		t.Fatalf("stub import exit %d:\n%s", status, output)
+	}
+}
+
 // The SSH route runs the same image, where Hermes auto-loads the ARIES Hermes
 // plugin as a bundled backend. Loading it must not fail or change the
 // backend: the terminal stays on Hermes's SSH environment and file tools stay

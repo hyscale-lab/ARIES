@@ -38,6 +38,9 @@ PROTOC_VERSION := 29.3
 PROTOC := $(CURDIR)/.cache/protobuf/bin/protoc
 PROTOC_GEN_GO_VERSION := v1.36.6
 PROTOC_GEN_GO_GRPC_VERSION := v1.5.1
+GRPCIO_TOOLS_VERSION := 1.81.1
+PROTOBUF_PYTHON_VERSION := 6.33.5
+PROTO_PYTHON := $(CURDIR)/.cache/protobuf/python/bin/python
 .PHONY: proto-tools proto
 proto-tools:
 	mkdir -p .cache/protobuf
@@ -46,12 +49,19 @@ proto-tools:
 	unzip -qo .cache/protobuf/protoc.zip -d .cache/protobuf
 	GOBIN=$(CURDIR)/.cache/protobuf/bin go install google.golang.org/protobuf/cmd/protoc-gen-go@$(PROTOC_GEN_GO_VERSION)
 	GOBIN=$(CURDIR)/.cache/protobuf/bin go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@$(PROTOC_GEN_GO_GRPC_VERSION)
+	uv venv --python python3 .cache/protobuf/python
+	UV_CACHE_DIR=$(CURDIR)/.cache/uv uv pip install --python $(PROTO_PYTHON) grpcio-tools==$(GRPCIO_TOOLS_VERSION) grpcio==$(GRPCIO_TOOLS_VERSION) protobuf==$(PROTOBUF_PYTHON_VERSION)
 
 proto:
 	test "$$($(CURDIR)/.cache/protobuf/bin/protoc-gen-go --version)" = 'protoc-gen-go $(PROTOC_GEN_GO_VERSION)'
 	test "$$($(CURDIR)/.cache/protobuf/bin/protoc-gen-go-grpc --version)" = 'protoc-gen-go-grpc $(patsubst v%,%,$(PROTOC_GEN_GO_GRPC_VERSION))'
 	test "$$($(PROTOC) --version)" = 'libprotoc $(PROTOC_VERSION)'
 	PATH=$(CURDIR)/.cache/protobuf/bin:$$PATH $(PROTOC) --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative pkg/bridge/control/v1/control.proto pkg/bridge/grpc/v1/sandbox.proto
+	test "$$($(PROTO_PYTHON) -c 'from importlib.metadata import version; print(version("grpcio-tools"))')" = '$(GRPCIO_TOOLS_VERSION)'
+	test "$$($(PROTO_PYTHON) -c 'from importlib.metadata import version; print(version("grpcio"))')" = '$(GRPCIO_TOOLS_VERSION)'
+	test "$$($(PROTO_PYTHON) -c 'from importlib.metadata import version; print(version("protobuf"))')" = '$(PROTOBUF_PYTHON_VERSION)'
+	$(PROTO_PYTHON) -m grpc_tools.protoc -I pkg/bridge/grpc/v1 --python_out=pkg/harness/hermes/plugin --grpc_python_out=pkg/harness/hermes/plugin pkg/bridge/grpc/v1/sandbox.proto
+	$(PROTO_PYTHON) -I -c 'from pathlib import Path; p = Path("pkg/harness/hermes/plugin/sandbox_pb2_grpc.py"); text = p.read_text(); old = "import sandbox_pb2 as sandbox__pb2"; assert text.count(old) == 1, "generated import changed"; p.write_text(text.replace(old, "from . import sandbox_pb2 as sandbox__pb2"))'
 
 .PHONY: bridge-image
 bridge-image: build

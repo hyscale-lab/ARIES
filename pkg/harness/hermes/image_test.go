@@ -86,14 +86,16 @@ func TestImageTagCoversTheRecipeAndEveryContextFile(t *testing.T) {
 	}
 }
 
-// The context is exactly the plugin and the seam script, byte for byte as
-// they are in this package.
+// The context is exactly the plugin, generated stubs and seam script, byte
+// for byte as they are in this package.
 func TestImageContextHoldsThePluginAndTheSeam(t *testing.T) {
 	files := ImageContext()
 	want := map[string]string{
-		"plugin/plugin.yaml": "plugin/plugin.yaml",
-		"plugin/__init__.py": "plugin/__init__.py",
-		"seam.py":            "seam.py",
+		"plugin/plugin.yaml":         "plugin/plugin.yaml",
+		"plugin/__init__.py":         "plugin/__init__.py",
+		"plugin/sandbox_pb2.py":      "plugin/sandbox_pb2.py",
+		"plugin/sandbox_pb2_grpc.py": "plugin/sandbox_pb2_grpc.py",
+		"seam.py":                    "seam.py",
 	}
 	if len(files) != len(want) {
 		t.Fatalf("context entries = %v", slices.Sorted(maps.Keys(files)))
@@ -125,7 +127,7 @@ func TestImageBuildArgsInstallThePinnedReleases(t *testing.T) {
 	for _, want := range []string{
 		"ARG BASE\nFROM ${BASE}\n", "ARG OTEL_PLUGIN\n", `"$OTEL_PLUGIN"`, "/opt/hermes/plugins/" + otelPluginName,
 		"ARG GRPCIO\n", `"grpcio==$GRPCIO"`, "uv pip install --python /opt/hermes/.venv/bin/python",
-		"COPY plugin/plugin.yaml plugin/__init__.py /opt/hermes/plugins/aries/",
+		"COPY plugin/ /opt/hermes/plugins/aries/",
 		"/opt/hermes/.venv/bin/python /tmp/aries-seam.py /opt/hermes",
 	} {
 		if !strings.Contains(ImageDockerfile, want) {
