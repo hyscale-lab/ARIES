@@ -20,6 +20,8 @@ class Sandbox(sandbox_pb2_grpc.SandboxServicer):
         self.response = None
         self.refusal = None
         self.summaryless = False
+        self.poison = None
+        self.write_chunks = []
 
     def record(self, context, operation, **fields):
         self.calls.append((operation, dict(context.invocation_metadata()).get("aries-tool-call-id"), fields))
@@ -39,6 +41,10 @@ class Sandbox(sandbox_pb2_grpc.SandboxServicer):
 
     def Stat(self, request, context):
         self.record(context, "stat", path=request.path)
+        if self.refusal is not None:
+            context.abort(self.refusal, "bridge refused the call")
+        if self.poison == "stat":
+            return pb.StatResponse(exists=True)
         if not os.path.isabs(request.path):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "path must be absolute")
         if not os.path.lexists(request.path):
@@ -64,6 +70,10 @@ class Sandbox(sandbox_pb2_grpc.SandboxServicer):
     def ReadFile(self, request, context):
         self.record(context, "read", path=request.path, max_bytes=request.max_bytes)
         data = self.read(request.path, context)
+        if self.poison == "read":
+            yield pb.ReadFileResponse(header=pb.ReadFileHeader(size=len(data)))
+            yield pb.ReadFileResponse(header=pb.ReadFileHeader(size=len(data)))
+            return
         limit = request.max_bytes or len(data)
         yield pb.ReadFileResponse(header=pb.ReadFileHeader(size=len(data), truncated=limit < len(data)))
         content = data[:limit]
@@ -83,6 +93,8 @@ class Sandbox(sandbox_pb2_grpc.SandboxServicer):
         total = data.count(b"\n")
         if not self.summaryless:
             yield pb.ReadLinesResponse(summary=pb.ReadLinesSummary(total_lines=total, size=len(data), ends_with_newline=data.endswith(b"\n"), more=total > request.first_line + request.max_lines - 1))
+            if self.poison == "lines":
+                yield pb.ReadLinesResponse(chunk=b"unexpected")
 
     def WriteFile(self, requests, context):
         iterator = iter(requests)
@@ -90,13 +102,17 @@ class Sandbox(sandbox_pb2_grpc.SandboxServicer):
         self.record(context, "write", path=header.path, size=header.size)
         if not os.path.isabs(header.path):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "path must be absolute")
-        data = b"".join(message.chunk for message in iterator)
+        chunks = [message.chunk for message in iterator]
+        self.write_chunks = [len(chunk) for chunk in chunks]
+        data = b"".join(chunks)
         if len(data) != header.size:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "write stream does not match its header")
         created = not os.path.exists(header.path)
         os.makedirs(os.path.dirname(header.path), exist_ok=True)
         with open(header.path, "wb") as target:
             target.write(data)
+        if self.poison == "write":
+            return pb.WriteFileResponse(bytes_written=len(data) - len(b"x"))
         return pb.WriteFileResponse(bytes_written=len(data), created=created)
 
 

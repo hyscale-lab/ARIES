@@ -6,11 +6,10 @@ Nothing is synced into the task sandbox.
 """
 
 import base64
-import json
 import os
 import posixpath
 import threading
-from types import SimpleNamespace
+from contextlib import contextmanager
 
 try:
     import grpc
@@ -28,13 +27,6 @@ TRANSPORT_FAILURE_EXIT = 255
 # sandbox (for example access check, transfer and rename), but Hermes gives
 # each single shell command only the terminal timeout.
 FILE_TIMEOUT_FACTOR = 3
-FILE_EXIT = {
-    grpc.StatusCode.NOT_FOUND: 1,
-    grpc.StatusCode.PERMISSION_DENIED: 2,
-    grpc.StatusCode.INVALID_ARGUMENT: 3,
-    grpc.StatusCode.RESOURCE_EXHAUSTED: 4,
-    grpc.StatusCode.FAILED_PRECONDITION: 5,
-} if grpc else {}
 
 
 def register(ctx):
@@ -73,84 +65,94 @@ def register(ctx):
         instead, so a broken bridge surfaces as a tool error and never as a
         silent fallback to the shell."""
 
-        def _file(self, operation, *args, data=None, accept=(0,)):
+        @contextmanager
+        def _file_call(self, operation):
             timeout = self.env.timeout * FILE_TIMEOUT_FACTOR
-            path = args[-1]
-            flags = dict(zip(args[:-1:2], args[1:-1:2]))
-            metadata = call_metadata()
-            output, report, code = b"", None, 0
-            client = self.env._client()
             try:
-                if operation == "stat":
-                    reply = client.Stat(pb.StatRequest(path=path), timeout=timeout, metadata=metadata)
-                    types = {pb.FILE_TYPE_REGULAR: "regular", pb.FILE_TYPE_DIRECTORY: "directory", pb.FILE_TYPE_OTHER: "other"}
-                    report = {"exists": reply.exists, "type": types.get(reply.type, ""),
-                              "size": reply.size, "mode": f"{reply.mode:04o}"}
-                    output = (json.dumps(report) + "\n").encode()
-                    report = None
-                elif operation == "read":
-                    stream = client.ReadFile(pb.ReadFileRequest(path=path, max_bytes=int(flags.get("--max-bytes", 0))),
-                                             timeout=timeout, metadata=metadata)
-                    chunks = []
-                    for message in stream:
-                        if message.WhichOneof("part") == "header":
-                            report = {"size": message.header.size, "truncated": message.header.truncated}
-                        else:
-                            chunks.append(message.chunk)
-                    if report is None:
-                        raise RuntimeError("aries: stream ended without a header")
-                    output = b"".join(chunks)
-                elif operation == "lines":
-                    stream = client.ReadLines(pb.ReadLinesRequest(
-                        path=path, first_line=int(flags["--first"]), max_lines=int(flags["--max"]),
-                        max_line_bytes=int(flags.get("--max-line-bytes", 0))), timeout=timeout, metadata=metadata)
-                    chunks = []
-                    for message in stream:
-                        if message.WhichOneof("part") == "summary":
-                            summary = message.summary
-                            report = {"total_lines": summary.total_lines, "size": summary.size,
-                                      "ends_with_newline": summary.ends_with_newline, "more": summary.more}
-                        else:
-                            chunks.append(message.chunk)
-                    if report is None:
-                        raise RuntimeError("aries: stream ended without a summary")
-                    output = b"".join(chunks)
-                elif operation == "write":
-                    size = int(flags["--size"])
-                    def requests():
-                        yield pb.WriteFileRequest(header=pb.WriteFileHeader(path=path, size=size))
-                        for offset in range(0, len(data), FILE_CHUNK_BYTES):
-                            yield pb.WriteFileRequest(chunk=data[offset:offset + FILE_CHUNK_BYTES])
-                    reply = client.WriteFile(requests(), timeout=timeout, metadata=metadata)
-                    report = {"bytes_written": reply.bytes_written, "created": reply.created}
-                else:
-                    raise ValueError(f"unknown file operation: {operation}")
+                yield timeout, call_metadata()
             except grpc.RpcError as error:
                 if error.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
                     raise RuntimeError(f"aries: file {operation} timed out after {timeout}s") from None
-                code = FILE_EXIT.get(error.code(), TRANSPORT_FAILURE_EXIT)
-                report = f"aries: {error.details()}\n".encode()
-            if isinstance(report, dict):
-                report = (json.dumps(report) + "\n").encode()
-            proc = SimpleNamespace(stdout=output, stderr=report or b"", returncode=code)
-            if code not in accept:
-                raise RuntimeError(proc.stderr.decode("utf-8", "replace").strip())
-            return proc
+                raise RuntimeError(f"aries: {error.details()}") from error
 
         def _absolute(self, path):
             path = self._expand_path(path)
             return path if posixpath.isabs(path) else posixpath.join(self.env.cwd, path)
 
+        def _stat(self, path):
+            with self._file_call("stat") as (timeout, metadata):
+                reply = self.env._client().Stat(pb.StatRequest(path=path), timeout=timeout, metadata=metadata)
+            if reply.exists and (reply.type not in (pb.FILE_TYPE_REGULAR, pb.FILE_TYPE_DIRECTORY, pb.FILE_TYPE_OTHER)
+                                 or reply.size < 0):
+                raise RuntimeError("aries: invalid stat reply")
+            return reply
+
+        def _read(self, path, max_bytes=0):
+            header, chunks = None, []
+            with self._file_call("read") as (timeout, metadata):
+                stream = self.env._client().ReadFile(pb.ReadFileRequest(path=path, max_bytes=max_bytes),
+                                                     timeout=timeout, metadata=metadata)
+                for message in stream:
+                    part = message.WhichOneof("part")
+                    if part == "header" and header is None:
+                        header = message.header
+                    elif part == "chunk" and header is not None:
+                        chunks.append(message.chunk)
+                    else:
+                        raise RuntimeError("aries: invalid read stream")
+            if header is None:
+                raise RuntimeError("aries: stream ended without a header")
+            content = b"".join(chunks)
+            if (header.size < len(content) or
+                    (not header.truncated and len(content) != header.size) or
+                    (header.truncated and (not max_bytes or len(content) != max_bytes or len(content) >= header.size)) or
+                    (max_bytes and len(content) > max_bytes)):
+                raise RuntimeError("aries: invalid read stream")
+            return header, content
+
         def _head(self, path, length):
             """The first length bytes, or None when the file is absent."""
-            proc = self._file("read", "--max-bytes", str(length), self._absolute(path), accept=(0, 1))
-            return proc.stdout if proc.returncode == 0 else None
-
-        def _stat(self, path):
-            return json.loads(self._file("stat", path).stdout)
+            try:
+                return self._read(self._absolute(path), length)[1]
+            except RuntimeError as error:
+                if isinstance(error.__cause__, grpc.RpcError) and error.__cause__.code() == grpc.StatusCode.NOT_FOUND:
+                    return None
+                raise
 
         def _read_all(self, path):
-            return self._file("read", path).stdout
+            return self._read(path)[1]
+
+        def _read_lines(self, path, offset, limit):
+            summary, chunks = None, []
+            with self._file_call("lines") as (timeout, metadata):
+                stream = self.env._client().ReadLines(pb.ReadLinesRequest(
+                    path=path, first_line=offset, max_lines=limit, max_line_bytes=4 * get_max_line_length() + 1),
+                    timeout=timeout, metadata=metadata)
+                for message in stream:
+                    part = message.WhichOneof("part")
+                    if part == "chunk" and summary is None:
+                        chunks.append(message.chunk)
+                    elif part == "summary" and summary is None:
+                        summary = message.summary
+                    else:
+                        raise RuntimeError("aries: invalid line stream")
+            if summary is None:
+                raise RuntimeError("aries: stream ended without a summary")
+            if summary.size < 0 or summary.total_lines < 0:
+                raise RuntimeError("aries: invalid line stream")
+            return summary, b"".join(chunks)
+
+        def _write(self, path, data):
+            def requests():
+                yield pb.WriteFileRequest(header=pb.WriteFileHeader(path=path, size=len(data)))
+                for offset in range(0, len(data), FILE_CHUNK_BYTES):
+                    yield pb.WriteFileRequest(chunk=data[offset:offset + FILE_CHUNK_BYTES])
+
+            with self._file_call("write") as (timeout, metadata):
+                reply = self.env._client().WriteFile(requests(), timeout=timeout, metadata=metadata)
+            if reply.bytes_written != len(data):
+                raise RuntimeError("aries: invalid write reply")
+            return reply
 
         def _is_binary(self, path, sample):
             return os.path.splitext(path)[1].lower() in BINARY_EXTENSIONS or self._is_likely_binary_bytes(sample)
@@ -170,42 +172,42 @@ def register(ctx):
 
         def _atomic_write(self, path, content):
             data = content.encode("utf-8", "surrogateescape")
-            proc = self._file("write", "--size", str(len(data)), self._absolute(path), data=data, accept=range(256))
-            return ExecuteResult(stdout=proc.stderr.decode("utf-8", "replace").strip(), exit_code=proc.returncode)
+            self._write(self._absolute(path), data)
+            return ExecuteResult(stdout="", exit_code=0)
 
         def read_file_bytes(self, path, max_bytes=None):
             path = self._absolute(path)
             stat = self._stat(path)
-            if not stat["exists"]:
+            if not stat.exists:
                 return ReadResult(error=f"File not found: {path}")
-            if stat["type"] != "regular":
+            if stat.type != pb.FILE_TYPE_REGULAR:
                 return self._not_regular_error(path)
-            if max_bytes is not None and stat["size"] > max_bytes:
-                return ReadResult(file_size=stat["size"],
-                                  error=f"File is too large ({stat['size']:,} bytes, limit is {max_bytes:,})")
+            if max_bytes is not None and stat.size > max_bytes:
+                return ReadResult(file_size=stat.size,
+                                  error=f"File is too large ({stat.size:,} bytes, limit is {max_bytes:,})")
             content = self._read_all(path)
-            return ReadResult(base64_content=base64.b64encode(content).decode(), file_size=stat["size"], is_binary=True)
+            return ReadResult(base64_content=base64.b64encode(content).decode(), file_size=stat.size, is_binary=True)
 
         def read_file_raw(self, path):
             path = self._absolute(path)
             stat = self._stat(path)
-            if not stat["exists"]:
+            if not stat.exists:
                 return self._suggest_similar_files(path)
-            if stat["type"] != "regular":
+            if stat.type != pb.FILE_TYPE_REGULAR:
                 return self._not_regular_error(path)
             if self._is_image(path):
-                return ReadResult(is_image=True, is_binary=True, file_size=stat["size"])
+                return ReadResult(is_image=True, is_binary=True, file_size=stat.size)
             sample = self._sample_file_bytes(path)
             if self._is_binary(path, sample):
-                return ReadResult(is_binary=True, file_size=stat["size"], error=describe_binary_file(sample, stat["size"]))
+                return ReadResult(is_binary=True, file_size=stat.size, error=describe_binary_file(sample, stat.size))
             text, _ = _strip_bom(self._read_all(path).decode("utf-8", "replace"))
-            return ReadResult(content=text, file_size=stat["size"])
+            return ReadResult(content=text, file_size=stat.size)
 
         def read_file(self, path, offset=1, limit=2000):
             path = self._absolute(path)
             offset, limit = normalize_read_pagination(offset, limit)
             stat = self._stat(path)
-            if not stat["exists"]:
+            if not stat.exists:
                 variant = self._unicode_variant_match(path)
                 if variant is not None:
                     result = self.read_file(variant, offset=offset, limit=limit)
@@ -214,9 +216,9 @@ def register(ctx):
                     result.hint = f"{note} {result.hint}" if result.hint else note
                     return result
                 return self._suggest_similar_files(path)
-            if stat["type"] != "regular":
+            if stat.type != pb.FILE_TYPE_REGULAR:
                 return self._not_regular_error(path)
-            size = stat["size"]
+            size = stat.size
             if self._is_image(path):
                 return ReadResult(is_image=True, is_binary=True, file_size=size, hint=(
                     "Image file detected. Automatically redirected to vision_analyze tool. "
@@ -228,17 +230,15 @@ def register(ctx):
                     return rescued
                 return ReadResult(is_binary=True, file_size=size, error=describe_binary_file(sample, size))
 
-            proc = self._file("lines", "--first", str(offset), "--max", str(limit),
-                              "--max-line-bytes", str(4 * get_max_line_length() + 1), path)
-            window = json.loads(proc.stderr)
-            text = proc.stdout.decode("utf-8", "replace")
+            window, content = self._read_lines(path, offset, limit)
+            text = content.decode("utf-8", "replace")
             if offset == 1:
                 text, _ = _strip_bom(text)
             # Hermes's own rule, kept exactly: an untruncated window of a file
             # with no final newline loses its last newline.
-            if not window["more"] and not window["ends_with_newline"] and text.endswith("\n"):
+            if not window.more and not window.ends_with_newline and text.endswith("\n"):
                 text = text[:-1]
-            total, end_line = window["total_lines"], offset + limit - 1
+            total, end_line = window.total_lines, offset + limit - 1
             if size == 0:
                 return ReadResult(content="", total_lines=0, file_size=0, hint="File is empty (0 bytes).")
             if offset > total > 0:
@@ -246,10 +246,10 @@ def register(ctx):
                     f"Note: offset {offset} is beyond the end of the file ({total} lines total). "
                     f"Retry with offset <= {total}."))
             hint = None
-            if window["more"]:
+            if window.more:
                 hint = f"Use offset={end_line + 1} to continue reading (showing {offset}-{end_line} of {total} lines)"
             return ReadResult(content=self._add_line_numbers(text, offset), total_lines=total,
-                              file_size=size, truncated=window["more"], hint=hint)
+                              file_size=size, truncated=window.more, hint=hint)
 
     # The name must not contain ssh, docker, singularity, modal, daytona or
     # local: Hermes classifies environments by class-name substring before it

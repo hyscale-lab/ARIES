@@ -113,20 +113,37 @@ assert ops.read_file("/work/sub").error
 assert "Cannot read '/': not a regular file" in ops.read_file("/").error, ops.read_file("/").error
 assert ops.read_file_bytes("/work/none").error == "File not found: /work/none"
 
-# File streams keep exact bytes and send one chunk per bounded message.
+# File streams preserve raw bytes, bounded reads, and an atomic-write result.
 large = bytes(range(256)) * (3 * CHUNK_BYTES // len(bytes(range(256))) + 1)
 fresh()
-assert ops._file("write", "--size", str(len(large)), "/work/large.bin", data=large).returncode == 0
-assert ops._file("read", "/work/large.bin").stdout == large
-assert ops._file("read", "--max-bytes", str(len(large) // 2), "/work/large.bin").stdout == large[:len(large) // 2]
-assert ops._file("write", "--size", str(len(large) + 1), "/work/large.bin", data=large,
-                 accept=range(256)).returncode == 3
-assert open("/work/large.bin", "rb").read() == large
-assert ops._file("read", "/work/none", accept=(0, 1)).returncode == 1
-assert ops._file("read", "/work/sub", accept=range(256)).returncode == 5
+written = ops._write("/work/large.bin", large)
+assert sandbox.write_chunks and max(sandbox.write_chunks) <= CHUNK_BYTES
+assert sum(sandbox.write_chunks) == len(large), sandbox.write_chunks
+assert written.bytes_written == len(large) and written.created, written
+assert ops._read_all("/work/large.bin") == large
+header, content = ops._read("/work/large.bin", len(large) // 2)
+assert header.size == len(large) and header.truncated and content == large[:len(large) // 2]
+assert ops.read_file_bytes("/work/large.bin", max_bytes=len(large) // 2).error
+assert ops._head("/work/none", len(b"probe")) is None
+assert ops._stat("/work/none").exists is False
+stat = ops._stat("/work/large.bin")
+from aries_plugin import sandbox_pb2 as pb
+assert stat.exists and stat.type == pb.FILE_TYPE_REGULAR and stat.size == len(large), stat
+assert stat.mode == os.stat("/work/large.bin").st_mode & 0o7777, stat
+assert ops._stat("/work/sub").type == pb.FILE_TYPE_DIRECTORY
+assert ops._atomic_write("/work/atomic.txt", "safe").exit_code == 0
+assert open("/work/atomic.txt", "rb").read() == b"safe"
+assert any(op == "write" and fields == {"path": "/work/atomic.txt", "size": len(b"safe")}
+           for op, _, fields in sandbox.calls), sandbox.calls
+try:
+    ops._read_all("/work/sub")
+except RuntimeError as error:
+    assert "not a regular file" in str(error), error
+else:
+    raise AssertionError("a directory read did not fail")
 sandbox.summaryless = True
 try:
-    ops._file("lines", "--first", "1", "--max", "1", "/work/sub/a.txt")
+    ops._read_lines("/work/sub/a.txt", 1, 1)
 except RuntimeError as error:
     assert "without a summary" in str(error), error
 else:
@@ -138,7 +155,7 @@ from tools.approval import _approval_tool_call_id  # noqa: E402
 token = _approval_tool_call_id.set("call_1")
 fresh()
 ops.read_file("/work/sub/a.txt")
-ops._file("write", "--size", str(len(b"x")), "/work/id.txt", data=b"x")
+ops._write("/work/id.txt", b"x")
 env.execute("true")
 _approval_tool_call_id.reset(token)
 assert {entry[0] for entry in sandbox.calls} >= {"exec", "stat", "read", "lines", "write"}, sandbox.calls
@@ -147,6 +164,23 @@ fresh()
 ops.read_file("/work/sub/a.txt")
 env.execute("true")
 assert all(entry[1] is None for entry in sandbox.calls), sandbox.calls
+
+# Corrupt file replies must not become a missing path, empty text, or a successful write.
+for operation, action in (
+    ("stat", lambda: ops.read_file_bytes("/work/sub/a.txt")),
+    ("read", lambda: ops.read_file_raw("/work/sub/a.txt")),
+    ("lines", lambda: ops.read_file("/work/sub/a.txt")),
+    ("write", lambda: ops._atomic_write("/work/poison.txt", "text")),
+):
+    sandbox.poison = operation
+    try:
+        action()
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError(f"poisoned {operation} reply did not raise")
+    finally:
+        sandbox.poison = None
 
 # A Hermes without the ContextVar fails the plugin at load, not per call.
 import tools.approval  # noqa: E402
@@ -163,7 +197,7 @@ finally:
 # A refused file call raises; absent files keep the read-head semantics.
 assert ops._head("/work/none", len(b"probe")) is None
 try:
-    ops._file("stat", "relative")
+    ops._stat("relative")
 except RuntimeError as error:
     assert "path must be absolute" in str(error), error
 else:
@@ -201,9 +235,15 @@ sandbox.refusal = grpc.StatusCode.RESOURCE_EXHAUSTED
 handle = env._run_bash("true")
 assert handle.wait(10) == plugin.TRANSPORT_FAILURE_EXIT, handle.returncode
 assert "aries: rpc error: code = ResourceExhausted desc = bridge refused the call\n" == handle.stdout.read()
-assert ops._file("read", "/work/sub/a.txt", accept=range(256)).returncode == 4
-sandbox.refusal = grpc.StatusCode.PERMISSION_DENIED
-assert ops._file("read", "/work/sub/a.txt", accept=range(256)).returncode == 2
+for code in (grpc.StatusCode.RESOURCE_EXHAUSTED, grpc.StatusCode.PERMISSION_DENIED,
+             grpc.StatusCode.UNAVAILABLE):
+    sandbox.refusal = code
+    try:
+        ops._head("/work/sub/a.txt", len(b"probe"))
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError(f"{code} returned empty or missing content")
 sandbox.refusal = None
 
 # Cancellation reaches the server through the pending gRPC call.
@@ -221,6 +261,18 @@ server.stop(0).wait()
 handle = env._run_bash("true")
 assert handle.wait(10) == plugin.TRANSPORT_FAILURE_EXIT
 assert "aries:" in handle.stdout.read()
+for operation, action in (
+    ("stat", lambda: ops.read_file_bytes("/work/sub/a.txt")),
+    ("read", lambda: ops._head("/work/sub/a.txt", len(b"probe"))),
+    ("lines", lambda: ops._read_lines("/work/sub/a.txt", 1, 1)),
+    ("write", lambda: ops._atomic_write("/work/revoked.txt", "text")),
+):
+    try:
+        action()
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError(f"revoked {operation} did not fail")
 
 # A missing target disables the provider, even if the old environment name is set.
 env.cleanup()
