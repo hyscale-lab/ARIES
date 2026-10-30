@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -23,15 +25,16 @@ type imageBuilder interface {
 }
 
 // BuildImage builds image from dockerfile once and reuses it from the local
-// Docker cache afterwards. The Dockerfile is the whole build context, and
-// buildArgs fill its ARG values. Any base it names must already be present;
-// network access during the build is the host's, never a task's.
-func BuildImage(ctx context.Context, socket, image, dockerfile string, buildArgs map[string]string) error {
+// Docker cache afterwards. The build context is the Dockerfile plus files,
+// keyed by context path, and buildArgs fill its ARG values. Any base it names
+// must already be present; network access during the build is the host's,
+// never a task's.
+func BuildImage(ctx context.Context, socket, image, dockerfile string, files map[string][]byte, buildArgs map[string]string) error {
 	api, err := newImageBuildClient(socket)
 	if err != nil {
 		return err
 	}
-	return errors.Join(buildImage(ctx, api, image, dockerfile, buildArgs), api.Close())
+	return errors.Join(buildImage(ctx, api, image, dockerfile, files, buildArgs), api.Close())
 }
 
 func newImageBuildClient(socket string) (*client.Client, error) {
@@ -49,8 +52,12 @@ func newImageBuildClient(socket string) (*client.Client, error) {
 	return api, nil
 }
 
-func buildImage(ctx context.Context, api imageBuilder, image, dockerfile string, buildArgs map[string]string) error {
-	archive, err := imageBuildArchive([]buildFile{{name: "Dockerfile", mode: 0o644, content: []byte(dockerfile)}})
+func buildImage(ctx context.Context, api imageBuilder, image, dockerfile string, files map[string][]byte, buildArgs map[string]string) error {
+	entries := []buildFile{{name: "Dockerfile", mode: 0o644, content: []byte(dockerfile)}}
+	for _, name := range slices.Sorted(maps.Keys(files)) {
+		entries = append(entries, buildFile{name: name, mode: 0o644, content: files[name]})
+	}
+	archive, err := imageBuildArchive(entries)
 	if err != nil {
 		return err
 	}

@@ -646,9 +646,6 @@ func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([
 		}
 		defer clear(client)
 		files[strings.TrimPrefix(clientContainerFS, "/")] = harness.ArchiveFile{Content: client, Mode: 0o555}
-		files[strings.TrimPrefix(pluginContainerFS, "/")+"/plugin.yaml"] = harness.ArchiveFile{Content: pluginManifest, Mode: 0o400}
-		files[strings.TrimPrefix(pluginContainerFS, "/")+"/__init__.py"] = harness.ArchiveFile{Content: pluginModule, Mode: 0o400}
-		files[strings.TrimPrefix(seamContainerFS, "/")] = harness.ArchiveFile{Content: seamScript, Mode: 0o400}
 	}
 	if extractEnabled {
 		files[strings.TrimPrefix(extractKeyPath, "/")] = harness.ArchiveFile{Content: active.Credentials.Get("extract"), Mode: 0o600}
@@ -674,8 +671,6 @@ func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([
 	}
 	if grpc {
 		directories = append(directories,
-			harness.ArchiveDirectory{Name: "run/aries/hermes/plugins", Mode: 0o700, UID: runtimeUID, GID: runtimeGID},
-			harness.ArchiveDirectory{Name: "run/aries/hermes/plugins/aries", Mode: 0o700, UID: runtimeUID, GID: runtimeGID},
 			harness.ArchiveDirectory{Name: "opt/aries", Mode: 0o755, UID: runtimeUID, GID: runtimeGID},
 			harness.ArchiveDirectory{Name: "opt/aries/bin", Mode: 0o755, UID: runtimeUID, GID: runtimeGID},
 		)

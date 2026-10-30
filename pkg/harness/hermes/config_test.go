@@ -622,29 +622,29 @@ func TestContainerEnvironmentRejectsUnusableGRPCEndpoints(t *testing.T) {
 	}
 }
 
-// The seam and the staged-file checks run before Hermes starts, and only on
-// the gRPC route: the SSH route runs the pinned image unmodified.
-func TestGatewayLauncherAppliesTheSeamOnlyForGRPC(t *testing.T) {
-	patched := string(gatewayLauncherScript("DEEPSEEK_API_KEY", false, true))
-	hermes := strings.Index(patched, "exec hermes ")
-	for _, want := range []string{
-		"[ ! -x " + clientContainerFS + " ]",
-		"[ ! -r " + pluginContainerFS + "/plugin.yaml ]",
-		"[ ! -r " + pluginContainerFS + "/__init__.py ]",
-		"if ! python3 " + seamContainerFS + "; then",
-	} {
-		if index := strings.Index(patched, want); index < 0 || index > hermes {
-			t.Fatalf("launcher does not run %q before Hermes:\n%s", want, patched)
+// The gRPC launcher checks the staged client before Hermes starts. It no
+// longer patches Hermes or checks the plugin: the ARIES Hermes image carries
+// both. The SSH launcher does not change.
+func TestGatewayLauncherChecksOnlyTheClientForGRPC(t *testing.T) {
+	launcher := string(gatewayLauncherScript("DEEPSEEK_API_KEY", false, true))
+	hermes := strings.Index(launcher, "exec hermes ")
+	if index := strings.Index(launcher, "[ ! -x "+clientContainerFS+" ]"); index < 0 || index > hermes {
+		t.Fatalf("launcher does not check the client before Hermes:\n%s", launcher)
+	}
+	for _, unwanted := range []string{"seam", "python3", "plugins/aries"} {
+		if strings.Contains(launcher, unwanted) {
+			t.Fatalf("gRPC launcher contains %q:\n%s", unwanted, launcher)
 		}
 	}
 	plain := string(gatewayLauncherScript("DEEPSEEK_API_KEY", false, false))
-	if strings.Contains(plain, seamContainerFS) || strings.Contains(plain, clientContainerFS) {
+	if strings.Contains(plain, clientContainerFS) {
 		t.Fatalf("SSH launcher was modified:\n%s", plain)
 	}
 }
 
-// Hermes loads a user plugin only when plugins.enabled names it, and must not
-// load it on the SSH route (TestRenderConfigAlwaysEnablesOTelPlugin).
+// The gRPC route lists the plugin in plugins.enabled. Hermes also auto-loads
+// it on the SSH route, as a bundled backend, but the backend stays ssh there
+// (TestARIESHermesImageKeepsTheSSHRouteOnTheShell).
 func TestRenderConfigEnablesThePluginOnlyForTheAriesBackend(t *testing.T) {
 	settings := baseSettings()
 	settings.ariesBackend = true

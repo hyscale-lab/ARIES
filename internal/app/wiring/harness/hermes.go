@@ -18,7 +18,7 @@ func NewHermes(cfg config.Config, outputRoot string, lookup func(string) ([]byte
 	if err := ValidateMCPServers(cfg.Harness); err != nil {
 		return app.HarnessInstance{}, errors.Join(err, transport.Close())
 	}
-	image, err := hermesharness.LocalImage(cfg.Versions.Hermes.Image, hermesOTelPlugin(cfg))
+	image, err := hermesharness.LocalImage(cfg.Versions.Hermes.Image, hermesOTelPlugin(cfg), cfg.Versions.Hermes.GRPCIO)
 	if err != nil {
 		return app.HarnessInstance{}, errors.Join(err, transport.Close())
 	}
@@ -45,19 +45,19 @@ func NewHermes(cfg config.Config, outputRoot string, lookup func(string) ([]byte
 	return app.HarnessInstance{Harness: manager, Close: manager.Close}, nil
 }
 
-// PrepareHermesImage builds the image Hermes runs, the pinned one plus
-// hermes-otel, through the deployment's build-if-missing operation.
-func PrepareHermesImage(ctx context.Context, cfg config.Config, build func(ctx context.Context, image, dockerfile string, buildArgs map[string]string) error) error {
+// PrepareHermesImage builds the image Hermes runs, the ARIES Hermes image,
+// through the deployment's build-if-missing operation.
+func PrepareHermesImage(ctx context.Context, cfg config.Config, build func(ctx context.Context, image, dockerfile string, files map[string][]byte, buildArgs map[string]string) error) error {
 	plugin := hermesOTelPlugin(cfg)
-	image, err := hermesharness.LocalImage(cfg.Versions.Hermes.Image, plugin)
+	image, err := hermesharness.LocalImage(cfg.Versions.Hermes.Image, plugin, cfg.Versions.Hermes.GRPCIO)
 	if err != nil {
 		return err
 	}
-	args, err := hermesharness.OTelBuildArgs(cfg.Versions.Hermes.Image, plugin)
+	args, err := hermesharness.ImageBuildArgs(cfg.Versions.Hermes.Image, plugin, cfg.Versions.Hermes.GRPCIO)
 	if err != nil {
 		return err
 	}
-	return build(ctx, image, hermesharness.OTelDockerfile, args)
+	return build(ctx, image, hermesharness.ImageDockerfile, hermesharness.ImageContext(), args)
 }
 
 func hermesOTelPlugin(cfg config.Config) hermesharness.OTelPlugin {

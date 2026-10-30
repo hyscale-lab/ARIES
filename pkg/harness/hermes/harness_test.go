@@ -388,10 +388,10 @@ func TestStartStagesTheSameArchiveForSSH(t *testing.T) {
 	}
 }
 
-// The gRPC route stages the client, the plugin and the seam. The client is a
-// linked binary larger than any credential, so the credential bound must not
-// apply to it.
-func TestStartStagesTheGRPCClientPluginAndSeam(t *testing.T) {
+// The gRPC route stages only the client: the plugin and the seam are in the
+// ARIES Hermes image. The client is a linked binary larger than any
+// credential, so the credential bound must not apply to it.
+func TestStartStagesOnlyTheGRPCClient(t *testing.T) {
 	client := filepath.Join(t.TempDir(), "aries-grpc-client")
 	if err := os.WriteFile(client, []byte("\x7fELF"), 0o600); err != nil {
 		t.Fatal(err)
@@ -411,17 +411,24 @@ func TestStartStagesTheGRPCClientPluginAndSeam(t *testing.T) {
 	}
 	defer manager.Stop(context.Background())
 
+	want := map[string]int64{
+		"run/aries":                       0o700,
+		"run/aries/hermes":                0o700,
+		"run/aries/ssh":                   0o700,
+		"run/aries/workspace":             0o755,
+		"run/aries/hermes/config.yaml":    0o600,
+		"run/aries/hermes/model.key":      0o600,
+		"run/aries/gateway.key":           0o600,
+		"run/aries/run-gateway":           0o555,
+		"opt/aries":                       0o755,
+		"opt/aries/bin":                   0o755,
+		"opt/aries/bin/aries-grpc-client": 0o555,
+	}
 	entries := archiveEntries(t, fake.archive)
-	for name, mode := range map[string]int64{
-		"opt/aries":                                  0o755,
-		"opt/aries/bin":                              0o755,
-		"opt/aries/bin/aries-grpc-client":            0o555,
-		"run/aries/hermes/plugins":                   0o700,
-		"run/aries/hermes/plugins/aries":             0o700,
-		"run/aries/hermes/plugins/aries/plugin.yaml": 0o400,
-		"run/aries/hermes/plugins/aries/__init__.py": 0o400,
-		"run/aries/seam.py":                          0o400,
-	} {
+	if len(entries) != len(want) {
+		t.Fatalf("gRPC archive entries = %v", slices.Sorted(maps.Keys(entries)))
+	}
+	for name, mode := range want {
 		header, ok := entries[name]
 		if !ok || header.Mode != mode || header.Uid != runtimeUID || header.Gid != runtimeGID {
 			t.Fatalf("gRPC archive entry %s = %+v, want mode %o owned by %d", name, header, mode, runtimeUID)
@@ -431,21 +438,8 @@ func TestStartStagesTheGRPCClientPluginAndSeam(t *testing.T) {
 		t.Fatalf("staged client size = %d", size)
 	}
 	contents := archiveContents(t, fake.archive)
-	for staged, source := range map[string]string{
-		"run/aries/hermes/plugins/aries/plugin.yaml": "plugin/plugin.yaml",
-		"run/aries/hermes/plugins/aries/__init__.py": "plugin/__init__.py",
-		"run/aries/seam.py":                          "seam.py",
-	} {
-		want, err := os.ReadFile(source)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !bytes.Equal(contents[staged], want) {
-			t.Fatalf("%s differs from %s", staged, source)
-		}
-	}
-	if !strings.Contains(string(contents["run/aries/run-gateway"]), "python3 "+seamContainerFS) {
-		t.Fatal("gRPC launcher does not apply the seam")
+	if launcher := string(contents["run/aries/run-gateway"]); strings.Contains(launcher, "seam") {
+		t.Fatalf("gRPC launcher still applies the seam:\n%s", launcher)
 	}
 	retained, err := os.ReadFile(filepath.Join(manager.runtime.Options.OutputDir, request.TaskID, "harness", "config.yaml"))
 	if err != nil {

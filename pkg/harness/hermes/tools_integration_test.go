@@ -2,7 +2,7 @@
 
 package hermes
 
-// The gRPC route end to end, short of a model: the harness stages the pinned
+// The gRPC route end to end, short of a model: the harness starts the ARIES
 // Hermes image with the ARIES plugin and the seam, the managed tool bridge
 // serves a real Docker sandbox, and Hermes's own tool entry points run through
 // it.
@@ -141,6 +141,7 @@ func TestPluginRunsHermesToolsThroughTheGRPCBridge(t *testing.T) {
 	})
 
 	manager := integrationManager(t, output)
+	manager.runtime.Options.Image = preparedImage(t, integrationImage)
 	if err := manager.Start(ctx, core.HarnessRequest{
 		RunID: runID, TaskID: taskID, Endpoint: endpoint,
 		Connectivity: live.(interface {
@@ -150,8 +151,8 @@ func TestPluginRunsHermesToolsThroughTheGRPCBridge(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("start Hermes: %v", err)
 	}
-	// The launcher has already applied the seam as root; the probe runs as the
-	// unprivileged user, with the container's own environment.
+	// The image carries the seam; the probe runs as the unprivileged user,
+	// with the container's own environment.
 	result, err := manager.runtime.Options.Deployment.Exec(ctx, manager.active.ID, core.Command{
 		Path: "python3", Args: []string{"-c", toolProbe, largeFilePath, fmt.Sprint(largeFileBytes)}, Dir: "/opt/hermes", User: "10000:10000", OutputLimitBytes: maxDockerOutput,
 	})
@@ -296,23 +297,35 @@ func TestPluginFileOperationsInThePinnedImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	script := "mkdir -p /fake && cp /t/fake_aries_grpc.py /fake/aries-grpc && chmod +x /fake/aries-grpc" +
+		" && python3 /seam.py && cd /opt/hermes && python3 /t/plugin_check.py"
+	status, output := runScriptInImage(ctx, t, integrationImage, "", script,
+		[]string{"FAKE_CLIENT_LOG=/tmp/client.log", "HERMES_WRITE_SAFE_ROOT="},
+		[]string{
+			filepath.Join(here, "plugin") + ":/plugin:ro",
+			filepath.Join(here, "seam.py") + ":/seam.py:ro",
+			filepath.Join(here, "testdata") + ":/t:ro",
+		})
+	if status != 0 || !strings.Contains(output, "PLUGIN_CHECK_OK") {
+		t.Fatalf("plugin check exit %d:\n%s", status, output)
+	}
+}
+
+// runScriptInImage runs script with sh in a new container of image, without a
+// network, as user ("" is the image's user). It returns the exit status and
+// the combined output, and confirms the container is gone afterwards.
+func runScriptInImage(ctx context.Context, t *testing.T, image, user, script string, env, binds []string) (int64, string) {
+	t.Helper()
 	api, err := client.New(client.FromEnv)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer api.Close()
-	script := "mkdir -p /fake && cp /t/fake_aries_grpc.py /fake/aries-grpc && chmod +x /fake/aries-grpc" +
-		" && python3 /seam.py && cd /opt/hermes && python3 /t/plugin_check.py"
 	created, err := api.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Config: &container.Config{
-			Image: integrationImage, Entrypoint: []string{"sh"}, Cmd: []string{"-c", script},
-			Env: []string{"FAKE_CLIENT_LOG=/tmp/client.log", "HERMES_WRITE_SAFE_ROOT="},
+			Image: image, User: user, Entrypoint: []string{"sh"}, Cmd: []string{"-c", script}, Env: env,
 		},
-		HostConfig: &container.HostConfig{NetworkMode: "none", Binds: []string{
-			filepath.Join(here, "plugin") + ":/plugin:ro",
-			filepath.Join(here, "seam.py") + ":/seam.py:ro",
-			filepath.Join(here, "testdata") + ":/t:ro",
-		}},
+		HostConfig: &container.HostConfig{NetworkMode: "none", Binds: binds},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -321,10 +334,10 @@ func TestPluginFileOperationsInThePinnedImage(t *testing.T) {
 		cleanup, done := context.WithTimeout(context.Background(), 30*time.Second)
 		defer done()
 		if _, err := api.ContainerRemove(cleanup, created.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil {
-			t.Errorf("remove plugin check: %v", err)
+			t.Errorf("remove script container: %v", err)
 		}
 		if _, err := api.ContainerInspect(cleanup, created.ID, client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
-			t.Errorf("plugin check absence not confirmed: %v", err)
+			t.Errorf("script container absence not confirmed: %v", err)
 		}
 	}()
 	if _, err := api.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
@@ -350,7 +363,5 @@ func TestPluginFileOperationsInThePinnedImage(t *testing.T) {
 	if copyErr != nil {
 		t.Fatal(copyErr)
 	}
-	if status != 0 || !strings.Contains(output.String(), "PLUGIN_CHECK_OK") {
-		t.Fatalf("plugin check exit %d:\n%s", status, output.String())
-	}
+	return status, output.String()
 }

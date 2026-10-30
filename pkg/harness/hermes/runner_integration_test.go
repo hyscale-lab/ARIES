@@ -112,9 +112,10 @@ func TestRunnerThroughRealHermesSSHBridge(t *testing.T) {
 }
 
 // The same task over the gRPC transport: Hermes runs the terminal call through
-// the ARIES plugin and the staged client.
+// the ARIES plugin and the staged client. Only the ARIES Hermes image carries
+// the plugin.
 func TestRunnerThroughRealHermesGRPCBridge(t *testing.T) {
-	runHermesBridgeScenario(t, "hermes-grpc", false, 1, true)
+	runHermesBridgeScenario(t, "hermes-grpc", false, 1, true, preparedImage(t, integrationImage))
 }
 
 func TestGatewayRepeatedAndConcurrentTaskOccurrences(t *testing.T) {
