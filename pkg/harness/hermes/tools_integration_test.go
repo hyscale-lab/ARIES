@@ -285,9 +285,8 @@ func TestPluginRunsHermesToolsThroughTheGRPCBridge(t *testing.T) {
 }
 
 // TestPluginFileOperationsInThePinnedImage runs the plugin's file operations
-// inside the pinned Hermes image, with the seam applied, against a fake client
-// that serves the same contract from the container's own filesystem. Hermes
-// is importable only there, so this is where the adapter's unit test lives.
+// inside the ARIES Hermes image against a local fake gRPC bridge. Hermes is
+// importable only there, so this is where the adapter's unit test lives.
 // The binds name package paths: a snap Docker cannot see the host's /tmp.
 func TestPluginFileOperationsInThePinnedImage(t *testing.T) {
 	requireDockerImage(t)
@@ -297,13 +296,11 @@ func TestPluginFileOperationsInThePinnedImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	script := "mkdir -p /fake && cp /t/fake_aries_grpc.py /fake/aries-grpc && chmod +x /fake/aries-grpc" +
-		" && python3 /seam.py && cd /opt/hermes && python3 /t/plugin_check.py"
-	status, output := runScriptInImage(ctx, t, integrationImage, "", script,
-		[]string{"FAKE_CLIENT_LOG=/tmp/client.log", "HERMES_WRITE_SAFE_ROOT="},
+	script := "cd /opt/hermes && /opt/hermes/.venv/bin/python /t/plugin_check.py"
+	status, output := runScriptInImage(ctx, t, preparedImage(t, integrationImage), "", script,
+		[]string{"HERMES_WRITE_SAFE_ROOT="},
 		[]string{
 			filepath.Join(here, "plugin") + ":/plugin:ro",
-			filepath.Join(here, "seam.py") + ":/seam.py:ro",
 			filepath.Join(here, "testdata") + ":/t:ro",
 		})
 	if status != 0 || !strings.Contains(output, "PLUGIN_CHECK_OK") {

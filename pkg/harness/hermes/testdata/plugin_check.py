@@ -1,14 +1,15 @@
-"""Drives the ARIES plugin's file operations inside the pinned Hermes image,
-against the fake client in fake_aries_grpc.py. Run by
-TestPluginFileOperationsInThePinnedImage; plain asserts, no pytest."""
+"""Check the ARIES plugin against a local gRPC bridge in the Hermes image."""
 import importlib.util
-import json
 import os
+import sys
 
 spec = importlib.util.spec_from_file_location("aries_plugin", "/plugin/__init__.py")
 plugin = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = plugin
 spec.loader.exec_module(plugin)
-plugin.CLIENT = "/fake/aries-grpc"
+from fake_aries_grpc import CHUNK_BYTES, start
+sandbox, server, target = start()
+os.environ["ARIES_GRPC_TARGET"] = target
 
 
 class Context:
@@ -21,6 +22,18 @@ plugin.register(context)
 os.makedirs("/work/sub", exist_ok=True)
 env = context.provider.create_environment(cwd="/work", timeout=30)
 assert env.cwd == "/work", env.cwd
+assert context.provider.is_available()
+loaded_grpc = plugin.grpc
+plugin.grpc = None
+assert not context.provider.is_available()
+plugin.grpc = loaded_grpc
+from tools.environments.base import _ThreadedProcessHandle
+handle = env._run_bash("printf ported", stdin_data="input")
+assert isinstance(handle, _ThreadedProcessHandle), type(handle)
+assert handle.wait(10) == 0, handle.returncode
+assert handle.stdout.read() == "ported"
+channel = env._channel
+assert channel is not None
 
 # The seam's own wiring is proven against the real bridge in
 # TestPluginRunsHermesToolsThroughTheGRPCBridge; here the adapter is taken
@@ -31,21 +44,11 @@ assert type(ops).__name__ == "AriesFileOperations", type(ops)
 executed = []
 original = env.execute
 env.execute = lambda command, *a, **k: executed.append(command) or original(command, *a, **k)
-log = os.environ["FAKE_CLIENT_LOG"]
-
-
-def client_entries():
-    with open(log) as handle:
-        return [json.loads(line) for line in handle]
-
-
-def client_calls():
-    return [entry["argv"] for entry in client_entries()]
 
 
 def fresh():
     executed.clear()
-    open(log, "w").close()
+    sandbox.calls.clear()
 
 
 # write_file: the bytes land through `file write`, not the atomic-write script.
@@ -53,7 +56,9 @@ fresh()
 result = ops.write_file("/work/sub/a.txt", "one\ntwo\nthree")
 assert result.error is None, result
 assert open("/work/sub/a.txt", "rb").read() == b"one\ntwo\nthree"
-assert ["file", "write", "--size", "13", "/work/sub/a.txt"] in client_calls(), client_calls()
+assert env._channel is channel
+assert any(op == "write" and fields == {"path": "/work/sub/a.txt", "size": len(b"one\ntwo\nthree")}
+           for op, _, fields in sandbox.calls), sandbox.calls
 assert not any("mktemp" in command or "cat >" in command for command in executed), executed
 
 # A BOM and CRLF line endings survive a rewrite, decided from typed probes.
@@ -101,22 +106,40 @@ assert ops.read_file("/work/sub").error
 assert "Cannot read '/': not a regular file" in ops.read_file("/").error, ops.read_file("/").error
 assert ops.read_file_bytes("/work/none").error == "File not found: /work/none"
 
-# The client gets the id of the tool call it serves from the ContextVar that
-# Hermes sets per tool call, also on the thread that runs a command, and no
-# variable outside a tool call.
+# File streams keep exact bytes and send one chunk per bounded message.
+large = bytes(range(256)) * (3 * CHUNK_BYTES // len(bytes(range(256))) + 1)
+fresh()
+assert ops._file("write", "--size", str(len(large)), "/work/large.bin", data=large).returncode == 0
+assert ops._file("read", "/work/large.bin").stdout == large
+assert ops._file("read", "--max-bytes", str(len(large) // 2), "/work/large.bin").stdout == large[:len(large) // 2]
+assert ops._file("write", "--size", str(len(large) + 1), "/work/large.bin", data=large,
+                 accept=range(256)).returncode == 3
+assert open("/work/large.bin", "rb").read() == large
+assert ops._file("read", "/work/none", accept=(0, 1)).returncode == 1
+assert ops._file("read", "/work/sub", accept=range(256)).returncode == 5
+sandbox.summaryless = True
+try:
+    ops._file("lines", "--first", "1", "--max", "1", "/work/sub/a.txt")
+except RuntimeError as error:
+    assert "without a summary" in str(error), error
+else:
+    raise AssertionError("a line stream without a summary did not fail")
+sandbox.summaryless = False
+
+# The ContextVar supplies metadata for exec and file calls, not environment variables.
 from tools.approval import _approval_tool_call_id  # noqa: E402
 token = _approval_tool_call_id.set("call_1")
 fresh()
 ops.read_file("/work/sub/a.txt")
+ops._file("write", "--size", str(len(b"x")), "/work/id.txt", data=b"x")
 env.execute("true")
 _approval_tool_call_id.reset(token)
-entries = client_entries()
-assert {entry["argv"][0] for entry in entries} == {"exec", "file"}, entries
-assert all(entry["tool_call_id"] == "call_1" for entry in entries), entries
+assert {entry[0] for entry in sandbox.calls} >= {"exec", "stat", "read", "lines", "write"}, sandbox.calls
+assert all(entry[1] == "call_1" for entry in sandbox.calls), sandbox.calls
 fresh()
 ops.read_file("/work/sub/a.txt")
 env.execute("true")
-assert all(entry["tool_call_id"] is None for entry in client_entries()), client_entries()
+assert all(entry[1] is None for entry in sandbox.calls), sandbox.calls
 
 # A Hermes without the ContextVar fails the plugin at load, not per call.
 import tools.approval  # noqa: E402
@@ -130,33 +153,74 @@ else:
 finally:
     tools.approval._approval_tool_call_id = _approval_tool_call_id
 
-# A broken client surfaces as an error, never as a shell fallback.
-plugin.CLIENT = "/nonexistent/aries-grpc"
+# A refused file call raises; absent files keep the read-head semantics.
+assert ops._head("/work/none", len(b"probe")) is None
 try:
-    ops._sample_file_bytes("/work/sub/a.txt")
-except Exception:
-    pass
+    ops._file("stat", "relative")
+except RuntimeError as error:
+    assert "path must be absolute" in str(error), error
 else:
-    raise AssertionError("a missing client did not raise")
+    raise AssertionError("a rejected file call did not raise")
 
-# A stalled client is killed at the file-call timeout and raises. A short
-# terminal timeout keeps the check fast. The stall outlasts the file-call
-# timeout many times, so an unbounded call returns empty instead of raising.
+# A gRPC deadline cancels a stalled call and reports the file timeout.
 env.timeout = 1
-with open("/fake/stall", "w") as handle:
-    handle.write(f"#!/bin/sh\necho $$ > /tmp/stall.pid\nexec sleep {10 * env.timeout * plugin.FILE_TIMEOUT_FACTOR}\n")
-os.chmod("/fake/stall", 0o755)
-plugin.CLIENT = "/fake/stall"
+sandbox.stall = True
 try:
     ops._sample_file_bytes("/work/sub/a.txt")
 except RuntimeError as error:
-    assert str(error) == "aries-grpc-client file read timed out after 3s", error
+    assert str(error) == "aries: file read timed out after 3s", error
 else:
-    raise AssertionError("a stalled client did not time out")
-try:
-    os.kill(int(open("/tmp/stall.pid").read()), 0)
-except ProcessLookupError:
-    pass
-else:
-    raise AssertionError("the stalled client still runs")
+    raise AssertionError("a stalled bridge did not time out")
+sandbox.stall = False
+
+# The process handle preserves bytes, login, exit codes, and bridge notices.
+from aries_plugin import sandbox_pb2 as pb
+sandbox.response = pb.ExecResponse(stdout=b"out", stderr=b"err", exit_code=7,
+                                   reason=pb.REASON_COMPLETED)
+handle = env._run_bash("exit 7", login=True, stdin_data="piped")
+assert handle.wait(10) == 7, handle.returncode
+assert handle.stdout.read() == "outerr"
+assert sandbox.calls[-1][2] == {"script": "exit 7", "stdin": b"piped", "login": True}, sandbox.calls[-1]
+sandbox.response = pb.ExecResponse(stdout=b"out", stderr=b"err", exit_code=255,
+                                   reason=pb.REASON_SANDBOX_ERROR, truncated=True)
+handle = env._run_bash("true")
+assert handle.wait(10) == plugin.TRANSPORT_FAILURE_EXIT
+assert handle.stdout.read() == "outerraries: output truncated at the bridge's limit\naries: REASON_SANDBOX_ERROR\n"
+sandbox.response = None
+
+# A bridge refusal is a transport failure, not a sandbox exit code.
+import grpc
+sandbox.refusal = grpc.StatusCode.RESOURCE_EXHAUSTED
+handle = env._run_bash("true")
+assert handle.wait(10) == plugin.TRANSPORT_FAILURE_EXIT, handle.returncode
+assert "aries: rpc error: code = ResourceExhausted desc = bridge refused the call\n" == handle.stdout.read()
+assert ops._file("read", "/work/sub/a.txt", accept=range(256)).returncode == 4
+sandbox.refusal = grpc.StatusCode.PERMISSION_DENIED
+assert ops._file("read", "/work/sub/a.txt", accept=range(256)).returncode == 2
+sandbox.refusal = None
+
+# Cancellation reaches the server through the pending gRPC call.
+sandbox.cancelled.clear()
+sandbox.running.clear()
+handle = env._run_bash("sleep 30")
+assert sandbox.running.wait(10), "server did not start the command"
+handle.kill()
+assert sandbox.cancelled.wait(10), "server did not receive cancellation"
+assert handle.wait(10) == plugin.TRANSPORT_FAILURE_EXIT, handle.returncode
+assert "aries:" in handle.stdout.read()
+
+# A revoked bridge returns 255 rather than a command exit code.
+server.stop(0).wait()
+handle = env._run_bash("true")
+assert handle.wait(10) == plugin.TRANSPORT_FAILURE_EXIT
+assert "aries:" in handle.stdout.read()
+
+# A missing target reports a transport failure without starting a process.
+env.cleanup()
+env._channel = None
+os.environ.pop("ARIES_GRPC_TARGET")
+assert not context.provider.is_available()
+handle = env._run_bash("true")
+assert handle.wait(10) == plugin.TRANSPORT_FAILURE_EXIT, handle.returncode
+assert "ARIES_GRPC_TARGET is not set" in handle.stdout.read()
 print("PLUGIN_CHECK_OK")
