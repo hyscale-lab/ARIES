@@ -317,8 +317,8 @@ func buildHarnessImage(ctx context.Context, cfg config.Config) error {
 	}
 	switch cfg.Sandbox.Deployment.Backend {
 	case "docker":
-		return harnesswiring.PrepareHermesImage(ctx, cfg, func(ctx context.Context, image, dockerfile string, buildArgs map[string]string) error {
-			return deploymentwiring.BuildDockerImage(ctx, cfg.Sandbox.Deployment, image, dockerfile, buildArgs)
+		return harnesswiring.PrepareHermesImage(ctx, cfg, func(ctx context.Context, image, dockerfile string, files map[string][]byte, buildArgs map[string]string) error {
+			return deploymentwiring.BuildDockerImage(ctx, cfg.Sandbox.Deployment, image, dockerfile, files, buildArgs)
 		})
 	case "kubernetes":
 		// The derived Hermes image must already be in a registry the cluster

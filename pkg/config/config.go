@@ -527,6 +527,9 @@ type OpenClawVersions struct {
 type HermesVersions struct {
 	Image      string                   `json:"image"`
 	OTelPlugin HermesOTelPluginVersions `json:"otel_plugin"`
+	// GRPCIO is the grpcio release the ARIES Hermes image installs for the
+	// ARIES Hermes plugin.
+	GRPCIO string `json:"grpcio"`
 }
 
 type HermesOTelPluginVersions struct {
@@ -1351,6 +1354,9 @@ func (c Versions) validate() error {
 		if !validPluginVersion(plugin.Version) {
 			return errors.New("hermes.otel_plugin.version must be a dotted release number")
 		}
+	}
+	if c.Hermes.GRPCIO != "" && !validPluginVersion(c.Hermes.GRPCIO) {
+		return errors.New("hermes.grpcio must be a dotted release number")
 	}
 	return nil
 }

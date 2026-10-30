@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 
@@ -26,6 +27,9 @@ type fakeImageBuilder struct {
 	builds     []client.ImageBuildOptions
 	inspects   int
 	dockerfile string
+	// context lists the build context entries in archive order.
+	context []*tar.Header
+	files   map[string]string
 }
 
 func (fake *fakeImageBuilder) ImageInspect(context.Context, string, ...client.ImageInspectOption) (client.ImageInspectResult, error) {
@@ -48,8 +52,19 @@ func (fake *fakeImageBuilder) ImageBuild(_ context.Context, buildContext io.Read
 	}
 	content, _ := io.ReadAll(archive)
 	fake.dockerfile = string(content)
-	if _, err := archive.Next(); err != io.EOF {
-		return client.ImageBuildResult{}, errors.New("Dockerfile-only context contains extra files")
+	fake.context = []*tar.Header{header}
+	fake.files = map[string]string{}
+	for {
+		header, err := archive.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return client.ImageBuildResult{}, err
+		}
+		content, _ := io.ReadAll(archive)
+		fake.context = append(fake.context, header)
+		fake.files[header.Name] = string(content)
 	}
 	if !strings.Contains(fake.stream, "error") {
 		fake.present = true
@@ -62,7 +77,7 @@ func (fake *fakeImageBuilder) ImageBuild(_ context.Context, buildContext io.Read
 
 func TestBuildImageReusesCachedImage(t *testing.T) {
 	fake := &fakeImageBuilder{present: true}
-	if err := buildImage(context.Background(), fake, testImage, testDockerfile, map[string]string{"BASE": testBase}); err != nil {
+	if err := buildImage(context.Background(), fake, testImage, testDockerfile, nil, map[string]string{"BASE": testBase}); err != nil {
 		t.Fatal(err)
 	}
 	if len(fake.builds) != 0 {
@@ -72,7 +87,7 @@ func TestBuildImageReusesCachedImage(t *testing.T) {
 
 func TestBuildImageBuildsMissingImageFromBase(t *testing.T) {
 	fake := &fakeImageBuilder{stream: `{"stream":"Step 1/3"}` + "\n" + `{"stream":"Successfully built"}` + "\n"}
-	if err := buildImage(context.Background(), fake, testImage, testDockerfile, map[string]string{"BASE": testBase}); err != nil {
+	if err := buildImage(context.Background(), fake, testImage, testDockerfile, nil, map[string]string{"BASE": testBase}); err != nil {
 		t.Fatal(err)
 	}
 	if len(fake.builds) != 1 {
@@ -85,8 +100,34 @@ func TestBuildImageBuildsMissingImageFromBase(t *testing.T) {
 	if !build.Remove || !build.ForceRemove || build.Dockerfile != "Dockerfile" || len(build.Labels) != 0 {
 		t.Fatalf("build cleanup or cache policy changed: %#v", build)
 	}
-	if fake.dockerfile != testDockerfile {
-		t.Fatalf("Dockerfile = %q", fake.dockerfile)
+	if fake.dockerfile != testDockerfile || len(fake.context) != 1 {
+		t.Fatalf("Dockerfile = %q, context entries = %d", fake.dockerfile, len(fake.context))
+	}
+}
+
+// The context holds the Dockerfile and then exactly the given files, sorted by
+// path, readable by everyone and writable by no one but the owner, so a
+// change to any file is a change to the context and nothing else leaks in.
+func TestBuildImageSendsTheGivenFilesInTheContext(t *testing.T) {
+	fake := &fakeImageBuilder{}
+	files := map[string][]byte{"seam.py": []byte("print()\n"), "plugin/plugin.yaml": []byte("name: aries\n"), "plugin/__init__.py": []byte("")}
+	if err := buildImage(context.Background(), fake, testImage, testDockerfile, files, nil); err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, header := range fake.context {
+		names = append(names, header.Name)
+		if header.Typeflag != tar.TypeReg || header.Mode != 0o644 {
+			t.Fatalf("context entry %s = %+v", header.Name, header)
+		}
+	}
+	if want := []string{"Dockerfile", "plugin/__init__.py", "plugin/plugin.yaml", "seam.py"}; !slices.Equal(names, want) {
+		t.Fatalf("context entries = %v, want %v", names, want)
+	}
+	for name, content := range files {
+		if fake.files[name] != string(content) {
+			t.Fatalf("context file %s = %q", name, fake.files[name])
+		}
 	}
 }
 
@@ -107,7 +148,7 @@ func TestBuildImageClosesFailedStreamAndPreservesCloseError(t *testing.T) {
 		Reader: strings.NewReader(`{"errorDetail":{"message":"build failed"}}`), closeErr: closeErr,
 	}
 	fake := &fakeImageBuilder{body: body}
-	err := buildImage(context.Background(), fake, testImage, testDockerfile, nil)
+	err := buildImage(context.Background(), fake, testImage, testDockerfile, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "build failed") || !errors.Is(err, closeErr) {
 		t.Fatalf("build error = %v", err)
 	}
@@ -118,11 +159,11 @@ func TestBuildImageClosesFailedStreamAndPreservesCloseError(t *testing.T) {
 
 func TestBuildImageReportsBuildFailures(t *testing.T) {
 	failed := &fakeImageBuilder{stream: `{"stream":"Step 1/3"}` + "\n" + `{"errorDetail":{"message":"uv: network unreachable"},"error":"uv: network unreachable"}` + "\n"}
-	if err := buildImage(context.Background(), failed, testImage, testDockerfile, nil); err == nil || !strings.Contains(err.Error(), "network unreachable") {
+	if err := buildImage(context.Background(), failed, testImage, testDockerfile, nil, nil); err == nil || !strings.Contains(err.Error(), "network unreachable") {
 		t.Fatalf("stream error = %v", err)
 	}
 	broken := &fakeImageBuilder{inspectErr: errors.New("daemon unavailable")}
-	if err := buildImage(context.Background(), broken, testImage, testDockerfile, nil); err == nil || len(broken.builds) != 0 {
+	if err := buildImage(context.Background(), broken, testImage, testDockerfile, nil, nil); err == nil || len(broken.builds) != 0 {
 		t.Fatalf("inspect error = %v, builds = %d", err, len(broken.builds))
 	}
 }

@@ -34,7 +34,7 @@ func fileContainer(t *testing.T, ctx context.Context, image string) (*Manager, s
 	if err := PullImages(ctx, "", []string{fixtureImage}); err != nil {
 		t.Skipf("Docker daemon and fixture image are required for integration tests: %v", err)
 	}
-	if err := BuildImage(ctx, "", userImage, "FROM "+fixtureImage+"\nUSER "+imageUser+"\n", nil); err != nil {
+	if err := BuildImage(ctx, "", userImage, "FROM "+fixtureImage+"\nUSER "+imageUser+"\n", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	logger := logrus.New()

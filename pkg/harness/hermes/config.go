@@ -29,13 +29,9 @@ const (
 	gatewayLauncherPath = stagedRoot + "/run-gateway"
 	workspaceRoot       = stagedRoot + "/workspace"
 
-	// The gRPC route stages the client, the ARIES Hermes plugin that runs it,
-	// and the seam script that lets the plugin supply file operations. The
-	// plugin lives under HERMES_HOME, which is where Hermes looks for user
-	// plugins.
+	// The gRPC route stages the client that the ARIES Hermes plugin runs. The
+	// plugin and the seam are in the ARIES Hermes image (ImageDockerfile).
 	clientContainerFS = "/opt/aries/bin/aries-grpc-client"
-	pluginContainerFS = stateContainerPath + "/plugins/aries"
-	seamContainerFS   = stagedRoot + "/seam.py"
 
 	// tavilyAPIKeyEnv is the in-container environment variable name Hermes's
 	// Tavily plugin reads. It is fixed by Hermes itself, unlike the profile's
@@ -66,7 +62,7 @@ type CompactionSettings struct {
 }
 
 // The ARIES Hermes plugin and the seam script that lets it supply file
-// operations. Both are staged only on the gRPC route.
+// operations. ImageContext puts both into the ARIES Hermes image.
 var (
 	//go:embed plugin/plugin.yaml
 	pluginManifest []byte
@@ -491,20 +487,13 @@ func containerEnvironment(endpoint core.ToolEndpoint, workdir string, terminalTi
 // inside the container means no value ever appears in Docker's exec or
 // container config. extractEnabled additionally exports the Tavily key
 // staged at extractKeyPath, under Hermes's fixed tavilyAPIKeyEnv name.
-func gatewayLauncherScript(apiKeyEnv string, extractEnabled, seam bool, mcpHostVars ...string) []byte {
+func gatewayLauncherScript(apiKeyEnv string, extractEnabled, grpc bool, mcpHostVars ...string) []byte {
 	script := `#!/bin/sh
 set -eu
 `
-	if seam {
-		// The launcher runs as root before Hermes drops privileges, which is the
-		// one point where the image's own files can be patched. A failed seam
-		// stops here, so file tools never silently stay on the shell.
-		script += `if [ ! -x ` + clientContainerFS + ` ] || [ ! -r ` + pluginContainerFS + `/plugin.yaml ] || [ ! -r ` + pluginContainerFS + `/__init__.py ]; then
-  echo "ARIES: Hermes gRPC client or plugin is missing" >&2
-  exit 1
-fi
-if ! python3 ` + seamContainerFS + `; then
-  echo "ARIES: Hermes file-operations seam failed" >&2
+	if grpc {
+		script += `if [ ! -x ` + clientContainerFS + ` ]; then
+  echo "ARIES: Hermes gRPC client is missing" >&2
   exit 1
 fi
 `
