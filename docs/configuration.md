@@ -146,13 +146,13 @@ supplies the required Docker socket mount explicitly; component labels do not
 grant access. The harness and sandbox never receive that socket. The bridge has daemon authority
 like Runner, even though each session's execution adapter validates one fixed target.
 
-The bridge runtime runs `aries-bridge` from the same build as `aries-ssh-client`
-and `aries-grpc-client`. `make build` produces all three alongside Runner.
-`make bridge-image` builds the Docker
-image containing only `aries-bridge`, using `bridge.image` and `bridge.base_image`
-from the version catalog. Runner stages the separate `aries-ssh-client` binary
-directly into the OpenClaw harness, and `aries-grpc-client` into the harness of
-a `hermes-grpc` run; the bridge container does not need either client.
+The bridge runtime runs `aries-bridge` from the same build as
+`aries-ssh-client`. `make build` produces `bin/aries`, `bin/aries-bridge`,
+and `bin/aries-ssh-client`. `make bridge-image` builds the Docker image
+containing only `aries-bridge`, using `bridge.image` and `bridge.base_image`
+from the version catalog. Runner stages `aries-ssh-client` into the OpenClaw
+harness. Hermes uses the ARIES Hermes image for both SSH and gRPC; its gRPC
+plugin is built into that image. The bridge container needs no SSH client.
 For the Kubernetes backend, `make k8s-images` builds the bridge on
 `bridge.kubernetes_base_image` instead, which supplies `kubectl`; bump it with
 the Kubernetes version the pinned Invitro installs.
@@ -234,14 +234,16 @@ Running a profile automatically loads `configs/versions.json`, creates or
 verifies the pinned Terminal-Bench checkout at `.cache/terminal-bench-2-1`, reads
 each selected task's explicit Docker image tag from its `task.toml`, and pulls
 only the configured harness image plus those selected images through the
-Docker Go SDK for Docker placement. For Hermes it then builds, once, the local image that adds the
-`hermes-otel` plugin pinned by `hermes.otel_plugin`. Preparation
+Docker Go SDK for Docker placement. For Hermes it then builds the ARIES
+Hermes image once. The image adds the pinned `hermes-otel` plugin, the ARIES
+Hermes plugin, the seam patch, and the pinned `hermes.grpcio` Python runtime.
+Preparation
 happens before the run directory is created, a managed runtime is started,
 model weights load, an external endpoint is contacted, or task work is
 admitted. The Terminal-Bench Git revision and exact tag-pinned OpenClaw image
-remain in `configs/versions.json`, alongside the tag-pinned Hermes image and
-the `hermes-otel` plugin's repository, release, and 40-character revision; task
-image digests are not duplicated there.
+remain in `configs/versions.json`, alongside the pinned Hermes image,
+`hermes.otel_plugin` (repository, release, and 40-character revision), and
+`hermes.grpcio` (`1.81.1`). Task image digests are not duplicated there.
 Preparation is safe to repeat and refuses to replace a checkout at another
 revision.
 
@@ -674,16 +676,22 @@ The Hermes profile is the same run with a different harness, so it needs the
 ./bin/aries profiles/hermes-tb2-fix-git-deepseek.json
 ```
 
-Hermes supports text and [voice-transcribe](voice_mode.md). Preparation builds
-a local image from the pinned upstream one with only the `hermes-otel` plugin
-added, once per machine (the first build needs GitHub and PyPI access and takes
-about 20 seconds), and Hermes runs it. It is paired
+Hermes supports text and [voice-transcribe](voice_mode.md). For Docker,
+preparation builds the ARIES Hermes image from the pinned upstream image, with
+`hermes-otel`, the ARIES Hermes plugin, pinned `grpcio`, and the file-tool
+seam. The first build needs GitHub and PyPI access. Hermes older than 0.21
+fails the image build. For Kubernetes, publish the same recipe before a run;
+[image publishing](../k8s/README.md#3-publish-the-images-the-cluster-pulls)
+builds and pushes it. The same image serves `hermes-ssh` and `hermes-grpc`.
+Hermes is paired
 with `bridge.type: "hermes-ssh"` or `"hermes-grpc"`; a crossed pair with
 OpenClaw is rejected before the run starts. Hermes issues every tool call as `bash -c`,
 so the task image must provide `/bin/bash`. On SSH, its `~/.hermes` file sync is refused by
 the bridge to keep the evaluated sandbox free of harness scaffold and
 credentials; Hermes logs one `file_sync: sync failed` warning and continues.
-On gRPC, Hermes uses the ARIES terminal backend, which syncs nothing; see
+On gRPC, Hermes uses the in-process ARIES Hermes plugin. The rendered
+`config.yaml` gives the plugin its bridge address at
+`plugins.entries.aries.settings.grpc_target`. The plugin syncs nothing; see
 [Hermes over gRPC](implementation/harnesses.md#hermes-over-grpc). The `-grpc`
 profiles are copies of Hermes SSH profiles with only `bridge.type` and `name`
 changed. The Terminal-Bench 2 one needs the same setup as above:

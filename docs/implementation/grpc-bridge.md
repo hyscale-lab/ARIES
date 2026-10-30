@@ -14,8 +14,8 @@ protocol `grpc`, user `aries`, and the sandbox workdir. The server is
 plaintext and authenticates no caller, as SSH and control do. It makes no
 SSH host key. The task container serves nothing and runs no daemon: every call
 reaches it through the execution backend of the run, the Docker Engine API or
-`kubectl exec` on Kubernetes. Hermes is the harness of this transport: its
-ARIES plugin runs the tool calls through the client; see
+`kubectl exec` on Kubernetes. The ARIES Hermes plugin calls the gRPC
+transport in the Hermes process; see
 [Hermes over gRPC](harnesses.md#hermes-over-grpc).
 
 ## Origin
@@ -136,13 +136,12 @@ reports its real result.
   command until it ends. Hermes runs a background process with its output in a
   log file, and polls the log with short commands, so polling works. This is a
   known limitation that we accept for now.
-- The agent sees output in a different order than on SSH. The plugin merges the
-  client's stderr into its stdout, but the
-  [client](../../pkg/bridge/grpc/client.go) writes all of stdout, then all of
-  stderr. So error lines come at the end, not next to the line that caused
-  them. The client's own lines, for example
-  `aries: REASON_SANDBOX_ERROR`, also come in the agent's output. SSH streams
-  both outputs, so their lines stay near the order the command wrote them.
+- The agent sees output in a different order than on SSH. The
+  [plugin](../../pkg/harness/hermes/plugin/__init__.py) combines all of stdout,
+  then all of stderr. Error lines come at the end, not next to the line that
+  caused them. The plugin also adds lines such as
+  `aries: REASON_SANDBOX_ERROR`. SSH streams both outputs, so their lines stay
+  near the order the command wrote them.
 - On Docker, an `Exec` ends only when the output of the command closes
   ([Docker exec](../../pkg/deployment/docker/exec.go)). A background child that
   keeps the output open, for example `cmd &` with no redirect, thus blocks the
@@ -174,10 +173,10 @@ reports its real result.
 - The service has no PTY, signal, reattach, list, move or remove call; see
   [Comparison with E2B](#comparison-with-e2b). Hermes does list, move and
   remove with shell commands through `Exec`.
-- Each operation starts a new client process and a new HTTP/2 connection, and
-  the client has no retry policy. One `read_file` of a text file makes three
-  calls: a stat, a read of the first 1000 bytes, and the line read. Hermes over
-  SSH reuses one ControlMaster connection.
+- The plugin reuses one gRPC channel for each Hermes environment and does not
+  retry failed calls. One `read_file` of a text file makes three calls: a stat,
+  a read of the first 1000 bytes, and the line read. Hermes over SSH reuses one
+  ControlMaster connection.
 - `Exec` stdin above 16 MiB is refused with `RESOURCE_EXHAUSTED` before
   anything runs. A workdir that is not shell-neutral is refused with
   `FAILED_PRECONDITION`. Both refusals are recorded with status `rejected` and
@@ -190,7 +189,7 @@ reports its real result.
   whose stdout or stderr passes 16 MiB
   ([`maxExecOutput`](../../pkg/deployment/docker/exec.go)), the same as for
   SSH. The call then ends with `REASON_SANDBOX_ERROR` and exit code 255.
-- Each gRPC message is at most 64 MiB, on the server and on the client. The
+- Each gRPC message is at most 64 MiB, on the server and in the plugin. The
   output bound always fires first.
 - File content has no size bound. It moves in 64 KiB chunks. The server holds
   one chunk at a time, plus written content up to 16 MiB for the audit.
@@ -225,60 +224,41 @@ during cancellation, stays in the record and does not fail revocation.
 Only a handler join that does not end and a failure to seal the audit prevent
 confirmed release; see [lifecycle](../design/bridge.md#lifecycle-cancellation-and-failure).
 
-## Client
+## In-process client
 
-ARIES stages the static `aries-grpc-client` into the Hermes container at
-`/opt/aries/bin/aries-grpc-client`. `make build` builds it with
-`CGO_ENABLED=0`. Keep it beside `bin/aries`. The
-[client](../../pkg/bridge/grpc/client.go) runs one operation for each process:
+The [ARIES Hermes plugin](../../pkg/harness/hermes/plugin/__init__.py) runs
+inside the Hermes process. It reads the bridge address from
+`plugins.entries.aries.settings.grpc_target` in the rendered `config.yaml`.
+It opens a plaintext gRPC channel on first use, disables HTTP proxies, and
+reuses the channel for commands and typed file calls. The environment closes
+it during cleanup. No executable is copied into the harness for this
+transport.
 
-```text
-aries-grpc-client exec [--login] [--] SCRIPT
-aries-grpc-client file stat PATH
-aries-grpc-client file read [--max-bytes N] PATH
-aries-grpc-client file lines --first N --max N [--max-line-bytes N] PATH
-aries-grpc-client file write --size N PATH < content
-```
+A command sends one unary `Exec` request with its script, optional stdin,
+and login flag. Hermes receives a process handle that cancels the gRPC call
+when the command times out. The plugin returns all stdout, then all stderr,
+in one output. It adds `aries: output truncated at the bridge's limit` if the
+bridge cut the output. If a command did not complete, it adds a line such as
+`aries: REASON_SANDBOX_ERROR`. A refusal or transport failure returns exit
+code 255. A completed command retains its exit code. Cancellation can leave
+the command running in the sandbox until it exits or the sandbox is removed.
 
-The client reads the bridge address from `ARIES_GRPC_TARGET`. It dials in
-plaintext and ignores the `*_PROXY` variables, because a proxy outside the run
-network cannot reach the bridge. `exec` reads all of stdin before it dials. It
-writes the command's stdout and stderr unchanged and exits with the command's
-exit code. When the output was cut, it adds one line on stderr. When the
-bridge reports that the command did not complete, the client exits 255 and
-adds the reason on stderr, for example `aries: REASON_SANDBOX_ERROR`. A usage
-error, a transport failure, or a refusal by the bridge exits 255, as OpenSSH
-does.
+For typed file calls, the plugin sends `Stat`, `ReadFile`, `ReadLines`, and
+`WriteFile` directly. A status of `NOT_FOUND`, `PERMISSION_DENIED`,
+`INVALID_ARGUMENT`, `RESOURCE_EXHAUSTED`, or `FAILED_PRECONDITION` maps to
+file status 1, 2, 3, 4, or 5, respectively. Other failures map to 255.
+Hermes reports these failures as tool errors, not as a shell fallback.
+Content moves in chunks, but a complete read is assembled for Hermes's file
+tool. Each file call has a deadline of three times the Hermes terminal
+timeout (540 s with the default 180 s). If it expires, Hermes reports a
+`timed out after <N>s` tool error. One file call can run several operations
+in the sandbox, but Hermes gives each shell command only the terminal timeout.
 
-For `file`, stdout holds only the payload. `stat` writes one JSON line on
-stdout. `read`, `lines`, and `write` write one JSON metadata line on stderr on
-success, and a message on failure. Content streams through and is never held
-whole. If a read fails after some content, that content stays on stdout, so
-check the exit code before you use stdout. The `file` exit codes are:
-
-| Exit code | Status |
-| --- | --- |
-| 0 | OK |
-| 1 | `NOT_FOUND` |
-| 2 | `PERMISSION_DENIED` |
-| 3 | `INVALID_ARGUMENT` |
-| 4 | `RESOURCE_EXHAUSTED` |
-| 5 | `FAILED_PRECONDITION` |
-| 255 | Any other status, a usage error, or a transport failure |
-
-The client has no timeout flag. Hermes stops the client process when a command
-times out, and the closed connection cancels the call on the bridge. The
-command may keep running in the sandbox until it exits or the sandbox is
-removed. The Hermes plugin stops a `file` client after three times the Hermes
-terminal timeout (540 s with the default 180 s) and reports a tool error. One
-file call can run several operations in the sandbox, but Hermes gives each
-single shell command only the terminal timeout.
-
-When `ARIES_TOOL_CALL_ID` is set and not empty, the client sends its value as
-the gRPC metadata `aries-tool-call-id` on each call. The client does not check
-the value. The bridge accepts one value of at most 128 bytes, made of the
-characters `A-Z`, `a-z`, `0-9`, `.`, `_`, `:`, and `-`. It refuses any other
-value with `INVALID_ARGUMENT` before the call reaches the sandbox.
+The plugin reads the id of the running Hermes tool call from its context
+variable and sends it as gRPC metadata `aries-tool-call-id` on each call.
+There is no id outside a tool call. The bridge accepts one value of at most
+128 bytes, made of `A-Z`, `a-z`, `0-9`, `.`, `_`, `:`, and `-`. It refuses
+other values with `INVALID_ARGUMENT` before the call reaches the sandbox.
 
 ## Evidence
 
@@ -370,7 +350,7 @@ column is this transport.
 | Missing path | An error | `exists=false` for `Stat`, with status OK |
 | Authentication | Access token or signed URL | None; plaintext on the run network |
 | Revocation | None for one session; access ends with the sandbox | Every call is refused with `UNAVAILABLE`, handlers are joined, and the audit is sealed before evaluation |
-| Timeouts | A request header can limit a process; closing the stream does not stop it | No server deadline; the harness stops the client and the closed connection cancels the call |
+| Timeouts | A request header can limit a process; closing the stream does not stop it | No server deadline; the harness cancels command calls and sets file-call deadlines |
 | Output limits | No byte limit found | 16 MiB for each of stdout and stderr; 64 MiB for a message |
 | Evidence | Operational log for E2B; no tool-call format | `tool-calls.jsonl` for each sandbox call, and an optional raw log |
 | Sandbox runtime | Firecracker microVM | Docker or Kubernetes container |
@@ -409,7 +389,8 @@ column is this transport.
 - **`ReadLines` and `max_bytes`.** Only the requested window crosses the wire.
 - **Unary `Exec` with bounded output.** The bridge process is shared, so a
   unary reply must fit in memory; see [Limits](#limits).
-- **No server deadline.** The harness owns the timeout; see [Client](#client).
+- **No server deadline.** The harness owns the timeout; see
+  [In-process client](#in-process-client).
 - **Evidence for each call.** Each sandbox call has a record with `sandbox_id`
   and a sequence number; see
   [evidence](../design/bridge.md#evidence-and-substitution).
@@ -417,10 +398,11 @@ column is this transport.
 ## Tests
 
 [Server tests](../../pkg/bridge/grpc/bridge_test.go),
-[file tests](../../pkg/bridge/grpc/files_test.go), and
-[client tests](../../pkg/bridge/grpc/client_test.go) use a fake executor.
-The [managed integration test](../../pkg/bridge/managed_integration_test.go)
-runs `hermes-grpc` through the real bridge image with the built client.
-The [Hermes tools test](../../pkg/harness/hermes/tools_integration_test.go)
+[file tests](../../pkg/bridge/grpc/files_test.go) use a fake executor.
+The [plugin checks](../../pkg/harness/hermes/testdata/plugin_check.py) use a
+fake gRPC server in the ARIES Hermes image. The
+[managed integration test](../../pkg/bridge/managed_integration_test.go)
+runs `hermes-grpc` through the real bridge image. The
+[Hermes tools test](../../pkg/harness/hermes/tools_integration_test.go)
 runs real Hermes tools over the gRPC transport; see
 [Hermes over gRPC](harnesses.md#hermes-over-grpc).

@@ -20,9 +20,9 @@ docker info >/dev/null
 make bridge-image
 ```
 
-Keep `bin/aries-ssh-client` and `bin/aries-grpc-client` beside `bin/aries`.
-`make bridge-image` builds the binaries
-and the pinned bridge image from the same source.
+Keep `bin/aries-ssh-client` beside `bin/aries` for OpenClaw runs.
+`make bridge-image` builds `bin/aries`, `bin/aries-ssh-client`, and
+`bin/aries-bridge`, then builds the pinned bridge image.
 
 ## Option A: DeepSeek
 

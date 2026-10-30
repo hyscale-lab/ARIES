@@ -30,6 +30,12 @@ service, not the topology at that earlier revision.
 - **E2B operation class.** The operation class of a gRPC tool-call record:
   `exec`, `stat`, `read` or `write`. Each one maps to one E2B envd call. It is
   a label, not E2B wire or log compatibility. _Avoid_: E2B-compatible log.
+- **ARIES Hermes image.** The Hermes image that ARIES builds from the pinned
+  upstream image. It adds `hermes-otel`, the ARIES Hermes plugin, the Hermes
+  seam patch, and the gRPC Python runtime. One image serves both Hermes
+  transports.
+- **ARIES Hermes plugin.** The Hermes terminal backend that carries tool calls
+  to the gRPC transport in the Hermes process.
 - **Raw log.** The opt-in, private record of request bytes for one transport
   (`<transport>_raw.log`). It keeps commands, stdin and written content, never
   output or read content. It is lossless up to 16 MiB per input. A gRPC
@@ -121,8 +127,8 @@ harness an endpoint with that transport as its protocol
   unchanged. See [SSH bridges](../implementation/ssh-bridges.md).
 - **gRPC.** The `aries.sandbox.v1` service has typed calls and no dialect:
   `Exec` carries a script, stdin, and a login flag, and four file procedures
-  carry a path and bytes. Hermes is its harness: the ARIES Hermes plugin runs a
-  staged `aries-grpc-client`, which carries the calls. See
+  carry a path and bytes. The ARIES Hermes plugin calls the gRPC transport
+  in the Hermes process. See
   [gRPC bridge](../implementation/grpc-bridge.md) and
   [Hermes over gRPC](../implementation/harnesses.md#hermes-over-grpc). For the
   E2B origin of its typed calls and a comparison, see

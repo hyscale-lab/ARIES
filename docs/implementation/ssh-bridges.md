@@ -83,8 +83,8 @@ in `workspace_home` when present.
 
 The Hermes dialect shares the SSH engine with OpenClaw while retaining its
 different command grammar and request policy. Hermes
-runs OpenSSH itself, so this bridge stages no client helper and supplies no
-client command. ARIES sets no `TERMINAL_SSH_KEY` and stages no client identity.
+runs OpenSSH itself, so this bridge stages no SSH client binary and supplies
+no client command. ARIES sets no `TERMINAL_SSH_KEY` and stages no client identity.
 The pinned Hermes implementation adds `-i` only when a key path is configured.
 Hermes retains its native
 `StrictHostKeyChecking=accept-new` and offers no way to preload a known-hosts
