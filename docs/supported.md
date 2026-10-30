@@ -47,9 +47,9 @@ guides above.
   are rejected before execution. One run uses one transport. OpenClaw over gRPC
   is not implemented. Hermes requires `/bin/bash` in the task image; its SSH bridge
   rejects Hermes's private `~/.hermes` file synchronization. OpenClaw requires
-  `bin/aries-ssh-client` beside `bin/aries`, and `hermes-grpc` requires
-  `bin/aries-grpc-client` there. All bridges require the matched Docker bridge image built with
-  `make bridge-image`.
+  `bin/aries-ssh-client` beside `bin/aries`. Both Hermes transports use the
+  ARIES Hermes image, which contains the in-process gRPC plugin. All bridges
+  require the matched Docker bridge image built with `make bridge-image`.
 - On the Kubernetes backend, a task that executes as a non-root user, as
   SWE-bench Pro does, needs `setpriv` from `util-linux` in its image and a root container
   user for per-command UID/GID switching. The upstream SWE-bench Pro images

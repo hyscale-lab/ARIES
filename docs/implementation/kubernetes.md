@@ -281,8 +281,12 @@ only in which images must be published beforehand:
 | --- | --- | --- | --- |
 | Task sandbox | Public, pinned by the benchmark | Both harnesses | No |
 | OpenClaw harness | Public upstream image, used unchanged | OpenClaw | No |
-| Hermes harness | Upstream image plus `hermes-otel`, built by ARIES | Hermes | Yes |
+| Hermes harness | Derived ARIES Hermes image | Hermes | Yes |
 | Bridge | Built by ARIES; needs `kubectl` on this backend | Both harnesses | Yes |
+
+The ARIES Hermes image adds `hermes-otel`, `grpcio` and the ARIES Hermes
+plugin. Its build applies the seam patch. The image serves both Hermes
+transports.
 
 An OpenClaw run therefore needs only the bridge image published, and a Hermes
 run needs the bridge and the derived Hermes image. Each deployment block's

@@ -201,11 +201,12 @@ bridge artifacts may contain task or model content; review them before sharing.
 
 - **Docker permission or socket error:** run `docker info` against the configured
   daemon. ARIES requires a local Unix socket; the default is `/var/run/docker.sock`.
-- **Missing `aries-ssh-client` or `aries-grpc-client` error:** rebuild with
-  `make build` and keep the helper beside the main binary.
-- **Hermes exits before readiness on a `hermes-grpc` run:** inspect
-  `harness/container.log` for an `ARIES:` line. A seam failure means the
-  Hermes pin no longer has the anchors that `seam.py` expects; see
+- **Missing `aries-ssh-client` error on OpenClaw:** rebuild with `make build`
+  and keep `bin/aries-ssh-client` beside `bin/aries`.
+- **ARIES Hermes image build failure:** check the build output. The base image
+  must contain Hermes 0.21 or newer. A seam failure means its source no longer
+  has the anchors that `seam.py` expects. The image recipe applies the seam at
+  build time, before any task container starts. See
   [Hermes over gRPC](implementation/harnesses.md#hermes-over-grpc).
 - **Credential error:** check ownership, owner read access, absence of group or
   world permissions, and one-line formatting of `DEEPSEEK_API.key`.
