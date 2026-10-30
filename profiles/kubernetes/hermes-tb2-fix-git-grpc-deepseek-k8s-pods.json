@@ -1,0 +1,71 @@
+{
+  "name": "hermes-tb2-fix-git-grpc-deepseek-k8s-pods",
+  "versions_file": "../../configs/versions.json",
+  "overrides_file": "",
+  "execution": {
+    "concurrency": 1
+  },
+  "benchmark": {
+    "type": "terminalbench2",
+    "root": ".cache/terminal-bench-2-1",
+    "tasks": [
+      "fix-git"
+    ]
+  },
+  "harness": {
+    "type": "hermes",
+    "deployment": {
+      "backend": "kubernetes",
+      "kubernetes": {
+        "namespace": "aries",
+        "images": {
+          "aries-local/hermes": "ghcr.io/hyscale-lab/aries-hermes"
+        },
+        "node_selector": {
+          "loader-nodetype": "worker"
+        }
+      }
+    }
+  },
+  "sandbox": {
+    "deployment": {
+      "backend": "kubernetes",
+      "kubernetes": {
+        "namespace": "aries",
+        "pod_cidr": "10.168.0.0/16",
+        "service_cidr": "10.96.0.0/12",
+        "node_selector": {
+          "loader-nodetype": "worker"
+        }
+      }
+    }
+  },
+  "bridge": {
+    "deployment": {
+      "backend": "kubernetes",
+      "kubernetes": {
+        "namespace": "aries",
+        "service_account": "aries-bridge",
+        "images": {
+          "aries-bridge": "ghcr.io/hyscale-lab/aries-bridge"
+        },
+        "node_selector": {
+          "loader-nodetype": "worker"
+        }
+      }
+    },
+    "type": "hermes-grpc",
+    "mode": "managed"
+  },
+  "runtime": {
+    "backend": "deepseek",
+    "mode": "external"
+  },
+  "model": {
+    "base_url": "https://api.deepseek.com",
+    "api_key_env": "DEEPSEEK_API_KEY",
+    "id": "deepseek-flash",
+    "reasoning_effort": "low"
+  },
+  "output_dir": "runs"
+}

@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -677,22 +678,14 @@ func validateExecUser(value string) error {
 		return nil
 	}
 	uid, gid, found := strings.Cut(value, ":")
-	if !found || strings.ContainsRune(gid, ':') || !decimalDigits(uid) || !decimalDigits(gid) {
+	// Each ID must fit uint32: a larger one wraps, and a file write can then
+	// give the file to root.
+	_, uidErr := strconv.ParseUint(uid, 10, 32)
+	_, gidErr := strconv.ParseUint(gid, 10, 32)
+	if !found || uidErr != nil || gidErr != nil {
 		return errors.New("exec user must be a numeric UID:GID pair")
 	}
 	return nil
-}
-
-func decimalDigits(value string) bool {
-	if value == "" {
-		return false
-	}
-	for _, character := range value {
-		if character < '0' || character > '9' {
-			return false
-		}
-	}
-	return true
 }
 
 func cleanContainerPath(path string) (string, error) {

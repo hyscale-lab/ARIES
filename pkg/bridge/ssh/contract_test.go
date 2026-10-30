@@ -20,6 +20,7 @@ import (
 	"github.com/hyscale-lab/aries/pkg/bridge/ssh/internal/testfixture"
 	"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw"
 	sshclient "github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw/client"
+	"github.com/hyscale-lab/aries/pkg/bridge/target"
 	"github.com/hyscale-lab/aries/pkg/core"
 	gossh "golang.org/x/crypto/ssh"
 )
@@ -36,9 +37,10 @@ var nativeCases = []nativeCase{
 }
 
 type contractExecutor struct {
-	mu    sync.Mutex
-	calls []core.Command
-	input []byte
+	target.Executor // file operations are unused by SSH
+	mu              sync.Mutex
+	calls           []core.Command
+	input           []byte
 }
 
 func (*contractExecutor) ContainerID() string   { return "container" }

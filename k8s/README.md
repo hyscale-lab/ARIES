@@ -74,8 +74,9 @@ The script:
    Without it, setup stops at that step;
 2. copies the committed `k8s/` tree to the master and runs `apply-aries.sh`
    there;
-3. builds `bin/aries` and `bin/aries-ssh-client` for the loader node and stages
-   them with `profiles/`, `configs/` and a namespaced kubeconfig under `~/aries`.
+3. builds `bin/aries` and `bin/aries-ssh-client` for the
+   loader node and stages them with `profiles/`, `configs/` and a namespaced
+   kubeconfig under `~/aries`.
 
 | Option | Effect |
 | --- | --- |
@@ -179,8 +180,10 @@ and pushes them under the tags ARIES requests:
   installs. The script needs no cluster access. For a cluster on another
   version, add `K8S_IMAGES_FLAGS="--kube-version <version>"` with the version
   `apply-aries.sh` printed.
-- **`<registry>/aries-hermes`** is the pinned upstream Hermes image plus
-  `hermes-otel`, the same image `aries setup` builds for Docker.
+- **`<registry>/aries-hermes`** is the ARIES Hermes image. It contains the
+  pinned upstream Hermes image, `hermes-otel`, the ARIES Hermes plugin,
+  pinned `grpcio`, and the file-tool seam patch. The same recipe builds the
+  Docker image for both Hermes transports.
 
 It ends by printing the `images` entries for the profile. `--only bridge` or
 `--only hermes` builds one image, `--platform linux/arm64` targets arm64 nodes,

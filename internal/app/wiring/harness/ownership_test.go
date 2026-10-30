@@ -33,6 +33,7 @@ func TestHarnessConstructionOwnsDeployment(t *testing.T) {
 					cfg := config.Config{}
 					cfg.Versions.Hermes.Image = "test/hermes:v1"
 					cfg.Versions.Hermes.OTelPlugin = config.HermesOTelPluginVersions{RepositoryURL: "https://example.invalid/hermes-otel", Version: "1.0.0", Revision: "0123456789abcdef0123456789abcdef01234567"}
+					cfg.Versions.Hermes.GRPCIO = "1.81.1"
 					cfg.Versions.OpenClaw.Image = "test/openclaw:v1"
 					switch failure {
 					case "invalid MCP":

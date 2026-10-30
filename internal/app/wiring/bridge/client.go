@@ -2,25 +2,27 @@ package bridge
 
 import (
 	"errors"
+	"path/filepath"
 
 	managed "github.com/hyscale-lab/aries/pkg/bridge"
 )
 
-// SSHClientConfig selects the harness-side SSH setup. Native dialects only own
+// ClientConfig selects the harness-side client setup. Native servers only own
 // command and workspace semantics; the controller stages these explicit inputs.
-func SSHClientConfig(bridgeType, helperPath string) (managed.ClientConfig, error) {
+// A staged helper is taken from helperDir under its container command's name.
+func ClientConfig(bridgeType, helperDir string) (managed.ClientConfig, error) {
 	client := managed.ClientConfig{}
 	switch bridgeType {
-	case "hermes-ssh":
+	case "hermes-ssh", "hermes-grpc":
 		return client, nil
 	case "openclaw-ssh":
-		if helperPath == "" {
-			return client, errors.New("OpenClaw bridge requires local client helper")
-		}
 		client.Command = "/opt/aries/bin/aries-ssh-client"
-		client.SourcePath = helperPath
-		return client, nil
 	default:
-		return client, errors.New("unsupported SSH harness bridge")
+		return client, errors.New("unsupported harness bridge")
 	}
+	if helperDir == "" {
+		return managed.ClientConfig{}, errors.New("bridge requires local client helper")
+	}
+	client.SourcePath = filepath.Join(helperDir, filepath.Base(client.Command))
+	return client, nil
 }

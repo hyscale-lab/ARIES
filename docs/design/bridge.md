@@ -6,19 +6,63 @@ ownership of the sandbox. The implementation builds on baseline
 `ec941cbece53df3022946a8502dab3f938f4e5ca`; this page describes the current shared
 service, not the topology at that earlier revision.
 
+## Terms
+
+- **Tool bridge.** The run-shared machinery that gives one harness temporary,
+  narrow access to one sandbox and revokes it before evaluation. It is the same
+  for every transport. _Avoid_: bridge process, per-task bridge.
+- **Control plane.** The Runner-to-bridge API that registers, inspects and
+  releases a sandbox. "gRPC bridge" meant both the control plane and the gRPC
+  transport: the control plane uses gRPC internally; "gRPC" alone names the
+  transport. _Avoid_: bridge gRPC (gRPC is also a transport).
+- **Transport.** The interchangeable wire between a harness and the tool bridge
+  for tool calls: SSH or gRPC. One transport serves a whole run. _Avoid_: route,
+  protocol (when the transport is meant).
+- **Dialect.** The command grammar one harness speaks for tool calls over SSH.
+  The gRPC transport has typed calls and no dialect. _Avoid_: wire grammar.
+- **Tool call.** One model-level tool invocation by the agent harness, such as
+  a Hermes `read_file`.
+- **Sandbox call.** One operation the tool bridge carries into the sandbox: an
+  exec, a stat, a read or a write. One tool call gives one or more sandbox
+  calls.
+- **Tool-call record.** One structured line of `tool-calls.jsonl` per sandbox
+  call. A gRPC record also has an _E2B operation class_.
+- **E2B operation class.** The operation class of a gRPC tool-call record:
+  `exec`, `stat`, `read` or `write`. Each one maps to one E2B envd call. It is
+  a label, not E2B wire or log compatibility. _Avoid_: E2B-compatible log.
+- **ARIES Hermes image.** The Hermes image that ARIES builds from the pinned
+  upstream image. It adds `hermes-otel`, the ARIES Hermes plugin, the Hermes
+  seam patch, and the gRPC Python runtime. One image serves both Hermes
+  transports.
+- **ARIES Hermes plugin.** The Hermes terminal backend that carries tool calls
+  to the gRPC transport in the Hermes process.
+- **Raw log.** The opt-in, private record of request bytes for one transport
+  (`<transport>_raw.log`). It keeps commands, stdin and written content, never
+  output or read content. It is lossless up to 16 MiB per input. A gRPC
+  `WriteFile` above that bound keeps only its byte count and sha256.
+
+Relationships:
+
+- A **Run** has exactly one **Tool bridge** and exactly one **Transport**.
+- A **Tool bridge** registers many sandboxes over the **Control plane**, one per
+  task.
+- A **Harness** speaks one **Dialect** over SSH, or typed calls over gRPC.
+- A **Transport** writes **Tool-call records** and, when the profile opts in, a
+  **Raw log**.
+
 ## Operations and ownership
 
 Runner still composes four roles. Its [ToolBridge interface](../../pkg/runner/interfaces.go)
 is a sandbox session hosted by a run-owned [Service](../../pkg/bridge/service.go).
 There is one bridge container and one shared Docker network per run. Every live
-sandbox gets an independent SSH listener, execution target, and evidence recorder.
+sandbox gets an independent listener, execution target, and evidence recorder.
 The bridge remains available while other tasks finish or later tasks arrive.
 
 | Owner | Responsibility |
 | --- | --- |
 | Application run | Start shared connectivity and bridge after model preflight; stop them after task cleanup; persist infrastructure outcomes. |
 | Runner / ToolSandbox | Create, prepare, evaluate, and remove live and fresh evaluation sandboxes. |
-| Bridge service | Own its runtime, control connection, one in-memory SSH host key, and session admission. |
+| Bridge service | Own its runtime, control connection, session admission, and, for SSH, one in-memory host key. |
 | ToolBridge session | Register one exact sandbox, expose its listener, release access, and collect finalized evidence. |
 
 `Start(ctx, sandbox)` returns a resolved `core.ToolEndpoint`. `Stop(ctx)` closes
@@ -49,21 +93,69 @@ reconcile the same ID; tool commands are never replayed automatically.
 The provider validates the actual runtime identity and ownership before execution.
 
 Control is plaintext, unauthenticated gRPC in the trusted research environment.
-SSH also accepts clients without authentication. One in-memory service host key
-satisfies SSH's handshake and is shared across listeners. ARIES stages no SSH
-client keys or known-hosts files and performs no host-key pinning. These choices
-do not remove exact sandbox binding, verifier isolation, or resource ownership.
+Both transports also accept clients without authentication. One in-memory
+service host key satisfies SSH's handshake and is shared across listeners.
+ARIES stages no SSH client keys or known-hosts files and performs no host-key
+pinning. The gRPC transport is plaintext and has no client credentials. These
+choices do not remove exact sandbox binding, verifier isolation, or resource ownership.
 
-The child's [NativeServer](../../pkg/bridge/bridge.go) receives a borrowed streaming
-executor, with no sandbox lifecycle authority. Shared SSH code owns serving,
-streams, cancellation and recording; OpenClaw and Hermes dialects own grammar,
-workspace adaptation and refusal policy. The thin `aries-ssh-client` forwards
-OpenClaw's command bytes without interpreting server grammar. Wiring supplies
-native factories and optional client staging. OpenClaw's concrete server prepares
-its workspace alias before starting the shared SSH manager; the alias remains
-sandbox-owned through evaluation and disappears with sandbox removal. Native
-cwd-validation arguments are mapped to the task root, while shell bodies pass
-through unchanged. See [SSH bridges](../implementation/ssh-bridges.md).
+The child's [NativeServer](../../pkg/bridge/bridge.go) receives a borrowed
+executor, with no sandbox lifecycle authority. The executor runs streaming
+commands and gives typed file stat, read, and write in the bound runtime
+([target](../../pkg/bridge/target/target.go)). Wiring supplies
+native factories and optional client staging.
+
+## Transports
+
+A transport is the wire between a harness and the tool bridge for tool calls.
+One transport serves a whole run. `bridge.type` selects it in
+[child wiring](../../internal/app/wiring/bridge/child.go):
+`openclaw-ssh` and `hermes-ssh` select SSH, and `hermes-grpc` selects gRPC
+([`transportOf`](../../pkg/bridge/launch.go)). The run service rejects a
+registered endpoint whose transport is not the run's transport, and gives the
+harness an endpoint with that transport as its protocol
+([session](../../pkg/bridge/session.go)).
+
+- **SSH.** Shared SSH code owns serving, streams, cancellation and recording;
+  OpenClaw and Hermes dialects own grammar, workspace adaptation and refusal
+  policy. A dialect is the command grammar of one harness, so it exists only
+  on SSH. The thin `aries-ssh-client` forwards OpenClaw's command bytes without
+  interpreting server grammar. OpenClaw's concrete server prepares its workspace
+  alias before starting the shared SSH manager; the alias remains sandbox-owned
+  through evaluation and disappears with sandbox removal. Native cwd-validation
+  arguments are mapped to the task root, while shell bodies pass through
+  unchanged. See [SSH bridges](../implementation/ssh-bridges.md).
+- **gRPC.** The `aries.sandbox.v1` service has typed calls and no dialect:
+  `Exec` carries a script, stdin, and a login flag, and four file procedures
+  carry a path and bytes. The ARIES Hermes plugin calls the gRPC transport
+  in the Hermes process. See
+  [gRPC bridge](../implementation/grpc-bridge.md) and
+  [Hermes over gRPC](../implementation/harnesses.md#hermes-over-grpc). For the
+  E2B origin of its typed calls and a comparison, see
+  [Origin](../implementation/grpc-bridge.md#origin) and
+  [Comparison with E2B](../implementation/grpc-bridge.md#comparison-with-e2b).
+
+Both transports write the same tool-call record rules to `tool-calls.jsonl`
+(see [evidence](#evidence-and-substitution)), and each writes its optional raw
+log as `<transport>_raw.log`: `ssh_raw.log` or `grpc_raw.log`. The security
+posture is the same for both: plaintext, no client authentication, and one
+shared run network. The gRPC transport adds no isolation that SSH does not have.
+
+The typed file operations of the gRPC transport use the Docker archive API
+([Docker files](../../pkg/deployment/docker/files.go)), or short shell scripts
+over `kubectl exec` on Kubernetes
+([Kubernetes files](../../pkg/deployment/kubernetes/files.go)). A write acts as
+the user of the agent's shell: the sandbox's exec user, or the image `USER`
+when no exec user is set. That user creates the missing parents, passes the
+access check, and renames a temporary file into place. New files and parents
+get that user as owner. Thus a typed write reaches only what the agent's own
+shell can write, as on SSH.
+
+Typed reads (stat and read) act as the Docker daemon, that is as root, or on
+Kubernetes as the container user, which is root on every current benchmark
+image. A file read can thus see files that the agent's own shell cannot read.
+This weakness is lower: a read changes nothing in the sandbox, and verifier
+material arrives only after revocation.
 
 ## Lifecycle, cancellation, and failure
 
@@ -92,22 +184,27 @@ task counts. Later removal does not erase earlier evidence or cleanup failures.
 
 ## Evidence and substitution
 
-Recording occurs once at the shared SSH execution boundary. Each session owns
-`tool-calls.jsonl` and optional `ssh_raw.log`, with `sandbox_id` and a local
-sequence. Registration metadata relates the sandbox to its run and task.
+Recording occurs once at each transport's execution boundary, through one
+shared [audit writer](../../pkg/bridge/internal/bridgekit/audit.go).
+Each session owns `tool-calls.jsonl` and an optional `<transport>_raw.log`, with
+`sandbox_id` and a local sequence. Registration metadata relates the sandbox
+to its run and task.
 Release finalizes an artifact manifest; collection validates it before publishing
 private task evidence. Missing finalized evidence after a child crash remains an
 error. See [bridge evidence](../run-results.md#bridge-evidence).
 
 Structured calls record command semantics, status, timing and output byte counts;
-they do not contain stdout/stderr bodies. Raw wire input may contain sensitive
-task data and stays private. Model credentials do not belong in these records.
+they do not contain stdout/stderr bodies or read file content. Printable UTF-8
+input stays inline, binary input becomes a `binary-omitted` marker, and no
+record holds base64. Raw wire input may contain sensitive task data and stays
+private. Model credentials do not belong in these records.
 Shared runtime measurements are recorded once under run infrastructure, while
 each task retains its own harness/sandbox observations.
 
-Another bridge protocol can reuse service/session ownership and borrowed execution.
-Endpoint handoff and a stable sandbox identity simplify that extension, but do
+The gRPC transport reuses service/session ownership and borrowed execution.
+Endpoint handoff and a stable sandbox identity simplify such extensions, but do
 not provide E2B wire compatibility. Snapshot, restore, suspend, other providers,
-and mixed protocols are unimplemented. Additional providers must satisfy explicit
-execution, staging, addressing, cancellation and confirmed cleanup contracts;
+mixed transports in one run, and OpenClaw over gRPC are unimplemented.
+Additional providers must satisfy explicit execution, staging, addressing,
+cancellation and confirmed cleanup contracts;
 see [current deployment limits](deployment.md#substitution-and-current-limits).

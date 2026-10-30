@@ -200,16 +200,24 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		return fmt.Errorf("Hermes %w", err)
 	}
 
+	grpcTarget := ""
+	if request.Endpoint.Protocol == "grpc" {
+		grpcTarget = request.Endpoint.Address
+	}
 	configuration, err := renderConfig(request.Model, renderSettings{
 		maxTurns: manager.options.MaxTurns, webSearchEnabled: manager.options.Common.WebSearchEnabled, extractEnabled: extractEnabled,
 		subagentsEnabled: manager.options.Common.SubagentsEnabled, maxConcurrentSubagents: manager.options.Common.MaxConcurrentSubagents,
 		compaction: manager.options.Compaction, extraBody: manager.options.ExtraBody, mcpServers: mcpServers,
-		noSandboxTools: request.NoSandboxTools,
+		noSandboxTools: request.NoSandboxTools, grpcTarget: grpcTarget,
 	}, voiceSTT)
 	if err != nil {
 		return err
 	}
-	terminal, err := renderTerminal(request.Endpoint.Workdir, manager.options.TerminalTimeout)
+	backend := "ssh"
+	if request.Endpoint.Protocol == "grpc" {
+		backend = "aries"
+	}
+	terminal, err := renderTerminal(backend, request.Endpoint.Workdir, manager.options.TerminalTimeout)
 	if err != nil {
 		return err
 	}

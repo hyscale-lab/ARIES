@@ -2,8 +2,11 @@ package bridge
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	managed "github.com/hyscale-lab/aries/pkg/bridge"
+	grpcbridge "github.com/hyscale-lab/aries/pkg/bridge/grpc"
 	sshbridge "github.com/hyscale-lab/aries/pkg/bridge/ssh"
 	"github.com/hyscale-lab/aries/pkg/bridge/ssh/hermes"
 	"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw"
@@ -41,7 +44,25 @@ func ServeChild(ctx context.Context, c managed.LaunchConfig, logger *logrus.Logg
 		return errors.New("unsupported bridge execution backend")
 	}
 	defer closeBackend()
-	return managed.Serve(ctx, managed.ServeOptions{Config: c, Backend: backend, NewNative: func(signer ssh.Signer, sandboxID, outputDir string) (managed.NativeServer, error) {
+	native, err := newNative(c, logger)
+	if err != nil {
+		return err
+	}
+	return managed.Serve(ctx, managed.ServeOptions{Config: c, Backend: backend, NewNative: native})
+}
+
+// newNative makes one host key per child process: every SSH listener of the
+// run presents it.
+func newNative(c managed.LaunchConfig, logger *logrus.Logger) (func(string, string) (managed.NativeServer, error), error) {
+	_, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	signer, err := ssh.NewSignerFromKey(key)
+	if err != nil {
+		return nil, err
+	}
+	return func(sandboxID, outputDir string) (managed.NativeServer, error) {
 		options := sshbridge.Options{HostSigner: signer, SandboxID: sandboxID, ResolveListen: func(context.Context) (core.BridgeListen, error) { return c.Listen, nil }, OutputDir: outputDir, Logger: logger, OmitRawLog: !c.RetainRawLog}
 		switch c.BridgeType {
 		case "hermes-ssh":
@@ -49,12 +70,20 @@ func ServeChild(ctx context.Context, c managed.LaunchConfig, logger *logrus.Logg
 			return sshbridge.New(options)
 		case "openclaw-ssh":
 			return openclaw.New(options)
+		case "hermes-grpc":
+			return grpcbridge.New(grpcbridge.Options{SandboxID: sandboxID, ResolveListen: options.ResolveListen, OutputDir: outputDir, Logger: logger, OmitRawLog: options.OmitRawLog})
 		default:
 			return nil, errors.New("unsupported bridge protocol")
 		}
-	}})
+	}, nil
 }
 
 var _ managed.NativeServer = (*sshbridge.Manager)(nil)
 
 var _ managed.NativeServer = (*openclaw.Server)(nil)
+
+var _ managed.NativeServer = (*grpcbridge.Manager)(nil)
+
+var _ target.Backend = (*docker.Manager)(nil)
+
+var _ target.Backend = (*kubernetes.Manager)(nil)

@@ -11,10 +11,17 @@ import (
 	"syscall"
 )
 
-const maxPrivateFileBytes = 16 << 20
+// MaxPrivateFileBytes bounds every credential and artifact that Read accepts.
+const MaxPrivateFileBytes = 16 << 20
 
 // Read rejects symlinks and files that change, exceed the bound, or have unsafe modes.
 func Read(path string, mode os.FileMode) ([]byte, error) {
+	return ReadBounded(path, mode, MaxPrivateFileBytes)
+}
+
+// ReadBounded is Read with an explicit size limit, for a staged binary that is
+// larger than any credential.
+func ReadBounded(path string, mode os.FileMode, limit int64) ([]byte, error) {
 	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, err
@@ -25,11 +32,11 @@ func Read(path string, mode os.FileMode) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !before.Mode().IsRegular() || before.Mode().Perm() != mode || before.Size() < 1 || before.Size() > maxPrivateFileBytes {
+	if !before.Mode().IsRegular() || before.Mode().Perm() != mode || before.Size() < 1 || before.Size() > limit {
 		return nil, errors.New("private source is not one bounded regular file with the required mode")
 	}
-	content, err := io.ReadAll(io.LimitReader(file, maxPrivateFileBytes+1))
-	if err != nil || len(content) > maxPrivateFileBytes {
+	content, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil || int64(len(content)) > limit {
 		return nil, errors.New("read private source within bound")
 	}
 	after, err := file.Stat()

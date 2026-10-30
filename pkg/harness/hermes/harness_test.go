@@ -9,11 +9,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -351,6 +353,94 @@ func TestStartStagesPrivateRuntimeAndPinsGatewayService(t *testing.T) {
 	for name, header := range entries {
 		if header.Uid != runtimeUID || header.Gid != runtimeGID {
 			t.Fatalf("%s owned by %d:%d, want %d:%d", name, header.Uid, header.Gid, runtimeUID, runtimeGID)
+		}
+	}
+}
+
+// The SSH archive must not change with the gRPC support: no client, plugin or
+// seam, and the same layout as before.
+func TestStartStagesTheSameArchiveForSSH(t *testing.T) {
+	fake := newFakeDeployment(t)
+	manager := newTestManager(t, fake, []byte("model-secret"))
+	if err := manager.Start(context.Background(), testRequest(t)); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop(context.Background())
+	want := map[string]int64{
+		"run/aries":                    0o700,
+		"run/aries/hermes":             0o700,
+		"run/aries/ssh":                0o700,
+		"run/aries/workspace":          0o755,
+		"run/aries/hermes/config.yaml": 0o600,
+		"run/aries/hermes/model.key":   0o600,
+		"run/aries/gateway.key":        0o600,
+		"run/aries/run-gateway":        0o555,
+	}
+	entries := archiveEntries(t, fake.archive)
+	if len(entries) != len(want) {
+		t.Fatalf("SSH archive entries = %v", slices.Sorted(maps.Keys(entries)))
+	}
+	for name, mode := range want {
+		if header, ok := entries[name]; !ok || header.Mode != mode {
+			t.Fatalf("SSH archive entry %s = %+v, want mode %o", name, header, mode)
+		}
+	}
+}
+
+// The gRPC route stages credentials and runtime configuration, not the plugin
+// or a client. Both are part of the ARIES Hermes image.
+func TestStartDoesNotStageTheGRPCClient(t *testing.T) {
+	fake := newFakeDeployment(t)
+	manager := newTestManager(t, fake, []byte("model-secret"))
+	request := testRequest(t)
+	request.Endpoint = core.ToolEndpoint{Protocol: "grpc", Address: "172.22.0.1:39425", Username: "aries", Workdir: "/app"}
+	if err := manager.Start(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop(context.Background())
+
+	want := map[string]int64{
+		"run/aries":                    0o700,
+		"run/aries/hermes":             0o700,
+		"run/aries/ssh":                0o700,
+		"run/aries/workspace":          0o755,
+		"run/aries/hermes/config.yaml": 0o600,
+		"run/aries/hermes/model.key":   0o600,
+		"run/aries/gateway.key":        0o600,
+		"run/aries/run-gateway":        0o555,
+	}
+	entries := archiveEntries(t, fake.archive)
+	if len(entries) != len(want) {
+		t.Fatalf("gRPC archive entries = %v", slices.Sorted(maps.Keys(entries)))
+	}
+	for name, mode := range want {
+		header, ok := entries[name]
+		if !ok || header.Mode != mode || header.Uid != runtimeUID || header.Gid != runtimeGID {
+			t.Fatalf("gRPC archive entry %s = %+v, want mode %o owned by %d", name, header, mode, runtimeUID)
+		}
+	}
+	contents := archiveContents(t, fake.archive)
+	if launcher := string(contents["run/aries/run-gateway"]); strings.Contains(launcher, "seam") {
+		t.Fatalf("gRPC launcher still applies the seam:\n%s", launcher)
+	}
+	retained, err := os.ReadFile(filepath.Join(manager.runtime.Options.OutputDir, request.TaskID, "harness", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := decodeConfigYAML(t, retained)
+	if backend := config["terminal"].(map[string]any)["backend"]; backend != "aries" {
+		t.Fatalf("terminal backend = %#v", backend)
+	}
+	if enabled := config["plugins"].(map[string]any)["enabled"]; !reflect.DeepEqual(enabled, []any{otelPluginName, "aries"}) {
+		t.Fatalf("enabled plugins = %#v", enabled)
+	}
+	wantEntry := map[string]any{"aries": map[string]any{"settings": map[string]any{"grpc_target": request.Endpoint.Address}}}
+	if got := config["plugins"].(map[string]any)["entries"]; !reflect.DeepEqual(got, wantEntry) {
+		t.Fatalf("plugin entries = %#v, want %#v", got, wantEntry)
+	}
+	for _, entry := range fake.created.Env {
+		if strings.HasPrefix(entry, "ARIES_GRPC_TARGET=") {
+			t.Fatalf("gRPC target in container environment: %v", fake.created.Env)
 		}
 	}
 }

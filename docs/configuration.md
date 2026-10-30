@@ -111,7 +111,9 @@ Checked-in profiles select harness identity and placement separately:
 
 This is a profile fragment; keep the benchmark, model, runtime, and other
 settings from a complete checked-in profile. OpenClaw uses `harness.type:
-"openclaw"` with `bridge.type: "openclaw-ssh"`. Pairing is checked independently
+"openclaw"` with `bridge.type: "openclaw-ssh"`. Hermes uses `hermes-ssh` or
+`hermes-grpc`; the bridge type also selects the run's
+[transport](design/bridge.md#transports). Pairing is checked independently
 of placement.
 
 The separate blocks express independent component placement, so the schema does
@@ -144,16 +146,19 @@ supplies the required Docker socket mount explicitly; component labels do not
 grant access. The harness and sandbox never receive that socket. The bridge has daemon authority
 like Runner, even though each session's execution adapter validates one fixed target.
 
-The bridge runtime runs `aries-bridge` from the same build as `aries-ssh-client`.
-`make build` produces both alongside Runner. `make bridge-image` builds the Docker
-image containing only `aries-bridge`, using `bridge.image` and `bridge.base_image`
-from the version catalog. Runner stages the separate `aries-ssh-client` binary
-directly into the OpenClaw harness; the bridge container does not need that client.
+The bridge runtime runs `aries-bridge` from the same build as
+`aries-ssh-client`. `make build` produces `bin/aries`, `bin/aries-bridge`,
+and `bin/aries-ssh-client`. `make bridge-image` builds the Docker image
+containing only `aries-bridge`, using `bridge.image` and `bridge.base_image`
+from the version catalog. Runner stages `aries-ssh-client` into the OpenClaw
+harness. Hermes uses the ARIES Hermes image for both SSH and gRPC; its gRPC
+plugin is built into that image. The bridge container needs no SSH client.
 For the Kubernetes backend, `make k8s-images` builds the bridge on
 `bridge.kubernetes_base_image` instead, which supplies `kubectl`; bump it with
 the Kubernetes version the pinned Invitro installs.
 Image preparation uses the selected daemon. Checked-in Docker bridge examples
-include [Hermes](../profiles/hermes-tb2-fix-git-deepseek.json) and
+include [Hermes](../profiles/hermes-tb2-fix-git-deepseek.json),
+[Hermes over gRPC](../profiles/hermes-tb2-fix-git-grpc-deepseek.json), and
 [OpenClaw](../profiles/openclaw-tb2-fix-git-deepseek.json).
 
 ### Kubernetes deployment
@@ -206,15 +211,17 @@ sandbox gets its own NetworkPolicy and the effective run policy is
 as SWE-bench Pro, must start as root and provide `setpriv` from `util-linux`;
 the upstream SWE-bench Pro images already do, so it needs no extra step.
 Checked-in examples are
-[Hermes](../profiles/kubernetes/hermes-tb2-fix-git-deepseek-k8s-pods.json) and
+[Hermes](../profiles/kubernetes/hermes-tb2-fix-git-deepseek-k8s-pods.json),
+[Hermes over gRPC](../profiles/kubernetes/hermes-tb2-fix-git-grpc-deepseek-k8s-pods.json), and
 [OpenClaw](../profiles/kubernetes/openclaw-tb2-fix-git-deepseek-k8s-pods.json). See the
 [Kubernetes implementation](implementation/kubernetes.md) for its constraints
 and [`k8s/`](../k8s/README.md) for cluster setup.
 
 Bridge addresses come from deployment resolution, not profile fields. Plaintext,
-unauthenticated gRPC control and harness-facing SSH use separate endpoints.
-Control has no TLS certificates or bearer tokens. SSH accepts unauthenticated
-clients, retaining one in-memory service host key for the handshake. No SSH client
+unauthenticated gRPC control and the harness-facing transport (SSH or gRPC)
+use separate endpoints. Control has no TLS certificates or bearer tokens. Both
+transports accept unauthenticated clients. SSH retains one in-memory service
+host key for the handshake. No SSH client
 keys or known-hosts files are staged. The shared service creates a dynamic listener
 per sandbox and deployment resolves its harness-reachable endpoint. Runner
 explicitly releases each sandbox session; run cleanup removes the service.
@@ -227,14 +234,16 @@ Running a profile automatically loads `configs/versions.json`, creates or
 verifies the pinned Terminal-Bench checkout at `.cache/terminal-bench-2-1`, reads
 each selected task's explicit Docker image tag from its `task.toml`, and pulls
 only the configured harness image plus those selected images through the
-Docker Go SDK for Docker placement. For Hermes it then builds, once, the local image that adds the
-`hermes-otel` plugin pinned by `hermes.otel_plugin`. Preparation
+Docker Go SDK for Docker placement. For Hermes it then builds the ARIES
+Hermes image once. The image adds the pinned `hermes-otel` plugin, the ARIES
+Hermes plugin, the seam patch, and the pinned `hermes.grpcio` Python runtime.
+Preparation
 happens before the run directory is created, a managed runtime is started,
 model weights load, an external endpoint is contacted, or task work is
 admitted. The Terminal-Bench Git revision and exact tag-pinned OpenClaw image
-remain in `configs/versions.json`, alongside the tag-pinned Hermes image and
-the `hermes-otel` plugin's repository, release, and 40-character revision; task
-image digests are not duplicated there.
+remain in `configs/versions.json`, alongside the pinned Hermes image,
+`hermes.otel_plugin` (repository, release, and 40-character revision), and
+`hermes.grpcio` (`1.81.1`). Task image digests are not duplicated there.
 Preparation is safe to repeat and refuses to replace a checkout at another
 revision.
 
@@ -667,15 +676,36 @@ The Hermes profile is the same run with a different harness, so it needs the
 ./bin/aries profiles/hermes-tb2-fix-git-deepseek.json
 ```
 
-Hermes supports text and [voice-transcribe](voice_mode.md). Preparation builds
-a local image from the pinned upstream one with only the `hermes-otel` plugin
-added, once per machine (the first build needs GitHub and PyPI access and takes
-about 20 seconds), and Hermes runs it. It is paired
-with `bridge.type: "hermes-ssh"`; the two values must match, and a crossed pair
-is rejected before the run starts. Hermes issues every tool call as `bash -c`,
-so the task image must provide `/bin/bash`. Its `~/.hermes` file sync is refused by
+Hermes supports text and [voice-transcribe](voice_mode.md). For Docker,
+preparation builds the ARIES Hermes image from the pinned upstream image, with
+`hermes-otel`, the ARIES Hermes plugin, pinned `grpcio`, and the file-tool
+seam. The first build needs GitHub and PyPI access. Hermes older than 0.21
+fails the image build. For Kubernetes, publish the same recipe before a run;
+[image publishing](../k8s/README.md#3-publish-the-images-the-cluster-pulls)
+builds and pushes it. The same image serves `hermes-ssh` and `hermes-grpc`.
+Hermes is paired
+with `bridge.type: "hermes-ssh"` or `"hermes-grpc"`; a crossed pair with
+OpenClaw is rejected before the run starts. Hermes issues every tool call as `bash -c`,
+so the task image must provide `/bin/bash`. On SSH, its `~/.hermes` file sync is refused by
 the bridge to keep the evaluated sandbox free of harness scaffold and
 credentials; Hermes logs one `file_sync: sync failed` warning and continues.
+On gRPC, Hermes uses the in-process ARIES Hermes plugin. The rendered
+`config.yaml` gives the plugin its bridge address at
+`plugins.entries.aries.settings.grpc_target`. The plugin syncs nothing; see
+[Hermes over gRPC](implementation/harnesses.md#hermes-over-grpc). The `-grpc`
+profiles are copies of Hermes SSH profiles with only `bridge.type` and `name`
+changed. The Terminal-Bench 2 one needs the same setup as above:
+
+```sh
+./bin/aries profiles/hermes-tb2-fix-git-grpc-deepseek.json
+```
+
+`hermes-sbpro-smoke1-grpc-deepseek.json` and `hermes-drb-smoke1-grpc-deepseek.json`
+need the setup of their benchmark guides:
+[SWE-bench Pro](benchmarks/swe-bench-pro.md) and
+[Deep Research Bench](benchmarks/deep-research-bench.md). The same three
+benchmarks have Kubernetes `-grpc` profiles in `profiles/kubernetes/`, beside
+the Hermes SSH ones.
 
 Hermes reserves environment names beginning with `API_SERVER_` for its Gateway.
 Do not use them as `model.api_key_env` or MCP `secret_env` source names. MCP
@@ -854,4 +884,5 @@ Changing the main agent's generation settings does not change FACT requests.
 - `harness.mcp_servers`: see [MCP configuration and boundaries](implementation/harnesses.md#model-context-protocol-mcp).
 - `harness.voice_transcribe`: see the [voice guide](voice_mode.md).
 - `bridge.retain_raw_log`: defaults to false. Enabling it retains sensitive,
-  replayable SSH input; see [run artifacts](run-results.md#bridge-evidence).
+  replayable tool-call input in `<transport>_raw.log` (`ssh_raw.log` or
+  `grpc_raw.log`); see [run artifacts](run-results.md#bridge-evidence).

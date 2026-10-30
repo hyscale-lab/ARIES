@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"github.com/hyscale-lab/aries/internal/testutil/dockerroute"
 	"io"
+	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
@@ -59,7 +60,7 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 	})
 
 	bridge := newIntegrationBridge(t, outputDir, logger, live.(*tasksandbox.Sandbox).Connectivity().Placement.AttachmentID)
-	endpoint, err := bridge.StartTarget(ctx, sandbox)
+	endpoint, err := bridge.StartTarget(ctx, sandboxTarget{sandbox})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +180,7 @@ func TestBridgeMapsVirtualWorkspaceToContainerRoot(t *testing.T) {
 	})
 
 	bridge := newIntegrationBridge(t, outputDir, logger, live.(*tasksandbox.Sandbox).Connectivity().Placement.AttachmentID)
-	endpoint, err := bridge.StartTarget(ctx, sandbox)
+	endpoint, err := bridge.StartTarget(ctx, sandboxTarget{sandbox})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +246,7 @@ func TestBridgeRunsConcurrentCallsWithoutAConvoy(t *testing.T) {
 	})
 
 	bridge := newIntegrationBridge(t, outputDir, logger, live.(*tasksandbox.Sandbox).Connectivity().Placement.AttachmentID)
-	endpoint, err := bridge.StartTarget(ctx, live.(*tasksandbox.Sandbox))
+	endpoint, err := bridge.StartTarget(ctx, sandboxTarget{live.(*tasksandbox.Sandbox)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,7 +452,7 @@ func TestBridgePreservesShellDataAndNativeCwdAsNonRoot(t *testing.T) {
 		t.Fatalf("fixture setup: %#v %v", setup, err)
 	}
 	bridge := newIntegrationBridge(t, outputDir, logger, sandbox.Connectivity().Placement.AttachmentID)
-	endpoint, err := bridge.StartTarget(ctx, sandbox)
+	endpoint, err := bridge.StartTarget(ctx, sandboxTarget{sandbox})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -509,4 +510,18 @@ func TestBridgePreservesShellDataAndNativeCwdAsNonRoot(t *testing.T) {
 	if err != nil || after.ExitCode != 0 {
 		t.Fatalf("candidate after revocation: %#v %v", after, err)
 	}
+}
+
+// sandboxTarget passes a task sandbox to an SSH bridge, which never uses file
+// operations.
+type sandboxTarget struct{ *tasksandbox.Sandbox }
+
+func (sandboxTarget) StatFile(context.Context, string) (fs.FileInfo, error) {
+	return nil, errors.ErrUnsupported
+}
+func (sandboxTarget) OpenFile(context.Context, string) (io.ReadCloser, fs.FileInfo, error) {
+	return nil, nil, errors.ErrUnsupported
+}
+func (sandboxTarget) WriteFile(context.Context, string, io.Reader, int64) (bool, error) {
+	return false, errors.ErrUnsupported
 }

@@ -17,6 +17,7 @@ task_dir="$run_dir/$task_id"
 cat "$task_dir/evaluation/reward.txt"
 cat "$task_dir/bridge/tool-calls.jsonl"
 test ! -f "$task_dir/bridge/ssh_raw.log" || cat "$task_dir/bridge/ssh_raw.log"
+test ! -f "$task_dir/bridge/grpc_raw.log" || cat "$task_dir/bridge/grpc_raw.log"
 cat "$task_dir/harness/openclaw.json"
 cat "$run_dir/infrastructure/bridge/monitor/index.json"
 cat "$run_dir/aries.log"
@@ -133,29 +134,53 @@ describes the Gateway differences relevant to comparisons.
 
 ## Bridge evidence
 
+The raw log is named after the run's transport: `bridge/ssh_raw.log` for SSH
+bridge types and `bridge/grpc_raw.log` for `hermes-grpc`.
 `bridge/ssh_raw.log` is an opt-in mode-0600 sensitive audit. It is written only
 when a profile sets `bridge.retain_raw_log` to `true`; an omitted or `false`
 value drops it, so the file is absent by default. When retained it contains
-lossless, human-readable text records between full-line
+human-readable text records between full-line
 `--- ARIES SSH CALL BEGIN ---` and `--- ARIES SSH CALL END ---` delimiters.
 Fixed-order `key=value` lines include the decoded wire command when available,
 exact payload and stdin byte counts, and escaped exact payload/stdin. Printable
 UTF-8 appears literally; backslash, newline, carriage return, tab, other
 controls, and invalid UTF-8 use explicit escapes. The file is neither JSON nor
-base64. It may contain exact wire-supplied values; keep the run directory
-private and do not publish this artifact without review.
+base64. Records are lossless up to 16 MiB per input. SSH stdin above that
+bound fails the command. It may contain exact wire-supplied values; keep the
+run directory private and do not publish this artifact without review.
+
+`bridge/grpc_raw.log` has the same opt-in, mode, escapes, and privacy rules.
+Its records are between `--- ARIES GRPC CALL BEGIN ---` and
+`--- ARIES GRPC CALL END ---`. They keep the `Exec` script and stdin and the
+`WriteFile` content, but only the path, byte count, and digest of a read. An
+`Exec` with stdin above 16 MiB is refused. A `WriteFile` above 16 MiB runs, but
+its record keeps only the byte count and sha256. See
+[gRPC evidence](implementation/grpc-bridge.md#evidence) for its fields.
 
 `bridge/tool-calls.jsonl` remains valid line-delimited JSON. Printable Unicode
 and HTML characters such as `&&`, `<`, and `>` appear literally, while quotes,
 backslashes, and newlines retain required JSON escaping. Printable stdin stays
 inline; binary or control-bearing stdin is replaced by a concise
 `binary-omitted` marker and exact byte count, with lossless bytes retained only
-in `ssh_raw.log`. Structured lifecycle logs and tool-call records continue to
-omit environment values and stdout/stderr bodies.
+in the raw log. Structured lifecycle logs and tool-call records continue to
+omit environment values and stdout/stderr bodies. Both transports use these
+rules. gRPC records also have `sha256`, `truncated`, and the read window fields
+`max_bytes`, `first_line`, `max_lines`, `max_line_bytes`, and `total_lines`, and
+keep written file content as `stdin`; see
+[gRPC evidence](implementation/grpc-bridge.md#evidence). The `operation_class`
+values differ by transport: gRPC uses the
+[E2B operation classes](implementation/grpc-bridge.md#e2b-operation-classes)
+`exec`, `stat`, `read`, and `write` (a label, not E2B compatibility), and SSH
+keeps the classes of its dialect. Only gRPC
+records can have `tool_call_id`, the id of the harness tool call that the
+sandbox call serves. It is absent when the id is not known.
 
 Both bridge logs identify the `sandbox_id` and a sequence number local to that
-sandbox's writer, with run/task and exact backend runtime metadata. One harness
-tool call may produce several SSH requests. Each session has its own listener
+sandbox's writer, with run/task and exact backend runtime metadata. In
+`tool-calls.jsonl`, `started_at` is the time the bridge started the call, and
+`timestamp` is the time it recorded the call after the call ended. A refused
+call has a `started_at` at the time of the refusal. One harness
+tool call may produce several SSH requests or gRPC calls. Each session has its own listener
 and logs even though the service container is shared. Releasing one sandbox
 closes its bridge access and finalizes its evidence without stopping the service
 or other sessions. `bridge/runtime.json` records that sandbox's binding;
@@ -176,8 +201,13 @@ bridge artifacts may contain task or model content; review them before sharing.
 
 - **Docker permission or socket error:** run `docker info` against the configured
   daemon. ARIES requires a local Unix socket; the default is `/var/run/docker.sock`.
-- **Missing `aries-ssh-client` error:** rebuild with `make build` and keep the helper
-  beside the main binary.
+- **Missing `aries-ssh-client` error on OpenClaw:** rebuild with `make build`
+  and keep `bin/aries-ssh-client` beside `bin/aries`.
+- **ARIES Hermes image build failure:** check the build output. The base image
+  must contain Hermes 0.21 or newer. A seam failure means its source no longer
+  has the anchors that `seam.py` expects. The image recipe applies the seam at
+  build time, before any task container starts. See
+  [Hermes over gRPC](implementation/harnesses.md#hermes-over-grpc).
 - **Credential error:** check ownership, owner read access, absence of group or
   world permissions, and one-line formatting of `DEEPSEEK_API.key`.
 - **Model error:** inspect `live-validation.json` for authentication, rate
@@ -211,9 +241,9 @@ bridge artifacts may contain task or model content; review them before sharing.
 - **Terminal-Bench revision mismatch:** move the stale checkout aside, then
   rerun the profile command (or the optional setup prewarm). ARIES never
   deletes it automatically.
-- **SSH timeout:** confirm the harness and bridge containers share the run
-  network and the harness can reach the bridge container's advertised SSH address
-  and port. SSH traffic uses that container address; control uses host loopback.
+- **SSH or gRPC timeout:** confirm the harness and bridge containers share the run
+  network and the harness can reach the bridge container's advertised address
+  and port. Tool traffic uses that container address; control uses host loopback.
 - **Suspected leak:** inspect `docker ps -a --filter label=aries.managed=true`
   and `docker network ls --filter label=aries.managed=true`.
 

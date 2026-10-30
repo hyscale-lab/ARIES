@@ -6,8 +6,10 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"math"
 	"net"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -272,7 +274,9 @@ func TestExecAcceptsAriesEnvironment(t *testing.T) {
 }
 
 func TestExecUserValidationRejectsNamesAndMalformedIDs(t *testing.T) {
-	for _, user := range []string{"root", "1000", "1000:", ":1000", "1:2:3", "-1:0", "1.0:2", " 1:2", "1:2 "} {
+	// An ID that does not fit uint32 must not wrap to root ownership.
+	tooLarge := strconv.FormatUint(math.MaxUint32+1, 10)
+	for _, user := range []string{"root", "1000", "1000:", ":1000", "1:2:3", "-1:0", "1.0:2", " 1:2", "1:2 ", tooLarge + ":0", "0:" + tooLarge} {
 		t.Run(user, func(t *testing.T) {
 			if err := validateCommand(core.Command{Path: "/bin/true", User: user}); err == nil {
 				t.Fatalf("validateCommand accepted exec user %q", user)

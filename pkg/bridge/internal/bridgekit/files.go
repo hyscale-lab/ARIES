@@ -1,12 +1,13 @@
-package ssh
+package bridgekit
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 )
 
-func ensurePrivateDirectory(path string) error {
+func EnsurePrivateDirectory(path string) error {
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		return err
 	}
@@ -22,4 +23,8 @@ func ensurePrivateDirectory(path string) error {
 		return errors.New("directory path contains a symbolic link")
 	}
 	return os.Chmod(path, 0o700)
+}
+
+func HasCancellationCause(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }

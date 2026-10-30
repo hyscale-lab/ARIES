@@ -89,10 +89,10 @@ implementations:
 
 | Role or service | Implementation |
 | --- | --- |
-| Agent harness | OpenClaw (text and realtime voice modes); Hermes (text) |
+| Agent harness | OpenClaw (text and realtime voice modes); Hermes (text and voice-transcribe modes, with an in-process gRPC plugin in the ARIES Hermes image) |
 | Benchmark | Terminal-Bench 2; Deep Research Bench; SWE-Atlas QA; the 731-task public SWE-bench Pro split; Toolathlon |
 | Tool sandbox | Shared Docker deployment through the Moby Go SDK; Kubernetes pods through `kubectl` |
-| Tool bridge | One managed SSH service per run, with OpenClaw or Hermes dialect and independent sandbox sessions |
+| Tool bridge | One managed service per run with independent sandbox sessions; SSH with an OpenClaw or Hermes dialect, or gRPC for Hermes |
 | Model service | External DeepSeek; external OpenAI-compatible servers such as vLLM; external or ARIES-managed SGLang |
 
 See [Supported implementations](docs/supported.md) for ownership,
@@ -114,6 +114,11 @@ the configured model service, and access to required image registries.
 make bridge-image
 ./bin/aries profiles/openclaw-tb2-fix-git-deepseek.json
 ```
+
+`make bridge-image` builds `bin/aries`, `bin/aries-bridge`, and
+`bin/aries-ssh-client`, then builds the bridge image. Keep
+`bin/aries-ssh-client` beside `bin/aries` for OpenClaw. Hermes uses the
+ARIES Hermes image for both SSH and its in-process gRPC plugin.
 
 Before a run, ARIES idempotently prepares the pinned benchmark checkout and
 required container images. `aries setup PROFILE.json` is available to prewarm
