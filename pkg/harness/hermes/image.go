@@ -45,7 +45,7 @@ RUN /opt/hermes/.venv/bin/python -c 'import sys; from importlib.metadata import 
     || { echo "ARIES needs Hermes 0.21 or newer" >&2; exit 1; }
 RUN uv pip install --python /opt/hermes/.venv/bin/python "$OTEL_PLUGIN" "grpcio==$GRPCIO" \
     && cp -r "$(/opt/hermes/.venv/bin/python -c 'import hermes_otel, os; print(os.path.dirname(hermes_otel.__file__))')" /opt/hermes/plugins/` + otelPluginName + `
-COPY plugin/plugin.yaml plugin/__init__.py /opt/hermes/plugins/aries/
+COPY plugin/ /opt/hermes/plugins/aries/
 COPY seam.py /tmp/aries-seam.py
 RUN /opt/hermes/.venv/bin/python /tmp/aries-seam.py /opt/hermes && rm /tmp/aries-seam.py
 `
@@ -54,9 +54,11 @@ RUN /opt/hermes/.venv/bin/python /tmp/aries-seam.py /opt/hermes && rm /tmp/aries
 // by context path.
 func ImageContext() map[string][]byte {
 	return map[string][]byte{
-		"plugin/plugin.yaml": pluginManifest,
-		"plugin/__init__.py": pluginModule,
-		"seam.py":            seamScript,
+		"plugin/plugin.yaml":         pluginManifest,
+		"plugin/__init__.py":         pluginModule,
+		"plugin/sandbox_pb2.py":      pluginSandboxPB,
+		"plugin/sandbox_pb2_grpc.py": pluginSandboxGRPC,
+		"seam.py":                    seamScript,
 	}
 }
 

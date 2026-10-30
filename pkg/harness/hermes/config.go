@@ -68,6 +68,10 @@ var (
 	pluginManifest []byte
 	//go:embed plugin/__init__.py
 	pluginModule []byte
+	//go:embed plugin/sandbox_pb2.py
+	pluginSandboxPB []byte
+	//go:embed plugin/sandbox_pb2_grpc.py
+	pluginSandboxGRPC []byte
 	//go:embed seam.py
 	seamScript []byte
 )
