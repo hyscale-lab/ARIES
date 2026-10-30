@@ -13,12 +13,10 @@ import (
 func ClientConfig(bridgeType, helperDir string) (managed.ClientConfig, error) {
 	client := managed.ClientConfig{}
 	switch bridgeType {
-	case "hermes-ssh":
+	case "hermes-ssh", "hermes-grpc":
 		return client, nil
 	case "openclaw-ssh":
 		client.Command = "/opt/aries/bin/aries-ssh-client"
-	case "hermes-grpc":
-		client.Command = "/opt/aries/bin/aries-grpc-client"
 	default:
 		return client, errors.New("unsupported harness bridge")
 	}

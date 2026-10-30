@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -21,6 +20,7 @@ import (
 	deploymentwiring "github.com/hyscale-lab/aries/internal/app/wiring/deployment"
 	"github.com/hyscale-lab/aries/internal/testutil/dockerroute"
 	managed "github.com/hyscale-lab/aries/pkg/bridge"
+	sandboxv1 "github.com/hyscale-lab/aries/pkg/bridge/grpc/v1"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
 	docker "github.com/hyscale-lab/aries/pkg/deployment/docker"
@@ -28,6 +28,8 @@ import (
 	tasksandbox "github.com/hyscale-lab/aries/pkg/sandbox"
 	"github.com/moby/moby/client"
 	"golang.org/x/crypto/ssh"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 const managedFixtureImage = "docker.io/library/debian:12-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241"
@@ -72,9 +74,7 @@ type managedFixture struct {
 	sandboxes      *tasksandbox.Manager
 	environment    *docker.RunEnvironment
 	protocol, root string
-	// client is the built helper the session stages; gRPC calls run it.
-	client string
-	ctx    context.Context
+	ctx            context.Context
 }
 
 func newManagedFixture(t *testing.T, protocol string) *managedFixture {
@@ -107,11 +107,11 @@ func newManagedFixture(t *testing.T, protocol string) *managedFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	helper := managedBinary(t, "aries-ssh-client", "ARIES_SSH_CLIENT")
-	if protocol == "hermes-grpc" {
-		helper = managedBinary(t, "aries-grpc-client", "ARIES_GRPC_CLIENT")
+	helperDir := ""
+	if protocol == "openclaw-ssh" {
+		helperDir = filepath.Dir(managedBinary(t, "aries-ssh-client", "ARIES_SSH_CLIENT"))
 	}
-	cc, err := bridgewiring.ClientConfig(protocol, filepath.Dir(helper))
+	cc, err := bridgewiring.ClientConfig(protocol, helperDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func newManagedFixture(t *testing.T, protocol string) *managedFixture {
 	if err = service.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	return &managedFixture{service: service, runtime: runtime, sandboxes: sandboxes, environment: env, protocol: protocol, root: root, client: helper, ctx: ctx}
+	return &managedFixture{service: service, runtime: runtime, sandboxes: sandboxes, environment: env, protocol: protocol, root: root, ctx: ctx}
 }
 
 type managedSession struct {
@@ -233,32 +233,21 @@ func (f *managedFixture) connect(t *testing.T, s *managedSession) (managedRun, s
 			return runManagedCommand(c, f.wire(script), input)
 		}, key
 	}
+	connection, err := grpc.NewClient(s.endpoint.Address, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithNoProxy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	client := sandboxv1.NewSandboxClient(connection)
 	return func(script string, input []byte) ([]byte, []byte, int, error) {
-		return runManagedClient(f.client, s.endpoint, script, input)
+		ctx, cancel := context.WithTimeout(f.ctx, time.Minute)
+		defer cancel()
+		response, err := client.Exec(ctx, &sandboxv1.ExecRequest{Script: script, Stdin: input})
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		return response.GetStdout(), response.GetStderr(), int(response.GetExitCode()), nil
 	}, ""
-}
-
-// runManagedClient runs the built gRPC client as the harness does. Every proxy
-// variable points at a port with no listener, so the call fails if the client
-// honours a proxy: the bridge address is not loopback, and Go proxies it.
-func runManagedClient(path string, e core.ToolEndpoint, script string, input []byte) ([]byte, []byte, int, error) {
-	command := exec.Command(path, "exec", "--", script)
-	command.Env = append(os.Environ(), "ARIES_GRPC_TARGET="+e.Address, "NO_PROXY=", "no_proxy=")
-	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
-		command.Env = append(command.Env, name+"=http://127.0.0.1:1")
-	}
-	var out, stderr bytes.Buffer
-	command.Stdin = bytes.NewReader(input)
-	command.Stdout = &out
-	command.Stderr = &stderr
-	err := command.Run()
-	code := 0
-	var exit *exec.ExitError
-	if errors.As(err, &exit) {
-		code = exit.ExitCode()
-		err = nil
-	}
-	return out.Bytes(), stderr.Bytes(), code, err
 }
 func TestManagedBridgeRuntimeMatrix(t *testing.T) {
 	for _, protocol := range []string{"hermes-ssh", "openclaw-ssh", "hermes-grpc"} {

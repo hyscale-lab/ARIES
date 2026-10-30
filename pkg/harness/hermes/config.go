@@ -29,10 +29,6 @@ const (
 	gatewayLauncherPath = stagedRoot + "/run-gateway"
 	workspaceRoot       = stagedRoot + "/workspace"
 
-	// The gRPC route stages the client that the ARIES Hermes plugin runs. The
-	// plugin and the seam are in the ARIES Hermes image (ImageDockerfile).
-	clientContainerFS = "/opt/aries/bin/aries-grpc-client"
-
 	// tavilyAPIKeyEnv is the in-container environment variable name Hermes's
 	// Tavily plugin reads. It is fixed by Hermes itself, unlike the profile's
 	// (host-side) HarnessWebSearchConfig.ExtractAPIKeyEnv lookup name.
@@ -491,17 +487,10 @@ func containerEnvironment(endpoint core.ToolEndpoint, workdir string, terminalTi
 // inside the container means no value ever appears in Docker's exec or
 // container config. extractEnabled additionally exports the Tavily key
 // staged at extractKeyPath, under Hermes's fixed tavilyAPIKeyEnv name.
-func gatewayLauncherScript(apiKeyEnv string, extractEnabled, grpc bool, mcpHostVars ...string) []byte {
+func gatewayLauncherScript(apiKeyEnv string, extractEnabled bool, mcpHostVars ...string) []byte {
 	script := `#!/bin/sh
 set -eu
 `
-	if grpc {
-		script += `if [ ! -x ` + clientContainerFS + ` ]; then
-  echo "ARIES: Hermes gRPC client is missing" >&2
-  exit 1
-fi
-`
-	}
 	script += `if [ ! -f ` + modelKeyPath + ` ]; then
   echo "ARIES: Hermes model key is missing" >&2
   exit 1
@@ -547,12 +536,8 @@ func validateModel(model core.ModelConfig) error {
 
 func validateEndpoint(endpoint core.ToolEndpoint) error {
 	if endpoint.Protocol == "grpc" {
-		// The bridge supplies the client, because Hermes has none for this
-		// transport. Its path is pinned so a mismatch between what the bridge
-		// advertises and what the harness stages fails here rather than at the
-		// first tool call.
-		if endpoint.Username != "aries" || endpoint.ClientCommand != clientContainerFS || endpoint.ClientSourceFile == "" {
-			return fmt.Errorf("Hermes requires a gRPC endpoint for user aries with its client staged at %s", clientContainerFS)
+		if endpoint.Username != "aries" || endpoint.ClientCommand != "" || endpoint.ClientSourceFile != "" {
+			return errors.New("Hermes requires a gRPC endpoint for user aries without a staged client")
 		}
 		return nil
 	}
