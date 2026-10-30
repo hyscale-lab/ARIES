@@ -84,8 +84,8 @@ type renderSettings struct {
 	extraBody              []byte
 	mcpServers             []core.MCPServerConfig
 	noSandboxTools         bool
-	// ariesBackend enables the ARIES terminal backend plugin (gRPC route).
-	ariesBackend bool
+	// grpcTarget enables the ARIES terminal backend plugin and supplies its target.
+	grpcTarget string
 }
 
 // sandboxToolsets are Hermes's toolsets that act in the sandbox: the shell,
@@ -222,16 +222,17 @@ func renderConfig(model core.ModelConfig, settings renderSettings, voiceSTT *Voi
 	if len(disabled) > 0 {
 		agentConfig["disabled_toolsets"] = disabled
 	}
-	plugins := []string{otelPluginName}
-	if settings.ariesBackend {
-		plugins = append(plugins, "aries")
+	plugins := map[string]any{"enabled": []string{otelPluginName}}
+	if settings.grpcTarget != "" {
+		plugins["enabled"] = []string{otelPluginName, "aries"}
+		plugins["entries"] = map[string]any{"aries": map[string]any{"settings": map[string]any{"grpc_target": settings.grpcTarget}}}
 	}
 	config := map[string]any{
 		"model": modelConfig,
 		"agent": agentConfig,
 		// Listed plugins supply the per-call timing absent from the native
 		// session store. Images without hermes_otel skip the name.
-		"plugins": map[string]any{"enabled": plugins},
+		"plugins": plugins,
 		"display": map[string]any{"streaming": false, "compact": true},
 	}
 	if settings.compaction != nil {
@@ -395,9 +396,8 @@ func yamlJSONNumbers(value any) any {
 }
 
 // containerEnvironment is the non-secret environment given to the Hermes
-// container. Hermes reads its terminal backend entirely from these names. SSH
-// uses Hermes's own ssh backend and needs the TERMINAL_SSH_* target; gRPC uses
-// the ARIES plugin, whose client reads ARIES_GRPC_TARGET instead.
+// container. SSH uses Hermes's own backend and needs the TERMINAL_SSH_*
+// target. gRPC selects the ARIES plugin; config.yaml supplies its target.
 //
 // ARIES_RUN_ID and ARIES_TASK_ID identify the task occurrence. Hermes expands
 // ${NAME} references in every configuration string from its process
@@ -443,7 +443,7 @@ func containerEnvironment(endpoint core.ToolEndpoint, workdir string, terminalTi
 		"API_SERVER_PORT=8642",
 	}
 	if endpoint.Protocol == "grpc" {
-		environment = append(environment, "TERMINAL_ENV=aries", "ARIES_GRPC_TARGET="+endpoint.Address)
+		environment = append(environment, "TERMINAL_ENV=aries")
 	} else {
 		environment = append(environment,
 			"TERMINAL_ENV=ssh",

@@ -564,8 +564,8 @@ func validGRPCEndpoint() core.ToolEndpoint {
 	}
 }
 
-// The gRPC endpoint selects the ARIES plugin backend and carries no SSH target:
-// the plugin's client reads its target from ARIES_GRPC_TARGET.
+// The gRPC endpoint selects the ARIES plugin backend without an SSH target.
+// The plugin reads its target from its config entry.
 func TestContainerEnvironmentSelectsTheAriesBackendUnderGRPC(t *testing.T) {
 	environment, err := containerEnvironment(validGRPCEndpoint(), "/aries/workspace", 180, false, "", "run-1", "fix-git")
 	if err != nil {
@@ -577,7 +577,6 @@ func TestContainerEnvironmentSelectsTheAriesBackendUnderGRPC(t *testing.T) {
 		"API_SERVER_HOST":                            "0.0.0.0",
 		"API_SERVER_PORT":                            "8642",
 		"HERMES_YOLO_MODE":                           "true",
-		"ARIES_GRPC_TARGET":                          "172.17.0.1:41234",
 		"TERMINAL_CWD":                               "/aries/workspace",
 		"TERMINAL_TIMEOUT":                           "180",
 		"ARIES_RUN_ID":                               "run-1",
@@ -636,10 +635,19 @@ func TestGatewayLauncherDoesNotCheckAStagedClient(t *testing.T) {
 // (TestARIESHermesImageKeepsTheSSHRouteOnTheShell).
 func TestRenderConfigEnablesThePluginOnlyForTheAriesBackend(t *testing.T) {
 	settings := baseSettings()
-	settings.ariesBackend = true
+	settings.grpcTarget = validGRPCEndpoint().Address
 	config := decodeConfigYAML(t, []byte(mustRender(t, validModel(), settings)))
-	if got := config["plugins"].(map[string]any)["enabled"]; !reflect.DeepEqual(got, []any{otelPluginName, "aries"}) {
+	plugins := config["plugins"].(map[string]any)
+	if got := plugins["enabled"]; !reflect.DeepEqual(got, []any{otelPluginName, "aries"}) {
 		t.Fatalf("enabled plugins = %#v", got)
+	}
+	want := map[string]any{"aries": map[string]any{"settings": map[string]any{"grpc_target": validGRPCEndpoint().Address}}}
+	if got := plugins["entries"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("plugin entries = %#v, want %#v", got, want)
+	}
+	sshConfig := decodeConfigYAML(t, []byte(mustRender(t, validModel(), baseSettings())))
+	if entries, ok := sshConfig["plugins"].(map[string]any)["entries"]; ok {
+		t.Fatalf("SSH plugin has entries = %#v", entries)
 	}
 }
 

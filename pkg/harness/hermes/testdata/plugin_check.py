@@ -9,15 +9,22 @@ sys.modules[spec.name] = plugin
 spec.loader.exec_module(plugin)
 from fake_aries_grpc import CHUNK_BYTES, start
 sandbox, server, target = start()
-os.environ["ARIES_GRPC_TARGET"] = target
+os.environ.pop("ARIES_GRPC_TARGET", None)
 
 
 class Context:
+    def __init__(self, target=None):
+        self.target = target
+
+    def get_config(self, key, default=None):
+        assert key == "grpc_target", key
+        return self.target if self.target is not None else default
+
     def register_terminal_environment_provider(self, provider):
         self.provider = provider
 
 
-context = Context()
+context = Context(target)
 plugin.register(context)
 os.makedirs("/work/sub", exist_ok=True)
 env = context.provider.create_environment(cwd="/work", timeout=30)
@@ -215,12 +222,15 @@ handle = env._run_bash("true")
 assert handle.wait(10) == plugin.TRANSPORT_FAILURE_EXIT
 assert "aries:" in handle.stdout.read()
 
-# A missing target reports a transport failure without starting a process.
+# A missing target disables the provider, even if the old environment name is set.
 env.cleanup()
 env._channel = None
-os.environ.pop("ARIES_GRPC_TARGET")
-assert not context.provider.is_available()
-handle = env._run_bash("true")
+os.environ["ARIES_GRPC_TARGET"] = target
+missing = Context()
+plugin.register(missing)
+assert not missing.provider.is_available()
+missing_env = missing.provider.create_environment(cwd="/work", timeout=30)
+handle = missing_env._run_bash("true")
 assert handle.wait(10) == plugin.TRANSPORT_FAILURE_EXIT, handle.returncode
-assert "ARIES_GRPC_TARGET is not set" in handle.stdout.read()
+assert "gRPC target is not set" in handle.stdout.read()
 print("PLUGIN_CHECK_OK")
