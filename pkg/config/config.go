@@ -55,18 +55,26 @@ type ExecutionConfig struct {
 	// count so the schedule, not the pool, decides when a task starts.
 	ArrivalsFile      string  `json:"arrivals_file,omitempty"`
 	ArrivalRatePerMin float64 `json:"arrival_rate_per_min,omitempty"`
-	// ParallelStart creates the harness's runtime while the sandbox starts;
-	// its configuration, which names the sandbox, still follows the bridge's
-	// registration.
-	ParallelStart bool `json:"parallel_start,omitempty"`
+	// ParallelStart, on unless set false, creates the harness's runtime while
+	// the sandbox starts; its configuration, which names the sandbox, still
+	// follows the bridge's registration. Use Parallel to read it.
+	ParallelStart *bool `json:"parallel_start,omitempty"`
 	// Warmup, when present, sends warm-up instructions through each started
-	// harness before the task's, so the task measures a warm harness.
+	// harness before the task's, so the task measures a warm harness. By
+	// default the warm-up is the task itself, once: a cold run, then the
+	// measured warm run on the same harness and sandbox.
 	Warmup *WarmupConfig `json:"warmup,omitempty"`
 }
 
-// WarmupConfig repeats Instruction, each time as its own conversation, until
-// the last Stable warm-ups took times within Tolerance of their median, or
-// Max warm-ups have run. Empty fields take the defaults below.
+// Parallel reports whether harnesses start alongside their sandboxes.
+func (e ExecutionConfig) Parallel() bool {
+	return e.ParallelStart == nil || *e.ParallelStart
+}
+
+// WarmupConfig repeats Instruction, or the task's own instruction when it is
+// empty, each time as its own conversation, until the last Stable warm-ups
+// took times within Tolerance of their median, or Max warm-ups have run.
+// Empty fields take the defaults below.
 type WarmupConfig struct {
 	Instruction string  `json:"instruction,omitempty"`
 	Stable      int     `json:"stable,omitempty"`
@@ -74,13 +82,11 @@ type WarmupConfig struct {
 	Max         int     `json:"max,omitempty"`
 }
 
-// The default warm-up runs one trivial command, so it passes through the
-// model, the harness and the tool path without changing the sandbox.
+// By default the task runs once before itself.
 const (
-	DefaultWarmupInstruction = "Run the shell command `true` once, then reply with the single word: done."
-	DefaultWarmupStable      = 3
-	DefaultWarmupTolerance   = 0.05
-	DefaultWarmupMax         = 10
+	DefaultWarmupStable    = 1
+	DefaultWarmupTolerance = 0.05
+	DefaultWarmupMax       = 1
 )
 
 // RuntimeConfig selects the model service. Mode is the ownership distinction:
@@ -760,9 +766,6 @@ func (c *Config) validate() error {
 		c.Execution.Loop = loop
 	}
 	if w := c.Execution.Warmup; w != nil {
-		if w.Instruction == "" {
-			w.Instruction = DefaultWarmupInstruction
-		}
 		if w.Stable == 0 {
 			w.Stable = DefaultWarmupStable
 		}
@@ -772,8 +775,8 @@ func (c *Config) validate() error {
 		if w.Max == 0 {
 			w.Max = DefaultWarmupMax
 		}
-		if strings.TrimSpace(w.Instruction) == "" || w.Stable < 1 || w.Max < w.Stable || !(w.Tolerance > 0) || math.IsInf(w.Tolerance, 0) {
-			return errors.New("execution.warmup needs a non-blank instruction, stable between 1 and max, and a finite positive tolerance")
+		if w.Instruction != "" && strings.TrimSpace(w.Instruction) == "" || w.Stable < 1 || w.Max < w.Stable || !(w.Tolerance > 0) || math.IsInf(w.Tolerance, 0) {
+			return errors.New("execution.warmup needs an empty or non-blank instruction, stable between 1 and max, and a finite positive tolerance")
 		}
 	}
 	if (c.Execution.ArrivalsFile != "") != (c.Execution.ArrivalRatePerMin != 0) {

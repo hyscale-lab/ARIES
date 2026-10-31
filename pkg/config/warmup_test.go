@@ -13,13 +13,17 @@ func TestDecodeWarmupTakesDefaultsAndRejectsBadValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := WarmupConfig{Instruction: DefaultWarmupInstruction, Stable: DefaultWarmupStable, Tolerance: DefaultWarmupTolerance, Max: DefaultWarmupMax}
-	if !cfg.Execution.ParallelStart || cfg.Execution.Warmup == nil || *cfg.Execution.Warmup != want {
+	want := WarmupConfig{Stable: DefaultWarmupStable, Tolerance: DefaultWarmupTolerance, Max: DefaultWarmupMax}
+	if !cfg.Execution.Parallel() || cfg.Execution.Warmup == nil || *cfg.Execution.Warmup != want {
 		t.Fatalf("execution = %#v, warm-up = %#v", cfg.Execution, cfg.Execution.Warmup)
 	}
 	cfg, err = Decode(strings.NewReader(with(`{"concurrency":1}`)))
-	if err != nil || cfg.Execution.Warmup != nil || cfg.Execution.ParallelStart {
-		t.Fatalf("execution = %#v, err = %v", cfg.Execution, err)
+	if err != nil || cfg.Execution.Warmup != nil || !cfg.Execution.Parallel() {
+		t.Fatalf("a parallel start is the default: execution = %#v, err = %v", cfg.Execution, err)
+	}
+	cfg, err = Decode(strings.NewReader(with(`{"concurrency":1,"parallel_start":false}`)))
+	if err != nil || cfg.Execution.Parallel() {
+		t.Fatalf("parallel_start false: execution = %#v, err = %v", cfg.Execution, err)
 	}
 	for _, bad := range []string{
 		`{"concurrency":1,"warmup":{"instruction":"   "}}`,

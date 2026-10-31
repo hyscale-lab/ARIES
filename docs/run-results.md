@@ -73,8 +73,8 @@ lifecycle step, with its name, `started_at` and `duration`, in the order
 bridge is one long-running server, started once in
 `infrastructure.startup_duration`; `bridge_register` is only the task
 registering its sandbox with it and receiving the SSH endpoint the harness
-uses. `harness_prepare` creates the harness's container or pod; with
-`execution.parallel_start` it runs alongside the sandbox steps, so phases can
+uses. `harness_prepare` creates the harness's container or pod; by default it
+runs alongside the sandbox steps (`execution.parallel_start`), so phases can
 overlap and the time to the agent's response is the span from the first
 phase's start to the end of `harness_run`. `harness_warmup` appears with
 `execution.warmup` and spans the warm-ups, which the task's `warmups` list

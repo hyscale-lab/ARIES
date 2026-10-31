@@ -45,11 +45,6 @@ TASKS = ["mb-noop", "mb-one-call", "mb-ten-calls", "mb-cpu", "mb-output"]
 SANDBOX = "openclaw-sbx-shared"
 AGENT = "/opt/aries-baseline/openclaw-agent"
 GATEWAY_PORT = 18789
-# The warm-up ARIES sends by default (pkg/config), and its settling rule: the
-# last WARMUP_STABLE warm-ups within WARMUP_TOLERANCE of their median, at most
-# WARMUP_MAX of them.
-WARMUP_INSTRUCTION = "Run the shell command `true` once, then reply with the single word: done."
-WARMUP_STABLE, WARMUP_TOLERANCE, WARMUP_MAX = 3, 0.05, 10
 MANIFEST_HEADER = "harness\tbackend\tmode\trepetition\trun_dir\trequests\tvariant\n"
 
 
@@ -62,23 +57,14 @@ def now():
 
 
 def warm_up(send):
-    """Sends warm-ups until their times settle, as the ARIES runner does.
-    send(index) runs warm-up index (from 1) and returns an error or "".
-    Returns the warm-ups, as run-result.json records them, and any error."""
-    warmups, durations = [], []
-    while len(durations) < WARMUP_MAX:
-        last = sorted(durations[-WARMUP_STABLE:])
-        if len(last) == WARMUP_STABLE and last[-1] - last[0] <= WARMUP_TOLERANCE * last[len(last) // 2]:
-            break
-        began = now()
-        error = send(len(durations) + 1)
-        elapsed = now() - began
-        warmups.append({"started_at": iso(began), "duration": int(elapsed * 1e9),
-                        "status": "failed" if error else "succeeded", "error": error})
-        if error:
-            return warmups, error
-        durations.append(elapsed)
-    return warmups, ""
+    """Runs the task once before itself, as ARIES's default warm-up does:
+    the cold run, on the fresh gateway and sandbox. send() returns an error
+    or "". Returns the warm-ups, as run-result.json records them, and any
+    error."""
+    began = now()
+    error = send()
+    return [{"started_at": iso(began), "duration": int((now() - began) * 1e9),
+             "status": "failed" if error else "succeeded", "error": error}], error
 
 
 def parse_time(text):
@@ -203,14 +189,12 @@ def run_task(args, root, run_dir, task, occurrence, template):
     agent = {}
     warmups = []
     if ready and args.warm:
-        # Each warm-up is its own session, as under ARIES.
-        def send(index):
+        # The task once in its own session, as under ARIES.
+        def send():
             result = subprocess.run(["docker", "exec", gateway, AGENT, "-url", "ws://127.0.0.1:%d" % GATEWAY_PORT,
-                                     "-session-key", "agent:main:aries-%s-warmup-%d" % (task_id, index),
-                                     "-message-file", os.path.join(work, "warmup.md")], capture_output=True, text=True)
+                                     "-session-key", "agent:main:aries-%s-warmup-1" % task_id,
+                                     "-message-file", os.path.join(work, "task.md")], capture_output=True, text=True)
             return "" if result.returncode == 0 else "warm-up exited %d: %s" % (result.returncode, result.stderr[-300:])
-        with open(os.path.join(work, "warmup.md"), "w") as handle:
-            handle.write(WARMUP_INSTRUCTION)
         began = now()
         warmups, error = warm_up(send)
         phase("harness_warmup", began)
@@ -296,7 +280,7 @@ def main():
     parser.add_argument("--address", required=True, help="this node's IP, where the gateway reaches aries-replay")
     parser.add_argument("--prometheus", required=True)
     parser.add_argument("--port", type=int, default=8090)
-    parser.add_argument("--warm", action="store_true", help="send warm-ups through the started gateway before each task")
+    parser.add_argument("--warm", action="store_true", help="run each task once before itself on the same gateway and sandbox")
     parser.add_argument("--tasks", default=",".join(TASKS), help="comma-separated subset of " + ",".join(TASKS))
     args = parser.parse_args()
     args.tasks = args.tasks.split(",")

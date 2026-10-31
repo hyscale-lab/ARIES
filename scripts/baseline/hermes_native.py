@@ -31,7 +31,7 @@ import urllib.error
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from openclaw_native import MANIFEST_HEADER, WARMUP_INSTRUCTION, iso, now, parse_time, prometheus_samples, remove_tree, run, warm_up  # noqa: E402
+from openclaw_native import MANIFEST_HEADER, iso, now, parse_time, prometheus_samples, remove_tree, run, warm_up  # noqa: E402
 
 TASKS = ["mb-noop", "mb-one-call", "mb-ten-calls", "mb-cpu", "mb-output"]
 API_PORT = 8642
@@ -168,9 +168,9 @@ def run_task(args, root, run_dir, task, occurrence, template, image):
     phase("harness_start", began)
     reward, outcome, warmups = 0.0, {}, []
     if ready and args.warm:
-        # Each warm-up is its own session, as under ARIES.
+        # The task once in its own session, as under ARIES.
         began = now()
-        warmups, error = warm_up(lambda index: run_gateway(WARMUP_INSTRUCTION, "aries-%s-warmup-%d" % (task_id, index))[1])
+        warmups, error = warm_up(lambda: run_gateway(instruction, "aries-%s-warmup-1" % task_id)[1])
         phase("harness_warmup", began)
     if not ready:
         error = "gateway did not start"
@@ -236,7 +236,7 @@ def main():
     parser.add_argument("--address", required=True, help="this node's IP, where the gateway reaches aries-replay")
     parser.add_argument("--prometheus", required=True)
     parser.add_argument("--port", type=int, default=8090)
-    parser.add_argument("--warm", action="store_true", help="send warm-ups through the started gateway before each task")
+    parser.add_argument("--warm", action="store_true", help="run each task once before itself on the same gateway and sandbox")
     parser.add_argument("--tasks", default=",".join(TASKS), help="comma-separated subset of " + ",".join(TASKS))
     args = parser.parse_args()
     args.tasks = args.tasks.split(",")

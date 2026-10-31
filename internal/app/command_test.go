@@ -586,5 +586,6 @@ func (b *cancelBridge) Stop(context.Context) error {
 }
 
 func (s *stubSandbox) Connectivity() core.HarnessConnectivity {
-	return core.HarnessConnectivity{Placement: core.RuntimePlacement{AttachmentID: "test-network"}}
+	// The run's placement, which the test infrastructure reports.
+	return core.HarnessConnectivity{Placement: core.RuntimePlacement{AttachmentID: "network"}}
 }

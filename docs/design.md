@@ -135,11 +135,12 @@ For every task the Runner performs this order:
 2. start the task sandbox;
 3. let the benchmark sanitize the live sandbox and confirm verifier paths are absent;
 4. start the bridge for that exact sandbox;
-5. prepare, start and run the harness: preparing creates its runtime and,
-   with `execution.parallel_start`, happens alongside steps 2 to 4, since it
-   needs only the run's placement; starting configures it with the sandbox's
-   endpoint; with `execution.warmup`, warm-up instructions run, each as its
-   own conversation, before the task's single instruction;
+5. prepare, start and run the harness: preparing creates its runtime and, by
+   default, happens alongside steps 2 to 4, since it needs only the run's
+   placement (`"parallel_start": false` moves it here); starting configures it
+   with the sandbox's endpoint; with `execution.warmup`, a warm-up, by default
+   the task itself, runs as its own conversation before the task's single
+   instruction;
 6. positively stop the harness;
 7. revoke the bridge and positively confirm access is gone;
 8. evaluate: the benchmark inspects the still-running sandbox and, when its

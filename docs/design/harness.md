@@ -39,8 +39,8 @@ of the harness's tools.
 
 ## Lifecycle, cancellation, and failure
 
-[Runner](../../pkg/runner/runner.go) prepares the harness after bridge startup, or,
-with `execution.parallel_start`, while the sandbox starts, and starts it after
+[Runner](../../pkg/runner/runner.go) prepares the harness while the sandbox starts,
+or after bridge startup with `"parallel_start": false`, and starts it after
 sandbox preparation and bridge startup. It checks that the sandbox's placement is
 the run's placement the harness was prepared in. Every attempted harness
 preparation or start is followed by `Stop`, including

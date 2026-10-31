@@ -338,6 +338,9 @@ func TestBuildTaskExperimentCreatesFreshFourRoleGraphs(t *testing.T) {
 		NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
 			return &stubBridge{}, nil
 		},
+		// Set by the run's infrastructure; a parallel start, the default,
+		// prepares harnesses in it.
+		Placement: core.RuntimePlacement{AttachmentID: "network"},
 	}
 	cfg := config.Config{Name: "x"}
 	model := core.ModelConfig{Provider: "deepseek", BaseURL: "https://example.invalid", Model: "m", APIKeyEnv: "KEY"}

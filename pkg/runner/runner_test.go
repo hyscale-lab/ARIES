@@ -265,20 +265,21 @@ func (f *fakeBridge) stopCount() int {
 }
 
 type fakeHarness struct {
-	mu            sync.Mutex
-	log           *callLog
-	prepared      []core.HarnessRequest
-	prepareErr    error
-	requests      []core.HarnessRequest
-	startErr      error
-	warmDurations []time.Duration
-	warmErr       error
-	warms         int
-	runErrors     []error
-	stopErrors    []error
-	runs          int
-	stops         int
-	instructions  []string
+	mu               sync.Mutex
+	log              *callLog
+	prepared         []core.HarnessRequest
+	prepareErr       error
+	requests         []core.HarnessRequest
+	startErr         error
+	warmDurations    []time.Duration
+	warmErr          error
+	warms            int
+	warmInstructions []string
+	runErrors        []error
+	stopErrors       []error
+	runs             int
+	stops            int
+	instructions     []string
 }
 
 func (f *fakeHarness) Prepare(ctx context.Context, request core.HarnessRequest) error {
@@ -294,6 +295,7 @@ func (f *fakeHarness) Prepare(ctx context.Context, request core.HarnessRequest) 
 func (f *fakeHarness) Warm(ctx context.Context, instruction string) (core.HarnessResult, error) {
 	f.log.add("harness.warm", ctx)
 	f.mu.Lock()
+	f.warmInstructions = append(f.warmInstructions, instruction)
 	var pause time.Duration
 	if f.warms < len(f.warmDurations) {
 		pause = f.warmDurations[f.warms]
@@ -1219,5 +1221,20 @@ func TestRunnerFailsTheTaskWhenAWarmupFails(t *testing.T) {
 	}
 	if slices.Contains(rig.log.snapshot(), "harness.run") || rig.harness.stopCount() == 0 {
 		t.Fatalf("calls = %v", rig.log.snapshot())
+	}
+}
+
+// With no instruction, the warm-up is the task itself: it runs once cold,
+// then again as the measured run on the same harness.
+func TestRunnerWarmsUpWithTheTaskItself(t *testing.T) {
+	rig := newRigWith(t, 1, Options{Warmup: &Warmup{Stable: 1, Tolerance: 0.05, Max: 1}})
+	result, err := rig.runner.Run(context.Background())
+	if err != nil || len(result.Tasks[0].Warmups) != 1 {
+		t.Fatalf("Run() error = %v, warm-ups = %#v", err, result.Tasks[0].Warmups)
+	}
+	rig.harness.mu.Lock()
+	defer rig.harness.mu.Unlock()
+	if !slices.Equal(rig.harness.warmInstructions, []string{"do work 0"}) || !slices.Equal(rig.harness.instructions, []string{"do work 0"}) {
+		t.Fatalf("warm-ups %v, task %v", rig.harness.warmInstructions, rig.harness.instructions)
 	}
 }

@@ -34,8 +34,9 @@ type Options struct {
 	Warmup *Warmup
 }
 
-// Warmup repeats Instruction until the last Stable warm-ups took times within
-// Tolerance of their median, or Max warm-ups have run.
+// Warmup repeats Instruction, or the task's own when it is empty, until the
+// last Stable warm-ups took times within Tolerance of their median, or Max
+// warm-ups have run.
 type Warmup struct {
 	Instruction string
 	Stable      int
@@ -112,8 +113,8 @@ func New(benchmark Benchmark, harness AgentHarness, toolSandbox ToolSandbox, bri
 		return nil, errors.New("a parallel start needs the run's placement")
 	}
 	if w := options.Warmup; w != nil {
-		if strings.TrimSpace(w.Instruction) == "" || w.Stable < 1 || w.Max < w.Stable || !(w.Tolerance >= 0) {
-			return nil, errors.New("warm-up needs an instruction, a positive stable count no larger than its maximum, and a non-negative tolerance")
+		if w.Instruction != "" && strings.TrimSpace(w.Instruction) == "" || w.Stable < 1 || w.Max < w.Stable || !(w.Tolerance >= 0) {
+			return nil, errors.New("warm-up needs an empty or non-blank instruction, a positive stable count no larger than its maximum, and a non-negative tolerance")
 		}
 		copied := *w
 		options.Warmup = &copied
@@ -167,13 +168,17 @@ func (r *Runner) Run(ctx context.Context) (core.RunResult, error) {
 }
 
 // warm sends warm-up instructions until their times settle, recording each.
-func (r *Runner) warm(ctx context.Context, result *core.TaskResult, phase func(string) func()) error {
+func (r *Runner) warm(ctx context.Context, task core.Task, result *core.TaskResult, phase func(string) func()) error {
 	endPhase := phase(core.PhaseHarnessWarmup)
 	defer endPhase()
+	instruction := r.warmup.Instruction
+	if instruction == "" {
+		instruction = task.Instruction
+	}
 	var durations []time.Duration
 	for len(durations) < r.warmup.Max && !r.warmup.stable(durations) {
 		began := time.Now()
-		warm, err := r.harness.Warm(ctx, r.warmup.Instruction)
+		warm, err := r.harness.Warm(ctx, instruction)
 		elapsed := time.Since(began)
 		record := core.Warmup{StartedAt: began, Duration: elapsed, Status: warm.Status}
 		if err != nil {
@@ -395,7 +400,7 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 	// idempotent, so every attempt must be followed by a positive stop
 	// confirmation before the evaluator can inspect the sandbox.
 	if err == nil && r.warmup != nil {
-		err = r.warm(ctx, &result, phase)
+		err = r.warm(ctx, task, &result, phase)
 	}
 	if err != nil {
 		result.Harness.Status = failureStatus(err)

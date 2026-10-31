@@ -15,16 +15,16 @@
 # --bridge-repository maps the Kubernetes bridge image to another repository,
 # such as one loaded onto the node, keeping the commit tag ARIES requests.
 #
-# --parallel creates each harness while its sandbox starts; --warm sends
-# warm-up requests through the started harness before the task, so the task
-# measures a warm harness. Record with --warm once, so the warm-up
-# conversation is recorded too; the tasks' recordings then serve every
-# variant. --tasks runs a comma-separated subset of the profile's tasks.
+# Each harness is created while its sandbox starts, as ARIES does by default;
+# --sequential creates it after the bridge registers the sandbox. --warm runs
+# each task twice on the same harness and sandbox, the first run cold and the
+# second warm; a plain recording serves it, since both runs are the same
+# conversation. --tasks runs a comma-separated subset of the profile's tasks.
 # Kubernetes pods are pinned to this node, where the Docker runs go.
 set -euo pipefail
 
 harness="" backend="" mode="" runs=1 address="" prometheus="" pace=recorded port=8090 bridge_repository=""
-parallel=false warm=false tasks=""
+parallel=true warm=false tasks=""
 usage() { sed -n '2,24s/^# \{0,1\}//p' "$0"; }
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -37,7 +37,7 @@ while [ $# -gt 0 ]; do
     --pace) pace=$2; shift 2 ;;
     --port) port=$2; shift 2 ;;
     --bridge-repository) bridge_repository=$2; shift 2 ;;
-    --parallel) parallel=true; shift ;;
+    --sequential) parallel=false; shift ;;
     --warm) warm=true; shift ;;
     --tasks) tasks=$2; shift 2 ;;
     -h|--help) usage; exit 0 ;;
