@@ -12,8 +12,10 @@ and result data live in [pkg/core](../../pkg/core).
 
 | Operation | Contract |
 | --- | --- |
-| `Start(context.Context, core.HarnessRequest) error` | Start the task-local runtime using model configuration, typed runtime placement and resolved service endpoints, temporary tool endpoint, resource limits, timeout, and artifact directory. Roll back partial allocations; retain enough ownership state for `Stop` after a failed start. |
-| `Run(context.Context, string) (core.HarnessResult, error)` | Execute the task instruction within its deadline. Return harness status and private artifact references; do not interpret this result as benchmark correctness. |
+| `Prepare(context.Context, core.HarnessRequest) error` | Create the task-local runtime from model configuration, run placement, resource limits, timeout, and artifact directory, without the tool endpoint or task service endpoints, so it can run while the sandbox starts. Reject invalid configuration before allocating. Roll back partial allocations; retain enough ownership state for `Stop` after a failure. |
+| `Start(context.Context, core.HarnessRequest) error` | Configure the prepared runtime with the resolved service endpoints and temporary tool endpoint, start the harness, and wait for readiness; prepare first when `Prepare` was not called. Roll back partial allocations as `Prepare` does. |
+| `Warm(context.Context, string) (core.HarnessResult, error)` | Before `Run` only, execute a warm-up instruction as its own conversation, which the task's conversation does not see. Keeps no task artifacts. |
+| `Run(context.Context, string) (core.HarnessResult, error)` | Execute the task instruction, accepted once, within its deadline. Return harness status and private artifact references; do not interpret this result as benchmark correctness. |
 | `Stop(context.Context) error` | Idempotently stop the owned runtime and positively confirm absence. A failure prevents evaluation. |
 
 `HarnessRequest.Connectivity` supplies typed placement and resolved task service
@@ -37,8 +39,11 @@ of the harness's tools.
 
 ## Lifecycle, cancellation, and failure
 
-[Runner](../../pkg/runner/runner.go) starts the harness after sandbox preparation
-and bridge startup. Every attempted harness start is followed by `Stop`, including
+[Runner](../../pkg/runner/runner.go) prepares the harness after bridge startup, or,
+with `execution.parallel_start`, while the sandbox starts, and starts it after
+sandbox preparation and bridge startup. It checks that the sandbox's placement is
+the run's placement the harness was prepared in. Every attempted harness
+preparation or start is followed by `Stop`, including
 partial startup failures. After `Run` succeeds, fails, or is canceled, Runner uses
 a fresh bounded context to stop the harness, then revoke the bridge. Verifier
 material remains withheld unless both confirmations succeed. Evaluation then
@@ -63,7 +68,7 @@ credential/artifact mechanics. `RuntimeOptions` carries the shared deployment,
 image, output directory, timeouts, logger, and credential lookup. Common mode,
 web, subagent, and MCP inputs use `harness.Options`; each native constructor
 applies its own defaults and supported modes. The consumed `runner.AgentHarness`
-interface remains unchanged.
+interface is the one shown above.
 
 Native managers retain configuration rendering, protocol readiness, request and
 cancellation behavior, voice handling, and result interpretation. Shared search
@@ -71,8 +76,12 @@ validation lives in `pkg/harness/config.go`; connectivity data stays in `pkg/cor
 because it crosses component boundaries. A new implementation reuses the common
 runtime while supplying its native files, commands, and protocol operations.
 
-For both OpenClaw and Hermes, Runner calls `Start` to create the runtime, then `Run` to execute
-the instruction. The manager obtains a private service endpoint through
+For both OpenClaw and Hermes, Runner calls `Prepare` to create the container,
+`Start` to stage the configuration that names the sandbox and start the
+Gateway, any `Warm` calls, then `Run` to execute the instruction. A warm-up is
+a new Gateway session (Hermes) or agent session key (OpenClaw). Hermes reads
+the settings that name the sandbox and task services from a staged file its
+launcher exports, because its container environment is fixed at creation. The manager obtains a private service endpoint through
 deployment operations, and a Gateway client performs the agent protocol. Shutdown uses deployment operations to confirm absence.
 Changing hosting must preserve Gateway semantics, request correlation,
 cancellation, credentials, artifacts, and isolation.

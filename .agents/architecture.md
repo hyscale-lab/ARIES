@@ -37,6 +37,12 @@ harness stop → confirm bridge revocation → evaluate → remove evaluation sa
 → remove task sandbox → release attachment. Record every task failure in
 `TaskResult.Error`.
 
+Prepare the harness (runtime created from the run's placement; sandbox endpoint
+pending) after bridge registration, or concurrently with sandbox start under
+`execution.parallel_start`; Start then configures it with the sandbox's endpoint.
+Optional warm-ups (`execution.warmup`) run before the task's single instruction,
+each as its own conversation.
+
 The app owns one shared bridge and network per run; Runner receives per-sandbox
 sessions. Start shared infrastructure after model preflight, before task admission.
 After task cleanup, stop and remove the shared bridge runtime, finalize shared

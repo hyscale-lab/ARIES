@@ -24,6 +24,10 @@ and [lifecycle](architecture.md#task-lifecycle).
 - Reuse shared harness ownership and credential mechanics. Preserve native defaults
   and credential fallbacks. Retain ownership after failed removal. `Stop` prevents admission while preserving
   `Run` snapshots. Redacted errors must not expose secrets through their causes.
+- Harness Prepare creates the runtime without tool or task-service endpoints and
+  rejects invalid configuration before allocating; Start stages what names the
+  sandbox. Warm runs only before Run, as its own conversation, and keeps no task
+  artifacts. Run accepts exactly one task instruction.
 - Each sandbox session has its own listener, immutable target binding, and recorder,
   keyed by a stable sandbox ID. Native tool execution must not call Runner or own
   sandbox lifecycle. Use plaintext unauthenticated gRPC and unauthenticated SSH,

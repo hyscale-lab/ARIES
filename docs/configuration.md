@@ -107,19 +107,33 @@ profile repeatedly, listing each run in `.cache/microbench-runs/manifest.tsv`:
 
 ```sh
 make build microbench
-scripts/microbench/run.sh --harness openclaw --backend docker --mode record \
+scripts/microbench/run.sh --harness openclaw --backend docker --mode record --warm \
   --address <this node's IP> --prometheus <Prometheus URL>
 scripts/microbench/run.sh --harness openclaw --backend k8s --mode replay --runs 10 \
   --address <this node's IP> --prometheus <Prometheus URL>
+scripts/microbench/run.sh --harness openclaw --backend k8s --mode replay --runs 10 --parallel \
+  --address <this node's IP> --prometheus <Prometheus URL>
+scripts/microbench/run.sh --harness openclaw --backend k8s --mode replay --runs 10 --warm \
+  --tasks mb-noop,mb-one-call --address <this node's IP> --prometheus <Prometheus URL>
 python3 scripts/microbench/analyze.py
 ```
 
-Record once per harness against the real model, then replay on every backend.
-`analyze.py` splits each task's time into the runner's phases, and the agent's
-run into model time, tool execution as the bridge measured it, and the rest,
-which is the harness's own work plus the transport between harness, bridge and
-sandbox. It writes one row per task run to `tasks.csv` and prints medians with
-the Kubernetes minus Docker difference.
+Record once per harness against the real model, with `--warm` so the warm-up
+conversation is recorded too, then replay on every backend. `--parallel` and
+`--warm` set the [cold and warm starts](#cold-and-warm-starts) above; each run's
+variant (`cold-sequential`, `cold-parallel`, `warm-sequential` or
+`warm-parallel`) is listed in the manifest, and Kubernetes pods are pinned to
+the node `run.sh` runs on. `--tasks` runs a subset. The native baselines,
+`scripts/baseline/{openclaw,hermes}_native.py`, take `--warm` and `--tasks` too.
+
+`analyze.py` reports, per variant, the latency to the agent's response: from
+the first start-up step for a cold task, the agent's run alone for a warm one.
+It splits the start-up into provisioning and harness preparation and start,
+and the agent's run into model time, tool execution as the bridge measured it,
+and the rest, which is the harness's own work plus the transport between
+harness, bridge and sandbox; warm-up requests and tool calls are left out. It
+writes one row per task run to `tasks.csv` and prints medians with the
+Kubernetes minus Docker difference.
 
 ### Paper-reproduction profiles
 
@@ -323,6 +337,33 @@ bound parallel occurrences. Add a positive Go duration such as `"30m"` as
 `execution.loop_duration` to repeat the list until admissions close; admitted
 work is always drained. ARIES loads each task's explicit tagged image directly from that
 task's `task.toml`; no version-catalog or Go code change is required.
+
+## Cold and warm starts
+
+Two `execution` settings change how each task's harness starts, for measuring
+start-up and warm latency:
+
+```json
+"execution": {
+  "concurrency": 1,
+  "parallel_start": true,
+  "warmup": {}
+}
+```
+
+`parallel_start` creates the harness's container or pod while the sandbox
+starts, instead of after the bridge registers it; the configuration that
+names the sandbox is still staged afterwards. It saves the harness's creation
+time where that overlaps the sandbox's start, most on Kubernetes.
+
+`warmup`, when present, sends a warm-up instruction through the started
+harness before the task, each time as its own conversation, until the last
+`stable` warm-ups (default 3) took times within `tolerance` (default 0.05) of
+their median, or `max` (default 10) have run. The default `instruction` runs
+one trivial command, so a warm-up passes through the model, the harness and
+the tool path without changing the sandbox. A failed warm-up fails the task's
+harness. With a replayed model, record with the warm-up on so its
+conversation is recorded too.
 
 ## Replay task arrivals
 
