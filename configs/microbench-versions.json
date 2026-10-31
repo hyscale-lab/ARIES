@@ -6,7 +6,7 @@
   },
   "terminalbench2": {
     "repository_url": "https://github.com/hyscale-lab/ARIES.git",
-    "revision": "5df2c3452feb15a11be5ba68383bde037b7df2bc"
+    "revision": "ef0141fc31889dd72cbff2d00366aae933841f9e"
   },
   "deepresearchbench": {
     "repository_url": "https://github.com/Ayanami0730/deep_research_bench.git",
