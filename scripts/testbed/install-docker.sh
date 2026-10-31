@@ -94,3 +94,7 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 docker info --format 'Docker {{.ServerVersion}}, storage {{.Driver}}, cgroup driver {{.CgroupDriver}}'
+# cAdvisor finds Docker only when it starts, so an ARIES cAdvisor already
+# running on this node reports no Docker containers until it restarts.
+echo "restart this node's cAdvisor so it sees Docker:"
+echo "  kubectl -n aries delete pod -l app.kubernetes.io/component=cadvisor --field-selector spec.nodeName=$(hostname -f)"
