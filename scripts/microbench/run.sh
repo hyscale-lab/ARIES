@@ -115,6 +115,12 @@ fi
 export DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-unused}
 
 requests=$store_dir/requests-$backend-$mode-$stamp.jsonl
+# Another server on the port would answer the readiness check below in place
+# of this one, and its recordings and request log are not this run's.
+if curl -s -o /dev/null "http://127.0.0.1:$port/v1/models"; then
+  echo "port $port already has a server; stop it first" >&2
+  exit 1
+fi
 ./bin/aries-replay -mode "$mode" -addr "0.0.0.0:$port" -store "$store" -log "$requests" -pace "$pace" -model deepseek-flash \
   >"$store_dir/server-$stamp.log" 2>&1 &
 server=$!
