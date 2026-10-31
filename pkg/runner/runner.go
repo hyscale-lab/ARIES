@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,6 +25,32 @@ type Options struct {
 	CleanupTimeout   time.Duration
 	Logger           *logrus.Logger
 	RuntimeOverrides RuntimeOverrides
+	// ParallelStart prepares the harness while the sandbox starts, in the
+	// run's Placement, instead of after the bridge is registered.
+	ParallelStart bool
+	Placement     core.RuntimePlacement
+	// Warmup, when set, sends warm-up instructions through the started
+	// harness before the task's.
+	Warmup *Warmup
+}
+
+// Warmup repeats Instruction until the last Stable warm-ups took times within
+// Tolerance of their median, or Max warm-ups have run.
+type Warmup struct {
+	Instruction string
+	Stable      int
+	Tolerance   float64
+	Max         int
+}
+
+func (w Warmup) stable(durations []time.Duration) bool {
+	if len(durations) < w.Stable {
+		return false
+	}
+	last := slices.Clone(durations[len(durations)-w.Stable:])
+	slices.Sort(last)
+	median := last[len(last)/2]
+	return median > 0 && float64(last[len(last)-1]-last[0]) <= w.Tolerance*float64(median)
 }
 
 type ResourceOverrides struct {
@@ -53,6 +80,9 @@ type Runner struct {
 	cleanupTimeout   time.Duration
 	logger           *logrus.Logger
 	runtimeOverrides RuntimeOverrides
+	parallelStart    bool
+	placement        core.RuntimePlacement
+	warmup           *Warmup
 }
 
 // New constructs a Runner explicitly and rejects missing roles.
@@ -78,6 +108,16 @@ func New(benchmark Benchmark, harness AgentHarness, toolSandbox ToolSandbox, bri
 	if options.Logger == nil {
 		options.Logger = logrus.StandardLogger()
 	}
+	if options.ParallelStart && options.Placement.AttachmentID == "" {
+		return nil, errors.New("a parallel start needs the run's placement")
+	}
+	if w := options.Warmup; w != nil {
+		if strings.TrimSpace(w.Instruction) == "" || w.Stable < 1 || w.Max < w.Stable || !(w.Tolerance >= 0) {
+			return nil, errors.New("warm-up needs an instruction, a positive stable count no larger than its maximum, and a non-negative tolerance")
+		}
+		copied := *w
+		options.Warmup = &copied
+	}
 	return &Runner{
 		benchmark:        benchmark,
 		harness:          harness,
@@ -90,6 +130,9 @@ func New(benchmark Benchmark, harness AgentHarness, toolSandbox ToolSandbox, bri
 		cleanupTimeout:   options.CleanupTimeout,
 		logger:           options.Logger,
 		runtimeOverrides: cloneRuntimeOverrides(options.RuntimeOverrides),
+		parallelStart:    options.ParallelStart,
+		placement:        options.Placement,
+		warmup:           options.Warmup,
 	}, nil
 }
 
@@ -123,6 +166,30 @@ func (r *Runner) Run(ctx context.Context) (core.RunResult, error) {
 	return result, errors.Join(runErrors...)
 }
 
+// warm sends warm-up instructions until their times settle, recording each.
+func (r *Runner) warm(ctx context.Context, result *core.TaskResult, phase func(string) func()) error {
+	endPhase := phase(core.PhaseHarnessWarmup)
+	defer endPhase()
+	var durations []time.Duration
+	for len(durations) < r.warmup.Max && !r.warmup.stable(durations) {
+		began := time.Now()
+		warm, err := r.harness.Warm(ctx, r.warmup.Instruction)
+		elapsed := time.Since(began)
+		record := core.Warmup{StartedAt: began, Duration: elapsed, Status: warm.Status}
+		if err != nil {
+			record.Status, record.Error = failureStatus(err), err.Error()
+			result.Warmups = append(result.Warmups, record)
+			return fmt.Errorf("warm-up %d: %w", len(durations)+1, err)
+		}
+		if record.Status == "" {
+			record.Status = core.StatusSucceeded
+		}
+		result.Warmups = append(result.Warmups, record)
+		durations = append(durations, elapsed)
+	}
+	return nil
+}
+
 func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, error) {
 	originalTask := task
 	sandboxEnvironment, harnessCPU, harnessMemory, harnessTimeout := effectiveRuntime(task, r.runtimeOverrides)
@@ -149,12 +216,26 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		}
 	}()
 	// phase starts timing one lifecycle step; calling the returned function
-	// records it.
+	// records it. A parallel start records harness_prepare from its own
+	// goroutine.
+	var phasesMu sync.Mutex
 	phase := func(name string) func() {
 		began := time.Now()
 		return func() {
+			phasesMu.Lock()
+			defer phasesMu.Unlock()
 			result.Phases = append(result.Phases, core.Phase{Name: name, StartedAt: began, Duration: time.Since(began)})
 		}
+	}
+	// prepared delivers the outcome of a parallel harness preparation once.
+	var prepared chan error
+	waitPrepared := func() error {
+		if prepared == nil {
+			return nil
+		}
+		err := <-prepared
+		prepared = nil
+		return err
 	}
 	ensureCleanupContext := func() context.Context {
 		if cleanupCtx == nil {
@@ -163,6 +244,10 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		return cleanupCtx
 	}
 	finish := func() (core.TaskResult, error) {
+		// A preparation still running must end before the harness is stopped.
+		if err := waitPrepared(); err != nil {
+			allErrors = append(allErrors, fmt.Errorf("prepare harness: %w", err))
+		}
 		cleanup := ensureCleanupContext()
 		endCleanup := phase(core.PhaseCleanup)
 		if evaluation.active() {
@@ -224,6 +309,32 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		return result, taskErr
 	}
 
+	request := core.HarnessRequest{
+		RunID:          r.runID,
+		TaskID:         task.ID,
+		Model:          r.model,
+		Timeout:        harnessTimeout,
+		CPU:            harnessCPU,
+		MemoryMB:       harnessMemory,
+		OutputDir:      r.outputDir,
+		NoSandboxTools: task.NoSandboxTools,
+	}
+	if r.parallelStart {
+		// The harness's runtime needs only the run's placement, so it is
+		// created while the sandbox starts. Prepare may allocate before it
+		// fails, and Stop is idempotent, so the harness is always stopped.
+		harnessActive = true
+		early := request
+		early.Connectivity = core.HarnessConnectivity{Placement: r.placement}
+		prepared = make(chan error, 1)
+		go func() {
+			endPrepare := phase(core.PhaseHarnessPrepare)
+			err := r.harness.Prepare(ctx, early)
+			endPrepare()
+			prepared <- err
+		}()
+	}
+
 	var err error
 	endPhase := phase(core.PhaseSandboxStart)
 	sandbox, err = r.toolSandbox.Start(ctx, core.SandboxRequest{
@@ -262,25 +373,30 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 	}
 	result.ToolLogPaths = append([]string(nil), endpoint.LogPaths...)
 
-	request := core.HarnessRequest{
-		Connectivity: sandbox.Connectivity(),
-		RunID:        r.runID,
-		TaskID:       task.ID,
-		Endpoint:     endpoint,
-		Model:        r.model,
-		Timeout:      harnessTimeout,
-		CPU:          harnessCPU,
-		MemoryMB:     harnessMemory,
-		OutputDir:    r.outputDir,
+	request.Connectivity = sandbox.Connectivity()
+	request.Endpoint = endpoint
+	if r.parallelStart {
+		err = waitPrepared()
+		if err == nil && request.Connectivity.Placement != r.placement {
+			err = errors.New("the sandbox's placement differs from the run's")
+		}
+	} else {
+		endPhase = phase(core.PhaseHarnessPrepare)
+		err = r.harness.Prepare(ctx, request)
+		endPhase()
+		harnessActive = true
 	}
-	request.NoSandboxTools = task.NoSandboxTools
-	endPhase = phase(core.PhaseHarnessStart)
-	err = r.harness.Start(ctx, request)
-	endPhase()
-	// Start may fail after allocating task-local resources. Stop is idempotent,
-	// so every Start attempt must be followed by a positive stop confirmation
-	// before the evaluator can inspect the sandbox.
-	harnessActive = true
+	if err == nil {
+		endPhase = phase(core.PhaseHarnessStart)
+		err = r.harness.Start(ctx, request)
+		endPhase()
+	}
+	// Prepare and Start may fail after allocating task-local resources. Stop is
+	// idempotent, so every attempt must be followed by a positive stop
+	// confirmation before the evaluator can inspect the sandbox.
+	if err == nil && r.warmup != nil {
+		err = r.warm(ctx, &result, phase)
+	}
 	if err != nil {
 		result.Harness.Status = failureStatus(err)
 		result.Harness.Error = err.Error()

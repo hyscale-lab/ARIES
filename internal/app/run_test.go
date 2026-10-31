@@ -289,7 +289,11 @@ func (*stubBenchmark) Evaluate(context.Context, core.Task, runner.Sandbox, runne
 
 type stubHarness struct{}
 
-func (*stubHarness) Start(context.Context, core.HarnessRequest) error { return nil }
+func (*stubHarness) Prepare(context.Context, core.HarnessRequest) error { return nil }
+func (*stubHarness) Start(context.Context, core.HarnessRequest) error   { return nil }
+func (*stubHarness) Warm(context.Context, string) (core.HarnessResult, error) {
+	return core.HarnessResult{}, nil
+}
 func (*stubHarness) Run(context.Context, string) (core.HarnessResult, error) {
 	return core.HarnessResult{}, nil
 }

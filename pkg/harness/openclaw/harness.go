@@ -106,6 +106,13 @@ type session struct {
 	safeTaskID       string
 	gatewayURL       string
 	agentIdempotency string
+	// searchURL, extractEnabled and mcp render the configuration once the
+	// sandbox's endpoint is known.
+	searchURL          string
+	extractEnabled     bool
+	mcp                MCPOptions
+	prepared, launched bool
+	warmups            int
 }
 
 var _ runner.AgentHarness = (*Manager)(nil)
@@ -157,9 +164,15 @@ func New(options Options) (*Manager, error) {
 	}, nil
 }
 
-func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) error {
+// Prepare creates the OpenClaw container without the sandbox's tool endpoint,
+// so it can be created while the sandbox starts. Start finishes it.
+func (manager *Manager) Prepare(ctx context.Context, request core.HarnessRequest) error {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
+	return manager.prepare(ctx, request)
+}
+
+func (manager *Manager) prepare(ctx context.Context, request core.HarnessRequest) error {
 	if manager.runtime.InUse() {
 		return errors.New("OpenClaw harness is already active")
 	}
@@ -204,13 +217,6 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 			}).Warn("OpenClaw extract API-key environment is not set; falling back to native web_fetch without Tavily extraction")
 		}
 	}
-	configuration, err := renderConfig(request.Model, request.Endpoint, manager.options.Common.Mode, request.Connectivity.SearchURL, manager.options.Common.WebSearchEnabled, extractEnabled, manager.options.Common.SubagentsEnabled, manager.options.Common.MaxConcurrentSubagents, MCPOptions{
-		Servers:        mcpServers,
-		NoSandboxTools: request.NoSandboxTools,
-	})
-	if err != nil {
-		return err
-	}
 	if ok, err := credentials.Load("model", request.Model.APIKeyEnv, manager.runtime.Options.APIKeyLookup); err != nil {
 		return err
 	} else if !ok {
@@ -222,18 +228,6 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		} else if !ok {
 			return fmt.Errorf("OpenClaw realtime API-key environment %q is not set", manager.options.Realtime.TTS.APIKeyEnv)
 		}
-	}
-	if value := credentials.Get("model"); len(value) != 0 && bytes.Contains(configuration, value) {
-		return errors.New("rendered OpenClaw config contains the API-key value")
-	}
-	if value := credentials.Get("voice"); len(value) != 0 && bytes.Contains(configuration, value) {
-		return errors.New("rendered OpenClaw config contains the realtime API-key value")
-	}
-	if value := credentials.Get("extract"); len(value) != 0 && bytes.Contains(configuration, value) {
-		return errors.New("rendered OpenClaw config contains the extract API-key value")
-	}
-	if err := credentials.LoadMCP(mcpServers, configuration, manager.runtime.Options.APIKeyLookup); err != nil {
-		return err
 	}
 	id, err := manager.newID()
 	if err != nil {
@@ -250,10 +244,13 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		return fmt.Errorf("generate OpenClaw agent idempotency key: %w", err)
 	}
 	active := &session{
-		Occurrence: &harness.Occurrence{RunID: request.RunID, TaskID: request.TaskID, AttemptID: id, Name: core.RuntimeName("openclaw", request.TaskID, id), ArtifactDir: filepath.Join(manager.runtime.Options.OutputDir, request.TaskID, "harness"), Endpoint: request.Endpoint, Model: request.Model, AgentTimeout: agentTimeout},
+		Occurrence: &harness.Occurrence{RunID: request.RunID, TaskID: request.TaskID, AttemptID: id, Name: core.RuntimeName("openclaw", request.TaskID, id), ArtifactDir: filepath.Join(manager.runtime.Options.OutputDir, request.TaskID, "harness"), Model: request.Model, AgentTimeout: agentTimeout},
 		safeTaskID: safeTaskID(request.TaskID),
 
 		agentIdempotency: agentIdempotency,
+		searchURL:        request.Connectivity.SearchURL,
+		extractEnabled:   extractEnabled,
+		mcp:              MCPOptions{Servers: mcpServers, NoSandboxTools: request.NoSandboxTools},
 	}
 	active.Credentials = credentials
 	active.Artifacts = &harness.Artifacts{Directory: active.ArtifactDir}
@@ -269,43 +266,134 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		Labels:    map[string]string{"aries.managed": "true", "aries.kind": "openclaw-harness", "aries.component": "harness", "aries.run": request.RunID, "aries.task": request.TaskID, "aries.attempt": active.AttemptID},
 		Placement: request.Connectivity.Placement, CPU: request.CPU, MemoryMB: request.MemoryMB, ServicePort: 18789,
 	}
-	fail := func(primary error) error {
-		err := manager.runtime.Rollback(ctx, active.Occurrence, primary)
-		if manager.runtime.InUse() {
-			manager.active = active
-		}
-		return err
-	}
 	if err := privatefiles.EnsureDirectory(active.ArtifactDir); err != nil {
-		return fail(fmt.Errorf("create OpenClaw artifact directory: %w", err))
+		return manager.fail(ctx, active, fmt.Errorf("create OpenClaw artifact directory: %w", err))
 	}
+	if err := manager.runtime.Create(ctx, active.Occurrence, active.DeploymentRequest); err != nil {
+		return manager.fail(ctx, active, err)
+	}
+	active.prepared = true
+	manager.active = active
+	return nil
+}
+
+// fail rolls back a startup that did not finish, keeping the occurrence for
+// cleanup when removal fails.
+func (manager *Manager) fail(ctx context.Context, active *session, primary error) error {
+	err := manager.runtime.Rollback(ctx, active.Occurrence, primary)
+	manager.active = nil
+	if manager.runtime.InUse() {
+		manager.active = active
+	}
+	return err
+}
+
+// Start configures the OpenClaw container with the sandbox's tool endpoint,
+// starts the gateway and waits until it is ready, preparing it first when
+// Prepare was not called.
+func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) error {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.active == nil {
+		if err := manager.prepare(ctx, request); err != nil {
+			return err
+		}
+	}
+	active := manager.active
+	if !active.prepared || active.launched {
+		return errors.New("OpenClaw harness is already active")
+	}
+	if active.RunID != request.RunID || active.TaskID != request.TaskID {
+		return errors.New("OpenClaw harness was prepared for another task")
+	}
+	active.launched = true
+	configuration, err := renderConfig(active.Model, request.Endpoint, manager.options.Common.Mode, active.searchURL, manager.options.Common.WebSearchEnabled, active.extractEnabled, manager.options.Common.SubagentsEnabled, manager.options.Common.MaxConcurrentSubagents, active.mcp)
+	if err != nil {
+		return manager.fail(ctx, active, err)
+	}
+	for _, name := range []string{"model", "voice", "extract"} {
+		if value := active.Credentials.Get(name); len(value) != 0 && bytes.Contains(configuration, value) {
+			return manager.fail(ctx, active, fmt.Errorf("rendered OpenClaw config contains the %s API-key value", name))
+		}
+	}
+	if err := active.Credentials.LoadMCP(active.mcp.Servers, configuration, manager.runtime.Options.APIKeyLookup); err != nil {
+		return manager.fail(ctx, active, err)
+	}
+	active.Endpoint = request.Endpoint
 	if err := active.Artifacts.Write("openclaw.json", configuration); err != nil {
-		return fail(fmt.Errorf("retain rendered OpenClaw config: %w", err))
+		return manager.fail(ctx, active, fmt.Errorf("retain rendered OpenClaw config: %w", err))
 	}
 	archive, err := manager.runtimeArchive(active, configuration)
 	if err != nil {
-		return fail(err)
+		return manager.fail(ctx, active, err)
 	}
 	defer clear(archive)
-	secrets := active.Credentials.Secrets()
-	if err := manager.runtime.Start(ctx, active.Occurrence, active.DeploymentRequest, archive, secrets); err != nil {
-		return fail(err)
+	if err := manager.runtime.Launch(ctx, active.Occurrence, archive, active.Credentials.Secrets()); err != nil {
+		return manager.fail(ctx, active, err)
 	}
 	readyCtx, cancel := context.WithTimeout(ctx, manager.runtime.Options.StartTimeout)
 	err = manager.waitReady(readyCtx, active)
 	cancel()
 	if err != nil {
-		return fail(err)
+		return manager.fail(ctx, active, err)
 	}
 	gatewayURL, err := manager.gatewayURL(ctx, active)
 	if err != nil {
-		return fail(err)
+		return manager.fail(ctx, active, err)
 	}
 	active.gatewayURL = gatewayURL
-	manager.active = active
 	manager.runtime.Ready()
 	manager.runtime.Options.Logger.WithContext(ctx).WithFields(logrus.Fields{"task_id": active.TaskID, "container": active.Name}).Info("OpenClaw harness started")
 	return nil
+}
+
+// Warm runs a warm-up instruction in its own agent session, so the task's
+// conversation does not see it. It keeps no artifacts.
+func (manager *Manager) Warm(ctx context.Context, instruction string) (core.HarnessResult, error) {
+	started := time.Now()
+	manager.mu.Lock()
+	if err := manager.runtime.AdmitWarm(instruction); err != nil {
+		manager.mu.Unlock()
+		return core.HarnessResult{Status: core.StatusFailed}, err
+	}
+	if isRealtimeMode(manager.options.Common.Mode) {
+		manager.mu.Unlock()
+		return core.HarnessResult{Status: core.StatusFailed}, errors.New("OpenClaw warm-up requires agent mode")
+	}
+	active := snapshotSession(manager.active)
+	manager.active.warmups++
+	sessionKey := fmt.Sprintf("agent:main:aries-%s-warmup-%d", active.safeTaskID, manager.active.warmups)
+	manager.mu.Unlock()
+	defer active.Credentials.Clear()
+	fail := func(err error) (core.HarnessResult, error) {
+		err = active.Credentials.RedactErr(err)
+		return active.FailedResult(started, err), err
+	}
+	idempotency, err := privatefiles.RandomID()
+	if err != nil {
+		return fail(fmt.Errorf("generate OpenClaw warm-up idempotency key: %w", err))
+	}
+	runCtx, cancel := context.WithTimeout(ctx, active.AgentTimeout)
+	defer cancel()
+	client, err := manager.newGateway(active.gatewayURL, active.Credentials.Get("gateway"))
+	if err != nil {
+		return fail(err)
+	}
+	defer client.Close()
+	summary, err := client.Connect(runCtx, gatewayclient.ConnectOptions{})
+	if err == nil && !summary.HasScope("operator.write") {
+		err = errors.New("OpenClaw agent gateway requires operator.write scope")
+	}
+	var result gatewayclient.AgentResult
+	if err == nil {
+		result, err = client.Agent(runCtx, gatewayclient.AgentRequest{
+			Message: instruction, SessionKey: sessionKey, IdempotencyKey: idempotency, Thinking: requestedThinking(active.Model),
+		})
+	}
+	if err != nil {
+		return fail(err)
+	}
+	return core.HarnessResult{Status: core.StatusSucceeded, FinalResponse: redactAgentResult(result, active).Text, Duration: time.Since(started)}, nil
 }
 
 func (manager *Manager) Run(ctx context.Context, instruction string) (core.HarnessResult, error) {

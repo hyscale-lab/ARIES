@@ -356,7 +356,9 @@ func TestStartStagesPrivateRuntimeAndPinsGatewayService(t *testing.T) {
 }
 
 // Hermes must run agent commands where the bridge does: the rendered terminal
-// section and TERMINAL_CWD both name the endpoint's workdir.
+// section and the staged TERMINAL_CWD both name the endpoint's workdir. The
+// endpoint stays out of the container's environment, which is set before the
+// sandbox is known.
 func TestStartNamesTheBridgeWorkdirToTheTerminal(t *testing.T) {
 	fake := newFakeDeployment(t)
 	manager := newTestManager(t, fake, []byte("model-secret"))
@@ -374,8 +376,50 @@ func TestStartNamesTheBridgeWorkdirToTheTerminal(t *testing.T) {
 	if terminal["backend"] != "ssh" || terminal["cwd"] != "/app" || terminal["timeout"] != manager.options.TerminalTimeout {
 		t.Fatalf("terminal settings = %#v", terminal)
 	}
-	if !slices.Contains(fake.created.Env, "TERMINAL_CWD=/app") {
-		t.Fatalf("TERMINAL_CWD does not name the bridge's workdir: %v", fake.created.Env)
+	staged := string(archiveContents(t, fake.archive)[strings.TrimPrefix(taskEnvPath, "/")])
+	if !strings.Contains(staged, "export TERMINAL_CWD=/app\n") || !strings.Contains(staged, "export TERMINAL_SSH_HOST=") {
+		t.Fatalf("staged terminal settings = %q", staged)
+	}
+	for _, entry := range fake.created.Env {
+		if strings.HasPrefix(entry, "TERMINAL_CWD=") || strings.HasPrefix(entry, "TERMINAL_SSH_") {
+			t.Fatalf("container environment names the sandbox: %v", fake.created.Env)
+		}
+	}
+}
+
+// Prepare creates the container without the sandbox; Start finishes it with
+// the endpoint, and warm-ups run as their own sessions before the task.
+func TestPrepareThenStartAndWarmBeforeTheTask(t *testing.T) {
+	fake := newFakeDeployment(t)
+	manager := newTestManager(t, fake, []byte("model-secret"))
+	request := testRequest(t)
+	prepared := request
+	prepared.Endpoint = core.ToolEndpoint{}
+	if err := manager.Prepare(context.Background(), prepared); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop(context.Background())
+	if fake.created.Name == "" || fake.archive != nil {
+		t.Fatalf("Prepare created %q and staged %d bytes", fake.created.Name, len(fake.archive))
+	}
+	if _, err := manager.Warm(context.Background(), "warm up"); err == nil {
+		t.Fatal("Warm before Start succeeded")
+	}
+	if err := manager.Start(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Warm(context.Background(), "warm up"); err != nil {
+		t.Fatal(err)
+	}
+	warmSession := fake.gatewaySession
+	if _, err := manager.Run(context.Background(), "solve the task"); err != nil {
+		t.Fatal(err)
+	}
+	if warmSession == fake.gatewaySession || !strings.Contains(warmSession, "warmup-1") {
+		t.Fatalf("warm-up session %q, task session %q", warmSession, fake.gatewaySession)
+	}
+	if _, err := manager.Warm(context.Background(), "warm up"); err == nil {
+		t.Fatal("Warm after the task succeeded")
 	}
 }
 

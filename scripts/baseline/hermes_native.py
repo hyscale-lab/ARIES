@@ -31,7 +31,7 @@ import urllib.error
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from openclaw_native import iso, now, prometheus_samples, remove_tree, run  # noqa: E402
+from openclaw_native import MANIFEST_HEADER, WARMUP_INSTRUCTION, iso, now, parse_time, prometheus_samples, remove_tree, run, warm_up  # noqa: E402
 
 TASKS = ["mb-noop", "mb-one-call", "mb-ten-calls", "mb-cpu", "mb-output"]
 API_PORT = 8642
@@ -86,6 +86,37 @@ def sandboxes():
     return [name for name in listed.stdout.split() if name]
 
 
+def created_since(names, since):
+    """The sandboxes created at or after since, newest first."""
+    found = []
+    for name in names:
+        inspected = subprocess.run(["docker", "inspect", name, "--format", "{{.Created}}"], capture_output=True, text=True)
+        if inspected.returncode != 0:
+            continue
+        created = parse_time(inspected.stdout.strip())
+        if created >= since:
+            found.append((created, name))
+    return [name for _, name in sorted(found, reverse=True)]
+
+
+def run_gateway(instruction, session_id):
+    """Runs one instruction in the named session, polled every 100 ms as
+    ARIES polls it; returns the run's outcome and an error or ""."""
+    try:
+        admitted = api("POST", "/v1/runs", {"input": instruction, "session_id": session_id})
+        run_id = admitted["run_id"]
+        while True:
+            outcome = api("GET", "/v1/runs/" + run_id)
+            if outcome.get("status") in ("completed", "failed", "cancelled", "interrupted"):
+                break
+            time.sleep(0.1)
+        if outcome.get("status") != "completed":
+            return outcome, "run %s: %s" % (outcome.get("status"), outcome.get("error", ""))
+        return outcome, ""
+    except (urllib.error.URLError, OSError, ValueError, KeyError) as problem:
+        return {}, "gateway API: %s" % problem
+
+
 def run_task(args, root, run_dir, task, occurrence, template, image):
     task_id = "%s-%03d" % (task, occurrence)
     # On the node's own disk: the gateway runs as root, which an NFS home
@@ -135,29 +166,25 @@ def run_task(args, root, run_dir, task, occurrence, template, image):
         except (urllib.error.URLError, OSError, ValueError):
             time.sleep(0.1)
     phase("harness_start", began)
-    reward, outcome = 0.0, {}
+    reward, outcome, warmups = 0.0, {}, []
+    if ready and args.warm:
+        # Each warm-up is its own session, as under ARIES.
+        began = now()
+        warmups, error = warm_up(lambda index: run_gateway(WARMUP_INSTRUCTION, "aries-%s-warmup-%d" % (task_id, index))[1])
+        phase("harness_warmup", began)
     if not ready:
         error = "gateway did not start"
-    else:
-        # The agent's run, polled every 100 ms as ARIES polls it.
+    elif not error:
+        # The agent's run.
         began = now()
-        try:
-            admitted = api("POST", "/v1/runs", {"input": instruction, "session_id": "aries-" + task_id})
-            run_id = admitted["run_id"]
-            while True:
-                outcome = api("GET", "/v1/runs/" + run_id)
-                if outcome.get("status") in ("completed", "failed", "cancelled", "interrupted"):
-                    break
-                time.sleep(0.1)
-            if outcome.get("status") != "completed":
-                error = "run %s: %s" % (outcome.get("status"), outcome.get("error", ""))
-        except (urllib.error.URLError, OSError, ValueError, KeyError) as problem:
-            error = "gateway API: %s" % problem
+        outcome, error = run_gateway(instruction, "aries-" + task_id)
         phase("harness_run", began)
-        # Evaluation, in Hermes's own sandbox; a task that ran nothing has
-        # none, so its verifier runs in a fresh container of the same image.
+        # Evaluation, in Hermes's own sandbox: the newest one the task's run
+        # created, or else the newest, which a warm-up created and the task
+        # reused. A task that ran nothing has none, so its verifier runs in a
+        # fresh container of the same image.
         began = now()
-        created = sandboxes()
+        created = created_since(sandboxes(), parse_time(phases[-1]["started_at"])) or sandboxes()
         target = created[0] if created else "hermes-native-eval-" + task_id
         if not created:
             run(["docker", "run", "-d", "--name", target, "--network", "none", "python:3.12.12-slim-bookworm", "sleep", "600"])
@@ -200,7 +227,7 @@ def run_task(args, root, run_dir, task, occurrence, template, image):
     remove_tree(work)
     return {"task_id": task_id, "harness": {"status": "succeeded" if not error else "failed"},
             "evaluation": {"status": "succeeded", "reward": reward}, "phases": phases,
-            "duration": int((finished - started) * 1e9), "error": error}
+            "duration": int((finished - started) * 1e9), "error": error, "warmups": warmups}
 
 
 def main():
@@ -209,7 +236,9 @@ def main():
     parser.add_argument("--address", required=True, help="this node's IP, where the gateway reaches aries-replay")
     parser.add_argument("--prometheus", required=True)
     parser.add_argument("--port", type=int, default=8090)
+    parser.add_argument("--warm", action="store_true", help="send warm-ups through the started gateway before each task")
     args = parser.parse_args()
+    variant = ("warm" if args.warm else "cold") + "-sequential"
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     os.chdir(root)
 
@@ -232,16 +261,19 @@ def main():
             except OSError:
                 time.sleep(0.2)
         manifest = os.path.join(root, ".cache", "microbench-runs", "manifest.tsv")
+        if not os.path.exists(manifest):
+            with open(manifest, "w") as handle:
+                handle.write(MANIFEST_HEADER)
         for repetition in range(1, args.runs + 1):
-            run_dir = os.path.join(root, "runs", "%s-hermes-microbench-native-replay-%d" % (stamp, repetition))
+            run_dir = os.path.join(root, "runs", "%s-hermes-microbench-native-replay-%s-%d" % (stamp, variant, repetition))
             os.makedirs(run_dir)
-            print("==> hermes-microbench-native-replay, run %d of %d" % (repetition, args.runs), flush=True)
+            print("==> hermes-microbench-native-replay-%s, run %d of %d" % (variant, repetition, args.runs), flush=True)
             started = now()
             tasks = [run_task(args, root, run_dir, task, index + 1, template, image) for index, task in enumerate(TASKS)]
             with open(os.path.join(run_dir, "run-result.json"), "w") as handle:
                 json.dump({"name": "hermes-microbench-native-replay", "tasks": tasks, "duration": int((now() - started) * 1e9)}, handle, indent=2)
             with open(manifest, "a") as handle:
-                handle.write("hermes\tnative\treplay\t%d\t%s\t%s\n" % (repetition, run_dir, requests))
+                handle.write("hermes\tnative\treplay\t%d\t%s\t%s\t%s\n" % (repetition, run_dir, requests, variant))
             print("    %s (%s)" % (run_dir, ", ".join("%s=%s%s" % (t["task_id"], t["evaluation"]["reward"], " " + t["error"][:80] if t["error"] else "") for t in tasks)), flush=True)
     finally:
         server.terminate()

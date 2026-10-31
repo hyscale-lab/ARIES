@@ -60,7 +60,8 @@ type Occurrence struct {
 // may be acquired before Runtime's mutex, never the reverse. Runtime does not
 // call native code or hold its mutex during deployment operations.
 //
-// Lifecycle: Own -> Start -> native readiness -> Ready -> AdmitRun.
+// Lifecycle: Own -> Create -> Launch (or Start, doing both) -> native
+// readiness -> Ready -> AdmitWarm, any number of times -> AdmitRun.
 // Any failed startup uses Rollback. Stop uses BeginStop -> native cancellation
 // -> Remove -> native client closure -> FinishStop. No callback hooks are needed.
 type Runtime struct {
@@ -128,7 +129,17 @@ func (r *Runtime) Own(o *Occurrence) error {
 	return nil
 }
 func (r *Runtime) Ready() { r.mu.Lock(); defer r.mu.Unlock(); r.ready = true }
+
+// AdmitWarm admits a warm-up instruction, which must precede the task's.
+func (r *Runtime) AdmitWarm(instruction string) error {
+	return r.admit(instruction, false)
+}
+
 func (r *Runtime) AdmitRun(instruction string) error {
+	return r.admit(instruction, true)
+}
+
+func (r *Runtime) admit(instruction string, task bool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.stop.Running() {
@@ -138,18 +149,31 @@ func (r *Runtime) AdmitRun(instruction string) error {
 		return fmt.Errorf("%s harness is not started", r.label)
 	}
 	if r.admitted {
+		if !task {
+			return fmt.Errorf("%s harness warm-up must precede the task instruction", r.label)
+		}
 		return fmt.Errorf("%s harness accepts exactly one task instruction", r.label)
 	}
 	if strings.TrimSpace(instruction) == "" || strings.ContainsRune(instruction, 0) {
 		return fmt.Errorf("%s task instruction is invalid", r.label)
 	}
-	r.admitted = true
+	r.admitted = task
 	return nil
 }
 
-// Start retains a returned identity even when Create reports partial failure.
-// Own must precede this operation, so every failure is available to rollback.
+// Start creates and launches the runtime in one step.
 func (r *Runtime) Start(ctx context.Context, o *Occurrence, request deployment.Request, archive []byte, secrets [][]byte) error {
+	if err := r.Create(ctx, o, request); err != nil {
+		return err
+	}
+	return r.Launch(ctx, o, archive, secrets)
+}
+
+// Create creates the runtime without starting the harness in it, so it can
+// happen before the harness's configuration is known. It retains a returned
+// identity even when Create reports partial failure. Own must precede this
+// operation, so every failure is available to rollback.
+func (r *Runtime) Create(ctx context.Context, o *Occurrence, request deployment.Request) error {
 	o.DeploymentRequest = request
 	id, err := r.Options.Deployment.Create(ctx, request)
 	o.ID = id
@@ -159,13 +183,20 @@ func (r *Runtime) Start(ctx context.Context, o *Occurrence, request deployment.R
 	if strings.TrimSpace(id) == "" {
 		return fmt.Errorf("deployment returned an empty %s runtime ID", r.label)
 	}
-	if err = r.Options.Deployment.UploadArchive(ctx, id, "/", bytes.NewReader(archive)); err != nil {
+	return nil
+}
+
+// Launch copies the private runtime files into a created runtime, validates
+// it and starts the harness.
+func (r *Runtime) Launch(ctx context.Context, o *Occurrence, archive []byte, secrets [][]byte) error {
+	id, request := o.ID, o.DeploymentRequest
+	if err := r.Options.Deployment.UploadArchive(ctx, id, "/", bytes.NewReader(archive)); err != nil {
 		return fmt.Errorf("copy private %s runtime: %w", r.label, err)
 	}
-	if err = r.Options.Deployment.Validate(ctx, id, request, secrets); err != nil {
+	if err := r.Options.Deployment.Validate(ctx, id, request, secrets); err != nil {
 		return err
 	}
-	if err = r.Options.Deployment.Start(ctx, id); err != nil {
+	if err := r.Options.Deployment.Start(ctx, id); err != nil {
 		return fmt.Errorf("start %s container: %w", r.label, err)
 	}
 	return nil

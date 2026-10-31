@@ -30,9 +30,16 @@ type EvaluationSandboxes interface {
 	Start(context.Context, core.Environment) (Sandbox, error)
 }
 
-// AgentHarness owns one task-local agent runtime.
+// AgentHarness owns one task-local agent runtime. Prepare creates the runtime
+// without the sandbox's tool endpoint, so it may run while the sandbox starts;
+// Start then configures it with request.Endpoint and waits until it is ready,
+// preparing first when Prepare was not called. Warm sends a warm-up
+// instruction as its own conversation and may be called any number of times
+// before Run, which accepts the task's single instruction.
 type AgentHarness interface {
+	Prepare(context.Context, core.HarnessRequest) error
 	Start(context.Context, core.HarnessRequest) error
+	Warm(context.Context, string) (core.HarnessResult, error)
 	Run(context.Context, string) (core.HarnessResult, error)
 	Stop(context.Context) error
 }

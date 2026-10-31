@@ -59,8 +59,14 @@ type runOutcome struct {
 }
 
 func (manager *Manager) runGateway(ctx context.Context, active *session, instruction string) (string, runOutcome, error) {
+	return manager.runGatewaySession(ctx, active, instruction, "aries-"+active.AttemptID)
+}
+
+// runGatewaySession runs one instruction in the named Gateway session; a new
+// name starts a new conversation.
+func (manager *Manager) runGatewaySession(ctx context.Context, active *session, instruction, sessionID string) (string, runOutcome, error) {
 	started := time.Now()
-	outcome := runOutcome{Status: string(core.StatusFailed), EndReason: "request_error", SessionID: "aries-" + active.AttemptID, StartedAt: started.UTC().Format(time.RFC3339Nano)}
+	outcome := runOutcome{Status: string(core.StatusFailed), EndReason: "request_error", SessionID: sessionID, StartedAt: started.UTC().Format(time.RFC3339Nano)}
 	execution := active.gateway
 	runCtx, cancel := context.WithTimeout(ctx, active.AgentTimeout)
 	defer cancel()

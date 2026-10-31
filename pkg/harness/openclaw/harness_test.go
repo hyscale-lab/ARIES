@@ -1563,3 +1563,54 @@ func TestTelemetryScrubsRedactEnvValues(t *testing.T) {
 		}
 	}
 }
+
+// sessionGateway records the session key of every agent request.
+type sessionGateway struct {
+	stubGateway
+	sessions []string
+}
+
+func (gateway *sessionGateway) Agent(_ context.Context, request gatewayclient.AgentRequest) (gatewayclient.AgentResult, error) {
+	gateway.sessions = append(gateway.sessions, request.SessionKey)
+	return gatewayclient.AgentResult{RunID: "run-agent", Text: "done"}, nil
+}
+
+// Prepare creates the container without the sandbox; Start finishes it with
+// the endpoint, and warm-ups run in their own sessions before the task.
+func TestPrepareThenStartAndWarmBeforeTheTask(t *testing.T) {
+	fake := &fakeDeployment{}
+	manager := newTestManager(t, fake, []byte("model-secret"))
+	gateway := &sessionGateway{}
+	manager.newGateway = func(string, []byte) (gatewayConnection, error) { return gateway, nil }
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{AttachmentID: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel(), Timeout: time.Second}
+	prepared := request
+	prepared.Endpoint = core.ToolEndpoint{}
+	if err := manager.Prepare(context.Background(), prepared); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop(context.Background())
+	if fake.created.Name == "" || fake.archive != nil {
+		t.Fatalf("Prepare created %q and staged %d bytes", fake.created.Name, len(fake.archive))
+	}
+	if _, err := manager.Warm(context.Background(), "warm up"); err == nil {
+		t.Fatal("Warm before Start succeeded")
+	}
+	if err := manager.Start(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if _, err := manager.Warm(context.Background(), "warm up"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := manager.Run(context.Background(), "solve the task"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"agent:main:aries-fix-git-warmup-1", "agent:main:aries-fix-git-warmup-2", "agent:main:aries-fix-git"}
+	if !slices.Equal(gateway.sessions, want) {
+		t.Fatalf("sessions = %v, want %v", gateway.sessions, want)
+	}
+	if _, err := manager.Warm(context.Background(), "warm up"); err == nil {
+		t.Fatal("Warm after the task succeeded")
+	}
+}

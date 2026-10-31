@@ -41,12 +41,18 @@ type runnerHermes struct {
 	endpoint  string
 }
 
-func (h *runnerHermes) Start(ctx context.Context, request core.HarnessRequest) error {
+// Prepare points the model at the host endpoint: the model is fixed when
+// the container is created.
+func (h *runnerHermes) Prepare(ctx context.Context, request core.HarnessRequest) error {
 	gateway, err := dockerroute.Listen(ctx, request.Connectivity.Placement.AttachmentID)
 	if err != nil {
 		return err
 	}
 	request.Model.BaseURL = "http://" + net.JoinHostPort(gateway.AdvertiseHost, h.modelPort) + "/v1"
+	return h.Manager.Prepare(ctx, request)
+}
+
+func (h *runnerHermes) Start(ctx context.Context, request core.HarnessRequest) error {
 	h.endpoint = request.Endpoint.Address
 	if err := h.Manager.Start(ctx, request); err != nil {
 		return err

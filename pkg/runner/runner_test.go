@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -264,15 +265,44 @@ func (f *fakeBridge) stopCount() int {
 }
 
 type fakeHarness struct {
-	mu           sync.Mutex
-	log          *callLog
-	requests     []core.HarnessRequest
-	startErr     error
-	runErrors    []error
-	stopErrors   []error
-	runs         int
-	stops        int
-	instructions []string
+	mu            sync.Mutex
+	log           *callLog
+	prepared      []core.HarnessRequest
+	prepareErr    error
+	requests      []core.HarnessRequest
+	startErr      error
+	warmDurations []time.Duration
+	warmErr       error
+	warms         int
+	runErrors     []error
+	stopErrors    []error
+	runs          int
+	stops         int
+	instructions  []string
+}
+
+func (f *fakeHarness) Prepare(ctx context.Context, request core.HarnessRequest) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.prepared = append(f.prepared, request)
+	return f.prepareErr
+}
+
+func (f *fakeHarness) Warm(ctx context.Context, instruction string) (core.HarnessResult, error) {
+	f.log.add("harness.warm", ctx)
+	f.mu.Lock()
+	var pause time.Duration
+	if f.warms < len(f.warmDurations) {
+		pause = f.warmDurations[f.warms]
+	}
+	f.warms++
+	err := f.warmErr
+	f.mu.Unlock()
+	time.Sleep(pause)
+	return core.HarnessResult{FinalResponse: "warm"}, err
 }
 
 func (f *fakeHarness) Start(ctx context.Context, request core.HarnessRequest) error {
@@ -340,6 +370,13 @@ type rig struct {
 
 func newRig(t *testing.T, tasks int) *rig {
 	t.Helper()
+	return newRigWith(t, tasks, Options{})
+}
+
+// newRigWith builds a rig whose runner also takes the start and warm-up
+// options set in extra.
+func newRigWith(t *testing.T, tasks int, extra Options) *rig {
+	t.Helper()
 	log := newCallLog()
 	taskList := make([]core.Task, tasks)
 	for i := range taskList {
@@ -356,6 +393,9 @@ func newRig(t *testing.T, tasks int) *rig {
 		OutputDir:      "runs",
 		CleanupTimeout: time.Second,
 		Logger:         logrus.New(),
+		ParallelStart:  extra.ParallelStart,
+		Placement:      extra.Placement,
+		Warmup:         extra.Warmup,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -422,8 +462,8 @@ func TestRunnerRecordsEachLifecyclePhaseInOrder(t *testing.T) {
 	}
 	task := result.Tasks[0]
 	want := []string{
-		core.PhaseSandboxStart, core.PhaseSandboxPrepare, core.PhaseBridgeRegister, core.PhaseHarnessStart,
-		core.PhaseHarnessRun, core.PhaseIsolation, core.PhaseEvaluation, core.PhaseCleanup,
+		core.PhaseSandboxStart, core.PhaseSandboxPrepare, core.PhaseBridgeRegister, core.PhaseHarnessPrepare,
+		core.PhaseHarnessStart, core.PhaseHarnessRun, core.PhaseIsolation, core.PhaseEvaluation, core.PhaseCleanup,
 	}
 	if got := phaseNames(task.Phases); !reflect.DeepEqual(got, want) {
 		t.Fatalf("phases = %v, want %v", got, want)
@@ -1096,5 +1136,88 @@ func TestNewRejectsMissingRunID(t *testing.T) {
 	rig := newRig(t, 0)
 	if _, err := New(rig.benchmark, rig.harness, rig.factory, rig.bridge, Options{}); err == nil || !strings.Contains(err.Error(), "run ID") {
 		t.Fatalf("New() error = %v, want missing run ID", err)
+	}
+}
+
+// A parallel start prepares the harness in the run's placement, without the
+// sandbox's endpoint, while the sandbox starts; Start then gets the endpoint.
+func TestRunnerPreparesTheHarnessWhileTheSandboxStarts(t *testing.T) {
+	rig := newRigWith(t, 1, Options{ParallelStart: true, Placement: core.RuntimePlacement{AttachmentID: "occurrence-network"}})
+	result, err := rig.runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	rig.harness.mu.Lock()
+	prepared, started := rig.harness.prepared, rig.harness.requests
+	rig.harness.mu.Unlock()
+	if len(prepared) != 1 || prepared[0].Connectivity.Placement.AttachmentID != "occurrence-network" || prepared[0].Connectivity.SearchURL != "" || prepared[0].Endpoint.Address != "" {
+		t.Fatalf("prepared = %#v", prepared)
+	}
+	if len(started) != 1 || started[0].Connectivity.SearchURL != "http://search.example:8123" {
+		t.Fatalf("started = %#v", started)
+	}
+	if !slices.Contains(phaseNames(result.Tasks[0].Phases), core.PhaseHarnessPrepare) || result.Tasks[0].Harness.Status != core.StatusSucceeded {
+		t.Fatalf("task = %#v", result.Tasks[0])
+	}
+}
+
+func TestRunnerRejectsASandboxOutsideTheRunPlacement(t *testing.T) {
+	rig := newRigWith(t, 1, Options{ParallelStart: true, Placement: core.RuntimePlacement{AttachmentID: "another-network"}})
+	result, err := rig.runner.Run(context.Background())
+	if err == nil || !strings.Contains(result.Tasks[0].Harness.Error, "placement") {
+		t.Fatalf("Run() error = %v, harness = %#v", err, result.Tasks[0].Harness)
+	}
+	if rig.harness.stopCount() == 0 {
+		t.Fatal("the prepared harness was not stopped")
+	}
+}
+
+func TestNewRejectsAParallelStartWithoutPlacement(t *testing.T) {
+	if _, err := New(&fakeBenchmark{}, &fakeHarness{}, &fakeToolSandbox{}, &fakeBridge{}, Options{RunID: "r", ParallelStart: true}); err == nil {
+		t.Fatal("New accepted a parallel start without the run's placement")
+	}
+}
+
+// Warm-ups repeat until the last Stable of them agree, then the task runs.
+func TestRunnerWarmsUpUntilStableBeforeTheTask(t *testing.T) {
+	rig := newRigWith(t, 1, Options{Warmup: &Warmup{Instruction: "warm up", Stable: 2, Tolerance: 0.5, Max: 6}})
+	rig.harness.warmDurations = []time.Duration{40 * time.Millisecond, 5 * time.Millisecond, 5 * time.Millisecond}
+	result, err := rig.runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	task := result.Tasks[0]
+	if len(task.Warmups) != 3 || task.Warmups[0].Duration < 40*time.Millisecond || task.Warmups[2].Status != core.StatusSucceeded {
+		t.Fatalf("warm-ups = %#v", task.Warmups)
+	}
+	calls := rig.log.snapshot()
+	if !slices.Equal(calls[slices.Index(calls, "harness.start"):slices.Index(calls, "harness.run")+1], []string{"harness.start", "harness.warm", "harness.warm", "harness.warm", "harness.run"}) {
+		t.Fatalf("calls = %v", calls)
+	}
+	if !slices.Contains(phaseNames(task.Phases), core.PhaseHarnessWarmup) {
+		t.Fatalf("phases = %v", phaseNames(task.Phases))
+	}
+}
+
+func TestRunnerStopsWarmingUpAtTheMaximum(t *testing.T) {
+	rig := newRigWith(t, 1, Options{Warmup: &Warmup{Instruction: "warm up", Stable: 2, Tolerance: 0, Max: 3}})
+	rig.harness.warmDurations = []time.Duration{time.Millisecond, 20 * time.Millisecond, time.Millisecond}
+	result, err := rig.runner.Run(context.Background())
+	if err != nil || len(result.Tasks[0].Warmups) != 3 {
+		t.Fatalf("Run() error = %v, warm-ups = %#v", err, result.Tasks[0].Warmups)
+	}
+}
+
+// A failed warm-up fails the harness; the task instruction is never sent.
+func TestRunnerFailsTheTaskWhenAWarmupFails(t *testing.T) {
+	rig := newRigWith(t, 1, Options{Warmup: &Warmup{Instruction: "warm up", Stable: 1, Tolerance: 0, Max: 3}})
+	rig.harness.warmErr = errors.New("gateway refused")
+	result, err := rig.runner.Run(context.Background())
+	task := result.Tasks[0]
+	if err == nil || task.Harness.Status != core.StatusFailed || len(task.Warmups) != 1 || task.Warmups[0].Error == "" {
+		t.Fatalf("Run() error = %v, task = %#v", err, task)
+	}
+	if slices.Contains(rig.log.snapshot(), "harness.run") || rig.harness.stopCount() == 0 {
+		t.Fatalf("calls = %v", rig.log.snapshot())
 	}
 }

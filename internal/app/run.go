@@ -44,6 +44,9 @@ type Wiring struct {
 	NewHarness         func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error)
 	NewSandbox         func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error)
 	NewBridge          func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error)
+	// Placement is the run's, set once its infrastructure has started, so a
+	// harness can be prepared before its sandbox exists.
+	Placement core.RuntimePlacement
 }
 
 type Dependencies struct {
@@ -344,8 +347,13 @@ func buildTaskExperiment(cfg config.Config, model core.ModelConfig, effectiveGPU
 	if err != nil {
 		return nil, errors.Join(err, sandbox.Resources.Close(), closeOccurrenceClients(sandbox.Close, harness.Close))
 	}
+	var warmup *runner.Warmup
+	if w := cfg.Execution.Warmup; w != nil {
+		warmup = &runner.Warmup{Instruction: w.Instruction, Stable: w.Stable, Tolerance: w.Tolerance, Max: w.Max}
+	}
 	benchmarkRunner, err := runner.New(benchmark, harness.Harness, sandbox.Sandbox, bridge, runner.Options{
 		Name: cfg.Name, RunID: runID, OutputDir: outputRoot, Model: model, Logger: logger,
+		ParallelStart: cfg.Execution.ParallelStart, Placement: wiring.Placement, Warmup: warmup,
 		RuntimeOverrides: runner.RuntimeOverrides{
 			HarnessResources:      runner.ResourceOverrides{CPU: cfg.Overrides.HarnessResources.CPU, MemoryMB: cfg.Overrides.HarnessResources.MemoryMB},
 			AgentSandboxResources: runner.ResourceOverrides{CPU: cfg.Overrides.AgentSandboxResources.CPU, MemoryMB: cfg.Overrides.AgentSandboxResources.MemoryMB, StorageMB: cfg.Overrides.AgentSandboxResources.StorageMB},

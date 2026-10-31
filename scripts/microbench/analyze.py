@@ -7,13 +7,20 @@ Reads the manifest scripts/microbench/run.sh writes and, for every task run,
 combines the runner's phase timeline (run-result.json), the bridge's tool-call
 log, aries-replay's request log and the resource samples. Writes one row per
 task run to tasks.csv beside the manifest and prints a Markdown summary of
-medians, with the Kubernetes minus Docker difference.
+medians per variant, with the Kubernetes minus Docker difference.
+
+A variant is how the task was started: cold (a fresh sandbox and harness,
+started one after the other or, with -parallel, side by side) or warm (warm-up
+requests through the started harness first). latency_s is what a user waits
+for, from the first start-up step to the agent's response; for a warm task it
+is the agent's run alone. startup_s is the cold part before the agent's run.
 
 The agent's run is split three ways: model time, the requests aries-replay
 served during it; tool time, what the bridge measured executing commands in
 the sandbox; and the remainder, the harness's own work plus the transport
-between harness, bridge and sandbox. Standard library only, so it runs on the
-cluster nodes.
+between harness, bridge and sandbox. Warm-up requests and their tool calls
+fall outside the agent's run and are left out. Standard library only, so it
+runs on the cluster nodes.
 """
 
 import csv
@@ -25,8 +32,10 @@ import statistics
 import sys
 from collections import defaultdict
 
-PHASES = ["sandbox_start", "sandbox_prepare", "bridge_register", "harness_start",
-          "harness_run", "isolation", "evaluation", "cleanup"]
+PHASES = ["sandbox_start", "sandbox_prepare", "bridge_register", "harness_prepare", "harness_start",
+          "harness_warmup", "harness_run", "isolation", "evaluation", "cleanup"]
+# Phases up to the agent's response; the warm-up is excluded from latency.
+STARTUP = ["sandbox_start", "sandbox_prepare", "bridge_register", "harness_prepare", "harness_start"]
 
 
 def parse_time(text):
@@ -47,7 +56,15 @@ def read_jsonl(path):
         return [json.loads(line) for line in handle if line.strip()]
 
 
-def harness_tool_calls(task_dir):
+def within(text, window):
+    """Whether a timestamp falls in the agent's run; no window or no
+    timestamp keeps the record."""
+    if window is None or not text:
+        return True
+    return window[0] <= parse_time(text) <= window[1]
+
+
+def harness_tool_calls(task_dir, window):
     """Tool calls as the harness saw them, from OpenClaw's session log: each
     tool result records how long the call took on the harness's side. The same
     log exists with and without ARIES, so this compares all deployments alike."""
@@ -57,7 +74,7 @@ def harness_tool_calls(task_dir):
             continue
         for entry in read_jsonl(path):
             message = entry.get("message") or {}
-            if message.get("role") == "toolResult":
+            if message.get("role") == "toolResult" and within(entry.get("timestamp"), window):
                 duration = (message.get("details") or {}).get("durationMs")
                 if isinstance(duration, (int, float)):
                     durations.append(duration)
@@ -101,35 +118,46 @@ def task_rows(entry, requests):
         if "bridge_start" in phases:
             phases.setdefault("bridge_register", phases.pop("bridge_start"))
         row = {key: entry[key] for key in ("harness", "backend", "mode", "repetition")}
+        row["variant"] = entry.get("variant") or "cold"
         row["task"] = task["task_id"].rsplit("-", 1)[0]
         row["reward"] = task["evaluation"].get("reward")
         row["error"] = task.get("error", "")
         for name in PHASES:
             row[name + "_s"] = phases[name]["duration"] / 1e9 if name in phases else None
         row["task_s"] = task["duration"] / 1e9
+        window = None
+        if "harness_run" in phases:
+            run_start = parse_time(phases["harness_run"]["started_at"])
+            window = (run_start, run_start + phases["harness_run"]["duration"] / 1e9)
+            first = min(parse_time(phases[name]["started_at"]) for name in STARTUP + ["harness_run"] if name in phases)
+            row["startup_s"] = run_start - first
+            row["provisioning_s"] = sum(row[name + "_s"] or 0 for name in ("sandbox_start", "sandbox_prepare", "bridge_register"))
+            warm = row["variant"].startswith("warm")
+            row["latency_s"] = window[1] - window[0] if warm else window[1] - first
+        warmups = task.get("warmups") or []
+        row["warmups"] = len(warmups)
+        if warmups:
+            row["warmup_last_s"] = warmups[-1]["duration"] / 1e9
         # OpenClaw's own measure of the agent's run, which the native baseline
         # records; its wall-clock harness_run also includes starting the CLI.
         if task.get("agent_internal_ms") is not None:
             row["agent_internal_s"] = task["agent_internal_ms"] / 1000
 
-        calls = read_jsonl(os.path.join(run_dir, task["task_id"], "bridge", "tool-calls.jsonl"))
+        calls = [call for call in read_jsonl(os.path.join(run_dir, task["task_id"], "bridge", "tool-calls.jsonl"))
+                 if within(call.get("timestamp"), window)]
         row["tool_calls"] = len(calls)
         row["tool_rejected"] = sum(1 for call in calls if call.get("status") != "completed")
         row["tool_exec_s"] = sum(call.get("duration_ms", 0) for call in calls) / 1000
         row["tool_exec_mean_ms"] = statistics.mean(c.get("duration_ms", 0) for c in calls) if calls else None
 
-        model_s = None
-        if "harness_run" in phases:
-            start = parse_time(phases["harness_run"]["started_at"])
-            end = start + phases["harness_run"]["duration"] / 1e9
-            chat = [r for r in requests if r["path"].endswith("/chat/completions")
-                    and start <= parse_time(r["received_at"]) <= end]
+        if window is not None:
+            chat = [r for r in requests if r["path"].endswith("/chat/completions") and within(r["received_at"], window)]
             model_s = sum(r["duration_ms"] for r in chat) / 1000
             row["model_calls"] = len(chat)
             row["model_misses"] = sum(1 for r in chat if r.get("hit") is False)
             row["model_s"] = model_s
             row["harness_other_s"] = phases["harness_run"]["duration"] / 1e9 - model_s - row["tool_exec_s"]
-        harness_calls = harness_tool_calls(os.path.join(run_dir, task["task_id"]))
+        harness_calls = harness_tool_calls(os.path.join(run_dir, task["task_id"]), window)
         row["harness_tool_calls"] = len(harness_calls)
         row["harness_tool_s"] = sum(harness_calls) / 1000
         row["harness_tool_mean_ms"] = statistics.mean(harness_calls) if harness_calls else None
@@ -165,32 +193,32 @@ def main():
         writer.writeheader()
         writer.writerows(rows)
 
-    shown = ["task_s", "sandbox_start_s", "harness_start_s", "harness_run_s", "agent_internal_s", "model_s",
-             "tool_exec_s", "harness_other_s", "isolation_s", "evaluation_s", "cleanup_s", "tool_exec_mean_ms",
+    shown = ["latency_s", "startup_s", "provisioning_s", "harness_prepare_s", "harness_start_s", "harness_run_s",
+             "agent_internal_s", "model_s", "tool_exec_s", "harness_other_s", "warmups", "warmup_last_s",
+             "task_s", "isolation_s", "evaluation_s", "cleanup_s", "tool_exec_mean_ms",
              "harness_tool_calls", "harness_tool_mean_ms",
              "sandbox_cpu_mean", "sandbox_cpu_peak", "harness_cpu_peak", "harness_memory_peak_mib"]
     groups = defaultdict(list)
     for row in rows:
         if row["mode"] == "replay":
-            groups[(row["harness"], row["task"], row["backend"])].append(row)
+            groups[(row["harness"], row["task"], row["variant"], row["backend"])].append(row)
     print("Medians over replayed runs; times in seconds, CPU in percent of one core.\n")
-    for harness in sorted({key[0] for key in groups}):
-        for task in sorted({key[1] for key in groups if key[0] == harness}):
-            native = groups.get((harness, task, "native"), [])
-            docker = groups.get((harness, task, "docker"), [])
-            k8s = groups.get((harness, task, "k8s"), [])
-            solved = lambda rows: "%d/%d" % (sum(1 for r in rows if r["reward"] == 1), len(rows))
-            print("### %s, %s (solved: native %s, ARIES Docker %s, ARIES Kubernetes %s)\n" % (
-                harness, task, solved(native), solved(docker), solved(k8s)))
-            print("| Measure | Native | ARIES Docker | ARIES Kubernetes | Kubernetes − Docker |")
-            print("| --- | --- | --- | --- | --- |")
-            fmt = lambda v: "" if v is None else "%.2f" % v
-            for column in shown:
-                n = median(r.get(column) for r in native)
-                d, k = median(r.get(column) for r in docker), median(r.get(column) for r in k8s)
-                diff = "" if d is None or k is None else "%+.2f" % (k - d)
-                print("| %s | %s | %s | %s | %s |" % (column, fmt(n), fmt(d), fmt(k), diff))
-            print()
+    for harness, task, variant in sorted({key[:3] for key in groups}):
+        native = groups.get((harness, task, variant, "native"), [])
+        docker = groups.get((harness, task, variant, "docker"), [])
+        k8s = groups.get((harness, task, variant, "k8s"), [])
+        solved = lambda rows: "%d/%d" % (sum(1 for r in rows if r["reward"] == 1), len(rows))
+        print("### %s, %s, %s (solved: native %s, ARIES Docker %s, ARIES Kubernetes %s)\n" % (
+            harness, task, variant, solved(native), solved(docker), solved(k8s)))
+        print("| Measure | Native | ARIES Docker | ARIES Kubernetes | Kubernetes − Docker |")
+        print("| --- | --- | --- | --- | --- |")
+        fmt = lambda v: "" if v is None else "%.2f" % v
+        for column in shown:
+            n = median(r.get(column) for r in native)
+            d, k = median(r.get(column) for r in docker), median(r.get(column) for r in k8s)
+            diff = "" if d is None or k is None else "%+.2f" % (k - d)
+            print("| %s | %s | %s | %s | %s |" % (column, fmt(n), fmt(d), fmt(k), diff))
+        print()
     print("Per-run rows: " + output)
 
 

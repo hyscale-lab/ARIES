@@ -251,16 +251,23 @@ type Phase struct {
 }
 
 // Phase names, in the order the runner enters them. A task that fails early
-// records only the phases it reached.
+// records only the phases it reached. With a parallel start, harness_prepare
+// runs alongside the sandbox phases, so phases can overlap in time.
 const (
 	PhaseSandboxStart   = "sandbox_start"
 	PhaseSandboxPrepare = "sandbox_prepare"
 	PhaseBridgeRegister = "bridge_register"
+	// PhaseHarnessPrepare creates the harness's runtime, which needs no access
+	// to the sandbox; PhaseHarnessStart configures it with that access, starts
+	// the harness and waits until it is ready.
+	PhaseHarnessPrepare = "harness_prepare"
 	PhaseHarnessStart   = "harness_start"
-	PhaseHarnessRun     = "harness_run"
-	PhaseIsolation      = "isolation"
-	PhaseEvaluation     = "evaluation"
-	PhaseCleanup        = "cleanup"
+	// PhaseHarnessWarmup spans the warm-up requests sent before the task.
+	PhaseHarnessWarmup = "harness_warmup"
+	PhaseHarnessRun    = "harness_run"
+	PhaseIsolation     = "isolation"
+	PhaseEvaluation    = "evaluation"
+	PhaseCleanup       = "cleanup"
 )
 
 // TaskResult preserves each outcome even when several operations fail.
@@ -283,6 +290,16 @@ type TaskResult struct {
 	// Phases is the task's timeline, so a latency can be split into
 	// provisioning, harness setup, the agent's run, evaluation and cleanup.
 	Phases []Phase `json:"phases,omitempty"`
+	// Warmups lists the warm-up requests sent before the task, in order.
+	Warmups []Warmup `json:"warmups,omitempty"`
+}
+
+// Warmup is one warm-up request sent through the harness before the task.
+type Warmup struct {
+	StartedAt time.Time     `json:"started_at"`
+	Duration  time.Duration `json:"duration"`
+	Status    string        `json:"status"`
+	Error     string        `json:"error,omitempty"`
 }
 
 // RunSummary is a direct count of task outcomes.

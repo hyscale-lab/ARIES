@@ -160,7 +160,7 @@ func TestValidateModelRejectsControlCharactersInModelID(t *testing.T) {
 // Hermes selects its SSH backend purely from the environment, so this is the
 // contract that replaces Agent_Bench's exec-bridge patch.
 func TestContainerEnvironmentSelectsNativeSSHBackend(t *testing.T) {
-	environment, err := containerEnvironment(validEndpoint(), "/aries/workspace", 180, false, "http://search.example:8123", "run-1", "fix-git")
+	environment, err := fullEnvironment(validEndpoint(), "/aries/workspace", 180, false, "http://search.example:8123", "run-1", "fix-git")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,16 +227,16 @@ func TestContainerEnvironmentRejectsUnusableEndpoints(t *testing.T) {
 	for name, mutate := range cases {
 		endpoint := validEndpoint()
 		mutate(&endpoint)
-		if _, err := containerEnvironment(endpoint, "/aries/workspace", 180, false, "http://search.example:8123", "run-1", "fix-git"); err == nil {
+		if _, err := fullEnvironment(endpoint, "/aries/workspace", 180, false, "http://search.example:8123", "run-1", "fix-git"); err == nil {
 			t.Fatalf("%s: invalid endpoint was accepted", name)
 		}
 	}
 	for _, workdir := range []string{"", "relative", "/has space", "/trailing/", "/a/../b"} {
-		if _, err := containerEnvironment(validEndpoint(), workdir, 180, false, "http://search.example:8123", "run-1", "fix-git"); err == nil {
+		if _, err := fullEnvironment(validEndpoint(), workdir, 180, false, "http://search.example:8123", "run-1", "fix-git"); err == nil {
 			t.Fatalf("workdir %q was accepted", workdir)
 		}
 	}
-	if _, err := containerEnvironment(validEndpoint(), "/aries/workspace", 0, false, "http://search.example:8123", "run-1", "fix-git"); err == nil {
+	if _, err := fullEnvironment(validEndpoint(), "/aries/workspace", 0, false, "http://search.example:8123", "run-1", "fix-git"); err == nil {
 		t.Fatal("non-positive terminal timeout was accepted")
 	}
 }
@@ -355,7 +355,7 @@ func TestRenderConfigIgnoresMaxConcurrentChildrenWhenSubagentsDisabled(t *testin
 }
 
 func TestContainerEnvironmentSetsSearXNGURLWhenWebSearchEnabled(t *testing.T) {
-	disabled, err := containerEnvironment(validEndpoint(), "/aries/workspace", 180, false, "http://search.example:8123", "run-1", "fix-git")
+	disabled, err := fullEnvironment(validEndpoint(), "/aries/workspace", 180, false, "http://search.example:8123", "run-1", "fix-git")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -364,7 +364,7 @@ func TestContainerEnvironmentSetsSearXNGURLWhenWebSearchEnabled(t *testing.T) {
 			t.Fatalf("SEARXNG_URL set despite web search being disabled: %v", disabled)
 		}
 	}
-	enabled, err := containerEnvironment(validEndpoint(), "/aries/workspace", 180, true, "http://search.example:8123", "run-1", "fix-git")
+	enabled, err := fullEnvironment(validEndpoint(), "/aries/workspace", 180, true, "http://search.example:8123", "run-1", "fix-git")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -467,10 +467,10 @@ func TestGatewayLauncherScriptExportsMCPHostVariables(t *testing.T) {
 }
 
 func TestSearchRequiresResolvedEndpoint(t *testing.T) {
-	if _, err := containerEnvironment(validEndpoint(), "/aries/workspace", 180, true, "", "run-1", "fix-git"); err == nil {
+	if _, err := fullEnvironment(validEndpoint(), "/aries/workspace", 180, true, "", "run-1", "fix-git"); err == nil {
 		t.Fatal("accepted search without a declared endpoint")
 	}
-	if _, err := containerEnvironment(validEndpoint(), "/aries/workspace", 180, false, "", "run-1", "fix-git"); err != nil {
+	if _, err := fullEnvironment(validEndpoint(), "/aries/workspace", 180, false, "", "run-1", "fix-git"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -532,4 +532,18 @@ func decodeConfigYAML(t *testing.T, rendered []byte) map[string]any {
 		t.Fatalf("invalid YAML: %v\n%s", err, rendered)
 	}
 	return config
+}
+
+// fullEnvironment is what Hermes's process sees: the container's environment
+// plus the task settings the launcher exports.
+func fullEnvironment(endpoint core.ToolEndpoint, workdir string, terminalTimeout int, webSearchEnabled bool, searchURL, runID, taskID string) ([]string, error) {
+	environment, err := containerEnvironment(terminalTimeout, runID, taskID)
+	if err != nil {
+		return nil, err
+	}
+	terminal, err := taskEnvironment(endpoint, workdir, webSearchEnabled, searchURL)
+	if err != nil {
+		return nil, err
+	}
+	return append(environment, terminal...), nil
 }

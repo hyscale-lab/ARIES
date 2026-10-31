@@ -55,7 +55,33 @@ type ExecutionConfig struct {
 	// count so the schedule, not the pool, decides when a task starts.
 	ArrivalsFile      string  `json:"arrivals_file,omitempty"`
 	ArrivalRatePerMin float64 `json:"arrival_rate_per_min,omitempty"`
+	// ParallelStart creates the harness's runtime while the sandbox starts;
+	// its configuration, which names the sandbox, still follows the bridge's
+	// registration.
+	ParallelStart bool `json:"parallel_start,omitempty"`
+	// Warmup, when present, sends warm-up instructions through each started
+	// harness before the task's, so the task measures a warm harness.
+	Warmup *WarmupConfig `json:"warmup,omitempty"`
 }
+
+// WarmupConfig repeats Instruction, each time as its own conversation, until
+// the last Stable warm-ups took times within Tolerance of their median, or
+// Max warm-ups have run. Empty fields take the defaults below.
+type WarmupConfig struct {
+	Instruction string  `json:"instruction,omitempty"`
+	Stable      int     `json:"stable,omitempty"`
+	Tolerance   float64 `json:"tolerance,omitempty"`
+	Max         int     `json:"max,omitempty"`
+}
+
+// The default warm-up runs one trivial command, so it passes through the
+// model, the harness and the tool path without changing the sandbox.
+const (
+	DefaultWarmupInstruction = "Run the shell command `true` once, then reply with the single word: done."
+	DefaultWarmupStable      = 3
+	DefaultWarmupTolerance   = 0.05
+	DefaultWarmupMax         = 10
+)
 
 // RuntimeConfig selects the model service. Mode is the ownership distinction:
 // "external" is an endpoint ARIES validates but never starts, configures, or
@@ -732,6 +758,23 @@ func (c *Config) validate() error {
 			return errors.New("execution.loop_duration must be a positive Go duration")
 		}
 		c.Execution.Loop = loop
+	}
+	if w := c.Execution.Warmup; w != nil {
+		if w.Instruction == "" {
+			w.Instruction = DefaultWarmupInstruction
+		}
+		if w.Stable == 0 {
+			w.Stable = DefaultWarmupStable
+		}
+		if w.Tolerance == 0 {
+			w.Tolerance = DefaultWarmupTolerance
+		}
+		if w.Max == 0 {
+			w.Max = DefaultWarmupMax
+		}
+		if strings.TrimSpace(w.Instruction) == "" || w.Stable < 1 || w.Max < w.Stable || !(w.Tolerance > 0) || math.IsInf(w.Tolerance, 0) {
+			return errors.New("execution.warmup needs a non-blank instruction, stable between 1 and max, and a finite positive tolerance")
+		}
 	}
 	if (c.Execution.ArrivalsFile != "") != (c.Execution.ArrivalRatePerMin != 0) {
 		return errors.New("execution.arrivals_file and execution.arrival_rate_per_min must be set together")

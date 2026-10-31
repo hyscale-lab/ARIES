@@ -95,7 +95,9 @@ type Manager struct {
 
 type session struct {
 	*harness.Occurrence
-	gateway *gatewayExecution
+	gateway            *gatewayExecution
+	prepared, launched bool
+	warmups            int
 }
 
 type speechSynthesizer interface {
@@ -170,9 +172,15 @@ func New(options Options) (*Manager, error) {
 	return &Manager{runtime: runtime, options: options, newSpeech: newSpeechClient, newID: privatefiles.RandomID}, nil
 }
 
-func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) error {
+// Prepare creates the Hermes container without the sandbox's tool endpoint,
+// so it can be created while the sandbox starts. Start finishes it.
+func (manager *Manager) Prepare(ctx context.Context, request core.HarnessRequest) error {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
+	return manager.prepare(ctx, request)
+}
+
+func (manager *Manager) prepare(ctx context.Context, request core.HarnessRequest) error {
 	if manager.runtime.InUse() {
 		return errors.New("Hermes harness is already active")
 	}
@@ -190,31 +198,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		agentTimeout = manager.runtime.Options.AgentTimeout
 	}
 	extractEnabled := manager.options.Common.WebSearchEnabled && manager.options.Common.ExtractAPIKeyEnv != ""
-	var voiceSTT *VoiceSTTOptions
-	if manager.options.Common.Mode == ModeVoiceTranscribe {
-		voiceSTT = &manager.options.VoiceTranscribe.STT
-	}
-
-	mcpServers, err := harness.MCPServers(request.Connectivity.MCPServers, manager.options.Common.MCPServers)
-	if err != nil {
-		return fmt.Errorf("Hermes %w", err)
-	}
-
-	configuration, err := renderConfig(request.Model, renderSettings{
-		maxTurns: manager.options.MaxTurns, webSearchEnabled: manager.options.Common.WebSearchEnabled, extractEnabled: extractEnabled,
-		subagentsEnabled: manager.options.Common.SubagentsEnabled, maxConcurrentSubagents: manager.options.Common.MaxConcurrentSubagents,
-		compaction: manager.options.Compaction, extraBody: manager.options.ExtraBody, mcpServers: mcpServers,
-		noSandboxTools: request.NoSandboxTools,
-	}, voiceSTT)
-	if err != nil {
-		return err
-	}
-	terminal, err := renderTerminal(request.Endpoint.Workdir, manager.options.TerminalTimeout)
-	if err != nil {
-		return err
-	}
-	configuration = append(configuration, terminal...)
-	environment, err := containerEnvironment(request.Endpoint, request.Endpoint.Workdir, manager.options.TerminalTimeout, manager.options.Common.WebSearchEnabled, request.Connectivity.SearchURL, request.RunID, request.TaskID)
+	environment, err := containerEnvironment(manager.options.TerminalTimeout, request.RunID, request.TaskID)
 	if err != nil {
 		return err
 	}
@@ -230,17 +214,11 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	} else if !ok {
 		return fmt.Errorf("Hermes API-key environment %q is not set", request.Model.APIKeyEnv)
 	}
-	if bytes.Contains(configuration, credentials.Get("model")) {
-		return errors.New("rendered Hermes config contains the API-key value")
-	}
 	if extractEnabled {
 		if ok, err := credentials.Load("extract", manager.options.Common.ExtractAPIKeyEnv, manager.runtime.Options.APIKeyLookup); err != nil {
 			return err
 		} else if !ok {
 			return fmt.Errorf("Hermes extract API-key environment %q is not set", manager.options.Common.ExtractAPIKeyEnv)
-		}
-		if bytes.Contains(configuration, credentials.Get("extract")) {
-			return errors.New("rendered Hermes config contains the extract API-key value")
 		}
 	}
 	if manager.options.Common.Mode == ModeVoiceTranscribe {
@@ -249,11 +227,8 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		} else if !ok {
 			return fmt.Errorf("Hermes voice API-key environment %q is not set", manager.options.VoiceTranscribe.TTS.APIKeyEnv)
 		}
-		if bytes.Contains(configuration, credentials.Get("voice")) {
-			return errors.New("rendered Hermes config contains the voice API-key value")
-		}
 	}
-	if err := credentials.LoadMCP(mcpServers, configuration, manager.runtime.Options.APIKeyLookup); err != nil {
+	if _, err := manager.renderAgentConfig(credentials, request.Model, request); err != nil {
 		return err
 	}
 	id, err := manager.newID()
@@ -275,7 +250,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		},
 	}
 	active := &session{
-		Occurrence: &harness.Occurrence{RunID: request.RunID, TaskID: request.TaskID, AttemptID: id, Name: core.RuntimeName("hermes", request.TaskID, id), DeploymentRequest: deploymentRequest, ArtifactDir: filepath.Join(manager.runtime.Options.OutputDir, request.TaskID, "harness"), Endpoint: request.Endpoint, Model: request.Model, AgentTimeout: agentTimeout},
+		Occurrence: &harness.Occurrence{RunID: request.RunID, TaskID: request.TaskID, AttemptID: id, Name: core.RuntimeName("hermes", request.TaskID, id), DeploymentRequest: deploymentRequest, ArtifactDir: filepath.Join(manager.runtime.Options.OutputDir, request.TaskID, "harness"), Model: request.Model, AgentTimeout: agentTimeout},
 	}
 	active.Credentials = credentials
 	active.Artifacts = &harness.Artifacts{Directory: active.ArtifactDir}
@@ -285,55 +260,157 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		active.Credentials.Clear()
 		return err
 	}
-	fail := func(primary error) error {
-		if active.gateway != nil {
-			active.gateway.client.Close()
-		}
-		err := manager.runtime.Rollback(ctx, active.Occurrence, primary)
-		if manager.runtime.InUse() {
-			manager.active = active
-		}
-		return err
-	}
 	encodedToken, err := privatefiles.RandomSecret(32)
 	if err != nil {
-		return fail(fmt.Errorf("generate Hermes Gateway credential: %w", err))
+		return manager.fail(ctx, active, fmt.Errorf("generate Hermes Gateway credential: %w", err))
 	}
 	active.Credentials.Set("gateway", encodedToken)
 	clear(encodedToken)
 	if err := privatefiles.EnsureDirectory(active.ArtifactDir); err != nil {
-		return fail(fmt.Errorf("create Hermes artifact directory: %w", err))
+		return manager.fail(ctx, active, fmt.Errorf("create Hermes artifact directory: %w", err))
 	}
-	if err := active.Artifacts.Write("config.yaml", active.Credentials.Redact(configuration)); err != nil {
-		return fail(fmt.Errorf("retain rendered Hermes config: %w", err))
+	if err := manager.runtime.Create(ctx, active.Occurrence, deploymentRequest); err != nil {
+		return manager.fail(ctx, active, err)
 	}
-	archive, err := manager.runtimeArchive(active, configuration)
+	active.prepared = true
+	manager.active = active
+	return nil
+}
+
+// fail rolls back a startup that did not finish, keeping the occurrence for
+// cleanup when removal fails.
+func (manager *Manager) fail(ctx context.Context, active *session, primary error) error {
+	if active.gateway != nil {
+		active.gateway.client.Close()
+	}
+	err := manager.runtime.Rollback(ctx, active.Occurrence, primary)
+	manager.active = nil
+	if manager.runtime.InUse() {
+		manager.active = active
+	}
+	return err
+}
+
+// Start configures the Hermes container with the sandbox's tool endpoint,
+// starts the Gateway and waits until it is ready, preparing it first when
+// Prepare was not called.
+func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) error {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.active == nil {
+		if err := manager.prepare(ctx, request); err != nil {
+			return err
+		}
+	}
+	active := manager.active
+	if !active.prepared || active.launched {
+		return errors.New("Hermes harness is already active")
+	}
+	if active.RunID != request.RunID || active.TaskID != request.TaskID {
+		return errors.New("Hermes harness was prepared for another task")
+	}
+	active.launched = true
+	configuration, err := manager.renderAgentConfig(active.Credentials, active.Model, request)
 	if err != nil {
-		return fail(err)
+		return manager.fail(ctx, active, err)
+	}
+	terminal, err := renderTerminal(request.Endpoint.Workdir, manager.options.TerminalTimeout)
+	if err != nil {
+		return manager.fail(ctx, active, err)
+	}
+	configuration = append(configuration, terminal...)
+	taskEnv, err := taskEnvironment(request.Endpoint, request.Endpoint.Workdir, manager.options.Common.WebSearchEnabled, request.Connectivity.SearchURL)
+	if err != nil {
+		return manager.fail(ctx, active, err)
+	}
+	active.Endpoint = request.Endpoint
+	if err := active.Artifacts.Write("config.yaml", active.Credentials.Redact(configuration)); err != nil {
+		return manager.fail(ctx, active, fmt.Errorf("retain rendered Hermes config: %w", err))
+	}
+	archive, err := manager.runtimeArchive(active, configuration, taskEnvFile(taskEnv))
+	if err != nil {
+		return manager.fail(ctx, active, err)
 	}
 	defer clear(archive)
-	secrets := active.Credentials.Secrets()
-	if err := manager.runtime.Start(ctx, active.Occurrence, deploymentRequest, archive, secrets); err != nil {
-		return fail(err)
+	if err := manager.runtime.Launch(ctx, active.Occurrence, archive, active.Credentials.Secrets()); err != nil {
+		return manager.fail(ctx, active, err)
 	}
 	address, err := manager.runtime.Options.Deployment.Address(ctx, active.ID, gatewayPort)
 	if err != nil {
-		return fail(fmt.Errorf("resolve Hermes Gateway: %w", err))
+		return manager.fail(ctx, active, fmt.Errorf("resolve Hermes Gateway: %w", err))
 	}
 	active.gateway, err = newGatewayExecution("http://"+address, active.Credentials.Get("gateway"))
 	if err != nil {
-		return fail(err)
+		return manager.fail(ctx, active, err)
 	}
 	readyCtx, cancel := context.WithTimeout(ctx, manager.runtime.Options.StartTimeout)
 	err = manager.waitReady(readyCtx, active)
 	cancel()
 	if err != nil {
-		return fail(err)
+		return manager.fail(ctx, active, err)
 	}
-	manager.active = active
 	manager.runtime.Ready()
 	manager.runtime.Options.Logger.WithContext(ctx).WithFields(logrus.Fields{"task_id": active.TaskID, "container": active.Name}).Info("Hermes harness started")
 	return nil
+}
+
+// renderAgentConfig renders config.yaml, without the terminal section that
+// names the sandbox, for the request's connectivity; checks that no credential
+// appears in it; and loads the MCP credentials it names. Prepare calls it to
+// reject a bad configuration before anything is allocated, Start to render
+// the configuration the harness gets.
+func (manager *Manager) renderAgentConfig(credentials *harness.Credentials, model core.ModelConfig, request core.HarnessRequest) ([]byte, error) {
+	mcpServers, err := harness.MCPServers(request.Connectivity.MCPServers, manager.options.Common.MCPServers)
+	if err != nil {
+		return nil, fmt.Errorf("Hermes %w", err)
+	}
+	var voiceSTT *VoiceSTTOptions
+	if manager.options.Common.Mode == ModeVoiceTranscribe {
+		voiceSTT = &manager.options.VoiceTranscribe.STT
+	}
+	configuration, err := renderConfig(model, renderSettings{
+		maxTurns: manager.options.MaxTurns, webSearchEnabled: manager.options.Common.WebSearchEnabled, extractEnabled: len(credentials.Get("extract")) != 0,
+		subagentsEnabled: manager.options.Common.SubagentsEnabled, maxConcurrentSubagents: manager.options.Common.MaxConcurrentSubagents,
+		compaction: manager.options.Compaction, extraBody: manager.options.ExtraBody, mcpServers: mcpServers,
+		noSandboxTools: request.NoSandboxTools,
+	}, voiceSTT)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range []string{"model", "extract", "voice"} {
+		if value := credentials.Get(name); len(value) != 0 && bytes.Contains(configuration, value) {
+			return nil, fmt.Errorf("rendered Hermes config contains the %s API-key value", name)
+		}
+	}
+	if err := credentials.LoadMCP(mcpServers, configuration, manager.runtime.Options.APIKeyLookup); err != nil {
+		return nil, err
+	}
+	return configuration, nil
+}
+
+// Warm runs a warm-up instruction as its own Gateway session, so the task's
+// conversation does not see it. It keeps no artifacts.
+func (manager *Manager) Warm(ctx context.Context, instruction string) (core.HarnessResult, error) {
+	started := time.Now()
+	manager.mu.Lock()
+	if err := manager.runtime.AdmitWarm(instruction); err != nil {
+		manager.mu.Unlock()
+		return core.HarnessResult{Status: core.StatusFailed}, err
+	}
+	active := snapshotSession(manager.active)
+	manager.active.warmups++
+	sessionID := fmt.Sprintf("aries-%s-warmup-%d", active.AttemptID, manager.active.warmups)
+	manager.mu.Unlock()
+	defer active.Credentials.Clear()
+	output, _, err := manager.runGatewaySession(ctx, active, instruction, sessionID)
+	if err != nil {
+		err = active.Credentials.RedactErr(err)
+		return active.FailedResult(started, err), err
+	}
+	return core.HarnessResult{
+		Status: core.StatusSucceeded, FinalResponse: strings.TrimRight(string(active.Credentials.Redact([]byte(output))), "\n"),
+		Duration: time.Since(started),
+	}, nil
 }
 
 func (manager *Manager) Run(ctx context.Context, instruction string) (core.HarnessResult, error) {
@@ -616,7 +693,7 @@ func (manager *Manager) waitReady(ctx context.Context, active *session) error {
 	}
 }
 
-func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([]byte, error) {
+func (manager *Manager) runtimeArchive(active *session, configuration, taskEnv []byte) ([]byte, error) {
 	extractEnabled := len(active.Credentials.Get("extract")) != 0
 	mcpHostVars := make([]string, 0, len(active.Credentials.MCPFiles()))
 	for hostVar := range active.Credentials.MCPFiles() {
@@ -628,6 +705,7 @@ func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([
 		strings.TrimPrefix(modelKeyPath, "/"):        {Content: active.Credentials.Get("model"), Mode: 0o600},
 		strings.TrimPrefix(gatewayKeyPath, "/"):      {Content: active.Credentials.Get("gateway"), Mode: 0o600},
 		strings.TrimPrefix(gatewayLauncherPath, "/"): {Content: gatewayLauncherScript(active.Model.APIKeyEnv, extractEnabled, mcpHostVars...), Mode: 0o555},
+		strings.TrimPrefix(taskEnvPath, "/"):         {Content: taskEnv, Mode: 0o600},
 	}
 	if extractEnabled {
 		files[strings.TrimPrefix(extractKeyPath, "/")] = harness.ArchiveFile{Content: active.Credentials.Get("extract"), Mode: 0o600}

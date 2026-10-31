@@ -542,7 +542,11 @@ type cancelHarness struct {
 	events  *[]string
 }
 
-func (*cancelHarness) Start(context.Context, core.HarnessRequest) error { return nil }
+func (*cancelHarness) Prepare(context.Context, core.HarnessRequest) error { return nil }
+func (*cancelHarness) Start(context.Context, core.HarnessRequest) error   { return nil }
+func (*cancelHarness) Warm(context.Context, string) (core.HarnessResult, error) {
+	return core.HarnessResult{}, nil
+}
 func (h *cancelHarness) Run(ctx context.Context, _ string) (core.HarnessResult, error) {
 	h.once.Do(func() { close(h.started) })
 	<-ctx.Done()

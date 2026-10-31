@@ -26,7 +26,10 @@ const (
 	voiceKeyPath        = stateContainerPath + "/voice.key"
 	voiceWAVPath        = stateContainerPath + "/voice-instruction.wav"
 	gatewayLauncherPath = stagedRoot + "/run-gateway"
-	workspaceRoot       = stagedRoot + "/workspace"
+	// taskEnvPath holds the settings that name the task's sandbox and services,
+	// which the launcher exports: the container is created before they are known.
+	taskEnvPath   = stagedRoot + "/task.env"
+	workspaceRoot = stagedRoot + "/workspace"
 
 	// tavilyAPIKeyEnv is the in-container environment variable name Hermes's
 	// Tavily plugin reads. It is fixed by Hermes itself, unlike the profile's
@@ -372,44 +375,23 @@ func yamlJSONNumbers(value any) any {
 }
 
 // containerEnvironment is the non-secret environment given to the Hermes
-// container. Hermes reads its terminal backend entirely from these names.
+// container when it is created, before the sandbox's endpoint is known.
+// Hermes reads its terminal backend from these names together with the ones
+// taskEnvironment stages for the launcher.
 //
 // ARIES_RUN_ID and ARIES_TASK_ID identify the task occurrence. Hermes expands
 // ${NAME} references in every configuration string from its process
 // environment, so a profile's extra_body can carry a per-task value, such as
 // a per-task tag, without ARIES interpreting the block.
-//
-// TERMINAL_CWD is the sandbox directory the bridge runs every agent command in
-// (the endpoint's Workdir), the same one renderTerminal writes into
-// config.yaml. Hermes opens its session with `cd <TERMINAL_CWD> 2>/dev/null ||
-// true`, but it then wraps each command in `builtin cd -- <cwd> || exit 126`
-// with the call's workdir or else this directory, so a path the sandbox lacks
-// would fail every command that names no workdir before it runs.
-func containerEnvironment(endpoint core.ToolEndpoint, workdir string, terminalTimeout int, webSearchEnabled bool, searchURL string, runID, taskID string) ([]string, error) {
-	if err := validateEndpoint(endpoint); err != nil {
-		return nil, err
-	}
+func containerEnvironment(terminalTimeout int, runID, taskID string) ([]string, error) {
 	if err := harness.ValidateRunID("Hermes", runID); err != nil {
 		return nil, err
 	}
 	if err := harness.ValidateTaskID("Hermes", taskID); err != nil {
 		return nil, err
 	}
-	if !validWorkdir(workdir) {
-		return nil, fmt.Errorf("Hermes terminal workdir %q is not shell-neutral", workdir)
-	}
 	if terminalTimeout <= 0 {
 		return nil, errors.New("Hermes terminal timeout must be positive")
-	}
-	host, port, err := net.SplitHostPort(endpoint.Address)
-	if err != nil {
-		return nil, fmt.Errorf("parse Hermes SSH endpoint address: %w", err)
-	}
-	if !core.ValidEndpointHost(host) {
-		return nil, errors.New("Hermes SSH endpoint host must be a unicast IPv4 address or DNS name")
-	}
-	if number, err := strconv.Atoi(port); err != nil || number < 1 || number > 65535 {
-		return nil, errors.New("Hermes SSH endpoint port is invalid")
 	}
 	environment := []string{
 		"HERMES_HOME=" + stateContainerPath,
@@ -417,10 +399,6 @@ func containerEnvironment(endpoint core.ToolEndpoint, workdir string, terminalTi
 		"API_SERVER_HOST=0.0.0.0",
 		"API_SERVER_PORT=8642",
 		"TERMINAL_ENV=ssh",
-		"TERMINAL_SSH_HOST=" + host,
-		"TERMINAL_SSH_PORT=" + port,
-		"TERMINAL_SSH_USER=" + endpoint.Username,
-		"TERMINAL_CWD=" + workdir,
 		"TERMINAL_TIMEOUT=" + strconv.Itoa(terminalTimeout),
 		"ARIES_RUN_ID=" + runID,
 		"ARIES_TASK_ID=" + taskID,
@@ -440,13 +418,62 @@ func containerEnvironment(endpoint core.ToolEndpoint, workdir string, terminalTi
 		"HERMES_OTEL_DASHBOARD_LIVE_RETENTION_HOURS=0",
 		"HERMES_OTEL_CONTENT_CAPTURE=off",
 	}
+	return environment, nil
+}
+
+// taskEnvironment is the rest of Hermes's environment: the sandbox's SSH
+// endpoint and directory, known only once the sandbox is registered, and the
+// task's search service. It is staged as a file of exports the launcher
+// reads, each value validated to need no shell quoting.
+//
+// TERMINAL_CWD is the sandbox directory the bridge runs every agent command in
+// (the endpoint's Workdir), the same one renderTerminal writes into
+// config.yaml. Hermes opens its session with `cd <TERMINAL_CWD> 2>/dev/null ||
+// true`, but it then wraps each command in `builtin cd -- <cwd> || exit 126`
+// with the call's workdir or else this directory, so a path the sandbox lacks
+// would fail every command that names no workdir before it runs.
+func taskEnvironment(endpoint core.ToolEndpoint, workdir string, webSearchEnabled bool, searchURL string) ([]string, error) {
+	if err := validateEndpoint(endpoint); err != nil {
+		return nil, err
+	}
+	if !validWorkdir(workdir) {
+		return nil, fmt.Errorf("Hermes terminal workdir %q is not shell-neutral", workdir)
+	}
+	host, port, err := net.SplitHostPort(endpoint.Address)
+	if err != nil {
+		return nil, fmt.Errorf("parse Hermes SSH endpoint address: %w", err)
+	}
+	if !core.ValidEndpointHost(host) {
+		return nil, errors.New("Hermes SSH endpoint host must be a unicast IPv4 address or DNS name")
+	}
+	if number, err := strconv.Atoi(port); err != nil || number < 1 || number > 65535 {
+		return nil, errors.New("Hermes SSH endpoint port is invalid")
+	}
+	environment := []string{
+		"TERMINAL_SSH_HOST=" + host,
+		"TERMINAL_SSH_PORT=" + port,
+		"TERMINAL_SSH_USER=" + endpoint.Username,
+		"TERMINAL_CWD=" + workdir,
+	}
 	if webSearchEnabled {
 		if err := harness.ValidateSearch(searchURL, true); err != nil {
 			return nil, err
 		}
+		if strings.ContainsAny(searchURL, " \t\n'\"$`\\;&|<>()*?[]{}~#") {
+			return nil, errors.New("Hermes search URL needs shell quoting")
+		}
 		environment = append(environment, "SEARXNG_URL="+searchURL)
 	}
 	return environment, nil
+}
+
+// taskEnvFile renders taskEnvironment as the launcher's exports.
+func taskEnvFile(environment []string) []byte {
+	var file strings.Builder
+	for _, entry := range environment {
+		file.WriteString("export " + entry + "\n")
+	}
+	return []byte(file.String())
 }
 
 // gatewayLauncherScript exports the staged credential(s) under their required
@@ -483,7 +510,12 @@ fi
 export ` + hostVar + `
 `
 	}
-	script += `API_SERVER_KEY="$(cat ` + gatewayKeyPath + `)"
+	script += `if [ ! -f ` + taskEnvPath + ` ]; then
+  echo "ARIES: Hermes task settings are missing" >&2
+  exit 1
+fi
+. ` + taskEnvPath + `
+API_SERVER_KEY="$(cat ` + gatewayKeyPath + `)"
 export API_SERVER_KEY
 exec hermes gateway run --no-supervise --external-supervisor
 `

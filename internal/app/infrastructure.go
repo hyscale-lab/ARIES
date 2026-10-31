@@ -149,6 +149,7 @@ func runWithInfrastructure(ctx context.Context, cfg config.Config, runID, output
 	}
 	report.StartupDuration = time.Since(started)
 	wiring.NewSandbox = infra.NewSandbox
+	wiring.Placement = placement
 	wiring.NewBridge = func(_ config.Config, root string, _ *logrus.Logger) (runner.ToolBridge, error) {
 		return service.NewSession(root)
 	}
