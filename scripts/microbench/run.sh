@@ -19,11 +19,12 @@
 # warm-up requests through the started harness before the task, so the task
 # measures a warm harness. Record with --warm once, so the warm-up
 # conversation is recorded too; the tasks' recordings then serve every
-# variant. Kubernetes pods are pinned to this node, where the Docker runs go.
+# variant. --tasks runs a comma-separated subset of the profile's tasks.
+# Kubernetes pods are pinned to this node, where the Docker runs go.
 set -euo pipefail
 
 harness="" backend="" mode="" runs=1 address="" prometheus="" pace=recorded port=8090 bridge_repository=""
-parallel=false warm=false
+parallel=false warm=false tasks=""
 usage() { sed -n '2,24s/^# \{0,1\}//p' "$0"; }
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -38,6 +39,7 @@ while [ $# -gt 0 ]; do
     --bridge-repository) bridge_repository=$2; shift 2 ;;
     --parallel) parallel=true; shift ;;
     --warm) warm=true; shift ;;
+    --tasks) tasks=$2; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -73,9 +75,9 @@ stamp=$(date -u +%Y%m%dT%H%M%SZ)
 variant=$([ "$warm" = true ] && echo warm || echo cold)-$([ "$parallel" = true ] && echo parallel || echo sequential)
 name=$harness-microbench-$backend-$mode-$variant
 profile=.cache/microbench-runs/$name.json
-python3 - "profiles/comparison/$harness-microbench-$backend.json" "$profile" "$name" "$address:$port" "$prometheus" "$root" "$bridge_repository" "$parallel" "$warm" "$(hostname -f)" <<'PY'
+python3 - "profiles/comparison/$harness-microbench-$backend.json" "$profile" "$name" "$address:$port" "$prometheus" "$root" "$bridge_repository" "$parallel" "$warm" "$(hostname -f)" "$tasks" <<'PY'
 import json, sys
-source, target, name, address, prometheus, root, bridge_repository, parallel, warm, node = sys.argv[1:]
+source, target, name, address, prometheus, root, bridge_repository, parallel, warm, node, tasks = sys.argv[1:]
 profile = json.load(open(source))
 profile["name"] = name
 # The written profile lives elsewhere, so its relative paths become absolute.
@@ -89,6 +91,11 @@ if bridge_repository:
     if bridge["backend"] != "kubernetes":
         sys.exit("--bridge-repository applies only to Kubernetes runs")
     bridge["kubernetes"]["images"] = {"aries-bridge": bridge_repository}
+if tasks:
+    subset = tasks.split(",")
+    if any(task not in profile["benchmark"]["tasks"] for task in subset):
+        sys.exit("--tasks must name tasks from " + ",".join(profile["benchmark"]["tasks"]))
+    profile["benchmark"]["tasks"] = subset
 execution = profile.setdefault("execution", {})
 execution["parallel_start"] = parallel == "true"
 if warm == "true":

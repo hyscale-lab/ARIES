@@ -49,7 +49,7 @@ def hermes_image():
 
 
 def config_template(root):
-    runs = sorted(glob.glob(os.path.join(root, "runs", "*hermes-microbench-docker-replay")), key=os.path.getmtime)
+    runs = sorted(glob.glob(os.path.join(root, "runs", "*hermes-microbench-docker-replay*")), key=os.path.getmtime)
     for run_dir in reversed(runs):
         paths = glob.glob(os.path.join(run_dir, "mb-one-call-*", "harness", "config.yaml"))
         if paths:
@@ -237,7 +237,11 @@ def main():
     parser.add_argument("--prometheus", required=True)
     parser.add_argument("--port", type=int, default=8090)
     parser.add_argument("--warm", action="store_true", help="send warm-ups through the started gateway before each task")
+    parser.add_argument("--tasks", default=",".join(TASKS), help="comma-separated subset of " + ",".join(TASKS))
     args = parser.parse_args()
+    args.tasks = args.tasks.split(",")
+    if not args.tasks or any(task not in TASKS for task in args.tasks):
+        sys.exit("--tasks must name tasks from " + ",".join(TASKS))
     variant = ("warm" if args.warm else "cold") + "-sequential"
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     os.chdir(root)
@@ -269,7 +273,7 @@ def main():
             os.makedirs(run_dir)
             print("==> hermes-microbench-native-replay-%s, run %d of %d" % (variant, repetition, args.runs), flush=True)
             started = now()
-            tasks = [run_task(args, root, run_dir, task, index + 1, template, image) for index, task in enumerate(TASKS)]
+            tasks = [run_task(args, root, run_dir, task, index + 1, template, image) for index, task in enumerate(args.tasks)]
             with open(os.path.join(run_dir, "run-result.json"), "w") as handle:
                 json.dump({"name": "hermes-microbench-native-replay", "tasks": tasks, "duration": int((now() - started) * 1e9)}, handle, indent=2)
             with open(manifest, "a") as handle:
