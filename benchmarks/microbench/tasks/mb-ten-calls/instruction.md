@@ -1,6 +1,6 @@
 Run the following ten shell commands in order. Run each one as its own separate tool call, one command per call; do not combine them, and do not run anything else:
 
-1. `echo 1 >> /tmp/mb-ten`
+1. `echo 1 > /tmp/mb-ten`
 2. `echo 2 >> /tmp/mb-ten`
 3. `echo 3 >> /tmp/mb-ten`
 4. `echo 4 >> /tmp/mb-ten`
