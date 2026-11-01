@@ -75,7 +75,7 @@ stamp=$(date -u +%Y%m%dT%H%M%SZ)
 variant=$([ "$warm" = true ] && echo warm || echo cold)-$([ "$parallel" = true ] && echo parallel || echo sequential)
 name=$harness-microbench-$backend-$mode-$variant
 profile=.cache/microbench-runs/$name.json
-python3 - "profiles/comparison/$harness-microbench-$backend.json" "$profile" "$name" "$address:$port" "$prometheus" "$root" "$bridge_repository" "$parallel" "$warm" "$(hostname -f)" "$tasks" <<'PY'
+python3 - "profiles/comparison/$harness-microbench-$backend.json" "$profile" "$name" "$address:$port" "$prometheus" "$root" "$bridge_repository" "$parallel" "$warm" "$(hostname)" "$tasks" <<'PY'
 import json, sys
 source, target, name, address, prometheus, root, bridge_repository, parallel, warm, node, tasks = sys.argv[1:]
 profile = json.load(open(source))

@@ -97,4 +97,4 @@ docker info --format 'Docker {{.ServerVersion}}, storage {{.Driver}}, cgroup dri
 # cAdvisor finds Docker only when it starts, so an ARIES cAdvisor already
 # running on this node reports no Docker containers until it restarts.
 echo "restart this node's cAdvisor so it sees Docker:"
-echo "  kubectl -n aries delete pod -l app.kubernetes.io/component=cadvisor --field-selector spec.nodeName=$(hostname -f)"
+echo "  kubectl -n aries delete pod -l app.kubernetes.io/component=cadvisor --field-selector spec.nodeName=$(hostname)"
