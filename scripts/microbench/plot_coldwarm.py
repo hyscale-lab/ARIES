@@ -7,7 +7,6 @@ Reads the tasks.csv that scripts/microbench/analyze.py writes for warm-mode
 runs (each task run cold, then again warm on the same harness and sandbox) and
 writes, as PNG and PDF, to OUT_DIR:
 
-  cold-latency   time from the first start-up step to the first answer
   end-to-end     cold and warm latency for every setup, split into stages
   first-request  how much longer the first request takes than the repeat
   after-answer   what follows the answer: collection, stop, evaluation, cleanup
@@ -24,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from plot import (HARNESSES, INK, SETUPS, STAGES, SURFACE, TASKS, median, number, plot_per_task, plt,  # noqa: E402
                   save, style)
 
-COLD_STAGES = [
+E2E_STAGES = [
     ("Sandbox and bridge", STAGES[0][1]),
     ("Harness start", STAGES[1][1]),
     ("Model (replayed)", STAGES[2][1]),
@@ -84,30 +83,8 @@ def stage_legend(figure, stages, y):
                   bbox_to_anchor=(0.5, y), handlelength=1, handleheight=1, columnspacing=1.4)
 
 
-def plot_cold(rows, out, table, record):
-    tasks = ["mb-noop", "mb-ten-calls", "mb-cpu"]
-    per = defaultdict(lambda: defaultdict(list))
-    for row in rows:
-        if row.get("cold_latency_s") is not None:
-            per[(row["harness"], row["task"])][row["backend"]].append(cold_values(row))
-    figure, axes = plt.subplots(len(HARNESSES), len(tasks), figsize=(11, 4.6), sharex=True)
-    for r, (harness, harness_label) in enumerate(HARNESSES):
-        for c, task in enumerate(tasks):
-            axis = axes[r][c]
-            style(axis)
-            stacked_rows(axis, per[(harness, task)], COLD_STAGES, table, ["cold-latency", harness, task])
-            axis.set_yticklabels([label for _, label in SETUPS] if c == 0 else [])
-            axis.set_title("%s · %s" % (harness_label, task), loc="left")
-            if r == len(HARNESSES) - 1 and c == len(tasks) // 2:
-                axis.set_xlabel("seconds to the first answer (median of 5 runs per stage)")
-    axes[0][0].set_xlim(0, 62)
-    stage_legend(figure, COLD_STAGES, 1.04)
-    figure.tight_layout()
-    save(figure, out, "cold-latency", record)
-
-
 def end_to_end_values(row, measure):
-    """Stages of a cold or warm run in COLD_STAGES order; a warm run has no
+    """Stages of a cold or warm run in E2E_STAGES order; a warm run has no
     start-up."""
     model = row.get(measure + "_model_s") or 0
     rest = [model, row[measure + "_run_s"] - model]
@@ -136,7 +113,7 @@ def plot_end_to_end(rows, out, table, record):
                     continue
                 values = [median(column) for column in zip(*runs)]
                 left = 0
-                for (stage, color), value in zip(COLD_STAGES, values):
+                for (stage, color), value in zip(E2E_STAGES, values):
                     if value > 0:
                         axis.barh(y, value, left=left, height=0.82, color=color, edgecolor=SURFACE, linewidth=1)
                         if value >= limit * 0.16:
@@ -153,7 +130,7 @@ def plot_end_to_end(rows, out, table, record):
                 axis.set_xlabel("seconds (median of 5 runs per stage)")
     # The panels share the y-axis, so it is inverted once for all of them.
     axes[0][0].invert_yaxis()
-    stage_legend(figure, COLD_STAGES, 1.04)
+    stage_legend(figure, E2E_STAGES, 1.04)
     figure.tight_layout()
     save(figure, out, "end-to-end", record)
 
@@ -181,7 +158,6 @@ def main():
     out = sys.argv[2]
     os.makedirs(out, exist_ok=True)
     table, record = [], []
-    plot_cold(rows, out, table, record)
     plot_end_to_end(rows, out, table, record)
     plot_per_task(rows, "first_extra_s", "first request minus the repeat, seconds", "%.1f", "first-request",
                   out, table, record)
