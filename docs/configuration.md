@@ -354,6 +354,19 @@ bridge registers it. That saves the harness's creation time where it overlaps
 the sandbox's start, most on Kubernetes. `"parallel_start": false` creates the
 harness only after the bridge registers the sandbox, one step after another.
 
+Only creating the harness overlaps the sandbox. Launching it still waits for
+bridge registration, because the harness reads, once at launch, the SSH
+address its tool calls go to (Hermes's `TERMINAL_SSH_HOST` and
+`TERMINAL_SSH_PORT`, for example), and that address exists only after
+registration. Registration needs the sandbox's runtime ID, which exists only
+once the sandbox has started, and the bridge opens the sandbox's SSH listener
+and picks its port at that point. So a cold start pays sandbox start, sandbox
+preparation and registration before the harness launches: about 0.3 s on
+Docker and 2.6 s on Kubernetes in the microbenchmarks. The harness does not use
+the address until its first tool call, so the wait comes from when the bridge
+picks the port, not from anything the harness needs; see the
+[roadmap](supported.md#roadmap).
+
 `warmup`, when present, runs a warm-up through the started harness before the
 task, as its own conversation. By default the warm-up is the task itself, once:
 a cold run on the fresh harness and sandbox, then the task again as the warm
