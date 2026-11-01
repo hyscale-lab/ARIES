@@ -17,10 +17,14 @@ before the request. With a warm-up, which by default is the task itself, the
 warm run is the task after it on the same harness and sandbox, and
 warm_latency_s its run alone.
 
-Each run is split three ways: model time, the requests aries-replay served
-during it; tool time, what the bridge measured executing commands in the
+Each run is split three ways: model time, how long at least one request
+aries-replay served was open during it, so requests a harness sends side by
+side count once; tool time, what the bridge measured executing commands in the
 sandbox; and the remainder, the harness's own work plus the transport between
-harness, bridge and sandbox. Standard library only, so it runs on the cluster
+harness, bridge and sandbox. The run ends when the harness answers; retaining
+its artifacts afterwards is harness_collect. Native runs have no start-up
+variant of their own, so each is compared with the ARIES variants that share
+its cold or warm measurement. Standard library only, so it runs on the cluster
 nodes.
 """
 
@@ -34,7 +38,7 @@ import sys
 from collections import defaultdict
 
 PHASES = ["sandbox_start", "sandbox_prepare", "bridge_register", "harness_prepare", "harness_start",
-          "harness_warmup", "harness_run", "isolation", "evaluation", "cleanup"]
+          "harness_warmup", "harness_run", "harness_collect", "isolation", "evaluation", "cleanup"]
 # Phases before the first request.
 STARTUP = ["sandbox_start", "sandbox_prepare", "bridge_register", "harness_prepare", "harness_start"]
 
@@ -63,6 +67,19 @@ def within(text, window):
     if window is None or not text:
         return True
     return window[0] <= parse_time(text) <= window[1]
+
+
+def model_seconds(requests, window):
+    """How long at least one of the requests was open within the window."""
+    spans = sorted((parse_time(r["received_at"]), parse_time(r["received_at"]) + r["duration_ms"] / 1000)
+                   for r in requests)
+    total, open_until = 0.0, window[0]
+    for start, end in spans:
+        start, end = max(start, open_until), min(end, window[1])
+        if end > start:
+            total += end - start
+            open_until = end
+    return total
 
 
 def harness_tool_calls(task_dir, window):
@@ -156,7 +173,7 @@ def task_rows(entry, requests):
             calls = [call for call in all_calls if within(call.get("timestamp"), window)]
             chat = [r for r in chats if within(r["received_at"], window)]
             row[name + "_run_s"] = window[1] - window[0]
-            row[name + "_model_s"] = sum(r["duration_ms"] for r in chat) / 1000
+            row[name + "_model_s"] = model_seconds(chat, window)
             row[name + "_model_calls"] = len(chat)
             row[name + "_model_misses"] = sum(1 for r in chat if r.get("hit") is False)
             row[name + "_tool_calls"] = len(calls)
@@ -202,16 +219,25 @@ def main():
     shown = ["cold_latency_s", "cold_startup_s", "provisioning_s", "harness_prepare_s", "harness_start_s",
              "cold_run_s", "cold_model_s", "cold_tool_s", "cold_other_s",
              "warm_latency_s", "warm_model_s", "warm_tool_s", "warm_other_s", "agent_internal_s",
-             "task_s", "isolation_s", "evaluation_s", "cleanup_s", "cold_tool_mean_ms", "warm_tool_mean_ms",
+             "task_s", "harness_collect_s", "isolation_s", "evaluation_s", "cleanup_s", "cold_tool_mean_ms", "warm_tool_mean_ms",
              "cold_harness_tool_mean_ms", "warm_harness_tool_mean_ms",
              "sandbox_cpu_mean", "sandbox_cpu_peak", "harness_cpu_peak", "harness_memory_peak_mib"]
     groups = defaultdict(list)
     for row in rows:
         if row["mode"] == "replay":
             groups[(row["harness"], row["task"], row["variant"], row["backend"])].append(row)
+    # A variant's first word says whether it measured a warm run.
+    measured = lambda variant: variant.split("-")[0]
+    natives = defaultdict(list)
+    for (harness, task, variant, backend), members in groups.items():
+        if backend == "native":
+            natives[(harness, task, measured(variant))].extend(members)
+    shown_variants = {key[:3] for key in groups if key[3] != "native"}
+    shown_variants |= {(h, t, v) for h, t, v, b in groups
+                       if b == "native" and not any(s[:2] == (h, t) and measured(s[2]) == measured(v) for s in shown_variants)}
     print("Medians over replayed runs; times in seconds, CPU in percent of one core.\n")
-    for harness, task, variant in sorted({key[:3] for key in groups}):
-        native = groups.get((harness, task, variant, "native"), [])
+    for harness, task, variant in sorted(shown_variants):
+        native = natives.get((harness, task, measured(variant)), [])
         docker = groups.get((harness, task, variant, "docker"), [])
         k8s = groups.get((harness, task, variant, "k8s"), [])
         solved = lambda rows: "%d/%d" % (sum(1 for r in rows if r["reward"] == 1), len(rows))
