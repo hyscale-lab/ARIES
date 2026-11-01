@@ -29,7 +29,7 @@ E2E_STAGES = [
 ]
 AFTER_STAGES = [
     ("Collect artifacts", STAGES[0][1]),
-    ("Stop harness and bridge", STAGES[1][1]),
+    ("Stop harness, revoke bridge access", STAGES[1][1]),
     ("Evaluate", STAGES[2][1]),
     ("Clean up", STAGES[3][1]),
 ]

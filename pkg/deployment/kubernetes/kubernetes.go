@@ -400,7 +400,7 @@ func (manager *Manager) Stop(ctx context.Context, id string) error {
 		}
 	}
 	manager.mu.Unlock()
-	if _, err := manager.run(ctx, nil, "delete", "pod", "-n", manager.options.Namespace, id, "--ignore-not-found", "--grace-period=5", "--wait=true"); err != nil {
+	if _, err := manager.run(ctx, nil, "delete", "pod", "-n", manager.options.Namespace, id, "--ignore-not-found", "--grace-period=1", "--wait=true"); err != nil {
 		return fmt.Errorf("delete Kubernetes pod: %w", err)
 	}
 	_, found, err := manager.pod(ctx, id)

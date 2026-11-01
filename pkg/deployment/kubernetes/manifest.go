@@ -187,10 +187,12 @@ func (manager *Manager) podManifest(request deployment.Request) ([]byte, error) 
 		container["securityContext"] = map[string]any{"allowPrivilegeEscalation": false}
 	}
 	spec := map[string]any{
-		"restartPolicy":                 "Never",
-		"automountServiceAccountToken":  manager.options.ServiceAccount != "",
-		"enableServiceLinks":            false,
-		"terminationGracePeriodSeconds": 5,
+		"restartPolicy":                "Never",
+		"automountServiceAccountToken": manager.options.ServiceAccount != "",
+		"enableServiceLinks":           false,
+		// The sandbox's PID 1 (sleep) ignores SIGTERM, so a longer grace period
+		// only delays its removal; harnesses exit on SIGTERM well within it.
+		"terminationGracePeriodSeconds": 1,
 		"containers":                    []any{container},
 		"volumes":                       volumes,
 	}

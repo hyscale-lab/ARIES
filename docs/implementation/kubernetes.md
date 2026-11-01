@@ -239,8 +239,12 @@ kubectl -n aries get pods -l app.kubernetes.io/managed-by=aries \
 `Validate` checks the pod against its request: identity, annotations, image,
 gated command, working directory, privilege escalation, host namespaces, host
 paths and the absence of a service account token. It also searches the whole pod
-object for supplied secret values. `Stop` deletes the pod and returns only after
-a lookup confirms absence.
+object for supplied secret values. `Stop` deletes the pod with a one-second
+grace period and returns only after a lookup confirms absence. A sandbox's
+process ignores SIGTERM, so the grace period is how long its removal waits
+before the kubelet kills it; one second is the shortest a deletion that still
+waits for the kubelet allows (`--force` would not confirm the containers have
+stopped).
 
 Only the bridge pod mounts a service account. Its Role allows `get pods` and
 `pods/exec` in the namespace, and before executing it confirms the target is a
