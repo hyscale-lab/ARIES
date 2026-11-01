@@ -163,12 +163,12 @@ the Hermes virtual environment and copies it into Hermes's bundled plugin direct
 task and the plugin's entry-point group is not one Hermes scans; a base older
 than Hermes 0.21 is left unchanged. No OTLP backend is configured, so the
 plugin makes no network calls; it keeps spans in SQLite under `HERMES_HOME`,
-with content capture off. After the Gateway request finishes, before container
-removal, a fixed-argv `python3` exec
+with content capture off. In `Collect`, after the Gateway request finishes and
+before container removal, a fixed-argv `python3` exec
 dumps them to `telemetry/otel-spans.jsonl`. A missing or empty store is not a
 failure; a dump that would exceed the exec output bound keeps the spans that
-fit, in end order, and logs a warning; any other dump failure fails the run,
-like other artifact collection failures.
+fit, in end order, and logs a warning; any other dump failure fails the
+harness result, like other artifact collection failures.
 Each span carries the wall-clock start and end of one tool call, model call, or
 API request, which Hermes's session export does not record. The spans do not
 reach bridge execs: Hermes passes no trace context over SSH, so execs are

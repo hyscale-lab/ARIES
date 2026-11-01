@@ -544,6 +544,7 @@ type cancelHarness struct {
 
 func (*cancelHarness) Prepare(context.Context, core.HarnessRequest) error { return nil }
 func (*cancelHarness) Start(context.Context, core.HarnessRequest) error   { return nil }
+func (*cancelHarness) Collect(context.Context) ([]string, error)          { return nil, nil }
 func (*cancelHarness) Warm(context.Context, string) (core.HarnessResult, error) {
 	return core.HarnessResult{}, nil
 }

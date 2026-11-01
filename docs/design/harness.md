@@ -15,7 +15,8 @@ and result data live in [pkg/core](../../pkg/core).
 | `Prepare(context.Context, core.HarnessRequest) error` | Create the task-local runtime from model configuration, run placement, resource limits, timeout, and artifact directory, without the tool endpoint or task service endpoints, so it can run while the sandbox starts. Reject invalid configuration before allocating. Roll back partial allocations; retain enough ownership state for `Stop` after a failure. |
 | `Start(context.Context, core.HarnessRequest) error` | Configure the prepared runtime with the resolved service endpoints and temporary tool endpoint, start the harness, and wait for readiness; prepare first when `Prepare` was not called. Roll back partial allocations as `Prepare` does. |
 | `Warm(context.Context, string) (core.HarnessResult, error)` | Before `Run` only, execute a warm-up instruction as its own conversation, which the task's conversation does not see. Keeps no task artifacts. |
-| `Run(context.Context, string) (core.HarnessResult, error)` | Execute the task instruction, accepted once, within its deadline. Return harness status and private artifact references; do not interpret this result as benchmark correctness. |
+| `Run(context.Context, string) (core.HarnessResult, error)` | Execute the task instruction, accepted once, within its deadline, and return when the agent answers. Return harness status; do not interpret this result as benchmark correctness. |
+| `Collect(context.Context) ([]string, error)` | After `Run`, retain that run's private artifacts, such as the harness's own trajectory and logs, and return every artifact reference; return nil when `Run` left nothing to retain. Runner times it as `harness_collect`, so the run's latency excludes it, and a failure fails the harness result. |
 | `Stop(context.Context) error` | Idempotently stop the owned runtime and positively confirm absence. A failure prevents evaluation. |
 
 `HarnessRequest.Connectivity` supplies typed placement and resolved task service
@@ -78,7 +79,8 @@ runtime while supplying its native files, commands, and protocol operations.
 
 For both OpenClaw and Hermes, Runner calls `Prepare` to create the container,
 `Start` to stage the configuration that names the sandbox and start the
-Gateway, any `Warm` calls, then `Run` to execute the instruction. A warm-up is
+Gateway, any `Warm` calls, then `Run` to execute the instruction and `Collect`
+to retain the Gateway log, session store and spans. A warm-up is
 a new Gateway session (Hermes) or agent session key (OpenClaw). Hermes reads
 the settings that name the sandbox and task services from a staged file its
 launcher exports, because its container environment is fixed at creation. The manager obtains a private service endpoint through

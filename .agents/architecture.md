@@ -32,7 +32,7 @@
 
 ## Task lifecycle
 
-Load → start/sanitize sandbox → register bridge → start/run harness → confirm
+Load → start/sanitize sandbox → register bridge → start/run/collect harness → confirm
 harness stop → confirm bridge revocation → evaluate → remove evaluation sandboxes
 → remove task sandbox → release attachment. Record every task failure in
 `TaskResult.Error`.

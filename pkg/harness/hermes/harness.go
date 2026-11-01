@@ -89,8 +89,17 @@ type Manager struct {
 	newSpeech func(audioinput.SpeechClientOptions) (speechSynthesizer, error)
 	newID     func() (string, error)
 
-	mu     sync.Mutex
-	active *session
+	mu         sync.Mutex
+	active     *session
+	collection *collection
+}
+
+// collection is what Run leaves for Collect: the artifact paths Run added to its
+// own snapshot of the session, and the task run's outputs.
+type collection struct {
+	paths   []string
+	stdout  []byte
+	outcome runOutcome
 }
 
 type session struct {
@@ -430,10 +439,7 @@ func (manager *Manager) Run(ctx context.Context, instruction string) (core.Harne
 	}
 	output, outcome, err := manager.runGateway(ctx, active, instruction)
 	stdout := active.Credentials.Redact([]byte(output))
-	artifactCtx, artifactCancel := context.WithTimeout(context.WithoutCancel(ctx), manager.runtime.Options.CleanupTimeout)
-	artifactErr := manager.collectArtifacts(artifactCtx, active, stdout, outcome)
-	artifactCancel()
-	err = errors.Join(err, artifactErr)
+	manager.leaveForCollect(active, stdout, outcome)
 	if err != nil {
 		err = active.Credentials.RedactErr(err)
 		return active.FailedResult(started, err), err
@@ -479,10 +485,7 @@ func (manager *Manager) runVoiceTranscribe(ctx context.Context, active *session,
 		err = errors.Join(err, active.Credentials.RedactErr(writeErr))
 		return active.FailedResult(started, err), err
 	}
-	artifactCtx, artifactCancel := context.WithTimeout(context.WithoutCancel(ctx), manager.runtime.Options.CleanupTimeout)
-	artifactErr := manager.collectArtifacts(artifactCtx, active, stdout, outcome)
-	artifactCancel()
-	err = errors.Join(err, artifactErr)
+	manager.leaveForCollect(active, stdout, outcome)
 	if err != nil {
 		err = active.Credentials.RedactErr(err)
 		return active.FailedResult(started, err), err
@@ -746,6 +749,34 @@ func (manager *Manager) stopSession(ctx context.Context, active *session) error 
 		active.gateway.client.Close()
 	}
 	return nil
+}
+
+// leaveForCollect records the task run's outputs once the Gateway has
+// answered, so the time spent retaining them is not part of the run.
+func (manager *Manager) leaveForCollect(active *session, stdout []byte, outcome runOutcome) {
+	manager.mu.Lock()
+	manager.collection = &collection{paths: active.Artifacts.Paths(), stdout: stdout, outcome: outcome}
+	manager.mu.Unlock()
+}
+
+// Collect retains the task run's outputs with Hermes's session export, spans
+// and container log. It retains nothing when Run did not reach the Gateway.
+func (manager *Manager) Collect(ctx context.Context) ([]string, error) {
+	manager.mu.Lock()
+	pending := manager.collection
+	manager.collection = nil
+	if pending == nil || manager.active == nil {
+		manager.mu.Unlock()
+		return nil, nil
+	}
+	active := snapshotSession(manager.active)
+	manager.mu.Unlock()
+	defer active.Credentials.Clear()
+	active.Artifacts.Add(pending.paths...)
+	collectCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), manager.runtime.Options.CleanupTimeout)
+	err := manager.collectArtifacts(collectCtx, active, pending.stdout, pending.outcome)
+	cancel()
+	return active.Artifacts.Paths(), active.Credentials.RedactErr(err)
 }
 
 func (manager *Manager) collectArtifacts(ctx context.Context, active *session, output []byte, outcome runOutcome) error {

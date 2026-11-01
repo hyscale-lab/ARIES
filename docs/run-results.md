@@ -68,15 +68,17 @@ jq -r '.tasks[] | select(.error) | "\(.task_id): \(.error)"' "$run_dir/run-resul
 Each task's `phases` list is its timeline as the runner saw it: one entry per
 lifecycle step, with its name, `started_at` and `duration`, in the order
 `sandbox_start`, `sandbox_prepare`, `bridge_register`, `harness_prepare`,
-`harness_start`, `harness_warmup`, `harness_run`, `isolation`, `evaluation` and
-`cleanup`. A task that fails early lists only the steps it reached. The run's
+`harness_start`, `harness_warmup`, `harness_run`, `harness_collect`,
+`isolation`, `evaluation` and `cleanup`. A task that fails early lists only the steps it reached. The run's
 bridge is one long-running server, started once in
 `infrastructure.startup_duration`; `bridge_register` is only the task
 registering its sandbox with it and receiving the SSH endpoint the harness
 uses. `harness_prepare` creates the harness's container or pod; by default it
 runs alongside the sandbox steps (`execution.parallel_start`), so phases can
 overlap and the time to the agent's response is the span from the first
-phase's start to the end of `harness_run`. `harness_warmup` appears with
+phase's start to the end of `harness_run`, which ends when the harness answers.
+`harness_collect` then retains the run's artifacts, such as Hermes's session
+export, which takes about two seconds. `harness_warmup` appears with
 `execution.warmup` and spans the warm-ups, which the task's `warmups` list
 records one by one with `started_at`, `duration`, `status` and any `error`. To
 split a task's latency:

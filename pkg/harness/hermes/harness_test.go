@@ -412,7 +412,7 @@ func TestPrepareThenStartAndWarmBeforeTheTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	warmSession := fake.gatewaySession
-	if _, err := manager.Run(context.Background(), "solve the task"); err != nil {
+	if _, err := runAndCollect(context.Background(), manager, "solve the task"); err != nil {
 		t.Fatal(err)
 	}
 	if warmSession == fake.gatewaySession || !strings.Contains(warmSession, "warmup-1") {
@@ -572,7 +572,7 @@ func TestRunReturnsFinalResponseAndArtifacts(t *testing.T) {
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
-	result, err := manager.Run(context.Background(), "fix the git repository")
+	result, err := runAndCollect(context.Background(), manager, "fix the git repository")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -646,7 +646,7 @@ func TestVoiceTranscribeSynthesizesAudioAndRunsTranscriptAsAgentMessage(t *testi
 		t.Fatal(err)
 	}
 	runtimeArchive := bytes.Clone(fake.archive)
-	result, err := manager.Run(context.Background(), "fix the git repository by voice")
+	result, err := runAndCollect(context.Background(), manager, "fix the git repository by voice")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -756,7 +756,7 @@ func TestVoiceTranscribeMapsOpenAICompatibleAgentProvider(t *testing.T) {
 			if err := manager.Start(context.Background(), request); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := manager.Run(context.Background(), "fix by voice"); err != nil {
+			if _, err := runAndCollect(context.Background(), manager, "fix by voice"); err != nil {
 				t.Fatal(err)
 			}
 			if !slices.Equal(fake.gatewayInputs, []string{"fix from speech"}) {
@@ -841,7 +841,7 @@ func TestVoiceTranscribeRejectsInvalidNativeResults(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer manager.Stop(context.Background())
-			result, err := manager.Run(context.Background(), "original task instruction")
+			result, err := runAndCollect(context.Background(), manager, "original task instruction")
 			if err == nil || !strings.Contains(err.Error(), test.wantError) || result.Status != core.StatusFailed {
 				t.Fatalf("STT result = %#v, error = %v", result, err)
 			}
@@ -874,10 +874,10 @@ func TestRunAcceptsExactlyOneInstruction(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Stop(context.Background())
-	if _, err := manager.Run(context.Background(), "first"); err != nil {
+	if _, err := runAndCollect(context.Background(), manager, "first"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.Run(context.Background(), "second"); err == nil {
+	if _, err := runAndCollect(context.Background(), manager, "second"); err == nil {
 		t.Fatal("second instruction was accepted")
 	}
 	if !slices.Equal(fake.gatewayInputs, []string{"first"}) {
@@ -888,7 +888,7 @@ func TestRunAcceptsExactlyOneInstruction(t *testing.T) {
 func TestRunRejectsInvalidInstructionAndUnstartedHarness(t *testing.T) {
 	fake := newFakeDeployment(t)
 	manager := newTestManager(t, fake, []byte("model-secret"))
-	if _, err := manager.Run(context.Background(), "task"); err == nil {
+	if _, err := runAndCollect(context.Background(), manager, "task"); err == nil {
 		t.Fatal("run before start was accepted")
 	}
 	if err := manager.Start(context.Background(), testRequest(t)); err != nil {
@@ -896,7 +896,7 @@ func TestRunRejectsInvalidInstructionAndUnstartedHarness(t *testing.T) {
 	}
 	defer manager.Stop(context.Background())
 	for _, instruction := range []string{"", "   ", "has\x00nul"} {
-		if _, err := manager.Run(context.Background(), instruction); err == nil {
+		if _, err := runAndCollect(context.Background(), manager, instruction); err == nil {
 			t.Fatalf("instruction %q was accepted", instruction)
 		}
 	}
@@ -913,7 +913,7 @@ func TestRunReportsNativeFailureAndStillRetainsArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Stop(context.Background())
-	result, err := manager.Run(context.Background(), "task")
+	result, err := runAndCollect(context.Background(), manager, "task")
 	if err == nil || !strings.Contains(err.Error(), "agent failed") {
 		t.Fatalf("err = %v", err)
 	}
@@ -934,7 +934,7 @@ func TestRunCancellationIsReportedAsCanceled(t *testing.T) {
 	defer manager.Stop(context.Background())
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	result, err := manager.Run(ctx, "task")
+	result, err := runAndCollect(ctx, manager, "task")
 	if err == nil {
 		t.Fatal("canceled run reported success")
 	}
@@ -955,7 +955,7 @@ func TestEmptySessionExportIsNotAFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Stop(context.Background())
-	result, err := manager.Run(context.Background(), "task")
+	result, err := runAndCollect(context.Background(), manager, "task")
 	if err != nil {
 		t.Fatalf("empty session export failed the run: %v", err)
 	}
@@ -979,7 +979,7 @@ func TestMissingSpanStoreIsNotAFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Stop(context.Background())
-	result, err := manager.Run(context.Background(), "task")
+	result, err := runAndCollect(context.Background(), manager, "task")
 	if err != nil {
 		t.Fatalf("missing span store failed the run: %v", err)
 	}
@@ -1003,7 +1003,7 @@ func TestBrokenSpanStoreFailsTheRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Stop(context.Background())
-	result, err := manager.Run(context.Background(), "task")
+	result, err := runAndCollect(context.Background(), manager, "task")
 	if err == nil || !strings.Contains(err.Error(), "exited with code 1") || !strings.Contains(err.Error(), "file is not a database") {
 		t.Fatalf("Run error = %v", err)
 	}
@@ -1024,7 +1024,7 @@ func TestTruncatedSpanDumpKeepsWhatFit(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Stop(context.Background())
-	if _, err := manager.Run(context.Background(), "task"); err != nil {
+	if _, err := runAndCollect(context.Background(), manager, "task"); err != nil {
 		t.Fatalf("truncated dump failed the run: %v", err)
 	}
 	content, err := os.ReadFile(filepath.Join(manager.runtime.Options.OutputDir, request.TaskID, "harness", "telemetry", "otel-spans.jsonl"))
@@ -1042,7 +1042,7 @@ func TestSpanDumpUsesFixedArgv(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Stop(context.Background())
-	if _, err := manager.Run(context.Background(), "task"); err != nil {
+	if _, err := runAndCollect(context.Background(), manager, "task"); err != nil {
 		t.Fatal(err)
 	}
 	for _, command := range fake.execs {
@@ -1209,7 +1209,7 @@ func TestRunOutcomeRecordsNativeTerminalState(t *testing.T) {
 				ctx, cancel = context.WithTimeout(ctx, 250*time.Millisecond)
 				defer cancel()
 			}
-			result, runErr := manager.Run(ctx, "task")
+			result, runErr := runAndCollect(ctx, manager, "task")
 			if result.Status != tc.status || (runErr == nil) != (tc.status == core.StatusSucceeded) {
 				t.Fatalf("result=%#v error=%v", result, runErr)
 			}
@@ -1247,7 +1247,7 @@ func TestGatewayCancelFailureDoesNotPreventRuntimeRemoval(t *testing.T) {
 	if err := manager.Start(context.Background(), testRequest(t)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.Run(context.Background(), "task"); err != nil {
+	if _, err := runAndCollect(context.Background(), manager, "task"); err != nil {
 		t.Fatal(err)
 	}
 	if err := manager.Stop(context.Background()); err != nil {
@@ -1357,7 +1357,7 @@ func TestRunScrubsRedactEnvValuesFromSavedArtifacts(t *testing.T) {
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.Run(context.Background(), "fix the git repository"); err != nil {
+	if _, err := runAndCollect(context.Background(), manager, "fix the git repository"); err != nil {
 		t.Fatal(err)
 	}
 	if err := manager.Stop(context.Background()); err != nil {
@@ -1417,4 +1417,22 @@ func TestStartRendersTheTaskMCPServers(t *testing.T) {
 	if clash.createCalls != 0 {
 		t.Fatalf("a runtime was created despite the clash: %d", clash.createCalls)
 	}
+}
+
+// runAndCollect runs the task instruction and then collects its artifacts, as
+// the runner does.
+func runAndCollect(ctx context.Context, manager *Manager, instruction string) (core.HarnessResult, error) {
+	result, err := manager.Run(ctx, instruction)
+	paths, collectErr := manager.Collect(ctx)
+	if paths != nil {
+		result.LogPaths = paths
+	}
+	if collectErr != nil {
+		if result.Status == core.StatusSucceeded {
+			result.Status = core.StatusFailed
+		}
+		err = errors.Join(err, collectErr)
+		result.Error = err.Error()
+	}
+	return result, err
 }

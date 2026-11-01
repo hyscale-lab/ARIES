@@ -75,8 +75,15 @@ type Manager struct {
 	newRealtime     func(realtimeclient.Gateway, realtimeclient.Options) (realtimeRunner, error)
 	newSpeech       func(audioinput.SpeechClientOptions) (speechSynthesizer, error)
 
-	mu     sync.Mutex
-	active *session
+	mu         sync.Mutex
+	active     *session
+	collection *collection
+}
+
+// collection is what Run leaves for Collect: the artifact paths Run added to its
+// own snapshot of the session.
+type collection struct {
+	paths []string
 }
 
 type realtimeRunner interface {
@@ -440,10 +447,7 @@ func (manager *Manager) Run(ctx context.Context, instruction string) (core.Harne
 		active.Artifacts.Add(resultPath)
 	}
 	err = errors.Join(err, writeErr)
-	artifactCtx, artifactCancel := context.WithTimeout(context.WithoutCancel(ctx), manager.runtime.Options.CleanupTimeout)
-	artifactErr := manager.collectArtifacts(artifactCtx, active)
-	artifactCancel()
-	err = errors.Join(err, artifactErr)
+	manager.leaveForCollect(active)
 	if err != nil {
 		return active.FailedResult(started, err), err
 	}
@@ -529,10 +533,7 @@ func (manager *Manager) runRealtime(ctx context.Context, active *session, instru
 	if len(realtimeResult.Errors) != 0 && manager.options.Common.Mode != ModeVoiceTranscribe {
 		err = errors.Join(err, errors.New(strings.Join(realtimeResult.Errors, "; ")))
 	}
-	artifactCtx, artifactCancel := context.WithTimeout(context.WithoutCancel(ctx), manager.runtime.Options.CleanupTimeout)
-	artifactErr := manager.collectArtifacts(artifactCtx, active)
-	artifactCancel()
-	err = errors.Join(err, artifactErr)
+	manager.leaveForCollect(active)
 	if err != nil {
 		return active.FailedResult(started, err), err
 	}
@@ -926,6 +927,34 @@ func (manager *Manager) stopSession(ctx context.Context, active *session) error 
 		return err
 	}
 	return nil
+}
+
+// leaveForCollect records the artifacts Run has written once the gateway has
+// answered, so the time spent retaining the rest is not part of the run.
+func (manager *Manager) leaveForCollect(active *session) {
+	manager.mu.Lock()
+	manager.collection = &collection{paths: active.Artifacts.Paths()}
+	manager.mu.Unlock()
+}
+
+// Collect retains the gateway log and OpenClaw's session files after the task
+// run. It retains nothing when Run did not reach the gateway.
+func (manager *Manager) Collect(ctx context.Context) ([]string, error) {
+	manager.mu.Lock()
+	pending := manager.collection
+	manager.collection = nil
+	if pending == nil || manager.active == nil {
+		manager.mu.Unlock()
+		return nil, nil
+	}
+	active := snapshotSession(manager.active)
+	manager.mu.Unlock()
+	defer active.Credentials.Clear()
+	active.Artifacts.Add(pending.paths...)
+	collectCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), manager.runtime.Options.CleanupTimeout)
+	err := manager.collectArtifacts(collectCtx, active)
+	cancel()
+	return active.Artifacts.Paths(), active.Credentials.RedactErr(err)
 }
 
 func (manager *Manager) collectArtifacts(ctx context.Context, active *session) error {

@@ -27,7 +27,9 @@ and [lifecycle](architecture.md#task-lifecycle).
 - Harness Prepare creates the runtime without tool or task-service endpoints and
   rejects invalid configuration before allocating; Start stages what names the
   sandbox. Warm runs only before Run, as its own conversation, and keeps no task
-  artifacts. Run accepts exactly one task instruction.
+  artifacts. Run accepts exactly one task instruction and returns when the agent
+  answers; Collect then retains that run's artifacts and is timed as its own
+  phase, never inside Run.
 - Each sandbox session has its own listener, immutable target binding, and recorder,
   keyed by a stable sandbox ID. Native tool execution must not call Runner or own
   sandbox lifecycle. Use plaintext unauthenticated gRPC and unauthenticated SSH,

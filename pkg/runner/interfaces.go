@@ -35,12 +35,15 @@ type EvaluationSandboxes interface {
 // Start then configures it with request.Endpoint and waits until it is ready,
 // preparing first when Prepare was not called. Warm sends a warm-up
 // instruction as its own conversation and may be called any number of times
-// before Run, which accepts the task's single instruction.
+// before Run, which accepts the task's single instruction and returns once the
+// agent answers. Collect then retains that run's artifacts and returns every
+// artifact path, or nil when Run left nothing to retain.
 type AgentHarness interface {
 	Prepare(context.Context, core.HarnessRequest) error
 	Start(context.Context, core.HarnessRequest) error
 	Warm(context.Context, string) (core.HarnessResult, error)
 	Run(context.Context, string) (core.HarnessResult, error)
+	Collect(context.Context) ([]string, error)
 	Stop(context.Context) error
 }
 

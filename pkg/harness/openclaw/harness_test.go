@@ -416,7 +416,7 @@ func TestAgentResultAndErrorsRedactEverySessionSecret(t *testing.T) {
 			if err := manager.active.Credentials.LoadMCP([]core.MCPServerConfig{{Name: "fixture", SecretEnv: map[string]string{"TOKEN": "MCP_KEY"}}}, nil, func(string) ([]byte, bool) { return []byte(secrets[3]), true }); err != nil {
 				t.Fatal(err)
 			}
-			result, runErr := manager.Run(context.Background(), "repair git")
+			result, runErr := runAndCollect(context.Background(), manager, "repair git")
 			if result.Status != test.status {
 				t.Fatalf("result = %#v, error = %v", result, runErr)
 			}
@@ -551,7 +551,7 @@ func TestHarnessUsesInjectedDeploymentAndPrivateArchive(t *testing.T) {
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
-	result, err := manager.Run(context.Background(), "repair git")
+	result, err := runAndCollect(context.Background(), manager, "repair git")
 	if err != nil || result.Status != core.StatusSucceeded || result.FinalResponse != "task complete" {
 		t.Fatalf("Run = %#v, %v", result, err)
 	}
@@ -780,7 +780,7 @@ func TestAgentRunUsesGatewayOnceWithExactParameters(t *testing.T) {
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
-	result, err := manager.Run(context.Background(), "repair git")
+	result, err := runAndCollect(context.Background(), manager, "repair git")
 	if err != nil || result.FinalResponse != "first\nsecond" {
 		t.Fatalf("Run = %#v, %v", result, err)
 	}
@@ -815,7 +815,7 @@ func TestAgentRequestsPreserveReasoningSelection(t *testing.T) {
 					}
 				})
 				if mode == ModeAgent {
-					if _, err := manager.Run(context.Background(), "repair git"); err != nil {
+					if _, err := runAndCollect(context.Background(), manager, "repair git"); err != nil {
 						t.Fatal(err)
 					}
 				} else {
@@ -852,7 +852,7 @@ func TestAgentRunRejectsMissingWriteScopeBeforeSubmission(t *testing.T) {
 	if err := manager.Start(context.Background(), core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{AttachmentID: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}); err != nil {
 		t.Fatal(err)
 	}
-	result, err := manager.Run(context.Background(), "repair git")
+	result, err := runAndCollect(context.Background(), manager, "repair git")
 	if err == nil || result.Status != core.StatusFailed || gateway.agentCalls != 0 || !strings.Contains(err.Error(), "operator.write") {
 		t.Fatalf("Run = %#v, %v calls=%d", result, err, gateway.agentCalls)
 	}
@@ -930,7 +930,7 @@ func TestRealtimeModePublishesGatewayAndRunsRunner(t *testing.T) {
 	if fake.created.ServicePort != 18789 {
 		t.Fatalf("service port = %d", fake.created.ServicePort)
 	}
-	result, err := manager.Run(context.Background(), "voice task")
+	result, err := runAndCollect(context.Background(), manager, "voice task")
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -1030,7 +1030,7 @@ func TestRealtimeTranscribeModeSendsTranscriptToAgent(t *testing.T) {
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
-	result, err := manager.Run(context.Background(), "voice task")
+	result, err := runAndCollect(context.Background(), manager, "voice task")
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -1099,7 +1099,7 @@ func TestRealtimeTranscribeErrorsDoNotStartAgent(t *testing.T) {
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
-	result, err := manager.Run(context.Background(), "voice task")
+	result, err := runAndCollect(context.Background(), manager, "voice task")
 	if err == nil || !strings.Contains(err.Error(), "session.error") {
 		t.Fatalf("Run error = %v", err)
 	}
@@ -1188,7 +1188,7 @@ func TestRealtimeTranscribeUsesSeparateSTTTimeoutAndFreshAgentTimeout(t *testing
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
-	result, err := manager.Run(context.Background(), "voice task")
+	result, err := runAndCollect(context.Background(), manager, "voice task")
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -1262,7 +1262,7 @@ func TestRealtimeTranscribeAgentUsesResponseOnlyGateway(t *testing.T) {
 	if err := manager.Start(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
-	result, err := manager.Run(context.Background(), "voice task")
+	result, err := runAndCollect(context.Background(), manager, "voice task")
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -1310,7 +1310,7 @@ func TestArtifactCollectionFailureBelongsToRunNotStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake.containerLogsErr = errors.New("gateway log unavailable")
-	result, err := manager.Run(context.Background(), "repair git")
+	result, err := runAndCollect(context.Background(), manager, "repair git")
 	if err == nil || result.Status != core.StatusFailed || !strings.Contains(err.Error(), "gateway log unavailable") {
 		t.Fatalf("Run = %#v, %v", result, err)
 	}
@@ -1603,7 +1603,7 @@ func TestPrepareThenStartAndWarmBeforeTheTask(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := manager.Run(context.Background(), "solve the task"); err != nil {
+	if _, err := runAndCollect(context.Background(), manager, "solve the task"); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"agent:main:aries-fix-git-warmup-1", "agent:main:aries-fix-git-warmup-2", "agent:main:aries-fix-git"}
@@ -1613,4 +1613,22 @@ func TestPrepareThenStartAndWarmBeforeTheTask(t *testing.T) {
 	if _, err := manager.Warm(context.Background(), "warm up"); err == nil {
 		t.Fatal("Warm after the task succeeded")
 	}
+}
+
+// runAndCollect runs the task instruction and then collects its artifacts, as
+// the runner does.
+func runAndCollect(ctx context.Context, manager *Manager, instruction string) (core.HarnessResult, error) {
+	result, err := manager.Run(ctx, instruction)
+	paths, collectErr := manager.Collect(ctx)
+	if paths != nil {
+		result.LogPaths = paths
+	}
+	if collectErr != nil {
+		if result.Status == core.StatusSucceeded {
+			result.Status = core.StatusFailed
+		}
+		err = errors.Join(err, collectErr)
+		result.Error = err.Error()
+	}
+	return result, err
 }

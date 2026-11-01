@@ -264,10 +264,13 @@ const (
 	PhaseHarnessStart   = "harness_start"
 	// PhaseHarnessWarmup spans the warm-up requests sent before the task.
 	PhaseHarnessWarmup = "harness_warmup"
-	PhaseHarnessRun    = "harness_run"
-	PhaseIsolation     = "isolation"
-	PhaseEvaluation    = "evaluation"
-	PhaseCleanup       = "cleanup"
+	// PhaseHarnessRun ends when the harness answers; PhaseHarnessCollect then
+	// retains that run's artifacts, such as the harness's own trajectory.
+	PhaseHarnessRun     = "harness_run"
+	PhaseHarnessCollect = "harness_collect"
+	PhaseIsolation      = "isolation"
+	PhaseEvaluation     = "evaluation"
+	PhaseCleanup        = "cleanup"
 )
 
 // TaskResult preserves each outcome even when several operations fail.

@@ -276,6 +276,9 @@ type fakeHarness struct {
 	warms            int
 	warmInstructions []string
 	runErrors        []error
+	collectPaths     []string
+	collectErr       error
+	collects         int
 	stopErrors       []error
 	runs             int
 	stops            int
@@ -334,6 +337,14 @@ func (f *fakeHarness) Run(ctx context.Context, instruction string) (core.Harness
 	f.runs++
 	f.mu.Unlock()
 	return core.HarnessResult{FinalResponse: "done"}, err
+}
+
+func (f *fakeHarness) Collect(ctx context.Context) ([]string, error) {
+	f.log.add("harness.collect", ctx)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.collects++
+	return f.collectPaths, f.collectErr
 }
 
 func (f *fakeHarness) Stop(ctx context.Context) error {
@@ -413,7 +424,7 @@ func TestRunnerSuccessOrdering(t *testing.T) {
 	}
 	wantCalls := []string{
 		"benchmark.tasks", "sandbox.start", "benchmark.prepare", "bridge.start", "harness.start", "harness.run",
-		"harness.stop", "bridge.stop", "benchmark.evaluate", "sandbox.stop",
+		"harness.collect", "harness.stop", "bridge.stop", "benchmark.evaluate", "sandbox.stop",
 	}
 	if got := rig.log.snapshot(); !reflect.DeepEqual(got, wantCalls) {
 		t.Fatalf("calls = %v, want %v", got, wantCalls)
@@ -465,7 +476,8 @@ func TestRunnerRecordsEachLifecyclePhaseInOrder(t *testing.T) {
 	task := result.Tasks[0]
 	want := []string{
 		core.PhaseSandboxStart, core.PhaseSandboxPrepare, core.PhaseBridgeRegister, core.PhaseHarnessPrepare,
-		core.PhaseHarnessStart, core.PhaseHarnessRun, core.PhaseIsolation, core.PhaseEvaluation, core.PhaseCleanup,
+		core.PhaseHarnessStart, core.PhaseHarnessRun, core.PhaseHarnessCollect, core.PhaseIsolation, core.PhaseEvaluation,
+		core.PhaseCleanup,
 	}
 	if got := phaseNames(task.Phases); !reflect.DeepEqual(got, want) {
 		t.Fatalf("phases = %v, want %v", got, want)
@@ -480,6 +492,34 @@ func TestRunnerRecordsEachLifecyclePhaseInOrder(t *testing.T) {
 				t.Fatalf("phase %s starts before %s ends", phase.Name, previous.Name)
 			}
 		}
+	}
+}
+
+// Collection is timed apart from the run, and its paths replace the run's.
+func TestRunnerCollectsTheHarnessArtifactsAfterTheRun(t *testing.T) {
+	rig := newRig(t, 1)
+	rig.harness.collectPaths = []string{"harness/trajectory.jsonl"}
+	result, err := rig.runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	task := result.Tasks[0]
+	if task.Harness.Status != core.StatusSucceeded || !slices.Equal(task.Harness.LogPaths, rig.harness.collectPaths) {
+		t.Fatalf("harness = %#v", task.Harness)
+	}
+}
+
+// A failed collection fails the harness, but the sandbox is still evaluated.
+func TestRunnerFailsTheHarnessWhenCollectionFails(t *testing.T) {
+	rig := newRig(t, 1)
+	rig.harness.collectErr = errors.New("export failed")
+	result, err := rig.runner.Run(context.Background())
+	task := result.Tasks[0]
+	if err == nil || task.Harness.Status != core.StatusFailed || task.Harness.Error != "export failed" {
+		t.Fatalf("Run() error = %v, harness = %#v", err, task.Harness)
+	}
+	if task.Evaluation.Status != core.StatusSucceeded {
+		t.Fatalf("evaluation = %#v", task.Evaluation)
 	}
 }
 
@@ -520,7 +560,7 @@ func TestRunnerStopsEvaluationSandboxesBeforeTaskSandbox(t *testing.T) {
 	}
 	wantCalls := []string{
 		"benchmark.tasks", "sandbox.start", "benchmark.prepare", "bridge.start", "harness.start", "harness.run",
-		"harness.stop", "bridge.stop", "benchmark.evaluate", "sandbox.start", "sandbox.start",
+		"harness.collect", "harness.stop", "bridge.stop", "benchmark.evaluate", "sandbox.start", "sandbox.start",
 		"sandbox.stop", "sandbox.stop", "sandbox.stop",
 	}
 	if got := rig.log.snapshot(); !reflect.DeepEqual(got, wantCalls) {
@@ -781,23 +821,23 @@ func TestRunnerFailuresAtEveryCall(t *testing.T) {
 		},
 		{
 			name: "harness run", configure: func(r *rig, err error) { r.harness.runErrors = []error{err} }, wantTasks: 1,
-			wantCalls: []string{"benchmark.tasks", "sandbox.start", "benchmark.prepare", "bridge.start", "harness.start", "harness.run", "harness.stop", "bridge.stop", "benchmark.evaluate", "sandbox.stop"}, wantEval: core.StatusSucceeded,
+			wantCalls: []string{"benchmark.tasks", "sandbox.start", "benchmark.prepare", "bridge.start", "harness.start", "harness.run", "harness.collect", "harness.stop", "bridge.stop", "benchmark.evaluate", "sandbox.stop"}, wantEval: core.StatusSucceeded,
 		},
 		{
 			name: "harness stop", configure: func(r *rig, err error) { r.harness.stopErrors = []error{err, nil} }, wantTasks: 1,
-			wantCalls: []string{"benchmark.tasks", "sandbox.start", "benchmark.prepare", "bridge.start", "harness.start", "harness.run", "harness.stop", "bridge.stop", "harness.stop", "sandbox.stop"}, wantEval: core.StatusBlockedIsolation,
+			wantCalls: []string{"benchmark.tasks", "sandbox.start", "benchmark.prepare", "bridge.start", "harness.start", "harness.run", "harness.collect", "harness.stop", "bridge.stop", "harness.stop", "sandbox.stop"}, wantEval: core.StatusBlockedIsolation,
 		},
 		{
 			name: "bridge stop", configure: func(r *rig, err error) { r.bridge.stopErrors = []error{err, nil} }, wantTasks: 1,
-			wantCalls: []string{"benchmark.tasks", "sandbox.start", "benchmark.prepare", "bridge.start", "harness.start", "harness.run", "harness.stop", "bridge.stop", "bridge.stop", "sandbox.stop"}, wantEval: core.StatusBlockedIsolation,
+			wantCalls: []string{"benchmark.tasks", "sandbox.start", "benchmark.prepare", "bridge.start", "harness.start", "harness.run", "harness.collect", "harness.stop", "bridge.stop", "bridge.stop", "sandbox.stop"}, wantEval: core.StatusBlockedIsolation,
 		},
 		{
 			name: "evaluate", configure: func(r *rig, err error) { r.benchmark.evaluationError = err }, wantTasks: 1,
-			wantCalls: []string{"benchmark.tasks", "sandbox.start", "benchmark.prepare", "bridge.start", "harness.start", "harness.run", "harness.stop", "bridge.stop", "benchmark.evaluate", "sandbox.stop"}, wantEval: core.StatusFailed,
+			wantCalls: []string{"benchmark.tasks", "sandbox.start", "benchmark.prepare", "bridge.start", "harness.start", "harness.run", "harness.collect", "harness.stop", "bridge.stop", "benchmark.evaluate", "sandbox.stop"}, wantEval: core.StatusFailed,
 		},
 		{
 			name: "sandbox stop", configure: func(r *rig, err error) { r.factory.stopErrors = []error{err} }, wantTasks: 1,
-			wantCalls: []string{"benchmark.tasks", "sandbox.start", "benchmark.prepare", "bridge.start", "harness.start", "harness.run", "harness.stop", "bridge.stop", "benchmark.evaluate", "sandbox.stop"}, wantEval: core.StatusSucceeded,
+			wantCalls: []string{"benchmark.tasks", "sandbox.start", "benchmark.prepare", "bridge.start", "harness.start", "harness.run", "harness.collect", "harness.stop", "bridge.stop", "benchmark.evaluate", "sandbox.stop"}, wantEval: core.StatusSucceeded,
 		},
 	}
 
@@ -828,7 +868,7 @@ func TestRunnerFailuresAtEveryCall(t *testing.T) {
 func TestRunnerCancellationAtEveryLifecycleCutPoint(t *testing.T) {
 	fullCalls := []string{
 		"benchmark.tasks", "sandbox.start", "benchmark.prepare", "bridge.start", "harness.start", "harness.run",
-		"harness.stop", "bridge.stop", "benchmark.evaluate", "sandbox.stop",
+		"harness.collect", "harness.stop", "bridge.stop", "benchmark.evaluate", "sandbox.stop",
 	}
 	tests := []struct {
 		name      string
@@ -844,6 +884,7 @@ func TestRunnerCancellationAtEveryLifecycleCutPoint(t *testing.T) {
 		{"bridge start", "bridge.start", []string{"benchmark.tasks", "sandbox.start", "benchmark.prepare", "bridge.start", "bridge.rollback", "bridge.stop", "sandbox.stop"}, 1, core.StatusNotRun, "bridge.rollback"},
 		{"harness start", "harness.start", []string{"benchmark.tasks", "sandbox.start", "benchmark.prepare", "bridge.start", "harness.start", "harness.rollback", "harness.stop", "bridge.stop", "benchmark.evaluate", "sandbox.stop"}, 1, core.StatusCanceled, "harness.rollback"},
 		{"harness run", "harness.run", fullCalls, 1, core.StatusCanceled, ""},
+		{"harness collect", "harness.collect", fullCalls, 1, core.StatusCanceled, ""},
 		{"harness stop", "harness.stop", fullCalls, 1, core.StatusCanceled, ""},
 		{"bridge stop", "bridge.stop", fullCalls, 1, core.StatusCanceled, ""},
 		{"evaluate", "benchmark.evaluate", fullCalls, 1, core.StatusCanceled, ""},

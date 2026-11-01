@@ -420,6 +420,22 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 			result.Harness.Error = runErr.Error()
 			allErrors = append(allErrors, fmt.Errorf("run harness: %w", runErr))
 		}
+		endPhase = phase(core.PhaseHarnessCollect)
+		paths, collectErr := r.harness.Collect(ctx)
+		endPhase()
+		if paths != nil {
+			result.Harness.LogPaths = paths
+		}
+		if collectErr != nil {
+			if result.Harness.Status == core.StatusSucceeded {
+				result.Harness.Status = core.StatusFailed
+			}
+			if result.Harness.Error != "" {
+				result.Harness.Error += "\n"
+			}
+			result.Harness.Error += collectErr.Error()
+			allErrors = append(allErrors, fmt.Errorf("collect harness artifacts: %w", collectErr))
+		}
 	}
 
 	isolationErrors := make([]error, 0, 2)

@@ -291,6 +291,7 @@ type stubHarness struct{}
 
 func (*stubHarness) Prepare(context.Context, core.HarnessRequest) error { return nil }
 func (*stubHarness) Start(context.Context, core.HarnessRequest) error   { return nil }
+func (*stubHarness) Collect(context.Context) ([]string, error)          { return nil, nil }
 func (*stubHarness) Warm(context.Context, string) (core.HarnessResult, error) {
 	return core.HarnessResult{}, nil
 }
