@@ -8,7 +8,6 @@ runs (each task run cold, then again warm on the same harness and sandbox) and
 writes, as PNG and PDF, to OUT_DIR:
 
   end-to-end     cold and warm latency for every setup, split into stages
-  first-request  how much longer the first request takes than the repeat
   after-answer   what follows the answer: collection, stop, evaluation, cleanup
 
 and figures.csv, every plotted number. Uses plot.py's palette and styling.
@@ -20,8 +19,7 @@ import sys
 from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from plot import (HARNESSES, INK, SETUPS, STAGES, SURFACE, TASKS, median, number, plot_per_task, plt,  # noqa: E402
-                  save, style)
+from plot import HARNESSES, INK, SETUPS, STAGES, SURFACE, TASKS, median, number, plt, save, style  # noqa: E402
 
 E2E_STAGES = [
     ("Sandbox and bridge", STAGES[0][1]),
@@ -44,8 +42,6 @@ def load(path):
         for key, value in row.items():
             if key not in ("harness", "backend", "mode", "task", "error", "variant"):
                 row[key] = number(value)
-        if row.get("cold_run_s") is not None and row.get("warm_run_s") is not None:
-            row["first_extra_s"] = row["cold_run_s"] - row["warm_run_s"]
     return rows
 
 
@@ -159,18 +155,11 @@ def main():
     os.makedirs(out, exist_ok=True)
     table, record = [], []
     plot_end_to_end(rows, out, table, record)
-    plot_per_task(rows, "first_extra_s", "first request minus the repeat, seconds", "%.1f", "first-request",
-                  out, table, record)
     plot_after(rows, out, table, record)
     with open(os.path.join(out, "figures.csv"), "w", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(["figure", "harness", "task", "setup", "measure", "value"])
-        for entry in table:
-            if entry[0] == "first-request":
-                # plot_per_task records figure, harness, backend, task, key, value.
-                figure_name, harness, backend, task, key, value = entry
-                entry = [figure_name, harness, task, backend, key, value]
-            writer.writerow(entry)
+        writer.writerows(table)
     print("wrote " + ", ".join(record) + " to " + out)
 
 
