@@ -8,7 +8,7 @@ runs (each task run cold, then again warm on the same harness and sandbox) and
 writes, as PNG and PDF, to OUT_DIR:
 
   cold-latency   time from the first start-up step to the first answer
-  warm-latency   the same task again on the started harness and sandbox
+  end-to-end     cold and warm latency side by side for every setup
   first-request  how much longer the first request takes than the repeat
   after-answer   what follows the answer: collection, stop, evaluation, cleanup
 
@@ -21,8 +21,8 @@ import sys
 from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from plot import (HARNESSES, INK, SETUPS, STAGES, SURFACE, median, number, plot_per_task, plt,  # noqa: E402
-                  save, style)
+from plot import (HARNESSES, INK, SETUP_COLOR, SETUPS, STAGES, SURFACE, TASKS, group, median,  # noqa: E402
+                  number, plot_per_task, plt, save, style)
 
 COLD_STAGES = [
     ("Sandbox and bridge", STAGES[0][1]),
@@ -106,6 +106,49 @@ def plot_cold(rows, out, table, record):
     save(figure, out, "cold-latency", record)
 
 
+def tint(color, amount=0.55):
+    """The color mixed toward the white surface, for the warm bar."""
+    channels = [int(color[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#%02x%02x%02x" % tuple(round(c + (255 - c) * amount) for c in channels)
+
+
+def plot_end_to_end(rows, out, table, record):
+    """Cold and warm latency, two bars per setup for every task."""
+    cold, warm = group(rows, "cold_latency_s"), group(rows, "warm_latency_s")
+    plt.rcParams["hatch.color"] = SURFACE
+    width = 0.13
+    figure, axes = plt.subplots(len(HARNESSES), 1, figsize=(11, 6.4), sharex=True)
+    for axis, (harness, label) in zip(axes, HARNESSES):
+        style(axis, "y")
+        for i, (backend, _) in enumerate(SETUPS):
+            color = SETUP_COLOR[backend]
+            for g, task in enumerate(TASKS):
+                for j, (measure, values) in enumerate((("cold", cold), ("warm", warm))):
+                    value = values.get((harness, backend, task))
+                    if value is None:
+                        continue
+                    x = g + (2 * i + j - 2.5) * width
+                    axis.bar(x, value, width=width - 0.015, color=color if measure == "cold" else tint(color),
+                             hatch=None if measure == "cold" else "////", edgecolor=SURFACE, linewidth=0.8)
+                    axis.text(x, value, "%.1f" % value, ha="center", va="bottom", fontsize=6, color=INK)
+                    table.append(["end-to-end", harness, task, backend, measure + "_latency_s", round(value, 3)])
+        axis.set_xticks(range(len(TASKS)))
+        axis.set_xticklabels(TASKS)
+        axis.set_title(label, loc="left")
+        axis.set_ylabel("seconds (median of 5 runs)")
+    handles, labels = [], []
+    for backend, name in SETUPS:
+        for measure in ("cold", "warm"):
+            color = SETUP_COLOR[backend]
+            handles.append(plt.Rectangle((0, 0), 1, 1, facecolor=color if measure == "cold" else tint(color),
+                                         hatch=None if measure == "cold" else "////", edgecolor=SURFACE))
+            labels.append("%s, %s" % (name, measure))
+    figure.legend(handles, labels, loc="upper center", ncol=3, bbox_to_anchor=(0.5, 1.07), handlelength=1.4,
+                  handleheight=1.2, columnspacing=1.6)
+    figure.tight_layout()
+    save(figure, out, "end-to-end", record)
+
+
 def plot_after(rows, out, table, record):
     per = defaultdict(lambda: defaultdict(list))
     for row in rows:
@@ -130,7 +173,7 @@ def main():
     os.makedirs(out, exist_ok=True)
     table, record = [], []
     plot_cold(rows, out, table, record)
-    plot_per_task(rows, "warm_latency_s", "seconds (median of 5 runs)", "%.1f", "warm-latency", out, table, record)
+    plot_end_to_end(rows, out, table, record)
     plot_per_task(rows, "first_extra_s", "first request minus the repeat, seconds", "%.1f", "first-request",
                   out, table, record)
     plot_after(rows, out, table, record)
@@ -138,7 +181,7 @@ def main():
         writer = csv.writer(handle)
         writer.writerow(["figure", "harness", "task", "setup", "measure", "value"])
         for entry in table:
-            if entry[0] in ("warm-latency", "first-request"):
+            if entry[0] == "first-request":
                 # plot_per_task records figure, harness, backend, task, key, value.
                 figure_name, harness, backend, task, key, value = entry
                 entry = [figure_name, harness, task, backend, key, value]
