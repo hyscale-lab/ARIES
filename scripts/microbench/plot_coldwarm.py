@@ -8,7 +8,7 @@ runs (each task run cold, then again warm on the same harness and sandbox) and
 writes, as PNG and PDF, to OUT_DIR:
 
   cold-latency   time from the first start-up step to the first answer
-  end-to-end     cold and warm latency side by side for every setup
+  end-to-end     cold and warm latency for every setup, split into stages
   first-request  how much longer the first request takes than the repeat
   after-answer   what follows the answer: collection, stop, evaluation, cleanup
 
@@ -21,14 +21,14 @@ import sys
 from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from plot import (HARNESSES, INK, SETUP_COLOR, SETUPS, STAGES, SURFACE, TASKS, group, median,  # noqa: E402
-                  number, plot_per_task, plt, save, style)
+from plot import (HARNESSES, INK, SETUPS, STAGES, SURFACE, TASKS, median, number, plot_per_task, plt,  # noqa: E402
+                  save, style)
 
 COLD_STAGES = [
     ("Sandbox and bridge", STAGES[0][1]),
     ("Harness start", STAGES[1][1]),
-    ("First request: model", STAGES[2][1]),
-    ("First request: tools and harness", STAGES[3][1]),
+    ("Model (replayed)", STAGES[2][1]),
+    ("Tools and harness logic", STAGES[3][1]),
 ]
 AFTER_STAGES = [
     ("Collect artifacts", STAGES[0][1]),
@@ -106,45 +106,54 @@ def plot_cold(rows, out, table, record):
     save(figure, out, "cold-latency", record)
 
 
-def tint(color, amount=0.55):
-    """The color mixed toward the white surface, for the warm bar."""
-    channels = [int(color[i:i + 2], 16) for i in (1, 3, 5)]
-    return "#%02x%02x%02x" % tuple(round(c + (255 - c) * amount) for c in channels)
+def end_to_end_values(row, measure):
+    """Stages of a cold or warm run in COLD_STAGES order; a warm run has no
+    start-up."""
+    model = row.get(measure + "_model_s") or 0
+    rest = [model, row[measure + "_run_s"] - model]
+    return cold_values(row) if measure == "cold" else [0, 0] + rest
 
 
 def plot_end_to_end(rows, out, table, record):
-    """Cold and warm latency, two bars per setup for every task."""
-    cold, warm = group(rows, "cold_latency_s"), group(rows, "warm_latency_s")
-    plt.rcParams["hatch.color"] = SURFACE
-    width = 0.13
-    figure, axes = plt.subplots(len(HARNESSES), 1, figsize=(11, 6.4), sharex=True)
-    for axis, (harness, label) in zip(axes, HARNESSES):
-        style(axis, "y")
-        for i, (backend, _) in enumerate(SETUPS):
-            color = SETUP_COLOR[backend]
-            for g, task in enumerate(TASKS):
-                for j, (measure, values) in enumerate((("cold", cold), ("warm", warm))):
-                    value = values.get((harness, backend, task))
-                    if value is None:
-                        continue
-                    x = g + (2 * i + j - 2.5) * width
-                    axis.bar(x, value, width=width - 0.015, color=color if measure == "cold" else tint(color),
-                             hatch=None if measure == "cold" else "////", edgecolor=SURFACE, linewidth=0.8)
-                    axis.text(x, value, "%.1f" % value, ha="center", va="bottom", fontsize=6, color=INK)
-                    table.append(["end-to-end", harness, task, backend, measure + "_latency_s", round(value, 3)])
-        axis.set_xticks(range(len(TASKS)))
-        axis.set_xticklabels(TASKS)
-        axis.set_title(label, loc="left")
-        axis.set_ylabel("seconds (median of 5 runs)")
-    handles, labels = [], []
-    for backend, name in SETUPS:
+    """Cold and warm end-to-end time per setup, split into stages."""
+    per = defaultdict(list)
+    for row in rows:
         for measure in ("cold", "warm"):
-            color = SETUP_COLOR[backend]
-            handles.append(plt.Rectangle((0, 0), 1, 1, facecolor=color if measure == "cold" else tint(color),
-                                         hatch=None if measure == "cold" else "////", edgecolor=SURFACE))
-            labels.append("%s, %s" % (name, measure))
-    figure.legend(handles, labels, loc="upper center", ncol=3, bbox_to_anchor=(0.5, 1.07), handlelength=1.4,
-                  handleheight=1.2, columnspacing=1.6)
+            if row.get(measure + "_latency_s") is not None:
+                per[(row["harness"], row["task"], row["backend"], measure)].append(end_to_end_values(row, measure))
+    bars = [(backend, measure, "%s · %s" % (name, measure)) for backend, name in SETUPS for measure in ("cold", "warm")]
+    positions = [i * 2.4 + j for i in range(len(SETUPS)) for j in (0, 1)]
+    figure, axes = plt.subplots(len(HARNESSES), len(TASKS), figsize=(15, 6.6), sharey=True)
+    for r, (harness, harness_label) in enumerate(HARNESSES):
+        limit = max(sum(median(column) for column in zip(*runs))
+                    for (h, _, _, _), runs in per.items() if h == harness) * 1.22
+        for c, task in enumerate(TASKS):
+            axis = axes[r][c]
+            style(axis)
+            for y, (backend, measure, _) in zip(positions, bars):
+                runs = per.get((harness, task, backend, measure))
+                if not runs:
+                    continue
+                values = [median(column) for column in zip(*runs)]
+                left = 0
+                for (stage, color), value in zip(COLD_STAGES, values):
+                    if value > 0:
+                        axis.barh(y, value, left=left, height=0.82, color=color, edgecolor=SURFACE, linewidth=1)
+                        if value >= limit * 0.16:
+                            axis.text(left + value / 2, y, "%.1f" % value, ha="center", va="center", fontsize=6.5,
+                                      color=INK)
+                    table.append(["end-to-end", harness, task, backend, measure + ": " + stage, round(value, 3)])
+                    left += value
+                axis.text(left, y, " %.1f" % left, va="center", fontsize=7, color=INK, fontweight="bold")
+            axis.set_xlim(0, limit)
+            axis.set_yticks(positions)
+            axis.set_yticklabels([label for _, _, label in bars])
+            axis.set_title("%s · %s" % (harness_label, task), loc="left")
+            if r == len(HARNESSES) - 1 and c == len(TASKS) // 2:
+                axis.set_xlabel("seconds (median of 5 runs per stage)")
+    # The panels share the y-axis, so it is inverted once for all of them.
+    axes[0][0].invert_yaxis()
+    stage_legend(figure, COLD_STAGES, 1.04)
     figure.tight_layout()
     save(figure, out, "end-to-end", record)
 
