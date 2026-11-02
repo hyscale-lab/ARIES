@@ -242,19 +242,19 @@ func (server *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		server.writeTiming(timing)
 		return
 	}
-	var key *Key
+	var keys []Key
 	if r.Method == http.MethodPost && r.URL.Path == chatPath {
-		if computed, err := KeyOf(body); err == nil {
-			key = &computed
+		if computed, err := keysOf(body); err == nil {
+			keys = computed
+			timing.Key = &keys[0]
 		} else {
 			timing.Error = err.Error()
 		}
 	}
-	timing.Key = key
 	if server.options.Mode == ModeRecord {
-		server.forward(w, r, body, received, key, &timing)
+		server.forward(w, r, body, received, timing.Key, &timing)
 	} else {
-		server.replay(w, r, received, key, &timing)
+		server.replay(w, r, received, keys, &timing)
 	}
 	server.writeTiming(timing)
 }
@@ -341,7 +341,7 @@ func (server *Server) forward(w http.ResponseWriter, r *http.Request, body []byt
 	}
 }
 
-func (server *Server) replay(w http.ResponseWriter, r *http.Request, received time.Time, key *Key, timing *Timing) {
+func (server *Server) replay(w http.ResponseWriter, r *http.Request, received time.Time, keys []Key, timing *Timing) {
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/models":
 		timing.Status = http.StatusOK
@@ -351,7 +351,7 @@ func (server *Server) replay(w http.ResponseWriter, r *http.Request, received ti
 		}
 		writeJSON(w, map[string]any{"object": "list", "data": []map[string]any{{"id": model, "object": "model", "created": 0, "owned_by": "aries"}}})
 		return
-	case key == nil:
+	case len(keys) == 0:
 		timing.Status = http.StatusBadRequest
 		if timing.Error == "" {
 			timing.Error = "unsupported route " + r.Method + " " + r.URL.Path
@@ -359,12 +359,19 @@ func (server *Server) replay(w http.ResponseWriter, r *http.Request, received ti
 		writeError(w, timing.Status, timing.Error)
 		return
 	}
+	var recording Recording
+	found := false
 	server.mu.Lock()
-	recording, found := server.recordings[key.String()]
+	for i := range keys {
+		if recording, found = server.recordings[keys[i].String()]; found {
+			timing.Key = &keys[i]
+			break
+		}
+	}
 	server.mu.Unlock()
 	timing.Hit = &found
 	if !found {
-		timing.Status, timing.Error = http.StatusNotFound, "no recording for "+key.String()
+		timing.Status, timing.Error = http.StatusNotFound, "no recording for "+keys[0].String()
 		writeError(w, timing.Status, timing.Error)
 		return
 	}
@@ -410,8 +417,26 @@ func complete(recording Recording) bool {
 
 var digits = regexp.MustCompile(`[0-9]+`)
 
+// weekdayStamp matches the date OpenClaw puts before a user message, such as
+// "[Mon 2026-11-02 14:31 UTC] ". Its digits are folded like any others, but its
+// weekday would make a recording miss on every other day of the week.
+var weekdayStamp = regexp.MustCompile(`^\[(Mon|Tue|Wed|Thu|Fri|Sat|Sun) `)
+
+var weekdays = []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
+
 // KeyOf locates a chat completion request in its conversation.
 func KeyOf(body []byte) (Key, error) {
+	keys, err := keysOf(body)
+	if err != nil {
+		return Key{}, err
+	}
+	return keys[0], nil
+}
+
+// keysOf returns the request's key and, when its first user message carries a
+// weekday stamp, the keys it has under the other six weekdays, so a recording
+// made on another day is found.
+func keysOf(body []byte) ([]Key, error) {
 	var request struct {
 		Messages []struct {
 			Role    string          `json:"role"`
@@ -420,7 +445,7 @@ func KeyOf(body []byte) (Key, error) {
 		Tools []json.RawMessage `json:"tools"`
 	}
 	if err := json.Unmarshal(body, &request); err != nil {
-		return Key{}, fmt.Errorf("chat completion body is not JSON: %w", err)
+		return nil, fmt.Errorf("chat completion body is not JSON: %w", err)
 	}
 	key := Key{Tools: len(request.Tools)}
 	first := ""
@@ -435,11 +460,23 @@ func KeyOf(body []byte) (Key, error) {
 		}
 	}
 	if first == "" {
-		return Key{}, errors.New("chat completion has no user message")
+		return nil, errors.New("chat completion has no user message")
 	}
+	keys := []Key{conversation(key, first)}
+	if stamp := weekdayStamp.FindStringSubmatch(first); stamp != nil {
+		for _, day := range weekdays {
+			if day != stamp[1] {
+				keys = append(keys, conversation(key, "["+day+first[len(stamp[0])-1:]))
+			}
+		}
+	}
+	return keys, nil
+}
+
+func conversation(key Key, first string) Key {
 	sum := sha256.Sum256([]byte(digits.ReplaceAllString(first, "0")))
 	key.Conversation = hex.EncodeToString(sum[:8])
-	return key, nil
+	return key
 }
 
 // contentText flattens a message's content, which is a string or a list of

@@ -284,3 +284,47 @@ func TestRecordKeepsACompleteReplyTheClientClosedEarly(t *testing.T) {
 		})
 	}
 }
+
+// OpenClaw stamps each user message with the date. A recording made on a
+// Sunday is found on a Monday, while a different instruction still misses.
+func TestReplayFindsARecordingMadeOnAnotherWeekday(t *testing.T) {
+	directory := t.TempDir()
+	store := filepath.Join(directory, "recordings.jsonl")
+	sunday, err := KeyOf([]byte(chatBody("[Sun 2026-11-01 04:33 UTC] Reply DONE", 0, 9)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	line, _ := json.Marshal(Recording{Key: sunday, Status: http.StatusOK, ContentType: "application/json", Chunks: []Chunk{{Data: []byte(`{"ok":true}`)}}})
+	if err := os.WriteFile(store, append(line, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(directory, "requests.jsonl")
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	replayer, err := New(Options{Mode: ModeReplay, StorePath: store, LogPath: log, Now: clock.Now, Sleep: clock.Sleep})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer replayer.Close()
+	server := httptest.NewServer(replayer)
+	defer server.Close()
+	for _, test := range []struct {
+		message string
+		status  int
+	}{
+		{"[Mon 2026-11-02 14:31 UTC] Reply DONE", http.StatusOK},
+		{"[Mon 2026-11-02 14:31 UTC] Reply NOPE", http.StatusNotFound},
+		{"Reply DONE", http.StatusNotFound},
+	} {
+		response, err := http.Post(server.URL+chatPath, "application/json", strings.NewReader(chatBody(test.message, 0, 9)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != test.status {
+			t.Fatalf("%q returned %d, want %d", test.message, response.StatusCode, test.status)
+		}
+	}
+	if timings := readLines(t, log); timings[0]["key"].(map[string]any)["conversation"] != sunday.Conversation {
+		t.Fatalf("the hit was logged under %v, not the recording's key", timings[0]["key"])
+	}
+}

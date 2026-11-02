@@ -741,6 +741,9 @@ conversation has progressed, not by the whole request, because tool output
 differs slightly between sandboxes. The key is a hash of the first user message
 (the task instruction, with digit runs folded so a timestamp does not split
 it), the number of assistant turns so far, and the number of tools offered.
+OpenClaw prefixes the message with the date, such as `[Mon 2026-11-02 14:31
+UTC]`; replay matches that weekday against all seven, so a recording serves
+runs on any day.
 The first successful recording of a key is served; a request with no recording
 gets `404`, which fails the task visibly. If the agent takes a different path
 from the recording, as it may when a tool's output really differs, replay can
