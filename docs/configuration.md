@@ -811,6 +811,61 @@ This run can incur charges from both the configured model provider and the TTS
 provider. The realtime profile keeps model and TTS credentials separate;
 neither belongs in profile JSON.
 
+### Portable plugins
+
+`harness.plugins` gives the agent extra skills and MCP servers from plugin
+packages in the [Agent Plugins 1.0.0](https://agent-plugins.org) format: a
+`plugin.json` manifest, Agent Skills under `skills/<name>/SKILL.md`, and MCP
+servers in `mcp.json`. The same entries work with OpenClaw and Hermes; each
+harness receives the skills and servers in its own configuration. The version
+catalog pins each package, and the profile selects it by name:
+
+```json
+"plugins": {
+  "memory-notes": {
+    "repository_url": "https://github.com/example/memory-notes",
+    "revision": "0123456789abcdef0123456789abcdef01234567",
+    "subdirectory": "plugin"
+  },
+  "local-tools": { "path": "../plugins/local-tools" }
+}
+```
+
+```json
+"harness": {
+  "type": "hermes",
+  "plugins": [
+    { "name": "memory-notes", "secret_env": { "NOTES_API_KEY": "MY_NOTES_API_KEY" } },
+    { "name": "local-tools" }
+  ]
+}
+```
+
+- A catalog entry is either a Git repository at a 40-character revision, with
+  the package optionally in a `subdirectory`, or a local `path` resolved
+  against the versions file. The catalog name must equal the manifest's
+  `name`.
+- Preparation (`aries setup`, and the start of every run) checks out each
+  pinned repository under `.cache/plugins/` and validates every selected
+  package. Where the specification lets a client skip an invalid skill or MCP
+  server, ARIES rejects the package: a run must not silently lack part of a
+  selected plugin.
+- `secret_env` maps environment variables of the package's command servers to
+  host variables, exactly as for `harness.mcp_servers`. Credentials never
+  belong in `mcp.json`: a `${...}` reference other than `${PLUGIN_ROOT}` and
+  `${PLUGIN_DATA}` is refused, and so is a header named like a credential.
+- A package (at most 4096 files and 32 MiB) is copied into every harness
+  container at task start; its data directory starts empty for each task
+  occurrence. An MCP command is either a `./` path to an executable file in
+  the package or a bare name that the harness image provides (OpenClaw's has
+  `node` and `npx` but no `uvx`); the harness start fails if it is missing.
+- A server named like one in `harness.mcp_servers` or another plugin is
+  refused.
+
+`<run>/<task>/harness/plugins.json` records each package's pin, content hash,
+staged size, skills, and servers. The mechanics and the differences between
+harnesses are in [portable plugins](implementation/harnesses.md#portable-plugins).
+
 ## Benchmark settings
 
 `benchmark.type`, `root`, and `tasks` select the benchmark, checkout, and task
@@ -882,6 +937,7 @@ Changing the main agent's generation settings does not change FACT requests.
 - `harness.web_search` and `harness.subagents`: see the
   [research benchmark guide](benchmarks/deep-research-bench.md#web-search-and-fetch).
 - `harness.mcp_servers`: see [MCP configuration and boundaries](implementation/harnesses.md#model-context-protocol-mcp).
+- `harness.plugins`: see [portable plugins](#portable-plugins).
 - `harness.voice_transcribe`: see the [voice guide](voice_mode.md).
 - `bridge.retain_raw_log`: defaults to false. Enabling it retains sensitive,
   replayable tool-call input in `<transport>_raw.log` (`ssh_raw.log` or
