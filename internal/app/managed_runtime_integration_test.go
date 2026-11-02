@@ -76,8 +76,8 @@ func TestConcreteManagedRuntimeWrapsPreflightAndTaskLifecycle(t *testing.T) {
 			record("compose")
 			return &managedIntegrationBenchmark{id: occurrenceID}, nil
 		}),
-		BuildHarnessImage: func(context.Context, config.Config) error { return nil },
-		PullImages:        func(context.Context, config.Config, []string) error { return nil },
+		PrepareHarness: func(context.Context, config.Config) error { return nil },
+		PullImages:     func(context.Context, config.Config, []string) error { return nil },
 
 		NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
 			return HarnessInstance{Harness: &stubHarness{}, Close: func() error { return nil }}, nil
@@ -174,8 +174,8 @@ func TestConcreteManagedRuntimeNaturalExitLogsStoppedAfterUnexpectedExit(t *test
 			}
 			return &managedIntegrationBenchmark{id: occurrenceID}, nil
 		}),
-		BuildHarnessImage: func(context.Context, config.Config) error { return nil },
-		PullImages:        func(context.Context, config.Config, []string) error { return nil },
+		PrepareHarness: func(context.Context, config.Config) error { return nil },
+		PullImages:     func(context.Context, config.Config, []string) error { return nil },
 
 		NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
 			return HarnessInstance{Harness: &stubHarness{}, Close: func() error { return nil }}, nil

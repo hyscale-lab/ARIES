@@ -34,6 +34,9 @@ func NewHermes(cfg config.Config, outputRoot string, lookup func(string) ([]byte
 		Compaction: hermesCompaction(cfg.Harness.Compaction),
 		ExtraBody:  hermesExtraBody(cfg.Harness.Hermes),
 	}
+	if err := pluginOptions(cfg, &options.Common); err != nil {
+		return app.HarnessInstance{}, errors.Join(err, transport.Close())
+	}
 
 	if cfg.Harness.Mode == hermesharness.ModeVoiceTranscribe {
 		options.VoiceTranscribe = hermesVoiceOptions(cfg.Harness.VoiceTranscribe)
