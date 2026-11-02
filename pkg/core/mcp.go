@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path"
 	"strings"
 	"unicode"
 )
@@ -23,6 +24,18 @@ type MCPServerConfig struct {
 	TimeoutSeconds int               `json:"timeout_seconds,omitempty"`
 	Env            map[string]string `json:"env,omitempty"`
 	SecretEnv      map[string]string `json:"secret_env,omitempty"`
+	// Cwd is a command server's absolute working directory in the harness
+	// runtime; empty keeps the harness's default.
+	Cwd string `json:"cwd,omitempty"`
+	// Headers are fixed, non-secret HTTP headers for a url server. Credentials
+	// never travel here: a header named like one is rejected.
+	Headers map[string]string `json:"headers,omitempty"`
+}
+
+// credentialHeaders are header names, lowercased, that carry credentials.
+var credentialHeaders = map[string]bool{
+	"authorization": true, "proxy-authorization": true, "cookie": true,
+	"x-api-key": true, "api-key": true, "x-auth-token": true,
 }
 
 // ValidateMCPServer verifies that an MCP server configuration specifies a valid name,
@@ -89,6 +102,34 @@ func ValidateMCPServer(cfg MCPServerConfig) error {
 	if hasURL && len(cfg.SecretEnv) > 0 {
 		return fmt.Errorf("MCP server %q secret_env is not supported for url servers", name)
 	}
+	if cfg.Cwd != "" {
+		if !hasCommand {
+			return fmt.Errorf("MCP server %q cwd applies only to a command server", name)
+		}
+		if !strings.HasPrefix(cfg.Cwd, "/") || path.Clean(cfg.Cwd) != cfg.Cwd || strings.ContainsFunc(cfg.Cwd, unicode.IsControl) {
+			return fmt.Errorf("MCP server %q cwd must be an absolute, clean path", name)
+		}
+	}
+	if len(cfg.Headers) > 0 && !hasURL {
+		return fmt.Errorf("MCP server %q headers apply only to a url server", name)
+	}
+	seenHeaders := make(map[string]bool, len(cfg.Headers))
+	for header, value := range cfg.Headers {
+		lower := strings.ToLower(header)
+		if header == "" || strings.IndexFunc(header, func(r rune) bool { return !headerTokenRune(r) }) >= 0 {
+			return fmt.Errorf("MCP server %q header name %q is invalid", name, header)
+		}
+		if seenHeaders[lower] {
+			return fmt.Errorf("MCP server %q header %q appears more than once", name, header)
+		}
+		seenHeaders[lower] = true
+		if credentialHeaders[lower] {
+			return fmt.Errorf("MCP server %q header %q carries a credential; headers are not secret", name, header)
+		}
+		if strings.ContainsFunc(value, unicode.IsControl) {
+			return fmt.Errorf("MCP server %q header %q value contains control characters", name, header)
+		}
+	}
 
 	if hasCommand {
 		cmd := strings.TrimSpace(cfg.Command)
@@ -110,6 +151,27 @@ func ValidateMCPServer(cfg MCPServerConfig) error {
 	}
 
 	return nil
+}
+
+// ValidPluginName reports whether name satisfies the Agent Plugins 1.0.0
+// manifest name constraints: 1-64 lowercase letters, digits, hyphens or
+// periods, starting and ending alphanumeric, with no "--" or "..".
+func ValidPluginName(name string) bool {
+	if name == "" || len(name) > 64 || strings.Contains(name, "--") || strings.Contains(name, "..") {
+		return false
+	}
+	for index, character := range name {
+		alphanumeric := character >= 'a' && character <= 'z' || character >= '0' && character <= '9'
+		if !alphanumeric && (index == 0 || index == len(name)-1 || character != '-' && character != '.') {
+			return false
+		}
+	}
+	return true
+}
+
+// headerTokenRune reports whether r may appear in an HTTP header name (RFC 9110 token).
+func headerTokenRune(r rune) bool {
+	return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("!#$%&'*+-.^_`|~", r)
 }
 
 func validEnvName(value string) bool {
