@@ -40,7 +40,7 @@ type Wiring struct {
 	SetupBenchmark     func(context.Context, config.Config) error
 	LoadBenchmark      func(context.Context, config.Config, string, []string, func(string) ([]byte, bool)) (PreparedBenchmark, error)
 	PullImages         func(context.Context, config.Config, []string) error
-	BuildHarnessImage  func(context.Context, config.Config) error
+	PrepareHarness     func(context.Context, config.Config) error
 	NewHarness         func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error)
 	NewSandbox         func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error)
 	NewBridge          func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error)
@@ -262,7 +262,7 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 }
 
 func ensurePrepared(ctx context.Context, cfg config.Config, outputRoot string, wiring Wiring, apiKeyLookup func(string) ([]byte, bool)) (PreparedBenchmark, error) {
-	if wiring.SetupBenchmark == nil || wiring.LoadBenchmark == nil || wiring.PullImages == nil || wiring.BuildHarnessImage == nil {
+	if wiring.SetupBenchmark == nil || wiring.LoadBenchmark == nil || wiring.PullImages == nil || wiring.PrepareHarness == nil {
 		return PreparedBenchmark{}, errors.New("preparation wiring is incomplete")
 	}
 	if wiring.PrepareBridge != nil {
@@ -288,7 +288,7 @@ func ensurePrepared(ctx context.Context, cfg config.Config, outputRoot string, w
 	if err := wiring.PullImages(ctx, cfg, uniqueStrings(images)); err != nil {
 		return PreparedBenchmark{}, err
 	}
-	if err := wiring.BuildHarnessImage(ctx, cfg); err != nil {
+	if err := wiring.PrepareHarness(ctx, cfg); err != nil {
 		return PreparedBenchmark{}, err
 	}
 	return catalog, nil
