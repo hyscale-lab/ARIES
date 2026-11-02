@@ -27,6 +27,9 @@ func NewOpenClaw(cfg config.Config, outputRoot string, lookup func(string) ([]by
 		},
 		Common: commonOptions(cfg),
 	}
+	if err := pluginOptions(cfg, &options.Common); err != nil {
+		return app.HarnessInstance{}, errors.Join(err, transport.Close())
+	}
 
 	if cfg.Harness.Mode == openclawharness.ModeRealtime || cfg.Harness.Mode == openclawharness.ModeVoiceTranscribe {
 		options.Realtime = openClawVoiceOptions(cfg.Harness)

@@ -124,7 +124,7 @@ func TestSetupPreparesBackendBeforeSideEffects(t *testing.T) {
 		return nil
 	}, LoadBenchmark: testBenchmarkLoader(func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
 		return nil, nil
-	}, nil), BuildHarnessImage: func(context.Context, config.Config) error { return nil }, PullImages: func(context.Context, config.Config, []string) error { return nil }}
+	}, nil), PrepareHarness: func(context.Context, config.Config) error { return nil }, PullImages: func(context.Context, config.Config, []string) error { return nil }}
 	var out bytes.Buffer
 	if err := Setup(context.Background(), profile, &out, Dependencies{Wiring: wiring}); err != nil {
 		t.Fatal(err)
@@ -160,7 +160,7 @@ func TestRunEnsuresPreparationBeforeOutputAndRuntime(t *testing.T) {
 			events = append(events, "tasks:"+strings.Join(taskIDs, ","))
 			return []core.Task{{Environment: core.Environment{Image: "task:tag"}}}, nil
 		}, nil),
-		BuildHarnessImage: func(context.Context, config.Config) error { return nil },
+		PrepareHarness: func(context.Context, config.Config) error { return nil },
 		PullImages: func(_ context.Context, _ config.Config, images []string) error {
 			events = append(events, "images:"+strings.Join(images, ","))
 			return prepareErr
@@ -198,7 +198,7 @@ func TestHarnessImageIsBuiltAfterPullAndFailureStopsRun(t *testing.T) {
 			events = append(events, "pull")
 			return nil
 		},
-		BuildHarnessImage: func(context.Context, config.Config) error {
+		PrepareHarness: func(context.Context, config.Config) error {
 			events = append(events, "build")
 			return buildErr
 		},
@@ -223,7 +223,7 @@ func TestSetupRetriesIncompletePreparationWithoutReadinessMarker(t *testing.T) {
 		LoadBenchmark: testBenchmarkLoader(func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
 			return nil, nil
 		}, nil),
-		BuildHarnessImage: func(context.Context, config.Config) error { return nil },
+		PrepareHarness: func(context.Context, config.Config) error { return nil },
 		PullImages: func(context.Context, config.Config, []string) error {
 			pullCalls++
 			if pullCalls == 1 {
@@ -263,8 +263,8 @@ func TestRunCancellationDuringPreparationHasNoDownstreamEffects(t *testing.T) {
 			downstream++
 			return nil, nil
 		}),
-		BuildHarnessImage: func(context.Context, config.Config) error { return nil },
-		PullImages:        func(context.Context, config.Config, []string) error { downstream++; return nil },
+		PrepareHarness: func(context.Context, config.Config) error { return nil },
+		PullImages:     func(context.Context, config.Config, []string) error { downstream++; return nil },
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -395,8 +395,8 @@ func TestBridgePreparationFailurePrecedesBenchmarkEffects(t *testing.T) {
 		LoadBenchmark: testBenchmarkLoader(func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
 			return nil, nil
 		}, nil),
-		PullImages:        func(context.Context, config.Config, []string) error { return nil },
-		BuildHarnessImage: func(context.Context, config.Config) error { return nil },
+		PullImages:     func(context.Context, config.Config, []string) error { return nil },
+		PrepareHarness: func(context.Context, config.Config) error { return nil },
 	}
 	if _, err := ensurePrepared(context.Background(), config.Config{}, t.TempDir(), wiring, nil); !errors.Is(err, sentinel) || touched {
 		t.Fatalf("preparation order/error lost: %v touched=%v", err, touched)
