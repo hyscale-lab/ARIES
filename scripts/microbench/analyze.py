@@ -17,9 +17,10 @@ before the request. With a warm-up, which by default is the task itself, the
 warm run is the task after it on the same harness and sandbox, and
 warm_latency_s its run alone.
 
-Each run is split three ways: model time, how long at least one request
-aries-replay served was open during it, so requests a harness sends side by
-side count once; tool time, what the bridge measured executing commands in the
+Each run is split three ways: model time, how long the agent waited on a
+model request, that is, how long at least one request offering it tools was
+open (a request offering none, such as Hermes's session title, runs beside the
+agent and is left out unless the run offers no tools at all); tool time, what the bridge measured executing commands in the
 sandbox; and the remainder, the harness's own work plus the transport between
 harness, bridge and sandbox. The run ends when the harness answers; retaining
 its artifacts afterwards is harness_collect. Native runs have no start-up
@@ -179,7 +180,8 @@ def task_rows(entry, requests):
             calls = [call for call in all_calls if within(call.get("timestamp"), window)]
             chat = [r for r in chats if within(r["received_at"], window)]
             row[name + "_run_s"] = window[1] - window[0]
-            row[name + "_model_s"] = model_seconds(chat, window)
+            waited = [r for r in chat if (r.get("key") or {}).get("tools")] or chat
+            row[name + "_model_s"] = model_seconds(waited, window)
             row[name + "_model_calls"] = len(chat)
             row[name + "_model_misses"] = sum(1 for r in chat if r.get("hit") is False)
             row[name + "_tool_calls"] = len(calls)
