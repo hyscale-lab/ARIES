@@ -139,9 +139,13 @@ listener's actual port. The native server reports its local binding without
 discovering a container IP or choosing Docker routing. Network ownership follows the
 [task-environment contract](../design/deployment.md#taskenvironment-operations-and-ownership).
 
-Control uses plaintext, unauthenticated gRPC with three operations:
-`RegisterSandbox`, `GetSandbox`, and `ReleaseSandbox`. Registration supplies the
-target binding and task metadata once; subsequent calls use only `sandbox_id`.
+Control uses plaintext, unauthenticated gRPC with four operations:
+`ReserveSandbox`, `RegisterSandbox`, `GetSandbox`, and `ReleaseSandbox`.
+Reservation opens the sandbox's listener (`Listen`) before the sandbox exists;
+registration supplies the target binding and task metadata once and binds them
+(`Bind`), holding back SSH handshakes accepted before it. The OpenClaw bridge
+prepares its workspace alias at binding, since that needs the sandbox.
+Subsequent calls use only `sandbox_id`.
 The service keeps independent registration and release state for each sandbox.
 Caller timeouts do not cancel service-owned admission or cleanup. A lost
 registration response is reconciled by looking up the same sandbox; only a

@@ -34,8 +34,13 @@ type Session struct {
 	descriptor                               core.BridgeTarget
 	local, remote, helper                    string
 	registered, exposed, released, collected bool
-	manifest                                 []*v1.Artifact
-	evidenceErr                              error
+	// reserved marks a sandbox reserved before it started, whose endpoint
+	// Start keeps.
+	reserved     bool
+	reservedPort uint32
+	endpoint     core.ToolEndpoint
+	manifest     []*v1.Artifact
+	evidenceErr  error
 }
 
 var _ runner.ToolBridge = (*Session)(nil)
@@ -47,71 +52,129 @@ func (s *Session) record() error {
 	}
 	return os.WriteFile(filepath.Join(s.local, "runtime.json"), b, 0600)
 }
+
+// Reserve opens the sandbox's access before the sandbox has started, so the
+// harness can be given its endpoint while the sandbox starts. Start then binds
+// the started sandbox to the same endpoint.
+func (s *Session) Reserve(ctx context.Context, sandbox runner.Sandbox) (core.ToolEndpoint, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.started || s.stopped || s.reserved {
+		return core.ToolEndpoint{}, errors.New("bridge session cannot be reused")
+	}
+	s.reserved = true
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	d, err := s.claim(sandbox, target.ValidateReservation)
+	if err != nil {
+		return core.ToolEndpoint{}, err
+	}
+	s.registered = true // Retain cleanup ownership even if the response is lost.
+	access, err := s.admit(ctx, func(ctx context.Context) (*v1.SandboxAccess, error) {
+		return s.service.client.ReserveSandbox(ctx, &v1.ReserveSandboxRequest{SandboxId: d.SandboxID, Metadata: &v1.Metadata{TaskId: d.TaskID}})
+	})
+	if err != nil {
+		return core.ToolEndpoint{}, err
+	}
+	if access.State != v1.State_RESERVED || access.Endpoint == nil {
+		return core.ToolEndpoint{}, fmt.Errorf("bridge sandbox reservation failed: state %s: %s", access.State, access.Error)
+	}
+	s.endpoint, err = s.expose(ctx, access.Endpoint, d.Workdir)
+	return s.endpoint, err
+}
+
+// Start binds a reserved sandbox now that it has started, or registers it in
+// one step when it was not reserved.
 func (s *Session) Start(ctx context.Context, sandbox runner.Sandbox) (core.ToolEndpoint, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var endpoint core.ToolEndpoint
 	if s.started || s.stopped {
-		return endpoint, errors.New("bridge session cannot be reused")
+		return core.ToolEndpoint{}, errors.New("bridge session cannot be reused")
 	}
 	s.started = true
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	reserved := s.descriptor
+	d, err := s.claim(sandbox, target.Validate)
+	if err != nil {
+		return core.ToolEndpoint{}, err
+	}
+	if s.reserved && (d.SandboxID != reserved.SandboxID || d.TaskID != reserved.TaskID || d.Workdir != reserved.Workdir || d.ExecUser != reserved.ExecUser) {
+		return core.ToolEndpoint{}, errors.New("started sandbox differs from its reservation")
+	}
+	if err = s.record(); err != nil {
+		return core.ToolEndpoint{}, err
+	}
+	s.registered = true // Retain cleanup ownership even if the response is lost.
+	access, err := s.registerSandbox(ctx, control.Registration(d))
+	if err != nil {
+		return core.ToolEndpoint{}, err
+	}
+	if access.State != v1.State_READY || access.Endpoint == nil {
+		return core.ToolEndpoint{}, fmt.Errorf("bridge sandbox registration failed: state %s: %s", access.State, access.Error)
+	}
+	if s.reserved {
+		if access.Endpoint.Port != s.reservedPort {
+			return core.ToolEndpoint{}, errors.New("bridge bound the sandbox to a different endpoint than it reserved")
+		}
+		return s.endpoint, nil
+	}
+	return s.expose(ctx, access.Endpoint, d.Workdir)
+}
+
+// claim exports the sandbox's bridge target, checks it against this run's
+// service and records where its evidence goes.
+func (s *Session) claim(sandbox runner.Sandbox, validate func(core.BridgeTarget) error) (core.BridgeTarget, error) {
 	s.service.mu.Lock()
 	running := s.service.state == "running"
 	s.service.mu.Unlock()
 	if !running {
-		return endpoint, errors.New("bridge service is not running")
+		return core.BridgeTarget{}, errors.New("bridge service is not running")
 	}
-	ctx, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
 	exporter, ok := sandbox.(targetExporter)
 	if !ok {
-		return endpoint, errors.New("sandbox cannot export a bridge target")
+		return core.BridgeTarget{}, errors.New("sandbox cannot export a bridge target")
 	}
 	d, err := exporter.ExportBridgeTarget()
 	if err != nil {
-		return endpoint, err
+		return core.BridgeTarget{}, err
 	}
-	if err = target.Validate(d); err != nil {
-		return endpoint, err
+	if err = validate(d); err != nil {
+		return core.BridgeTarget{}, err
 	}
 	if d.Backend != s.service.options.Launch.Config.Backend || d.RunID != s.service.options.RunID {
-		return endpoint, errors.New("sandbox backend or run does not match bridge service")
+		return core.BridgeTarget{}, errors.New("sandbox backend or run does not match bridge service")
 	}
 	s.descriptor = d
 	s.local = filepath.Join(s.outputRoot, d.TaskID, "bridge")
 	s.remote = filepath.Join(s.service.options.Launch.Config.OutputDir, d.SandboxID)
 	if err = os.MkdirAll(s.local, 0700); err != nil {
-		return endpoint, err
+		return core.BridgeTarget{}, err
 	}
-	if err = s.record(); err != nil {
-		return endpoint, err
-	}
-	s.registered = true // Retain cleanup ownership even if the response is lost.
-	access, err := s.registerSandbox(ctx, control.Registration(d))
-	if err != nil {
-		return endpoint, err
-	}
-	if access.State != v1.State_READY || access.Endpoint == nil {
-		return endpoint, fmt.Errorf("bridge sandbox registration failed: state %s: %s", access.State, access.Error)
-	}
-	native := access.Endpoint
+	return d, nil
+}
+
+// expose turns the bridge's native endpoint into the harness's: the bridge
+// runtime's address at that port, and the staged client helper.
+func (s *Session) expose(ctx context.Context, native *v1.Endpoint, workdir string) (core.ToolEndpoint, error) {
 	if native.Transport != "ssh" || native.User != "aries" || native.Port == 0 || native.Port > 65535 {
-		return endpoint, errors.New("invalid native bridge endpoint")
+		return core.ToolEndpoint{}, errors.New("invalid native bridge endpoint")
 	}
 	// Binding is reported by the child; deployment resolves the consumer address.
 	address, err := s.service.options.Runtime.(deployment.ServiceRuntime).TaskAddress(ctx, s.service.runtimeID, int(native.Port))
 	if err != nil {
-		return endpoint, err
+		return core.ToolEndpoint{}, err
 	}
 	host, port, err := net.SplitHostPort(address)
 	if err != nil || host == "" {
-		return endpoint, errors.New("invalid resolved native endpoint")
+		return core.ToolEndpoint{}, errors.New("invalid resolved native endpoint")
 	}
 	n, err := strconv.Atoi(port)
 	if err != nil || n < 1 || n > 65535 {
-		return endpoint, errors.New("invalid resolved native endpoint port")
+		return core.ToolEndpoint{}, errors.New("invalid resolved native endpoint port")
 	}
-	endpoint = core.ToolEndpoint{Protocol: "ssh", Address: address, Username: native.User, Workdir: d.Workdir, LogPaths: []string{filepath.Join(s.local, "tool-calls.jsonl")}}
+	s.reservedPort = native.Port
+	endpoint := core.ToolEndpoint{Protocol: "ssh", Address: address, Username: native.User, Workdir: workdir, LogPaths: []string{filepath.Join(s.local, "tool-calls.jsonl")}}
 	if s.service.options.RetainRawLog {
 		endpoint.LogPaths = append(endpoint.LogPaths, filepath.Join(s.local, "ssh_raw.log"))
 	}

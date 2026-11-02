@@ -28,13 +28,18 @@ type cleanupNative struct {
 	stopErr error
 }
 
-func (n *cleanupNative) StartTarget(_ context.Context, borrowed target.Executor) (core.ToolEndpoint, error) {
-	n.target = borrowed
+func (n *cleanupNative) Listen(context.Context) (core.ToolEndpoint, error) {
 	return core.ToolEndpoint{Address: "0.0.0.0:2222", Username: "aries", Protocol: "ssh"}, nil
 }
+func (n *cleanupNative) Bind(_ context.Context, borrowed target.Executor) error {
+	n.target = borrowed
+	return nil
+}
 func (n *cleanupNative) Stop(ctx context.Context) error {
-	if _, err := n.target.ExecStream(ctx, core.Command{Path: "/bin/true"}, nil, io.Discard, io.Discard); err == nil {
-		return errors.New("borrowed admission remained open")
+	if n.target != nil {
+		if _, err := n.target.ExecStream(ctx, core.Command{Path: "/bin/true"}, nil, io.Discard, io.Discard); err == nil {
+			return errors.New("borrowed admission remained open")
+		}
 	}
 	if n.stopErr != nil {
 		return n.stopErr
@@ -97,13 +102,20 @@ func TestServeSharesHostSignerAndSurvivesIndependentReleases(t *testing.T) {
 	release("b")
 	register("c")
 	release("c")
+	// A sandbox reserved before it exists keeps its endpoint when registered.
+	reserved, err := client.ReserveSandbox(call, &v1.ReserveSandboxRequest{SandboxId: "d", Metadata: &v1.Metadata{TaskId: "task"}})
+	if err != nil || reserved.State != v1.State_RESERVED || reserved.Endpoint.GetPort() != 2222 {
+		t.Fatal(reserved, err)
+	}
+	register("d")
+	release("d")
 	select {
 	case err := <-done:
 		t.Fatal("idle service exited", err)
 	default:
 	}
 	mu.Lock()
-	if len(keys) != 3 || keys[0] != keys[1] || keys[1] != keys[2] {
+	if len(keys) != 4 || keys[0] != keys[1] || keys[1] != keys[2] || keys[2] != keys[3] {
 		t.Fatal("signer changed across sessions")
 	}
 	mu.Unlock()
@@ -116,7 +128,7 @@ func TestServeSharesHostSignerAndSurvivesIndependentReleases(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("service failed to exit")
 	}
-	for _, id := range []string{"a", "b", "c"} {
+	for _, id := range []string{"a", "b", "c", "d"} {
 		entries, err := os.ReadDir(filepath.Join(root, id))
 		if err != nil || len(entries) != 1 || entries[0].Name() != "tool-calls.jsonl" {
 			t.Fatal("unexpected staged credentials", entries, err)

@@ -36,9 +36,15 @@ network interfaces, or construct Docker addresses. See
 ## Control and native protocols
 
 The internal [gRPC API](../../pkg/bridge/control/v1/control.proto) has
-`RegisterSandbox`, `GetSandbox`, and `ReleaseSandbox`. Each operates on one stable
-`sandbox_id`, reused from the sandbox's unique runtime name. Registration supplies
-the immutable provider runtime ID, workdir, execution user, and task metadata.
+`ReserveSandbox`, `RegisterSandbox`, `GetSandbox`, and `ReleaseSandbox`. Each
+operates on one stable `sandbox_id`, reused from the sandbox's unique runtime
+name. Reservation, with only the task metadata, opens the sandbox's listener and
+returns its endpoint before the sandbox exists, so a harness can be configured
+with it while the sandbox starts. Registration supplies the immutable provider
+runtime ID, workdir, execution user, and task metadata, and binds them to a
+reserved listener, or reserves and binds in one step. A connection accepted
+before binding waits for it, and revocation closes it unserved, so no command
+reaches a sandbox before its registration.
 The run and backend are configured once for the service. Runtime IDs are internal
 execution and cleanup references, not additional public lifecycle identifiers.
 

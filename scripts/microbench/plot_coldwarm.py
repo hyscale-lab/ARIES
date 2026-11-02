@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from plot import HARNESSES, INK, SETUPS, STAGES, SURFACE, TASKS, median, number, plt, save, style  # noqa: E402
 
 E2E_STAGES = [
-    ("Sandbox and bridge", STAGES[0][1]),
+    ("Sandbox, bridge and harness container", STAGES[0][1]),
     ("Harness start", STAGES[1][1]),
     ("Model (replayed)", STAGES[2][1]),
     ("Tools and harness logic", STAGES[3][1]),
@@ -46,9 +46,12 @@ def load(path):
 
 
 def cold_values(row):
-    provisioning = row.get("provisioning_s") or 0
+    """Start-up split by what is on its critical path: steps can overlap, so
+    harness start is its own phase and everything else before the first
+    request is the rest."""
+    harness = row.get("harness_start_s") or 0
     model = row.get("cold_model_s") or 0
-    return [provisioning, row["cold_startup_s"] - provisioning, model, row["cold_run_s"] - model]
+    return [row["cold_startup_s"] - harness, harness, model, row["cold_run_s"] - model]
 
 
 def after_values(row):

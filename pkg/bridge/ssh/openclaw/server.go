@@ -62,15 +62,40 @@ func New(options ssh.Options) (*Server, error) {
 	return &Server{manager: manager, dialect: dialect}, nil
 }
 
+// StartTarget listens and binds the sandbox in one step.
 func (server *Server) StartTarget(ctx context.Context, sandbox target.Executor) (core.ToolEndpoint, error) {
+	if sandbox == nil {
+		return core.ToolEndpoint{}, errors.New("OpenClaw bridge target is required")
+	}
+	endpoint, err := server.Listen(ctx)
+	if err != nil {
+		return core.ToolEndpoint{}, err
+	}
+	if err := server.Bind(ctx, sandbox); err != nil {
+		return core.ToolEndpoint{}, err
+	}
+	endpoint.Workdir = sandbox.Workdir()
+	return endpoint, nil
+}
+
+// Listen opens the endpoint before the sandbox exists.
+func (server *Server) Listen(ctx context.Context) (core.ToolEndpoint, error) {
 	server.mu.Lock()
 	defer server.mu.Unlock()
 	if server.used {
 		return core.ToolEndpoint{}, errors.New("OpenClaw bridge is already used or revoked")
 	}
 	server.used = true
+	return server.manager.Listen(ctx)
+}
+
+// Bind prepares the sandbox's workspace alias, then serves the sandbox on the
+// endpoint Listen opened.
+func (server *Server) Bind(ctx context.Context, sandbox target.Executor) error {
+	server.mu.Lock()
+	defer server.mu.Unlock()
 	if sandbox == nil {
-		return core.ToolEndpoint{}, errors.New("OpenClaw bridge target is required")
+		return errors.New("OpenClaw bridge target is required")
 	}
 	var stdout, stderr bytes.Buffer
 	result, err := sandbox.ExecStream(ctx, core.Command{
@@ -78,16 +103,16 @@ func (server *Server) StartTarget(ctx context.Context, sandbox target.Executor) 
 		Dir: "/", User: "0:0",
 	}, nil, &stdout, &stderr)
 	if err != nil {
-		return core.ToolEndpoint{}, fmt.Errorf("prepare OpenClaw workspace alias: %w", err)
+		return fmt.Errorf("prepare OpenClaw workspace alias: %w", err)
 	}
 	if result.ExitCode != 0 {
-		return core.ToolEndpoint{}, fmt.Errorf("prepare OpenClaw workspace alias: exit %d: %s", result.ExitCode, strings.TrimSpace(stderr.String()))
+		return fmt.Errorf("prepare OpenClaw workspace alias: exit %d: %s", result.ExitCode, strings.TrimSpace(stderr.String()))
 	}
 	server.dialect.validationRoot = strings.TrimSuffix(stdout.String(), "\n")
 	if !strings.HasPrefix(server.dialect.validationRoot, "/") {
-		return core.ToolEndpoint{}, errors.New("OpenClaw workspace setup returned no absolute directory")
+		return errors.New("OpenClaw workspace setup returned no absolute directory")
 	}
-	return server.manager.StartTarget(ctx, sandbox)
+	return server.manager.Bind(ctx, sandbox)
 }
 
 func (server *Server) Stop(ctx context.Context) error {

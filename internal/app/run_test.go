@@ -305,11 +305,18 @@ type stubToolSandbox struct{}
 func (*stubToolSandbox) Start(context.Context, core.SandboxRequest) (runner.Sandbox, error) {
 	return nil, nil
 }
-func (*stubToolSandbox) Stop(context.Context, runner.Sandbox) error { return nil }
+func (*stubToolSandbox) Reserve(context.Context, core.SandboxRequest) (runner.Sandbox, error) {
+	return nil, nil
+}
+func (*stubToolSandbox) Launch(context.Context, runner.Sandbox) error { return nil }
+func (*stubToolSandbox) Stop(context.Context, runner.Sandbox) error   { return nil }
 
 type stubBridge struct{}
 
 func (*stubBridge) Start(context.Context, runner.Sandbox) (core.ToolEndpoint, error) {
+	return core.ToolEndpoint{}, nil
+}
+func (*stubBridge) Reserve(context.Context, runner.Sandbox) (core.ToolEndpoint, error) {
 	return core.ToolEndpoint{}, nil
 }
 func (*stubBridge) Stop(context.Context) error { return nil }

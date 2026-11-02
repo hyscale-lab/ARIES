@@ -3,11 +3,14 @@ package aries.bridge.control.v1;
 option go_package = "github.com/hyscale-lab/aries/pkg/bridge/control/v1;controlv1";
 
 service BridgeControl {
+  // ReserveSandbox opens a sandbox's access before the sandbox exists;
+  // RegisterSandbox then binds the started sandbox to it.
+  rpc ReserveSandbox(ReserveSandboxRequest) returns (SandboxAccess);
   rpc RegisterSandbox(RegisterSandboxRequest) returns (SandboxAccess);
   rpc GetSandbox(SandboxRequest) returns (SandboxAccess);
   rpc ReleaseSandbox(SandboxRequest) returns (SandboxAccess);
 }
-enum State { STATE_UNSPECIFIED = 0; REGISTERING = 1; READY = 2; RELEASING = 3; RELEASED = 4; }
+enum State { STATE_UNSPECIFIED = 0; REGISTERING = 1; READY = 2; RELEASING = 3; RELEASED = 4; RESERVED = 5; }
 message Target {
   reserved 1 to 5, 7 to 11, 14, 15;
   reserved "version", "run_id", "task_id", "occurrence_id", "backend", "runtime_name", "expected_labels", "max_input_bytes", "max_output_bytes";
@@ -16,6 +19,7 @@ message Target {
   string exec_user = 13;
 }
 message Metadata { string task_id = 1; }
+message ReserveSandboxRequest { string sandbox_id = 1; Metadata metadata = 2; }
 message RegisterSandboxRequest { string sandbox_id = 1; Target target = 2; Metadata metadata = 3; }
 message SandboxRequest { string sandbox_id = 1; }
 message Endpoint {

@@ -91,10 +91,11 @@ func (r *launchRuntime) Validate(_ context.Context, id string, req deployment.Re
 
 type launchAccess struct{ runtime *launchRuntime }
 
-func (a launchAccess) Register(context.Context) (*v1.Endpoint, error) {
+func (a launchAccess) Reserve(context.Context) (*v1.Endpoint, error) {
 	a.runtime.event("register")
 	return &v1.Endpoint{Port: 3022, User: "aries", Transport: "ssh"}, nil
 }
+func (a launchAccess) Bind(context.Context, *v1.RegisterSandboxRequest) error { return nil }
 func (a launchAccess) Release(context.Context) ([]*v1.Artifact, error) {
 	r := a.runtime
 	r.mu.Lock()
@@ -107,7 +108,7 @@ func (a launchAccess) Release(context.Context) ([]*v1.Artifact, error) {
 }
 func (r *launchRuntime) Start(context.Context, string) error {
 	r.event("start")
-	service, err := control.NewServer(control.Config{NewSandbox: func(*v1.RegisterSandboxRequest) control.Sandbox { return launchAccess{r} }})
+	service, err := control.NewServer(control.Config{NewSandbox: func(string) control.Sandbox { return launchAccess{r} }})
 	if err != nil {
 		return err
 	}

@@ -16,8 +16,8 @@ and [lifecycle](architecture.md#task-lifecycle).
   the task workdir; preserve explicit native per-call overrides.
 - Preserve shell bodies and native protocol semantics; adapt provider-owned path
   arguments or filesystem mappings without rewriting agent command text. Honor
-  benchmark-defined workdirs; resolve unspecified workdirs from the running image
-  before exposing access. Never retry ambiguous
+  benchmark-defined workdirs; resolve unspecified workdirs from a running container
+  of the image, per task or once per run, before exposing access. Never retry ambiguous
   submissions, widen accepted payloads to hide failures, or enable Hermes credential sync.
 - Task/evaluation handles borrow run connectivity. Releasing one must not remove
   the network or close peers' transports. Do not require a private network per pair.
@@ -31,7 +31,8 @@ and [lifecycle](architecture.md#task-lifecycle).
   answers; Collect then retains that run's artifacts and is timed as its own
   phase, never inside Run.
 - Each sandbox session has its own listener, immutable target binding, and recorder,
-  keyed by a stable sandbox ID. Native tool execution must not call Runner or own
+  keyed by a stable sandbox ID; a listener reserved before its sandbox exists
+  serves nothing until the target is bound. Native tool execution must not call Runner or own
   sandbox lifecycle. Use plaintext unauthenticated gRPC and unauthenticated SSH,
   one in-memory service host key, and no client-key staging; preserve
   target/ownership checks.

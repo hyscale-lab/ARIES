@@ -13,8 +13,10 @@ The [Runner interfaces](../../pkg/runner/interfaces.go) define:
 
 | Operation | Contract |
 | --- | --- |
-| `Start(ctx, SandboxRequest) (Sandbox, error)` | Create and validate a live task environment; clean up partial allocation on failure. |
-| `Stop(ctx, Sandbox) error` | Release the owned environment; success confirms absence. Repeated stops are safe. |
+| `Start(ctx, SandboxRequest) (Sandbox, error)` | Create and validate a live task environment; clean up partial allocation on failure. Equivalent to `Reserve` then `Launch`. |
+| `Reserve(ctx, SandboxRequest) (Sandbox, error)` | Name the environment and start its task services without creating it, so its connectivity and bridge target are known while it starts. Needs the working directory, since nothing can run yet to find it. |
+| `Launch(ctx, Sandbox) error` | Create and start a reserved environment; a failure rolls it back. |
+| `Stop(ctx, Sandbox) error` | Release the owned environment, reserved or launched; success confirms absence. Repeated stops are safe. |
 | `Sandbox.Connectivity() core.HarnessConnectivity` | Return typed placement and resolved task service endpoints. Ownership of the task environment stays with the sandbox. |
 | `Sandbox.Exec(ctx, Command)` | Execute exact argv with context cancellation; return a command result separately from transport errors. |
 | `Sandbox.Upload(ctx, source, destination)` | Transfer a host file into the task environment. |
@@ -34,7 +36,8 @@ cleanup and closes the transport; it does not replace `Stop` for active tasks.
 
 ## Lifecycle, isolation, and failure
 
-The sandbox begins before bridge or harness startup. The benchmark sanitizes it
+The sandbox begins before bridge or harness startup; when it is reserved, its
+container starts while the harness does. The benchmark sanitizes it
 before agent access and evaluates after harness stop and bridge revocation are
 positively confirmed, either in that same live environment or in fresh
 evaluation sandboxes. Harness failure does not decide the evaluation outcome.

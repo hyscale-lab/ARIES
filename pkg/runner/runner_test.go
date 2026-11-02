@@ -156,6 +156,7 @@ type fakeToolSandbox struct {
 	mu         sync.Mutex
 	log        *callLog
 	startErr   error
+	launchErr  error
 	stopErrors []error
 	stopWait   bool
 	stops      int
@@ -181,6 +182,25 @@ func (f *fakeToolSandbox) Start(ctx context.Context, request core.SandboxRequest
 		return &fakeSandbox{name: fmt.Sprintf("evaluation-%d", len(f.requests))}, nil
 	}
 	return f.sandbox, nil
+}
+
+func (f *fakeToolSandbox) Reserve(ctx context.Context, request core.SandboxRequest) (Sandbox, error) {
+	f.log.add("sandbox.reserve", ctx)
+	f.mu.Lock()
+	f.requests = append(f.requests, request)
+	f.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return f.sandbox, nil
+}
+
+func (f *fakeToolSandbox) Launch(ctx context.Context, _ Sandbox) error {
+	f.log.add("sandbox.launch", ctx)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return f.launchErr
 }
 
 func (f *fakeToolSandbox) Stop(ctx context.Context, sandbox Sandbox) error {
@@ -242,6 +262,14 @@ func (f *fakeBridge) Start(ctx context.Context, _ Sandbox) (core.ToolEndpoint, e
 	if f.startErr != nil {
 		f.log.addRollback("bridge.rollback", ctx)
 		return core.ToolEndpoint{}, f.startErr
+	}
+	return core.ToolEndpoint{Protocol: "fake", Address: "task", LogPaths: []string{"/runs/tool-calls.jsonl"}}, nil
+}
+
+func (f *fakeBridge) Reserve(ctx context.Context, _ Sandbox) (core.ToolEndpoint, error) {
+	f.log.add("bridge.reserve", ctx)
+	if err := ctx.Err(); err != nil {
+		return core.ToolEndpoint{}, err
 	}
 	return core.ToolEndpoint{Protocol: "fake", Address: "task", LogPaths: []string{"/runs/tool-calls.jsonl"}}, nil
 }
@@ -408,6 +436,7 @@ func newRigWith(t *testing.T, tasks int, extra Options) *rig {
 		Logger:         logrus.New(),
 		ParallelStart:  extra.ParallelStart,
 		Placement:      extra.Placement,
+		Workdirs:       extra.Workdirs,
 		Warmup:         extra.Warmup,
 	})
 	if err != nil {
@@ -1186,6 +1215,7 @@ func TestNewRejectsMissingRunID(t *testing.T) {
 // sandbox's endpoint, while the sandbox starts; Start then gets the endpoint.
 func TestRunnerPreparesTheHarnessWhileTheSandboxStarts(t *testing.T) {
 	rig := newRigWith(t, 1, Options{ParallelStart: true, Placement: core.RuntimePlacement{AttachmentID: "occurrence-network"}})
+	rig.benchmark.tasks[0].Environment.Workdir = ""
 	result, err := rig.runner.Run(context.Background())
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -1206,12 +1236,104 @@ func TestRunnerPreparesTheHarnessWhileTheSandboxStarts(t *testing.T) {
 
 func TestRunnerRejectsASandboxOutsideTheRunPlacement(t *testing.T) {
 	rig := newRigWith(t, 1, Options{ParallelStart: true, Placement: core.RuntimePlacement{AttachmentID: "another-network"}})
+	rig.benchmark.tasks[0].Environment.Workdir = ""
 	result, err := rig.runner.Run(context.Background())
 	if err == nil || !strings.Contains(result.Tasks[0].Harness.Error, "placement") {
 		t.Fatalf("Run() error = %v, harness = %#v", err, result.Tasks[0].Harness)
 	}
 	if rig.harness.stopCount() == 0 {
 		t.Fatal("the prepared harness was not stopped")
+	}
+}
+
+// With the working directory known, the sandbox and bridge are reserved and
+// the harness is started with the reserved endpoint while the sandbox starts.
+// The bridge registers the sandbox only after the benchmark prepares it.
+func TestRunnerStartsTheHarnessWhileTheSandboxStarts(t *testing.T) {
+	rig := newRigWith(t, 1, Options{ParallelStart: true, Placement: core.RuntimePlacement{AttachmentID: "occurrence-network"}})
+	harnessStarted := make(chan struct{})
+	rig.log.setHook("harness.start", func() { close(harnessStarted) })
+	rig.log.setHook("sandbox.launch", func() {
+		// A harness started only after the sandbox would never arrive here.
+		select {
+		case <-harnessStarted:
+		case <-time.After(5 * time.Second):
+		}
+	})
+	result, err := rig.runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	select {
+	case <-harnessStarted:
+	default:
+		t.Fatal("the harness never started")
+	}
+	calls := rig.log.snapshot()
+	for _, before := range [][2]string{{"sandbox.reserve", "bridge.reserve"}, {"bridge.reserve", "harness.start"}, {"benchmark.prepare", "bridge.start"}, {"bridge.start", "harness.run"}} {
+		if slices.Index(calls, before[0]) < 0 || slices.Index(calls, before[0]) > slices.Index(calls, before[1]) {
+			t.Fatalf("%s should precede %s: %v", before[0], before[1], calls)
+		}
+	}
+	if slices.Contains(calls, "sandbox.start") {
+		t.Fatalf("the sandbox was started in one step: %v", calls)
+	}
+	rig.harness.mu.Lock()
+	started := rig.harness.requests
+	rig.harness.mu.Unlock()
+	if len(started) != 1 || started[0].Endpoint.Address != "task" || started[0].Connectivity.SearchURL != "http://search.example:8123" {
+		t.Fatalf("started = %#v", started)
+	}
+	phases := phaseNames(result.Tasks[0].Phases)
+	if !slices.Contains(phases, core.PhaseSandboxReserve) || !slices.Contains(phases, core.PhaseBridgeReserve) || result.Tasks[0].Harness.Status != core.StatusSucceeded {
+		t.Fatalf("task = %#v", result.Tasks[0])
+	}
+}
+
+// A task image without a working directory takes it from Workdirs, which is
+// what lets its harness start early.
+func TestRunnerTakesTheWorkdirOfAnImageFromWorkdirs(t *testing.T) {
+	rig := newRigWith(t, 1, Options{ParallelStart: true, Placement: core.RuntimePlacement{AttachmentID: "occurrence-network"},
+		Workdirs: map[WorkdirKey]string{{Image: "fixture"}: "/resolved"}})
+	rig.benchmark.tasks[0].Environment.Workdir = ""
+	if _, err := rig.runner.Run(context.Background()); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	rig.factory.mu.Lock()
+	defer rig.factory.mu.Unlock()
+	if len(rig.factory.requests) != 1 || rig.factory.requests[0].Environment.Workdir != "/resolved" || !slices.Contains(rig.log.snapshot(), "sandbox.reserve") {
+		t.Fatalf("requests = %#v, calls = %v", rig.factory.requests, rig.log.snapshot())
+	}
+}
+
+// A sandbox that fails to launch leaves the started harness, the reserved
+// bridge and the reserved sandbox to be stopped.
+func TestRunnerStopsAnEarlyHarnessWhenTheSandboxFailsToLaunch(t *testing.T) {
+	rig := newRigWith(t, 1, Options{ParallelStart: true, Placement: core.RuntimePlacement{AttachmentID: "occurrence-network"}})
+	rig.factory.launchErr = errors.New("image missing")
+	result, err := rig.runner.Run(context.Background())
+	if err == nil || !strings.Contains(result.Tasks[0].Error, "start sandbox: image missing") {
+		t.Fatalf("Run() error = %v, task error = %q", err, result.Tasks[0].Error)
+	}
+	if rig.harness.stopCount() == 0 || rig.bridge.stopCount() == 0 || !slices.Contains(rig.log.snapshot(), "sandbox.stop") {
+		t.Fatalf("calls = %v", rig.log.snapshot())
+	}
+	if slices.Contains(rig.log.snapshot(), "bridge.start") || slices.Contains(rig.log.snapshot(), "harness.run") {
+		t.Fatalf("calls = %v", rig.log.snapshot())
+	}
+}
+
+// A reserved sandbox outside the run's placement is refused before its bridge
+// is reserved or its harness started.
+func TestRunnerRejectsAReservedSandboxOutsideTheRunPlacement(t *testing.T) {
+	rig := newRigWith(t, 1, Options{ParallelStart: true, Placement: core.RuntimePlacement{AttachmentID: "another-network"}})
+	result, err := rig.runner.Run(context.Background())
+	if err == nil || !strings.Contains(result.Tasks[0].Error, "placement") {
+		t.Fatalf("Run() error = %v, task = %#v", err, result.Tasks[0])
+	}
+	calls := rig.log.snapshot()
+	if slices.Contains(calls, "bridge.reserve") || slices.Contains(calls, "harness.start") || !slices.Contains(calls, "sandbox.stop") {
+		t.Fatalf("calls = %v", calls)
 	}
 }
 

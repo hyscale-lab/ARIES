@@ -29,6 +29,7 @@ const (
 	State_READY             State = 2
 	State_RELEASING         State = 3
 	State_RELEASED          State = 4
+	State_RESERVED          State = 5
 )
 
 // Enum value maps for State.
@@ -39,6 +40,7 @@ var (
 		2: "READY",
 		3: "RELEASING",
 		4: "RELEASED",
+		5: "RESERVED",
 	}
 	State_value = map[string]int32{
 		"STATE_UNSPECIFIED": 0,
@@ -46,6 +48,7 @@ var (
 		"READY":             2,
 		"RELEASING":         3,
 		"RELEASED":          4,
+		"RESERVED":          5,
 	}
 )
 
@@ -180,6 +183,58 @@ func (x *Metadata) GetTaskId() string {
 	return ""
 }
 
+type ReserveSandboxRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SandboxId     string                 `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
+	Metadata      *Metadata              `protobuf:"bytes,2,opt,name=metadata,proto3" json:"metadata,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReserveSandboxRequest) Reset() {
+	*x = ReserveSandboxRequest{}
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReserveSandboxRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReserveSandboxRequest) ProtoMessage() {}
+
+func (x *ReserveSandboxRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReserveSandboxRequest.ProtoReflect.Descriptor instead.
+func (*ReserveSandboxRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ReserveSandboxRequest) GetSandboxId() string {
+	if x != nil {
+		return x.SandboxId
+	}
+	return ""
+}
+
+func (x *ReserveSandboxRequest) GetMetadata() *Metadata {
+	if x != nil {
+		return x.Metadata
+	}
+	return nil
+}
+
 type RegisterSandboxRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SandboxId     string                 `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
@@ -191,7 +246,7 @@ type RegisterSandboxRequest struct {
 
 func (x *RegisterSandboxRequest) Reset() {
 	*x = RegisterSandboxRequest{}
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[2]
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -203,7 +258,7 @@ func (x *RegisterSandboxRequest) String() string {
 func (*RegisterSandboxRequest) ProtoMessage() {}
 
 func (x *RegisterSandboxRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[2]
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -216,7 +271,7 @@ func (x *RegisterSandboxRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterSandboxRequest.ProtoReflect.Descriptor instead.
 func (*RegisterSandboxRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{2}
+	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *RegisterSandboxRequest) GetSandboxId() string {
@@ -249,7 +304,7 @@ type SandboxRequest struct {
 
 func (x *SandboxRequest) Reset() {
 	*x = SandboxRequest{}
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[3]
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -261,7 +316,7 @@ func (x *SandboxRequest) String() string {
 func (*SandboxRequest) ProtoMessage() {}
 
 func (x *SandboxRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[3]
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -274,7 +329,7 @@ func (x *SandboxRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SandboxRequest.ProtoReflect.Descriptor instead.
 func (*SandboxRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{3}
+	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *SandboxRequest) GetSandboxId() string {
@@ -295,7 +350,7 @@ type Endpoint struct {
 
 func (x *Endpoint) Reset() {
 	*x = Endpoint{}
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[4]
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -307,7 +362,7 @@ func (x *Endpoint) String() string {
 func (*Endpoint) ProtoMessage() {}
 
 func (x *Endpoint) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[4]
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -320,7 +375,7 @@ func (x *Endpoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Endpoint.ProtoReflect.Descriptor instead.
 func (*Endpoint) Descriptor() ([]byte, []int) {
-	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{4}
+	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *Endpoint) GetPort() uint32 {
@@ -356,7 +411,7 @@ type Artifact struct {
 
 func (x *Artifact) Reset() {
 	*x = Artifact{}
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[5]
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -368,7 +423,7 @@ func (x *Artifact) String() string {
 func (*Artifact) ProtoMessage() {}
 
 func (x *Artifact) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[5]
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -381,7 +436,7 @@ func (x *Artifact) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Artifact.ProtoReflect.Descriptor instead.
 func (*Artifact) Descriptor() ([]byte, []int) {
-	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{5}
+	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Artifact) GetName() string {
@@ -426,7 +481,7 @@ type SandboxAccess struct {
 
 func (x *SandboxAccess) Reset() {
 	*x = SandboxAccess{}
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[6]
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -438,7 +493,7 @@ func (x *SandboxAccess) String() string {
 func (*SandboxAccess) ProtoMessage() {}
 
 func (x *SandboxAccess) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[6]
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -451,7 +506,7 @@ func (x *SandboxAccess) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SandboxAccess.ProtoReflect.Descriptor instead.
 func (*SandboxAccess) Descriptor() ([]byte, []int) {
-	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{6}
+	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *SandboxAccess) GetSandboxId() string {
@@ -507,7 +562,11 @@ const file_pkg_bridge_control_v1_control_proto_rawDesc = "" +
 	"\aworkdir\x18\f \x01(\tR\aworkdir\x12\x1b\n" +
 	"\texec_user\x18\r \x01(\tR\bexecUserJ\x04\b\x01\x10\x06J\x04\b\a\x10\fJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10R\aversionR\x06run_idR\atask_idR\roccurrence_idR\abackendR\fruntime_nameR\x0fexpected_labelsR\x0fmax_input_bytesR\x10max_output_bytes\"#\n" +
 	"\bMetadata\x12\x17\n" +
-	"\atask_id\x18\x01 \x01(\tR\x06taskId\"\xaf\x01\n" +
+	"\atask_id\x18\x01 \x01(\tR\x06taskId\"u\n" +
+	"\x15ReserveSandboxRequest\x12\x1d\n" +
+	"\n" +
+	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\x12=\n" +
+	"\bmetadata\x18\x02 \x01(\v2!.aries.bridge.control.v1.MetadataR\bmetadata\"\xaf\x01\n" +
 	"\x16RegisterSandboxRequest\x12\x1d\n" +
 	"\n" +
 	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\x127\n" +
@@ -532,14 +591,16 @@ const file_pkg_bridge_control_v1_control_proto_rawDesc = "" +
 	"\bendpoint\x18\x03 \x01(\v2!.aries.bridge.control.v1.EndpointR\bendpoint\x12?\n" +
 	"\tartifacts\x18\x04 \x03(\v2!.aries.bridge.control.v1.ArtifactR\tartifacts\x12\x14\n" +
 	"\x05error\x18\x05 \x01(\tR\x05error\x12#\n" +
-	"\rcleanup_error\x18\x06 \x01(\tR\fcleanupError*W\n" +
+	"\rcleanup_error\x18\x06 \x01(\tR\fcleanupError*e\n" +
 	"\x05State\x12\x15\n" +
 	"\x11STATE_UNSPECIFIED\x10\x00\x12\x0f\n" +
 	"\vREGISTERING\x10\x01\x12\t\n" +
 	"\x05READY\x10\x02\x12\r\n" +
 	"\tRELEASING\x10\x03\x12\f\n" +
-	"\bRELEASED\x10\x042\xbd\x02\n" +
-	"\rBridgeControl\x12j\n" +
+	"\bRELEASED\x10\x04\x12\f\n" +
+	"\bRESERVED\x10\x052\xa7\x03\n" +
+	"\rBridgeControl\x12h\n" +
+	"\x0eReserveSandbox\x12..aries.bridge.control.v1.ReserveSandboxRequest\x1a&.aries.bridge.control.v1.SandboxAccess\x12j\n" +
 	"\x0fRegisterSandbox\x12/.aries.bridge.control.v1.RegisterSandboxRequest\x1a&.aries.bridge.control.v1.SandboxAccess\x12]\n" +
 	"\n" +
 	"GetSandbox\x12'.aries.bridge.control.v1.SandboxRequest\x1a&.aries.bridge.control.v1.SandboxAccess\x12a\n" +
@@ -558,34 +619,38 @@ func file_pkg_bridge_control_v1_control_proto_rawDescGZIP() []byte {
 }
 
 var file_pkg_bridge_control_v1_control_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_pkg_bridge_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_pkg_bridge_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_pkg_bridge_control_v1_control_proto_goTypes = []any{
 	(State)(0),                     // 0: aries.bridge.control.v1.State
 	(*Target)(nil),                 // 1: aries.bridge.control.v1.Target
 	(*Metadata)(nil),               // 2: aries.bridge.control.v1.Metadata
-	(*RegisterSandboxRequest)(nil), // 3: aries.bridge.control.v1.RegisterSandboxRequest
-	(*SandboxRequest)(nil),         // 4: aries.bridge.control.v1.SandboxRequest
-	(*Endpoint)(nil),               // 5: aries.bridge.control.v1.Endpoint
-	(*Artifact)(nil),               // 6: aries.bridge.control.v1.Artifact
-	(*SandboxAccess)(nil),          // 7: aries.bridge.control.v1.SandboxAccess
+	(*ReserveSandboxRequest)(nil),  // 3: aries.bridge.control.v1.ReserveSandboxRequest
+	(*RegisterSandboxRequest)(nil), // 4: aries.bridge.control.v1.RegisterSandboxRequest
+	(*SandboxRequest)(nil),         // 5: aries.bridge.control.v1.SandboxRequest
+	(*Endpoint)(nil),               // 6: aries.bridge.control.v1.Endpoint
+	(*Artifact)(nil),               // 7: aries.bridge.control.v1.Artifact
+	(*SandboxAccess)(nil),          // 8: aries.bridge.control.v1.SandboxAccess
 }
 var file_pkg_bridge_control_v1_control_proto_depIdxs = []int32{
-	1, // 0: aries.bridge.control.v1.RegisterSandboxRequest.target:type_name -> aries.bridge.control.v1.Target
-	2, // 1: aries.bridge.control.v1.RegisterSandboxRequest.metadata:type_name -> aries.bridge.control.v1.Metadata
-	0, // 2: aries.bridge.control.v1.SandboxAccess.state:type_name -> aries.bridge.control.v1.State
-	5, // 3: aries.bridge.control.v1.SandboxAccess.endpoint:type_name -> aries.bridge.control.v1.Endpoint
-	6, // 4: aries.bridge.control.v1.SandboxAccess.artifacts:type_name -> aries.bridge.control.v1.Artifact
-	3, // 5: aries.bridge.control.v1.BridgeControl.RegisterSandbox:input_type -> aries.bridge.control.v1.RegisterSandboxRequest
-	4, // 6: aries.bridge.control.v1.BridgeControl.GetSandbox:input_type -> aries.bridge.control.v1.SandboxRequest
-	4, // 7: aries.bridge.control.v1.BridgeControl.ReleaseSandbox:input_type -> aries.bridge.control.v1.SandboxRequest
-	7, // 8: aries.bridge.control.v1.BridgeControl.RegisterSandbox:output_type -> aries.bridge.control.v1.SandboxAccess
-	7, // 9: aries.bridge.control.v1.BridgeControl.GetSandbox:output_type -> aries.bridge.control.v1.SandboxAccess
-	7, // 10: aries.bridge.control.v1.BridgeControl.ReleaseSandbox:output_type -> aries.bridge.control.v1.SandboxAccess
-	8, // [8:11] is the sub-list for method output_type
-	5, // [5:8] is the sub-list for method input_type
-	5, // [5:5] is the sub-list for extension type_name
-	5, // [5:5] is the sub-list for extension extendee
-	0, // [0:5] is the sub-list for field type_name
+	2,  // 0: aries.bridge.control.v1.ReserveSandboxRequest.metadata:type_name -> aries.bridge.control.v1.Metadata
+	1,  // 1: aries.bridge.control.v1.RegisterSandboxRequest.target:type_name -> aries.bridge.control.v1.Target
+	2,  // 2: aries.bridge.control.v1.RegisterSandboxRequest.metadata:type_name -> aries.bridge.control.v1.Metadata
+	0,  // 3: aries.bridge.control.v1.SandboxAccess.state:type_name -> aries.bridge.control.v1.State
+	6,  // 4: aries.bridge.control.v1.SandboxAccess.endpoint:type_name -> aries.bridge.control.v1.Endpoint
+	7,  // 5: aries.bridge.control.v1.SandboxAccess.artifacts:type_name -> aries.bridge.control.v1.Artifact
+	3,  // 6: aries.bridge.control.v1.BridgeControl.ReserveSandbox:input_type -> aries.bridge.control.v1.ReserveSandboxRequest
+	4,  // 7: aries.bridge.control.v1.BridgeControl.RegisterSandbox:input_type -> aries.bridge.control.v1.RegisterSandboxRequest
+	5,  // 8: aries.bridge.control.v1.BridgeControl.GetSandbox:input_type -> aries.bridge.control.v1.SandboxRequest
+	5,  // 9: aries.bridge.control.v1.BridgeControl.ReleaseSandbox:input_type -> aries.bridge.control.v1.SandboxRequest
+	8,  // 10: aries.bridge.control.v1.BridgeControl.ReserveSandbox:output_type -> aries.bridge.control.v1.SandboxAccess
+	8,  // 11: aries.bridge.control.v1.BridgeControl.RegisterSandbox:output_type -> aries.bridge.control.v1.SandboxAccess
+	8,  // 12: aries.bridge.control.v1.BridgeControl.GetSandbox:output_type -> aries.bridge.control.v1.SandboxAccess
+	8,  // 13: aries.bridge.control.v1.BridgeControl.ReleaseSandbox:output_type -> aries.bridge.control.v1.SandboxAccess
+	10, // [10:14] is the sub-list for method output_type
+	6,  // [6:10] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_pkg_bridge_control_v1_control_proto_init() }
@@ -599,7 +664,7 @@ func file_pkg_bridge_control_v1_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_bridge_control_v1_control_proto_rawDesc), len(file_pkg_bridge_control_v1_control_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   7,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -257,7 +257,14 @@ func TestRunForwardsFreshPreparedGPUIndicesToEveryOccurrence(t *testing.T) {
 		NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
 			return HarnessInstance{Harness: &stubHarness{}, Close: func() error { return nil }}, nil
 		},
-		NewSandbox: func(_ config.Config, _, _, _ string, gpuIndices []int, _ *logrus.Logger) (SandboxInstance, error) {
+		NewSandbox: func(_ config.Config, _, _, occurrenceID string, gpuIndices []int, _ *logrus.Logger) (SandboxInstance, error) {
+			// The run probes the task image's working directory without GPUs.
+			if strings.HasPrefix(occurrenceID, "workdir-probe-") {
+				if len(gpuIndices) != 0 {
+					t.Fatalf("workdir probe GPU indices = %v", gpuIndices)
+				}
+				return SandboxInstance{Sandbox: &managedIntegrationSandbox{}, Resources: &stubResources{}, Close: func() error { return nil }}, nil
+			}
 			sandboxCalls++
 			if !reflect.DeepEqual(gpuIndices, []int{4, 2}) {
 				t.Fatalf("sandbox call %d GPU indices = %v", sandboxCalls, gpuIndices)
@@ -563,6 +570,10 @@ type cancelSandbox struct{ events *[]string }
 func (*cancelSandbox) Start(context.Context, core.SandboxRequest) (runner.Sandbox, error) {
 	return &stubSandbox{}, nil
 }
+func (*cancelSandbox) Reserve(context.Context, core.SandboxRequest) (runner.Sandbox, error) {
+	return &stubSandbox{}, nil
+}
+func (*cancelSandbox) Launch(context.Context, runner.Sandbox) error { return nil }
 func (s *cancelSandbox) Stop(context.Context, runner.Sandbox) error {
 	*s.events = append(*s.events, "sandbox-stop")
 	return nil
@@ -579,6 +590,9 @@ func (*stubSandbox) Download(context.Context, string, string) error { return nil
 type cancelBridge struct{ events *[]string }
 
 func (*cancelBridge) Start(context.Context, runner.Sandbox) (core.ToolEndpoint, error) {
+	return core.ToolEndpoint{}, nil
+}
+func (*cancelBridge) Reserve(context.Context, runner.Sandbox) (core.ToolEndpoint, error) {
 	return core.ToolEndpoint{}, nil
 }
 func (b *cancelBridge) Stop(context.Context) error {

@@ -254,6 +254,11 @@ type Phase struct {
 // records only the phases it reached. With a parallel start, harness_prepare
 // runs alongside the sandbox phases, so phases can overlap in time.
 const (
+	// PhaseSandboxReserve and PhaseBridgeReserve name the sandbox, start its
+	// task services and open its bridge endpoint before the sandbox starts, so
+	// the harness can start alongside it.
+	PhaseSandboxReserve = "sandbox_reserve"
+	PhaseBridgeReserve  = "bridge_reserve"
 	PhaseSandboxStart   = "sandbox_start"
 	PhaseSandboxPrepare = "sandbox_prepare"
 	PhaseBridgeRegister = "bridge_register"

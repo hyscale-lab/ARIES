@@ -77,6 +77,8 @@ type Sandbox struct {
 	cleanupTimeout time.Duration
 	runID          string
 	taskID         string
+	// request is kept from Reserve for Launch.
+	request core.SandboxRequest
 
 	mu               sync.Mutex
 	containerOwned   bool
@@ -155,7 +157,44 @@ func New(options Options) (*Manager, error) {
 	}, nil
 }
 
+// Start reserves and launches a sandbox in one step.
 func (m *Manager) Start(ctx context.Context, request core.SandboxRequest) (runner.Sandbox, error) {
+	s, err := m.reserve(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	if err := m.launch(ctx, s); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// Reserve names the sandbox and starts its task services without creating its
+// container, so the harness and bridge can be configured while it starts.
+// The working directory must be known, since nothing can run yet to find it.
+func (m *Manager) Reserve(ctx context.Context, request core.SandboxRequest) (runner.Sandbox, error) {
+	if request.Environment.Workdir == "" {
+		return nil, errors.New("a sandbox reserved before it starts needs its working directory")
+	}
+	return m.reserve(ctx, request)
+}
+
+// Launch creates and starts the container of a sandbox Reserve returned.
+func (m *Manager) Launch(ctx context.Context, live runner.Sandbox) error {
+	s, ok := live.(*Sandbox)
+	if !ok || s == nil || s.owner != m {
+		return fmt.Errorf("launch deployment sandbox: unsupported sandbox %T", live)
+	}
+	s.mu.Lock()
+	launched := s.containerOwned || s.stopping || s.stopped
+	s.mu.Unlock()
+	if launched {
+		return errors.New("launch deployment sandbox: sandbox was already launched or stopped")
+	}
+	return m.launch(ctx, s)
+}
+
+func (m *Manager) reserve(ctx context.Context, request core.SandboxRequest) (*Sandbox, error) {
 	if err := validateIdentity("run", request.RunID); err != nil {
 		return nil, err
 	}
@@ -178,7 +217,7 @@ func (m *Manager) Start(ctx context.Context, request core.SandboxRequest) (runne
 		workdir:       request.Environment.Workdir, execUser: request.Environment.ExecUser,
 		artifactDir: filepath.Join(m.outputDir, request.TaskID, sandboxComponent(request)),
 		outputDir:   m.outputDir, cleanupTimeout: m.cleanupTimeout,
-		runID: request.RunID, taskID: request.TaskID,
+		runID: request.RunID, taskID: request.TaskID, request: request,
 	}
 	if err := os.MkdirAll(s.artifactDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create sandbox artifact directory: %w", err)
@@ -195,6 +234,11 @@ func (m *Manager) Start(ctx context.Context, request core.SandboxRequest) (runne
 	if err = s.environment.Validate(ctx); err != nil {
 		return nil, s.rollbackStart(ctx, err)
 	}
+	return s, nil
+}
+
+func (m *Manager) launch(ctx context.Context, s *Sandbox) error {
+	request := s.request
 	env := request.Environment
 	deploymentRequest := deployment.Request{
 		Name: s.containerName, Image: env.Image, Workdir: env.Workdir,
@@ -211,51 +255,52 @@ func (m *Manager) Start(ctx context.Context, request core.SandboxRequest) (runne
 	if env.MemoryMB > 0 {
 		deploymentRequest.MemoryMB = &env.MemoryMB
 	}
+	var err error
 	s.containerID, err = m.deployment.Create(ctx, deploymentRequest)
 	s.containerOwned = s.containerID != ""
 	if err != nil {
-		return nil, s.rollbackStart(ctx, fmt.Errorf("create task container: %w", err))
+		return s.rollbackStart(ctx, fmt.Errorf("create task container: %w", err))
 	}
 	if !s.containerOwned {
-		return nil, s.rollbackStart(ctx, errors.New("create task container: deployment returned an empty container ID"))
+		return s.rollbackStart(ctx, errors.New("create task container: deployment returned an empty container ID"))
 	}
 	if err = m.deployment.Validate(ctx, s.containerID, deploymentRequest, nil); err != nil {
-		return nil, s.rollbackStart(ctx, err)
+		return s.rollbackStart(ctx, err)
 	}
 	if err = m.deployment.Start(ctx, s.containerID); err != nil {
-		return nil, s.rollbackStart(ctx, err)
+		return s.rollbackStart(ctx, err)
 	}
 	running, err := m.deployment.Running(ctx, s.containerID)
 	if err != nil {
-		return nil, s.rollbackStart(ctx, err)
+		return s.rollbackStart(ctx, err)
 	}
 	if !running {
-		return nil, s.rollbackStart(ctx, errors.New("task container is not running"))
+		return s.rollbackStart(ctx, errors.New("task container is not running"))
 	}
 	if err = m.deployment.Validate(ctx, s.containerID, deploymentRequest, nil); err != nil {
-		return nil, s.rollbackStart(ctx, err)
+		return s.rollbackStart(ctx, err)
 	}
 	if err = s.environment.Validate(ctx); err != nil {
-		return nil, s.rollbackStart(ctx, err)
+		return s.rollbackStart(ctx, err)
 	}
 	if s.workdir == "" {
 		result, err := m.deployment.Exec(ctx, s.containerID, core.Command{
 			Path: "/bin/sh", Args: []string{"-c", "pwd -P"}, User: s.execUser,
 		})
 		if err != nil {
-			return nil, s.rollbackStart(ctx, fmt.Errorf("resolve image working directory: %w", err))
+			return s.rollbackStart(ctx, fmt.Errorf("resolve image working directory: %w", err))
 		}
 		workdir, newline := strings.CutSuffix(result.Stdout, "\n")
 		if result.ExitCode != 0 || !newline {
-			return nil, s.rollbackStart(ctx, errors.New("resolve image working directory: pwd failed or returned incomplete output"))
+			return s.rollbackStart(ctx, errors.New("resolve image working directory: pwd failed or returned incomplete output"))
 		}
 		if _, err := cleanContainerWorkdir(workdir); err != nil {
-			return nil, s.rollbackStart(ctx, fmt.Errorf("resolve image working directory: %w", err))
+			return s.rollbackStart(ctx, fmt.Errorf("resolve image working directory: %w", err))
 		}
 		s.workdir = workdir
 	}
 	m.logger.WithContext(ctx).WithFields(logrus.Fields{"container": s.containerName, "placement": s.connectivity.Placement}).Info("task sandbox started")
-	return s, nil
+	return nil
 }
 
 // Stop releases a sandbox created by this manager.

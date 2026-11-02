@@ -83,15 +83,8 @@ unauthenticated; one service host key is retained for the SSH handshake.
 E2B lifecycle semantics and a future E2B-compatible harness protocol are separate
 from the internal gRPC control transport. No E2B wire compatibility is implemented
 or verified. Current harness tool traffic retains its native SSH protocol; the
-existing control API registers, looks up and releases borrowed sandbox access.
-
-Harness launch waits for bridge registration, because the bridge picks a
-sandbox's SSH port only when the sandbox registers (see
-[cold and warm starts](configuration.md#cold-and-warm-starts)). A bridge that
-reserves the port before the sandbox exists, and binds the sandbox to it once
-started, would let the harness launch alongside the sandbox without changing
-either harness. Tool calls would then have to wait for, or fail on, a sandbox
-that has not finished starting.
+existing control API reserves, registers, looks up and releases borrowed
+sandbox access.
 
 See the [deployment contract](design/deployment.md),
 [Docker implementation](implementation/docker.md),

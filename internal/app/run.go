@@ -47,6 +47,9 @@ type Wiring struct {
 	// Placement is the run's, set once its infrastructure has started, so a
 	// harness can be prepared before its sandbox exists.
 	Placement core.RuntimePlacement
+	// Workdirs holds the resolved working directories of task images that name
+	// none, so a harness can start alongside its sandbox.
+	Workdirs map[runner.WorkdirKey]string
 }
 
 type Dependencies struct {
@@ -243,6 +246,9 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 	go func() {
 		completed <- executeAndRecord(runCtx, func(executionCtx context.Context) (core.RunResult, error) {
 			return runWithInfrastructure(executionCtx, cfg, runID, outputRoot, logger, dependencies.Wiring, func(executionCtx context.Context, taskWiring Wiring) (core.RunResult, error) {
+				if cfg.Execution.Parallel() {
+					taskWiring.Workdirs = resolveWorkdirs(executionCtx, cfg, runID, outputRoot, catalog.Tasks, taskWiring, logger)
+				}
 				return runProfile(executionCtx, cfg.Name, runID, cfg.Benchmark.Tasks, cfg.Execution.Concurrency, cfg.Execution.Loop, schedule,
 					func(taskCtx context.Context, occurrence taskOccurrence) (core.RunResult, error) {
 						experiment, err := buildTaskExperiment(cfg, prepared.Model, prepared.EffectiveGPUIndices, runID, outputRoot, occurrence.logicalID, occurrence.executionID, harnessLookup, logger, catalog, taskWiring)
@@ -353,7 +359,7 @@ func buildTaskExperiment(cfg config.Config, model core.ModelConfig, effectiveGPU
 	}
 	benchmarkRunner, err := runner.New(benchmark, harness.Harness, sandbox.Sandbox, bridge, runner.Options{
 		Name: cfg.Name, RunID: runID, OutputDir: outputRoot, Model: model, Logger: logger,
-		ParallelStart: cfg.Execution.Parallel(), Placement: wiring.Placement, Warmup: warmup,
+		ParallelStart: cfg.Execution.Parallel(), Placement: wiring.Placement, Workdirs: wiring.Workdirs, Warmup: warmup,
 		RuntimeOverrides: runner.RuntimeOverrides{
 			HarnessResources:      runner.ResourceOverrides{CPU: cfg.Overrides.HarnessResources.CPU, MemoryMB: cfg.Overrides.HarnessResources.MemoryMB},
 			AgentSandboxResources: runner.ResourceOverrides{CPU: cfg.Overrides.AgentSandboxResources.CPU, MemoryMB: cfg.Overrides.AgentSandboxResources.MemoryMB, StorageMB: cfg.Overrides.AgentSandboxResources.StorageMB},

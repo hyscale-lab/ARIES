@@ -49,8 +49,14 @@ type AgentHarness interface {
 
 // ToolSandbox owns the lifecycle of the task environment the agent uses and of
 // any fresh evaluation sandboxes requested through SandboxRequest.Purpose.
+// Reserve names a sandbox and starts its task services without creating it,
+// given its working directory, so its connectivity and bridge target are known
+// while it starts; Launch then creates and starts it. Start does both. Stop
+// accepts a sandbox at either stage.
 type ToolSandbox interface {
 	Start(context.Context, core.SandboxRequest) (Sandbox, error)
+	Reserve(context.Context, core.SandboxRequest) (Sandbox, error)
+	Launch(context.Context, Sandbox) error
 	Stop(context.Context, Sandbox) error
 }
 
@@ -77,8 +83,12 @@ type StreamExecutor interface {
 }
 
 // ToolBridge grants and then positively revokes harness access to a sandbox.
+// Reserve, for a sandbox from ToolSandbox.Reserve, returns the endpoint before
+// the sandbox has started; Start then grants access to the started sandbox on
+// it, and access is not served before Start. Without Reserve, Start does both.
 // A nil Stop error is the positive revocation confirmation.
 type ToolBridge interface {
+	Reserve(context.Context, Sandbox) (core.ToolEndpoint, error)
 	Start(context.Context, Sandbox) (core.ToolEndpoint, error)
 	Stop(context.Context) error
 }

@@ -25,10 +25,15 @@ type Options struct {
 	CleanupTimeout   time.Duration
 	Logger           *logrus.Logger
 	RuntimeOverrides RuntimeOverrides
-	// ParallelStart prepares the harness while the sandbox starts, in the
-	// run's Placement, instead of after the bridge is registered.
+	// ParallelStart starts the harness while the sandbox starts, in the run's
+	// Placement. When the sandbox's working directory is known, from the task
+	// or Workdirs, the harness is fully started alongside it; otherwise only
+	// prepared, and started once the bridge is registered.
 	ParallelStart bool
 	Placement     core.RuntimePlacement
+	// Workdirs gives the working directory of task images that do not name
+	// one, as a sandbox started from them would resolve it.
+	Workdirs map[WorkdirKey]string
 	// Warmup, when set, sends warm-up instructions through the started
 	// harness before the task's.
 	Warmup *Warmup
@@ -43,6 +48,9 @@ type Warmup struct {
 	Tolerance   float64
 	Max         int
 }
+
+// WorkdirKey names a task image and the user its commands run as.
+type WorkdirKey struct{ Image, ExecUser string }
 
 func (w Warmup) stable(durations []time.Duration) bool {
 	if len(durations) < w.Stable {
@@ -83,6 +91,7 @@ type Runner struct {
 	runtimeOverrides RuntimeOverrides
 	parallelStart    bool
 	placement        core.RuntimePlacement
+	workdirs         map[WorkdirKey]string
 	warmup           *Warmup
 }
 
@@ -133,6 +142,7 @@ func New(benchmark Benchmark, harness AgentHarness, toolSandbox ToolSandbox, bri
 		runtimeOverrides: cloneRuntimeOverrides(options.RuntimeOverrides),
 		parallelStart:    options.ParallelStart,
 		placement:        options.Placement,
+		workdirs:         maps.Clone(options.Workdirs),
 		warmup:           options.Warmup,
 	}, nil
 }
@@ -232,8 +242,12 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 			result.Phases = append(result.Phases, core.Phase{Name: name, StartedAt: began, Duration: time.Since(began)})
 		}
 	}
-	// prepared delivers the outcome of a parallel harness preparation once.
+	// prepared delivers the outcome of a parallel harness preparation, or of
+	// an early start, once; cancelEarly ends an early start the task gave up on.
 	var prepared chan error
+	earlyCtx, cancelEarly := context.WithCancel(ctx)
+	defer cancelEarly()
+	earlyCanceled := false
 	waitPrepared := func() error {
 		if prepared == nil {
 			return nil
@@ -250,7 +264,12 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 	}
 	finish := func() (core.TaskResult, error) {
 		// A preparation still running must end before the harness is stopped.
-		if err := waitPrepared(); err != nil {
+		if prepared != nil {
+			earlyCanceled = true
+			cancelEarly()
+		}
+		// A start this task canceled is not a harness failure of its own.
+		if err := waitPrepared(); err != nil && !(earlyCanceled && errors.Is(err, context.Canceled)) {
 			allErrors = append(allErrors, fmt.Errorf("prepare harness: %w", err))
 		}
 		cleanup := ensureCleanupContext()
@@ -324,29 +343,81 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		OutputDir:      r.outputDir,
 		NoSandboxTools: task.NoSandboxTools,
 	}
-	if r.parallelStart {
+	if sandboxEnvironment.Workdir == "" {
+		sandboxEnvironment.Workdir = r.workdirs[WorkdirKey{Image: sandboxEnvironment.Image, ExecUser: sandboxEnvironment.ExecUser}]
+	}
+	sandboxRequest := core.SandboxRequest{RunID: r.runID, TaskID: task.ID, Environment: sandboxEnvironment}
+	// With the working directory known, the sandbox and its bridge endpoint are
+	// reserved first, so the harness is configured and started while the
+	// sandbox starts. The bridge serves the endpoint only once it registers the
+	// started, sanitized sandbox.
+	early := r.parallelStart && sandboxEnvironment.Workdir != ""
+	var err error
+	var reserved core.ToolEndpoint
+	if early {
+		endPhase := phase(core.PhaseSandboxReserve)
+		sandbox, err = r.toolSandbox.Reserve(ctx, sandboxRequest)
+		endPhase()
+		if err != nil {
+			allErrors = append(allErrors, fmt.Errorf("reserve sandbox: %w", err))
+			return finish()
+		}
+		if sandbox == nil {
+			allErrors = append(allErrors, errors.New("reserve sandbox: returned a nil sandbox"))
+			return finish()
+		}
+		sandboxActive = true
+		if sandbox.Connectivity().Placement != r.placement {
+			allErrors = append(allErrors, errors.New("reserve sandbox: the sandbox's placement differs from the run's"))
+			return finish()
+		}
+		endPhase = phase(core.PhaseBridgeReserve)
+		reserved, err = r.bridge.Reserve(ctx, sandbox)
+		endPhase()
+		// Reserve may open access before it fails; Stop confirms its release.
+		bridgeActive = true
+		if err != nil {
+			allErrors = append(allErrors, fmt.Errorf("reserve bridge: %w", err))
+			return finish()
+		}
+		request.Connectivity = sandbox.Connectivity()
+		request.Endpoint = reserved
+		harnessActive = true
+		ready := request
+		prepared = make(chan error, 1)
+		go func() {
+			endPrepare := phase(core.PhaseHarnessPrepare)
+			err := r.harness.Prepare(earlyCtx, ready)
+			endPrepare()
+			if err == nil {
+				endStart := phase(core.PhaseHarnessStart)
+				err = r.harness.Start(earlyCtx, ready)
+				endStart()
+			}
+			prepared <- err
+		}()
+	} else if r.parallelStart {
 		// The harness's runtime needs only the run's placement, so it is
 		// created while the sandbox starts. Prepare may allocate before it
 		// fails, and Stop is idempotent, so the harness is always stopped.
 		harnessActive = true
-		early := request
-		early.Connectivity = core.HarnessConnectivity{Placement: r.placement}
+		created := request
+		created.Connectivity = core.HarnessConnectivity{Placement: r.placement}
 		prepared = make(chan error, 1)
 		go func() {
 			endPrepare := phase(core.PhaseHarnessPrepare)
-			err := r.harness.Prepare(ctx, early)
+			err := r.harness.Prepare(ctx, created)
 			endPrepare()
 			prepared <- err
 		}()
 	}
 
-	var err error
 	endPhase := phase(core.PhaseSandboxStart)
-	sandbox, err = r.toolSandbox.Start(ctx, core.SandboxRequest{
-		RunID:       r.runID,
-		TaskID:      task.ID,
-		Environment: sandboxEnvironment,
-	})
+	if early {
+		err = r.toolSandbox.Launch(ctx, sandbox)
+	} else {
+		sandbox, err = r.toolSandbox.Start(ctx, sandboxRequest)
+	}
 	endPhase()
 	if err != nil {
 		allErrors = append(allErrors, fmt.Errorf("start sandbox: %w", err))
@@ -372,29 +443,36 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 	// rollback fails. Stop is idempotent, so every Start attempt must be followed
 	// by a positive revocation confirmation before sandbox cleanup.
 	bridgeActive = true
+	if err == nil && early && endpoint.Address != reserved.Address {
+		err = errors.New("the bridge registered the sandbox at a different endpoint than it reserved")
+	}
 	if err != nil {
 		allErrors = append(allErrors, fmt.Errorf("start bridge: %w", err))
 		return finish()
 	}
 	result.ToolLogPaths = append([]string(nil), endpoint.LogPaths...)
 
-	request.Connectivity = sandbox.Connectivity()
-	request.Endpoint = endpoint
-	if r.parallelStart {
+	if early {
 		err = waitPrepared()
-		if err == nil && request.Connectivity.Placement != r.placement {
-			err = errors.New("the sandbox's placement differs from the run's")
-		}
 	} else {
-		endPhase = phase(core.PhaseHarnessPrepare)
-		err = r.harness.Prepare(ctx, request)
-		endPhase()
-		harnessActive = true
-	}
-	if err == nil {
-		endPhase = phase(core.PhaseHarnessStart)
-		err = r.harness.Start(ctx, request)
-		endPhase()
+		request.Connectivity = sandbox.Connectivity()
+		request.Endpoint = endpoint
+		if r.parallelStart {
+			err = waitPrepared()
+			if err == nil && request.Connectivity.Placement != r.placement {
+				err = errors.New("the sandbox's placement differs from the run's")
+			}
+		} else {
+			endPhase = phase(core.PhaseHarnessPrepare)
+			err = r.harness.Prepare(ctx, request)
+			endPhase()
+			harnessActive = true
+		}
+		if err == nil {
+			endPhase = phase(core.PhaseHarnessStart)
+			err = r.harness.Start(ctx, request)
+			endPhase()
+		}
 	}
 	// Prepare and Start may fail after allocating task-local resources. Stop is
 	// idempotent, so every attempt must be followed by a positive stop

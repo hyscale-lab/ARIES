@@ -26,7 +26,9 @@ func PrepareCommand(command core.Command, workdir, user string) (core.Command, e
 func (s *Sandbox) ExportBridgeTarget() (core.BridgeTarget, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.containerOwned || s.stopping || s.stopped {
+	// A reserved sandbox exports its target before its container exists, for
+	// the bridge to reserve its access; RuntimeID is then empty.
+	if !(s.containerOwned || s.environmentOwned) || s.stopping || s.stopped {
 		return core.BridgeTarget{}, errors.New("sandbox is not available for bridge assignment")
 	}
 	backend, ok := s.deployment.(interface{ BridgeBackend() string })

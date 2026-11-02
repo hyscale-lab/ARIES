@@ -37,10 +37,11 @@ harness stop → confirm bridge revocation → evaluate → remove evaluation sa
 → remove task sandbox → release attachment. Record every task failure in
 `TaskResult.Error`.
 
-Prepare the harness (runtime created from the run's placement; sandbox endpoint
-pending) concurrently with sandbox start, or after bridge registration when
-`execution.parallel_start` is false; Start then configures it with the sandbox's
-endpoint.
+With the workdir known, reserve the sandbox and its bridge endpoint and start
+the harness on that endpoint during sandbox launch; the bridge serves it only
+after registering the sanitized sandbox. Otherwise prepare the harness during
+sandbox start (or after registration when `execution.parallel_start` is false)
+and start it after registration.
 Optional warm-ups (`execution.warmup`) run before the task's single instruction,
 each as its own conversation.
 

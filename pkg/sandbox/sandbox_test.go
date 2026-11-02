@@ -670,3 +670,54 @@ func TestPathAndDownloadLimitRejectionBeforeDeployment(t *testing.T) {
 		t.Fatal("rejected root workdir", err)
 	}
 }
+
+// Reserve starts only the task services, so connectivity is known before the
+// container exists; Launch then creates it.
+func TestReserveThenLaunchCreatesTheContainerOnlyAtLaunch(t *testing.T) {
+	f := &fakeDeployment{}
+	m := testManager(t, f)
+	live, err := m.Reserve(context.Background(), testRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(f.calls, "create") || live.Connectivity().Placement.AttachmentID != "private-network" {
+		t.Fatalf("reserved sandbox: calls %v connectivity %+v", f.calls, live.Connectivity())
+	}
+	if err := m.Launch(context.Background(), live); err != nil {
+		t.Fatal(err)
+	}
+	s := live.(*Sandbox)
+	if !slices.Contains(f.calls, "create") || s.ContainerID() != "container-id" || f.request.Workdir != "/work" {
+		t.Fatalf("launched sandbox: calls %v request %+v", f.calls, f.request)
+	}
+	if err := m.Launch(context.Background(), live); err == nil {
+		t.Fatal("a sandbox was launched twice")
+	}
+	if err := m.Stop(context.Background(), live); err != nil || f.stopCalls != 1 || f.networkStops != 1 {
+		t.Fatalf("stop: %v runtime=%d attachment=%d", err, f.stopCalls, f.networkStops)
+	}
+}
+
+// Nothing can run in a sandbox that has not started, so its working directory
+// must be known to reserve it.
+func TestReserveNeedsTheWorkingDirectory(t *testing.T) {
+	f := &fakeDeployment{}
+	request := testRequest()
+	request.Environment.Workdir = ""
+	if _, err := testManager(t, f).Reserve(context.Background(), request); err == nil || f.environmentRequest.RunID != "" {
+		t.Fatalf("reserved without a working directory: %v", err)
+	}
+}
+
+// A reserved sandbox that never launches stops only its task services.
+func TestStopReleasesAReservedSandboxThatNeverLaunched(t *testing.T) {
+	f := &fakeDeployment{}
+	m := testManager(t, f)
+	live, err := m.Reserve(context.Background(), testRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Stop(context.Background(), live); err != nil || f.stopCalls != 0 || f.networkStops != 1 {
+		t.Fatalf("stop: %v runtime=%d attachment=%d", err, f.stopCalls, f.networkStops)
+	}
+}

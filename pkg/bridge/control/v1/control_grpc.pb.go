@@ -19,6 +19,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	BridgeControl_ReserveSandbox_FullMethodName  = "/aries.bridge.control.v1.BridgeControl/ReserveSandbox"
 	BridgeControl_RegisterSandbox_FullMethodName = "/aries.bridge.control.v1.BridgeControl/RegisterSandbox"
 	BridgeControl_GetSandbox_FullMethodName      = "/aries.bridge.control.v1.BridgeControl/GetSandbox"
 	BridgeControl_ReleaseSandbox_FullMethodName  = "/aries.bridge.control.v1.BridgeControl/ReleaseSandbox"
@@ -28,6 +29,9 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type BridgeControlClient interface {
+	// ReserveSandbox opens a sandbox's access before the sandbox exists;
+	// RegisterSandbox then binds the started sandbox to it.
+	ReserveSandbox(ctx context.Context, in *ReserveSandboxRequest, opts ...grpc.CallOption) (*SandboxAccess, error)
 	RegisterSandbox(ctx context.Context, in *RegisterSandboxRequest, opts ...grpc.CallOption) (*SandboxAccess, error)
 	GetSandbox(ctx context.Context, in *SandboxRequest, opts ...grpc.CallOption) (*SandboxAccess, error)
 	ReleaseSandbox(ctx context.Context, in *SandboxRequest, opts ...grpc.CallOption) (*SandboxAccess, error)
@@ -39,6 +43,16 @@ type bridgeControlClient struct {
 
 func NewBridgeControlClient(cc grpc.ClientConnInterface) BridgeControlClient {
 	return &bridgeControlClient{cc}
+}
+
+func (c *bridgeControlClient) ReserveSandbox(ctx context.Context, in *ReserveSandboxRequest, opts ...grpc.CallOption) (*SandboxAccess, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SandboxAccess)
+	err := c.cc.Invoke(ctx, BridgeControl_ReserveSandbox_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *bridgeControlClient) RegisterSandbox(ctx context.Context, in *RegisterSandboxRequest, opts ...grpc.CallOption) (*SandboxAccess, error) {
@@ -75,6 +89,9 @@ func (c *bridgeControlClient) ReleaseSandbox(ctx context.Context, in *SandboxReq
 // All implementations must embed UnimplementedBridgeControlServer
 // for forward compatibility.
 type BridgeControlServer interface {
+	// ReserveSandbox opens a sandbox's access before the sandbox exists;
+	// RegisterSandbox then binds the started sandbox to it.
+	ReserveSandbox(context.Context, *ReserveSandboxRequest) (*SandboxAccess, error)
 	RegisterSandbox(context.Context, *RegisterSandboxRequest) (*SandboxAccess, error)
 	GetSandbox(context.Context, *SandboxRequest) (*SandboxAccess, error)
 	ReleaseSandbox(context.Context, *SandboxRequest) (*SandboxAccess, error)
@@ -88,6 +105,9 @@ type BridgeControlServer interface {
 // pointer dereference when methods are called.
 type UnimplementedBridgeControlServer struct{}
 
+func (UnimplementedBridgeControlServer) ReserveSandbox(context.Context, *ReserveSandboxRequest) (*SandboxAccess, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReserveSandbox not implemented")
+}
 func (UnimplementedBridgeControlServer) RegisterSandbox(context.Context, *RegisterSandboxRequest) (*SandboxAccess, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RegisterSandbox not implemented")
 }
@@ -116,6 +136,24 @@ func RegisterBridgeControlServer(s grpc.ServiceRegistrar, srv BridgeControlServe
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&BridgeControl_ServiceDesc, srv)
+}
+
+func _BridgeControl_ReserveSandbox_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReserveSandboxRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BridgeControlServer).ReserveSandbox(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BridgeControl_ReserveSandbox_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BridgeControlServer).ReserveSandbox(ctx, req.(*ReserveSandboxRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _BridgeControl_RegisterSandbox_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -179,6 +217,10 @@ var BridgeControl_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "aries.bridge.control.v1.BridgeControl",
 	HandlerType: (*BridgeControlServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ReserveSandbox",
+			Handler:    _BridgeControl_ReserveSandbox_Handler,
+		},
 		{
 			MethodName: "RegisterSandbox",
 			Handler:    _BridgeControl_RegisterSandbox_Handler,

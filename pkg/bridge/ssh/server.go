@@ -49,6 +49,13 @@ func (session *bridgeSession) handleConnection(ctx context.Context, connection n
 		delete(session.connections, connection)
 		session.mu.Unlock()
 	}()
+	// A sandbox reserved before it started is served once it is bound; the
+	// handshake waits for that, and revocation ends the wait.
+	select {
+	case <-session.bound:
+	case <-ctx.Done():
+		return
+	}
 	if err := connection.SetDeadline(time.Now().Add(lockedConnectTimeout)); err != nil {
 		return
 	}

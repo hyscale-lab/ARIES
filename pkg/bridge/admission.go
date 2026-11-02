@@ -13,7 +13,16 @@ import (
 // permits resubmitting the same immutable binding; tool commands are never replayed.
 func (s *Session) registerSandbox(ctx context.Context, request *v1.RegisterSandboxRequest) (*v1.SandboxAccess, error) {
 	immutable := proto.Clone(request).(*v1.RegisterSandboxRequest)
-	access, err := s.service.client.RegisterSandbox(ctx, immutable)
+	return s.admit(ctx, func(ctx context.Context) (*v1.SandboxAccess, error) {
+		return s.service.client.RegisterSandbox(ctx, immutable)
+	})
+}
+
+// admit makes one admission call and reconciles an uncertain or still-pending
+// result by reading the sandbox's state, repeating the call when the bridge
+// has no record of it.
+func (s *Session) admit(ctx context.Context, call func(context.Context) (*v1.SandboxAccess, error)) (*v1.SandboxAccess, error) {
+	access, err := call(ctx)
 	for {
 		if ctx.Err() != nil {
 			return nil, errors.Join(err, ctx.Err())
@@ -33,7 +42,7 @@ func (s *Session) registerSandbox(ctx context.Context, request *v1.RegisterSandb
 		}
 		access, err = s.service.client.GetSandbox(ctx, s.request())
 		if status.Code(err) == codes.NotFound {
-			access, err = s.service.client.RegisterSandbox(ctx, immutable)
+			access, err = call(ctx)
 		}
 	}
 }

@@ -42,8 +42,8 @@ func serve(ctx context.Context, options ServeOptions, listener net.Listener) err
 	if err != nil {
 		return err
 	}
-	service, err := control.NewServer(control.Config{NewSandbox: func(request *v1.RegisterSandboxRequest) control.Sandbox {
-		return &nativeSandbox{options: options, request: request, signer: signer, root: filepath.Join(options.Config.OutputDir, request.SandboxId)}
+	service, err := control.NewServer(control.Config{NewSandbox: func(sandboxID string) control.Sandbox {
+		return &nativeSandbox{options: options, sandboxID: sandboxID, signer: signer, root: filepath.Join(options.Config.OutputDir, sandboxID)}
 	}})
 	if err != nil {
 		return err
@@ -73,30 +73,27 @@ func serve(ctx context.Context, options ServeOptions, listener net.Listener) err
 
 // This object belongs to one control entry; no second assignment registry exists.
 type nativeSandbox struct {
-	options  ServeOptions
-	request  *v1.RegisterSandboxRequest
-	signer   ssh.Signer
-	native   NativeServer
-	borrowed *target.Borrowed
-	root     string
-	ready    bool
+	options   ServeOptions
+	sandboxID string
+	signer    ssh.Signer
+	native    NativeServer
+	borrowed  *target.Borrowed
+	root      string
+	ready     bool
 }
 
-func (s *nativeSandbox) Register(ctx context.Context) (*v1.Endpoint, error) {
-	descriptor := control.TargetFromRegistration(s.request, s.options.Config.RunID, s.options.Config.Backend)
+// Reserve opens the sandbox's native endpoint before its target exists.
+func (s *nativeSandbox) Reserve(ctx context.Context) (*v1.Endpoint, error) {
 	var err error
-	s.borrowed, err = target.New(ctx, descriptor, s.options.Backend)
+	s.native, err = s.options.NewNative(s.signer, s.sandboxID, s.root)
 	if err != nil {
 		return nil, err
 	}
-	s.native, err = s.options.NewNative(s.signer, s.request.SandboxId, s.root)
+	endpoint, err := s.native.Listen(ctx)
 	if err != nil {
 		return nil, err
 	}
-	endpoint, err := s.native.StartTarget(ctx, s.borrowed)
-	if err != nil {
-		return nil, err
-	}
+	s.ready = true
 	_, port, err := net.SplitHostPort(endpoint.Address)
 	if err != nil {
 		return nil, err
@@ -105,8 +102,18 @@ func (s *nativeSandbox) Register(ctx context.Context) (*v1.Endpoint, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.ready = true
 	return &v1.Endpoint{Port: uint32(number), User: endpoint.Username, Transport: endpoint.Protocol}, nil
+}
+
+// Bind validates the registered target and serves it on the reserved endpoint.
+func (s *nativeSandbox) Bind(ctx context.Context, request *v1.RegisterSandboxRequest) error {
+	descriptor := control.TargetFromRegistration(request, s.options.Config.RunID, s.options.Config.Backend)
+	var err error
+	s.borrowed, err = target.New(ctx, descriptor, s.options.Backend)
+	if err != nil {
+		return err
+	}
+	return s.native.Bind(ctx, s.borrowed)
 }
 func (s *nativeSandbox) Release(ctx context.Context) ([]*v1.Artifact, error) {
 	if s.borrowed != nil {

@@ -1081,3 +1081,66 @@ func TestInvalidPreparedActionCannotExecute(t *testing.T) {
 		t.Fatalf("refusal evidence = %#v", records)
 	}
 }
+
+// A client that connects before the sandbox is bound waits for the bind, then
+// is served; a client still waiting when the endpoint is revoked is closed.
+func TestConnectionsWaitForTheSandboxToBeBound(t *testing.T) {
+	manager := newContractManager(t, t.TempDir())
+	endpoint, err := manager.Listen(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dialed := make(chan error, 1)
+	go func() {
+		client, err := ssh.Dial("tcp", endpoint.Address, bridgeClientConfig(t, endpoint))
+		if err == nil {
+			_, _, err = client.SendRequest("keepalive@openssh.com", true, nil)
+			_ = client.Close()
+		}
+		dialed <- err
+	}()
+	select {
+	case err := <-dialed:
+		t.Fatalf("handshake finished before the sandbox was bound: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if err := manager.Bind(context.Background(), &contractSandbox{}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-dialed:
+		if err != nil {
+			t.Fatalf("bound handshake: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("handshake did not finish after the bind")
+	}
+	if err := manager.Bind(context.Background(), &contractSandbox{}); err == nil {
+		t.Fatal("a second sandbox was bound")
+	}
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	unbound := newContractManager(t, t.TempDir())
+	endpoint, err = unbound.Listen(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		_, err := ssh.Dial("tcp", endpoint.Address, bridgeClientConfig(t, endpoint))
+		dialed <- err
+	}()
+	time.Sleep(100 * time.Millisecond)
+	if err := unbound.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-dialed:
+		if err == nil {
+			t.Fatal("an unbound endpoint completed a handshake")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("revocation left a waiting connection open")
+	}
+}

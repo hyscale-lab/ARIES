@@ -84,7 +84,7 @@ func TestWorkspaceStartupAndRevocation(t *testing.T) {
 	}
 }
 
-func TestWorkspaceStartupRefusesCollisionsBeforeListening(t *testing.T) {
+func TestWorkspaceCollisionIsRefusedBeforeBinding(t *testing.T) {
 	for _, collision := range []string{"file", "directory", "symlink", "dangling-symlink", "ancestor-symlink", "ancestor-file"} {
 		t.Run(collision, func(t *testing.T) {
 			base := t.TempDir()
@@ -126,16 +126,19 @@ func TestWorkspaceStartupRefusesCollisionsBeforeListening(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			listened := false
 			dialect := &Dialect{}
 			fixture := testfixture.New(t, bridgessh.Options{Dialect: dialect, OutputDir: t.TempDir(), ResolveListen: func(context.Context) (core.BridgeListen, error) {
-				listened = true
 				return core.BridgeListen{BindHost: "127.0.0.1"}, nil
 			}})
 			server := &Server{manager: fixture.Manager, dialect: dialect}
 			_, err = server.StartTarget(context.Background(), &workspaceExecutor{workdir: workdir, alias: alias})
-			if err == nil || listened {
-				t.Fatalf("collision start = %v; listened %v", err, listened)
+			if err == nil {
+				t.Fatal("collision start succeeded")
+			}
+			// The reserved endpoint was never bound, so nothing ran there, and
+			// stopping it releases it.
+			if err := server.Stop(context.Background()); err != nil {
+				t.Fatalf("stop after refused bind: %v", err)
 			}
 			after, err := os.Lstat(watched)
 			if err != nil || !os.SameFile(before, after) || before.Mode() != after.Mode() {

@@ -69,8 +69,11 @@ type Manager struct {
 }
 
 type bridgeSession struct {
-	dialect       Dialect
+	dialect Dialect
+	// sandbox is set once by Bind, which then closes bound; connections wait
+	// for bound before their handshake.
 	sandbox       target.Executor
+	bound         chan struct{}
 	listener      net.Listener
 	configuration *gossh.ServerConfig
 	cancel        context.CancelFunc
@@ -126,15 +129,51 @@ func New(options Options) (*Manager, error) {
 	}, nil
 }
 
-// StartTarget serves a borrowed execution capability without sandbox lifecycle authority.
+// StartTarget serves a borrowed execution capability without sandbox lifecycle
+// authority, listening and binding in one step.
 func (manager *Manager) StartTarget(ctx context.Context, sandbox target.Executor) (core.ToolEndpoint, error) {
+	if sandbox == nil {
+		return core.ToolEndpoint{}, errors.New("SSH target is required")
+	}
+	endpoint, err := manager.Listen(ctx)
+	if err != nil {
+		return core.ToolEndpoint{}, err
+	}
+	if err := manager.Bind(ctx, sandbox); err != nil {
+		return core.ToolEndpoint{}, err
+	}
+	endpoint.Workdir = sandbox.Workdir()
+	return endpoint, nil
+}
+
+// Bind serves the sandbox on the endpoint Listen opened. Connections accepted
+// before it wait for it.
+func (manager *Manager) Bind(ctx context.Context, sandbox target.Executor) error {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if sandbox == nil {
+		return errors.New("SSH target is required")
+	}
+	session := manager.active
+	if session == nil || manager.stopping {
+		return errors.New("SSH bridge is not listening")
+	}
+	if session.sandbox != nil {
+		return errors.New("SSH bridge is already bound")
+	}
+	session.sandbox = sandbox
+	close(session.bound)
+	manager.logger.WithContext(ctx).WithField("container", sandbox.ContainerName()).Info("SSH bridge bound")
+	return nil
+}
+
+// Listen opens the sandbox's endpoint before its target exists. Its tool log
+// is created now, so the endpoint names it.
+func (manager *Manager) Listen(ctx context.Context) (core.ToolEndpoint, error) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	if manager.used || manager.active != nil || manager.stopping {
 		return core.ToolEndpoint{}, errors.New("SSH bridge is already active")
-	}
-	if sandbox == nil {
-		return core.ToolEndpoint{}, errors.New("SSH target is required")
 	}
 	listen, err := manager.resolveListen(ctx)
 	if err != nil {
@@ -146,7 +185,7 @@ func (manager *Manager) StartTarget(ctx context.Context, sandbox target.Executor
 	}
 	manager.used = true
 	session := &bridgeSession{dialect: manager.dialect,
-		sandbox: sandbox, sandboxID: manager.sandboxID, connections: make(map[net.Conn]struct{}),
+		bound: make(chan struct{}), sandboxID: manager.sandboxID, connections: make(map[net.Conn]struct{}),
 		replyRequest: func(request *gossh.Request, accepted bool) error { return request.Reply(accepted, nil) },
 	}
 	session.artifactDir = manager.outputDir
@@ -203,9 +242,8 @@ func (manager *Manager) StartTarget(ctx context.Context, sandbox target.Executor
 	manager.active = session
 	manager.stopErr = nil
 	address := listener.Addr().String()
-	manager.logger.WithContext(ctx).WithFields(logrus.Fields{"address": address, "container": sandbox.ContainerName()}).Info("SSH bridge started")
-	endpoint := core.ToolEndpoint{Protocol: "ssh", Address: address, Username: lockedUsername, Workdir: sandbox.Workdir(), LogPaths: session.logPaths()}
-	return endpoint, nil
+	manager.logger.WithContext(ctx).WithField("address", address).Info("SSH bridge listening")
+	return core.ToolEndpoint{Protocol: "ssh", Address: address, Username: lockedUsername, LogPaths: session.logPaths()}, nil
 }
 
 // logPaths omits ssh_raw.log when it was not retained, so the endpoint never

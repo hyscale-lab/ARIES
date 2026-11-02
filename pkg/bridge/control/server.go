@@ -19,16 +19,22 @@ import (
 )
 
 // Sandbox owns only this resource's native access and finalized evidence.
+// Reserve opens the access before any target exists; Bind then attaches the
+// registered target to it.
 type Sandbox interface {
-	Register(context.Context) (*v1.Endpoint, error)
+	Reserve(context.Context) (*v1.Endpoint, error)
+	Bind(context.Context, *v1.RegisterSandboxRequest) error
 	Release(context.Context) ([]*v1.Artifact, error)
 }
 type Config struct {
 	OperationTimeout time.Duration
-	NewSandbox       func(*v1.RegisterSandboxRequest) Sandbox
+	NewSandbox       func(sandboxID string) Sandbox
 }
 type entry struct {
-	mu        sync.Mutex
+	mu sync.Mutex
+	// taskID is set by a reservation or registration; request only once a
+	// target is bound.
+	taskID    string
 	request   *v1.RegisterSandboxRequest
 	access    *v1.SandboxAccess
 	native    Sandbox
@@ -73,21 +79,22 @@ func (e *entry) wait(ctx context.Context, ch <-chan struct{}) (*v1.SandboxAccess
 		return nil, status.FromContextError(ctx.Err()).Err()
 	}
 }
-func (s *Server) RegisterSandbox(ctx context.Context, r *v1.RegisterSandboxRequest) (*v1.SandboxAccess, error) {
-	if !identifier.MatchString(r.GetSandboxId()) || r.GetTarget().GetRuntimeId() == "" || strings.ContainsAny(r.GetTarget().GetRuntimeId(), "\x00\r\n") || !identifier.MatchString(r.GetMetadata().GetTaskId()) {
-		return nil, status.Error(codes.InvalidArgument, "sandbox identity, target and task metadata are required")
+
+// ReserveSandbox opens access for a sandbox that does not exist yet, so its
+// endpoint is known before the sandbox starts. A repeated reservation reports
+// the same access.
+func (s *Server) ReserveSandbox(ctx context.Context, r *v1.ReserveSandboxRequest) (*v1.SandboxAccess, error) {
+	if !identifier.MatchString(r.GetSandboxId()) || !identifier.MatchString(r.GetMetadata().GetTaskId()) {
+		return nil, status.Error(codes.InvalidArgument, "sandbox identity and task metadata are required")
 	}
 	s.mu.Lock()
 	if e := s.entries[r.SandboxId]; e != nil {
 		s.mu.Unlock()
 		e.mu.Lock()
 		defer e.mu.Unlock()
-		// An explicit release reserves even an unseen ID, closing a late registration.
-		if e.request == nil {
-			return e.snapshot(), nil
-		}
-		if !proto.Equal(e.request, r) {
-			return nil, status.Error(codes.AlreadyExists, "sandbox has a different immutable binding")
+		// An explicit release reserves even an unseen ID, closing a late reservation.
+		if e.taskID != "" && e.taskID != r.Metadata.TaskId {
+			return nil, status.Error(codes.AlreadyExists, "sandbox is reserved for a different task")
 		}
 		return e.snapshot(), nil
 	}
@@ -95,21 +102,109 @@ func (s *Server) RegisterSandbox(ctx context.Context, r *v1.RegisterSandboxReque
 		s.mu.Unlock()
 		return nil, status.Error(codes.FailedPrecondition, "bridge service is closing")
 	}
-	request := proto.Clone(r).(*v1.RegisterSandboxRequest)
-	e := &entry{request: request, access: &v1.SandboxAccess{SandboxId: r.SandboxId, State: v1.State_REGISTERING}, busy: true, operation: make(chan struct{})}
-	opctx, cancel := context.WithTimeout(context.Background(), s.cfg.OperationTimeout)
-	e.cancel = cancel
+	e := &entry{taskID: r.Metadata.TaskId, access: &v1.SandboxAccess{SandboxId: r.SandboxId, State: v1.State_REGISTERING}}
 	s.entries[r.SandboxId] = e
 	s.mu.Unlock()
+	e.mu.Lock()
+	ch := s.operate(e, v1.State_RESERVED, func(ctx context.Context, native Sandbox) (*v1.Endpoint, error) {
+		return native.Reserve(ctx)
+	})
+	e.mu.Unlock()
+	return e.wait(ctx, ch)
+}
+
+// RegisterSandbox binds a started sandbox's target to its reserved access, or
+// reserves and binds in one step when the sandbox was not reserved.
+func (s *Server) RegisterSandbox(ctx context.Context, r *v1.RegisterSandboxRequest) (*v1.SandboxAccess, error) {
+	if !identifier.MatchString(r.GetSandboxId()) || r.GetTarget().GetRuntimeId() == "" || strings.ContainsAny(r.GetTarget().GetRuntimeId(), "\x00\r\n") || !identifier.MatchString(r.GetMetadata().GetTaskId()) {
+		return nil, status.Error(codes.InvalidArgument, "sandbox identity, target and task metadata are required")
+	}
+	request := proto.Clone(r).(*v1.RegisterSandboxRequest)
+	bind := func(ctx context.Context, native Sandbox) error { return native.Bind(ctx, request) }
+	s.mu.Lock()
+	if e := s.entries[r.SandboxId]; e != nil {
+		s.mu.Unlock()
+		return s.bindReserved(ctx, e, request, bind)
+	}
+	if s.closing {
+		s.mu.Unlock()
+		return nil, status.Error(codes.FailedPrecondition, "bridge service is closing")
+	}
+	e := &entry{taskID: r.Metadata.TaskId, request: request, access: &v1.SandboxAccess{SandboxId: r.SandboxId, State: v1.State_REGISTERING}}
+	s.entries[r.SandboxId] = e
+	s.mu.Unlock()
+	e.mu.Lock()
+	ch := s.operate(e, v1.State_READY, func(ctx context.Context, native Sandbox) (*v1.Endpoint, error) {
+		endpoint, err := native.Reserve(ctx)
+		if err == nil {
+			err = bind(ctx, native)
+		}
+		return endpoint, err
+	})
+	e.mu.Unlock()
+	return e.wait(ctx, ch)
+}
+
+// bindReserved binds a target to an existing entry: a reservation awaiting
+// one, or an entry already bound or closed, which it reports unchanged.
+func (s *Server) bindReserved(ctx context.Context, e *entry, request *v1.RegisterSandboxRequest, bind func(context.Context, Sandbox) error) (*v1.SandboxAccess, error) {
+	e.mu.Lock()
+	// A reservation still opening its access is waited for, not reported.
+	for e.busy && e.request == nil {
+		ch := e.operation
+		e.mu.Unlock()
+		if _, err := e.wait(ctx, ch); err != nil {
+			return nil, err
+		}
+		e.mu.Lock()
+	}
+	if e.request != nil {
+		defer e.mu.Unlock()
+		if !proto.Equal(e.request, request) {
+			return nil, status.Error(codes.AlreadyExists, "sandbox has a different immutable binding")
+		}
+		return e.snapshot(), nil
+	}
+	// An explicit release reserves even an unseen ID, closing a late registration.
+	if e.access.State != v1.State_RESERVED {
+		defer e.mu.Unlock()
+		return e.snapshot(), nil
+	}
+	if e.taskID != request.Metadata.TaskId {
+		e.mu.Unlock()
+		return nil, status.Error(codes.AlreadyExists, "sandbox is reserved for a different task")
+	}
+	e.request = request
+	endpoint := e.access.Endpoint
+	ch := s.operate(e, v1.State_READY, func(ctx context.Context, native Sandbox) (*v1.Endpoint, error) {
+		return endpoint, bind(ctx, native)
+	})
+	e.mu.Unlock()
+	return e.wait(ctx, ch)
+}
+
+// operate runs one native operation for e, which the caller holds locked,
+// outside every lock, and records success as the given state. A failure
+// releases whatever the operation opened.
+func (s *Server) operate(e *entry, success v1.State, operation func(context.Context, Sandbox) (*v1.Endpoint, error)) chan struct{} {
+	e.access.State = v1.State_REGISTERING
+	e.busy = true
+	e.operation = make(chan struct{})
 	ch := e.operation
+	opctx, cancel := context.WithTimeout(context.Background(), s.cfg.OperationTimeout)
+	e.cancel = cancel
+	native := e.native
+	id := e.access.SandboxId
 	go func() {
-		native := s.cfg.NewSandbox(request)
+		if native == nil {
+			native = s.cfg.NewSandbox(id)
+		}
 		var endpoint *v1.Endpoint
 		var err error
 		if native == nil {
 			err = errors.New("native sandbox factory returned nil")
 		} else {
-			endpoint, err = native.Register(opctx)
+			endpoint, err = operation(opctx, native)
 		}
 		if err == nil && (endpoint == nil || endpoint.Port == 0 || endpoint.Port > 65535) {
 			err = errors.New("native bridge did not provide a ready endpoint")
@@ -125,14 +220,14 @@ func (s *Server) RegisterSandbox(ctx context.Context, r *v1.RegisterSandboxReque
 		}
 		if e.access.State == v1.State_REGISTERING {
 			e.access.Endpoint = endpoint
-			e.access.State = v1.State_READY
+			e.access.State = success
 		}
 		close(ch)
 		if e.access.State == v1.State_RELEASING {
 			s.releaseLocked(e)
 		}
 	}()
-	return e.wait(ctx, ch)
+	return ch
 }
 func (s *Server) find(id string) (*entry, error) {
 	if !identifier.MatchString(id) {

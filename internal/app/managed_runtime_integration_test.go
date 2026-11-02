@@ -240,7 +240,11 @@ func (*managedIntegrationSandbox) Start(context.Context, core.SandboxRequest) (r
 	return &stubSandbox{}, nil
 }
 
-func (*managedIntegrationSandbox) Stop(context.Context, runner.Sandbox) error { return nil }
+func (*managedIntegrationSandbox) Reserve(context.Context, core.SandboxRequest) (runner.Sandbox, error) {
+	return &stubSandbox{}, nil
+}
+func (*managedIntegrationSandbox) Launch(context.Context, runner.Sandbox) error { return nil }
+func (*managedIntegrationSandbox) Stop(context.Context, runner.Sandbox) error   { return nil }
 
 type managedIntegrationBenchmark struct{ id string }
 

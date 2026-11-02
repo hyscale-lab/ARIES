@@ -41,13 +41,19 @@ var backendIdentifier = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
 // Validate checks the shared grant contract. The selected backend must verify
 // support and the actual resource's immutable identity and ownership.
 func Validate(d core.BridgeTarget) error {
+	if d.RuntimeID == "" || len(d.RuntimeID) > 1024 || strings.ContainsAny(d.RuntimeID, "\x00\r\n") {
+		return errors.New("invalid immutable runtime identity")
+	}
+	return ValidateReservation(d)
+}
+
+// ValidateReservation checks everything but the runtime, which a sandbox
+// reserved before it started does not have yet.
+func ValidateReservation(d core.BridgeTarget) error {
 	for _, v := range []string{d.RunID, d.TaskID, d.SandboxID} {
 		if v == "" || len(v) > 256 || strings.ContainsAny(v, "/\\\x00\r\n") || v == "." || v == ".." {
 			return errors.New("invalid bridge target identity")
 		}
-	}
-	if d.RuntimeID == "" || len(d.RuntimeID) > 1024 || strings.ContainsAny(d.RuntimeID, "\x00\r\n") {
-		return errors.New("invalid immutable runtime identity")
 	}
 	if !backendIdentifier.MatchString(d.Backend) {
 		return errors.New("invalid bridge target backend identifier")

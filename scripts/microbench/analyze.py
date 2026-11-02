@@ -37,10 +37,13 @@ import statistics
 import sys
 from collections import defaultdict
 
-PHASES = ["sandbox_start", "sandbox_prepare", "bridge_register", "harness_prepare", "harness_start",
-          "harness_warmup", "harness_run", "harness_collect", "isolation", "evaluation", "cleanup"]
-# Phases before the first request.
-STARTUP = ["sandbox_start", "sandbox_prepare", "bridge_register", "harness_prepare", "harness_start"]
+PHASES = ["sandbox_reserve", "bridge_reserve", "sandbox_start", "sandbox_prepare", "bridge_register",
+          "harness_prepare", "harness_start", "harness_warmup", "harness_run", "harness_collect", "isolation",
+          "evaluation", "cleanup"]
+# Phases before the first request. They can overlap: the harness is created,
+# and with a known working directory also started, while the sandbox starts.
+STARTUP = ["sandbox_reserve", "bridge_reserve", "sandbox_start", "sandbox_prepare", "bridge_register",
+           "harness_prepare", "harness_start"]
 
 
 def parse_time(text):
@@ -160,6 +163,9 @@ def task_rows(entry, requests):
             row["provisioning_s"] = sum(row[name + "_s"] or 0 for name in ("sandbox_start", "sandbox_prepare", "bridge_register"))
             row["cold_startup_s"] = runs["cold"][0] - first
             row["cold_latency_s"] = runs["cold"][1] - first
+            # The part of start-up not spent starting the harness: the sandbox,
+            # bridge and harness container steps on the critical path.
+            row["startup_other_s"] = row["cold_startup_s"] - (row["harness_start_s"] or 0)
         if "warm" in runs:
             row["warm_latency_s"] = runs["warm"][1] - runs["warm"][0]
         # OpenClaw's own measure of the agent's run, which the native baseline
