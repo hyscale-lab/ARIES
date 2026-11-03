@@ -40,7 +40,18 @@ The first version uses the gRPC transport. The trace parser and timing logic do 
 
 ## 2. Scope and language
 
-A **sandbox call** is one bridge operation. One model-level **tool call** can cause several sandbox calls. This design replays sandbox calls. It does not replay model decisions or task arrivals ([bridge terms](bridge.md#terms), `docs/design/bridge.md:23-32`; `pkg/config/arrivals.go:19-34`). The [project glossary](../../GLOSSARY.md) names the replay trace, replay-ready trace, and replay mismatch.
+A **sandbox call** is one bridge operation. One model-level **tool call** can cause several sandbox calls. This design replays sandbox calls. It does not replay model decisions or task arrivals ([bridge terms](bridge.md#terms), `docs/design/bridge.md:23-32`; `pkg/config/arrivals.go:19-34`).
+
+| Term | Meaning | Avoid |
+| --- | --- | --- |
+| **Logical task** | A benchmark case selected by its catalog ID, before a run assigns an execution ID. | Task occurrence |
+| **Task occurrence** | One execution of a logical task, with its own run-local ID, sandbox, and call log. | Logical task |
+| **Sandbox-call replay** | A task execution that repeats recorded sandbox calls without an agent harness or agent model. | Task-arrival replay |
+| **Replay trace** | The recorded requests, expected responses, and timing of sandbox calls from one task occurrence. | Arrival trace |
+| **Replay-ready trace** | A replay trace with complete request inputs, response checks, and timing. | Complete log |
+| **Replay mismatch** | A difference between an expected sandbox-call response and the response to its replayed request. | Benchmark failure |
+
+A logical task differs from its per-run task occurrence (`internal/app/execution.go:32-43,84-112`).
 
 One replay trace belongs to one task occurrence. Replay selects the same benchmark and logical task, compares the recorded image reference and pinned benchmark revisions with the new run, and runs the benchmark's normal sandbox preparation. It does not prove that the prepared sandboxes have identical state. The image reference is a tag, which can name different bytes later (`internal/app/execution.go:32-43,84-112`; `internal/app/run.go:264-294`; `pkg/runner/runner.go:213-240`; `pkg/containerimage/image.go:20-38`). Replay may change the sandbox runtime from Docker to Kubernetes. Replay uses recorded `started_at` values to target each call's start time. It also preserves the initial wait and final wait. The gaps include opaque harness and model work; replay does not reproduce that work or inspect model responses. Network delay can move the bridge's actual start time. The benchmark verifier remains independent of the caller (`pkg/runner/interfaces.go:17-37`; `pkg/runner/runner.go:305-316`; `pkg/bridge/grpc/files.go:358-365`).
 
