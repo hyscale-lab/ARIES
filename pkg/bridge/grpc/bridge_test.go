@@ -167,6 +167,63 @@ func TestOutputBeyondTheLimitTruncates(t *testing.T) {
 	}
 }
 
+func TestReplayOutcomeUsesReturnedExecBytes(t *testing.T) {
+	executor := newFakeExecutor(nil)
+	executor.exitCode = 7
+	executor.stdout = bytes.Repeat([]byte("a"), defaultOutputLimit+1)
+	manager, client, endpoint := startBridge(t, executor, Options{OmitRawLog: true})
+	for _, length := range []int{defaultOutputLimit + 1, defaultOutputLimit + 2} {
+		executor.stdout = bytes.Repeat([]byte("a"), length)
+		response, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "print"})
+		if err != nil || len(response.GetStdout()) != defaultOutputLimit || !response.GetTruncated() {
+			t.Fatalf("truncated output = %v, %v", response, err)
+		}
+	}
+	executor.stdout[0] = 'b'
+	if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "print"}); err != nil {
+		t.Fatal(err)
+	}
+	stop(t, manager)
+	records := readToolCalls(t, endpoint.LogPaths[0])
+	if len(records) != 3 || records[0]["response_sha256"] == nil || records[0]["response_sha256"] != records[1]["response_sha256"] || records[0]["response_sha256"] == records[2]["response_sha256"] {
+		t.Fatalf("truncated output fingerprints: %#v", records)
+	}
+	if records[0]["stdout_bytes"] == records[1]["stdout_bytes"] || records[0]["response_bytes"] != records[1]["response_bytes"] {
+		t.Fatalf("produced counts changed the outcome: %#v", records)
+	}
+	if records[0]["grpc_code"] != codes.OK.String() || records[0]["exit_code"] != float64(executor.exitCode) {
+		t.Fatalf("nonzero command exit changed RPC status: %#v", records[0])
+	}
+}
+
+func TestReplayOutcomeCapturesExecExitAndReason(t *testing.T) {
+	executor := newFakeExecutor(nil)
+	manager, client, endpoint := startBridge(t, executor, Options{OmitRawLog: true})
+	for _, exit := range []int{0, 0, 7, 255} {
+		executor.exitCode = exit
+		if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "print"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	executor.execErr = errors.New("sandbox failed")
+	if response, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "print"}); err != nil || response.GetReason() != sandboxv1.Reason_REASON_SANDBOX_ERROR {
+		t.Fatalf("sandbox failure response = %v, %v", response, err)
+	}
+	stop(t, manager)
+	records := readToolCalls(t, endpoint.LogPaths[0])
+	if len(records) != 5 || records[0]["response_sha256"] == nil || records[0]["response_sha256"] != records[1]["response_sha256"] || records[1]["response_sha256"] == records[2]["response_sha256"] || records[3]["response_sha256"] == records[4]["response_sha256"] {
+		t.Fatalf("exit and reason fingerprints: %#v", records)
+	}
+	if records[3]["exit_code"] != records[4]["exit_code"] || records[3]["response_bytes"] != records[4]["response_bytes"] {
+		t.Fatalf("reason comparison changed exit or response length: %#v", records)
+	}
+	for _, record := range records {
+		if record["grpc_code"] != codes.OK.String() {
+			t.Fatalf("command failure changed gRPC status: %#v", record)
+		}
+	}
+}
+
 // The transport cap must never fire before truncation does. Both streams can
 // be full at once, so the cap has to clear twice the bound plus framing.
 func TestTruncationBindsBeforeTheTransportCap(t *testing.T) {
