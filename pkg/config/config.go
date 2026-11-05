@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/hyscale-lab/aries/pkg/containerimage"
 	"github.com/hyscale-lab/aries/pkg/core"
@@ -283,6 +284,20 @@ type HarnessConfig struct {
 	// configured and mean nothing to another harness. Such escape hatches go
 	// under this type-specific block rather than onto the shared fields.
 	Hermes *HarnessHermesConfig `json:"hermes,omitempty"`
+	// Plugins selects portable plugin packages pinned in the version catalog's
+	// plugins map. The same entries work with every harness that supports
+	// them; each renders the packages' skills and MCP servers natively.
+	Plugins []HarnessPluginConfig `json:"plugins,omitempty"`
+}
+
+// HarnessPluginConfig selects one portable plugin package by its catalog
+// name. SecretEnv maps environment variables of the package's MCP command
+// servers to host variables, as harness.mcp_servers secret_env does: the
+// values reach the servers through private files and never the profile,
+// rendered configuration, or results.
+type HarnessPluginConfig struct {
+	Name      string            `json:"name"`
+	SecretEnv map[string]string `json:"secret_env,omitempty"`
 }
 
 // HarnessHermesConfig is the harness.hermes block. It is valid only with
@@ -478,6 +493,22 @@ type Versions struct {
 	Toolathlon        ToolathlonVersions        `json:"toolathlon,omitempty"`
 	OpenClaw          OpenClawVersions          `json:"openclaw"`
 	Hermes            HermesVersions            `json:"hermes"`
+	// Plugins pins portable plugin packages by name; a profile selects them
+	// with harness.plugins. The name must equal the package manifest's name.
+	Plugins map[string]PluginVersions `json:"plugins,omitempty"`
+}
+
+// PluginVersions pins one portable plugin package (Agent Plugins 1.0.0):
+// either a Git repository at an exact revision, with the package optionally
+// in a subdirectory, or a local directory relative to the versions file.
+type PluginVersions struct {
+	RepositoryURL string `json:"repository_url,omitempty"`
+	Revision      string `json:"revision,omitempty"`
+	Subdirectory  string `json:"subdirectory,omitempty"`
+	Path          string `json:"path,omitempty"`
+	// ResolvedPath is Path made absolute against the versions file's
+	// directory by LoadVersions.
+	ResolvedPath string `json:"-"`
 }
 
 // ToolathlonVersions pins the Toolathlon checkout. Like the Hermes image, a
@@ -564,6 +595,11 @@ func Load(path string) (Config, error) {
 	if cfg.Benchmark.Type == "toolathlon" {
 		if err := validateRepositoryPin("toolathlon", versions.Toolathlon.RepositoryURL, versions.Toolathlon.Revision); err != nil {
 			return Config{}, fmt.Errorf("load version pins: %w", err)
+		}
+	}
+	for _, plugin := range cfg.Harness.Plugins {
+		if _, ok := versions.Plugins[plugin.Name]; !ok {
+			return Config{}, fmt.Errorf("harness.plugins: %q is not pinned in the version catalog's plugins", plugin.Name)
 		}
 	}
 	if cfg.OverridesFile != "" {
@@ -682,6 +718,19 @@ func LoadVersions(path string) (Versions, error) {
 	versions, err := DecodeVersions(f)
 	if err != nil {
 		return Versions{}, fmt.Errorf("decode version pins %q: %w", path, err)
+	}
+	for name, plugin := range versions.Plugins {
+		if plugin.Path == "" {
+			continue
+		}
+		resolved := plugin.Path
+		if !filepath.IsAbs(resolved) {
+			resolved = filepath.Join(filepath.Dir(path), resolved)
+		}
+		if plugin.ResolvedPath, err = filepath.Abs(resolved); err != nil {
+			return Versions{}, fmt.Errorf("resolve plugins.%s.path: %w", name, err)
+		}
+		versions.Plugins[name] = plugin
 	}
 	return versions, nil
 }
@@ -1076,6 +1125,29 @@ func (h *HarnessConfig) validate() error {
 			}
 		}
 	}
+	if len(h.Plugins) > 0 {
+		if h.Type != "openclaw" && h.Type != "hermes" {
+			return errors.New("harness.plugins requires OpenClaw or Hermes")
+		}
+		seenPlugins := make(map[string]bool, len(h.Plugins))
+		for _, plugin := range h.Plugins {
+			if !core.ValidPluginName(plugin.Name) {
+				return fmt.Errorf("harness.plugins: %q is not an Agent Plugins name", plugin.Name)
+			}
+			if seenPlugins[plugin.Name] {
+				return fmt.Errorf("harness.plugins: %q is selected twice", plugin.Name)
+			}
+			seenPlugins[plugin.Name] = true
+			for key, hostVar := range plugin.SecretEnv {
+				if !validEnvName(key) || !validEnvName(hostVar) {
+					return fmt.Errorf("harness.plugins %q: secret_env %q -> %q must map environment variable names", plugin.Name, key, hostVar)
+				}
+				if key == "PLUGIN_ROOT" || key == "PLUGIN_DATA" {
+					return fmt.Errorf("harness.plugins %q: secret_env must not set %s", plugin.Name, key)
+				}
+			}
+		}
+	}
 	switch h.Mode {
 	case "agent":
 		if h.Realtime != (HarnessRealtimeConfig{}) {
@@ -1358,7 +1430,46 @@ func (c Versions) validate() error {
 	if c.Hermes.GRPCIO != "" && !validPluginVersion(c.Hermes.GRPCIO) {
 		return errors.New("hermes.grpcio must be a dotted release number")
 	}
+	for name, plugin := range c.Plugins {
+		if err := plugin.validate("plugins." + name); err != nil {
+			return err
+		}
+		if !core.ValidPluginName(name) {
+			return fmt.Errorf("plugins.%s: name must be an Agent Plugins name (lowercase letters, digits, hyphens or periods)", name)
+		}
+	}
 	return nil
+}
+
+// validate requires exactly one source: a Git pin or a local path.
+func (p PluginVersions) validate(name string) error {
+	git := p.RepositoryURL != "" || p.Revision != ""
+	switch {
+	case git && p.Path != "":
+		return fmt.Errorf("%s: set repository_url and revision, or path, not both", name)
+	case git:
+		if err := validateRepositoryPin(name, p.RepositoryURL, p.Revision); err != nil {
+			return err
+		}
+		if p.Subdirectory != "" && !cleanRelativePath(p.Subdirectory) {
+			return fmt.Errorf("%s.subdirectory must be a clean relative path inside the repository", name)
+		}
+	case p.Path != "":
+		if p.Subdirectory != "" {
+			return fmt.Errorf("%s.subdirectory applies only to a repository", name)
+		}
+		if filepath.Clean(p.Path) != p.Path || strings.ContainsFunc(p.Path, unicode.IsControl) {
+			return fmt.Errorf("%s.path must be a clean path", name)
+		}
+	default:
+		return fmt.Errorf("%s: set repository_url and revision, or path", name)
+	}
+	return nil
+}
+
+func cleanRelativePath(value string) bool {
+	return !filepath.IsAbs(value) && filepath.Clean(value) == value && value != "." && value != ".." &&
+		!strings.HasPrefix(value, "../") && !strings.ContainsFunc(value, unicode.IsControl)
 }
 
 func validPluginVersion(version string) bool {

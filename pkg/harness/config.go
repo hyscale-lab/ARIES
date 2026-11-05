@@ -26,6 +26,10 @@ type Options struct {
 	// (Toolathlon's account tokens). They are read through the API-key lookup
 	// at Start; an unset variable is skipped.
 	RedactEnv []string
+	// Plugins are the profile's portable plugin packages. Their MCP servers
+	// are already part of MCPServers; native managers stage their files and
+	// render their skills.
+	Plugins []Plugin
 }
 
 // TTSOptions are the common speech synthesis inputs. Native transcription and

@@ -15,8 +15,8 @@ This page summarizes capabilities and limitations. Use the
 
 | Category | Supported implementation | Guide |
 | --- | --- | --- |
-| Agent harness | **OpenClaw** — text, realtime, and voice-transcribe modes; web tools and configurable subagent spawning | [Harness configuration](configuration.md), [realtime mode](configuration.md#realtime-openclaw-mode), [voice guide](voice_mode.md) |
-| Agent harness | **Hermes** — text and voice-transcribe modes through its native Gateway; web tools, context compaction, and custom request bodies for compatible backends | [Hermes configuration](configuration.md#hermes-context-window-compaction-and-request-extra-body), [voice guide](voice_mode.md) |
+| Agent harness | **OpenClaw** — text, realtime, and voice-transcribe modes; web tools, configurable subagent spawning, and portable plugins | [Harness configuration](configuration.md), [portable plugins](configuration.md#portable-plugins), [realtime mode](configuration.md#realtime-openclaw-mode), [voice guide](voice_mode.md) |
+| Agent harness | **Hermes** — text and voice-transcribe modes through its native Gateway; web tools, context compaction, custom request bodies for compatible backends, and portable plugins | [Hermes configuration](configuration.md#hermes-context-window-compaction-and-request-extra-body), [portable plugins](configuration.md#portable-plugins), [voice guide](voice_mode.md) |
 | Benchmark | **Terminal-Bench 2** — verifier-based terminal tasks | [Quick start](quick-start.md) |
 | Benchmark | **Deep Research Bench** — open-ended research reports with RACE grading and optional FACT citation checking; grading can be disabled | [Benchmark guide](benchmarks/deep-research-bench.md) |
 | Benchmark | **SWE-Atlas QA** — codebase Q&A with host-side rubric grading; grading can be disabled; only the QA track is implemented | [Benchmark guide](benchmarks/swe-atlas-qa.md) |
@@ -57,6 +57,12 @@ guides above.
   Images need `/bin/sh`, and the bridge and derived Hermes images must be
   published to a registry the cluster pulls from; `make k8s-images` does that. See the
   [Kubernetes implementation](implementation/kubernetes.md).
+- Portable plugins (Agent Plugins 1.0.0: skills and MCP servers) work with
+  OpenClaw and Hermes. Native harness plugins are not configurable. An MCP
+  command must be an executable file in the package or exist in the harness
+  image. In ARIES's OpenClaw sessions,
+  which run in sandbox mode, a skill is listed but its body cannot be opened. See
+  [portable plugins](implementation/harnesses.md#portable-plugins).
 - Realtime mode is OpenClaw-only and needs a separate TTS credential. See the
   [realtime setup](configuration.md#realtime-openclaw-mode).
 - External model servers are operated separately from ARIES. ARIES does not

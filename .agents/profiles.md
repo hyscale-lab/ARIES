@@ -3,6 +3,7 @@
 Start from `profiles/*.json`; consult the [schema](../pkg/config/config.go),
 [configuration reference](../docs/configuration.md), and [support matrix](../docs/supported.md).
 Use `configs/versions.json` for pins; do not duplicate the field inventory here.
+When selecting plugins, see [portable plugins](../docs/configuration.md#portable-plugins).
 
 - Keep role selection separate from placement. Harness and sandbox share a local
   Docker daemon and one run network; each run has one managed Docker bridge container.

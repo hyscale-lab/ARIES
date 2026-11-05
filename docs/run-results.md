@@ -192,6 +192,10 @@ SSH tool inputs, Docker sandbox logs, one-second CPU and memory samples,
 verifier stdout/stderr, and CTRF output. `aries.log` is the structured Logrus
 run log.
 
+A run with `harness.plugins` also writes `harness/plugins.json` for either
+harness: each package's pin, tree hash, staged files and bytes, skills, and MCP
+servers.
+
 OpenClaw text mode writes `harness/agent-result.json`. Realtime mode instead writes the
 private `harness/voice-instruction.txt`, `harness/voice-instruction.wav`, its
 metadata, and `harness/realtime-result.json`. These mode-specific harness and
