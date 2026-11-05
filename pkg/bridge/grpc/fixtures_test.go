@@ -40,6 +40,7 @@ type fakeExecutor struct {
 	// writeHook runs after WriteFile stores the file, as the Docker target
 	// confirms its rename; its error is the target's.
 	writeHook func(context.Context) error
+	readLimit int
 
 	mu       sync.Mutex
 	commands []core.Command
@@ -105,7 +106,19 @@ func (executor *fakeExecutor) OpenFile(_ context.Context, path string) (io.ReadC
 		return nil, nil, err
 	}
 	info, err := file.Stat()
+	if executor.readLimit > 0 {
+		return &limitedReadCloser{ReadCloser: file, limit: executor.readLimit}, info, err
+	}
 	return file, info, err
+}
+
+type limitedReadCloser struct {
+	io.ReadCloser
+	limit int
+}
+
+func (reader *limitedReadCloser) Read(content []byte) (int, error) {
+	return reader.ReadCloser.Read(content[:min(len(content), reader.limit)])
 }
 
 // fsName maps a sandbox path into the fake's file system, whose root "."
