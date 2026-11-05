@@ -211,6 +211,7 @@ type HarnessResult struct {
 type IsolationResult struct {
 	Status         string `json:"status"`
 	HarnessStopped bool   `json:"harness_stopped"`
+	CallerStopped  bool   `json:"caller_stopped,omitempty"`
 	BridgeRevoked  bool   `json:"bridge_revoked"`
 	Error          string `json:"error,omitempty"`
 }
@@ -224,6 +225,15 @@ type Evaluation struct {
 	Duration       time.Duration `json:"duration"`
 	LogPaths       []string      `json:"log_paths,omitempty"`
 	Error          string        `json:"error,omitempty"`
+	Reused         bool          `json:"reused,omitempty"`
+	SourceRunID    string        `json:"source_run_id,omitempty"`
+	SourceTaskID   string        `json:"source_task_id,omitempty"`
+}
+
+// ReplayResult records sandbox-call execution separately from the source grade.
+type ReplayResult struct {
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
 }
 
 // ObserverResult records observer-only evidence composed outside the Runner.
@@ -247,6 +257,7 @@ type TaskResult struct {
 	TaskID       string          `json:"task_id"`
 	ToolLogPaths []string        `json:"tool_log_paths,omitempty"`
 	Harness      HarnessResult   `json:"harness"`
+	Replay       *ReplayResult   `json:"replay,omitempty"`
 	Isolation    IsolationResult `json:"isolation"`
 	Evaluation   Evaluation      `json:"evaluation"`
 	Observer     ObserverResult  `json:"observer"`
