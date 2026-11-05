@@ -29,6 +29,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -93,11 +94,21 @@ type Chunk struct {
 
 // Recording is one stored response.
 type Recording struct {
-	Key         Key       `json:"key"`
-	RecordedAt  time.Time `json:"recorded_at"`
-	Status      int       `json:"status"`
-	ContentType string    `json:"content_type"`
-	Chunks      []Chunk   `json:"chunks"`
+	Key Key `json:"key"`
+	// Occurrence numbers the recordings of one key in the order they were
+	// made, from 1: a harness sends the same request again when a task runs
+	// twice on it, as a warm run does, and may be answered differently. Replay
+	// serves the nth request for a key with the nth recording, cycling for the
+	// next repetition. Recordings made before it existed have 0, and only the
+	// first of them for a key is served.
+	Occurrence int `json:"occurrence,omitempty"`
+	// Request is the body the harness sent, for reading a recording; replay
+	// does not use it.
+	Request     json.RawMessage `json:"request,omitempty"`
+	RecordedAt  time.Time       `json:"recorded_at"`
+	Status      int             `json:"status"`
+	ContentType string          `json:"content_type"`
+	Chunks      []Chunk         `json:"chunks"`
 }
 
 // Timing is one line of the request log.
@@ -112,9 +123,12 @@ type Timing struct {
 	RequestBytes int       `json:"request_bytes"`
 	ReplyBytes   int       `json:"reply_bytes"`
 	// Hit is false when replay had no recording for the request.
-	Hit   *bool  `json:"hit,omitempty"`
-	Error string `json:"error,omitempty"`
-	Note  string `json:"note,omitempty"`
+	Hit *bool `json:"hit,omitempty"`
+	// Occurrence is the recording a hit was served from, or the one a
+	// recorded reply was stored as.
+	Occurrence int    `json:"occurrence,omitempty"`
+	Error      string `json:"error,omitempty"`
+	Note       string `json:"note,omitempty"`
 }
 
 // Server is an http.Handler. Close releases its files.
@@ -123,9 +137,12 @@ type Server struct {
 	upstream *url.URL
 
 	mu         sync.Mutex
-	recordings map[string]Recording
-	store      *os.File
-	log        *os.File
+	recordings map[string][]Recording
+	// seen counts each key's requests: recorded ones in record mode, served
+	// ones in replay mode.
+	seen  map[string]int
+	store *os.File
+	log   *os.File
 }
 
 // New opens the store and log for the given mode.
@@ -148,7 +165,7 @@ func New(options Options) (*Server, error) {
 	if options.Sleep == nil {
 		options.Sleep = time.Sleep
 	}
-	server := &Server{options: options, recordings: map[string]Recording{}}
+	server := &Server{options: options, recordings: map[string][]Recording{}, seen: map[string]int{}}
 	switch options.Mode {
 	case ModeRecord:
 		upstream, err := url.Parse(options.Upstream)
@@ -179,8 +196,9 @@ func New(options Options) (*Server, error) {
 	return server, nil
 }
 
-// load reads the store. The first successful recording of each key wins: a
-// later one for the same key is the harness retrying, or a repeated run.
+// load reads the store, keeping each key's successful recordings in
+// occurrence order. Of recordings without an occurrence, only the first per
+// key is kept: a later one is the harness retrying, or a repeated run.
 func (server *Server) load() error {
 	file, err := os.Open(server.options.StorePath)
 	if err != nil {
@@ -202,9 +220,15 @@ func (server *Server) load() error {
 		if recording.Status != http.StatusOK {
 			continue
 		}
-		if _, seen := server.recordings[recording.Key.String()]; !seen {
-			server.recordings[recording.Key.String()] = recording
+		key := recording.Key.String()
+		kept := server.recordings[key]
+		if len(kept) != 0 && (recording.Occurrence == 0 || kept[0].Occurrence == 0 || slices.ContainsFunc(kept, func(r Recording) bool { return r.Occurrence == recording.Occurrence })) {
+			continue
 		}
+		server.recordings[key] = append(kept, recording)
+	}
+	for _, kept := range server.recordings {
+		slices.SortStableFunc(kept, func(a, b Recording) int { return a.Occurrence - b.Occurrence })
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("read recordings: %w", err)
@@ -335,6 +359,12 @@ func (server *Server) forward(w http.ResponseWriter, r *http.Request, body []byt
 	// A reply cut short is not stored: replaying it would truncate a turn.
 	if key != nil && timing.Error == "" {
 		recording.Key = *key
+		recording.Request = append(json.RawMessage(nil), body...)
+		server.mu.Lock()
+		server.seen[key.String()]++
+		recording.Occurrence = server.seen[key.String()]
+		server.mu.Unlock()
+		timing.Occurrence = recording.Occurrence
 		if err := server.appendRecording(recording); err != nil {
 			timing.Error = err.Error()
 		}
@@ -363,8 +393,12 @@ func (server *Server) replay(w http.ResponseWriter, r *http.Request, received ti
 	found := false
 	server.mu.Lock()
 	for i := range keys {
-		if recording, found = server.recordings[keys[i].String()]; found {
+		name := keys[i].String()
+		if kept := server.recordings[name]; len(kept) != 0 {
+			recording, found = kept[server.seen[name]%len(kept)], true
+			server.seen[name]++
 			timing.Key = &keys[i]
+			timing.Occurrence = recording.Occurrence
 			break
 		}
 	}

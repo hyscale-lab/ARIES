@@ -328,3 +328,94 @@ func TestReplayFindsARecordingMadeOnAnotherWeekday(t *testing.T) {
 		t.Fatalf("the hit was logged under %v, not the recording's key", timings[0]["key"])
 	}
 }
+
+// A task run twice on one harness sends the same request twice, and the
+// model may answer each differently. Both are recorded, with the request, and
+// replayed in order, cycling for the next repetition.
+func TestReplayServesEachOccurrenceOfARequestInOrder(t *testing.T) {
+	replies := []string{`{"reply":"cold"}`, `{"reply":"warm"}`}
+	calls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, replies[calls%2])
+		calls++
+	}))
+	defer upstream.Close()
+	directory := t.TempDir()
+	store := filepath.Join(directory, "recordings.jsonl")
+	recorder, err := New(Options{Mode: ModeRecord, Upstream: upstream.URL, StorePath: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(recorder)
+	body := chatBody("Reply DONE", 0, 3)
+	for range replies {
+		response, err := http.Post(proxy.URL+chatPath, "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+	}
+	proxy.Close()
+	recorder.Close()
+	lines := readLines(t, store)
+	if len(lines) != 2 || lines[0]["occurrence"] != 1.0 || lines[1]["occurrence"] != 2.0 || lines[0]["request"] == nil {
+		t.Fatalf("recordings = %v", lines)
+	}
+
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	replayer, err := New(Options{Mode: ModeReplay, StorePath: store, Now: clock.Now, Sleep: clock.Sleep})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer replayer.Close()
+	server := httptest.NewServer(replayer)
+	defer server.Close()
+	for _, want := range []string{replies[0], replies[1], replies[0], replies[1]} {
+		response, err := http.Post(server.URL+chatPath, "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		if string(got) != want {
+			t.Fatalf("replayed %s, want %s", got, want)
+		}
+	}
+}
+
+// Recordings made before occurrences existed keep serving the first one.
+func TestReplayKeepsTheFirstOfRecordingsWithoutOccurrences(t *testing.T) {
+	key, err := KeyOf([]byte(chatBody("Reply DONE", 0, 3)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file strings.Builder
+	for _, reply := range []string{`{"first":true}`, `{"first":false}`} {
+		line, _ := json.Marshal(Recording{Key: key, Status: http.StatusOK, Chunks: []Chunk{{Data: []byte(reply)}}})
+		file.Write(append(line, '\n'))
+	}
+	store := filepath.Join(t.TempDir(), "recordings.jsonl")
+	if err := os.WriteFile(store, []byte(file.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	replayer, err := New(Options{Mode: ModeReplay, StorePath: store, Now: clock.Now, Sleep: clock.Sleep})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer replayer.Close()
+	server := httptest.NewServer(replayer)
+	defer server.Close()
+	for range 2 {
+		response, err := http.Post(server.URL+chatPath, "application/json", strings.NewReader(chatBody("Reply DONE", 0, 3)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		if string(got) != `{"first":true}` {
+			t.Fatalf("replayed %s", got)
+		}
+	}
+}

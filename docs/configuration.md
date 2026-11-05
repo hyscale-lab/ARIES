@@ -107,7 +107,7 @@ profile repeatedly, listing each run in `.cache/microbench-runs/manifest.tsv`:
 
 ```sh
 make build microbench
-scripts/microbench/run.sh --harness openclaw --backend docker --mode record \
+scripts/microbench/run.sh --harness openclaw --backend docker --mode record --warm \
   --address <this node's IP> --prometheus <Prometheus URL>
 scripts/microbench/run.sh --harness openclaw --backend k8s --mode replay --runs 10 --warm \
   --address <this node's IP> --prometheus <Prometheus URL>
@@ -115,6 +115,56 @@ python3 scripts/microbench/analyze.py
 ```
 
 Record once per harness against the real model, then replay on every backend.
+Record with `--warm` when replaying with it: each task then runs cold and warm
+during the recording too, so the warm run's requests are recorded as the model
+answered them, not served the cold run's replies (see
+[recorded and replayed model output](#recorded-and-replayed-model-output)).
+
+#### Recording, keeping, decoding and replaying
+
+1. **Record** on the node, with the model's real API key in `DEEPSEEK_API_KEY`
+   or `DEEPSEEK_API.key`. A recording appends to
+   `.cache/microbench-replay/<harness>/recordings.jsonl`, so move an older one
+   aside first:
+
+   ```sh
+   mv .cache/microbench-replay/openclaw/recordings.jsonl{,.old}
+   scripts/microbench/run.sh --harness openclaw --backend docker --mode record --warm \
+     --address <this node's IP> --prometheus <Prometheus URL>
+   ```
+
+   Check that every task was solved and that the request log
+   (`.cache/microbench-replay/<harness>/requests-docker-record-*.jsonl`) shows
+   status 200 throughout.
+
+2. **Keep a copy** off the node, which a cluster's end would otherwise lose:
+
+   ```sh
+   rsync -a <user>@<node>:aries/.cache/microbench-replay/ .cache/microbench-replay/
+   ```
+
+3. **Decode** it into a readable report: per task, every turn of the cold and
+   the warm run, with what the harness sent, the model's reasoning, its text,
+   its tool calls and its timing:
+
+   ```sh
+   python3 scripts/microbench/decode_recordings.py \
+     .cache/microbench-replay/openclaw/recordings.jsonl -o openclaw-recordings.md
+   ```
+
+   `--full` adds each request's complete message list, system prompt included.
+
+4. **Replay** on every backend from the same file, copied back to a node if it
+   was recorded elsewhere. Replay with `--warm` to match a warm recording:
+
+   ```sh
+   scripts/microbench/run.sh --harness openclaw --backend docker --mode replay --runs 5 --warm \
+     --address <this node's IP> --prometheus <Prometheus URL>
+   ```
+
+   Every request should be a hit: the request log's lines all have
+   `"hit": true`, and the `occurrence` they were served from alternates
+   between the cold run's and the warm run's.
 `--warm` runs each task twice on one harness and sandbox, as in [cold and warm
 starts](#cold-and-warm-starts), so one run gives both measurements;
 `--sequential` turns the parallel start off. Each run's variant
@@ -744,15 +794,24 @@ it), the number of assistant turns so far, and the number of tools offered.
 OpenClaw prefixes the message with the date, such as `[Mon 2026-11-02 14:31
 UTC]`; replay matches that weekday against all seven, so a recording serves
 runs on any day.
-The first successful recording of a key is served; a request with no recording
+Every successful reply is stored with an `occurrence`, numbering the
+recordings of its key from 1, and with the request the harness sent, which
+only [the decoder](#recording-keeping-decoding-and-replaying) reads. A task run
+twice on one harness, cold then warm, sends the same requests twice, and the
+model may answer them differently; replay serves the nth request for a key
+with the nth recording, and starts again from the first for the next
+repetition, so each repetition replays the cold and the warm run as recorded.
+This assumes every repetition sends the same requests in the same order, as a
+replayed run does when its replies match. Of recordings made before
+occurrences existed, the first per key is served. A request with no recording
 gets `404`, which fails the task visibly. If the agent takes a different path
 from the recording, as it may when a tool's output really differs, replay can
 only serve the recorded turn, so treat a replayed task whose outcome differs
 from its recording's as suspect.
 
 Each line of the `-log` file is one request: `received_at`, `first_byte_ms`,
-`duration_ms`, status, sizes, the key and, in replay mode, whether it was a
-hit. That is the model's share of a task's latency.
+`duration_ms`, status, sizes, the key, the occurrence it was stored as or
+served from and, in replay mode, whether it was a hit. That is the model's share of a task's latency.
 
 ### Managed SGLang
 
