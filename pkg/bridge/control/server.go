@@ -10,6 +10,7 @@ import (
 	"time"
 
 	v1 "github.com/hyscale-lab/aries/pkg/bridge/control/v1"
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgekit"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
@@ -33,6 +34,7 @@ type entry struct {
 	access    *v1.SandboxAccess
 	native    Sandbox
 	busy      bool
+	completed string
 	operation chan struct{}
 	cancel    context.CancelFunc
 }
@@ -154,6 +156,21 @@ func (s *Server) GetSandbox(ctx context.Context, r *v1.SandboxRequest) (*v1.Sand
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.snapshot(), nil
+}
+func (s *Server) CompleteSandbox(_ context.Context, r *v1.SandboxRequest) (*v1.Completion, error) {
+	e, err := s.find(r.GetSandboxId())
+	if err != nil {
+		return nil, err
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.access.State != v1.State_READY {
+		return nil, status.Error(codes.FailedPrecondition, "sandbox is not ready for completion")
+	}
+	if e.completed == "" {
+		e.completed = bridgekit.FormatTime(time.Now())
+	}
+	return &v1.Completion{SandboxId: r.SandboxId, CompletedAt: e.completed}, nil
 }
 func (s *Server) ReleaseSandbox(ctx context.Context, r *v1.SandboxRequest) (*v1.SandboxAccess, error) {
 	if !identifier.MatchString(r.GetSandboxId()) {

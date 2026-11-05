@@ -284,6 +284,58 @@ func (x *SandboxRequest) GetSandboxId() string {
 	return ""
 }
 
+type Completion struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SandboxId     string                 `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
+	CompletedAt   string                 `protobuf:"bytes,2,opt,name=completed_at,json=completedAt,proto3" json:"completed_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Completion) Reset() {
+	*x = Completion{}
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Completion) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Completion) ProtoMessage() {}
+
+func (x *Completion) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Completion.ProtoReflect.Descriptor instead.
+func (*Completion) Descriptor() ([]byte, []int) {
+	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *Completion) GetSandboxId() string {
+	if x != nil {
+		return x.SandboxId
+	}
+	return ""
+}
+
+func (x *Completion) GetCompletedAt() string {
+	if x != nil {
+		return x.CompletedAt
+	}
+	return ""
+}
+
 type Endpoint struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Port          uint32                 `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
@@ -295,7 +347,7 @@ type Endpoint struct {
 
 func (x *Endpoint) Reset() {
 	*x = Endpoint{}
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[4]
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -307,7 +359,7 @@ func (x *Endpoint) String() string {
 func (*Endpoint) ProtoMessage() {}
 
 func (x *Endpoint) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[4]
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -320,7 +372,7 @@ func (x *Endpoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Endpoint.ProtoReflect.Descriptor instead.
 func (*Endpoint) Descriptor() ([]byte, []int) {
-	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{4}
+	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *Endpoint) GetPort() uint32 {
@@ -356,7 +408,7 @@ type Artifact struct {
 
 func (x *Artifact) Reset() {
 	*x = Artifact{}
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[5]
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -368,7 +420,7 @@ func (x *Artifact) String() string {
 func (*Artifact) ProtoMessage() {}
 
 func (x *Artifact) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[5]
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -381,7 +433,7 @@ func (x *Artifact) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Artifact.ProtoReflect.Descriptor instead.
 func (*Artifact) Descriptor() ([]byte, []int) {
-	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{5}
+	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Artifact) GetName() string {
@@ -426,7 +478,7 @@ type SandboxAccess struct {
 
 func (x *SandboxAccess) Reset() {
 	*x = SandboxAccess{}
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[6]
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -438,7 +490,7 @@ func (x *SandboxAccess) String() string {
 func (*SandboxAccess) ProtoMessage() {}
 
 func (x *SandboxAccess) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[6]
+	mi := &file_pkg_bridge_control_v1_control_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -451,7 +503,7 @@ func (x *SandboxAccess) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SandboxAccess.ProtoReflect.Descriptor instead.
 func (*SandboxAccess) Descriptor() ([]byte, []int) {
-	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{6}
+	return file_pkg_bridge_control_v1_control_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *SandboxAccess) GetSandboxId() string {
@@ -515,7 +567,12 @@ const file_pkg_bridge_control_v1_control_proto_rawDesc = "" +
 	"\bmetadata\x18\x03 \x01(\v2!.aries.bridge.control.v1.MetadataR\bmetadata\"/\n" +
 	"\x0eSandboxRequest\x12\x1d\n" +
 	"\n" +
-	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\"l\n" +
+	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\"N\n" +
+	"\n" +
+	"Completion\x12\x1d\n" +
+	"\n" +
+	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\x12!\n" +
+	"\fcompleted_at\x18\x02 \x01(\tR\vcompletedAt\"l\n" +
 	"\bEndpoint\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\rR\x04port\x12\x12\n" +
 	"\x04user\x18\x03 \x01(\tR\x04user\x12\x1c\n" +
@@ -538,11 +595,12 @@ const file_pkg_bridge_control_v1_control_proto_rawDesc = "" +
 	"\vREGISTERING\x10\x01\x12\t\n" +
 	"\x05READY\x10\x02\x12\r\n" +
 	"\tRELEASING\x10\x03\x12\f\n" +
-	"\bRELEASED\x10\x042\xbd\x02\n" +
+	"\bRELEASED\x10\x042\x9e\x03\n" +
 	"\rBridgeControl\x12j\n" +
 	"\x0fRegisterSandbox\x12/.aries.bridge.control.v1.RegisterSandboxRequest\x1a&.aries.bridge.control.v1.SandboxAccess\x12]\n" +
 	"\n" +
-	"GetSandbox\x12'.aries.bridge.control.v1.SandboxRequest\x1a&.aries.bridge.control.v1.SandboxAccess\x12a\n" +
+	"GetSandbox\x12'.aries.bridge.control.v1.SandboxRequest\x1a&.aries.bridge.control.v1.SandboxAccess\x12_\n" +
+	"\x0fCompleteSandbox\x12'.aries.bridge.control.v1.SandboxRequest\x1a#.aries.bridge.control.v1.Completion\x12a\n" +
 	"\x0eReleaseSandbox\x12'.aries.bridge.control.v1.SandboxRequest\x1a&.aries.bridge.control.v1.SandboxAccessB>Z<github.com/hyscale-lab/aries/pkg/bridge/control/v1;controlv1b\x06proto3"
 
 var (
@@ -558,31 +616,34 @@ func file_pkg_bridge_control_v1_control_proto_rawDescGZIP() []byte {
 }
 
 var file_pkg_bridge_control_v1_control_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_pkg_bridge_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_pkg_bridge_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_pkg_bridge_control_v1_control_proto_goTypes = []any{
 	(State)(0),                     // 0: aries.bridge.control.v1.State
 	(*Target)(nil),                 // 1: aries.bridge.control.v1.Target
 	(*Metadata)(nil),               // 2: aries.bridge.control.v1.Metadata
 	(*RegisterSandboxRequest)(nil), // 3: aries.bridge.control.v1.RegisterSandboxRequest
 	(*SandboxRequest)(nil),         // 4: aries.bridge.control.v1.SandboxRequest
-	(*Endpoint)(nil),               // 5: aries.bridge.control.v1.Endpoint
-	(*Artifact)(nil),               // 6: aries.bridge.control.v1.Artifact
-	(*SandboxAccess)(nil),          // 7: aries.bridge.control.v1.SandboxAccess
+	(*Completion)(nil),             // 5: aries.bridge.control.v1.Completion
+	(*Endpoint)(nil),               // 6: aries.bridge.control.v1.Endpoint
+	(*Artifact)(nil),               // 7: aries.bridge.control.v1.Artifact
+	(*SandboxAccess)(nil),          // 8: aries.bridge.control.v1.SandboxAccess
 }
 var file_pkg_bridge_control_v1_control_proto_depIdxs = []int32{
 	1, // 0: aries.bridge.control.v1.RegisterSandboxRequest.target:type_name -> aries.bridge.control.v1.Target
 	2, // 1: aries.bridge.control.v1.RegisterSandboxRequest.metadata:type_name -> aries.bridge.control.v1.Metadata
 	0, // 2: aries.bridge.control.v1.SandboxAccess.state:type_name -> aries.bridge.control.v1.State
-	5, // 3: aries.bridge.control.v1.SandboxAccess.endpoint:type_name -> aries.bridge.control.v1.Endpoint
-	6, // 4: aries.bridge.control.v1.SandboxAccess.artifacts:type_name -> aries.bridge.control.v1.Artifact
+	6, // 3: aries.bridge.control.v1.SandboxAccess.endpoint:type_name -> aries.bridge.control.v1.Endpoint
+	7, // 4: aries.bridge.control.v1.SandboxAccess.artifacts:type_name -> aries.bridge.control.v1.Artifact
 	3, // 5: aries.bridge.control.v1.BridgeControl.RegisterSandbox:input_type -> aries.bridge.control.v1.RegisterSandboxRequest
 	4, // 6: aries.bridge.control.v1.BridgeControl.GetSandbox:input_type -> aries.bridge.control.v1.SandboxRequest
-	4, // 7: aries.bridge.control.v1.BridgeControl.ReleaseSandbox:input_type -> aries.bridge.control.v1.SandboxRequest
-	7, // 8: aries.bridge.control.v1.BridgeControl.RegisterSandbox:output_type -> aries.bridge.control.v1.SandboxAccess
-	7, // 9: aries.bridge.control.v1.BridgeControl.GetSandbox:output_type -> aries.bridge.control.v1.SandboxAccess
-	7, // 10: aries.bridge.control.v1.BridgeControl.ReleaseSandbox:output_type -> aries.bridge.control.v1.SandboxAccess
-	8, // [8:11] is the sub-list for method output_type
-	5, // [5:8] is the sub-list for method input_type
+	4, // 7: aries.bridge.control.v1.BridgeControl.CompleteSandbox:input_type -> aries.bridge.control.v1.SandboxRequest
+	4, // 8: aries.bridge.control.v1.BridgeControl.ReleaseSandbox:input_type -> aries.bridge.control.v1.SandboxRequest
+	8, // 9: aries.bridge.control.v1.BridgeControl.RegisterSandbox:output_type -> aries.bridge.control.v1.SandboxAccess
+	8, // 10: aries.bridge.control.v1.BridgeControl.GetSandbox:output_type -> aries.bridge.control.v1.SandboxAccess
+	5, // 11: aries.bridge.control.v1.BridgeControl.CompleteSandbox:output_type -> aries.bridge.control.v1.Completion
+	8, // 12: aries.bridge.control.v1.BridgeControl.ReleaseSandbox:output_type -> aries.bridge.control.v1.SandboxAccess
+	9, // [9:13] is the sub-list for method output_type
+	5, // [5:9] is the sub-list for method input_type
 	5, // [5:5] is the sub-list for extension type_name
 	5, // [5:5] is the sub-list for extension extendee
 	0, // [0:5] is the sub-list for field type_name
@@ -599,7 +660,7 @@ func file_pkg_bridge_control_v1_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_bridge_control_v1_control_proto_rawDesc), len(file_pkg_bridge_control_v1_control_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   7,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
