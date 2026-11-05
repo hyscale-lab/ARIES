@@ -417,6 +417,76 @@ func TestLoadReplaySourceAcceptsRecordedGRPCCalls(t *testing.T) {
 	}
 }
 
+func TestReplayCallsReplaysRecordedGRPCMethods(t *testing.T) {
+	const callerDeadline = time.Minute
+	const replayStep = 200 * time.Millisecond
+	files := fstest.MapFS{"app/f": &fstest.MapFile{Data: []byte("x\n"), Mode: 0o600}}
+	sourceTarget := newFakeExecutor(files)
+	sourceManager := newTestManager(t, Options{OmitRawLog: true})
+	sourceEndpoint, err := sourceManager.StartTarget(context.Background(), sourceTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceClient := dial(t, sourceEndpoint, withToolCallID("recorded-tool")...)
+	for operation, callErr := range callEveryRPC(sourceClient) {
+		if callErr != nil {
+			t.Fatalf("record %s: %v", operation, callErr)
+		}
+	}
+	stop(t, sourceManager)
+	log, err := os.ReadFile(sourceEndpoint.LogPaths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var records []toolCallRecord
+	for _, line := range bytes.Split(bytes.TrimSpace(log), []byte{'\n'}) {
+		var record toolCallRecord
+		if err := json.Unmarshal(line, &record); err != nil {
+			t.Fatal(err)
+		}
+		record.RunID, record.TaskID, record.SandboxID = replayRunID, replayTaskID, replaySandboxID
+		records = append(records, record)
+	}
+	completed, err := time.Parse(time.RFC3339Nano, records[len(records)-1].Timestamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := writeReplaySource(t, records, completed, core.Evaluation{Status: core.StatusSucceeded})
+	plan, err := LoadReplaySource(source, replayTask, replayBenchmark, replayRevisions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Separate dependent file calls so a fast replay cannot overtake its write.
+	for index := range plan.Calls {
+		plan.Calls[index].StartOffset = time.Duration(index) * replayStep
+	}
+	target := newFakeExecutor(fstest.MapFS{"app/f": &fstest.MapFile{Data: []byte("x\n"), Mode: 0o600}})
+	manager, client, endpoint := startBridge(t, target, Options{SandboxID: "new-sandbox", OmitRawLog: true})
+	ctx, cancel := context.WithTimeout(context.Background(), callerDeadline)
+	defer cancel()
+	if err := ReplayCalls(ctx, client, plan); err != nil {
+		t.Fatalf("ReplayCalls: %v", err)
+	}
+	stop(t, manager)
+	commands, stdins, fileOps := target.snapshot()
+	if len(commands) != 1 || commands[0].Args[len(commands[0].Args)-1] != "true" || len(stdins) != 1 || fileOps != len(plan.Calls)-len(commands) {
+		t.Fatalf("replayed commands = %#v, stdin = %q, file calls = %d", commands, stdins, fileOps)
+	}
+	newLog, err := os.ReadFile(endpoint.LogPaths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range bytes.Split(bytes.TrimSpace(newLog), []byte{'\n'}) {
+		var record toolCallRecord
+		if err := json.Unmarshal(line, &record); err != nil {
+			t.Fatal(err)
+		}
+		if record.SandboxID != "new-sandbox" || record.RunID != target.RunID() || record.TaskID != target.TaskID() || record.ToolCallID != "recorded-tool" {
+			t.Fatalf("replayed call identity = %+v", record.ToolCallRecord)
+		}
+	}
+}
+
 func TestLoadReplaySourceAcceptsCapturedEmptyExec(t *testing.T) {
 	manager, client, endpoint := startBridge(t, newFakeExecutor(nil), Options{OmitRawLog: true})
 	if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{}); err != nil {
