@@ -261,6 +261,11 @@ installs inside the sandbox, such as a test script's `apt-get install`, need a
 glibc no newer than the task images'. See the
 [Apptainer implementation](implementation/apptainer.md) for the topology and limits.
 
+A checked-in [example](../profiles/apptainer/hermes-tb2-fix-git-apptainer.json)
+runs Terminal-Bench 2 `fix-git` with Hermes against an OpenAI-compatible model
+server. Replace its paths and its model address; use an address rather than a
+name, and one that is not the host's loopback, which a run's namespace cannot
+reach. `aries setup` reports the Hermes tag to map if the example's is out of date.
 
 Bridge addresses come from deployment resolution, not profile fields. Plaintext,
 unauthenticated gRPC control and the harness-facing transport (SSH or gRPC)
