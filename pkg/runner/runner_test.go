@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -361,6 +362,72 @@ func newRig(t *testing.T, tasks int) *rig {
 		t.Fatalf("New() error = %v", err)
 	}
 	return &rig{log: log, benchmark: benchmark, factory: factory, bridge: bridge, harness: harness, runner: runner}
+}
+
+type completionBridge struct {
+	*fakeBridge
+	err error
+}
+
+func (b *completionBridge) CompleteHarness(ctx context.Context) error {
+	b.log.add("bridge.complete", ctx)
+	return b.err
+}
+
+func TestRunnerCompletionAfterConfirmedHarnessStop(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		stopError   error
+		signalError error
+		wantSignal  bool
+	}{
+		{name: "confirmed stop", wantSignal: true},
+		{name: "unconfirmed stop", stopError: errInjected},
+		{name: "failed signal", signalError: errInjected, wantSignal: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rig := newRig(t, 1)
+			rig.harness.stopErrors = []error{test.stopError}
+			rig.runner.bridge = &completionBridge{fakeBridge: rig.bridge, err: test.signalError}
+			_, err := rig.runner.Run(context.Background())
+			if (err != nil) != (test.stopError != nil || test.signalError != nil) {
+				t.Fatalf("Run() error = %v", err)
+			}
+			calls := rig.log.snapshot()
+			stop := slices.Index(calls, "harness.stop")
+			signal := slices.Index(calls, "bridge.complete")
+			release := slices.Index(calls, "bridge.stop")
+			if stop < 0 || release <= stop || (signal >= 0) != test.wantSignal || (signal >= 0 && (signal <= stop || signal >= release)) {
+				t.Fatalf("completion and release order = %v", calls)
+			}
+			if test.signalError != nil && rig.bridge.stopCount() != 1 {
+				t.Fatalf("bridge release calls = %d", rig.bridge.stopCount())
+			}
+		})
+	}
+}
+
+type sourceBridge struct {
+	*fakeBridge
+	image string
+}
+
+func (b *sourceBridge) RecordTask(image string) {
+	b.image = image
+	b.log.add("bridge.record-task", nil)
+}
+
+func TestRunnerRecordsOccurrenceImageBeforeBridgeStart(t *testing.T) {
+	rig := newRig(t, 1)
+	bridge := &sourceBridge{fakeBridge: rig.bridge}
+	rig.runner.bridge = bridge
+	if _, err := rig.runner.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	calls := rig.log.snapshot()
+	if bridge.image != rig.benchmark.tasks[0].Environment.Image || slices.Index(calls, "bridge.record-task") != slices.Index(calls, "bridge.start")-1 {
+		t.Fatalf("occurrence image = %q; calls = %v", bridge.image, calls)
+	}
 }
 
 func TestRunnerSuccessOrdering(t *testing.T) {

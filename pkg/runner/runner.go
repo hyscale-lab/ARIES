@@ -230,6 +230,9 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		return finish()
 	}
 
+	if provenance, ok := r.bridge.(interface{ RecordTask(string) }); ok {
+		provenance.RecordTask(task.Environment.Image)
+	}
 	endpoint, err := r.bridge.Start(ctx, sandbox)
 	// Start may fail after allocating task-local resources or after its internal
 	// rollback fails. Stop is idempotent, so every Start attempt must be followed
@@ -283,6 +286,11 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 	} else {
 		harnessActive = false
 		result.Isolation.HarnessStopped = true
+		if completion, ok := r.bridge.(interface{ CompleteHarness(context.Context) error }); ok {
+			if err := completion.CompleteHarness(isolationCtx); err != nil {
+				allErrors = append(allErrors, fmt.Errorf("record harness completion: %w", err))
+			}
+		}
 	}
 	if err := r.bridge.Stop(isolationCtx); err != nil {
 		isolationErrors = append(isolationErrors, fmt.Errorf("confirm bridge revoked: %w", err))

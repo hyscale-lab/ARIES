@@ -28,6 +28,8 @@ type Options struct {
 	Launch                       LaunchSpec
 	Client                       ClientConfig
 	OutputDir, BridgeType, RunID string
+	BenchmarkType                string
+	BenchmarkRevisions           map[string]string
 	Placement                    core.RuntimePlacement
 	RetainRawLog                 bool
 }
@@ -82,6 +84,7 @@ func NewService(options Options) (*Service, error) {
 			return nil, err
 		}
 	}
+	options.BenchmarkRevisions = maps.Clone(options.BenchmarkRevisions)
 	return &Service{options: options, state: "new", transport: transport}, nil
 }
 func nonce() (string, error) {

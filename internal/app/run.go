@@ -344,6 +344,14 @@ func buildTaskExperiment(cfg config.Config, model core.ModelConfig, effectiveGPU
 	if err != nil {
 		return nil, errors.Join(err, sandbox.Resources.Close(), closeOccurrenceClients(sandbox.Close, harness.Close))
 	}
+	if provenance, ok := bridge.(interface{ RecordSource(string, string) }); ok {
+		for _, selected := range catalog.Tasks {
+			if selected.ID == logicalID {
+				provenance.RecordSource(logicalID, selected.Environment.Image)
+				break
+			}
+		}
+	}
 	benchmarkRunner, err := runner.New(benchmark, harness.Harness, sandbox.Sandbox, bridge, runner.Options{
 		Name: cfg.Name, RunID: runID, OutputDir: outputRoot, Model: model, Logger: logger,
 		RuntimeOverrides: runner.RuntimeOverrides{
