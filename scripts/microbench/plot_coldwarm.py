@@ -19,13 +19,14 @@ import sys
 from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from plot import HARNESSES, INK, SETUPS, STAGES, SURFACE, TASKS, median, number, plt, save, style  # noqa: E402
+from plot import HARNESSES, INK, SETUPS, STAGES, SURFACE, TASKS, number, plt, save, style  # noqa: E402
 
 E2E_STAGES = [
     ("Sandbox, bridge and harness container", STAGES[0][1]),
     ("Harness start", STAGES[1][1]),
     ("Model (replayed)", STAGES[2][1]),
-    ("Tools and harness logic", STAGES[3][1]),
+    ("Tool execution", STAGES[3][1]),
+    ("Harness logic", STAGES[4][1]),
 ]
 AFTER_STAGES = [
     ("Collect artifacts", STAGES[0][1]),
@@ -33,6 +34,12 @@ AFTER_STAGES = [
     ("Evaluate", STAGES[2][1]),
     ("Clean up", STAGES[3][1]),
 ]
+
+
+def mean(values):
+    """The average, which a stacked bar's stages add up to exactly."""
+    values = [v for v in values if v is not None]
+    return sum(values) / len(values) if values else 0.0
 
 
 def load(path):
@@ -45,13 +52,20 @@ def load(path):
     return rows
 
 
+def run_values(row, measure):
+    """A run split into model time, tool execution as the harness timed it,
+    and the harness's own logic, the rest."""
+    model = row.get(measure + "_model_s") or 0
+    tools = row.get(measure + "_tool_exec_s") or 0
+    return [model, tools, row[measure + "_run_s"] - model - tools]
+
+
 def cold_values(row):
     """Start-up split by what is on its critical path: steps can overlap, so
     harness start is its own phase and everything else before the first
     request is the rest."""
     harness = row.get("harness_start_s") or 0
-    model = row.get("cold_model_s") or 0
-    return [row["cold_startup_s"] - harness, harness, model, row["cold_run_s"] - model]
+    return [row["cold_startup_s"] - harness, harness] + run_values(row, "cold")
 
 
 def after_values(row):
@@ -64,7 +78,7 @@ def stacked_rows(axis, stacks, stages, table, label_parts):
         runs = stacks.get(backend)
         if not runs:
             continue
-        values = [median(column) for column in zip(*runs)]
+        values = [mean(column) for column in zip(*runs)]
         left = 0
         for (stage, color), value in zip(stages, values):
             if value > 0:
@@ -85,9 +99,7 @@ def stage_legend(figure, stages, y):
 def end_to_end_values(row, measure):
     """Stages of a cold or warm run in E2E_STAGES order; a warm run has no
     start-up."""
-    model = row.get(measure + "_model_s") or 0
-    rest = [model, row[measure + "_run_s"] - model]
-    return cold_values(row) if measure == "cold" else [0, 0] + rest
+    return cold_values(row) if measure == "cold" else [0, 0] + run_values(row, "warm")
 
 
 def plot_end_to_end(rows, out, table, record):
@@ -101,7 +113,7 @@ def plot_end_to_end(rows, out, table, record):
     positions = [i * 2.4 + j for i in range(len(SETUPS)) for j in (0, 1)]
     figure, axes = plt.subplots(len(HARNESSES), len(TASKS), figsize=(15, 6.6), sharey=True)
     for r, (harness, harness_label) in enumerate(HARNESSES):
-        limit = max(sum(median(column) for column in zip(*runs))
+        limit = max(sum(mean(column) for column in zip(*runs))
                     for (h, _, _, _), runs in per.items() if h == harness) * 1.22
         for c, task in enumerate(TASKS):
             axis = axes[r][c]
@@ -110,7 +122,7 @@ def plot_end_to_end(rows, out, table, record):
                 runs = per.get((harness, task, backend, measure))
                 if not runs:
                     continue
-                values = [median(column) for column in zip(*runs)]
+                values = [mean(column) for column in zip(*runs)]
                 left = 0
                 for (stage, color), value in zip(E2E_STAGES, values):
                     if value > 0:
@@ -126,7 +138,7 @@ def plot_end_to_end(rows, out, table, record):
             axis.set_yticklabels([label for _, _, label in bars])
             axis.set_title("%s · %s" % (harness_label, task), loc="left")
             if r == len(HARNESSES) - 1 and c == len(TASKS) // 2:
-                axis.set_xlabel("seconds (median of 5 runs per stage)")
+                axis.set_xlabel("seconds (mean of 5 runs)")
     # The panels share the y-axis, so it is inverted once for all of them.
     axes[0][0].invert_yaxis()
     stage_legend(figure, E2E_STAGES, 1.04)
@@ -144,7 +156,7 @@ def plot_after(rows, out, table, record):
         stacked_rows(axis, per[harness], AFTER_STAGES, table, ["after-answer", harness, "all tasks"])
         axis.set_yticklabels([name for _, name in SETUPS] if c == 0 else [])
         axis.set_title(label, loc="left")
-        axis.set_xlabel("seconds after the answer (median over all tasks)")
+        axis.set_xlabel("seconds after the answer (mean over all tasks)")
     stage_legend(figure, AFTER_STAGES, 1.1)
     figure.tight_layout()
     save(figure, out, "after-answer", record)
