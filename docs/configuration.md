@@ -802,7 +802,11 @@ model may answer them differently; replay serves the nth request for a key
 with the nth recording, and starts again from the first for the next
 repetition, so each repetition replays the cold and the warm run as recorded.
 This assumes every repetition sends the same requests in the same order, as a
-replayed run does when its replies match. Of recordings made before
+replayed run does when its replies match. An error reply is recorded, for reading, but never
+served: a request the provider rejected, such as Hermes's session-title
+request asking DeepSeek for a `response_format` it does not offer, is
+answered in replay with the successful retry that followed it, so the harness
+does not retry. Of recordings made before
 occurrences existed, the first per key is served. A request with no recording
 gets `404`, which fails the task visibly. If the agent takes a different path
 from the recording, as it may when a tool's output really differs, replay can
