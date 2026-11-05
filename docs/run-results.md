@@ -95,6 +95,10 @@ reads Prometheus, whose figures the kubelet refreshes on its housekeeping
 interval (10 seconds by default), and records a sample only when the scraped
 observation advances. See
 [Kubernetes resource measurements](implementation/kubernetes.md#resource-measurements).
+Apptainer is sampled every second from `/proc`, because an unprivileged user has no
+cgroup per instance; its memory is the processes' proportional set size, which
+excludes the page cache. See
+[Apptainer resource measurement](implementation/apptainer.md#resource-measurement).
 
 Docker sampling can overlap runtime teardown. If a stats response lacks its
 observation timestamp, ARIES checks the same runtime again and skips that sample

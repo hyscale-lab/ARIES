@@ -97,7 +97,9 @@ The reference composition is local Docker on one daemon. Bridge runtime placemen
 and sandbox execution are separately injected, and both must use the same
 provider. Backend endpoints and socket mounts come from provider wiring. A
 [Kubernetes provider](../implementation/kubernetes.md) implements the same
-contracts on pods for a narrower set of runs.
+contracts on pods for a narrower set of runs, and an
+[Apptainer provider](../implementation/apptainer.md) implements them on
+unprivileged instances, one task at a time, for hosts without Docker.
 
 Deployment requests still include container-oriented resource settings, host
 mounts, network aliases and image-volume policy. The sandbox assumes Linux,

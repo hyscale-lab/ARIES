@@ -7,6 +7,8 @@
 - Release checks: `make build`, `make test`, `make test-race`, `make lint`,
   `make integration`. Unit/race tests require neither Docker nor paid APIs;
   integration uses real containers and a deterministic fake model endpoint.
+- When changing `pkg/deployment/apptainer`, also run `make integration-apptainer`
+  on a host with Apptainer; see [its tests](../docs/implementation/apptainer.md#tests).
 - Make configures local Go caches; direct Go commands may need
   `GOCACHE=$PWD/.cache/go-build GOMODCACHE=$PWD/.cache/go-mod`.
 - Documentation-only edits need content/link/anchor checks and `git diff --check`.

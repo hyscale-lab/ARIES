@@ -90,6 +90,7 @@ send to a finished daemon's queue until the queue filled and the command blocked
 the runtime's environment, so every command uses the same daemon, and ownership
 that a command fakes stays visible to later ones. A command that kills this
 daemon stalls later commands until they time out.
+
 ## Resource measurement
 
 Without cgroups v2 an unprivileged user has no cgroup per instance, so the
@@ -140,6 +141,21 @@ record. An instance with no record, or whose PID differs from its record, is
 never stopped. The bridge process is stopped by process group and its directory
 removed. The namespace ends with the run's last process.
 
+As on the other backends, a Runner that crashes leaves its runtimes for an
+operator to clean up, and the bridge process keeps running, which also keeps the
+namespace. Every runtime's `Stop` works from its record on disk, so a later process
+that calls it does remove them; a PID that now names another process is not
+signaled. ARIES has no command that does this yet.
+
+## Tests
+
 [Provider tests](../../pkg/deployment/apptainer/apptainer_test.go) use a fake
-`apptainer`; [real-instance tests](../../pkg/deployment/apptainer/integration_test.go)
-run with the `apptainer` build tag on a host that has Apptainer.
+`apptainer`. [Real-instance tests](../../pkg/deployment/apptainer/integration_test.go)
+need a host with Apptainer and an image, and `make integration` does not run them:
+
+```bash
+make integration-apptainer ARIES_APPTAINER_TEST_IMAGE=/path/to/image.sif
+```
+
+The fakeroot test is skipped unless `fakeroot-sysv` is on `PATH`. On Ubuntu 24.04
+the tests also need the AppArmor restriction described under [Limits](#limits) off.
