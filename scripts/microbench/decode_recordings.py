@@ -27,6 +27,7 @@ import argparse
 import base64
 import datetime
 import json
+import re
 import sys
 from collections import defaultdict
 
@@ -47,6 +48,19 @@ def trimmed(text, limit=TRIM):
     if len(text) <= limit:
         return text
     return text[:limit] + "\n… (%d more characters)" % (len(text) - limit)
+
+
+def block(text, language="text", indent=""):
+    """A fenced code block whose fence is longer than any run of backticks in
+    the text, so a task's own code blocks cannot close it early."""
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    fence = "`" * max(3, longest + 1)
+    return [indent + fence + language] + [indent + line for line in text.splitlines() or [""]] + [indent + fence]
+
+
+def cell(text):
+    """Text for one table cell: one line, with its pipes and backticks escaped."""
+    return " ".join(text.split()).replace("|", "\\|").replace("`", "\\`")
 
 
 def body_of(recording):
@@ -168,13 +182,13 @@ def render(recordings, full):
         group = conversations[conversation]
         first = next((text for text in map(first_user, group) if text), "(request not stored)")
         out.append("| `%s` | %s | %s |" % (
-            conversation, " ".join(first.split())[:80].replace("|", "\\|"), " | ".join(calls(group, run) for run in runs)))
+            conversation, cell(" ".join(first.split())[:80]), " | ".join(calls(group, run) for run in runs)))
     for conversation in order:
         group = conversations[conversation]
         first = next((text for text in map(first_user, group) if text), None)
         out += ["", "## Conversation `%s`" % conversation, ""]
         if first is not None:
-            out += ["**First user message:**", "", "```text", trimmed(first, 4000), "```"]
+            out += ["**First user message:**", ""] + block(trimmed(first, 4000))
         for recording in group:
             key = recording["key"]
             chunks = recording.get("chunks") or []
@@ -189,12 +203,10 @@ def render(recordings, full):
                 for message in new_messages(request.get("messages") or []):
                     role = message.get("role")
                     label = role + (" (%s)" % message["tool_call_id"] if message.get("tool_call_id") else "")
-                    out += ["- *%s*:" % label, "", "  ```text"]
-                    out += ["  " + line for line in trimmed(text_of(message.get("content"))).splitlines() or [""]]
-                    out.append("  ```")
+                    out += ["- *%s*:" % label, ""] + block(trimmed(text_of(message.get("content"))), indent="  ")
                 if full:
-                    out += ["", "<details><summary>Full request (%d messages)</summary>" % len(request.get("messages") or []), "", "```json",
-                            json.dumps(request.get("messages"), indent=2, ensure_ascii=False), "```", "", "</details>"]
+                    out += ["", "<details><summary>Full request (%d messages)</summary>" % len(request.get("messages") or []), ""]
+                    out += block(json.dumps(request.get("messages"), indent=2, ensure_ascii=False), "json") + ["", "</details>"]
             else:
                 out += ["", "*The request was not stored with this recording.*"]
             if recording.get("status") != 200:
@@ -211,10 +223,10 @@ def render(recordings, full):
                 out += ["> " + line for line in trimmed(reply["reasoning"]).splitlines()]
                 out.append("")
             if reply["content"]:
-                out += ["```text", trimmed(reply["content"]), "```"]
+                out += block(trimmed(reply["content"]))
             for index in sorted(reply["tool_calls"]):
                 call = reply["tool_calls"][index]
-                out += ["", "Tool call `%s`:" % call["name"], "", "```json", pretty_arguments(call["arguments"]), "```"]
+                out += ["", "Tool call `%s`:" % call["name"], ""] + block(pretty_arguments(call["arguments"]), "json")
             if reply["usage"]:
                 usage = reply["usage"]
                 out.append("")
