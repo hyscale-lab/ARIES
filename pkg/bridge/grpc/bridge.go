@@ -356,11 +356,13 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 	raw := rawGRPCRecord{OperationClass: kindExec, Script: script, Login: request.GetLogin()}
 	toolCallID, validID := incomingToolCallID(ctx)
 	refuse := func(code codes.Code, message string) (*sandboxv1.ExecResponse, error) {
-		session.writeRecord(toolCallRecord{ToolCallRecord: bridgekit.ToolCallRecord{
+		record := toolCallRecord{ToolCallRecord: bridgekit.ToolCallRecord{
 			OperationClass: kindExec, CommandHash: bridgekit.CommandHash(script), Command: script,
 			StdinEncoding: "utf-8", ExitCode: refusedExitCode, StartedAt: bridgekit.FormatTime(time.Now()),
 			Status: "rejected", Error: message, ToolCallID: toolCallID,
-		}}, raw)
+		}}
+		record.setOutcome(newResponseOutcome(sandboxv1.Sandbox_Exec_FullMethodName), status.Error(code, message))
+		session.writeRecord(record, raw)
 		return nil, status.Error(code, message)
 	}
 	if session.revoked.Load() {
@@ -412,7 +414,7 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 	truncated := stdout.truncated() || stderr.truncated()
 	stdinContent, stdinEncoding := session.describeInput(input, int64(len(input)))
 	raw.Stdin, raw.StdinBytes = input, int64(len(input))
-	session.writeRecord(toolCallRecord{ToolCallRecord: bridgekit.ToolCallRecord{
+	record := toolCallRecord{ToolCallRecord: bridgekit.ToolCallRecord{
 		OperationClass: kindExec, Path: command.Path, Workdir: command.Dir,
 		CommandHash: bridgekit.CommandHash(script), Command: script,
 		Argv:  append([]string{command.Path}, command.Args...),
@@ -420,11 +422,19 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 		StdoutBytes: stdout.count(), StderrBytes: stderr.count(),
 		ExitCode: exitCode, StartedAt: bridgekit.FormatTime(started), DurationMS: time.Since(started).Milliseconds(),
 		Status: statusText, Error: message, ToolCallID: toolCallID,
-	}, Truncated: truncated}, raw)
-	return &sandboxv1.ExecResponse{
+	}, Truncated: truncated}
+	if stdinEncoding != "utf-8" {
+		record.ReplayError = "stdin-omitted"
+	}
+	response := &sandboxv1.ExecResponse{
 		ExitCode: int32(exitCode), Reason: reason,
 		Stdout: stdoutBuffer.Bytes(), Stderr: stderrBuffer.Bytes(), Truncated: truncated,
-	}, nil
+	}
+	outcome := newResponseOutcome(sandboxv1.Sandbox_Exec_FullMethodName)
+	outcome.message(response)
+	record.setOutcome(outcome, nil)
+	session.writeRecord(record, raw)
+	return response, nil
 }
 
 // incomingToolCallID returns the tool call id the client sent, or "" when it

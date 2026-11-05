@@ -2,11 +2,17 @@ package grpc
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"fmt"
+	"hash"
 	"io"
 	"sync"
 
 	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgekit"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // toolCallRecord is the gRPC line of tool-calls.jsonl.
@@ -15,8 +21,56 @@ type toolCallRecord struct {
 	// SHA256 is the hex digest of the content a file call moved.
 	SHA256 string `json:"sha256,omitempty"`
 	// Truncated reports that the reply holds less than the sandbox produced.
-	Truncated bool `json:"truncated,omitempty"`
+	Truncated      bool   `json:"truncated,omitempty"`
+	ResponseSHA256 string `json:"response_sha256"`
+	ResponseBytes  int64  `json:"response_bytes"`
+	GRPCCode       string `json:"grpc_code"`
+	ReplayError    string `json:"replay_error,omitempty"`
 	fileWindow
+}
+
+// responseOutcome hashes a versioned sequence of length-prefixed protobuf
+// messages. Stream bodies use fixed chunkBytes frames, not target read sizes.
+type responseOutcome struct {
+	hash    hash.Hash
+	bytes   int64
+	invalid bool
+}
+
+func newResponseOutcome(method string) *responseOutcome {
+	outcome := &responseOutcome{hash: sha256.New()}
+	outcome.field([]byte("aries.grpc.outcome.v1"))
+	outcome.field([]byte(method))
+	return outcome
+}
+
+func (outcome *responseOutcome) field(value []byte) {
+	var prefix [binary.MaxVarintLen64]byte
+	length := binary.PutUvarint(prefix[:], uint64(len(value)))
+	_, _ = outcome.hash.Write(prefix[:length])
+	_, _ = outcome.hash.Write(value)
+	outcome.bytes += int64(length + len(value))
+}
+
+func (outcome *responseOutcome) message(value proto.Message) {
+	encoded, err := (proto.MarshalOptions{Deterministic: true}).Marshal(value)
+	if err != nil {
+		outcome.invalid = true
+		return
+	}
+	outcome.field(encoded)
+}
+
+func (record *toolCallRecord) setOutcome(outcome *responseOutcome, err error) {
+	code := status.Code(err)
+	outcome.field([]byte(code.String()))
+	outcome.field([]byte(status.Convert(err).Message()))
+	record.ResponseSHA256 = hex.EncodeToString(outcome.hash.Sum(nil))
+	record.ResponseBytes = outcome.bytes
+	record.GRPCCode = code.String()
+	if outcome.invalid {
+		record.ReplayError = "response-encoding-failed"
+	}
 }
 
 // fileWindow is the part of a file that a read asked for. A whole-file read,
