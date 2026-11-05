@@ -7,9 +7,10 @@ Each recording holds the model's reply as the raw chunks it streamed, and,
 for recordings made since requests were kept, the request the harness sent.
 The report groups recordings by conversation (the task's first user message)
 and lists each conversation's recordings in the order they were made, labelled
-with the run they belong to: a task run twice on one harness records every
-turn twice, so with --warm run 1 is the cold run and run 2 the warm one. For
-each recording it shows:
+with the run they belong to: a task recorded with --warm runs twice on one
+harness, so each of its model calls is recorded once in the cold run and once
+in the warm run. A third or later run is labelled by its number. For each
+recording it shows:
 
   - when it was recorded, the time to the first byte and to the last;
   - what the harness sent since the model's previous reply (tool results, or
@@ -24,6 +25,7 @@ only.
 
 import argparse
 import base64
+import datetime
 import json
 import sys
 from collections import defaultdict
@@ -90,14 +92,45 @@ def new_messages(messages):
             or (m.get("role") == "system" and len(text_of(m.get("content"))) < 2000)]
 
 
+RUN_NAMES = {1: "Cold", 2: "Warm"}
+
+
 def label_runs(group):
-    """Numbers the runs in a conversation's recordings, in recorded order: a
-    new run starts at each first turn that offers tools, the agent's own."""
-    run = 0
+    """Names the run of each of a conversation's recordings, which are in
+    recorded order. The agent's own calls offer tools, and a run starts at
+    each of its first turns: the first run is the cold one and the second the
+    warm one. A background call, which offers none, belongs to the run whose
+    first agent call is nearest in time: a harness sends it beside that call,
+    sometimes just before it."""
+    starts = []
     for recording in group:
-        if recording["key"]["turn"] == 0 and recording["key"]["tools"]:
-            run += 1
-        recording["_run"] = max(run, 1)
+        if recording["key"]["tools"]:
+            if recording["key"]["turn"] == 0:
+                starts.append(recording.get("recorded_at", ""))
+            recording["_number"] = max(len(starts), 1)
+    seconds = lambda text: parse_time(text) if text else 0.0
+    for recording in group:
+        if not recording["key"]["tools"]:
+            moment = seconds(recording.get("recorded_at"))
+            recording["_number"] = min(range(len(starts)), key=lambda i: abs(seconds(starts[i]) - moment)) + 1 if starts else 1
+        recording["_run"] = RUN_NAMES.get(recording["_number"], "Run %d" % recording["_number"])
+
+
+def parse_time(text):
+    # Go writes nanoseconds; Python keeps microseconds.
+    text = text.replace("Z", "+00:00")
+    if "." in text:
+        head, rest = text.split(".", 1)
+        digits = rest[:len(rest) - len(rest.lstrip("0123456789"))]
+        text = "%s.%s%s" % (head, digits[:6].ljust(6, "0"), rest[len(digits):])
+    return datetime.datetime.fromisoformat(text).timestamp()
+
+
+def calls(group, run):
+    """A run's model calls: the agent's, and background ones offering no tools."""
+    agent = sum(1 for r in group if r["_run"] == run and r["key"]["tools"])
+    background = sum(1 for r in group if r["_run"] == run and not r["key"]["tools"])
+    return "%d%s" % (agent, " (+%d background)" % background if background else "")
 
 
 def first_user(recording):
@@ -124,16 +157,20 @@ def render(recordings, full):
     order = sorted(conversations, key=lambda c: min(r.get("recorded_at", "") for r in conversations[c]))
     out = ["# Recorded model calls", ""]
     out.append("%d recordings in %d conversations. Times are from when aries-replay received the request." % (len(recordings), len(order)))
-    out += ["", "| Conversation | First user message | Recordings | Turns | Occurrences |", "|---|---|---|---|---|"]
+    for conversation in order:
+        conversations[conversation].sort(key=lambda r: r.get("recorded_at", ""))
+        label_runs(conversations[conversation])
+        conversations[conversation].sort(key=lambda r: (r["_number"], r.get("recorded_at", "")))
+    numbers = sorted({r["_number"] for r in recordings})
+    runs = [RUN_NAMES.get(n, "Run %d" % n) for n in numbers]
+    out += ["", "Model calls recorded per run:", "", "| Conversation | First user message | %s |" % " | ".join(runs), "|---|---|" + "---|" * len(runs)]
     for conversation in order:
         group = conversations[conversation]
         first = next((text for text in map(first_user, group) if text), "(request not stored)")
-        out.append("| `%s` | %s | %d | %d | %d |" % (
-            conversation, " ".join(first.split())[:80].replace("|", "\\|"), len(group),
-            len({r["key"]["turn"] for r in group}), max(r.get("occurrence", 0) for r in group)))
+        out.append("| `%s` | %s | %s |" % (
+            conversation, " ".join(first.split())[:80].replace("|", "\\|"), " | ".join(calls(group, run) for run in runs)))
     for conversation in order:
-        group = sorted(conversations[conversation], key=lambda r: r.get("recorded_at", ""))
-        label_runs(group)
+        group = conversations[conversation]
         first = next((text for text in map(first_user, group) if text), None)
         out += ["", "## Conversation `%s`" % conversation, ""]
         if first is not None:
@@ -143,9 +180,9 @@ def render(recordings, full):
             chunks = recording.get("chunks") or []
             first_byte = chunks[0]["offset_ms"] if chunks else 0
             last_byte = chunks[-1]["offset_ms"] if chunks else 0
-            out += ["", "### Run %d, turn %d%s" % (recording["_run"], key["turn"], "" if key["tools"] else ", background request (offers no tools)"), ""]
-            out.append("Recorded %s · occurrence %s · status %s · first byte %.0f ms · last byte %.0f ms · %d chunks · %d tools offered" % (
-                recording.get("recorded_at", "?"), recording.get("occurrence") or "?", recording.get("status"), first_byte, last_byte, len(chunks), key["tools"]))
+            out += ["", "### %s run, turn %d%s" % (recording["_run"], key["turn"], "" if key["tools"] else ", background request (offers no tools)"), ""]
+            out.append("Recorded %s · status %s · first byte %.0f ms · last byte %.0f ms · %d chunks · %d tools offered" % (
+                recording.get("recorded_at", "?"), recording.get("status"), first_byte, last_byte, len(chunks), key["tools"]))
             request = recording.get("request")
             if request:
                 out += ["", "**Sent since the last reply:**", ""]
