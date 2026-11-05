@@ -314,6 +314,43 @@ type stubResources struct{}
 func (*stubResources) Sample(context.Context) ([]core.ResourceReading, error) { return nil, nil }
 func (*stubResources) Close() error                                           { return nil }
 
+type sourceStubBridge struct {
+	stubBridge
+	logicalID string
+	image     string
+}
+
+func (b *sourceStubBridge) RecordSource(logicalID, image string) {
+	b.logicalID, b.image = logicalID, image
+}
+
+func TestTaskExperimentBindsCatalogIdentityNotOccurrenceIdentity(t *testing.T) {
+	const logicalID = "task-logical"
+	const occurrenceID = "task-logical-001"
+	const image = "task-image:tag"
+	bridge := &sourceStubBridge{}
+	wiring := Wiring{
+		NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
+			return HarnessInstance{Harness: &stubHarness{}}, nil
+		},
+		NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
+			return SandboxInstance{Sandbox: &stubToolSandbox{}, Resources: &stubResources{}}, nil
+		},
+		NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) { return bridge, nil },
+	}
+	catalog := PreparedBenchmark{
+		Tasks:         []core.Task{{ID: logicalID, Environment: core.Environment{Image: image}}},
+		NewOccurrence: func(_, _ string) (runner.Benchmark, error) { return &stubBenchmark{}, nil },
+	}
+	_, err := buildTaskExperiment(config.Config{Name: "fixture"}, core.ModelConfig{}, nil, "run", t.TempDir(), logicalID, occurrenceID, nil, nil, catalog, wiring)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bridge.logicalID != logicalID || bridge.image != image || bridge.logicalID == occurrenceID {
+		t.Fatalf("source binding = %q, %q", bridge.logicalID, bridge.image)
+	}
+}
+
 func TestBuildTaskExperimentCreatesFreshFourRoleGraphs(t *testing.T) {
 	wiring := Wiring{
 		LoadBenchmark: testBenchmarkLoader(nil, func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {

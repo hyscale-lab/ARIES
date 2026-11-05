@@ -181,6 +181,38 @@ func TestFailedRegistrationCleansOnlyItsOwnNativeState(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+func TestCompletionReceiptRequiresReadySandbox(t *testing.T) {
+	const sandboxID = "source"
+	s, err := NewServer(Config{NewSandbox: func(*v1.RegisterSandboxRequest) Sandbox { return testSandbox{} }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := s.CompleteSandbox(ctx, &v1.SandboxRequest{SandboxId: sandboxID}); status.Code(err) != codes.NotFound {
+		t.Fatalf("missing sandbox completion = %v", err)
+	}
+	if _, err := s.RegisterSandbox(ctx, request(sandboxID)); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := s.CompleteSandbox(ctx, &v1.SandboxRequest{SandboxId: sandboxID})
+	if err != nil || receipt.GetCompletedAt() == "" {
+		t.Fatalf("completion receipt = %v, %v", receipt, err)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, receipt.GetCompletedAt()); err != nil {
+		t.Fatal(err)
+	}
+	again, err := s.CompleteSandbox(ctx, &v1.SandboxRequest{SandboxId: sandboxID})
+	if err != nil || again.GetCompletedAt() != receipt.GetCompletedAt() {
+		t.Fatalf("repeat receipt = %v, %v", again, err)
+	}
+	if _, err := s.ReleaseSandbox(ctx, &v1.SandboxRequest{SandboxId: sandboxID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CompleteSandbox(ctx, &v1.SandboxRequest{SandboxId: sandboxID}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("completion after release = %v", err)
+	}
+}
+
 func TestPlaintextGRPCSandboxIdentity(t *testing.T) {
 	s, _ := NewServer(Config{NewSandbox: func(*v1.RegisterSandboxRequest) Sandbox { return testSandbox{} }})
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -206,6 +238,9 @@ func TestPlaintextGRPCSandboxIdentity(t *testing.T) {
 	}
 	if _, err := c.GetSandbox(ctx, &v1.SandboxRequest{SandboxId: "missing"}); status.Code(err) != codes.NotFound {
 		t.Fatal(err)
+	}
+	if receipt, err := c.CompleteSandbox(ctx, &v1.SandboxRequest{SandboxId: "a"}); err != nil || receipt.GetCompletedAt() == "" {
+		t.Fatal(receipt, err)
 	}
 	if a, err := c.ReleaseSandbox(ctx, &v1.SandboxRequest{SandboxId: "a"}); err != nil || a.State != v1.State_RELEASED {
 		t.Fatal(a, err)
