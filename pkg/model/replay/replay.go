@@ -286,6 +286,15 @@ func (server *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // forward relays the request upstream and the reply back as it arrives,
 // recording a chat completion's reply.
 func (server *Server) forward(w http.ResponseWriter, r *http.Request, body []byte, received time.Time, key *Key, timing *Timing) {
+	// Occurrences follow the order requests arrive in, which replay sees
+	// again, not the order their replies finish in.
+	occurrence := 0
+	if key != nil {
+		server.mu.Lock()
+		server.seen[key.String()]++
+		occurrence = server.seen[key.String()]
+		server.mu.Unlock()
+	}
 	target := *server.upstream
 	target.Path = strings.TrimSuffix(target.Path, "/") + r.URL.Path
 	target.RawQuery = r.URL.RawQuery
@@ -360,11 +369,8 @@ func (server *Server) forward(w http.ResponseWriter, r *http.Request, body []byt
 	if key != nil && timing.Error == "" {
 		recording.Key = *key
 		recording.Request = append(json.RawMessage(nil), body...)
-		server.mu.Lock()
-		server.seen[key.String()]++
-		recording.Occurrence = server.seen[key.String()]
-		server.mu.Unlock()
-		timing.Occurrence = recording.Occurrence
+		recording.Occurrence = occurrence
+		timing.Occurrence = occurrence
 		if err := server.appendRecording(recording); err != nil {
 			timing.Error = err.Error()
 		}

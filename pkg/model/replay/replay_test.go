@@ -419,3 +419,59 @@ func TestReplayKeepsTheFirstOfRecordingsWithoutOccurrences(t *testing.T) {
 		}
 	}
 }
+
+// Requests are numbered as they arrive: a first request whose reply finishes
+// after a second one's still records as occurrence 1.
+func TestOccurrencesFollowArrivalNotCompletion(t *testing.T) {
+	release := make(chan struct{})
+	var arrivals sync.WaitGroup
+	arrivals.Add(1)
+	calls := 0
+	var mu sync.Mutex
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls++
+		first := calls == 1
+		mu.Unlock()
+		if first {
+			arrivals.Done()
+			<-release
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"first":%v}`, first)
+	}))
+	defer upstream.Close()
+	store := filepath.Join(t.TempDir(), "recordings.jsonl")
+	recorder, err := New(Options{Mode: ModeRecord, Upstream: upstream.URL, StorePath: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(recorder)
+	defer proxy.Close()
+	body := chatBody("Reply DONE", 0, 3)
+	done := make(chan struct{})
+	go func() {
+		response, err := http.Post(proxy.URL+chatPath, "application/json", strings.NewReader(body))
+		if err == nil {
+			response.Body.Close()
+		}
+		close(done)
+	}()
+	arrivals.Wait()
+	response, err := http.Post(proxy.URL+chatPath, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	close(release)
+	<-done
+	recorder.Close()
+	for _, line := range readLines(t, store) {
+		chunks := line["chunks"].([]any)
+		data := chunks[0].(map[string]any)["data"].(string)
+		first := data == "eyJmaXJzdCI6dHJ1ZX0=" // {"first":true}
+		if (line["occurrence"] == 1.0) != first {
+			t.Fatalf("occurrence %v holds %s", line["occurrence"], data)
+		}
+	}
+}

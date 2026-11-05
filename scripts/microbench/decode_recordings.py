@@ -5,14 +5,17 @@
 
 Each recording holds the model's reply as the raw chunks it streamed, and,
 for recordings made since requests were kept, the request the harness sent.
-The report groups recordings by conversation (the task's first user message),
-then by turn and occurrence (a task run twice on one harness, cold then warm,
-records each turn twice), and shows for each:
+The report groups recordings by conversation (the task's first user message)
+and lists each conversation's recordings in the order they were made, labelled
+with the run they belong to: a task run twice on one harness records every
+turn twice, so with --warm run 1 is the cold run and run 2 the warm one. For
+each recording it shows:
 
   - when it was recorded, the time to the first byte and to the last;
   - what the harness sent since the model's previous reply (tool results, or
     the user's message), and how many tools it offered;
-  - the reply: the model's reasoning, its text, and the tool calls it made;
+  - the reply: the model's reasoning, its text, and the tool calls it made, or
+    the provider's error;
   - token usage, when the provider reported it.
 
 --full also includes each request's complete message list. Standard library
@@ -77,9 +80,24 @@ def decode_reply(recording):
 
 
 def new_messages(messages):
-    """What the harness sent since the model's last reply."""
+    """What the harness sent since the model's last reply. A first request
+    shows its user message, and its system prompt when that is short, as for
+    a background request such as a session title."""
     last = max((i for i, message in enumerate(messages) if message.get("role") == "assistant"), default=-1)
-    return messages[last + 1:] if last >= 0 else [m for m in messages if m.get("role") == "user"]
+    if last >= 0:
+        return messages[last + 1:]
+    return [m for m in messages if m.get("role") == "user"
+            or (m.get("role") == "system" and len(text_of(m.get("content"))) < 2000)]
+
+
+def label_runs(group):
+    """Numbers the runs in a conversation's recordings, in recorded order: a
+    new run starts at each first turn that offers tools, the agent's own."""
+    run = 0
+    for recording in group:
+        if recording["key"]["turn"] == 0 and recording["key"]["tools"]:
+            run += 1
+        recording["_run"] = max(run, 1)
 
 
 def first_user(recording):
@@ -114,7 +132,8 @@ def render(recordings, full):
             conversation, " ".join(first.split())[:80].replace("|", "\\|"), len(group),
             len({r["key"]["turn"] for r in group}), max(r.get("occurrence", 0) for r in group)))
     for conversation in order:
-        group = sorted(conversations[conversation], key=lambda r: (r.get("occurrence", 0), r["key"]["turn"], -r["key"]["tools"], r.get("recorded_at", "")))
+        group = sorted(conversations[conversation], key=lambda r: r.get("recorded_at", ""))
+        label_runs(group)
         first = next((text for text in map(first_user, group) if text), None)
         out += ["", "## Conversation `%s`" % conversation, ""]
         if first is not None:
@@ -124,9 +143,9 @@ def render(recordings, full):
             chunks = recording.get("chunks") or []
             first_byte = chunks[0]["offset_ms"] if chunks else 0
             last_byte = chunks[-1]["offset_ms"] if chunks else 0
-            out += ["", "### Turn %d, occurrence %s%s" % (key["turn"], recording.get("occurrence") or "?", "" if key["tools"] else " (offers no tools: a background request)"), ""]
-            out.append("Recorded %s · status %s · first byte %.0f ms · last byte %.0f ms · %d chunks · %d tools offered" % (
-                recording.get("recorded_at", "?"), recording.get("status"), first_byte, last_byte, len(chunks), key["tools"]))
+            out += ["", "### Run %d, turn %d%s" % (recording["_run"], key["turn"], "" if key["tools"] else ", background request (offers no tools)"), ""]
+            out.append("Recorded %s · occurrence %s · status %s · first byte %.0f ms · last byte %.0f ms · %d chunks · %d tools offered" % (
+                recording.get("recorded_at", "?"), recording.get("occurrence") or "?", recording.get("status"), first_byte, last_byte, len(chunks), key["tools"]))
             request = recording.get("request")
             if request:
                 out += ["", "**Sent since the last reply:**", ""]
@@ -141,6 +160,14 @@ def render(recordings, full):
                             json.dumps(request.get("messages"), indent=2, ensure_ascii=False), "```", "", "</details>"]
             else:
                 out += ["", "*The request was not stored with this recording.*"]
+            if recording.get("status") != 200:
+                error = body_of(recording).decode("utf-8", "replace")
+                try:
+                    error = json.loads(error)["error"]["message"]
+                except (ValueError, KeyError, TypeError):
+                    pass
+                out += ["", "**Error** (replay does not serve it): %s" % trimmed(error, 500)]
+                continue
             reply = decode_reply(recording)
             out += ["", "**Reply** (finish: %s):" % reply["finish"], ""]
             if reply["reasoning"]:
