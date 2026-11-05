@@ -117,6 +117,18 @@ def run_gateway(instruction, session_id):
         return {}, "gateway API: %s" % problem
 
 
+# Prints the spans Hermes's hermes_otel plugin stored, one JSON object per
+# line, as ARIES collects them (pkg/harness/hermes/harness.go).
+SPAN_DUMP = """import os, sqlite3, sys
+path = sys.argv[1]
+if not os.path.isfile(path):
+    sys.exit(3)
+db = sqlite3.connect("file:" + path + "?mode=ro", uri=True)
+for (data,) in db.execute("SELECT data FROM events WHERE kind = 'span' ORDER BY seq"):
+    sys.stdout.write(data + "\\n")
+"""
+
+
 def run_task(args, root, run_dir, task, occurrence, template, image):
     task_id = "%s-%03d" % (task, occurrence)
     # On the node's own disk: the gateway runs as root, which an NFS home
@@ -209,6 +221,13 @@ def run_task(args, root, run_dir, task, occurrence, template, image):
     subprocess.run(["docker", "logs", gateway], stdout=open(os.path.join(harness_dir, "container.log"), "w"), stderr=subprocess.STDOUT)
     with open(os.path.join(harness_dir, "session-outcome.json"), "w") as handle:
         json.dump(outcome, handle, indent=2)
+    # Hermes's spans time each tool call from the harness's side, as under ARIES.
+    spans = subprocess.run(["docker", "exec", gateway, "python3", "-c", SPAN_DUMP,
+                            os.path.join(work, "home", "hermes_otel_live.db")], capture_output=True)
+    if spans.returncode == 0 and spans.stdout:
+        os.makedirs(os.path.join(harness_dir, "telemetry"), exist_ok=True)
+        with open(os.path.join(harness_dir, "telemetry", "otel-spans.jsonl"), "wb") as handle:
+            handle.write(spans.stdout)
 
     began = now()
     subprocess.run(["docker", "rm", "-f", gateway] + sandbox_names, capture_output=True)

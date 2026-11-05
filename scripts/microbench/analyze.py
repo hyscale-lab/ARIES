@@ -7,7 +7,7 @@ Reads the manifest scripts/microbench/run.sh writes and, for every task run,
 combines the runner's phase timeline (run-result.json), the bridge's tool-call
 log, aries-replay's request log and the resource samples. Writes one row per
 task run to tasks.csv beside the manifest and prints a Markdown summary of
-medians per variant, with the Kubernetes minus Docker difference.
+means per variant, with the Kubernetes minus Docker difference.
 
 A variant names how harnesses started (parallel, alongside their sandboxes,
 or sequential) and whether a warm-up ran first. The cold run is the first
@@ -20,9 +20,12 @@ warm_latency_s its run alone.
 Each run is split three ways: model time, how long the agent waited on a
 model request, that is, how long at least one request offering it tools was
 open (a request offering none, such as Hermes's session title, runs beside the
-agent and is left out unless the run offers no tools at all); tool time, what the bridge measured executing commands in the
-sandbox; and the remainder, the harness's own work plus the transport between
-harness, bridge and sandbox. The run ends when the harness answers; retaining
+agent and is left out unless the run offers no tools at all); tool execution,
+how long the harness's tool calls took as the harness itself timed them, from
+OpenClaw's session log or Hermes's spans, which every deployment keeps alike
+(the transport to the sandbox included); and harness logic, the remainder, the
+harness's own work. The bridge's own measure of executing each command is
+kept as tool_s. The run ends when the harness answers; retaining
 its artifacts afterwards is harness_collect. Native runs have no start-up
 variant of their own, so each is compared with the ARIES variants that share
 its cold or warm measurement. Standard library only, so it runs on the cluster
@@ -83,6 +86,43 @@ def model_seconds(requests, window):
         if end > start:
             total += end - start
             open_until = end
+    return total
+
+
+def harness_tool_seconds(task_dir, window):
+    """How long the harness's tool calls took as it saw them: the union of
+    Hermes's tool spans, or else, from OpenClaw's session log, the time from
+    each tool-calling reply to its tool result. OpenClaw's own durationMs
+    leaves out the workspace sync it runs in the sandbox before each command.
+    None when the run kept neither."""
+    spans_path = os.path.join(task_dir, "harness", "telemetry", "otel-spans.jsonl")
+    if os.path.exists(spans_path):
+        spans = sorted((span["start_time_unix_nano"] / 1e9, span["end_time_unix_nano"] / 1e9)
+                       for span in read_jsonl(spans_path) if span.get("name", "").startswith("tool."))
+        total, open_until = 0.0, window[0]
+        for start, end in spans:
+            start, end = max(start, open_until), min(end, window[1])
+            if end > start:
+                total += end - start
+                open_until = end
+        return total
+    logs = [path for path in glob.glob(os.path.join(task_dir, "harness", "telemetry", "*.jsonl"))
+            if "trajectory" not in os.path.basename(path)]
+    if not logs:
+        return None
+    total = 0.0
+    for path in logs:
+        called = None
+        for entry in read_jsonl(path):
+            role = (entry.get("message") or {}).get("role")
+            if not entry.get("timestamp") or role not in ("assistant", "toolResult"):
+                continue
+            moment = parse_time(entry["timestamp"])
+            if role == "assistant":
+                called = moment
+            elif called is not None and window[0] <= called and moment <= window[1]:
+                total += moment - called
+                called = moment
     return total
 
 
@@ -189,6 +229,9 @@ def task_rows(entry, requests):
             row[name + "_tool_s"] = sum(call.get("duration_ms", 0) for call in calls) / 1000
             row[name + "_tool_mean_ms"] = statistics.mean(c.get("duration_ms", 0) for c in calls) if calls else None
             row[name + "_other_s"] = row[name + "_run_s"] - row[name + "_model_s"] - row[name + "_tool_s"]
+            executed = harness_tool_seconds(os.path.join(run_dir, task["task_id"]), window)
+            row[name + "_tool_exec_s"] = executed
+            row[name + "_harness_logic_s"] = None if executed is None else row[name + "_run_s"] - row[name + "_model_s"] - executed
             harness_calls = harness_tool_calls(os.path.join(run_dir, task["task_id"]), window)
             row[name + "_harness_tool_calls"] = len(harness_calls)
             row[name + "_harness_tool_mean_ms"] = statistics.mean(harness_calls) if harness_calls else None
@@ -200,9 +243,9 @@ def task_rows(entry, requests):
     return rows
 
 
-def median(values):
+def mean(values):
     values = [v for v in values if isinstance(v, (int, float))]
-    return statistics.median(values) if values else None
+    return statistics.fmean(values) if values else None
 
 
 def main():
@@ -225,8 +268,8 @@ def main():
         writer.writerows(rows)
 
     shown = ["cold_latency_s", "cold_startup_s", "provisioning_s", "harness_prepare_s", "harness_start_s",
-             "cold_run_s", "cold_model_s", "cold_tool_s", "cold_other_s",
-             "warm_latency_s", "warm_model_s", "warm_tool_s", "warm_other_s", "agent_internal_s",
+             "cold_run_s", "cold_model_s", "cold_tool_exec_s", "cold_harness_logic_s", "cold_tool_s",
+             "warm_latency_s", "warm_model_s", "warm_tool_exec_s", "warm_harness_logic_s", "warm_tool_s", "agent_internal_s",
              "task_s", "harness_collect_s", "isolation_s", "evaluation_s", "cleanup_s", "cold_tool_mean_ms", "warm_tool_mean_ms",
              "cold_harness_tool_mean_ms", "warm_harness_tool_mean_ms",
              "sandbox_cpu_mean", "sandbox_cpu_peak", "harness_cpu_peak", "harness_memory_peak_mib"]
@@ -243,7 +286,7 @@ def main():
     shown_variants = {key[:3] for key in groups if key[3] != "native"}
     shown_variants |= {(h, t, v) for h, t, v, b in groups
                        if b == "native" and not any(s[:2] == (h, t) and measured(s[2]) == measured(v) for s in shown_variants)}
-    print("Medians over replayed runs; times in seconds, CPU in percent of one core.\n")
+    print("Means over replayed runs; times in seconds, CPU in percent of one core.\n")
     for harness, task, variant in sorted(shown_variants):
         native = natives.get((harness, task, measured(variant)), [])
         docker = groups.get((harness, task, variant, "docker"), [])
@@ -255,8 +298,8 @@ def main():
         print("| --- | --- | --- | --- | --- |")
         fmt = lambda v: "" if v is None else "%.2f" % v
         for column in shown:
-            n = median(r.get(column) for r in native)
-            d, k = median(r.get(column) for r in docker), median(r.get(column) for r in k8s)
+            n = mean(r.get(column) for r in native)
+            d, k = mean(r.get(column) for r in docker), mean(r.get(column) for r in k8s)
             diff = "" if d is None or k is None else "%+.2f" % (k - d)
             print("| %s | %s | %s | %s | %s |" % (column, fmt(n), fmt(d), fmt(k), diff))
         print()
