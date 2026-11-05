@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/replay"
 	"github.com/sirupsen/logrus"
 )
 
@@ -51,6 +52,8 @@ type Runner struct {
 	cleanupTimeout   time.Duration
 	logger           *logrus.Logger
 	runtimeOverrides RuntimeOverrides
+	loadSource       func(context.Context) (replay.Plan, error)
+	caller           ReplayCaller
 }
 
 // New constructs a Runner explicitly and rejects missing roles.
@@ -91,6 +94,31 @@ func New(benchmark Benchmark, harness AgentHarness, toolSandbox ToolSandbox, bri
 	}, nil
 }
 
+// NewReplay constructs the explicit replay path without an agent harness.
+func NewReplay(benchmark Benchmark, toolSandbox ToolSandbox, bridge ToolBridge, caller ReplayCaller, loadSource func(context.Context) (replay.Plan, error), options Options) (*Runner, error) {
+	if benchmark == nil || toolSandbox == nil || bridge == nil || caller == nil {
+		return nil, errors.New("replay benchmark, sandbox, bridge, and caller are required")
+	}
+	if loadSource == nil {
+		return nil, errors.New("replay source loader is required")
+	}
+	if options.RunID == "" {
+		return nil, errors.New("run ID is required")
+	}
+	if options.CleanupTimeout <= 0 {
+		options.CleanupTimeout = defaultCleanupTimeout
+	}
+	if options.Logger == nil {
+		options.Logger = logrus.StandardLogger()
+	}
+	return &Runner{
+		benchmark: benchmark, toolSandbox: toolSandbox, bridge: bridge, caller: caller,
+		loadSource: loadSource, name: options.Name, runID: options.RunID, outputDir: options.OutputDir,
+		cleanupTimeout: options.CleanupTimeout, logger: options.Logger,
+		runtimeOverrides: cloneRuntimeOverrides(options.RuntimeOverrides),
+	}, nil
+}
+
 // Run executes tasks sequentially. A task failure is recorded without hiding
 // later independent task results unless the run context itself is cancelled.
 func (r *Runner) Run(ctx context.Context) (core.RunResult, error) {
@@ -109,7 +137,13 @@ func (r *Runner) Run(ctx context.Context) (core.RunResult, error) {
 			runErrors = append(runErrors, fmt.Errorf("schedule task %q: %w", task.ID, err))
 			break
 		}
-		taskResult, taskErr := r.runTask(ctx, task)
+		var taskResult core.TaskResult
+		var taskErr error
+		if r.caller != nil {
+			taskResult, taskErr = r.runReplayTask(ctx, task)
+		} else {
+			taskResult, taskErr = r.runTask(ctx, task)
+		}
 		result.Tasks = append(result.Tasks, taskResult)
 		if taskErr != nil {
 			runErrors = append(runErrors, fmt.Errorf("task %q: %w", task.ID, taskErr))
@@ -326,6 +360,142 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 	return finish()
 }
 
+func (r *Runner) runReplayTask(ctx context.Context, task core.Task) (core.TaskResult, error) {
+	started := time.Now()
+	result := newTaskResult(task.ID)
+	result.StartedAt = started
+	result.Replay = &core.ReplayResult{Status: core.StatusNotStarted}
+	r.logger.WithContext(ctx).WithField("task_id", task.ID).Info("replay task started")
+
+	var (
+		sandbox       Sandbox
+		sandboxActive bool
+		bridgeActive  bool
+		callerActive  bool
+		allErrors     []error
+		cleanupErrors []error
+		cleanupUsed   bool
+	)
+	finish := func() (core.TaskResult, error) {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.cleanupTimeout)
+		defer cancel()
+		if callerActive {
+			cleanupUsed = true
+			if err := r.caller.Stop(cleanupCtx); err != nil {
+				cleanupErrors = append(cleanupErrors, fmt.Errorf("cleanup replay caller: %w", err))
+			}
+		}
+		if bridgeActive {
+			cleanupUsed = true
+			if err := r.bridge.Stop(cleanupCtx); err != nil {
+				cleanupErrors = append(cleanupErrors, fmt.Errorf("cleanup bridge: %w", err))
+			}
+		}
+		if sandboxActive {
+			cleanupUsed = true
+			if err := r.toolSandbox.Stop(cleanupCtx, sandbox); err != nil {
+				cleanupErrors = append(cleanupErrors, fmt.Errorf("cleanup sandbox: %w", err))
+			}
+		}
+		if cleanupUsed {
+			result.Cleanup.Status = core.StatusSucceeded
+		}
+		if len(cleanupErrors) != 0 {
+			result.Cleanup.Status = core.StatusFailed
+			result.Cleanup.Error = errors.Join(cleanupErrors...).Error()
+			allErrors = append(allErrors, cleanupErrors...)
+		}
+		if runErr := ctx.Err(); runErr != nil && !errors.Is(errors.Join(allErrors...), runErr) {
+			allErrors = append(allErrors, fmt.Errorf("run context: %w", runErr))
+		}
+		result.Duration = time.Since(started)
+		taskErr := errors.Join(allErrors...)
+		entry := r.logger.WithContext(context.WithoutCancel(ctx)).WithFields(logrus.Fields{
+			"task_id": task.ID, "replay_status": result.Replay.Status,
+			"evaluation_status": result.Evaluation.Status, "cleanup_status": result.Cleanup.Status,
+		})
+		if taskErr != nil {
+			result.Error = taskErr.Error()
+			entry = entry.WithError(taskErr)
+		}
+		entry.Info("replay task finished")
+		return result, taskErr
+	}
+
+	plan, err := r.loadSource(ctx)
+	if err != nil {
+		result.Replay.Status = failureStatus(err)
+		result.Replay.Error = err.Error()
+		allErrors = append(allErrors, fmt.Errorf("validate replay source: %w", err))
+		return finish()
+	}
+	result.Evaluation = plan.Evaluation
+	result.Evaluation.Reused = true
+	result.Evaluation.SourceRunID = plan.SourceRunID
+	result.Evaluation.SourceTaskID = plan.SourceTaskID
+
+	sandboxEnvironment, _, _, _ := effectiveRuntime(task, r.runtimeOverrides)
+	sandbox, err = r.toolSandbox.Start(ctx, core.SandboxRequest{RunID: r.runID, TaskID: task.ID, Environment: sandboxEnvironment})
+	if err != nil {
+		allErrors = append(allErrors, fmt.Errorf("start sandbox: %w", err))
+		return finish()
+	}
+	if sandbox == nil {
+		allErrors = append(allErrors, errors.New("start sandbox: returned a nil sandbox"))
+		return finish()
+	}
+	sandboxActive = true
+	if err := r.benchmark.PrepareSandbox(ctx, task, sandbox); err != nil {
+		allErrors = append(allErrors, fmt.Errorf("prepare sandbox: %w", err))
+		return finish()
+	}
+	endpoint, err := r.bridge.Start(ctx, sandbox)
+	// A failed Start can leave task-local resources. Always confirm revocation.
+	bridgeActive = true
+	if err != nil {
+		allErrors = append(allErrors, fmt.Errorf("start bridge: %w", err))
+		return finish()
+	}
+	result.ToolLogPaths = append([]string(nil), endpoint.LogPaths...)
+	// A failed Start can leave a live caller. Stop it before bridge revocation.
+	callerActive = true
+	if err := r.caller.Start(ctx, endpoint, sandbox.Connectivity(), r.runID, task.ID); err != nil {
+		result.Replay.Status = failureStatus(err)
+		result.Replay.Error = err.Error()
+		allErrors = append(allErrors, fmt.Errorf("start replay caller: %w", err))
+	} else if err := r.caller.Run(ctx, plan); err != nil {
+		result.Replay.Status = failureStatus(err)
+		result.Replay.Error = err.Error()
+		allErrors = append(allErrors, fmt.Errorf("run replay caller: %w", err))
+	} else {
+		result.Replay.Status = core.StatusSucceeded
+	}
+
+	isolationCtx, cancelIsolation := context.WithTimeout(context.WithoutCancel(ctx), r.cleanupTimeout)
+	var isolationErrors []error
+	if err := r.caller.Stop(isolationCtx); err != nil {
+		isolationErrors = append(isolationErrors, fmt.Errorf("confirm replay caller stopped: %w", err))
+	} else {
+		callerActive = false
+		result.Isolation.CallerStopped = true
+	}
+	if err := r.bridge.Stop(isolationCtx); err != nil {
+		isolationErrors = append(isolationErrors, fmt.Errorf("confirm bridge revoked: %w", err))
+	} else {
+		bridgeActive = false
+		result.Isolation.BridgeRevoked = true
+	}
+	cancelIsolation()
+	if len(isolationErrors) != 0 {
+		result.Isolation.Status = core.StatusBlockedIsolation
+		result.Isolation.Error = errors.Join(isolationErrors...).Error()
+		allErrors = append(allErrors, isolationErrors...)
+	} else {
+		result.Isolation.Status = core.StatusConfirmed
+	}
+	return finish()
+}
+
 func cloneRuntimeOverrides(overrides RuntimeOverrides) RuntimeOverrides {
 	cloned := RuntimeOverrides{
 		HarnessResources:      cloneResourceOverrides(overrides.HarnessResources),
@@ -419,15 +589,17 @@ func summarize(tasks []core.TaskResult) core.RunSummary {
 		} else if task.Harness.Status == core.StatusFailed || task.Harness.Status == core.StatusCanceled {
 			summary.HarnessFailed++
 		}
-		switch task.Evaluation.Status {
-		case core.StatusSucceeded:
-			summary.EvaluationsRun++
-			summary.EvaluationsSucceeded++
-		case core.StatusFailed, core.StatusCanceled:
-			summary.EvaluationsRun++
-			summary.EvaluationsFailed++
-		case core.StatusBlockedIsolation:
-			summary.EvaluationsBlocked++
+		if !task.Evaluation.Reused {
+			switch task.Evaluation.Status {
+			case core.StatusSucceeded:
+				summary.EvaluationsRun++
+				summary.EvaluationsSucceeded++
+			case core.StatusFailed, core.StatusCanceled:
+				summary.EvaluationsRun++
+				summary.EvaluationsFailed++
+			case core.StatusBlockedIsolation:
+				summary.EvaluationsBlocked++
+			}
 		}
 		if task.Cleanup.Status == core.StatusFailed {
 			summary.CleanupFailed++
