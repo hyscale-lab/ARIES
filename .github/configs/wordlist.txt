@@ -84,6 +84,8 @@ NCSpeech
 noncanonical
 nousresearch
 npm
+NSCC
+NSCC's
 ntu
 nvidia
 OAuth
@@ -99,6 +101,7 @@ opentelemetry
 orchestrator
 otlp
 parsers
+PBS
 pid
 plaintext
 pre
@@ -188,6 +191,7 @@ vendored
 verifier
 verifiers
 vllm
+walltime
 wav
 websocket
 workdir
