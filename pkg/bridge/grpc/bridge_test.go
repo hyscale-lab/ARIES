@@ -17,6 +17,7 @@ import (
 	sandboxv1 "github.com/hyscale-lab/aries/pkg/bridge/grpc/v1"
 	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgekit"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -294,6 +295,36 @@ func TestFailedAuditRefusesEveryRPC(t *testing.T) {
 	}
 }
 
+func TestMalformedReplaySourceSequenceIsRefusedBeforeSandboxDispatch(t *testing.T) {
+	const sourceSequenceKey = "aries-replay-source-sequence"
+	executor := newFakeExecutor(fstest.MapFS{"app/f": &fstest.MapFile{Data: []byte("x")}})
+	manager, client, _ := startBridge(t, executor, Options{})
+	for name, values := range map[string][]string{
+		"duplicate":   {"1", "1"},
+		"zero":        {"0"},
+		"negative":    {"-1"},
+		"not decimal": {"not-a-sequence"},
+		"overflow":    {"18446744073709551616"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			for _, value := range values {
+				ctx = metadata.AppendToOutgoingContext(ctx, sourceSequenceKey, value)
+			}
+			if _, err := client.Exec(ctx, &sandboxv1.ExecRequest{Script: "true"}); status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("malformed replay Exec metadata accepted: %v", err)
+			}
+			if _, err := client.Stat(ctx, &sandboxv1.StatRequest{Path: "/app/f"}); status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("malformed replay Stat metadata accepted: %v", err)
+			}
+		})
+	}
+	if commands, _, fileOps := executor.snapshot(); len(commands) != 0 || fileOps != 0 {
+		t.Fatalf("malformed replay metadata reached sandbox: %d commands, %d file operations", len(commands), fileOps)
+	}
+	stop(t, manager)
+}
+
 // testToolCallID is a tool call id of the form Hermes sends.
 const testToolCallID = "call_1"
 
@@ -328,6 +359,9 @@ func TestRecordsCarryTheToolCallID(t *testing.T) {
 		id, present := record["tool_call_id"]
 		if want := ids[index/rpcs]; want == "" && present || want != "" && id != want {
 			t.Fatalf("record %d tool_call_id = %v (present %t), want %q", index, id, present, want)
+		}
+		if _, present := record["replay_source_sequence"]; present {
+			t.Fatalf("live record %d has replay-only correlation", index)
 		}
 	}
 }

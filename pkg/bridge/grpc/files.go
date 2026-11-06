@@ -52,6 +52,7 @@ type fileCall struct {
 	window  fileWindow
 	// toolCallID is the harness tool call the file call serves, or "".
 	toolCallID         string
+	sourceSequence     uint64
 	outcome            *responseOutcome
 	responseSendFailed bool
 }
@@ -62,7 +63,8 @@ type fileCall struct {
 func (svc *service) beginFile(ctx context.Context, method, kind, filePath, invalid string, window fileWindow) (*fileCall, error) {
 	session := svc.session
 	toolCallID, validID := incomingToolCallID(ctx)
-	call := &fileCall{session: session, outcome: newResponseOutcome(method), kind: kind, path: filePath, started: time.Now(), window: window, toolCallID: toolCallID}
+	sourceSequence, validSequence := incomingReplaySourceSequence(ctx)
+	call := &fileCall{session: session, outcome: newResponseOutcome(method), kind: kind, path: filePath, started: time.Now(), window: window, toolCallID: toolCallID, sourceSequence: sourceSequence}
 	reject := func(code codes.Code, message string) (*fileCall, error) {
 		call.recordFile(nil, false, 0, "rejected", message, status.Error(code, message))
 		return nil, status.Error(code, message)
@@ -75,6 +77,9 @@ func (svc *service) beginFile(ctx context.Context, method, kind, filePath, inval
 	}
 	if !validID {
 		return reject(codes.InvalidArgument, invalidToolCallID)
+	}
+	if !validSequence {
+		return reject(codes.InvalidArgument, invalidReplaySourceSequence)
 	}
 	if invalid != "" {
 		return reject(codes.InvalidArgument, invalid)
@@ -450,7 +455,7 @@ func (call *fileCall) recordFile(sink *contentSink, truncated bool, duration int
 		OperationClass: kind, Path: call.path,
 		ExitCode: refusedExitCode, StartedAt: bridgekit.FormatTime(call.started), DurationMS: duration, Status: statusText, Error: message,
 		StdinEncoding: "utf-8", ToolCallID: call.toolCallID,
-	}, Truncated: truncated, fileWindow: call.window}
+	}, Truncated: truncated, ReplaySourceSequence: call.sourceSequence, fileWindow: call.window}
 	raw := rawGRPCRecord{OperationClass: kind, Path: call.path}
 	if sink != nil {
 		if statusText == "completed" {

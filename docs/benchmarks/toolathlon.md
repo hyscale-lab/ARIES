@@ -1,5 +1,9 @@
 ## Toolathlon
 
+Toolathlon does not support sandbox-call replay. Its task gateway uses MCP
+interactions that the `hermes-grpc` sandbox-call trace does not capture.
+See [supported implementations](../supported.md#current-limitations).
+
 `profiles/hermes-toolathlon-canvas-list-test-deepseek.json` runs one
 [Toolathlon](https://github.com/hkust-nlp/Toolathlon) task. Toolathlon is a
 benchmark of 108 tool-use tasks in which the agent works through MCP servers

@@ -72,6 +72,11 @@ const (
 	toolCallIDChars    = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:-"
 	// invalidToolCallID is the refusal message for an id outside the bound.
 	invalidToolCallID = "malformed tool call id"
+	// The replay key identifies a source audit record, not a harness tool call.
+	replaySourceSequenceKey     = "aries-replay-source-sequence"
+	replaySequenceBase          = 10
+	replaySequenceBits          = 64
+	invalidReplaySourceSequence = "malformed replay source sequence"
 	// auditFailed is the refusal message after the audit latched an error.
 	auditFailed = "bridge audit failed"
 )
@@ -355,12 +360,13 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 	command := core.Command{Path: bridgekit.RemoteShellPath, Args: args, Dir: session.sandbox.Workdir()}
 	raw := rawGRPCRecord{OperationClass: kindExec, Script: script, Login: request.GetLogin()}
 	toolCallID, validID := incomingToolCallID(ctx)
+	sourceSequence, validSequence := incomingReplaySourceSequence(ctx)
 	refuse := func(code codes.Code, message string) (*sandboxv1.ExecResponse, error) {
 		record := toolCallRecord{ToolCallRecord: bridgekit.ToolCallRecord{
 			OperationClass: kindExec, CommandHash: bridgekit.CommandHash(script), Command: script,
 			StdinEncoding: "utf-8", ExitCode: refusedExitCode, StartedAt: bridgekit.FormatTime(time.Now()),
 			Status: "rejected", Error: message, ToolCallID: toolCallID,
-		}}
+		}, ReplaySourceSequence: sourceSequence}
 		record.setOutcome(newResponseOutcome(sandboxv1.Sandbox_Exec_FullMethodName), status.Error(code, message))
 		session.writeRecord(record, raw)
 		return nil, status.Error(code, message)
@@ -373,6 +379,9 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 	}
 	if !validID {
 		return refuse(codes.InvalidArgument, invalidToolCallID)
+	}
+	if !validSequence {
+		return refuse(codes.InvalidArgument, invalidReplaySourceSequence)
 	}
 	// The whole input is in hand, so the call is refused before anything runs
 	// and the refusal is the evidence.
@@ -422,7 +431,7 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 		StdoutBytes: stdout.count(), StderrBytes: stderr.count(),
 		ExitCode: exitCode, StartedAt: bridgekit.FormatTime(started), DurationMS: time.Since(started).Milliseconds(),
 		Status: statusText, Error: message, ToolCallID: toolCallID,
-	}, Truncated: truncated}
+	}, Truncated: truncated, ReplaySourceSequence: sourceSequence}
 	if stdinEncoding != "utf-8" {
 		record.ReplayError = "stdin-omitted"
 	}
@@ -450,6 +459,21 @@ func incomingToolCallID(ctx context.Context) (string, bool) {
 		return "", false
 	}
 	return values[0], true
+}
+
+func incomingReplaySourceSequence(ctx context.Context) (uint64, bool) {
+	values := metadata.ValueFromIncomingContext(ctx, replaySourceSequenceKey)
+	if len(values) == 0 {
+		return 0, true
+	}
+	if len(values) != 1 {
+		return 0, false
+	}
+	sequence, err := strconv.ParseUint(values[0], replaySequenceBase, replaySequenceBits)
+	if err != nil || sequence == 0 || strconv.FormatUint(sequence, replaySequenceBase) != values[0] {
+		return 0, false
+	}
+	return sequence, true
 }
 
 func (session *bridgeSession) writeRecord(record toolCallRecord, raw rawGRPCRecord) {

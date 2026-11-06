@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"time"
 
 	sandboxv1 "github.com/hyscale-lab/aries/pkg/bridge/grpc/v1"
@@ -113,6 +114,9 @@ launch:
 }
 
 func replayCall(ctx context.Context, client sandboxv1.SandboxClient, call replay.Call) error {
+	if call.Sequence != 0 {
+		ctx = metadata.AppendToOutgoingContext(ctx, replaySourceSequenceKey, strconv.FormatUint(call.Sequence, replaySequenceBase))
+	}
 	if call.ToolCallID != "" {
 		ctx = metadata.AppendToOutgoingContext(ctx, toolCallIDKey, call.ToolCallID)
 	}

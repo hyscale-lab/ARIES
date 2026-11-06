@@ -17,8 +17,9 @@ fields from your chosen profile.
 | `name` | Experiment name used in run identity. |
 | `versions_file` | Pinned benchmark repositories and harness images. |
 | `overrides_file` | Optional resource/deadline overrides; `""` disables loading. |
-| `benchmark` | Benchmark type, checkout root, selected task occurrences, and supported evaluator options. |
-| `harness` | Agent implementation, mode, placement, and optional tool/model settings. |
+| `benchmark` | Benchmark type, checkout root, selected logical tasks, and supported evaluator options. |
+| `harness` | Live agent implementation, mode, placement, and optional tool/model settings. |
+| `replay` | Replay source occurrence and private caller placement; replaces live model and harness settings. |
 | `sandbox.deployment` | Task runtime placement. |
 | `bridge` | Paired tool adapter, managed deployment, and optional raw evidence retention. |
 | `runtime` | Model service backend and external/managed ownership. |
@@ -26,8 +27,8 @@ fields from your chosen profile.
 | `execution` | Concurrency, looping, or arrival schedule. |
 | `output_dir` | Private run output root; defaults to `runs`. |
 
-`versions_file`, nonempty `overrides_file`, and managed SGLang's `config.file`
-resolve relative to the profile. Run from the repository root for checked-in
+`versions_file`, nonempty `overrides_file`, managed SGLang's `config.file`,
+and `replay.source` resolve relative to the profile. Run from the repository root for checked-in
 profiles: benchmark roots, output paths, and arrival trace paths use the working
 directory. Profiles reject unknown fields and trailing JSON; there is no merge
 or inheritance layer. Never put credential values in profile JSON.
@@ -322,6 +323,71 @@ bound parallel occurrences. Add a positive Go duration such as `"30m"` as
 `execution.loop_duration` to repeat the list until admissions close; admitted
 work is always drained. ARIES loads each task's explicit tagged image directly from that
 task's `task.toml`; no version-catalog or Go code change is required.
+
+## Sandbox-call replay
+
+A replay profile selects one earlier task occurrence, not an arrival schedule.
+Create a new profile from the live profile that produced a `hermes-grpc` trace.
+Keep the same benchmark type, one matching logical task ID, versions file,
+overrides file, sandbox, and managed bridge settings. Remove top-level `model`,
+`harness`, and `runtime`. Add this fragment, with a source path relative to the
+new profile file:
+
+```json
+{
+  "benchmark": { "tasks": ["fix-git"] },
+  "bridge": { "type": "hermes-grpc", "mode": "managed", "deployment": { "backend": "docker" } },
+  "replay": {
+    "source": "../runs/SOURCE_RUN/fix-git-001",
+    "deployment": { "backend": "docker", "docker": { "socket": "/var/run/docker.sock" } }
+  }
+}
+```
+
+This is not a complete profile. Replace `SOURCE_RUN` with the source run
+directory. The source occurrence must contain `bridge/tool-calls.jsonl` and
+`bridge/runtime.json`; its parent must contain `run-result.json` with a
+matching evaluation. These three files are the only first-version source
+artifacts. The bridge log must contain complete request inputs and response
+checks. The runtime file must bind the complete log and identify the same
+benchmark, task, image reference, and pinned revisions. Old runs without this
+evidence cannot be replayed. Keep all source artifacts private. The structured
+log omits binary or control-bearing input and write bodies above 16 MiB.
+Failed writes can lack the declared size. Any such call rejects the whole
+source. The optional raw log does not restore omitted input for replay, and
+it is not a first-version replay source artifact.
+
+`replay.deployment` places a separate caller runtime in the pinned bridge
+image. For Docker, the caller, bridge, and sandbox must use the same local
+socket and private run network. For Kubernetes, all three must use the same
+backend and namespace. Set caller placement separately; it does not inherit
+bridge or sandbox settings. The caller reaches the private gRPC bridge and
+must not publish its unauthenticated endpoint or mount host paths. The
+first version supports `hermes-grpc` only, not SSH or Toolathlon.
+
+A replay profile requires exactly one `benchmark.tasks` ID and forbids
+`execution.loop_duration`, `execution.arrivals_file`, and
+`execution.arrival_rate_per_min`. It also forbids a live model, harness, or
+model runtime. Replay does not load a model credential, start a harness, run
+a model judge, or call the benchmark verifier. It retains the source
+evaluation as a labeled historical grade, not a grade of the new sandbox.
+A changed bridge response stops later calls and fails replay even when the
+source reward is positive. Equal responses do not prove equal final sandbox
+state. See [replay results](run-results.md#sandbox-call-replay-results).
+
+The replay caller uses the task's positive agent timeout, or the positive
+`agent_timeout_seconds` override when present. If both are absent or zero,
+the default is 20 minutes. A negative timeout is rejected. The first call
+starts after sandbox preparation, bridge access, and caller readiness.
+Later calls keep their recorded start spacing; the caller also keeps the
+recorded wait after the last call. Network delay can shift the bridge's actual
+start time. After confirmed caller stop and bridge revocation, ARIES pairs
+private bridge audit records by the source audit sequence. This replay-only
+identifier is separate from `tool_call_id`. The result reports signed
+`drift_ns` for each call relative to the first bridge call in each trace.
+Positive drift means a later relative start. Missing or duplicate identifiers
+make the timing diagnostic unavailable; they do not change response matching
+or the inherited evaluation. See [replay results](run-results.md#sandbox-call-replay-results).
 
 ## Replay task arrivals
 
