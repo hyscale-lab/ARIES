@@ -75,7 +75,7 @@ func LoadReplaySource(sourceDir string, task core.Task, benchmarkType string, re
 	}
 	defer bridge.Close()
 
-	runtimeData, err := readReplayFile(bridge, "runtime.json", maxMessageBytes)
+	runtimeData, err := readReplayFile(bridge, "runtime.json", MaxMessageBytes)
 	if err != nil {
 		return plan, fmt.Errorf("read replay runtime: %w", err)
 	}
@@ -110,7 +110,7 @@ func LoadReplaySource(sourceDir string, task core.Task, benchmarkType string, re
 		return plan, errors.New("replay call log ends with an incomplete line")
 	}
 
-	resultData, err := readReplayFile(root, "run-result.json", maxMessageBytes)
+	resultData, err := readReplayFile(root, "run-result.json", MaxMessageBytes)
 	if err != nil {
 		return plan, fmt.Errorf("read replay run result: %w", err)
 	}
@@ -146,7 +146,7 @@ func LoadReplaySource(sourceDir string, task core.Task, benchmarkType string, re
 	lines := bytes.Split(log, []byte{'\n'})
 	starts := make(map[uint64]time.Time, len(lines)-1)
 	for index, line := range lines[:len(lines)-1] {
-		if len(line) == 0 || len(line) > 2*maxMessageBytes {
+		if len(line) == 0 || len(line) > 2*MaxMessageBytes {
 			return replay.Plan{}, fmt.Errorf("replay call %d has invalid length", index+1)
 		}
 		var record toolCallRecord

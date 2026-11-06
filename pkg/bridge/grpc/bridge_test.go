@@ -228,8 +228,8 @@ func TestReplayOutcomeCapturesExecExitAndReason(t *testing.T) {
 // be full at once, so the cap has to clear twice the bound plus framing.
 func TestTruncationBindsBeforeTheTransportCap(t *testing.T) {
 	worstCaseReply := 2 * defaultOutputLimit
-	if margin := maxMessageBytes - worstCaseReply; margin < defaultOutputLimit {
-		t.Fatalf("maxMessageBytes = %d leaves only %d bytes above two truncated streams", maxMessageBytes, margin)
+	if margin := MaxMessageBytes - worstCaseReply; margin < defaultOutputLimit {
+		t.Fatalf("MaxMessageBytes = %d leaves only %d bytes above two truncated streams", MaxMessageBytes, margin)
 	}
 }
 
