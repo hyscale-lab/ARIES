@@ -52,12 +52,12 @@ const (
 	// maxExecOutput first.
 	defaultOutputLimit = 16 << 20
 
-	// maxMessageBytes is a backstop and must never be the binding constraint.
+	// MaxMessageBytes is a backstop and must never be the binding constraint.
 	// If the transport cap fired first, a command would run to completion and
 	// then have its reply rejected — the exact failure mode truncation exists to
 	// avoid, and the one grpc-go's 4 MiB receive default would have caused. Two
 	// fully truncated streams plus framing must fit well inside it.
-	maxMessageBytes = 64 << 20
+	MaxMessageBytes = 64 << 20
 
 	// refusedExitCode marks a record for a call that never ran, as Hermes's SSH
 	// dialect does.
@@ -215,7 +215,7 @@ func (manager *Manager) StartTarget(ctx context.Context, sandbox target.Executor
 	session.audit = bridgekit.NewAuditWriter(structured, raw)
 	session.serveCtx, session.cancel = context.WithCancel(context.Background())
 	session.server = grpc.NewServer(
-		grpc.MaxRecvMsgSize(maxMessageBytes), grpc.MaxSendMsgSize(maxMessageBytes),
+		grpc.MaxRecvMsgSize(MaxMessageBytes), grpc.MaxSendMsgSize(MaxMessageBytes),
 		// Stop must not return while a handler can still write its record;
 		// see revoke.
 		grpc.WaitForHandlers(true))
