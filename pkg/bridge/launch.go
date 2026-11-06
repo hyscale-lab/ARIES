@@ -16,15 +16,14 @@ type LaunchSpec struct {
 
 // LaunchConfig describes the run-owned bridge. Its host key is generated in memory.
 type LaunchConfig struct {
-	RunID             string            `json:"run_id"`
-	BridgeType        string            `json:"bridge_type"`
-	Backend           string            `json:"backend"`
-	BackendEndpoint   string            `json:"backend_endpoint,omitempty"`
-	Listen            core.BridgeListen `json:"listen"`
-	ControlAddress    string            `json:"control_address"`
-	OutputDir         string            `json:"output_dir"`
-	RetainRawLog      bool              `json:"retain_raw_log"`
-	DebugExecResponse bool              `json:"debug_exec_response,omitempty"`
+	RunID           string            `json:"run_id"`
+	BridgeType      string            `json:"bridge_type"`
+	Backend         string            `json:"backend"`
+	BackendEndpoint string            `json:"backend_endpoint,omitempty"`
+	Listen          core.BridgeListen `json:"listen"`
+	ControlAddress  string            `json:"control_address"`
+	OutputDir       string            `json:"output_dir"`
+	RetainRawLog    bool              `json:"retain_raw_log"`
 }
 
 // transportOf names the run's transport for a bridge type, or "" for an unknown type.

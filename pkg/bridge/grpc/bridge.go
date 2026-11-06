@@ -92,20 +92,17 @@ type Options struct {
 	// OmitRawLog drops grpc_raw.log, the only artifact holding binary stdin
 	// and written content that the structured log omits.
 	OmitRawLog bool
-	// DebugExecResponse keeps Exec output in the private structured audit.
-	DebugExecResponse bool
 }
 
 // Manager owns one occurrence and serves its calls to the borrowed target.
 type Manager struct {
-	used              bool
-	sandboxID         string
-	resolveListen     func(context.Context) (core.BridgeListen, error)
-	outputDir         string
-	cleanupTimeout    time.Duration
-	logger            *logrus.Logger
-	omitRawLog        bool
-	debugExecResponse bool
+	used           bool
+	sandboxID      string
+	resolveListen  func(context.Context) (core.BridgeListen, error)
+	outputDir      string
+	cleanupTimeout time.Duration
+	logger         *logrus.Logger
+	omitRawLog     bool
 
 	mu       sync.Mutex
 	active   *bridgeSession
@@ -115,18 +112,17 @@ type Manager struct {
 }
 
 type bridgeSession struct {
-	sandbox           target.Executor
-	sandboxID         string
-	listener          net.Listener
-	server            *grpc.Server
-	serveCtx          context.Context
-	cancel            context.CancelFunc
-	artifactDir       string
-	toolLogPath       string
-	rawLogPath        string
-	audit             *bridgekit.AuditWriter
-	debugExecResponse bool
-	partialStart      bool
+	sandbox      target.Executor
+	sandboxID    string
+	listener     net.Listener
+	server       *grpc.Server
+	serveCtx     context.Context
+	cancel       context.CancelFunc
+	artifactDir  string
+	toolLogPath  string
+	rawLogPath   string
+	audit        *bridgekit.AuditWriter
+	partialStart bool
 
 	// revoked is set before the transport is touched, so a call arriving
 	// concurrently is refused by construction rather than by timing.
@@ -163,7 +159,7 @@ func New(options Options) (*Manager, error) {
 	return &Manager{
 		sandboxID: options.SandboxID, resolveListen: options.ResolveListen,
 		outputDir: outputDir, cleanupTimeout: options.CleanupTimeout,
-		logger: options.Logger, omitRawLog: options.OmitRawLog, debugExecResponse: options.DebugExecResponse,
+		logger: options.Logger, omitRawLog: options.OmitRawLog,
 	}, nil
 }
 
@@ -186,7 +182,7 @@ func (manager *Manager) StartTarget(ctx context.Context, sandbox target.Executor
 		return core.ToolEndpoint{}, errors.New("gRPC bridge requires a bind IP and valid port")
 	}
 	manager.used = true
-	session := &bridgeSession{sandbox: sandbox, sandboxID: manager.sandboxID, artifactDir: manager.outputDir, debugExecResponse: manager.debugExecResponse}
+	session := &bridgeSession{sandbox: sandbox, sandboxID: manager.sandboxID, artifactDir: manager.outputDir}
 	fail := func(primary error) (core.ToolEndpoint, error) {
 		session.partialStart = true
 		session.revoke()
@@ -446,9 +442,7 @@ func (svc *service) Exec(ctx context.Context, request *sandboxv1.ExecRequest) (*
 	outcome := newResponseOutcome(sandboxv1.Sandbox_Exec_FullMethodName)
 	outcome.message(response)
 	record.setOutcome(outcome, nil)
-	if session.debugExecResponse {
-		record.setDebugResponse(response.GetStdout(), response.GetStderr())
-	}
+	record.setDebugResponse(response.GetStdout(), response.GetStderr())
 	session.writeRecord(record, raw)
 	return response, nil
 }

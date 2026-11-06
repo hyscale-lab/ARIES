@@ -151,7 +151,10 @@ make bridge-image
 
 Use a live run recorded with the current gRPC response checks. A replay run
 reports call matching and positive cleanup separately from its inherited
-source grade. It does not run a fresh verifier or model judge. Review the
+source grade. Every Hermes gRPC run retains bounded `Exec` output in its
+private bridge audit. A replay logs changed output through `aries.log` and
+stderr; hash-only drift does not stop it. Keep these artifacts private.
+An oversized audit response fails its live task before evaluation. It does not run a fresh verifier or model judge. Review the
 [replay results](run-results.md#sandbox-call-replay-results) before you
 compare grades: equal responses do not prove equal final sandbox state.
 

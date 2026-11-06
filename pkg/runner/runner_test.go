@@ -367,6 +367,57 @@ func newRig(t *testing.T, tasks int) *rig {
 	return &rig{log: log, benchmark: benchmark, factory: factory, bridge: bridge, harness: harness, runner: runner}
 }
 
+type markedAuditBridge struct {
+	*fakeBridge
+	paths []string
+}
+
+func (b *markedAuditBridge) Start(ctx context.Context, sandbox Sandbox) (core.ToolEndpoint, error) {
+	endpoint, err := b.fakeBridge.Start(ctx, sandbox)
+	if err != nil {
+		return endpoint, err
+	}
+	endpoint.Protocol = "grpc"
+	endpoint.LogPaths = []string{b.paths[b.stopCount()]}
+	return endpoint, nil
+}
+
+func TestRunnerOversizedExecAuditSkipsEvaluationAfterRevocationAndContinues(t *testing.T) {
+	rig := newRig(t, 2)
+	root := t.TempDir()
+	oversized := filepath.Join(root, "oversized.jsonl")
+	ordinary := filepath.Join(root, "ordinary.jsonl")
+	if err := os.WriteFile(oversized, []byte("{\"replay_error\":\"response-debug-too-large\"}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ordinary, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rig.runner.bridge = &markedAuditBridge{fakeBridge: rig.bridge, paths: []string{oversized, ordinary}}
+	result, err := rig.runner.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "audit") {
+		t.Fatalf("oversized audit accepted: %v", err)
+	}
+	if len(result.Tasks) != len(rig.benchmark.tasks) || result.Tasks[0].Evaluation.Status != core.StatusNotRun || result.Tasks[0].Isolation.Status != core.StatusConfirmed || result.Tasks[0].Cleanup.Status != core.StatusSucceeded || result.Tasks[1].Evaluation.Status != core.StatusSucceeded {
+		t.Fatalf("task results = %+v", result.Tasks)
+	}
+	if rig.bridge.stopCount() != len(rig.benchmark.tasks) || rig.factory.stopCount() != len(rig.benchmark.tasks) || rig.benchmark.evaluations != 1 {
+		t.Fatalf("stops and evaluations = %d, %d, %d", rig.bridge.stopCount(), rig.factory.stopCount(), rig.benchmark.evaluations)
+	}
+}
+
+func TestRunnerCombinedAuditOverflowBlocksIsolationAndContinues(t *testing.T) {
+	rig := newRig(t, 2)
+	rig.bridge.stopErrors = []error{errors.New("combined audit exceeds limit"), nil}
+	result, err := rig.runner.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "combined audit") {
+		t.Fatalf("audit overflow accepted: %v", err)
+	}
+	if len(result.Tasks) != len(rig.benchmark.tasks) || result.Tasks[0].Isolation.Status != core.StatusBlockedIsolation || result.Tasks[0].Isolation.BridgeRevoked || result.Tasks[0].Evaluation.Status != core.StatusBlockedIsolation || result.Tasks[0].Cleanup.Status != core.StatusSucceeded || result.Tasks[1].Evaluation.Status != core.StatusSucceeded || rig.factory.stopCount() != len(rig.benchmark.tasks) || rig.benchmark.evaluations != 1 {
+		t.Fatalf("overflow and sibling results = %+v", result.Tasks)
+	}
+}
+
 type completionBridge struct {
 	*fakeBridge
 	err error
@@ -1183,7 +1234,7 @@ func TestReplayReportsHashDriftAfterIsolationWithoutResultText(t *testing.T) {
 	var logs bytes.Buffer
 	logger := logrus.New()
 	logger.SetOutput(&logs)
-	plan := replay.Plan{Calls: []replay.Call{{Sequence: sourceSequence, Operation: "Exec", ResponseSHA256: sourceHash, ResponseDebug: true, ResponseStdout: []byte(sourceText)}}, SourceRunID: replaySourceRunID, SourceTaskID: replaySourceTaskID, Evaluation: core.Evaluation{Status: core.StatusSucceeded, Reward: float64(sourceSequence)}, DebugExecResponse: true}
+	plan := replay.Plan{Calls: []replay.Call{{Sequence: sourceSequence, Operation: "Exec", ResponseSHA256: sourceHash, ResponseDebug: true, ResponseStdout: []byte(sourceText)}}, SourceRunID: replaySourceRunID, SourceTaskID: replaySourceTaskID, Evaluation: core.Evaluation{Status: core.StatusSucceeded, Reward: float64(sourceSequence)}}
 	engine, err := NewReplay(&panicReplayEvaluation{rig.benchmark}, rig.factory, bridge, &fakeReplayCaller{log: rig.log}, func(context.Context) (replay.Plan, error) { return plan, nil }, Options{RunID: "replay-run", Logger: logger})
 	if err != nil {
 		t.Fatal(err)

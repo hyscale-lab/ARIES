@@ -76,7 +76,7 @@ func TestExecRunsBashInTheSandboxWorkdir(t *testing.T) {
 	if len(argv) != 4 || argv[1] != "-l" {
 		t.Fatalf("record argv = %#v", records[1]["argv"])
 	}
-	// Command output never enters the audit; only byte counts.
+	// Exec output uses response fields, not the legacy stdout/stderr fields.
 	for _, forbidden := range []string{"stdout", "stderr", "truncated"} {
 		if _, present := records[1][forbidden]; present {
 			t.Fatalf("record carries %q", forbidden)
@@ -84,55 +84,44 @@ func TestExecRunsBashInTheSandboxWorkdir(t *testing.T) {
 	}
 }
 
-func TestExecDebugResponseKeepsBinaryBytesAndDefaultsOff(t *testing.T) {
+func TestExecResponseKeepsBinaryBytesByDefault(t *testing.T) {
 	binary := []byte{'a', 0xff, 'b'}
-	for _, enabled := range []bool{false, true} {
-		executor := newFakeExecutor(nil)
-		executor.stdout = binary
-		executor.stderr = []byte("error text")
-		manager, client, endpoint := startBridge(t, executor, Options{OmitRawLog: true, DebugExecResponse: enabled})
-		if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "true"}); err != nil {
-			t.Fatal(err)
-		}
-		stop(t, manager)
-		record := readToolCalls(t, endpoint.LogPaths[0])[0]
-		if !enabled {
-			if _, ok := record["response_stdout_base64"]; ok {
-				t.Fatalf("binary response recorded without opt-in: %+v", record)
-			}
-			if _, ok := record["response_stderr"]; ok {
-				t.Fatalf("text response recorded without opt-in: %+v", record)
-			}
-			continue
-		}
-		encoded, ok := record["response_stdout_base64"].(string)
-		if !ok {
-			t.Fatalf("binary output missing: %+v", record)
-		}
-		decoded, err := base64.StdEncoding.DecodeString(encoded)
-		if err != nil || !bytes.Equal(decoded, binary) || record["response_stderr"] != "error text" {
-			t.Fatalf("binary output = %q, error = %v, record = %+v", decoded, err, record)
-		}
+	executor := newFakeExecutor(nil)
+	executor.stdout = binary
+	executor.stderr = []byte("error text")
+	manager, client, endpoint := startBridge(t, executor, Options{OmitRawLog: true})
+	if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "true"}); err != nil {
+		t.Fatal(err)
+	}
+	stop(t, manager)
+	record := readToolCalls(t, endpoint.LogPaths[0])[0]
+	encoded, ok := record["response_stdout_base64"].(string)
+	if !ok {
+		t.Fatalf("binary output missing: %+v", record)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil || !bytes.Equal(decoded, binary) || record["response_stderr"] != "error text" {
+		t.Fatalf("binary output = %q, error = %v, record = %+v", decoded, err, record)
 	}
 }
 
-func TestExecDebugResponseKeepsFullBoundedText(t *testing.T) {
+func TestExecResponseKeepsFullBoundedText(t *testing.T) {
 	executor := newFakeExecutor(nil)
 	executor.stdout = bytes.Repeat([]byte{'<'}, defaultOutputLimit)
-	manager, client, endpoint := startBridge(t, executor, Options{OmitRawLog: true, DebugExecResponse: true})
+	manager, client, endpoint := startBridge(t, executor, Options{OmitRawLog: true})
 	if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "true"}); err != nil {
 		t.Fatal(err)
 	}
 	stop(t, manager)
 	record := readToolCalls(t, endpoint.LogPaths[0])[0]
 	if record["response_debug"] != true || record["replay_error"] != nil || record["response_stdout"] != string(executor.stdout) {
-		t.Fatal("bounded UTF-8 output lost from debug audit")
+		t.Fatal("bounded UTF-8 output lost from audit")
 	}
 }
 
-func TestExecDebugResponseChecksBoundAfterIdentity(t *testing.T) {
+func TestExecResponseChecksBoundAfterIdentity(t *testing.T) {
 	const responseStreamCount = 2 // Exec has stdout and stderr.
-	baselineManager, baselineClient, baselineEndpoint := startBridge(t, newFakeExecutor(nil), Options{OmitRawLog: true, DebugExecResponse: true})
+	baselineManager, baselineClient, baselineEndpoint := startBridge(t, newFakeExecutor(nil), Options{OmitRawLog: true})
 	if _, err := baselineClient.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "true"}); err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +137,7 @@ func TestExecDebugResponseChecksBoundAfterIdentity(t *testing.T) {
 	}
 	executor.stdout = bytes.Repeat([]byte{0}, perStream)
 	executor.stderr = executor.stdout
-	manager, client, endpoint := startBridge(t, executor, Options{OmitRawLog: true, DebugExecResponse: true})
+	manager, client, endpoint := startBridge(t, executor, Options{OmitRawLog: true})
 	if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "true"}); err != nil {
 		t.Fatal(err)
 	}
@@ -162,22 +151,22 @@ func TestExecDebugResponseChecksBoundAfterIdentity(t *testing.T) {
 	}
 	record := readToolCalls(t, endpoint.LogPaths[0])[0]
 	if record["replay_error"] != "response-debug-too-large" || record["response_debug"] != nil {
-		t.Fatalf("identity pushed debug response past replay limit: %+v", record)
+		t.Fatalf("identity pushed response past replay limit: %+v", record)
 	}
 }
 
-func TestExecDebugResponseMarksOversizedAuditUnreplayable(t *testing.T) {
+func TestExecResponseMarksOversizedAuditUnreplayable(t *testing.T) {
 	executor := newFakeExecutor(nil)
 	executor.stdout = bytes.Repeat([]byte{0}, MaxMessageBytes/len(`\u0000`)+1)
 	executor.stderr = executor.stdout
-	manager, client, endpoint := startBridge(t, executor, Options{OmitRawLog: true, DebugExecResponse: true})
+	manager, client, endpoint := startBridge(t, executor, Options{OmitRawLog: true})
 	if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "true"}); err != nil {
 		t.Fatal(err)
 	}
 	stop(t, manager)
 	record := readToolCalls(t, endpoint.LogPaths[0])[0]
 	if record["replay_error"] != "response-debug-too-large" || record["response_debug"] != nil || record["response_stdout"] != nil {
-		t.Fatalf("oversized debug dump was accepted: %+v", record)
+		t.Fatalf("oversized response was accepted: %+v", record)
 	}
 }
 

@@ -472,7 +472,6 @@ func buildReplayTaskExperiment(cfg config.Config, runID, outputRoot, logicalID, 
 	benchmarkRunner, err := runner.NewReplay(benchmark, sandbox.Sandbox, bridge, caller,
 		func(ctx context.Context) (replay.Plan, error) {
 			plan, err := wiring.LoadReplaySource(ctx, cfg, selected)
-			plan.DebugExecResponse = cfg.Bridge.DebugExecResponse
 			return plan, err
 		},
 		runner.Options{Name: cfg.Name, RunID: runID, OutputDir: outputRoot, Logger: logger,

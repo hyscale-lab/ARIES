@@ -158,7 +158,7 @@ func TestReplayCallsWriteFileFramesAndChecksByteCount(t *testing.T) {
 		t.Fatalf("write frames = %v", sizes)
 	}
 	wrongCount.Store(true)
-	if err := ReplayCalls(ctx, client, replay.Plan{Calls: []replay.Call{call}, DebugExecResponse: true}); err == nil || !strings.Contains(err.Error(), "mismatch") {
+	if err := ReplayCalls(ctx, client, replay.Plan{Calls: []replay.Call{call}}); err == nil || !strings.Contains(err.Error(), "mismatch") {
 		t.Fatalf("wrong byte count accepted with debug on: %v", err)
 	}
 }
@@ -199,7 +199,7 @@ func TestReplayCallsNormalizeReadFramesAndCompareFullOutcome(t *testing.T) {
 	}
 }
 
-func TestReplayCallsRejectReadFileBodyBeforeHeader(t *testing.T) {
+func TestReplayCallsAllowReadFileBodyBeforeHeaderAsHashDrift(t *testing.T) {
 	body := []byte("file contents")
 	header := &sandboxv1.ReadFileResponse{Part: &sandboxv1.ReadFileResponse_Header{Header: &sandboxv1.ReadFileHeader{Size: int64(len(body))}}}
 	chunk := &sandboxv1.ReadFileResponse{Part: &sandboxv1.ReadFileResponse_Chunk{Chunk: body}}
@@ -214,8 +214,8 @@ func TestReplayCallsRejectReadFileBodyBeforeHeader(t *testing.T) {
 	client := replayEndpoint(t, server)
 	ctx, cancel := context.WithTimeout(context.Background(), replayTestDeadline)
 	defer cancel()
-	if err := ReplayCalls(ctx, client, replay.Plan{Calls: []replay.Call{call}}); err == nil || !strings.Contains(err.Error(), "mismatch") {
-		t.Fatalf("out-of-order body accepted: %v", err)
+	if err := ReplayCalls(ctx, client, replay.Plan{Calls: []replay.Call{call}}); err != nil {
+		t.Fatalf("hash-only drift stopped replay: %v", err)
 	}
 }
 
@@ -380,8 +380,13 @@ func TestReplayCallsCompareExecStatAndReadLinesFields(t *testing.T) {
 				t.Fatal(err)
 			}
 			scenario.change()
-			if err := ReplayCalls(ctx, client, replay.Plan{Calls: []replay.Call{call}}); err == nil || !strings.Contains(err.Error(), "mismatch") {
-				t.Fatalf("changed response accepted: %v", err)
+			err := ReplayCalls(ctx, client, replay.Plan{Calls: []replay.Call{call}})
+			strict := scenario.name == "Exec exit" || scenario.name == "Exec stdout" || scenario.name == "Exec stderr" || scenario.name == "Exec truncated" || scenario.name == "Stat existence" || scenario.name == "ReadLines summary" || scenario.name == "ReadLines content"
+			if strict && (err == nil || !strings.Contains(err.Error(), "mismatch")) {
+				t.Fatalf("strict response change accepted: %v", err)
+			}
+			if !strict && err != nil {
+				t.Fatalf("hash-only response drift stopped replay: %v", err)
 			}
 		})
 	}
@@ -415,7 +420,7 @@ func TestReplayCallsCompareGRPCErrorCodeAndMessage(t *testing.T) {
 		t.Fatalf("recorded failure changed: %v", err)
 	}
 	changedCode.Store(true)
-	if err := ReplayCalls(ctx, client, replay.Plan{Calls: []replay.Call{call}, DebugExecResponse: true}); err == nil || !strings.Contains(err.Error(), "mismatch") {
+	if err := ReplayCalls(ctx, client, replay.Plan{Calls: []replay.Call{call}}); err == nil || !strings.Contains(err.Error(), "mismatch") {
 		t.Fatalf("changed status code accepted with debug on: %v", err)
 	}
 	changedCode.Store(false)
@@ -425,7 +430,7 @@ func TestReplayCallsCompareGRPCErrorCodeAndMessage(t *testing.T) {
 	}
 }
 
-func TestReplayCallsDebugHashDriftContinuesConcurrentCalls(t *testing.T) {
+func TestReplayCallsDefaultHashDriftContinuesConcurrentCalls(t *testing.T) {
 	const sourceSequence uint64 = 1
 	const nextSequence uint64 = sourceSequence + 1
 	const laterSequence uint64 = nextSequence + 1
@@ -458,9 +463,9 @@ func TestReplayCallsDebugHashDriftContinuesConcurrentCalls(t *testing.T) {
 	}}
 	ctx, cancel := context.WithTimeout(context.Background(), replayTestDeadline)
 	defer cancel()
-	plan := replay.Plan{Calls: []replay.Call{firstCall, secondCall, laterCall}, DebugExecResponse: true}
+	plan := replay.Plan{Calls: []replay.Call{firstCall, secondCall, laterCall}}
 	if err := ReplayCalls(ctx, replayEndpoint(t, server), plan); err != nil {
-		t.Fatalf("debug hash drift blocked later call: %v", err)
+		t.Fatalf("default hash drift blocked later call: %v", err)
 	}
 	select {
 	case <-laterStarted:
@@ -469,7 +474,7 @@ func TestReplayCallsDebugHashDriftContinuesConcurrentCalls(t *testing.T) {
 	}
 }
 
-func TestReplayCallsDebugHashDriftKeepsStrictChecks(t *testing.T) {
+func TestReplayCallsDefaultHashDriftKeepsStrictChecks(t *testing.T) {
 	const sourceExitCode int32 = 1
 	const changedExitCode int32 = sourceExitCode + 1
 	source := &sandboxv1.ExecResponse{ExitCode: sourceExitCode, Stdout: []byte("git hash aaa")}
@@ -492,16 +497,13 @@ func TestReplayCallsDebugHashDriftKeepsStrictChecks(t *testing.T) {
 			response = proto.Clone(source).(*sandboxv1.ExecResponse)
 			response.Stdout = []byte("git hash bbb")
 			scenario.change()
-			if err := ReplayCalls(ctx, client, replay.Plan{Calls: []replay.Call{call}, DebugExecResponse: true}); err == nil || !strings.Contains(err.Error(), "mismatch") {
+			if err := ReplayCalls(ctx, client, replay.Plan{Calls: []replay.Call{call}}); err == nil || !strings.Contains(err.Error(), "mismatch") {
 				t.Fatalf("strict replay change accepted: %v", err)
 			}
 		})
 	}
 	response = proto.Clone(source).(*sandboxv1.ExecResponse)
 	response.Stdout = []byte("git hash bbb")
-	if err := ReplayCalls(ctx, client, replay.Plan{Calls: []replay.Call{call}}); err == nil || !strings.Contains(err.Error(), "mismatch") {
-		t.Fatalf("debug-off hash drift accepted: %v", err)
-	}
 }
 
 func TestReplayCallsRequireDeadlineAndSkipEmptyTrace(t *testing.T) {
