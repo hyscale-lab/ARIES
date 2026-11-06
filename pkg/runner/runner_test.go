@@ -1171,6 +1171,40 @@ func TestReplayReadsDriftOnlyAfterConfirmedBridgeStop(t *testing.T) {
 	}
 }
 
+func TestReplayReportsHashDriftAfterIsolationWithoutResultText(t *testing.T) {
+	const sourceSequence uint64 = 1
+	const sourceText = "source git hash aaa"
+	const replayText = "replay git hash bbb"
+	const sourceHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const replayHash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	rig := newRig(t, int(sourceSequence))
+	bridge := &timingFinalizingBridge{fakeBridge: rig.bridge, path: filepath.Join(t.TempDir(), "tool-calls.jsonl")}
+	bridge.data = fmt.Appendf(nil, "{\"replay_source_sequence\":%d,\"started_at\":%q,\"operation_class\":\"exec\",\"response_sha256\":%q,\"response_debug\":true,\"response_stdout\":%q}\n", sourceSequence, time.Now().UTC().Format(time.RFC3339Nano), replayHash, replayText)
+	var logs bytes.Buffer
+	logger := logrus.New()
+	logger.SetOutput(&logs)
+	plan := replay.Plan{Calls: []replay.Call{{Sequence: sourceSequence, Operation: "Exec", ResponseSHA256: sourceHash, ResponseDebug: true, ResponseStdout: []byte(sourceText)}}, SourceRunID: replaySourceRunID, SourceTaskID: replaySourceTaskID, Evaluation: core.Evaluation{Status: core.StatusSucceeded, Reward: float64(sourceSequence)}, DebugExecResponse: true}
+	engine, err := NewReplay(&panicReplayEvaluation{rig.benchmark}, rig.factory, bridge, &fakeReplayCaller{log: rig.log}, func(context.Context) (replay.Plan, error) { return plan, nil }, Options{RunID: "replay-run", Logger: logger})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := engine.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := result.Tasks[0]
+	if task.Replay.Status != core.StatusSucceeded || task.Replay.Responses == nil || task.Replay.Responses.Status != "available" || len(task.Replay.Responses.Calls) != int(sourceSequence) || task.Replay.Responses.Calls[0].Status != "drifted" || !task.Evaluation.Reused || task.Isolation.Status != core.StatusConfirmed {
+		t.Fatalf("hash drift changed replay outcome: %+v", task)
+	}
+	if !strings.Contains(logs.String(), sourceText) || !strings.Contains(logs.String(), replayText) || !strings.Contains(logs.String(), sourceHash) || !strings.Contains(logs.String(), replayHash) {
+		t.Fatalf("drift log does not show source and replay output and hashes: %s", logs.String())
+	}
+	encoded := fmt.Sprintf("%+v", result)
+	if strings.Contains(encoded, sourceText) || strings.Contains(encoded, replayText) {
+		t.Fatalf("response text entered structured result: %s", encoded)
+	}
+}
+
 func TestReplayMissingDriftKeepsMatchAndSourceGrade(t *testing.T) {
 	const firstSourceSequence = 1
 	rig := newRig(t, firstSourceSequence)

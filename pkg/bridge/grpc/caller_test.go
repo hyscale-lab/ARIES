@@ -78,7 +78,11 @@ func expectedReplayCall(operation string, messages ...proto.Message) replay.Call
 	}
 	outcome.field([]byte(codes.OK.String()))
 	outcome.field(nil)
-	return replay.Call{Operation: operation, ResponseSHA256: hex.EncodeToString(outcome.hash.Sum(nil)), ResponseBytes: outcome.bytes, ResponseCode: codes.OK.String()}
+	call := replay.Call{Operation: operation, ResponseSHA256: hex.EncodeToString(outcome.hash.Sum(nil)), ResponseBytes: outcome.bytes, ResponseCode: codes.OK.String()}
+	if operation == "Exec" && len(messages) != 0 {
+		call.ExitCode = messages[0].(*sandboxv1.ExecResponse).GetExitCode()
+	}
+	return call
 }
 
 func TestReplayCallCarriesSourceSequenceSeparateFromToolCallID(t *testing.T) {
@@ -154,8 +158,8 @@ func TestReplayCallsWriteFileFramesAndChecksByteCount(t *testing.T) {
 		t.Fatalf("write frames = %v", sizes)
 	}
 	wrongCount.Store(true)
-	if err := ReplayCalls(ctx, client, replay.Plan{Calls: []replay.Call{call}}); err == nil || !strings.Contains(err.Error(), "mismatch") {
-		t.Fatalf("wrong byte count accepted: %v", err)
+	if err := ReplayCalls(ctx, client, replay.Plan{Calls: []replay.Call{call}, DebugExecResponse: true}); err == nil || !strings.Contains(err.Error(), "mismatch") {
+		t.Fatalf("wrong byte count accepted with debug on: %v", err)
 	}
 }
 
@@ -396,7 +400,7 @@ func TestReplayCallsCompareGRPCErrorCodeAndMessage(t *testing.T) {
 		}
 		code, message := codes.NotFound, expectedMessage
 		if changedCode.Load() {
-			code = codes.PermissionDenied
+			code = codes.Internal
 		}
 		if changedMessage.Load() {
 			message = "different failure"
@@ -411,13 +415,92 @@ func TestReplayCallsCompareGRPCErrorCodeAndMessage(t *testing.T) {
 		t.Fatalf("recorded failure changed: %v", err)
 	}
 	changedCode.Store(true)
-	if err := ReplayCalls(ctx, client, plan); err == nil || !strings.Contains(err.Error(), "mismatch") {
-		t.Fatalf("changed status code accepted: %v", err)
+	if err := ReplayCalls(ctx, client, replay.Plan{Calls: []replay.Call{call}, DebugExecResponse: true}); err == nil || !strings.Contains(err.Error(), "mismatch") {
+		t.Fatalf("changed status code accepted with debug on: %v", err)
 	}
 	changedCode.Store(false)
 	changedMessage.Store(true)
 	if err := ReplayCalls(ctx, client, plan); err == nil || !strings.Contains(err.Error(), "mismatch") {
 		t.Fatalf("changed error message accepted: %v", err)
+	}
+}
+
+func TestReplayCallsDebugHashDriftContinuesConcurrentCalls(t *testing.T) {
+	const sourceSequence uint64 = 1
+	const nextSequence uint64 = sourceSequence + 1
+	const laterSequence uint64 = nextSequence + 1
+	const laterOffset = time.Second
+	source := &sandboxv1.ExecResponse{Stdout: []byte("git hash aaa")}
+	changed := &sandboxv1.ExecResponse{Stdout: []byte("git hash bbb")}
+	second := &sandboxv1.ExecResponse{}
+	firstCall := expectedReplayCall("Exec", source)
+	firstCall.Sequence, firstCall.Script, firstCall.ExitCode = sourceSequence, "first", source.GetExitCode()
+	secondCall := expectedReplayCall("Exec", second)
+	secondCall.Sequence, secondCall.Script = nextSequence, "second"
+	laterCall := expectedReplayCall("Exec", second)
+	laterCall.Sequence, laterCall.Script, laterCall.StartOffset = laterSequence, "later", laterOffset
+	started := make(chan struct{})
+	finished := make(chan struct{})
+	laterStarted := make(chan struct{})
+	server := &replayServer{exec: func(ctx context.Context, request *sandboxv1.ExecRequest) (*sandboxv1.ExecResponse, error) {
+		switch request.GetScript() {
+		case "first":
+			close(started)
+			<-finished
+			return changed, nil
+		case "second":
+			<-started
+			close(finished)
+		case "later":
+			close(laterStarted)
+		}
+		return second, nil
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), replayTestDeadline)
+	defer cancel()
+	plan := replay.Plan{Calls: []replay.Call{firstCall, secondCall, laterCall}, DebugExecResponse: true}
+	if err := ReplayCalls(ctx, replayEndpoint(t, server), plan); err != nil {
+		t.Fatalf("debug hash drift blocked later call: %v", err)
+	}
+	select {
+	case <-laterStarted:
+	default:
+		t.Fatal("later call did not run after response hash drift")
+	}
+}
+
+func TestReplayCallsDebugHashDriftKeepsStrictChecks(t *testing.T) {
+	const sourceExitCode int32 = 1
+	const changedExitCode int32 = sourceExitCode + 1
+	source := &sandboxv1.ExecResponse{ExitCode: sourceExitCode, Stdout: []byte("git hash aaa")}
+	response := proto.Clone(source).(*sandboxv1.ExecResponse)
+	call := expectedReplayCall("Exec", source)
+	call.ExitCode = sourceExitCode
+	server := &replayServer{exec: func(context.Context, *sandboxv1.ExecRequest) (*sandboxv1.ExecResponse, error) { return response, nil }}
+	ctx, cancel := context.WithTimeout(context.Background(), replayTestDeadline)
+	defer cancel()
+	client := replayEndpoint(t, server)
+	response.Stdout = []byte("git hash bbb")
+	for _, scenario := range []struct {
+		name   string
+		change func()
+	}{
+		{"exit code", func() { response.ExitCode = changedExitCode }},
+		{"response length", func() { response.Stdout = append(response.Stdout, '!') }},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			response = proto.Clone(source).(*sandboxv1.ExecResponse)
+			response.Stdout = []byte("git hash bbb")
+			scenario.change()
+			if err := ReplayCalls(ctx, client, replay.Plan{Calls: []replay.Call{call}, DebugExecResponse: true}); err == nil || !strings.Contains(err.Error(), "mismatch") {
+				t.Fatalf("strict replay change accepted: %v", err)
+			}
+		})
+	}
+	response = proto.Clone(source).(*sandboxv1.ExecResponse)
+	response.Stdout = []byte("git hash bbb")
+	if err := ReplayCalls(ctx, client, replay.Plan{Calls: []replay.Call{call}}); err == nil || !strings.Contains(err.Error(), "mismatch") {
+		t.Fatalf("debug-off hash drift accepted: %v", err)
 	}
 }
 
