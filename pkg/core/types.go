@@ -243,11 +243,27 @@ type ReplayTiming struct {
 	Reason string             `json:"reason,omitempty"`
 }
 
+// ReplayCallResponse compares one replayed response hash with its source hash.
+type ReplayCallResponse struct {
+	SourceSequence uint64 `json:"source_sequence"`
+	Status         string `json:"status"`
+	ExpectedSHA256 string `json:"expected_sha256"`
+	ActualSHA256   string `json:"actual_sha256"`
+}
+
+// ReplayResponses reports response equality separately from the reused grade.
+type ReplayResponses struct {
+	Status string               `json:"status"`
+	Calls  []ReplayCallResponse `json:"calls,omitempty"`
+	Reason string               `json:"reason,omitempty"`
+}
+
 // ReplayResult records sandbox-call execution separately from the source grade.
 type ReplayResult struct {
-	Status string        `json:"status"`
-	Error  string        `json:"error,omitempty"`
-	Timing *ReplayTiming `json:"timing,omitempty"`
+	Status    string           `json:"status"`
+	Error     string           `json:"error,omitempty"`
+	Timing    *ReplayTiming    `json:"timing,omitempty"`
+	Responses *ReplayResponses `json:"responses,omitempty"`
 }
 
 // ObserverResult records observer-only evidence composed outside the Runner.

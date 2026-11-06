@@ -86,7 +86,7 @@ launch:
 			break launch
 		}
 		active++
-		go func() { results <- replayCall(callsCtx, client, call) }()
+		go func() { results <- replayCall(callsCtx, client, call, plan.DebugExecResponse) }()
 	}
 	for active > 0 {
 		select {
@@ -113,7 +113,7 @@ launch:
 	return ctx.Err()
 }
 
-func replayCall(ctx context.Context, client sandboxv1.SandboxClient, call replay.Call) error {
+func replayCall(ctx context.Context, client sandboxv1.SandboxClient, call replay.Call, debugExecResponse bool) error {
 	if call.Sequence != 0 {
 		ctx = metadata.AppendToOutgoingContext(ctx, replaySourceSequenceKey, strconv.FormatUint(call.Sequence, replaySequenceBase))
 	}
@@ -123,6 +123,7 @@ func replayCall(ctx context.Context, client sandboxv1.SandboxClient, call replay
 	var outcome *responseOutcome
 	var err error
 	var written *sandboxv1.WriteFileResponse
+	var exitCodeChanged bool
 	switch call.Operation {
 	case "Exec":
 		outcome = newResponseOutcome(sandboxv1.Sandbox_Exec_FullMethodName)
@@ -130,6 +131,7 @@ func replayCall(ctx context.Context, client sandboxv1.SandboxClient, call replay
 		err = callErr
 		if err == nil {
 			outcome.message(response)
+			exitCodeChanged = response.GetExitCode() != call.ExitCode
 		}
 	case "Stat":
 		outcome = newResponseOutcome(sandboxv1.Sandbox_Stat_FullMethodName)
@@ -212,7 +214,7 @@ func replayCall(ctx context.Context, client sandboxv1.SandboxClient, call replay
 	}
 	outcome.field([]byte(status.Code(err).String()))
 	outcome.field([]byte(status.Convert(err).Message()))
-	if outcome.invalid || hex.EncodeToString(outcome.hash.Sum(nil)) != call.ResponseSHA256 || outcome.bytes != call.ResponseBytes || status.Code(err).String() != call.ResponseCode || written != nil && written.GetBytesWritten() != int64(len(call.Body)) {
+	if outcome.invalid || outcome.bytes != call.ResponseBytes || status.Code(err).String() != call.ResponseCode || exitCodeChanged || written != nil && written.GetBytesWritten() != int64(len(call.Body)) || !debugExecResponse && hex.EncodeToString(outcome.hash.Sum(nil)) != call.ResponseSHA256 {
 		return fmt.Errorf("replay call %d %s response mismatch", call.Sequence, call.Operation)
 	}
 	return nil

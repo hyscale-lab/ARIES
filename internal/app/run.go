@@ -470,7 +470,11 @@ func buildReplayTaskExperiment(cfg config.Config, runID, outputRoot, logicalID, 
 		return caller.Stop(cleanupCtx)
 	}
 	benchmarkRunner, err := runner.NewReplay(benchmark, sandbox.Sandbox, bridge, caller,
-		func(ctx context.Context) (replay.Plan, error) { return wiring.LoadReplaySource(ctx, cfg, selected) },
+		func(ctx context.Context) (replay.Plan, error) {
+			plan, err := wiring.LoadReplaySource(ctx, cfg, selected)
+			plan.DebugExecResponse = cfg.Bridge.DebugExecResponse
+			return plan, err
+		},
 		runner.Options{Name: cfg.Name, RunID: runID, OutputDir: outputRoot, Logger: logger,
 			RuntimeOverrides: runner.RuntimeOverrides{AgentSandboxResources: runner.ResourceOverrides{
 				CPU: cfg.Overrides.AgentSandboxResources.CPU, MemoryMB: cfg.Overrides.AgentSandboxResources.MemoryMB,

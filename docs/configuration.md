@@ -371,9 +371,11 @@ A replay profile requires exactly one `benchmark.tasks` ID and forbids
 model runtime. Replay does not load a model credential, start a harness, run
 a model judge, or call the benchmark verifier. It retains the source
 evaluation as a labeled historical grade, not a grade of the new sandbox.
-A changed bridge response stops later calls and fails replay even when the
-source reward is positive. Equal responses do not prove equal final sandbox
-state. See [replay results](run-results.md#sandbox-call-replay-results).
+A strict bridge response difference stops later calls and fails replay even when the
+source reward is positive. With replay `bridge.debug_exec_response: true`, a
+changed response SHA-256 alone is a diagnostic and does not stop later calls.
+The byte count, gRPC code, `Exec` exit code, and successful `WriteFile` byte
+count remain strict. Equal responses do not prove equal final sandbox state. See [replay results](run-results.md#sandbox-call-replay-results).
 
 To inspect gRPC `Exec` output for a replay mismatch, set
 `"debug_exec_response": true` in the `bridge` block of **both** the live
@@ -396,8 +398,14 @@ Debug output can contain private data. Keep both audit files private and disable
 the option after diagnosis. Each reply stays within the existing output bound;
 if JSON encoding exceeds the replay audit line bound, the record has
 `replay_error: "response-debug-too-large"` and cannot become a replay source.
-The original response hash, byte count, gRPC code, and mismatch failure do not
-change. Output text does not enter `aries.log` or `run-result.json`.
+The original response hash, byte count, and gRPC code do not
+change. After caller stop and bridge revocation, `aries.log` and stderr show
+per-call expected and actual hashes on drift. For `Exec`, they also show
+labeled captured stdout and stderr when replay debug is on. Non-UTF-8 output
+uses labeled base64. If the source audit has no captured `Exec` output, the
+log says `source output unavailable`. File-call drift logs contain hashes but
+no response text. Treat `aries.log` as private. Output text does not enter
+`run-result.json` or caller errors.
 
 The replay caller uses the task's positive agent timeout, or the positive
 `agent_timeout_seconds` override when present. If both are absent or zero,
