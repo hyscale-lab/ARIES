@@ -11,6 +11,7 @@ import (
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/monitor"
+	"github.com/hyscale-lab/aries/pkg/replay"
 	"github.com/hyscale-lab/aries/pkg/runner"
 	"github.com/sirupsen/logrus"
 )
@@ -44,6 +45,9 @@ type Wiring struct {
 	NewHarness         func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error)
 	NewSandbox         func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error)
 	NewBridge          func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error)
+	NewReplayCaller    func(config.Config, core.RuntimePlacement, time.Duration, *logrus.Logger) (runner.ReplayCaller, error)
+	LoadReplaySource   func(context.Context, config.Config, core.Task) (replay.Plan, error)
+	ReplayPlacement    core.RuntimePlacement
 }
 
 type Dependencies struct {
@@ -60,6 +64,13 @@ func Setup(ctx context.Context, profilePath string, stdout io.Writer, dependenci
 		return err
 	}
 	if err := validateWiredComponents(cfg, dependencies.Wiring); err != nil {
+		return err
+	}
+	if cfg.Replay != nil {
+		if _, err := ensurePrepared(ctx, cfg, cfg.OutputDir, dependencies.Wiring, nil); err != nil {
+			return err
+		}
+		_, err := fmt.Fprintf(stdout, "profile ready: %s\n", profilePath)
 		return err
 	}
 	if dependencies.Wiring.PrepareBackend == nil {
@@ -97,6 +108,9 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 	outputRoot, err := resolveOutputRoot(cfg.OutputDir, runID)
 	if err != nil {
 		return err
+	}
+	if cfg.Replay != nil {
+		return runReplay(ctx, cfg, runID, outputRoot, stdout, dependencies.Wiring, logger)
 	}
 	if dependencies.Wiring.PrepareBackend == nil {
 		return errors.New("backend preparer is required")
@@ -261,8 +275,39 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 	return returnErr
 }
 
+func runReplay(ctx context.Context, cfg config.Config, runID, outputRoot string, stdout io.Writer, wiring Wiring, logger *logrus.Logger) (returnErr error) {
+	catalog, err := ensurePrepared(ctx, cfg, outputRoot, wiring, nil)
+	if err != nil {
+		return err
+	}
+	if err := createRunOutputRoot(outputRoot); err != nil {
+		return fmt.Errorf("create private run output root: %w", err)
+	}
+	detachRunLog, err := attachRunLog(logger, outputRoot)
+	if err != nil {
+		return err
+	}
+	defer func() { returnErr = errors.Join(returnErr, detachRunLog()) }()
+	return runWithReplayInfrastructure(ctx, cfg, runID, outputRoot, stdout, wiring, logger, catalog)
+}
+
+func runWithReplayInfrastructure(ctx context.Context, cfg config.Config, runID, outputRoot string, stdout io.Writer, wiring Wiring, logger *logrus.Logger, catalog PreparedBenchmark) error {
+	return executeAndRecord(ctx, func(ctx context.Context) (core.RunResult, error) {
+		return runWithInfrastructure(ctx, cfg, runID, outputRoot, logger, wiring, func(ctx context.Context, taskWiring Wiring) (core.RunResult, error) {
+			return runProfile(ctx, cfg.Name, runID, cfg.Benchmark.Tasks, cfg.Execution.Concurrency, 0, nil,
+				func(taskCtx context.Context, occurrence taskOccurrence) (core.RunResult, error) {
+					experiment, err := buildTaskExperiment(cfg, core.ModelConfig{}, nil, runID, outputRoot, occurrence.logicalID, occurrence.executionID, nil, logger, catalog, taskWiring)
+					if err != nil {
+						return core.RunResult{}, err
+					}
+					return experiment.Run(taskCtx)
+				})
+		})
+	}, outputRoot, stdout)
+}
+
 func ensurePrepared(ctx context.Context, cfg config.Config, outputRoot string, wiring Wiring, apiKeyLookup func(string) ([]byte, bool)) (PreparedBenchmark, error) {
-	if wiring.SetupBenchmark == nil || wiring.LoadBenchmark == nil || wiring.PullImages == nil || wiring.BuildHarnessImage == nil {
+	if wiring.SetupBenchmark == nil || wiring.LoadBenchmark == nil || wiring.PullImages == nil || cfg.Replay == nil && wiring.BuildHarnessImage == nil {
 		return PreparedBenchmark{}, errors.New("preparation wiring is incomplete")
 	}
 	if wiring.PrepareBridge != nil {
@@ -277,19 +322,24 @@ func ensurePrepared(ctx context.Context, cfg config.Config, outputRoot string, w
 	if err != nil {
 		return PreparedBenchmark{}, err
 	}
-	harnessImage, err := cfg.Versions.HarnessImage(cfg.Harness.Type)
-	if err != nil {
-		return PreparedBenchmark{}, err
+	images := make([]string, 0, len(catalog.Tasks)+1)
+	if cfg.Replay == nil {
+		harnessImage, err := cfg.Versions.HarnessImage(cfg.Harness.Type)
+		if err != nil {
+			return PreparedBenchmark{}, err
+		}
+		images = append(images, harnessImage)
 	}
-	images := []string{harnessImage}
 	for _, task := range catalog.Tasks {
 		images = append(images, task.Environment.Image)
 	}
 	if err := wiring.PullImages(ctx, cfg, uniqueStrings(images)); err != nil {
 		return PreparedBenchmark{}, err
 	}
-	if err := wiring.BuildHarnessImage(ctx, cfg); err != nil {
-		return PreparedBenchmark{}, err
+	if cfg.Replay == nil {
+		if err := wiring.BuildHarnessImage(ctx, cfg); err != nil {
+			return PreparedBenchmark{}, err
+		}
 	}
 	return catalog, nil
 }
@@ -322,6 +372,9 @@ func resolveOutputRoot(root, runID string) (string, error) {
 }
 
 func buildTaskExperiment(cfg config.Config, model core.ModelConfig, effectiveGPUIndices []int, runID, outputRoot, logicalID, occurrenceID string, apiKeyLookup func(string) ([]byte, bool), logger *logrus.Logger, catalog PreparedBenchmark, wiring Wiring) (*experiment, error) {
+	if cfg.Replay != nil {
+		return buildReplayTaskExperiment(cfg, runID, outputRoot, logicalID, occurrenceID, logger, catalog, wiring)
+	}
 	if logger == nil {
 		logger = logrus.StandardLogger()
 	}
@@ -368,6 +421,70 @@ func buildTaskExperiment(cfg config.Config, model core.ModelConfig, effectiveGPU
 		return nil, errors.Join(fmt.Errorf("construct monitor: %w", err), sandbox.Resources.Close(), closeOccurrenceClients(sandbox.Close, harness.Close))
 	}
 	return &experiment{runner: benchmarkRunner, recorder: recorder, close: func() error { return closeOccurrenceClients(sandbox.Close, harness.Close) }}, nil
+}
+
+func buildReplayTaskExperiment(cfg config.Config, runID, outputRoot, logicalID, occurrenceID string, logger *logrus.Logger, catalog PreparedBenchmark, wiring Wiring) (*experiment, error) {
+	if catalog.NewOccurrence == nil || wiring.NewSandbox == nil || wiring.NewBridge == nil || wiring.NewReplayCaller == nil || wiring.LoadReplaySource == nil {
+		return nil, errors.New("replay component wiring is incomplete")
+	}
+	var selected core.Task
+	found := false
+	for _, task := range catalog.Tasks {
+		if task.ID == logicalID {
+			selected, found = task, true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("replay catalog has no logical task %q", logicalID)
+	}
+	benchmark, err := catalog.NewOccurrence(logicalID, occurrenceID)
+	if err != nil {
+		return nil, err
+	}
+	sandbox, err := wiring.NewSandbox(cfg, outputRoot, runID, occurrenceID, nil, logger)
+	if err != nil {
+		return nil, err
+	}
+	closeSandbox := func() error {
+		return errors.Join(sandbox.Resources.Close(), closeOccurrenceClients(sandbox.Close, nil))
+	}
+	bridge, err := wiring.NewBridge(cfg, outputRoot, logger)
+	if err != nil {
+		return nil, errors.Join(err, closeSandbox())
+	}
+	if provenance, ok := bridge.(interface{ RecordSource(string, string) }); ok {
+		provenance.RecordSource(logicalID, selected.Environment.Image)
+	}
+	timeout := selected.Timeout
+	if cfg.Overrides.AgentTimeout != nil {
+		timeout = *cfg.Overrides.AgentTimeout
+	}
+	caller, err := wiring.NewReplayCaller(cfg, wiring.ReplayPlacement, timeout, logger)
+	if err != nil {
+		return nil, errors.Join(err, closeSandbox())
+	}
+	closeCaller := func() error {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		return caller.Stop(cleanupCtx)
+	}
+	benchmarkRunner, err := runner.NewReplay(benchmark, sandbox.Sandbox, bridge, caller,
+		func(ctx context.Context) (replay.Plan, error) { return wiring.LoadReplaySource(ctx, cfg, selected) },
+		runner.Options{Name: cfg.Name, RunID: runID, OutputDir: outputRoot, Logger: logger,
+			RuntimeOverrides: runner.RuntimeOverrides{AgentSandboxResources: runner.ResourceOverrides{
+				CPU: cfg.Overrides.AgentSandboxResources.CPU, MemoryMB: cfg.Overrides.AgentSandboxResources.MemoryMB,
+			}}})
+	if err != nil {
+		return nil, errors.Join(err, closeCaller(), closeSandbox())
+	}
+	recorder, err := monitor.New(monitor.Options{RunID: runID, TaskIDs: []string{occurrenceID}, OutputDir: outputRoot, Source: sandbox.Resources, Logger: logger})
+	if err != nil {
+		return nil, errors.Join(err, closeCaller(), closeSandbox())
+	}
+	return &experiment{runner: benchmarkRunner, recorder: recorder, close: func() error {
+		return errors.Join(closeCaller(), closeOccurrenceClients(sandbox.Close, nil))
+	}}, nil
 }
 
 func closeOccurrenceClients(sandboxClose, harnessClose func() error) error {

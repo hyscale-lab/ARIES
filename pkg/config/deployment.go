@@ -77,14 +77,20 @@ func (c *Config) NormalizeDeployment() error {
 	if c.Sandbox.Type == "docker" && c.Sandbox.Deployment.Backend != "" && c.Sandbox.Deployment.Backend != "docker" {
 		return fmt.Errorf("sandbox.type conflicts with sandbox.deployment.backend %q", c.Sandbox.Deployment.Backend)
 	}
-	if err := c.Harness.Deployment.normalize("harness.deployment"); err != nil {
+	caller := &c.Harness.Deployment
+	callerPath := "harness.deployment"
+	if c.Replay != nil {
+		caller = &c.Replay.Deployment
+		callerPath = "replay.deployment"
+	}
+	if err := caller.normalize(callerPath); err != nil {
 		return err
 	}
 	if err := c.Sandbox.Deployment.normalize("sandbox.deployment"); err != nil {
 		return err
 	}
-	if c.Harness.Deployment.Backend == "docker" && c.Sandbox.Deployment.Backend == "docker" && c.Harness.Deployment.Docker.Socket != c.Sandbox.Deployment.Docker.Socket {
-		return fmt.Errorf("harness.deployment.docker.socket and sandbox.deployment.docker.socket must select the same local Docker daemon")
+	if caller.Backend == "docker" && c.Sandbox.Deployment.Backend == "docker" && caller.Docker.Socket != c.Sandbox.Deployment.Docker.Socket {
+		return fmt.Errorf("%s.docker.socket and sandbox.deployment.docker.socket must select the same local Docker daemon", callerPath)
 	}
 	if c.Bridge.Mode == "" {
 		c.Bridge.Mode = "managed"
@@ -117,15 +123,19 @@ func (c *Config) NormalizeDeployment() error {
 	return nil
 }
 
-// normalizeKubernetes checks the one composition the Kubernetes provider
-// supports: all three components in a single namespace. The bridge pod execs
-// into sandbox pods and harness pods dial the bridge pod, so a component left
-// on Docker or in another namespace could not be reached.
+// normalizeKubernetes checks that the caller, sandbox, and bridge share one
+// namespace. The bridge pod execs into sandbox pods, and the caller dials the bridge.
 func (c *Config) normalizeKubernetes() error {
+	caller := &c.Harness.Deployment
+	callerPath := "harness.deployment"
+	if c.Replay != nil {
+		caller = &c.Replay.Deployment
+		callerPath = "replay.deployment"
+	}
 	placements := []struct {
 		path string
 		cfg  *DeploymentConfig
-	}{{"harness.deployment", &c.Harness.Deployment}, {"sandbox.deployment", &c.Sandbox.Deployment}, {"bridge.deployment", &c.Bridge.Deployment}}
+	}{{callerPath, caller}, {"sandbox.deployment", &c.Sandbox.Deployment}, {"bridge.deployment", &c.Bridge.Deployment}}
 	selected := 0
 	for _, placement := range placements {
 		if placement.cfg.Backend == "kubernetes" {
@@ -136,6 +146,9 @@ func (c *Config) normalizeKubernetes() error {
 		return nil
 	}
 	if selected != len(placements) {
+		if c.Replay != nil {
+			return fmt.Errorf("replay, sandbox and bridge must all use the kubernetes deployment backend together")
+		}
 		return fmt.Errorf("harness, sandbox and bridge must all use the kubernetes deployment backend together")
 	}
 	namespace := c.Sandbox.Deployment.Kubernetes.Namespace
