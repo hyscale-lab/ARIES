@@ -210,9 +210,14 @@ in the transport’s raw log. SSH stdin is always relayed in full, but both SSH 
 `stdin_bytes` and `stdin_truncated: true`, so neither file is then a complete
 input record. If the cut splits a multibyte character, only that partial
 character is left out of the readable `tool-calls.jsonl` text.
-Structured lifecycle logs and tool-call records continue to
-omit environment values and stdout/stderr bodies for both transports.
-gRPC records also have `sha256`, `truncated`, and the read window fields
+Structured lifecycle logs and tool-call records omit environment values.
+By default, tool-call records also omit stdout/stderr bodies.
+With `bridge.debug_exec_response: true` on a `hermes-grpc` profile,
+only its private `bridge/tool-calls.jsonl` adds `Exec` response text. Enable
+the option on both source and replay profiles to compare their output. See
+[replay configuration](configuration.md#sandbox-call-replay) for call 15 and
+binary-output inspection. This text can contain private data; do not publish
+the audit without review. Both transports use the default rules. gRPC records also have `sha256`, `truncated`, and the read window fields
 `max_bytes`, `first_line`, `max_lines`, `max_line_bytes`, and `total_lines`, and
 keep written file content as `stdin`; see
 [gRPC evidence](implementation/grpc-bridge.md#evidence). The `operation_class`

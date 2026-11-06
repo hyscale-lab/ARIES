@@ -3,6 +3,7 @@ package grpc
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"net"
 	"os"
@@ -80,6 +81,103 @@ func TestExecRunsBashInTheSandboxWorkdir(t *testing.T) {
 		if _, present := records[1][forbidden]; present {
 			t.Fatalf("record carries %q", forbidden)
 		}
+	}
+}
+
+func TestExecDebugResponseKeepsBinaryBytesAndDefaultsOff(t *testing.T) {
+	binary := []byte{'a', 0xff, 'b'}
+	for _, enabled := range []bool{false, true} {
+		executor := newFakeExecutor(nil)
+		executor.stdout = binary
+		executor.stderr = []byte("error text")
+		manager, client, endpoint := startBridge(t, executor, Options{OmitRawLog: true, DebugExecResponse: enabled})
+		if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "true"}); err != nil {
+			t.Fatal(err)
+		}
+		stop(t, manager)
+		record := readToolCalls(t, endpoint.LogPaths[0])[0]
+		if !enabled {
+			if _, ok := record["response_stdout_base64"]; ok {
+				t.Fatalf("binary response recorded without opt-in: %+v", record)
+			}
+			if _, ok := record["response_stderr"]; ok {
+				t.Fatalf("text response recorded without opt-in: %+v", record)
+			}
+			continue
+		}
+		encoded, ok := record["response_stdout_base64"].(string)
+		if !ok {
+			t.Fatalf("binary output missing: %+v", record)
+		}
+		decoded, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil || !bytes.Equal(decoded, binary) || record["response_stderr"] != "error text" {
+			t.Fatalf("binary output = %q, error = %v, record = %+v", decoded, err, record)
+		}
+	}
+}
+
+func TestExecDebugResponseKeepsFullBoundedText(t *testing.T) {
+	executor := newFakeExecutor(nil)
+	executor.stdout = bytes.Repeat([]byte{'<'}, defaultOutputLimit)
+	manager, client, endpoint := startBridge(t, executor, Options{OmitRawLog: true, DebugExecResponse: true})
+	if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "true"}); err != nil {
+		t.Fatal(err)
+	}
+	stop(t, manager)
+	record := readToolCalls(t, endpoint.LogPaths[0])[0]
+	if record["response_debug"] != true || record["replay_error"] != nil || record["response_stdout"] != string(executor.stdout) {
+		t.Fatal("bounded UTF-8 output lost from debug audit")
+	}
+}
+
+func TestExecDebugResponseChecksBoundAfterIdentity(t *testing.T) {
+	const responseStreamCount = 2 // Exec has stdout and stderr.
+	baselineManager, baselineClient, baselineEndpoint := startBridge(t, newFakeExecutor(nil), Options{OmitRawLog: true, DebugExecResponse: true})
+	if _, err := baselineClient.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "true"}); err != nil {
+		t.Fatal(err)
+	}
+	stop(t, baselineManager)
+	baseline, err := os.ReadFile(baselineEndpoint.LogPaths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := newFakeExecutor(nil)
+	perStream := (2*MaxMessageBytes - len(baseline) - len(executor.ContainerName())) / (responseStreamCount * len(`\u0000`))
+	if perStream > defaultOutputLimit {
+		t.Fatalf("test output exceeds Exec limit: %d", perStream)
+	}
+	executor.stdout = bytes.Repeat([]byte{0}, perStream)
+	executor.stderr = executor.stdout
+	manager, client, endpoint := startBridge(t, executor, Options{OmitRawLog: true, DebugExecResponse: true})
+	if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "true"}); err != nil {
+		t.Fatal(err)
+	}
+	stop(t, manager)
+	log, err := os.ReadFile(endpoint.LogPaths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(log) > 2*MaxMessageBytes {
+		t.Fatalf("final audit line exceeds replay limit: %d", len(log))
+	}
+	record := readToolCalls(t, endpoint.LogPaths[0])[0]
+	if record["replay_error"] != "response-debug-too-large" || record["response_debug"] != nil {
+		t.Fatalf("identity pushed debug response past replay limit: %+v", record)
+	}
+}
+
+func TestExecDebugResponseMarksOversizedAuditUnreplayable(t *testing.T) {
+	executor := newFakeExecutor(nil)
+	executor.stdout = bytes.Repeat([]byte{0}, MaxMessageBytes/len(`\u0000`)+1)
+	executor.stderr = executor.stdout
+	manager, client, endpoint := startBridge(t, executor, Options{OmitRawLog: true, DebugExecResponse: true})
+	if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "true"}); err != nil {
+		t.Fatal(err)
+	}
+	stop(t, manager)
+	record := readToolCalls(t, endpoint.LogPaths[0])[0]
+	if record["replay_error"] != "response-debug-too-large" || record["response_debug"] != nil || record["response_stdout"] != nil {
+		t.Fatalf("oversized debug dump was accepted: %+v", record)
 	}
 }
 
