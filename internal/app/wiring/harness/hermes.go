@@ -33,6 +33,8 @@ func NewHermes(cfg config.Config, outputRoot string, lookup func(string) ([]byte
 		Common:     commonOptions(cfg),
 		Compaction: hermesCompaction(cfg.Harness.Compaction),
 		ExtraBody:  hermesExtraBody(cfg.Harness.Hermes),
+		// Apptainer without subordinate IDs cannot switch users.
+		KeepRoot: cfg.Harness.Deployment.Backend == "apptainer",
 	}
 
 	if cfg.Harness.Mode == hermesharness.ModeVoiceTranscribe {

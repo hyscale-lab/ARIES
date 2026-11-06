@@ -91,7 +91,7 @@ implementations:
 | --- | --- |
 | Agent harness | OpenClaw (text and realtime voice modes); Hermes (text and voice-transcribe modes, with an in-process gRPC plugin in the ARIES Hermes image) |
 | Benchmark | Terminal-Bench 2; Deep Research Bench; SWE-Atlas QA; the 731-task public SWE-bench Pro split; Toolathlon |
-| Tool sandbox | Shared Docker deployment through the Moby Go SDK; Kubernetes pods through `kubectl` |
+| Tool sandbox | Shared Docker deployment through the Moby Go SDK; Kubernetes pods through `kubectl`; unprivileged Apptainer instances, for hosts without Docker |
 | Tool bridge | One managed service per run with independent sandbox sessions; SSH with an OpenClaw or Hermes dialect, or gRPC for Hermes |
 | Model service | External DeepSeek; external OpenAI-compatible servers such as vLLM; external or ARIES-managed SGLang |
 
@@ -130,7 +130,8 @@ The DeepSeek example requires an API key and can incur charges. The
 run, SGLang alternatives, result inspection, and troubleshooting.
 
 To run on a Kubernetes cluster built with Invitro's setup scripts, see
-[`k8s/`](k8s/README.md).
+[`k8s/`](k8s/README.md). To run where a normal user cannot run Docker, such as an
+HPC cluster, see [Apptainer placement](docs/configuration.md#apptainer-placement).
 
 For repository-level software-engineering tasks, see the
 [SWE-bench Pro guide](docs/benchmarks/swe-bench-pro.md). Its setup additionally

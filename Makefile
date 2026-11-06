@@ -24,6 +24,13 @@ lint:
 integration: bridge-image
 	ARIES_SSH_CLIENT=$(CURDIR)/bin/aries-ssh-client go test -p=1 -count=1 -tags=integration ./...
 
+# Real-instance tests of the Apptainer provider, on a host with Apptainer:
+#   make integration-apptainer ARIES_APPTAINER_TEST_IMAGE=/path/to/image.sif
+.PHONY: integration-apptainer
+integration-apptainer:
+	test -n "$(ARIES_APPTAINER_TEST_IMAGE)"
+	ARIES_APPTAINER_TEST_IMAGE="$(ARIES_APPTAINER_TEST_IMAGE)" go test -count=1 -tags=apptainer -run Real ./pkg/deployment/apptainer
+
 run: build
 	./bin/aries $(PROFILE)
 

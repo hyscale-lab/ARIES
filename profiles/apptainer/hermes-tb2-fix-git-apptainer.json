@@ -1,0 +1,72 @@
+{
+  "name": "hermes-tb2-fix-git-apptainer",
+  "versions_file": "../../configs/versions.json",
+  "overrides_file": "",
+  "execution": {
+    "concurrency": 1
+  },
+  "benchmark": {
+    "type": "terminalbench2",
+    "root": ".cache/terminal-bench-2-1",
+    "tasks": [
+      "fix-git"
+    ]
+  },
+  "harness": {
+    "type": "hermes",
+    "deployment": {
+      "backend": "apptainer",
+      "apptainer": {
+        "state_dir": "/scratch/users/me/aries/state",
+        "image_dir": "/scratch/users/me/aries/images",
+        "overlay_dir": "/tmp/aries-overlays",
+        "images": {
+          "aries-local/hermes:v2026.8.31-otel1.19.0-grpcio1.81.1-029be3d7c7bf": "/scratch/users/me/aries/hermes.sif"
+        },
+        "unenforced_limits": true
+      }
+    }
+  },
+  "sandbox": {
+    "deployment": {
+      "backend": "apptainer",
+      "apptainer": {
+        "state_dir": "/scratch/users/me/aries/state",
+        "image_dir": "/scratch/users/me/aries/images",
+        "overlay_dir": "/tmp/aries-overlays",
+        "images": {
+          "aries-local/hermes:v2026.8.31-otel1.19.0-grpcio1.81.1-029be3d7c7bf": "/scratch/users/me/aries/hermes.sif"
+        },
+        "unenforced_limits": true
+      }
+    }
+  },
+  "bridge": {
+    "deployment": {
+      "backend": "apptainer",
+      "apptainer": {
+        "state_dir": "/scratch/users/me/aries/state",
+        "image_dir": "/scratch/users/me/aries/images",
+        "overlay_dir": "/tmp/aries-overlays",
+        "images": {
+          "aries-local/hermes:v2026.8.31-otel1.19.0-grpcio1.81.1-029be3d7c7bf": "/scratch/users/me/aries/hermes.sif"
+        },
+        "unenforced_limits": true
+      }
+    },
+    "type": "hermes-ssh",
+    "mode": "managed"
+  },
+  "runtime": {
+    "backend": "openai",
+    "mode": "external"
+  },
+  "model": {
+    "base_url": "http://10.0.0.1:30000/v1",
+    "api_key_env": "SGLANG_API_KEY",
+    "id": "Qwen/Qwen3-4B",
+    "context_length": 65536,
+    "max_tokens": 8192
+  },
+  "output_dir": "runs"
+}

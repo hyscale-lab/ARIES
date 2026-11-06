@@ -108,7 +108,8 @@ already be substituted. Placements must provide the component's required
 capabilities and safety guarantees. The Docker provider and its remaining
 portability limits are described in [Docker implementation](implementation/docker.md);
 the Kubernetes provider and the constraints it adds are in
-[Kubernetes implementation](implementation/kubernetes.md).
+[Kubernetes implementation](implementation/kubernetes.md), and the Apptainer
+provider and its limits are in [Apptainer implementation](implementation/apptainer.md).
 Profile syntax stays in the [deployment guide](configuration.md#deployment-configuration).
 
 ## Protocol independence

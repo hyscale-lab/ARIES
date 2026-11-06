@@ -308,7 +308,7 @@ func TestStartStagesPrivateRuntimeAndPinsGatewayService(t *testing.T) {
 	defer manager.Stop(context.Background())
 
 	config := fake.created
-	if !slices.Equal(config.Entrypoint, gatewayEntrypoint) || !slices.Equal(config.Args, gatewayCommand) {
+	if !slices.Equal(config.Entrypoint, gatewayEntrypoint) || !slices.Equal(config.Args, gatewayCommand(false)) {
 		t.Fatalf("container is not pinned to the Gateway command: %v %v", config.Entrypoint, config.Args)
 	}
 	if config.Labels["aries.component"] != "harness" || config.Labels["aries.kind"] != "hermes-harness" || config.Labels["aries.managed"] != "true" {
@@ -1334,7 +1334,7 @@ func TestDeploymentReceivesRuntimeConstraintsAndSecretValidation(t *testing.T) {
 	if fake.created.CPU == nil || *fake.created.CPU != cpu || fake.created.MemoryMB == nil || *fake.created.MemoryMB != memory {
 		t.Fatalf("resources = %#v", fake.created)
 	}
-	if got := fake.validatedRequest; got.Name != fake.created.Name || got.Image != testHermesImage || got.Placement.AttachmentID != request.Connectivity.Placement.AttachmentID || !slices.Equal(got.Args, gatewayCommand) || !slices.Equal(got.Entrypoint, gatewayEntrypoint) {
+	if got := fake.validatedRequest; got.Name != fake.created.Name || got.Image != testHermesImage || got.Placement.AttachmentID != request.Connectivity.Placement.AttachmentID || !slices.Equal(got.Args, gatewayCommand(false)) || !slices.Equal(got.Entrypoint, gatewayEntrypoint) {
 		t.Fatalf("validation request = %#v", got)
 	}
 	if !slices.Equal(fake.created.ImageVolumes, []string{imageDeclaredVolume}) {
@@ -1462,5 +1462,31 @@ func TestStartRendersTheTaskMCPServers(t *testing.T) {
 	}
 	if clash.createCalls != 0 {
 		t.Fatalf("a runtime was created despite the clash: %d", clash.createCalls)
+	}
+}
+
+// With KeepRoot the gateway keeps root, and the deployment may have no hermes
+// UID to give the staged files to.
+func TestGatewayChownsOnlyWhenItWillDropRoot(t *testing.T) {
+	fake := newFakeDeployment(t)
+	manager := newTestManager(t, fake, []byte("model-secret"))
+	if err := manager.Start(context.Background(), testRequest(t)); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop(context.Background())
+	if command := strings.Join(fake.created.Args, " "); !strings.Contains(command, "chown -R 10000:10000") {
+		t.Fatalf("default start command = %q", command)
+	}
+
+	keeping := newFakeDeployment(t)
+	keepRoot := newTestManager(t, keeping, []byte("model-secret"))
+	keepRoot.options.KeepRoot = true
+	if err := keepRoot.Start(context.Background(), testRequest(t)); err != nil {
+		t.Fatal(err)
+	}
+	defer keepRoot.Stop(context.Background())
+	command := strings.Join(keeping.created.Args, " ")
+	if strings.Contains(command, "chown") || !strings.Contains(command, gatewayLauncherPath) {
+		t.Fatalf("KeepRoot start command = %q", command)
 	}
 }
