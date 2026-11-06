@@ -19,6 +19,9 @@
   and cleanup/errors. Exit status alone is insufficient.
 - After runtime work, check for leaked containers, networks, processes, listeners,
   and credential files. Scan private artifacts without printing secrets.
+- Check the private Hermes gRPC audit before live evaluation. An oversized
+  response fails its task after confirmed revocation. An aggregate audit failure
+  does not confirm revocation; block evaluation and report cleanup truthfully.
 - Keep credentials, datasets, and run artifacts ignored. Report actual evidence
   and validation gaps.
 

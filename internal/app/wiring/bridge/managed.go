@@ -23,7 +23,7 @@ func NewService(cfg config.Config, runID, outputRoot string, placement core.Runt
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}
-	service, err := managed.NewService(managed.Options{Runtime: runtime, Launch: launch, Client: client, RunID: runID, Placement: placement, OutputDir: outputRoot, BridgeType: cfg.Bridge.Type, RetainRawLog: cfg.Bridge.RetainBridgeRawLog(), DebugExecResponse: cfg.Bridge.DebugExecResponse, BenchmarkType: cfg.Benchmark.Type, BenchmarkRevisions: BenchmarkRevisions(cfg)})
+	service, err := managed.NewService(managed.Options{Runtime: runtime, Launch: launch, Client: client, RunID: runID, Placement: placement, OutputDir: outputRoot, BridgeType: cfg.Bridge.Type, RetainRawLog: cfg.Bridge.RetainBridgeRawLog(), BenchmarkType: cfg.Benchmark.Type, BenchmarkRevisions: BenchmarkRevisions(cfg)})
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}

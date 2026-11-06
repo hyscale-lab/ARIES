@@ -19,6 +19,7 @@ import (
 	"github.com/hyscale-lab/aries/pkg/bridge/target"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/deployment"
+	"github.com/hyscale-lab/aries/pkg/replay"
 	"github.com/hyscale-lab/aries/pkg/runner"
 )
 
@@ -299,7 +300,15 @@ func (s *Session) Stop(ctx context.Context) error {
 		}
 		s.metadata.ToolCallsBytes = &collected[0].Size
 		s.metadata.ToolCallsSHA256 = collected[0].SHA256
-		s.metadata.ReplayReady = s.service.transport == "grpc" && s.sourceBound && s.taskBound && s.metadata.Image == s.occurrenceImage && s.metadata.HarnessCompletedAt != "" && s.service.options.BenchmarkType != "" && len(s.service.options.BenchmarkRevisions) != 0
+		auditReady := true
+		if s.service.transport == "grpc" {
+			auditErr := replay.LiveAuditError(filepath.Join(s.local, "tool-calls.jsonl"))
+			if auditErr != nil && !errors.Is(auditErr, replay.ErrExecResponseTooLarge) {
+				return errors.Join(auditErr, s.removeHelper())
+			}
+			auditReady = auditErr == nil
+		}
+		s.metadata.ReplayReady = auditReady && s.service.transport == "grpc" && s.sourceBound && s.taskBound && s.metadata.Image == s.occurrenceImage && s.metadata.HarnessCompletedAt != "" && s.service.options.BenchmarkType != "" && len(s.service.options.BenchmarkRevisions) != 0
 		for _, revision := range s.service.options.BenchmarkRevisions {
 			if revision == "" {
 				s.metadata.ReplayReady = false

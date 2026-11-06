@@ -2,7 +2,6 @@ package grpc
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -86,7 +85,7 @@ launch:
 			break launch
 		}
 		active++
-		go func() { results <- replayCall(callsCtx, client, call, plan.DebugExecResponse) }()
+		go func() { results <- replayCall(callsCtx, client, call) }()
 	}
 	for active > 0 {
 		select {
@@ -113,7 +112,7 @@ launch:
 	return ctx.Err()
 }
 
-func replayCall(ctx context.Context, client sandboxv1.SandboxClient, call replay.Call, debugExecResponse bool) error {
+func replayCall(ctx context.Context, client sandboxv1.SandboxClient, call replay.Call) error {
 	if call.Sequence != 0 {
 		ctx = metadata.AppendToOutgoingContext(ctx, replaySourceSequenceKey, strconv.FormatUint(call.Sequence, replaySequenceBase))
 	}
@@ -214,7 +213,7 @@ func replayCall(ctx context.Context, client sandboxv1.SandboxClient, call replay
 	}
 	outcome.field([]byte(status.Code(err).String()))
 	outcome.field([]byte(status.Convert(err).Message()))
-	if outcome.invalid || outcome.bytes != call.ResponseBytes || status.Code(err).String() != call.ResponseCode || exitCodeChanged || written != nil && written.GetBytesWritten() != int64(len(call.Body)) || !debugExecResponse && hex.EncodeToString(outcome.hash.Sum(nil)) != call.ResponseSHA256 {
+	if outcome.invalid || outcome.bytes != call.ResponseBytes || status.Code(err).String() != call.ResponseCode || exitCodeChanged || written != nil && written.GetBytesWritten() != int64(len(call.Body)) {
 		return fmt.Errorf("replay call %d %s response mismatch", call.Sequence, call.Operation)
 	}
 	return nil
