@@ -46,6 +46,10 @@ material grading ever touches.
 
 ### Grading
 
+A replay of a `hermes-grpc` source does not read the private rubric or call
+the judge. It carries the earlier evaluation with its source IDs instead of
+grading a new answer. See [replay configuration](../configuration.md#sandbox-call-replay).
+
 Grading uses a host-side LLM judge against each task's private rubric.
 `evaluation.reward` is `1` only when at least one “must have” rubric is scored and every scored
 “must have” rubric passes;

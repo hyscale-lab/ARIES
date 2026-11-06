@@ -78,6 +78,45 @@ sandbox's container logs in the task's `evaluation-sandbox/` directory and its
 resource samples under the `evaluation-sandbox` component in
 `monitor/resources.jsonl`.
 
+## Sandbox-call replay results
+
+A replay run has one task occurrence. Read `tasks[0].replay.status` and
+`tasks[0].replay.error` for call execution. Read
+`tasks[0].isolation.caller_stopped` and
+`tasks[0].isolation.bridge_revoked` for positive isolation confirmation.
+Read `tasks[0].cleanup` for sandbox removal. These outcomes remain separate:
+a replay mismatch does not hide a failed stop or failed bridge revocation.
+The task's `error` combines failures; an inherited reward does not override
+replay or isolation failure.
+
+`tasks[0].evaluation.reused` marks the source occurrence's recorded
+evaluation. `evaluation.source_run_id` and `evaluation.source_task_id` name
+its source run and occurrence. Its status, score, reward, and error are
+historical values. Replay does not run a new verifier, model judge, or FACT
+check. It does not copy source `evaluation/` artifacts into the replay run.
+Inspect those files in the source run. A successful replay establishes matching
+bridge-visible responses, not equal final sandbox state or a fresh grade.
+
+`tasks[0].replay.timing.status` is `available` only when a finalized replay
+bridge audit matches every source audit sequence. Its `calls` list has
+`source_sequence` and signed `drift_ns` for each source call. Drift compares
+the bridge `started_at` offset from the first call in each trace; positive
+values mean later relative replay starts. The replay-only source sequence is
+not `tool_call_id`, which can be absent or reused. If correlation is missing
+or duplicated, timing is `unavailable` with a `reason` and no inferred
+per-call values. This diagnostic does not change replay response matching,
+isolation status, or the reused grade. Timing is read only after confirmed
+caller stop and bridge revocation.
+
+The source occurrence directory contains the private
+`bridge/tool-calls.jsonl` and `bridge/runtime.json`; its parent run contains
+`run-result.json`. A source with missing input, canceled or refused calls,
+missing response checks, a changed log digest, or a missing matching source
+evaluation fails before sandbox creation. Replay preserves later call-start
+spacing and the final post-call wait, but not the initial setup wait. Actual
+start times can drift due to network and bridge scheduling. See
+[replay configuration](configuration.md#sandbox-call-replay).
+
 ## Measurement availability
 
 Read observer status and `monitor/index.json` before interpreting resource data.

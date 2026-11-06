@@ -230,10 +230,24 @@ type Evaluation struct {
 	SourceTaskID   string        `json:"source_task_id,omitempty"`
 }
 
+// ReplayCallTiming compares one replayed call with its source start offset.
+type ReplayCallTiming struct {
+	SourceSequence uint64 `json:"source_sequence"`
+	DriftNS        int64  `json:"drift_ns"`
+}
+
+// ReplayTiming reports diagnostic call-start drift, not response equality.
+type ReplayTiming struct {
+	Status string             `json:"status"`
+	Calls  []ReplayCallTiming `json:"calls,omitempty"`
+	Reason string             `json:"reason,omitempty"`
+}
+
 // ReplayResult records sandbox-call execution separately from the source grade.
 type ReplayResult struct {
-	Status string `json:"status"`
-	Error  string `json:"error,omitempty"`
+	Status string        `json:"status"`
+	Error  string        `json:"error,omitempty"`
+	Timing *ReplayTiming `json:"timing,omitempty"`
 }
 
 // ObserverResult records observer-only evidence composed outside the Runner.

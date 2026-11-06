@@ -21,11 +21,12 @@ type toolCallRecord struct {
 	// SHA256 is the hex digest of the content a file call moved.
 	SHA256 string `json:"sha256,omitempty"`
 	// Truncated reports that the reply holds less than the sandbox produced.
-	Truncated      bool   `json:"truncated,omitempty"`
-	ResponseSHA256 string `json:"response_sha256"`
-	ResponseBytes  int64  `json:"response_bytes"`
-	GRPCCode       string `json:"grpc_code"`
-	ReplayError    string `json:"replay_error,omitempty"`
+	Truncated            bool   `json:"truncated,omitempty"`
+	ResponseSHA256       string `json:"response_sha256"`
+	ResponseBytes        int64  `json:"response_bytes"`
+	GRPCCode             string `json:"grpc_code"`
+	ReplayError          string `json:"replay_error,omitempty"`
+	ReplaySourceSequence uint64 `json:"replay_source_sequence,omitempty"`
 	fileWindow
 }
 

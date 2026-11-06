@@ -443,14 +443,32 @@ func TestManagedReplayCallerUsesDockerTaskNetwork(t *testing.T) {
 		logs, logErr := runtime.Logs(ctx, runtime.id, maxFailureLogBytes)
 		t.Fatalf("replay caller start: %v; logs: %q; log error: %v", err, logs, logErr)
 	}
+	callerContainer, err := api.ContainerInspect(ctx, runtime.id, client.ContainerInspectOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachment := fixture.environment.NetworkName()
+	const privateNetworkCount = 1
+	if runtime.id == fixture.service.RuntimeID() || runtime.id == session.sandbox.ContainerID() || len(callerContainer.Container.NetworkSettings.Networks) != privateNetworkCount || callerContainer.Container.NetworkSettings.Networks[attachment] == nil || len(callerContainer.Container.Mounts) != 0 || len(callerContainer.Container.HostConfig.PortBindings) != 0 {
+		t.Fatalf("replay caller lacks a separate private runtime: %+v", callerContainer.Container)
+	}
 	if err := caller.Run(ctx, replay.Plan{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := caller.Stop(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := api.ContainerInspect(ctx, runtime.id, client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
+		t.Fatalf("replay caller removal not confirmed: %v", err)
+	}
 	if err := session.session.Stop(ctx); err != nil {
 		t.Fatal(err)
+	}
+	if err := fixture.sandboxes.Stop(ctx, session.sandbox); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.ContainerInspect(ctx, session.sandbox.ContainerID(), client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
+		t.Fatalf("replay sandbox removal not confirmed: %v", err)
 	}
 }
 

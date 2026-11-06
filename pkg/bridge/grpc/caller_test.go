@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -78,6 +79,29 @@ func expectedReplayCall(operation string, messages ...proto.Message) replay.Call
 	outcome.field([]byte(codes.OK.String()))
 	outcome.field(nil)
 	return replay.Call{Operation: operation, ResponseSHA256: hex.EncodeToString(outcome.hash.Sum(nil)), ResponseBytes: outcome.bytes, ResponseCode: codes.OK.String()}
+}
+
+func TestReplayCallCarriesSourceSequenceSeparateFromToolCallID(t *testing.T) {
+	const firstSourceSequence uint64 = 1
+	const decimalBase = 10
+	const oneMetadataValue = 1
+	const sourceSequenceKey = "aries-replay-source-sequence"
+	response := &sandboxv1.ExecResponse{}
+	call := expectedReplayCall("Exec", response)
+	call.Sequence, call.ToolCallID = firstSourceSequence, testToolCallID
+	server := &replayServer{exec: func(ctx context.Context, _ *sandboxv1.ExecRequest) (*sandboxv1.ExecResponse, error) {
+		sequence := metadata.ValueFromIncomingContext(ctx, sourceSequenceKey)
+		toolID := metadata.ValueFromIncomingContext(ctx, toolCallIDKey)
+		if len(sequence) != oneMetadataValue || sequence[0] != strconv.FormatUint(firstSourceSequence, decimalBase) || len(toolID) != oneMetadataValue || toolID[0] != call.ToolCallID {
+			return nil, status.Error(codes.InvalidArgument, "replay metadata changed")
+		}
+		return response, nil
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), replayTestDeadline)
+	defer cancel()
+	if err := ReplayCalls(ctx, replayEndpoint(t, server), replay.Plan{Calls: []replay.Call{call}}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestReplayCallsWriteFileFramesAndChecksByteCount(t *testing.T) {
