@@ -147,6 +147,34 @@ namespace. Every runtime's `Stop` works from its record on disk, so a later proc
 that calls it does remove them; a PID that now names another process is not
 signaled. ARIES has no command that does this yet.
 
+## Running on a PBS cluster
+
+[`scripts/apptainer-example.pbs`](../../scripts/apptainer-example.pbs) is a job to start from, written
+and tested on NSCC's ASPIRE 2A. One GPU node serves Qwen3-4B with SGLang and runs Hermes on
+Terminal-Bench 2 tasks, one at a time, with the whole of ARIES on that node. Only the Hermes image has to be
+made elsewhere, as [Images](#images) describes. Put it at `.cache/hermes.sif` in a checkout on scratch, then
+submit from the checkout:
+
+```bash
+qsub -P <project> -v SETUP_ONLY=1 -l select=1:ncpus=16:mem=96gb -l walltime=08:00:00 scripts/apptainer-example.pbs
+qsub -P <project> scripts/apptainer-example.pbs
+```
+
+The first job needs no GPU. It builds ARIES, unpacks `fakeroot`, pulls the SGLang image, downloads the
+model's weights and runs `aries setup`, skipping whatever is already done. Its walltime keeps it out of
+NSCC's `qdev` queue, whose limit is two hours. The second runs `fix-git`; `-v TASKS=fix-git:vulnerable-secret`
+chooses other tasks. Each job's logs and results are in `runs/example-<job>/`, as
+[run results](../run-results.md) describes.
+
+On 6 November 2026 the first job took 34 minutes from a fresh clone, most of it for the SGLang image and the
+weights. A GPU job with three tasks took 17 minutes once it started; the wait for a GPU that day ran from
+seconds to nearly an hour.
+
+Expect a score of 0. Qwen3-4B failed `fix-git`, `vulnerable-secret` and `openssl-selfsigned-cert`, and those
+tasks' evaluations report `failed`. Each task's `evaluation/ctrf.json` holds the grader's test results; a
+task without them was not graded, which points at the run and not at the model. `fix-git`'s own solution,
+sent through Hermes by a scripted model on a CPU node, scored 1.
+
 ## Tests
 
 [Provider tests](../../pkg/deployment/apptainer/apptainer_test.go) use a fake

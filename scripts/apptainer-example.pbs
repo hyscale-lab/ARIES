@@ -1,0 +1,178 @@
+#!/bin/bash
+# An example PBS job for the Apptainer backend, written and tested on NSCC's ASPIRE 2A. One GPU node
+# serves Qwen3-4B with SGLang and runs Hermes on Terminal-Bench 2 tasks, one at a time, with the whole
+# of ARIES on that node. On another cluster, change the queue, the modules and the SGLang image's CUDA
+# build. See docs/implementation/apptainer.md#running-on-a-pbs-cluster.
+#
+# From a checkout on scratch, with the Hermes image at .cache/hermes.sif:
+#
+#   qsub -P <project> -v SETUP_ONLY=1 -l select=1:ncpus=16:mem=96gb -l walltime=08:00:00 scripts/apptainer-example.pbs
+#   qsub -P <project> scripts/apptainer-example.pbs
+#   qsub -P <project> -v TASKS=fix-git:vulnerable-secret scripts/apptainer-example.pbs
+#
+# The first command does the downloads and the build on a CPU node, so that a GPU job does not pay to
+# wait for them. Any step already done is skipped. qsub -v splits on commas, so tasks are separated
+# with ":". Each job's results and logs are in runs/example-<job>/. Qwen3-4B scored 0 on each task tried,
+# and that does not mean the job failed; the documentation explains.
+#
+#PBS -N aries-example
+#PBS -q normal
+#PBS -l select=1:ncpus=16:mem=128gb:ngpus=1
+#PBS -l walltime=01:30:00
+#PBS -j oe
+
+# Compute nodes have no git on PATH, and setup clones the dataset with it. Loaded before set -u,
+# which the module command does not survive.
+module load apptainer/1.5.0 git/2.39.2 go/1.26.4
+set -euo pipefail
+
+ARIES_HOME="${PBS_O_WORKDIR:-$PWD}"
+cd "$ARIES_HOME"
+TASKS="${TASKS:-fix-git}"
+JOB="${PBS_JOBID:-manual}"
+JOB="${JOB%%.*}"
+WORK="$ARIES_HOME/runs/example-$JOB"
+# Images, overlays and state need a local disk: Apptainer's FUSE mounts and millions of small files
+# do not suit Lustre. Everything worth keeping goes to WORK or .cache, on scratch.
+LOCAL="${TMPDIR:-/tmp}/aries-example-$JOB"
+HERMES_SIF="$ARIES_HOME/.cache/hermes.sif"
+SGLANG_SIF="$ARIES_HOME/.cache/sglang-v0.5.2-cu126.sif"
+FAKEROOT="$ARIES_HOME/.cache/fakeroot"
+MODEL=Qwen/Qwen3-4B
+mkdir -p "$WORK" "$LOCAL/tmp" "$ARIES_HOME/.cache/hf"
+# PBS copies its own output file only when the job ends; this one can be followed.
+exec > >(tee -a "$WORK/job.log") 2>&1
+
+export APPTAINER_CACHEDIR="$ARIES_HOME/.cache/apptainer"
+export APPTAINER_TMPDIR="$LOCAL/tmp"
+export HF_HOME="$ARIES_HOME/.cache/hf"
+export SGLANG_API_KEY=local-not-a-secret
+
+sglang_pid=""
+cleanup() {
+    if [ -n "$sglang_pid" ]; then
+        # Disowned first, or the shell reports the server as "Terminated" and the job looks as if it failed.
+        disown "$sglang_pid" 2>/dev/null || true
+        kill "$sglang_pid" 2>/dev/null || true
+    fi
+    chmod -R u+w "$LOCAL" 2>/dev/null || true
+    rm -rf "$LOCAL"
+}
+trap cleanup EXIT
+
+step() { echo "== $(date -Is) $*"; }
+
+if [ ! -f "$HERMES_SIF" ]; then
+    echo "$HERMES_SIF is missing. Hermes's image needs a Docker build, so make it on a host with Docker:"
+    echo "see docs/implementation/apptainer.md#running-on-a-pbs-cluster"
+    exit 1
+fi
+
+if [ ! -x bin/aries ]; then
+    step "building ARIES"
+    # On the local disk: unpacking Go's toolchain on Lustre took over 15 minutes.
+    GOPATH="$LOCAL/go" GOMODCACHE="$LOCAL/go/mod" GOCACHE="$LOCAL/go/cache" GOTOOLCHAIN=auto \
+        GOFLAGS="-modcacherw -buildvcs=false" CGO_ENABLED=0 make build
+fi
+
+if [ ! -x "$FAKEROOT/bin/fakeroot-sysv" ]; then
+    # Task images' package managers need it, and their glibc is older than a current build's. EPEL 8's
+    # is old enough; it is unpacked, not installed, and its script's absolute /usr paths are rewritten.
+    step "unpacking fakeroot"
+    mirror=https://mirrors.kernel.org/fedora-epel/8/Everything/x86_64/Packages/f
+    mkdir -p "$FAKEROOT/root" "$FAKEROOT/bin"
+    while read -r sum package; do
+        curl -sSf -o "$LOCAL/$package" "$mirror/$package"
+        echo "$sum  $LOCAL/$package" | sha256sum -c --quiet
+        (cd "$FAKEROOT/root" && rpm2cpio "$LOCAL/$package" | cpio -idm --quiet)
+    done <<'PACKAGES'
+a88d35381c54e5ee95d568be7923571e5059e5978738efc72bb394f70e6d1f65 fakeroot-1.33-1.el8.x86_64.rpm
+9e5aee07349692016dd37cd4faa542dd8393588514f7f94d784091644062bd64 fakeroot-libs-1.33-1.el8.x86_64.rpm
+PACKAGES
+    sed -e "s#/usr/bin#$FAKEROOT/bin#g" -e "s#/usr/lib64#$FAKEROOT/root/usr/lib64#g" \
+        -e "s#/usr/lib/#$FAKEROOT/root/usr/lib/#g" "$FAKEROOT/root/usr/bin/fakeroot-sysv" > "$FAKEROOT/bin/fakeroot-sysv"
+    chmod 755 "$FAKEROOT/bin/fakeroot-sysv"
+    cp "$FAKEROOT/root/usr/bin/faked-sysv" "$FAKEROOT/bin/faked-sysv"
+fi
+export PATH="$FAKEROOT/bin:$PATH"
+
+if [ ! -f "$SGLANG_SIF" ]; then
+    # Up to an hour. -cu126 is the newest build that the A100 nodes' CUDA 12.8 driver accepts.
+    step "pulling the SGLang image"
+    apptainer pull "$SGLANG_SIF" docker://lmsysorg/sglang:v0.5.2-cu126
+fi
+step "checking the model's weights"
+apptainer exec --bind "$HF_HOME" --env HF_HOME="$HF_HOME" "$SGLANG_SIF" \
+    python3 -c "from huggingface_hub import snapshot_download; print(snapshot_download('$MODEL'))"
+
+# Start from the example profile, with this job's paths, tasks and model address. The model listens on
+# the node's address because the run's network namespace has its own loopback.
+NODE_IP="$(hostname -I | awk '{print $1}')"
+python3 - "$ARIES_HOME" "$LOCAL" "$WORK" "$HERMES_SIF" "$NODE_IP" "$TASKS" <<'PY'
+import json
+import sys
+
+home, local, work, hermes_sif, node_ip, tasks = sys.argv[1:]
+profile = json.load(open(home + "/profiles/apptainer/hermes-tb2-fix-git-apptainer.json"))
+profile["versions_file"] = home + "/configs/versions.json"
+profile["benchmark"]["root"] = home + "/.cache/terminal-bench-2-1"
+profile["benchmark"]["tasks"] = tasks.split(":")
+profile["model"]["base_url"] = "http://%s:30000/v1" % node_ip
+profile["output_dir"] = work
+for part in ("harness", "sandbox", "bridge"):
+    placement = profile[part]["deployment"]["apptainer"]
+    placement["state_dir"] = local + "/state"
+    placement["image_dir"] = local + "/images"
+    placement["overlay_dir"] = local + "/overlays"
+    placement["images"] = {tag: hermes_sif for tag in placement["images"]}
+json.dump(profile, open(work + "/profile.json", "w"), indent=1)
+PY
+
+step "aries setup"
+if ! bin/aries setup "$WORK/profile.json" > "$WORK/setup.log" 2>&1; then
+    tail -20 "$WORK/setup.log"
+    exit 1
+fi
+
+if [ -n "${SETUP_ONLY:-}" ]; then
+    step "setup finished; the GPU job can start"
+    exit 0
+fi
+
+# The flags give Qwen3-4B the 64K context window that Hermes requires.
+step "starting SGLang"
+apptainer exec --nv --bind "$HF_HOME" --env HF_HOME="$HF_HOME" --env CUDA_VISIBLE_DEVICES=0 \
+    --env SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1 "$SGLANG_SIF" \
+    python3 -m sglang.launch_server --model-path "$MODEL" --host 0.0.0.0 --port 30000 --tp 1 --context-length 65536 \
+    --json-model-override-args '{"rope_scaling":{"rope_type":"yarn","factor":2,"original_max_position_embeddings":32768}}' \
+    --tool-call-parser qwen25 --reasoning-parser qwen3 --mem-fraction-static 0.85 --log-level info > "$WORK/sglang.log" 2>&1 &
+sglang_pid=$!
+for _ in $(seq 1 120); do
+    if curl -sf -o /dev/null "http://$NODE_IP:30000/v1/models"; then break; fi
+    if ! kill -0 "$sglang_pid" 2>/dev/null; then
+        echo "SGLang exited:"
+        tail -20 "$WORK/sglang.log"
+        exit 1
+    fi
+    sleep 5
+done
+
+step "aries run: $TASKS"
+status=0
+bin/aries "$WORK/profile.json" > "$WORK/aries.log" 2>&1 || status=$?
+step "aries exit $status"
+
+python3 - "$WORK" <<'PY'
+import glob
+import json
+import sys
+
+print("%-30s %-10s %-10s %-10s %-6s %s" % ("task", "harness", "isolation", "evaluation", "score", "seconds"))
+for path in glob.glob(sys.argv[1] + "/*/run-result.json"):
+    for task in json.load(open(path))["tasks"]:
+        parts = [(task.get(part) or {}) for part in ("harness", "isolation", "evaluation")]
+        print("%-30s %-10s %-10s %-10s %-6s %d" % (task["task_id"], parts[0].get("status"), parts[1].get("status"),
+                                                  parts[2].get("status"), parts[2].get("score"), task.get("duration", 0) // 10**9))
+    print("results:", path)
+PY
+exit "$status"
