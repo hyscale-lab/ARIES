@@ -1,14 +1,18 @@
 package replay
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/sirupsen/logrus"
 )
 
 const timingFixtureStart = "2026-11-05T12:00:00Z"
@@ -28,6 +32,58 @@ func writeTimingAudit(t *testing.T, records ...map[string]any) string {
 		}
 	}
 	return path
+}
+
+func TestReadResponsesLogsLegacyAndBinaryDriftWithoutResultText(t *testing.T) {
+	const firstSequence uint64 = 1
+	const nextSequence uint64 = firstSequence + 1
+	const expectedHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const actualHash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	const sourceText = "source git hash aaa"
+	const replayText = "replay git hash bbb"
+	// This byte cannot start a valid UTF-8 sequence.
+	const invalidUTF8Byte byte = 0xff
+	binary := []byte{invalidUTF8Byte}
+	for _, sourceDebug := range []bool{true, false} {
+		var logs bytes.Buffer
+		logger := logrus.New()
+		logger.SetOutput(&logs)
+		path := writeTimingAudit(t,
+			map[string]any{"replay_source_sequence": firstSequence, "operation_class": "exec", "response_sha256": actualHash, "response_debug": true, "response_stdout": replayText, "response_stderr_base64": base64.StdEncoding.EncodeToString(binary)},
+			map[string]any{"replay_source_sequence": nextSequence, "operation_class": "stat", "response_sha256": actualHash},
+		)
+		plan := Plan{Calls: []Call{{Sequence: firstSequence, Operation: "Exec", ResponseSHA256: expectedHash, ResponseDebug: sourceDebug, ResponseStdout: []byte(sourceText)}, {Sequence: nextSequence, Operation: "Stat", ResponseSHA256: actualHash}}, DebugExecResponse: true}
+		got := ReadResponses(path, plan, logger)
+		if got.Status != "available" || len(got.Calls) != len(plan.Calls) || got.Calls[0].Status != "drifted" || got.Calls[1].Status != "matched" {
+			t.Fatalf("response summary = %+v", got)
+		}
+		if !strings.Contains(logs.String(), expectedHash) || !strings.Contains(logs.String(), actualHash) || !strings.Contains(logs.String(), replayText) || !strings.Contains(logs.String(), "base64: "+base64.StdEncoding.EncodeToString(binary)) {
+			t.Fatalf("missing drift hashes or replay output: %s", logs.String())
+		}
+		if sourceDebug && !strings.Contains(logs.String(), sourceText) || !sourceDebug && !strings.Contains(logs.String(), "source output unavailable") {
+			t.Fatalf("wrong source output log: %s", logs.String())
+		}
+		encoded, err := json.Marshal(got)
+		if err != nil || strings.Contains(string(encoded), sourceText) || strings.Contains(string(encoded), replayText) {
+			t.Fatalf("response text entered result: %s, %v", encoded, err)
+		}
+	}
+}
+
+func TestReadResponsesLogsFinalizedDriftEvenWithMissingCalls(t *testing.T) {
+	const firstSequence uint64 = 1
+	const nextSequence uint64 = firstSequence + 1
+	const sourceHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const replayHash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	var logs bytes.Buffer
+	logger := logrus.New()
+	logger.SetOutput(&logs)
+	path := writeTimingAudit(t, map[string]any{"replay_source_sequence": firstSequence, "operation_class": "stat", "response_sha256": replayHash})
+	plan := Plan{Calls: []Call{{Sequence: firstSequence, Operation: "Stat", ResponseSHA256: sourceHash}, {Sequence: nextSequence, Operation: "Stat", ResponseSHA256: sourceHash}}, DebugExecResponse: true}
+	got := ReadResponses(path, plan, logger)
+	if got.Status != "unavailable" || len(got.Calls) != 0 || !strings.Contains(logs.String(), sourceHash) || !strings.Contains(logs.String(), replayHash) || strings.Contains(logs.String(), "stdout") {
+		t.Fatalf("partial strict failure lost drift log or invented file text: %+v; log: %s", got, logs.String())
+	}
 }
 
 func TestReadTimingPairsSourceSequenceAndSignedDrift(t *testing.T) {

@@ -261,6 +261,9 @@ func parseReplayCall(record toolCallRecord, line []byte, sequence uint64, runID,
 	}
 	switch record.OperationClass {
 	case kindExec:
+		if !validReplayNumber(fields["exit_code"]) || record.ExitCode < 0 || record.ExitCode > int(^uint8(0)) {
+			return replay.Call{}, time.Time{}, time.Time{}, errors.New("replay Exec exit code is invalid")
+		}
 		command := fields["command"]
 		if len(command) > 0 && command[0] != '"' || len(fields["stdin"]) == 0 || fields["stdin"][0] != '"' || !validReplayNumber(fields["stdin_bytes"]) || record.CommandHash != bridgekit.CommandHash(record.Command) || record.StdinEncoding != "utf-8" || int64(len(record.Stdin)) != record.StdinBytes || !bridgekit.ValidWorkdir(record.Workdir) {
 			return replay.Call{}, time.Time{}, time.Time{}, errors.New("replay Exec input is incomplete")
@@ -270,6 +273,17 @@ func parseReplayCall(record toolCallRecord, line []byte, sequence uint64, runID,
 			return replay.Call{}, time.Time{}, time.Time{}, errors.New("replay Exec argv differs from the recorded command")
 		}
 		call.Operation, call.Script, call.Login, call.Body = "Exec", record.Command, login, []byte(record.Stdin)
+		call.ExitCode = int32(record.ExitCode)
+		if record.ResponseDebug {
+			call.ResponseDebug = true
+			call.ResponseStdout, call.ResponseStderr = []byte(record.ResponseStdout), []byte(record.ResponseStderr)
+			if record.ResponseStdoutBase64 != nil {
+				call.ResponseStdout = record.ResponseStdoutBase64
+			}
+			if record.ResponseStderrBase64 != nil {
+				call.ResponseStderr = record.ResponseStderrBase64
+			}
+		}
 	case kindFileStat, kindFileRead, kindFileWrite:
 		if !strings.HasPrefix(record.Path, "/") || strings.ContainsRune(record.Path, 0) {
 			return replay.Call{}, time.Time{}, time.Time{}, errors.New("replay file path is invalid")

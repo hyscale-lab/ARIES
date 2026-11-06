@@ -24,13 +24,18 @@ type Call struct {
 	ResponseSHA256 string        `json:"response_sha256"`
 	ResponseBytes  int64         `json:"response_bytes"`
 	ResponseCode   string        `json:"response_code"`
+	ExitCode       int32         `json:"exit_code,omitempty"`
+	ResponseDebug  bool          `json:"-"`
+	ResponseStdout []byte        `json:"-"`
+	ResponseStderr []byte        `json:"-"`
 }
 
 // Plan holds the complete request schedule and the recorded source evaluation.
 type Plan struct {
-	Calls        []Call          `json:"calls"`
-	FinalWait    time.Duration   `json:"final_wait"`
-	SourceRunID  string          `json:"source_run_id"`
-	SourceTaskID string          `json:"source_task_id"`
-	Evaluation   core.Evaluation `json:"evaluation"`
+	Calls             []Call          `json:"calls"`
+	FinalWait         time.Duration   `json:"final_wait"`
+	SourceRunID       string          `json:"source_run_id"`
+	SourceTaskID      string          `json:"source_task_id"`
+	Evaluation        core.Evaluation `json:"evaluation"`
+	DebugExecResponse bool            `json:"debug_exec_response,omitempty"`
 }

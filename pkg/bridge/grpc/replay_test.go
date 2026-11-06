@@ -123,6 +123,74 @@ func TestLoadReplaySourceOrdersCallsAndPreservesEvaluation(t *testing.T) {
 	}
 }
 
+func TestLoadReplaySourceKeepsExecExitAndOptionalOutput(t *testing.T) {
+	start, err := time.Parse(time.RFC3339Nano, replaySourceTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const sourceExitCode = 7
+	const sourceStdout = "source git hash aaa"
+	record := replayRecord(start, start.Add(time.Second), 1)
+	record.OperationClass, record.Command = kindExec, "git rev-parse HEAD"
+	record.CommandHash, record.Path, record.Workdir = bridgekit.CommandHash(record.Command), bridgekit.RemoteShellPath, testWorkdir
+	record.Argv = []string{bridgekit.RemoteShellPath, "-c", record.Command}
+	record.ExitCode = sourceExitCode
+	// This byte cannot start a valid UTF-8 sequence.
+	const invalidUTF8Byte byte = 0xff
+	record.setDebugResponse([]byte(sourceStdout), []byte{invalidUTF8Byte})
+	for _, debug := range []bool{true, false} {
+		copy := record
+		if !debug {
+			copy.ResponseDebug = false
+			copy.ResponseStdout, copy.ResponseStderr = "", ""
+			copy.ResponseStderrBase64 = nil
+		}
+		source := writeReplaySource(t, []toolCallRecord{copy}, start.Add(2*time.Second), core.Evaluation{Status: core.StatusSucceeded})
+		plan, err := LoadReplaySource(source, replayTask, replayBenchmark, replayRevisions)
+		if err != nil {
+			t.Fatal(err)
+		}
+		call := plan.Calls[0]
+		if call.ExitCode != sourceExitCode || call.ResponseDebug != debug {
+			t.Fatalf("Exec exit and debug availability = %+v", call)
+		}
+		if debug && (string(call.ResponseStdout) != sourceStdout || !bytes.Equal(call.ResponseStderr, []byte{invalidUTF8Byte})) {
+			t.Fatalf("Exec text and binary source output = %+v", call)
+		}
+	}
+}
+
+func TestLoadReplaySourceRejectsExecExitOutsideBridgeRange(t *testing.T) {
+	start, err := time.Parse(time.RFC3339Nano, replaySourceTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := replayRecord(start, start.Add(time.Second), 1)
+	record.OperationClass, record.Command = kindExec, "git rev-parse HEAD"
+	record.CommandHash, record.Path, record.Workdir = bridgekit.CommandHash(record.Command), bridgekit.RemoteShellPath, testWorkdir
+	record.Argv = []string{bridgekit.RemoteShellPath, "-c", record.Command}
+	for _, invalidExitCode := range []int{refusedExitCode, int(^uint8(0)) + 1} {
+		record.ExitCode = invalidExitCode
+		source := writeReplaySource(t, []toolCallRecord{record}, start.Add(2*time.Second), core.Evaluation{Status: core.StatusSucceeded})
+		if plan, err := LoadReplaySource(source, replayTask, replayBenchmark, replayRevisions); err == nil || len(plan.Calls) != 0 {
+			t.Fatalf("invalid source Exec exit %d accepted: %+v, %v", invalidExitCode, plan, err)
+		}
+	}
+	for name, change := range map[string]func(map[string]any){
+		"missing": func(fields map[string]any) { delete(fields, "exit_code") },
+		"null":    func(fields map[string]any) { fields["exit_code"] = nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			record.ExitCode = 0
+			source := writeReplaySource(t, []toolCallRecord{record}, start.Add(2*time.Second), core.Evaluation{Status: core.StatusSucceeded})
+			rewriteReplayRecord(t, source, change)
+			if plan, err := LoadReplaySource(source, replayTask, replayBenchmark, replayRevisions); err == nil || len(plan.Calls) != 0 {
+				t.Fatalf("missing source Exec exit evidence accepted: %+v, %v", plan, err)
+			}
+		})
+	}
+}
+
 func TestLoadReplaySourceRejectsAnyBadCall(t *testing.T) {
 	start, err := time.Parse(time.RFC3339Nano, replaySourceTime)
 	if err != nil {

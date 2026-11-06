@@ -94,8 +94,9 @@ evaluation. `evaluation.source_run_id` and `evaluation.source_task_id` name
 its source run and occurrence. Its status, score, reward, and error are
 historical values. Replay does not run a new verifier, model judge, or FACT
 check. It does not copy source `evaluation/` artifacts into the replay run.
-Inspect those files in the source run. A successful replay establishes matching
-bridge-visible responses, not equal final sandbox state or a fresh grade.
+Inspect those files in the source run. A successful replay confirms strict
+response checks; inspect `replay.responses` for hash equality. It does not
+prove equal final sandbox state or provide a fresh grade.
 
 `tasks[0].replay.timing.status` is `available` only when a finalized replay
 bridge audit matches every source audit sequence. Its `calls` list has
@@ -107,6 +108,20 @@ or duplicated, timing is `unavailable` with a `reason` and no inferred
 per-call values. This diagnostic does not change replay response matching,
 isolation status, or the reused grade. Timing is read only after confirmed
 caller stop and bridge revocation.
+
+`tasks[0].replay.responses.status` is `available` after confirmed caller stop
+and bridge revocation when the private replay audit identifies every source
+call. Its `calls` list records `source_sequence`, `expected_sha256`,
+`actual_sha256`, and `matched` or `drifted` status. Missing or ambiguous audit
+evidence makes the summary `unavailable` with a reason. With replay
+`bridge.debug_exec_response: true`, hash drift alone does not fail replay;
+strict byte count, gRPC code, `Exec` exit code, and successful `WriteFile` byte
+count still fail replay. With replay debug off, hash drift is fatal. A reused
+grade does not show response equality. `aries.log` and stderr show per-call
+hashes on drift and captured `Exec` output when debug is on. If the source
+output is absent, the log says `source output unavailable`. Non-UTF-8 output
+uses labeled base64. Response text stays out of `run-result.json` and caller
+errors. Treat `aries.log` as private when debug is on.
 
 The source occurrence directory contains the private
 `bridge/tool-calls.jsonl` and `bridge/runtime.json`; its parent run contains
