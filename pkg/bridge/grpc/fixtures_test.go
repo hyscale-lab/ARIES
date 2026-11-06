@@ -196,7 +196,7 @@ func newTestManager(t *testing.T, options Options) *Manager {
 func dial(t *testing.T, endpoint core.ToolEndpoint, options ...grpc.DialOption) sandboxv1.SandboxClient {
 	t.Helper()
 	options = append(options, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithNoProxy(),
-		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(maxMessageBytes)))
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(MaxMessageBytes)))
 	connection, err := grpc.NewClient(endpoint.Address, options...)
 	if err != nil {
 		t.Fatalf("dial bridge: %v", err)
@@ -279,7 +279,7 @@ func readToolCalls(t *testing.T, path string) []map[string]any {
 	defer file.Close()
 	var records []map[string]any
 	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 1<<20), 2*maxMessageBytes)
+	scanner.Buffer(make([]byte, 0, 1<<20), 2*MaxMessageBytes)
 	for scanner.Scan() {
 		var record map[string]any
 		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {

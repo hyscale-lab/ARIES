@@ -161,6 +161,20 @@ func TestPodManifestStagingAndBridgeIdentity(t *testing.T) {
 	}
 }
 
+func TestReplayCallerRequestDisablesServiceAccountToken(t *testing.T) {
+	manager, _ := newTestManager(t, Options{ServiceAccount: "aries-bridge"})
+	request := testRequest()
+	request.DisableServiceAccountToken = true
+	raw, err := manager.podManifest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := decodeManifest(t, raw)["spec"].(map[string]any)
+	if spec["automountServiceAccountToken"] != false || spec["serviceAccountName"] != nil {
+		t.Fatalf("replay caller received a service account token: %v", spec)
+	}
+}
+
 func TestValidateRequestRejectsWhatTheProviderCannotHonor(t *testing.T) {
 	manager, _ := newTestManager(t, Options{})
 	for name, mutate := range map[string]func(*deployment.Request){
@@ -278,6 +292,21 @@ func TestValidateChecksIdentityIsolationAndSecrets(t *testing.T) {
 		if err := manager.Validate(context.Background(), request.Name, request, [][]byte{[]byte("sk-secret")}); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+func TestValidateReplayCallerRequestRejectsMountedServiceAccountToken(t *testing.T) {
+	manager, fake := newTestManager(t, Options{ServiceAccount: "aries-bridge"})
+	request := testRequest()
+	request.DisableServiceAccountToken = true
+	fake.respond = func(_ context.Context, _ []string, _ []byte, stdout, _ io.Writer) error {
+		_, err := io.WriteString(stdout, podJSON(t, manager, request, func(manifest map[string]any) {
+			manifest["spec"].(map[string]any)["automountServiceAccountToken"] = true
+		}))
+		return err
+	}
+	if err := manager.Validate(context.Background(), request.Name, request, nil); err == nil || !strings.Contains(err.Error(), "service account token") {
+		t.Fatalf("replay caller token mount accepted: %v", err)
 	}
 }
 

@@ -188,13 +188,13 @@ func (manager *Manager) podManifest(request deployment.Request) ([]byte, error) 
 	}
 	spec := map[string]any{
 		"restartPolicy":                 "Never",
-		"automountServiceAccountToken":  manager.options.ServiceAccount != "",
+		"automountServiceAccountToken":  manager.options.ServiceAccount != "" && !request.DisableServiceAccountToken,
 		"enableServiceLinks":            false,
 		"terminationGracePeriodSeconds": 5,
 		"containers":                    []any{container},
 		"volumes":                       volumes,
 	}
-	if manager.options.ServiceAccount != "" {
+	if manager.options.ServiceAccount != "" && !request.DisableServiceAccountToken {
 		spec["serviceAccountName"] = manager.options.ServiceAccount
 	}
 	if manager.options.ImagePullSecret != "" {

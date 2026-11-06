@@ -23,7 +23,10 @@ import (
 	sandboxv1 "github.com/hyscale-lab/aries/pkg/bridge/grpc/v1"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/deployment"
 	docker "github.com/hyscale-lab/aries/pkg/deployment/docker"
+	"github.com/hyscale-lab/aries/pkg/replay"
+	replaymanaged "github.com/hyscale-lab/aries/pkg/replay/managed"
 	"github.com/hyscale-lab/aries/pkg/runner"
 	tasksandbox "github.com/hyscale-lab/aries/pkg/sandbox"
 	"github.com/moby/moby/client"
@@ -384,6 +387,73 @@ func TestManagedBridgeRuntimeMatrix(t *testing.T) {
 		})
 	}
 }
+
+type replayDiagnosticRuntime struct {
+	deployment.Runtime
+	id string
+}
+
+func (runtime *replayDiagnosticRuntime) Create(ctx context.Context, request deployment.Request) (string, error) {
+	id, err := runtime.Runtime.Create(ctx, request)
+	runtime.id = id
+	return id, err
+}
+
+func TestManagedReplayCallerUsesDockerTaskNetwork(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	api, err := client.New(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		t.Skipf("Docker client unavailable: %v", err)
+	}
+	defer api.Close()
+	versions, err := config.LoadVersions(filepath.Join(managedRoot(t), "configs", "versions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, image := range []string{versions.Bridge.Image, managedFixtureImage} {
+		if _, err := api.ImageInspect(ctx, image); err != nil {
+			t.Skipf("pinned integration image %q unavailable: %v", image, err)
+		}
+	}
+	fixture := newManagedFixture(t, "hermes-grpc")
+	session := fixture.newSession(t, "replay")
+	dockerRuntime, err := docker.New(docker.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &replayDiagnosticRuntime{Runtime: dockerRuntime}
+	placement := session.sandbox.Connectivity().Placement
+	caller, err := replaymanaged.New(replaymanaged.Options{
+		Runtime: runtime, Image: versions.Bridge.Image, Backend: "docker", BridgeBackend: "docker",
+		BridgePlacement: placement, CallTimeout: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanup, done := context.WithTimeout(context.Background(), 30*time.Second)
+		defer done()
+		if err := caller.Stop(cleanup); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := caller.Start(ctx, session.endpoint, session.sandbox.Connectivity(), "managed-integration", "repeated-task"); err != nil {
+		const maxFailureLogBytes = 4 << 10
+		logs, logErr := runtime.Logs(ctx, runtime.id, maxFailureLogBytes)
+		t.Fatalf("replay caller start: %v; logs: %q; log error: %v", err, logs, logErr)
+	}
+	if err := caller.Run(ctx, replay.Plan{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := caller.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.session.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestManagedContainerCrashReportsMissingEvidence(t *testing.T) {
 	f := newManagedFixture(t, "openclaw-ssh")
 	s := f.newSession(t, "crash")
