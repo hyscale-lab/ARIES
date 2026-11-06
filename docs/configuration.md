@@ -322,16 +322,14 @@ model runtime. Replay does not load a model credential, start a harness, run
 a model judge, or call the benchmark verifier. It retains the source
 evaluation as a labeled historical grade, not a grade of the new sandbox.
 A strict bridge response difference stops later calls and fails replay even when the
-source reward is positive. With replay `bridge.debug_exec_response: true`, a
-changed response SHA-256 alone is a diagnostic and does not stop later calls.
+source reward is positive. A changed response SHA-256 alone is diagnostic and
+does not stop later calls.
 The byte count, gRPC code, `Exec` exit code, and successful `WriteFile` byte
 count remain strict. Equal responses do not prove equal final sandbox state. See [replay results](run-results.md#sandbox-call-replay-results).
 
-To inspect gRPC `Exec` output for a replay mismatch, set
-`"debug_exec_response": true` in the `bridge` block of **both** the live
-source profile and the replay profile before their runs. This option defaults
-to false and does not enable `bridge.retain_raw_log` or capture request bodies.
-The private `bridge/tool-calls.jsonl` for each run then includes exact UTF-8
+Every live and replay `hermes-grpc` task retains bounded `Exec` output in its
+private `bridge/tool-calls.jsonl` without a profile option. This does not enable
+`bridge.retain_raw_log` or capture request bodies. The audit includes exact UTF-8
 `response_stdout` and `response_stderr`; non-UTF-8 output uses lossless
 `response_stdout_base64` or `response_stderr_base64`. Empty output has
 `response_debug: true` with no text field. The replay audit uses
@@ -344,14 +342,17 @@ jq 'select(.replay_source_sequence == 15) | {sequence, replay_source_sequence, r
 ```
 
 Set `source_dir` and `replay_dir` to the respective task occurrence directories.
-Debug output can contain private data. Keep both audit files private and disable
-the option after diagnosis. Each reply stays within the existing output bound;
-if JSON encoding exceeds the replay audit line bound, the record has
-`replay_error: "response-debug-too-large"` and cannot become a replay source.
+Output can contain task-supplied or private data. Keep both audit files private.
+Each reply stays within the existing output bound. If JSON encoding exceeds the
+128 MiB replay audit line bound, the record has
+`replay_error: "response-debug-too-large"`. After confirmed bridge revocation,
+the live task fails without evaluation, and its source is not replay-ready.
+If the combined 256 MiB audit limit fails, bridge stop is unconfirmed and
+evaluation remains blocked. Independent tasks continue.
 The original response hash, byte count, and gRPC code do not
 change. After caller stop and bridge revocation, `aries.log` and stderr show
 per-call expected and actual hashes on drift. For `Exec`, they also show
-labeled captured stdout and stderr when replay debug is on. Non-UTF-8 output
+labeled captured stdout and stderr for `Exec`. Non-UTF-8 output
 uses labeled base64. If the source audit has no captured `Exec` output, the
 log says `source output unavailable`. File-call drift logs contain hashes but
 no response text. Treat `aries.log` as private. Output text does not enter

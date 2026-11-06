@@ -52,7 +52,7 @@ func TestReadResponsesLogsLegacyAndBinaryDriftWithoutResultText(t *testing.T) {
 			map[string]any{"replay_source_sequence": firstSequence, "operation_class": "exec", "response_sha256": actualHash, "response_debug": true, "response_stdout": replayText, "response_stderr_base64": base64.StdEncoding.EncodeToString(binary)},
 			map[string]any{"replay_source_sequence": nextSequence, "operation_class": "stat", "response_sha256": actualHash},
 		)
-		plan := Plan{Calls: []Call{{Sequence: firstSequence, Operation: "Exec", ResponseSHA256: expectedHash, ResponseDebug: sourceDebug, ResponseStdout: []byte(sourceText)}, {Sequence: nextSequence, Operation: "Stat", ResponseSHA256: actualHash}}, DebugExecResponse: true}
+		plan := Plan{Calls: []Call{{Sequence: firstSequence, Operation: "Exec", ResponseSHA256: expectedHash, ResponseDebug: sourceDebug, ResponseStdout: []byte(sourceText)}, {Sequence: nextSequence, Operation: "Stat", ResponseSHA256: actualHash}}}
 		got := ReadResponses(path, plan, logger)
 		if got.Status != "available" || len(got.Calls) != len(plan.Calls) || got.Calls[0].Status != "drifted" || got.Calls[1].Status != "matched" {
 			t.Fatalf("response summary = %+v", got)
@@ -79,7 +79,7 @@ func TestReadResponsesLogsFinalizedDriftEvenWithMissingCalls(t *testing.T) {
 	logger := logrus.New()
 	logger.SetOutput(&logs)
 	path := writeTimingAudit(t, map[string]any{"replay_source_sequence": firstSequence, "operation_class": "stat", "response_sha256": replayHash})
-	plan := Plan{Calls: []Call{{Sequence: firstSequence, Operation: "Stat", ResponseSHA256: sourceHash}, {Sequence: nextSequence, Operation: "Stat", ResponseSHA256: sourceHash}}, DebugExecResponse: true}
+	plan := Plan{Calls: []Call{{Sequence: firstSequence, Operation: "Stat", ResponseSHA256: sourceHash}, {Sequence: nextSequence, Operation: "Stat", ResponseSHA256: sourceHash}}}
 	got := ReadResponses(path, plan, logger)
 	if got.Status != "unavailable" || len(got.Calls) != 0 || !strings.Contains(logs.String(), sourceHash) || !strings.Contains(logs.String(), replayHash) || strings.Contains(logs.String(), "stdout") {
 		t.Fatalf("partial strict failure lost drift log or invented file text: %+v; log: %s", got, logs.String())

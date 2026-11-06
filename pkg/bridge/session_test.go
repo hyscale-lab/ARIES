@@ -2,6 +2,8 @@ package bridge
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	v1 "github.com/hyscale-lab/aries/pkg/bridge/control/v1"
@@ -162,6 +164,38 @@ func TestSessionFinalizesReplaySourceOnlyWithCompletionAndMatchingImage(t *testi
 				t.Fatalf("private runtime metadata = %v, %v", info, err)
 			}
 		})
+	}
+}
+
+func TestSessionOversizedExecAuditCannotClaimReplayReady(t *testing.T) {
+	const image = "task-image:tag"
+	s, _, _ := fixtureSession(t)
+	s.service.transport = "grpc"
+	s.service.options.BenchmarkType = "terminalbench2"
+	s.service.options.BenchmarkRevisions = map[string]string{"revision": "pinned-revision"}
+	s.exposed, s.released, s.collected = true, true, true
+	s.metadata.HarnessCompletedAt = fixtureCompletedAt
+	s.RecordSource("catalog-task", image)
+	s.RecordTask(image)
+	content := []byte("{\"replay_error\":\"response-debug-too-large\"}\n")
+	path := filepath.Join(s.local, "tool-calls.jsonl")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(content)
+	s.manifest = []*v1.Artifact{{Name: "tool-calls.jsonl", Status: "complete", Size: int64(len(content)), Sha256: hex.EncodeToString(sum[:])}}
+	if err := s.Stop(context.Background()); err != nil {
+		t.Fatalf("confirmed release rejected bounded marker: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(s.local, "runtime.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var metadata struct {
+		ReplayReady bool `json:"replay_ready"`
+	}
+	if err := json.Unmarshal(data, &metadata); err != nil || metadata.ReplayReady {
+		t.Fatalf("oversized response claimed replay readiness: %+v, %v", metadata, err)
 	}
 }
 

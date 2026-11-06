@@ -83,6 +83,7 @@ natively
 NativeServer
 NCSpeech
 noncanonical
+nonfatal
 nousresearch
 npm
 ntu

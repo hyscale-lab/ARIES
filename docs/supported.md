@@ -47,7 +47,9 @@ guides above.
   logical task. It does not support SSH, repeated tasks, arrivals, or Toolathlon.
   It needs no harness, model key, judge, or fresh verifier. Its source grade is
   historical evidence: matching bridge responses do not prove matching final
-  sandbox state. See the [replay limits](configuration.md#sandbox-call-replay).
+  sandbox state. Hermes gRPC retains bounded `Exec` output by default; an
+  oversized response fails its live task before evaluation. See the
+  [replay limits](configuration.md#sandbox-call-replay).
 
 - Each bridge type supports its corresponding harness: OpenClaw uses
   `openclaw-ssh`, and Hermes uses `hermes-ssh` or `hermes-grpc`. Crossed pairs

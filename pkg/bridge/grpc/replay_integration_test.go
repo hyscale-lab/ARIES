@@ -9,6 +9,8 @@ import (
 	"errors"
 	"os"
 	"testing"
+
+	"github.com/sirupsen/logrus"
 	"testing/fstest"
 	"time"
 
@@ -19,10 +21,11 @@ import (
 )
 
 const (
-	replayIntegrationWait   = 200 * time.Millisecond
-	replayIntegrationScore  = 0.75
-	replayIntegrationReward = 1
-	replayIntegrationCount  = 1
+	replayIntegrationWait         = 200 * time.Millisecond
+	replayIntegrationScore        = 0.75
+	replayIntegrationReward       = 1
+	replayIntegrationCount        = 1
+	replayIntegrationSourceOutput = "source"
 )
 
 type replayIntegrationBenchmark struct{ task core.Task }
@@ -107,7 +110,9 @@ func (caller *replayIntegrationCaller) Stop(context.Context) error {
 
 func captureReplayIntegrationSource(t *testing.T) string {
 	t.Helper()
-	manager, client, endpoint := startBridge(t, newFakeExecutor(fstest.MapFS{"app/f": &fstest.MapFile{Data: []byte("x\n"), Mode: 0o600}}), Options{OmitRawLog: true})
+	sourceTarget := newFakeExecutor(fstest.MapFS{"app/f": &fstest.MapFile{Data: []byte("x\n"), Mode: 0o600}})
+	sourceTarget.stdout = []byte(replayIntegrationSourceOutput)
+	manager, client, endpoint := startBridge(t, sourceTarget, Options{OmitRawLog: true})
 	if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "true"}); err != nil {
 		t.Fatal(err)
 	}
@@ -151,13 +156,13 @@ func captureReplayIntegrationSource(t *testing.T) string {
 	return writeReplaySource(t, records, finished.Add(replayIntegrationWait), core.Evaluation{Status: core.StatusSucceeded, Score: replayIntegrationScore, Reward: replayIntegrationReward})
 }
 
-func TestReplayExecDebugAuditShowsSameLengthMismatch(t *testing.T) {
+func TestReplayExecDefaultAuditReportsSameLengthDrift(t *testing.T) {
 	const sourceOutput = "same one"
 	const replayOutput = "same two"
 	sourceTarget := newFakeExecutor(nil)
 	sourceTarget.stdout = []byte(sourceOutput)
 	sourceTarget.stderr = []byte("source error")
-	manager, client, endpoint := startBridge(t, sourceTarget, Options{OmitRawLog: true, DebugExecResponse: true})
+	manager, client, endpoint := startBridge(t, sourceTarget, Options{OmitRawLog: true})
 	if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "true"}); err != nil {
 		t.Fatal(err)
 	}
@@ -187,19 +192,25 @@ func TestReplayExecDebugAuditShowsSameLengthMismatch(t *testing.T) {
 	target.stdout = []byte(replayOutput)
 	target.stderr = []byte("source error")
 	sandbox := &replayIntegrationSandbox{target: target}
-	bridge := &replayIntegrationBridge{manager: newTestManager(t, Options{OmitRawLog: true, DebugExecResponse: true}), sandbox: sandbox}
+	bridge := &replayIntegrationBridge{manager: newTestManager(t, Options{OmitRawLog: true}), sandbox: sandbox}
 	caller := &replayIntegrationCaller{t: t}
+	var logs bytes.Buffer
+	logger := logrus.New()
+	logger.SetOutput(&logs)
 	engine, err := runner.NewReplay(replayIntegrationBenchmark{replayTask}, sandbox, bridge, caller,
 		func(context.Context) (replay.Plan, error) {
 			return LoadReplaySource(source, replayTask, replayBenchmark, replayRevisions)
 		},
-		runner.Options{RunID: "replay-run"})
+		runner.Options{RunID: "replay-run", Logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}
 	result, runErr := engine.Run(context.Background())
-	if runErr == nil || !bytes.Contains([]byte(runErr.Error()), []byte("mismatch")) || result.Tasks[0].Replay.Status != core.StatusFailed {
-		t.Fatalf("same-length output mismatch accepted: result=%+v error=%v", result, runErr)
+	if runErr != nil || result.Tasks[0].Replay.Status != core.StatusSucceeded || result.Tasks[0].Replay.Responses.Status != "available" || len(result.Tasks[0].Replay.Responses.Calls) != replayIntegrationCount || result.Tasks[0].Replay.Responses.Calls[0].Status != "drifted" {
+		t.Fatalf("same-length output drift failed replay or was not reported: result=%+v error=%v", result, runErr)
+	}
+	if !bytes.Contains(logs.Bytes(), []byte(sourceOutput)) || !bytes.Contains(logs.Bytes(), []byte(replayOutput)) || !bytes.Contains(logs.Bytes(), []byte("expected_sha256")) || !bytes.Contains(logs.Bytes(), []byte("actual_sha256")) {
+		t.Fatalf("drift output or hashes missing from private log: %s", logs.String())
 	}
 	replayed := readToolCalls(t, result.Tasks[0].ToolLogPaths[0])
 	if len(replayed) != replayIntegrationCount || replayed[0]["response_stdout"] != replayOutput || replayed[0]["response_stderr"] != "source error" || replayed[0]["replay_source_sequence"] != sourceRecords[0]["sequence"] || replayed[0]["response_sha256"] == sourceRecords[0]["response_sha256"] || replayed[0]["response_bytes"] != sourceRecords[0]["response_bytes"] {
@@ -224,9 +235,11 @@ func TestCaptureToReplayPreservesFiveCallsAndInheritedGrade(t *testing.T) {
 	for _, test := range []struct {
 		name, changedOutput string
 		wantCalls           int
+		strict, drift       bool
 	}{
-		{name: "matching trace", wantCalls: len(plan.Calls)},
-		{name: "changed first response", changedOutput: "changed", wantCalls: replayIntegrationCount},
+		{name: "matching trace", changedOutput: replayIntegrationSourceOutput, wantCalls: len(plan.Calls)},
+		{name: "same-length drift", changedOutput: "drifts", wantCalls: len(plan.Calls), drift: true},
+		{name: "strict response length", changedOutput: "changed", wantCalls: replayIntegrationCount, strict: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			target := newFakeExecutor(fstest.MapFS{"app/f": &fstest.MapFile{Data: []byte("x\n"), Mode: 0o600}})
@@ -243,7 +256,7 @@ func TestCaptureToReplayPreservesFiveCallsAndInheritedGrade(t *testing.T) {
 				t.Fatal(err)
 			}
 			result, runErr := engine.Run(context.Background())
-			if test.changedOutput == "" && runErr != nil || test.changedOutput != "" && (runErr == nil || !bytes.Contains([]byte(runErr.Error()), []byte("mismatch"))) {
+			if test.strict && (runErr == nil || !bytes.Contains([]byte(runErr.Error()), []byte("mismatch"))) || !test.strict && runErr != nil {
 				t.Fatalf("replay error = %v", runErr)
 			}
 			if len(result.Tasks) != replayIntegrationCount {
@@ -253,13 +266,16 @@ func TestCaptureToReplayPreservesFiveCallsAndInheritedGrade(t *testing.T) {
 			if task.Isolation.Status != core.StatusConfirmed || !task.Isolation.CallerStopped || !task.Isolation.BridgeRevoked || task.Cleanup.Status != core.StatusSucceeded || !task.Evaluation.Reused || task.Evaluation.Status != core.StatusSucceeded || task.Evaluation.SourceRunID != replayRunID || task.Evaluation.SourceTaskID != replayTaskID || task.Evaluation.Score != replayIntegrationScore || task.Evaluation.Reward != replayIntegrationReward || result.Summary.EvaluationsRun != 0 {
 				t.Fatalf("replay result = %+v", result)
 			}
-			if test.changedOutput == "" && task.Replay.Status != core.StatusSucceeded || test.changedOutput != "" && (task.Replay.Status != core.StatusFailed || task.Replay.Error == "") {
+			if test.strict && (task.Replay.Status != core.StatusFailed || task.Replay.Error == "") || !test.strict && task.Replay.Status != core.StatusSucceeded {
 				t.Fatalf("replay outcome = %+v", task.Replay)
 			}
-			if test.changedOutput != "" && (task.Replay.Timing == nil || task.Replay.Timing.Status != "unavailable" || task.Replay.Timing.Reason == "") {
+			if test.drift && (task.Replay.Responses == nil || task.Replay.Responses.Status != "available" || len(task.Replay.Responses.Calls) != len(plan.Calls) || task.Replay.Responses.Calls[0].Status != "drifted") {
+				t.Fatalf("later calls did not finish after hash drift: %+v", task.Replay.Responses)
+			}
+			if test.strict && (task.Replay.Timing == nil || task.Replay.Timing.Status != "unavailable" || task.Replay.Timing.Reason == "") {
 				t.Fatalf("mismatch hid missing timing: %+v", task.Replay)
 			}
-			if test.changedOutput == "" {
+			if !test.strict {
 				if len(task.ToolLogPaths) == 0 {
 					t.Fatal("replay bridge audit is missing")
 				}

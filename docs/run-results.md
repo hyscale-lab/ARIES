@@ -113,15 +113,14 @@ caller stop and bridge revocation.
 and bridge revocation when the private replay audit identifies every source
 call. Its `calls` list records `source_sequence`, `expected_sha256`,
 `actual_sha256`, and `matched` or `drifted` status. Missing or ambiguous audit
-evidence makes the summary `unavailable` with a reason. With replay
-`bridge.debug_exec_response: true`, hash drift alone does not fail replay;
-strict byte count, gRPC code, `Exec` exit code, and successful `WriteFile` byte
-count still fail replay. With replay debug off, hash drift is fatal. A reused
-grade does not show response equality. `aries.log` and stderr show per-call
-hashes on drift and captured `Exec` output when debug is on. If the source
+evidence makes the summary `unavailable` with a reason. Hash-only drift
+does not fail replay. Strict byte count, gRPC code, `Exec` exit code, and
+successful `WriteFile` byte count still fail replay. A reused grade does not
+show response equality. `aries.log` and stderr show per-call hashes on drift
+and captured `Exec` output. If the source
 output is absent, the log says `source output unavailable`. Non-UTF-8 output
 uses labeled base64. Response text stays out of `run-result.json` and caller
-errors. Treat `aries.log` as private when debug is on.
+errors. Treat `aries.log` as private.
 
 The source occurrence directory contains the private
 `bridge/tool-calls.jsonl` and `bridge/runtime.json`; its parent run contains
@@ -217,13 +216,15 @@ backslashes, and newlines retain required JSON escaping. Printable stdin stays
 inline; binary or control-bearing stdin is replaced by a concise
 `binary-omitted` marker and exact byte count, with lossless bytes retained only
 in the raw log. Structured lifecycle logs and tool-call records omit
-environment values. By default, tool-call records also omit stdout/stderr
-bodies. With `bridge.debug_exec_response: true` on a `hermes-grpc` profile,
-only its private `bridge/tool-calls.jsonl` adds `Exec` response text. Enable
-the option on both source and replay profiles to compare their output. See
+environment values. Every `hermes-grpc` task records bounded `Exec` output
+in its private `bridge/tool-calls.jsonl` by default. SSH audit records do not
+retain response text. See
 [replay configuration](configuration.md#sandbox-call-replay) for call 15 and
-binary-output inspection. This text can contain private data; do not publish
-the audit without review. Both transports use the default rules. gRPC records also have `sha256`, `truncated`, and the read window fields
+binary-output inspection. This text can contain task-supplied or private data; do not publish
+the audit or `aries.log` without review. If encoded output exceeds the
+128 MiB replay line bound, the live task fails after confirmed bridge stop,
+skips evaluation, and is not replay-ready. An aggregate audit failure keeps
+isolation unconfirmed and evaluation blocked. Both transports use the default rules. gRPC records also have `sha256`, `truncated`, and the read window fields
 `max_bytes`, `first_line`, `max_lines`, `max_line_bytes`, and `total_lines`, and
 keep written file content as `stdin`; see
 [gRPC evidence](implementation/grpc-bridge.md#evidence). The `operation_class`

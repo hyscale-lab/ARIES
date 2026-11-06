@@ -455,8 +455,6 @@ type BridgeConfig struct {
 	// payloads, and binary stdin; profiles that need that forensic record must
 	// opt in by setting it true.
 	RetainRawLog *bool `json:"retain_raw_log,omitempty"`
-	// DebugExecResponse records the gRPC Exec reply in the private tool audit.
-	DebugExecResponse bool `json:"debug_exec_response,omitempty"`
 }
 
 // RetainBridgeRawLog reports whether <transport>_raw.log should be written,
@@ -827,9 +825,6 @@ func (c *Config) validate() error {
 		if strings.TrimSpace(check.value) == "" {
 			return fmt.Errorf("%s is required", check.name)
 		}
-	}
-	if c.Bridge.DebugExecResponse && c.Bridge.Type != "hermes-grpc" {
-		return errors.New("bridge.debug_exec_response requires bridge.type hermes-grpc")
 	}
 	if c.Replay != nil {
 		if strings.TrimSpace(c.Replay.Source) == "" {

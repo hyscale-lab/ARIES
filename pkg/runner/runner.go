@@ -345,6 +345,12 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 	}
 
 	result.Isolation.Status = core.StatusConfirmed
+	if endpoint.Protocol == "grpc" && len(result.ToolLogPaths) != 0 {
+		if err := replay.LiveAuditError(result.ToolLogPaths[0]); err != nil {
+			allErrors = append(allErrors, fmt.Errorf("check live bridge audit: %w", err))
+			return finish()
+		}
+	}
 	taskEvaluation, evaluationErr := r.benchmark.Evaluate(ctx, originalTask, sandbox, evaluation)
 	result.Evaluation = taskEvaluation
 	if evaluationErr == nil {

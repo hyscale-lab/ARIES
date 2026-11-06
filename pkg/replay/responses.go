@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -13,6 +15,59 @@ import (
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/sirupsen/logrus"
 )
+
+var ErrExecResponseTooLarge = errors.New("Exec response exceeds replay audit line bound")
+
+// LiveAuditError checks the finalized gRPC audit for output that could not fit
+// in one replay record. It fails closed if the private audit is not intact.
+func LiveAuditError(path string) error {
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		return fmt.Errorf("open live bridge audit directory: %w", err)
+	}
+	defer root.Close()
+	name := filepath.Base(path)
+	info, err := root.Lstat(name)
+	if err != nil {
+		return fmt.Errorf("stat live bridge audit: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm() != privateTimingFileMode || info.Size() < 0 || info.Size() > maxTimingAuditBytes {
+		return errors.New("live bridge audit is not a bounded private file")
+	}
+	file, err := root.Open(name)
+	if err != nil {
+		return fmt.Errorf("open live bridge audit: %w", err)
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(info, opened) || opened.Size() != info.Size() {
+		return errors.New("live bridge audit changed before reading")
+	}
+	decoder := json.NewDecoder(io.LimitReader(file, maxTimingAuditBytes+1))
+	var overflow bool
+	for {
+		var record struct {
+			ReplayError string `json:"replay_error"`
+		}
+		if err := decoder.Decode(&record); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return fmt.Errorf("decode live bridge audit: %w", err)
+		}
+		if record.ReplayError == "response-debug-too-large" {
+			overflow = true
+		}
+	}
+	closed, err := file.Stat()
+	if err != nil || !os.SameFile(info, closed) || closed.Size() != info.Size() {
+		return errors.New("live bridge audit changed while reading")
+	}
+	if overflow {
+		return ErrExecResponseTooLarge
+	}
+	return nil
+}
 
 // ReadResponses compares finalized private audit hashes after bridge revocation.
 func ReadResponses(path string, plan Plan, logger *logrus.Logger) core.ReplayResponses {
@@ -87,7 +142,7 @@ func ReadResponses(path string, plan Plan, logger *logrus.Logger) core.ReplayRes
 			status = "drifted"
 			entry := logger.WithFields(logrus.Fields{"source_sequence": call.Sequence, "operation": call.Operation, "expected_sha256": call.ResponseSHA256, "actual_sha256": record.SHA256})
 			entry.Warn("replay response hash drift")
-			if plan.DebugExecResponse && call.Operation == "Exec" {
+			if call.Operation == "Exec" {
 				if !call.ResponseDebug {
 					entry.Warn("source output unavailable")
 				} else {
