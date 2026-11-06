@@ -6,6 +6,34 @@ import (
 	"testing"
 )
 
+func TestReplayDeploymentKeepsPrivateKubernetesNamespace(t *testing.T) {
+	input := strings.Replace(validReplayConfig(), `"deployment":{"backend":"docker"}`, `"deployment":{"backend":"kubernetes"}`, 1)
+	input = strings.Replace(input, `"sandbox":{"type":"docker"}`, `"sandbox":{"deployment":{"backend":"kubernetes"}}`, 1)
+	input = strings.Replace(input, `"bridge":{"type":"hermes-grpc"}`, `"bridge":{"type":"hermes-grpc","deployment":{"backend":"kubernetes"}}`, 1)
+	cfg, err := Decode(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Replay.Deployment.Kubernetes.Namespace != cfg.Bridge.Deployment.Kubernetes.Namespace || cfg.Replay.Deployment.Kubernetes.Namespace != cfg.Sandbox.Deployment.Kubernetes.Namespace {
+		t.Fatalf("caller and bridge do not share private namespace: %+v", cfg)
+	}
+}
+
+func TestReplayDeploymentRejectsCrossedPrivateRoutes(t *testing.T) {
+	base := validReplayConfig()
+	for name, input := range map[string]string{
+		"other Docker socket":        strings.Replace(base, `"source":"source-run/task-001","deployment":{"backend":"docker"}`, `"source":"source-run/task-001","deployment":{"backend":"docker","docker":{"socket":"/other/docker.sock"}}`, 1),
+		"other Kubernetes namespace": strings.Replace(strings.Replace(strings.Replace(base, `"deployment":{"backend":"docker"}`, `"deployment":{"backend":"kubernetes","kubernetes":{"namespace":"different"}}`, 1), `"sandbox":{"type":"docker"}`, `"sandbox":{"deployment":{"backend":"kubernetes"}}`, 1), `"bridge":{"type":"hermes-grpc"}`, `"bridge":{"type":"hermes-grpc","deployment":{"backend":"kubernetes"}}`, 1),
+		"mixed Kubernetes backend":   strings.Replace(base, `"source":"source-run/task-001","deployment":{"backend":"docker"}`, `"source":"source-run/task-001","deployment":{"backend":"kubernetes"}`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Decode(strings.NewReader(input)); err == nil {
+				t.Fatal("accepted crossed replay route")
+			}
+		})
+	}
+}
+
 func TestDeploymentNormalization(t *testing.T) {
 	for _, legacy := range []string{"", "docker"} {
 		cfg := Config{Sandbox: SandboxConfig{Type: legacy}}

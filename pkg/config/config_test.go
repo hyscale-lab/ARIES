@@ -21,6 +21,101 @@ const validConfig = `{
 
 const validVersions = `{"terminalbench2":{"repository_url":"https://example.invalid/terminal-bench-2.git","revision":"0123456789abcdef0123456789abcdef01234567"},"deepresearchbench":{"repository_url":"https://example.invalid/deep-research-bench.git","revision":"fedcba9876543210fedcba9876543210fedcba98"},"sweatlasqa":{"repository_url":"https://example.invalid/swe-atlas.git","revision":"1111111111111111111111111111111111111111"},"swebenchpro":{"dataset_repository_url":"https://example.invalid/swe-bench-pro-data.git","dataset_revision":"1111111111111111111111111111111111111111","evaluator_repository_url":"https://example.invalid/swe-bench-pro-evaluator.git","evaluator_revision":"2222222222222222222222222222222222222222"},"openclaw":{"image":"ghcr.io/openclaw/openclaw:2026.7.1"},"hermes":{"image":"docker.io/nousresearch/hermes-agent:v2026.8.31"}}`
 
+func validReplayConfig() string {
+	profile := strings.Replace(validConfig, `"harness":{"type":"openclaw"},`, `"replay":{"source":"source-run/task-001","deployment":{"backend":"docker"}},`, 1)
+	profile = strings.Replace(profile, `"bridge":{"type":"openclaw-ssh"}`, `"bridge":{"type":"hermes-grpc"}`, 1)
+	return strings.Replace(profile, `,
+  "runtime":{"backend":"deepseek","mode":"external"},
+  "model":{"id":"fake","base_url":"http://127.0.0.1:8080","api_key_env":"DEEPSEEK_API_KEY"}`, "", 1)
+}
+
+func TestReplayProfileUsesOneSourceWithoutLiveFields(t *testing.T) {
+	cfg, err := Decode(strings.NewReader(validReplayConfig()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Replay == nil || cfg.Replay.Source != "source-run/task-001" {
+		t.Fatalf("replay = %+v", cfg.Replay)
+	}
+}
+
+func TestReplayProfileRejectsLiveFieldsAndRepeatedTasks(t *testing.T) {
+	base := validReplayConfig()
+	for name, profile := range map[string]string{
+		"model":                    strings.Replace(base, `"replay":`, `"model":{},"replay":`, 1),
+		"harness":                  strings.Replace(base, `"replay":`, `"harness":{},"replay":`, 1),
+		"runtime":                  strings.Replace(base, `"replay":`, `"runtime":{},"replay":`, 1),
+		"missing model and replay": strings.Replace(base, `"replay":{"source":"source-run/task-001","deployment":{"backend":"docker"}},`, "", 1),
+		"extra tasks":              strings.Replace(base, `"tasks":["fix-git"]`, `"tasks":["fix-git","other"]`, 1),
+		"empty loop field":         strings.Replace(base, `"benchmark":`, `"execution":{"loop_duration":""},"benchmark":`, 1),
+		"empty arrivals field":     strings.Replace(base, `"benchmark":`, `"execution":{"arrivals_file":""},"benchmark":`, 1),
+		"zero arrival rate field":  strings.Replace(base, `"benchmark":`, `"execution":{"arrival_rate_per_min":0},"benchmark":`, 1),
+		"missing deployment":       strings.Replace(base, `,"deployment":{"backend":"docker"}`, "", 1),
+		"null replay":              strings.Replace(base, `"replay":{"source":"source-run/task-001","deployment":{"backend":"docker"}}`, `"replay":null`, 1),
+		"loop":                     strings.Replace(base, `"benchmark":`, `"execution":{"loop_duration":"1m"},"benchmark":`, 1),
+		"arrivals file":            strings.Replace(base, `"benchmark":`, `"execution":{"arrivals_file":"arrivals.json"},"benchmark":`, 1),
+		"arrival rate":             strings.Replace(base, `"benchmark":`, `"execution":{"arrival_rate_per_min":1},"benchmark":`, 1),
+		"other bridge":             strings.Replace(base, `"hermes-grpc"`, `"hermes-ssh"`, 1),
+		"unknown replay field":     strings.Replace(base, `"source":"source-run/task-001"`, `"source":"source-run/task-001","unknown":true`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Decode(strings.NewReader(profile)); err == nil {
+				t.Fatal("accepted invalid replay profile")
+			}
+		})
+	}
+	if _, err := Decode(strings.NewReader(strings.Replace(validConfig, `"model":`, `"replay":{},"model":`, 1))); err == nil {
+		t.Fatal("accepted combined live and replay profile")
+	}
+}
+
+func TestReplayProfileRejectsMixedCaseAliases(t *testing.T) {
+	base := validReplayConfig()
+	for name, profile := range map[string]string{
+		"mixed-case model":             strings.Replace(base, `"replay":`, `"Model":{},"replay":`, 1),
+		"mixed-case replay with model": strings.Replace(base, `"replay":`, `"model":{},"Replay":`, 1),
+		"mixed-case harness":           strings.Replace(base, `"replay":`, `"Harness":{},"replay":`, 1),
+		"mixed-case runtime":           strings.Replace(base, `"replay":`, `"Runtime":{},"replay":`, 1),
+		"mixed-case execution":         strings.Replace(base, `"benchmark":`, `"Execution":{"loop_duration":""},"benchmark":`, 1),
+		"mixed-case loop":              strings.Replace(base, `"benchmark":`, `"execution":{"LOOP_DURATION":""},"benchmark":`, 1),
+		"mixed-case arrivals":          strings.Replace(base, `"benchmark":`, `"execution":{"ARRIVALS_FILE":""},"benchmark":`, 1),
+		"mixed-case arrival rate":      strings.Replace(base, `"benchmark":`, `"execution":{"ARRIVAL_RATE_PER_MIN":0},"benchmark":`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Decode(strings.NewReader(profile)); err == nil {
+				t.Fatal("accepted mixed-case alias in replay profile")
+			}
+		})
+	}
+	live := strings.Replace(validConfig, `"model":`, `"Model":`, 1)
+	if _, err := Decode(strings.NewReader(live)); err != nil {
+		t.Fatalf("existing live model alias rejected: %v", err)
+	}
+}
+
+func TestLoadResolvesReplaySourceFromProfileDirectory(t *testing.T) {
+	root := t.TempDir()
+	profile := filepath.Join(root, "profiles", "replay.json")
+	if err := os.MkdirAll(filepath.Dir(profile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	input := strings.Replace(validReplayConfig(), `"versions_file":"../configs/versions.json"`, `"versions_file":"versions.json"`, 1)
+	if err := os.WriteFile(profile, []byte(input), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(profile), "versions.json"), []byte(validVersions), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(filepath.Dir(profile), "source-run", "task-001")
+	if cfg.Replay.Source != want {
+		t.Fatalf("source = %q, want %q", cfg.Replay.Source, want)
+	}
+}
+
 func TestNormalizedRuntimeSchema(t *testing.T) {
 	cfg, err := Decode(strings.NewReader(validConfig))
 	if err != nil {

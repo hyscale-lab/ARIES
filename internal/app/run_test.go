@@ -14,9 +14,181 @@ import (
 
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/replay"
 	"github.com/hyscale-lab/aries/pkg/runner"
 	"github.com/sirupsen/logrus"
 )
+
+func writeReplayCommandProfile(t *testing.T, output string) string {
+	t.Helper()
+	path := writeCommandProfile(t, output)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := strings.Replace(string(data), `"harness":{"type":"openclaw"}`, `"replay":{"source":"source-run/a-001","deployment":{"backend":"docker"}}`, 1)
+	profile = strings.Replace(profile, `"bridge":{"type":"openclaw-ssh"}`, `"bridge":{"type":"hermes-grpc"}`, 1)
+	profile = strings.Replace(profile, `,"runtime":{"backend":"deepseek","mode":"external"}`, "", 1)
+	profile = strings.Replace(profile, `,"model":{"id":"deepseek-v4-flash","base_url":"https://api.deepseek.com","api_key_env":"DEEPSEEK_API_KEY"}`, "", 1)
+	if err := os.WriteFile(path, []byte(profile), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestReplaySetupPreparesTaskWithoutModelBackend(t *testing.T) {
+	path := writeReplayCommandProfile(t, filepath.Join(t.TempDir(), "runs"))
+	var prepared []string
+	wiring := Wiring{
+		ValidateComponents: func(config.Config) error { return nil },
+		PrepareBackend: func(config.Config, string) (PreparedBackend, error) {
+			t.Fatal("setup prepared model backend")
+			return PreparedBackend{}, nil
+		},
+		SetupBenchmark: func(context.Context, config.Config) error { prepared = append(prepared, "benchmark"); return nil },
+		LoadBenchmark: testBenchmarkLoader(func(context.Context, config.Config, []string, func(string) ([]byte, bool)) ([]core.Task, error) {
+			return []core.Task{{Environment: core.Environment{Image: "task:tag"}}}, nil
+		}, nil),
+		PullImages: func(_ context.Context, _ config.Config, images []string) error {
+			prepared = append(prepared, strings.Join(images, ","))
+			return nil
+		},
+	}
+	if err := Setup(context.Background(), path, io.Discard, Dependencies{Wiring: wiring}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(prepared, []string{"benchmark", "task:tag"}) {
+		t.Fatalf("preparation = %v", prepared)
+	}
+}
+
+func TestReplayRunPreparesTaskWithoutLiveModelOrHarness(t *testing.T) {
+	profile := writeReplayCommandProfile(t, filepath.Join(t.TempDir(), "runs"))
+	stop := errors.New("infrastructure stopped before sandbox")
+	var events []string
+	wiring := Wiring{
+		ValidateComponents: func(config.Config) error { return nil },
+		PrepareBackend: func(config.Config, string) (PreparedBackend, error) {
+			t.Fatal("replay prepared model backend")
+			return PreparedBackend{}, nil
+		},
+		PrepareBridge:  func(context.Context, config.Config) error { events = append(events, "bridge"); return nil },
+		SetupBenchmark: func(context.Context, config.Config) error { events = append(events, "benchmark"); return nil },
+		LoadBenchmark: testBenchmarkLoader(func(_ context.Context, _ config.Config, taskIDs []string, lookup func(string) ([]byte, bool)) ([]core.Task, error) {
+			if !reflect.DeepEqual(taskIDs, []string{"a"}) || lookup != nil {
+				t.Fatalf("task IDs = %v, has lookup = %v", taskIDs, lookup != nil)
+			}
+			events = append(events, "catalog")
+			return []core.Task{{ID: "a", Environment: core.Environment{Image: "task:tag"}}}, nil
+		}, nil),
+		PullImages: func(_ context.Context, _ config.Config, images []string) error {
+			events = append(events, "images:"+strings.Join(images, ","))
+			return nil
+		},
+		BuildHarnessImage: func(context.Context, config.Config) error { t.Fatal("replay built harness image"); return nil },
+		NewInfrastructure: func(config.Config, string, string, *logrus.Logger) (*RunInfrastructure, error) {
+			events = append(events, "infrastructure")
+			return nil, stop
+		},
+	}
+	if err := Run(context.Background(), profile, io.Discard, Dependencies{Wiring: wiring}); !errors.Is(err, stop) {
+		t.Fatalf("Run error = %v, want infrastructure stop", err)
+	}
+	want := []string{"bridge", "benchmark", "catalog", "images:task:tag", "infrastructure"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %v, want %v", events, want)
+	}
+}
+
+type replayTaskBenchmark struct {
+	stubBenchmark
+	task core.Task
+}
+
+func (b *replayTaskBenchmark) Tasks(context.Context) ([]core.Task, error) {
+	return []core.Task{b.task}, nil
+}
+
+type stubReplayCaller struct{ stops int }
+
+func (*stubReplayCaller) Start(context.Context, core.ToolEndpoint, core.HarnessConnectivity, string, string) error {
+	return nil
+}
+func (*stubReplayCaller) Run(context.Context, replay.Plan) error { return nil }
+func (caller *stubReplayCaller) Stop(context.Context) error {
+	caller.stops++
+	return nil
+}
+
+func TestReplayTaskBindsLogicalCatalogTaskAndLiveTimeout(t *testing.T) {
+	failure := errors.New("source not ready")
+	invalidTimeout := errors.New("negative caller timeout")
+	for _, tc := range []struct {
+		name, taskID, benchmarkType string
+		configured, override, want  time.Duration
+	}{
+		{name: "task timeout", taskID: "logical", configured: time.Minute, want: time.Minute},
+		{name: "override", taskID: "logical", configured: time.Minute, override: time.Minute + time.Minute, want: time.Minute + time.Minute},
+		{name: "deep research zero timeout", taskID: "logical", benchmarkType: "deepresearchbench"},
+		{name: "negative task timeout", taskID: "logical", configured: -time.Minute, want: -time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			benchmarkType := tc.benchmarkType
+			if benchmarkType == "" {
+				benchmarkType = "terminalbench2"
+			}
+			cfg := config.Config{Name: "replay", Benchmark: config.BenchmarkConfig{Type: benchmarkType}, Replay: &config.ReplayConfig{Source: "source-run/logical-001"}}
+			if tc.override > 0 {
+				cfg.Overrides.AgentTimeout = &tc.override
+			}
+			task := core.Task{ID: tc.taskID, Timeout: tc.configured, Environment: core.Environment{Image: "task:tag"}}
+			catalog := PreparedBenchmark{Tasks: []core.Task{task}, NewOccurrence: func(logicalID, occurrenceID string) (runner.Benchmark, error) {
+				if logicalID != tc.taskID || occurrenceID != "logical-001" {
+					t.Fatalf("task binding = %q, %q", logicalID, occurrenceID)
+				}
+				return &replayTaskBenchmark{task: task}, nil
+			}}
+			caller := &stubReplayCaller{}
+			wiring := Wiring{
+				NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
+					return SandboxInstance{Sandbox: &stubToolSandbox{}, Resources: &stubResources{}}, nil
+				},
+				NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) { return &stubBridge{}, nil },
+				NewReplayCaller: func(_ config.Config, _ core.RuntimePlacement, timeout time.Duration, _ *logrus.Logger) (runner.ReplayCaller, error) {
+					if timeout != tc.want {
+						t.Fatalf("caller timeout = %s, want %s", timeout, tc.want)
+					}
+					if timeout < 0 {
+						return nil, invalidTimeout
+					}
+					return caller, nil
+				},
+				LoadReplaySource: func(_ context.Context, loaded config.Config, selected core.Task) (replay.Plan, error) {
+					if loaded.Replay.Source != cfg.Replay.Source || !reflect.DeepEqual(selected, task) {
+						t.Fatalf("replay source selected wrong logical task: %+v", selected)
+					}
+					return replay.Plan{}, failure
+				},
+			}
+			experiment, err := buildTaskExperiment(cfg, core.ModelConfig{}, nil, "run", t.TempDir(), tc.taskID, "logical-001", nil, nil, catalog, wiring)
+			if tc.want < 0 {
+				if !errors.Is(err, invalidTimeout) || experiment != nil {
+					t.Fatalf("negative timeout accepted: experiment = %v, error = %v", experiment, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := experiment.Run(context.Background()); !errors.Is(err, failure) {
+				t.Fatalf("replay source error = %v, want %v", err, failure)
+			}
+			if caller.stops != 1 {
+				t.Fatalf("replay caller stopped %d times after source failure", caller.stops)
+			}
+		})
+	}
+}
 
 func TestNewRunIDContainsExperimentNameAndIsSafe(t *testing.T) {
 	now := time.Date(2026, 7, 21, 2, 3, 4, 5, time.FixedZone("other", 3*60*60))

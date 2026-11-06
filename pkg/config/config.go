@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -37,6 +38,7 @@ type Config struct {
 	Bridge        BridgeConfig     `json:"bridge"`
 	Runtime       RuntimeConfig    `json:"runtime"`
 	Model         ProfileModel     `json:"model"`
+	Replay        *ReplayConfig    `json:"replay,omitempty"`
 	Execution     ExecutionConfig  `json:"execution,omitempty"`
 	OutputDir     string           `json:"output_dir"`
 	Versions      Versions         `json:"-"`
@@ -100,6 +102,11 @@ type RuntimeOverrides struct {
 type ResourceOverrides struct {
 	CPU      *float64 `json:"cpu,omitempty"`
 	MemoryMB *int     `json:"memory_mb,omitempty"`
+}
+
+type ReplayConfig struct {
+	Source     string           `json:"source"`
+	Deployment DeploymentConfig `json:"deployment"`
 }
 
 type ProfileModel struct {
@@ -588,6 +595,16 @@ func Load(path string) (Config, error) {
 		}
 		cfg.Runtime.Config.ResolvedFile = resolved
 	}
+	if cfg.Replay != nil {
+		resolved := cfg.Replay.Source
+		if !filepath.IsAbs(resolved) {
+			resolved = filepath.Join(filepath.Dir(path), resolved)
+		}
+		cfg.Replay.Source, err = filepath.Abs(resolved)
+		if err != nil {
+			return Config{}, fmt.Errorf("resolve replay source: %w", err)
+		}
+	}
 	return cfg, nil
 }
 
@@ -658,9 +675,63 @@ func validateResources(name string, resources ResourceOverrides) error {
 
 // Decode rejects unknown fields and trailing JSON values.
 func Decode(r io.Reader) (Config, error) {
-	cfg := Config{Execution: ExecutionConfig{Concurrency: 1}}
-	if err := decodeStrictJSON(r, &cfg, "experiment config"); err != nil {
+	data, err := io.ReadAll(r)
+	if err != nil {
 		return Config{}, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return Config{}, err
+	}
+	var model, replay bool
+	for key := range fields {
+		model = model || strings.EqualFold(key, "model")
+		replay = replay || strings.EqualFold(key, "replay")
+	}
+	if model == replay {
+		return Config{}, errors.New("profile requires exactly one of model or replay")
+	}
+	if replay {
+		for key := range fields {
+			for _, field := range []string{"model", "replay", "harness", "runtime", "execution"} {
+				if strings.EqualFold(key, field) && key != field {
+					return Config{}, fmt.Errorf("replay profile field %q must use canonical name %q", key, field)
+				}
+			}
+		}
+		for _, field := range []string{"harness", "runtime"} {
+			if _, exists := fields[field]; exists {
+				return Config{}, fmt.Errorf("replay forbids %s", field)
+			}
+		}
+		var replayFields map[string]json.RawMessage
+		if err := json.Unmarshal(fields["replay"], &replayFields); err != nil {
+			return Config{}, fmt.Errorf("replay: %w", err)
+		}
+		deployment, exists := replayFields["deployment"]
+		if !exists || string(deployment) == "null" {
+			return Config{}, errors.New("replay.deployment is required")
+		}
+		var executionFields map[string]json.RawMessage
+		if execution, exists := fields["execution"]; exists {
+			if err := json.Unmarshal(execution, &executionFields); err != nil {
+				return Config{}, fmt.Errorf("execution: %w", err)
+			}
+		}
+		for key := range executionFields {
+			for _, field := range []string{"loop_duration", "arrivals_file", "arrival_rate_per_min"} {
+				if strings.EqualFold(key, field) {
+					return Config{}, fmt.Errorf("replay forbids execution.%s", field)
+				}
+			}
+		}
+	}
+	cfg := Config{Execution: ExecutionConfig{Concurrency: 1}}
+	if err := decodeStrictJSON(bytes.NewReader(data), &cfg, "experiment config"); err != nil {
+		return Config{}, err
+	}
+	if replay && cfg.Replay == nil {
+		return Config{}, errors.New("replay must not be null")
 	}
 
 	if cfg.OutputDir == "" {
@@ -747,16 +818,36 @@ func (c *Config) validate() error {
 		{"versions_file", c.VersionsFile},
 		{"benchmark.type", c.Benchmark.Type},
 		{"benchmark.root", c.Benchmark.Root},
-		{"harness.type", c.Harness.Type},
 		{"bridge.type", c.Bridge.Type},
-		{"runtime.backend", c.Runtime.Backend},
-		{"runtime.mode", c.Runtime.Mode},
-		{"model.base_url", c.Model.BaseURL},
-		{"model.id", c.Model.ID},
-		{"model.api_key_env", c.Model.APIKeyEnv},
 		{"output_dir", c.OutputDir},
 	}
 	for _, check := range checks {
+		if strings.TrimSpace(check.value) == "" {
+			return fmt.Errorf("%s is required", check.name)
+		}
+	}
+	if c.Replay != nil {
+		if strings.TrimSpace(c.Replay.Source) == "" {
+			return errors.New("replay.source is required")
+		}
+		if len(c.Benchmark.Tasks) != 1 || strings.TrimSpace(c.Benchmark.Tasks[0]) == "" {
+			return errors.New("replay requires exactly one benchmark.tasks ID")
+		}
+		if c.Execution.LoopDuration != "" || c.Execution.ArrivalsFile != "" || c.Execution.ArrivalRatePerMin != 0 {
+			return errors.New("replay forbids loops and arrival settings")
+		}
+		if c.Bridge.Type != "hermes-grpc" {
+			return errors.New("replay requires bridge.type hermes-grpc")
+		}
+		if err := validateExperimentName(c.Name); err != nil {
+			return err
+		}
+		return c.validateBenchmarkType()
+	}
+	for _, check := range []struct{ name, value string }{
+		{"harness.type", c.Harness.Type}, {"runtime.backend", c.Runtime.Backend}, {"runtime.mode", c.Runtime.Mode},
+		{"model.base_url", c.Model.BaseURL}, {"model.id", c.Model.ID}, {"model.api_key_env", c.Model.APIKeyEnv},
+	} {
 		if strings.TrimSpace(check.value) == "" {
 			return fmt.Errorf("%s is required", check.name)
 		}
@@ -917,11 +1008,13 @@ func (c *Config) validateBenchmarkType() error {
 		return nil
 	case "sweatlasqa":
 		judge := c.Benchmark.Judge
-		if judge == nil {
+		if judge == nil && c.Replay == nil {
 			return errors.New("benchmark.judge is required for sweatlasqa")
 		}
-		if err := judge.validate(); err != nil {
-			return err
+		if judge != nil {
+			if err := judge.validate(); err != nil {
+				return err
+			}
 		}
 		if c.Benchmark.Environment != nil {
 			return errors.New("benchmark.environment must not be set for sweatlasqa")

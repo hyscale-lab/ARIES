@@ -26,7 +26,7 @@ func TestSelectedBenchmarkRevisionsExcludeUnselectedPins(t *testing.T) {
 		{name: "swebenchpro", want: map[string]string{"dataset_revision": "dataset-pin", "evaluator_revision": "evaluator-pin"}},
 		{name: "toolathlon"},
 	} {
-		if got := benchmarkRevisions(config.Config{Benchmark: config.BenchmarkConfig{Type: test.name}, Versions: pins}); !reflect.DeepEqual(got, test.want) {
+		if got := BenchmarkRevisions(config.Config{Benchmark: config.BenchmarkConfig{Type: test.name}, Versions: pins}); !reflect.DeepEqual(got, test.want) {
 			t.Fatalf("selected %s pins = %v, want %v", test.name, got, test.want)
 		}
 	}

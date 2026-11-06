@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"github.com/hyscale-lab/aries/internal/app"
 	benchmarkwiring "github.com/hyscale-lab/aries/internal/app/wiring/benchmark"
@@ -18,6 +19,8 @@ import (
 	"github.com/hyscale-lab/aries/pkg/containerimage"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/deployment"
+	"github.com/hyscale-lab/aries/pkg/replay"
+	replaymanaged "github.com/hyscale-lab/aries/pkg/replay/managed"
 	"github.com/hyscale-lab/aries/pkg/runner"
 	"github.com/sirupsen/logrus"
 )
@@ -33,6 +36,10 @@ func commandWiring() app.Wiring {
 		BuildHarnessImage:  buildHarnessImage,
 		NewHarness:         newHarness,
 		NewInfrastructure:  newInfrastructure,
+		NewReplayCaller:    newReplayCaller,
+		LoadReplaySource: func(_ context.Context, cfg config.Config, task core.Task) (replay.Plan, error) {
+			return bridgewiring.LoadReplaySource(cfg, task)
+		},
 	}
 }
 
@@ -61,11 +68,20 @@ func validateComponents(cfg config.Config) error {
 	case "sweatlasqa":
 	case "swebenchpro":
 	case "toolathlon":
+		if cfg.Replay != nil {
+			return errors.New("replay does not support toolathlon")
+		}
 		if err := benchmarkwiring.ValidateToolathlon(cfg); err != nil {
 			return err
 		}
 	default:
 		return fmt.Errorf("unsupported benchmark type %q", cfg.Benchmark.Type)
+	}
+	if cfg.Replay != nil {
+		if cfg.Bridge.Type != "hermes-grpc" {
+			return errors.New("replay requires bridge.type hermes-grpc")
+		}
+		return nil
 	}
 	switch cfg.Harness.Type {
 	case "openclaw":
@@ -152,6 +168,31 @@ func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byt
 	default:
 		return app.HarnessInstance{}, errors.Join(fmt.Errorf("unsupported harness type %q", cfg.Harness.Type), transport.Close())
 	}
+}
+
+func newReplayCaller(cfg config.Config, placement core.RuntimePlacement, timeout time.Duration, logger *logrus.Logger) (runner.ReplayCaller, error) {
+	if cfg.Replay == nil {
+		return nil, errors.New("replay profile is required")
+	}
+	if err := validateComponents(cfg); err != nil {
+		return nil, err
+	}
+	if placement.AttachmentID == "" {
+		return nil, errors.New("replay caller requires a private run attachment")
+	}
+	runtime, err := newDeployment(cfg.Replay.Deployment, logger)
+	if err != nil {
+		return nil, fmt.Errorf("construct replay deployment: %w", err)
+	}
+	caller, err := replaymanaged.New(replaymanaged.Options{
+		Runtime: runtime, Image: cfg.Versions.Bridge.Image,
+		Backend: cfg.Replay.Deployment.Backend, BridgeBackend: cfg.Bridge.Deployment.Backend,
+		BridgePlacement: placement, CallTimeout: timeout,
+	})
+	if err != nil {
+		return nil, errors.Join(err, runtime.Close())
+	}
+	return caller, nil
 }
 
 func newSandbox(cfg config.Config, outputRoot, runID, occurrenceID string, gpuIndices []int, logger *logrus.Logger, environment deployment.RunEnvironment) (app.SandboxInstance, error) {
@@ -293,19 +334,29 @@ func validateDeployment(cfg *config.Config) error {
 	if err := cfg.NormalizeDeployment(); err != nil {
 		return err
 	}
-	if cfg.Harness.Deployment.Backend != cfg.Sandbox.Deployment.Backend {
-		return errors.New("harness and sandbox must use the same deployment backend")
+	caller := cfg.Harness.Deployment
+	callerName := "harness"
+	if cfg.Replay != nil {
+		caller = cfg.Replay.Deployment
+		callerName = "replay caller"
+		if caller.Backend != cfg.Bridge.Deployment.Backend {
+			return errors.New("replay caller and bridge must use the same deployment backend")
+		}
+	}
+	if caller.Backend != cfg.Sandbox.Deployment.Backend {
+		return fmt.Errorf("%s and sandbox must use the same deployment backend", callerName)
 	}
 
 	if err := containerimage.ValidatePinnedTagOnly(cfg.Versions.Bridge.Image); err != nil {
 		return fmt.Errorf("bridge deployment requires pinned versions.bridge.image: %w", err)
 	}
-	for _, component := range []struct {
+	components := []struct {
 		path      string
 		placement config.DeploymentConfig
 	}{
-		{"harness.deployment", cfg.Harness.Deployment}, {"sandbox.deployment", cfg.Sandbox.Deployment},
-	} {
+		{callerName + ".deployment", caller}, {"sandbox.deployment", cfg.Sandbox.Deployment},
+	}
+	for _, component := range components {
 		switch component.placement.Backend {
 		case "docker", "kubernetes", "apptainer":
 		default:
