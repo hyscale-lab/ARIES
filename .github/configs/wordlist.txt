@@ -11,6 +11,7 @@ asr
 backend
 backends
 backoff
+base64
 basenames
 bursty
 cadvisor

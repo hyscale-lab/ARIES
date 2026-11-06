@@ -325,6 +325,30 @@ A changed bridge response stops later calls and fails replay even when the
 source reward is positive. Equal responses do not prove equal final sandbox
 state. See [replay results](run-results.md#sandbox-call-replay-results).
 
+To inspect gRPC `Exec` output for a replay mismatch, set
+`"debug_exec_response": true` in the `bridge` block of **both** the live
+source profile and the replay profile before their runs. This option defaults
+to false and does not enable `bridge.retain_raw_log` or capture request bodies.
+The private `bridge/tool-calls.jsonl` for each run then includes exact UTF-8
+`response_stdout` and `response_stderr`; non-UTF-8 output uses lossless
+`response_stdout_base64` or `response_stderr_base64`. Empty output has
+`response_debug: true` with no text field. The replay audit uses
+`replay_source_sequence` to name the matching source audit `sequence`.
+Inspect source call 15 and its replay call with:
+
+```sh
+jq 'select(.sequence == 15) | {sequence, response_debug, response_stdout, response_stderr, response_stdout_base64, response_stderr_base64}' "$source_dir/bridge/tool-calls.jsonl"
+jq 'select(.replay_source_sequence == 15) | {sequence, replay_source_sequence, response_debug, response_stdout, response_stderr, response_stdout_base64, response_stderr_base64}' "$replay_dir/bridge/tool-calls.jsonl"
+```
+
+Set `source_dir` and `replay_dir` to the respective task occurrence directories.
+Debug output can contain private data. Keep both audit files private and disable
+the option after diagnosis. Each reply stays within the existing output bound;
+if JSON encoding exceeds the replay audit line bound, the record has
+`replay_error: "response-debug-too-large"` and cannot become a replay source.
+The original response hash, byte count, gRPC code, and mismatch failure do not
+change. Output text does not enter `aries.log` or `run-result.json`.
+
 The replay caller uses the task's positive agent timeout, or the positive
 `agent_timeout_seconds` override when present. If both are absent or zero,
 the default is 20 minutes. A negative timeout is rejected. The first call

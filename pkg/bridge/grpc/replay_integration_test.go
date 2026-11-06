@@ -151,6 +151,62 @@ func captureReplayIntegrationSource(t *testing.T) string {
 	return writeReplaySource(t, records, finished.Add(replayIntegrationWait), core.Evaluation{Status: core.StatusSucceeded, Score: replayIntegrationScore, Reward: replayIntegrationReward})
 }
 
+func TestReplayExecDebugAuditShowsSameLengthMismatch(t *testing.T) {
+	const sourceOutput = "same one"
+	const replayOutput = "same two"
+	sourceTarget := newFakeExecutor(nil)
+	sourceTarget.stdout = []byte(sourceOutput)
+	sourceTarget.stderr = []byte("source error")
+	manager, client, endpoint := startBridge(t, sourceTarget, Options{OmitRawLog: true, DebugExecResponse: true})
+	if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "true"}); err != nil {
+		t.Fatal(err)
+	}
+	stop(t, manager)
+	sourceRecords := readToolCalls(t, endpoint.LogPaths[0])
+	if len(sourceRecords) != replayIntegrationCount || sourceRecords[0]["response_stdout"] != sourceOutput || sourceRecords[0]["response_stderr"] != "source error" {
+		t.Fatalf("source audit = %+v", sourceRecords)
+	}
+	log, err := os.ReadFile(endpoint.LogPaths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record toolCallRecord
+	if err := json.Unmarshal(bytes.TrimSpace(log), &record); err != nil {
+		t.Fatal(err)
+	}
+	record.RunID, record.TaskID, record.SandboxID = replayRunID, replayTaskID, replaySandboxID
+	stamped, err := time.Parse(time.RFC3339Nano, record.Timestamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := writeReplaySource(t, []toolCallRecord{record}, stamped.Add(replayIntegrationWait), core.Evaluation{Status: core.StatusSucceeded, Reward: replayIntegrationReward})
+	if _, err := LoadReplaySource(source, replayTask, replayBenchmark, replayRevisions); err != nil {
+		t.Fatal(err)
+	}
+	target := newFakeExecutor(nil)
+	target.stdout = []byte(replayOutput)
+	target.stderr = []byte("source error")
+	sandbox := &replayIntegrationSandbox{target: target}
+	bridge := &replayIntegrationBridge{manager: newTestManager(t, Options{OmitRawLog: true, DebugExecResponse: true}), sandbox: sandbox}
+	caller := &replayIntegrationCaller{t: t}
+	engine, err := runner.NewReplay(replayIntegrationBenchmark{replayTask}, sandbox, bridge, caller,
+		func(context.Context) (replay.Plan, error) {
+			return LoadReplaySource(source, replayTask, replayBenchmark, replayRevisions)
+		},
+		runner.Options{RunID: "replay-run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, runErr := engine.Run(context.Background())
+	if runErr == nil || !bytes.Contains([]byte(runErr.Error()), []byte("mismatch")) || result.Tasks[0].Replay.Status != core.StatusFailed {
+		t.Fatalf("same-length output mismatch accepted: result=%+v error=%v", result, runErr)
+	}
+	replayed := readToolCalls(t, result.Tasks[0].ToolLogPaths[0])
+	if len(replayed) != replayIntegrationCount || replayed[0]["response_stdout"] != replayOutput || replayed[0]["response_stderr"] != "source error" || replayed[0]["replay_source_sequence"] != sourceRecords[0]["sequence"] || replayed[0]["response_sha256"] == sourceRecords[0]["response_sha256"] || replayed[0]["response_bytes"] != sourceRecords[0]["response_bytes"] {
+		t.Fatalf("replay audit = %+v, source = %+v", replayed, sourceRecords)
+	}
+}
+
 func TestCaptureToReplayPreservesFiveCallsAndInheritedGrade(t *testing.T) {
 	source := captureReplayIntegrationSource(t)
 	plan, err := LoadReplaySource(source, replayTask, replayBenchmark, replayRevisions)

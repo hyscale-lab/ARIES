@@ -250,6 +250,17 @@ func TestServiceUsesInjectedLaunchAndResolvedEndpoint(t *testing.T) {
 		})
 	}
 }
+func TestServiceStagesDebugResponseWithoutRawLog(t *testing.T) {
+	service, runtime, _ := launchFixtureWith(t, "docker", "hermes-grpc", false)
+	service.options.DebugExecResponse = true
+	if err := service.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !runtime.config.DebugExecResponse || runtime.config.RetainRawLog {
+		t.Fatalf("staged bridge config = %+v", runtime.config)
+	}
+}
+
 func TestBootstrapFailureRetainsServiceCleanup(t *testing.T) {
 	s, r, _ := launchFixture(t, "docker")
 	r.uploadErr = errors.New("upload failed")

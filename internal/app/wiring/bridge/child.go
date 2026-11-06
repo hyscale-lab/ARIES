@@ -71,7 +71,7 @@ func newNative(c managed.LaunchConfig, logger *logrus.Logger) (func(string, stri
 		case "openclaw-ssh":
 			return openclaw.New(options)
 		case "hermes-grpc":
-			return grpcbridge.New(grpcbridge.Options{SandboxID: sandboxID, ResolveListen: options.ResolveListen, OutputDir: outputDir, Logger: logger, OmitRawLog: options.OmitRawLog})
+			return grpcbridge.New(grpcbridge.Options{SandboxID: sandboxID, ResolveListen: options.ResolveListen, OutputDir: outputDir, Logger: logger, OmitRawLog: options.OmitRawLog, DebugExecResponse: c.DebugExecResponse})
 		default:
 			return nil, errors.New("unsupported bridge protocol")
 		}

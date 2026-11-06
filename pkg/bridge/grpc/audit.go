@@ -8,7 +8,10 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"strconv"
 	"sync"
+	"time"
+	"unicode/utf8"
 
 	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgekit"
 	"google.golang.org/grpc/status"
@@ -27,6 +30,11 @@ type toolCallRecord struct {
 	GRPCCode             string `json:"grpc_code"`
 	ReplayError          string `json:"replay_error,omitempty"`
 	ReplaySourceSequence uint64 `json:"replay_source_sequence,omitempty"`
+	ResponseDebug        bool   `json:"response_debug,omitempty"`
+	ResponseStdout       string `json:"response_stdout,omitempty"`
+	ResponseStderr       string `json:"response_stderr,omitempty"`
+	ResponseStdoutBase64 []byte `json:"response_stdout_base64,omitempty"`
+	ResponseStderrBase64 []byte `json:"response_stderr_base64,omitempty"`
 	fileWindow
 }
 
@@ -71,6 +79,32 @@ func (record *toolCallRecord) setOutcome(outcome *responseOutcome, err error) {
 	record.GRPCCode = code.String()
 	if outcome.invalid {
 		record.ReplayError = "response-encoding-failed"
+	}
+}
+
+func (record *toolCallRecord) setDebugResponse(stdout, stderr []byte) {
+	record.ResponseDebug = true
+	if utf8.Valid(stdout) {
+		record.ResponseStdout = string(stdout)
+	} else {
+		record.ResponseStdoutBase64 = stdout
+	}
+	if utf8.Valid(stderr) {
+		record.ResponseStderr = string(stderr)
+	} else {
+		record.ResponseStderrBase64 = stderr
+	}
+}
+
+func (record *toolCallRecord) boundDebugResponse() {
+	// Reserve space for the sequence and timestamp that the audit stamps later.
+	encoded, err := bridgekit.MarshalJSONLine(record)
+	stampBytes := len(time.RFC3339Nano) + len(strconv.FormatUint(^uint64(0), replaySequenceBase))
+	if err != nil || len(encoded) > 2*MaxMessageBytes-stampBytes {
+		record.ResponseDebug = false
+		record.ResponseStdout, record.ResponseStderr = "", ""
+		record.ResponseStdoutBase64, record.ResponseStderrBase64 = nil, nil
+		record.ReplayError = "response-debug-too-large"
 	}
 }
 
