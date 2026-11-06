@@ -364,7 +364,7 @@ func (r *Runner) runReplayTask(ctx context.Context, task core.Task) (core.TaskRe
 	started := time.Now()
 	result := newTaskResult(task.ID)
 	result.StartedAt = started
-	result.Replay = &core.ReplayResult{Status: core.StatusNotStarted}
+	result.Replay = &core.ReplayResult{Status: core.StatusNotStarted, Timing: &core.ReplayTiming{Status: "unavailable", Reason: "replay bridge audit is not finalized"}}
 	r.logger.WithContext(ctx).WithField("task_id", task.ID).Info("replay task started")
 
 	var (
@@ -475,6 +475,7 @@ func (r *Runner) runReplayTask(ctx context.Context, task core.Task) (core.TaskRe
 	var isolationErrors []error
 	if err := r.caller.Stop(isolationCtx); err != nil {
 		isolationErrors = append(isolationErrors, fmt.Errorf("confirm replay caller stopped: %w", err))
+		result.Replay.Timing.Reason = "replay caller stop is unconfirmed"
 	} else {
 		callerActive = false
 		result.Isolation.CallerStopped = true
@@ -484,6 +485,14 @@ func (r *Runner) runReplayTask(ctx context.Context, task core.Task) (core.TaskRe
 	} else {
 		bridgeActive = false
 		result.Isolation.BridgeRevoked = true
+		if result.Isolation.CallerStopped {
+			path := ""
+			if len(result.ToolLogPaths) != 0 {
+				path = result.ToolLogPaths[0]
+			}
+			timing := replay.ReadTiming(path, plan)
+			result.Replay.Timing = &timing
+		}
 	}
 	cancelIsolation()
 	if len(isolationErrors) != 0 {
