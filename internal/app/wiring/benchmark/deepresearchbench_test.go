@@ -8,6 +8,21 @@ import (
 	"github.com/hyscale-lab/aries/pkg/core"
 )
 
+func TestReplayDeepResearchBenchNeedsNoJudgeOrFACTKey(t *testing.T) {
+	cfg := config.Config{Replay: &config.ReplayConfig{Source: "source-run/task-001"}}
+	cfg.Benchmark.Root = t.TempDir()
+	cfg.Benchmark.Environment = &config.BenchmarkEnvironment{Image: "task:tag"}
+	cfg.Benchmark.Fact = &config.FactConfig{JinaAPIKeyEnv: "MISSING_JINA_KEY"}
+	cfg.Versions.DeepResearchBench.Revision = "revision"
+	benchmark, err := NewDeepResearchBench(cfg, t.TempDir(), []string{"1"}, nil, func(string) ([]byte, bool) {
+		t.Fatal("replay looked up a judge or FACT credential")
+		return nil, false
+	})
+	if err != nil || benchmark == nil {
+		t.Fatalf("replay benchmark = %v, error = %v", benchmark, err)
+	}
+}
+
 func TestDeepResearchModelDefaultsAndDisabledJudge(t *testing.T) {
 	cfg := config.Config{
 		Runtime: config.RuntimeConfig{Backend: "openai"},
