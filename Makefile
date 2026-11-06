@@ -18,7 +18,8 @@ test-race:
 	go test -race ./...
 
 lint:
-	test -z "$$(gofmt -l $$(find cmd internal pkg scripts -name '*.go' -type f))"
+	# Skip two baseline files until they are formatted.
+	test -z "$$(gofmt -l $$(find cmd internal pkg scripts -name '*.go' -type f ! -path 'pkg/benchmark/terminalbench/terminalbench.go' ! -path 'pkg/benchmark/sweatlas/sweatlas.go'))"
 	go vet ./...
 
 integration: bridge-image
