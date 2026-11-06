@@ -34,7 +34,7 @@ flowchart LR
     B ==>|audit| L[New call log]
 ```
 
-Both runs use the same sandbox and isolation order. The replay caller replaces the harness and its model input. Replay support in `Runner` is proposed, not implemented (`pkg/runner/runner.go:56-69,233-318`). The [replay caller](#5-replayer-components) includes the parser, scheduler, and gRPC caller. The [first-version evaluation rule](#8-reused-evaluation-in-the-first-version) carries the source result without a verifier rerun.
+Both runs use the same sandbox and isolation order. The replay caller replaces the harness and its model input. `Runner` implements a replay path without an agent harness (`pkg/runner/runner.go:97-120,363-505`). The [replay caller](#5-replayer-components) includes the parser, scheduler, and gRPC caller. The [first-version evaluation rule](#8-reused-evaluation-in-the-first-version) carries the source result without a verifier rerun.
 
 The first version uses the gRPC transport. The trace parser and timing logic do not depend on a Hermes tool or a model response. The caller maps requests to gRPC. A later SSH caller can use the same replay steps without changing the scheduler.
 
@@ -134,7 +134,7 @@ Only the parser and caller know the transport. The scheduler consumes call offse
 
 ## 6. Lifecycle and results
 
-The current Runner requires an `AgentHarness` and calls its `Start`, `Run`, and `Stop` after it starts the bridge. It evaluates only after positive harness stop and bridge revocation (`pkg/runner/runner.go:41-69,233-318`). Its benchmark interface takes the task and sandbox, not harness output (`pkg/runner/interfaces.go:17-37`). A replayer needs a narrow caller path in the same bridge-access slot. It must not pretend to run an agent or add a fifth Runner role. The [profile branch](#9-profile-integration) is selected, but Runner construction remains proposed. The [reused evaluation rule](#8-reused-evaluation-in-the-first-version) replaces the verifier call for replay.
+For live runs, `runner.New` requires an `AgentHarness`. `Runner` calls its `Start`, `Run`, and `Stop` after bridge start. It evaluates only after positive harness stop and bridge revocation (`pkg/runner/runner.go:59-95,270-358`). Its benchmark interface takes the task and sandbox, not harness output (`pkg/runner/interfaces.go:17-37`). Replay uses a narrow caller path in the same bridge-access slot. It does not run an agent or add a fifth Runner role. The [profile branch](#9-profile-integration) selects replay, and `runner.NewReplay` constructs its path without an agent harness (`pkg/runner/runner.go:97-120`). The [reused evaluation rule](#8-reused-evaluation-in-the-first-version) replaces the verifier call for replay.
 
 ```go
 	if err := r.harness.Stop(isolationCtx); err != nil {
