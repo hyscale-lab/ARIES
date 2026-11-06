@@ -205,9 +205,14 @@ and HTML characters such as `&&`, `<`, and `>` appear literally, while quotes,
 backslashes, and newlines retain required JSON escaping. Printable stdin stays
 inline; binary or control-bearing stdin is replaced by a concise
 `binary-omitted` marker and exact byte count, with lossless bytes retained only
-in the raw log. Structured lifecycle logs and tool-call records continue to
-omit environment values and stdout/stderr bodies. Both transports use these
-rules. gRPC records also have `sha256`, `truncated`, and the read window fields
+in the raw log. Structured lifecycle logs and tool-call records omit
+environment values. By default, tool-call records also omit stdout/stderr
+bodies. With `bridge.debug_exec_response: true` on a `hermes-grpc` profile,
+only its private `bridge/tool-calls.jsonl` adds `Exec` response text. Enable
+the option on both source and replay profiles to compare their output. See
+[replay configuration](configuration.md#sandbox-call-replay) for call 15 and
+binary-output inspection. This text can contain private data; do not publish
+the audit without review. Both transports use the default rules. gRPC records also have `sha256`, `truncated`, and the read window fields
 `max_bytes`, `first_line`, `max_lines`, `max_line_bytes`, and `total_lines`, and
 keep written file content as `stdin`; see
 [gRPC evidence](implementation/grpc-bridge.md#evidence). The `operation_class`

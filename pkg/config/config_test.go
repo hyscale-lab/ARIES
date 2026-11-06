@@ -29,6 +29,26 @@ func validReplayConfig() string {
   "model":{"id":"fake","base_url":"http://127.0.0.1:8080","api_key_env":"DEEPSEEK_API_KEY"}`, "", 1)
 }
 
+func TestExecResponseDebugRequiresProfileOptIn(t *testing.T) {
+	for _, profile := range []string{strings.Replace(strings.Replace(validConfig, `"harness":{"type":"openclaw"}`, `"harness":{"type":"hermes"}`, 1), `"bridge":{"type":"openclaw-ssh"}`, `"bridge":{"type":"hermes-grpc"}`, 1), validReplayConfig()} {
+		cfg, err := Decode(strings.NewReader(profile))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Bridge.DebugExecResponse || cfg.Bridge.RetainBridgeRawLog() {
+			t.Fatal("debug response or raw log enabled without opt-in")
+		}
+		withDebug := strings.Replace(profile, `"bridge":{`, `"bridge":{"debug_exec_response":true,`, 1)
+		cfg, err = Decode(strings.NewReader(withDebug))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !cfg.Bridge.DebugExecResponse || cfg.Bridge.RetainBridgeRawLog() {
+			t.Fatal("debug response opt-in also enabled raw log")
+		}
+	}
+}
+
 func TestReplayProfileUsesOneSourceWithoutLiveFields(t *testing.T) {
 	cfg, err := Decode(strings.NewReader(validReplayConfig()))
 	if err != nil {
