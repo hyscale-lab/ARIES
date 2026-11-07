@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -50,18 +51,22 @@ type fileCall struct {
 	started time.Time
 	window  fileWindow
 	// toolCallID is the harness tool call the file call serves, or "".
-	toolCallID string
+	toolCallID         string
+	sourceSequence     uint64
+	outcome            *responseOutcome
+	responseSendFailed bool
 }
 
 // beginFile admits a file call. invalid, when set, is the reason the request
 // arguments are refused; revocation is checked first. A refused call is
 // recorded with started at the time of the refusal.
-func (svc *service) beginFile(ctx context.Context, kind, filePath, invalid string, window fileWindow) (*fileCall, error) {
+func (svc *service) beginFile(ctx context.Context, method, kind, filePath, invalid string, window fileWindow) (*fileCall, error) {
 	session := svc.session
 	toolCallID, validID := incomingToolCallID(ctx)
-	call := &fileCall{session: session, kind: kind, path: filePath, started: time.Now(), window: window, toolCallID: toolCallID}
+	sourceSequence, validSequence := incomingReplaySourceSequence(ctx)
+	call := &fileCall{session: session, outcome: newResponseOutcome(method), kind: kind, path: filePath, started: time.Now(), window: window, toolCallID: toolCallID, sourceSequence: sourceSequence}
 	reject := func(code codes.Code, message string) (*fileCall, error) {
-		call.recordFile(nil, false, 0, "rejected", message)
+		call.recordFile(nil, false, 0, "rejected", message, status.Error(code, message))
 		return nil, status.Error(code, message)
 	}
 	if session.revoked.Load() {
@@ -72,6 +77,9 @@ func (svc *service) beginFile(ctx context.Context, kind, filePath, invalid strin
 	}
 	if !validID {
 		return reject(codes.InvalidArgument, invalidToolCallID)
+	}
+	if !validSequence {
+		return reject(codes.InvalidArgument, invalidReplaySourceSequence)
 	}
 	if invalid != "" {
 		return reject(codes.InvalidArgument, invalid)
@@ -96,7 +104,7 @@ func (call *fileCall) finish(err error, sink *contentSink, truncated bool) error
 			statusText = "canceled"
 		}
 	}
-	call.recordFile(sink, truncated, time.Since(call.started).Milliseconds(), statusText, message)
+	call.recordFile(sink, truncated, time.Since(call.started).Milliseconds(), statusText, message, result)
 	return result
 }
 
@@ -108,6 +116,15 @@ func (call *fileCall) streamErr(err error) error {
 		return call.ctx.Err()
 	}
 	return err
+}
+
+func (call *fileCall) sent(err error, response proto.Message) error {
+	if err != nil {
+		call.responseSendFailed = true
+	} else {
+		call.outcome.message(response)
+	}
+	return call.streamErr(err)
 }
 
 func fileStatus(err error) error {
@@ -203,13 +220,15 @@ func (writer *chunkWriter) flush() error {
 }
 
 func (svc *service) Stat(ctx context.Context, request *sandboxv1.StatRequest) (*sandboxv1.StatResponse, error) {
-	call, err := svc.beginFile(ctx, kindFileStat, request.GetPath(), "", fileWindow{})
+	call, err := svc.beginFile(ctx, sandboxv1.Sandbox_Stat_FullMethodName, kindFileStat, request.GetPath(), "", fileWindow{})
 	if err != nil {
 		return nil, err
 	}
 	info, err := svc.session.sandbox.StatFile(call.ctx, call.path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return &sandboxv1.StatResponse{}, call.finish(nil, nil, false)
+		response := &sandboxv1.StatResponse{}
+		call.outcome.message(response)
+		return response, call.finish(nil, nil, false)
 	}
 	if err != nil {
 		return nil, call.finish(err, nil, false)
@@ -221,6 +240,7 @@ func (svc *service) Stat(ctx context.Context, request *sandboxv1.StatRequest) (*
 	case info.IsDir():
 		response.Type = sandboxv1.FileType_FILE_TYPE_DIRECTORY
 	}
+	call.outcome.message(response)
 	return response, call.finish(nil, nil, false)
 }
 
@@ -230,12 +250,13 @@ func (svc *service) ReadFile(request *sandboxv1.ReadFileRequest, stream grpc.Ser
 	if limit < 0 {
 		invalid = "max_bytes out of range"
 	}
-	call, err := svc.beginFile(stream.Context(), kindFileRead, request.GetPath(), invalid, fileWindow{MaxBytes: limit})
+	call, err := svc.beginFile(stream.Context(), sandboxv1.Sandbox_ReadFile_FullMethodName, kindFileRead, request.GetPath(), invalid, fileWindow{MaxBytes: limit})
 	if err != nil {
 		return err
 	}
 	chunks := &chunkWriter{send: func(chunk []byte) error {
-		return call.streamErr(stream.Send(&sandboxv1.ReadFileResponse{Part: &sandboxv1.ReadFileResponse_Chunk{Chunk: chunk}}))
+		response := &sandboxv1.ReadFileResponse{Part: &sandboxv1.ReadFileResponse_Chunk{Chunk: chunk}}
+		return call.sent(stream.Send(response), response)
 	}}
 	sink := newSink(chunks, false)
 	truncated, err := readRange(call, stream, limit, sink)
@@ -258,7 +279,8 @@ func readRange(call *fileCall, stream grpc.ServerStreamingServer[sandboxv1.ReadF
 	}
 	truncated := limit > 0 && limit < info.Size()
 	header := &sandboxv1.ReadFileHeader{Size: info.Size(), Truncated: truncated}
-	if err := call.streamErr(stream.Send(&sandboxv1.ReadFileResponse{Part: &sandboxv1.ReadFileResponse_Header{Header: header}})); err != nil {
+	response := &sandboxv1.ReadFileResponse{Part: &sandboxv1.ReadFileResponse_Header{Header: header}}
+	if err := call.sent(stream.Send(response), response); err != nil {
 		return false, err
 	}
 	var source io.Reader = reader
@@ -274,7 +296,7 @@ func (svc *service) ReadLines(request *sandboxv1.ReadLinesRequest, stream grpc.S
 	if request.GetFirstLine() < 1 || request.GetMaxLines() < 1 || request.GetMaxLineBytes() < 0 {
 		invalid = "line window out of range"
 	}
-	call, err := svc.beginFile(stream.Context(), kindFileRead, request.GetPath(), invalid, fileWindow{
+	call, err := svc.beginFile(stream.Context(), sandboxv1.Sandbox_ReadLines_FullMethodName, kindFileRead, request.GetPath(), invalid, fileWindow{
 		FirstLine: request.GetFirstLine(), MaxLines: request.GetMaxLines(), MaxLineBytes: request.GetMaxLineBytes(),
 	})
 	if err != nil {
@@ -290,7 +312,8 @@ func (svc *service) ReadLines(request *sandboxv1.ReadLinesRequest, stream grpc.S
 	}
 	defer reader.Close()
 	chunks := &chunkWriter{send: func(chunk []byte) error {
-		return call.streamErr(stream.Send(&sandboxv1.ReadLinesResponse{Part: &sandboxv1.ReadLinesResponse_Chunk{Chunk: chunk}}))
+		response := &sandboxv1.ReadLinesResponse{Part: &sandboxv1.ReadLinesResponse_Chunk{Chunk: chunk}}
+		return call.sent(stream.Send(response), response)
 	}}
 	sink := newSink(chunks, false)
 	summary, err := readLines(reader, sink, request.GetFirstLine(), request.GetMaxLines(), request.GetMaxLineBytes())
@@ -303,7 +326,8 @@ func (svc *service) ReadLines(request *sandboxv1.ReadLinesRequest, stream grpc.S
 	}
 	if err == nil {
 		summary.Size = info.Size()
-		err = call.streamErr(stream.Send(&sandboxv1.ReadLinesResponse{Part: &sandboxv1.ReadLinesResponse_Summary{Summary: summary}}))
+		response := &sandboxv1.ReadLinesResponse{Part: &sandboxv1.ReadLinesResponse_Summary{Summary: summary}}
+		err = call.sent(stream.Send(response), response)
 	}
 	return call.finish(err, sink, summary.GetMore())
 }
@@ -362,7 +386,7 @@ func (svc *service) WriteFile(stream grpc.ClientStreamingServer[sandboxv1.WriteF
 	if err != nil || header == nil || header.GetSize() < 0 {
 		invalid = errWriteStream.Error()
 	}
-	call, err := svc.beginFile(stream.Context(), kindFileWrite, header.GetPath(), invalid, fileWindow{})
+	call, err := svc.beginFile(stream.Context(), sandboxv1.Sandbox_WriteFile_FullMethodName, kindFileWrite, header.GetPath(), invalid, fileWindow{})
 	if err != nil {
 		return err
 	}
@@ -376,7 +400,11 @@ func (svc *service) WriteFile(stream grpc.ClientStreamingServer[sandboxv1.WriteF
 	if err == nil {
 		// The file changed, so a response the client is no longer there to
 		// receive does not change the record.
-		_ = stream.SendAndClose(&sandboxv1.WriteFileResponse{BytesWritten: header.GetSize(), Created: created})
+		response := &sandboxv1.WriteFileResponse{BytesWritten: header.GetSize(), Created: created}
+		call.outcome.message(response)
+		if stream.SendAndClose(response) != nil {
+			call.responseSendFailed = true
+		}
 	}
 	return call.finish(err, sink, false)
 }
@@ -421,13 +449,13 @@ func (reader *streamReader) Read(buffer []byte) (int, error) {
 // no exit code, so the field carries refusedExitCode; status says what
 // happened. Written content follows the stdin rules; a read records only its
 // size and, when completed, the digest of what was sent.
-func (call *fileCall) recordFile(sink *contentSink, truncated bool, duration int64, statusText, message string) {
+func (call *fileCall) recordFile(sink *contentSink, truncated bool, duration int64, statusText, message string, err error) {
 	session, kind := call.session, call.kind
 	record := toolCallRecord{ToolCallRecord: bridgekit.ToolCallRecord{
 		OperationClass: kind, Path: call.path,
 		ExitCode: refusedExitCode, StartedAt: bridgekit.FormatTime(call.started), DurationMS: duration, Status: statusText, Error: message,
 		StdinEncoding: "utf-8", ToolCallID: call.toolCallID,
-	}, Truncated: truncated, fileWindow: call.window}
+	}, Truncated: truncated, ReplaySourceSequence: call.sourceSequence, fileWindow: call.window}
 	raw := rawGRPCRecord{OperationClass: kind, Path: call.path}
 	if sink != nil {
 		if statusText == "completed" {
@@ -445,5 +473,14 @@ func (call *fileCall) recordFile(sink *contentSink, truncated bool, duration int
 			record.StdoutBytes, raw.ReadBytes = sink.count, sink.count
 		}
 	}
+	if call.responseSendFailed {
+		record.ReplayError = "response-send-failed"
+	} else if kind == kindFileWrite && statusText == "failed" {
+		record.ReplayError = "write-size-omitted"
+	}
+	if kind == kindFileWrite && record.StdinEncoding != "utf-8" {
+		record.ReplayError = "write-content-omitted"
+	}
+	record.setOutcome(call.outcome, err)
 	session.writeRecord(record, raw)
 }

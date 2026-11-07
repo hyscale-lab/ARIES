@@ -161,6 +161,34 @@ func TestPodManifestStagingAndBridgeIdentity(t *testing.T) {
 	}
 }
 
+func TestReplayCallerRequestDisablesServiceAccountToken(t *testing.T) {
+	manager, fake := newTestManager(t, Options{ServiceAccount: "aries-bridge"})
+	request := testRequest()
+	request.Name = "aries-replay-caller"
+	request.Image = "aries-bridge:tag"
+	request.Entrypoint = []string{"/usr/local/bin/aries-bridge"}
+	request.Args = []string{"replay", "/run/aries/launch.json"}
+	request.ServicePort = 0
+	request.Env = nil
+	request.Labels["aries.component"] = "replay-caller"
+	request.DisableServiceAccountToken = true
+	raw, err := manager.podManifest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := decodeManifest(t, raw)
+	metadata := manifest["metadata"].(map[string]any)
+	spec := manifest["spec"].(map[string]any)
+	container := spec["containers"].([]any)[0].(map[string]any)
+	const gateMountCount = 1
+	if metadata["namespace"] != request.Placement.AttachmentID || metadata["labels"].(map[string]any)[componentLabel] != "replay-caller" || spec["automountServiceAccountToken"] != false || spec["serviceAccountName"] != nil || spec["hostNetwork"] != nil || container["ports"] != nil || len(container["volumeMounts"].([]any)) != gateMountCount || len(spec["volumes"].([]any)) != gateMountCount {
+		t.Fatalf("replay caller was not privately placed: %v", manifest)
+	}
+	if len(fake.verbs()) != 0 {
+		t.Fatalf("manifest construction contacted a cluster: %v", fake.verbs())
+	}
+}
+
 func TestValidateRequestRejectsWhatTheProviderCannotHonor(t *testing.T) {
 	manager, _ := newTestManager(t, Options{})
 	for name, mutate := range map[string]func(*deployment.Request){
@@ -278,6 +306,21 @@ func TestValidateChecksIdentityIsolationAndSecrets(t *testing.T) {
 		if err := manager.Validate(context.Background(), request.Name, request, [][]byte{[]byte("sk-secret")}); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+func TestValidateReplayCallerRequestRejectsMountedServiceAccountToken(t *testing.T) {
+	manager, fake := newTestManager(t, Options{ServiceAccount: "aries-bridge"})
+	request := testRequest()
+	request.DisableServiceAccountToken = true
+	fake.respond = func(_ context.Context, _ []string, _ []byte, stdout, _ io.Writer) error {
+		_, err := io.WriteString(stdout, podJSON(t, manager, request, func(manifest map[string]any) {
+			manifest["spec"].(map[string]any)["automountServiceAccountToken"] = true
+		}))
+		return err
+	}
+	if err := manager.Validate(context.Background(), request.Name, request, nil); err == nil || !strings.Contains(err.Error(), "service account token") {
+		t.Fatalf("replay caller token mount accepted: %v", err)
 	}
 }
 

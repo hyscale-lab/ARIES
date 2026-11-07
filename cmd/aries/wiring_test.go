@@ -18,6 +18,48 @@ import (
 	"github.com/hyscale-lab/aries/pkg/core"
 )
 
+func TestReplayWiringRejectsUnattachedCallerWithoutDockerEffects(t *testing.T) {
+	cfg := config.Config{
+		Benchmark: config.BenchmarkConfig{Type: "terminalbench2"},
+		Replay:    &config.ReplayConfig{Source: "source-run/task-001"},
+		Bridge:    config.BridgeConfig{Type: "hermes-grpc"},
+		Versions:  config.Versions{Bridge: config.BridgeVersions{Image: "aries-bridge:v1"}},
+	}
+	wiring := commandWiring()
+	if wiring.NewReplayCaller == nil || wiring.LoadReplaySource == nil {
+		t.Fatal("command wiring has no replay caller or source loader")
+	}
+	if _, err := wiring.NewReplayCaller(cfg, core.RuntimePlacement{}, 0, nil); err == nil {
+		t.Fatal("caller without private run attachment was accepted")
+	}
+}
+
+func TestValidateComponentsAllowsOnlyReplayGRPCAndPrivateRoute(t *testing.T) {
+	cfg := config.Config{
+		Benchmark: config.BenchmarkConfig{Type: "terminalbench2"},
+		Replay:    &config.ReplayConfig{Source: "source-run/task-001"},
+		Bridge:    config.BridgeConfig{Type: "hermes-grpc"},
+		Versions:  config.Versions{Bridge: config.BridgeVersions{Image: "aries-bridge:v1"}},
+	}
+	if err := validateComponents(cfg); err != nil {
+		t.Fatalf("valid replay components rejected: %v", err)
+	}
+	cfg.Benchmark.Type = "toolathlon"
+	if err := validateComponents(cfg); err == nil {
+		t.Fatal("accepted Toolathlon replay")
+	}
+	cfg.Benchmark.Type = "terminalbench2"
+	cfg.Bridge.Type = "hermes-ssh"
+	if err := validateComponents(cfg); err == nil {
+		t.Fatal("accepted replay SSH bridge")
+	}
+	cfg.Bridge.Type = "hermes-grpc"
+	cfg.Replay.Deployment = config.DeploymentConfig{Backend: "docker", Docker: &config.DockerDeploymentConfig{Socket: "/other/docker.sock"}}
+	if err := validateComponents(cfg); err == nil {
+		t.Fatal("accepted caller on another Docker daemon")
+	}
+}
+
 func TestDispatchAcceptsOnlyExactCommandGrammar(t *testing.T) {
 	runErr := errors.New("run")
 	setupErr := errors.New("setup")

@@ -133,6 +133,31 @@ See [managed SGLang configuration](configuration.md#managed-sglang) for GPU
 selection, model changes, and timeout rules. If you already operate a server,
 use [external SGLang](configuration.md#external-sglang) instead.
 
+## Replay a recorded task
+
+After a live `hermes-grpc` run, you can repeat its recorded sandbox calls
+without a model key or harness. Build the bridge image, copy the live profile,
+keep its benchmark, sandbox, and bridge settings, and replace its `model`,
+`harness`, and `runtime` blocks with `replay.source` and
+`replay.deployment`. Select only the source logical task ID in
+`benchmark.tasks`. The source path names that task occurrence directory
+relative to the new profile file, not relative to the working directory.
+Follow the [replay profile example](configuration.md#sandbox-call-replay).
+
+```sh
+make bridge-image
+./bin/aries profiles/REPLACE_WITH_REPLAY_PROFILE.json
+```
+
+Use a live run recorded with the current gRPC response checks. A replay run
+reports call matching and positive cleanup separately from its inherited
+source grade. Every Hermes gRPC run retains bounded `Exec` output in its
+private bridge audit. A replay logs changed output through `aries.log` and
+stderr; hash-only drift does not stop it. Keep these artifacts private.
+An oversized audit response fails its live task before evaluation. It does not run a fresh verifier or model judge. Review the
+[replay results](run-results.md#sandbox-call-replay-results) before you
+compare grades: equal responses do not prove equal final sandbox state.
+
 ## Inspect the result
 
 Results are saved under `runs/`, in a directory named with the run timestamp and

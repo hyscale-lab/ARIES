@@ -11,6 +11,7 @@ asr
 backend
 backends
 backoff
+base64
 basenames
 bursty
 cadvisor
@@ -82,6 +83,7 @@ natively
 NativeServer
 NCSpeech
 noncanonical
+nonfatal
 nousresearch
 npm
 ntu
@@ -123,6 +125,7 @@ relicense
 renderer
 renderers
 replayable
+replayer
 resubmission
 roadmap
 RPCs

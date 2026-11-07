@@ -65,7 +65,9 @@ type Request struct {
 	GPUs            int
 	Init            bool
 	NoNewPrivileges bool
-	NetworkAliases  []string
+	// DisableServiceAccountToken denies a Kubernetes token even when the runtime manager uses one.
+	DisableServiceAccountToken bool
+	NetworkAliases             []string
 	// AllowImageVolumes permits anonymous volumes declared by the image.
 	AllowImageVolumes bool
 	Name              string

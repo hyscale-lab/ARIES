@@ -273,7 +273,7 @@ func (manager *Manager) Validate(ctx context.Context, id string, request deploym
 			return errors.New("deployment has a host mount beyond requested paths")
 		}
 	}
-	if manager.options.ServiceAccount == "" && (pod.Spec.AutomountServiceAccountToken == nil || *pod.Spec.AutomountServiceAccountToken) {
+	if (manager.options.ServiceAccount == "" || request.DisableServiceAccountToken) && (pod.Spec.AutomountServiceAccountToken == nil || *pod.Spec.AutomountServiceAccountToken) {
 		return errors.New("deployment must not mount a service account token")
 	}
 	for _, secret := range secrets {

@@ -26,6 +26,7 @@ This page summarizes capabilities and limitations. Use the
 | Tool sandbox and deployment | **Kubernetes** — one pod per runtime, driven through `kubectl`; Terminal-Bench 2, SWE-bench Pro and Deep Research Bench with OpenClaw or Hermes in text mode | [Kubernetes deployment](configuration.md#kubernetes-deployment), [Kubernetes implementation](implementation/kubernetes.md), [cluster setup](../k8s/README.md) |
 | Tool bridge | **OpenClaw SSH** and **Hermes SSH** — managed Docker container or Kubernetes pod; harness-specific SSH adapters | [SSH bridge implementation](implementation/ssh-bridges.md) |
 | Tool bridge | **Hermes gRPC** — same managed Docker container or Kubernetes pod; typed `Exec` and file procedures through the ARIES Hermes plugin | [gRPC bridge implementation](implementation/grpc-bridge.md) |
+| Sandbox-call replay | **Hermes gRPC** — one recorded task occurrence through a separate private caller; Docker or Kubernetes placement, with the source grade reused | [Replay configuration](configuration.md#sandbox-call-replay), [replay results](run-results.md#sandbox-call-replay-results) |
 | Model service | **DeepSeek** — external endpoint | [Model backends](configuration.md#model-backends) |
 | Model service | **SGLang** — external endpoint or one ARIES-managed host process per run | [Model backends](configuration.md#model-backends) |
 | Model service | **OpenAI-compatible server** — external only, including vLLM, llama.cpp, gateways, and hosted endpoints | [Model backends](configuration.md#model-backends) |
@@ -41,6 +42,14 @@ judge settings, and credential requirements are documented in the
 guides above.
 
 ## Current limitations
+
+- Sandbox-call replay accepts only a replay-ready `hermes-grpc` source for one
+  logical task. It does not support SSH, repeated tasks, arrivals, or Toolathlon.
+  It needs no harness, model key, judge, or fresh verifier. Its source grade is
+  historical evidence: matching bridge responses do not prove matching final
+  sandbox state. Hermes gRPC retains bounded `Exec` output by default; an
+  oversized response fails its live task before evaluation. See the
+  [replay limits](configuration.md#sandbox-call-replay).
 
 - Each bridge type supports its corresponding harness: OpenClaw uses
   `openclaw-ssh`, and Hermes uses `hermes-ssh` or `hermes-grpc`. Crossed pairs
