@@ -125,6 +125,7 @@ relicense
 renderer
 renderers
 replayable
+replayer
 resubmission
 roadmap
 RPCs
