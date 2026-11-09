@@ -73,7 +73,9 @@ the normal ARIES command semantics.
 ## Isolation and evaluation
 
 A replay of a `hermes-grpc` source still prepares the task sandbox and
-confirms caller stop and bridge revocation. It does not capture a new patch,
+attempts to confirm caller stop and bridge revocation. Check both isolation
+fields in [replay results](../run-results.md#sandbox-call-replay-results).
+It does not capture a new patch,
 start a fresh evaluation sandbox, or run the upstream verifier. Its recorded
 source grade remains labeled reused. See
 [replay configuration](../configuration.md#sandbox-call-replay).

@@ -220,7 +220,8 @@ backslashes, and newlines retain required JSON escaping. Printable stdin stays
 inline; binary or control-bearing stdin is replaced by a concise
 `binary-omitted` marker and exact byte count, with lossless bytes retained only
 in the raw log. Structured lifecycle logs and tool-call records omit
-environment values. With `--record-for-replay`, a live `hermes-grpc` task records
+dedicated environment-value fields, but captured `Exec` output can contain environment values
+printed by a command. With `--record-for-replay`, a live `hermes-grpc` task records
 bounded `Exec` output in its private `bridge/tool-calls.jsonl`. Replay execution
 retains this evidence automatically. Ordinary live runs omit replay-only response
 fields; they still keep baseline command, input, file-window, status, and byte-count
