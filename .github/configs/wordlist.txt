@@ -7,6 +7,7 @@ api
 argv
 aries
 automattic's
+automounting
 asr
 backend
 backends
@@ -72,6 +73,7 @@ lifecycle
 liveness
 llm
 logrus
+lookups
 loopback
 MCP
 metadata
