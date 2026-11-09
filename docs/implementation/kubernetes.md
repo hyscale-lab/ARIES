@@ -264,6 +264,22 @@ paths and the absence of a service account token. It also searches the whole pod
 object for supplied secret values. `Stop` deletes the pod and returns only after
 a lookup confirms absence.
 
+The no-token policy applies when the manager has no configured service account
+or the request disables its token. Validation rejects token automounting, explicit
+`serviceAccountToken` projections, and direct or projected Secret volumes with
+type `kubernetes.io/service-account-token`. Ordinary Secret types and other
+projections remain allowed.
+
+For each referenced Secret under this policy, ARIES requests only its type through
+`kubectl get secret -n NAMESPACE NAME -o 'jsonpath-as-json={.type}'`. The lookup has
+a deadline and an output bound. Missing or denied lookups and malformed output
+fail validation. Lookup output and error causes do not enter logs or errors.
+The Runner's Kubernetes credentials need `get` permission for these Secrets in
+the pod's namespace. Kubernetes grants this permission for the whole Secret, not
+one field; ARIES reads only the type from kubectl output. Operators can restrict
+permission to the referenced names with `resourceNames`. The chart does not grant
+this access. ARIES does not grant permissions or list Secrets.
+
 Only the bridge pod mounts a service account. Its Role allows `get pods` and
 `pods/exec` in the namespace, and before executing it confirms the target is a
 live sandbox pod of its own run and task.

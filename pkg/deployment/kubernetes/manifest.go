@@ -266,10 +266,16 @@ type podObject struct {
 			} `json:"resources"`
 		} `json:"containers"`
 		Volumes []struct {
-			HostPath  *struct{} `json:"hostPath"`
+			HostPath *struct{} `json:"hostPath"`
+			Secret   *struct {
+				SecretName string `json:"secretName"`
+			} `json:"secret"`
 			Projected *struct {
 				Sources []struct {
 					ServiceAccountToken *struct{} `json:"serviceAccountToken"`
+					Secret              *struct {
+						Name string `json:"name"`
+					} `json:"secret"`
 				} `json:"sources"`
 			} `json:"projected"`
 		} `json:"volumes"`
