@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"path"
+	"sync/atomic"
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/core"
@@ -51,6 +52,7 @@ type Caller struct {
 	options       Options
 	id            string
 	started       bool
+	ran           atomic.Bool
 	removed       bool
 	closed        bool
 	allocationErr error
@@ -144,8 +146,18 @@ func (caller *Caller) Start(ctx context.Context, endpoint core.ToolEndpoint, con
 }
 
 func (caller *Caller) Run(ctx context.Context, plan replay.Plan) error {
+	if caller.ran.Swap(true) {
+		return errors.New("replay caller has already run")
+	}
 	if caller.id == "" || caller.removed {
 		return errors.New("replay caller is not active")
+	}
+	// The validated source schedule is finite. Each call receives a bounded allowance.
+	wait, err := executionTimeout(plan, caller.options.CallTimeout)
+	// Allow plan acceptance and result transfer outside the child's execution budget.
+	const headroom = startTimeout + startTimeout
+	if err != nil || wait > time.Duration(1<<63-1)-headroom {
+		return errors.New("replay schedule exceeds the supported deadline")
 	}
 	data, err := json.Marshal(plan)
 	if err != nil || len(data) > maxPlanBytes {
@@ -157,16 +169,7 @@ func (caller *Caller) Run(ctx context.Context, plan replay.Plan) error {
 	if err := caller.upload(ctx, planReadyFile, nil); err != nil {
 		return fmt.Errorf("publish replay plan: %w", err)
 	}
-	// The validated source schedule is finite. Each call receives a bounded allowance.
-	callTimeout := caller.options.CallTimeout
-	wait := callTimeout + plan.FinalWait
-	for _, call := range plan.Calls {
-		if call.StartOffset < 0 || call.StartOffset > time.Duration(1<<63-1)-wait {
-			return errors.New("replay schedule exceeds the supported deadline")
-		}
-		wait = max(wait, call.StartOffset+callTimeout+plan.FinalWait)
-	}
-	runCtx, cancel := context.WithTimeout(ctx, wait)
+	runCtx, cancel := context.WithTimeout(ctx, wait+headroom)
 	defer cancel()
 	for {
 		if data, err := caller.download(runCtx, resultFile); err == nil {
@@ -199,6 +202,7 @@ func (caller *Caller) Stop(ctx context.Context) error {
 			return errors.Join(caller.allocationErr, fmt.Errorf("confirm replay caller removal: %w", err))
 		}
 		caller.removed = true
+		caller.allocationErr = nil
 	}
 	if !caller.closed {
 		if err := caller.options.Runtime.Close(); err != nil {

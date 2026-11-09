@@ -78,20 +78,29 @@ func RunChild(ctx context.Context, configPath string) error {
 	if err := json.Unmarshal(data, &plan); err != nil {
 		return finishChild(ctx, folder, err)
 	}
+	wait, err := executionTimeout(plan, launch.CallTimeout)
+	if err != nil {
+		return finishChild(ctx, folder, err)
+	}
+	callCtx, done := context.WithTimeout(ctx, wait)
+	err = bridgegrpc.ReplayCalls(callCtx, launch.CallTimeout, sandboxv1.NewSandboxClient(connection), plan)
+	done()
+	return finishChild(ctx, folder, err)
+}
+
+func executionTimeout(plan replay.Plan, callTimeout time.Duration) (time.Duration, error) {
+	const maxDuration = time.Duration(1<<63 - 1)
+	if plan.FinalWait < 0 || plan.FinalWait > maxDuration-callTimeout {
+		return 0, errors.New("invalid replay schedule")
+	}
 	last := time.Duration(0)
 	for _, call := range plan.Calls {
-		if call.StartOffset < 0 || call.StartOffset > time.Duration(1<<63-1)-launch.CallTimeout-plan.FinalWait {
-			return finishChild(ctx, folder, errors.New("invalid replay schedule"))
+		if call.StartOffset < 0 || call.StartOffset > maxDuration-callTimeout-plan.FinalWait {
+			return 0, errors.New("invalid replay schedule")
 		}
 		last = max(last, call.StartOffset)
 	}
-	if plan.FinalWait < 0 || plan.FinalWait > time.Duration(1<<63-1)-launch.CallTimeout-last {
-		return finishChild(ctx, folder, errors.New("invalid final replay wait"))
-	}
-	callCtx, done := context.WithTimeout(ctx, last+launch.CallTimeout+plan.FinalWait)
-	err = bridgegrpc.ReplayCalls(callCtx, sandboxv1.NewSandboxClient(connection), plan)
-	done()
-	return finishChild(ctx, folder, err)
+	return last + callTimeout + plan.FinalWait, nil
 }
 
 func finishChild(ctx context.Context, folder string, resultErr error) error {

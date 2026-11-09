@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	sandboxv1 "github.com/hyscale-lab/aries/pkg/bridge/grpc/v1"
@@ -22,6 +23,7 @@ import (
 	"github.com/hyscale-lab/aries/pkg/deployment"
 	"github.com/hyscale-lab/aries/pkg/harness"
 	"github.com/hyscale-lab/aries/pkg/replay"
+	"github.com/hyscale-lab/aries/pkg/runner"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
@@ -34,8 +36,14 @@ type fakeRuntime struct {
 	stops         int
 	stopBounded   bool
 	createErr     error
+	emptyID       bool
+	stopErr       error
 	closeErr      error
 	stagedTimeout time.Duration
+	files         map[string][]byte
+	resultDelay   time.Duration
+	resultReady   <-chan struct{}
+	planUploads   int
 }
 
 func (runtime *fakeRuntime) UploadArchive(_ context.Context, _, _ string, source io.Reader) error {
@@ -43,6 +51,20 @@ func (runtime *fakeRuntime) UploadArchive(_ context.Context, _, _ string, source
 	header, err := archive.Next()
 	if err != nil {
 		return err
+	}
+	if runtime.files != nil {
+		data, err := io.ReadAll(archive)
+		if err != nil {
+			return err
+		}
+		runtime.files[header.Name] = data
+		if header.Name == planFile {
+			runtime.planUploads++
+		}
+		if header.Name == planReadyFile {
+			runtime.files[resultFile] = []byte(`{"done":true}`)
+		}
+		return nil
 	}
 	if header.Name == launchFile {
 		data, err := io.ReadAll(archive)
@@ -61,14 +83,168 @@ func (runtime *fakeRuntime) UploadArchive(_ context.Context, _, _ string, source
 func (runtime *fakeRuntime) Create(_ context.Context, request deployment.Request) (string, error) {
 	runtime.creates++
 	runtime.request = request
+	if runtime.emptyID {
+		return "", runtime.createErr
+	}
 	return "owned-caller", runtime.createErr
 }
 func (runtime *fakeRuntime) Stop(ctx context.Context, _ string) error {
 	runtime.stops++
 	_, runtime.stopBounded = ctx.Deadline()
-	return ctx.Err()
+	return errors.Join(runtime.stopErr, ctx.Err())
 }
 func (runtime *fakeRuntime) Close() error { return runtime.closeErr }
+
+func (runtime *fakeRuntime) Validate(context.Context, string, deployment.Request, [][]byte) error {
+	return nil
+}
+func (runtime *fakeRuntime) Start(context.Context, string) error {
+	runtime.files[readyFile] = nil
+	return nil
+}
+func (runtime *fakeRuntime) Running(ctx context.Context, _ string) (bool, error) {
+	return true, ctx.Err()
+}
+func (runtime *fakeRuntime) DownloadArchive(ctx context.Context, _, name string) (io.ReadCloser, deployment.FileInfo, error) {
+	name = filepath.Base(name)
+	data, ok := runtime.files[name]
+	if !ok {
+		return nil, deployment.FileInfo{}, runner.ErrNotFound
+	}
+	if name == resultFile {
+		if runtime.resultReady != nil {
+			select {
+			case <-runtime.resultReady:
+			case <-ctx.Done():
+				return nil, deployment.FileInfo{}, ctx.Err()
+			}
+		}
+		timer := time.NewTimer(runtime.resultDelay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return nil, deployment.FileInfo{}, ctx.Err()
+		}
+	}
+	var buffer bytes.Buffer
+	archive := tar.NewWriter(&buffer)
+	if err := archive.WriteHeader(&tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0600, Size: int64(len(data))}); err != nil {
+		return nil, deployment.FileInfo{}, err
+	}
+	if _, err := archive.Write(data); err != nil {
+		return nil, deployment.FileInfo{}, err
+	}
+	if err := archive.Close(); err != nil {
+		return nil, deployment.FileInfo{}, err
+	}
+	return io.NopCloser(&buffer), deployment.FileInfo{Mode: 0600, Size: int64(len(data))}, nil
+}
+
+func TestReplayCallerAllowsChildStartupAndResultTransfer(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const callTimeout = time.Second
+		plan := replay.Plan{Calls: []replay.Call{{StartOffset: callTimeout}}, FinalWait: callTimeout}
+		const childBudget = callTimeout + callTimeout + callTimeout
+		const startupDelay = pollInterval
+		const transferDelay = pollInterval
+		runtime := &fakeRuntime{files: make(map[string][]byte), resultDelay: startupDelay + childBudget + transferDelay}
+		placement := core.RuntimePlacement{AttachmentID: "task-network"}
+		caller, err := New(Options{Runtime: runtime, Image: "aries-bridge:v1", Backend: "docker", BridgeBackend: "docker", BridgePlacement: placement, CallTimeout: callTimeout})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := caller.Start(context.Background(), core.ToolEndpoint{Protocol: "grpc", Address: "10.0.0.1:8443"}, core.HarnessConnectivity{Placement: placement}, "run", "task"); err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := caller.Stop(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+		}()
+		if err := caller.Run(context.Background(), plan); err != nil {
+			t.Fatalf("child execution lost startup or result allowance: %v", err)
+		}
+	})
+}
+
+func TestReplayCallerRejectsRepeatedRun(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const onePlan = 1
+		release := make(chan struct{})
+		runtime := &fakeRuntime{files: make(map[string][]byte), resultReady: release}
+		placement := core.RuntimePlacement{AttachmentID: "task-network"}
+		caller, err := New(Options{Runtime: runtime, Image: "aries-bridge:v1", Backend: "docker", BridgeBackend: "docker", BridgePlacement: placement, CallTimeout: time.Second})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := caller.Start(context.Background(), core.ToolEndpoint{Protocol: "grpc", Address: "10.0.0.1:8443"}, core.HarnessConnectivity{Placement: placement}, "run", "task"); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		first := make(chan error, onePlan)
+		go func() { first <- caller.Run(ctx, replay.Plan{}) }()
+		synctest.Wait()
+		second := make(chan error, onePlan)
+		go func() { second <- caller.Run(ctx, replay.Plan{}) }()
+		synctest.Wait()
+		select {
+		case err := <-second:
+			if err == nil || !strings.Contains(err.Error(), "already run") {
+				t.Fatalf("concurrent run not rejected: %v", err)
+			}
+		default:
+			cancel()
+			t.Fatal("concurrent run waited for the first plan's result")
+		}
+		close(release)
+		if err := <-first; err != nil {
+			t.Fatalf("first run failed: %v", err)
+		}
+		if err := caller.Run(ctx, replay.Plan{FinalWait: time.Second}); err == nil || !strings.Contains(err.Error(), "already run") {
+			t.Fatalf("later run reused a stale result: %v", err)
+		}
+		if runtime.planUploads != onePlan {
+			t.Fatalf("plan uploads = %d, want %d", runtime.planUploads, onePlan)
+		}
+		if err := caller.Stop(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+func TestReplayCallerRejectsInvalidDeadline(t *testing.T) {
+	const maxDuration = time.Duration(1<<63 - 1)
+	for _, test := range []struct {
+		name    string
+		timeout time.Duration
+		plan    replay.Plan
+	}{
+		{name: "negative final wait", timeout: time.Second, plan: replay.Plan{FinalWait: -time.Second}},
+		{name: "execution overflow", timeout: maxDuration, plan: replay.Plan{FinalWait: time.Second}},
+		{name: "offset overflow", timeout: time.Second, plan: replay.Plan{Calls: []replay.Call{{StartOffset: maxDuration}}}},
+		{name: "headroom overflow", timeout: maxDuration - startTimeout},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runtime := &fakeRuntime{files: make(map[string][]byte)}
+			placement := core.RuntimePlacement{AttachmentID: "task-network"}
+			caller, err := New(Options{Runtime: runtime, Image: "aries-bridge:v1", Backend: "docker", BridgeBackend: "docker", BridgePlacement: placement, CallTimeout: test.timeout})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := caller.Start(context.Background(), core.ToolEndpoint{Protocol: "grpc", Address: "10.0.0.1:8443"}, core.HarnessConnectivity{Placement: placement}, "run", "task"); err != nil {
+				t.Fatal(err)
+			}
+			if err := caller.Run(context.Background(), test.plan); err == nil || !strings.Contains(err.Error(), "schedule") {
+				t.Fatalf("invalid replay deadline not rejected before execution: %v", err)
+			}
+			if err := caller.Stop(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
 
 func TestReplayChildConfirmsBridgeReachabilityBeforePlan(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -364,18 +540,43 @@ func TestReplayCallerRejectsDifferentBridgeBackendOrTaskAttachment(t *testing.T)
 }
 
 func TestReplayCallerRemovesKnownIdentityAfterPartialCreate(t *testing.T) {
+	const oneRemoval = 1
 	closeErr := errors.New("runtime transport close failed")
-	runtime := &fakeRuntime{createErr: deployment.ErrAllocationUnconfirmed, closeErr: closeErr}
-	placement := core.RuntimePlacement{AttachmentID: "task-network"}
-	caller, err := New(Options{Runtime: runtime, Image: "aries-bridge:v1", Backend: "docker", BridgeBackend: "docker", BridgePlacement: placement, CallTimeout: time.Second})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := caller.Start(context.Background(), core.ToolEndpoint{Protocol: "grpc", Address: "10.0.0.1:8443"}, core.HarnessConnectivity{Placement: placement}, "run", "task"); !errors.Is(err, deployment.ErrAllocationUnconfirmed) {
-		t.Fatalf("partial create error = %v", err)
-	}
-	if err := caller.Stop(context.Background()); !errors.Is(err, deployment.ErrAllocationUnconfirmed) || !errors.Is(err, closeErr) || runtime.stops != 1 {
-		t.Fatalf("partial allocation not removed or failures lost: %v, stops %d", err, runtime.stops)
+	stopErr := errors.New("runtime removal unconfirmed")
+	for _, test := range []struct {
+		name      string
+		emptyID   bool
+		stopErr   error
+		closeErr  error
+		uncertain bool
+	}{
+		{name: "owned removal clears uncertainty"},
+		{name: "owned removal preserves close error", closeErr: closeErr},
+		{name: "unknown identity stays uncertain", emptyID: true, uncertain: true},
+		{name: "failed removal stays uncertain", stopErr: stopErr, uncertain: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runtime := &fakeRuntime{createErr: deployment.ErrAllocationUnconfirmed, emptyID: test.emptyID, stopErr: test.stopErr, closeErr: test.closeErr}
+			placement := core.RuntimePlacement{AttachmentID: "task-network"}
+			caller, err := New(Options{Runtime: runtime, Image: "aries-bridge:v1", Backend: "docker", BridgeBackend: "docker", BridgePlacement: placement, CallTimeout: time.Second})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := caller.Start(context.Background(), core.ToolEndpoint{Protocol: "grpc", Address: "10.0.0.1:8443"}, core.HarnessConnectivity{Placement: placement}, "run", "task"); !errors.Is(err, deployment.ErrAllocationUnconfirmed) {
+				t.Fatalf("partial create error = %v", err)
+			}
+			err = caller.Stop(context.Background())
+			if errors.Is(err, deployment.ErrAllocationUnconfirmed) != test.uncertain || test.closeErr != nil && !errors.Is(err, test.closeErr) || test.stopErr != nil && !errors.Is(err, test.stopErr) {
+				t.Fatalf("cleanup errors changed: %v", err)
+			}
+			wantStops := oneRemoval
+			if test.emptyID {
+				wantStops = 0
+			}
+			if runtime.stops != wantStops {
+				t.Fatalf("removals = %d, want %d", runtime.stops, wantStops)
+			}
+		})
 	}
 }
 

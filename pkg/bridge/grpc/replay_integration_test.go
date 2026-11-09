@@ -100,7 +100,7 @@ func (caller *replayIntegrationCaller) Start(_ context.Context, endpoint core.To
 func (caller *replayIntegrationCaller) Run(ctx context.Context, plan replay.Plan) error {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	return ReplayCalls(ctx, caller.client, plan)
+	return ReplayCalls(ctx, time.Minute, caller.client, plan)
 }
 func (caller *replayIntegrationCaller) Stop(context.Context) error {
 	caller.stops++

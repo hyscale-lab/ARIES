@@ -103,7 +103,7 @@ func TestReplayCallCarriesSourceSequenceSeparateFromToolCallID(t *testing.T) {
 	}}
 	ctx, cancel := context.WithTimeout(context.Background(), replayTestDeadline)
 	defer cancel()
-	if err := ReplayCalls(ctx, replayEndpoint(t, server), replay.Plan{Calls: []replay.Call{call}}); err != nil {
+	if err := ReplayCalls(ctx, replayTestDeadline, replayEndpoint(t, server), replay.Plan{Calls: []replay.Call{call}}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -150,7 +150,7 @@ func TestReplayCallsWriteFileFramesAndChecksByteCount(t *testing.T) {
 	client := replayEndpoint(t, server)
 	ctx, cancel := context.WithTimeout(context.Background(), replayTestDeadline)
 	defer cancel()
-	if err := ReplayCalls(ctx, client, replay.Plan{Calls: []replay.Call{call}}); err != nil {
+	if err := ReplayCalls(ctx, replayTestDeadline, client, replay.Plan{Calls: []replay.Call{call}}); err != nil {
 		t.Fatal(err)
 	}
 	sizes := <-frames
@@ -158,7 +158,7 @@ func TestReplayCallsWriteFileFramesAndChecksByteCount(t *testing.T) {
 		t.Fatalf("write frames = %v", sizes)
 	}
 	wrongCount.Store(true)
-	if err := ReplayCalls(ctx, client, replay.Plan{Calls: []replay.Call{call}}); err == nil || !strings.Contains(err.Error(), "mismatch") {
+	if err := ReplayCalls(ctx, replayTestDeadline, client, replay.Plan{Calls: []replay.Call{call}}); err == nil || !strings.Contains(err.Error(), "mismatch") {
 		t.Fatalf("wrong byte count accepted with debug on: %v", err)
 	}
 }
@@ -190,11 +190,11 @@ func TestReplayCallsNormalizeReadFramesAndCompareFullOutcome(t *testing.T) {
 	client := replayEndpoint(t, server)
 	ctx, cancel := context.WithTimeout(context.Background(), replayTestDeadline)
 	defer cancel()
-	if err := ReplayCalls(ctx, client, replay.Plan{Calls: []replay.Call{call}}); err != nil {
+	if err := ReplayCalls(ctx, replayTestDeadline, client, replay.Plan{Calls: []replay.Call{call}}); err != nil {
 		t.Fatalf("same body with different frames: %v", err)
 	}
 	header.GetHeader().Truncated = true
-	if err := ReplayCalls(ctx, client, replay.Plan{Calls: []replay.Call{call}}); err == nil || !strings.Contains(err.Error(), "mismatch") {
+	if err := ReplayCalls(ctx, replayTestDeadline, client, replay.Plan{Calls: []replay.Call{call}}); err == nil || !strings.Contains(err.Error(), "mismatch") {
 		t.Fatalf("changed header accepted: %v", err)
 	}
 }
@@ -214,7 +214,7 @@ func TestReplayCallsAllowReadFileBodyBeforeHeaderAsHashDrift(t *testing.T) {
 	client := replayEndpoint(t, server)
 	ctx, cancel := context.WithTimeout(context.Background(), replayTestDeadline)
 	defer cancel()
-	if err := ReplayCalls(ctx, client, replay.Plan{Calls: []replay.Call{call}}); err != nil {
+	if err := ReplayCalls(ctx, replayTestDeadline, client, replay.Plan{Calls: []replay.Call{call}}); err != nil {
 		t.Fatalf("hash-only drift stopped replay: %v", err)
 	}
 }
@@ -250,7 +250,7 @@ func TestReplayCallsStopOnMismatchAndCancelInFlight(t *testing.T) {
 	client := replayEndpoint(t, server)
 	ctx, cancel := context.WithTimeout(context.Background(), replayTestDeadline)
 	defer cancel()
-	if err := ReplayCalls(ctx, client, replay.Plan{Calls: []replay.Call{first, second, third}}); err == nil || !strings.Contains(err.Error(), "mismatch") {
+	if err := ReplayCalls(ctx, replayTestDeadline, client, replay.Plan{Calls: []replay.Call{first, second, third}}); err == nil || !strings.Contains(err.Error(), "mismatch") {
 		t.Fatalf("changed response accepted: %v", err)
 	}
 	select {
@@ -262,6 +262,52 @@ func TestReplayCallsStopOnMismatchAndCancelInFlight(t *testing.T) {
 	defer mu.Unlock()
 	if len(started) != 2 {
 		t.Fatalf("calls started after mismatch: %v", started)
+	}
+}
+
+func TestReplayCallsApplyIndividualTimeoutBeforeLaterCall(t *testing.T) {
+	const callTimeout = 100 * time.Millisecond
+	const laterOffset = callTimeout + callTimeout
+	const deadlineMessage = "context deadline exceeded"
+	const oneResult = 1
+	firstCanceled := make(chan struct{})
+	firstBudget := make(chan time.Duration, oneResult)
+	laterStarted := make(chan struct{})
+	server := &replayServer{exec: func(ctx context.Context, request *sandboxv1.ExecRequest) (*sandboxv1.ExecResponse, error) {
+		if request.GetScript() == "first" {
+			deadline, _ := ctx.Deadline()
+			firstBudget <- time.Until(deadline)
+			<-ctx.Done()
+			close(firstCanceled)
+			return nil, status.FromContextError(ctx.Err()).Err()
+		}
+		select {
+		case <-firstCanceled:
+			close(laterStarted)
+			return &sandboxv1.ExecResponse{}, nil
+		default:
+			return nil, status.Error(codes.FailedPrecondition, "first call exceeded its allowance")
+		}
+	}}
+	outcome := newResponseOutcome(sandboxv1.Sandbox_Exec_FullMethodName)
+	outcome.field([]byte(codes.DeadlineExceeded.String()))
+	outcome.field([]byte(deadlineMessage))
+	first := replay.Call{Operation: "Exec", Script: "first", ResponseCode: codes.DeadlineExceeded.String(), ResponseBytes: outcome.bytes}
+	later := expectedReplayCall("Exec", &sandboxv1.ExecResponse{})
+	later.Script, later.StartOffset = "later", laterOffset
+	ctx, cancel := context.WithTimeout(context.Background(), replayTestDeadline)
+	defer cancel()
+	plan := replay.Plan{Calls: []replay.Call{first, later}}
+	if err := ReplayCalls(ctx, callTimeout, replayEndpoint(t, server), plan); err != nil {
+		t.Fatalf("recorded timeout blocked later call: %v", err)
+	}
+	if budget := <-firstBudget; budget <= 0 || budget > callTimeout {
+		t.Fatalf("first RPC allowance = %s, want at most %s", budget, callTimeout)
+	}
+	select {
+	case <-laterStarted:
+	default:
+		t.Fatal("later call did not run after the expected timeout")
 	}
 }
 
@@ -303,13 +349,15 @@ func TestReplayCallsScheduleOverlapAndFinalWait(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), replayTestDeadline)
 	defer cancel()
 	plan := replay.Plan{Calls: []replay.Call{first, second, third}, FinalWait: finalWait}
-	if err := ReplayCalls(ctx, client, plan); err != nil {
+	testStart := time.Now()
+	if err := ReplayCalls(ctx, replayTestDeadline, client, plan); err != nil {
 		t.Fatalf("overlapping calls: %v", err)
 	}
 	returned := time.Now()
 	origin, next, last := <-firstStarted, <-secondStarted, <-thirdStarted
 	finished := <-firstFinished
-	if next.Sub(origin) < step/2 || last.Sub(next) > 2*step || last.Sub(origin) > 3*step {
+	const earliestThirdStart = step + step/2
+	if next.Sub(origin) < step/2 || last.Sub(next) > 2*step || last.Sub(testStart) < earliestThirdStart || last.Sub(origin) > 3*step {
 		t.Fatalf("absolute starts: first = %v, second = %v, third = %v", origin, next, last)
 	}
 	if returned.Sub(finished) < finalWait {
@@ -376,11 +424,11 @@ func TestReplayCallsCompareExecStatAndReadLinesFields(t *testing.T) {
 				call = expectedReplayCall("ReadLines", linesChunk, linesSummary)
 				call.Path, call.FirstLine, call.MaxLines, call.MaxLineBytes = linesRequest.Path, linesRequest.FirstLine, linesRequest.MaxLines, linesRequest.MaxLineBytes
 			}
-			if err := ReplayCalls(ctx, client, replay.Plan{Calls: []replay.Call{call}}); err != nil {
+			if err := ReplayCalls(ctx, replayTestDeadline, client, replay.Plan{Calls: []replay.Call{call}}); err != nil {
 				t.Fatal(err)
 			}
 			scenario.change()
-			err := ReplayCalls(ctx, client, replay.Plan{Calls: []replay.Call{call}})
+			err := ReplayCalls(ctx, replayTestDeadline, client, replay.Plan{Calls: []replay.Call{call}})
 			strict := scenario.name == "Exec exit" || scenario.name == "Exec stdout" || scenario.name == "Exec stderr" || scenario.name == "Exec truncated" || scenario.name == "Stat existence" || scenario.name == "ReadLines summary" || scenario.name == "ReadLines content"
 			if strict && (err == nil || !strings.Contains(err.Error(), "mismatch")) {
 				t.Fatalf("strict response change accepted: %v", err)
@@ -416,16 +464,16 @@ func TestReplayCallsCompareGRPCErrorCodeAndMessage(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), replayTestDeadline)
 	defer cancel()
 	plan := replay.Plan{Calls: []replay.Call{call}}
-	if err := ReplayCalls(ctx, client, plan); err != nil {
+	if err := ReplayCalls(ctx, replayTestDeadline, client, plan); err != nil {
 		t.Fatalf("recorded failure changed: %v", err)
 	}
 	changedCode.Store(true)
-	if err := ReplayCalls(ctx, client, replay.Plan{Calls: []replay.Call{call}}); err == nil || !strings.Contains(err.Error(), "mismatch") {
+	if err := ReplayCalls(ctx, replayTestDeadline, client, replay.Plan{Calls: []replay.Call{call}}); err == nil || !strings.Contains(err.Error(), "mismatch") {
 		t.Fatalf("changed status code accepted with debug on: %v", err)
 	}
 	changedCode.Store(false)
 	changedMessage.Store(true)
-	if err := ReplayCalls(ctx, client, plan); err == nil || !strings.Contains(err.Error(), "mismatch") {
+	if err := ReplayCalls(ctx, replayTestDeadline, client, plan); err == nil || !strings.Contains(err.Error(), "mismatch") {
 		t.Fatalf("changed error message accepted: %v", err)
 	}
 }
@@ -464,7 +512,7 @@ func TestReplayCallsDefaultHashDriftContinuesConcurrentCalls(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), replayTestDeadline)
 	defer cancel()
 	plan := replay.Plan{Calls: []replay.Call{firstCall, secondCall, laterCall}}
-	if err := ReplayCalls(ctx, replayEndpoint(t, server), plan); err != nil {
+	if err := ReplayCalls(ctx, replayTestDeadline, replayEndpoint(t, server), plan); err != nil {
 		t.Fatalf("default hash drift blocked later call: %v", err)
 	}
 	select {
@@ -497,7 +545,7 @@ func TestReplayCallsDefaultHashDriftKeepsStrictChecks(t *testing.T) {
 			response = proto.Clone(source).(*sandboxv1.ExecResponse)
 			response.Stdout = []byte("git hash bbb")
 			scenario.change()
-			if err := ReplayCalls(ctx, client, replay.Plan{Calls: []replay.Call{call}}); err == nil || !strings.Contains(err.Error(), "mismatch") {
+			if err := ReplayCalls(ctx, replayTestDeadline, client, replay.Plan{Calls: []replay.Call{call}}); err == nil || !strings.Contains(err.Error(), "mismatch") {
 				t.Fatalf("strict replay change accepted: %v", err)
 			}
 		})
@@ -507,15 +555,15 @@ func TestReplayCallsDefaultHashDriftKeepsStrictChecks(t *testing.T) {
 }
 
 func TestReplayCallsRequireDeadlineAndSkipEmptyTrace(t *testing.T) {
-	if err := ReplayCalls(context.Background(), nil, replay.Plan{Calls: []replay.Call{{Operation: "Exec"}}}); err == nil || !strings.Contains(err.Error(), "deadline") {
+	if err := ReplayCalls(context.Background(), replayTestDeadline, nil, replay.Plan{Calls: []replay.Call{{Operation: "Exec"}}}); err == nil || !strings.Contains(err.Error(), "deadline") {
 		t.Fatalf("missing deadline accepted: %v", err)
 	}
-	if err := ReplayCalls(context.Background(), nil, replay.Plan{FinalWait: replayTestDeadline}); err != nil {
+	if err := ReplayCalls(context.Background(), replayTestDeadline, nil, replay.Plan{FinalWait: replayTestDeadline}); err != nil {
 		t.Fatalf("empty trace waited or required client: %v", err)
 	}
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-replayTestDeadline))
 	defer cancel()
-	if err := ReplayCalls(ctx, nil, replay.Plan{Calls: []replay.Call{{Operation: "Exec"}}}); !errors.Is(err, context.DeadlineExceeded) {
+	if err := ReplayCalls(ctx, replayTestDeadline, nil, replay.Plan{Calls: []replay.Call{{Operation: "Exec"}}}); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expired deadline accepted: %v", err)
 	}
 }

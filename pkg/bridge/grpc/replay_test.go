@@ -532,7 +532,7 @@ func TestReplayCallsReplaysRecordedGRPCMethods(t *testing.T) {
 	manager, client, endpoint := startBridge(t, target, Options{CaptureReplay: true, SandboxID: "new-sandbox", OmitRawLog: true})
 	ctx, cancel := context.WithTimeout(context.Background(), callerDeadline)
 	defer cancel()
-	if err := ReplayCalls(ctx, client, plan); err != nil {
+	if err := ReplayCalls(ctx, callerDeadline, client, plan); err != nil {
 		t.Fatalf("ReplayCalls: %v", err)
 	}
 	stop(t, manager)
