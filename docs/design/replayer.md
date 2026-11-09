@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-Sandbox-call replay repeats one recorded task's sandbox calls without starting an agent harness or calling an agent model. A live run produces a [replay trace](#2-scope-and-language) through the existing gRPC tool bridge. The [capture contract](#4-capture-contract) records response checks and session timing in the [current audit](#3-current-evidence-and-gaps). A [trace sanity check](#5-replayer-components) validates the complete source before sandbox creation. The [scheduler and caller](#5-replayer-components) then send its requests through a new bridge session. The [Runner lifecycle](#6-lifecycle-and-results) still prepares the sandbox and confirms caller stop and bridge revocation. [Checks and limits](#7-checks-and-limits) define what a result means. The [first replay version reuses the source evaluation](#8-reused-evaluation-in-the-first-version); [profile integration](#9-profile-integration) selects one source occurrence. [Open questions and deferred features](#10-open-questions-and-deferred-features) remain separate from the implemented first version.
+Sandbox-call replay repeats one recorded task's sandbox calls without starting an agent harness or calling an agent model. A live run with `--record-for-replay` produces a [replay trace](#2-scope-and-language) through the existing gRPC tool bridge. The [capture contract](#4-capture-contract) records response checks and session timing in the [current audit](#3-current-evidence-and-gaps). A [trace sanity check](#5-replayer-components) validates the complete source before sandbox creation. The [scheduler and caller](#5-replayer-components) then send its requests through a new bridge session. The [Runner lifecycle](#6-lifecycle-and-results) still prepares the sandbox and confirms caller stop and bridge revocation. [Checks and limits](#7-checks-and-limits) define what a result means. The [first replay version reuses the source evaluation](#8-reused-evaluation-in-the-first-version); [profile integration](#9-profile-integration) selects one source occurrence. [Open questions and deferred features](#10-open-questions-and-deferred-features) remain separate from the implemented first version.
 
 **Recording run: harness and model active.**
 
@@ -64,7 +64,7 @@ A strict gRPC result difference is a **replay mismatch**. Stop new calls on the 
 
 ## 3. Current evidence and gaps
 
-The bridge writes one JSONL line per sandbox call after that call finishes. The line has `started_at`, rounded `duration_ms`, completion-time `timestamp`, and a sequence assigned when the writer enqueues it. Thus file order is not start order. `started_at` is an `RFC3339Nano` bridge-clock timestamp. A separate confirmed-harness-completion marker is stored in `bridge/runtime.json` after Runner confirms harness stop (`pkg/bridge/internal/bridgekit/audit.go:27-59,130-165`; `pkg/runner/runner.go:316-334`; `pkg/bridge/session.go:109-130`).
+The bridge writes one JSONL line per sandbox call after that call finishes. The line has `started_at`, rounded `duration_ms`, completion-time `timestamp`, and a sequence assigned when the writer enqueues it. Thus file order is not start order. `started_at` is an `RFC3339Nano` bridge-clock timestamp. With recording enabled, a separate confirmed-harness-completion marker is stored in `bridge/runtime.json` after Runner confirms harness stop (`pkg/bridge/internal/bridgekit/audit.go:27-59,130-165`; `pkg/runner/runner.go:316-334`; `pkg/bridge/session.go:109-130`).
 
 ```go
 	sequence := writer.sequence + 1
@@ -74,9 +74,9 @@ The bridge writes one JSONL line per sandbox call after that call finishes. The 
 
 This code runs when the record is enqueued, not when the sandbox call starts (`pkg/bridge/internal/bridgekit/audit.go:130-143`). Sort by `started_at` for the replay schedule. Do not add an ordering or per-call offset field until a real trace needs one. Reject an equal-time ambiguity instead of inventing an order. `FormatTime` discards Go's monotonic clock value, so wall-clock changes can distort offsets even when the start order is clear (`pkg/bridge/internal/bridgekit/audit.go:57-60`). The first version assumes a stable bridge wall clock. It cannot detect every clock jump between calls; strict timing across such jumps needs recorded monotonic offsets.
 
-| gRPC call | Request input in new live audit | Response checks in new live audit |
+| gRPC call | Request input in recording audit | Response checks in recording audit |
 | --- | --- | --- |
-| `Exec` | Script, shell arguments, workdir, and printable UTF-8 stdin up to 16 MiB. | Canonical response digest and length, gRPC code, exit code, and bounded returned stdout/stderr by default. Produced-byte counts can differ from returned bytes. (`pkg/bridge/grpc/bridge.go:397-447`; `pkg/bridge/grpc/audit.go:21-39,85-109`) |
+| `Exec` | Script, shell arguments, workdir, and printable UTF-8 stdin up to 16 MiB. | Canonical response digest and length, gRPC code, exit code, and bounded returned stdout/stderr when recording. Produced-byte counts can differ from returned bytes. (`pkg/bridge/grpc/bridge.go:397-447`; `pkg/bridge/grpc/audit.go:21-39,85-109`) |
 | `Stat` | Path. | Canonical response digest and length include existence, type, size, and mode; gRPC code is explicit. (`pkg/bridge/grpc/files.go:205-224`; `pkg/bridge/grpc/audit.go:73-83`) |
 | `ReadFile` | Path and optional `max_bytes`; zero or omission reads the whole file. | Canonical response digest and length include header and streamed content or failure status. (`pkg/bridge/grpc/files.go:227-269,420-449`; `pkg/bridge/grpc/audit.go:41-83`) |
 | `ReadLines` | Path, positive first line and line count, and optional byte clamp. | Canonical response digest and length include summary and streamed content or failure status. (`pkg/bridge/grpc/files.go:272-332,420-449`; `pkg/bridge/grpc/audit.go:41-83`) |
@@ -93,13 +93,13 @@ Successful `ReadLines` calls have positive window fields, so these fields distin
 	}
 ```
 
-The input rule above omits binary or control-bearing stdin and file-write bodies from JSONL. The optional raw log can retain those bytes through 16 MiB, but it is off by default. A write larger than 16 MiB can succeed without retaining its body in either log. `Exec` refuses stdin above 16 MiB before execution (`pkg/bridge/grpc/audit.go:164-184`; `pkg/bridge/grpc/files.go:151-168,437-443`; `pkg/bridge/grpc/bridge.go:386-390`; `pkg/config/config.go:445-456`). The combined audit files also have a 256 MiB limit; an audit failure latches and stops later calls (`pkg/bridge/internal/bridgekit/audit.go:22-25,130-165,249-258`). Historical recordings from before the capture extension lack response fingerprints and the completion marker; they are not strict replay sources. New live runs capture these fields and can be replay-ready (`pkg/bridge/grpc/audit.go:21-39`; `pkg/bridge/session.go:283-320`).
+The input rule above omits binary or control-bearing stdin and file-write bodies from JSONL. The optional raw log can retain those bytes through 16 MiB, but it is off by default. A write larger than 16 MiB can succeed without retaining its body in either log. `Exec` refuses stdin above 16 MiB before execution (`pkg/bridge/grpc/audit.go:164-184`; `pkg/bridge/grpc/files.go:151-168,437-443`; `pkg/bridge/grpc/bridge.go:386-390`; `pkg/config/config.go:445-456`). The combined audit files also have a 256 MiB limit; an audit failure latches and stops later calls (`pkg/bridge/internal/bridgekit/audit.go:22-25,130-165,249-258`). Historical recordings from before the capture extension lack response fingerprints and the completion marker; they are not strict replay sources. Live runs with `--record-for-replay` capture these fields and can be replay-ready (`pkg/bridge/grpc/audit.go:21-39`; `pkg/bridge/session.go:283-320`).
 
 **Sources:** `pkg/bridge/internal/bridgekit/audit.go`, `pkg/bridge/grpc/audit.go`, `pkg/bridge/grpc/bridge.go`, `pkg/bridge/grpc/files.go`, `pkg/bridge/grpc/replay.go`, `pkg/bridge/grpc/v1/sandbox.proto`, `pkg/bridge/session.go`, `pkg/runner/runner.go`, `pkg/config/config.go`.
 
 ## 4. Capture contract
 
-New live gRPC runs extend the tool-call record while keeping its request fields and one-line-per-sandbox-call form (`pkg/bridge/grpc/audit.go:21-39`; `docs/design/bridge.md:185-200`). The response fields are:
+Live gRPC runs with `--record-for-replay` extend the tool-call record while keeping its request fields and one-line-per-sandbox-call form (`pkg/bridge/grpc/audit.go:21-39`; `docs/design/bridge.md:185-200`). The response fields are:
 
 | Field | Meaning |
 | --- | --- |
@@ -110,11 +110,11 @@ New live gRPC runs extend the tool-call record while keeping its request fields 
 
 The recorder and caller use one versioned, deterministic outcome encoding. It length-prefixes the method and each deterministic protobuf response message. Stream bodies use fixed chunks, not the target's read sizes. The final fields hold the RPC status and message. The digest covers the response assembled and sent by the bridge, not output cut by a cap. It cannot prove that the client received each byte (`pkg/bridge/grpc/audit.go:41-83`; `pkg/bridge/grpc/caller.go:122-220`; `pkg/bridge/grpc/files.go:375-381`).
 
-New live audits retain printable request text in `tool-calls.jsonl`. The recorder marks omitted stdin and write content with `replay_error` (`pkg/bridge/grpc/bridge.go:423-447`; `pkg/bridge/grpc/files.go:420-449`). Before replay starts its task sandbox or sends any call, `LoadReplaySource` reads every record and validates the complete source. It rejects a rejected or canceled call, a missing input or outcome, and each failed `WriteFile`. An admitted non-write call that fails after sandbox dispatch can remain replayable when its inputs and outcome are complete. If call 11 omits a `WriteFile` body, replay reports the trace as not replayable. It does not send calls 1–10 (`pkg/bridge/grpc/replay.go:44-193,234-320`). The private audit retains bounded `Exec` output text or lossless base64 by default, without a debug flag. A single `Exec` record beyond the 128 MiB line bound keeps a bounded `replay_error` marker. After confirmed harness stop and bridge revocation, Runner fails that live task and skips evaluation; other tasks continue (`pkg/bridge/grpc/audit.go:85-109`; `pkg/runner/runner.go:316-353`; `pkg/replay/responses.go:19-70`). If the combined 256 MiB audit limit latches a failure, bridge revocation and collection are unconfirmed; Runner blocks evaluation and reports the actual cleanup result (`pkg/bridge/internal/bridgekit/audit.go:130-165,249-258`; `pkg/bridge/session.go:220-320`; `pkg/runner/runner.go:329-345`). Captured output and `aries.log` can contain task-supplied text. Keep both private, and never deliberately log known credentials. A private payload format for omitted inputs is [deferred](#10-open-questions-and-deferred-features).
+Live audits retain printable request text in `tool-calls.jsonl`. The recorder marks omitted stdin and write content with `replay_error` (`pkg/bridge/grpc/bridge.go:423-447`; `pkg/bridge/grpc/files.go:420-449`). Before replay starts its task sandbox or sends any call, `LoadReplaySource` reads every record and validates the complete source. It rejects a rejected or canceled call, a missing input or outcome, and each failed `WriteFile`. An admitted non-write call that fails after sandbox dispatch can remain replayable when its inputs and outcome are complete. If call 11 omits a `WriteFile` body, replay reports the trace as not replayable. It does not send calls 1–10 (`pkg/bridge/grpc/replay.go:44-193,234-320`). The private audit retains bounded `Exec` output text or lossless base64 when recording, without a separate debug flag. A single `Exec` record beyond the 128 MiB line bound keeps a bounded `replay_error` marker. After confirmed harness stop and bridge revocation, Runner fails that recording task and skips evaluation (`pkg/bridge/grpc/audit.go:85-109`; `pkg/runner/runner.go:316-353`; `pkg/replay/responses.go:19-70`). If the combined 256 MiB audit limit latches a failure, bridge revocation and collection are unconfirmed; Runner blocks evaluation and reports the actual cleanup result (`pkg/bridge/internal/bridgekit/audit.go:130-165,249-258`; `pkg/bridge/session.go:220-320`; `pkg/runner/runner.go:329-345`). Captured output and `aries.log` can contain task-supplied text. Keep both private, and never deliberately log known credentials. A private payload format for omitted inputs is [deferred](#10-open-questions-and-deferred-features).
 
-The control plane records a confirmed harness-completion marker with the same bridge host clock as call `timestamp`. Runner sends `CompleteHarness` after positive harness stop and before bridge release; the control server stamps its receipt (`pkg/runner/runner.go:316-334`; `pkg/bridge/session.go:109-130`; `pkg/bridge/control/server.go:160-174`). Release alone would include unrelated cleanup delay. The signal can arrive after the actual stop, so it is not an exact harness-stop time. A missing marker prevents replay readiness but does not skip release. Per-task `bridge/runtime.json` now stores schema version, `harness_completed_at`, benchmark type, logical task ID, image reference, pinned revisions, and runtime IDs (`pkg/bridge/session.go:30-43,80-107,283-320`). It does not contain a prepared sandbox snapshot, image digest, or credentials.
+When recording, the control plane records a confirmed harness-completion marker with the same bridge host clock as call `timestamp`. Runner sends `CompleteHarness` after positive harness stop and before bridge release; the control server stamps its receipt (`pkg/runner/runner.go:316-334`; `pkg/bridge/session.go:109-130`; `pkg/bridge/control/server.go:160-174`). Release alone would include unrelated cleanup delay. The signal can arrive after the actual stop, so it is not an exact harness-stop time. A missing marker prevents replay readiness but does not skip release. For recording runs, per-task `bridge/runtime.json` stores schema version, `harness_completed_at`, benchmark type, logical task ID, image reference, pinned revisions, and runtime IDs (`pkg/bridge/session.go:30-43,80-107,283-320`). It does not contain a prepared sandbox snapshot, image digest, or credentials.
 
-After bridge release and collection, `Session.Stop` stores `tool_calls_bytes` and `tool_calls_sha256` in `runtime.json`. `LoadReplaySource` checks both before parsing the source, so a complete-line truncation cannot look like a valid shorter call sequence (`pkg/bridge/session.go:254-320`; `pkg/bridge/grpc/replay.go:78-111`). A failed finalization or collection does not mark a source replay-ready. Audit output remains private (`pkg/bridge/session.go:283-320`; `pkg/bridge/grpc/replay.go:195-222`).
+With capture enabled, after bridge release and collection, `Session.Stop` stores `tool_calls_bytes` and `tool_calls_sha256` in `runtime.json`. `LoadReplaySource` checks both before parsing the source, so a complete-line truncation cannot look like a valid shorter call sequence (`pkg/bridge/session.go:254-320`; `pkg/bridge/grpc/replay.go:78-111`). A failed finalization or collection does not mark a source replay-ready. Audit output remains private (`pkg/bridge/session.go:283-320`; `pkg/bridge/grpc/replay.go:195-222`).
 
 **Sources:** `pkg/bridge/internal/bridgekit/audit.go`, `pkg/bridge/grpc/audit.go`, `pkg/bridge/grpc/bridge.go`, `pkg/bridge/grpc/files.go`, `pkg/bridge/grpc/replay.go`, `pkg/bridge/grpc/caller.go`, `pkg/bridge/grpc/v1/sandbox.proto`, `pkg/runner/runner.go`, `pkg/replay/responses.go`, `pkg/bridge/session.go`, `pkg/bridge/control/server.go`, `docs/design/bridge.md`.
 
@@ -136,7 +136,7 @@ Only the parser and caller know the transport. The scheduler consumes call offse
 
 ## 6. Lifecycle and results
 
-For live runs, `runner.New` requires an `AgentHarness`. Runner calls its `Start`, `Run`, and `Stop` after bridge start. It evaluates only after positive harness stop, bridge revocation, and an intact bounded gRPC audit (`pkg/runner/runner.go:59-95,270-365`). Its benchmark interface takes the task and sandbox, not harness output (`pkg/runner/interfaces.go:17-37`). Replay uses a narrow caller path in the same bridge-access slot. It does not run an agent or add a fifth Runner role. The [profile branch](#9-profile-integration) selects replay, and `runner.NewReplay` constructs its path without an agent harness (`pkg/runner/runner.go:97-120`). The [reused evaluation rule](#8-reused-evaluation-in-the-first-version) replaces the verifier call for replay.
+For live runs, `runner.New` requires an `AgentHarness`. Runner calls its `Start`, `Run`, and `Stop` after bridge start. It evaluates only after positive harness stop and bridge revocation. Recording runs also check the bounded gRPC response audit (`pkg/runner/runner.go:59-95,270-365`). Its benchmark interface takes the task and sandbox, not harness output (`pkg/runner/interfaces.go:17-37`). Replay uses a narrow caller path in the same bridge-access slot. It does not run an agent or add a fifth Runner role. The [profile branch](#9-profile-integration) selects replay, and `runner.NewReplay` constructs its path without an agent harness (`pkg/runner/runner.go:97-120`). The [reused evaluation rule](#8-reused-evaluation-in-the-first-version) replaces the verifier call for replay.
 
 ```go
 	if err := r.harness.Stop(isolationCtx); err != nil {
@@ -144,7 +144,7 @@ For live runs, `runner.New` requires an `AgentHarness`. Runner calls its `Start`
 	} else {
 		harnessActive = false
 		result.Isolation.HarnessStopped = true
-		if completion, ok := r.bridge.(interface{ CompleteHarness(context.Context) error }); ok {
+		if completion, ok := r.bridge.(interface{ CompleteHarness(context.Context) error }); ok && r.recordForReplay {
 			if err := completion.CompleteHarness(isolationCtx); err != nil {
 				allErrors = append(allErrors, fmt.Errorf("record harness completion: %w", err))
 			}
@@ -158,7 +158,7 @@ For live runs, `runner.New` requires an `AgentHarness`. Runner calls its `Start`
 	}
 ```
 
-Runner calls `CompleteHarness` only after a confirmed stop and still revokes the bridge if completion recording fails (`pkg/runner/runner.go:316-335`).
+When recording, Runner calls `CompleteHarness` only after a confirmed stop and still revokes the bridge if completion recording fails (`pkg/runner/runner.go:316-335`).
 
 Run the complete [trace sanity check](#5-replayer-components) and reject any source that is not replayable before creating the task sandbox. Prepare the sandbox, start its bridge session, confirm caller readiness, run the validated plan, and confirm caller stop. Revoke bridge access before finalizing replay. Do not upload private verifier material or call `Benchmark.Evaluate` in the first version. Then remove sandboxes. If caller stop or bridge revocation cannot be confirmed, report an isolation failure and continue bounded cleanup (`pkg/runner/runner.go:430-514`; `docs/design.md:131-164`). A mismatch is a replay execution failure, not an evaluation result. The live Runner evaluates task state after confirmed isolation, even after a harness run failure (`pkg/runner/runner.go:293-365`). Replay instead carries the source task's recorded evaluation with an explicit reused label and source run and task IDs. This result is historical evidence, not a new grade of the replay sandbox. Keep replay mismatch and isolation failures separate; the reused source grade cannot make a failed replay succeed (`pkg/core/types.go:201-226,245-283`; `pkg/runner/runner.go:430-441,468-514`).
 
@@ -190,6 +190,24 @@ A fresh evaluation, cached model-judge verdict after input comparison, and autom
 
 ### 9.1 Profile branches
 
+Live source recording is a CLI intent, not a profile field. Both
+`aries PROFILE --record-for-replay` and `aries --record-for-replay PROFILE`
+enable it. Reject the flag on setup and replay profiles, duplicate or unknown
+flags, and extra positional arguments. Preserve a single profile named `setup`.
+Require Hermes gRPC, source provenance through existing wiring, and exactly one
+resolved selected task before sandbox or model-runtime execution. A selector can
+expand; validate the resolved catalog, not only selector count. Reject loops,
+repeated tasks, and arrival schedules only for recording runs. Do not use a
+separate benchmark-name list. Keep detailed call and timing checks in the replay
+loader; successful recording does not promise a replayable trace.
+
+Ordinary live runs keep baseline audits, raw-log opt-in, limits, and all isolation
+and cleanup checks. They omit replay response enrichment, completion recording,
+source finalization, and replay-only task failures. Their per-task runtime JSON
+contains only the original five runtime-binding fields. Run directory layout and
+`output_dir` do not change. Replay execution automatically captures timing and
+response evidence, without the live recording flag.
+
 A strict profile selects exactly one execution mode. A live profile has top-level `model`, `harness`, and model `runtime` fields. A replay profile has top-level `replay` instead and forbids all three live-only fields. The common `benchmark`, `sandbox`, and `bridge` configuration still selects the task and its execution environment. A replay profile selects one recorded task occurrence, not a list of source occurrences. Require exactly one `benchmark.tasks` ID that matches the source logical task. Forbid `execution.loop_duration`, `execution.arrivals_file`, and `execution.arrival_rate_per_min` in replay profiles. These fields can schedule repeated occurrences, even when the profile selects only one logical task (`pkg/config/config.go:724-740,822-829`; `internal/app/execution.go:115-150`). Keep `bridge.type: "hermes-grpc"` for the first replay version; do not infer a new bridge type from the absent harness (`pkg/config/config.go:659-846`; `cmd/aries/wiring.go:38-73,246-269`).
 
 | Profile branch | Required caller fields | Forbidden caller fields |
@@ -203,7 +221,7 @@ A strict profile selects exactly one execution mode. A live profile has top-leve
 
 `replay.source` names one task-occurrence directory. A relative path resolves from the replay profile file's directory, not the process working directory (`pkg/config/config.go:598-607`). The source directory contains `bridge/tool-calls.jsonl` for sandbox calls and `bridge/runtime.json` for the finalized log binding, completion marker, and task identity. The parent run directory holds `run-result.json` with the source evaluation. `LoadReplaySource` checks the binding, task identity, and one matching recorded evaluation before sandbox creation (`pkg/bridge/session.go:30-43,283-320`; `pkg/bridge/grpc/replay.go:44-143`; `pkg/core/types.go:245-284`). The source evaluation is not a call or timing input.
 
-Historical sources recorded before the capture extension lack response checks, finalized log binding, and the bridge completion marker. The loader rejects them rather than silently upgrading them. A current live Hermes gRPC run can produce replay-ready evidence when its bounded capture and completion checks succeed. Source runtime IDs identify the earlier run and do not become new sandbox or bridge IDs (`pkg/bridge/grpc/replay.go:78-111,234-320`; `pkg/bridge/session.go:283-320`; [capture contract](#4-capture-contract)).
+Historical sources recorded before the capture extension lack response checks, finalized log binding, and the bridge completion marker. The loader rejects them rather than silently upgrading them. A current live Hermes gRPC run with `--record-for-replay` can produce replay-ready evidence when its bounded capture and completion checks succeed. Source runtime IDs identify the earlier run and do not become new sandbox or bridge IDs (`pkg/bridge/grpc/replay.go:78-111,234-320`; `pkg/bridge/session.go:283-320`; [capture contract](#4-capture-contract)).
 
 ### 9.3 Starting-state checks and application flow
 
@@ -217,11 +235,11 @@ The first version [reuses the source evaluation](#8-reused-evaluation-in-the-fir
 
 ## 10. Open questions and deferred features
 
-**Open policy questions.** These two questions remain unresolved:
+**Open policy question.** This question remains unresolved:
 
-1. What long-term rule applies to an older source `Exec` audit without captured stdout or stderr? Today Runner logs `source output unavailable` on SHA-only drift and continues (`pkg/bridge/grpc/replay.go:277-285`; `pkg/replay/responses.go:140-160`). New live gRPC runs retain bounded output by default; that capture rule is settled (`pkg/bridge/grpc/bridge.go:438-447`; `pkg/bridge/grpc/audit.go:85-109`).
-2. Should a live benchmark profile mark its run as intended for later replay? The profile has no such flag today. New live gRPC runs record bounded replay evidence by default (`pkg/config/config.go:29-46`; `pkg/bridge/grpc/bridge.go:438-447`; `pkg/bridge/session.go:301-320`).
+1. What long-term rule applies to an older source `Exec` audit without captured stdout or stderr? Today Runner logs `source output unavailable` on SHA-only drift and continues (`pkg/bridge/grpc/replay.go:277-285`; `pkg/replay/responses.go:140-160`). Recording and replay gRPC runs retain bounded output; that capture rule is settled (`pkg/bridge/grpc/bridge.go:438-447`; `pkg/bridge/grpc/audit.go:85-109`).
+**Recording-intent decision.** Use the CLI-only `--record-for-replay` flag for live source recording. Do not add a profile field. Ordinary runs keep baseline evidence; replay execution captures comparison evidence automatically.
 
-**Deferred features, not first-version policy questions.** SSH replay, Toolathlon MCP replay, prepared sandbox snapshots, monotonic recorded offsets, fresh grading, and a private format for omitted request payloads are outside this version. The gRPC caller and parser, source evaluation reuse, and bounded default `Exec` capture are implemented (`pkg/bridge/grpc/replay.go:44-193`; `pkg/bridge/grpc/caller.go:17-220`; `pkg/runner/runner.go:430-514`; `pkg/bridge/grpc/bridge.go:438-447`).
+**Deferred features, not first-version policy questions.** SSH replay, Toolathlon MCP replay, prepared sandbox snapshots, monotonic recorded offsets, fresh grading, and a private format for omitted request payloads are outside this version. The gRPC caller and parser, source evaluation reuse, and bounded opt-in live `Exec` capture are implemented (`pkg/bridge/grpc/replay.go:44-193`; `pkg/bridge/grpc/caller.go:17-220`; `pkg/runner/runner.go:430-514`; `pkg/bridge/grpc/bridge.go:438-447`).
 
 **Sources:** `pkg/bridge/grpc/replay.go`, `pkg/bridge/grpc/caller.go`, `pkg/bridge/grpc/bridge.go`, `pkg/bridge/grpc/audit.go`, `pkg/replay/responses.go`, `pkg/runner/runner.go`, `pkg/config/config.go`, `pkg/bridge/session.go`.

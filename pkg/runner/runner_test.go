@@ -384,6 +384,7 @@ func (b *markedAuditBridge) Start(ctx context.Context, sandbox Sandbox) (core.To
 
 func TestRunnerOversizedExecAuditSkipsEvaluationAfterRevocationAndContinues(t *testing.T) {
 	rig := newRig(t, 2)
+	rig.runner.recordForReplay = true
 	root := t.TempDir()
 	oversized := filepath.Join(root, "oversized.jsonl")
 	ordinary := filepath.Join(root, "ordinary.jsonl")
@@ -441,6 +442,7 @@ func TestRunnerCompletionAfterConfirmedHarnessStop(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			rig := newRig(t, 1)
+			rig.runner.recordForReplay = true
 			rig.harness.stopErrors = []error{test.stopError}
 			rig.runner.bridge = &completionBridge{fakeBridge: rig.bridge, err: test.signalError}
 			_, err := rig.runner.Run(context.Background())
@@ -473,6 +475,7 @@ func (b *sourceBridge) RecordTask(image string) {
 
 func TestRunnerRecordsOccurrenceImageBeforeBridgeStart(t *testing.T) {
 	rig := newRig(t, 1)
+	rig.runner.recordForReplay = true
 	bridge := &sourceBridge{fakeBridge: rig.bridge}
 	rig.runner.bridge = bridge
 	if _, err := rig.runner.Run(context.Background()); err != nil {
@@ -1506,5 +1509,40 @@ func TestNewRejectsMissingRunID(t *testing.T) {
 	rig := newRig(t, 0)
 	if _, err := New(rig.benchmark, rig.harness, rig.factory, rig.bridge, Options{}); err == nil || !strings.Contains(err.Error(), "run ID") {
 		t.Fatalf("New() error = %v, want missing run ID", err)
+	}
+}
+
+func TestRunnerOrdinaryRunSkipsReplayChecksButKeepsIsolation(t *testing.T) {
+	const oneTask = 1 // One task is enough to check completion and evaluation.
+	for _, bridgeFailure := range []bool{false, true} {
+		t.Run(fmt.Sprint(bridgeFailure), func(t *testing.T) {
+			rig := newRig(t, oneTask)
+			if bridgeFailure {
+				rig.bridge.stopErrors = []error{errInjected}
+			}
+			rig.runner.bridge = &completionBridge{fakeBridge: rig.bridge, err: errors.New("replay completion failed")}
+			result, err := rig.runner.Run(context.Background())
+			if (err != nil) != bridgeFailure || slices.Contains(rig.log.snapshot(), "bridge.complete") {
+				t.Fatalf("ordinary run used replay completion: error=%v calls=%v", err, rig.log.snapshot())
+			}
+			task := result.Tasks[0]
+			if bridgeFailure {
+				if task.Evaluation.Status != core.StatusBlockedIsolation {
+					t.Fatalf("isolation weakened: %+v", task)
+				}
+			} else if task.Evaluation.Status != core.StatusSucceeded {
+				t.Fatalf("ordinary evaluation skipped: %+v", task)
+			}
+		})
+	}
+	rig := newRig(t, oneTask)
+	path := filepath.Join(t.TempDir(), "tool-calls.jsonl")
+	if err := os.WriteFile(path, []byte("{\"replay_error\":\"response-debug-too-large\"}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	rig.runner.bridge = &markedAuditBridge{fakeBridge: rig.bridge, paths: []string{path}}
+	result, err := rig.runner.Run(context.Background())
+	if err != nil || result.Tasks[0].Evaluation.Status != core.StatusSucceeded {
+		t.Fatalf("ordinary run used replay audit check: result=%+v error=%v", result, err)
 	}
 }

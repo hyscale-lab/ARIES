@@ -112,7 +112,7 @@ func captureReplayIntegrationSource(t *testing.T) string {
 	t.Helper()
 	sourceTarget := newFakeExecutor(fstest.MapFS{"app/f": &fstest.MapFile{Data: []byte("x\n"), Mode: 0o600}})
 	sourceTarget.stdout = []byte(replayIntegrationSourceOutput)
-	manager, client, endpoint := startBridge(t, sourceTarget, Options{OmitRawLog: true})
+	manager, client, endpoint := startBridge(t, sourceTarget, Options{CaptureReplay: true, OmitRawLog: true})
 	if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "true"}); err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestReplayExecDefaultAuditReportsSameLengthDrift(t *testing.T) {
 	sourceTarget := newFakeExecutor(nil)
 	sourceTarget.stdout = []byte(sourceOutput)
 	sourceTarget.stderr = []byte("source error")
-	manager, client, endpoint := startBridge(t, sourceTarget, Options{OmitRawLog: true})
+	manager, client, endpoint := startBridge(t, sourceTarget, Options{CaptureReplay: true, OmitRawLog: true})
 	if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "true"}); err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestReplayExecDefaultAuditReportsSameLengthDrift(t *testing.T) {
 	target.stdout = []byte(replayOutput)
 	target.stderr = []byte("source error")
 	sandbox := &replayIntegrationSandbox{target: target}
-	bridge := &replayIntegrationBridge{manager: newTestManager(t, Options{OmitRawLog: true}), sandbox: sandbox}
+	bridge := &replayIntegrationBridge{manager: newTestManager(t, Options{CaptureReplay: true, OmitRawLog: true}), sandbox: sandbox}
 	caller := &replayIntegrationCaller{t: t}
 	var logs bytes.Buffer
 	logger := logrus.New()
@@ -245,7 +245,7 @@ func TestCaptureToReplayPreservesFiveCallsAndInheritedGrade(t *testing.T) {
 			target := newFakeExecutor(fstest.MapFS{"app/f": &fstest.MapFile{Data: []byte("x\n"), Mode: 0o600}})
 			target.stdout = []byte(test.changedOutput)
 			sandbox := &replayIntegrationSandbox{target: target}
-			bridge := &replayIntegrationBridge{manager: newTestManager(t, Options{OmitRawLog: true}), sandbox: sandbox}
+			bridge := &replayIntegrationBridge{manager: newTestManager(t, Options{CaptureReplay: true, OmitRawLog: true}), sandbox: sandbox}
 			caller := &replayIntegrationCaller{t: t}
 			engine, err := runner.NewReplay(replayIntegrationBenchmark{replayTask}, sandbox, bridge, caller,
 				func(context.Context) (replay.Plan, error) {
@@ -345,7 +345,7 @@ func TestUnreplayableEleventhCallPreventsSandboxCreation(t *testing.T) {
 			change(&records[earlierCalls])
 			source := writeReplaySource(t, records, start.Add(time.Duration(len(records))*callGap), core.Evaluation{Status: core.StatusSucceeded, Reward: firstSequence})
 			sandbox := &replayIntegrationSandbox{target: newFakeExecutor(nil)}
-			bridge := &replayIntegrationBridge{manager: newTestManager(t, Options{OmitRawLog: true}), sandbox: sandbox}
+			bridge := &replayIntegrationBridge{manager: newTestManager(t, Options{CaptureReplay: true, OmitRawLog: true}), sandbox: sandbox}
 			caller := &replayIntegrationCaller{t: t}
 			engine, err := runner.NewReplay(replayIntegrationBenchmark{replayTask}, sandbox, bridge, caller,
 				func(context.Context) (replay.Plan, error) {

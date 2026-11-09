@@ -77,7 +77,7 @@ func TestFileProceduresMoveBytesThroughTheSandbox(t *testing.T) {
 // left out of the audit, but its size and digest are kept and Stop confirms.
 func TestFileContentLargerThanTheRetainedBoundStreams(t *testing.T) {
 	executor := newFakeExecutor(nil)
-	manager, client, endpoint := startBridge(t, executor, Options{})
+	manager, client, endpoint := startBridge(t, executor, Options{CaptureReplay: true})
 	line := []byte(strings.Repeat("x", 99) + "\n")
 	body := bytes.Repeat(line, bridgekit.MaxRecordedInputBytes/len(line)+1)
 
@@ -215,7 +215,7 @@ func TestToolCallRecordsFollowTheSSHRules(t *testing.T) {
 		written = append(written, time.Now())
 		return nil
 	}
-	manager, client, endpoint := startBridge(t, executor, Options{OmitRawLog: true})
+	manager, client, endpoint := startBridge(t, executor, Options{CaptureReplay: true, OmitRawLog: true})
 	ctx := context.Background()
 	binary := []byte{0, 1, 2, 0xff}
 	sent := time.Now()
@@ -322,7 +322,7 @@ func TestReplayOutcomeCapturesFileResponses(t *testing.T) {
 	executor := newFakeExecutor(fstest.MapFS{
 		"app/file": &fstest.MapFile{Data: body, Mode: 0o600},
 	})
-	manager, client, endpoint := startBridge(t, executor, Options{OmitRawLog: true})
+	manager, client, endpoint := startBridge(t, executor, Options{CaptureReplay: true, OmitRawLog: true})
 	ctx := context.Background()
 	for _, readLimit := range []int{len(body), len("read body\n")} {
 		executor.readLimit = readLimit
@@ -384,7 +384,7 @@ func TestReplayOutcomeCapturesFileResponses(t *testing.T) {
 func TestReplayOutcomeIncludesReadMetadataWithoutChangingTheBody(t *testing.T) {
 	const firstLine = "one\n"
 	executor := newFakeExecutor(fstest.MapFS{"app/file": &fstest.MapFile{Data: []byte(firstLine + "two\n"), Mode: 0o644}})
-	manager, client, endpoint := startBridge(t, executor, Options{OmitRawLog: true})
+	manager, client, endpoint := startBridge(t, executor, Options{CaptureReplay: true, OmitRawLog: true})
 	read := func(want string) {
 		t.Helper()
 		body, _, err := readFile(client, &sandboxv1.ReadFileRequest{Path: "/app/file", MaxBytes: int64(len(firstLine))})
@@ -415,7 +415,7 @@ func TestReplayOutcomeIncludesReadMetadataWithoutChangingTheBody(t *testing.T) {
 
 func TestReplayOutcomeCapturesGRPCFailures(t *testing.T) {
 	executor := newFakeExecutor(fstest.MapFS{"app/dir": &fstest.MapFile{Mode: fs.ModeDir | 0o755}})
-	manager, client, endpoint := startBridge(t, executor, Options{OmitRawLog: true})
+	manager, client, endpoint := startBridge(t, executor, Options{CaptureReplay: true, OmitRawLog: true})
 	ctx := context.Background()
 	_, _, missing := readFile(client, &sandboxv1.ReadFileRequest{Path: "/app/missing"})
 	_, _, directory := readFile(client, &sandboxv1.ReadFileRequest{Path: "/app/dir"})
@@ -447,7 +447,7 @@ func TestReplayOutcomeCapturesGRPCFailures(t *testing.T) {
 
 func TestReplayOutcomeMarksWritesWithMissingInputs(t *testing.T) {
 	executor := newFakeExecutor(fstest.MapFS{"app/dir": &fstest.MapFile{Mode: fs.ModeDir | 0o755}})
-	manager, client, endpoint := startBridge(t, executor, Options{OmitRawLog: true})
+	manager, client, endpoint := startBridge(t, executor, Options{CaptureReplay: true, OmitRawLog: true})
 	text := []byte("exact text")
 	if _, err := writeFile(client, "/app/text", int64(len(text)), text); err != nil {
 		t.Fatal(err)

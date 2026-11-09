@@ -444,7 +444,7 @@ func TestLoadReplaySourceRejectsMissingFieldsAndUnsafeSourceFiles(t *testing.T) 
 
 func TestLoadReplaySourceAcceptsRecordedGRPCCalls(t *testing.T) {
 	executor := newFakeExecutor(fstest.MapFS{"app/f": &fstest.MapFile{Data: []byte("x\n"), Mode: 0o600}})
-	manager, client, endpoint := startBridge(t, executor, Options{OmitRawLog: true})
+	manager, client, endpoint := startBridge(t, executor, Options{CaptureReplay: true, OmitRawLog: true})
 	for name, err := range callEveryRPC(client) {
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -490,7 +490,7 @@ func TestReplayCallsReplaysRecordedGRPCMethods(t *testing.T) {
 	const replayStep = 200 * time.Millisecond
 	files := fstest.MapFS{"app/f": &fstest.MapFile{Data: []byte("x\n"), Mode: 0o600}}
 	sourceTarget := newFakeExecutor(files)
-	sourceManager := newTestManager(t, Options{OmitRawLog: true})
+	sourceManager := newTestManager(t, Options{CaptureReplay: true, OmitRawLog: true})
 	sourceEndpoint, err := sourceManager.StartTarget(context.Background(), sourceTarget)
 	if err != nil {
 		t.Fatal(err)
@@ -529,7 +529,7 @@ func TestReplayCallsReplaysRecordedGRPCMethods(t *testing.T) {
 		plan.Calls[index].StartOffset = time.Duration(index) * replayStep
 	}
 	target := newFakeExecutor(fstest.MapFS{"app/f": &fstest.MapFile{Data: []byte("x\n"), Mode: 0o600}})
-	manager, client, endpoint := startBridge(t, target, Options{SandboxID: "new-sandbox", OmitRawLog: true})
+	manager, client, endpoint := startBridge(t, target, Options{CaptureReplay: true, SandboxID: "new-sandbox", OmitRawLog: true})
 	ctx, cancel := context.WithTimeout(context.Background(), callerDeadline)
 	defer cancel()
 	if err := ReplayCalls(ctx, client, plan); err != nil {
@@ -556,7 +556,7 @@ func TestReplayCallsReplaysRecordedGRPCMethods(t *testing.T) {
 }
 
 func TestLoadReplaySourceAcceptsCapturedEmptyExec(t *testing.T) {
-	manager, client, endpoint := startBridge(t, newFakeExecutor(nil), Options{OmitRawLog: true})
+	manager, client, endpoint := startBridge(t, newFakeExecutor(nil), Options{CaptureReplay: true, OmitRawLog: true})
 	if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{}); err != nil {
 		t.Fatal(err)
 	}

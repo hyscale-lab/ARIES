@@ -25,9 +25,9 @@ type toolCallRecord struct {
 	SHA256 string `json:"sha256,omitempty"`
 	// Truncated reports that the reply holds less than the sandbox produced.
 	Truncated            bool   `json:"truncated,omitempty"`
-	ResponseSHA256       string `json:"response_sha256"`
-	ResponseBytes        int64  `json:"response_bytes"`
-	GRPCCode             string `json:"grpc_code"`
+	ResponseSHA256       string `json:"response_sha256,omitempty"`
+	ResponseBytes        int64  `json:"response_bytes,omitempty"`
+	GRPCCode             string `json:"grpc_code,omitempty"`
 	ReplayError          string `json:"replay_error,omitempty"`
 	ReplaySourceSequence uint64 `json:"replay_source_sequence,omitempty"`
 	ResponseDebug        bool   `json:"response_debug,omitempty"`
@@ -46,6 +46,13 @@ type responseOutcome struct {
 	invalid bool
 }
 
+func (session *bridgeSession) responseOutcome(method string) *responseOutcome {
+	if !session.captureReplay {
+		return nil
+	}
+	return newResponseOutcome(method)
+}
+
 func newResponseOutcome(method string) *responseOutcome {
 	outcome := &responseOutcome{hash: sha256.New()}
 	outcome.field([]byte("aries.grpc.outcome.v1"))
@@ -62,6 +69,9 @@ func (outcome *responseOutcome) field(value []byte) {
 }
 
 func (outcome *responseOutcome) message(value proto.Message) {
+	if outcome == nil {
+		return
+	}
 	encoded, err := (proto.MarshalOptions{Deterministic: true}).Marshal(value)
 	if err != nil {
 		outcome.invalid = true
@@ -71,6 +81,9 @@ func (outcome *responseOutcome) message(value proto.Message) {
 }
 
 func (record *toolCallRecord) setOutcome(outcome *responseOutcome, err error) {
+	if outcome == nil {
+		return
+	}
 	code := status.Code(err)
 	outcome.field([]byte(code.String()))
 	outcome.field([]byte(status.Convert(err).Message()))

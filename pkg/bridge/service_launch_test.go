@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -352,5 +353,22 @@ func TestServiceRejectsBridgeTypeWithoutTransport(t *testing.T) {
 	launch := LaunchSpec{RuntimeBackend: "service-fixture", ResourceMetrics: "unsupported", Request: deployment.Request{Workdir: "/private/bootstrap", ServicePort: 9443}, Config: LaunchConfig{Backend: "docker", ControlAddress: "127.0.0.1:0", OutputDir: "/private/results"}}
 	if _, err := NewService(Options{Runtime: &launchRuntime{}, Launch: launch, RunID: "run", OutputDir: t.TempDir(), BridgeType: "fixture-ssh"}); err == nil {
 		t.Fatal("bridge type without transport accepted")
+	}
+}
+
+func TestServiceStagesReplayCaptureForBothBackends(t *testing.T) {
+	for _, backend := range []string{"docker", "kubernetes"} {
+		for _, capture := range []bool{false, true} {
+			t.Run(backend+"/"+strconv.FormatBool(capture), func(t *testing.T) {
+				service, runtime, _ := launchFixtureWith(t, backend, "hermes-grpc", false)
+				service.options.CaptureReplay = capture
+				if err := service.Start(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				if runtime.config.CaptureReplay != capture {
+					t.Fatalf("capture=%v, staged=%v", capture, runtime.config.CaptureReplay)
+				}
+			})
+		}
 	}
 }

@@ -76,7 +76,7 @@ func TestExecRunsBashInTheSandboxWorkdir(t *testing.T) {
 	if len(argv) != 4 || argv[1] != "-l" {
 		t.Fatalf("record argv = %#v", records[1]["argv"])
 	}
-	// Exec output uses response fields, not the legacy stdout/stderr fields.
+	// Exec output does not use the legacy stdout/stderr fields.
 	for _, forbidden := range []string{"stdout", "stderr", "truncated"} {
 		if _, present := records[1][forbidden]; present {
 			t.Fatalf("record carries %q", forbidden)
@@ -84,12 +84,12 @@ func TestExecRunsBashInTheSandboxWorkdir(t *testing.T) {
 	}
 }
 
-func TestExecResponseKeepsBinaryBytesByDefault(t *testing.T) {
+func TestExecResponseKeepsBinaryBytesWhenRecording(t *testing.T) {
 	binary := []byte{'a', 0xff, 'b'}
 	executor := newFakeExecutor(nil)
 	executor.stdout = binary
 	executor.stderr = []byte("error text")
-	manager, client, endpoint := startBridge(t, executor, Options{OmitRawLog: true})
+	manager, client, endpoint := startBridge(t, executor, Options{CaptureReplay: true, OmitRawLog: true})
 	if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "true"}); err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestExecResponseKeepsBinaryBytesByDefault(t *testing.T) {
 func TestExecResponseKeepsFullBoundedText(t *testing.T) {
 	executor := newFakeExecutor(nil)
 	executor.stdout = bytes.Repeat([]byte{'<'}, defaultOutputLimit)
-	manager, client, endpoint := startBridge(t, executor, Options{OmitRawLog: true})
+	manager, client, endpoint := startBridge(t, executor, Options{CaptureReplay: true, OmitRawLog: true})
 	if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "true"}); err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestExecResponseKeepsFullBoundedText(t *testing.T) {
 
 func TestExecResponseChecksBoundAfterIdentity(t *testing.T) {
 	const responseStreamCount = 2 // Exec has stdout and stderr.
-	baselineManager, baselineClient, baselineEndpoint := startBridge(t, newFakeExecutor(nil), Options{OmitRawLog: true})
+	baselineManager, baselineClient, baselineEndpoint := startBridge(t, newFakeExecutor(nil), Options{CaptureReplay: true, OmitRawLog: true})
 	if _, err := baselineClient.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "true"}); err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestExecResponseChecksBoundAfterIdentity(t *testing.T) {
 	}
 	executor.stdout = bytes.Repeat([]byte{0}, perStream)
 	executor.stderr = executor.stdout
-	manager, client, endpoint := startBridge(t, executor, Options{OmitRawLog: true})
+	manager, client, endpoint := startBridge(t, executor, Options{CaptureReplay: true, OmitRawLog: true})
 	if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "true"}); err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestExecResponseMarksOversizedAuditUnreplayable(t *testing.T) {
 	executor := newFakeExecutor(nil)
 	executor.stdout = bytes.Repeat([]byte{0}, MaxMessageBytes/len(`\u0000`)+1)
 	executor.stderr = executor.stdout
-	manager, client, endpoint := startBridge(t, executor, Options{OmitRawLog: true})
+	manager, client, endpoint := startBridge(t, executor, Options{CaptureReplay: true, OmitRawLog: true})
 	if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "true"}); err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +259,7 @@ func TestReplayOutcomeUsesReturnedExecBytes(t *testing.T) {
 	executor := newFakeExecutor(nil)
 	executor.exitCode = 7
 	executor.stdout = bytes.Repeat([]byte("a"), defaultOutputLimit+1)
-	manager, client, endpoint := startBridge(t, executor, Options{OmitRawLog: true})
+	manager, client, endpoint := startBridge(t, executor, Options{CaptureReplay: true, OmitRawLog: true})
 	for _, length := range []int{defaultOutputLimit + 1, defaultOutputLimit + 2} {
 		executor.stdout = bytes.Repeat([]byte("a"), length)
 		response, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "print"})
@@ -286,7 +286,7 @@ func TestReplayOutcomeUsesReturnedExecBytes(t *testing.T) {
 
 func TestReplayOutcomeCapturesExecExitAndReason(t *testing.T) {
 	executor := newFakeExecutor(nil)
-	manager, client, endpoint := startBridge(t, executor, Options{OmitRawLog: true})
+	manager, client, endpoint := startBridge(t, executor, Options{CaptureReplay: true, OmitRawLog: true})
 	for _, exit := range []int{0, 0, 7, 255} {
 		executor.exitCode = exit
 		if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "print"}); err != nil {
@@ -695,4 +695,66 @@ func decodeRawGRPCRecords(t *testing.T, content []byte) []map[string]string {
 		records = append(records, record)
 	}
 	return records
+}
+
+func TestReplayEvidenceRequiresCapture(t *testing.T) {
+	const body = "one\ntwo\n"
+	const invalidUTF8Byte byte = 0xff // This byte cannot start a valid UTF-8 sequence.
+	for _, capture := range []bool{false, true} {
+		t.Run(strconv.FormatBool(capture), func(t *testing.T) {
+			executor := newFakeExecutor(fstest.MapFS{"app/file": {Data: []byte(body), Mode: 0600}})
+			executor.stdout = []byte("output")
+			manager, client, endpoint := startBridge(t, executor, Options{CaptureReplay: capture, OmitRawLog: true})
+			ctx := context.Background()
+			if _, err := client.Exec(ctx, &sandboxv1.ExecRequest{Script: "cat", Stdin: []byte("input")}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := client.Exec(ctx, &sandboxv1.ExecRequest{Script: "cat", Stdin: []byte{invalidUTF8Byte}}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := client.Exec(ctx, &sandboxv1.ExecRequest{Script: "cat", Stdin: make([]byte, bridgekit.MaxRecordedInputBytes+1)}); status.Code(err) != codes.ResourceExhausted {
+				t.Fatal(err)
+			}
+			if _, err := client.Stat(ctx, &sandboxv1.StatRequest{Path: "/app/file"}); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := readFile(client, &sandboxv1.ReadFileRequest{Path: "/app/file"}); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := readWindow(client, &sandboxv1.ReadLinesRequest{Path: "/app/file", FirstLine: 1, MaxLines: 1}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := writeFile(client, "/app/written", int64(len(body)), []byte(body)); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := readFile(client, &sandboxv1.ReadFileRequest{Path: "/app/missing"}); status.Code(err) != codes.NotFound {
+				t.Fatal(err)
+			}
+			stop(t, manager)
+			records := readToolCalls(t, endpoint.LogPaths[0])
+			const calls = 8 // Three Exec calls and five file calls must each have an audit record.
+			if len(records) != calls {
+				t.Fatalf("records=%d, want %d", len(records), calls)
+			}
+			for _, record := range records {
+				if capture {
+					if record["response_sha256"] == nil || record["response_bytes"] == nil || record["grpc_code"] == nil {
+						t.Fatalf("missing replay outcome: %v", record)
+					}
+				} else {
+					for _, field := range []string{"response_sha256", "response_bytes", "grpc_code", "replay_error", "response_debug", "response_stdout", "response_stderr", "response_stdout_base64", "response_stderr_base64", "replay_source_sequence"} {
+						if _, ok := record[field]; ok {
+							t.Fatalf("ordinary audit has %s", field)
+						}
+					}
+				}
+			}
+			if records[0]["command"] != "cat" || records[0]["stdin"] != "input" || records[0]["stdout_bytes"] != float64(len(executor.stdout)) || records[0]["exit_code"] != float64(0) {
+				t.Fatalf("baseline audit lost: %v", records[0])
+			}
+			if capture && (records[0]["response_stdout"] != "output" || records[1]["replay_error"] != "stdin-omitted" || records[2]["grpc_code"] != codes.ResourceExhausted.String() || records[len(records)-1]["grpc_code"] != codes.NotFound.String()) {
+				t.Fatalf("capture lost success or error details: %v", records)
+			}
+		})
+	}
 }

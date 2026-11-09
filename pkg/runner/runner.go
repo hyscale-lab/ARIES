@@ -18,6 +18,7 @@ const defaultCleanupTimeout = 30 * time.Second
 
 // Options contains the few experiment-level inputs needed by the Runner.
 type Options struct {
+	RecordForReplay  bool
 	Name             string
 	RunID            string
 	OutputDir        string
@@ -41,6 +42,7 @@ type RuntimeOverrides struct {
 
 // Runner composes exactly the benchmark, harness, sandbox, and bridge roles.
 type Runner struct {
+	recordForReplay  bool
 	benchmark        Benchmark
 	harness          AgentHarness
 	toolSandbox      ToolSandbox
@@ -80,6 +82,7 @@ func New(benchmark Benchmark, harness AgentHarness, toolSandbox ToolSandbox, bri
 		options.Logger = logrus.StandardLogger()
 	}
 	return &Runner{
+		recordForReplay:  options.RecordForReplay,
 		benchmark:        benchmark,
 		harness:          harness,
 		toolSandbox:      toolSandbox,
@@ -264,7 +267,7 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		return finish()
 	}
 
-	if provenance, ok := r.bridge.(interface{ RecordTask(string) }); ok {
+	if provenance, ok := r.bridge.(interface{ RecordTask(string) }); ok && r.recordForReplay {
 		provenance.RecordTask(task.Environment.Image)
 	}
 	endpoint, err := r.bridge.Start(ctx, sandbox)
@@ -320,7 +323,7 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 	} else {
 		harnessActive = false
 		result.Isolation.HarnessStopped = true
-		if completion, ok := r.bridge.(interface{ CompleteHarness(context.Context) error }); ok {
+		if completion, ok := r.bridge.(interface{ CompleteHarness(context.Context) error }); ok && r.recordForReplay {
 			if err := completion.CompleteHarness(isolationCtx); err != nil {
 				allErrors = append(allErrors, fmt.Errorf("record harness completion: %w", err))
 			}
@@ -345,7 +348,7 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 	}
 
 	result.Isolation.Status = core.StatusConfirmed
-	if endpoint.Protocol == "grpc" && len(result.ToolLogPaths) != 0 {
+	if r.recordForReplay && endpoint.Protocol == "grpc" && len(result.ToolLogPaths) != 0 {
 		if err := replay.LiveAuditError(result.ToolLogPaths[0]); err != nil {
 			allErrors = append(allErrors, fmt.Errorf("check live bridge audit: %w", err))
 			return finish()
