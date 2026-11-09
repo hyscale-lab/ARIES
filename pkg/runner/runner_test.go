@@ -1313,6 +1313,68 @@ func (bridge *timingFinalizingBridge) Stop(ctx context.Context) error {
 	return os.WriteFile(bridge.path, data, 0o600)
 }
 
+func TestReplayCallerStopKeepsFreshRevocationBudget(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		rig, _, _ := newReplayRig(t, core.Evaluation{Status: core.StatusSucceeded})
+		rig.runner.bridge = &timingFinalizingBridge{
+			fakeBridge: rig.bridge,
+			path:       filepath.Join(t.TempDir(), "tool-calls.jsonl"),
+			data:       []byte{},
+		}
+		rig.log.setHook("caller.stop", func() { time.Sleep(rig.runner.cleanupTimeout - fakeRollbackTimeout) })
+		const bridgeWork = fakeRollbackTimeout + fakeRollbackTimeout
+		rig.log.setHook("bridge.stop", func() { time.Sleep(bridgeWork) })
+
+		result, err := rig.runner.Run(context.Background())
+		if err != nil {
+			t.Fatalf("delayed caller stop consumed bridge revocation budget: %v", err)
+		}
+		task := result.Tasks[0]
+		if task.Isolation.Status != core.StatusConfirmed || !task.Isolation.CallerStopped || !task.Isolation.BridgeRevoked || task.Cleanup.Status != core.StatusSucceeded {
+			t.Fatalf("isolation or cleanup failed: %+v", task)
+		}
+		if task.Replay.Timing.Status != "available" || task.Replay.Responses.Status != "available" || !task.Evaluation.Reused {
+			t.Fatalf("finalized replay evidence is unavailable: %+v", task)
+		}
+		wantCalls := []string{"benchmark.tasks", "replay.load", "sandbox.start", "benchmark.prepare", "bridge.start", "caller.start", "caller.run", "caller.stop", "bridge.stop", "sandbox.stop"}
+		if got := rig.log.snapshot(); !slices.Equal(got, wantCalls) {
+			t.Fatalf("replay lifecycle = %v, want %v", got, wantCalls)
+		}
+		for _, name := range []string{"caller.stop", "bridge.stop", "sandbox.stop"} {
+			assertBoundedLiveContext(t, rig.log, name)
+		}
+	})
+}
+
+func TestReplayCallerStopTimeoutStillRevokesBridge(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		rig, caller, _ := newReplayRig(t, core.Evaluation{Status: core.StatusSucceeded})
+		rig.log.setHook("caller.stop", func() {
+			if caller.stops == 0 {
+				time.Sleep(rig.runner.cleanupTimeout + fakeRollbackTimeout)
+			}
+		})
+		result, err := rig.runner.Run(context.Background())
+		task := result.Tasks[0]
+		if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(task.Error, "confirm replay caller stopped: context deadline exceeded") {
+			t.Fatalf("caller stop timeout evidence lost: task=%+v error=%v", task, err)
+		}
+		if task.Isolation.Status != core.StatusBlockedIsolation || task.Isolation.CallerStopped || !task.Isolation.BridgeRevoked || task.Cleanup.Status != core.StatusSucceeded || !task.Evaluation.Reused {
+			t.Fatalf("isolation and cleanup outcomes = %+v", task)
+		}
+		if task.Replay.Timing.Reason != "replay caller stop is unconfirmed" || task.Replay.Responses.Reason != "replay caller stop is unconfirmed" {
+			t.Fatalf("diagnostics crossed unconfirmed caller stop: %+v", task.Replay)
+		}
+		wantCalls := []string{"benchmark.tasks", "replay.load", "sandbox.start", "benchmark.prepare", "bridge.start", "caller.start", "caller.run", "caller.stop", "bridge.stop", "caller.stop", "sandbox.stop"}
+		if got := rig.log.snapshot(); !slices.Equal(got, wantCalls) {
+			t.Fatalf("replay lifecycle = %v, want %v", got, wantCalls)
+		}
+		for _, name := range []string{"caller.stop", "bridge.stop", "sandbox.stop"} {
+			assertBoundedLiveContext(t, rig.log, name)
+		}
+	})
+}
+
 func TestReplayReadsDriftOnlyAfterConfirmedBridgeStop(t *testing.T) {
 	const firstSourceSequence = 1
 	rig := newRig(t, firstSourceSequence)
