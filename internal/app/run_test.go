@@ -491,12 +491,117 @@ func (*stubResources) Close() error                                           { 
 
 type sourceStubBridge struct {
 	stubBridge
-	logicalID string
-	image     string
+	logicalID   string
+	image       string
+	taskImage   string
+	completions int
 }
 
 func (b *sourceStubBridge) RecordSource(logicalID, image string) {
 	b.logicalID, b.image = logicalID, image
+}
+
+func (b *sourceStubBridge) RecordTask(image string) { b.taskImage = image }
+
+func (b *sourceStubBridge) CompleteHarness(context.Context) error {
+	b.completions++
+	return nil
+}
+
+func TestTaskExperimentRequiresRecordingMethodsOnlyForRecording(t *testing.T) {
+	type sourceRecorder interface{ RecordSource(string, string) }
+	type taskRecorder interface{ RecordTask(string) }
+	type harnessCompleter interface{ CompleteHarness(context.Context) error }
+	for _, test := range []struct {
+		name      string
+		recording bool
+		missing   string
+		wrap      func(*sourceStubBridge) runner.ToolBridge
+	}{
+		{name: "missing source", recording: true, missing: "RecordSource", wrap: func(b *sourceStubBridge) runner.ToolBridge {
+			return struct {
+				runner.ToolBridge
+				taskRecorder
+				harnessCompleter
+			}{b, b, b}
+		}},
+		{name: "missing task", recording: true, missing: "RecordTask", wrap: func(b *sourceStubBridge) runner.ToolBridge {
+			return struct {
+				runner.ToolBridge
+				sourceRecorder
+				harnessCompleter
+			}{b, b, b}
+		}},
+		{name: "missing completion", recording: true, missing: "CompleteHarness", wrap: func(b *sourceStubBridge) runner.ToolBridge {
+			return struct {
+				runner.ToolBridge
+				sourceRecorder
+				taskRecorder
+			}{b, b, b}
+		}},
+		{name: "supported recording", recording: true, wrap: func(b *sourceStubBridge) runner.ToolBridge { return b }},
+		{name: "ordinary run", wrap: func(b *sourceStubBridge) runner.ToolBridge { return &b.stubBridge }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			const logicalID = "task-logical"
+			const occurrenceID = "task-logical-001"
+			const image = "task-image:tag"
+			const oneCompletion = 1
+			task := core.Task{ID: occurrenceID, Environment: core.Environment{Image: image}}
+			bridge := &sourceStubBridge{}
+			var events []string
+			resources := &infrastructureResources{events: &events}
+			closeErr := errors.New("transport close failed")
+			closeClient := func(name string) error {
+				events = append(events, name)
+				if test.missing != "" {
+					return closeErr
+				}
+				return nil
+			}
+			wiring := Wiring{recordForReplay: test.recording,
+				NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
+					return HarnessInstance{Harness: &stubHarness{}, Close: func() error { return closeClient("harness-close") }}, nil
+				},
+				NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
+					return SandboxInstance{Sandbox: &cancelSandbox{events: &events}, Resources: resources, Close: func() error { return closeClient("sandbox-close") }}, nil
+				},
+				NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) { return test.wrap(bridge), nil },
+			}
+			catalog := PreparedBenchmark{
+				Tasks:         []core.Task{{ID: logicalID, Environment: task.Environment}},
+				NewOccurrence: func(_, _ string) (runner.Benchmark, error) { return &replayTaskBenchmark{task: task}, nil },
+			}
+			experiment, err := buildTaskExperiment(config.Config{Name: "fixture"}, core.ModelConfig{}, nil, "run", t.TempDir(), logicalID, occurrenceID, nil, nil, catalog, wiring)
+			if test.missing != "" {
+				if experiment != nil || err == nil || !strings.Contains(err.Error(), test.missing) || !errors.Is(err, closeErr) {
+					t.Fatalf("missing %s accepted or cleanup error lost: experiment=%v error=%v", test.missing, experiment, err)
+				}
+				if bridge.logicalID != "" || bridge.taskImage != "" || bridge.completions != 0 || !reflect.DeepEqual(events, []string{"observer-close", "sandbox-close", "harness-close"}) {
+					t.Fatalf("invalid recording caused task effects: bridge=%+v events=%v", bridge, events)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := experiment.Run(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := result.Tasks[0]
+			if got.Isolation.Status != core.StatusConfirmed || got.Evaluation.Status != core.StatusSucceeded || got.Cleanup.Status != core.StatusSucceeded {
+				t.Fatalf("task result = %+v", got)
+			}
+			if test.recording {
+				if bridge.logicalID != logicalID || bridge.image != image || bridge.taskImage != image || bridge.completions != oneCompletion {
+					t.Fatalf("recording methods did not receive task evidence: %+v", bridge)
+				}
+			} else if bridge.logicalID != "" || bridge.taskImage != "" || bridge.completions != 0 {
+				t.Fatalf("ordinary run used recording methods: %+v", bridge)
+			}
+		})
+	}
 }
 
 func TestTaskExperimentBindsCatalogIdentityNotOccurrenceIdentity(t *testing.T) {

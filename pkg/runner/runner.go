@@ -72,6 +72,15 @@ func New(benchmark Benchmark, harness AgentHarness, toolSandbox ToolSandbox, bri
 	if bridge == nil {
 		return nil, errors.New("tool bridge is required")
 	}
+	if options.RecordForReplay {
+		if _, ok := bridge.(interface {
+			RecordSource(string, string)
+			RecordTask(string)
+			CompleteHarness(context.Context) error
+		}); !ok {
+			return nil, errors.New("recording requires bridge RecordSource, RecordTask, and CompleteHarness methods")
+		}
+	}
 	if options.RunID == "" {
 		return nil, errors.New("run ID is required")
 	}
@@ -512,6 +521,8 @@ func (r *Runner) runReplayTask(ctx context.Context, task core.Task) (core.TaskRe
 		callerActive = false
 		result.Isolation.CallerStopped = true
 	}
+	cancelIsolation()
+	isolationCtx, cancelIsolation = context.WithTimeout(context.WithoutCancel(ctx), r.cleanupTimeout)
 	if err := r.bridge.Stop(isolationCtx); err != nil {
 		isolationErrors = append(isolationErrors, fmt.Errorf("confirm bridge revoked: %w", err))
 	} else {
