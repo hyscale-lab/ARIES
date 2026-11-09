@@ -16,7 +16,7 @@ import (
 
 // ReplayCalls sends a validated plan through a ready, private bridge client.
 // It does not return while any started call can still use the bridge.
-func ReplayCalls(ctx context.Context, client sandboxv1.SandboxClient, plan replay.Plan) error {
+func ReplayCalls(ctx context.Context, callTimeout time.Duration, client sandboxv1.SandboxClient, plan replay.Plan) error {
 	if len(plan.Calls) == 0 {
 		return ctx.Err()
 	}
@@ -85,7 +85,11 @@ launch:
 			break launch
 		}
 		active++
-		go func() { results <- replayCall(callsCtx, client, call) }()
+		callCtx, done := context.WithTimeout(callsCtx, callTimeout)
+		go func() {
+			defer done()
+			results <- replayCall(callCtx, client, call)
+		}()
 	}
 	for active > 0 {
 		select {
