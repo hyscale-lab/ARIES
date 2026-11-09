@@ -18,6 +18,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	bridgegrpc "github.com/hyscale-lab/aries/pkg/bridge/grpc"
 	sandboxv1 "github.com/hyscale-lab/aries/pkg/bridge/grpc/v1"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/deployment"
@@ -44,13 +45,87 @@ type fakeRuntime struct {
 	resultDelay   time.Duration
 	resultReady   <-chan struct{}
 	planUploads   int
+	upload        func(context.Context, string) error
 }
 
-func (runtime *fakeRuntime) UploadArchive(_ context.Context, _, _ string, source io.Reader) error {
+func TestReplayCallerBoundsPlanStaging(t *testing.T) {
+	const oneRemoval = 1
+	for _, test := range []struct {
+		name       string
+		stalled    string
+		firstDelay time.Duration
+		cancel     bool
+	}{
+		{name: "plan upload", stalled: planFile},
+		{name: "publication upload", stalled: planReadyFile},
+		{name: "shared allowance", stalled: planReadyFile, firstDelay: startTimeout - pollInterval},
+		{name: "parent cancellation", stalled: planReadyFile, cancel: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				runtime := &fakeRuntime{files: make(map[string][]byte)}
+				runtime.upload = func(uploadCtx context.Context, name string) error {
+					if name == launchFile {
+						return nil
+					}
+					if _, bounded := uploadCtx.Deadline(); !bounded {
+						return errors.New("plan upload has no deadline")
+					}
+					if name == planFile && test.firstDelay > 0 {
+						<-time.After(test.firstDelay)
+					}
+					if name == test.stalled {
+						if test.cancel {
+							cancel()
+						}
+						<-uploadCtx.Done()
+						return uploadCtx.Err()
+					}
+					return nil
+				}
+				placement := core.RuntimePlacement{AttachmentID: "task-network"}
+				caller, err := New(Options{Runtime: runtime, Image: "aries-bridge:v1", Backend: "docker", BridgeBackend: "docker", BridgePlacement: placement, CallTimeout: time.Second})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := caller.Start(ctx, core.ToolEndpoint{Protocol: "grpc", Address: "10.0.0.1:8443"}, core.HarnessConnectivity{Placement: placement}, "run", "task"); err != nil {
+					t.Fatal(err)
+				}
+				started := time.Now()
+				runErr := caller.Run(ctx, replay.Plan{})
+				wantErr, wantWait := error(context.DeadlineExceeded), startTimeout
+				if test.cancel {
+					wantErr, wantWait = context.Canceled, 0
+				}
+				if err := caller.Stop(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				if err := caller.Stop(context.Background()); err != nil || runtime.stops != oneRemoval || !runtime.stopBounded {
+					t.Fatalf("cleanup after staging failure: error=%v, stops=%d, bounded=%t", err, runtime.stops, runtime.stopBounded)
+				}
+				if !errors.Is(runErr, wantErr) || time.Since(started) != wantWait {
+					t.Fatalf("staging returned %v after %s, want %v after %s", runErr, time.Since(started), wantErr, wantWait)
+				}
+				if err := caller.Run(context.Background(), replay.Plan{}); err == nil || !strings.Contains(err.Error(), "already run") {
+					t.Fatalf("staging failure allowed another run: %v", err)
+				}
+			})
+		})
+	}
+}
+
+func (runtime *fakeRuntime) UploadArchive(ctx context.Context, _, _ string, source io.Reader) error {
 	archive := tar.NewReader(source)
 	header, err := archive.Next()
 	if err != nil {
 		return err
+	}
+	if runtime.upload != nil {
+		if err := runtime.upload(ctx, header.Name); err != nil {
+			return err
+		}
 	}
 	if runtime.files != nil {
 		data, err := io.ReadAll(archive)
@@ -141,14 +216,74 @@ func (runtime *fakeRuntime) DownloadArchive(ctx context.Context, _, name string)
 	return io.NopCloser(&buffer), deployment.FileInfo{Mode: 0600, Size: int64(len(data))}, nil
 }
 
+type delayedReplayClient struct {
+	sandboxv1.SandboxClient
+	exec func(context.Context) (*sandboxv1.ExecResponse, error)
+}
+
+func (client delayedReplayClient) Exec(ctx context.Context, _ *sandboxv1.ExecRequest, _ ...grpc.CallOption) (*sandboxv1.ExecResponse, error) {
+	return client.exec(ctx)
+}
+
+func TestReplayChildAllowsProcessingAndFullFinalWait(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const callTimeout = time.Second
+		const schedulingDelay = pollInterval
+		const rpcDelay = callTimeout - pollInterval
+		const processingDelay = pollInterval + pollInterval
+		const finalWait = callTimeout
+		plan := replay.Plan{Calls: []replay.Call{{Operation: "Exec", Script: "true", StartOffset: callTimeout, ResponseCode: codes.OK.String()}}, FinalWait: finalWait}
+		completed := time.Time{}
+		client := delayedReplayClient{exec: func(ctx context.Context) (*sandboxv1.ExecResponse, error) {
+			deadline, bounded := ctx.Deadline()
+			if !bounded || time.Until(deadline) != callTimeout {
+				t.Errorf("RPC allowance = %s, bounded=%t, want %s", time.Until(deadline), bounded, callTimeout)
+			}
+			<-time.After(rpcDelay)
+			if err := ctx.Err(); err != nil {
+				t.Errorf("reply lost its RPC allowance: %v", err)
+			}
+			// The reply arrives before its deadline. Local processing can finish after it.
+			<-time.After(processingDelay)
+			completed = time.Now()
+			return &sandboxv1.ExecResponse{}, nil
+		}}
+		// The outcome has five length-prefixed fields and an empty Exec reply.
+		for _, field := range [][]byte{[]byte("aries.grpc.outcome.v1"), []byte(sandboxv1.Sandbox_Exec_FullMethodName), nil, []byte(codes.OK.String()), nil} {
+			var prefix [binary.MaxVarintLen64]byte
+			plan.Calls[0].ResponseBytes += int64(binary.PutUvarint(prefix[:], uint64(len(field))) + len(field))
+		}
+		wait, err := executionTimeout(plan, callTimeout)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), wait)
+		defer cancel()
+		<-time.After(schedulingDelay)
+		if err := bridgegrpc.ReplayCalls(ctx, callTimeout, client, plan); err != nil {
+			t.Fatalf("valid reply lost the recorded final wait: %v", err)
+		}
+		if completed.IsZero() || time.Since(completed) != finalWait {
+			t.Fatalf("recorded final wait = %s, want %s", time.Since(completed), finalWait)
+		}
+	})
+}
+
 func TestReplayCallerAllowsChildStartupAndResultTransfer(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		const callTimeout = time.Second
 		plan := replay.Plan{Calls: []replay.Call{{StartOffset: callTimeout}}, FinalWait: callTimeout}
-		const childBudget = callTimeout + callTimeout + callTimeout
-		const startupDelay = pollInterval
-		const transferDelay = pollInterval
+		const childBudget = callTimeout + callTimeout + callTimeout + startTimeout
+		const stagingDelay = startTimeout - pollInterval
+		const startupDelay = startTimeout - pollInterval
+		const transferDelay = startTimeout - pollInterval
 		runtime := &fakeRuntime{files: make(map[string][]byte), resultDelay: startupDelay + childBudget + transferDelay}
+		runtime.upload = func(_ context.Context, name string) error {
+			if name == planFile {
+				<-time.After(stagingDelay)
+			}
+			return nil
+		}
 		placement := core.RuntimePlacement{AttachmentID: "task-network"}
 		caller, err := New(Options{Runtime: runtime, Image: "aries-bridge:v1", Backend: "docker", BridgeBackend: "docker", BridgePlacement: placement, CallTimeout: callTimeout})
 		if err != nil {
@@ -162,8 +297,12 @@ func TestReplayCallerAllowsChildStartupAndResultTransfer(t *testing.T) {
 				t.Fatal(err)
 			}
 		}()
+		started := time.Now()
 		if err := caller.Run(context.Background(), plan); err != nil {
-			t.Fatalf("child execution lost startup or result allowance: %v", err)
+			t.Fatalf("child execution lost staging, startup or result allowance: %v", err)
+		}
+		if elapsed := time.Since(started); elapsed != stagingDelay+runtime.resultDelay {
+			t.Fatalf("caller returned after %s, want %s", elapsed, stagingDelay+runtime.resultDelay)
 		}
 	})
 }
@@ -214,6 +353,38 @@ func TestReplayCallerRejectsRepeatedRun(t *testing.T) {
 	})
 }
 
+func TestReplayChildExecutionBudgetBoundaries(t *testing.T) {
+	const maxDuration = time.Duration(1<<63 - 1)
+	for _, test := range []struct {
+		name    string
+		timeout time.Duration
+		plan    replay.Plan
+		valid   bool
+	}{
+		{name: "negative call timeout", timeout: -time.Second},
+		{name: "zero call timeout"},
+		{name: "negative final wait", timeout: time.Second, plan: replay.Plan{FinalWait: -time.Second}},
+		{name: "negative offset", timeout: time.Second, plan: replay.Plan{Calls: []replay.Call{{StartOffset: -time.Second}}}},
+		{name: "call overhead overflow", timeout: maxDuration},
+		{name: "final wait overhead overflow", timeout: time.Second, plan: replay.Plan{FinalWait: maxDuration - time.Second}},
+		{name: "offset overhead overflow", timeout: time.Second, plan: replay.Plan{Calls: []replay.Call{{StartOffset: maxDuration - time.Second}}}},
+		{name: "largest call budget", timeout: maxDuration - startTimeout, valid: true},
+		{name: "largest final wait", timeout: time.Second, plan: replay.Plan{FinalWait: maxDuration - time.Second - startTimeout}, valid: true},
+		{name: "largest offset", timeout: time.Second, plan: replay.Plan{Calls: []replay.Call{{StartOffset: maxDuration - time.Second - startTimeout}}}, valid: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			wait, err := executionTimeout(test.plan, test.timeout)
+			if test.valid {
+				if err != nil || wait != maxDuration {
+					t.Fatalf("largest child budget = %s, error=%v", wait, err)
+				}
+			} else if err == nil {
+				t.Fatalf("invalid child budget accepted: %s", wait)
+			}
+		})
+	}
+}
+
 func TestReplayCallerRejectsInvalidDeadline(t *testing.T) {
 	const maxDuration = time.Duration(1<<63 - 1)
 	for _, test := range []struct {
@@ -222,9 +393,11 @@ func TestReplayCallerRejectsInvalidDeadline(t *testing.T) {
 		plan    replay.Plan
 	}{
 		{name: "negative final wait", timeout: time.Second, plan: replay.Plan{FinalWait: -time.Second}},
+		{name: "negative offset", timeout: time.Second, plan: replay.Plan{Calls: []replay.Call{{StartOffset: -time.Second}}}},
 		{name: "execution overflow", timeout: maxDuration, plan: replay.Plan{FinalWait: time.Second}},
 		{name: "offset overflow", timeout: time.Second, plan: replay.Plan{Calls: []replay.Call{{StartOffset: maxDuration}}}},
 		{name: "headroom overflow", timeout: maxDuration - startTimeout},
+		{name: "child overhead and parent headroom overflow", timeout: maxDuration - startTimeout - startTimeout},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runtime := &fakeRuntime{files: make(map[string][]byte)}
