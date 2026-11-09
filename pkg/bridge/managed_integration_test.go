@@ -5,6 +5,9 @@ package bridge_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,7 +35,9 @@ import (
 	"github.com/moby/moby/client"
 	"golang.org/x/crypto/ssh"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/proto"
 )
 
 const managedFixtureImage = "docker.io/library/debian:12-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241"
@@ -452,8 +457,29 @@ func TestManagedReplayCallerUsesDockerTaskNetwork(t *testing.T) {
 	if runtime.id == fixture.service.RuntimeID() || runtime.id == session.sandbox.ContainerID() || len(callerContainer.Container.NetworkSettings.Networks) != privateNetworkCount || callerContainer.Container.NetworkSettings.Networks[attachment] == nil || len(callerContainer.Container.Mounts) != 0 || len(callerContainer.Container.HostConfig.PortBindings) != 0 {
 		t.Fatalf("replay caller lacks a separate private runtime: %+v", callerContainer.Container)
 	}
-	if err := caller.Run(ctx, replay.Plan{}); err != nil {
+	const sourceSequence = 1
+	const replayPath = "/work/replay-marker"
+	const replayBody = "managed replay payload"
+	response, err := (proto.MarshalOptions{Deterministic: true}).Marshal(&sandboxv1.WriteFileResponse{Created: true, BytesWritten: int64(len(replayBody))})
+	if err != nil {
 		t.Fatal(err)
+	}
+	fingerprint := sha256.New()
+	var responseBytes int64
+	for _, field := range [][]byte{[]byte("aries.grpc.outcome.v1"), []byte(sandboxv1.Sandbox_WriteFile_FullMethodName), response, []byte(codes.OK.String()), nil} {
+		var prefix [binary.MaxVarintLen64]byte
+		length := binary.PutUvarint(prefix[:], uint64(len(field)))
+		_, _ = fingerprint.Write(prefix[:length])
+		_, _ = fingerprint.Write(field)
+		responseBytes += int64(length + len(field))
+	}
+	plan := replay.Plan{Calls: []replay.Call{{Sequence: sourceSequence, Operation: "WriteFile", Path: replayPath, Body: []byte(replayBody), ResponseCode: codes.OK.String(), ResponseSHA256: hex.EncodeToString(fingerprint.Sum(nil)), ResponseBytes: responseBytes}}}
+	if err := caller.Run(ctx, plan); err != nil {
+		t.Fatal(err)
+	}
+	written, err := session.sandbox.Exec(ctx, core.Command{Path: "/bin/cat", Args: []string{replayPath}})
+	if err != nil || written.ExitCode != 0 || written.Stdout != replayBody {
+		t.Fatalf("managed replay did not write the staged body: result=%+v error=%v", written, err)
 	}
 	if err := caller.Stop(ctx); err != nil {
 		t.Fatal(err)
