@@ -71,7 +71,7 @@ func RunChild(ctx context.Context, configPath string) error {
 			return nil
 		}
 	}
-	data, err = privateFile(filepath.Join(folder, planFile), maxPlanBytes)
+	data, err = privateFile(filepath.Join(folder, planFile), replay.MaxPlanBytes)
 	if err != nil {
 		return finishChild(ctx, folder, err)
 	}

@@ -29,6 +29,7 @@ const replayFileMode os.FileMode = 0o600
 const replayDirectoryMode os.FileMode = 0o700
 
 type replaySourceMetadata struct {
+	RunID              string            `json:"run_id"`
 	SchemaVersion      int               `json:"schema_version"`
 	ReplayReady        bool              `json:"replay_ready"`
 	SandboxID          string            `json:"SandboxID"`
@@ -44,6 +45,10 @@ type replaySourceMetadata struct {
 // LoadReplaySource validates all private source evidence before returning a plan.
 // It makes no sandbox call and does not run a benchmark verifier.
 func LoadReplaySource(sourceDir string, task core.Task, benchmarkType string, revisions map[string]string) (replay.Plan, error) {
+	return loadReplaySource(sourceDir, task, benchmarkType, revisions, replay.MaxPlanBytes)
+}
+
+func loadReplaySource(sourceDir string, task core.Task, benchmarkType string, revisions map[string]string, maxPlanBytes int) (replay.Plan, error) {
 	var plan replay.Plan
 	parent := filepath.Dir(filepath.Clean(sourceDir))
 	occurrence := filepath.Base(filepath.Clean(sourceDir))
@@ -118,6 +123,9 @@ func LoadReplaySource(sourceDir string, task core.Task, benchmarkType string, re
 	if err := json.Unmarshal(resultData, &result); err != nil || result.RunID == "" {
 		return plan, errors.New("replay source run result is invalid")
 	}
+	if metadata.RunID != "" && metadata.RunID != result.RunID || metadata.RunID == "" && len(log) == 0 {
+		return plan, errors.New("replay source run binding is missing or differs from parent result")
+	}
 	var rawResult struct {
 		Tasks []struct {
 			Evaluation map[string]json.RawMessage `json:"evaluation"`
@@ -166,28 +174,35 @@ func LoadReplaySource(sourceDir string, task core.Task, benchmarkType string, re
 		}
 		plan.Calls = append(plan.Calls, call)
 	}
-	if len(plan.Calls) == 0 {
-		return plan, nil
-	}
-	// File order follows call completion, not admission. The start time is the
-	// schedule's origin even when a later file line started first.
-	slices.SortFunc(plan.Calls, func(left, right replay.Call) int {
-		return starts[left.Sequence].Compare(starts[right.Sequence])
-	})
-	for index := range plan.Calls {
-		if index > 0 && starts[plan.Calls[index-1].Sequence].Equal(starts[plan.Calls[index].Sequence]) {
-			return replay.Plan{}, errors.New("replay call starts are ambiguous")
+	if task.Environment.Workdir != "" {
+		if err := plan.ValidateWorkdir(task.Environment.Workdir); err != nil {
+			return replay.Plan{}, err
 		}
-		start := starts[plan.Calls[index].Sequence]
-		offset := start.Sub(first)
-		if offset < 0 || !first.Add(offset).Equal(start) {
-			return replay.Plan{}, errors.New("replay call start offset is not representable")
-		}
-		plan.Calls[index].StartOffset = offset
 	}
-	plan.FinalWait = completed.Sub(latest)
-	if plan.FinalWait < 0 || !latest.Add(plan.FinalWait).Equal(completed) {
-		return replay.Plan{}, errors.New("replay completion wait is invalid")
+	if len(plan.Calls) != 0 {
+		// File order follows call completion, not admission. The start time is the
+		// schedule's origin even when a later file line started first.
+		slices.SortFunc(plan.Calls, func(left, right replay.Call) int {
+			return starts[left.Sequence].Compare(starts[right.Sequence])
+		})
+		for index := range plan.Calls {
+			if index > 0 && starts[plan.Calls[index-1].Sequence].Equal(starts[plan.Calls[index].Sequence]) {
+				return replay.Plan{}, errors.New("replay call starts are ambiguous")
+			}
+			start := starts[plan.Calls[index].Sequence]
+			offset := start.Sub(first)
+			if offset < 0 || !first.Add(offset).Equal(start) {
+				return replay.Plan{}, errors.New("replay call start offset is not representable")
+			}
+			plan.Calls[index].StartOffset = offset
+		}
+		plan.FinalWait = completed.Sub(latest)
+		if plan.FinalWait < 0 || !latest.Add(plan.FinalWait).Equal(completed) {
+			return replay.Plan{}, errors.New("replay completion wait is invalid")
+		}
+	}
+	if _, err := replay.EncodePlan(plan, maxPlanBytes); err != nil {
+		return replay.Plan{}, fmt.Errorf("encode replay source plan: %w", err)
 	}
 	return plan, nil
 }
@@ -273,7 +288,7 @@ func parseReplayCall(record toolCallRecord, line []byte, sequence uint64, runID,
 			return replay.Call{}, time.Time{}, time.Time{}, errors.New("replay Exec argv differs from the recorded command")
 		}
 		call.Operation, call.Script, call.Login, call.Body = "Exec", record.Command, login, []byte(record.Stdin)
-		call.ExitCode = int32(record.ExitCode)
+		call.Workdir, call.ExitCode = record.Workdir, int32(record.ExitCode)
 		if record.ResponseDebug {
 			call.ResponseDebug = true
 			call.ResponseStdout, call.ResponseStderr = []byte(record.ResponseStdout), []byte(record.ResponseStderr)

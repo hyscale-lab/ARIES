@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -55,18 +56,18 @@ func writeReplaySource(t *testing.T, records []toolCallRecord, completed time.Ti
 	}
 	var log []byte
 	for _, record := range records {
-		line, err := json.Marshal(record)
+		line, err := bridgekit.MarshalJSONLine(record)
 		if err != nil {
 			t.Fatal(err)
 		}
-		log = append(append(log, line...), '\n')
+		log = append(log, line...)
 	}
 	if err := os.WriteFile(filepath.Join(bridgeDir, "tool-calls.jsonl"), log, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	digest := sha256.Sum256(log)
 	metadata := map[string]any{
-		"schema_version": 1, "replay_ready": true, "SandboxID": replaySandboxID,
+		"schema_version": 1, "run_id": replayRunID, "replay_ready": true, "SandboxID": replaySandboxID,
 		"benchmark_type": replayBenchmark, "task_id": replayLogicalID, "image": replayImage,
 		"benchmark_revisions": replayRevisions, "harness_completed_at": bridgekit.FormatTime(completed),
 		"tool_calls_bytes": len(log), "tool_calls_sha256": hex.EncodeToString(digest[:]),
@@ -120,6 +121,44 @@ func TestLoadReplaySourceOrdersCallsAndPreservesEvaluation(t *testing.T) {
 	}
 	if len(plan.Calls) != 2 || plan.Calls[0].Operation != "Exec" || plan.Calls[0].Sequence != early.Sequence || plan.Calls[0].StartOffset != 0 || plan.Calls[0].Script != early.Command || plan.Calls[1].Operation != "Stat" || plan.Calls[1].Sequence != late.Sequence || plan.Calls[1].StartOffset != startGap || plan.FinalWait != finalWait {
 		t.Fatalf("call plan = %+v", plan)
+	}
+}
+
+func TestLoadReplaySourceKeepsExecWorkdir(t *testing.T) {
+	at, err := time.Parse(time.RFC3339Nano, replaySourceTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := replayRecord(at, at, 1)
+	record.OperationClass, record.Command = kindExec, "touch relative-file"
+	record.CommandHash, record.Path, record.Workdir = bridgekit.CommandHash(record.Command), bridgekit.RemoteShellPath, testWorkdir
+	record.Argv = []string{bridgekit.RemoteShellPath, "-c", record.Command}
+	source := writeReplaySource(t, []toolCallRecord{record}, at, core.Evaluation{Status: core.StatusSucceeded})
+	for _, workdir := range []string{"", testWorkdir, "/other"} {
+		t.Run("workdir="+workdir, func(t *testing.T) {
+			task := replayTask
+			task.Environment.Workdir = workdir
+			plan, err := LoadReplaySource(source, task, replayBenchmark, replayRevisions)
+			if workdir != "" && workdir != testWorkdir {
+				if err == nil || len(plan.Calls) != 0 {
+					t.Fatalf("changed workdir accepted: %+v, %v", plan, err)
+				}
+				return
+			}
+			if err != nil || len(plan.Calls) != 1 {
+				t.Fatalf("same workdir source: %+v, %v", plan, err)
+			}
+			data, err := json.Marshal(plan.Calls[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			var call struct {
+				Workdir string `json:"workdir"`
+			}
+			if err := json.Unmarshal(data, &call); err != nil || call.Workdir != testWorkdir {
+				t.Fatalf("recorded workdir lost: %+v, %v", call, err)
+			}
+		})
 	}
 }
 
@@ -298,8 +337,103 @@ func updateReplayMetadata(t *testing.T, source, key string, value any) {
 	if err := json.Unmarshal(content, &metadata); err != nil {
 		t.Fatal(err)
 	}
-	metadata[key] = value
+	if value == nil {
+		delete(metadata, key)
+	} else {
+		metadata[key] = value
+	}
 	writeReplayJSON(t, path, metadata)
+}
+
+func TestLoadReplaySourceChecksEncodedPlanBound(t *testing.T) {
+	at, err := time.Parse(time.RFC3339Nano, replaySourceTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const payloadBytes = 4 << 10
+	const boundaryByte = 1
+	const firstSequence = 1
+	const callGap = time.Second
+	write := replayRecord(at, at, firstSequence)
+	write.OperationClass, write.Stdin = kindFileWrite, strings.Repeat("a", payloadBytes)
+	write.StdinBytes = int64(len(write.Stdin))
+	digest := sha256.Sum256([]byte(write.Stdin))
+	write.SHA256 = hex.EncodeToString(digest[:])
+	stat := replayRecord(at.Add(callGap), at.Add(callGap), firstSequence+1)
+	stat.Path = "/" + strings.Repeat("<", payloadBytes)
+	for name, records := range map[string][]toolCallRecord{
+		"escaping and base64": {write, stat},
+		"empty":               nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			source := writeReplaySource(t, records, at.Add(callGap+callGap), core.Evaluation{Status: core.StatusSucceeded})
+			plan, err := LoadReplaySource(source, replayTask, replayBenchmark, replayRevisions)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := json.Marshal(plan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			log, err := os.ReadFile(filepath.Join(source, "bridge", "tool-calls.jsonl"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(log) >= len(data)-boundaryByte || int64(len(log)) > maxReplayLogBytes {
+				t.Fatalf("audit must fit below the plan bound: audit=%d, plan=%d", len(log), len(data))
+			}
+			for _, bound := range []int{len(data) - boundaryByte, len(data)} {
+				got, err := loadReplaySource(source, replayTask, replayBenchmark, replayRevisions, bound)
+				if bound == len(data) {
+					if err != nil || got.SourceRunID != replayRunID || len(got.Calls) != len(records) || got.FinalWait != plan.FinalWait {
+						t.Fatalf("exact plan bound rejected: %+v, %v", got, err)
+					}
+				} else if err == nil || !strings.Contains(err.Error(), "plan") || got.SourceRunID != "" || len(got.Calls) != 0 {
+					t.Fatalf("oversized plan accepted: bound=%d, plan=%d, error=%v", bound, len(data), err)
+				}
+			}
+		})
+	}
+}
+
+func TestLoadReplaySourceBindsParentRun(t *testing.T) {
+	at, err := time.Parse(time.RFC3339Nano, replaySourceTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const otherRunID = "other-run"
+	for _, test := range []struct {
+		name     string
+		records  []toolCallRecord
+		runID    any
+		parentID string
+		valid    bool
+	}{
+		{name: "bound empty", runID: replayRunID, parentID: replayRunID, valid: true},
+		{name: "copied empty", runID: replayRunID, parentID: otherRunID},
+		{name: "legacy empty", parentID: replayRunID},
+		{name: "legacy nonempty", records: []toolCallRecord{replayRecord(at, at, 1)}, parentID: replayRunID, valid: true},
+		{name: "copied legacy nonempty", records: []toolCallRecord{replayRecord(at, at, 1)}, parentID: otherRunID},
+		{name: "wrong metadata on nonempty", records: []toolCallRecord{replayRecord(at, at, 1)}, runID: otherRunID, parentID: replayRunID},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source := writeReplaySource(t, test.records, at, core.Evaluation{Status: core.StatusSucceeded})
+			updateReplayMetadata(t, source, "run_id", test.runID)
+			writeReplayJSON(t, filepath.Join(filepath.Dir(source), "run-result.json"), core.RunResult{
+				RunID: test.parentID, Tasks: []core.TaskResult{{TaskID: replayTaskID, Evaluation: core.Evaluation{Status: core.StatusSucceeded}}},
+			})
+			plan, err := LoadReplaySource(source, replayTask, replayBenchmark, replayRevisions)
+			if test.valid {
+				if err != nil || plan.SourceRunID != replayRunID || plan.Evaluation.Status != core.StatusSucceeded {
+					t.Fatalf("bound source = %+v, error = %v", plan, err)
+				}
+			} else if err == nil || plan.SourceRunID != "" || len(plan.Calls) != 0 {
+				t.Fatalf("unbound source accepted: %+v, error = %v", plan, err)
+			} else if len(test.records) == 0 && !strings.Contains(err.Error(), "source run binding") {
+				t.Fatalf("unclear empty source error: %v", err)
+			}
+		})
+	}
 }
 
 func TestLoadReplaySourceEmptyTraceHasNoFinalWait(t *testing.T) {

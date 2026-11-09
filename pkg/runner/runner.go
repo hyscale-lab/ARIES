@@ -472,6 +472,12 @@ func (r *Runner) runReplayTask(ctx context.Context, task core.Task) (core.TaskRe
 		return finish()
 	}
 	result.ToolLogPaths = append([]string(nil), endpoint.LogPaths...)
+	if err := plan.ValidateWorkdir(endpoint.Workdir); err != nil {
+		result.Replay.Status = failureStatus(err)
+		result.Replay.Error = err.Error()
+		allErrors = append(allErrors, fmt.Errorf("validate replay workdir: %w", err))
+		return finish()
+	}
 	// A failed Start can leave a live caller. Stop it before bridge revocation.
 	callerActive = true
 	if err := r.caller.Start(ctx, endpoint, sandbox.Connectivity(), r.runID, task.ID); err != nil {

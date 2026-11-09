@@ -232,6 +232,7 @@ func (f *fakeSandbox) Download(context.Context, string, string) error { return n
 type fakeBridge struct {
 	mu         sync.Mutex
 	log        *callLog
+	workdir    string
 	startErr   error
 	stopErrors []error
 	stops      int
@@ -247,7 +248,7 @@ func (f *fakeBridge) Start(ctx context.Context, _ Sandbox) (core.ToolEndpoint, e
 		f.log.addRollback("bridge.rollback", ctx)
 		return core.ToolEndpoint{}, f.startErr
 	}
-	return core.ToolEndpoint{Protocol: "fake", Address: "task", LogPaths: []string{"/runs/tool-calls.jsonl"}}, nil
+	return core.ToolEndpoint{Protocol: "fake", Address: "task", Workdir: f.workdir, LogPaths: []string{"/runs/tool-calls.jsonl"}}, nil
 }
 
 func (f *fakeBridge) Stop(ctx context.Context) error {
@@ -1406,6 +1407,35 @@ func newReplayRig(t *testing.T, evaluation core.Evaluation, calls ...replay.Call
 	}
 	rig.runner = runner
 	return rig, caller, plan
+}
+
+func TestReplayChecksResolvedExecWorkdirBeforeCallerStart(t *testing.T) {
+	const recordedWorkdir = "/app"
+	const sourceSequence = 1
+	for _, workdir := range []string{recordedWorkdir, "/other"} {
+		t.Run(workdir, func(t *testing.T) {
+			// The caller returns the same success for both workdirs.
+			rig, caller, plan := newReplayRig(t, core.Evaluation{Status: core.StatusSucceeded}, replay.Call{
+				Operation: "Exec", Sequence: sourceSequence, Script: "touch relative-file", Workdir: recordedWorkdir,
+			})
+			rig.bridge.workdir = workdir
+			result, err := rig.runner.Run(context.Background())
+			task := result.Tasks[0]
+			if workdir == recordedWorkdir {
+				if err != nil || task.Replay.Status != core.StatusSucceeded || !reflect.DeepEqual(caller.plan, plan) {
+					t.Fatalf("same workdir replay = %+v, caller plan = %+v, %v", task, caller.plan, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "workdir") || task.Replay.Status != core.StatusFailed || task.Cleanup.Status != core.StatusSucceeded {
+				t.Fatalf("changed workdir replay = %+v, %v", task, err)
+			}
+			want := []string{"benchmark.tasks", "replay.load", "sandbox.start", "benchmark.prepare", "bridge.start", "bridge.stop", "sandbox.stop"}
+			if got := rig.log.snapshot(); !reflect.DeepEqual(got, want) {
+				t.Fatalf("changed workdir lifecycle = %v, want %v", got, want)
+			}
+		})
+	}
 }
 
 func TestReplayEmptyTracePreservesSourceEvaluationWithoutVerifier(t *testing.T) {
