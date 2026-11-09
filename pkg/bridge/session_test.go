@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -89,6 +90,7 @@ func TestSessionFinalizesReplaySourceOnlyWithCompletionAndMatchingImage(t *testi
 		t.Run(test.name, func(t *testing.T) {
 			s, runtime, client := fixtureSession(t)
 			s.service.transport = "grpc"
+			s.service.options.CaptureReplay = true
 			s.exposed = true
 			s.service.options.BenchmarkType = "terminalbench2"
 			s.service.options.BenchmarkRevisions = map[string]string{"revision": benchmarkRevision}
@@ -171,6 +173,7 @@ func TestSessionOversizedExecAuditCannotClaimReplayReady(t *testing.T) {
 	const image = "task-image:tag"
 	s, _, _ := fixtureSession(t)
 	s.service.transport = "grpc"
+	s.service.options.CaptureReplay = true
 	s.service.options.BenchmarkType = "terminalbench2"
 	s.service.options.BenchmarkRevisions = map[string]string{"revision": "pinned-revision"}
 	s.exposed, s.released, s.collected = true, true, true
@@ -202,6 +205,7 @@ func TestSessionOversizedExecAuditCannotClaimReplayReady(t *testing.T) {
 func TestFinalMetadataFailureStillRemovesHelperAfterRelease(t *testing.T) {
 	s, runtime, client := fixtureSession(t)
 	s.service.transport = "grpc"
+	s.service.options.CaptureReplay = true
 	s.service.options.BenchmarkType = "terminalbench2"
 	s.service.options.BenchmarkRevisions = map[string]string{"revision": "pinned-revision"}
 	s.RecordSource("catalog-task", "task-image:tag")
@@ -376,5 +380,47 @@ func TestClientHelperStagingAndSessionCleanup(t *testing.T) {
 	_ = os.Symlink(source, link)
 	if err := stageClientHelper(link, s.helper); err == nil {
 		t.Fatal("symlink source accepted")
+	}
+}
+
+func TestOrdinarySessionKeepsOnlyBaselineRuntimeFields(t *testing.T) {
+	for _, transport := range []string{"grpc", "ssh"} {
+		t.Run(transport, func(t *testing.T) {
+			s, r, c := fixtureSession(t)
+			s.service.transport = transport
+			s.service.options.Launch.RuntimeBackend = "docker"
+			s.service.runtimeName = "bridge-runtime"
+			s.descriptor.RuntimeID = "sandbox-runtime"
+			s.service.options.BenchmarkType = "terminalbench2"
+			s.service.options.BenchmarkRevisions = map[string]string{"revision": "pin"}
+			s.exposed = true
+			s.RecordSource("logical-task", "image:tag")
+			s.RecordTask("image:tag")
+			c.completionErr = errors.New("completion must not be sent")
+			if err := s.record(); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.CompleteHarness(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Stop(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(filepath.Join(s.local, "runtime.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]any
+			if err := json.Unmarshal(data, &fields); err != nil {
+				t.Fatal(err)
+			}
+			want := map[string]any{"Backend": "docker", "RuntimeID": "runtime", "RuntimeName": "bridge-runtime", "SandboxID": "sandbox", "TargetRuntimeID": "sandbox-runtime"}
+			if !reflect.DeepEqual(fields, want) {
+				t.Fatalf("runtime fields=%v, want %v", fields, want)
+			}
+			if c.calls != 1 || r.downloads != 1 || !s.collected || !s.released {
+				t.Fatalf("baseline release/evidence lost: client=%+v runtime=%+v", c, r)
+			}
+		})
 	}
 }

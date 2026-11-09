@@ -34,7 +34,9 @@ type PreparedBenchmark struct {
 }
 
 type Wiring struct {
-	NewInfrastructure  func(config.Config, string, string, *logrus.Logger) (*RunInfrastructure, error)
+	recordForReplay    bool
+	BenchmarkRevisions func(config.Config) map[string]string
+	NewInfrastructure  func(config.Config, string, string, bool, *logrus.Logger) (*RunInfrastructure, error)
 	PrepareBridge      func(context.Context, config.Config) error
 	PrepareBackend     func(config.Config, string) (PreparedBackend, error)
 	ValidateComponents func(config.Config) error
@@ -51,6 +53,8 @@ type Wiring struct {
 }
 
 type Dependencies struct {
+	// RecordForReplay selects live source recording; replay execution enables its own capture.
+	RecordForReplay bool
 	ExecutablePath  string
 	PreflightClient httpDoer
 	PreflightSleep  contextSleep
@@ -59,6 +63,9 @@ type Dependencies struct {
 }
 
 func Setup(ctx context.Context, profilePath string, stdout io.Writer, dependencies Dependencies) error {
+	if dependencies.RecordForReplay {
+		return errors.New("--record-for-replay is not supported by setup")
+	}
 	cfg, err := config.Load(profilePath)
 	if err != nil {
 		return err
@@ -101,6 +108,24 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 	if err != nil {
 		return err
 	}
+	dependencies.Wiring.recordForReplay = dependencies.RecordForReplay
+	if dependencies.RecordForReplay {
+		if cfg.Replay != nil {
+			return errors.New("--record-for-replay is not supported with a replay profile")
+		}
+		if cfg.Bridge.Type != "hermes-grpc" {
+			return errors.New("recording requires bridge.type hermes-grpc")
+		}
+		if cfg.Execution.Loop != 0 {
+			return errors.New("recording does not support a loop")
+		}
+		if cfg.Execution.ArrivalsFile != "" {
+			return errors.New("recording does not support an arrival schedule")
+		}
+		if len(uniqueStrings(cfg.Benchmark.Tasks)) != len(cfg.Benchmark.Tasks) {
+			return errors.New("recording does not support repeated tasks")
+		}
+	}
 	if err := validateWiredComponents(cfg, dependencies.Wiring); err != nil {
 		return err
 	}
@@ -137,6 +162,9 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 	if err != nil {
 		preparationEntry.WithFields(logrus.Fields{"preparation_state": "not_prepared", "error_category": "preparation_failed"}).Error("profile preparation")
 		return err
+	}
+	if dependencies.RecordForReplay {
+		cfg.Benchmark.Tasks = []string{catalog.Tasks[0].ID}
 	}
 	preparationEntry.WithField("preparation_state", "prepared").Info("profile preparation")
 	if err := createRunOutputRoot(outputRoot); err != nil {
@@ -322,6 +350,24 @@ func ensurePrepared(ctx context.Context, cfg config.Config, outputRoot string, w
 	if err != nil {
 		return PreparedBenchmark{}, err
 	}
+	if wiring.recordForReplay {
+		if len(catalog.Tasks) != 1 {
+			return PreparedBenchmark{}, errors.New("recording requires exactly one resolved selected task")
+		}
+		task := catalog.Tasks[0]
+		if wiring.BenchmarkRevisions == nil || task.ID == "" || task.Environment.Image == "" {
+			return PreparedBenchmark{}, errors.New("recording requires source provenance")
+		}
+		revisions := wiring.BenchmarkRevisions(cfg)
+		if len(revisions) == 0 {
+			return PreparedBenchmark{}, errors.New("recording requires source provenance")
+		}
+		for _, revision := range revisions {
+			if revision == "" {
+				return PreparedBenchmark{}, errors.New("recording requires source provenance")
+			}
+		}
+	}
 	images := make([]string, 0, len(catalog.Tasks)+1)
 	if cfg.Replay == nil {
 		harnessImage, err := cfg.Versions.HarnessImage(cfg.Harness.Type)
@@ -397,7 +443,7 @@ func buildTaskExperiment(cfg config.Config, model core.ModelConfig, effectiveGPU
 	if err != nil {
 		return nil, errors.Join(err, sandbox.Resources.Close(), closeOccurrenceClients(sandbox.Close, harness.Close))
 	}
-	if provenance, ok := bridge.(interface{ RecordSource(string, string) }); ok {
+	if provenance, ok := bridge.(interface{ RecordSource(string, string) }); ok && wiring.recordForReplay {
 		for _, selected := range catalog.Tasks {
 			if selected.ID == logicalID {
 				provenance.RecordSource(logicalID, selected.Environment.Image)
@@ -406,7 +452,7 @@ func buildTaskExperiment(cfg config.Config, model core.ModelConfig, effectiveGPU
 		}
 	}
 	benchmarkRunner, err := runner.New(benchmark, harness.Harness, sandbox.Sandbox, bridge, runner.Options{
-		Name: cfg.Name, RunID: runID, OutputDir: outputRoot, Model: model, Logger: logger,
+		Name: cfg.Name, RunID: runID, OutputDir: outputRoot, Model: model, Logger: logger, RecordForReplay: wiring.recordForReplay,
 		RuntimeOverrides: runner.RuntimeOverrides{
 			HarnessResources:      runner.ResourceOverrides{CPU: cfg.Overrides.HarnessResources.CPU, MemoryMB: cfg.Overrides.HarnessResources.MemoryMB},
 			AgentSandboxResources: runner.ResourceOverrides{CPU: cfg.Overrides.AgentSandboxResources.CPU, MemoryMB: cfg.Overrides.AgentSandboxResources.MemoryMB},

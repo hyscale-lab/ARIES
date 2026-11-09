@@ -32,6 +32,7 @@ type Options struct {
 	BenchmarkRevisions           map[string]string
 	Placement                    core.RuntimePlacement
 	RetainRawLog                 bool
+	CaptureReplay                bool
 }
 
 // ClientConfig is the optional native client helper supplied by composition.
@@ -146,6 +147,7 @@ func (s *Service) Start(ctx context.Context) error {
 	config.RunID = s.options.RunID
 	config.BridgeType = s.options.BridgeType
 	config.RetainRawLog = s.options.RetainRawLog
+	config.CaptureReplay = s.options.CaptureReplay
 	data, err := json.Marshal(config)
 	if err != nil {
 		return err

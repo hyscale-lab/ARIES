@@ -86,7 +86,10 @@ func TestReplayRunPreparesTaskWithoutLiveModelOrHarness(t *testing.T) {
 			return nil
 		},
 		BuildHarnessImage: func(context.Context, config.Config) error { t.Fatal("replay built harness image"); return nil },
-		NewInfrastructure: func(config.Config, string, string, *logrus.Logger) (*RunInfrastructure, error) {
+		NewInfrastructure: func(_ config.Config, _, _ string, captureReplay bool, _ *logrus.Logger) (*RunInfrastructure, error) {
+			if !captureReplay {
+				t.Fatal("replay did not enable evidence capture")
+			}
 			events = append(events, "infrastructure")
 			return nil, stop
 		},
@@ -501,7 +504,7 @@ func TestTaskExperimentBindsCatalogIdentityNotOccurrenceIdentity(t *testing.T) {
 	const occurrenceID = "task-logical-001"
 	const image = "task-image:tag"
 	bridge := &sourceStubBridge{}
-	wiring := Wiring{
+	wiring := Wiring{recordForReplay: true,
 		NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
 			return HarnessInstance{Harness: &stubHarness{}}, nil
 		},
@@ -609,5 +612,138 @@ func TestBridgePreparationFailurePrecedesBenchmarkEffects(t *testing.T) {
 	}
 	if _, err := ensurePrepared(context.Background(), config.Config{}, t.TempDir(), wiring, nil); !errors.Is(err, sentinel) || touched {
 		t.Fatalf("preparation order/error lost: %v touched=%v", err, touched)
+	}
+}
+
+func TestRecordingRejectsUnsupportedRunBeforePreparation(t *testing.T) {
+	for _, test := range []struct {
+		name, before, after, want string
+		replay, setup             bool
+	}{
+		{name: "ssh", before: `"bridge":{"type":"openclaw-ssh"}`, after: `"bridge":{"type":"hermes-ssh"}`, want: "hermes-grpc"},
+		{name: "loop", before: `"tasks":["a"]`, after: `"tasks":["a"]`, want: "loop"},
+		{name: "repeated selector", before: `"tasks":["a"]`, after: `"tasks":["a","a"]`, want: "repeat"},
+		{name: "arrivals", want: "arrival"},
+		{name: "replay", replay: true, want: "replay profile"},
+		{name: "setup", setup: true, want: "setup"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := writeCommandProfile(t, filepath.Join(t.TempDir(), "runs"))
+			if test.replay {
+				path = writeReplayCommandProfile(t, filepath.Join(t.TempDir(), "runs"))
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			profile := strings.Replace(string(data), `"harness":{"type":"openclaw"}`, `"harness":{"type":"hermes"}`, 1)
+			if test.before != "" {
+				profile = strings.Replace(profile, test.before, test.after, 1)
+			}
+			if test.name != "ssh" {
+				profile = strings.Replace(profile, `"bridge":{"type":"openclaw-ssh"}`, `"bridge":{"type":"hermes-grpc"}`, 1)
+			}
+			if test.name == "loop" {
+				profile = strings.Replace(profile, `"output_dir":`, `"execution":{"loop_duration":"1s"},"output_dir":`, 1)
+			}
+			if test.name == "arrivals" {
+				profile = strings.Replace(profile, `"output_dir":`, `"execution":{"arrivals_file":"schedule.csv","arrival_rate_per_min":1},"output_dir":`, 1)
+			}
+			if err := os.WriteFile(path, []byte(profile), 0600); err != nil {
+				t.Fatal(err)
+			}
+			deps := Dependencies{RecordForReplay: true, Wiring: Wiring{ValidateComponents: func(config.Config) error { return nil }, PrepareBackend: func(config.Config, string) (PreparedBackend, error) {
+				t.Fatal("recording rejection reached backend")
+				return PreparedBackend{}, nil
+			}}}
+			command := Run
+			if test.setup {
+				command = Setup
+			}
+			err = command(context.Background(), path, io.Discard, deps)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestRecordingResolvesCatalogAndRequiredProvenanceBeforeExecution(t *testing.T) {
+	const resolvedID = "resolved-task"
+	const image = "task:tag"
+	task := core.Task{ID: resolvedID, Environment: core.Environment{Image: image}}
+	for _, test := range []struct {
+		name      string
+		tasks     []core.Task
+		revisions map[string]string
+		want      string
+		recording bool
+	}{
+		{name: "one resolved task", tasks: []core.Task{task}, revisions: map[string]string{"revision": "pin"}, recording: true},
+		{name: "selector expands", tasks: []core.Task{task, {ID: "other", Environment: core.Environment{Image: image}}}, revisions: map[string]string{"revision": "pin"}, want: "exactly one", recording: true},
+		{name: "empty selection", revisions: map[string]string{"revision": "pin"}, want: "exactly one", recording: true},
+		{name: "no provenance", tasks: []core.Task{task}, want: "provenance", recording: true},
+		{name: "empty revision", tasks: []core.Task{task}, revisions: map[string]string{"revision": ""}, want: "provenance", recording: true},
+		{name: "no image", tasks: []core.Task{{ID: resolvedID}}, revisions: map[string]string{"revision": "pin"}, want: "provenance", recording: true},
+		{name: "ordinary run unrestricted", tasks: []core.Task{task, {ID: "other"}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv(deepSeekAPIKey, "synthetic-key")
+			path := writeCommandProfile(t, filepath.Join(t.TempDir(), "runs"))
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			profile := strings.Replace(string(data), `"harness":{"type":"openclaw"}`, `"harness":{"type":"hermes"}`, 1)
+			profile = strings.Replace(profile, `"bridge":{"type":"openclaw-ssh"}`, `"bridge":{"type":"hermes-grpc"}`, 1)
+			if err := os.WriteFile(path, []byte(profile), 0600); err != nil {
+				t.Fatal(err)
+			}
+			stopped := errors.New("occurrence reached")
+			var selected string
+			wiring := Wiring{
+				ValidateComponents: func(config.Config) error { return nil },
+				PrepareBackend: func(cfg config.Config, _ string) (PreparedBackend, error) {
+					return PreparedBackend{Model: cfg.CoreModel()}, nil
+				},
+				SetupBenchmark:     func(context.Context, config.Config) error { return nil },
+				BenchmarkRevisions: func(config.Config) map[string]string { return test.revisions },
+				LoadBenchmark: func(_ context.Context, _ config.Config, _ string, selectors []string, _ func(string) ([]byte, bool)) (PreparedBenchmark, error) {
+					if !reflect.DeepEqual(selectors, []string{"a"}) {
+						t.Fatalf("selectors=%v", selectors)
+					}
+					return PreparedBenchmark{Tasks: test.tasks, NewOccurrence: func(logicalID, _ string) (runner.Benchmark, error) { selected = logicalID; return nil, stopped }}, nil
+				},
+				PullImages: func(context.Context, config.Config, []string) error {
+					if test.want != "" {
+						t.Fatal("invalid recording pulled images")
+					}
+					return nil
+				},
+				BuildHarnessImage: func(context.Context, config.Config) error { return nil },
+				NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
+					return HarnessInstance{}, nil
+				},
+				NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
+					return SandboxInstance{}, nil
+				},
+				NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) { return nil, nil },
+			}
+			doer := &preflightDoer{t: t, replies: []preflightReply{{status: 200, body: `{"data":[{"id":"deepseek-v4-flash"}]}`}}}
+			err = runCommandForTest(context.Background(), path, io.Discard, Dependencies{RecordForReplay: test.recording, Wiring: wiring, PreflightClient: doer})
+			if test.want != "" {
+				if err == nil || !strings.Contains(err.Error(), test.want) {
+					t.Fatalf("error=%v, want %q", err, test.want)
+				}
+				return
+			}
+			wantID := "a"
+			if test.recording {
+				wantID = resolvedID
+			}
+			if !errors.Is(err, stopped) || selected != wantID {
+				t.Fatalf("error=%v, selected=%q, want=%q", err, selected, wantID)
+			}
+		})
 	}
 }

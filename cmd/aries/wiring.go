@@ -28,6 +28,7 @@ import (
 func commandWiring() app.Wiring {
 	return app.Wiring{
 		PrepareBackend:     prepareBackend,
+		BenchmarkRevisions: bridgewiring.BenchmarkRevisions,
 		PrepareBridge:      prepareBridge,
 		ValidateComponents: validateComponents,
 		SetupBenchmark:     setupBenchmark,
@@ -223,7 +224,7 @@ func newSandbox(cfg config.Config, outputRoot, runID, occurrenceID string, gpuIn
 	}
 }
 
-func newSharedBridge(cfg config.Config, runID, outputRoot string, placement core.RuntimePlacement, logger *logrus.Logger) (app.SharedBridge, error) {
+func newSharedBridge(cfg config.Config, runID, outputRoot string, placement core.RuntimePlacement, captureReplay bool, logger *logrus.Logger) (app.SharedBridge, error) {
 	if err := validateDeployment(&cfg); err != nil {
 		return nil, err
 	}
@@ -233,7 +234,7 @@ func newSharedBridge(cfg config.Config, runID, outputRoot string, placement core
 		return nil, fmt.Errorf("unsupported bridge type %q", cfg.Bridge.Type)
 	}
 	if cfg.Bridge.Deployment.Backend == "apptainer" {
-		return newApptainerBridge(cfg, runID, outputRoot, placement)
+		return newApptainerBridge(cfg, runID, outputRoot, placement, captureReplay)
 	}
 	runtime, err := newDeployment(cfg.Bridge.Deployment, logger)
 	if err != nil {
@@ -262,13 +263,13 @@ func newSharedBridge(cfg config.Config, runID, outputRoot string, placement core
 	default:
 		return nil, errors.Join(fmt.Errorf("unsupported bridge execution backend %q", cfg.Sandbox.Deployment.Backend), runtime.Close())
 	}
-	return bridgewiring.NewService(cfg, runID, filepath.Join(outputRoot, "infrastructure", "bridge"), placement, runtime, launch)
+	return bridgewiring.NewService(cfg, runID, filepath.Join(outputRoot, "infrastructure", "bridge"), placement, captureReplay, runtime, launch)
 }
 
 // newApptainerBridge runs the bridge as a process in the run's namespace: from
 // inside an instance it could not execute in the sandboxes. Its paths are host
 // paths, and its ports are on the run's private loopback.
-func newApptainerBridge(cfg config.Config, runID, outputRoot string, placement core.RuntimePlacement) (app.SharedBridge, error) {
+func newApptainerBridge(cfg config.Config, runID, outputRoot string, placement core.RuntimePlacement, captureReplay bool) (app.SharedBridge, error) {
 	runtime, workdir, endpoint, err := deploymentwiring.ApptainerBridge(cfg.Bridge.Deployment, runID)
 	if err != nil {
 		return nil, fmt.Errorf("construct bridge deployment: %w", err)
@@ -281,7 +282,7 @@ func newApptainerBridge(cfg config.Config, runID, outputRoot string, placement c
 	launch.Config.ControlAddress = "127.0.0.1:" + strconv.Itoa(launch.Request.ServicePort)
 	launch.Config.Listen.BindHost = "127.0.0.1"
 	launch.Config.Backend, launch.Config.BackendEndpoint = "apptainer", endpoint
-	return bridgewiring.NewService(cfg, runID, filepath.Join(outputRoot, "infrastructure", "bridge"), placement, runtime, launch)
+	return bridgewiring.NewService(cfg, runID, filepath.Join(outputRoot, "infrastructure", "bridge"), placement, captureReplay, runtime, launch)
 }
 
 func prepareBridge(ctx context.Context, cfg config.Config) error {
@@ -453,7 +454,7 @@ func buildHarnessImage(ctx context.Context, cfg config.Config) error {
 	}
 }
 
-func newInfrastructure(cfg config.Config, runID, outputRoot string, logger *logrus.Logger) (*app.RunInfrastructure, error) {
+func newInfrastructure(cfg config.Config, runID, outputRoot string, captureReplay bool, logger *logrus.Logger) (*app.RunInfrastructure, error) {
 	if err := validateDeployment(&cfg); err != nil {
 		return nil, err
 	}
@@ -474,7 +475,7 @@ func newInfrastructure(cfg config.Config, runID, outputRoot string, logger *logr
 				return newSandbox(cfg, root, run, occurrence, gpus, log, environment)
 			},
 			NewBridge: func(placement core.RuntimePlacement) (app.SharedBridge, error) {
-				return newSharedBridge(cfg, runID, outputRoot, placement, logger)
+				return newSharedBridge(cfg, runID, outputRoot, placement, captureReplay, logger)
 			},
 		}, nil
 	case "kubernetes":
@@ -493,7 +494,7 @@ func newInfrastructure(cfg config.Config, runID, outputRoot string, logger *logr
 				return newSandbox(cfg, root, run, occurrence, gpus, log, environment)
 			},
 			NewBridge: func(placement core.RuntimePlacement) (app.SharedBridge, error) {
-				return newSharedBridge(cfg, runID, outputRoot, placement, logger)
+				return newSharedBridge(cfg, runID, outputRoot, placement, captureReplay, logger)
 			},
 		}, nil
 	case "apptainer":
@@ -512,7 +513,7 @@ func newInfrastructure(cfg config.Config, runID, outputRoot string, logger *logr
 				return newSandbox(cfg, root, run, occurrence, gpus, log, environment)
 			},
 			NewBridge: func(placement core.RuntimePlacement) (app.SharedBridge, error) {
-				return newSharedBridge(cfg, runID, outputRoot, placement, logger)
+				return newSharedBridge(cfg, runID, outputRoot, placement, captureReplay, logger)
 			},
 		}, nil
 	default:

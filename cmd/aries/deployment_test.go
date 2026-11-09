@@ -140,7 +140,7 @@ func TestKubernetesBackendSelectsItsProviderForEveryComponent(t *testing.T) {
 	if err := pullImages(context.Background(), cfg, []string{"example.test/task:1"}); err != nil {
 		t.Fatal(err)
 	}
-	infrastructure, err := newInfrastructure(cfg, "run-1", t.TempDir(), nil)
+	infrastructure, err := newInfrastructure(cfg, "run-1", t.TempDir(), false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

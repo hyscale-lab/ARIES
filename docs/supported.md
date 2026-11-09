@@ -50,8 +50,10 @@ guides above.
   logical task. It does not support SSH, repeated tasks, arrivals, or Toolathlon.
   It needs no harness, model key, judge, or fresh verifier. Its source grade is
   historical evidence: matching bridge responses do not prove matching final
-  sandbox state. Hermes gRPC retains bounded `Exec` output by default; an
-  oversized response fails its live task before evaluation. See the
+  sandbox state. Live source recording requires the CLI flag `--record-for-replay`,
+  Hermes gRPC, source provenance, and exactly one resolved task. An oversized
+  captured response fails its recording task before evaluation. Replay execution
+  captures comparison evidence without that flag. See the
   [replay limits](configuration.md#sandbox-call-replay).
 
 - Each bridge type supports its corresponding harness: OpenClaw uses

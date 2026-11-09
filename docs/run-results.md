@@ -220,15 +220,17 @@ backslashes, and newlines retain required JSON escaping. Printable stdin stays
 inline; binary or control-bearing stdin is replaced by a concise
 `binary-omitted` marker and exact byte count, with lossless bytes retained only
 in the raw log. Structured lifecycle logs and tool-call records omit
-environment values. Every `hermes-grpc` task records bounded `Exec` output
-in its private `bridge/tool-calls.jsonl` by default. SSH audit records do not
-retain response text. See
+environment values. With `--record-for-replay`, a live `hermes-grpc` task records
+bounded `Exec` output in its private `bridge/tool-calls.jsonl`. Replay execution
+retains this evidence automatically. Ordinary live runs omit replay-only response
+fields; they still keep baseline command, input, file-window, status, and byte-count
+audits. SSH audit records do not retain response text. See
 [replay configuration](configuration.md#sandbox-call-replay) for call 15 and
 binary-output inspection. This text can contain task-supplied or private data; do not publish
 the audit or `aries.log` without review. If encoded output exceeds the
-128 MiB replay line bound, the live task fails after confirmed bridge stop,
+128 MiB replay line bound, the recording task fails after confirmed bridge stop,
 skips evaluation, and is not replay-ready. An aggregate audit failure keeps
-isolation unconfirmed and evaluation blocked. Both transports use the default rules. gRPC records also have `sha256`, `truncated`, and the read window fields
+isolation unconfirmed and evaluation blocked for all live runs. gRPC records also have `sha256`, `truncated`, and the read window fields
 `max_bytes`, `first_line`, `max_lines`, `max_line_bytes`, and `total_lines`, and
 keep written file content as `stdin`; see
 [gRPC evidence](implementation/grpc-bridge.md#evidence). The `operation_class`
@@ -249,6 +251,12 @@ and logs even though the service container is shared. Releasing one sandbox
 closes its bridge access and finalizes its evidence without stopping the service
 or other sessions. `bridge/runtime.json` records that sandbox's binding;
 `infrastructure/bridge/runtime.json` records the shared service runtime.
+For ordinary live runs, the per-task runtime file has only `Backend`, `RuntimeID`,
+`RuntimeName`, `SandboxID`, and `TargetRuntimeID`. It omits replay schema,
+provenance, completion, digest, and readiness fields, rather than writing empty
+values. Recording adds those fields to the same file. A `replay_ready` marker
+confirms metadata and audit finalization, not full call or timing compatibility;
+the replay loader can still reject the source.
 
 Each OpenClaw task directory contains the exact placeholder-only rendered
 `harness/openclaw.json`, OpenClaw logs and telemetry when available, replayable

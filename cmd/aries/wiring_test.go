@@ -64,16 +64,28 @@ func TestDispatchAcceptsOnlyExactCommandGrammar(t *testing.T) {
 	runErr := errors.New("run")
 	setupErr := errors.New("setup")
 	for _, tc := range []struct {
-		name        string
-		args        []string
-		wantRun     int
-		wantSetup   int
-		wantErr     error
-		wantProfile string
+		name          string
+		args          []string
+		wantRun       int
+		wantSetup     int
+		wantErr       error
+		wantProfile   string
+		wantRecording bool
 	}{
 		{name: "run", args: []string{"profile.json"}, wantRun: 1, wantErr: runErr, wantProfile: "profile.json"},
 		{name: "setup", args: []string{"setup", "profile.json"}, wantSetup: 1, wantErr: setupErr, wantProfile: "profile.json"},
+		{name: "record after profile", args: []string{"profile.json", "--record-for-replay"}, wantRun: 1, wantErr: runErr, wantProfile: "profile.json", wantRecording: true},
+		{name: "record before profile", args: []string{"--record-for-replay", "profile.json"}, wantRun: 1, wantErr: runErr, wantProfile: "profile.json", wantRecording: true},
+		{name: "record after profile named setup", args: []string{"setup", "--record-for-replay"}, wantRun: 1, wantErr: runErr, wantProfile: "setup", wantRecording: true},
+		{name: "record profile named setup", args: []string{"--record-for-replay", "setup"}, wantRun: 1, wantErr: runErr, wantProfile: "setup", wantRecording: true},
 		{name: "empty"},
+		{name: "flag only", args: []string{"--record-for-replay"}},
+		{name: "duplicate flag", args: []string{"--record-for-replay", "profile.json", "--record-for-replay"}},
+		{name: "unknown flag", args: []string{"--unknown"}},
+		{name: "unknown flag with profile", args: []string{"profile.json", "--unknown"}},
+		{name: "setup recording", args: []string{"setup", "profile.json", "--record-for-replay"}},
+		{name: "recording setup", args: []string{"--record-for-replay", "setup", "profile.json"}},
+		{name: "recording extra profile", args: []string{"profile.json", "other.json", "--record-for-replay"}},
 		{name: "profile named setup", args: []string{"setup"}, wantRun: 1, wantErr: runErr, wantProfile: "setup"},
 		{name: "unknown two args", args: []string{"other", "profile.json"}},
 		{name: "extra arg", args: []string{"setup", "profile.json", "extra"}},
@@ -81,9 +93,12 @@ func TestDispatchAcceptsOnlyExactCommandGrammar(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			runCalls, setupCalls := 0, 0
 			var profile string
-			run := func(context.Context, string, io.Writer, app.Dependencies) error {
+			run := func(_ context.Context, got string, _ io.Writer, deps app.Dependencies) error {
 				runCalls++
-				profile = tc.args[0]
+				profile = got
+				if deps.RecordForReplay != tc.wantRecording {
+					t.Fatalf("recording=%v, want %v", deps.RecordForReplay, tc.wantRecording)
+				}
 				return runErr
 			}
 			setup := func(_ context.Context, got string, _ io.Writer, _ app.Dependencies) error {
@@ -95,7 +110,7 @@ func TestDispatchAcceptsOnlyExactCommandGrammar(t *testing.T) {
 			if runCalls != tc.wantRun || setupCalls != tc.wantSetup || (tc.wantErr != nil && !errors.Is(err, tc.wantErr)) {
 				t.Fatalf("run=%d setup=%d err=%v", runCalls, setupCalls, err)
 			}
-			if tc.wantErr == nil && (err == nil || err.Error() != "usage: aries PROFILE.json | aries setup PROFILE.json") {
+			if tc.wantErr == nil && (err == nil || err.Error() != "usage: aries [--record-for-replay] PROFILE.json | aries setup PROFILE.json") {
 				t.Fatalf("grammar err=%v", err)
 			}
 			if tc.wantProfile != "" && profile != tc.wantProfile {
@@ -228,7 +243,7 @@ func TestNewSharedBridgeAcceptsTheHermesGRPCBridge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bridge, err := newSharedBridge(cfg, "run-1", t.TempDir(), core.RuntimePlacement{}, nil)
+	bridge, err := newSharedBridge(cfg, "run-1", t.TempDir(), core.RuntimePlacement{}, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

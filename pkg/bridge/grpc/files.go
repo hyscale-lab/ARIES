@@ -64,7 +64,7 @@ func (svc *service) beginFile(ctx context.Context, method, kind, filePath, inval
 	session := svc.session
 	toolCallID, validID := incomingToolCallID(ctx)
 	sourceSequence, validSequence := incomingReplaySourceSequence(ctx)
-	call := &fileCall{session: session, outcome: newResponseOutcome(method), kind: kind, path: filePath, started: time.Now(), window: window, toolCallID: toolCallID, sourceSequence: sourceSequence}
+	call := &fileCall{session: session, outcome: session.responseOutcome(method), kind: kind, path: filePath, started: time.Now(), window: window, toolCallID: toolCallID, sourceSequence: sourceSequence}
 	reject := func(code codes.Code, message string) (*fileCall, error) {
 		call.recordFile(nil, false, 0, "rejected", message, status.Error(code, message))
 		return nil, status.Error(code, message)
@@ -473,12 +473,12 @@ func (call *fileCall) recordFile(sink *contentSink, truncated bool, duration int
 			record.StdoutBytes, raw.ReadBytes = sink.count, sink.count
 		}
 	}
-	if call.responseSendFailed {
+	if session.captureReplay && call.responseSendFailed {
 		record.ReplayError = "response-send-failed"
-	} else if kind == kindFileWrite && statusText == "failed" {
+	} else if session.captureReplay && kind == kindFileWrite && statusText == "failed" {
 		record.ReplayError = "write-size-omitted"
 	}
-	if kind == kindFileWrite && record.StdinEncoding != "utf-8" {
+	if session.captureReplay && kind == kindFileWrite && record.StdinEncoding != "utf-8" {
 		record.ReplayError = "write-content-omitted"
 	}
 	record.setOutcome(call.outcome, err)

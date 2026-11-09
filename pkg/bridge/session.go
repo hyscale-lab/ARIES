@@ -63,7 +63,7 @@ var _ runner.ToolBridge = (*Session)(nil)
 func (s *Session) RecordSource(logicalID, image string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.started {
+	if s.started || !s.service.options.CaptureReplay {
 		return
 	}
 	s.metadata.TaskID, s.metadata.Image = logicalID, image
@@ -72,7 +72,7 @@ func (s *Session) RecordSource(logicalID, image string) {
 func (s *Session) RecordTask(image string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.started {
+	if s.started || !s.service.options.CaptureReplay {
 		return
 	}
 	s.occurrenceImage, s.taskBound = image, image != ""
@@ -86,7 +86,11 @@ func (s *Session) record() error {
 	s.metadata.SchemaVersion = sourceSchemaVersion
 	s.metadata.BenchmarkType = s.service.options.BenchmarkType
 	s.metadata.BenchmarkRevisions = maps.Clone(s.service.options.BenchmarkRevisions)
-	b, err := json.MarshalIndent(s.metadata, "", "  ")
+	var metadata any = s.metadata
+	if !s.service.options.CaptureReplay {
+		metadata = struct{ Backend, RuntimeID, RuntimeName, SandboxID, TargetRuntimeID string }{s.metadata.Backend, s.metadata.RuntimeID, s.metadata.RuntimeName, s.metadata.SandboxID, s.metadata.TargetRuntimeID}
+	}
+	b, err := json.MarshalIndent(metadata, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -107,7 +111,7 @@ func (s *Session) record() error {
 	return os.Rename(file.Name(), filepath.Join(s.local, "runtime.json"))
 }
 func (s *Session) CompleteHarness(ctx context.Context) error {
-	if s.service.transport != "grpc" {
+	if !s.service.options.CaptureReplay || s.service.transport != "grpc" {
 		return nil
 	}
 	s.mu.Lock()
@@ -280,7 +284,7 @@ func (s *Session) Stop(ctx context.Context) error {
 		}
 		s.collected = true
 	}
-	if s.exposed && s.collected && !s.metadataFinalized {
+	if s.service.options.CaptureReplay && s.exposed && s.collected && !s.metadataFinalized {
 		var manifest *v1.Artifact
 		for _, entry := range s.manifest {
 			if entry.Name == "tool-calls.jsonl" {

@@ -33,6 +33,35 @@ profiles: benchmark roots, output paths, and arrival trace paths use the working
 directory. Profiles reject unknown fields and trailing JSON; there is no merge
 or inheritance layer. Never put credential values in profile JSON.
 
+## CLI recording intent
+
+An ordinary run keeps the baseline audit and does not add replay response evidence:
+
+```sh
+./bin/aries PROFILE.json
+```
+
+To record a live source for later replay, use either order:
+
+```sh
+./bin/aries PROFILE.json --record-for-replay
+./bin/aries --record-for-replay PROFILE.json
+```
+
+This flag changes no profile JSON. It requires `hermes-grpc`, source provenance
+from the selected task and pinned benchmark revisions, and exactly one resolved
+selected task. ARIES resolves selectors before sandbox or model-runtime execution;
+a selector that expands to several tasks is rejected. Loops, repeated tasks, and
+arrival schedules are not supported while recording. These restrictions do not
+apply to ordinary live runs. Recording can still produce an incompatible trace;
+replay loading checks call inputs, outcomes, and timing before sandbox creation.
+
+The flag is not valid with `aries setup PROFILE.json` or a replay profile.
+Duplicate flags, unknown flags, and extra positional arguments are rejected.
+A single profile named `setup` still runs as a profile. `output_dir` and the run
+directory layout do not change. There is no separate output flag or new mandatory evidence file.
+Replay execution automatically retains comparison evidence without this flag.
+
 ## Resource and timeout overrides
 
 The five-task profile additionally references
@@ -377,8 +406,9 @@ does not stop later calls.
 The byte count, gRPC code, `Exec` exit code, and successful `WriteFile` byte
 count remain strict. Equal responses do not prove equal final sandbox state. See [replay results](run-results.md#sandbox-call-replay-results).
 
-Every live and replay `hermes-grpc` task retains bounded `Exec` output in its
-private `bridge/tool-calls.jsonl` without a profile option. This does not enable
+A live `hermes-grpc` task with `--record-for-replay`, and every replay task,
+retains bounded `Exec` output in its private `bridge/tool-calls.jsonl`.
+Ordinary live audits omit the replay-only response fields and completion metadata. This does not enable
 `bridge.retain_raw_log` or capture request bodies. The audit includes exact UTF-8
 `response_stdout` and `response_stderr`; non-UTF-8 output uses lossless
 `response_stdout_base64` or `response_stderr_base64`. Empty output has
@@ -396,7 +426,7 @@ Output can contain task-supplied or private data. Keep both audit files private.
 Each reply stays within the existing output bound. If JSON encoding exceeds the
 128 MiB replay audit line bound, the record has
 `replay_error: "response-debug-too-large"`. After confirmed bridge revocation,
-the live task fails without evaluation, and its source is not replay-ready.
+the recording task fails without evaluation, and its source is not replay-ready.
 If the combined 256 MiB audit limit fails, bridge stop is unconfirmed and
 evaluation remains blocked. Independent tasks continue.
 The original response hash, byte count, and gRPC code do not
