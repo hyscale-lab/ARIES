@@ -2,6 +2,9 @@
 package replay
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/core"
@@ -15,6 +18,7 @@ type Call struct {
 	ToolCallID     string        `json:"tool_call_id,omitempty"`
 	Script         string        `json:"script,omitempty"`
 	Login          bool          `json:"login,omitempty"`
+	Workdir        string        `json:"workdir,omitempty"`
 	Path           string        `json:"path,omitempty"`
 	Body           []byte        `json:"body,omitempty"`
 	MaxBytes       int64         `json:"max_bytes,omitempty"`
@@ -37,4 +41,27 @@ type Plan struct {
 	SourceRunID  string          `json:"source_run_id"`
 	SourceTaskID string          `json:"source_task_id"`
 	Evaluation   core.Evaluation `json:"evaluation"`
+}
+
+// MaxPlanBytes bounds the managed caller's encoded plan.
+// A plan expands retained request bytes through JSON base64 encoding.
+const MaxPlanBytes = 512 << 20
+
+// EncodePlan uses the managed caller's encoding and rejects data above the bound.
+func EncodePlan(plan Plan, maxBytes int) ([]byte, error) {
+	data, err := json.Marshal(plan)
+	if err != nil || len(data) > maxBytes {
+		return nil, errors.Join(err, errors.New("replay caller plan is too large or invalid"))
+	}
+	return data, nil
+}
+
+// ValidateWorkdir checks Exec calls against the selected or resolved workdir.
+func (plan Plan) ValidateWorkdir(workdir string) error {
+	for _, call := range plan.Calls {
+		if call.Operation == "Exec" && call.Workdir != workdir {
+			return fmt.Errorf("replay call %d Exec workdir %q differs from replay workdir %q", call.Sequence, call.Workdir, workdir)
+		}
+	}
+	return nil
 }

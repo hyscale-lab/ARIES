@@ -31,6 +31,7 @@ const sourceSchemaVersion = 1
 
 type sourceMetadata struct {
 	Backend, RuntimeID, RuntimeName, SandboxID, TargetRuntimeID string
+	RunID                                                       string            `json:"run_id"`
 	SchemaVersion                                               int               `json:"schema_version"`
 	BenchmarkType                                               string            `json:"benchmark_type,omitempty"`
 	TaskID                                                      string            `json:"task_id,omitempty"`
@@ -83,6 +84,7 @@ func (s *Session) record() error {
 	s.metadata.RuntimeName = s.service.runtimeName
 	s.metadata.SandboxID = s.descriptor.SandboxID
 	s.metadata.TargetRuntimeID = s.descriptor.RuntimeID
+	s.metadata.RunID = s.descriptor.RunID
 	s.metadata.SchemaVersion = sourceSchemaVersion
 	s.metadata.BenchmarkType = s.service.options.BenchmarkType
 	s.metadata.BenchmarkRevisions = maps.Clone(s.service.options.BenchmarkRevisions)

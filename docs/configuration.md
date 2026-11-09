@@ -386,6 +386,15 @@ Failed writes can lack the declared size. Any such call rejects the whole
 source. The optional raw log does not restore omitted input for replay, and
 it is not a first-version replay source artifact.
 
+Recording metadata stores `run_id`, which must match the parent result even
+for an empty call log. Earlier nonempty sources without this field remain
+valid only when every call proves that run binding. An earlier empty source
+without a verifiable run binding is rejected before sandbox creation.
+The loader also checks the actual encoded plan against the caller's 512 MiB
+bound before sandbox creation. Each recorded `Exec` workdir must match the
+selected workdir, when explicit, and the resolved bridge endpoint workdir
+before the caller starts. Replay keeps the recorded command arguments.
+
 `replay.deployment` places a separate caller runtime in the pinned bridge
 image. For Docker, the caller, bridge, and sandbox must use the same local
 socket and private run network. For Kubernetes, all three must use the same

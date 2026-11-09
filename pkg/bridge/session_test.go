@@ -94,7 +94,7 @@ func TestSessionFinalizesReplaySourceOnlyWithCompletionAndMatchingImage(t *testi
 			s.exposed = true
 			s.service.options.BenchmarkType = "terminalbench2"
 			s.service.options.BenchmarkRevisions = map[string]string{"revision": benchmarkRevision}
-			s.descriptor.TaskID = "catalog-task-001"
+			s.descriptor.RunID, s.descriptor.TaskID = "source-run", "catalog-task-001"
 			s.descriptor.RuntimeID = "target-runtime"
 			s.service.runtimeName = "bridge-runtime-name"
 			s.service.options.Launch.RuntimeBackend = "docker"
@@ -126,6 +126,7 @@ func TestSessionFinalizesReplaySourceOnlyWithCompletionAndMatchingImage(t *testi
 				t.Fatal(err)
 			}
 			var metadata struct {
+				RunID              string            `json:"run_id"`
 				SchemaVersion      int               `json:"schema_version"`
 				BenchmarkType      string            `json:"benchmark_type"`
 				TaskID             string            `json:"task_id"`
@@ -143,7 +144,7 @@ func TestSessionFinalizesReplaySourceOnlyWithCompletionAndMatchingImage(t *testi
 			if err := json.Unmarshal(data, &metadata); err != nil {
 				t.Fatal(err)
 			}
-			if metadata.SchemaVersion != sourceSchemaVersion || metadata.TaskID != logicalID || metadata.Image != image || metadata.BenchmarkType != "terminalbench2" || metadata.BenchmarkRevisions["revision"] != benchmarkRevision || metadata.ReplayReady != test.ready || metadata.RuntimeID != "runtime" || metadata.RuntimeName != "bridge-runtime-name" || metadata.SandboxID != "sandbox" || metadata.TargetRuntimeID != "target-runtime" {
+			if metadata.RunID != s.descriptor.RunID || metadata.SchemaVersion != sourceSchemaVersion || metadata.TaskID != logicalID || metadata.Image != image || metadata.BenchmarkType != "terminalbench2" || metadata.BenchmarkRevisions["revision"] != benchmarkRevision || metadata.ReplayReady != test.ready || metadata.RuntimeID != "runtime" || metadata.RuntimeName != "bridge-runtime-name" || metadata.SandboxID != "sandbox" || metadata.TargetRuntimeID != "target-runtime" {
 				t.Fatalf("runtime metadata = %+v", metadata)
 			}
 			if test.complete && !test.signalErr && !test.corrupt && !test.downloadFailure && metadata.HarnessCompletedAt != fixtureCompletedAt {

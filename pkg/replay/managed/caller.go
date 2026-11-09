@@ -23,16 +23,14 @@ import (
 )
 
 const (
-	workdir       = "/tmp"
-	launchFile    = "aries-replay-launch.json"
-	readyFile     = "aries-replay-ready"
-	planFile      = "aries-replay-plan.json"
-	planReadyFile = "aries-replay-plan.ready"
-	resultFile    = "aries-replay-result.json"
-	startTimeout  = time.Minute
-	pollInterval  = 50 * time.Millisecond
-	// A plan expands retained request bytes through JSON base64 encoding.
-	maxPlanBytes   = 512 << 20
+	workdir        = "/tmp"
+	launchFile     = "aries-replay-launch.json"
+	readyFile      = "aries-replay-ready"
+	planFile       = "aries-replay-plan.json"
+	planReadyFile  = "aries-replay-plan.ready"
+	resultFile     = "aries-replay-result.json"
+	startTimeout   = time.Minute
+	pollInterval   = 50 * time.Millisecond
 	maxStatusBytes = 1 << 20
 )
 
@@ -159,9 +157,9 @@ func (caller *Caller) Run(ctx context.Context, plan replay.Plan) error {
 	if err != nil || wait > time.Duration(1<<63-1)-headroom {
 		return errors.New("replay schedule exceeds the supported deadline")
 	}
-	data, err := json.Marshal(plan)
-	if err != nil || len(data) > maxPlanBytes {
-		return errors.Join(err, errors.New("replay caller plan is too large or invalid"))
+	data, err := replay.EncodePlan(plan, replay.MaxPlanBytes)
+	if err != nil {
+		return err
 	}
 	if err := caller.upload(ctx, planFile, data); err != nil {
 		return fmt.Errorf("stage replay plan: %w", err)
