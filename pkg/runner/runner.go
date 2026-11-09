@@ -324,10 +324,16 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		harnessActive = false
 		result.Isolation.HarnessStopped = true
 		if completion, ok := r.bridge.(interface{ CompleteHarness(context.Context) error }); ok && r.recordForReplay {
-			if err := completion.CompleteHarness(isolationCtx); err != nil {
+			completionCtx, cancelCompletion := context.WithTimeout(context.WithoutCancel(ctx), r.cleanupTimeout)
+			if err := completion.CompleteHarness(completionCtx); err != nil {
 				allErrors = append(allErrors, fmt.Errorf("record harness completion: %w", err))
 			}
+			cancelCompletion()
 		}
+	}
+	if r.recordForReplay {
+		cancelIsolation()
+		isolationCtx, cancelIsolation = context.WithTimeout(context.WithoutCancel(ctx), r.cleanupTimeout)
 	}
 	if err := r.bridge.Stop(isolationCtx); err != nil {
 		isolationErrors = append(isolationErrors, fmt.Errorf("confirm bridge revoked: %w", err))
