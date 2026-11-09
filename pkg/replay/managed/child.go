@@ -90,17 +90,19 @@ func RunChild(ctx context.Context, configPath string) error {
 
 func executionTimeout(plan replay.Plan, callTimeout time.Duration) (time.Duration, error) {
 	const maxDuration = time.Duration(1<<63 - 1)
-	if plan.FinalWait < 0 || plan.FinalWait > maxDuration-callTimeout {
+	if callTimeout <= 0 || callTimeout > maxDuration-startTimeout || plan.FinalWait < 0 || plan.FinalWait > maxDuration-callTimeout-startTimeout {
 		return 0, errors.New("invalid replay schedule")
 	}
+	// Allow scheduling and response processing outside RPC timeouts and the recorded final wait.
+	budget := callTimeout + plan.FinalWait + startTimeout
 	last := time.Duration(0)
 	for _, call := range plan.Calls {
-		if call.StartOffset < 0 || call.StartOffset > maxDuration-callTimeout-plan.FinalWait {
+		if call.StartOffset < 0 || call.StartOffset > maxDuration-budget {
 			return 0, errors.New("invalid replay schedule")
 		}
 		last = max(last, call.StartOffset)
 	}
-	return last + callTimeout + plan.FinalWait, nil
+	return last + budget, nil
 }
 
 func finishChild(ctx context.Context, folder string, resultErr error) error {

@@ -161,10 +161,12 @@ func (caller *Caller) Run(ctx context.Context, plan replay.Plan) error {
 	if err != nil {
 		return err
 	}
-	if err := caller.upload(ctx, planFile, data); err != nil {
+	stageCtx, cancelStage := context.WithTimeout(ctx, startTimeout)
+	defer cancelStage()
+	if err := caller.upload(stageCtx, planFile, data); err != nil {
 		return fmt.Errorf("stage replay plan: %w", err)
 	}
-	if err := caller.upload(ctx, planReadyFile, nil); err != nil {
+	if err := caller.upload(stageCtx, planReadyFile, nil); err != nil {
 		return fmt.Errorf("publish replay plan: %w", err)
 	}
 	runCtx, cancel := context.WithTimeout(ctx, wait+headroom)
