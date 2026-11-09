@@ -224,7 +224,8 @@ in the transport’s raw log. SSH stdin is always relayed in full, but both SSH 
 `stdin_bytes` and `stdin_truncated: true`, so neither file is then a complete
 input record. If the cut splits a multibyte character, only that partial
 character is left out of the readable `tool-calls.jsonl` text.
-Structured lifecycle logs and tool-call records omit environment values.
+Structured lifecycle logs and tool-call records omit dedicated environment-value fields,
+but captured `Exec` output can contain environment values printed by a command.
 With `--record-for-replay`, a live `hermes-grpc` task records
 bounded `Exec` output in its private `bridge/tool-calls.jsonl`. Replay execution
 retains this evidence automatically. Ordinary live runs omit replay-only response

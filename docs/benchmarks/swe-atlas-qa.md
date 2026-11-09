@@ -46,8 +46,8 @@ material grading ever touches.
 
 ### Grading
 
-A replay of a `hermes-grpc` source does not read the private rubric or call
-the judge. It carries the earlier evaluation with its source IDs instead of
+A replay of a `hermes-grpc` source does not grade against the private rubric or
+call the judge. It carries the earlier evaluation with its source IDs instead of
 grading a new answer. See [replay configuration](../configuration.md#sandbox-call-replay).
 
 Grading uses a host-side LLM judge against each task's private rubric.
@@ -58,7 +58,7 @@ Grading uses a host-side LLM judge against each task's private rubric.
 excluded from aggregation. The [implementation notes](../implementation/benchmarks.md#swe-atlas-qa)
 explain extraction, normalization, retry behavior, and private inputs.
 
-A `benchmark.judge` block is **required** (unlike Deep Research Bench, where
+A `benchmark.judge` block is **required for live profiles** (unlike Deep Research Bench, where
 it is optional and falls back to the profile's own model) — judge-graded
 rubric scoring is this benchmark's entire output, so there is no sensible
 default judge.
