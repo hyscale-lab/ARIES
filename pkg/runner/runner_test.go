@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/core"
@@ -421,33 +422,88 @@ func TestRunnerCombinedAuditOverflowBlocksIsolationAndContinues(t *testing.T) {
 
 type completionBridge struct {
 	*fakeBridge
-	err error
+	err  error
+	wait bool
 }
 
 func (b *completionBridge) CompleteHarness(ctx context.Context) error {
 	b.log.add("bridge.complete", ctx)
+	if b.wait {
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	return b.err
 }
 
+func TestRunnerCompletionTimeoutKeepsFreshRevocationBudget(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const oneTask = 1 // One task is enough to check all isolation stages.
+		rig := newRig(t, oneTask)
+		rig.runner.recordForReplay = true
+		rig.runner.bridge = &completionBridge{fakeBridge: rig.bridge, wait: true}
+		rig.log.setHook("harness.stop", func() { time.Sleep(fakeRollbackTimeout) })
+		var completionStarted time.Time
+		var completionDuration time.Duration
+		rig.log.setHook("bridge.complete", func() { completionStarted = time.Now() })
+		rig.log.setHook("bridge.stop", func() { completionDuration = time.Since(completionStarted) })
+
+		result, err := rig.runner.Run(context.Background())
+		assertBoundedLiveContext(t, rig.log, "bridge.complete")
+		assertBoundedLiveContext(t, rig.log, "bridge.stop")
+		assertBoundedLiveContext(t, rig.log, "sandbox.stop")
+		if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(result.Tasks[0].Error, "record harness completion: context deadline exceeded") {
+			t.Fatalf("completion timeout evidence lost: result=%+v error=%v", result, err)
+		}
+		if completionDuration != rig.runner.cleanupTimeout {
+			t.Fatalf("completion budget = %v, want %v", completionDuration, rig.runner.cleanupTimeout)
+		}
+		task := result.Tasks[0]
+		if task.Isolation.Status != core.StatusConfirmed || !task.Isolation.HarnessStopped || !task.Isolation.BridgeRevoked || task.Evaluation.Status != core.StatusSucceeded || task.Cleanup.Status != core.StatusSucceeded {
+			t.Fatalf("task result = %+v", task)
+		}
+		wantCalls := []string{
+			"benchmark.tasks", "sandbox.start", "benchmark.prepare", "bridge.start", "harness.start", "harness.run",
+			"harness.stop", "bridge.complete", "bridge.stop", "benchmark.evaluate", "sandbox.stop",
+		}
+		if got := rig.log.snapshot(); !reflect.DeepEqual(got, wantCalls) {
+			t.Fatalf("calls = %v, want %v", got, wantCalls)
+		}
+	})
+}
+
 func TestRunnerCompletionAfterConfirmedHarnessStop(t *testing.T) {
+	const oneTask = 1 // One task is enough to check completion and isolation.
 	for _, test := range []struct {
 		name        string
 		stopError   error
 		signalError error
+		bridgeError error
+		cancel      bool
 		wantSignal  bool
 	}{
 		{name: "confirmed stop", wantSignal: true},
 		{name: "unconfirmed stop", stopError: errInjected},
 		{name: "failed signal", signalError: errInjected, wantSignal: true},
+		{name: "failed signal and revocation", signalError: errInjected, bridgeError: errInjected, wantSignal: true},
+		{name: "cancelled signal", signalError: errInjected, cancel: true, wantSignal: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			rig := newRig(t, 1)
+			rig := newRig(t, oneTask)
 			rig.runner.recordForReplay = true
 			rig.harness.stopErrors = []error{test.stopError}
+			rig.bridge.stopErrors = []error{test.bridgeError}
 			rig.runner.bridge = &completionBridge{fakeBridge: rig.bridge, err: test.signalError}
-			_, err := rig.runner.Run(context.Background())
-			if (err != nil) != (test.stopError != nil || test.signalError != nil) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if test.cancel {
+				rig.log.setHook("bridge.complete", cancel)
+			}
+			result, err := rig.runner.Run(ctx)
+			if (err != nil) != (test.stopError != nil || test.signalError != nil || test.bridgeError != nil) {
 				t.Fatalf("Run() error = %v", err)
+			}
+			if test.cancel && !errors.Is(err, context.Canceled) {
+				t.Fatalf("Run() error = %v, want cancellation", err)
 			}
 			calls := rig.log.snapshot()
 			stop := slices.Index(calls, "harness.stop")
@@ -456,9 +512,25 @@ func TestRunnerCompletionAfterConfirmedHarnessStop(t *testing.T) {
 			if stop < 0 || release <= stop || (signal >= 0) != test.wantSignal || (signal >= 0 && (signal <= stop || signal >= release)) {
 				t.Fatalf("completion and release order = %v", calls)
 			}
-			if test.signalError != nil && rig.bridge.stopCount() != 1 {
+			if test.signalError != nil && test.bridgeError == nil && rig.bridge.stopCount() != oneTask {
 				t.Fatalf("bridge release calls = %d", rig.bridge.stopCount())
 			}
+			task := result.Tasks[0]
+			if test.signalError != nil && (!errors.Is(err, test.signalError) || !strings.Contains(task.Error, "record harness completion: "+test.signalError.Error())) {
+				t.Fatalf("completion error evidence lost: task=%+v error=%v", task, err)
+			}
+			if task.Isolation.HarnessStopped != (test.stopError == nil) || task.Isolation.BridgeRevoked != (test.bridgeError == nil) {
+				t.Fatalf("isolation confirmations = %+v", task.Isolation)
+			}
+			if test.stopError != nil || test.bridgeError != nil {
+				if task.Isolation.Status != core.StatusBlockedIsolation || task.Evaluation.Status != core.StatusBlockedIsolation || slices.Contains(calls, "benchmark.evaluate") {
+					t.Fatalf("evaluation passed an unconfirmed isolation gate: %+v", task)
+				}
+			} else if task.Isolation.Status != core.StatusConfirmed || slices.Index(calls, "benchmark.evaluate") <= release {
+				t.Fatalf("evaluation did not follow confirmed revocation: task=%+v calls=%v", task, calls)
+			}
+			assertBoundedLiveContext(t, rig.log, "bridge.stop")
+			assertBoundedLiveContext(t, rig.log, "sandbox.stop")
 		})
 	}
 }
