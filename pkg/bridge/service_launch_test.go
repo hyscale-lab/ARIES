@@ -20,10 +20,14 @@ import (
 
 	"github.com/hyscale-lab/aries/pkg/bridge/control"
 	v1 "github.com/hyscale-lab/aries/pkg/bridge/control/v1"
+	bridgegrpc "github.com/hyscale-lab/aries/pkg/bridge/grpc"
+	sandboxv1 "github.com/hyscale-lab/aries/pkg/bridge/grpc/v1"
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgekit"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/deployment"
 	"github.com/hyscale-lab/aries/pkg/runner"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 type launchSandbox struct {
@@ -370,5 +374,188 @@ func TestServiceStagesReplayCaptureForBothBackends(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+const sessionReplayCallCount = 1
+const sessionReplayOutput = "/work\n"
+
+// Only runtime deployment and sandbox execution are fake. Control, capture,
+// completion, evidence collection and source loading use production code.
+type sessionReplayRuntime struct {
+	*launchRuntime
+	backend sessionReplayBackend
+	cancel  context.CancelFunc
+	served  chan error
+}
+
+type sessionReplayBackend struct {
+	bootstrapBackend
+	commands chan core.Command
+}
+
+func (b sessionReplayBackend) ExecStream(_ context.Context, _ string, command core.Command, _ io.Reader, out, _ io.Writer) (core.CommandResult, error) {
+	b.commands <- command
+	_, err := io.WriteString(out, sessionReplayOutput)
+	return core.CommandResult{}, err
+}
+
+func (r *sessionReplayRuntime) Start(context.Context, string) error {
+	r.event("start")
+	listener, err := net.Listen("tcp", r.config.ControlAddress)
+	if err != nil {
+		return err
+	}
+	r.controlAddress = listener.Addr().String()
+	ctx, cancel := context.WithCancel(context.Background())
+	r.cancel, r.served = cancel, make(chan error, sessionReplayCallCount)
+	go func() {
+		r.served <- serve(ctx, ServeOptions{Config: r.config, Backend: r.backend, NewNative: func(id, output string) (NativeServer, error) {
+			return bridgegrpc.New(bridgegrpc.Options{
+				SandboxID: id, OutputDir: output, CaptureReplay: r.config.CaptureReplay, OmitRawLog: !r.config.RetainRawLog,
+				ResolveListen: func(context.Context) (core.BridgeListen, error) {
+					return core.BridgeListen{BindHost: "127.0.0.1"}, nil
+				},
+			})
+		}}, listener)
+	}()
+	return nil
+}
+
+func (r *sessionReplayRuntime) TaskAddress(_ context.Context, _ string, port int) (string, error) {
+	return net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), nil
+}
+
+func (r *sessionReplayRuntime) DownloadArchive(_ context.Context, _ string, path string) (io.ReadCloser, deployment.FileInfo, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, deployment.FileInfo{}, err
+	}
+	var data bytes.Buffer
+	archive := tar.NewWriter(&data)
+	if err := archive.WriteHeader(&tar.Header{Name: filepath.Base(path), Typeflag: tar.TypeReg, Mode: 0600, Size: int64(len(content))}); err != nil {
+		return nil, deployment.FileInfo{}, err
+	}
+	_, err = archive.Write(content)
+	if err = errors.Join(err, archive.Close()); err != nil {
+		return nil, deployment.FileInfo{}, err
+	}
+	return io.NopCloser(&data), deployment.FileInfo{Mode: 0600, Size: int64(len(content))}, nil
+}
+
+func (r *sessionReplayRuntime) Stop(ctx context.Context, _ string) error {
+	if r.cancel == nil {
+		return nil
+	}
+	r.cancel()
+	select {
+	case err := <-r.served:
+		r.cancel = nil
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func TestSessionFinalizedRecordingLoadsForReplay(t *testing.T) {
+	const logicalID = "catalog-task"
+	const image = "task-image:tag"
+	const benchmark = "terminalbench2"
+	const script = "pwd"
+	const score = 0.75
+	const reward = 1
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	service, base, sandbox := launchFixtureWith(t, "docker", "hermes-grpc", false)
+	runtime := &sessionReplayRuntime{launchRuntime: base, backend: sessionReplayBackend{commands: make(chan core.Command, sessionReplayCallCount)}}
+	service.options.Runtime = runtime
+	service.options.Launch.Config.OutputDir = t.TempDir()
+	service.options.CaptureReplay = true
+	service.options.BenchmarkType = benchmark
+	service.options.BenchmarkRevisions = map[string]string{"revision": "pinned-revision"}
+	if err := service.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	bridge, err := service.NewSession(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := bridge.(*Session)
+	session.RecordSource(logicalID, image)
+	session.RecordTask(image)
+	endpoint, err := session.Start(ctx, sandbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := grpc.NewClient(endpoint.Address, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithNoProxy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	response, err := sandboxv1.NewSandboxClient(connection).Exec(ctx, &sandboxv1.ExecRequest{Script: script})
+	if err != nil || string(response.GetStdout()) != sessionReplayOutput {
+		t.Fatalf("recorded Exec response = %+v, error = %v", response, err)
+	}
+	command := <-runtime.backend.commands
+	if endpoint.Workdir != sandbox.descriptor.Workdir || command.Dir != endpoint.Workdir {
+		t.Fatalf("Exec workdir = %q, endpoint = %+v, target = %+v", command.Dir, endpoint, sandbox.descriptor)
+	}
+	if err := session.CompleteHarness(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	metadataData, err := os.ReadFile(filepath.Join(session.local, "runtime.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var metadata sourceMetadata
+	if err := json.Unmarshal(metadataData, &metadata); err != nil {
+		t.Fatal(err)
+	}
+	log, err := os.ReadFile(endpoint.LogPaths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteLog, err := os.ReadFile(filepath.Join(service.options.Launch.Config.OutputDir, sandbox.descriptor.SandboxID, "tool-calls.jsonl"))
+	if err != nil || !bytes.Equal(log, remoteLog) {
+		t.Fatalf("collected audit differs from captured audit: %v", err)
+	}
+	digest := sha256.Sum256(log)
+	if !metadata.ReplayReady || metadata.RunID != sandbox.descriptor.RunID || metadata.TaskID != logicalID || metadata.SandboxID != sandbox.descriptor.SandboxID || metadata.HarnessCompletedAt == "" || metadata.ToolCallsBytes == nil || *metadata.ToolCallsBytes != int64(len(log)) || metadata.ToolCallsSHA256 != hex.EncodeToString(digest[:]) {
+		t.Fatalf("finalized recording metadata = %+v", metadata)
+	}
+	var record bridgekit.ToolCallRecord
+	if err := json.Unmarshal(bytes.TrimSpace(log), &record); err != nil {
+		t.Fatal(err)
+	}
+	if record.RunID != sandbox.descriptor.RunID || record.TaskID != sandbox.descriptor.TaskID || record.SandboxID != sandbox.descriptor.SandboxID || record.Workdir != endpoint.Workdir {
+		t.Fatalf("captured call binding = %+v", record)
+	}
+	evaluation := core.Evaluation{Status: core.StatusSucceeded, Score: score, Reward: reward}
+	result := core.RunResult{RunID: sandbox.descriptor.RunID, Tasks: []core.TaskResult{{TaskID: sandbox.descriptor.TaskID, Evaluation: evaluation}}}
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "run-result.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	task := core.Task{ID: logicalID, Environment: core.Environment{Image: image, Workdir: sandbox.descriptor.Workdir}}
+	plan, err := bridgegrpc.LoadReplaySource(filepath.Join(root, sandbox.descriptor.TaskID), task, benchmark, service.options.BenchmarkRevisions)
+	if err != nil {
+		t.Fatalf("load unchanged production recording: %v", err)
+	}
+	if plan.SourceRunID != result.RunID || plan.SourceTaskID != sandbox.descriptor.TaskID || !reflect.DeepEqual(plan.Evaluation, evaluation) || len(plan.Calls) != sessionReplayCallCount {
+		t.Fatalf("loaded production recording = %+v", plan)
+	}
+	call := plan.Calls[0]
+	if call.Operation != "Exec" || call.Script != script || call.Workdir != endpoint.Workdir || call.ResponseCode != "OK" || call.ResponseSHA256 == "" || call.ResponseBytes <= 0 || !bytes.Equal(call.ResponseStdout, response.Stdout) {
+		t.Fatalf("loaded captured Exec = %+v", call)
 	}
 }
