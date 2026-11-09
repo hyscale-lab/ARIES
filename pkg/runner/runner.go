@@ -134,6 +134,12 @@ func (r *Runner) Run(ctx context.Context) (core.RunResult, error) {
 		return result, fmt.Errorf("list benchmark tasks: %w", err)
 	}
 
+	const replayTaskCount = 1
+	if r.caller != nil && len(tasks) != replayTaskCount {
+		result.Duration = time.Since(started)
+		return result, errors.New("replay requires exactly one task")
+	}
+
 	var runErrors []error
 	for _, task := range tasks {
 		if err := ctx.Err(); err != nil {
@@ -354,7 +360,11 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 	}
 
 	result.Isolation.Status = core.StatusConfirmed
-	if r.recordForReplay && endpoint.Protocol == "grpc" && len(result.ToolLogPaths) != 0 {
+	if r.recordForReplay && endpoint.Protocol == "grpc" {
+		if len(result.ToolLogPaths) == 0 {
+			allErrors = append(allErrors, errors.New("check live bridge audit: missing structured audit path"))
+			return finish()
+		}
 		if err := replay.LiveAuditError(result.ToolLogPaths[0]); err != nil {
 			allErrors = append(allErrors, fmt.Errorf("check live bridge audit: %w", err))
 			return finish()

@@ -3,6 +3,7 @@ package runner
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -380,8 +381,49 @@ func (b *markedAuditBridge) Start(ctx context.Context, sandbox Sandbox) (core.To
 		return endpoint, err
 	}
 	endpoint.Protocol = "grpc"
-	endpoint.LogPaths = []string{b.paths[b.stopCount()]}
+	endpoint.LogPaths = nil
+	if b.paths != nil {
+		endpoint.LogPaths = []string{b.paths[b.stopCount()]}
+	}
 	return endpoint, nil
+}
+
+func TestRunnerMissingAuditPathRejectsRecordingOnly(t *testing.T) {
+	const oneTask = 1
+	for _, recording := range []bool{false, true} {
+		t.Run(fmt.Sprint(recording), func(t *testing.T) {
+			rig := newRig(t, oneTask)
+			rig.runner.recordForReplay = recording
+			rig.runner.bridge = &markedAuditBridge{fakeBridge: rig.bridge}
+			result, err := rig.runner.Run(context.Background())
+			if recording {
+				if err == nil || !strings.Contains(err.Error(), "check live bridge audit: missing structured audit path") {
+					t.Fatalf("recording accepted a missing audit path: %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("ordinary run rejected a missing audit path: %v", err)
+			}
+			task := result.Tasks[0]
+			if task.Isolation.Status != core.StatusConfirmed || !task.Isolation.HarnessStopped || !task.Isolation.BridgeRevoked || task.Cleanup.Status != core.StatusSucceeded {
+				t.Fatalf("isolation or cleanup failed: %+v", task)
+			}
+			wantEvaluation := core.StatusSucceeded
+			if recording {
+				wantEvaluation = core.StatusNotRun
+			}
+			if task.Evaluation.Status != wantEvaluation || slices.Contains(rig.log.snapshot(), "benchmark.evaluate") == recording {
+				t.Fatalf("evaluation crossed the audit boundary: task=%+v calls=%v", task, rig.log.snapshot())
+			}
+			wantCalls := []string{"benchmark.tasks", "sandbox.start", "benchmark.prepare", "bridge.start", "harness.start", "harness.run", "harness.stop", "bridge.stop"}
+			if !recording {
+				wantCalls = append(wantCalls, "benchmark.evaluate")
+			}
+			wantCalls = append(wantCalls, "sandbox.stop")
+			if got := rig.log.snapshot(); !reflect.DeepEqual(got, wantCalls) {
+				t.Fatalf("calls = %v, want %v", got, wantCalls)
+			}
+		})
+	}
 }
 
 func TestRunnerOversizedExecAuditSkipsEvaluationAfterRevocationAndContinues(t *testing.T) {
@@ -1326,7 +1368,11 @@ func TestReplayReportsHashDriftAfterIsolationWithoutResultText(t *testing.T) {
 	if !strings.Contains(logs.String(), sourceText) || !strings.Contains(logs.String(), replayText) || !strings.Contains(logs.String(), sourceHash) || !strings.Contains(logs.String(), replayHash) {
 		t.Fatalf("drift log does not show source and replay output and hashes: %s", logs.String())
 	}
-	encoded := fmt.Sprintf("%+v", result)
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := string(data)
 	if strings.Contains(encoded, sourceText) || strings.Contains(encoded, replayText) {
 		t.Fatalf("response text entered structured result: %s", encoded)
 	}
@@ -1407,6 +1453,26 @@ func newReplayRig(t *testing.T, evaluation core.Evaluation, calls ...replay.Call
 	}
 	rig.runner = runner
 	return rig, caller, plan
+}
+
+func TestReplayRejectsTaskCountBeforeSourceOrSandbox(t *testing.T) {
+	for _, multiple := range []bool{false, true} {
+		t.Run(fmt.Sprint(multiple), func(t *testing.T) {
+			rig, _, _ := newReplayRig(t, core.Evaluation{Status: core.StatusSucceeded})
+			if multiple {
+				rig.benchmark.tasks = append(rig.benchmark.tasks, rig.benchmark.tasks...)
+			} else {
+				rig.benchmark.tasks = nil
+			}
+			result, err := rig.runner.Run(context.Background())
+			if err == nil || !strings.Contains(err.Error(), "replay requires exactly one task") {
+				t.Fatalf("replay accepted %d tasks: %v", len(rig.benchmark.tasks), err)
+			}
+			if len(result.Tasks) != 0 || !reflect.DeepEqual(rig.log.snapshot(), []string{"benchmark.tasks"}) {
+				t.Fatalf("invalid task count started replay: result=%+v calls=%v", result, rig.log.snapshot())
+			}
+		})
+	}
 }
 
 func TestReplayChecksResolvedExecWorkdirBeforeCallerStart(t *testing.T) {
