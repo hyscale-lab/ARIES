@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -108,13 +109,14 @@ func TestExecResponseKeepsBinaryBytesWhenRecording(t *testing.T) {
 func TestExecResponseKeepsFullBoundedText(t *testing.T) {
 	executor := newFakeExecutor(nil)
 	executor.stdout = bytes.Repeat([]byte{'<'}, defaultOutputLimit)
+	executor.stderr = executor.stdout
 	manager, client, endpoint := startBridge(t, executor, Options{CaptureReplay: true, OmitRawLog: true})
 	if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "true"}); err != nil {
 		t.Fatal(err)
 	}
 	stop(t, manager)
 	record := readToolCalls(t, endpoint.LogPaths[0])[0]
-	if record["response_debug"] != true || record["replay_error"] != nil || record["response_stdout"] != string(executor.stdout) {
+	if record["response_debug"] != true || record["replay_error"] != nil || record["response_stdout"] != string(executor.stdout) || record["response_stderr"] != string(executor.stderr) {
 		t.Fatal("bounded UTF-8 output lost from audit")
 	}
 }
@@ -160,13 +162,91 @@ func TestExecResponseMarksOversizedAuditUnreplayable(t *testing.T) {
 	executor.stdout = bytes.Repeat([]byte{0}, MaxMessageBytes/len(`\u0000`)+1)
 	executor.stderr = executor.stdout
 	manager, client, endpoint := startBridge(t, executor, Options{CaptureReplay: true, OmitRawLog: true})
-	if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "true"}); err != nil {
+	response, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "true"})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !bytes.Equal(response.GetStdout(), executor.stdout) || !bytes.Equal(response.GetStderr(), executor.stderr) {
+		t.Fatal("audit overflow changed the Exec response")
 	}
 	stop(t, manager)
 	record := readToolCalls(t, endpoint.LogPaths[0])[0]
 	if record["replay_error"] != "response-debug-too-large" || record["response_debug"] != nil || record["response_stdout"] != nil {
 		t.Fatalf("oversized response was accepted: %+v", record)
+	}
+}
+
+func TestBoundDebugResponseRejectsBeforeExpandedAllocation(t *testing.T) {
+	output := strings.Repeat("\x00", defaultOutputLimit)
+	record := toolCallRecord{
+		ToolCallRecord: bridgekit.ToolCallRecord{ToolCallID: testToolCallID, StdoutBytes: int64(len(output))},
+		ResponseDebug:  true, ResponseStdout: output, ResponseStderr: output,
+		ResponseSHA256: bridgekit.CommandHash(output), GRPCCode: codes.OK.String(),
+	}
+	// Do not run in parallel: the allocation counter belongs to the process.
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	record.boundDebugResponse()
+	runtime.ReadMemStats(&after)
+	allocated := after.TotalAlloc - before.TotalAlloc
+	t.Logf("size check allocated %d bytes", allocated)
+	// One retained stream is ample space for fixed metadata bookkeeping.
+	if allocated > uint64(defaultOutputLimit) {
+		t.Fatalf("size check allocated %d bytes for an oversized escaped response; limit = %d", allocated, defaultOutputLimit)
+	}
+	if record.ResponseDebug || record.ResponseStdout != "" || record.ResponseStderr != "" || record.ReplayError != "response-debug-too-large" {
+		t.Fatal("oversized response was retained")
+	}
+	if record.ToolCallID != testToolCallID || record.StdoutBytes != int64(len(output)) || record.ResponseSHA256 != bridgekit.CommandHash(output) || record.GRPCCode != codes.OK.String() {
+		t.Fatal("size check changed response metadata")
+	}
+}
+
+func TestBoundDebugResponseEncodedBoundary(t *testing.T) {
+	for name, text := range map[string]string{
+		"plain HTML":             "<>&plain",
+		"short escapes":          "\"\\\b\f\n\r\t",
+		"control characters":     "\x00\x01\x1f",
+		"Unicode":                "α  �",
+		"base64 padding":         "a",
+		"base64 without padding": "abc",
+	} {
+		t.Run(name, func(t *testing.T) {
+			record := toolCallRecord{
+				ToolCallRecord: bridgekit.ToolCallRecord{
+					SandboxID: "sandbox", ContainerID: "container", ContainerName: "name",
+					RunID: "run", TaskID: "task", ToolCallID: testToolCallID,
+					Command: "echo \"text\"", Argv: []string{"bash", "-c", "echo \"text\""},
+					Environment: []string{"HOME"}, Stdin: "input\n", Error: "error\ttext",
+				},
+				ResponseDebug: true, ResponseStdout: text, ResponseStderr: text,
+				ResponseStdoutBase64: []byte(text), ResponseStderrBase64: []byte(text),
+				ResponseSHA256: bridgekit.CommandHash(text), GRPCCode: codes.OK.String(),
+			}
+			encoded, err := bridgekit.MarshalJSONLine(&record)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stampBytes := len(time.RFC3339Nano) + len(strconv.FormatUint(^uint64(0), replaySequenceBase))
+			remaining := 2*MaxMessageBytes - stampBytes - len(encoded)
+			// Each NUL adds six JSON bytes; plain '<' uses one with HTML escaping off.
+			record.ResponseStdout += strings.Repeat("\x00", remaining/len(`\u0000`)) + strings.Repeat("<", remaining%len(`\u0000`))
+			atLimit := record
+			atLimit.boundDebugResponse()
+			if !atLimit.ResponseDebug || atLimit.ReplayError != "" || atLimit.ResponseStdout != record.ResponseStdout || atLimit.ResponseStderr != text || !bytes.Equal(atLimit.ResponseStdoutBase64, []byte(text)) || !bytes.Equal(atLimit.ResponseStderrBase64, []byte(text)) {
+				t.Fatal("response at the encoded limit was changed")
+			}
+			pastLimit := record
+			pastLimit.ResponseStderr += "x"
+			pastLimit.boundDebugResponse()
+			if pastLimit.ResponseDebug || pastLimit.ResponseStdout != "" || pastLimit.ResponseStderr != "" || pastLimit.ResponseStdoutBase64 != nil || pastLimit.ResponseStderrBase64 != nil || pastLimit.ReplayError != "response-debug-too-large" {
+				t.Fatal("response one encoded byte past the limit was retained")
+			}
+			if pastLimit.ToolCallID != record.ToolCallID || pastLimit.Command != record.Command || pastLimit.ResponseSHA256 != record.ResponseSHA256 {
+				t.Fatal("overflow changed retained metadata")
+			}
+		})
 	}
 }
 

@@ -3,6 +3,7 @@ package grpc
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -111,14 +112,60 @@ func (record *toolCallRecord) setDebugResponse(stdout, stderr []byte) {
 
 func (record *toolCallRecord) boundDebugResponse() {
 	// Reserve space for the sequence and timestamp that the audit stamps later.
-	encoded, err := bridgekit.MarshalJSONLine(record)
 	stampBytes := len(time.RFC3339Nano) + len(strconv.FormatUint(^uint64(0), replaySequenceBase))
-	if err != nil || len(encoded) > 2*MaxMessageBytes-stampBytes {
-		record.ResponseDebug = false
-		record.ResponseStdout, record.ResponseStderr = "", ""
-		record.ResponseStdoutBase64, record.ResponseStderrBase64 = nil, nil
-		record.ReplayError = "response-debug-too-large"
+	limit := 2*MaxMessageBytes - stampBytes
+	responseBytes := 0
+	for _, field := range []struct{ prefix, value string }{
+		{`,"response_stdout":""`, record.ResponseStdout},
+		{`,"response_stderr":""`, record.ResponseStderr},
+	} {
+		if field.value != "" {
+			responseBytes += len(field.prefix) + jsonStringContentBytes(field.value)
+		}
 	}
+	for _, field := range []struct {
+		prefix string
+		value  []byte
+	}{
+		{`,"response_stdout_base64":""`, record.ResponseStdoutBase64},
+		{`,"response_stderr_base64":""`, record.ResponseStderrBase64},
+	} {
+		if len(field.value) != 0 {
+			responseBytes += len(field.prefix) + base64.StdEncoding.EncodedLen(len(field.value))
+		}
+	}
+	if responseBytes <= limit {
+		// Encode metadata only; response escaping must not allocate before the check.
+		metadata := *record
+		metadata.ResponseStdout, metadata.ResponseStderr = "", ""
+		metadata.ResponseStdoutBase64, metadata.ResponseStderrBase64 = nil, nil
+		encoded, err := bridgekit.MarshalJSONLine(&metadata)
+		if err == nil && len(encoded) <= limit-responseBytes {
+			return
+		}
+	}
+	record.ResponseDebug = false
+	record.ResponseStdout, record.ResponseStderr = "", ""
+	record.ResponseStdoutBase64, record.ResponseStderrBase64 = nil, nil
+	record.ReplayError = "response-debug-too-large"
+}
+
+// jsonStringContentBytes counts valid UTF-8 from setDebugResponse with HTML escaping disabled.
+func jsonStringContentBytes(value string) int {
+	size := len(value)
+	for _, char := range value {
+		switch char {
+		case '\\', '"', '\n', '\r', '\t', '\b', '\f':
+			size += len(`\n`) - len("\n")
+		case ' ', ' ':
+			size += len(`\u0000`) - utf8.RuneLen(char)
+		default:
+			if char < ' ' {
+				size += len(`\u0000`) - utf8.RuneLen(char)
+			}
+		}
+	}
+	return size
 }
 
 // fileWindow is the part of a file that a read asked for. A whole-file read,
