@@ -17,6 +17,7 @@ import (
 
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/deployment"
+	"github.com/hyscale-lab/aries/pkg/replay/managed"
 	"github.com/hyscale-lab/aries/pkg/runner"
 )
 
@@ -321,6 +322,106 @@ func TestValidateReplayCallerRequestRejectsMountedServiceAccountToken(t *testing
 	}
 	if err := manager.Validate(context.Background(), request.Name, request, nil); err == nil || !strings.Contains(err.Error(), "service account token") {
 		t.Fatalf("replay caller token mount accepted: %v", err)
+	}
+}
+
+func TestReplayCallerRejectsProjectedServiceAccountTokenBeforeStart(t *testing.T) {
+	manager, fake := newTestManager(t, Options{ServiceAccount: "aries-bridge"})
+	var pod []byte
+	gateOpened := false
+	fake.respond = func(_ context.Context, args []string, stdin []byte, stdout, _ io.Writer) error {
+		switch args[0] {
+		case "create":
+			manifest := decodeManifest(t, stdin)
+			spec := manifest["spec"].(map[string]any)
+			if spec["automountServiceAccountToken"] != false {
+				t.Fatal("replay caller did not disable token automount")
+			}
+			spec["volumes"] = append(spec["volumes"].([]any), map[string]any{
+				"name": "token", "projected": map[string]any{"sources": []any{
+					map[string]any{"serviceAccountToken": map[string]any{"path": "token"}},
+				}},
+			})
+			container := spec["containers"].([]any)[0].(map[string]any)
+			container["volumeMounts"] = append(container["volumeMounts"].([]any), map[string]any{
+				"name": "token", "mountPath": "/run/token", "readOnly": true,
+			})
+			var err error
+			pod, err = json.Marshal(manifest)
+			return err
+		case "get":
+			_, err := stdout.Write(pod)
+			return err
+		case "exec":
+			if slices.Contains(args, ": > "+gateMarker) {
+				gateOpened = true
+				return errors.New("runtime gate opened")
+			}
+		case "delete":
+			pod = nil
+		}
+		return nil
+	}
+	placement := core.RuntimePlacement{AttachmentID: manager.Namespace()}
+	caller, err := managed.New(managed.Options{
+		Runtime: manager, Image: "aries-bridge:tag", Backend: "kubernetes",
+		BridgeBackend: "kubernetes", BridgePlacement: placement,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := caller.Stop(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	err = caller.Start(context.Background(), core.ToolEndpoint{Address: "bridge.aries:8443", Protocol: "grpc"}, core.HarnessConnectivity{Placement: placement}, "run-1", "task-1")
+	if err == nil || !strings.Contains(err.Error(), "validate replay caller") || !strings.Contains(err.Error(), "service account token") {
+		t.Errorf("projected service account token validation = %v", err)
+	}
+	if gateOpened {
+		t.Fatal("replay caller started with a projected service account token")
+	}
+}
+
+func TestValidateProjectedVolumeSources(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		sources    string
+		disable    bool
+		wantReject bool
+	}{
+		{name: "config map", sources: `[{"configMap":{"name":"settings"}}]`, disable: true},
+		{name: "secret", sources: `[{"secret":{"name":"settings"}}]`, disable: true},
+		{name: "downward API", sources: `[{"downwardAPI":{"items":[{"path":"name","fieldRef":{"fieldPath":"metadata.name"}}]}}]`, disable: true},
+		{name: "empty token projection", sources: `[{"serviceAccountToken":{}}]`, disable: true, wantReject: true},
+		{name: "token after config map", sources: `[{"configMap":{"name":"settings"}},{"serviceAccountToken":{"path":"token"}}]`, disable: true, wantReject: true},
+		{name: "token policy off", sources: `[{"serviceAccountToken":{"path":"token"}}]`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			manager, fake := newTestManager(t, Options{ServiceAccount: "aries-bridge"})
+			request := testRequest()
+			request.DisableServiceAccountToken = test.disable
+			pod := podJSON(t, manager, request, func(manifest map[string]any) {
+				spec := manifest["spec"].(map[string]any)
+				spec["automountServiceAccountToken"] = false
+				spec["volumes"] = append(spec["volumes"].([]any), map[string]any{
+					"name": "projection", "projected": map[string]any{"sources": json.RawMessage(test.sources)},
+				})
+			})
+			fake.respond = func(_ context.Context, _ []string, _ []byte, stdout, _ io.Writer) error {
+				_, err := io.WriteString(stdout, pod)
+				return err
+			}
+			err := manager.Validate(context.Background(), request.Name, request, nil)
+			if test.wantReject {
+				if err == nil || !strings.Contains(err.Error(), "service account token") {
+					t.Fatalf("projected token accepted: %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("allowed projection rejected: %v", err)
+			}
+		})
 	}
 }
 

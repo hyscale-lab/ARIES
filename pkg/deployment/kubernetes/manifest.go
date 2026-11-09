@@ -266,7 +266,12 @@ type podObject struct {
 			} `json:"resources"`
 		} `json:"containers"`
 		Volumes []struct {
-			HostPath *struct{} `json:"hostPath"`
+			HostPath  *struct{} `json:"hostPath"`
+			Projected *struct {
+				Sources []struct {
+					ServiceAccountToken *struct{} `json:"serviceAccountToken"`
+				} `json:"sources"`
+			} `json:"projected"`
 		} `json:"volumes"`
 	} `json:"spec"`
 	Status struct {
