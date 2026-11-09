@@ -39,16 +39,40 @@ executes in them.
 `images` maps it to. An unprivileged build gives every file to the invoking
 user, which is root inside the instance. Run from a SIF instead, files that
 belong to other users in the image, such as the partial-download directories of `apt`,
-cannot be changed by that root, and `apt-get` fails. Hermes runs an image
-derived with a Docker build, which Apptainer cannot perform; build it on a
-Docker host, convert it (`apptainer build hermes.sif docker-archive:hermes.tar`),
-and map its tag to the SIF.
+cannot be changed by that root, and `apt-get` fails.
 
-An unpacked image keeps none of the OCI image's configuration, but a SIF built
-from one does. Setup therefore pulls a registry image into a temporary SIF, and
-records the image's working directory beside the unpacked directory; a runtime
-whose request names no working directory starts there, as a Docker container
-would. An image unpacked without that record is unpacked again.
+Only Hermes's image needs a step of your own. ARIES derives it with a Docker
+build, which Apptainer cannot perform, so it is built on a host with Docker,
+saved to a file and converted to a SIF. From a clone of this repository on that
+host:
+
+```bash
+make build
+bin/aries setup profiles/hermes-tb2-fix-git-deepseek.json
+TAG=$(grep -o -m 1 'aries-local/hermes:[^"]*' profiles/apptainer/hermes-tb2-fix-git-apptainer.json)
+docker save "$TAG" -o hermes.tar
+apptainer build hermes.sif docker-archive:hermes.tar
+```
+
+Setup with a Hermes profile on Docker builds the image, and calls no model. The
+last command needs Apptainer, and can run on the cluster instead. Then map the
+tag to the SIF in the `images` of the harness, sandbox and bridge placements, as
+the [example profile](../../profiles/apptainer/hermes-tb2-fix-git-apptainer.json)
+does:
+
+```json
+"images": { "aries-local/hermes:TAG": "/scratch/users/me/aries/hermes.sif" }
+```
+
+The [PBS example](#running-on-a-pbs-cluster) converts the file and maps the tag
+itself.
+
+The rest happens in setup, with nothing for you to do. A directory unpacked from
+a registry image loses the image's configuration, including its working
+directory, but a SIF keeps it. Setup therefore pulls a registry image into a
+temporary SIF first, and records the working directory beside the unpacked
+directory; a runtime whose request names no working directory starts there, as a
+Docker container would. Setup unpacks again any image that lacks this record.
 
 ## Runtime creation and execution
 
@@ -151,24 +175,38 @@ signaled. ARIES has no command that does this yet.
 
 [`scripts/apptainer-example.pbs`](../../scripts/apptainer-example.pbs) is a job to start from, written
 and tested on NSCC's ASPIRE 2A. One GPU node serves Qwen3-4B with SGLang and runs Hermes on
-Terminal-Bench 2 tasks, one at a time, with the whole of ARIES on that node. Only the Hermes image has to be
-made elsewhere, as [Images](#images) describes. Put it at `.cache/hermes.sif` in a checkout on scratch, then
-submit from the checkout:
+Terminal-Bench 2 tasks, one at a time, with the whole of ARIES on that node. The job runs from a clone of
+this repository: it builds ARIES from the clone and uses its example profile and pinned versions, so the
+script alone is not enough.
 
-```bash
-qsub -P <project> -v SETUP_ONLY=1 -l select=1:ncpus=16:mem=96gb -l walltime=08:00:00 scripts/apptainer-example.pbs
-qsub -P <project> scripts/apptainer-example.pbs
-```
+1. On a host with Docker, save Hermes's image with the commands under [Images](#images), up to `docker save`.
+2. On the cluster's login node, clone the repository on scratch and make its cache directory:
 
-The first job needs no GPU. It builds ARIES, unpacks `fakeroot`, pulls the SGLang image, downloads the
-model's weights and runs `aries setup`, skipping whatever is already done. Its walltime keeps it out of
-NSCC's `qdev` queue, whose limit is two hours. The second runs `fix-git`; `-v TASKS=fix-git:vulnerable-secret`
-chooses other tasks. Each job's logs and results are in `runs/example-<job>/`, as
-[run results](../run-results.md) describes.
+   ```bash
+   git clone https://github.com/hyscale-lab/ARIES.git
+   cd ARIES
+   mkdir -p .cache
+   ```
+
+3. Copy `hermes.tar` from the Docker host to `.cache/hermes.tar` in that clone, with `scp` or `rsync`.
+4. Submit the two jobs from the clone, with your project in place of `<project>`:
+
+   ```bash
+   setup=$(qsub -P <project> -v SETUP_ONLY=1 -l select=1:ncpus=16:mem=96gb -l walltime=08:00:00 scripts/apptainer-example.pbs)
+   qsub -P <project> -W depend=afterok:$setup scripts/apptainer-example.pbs
+   ```
+
+The first job needs no GPU. It converts `.cache/hermes.tar` to `.cache/hermes.sif`, builds ARIES, unpacks
+`fakeroot`, pulls the SGLang image, downloads the model's weights and runs `aries setup`, skipping whatever is
+already done. Its walltime keeps it out of NSCC's `qdev` queue, whose limit is two hours. The second waits for
+the first and runs `fix-git`; `-v TASKS=fix-git:vulnerable-secret` chooses other tasks. Nothing needs mapping:
+each job writes its own profile, `runs/example-<job>/profile.json`, with Hermes's tag mapped to
+`.cache/hermes.sif`. Each job's logs and results are in `runs/example-<job>/`, as
+[run results](../run-results.md) describes. `.cache` grows to about 52 GB.
 
 On 6 November 2026 the first job took 34 minutes from a fresh clone, most of it for the SGLang image and the
-weights. A GPU job with three tasks took 17 minutes once it started; the wait for a GPU that day ran from
-seconds to nearly an hour.
+weights; converting `hermes.tar` added 71 seconds on 9 November. A GPU job with three tasks took 17 minutes
+once it started; the wait for a GPU that day ran from seconds to nearly an hour.
 
 Expect a score of 0. Qwen3-4B failed `fix-git`, `vulnerable-secret` and `openssl-selfsigned-cert`, and those
 tasks' evaluations report `failed`. Each task's `evaluation/ctrf.json` holds the grader's test results; a

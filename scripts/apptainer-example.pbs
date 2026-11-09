@@ -4,16 +4,18 @@
 # of ARIES on that node. On another cluster, change the queue, the modules and the SGLang image's CUDA
 # build. See docs/implementation/apptainer.md#running-on-a-pbs-cluster.
 #
-# From a checkout on scratch, with the Hermes image at .cache/hermes.sif:
+# From a clone of this repository on scratch, with Hermes's image saved by Docker at .cache/hermes.tar
+# (or already converted, at .cache/hermes.sif):
 #
-#   qsub -P <project> -v SETUP_ONLY=1 -l select=1:ncpus=16:mem=96gb -l walltime=08:00:00 scripts/apptainer-example.pbs
-#   qsub -P <project> scripts/apptainer-example.pbs
+#   setup=$(qsub -P <project> -v SETUP_ONLY=1 -l select=1:ncpus=16:mem=96gb -l walltime=08:00:00 scripts/apptainer-example.pbs)
+#   qsub -P <project> -W depend=afterok:$setup scripts/apptainer-example.pbs
 #   qsub -P <project> -v TASKS=fix-git:vulnerable-secret scripts/apptainer-example.pbs
 #
-# The first command does the downloads and the build on a CPU node, so that a GPU job does not pay to
-# wait for them. Any step already done is skipped. qsub -v splits on commas, so tasks are separated
-# with ":". Each job's results and logs are in runs/example-<job>/. Qwen3-4B scored 0 on each task tried,
-# and that does not mean the job failed; the documentation explains.
+# The first command converts the Hermes image and does the downloads and the build on a CPU node, so
+# that a GPU job does not pay to wait for them; the second waits for it. The third runs other tasks
+# once setup is done. Any step already done is skipped. qsub -v splits on commas, so tasks are
+# separated with ":". Each job's results and logs are in runs/example-<job>/. Qwen3-4B scored 0 on
+# each task tried, and that does not mean the job failed; the documentation explains.
 #
 #PBS -N aries-example
 #PBS -q normal
@@ -35,6 +37,7 @@ WORK="$ARIES_HOME/runs/example-$JOB"
 # Images, overlays and state need a local disk: Apptainer's FUSE mounts and millions of small files
 # do not suit Lustre. Everything worth keeping goes to WORK or .cache, on scratch.
 LOCAL="${TMPDIR:-/tmp}/aries-example-$JOB"
+HERMES_TAR="$ARIES_HOME/.cache/hermes.tar"
 HERMES_SIF="$ARIES_HOME/.cache/hermes.sif"
 SGLANG_SIF="$ARIES_HOME/.cache/sglang-v0.5.2-cu126.sif"
 FAKEROOT="$ARIES_HOME/.cache/fakeroot"
@@ -63,9 +66,15 @@ trap cleanup EXIT
 step() { echo "== $(date -Is) $*"; }
 
 if [ ! -f "$HERMES_SIF" ]; then
-    echo "$HERMES_SIF is missing. Hermes's image needs a Docker build, so make it on a host with Docker:"
-    echo "see docs/implementation/apptainer.md#running-on-a-pbs-cluster"
-    exit 1
+    if [ ! -f "$HERMES_TAR" ]; then
+        echo "Neither $HERMES_TAR nor $HERMES_SIF is there. Hermes's image needs a Docker build, so save it"
+        echo "on a host with Docker: see docs/implementation/apptainer.md#running-on-a-pbs-cluster"
+        exit 1
+    fi
+    # Built on the local disk, and moved into place only when complete.
+    step "converting the Hermes image"
+    apptainer build "$LOCAL/hermes.sif" "docker-archive:$HERMES_TAR"
+    mv "$LOCAL/hermes.sif" "$HERMES_SIF"
 fi
 
 if [ ! -x bin/aries ]; then

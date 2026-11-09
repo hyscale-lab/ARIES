@@ -243,9 +243,9 @@ runtime's writable layer; node-local disk is much faster than a parallel
 filesystem, and `state_dir` is used when it is omitted. `images` maps an image
 reference to a SIF prepared elsewhere, which setup unpacks instead of pulling:
 Hermes runs an image derived with a Docker build, which Apptainer cannot
-perform, so build it on a Docker host, convert it with `apptainer build
-NAME.sif docker-archive:ARCHIVE.tar`, and map its tag here; `aries setup`
-reports the tag it needs. ARIES runs the `apptainer` found on `PATH`.
+perform, so build it on a Docker host and convert it, as
+[Apptainer images](implementation/apptainer.md#images) lists step by step, and
+map its tag here; `aries setup` reports the tag it needs. ARIES runs the `apptainer` found on `PATH`.
 
 Apptainer cannot enforce CPU or memory limits without cgroups v2. A runtime that
 requests them, as every Terminal-Bench 2 task does, is refused unless
