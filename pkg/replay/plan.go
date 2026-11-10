@@ -43,6 +43,8 @@ type Plan struct {
 	Evaluation   core.Evaluation `json:"evaluation"`
 	// StartedAt is the recorded source timeline origin, not a replay scheduling epoch.
 	StartedAt time.Time `json:"-"`
+	// ReplayAt is the shared replay wall-clock origin. Nil uses caller-local timing.
+	ReplayAt *time.Time `json:"replay_at,omitempty"`
 }
 
 // MaxPlanBytes bounds the managed caller's encoded plan.

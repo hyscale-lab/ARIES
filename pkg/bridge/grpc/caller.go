@@ -50,6 +50,10 @@ func ReplayCalls(ctx context.Context, callTimeout time.Duration, client sandboxv
 		fail(err)
 	}
 	origin := time.Now()
+	if plan.ReplayAt != nil {
+		// Map the cross-process wall time to this process's monotonic clock once.
+		origin = origin.Add(plan.ReplayAt.Round(0).Sub(origin.Round(0)))
+	}
 launch:
 	for _, call := range plan.Calls {
 		for failure == nil {

@@ -43,6 +43,7 @@ type fakeRuntime struct {
 	stagedTimeout time.Duration
 	files         map[string][]byte
 	resultDelay   time.Duration
+	readyDelay    time.Duration
 	resultReady   <-chan struct{}
 	planUploads   int
 	upload        func(context.Context, string) error
@@ -94,7 +95,8 @@ func TestReplayCallerBoundsPlanStaging(t *testing.T) {
 					t.Fatal(err)
 				}
 				started := time.Now()
-				runErr := caller.Run(ctx, replay.Plan{})
+				origin := time.Now().Add(startTimeout)
+				runErr := caller.Run(ctx, replay.Plan{ReplayAt: &origin})
 				wantErr, wantWait := error(context.DeadlineExceeded), startTimeout
 				if test.cancel {
 					wantErr, wantWait = context.Canceled, 0
@@ -185,6 +187,15 @@ func (runtime *fakeRuntime) DownloadArchive(ctx context.Context, _, name string)
 	data, ok := runtime.files[name]
 	if !ok {
 		return nil, deployment.FileInfo{}, runner.ErrNotFound
+	}
+	if name == readyFile {
+		timer := time.NewTimer(runtime.readyDelay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return nil, deployment.FileInfo{}, ctx.Err()
+		}
 	}
 	if name == resultFile {
 		if runtime.resultReady != nil {
@@ -307,6 +318,72 @@ func TestReplayCallerAllowsChildStartupAndResultTransfer(t *testing.T) {
 	})
 }
 
+func TestReplayCallerUsesSharedOriginBudgetAfterStaging(t *testing.T) {
+	const maxDuration = time.Duration(1<<63 - 1)
+	const callTimeout = time.Second
+	const finalWait = time.Second
+	const offset = startTimeout + startTimeout
+	const overhead = callTimeout + finalWait + startTimeout
+	const headroom = startTimeout + startTimeout
+	const futureDelay = headroom + headroom
+	for _, test := range []struct {
+		name         string
+		originDelay  time.Duration
+		offset       time.Duration
+		readyDelay   time.Duration
+		stageDelay   time.Duration
+		resultDelay  time.Duration
+		wantDeadline bool
+		zeroOrigin   bool
+	}{
+		{name: "future origin", offset: offset, originDelay: futureDelay, readyDelay: pollInterval, stageDelay: pollInterval, resultDelay: futureDelay + offset},
+		{name: "overdue origin", offset: offset, originDelay: -futureDelay, readyDelay: pollInterval, stageDelay: pollInterval, resultDelay: overhead + headroom + pollInterval, wantDeadline: true},
+		{name: "explicit zero origin", offset: offset, zeroOrigin: true, resultDelay: overhead + headroom + pollInterval, wantDeadline: true},
+		{name: "overdue large offset", offset: maxDuration - overhead - headroom, zeroOrigin: true, resultDelay: overhead + headroom + pollInterval, wantDeadline: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				origin := time.Now().Add(test.originDelay)
+				if test.zeroOrigin {
+					origin = time.Time{}
+				}
+				plan := replay.Plan{ReplayAt: &origin, Calls: []replay.Call{{StartOffset: test.offset}}, FinalWait: finalWait}
+				runtime := &fakeRuntime{files: make(map[string][]byte), readyDelay: test.readyDelay, resultDelay: test.resultDelay}
+				runtime.upload = func(_ context.Context, name string) error {
+					if name == planFile {
+						<-time.After(test.stageDelay)
+					}
+					return nil
+				}
+				placement := core.RuntimePlacement{AttachmentID: "task-network"}
+				caller, err := New(Options{Runtime: runtime, Image: "aries-bridge:v1", Backend: "docker", BridgeBackend: "docker", BridgePlacement: placement, CallTimeout: callTimeout})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := caller.Start(context.Background(), core.ToolEndpoint{Protocol: "grpc", Address: "10.0.0.1:8443"}, core.HarnessConnectivity{Placement: placement}, "run", "task"); err != nil {
+					t.Fatal(err)
+				}
+				started := time.Now()
+				err = caller.Run(context.Background(), plan)
+				if test.wantDeadline {
+					if !errors.Is(err, context.DeadlineExceeded) || time.Since(started) != test.stageDelay+overhead+headroom {
+						t.Errorf("overdue caller = %v after %s, want bounded timeout after %s", err, time.Since(started), test.stageDelay+overhead+headroom)
+					}
+				} else if err != nil {
+					t.Errorf("future origin lost execution allowance: %v", err)
+				}
+				var staged replay.Plan
+				if err := json.Unmarshal(runtime.files[planFile], &staged); err != nil || staged.ReplayAt == nil || !staged.ReplayAt.Equal(origin) {
+					t.Errorf("staged origin changed after readiness and upload: %v, %v", staged.ReplayAt, err)
+				}
+				if err := caller.Stop(context.Background()); err != nil || !runtime.stopBounded {
+					t.Fatalf("cleanup = %v, bounded=%t", err, runtime.stopBounded)
+				}
+			})
+		})
+	}
+}
+
 func TestReplayCallerRejectsRepeatedRun(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		const onePlan = 1
@@ -387,11 +464,17 @@ func TestReplayChildExecutionBudgetBoundaries(t *testing.T) {
 
 func TestReplayCallerRejectsInvalidDeadline(t *testing.T) {
 	const maxDuration = time.Duration(1<<63 - 1)
+	farFuture := time.Now().Add(maxDuration)
+	beyondFuture := farFuture.Add(startTimeout)
+	offsetFuture := time.Now().Add(maxDuration - startTimeout)
 	for _, test := range []struct {
 		name    string
 		timeout time.Duration
 		plan    replay.Plan
 	}{
+		{name: "shared future subtraction overflow", timeout: time.Second, plan: replay.Plan{ReplayAt: &beyondFuture, Calls: []replay.Call{{}}}},
+		{name: "shared future origin overflow", timeout: time.Second, plan: replay.Plan{ReplayAt: &farFuture, Calls: []replay.Call{{}}}},
+		{name: "shared origin and offset overflow", timeout: time.Second, plan: replay.Plan{ReplayAt: &offsetFuture, Calls: []replay.Call{{StartOffset: startTimeout}}}},
 		{name: "negative final wait", timeout: time.Second, plan: replay.Plan{FinalWait: -time.Second}},
 		{name: "negative offset", timeout: time.Second, plan: replay.Plan{Calls: []replay.Call{{StartOffset: -time.Second}}}},
 		{name: "execution overflow", timeout: maxDuration, plan: replay.Plan{FinalWait: time.Second}},
@@ -411,6 +494,9 @@ func TestReplayCallerRejectsInvalidDeadline(t *testing.T) {
 			}
 			if err := caller.Run(context.Background(), test.plan); err == nil || !strings.Contains(err.Error(), "schedule") {
 				t.Fatalf("invalid replay deadline not rejected before execution: %v", err)
+			}
+			if runtime.planUploads != 0 {
+				t.Fatal("invalid schedule reached private plan staging")
 			}
 			if err := caller.Stop(context.Background()); err != nil {
 				t.Fatal(err)
@@ -478,9 +564,13 @@ const childTestDeadline = 5 * time.Second
 type largeExecServer struct {
 	sandboxv1.UnimplementedSandboxServer
 	response *sandboxv1.ExecResponse
+	started  chan<- time.Time
 }
 
 func (server *largeExecServer) Exec(context.Context, *sandboxv1.ExecRequest) (*sandboxv1.ExecResponse, error) {
+	if server.started != nil {
+		server.started <- time.Now()
+	}
 	return server.response, nil
 }
 
@@ -550,12 +640,17 @@ func TestReplayChildReceivesLargeExecReply(t *testing.T) {
 	}
 }
 
-func TestReplayChildWaitsForCompletePlanUpload(t *testing.T) {
+func TestReplayChildKeepsSharedOriginAfterCompletePlanUpload(t *testing.T) {
+	const oneCall = 1
+	const callOffset = time.Second
+	origin := time.Now()
+	started := make(chan time.Time, oneCall)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	service := grpc.NewServer()
+	sandboxv1.RegisterSandboxServer(service, &largeExecServer{response: &sandboxv1.ExecResponse{}, started: started})
 	go func() { _ = service.Serve(listener) }()
 	t.Cleanup(service.Stop)
 	folder := t.TempDir()
@@ -575,13 +670,22 @@ func TestReplayChildWaitsForCompletePlanUpload(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	complete := []byte(`{"calls":[]}`)
+	plan := replay.Plan{ReplayAt: &origin, Calls: []replay.Call{{Operation: "Exec", Script: "true", StartOffset: callOffset, ResponseCode: codes.OK.String()}}}
+	// The outcome has five length-prefixed fields and an empty Exec reply.
+	for _, field := range [][]byte{[]byte("aries.grpc.outcome.v1"), []byte(sandboxv1.Sandbox_Exec_FullMethodName), nil, []byte(codes.OK.String()), nil} {
+		var prefix [binary.MaxVarintLen64]byte
+		plan.Calls[0].ResponseBytes += int64(binary.PutUvarint(prefix[:], uint64(len(field))) + len(field))
+	}
+	complete, err := replay.EncodePlan(plan, replay.MaxPlanBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 	partial := complete[:len(complete)/2]
 	planPath := filepath.Join(folder, planFile)
 	if err := os.WriteFile(planPath, partial, 0600); err != nil {
 		t.Fatal(err)
 	}
-	observation := time.NewTimer(time.Second)
+	observation := time.NewTimer(callOffset + callOffset)
 	defer observation.Stop()
 	for {
 		if data, err := os.ReadFile(filepath.Join(folder, resultFile)); err == nil {
@@ -606,6 +710,7 @@ completed:
 	if err := file.Close(); err != nil {
 		t.Fatal(err)
 	}
+	published := time.Now()
 	if err := os.WriteFile(filepath.Join(folder, planReadyFile), nil, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -614,6 +719,9 @@ completed:
 			var outcome childResult
 			if err := json.Unmarshal(data, &outcome); err != nil || !outcome.Done || outcome.Error != "" {
 				t.Fatalf("complete plan replay = %s, %v", data, err)
+			}
+			if launched := <-started; launched.Sub(published) >= callOffset {
+				t.Fatalf("plan acceptance reset the origin: launch delay = %s", launched.Sub(published))
 			}
 			return
 		}
