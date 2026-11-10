@@ -7,8 +7,10 @@ import (
 	"io"
 	"path/filepath"
 	"slices"
+	"sync"
 	"time"
 
+	bridgegrpc "github.com/hyscale-lab/aries/pkg/bridge/grpc"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/monitor"
@@ -35,22 +37,23 @@ type PreparedBenchmark struct {
 }
 
 type Wiring struct {
-	recordForReplay    bool
-	BenchmarkRevisions func(config.Config) map[string]string
-	NewInfrastructure  func(config.Config, string, string, bool, *logrus.Logger) (*RunInfrastructure, error)
-	PrepareBridge      func(context.Context, config.Config) error
-	PrepareBackend     func(config.Config, string) (PreparedBackend, error)
-	ValidateComponents func(config.Config) error
-	SetupBenchmark     func(context.Context, config.Config) error
-	LoadBenchmark      func(context.Context, config.Config, string, []string, func(string) ([]byte, bool)) (PreparedBenchmark, error)
-	PullImages         func(context.Context, config.Config, []string) error
-	BuildHarnessImage  func(context.Context, config.Config) error
-	NewHarness         func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error)
-	NewSandbox         func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error)
-	NewBridge          func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error)
-	NewReplayCaller    func(config.Config, core.RuntimePlacement, time.Duration, *logrus.Logger) (runner.ReplayCaller, error)
-	LoadReplaySource   func(context.Context, config.Config, core.Task) (replay.Plan, error)
-	ReplayPlacement    core.RuntimePlacement
+	recordForReplay       bool
+	BenchmarkRevisions    func(config.Config) map[string]string
+	NewInfrastructure     func(config.Config, string, string, bool, *logrus.Logger) (*RunInfrastructure, error)
+	PrepareBridge         func(context.Context, config.Config) error
+	PrepareBackend        func(config.Config, string) (PreparedBackend, error)
+	ValidateComponents    func(config.Config) error
+	SetupBenchmark        func(context.Context, config.Config) error
+	LoadBenchmark         func(context.Context, config.Config, string, []string, func(string) ([]byte, bool)) (PreparedBenchmark, error)
+	PullImages            func(context.Context, config.Config, []string) error
+	BuildHarnessImage     func(context.Context, config.Config) error
+	NewHarness            func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error)
+	NewSandbox            func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error)
+	NewBridge             func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error)
+	NewReplayCaller       func(config.Config, core.RuntimePlacement, time.Duration, *logrus.Logger) (runner.ReplayCaller, error)
+	PreflightReplaySource func(context.Context, config.Config, []core.Task, *logrus.Entry) (*bridgegrpc.ReplaySelection, error)
+	LoadReplaySource      func(context.Context, config.Config, core.Task) (replay.Plan, error)
+	ReplayPlacement       core.RuntimePlacement
 }
 
 type Dependencies struct {
@@ -320,15 +323,58 @@ func runReplay(ctx context.Context, cfg config.Config, runID, outputRoot string,
 		return err
 	}
 	defer func() { returnErr = errors.Join(returnErr, detachRunLog()) }()
-	return runWithReplayInfrastructure(ctx, cfg, runID, outputRoot, stdout, wiring, logger, catalog)
+	if wiring.PreflightReplaySource == nil {
+		return errors.New("replay source preflight is required")
+	}
+	selection, err := wiring.PreflightReplaySource(ctx, cfg, catalog.Tasks, logger.WithField("run_id", runID))
+	if err != nil {
+		return err
+	}
+	return runWithReplayInfrastructure(ctx, cfg, runID, outputRoot, stdout, wiring, logger, catalog, selection)
 }
 
-func runWithReplayInfrastructure(ctx context.Context, cfg config.Config, runID, outputRoot string, stdout io.Writer, wiring Wiring, logger *logrus.Logger, catalog PreparedBenchmark) error {
+type replayCaller struct {
+	runner.ReplayCaller
+	replayAt func() time.Time
+}
+
+func (caller *replayCaller) Run(ctx context.Context, plan replay.Plan) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if len(plan.Calls) != 0 {
+		origin := caller.replayAt()
+		plan.ReplayAt = &origin
+	}
+	return caller.ReplayCaller.Run(ctx, plan)
+}
+
+func runWithReplayInfrastructure(ctx context.Context, cfg config.Config, runID, outputRoot string, stdout io.Writer, wiring Wiring, logger *logrus.Logger, catalog PreparedBenchmark, selection *bridgegrpc.ReplaySelection) error {
+	taskIDs := make([]string, 0, len(selection.Occurrences))
+	for _, occurrence := range selection.Occurrences {
+		taskIDs = append(taskIDs, occurrence.LogicalTaskID)
+	}
 	return executeAndRecord(ctx, func(ctx context.Context) (core.RunResult, error) {
 		return runWithInfrastructure(ctx, cfg, runID, outputRoot, logger, wiring, func(ctx context.Context, taskWiring Wiring) (core.RunResult, error) {
-			return runProfile(ctx, cfg.Name, runID, cfg.Benchmark.Tasks, cfg.Execution.Concurrency, 0, nil,
+			if len(taskIDs) > 1 && taskWiring.NewReplayCaller != nil {
+				replayAt := sync.OnceValue(func() time.Time { return time.Now().UTC() })
+				newReplayCaller := taskWiring.NewReplayCaller
+				taskWiring.NewReplayCaller = func(cfg config.Config, placement core.RuntimePlacement, timeout time.Duration, logger *logrus.Logger) (runner.ReplayCaller, error) {
+					caller, err := newReplayCaller(cfg, placement, timeout, logger)
+					if err != nil {
+						return nil, err
+					}
+					return &replayCaller{ReplayCaller: caller, replayAt: replayAt}, nil
+				}
+			}
+			return runProfile(ctx, cfg.Name, runID, taskIDs, cfg.Execution.Concurrency, 0, nil,
 				func(taskCtx context.Context, occurrence taskOccurrence) (core.RunResult, error) {
-					experiment, err := buildTaskExperiment(cfg, core.ModelConfig{}, nil, runID, outputRoot, occurrence.logicalID, occurrence.executionID, nil, logger, catalog, taskWiring)
+					index := occurrence.index
+					occurrenceWiring := taskWiring
+					occurrenceWiring.LoadReplaySource = func(ctx context.Context, _ config.Config, _ core.Task) (replay.Plan, error) {
+						return selection.Load(ctx, index)
+					}
+					experiment, err := buildTaskExperiment(cfg, core.ModelConfig{}, nil, runID, outputRoot, selection.Occurrences[index].LogicalTaskID, occurrence.executionID, nil, logger, catalog, occurrenceWiring)
 					if err != nil {
 						return core.RunResult{}, err
 					}

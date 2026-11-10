@@ -48,14 +48,22 @@ func TestReplayProfileUsesOneSourceWithoutLiveFields(t *testing.T) {
 	}
 }
 
-func TestReplayProfileRejectsLiveFieldsAndRepeatedTasks(t *testing.T) {
+func TestReplayProfileAcceptsCatalogSelectors(t *testing.T) {
+	for _, tasks := range []string{`["fix-git","other"]`, `["fix-git","fix-git"]`, `[]`} {
+		profile := strings.Replace(validReplayConfig(), `["fix-git"]`, tasks, 1)
+		if _, err := Decode(strings.NewReader(profile)); err != nil {
+			t.Fatalf("catalog selector %s rejected: %v", tasks, err)
+		}
+	}
+}
+
+func TestReplayProfileRejectsLiveFieldsAndSchedules(t *testing.T) {
 	base := validReplayConfig()
 	for name, profile := range map[string]string{
 		"model":                    strings.Replace(base, `"replay":`, `"model":{},"replay":`, 1),
 		"harness":                  strings.Replace(base, `"replay":`, `"harness":{},"replay":`, 1),
 		"runtime":                  strings.Replace(base, `"replay":`, `"runtime":{},"replay":`, 1),
 		"missing model and replay": strings.Replace(base, `"replay":{"source":"source-run/task-001","deployment":{"backend":"docker"}},`, "", 1),
-		"extra tasks":              strings.Replace(base, `"tasks":["fix-git"]`, `"tasks":["fix-git","other"]`, 1),
 		"empty loop field":         strings.Replace(base, `"benchmark":`, `"execution":{"loop_duration":""},"benchmark":`, 1),
 		"empty arrivals field":     strings.Replace(base, `"benchmark":`, `"execution":{"arrivals_file":""},"benchmark":`, 1),
 		"zero arrival rate field":  strings.Replace(base, `"benchmark":`, `"execution":{"arrival_rate_per_min":0},"benchmark":`, 1),

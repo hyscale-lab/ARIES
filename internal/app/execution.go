@@ -32,6 +32,7 @@ func (experiment *experiment) Run(ctx context.Context) (core.RunResult, error) {
 type taskOccurrence struct {
 	logicalID   string
 	executionID string
+	index       int
 }
 
 func nextTaskOccurrence(logicalID string, index *uint64) (taskOccurrence, error) {
@@ -102,6 +103,7 @@ func runProfile(ctx context.Context, name, runID string, taskIDs []string, concu
 			slots = append(slots, &occurrenceSlot{err: err})
 			return false
 		}
+		occurrence.index = len(slots)
 		slot := &occurrenceSlot{occurrence: occurrence}
 		slots = append(slots, slot)
 		wg.Add(1)

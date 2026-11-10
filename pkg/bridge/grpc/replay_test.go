@@ -693,13 +693,20 @@ func TestPreflightReplaySourceChecksGlobalPlanBound(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan.Calls[0].StartOffset = callGap
+	const replayOrigin = "2026-11-05T12:00:00.000000001Z"
+	replayAt, err := time.Parse(time.RFC3339Nano, replayOrigin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.ReplayAt = &replayAt
 	globalData, err := json.Marshal(plan)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, bound := range []int{len(localData), len(globalData)} {
+	const oneByte = 1
+	for _, bound := range []int{len(localData), len(globalData) - oneByte, len(globalData)} {
 		selection, err := preflightReplaySource(context.Background(), run, []core.Task{replayTask}, replayBenchmark, replayRevisions, nil, bound)
-		if bound == len(localData) {
+		if bound < len(globalData) {
 			if err == nil || selection != nil {
 				t.Fatalf("global plan above encoded bound accepted: %+v, %v", selection, err)
 			}
@@ -712,6 +719,54 @@ func TestPreflightReplaySourceChecksGlobalPlanBound(t *testing.T) {
 		if err != nil || got.Calls[0].StartOffset != callGap {
 			t.Fatalf("exact global plan bound rejected: %+v, %v", got, err)
 		}
+		got.ReplayAt = &replayAt
+		encoded, err := json.Marshal(got)
+		if err != nil || len(encoded) != bound {
+			t.Fatalf("preflight did not cover serialized origin: bytes=%d bound=%d err=%v", len(encoded), bound, err)
+		}
+	}
+}
+
+func TestPreflightReplaySourceKeepsLocalPlanBounds(t *testing.T) {
+	start, err := time.Parse(time.RFC3339Nano, replaySourceTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name    string
+		records []toolCallRecord
+	}{
+		{name: "empty"},
+		{name: "calls", records: []toolCallRecord{replayRecord(start, start, 1)}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source := writeReplaySource(t, test.records, start, core.Evaluation{Status: core.StatusSucceeded})
+			plan, err := LoadReplaySource(source, replayTask, replayBenchmark, replayRevisions)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := json.Marshal(plan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			const oneByte = 1
+			for _, bound := range []int{len(data) - oneByte, len(data)} {
+				selection, err := preflightReplaySource(context.Background(), source, []core.Task{replayTask}, replayBenchmark, replayRevisions, nil, bound)
+				if bound < len(data) {
+					if err == nil || selection != nil {
+						t.Fatalf("local plan exceeded preflight bound: %+v %v", selection, err)
+					}
+					continue
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				got, err := selection.Load(context.Background(), 0)
+				if err != nil || len(got.Calls) != len(test.records) || got.ReplayAt != nil {
+					t.Fatalf("local plan bound changed: %+v %v", got, err)
+				}
+			}
+		})
 	}
 }
 

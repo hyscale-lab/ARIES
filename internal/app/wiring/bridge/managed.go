@@ -1,6 +1,7 @@
 package bridge
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -11,7 +12,7 @@ import (
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/deployment"
-	"github.com/hyscale-lab/aries/pkg/replay"
+	"github.com/sirupsen/logrus"
 )
 
 // NewService takes ownership of the supplied run-scoped runtime transport.
@@ -49,9 +50,9 @@ func SandboxStaging(cfg config.Config) (managed.SandboxStaging, error) {
 	}
 }
 
-// LoadReplaySource binds source validation to the selected catalog task and pins.
-func LoadReplaySource(cfg config.Config, task core.Task) (replay.Plan, error) {
-	return grpc.LoadReplaySource(cfg.Replay.Source, task, cfg.Benchmark.Type, BenchmarkRevisions(cfg))
+// PreflightReplaySource binds the complete source selection to catalog tasks and pins.
+func PreflightReplaySource(ctx context.Context, cfg config.Config, tasks []core.Task, logger *logrus.Entry) (*grpc.ReplaySelection, error) {
+	return grpc.PreflightReplaySource(ctx, cfg.Replay.Source, tasks, cfg.Benchmark.Type, BenchmarkRevisions(cfg), logger)
 }
 
 // BenchmarkRevisions returns the same pins used by live bridge evidence.

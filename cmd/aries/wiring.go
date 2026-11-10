@@ -19,7 +19,6 @@ import (
 	"github.com/hyscale-lab/aries/pkg/containerimage"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/deployment"
-	"github.com/hyscale-lab/aries/pkg/replay"
 	replaymanaged "github.com/hyscale-lab/aries/pkg/replay/managed"
 	"github.com/hyscale-lab/aries/pkg/runner"
 	"github.com/sirupsen/logrus"
@@ -27,20 +26,18 @@ import (
 
 func commandWiring() app.Wiring {
 	return app.Wiring{
-		PrepareBackend:     prepareBackend,
-		BenchmarkRevisions: bridgewiring.BenchmarkRevisions,
-		PrepareBridge:      prepareBridge,
-		ValidateComponents: validateComponents,
-		SetupBenchmark:     setupBenchmark,
-		LoadBenchmark:      loadBenchmark,
-		PullImages:         pullImages,
-		BuildHarnessImage:  buildHarnessImage,
-		NewHarness:         newHarness,
-		NewInfrastructure:  newInfrastructure,
-		NewReplayCaller:    newReplayCaller,
-		LoadReplaySource: func(_ context.Context, cfg config.Config, task core.Task) (replay.Plan, error) {
-			return bridgewiring.LoadReplaySource(cfg, task)
-		},
+		PrepareBackend:        prepareBackend,
+		BenchmarkRevisions:    bridgewiring.BenchmarkRevisions,
+		PrepareBridge:         prepareBridge,
+		ValidateComponents:    validateComponents,
+		SetupBenchmark:        setupBenchmark,
+		LoadBenchmark:         loadBenchmark,
+		PullImages:            pullImages,
+		BuildHarnessImage:     buildHarnessImage,
+		NewHarness:            newHarness,
+		NewInfrastructure:     newInfrastructure,
+		NewReplayCaller:       newReplayCaller,
+		PreflightReplaySource: bridgewiring.PreflightReplaySource,
 	}
 }
 

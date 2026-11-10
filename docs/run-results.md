@@ -80,7 +80,10 @@ resource samples under the `evaluation-sandbox` component in
 
 ## Sandbox-call replay results
 
-A replay run has one task occurrence. Read `tasks[0].replay.status` and
+A replay run has one result per selected source occurrence, including zero-call
+occurrences. Logical task IDs can repeat. Fresh execution identities belong to the
+new run, even when local execution-ID strings match source occurrence IDs. The fields below show the first result; inspect every
+entry in `tasks` for a complete run. Read `tasks[0].replay.status` and
 `tasks[0].replay.error` for call execution. Read
 `tasks[0].isolation.caller_stopped` and
 `tasks[0].isolation.bridge_revoked` for positive isolation confirmation.
@@ -126,9 +129,14 @@ The source occurrence directory contains the private
 `bridge/tool-calls.jsonl` and `bridge/runtime.json`; its parent run contains
 `run-result.json`. A source with missing input, canceled or refused calls,
 missing response checks, a changed log digest, or a missing matching source
-evaluation fails before sandbox creation. Replay preserves later call-start
-spacing and the final post-call wait, but not the initial setup wait. Actual
-start times can drift due to network and bridge scheduling. See
+evaluation fails whole-run preflight before any task sandbox starts. Admission
+also rejects evidence changed after preflight. Replay uses one common call-start
+timeline and preserves each source's final post-call wait, but not initial setup
+waits or sandbox lifecycle timing. For multiple occurrences, the first ready
+caller with recorded calls starts the shared clock. Empty plans do not arm it;
+a single selected occurrence keeps local timing after readiness. Later readiness
+does not reset the timeline. Actual start times can drift due to bounded admission,
+private plan staging, network, and bridge scheduling. Source artifacts remain in their source run; replay outputs are separate. See
 [replay configuration](configuration.md#sandbox-call-replay).
 
 ## Measurement availability

@@ -3,22 +3,31 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
 
+	"github.com/hyscale-lab/aries/pkg/benchmark/terminalbench"
+	bridgegrpc "github.com/hyscale-lab/aries/pkg/bridge/grpc"
+	sandboxv1 "github.com/hyscale-lab/aries/pkg/bridge/grpc/v1"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/replay"
 	"github.com/hyscale-lab/aries/pkg/runner"
 	"github.com/sirupsen/logrus"
+	"google.golang.org/grpc"
 )
 
 func writeReplayCommandProfile(t *testing.T, output string) string {
@@ -88,6 +97,10 @@ func TestReplayRunPreparesTaskWithoutLiveModelOrHarness(t *testing.T) {
 			return nil
 		},
 		BuildHarnessImage: func(context.Context, config.Config) error { t.Fatal("replay built harness image"); return nil },
+		PreflightReplaySource: func(context.Context, config.Config, []core.Task, *logrus.Entry) (*bridgegrpc.ReplaySelection, error) {
+			events = append(events, "preflight")
+			return &bridgegrpc.ReplaySelection{}, nil
+		},
 		NewInfrastructure: func(_ config.Config, _, _ string, captureReplay bool, _ *logrus.Logger) (*RunInfrastructure, error) {
 			if !captureReplay {
 				t.Fatal("replay did not enable evidence capture")
@@ -99,7 +112,7 @@ func TestReplayRunPreparesTaskWithoutLiveModelOrHarness(t *testing.T) {
 	if err := Run(context.Background(), profile, io.Discard, Dependencies{Wiring: wiring}); !errors.Is(err, stop) {
 		t.Fatalf("Run error = %v, want infrastructure stop", err)
 	}
-	want := []string{"bridge", "benchmark", "catalog", "images:task:tag", "infrastructure"}
+	want := []string{"bridge", "benchmark", "catalog", "images:task:tag", "preflight", "infrastructure"}
 	if !reflect.DeepEqual(events, want) {
 		t.Fatalf("events = %v, want %v", events, want)
 	}
@@ -123,6 +136,780 @@ func (*stubReplayCaller) Run(context.Context, replay.Plan) error { return nil }
 func (caller *stubReplayCaller) Stop(context.Context) error {
 	caller.stops++
 	return nil
+}
+
+const (
+	finiteSourceRun = "recorded-run"
+	finiteImage     = "task:tag"
+	finiteRevision  = "source-revision"
+	finiteStart     = "2026-11-05T12:00:00Z"
+	finiteCallGap   = time.Second
+)
+
+func writeFiniteReplaySource(t *testing.T, logicalIDs []string, zeroCalls bool, offsets ...time.Duration) (string, []core.Task, []core.TaskResult) {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	start, err := time.Parse(time.RFC3339Nano, finiteStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tasks []core.Task
+	var results []core.TaskResult
+	seen := map[string]bool{}
+	writeJSON := func(path string, value any) {
+		data, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for index, logicalID := range logicalIDs {
+		if !seen[logicalID] {
+			tasks = append(tasks, core.Task{ID: logicalID, Environment: core.Environment{Image: finiteImage}})
+			seen[logicalID] = true
+		}
+		const firstOccurrence = 1
+		id := fmt.Sprintf("%s-%03d", logicalID, index+firstOccurrence)
+		dir := filepath.Join(root, id, "bridge")
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		var log []byte
+		at := start.Add(time.Duration(index) * finiteCallGap)
+		if !zeroCalls {
+			if len(offsets) == 0 {
+				offsets = []time.Duration{0}
+			}
+			for callIndex, offset := range offsets {
+				const firstSequence = 1
+				// Canonical empty Stat success: version, method, empty message, OK, empty error.
+				const response = "\x15aries.grpc.outcome.v1\x1e/aries.sandbox.v1.Sandbox/Stat\x00\x02OK\x00"
+				digest := sha256.Sum256([]byte(response))
+				called := at.Add(offset)
+				record := map[string]any{
+					"run_id": finiteSourceRun, "task_id": id, "sandbox_id": id,
+					"sequence": callIndex + firstSequence, "started_at": called.Format(time.RFC3339Nano), "timestamp": called.Format(time.RFC3339Nano),
+					"operation_class": "stat", "path": "/app/file", "status": "completed",
+					"response_sha256": hex.EncodeToString(digest[:]), "response_bytes": len(response), "grpc_code": "OK",
+				}
+				line, err := json.Marshal(record)
+				if err != nil {
+					t.Fatal(err)
+				}
+				log = append(log, line...)
+				log = append(log, '\n')
+			}
+			at = at.Add(offsets[len(offsets)-1])
+		}
+		if err := os.WriteFile(filepath.Join(dir, "tool-calls.jsonl"), log, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(log)
+		const sourceSchemaVersion = 1
+		writeJSON(filepath.Join(dir, "runtime.json"), map[string]any{
+			"schema_version": sourceSchemaVersion, "run_id": finiteSourceRun, "replay_ready": true, "SandboxID": id,
+			"benchmark_type": "terminalbench2", "task_id": logicalID, "image": finiteImage,
+			"benchmark_revisions": map[string]string{"revision": finiteRevision}, "harness_completed_at": at.Format(time.RFC3339Nano),
+			"tool_calls_bytes": len(log), "tool_calls_sha256": hex.EncodeToString(digest[:]),
+		})
+		results = append(results, core.TaskResult{TaskID: id, Evaluation: core.Evaluation{Status: core.StatusSucceeded, Score: float64(index), Reward: float64(index), VerifierStatus: id}})
+	}
+	writeJSON(filepath.Join(root, "run-result.json"), core.RunResult{RunID: finiteSourceRun, Tasks: results})
+	return root, tasks, results
+}
+
+type finiteReplayCaller struct {
+	stubReplayCaller
+	start func(context.Context) error
+	run   func(context.Context, replay.Plan) error
+	stop  func(context.Context) error
+}
+
+func (caller *finiteReplayCaller) Start(ctx context.Context, _ core.ToolEndpoint, _ core.HarnessConnectivity, _, _ string) error {
+	if caller.start != nil {
+		return caller.start(ctx)
+	}
+	return nil
+}
+func (caller *finiteReplayCaller) Run(ctx context.Context, plan replay.Plan) error {
+	return caller.run(ctx, plan)
+}
+func (caller *finiteReplayCaller) Stop(ctx context.Context) error {
+	if caller.stop != nil {
+		return caller.stop(ctx)
+	}
+	return caller.stubReplayCaller.Stop(ctx)
+}
+
+type finiteReplaySandbox struct {
+	managedIntegrationSandbox
+	start func(context.Context) error
+	stop  func(context.Context) error
+}
+
+func (sandbox *finiteReplaySandbox) Start(ctx context.Context, request core.SandboxRequest) (runner.Sandbox, error) {
+	if sandbox.start != nil {
+		if err := sandbox.start(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return sandbox.managedIntegrationSandbox.Start(ctx, request)
+}
+func (sandbox *finiteReplaySandbox) Stop(ctx context.Context, _ runner.Sandbox) error {
+	if sandbox.stop != nil {
+		return sandbox.stop(ctx)
+	}
+	return nil
+}
+
+type finiteReplayBenchmark struct{ replayTaskBenchmark }
+
+func (*finiteReplayBenchmark) Evaluate(context.Context, core.Task, runner.Sandbox, runner.EvaluationSandboxes) (core.Evaluation, error) {
+	return core.Evaluation{}, errors.New("replay must not run a verifier or judge")
+}
+
+func finiteReplayProfile(t *testing.T, source string, concurrency int) string {
+	t.Helper()
+	profile := writeReplayCommandProfile(t, filepath.Join(t.TempDir(), "runs"))
+	data, err := os.ReadFile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = bytes.Replace(data, []byte(`"source-run/a-001"`), []byte(fmt.Sprintf("%q", source)), 1)
+	data = bytes.Replace(data, []byte(`"benchmark":`), []byte(fmt.Sprintf(`"execution":{"concurrency":%d},"benchmark":`, concurrency)), 1)
+	if err := os.WriteFile(profile, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return profile
+}
+
+func finiteReplayWiring(tasks []core.Task) Wiring {
+	return Wiring{
+		ValidateComponents: func(config.Config) error { return nil },
+		SetupBenchmark:     func(context.Context, config.Config) error { return nil },
+		PullImages:         func(context.Context, config.Config, []string) error { return nil },
+		LoadBenchmark: func(context.Context, config.Config, string, []string, func(string) ([]byte, bool)) (PreparedBenchmark, error) {
+			return PreparedBenchmark{Tasks: tasks, NewOccurrence: func(logicalID, occurrenceID string) (runner.Benchmark, error) {
+				return &finiteReplayBenchmark{replayTaskBenchmark{task: core.Task{ID: occurrenceID, Environment: core.Environment{Image: finiteImage}}}}, nil
+			}}, nil
+		},
+		PreflightReplaySource: func(ctx context.Context, cfg config.Config, tasks []core.Task, logger *logrus.Entry) (*bridgegrpc.ReplaySelection, error) {
+			return bridgegrpc.PreflightReplaySource(ctx, cfg.Replay.Source, tasks, cfg.Benchmark.Type, map[string]string{"revision": finiteRevision}, logger)
+		},
+		NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
+			return SandboxInstance{Sandbox: &managedIntegrationSandbox{}, Resources: &stubResources{}}, nil
+		},
+		NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) { return &stubBridge{}, nil },
+	}
+}
+
+func snapshotFiniteReplaySource(t *testing.T, source string) map[string][sha256.Size]byte {
+	t.Helper()
+	files := map[string][sha256.Size]byte{}
+	if err := filepath.Walk(source, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		files[path] = sha256.Sum256(data)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return files
+}
+
+func TestReplayRunExecutesFiniteRecordedOccurrences(t *testing.T) {
+	for _, test := range []struct {
+		name                      string
+		ids                       []string
+		zeroCalls, single, legacy bool
+	}{
+		{name: "distinct", ids: []string{"a", "b"}},
+		{name: "repeated", ids: []string{"a", "a"}},
+		{name: "loop-produced", ids: []string{"a", "b", "a", "b"}},
+		{name: "zero calls", ids: []string{"a", "a"}, zeroCalls: true},
+		{name: "single occurrence", ids: []string{"a", "b"}, single: true},
+		{name: "legacy occurrence", ids: []string{"a"}, single: true, legacy: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source, tasks, expected := writeFiniteReplaySource(t, test.ids, test.zeroCalls)
+			if test.legacy {
+				path := filepath.Join(source, expected[0].TaskID, "bridge", "runtime.json")
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				data = bytes.Replace(data, []byte(`"run_id":"recorded-run",`), nil, 1)
+				if err := os.WriteFile(path, data, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			sourceRoot := source
+			original := snapshotFiniteReplaySource(t, sourceRoot)
+			if test.single {
+				source = filepath.Join(source, expected[0].TaskID)
+				expected = expected[:1]
+			}
+			const concurrency = 1
+			profile := finiteReplayProfile(t, source, concurrency)
+			var plans []replay.Plan
+			wiring := finiteReplayWiring(tasks)
+			wiring.NewReplayCaller = func(config.Config, core.RuntimePlacement, time.Duration, *logrus.Logger) (runner.ReplayCaller, error) {
+				return &finiteReplayCaller{run: func(_ context.Context, plan replay.Plan) error { plans = append(plans, plan); return nil }}, nil
+			}
+			var out bytes.Buffer
+			if err := runCommandForTest(context.Background(), profile, &out, Dependencies{Wiring: wiring}); err != nil {
+				t.Fatal(err)
+			}
+			var result core.RunResult
+			if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(original, snapshotFiniteReplaySource(t, sourceRoot)) {
+				t.Fatal("replay changed source artifacts")
+			}
+			if result.RunID == finiteSourceRun {
+				t.Fatal("replay reused source run identity")
+			}
+			if len(result.Tasks) != len(expected) || len(plans) != len(expected) {
+				t.Fatalf("results=%+v plans=%+v, want %d occurrences", result, plans, len(expected))
+			}
+			for index, task := range result.Tasks {
+				grade := expected[index].Evaluation
+				grade.Reused = true
+				grade.SourceRunID = finiteSourceRun
+				grade.SourceTaskID = expected[index].TaskID
+				if !reflect.DeepEqual(task.Evaluation, grade) {
+					t.Fatalf("wrong source binding: %+v", task)
+				}
+				if len(expected) == 1 || test.zeroCalls {
+					if plans[index].ReplayAt != nil {
+						t.Fatalf("single occurrence lost legacy timing: %+v", plans[index])
+					}
+				} else if plans[index].ReplayAt == nil || !plans[index].ReplayAt.Equal(*plans[0].ReplayAt) {
+					t.Fatalf("no shared replay origin: %+v", plans)
+				}
+				if test.zeroCalls && len(plans[index].Calls) != 0 {
+					t.Fatalf("invented calls: %+v", plans[index])
+				}
+			}
+		})
+	}
+}
+
+func TestReplayRunUsesTerminalBenchOccurrenceIDs(t *testing.T) {
+	for _, test := range []struct {
+		ids    []string
+		single bool
+	}{
+		{ids: []string{"a"}},
+		{ids: []string{"a", "b", "a"}},
+		{ids: []string{"a", "b", "a"}, single: true},
+	} {
+		name := strings.Join(test.ids, "+")
+		if test.single {
+			name += "/occurrence"
+		}
+		t.Run(name, func(t *testing.T) {
+			source, tasks, expected := writeFiniteReplaySource(t, test.ids, false)
+			ids := test.ids
+			if test.single {
+				expected = expected[len(expected)-1:]
+				ids = ids[len(ids)-1:]
+				source = filepath.Join(source, expected[0].TaskID)
+			}
+			root := t.TempDir()
+			var logicalIDs []string
+			for _, task := range tasks {
+				logicalIDs = append(logicalIDs, task.ID)
+				const positiveLimit = 1
+				manifest := fmt.Sprintf("schema_version = \"1.1\"\n[task]\nname = %[1]q\n[agent]\ntimeout_sec = %[3]d\n[verifier]\ntimeout_sec = %[3]d\n[environment]\nbuild_timeout_sec = %[3]d\ndocker_image = %[2]q\ncpus = %[3]d\nmemory_mb = %[3]d\nstorage_mb = %[3]d\n", "terminal-bench/"+task.ID, finiteImage, positiveLimit)
+				for name, data := range map[string]string{"task.toml": manifest, "instruction.md": "Complete the task.\n", "tests/test.sh": "#!/bin/sh\n"} {
+					path := filepath.Join(root, task.ID, name)
+					if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			git := func(args ...string) string {
+				out, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput()
+				if err != nil {
+					t.Fatalf("fixture git %v: %v: %s", args, err, out)
+				}
+				return strings.TrimSpace(string(out))
+			}
+			git("init", "--quiet")
+			git("add", ".")
+			git("-c", "user.name=ARIES Test", "-c", "user.email=aries@example.invalid", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "fixture")
+			catalog, err := terminalbench.New(terminalbench.Options{Root: root, TaskIDs: logicalIDs, OutputDir: t.TempDir(), Revision: git("rev-parse", "HEAD")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			selected, err := catalog.Tasks(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			wiring := finiteReplayWiring(tasks)
+			wiring.LoadBenchmark = func(context.Context, config.Config, string, []string, func(string) ([]byte, bool)) (PreparedBenchmark, error) {
+				return PreparedBenchmark{Tasks: selected, NewOccurrence: catalog.ForTask}, nil
+			}
+			wiring.NewReplayCaller = func(config.Config, core.RuntimePlacement, time.Duration, *logrus.Logger) (runner.ReplayCaller, error) {
+				return &stubReplayCaller{}, nil
+			}
+			const concurrency = 1
+			var out bytes.Buffer
+			if err := runCommandForTest(context.Background(), finiteReplayProfile(t, source, concurrency), &out, Dependencies{Wiring: wiring}); err != nil {
+				t.Fatal(err)
+			}
+			var result core.RunResult
+			if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if len(result.Tasks) != len(expected) {
+				t.Fatalf("missing real benchmark occurrences: %+v", result)
+			}
+			for index, task := range result.Tasks {
+				const firstOccurrence = 1
+				if want := fmt.Sprintf("%s-%03d", ids[index], index+firstOccurrence); task.TaskID != want || task.Evaluation.SourceTaskID != expected[index].TaskID {
+					t.Fatalf("task and source identities changed: %+v, want execution %s", task, want)
+				}
+			}
+		})
+	}
+}
+
+type finiteStatClient struct {
+	sandboxv1.SandboxClient
+	started func()
+}
+
+func (client finiteStatClient) Stat(context.Context, *sandboxv1.StatRequest, ...grpc.CallOption) (*sandboxv1.StatResponse, error) {
+	client.started()
+	return &sandboxv1.StatResponse{}, nil
+}
+
+func TestReplayRunPreservesCallSpacingAfterInitialPreparation(t *testing.T) {
+	for _, ids := range [][]string{{"a"}, {"a", "b"}} {
+		t.Run(strings.Join(ids, "+"), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				const preparationDelay = finiteCallGap + finiteCallGap
+				const callsPerOccurrence = 2
+				source, tasks, expected := writeFiniteReplaySource(t, ids, false, 0, finiteCallGap)
+				type callStart struct {
+					source string
+					at     time.Time
+				}
+				starts := make(chan callStart, len(expected)*callsPerOccurrence)
+				wiring := finiteReplayWiring(tasks)
+				wiring.NewSandbox = func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
+					return SandboxInstance{Sandbox: &finiteReplaySandbox{start: func(context.Context) error { time.Sleep(preparationDelay); return nil }}, Resources: &stubResources{}}, nil
+				}
+				wiring.NewReplayCaller = func(config.Config, core.RuntimePlacement, time.Duration, *logrus.Logger) (runner.ReplayCaller, error) {
+					return &finiteReplayCaller{
+						start: func(context.Context) error { time.Sleep(preparationDelay); return nil },
+						run: func(ctx context.Context, plan replay.Plan) error {
+							client := finiteStatClient{started: func() { starts <- callStart{plan.SourceTaskID, time.Now()} }}
+							callCtx, cancel := context.WithTimeout(ctx, preparationDelay+preparationDelay)
+							defer cancel()
+							return bridgegrpc.ReplayCalls(callCtx, finiteCallGap, client, plan)
+						},
+					}, nil
+				}
+				if err := runCommandForTest(context.Background(), finiteReplayProfile(t, source, len(ids)), io.Discard, Dependencies{Wiring: wiring}); err != nil {
+					t.Fatal(err)
+				}
+				close(starts)
+				bySource := map[string][]time.Time{}
+				for start := range starts {
+					bySource[start.source] = append(bySource[start.source], start.at)
+				}
+				for _, source := range expected {
+					calls := bySource[source.TaskID]
+					if len(calls) != callsPerOccurrence {
+						t.Fatalf("source %s started %d calls", source.TaskID, len(calls))
+					}
+					if gap := calls[len(calls)-1].Sub(calls[0]); gap != finiteCallGap {
+						t.Fatalf("initial preparation consumed source spacing: source=%s gap=%s want=%s", source.TaskID, gap, finiteCallGap)
+					}
+				}
+			})
+		})
+	}
+}
+
+func TestReplayRunArmsClockOnlyForFirstReadyCalls(t *testing.T) {
+	for _, stage := range []string{"first empty", "first start fails", "later readiness", "canceled"} {
+		t.Run(stage, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				const concurrency = 1
+				const preparationDelay = finiteCallGap + finiteCallGap
+				source, tasks, expected := writeFiniteReplaySource(t, []string{"a", "b"}, false, 0, finiteCallGap)
+				if stage == "first empty" {
+					empty, _, _ := writeFiniteReplaySource(t, []string{"a"}, true)
+					for _, name := range []string{"runtime.json", "tool-calls.jsonl"} {
+						from := filepath.Join(empty, expected[0].TaskID, "bridge", name)
+						data, err := os.ReadFile(from)
+						if err != nil {
+							t.Fatal(err)
+						}
+						to := filepath.Join(source, expected[0].TaskID, "bridge", name)
+						if err := os.WriteFile(to, data, 0o600); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				failure := errors.New("first caller start failed")
+				type execution struct {
+					plan            replay.Plan
+					ready, finished time.Time
+					calls           []time.Time
+				}
+				var executions []execution
+				constructed := 0
+				wiring := finiteReplayWiring(tasks)
+				wiring.NewReplayCaller = func(config.Config, core.RuntimePlacement, time.Duration, *logrus.Logger) (runner.ReplayCaller, error) {
+					index := constructed
+					constructed++
+					var ready time.Time
+					return &finiteReplayCaller{
+						start: func(context.Context) error {
+							if index == 0 && stage == "first start fails" {
+								return failure
+							}
+							if index == 0 && stage == "canceled" {
+								cancel()
+								return nil
+							}
+							time.Sleep(preparationDelay)
+							ready = time.Now()
+							return nil
+						},
+						run: func(ctx context.Context, plan replay.Plan) error {
+							starts := make(chan time.Time, len(plan.Calls))
+							client := finiteStatClient{started: func() { starts <- time.Now() }}
+							callCtx, done := context.WithTimeout(ctx, preparationDelay+preparationDelay)
+							defer done()
+							err := bridgegrpc.ReplayCalls(callCtx, finiteCallGap, client, plan)
+							close(starts)
+							record := execution{plan: plan, ready: ready, finished: time.Now()}
+							for at := range starts {
+								record.calls = append(record.calls, at)
+							}
+							executions = append(executions, record)
+							return err
+						},
+					}, nil
+				}
+				err := runCommandForTest(ctx, finiteReplayProfile(t, source, concurrency), io.Discard, Dependencies{Wiring: wiring})
+				switch stage {
+				case "canceled":
+					if !errors.Is(err, context.Canceled) || len(executions) != 0 || constructed != concurrency {
+						t.Fatalf("cancellation admitted or ran more work: constructed=%d executions=%d err=%v", constructed, len(executions), err)
+					}
+					return
+				case "first start fails":
+					if !errors.Is(err, failure) || len(executions) != len(expected)-concurrency {
+						t.Fatalf("failed startup blocked healthy occurrence: executions=%d err=%v", len(executions), err)
+					}
+				default:
+					if err != nil || len(executions) != len(expected) {
+						t.Fatalf("execution count=%d err=%v", len(executions), err)
+					}
+				}
+				var origin time.Time
+				for _, record := range executions {
+					if len(record.plan.Calls) == 0 {
+						if record.plan.ReplayAt != nil || !record.finished.Equal(record.ready) {
+							t.Fatalf("empty plan armed a clock: %+v", record)
+						}
+						continue
+					}
+					if record.plan.ReplayAt == nil {
+						t.Fatal("nonempty plan has no shared clock")
+					}
+					if origin.IsZero() {
+						origin = *record.plan.ReplayAt
+						if !origin.Equal(record.ready) {
+							t.Fatalf("clock armed before first ready caller: origin=%s ready=%s", origin, record.ready)
+						}
+					} else {
+						if !record.plan.ReplayAt.Equal(origin) {
+							t.Fatalf("later readiness reset origin: %+v", record)
+						}
+						if target := origin.Add(record.plan.Calls[0].StartOffset); !record.calls[0].After(target) {
+							t.Fatalf("late admission was not exercised: start=%s target=%s", record.calls[0], target)
+						}
+					}
+				}
+				if origin.IsZero() {
+					t.Fatal("healthy caller never armed the clock")
+				}
+			})
+		})
+	}
+}
+
+func TestReplayRunBoundsAllocationAndKeepsOriginAfterReadinessDelay(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const concurrency = 2
+		const preparationDelay = finiteCallGap + finiteCallGap
+		source, tasks, expected := writeFiniteReplaySource(t, []string{"a", "b", "a", "b"}, false)
+		profile := finiteReplayProfile(t, source, concurrency)
+		plans := make(chan replay.Plan, len(expected))
+		release := make(chan struct{})
+		allocated, active, maximum := 0, 0, 0
+		var mu sync.Mutex
+		wiring := finiteReplayWiring(tasks)
+		wiring.NewSandbox = func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
+			mu.Lock()
+			allocated++
+			active++
+			maximum = max(maximum, active)
+			mu.Unlock()
+			return SandboxInstance{Sandbox: &finiteReplaySandbox{start: func(context.Context) error {
+				time.Sleep(preparationDelay)
+				return nil
+			}}, Resources: &stubResources{}, Close: func() error { mu.Lock(); active--; mu.Unlock(); return nil }}, nil
+		}
+		wiring.NewReplayCaller = func(config.Config, core.RuntimePlacement, time.Duration, *logrus.Logger) (runner.ReplayCaller, error) {
+			return &finiteReplayCaller{run: func(ctx context.Context, plan replay.Plan) error {
+				plans <- plan
+				select {
+				case <-release:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}}, nil
+		}
+		done := make(chan error, 1)
+		go func() {
+			done <- runCommandForTest(context.Background(), profile, io.Discard, Dependencies{Wiring: wiring})
+		}()
+		synctest.Wait()
+		if allocated != concurrency || active != concurrency {
+			t.Fatalf("preallocated queued sandboxes: allocated=%d active=%d", allocated, active)
+		}
+		var origin time.Time
+		var admitted []replay.Plan
+		for range concurrency {
+			plan := <-plans
+			if plan.ReplayAt == nil {
+				t.Fatal("missing shared origin")
+			}
+			origin = *plan.ReplayAt
+			admitted = append(admitted, plan)
+		}
+		close(release)
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		close(plans)
+		for plan := range plans {
+			admitted = append(admitted, plan)
+		}
+		if maximum != concurrency || active != 0 || allocated != len(expected) || len(admitted) != len(expected) {
+			t.Fatalf("allocation exceeded bound or leaked: maximum=%d active=%d allocated=%d plans=%d", maximum, active, allocated, len(admitted))
+		}
+		for _, plan := range admitted {
+			if !plan.ReplayAt.Equal(origin) || plan.ReplayAt.Location() != time.UTC {
+				t.Fatalf("readiness reset origin: %+v", plan)
+			}
+			for index, source := range expected {
+				if source.TaskID == plan.SourceTaskID && plan.Calls[0].StartOffset != time.Duration(index)*finiteCallGap {
+					t.Fatalf("source timeline changed: %+v", plan)
+				}
+			}
+		}
+	})
+}
+
+func TestReplayRunRejectsInvalidWorkloadBeforeSandboxStart(t *testing.T) {
+	const concurrency = 1
+	source, tasks, expected := writeFiniteReplaySource(t, []string{"a", "b"}, false)
+	path := filepath.Join(source, expected[len(expected)-1].TaskID, "bridge", "runtime.json")
+	if err := os.WriteFile(path, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wiring := finiteReplayWiring(tasks)
+	wiring.NewSandbox = func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
+		t.Error("invalid final source allocated a task sandbox")
+		return SandboxInstance{}, errors.New("unexpected sandbox")
+	}
+	wiring.NewReplayCaller = func(config.Config, core.RuntimePlacement, time.Duration, *logrus.Logger) (runner.ReplayCaller, error) {
+		t.Error("invalid final source allocated a caller")
+		return nil, errors.New("unexpected caller")
+	}
+	if err := runCommandForTest(context.Background(), finiteReplayProfile(t, source, concurrency), io.Discard, Dependencies{Wiring: wiring}); err == nil || !strings.Contains(err.Error(), "no matching logical task") {
+		t.Fatalf("invalid whole-run preflight = %v", err)
+	}
+}
+
+func TestReplayRunRevalidatesQueuedSourceBeforeSandboxStart(t *testing.T) {
+	const concurrency = 1
+	const firstOccurrenceCount = 1
+	source, tasks, expected := writeFiniteReplaySource(t, []string{"a", "b"}, false)
+	path := filepath.Join(source, expected[len(expected)-1].TaskID, "bridge", "runtime.json")
+	wiring := finiteReplayWiring(tasks)
+	preflight := wiring.PreflightReplaySource
+	wiring.PreflightReplaySource = func(ctx context.Context, cfg config.Config, tasks []core.Task, logger *logrus.Entry) (*bridgegrpc.ReplaySelection, error) {
+		selection, err := preflight(ctx, cfg, tasks, logger)
+		if err != nil {
+			return nil, err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return selection, nil
+	}
+	starts := 0
+	wiring.NewSandbox = func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
+		return SandboxInstance{Sandbox: &finiteReplaySandbox{start: func(context.Context) error { starts++; return nil }}, Resources: &stubResources{}}, nil
+	}
+	wiring.NewReplayCaller = func(config.Config, core.RuntimePlacement, time.Duration, *logrus.Logger) (runner.ReplayCaller, error) {
+		return &finiteReplayCaller{run: func(context.Context, replay.Plan) error { return nil }}, nil
+	}
+	var out bytes.Buffer
+	err := runCommandForTest(context.Background(), finiteReplayProfile(t, source, concurrency), &out, Dependencies{Wiring: wiring})
+	if err == nil || !strings.Contains(err.Error(), "changed after preflight") || starts != firstOccurrenceCount {
+		t.Fatalf("queued source revalidation: starts=%d err=%v", starts, err)
+	}
+	var result core.RunResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Tasks) != len(expected) || result.Tasks[len(result.Tasks)-1].Replay.Status != core.StatusFailed {
+		t.Fatalf("missing queued failure: %+v", result)
+	}
+}
+
+type finiteReplayBridge struct {
+	stubBridge
+	startErr error
+	stop     func(context.Context) error
+}
+
+func (bridge *finiteReplayBridge) Start(context.Context, runner.Sandbox) (core.ToolEndpoint, error) {
+	return core.ToolEndpoint{}, bridge.startErr
+}
+func (bridge *finiteReplayBridge) Stop(ctx context.Context) error { return bridge.stop(ctx) }
+
+func TestReplayRunCleansFailuresAndCancellation(t *testing.T) {
+	for _, stage := range []string{"caller start", "caller run", "bridge start", "canceled"} {
+		t.Run(stage, func(t *testing.T) {
+			const concurrency = 1
+			source, tasks, expected := writeFiniteReplaySource(t, []string{"a", "a"}, false)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			failure := errors.New(stage)
+			var events []string
+			allocated, closed := 0, 0
+			cleanup := func(ctx context.Context, event string) error {
+				if ctx.Err() != nil {
+					t.Errorf("%s used canceled cleanup context: %v", event, ctx.Err())
+				}
+				if _, bounded := ctx.Deadline(); !bounded {
+					t.Errorf("%s has no cleanup deadline", event)
+				}
+				events = append(events, event)
+				return nil
+			}
+			wiring := finiteReplayWiring(tasks)
+			wiring.NewSandbox = func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
+				allocated++
+				return SandboxInstance{Sandbox: &finiteReplaySandbox{stop: func(ctx context.Context) error { return cleanup(ctx, "sandbox-stop") }}, Resources: &stubResources{}, Close: func() error { closed++; return nil }}, nil
+			}
+			wiring.NewBridge = func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
+				bridge := &finiteReplayBridge{stop: func(ctx context.Context) error { return cleanup(ctx, "bridge-stop") }}
+				if stage == "bridge start" {
+					bridge.startErr = failure
+				}
+				return bridge, nil
+			}
+			wiring.NewReplayCaller = func(config.Config, core.RuntimePlacement, time.Duration, *logrus.Logger) (runner.ReplayCaller, error) {
+				started, stopped := false, false
+				return &finiteReplayCaller{
+					start: func(context.Context) error {
+						started = true
+						if stage == "caller start" {
+							return failure
+						}
+						return nil
+					},
+					run: func(context.Context, replay.Plan) error {
+						if stage == "canceled" {
+							cancel()
+							return ctx.Err()
+						}
+						return failure
+					},
+					stop: func(ctx context.Context) error {
+						if !started || stopped {
+							return nil
+						}
+						stopped = true
+						return cleanup(ctx, "caller-stop")
+					},
+				}, nil
+			}
+			var out bytes.Buffer
+			err := runCommandForTest(ctx, finiteReplayProfile(t, source, concurrency), &out, Dependencies{Wiring: wiring})
+			if stage == "canceled" {
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("cancel error = %v", err)
+				}
+				expected = expected[:concurrency]
+			} else if !errors.Is(err, failure) {
+				t.Fatalf("failure = %v", err)
+			}
+			if allocated != len(expected) || closed != allocated {
+				t.Fatalf("runtime owners leaked: allocated=%d closed=%d", allocated, closed)
+			}
+			want := []string{}
+			for range expected {
+				if stage != "bridge start" {
+					want = append(want, "caller-stop")
+				}
+				want = append(want, "bridge-stop", "sandbox-stop")
+			}
+			if !reflect.DeepEqual(events, want) {
+				t.Fatalf("cleanup order=%v want=%v", events, want)
+			}
+			var result core.RunResult
+			if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if len(result.Tasks) != len(expected) || result.Infrastructure.Cleanup.Status != core.StatusSucceeded {
+				t.Fatalf("missing results or shared cleanup: %+v", result)
+			}
+			for _, task := range result.Tasks {
+				if task.Cleanup.Status != core.StatusSucceeded || !task.Evaluation.Reused || task.Error == "" {
+					t.Fatalf("lost failed occurrence: %+v", task)
+				}
+			}
+		})
+	}
 }
 
 func TestReplayTaskBindsLogicalCatalogTaskAndLiveTimeout(t *testing.T) {
