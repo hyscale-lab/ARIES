@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -49,7 +50,14 @@ func LoadReplaySource(sourceDir string, task core.Task, benchmarkType string, re
 }
 
 func loadReplaySource(sourceDir string, task core.Task, benchmarkType string, revisions map[string]string, maxPlanBytes int) (replay.Plan, error) {
+	return loadReplaySourceContext(context.Background(), sourceDir, task, benchmarkType, revisions, maxPlanBytes, nil, nil)
+}
+
+func loadReplaySourceContext(ctx context.Context, sourceDir string, task core.Task, benchmarkType string, revisions map[string]string, maxPlanBytes int, result *replayRunIndex, binding *replaySourceBinding) (replay.Plan, error) {
 	var plan replay.Plan
+	if err := ctx.Err(); err != nil {
+		return plan, err
+	}
 	parent := filepath.Dir(filepath.Clean(sourceDir))
 	occurrence := filepath.Base(filepath.Clean(sourceDir))
 	if occurrence == "." || occurrence == string(filepath.Separator) || sourceDir == "" {
@@ -80,7 +88,7 @@ func loadReplaySource(sourceDir string, task core.Task, benchmarkType string, re
 	}
 	defer bridge.Close()
 
-	runtimeData, err := readReplayFile(bridge, "runtime.json", MaxMessageBytes)
+	runtimeData, err := readReplayFile(ctx, bridge, "runtime.json", MaxMessageBytes)
 	if err != nil {
 		return plan, fmt.Errorf("read replay runtime: %w", err)
 	}
@@ -103,7 +111,7 @@ func loadReplaySource(sourceDir string, task core.Task, benchmarkType string, re
 	if err != nil {
 		return plan, fmt.Errorf("invalid replay completion marker: %w", err)
 	}
-	log, err := readReplayFile(bridge, "tool-calls.jsonl", maxReplayLogBytes)
+	log, err := readReplayFile(ctx, bridge, "tool-calls.jsonl", maxReplayLogBytes)
 	if err != nil {
 		return plan, fmt.Errorf("read replay calls: %w", err)
 	}
@@ -115,35 +123,32 @@ func loadReplaySource(sourceDir string, task core.Task, benchmarkType string, re
 		return plan, errors.New("replay call log ends with an incomplete line")
 	}
 
-	resultData, err := readReplayFile(root, "run-result.json", MaxMessageBytes)
-	if err != nil {
-		return plan, fmt.Errorf("read replay run result: %w", err)
-	}
-	var result core.RunResult
-	if err := json.Unmarshal(resultData, &result); err != nil || result.RunID == "" {
-		return plan, errors.New("replay source run result is invalid")
+	if result == nil {
+		result, err = readReplayRunIndex(ctx, root)
+		if err != nil {
+			return plan, err
+		}
 	}
 	if metadata.RunID != "" && metadata.RunID != result.RunID || metadata.RunID == "" && len(log) == 0 {
 		return plan, errors.New("replay source run binding is missing or differs from parent result")
 	}
-	var rawResult struct {
-		Tasks []struct {
-			Evaluation map[string]json.RawMessage `json:"evaluation"`
-		} `json:"tasks"`
-	}
-	if err := json.Unmarshal(resultData, &rawResult); err != nil || len(rawResult.Tasks) != len(result.Tasks) {
-		return plan, errors.New("replay source evaluations are invalid")
-	}
-	for index, candidate := range result.Tasks {
+	for _, candidate := range result.Tasks {
 		if candidate.TaskID != occurrence {
 			continue
 		}
-		grades := rawResult.Tasks[index].Evaluation
-		if plan.SourceTaskID != "" || candidate.Evaluation.Status != core.StatusSucceeded && candidate.Evaluation.Status != core.StatusFailed && candidate.Evaluation.Status != core.StatusCanceled || !validReplayNumber(grades["score"]) || !validReplayNumber(grades["reward"]) {
+		var evaluation core.Evaluation
+		var grades map[string]json.RawMessage
+		if err := json.Unmarshal(candidate.Evaluation, &evaluation); err != nil {
+			return replay.Plan{}, errors.New("replay source evaluation is invalid")
+		}
+		if err := json.Unmarshal(candidate.Evaluation, &grades); err != nil {
+			return replay.Plan{}, errors.New("replay source evaluation grades are invalid")
+		}
+		if plan.SourceTaskID != "" || evaluation.Status != core.StatusSucceeded && evaluation.Status != core.StatusFailed && evaluation.Status != core.StatusCanceled || !validReplayNumber(grades["score"]) || !validReplayNumber(grades["reward"]) {
 			return replay.Plan{}, errors.New("replay source has no unique recorded evaluation")
 		}
 		plan.SourceTaskID = candidate.TaskID
-		plan.Evaluation = candidate.Evaluation
+		plan.Evaluation = evaluation
 	}
 	if plan.SourceTaskID == "" {
 		return replay.Plan{}, errors.New("replay source has no matching evaluation")
@@ -154,6 +159,9 @@ func loadReplaySource(sourceDir string, task core.Task, benchmarkType string, re
 	lines := bytes.Split(log, []byte{'\n'})
 	starts := make(map[uint64]time.Time, len(lines)-1)
 	for index, line := range lines[:len(lines)-1] {
+		if err := ctx.Err(); err != nil {
+			return replay.Plan{}, err
+		}
 		if len(line) == 0 || len(line) > 2*MaxMessageBytes {
 			return replay.Plan{}, fmt.Errorf("replay call %d has invalid length", index+1)
 		}
@@ -199,13 +207,23 @@ func loadReplaySource(sourceDir string, task core.Task, benchmarkType string, re
 			return replay.Plan{}, errors.New("replay completion wait is invalid")
 		}
 	}
-	if _, err := replay.EncodePlan(plan, maxPlanBytes); err != nil {
+	encoded, err := replay.EncodePlan(plan, maxPlanBytes)
+	if err != nil {
 		return replay.Plan{}, fmt.Errorf("encode replay source plan: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return replay.Plan{}, err
+	}
+	if binding != nil {
+		*binding = replaySourceBinding{runtime: sha256.Sum256(runtimeData), calls: digest, result: result.digest, planBytes: len(encoded)}
 	}
 	return plan, nil
 }
 
-func readReplayFile(root *os.Root, name string, bound int64) ([]byte, error) {
+func readReplayFile(ctx context.Context, root *os.Root, name string, bound int64) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	info, err := root.Lstat(name)
 	if err != nil {
 		return nil, err
@@ -225,14 +243,27 @@ func readReplayFile(root *os.Root, name string, bound int64) ([]byte, error) {
 	if !os.SameFile(info, opened) || opened.Mode().Perm() != replayFileMode || opened.Size() != info.Size() {
 		return nil, errors.New("replay evidence changed before reading")
 	}
-	content, err := io.ReadAll(io.LimitReader(file, bound+1))
-	if err != nil {
-		return nil, err
+	const readChunkBytes = 64 << 10
+	content := make([]byte, info.Size()+1)
+	read := 0
+	for read < len(content) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		end := min(read+readChunkBytes, len(content))
+		count, err := file.Read(content[read:end])
+		read += count
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, err
+		}
 	}
-	if int64(len(content)) != info.Size() {
+	if int64(read) != info.Size() {
 		return nil, errors.New("replay evidence changed while reading")
 	}
-	return content, nil
+	return content[:read], ctx.Err()
 }
 
 func validReplayNumber(value json.RawMessage) bool {
