@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -108,13 +109,77 @@ func TestReadTimingPairsSourceSequenceAndSignedDrift(t *testing.T) {
 		map[string]any{"replay_source_sequence": firstSourceSequence, "started_at": start.Format(time.RFC3339Nano), "tool_call_id": "shared-tool"},
 		map[string]any{"replay_source_sequence": secondSourceSequence, "started_at": start.Add(sourceGap + lateDrift).Format(time.RFC3339Nano), "tool_call_id": "shared-tool"},
 	)
-	want := core.ReplayTiming{Status: "available", Calls: []core.ReplayCallTiming{
+	want := core.ReplayTiming{Status: "available", Basis: "occurrence_first_start", Calls: []core.ReplayCallTiming{
 		{SourceSequence: firstSourceSequence, DriftNS: 0},
 		{SourceSequence: secondSourceSequence, DriftNS: lateDrift.Nanoseconds()},
 		{SourceSequence: thirdSourceSequence, DriftNS: earlyDrift.Nanoseconds()},
 	}}
 	if got := ReadTiming(path, plan); !reflect.DeepEqual(got, want) {
 		t.Fatalf("signed timing drift = %+v, want %+v", got, want)
+	}
+}
+
+func TestReadTimingKeepsCrossOccurrenceDisplacement(t *testing.T) {
+	const firstSequence uint64 = 1
+	const nextSequence = firstSequence + 1
+	const sourceGap = time.Second
+	const callGap = sourceGap / 2
+	const firstLateness = 3 * time.Millisecond
+	const laterLateness = 40 * time.Millisecond
+	origin, err := time.Parse(time.RFC3339Nano, timingFixtureStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, occurrence := range []struct {
+		taskID        string
+		offset, drift time.Duration
+	}{
+		{taskID: "a-001", drift: firstLateness},
+		{taskID: "a-002", offset: sourceGap, drift: laterLateness},
+	} {
+		t.Run(occurrence.taskID, func(t *testing.T) {
+			plan := Plan{SourceRunID: "source-run", SourceTaskID: occurrence.taskID, ReplayAt: &origin, Calls: []Call{
+				{Sequence: firstSequence, StartOffset: occurrence.offset},
+				{Sequence: nextSequence, StartOffset: occurrence.offset + callGap},
+			}}
+			// A run-local task string can match the source in a different run.
+			path := writeTimingAudit(t,
+				map[string]any{"run_id": "new-run", "task_id": occurrence.taskID, "replay_source_sequence": nextSequence, "started_at": origin.Add(occurrence.offset + callGap + occurrence.drift).Format(time.RFC3339Nano)},
+				map[string]any{"run_id": "new-run", "task_id": occurrence.taskID, "replay_source_sequence": firstSequence, "started_at": origin.Add(occurrence.offset + occurrence.drift).Format(time.RFC3339Nano)},
+			)
+			got := ReadTiming(path, plan)
+			if got.Status != "available" || got.Basis != "shared_replay_origin" || len(got.Calls) != len(plan.Calls) {
+				t.Fatalf("timing unavailable: %+v", got)
+			}
+			for index, call := range got.Calls {
+				if call.SourceSequence != plan.Calls[index].Sequence || call.DriftNS != occurrence.drift.Nanoseconds() {
+					t.Fatalf("occurrence displacement was hidden: %+v, want %v", got, occurrence.drift)
+				}
+			}
+		})
+	}
+}
+
+func TestReadTimingSharedOriginKeepsEarlyStartsAndRejectsOverflow(t *testing.T) {
+	const sequence uint64 = 1
+	const beforeOrigin = -2 * time.Nanosecond
+	origin, err := time.Parse(time.RFC3339Nano, timingFixtureStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := writeTimingAudit(t, map[string]any{"replay_source_sequence": sequence, "started_at": origin.Add(beforeOrigin).Format(time.RFC3339Nano)})
+	plan := Plan{ReplayAt: &origin, Calls: []Call{{Sequence: sequence}}}
+	got := ReadTiming(path, plan)
+	if got.Status != "available" || len(got.Calls) != len(plan.Calls) || got.Calls[0].DriftNS != beforeOrigin.Nanoseconds() {
+		t.Fatalf("early bridge start lost signed drift: %+v", got)
+	}
+	plan.Calls[0].StartOffset = time.Duration(math.MaxInt64)
+	if got := ReadTiming(path, plan); got.Status != "unavailable" || len(got.Calls) != 0 || !strings.Contains(got.Reason, "not representable") {
+		t.Fatalf("shared drift overflow was accepted: %+v", got)
+	}
+	origin = time.Time{}
+	if got := ReadTiming(path, plan); got.Status != "unavailable" || len(got.Calls) != 0 || !strings.Contains(got.Reason, "not representable") {
+		t.Fatalf("shared offset overflow was accepted: %+v", got)
 	}
 }
 

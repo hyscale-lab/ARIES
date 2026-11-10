@@ -336,7 +336,11 @@ func runReplay(ctx context.Context, cfg config.Config, runID, outputRoot string,
 type replayCaller struct {
 	runner.ReplayCaller
 	replayAt func() time.Time
+	origin   *time.Time
 }
+
+// ReplayAt returns the epoch set by Run without starting an unused clock.
+func (caller *replayCaller) ReplayAt() *time.Time { return caller.origin }
 
 func (caller *replayCaller) Run(ctx context.Context, plan replay.Plan) error {
 	if err := ctx.Err(); err != nil {
@@ -344,6 +348,7 @@ func (caller *replayCaller) Run(ctx context.Context, plan replay.Plan) error {
 	}
 	if len(plan.Calls) != 0 {
 		origin := caller.replayAt()
+		caller.origin = &origin
 		plan.ReplayAt = &origin
 	}
 	return caller.ReplayCaller.Run(ctx, plan)

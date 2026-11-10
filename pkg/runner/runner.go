@@ -542,6 +542,9 @@ func (r *Runner) runReplayTask(ctx context.Context, task core.Task) (core.TaskRe
 			if len(result.ToolLogPaths) != 0 {
 				path = result.ToolLogPaths[0]
 			}
+			if clock, ok := r.caller.(interface{ ReplayAt() *time.Time }); ok {
+				plan.ReplayAt = clock.ReplayAt()
+			}
 			timing := replay.ReadTiming(path, plan)
 			result.Replay.Timing = &timing
 			responses := replay.ReadResponses(path, plan, r.logger)
