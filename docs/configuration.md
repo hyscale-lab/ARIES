@@ -48,13 +48,16 @@ To record a live source for later replay, use either order:
 ./bin/aries --record-for-replay PROFILE.json
 ```
 
-This flag changes no profile JSON. It requires `hermes-grpc`, source provenance
-from the selected task and pinned benchmark revisions, and exactly one resolved
-selected task. ARIES resolves selectors before sandbox or model-runtime execution;
-a selector that expands to several tasks is rejected. Loops, repeated tasks, and
-arrival schedules are not supported while recording. These restrictions do not
-apply to ordinary live runs. Recording can still produce an incompatible trace;
-replay loading checks call inputs, outcomes, and timing before sandbox creation.
+This flag changes no profile JSON. It requires `hermes-grpc` and source provenance
+from every selected task and the pinned benchmark revisions. ARIES validates the
+resolved catalog before sandbox or model-runtime execution. Recording supports
+multiple logical tasks, repeated task IDs, selectors that resolve to several
+tasks, and finite timed loops. Each occurrence has a separate source directory
+and finalized trace. A loop stops admission at its deadline and finishes admitted
+work. Arrival schedules remain unsupported while recording; ordinary live runs
+are unchanged. Recording can still produce an incompatible trace; replay loading
+checks call inputs, outcomes, and timing before sandbox creation. Replay still
+selects one source occurrence, not a complete recorded run.
 
 The flag is not valid with `aries setup PROFILE.json` or a replay profile.
 Duplicate flags, unknown flags, and extra positional arguments are rejected.

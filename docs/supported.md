@@ -51,8 +51,11 @@ guides above.
   It needs no harness, model key, judge, or fresh verifier. Its source grade is
   historical evidence: matching bridge responses do not prove matching final
   sandbox state. Live source recording requires the CLI flag `--record-for-replay`,
-  Hermes gRPC, source provenance, and exactly one resolved task. An oversized
-  captured response fails its recording task before evaluation. Replay execution
+  Hermes gRPC, and provenance for every selected task. Recording supports multiple
+  tasks, repeated task IDs, and finite timed loops, with a separate source per
+  occurrence. Recording still rejects arrival schedules. Whole-run replay is not
+  implemented. An oversized captured response fails its recording task before
+  evaluation. Replay execution
   captures comparison evidence without that flag. See the
   [replay limits](configuration.md#sandbox-call-replay).
 

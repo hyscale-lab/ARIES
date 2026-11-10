@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/config"
@@ -116,14 +117,8 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 		if cfg.Bridge.Type != "hermes-grpc" {
 			return errors.New("recording requires bridge.type hermes-grpc")
 		}
-		if cfg.Execution.Loop != 0 {
-			return errors.New("recording does not support a loop")
-		}
 		if cfg.Execution.ArrivalsFile != "" {
 			return errors.New("recording does not support an arrival schedule")
-		}
-		if len(uniqueStrings(cfg.Benchmark.Tasks)) != len(cfg.Benchmark.Tasks) {
-			return errors.New("recording does not support repeated tasks")
 		}
 	}
 	if err := validateWiredComponents(cfg, dependencies.Wiring); err != nil {
@@ -164,7 +159,16 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 		return err
 	}
 	if dependencies.RecordForReplay {
-		cfg.Benchmark.Tasks = []string{catalog.Tasks[0].ID}
+		resolvedIDs := make([]string, 0, len(catalog.Tasks))
+		for _, task := range catalog.Tasks {
+			resolvedIDs = append(resolvedIDs, task.ID)
+		}
+		for _, id := range cfg.Benchmark.Tasks {
+			if !slices.Contains(resolvedIDs, id) {
+				cfg.Benchmark.Tasks = resolvedIDs
+				break
+			}
+		}
 	}
 	preparationEntry.WithField("preparation_state", "prepared").Info("profile preparation")
 	if err := createRunOutputRoot(outputRoot); err != nil {
@@ -351,12 +355,16 @@ func ensurePrepared(ctx context.Context, cfg config.Config, outputRoot string, w
 		return PreparedBenchmark{}, err
 	}
 	if wiring.recordForReplay {
-		if len(catalog.Tasks) != 1 {
-			return PreparedBenchmark{}, errors.New("recording requires exactly one resolved selected task")
+		if len(catalog.Tasks) == 0 {
+			return PreparedBenchmark{}, errors.New("recording requires at least one resolved selected task")
 		}
-		task := catalog.Tasks[0]
-		if wiring.BenchmarkRevisions == nil || task.ID == "" || task.Environment.Image == "" {
+		if wiring.BenchmarkRevisions == nil {
 			return PreparedBenchmark{}, errors.New("recording requires source provenance")
+		}
+		for _, task := range catalog.Tasks {
+			if task.ID == "" || task.Environment.Image == "" {
+				return PreparedBenchmark{}, errors.New("recording requires source provenance")
+			}
 		}
 		revisions := wiring.BenchmarkRevisions(cfg)
 		if len(revisions) == 0 {

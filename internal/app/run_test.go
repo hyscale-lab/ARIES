@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/config"
@@ -720,14 +722,171 @@ func TestBridgePreparationFailurePrecedesBenchmarkEffects(t *testing.T) {
 	}
 }
 
+type occurrenceRecordingHarness struct {
+	stubHarness
+	request core.HarnessRequest
+	delay   time.Duration
+}
+
+func (h *occurrenceRecordingHarness) Start(_ context.Context, request core.HarnessRequest) error {
+	h.request = request
+	return nil
+}
+
+func (h *occurrenceRecordingHarness) Run(context.Context, string) (core.HarnessResult, error) {
+	time.Sleep(h.delay)
+	return core.HarnessResult{}, nil
+}
+
+func TestRecordingPreservesSelectedOccurrences(t *testing.T) {
+	const firstID = "first"
+	const secondID = "second"
+	const firstImage = "first-image:tag"
+	const secondImage = "second-image:tag"
+	const loopDuration = time.Second
+	const singleCompletion = 1
+	const firstLoopDivisor = 2
+	t.Setenv(deepSeekAPIKey, "synthetic-key")
+	catalogTasks := []core.Task{
+		{ID: firstID, Environment: core.Environment{Image: firstImage}},
+		{ID: secondID, Environment: core.Environment{Image: secondImage}},
+	}
+	for _, test := range []struct {
+		name      string
+		selectors []string
+		want      []string
+		loop      time.Duration
+		recording bool
+	}{
+		{name: "distinct", selectors: []string{firstID, secondID}, want: []string{"first-001", "second-002"}, recording: true},
+		{name: "repeated", selectors: []string{secondID, firstID, secondID}, want: []string{"second-001", "first-002", "second-003"}, recording: true},
+		{name: "expanding selector", selectors: []string{"group"}, want: []string{"first-001", "second-002"}, recording: true},
+		{name: "finite loop", selectors: []string{firstID}, want: []string{"first-001", "first-002"}, loop: loopDuration, recording: true},
+		{name: "ordinary repeated", selectors: []string{secondID, firstID, secondID}, want: []string{"second-001", "first-002", "second-003"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				path := writeCommandProfile(t, filepath.Join(t.TempDir(), "runs"))
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				selectors, err := json.Marshal(test.selectors)
+				if err != nil {
+					t.Fatal(err)
+				}
+				profile := strings.ReplaceAll(string(data), `"tasks":["a"]`, `"tasks":`+string(selectors))
+				profile = strings.ReplaceAll(profile, `"harness":{"type":"openclaw"}`, `"harness":{"type":"hermes"}`)
+				profile = strings.ReplaceAll(profile, `"bridge":{"type":"openclaw-ssh"}`, `"bridge":{"type":"hermes-grpc"}`)
+				if test.loop != 0 {
+					profile = strings.ReplaceAll(profile, `"output_dir":`, `"execution":{"loop_duration":"`+test.loop.String()+`"},"output_dir":`)
+				}
+				if err := os.WriteFile(path, []byte(profile), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				tasks := catalogTasks
+				if test.loop != 0 {
+					tasks = catalogTasks[:singleCompletion]
+				}
+				var bridges []*sourceStubBridge
+				var harnesses []*occurrenceRecordingHarness
+				var benchmarks []*replayTaskBenchmark
+				var sandboxes []*cancelSandbox
+				wiring := Wiring{
+					ValidateComponents: func(config.Config) error { return nil },
+					PrepareBackend: func(cfg config.Config, _ string) (PreparedBackend, error) {
+						return PreparedBackend{Model: cfg.CoreModel()}, nil
+					},
+					SetupBenchmark:     func(context.Context, config.Config) error { return nil },
+					BenchmarkRevisions: func(config.Config) map[string]string { return map[string]string{"revision": "pin"} },
+					LoadBenchmark: func(_ context.Context, _ config.Config, _ string, _ []string, _ func(string) ([]byte, bool)) (PreparedBenchmark, error) {
+						return PreparedBenchmark{Tasks: tasks, NewOccurrence: func(logicalID, occurrenceID string) (runner.Benchmark, error) {
+							for _, task := range tasks {
+								if task.ID == logicalID {
+									task.ID = occurrenceID
+									benchmark := &replayTaskBenchmark{task: task}
+									benchmarks = append(benchmarks, benchmark)
+									return benchmark, nil
+								}
+							}
+							return nil, errors.New("logical task absent")
+						}}, nil
+					},
+					PullImages:        func(context.Context, config.Config, []string) error { return nil },
+					BuildHarnessImage: func(context.Context, config.Config) error { return nil },
+					NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
+						harness := &occurrenceRecordingHarness{}
+						if test.loop != 0 {
+							harness.delay = test.loop
+							if len(harnesses) == 0 {
+								harness.delay /= firstLoopDivisor
+							}
+						}
+						harnesses = append(harnesses, harness)
+						return HarnessInstance{Harness: harness}, nil
+					},
+					NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
+						sandbox := &cancelSandbox{events: new([]string)}
+						sandboxes = append(sandboxes, sandbox)
+						return SandboxInstance{Sandbox: sandbox, Resources: &stubResources{}}, nil
+					},
+					NewBridge: func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
+						bridge := &sourceStubBridge{}
+						bridges = append(bridges, bridge)
+						return bridge, nil
+					},
+				}
+				var output bytes.Buffer
+				doer := &preflightDoer{t: t, replies: []preflightReply{{status: 200, body: `{"data":[{"id":"deepseek-v4-flash"}]}`}}}
+				if err := runCommandForTest(context.Background(), path, &output, Dependencies{RecordForReplay: test.recording, Wiring: wiring, PreflightClient: doer}); err != nil {
+					t.Fatal(err)
+				}
+				var result core.RunResult
+				if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+					t.Fatal(err)
+				}
+				var got []string
+				for index, task := range result.Tasks {
+					got = append(got, task.TaskID)
+					harness, bridge := harnesses[index], bridges[index]
+					if harness.request.RunID != result.RunID || harness.request.TaskID != task.TaskID || task.Evaluation.Status != core.StatusSucceeded || task.Isolation.Status != core.StatusConfirmed || task.Cleanup.Status != core.StatusSucceeded {
+						t.Fatalf("occurrence binding or lifecycle = %+v, request = %+v", task, harness.request)
+					}
+					if test.recording {
+						logicalID := task.TaskID[:strings.LastIndex(task.TaskID, "-")]
+						wantImage := firstImage
+						if logicalID == secondID {
+							wantImage = secondImage
+						}
+						if bridge.logicalID != logicalID || bridge.image != wantImage || bridge.taskImage != wantImage || bridge.completions != singleCompletion {
+							t.Fatalf("source binding for %s = %+v", task.TaskID, bridge)
+						}
+					} else if bridge.logicalID != "" || bridge.image != "" || bridge.taskImage != "" || bridge.completions != 0 {
+						t.Fatalf("ordinary occurrence used recording: %+v", bridge)
+					}
+					for previous := range index {
+						if benchmarks[previous] == benchmarks[index] || harnesses[previous] == harness || sandboxes[previous] == sandboxes[index] || bridges[previous] == bridge {
+							t.Fatal("occurrences share mutable owners")
+						}
+					}
+				}
+				if !reflect.DeepEqual(got, test.want) {
+					t.Fatalf("occurrences = %v, want %v", got, test.want)
+				}
+				if test.loop != 0 && result.Duration <= test.loop {
+					t.Fatalf("admitted work did not drain after loop admission: %s", result.Duration)
+				}
+			})
+		})
+	}
+}
+
 func TestRecordingRejectsUnsupportedRunBeforePreparation(t *testing.T) {
 	for _, test := range []struct {
 		name, before, after, want string
 		replay, setup             bool
 	}{
 		{name: "ssh", before: `"bridge":{"type":"openclaw-ssh"}`, after: `"bridge":{"type":"hermes-ssh"}`, want: "hermes-grpc"},
-		{name: "loop", before: `"tasks":["a"]`, after: `"tasks":["a"]`, want: "loop"},
-		{name: "repeated selector", before: `"tasks":["a"]`, after: `"tasks":["a","a"]`, want: "repeat"},
 		{name: "arrivals", want: "arrival"},
 		{name: "replay", replay: true, want: "replay profile"},
 		{name: "setup", setup: true, want: "setup"},
@@ -747,9 +906,6 @@ func TestRecordingRejectsUnsupportedRunBeforePreparation(t *testing.T) {
 			}
 			if test.name != "ssh" {
 				profile = strings.Replace(profile, `"bridge":{"type":"openclaw-ssh"}`, `"bridge":{"type":"hermes-grpc"}`, 1)
-			}
-			if test.name == "loop" {
-				profile = strings.Replace(profile, `"output_dir":`, `"execution":{"loop_duration":"1s"},"output_dir":`, 1)
 			}
 			if test.name == "arrivals" {
 				profile = strings.Replace(profile, `"output_dir":`, `"execution":{"arrivals_file":"schedule.csv","arrival_rate_per_min":1},"output_dir":`, 1)
@@ -785,11 +941,13 @@ func TestRecordingResolvesCatalogAndRequiredProvenanceBeforeExecution(t *testing
 		recording bool
 	}{
 		{name: "one resolved task", tasks: []core.Task{task}, revisions: map[string]string{"revision": "pin"}, recording: true},
-		{name: "selector expands", tasks: []core.Task{task, {ID: "other", Environment: core.Environment{Image: image}}}, revisions: map[string]string{"revision": "pin"}, want: "exactly one", recording: true},
-		{name: "empty selection", revisions: map[string]string{"revision": "pin"}, want: "exactly one", recording: true},
+		{name: "selector expands", tasks: []core.Task{task, {ID: "other", Environment: core.Environment{Image: image}}}, revisions: map[string]string{"revision": "pin"}, recording: true},
+		{name: "empty selection", revisions: map[string]string{"revision": "pin"}, want: "at least one", recording: true},
 		{name: "no provenance", tasks: []core.Task{task}, want: "provenance", recording: true},
 		{name: "empty revision", tasks: []core.Task{task}, revisions: map[string]string{"revision": ""}, want: "provenance", recording: true},
 		{name: "no image", tasks: []core.Task{{ID: resolvedID}}, revisions: map[string]string{"revision": "pin"}, want: "provenance", recording: true},
+		{name: "later task has no image", tasks: []core.Task{task, {ID: "other"}}, revisions: map[string]string{"revision": "pin"}, want: "provenance", recording: true},
+		{name: "later task has no ID", tasks: []core.Task{task, {Environment: core.Environment{Image: image}}}, revisions: map[string]string{"revision": "pin"}, want: "provenance", recording: true},
 		{name: "ordinary run unrestricted", tasks: []core.Task{task, {ID: "other"}}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -805,7 +963,7 @@ func TestRecordingResolvesCatalogAndRequiredProvenanceBeforeExecution(t *testing
 				t.Fatal(err)
 			}
 			stopped := errors.New("occurrence reached")
-			var selected string
+			var selected []string
 			wiring := Wiring{
 				ValidateComponents: func(config.Config) error { return nil },
 				PrepareBackend: func(cfg config.Config, _ string) (PreparedBackend, error) {
@@ -817,7 +975,10 @@ func TestRecordingResolvesCatalogAndRequiredProvenanceBeforeExecution(t *testing
 					if !reflect.DeepEqual(selectors, []string{"a"}) {
 						t.Fatalf("selectors=%v", selectors)
 					}
-					return PreparedBenchmark{Tasks: test.tasks, NewOccurrence: func(logicalID, _ string) (runner.Benchmark, error) { selected = logicalID; return nil, stopped }}, nil
+					return PreparedBenchmark{Tasks: test.tasks, NewOccurrence: func(logicalID, _ string) (runner.Benchmark, error) {
+						selected = append(selected, logicalID)
+						return nil, stopped
+					}}, nil
 				},
 				PullImages: func(context.Context, config.Config, []string) error {
 					if test.want != "" {
@@ -842,12 +1003,15 @@ func TestRecordingResolvesCatalogAndRequiredProvenanceBeforeExecution(t *testing
 				}
 				return
 			}
-			wantID := "a"
+			wantIDs := []string{"a"}
 			if test.recording {
-				wantID = resolvedID
+				wantIDs = nil
+				for _, task := range test.tasks {
+					wantIDs = append(wantIDs, task.ID)
+				}
 			}
-			if !errors.Is(err, stopped) || selected != wantID {
-				t.Fatalf("error=%v, selected=%q, want=%q", err, selected, wantID)
+			if !errors.Is(err, stopped) || !reflect.DeepEqual(selected, wantIDs) {
+				t.Fatalf("error=%v, selected=%q, want=%q", err, selected, wantIDs)
 			}
 		})
 	}
