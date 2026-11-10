@@ -264,6 +264,7 @@ func (f *fakeBridge) stopCount() int {
 }
 
 type fakeHarness struct {
+	stopHook     func(context.Context)
 	mu           sync.Mutex
 	log          *callLog
 	requests     []core.HarnessRequest
@@ -308,6 +309,9 @@ func (f *fakeHarness) Stop(ctx context.Context) error {
 	f.log.add("harness.stop", ctx)
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if f.stopHook != nil {
+		f.stopHook(ctx)
 	}
 	f.mu.Lock()
 	err := indexedError(f.stopErrors, f.stops)
@@ -1049,5 +1053,19 @@ func TestNewRejectsMissingRunID(t *testing.T) {
 	rig := newRig(t, 0)
 	if _, err := New(rig.benchmark, rig.harness, rig.factory, rig.bridge, Options{}); err == nil || !strings.Contains(err.Error(), "run ID") {
 		t.Fatalf("New() error = %v, want missing run ID", err)
+	}
+}
+
+func TestRunnerGivesBridgeFreshContextAfterHarnessCleanup(t *testing.T) {
+	rig := newRig(t, 1)
+	rig.runner.cleanupTimeout = 10 * time.Millisecond
+	rig.harness.stopHook = func(ctx context.Context) { <-ctx.Done() }
+	result, err := rig.runner.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := result.Tasks[0]
+	if !task.Isolation.HarnessStopped || !task.Isolation.BridgeRevoked || task.Evaluation.Status != core.StatusSucceeded {
+		t.Fatalf("expired harness context leaked to bridge: %+v", task)
 	}
 }

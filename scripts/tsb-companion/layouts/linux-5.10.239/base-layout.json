@@ -1,0 +1,133 @@
+{
+  "schema": "aries.guest-layout.v1",
+  "kernel_sha256": "0e524afe5a90f4ce4b13091a8b5acf7fbe9e7584e711f609d27b69b78564117d",
+  "kernel_release": "5.10.239",
+  "layout": {
+    "task_struct": {
+      "sizeof": 7040,
+      "tasks": 776,
+      "pid": 1032,
+      "tgid": 1036,
+      "comm": 1536,
+      "mm": 856,
+      "active_mm": 864
+    },
+    "mm_struct": {
+      "sizeof": 1016,
+      "pgd": 80,
+      "mmap": 0,
+      "start_brk": 288,
+      "brk": 296,
+      "start_stack": 304
+    },
+    "vm_area_struct": {
+      "sizeof": 200,
+      "vm_start": 0,
+      "vm_end": 8,
+      "vm_next": 16,
+      "vm_flags": 80,
+      "vm_file": 160,
+      "vm_pgoff": 152
+    },
+    "file": {
+      "sizeof": 256,
+      "f_path": 16
+    },
+    "path": {
+      "sizeof": 16,
+      "dentry": 8,
+      "mnt": 0
+    },
+    "dentry": {
+      "sizeof": 192,
+      "d_name": 32,
+      "d_parent": 24,
+      "d_inode": 48
+    },
+    "qstr": {
+      "sizeof": 16,
+      "name": 8,
+      "len": 4
+    },
+    "inode": {
+      "sizeof": 592,
+      "i_ino": 64,
+      "i_mapping": 48,
+      "i_mode": 0
+    },
+    "address_space": {
+      "sizeof": 160,
+      "host": 0
+    },
+    "page": {
+      "sizeof": 64,
+      "flags": 0,
+      "_refcount": 52,
+      "_mapcount": 48,
+      "mapping": 24,
+      "index": 32,
+      "compound_head": 8,
+      "private": 40,
+      "page_type": 48,
+      "lru.next": 8,
+      "lru.prev": 16
+    },
+    "list_head": {
+      "sizeof": 16,
+      "next": 0,
+      "prev": 8
+    },
+    "mem_section": {
+      "sizeof": 16,
+      "section_mem_map": 0
+    },
+    "pageflags": {
+      "PG_locked": 0,
+      "PG_referenced": 1,
+      "PG_uptodate": 2,
+      "PG_dirty": 3,
+      "PG_lru": 4,
+      "PG_active": 5,
+      "PG_workingset": 6,
+      "PG_slab": 9,
+      "PG_owner_priv_1": 10,
+      "PG_arch_1": 11,
+      "PG_reserved": 12,
+      "PG_private": 13,
+      "PG_private_2": 14,
+      "PG_writeback": 15,
+      "PG_head": 16,
+      "PG_mappedtodisk": 17,
+      "PG_reclaim": 18,
+      "PG_swapbacked": 19,
+      "PG_unevictable": 20,
+      "PG_mlocked": 21
+    },
+    "constants": {
+      "PAGE_MAPPING_ANON": 1,
+      "PAGE_MAPPING_MOVABLE": 2,
+      "PAGE_MAPPING_FLAGS": 3,
+      "PAGE_TYPE_BASE": 4026531840,
+      "PG_buddy": 128,
+      "PG_table": 1024,
+      "PG_offline": 256
+    }
+  },
+  "symbols": {
+    "_stext": 18446744071578845184,
+    "init_mm": 18446744071596453024,
+    "init_task": 18446744071595726208,
+    "init_top_pgt": 18446744071595687936,
+    "linux_banner": 18446744071593525664,
+    "mem_section": 18446744071601446552,
+    "page_offset_base": 18446744071595406160,
+    "phys_base": 18446744071595724816,
+    "vmcoreinfo_data": 18446744071601068064,
+    "vmemmap_base": 18446744071595406144
+  },
+  "checks": {
+    "task_struct_size_matches_elf_init_task": true,
+    "mm_struct_plus_initialized_cpumask_matches_elf_init_mm": true
+  },
+  "method": "Compiler-generated offsetof/sizeof using amazonlinux/linux microvm-kernel-5.10.239-261.959.amzn2 commit1696dae7327b645d2b4b860e919e431dcda0d11c and embedded IKCONFIG; GCC11.5 vs original11.4. Feature config unchanged after olddefconfig; only toolchain version fields differ. All18 overlapping VMCOREINFO fields validated. Remaining fields need decoder ground-truth checks."
+}

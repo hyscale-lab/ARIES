@@ -1,1 +1,4 @@
 traces/*.csv filter=lfs diff=lfs merge=lfs -text
+# Preserve exact upstream deltas, including unified-diff blank context lines.
+scripts/tsb-firecracker/firecracker-tracer.patch -whitespace
+scripts/tsb-steps/native-openclaw.patch -whitespace

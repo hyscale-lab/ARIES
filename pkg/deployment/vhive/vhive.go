@@ -60,6 +60,10 @@ type Options struct {
 	// CheckpointAfterExec parks borrowed bridge calls. Runner operations restore
 	// on demand and leave preparation/evaluation processes running.
 	CheckpointAfterExec bool
+	// RestoreMemorySocket selects a caller-owned native UFFD memory backend.
+	// The caller must serve the current checkpoint through VMM teardown. Empty uses File.
+	// This research-only option is not exposed through profiles or borrowed bridges.
+	RestoreMemorySocket string
 	// ImageArchive supplies the prepared image (including local benchmark builds).
 	// The provider imports it into its own containerd namespace.
 	ImageArchive func(context.Context, string) (io.ReadCloser, error)
@@ -142,6 +146,12 @@ func New(options Options) (*Manager, error) {
 }
 
 func validateOptions(o Options) error {
+	if o.RestoreMemorySocket != "" {
+		p := o.RestoreMemorySocket
+		if o.IdleMode != "checkpoint" || !filepath.IsAbs(p) || filepath.Clean(p) != p || p == "/" || strings.ContainsRune(p, 0) {
+			return errors.New("UFFD restore requires checkpoint mode and a clean absolute socket path")
+		}
+	}
 	if o.IdleMode != "" && o.IdleMode != "persistent" && o.IdleMode != "checkpoint" {
 		return errors.New("vHive idle_mode must be persistent or checkpoint")
 	}

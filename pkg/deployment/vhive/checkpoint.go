@@ -26,12 +26,13 @@ type snapshotControl interface {
 }
 
 type checkpointState struct {
-	TaskRunning bool                   `json:"task_running"`
-	Phase       string                 `json:"phase"`
-	Request     *proto.CreateVMRequest `json:"request"`
-	Memory      string                 `json:"memory,omitempty"`
-	Snapshot    string                 `json:"snapshot,omitempty"`
-	Processes   []checkpointProcess    `json:"processes,omitempty"`
+	ContainerDiskSource string                 `json:"container_disk_source,omitempty"`
+	TaskRunning         bool                   `json:"task_running"`
+	Phase               string                 `json:"phase"`
+	Request             *proto.CreateVMRequest `json:"request"`
+	Memory              string                 `json:"memory,omitempty"`
+	Snapshot            string                 `json:"snapshot,omitempty"`
+	Processes           []checkpointProcess    `json:"processes,omitempty"`
 }
 
 type checkpointProcess struct {
@@ -257,6 +258,16 @@ func (m *Manager) suspendCheckpoint(ctx context.Context, id string) error {
 		return err
 	}
 	s.TaskRunning = running
+	if m.options.RestoreMemorySocket != "" {
+		mounts, mountErr := m.client.SnapshotService(m.options.Snapshotter).Mounts(m.ctx(ctx), id)
+		if mountErr != nil {
+			return mountErr
+		}
+		if len(mounts) != 1 || mounts[0].Source == "" {
+			return errors.New("UFFD checkpoint requires one retained disk source")
+		}
+		s.ContainerDiskSource = mounts[0].Source
+	}
 	endStage = core.TimeCommandStage(ctx, "checkpoint.identify_processes")
 	processes, err := m.checkpointProcesses(ctx, id)
 	endStage()
@@ -370,6 +381,9 @@ func (m *Manager) resumeCheckpoint(ctx context.Context, id string) error {
 	request.LoadSnapshot = true
 	request.SnapshotPath = s.Snapshot
 	request.MemBackend = &proto.MemoryBackend{BackendType: "File", BackendPath: s.Memory}
+	if m.options.RestoreMemorySocket != "" {
+		request.MemBackend = &proto.MemoryBackend{BackendType: "Uffd", BackendPath: m.options.RestoreMemorySocket}
+	}
 	endStage = core.TimeCommandStage(ctx, "restore.prepare_mounts")
 	mounts, err := m.client.SnapshotService(m.options.Snapshotter).Mounts(m.ctx(ctx), id)
 	endStage()
@@ -378,6 +392,9 @@ func (m *Manager) resumeCheckpoint(ctx context.Context, id string) error {
 	}
 	if len(mounts) != 1 {
 		return errors.New("checkpoint requires one container disk")
+	}
+	if m.options.RestoreMemorySocket != "" && (s.ContainerDiskSource == "" || s.ContainerDiskSource != mounts[0].Source) {
+		return errors.New("UFFD restore requires the original retained disk source")
 	}
 	request.ContainerSnapshotPath = mounts[0].Source
 	// Mark before submitting: an ambiguous native response must never replay a VM.

@@ -1,0 +1,372 @@
+diff --git a/src/agents/bash-process-registry.test.ts b/src/agents/bash-process-registry.test.ts
+index 25974067..fae39d46 100644
+--- a/src/agents/bash-process-registry.test.ts
++++ b/src/agents/bash-process-registry.test.ts
+@@ -4,6 +4,7 @@
+  * state for background exec sessions.
+  */
+ import type { ChildProcessWithoutNullStreams } from "node:child_process";
++import { onInternalDiagnosticEvent, resetDiagnosticEventsForTest, waitForDiagnosticEventsDrained } from "../infra/diagnostic-events.js";
+ import { beforeEach, describe, expect, it, vi } from "vitest";
+ import type { ProcessSession } from "./bash-process-registry.js";
+ import {
+@@ -228,3 +229,30 @@ describe("cursorKeyMode", () => {
+     expect(session.cursorKeyMode).toBe("normal");
+   });
+ });
++
++it("retains native process origin and lifecycle without command content", async () => {
++  resetDiagnosticEventsForTest();
++  const events: unknown[] = [];
++  const stop = onInternalDiagnosticEvent((event) => {
++    if (event.type.startsWith("exec.process.")) events.push(event);
++  });
++  try {
++    const session = createProcessSessionFixture({ id: "native-job-a", command: "PRIVATE" });
++    session.originToolCallId = "native-tool-a";
++    session.sessionKey = "native-session";
++    addSession(session);
++    markBackgrounded(session);
++    markExited(session, 0, null, "completed");
++    await waitForDiagnosticEventsDrained();
++    expect(events).toMatchObject([
++      { type: "exec.process.created", processSessionId: "native-job-a", originToolCallId: "native-tool-a", backgrounded: false },
++      { type: "exec.process.backgrounded", processSessionId: "native-job-a", originToolCallId: "native-tool-a", backgrounded: true },
++      { type: "exec.process.exited", processSessionId: "native-job-a", originToolCallId: "native-tool-a", outcome: "completed" },
++    ]);
++    expect(JSON.stringify(events)).not.toContain("PRIVATE");
++  } finally {
++    stop();
++    resetProcessRegistryForTests();
++    resetDiagnosticEventsForTest();
++  }
++});
+diff --git a/src/agents/bash-process-registry.ts b/src/agents/bash-process-registry.ts
+index ca7a0ac3..a52b9113 100644
+--- a/src/agents/bash-process-registry.ts
++++ b/src/agents/bash-process-registry.ts
+@@ -4,6 +4,7 @@
+  * session retention, and process cleanup for reconnect/poll flows.
+  */
+ import type { ChildProcessWithoutNullStreams } from "node:child_process";
++import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
+ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+ import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
+ import type { TerminationReason } from "../process/supervisor/types.js";
+@@ -43,6 +44,8 @@ type SessionStdin = {
+ /** Mutable session state for a running bash exec process. */
+ export interface ProcessSession {
+   id: string;
++  /** Originating native tool identity; never derived from time proximity. */
++  originToolCallId?: string;
+   command: string;
+   scopeKey?: string;
+   sessionKey?: string;
+@@ -121,9 +124,28 @@ export function createSessionSlug(): string {
+   return createSessionSlugId(isSessionIdTaken);
+ }
+ 
++function emitProcessLifecycle(
++  type: "exec.process.created" | "exec.process.backgrounded" | "exec.process.exited",
++  session: ProcessSession,
++  outcome?: string,
++) {
++  emitTrustedDiagnosticEvent({
++    type,
++    processSessionId: session.id,
++    originToolCallId: session.originToolCallId,
++    sessionKey: session.sessionKey,
++    sourceTimestampMs: Date.now(),
++    sourceMonotonicNs: process.hrtime.bigint().toString(),
++    processStartedAtMs: session.startedAt,
++    backgrounded: session.backgrounded,
++    ...(outcome ? { outcome } : {}),
++  });
++}
++
+ /** Adds a running session and starts retention sweeping if needed. */
+ export function addSession(session: ProcessSession) {
+   runningSessions.set(session.id, session);
++  emitProcessLifecycle("exec.process.created", session);
+   startSweeper();
+ }
+ 
+@@ -195,6 +217,7 @@ export function markExited(
+   noOutputTimedOut?: boolean,
+ ) {
+   session.exited = true;
++  emitProcessLifecycle("exec.process.exited", session, status);
+   session.exitCode = exitCode;
+   session.exitSignal = exitSignal;
+   session.exitReason = exitReason;
+@@ -206,6 +229,7 @@ export function markExited(
+ /** Marks a running session as reconnectable after the exec call returns. */
+ export function markBackgrounded(session: ProcessSession) {
+   session.backgrounded = true;
++  emitProcessLifecycle("exec.process.backgrounded", session);
+ }
+ 
+ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
+diff --git a/src/agents/bash-tools.exec-runtime.ts b/src/agents/bash-tools.exec-runtime.ts
+index b3183da9..b9a6db1a 100644
+--- a/src/agents/bash-tools.exec-runtime.ts
++++ b/src/agents/bash-tools.exec-runtime.ts
+@@ -579,6 +579,7 @@ function wrapPosixCommandWithPathPrepend(
+ 
+ /** Starts a host or sandbox exec process and registers it for polling/backgrounding. */
+ export async function runExecProcess(opts: {
++  originToolCallId?: string;
+   command: string;
+   // Execute this instead of `command` (which is kept for display/session/logging).
+   // Used to sanitize safeBins execution while preserving the original user input.
+@@ -623,6 +624,7 @@ export async function runExecProcess(opts: {
+ 
+   const session: ProcessSession = {
+     id: sessionId,
++    originToolCallId: opts.originToolCallId,
+     command: opts.command,
+     scopeKey: opts.scopeKey,
+     sessionKey: opts.sessionKey,
+diff --git a/src/agents/bash-tools.exec.ts b/src/agents/bash-tools.exec.ts
+index 934e93c0..08c5ec9d 100644
+--- a/src/agents/bash-tools.exec.ts
++++ b/src/agents/bash-tools.exec.ts
+@@ -1969,6 +1969,7 @@ export function createExecTool(
+         }
+ 
+         run = await runExecProcess({
++          originToolCallId: _toolCallId,
+           command: params.command,
+           execCommand: execCommandOverride,
+           workdir,
+diff --git a/src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.test.ts b/src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.test.ts
+index c2763429..10c9459a 100644
+--- a/src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.test.ts
++++ b/src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.test.ts
+@@ -1218,3 +1218,54 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
+     expect(events[1]).not.toHaveProperty("errorCategory");
+   });
+ });
++
++describe("ARIES metadata-only causal model boundaries", () => {
++  beforeEach(() => {
++    resetDiagnosticEventsForTest();
++    resetGlobalHookRunner();
++  });
++  afterEach(() => resetDiagnosticEventsForTest());
++
++  it.each(["toolUse", "stop", "error", "aborted"])(
++    "retains response identity/stop reason without content capture: %s",
++    async (stopReason) => {
++      const result = {
++        role: "assistant",
++        stopReason,
++        content: stopReason === "toolUse"
++          ? [{ type: "toolCall", id: "native-tool-a", name: "exec", arguments: { command: "PRIVATE" } }]
++          : [{ type: "text", text: "PRIVATE" }],
++      };
++      const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
++        (() => ({ result: async () => result, async *[Symbol.asyncIterator]() {
++          yield { type: "done", message: result };
++        } })) as unknown as StreamFn,
++        {
++          runId: "run", provider: "test", model: "test",
++          trace: createDiagnosticTraceContext(),
++          callCategory: "primary_agent_chain",
++          nextCallId: () => "native-model-a",
++        },
++      );
++      const events = await collectTrustedModelCallEvents(async () => {
++        const stream = await wrapped({} as never, {} as never, {} as never);
++        expect(await stream.result()).toBe(result);
++        await drain(stream);
++      });
++      expect(events).toHaveLength(2);
++      const start = events[0].event;
++      const end = events[1].event;
++      expect(start).toMatchObject({
++        callId: "native-model-a", callCategory: "primary_agent_chain",
++        dispatchWallMs: expect.any(Number), dispatchMonoNs: expect.any(String),
++      });
++      expect(end).toMatchObject({
++        responseStopReason: stopReason,
++        returnedToolCallIds: stopReason === "toolUse" ? ["native-tool-a"] : [],
++        responseWallMs: expect.any(Number), responseMonoNs: expect.any(String),
++      });
++      expect(JSON.stringify(events)).not.toContain("PRIVATE");
++      expect(events.every(item => !item.privateData.modelContent)).toBe(true);
++    },
++  );
++});
+diff --git a/src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.ts b/src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.ts
+index e60c1246..ba229229 100644
+--- a/src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.ts
++++ b/src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.ts
+@@ -51,6 +51,7 @@ type ModelCallDiagnosticContext = {
+   contextWindowReferenceTokens?: number;
+   trace: DiagnosticTraceContext;
+   contentCapture?: DiagnosticModelContentCapturePolicy;
++  callCategory?: "primary_agent_chain" | "raw_model";
+   nextCallId: () => string;
+   onStarted?: () => void;
+ };
+@@ -94,6 +95,10 @@ type ModelCallObservationState = {
+   contentCapture?: DiagnosticModelContentCapturePolicy;
+   lastStreamProgressAt?: number;
+   terminalEventEmitted?: boolean;
++  responseWallMs?: number;
++  responseMonoNs?: string;
++  responseStopReason?: string;
++  returnedToolCallIds?: string[];
+ };
+ 
+ const MODEL_CALL_STREAM_PROGRESS_INTERVAL_MS = 30_000;
+@@ -274,6 +279,21 @@ function observeOutputMessageContent(state: ModelCallObservationState, chunk: un
+   }
+ }
+ 
++function observeResponseMetadata(state: ModelCallObservationState, result: unknown): void {
++  if (!isRecord(result) || result.role !== "assistant" || !Array.isArray(result.content)) {
++    return;
++  }
++  // The callback sees the native completed response; no prompt/tool content is retained.
++  state.responseWallMs ??= Date.now();
++  state.responseMonoNs ??= process.hrtime.bigint().toString();
++  if (typeof result.stopReason === "string") {
++    state.responseStopReason = result.stopReason;
++  }
++  state.returnedToolCallIds = result.content.flatMap((item: unknown) =>
++    isRecord(item) && item.type === "toolCall" && typeof item.id === "string" ? [item.id] : [],
++  );
++}
++
+ function observeResultMessageContent(
+   state: ModelCallObservationState,
+   startedAt: number,
+@@ -281,6 +301,7 @@ function observeResultMessageContent(
+ ): void {
+   state.timeToFirstByteMs ??= Math.max(0, Date.now() - startedAt);
+   observeModelCallUsage(state, result);
++  observeResponseMetadata(state, result);
+   if (state.contentCapture?.outputMessages && state.outputMessages === undefined) {
+     state.outputMessages = [cloneDiagnosticContentValue(result)];
+   }
+@@ -299,6 +320,9 @@ function observeResponseChunk(
+ ): void {
+   state.timeToFirstByteMs ??= Math.max(0, Date.now() - startedAt);
+   observeOutputMessageContent(state, chunk);
++  if (isRecord(chunk) && (chunk.type === "done" || chunk.type === "error")) {
++    observeResponseMetadata(state, chunk.message ?? chunk.error);
++  }
+   const bytes = responseStreamChunkByteLength(chunk);
+   if (bytes !== undefined) {
+     state.responseStreamBytes += bytes;
+@@ -385,6 +409,7 @@ function baseModelCallEvent(
+   return {
+     runId: ctx.runId,
+     callId,
++    ...(ctx.callCategory ? { callCategory: ctx.callCategory } : {}),
+     ...(ctx.sessionKey && { sessionKey: ctx.sessionKey }),
+     ...(ctx.sessionId && { sessionId: ctx.sessionId }),
+     provider: ctx.provider,
+@@ -577,6 +602,12 @@ function emitModelCallCompleted(
+     {
+       type: "model.call.completed",
+       ...eventBase,
++      ...(state.responseWallMs !== undefined ? {
++        responseWallMs: state.responseWallMs,
++        responseMonoNs: state.responseMonoNs,
++        responseStopReason: state.responseStopReason,
++        returnedToolCallIds: state.returnedToolCallIds,
++      } : {}),
+       durationMs,
+       ...sizeTimingFields,
+       ...modelCallUsageField(state),
+@@ -857,7 +888,11 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
+     const promptStats = areDiagnosticsEnabledForProcess()
+       ? streamContextModelPromptStats(streamContext)
+       : undefined;
+-    const eventBase = baseModelCallEvent(ctx, callId, trace, promptStats);
++    const eventBase: ModelCallEventBase = {
++      ...baseModelCallEvent(ctx, callId, trace, promptStats),
++      dispatchWallMs: Date.now(),
++      dispatchMonoNs: process.hrtime.bigint().toString(),
++    };
+     const modelContent = streamContextModelContentFields(ctx.contentCapture, streamContext);
+     emitModelCallStarted(eventBase, modelContent);
+     ctx.onStarted?.();
+diff --git a/src/agents/embedded-agent-runner/run/attempt.ts b/src/agents/embedded-agent-runner/run/attempt.ts
+index e0d8dd00..aa156b91 100644
+--- a/src/agents/embedded-agent-runner/run/attempt.ts
++++ b/src/agents/embedded-agent-runner/run/attempt.ts
+@@ -3293,6 +3293,7 @@ export async function runEmbeddedAttempt(
+             : {}),
+           trace: runTrace,
+           contentCapture: resolveDiagnosticModelContentCapturePolicy(params.config),
++          callCategory: isRawModelRun ? "raw_model" : "primary_agent_chain",
+           nextCallId: () => `${params.runId}:model:${(diagnosticModelCallSeq += 1)}`,
+           onStarted: () => {
+             params.onExecutionPhase?.({
+diff --git a/src/infra/diagnostic-events.ts b/src/infra/diagnostic-events.ts
+index dbb1fb19..dd65c501 100644
+--- a/src/infra/diagnostic-events.ts
++++ b/src/infra/diagnostic-events.ts
+@@ -498,6 +498,18 @@ export type DiagnosticSkillUsedEvent = DiagnosticBaseEvent & {
+   toolCallId?: string;
+ };
+ 
++export type DiagnosticExecProcessLifecycleEvent = DiagnosticBaseEvent & {
++  type: "exec.process.created" | "exec.process.backgrounded" | "exec.process.exited";
++  processSessionId: string;
++  originToolCallId?: string;
++  sessionKey?: string;
++  sourceTimestampMs: number;
++  sourceMonotonicNs: string;
++  processStartedAtMs: number;
++  backgrounded: boolean;
++  outcome?: string;
++};
++
+ export type DiagnosticExecProcessCompletedEvent = DiagnosticBaseEvent & {
+   type: "exec.process.completed";
+   sessionKey?: string;
+@@ -593,6 +605,10 @@ type DiagnosticModelCallBaseEvent = DiagnosticBaseEvent & {
+   type: "model.call.started" | "model.call.completed" | "model.call.error";
+   runId: string;
+   callId: string;
++  /** ARIES research metadata: source boundary clocks, never content. */
++  dispatchWallMs?: number;
++  dispatchMonoNs?: string;
++  callCategory?: "primary_agent_chain" | "raw_model";
+   sessionKey?: string;
+   sessionId?: string;
+   provider: string;
+@@ -612,6 +628,10 @@ export type DiagnosticModelCallStartedEvent = DiagnosticModelCallBaseEvent & {
+ 
+ export type DiagnosticModelCallCompletedEvent = DiagnosticModelCallBaseEvent & {
+   type: "model.call.completed";
++  responseWallMs?: number;
++  responseMonoNs?: string;
++  responseStopReason?: string;
++  returnedToolCallIds?: string[];
+   durationMs: number;
+   requestPayloadBytes?: number;
+   responseStreamBytes?: number;
+@@ -780,6 +800,7 @@ export type DiagnosticEventPayload =
+   | DiagnosticToolExecutionErrorEvent
+   | DiagnosticToolExecutionBlockedEvent
+   | DiagnosticSkillUsedEvent
++  | DiagnosticExecProcessLifecycleEvent
+   | DiagnosticExecProcessCompletedEvent
+   | DiagnosticExecApprovalFollowupSuppressedEvent
+   | DiagnosticRunStartedEvent
+@@ -904,6 +925,9 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
+   "tool.execution.error",
+   "tool.execution.blocked",
+   "skill.used",
++  "exec.process.created",
++  "exec.process.backgrounded",
++  "exec.process.exited",
+   "exec.process.completed",
+   "exec.approval.followup_suppressed",
+   "message.delivery.started",

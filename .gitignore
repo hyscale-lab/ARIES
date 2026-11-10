@@ -70,3 +70,6 @@ kubeconfig
 /docker/
 /Dockerfile
 /.dockerignore
+
+# Python research-tool bytecode caches
+__pycache__/

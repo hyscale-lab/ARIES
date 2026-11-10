@@ -23,7 +23,10 @@ and [lifecycle](architecture.md#task-lifecycle).
   the network or close peers' transports. Do not require a private network per pair.
 - Reuse shared harness ownership and credential mechanics. Preserve native defaults
   and credential fallbacks. Retain ownership after failed removal. `Stop` prevents admission while preserving
-  `Run` snapshots. Redacted errors must not expose secrets through their causes.
+  `Run` snapshots. An opted-in guest-holding observer remains harness-owned:
+  confirm its release after harness removal before successful stop, preserving
+  measurement validity separately from physical release. Redacted errors must
+  not expose secrets through their causes.
 - Each sandbox session has its own listener, immutable target binding, and recorder,
   keyed by a stable sandbox ID. Native tool execution must not call Runner or own
   sandbox lifecycle. Use plaintext unauthenticated gRPC and unauthenticated SSH,

@@ -1,0 +1,41 @@
+{
+  "repository_url": "https://github.com/openclaw/openclaw.git",
+  "base_revision": "2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4",
+  "tag": "v2026.7.1",
+  "patch": "native-openclaw.patch",
+  "patch_sha256": "d63bf6e22f52bec30d7641b1900b8a71f58ba19572a66027eee2157739f0d1d2",
+  "patched_files": [
+    {
+      "path": "src/agents/bash-process-registry.test.ts",
+      "sha256": "c9b96a3365c326d2c8954b59b3235651a6fa88b12d6fed7c8fdbc267a8c68981"
+    },
+    {
+      "path": "src/agents/bash-process-registry.ts",
+      "sha256": "cc65c9795299525037dfb320ff0f05cb46e8862dd2ba2b7f66442825c676880e"
+    },
+    {
+      "path": "src/agents/bash-tools.exec-runtime.ts",
+      "sha256": "18aceb5c2c0a9601db721793907f9159b8c2a6ebf7c8f112fe93bc172681229d"
+    },
+    {
+      "path": "src/agents/bash-tools.exec.ts",
+      "sha256": "f860bebfae481284e7b556e3461622ed781d0b970ed01f190ab7d2d7ea066867"
+    },
+    {
+      "path": "src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.test.ts",
+      "sha256": "7553a88bfcb9706fc7e2f9821d4798b041f58be49b31f2ec9766d05222a6abe7"
+    },
+    {
+      "path": "src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.ts",
+      "sha256": "ed0e4e497a7a469b517dfa99731916bd684c1a5e342a35989038b4f0ec6b553b"
+    },
+    {
+      "path": "src/agents/embedded-agent-runner/run/attempt.ts",
+      "sha256": "03254b130254df850f4966ef0b4ffab17bf8d59b2a940889db3de23f0491df50"
+    },
+    {
+      "path": "src/infra/diagnostic-events.ts",
+      "sha256": "73ddbae260a49b37d6b8389e4f5a48b5136e82170a9d5f49d9486d6d1eaa53b8"
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+--- a/client/models/snapshot_load_params.go
++++ b/client/models/snapshot_load_params.go
+@@ -38 +38 @@
+-	ContainerSnapshotPath *string `json:"container_snapshot_path"`
++	ContainerSnapshotPath *string `json:"-"`

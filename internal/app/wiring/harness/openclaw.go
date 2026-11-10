@@ -28,6 +28,10 @@ func NewOpenClaw(cfg config.Config, outputRoot string, lookup func(string) ([]by
 		Common: commonOptions(cfg),
 	}
 
+	if o := cfg.Harness.StepObservation; o != nil {
+		options.StepObservation = &openclawharness.StepObservationOptions{PluginDir: o.PluginDir, ObserverURL: o.ObserverURL}
+	}
+
 	if cfg.Harness.Mode == openclawharness.ModeRealtime || cfg.Harness.Mode == openclawharness.ModeVoiceTranscribe {
 		options.Realtime = openClawVoiceOptions(cfg.Harness)
 	}

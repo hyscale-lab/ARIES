@@ -81,6 +81,10 @@ and extension requirements. Detailed [component contracts](docs/design.md#guides
 and [implementation explanations](docs/implementation/README.md) cover the code's
 current behavior. Coding agents start at [AGENTS.md](AGENTS.md).
 
+The experimental [memory-footprint tracer source guide](docs/experiments/memory-footprint-tracing.md)
+records the preserved observer, companion, native dependency patches and rebuild
+paths. It separates the current VMM-owned backend from earlier page-idle studies.
+
 ## Current implementation
 
 The research framework is intended to support multiple harnesses, benchmarks,

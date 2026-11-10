@@ -171,6 +171,47 @@ operations restore the sandbox when needed without parking after every file
 transfer. A restore or checkpoint error remains an operation error and retains
 ownership for cleanup; an ambiguous command submission is never retried.
 
+## Research memory tracing
+
+The optional [memory-footprint tracer](../experiments/memory-footprint-tracing.md)
+uses a separate pinned Firecracker fork with VMM-owned page-idle access, dirty,
+residency and bounded metadata APIs. The companion decoder, host coordinator,
+native OpenClaw patch and plugins are preserved as source in this repository.
+These APIs are experimental dependencies; the normal vHive provider does not
+install the fork or start its observer automatically.
+
+The access/dirty policy uses one fresh persistent VM and pauses it during LLM
+intervals. It does not use snapshot restore as a per-step measurement mechanism.
+VMM RAM mappings, residency and process RSS/PSS are distinct measures; the
+provider's research `ObserveMemory` samples process mappings and must not be
+reported as complete attributable host memory. Unsupported measurements remain
+unsupported rather than becoming zero.
+
+The OpenClaw harness owns its post-stop observer-release barrier. If release
+cannot be confirmed, harness isolation fails and independent evaluation remains
+blocked. Canceled observation may be released for cleanup without certifying a
+complete trace. See the [epoch protocol](../experiments/tsb-access-dirty.md) for
+writer coverage, metadata consistency and capture cancellation.
+
+## Research restore-memory observation
+
+The provider's optional Go `Options.RestoreMemorySocket` selects Firecracker's
+native UFFD memory backend for checkpoint restore. It is a research-driver
+option, not a public profile field. It requires checkpoint mode and a clean
+absolute Unix socket path. The caller owns the UFFD handler and must keep it
+servicing faults for the restored VMM's lifetime. The ordinary profile restore
+path continues to use its file-backed memory backend when this option is absent.
+
+A VM snapshot includes guest memory and VMM state; a container filesystem image
+alone cannot supply either. The retained disk and guest identity must survive
+restore. Fault records identify demand for absent restored pages, not every
+subsequent access and not a complete read/write split. Compare snapshot offsets
+only within the same logical guest lineage, and distinguish restore/transport
+faults from the observed tool interval. Snapshotting or reading memory to save
+it can itself trigger faults, so an unbounded fault log is not automatically a
+per-step page set. Each full LLM tool step may contain several sandbox operations;
+restoring per operation is not equivalent to restoring once per step.
+
 ## Latency breakdown
 
 The bridge's `tool-calls.jsonl` records the request's UTC receipt, monotonic

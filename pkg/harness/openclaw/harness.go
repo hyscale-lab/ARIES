@@ -19,6 +19,7 @@ import (
 	"github.com/hyscale-lab/aries/pkg/deployment"
 	"github.com/hyscale-lab/aries/pkg/harness"
 	"github.com/hyscale-lab/aries/pkg/harness/internal/privatefiles"
+	ownership "github.com/hyscale-lab/aries/pkg/harness/internal/runtime"
 	gatewayclient "github.com/hyscale-lab/aries/pkg/harness/openclaw/gateway"
 	realtimeclient "github.com/hyscale-lab/aries/pkg/harness/openclaw/realtime"
 	"github.com/hyscale-lab/aries/pkg/runner"
@@ -45,9 +46,10 @@ func isRealtimeMode(mode string) bool {
 
 // Options are the host-local inputs to one upstream OpenClaw container.
 type Options struct {
-	Runtime  harness.RuntimeOptions
-	Common   harness.Options
-	Realtime RealtimeOptions
+	StepObservation *StepObservationOptions
+	Runtime         harness.RuntimeOptions
+	Common          harness.Options
+	Realtime        RealtimeOptions
 }
 
 type RealtimeOptions struct {
@@ -77,6 +79,7 @@ type Manager struct {
 
 	mu     sync.Mutex
 	active *session
+	stop   ownership.StopState
 }
 
 type realtimeRunner interface {
@@ -119,6 +122,11 @@ func New(options Options) (*Manager, error) {
 	if options.Common.Mode == "" {
 		options.Common.Mode = ModeAgent
 	}
+	if options.StepObservation != nil {
+		if err := options.StepObservation.validate(options.Common.Mode); err != nil {
+			return nil, err
+		}
+	}
 	switch options.Common.Mode {
 	case ModeAgent:
 		if options.Realtime != (RealtimeOptions{}) {
@@ -160,7 +168,7 @@ func New(options Options) (*Manager, error) {
 func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) error {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	if manager.runtime.InUse() {
+	if manager.runtime.InUse() || manager.active != nil || manager.stop.Running() {
 		return errors.New("OpenClaw harness is already active")
 	}
 	if err := harness.ValidateRunID("OpenClaw", request.RunID); err != nil {
@@ -210,6 +218,12 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	})
 	if err != nil {
 		return err
+	}
+	if manager.options.StepObservation != nil {
+		configuration, err = renderStepObservation(configuration)
+		if err != nil {
+			return err
+		}
 	}
 	if ok, err := credentials.Load("model", request.Model.APIKeyEnv, manager.runtime.Options.APIKeyLookup); err != nil {
 		return err
@@ -268,6 +282,9 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		Env: []string{"OPENCLAW_CONFIG_PATH=" + configContainerPath}, Args: []string{launcherPath, gatewayLauncherPath},
 		Labels:    map[string]string{"aries.managed": "true", "aries.kind": "openclaw-harness", "aries.component": "harness", "aries.run": request.RunID, "aries.task": request.TaskID, "aries.attempt": active.AttemptID},
 		Placement: request.Connectivity.Placement, CPU: request.CPU, MemoryMB: request.MemoryMB, ServicePort: 18789,
+	}
+	if o := manager.options.StepObservation; o != nil {
+		active.DeploymentRequest.Env = append(active.DeploymentRequest.Env, stepObservationEnvironment(o, active.Occurrence)...)
 	}
 	fail := func(primary error) error {
 		err := manager.runtime.Rollback(ctx, active.Occurrence, primary)
@@ -675,23 +692,35 @@ func durationOrDefault(value, fallback time.Duration) time.Duration {
 
 func (manager *Manager) Stop(ctx context.Context) error {
 	manager.mu.Lock()
-	attempt, ownsCleanup := manager.runtime.BeginStop()
+	attempt, ownsCleanup := manager.stop.Begin(manager.active != nil || manager.runtime.InUse())
 	if !ownsCleanup {
 		manager.mu.Unlock()
 		return attempt.Wait(ctx)
 	}
 	active := manager.active
+	_, ownsRuntime := manager.runtime.BeginStop()
 	manager.mu.Unlock()
 
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), manager.runtime.Options.CleanupTimeout)
-	err := manager.stopSession(cleanupCtx, active)
-	cancel()
+	var err error
+	if ownsRuntime {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), manager.runtime.Options.CleanupTimeout)
+		err = manager.stopSession(cleanupCtx, active)
+		cancel()
+		manager.runtime.FinishStop(err)
+	}
+	// This independent budget must not inherit an exhausted runtime-removal or
+	// caller deadline. A censored measurement is compatible with released=true.
+	if err == nil && active != nil && manager.options.StepObservation != nil {
+		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), stepObservationCleanupTimeout)
+		err = manager.releaseStepObservation(releaseCtx, active)
+		cancel()
+	}
 
 	manager.mu.Lock()
-	if active == nil || active.ID == "" {
+	if err == nil {
 		manager.active = nil
 	}
-	manager.runtime.FinishStop(err)
+	manager.stop.Finish(err)
 	manager.mu.Unlock()
 	return err
 }
@@ -742,6 +771,11 @@ func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([
 		"run/aries/gateway-launcher":     {Content: gatewayLauncherScript(), Mode: 0o555},
 		"opt/aries/bin/aries-ssh-client": {Content: clientBytes, Mode: 0o555},
 	}
+	if o := manager.options.StepObservation; o != nil {
+		if err := stageStepObservation(files, o.PluginDir); err != nil {
+			return nil, err
+		}
+	}
 	if len(active.Credentials.Get("voice")) != 0 {
 		files["run/aries/realtime.key"] = harness.ArchiveFile{Content: active.Credentials.Get("voice"), Mode: 0o600}
 	}
@@ -762,6 +796,9 @@ func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([
 		{Name: "opt/aries/bin", Mode: 0o755, UID: 1000, GID: 1000},
 		{Name: "home/node/.openclaw", Mode: 0o700, UID: 1000, GID: 1000},
 		{Name: "home/node/.openclaw/.aries", Mode: 0o700, UID: 1000, GID: 1000},
+	}
+	if manager.options.StepObservation != nil {
+		directories = append(directories, harness.ArchiveDirectory{Name: "run/aries/step-pages", Mode: 0o700, UID: 1000, GID: 1000})
 	}
 	return harness.StageArchive(directories, files)
 }

@@ -284,6 +284,10 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		harnessActive = false
 		result.Isolation.HarnessStopped = true
 	}
+	cancelIsolation()
+	// Each independent isolation owner gets a fresh bounded cleanup context.
+	// Host-side observation release may consume the harness's cleanup budget.
+	isolationCtx, cancelIsolation = context.WithTimeout(context.WithoutCancel(ctx), r.cleanupTimeout)
 	if err := r.bridge.Stop(isolationCtx); err != nil {
 		isolationErrors = append(isolationErrors, fmt.Errorf("confirm bridge revoked: %w", err))
 	} else {

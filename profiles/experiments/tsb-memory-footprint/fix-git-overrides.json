@@ -1,0 +1,6 @@
+{
+  "agent_sandbox_resources": {
+    "cpu": 2,
+    "memory_mb": 4096
+  }
+}

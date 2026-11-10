@@ -11,6 +11,11 @@ Use `configs/versions.json` for pins; do not duplicate the field inventory here.
   [constraints](../docs/implementation/vhive.md). On Kubernetes all three
   components share one namespace and backend. Reject other mixed compositions
   and explicit embedded mode before effects.
+- Keep optional step observation owned by the native OpenClaw agent harness;
+  preserve native batch scheduling and reject other harness modes. Treat the
+  access/dirty guest-pause policy as an explicit experimental change. Use the
+  [tracer source pins and setup](../docs/experiments/memory-footprint-tracing.md)
+  and [step observation configuration](../docs/configuration.md#native-step-observation).
 - Declare `overrides_file` explicitly (`""` disables overrides). Keep harness and
   sandbox resource limits independent; preserve omission/default semantics and
   explicit model request settings without silently changing their meaning. Judges

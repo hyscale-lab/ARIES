@@ -1,0 +1,188 @@
+{
+  "schema": "aries.owner-layout.v1",
+  "kernel_sha256": "0e524afe5a90f4ce4b13091a8b5acf7fbe9e7584e711f609d27b69b78564117d",
+  "offsets": {
+    "task_struct.thread_group": 1208,
+    "task_struct.stack": 24,
+    "THREAD_SIZE": 16384,
+    "vdso_image.data": 0,
+    "vdso_image.size": 8,
+    "page.compound_order": 17
+  },
+  "symbols": {
+    "_stext": 18446744071578845184,
+    "_end": 18446744071602094080,
+    "empty_zero_page": 18446744071600656384,
+    "__vvar_page": 18446744071596908544,
+    "vdso_image_64": 18446744071593529504,
+    "vdso_image_32": 18446744071593529632,
+    "init_top_pgt": 18446744071595687936
+  },
+  "allocated_sections": [
+    {
+      "name": ".text",
+      "address": 18446744071578845184,
+      "size": 12587362,
+      "flags": 6
+    },
+    {
+      "name": ".rodata",
+      "address": 18446744071593525248,
+      "size": 1922480,
+      "flags": 3
+    },
+    {
+      "name": ".pci_fixup",
+      "address": 18446744071595447728,
+      "size": 12432,
+      "flags": 2
+    },
+    {
+      "name": "__param",
+      "address": 18446744071595460160,
+      "size": 9680,
+      "flags": 2
+    },
+    {
+      "name": "__modver",
+      "address": 18446744071595469840,
+      "size": 64,
+      "flags": 2
+    },
+    {
+      "name": "__ex_table",
+      "address": 18446744071595469904,
+      "size": 12072,
+      "flags": 2
+    },
+    {
+      "name": ".notes",
+      "address": 18446744071595481976,
+      "size": 84,
+      "flags": 2
+    },
+    {
+      "name": ".data",
+      "address": 18446744071595622400,
+      "size": 1206656,
+      "flags": 3
+    },
+    {
+      "name": "__bug_table",
+      "address": 18446744071596829056,
+      "size": 78048,
+      "flags": 3
+    },
+    {
+      "name": ".vvar",
+      "address": 18446744071596908544,
+      "size": 4096,
+      "flags": 3
+    },
+    {
+      "name": ".data..percpu",
+      "address": 0,
+      "size": 155800,
+      "flags": 3
+    },
+    {
+      "name": ".init.text",
+      "address": 18446744071597072384,
+      "size": 305268,
+      "flags": 6
+    },
+    {
+      "name": ".altinstr_aux",
+      "address": 18446744071597377652,
+      "size": 2807,
+      "flags": 6
+    },
+    {
+      "name": ".init.data",
+      "address": 18446744071597383680,
+      "size": 2878424,
+      "flags": 3
+    },
+    {
+      "name": ".x86_cpu_dev.init",
+      "address": 18446744071600262104,
+      "size": 40,
+      "flags": 2
+    },
+    {
+      "name": ".parainstructions",
+      "address": 18446744071600262144,
+      "size": 69532,
+      "flags": 2
+    },
+    {
+      "name": ".retpoline_sites",
+      "address": 18446744071600331680,
+      "size": 30664,
+      "flags": 2
+    },
+    {
+      "name": ".return_sites",
+      "address": 18446744071600362344,
+      "size": 231468,
+      "flags": 2
+    },
+    {
+      "name": ".altinstructions",
+      "address": 18446744071600593816,
+      "size": 11568,
+      "flags": 2
+    },
+    {
+      "name": ".altinstr_replacement",
+      "address": 18446744071600605384,
+      "size": 3296,
+      "flags": 6
+    },
+    {
+      "name": ".iommu_table",
+      "address": 18446744071600608680,
+      "size": 80,
+      "flags": 2
+    },
+    {
+      "name": ".apicdrivers",
+      "address": 18446744071600608760,
+      "size": 32,
+      "flags": 3
+    },
+    {
+      "name": ".exit.text",
+      "address": 18446744071600608792,
+      "size": 6359,
+      "flags": 6
+    },
+    {
+      "name": ".smp_locks",
+      "address": 18446744071600615424,
+      "size": 36864,
+      "flags": 2
+    },
+    {
+      "name": ".data_nosave",
+      "address": 18446744071600652288,
+      "size": 4096,
+      "flags": 3
+    },
+    {
+      "name": ".bss",
+      "address": 18446744071600656384,
+      "size": 1257472,
+      "flags": 3
+    },
+    {
+      "name": ".brk",
+      "address": 18446744071601913856,
+      "size": 180224,
+      "flags": 3
+    }
+  ],
+  "source_commit": "1696dae7327b645d2b4b860e919e431dcda0d11c",
+  "kernel_config_sha256": "4a7f02416d798993f11bfe5896de2c88b7bf82a4bf6cf23e6371fe4ef8cc0522",
+  "scope": "x86-64 four-level paging, exact configured guest kernel; generated offsets not independently proven beyond live fixtures"
+}

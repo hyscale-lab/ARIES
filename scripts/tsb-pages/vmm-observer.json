@@ -1,0 +1,5 @@
+{
+  "backend": "vmm_owned",
+  "companion_path": "scripts/tsb-companion",
+  "agent_timeout_overrides": {}
+}

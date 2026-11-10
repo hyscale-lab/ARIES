@@ -1,0 +1,16 @@
+{
+  "repository": "https://github.com/JooyoungPark73/firecracker.git",
+  "branch": "firecracker-tracer",
+  "upstream_repository": "https://github.com/firecracker-microvm/firecracker.git",
+  "base_revision": "f8d253a0750f2cbad678c74a1153caa7596475c0",
+  "revision": "209428517ba3f92388e31961183aedea089f6662",
+  "tree": "ec7add22f40c9bf66610a05dcab55e474046d240",
+  "patch": "firecracker-tracer.patch",
+  "patch_sha256": "3328dd6c918525c6647ecf3b0f8e46cfd7b82a16cdacd346a8568233011d3489",
+  "rust_toolchain": "1.87.0",
+  "target": "x86_64-unknown-linux-musl",
+  "firecracker_containerd": {
+    "repository": "https://github.com/firecracker-microvm/firecracker-containerd.git",
+    "revision": "be68640a5d2237f5b427c37c1f5809ec154126c5"
+  }
+}

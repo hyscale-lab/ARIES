@@ -904,6 +904,59 @@ other omitted generation settings retain benchmark defaults.
 FACT retains its separate schema, including its `model` field and Jina settings.
 Changing the main agent's generation settings does not change FACT requests.
 
+## Native step observation
+
+`harness.step_observation` optionally stages the `aries-step-pages` research
+plugin in native OpenClaw **agent mode only**. Omit it to retain ordinary harness
+behavior. Hermes, realtime, and voice-transcribe modes reject this option.
+
+```json
+"step_observation": {
+  "plugin_dir": "/absolute/path/to/ARIES/scripts/tsb-access-dirty-plugin",
+  "observer_url": "http://172.17.0.1:18181"
+}
+```
+
+Place this object inside `harness`. `plugin_dir` must be a clean absolute directory
+on the ARIES host containing the native plugin's `index.mjs`, `end-request.mjs`,
+`openclaw.plugin.json`, and `package.json`. ARIES stages those bounded regular
+files, enables the plugin and its explicit terminal-hook permission, and supplies
+the observation endpoint and occurrence identity. `observer_url` must be HTTP(S),
+reachable from the harness container, without credentials, query, or fragment.
+The address above is illustrative; choose one reachable through the configured
+harness network. ARIES does not start or manage the observer service.
+
+The current access/dirty plugin uses a complete LLM tool-response batch as its
+**step**: every requested native call and harness-expanded operation from one
+assistant response shares a single window, including sequential or parallel
+calls. A **session** is an end-to-end task occurrence; a **turn** is a user-harness
+interaction. Agent mode currently admits one user request per occurrence and
+assigns turn `1`. Native result persistence closes the batch; operation-level
+bridge evidence remains separate.
+
+With `scripts/tsb-access-dirty-plugin`, the observer pauses the guest during
+initial/inter-step LLM intervals, resumes before tool admission, and records
+separate access/unknown, dirty, residency and metadata evidence. This is an
+explicit experimental pause policy that affects asynchronous guest progress.
+It requires the pinned native dependencies and external observer described in
+[the tracer source guide](experiments/memory-footprint-tracing.md). The earlier
+`scripts/tsb-pages-plugin` remains available for the historical page-idle batch
+protocol; its combined read/write access evidence has different limits.
+
+A successful native terminal hook seals the measurement horizon before release.
+After confirmed harness-container removal, ARIES independently requires an
+identity-matched observer release acknowledgement before returning successful
+harness stop. Cancellation may release the guest while marking the measurement
+censored; physical release does not certify trace completeness. Runner gives
+bridge revocation a fresh cleanup budget after harness isolation and withholds
+private evaluation material unless both stages succeed. Retain observer-release
+receipts, invalid intervals and unknown pages explicitly.
+
+This option does not establish complete host-memory attribution or make each
+bridge command an independent step. See [access/dirty epoch semantics](experiments/tsb-access-dirty.md)
+and [historical page-idle semantics](experiments/tsb-tool-pages-suite.md) before
+interpreting page sets.
+
 ## Other harness and evidence options
 
 - `harness.web_search` and `harness.subagents`: see the

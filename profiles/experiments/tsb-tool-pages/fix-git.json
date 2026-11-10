@@ -1,0 +1,61 @@
+{
+  "name": "tsb-tool-pages-fix-git",
+  "versions_file": "../../../configs/versions.json",
+  "overrides_file": "fix-git-overrides.json",
+  "execution": {
+    "concurrency": 1
+  },
+  "benchmark": {
+    "type": "terminalbench2",
+    "root": ".cache/terminal-bench-2-1",
+    "tasks": [
+      "fix-git"
+    ]
+  },
+  "harness": {
+    "type": "openclaw",
+    "deployment": {
+      "backend": "docker",
+      "docker": {
+        "socket": "/var/run/docker.sock"
+      }
+    },
+    "step_observation": {
+      "plugin_dir": "/home/nehalem/aries/scripts/tsb-pages-plugin",
+      "observer_url": "http://172.17.0.1:18181"
+    }
+  },
+  "sandbox": {
+    "deployment": {
+      "backend": "vhive",
+      "vhive": {
+        "socket": "/run/firecracker-containerd/containerd.sock",
+        "namespace": "aries",
+        "snapshotter": "devmapper",
+        "io_dir": "/run/firecracker-containerd/aries-io",
+        "cni_network": "fcnet",
+        "idle_mode": "persistent",
+        "vcpus": 2,
+        "memory_mb": 4096
+      }
+    }
+  },
+  "bridge": {
+    "deployment": {
+      "backend": "docker"
+    },
+    "type": "openclaw-ssh",
+    "mode": "managed"
+  },
+  "runtime": {
+    "backend": "deepseek",
+    "mode": "external"
+  },
+  "model": {
+    "base_url": "https://api.deepseek.com",
+    "api_key_env": "DEEPSEEK_API_KEY",
+    "id": "deepseek-flash",
+    "reasoning_effort": "high"
+  },
+  "output_dir": "runs/tsb-tool-pages/fix-git"
+}

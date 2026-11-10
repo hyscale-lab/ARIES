@@ -262,14 +262,20 @@ func (f FactConfig) CoreModel() core.ModelConfig {
 	return core.ModelConfig{Provider: f.Provider, BaseURL: f.BaseURL, Model: f.ID, APIKeyEnv: f.APIKeyEnv}
 }
 
+type HarnessStepObservationConfig struct {
+	PluginDir   string `json:"plugin_dir"`
+	ObserverURL string `json:"observer_url"`
+}
+
 type HarnessConfig struct {
-	Deployment      DeploymentConfig             `json:"deployment,omitempty"`
-	Type            string                       `json:"type"`
-	Mode            string                       `json:"mode,omitempty"`
-	Realtime        HarnessRealtimeConfig        `json:"realtime,omitempty"`
-	VoiceTranscribe HarnessVoiceTranscribeConfig `json:"voice_transcribe,omitempty"`
-	WebSearch       HarnessWebSearchConfig       `json:"web_search,omitempty"`
-	Subagents       HarnessSubagentsConfig       `json:"subagents,omitempty"`
+	StepObservation *HarnessStepObservationConfig `json:"step_observation,omitempty"`
+	Deployment      DeploymentConfig              `json:"deployment,omitempty"`
+	Type            string                        `json:"type"`
+	Mode            string                        `json:"mode,omitempty"`
+	Realtime        HarnessRealtimeConfig         `json:"realtime,omitempty"`
+	VoiceTranscribe HarnessVoiceTranscribeConfig  `json:"voice_transcribe,omitempty"`
+	WebSearch       HarnessWebSearchConfig        `json:"web_search,omitempty"`
+	Subagents       HarnessSubagentsConfig        `json:"subagents,omitempty"`
 	// MCPServers configures external or in-harness Model Context Protocol (MCP) servers
 	// for Hermes and OpenClaw harnesses.
 	MCPServers []core.MCPServerConfig `json:"mcp_servers,omitempty"`
@@ -1024,6 +1030,19 @@ func (h *HarnessConfig) validateHermesBlocks() error {
 func (h *HarnessConfig) validate() error {
 	if h.Mode == "" {
 		h.Mode = "agent"
+	}
+	if h.StepObservation != nil {
+		o := h.StepObservation
+		if h.Type != "openclaw" || h.Mode != "agent" {
+			return errors.New("harness.step_observation requires OpenClaw agent mode")
+		}
+		if !filepath.IsAbs(o.PluginDir) || filepath.Clean(o.PluginDir) != o.PluginDir || o.PluginDir == "/" || strings.ContainsRune(o.PluginDir, 0) {
+			return errors.New("harness.step_observation.plugin_dir must be a clean absolute directory")
+		}
+		u, err := url.Parse(o.ObserverURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+			return errors.New("harness.step_observation.observer_url must be HTTP(S) without credentials, query or fragment")
+		}
 	}
 	if err := h.validateHermesBlocks(); err != nil {
 		return err

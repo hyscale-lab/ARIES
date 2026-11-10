@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+"""Make an evidence-linked overview, without claiming unknown pages were idle."""
+import argparse,html,json
+from pathlib import Path
+
+def main():
+    ap=argparse.ArgumentParser();ap.add_argument('--root',type=Path,required=True);a=ap.parse_args();r=a.root
+    def load(p):return json.loads((r/p).read_text())
+    paid=load('native-paid-001/comparison.json');mock=load('native-mock-002/comparison.json');uffd=load('uffd-pilot-002/pilot-report.json')
+    status=load('study-status.json')
+    rows=''.join('<tr><td>'+html.escape(str(i+1))+'</td><td>'+html.escape(s['step_id'])+'</td><td>'+str(s['counted_touched_pages'])+'</td><td>'+str(s['unknown_pages'])+'</td><td>'+str(s['tool_result_is_error'])+'</td></tr>' for i,s in enumerate(paid['steps']))
+    content='''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Pages per LLM tool step</title><style>body{font:16px system-ui;max-width:1100px;margin:32px auto;padding:0 20px;color:#18283a}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccd4dd;padding:8px;text-align:left}code{overflow-wrap:anywhere}.note{padding:18px;background:#fff2d8}pre{white-space:pre-wrap}</style><h1>Pages per LLM tool step</h1>
+<p><b>Session</b> = end-to-end task; <b>turn</b> = user–harness interaction; <b>step</b> = one LLM tool call, including all constituent sandbox operations.</p>
+<p>The native OpenClaw hooks arm tracking before a step and finalize its page set before the result is passed back to the LLM. Tracking is reset before the next step; guest memory and filesystem changes are preserved. LLM inference is outside the tool window. This version finalizes synchronously; overlap with inference is not implemented.</p>
+<div class="note"><b>All unknown pages are counted as touched in the primary counts and Jaccard matrix, as requested.</b> This is an explicit analysis assumption, not proof of access. The original observed-only matrix and raw unknown labels remain available. Newly resident pages, mapping changes and unsupported page types can be missed; endpoint checks cannot exclude transient changes or KVM TLB effects. Guest/background/VMM accesses can contribute. The actual sandbox has 2 vCPUs and 4096 MiB; this is guest RAM tracking, not full host footprint accounting.</div>
+<h2>Native DeepSeek session</h2><p>With all unknown pages included, pairwise Jaccard for steps 4–10 ranges from 67% to 84% (mean 75%). Other steps have lower overlaps. Jaccard measures shared pages divided by the union of both step sets; it is not the fraction of all VM memory.</p><p>Model: deepseek-flash, high thinking effort. Full task outcome, model usage and cleanup are separate from observer validity.</p><p><a href="native-paid-001/comparison.html">Step comparison matrix and timing</a> · <a href="native-paid-001/observer/steps.jsonl">Raw page sets</a> · <a href="native-paid-001/boundary-audit.md">Native boundary audit</a> · <a href="native-paid-001/machine-config.json">Actual VM resources</a></p>
+<table><tr><th>Step</th><th>Native LLM tool-call ID</th><th>Counted touched pages (observed + unknown, 4 KiB)</th><th>Unknown included</th><th>Tool error</th></tr>'''+rows+'''</table>
+<h2>Snapshot/restore experiment</h2><p>Four deterministic steps used fresh UFFD-backed VM restores, preserving boot ID, background process and disk state. This is a mechanism pilot, not a paid LLM trace. First-fault sets during tool execution omit pages already faulted during restore. Both tool-only faults and the restore-through-tool envelope are retained; snapshot-writing faults are excluded.</p><p><a href="uffd-pilot-002/pilot-report.html">UFFD report and overlap comparisons</a> · <a href="uffd-compat/">Recorded native compatibility patch</a></p>
+<h2>Validation and retained failures</h2><p><a href="native-mock-002/comparison.html">Native mock steps</a> · <a href="native-mock-002/boundary-audit.md">Two LLM calls → five and four sandbox operations</a> · <a href="idle-pilot-002/comparison.html">Initial idle mechanism pilot</a> · <a href="validation/">Checks</a></p><p>Retained failures include initial daemon PID discovery, first plugin service/registry integration, and first stock Firecracker restore compatibility failure. No paid retry is hidden.</p><h2>Recorded status</h2><pre>'''+html.escape(json.dumps(status,indent=2))+'''</pre><p><a href="study-status.json">Machine-readable status</a> · <a href="SHA256SUMS">Artifact checksums</a> · <a href="source-recovery/">Source recovery</a></p></html>'''
+    methodology=Path(__file__).with_name('methodology.html').read_text()
+    content=content.replace('<h2>Native DeepSeek session</h2>',methodology+'<h2>Native DeepSeek session</h2>')
+    (r/'methodology.html').write_text('<!doctype html><html lang="en"><meta charset="utf-8"><title>Page collection methodology</title>'+methodology+'</html>')
+    (r/'report.html').write_text(content);(r/'report.html').chmod(0o600)
+    print(r/'report.html',len(paid['steps']),'native paid steps;',len(mock['steps']),'mock steps')
+if __name__=='__main__':main()
