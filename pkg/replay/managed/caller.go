@@ -204,9 +204,12 @@ func (caller *Caller) Stop(ctx context.Context) error {
 		caller.removed = true
 		caller.allocationErr = nil
 	}
+	if caller.allocationErr != nil {
+		return caller.allocationErr
+	}
 	if !caller.closed {
 		if err := caller.options.Runtime.Close(); err != nil {
-			return errors.Join(caller.allocationErr, err)
+			return &runner.TransportCloseError{Err: err}
 		}
 		caller.closed = true
 	}

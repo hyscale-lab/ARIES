@@ -92,6 +92,12 @@ a replay mismatch does not hide a failed stop or failed bridge revocation.
 The task's `error` combines failures; an inherited reward does not override
 replay or isolation failure.
 
+If replay cleanup remains unconfirmed, ARIES stops new admission but lets admitted
+occurrences finish. ARIES retains the resource owners for bounded cleanup retries
+after those occurrences finish. A successful retry can set `cleanup.status` to
+`succeeded`. The task's `error` retains the original failure. An ordinary response
+mismatch does not stop admission when cleanup is confirmed.
+
 `tasks[0].evaluation.reused` marks the source occurrence's recorded
 evaluation. `evaluation.source_run_id` and `evaluation.source_task_id` name
 its source run and occurrence. Its status, score, reward, and error are

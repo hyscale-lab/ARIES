@@ -1,6 +1,7 @@
 package app
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -24,8 +25,11 @@ import (
 	sandboxv1 "github.com/hyscale-lab/aries/pkg/bridge/grpc/v1"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/deployment"
 	"github.com/hyscale-lab/aries/pkg/replay"
+	"github.com/hyscale-lab/aries/pkg/replay/managed"
 	"github.com/hyscale-lab/aries/pkg/runner"
+	"github.com/hyscale-lab/aries/pkg/sandbox"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 )
@@ -860,6 +864,580 @@ func TestReplayRunBoundsAllocationAndKeepsOriginAfterReadinessDelay(t *testing.T
 	})
 }
 
+type finiteCleanupRuntime struct {
+	deployment.Deployment
+	present      bool
+	stops        int
+	closes       int
+	stopFailures int
+	stopErr      error
+	createErr    error
+	emptyID      bool
+	resultError  string
+	closeErr     error
+}
+
+func (runtime *finiteCleanupRuntime) Create(context.Context, deployment.Request) (string, error) {
+	runtime.present = true
+	if runtime.emptyID {
+		return "", runtime.createErr
+	}
+	return "owned-runtime", runtime.createErr
+}
+func (*finiteCleanupRuntime) Validate(context.Context, string, deployment.Request, [][]byte) error {
+	return nil
+}
+func (*finiteCleanupRuntime) Start(context.Context, string) error           { return nil }
+func (*finiteCleanupRuntime) Running(context.Context, string) (bool, error) { return true, nil }
+func (*finiteCleanupRuntime) Exec(context.Context, string, core.Command) (core.CommandResult, error) {
+	return core.CommandResult{Stdout: "/app\n"}, nil
+}
+func (*finiteCleanupRuntime) LogsStream(context.Context, string, io.Writer, io.Writer) error {
+	return nil
+}
+func (runtime *finiteCleanupRuntime) Stop(ctx context.Context, _ string) error {
+	runtime.stops++
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if _, bounded := ctx.Deadline(); !bounded {
+		return errors.New("runtime cleanup has no deadline")
+	}
+	if runtime.stopErr != nil && (runtime.stopFailures == 0 || runtime.stops <= runtime.stopFailures) {
+		return runtime.stopErr
+	}
+	runtime.present = false
+	return nil
+}
+func (runtime *finiteCleanupRuntime) Close() error { runtime.closes++; return runtime.closeErr }
+func (*finiteCleanupRuntime) UploadArchive(context.Context, string, string, io.Reader) error {
+	return nil
+}
+func (runtime *finiteCleanupRuntime) DownloadArchive(_ context.Context, _, name string) (io.ReadCloser, deployment.FileInfo, error) {
+	const privateMode = 0o600
+	data, err := json.Marshal(map[string]any{"done": true, "error": runtime.resultError})
+	if err != nil {
+		return nil, deployment.FileInfo{}, err
+	}
+	var buffer bytes.Buffer
+	archive := tar.NewWriter(&buffer)
+	if err := archive.WriteHeader(&tar.Header{Name: filepath.Base(name), Typeflag: tar.TypeReg, Mode: privateMode, Size: int64(len(data))}); err != nil {
+		return nil, deployment.FileInfo{}, err
+	}
+	if _, err := archive.Write(data); err != nil {
+		return nil, deployment.FileInfo{}, err
+	}
+	if err := archive.Close(); err != nil {
+		return nil, deployment.FileInfo{}, err
+	}
+	return io.NopCloser(&buffer), deployment.FileInfo{Mode: privateMode, Size: int64(len(data))}, nil
+}
+
+type finiteCleanupEnvironment struct{}
+
+func (*finiteCleanupEnvironment) Start(context.Context, deployment.TaskEnvironmentRequest) (core.HarnessConnectivity, error) {
+	return core.HarnessConnectivity{Placement: core.RuntimePlacement{AttachmentID: "network"}}, nil
+}
+func (*finiteCleanupEnvironment) Validate(context.Context) error { return nil }
+func (*finiteCleanupEnvironment) Stop(context.Context) error     { return nil }
+
+func TestReplayRunStopsAdmissionAndRetainsFailedSandboxOwner(t *testing.T) {
+	const concurrency = 1
+	source, tasks, _ := writeFiniteReplaySource(t, []string{"a", "b"}, false)
+	failure := errors.New("runtime removal remains unconfirmed")
+	var managers []*sandbox.Manager
+	var runtimes []*finiteCleanupRuntime
+	wiring := finiteReplayWiring(tasks)
+	wiring.NewSandbox = func(_ config.Config, root, _, _ string, _ []int, logger *logrus.Logger) (SandboxInstance, error) {
+		runtime := &finiteCleanupRuntime{stopErr: failure}
+		manager, err := sandbox.New(sandbox.Options{OutputDir: root, Deployment: runtime,
+			NewEnvironment: func() deployment.TaskEnvironment { return &finiteCleanupEnvironment{} }, Logger: logger})
+		if err != nil {
+			return SandboxInstance{}, err
+		}
+		managers = append(managers, manager)
+		runtimes = append(runtimes, runtime)
+		return SandboxInstance{Sandbox: manager, Resources: &stubResources{}, Close: manager.Close}, nil
+	}
+	wiring.NewReplayCaller = func(config.Config, core.RuntimePlacement, time.Duration, *logrus.Logger) (runner.ReplayCaller, error) {
+		return &stubReplayCaller{}, nil
+	}
+	t.Cleanup(func() {
+		for index, manager := range managers {
+			runtimes[index].stopErr = nil
+			if err := manager.Close(); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	var out bytes.Buffer
+	err := runCommandForTest(context.Background(), finiteReplayProfile(t, source, concurrency), &out, Dependencies{Wiring: wiring})
+	if !errors.Is(err, failure) {
+		t.Fatalf("missing removal error: %v", err)
+	}
+	if len(runtimes) != concurrency {
+		t.Errorf("admitted replacement before confirmed removal: allocated=%d limit=%d", len(runtimes), concurrency)
+	}
+	var result core.RunResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Tasks) != concurrency || result.Summary.CleanupFailed != concurrency || result.Tasks[0].Cleanup.Status != core.StatusFailed {
+		t.Errorf("missing final cleanup uncertainty: %+v", result)
+	}
+	for index, runtime := range runtimes {
+		if !runtime.present || runtime.closes != 0 {
+			t.Errorf("lost live cleanup owner: present=%v transport closes=%d", runtime.present, runtime.closes)
+		}
+		before := runtime.stops
+		if err := managers[index].Close(); !errors.Is(err, failure) || runtime.stops <= before {
+			t.Errorf("failed owner was not retained for retry: stops=%d previous=%d error=%v", runtime.stops, before, err)
+		}
+	}
+}
+
+func TestReplayRunReleasesCapacityAfterConfirmedSandboxRetry(t *testing.T) {
+	for _, partialStart := range []bool{false, true} {
+		t.Run(fmt.Sprintf("partial-start=%t", partialStart), func(t *testing.T) {
+			const concurrency = 1
+			const failedAttempts = 1
+			const closedTransport = 1
+			source, tasks, expected := writeFiniteReplaySource(t, []string{"a", "b"}, false)
+			failure := errors.New("first removal failed")
+			var runtimes []*finiteCleanupRuntime
+			wiring := finiteReplayWiring(tasks)
+			wiring.NewSandbox = func(_ config.Config, root, _, _ string, _ []int, logger *logrus.Logger) (SandboxInstance, error) {
+				for _, runtime := range runtimes {
+					if runtime.present {
+						t.Error("replacement allocated before confirmed removal")
+					}
+				}
+				runtime := &finiteCleanupRuntime{}
+				if len(runtimes) == 0 {
+					runtime.stopErr, runtime.stopFailures = failure, failedAttempts
+					if partialStart {
+						runtime.createErr = errors.New("partial runtime creation failed")
+					}
+				}
+				manager, err := sandbox.New(sandbox.Options{OutputDir: root, Deployment: runtime,
+					NewEnvironment: func() deployment.TaskEnvironment { return &finiteCleanupEnvironment{} }, Logger: logger})
+				if err != nil {
+					return SandboxInstance{}, err
+				}
+				runtimes = append(runtimes, runtime)
+				return SandboxInstance{Sandbox: manager, Resources: &stubResources{}, Close: manager.Close}, nil
+			}
+			wiring.NewReplayCaller = func(config.Config, core.RuntimePlacement, time.Duration, *logrus.Logger) (runner.ReplayCaller, error) {
+				return &stubReplayCaller{}, nil
+			}
+			var out bytes.Buffer
+			err := runCommandForTest(context.Background(), finiteReplayProfile(t, source, concurrency), &out, Dependencies{Wiring: wiring})
+			if !errors.Is(err, failure) || len(runtimes) != len(expected) {
+				t.Fatalf("confirmed retry blocked admission or lost prior error: allocated=%d error=%v", len(runtimes), err)
+			}
+			var result core.RunResult
+			if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if len(result.Tasks) != len(expected) || result.Summary.CleanupFailed != 0 || result.Tasks[0].Error == "" || result.Tasks[0].Cleanup.Status == core.StatusFailed {
+				t.Fatalf("confirmed retry reported live ownership or lost error evidence: %+v", result)
+			}
+			for _, runtime := range runtimes {
+				if runtime.present || runtime.closes != closedTransport {
+					t.Fatalf("runtime not positively released: %+v", runtime)
+				}
+			}
+		})
+	}
+}
+
+func TestReplayRunStopsAdmissionAfterUnconfirmedPartialAllocation(t *testing.T) {
+	for _, emptyID := range []bool{false, true} {
+		t.Run(fmt.Sprintf("unknown-identity=%t", emptyID), func(t *testing.T) {
+			const concurrency = 1
+			source, tasks, _ := writeFiniteReplaySource(t, []string{"a", "b"}, false)
+			var runtimes []*finiteCleanupRuntime
+			wiring := finiteReplayWiring(tasks)
+			wiring.NewSandbox = func(_ config.Config, root, _, _ string, _ []int, logger *logrus.Logger) (SandboxInstance, error) {
+				runtime := &finiteCleanupRuntime{createErr: deployment.ErrAllocationUnconfirmed, emptyID: emptyID,
+					stopErr: errors.New("partial runtime removal failed")}
+				manager, err := sandbox.New(sandbox.Options{OutputDir: root, Deployment: runtime,
+					NewEnvironment: func() deployment.TaskEnvironment { return &finiteCleanupEnvironment{} }, Logger: logger})
+				if err != nil {
+					return SandboxInstance{}, err
+				}
+				runtimes = append(runtimes, runtime)
+				return SandboxInstance{Sandbox: manager, Resources: &stubResources{}, Close: manager.Close}, nil
+			}
+			wiring.NewReplayCaller = func(config.Config, core.RuntimePlacement, time.Duration, *logrus.Logger) (runner.ReplayCaller, error) {
+				return &stubReplayCaller{}, nil
+			}
+			var out bytes.Buffer
+			err := runCommandForTest(context.Background(), finiteReplayProfile(t, source, concurrency), &out, Dependencies{Wiring: wiring})
+			if !errors.Is(err, deployment.ErrAllocationUnconfirmed) || len(runtimes) != concurrency {
+				t.Errorf("partial allocation uncertainty allowed replacement: allocated=%d error=%v", len(runtimes), err)
+			}
+			for _, runtime := range runtimes {
+				if !runtime.present || runtime.closes != 0 {
+					t.Errorf("partial runtime lost its retry transport: %+v", runtime)
+				}
+			}
+			var result core.RunResult
+			if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if len(result.Tasks) != concurrency || result.Summary.CleanupFailed != concurrency || result.Tasks[0].Cleanup.Status != core.StatusFailed {
+				t.Errorf("partial allocation uncertainty missing from result: %+v", result)
+			}
+		})
+	}
+}
+
+func TestReplayRunHandlesCallerCleanupUncertainty(t *testing.T) {
+	const concurrency = 1
+	const failedStopPhases = 2
+	const closedTransport = 1
+	for _, stage := range []string{"persistent", "transient", "partial start", "unknown identity", "mixed stop error", "response mismatch"} {
+		t.Run(stage, func(t *testing.T) {
+			source, tasks, expected := writeFiniteReplaySource(t, []string{"a", "b"}, false)
+			failure := errors.New("caller removal remains unconfirmed")
+			const responseError = "strict replay response mismatch"
+			var runtimes []*finiteCleanupRuntime
+			var callers []*managed.Caller
+			wiring := finiteReplayWiring(tasks)
+			wiring.NewSandbox = func(_ config.Config, root, _, _ string, _ []int, logger *logrus.Logger) (SandboxInstance, error) {
+				manager, err := sandbox.New(sandbox.Options{OutputDir: root, Deployment: &finiteCleanupRuntime{},
+					NewEnvironment: func() deployment.TaskEnvironment { return &finiteCleanupEnvironment{} }, Logger: logger})
+				if err != nil {
+					return SandboxInstance{}, err
+				}
+				return SandboxInstance{Sandbox: manager, Resources: &stubResources{}, Close: manager.Close}, nil
+			}
+			wiring.NewBridge = func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
+				return &finiteReplayBridge{endpoint: core.ToolEndpoint{Protocol: "grpc", Address: "bridge:8443"}, stop: func(context.Context) error { return nil }}, nil
+			}
+			wiring.NewReplayCaller = func(_ config.Config, placement core.RuntimePlacement, timeout time.Duration, _ *logrus.Logger) (runner.ReplayCaller, error) {
+				for _, runtime := range runtimes {
+					if runtime.present {
+						t.Error("replacement allocated before confirmed caller removal")
+					}
+				}
+				runtime := &finiteCleanupRuntime{}
+				if len(runtimes) == 0 {
+					if stage == "response mismatch" {
+						runtime.resultError = responseError
+					} else {
+						runtime.stopErr = failure
+					}
+					switch stage {
+					case "transient":
+						runtime.stopFailures = failedStopPhases
+					case "partial start":
+						runtime.createErr = errors.New("caller partial creation failed")
+					case "unknown identity":
+						runtime.createErr, runtime.emptyID = deployment.ErrAllocationUnconfirmed, true
+					case "mixed stop error":
+						runtime.stopErr = errors.Join(&runner.TransportCloseError{Err: errors.New("other transport close failed")}, failure)
+					}
+				}
+				caller, err := managed.New(managed.Options{Runtime: runtime, Image: finiteImage, Backend: "docker", BridgeBackend: "docker", BridgePlacement: placement, CallTimeout: timeout})
+				if err != nil {
+					return nil, err
+				}
+				runtimes, callers = append(runtimes, runtime), append(callers, caller)
+				return caller, nil
+			}
+			t.Cleanup(func() {
+				for index, caller := range callers {
+					if runtimes[index].emptyID {
+						continue
+					}
+					runtimes[index].stopErr = nil
+					if err := caller.Stop(context.Background()); err != nil {
+						t.Error(err)
+					}
+				}
+			})
+			var out bytes.Buffer
+			err := runCommandForTest(context.Background(), finiteReplayProfile(t, source, concurrency), &out, Dependencies{Wiring: wiring})
+			var result core.RunResult
+			if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if stage == "transient" || stage == "response mismatch" {
+				if len(runtimes) != len(expected) || len(result.Tasks) != len(expected) || result.Summary.CleanupFailed != 0 || result.Tasks[0].Cleanup.Status != core.StatusSucceeded || result.Tasks[0].Error == "" {
+					t.Fatalf("confirmed caller release blocked admission or lost error evidence: allocated=%d result=%+v error=%v", len(runtimes), result, err)
+				}
+				for _, runtime := range runtimes {
+					if runtime.present || runtime.closes != closedTransport {
+						t.Errorf("confirmed caller release lost: %+v", runtime)
+					}
+				}
+			} else {
+				if len(runtimes) != concurrency || len(result.Tasks) != concurrency || result.Summary.CleanupFailed != concurrency || result.Tasks[0].Cleanup.Status != core.StatusFailed {
+					t.Fatalf("unconfirmed caller release allowed admission: allocated=%d result=%+v error=%v", len(runtimes), result, err)
+				}
+				if !runtimes[0].present || runtimes[0].closes != 0 {
+					t.Errorf("caller lost ownership or retry transport: %+v", runtimes[0])
+				}
+			}
+			switch stage {
+			case "response mismatch":
+				if err == nil || !strings.Contains(err.Error(), responseError) {
+					t.Errorf("missing strict response failure: %v", err)
+				}
+			case "unknown identity":
+				if !errors.Is(err, deployment.ErrAllocationUnconfirmed) {
+					t.Errorf("missing unknown allocation error: %v", err)
+				}
+			default:
+				if !errors.Is(err, failure) {
+					t.Errorf("missing original caller removal failure: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestReplayRunContinuesAfterTransportCloseFailure(t *testing.T) {
+	for _, owner := range []string{"sandbox", "caller"} {
+		t.Run(owner, func(t *testing.T) {
+			const concurrency = 1
+			const oneRemoval = 1
+			source, tasks, expected := writeFiniteReplaySource(t, []string{"a", "b"}, false)
+			original := snapshotFiniteReplaySource(t, source)
+			failure := errors.New("runtime transport close failed after confirmed removal")
+			var sandboxes, callers []*finiteCleanupRuntime
+			wiring := finiteReplayWiring(tasks)
+			wiring.NewSandbox = func(_ config.Config, root, _, _ string, _ []int, logger *logrus.Logger) (SandboxInstance, error) {
+				runtime := &finiteCleanupRuntime{}
+				if owner == "sandbox" && len(sandboxes) == 0 {
+					runtime.closeErr = failure
+				}
+				manager, err := sandbox.New(sandbox.Options{OutputDir: root, Deployment: runtime,
+					NewEnvironment: func() deployment.TaskEnvironment { return &finiteCleanupEnvironment{} }, Logger: logger})
+				if err != nil {
+					return SandboxInstance{}, err
+				}
+				sandboxes = append(sandboxes, runtime)
+				return SandboxInstance{Sandbox: manager, Resources: &stubResources{}, Close: manager.Close}, nil
+			}
+			wiring.NewBridge = func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
+				return &finiteReplayBridge{endpoint: core.ToolEndpoint{Protocol: "grpc", Address: "bridge:8443"}, stop: func(context.Context) error { return nil }}, nil
+			}
+			wiring.NewReplayCaller = func(_ config.Config, placement core.RuntimePlacement, timeout time.Duration, _ *logrus.Logger) (runner.ReplayCaller, error) {
+				runtime := &finiteCleanupRuntime{}
+				if owner == "caller" && len(callers) == 0 {
+					runtime.closeErr = failure
+				}
+				callers = append(callers, runtime)
+				return managed.New(managed.Options{Runtime: runtime, Image: finiteImage, Backend: "docker", BridgeBackend: "docker", BridgePlacement: placement, CallTimeout: timeout})
+			}
+			var out bytes.Buffer
+			err := runCommandForTest(context.Background(), finiteReplayProfile(t, source, concurrency), &out, Dependencies{Wiring: wiring})
+			if !errors.Is(err, failure) || errors.Is(err, errReplayCleanupUnconfirmed) {
+				t.Errorf("transport close failure lost or classified as unsafe admission: %v", err)
+			}
+			var result core.RunResult
+			if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if len(result.Tasks) != len(expected) || len(sandboxes) != len(expected) || len(callers) != len(expected) {
+				t.Errorf("confirmed removal blocked replacement: tasks=%d sandboxes=%d callers=%d", len(result.Tasks), len(sandboxes), len(callers))
+			}
+			for _, runtimes := range [][]*finiteCleanupRuntime{sandboxes, callers} {
+				for _, runtime := range runtimes {
+					if runtime.present || runtime.stops != oneRemoval {
+						t.Errorf("runtime removal was not confirmed or was repeated: %+v", runtime)
+					}
+				}
+			}
+			for index, task := range result.Tasks {
+				grade := expected[index].Evaluation
+				grade.Reused, grade.SourceRunID, grade.SourceTaskID = true, finiteSourceRun, expected[index].TaskID
+				if task.Isolation.Status != core.StatusConfirmed || !task.Isolation.CallerStopped || !task.Isolation.BridgeRevoked || task.Replay.Status != core.StatusSucceeded || !reflect.DeepEqual(task.Evaluation, grade) {
+					t.Errorf("transport error changed isolation, replay, or inherited grade: %+v", task)
+				}
+			}
+			if result.Tasks[0].Cleanup.Status != core.StatusFailed || !strings.Contains(result.Tasks[0].Cleanup.Error, failure.Error()) || !strings.Contains(result.Tasks[0].Error, failure.Error()) {
+				t.Errorf("transport close error missing from cleanup evidence: %+v", result.Tasks[0])
+			}
+			if !reflect.DeepEqual(original, snapshotFiniteReplaySource(t, source)) {
+				t.Error("transport cleanup changed the source artifacts")
+			}
+		})
+	}
+}
+
+func TestReplayRunRetriesSandboxStopWithoutRelyingOnClientClose(t *testing.T) {
+	for _, transient := range []bool{false, true} {
+		t.Run(fmt.Sprintf("transient=%t", transient), func(t *testing.T) {
+			const concurrency = 1
+			const failedAttempt = 1
+			source, tasks, expected := writeFiniteReplaySource(t, []string{"a", "b"}, false)
+			failure := errors.New("sandbox Stop did not confirm removal")
+			allocated, live := 0, 0
+			wiring := finiteReplayWiring(tasks)
+			wiring.NewSandbox = func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
+				if live != 0 {
+					t.Error("client close permitted replacement without a positive Stop")
+				}
+				first := allocated == 0
+				allocated++
+				stops := 0
+				active := false
+				var closeClient func() error
+				if !transient {
+					closeClient = func() error { return nil }
+				}
+				return SandboxInstance{Sandbox: &finiteReplaySandbox{
+					start: func(context.Context) error { active = true; live++; return nil },
+					stop: func(ctx context.Context) error {
+						stops++
+						if ctx.Err() != nil {
+							t.Errorf("cleanup inherited cancellation: %v", ctx.Err())
+						}
+						if _, bounded := ctx.Deadline(); !bounded {
+							t.Error("cleanup has no deadline")
+						}
+						if first && (!transient || stops == failedAttempt) {
+							return failure
+						}
+						if active {
+							active = false
+							live--
+						}
+						return nil
+					},
+				}, Resources: &stubResources{}, Close: closeClient}, nil
+			}
+			wiring.NewReplayCaller = func(config.Config, core.RuntimePlacement, time.Duration, *logrus.Logger) (runner.ReplayCaller, error) {
+				return &stubReplayCaller{}, nil
+			}
+			var out bytes.Buffer
+			err := runCommandForTest(context.Background(), finiteReplayProfile(t, source, concurrency), &out, Dependencies{Wiring: wiring})
+			if !errors.Is(err, failure) {
+				t.Fatalf("missing first cleanup failure: %v", err)
+			}
+			var result core.RunResult
+			if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if transient {
+				if allocated != len(expected) || live != 0 || result.Tasks[0].Cleanup.Status != core.StatusSucceeded {
+					t.Fatalf("positive Stop retry did not release capacity: allocated=%d live=%d result=%+v", allocated, live, result)
+				}
+			} else if allocated != concurrency || live != concurrency || result.Tasks[0].Cleanup.Status != core.StatusFailed {
+				t.Fatalf("unconfirmed Stop released capacity: allocated=%d live=%d result=%+v", allocated, live, result)
+			}
+		})
+	}
+}
+
+func TestReplayRunDrainsAdmittedPeersAfterCleanupUncertainty(t *testing.T) {
+	for _, stage := range []string{"persistent", "recovered", "canceled"} {
+		t.Run(stage, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				const concurrency = 2
+				source, tasks, expected := writeFiniteReplaySource(t, []string{"a", "b", "a", "b"}, false)
+				firstID := expected[0].TaskID
+				failure := errors.New("first sandbox removal remains unconfirmed")
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				started := make(chan string, len(expected))
+				finishFirst, finishPeer := make(chan struct{}), make(chan struct{})
+				var mu sync.Mutex
+				managers := map[string]*sandbox.Manager{}
+				runtimes := map[string]*finiteCleanupRuntime{}
+				wiring := finiteReplayWiring(tasks)
+				wiring.NewSandbox = func(_ config.Config, root, _, id string, _ []int, logger *logrus.Logger) (SandboxInstance, error) {
+					runtime := &finiteCleanupRuntime{}
+					if id == firstID {
+						runtime.stopErr = failure
+					}
+					manager, err := sandbox.New(sandbox.Options{OutputDir: root, Deployment: runtime,
+						NewEnvironment: func() deployment.TaskEnvironment { return &finiteCleanupEnvironment{} }, Logger: logger})
+					if err != nil {
+						return SandboxInstance{}, err
+					}
+					mu.Lock()
+					managers[id], runtimes[id] = manager, runtime
+					mu.Unlock()
+					return SandboxInstance{Sandbox: manager, Resources: &stubResources{}, Close: manager.Close}, nil
+				}
+				wiring.NewReplayCaller = func(config.Config, core.RuntimePlacement, time.Duration, *logrus.Logger) (runner.ReplayCaller, error) {
+					return &finiteReplayCaller{run: func(ctx context.Context, plan replay.Plan) error {
+						started <- plan.SourceTaskID
+						release := finishPeer
+						if plan.SourceTaskID == firstID {
+							release = finishFirst
+						}
+						select {
+						case <-release:
+							return nil
+						case <-ctx.Done():
+							return ctx.Err()
+						}
+					}}, nil
+				}
+				var out bytes.Buffer
+				done := make(chan error, concurrency)
+				go func() {
+					done <- runCommandForTest(ctx, finiteReplayProfile(t, source, concurrency), &out, Dependencies{Wiring: wiring})
+				}()
+				for range concurrency {
+					<-started
+				}
+				close(finishFirst)
+				synctest.Wait()
+				if len(runtimes) != concurrency || !runtimes[firstID].present || runtimes[firstID].closes != 0 {
+					t.Errorf("failed owner was replaced or discarded while peer ran: %+v", runtimes)
+				}
+				select {
+				case <-done:
+					t.Fatal("run returned before admitted peer drained")
+				default:
+				}
+				if stage == "recovered" {
+					runtimes[firstID].stopErr = nil
+				}
+				if stage == "canceled" {
+					cancel()
+				} else {
+					close(finishPeer)
+				}
+				err := <-done
+				if !errors.Is(err, failure) || stage == "canceled" && !errors.Is(err, context.Canceled) {
+					t.Errorf("lost cleanup or cancellation error: %v", err)
+				}
+				var result core.RunResult
+				if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+					t.Fatal(err)
+				}
+				wantFirstCleanup := core.StatusFailed
+				if stage == "recovered" {
+					wantFirstCleanup = core.StatusSucceeded
+					if runtimes[firstID].present || result.Summary.CleanupFailed != 0 || result.Tasks[0].Error == "" {
+						t.Errorf("drain-time retry did not confirm release or retain prior error: runtime=%+v result=%+v", runtimes[firstID], result)
+					}
+				}
+				if len(runtimes) != concurrency || len(result.Tasks) != concurrency || result.Tasks[0].Cleanup.Status != wantFirstCleanup || result.Tasks[len(result.Tasks)-1].Cleanup.Status != core.StatusSucceeded {
+					t.Errorf("peer cleanup or admission failed: runtimes=%+v result=%+v", runtimes, result)
+				}
+				for id, manager := range managers {
+					if id != firstID && runtimes[id].present {
+						t.Error("admitted peer runtime remains present")
+					}
+					runtimes[id].stopErr = nil
+					if err := manager.Close(); err != nil {
+						t.Error(err)
+					}
+				}
+			})
+		})
+	}
+}
+
 func TestReplayRunRejectsInvalidWorkloadBeforeSandboxStart(t *testing.T) {
 	const concurrency = 1
 	source, tasks, expected := writeFiniteReplaySource(t, []string{"a", "b"}, false)
@@ -927,10 +1505,11 @@ type finiteReplayBridge struct {
 	stubBridge
 	startErr error
 	stop     func(context.Context) error
+	endpoint core.ToolEndpoint
 }
 
 func (bridge *finiteReplayBridge) Start(context.Context, runner.Sandbox) (core.ToolEndpoint, error) {
-	return core.ToolEndpoint{}, bridge.startErr
+	return bridge.endpoint, bridge.startErr
 }
 func (bridge *finiteReplayBridge) Stop(ctx context.Context) error { return bridge.stop(ctx) }
 
