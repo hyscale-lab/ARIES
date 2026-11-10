@@ -86,6 +86,7 @@ type Sandbox struct {
 	stopping         bool
 	stopDone         chan struct{}
 	stopErr          error
+	allocationErr    error
 }
 
 // Close releases the deployment transport after all sandboxes have stopped.
@@ -104,7 +105,7 @@ func (m *Manager) Close() error {
 	var cleanupErrors []error
 	for _, s := range pending {
 		ctx, cancel := context.WithTimeout(context.Background(), m.cleanupTimeout)
-		err := s.stopOnce(ctx, false)
+		err := s.stop(ctx, false)
 		cancel()
 		if err != nil {
 			cleanupErrors = append(cleanupErrors, err)
@@ -118,7 +119,10 @@ func (m *Manager) Close() error {
 		return err
 	}
 	m.closeOnce.Do(func() { m.closeErr = m.deployment.Close() })
-	return m.closeErr
+	if m.closeErr != nil {
+		return &runner.TransportCloseError{Err: m.closeErr}
+	}
+	return nil
 }
 
 // New constructs a manager without contacting the deployment backend.
@@ -214,6 +218,9 @@ func (m *Manager) Start(ctx context.Context, request core.SandboxRequest) (runne
 	}
 	s.containerID, err = m.deployment.Create(ctx, deploymentRequest)
 	s.containerOwned = s.containerID != ""
+	if !s.containerOwned && errors.Is(err, deployment.ErrAllocationUnconfirmed) {
+		s.allocationErr = err
+	}
 	if err != nil {
 		return nil, s.rollbackStart(ctx, fmt.Errorf("create task container: %w", err))
 	}
@@ -271,7 +278,15 @@ func (m *Manager) Stop(ctx context.Context, live runner.Sandbox) error {
 	if sandbox.owner != m {
 		return errors.New("stop deployment sandbox: sandbox belongs to another manager")
 	}
-	return sandbox.stop(ctx)
+	err := sandbox.stop(ctx, true)
+	m.mu.Lock()
+	if err != nil {
+		m.pending[sandbox] = struct{}{}
+	} else {
+		delete(m.pending, sandbox)
+	}
+	m.mu.Unlock()
+	return err
 }
 
 func ownershipLabels(request core.SandboxRequest, kind string) map[string]string {
@@ -461,7 +476,7 @@ func (s *Sandbox) download(ctx context.Context, source, destination string, maxB
 
 // stop records logs and removes the task container and network. Concurrent and
 // repeated calls are safe; failed removals can be retried.
-func (s *Sandbox) stop(ctx context.Context) error {
+func (s *Sandbox) stop(ctx context.Context, collectLogs bool) error {
 	s.mu.Lock()
 	if s.stopped {
 		s.mu.Unlock()
@@ -485,7 +500,7 @@ func (s *Sandbox) stop(ctx context.Context) error {
 	done := s.stopDone
 	s.mu.Unlock()
 
-	err := s.stopOnce(ctx, true)
+	err := s.stopOnce(ctx, collectLogs)
 	s.mu.Lock()
 	s.stopErr = err
 	s.stopping = false
@@ -497,8 +512,11 @@ func (s *Sandbox) stop(ctx context.Context) error {
 
 func (s *Sandbox) stopOnce(ctx context.Context, collectLogs bool) error {
 	s.mu.Lock()
-	containerOwned, environmentOwned := s.containerOwned, s.environmentOwned
+	containerOwned, environmentOwned, allocationErr := s.containerOwned, s.environmentOwned, s.allocationErr
 	s.mu.Unlock()
+	if allocationErr != nil {
+		return allocationErr
+	}
 	var errs []error
 	if containerOwned {
 		if collectLogs {

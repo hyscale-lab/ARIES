@@ -372,7 +372,11 @@ func runWithReplayInfrastructure(ctx context.Context, cfg config.Config, runID, 
 					return &replayCaller{ReplayCaller: caller, replayAt: replayAt}, nil
 				}
 			}
-			return runProfile(ctx, cfg.Name, runID, taskIDs, cfg.Execution.Concurrency, 0, nil,
+			pending := make([]struct {
+				experiment *experiment
+				result     core.RunResult
+			}, len(taskIDs))
+			result, runErr := runProfile(ctx, cfg.Name, runID, taskIDs, cfg.Execution.Concurrency, 0, nil,
 				func(taskCtx context.Context, occurrence taskOccurrence) (core.RunResult, error) {
 					index := occurrence.index
 					occurrenceWiring := taskWiring
@@ -383,8 +387,32 @@ func runWithReplayInfrastructure(ctx context.Context, cfg config.Config, runID, 
 					if err != nil {
 						return core.RunResult{}, err
 					}
-					return experiment.Run(taskCtx)
+					result, err := experiment.Run(taskCtx)
+					if errors.Is(err, errReplayCleanupUnconfirmed) {
+						pending[index].experiment, pending[index].result = experiment, result
+					}
+					return result, err
 				})
+			retryStarted := time.Now()
+			// Keep failed owners until admitted peers drain, before shared cleanup removes their attachment.
+			for _, owner := range pending {
+				if owner.experiment == nil {
+					continue
+				}
+				previousFailures := owner.result.Summary.CleanupFailed
+				runErr = errors.Join(runErr, owner.experiment.closeReplay(&owner.result))
+				result.Summary.CleanupFailed += owner.result.Summary.CleanupFailed - previousFailures
+				for _, task := range owner.result.Tasks {
+					for index := range result.Tasks {
+						if result.Tasks[index].TaskID == task.TaskID {
+							result.Tasks[index] = task
+							break
+						}
+					}
+				}
+			}
+			result.Duration += time.Since(retryStarted)
+			return result, runErr
 		})
 	}, outputRoot, stdout)
 }
@@ -590,8 +618,37 @@ func buildReplayTaskExperiment(cfg config.Config, runID, outputRoot, logicalID, 
 	if err != nil {
 		return nil, errors.Join(err, closeCaller(), closeSandbox())
 	}
-	return &experiment{runner: benchmarkRunner, recorder: recorder, close: func() error {
-		return errors.Join(closeCaller(), closeOccurrenceClients(sandbox.Close, nil))
+	return &experiment{runner: benchmarkRunner, recorder: recorder, closeReplay: func(result *core.RunResult) error {
+		cleanupErr := benchmarkRunner.RetryReplayCleanup(context.Background())
+		if runner.CleanupConfirmed(cleanupErr) {
+			cleanupErr = errors.Join(cleanupErr, closeCaller(), closeOccurrenceClients(sandbox.Close, nil))
+		}
+		for index := range result.Tasks {
+			task := &result.Tasks[index]
+			wasFailed := task.Cleanup.Status == core.StatusFailed
+			switch {
+			case cleanupErr != nil:
+				if !wasFailed {
+					result.Summary.CleanupFailed++
+				}
+				task.Cleanup.Status = core.StatusFailed
+				task.Cleanup.Error = cleanupErr.Error()
+				if task.Error != "" {
+					task.Error = errors.Join(errors.New(task.Error), cleanupErr).Error()
+				} else {
+					task.Error = cleanupErr.Error()
+				}
+			case wasFailed:
+				// The retry confirms release; the task error retains the first failure.
+				task.Cleanup.Status = core.StatusSucceeded
+				task.Cleanup.Error = ""
+				result.Summary.CleanupFailed--
+			}
+		}
+		if !runner.CleanupConfirmed(cleanupErr) {
+			return fmt.Errorf("%w: %w", errReplayCleanupUnconfirmed, cleanupErr)
+		}
+		return cleanupErr
 	}}, nil
 }
 

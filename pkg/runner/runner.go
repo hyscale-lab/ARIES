@@ -16,6 +16,40 @@ import (
 
 const defaultCleanupTimeout = 30 * time.Second
 
+// TransportCloseError reports a client close error after positive runtime removal.
+// It must not include unconfirmed runtime ownership.
+type TransportCloseError struct{ Err error }
+
+func (err *TransportCloseError) Error() string {
+	return fmt.Sprintf("close runtime transport after confirmed removal: %v", err.Err)
+}
+
+func (err *TransportCloseError) Unwrap() error { return err.Err }
+
+// CleanupConfirmed accepts only nil errors or transport-close errors after positive removal.
+func CleanupConfirmed(err error) bool {
+	switch typed := err.(type) {
+	case nil, *TransportCloseError:
+		return true
+	case interface{ Unwrap() []error }:
+		children := typed.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !CleanupConfirmed(child) {
+				return false
+			}
+		}
+		return true
+	case interface{ Unwrap() error }:
+		child := typed.Unwrap()
+		return child != nil && CleanupConfirmed(child)
+	default:
+		return false
+	}
+}
+
 // Options contains the few experiment-level inputs needed by the Runner.
 type Options struct {
 	RecordForReplay  bool
@@ -42,20 +76,21 @@ type RuntimeOverrides struct {
 
 // Runner composes exactly the benchmark, harness, sandbox, and bridge roles.
 type Runner struct {
-	recordForReplay  bool
-	benchmark        Benchmark
-	harness          AgentHarness
-	toolSandbox      ToolSandbox
-	bridge           ToolBridge
-	name             string
-	runID            string
-	outputDir        string
-	model            core.ModelConfig
-	cleanupTimeout   time.Duration
-	logger           *logrus.Logger
-	runtimeOverrides RuntimeOverrides
-	loadSource       func(context.Context) (replay.Plan, error)
-	caller           ReplayCaller
+	recordForReplay    bool
+	benchmark          Benchmark
+	harness            AgentHarness
+	toolSandbox        ToolSandbox
+	bridge             ToolBridge
+	name               string
+	runID              string
+	outputDir          string
+	model              core.ModelConfig
+	cleanupTimeout     time.Duration
+	logger             *logrus.Logger
+	runtimeOverrides   RuntimeOverrides
+	loadSource         func(context.Context) (replay.Plan, error)
+	caller             ReplayCaller
+	retryReplayCleanup func(context.Context) error
 }
 
 // New constructs a Runner explicitly and rejects missing roles.
@@ -394,6 +429,14 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 	return finish()
 }
 
+// RetryReplayCleanup retries retained replay owners after Run returns, before the app closes their clients.
+func (r *Runner) RetryReplayCleanup(ctx context.Context) error {
+	if r.retryReplayCleanup == nil {
+		return nil
+	}
+	return r.retryReplayCleanup(ctx)
+}
+
 func (r *Runner) runReplayTask(ctx context.Context, task core.Task) (core.TaskResult, error) {
 	started := time.Now()
 	result := newTaskResult(task.ID)
@@ -407,37 +450,57 @@ func (r *Runner) runReplayTask(ctx context.Context, task core.Task) (core.TaskRe
 		bridgeActive  bool
 		callerActive  bool
 		allErrors     []error
-		cleanupErrors []error
 		cleanupUsed   bool
 	)
-	finish := func() (core.TaskResult, error) {
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.cleanupTimeout)
-		defer cancel()
+	r.retryReplayCleanup = func(ctx context.Context) error {
+		var cleanupErrors []error
 		if callerActive {
 			cleanupUsed = true
-			if err := r.caller.Stop(cleanupCtx); err != nil {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.cleanupTimeout)
+			err := r.caller.Stop(cleanupCtx)
+			if err != nil {
 				cleanupErrors = append(cleanupErrors, fmt.Errorf("cleanup replay caller: %w", err))
 			}
+			if CleanupConfirmed(err) {
+				callerActive = false
+			}
+			cancel()
 		}
 		if bridgeActive {
 			cleanupUsed = true
-			if err := r.bridge.Stop(cleanupCtx); err != nil {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.cleanupTimeout)
+			err := r.bridge.Stop(cleanupCtx)
+			if err != nil {
 				cleanupErrors = append(cleanupErrors, fmt.Errorf("cleanup bridge: %w", err))
 			}
+			if CleanupConfirmed(err) {
+				bridgeActive = false
+			}
+			cancel()
 		}
 		if sandboxActive {
 			cleanupUsed = true
-			if err := r.toolSandbox.Stop(cleanupCtx, sandbox); err != nil {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.cleanupTimeout)
+			err := r.toolSandbox.Stop(cleanupCtx, sandbox)
+			if err != nil {
 				cleanupErrors = append(cleanupErrors, fmt.Errorf("cleanup sandbox: %w", err))
 			}
+			if CleanupConfirmed(err) {
+				sandboxActive = false
+			}
+			cancel()
 		}
+		return errors.Join(cleanupErrors...)
+	}
+	finish := func() (core.TaskResult, error) {
+		cleanupErr := r.RetryReplayCleanup(ctx)
 		if cleanupUsed {
 			result.Cleanup.Status = core.StatusSucceeded
 		}
-		if len(cleanupErrors) != 0 {
+		if cleanupErr != nil {
 			result.Cleanup.Status = core.StatusFailed
-			result.Cleanup.Error = errors.Join(cleanupErrors...).Error()
-			allErrors = append(allErrors, cleanupErrors...)
+			result.Cleanup.Error = cleanupErr.Error()
+			allErrors = append(allErrors, cleanupErr)
 		}
 		if runErr := ctx.Err(); runErr != nil && !errors.Is(errors.Join(allErrors...), runErr) {
 			allErrors = append(allErrors, fmt.Errorf("run context: %w", runErr))
@@ -522,21 +585,27 @@ func (r *Runner) runReplayTask(ctx context.Context, task core.Task) (core.TaskRe
 
 	isolationCtx, cancelIsolation := context.WithTimeout(context.WithoutCancel(ctx), r.cleanupTimeout)
 	var isolationErrors []error
-	if err := r.caller.Stop(isolationCtx); err != nil {
+	if err := r.caller.Stop(isolationCtx); !CleanupConfirmed(err) {
 		isolationErrors = append(isolationErrors, fmt.Errorf("confirm replay caller stopped: %w", err))
 		result.Replay.Timing.Reason = "replay caller stop is unconfirmed"
 		result.Replay.Responses.Reason = "replay caller stop is unconfirmed"
 	} else {
 		callerActive = false
 		result.Isolation.CallerStopped = true
+		if err != nil {
+			allErrors = append(allErrors, fmt.Errorf("close replay caller transport: %w", err))
+		}
 	}
 	cancelIsolation()
 	isolationCtx, cancelIsolation = context.WithTimeout(context.WithoutCancel(ctx), r.cleanupTimeout)
-	if err := r.bridge.Stop(isolationCtx); err != nil {
+	if err := r.bridge.Stop(isolationCtx); !CleanupConfirmed(err) {
 		isolationErrors = append(isolationErrors, fmt.Errorf("confirm bridge revoked: %w", err))
 	} else {
 		bridgeActive = false
 		result.Isolation.BridgeRevoked = true
+		if err != nil {
+			allErrors = append(allErrors, fmt.Errorf("close replay bridge transport: %w", err))
+		}
 		if result.Isolation.CallerStopped {
 			path := ""
 			if len(result.ToolLogPaths) != 0 {

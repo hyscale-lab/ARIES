@@ -15,16 +15,22 @@ import (
 
 const observerStopTimeout = 15 * time.Second
 
+var errReplayCleanupUnconfirmed = errors.New("replay admission stopped because cleanup was not confirmed")
+
 type experiment struct {
-	runner   *runner.Runner
-	recorder *monitor.Recorder
-	close    func() error
+	runner      *runner.Runner
+	recorder    *monitor.Recorder
+	close       func() error
+	closeReplay func(*core.RunResult) error
 }
 
 func (experiment *experiment) Run(ctx context.Context) (core.RunResult, error) {
 	result, err := runObserved(ctx, experiment.runner.Run, experiment.recorder.Start, experiment.recorder.Stop, observerStopTimeout)
 	if experiment.close != nil {
 		err = errors.Join(err, experiment.close())
+	}
+	if experiment.closeReplay != nil {
+		err = errors.Join(err, experiment.closeReplay(&result))
 	}
 	return result, err
 }
@@ -79,6 +85,8 @@ func runProfile(ctx context.Context, name, runID string, taskIDs []string, concu
 		deadline = timer.C
 	}
 	capacity := make(chan struct{}, concurrency)
+	admissionStopped := make(chan struct{})
+	var stopAdmission sync.Once
 	var slots []*occurrenceSlot
 	var wg sync.WaitGroup
 	var index uint64
@@ -91,7 +99,15 @@ func runProfile(ctx context.Context, name, runID string, taskIDs []string, concu
 			return false
 		case <-deadline:
 			return false
+		case <-admissionStopped:
+			return false
 		case capacity <- struct{}{}:
+		}
+		select {
+		case <-admissionStopped:
+			<-capacity
+			return false
+		default:
 		}
 		if ctx.Err() != nil || !deadlineAt.IsZero() && !time.Now().Before(deadlineAt) {
 			<-capacity
@@ -111,6 +127,9 @@ func runProfile(ctx context.Context, name, runID string, taskIDs []string, concu
 			defer wg.Done()
 			defer func() { <-capacity }()
 			slot.result, slot.err = run(ctx, occurrence)
+			if errors.Is(slot.err, errReplayCleanupUnconfirmed) {
+				stopAdmission.Do(func() { close(admissionStopped) })
+			}
 		}()
 		return true
 	}
