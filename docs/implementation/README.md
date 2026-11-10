@@ -13,5 +13,6 @@ and [benchmark guides](../design/benchmark.md) for setup and execution.
 - [Apptainer runtime and run namespace](apptainer.md)
 - [Benchmark evaluation mechanisms](benchmarks.md)
 - [Model runtime mechanisms](model-runtime.md)
+- [Mock LLM smoke experiments](mock-llm.md)
 
 Future capabilities are listed separately in the [roadmap](../supported.md#roadmap).

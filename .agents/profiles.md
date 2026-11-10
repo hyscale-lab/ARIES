@@ -16,6 +16,7 @@ Use `configs/versions.json` for pins; do not duplicate the field inventory here.
   share model fields; preserve independent evaluation defaults and validation.
 - Match model IDs to the served catalog. Keep credential values out of profiles,
   metadata, logs, and results; use configured environment-variable references.
+  For no-cost model/tool smoke runs, use the [mock LLM guide](../docs/implementation/mock-llm.md).
 - Preserve [DeepSeek credential-file validation and fallback](../docs/configuration.md#external-deepseek).
 - For managed SGLang, validate endpoint and measurement settings using full option
   names; reject aliases and abbreviations that bypass those checks, keys containing
