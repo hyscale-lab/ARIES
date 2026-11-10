@@ -63,6 +63,13 @@ class ProcessTests(unittest.TestCase):
    self.assertTrue(failure["publication_failed"])
    self.assertTrue(failure["attribution_decode_completed"])
    self.assertFalse(failure["records_acknowledged"])
+   metrics=json.loads((root/'out/companion-metrics.json').read_text())
+   self.assertEqual(metrics['mode'],'bootstrap');self.assertEqual(metrics['capture_id'],'c')
+   self.assertTrue(metrics['phases']['bootstrap']['completed'])
+   self.assertTrue(metrics['phases']['seal']['completed'])
+   self.assertFalse(metrics['phases']['publication']['completed'])
+   for phase in metrics['phases'].values():
+    self.assertGreaterEqual(phase['wall_ns'],0);self.assertGreaterEqual(phase['cpu_ns'],0)
 
  def test_cli_rejects_missing_inputs_before_api(self):
   from unittest.mock import patch

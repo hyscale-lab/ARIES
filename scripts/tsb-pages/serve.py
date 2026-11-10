@@ -66,6 +66,7 @@ def main():
     tracker = None
     invalid = False
     operation_lock = threading.RLock()
+    identity_lock = threading.Lock()
     error_lock = threading.Lock()
     abort_requested = threading.Event()
     session_identity = None
@@ -154,15 +155,19 @@ def main():
                 identity = tuple(body.get(name) for name in ("session_id", "turn_id"))
                 if not all(isinstance(value, str) and value for value in identity):
                     raise ValueError("native session/turn hierarchy required")
-                if session_identity is not None and identity != session_identity:
-                    raise ValueError("observer session identity mismatch")
-                if self.path == "/session/abort":
-                    # Cancellation precedes operation ownership, interrupting an
-                    # in-progress export/read barrier instead of queueing behind it.
-                    abort_requested.set()
-                    current = observer
-                    if current is not None and hasattr(current, "request_abort"):
-                        current.request_abort()
+                with identity_lock:
+                    if session_identity is not None and identity != session_identity:
+                        raise ValueError("observer session identity mismatch")
+                    if session_identity is None and self.path in ("/session/start", "/session/abort", "/batch"):
+                        session_identity = identity
+                    if self.path == "/session/abort":
+                        # Bind/validate identity before cancellation can affect
+                        # a concurrently initializing session. Never wait for the
+                        # operation lock before interrupting its live reads.
+                        abort_requested.set()
+                        current = observer
+                        if current is not None and hasattr(current, "request_abort"):
+                            current.request_abort()
                 with operation_lock:
                     if session_identity is not None and identity != session_identity:
                         raise ValueError("observer session identity mismatch")
@@ -210,6 +215,7 @@ def main():
                     else:
                         raise ValueError("unknown endpoint")
                     if self.path != "/session/abort": result = tracker.last_ack
+                    result = {**result, "session_id": session_identity[0], "turn_id": session_identity[1]}
             except Exception as error:
                 status = 409
                 invalid = True
@@ -238,7 +244,17 @@ def main():
     }) + "\n")
 
     def stop(*_):
-        threading.Thread(target=server.shutdown, daemon=True).start()
+        def shutdown():
+            try:
+                if vmm_owned:
+                    abort_requested.set()
+                    current = observer
+                    if current is not None: current.request_abort()
+            finally:
+                server.shutdown()
+        # Signals may interrupt cleanup while it owns an observer lock. Keep
+        # interruption before handler joining, outside the signal context.
+        threading.Thread(target=shutdown, daemon=True).start()
 
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
@@ -247,23 +263,32 @@ def main():
     finally:
         # Stop admissions and join bounded request handlers before closing logs.
         server.server_close()
-        operation_lock.acquire()
-        if tracker and tracker.pending is not None:
-            pending = tracker.pending
-            save(errors, {"error": "shutdown with incomplete LLM batch",
-                          "metadata": pending["metadata"],
-                          "completed_tool_call_ids": pending["completed_order"],
-                          "missing_tool_call_ids": [call for call in pending["expected"]
-                                                    if call not in pending["completed"]]})
-        if observer:
-            observer.close()
-        if tracer and tracer.poll() is None:
-            tracer.send_signal(signal.SIGINT)
-            tracer.wait(timeout=10)
-        rows.close()
-        errors.close()
-        groups.close()
-        operation_lock.release()
+        with operation_lock:
+            try:
+                if tracker and tracker.pending is not None:
+                    pending = tracker.pending
+                    save(errors, {"error": "shutdown with incomplete LLM batch",
+                                  "metadata": pending["metadata"],
+                                  "completed_tool_call_ids": pending["completed_order"],
+                                  "missing_tool_call_ids": [call for call in pending["expected"]
+                                                            if call not in pending["completed"]]})
+                if observer:
+                    try:
+                        if vmm_owned and abort_requested.is_set():
+                            observer.abort_session("observer_shutdown")
+                    finally:
+                        observer.close()
+                if tracer and tracer.poll() is None:
+                    tracer.send_signal(signal.SIGINT)
+                    tracer.wait(timeout=10)
+            except BaseException as error:
+                save(errors, {"error": "observer shutdown failed",
+                              "type": type(error).__name__, "message": str(error)})
+                raise
+            finally:
+                rows.close()
+                errors.close()
+                groups.close()
 
 
 if __name__ == "__main__":

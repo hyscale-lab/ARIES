@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -225,5 +226,58 @@ func TestObserverReleaseRespectsBoundedContext(t *testing.T) {
 	defer cancel()
 	if err := manager.releaseStepObservation(ctx, active); err == nil || errors.Is(err, nil) {
 		t.Fatal("missing response accepted")
+	}
+}
+
+type pausedReadinessFailure struct {
+	*fakeDeployment
+	paused *atomic.Bool
+}
+
+func (deployment *pausedReadinessFailure) Exec(context.Context, string, core.Command) (core.CommandResult, error) {
+	// The native plugin service may acquire its guest hold before gateway readiness.
+	deployment.paused.Store(true)
+	return core.CommandResult{}, errors.New("gateway readiness failed after observer startup")
+}
+
+func TestStartRollbackRetainsObserverReleaseAfterHarnessRemoval(t *testing.T) {
+	fake := newFakeDeployment()
+	manager := newTestManager(t, fake, []byte("model-secret"))
+	var paused atomic.Bool
+	manager.runtime.Options.Deployment = &pausedReadinessFailure{fakeDeployment: fake, paused: &paused}
+	manager.runtime.Options.StartTimeout = time.Millisecond
+	pluginDir := t.TempDir()
+	for _, name := range []string{"index.mjs", "end-request.mjs", "openclaw.plugin.json", "package.json"} {
+		if err := os.WriteFile(filepath.Join(pluginDir, name), []byte(name), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if !fake.removed {
+			t.Error("observer release preceded harness rollback")
+		}
+		paused.Store(false)
+		body["ok"], body["released"], body["paused"] = true, true, false
+		_ = json.NewEncoder(w).Encode(body)
+	}))
+	defer server.Close()
+	manager.options.StepObservation = &StepObservationOptions{PluginDir: pluginDir, ObserverURL: server.URL}
+	request := core.HarnessRequest{Connectivity: core.HarnessConnectivity{SearchURL: "http://search.example:8123", Placement: core.RuntimePlacement{AttachmentID: "aries-net-test"}}, RunID: "run-1", TaskID: "fix-git", Endpoint: endpointFiles(t), Model: testModel()}
+	if err := manager.Start(context.Background(), request); err == nil {
+		t.Fatal("failed readiness accepted")
+	}
+	if !fake.removed || !paused.Load() {
+		t.Fatal("fixture did not remove the harness while retaining the observer's hold")
+	}
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if paused.Load() {
+		t.Fatal("successful Stop after failed Start left the guest paused")
+	}
+	if fake.stopCalls != 1 {
+		t.Fatalf("already removed harness was removed again: %d", fake.stopCalls)
 	}
 }

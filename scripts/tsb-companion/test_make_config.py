@@ -15,7 +15,12 @@ class ConfigTests(unittest.TestCase):
    config=build_config(kernel,root)
    self.assertFalse(config["enable_compression"])
    self.assertEqual(config["kernel_image"],str(kernel.resolve()))
+   self.assertEqual(config['attribution_detail'],'file')
+   self.assertEqual(build_config(kernel,root,detail='category')['attribution_detail'],'category')
+   coarse=build_config(kernel,root,detail='category',resident_sample_pages=0)
+   self.assertFalse(coarse['enable_resident_sampling']);self.assertEqual(coarse['resident_sample_pages'],0)
    (root/"owner-layout.json").write_text(json.dumps({"kernel_sha256":"wrong"}))
    with self.assertRaises(ValueError):build_config(kernel,root)
+   with self.assertRaises(ValueError):build_config(kernel,root,detail='category')
 
 if __name__=="__main__":unittest.main()

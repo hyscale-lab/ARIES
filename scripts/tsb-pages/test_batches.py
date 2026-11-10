@@ -181,6 +181,17 @@ class LLMBatches(unittest.TestCase):
             tracker.register(body)
         self.assertFalse(observer.arms)
 
+    def test_different_tool_cannot_complete_a_declared_native_call(self):
+        for endpoint in ("begin","end"):
+            with self.subTest(endpoint=endpoint):
+                tracker,observer,groups=self.fixture()
+                tracker.register(declaration(calls=("a",)))
+                with self.assertRaisesRegex(ValueError,"tool name"):
+                    getattr(tracker,endpoint)(key("a"),metadata("a",tool_name="read"))
+                self.assertEqual(observer.collections,0)
+                self.assertEqual([row["event"] for row in groups],["batch_begin"])
+                self.assertFalse(tracker.pending["completed"])
+
 
 if __name__ == "__main__":
     unittest.main()

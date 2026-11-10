@@ -103,6 +103,8 @@ class BatchTracker:
             raise ValueError("native call/result ID was not requested by the registered assistant message")
         if key[2] in batch["completed"]:
             raise ValueError("duplicate native result or admission after completion")
+        if metadata.get("tool_name") != batch["expected"][key[2]]["tool_name"]:
+            raise ValueError("native tool name differs from the registered assistant message")
         declared_session = declared.get("native_session_key")
         native_session = metadata.get("native_session_key")
         if declared_session and native_session and declared_session != native_session:
@@ -153,7 +155,8 @@ class BatchTracker:
                     uncertainty.remove("finite arm/scan operations are non-atomic while the VMM keeps running")
                 uncertainty.append("guest vCPUs paused at boundaries; in-flight device writes are not proven drained")
             reading.update({
-                "schema": SCHEMA, "batch_id": declared["batch_id"],
+                "schema": (reading.get("schema") if reading.get("schema") == "aries.vmm-tracer.compact.v1"
+                           else SCHEMA), "batch_id": declared["batch_id"],
                 "llm_step_id": declared["llm_step_id"], "group_id": declared["batch_id"],
                 "expected_tool_call_ids": expected_ids, "member_tool_call_ids": expected_ids,
                 "group_members": members, "concurrency_peak": batch["concurrency_peak"],

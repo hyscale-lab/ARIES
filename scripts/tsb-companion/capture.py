@@ -8,10 +8,11 @@ import os
 import gzip
 import hashlib
 import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from capture_memory import CaptureMemory
-from decoder import GuestDecoder
+from decoder import GuestDecoder,attribution_detail
 from binding import bind_bootstrap,validate_live_inputs,region_identity
 from vmm_api import VmmAPI, CaptureProvider, decode_page, VmmRequestError, export_rows
 
@@ -114,6 +115,7 @@ def main():
         validate_live_inputs(bootstrap,reading,generation=args.vm_generation,epoch=args.epoch,
             source_epoch=args.source_epoch,source_record_id=args.source_record_id,consistency=args.consistency)
     if config.get("enable_compression"):ap.error("payload compression is outside this capture milestone")
+    detail=attribution_detail(config)
     if args.consistency=="dirty_validated" and not args.vm_generation:
         ap.error("dirty-validated capture requires --vm-generation from coordinator arm")
     args.output.mkdir(parents=True,exist_ok=False)
@@ -136,7 +138,24 @@ def main():
     memory=CaptureMemory(provider)
     write(args.output/"capture-begin.json",provider.begin)
     decode_completed=False
+    phases={}
+    active_phase=None
+    def phase_begin(name):
+        nonlocal active_phase
+        before=time.monotonic_ns(),time.process_time_ns(),memory.metrics()
+        active_phase=name,before
+        return before
+    def phase_end(name,before,completed=True):
+        nonlocal active_phase
+        end=time.monotonic_ns();cpu=time.process_time_ns();after=memory.metrics()
+        phases[name]={"completed":completed,"begin_monotonic_ns":before[0],"end_monotonic_ns":end,
+            "wall_ns":end-before[0],"cpu_ns":cpu-before[1],
+            "provider_delta":{key:after[key]-before[2][key] for key in after},"provider_after":after}
+        active_phase=None
+    bundle=None
+    d=None
     try:
+        decode_begin=phase_begin("bootstrap" if args.mode=="bootstrap" else "capture_decode")
         if args.mode=="bootstrap":
             vm_id=args.vm_id or str(provider.vm_generation)
             d=GuestDecoder(0,vm_id,[],config,memory)
@@ -148,20 +167,18 @@ def main():
             if region_identity(provider.regions)!=region_identity(bootstrap["capture_binding"]["regions"]):
                 raise ValueError("live VMM region map changed from validated bootstrap")
             d=decoder_from_bootstrap(bootstrap,memory,reading)
-            bundle=d.capture_metadata(reading);decode_completed=True
             write(args.output/"reading.json",reading)
+            bundle=d.capture_metadata(reading);decode_completed=True
+        phase_end("bootstrap" if args.mode=="bootstrap" else "capture_decode",decode_begin)
+        seal_begin=phase_begin("seal")
         seal=provider.seal()
         write(args.output/"capture-seal.json",seal)
+        phase_end("seal",seal_begin)
         # Only bytes in the already-sealed provider may be used from here onward.
+        publication_begin=phase_begin("publication")
         if bundle is not None:d.publish_capture(bundle,args.output/"attribution")
         publish_vmm_capture(provider,args.output/"vmm-capture")
-        write(args.output/"companion-metrics.json",{
-            "read_requests":memory.read_requests,"requested_pages":memory.requested_pages,
-            "cached_pages":len(memory.cache),"consumed_pages":len(memory.consumed_pages),
-            "consistency_policy":args.consistency,
-            "dirty_validation_pending":args.consistency=="dirty_validated",
-            "live_discovery_includes_row_materialization":True,
-            "api_calls":api.calls})
+        phase_end("publication",publication_begin)
     except BaseException as error:
         if isinstance(error,VmmRequestError):write(args.output/"api-error.json",error.as_receipt())
         if provider.state=="open":
@@ -181,6 +198,17 @@ def main():
              "records_acknowledged":False,"retained_record_known":provider.capture_record_id is not None,"resume_performed":False})
         raise
     finally:
+        if active_phase is not None:phase_end(*active_phase,completed=False)
+        decode_metrics=getattr(d,"decode_metrics",None)
+        write(args.output/"companion-metrics.json",{**memory.metrics(),
+            "schema":"aries.companion-metrics.v1","capture_id":args.capture_id,"mode":args.mode,
+            "attribution_detail":detail,"phases":phases,
+            "decode_metrics":decode_metrics if isinstance(decode_metrics,dict) else None,
+            "consistency_policy":args.consistency,
+            "dirty_validation_pending":args.consistency=="dirty_validated",
+            "live_discovery_includes_row_materialization":True,
+            "publication_scope":"attribution artifacts plus complete VMM export; excludes subsequent controller validation/ACK",
+            "api_calls":api.calls})
         write(args.output/"api-calls.json",api.calls)
 
 if __name__=="__main__":main()

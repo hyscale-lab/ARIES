@@ -1,11 +1,21 @@
 """Boundary-state attribution; host-only metadata reads, no guest agent."""
-import collections,gzip,json,struct,time
+import collections,gzip,hashlib,json,struct,time
+from contextlib import contextmanager
 from pathlib import Path
 from memory import GuestMemory,KernelImage
+from binding import layout_identity
+
+DETAIL_LEVELS=('category','process','file')
+
+def attribution_detail(config):
+ level=config.get('attribution_detail','file')
+ if level not in DETAIL_LEVELS:raise ValueError('attribution_detail must be category, process or file')
+ return level
 
 class GuestDecoder:
  def __init__(self,pid,vm_id,slots,config,memory_provider):
   self.pid=pid;self.vm_id=vm_id;self.slots=slots;self.config=dict(config)
+  attribution_detail(self.config)
   if config.get('enable_compression'):raise ValueError('payload compression is not supported by capture companion')
   for kind in ('names','owner'):
    if self.config.get(kind+'_layout_path') and not self.config.get(kind+'_layout_data'):
@@ -14,6 +24,24 @@ class GuestDecoder:
   self.meta=json.loads(Path(config['layout_path']).read_text());self.l=self.meta['layout']
   self.a=None;self.cache={};self.errors=[]
  def close(self):self.mem.close()
+ @contextmanager
+ def stage(self,name,enabled=True):
+  begin=time.monotonic_ns();cpu=time.process_time_ns();pages=len(self.cache)
+  before=self.mem.metrics() if hasattr(self.mem,'metrics') else None
+  completed=False
+  try:
+   yield
+   completed=True
+  finally:
+   after=self.mem.metrics() if hasattr(self.mem,'metrics') else None
+   end=time.monotonic_ns();end_cpu=time.process_time_ns()
+   self.decode_metrics['stages'][name]={
+    'executed':enabled,'completed':completed,'begin_monotonic_ns':begin,'end_monotonic_ns':end,
+    'wall_ns':end-begin if enabled else None,'cpu_ns':end_cpu-cpu if enabled else None,
+    'decoder_metadata_pages_added':len(self.cache)-pages,
+    'decoder_closure_pages':len(self.cache),'decoder_closure_bytes':len(self.cache)*4096,
+    'provider_delta':{k:after[k]-before[k] for k in before} if before is not None else None,
+    'provider_after':after}
  def bootstrap(self):
   self.a=self.image.resolve(self.mem)
   if self.a['kernel_sha256']!=self.meta['kernel_sha256']:raise ValueError('layout kernel hash mismatch')
@@ -88,7 +116,8 @@ class GuestDecoder:
      yield lo,hi,phys+(lo-va),entry
     else:yield from descend(entry&0x000ffffffffff000,shift-9,va)
   yield from descend(pgd,39,0)
- def processes(self,wanted):
+ def processes(self,wanted,resolve_files=None):
+  if resolve_files is None:resolve_files=attribution_detail(self.config)=='file'
   tasks=[];vmas=[];owners=collections.defaultdict(list);seen=set();mmseen=set()
   root=self.sym('init_task');at=root
   while at not in seen:
@@ -108,7 +137,7 @@ class GuestDecoder:
       if not (lastend<=start<end<=1<<47 and start%4096==end%4096==0):raise ValueError('invalid VMA bounds')
       lastend=end;file=self.field(vma,'vm_area_struct','vm_file');flags=self.field(vma,'vm_area_struct','vm_flags')
       row={'pid':pid,'tgid':tgid,'comm':comm,'mm_address':mm,'start':start,'end':end,'flags':flags,'pgoff':self.field(vma,'vm_area_struct','vm_pgoff'),'file_address':file,'pgd_phys':pgd}
-      if file:
+      if file and resolve_files:
        try:row['file']=self.filename(file)
        except (ValueError,OSError) as e:row['file_error']=str(e)
       index=len(vmas);vmas.append(row)
@@ -151,69 +180,103 @@ class GuestDecoder:
   return free
  def capture_metadata(self,reading):
   if self.a is None:raise ValueError('bootstrap required')
-  start=time.monotonic_ns();self.cache={};self.errors=[];self.metadata_read_gpas=set()
+  level=attribution_detail(self.config)
+  start=time.monotonic_ns();start_cpu=time.process_time_ns();self.cache={};self.errors=[];self.metadata_read_gpas=set()
+  self.decode_metrics={'schema':'aries.attribution-decode-metrics.v1','attribution_detail':level,
+   'stages':{},'clock':'child process monotonic wall time and process CPU time',
+   'scope':'Decoder discovery and rich-row materialization; provider counts include bounded prefetch, not HTTP or VM overhead estimates'}
   manual=set(reading.get('selected_gpas',[])) if reading.get('selection_scope')=='explicit_gpas' else set()
   observed=set(reading['accessed_gpas']);unknown={int(g):why for g,why in reading['unknown_gpas'].items()}
   additional=set(reading.get('additional_gpas',[]))
   wanted=observed|set(unknown)|additional|manual
-  sample=None;sample_gpas=set(self.config.get('replay_sample_gpas',[]))
-  if self.config.get('enable_resident_sampling') and 'replay_sample_gpas' not in self.config:
-   from compression import ResidentSample
-   sample=ResidentSample(self,reading);sample_gpas=sample.census()
+  with self.stage('selection'):
+   sample=None;sample_gpas=set(self.config.get('replay_sample_gpas',[]))
+   if self.config.get('enable_resident_sampling') and 'replay_sample_gpas' not in self.config:
+    from compression import ResidentSample
+    sample=ResidentSample(self,reading);sample_gpas=sample.census()
   allwanted=wanted|sample_gpas
+  gpa_hash=lambda values:hashlib.sha256(b''.join(struct.pack('<Q',g) for g in sorted(values))).hexdigest()
+  self.decode_metrics.update({'selected_pages':len(wanted),'selected_gpas_sha256':gpa_hash(wanted),
+   'sample_pages':len(sample_gpas),'sample_gpas_sha256':gpa_hash(sample_gpas),
+   'kernel_sha256':self.a['kernel_sha256'],
+   'layout_identity':layout_identity({'anchors':self.a,'layout':self.meta,'attribution_config':self.config}),
+   'decoded_pages':len(allwanted)})
   # Known struct-page frontiers are fetched in bounded batches before per-row decoding.
   prefetch=getattr(self.mem,'prefetch_virtual_ranges',None)
-  if prefetch and allwanted:
-   size=self.l['page']['sizeof'];ranges=[];last=None
-   for g in sorted(allwanted):
-    lo=self.a['vmemmap_base']+(g//4096)*size;hi=lo+size
-    if ranges and lo==ranges[-1][1]:ranges[-1]=(ranges[-1][0],hi)
-    else:ranges.append((lo,hi))
-   prefetch(ranges,self.a['kernel_pgd_phys'])
-  tasks,vmas,owners=self.processes(allwanted)
-  try:free=self.free_pages(allwanted)
-  except (ValueError,OSError) as e:free=set();self.errors.append({'phase':'free_lists','error':str(e)})
+  with self.stage('struct_page_prefetch',bool(prefetch and allwanted)):
+   if prefetch and allwanted:
+    size=self.l['page']['sizeof'];ranges=[]
+    for g in sorted(allwanted):
+     lo=self.a['vmemmap_base']+(g//4096)*size;hi=lo+size
+     if ranges and lo==ranges[-1][1]:ranges[-1]=(ranges[-1][0],hi)
+     else:ranges.append((lo,hi))
+    prefetch(ranges,self.a['kernel_pgd_phys'])
+  with self.stage('process_mappings',level!='category'):
+   tasks,vmas,owners=self.processes(allwanted,resolve_files=False) if level!='category' else ([],[],{})
+  with self.stage('free_lists',level!='category'):
+   free=set()
+   if level!='category':
+    try:free=self.free_pages(allwanted)
+    except (ValueError,OSError) as e:self.errors.append({'phase':'free_lists','error':str(e)})
   rows=[];counts=collections.Counter();flagbits=self.l['pageflags']
-  for g in sorted(allwanted):
-   row={'gpa':g,'access_status':'manual_selection' if g in manual else 'observed' if g in observed else 'assumed' if g in unknown else 'dirty_only_evidence' if g in additional else 'outside_measured_footprint','access_unknown_reason':unknown.get(g),'owners':owners.get(g,[])}
-   if reading.get('additional_access_sources') is not None:
-    row['additional_access_sources']=reading['additional_access_sources'].get(str(g),[])
-   try:
-    page=self.a['vmemmap_base']+(g//4096)*self.l['page']['sizeof'];raw=self.v(page,self.l['page']['sizeof'])
-    def value(f,n=8,signed=False):return int.from_bytes(raw[self.l['page'][f]:self.l['page'][f]+n],'little',signed=signed)
-    flags=value('flags');mapping=value('mapping');head=value('compound_head')
-    row.update(page_flags=flags,refcount=value('_refcount',4,True),mapcount_raw=value('_mapcount',4,True),mapping=mapping,index=value('index'),guest_page_dirty_flag=bool(flags&(1<<flagbits['PG_dirty'])),guest_page_writeback_flag=bool(flags&(1<<flagbits['PG_writeback'])))
-    if g in free:category='free_buddy'
-    elif head&1:category='compound_tail_unresolved'
-    elif flags&(1<<flagbits['PG_slab']):category='kernel_slab'
-    elif ((row['mapcount_raw'] & 0xffffffff) & (0xf0000000|1024))==0xf0000000:category='kernel_page_table'
-    elif mapping&1:category='anonymous'
-    elif mapping and not mapping&3:
-     inode=self.field(mapping,'address_space','host')
-     if not inode or self.field(inode,'inode','i_mapping')!=mapping:raise ValueError('page mapping/inode backlink mismatch')
-     row['file_inode_address']=inode;row['file_inode_number']=self.field(inode,'inode','i_ino')
-     row['file_offset']=value('index')*4096
-     category='shmem' if flags&(1<<flagbits['PG_swapbacked']) else 'file_cache'
-    elif flags&(1<<flagbits['PG_reserved']):category='reserved'
-    elif owners.get(g):category='mapped_unresolved'
-    else:category='unresolved'
-    row['category']=category
-   except (ValueError,OSError) as e:row['category']='unresolved';row['classification_error']=str(e)
-   rows.append(row)
+  with self.stage('page_categories'):
+   for g in sorted(allwanted):
+    row={'gpa':g,'access_status':'manual_selection' if g in manual else 'observed' if g in observed else 'assumed' if g in unknown else 'dirty_only_evidence' if g in additional else 'outside_measured_footprint','access_unknown_reason':unknown.get(g),'owners':owners.get(g,[])}
+    if reading.get('additional_access_sources') is not None:
+     row['additional_access_sources']=reading['additional_access_sources'].get(str(g),[])
+    try:
+     page=self.a['vmemmap_base']+(g//4096)*self.l['page']['sizeof'];raw=self.v(page,self.l['page']['sizeof'])
+     def value(f,n=8,signed=False):return int.from_bytes(raw[self.l['page'][f]:self.l['page'][f]+n],'little',signed=signed)
+     flags=value('flags');mapping=value('mapping');head=value('compound_head')
+     row.update(page_flags=flags,refcount=value('_refcount',4,True),mapcount_raw=value('_mapcount',4,True),mapping=mapping,index=value('index'),guest_page_dirty_flag=bool(flags&(1<<flagbits['PG_dirty'])),guest_page_writeback_flag=bool(flags&(1<<flagbits['PG_writeback'])))
+     constants=self.l.get('constants',{})
+     buddy=constants.get('PG_buddy')
+     if g in free:category='free_buddy'
+     elif level=='category' and buddy is not None and (row['mapcount_raw']& (constants['PAGE_TYPE_BASE']|buddy))==constants['PAGE_TYPE_BASE']:category='free_buddy_head'
+     elif head&1:category='compound_tail_unresolved'
+     elif flags&(1<<flagbits['PG_slab']):category='kernel_slab'
+     elif ((row['mapcount_raw'] & 0xffffffff) & (0xf0000000|1024))==0xf0000000:category='kernel_page_table'
+     elif mapping&1:category='anonymous'
+     elif mapping and not mapping&3:
+      inode=self.field(mapping,'address_space','host')
+      if not inode or self.field(inode,'inode','i_mapping')!=mapping:raise ValueError('page mapping/inode backlink mismatch')
+      row['file_inode_address']=inode;row['file_inode_number']=self.field(inode,'inode','i_ino')
+      row['file_offset']=value('index')*4096
+      category='shmem' if flags&(1<<flagbits['PG_swapbacked']) else 'file_cache'
+     elif flags&(1<<flagbits['PG_reserved']):category='reserved'
+     elif owners.get(g):category='mapped_unresolved'
+     else:category='unresolved'
+     row['category']=category
+    except (ValueError,OSError) as e:row['category']='unresolved';row['classification_error']=str(e)
+    rows.append(row)
   owner_summary=None;files={};names_summary=None
-  if self.config.get('owner_layout_data') or self.config.get('owner_layout_path'):
-   from owners import OwnerAttribution
-   owner_summary=OwnerAttribution(self,self.config).enrich(rows,tasks,vmas)
-  if self.config.get('names_layout_data') or self.config.get('names_layout_path'):
-   from file_names import FileNames
-   helper=FileNames(self,self.config);helper.begin(tasks,vmas)
+  owner_enabled=level!='category' and bool(self.config.get('owner_layout_data') or self.config.get('owner_layout_path'))
+  names_enabled=level=='file' and bool(self.config.get('names_layout_data') or self.config.get('names_layout_path'))
+  with self.stage('owner_resolution',owner_enabled):
+   if owner_enabled:
+    from owners import OwnerAttribution
+    owner_summary=OwnerAttribution(self,self.config).enrich(rows,tasks,vmas)
+  with self.stage('file_resolution',level=='file'):
+   if level=='file':
+    for vma in vmas:
+     if vma['file_address']:
+      try:vma['file']=self.filename(vma['file_address'])
+      except (ValueError,OSError) as e:vma['file_error']=str(e)
+   if names_enabled:
+    from file_names import FileNames
+    helper=FileNames(self,self.config);helper.begin(tasks,vmas)
+    for row in rows:
+     inode=row.get('file_inode_address')
+     if row['category'] in ('file_cache','shmem') and inode:
+      ref=hex(inode)
+      if ref not in files:files[ref]=helper.resolve(inode)
+      row['file_ref']=ref;row['file_naming_status']=files[ref]['naming_status']
+    names_summary=helper.metadata()
+  if level=='category':
+   for row in rows:row['ownership_status']='not_collected_detail_level'
+  if level!='file':
    for row in rows:
-    inode=row.get('file_inode_address')
-    if row['category'] in ('file_cache','shmem') and inode:
-     ref=hex(inode)
-     if ref not in files:files[ref]=helper.resolve(inode)
-     row['file_ref']=ref;row['file_naming_status']=files[ref]['naming_status']
-   names_summary=helper.metadata()
+    if row['category'] in ('file_cache','shmem'):row['file_naming_status']='not_collected_detail_level'
   allrows=rows
   rows=[row for row in allrows if row['gpa'] in wanted]
   counts=collections.Counter(row['category'] for row in rows)
@@ -221,9 +284,25 @@ class GuestDecoder:
   result={'schema':'aries.guest-attribution.v2' if self.config.get('names_layout_data') else 'aries.guest-attribution.v1','vm_id':self.vm_id,'group_id':reading.get('tool_call_id'),'pages':len(rows),'categories':dict(counts),'observed_pages':len(observed),'assumed_pages':len(unknown),'pages_with_process_mapping':sum(bool(r['owners']) for r in rows),'process_count':len(tasks),'vma_count':len(vmas),'metadata_pages_copied':len(pages),'resident_sample_pages':len(sample_gpas),'file_naming_counts':dict(collections.Counter(row.get('file_naming_status','missing_inode_identity') for row in rows if row['category']=='file_cache')),'owner_summary':owner_summary,'file_namespace_errors':names_summary['errors'] if names_summary else [],'errors':self.errors,'capture_and_decode_ns':time.monotonic_ns()-start,'semantics':'paused-boundary state; not access-time owner; file paths are mount-relative; refcount is not reclaimability; free excludes per-CPU lists','limitations':['VMM capture coherence is qualified by its seal/finalized receipt; without dirty validation only declared pause/drain quiescence is established','Unset page dirty flag is not proof of clean/discardable content; writable PTE dirty bits and backing-file consistency require separate checks','Owner traversal covers process leaders, all leaders sharing each decoded mm, present user PTEs only; PROT_NONE/swapped mappings excluded','Owner coverage is partial if process_mappings errors are recorded','Kernel stacks/unmapped allocations may remain unresolved','Metadata discovery and artifact publication have separate timing; boundary consistency requires caller validation','Anonymous vs file-backed classification uses guest page metadata, not VMA pathname alone']}
   if manual:result['manually_selected_pages']=len(manual)
   if additional:result['dirty_only_pages']=len(additional-observed-set(unknown))
+  result['attribution_detail']=level
+  result['detail_scope']={'process_mappings':level!='category','owner_enrichment':owner_enabled,
+   'file_names':names_enabled,'free_pages':'buddy_heads_only' if level=='category' else 'buddy_lists_excluding_per_cpu',
+   'semantics':'Boundary state/category evidence; no access-causing process or guaranteed reachable backing pathname'}
+  if level=='category':
+   result['process_count']=result['vma_count']=result['pages_with_process_mapping']=None
+   result['limitations'].append('Category mode omits process/PTE owners, buddy-block tail expansion, compound-head enrichment and paths; skipped ownership is not a zero-owner claim')
+  self.decode_metrics.update({'tasks_walked':len(tasks) if level!='category' else None,'vmas_walked':len(vmas) if level!='category' else None,
+   'file_identities_resolved':len(files) if names_enabled else None,
+   'decoder_closure_pages':len(self.cache),'decoder_closure_bytes':len(self.cache)*4096,
+   'provider_totals':self.mem.metrics() if hasattr(self.mem,'metrics') else None,
+   'category_coverage':{'categories':dict(counts),
+    'unresolved_pages':sum(r['category'] in ('unresolved','mapped_unresolved','compound_tail_unresolved') for r in rows),
+    'pages_with_process_mapping':result['pages_with_process_mapping'],
+    'file_identities_resolved':len(files) if names_enabled else None},
+   'wall_ns':time.monotonic_ns()-start,'cpu_ns':time.process_time_ns()-start_cpu})
   return {'summary':result,'rows':rows,'allrows':allrows,'sample_gpas':sample_gpas,
           'sample':sample,'owners':owner_summary,'files':files,'names':names_summary,
-          'tasks':tasks,'vmas':vmas,'metadata':dict(self.cache)}
+          'tasks':tasks,'vmas':vmas,'metadata':dict(self.cache),'metrics':self.decode_metrics}
  def publish_capture(self,bundle,output_dir):
   start=time.monotonic_ns();out=Path(output_dir);out.mkdir(parents=True,exist_ok=True)
   def write(name,value):(out/name).write_text(json.dumps(value,indent=2)+'\n')
@@ -245,6 +324,7 @@ class GuestDecoder:
   with gzip.open(out/'metadata-pages.bin.gz','wb',compresslevel=1) as f:
    for g in pages:f.write(bundle['metadata'][g])
   write('metadata-index.json',{'page_bytes':4096,'gpas':pages})
+  write('decode-metrics.json',bundle['metrics'])
   result=dict(bundle['summary']);result['publication_ns']=time.monotonic_ns()-start
   write('summary.json',result)
   return result

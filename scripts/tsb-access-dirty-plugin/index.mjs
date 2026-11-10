@@ -28,8 +28,33 @@ export default {
     };
     const failure=(reason,fields={})=>{
       shared.measurementErrors++;
-      try{record("measurement_error",{reason,...fields});}
+      api.logger?.error?.("ARIES LLM-step observation failed: "+reason);
+      try{record("measurement_error",{...fields,reason});}
       catch{api.logger?.error?.("ARIES LLM-step observation log unavailable");}
+    };
+    const sameSession=ack=>ack?.session_id===shared.hierarchy.session_id && ack?.turn_id===shared.hierarchy.turn_id;
+    const nativeContext=ctx=>{
+      if(typeof ctx.sessionKey!=="string" || !ctx.sessionKey){failure("invalid_native_session_identity");return false;}
+      if(shared.nativeSessionKey!==undefined && shared.nativeSessionKey!==ctx.sessionKey){failure("native_session_mismatch");return false;}
+      shared.nativeSessionKey=ctx.sessionKey;
+      return true;
+    };
+    const nativeCall=(event,ctx,id,name)=>{
+      const ids=[event.toolCallId,ctx.toolCallId,event.message?.toolCallId].filter(value=>value!==undefined);
+      const names=[event.toolName,ctx.toolName,event.message?.toolName].filter(value=>value!==undefined);
+      if(ids.some(value=>value!==id) || names.some(value=>value!==name)){
+        failure("native_call_identity_mismatch",{tool_call_id:id});return false;
+      }
+      return true;
+    };
+    const batchAcknowledged=(ack,batch,collection,remaining)=>{
+      const expected=batch.metadata.expected_tool_call_ids;
+      const actual=ack?.remaining_expected_tool_call_ids;
+      return ack?.ok===true && sameSession(ack) &&
+        ack.batch_id===batch.metadata.batch_id && ack.llm_step_id===batch.metadata.llm_step_id &&
+        ack.collection===collection && Array.isArray(actual) && new Set(actual).size===actual.length &&
+        actual.every(id=>expected.includes(id)) &&
+        (remaining===undefined || JSON.stringify(actual)===JSON.stringify(remaining));
     };
     const syncRequest=(route,payload)=>{
       const result=spawnSync(process.execPath,[helper],{
@@ -39,7 +64,7 @@ export default {
       if(result.status!==0 || result.error)return {ok:false,helper_exit:result.status,error_type:result.error?.name};
       try{
         const ack=JSON.parse(result.stdout);
-        return ack.ok===true ? {ok:true,ack} : {ok:false,error_type:"InvalidAcknowledgement"};
+        return ack?.ok===true && sameSession(ack) ? {ok:true,ack} : {ok:false,error_type:"InvalidAcknowledgement"};
       }catch{return {ok:false,error_type:"InvalidAcknowledgement"};}
     };
     const perCall=(batch,id,name,ctx,event={})=>({
@@ -64,7 +89,7 @@ export default {
         record("service_started",shared.hierarchy);
         record("session_pause_requested",shared.hierarchy);
         const init=syncRequest("/session/start",{...shared.hierarchy,...stamp()});
-        if(!init.ok){failure("initial_session_pause_failed",init);throw new Error("initial guest pause not confirmed");}
+        if(!init.ok || init.ack.paused!==true){failure("initial_session_pause_failed",init);throw new Error("initial guest pause not confirmed");}
         record("session_pause_confirmed",{...shared.hierarchy,observer_ack:init.ack});
       },
       stop(){
@@ -77,6 +102,7 @@ export default {
         fs.closeSync(shared.fd);shared.fd=undefined;shared.endpoint=undefined;shared.hierarchy=undefined;
         shared.active.clear();shared.batches.clear();shared.calls.clear();shared.declarations.clear();
         shared.modelPending.clear();shared.modelCompleted.clear();shared.terminalSealed=false;
+        shared.nativeSessionKey=undefined;
         // Sequences and prior errors are process-lifetime provenance, never recycled on reload.
       },
     });
@@ -84,14 +110,18 @@ export default {
       if(!shared.endpoint)return;
       record("session_resume_requested",{reason,...shared.hierarchy});
       const result=syncRequest("/session/end",{...shared.hierarchy,...stamp(),reason,terminal_complete});
-      if(!result.ok)failure("terminal_resume_failed",{reason,...result});
+      if(!result.ok || result.ack.released!==true || result.ack.paused!==false ||
+        result.ack.terminal_complete!==terminal_complete)failure("terminal_resume_failed",{release_reason:reason,...result});
       else record("session_resume_confirmed",{reason,observer_ack:result.ack});
     };
-    api.on("before_agent_finalize",async()=>{
+    api.on("before_agent_finalize",async(_event,ctx)=>{
+      if(!nativeContext(ctx))return;
+      if(shared.terminalSealed){failure("duplicate_terminal_seal");return;}
       const begin=process.hrtime.bigint();
       const deadline=Date.now()+1000;
       while(shared.modelPending.size && Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,10));
-      const unfinished=[...shared.batches.values()].filter(b=>!b.complete).length;
+      const unfinished=[...shared.batches.values()].filter(b=>!b.complete ||
+        b.completed.size!==b.metadata.expected_tool_call_ids.length).length;
       const valid=shared.modelPending.size===0 && shared.modelCompleted.size>0 &&
         shared.active.size===0 && unfinished===0 && shared.measurementErrors===0;
       if(!valid)failure("terminal_seal_incomplete");
@@ -113,6 +143,10 @@ export default {
     });
     for(const hook of ["model_call_started","model_call_ended"]){
       api.on(hook,(event,ctx)=>{
+        if(!nativeContext(ctx))return;
+        if(typeof event.runId!=="string" || !event.runId || typeof event.callId!=="string" || !event.callId){
+          failure("invalid_native_model_identity",{hook});return;
+        }
         const fields={...shared.hierarchy,native_session_key:ctx.sessionKey,
           run_id:event.runId,call_id:event.callId,provider:event.provider,model:event.model};
         for(const k of ["durationMs","outcome","errorCategory","failureKind","timeToFirstByteMs","requestPayloadBytes","responseStreamBytes"]){
@@ -146,12 +180,14 @@ export default {
       if(message?.role!=="assistant" || message.stopReason!=="toolUse")return;
       const calls=Array.isArray(message.content) ? message.content.filter(c=>c?.type==="toolCall") : [];
       if(calls.length===0)return;
+      if(!nativeContext(ctx))return;
       if(!shared.endpoint){failure("batch_missing_service");return;}
       if(calls.some(c=>typeof c.id!=="string"||!c.id||typeof c.name!=="string"||!c.name) || new Set(calls.map(c=>c.id)).size!==calls.length){
         failure("invalid_native_batch_identity");return;
       }
       const requested_tools=calls.map(c=>({tool_call_id:c.id,tool_name:c.name}));
-      const fingerprint=JSON.stringify([ctx.sessionKey ?? "",message.timestamp ?? null,calls.map(c=>c.id)]);
+      const fingerprint=JSON.stringify([ctx.sessionKey,message.id ?? message.responseId ?? null,
+        message.timestamp ?? null,calls.map(c=>[c.id,c.name])]);
       const previous=shared.declarations.get(fingerprint);
       if(previous){record("batch_declaration_reused",{batch_id:previous,llm_step_id:previous});return;}
       const batch_id="llm-step-"+String(++shared.batchSequence).padStart(6,"0");
@@ -173,24 +209,27 @@ export default {
       }
       record("batch_requested",metadata);
       const result=syncRequest("/batch",{...metadata,...stamp()});
-      if(!result.ok)failure("batch_registration_failed",{...metadata,...result});
+      if(!result.ok || !batchAcknowledged(result.ack,batch,"armed",metadata.expected_tool_call_ids))failure("batch_registration_failed",{...metadata,...result});
       else{batch.registered=true;record("batch_confirmed",{...metadata,observer_ack:result.ack});}
       // Metadata observation only: never replace, reject, or mutate the message.
     });
     api.on("before_tool_call",async(event,ctx)=>{
+      if(!nativeContext(ctx))return;
       const id=event.toolCallId ?? ctx.toolCallId;
       const entry=shared.calls.get(key(ctx.sessionKey,id));
       if(!entry || !shared.endpoint){failure("native_call_without_declared_batch",{tool_call_id:id,native_session_key:ctx.sessionKey});return;}
       const {batch}=entry;
+      if(!nativeCall(event,ctx,id,entry.tool_name))return;
+      if(!batch.registered){failure("native_call_with_unconfirmed_batch",{tool_call_id:id});return;}
       const k=key(ctx.sessionKey,id);
       if(shared.active.has(k)||batch.completed.has(id)){failure("duplicate_native_begin",{batch_id:batch.metadata.batch_id,tool_call_id:id});return;}
       batch.runId ??= event.runId ?? ctx.runId;
-      const metadata=perCall(batch,id,event.toolName ?? ctx.toolName ?? entry.tool_name,ctx,event);
+      const metadata=perCall(batch,id,entry.tool_name,ctx,event);
       shared.active.set(k,metadata);record("begin_requested",metadata);
       try{
         const response=await fetch(shared.endpoint+"/begin",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({...metadata,...stamp()}),signal:AbortSignal.timeout(120000)});
         const ack=await response.json();
-        if(!response.ok||ack.ok!==true)throw new Error("invalid begin acknowledgement");
+        if(!response.ok||!batchAcknowledged(ack,batch,"pending"))throw new Error("invalid begin acknowledgement");
         record("begin_confirmed",{...metadata,observer_ack:ack});
       }catch(error){failure("begin_failed",{...metadata,error_type:error?.name ?? "Error"});}
     },{timeoutMs:125000});
@@ -199,16 +238,20 @@ export default {
       const k=key(ctx.sessionKey,id);
       const entry=shared.calls.get(k);
       if(event.isSynthetic===true){failure("synthetic_result",{tool_call_id:id,native_session_key:ctx.sessionKey});return;}
+      if(!nativeContext(ctx))return;
       if(!entry){failure("result_without_declared_batch",{tool_call_id:id,native_session_key:ctx.sessionKey});return;}
       const {batch}=entry;
+      if(!nativeCall(event,ctx,id,entry.tool_name))return;
+      if(!batch.registered){failure("native_result_with_unconfirmed_batch",{tool_call_id:id});return;}
       if(batch.completed.has(id)){failure("duplicate_native_result",{batch_id:batch.metadata.batch_id,tool_call_id:id});return;}
       // Native argument validation and missing-tool results may legitimately
       // bypass before_tool_call. The assistant-declared expected ID owns them.
-      const metadata=shared.active.get(k) ?? perCall(batch,id,event.toolName ?? entry.tool_name,ctx);
+      const metadata=shared.active.get(k) ?? perCall(batch,id,entry.tool_name,ctx);
       const begin_observed=shared.active.has(k);
       record("end_requested",{...metadata,begin_observed});
       const result=syncRequest("/end",{...metadata,...stamp(),is_error:event.message?.isError===true,begin_observed});
-      if(!result.ok)failure("end_failed",{...metadata,...result});
+      const remaining=batch.metadata.expected_tool_call_ids.filter(expected=>expected!==id && !batch.completed.has(expected));
+      if(!result.ok || !batchAcknowledged(result.ack,batch,remaining.length ? "pending" : "collected",remaining))failure("end_failed",{...metadata,...result});
       else{
         batch.completed.add(id);
         record("end_confirmed",{...metadata,begin_observed,observer_ack:result.ack});

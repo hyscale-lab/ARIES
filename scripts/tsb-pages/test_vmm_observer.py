@@ -72,7 +72,7 @@ class Tests(unittest.TestCase):
             o=self.observer(root);o.bootstrap=None;o.current_group="step"
             o.coordinator.regions=[{"slot":0,"guest_base":0,"bytes":16384,"page_count":4}]
             access=[{"gpa":0,"state":"observed"},{"gpa":4096,"state":"unknown","unknown_reason":"newly-resident-unarmed"},
-                    {"gpa":8192,"state":"idle"},{"gpa":12288,"state":"absent"}]
+                    {"gpa":8192,"state":"idle"}]  # Native export omits the all-samples-absent page.
             dirty=[{"gpa":8192,"kvm_dirty":True,"vmm_dirty":False}]
             for name,data in (("access",access),("dirty",dirty)):
                 with gzip.open(Path(root)/(name+".jsonl.gz"),"wt") as stream:
@@ -94,7 +94,33 @@ class Tests(unittest.TestCase):
             self.assertEqual(expanded["unknown_gpas"],{"4096":"newly-resident-unarmed"})
             self.assertEqual(expanded["additional_gpas"],[8192])
             self.assertEqual(reading["counted_pages"],3)
+            self.assertEqual(reading["regions"][0]["masks"]["access_absent"]["pages"],1)
             self.assertNotIn(12288,expanded["accessed_gpas"])
+
+    def test_empty_native_export_marks_absence_per_region_without_ram_holes_or_padding(self):
+        from compact import expand_reading
+        with tempfile.TemporaryDirectory() as root:
+            o=self.observer(root);o.bootstrap=None;o.current_group="step"
+            o.coordinator.regions=[{"slot":0,"guest_base":0,"bytes":65*4096,"page_count":65},
+                                   {"slot":1,"guest_base":1<<32,"bytes":8192,"page_count":2}]
+            for name in ("access","dirty"):
+                with gzip.open(Path(root)/(name+".jsonl.gz"),"wt"):pass
+            reading=o._reading({"epoch":3,"epoch_record_id":"record"},Path(root))
+            self.assertEqual([r["masks"]["access_absent"]["pages"] for r in reading["regions"]],[65,2])
+            self.assertEqual(expand_reading(reading,artifact_directory=root)["accessed_gpas"],[])
+            self.assertEqual(reading["counted_pages"],0)
+
+    def test_native_export_cannot_turn_duplicate_or_out_of_ram_rows_into_absence(self):
+        for access in ([{"gpa":4096,"state":"observed"}],
+                       [{"gpa":0,"state":"observed"},{"gpa":0,"state":"idle"}]):
+            with self.subTest(access=access),tempfile.TemporaryDirectory() as root:
+                o=self.observer(root);o.bootstrap=None;o.current_group="step"
+                o.coordinator.regions=[{"slot":0,"guest_base":0,"bytes":4096,"page_count":1}]
+                for name,data in (("access",access),("dirty",[])):
+                    with gzip.open(Path(root)/(name+".jsonl.gz"),"wt") as stream:
+                        for row in data:stream.write(json.dumps(row)+"\n")
+                with self.assertRaisesRegex(ValueError,"exported|authoritative"):
+                    o._reading({"epoch":3,"epoch_record_id":"record"},Path(root))
 
 
 
@@ -159,5 +185,41 @@ class CancellationTests(Tests):
             o=self.observer(root);o.Capture=Mock();o.abort_requested.set()
             with self.assertRaisesRegex(RuntimeError,"cancellation"):o._capture()
             o.Capture.assert_not_called()
+    def test_running_release_rechecks_vmm_identity_after_state_reply(self):
+        with tempfile.TemporaryDirectory() as root:
+            o=self.observer(root)
+            o._connection.return_value.getresponse.return_value.read.return_value=b'{"state":"Running"}'
+            o.identity.side_effect=[None,RuntimeError("VMM PID/start identity changed")]
+            with self.assertRaisesRegex(RuntimeError,"identity changed"):
+                o.abort_session()
+            self.assertFalse(o.release_confirmed)
+            self.assertFalse(o.session_ended)
+    def test_state_failure_body_is_bounded(self):
+        with tempfile.TemporaryDirectory() as root:
+            o=self.observer(root)
+            del o._state
+            response=o._connection.return_value.getresponse.return_value
+            response.status=500
+            body=io.BytesIO(b'x'*32768)
+            response.read.side_effect=body.read
+            with self.assertRaisesRegex(RuntimeError,"response exceeds.*bound"):
+                o._state("Paused",{})
+            self.assertLessEqual(body.tell(),16385)
+
+class APIIdentityTests(unittest.TestCase):
+    def test_export_reply_from_reused_process_is_not_accepted(self):
+        with tempfile.TemporaryDirectory() as root:
+            o=VmmObserver(1,"v",2,"unused",{},Path(root)/"observer")
+            connection=Mock()
+            connection.getresponse.return_value.status=200
+            connection.getresponse.return_value.read.return_value=b'{"rows":[]}'
+            try:
+                with patch.object(o,"_connection",return_value=connection), \
+                     patch.object(o,"identity",side_effect=[None,RuntimeError("VMM PID/start identity changed")]):
+                    with self.assertRaisesRegex(RuntimeError,"identity changed"):
+                        o.api.call("/trace-epochs","export",record_id="record")
+                self.assertEqual(o.api.calls[-1]["outcome"],"failed")
+            finally:
+                o.events.close();o.phases.close()
 
 if __name__=="__main__":unittest.main()

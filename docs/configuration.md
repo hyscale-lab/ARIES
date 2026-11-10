@@ -932,7 +932,10 @@ assistant response shares a single window, including sequential or parallel
 calls. A **session** is an end-to-end task occurrence; a **turn** is a user-harness
 interaction. Agent mode currently admits one user request per occurrence and
 assigns turn `1`. Native result persistence closes the batch; operation-level
-bridge evidence remains separate.
+bridge evidence remains separate. Native session, call IDs and tool names must
+match the declared batch. The plugin checks observer acknowledgements against
+the occurrence, batch and remaining expected results before accepting progress
+or completion; a generic successful HTTP response does not certify a window.
 
 With `scripts/tsb-access-dirty-plugin`, the observer pauses the guest during
 initial/inter-step LLM intervals, resumes before tool admission, and records
@@ -946,11 +949,17 @@ protocol; its combined read/write access evidence has different limits.
 A successful native terminal hook seals the measurement horizon before release.
 After confirmed harness-container removal, ARIES independently requires an
 identity-matched observer release acknowledgement before returning successful
-harness stop. Cancellation may release the guest while marking the measurement
-censored; physical release does not certify trace completeness. Runner gives
+harness stop. This ownership survives a failed harness start: runtime rollback
+retains the occurrence identity until the observer release is confirmed.
+Cancellation may release the guest while marking the measurement censored;
+physical release does not certify trace completeness. Runner gives
 bridge revocation a fresh cleanup budget after harness isolation and withholds
 private evaluation material unless both stages succeed. Retain observer-release
 receipts, invalid intervals and unknown pages explicitly.
+
+The external companion configuration separately selects semantic detail
+(`category`, `process`, or `file`) and resident sampling. These are not additional
+`harness.step_observation` fields; see [detail configuration and costs](experiments/memory-footprint-tracing.md#attribution-detail-and-cost).
 
 This option does not establish complete host-memory attribution or make each
 bridge command an independent step. See [access/dirty epoch semantics](experiments/tsb-access-dirty.md)

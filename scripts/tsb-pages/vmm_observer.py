@@ -82,6 +82,7 @@ class VmmObserver:
         class CancelableAPI(VmmAPI):
             def call(api, endpoint, operation, **fields):
                 owner._check_cancel()
+                owner.identity()
                 conn = owner._connection()
                 request = {"operation": operation, **fields}
                 receipt = {"endpoint": endpoint, "operation": operation,
@@ -100,6 +101,7 @@ class VmmObserver:
                         raise VmmRequestError(endpoint, operation, response.status, body)
                     result = json.loads(raw)
                     if not isinstance(result, dict): raise RuntimeError("invalid VMM response type")
+                    owner.identity()
                     owner._check_cancel()
                     receipt["outcome"] = "returned"
                     return result
@@ -182,7 +184,9 @@ class VmmObserver:
             connection.request("PATCH", "/vm", json.dumps({"state": state}),
                                {"Content-Type": "application/json"})
             response = connection.getresponse()
-            body = response.read()
+            body = response.read(16385)
+            if len(body) > 16384:
+                raise RuntimeError("VMM state response exceeds client bound")
             if response.status != 204:
                 raise RuntimeError(f"VMM {state}: HTTP {response.status}: {body[:512]!r}")
         finally: self._disconnect(connection)
@@ -202,10 +206,35 @@ class VmmObserver:
             event["error"] = {"type": type(error).__name__, "message": str(error)}
             raise
         finally:
-            event["end_ns"] = time.monotonic_ns()
-            self.events.write(json.dumps(event) + "\n")
-            self.events.flush()
-            save(self.output / "api-calls.json", self.api.calls)
+            try:
+                event.update(self._persist_api_calls())
+            except BaseException as error:
+                self.invalid = True
+                event["persistence_error"] = {"type": type(error).__name__, "message": str(error)}
+                raise
+            finally:
+                # Includes receipt persistence, excludes this boundary journal's own write.
+                event["end_ns"] = time.monotonic_ns()
+                self.events.write(json.dumps(event) + "\n")
+                self.events.flush()
+
+    def _persist_api_calls(self):
+        """Append each receipt once; do not rewrite an ever-growing history at every boundary."""
+        if not self.api.calls:
+            return {"api_journal_records": 0, "api_journal_bytes": 0, "api_journal_ns": 0}
+        begin = time.monotonic_ns()
+        sequence = getattr(self, "_api_call_sequence", 0)
+        count = len(self.api.calls)
+        data = b"".join((json.dumps({**row, "sequence": sequence + index + 1},
+            separators=(",", ":")) + "\n").encode() for index, row in enumerate(self.api.calls))
+        with (self.output / "api-calls.jsonl").open("ab") as stream:
+            stream.write(data); stream.flush(); os.fsync(stream.fileno())
+        self._api_call_sequence = sequence + count
+        self.api.calls.clear()
+        end = time.monotonic_ns()
+        return {"api_journal_records": count, "api_journal_bytes": len(data),
+                "api_journal_begin_ns": begin, "api_journal_end_ns": end,
+                "api_journal_ns": end - begin}
 
     def _publish_epoch(self, response, event, censored=False, baseline=False):
         epoch = response["epoch"]
@@ -334,12 +363,22 @@ class VmmObserver:
 
     def _reading(self, response, directory):
         self._check_cancel()
-        masks = {name: set() for name in ("access_observed", "access_unknown", "access_idle", "access_absent",
+        masks = {name: set() for name in ("access_observed", "access_unknown", "access_idle",
                                          "kvm_dirty", "vmm_dirty", "combined_dirty")}
         unknown = {}
+        access_sets = tuple(masks["access_" + name] for name in ("observed", "unknown", "idle"))
+        def checked_gpa(row):
+            gpa = row["gpa"]
+            if (type(gpa) is not int or gpa < 0 or gpa % 4096 or not any(
+                    r["guest_base"] <= gpa < r["guest_base"] + r["bytes"] for r in self.coordinator.regions)):
+                raise ValueError("exported GPA is outside authoritative RAM")
+            return gpa
         for ordinal, row in enumerate(rows(directory / "access.jsonl.gz")):
             if ordinal % 4096 == 0: self._check_cancel()
-            masks["access_" + row["state"]].add(row["gpa"])
+            gpa = checked_gpa(row)
+            if any(gpa in selected for selected in access_sets) or row["state"] not in ("observed", "unknown", "idle"):
+                raise ValueError("duplicate or invalid exported access classification")
+            masks["access_" + row["state"]].add(gpa)
             if row["state"] == "unknown":
                 reason = row["unknown_reason"]
                 if not isinstance(reason, str) or not reason.replace("_", "").replace("-", "").isalnum():
@@ -348,12 +387,17 @@ class VmmObserver:
                 unknown[str(row["gpa"])] = reason
         for ordinal, row in enumerate(rows(directory / "dirty.jsonl.gz")):
             if ordinal % 4096 == 0: self._check_cancel()
+            gpa = checked_gpa(row)
+            if (gpa in masks["combined_dirty"] or any(type(row[name]) is not bool for name in ("kvm_dirty", "vmm_dirty"))
+                    or not (row["kvm_dirty"] or row["vmm_dirty"])):
+                raise ValueError("duplicate or invalid exported dirty provenance")
             for name in ("kvm_dirty", "vmm_dirty"):
-                if row[name]: masks[name].add(row["gpa"])
-            masks["combined_dirty"].add(row["gpa"])
+                if row[name]: masks[name].add(gpa)
+            masks["combined_dirty"].add(gpa)
         regions = []
         for index, region in enumerate(self.coordinator.regions):
             region = dict(region, masks={})
+            buffers = {}
             for name, selected in masks.items():
                 self._check_cancel()
                 buffer = bytearray(((region["page_count"] + 63) // 64) * 8)
@@ -363,6 +407,16 @@ class VmmObserver:
                     if 0 <= offset < region["bytes"]:
                         bit = offset // 4096
                         buffer[bit // 8] |= 1 << (bit % 8)
+                buffers[name] = buffer
+            # Native AccessRecord::rows omits pages absent at all finite samples.
+            # Keep that complement distinct from the final census's residency.
+            classified = (int.from_bytes(buffers["access_observed"], "little") |
+                          int.from_bytes(buffers["access_unknown"], "little") |
+                          int.from_bytes(buffers["access_idle"], "little"))
+            absent = ((1 << region["page_count"]) - 1) ^ classified
+            buffers["access_absent"] = absent.to_bytes(len(buffers["access_observed"]), "little")
+            for name, buffer in buffers.items():
+                self._check_cancel()
                 path = directory / f"region-{index}-{name}.bin"
                 with path.open("xb") as stream:
                     stream.write(buffer); stream.flush(); os.fsync(stream.fileno())
@@ -470,6 +524,7 @@ class VmmObserver:
                 if state not in ("Paused", "Running"):
                     raise RuntimeError("VMM state is neither Paused nor Running")
             finally: self._disconnect(connection)
+            self.identity()
             event["state_before_release"] = state
             if state == "Paused": self._state("Resumed", event)
             else:
@@ -537,5 +592,10 @@ class VmmObserver:
             if cleanup_errors:
                 save(self.output / "publication-cleanup-errors.json", cleanup_errors)
                 if failure is None: failure = RuntimeError("publication child cleanup failed")
+            try:
+                self._persist_api_calls()
+            except BaseException as error:
+                self.invalid = True
+                if failure is None: failure = error
             self.events.close(); self.phases.close(); self.closed = True
         if failure is not None: raise failure

@@ -17,7 +17,8 @@ test("native declarations bracket sequential, immediate and parallel batches wit
  " let collection='pending';",
  " if(req.url==='/batch'){pending=new Set(value.expected_tool_call_ids);collection='armed';}",
  " if(req.url==='/end'){pending.delete(value.tool_call_id);collection=pending.size===0?'collected':'pending';}",
- " setTimeout(()=>{res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({ok:true,collection,batch_id:value.batch_id,llm_step_id:value.llm_step_id,remaining_expected_tool_call_ids:[...pending],granularity:'llm_reasoning_step'}))},req.url==='/batch'?100:40);",
+ " const lifecycle=req.url==='/session/start'?{paused:true}:req.url==='/session/end'?{released:true,paused:false,terminal_complete:value.terminal_complete}:{};",
+ " setTimeout(()=>{res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({ok:true,session_id:value.session_id,turn_id:value.turn_id,...lifecycle,collection,batch_id:value.batch_id,llm_step_id:value.llm_step_id,remaining_expected_tool_call_ids:[...pending],granularity:'llm_reasoning_step'}))},req.url==='/batch'?100:40);",
  "});",
  "server.listen(0,'127.0.0.1',()=>console.log(server.address().port));"
  ].join("\n");

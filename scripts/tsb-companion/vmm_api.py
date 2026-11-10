@@ -168,27 +168,35 @@ class CaptureProvider:
         return sorted(set(matches))
     def resident_sample(self,seed,requested):
         if requested<0:raise ValueError("negative sample size")
-        unique={};metadata=None;resident_count=0;masked=0
+        seen=set();metadata=None;resident_count=0;masked=0;indices=None;selected=[]
         bound=sum(r["bytes"]//PAGE for r in self.regions)
         for rows,metadata in export_rows(self.api,"/memory-census",self.census_record_id,"resident",max_rows=bound,expected_generation=self.vm_generation):
+            if indices is None:
+                population=metadata["resident_population"]["unique_nonzero_host_pfns"]
+                if type(population) is not int or not 0<=population<=bound:
+                    raise CaptureFailure("invalid census population")
+                indices=set(random.Random(seed).sample(range(population),min(requested,population)))
             for row in rows:
                 resident_count+=1;pfn=row["pfn"]
-                if pfn:unique.setdefault(pfn,row)
-                else:masked+=1
+                if not pfn:masked+=1;continue
+                if pfn in seen:continue
+                ordinal=len(seen);seen.add(pfn)
+                if ordinal in indices:
+                    selected.append({"gpa":row["gpa"],"host_pfn":pfn,
+                        "host_kpageflags":row["host_kpageflags"],"host_kpagecount":row["host_kpagecount"]})
         counts=metadata["resident_population"]
-        if counts["resident_gpa_pages"]!=resident_count or counts["unique_nonzero_host_pfns"]!=len(unique) or counts["zero_pfn_pages"]!=masked:
+        if counts["resident_gpa_pages"]!=resident_count or counts["unique_nonzero_host_pfns"]!=len(seen) or counts["zero_pfn_pages"]!=masked:
             raise CaptureFailure("census identity/count mismatch")
-        n=min(requested,len(unique));indices=set(random.Random(seed).sample(range(len(unique)),n))
-        selected=[{"gpa":row["gpa"],"host_pfn":pfn,"host_kpageflags":row["host_kpageflags"],
-                   "host_kpagecount":row["host_kpagecount"]} for i,(pfn,row) in enumerate(unique.items()) if i in indices]
+        n=min(requested,len(seen))
+        if len(selected)!=n:raise CaptureFailure("census selection/count mismatch")
         if any(not isinstance(r[k],int) or r[k]<0 for r in selected for k in ("host_pfn","host_kpageflags","host_kpagecount")):
             raise CaptureFailure("selected census metadata unavailable")
         return {"selection":selected,"resident_population":{
-            "resident_gpa_pages":resident_count,"unique_nonzero_host_pfns":len(unique),"zero_pfn_pages":masked,
+            "resident_gpa_pages":resident_count,"unique_nonzero_host_pfns":len(seen),"zero_pfn_pages":masked,
             "pre_capture_vmm_smaps_rollup":{"Rss_kib":counts.get("vmm_rss_kib"),"Pss_kib":counts.get("vmm_pss_kib")},
             "census_ns":metadata["inventory_end_ns"]-metadata["inventory_begin_ns"]},
             "sample_design":{"unit":"one representative GPA per distinct nonzero resident host PFN",
-                            "population_pages":len(unique),"sample_pages":n,"requested_pages":requested,
+                            "population_pages":len(seen),"sample_pages":n,"requested_pages":requested,
                             "seed":seed,"rule":"uniform without replacement"}}
     def seal(self):
         if self.state!="open":raise CaptureFailure("capture already closed")

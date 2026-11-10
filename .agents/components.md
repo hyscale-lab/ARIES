@@ -24,7 +24,8 @@ and [lifecycle](architecture.md#task-lifecycle).
 - Reuse shared harness ownership and credential mechanics. Preserve native defaults
   and credential fallbacks. Retain ownership after failed removal. `Stop` prevents admission while preserving
   `Run` snapshots. An opted-in guest-holding observer remains harness-owned:
-  confirm its release after harness removal before successful stop, preserving
+  retain its occurrence identity through startup rollback and require matching
+  release confirmation after harness removal before successful stop. Preserve
   measurement validity separately from physical release. Redacted errors must
   not expose secrets through their causes.
 - Each sandbox session has its own listener, immutable target binding, and recorder,

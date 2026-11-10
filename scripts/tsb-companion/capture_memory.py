@@ -36,6 +36,10 @@ class CaptureMemory:
         if any(a[1]>b[0] for a,b in zip(bounds,bounds[1:])):
             raise CaptureFailure("overlapping guest regions")
 
+    def metrics(self):
+        return {"read_requests":self.read_requests,"requested_pages":self.requested_pages,
+                "cached_pages":len(self.cache),"consumed_pages":len(self.consumed_pages)}
+
     def _region(self, gpa):
         for region in self.regions:
             if region["guest_base"] <= gpa < region["guest_base"] + region["bytes"]:

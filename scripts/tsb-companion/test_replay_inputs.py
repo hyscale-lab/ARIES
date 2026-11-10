@@ -27,7 +27,7 @@ class ReplayInputs(unittest.TestCase):
             maskdir=root/"epoch-000003";maskdir.mkdir()
             masks={}
             for name,bits in {"access_observed":1,"access_unknown":2,"unknown_not-on-lru":2,
-                              "access_idle":4,"kvm_dirty":4,"vmm_dirty":0,"combined_dirty":4}.items():
+                              "access_idle":4,"access_absent":0,"kvm_dirty":4,"vmm_dirty":0,"combined_dirty":4}.items():
                 raw=bits.to_bytes(8,"little");(maskdir/(name+".bin")).write_bytes(raw)
                 masks[name]={"file":name+".bin","sha256":hashlib.sha256(raw).hexdigest(),"pages":bits.bit_count()}
             value={"artifact_directory":"/gone/worker/path","vm_generation":"g","source_epoch":3,

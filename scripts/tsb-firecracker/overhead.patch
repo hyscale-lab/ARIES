@@ -1,0 +1,353 @@
+diff --git c/src/vmm/src/page_tracking/host_pages.rs w/src/vmm/src/page_tracking/host_pages.rs
+index 56841bc6e..9068475fa 100644
+--- c/src/vmm/src/page_tracking/host_pages.rs
++++ w/src/vmm/src/page_tracking/host_pages.rs
+@@ -23,6 +23,9 @@ const LRU: u64 = 1 << 5;
+ const COMPOUND: u64 = (1 << 15) | (1 << 16) | (1 << 17) | (1 << 22);
+ const SHARED: u64 = (1 << 21) | (1 << 24);
+ const PROC_WORDS: usize = 8192;
++// Read-only flags/count metadata can span small PFN holes. Do not apply this
++// to page-idle I/O, whose reads/writes have page-tracking side effects.
++const PROC_MAX_WORD_GAP: u64 = 4;
+ const IDLE_WORDS: usize = 512; // kernfs binary I/O is capped at one host page.
+ const MAX_CHUNK_ROWS: usize = 256;
+ const DEFAULT_COMPONENT_LIMIT: usize = 512 * 1024 * 1024;
+@@ -74,14 +77,22 @@ fn read_words<T: Read + Seek>(
+     while first < indices.len() {
+         let mut end = first + 1;
+         while end < indices.len()
+-            && end - first < limit
+-            && indices[end - 1].checked_add(1) == Some(indices[end])
++            && indices[end] - indices[first] < limit as u64
++            && indices[end] - indices[end - 1] <= PROC_MAX_WORD_GAP
+         {
+             end += 1;
+         }
+-        io_read(io, indices[first], &mut bytes[..(end - first) * 8])?;
+-        for (j, chunk) in bytes[..(end - first) * 8].chunks_exact(8).enumerate() {
+-            out[first + j] = u64::from_ne_bytes(chunk.try_into().unwrap());
++        let span = (indices[end - 1] - indices[first] + 1) as usize;
++        io_read(io, indices[first], &mut bytes[..span * 8])?;
++        if span == end - first {
++            for (j, chunk) in bytes[..span * 8].chunks_exact(8).enumerate() {
++                out[first + j] = u64::from_ne_bytes(chunk.try_into().unwrap());
++            }
++        } else {
++            for j in first..end {
++                let at = (indices[j] - indices[first]) as usize * 8;
++                out[j] = u64::from_ne_bytes(bytes[at..at + 8].try_into().unwrap());
++            }
+         }
+         first = end;
+     }
+@@ -1152,7 +1163,7 @@ mod tests {
+         assert!(read_words(&mut Cursor::new(vec![0u8; 7]), &[0], PROC_WORDS).is_err());
+     }
+     #[test]
+-    fn sparse_words_do_not_read_or_write_holes() {
++    fn idle_words_skip_holes_while_read_only_metadata_coalesces_small_gaps() {
+         let mut io = CountIo::default();
+         write_idle(&mut io, &[(0, 1), (2, 4)]).unwrap();
+         assert_eq!(io.writes, vec![8, 8]);
+@@ -1160,11 +1171,91 @@ mod tests {
+             read_words(&mut io, &[0, 2], PROC_WORDS).unwrap(),
+             vec![1, 4]
+         );
+-        assert_eq!(io.reads, vec![8, 8]);
++        assert_eq!(io.reads, vec![24]);
++        let mut words = [(0, 0), (2, 0)];
++        read_idle_in_place(&mut io, &mut words).unwrap();
++        assert_eq!(words, [(0, 1), (2, 4)]);
++        assert_eq!(io.reads, vec![24, 8, 8]);
+         assert!(read_words(&mut io, &[2, 1], PROC_WORDS).is_err());
+         assert!(read_words(&mut io, &[1, 1], PROC_WORDS).is_err());
+     }
+     #[test]
++    fn coalesced_metadata_preserves_values_limits_large_holes_and_eof_errors() {
++        let values: Vec<u64> = (0..20000).map(|i| i * 257 + 11).collect();
++        let bytes: Vec<u8> = values.iter().flat_map(|word| word.to_ne_bytes()).collect();
++        let mut io = CountIo { inner: Cursor::new(bytes), ..Default::default() };
++        let selected: Vec<u64> = (0..8192).map(|i| i * 2).collect();
++        assert_eq!(read_words(&mut io, &selected, PROC_WORDS).unwrap(),
++            selected.iter().map(|&i| values[i as usize]).collect::<Vec<_>>());
++        assert_eq!(io.reads, vec![65528, 65528]);
++        io.reads.clear();
++        assert_eq!(read_words(&mut io, &[0, 4, 9], PROC_WORDS).unwrap(),
++            vec![values[0], values[4], values[9]]);
++        assert_eq!(io.reads, vec![40, 8]);
++        io.reads.clear();
++        read_words(&mut io, &[0, 8193], PROC_WORDS).unwrap();
++        assert_eq!(io.reads, vec![8, 8]);
++        assert!(read_words(&mut Cursor::new(vec![0u8; 24 - 1]), &[0, 2], PROC_WORDS).is_err());
++    }
++    #[test]
++    #[ignore = "local regular-file metadata I/O benchmark; no KVM or procfs writes"]
++    fn benchmark_sparse_metadata_coalescing() {
++        use std::time::Instant;
++        use vmm_sys_util::tempfile::TempFile;
++        struct CountFile { file: File, reads: usize, seeks: usize, bytes: usize }
++        impl Seek for CountFile {
++            fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
++                self.seeks += 1;
++                self.file.seek(pos)
++            }
++        }
++        impl Read for CountFile {
++            fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
++                self.reads += 1;
++                let count = self.file.read(out)?;
++                self.bytes += count;
++                Ok(count)
++            }
++        }
++        fn legacy(io: &mut CountFile, indices: &[u64]) -> Vec<u64> {
++            let mut result = vec![0; indices.len()];
++            let mut first = 0;
++            let mut bytes = [0u8; PROC_WORDS * 8];
++            while first < indices.len() {
++                let mut end = first + 1;
++                while end < indices.len() && end-first < PROC_WORDS && indices[end-1]+1 == indices[end] { end += 1; }
++                io_read(io, indices[first], &mut bytes[..(end-first)*8]).unwrap();
++                for (j, chunk) in bytes[..(end-first)*8].chunks_exact(8).enumerate() {
++                    result[first+j] = u64::from_ne_bytes(chunk.try_into().unwrap());
++                }
++                first = end;
++            }
++            result
++        }
++        for (stride, pages) in [(1u64,65536usize),(2,65536),(4,65536),(5,8192)] {
++            let temp = TempFile::new().unwrap();
++            let indices: Vec<_> = (0..pages).map(|i| 100000+(i as u64)*stride).collect();
++            let values: Vec<u8> = (0..=*indices.last().unwrap()).flat_map(|i| (i^0x5a5a5a5a5a5a5a5a).to_ne_bytes()).collect();
++            let mut file = temp.as_file().try_clone().unwrap();
++            file.write_all(&values).unwrap();
++            let mut old = CountFile { file: file.try_clone().unwrap(), reads:0, seeks:0, bytes:0 };
++            let start = Instant::now();
++            let expected = legacy(&mut old, &indices);
++            let baseline_ns = start.elapsed().as_nanos();
++            let mut new = CountFile { file, reads:0, seeks:0, bytes:0 };
++            let start = Instant::now();
++            let actual = read_words(&mut new, &indices, PROC_WORDS).unwrap();
++            let indexed_ns = start.elapsed().as_nanos();
++            assert_eq!(actual, expected);
++            assert_eq!(actual, indices.iter().map(|i| i^0x5a5a5a5a5a5a5a5a).collect::<Vec<_>>());
++            println!("{}", json!({"benchmark":"metadata_gap_coalescing","selected_pfns":pages,"stride":stride,
++                "max_read_bytes":PROC_WORDS*8,"max_pfn_step":PROC_MAX_WORD_GAP,
++                "baseline":{"wall_ns":baseline_ns,"read_calls":old.reads,"lseek_calls":old.seeks,"bytes":old.bytes},
++                "coalesced":{"wall_ns":indexed_ns,"read_calls":new.reads,"lseek_calls":new.seeks,"bytes":new.bytes},
++                "all_selected_words_equal":true,"scope":"compiled Rust regular-file fixture; not procfs latency"}));
++        }
++    }
++    #[test]
+     fn ordinal_chunks_skip_presence_words_without_allocating_rows() {
+         let mut offset = 3;
+         assert_eq!(
+diff --git c/src/vmm/src/page_tracking/records.rs w/src/vmm/src/page_tracking/records.rs
+index 376f524b4..9e2d28643 100644
+--- c/src/vmm/src/page_tracking/records.rs
++++ w/src/vmm/src/page_tracking/records.rs
+@@ -10,6 +10,7 @@ use std::sync::Arc;
+ 
+ pub const MAX_RECORDS: usize = 8;
+ pub const MAX_RETAINED_BYTES: usize = 1024 * 1024 * 1024;
++const DIRTY_RANK_BYTES: usize = 256;
+ 
+ #[derive(Clone, Debug, Serialize)]
+ pub struct DirtyPage {
+@@ -23,6 +24,7 @@ pub struct DirtyRegion {
+     pub page_count: u64,
+     cpu: Vec<u8>,
+     vmm: Vec<u8>,
++    rank: Vec<u64>,
+ }
+ #[derive(Debug, Default)]
+ pub struct DirtyData {
+@@ -54,11 +56,20 @@ impl DirtyData {
+             if cpu.len() != vmm.len() || cpu.len() as u64 != pages.div_ceil(64) * 8 {
+                 return Err("dirty bitmap length mismatch".into());
+             }
+-            let positive: u64 = cpu
+-                .iter()
+-                .zip(&vmm)
+-                .map(|(a, b)| (a | b).count_ones() as u64)
+-                .sum();
++            let mut rank = Vec::new();
++            rank.try_reserve_exact(cpu.len().div_ceil(DIRTY_RANK_BYTES) + 1)
++                .map_err(|e| format!("dirty rank allocation: {e}"))?;
++            rank.push(0);
++            let mut positive = 0;
++            for (byte, (&a, &b)) in cpu.iter().zip(&vmm).enumerate() {
++                positive += (a | b).count_ones() as u64;
++                if (byte + 1) % DIRTY_RANK_BYTES == 0 {
++                    rank.push(positive);
++                }
++            }
++            if cpu.len() % DIRTY_RANK_BYTES != 0 {
++                rank.push(positive);
++            }
+             out.positive_count = out
+                 .positive_count
+                 .checked_add(positive)
+@@ -69,6 +80,7 @@ impl DirtyData {
+                 page_count: pages,
+                 cpu,
+                 vmm,
++                rank,
+             });
+         }
+         out.metadata = json!({"regions":region_meta,"begin_monotonic_us":value["begin_monotonic_us"],"end_monotonic_us":value["end_monotonic_us"],"vcpu_paused":value["vcpu_paused"],"device_quiescence":value["device_quiescence"],"vmm_semantics":value["vmm_semantics"],"boot_baseline_discarded":value["boot_baseline_discarded"]});
+@@ -77,7 +89,11 @@ impl DirtyData {
+     pub fn estimated_bytes(&self) -> usize {
+         self.regions
+             .iter()
+-            .map(|r| r.cpu.capacity() + r.vmm.capacity() + 64)
++            .map(|r| {
++                r.cpu.capacity() + r.vmm.capacity()
++                    + r.rank.capacity() * std::mem::size_of::<u64>()
++                    + std::mem::size_of::<DirtyRegion>()
++            })
+             .sum()
+     }
+     pub fn contains(&self, gpa: u64) -> bool {
+@@ -94,7 +110,18 @@ impl DirtyData {
+         let mut skip = offset;
+         let mut rows = Vec::new();
+         for r in &self.regions {
+-            for (byte, (&cpu, &vmm)) in r.cpu.iter().zip(&r.vmm).enumerate() {
++            let total = *r.rank.last().unwrap_or(&0);
++            if skip >= total {
++                skip -= total;
++                continue;
++            }
++            // Frozen bitmaps permit ordinal lookup without another prefix scan.
++            // Repeated ranks skip empty blocks while retaining their GPA positions.
++            let block = r.rank.partition_point(|&count| count <= skip) - 1;
++            skip -= r.rank[block];
++            let first = block * DIRTY_RANK_BYTES;
++            for (relative, (&cpu, &vmm)) in r.cpu[first..].iter().zip(&r.vmm[first..]).enumerate() {
++                let byte = first + relative;
+                 let mut bits = cpu | vmm;
+                 let count = bits.count_ones() as u64;
+                 if skip >= count {
+@@ -358,3 +385,121 @@ impl Records {
+         Ok(id)
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn region(base: u64, pages: usize, cpu: &[usize], vmm: &[usize]) -> Value {
++        let mut cpu_bits = vec![0u8; pages.div_ceil(64) * 8];
++        let mut vmm_bits = cpu_bits.clone();
++        for &page in cpu {
++            cpu_bits[page / 8] |= 1 << (page % 8);
++        }
++        for &page in vmm {
++            vmm_bits[page / 8] |= 1 << (page % 8);
++        }
++        json!({"slot":0,"guest_base":base,"page_count":pages,"bytes":pages*4096,
++            "kvm_dirty_b64":STANDARD.encode(cpu_bits),"vmm_dirty_b64":STANDARD.encode(vmm_bits)})
++    }
++
++    #[test]
++    fn dirty_ordinals_preserve_dense_cpu_and_vmm_provenance() {
++        let pages = 8192;
++        let cpu: Vec<_> = (0..pages).collect();
++        let vmm: Vec<_> = (0..pages).step_by(2).collect();
++        let data = DirtyData::from_reply(&json!({"regions":[region(4096,pages,&cpu,&vmm)]})).unwrap();
++        assert_eq!(data.positive_count, pages as u64);
++        for offset in [0, 1, 2047, 2048, 4095, 4096, 8191, 8192] {
++            let rows = data.rows(offset as u64, 4096);
++            assert_eq!(rows.len(), (pages - offset).min(4096));
++            for (index, row) in rows.iter().enumerate() {
++                let page = offset + index;
++                assert_eq!(*row, json!({"gpa":4096+(page as u64)*4096,
++                    "kvm_dirty":true,"vmm_dirty":page%2==0}));
++            }
++        }
++    }
++
++    #[test]
++    fn dirty_ordinals_skip_empty_blocks_regions_and_preserve_partial_tail() {
++        let data = DirtyData::from_reply(&json!({"regions":[
++            region(0,4096,&[],&[]),
++            region(0x10000000,8193,&[0,2048,8192],&[2048,4097]),
++            region(0x20000000,65,&[64],&[])]})).unwrap();
++        let expected = vec![
++            json!({"gpa":0x10000000u64,"kvm_dirty":true,"vmm_dirty":false}),
++            json!({"gpa":0x10000000u64+2048*4096,"kvm_dirty":true,"vmm_dirty":true}),
++            json!({"gpa":0x10000000u64+4097*4096,"kvm_dirty":false,"vmm_dirty":true}),
++            json!({"gpa":0x10000000u64+8192*4096,"kvm_dirty":true,"vmm_dirty":false}),
++            json!({"gpa":0x20000000u64+64*4096,"kvm_dirty":true,"vmm_dirty":false}),
++        ];
++        assert_eq!(data.positive_count, expected.len() as u64);
++        for offset in 0..=expected.len() {
++            for limit in [1, 2, 4096] {
++                assert_eq!(data.rows(offset as u64, limit), expected[offset..].iter().take(limit).cloned().collect::<Vec<_>>());
++            }
++        }
++        assert!(data.rows(100, 4096).is_empty());
++    }
++
++    // Pre-index implementation retained solely as an independent benchmark oracle.
++    fn legacy_rows(data: &DirtyData, offset: u64, limit: usize) -> Vec<Value> {
++        let mut skip = offset;
++        let mut rows = Vec::new();
++        for r in &data.regions {
++            for (byte, (&cpu, &vmm)) in r.cpu.iter().zip(&r.vmm).enumerate() {
++                let mut bits = cpu | vmm;
++                let count = bits.count_ones() as u64;
++                if skip >= count {
++                    skip -= count;
++                    continue;
++                }
++                while bits != 0 {
++                    let bit = bits.trailing_zeros();
++                    bits &= bits - 1;
++                    let page = byte as u64 * 8 + u64::from(bit);
++                    if page >= r.page_count { break; }
++                    if skip > 0 { skip -= 1; continue; }
++                    rows.push(json!({"gpa":r.guest_base+page*4096,
++                        "kvm_dirty":cpu&(1<<bit)!=0,"vmm_dirty":vmm&(1<<bit)!=0}));
++                    if rows.len() == limit { return rows; }
++                }
++            }
++        }
++        rows
++    }
++
++    #[test]
++    #[ignore = "local deterministic export microbenchmark, no KVM"]
++    fn benchmark_dirty_export_prefix_index() {
++        use std::hint::black_box;
++        use std::time::Instant;
++        let pages = 1 << 19;
++        let cpu: Vec<_> = (0..pages).collect();
++        let vmm: Vec<_> = (0..pages).step_by(2).collect();
++        let data = DirtyData::from_reply(&json!({"regions":[region(0,pages,&cpu,&vmm)]})).unwrap();
++        for offset in (0..pages).step_by(4096) {
++            assert_eq!(data.rows(offset as u64, 4096), legacy_rows(&data, offset as u64, 4096));
++        }
++        let mut baseline = Vec::new();
++        let mut indexed = Vec::new();
++        for _ in 0..5 {
++            let start = Instant::now();
++            for offset in (0..pages).step_by(4096) {
++                black_box(legacy_rows(black_box(&data), offset as u64, 4096));
++            }
++            baseline.push(start.elapsed().as_nanos());
++            let start = Instant::now();
++            for offset in (0..pages).step_by(4096) {
++                black_box(data.rows(offset as u64, 4096));
++            }
++            indexed.push(start.elapsed().as_nanos());
++        }
++        println!("{}", json!({"benchmark":"dirty_export_prefix_index","guest_ram_bytes":pages as u64*4096,
++            "positive_pages":pages,"limit":4096,"exports":pages/4096,
++            "index_bytes":data.regions[0].rank.capacity()*8,
++            "baseline_wall_samples_ns":baseline,"indexed_wall_samples_ns":indexed,
++            "all_export_rows_semantically_equal":true,"scope":"compiled local Rust/JSON fixture; no KVM or guest"}));
++    }
++}

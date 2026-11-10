@@ -7,6 +7,11 @@
   "tree": "ec7add22f40c9bf66610a05dcab55e474046d240",
   "patch": "firecracker-tracer.patch",
   "patch_sha256": "3328dd6c918525c6647ecf3b0f8e46cfd7b82a16cdacd346a8568233011d3489",
+  "overhead_patch": {
+    "file": "overhead.patch",
+    "sha256": "20251ca78515ff86e2bc06144af26eabd89327336ab46a9a2e1941fb5ccf3112",
+    "tree": "e8c57989a5ba7022e36283399ca367f61aa1761e"
+  },
   "rust_toolchain": "1.87.0",
   "target": "x86_64-unknown-linux-musl",
   "firecracker_containerd": {

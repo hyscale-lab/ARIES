@@ -287,8 +287,11 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		active.DeploymentRequest.Env = append(active.DeploymentRequest.Env, stepObservationEnvironment(o, active.Occurrence)...)
 	}
 	fail := func(primary error) error {
+		// A created runtime may have started its plugin service before startup
+		// failed. Removing that runtime does not release the observer's guest hold.
+		observerMayBeActive := manager.options.StepObservation != nil && active.ID != ""
 		err := manager.runtime.Rollback(ctx, active.Occurrence, primary)
-		if manager.runtime.InUse() {
+		if manager.runtime.InUse() || observerMayBeActive {
 			manager.active = active
 		}
 		return err

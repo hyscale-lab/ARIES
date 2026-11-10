@@ -16,8 +16,12 @@
   confirmed isolation, task cleanup/errors, and shared infrastructure observation
   and cleanup/errors. Exit status alone is insufficient.
 - For memory tracing, follow the selected [backend protocol and source pins](../docs/experiments/memory-footprint-tracing.md);
-  validate native boundaries and cancellation separately from page coverage.
-  Preserve the declared workload inventory, incomplete windows and unknowns;
+  validate native boundaries, acknowledgement identities and cancellation
+  separately from page coverage. Reject contradictory compact partitions, unions
+  or counts even when source hashes match. Keep native bit work, host blocking,
+  decoder detail and publication costs distinct; never add overlapping spans or
+  infer native overhead from an in-memory fixture. Preserve the declared workload
+  inventory, incomplete windows and unknowns;
   fixture success does not prove completed benchmark collection.
 - After runtime work, check for leaked containers, networks, processes, listeners,
   and credential files. Scan private artifacts without printing secrets.

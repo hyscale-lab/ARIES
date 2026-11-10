@@ -10,9 +10,15 @@ test("compaction end preserves paused session and repeated native model identity
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"aries-compaction-"));
  const child=spawn(process.execPath,["--input-type=module","-e",String.raw`
  import http from "node:http";import fs from "node:fs";
+ let pending=[];
  const s=http.createServer(async(req,res)=>{let b="";for await(const c of req)b+=c;
  const v=JSON.parse(b);fs.appendFileSync(process.env.CALLS,JSON.stringify({path:req.url,body:v})+"\n");
- res.writeHead(200,{"content-type":"application/json"});res.end(JSON.stringify({ok:true,collection:req.url==="/end"?"collected":"armed",paused:req.url!=="/batch"}))});
+ if(req.url==="/batch")pending=v.expected_tool_call_ids;
+ if(req.url==="/end")pending=pending.filter(id=>id!==v.tool_call_id);
+ const lifecycle=req.url==="/session/start"?{paused:true}:req.url==="/session/end"?{released:true,paused:false,terminal_complete:v.terminal_complete}:{};
+ res.writeHead(200,{"content-type":"application/json"});res.end(JSON.stringify({ok:true,session_id:v.session_id,turn_id:v.turn_id,
+ ...lifecycle,batch_id:v.batch_id,llm_step_id:v.llm_step_id,remaining_expected_tool_call_ids:pending,
+ collection:req.url==="/batch"?"armed":req.url==="/end"?"collected":"pending"}))});
  s.listen(0,"127.0.0.1",()=>console.log(s.address().port));
  `],{env:{...process.env,CALLS:path.join(dir,"http.jsonl")},stdio:["ignore","pipe","inherit"]});
  try{

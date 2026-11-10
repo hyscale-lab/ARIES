@@ -17,7 +17,16 @@ The pinned OpenClaw image exposes model_call_started/model_call_ended IDs, durat
 
 The opted-in research plugin requires hooks.allowConversationAccess=true for terminal hooks. The renderer grants permission only to aries-step-pages; other model/tool/plugin configuration is preserved.
 
-Keep host monotonic pause, dirty/access, census, discovery, barrier, publication and resume times distinct. The full paused LLM interval is policy time. Only measured nonoverlapping critical-path tracer spans may be subtracted for descriptive adjusted duration; that does not recover uninstrumented latency.
+The observer binds a session/turn before initialization or cancellation can
+affect that session. Every successful acknowledgement carries that identity.
+The plugin also requires the declared native session, tool IDs/names, batch and
+remaining-result set to agree before confirming admission or completion. Invalid
+acknowledgements remain measurement failures and cannot produce a successful
+terminal seal. These checks do not rewrite native messages or scheduling.
+A failed harness start can already have initialized the observer, so rollback
+retains the occurrence identity for the later confirmed-stop release barrier.
+
+Keep host monotonic pause, dirty/access, census, discovery, barrier, publication and resume times distinct. The full paused LLM interval is policy time. Keep measured nonoverlapping critical-path spans separate from that policy interval; the overhead report does not reconstruct uninstrumented latency.
 
 ## Raw data
 
@@ -26,6 +35,14 @@ The worker-specific FC build must enable dirty tracking before boot and support 
 Primary modeled demand is observed access union unknown-as-touched union KVM/VMM candidates; preserve the old access-only sensitivity. Do not relabel raw access evidence. Host-idle missed reads remain possible; controlled read-only fixture validation is mandatory.
 
 Each epoch phase manifest indexes region-relative little-endian bitmaps with hashes/populations. Resident masks and gzip uint64 host-PFN arrays preserve GPA aliases and distinguish absent pages from resident unresolved PFN zero. VMM smaps_rollup RSS/PSS is separate. Physical backing estimates are not proof of system-wide reclaim, exclusivity or safe eviction.
+
+Compact readers validate content relationships as well as hashes: access states
+are disjoint, the VMM format partitions the declared RAM regions including
+absence, unknown-reason masks partition the unknown set, and combined dirty
+equals the KVM/VMM union. Retained summary counts must agree with those masks.
+Contradictory evidence is rejected before expanded page lists are accepted for
+derived comparisons. A closed bitmap partition validates the representation; it does
+not establish complete hardware access detection.
 
 The pinned FC HTTP pause also suspends its device event loop. Dirty transactions check asynchronous block completion and reject unsupported writers/devices. This backend-specific guarantee requires native tests. Retain gap dirty maps and sequential-boundary skew; common epoch tokens do not establish simultaneous hardware samples.
 
@@ -37,11 +54,21 @@ Attribute effective demand while preserving raw access and additional KVM/VMM pr
 
 Observer metadata reads can contaminate host-idle gap access. Retain the observer-read mask and raw overlap, without subtracting overlap and claiming guest-only activity. Re-arm tool access after the metadata barrier.
 
+The companion's `attribution_detail` selects `category`, `process` or `file`
+(default). Category mode skips per-boundary process/VMA/PTE, owner, full free-list
+and filename walks; it retains coarse page categories, inode identity checks,
+buddy-head-only evidence and explicit unresolved cases. Process mode adds
+process/owner associations without resolving paths; file mode adds the full
+filename traversal. Bootstrap validation remains common and is measured
+separately. These are different observation scopes, not interchangeable output
+labels. Skipped association fields are unavailable rather than evidence of no
+owner or no backing path. See [detail configuration and costs](memory-footprint-tracing.md#attribution-detail-and-cost).
+
 ## Preparation and gates
 
 Use explicit fresh root, selection file, access-dirty config and attribution config in suite preparation. Run uses frozen inputs. The suite chooses the new plugin and applies P2 only to the five tasks. The optional agent_timeout_overrides map accepts catalog task IDs and positive integer seconds; omitted configuration retains the original RStan 5400-second default, while an explicit empty map keeps all native agent deadlines. Each selected override is written to the native runtime override file and hash-bound into the profile and manifest. Verifier timeouts and native CPU/RAM remain unchanged. Historical reruns used Scheme 9600 seconds and RStan 21600 seconds in distinct roots. Those were explicit deviations from the original study; new runs must choose and record their own overrides. Automatic paid retries are disabled.
 
-Worker-only deterministic tests precede native known read-only/write/write-restore/block/network truth tables, reset continuity, initial/final hooks, metadata consistency, PFN aliases and cleanup. For a new study, validate the selected native configuration before interpreting workload measurements, and preserve failed/censored/unsupported outcomes. Source recovery and deterministic tests do not launch or authorize paid workloads.
+Local deterministic fixtures exercise identity mismatches, acknowledgement consistency, cancellation, compact masks and lifecycle failures. Native known read-only/write/write-restore/block/network truth tables, reset continuity, metadata consistency, PFN aliases and cleanup require separate worker validation. For a new study, validate the selected native configuration before interpreting workload measurements, and preserve failed/censored/unsupported outcomes. Source recovery and deterministic tests do not launch or authorize paid workloads.
 
 
 In the legacy external observer, metadata cancellation has a bounded cooperative grace (default 5 seconds) after
@@ -93,6 +120,12 @@ and all bounded guest metadata bytes. Census and epoch exports are immutable
 JSONL-gzip datasets; tool readings additionally retain compact region bitmaps
 with hashes and relocatable sibling paths.
 
+The host checks the selected VMM PID/start identity before each metric API call
+and again after its response, and rechecks state-query identity before cleanup
+release. Bounded state/error responses cannot become unbounded memory reads. A
+PID reuse or VMM replacement invalidates the sample instead of joining evidence
+across runtimes. VM generation and record bindings remain independently checked.
+
 P2 starts with an explicit bootstrap epoch before the first model request.
 Bootstrap search and metadata reads remain in the retained read mask and are
 excluded from useful model/tool work. A rotation validates bootstrap before the
@@ -120,6 +153,11 @@ epoch. The ACK separates released from measurement_valid, so a censored trace
 can be physically safe for independent verification. Each host cleanup attempt
 retains its own timing/ACK receipt.
 
+`SIGTERM`/`SIGINT` during VMM-owned observation interrupt live API/reader work
+and use the same bounded abort/release path before observer close. The open
+phase remains censored, and cleanup failure remains an error. Service shutdown
+does not manufacture a final epoch collection or a complete terminal seal.
+
 The cancellation path skips final epoch collection/export and records the open
 phase/group as censored; expected/missing native results are preserved. No
 synthetic result or complete terminal seal is created. The VMM has no coordinator
@@ -131,16 +169,36 @@ server records and do not implicitly discard valid capture evidence. Observer
 close reaps its publication children even if terminal release fails.
 
 Boundary journals separately time metadata barriers, immutable record export,
-publication waits, rotations and Pause/Resume. Useful held-LLM time is not
-automatically observer overhead. The initial implementation still materializes
-rich attribution rows during live discovery, and exports epoch data on the
-boundary path; a small deterministic fixture does not establish low overhead
-for a large workload. The full read mask qualifies observer contamination of
-gap access. No complete host-idle read coverage is inferred from exact replay.
+publication waits, rotations, Pause/Resume and API-receipt persistence. The
+[overhead report](memory-footprint-tracing.md#overhead-reports) retains those
+parent/component envelopes, native bit-operation work, child phases and semantic
+decode stages separately. It reads VMM metadata directly instead of inventing
+missing legacy scan timings. Repeated/shared receipts are deduplicated; interval
+unions prevent nested waits from being added twice.
+Headline costs include only complete, nonfailed, noncensored records. Failed,
+censored and incomplete attempt costs remain in separate completion-state
+statistics, and a record completion state does not certify full trace coverage.
+
+Useful held-LLM time is not automatically observer overhead. A decoder can run
+during that interval, while only its remaining seal wait blocks the next tool
+admission. Child publication can continue from sealed bytes. Host boundary
+timings include API-ledger persistence, but their own journal write and helper/
+network delay remain outside that envelope. The report does not subtract these
+spans from tool-window timing or reconstruct uninstrumented latency.
+
+Decoder stage/provider/closure metrics distinguish coarse categories from
+process and file-backend traversal costs. Compare identical selections, sample
+designs, layouts and source epochs, and retain partial/unresolved coverage.
+Local in-memory comparisons isolate Python fixture costs; they do not establish
+low native tracing overhead for a large workload. The full read mask qualifies
+observer contamination of gap access. No complete host-idle read coverage is
+inferred from exact replay or from the optimization overlay.
 
 Suite postprocessing validates VMM-owned memory sizes and generation against the
 retained initial-arm authoritative regions, without requiring legacy KVM slot
-interception. The comparison adapter retains LLM-batch identity and source
+interception. Progress capture uses that same region/generation evidence and
+validates the live PID/start and VM identity; VMM-owned runs do not require the
+legacy `selected-slots.json` or a claimed `strace` detach. The comparison adapter retains LLM-batch identity and source
 epoch/record metadata for compact VMM readings. Missing old per-scan timings
 remain unavailable rather than zero; VMM boundary journals and immutable census
 exports carry the new timing and backing evidence.

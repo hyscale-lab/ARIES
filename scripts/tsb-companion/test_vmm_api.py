@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import random
 import unittest
 from capture_memory import CaptureFailure
 from vmm_api import CaptureProvider, export_rows, finalize_capture, VmmRequestError
@@ -40,6 +41,34 @@ class API:
   raise AssertionError(operation)
 
 class ProviderTests(unittest.TestCase):
+ def test_streamed_sample_preserves_seed_alias_representative_and_order(self):
+  class ManyPages(API):
+   def _respond(self,endpoint,operation,**kw):
+    if operation=="begin":
+     result=super()._respond(endpoint,operation,**kw)
+     result["regions"]=[{"slot":0,"guest_base":0,"bytes":20000*4096,"page_count":20000}]
+     return result
+    if operation!="export":return super()._respond(endpoint,operation,**kw)
+    all_rows=[{"gpa":i*4096,"pfn":0 if i%17==0 else i//3+1,
+               "host_kpageflags":4,"host_kpagecount":2} for i in range(20000)]
+    unique={row["pfn"] for row in all_rows if row["pfn"]}
+    lo=kw["offset"];hi=min(len(all_rows),lo+kw["limit"])
+    return {"record_id":kw["record_id"],"kind":kw["kind"],"offset":lo,"next_offset":hi,
+      "total_rows":len(all_rows),"complete":hi==len(all_rows),"rows":all_rows[lo:hi],
+      "metadata":{"resident_population":{"resident_gpa_pages":len(all_rows),
+       "unique_nonzero_host_pfns":len(unique),"zero_pfn_pages":sum(row["pfn"]==0 for row in all_rows)},
+       "inventory_begin_ns":100,"inventory_end_ns":200}}
+  api=ManyPages();provider=CaptureProvider(api,"c",consistency="quiescence_only")
+  for seed in (0,42,710):
+   sample=provider.resident_sample(seed,31)
+   first={}
+   for i in range(20000):
+    if i%17:first.setdefault(i//3+1,i*4096)
+   indices=set(random.Random(seed).sample(range(len(first)),31))
+   expected=[(g,pfn) for i,(pfn,g) in enumerate(first.items()) if i in indices]
+   self.assertEqual([(row["gpa"],row["host_pfn"]) for row in sample["selection"]],expected)
+   self.assertEqual(sample["sample_design"]["population_pages"],len(first))
+
  def test_metadata_only_never_requires_idle_or_dirty_endpoints(self):
   api=API();p=CaptureProvider(api,"capture-1",consistency="quiescence_only")
   self.assertEqual(p.budgets["max_scan_bytes"],0)

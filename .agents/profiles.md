@@ -13,7 +13,9 @@ Use `configs/versions.json` for pins; do not duplicate the field inventory here.
   and explicit embedded mode before effects.
 - Keep optional step observation owned by the native OpenClaw agent harness;
   preserve native batch scheduling and reject other harness modes. Treat the
-  access/dirty guest-pause policy as an explicit experimental change. Use the
+  access/dirty guest-pause policy and attribution detail/sampling choices as
+  explicit experimental changes; freeze their configuration and preserve skipped
+  attribution as unavailable. Use the
   [tracer source pins and setup](../docs/experiments/memory-footprint-tracing.md)
   and [step observation configuration](../docs/configuration.md#native-step-observation).
 - Declare `overrides_file` explicitly (`""` disables overrides). Keep harness and

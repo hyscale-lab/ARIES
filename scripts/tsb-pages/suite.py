@@ -83,7 +83,7 @@ def runtime_files():
     files = {REPO / "bin" / name for name in ("aries", "aries-bridge", "aries-echo", "aries-ssh-client")}
     files.update((TEMPLATE, VERSIONS))
     files.update(Path(__file__).parent / name for name in (
-        "suite.py", "serve.py", "batches.py", "idle.py", "run.py", "compare.py", "boundaries.py", "methodology.html", "access_dirty.py", "compact.py", "vmm_observer.py", "model_occurrences.py"))
+        "suite.py", "suite_report.py", "overhead.py", "serve.py", "batches.py", "idle.py", "run.py", "compare.py", "boundaries.py", "methodology.html", "access_dirty.py", "compact.py", "vmm_observer.py", "model_occurrences.py"))
     files.update((REPO / "scripts/tsb-attribution").glob("*.py"))
     plugin = REPO / "scripts/tsb-pages-plugin"
     files.update(p for p in plugin.rglob("*") if p.is_file()
@@ -525,6 +525,24 @@ def inventory():
 
 
 
+def canonical_memory_regions(regions):
+    result = []
+    for r in regions:
+        base, size, slot = r["guest_base"], r["bytes"], r["slot"]
+        if (type(base) is not int or type(size) is not int or base < 0
+                or size <= 0 or base + size > 1 << 64 or base % 4096 or size % 4096
+                or type(slot) is not int or not 0 <= slot < 1 << 32
+                or type(r["page_count"]) is not int or r["page_count"] != size // 4096):
+            raise ValueError("invalid VMM RAM region")
+        result.append((base, size, slot))
+    result.sort()
+    if not result or len({r[2] for r in result}) != len(result):
+        raise ValueError("missing/duplicate VMM RAM slots")
+    if any(a[0] + a[1] > b[0] for a, b in zip(result, result[1:])):
+        raise ValueError("overlapping VMM RAM regions")
+    return result
+
+
 def observation_memory(observer, readings, backend):
     """Validate retained authoritative RAM identity, without live process reads."""
     if backend != "vmm_owned":
@@ -537,26 +555,11 @@ def observation_memory(observer, readings, backend):
             or not isinstance(generation, str) or not generation
             or initial.get("baseline_discarded") is not True):
         raise ValueError("missing or invalid VMM initial-arm identity")
-    def canonical_regions(regions):
-        result = []
-        for r in regions:
-            base, size = r["guest_base"], r["bytes"]
-            if (not isinstance(base, int) or not isinstance(size, int) or base < 0
-                    or size <= 0 or base % 4096 or size % 4096
-                    or r["page_count"] != size // 4096):
-                raise ValueError("invalid VMM RAM region")
-            result.append((base, size, r["slot"]))
-        result.sort()
-        if not result or len({r[2] for r in result}) != len(result):
-            raise ValueError("missing/duplicate VMM RAM slots")
-        if any(a[0] + a[1] > b[0] for a, b in zip(result, result[1:])):
-            raise ValueError("overlapping VMM RAM regions")
-        return result
-    expected = canonical_regions(initial["regions"])
+    expected = canonical_memory_regions(initial["regions"])
     for group in readings:
         reading = group["reading"]
         if (reading.get("vm_generation") != generation
-                or canonical_regions(reading["regions"]) != expected):
+                or canonical_memory_regions(reading["regions"]) != expected):
             raise ValueError("reading differs from authoritative VMM generation/regions")
     return sum(r[1] for r in expected), "vmm_initial_arm_authoritative_regions"
 
@@ -692,20 +695,34 @@ class Suite:
         observer = self.root / status["task_id"] / "observer"
         try:
             identity = read_json(observer / "vmm.json")
-            slots = read_json(observer / "selected-slots.json")
             pid = identity["pid"]
             args = Path("/proc/" + str(pid) + "/cmdline").read_bytes().split(b"\0")
             vm_id = os.fsdecode(args[args.index(b"--id") + 1])
-            if not vm_id.startswith(status["vm_prefix"]):
+            start = int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19])
+            if (start != int(identity["start_ticks"]) or vm_id != identity["vm_id"]
+                    or not vm_id.startswith(status["vm_prefix"])):
                 raise ValueError("selected VMM ID does not match task-specific prefix")
-            status["capture"] = {
+            capture = {
                 "vmm_pid": pid, "vmm_start_ticks": identity["start_ticks"], "vm_id": vm_id,
-                "selected_slots": len(slots),
-                "selected_slot_memory_bytes": sum(s["memory_size"] for s in slots),
                 "vmm_json_sha256": digest(observer / "vmm.json"),
-                "selected_slots_sha256": digest(observer / "selected-slots.json"),
-                "strace_detached_before_capture_publication": True,
             }
+            access = self.manifest["execution"].get("access_dirty_config")
+            backend = read_json(access["path"]).get("backend") if access else None
+            if backend == "vmm_owned":
+                memory, evidence = observation_memory(observer, [], backend)
+                initial_path = observer / "access-dirty/initial-arm.json"
+                initial = read_json(initial_path)
+                capture.update(vm_generation=initial["vm_generation"],
+                    selected_slots=len(initial["regions"]), selected_slot_memory_bytes=memory,
+                    memory_region_evidence=evidence, initial_arm_sha256=digest(initial_path))
+            else:
+                slots_path = observer / "selected-slots.json"
+                slots = read_json(slots_path)
+                capture.update(selected_slots=len(slots),
+                    selected_slot_memory_bytes=sum(s["memory_size"] for s in slots),
+                    selected_slots_sha256=digest(slots_path),
+                    strace_detached_before_capture_publication=True)
+            status["capture"] = capture
             self.event("vmm_selected", **status["capture"])
         except (OSError, KeyError, ValueError, IndexError, TypeError):
             # Files can be between native write calls. Final evidence parsing
@@ -821,6 +838,21 @@ class Suite:
             status["measurement"] = {"status": "failed", "error_type": type(error).__name__,
                                       "error": str(error)}
         runs = sorted((task_root / "runs").glob("*/run-result.json"))
+        # Include failed/partial observations, even if the native run result is absent.
+        overhead_command = [sys.executable, "-B", str(REPO / "scripts/tsb-pages/overhead.py"),
+                            "--observer", str(observer), "--output", str(task_root / "overhead.json")]
+        if len(runs) == 1:
+            plugin_log = runs[0].parent / record["execution_task_id"] / "harness/telemetry/aries-step-pages.jsonl"
+            if plugin_log.exists():
+                overhead_command.extend(["--plugin-log", str(plugin_log)])
+        try:
+            code = self.command(overhead_command, "overhead", status)
+            overhead_report = read_json(task_root / "overhead.json") if code == 0 else {}
+            status["tracer_overhead"] = {"status": overhead_report.get("status", "failed"),
+                                        "returncode": code, "errors": overhead_report.get("errors", [])}
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            status["tracer_overhead"] = {"status": "failed", "error_type": type(error).__name__,
+                                        "error": str(error)}
         if len(runs) != 1:
             status["result_error"] = "expected exactly one run-result.json; found " + str(len(runs))
             self.halt("native result missing or ambiguous; cleanup outcome cannot be established")
