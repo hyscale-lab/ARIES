@@ -41,6 +41,8 @@ type Plan struct {
 	SourceRunID  string          `json:"source_run_id"`
 	SourceTaskID string          `json:"source_task_id"`
 	Evaluation   core.Evaluation `json:"evaluation"`
+	// StartedAt retains the source clock origin for run diagnostics only.
+	StartedAt time.Time `json:"-"`
 }
 
 // MaxPlanBytes bounds the managed caller's encoded plan.

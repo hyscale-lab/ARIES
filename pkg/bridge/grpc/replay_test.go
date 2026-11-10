@@ -448,18 +448,103 @@ func TestLoadReplaySourceEmptyTraceHasNoFinalWait(t *testing.T) {
 	}
 }
 
-func TestLoadReplaySourceRejectsEqualStarts(t *testing.T) {
+func TestLoadReplaySourceReplaysEqualStartsWithOverlap(t *testing.T) {
 	start, err := time.Parse(time.RFC3339Nano, replaySourceTime)
 	if err != nil {
 		t.Fatal(err)
 	}
 	const callDuration = time.Second
-	source := writeReplaySource(t, []toolCallRecord{
-		replayRecord(start, start.Add(callDuration), 1),
-		replayRecord(start, start.Add(callDuration), 2),
-	}, start.Add(callDuration), core.Evaluation{Status: core.StatusSucceeded})
-	if plan, err := LoadReplaySource(source, replayTask, replayBenchmark, replayRevisions); err == nil || len(plan.Calls) != 0 {
-		t.Fatalf("equal call starts accepted: plan = %+v, error = %v", plan, err)
+	const firstSequence uint64 = 1
+	const secondSequence = firstSequence + 1
+	response := &sandboxv1.StatResponse{}
+	expected := expectedReplayCall("Stat", response)
+	records := []toolCallRecord{
+		replayRecord(start, start.Add(callDuration), firstSequence),
+		replayRecord(start, start.Add(callDuration+callDuration), secondSequence),
+	}
+	for index := range records {
+		records[index].ResponseBytes = expected.ResponseBytes
+		records[index].ResponseSHA256 = expected.ResponseSHA256
+	}
+	source := writeReplaySource(t, records, start.Add(callDuration+callDuration), core.Evaluation{Status: core.StatusSucceeded})
+	plan, err := LoadReplaySource(source, replayTask, replayBenchmark, replayRevisions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sequences := make(map[uint64]bool, len(records))
+	for _, call := range plan.Calls {
+		if call.StartOffset != 0 || sequences[call.Sequence] {
+			t.Fatalf("tied call lost its offset or identity: %+v", plan.Calls)
+		}
+		sequences[call.Sequence] = true
+	}
+	if len(plan.Calls) != len(records) || !sequences[firstSequence] || !sequences[secondSequence] || plan.FinalWait != 0 || !plan.StartedAt.Equal(start) {
+		t.Fatalf("tied call plan = %+v", plan)
+	}
+
+	entered := make(chan struct{}, len(records))
+	release := make(chan struct{}, len(records))
+	defer close(release)
+	server := &replayServer{stat: func(ctx context.Context, _ *sandboxv1.StatRequest) (*sandboxv1.StatResponse, error) {
+		entered <- struct{}{}
+		select {
+		case <-release:
+			return response, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}}
+	client := replayEndpoint(t, server)
+	ctx, cancel := context.WithTimeout(context.Background(), replayTestDeadline)
+	defer cancel()
+	const callerResults = 1
+	done := make(chan error, callerResults)
+	go func() { done <- ReplayCalls(ctx, replayTestDeadline, client, plan) }()
+	for range records {
+		select {
+		case <-entered:
+		case <-ctx.Done():
+			t.Fatal("tied calls did not overlap")
+		}
+	}
+	// Both calls are active before either can finish.
+	for range records {
+		release <- struct{}{}
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("replay tied calls: %v", err)
+	}
+}
+
+func TestLoadReplaySourceRejectsBadEqualStartEvidence(t *testing.T) {
+	start, err := time.Parse(time.RFC3339Nano, replaySourceTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const firstSequence uint64 = 1
+	const secondSequence = firstSequence + 1
+	const callDuration = time.Second
+	for name, change := range map[string]func(*toolCallRecord){
+		"sequence gap":       func(record *toolCallRecord) { record.Sequence = secondSequence + 1 },
+		"duplicate sequence": func(record *toolCallRecord) { record.Sequence = firstSequence },
+		"invalid start":      func(record *toolCallRecord) { record.StartedAt = "invalid" },
+		"invalid completion": func(record *toolCallRecord) { record.Timestamp = "invalid" },
+		"completion before start": func(record *toolCallRecord) {
+			record.Timestamp = bridgekit.FormatTime(start.Add(-callDuration))
+		},
+		"incomplete response": func(record *toolCallRecord) { record.ResponseSHA256 = "" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			records := []toolCallRecord{
+				replayRecord(start, start.Add(callDuration), firstSequence),
+				replayRecord(start, start.Add(callDuration), secondSequence),
+			}
+			change(&records[len(records)-1])
+			source := writeReplaySource(t, records, start.Add(callDuration), core.Evaluation{Status: core.StatusSucceeded})
+			if plan, err := LoadReplaySource(source, replayTask, replayBenchmark, replayRevisions); err == nil || len(plan.Calls) != 0 {
+				t.Fatalf("bad equal-start evidence accepted: plan=%+v error=%v", plan, err)
+			}
+		})
 	}
 }
 

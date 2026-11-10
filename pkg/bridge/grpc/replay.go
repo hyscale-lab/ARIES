@@ -180,15 +180,13 @@ func loadReplaySource(sourceDir string, task core.Task, benchmarkType string, re
 		}
 	}
 	if len(plan.Calls) != 0 {
+		plan.StartedAt = first
 		// File order follows call completion, not admission. The start time is the
 		// schedule's origin even when a later file line started first.
 		slices.SortFunc(plan.Calls, func(left, right replay.Call) int {
 			return starts[left.Sequence].Compare(starts[right.Sequence])
 		})
 		for index := range plan.Calls {
-			if index > 0 && starts[plan.Calls[index-1].Sequence].Equal(starts[plan.Calls[index].Sequence]) {
-				return replay.Plan{}, errors.New("replay call starts are ambiguous")
-			}
 			start := starts[plan.Calls[index].Sequence]
 			offset := start.Sub(first)
 			if offset < 0 || !first.Add(offset).Equal(start) {
