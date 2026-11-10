@@ -26,8 +26,8 @@ func TestReplayWiringRejectsUnattachedCallerWithoutDockerEffects(t *testing.T) {
 		Versions:  config.Versions{Bridge: config.BridgeVersions{Image: "aries-bridge:v1"}},
 	}
 	wiring := commandWiring()
-	if wiring.NewReplayCaller == nil || wiring.LoadReplaySource == nil {
-		t.Fatal("command wiring has no replay caller or source loader")
+	if wiring.NewReplayCaller == nil || wiring.PreflightReplaySource == nil {
+		t.Fatal("command wiring has no replay caller or source preflight")
 	}
 	if _, err := wiring.NewReplayCaller(cfg, core.RuntimePlacement{}, 0, nil); err == nil {
 		t.Fatal("caller without private run attachment was accepted")

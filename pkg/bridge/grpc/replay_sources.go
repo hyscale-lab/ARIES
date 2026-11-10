@@ -184,6 +184,14 @@ func preflightReplaySource(ctx context.Context, sourceDir string, tasks []core.T
 	for index := range selection.Occurrences {
 		occurrence := &selection.Occurrences[index]
 		planBytes := selection.sources[index].binding.planBytes
+		if len(selection.Occurrences) > 1 && len(occurrence.Calls) != 0 {
+			// Reserve the longest UTC origin before any task sandbox can start.
+			const replayOriginBytes = len(`,"replay_at":"2006-01-02T15:04:05.999999999Z"`)
+			planBytes += replayOriginBytes
+		}
+		if planBytes > selection.maxPlanBytes {
+			return nil, errors.New("replay global plan exceeds the encoded byte bound")
+		}
 		if len(occurrence.Calls) != 0 {
 			selection.sources[index].offset = occurrence.StartedAt.Sub(selection.StartedAt)
 		}

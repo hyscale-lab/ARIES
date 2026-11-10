@@ -830,9 +830,6 @@ func (c *Config) validate() error {
 		if strings.TrimSpace(c.Replay.Source) == "" {
 			return errors.New("replay.source is required")
 		}
-		if len(c.Benchmark.Tasks) != 1 || strings.TrimSpace(c.Benchmark.Tasks[0]) == "" {
-			return errors.New("replay requires exactly one benchmark.tasks ID")
-		}
 		if c.Execution.LoopDuration != "" || c.Execution.ArrivalsFile != "" || c.Execution.ArrivalRatePerMin != 0 {
 			return errors.New("replay forbids loops and arrival settings")
 		}

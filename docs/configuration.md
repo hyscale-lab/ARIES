@@ -19,7 +19,7 @@ fields from your chosen profile.
 | `overrides_file` | Optional resource/deadline overrides; `""` disables loading. |
 | `benchmark` | Benchmark type, checkout root, selected logical tasks, and supported evaluator options. |
 | `harness` | Live agent implementation, mode, placement, and optional tool/model settings. |
-| `replay` | Replay source occurrence and private caller placement; replaces live model and harness settings. |
+| `replay` | Replay source occurrence or complete run, with private caller placement; replaces live model and harness settings. |
 | `sandbox.deployment` | Task runtime placement. |
 | `bridge` | Paired tool adapter, managed deployment, and optional raw evidence retention. |
 | `runtime` | Model service backend and external/managed ownership. |
@@ -56,8 +56,8 @@ tasks, and finite timed loops. Each occurrence has a separate source directory
 and finalized trace. A loop stops admission at its deadline and finishes admitted
 work. Arrival schedules remain unsupported while recording; ordinary live runs
 are unchanged. Recording can still produce an incompatible trace; replay loading
-checks call inputs, outcomes, and timing before sandbox creation. Replay still
-selects one source occurrence, not a complete recorded run.
+checks call inputs, outcomes, and timing before sandbox creation. Replay selects
+one source occurrence or every recorded occurrence in a complete run.
 
 The flag is not valid with `aries setup PROFILE.json` or a replay profile.
 Duplicate flags, unknown flags, and extra positional arguments are rejected.
@@ -358,9 +358,10 @@ task's `task.toml`; no version-catalog or Go code change is required.
 
 ## Sandbox-call replay
 
-A replay profile selects one earlier task occurrence, not an arrival schedule.
-Create a new profile from the live profile that produced a `hermes-grpc` trace.
-Keep the same benchmark type, one matching logical task ID, versions file,
+A replay profile selects one earlier task occurrence or a complete recorded run,
+not an arrival schedule. Create a new profile from the live profile that produced
+a `hermes-grpc` trace. Keep the same benchmark type, catalog selection for all
+source logical tasks, versions file,
 overrides file, sandbox, and managed bridge settings. Remove top-level `model`,
 `harness`, and `runtime`. Add this fragment, with a source path relative to the
 new profile file:
@@ -377,7 +378,8 @@ new profile file:
 ```
 
 This is not a complete profile. Replace `SOURCE_RUN` with the source run
-directory. The source occurrence must contain `bridge/tool-calls.jsonl` and
+directory. To replay the complete run, set `source` to `../runs/SOURCE_RUN`.
+The source occurrence must contain `bridge/tool-calls.jsonl` and
 `bridge/runtime.json`; its parent must contain `run-result.json` with a
 matching evaluation. These three files are the only first-version source
 artifacts. The bridge log must contain complete request inputs and response
@@ -393,8 +395,11 @@ Recording metadata stores `run_id`, which must match the parent result even
 for an empty call log. Earlier nonempty sources without this field remain
 valid only when every call proves that run binding. An earlier empty source
 without a verifiable run binding is rejected before sandbox creation.
-The loader also checks the actual encoded plan against the caller's 512 MiB
-bound before sandbox creation. Each recorded `Exec` workdir must match the
+Whole-run preflight validates every indexed occurrence before any task sandbox
+starts. It checks the caller's 512 MiB encoded-plan bound, including global
+offsets and the serialized UTC replay origin. Admission reloads one bounded plan
+and rejects changed runtime metadata, call logs, or parent results. Each recorded
+`Exec` workdir must match the
 selected workdir, when explicit, and the resolved bridge endpoint workdir
 before the caller starts. Replay keeps the recorded command arguments.
 
@@ -406,7 +411,12 @@ bridge or sandbox settings. The caller reaches the private gRPC bridge and
 must not publish its unauthenticated endpoint or mount host paths. The
 first version supports `hermes-grpc` only, not SSH or Toolathlon.
 
-A replay profile requires exactly one `benchmark.tasks` ID and forbids
+`benchmark.tasks` selects the catalog for source validation, not the number of
+replay executions. Replay executes each source occurrence once, including
+repeated logical IDs and occurrences from source loops. It retains zero-call
+occurrences and their source grades. `execution.concurrency` bounds admitted
+runtime owners; queued work does not allocate a sandbox in advance. Replay
+profiles forbid
 `execution.loop_duration`, `execution.arrivals_file`, and
 `execution.arrival_rate_per_min`. It also forbids a live model, harness, or
 model runtime. Replay does not load a model credential, start a harness, run
@@ -454,8 +464,18 @@ The replay caller uses the task's positive agent timeout, or the positive
 `agent_timeout_seconds` override when present. If both are absent or zero,
 the default is 20 minutes. A negative timeout is rejected. The first call
 starts after sandbox preparation, bridge access, and caller readiness.
-Later calls keep their recorded start spacing; the caller also keeps the
-recorded wait after the last call. Network delay can shift the bridge's actual
+For multiple selected occurrences, the first ready caller with recorded calls
+starts one UTC replay clock. Later callers reuse it, with offsets from the earliest
+recorded `started_at` in the selected workload. Empty plans neither arm nor wait
+for that clock. A single selected occurrence keeps local timing after readiness.
+Late readiness does not move the common origin; overdue calls start as soon as
+possible. Private plan staging and network delay after readiness remain diagnostic.
+The caller also keeps the
+recorded wait after the last call. Replay does not reproduce sandbox lifecycle
+timing, the original live-sandbox count, or original resource contention.
+Positive caller stop, bridge revocation, and confirmed sandbox removal remain
+required. Source artifacts stay unchanged; replay writes a separate run directory.
+Network delay can shift the bridge's actual
 start time. After confirmed caller stop and bridge revocation, ARIES pairs
 private bridge audit records by the source audit sequence. This replay-only
 identifier is separate from `tool_call_id`. The result reports signed
