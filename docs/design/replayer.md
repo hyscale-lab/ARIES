@@ -202,12 +202,17 @@ Live source recording is a CLI intent, not a profile field. Both
 `aries PROFILE --record-for-replay` and `aries --record-for-replay PROFILE`
 enable it. Reject the flag on setup and replay profiles, duplicate or unknown
 flags, and extra positional arguments. Preserve a single profile named `setup`.
-Require Hermes gRPC, source provenance through existing wiring, and exactly one
-resolved selected task before sandbox or model-runtime execution. A selector can
-expand; validate the resolved catalog, not only selector count. Reject loops,
-repeated tasks, and arrival schedules only for recording runs. Do not use a
+Require Hermes gRPC and source provenance for every resolved selected task before
+sandbox or model-runtime execution. Recording supports multiple logical tasks,
+repeated task IDs, and finite timed loops. A selector can expand; retain every
+resolved task instead of selecting only the first. Direct logical task IDs keep
+their requested order and repeats. Each occurrence uses fresh benchmark and runtime
+owners and writes a separate source with its logical identity, image, revisions,
+and parent run binding. A loop closes admission at its deadline and finishes
+admitted work. Arrival schedules remain unsupported for recording. Do not use a
 separate benchmark-name list. Keep detailed call and timing checks in the replay
-loader; successful recording does not promise a replayable trace.
+loader; successful recording does not promise a replayable trace. Replay still
+selects one source occurrence; whole-run replay is not implemented.
 
 Ordinary live runs keep baseline audits, raw-log opt-in, limits, and all isolation
 and cleanup checks. They omit replay response enrichment, completion recording,

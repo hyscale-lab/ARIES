@@ -559,3 +559,111 @@ func TestSessionFinalizedRecordingLoadsForReplay(t *testing.T) {
 		t.Fatalf("loaded captured Exec = %+v", call)
 	}
 }
+
+func TestSessionFinalizedOccurrencesKeepIndependentSourceBindings(t *testing.T) {
+	const benchmark = "terminalbench2"
+	const revision = "pinned-revision"
+	const firstImage = "first-image:tag"
+	const secondImage = "second-image:tag"
+	const firstScore = 0.25
+	const secondScore = 0.75
+	const emptyScore = 1
+	workload := []struct {
+		logicalID, occurrenceID, image string
+		score                          float64
+		empty                          bool
+	}{
+		{logicalID: "first", occurrenceID: "first-001", image: firstImage, score: firstScore},
+		{logicalID: "second", occurrenceID: "second-002", image: secondImage, score: secondScore},
+		{logicalID: "first", occurrenceID: "first-003", image: firstImage, score: emptyScore, empty: true},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	service, base, sandbox := launchFixtureWith(t, "docker", "hermes-grpc", false)
+	runtime := &sessionReplayRuntime{launchRuntime: base, backend: sessionReplayBackend{commands: make(chan core.Command, len(workload))}}
+	service.options.Runtime = runtime
+	service.options.Launch.Config.OutputDir = t.TempDir()
+	service.options.CaptureReplay = true
+	service.options.BenchmarkType = benchmark
+	service.options.BenchmarkRevisions = map[string]string{"revision": revision}
+	if err := service.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	result := core.RunResult{RunID: sandbox.descriptor.RunID}
+	for _, occurrence := range workload {
+		bridge, err := service.NewSession(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		session := bridge.(*Session)
+		sandbox.descriptor.TaskID = occurrence.occurrenceID
+		sandbox.descriptor.SandboxID = "sandbox-" + occurrence.occurrenceID
+		sandbox.descriptor.RuntimeID = "runtime-" + occurrence.occurrenceID
+		session.RecordSource(occurrence.logicalID, occurrence.image)
+		session.RecordTask(occurrence.image)
+		endpoint, err := session.Start(ctx, sandbox)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !occurrence.empty {
+			connection, err := grpc.NewClient(endpoint.Address, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithNoProxy())
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, callErr := sandboxv1.NewSandboxClient(connection).Exec(ctx, &sandboxv1.ExecRequest{Script: "pwd"})
+			if err := errors.Join(callErr, connection.Close()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := session.CompleteHarness(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := session.Stop(ctx); err != nil {
+			t.Fatal(err)
+		}
+		result.Tasks = append(result.Tasks, core.TaskResult{TaskID: occurrence.occurrenceID, Evaluation: core.Evaluation{Status: core.StatusSucceeded, Score: occurrence.score}})
+	}
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "run-result.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for index, occurrence := range workload {
+		source := filepath.Join(root, occurrence.occurrenceID)
+		task := core.Task{ID: occurrence.logicalID, Environment: core.Environment{Image: occurrence.image, Workdir: sandbox.descriptor.Workdir}}
+		plan, err := bridgegrpc.LoadReplaySource(source, task, benchmark, service.options.BenchmarkRevisions)
+		if err != nil {
+			t.Fatalf("load %s: %v", occurrence.occurrenceID, err)
+		}
+		wantCalls := sessionReplayCallCount
+		if occurrence.empty {
+			wantCalls = 0
+		}
+		if plan.SourceRunID != result.RunID || plan.SourceTaskID != occurrence.occurrenceID || !reflect.DeepEqual(plan.Evaluation, result.Tasks[index].Evaluation) || len(plan.Calls) != wantCalls {
+			t.Fatalf("source %s binding = %+v", occurrence.occurrenceID, plan)
+		}
+		metadataData, err := os.ReadFile(filepath.Join(source, "bridge", "runtime.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var metadata sourceMetadata
+		if err := json.Unmarshal(metadataData, &metadata); err != nil {
+			t.Fatal(err)
+		}
+		if !metadata.ReplayReady || metadata.RunID != result.RunID || metadata.TaskID != occurrence.logicalID || metadata.Image != occurrence.image || metadata.SandboxID != "sandbox-"+occurrence.occurrenceID || metadata.BenchmarkRevisions["revision"] != revision || metadata.ToolCallsBytes == nil || metadata.ToolCallsSHA256 == "" {
+			t.Fatalf("source %s metadata = %+v", occurrence.occurrenceID, metadata)
+		}
+		if occurrence.empty {
+			digest := sha256.Sum256(nil)
+			if *metadata.ToolCallsBytes != 0 || metadata.ToolCallsSHA256 != hex.EncodeToString(digest[:]) || plan.FinalWait != 0 {
+				t.Fatalf("empty source binding = %+v, plan = %+v", metadata, plan)
+			}
+		}
+	}
+}
