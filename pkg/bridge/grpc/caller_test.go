@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	sandboxv1 "github.com/hyscale-lab/aries/pkg/bridge/grpc/v1"
@@ -256,7 +258,12 @@ func TestReplayCallsStopOnMismatchAndCancelInFlight(t *testing.T) {
 			client := replayEndpoint(t, server)
 			ctx, cancel := context.WithTimeout(context.Background(), replayTestDeadline)
 			defer cancel()
-			if err := ReplayCalls(ctx, replayTestDeadline, client, replay.Plan{Calls: []replay.Call{first, second, third}}); err == nil || !strings.Contains(err.Error(), "mismatch") {
+			plan := replay.Plan{Calls: []replay.Call{first, second, third}}
+			if mismatchOffset != 0 {
+				origin := time.Now().Add(-nextOffset)
+				plan.ReplayAt = &origin
+			}
+			if err := ReplayCalls(ctx, replayTestDeadline, client, plan); err == nil || !strings.Contains(err.Error(), "mismatch") {
 				t.Fatalf("changed response accepted: %v", err)
 			}
 			select {
@@ -562,12 +569,107 @@ func TestReplayCallsDefaultHashDriftKeepsStrictChecks(t *testing.T) {
 	response.Stdout = []byte("git hash bbb")
 }
 
+type scheduledReplayClient struct {
+	sandboxv1.SandboxClient
+	exec func(context.Context) (*sandboxv1.ExecResponse, error)
+}
+
+func (client scheduledReplayClient) Exec(ctx context.Context, _ *sandboxv1.ExecRequest, _ ...grpc.CallOption) (*sandboxv1.ExecResponse, error) {
+	return client.exec(ctx)
+}
+
+func TestReplayCallsShareOriginAcrossDelayedCallers(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const step = time.Second
+		const callTimeout = step
+		const finalWait = step
+		started := time.Now()
+		origin := started.Add(step)
+		data, err := json.Marshal(map[string]any{"replay_at": origin})
+		if err != nil {
+			t.Fatal(err)
+		}
+		tests := []struct {
+			name          string
+			ready, offset time.Duration
+			want          time.Duration
+		}{
+			{name: "first equal target", offset: step, want: step + step},
+			{name: "delayed equal target", ready: step, offset: step, want: step + step},
+			{name: "later global target", ready: step, offset: step + step, want: step + step + step},
+			{name: "overdue target", ready: step + step + step, offset: step, want: step + step + step},
+		}
+		done := make(chan struct{}, len(tests))
+		for _, test := range tests {
+			go func() {
+				defer func() { done <- struct{}{} }()
+				// JSON crosses the same process boundary as a private staged plan.
+				var plan replay.Plan
+				if err := json.Unmarshal(data, &plan); err != nil {
+					t.Error(err)
+					return
+				}
+				call := expectedReplayCall("Exec", &sandboxv1.ExecResponse{})
+				call.StartOffset = test.offset
+				plan.Calls, plan.FinalWait = []replay.Call{call}, finalWait
+				client := scheduledReplayClient{exec: func(ctx context.Context) (*sandboxv1.ExecResponse, error) {
+					if elapsed := time.Since(started); elapsed != test.want {
+						t.Errorf("%s: launch after %s, want %s", test.name, elapsed, test.want)
+					}
+					deadline, bounded := ctx.Deadline()
+					if !bounded || time.Until(deadline) != callTimeout {
+						t.Errorf("%s: RPC allowance = %s, bounded=%t", test.name, time.Until(deadline), bounded)
+					}
+					return &sandboxv1.ExecResponse{}, nil
+				}}
+				ctx, cancel := context.WithTimeout(context.Background(), replayTestDeadline+test.ready+test.offset)
+				defer cancel()
+				<-time.After(test.ready)
+				if err := ReplayCalls(ctx, callTimeout, client, plan); err != nil {
+					t.Error(err)
+				}
+				if elapsed := time.Since(started); elapsed != test.want+finalWait {
+					t.Errorf("%s: return after %s, want %s", test.name, elapsed, test.want+finalWait)
+				}
+			}()
+		}
+		for range tests {
+			<-done
+		}
+	})
+}
+
+func TestReplayCallsCancelSharedFutureSchedule(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const step = time.Second
+		origin := time.Now().Add(step + step)
+		ctx, cancel := context.WithTimeout(context.Background(), replayTestDeadline)
+		defer cancel()
+		go func() {
+			<-time.After(step)
+			cancel()
+		}()
+		client := scheduledReplayClient{exec: func(context.Context) (*sandboxv1.ExecResponse, error) {
+			t.Error("call launched after cancellation")
+			return &sandboxv1.ExecResponse{}, nil
+		}}
+		call := expectedReplayCall("Exec", &sandboxv1.ExecResponse{})
+		if err := ReplayCalls(ctx, step, client, replay.Plan{ReplayAt: &origin, Calls: []replay.Call{call}}); !errors.Is(err, context.Canceled) {
+			t.Fatalf("shared schedule cancellation = %v", err)
+		}
+	})
+}
+
 func TestReplayCallsRequireDeadlineAndSkipEmptyTrace(t *testing.T) {
 	if err := ReplayCalls(context.Background(), replayTestDeadline, nil, replay.Plan{Calls: []replay.Call{{Operation: "Exec"}}}); err == nil || !strings.Contains(err.Error(), "deadline") {
 		t.Fatalf("missing deadline accepted: %v", err)
 	}
-	if err := ReplayCalls(context.Background(), replayTestDeadline, nil, replay.Plan{FinalWait: replayTestDeadline}); err != nil {
-		t.Fatalf("empty trace waited or required client: %v", err)
+	zero := time.Time{}
+	future := time.Now().Add(replayTestDeadline)
+	for _, origin := range []*time.Time{nil, &zero, &future} {
+		if err := ReplayCalls(context.Background(), replayTestDeadline, nil, replay.Plan{ReplayAt: origin, FinalWait: replayTestDeadline}); err != nil {
+			t.Fatalf("empty trace waited or required client: %v", err)
+		}
 	}
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-replayTestDeadline))
 	defer cancel()
