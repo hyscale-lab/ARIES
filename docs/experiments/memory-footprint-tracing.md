@@ -18,6 +18,7 @@ guest progress and is an explicit experimental intervention.
 | Source | Purpose |
 | --- | --- |
 | [`scripts/tsb-firecracker/`](../../scripts/tsb-firecracker) | Exact Firecracker source delta and dependency manifest |
+| [`scripts/tsb-firecracker/fixtures/legacy-native/`](../../scripts/tsb-firecracker/fixtures/legacy-native) | Historical native validation helpers, mock servers and source checksums recovered before worker reset |
 | [`scripts/tsb-companion/`](../../scripts/tsb-companion) | VMM API client, decoder, capture/replay, tests and pinned kernel layouts |
 | [`scripts/tsb-pages/`](../../scripts/tsb-pages) | Observer server, VMM coordinator, suite preparation, boundary audits and comparisons |
 | [`scripts/tsb-access-dirty-plugin/`](../../scripts/tsb-access-dirty-plugin) | Native batch, model-occurrence and terminal lifecycle instrumentation |
