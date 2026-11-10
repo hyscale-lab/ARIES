@@ -223,6 +223,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		subagentsEnabled: manager.options.Common.SubagentsEnabled, maxConcurrentSubagents: manager.options.Common.MaxConcurrentSubagents,
 		compaction: manager.options.Compaction, extraBody: manager.options.ExtraBody, mcpServers: mcpServers,
 		noSandboxTools: request.NoSandboxTools, grpcTarget: grpcTarget,
+		skillDirs: harness.PluginSkillDirs(manager.options.Common.Plugins),
 	}, voiceSTT)
 	if err != nil {
 		return err
@@ -332,6 +333,15 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	if err := active.Artifacts.Write("config.yaml", active.Credentials.Redact(configuration)); err != nil {
 		return fail(fmt.Errorf("retain rendered Hermes config: %w", err))
 	}
+	if plugins := manager.options.Common.Plugins; len(plugins) > 0 {
+		record, err := harness.PluginRecord(plugins)
+		if err == nil {
+			err = active.Artifacts.Write("plugins.json", record)
+		}
+		if err != nil {
+			return fail(fmt.Errorf("retain Hermes plugin record: %w", err))
+		}
+	}
 	archive, err := manager.runtimeArchive(active, configuration)
 	if err != nil {
 		return fail(err)
@@ -340,6 +350,9 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	secrets := active.Credentials.Secrets()
 	if err := manager.runtime.Start(ctx, active.Occurrence, deploymentRequest, archive, secrets); err != nil {
 		return fail(err)
+	}
+	if err := harness.CheckPluginCommands(ctx, manager.runtime.Options.Deployment, active.ID, manager.options.Common.Plugins); err != nil {
+		return fail(fmt.Errorf("Hermes %w", err))
 	}
 	address, err := manager.runtime.Options.Deployment.Address(ctx, active.ID, gatewayPort)
 	if err != nil {
@@ -675,6 +688,11 @@ func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([
 		{Name: "run/aries/hermes", Mode: 0o700, UID: runtimeUID, GID: runtimeGID},
 		{Name: "run/aries/ssh", Mode: 0o700, UID: runtimeUID, GID: runtimeGID},
 		{Name: "run/aries/workspace", Mode: 0o755, UID: runtimeUID, GID: runtimeGID},
+	}
+	pluginDirectories, pluginFiles := harness.PluginArchive(manager.options.Common.Plugins, runtimeUID, runtimeGID)
+	directories = append(directories, pluginDirectories...)
+	for name, file := range pluginFiles {
+		files[name] = file
 	}
 	return harness.StageArchive(directories, files)
 }

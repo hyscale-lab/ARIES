@@ -269,6 +269,7 @@ ARIES supports configuring Model Context Protocol (`MCP`) servers for agent harn
   - `secret_env` maps target variables to host environment variable names. Raw secrets are rejected at validation time; rendered configurations persist `${NAME}` placeholders, and harness session startup stages credentials into private key files (`0600`) exported by in-container launcher scripts rather than exposing them in container environment metadata.
   - Both `env` and `secret_env` are supported for command servers and rejected for `url` servers.
 - `transport` applies only to `url` servers; `timeout_seconds` must not be negative.
+- `cwd` (an absolute, clean path) applies only to command servers and `headers` only to `url` servers. Headers are not secret: a header named like a credential (`Authorization`, `Cookie`, `X-API-Key`, and similar) is rejected.
 
 Each harness scrubs the `secret_env` values from everything it saves (session exports, logs, the retained config) together with its own keys. A harness's `RedactEnv` option names further host variables whose values the harness is never given but scrubs the same way: a benchmark's credentials that reach the sandbox, where the agent can read them (the harness wiring fills it from Toolathlon's `credentials_env` and `credential_files_env`). A multi-line or `JSON` value is scrubbed by its lines and string fields as well (`core.SecretParts`).
 
@@ -291,6 +292,80 @@ and each harness puts them ahead of the profile's servers when it starts
 
 MCP tools do not automatically pass through the ToolBridge or inherit
 task-sandbox isolation.
+
+## Portable plugins
+
+`harness.plugins` selects packages in the [Agent Plugins 1.0.0](https://agent-plugins.org/specification)
+format, whose two portable component types are Agent Skills and MCP servers.
+Native plugins (OpenClaw's JavaScript, Hermes's Python) are not portable and
+are not handled here. Configuration is in the
+[configuration guide](../configuration.md#portable-plugins).
+
+`agentplugin.Load` reads one package into a `harness.Plugin`:
+
+- the manifest and `mcp.json` are checked against the specification's closed
+  schemas, and the manifest name must equal the catalog name;
+- skills are the immediate `skills/<name>/SKILL.md` files whose front matter
+  satisfies the Agent Skills rules (the name matches its directory, a
+  description is present);
+- each `mcp.json` server becomes a `core.MCPServerConfig` for the runtime:
+  - a `./` command becomes a path under the staged root, and a bare command
+    stays as it is;
+  - `${PLUGIN_ROOT}` and `${PLUGIN_DATA}` are expanded once in `args`, `env`
+    and `cwd`;
+  - the two variables are set in the server's environment;
+  - `cwd` defaults to the plugin root.
+
+Where the specification lets a client skip an invalid skill or server, ARIES
+rejects the package. Symbolic links and any other non-regular file are
+refused, and the package is bounded at 4096 files and 32 MiB. A `${...}`
+reference that remains after expansion is refused, because both harnesses
+expand `${NAME}` in their configuration from an environment that holds
+ARIES's credentials. The tree hash covers every path, its executable bit and
+its content.
+
+Preparation checks out each pinned repository under `.cache/plugins/` (an
+exact shallow checkout, verified clean) and loads every selected package. The
+harness wiring loads them again for each occurrence:
+
+- it applies `secret_env` to the package's command servers;
+- it appends those servers to the profile's `harness.mcp_servers`, refusing a
+  repeated name, so the existing credential staging, launcher exports and
+  redaction cover them;
+- it passes the packages to the native manager.
+
+Each native manager:
+
+- stages the package files read-only under `/run/aries/plugins/<name>`, owned
+  by the harness user, with an empty private `/run/aries/plugin-data/<name>`,
+  through the same archive as its configuration;
+- points its native skill setting at the package's `skills` directory: OpenClaw
+  `skills.load.extraDirs`, and Hermes `skills.external_dirs` plus the `skills`
+  toolset in `platform_toolsets.api_server`;
+- after the runtime starts and before readiness, confirms through
+  `Deployment.Exec`, with each server's own environment and working directory,
+  that every plugin command resolves in the image (a bare name on the server's
+  `PATH`, a staged path as an executable file); otherwise the start fails
+  with that reason, instead of the run proceeding without the server's tools;
+- writes `plugins.json` with each package's pin, tree hash, staged size, skills
+  and servers.
+
+The harnesses expose the same package differently:
+
+- **OpenClaw** offers a plugin's MCP tools directly, as
+  `<server>__<tool>`, through the existing `bundle-mcp` sandbox allowance.
+  - It lists a skill's name, description and location in the system prompt.
+  - The location is a path in the harness container, so the agent cannot open
+    the skill's body in ARIES's sessions, which run in sandbox mode: `read` is denied, `exec`
+    runs in the task sandbox, and the bridge suppresses OpenClaw's skill
+    upload into the sandbox.
+  - OpenClaw's own bundled skills are listed the same way.
+- **Hermes** holds MCP tools behind its tool search (`tools.tool_search`,
+  default `auto` at the pinned version).
+  - The model sees `tool_search`, `tool_describe` and `tool_call`, and the
+    bridge's description lists `mcp__<server>__<tool>`.
+  - Skills are read with `skills_list` and `skill_view`, which run in the
+    harness container.
 
 ## Shared mechanics and connectivity
 

@@ -30,7 +30,7 @@ func commandWiring() app.Wiring {
 		SetupBenchmark:     setupBenchmark,
 		LoadBenchmark:      loadBenchmark,
 		PullImages:         pullImages,
-		BuildHarnessImage:  buildHarnessImage,
+		PrepareHarness:     prepareHarness,
 		NewHarness:         newHarness,
 		NewInfrastructure:  newInfrastructure,
 	}
@@ -372,10 +372,14 @@ func apptainerImages(cfg config.Config, images []string) []string {
 	return kept
 }
 
-// buildHarnessImage builds the image the harness runs when it is derived from
-// the pinned one: Hermes runs its pinned image plus hermes-otel. It uses the
-// daemon pullImages prepared the base on.
-func buildHarnessImage(ctx context.Context, cfg config.Config) error {
+// prepareHarness prepares the harness's pinned inputs: the profile's plugin
+// packages, and the image the harness runs when it is derived from the pinned
+// one (Hermes runs its pinned image plus hermes-otel), built on the daemon
+// pullImages prepared the base on.
+func prepareHarness(ctx context.Context, cfg config.Config) error {
+	if err := harnesswiring.PreparePlugins(ctx, cfg); err != nil {
+		return err
+	}
 	if cfg.Harness.Type != "hermes" {
 		return nil
 	}
