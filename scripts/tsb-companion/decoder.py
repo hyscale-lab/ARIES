@@ -192,7 +192,7 @@ class GuestDecoder:
   with self.stage('selection'):
    sample=None;sample_gpas=set(self.config.get('replay_sample_gpas',[]))
    if self.config.get('enable_resident_sampling') and 'replay_sample_gpas' not in self.config:
-    from compression import ResidentSample
+    from sampling import ResidentSample
     sample=ResidentSample(self,reading);sample_gpas=sample.census()
   allwanted=wanted|sample_gpas
   gpa_hash=lambda values:hashlib.sha256(b''.join(struct.pack('<Q',g) for g in sorted(values))).hexdigest()
@@ -312,7 +312,6 @@ class GuestDecoder:
   sample=bundle['sample']
   if sample:
    write('resident-census.json',{'resident_population':sample.counts,'sample_design':sample.design,'selection':sample.selected})
-   if self.config.get('enable_compression',False):sample.collect(bundle['allrows'],out)
   if bundle['sample_gpas']:
    with gzip.open(out/'resident-sample.jsonl.gz','wt',compresslevel=1) as f:
     for row in bundle['allrows']:

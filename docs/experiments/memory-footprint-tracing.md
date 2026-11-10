@@ -18,24 +18,19 @@ guest progress and is an explicit experimental intervention.
 | Source | Purpose |
 | --- | --- |
 | [`scripts/tsb-firecracker/`](../../scripts/tsb-firecracker) | Exact Firecracker source delta and dependency manifest |
-| [`scripts/tsb-firecracker/fixtures/legacy-native/`](../../scripts/tsb-firecracker/fixtures/legacy-native) | Historical native validation helpers, mock servers and source checksums recovered before worker reset |
 | [`scripts/tsb-companion/`](../../scripts/tsb-companion) | VMM API client, decoder, capture/replay, tests and pinned kernel layouts |
+| [`scripts/tsb-companion/fixtures/`](../../scripts/tsb-companion/fixtures) | Current known-object guest fixture and native companion validation driver |
 | [`scripts/tsb-pages/`](../../scripts/tsb-pages) | Observer server, VMM coordinator, suite preparation, boundary audits and comparisons |
 | [`scripts/tsb-access-dirty-plugin/`](../../scripts/tsb-access-dirty-plugin) | Native batch, model-occurrence and terminal lifecycle instrumentation |
-| [`scripts/tsb-steps/`](../../scripts/tsb-steps) | Exact OpenClaw source patch, dependency manifest and metadata diagnostics |
+| [`scripts/tsb-steps/`](../../scripts/tsb-steps) | Exact OpenClaw source patch, dependency manifest and native build instructions |
 | [`pkg/harness/openclaw/step_observation.go`](../../pkg/harness/openclaw/step_observation.go) | Plugin staging and host-owned post-stop observer-release barrier |
 | [`pkg/deployment/vhive/memory.go`](../../pkg/deployment/vhive/memory.go) | Separate process-mapping observations for native VMs |
-| [`profiles/experiments/tsb-memory-footprint/`](../../profiles/experiments/tsb-memory-footprint), [`tsb-tool-pages/`](../../profiles/experiments/tsb-tool-pages) | Earlier research profile templates; adapt worker paths and runtime images before reuse |
+| [`profiles/experiments/tsb-tool-pages/fix-git.json`](../../profiles/experiments/tsb-tool-pages/fix-git.json) | Current profile template with native CPU/RAM; adapt its worker paths, image and observer address |
 
-`scripts/tsb-attribution`, `tsb-access`, `tsb-pages-plugin` and `tsb-uffd` preserve
-earlier external host-memory, idle-page and restore-fault approaches. They have
-different consistency and measurement contracts. They are not substitutes for
-the VMM-owned backend's generation-bound capture protocol.
-
-The historical idle-only observer lacks the current host stop protocol's
-`/session/abort` acknowledgement. Its old profiles therefore block isolation with
-the recovered harness. Adapt that release contract before reusing those profiles;
-the VMM-owned configuration implements the required bounded release barrier.
+The maintained collection path is the VMM-owned backend. Earlier standalone
+host-memory, idle-page and restore-fault collectors and their study guides were
+removed; their sources remain in Git history at `b0c358a`. They are not required
+to build, collect or replay the current tracer.
 
 ## Firecracker dependency
 
@@ -107,6 +102,11 @@ The separate firecracker-containerd checkout inspected on `amd218` was clean at
 not replace ARIES's Go module pin or the ordinary
 [vHive worker setup contract](../implementation/vhive.md#prepare-the-worker).
 
+[`stock-firecracker-sdk.patch`](../../scripts/tsb-firecracker/stock-firecracker-sdk.patch)
+is a separate optional snapshot-load serialization fix for the native Go SDK:
+it omits the container-specific snapshot field from Firecracker's JSON request.
+It is not needed for fresh-boot tracing and preparation does not install it.
+
 ## OpenClaw dependency
 
 The native patch is based on upstream OpenClaw commit
@@ -120,7 +120,7 @@ the native diagnostic and background-process metadata changes.
 Apply it once to a clean checkout of that base, using ordinary `git apply
 --check` followed by `git apply`. Use that checkout's pinned Node and package
 manager, frozen lockfile, authored tests and upstream Dockerfile. The existing
-[Step diagnostics README](../../scripts/tsb-steps/README.md) documents the native
+[OpenClaw patch build guide](../../scripts/tsb-steps/README.md) documents the native
 commands and instrumentation limits. Select the rebuilt image explicitly in
 the experiment's versions file; the unmodified published OpenClaw image does
 not gain this patch from ARIES plugin staging.
@@ -130,7 +130,7 @@ Before new measurements, validate the configured native hooks, concurrent and
 sequential tool batches, terminal release, cancellation and evaluation isolation
 with deterministic fixtures on the chosen worker.
 
-## Configuration without historical run directories
+## Configuration
 
 Use a dedicated KVM-capable worker with the native
 [vHive prerequisites](../implementation/vhive.md#prepare-the-worker). The
@@ -165,7 +165,11 @@ The ELF must hash to the pinned layout profile; a release filename is
 insufficient. The kernel binary is not included. A different kernel requires
 fresh validated layouts. See the
 [layout provenance](../../scripts/tsb-companion/layouts/linux-5.10.239/README.md).
-No payload compression is enabled by the generated configuration.
+The retained [layout tools](../../scripts/tsb-companion/README.md#kernel-layout-inputs)
+generate and decode base offsets and validate VMCOREINFO overlap. The recovered
+probe does not regenerate the owner/name extensions; those pinned profiles
+retain their separate validation provenance. No payload compression is enabled
+by the generated configuration.
 
 `scripts/tsb-pages/suite.py --prepare` accepts `--selection-file`,
 `--access-dirty-config` and `--attribution-config` and freezes their source/config
@@ -189,11 +193,6 @@ bounded cancellation/release path instead of completing an abandoned epoch.
 
 See [access/dirty epochs](tsb-access-dirty.md) for the complete protocol and
 [observer timeouts](tsb-observer-timeouts.md) for task-specific waiting behavior.
-The earlier [idle-page suite](tsb-tool-pages-suite.md),
-[host-side attribution](tsb-page-attribution.md) and
-[memory investigation](tsb-memory-footprint.md) are historical method references.
-Their private evidence paths and past paid-run decisions are not prerequisites
-or authorization for a new run.
 
 ## Attribution detail and cost
 
@@ -283,7 +282,7 @@ Compare detail modes only with their selection/sample, layout, epoch and source
 bindings visible. Aggregate mode tables describe observed records and do not
 calculate unmatched mode speedups. Suite summaries keep host collection, native
 bit work and attribution costs separate; VMM residency denominators use validated
-initial RAM regions and immutable epoch census rather than legacy slot files.
+initial RAM regions and immutable epoch census.
 The window-footprint/endpoint-residency ratio can exceed one when pages disappear
 during the window; it is not clamped or interpreted as simultaneous residency.
 
@@ -297,10 +296,7 @@ make test
 python3 -m unittest discover -s scripts/tsb-pages -p 'test_*.py'
 python3 -m unittest discover -s scripts/tsb-companion -p 'test_*.py'
 python3 -m unittest discover -s scripts/tsb-firecracker -p 'test_*.py'
-python3 -m unittest discover -s scripts/tsb-attribution -p 'test_*.py'
 node --test scripts/tsb-access-dirty-plugin/test*.mjs
-node --test scripts/tsb-pages-plugin/test.mjs
-node --test scripts/tsb-steps/test.mjs
 ```
 
 The local fixtures use simulated APIs, native hook events and disposable files.
@@ -309,9 +305,8 @@ failed-start ownership, signal cancellation and compact evidence consistency.
 Compact readers reject overlapping access states, incomplete VMM partitions,
 contradictory unknown reasons, dirty unions or retained summary counts even when
 individual file hashes match. Suite progress uses the initial VMM arm record
-for authoritative RAM regions and generation rather than legacy slot-intercept
-files. The compact producer reconstructs the native export's omitted
-all-samples-absent pages per RAM region, without including GPA holes or bitmap
+for authoritative RAM regions and generation. The compact producer reconstructs
+the native export's omitted all-samples-absent pages per RAM region, without including GPA holes or bitmap
 padding. This absence mask is distinct from final census residency. Suite
 session unions remain unavailable across different VM incarnations.
 These checks do not change the original Firecracker source pin or extend
@@ -341,17 +336,14 @@ pause policy, GPA/sample selection and native runtime identity explicit. Report
 workload delay, boundary waits, CPU and memory separately. Compare the baseline
 and optimized native trees explicitly when assessing the overlay.
 
-The recovered baseline came from `/home/nehalem/aries` on CloudLab workers
-`amd205` and `amd218`; their latest principal observer/plugin/suite source hashes
-matched. The ignored worker artifact
-`runs/tsb-access-dirty-001/rerun-lifecycle-implementation-001/source-final-001.tar.gz`
-provided the final harness/runner/lifecycle test snapshot. The OpenClaw patch was
-regenerated from the eight live modified files because the older saved patch
-was not an exact restoration. The Firecracker checkout was clean at the
-published pin, and all 29 released companion files matched that commit's
-`tools/aries-attribution` blobs. Older worker variants remain distinct provenance;
-they are not silently mixed into the selected current implementation. Host
-identity, lifecycle acknowledgement, cancellation and compact-data consistency
-checks were strengthened after recovery; the exact native Firecracker delta
-and original dependency pins remain the preserved reference. A separately
-versioned optimization overlay, when selected, is distinct from that reference.
+The recovered baseline came from CloudLab workers `amd205` and `amd218`;
+their principal observer/plugin/suite source hashes matched. The final worker
+source snapshot supplied the harness/runner/lifecycle tests. The OpenClaw patch
+was regenerated from its eight modified files, and the clean Firecracker
+checkout matched the published pin. The original 29 companion files matched
+that commit's `tools/aries-attribution` blobs. Current host identity, lifecycle,
+compact-data validation, attribution detail and cost reporting include later
+repository changes. The exact original Firecracker delta and dependency pins
+remain the recovery reference; the separately versioned optimization overlay
+is explicit in its manifest. No private worker artifact is required as a build
+or collection input.

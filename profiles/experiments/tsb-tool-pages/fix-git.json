@@ -1,7 +1,7 @@
 {
   "name": "tsb-tool-pages-fix-git",
   "versions_file": "../../../configs/versions.json",
-  "overrides_file": "fix-git-overrides.json",
+  "overrides_file": "",
   "execution": {
     "concurrency": 1
   },
@@ -21,7 +21,7 @@
       }
     },
     "step_observation": {
-      "plugin_dir": "/home/nehalem/aries/scripts/tsb-pages-plugin",
+      "plugin_dir": "/home/nehalem/aries/scripts/tsb-access-dirty-plugin",
       "observer_url": "http://172.17.0.1:18181"
     }
   },
@@ -34,9 +34,7 @@
         "snapshotter": "devmapper",
         "io_dir": "/run/firecracker-containerd/aries-io",
         "cni_network": "fcnet",
-        "idle_mode": "persistent",
-        "vcpus": 2,
-        "memory_mb": 4096
+        "idle_mode": "persistent"
       }
     }
   },

@@ -2,7 +2,9 @@ import ast
 import io
 import gzip
 import json
+import sys
 from pathlib import Path
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"tsb-companion"))
 import tempfile
 import unittest
 from unittest.mock import Mock, patch

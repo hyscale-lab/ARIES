@@ -15,7 +15,7 @@
   Inspect `runs/<run-id>/run-result.json`: harness outcome, evaluation score,
   confirmed isolation, task cleanup/errors, and shared infrastructure observation
   and cleanup/errors. Exit status alone is insufficient.
-- For memory tracing, follow the selected [backend protocol and source pins](../docs/experiments/memory-footprint-tracing.md);
+- For VMM-owned memory tracing, follow the [protocol and source pins](../docs/experiments/memory-footprint-tracing.md);
   validate native boundaries, acknowledgement identities and cancellation
   separately from page coverage. Reject contradictory compact partitions, unions
   or counts even when source hashes match. Keep native bit work, host blocking,

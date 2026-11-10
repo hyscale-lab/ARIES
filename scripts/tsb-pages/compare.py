@@ -6,8 +6,12 @@ import hashlib
 import html
 import json
 import os
+import sys
 import time
 from pathlib import Path
+
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"tsb-companion"))
+from compact import expand_reading
 
 
 def elapsed_ms(begin, end):
@@ -86,7 +90,6 @@ def _metrics(before_count, after_count, intersection):
 
 
 def normalize(row, index, artifact_root=None):
-    from compact import expand_reading
     raw=row['reading']
     directory=None
     if artifact_root is not None and raw.get('vm_generation') and 'accessed_gpas' not in raw:
@@ -250,7 +253,6 @@ def render(summary):
     for a in range(n):
         baseline_rows.append('<tr><th>'+str(a+1)+'</th>'+''.join('<td>'+('—' if p['jaccard'] is None else f"{p['jaccard']:.3f}")+'</td>' for p in baseline['pairs'][a*n:(a+1)*n])+'</tr>')
     baseline_html='<h2>Original matrix: observed touched only</h2><div class="scroll"><table><tr><th>From / to</th>'+''.join('<th>'+str(i+1)+'</th>' for i in range(n))+'</tr>'+''.join(baseline_rows)+'</table></div>'
-    methodology=Path(__file__).with_name('methodology.html').read_text()
     coverage=summary['coverage']
     if summary['comparison_unit']=='llm_reasoning_step':
         notice=('<p><strong>ONE MATRIX ROW PER LLM REASONING STEP.</strong> '+str(coverage['native_member_calls'])+' native tool calls belong to '+str(n)+' LLM tool-request batches. Each bitmap arm precedes native harness preparation, covers all requested calls and their expanded operations regardless of sequential/parallel scheduling, and ends when every expected native result is ready for the LLM. There are no resets inside an LLM step. Per-call page sets were not measured.</p><p>Batch registration and expected-result completion do not certify complete or exclusively causal page coverage. Guest-kernel, background and host/VMM activity is included.</p>')
@@ -265,7 +267,7 @@ def render(summary):
            'Historical busy-period page comparison' if summary['mode']=='group' else 'Per-step observed page comparison')
     unit_description=('Session → user/harness turn → LLM reasoning step → native calls and bridge operations. Each row and matrix index is one LLM tool-request batch; native IDs/times remain separate.' if summary['comparison_unit']=='llm_reasoning_step' else
                       'Historical observation units retain their original schema and membership; see comparison_unit.')
-    return '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'+title+'</title><style>body{font:15px system-ui;margin:32px;color:#17232b}table{border-collapse:collapse}td,th{padding:8px;border:1px solid #ccd6db;text-align:left}.scroll{overflow:auto}li{margin:8px 0}h1{font-size:26px}</style><h1>'+title+'</h1>'+warning+'<p>'+unit_description+'</p><ul>'+''.join('<li>'+e(v)+'</li>' for v in summary['meaning'])+'</ul>'+methodology+'<h2>Observed intervals</h2><div class="scroll"><table><tr>'+''.join('<th>'+h+'</th>' for h in headers)+'</tr>'+''.join(records)+'</table></div><h2>Jaccard matrix: all unknown pages counted as touched</h2><p>Row → column. Hover for intersection, new, lost and union page counts. — means undefined or incomparable.</p><div class="scroll"><table><tr><th>From / to</th>'+''.join('<th>'+str(i+1)+'</th>' for i in range(n))+'</tr>'+''.join(matrix)+'</table></div>'+baseline_html+'<p>Raw GPA lists, unknown reasons and directional pair metrics are retained in the sibling JSON summary and source JSONL.</p></html>'
+    return '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'+title+'</title><style>body{font:15px system-ui;margin:32px;color:#17232b}table{border-collapse:collapse}td,th{padding:8px;border:1px solid #ccd6db;text-align:left}.scroll{overflow:auto}li{margin:8px 0}h1{font-size:26px}</style><h1>'+title+'</h1>'+warning+'<p>'+unit_description+'</p><ul>'+''.join('<li>'+e(v)+'</li>' for v in summary['meaning'])+'</ul><h2>Observed intervals</h2><div class="scroll"><table><tr>'+''.join('<th>'+h+'</th>' for h in headers)+'</tr>'+''.join(records)+'</table></div><h2>Jaccard matrix: all unknown pages counted as touched</h2><p>Row → column. Hover for intersection, new, lost and union page counts. — means undefined or incomparable.</p><div class="scroll"><table><tr><th>From / to</th>'+''.join('<th>'+str(i+1)+'</th>' for i in range(n))+'</tr>'+''.join(matrix)+'</table></div>'+baseline_html+'<p>Raw GPA lists, unknown reasons and directional pair metrics are retained in the sibling JSON summary and source JSONL.</p></html>'
 
 
 def _file_sha256(path):

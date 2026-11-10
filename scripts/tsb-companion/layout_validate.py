@@ -19,6 +19,7 @@ for line in v.splitlines():
   actual=x['layout']['pageflags'].get(name)
   if name=='PG_head_mask':actual=1<<x['layout']['pageflags']['PG_head']
  if actual is not None:checks.append({'vmcoreinfo_key':kind+'('+name+')','vmcoreinfo_value':value,'generated_value':actual,'matches':value==actual})
-result={'checks':checks,'all_match':all(c['matches'] for c in checks),'scope':'Only fields exposed by VMCOREINFO; remaining fields require source and runtime checks.'}
+result={'checks':checks,'all_match':bool(checks) and all(c['matches'] for c in checks),'scope':'Only fields exposed by VMCOREINFO; remaining fields require source and runtime checks.'}
 args.output.write_text(json.dumps(result,indent=2)+'\n')
 print(json.dumps(result,indent=2))
+if not result['all_match']:raise SystemExit(1)

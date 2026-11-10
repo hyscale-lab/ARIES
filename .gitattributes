@@ -3,5 +3,3 @@ traces/*.csv filter=lfs diff=lfs merge=lfs -text
 scripts/tsb-firecracker/firecracker-tracer.patch -whitespace
 scripts/tsb-firecracker/overhead.patch -whitespace
 scripts/tsb-steps/native-openclaw.patch -whitespace
-# Keep the checksummed native fixture's original trailing blank line.
-scripts/tsb-firecracker/fixtures/legacy-native/idle-truth/idle_fixture.py whitespace=-blank-at-eof

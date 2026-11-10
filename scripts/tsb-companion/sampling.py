@@ -10,5 +10,3 @@ class ResidentSample:
   if len({s['gpa'] for s in self.selected})!=len(self.selected) or len({s['host_pfn'] for s in self.selected})!=len(self.selected):
    raise RuntimeError('invalid VMM resident sample identities')
   return {s['gpa'] for s in self.selected}
- def collect(self,*args):
-  raise RuntimeError('payload compression is outside the capture companion')

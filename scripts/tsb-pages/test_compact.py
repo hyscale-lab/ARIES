@@ -1,20 +1,15 @@
 """Contradictory retained evidence cannot pass individual bitmap hash checks."""
 import copy
 import hashlib
-import importlib.util
+import sys
 from pathlib import Path
 import tempfile
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-DECODERS = []
-for directory in ("tsb-pages", "tsb-companion"):
-    spec = importlib.util.spec_from_file_location(directory.replace("-", "_"),
-        ROOT / "scripts" / directory / "compact.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    DECODERS.append((directory, module.expand_reading))
+sys.path.insert(0,str(ROOT/"scripts/tsb-companion"))
+from compact import expand_reading
 
 
 class CompactTests(unittest.TestCase):
@@ -35,23 +30,20 @@ class CompactTests(unittest.TestCase):
                 "observed_pages": 1, "unknown_pages": 1, "dirty_pages": 2, "counted_pages": 3}
 
     def reject(self, reading, reason):
-        for name, expand in DECODERS:
-            with self.subTest(decoder=name), self.assertRaisesRegex(ValueError, reason):
-                expand(reading)
+        with self.assertRaisesRegex(ValueError, reason):
+            expand_reading(reading)
 
     def test_valid_partition_and_conservative_union_preserve_raw_input(self):
         with tempfile.TemporaryDirectory() as temporary:
             reading = self.reading(Path(temporary)); before = copy.deepcopy(reading)
-            for name, expand in DECODERS:
-                with self.subTest(decoder=name):
-                    result = expand(reading)
-                    self.assertEqual(result["accessed_gpas"], [0])
-                    self.assertEqual(result["idle_gpas"], [8192])
-                    self.assertEqual(result["unknown_gpas"], {"4096": "not-on-lru"})
-                    self.assertEqual(result["dirty_gpas"], [0, 8192])
-                    self.assertEqual(result["additional_access_sources"],
-                        {"0": ["vmm_potential_write"], "8192": ["kvm_dirty"]})
-                    self.assertEqual(reading, before)
+            result = expand_reading(reading)
+            self.assertEqual(result["accessed_gpas"], [0])
+            self.assertEqual(result["idle_gpas"], [8192])
+            self.assertEqual(result["unknown_gpas"], {"4096": "not-on-lru"})
+            self.assertEqual(result["dirty_gpas"], [0, 8192])
+            self.assertEqual(result["additional_access_sources"],
+                {"0": ["vmm_potential_write"], "8192": ["kvm_dirty"]})
+            self.assertEqual(reading, before)
 
     def test_individually_hashed_contradictory_masks_are_rejected(self):
         cases = [({"combined_dirty": 4}, "dirty union"),
@@ -86,9 +78,7 @@ class CompactTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             reading = self.reading(Path(temporary)); reading.pop("schema")
             del reading["regions"][0]["masks"]["access_absent"]
-            for name, expand in DECODERS:
-                with self.subTest(decoder=name):
-                    self.assertEqual(expand(reading)["unknown_gpas"], {"4096": "not-on-lru"})
+            self.assertEqual(expand_reading(reading)["unknown_gpas"], {"4096": "not-on-lru"})
 
     def test_multiple_ram_regions_keep_high_gpas_and_absence_separate(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -98,14 +88,12 @@ class CompactTests(unittest.TestCase):
             reading["regions"].append(high)
             for key in ("observed_pages", "unknown_pages", "dirty_pages", "counted_pages"):
                 reading[key] *= 2
-            for name, expand in DECODERS:
-                with self.subTest(decoder=name):
-                    result = expand(reading)
-                    self.assertEqual(result["accessed_gpas"], [0, 1 << 32])
-                    self.assertEqual(result["dirty_gpas"], [0, 8192, 1 << 32, (1 << 32) + 8192])
-                    self.assertEqual(result["unknown_gpas"],
-                        {"4096": "not-on-lru", str((1 << 32) + 4096): "not-on-lru"})
-                    self.assertNotIn(12288, result["dirty_gpas"])
+            result = expand_reading(reading)
+            self.assertEqual(result["accessed_gpas"], [0, 1 << 32])
+            self.assertEqual(result["dirty_gpas"], [0, 8192, 1 << 32, (1 << 32) + 8192])
+            self.assertEqual(result["unknown_gpas"],
+                {"4096": "not-on-lru", str((1 << 32) + 4096): "not-on-lru"})
+            self.assertNotIn(12288, result["dirty_gpas"])
 
     def test_old_batch_wrapper_does_not_bypass_native_partition_checks(self):
         with tempfile.TemporaryDirectory() as temporary:

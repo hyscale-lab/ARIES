@@ -83,13 +83,11 @@ def runtime_files():
     files = {REPO / "bin" / name for name in ("aries", "aries-bridge", "aries-echo", "aries-ssh-client")}
     files.update((TEMPLATE, VERSIONS))
     files.update(Path(__file__).parent / name for name in (
-        "suite.py", "suite_report.py", "overhead.py", "serve.py", "batches.py", "idle.py", "run.py", "compare.py", "boundaries.py", "methodology.html", "access_dirty.py", "compact.py", "vmm_observer.py", "model_occurrences.py"))
-    files.update((REPO / "scripts/tsb-attribution").glob("*.py"))
-    plugin = REPO / "scripts/tsb-pages-plugin"
-    files.update(p for p in plugin.rglob("*") if p.is_file()
-                 and not any(part in ("node_modules", "__pycache__", ".git") for part in p.parts))
-    files.update(p for p in (REPO / "scripts/tsb-access-dirty-plugin").rglob("*") if p.is_file()
-                 and not any(part in ("node_modules", "__pycache__", ".git") for part in p.parts))
+        "suite.py", "suite_report.py", "overhead.py", "serve.py", "batches.py", "compare.py",
+        "boundaries.py", "vmm_observer.py", "model_occurrences.py"))
+    for name in ("tsb-companion", "tsb-access-dirty-plugin"):
+        files.update(p for p in (REPO / "scripts" / name).rglob("*") if p.is_file()
+                     and not any(part in ("node_modules", "__pycache__", ".git") for part in p.parts))
     return {str(p.relative_to(REPO)): digest(p) for p in sorted(files)}
 
 
@@ -154,6 +152,7 @@ def profile_for(record, root, port):
     profile["benchmark"]["root"] = str(DATASET)
     profile["benchmark"]["tasks"] = [record["task_id"]]
     profile["harness"]["step_observation"]["observer_url"] = "http://172.17.0.1:" + str(port)
+    profile["harness"]["step_observation"]["plugin_dir"] = str(REPO / "scripts/tsb-access-dirty-plugin")
     # Task environment CPU/RAM are passed by the native benchmark, with no override.
     profile["sandbox"]["deployment"]["vhive"].pop("vcpus", None)
     profile["sandbox"]["deployment"]["vhive"].pop("memory_mb", None)
@@ -288,6 +287,7 @@ def validate_observer_override(record):
 
 def prepare(args):
     root = inside_repo(args.root)
+    config = read_vmm_config(getattr(args, "access_dirty_config", None))
     root.mkdir(parents=True, exist_ok=True)
     state_dir = root / "state"
     state_dir.mkdir(exist_ok=True)
@@ -301,39 +301,35 @@ def prepare(args):
     selection = selection_for(getattr(args, "selection_file", None), records)
     selected = [r for r in records if r["shard_index"] == args.shard_index
                 and r["task_id"] in selection["task_ids"]]
-    access_dirty = None
-    if getattr(args, "access_dirty_config", None):
-        config = read_json(inside_repo(args.access_dirty_config))
-        rstan_observer_allowance(config)
-        detailed = config.get("detailed_task_ids", ["fix-git", "prove-plus-comm", "overfull-hbox", "rstan-to-pystan", "schemelike-metacircular-eval"])
-        if len(detailed) != len(set(detailed)) or not set(detailed) <= {r["task_id"] for r in records}:
-            raise ValueError("invalid detailed task selection")
-        required_detail = {"fix-git", "prove-plus-comm", "overfull-hbox", "rstan-to-pystan", "schemelike-metacircular-eval"}
-        if set(detailed) != required_detail:
-            raise ValueError("detailed attribution is scoped to the five approved tasks")
-        if any(r["task_id"] in required_detail for r in selected) and not getattr(args, "attribution_config", None):
-            raise ValueError("selected detailed tasks require attribution config")
-        config["detailed_task_ids"] = detailed
-        agent_timeouts = config.get("agent_timeout_overrides", {"rstan-to-pystan": 5400})
-        catalog_ids = {record["task_id"] for record in records}
-        if (not isinstance(agent_timeouts, dict)
-                or any(task not in catalog_ids for task in agent_timeouts)
-                or any(type(seconds) is not int or seconds <= 0
-                       for seconds in agent_timeouts.values())):
-            raise ValueError("agent_timeout_overrides requires catalog task IDs and positive integer seconds")
-        config["agent_timeout_overrides"] = agent_timeouts
-        if config.get("backend") == "vmm_owned":
-            companion = inside_repo(config.get("companion_path", REPO / "scripts/tsb-companion"))
-            config["companion_path"] = str(companion)
-            source_files = {str(p): digest(p) for p in companion.rglob("*")
-                            if p.is_file() and "__pycache__" not in p.parts}
-            if not (companion / "capture.py").exists() or not (companion / "epochs.py").exists():
-                raise ValueError("VMM companion source is incomplete")
-            config["companion_source_hashes"] = source_files
-        config["pause_policy"] = "pause_during_llm"
-        target = root / "access-dirty-config.json"
-        atomic_json(target, config)
-        access_dirty = {"path": str(target), "sha256": digest(target), "detailed_task_ids": detailed}
+    rstan_observer_allowance(config)
+    detailed = config.get("detailed_task_ids", ["fix-git", "prove-plus-comm", "overfull-hbox", "rstan-to-pystan", "schemelike-metacircular-eval"])
+    if len(detailed) != len(set(detailed)) or not set(detailed) <= {r["task_id"] for r in records}:
+        raise ValueError("invalid detailed task selection")
+    required_detail = {"fix-git", "prove-plus-comm", "overfull-hbox", "rstan-to-pystan", "schemelike-metacircular-eval"}
+    if set(detailed) != required_detail:
+        raise ValueError("detailed attribution is scoped to the five approved tasks")
+    if any(r["task_id"] in required_detail for r in selected) and not getattr(args, "attribution_config", None):
+        raise ValueError("selected detailed tasks require attribution config")
+    config["detailed_task_ids"] = detailed
+    agent_timeouts = config.get("agent_timeout_overrides", {"rstan-to-pystan": 5400})
+    catalog_ids = {record["task_id"] for record in records}
+    if (not isinstance(agent_timeouts, dict)
+            or any(task not in catalog_ids for task in agent_timeouts)
+            or any(type(seconds) is not int or seconds <= 0
+                   for seconds in agent_timeouts.values())):
+        raise ValueError("agent_timeout_overrides requires catalog task IDs and positive integer seconds")
+    config["agent_timeout_overrides"] = agent_timeouts
+    companion = inside_repo(config.get("companion_path", REPO / "scripts/tsb-companion"))
+    config["companion_path"] = str(companion)
+    source_files = {str(p): digest(p) for p in companion.rglob("*")
+                    if p.is_file() and "__pycache__" not in p.parts}
+    if not (companion / "capture.py").exists() or not (companion / "epochs.py").exists():
+        raise ValueError("VMM companion source is incomplete")
+    config["companion_source_hashes"] = source_files
+    config["pause_policy"] = "pause_during_llm"
+    target = root / "access-dirty-config.json"
+    atomic_json(target, config)
+    access_dirty = {"path": str(target), "sha256": digest(target), "detailed_task_ids": detailed}
     for record in selected:
         task_root = root / record["task_id"]
         task_root.mkdir(exist_ok=True)
@@ -344,20 +340,18 @@ def prepare(args):
                 raise ValueError("refusing to replace a non-pending task: " + record["task_id"])
         profile_path = task_root / "profile.json"
         profile = profile_for(record, root, args.port)
-        if access_dirty:
-            profile["harness"]["step_observation"]["plugin_dir"] = str(REPO / "scripts/tsb-access-dirty-plugin")
-            record["detailed_attribution"] = record["task_id"] in access_dirty["detailed_task_ids"]
-            if record["task_id"] in config["agent_timeout_overrides"]:
-                agent_timeout = config["agent_timeout_overrides"][record["task_id"]]
-                override = task_root / "runtime-overrides.json"
-                atomic_json(override, {"agent_timeout_seconds": agent_timeout})
-                profile["overrides_file"] = str(override)
-                record["runtime_overrides"] = {"path": str(override), "sha256": digest(override),
-                                               "agent_timeout_seconds": agent_timeout,
-                                               "verifier_timeout_seconds": record["native_verifier_timeout_sec"]}
-            binding = prepare_observer_override(record, profile, config, task_root)
-            if binding is not None:
-                record["observer_override"] = binding
+        record["detailed_attribution"] = record["task_id"] in access_dirty["detailed_task_ids"]
+        if record["task_id"] in config["agent_timeout_overrides"]:
+            agent_timeout = config["agent_timeout_overrides"][record["task_id"]]
+            override = task_root / "runtime-overrides.json"
+            atomic_json(override, {"agent_timeout_seconds": agent_timeout})
+            profile["overrides_file"] = str(override)
+            record["runtime_overrides"] = {"path": str(override), "sha256": digest(override),
+                                           "agent_timeout_seconds": agent_timeout,
+                                           "verifier_timeout_seconds": record["native_verifier_timeout_sec"]}
+        binding = prepare_observer_override(record, profile, config, task_root)
+        if binding is not None:
+            record["observer_override"] = binding
         atomic_json(profile_path, profile)
         record["profile"] = str(profile_path)
         record["profile_sha256"] = digest(profile_path)
@@ -416,13 +410,12 @@ def prepare(args):
             "native_timing_boundary": "complete assistant tool-request declaration before harness preparation through all expected native results ready for the LLM",
         },
     }
-    if access_dirty:
-        manifest["method"]["pause_policy"] = "pause_during_llm_including_initial_request"
-        manifest["method"]["native_resources_and_timeouts"] = False
-        manifest["method"]["native_resources_and_verifier_timeouts"] = True
-        manifest["method"]["guest_async_progress_changed_by_authorized_pause"] = True
-        manifest["budget"]["per_task_agent_timeout"] = "native except explicit agent_timeout_overrides"
-        manifest["budget"]["agent_timeout_overrides"] = agent_timeouts
+    manifest["method"]["pause_policy"] = "pause_during_llm_including_initial_request"
+    manifest["method"]["native_resources_and_timeouts"] = False
+    manifest["method"]["native_resources_and_verifier_timeouts"] = True
+    manifest["method"]["guest_async_progress_changed_by_authorized_pause"] = True
+    manifest["budget"]["per_task_agent_timeout"] = "native except explicit agent_timeout_overrides"
+    manifest["budget"]["agent_timeout_overrides"] = agent_timeouts
     atomic_json(manifest_path, manifest)
     atomic_json(existing, {
         "schema": SCHEMA, "status": "prepared", "updated_at": utc(),
@@ -450,6 +443,27 @@ def read_json(path):
     return json.loads(Path(path).read_text())
 
 
+def read_vmm_config(path):
+    if path is None:
+        raise ValueError("VMM-owned observer config required")
+    config = read_json(inside_repo(path))
+    if not isinstance(config, dict) or config.get("backend") != "vmm_owned":
+        raise ValueError("observer requires backend=vmm_owned")
+    return config
+
+
+def prepared_vmm_config(manifest):
+    binding = manifest["execution"].get("access_dirty_config")
+    if not isinstance(binding, dict) or not binding.get("path"):
+        raise ValueError("VMM-owned observer config required")
+    config = read_vmm_config(binding["path"])
+    if digest(binding["path"]) != binding.get("sha256"):
+        raise ValueError("access-dirty config changed after preparation")
+    if manifest["execution"].get("observation_mode") != "group":
+        raise ValueError("observer requires group observation mode")
+    return config
+
+
 def read_rows(path):
     return [json.loads(line) for line in Path(path).read_text().splitlines() if line.strip()]
 
@@ -464,10 +478,7 @@ def process_rows():
             args = (directory / "cmdline").read_bytes().split(b"\0")
             executable = Path(os.fsdecode(args[0])).name
             record = {"pid": int(directory.name)}
-            if executable == "strace" and b"-p" in args:
-                at = args.index(b"-p")
-                record.update(kind="strace", target_pid=int(args[at + 1]))
-            elif "firecracker" in executable and b"--id" in args:
+            if "firecracker" in executable and b"--id" in args:
                 at = args.index(b"--id")
                 vm_id = os.fsdecode(args[at + 1])
                 if not vm_id.startswith("aries-"):
@@ -510,17 +521,9 @@ def inventory():
             result["errors"].append(name + ": " + type(error).__name__)
     processes = process_rows()
     result["firecracker_processes"] = [r for r in processes if r["kind"] == "firecracker"]
-    try:
-        daemon_pid = int(capture(["systemctl", "show", "firecracker-containerd",
-                                  "--property", "MainPID", "--value"]))
-        result["attached_tracers"] = [r for r in processes
-                                      if r["kind"] == "strace" and r["target_pid"] == daemon_pid]
-    except (subprocess.SubprocessError, OSError, ValueError) as error:
-        result["attached_tracers"] = None
-        result["errors"].append("daemon identity: " + type(error).__name__)
     result["clean"] = not result["errors"] and not any(result.get(name) for name in (
         "docker_containers", "docker_networks", "containerd_containers", "containerd_tasks",
-        "firecracker_processes", "attached_tracers"))
+        "firecracker_processes"))
     return result
 
 
@@ -543,12 +546,8 @@ def canonical_memory_regions(regions):
     return result
 
 
-def observation_memory(observer, readings, backend):
+def observation_memory(observer, readings):
     """Validate retained authoritative RAM identity, without live process reads."""
-    if backend != "vmm_owned":
-        path = observer / "selected-slots.json"
-        return (sum(r["memory_size"] for r in read_json(path)) if path.exists() else None,
-                "legacy_captured_kvm_slots")
     initial = read_json(observer / "access-dirty/initial-arm.json")
     generation = initial.get("vm_generation")
     if (initial.get("schema") != "aries.firecracker.trace-epochs.v1"
@@ -672,9 +671,8 @@ class Suite:
             if int(stat[19]) != int(receipt["vmm_start_ticks"]) or vm_id != receipt["vm_id"] or not vm_id.startswith(status["vm_prefix"]):
                 raise RuntimeError("fatal recovery VMM identity mismatch")
         identity()
-        sys.path.insert(0, str(REPO / "scripts/tsb-attribution"))
-        from paused import UnixHTTPConnection
-        conn = UnixHTTPConnection(receipt["socket_path"], 10)
+        from vmm_observer import Connection
+        conn = Connection(receipt["socket_path"], 10)
         try:
             conn.request("PATCH", "/vm", json.dumps({"state": "Resumed"}), {"Content-Type": "application/json"})
             response = conn.getresponse(); body = response.read()
@@ -706,22 +704,12 @@ class Suite:
                 "vmm_pid": pid, "vmm_start_ticks": identity["start_ticks"], "vm_id": vm_id,
                 "vmm_json_sha256": digest(observer / "vmm.json"),
             }
-            access = self.manifest["execution"].get("access_dirty_config")
-            backend = read_json(access["path"]).get("backend") if access else None
-            if backend == "vmm_owned":
-                memory, evidence = observation_memory(observer, [], backend)
-                initial_path = observer / "access-dirty/initial-arm.json"
-                initial = read_json(initial_path)
-                capture.update(vm_generation=initial["vm_generation"],
-                    selected_slots=len(initial["regions"]), selected_slot_memory_bytes=memory,
-                    memory_region_evidence=evidence, initial_arm_sha256=digest(initial_path))
-            else:
-                slots_path = observer / "selected-slots.json"
-                slots = read_json(slots_path)
-                capture.update(selected_slots=len(slots),
-                    selected_slot_memory_bytes=sum(s["memory_size"] for s in slots),
-                    selected_slots_sha256=digest(slots_path),
-                    strace_detached_before_capture_publication=True)
+            memory, evidence = observation_memory(observer, [])
+            initial_path = observer / "access-dirty/initial-arm.json"
+            initial = read_json(initial_path)
+            capture.update(vm_generation=initial["vm_generation"],
+                selected_slots=len(initial["regions"]), selected_slot_memory_bytes=memory,
+                memory_region_evidence=evidence, initial_arm_sha256=digest(initial_path))
             status["capture"] = capture
             self.event("vmm_selected", **status["capture"])
         except (OSError, KeyError, ValueError, IndexError, TypeError):
@@ -781,27 +769,23 @@ class Suite:
             errors = read_rows(observer / "errors.jsonl")
             begins = [r for r in rows if r.get("event") == "step_begin"]
             ends = [r for r in rows if r.get("event") == "step_end"]
-            mode = self.manifest["execution"].get("observation_mode", "legacy")
+            mode = "group"
             groups_path = observer / "groups.jsonl"
-            readings = ([r for r in read_rows(groups_path) if r.get("event") == "group_end"]
-                        if mode == "group" else [r for r in ends if "reading" in r])
+            readings = [r for r in read_rows(groups_path) if r.get("event") == "group_end"]
             grouped_members = collections.Counter((group.get("batch_id"), call)
                 for group in readings for call in group.get("member_tool_call_ids", []))
             result_ids = collections.Counter((row.get("batch_id"), row["tool_call_id"]) for row in ends)
-            group_pairing = grouped_members == result_ids if mode == "group" else True
+            group_pairing = grouped_members == result_ids
             admission_ids = collections.Counter((row.get("batch_id"), row["tool_call_id"]) for row in begins)
             admitted_results = collections.Counter((row.get("batch_id"), row["tool_call_id"])
                 for row in ends if row.get("begin_observed") is True)
-            admission_pairing = (admission_ids == admitted_results if mode == "group"
-                                 else len(begins) == len(ends))
+            admission_pairing = admission_ids == admitted_results
             completed_window_evidence_valid = (
                 admission_pairing and group_pairing
                 and all(r.get("measurement_valid") is True for r in ends + readings)
                 and status.get("observer_returncode") == 0)
             vm_ids = sorted({r["reading"]["vm_instance"] for r in readings})
-            access_config = self.manifest["execution"].get("access_dirty_config")
-            backend = read_json(access_config["path"]).get("backend") if access_config else None
-            slot_bytes, region_source = observation_memory(observer, readings, backend)
+            slot_bytes, region_source = observation_memory(observer, readings)
             native_memory = record["native_environment"]["memory_mb"] * 1024 ** 2
             if readings and (len(vm_ids) != 1 or not vm_ids[0].startswith(record["vm_prefix"])
                          or slot_bytes != native_memory):
@@ -811,8 +795,8 @@ class Suite:
                 "status": ("succeeded" if valid else "failed") if rows or errors else "not_observed",
                 "completed_window_evidence_valid": completed_window_evidence_valid,
                 "step_begins": len(begins), "step_ends": len(ends),
-                "mode": mode, "comparison_unit": "llm_reasoning_step" if mode == "group" else "native_tool_call_window",
-                "reading_count": len(readings), "llm_steps": len(readings) if mode == "group" else None,
+                "mode": mode, "comparison_unit": "llm_reasoning_step",
+                "reading_count": len(readings), "llm_steps": len(readings),
                 "native_results_without_admission": sum(row.get("begin_observed") is False for row in ends),
                 "coverage_complete": False,
                 "measurement_valid_scope": "expected_batch_registration_and_result_completion_only",
@@ -830,7 +814,7 @@ class Suite:
                 "unknown_policy": "raw unknown classifications retained; compare counts unknown as touched by requested assumption",
             }
             code = self.command([sys.executable, "-B", str(REPO / "scripts/tsb-pages/compare.py"),
-                                 "--input", str(groups_path if mode == "group" else observer / "steps.jsonl"),
+                                 "--input", str(groups_path),
                                  "--mode", mode,
                                  "--output", str(task_root / "comparison.json")], "compare", status)
             status["comparison"] = {"status": "succeeded" if code == 0 else "failed", "returncode": code}
@@ -932,20 +916,15 @@ class Suite:
                 "--port", str(self.manifest["execution"]["observer_port"]),
                 "--vm-prefix", record["vm_prefix"],
             ]
-            if "observation_mode" in self.manifest["execution"]:
-                observer_command.extend(["--mode", self.manifest["execution"]["observation_mode"]])
-            access_dirty = self.manifest["execution"].get("access_dirty_config")
-            if access_dirty:
-                if digest(access_dirty["path"]) != access_dirty["sha256"]:
-                    raise ValueError("access-dirty config changed after preparation")
-                selected_config = read_json(access_dirty["path"])
-                for source_path, expected_hash in selected_config.get("companion_source_hashes", {}).items():
-                    if digest(source_path) != expected_hash:
-                        raise ValueError("VMM companion changed after preparation")
-                observer_config = validate_observer_override(record) or access_dirty["path"]
-                observer_command.extend(["--access-dirty-config", observer_config])
+            access_dirty = self.manifest["execution"]["access_dirty_config"]
+            selected_config = prepared_vmm_config(self.manifest)
+            for source_path, expected_hash in selected_config.get("companion_source_hashes", {}).items():
+                if digest(source_path) != expected_hash:
+                    raise ValueError("VMM companion changed after preparation")
+            observer_config = validate_observer_override(record) or access_dirty["path"]
+            observer_command.extend(["--access-dirty-config", observer_config])
             attribution = self.manifest["execution"].get("attribution_config")
-            if attribution and (not access_dirty or record.get("detailed_attribution")):
+            if attribution and record.get("detailed_attribution"):
                 if digest(attribution["path"]) != attribution["sha256"]:
                     raise ValueError("attribution config changed after preparation")
                 for key, source in attribution.get("inputs", {}).items():
@@ -1031,7 +1010,7 @@ class Suite:
             atomic_json(self.root / ("before-suite-inventory-shard-" +
                                       str(self.manifest["shard_index"]) + ".json"), before)
             if not before["clean"]:
-                self.halt("worker has pre-existing ARIES runtimes, tracers or inspection failures")
+                self.halt("worker has pre-existing ARIES runtimes or inspection failures")
             for record in self.tasks:
                 if self.stop_requested or not self.disk_ok(force=True):
                     break
@@ -1065,6 +1044,7 @@ def run_suite(args):
     manifest_path = root / "manifests" / ("shard-" + str(args.shard_index) + ".json")
     state_path = root / "state" / ("shard-" + str(args.shard_index) + ".json")
     manifest = read_json(manifest_path)
+    prepared_vmm_config(manifest)
     state = read_json(state_path)
     if state["status"] != "prepared":
         raise ValueError("suite has already started; automatic native/paid retries and restarts are disabled")
@@ -1111,8 +1091,9 @@ def main():
     parser.add_argument("--observation-mode", choices=("group",), default="group",
                         help="one LLM reasoning-step batch; preserves native scheduling")
     parser.add_argument("--attribution-config", type=Path,
-                        help="prepare only: optional paused host attribution config")
-    parser.add_argument("--access-dirty-config", type=Path, help="prepare only: compact access/dirty and initial/inter-LLM pause policy")
+                        help="prepare only: optional VMM companion attribution config")
+    parser.add_argument("--access-dirty-config", type=Path,
+                        help="required for prepare: VMM-owned config with backend=vmm_owned")
     args = parser.parse_args()
     if args.access_dirty_config is not None and not args.prepare:
         parser.error("--access-dirty-config applies only to --prepare")
@@ -1124,11 +1105,15 @@ def main():
         parser.error("require 0 <= shard-index < shard-count <= 89")
     if not 1024 <= args.port <= 65535 or args.min_free_gib < 1:
         parser.error("require an unprivileged valid port and positive disk reserve")
+    root = inside_repo(args.root)
+    if args.prepare:
+        read_vmm_config(args.access_dirty_config)
+    else:
+        prepared_vmm_config(read_json(root / "manifests" / ("shard-" + str(args.shard_index) + ".json")))
     global ARTIFACT_OWNER
     ARTIFACT_OWNER = pwd.getpwnam(args.owner)
     os.chdir(REPO)
     os.umask(0o077)
-    root = inside_repo(args.root)
     root.mkdir(parents=True, exist_ok=True)
     with (root / ".suite.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

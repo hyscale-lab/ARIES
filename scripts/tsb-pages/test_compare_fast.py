@@ -7,7 +7,6 @@ import json
 import os
 from pathlib import Path
 import random
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -112,7 +111,6 @@ class CLISidecarTests(unittest.TestCase):
     def test_source_hash_is_captured_before_build_even_if_source_changes_during_it(self):
         source=self.root/"processor.py"
         source.write_bytes((HERE/"compare.py").read_bytes())
-        shutil.copy2(HERE/"methodology.html",self.root/"methodology.html")
         before=hashlib.sha256(source.read_bytes()).hexdigest()
         original=compare.summarize
         output=self.root/"comparison.json"

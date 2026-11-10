@@ -6,7 +6,7 @@ import suite
 class AccessDirtyPrepare(unittest.TestCase):
     def test_only_five_detailed_new_plugin_and_only_rstan_agent_override(self):
         with tempfile.TemporaryDirectory(dir=suite.REPO/".cache") as d:
-            base=Path(d);config=base/"access.json";config.write_text("{}")
+            base=Path(d);config=base/"access.json";config.write_text('{"backend":"vmm_owned"}')
             attr=base/"attr.json";attr.write_text('{"enable_compression":false}')
             names=["fix-git","prove-plus-comm","overfull-hbox","rstan-to-pystan","schemelike-metacircular-eval","ordinary"]
             records=[{"task_id":name,"execution_task_id":name+"-001","shard_index":0,

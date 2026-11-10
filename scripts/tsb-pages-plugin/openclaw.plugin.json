@@ -1,1 +1,0 @@
-{"id":"aries-step-pages","name":"ARIES per-Step page observation","description":"Awaited tool begin and synchronous result-persistence barriers for a worker-owned page observer.","activation":{"onStartup":true},"configSchema":{"type":"object","additionalProperties":false,"properties":{}}}

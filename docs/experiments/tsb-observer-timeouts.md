@@ -13,5 +13,4 @@ Admission verifies those hashes before setup and execution. Cancellation, child
 reaping and capture-discard behavior follow the
 [VMM-owned backend contract](tsb-access-dirty.md#vmm-owned-tracing-backend). A
 longer wait never certifies successful capture, terminal completion, or low
-overhead. Historical replay timings and private observer-timeout-review artifacts
-are not part of this source recovery.
+overhead.

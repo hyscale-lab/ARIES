@@ -176,7 +176,7 @@ ownership for cleanup; an ambiguous command submission is never retried.
 The optional [memory-footprint tracer](../experiments/memory-footprint-tracing.md)
 uses a separate pinned Firecracker fork with VMM-owned page-idle access, dirty,
 residency and bounded metadata APIs. The companion decoder, host coordinator,
-native OpenClaw patch and plugins are preserved as source in this repository.
+native OpenClaw patch and plugin are preserved as source in this repository.
 These APIs are experimental dependencies; the normal vHive provider does not
 install the fork or start its observer automatically.
 

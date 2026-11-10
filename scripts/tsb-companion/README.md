@@ -18,8 +18,10 @@ This directory does not read host /proc process memory or pagemap.
   compound-page evidence. No fictitious PID for a global or unresolved page.
 - file_names.py: inode aliases, mount namespaces, internal names and explicit
   missing-name reasons. Unnamed is not automatically intrinsically nameless.
-- compression.py: metadata-only sample selection from the immutable VMM census;
+- sampling.py: metadata-only sample selection from the immutable VMM census;
   no payload compression.
+- compact.py: shared integrity checks and expansion of retained access/dirty
+  masks, used by capture, replay and the page-comparison tools.
 - replay.py: retained-byte replay with no live guest connection.
 
 The transport binding uses the separate metadata-capture and memory-census
@@ -140,6 +142,38 @@ The command refuses a different ELF hash or an existing output. Other kernels
 need independently generated and validated base, owner and name layouts. Keep
 bootstrap ELF-hash, VMCOREINFO, KASLR/page-table and process/VMA checks enabled.
 
+The retained base-layout generator and compiler probe use the matching prepared
+kernel source and configuration:
+
+```sh
+python3 scripts/tsb-companion/layout_generate.py \
+  --output-dir .cache/attribution-layout \
+  --kernel-source /path/to/prepared/linux-source
+```
+
+Compile the generated `kernel/layout_offsets.c` with that kernel's build, then
+extract its `attribution_layout` array as raw little-endian unsigned longs.
+Decode it against the actual guest ELF and check captured VMCOREINFO:
+
+```sh
+python3 scripts/tsb-companion/layout_decode.py \
+  --offsets /path/to/offsets.bin \
+  --names .cache/attribution-layout/offset-names.json \
+  --kernel-image /path/to/vmlinux-5.10.239 \
+  --output .cache/attribution-layout/base-layout.json
+python3 scripts/tsb-companion/layout_validate.py \
+  --layout .cache/attribution-layout/base-layout.json \
+  --anchors /path/to/anchors.json \
+  --output .cache/attribution-layout/vmcoreinfo-validation.json
+```
+
+Validation writes its report and exits unsuccessfully for a mismatch or no
+comparable fields. Matching exposed fields does not validate omitted fields.
+The generator covers the base layout only; it does not regenerate the owner or
+file-name extensions. Their pinned JSON profiles and provenance remain under
+`layouts/linux-5.10.239/`; another kernel needs independently derived extension
+offsets and native semantic checks.
+
 ## Reproduce the known-object native fixture
 
 This x86-64 fixture uses a disposable 256 MiB VM, an ordinary userspace helper,
@@ -151,13 +185,13 @@ the controlled helper to establish its known GPA oracle.
 On an isolated Linux worker, install Python 3, musl-gcc, a **statically linked**
 BusyBox, cpio and the normal Firecracker/KVM prerequisites. The VMM needs the
 host page-idle/PFN permissions described in
-[the tracer guide](../../docs/firecracker-tracer.md); the example runs the
+[the tracer guide](../../docs/experiments/memory-footprint-tracing.md#firecracker-dependency); the example runs the
 fixture as root. Supply a tracer binary built from this branch and the matching
 kernel ELF for the included layout profile. The commands below construct the
 same helper/initrd used by the native companion gate. Use a fresh directory;
 the fixture also refuses to reuse its output directory.
 
-Run from the Firecracker repository root, replacing the two input paths:
+Run from the ARIES repository root, replacing the two input paths:
 
 ```bash
 set -eu

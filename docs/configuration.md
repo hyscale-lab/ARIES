@@ -941,10 +941,8 @@ With `scripts/tsb-access-dirty-plugin`, the observer pauses the guest during
 initial/inter-step LLM intervals, resumes before tool admission, and records
 separate access/unknown, dirty, residency and metadata evidence. This is an
 explicit experimental pause policy that affects asynchronous guest progress.
-It requires the pinned native dependencies and external observer described in
-[the tracer source guide](experiments/memory-footprint-tracing.md). The earlier
-`scripts/tsb-pages-plugin` remains available for the historical page-idle batch
-protocol; its combined read/write access evidence has different limits.
+It requires the pinned native dependencies and VMM-owned observer described in
+[the tracer source guide](experiments/memory-footprint-tracing.md).
 
 A successful native terminal hook seals the measurement horizon before release.
 After confirmed harness-container removal, ARIES independently requires an
@@ -963,8 +961,7 @@ The external companion configuration separately selects semantic detail
 
 This option does not establish complete host-memory attribution or make each
 bridge command an independent step. See [access/dirty epoch semantics](experiments/tsb-access-dirty.md)
-and [historical page-idle semantics](experiments/tsb-tool-pages-suite.md) before
-interpreting page sets.
+before interpreting page sets.
 
 ## Other harness and evidence options
 

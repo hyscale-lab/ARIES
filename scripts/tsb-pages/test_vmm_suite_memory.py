@@ -17,10 +17,10 @@ class MemoryTests(unittest.TestCase):
                        "vm_generation": "g", "baseline_discarded": True, "regions": regions}
             (root / "access-dirty/initial-arm.json").write_text(json.dumps(initial))
             groups = [{"reading": {"vm_generation": "g", "regions": regions}}]
-            self.assertEqual(observation_memory(root, groups, "vmm_owned"),
+            self.assertEqual(observation_memory(root, groups),
                              (12288, "vmm_initial_arm_authoritative_regions"))
             groups[0]["reading"]["vm_generation"] = "different"
-            with self.assertRaises(ValueError): observation_memory(root, groups, "vmm_owned")
+            with self.assertRaises(ValueError): observation_memory(root, groups)
 
     def test_overlap_cannot_pass_native_memory_sum(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -31,10 +31,10 @@ class MemoryTests(unittest.TestCase):
             initial = {"schema": "aries.firecracker.trace-epochs.v1",
                        "vm_generation": "g", "baseline_discarded": True, "regions": regions}
             (root / "access-dirty/initial-arm.json").write_text(json.dumps(initial))
-            with self.assertRaises(ValueError): observation_memory(root, [], "vmm_owned")
+            with self.assertRaises(ValueError): observation_memory(root, [])
 
 class CaptureSelectionTests(unittest.TestCase):
-    def fixture(self, root, *, backend="vmm_owned", stale=False, other_vm=False):
+    def fixture(self, root, *, stale=False, other_vm=False):
         observer = root / "task/observer"; observer.mkdir(parents=True)
         pid = os.getpid()
         start = int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19])
@@ -46,11 +46,7 @@ class CaptureSelectionTests(unittest.TestCase):
                    "baseline_discarded": True,
                    "regions": [{"slot": 0, "guest_base": 0, "bytes": 8192, "page_count": 2}]}
         (observer / "access-dirty/initial-arm.json").write_text(json.dumps(initial))
-        config = root / "config.json"; config.write_text(json.dumps({"backend": backend}))
-        if backend != "vmm_owned":
-            (observer / "selected-slots.json").write_text(json.dumps([{"memory_size": 8192}]))
         suite = object.__new__(Suite); suite.root = root
-        suite.manifest = {"execution": {"access_dirty_config": {"path": str(config)}}}
         events = []; suite.event = lambda *args, **kwargs: events.append((args, kwargs))
         status = {"task_id": "task", "vm_prefix": "aries-sandbox-task-"}
         original = Path.read_bytes
@@ -80,14 +76,6 @@ class CaptureSelectionTests(unittest.TestCase):
                 self.assertNotIn("capture", status)
                 self.assertEqual(events, [])
 
-    def test_legacy_capture_keeps_its_original_slot_evidence(self):
-        with tempfile.TemporaryDirectory() as directory:
-            status, events, _ = self.fixture(Path(directory), backend="legacy_external")
-            capture = status["capture"]
-            self.assertEqual(capture["selected_slot_memory_bytes"], 8192)
-            self.assertTrue(capture["strace_detached_before_capture_publication"])
-            self.assertIn("selected_slots_sha256", capture)
-            self.assertEqual(len(events), 1)
 
 
 if __name__ == "__main__": unittest.main()

@@ -44,18 +44,24 @@ class SelectionTests(unittest.TestCase):
 
     def test_fresh_subset_prepare_run_preserves_catalog_and_no_retry(self):
         self.write_selection(["c"])
+        self.records += [{"task_id": task, "execution_task_id": task + "-001", "shard_index": 1}
+                         for task in ("fix-git", "prove-plus-comm", "overfull-hbox", "rstan-to-pystan",
+                                      "schemelike-metacircular-eval")]
+        config = self.base / "config.json"
+        config.write_text('{"backend":"vmm_owned"}')
         args = argparse.Namespace(root=self.base / "run", shard_index=0, shard_count=2,
                                   port=18181, min_free_gib=20, owner="nehalem",
-                                  observation_mode="group", selection_file=self.selection)
+                                  observation_mode="group", selection_file=self.selection,
+                                  access_dirty_config=config, attribution_config=None)
         pins = {"terminalbench2": {"repository_url": "fixture", "revision": "fixture"}}
         def catalog(_):
             return pins, copy.deepcopy(self.records)
         with patch.object(suite, "task_catalog", side_effect=catalog), \
              patch.object(suite, "source_record", return_value={"fixture": True}), \
-             patch.object(suite, "profile_for", return_value={"fixture": True}):
+             patch.object(suite, "profile_for", return_value={"fixture": True, "harness": {"step_observation": {}}}):
             suite.prepare(args)
             manifest = suite.read_json(args.root / "manifests/shard-0.json")
-            self.assertEqual(len(manifest["tasks"]), 3)
+            self.assertEqual(len(manifest["tasks"]), len(self.records))
             self.assertEqual(manifest["selected_task_ids"], ["c"])
             self.assertFalse((args.root / "a").exists())
             self.assertFalse((args.root / "b").exists())

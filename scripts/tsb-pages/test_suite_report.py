@@ -83,11 +83,10 @@ class SuiteReportTests(unittest.TestCase):
         self.assertTrue(report["guest_memory_evidence"]["errors"])
         self.assertIsNone(report["guest_resident_at_scan_end_mib"]["median"])
 
-    def test_legacy_footprint_fraction_keeps_dirty_contribution(self):
-        self.write(self.observer/"selected-slots.json",[{"memory_size":65536}])
-        self.comparison(not_resident_at_end_gpa_ranges=[[32768,65536]])
+    def test_unobserved_task_keeps_measurements_unavailable(self):
         report=task_summary(self.root,self.task)
-        self.assertEqual(report["counted_footprint_fraction_of_endpoint_resident_ram"]["median"],16384/32768)
+        self.assertIsNone(report["counted_footprint_fraction_of_endpoint_resident_ram"]["median"])
+        self.assertEqual(report["guest_memory_evidence"]["errors"],[])
         self.assertEqual(report["tracer_overhead"]["status"],"no_measurements")
 
     def test_session_union_is_unavailable_across_vm_incarnations(self):

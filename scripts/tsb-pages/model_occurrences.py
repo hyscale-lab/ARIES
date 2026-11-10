@@ -1,4 +1,4 @@
-"""Strict occurrence pairing for the separately versioned two-rerun extension."""
+"""Pair native provider-call occurrences with their declared LLM gaps."""
 import hashlib,json,re
 class OccurrenceError(ValueError):pass
 def need(ok,message):

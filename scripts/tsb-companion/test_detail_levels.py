@@ -170,7 +170,7 @@ def synthetic_benchmark(repetitions=11,*,processes=8,pages_per_category=16,prefe
     identities={tuple(r[k] for k in ['selected_gpas_sha256','sample_gpas_sha256','layout_identity']) for r in result['levels'].values()}
     result['comparison_identity_matches']=len(identities)==1
     result['source_sha256']={name:hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-                            for name in ['benchmark_detail.py','test_detail_levels.py','decoder.py','capture_memory.py','owners.py','file_names.py']}
+                            for name in ['benchmark_detail.py','test_detail_levels.py','decoder.py','capture_memory.py','owners.py','file_names.py','sampling.py']}
     return result
 
 

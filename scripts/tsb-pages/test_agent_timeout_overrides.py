@@ -10,7 +10,7 @@ class AgentTimeoutMap(unittest.TestCase):
                   "native_verifier_timeout_sec":2400 if n=="schemelike-metacircular-eval" else 1800,
                   "native_agent_timeout_sec":2400 if n=="schemelike-metacircular-eval" else 1800,
                   "native_cpu_count":2,"native_memory_mb":8192} for n in names]
-        config=base/"access.json";config.write_text(json.dumps({"agent_timeout_overrides":mapping}))
+        config=base/"access.json";config.write_text(json.dumps({"backend":"vmm_owned","agent_timeout_overrides":mapping}))
         attr=base/"attr.json";attr.write_text('{"enable_compression":false}')
         selection=None
         if selected is not None:

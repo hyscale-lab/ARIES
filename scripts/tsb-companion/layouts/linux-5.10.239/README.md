@@ -6,8 +6,9 @@ kernel ELF, SHA-256:
     0e524afe5a90f4ce4b13091a8b5acf7fbe9e7584e711f609d27b69b78564117d
 
 The kernel binary is not included. Supply the ELF actually used to boot the VM;
-a matching release string alone is insufficient. The JSON checksums in
-SHA256SUMS retain the prior validated profile verbatim.
+a matching release string alone is insufficient. SHA256SUMS retains the three
+prior JSON profile checksums and records the recovered base compiler probe
+`layout_offsets.c` and its ordered fields `offset-names.json`.
 
 Base and extended offsets were generated from compiler offsetof/sizeof probes
 against amazonlinux/linux source commit
@@ -28,6 +29,11 @@ profile), then checks task/VMA traversal and PID1. Owner/name offsets additional
 had native semantic fixtures. Those checks support this pinned profile; they do
 not independently prove every generated offset or make it portable to another
 kernel.
+
+The companion [layout tools](../../README.md#kernel-layout-inputs) regenerate
+the base probe, decode its values and compare exposed VMCOREINFO fields.
+The retained generator does not produce the owner/name extensions; those need
+separate kernel-specific offset derivation and semantic validation.
 
 For a different kernel, generate fresh layout modules from that kernel's actual
 build configuration/type information and validate overlapping VMCOREINFO plus

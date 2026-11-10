@@ -1,4 +1,4 @@
-"""Decode retained little-endian, region-relative GPA masks for offline legacy analyses."""
+"""Decode validated region-relative GPA masks for attribution and offline analysis."""
 import hashlib
 from pathlib import Path
 

@@ -2,7 +2,6 @@
 import json
 import os
 from pathlib import Path
-import signal
 import tempfile
 import threading
 import time
@@ -14,15 +13,24 @@ import urllib.request
 import serve
 
 
-class FixtureIdleObserver:
+class FixtureVmmObserver:
     instances = []
 
-    def __init__(self, pid, vm_id, slots):
-        self.pid, self.vm_id, self.slots, self.start = pid, vm_id, slots, "fixture-start"
+    def __init__(self, pid, vm_id, start, socket_path, config, output):
+        self.pid, self.vm_id, self.start = pid, vm_id, start
         self.arm_count = self.collect_count = 0
         self.armed = None
         self.closed = False
         self.instances.append(self)
+
+    def session_start(self):
+        return {"ok": True, "paused": True}
+
+    def request_abort(self):
+        pass
+
+    def abort_session(self, reason):
+        return {"ok": True, "released": True, "paused": False}
 
     def arm(self, name):
         if self.armed is not None:
@@ -41,7 +49,7 @@ class FixtureIdleObserver:
         arm = self.armed
         self.armed = None
         return {
-            "schema": "aries.tsb.tool-pages.idle.v1", "vm_instance": self.vm_id,
+            "schema": "aries.vmm-tracer.compact.v1", "vm_instance": self.vm_id,
             "vmm_pid": self.pid, "vmm_start_ticks": self.start, "clock": "host-CLOCK_MONOTONIC",
             "page_bytes": 4096, "accessed_gpas": [0], "unknown_gpas": {"4096": "fixture"},
             "idle_gpas": [8192], "arm_begin_ns": arm["begin"], "arm_end_ns": arm["end"],
@@ -55,24 +63,6 @@ class FixtureIdleObserver:
         self.closed = True
 
 
-class FixtureTracer:
-    def __init__(self, *args, **kwargs):
-        self.stderr = iter(["one-slot"])
-        self.returncode = None
-
-    def poll(self):
-        return self.returncode
-
-    def send_signal(self, signum):
-        if signum != signal.SIGINT:
-            raise AssertionError("unexpected tracer signal")
-        self.returncode = 0
-
-    def wait(self, timeout=None):
-        self.returncode = 0
-        return 0
-
-
 class HTTPBarriers(unittest.TestCase):
     def fixture(self, mode, action):
         validation = Path(__file__).resolve().parents[2] / ".cache/tsb-http-tests"
@@ -82,19 +72,15 @@ class HTTPBarriers(unittest.TestCase):
             servers, failures = [], []
             started = threading.Event()
             real_http_server = serve.ThreadingHTTPServer
-            real_read_bytes = Path.read_bytes
             pid = os.getpid()
+            config = Path(directory) / "config.json"
+            config.write_text('{"backend":"vmm_owned"}')
 
             class CaptureServer(real_http_server):
                 def __init__(self, *args, **kwargs):
                     super().__init__(*args, **kwargs)
                     servers.append(self)
                     started.set()
-
-            def read_bytes(path):
-                if str(path) == "/proc/" + str(pid) + "/cmdline":
-                    return b"firecracker\0--id\0aries-sandbox-http-fixture\0"
-                return real_read_bytes(path)
 
             def run():
                 try:
@@ -103,16 +89,13 @@ class HTTPBarriers(unittest.TestCase):
                     failures.append(error)
 
             arguments = ["serve.py", "--output", str(output), "--port", "0",
-                         "--vm-prefix", "aries-sandbox-http-", "--mode", mode]
+                         "--vm-prefix", "aries-sandbox-http-", "--mode", mode,
+                         "--access-dirty-config", str(config)]
             with patch("sys.argv", arguments), \
-                    patch.object(serve.subprocess, "check_output", return_value=str(pid)), \
-                    patch.object(serve.subprocess, "Popen", FixtureTracer), \
-                    patch("run.parse_slot", return_value={
-                        "tid": pid, "guest_phys_addr": 0, "userspace_addr": 4096, "memory_size": 16384}), \
-                    patch("idle.IdleObserver", FixtureIdleObserver), \
+                    patch("vmm_observer.discover", return_value=(pid, "aries-sandbox-http-fixture", 1, "fixture.sock")), \
+                    patch("vmm_observer.VmmObserver", FixtureVmmObserver), \
                     patch.object(serve, "ThreadingHTTPServer", CaptureServer), \
-                    patch.object(serve.signal, "signal"), \
-                    patch.object(Path, "read_bytes", read_bytes):
+                    patch.object(serve.signal, "signal"):
                 thread = threading.Thread(target=run, daemon=True)
                 thread.start()
                 self.assertTrue(started.wait(5), failures)
@@ -131,13 +114,14 @@ class HTTPBarriers(unittest.TestCase):
                         return json.load(response)
 
                 try:
+                    self.assertTrue(post("/session/start")["paused"])
                     action(post, output)
                 finally:
                     servers[0].shutdown()
                     thread.join(timeout=5)
                 self.assertFalse(thread.is_alive())
                 self.assertFalse(failures, failures)
-                observer = FixtureIdleObserver.instances[-1]
+                observer = FixtureVmmObserver.instances[-1]
                 self.assertTrue(observer.closed)
                 return observer.arm_count, observer.collect_count
 
@@ -157,7 +141,7 @@ class HTTPBarriers(unittest.TestCase):
             self.assertEqual(last["collection"], "collected")
             groups = [json.loads(line) for line in (output / "groups.jsonl").read_text().splitlines()]
             self.assertEqual([r["event"] for r in groups], ["batch_begin", "group_end"])
-            self.assertEqual(groups[-1]["reading"]["schema"], "aries.tsb.tool-pages.llm-batch.v1")
+            self.assertEqual(groups[-1]["reading"]["schema"], "aries.vmm-tracer.compact.v1")
             self.assertEqual(groups[-1]["concurrency_peak"], 1)
             steps = [json.loads(line) for line in (output / "steps.jsonl").read_text().splitlines()]
             self.assertTrue(all("reading" not in row for row in steps))

@@ -5,7 +5,6 @@ import json
 import os
 from pathlib import Path
 import signal
-import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -22,11 +21,13 @@ def main():
     parser.add_argument("--mode", choices=("group",), default="group",
                         help="one shared reading per native assistant tool-request batch")
     parser.add_argument("--attribution-config", type=Path,
-                        help="optional paused host-side attribution configuration")
-    parser.add_argument("--access-dirty-config", type=Path, help="opt-in continuous access/dirty epochs with LLM pause policy")
+                        help="optional VMM companion attribution configuration")
+    parser.add_argument("--access-dirty-config", type=Path, required=True,
+                        help="VMM-owned access/dirty configuration with backend=vmm_owned")
     args = parser.parse_args()
-    access_dirty_config = json.loads(args.access_dirty_config.read_text()) if args.access_dirty_config else None
-    vmm_owned = access_dirty_config is not None and access_dirty_config.get("backend") == "vmm_owned"
+    access_dirty_config = json.loads(args.access_dirty_config.read_text())
+    if not isinstance(access_dirty_config, dict) or access_dirty_config.get("backend") != "vmm_owned":
+        raise ValueError("observer requires backend=vmm_owned")
     attribution_config = json.loads(args.attribution_config.read_text()) if args.attribution_config else None
     mode_schema, mode_scope, validity_scope = SCHEMA, SCOPE, VALIDITY_SCOPE
     os.umask(0o077)
@@ -39,29 +40,6 @@ def main():
         stream.write(json.dumps(value) + "\n")
         stream.flush()
 
-    tracer = None
-    thread = None
-    slots = []
-    if not vmm_owned:
-        from idle import IdleObserver
-        from run import parse_slot
-        daemon_pid = int(subprocess.check_output([
-            "systemctl", "show", "firecracker-containerd", "--property", "MainPID", "--value"], text=True))
-        slots = []
-        tracer = subprocess.Popen(["strace", "-f", "-e", "trace=ioctl", "-p", str(daemon_pid)],
-                                  stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True)
-
-        def trace():
-            for line in tracer.stderr:
-                entry = parse_slot(line)
-                if entry:
-                    slots.append(entry)
-
-        thread = threading.Thread(target=trace)
-        thread.start()
-        time.sleep(1)
-        if tracer.poll() is not None:
-            raise RuntimeError("capture attach failed")
     observer = None
     tracker = None
     invalid = False
@@ -72,56 +50,18 @@ def main():
     session_identity = None
 
     def setup():
-        nonlocal observer, tracer, tracker
-        if vmm_owned:
-            from vmm_observer import VmmObserver, discover
-            vmm, vm_id, start, socket_path = discover(args.vm_prefix)
-            config = dict(access_dirty_config)
-            if attribution_config is not None:
-                config["attribution"] = attribution_config
-            observer = VmmObserver(vmm, vm_id, start, socket_path, config, args.output / "access-dirty")
-        else:
-            tracer.send_signal(signal.SIGINT)
-            tracer.wait(timeout=10)
-            thread.join(timeout=10)
-            tracer = None
-            (args.output / "slots.json").write_text(json.dumps(slots, indent=2) + "\n")
-            candidates = {}
-            for entry in slots:
-                try:
-                    pid = int(next(line.split()[1]
-                                   for line in Path("/proc/" + str(entry["tid"]) + "/status").read_text().splitlines()
-                                   if line.startswith("Tgid:")))
-                    command = Path("/proc/" + str(pid) + "/cmdline").read_bytes().split(b"\0")
-                    at = command.index(b"--id")
-                    vm_id = command[at + 1].decode()
-                except (OSError, ValueError, IndexError):
-                    continue
-                if vm_id.startswith(args.vm_prefix):
-                    candidates.setdefault((pid, vm_id), []).append(entry)
-            if len(candidates) != 1:
-                raise RuntimeError("require exactly one captured live VMM matching study sandbox prefix")
-            (vmm, vm_id), regions = next(iter(candidates.items()))
-            (args.output / "selected-slots.json").write_text(json.dumps(regions, indent=2) + "\n")
-            observer = IdleObserver(vmm, vm_id, regions)
-            if access_dirty_config is not None:
-                import sys
-                sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tsb-attribution"))
-                from access_dirty import AccessDirtyObserver
-                config = dict(access_dirty_config)
-                if attribution_config is not None:
-                    config["attribution"] = attribution_config
-                observer = AccessDirtyObserver(observer, config, args.output / "access-dirty")
-            elif attribution_config is not None:
-                import sys
-                sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tsb-attribution"))
-                from paused import PausedAttributionObserver
-                observer = PausedAttributionObserver(observer, attribution_config, args.output / "attribution")
+        nonlocal observer, tracker
+        from vmm_observer import VmmObserver, discover
+        vmm, vm_id, start, socket_path = discover(args.vm_prefix)
+        config = dict(access_dirty_config)
+        if attribution_config is not None:
+            config["attribution"] = attribution_config
+        observer = VmmObserver(vmm, vm_id, start, socket_path, config, args.output / "access-dirty")
         tracker = BatchTracker(observer, lambda value: save(groups, value))
         tracker.invalid = invalid
         (args.output / "vmm.json").write_text(json.dumps({
             "pid": vmm, "vm_id": vm_id, "start_ticks": observer.start,
-            "scope": "single VM identity; persistent mode only", "backend": "vmm_owned" if vmm_owned else "legacy_external"}) + "\n")
+            "scope": "single VM identity; persistent mode only", "backend": "vmm_owned"}) + "\n")
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
@@ -166,7 +106,7 @@ def main():
                         # operation lock before interrupting its live reads.
                         abort_requested.set()
                         current = observer
-                        if current is not None and hasattr(current, "request_abort"):
+                        if current is not None:
                             current.request_abort()
                 with operation_lock:
                     if session_identity is not None and identity != session_identity:
@@ -174,8 +114,6 @@ def main():
                     if abort_requested.is_set() and self.path != "/session/abort":
                         raise ValueError("host cancellation already requested")
                     if self.path == "/session/start":
-                        if access_dirty_config is None:
-                            raise ValueError("session pause requires access-dirty mode")
                         if session_identity is None: session_identity = identity
                         if observer is None: setup()
                         if abort_requested.is_set():
@@ -183,8 +121,6 @@ def main():
                             raise ValueError("host cancellation interrupted initialization")
                         tracker.last_ack = observer.session_start()
                     elif self.path == "/session/abort":
-                        if access_dirty_config is None:
-                            raise ValueError("host abort requires access-dirty mode")
                         if observer is None:
                             # No observer was initialized and therefore no pause
                             # or capture ownership was acquired by this endpoint.
@@ -192,17 +128,16 @@ def main():
                                       "measurement_valid": False, "terminal_complete": False,
                                       "observer_not_initialized": True}
                         else:
-                            if not hasattr(observer, "abort_session"):
-                                raise ValueError("backend has no bounded cancellation barrier")
                             result = observer.abort_session(body.get("reason", "host_confirmed_harness_stopped"))
                         result = {**result, "session_id": identity[0], "turn_id": identity[1]}
                         if tracker: tracker.last_ack = result
                     elif self.path == "/session/end":
-                        if access_dirty_config is None or observer is None:
+                        if observer is None:
                             raise ValueError("no initialized access-dirty session")
                         tracker.last_ack = observer.session_end(body.get("reason", "native_terminal"), body.get("terminal_complete") is True)
                     elif self.path == "/batch":
-                        if observer is None: setup()
+                        if observer is None:
+                            raise ValueError("no initialized VMM-owned session")
                         tracker.register(body)
                     elif self.path in ("/begin", "/end"):
                         key = tuple(body.get(name) for name in ("session_id", "turn_id", "tool_call_id"))
@@ -246,10 +181,9 @@ def main():
     def stop(*_):
         def shutdown():
             try:
-                if vmm_owned:
-                    abort_requested.set()
-                    current = observer
-                    if current is not None: current.request_abort()
+                abort_requested.set()
+                current = observer
+                if current is not None: current.request_abort()
             finally:
                 server.shutdown()
         # Signals may interrupt cleanup while it owns an observer lock. Keep
@@ -274,13 +208,10 @@ def main():
                                                             if call not in pending["completed"]]})
                 if observer:
                     try:
-                        if vmm_owned and abort_requested.is_set():
+                        if abort_requested.is_set():
                             observer.abort_session("observer_shutdown")
                     finally:
                         observer.close()
-                if tracer and tracer.poll() is None:
-                    tracer.send_signal(signal.SIGINT)
-                    tracer.wait(timeout=10)
             except BaseException as error:
                 save(errors, {"error": "observer shutdown failed",
                               "type": type(error).__name__, "message": str(error)})

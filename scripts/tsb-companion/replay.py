@@ -260,7 +260,7 @@ def main():
                           source / "resident-sample.jsonl.gz", source / "owners.json",
                           source / "files.json", source / "file-namespaces.json",
                           Path(__file__).with_name("owners.py"), Path(__file__).with_name("file_names.py"),
-                          Path(__file__).with_name("compression.py")) if p.exists()]
+                          Path(__file__).with_name("sampling.py")) if p.exists()]
     if mask_directory is not None:
         paths.append(Path(__file__).with_name("compact.py"))
         raw = json.loads(reading_path.read_text())

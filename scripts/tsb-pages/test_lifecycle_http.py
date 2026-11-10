@@ -97,6 +97,19 @@ class HTTPTests(unittest.TestCase):
      self.assertEqual(status,200,ack)
      self.assertEqual({name:ack.get(name) for name in identity},identity)
    finally:self.finish(process)
+ def test_batch_cannot_initialize_a_session_without_pause_barrier(self):
+  with tempfile.TemporaryDirectory() as temp:
+   root=Path(temp);process,port=self.launch(root)
+   declaration={"session_id":"s","turn_id":"t","batch_id":"b","llm_step_id":"b",
+      "expected_tool_call_ids":["a"],"requested_tools":[{"tool_call_id":"a","tool_name":"exec"}]}
+   try:
+    status,ack=self.request(port,"/batch",declaration)
+    self.assertEqual(status,409)
+    self.assertFalse(ack["ok"])
+    self.assertIn("no initialized VMM-owned session",ack["error"])
+    self.assertFalse((root/"observer/vmm.json").exists())
+    self.assertFalse((root/"observer/access-dirty").exists())
+   finally:self.finish(process)
  def test_failed_shutdown_release_still_closes_observer_and_reports_failure(self):
   with tempfile.TemporaryDirectory() as temp:
    root=Path(temp)

@@ -1,4 +1,4 @@
-"""One VM page-idle observation per complete native LLM tool-request batch."""
+"""Coordinate one VMM observation per complete native LLM tool-request batch."""
 import collections
 import time
 

@@ -82,8 +82,8 @@ and [implementation explanations](docs/implementation/README.md) cover the code'
 current behavior. Coding agents start at [AGENTS.md](AGENTS.md).
 
 The experimental [memory-footprint tracer source guide](docs/experiments/memory-footprint-tracing.md)
-records the preserved observer, companion, native dependency patches and rebuild
-paths. It separates the current VMM-owned backend from earlier page-idle studies.
+records the VMM-owned observer, companion, native dependency patches, rebuild
+paths, detail modes and overhead reports.
 
 ## Current implementation
 
