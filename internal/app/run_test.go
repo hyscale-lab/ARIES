@@ -330,6 +330,125 @@ func snapshotFiniteReplaySource(t *testing.T, source string) map[string][sha256.
 	return files
 }
 
+type finiteAuditBridge struct{ path string }
+
+func (bridge *finiteAuditBridge) Start(context.Context, runner.Sandbox) (core.ToolEndpoint, error) {
+	return core.ToolEndpoint{LogPaths: []string{bridge.path}}, nil
+}
+func (*finiteAuditBridge) Stop(context.Context) error { return nil }
+
+func TestReplayRunReportsSharedTimingAndEqualStartWarnings(t *testing.T) {
+	const concurrency = 1
+	const firstLateness = 3 * time.Millisecond
+	const laterLateness = 40 * time.Millisecond
+	source, tasks, expected := writeFiniteReplaySource(t, []string{"a", "a"}, false, 0, finiteCallGap, finiteCallGap)
+	wiring := finiteReplayWiring(tasks)
+	var runRoot, auditPath string
+	created := 0
+	wiring.NewBridge = func(_ config.Config, outputRoot string, _ *logrus.Logger) (runner.ToolBridge, error) {
+		runRoot = outputRoot
+		auditPath = filepath.Join(outputRoot, fmt.Sprintf("audit-%d.jsonl", created))
+		created++
+		return &finiteAuditBridge{path: auditPath}, nil
+	}
+	wiring.NewReplayCaller = func(config.Config, core.RuntimePlacement, time.Duration, *logrus.Logger) (runner.ReplayCaller, error) {
+		path := auditPath
+		return &finiteReplayCaller{run: func(_ context.Context, plan replay.Plan) error {
+			if plan.ReplayAt == nil {
+				return errors.New("whole workload has no shared replay origin")
+			}
+			lateness := firstLateness
+			if plan.SourceTaskID == expected[len(expected)-1].TaskID {
+				lateness = laterLateness
+			}
+			file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+			if err != nil {
+				return err
+			}
+			encoder := json.NewEncoder(file)
+			for _, call := range plan.Calls {
+				if err := encoder.Encode(map[string]any{
+					"replay_source_sequence": call.Sequence,
+					"started_at":             plan.ReplayAt.Add(call.StartOffset + lateness).Format(time.RFC3339Nano),
+					"operation_class":        "stat", "response_sha256": call.ResponseSHA256,
+				}); err != nil {
+					return errors.Join(err, file.Close())
+				}
+			}
+			return file.Close()
+		}}, nil
+	}
+	var out bytes.Buffer
+	if err := runCommandForTest(context.Background(), finiteReplayProfile(t, source, concurrency), &out, Dependencies{Wiring: wiring}); err != nil {
+		t.Fatal(err)
+	}
+	var result core.RunResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := os.ReadFile(filepath.Join(runRoot, "run-result.json"))
+	if err != nil || !bytes.Equal(persisted, out.Bytes()) {
+		t.Fatalf("persisted result differs from stdout: %v", err)
+	}
+	if len(result.Tasks) != len(expected) {
+		t.Fatalf("missing occurrence results: %+v", result)
+	}
+	for index, task := range result.Tasks {
+		wantDrift := firstLateness
+		if index == len(expected)-1 {
+			wantDrift = laterLateness
+		}
+		if task.Replay.Status != core.StatusSucceeded || task.Replay.Timing.Status != "available" || task.Replay.Timing.Basis != "shared_replay_origin" || len(task.Replay.Timing.Calls) == 0 || task.Replay.Responses.Status != "available" || len(task.Replay.Responses.Calls) != len(task.Replay.Timing.Calls) || task.Evaluation.SourceTaskID != expected[index].TaskID {
+			t.Fatalf("shared timing or source binding lost: %+v", task)
+		}
+		for _, call := range task.Replay.Timing.Calls {
+			if call.DriftNS != wantDrift.Nanoseconds() {
+				t.Fatalf("wrong occurrence displacement: %+v, want %v", task.Replay.Timing, wantDrift)
+			}
+		}
+	}
+	logs, err := os.ReadFile(filepath.Join(runRoot, "aries.log"))
+	if err != nil || !bytes.Contains(logs, []byte("replay calls have equal start timestamps")) || !bytes.Contains(logs, []byte("tied_source_task_id")) || !bytes.Contains(logs, []byte("tied_source_sequence")) {
+		t.Fatalf("equal starts missing from run log: %s, %v", logs, err)
+	}
+}
+
+func TestReplayRunEmptyDiagnosticsDoNotArmSharedClock(t *testing.T) {
+	const concurrency = 1
+	source, tasks, expected := writeFiniteReplaySource(t, []string{"a", "a"}, true)
+	wiring := finiteReplayWiring(tasks)
+	var auditPath string
+	wiring.NewBridge = func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error) {
+		auditPath = filepath.Join(t.TempDir(), "tool-calls.jsonl")
+		return &finiteAuditBridge{path: auditPath}, nil
+	}
+	wiring.NewReplayCaller = func(config.Config, core.RuntimePlacement, time.Duration, *logrus.Logger) (runner.ReplayCaller, error) {
+		path := auditPath
+		return &finiteReplayCaller{run: func(_ context.Context, plan replay.Plan) error {
+			if plan.ReplayAt != nil || len(plan.Calls) != 0 {
+				return errors.New("empty source armed a clock or invented a call")
+			}
+			return os.WriteFile(path, nil, 0o600)
+		}}, nil
+	}
+	var out bytes.Buffer
+	if err := runCommandForTest(context.Background(), finiteReplayProfile(t, source, concurrency), &out, Dependencies{Wiring: wiring}); err != nil {
+		t.Fatal(err)
+	}
+	var result core.RunResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Tasks) != len(expected) {
+		t.Fatalf("missing empty occurrences: %+v", result)
+	}
+	for _, task := range result.Tasks {
+		if task.Replay.Timing.Status != "available" || task.Replay.Timing.Basis != "occurrence_first_start" || len(task.Replay.Timing.Calls) != 0 {
+			t.Fatalf("diagnostics armed an unused shared clock: %+v", task.Replay.Timing)
+		}
+	}
+}
+
 func TestReplayRunExecutesFiniteRecordedOccurrences(t *testing.T) {
 	for _, test := range []struct {
 		name                      string

@@ -18,8 +18,12 @@ const (
 
 // ReadTiming compares finalized bridge starts with one validated source plan.
 func ReadTiming(path string, plan Plan) core.ReplayTiming {
+	basis := "occurrence_first_start"
+	if plan.ReplayAt != nil {
+		basis = "shared_replay_origin"
+	}
 	unavailable := func(reason string) core.ReplayTiming {
-		return core.ReplayTiming{Status: "unavailable", Reason: reason}
+		return core.ReplayTiming{Status: "unavailable", Basis: basis, Reason: reason}
 	}
 	if path == "" {
 		return unavailable("replay bridge audit is missing")
@@ -82,7 +86,10 @@ func ReadTiming(path string, plan Plan) core.ReplayTiming {
 	if len(starts) != len(plan.Calls) {
 		return unavailable("replay bridge audit has missing calls")
 	}
-	timing := core.ReplayTiming{Status: "available"}
+	if plan.ReplayAt != nil {
+		first = plan.ReplayAt.Round(0)
+	}
+	timing := core.ReplayTiming{Status: "available", Basis: basis}
 	for _, call := range plan.Calls {
 		started, exists := starts[call.Sequence]
 		if !exists || call.Sequence == 0 || call.StartOffset < 0 {
@@ -92,7 +99,11 @@ func ReadTiming(path string, plan Plan) core.ReplayTiming {
 		if !first.Add(offset).Equal(started) {
 			return unavailable("replay bridge audit start offset is not representable")
 		}
-		timing.Calls = append(timing.Calls, core.ReplayCallTiming{SourceSequence: call.Sequence, DriftNS: (offset - call.StartOffset).Nanoseconds()})
+		drift := offset - call.StartOffset
+		if drift > offset {
+			return unavailable("replay bridge audit start drift is not representable")
+		}
+		timing.Calls = append(timing.Calls, core.ReplayCallTiming{SourceSequence: call.Sequence, DriftNS: drift.Nanoseconds()})
 	}
 	return timing
 }

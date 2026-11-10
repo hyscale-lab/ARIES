@@ -392,11 +392,26 @@ type sessionReplayRuntime struct {
 type sessionReplayBackend struct {
 	bootstrapBackend
 	commands chan core.Command
+	wait     <-chan struct{}
+	outputs  map[string]string
 }
 
-func (b sessionReplayBackend) ExecStream(_ context.Context, _ string, command core.Command, _ io.Reader, out, _ io.Writer) (core.CommandResult, error) {
+func (b sessionReplayBackend) ExecStream(ctx context.Context, _ string, command core.Command, _ io.Reader, out, _ io.Writer) (core.CommandResult, error) {
 	b.commands <- command
-	_, err := io.WriteString(out, sessionReplayOutput)
+	if b.wait != nil {
+		select {
+		case <-b.wait:
+		case <-ctx.Done():
+			return core.CommandResult{}, ctx.Err()
+		}
+	}
+	output := sessionReplayOutput
+	if len(command.Args) != 0 {
+		if captured, ok := b.outputs[command.Args[len(command.Args)-1]]; ok {
+			output = captured
+		}
+	}
+	_, err := io.WriteString(out, output)
 	return core.CommandResult{}, err
 }
 

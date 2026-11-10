@@ -103,14 +103,22 @@ prove equal final sandbox state or provide a fresh grade.
 
 `tasks[0].replay.timing.status` is `available` only when a finalized replay
 bridge audit matches every source audit sequence. Its `calls` list has
-`source_sequence` and signed `drift_ns` for each source call. Drift compares
-the bridge `started_at` offset from the first call in each trace; positive
-values mean later relative replay starts. The replay-only source sequence is
-not `tool_call_id`, which can be absent or reused. If correlation is missing
-or duplicated, timing is `unavailable` with a `reason` and no inferred
-per-call values. This diagnostic does not change replay response matching,
+`source_sequence` and signed `drift_ns` for each source call. With
+`basis: "shared_replay_origin"`, drift is the observed bridge `started_at`
+minus the common scheduled UTC replay origin, minus the global source offset.
+Thus a delayed occurrence keeps its displacement even when its local call gaps
+match. Staging delay, late readiness, and UTC clock skew can contribute to drift.
+The app, callers, and replay bridge need synchronized wall clocks for this comparison.
+With `basis: "occurrence_first_start"`, no shared epoch was established; offsets
+remain relative to the earliest bridge start in that occurrence. Single-occurrence
+selections keep this earlier behavior. Empty traces have no per-call drift.
+Positive drift means a later start on the stated basis. Source sequences remain
+occurrence-local: use the evaluation's source run and task IDs with each sequence,
+not an invented global sequence or `tool_call_id`. If correlation is missing,
+duplicated, or unrepresentable, timing is `unavailable` with a `reason` and no
+inferred per-call values. This diagnostic does not change replay response matching,
 isolation status, or the reused grade. Timing is read only after confirmed
-caller stop and bridge revocation.
+caller stop and bridge revocation. Reading it never starts an unused clock.
 
 `tasks[0].replay.responses.status` is `available` after confirmed caller stop
 and bridge revocation when the private replay audit identifies every source
@@ -136,7 +144,10 @@ waits or sandbox lifecycle timing. For multiple occurrences, the first ready
 caller with recorded calls starts the shared clock. Empty plans do not arm it;
 a single selected occurrence keeps local timing after readiness. Later readiness
 does not reset the timeline. Actual start times can drift due to bounded admission,
-private plan staging, network, and bridge scheduling. Source artifacts remain in their source run; replay outputs are separate. See
+private plan staging, network, and bridge scheduling. Equal source start timestamps
+are accepted without a launch-order guarantee and produce warnings in `aries.log`.
+Replay does not reproduce the original live-sandbox count or resource contention.
+Source artifacts remain in their source run; replay outputs are separate. See
 [replay configuration](configuration.md#sandbox-call-replay).
 
 ## Measurement availability

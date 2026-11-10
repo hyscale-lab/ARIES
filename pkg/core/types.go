@@ -239,6 +239,7 @@ type ReplayCallTiming struct {
 // ReplayTiming reports diagnostic call-start drift, not response equality.
 type ReplayTiming struct {
 	Status string             `json:"status"`
+	Basis  string             `json:"basis,omitempty"`
 	Calls  []ReplayCallTiming `json:"calls,omitempty"`
 	Reason string             `json:"reason,omitempty"`
 }

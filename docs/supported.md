@@ -58,7 +58,12 @@ guides above.
   occurrence. Recording still rejects arrival schedules. Replay uses one common
   operation timeline, but does not reproduce sandbox lifecycle timing, the original
   live-sandbox count, or original resource contention. Late readiness does not reset
-  the timeline. Ownership, sanitization, isolation, revocation, and confirmed
+  the timeline. Equal source starts are valid and produce `aries.log` warnings.
+  Shared scheduling and timing comparison require synchronized UTC wall clocks
+  for the app, callers, and bridge. Timing reports its shared-origin or local basis;
+  shared-origin drift includes cross-occurrence displacement and staging delay.
+  Hash-only and timing drift remain nonfatal; strict response checks still fail.
+  Ownership, sanitization, isolation, revocation, and confirmed
   removal checks remain required. An oversized captured response fails its recording task before
   evaluation. Replay execution
   captures comparison evidence without that flag. See the

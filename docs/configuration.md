@@ -469,7 +469,11 @@ starts one UTC replay clock. Later callers reuse it, with offsets from the earli
 recorded `started_at` in the selected workload. Empty plans neither arm nor wait
 for that clock. A single selected occurrence keeps local timing after readiness.
 Late readiness does not move the common origin; overdue calls start as soon as
-possible. Private plan staging and network delay after readiness remain diagnostic.
+possible. Equal source starts can launch in any order and produce warnings in
+`aries.log`. The app, callers, and replay bridge require synchronized UTC wall
+clocks for shared scheduling and timing comparison. Source bridge clocks must also
+be stable and synchronized. Private plan staging, clock skew, and network delay
+can move actual bridge starts; these differences remain diagnostic.
 The caller also keeps the
 recorded wait after the last call. Replay does not reproduce sandbox lifecycle
 timing, the original live-sandbox count, or original resource contention.
@@ -478,11 +482,16 @@ required. Source artifacts stay unchanged; replay writes a separate run director
 Network delay can shift the bridge's actual
 start time. After confirmed caller stop and bridge revocation, ARIES pairs
 private bridge audit records by the source audit sequence. This replay-only
-identifier is separate from `tool_call_id`. The result reports signed
-`drift_ns` for each call relative to the first bridge call in each trace.
-Positive drift means a later relative start. Missing or duplicate identifiers
-make the timing diagnostic unavailable; they do not change response matching
-or the inherited evaluation. See [replay results](run-results.md#sandbox-call-replay-results).
+identifier is separate from `tool_call_id` and stays local to its source occurrence.
+The timing result names its `basis`. With `shared_replay_origin`, signed `drift_ns`
+compares observed bridge starts against the common scheduled UTC epoch plus each
+global source offset. It retains cross-occurrence displacement, including lateness
+and staging delay. With `occurrence_first_start`, no shared epoch was established;
+comparison keeps the earlier occurrence-local normalization. Positive drift means
+a later start on that basis. Empty traces create no calls or clock. Missing,
+duplicate, or unrepresentable correlation makes timing unavailable. Timing drift
+does not change response matching or the inherited evaluation. See
+[replay results](run-results.md#sandbox-call-replay-results).
 
 ## Replay task arrivals
 
