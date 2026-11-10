@@ -463,6 +463,15 @@ func (r *Runner) runReplayTask(ctx context.Context, task core.Task) (core.TaskRe
 		allErrors = append(allErrors, fmt.Errorf("validate replay source: %w", err))
 		return finish()
 	}
+	for index, call := range plan.Calls {
+		if index > 0 && call.StartOffset == plan.Calls[index-1].StartOffset {
+			r.logger.WithContext(ctx).WithFields(logrus.Fields{
+				"task_id": task.ID, "source_run_id": plan.SourceRunID, "source_task_id": plan.SourceTaskID,
+				"source_sequence": call.Sequence, "tied_source_sequence": plan.Calls[index-1].Sequence,
+				"started_at": plan.StartedAt.Add(call.StartOffset).Format(time.RFC3339Nano), "start_offset_ns": call.StartOffset,
+			}).Warn("replay calls have equal start timestamps")
+		}
+	}
 	result.Evaluation = plan.Evaluation
 	result.Evaluation.Reused = true
 	result.Evaluation.SourceRunID = plan.SourceRunID

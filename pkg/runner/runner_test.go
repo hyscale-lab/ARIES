@@ -1440,6 +1440,83 @@ func TestReplayReportsHashDriftAfterIsolationWithoutResultText(t *testing.T) {
 	}
 }
 
+func TestReplayWarnsEqualStartsInRunLogWithoutPayloads(t *testing.T) {
+	const firstSequence uint64 = 1
+	const tiedSequence = firstSequence + 1
+	const lastSequence = tiedSequence + 1
+	const tieOffset = time.Second
+	const sourceTime = "2026-11-05T12:00:00Z"
+	const tiedTime = "2026-11-05T12:00:01Z"
+	const privateCommand = "command-must-not-be-logged"
+	const privateOutput = "output-must-not-be-logged"
+	const privateCredential = "credential-must-not-be-logged"
+	const oneWarning = 1
+	rig, caller, plan := newReplayRig(t, core.Evaluation{Status: core.StatusSucceeded},
+		replay.Call{Sequence: firstSequence},
+		replay.Call{Sequence: lastSequence, StartOffset: tieOffset, Script: privateCommand, Body: []byte(privateCredential)},
+		replay.Call{Sequence: tiedSequence, StartOffset: tieOffset, ResponseStdout: []byte(privateOutput)},
+	)
+	start, err := time.Parse(time.RFC3339Nano, sourceTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.StartedAt = start
+	path := filepath.Join(t.TempDir(), "aries.log")
+	log, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = log.Close() })
+	logger := logrus.New()
+	logger.SetOutput(log)
+	logger.SetFormatter(&logrus.JSONFormatter{})
+	engine, err := NewReplay(&panicReplayEvaluation{rig.benchmark}, rig.factory, rig.bridge, caller,
+		func(context.Context) (replay.Plan, error) { return plan, nil }, Options{RunID: "replay-run", Logger: logger})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := engine.Run(context.Background())
+	if err != nil || result.Tasks[0].Replay.Status != core.StatusSucceeded {
+		t.Fatalf("tied replay failed: result=%+v error=%v", result, err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	warnings := 0
+	for _, line := range bytes.Split(bytes.TrimSpace(data), []byte{'\n'}) {
+		var entry struct {
+			Level          string        `json:"level"`
+			Message        string        `json:"msg"`
+			TaskID         string        `json:"task_id"`
+			SourceRunID    string        `json:"source_run_id"`
+			SourceTaskID   string        `json:"source_task_id"`
+			SourceSequence uint64        `json:"source_sequence"`
+			TiedSequence   uint64        `json:"tied_source_sequence"`
+			StartOffset    time.Duration `json:"start_offset_ns"`
+			StartedAt      string        `json:"started_at"`
+		}
+		if err := json.Unmarshal(line, &entry); err != nil {
+			t.Fatal(err)
+		}
+		if entry.Level != logrus.WarnLevel.String() {
+			continue
+		}
+		warnings++
+		if entry.Message != "replay calls have equal start timestamps" || entry.TaskID != rig.benchmark.tasks[0].ID || entry.SourceRunID != replaySourceRunID || entry.SourceTaskID != replaySourceTaskID || entry.SourceSequence != tiedSequence || entry.TiedSequence != lastSequence || entry.StartOffset != tieOffset || entry.StartedAt != tiedTime {
+			t.Fatalf("tie warning lacks source identity or time: %s", line)
+		}
+	}
+	if warnings != oneWarning {
+		t.Fatalf("run log has %d tie warnings, want %d: %s", warnings, oneWarning, data)
+	}
+	for _, private := range []string{privateCommand, privateOutput, privateCredential} {
+		if bytes.Contains(data, []byte(private)) {
+			t.Fatalf("private payload entered tie warning: %s", data)
+		}
+	}
+}
+
 func TestReplayMissingDriftKeepsMatchAndSourceGrade(t *testing.T) {
 	const firstSourceSequence = 1
 	rig := newRig(t, firstSourceSequence)

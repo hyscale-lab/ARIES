@@ -221,47 +221,55 @@ func TestReplayCallsAllowReadFileBodyBeforeHeaderAsHashDrift(t *testing.T) {
 
 func TestReplayCallsStopOnMismatchAndCancelInFlight(t *testing.T) {
 	const nextOffset = 100 * time.Millisecond
-	entered := make(chan struct{})
-	canceled := make(chan struct{})
-	var mu sync.Mutex
-	var started []string
-	server := &replayServer{exec: func(ctx context.Context, request *sandboxv1.ExecRequest) (*sandboxv1.ExecResponse, error) {
-		mu.Lock()
-		started = append(started, request.GetScript())
-		mu.Unlock()
-		switch request.GetScript() {
-		case "slow":
-			close(entered)
-			<-ctx.Done()
-			close(canceled)
-			return nil, status.Error(codes.Canceled, "slow call canceled")
-		case "bad":
-			<-entered
-			return &sandboxv1.ExecResponse{Stdout: []byte("changed")}, nil
-		default:
-			return &sandboxv1.ExecResponse{}, nil
-		}
-	}}
-	call := expectedReplayCall("Exec", &sandboxv1.ExecResponse{})
-	first, second, third := call, call, call
-	first.Script, first.Sequence = "slow", 1
-	second.Script, second.Sequence, second.StartOffset = "bad", 2, nextOffset
-	third.Script, third.Sequence, third.StartOffset = "later", 3, 2*nextOffset
-	client := replayEndpoint(t, server)
-	ctx, cancel := context.WithTimeout(context.Background(), replayTestDeadline)
-	defer cancel()
-	if err := ReplayCalls(ctx, replayTestDeadline, client, replay.Plan{Calls: []replay.Call{first, second, third}}); err == nil || !strings.Contains(err.Error(), "mismatch") {
-		t.Fatalf("changed response accepted: %v", err)
-	}
-	select {
-	case <-canceled:
-	case <-time.After(replayTestDeadline):
-		t.Fatal("in-flight call did not receive cancellation")
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if len(started) != 2 {
-		t.Fatalf("calls started after mismatch: %v", started)
+	for _, mismatchOffset := range []time.Duration{0, nextOffset} {
+		t.Run(mismatchOffset.String(), func(t *testing.T) {
+			entered := make(chan struct{})
+			canceled := make(chan struct{})
+			var mu sync.Mutex
+			var started []string
+			server := &replayServer{exec: func(ctx context.Context, request *sandboxv1.ExecRequest) (*sandboxv1.ExecResponse, error) {
+				mu.Lock()
+				started = append(started, request.GetScript())
+				mu.Unlock()
+				switch request.GetScript() {
+				case "slow":
+					close(entered)
+					<-ctx.Done()
+					close(canceled)
+					return nil, status.Error(codes.Canceled, "slow call canceled")
+				case "bad":
+					select {
+					case <-entered:
+						return &sandboxv1.ExecResponse{Stdout: []byte("changed")}, nil
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					}
+				default:
+					return &sandboxv1.ExecResponse{}, nil
+				}
+			}}
+			call := expectedReplayCall("Exec", &sandboxv1.ExecResponse{})
+			first, second, third := call, call, call
+			first.Script, first.Sequence = "slow", 1
+			second.Script, second.Sequence, second.StartOffset = "bad", 2, mismatchOffset
+			third.Script, third.Sequence, third.StartOffset = "later", 3, 2*nextOffset
+			client := replayEndpoint(t, server)
+			ctx, cancel := context.WithTimeout(context.Background(), replayTestDeadline)
+			defer cancel()
+			if err := ReplayCalls(ctx, replayTestDeadline, client, replay.Plan{Calls: []replay.Call{first, second, third}}); err == nil || !strings.Contains(err.Error(), "mismatch") {
+				t.Fatalf("changed response accepted: %v", err)
+			}
+			select {
+			case <-canceled:
+			case <-time.After(replayTestDeadline):
+				t.Fatal("in-flight call did not receive cancellation")
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if len(started) != 2 {
+				t.Fatalf("calls started after mismatch: %v", started)
+			}
+		})
 	}
 }
 
