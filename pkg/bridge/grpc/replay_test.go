@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	sandboxv1 "github.com/hyscale-lab/aries/pkg/bridge/grpc/v1"
 	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgekit"
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -324,6 +326,463 @@ func TestLoadReplaySourceRejectsIncompleteEvidenceAndWrongTask(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPreflightReplaySourceSelectsOccurrences(t *testing.T) {
+	start, err := time.Parse(time.RFC3339Nano, replaySourceTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const otherTaskID = "other-task"
+	const otherImage = "other-image:tag"
+	const otherWorkdir = "/other-workdir"
+	const repeatedOccurrenceID = "task-002"
+	const otherOccurrenceID = "other-task-001"
+	const emptyOccurrenceID = "empty-task-001"
+	const startGap = 3 * time.Second
+	otherTask := core.Task{ID: otherTaskID, Environment: core.Environment{Image: otherImage, Workdir: otherWorkdir}}
+	other := replayRecord(start, start, 1)
+	other.OperationClass, other.Command = kindExec, "pwd"
+	other.CommandHash, other.Path, other.Workdir = bridgekit.CommandHash(other.Command), bridgekit.RemoteShellPath, otherWorkdir
+	other.Argv = []string{bridgekit.RemoteShellPath, "-c", other.Command}
+	inputs := []replayOccurrenceFixture{
+		{id: replayTaskID, task: replayTask, records: []toolCallRecord{
+			replayRecord(start.Add(startGap), start.Add(startGap), 1),
+			replayRecord(start.Add(startGap), start.Add(startGap), 2),
+		}},
+		{id: repeatedOccurrenceID, task: replayTask, records: []toolCallRecord{replayRecord(start, start, 1)}},
+		{id: otherOccurrenceID, task: otherTask, records: []toolCallRecord{other}},
+		{id: emptyOccurrenceID, task: replayTask},
+	}
+	run := writeReplayRun(t, inputs, start.Add(startGap))
+	catalog := []core.Task{replayTask, otherTask}
+	selection, err := PreflightReplaySource(context.Background(), run, catalog, replayBenchmark, replayRevisions, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(selection.Occurrences) != len(inputs) || !selection.StartedAt.Equal(start) {
+		t.Fatalf("selected workload = %+v", selection)
+	}
+	for index, input := range inputs {
+		occurrence := selection.Occurrences[index]
+		if occurrence.SourceTaskID != input.id || occurrence.LogicalTaskID != input.task.ID || len(occurrence.Calls) != len(input.records) {
+			t.Fatalf("selected occurrence = %+v", occurrence)
+		}
+		plan, err := selection.Load(context.Background(), index)
+		if err != nil || plan.SourceTaskID != input.id || len(plan.Calls) != len(input.records) || plan.Evaluation.Status != core.StatusFailed {
+			t.Fatalf("admitted occurrence = %+v, %v", plan, err)
+		}
+		if len(plan.Calls) != 0 {
+			wantOffset := time.Duration(0)
+			if index == 0 {
+				wantOffset = startGap
+			}
+			if !plan.StartedAt.Equal(start) {
+				t.Fatalf("global offsets have an occurrence-local source origin: %+v", plan)
+			}
+			for callIndex, call := range plan.Calls {
+				if call.StartOffset != wantOffset || occurrence.Calls[callIndex].StartOffset != wantOffset {
+					t.Fatalf("global call offsets = %+v, %+v", plan.Calls, occurrence.Calls)
+				}
+				if got := plan.StartedAt.Add(call.StartOffset); !got.Equal(start.Add(wantOffset)) {
+					t.Fatalf("absolute call start was shifted twice: got %s", got)
+				}
+			}
+		} else if !plan.StartedAt.IsZero() || !occurrence.StartedAt.IsZero() || plan.FinalWait != 0 {
+			t.Fatalf("empty occurrence invented timing: %+v, %+v", plan, occurrence)
+		}
+	}
+	selection.Occurrences[0] = ReplayOccurrence{}
+	selection.StartedAt = start.Add(startGap)
+	boundPlan, err := selection.Load(context.Background(), 0)
+	if err != nil || boundPlan.SourceTaskID != replayTaskID || !boundPlan.StartedAt.Equal(start) || boundPlan.Calls[0].StartOffset != startGap {
+		t.Fatalf("summary mutation changed the private admission binding: %+v, %v", boundPlan, err)
+	}
+	source := filepath.Join(run, replayTaskID)
+	single, err := PreflightReplaySource(context.Background(), source, catalog, replayBenchmark, replayRevisions, nil)
+	if err != nil || len(single.Occurrences) != 1 || !single.StartedAt.Equal(start.Add(startGap)) {
+		t.Fatalf("single source selection = %+v, %v", single, err)
+	}
+	plan, err := single.Load(context.Background(), 0)
+	if err != nil || plan.Calls[0].StartOffset != 0 {
+		t.Fatalf("single source admission = %+v, %v", plan, err)
+	}
+}
+
+func TestPreflightReplaySourceWarnsCrossOccurrenceStarts(t *testing.T) {
+	start, err := time.Parse(time.RFC3339Nano, replaySourceTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const secondOccurrenceID = "task-002"
+	const privatePath = "/private/recorded-input"
+	const owningRunID = "replay-run"
+	const firstSequence uint64 = 1
+	const secondSequence = firstSequence + 1
+	const tieOffset = time.Second
+	first := replayRecord(start, start, firstSequence)
+	tied := replayRecord(start.Add(tieOffset), start.Add(tieOffset), secondSequence)
+	tied.Path = privatePath
+	other := replayRecord(start.Add(tieOffset), start.Add(tieOffset), firstSequence)
+	other.Path = privatePath
+	run := writeReplayRun(t, []replayOccurrenceFixture{
+		{id: replayTaskID, task: replayTask, records: []toolCallRecord{first, tied}},
+		{id: secondOccurrenceID, task: replayTask, records: []toolCallRecord{other}},
+	}, start.Add(tieOffset))
+	var output bytes.Buffer
+	logger := logrus.New()
+	logger.SetOutput(&output)
+	logger.SetFormatter(&logrus.JSONFormatter{})
+	selection, err := PreflightReplaySource(context.Background(), run, []core.Task{replayTask}, replayBenchmark, replayRevisions, logger.WithField("run_id", owningRunID))
+	if err != nil || selection == nil {
+		t.Fatalf("tied selection = %+v, %v", selection, err)
+	}
+	var warning struct {
+		Level          string        `json:"level"`
+		Message        string        `json:"msg"`
+		RunID          string        `json:"run_id"`
+		SourceRunID    string        `json:"source_run_id"`
+		SourceTaskID   string        `json:"source_task_id"`
+		SourceSequence uint64        `json:"source_sequence"`
+		TiedTaskID     string        `json:"tied_source_task_id"`
+		TiedSequence   uint64        `json:"tied_source_sequence"`
+		StartedAt      string        `json:"started_at"`
+		StartOffset    time.Duration `json:"start_offset_ns"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &warning); err != nil {
+		t.Fatalf("cross-occurrence warning is missing or invalid: %q, %v", output.String(), err)
+	}
+	if warning.Level != logrus.WarnLevel.String() || warning.Message != "replay calls have equal start timestamps" || warning.RunID != owningRunID || warning.SourceRunID != replayRunID || warning.SourceTaskID != replayTaskID || warning.SourceSequence != secondSequence || warning.TiedTaskID != secondOccurrenceID || warning.TiedSequence != firstSequence || warning.StartedAt != bridgekit.FormatTime(start.Add(tieOffset)) || warning.StartOffset != tieOffset {
+		t.Fatalf("cross-occurrence warning lost identity or timing: %s", output.String())
+	}
+	if strings.Contains(output.String(), privatePath) || strings.Contains(output.String(), replayOutcome) {
+		t.Fatalf("cross-occurrence warning contains private payloads: %s", output.String())
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	logger.SetOutput(cancelReplayLogWriter{cancel: cancel})
+	if got, err := PreflightReplaySource(ctx, run, []core.Task{replayTask}, replayBenchmark, replayRevisions, logger.WithField("run_id", owningRunID)); err != context.Canceled || got != nil {
+		t.Fatalf("cancellation during preflight exposed a selection: %+v, %v", got, err)
+	}
+}
+
+type cancelReplayLogWriter struct {
+	cancel context.CancelFunc
+}
+
+func (writer cancelReplayLogWriter) Write(data []byte) (int, error) {
+	writer.cancel()
+	return len(data), nil
+}
+
+func TestPreflightReplaySourceRejectsInvalidFinalOccurrence(t *testing.T) {
+	start, err := time.Parse(time.RFC3339Nano, replaySourceTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const finalID = "task-002"
+	inputs := []replayOccurrenceFixture{
+		{id: replayTaskID, task: replayTask, records: []toolCallRecord{replayRecord(start, start, 1)}},
+		{id: finalID, task: replayTask, records: []toolCallRecord{replayRecord(start, start, 1)}},
+	}
+	for name, change := range map[string]func(string){
+		"missing occurrence": func(run string) {
+			if err := os.Rename(filepath.Join(run, finalID), filepath.Join(run, "unlisted")); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"duplicate occurrence": func(run string) { rewriteReplayIndex(t, run, finalID, true) },
+		"empty occurrence":     func(run string) { rewriteReplayIndex(t, run, "", false) },
+		"escaped occurrence":   func(run string) { rewriteReplayIndex(t, run, "../"+finalID, false) },
+		"absolute occurrence":  func(run string) { rewriteReplayIndex(t, run, filepath.Join(run, finalID), false) },
+		"nested occurrence":    func(run string) { rewriteReplayIndex(t, run, finalID+"/child", false) },
+		"dot occurrence":       func(run string) { rewriteReplayIndex(t, run, ".", false) },
+		"symlink occurrence": func(run string) {
+			path := filepath.Join(run, finalID)
+			other := filepath.Join(run, "unlisted")
+			if err := os.Rename(path, other); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(other, path); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"mismatched occurrence": func(run string) {
+			rewriteReplayRecord(t, filepath.Join(run, finalID), func(record map[string]any) { record["task_id"] = replayTaskID })
+		},
+		"mismatched logical task": func(run string) { updateReplayMetadata(t, filepath.Join(run, finalID), "task_id", "unknown") },
+		"mismatched provenance":   func(run string) { updateReplayMetadata(t, filepath.Join(run, finalID), "image", "other:image") },
+		"mismatched run":          func(run string) { updateReplayMetadata(t, filepath.Join(run, finalID), "run_id", "other-run") },
+		"incomplete evidence":     func(run string) { updateReplayMetadata(t, filepath.Join(run, finalID), "replay_ready", false) },
+		"missing evaluation": func(run string) {
+			writeReplayJSON(t, filepath.Join(run, "run-result.json"), core.RunResult{RunID: replayRunID, Tasks: []core.TaskResult{
+				{TaskID: replayTaskID, Evaluation: core.Evaluation{Status: core.StatusSucceeded}}, {TaskID: finalID},
+			}})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			run := writeReplayRun(t, inputs, start)
+			change(run)
+			selection, err := PreflightReplaySource(context.Background(), run, []core.Task{replayTask}, replayBenchmark, replayRevisions, nil)
+			if err == nil || selection != nil {
+				t.Fatalf("invalid final occurrence exposed an admissible selection: %+v, %v", selection, err)
+			}
+		})
+	}
+}
+
+func rewriteReplayIndex(t *testing.T, run, finalID string, duplicate bool) {
+	t.Helper()
+	tasks := []core.TaskResult{
+		{TaskID: replayTaskID, Evaluation: core.Evaluation{Status: core.StatusSucceeded}},
+		{TaskID: finalID, Evaluation: core.Evaluation{Status: core.StatusSucceeded}},
+	}
+	if duplicate {
+		tasks = append(tasks, tasks[len(tasks)-1])
+	}
+	writeReplayJSON(t, filepath.Join(run, "run-result.json"), core.RunResult{RunID: replayRunID, Tasks: tasks})
+}
+
+func TestReplaySelectionRejectsChangedFinalizedEvidence(t *testing.T) {
+	start, err := time.Parse(time.RFC3339Nano, replaySourceTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, change := range map[string]func(string){
+		"refinalized call": func(source string) {
+			rewriteReplayRecord(t, source, func(record map[string]any) { record["path"] = "/changed-input" })
+		},
+		"runtime completion": func(source string) {
+			updateReplayMetadata(t, source, "harness_completed_at", bridgekit.FormatTime(start.Add(time.Second)))
+		},
+		"parent result": func(source string) {
+			writeReplayJSON(t, filepath.Join(filepath.Dir(source), "run-result.json"), core.RunResult{RunID: replayRunID, Name: "changed", Tasks: []core.TaskResult{
+				{TaskID: replayTaskID, Evaluation: core.Evaluation{Status: core.StatusSucceeded}},
+			}})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			source := writeReplaySource(t, []toolCallRecord{replayRecord(start, start, 1)}, start, core.Evaluation{Status: core.StatusSucceeded})
+			selection, err := PreflightReplaySource(context.Background(), source, []core.Task{replayTask}, replayBenchmark, replayRevisions, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			change(source)
+			plan, err := selection.Load(context.Background(), 0)
+			if err == nil || !strings.Contains(err.Error(), "changed after preflight") || plan.SourceRunID != "" || len(plan.Calls) != 0 {
+				t.Fatalf("changed finalized source admitted: %+v, %v", plan, err)
+			}
+		})
+	}
+}
+
+func TestPreflightReplaySourceEmptyAndLegacySources(t *testing.T) {
+	start, err := time.Parse(time.RFC3339Nano, replaySourceTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const secondOccurrenceID = "task-002"
+	run := writeReplayRun(t, []replayOccurrenceFixture{{id: replayTaskID, task: replayTask}, {id: secondOccurrenceID, task: replayTask}}, start)
+	selection, err := PreflightReplaySource(context.Background(), run, []core.Task{replayTask}, replayBenchmark, replayRevisions, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !selection.StartedAt.IsZero() {
+		t.Fatalf("empty workload invented a source origin: %+v", selection)
+	}
+	for index, occurrence := range selection.Occurrences {
+		plan, err := selection.Load(context.Background(), index)
+		if err != nil || len(occurrence.Calls) != 0 || !occurrence.StartedAt.IsZero() || len(plan.Calls) != 0 || plan.FinalWait != 0 || !plan.StartedAt.IsZero() {
+			t.Fatalf("empty source admission = %+v, %+v, %v", occurrence, plan, err)
+		}
+	}
+	source := writeReplaySource(t, []toolCallRecord{replayRecord(start, start, 1)}, start, core.Evaluation{Status: core.StatusSucceeded})
+	updateReplayMetadata(t, source, "run_id", nil)
+	before := make(map[string][]byte)
+	for _, path := range []string{filepath.Join(source, "bridge", "runtime.json"), filepath.Join(source, "bridge", "tool-calls.jsonl"), filepath.Join(filepath.Dir(source), "run-result.json")} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[path] = data
+	}
+	legacy, err := PreflightReplaySource(context.Background(), source, []core.Task{replayTask}, replayBenchmark, replayRevisions, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := legacy.Load(context.Background(), 0)
+	if err != nil || len(plan.Calls) != 1 {
+		t.Fatalf("legacy source admission = %+v, %v", plan, err)
+	}
+	for path, original := range before {
+		data, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(data, original) {
+			t.Fatalf("source evidence changed: %s, %v", path, err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got, err := PreflightReplaySource(ctx, source, []core.Task{replayTask}, replayBenchmark, replayRevisions, nil); err != context.Canceled || got != nil {
+		t.Fatalf("canceled preflight = %+v, %v", got, err)
+	}
+	if got, err := legacy.Load(ctx, 0); err != context.Canceled || len(got.Calls) != 0 {
+		t.Fatalf("canceled admission = %+v, %v", got, err)
+	}
+}
+
+func TestPreflightReplaySourceUsesRecordedGlobalTimeBounds(t *testing.T) {
+	const earlyTimestamp = "0001-01-01T00:00:00Z"
+	const lateTimestamp = "9999-01-01T00:00:00Z"
+	const laterOccurrenceID = "task-002"
+	early, err := time.Parse(time.RFC3339Nano, earlyTimestamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	late, err := time.Parse(time.RFC3339Nano, lateTimestamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, later := range map[string]time.Time{"zero source time": early.Add(time.Second), "unrepresentable offset": late} {
+		t.Run(name, func(t *testing.T) {
+			// Completion markers are local to each source, not the run timeline.
+			firstSource := writeReplaySource(t, []toolCallRecord{replayRecord(early, early, 1)}, early, core.Evaluation{Status: core.StatusSucceeded})
+			second := replayRecord(later, later, 1)
+			second.TaskID = laterOccurrenceID
+			secondSource := writeReplaySource(t, []toolCallRecord{second}, later, core.Evaluation{Status: core.StatusSucceeded})
+			run := filepath.Dir(firstSource)
+			if err := os.Rename(secondSource, filepath.Join(run, laterOccurrenceID)); err != nil {
+				t.Fatal(err)
+			}
+			rewriteReplayIndex(t, run, laterOccurrenceID, false)
+			selection, err := PreflightReplaySource(context.Background(), run, []core.Task{replayTask}, replayBenchmark, replayRevisions, nil)
+			if later.Equal(late) {
+				if err == nil || selection != nil {
+					t.Fatalf("unrepresentable global offset accepted: %+v, %v", selection, err)
+				}
+				return
+			}
+			if err != nil || !selection.StartedAt.Equal(early) {
+				t.Fatalf("recorded zero origin treated as an empty trace: %+v, %v", selection, err)
+			}
+			plan, err := selection.Load(context.Background(), len(selection.Occurrences)-1)
+			if err != nil || plan.Calls[0].StartOffset != time.Second || !plan.StartedAt.Equal(early) {
+				t.Fatalf("recorded global source origin and offset = %+v, %v", plan, err)
+			}
+		})
+	}
+}
+
+func TestPreflightReplaySourceChecksGlobalPlanBound(t *testing.T) {
+	start, err := time.Parse(time.RFC3339Nano, replaySourceTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const laterOccurrenceID = "task-002"
+	const callGap = time.Second
+	run := writeReplayRun(t, []replayOccurrenceFixture{
+		{id: replayTaskID, task: replayTask, records: []toolCallRecord{replayRecord(start, start, 1)}},
+		{id: laterOccurrenceID, task: replayTask, records: []toolCallRecord{replayRecord(start.Add(callGap), start.Add(callGap), 1)}},
+	}, start.Add(callGap))
+	updateReplayMetadata(t, filepath.Join(run, replayTaskID), "harness_completed_at", bridgekit.FormatTime(start))
+	plan, err := LoadReplaySource(filepath.Join(run, laterOccurrenceID), replayTask, replayBenchmark, replayRevisions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localData, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.Calls[0].StartOffset = callGap
+	globalData, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bound := range []int{len(localData), len(globalData)} {
+		selection, err := preflightReplaySource(context.Background(), run, []core.Task{replayTask}, replayBenchmark, replayRevisions, nil, bound)
+		if bound == len(localData) {
+			if err == nil || selection != nil {
+				t.Fatalf("global plan above encoded bound accepted: %+v, %v", selection, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := selection.Load(context.Background(), len(selection.Occurrences)-1)
+		if err != nil || got.Calls[0].StartOffset != callGap {
+			t.Fatalf("exact global plan bound rejected: %+v, %v", got, err)
+		}
+	}
+}
+
+func TestReplaySelectionDoesNotRetainPayloadPlans(t *testing.T) {
+	start, err := time.Parse(time.RFC3339Nano, replaySourceTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const payloadBytes = 2 << 20
+	const occurrenceCount = 8
+	const retainedPayloadLimit = 2 * payloadBytes
+	inputs := make([]replayOccurrenceFixture, occurrenceCount)
+	for index := range inputs {
+		record := replayRecord(start, start, 1)
+		record.OperationClass, record.Stdin = kindFileWrite, strings.Repeat("x", payloadBytes)
+		record.StdinBytes = int64(len(record.Stdin))
+		digest := sha256.Sum256([]byte(record.Stdin))
+		record.SHA256 = hex.EncodeToString(digest[:])
+		inputs[index] = replayOccurrenceFixture{id: replayTaskID + strings.Repeat("-repeat", index), task: replayTask, records: []toolCallRecord{record}}
+	}
+	run := writeReplayRun(t, inputs, start)
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	selection, err := PreflightReplaySource(context.Background(), run, []core.Task{replayTask}, replayBenchmark, replayRevisions, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	if retained := int64(after.HeapAlloc) - int64(before.HeapAlloc); retained >= retainedPayloadLimit {
+		t.Fatalf("selection retained payload-sized heap: %d bytes", retained)
+	}
+	for index := range selection.Occurrences {
+		plan, err := selection.Load(context.Background(), index)
+		if err != nil || len(plan.Calls) != 1 || len(plan.Calls[0].Body) != payloadBytes {
+			t.Fatalf("bounded payload admission = %d calls, %v", len(plan.Calls), err)
+		}
+	}
+	runtime.KeepAlive(selection)
+}
+
+type replayOccurrenceFixture struct {
+	id      string
+	task    core.Task
+	records []toolCallRecord
+}
+
+func writeReplayRun(t *testing.T, inputs []replayOccurrenceFixture, completed time.Time) string {
+	t.Helper()
+	run := t.TempDir()
+	if err := os.Chmod(run, replayDirectoryMode); err != nil {
+		t.Fatal(err)
+	}
+	result := core.RunResult{RunID: replayRunID}
+	for _, input := range inputs {
+		records := slices.Clone(input.records)
+		for index := range records {
+			records[index].TaskID = input.id
+		}
+		evaluation := core.Evaluation{Status: core.StatusFailed}
+		source := writeReplaySource(t, records, completed, evaluation)
+		updateReplayMetadata(t, source, "task_id", input.task.ID)
+		updateReplayMetadata(t, source, "image", input.task.Environment.Image)
+		if err := os.Rename(source, filepath.Join(run, input.id)); err != nil {
+			t.Fatal(err)
+		}
+		result.Tasks = append(result.Tasks, core.TaskResult{TaskID: input.id, Evaluation: evaluation})
+	}
+	writeReplayJSON(t, filepath.Join(run, "run-result.json"), result)
+	return run
 }
 
 func updateReplayMetadata(t *testing.T, source, key string, value any) {
