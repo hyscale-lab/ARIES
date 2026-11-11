@@ -33,7 +33,39 @@ func commandWiring() app.Wiring {
 		BuildHarnessImage:  buildHarnessImage,
 		NewHarness:         newHarness,
 		NewInfrastructure:  newInfrastructure,
+		FindLeftovers:      findLeftovers,
 	}
+}
+
+// findLeftovers lists what a run left behind, in the order to remove it: its
+// runtimes and networks on the profile's backend, then a managed model server.
+// Docker task components share one selected daemon, and an Apptainer run's
+// three placements are identical, so the sandbox's placement covers the run.
+func findLeftovers(ctx context.Context, cfg config.Config, runID, outputRoot string, logger *logrus.Logger) ([]app.Leftover, func() error, error) {
+	if err := validateDeployment(&cfg); err != nil {
+		return nil, nil, err
+	}
+	var leftovers []app.Leftover
+	var release func() error
+	var err error
+	switch cfg.Sandbox.Deployment.Backend {
+	case "docker":
+		leftovers, release, err = deploymentwiring.DockerLeftovers(ctx, cfg.Sandbox.Deployment, runID, logger)
+	case "apptainer":
+		leftovers, release, err = deploymentwiring.ApptainerLeftovers(cfg.Sandbox.Deployment, runID, logger)
+	case "kubernetes":
+		return nil, nil, errors.New("aries cleanup does not support Kubernetes yet; remove the run's pods, Service and NetworkPolicies, which carry its aries.run annotation")
+	default:
+		return nil, nil, fmt.Errorf("unsupported sandbox.deployment.backend %q", cfg.Sandbox.Deployment.Backend)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	server, err := runtimewiring.ManagedSGLangLeftovers(cfg, outputRoot)
+	if err != nil {
+		return nil, nil, errors.Join(err, release())
+	}
+	return append(leftovers, server...), release, nil
 }
 
 func validateComponents(cfg config.Config) error {

@@ -93,7 +93,7 @@ func RunInNamespace(ctx context.Context, argv []string, slirpPath string) (int, 
 			<-childDone
 		}
 	}
-	network, ready, err := startSlirp(slirp, child.Process.Pid)
+	network, slirpExit, ready, err := startSlirp(slirp, child.Process.Pid)
 	if err != nil {
 		_ = releaseWriter.Close()
 		stopChild()
@@ -102,6 +102,7 @@ func RunInNamespace(ctx context.Context, argv []string, slirpPath string) (int, 
 	defer func() {
 		_ = network.Process.Signal(syscall.SIGTERM)
 		_ = network.Wait()
+		_ = slirpExit.Close()
 	}()
 	select {
 	case err := <-ready:
@@ -141,21 +142,33 @@ func RunInNamespace(ctx context.Context, argv []string, slirpPath string) (int, 
 
 // startSlirp attaches slirp4netns to the namespace of pid. The returned channel
 // reports once slirp4netns has configured the interface, or why it could not.
-func startSlirp(path string, pid int) (*exec.Cmd, <-chan error, error) {
+// slirp4netns exits when the returned file, the write end of its exit pipe, is
+// closed. Only this process holds it, so the kernel closes it if this process
+// dies without stopping slirp4netns, as after kill -9, and slirp4netns follows.
+func startSlirp(path string, pid int) (*exec.Cmd, *os.File, <-chan error, error) {
 	readyReader, readyWriter, err := os.Pipe()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	network := exec.Command(path, "--configure", "--mtu=65520", "--disable-host-loopback", "--ready-fd=3", strconv.Itoa(pid), runNamespaceTap)
-	network.ExtraFiles = []*os.File{readyWriter}
+	exitReader, exitWriter, err := os.Pipe()
+	if err != nil {
+		readyReader.Close()
+		readyWriter.Close()
+		return nil, nil, nil, err
+	}
+	network := exec.Command(path, "--configure", "--mtu=65520", "--disable-host-loopback", "--ready-fd=3", "--exit-fd=4", strconv.Itoa(pid), runNamespaceTap)
+	network.ExtraFiles = []*os.File{readyWriter, exitReader}
 	var output strings.Builder
 	network.Stdout, network.Stderr = &output, &output
 	if err := network.Start(); err != nil {
 		readyReader.Close()
 		readyWriter.Close()
-		return nil, nil, fmt.Errorf("start slirp4netns: %w", err)
+		exitReader.Close()
+		exitWriter.Close()
+		return nil, nil, nil, fmt.Errorf("start slirp4netns: %w", err)
 	}
 	readyWriter.Close()
+	exitReader.Close()
 	ready := make(chan error, 1)
 	go func() {
 		defer readyReader.Close()
@@ -169,7 +182,7 @@ func startSlirp(path string, pid int) (*exec.Cmd, <-chan error, error) {
 		}
 		ready <- errors.New("slirp4netns reported an unexpected readiness value")
 	}()
-	return network, ready, nil
+	return network, exitWriter, ready, nil
 }
 
 // WaitForRunNamespace is called first by a process that RunInNamespace

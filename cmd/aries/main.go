@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -31,7 +32,7 @@ func main() {
 		}
 		os.Exit(code)
 	}
-	if err := dispatch(ctx, os.Args[1:], os.Stdout, app.Dependencies{Logger: logger, Wiring: commandWiring()}, app.Run, app.Setup); err != nil {
+	if err := dispatch(ctx, os.Args[1:], os.Stdout, app.Dependencies{Logger: logger, Wiring: commandWiring()}, app.Run, app.Setup, app.Cleanup); err != nil {
 		logger.WithError(err).Error("aries failed")
 		os.Exit(1)
 	}
@@ -39,15 +40,48 @@ func main() {
 
 type useCase func(context.Context, string, io.Writer, app.Dependencies) error
 
-func dispatch(ctx context.Context, args []string, stdout io.Writer, dependencies app.Dependencies, run, setup useCase) error {
+type cleanupUseCase func(context.Context, string, string, app.CleanupOptions, io.Writer, app.Dependencies) error
+
+const usage = "usage: aries PROFILE.json | aries setup PROFILE.json | aries cleanup [--dry-run] [--force] PROFILE.json RUN_ID"
+
+func dispatch(ctx context.Context, args []string, stdout io.Writer, dependencies app.Dependencies, run, setup useCase, cleanup cleanupUseCase) error {
 	switch {
 	case len(args) == 1:
 		return run(ctx, args[0], stdout, dependencies)
 	case len(args) == 2 && args[0] == "setup":
 		return setup(ctx, args[1], stdout, dependencies)
+	case len(args) >= 3 && args[0] == "cleanup":
+		profile, runID, options, err := cleanupArguments(args[1:])
+		if err != nil {
+			return err
+		}
+		return cleanup(ctx, profile, runID, options, stdout, dependencies)
 	default:
-		return errors.New("usage: aries PROFILE.json | aries setup PROFILE.json")
+		return errors.New(usage)
 	}
+}
+
+// cleanupArguments reads `aries cleanup`'s flags, in any position, and its
+// profile and run ID.
+func cleanupArguments(args []string) (string, string, app.CleanupOptions, error) {
+	var options app.CleanupOptions
+	var positional []string
+	for _, arg := range args {
+		switch {
+		case arg == "--dry-run":
+			options.DryRun = true
+		case arg == "--force":
+			options.Force = true
+		case strings.HasPrefix(arg, "-"):
+			return "", "", options, errors.New(usage)
+		default:
+			positional = append(positional, arg)
+		}
+	}
+	if len(positional) != 2 {
+		return "", "", options, errors.New(usage)
+	}
+	return positional[0], positional[1], options, nil
 }
 
 // runInOwnNamespace runs an Apptainer profile in a private network namespace:

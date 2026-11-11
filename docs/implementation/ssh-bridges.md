@@ -156,7 +156,8 @@ There are no SSH client credential files, leases, or controller-liveness checks.
 Runner explicitly releases its session during task cleanup. The run owner stops
 the shared service after tasks finish and removes the network after its
 containers are gone. An abrupt controller crash can leave owned runtimes and
-networks requiring operator cleanup.
+networks, which `aries cleanup` removes (see
+[after a crash](../run-results.md#after-a-crash)).
 
 Stop closes tool admission and bridge-owned listeners/connections/handlers,
 finalizes and collects that sandbox's evidence. Service shutdown separately

@@ -21,24 +21,35 @@ import (
 func TestDispatchAcceptsOnlyExactCommandGrammar(t *testing.T) {
 	runErr := errors.New("run")
 	setupErr := errors.New("setup")
+	cleanupErr := errors.New("cleanup")
 	for _, tc := range []struct {
 		name        string
 		args        []string
 		wantRun     int
 		wantSetup   int
+		wantCleanup int
 		wantErr     error
 		wantProfile string
+		wantRunID   string
+		wantOptions app.CleanupOptions
 	}{
 		{name: "run", args: []string{"profile.json"}, wantRun: 1, wantErr: runErr, wantProfile: "profile.json"},
 		{name: "setup", args: []string{"setup", "profile.json"}, wantSetup: 1, wantErr: setupErr, wantProfile: "profile.json"},
+		{name: "cleanup", args: []string{"cleanup", "profile.json", "run-1"}, wantCleanup: 1, wantErr: cleanupErr, wantProfile: "profile.json", wantRunID: "run-1"},
+		{name: "cleanup flags anywhere", args: []string{"cleanup", "--force", "profile.json", "--dry-run", "run-1"}, wantCleanup: 1, wantErr: cleanupErr, wantProfile: "profile.json", wantRunID: "run-1", wantOptions: app.CleanupOptions{DryRun: true, Force: true}},
 		{name: "empty"},
 		{name: "profile named setup", args: []string{"setup"}, wantRun: 1, wantErr: runErr, wantProfile: "setup"},
+		{name: "profile named cleanup", args: []string{"cleanup"}, wantRun: 1, wantErr: runErr, wantProfile: "cleanup"},
 		{name: "unknown two args", args: []string{"other", "profile.json"}},
 		{name: "extra arg", args: []string{"setup", "profile.json", "extra"}},
+		{name: "cleanup without run ID", args: []string{"cleanup", "profile.json", "--force"}},
+		{name: "cleanup extra arg", args: []string{"cleanup", "profile.json", "run-1", "extra"}},
+		{name: "cleanup unknown flag", args: []string{"cleanup", "--yes", "profile.json", "run-1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			runCalls, setupCalls := 0, 0
-			var profile string
+			runCalls, setupCalls, cleanupCalls := 0, 0, 0
+			var profile, runID string
+			var options app.CleanupOptions
 			run := func(context.Context, string, io.Writer, app.Dependencies) error {
 				runCalls++
 				profile = tc.args[0]
@@ -49,15 +60,23 @@ func TestDispatchAcceptsOnlyExactCommandGrammar(t *testing.T) {
 				profile = got
 				return setupErr
 			}
-			err := dispatch(context.Background(), tc.args, &bytes.Buffer{}, app.Dependencies{}, run, setup)
-			if runCalls != tc.wantRun || setupCalls != tc.wantSetup || (tc.wantErr != nil && !errors.Is(err, tc.wantErr)) {
-				t.Fatalf("run=%d setup=%d err=%v", runCalls, setupCalls, err)
+			cleanup := func(_ context.Context, gotProfile, gotRunID string, gotOptions app.CleanupOptions, _ io.Writer, _ app.Dependencies) error {
+				cleanupCalls++
+				profile, runID, options = gotProfile, gotRunID, gotOptions
+				return cleanupErr
 			}
-			if tc.wantErr == nil && (err == nil || err.Error() != "usage: aries PROFILE.json | aries setup PROFILE.json") {
+			err := dispatch(context.Background(), tc.args, &bytes.Buffer{}, app.Dependencies{}, run, setup, cleanup)
+			if runCalls != tc.wantRun || setupCalls != tc.wantSetup || cleanupCalls != tc.wantCleanup || (tc.wantErr != nil && !errors.Is(err, tc.wantErr)) {
+				t.Fatalf("run=%d setup=%d cleanup=%d err=%v", runCalls, setupCalls, cleanupCalls, err)
+			}
+			if tc.wantErr == nil && (err == nil || err.Error() != usage) {
 				t.Fatalf("grammar err=%v", err)
 			}
 			if tc.wantProfile != "" && profile != tc.wantProfile {
 				t.Fatalf("profile=%q", profile)
+			}
+			if runID != tc.wantRunID || options != tc.wantOptions {
+				t.Fatalf("run ID=%q options=%+v", runID, options)
 			}
 		})
 	}
