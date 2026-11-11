@@ -189,13 +189,13 @@ Call cancellation or timeout does not prove termination of background processes.
 
 **Proposed policy. This section does not change the current contract.**
 
-Reject an unrepresentable recording at the earliest safe boundary. Reject known unsupported request input before dispatch when possible. Report output-capture loss when it becomes known. Preserve the RPC's actual result and any side effects already made. Always run positive cleanup. These recommendations address the [current gaps](#7-current-errors-and-cleanup-safeguards), rather than remove evidence or isolation safeguards.
+Reject an unrepresentable recording at the earliest safe boundary. Reject known unsupported request input before dispatch when possible. Report output-capture loss when it becomes known. Preserve the actual RPC result and any side effects already made. Always run positive cleanup. These recommendations address the [current gaps](#7-current-errors-and-cleanup-safeguards), rather than remove evidence or isolation safeguards.
 
 Do not treat an expected recorded non-OK outcome as an unexpected failure. Compare it with the recorded expectation. The current caller already supports this distinction and stops on strict mismatches (`pkg/bridge/grpc/caller.go:222-227,39-45`; [response rules](#6-response-checks-and-result-meaning)).
 
 The following stronger rules need an explicit contract decision: fatal SHA-only drift, fatal diagnostic unavailability, a timing-drift threshold, or stopping future occurrences on the first response mismatch. Stopping future calls on SHA-only drift is also a change; stopping future calls on strict mismatch already exists. No strict-hash or timing-policy switch currently exists (`pkg/config/config.go:107-110`; `pkg/bridge/grpc/caller.go:39-45,222-227`; `pkg/runner/runner.go:609-629`; `internal/app/execution.go:125-133`).
 
-Any early-stop rule can leave part of the finite source workload unexecuted. Calls already started cannot be undone. Concurrent occurrences may already own live runtimes. A stricter policy must retain those facts in results and continue bounded cleanup ([execution](#5-timing-and-execution-fidelity), [cleanup](#7-current-errors-and-cleanup-safeguards)).
+Any early-stop rule can stop execution before the finite source workload is complete. Calls already started cannot be undone. Concurrent occurrences may already own live runtimes. A stricter policy must retain those facts in results and continue bounded cleanup ([execution](#5-timing-and-execution-fidelity), [cleanup](#7-current-errors-and-cleanup-safeguards)).
 
 An error is the appropriate outcome for missing required capture. It is not a substitute for defining replay fidelity. Timing variation, unobserved state, and reused evaluation are separate limits. They can occur without overflow or malformed input ([timing](#5-timing-and-execution-fidelity), [result meaning](#6-response-checks-and-result-meaning)).
 
