@@ -239,7 +239,7 @@ type processFile struct {
 // bridges reads the run's process runtimes. Their own time and memory count;
 // the commands a bridge runs count for the sandboxes that run them.
 func (source *ResourceSource) bridges(table processTable) ([]core.ResourceReading, error) {
-	paths, err := filepath.Glob(filepath.Join(source.options.StateDir, "*"+processRecordSuffix))
+	paths, err := processRecordPaths(source.options.StateDir)
 	if err != nil {
 		return nil, err
 	}

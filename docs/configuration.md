@@ -704,7 +704,10 @@ referenced YAML using the exact arguments
 `/health`, and then requires exact model discovery at `/v1/models`. It retains
 the child output in mode-0600 `sglang/stdout.log` and `sglang/stderr.log`, stops
 the process group after all admitted tasks drain, and uses `stop_timeout` as
-the graceful TERM budget before forced cleanup.
+the graceful TERM budget before forced cleanup. The group runs apart from ARIES
+and outlives it if ARIES is killed, so `sglang/process.json` records it, and
+`aries cleanup` stops a server that a crashed run left (see
+[after a crash](run-results.md#after-a-crash)).
 
 The configured credential variable is available to ARIES and OpenClaw but is
 removed from the managed SGLang child's environment:

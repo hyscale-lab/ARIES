@@ -201,6 +201,33 @@ private `harness/voice-instruction.txt`, `harness/voice-instruction.wav`, its
 metadata, and `harness/realtime-result.json`. These mode-specific harness and
 bridge artifacts may contain task or model content; review them before sharing.
 
+## After a crash
+
+A run removes its runtimes and networks as it ends. If its `aries` process stops
+without doing so, as after `kill -9`, an out-of-memory kill or a lost node, they
+keep running. Remove them with the run's profile and its ID, which is the name
+of its run directory under `runs/`:
+
+```sh
+./bin/aries cleanup --dry-run profiles/openclaw-tb2-fix-git-deepseek.json RUN_ID
+./bin/aries cleanup profiles/openclaw-tb2-fix-git-deepseek.json RUN_ID
+```
+
+`--dry-run` lists what would be removed. Cleanup finds the run's containers and
+networks on Docker, and its instances and bridge process on Apptainer, by their
+`aries.run` label, and removes each with the operation the run itself uses at
+its end. With managed SGLang it also stops the model server that
+`sglang/process.json` in the run directory records, allowing `stop_timeout`
+before it forces the server to stop. It reports every removal and fails if
+anything is left; running it again is safe. Kubernetes is not supported yet: there, the run's pods, Service
+and network policies carry its `aries.run` annotation.
+
+Each run writes `runner.json` to its directory with the host, PID and start time
+of its `aries` process, and cleanup refuses while that process is still running.
+Without that file, or from another host, it cannot tell, so it refuses unless
+`--force` is given; check that the run has stopped first. A crashed run's results
+stay incomplete: cleanup only removes what the run left running.
+
 ## Troubleshooting
 
 - **Docker permission or socket error:** run `docker info` against the configured
@@ -249,7 +276,8 @@ bridge artifacts may contain task or model content; review them before sharing.
   network and the harness can reach the bridge container's advertised address
   and port. Tool traffic uses that container address; control uses host loopback.
 - **Suspected leak:** inspect `docker ps -a --filter label=aries.managed=true`
-  and `docker network ls --filter label=aries.managed=true`.
+  and `docker network ls --filter label=aries.managed=true`. To remove what a
+  crashed run left, see [after a crash](#after-a-crash).
 
 For architecture and security boundaries, see [the architecture guide](design.md).
 For the exact implementation matrix and configuration pointers, see

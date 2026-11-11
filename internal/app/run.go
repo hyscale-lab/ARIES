@@ -44,6 +44,10 @@ type Wiring struct {
 	NewHarness         func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error)
 	NewSandbox         func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error)
 	NewBridge          func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error)
+	// FindLeftovers lists what a run left behind, given its ID and directory,
+	// in the order to remove it, with a function that releases the clients it
+	// opened.
+	FindLeftovers func(context.Context, config.Config, string, string, *logrus.Logger) ([]Leftover, func() error, error)
 }
 
 type Dependencies struct {
@@ -52,6 +56,10 @@ type Dependencies struct {
 	PreflightSleep  contextSleep
 	Logger          *logrus.Logger
 	Wiring          Wiring
+	// Hostname and ProcessStart identify the Runner process in runner.json;
+	// nil uses this host's name and /proc.
+	Hostname     func() (string, error)
+	ProcessStart func(int) (uint64, bool, error)
 }
 
 func Setup(ctx context.Context, profilePath string, stdout io.Writer, dependencies Dependencies) error {
@@ -127,6 +135,11 @@ func Run(ctx context.Context, profilePath string, stdout io.Writer, dependencies
 	preparationEntry.WithField("preparation_state", "prepared").Info("profile preparation")
 	if err := createRunOutputRoot(outputRoot); err != nil {
 		return fmt.Errorf("create private run output root: %w", err)
+	}
+	// Before any runtime starts, so that a later cleanup can tell whether this
+	// process still owns them.
+	if err := writeRunnerRecord(outputRoot, dependencies.hostname(), dependencies.processStart()); err != nil {
+		return fmt.Errorf("record the run's Runner: %w", err)
 	}
 	detachRunLog, err := attachRunLog(logger, outputRoot)
 	if err != nil {
