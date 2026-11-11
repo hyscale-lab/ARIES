@@ -17,7 +17,9 @@ import (
 
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/deployment"
+	"github.com/hyscale-lab/aries/pkg/replay/managed"
 	"github.com/hyscale-lab/aries/pkg/runner"
+	"github.com/sirupsen/logrus"
 )
 
 // fakeKubectl answers each invocation from respond and records what was run.
@@ -161,6 +163,34 @@ func TestPodManifestStagingAndBridgeIdentity(t *testing.T) {
 	}
 }
 
+func TestReplayCallerRequestDisablesServiceAccountToken(t *testing.T) {
+	manager, fake := newTestManager(t, Options{ServiceAccount: "aries-bridge"})
+	request := testRequest()
+	request.Name = "aries-replay-caller"
+	request.Image = "aries-bridge:tag"
+	request.Entrypoint = []string{"/usr/local/bin/aries-bridge"}
+	request.Args = []string{"replay", "/run/aries/launch.json"}
+	request.ServicePort = 0
+	request.Env = nil
+	request.Labels["aries.component"] = "replay-caller"
+	request.DisableServiceAccountToken = true
+	raw, err := manager.podManifest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := decodeManifest(t, raw)
+	metadata := manifest["metadata"].(map[string]any)
+	spec := manifest["spec"].(map[string]any)
+	container := spec["containers"].([]any)[0].(map[string]any)
+	const gateMountCount = 1
+	if metadata["namespace"] != request.Placement.AttachmentID || metadata["labels"].(map[string]any)[componentLabel] != "replay-caller" || spec["automountServiceAccountToken"] != false || spec["serviceAccountName"] != nil || spec["hostNetwork"] != nil || container["ports"] != nil || len(container["volumeMounts"].([]any)) != gateMountCount || len(spec["volumes"].([]any)) != gateMountCount {
+		t.Fatalf("replay caller was not privately placed: %v", manifest)
+	}
+	if len(fake.verbs()) != 0 {
+		t.Fatalf("manifest construction contacted a cluster: %v", fake.verbs())
+	}
+}
+
 func TestValidateRequestRejectsWhatTheProviderCannotHonor(t *testing.T) {
 	manager, _ := newTestManager(t, Options{})
 	for name, mutate := range map[string]func(*deployment.Request){
@@ -278,6 +308,265 @@ func TestValidateChecksIdentityIsolationAndSecrets(t *testing.T) {
 		if err := manager.Validate(context.Background(), request.Name, request, [][]byte{[]byte("sk-secret")}); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+func TestValidateReplayCallerRequestRejectsMountedServiceAccountToken(t *testing.T) {
+	manager, fake := newTestManager(t, Options{ServiceAccount: "aries-bridge"})
+	request := testRequest()
+	request.DisableServiceAccountToken = true
+	fake.respond = func(_ context.Context, _ []string, _ []byte, stdout, _ io.Writer) error {
+		_, err := io.WriteString(stdout, podJSON(t, manager, request, func(manifest map[string]any) {
+			manifest["spec"].(map[string]any)["automountServiceAccountToken"] = true
+		}))
+		return err
+	}
+	if err := manager.Validate(context.Background(), request.Name, request, nil); err == nil || !strings.Contains(err.Error(), "service account token") {
+		t.Fatalf("replay caller token mount accepted: %v", err)
+	}
+}
+
+func TestReplayCallerRejectsServiceAccountTokenBeforeStart(t *testing.T) {
+	for name, volume := range map[string]string{
+		"token projection": `{"name":"token","projected":{"sources":[{"serviceAccountToken":{"path":"token"}}]}}`,
+		"direct Secret":    `{"name":"token","secret":{"secretName":"legacy-token"}}`,
+		"projected Secret": `{"name":"token","projected":{"sources":[{"secret":{"name":"legacy-token"}}]}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			manager, fake := newTestManager(t, Options{ServiceAccount: "aries-bridge"})
+			var pod []byte
+			gateOpened := false
+			fake.respond = func(ctx context.Context, args []string, stdin []byte, stdout, _ io.Writer) error {
+				switch args[0] {
+				case "create":
+					manifest := decodeManifest(t, stdin)
+					spec := manifest["spec"].(map[string]any)
+					if spec["automountServiceAccountToken"] != false {
+						t.Fatal("replay caller did not disable token automount")
+					}
+					spec["volumes"] = append(spec["volumes"].([]any), json.RawMessage(volume))
+					container := spec["containers"].([]any)[0].(map[string]any)
+					container["volumeMounts"] = append(container["volumeMounts"].([]any), map[string]any{
+						"name": "token", "mountPath": "/run/token", "readOnly": true,
+					})
+					var err error
+					pod, err = json.Marshal(manifest)
+					return err
+				case "get":
+					if slices.Contains(args, "secret") {
+						want := []string{"get", "secret", "-n", manager.Namespace(), "legacy-token", "-o", "jsonpath-as-json={.type}"}
+						if !slices.Equal(args, want) {
+							t.Fatalf("Secret lookup = %q, want %q", args, want)
+						}
+						if _, bounded := ctx.Deadline(); !bounded {
+							t.Fatal("Secret lookup has no deadline")
+						}
+						_, err := io.WriteString(stdout, `["kubernetes.io/service-account-token"]`)
+						return err
+					}
+					_, err := stdout.Write(pod)
+					return err
+				case "exec":
+					if slices.Contains(args, ": > "+gateMarker) {
+						gateOpened = true
+						return errors.New("runtime gate opened")
+					}
+				case "delete":
+					pod = nil
+				}
+				return nil
+			}
+			placement := core.RuntimePlacement{AttachmentID: manager.Namespace()}
+			caller, err := managed.New(managed.Options{
+				Runtime: manager, Image: "aries-bridge:tag", Backend: "kubernetes",
+				BridgeBackend: "kubernetes", BridgePlacement: placement,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := caller.Stop(context.Background()); err != nil {
+					t.Error(err)
+				}
+				if len(pod) != 0 || !slices.Contains(fake.verbs(), "delete pod") {
+					t.Error("rejected replay caller pod was not removed")
+				}
+			})
+			err = caller.Start(context.Background(), core.ToolEndpoint{Address: "bridge.aries:8443", Protocol: "grpc"}, core.HarnessConnectivity{Placement: placement}, "run-1", "task-1")
+			if err == nil || !strings.Contains(err.Error(), "validate replay caller") || !strings.Contains(err.Error(), "service account token") {
+				t.Errorf("service account token validation = %v", err)
+			}
+			if gateOpened {
+				t.Fatal("replay caller started with a service account token")
+			}
+		})
+	}
+}
+
+func TestValidateProjectedVolumeSources(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		sources    string
+		disable    bool
+		wantReject bool
+		noAccount  bool
+	}{
+		{name: "default token policy", sources: `[{"serviceAccountToken":{"path":"token"}}]`, noAccount: true, wantReject: true},
+		{name: "config map", sources: `[{"configMap":{"name":"settings"}}]`, disable: true},
+		{name: "secret", sources: `[{"secret":{"name":"settings"}}]`, disable: true},
+		{name: "downward API", sources: `[{"downwardAPI":{"items":[{"path":"name","fieldRef":{"fieldPath":"metadata.name"}}]}}]`, disable: true},
+		{name: "empty token projection", sources: `[{"serviceAccountToken":{}}]`, disable: true, wantReject: true},
+		{name: "token after config map", sources: `[{"configMap":{"name":"settings"}},{"serviceAccountToken":{"path":"token"}}]`, disable: true, wantReject: true},
+		{name: "token policy off", sources: `[{"serviceAccountToken":{"path":"token"}}]`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			serviceAccount := "aries-bridge"
+			if test.noAccount {
+				serviceAccount = ""
+			}
+			manager, fake := newTestManager(t, Options{ServiceAccount: serviceAccount})
+			request := testRequest()
+			request.DisableServiceAccountToken = test.disable
+			pod := podJSON(t, manager, request, func(manifest map[string]any) {
+				spec := manifest["spec"].(map[string]any)
+				spec["automountServiceAccountToken"] = false
+				spec["volumes"] = append(spec["volumes"].([]any), map[string]any{
+					"name": "projection", "projected": map[string]any{"sources": json.RawMessage(test.sources)},
+				})
+			})
+			fake.respond = func(_ context.Context, args []string, _ []byte, stdout, _ io.Writer) error {
+				if slices.Contains(args, "secret") {
+					_, err := io.WriteString(stdout, `["Opaque"]`)
+					return err
+				}
+				_, err := io.WriteString(stdout, pod)
+				return err
+			}
+			err := manager.Validate(context.Background(), request.Name, request, nil)
+			if test.wantReject {
+				if err == nil || !strings.Contains(err.Error(), "service account token") {
+					t.Fatalf("projected token accepted: %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("allowed projection rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateSecretVolumeTypes(t *testing.T) {
+	const privateOutput = "lookup-private-content"
+	for mount, volume := range map[string]string{
+		"direct":    `{"name":"settings","secret":{"secretName":"runtime-settings"}}`,
+		"projected": `{"name":"settings","projected":{"sources":[{"configMap":{"name":"settings"}},{"secret":{"name":"runtime-settings"}}]}}`,
+	} {
+		for _, policy := range []struct {
+			name           string
+			serviceAccount string
+			disable        bool
+		}{
+			{name: "default"},
+			{name: "explicit", serviceAccount: "aries-bridge", disable: true},
+			{name: "off", serviceAccount: "aries-bridge"},
+		} {
+			for _, lookup := range []struct {
+				name   string
+				output string
+				err    error
+				reject bool
+			}{
+				{name: "opaque", output: `["Opaque"]`},
+				{name: "TLS", output: `["kubernetes.io/tls"]`},
+				{name: "custom", output: `["example.test/settings"]`},
+				{name: "token", output: `["kubernetes.io/service-account-token"]`, reject: true},
+				{name: "missing", err: errors.New("NotFound: " + privateOutput), reject: true},
+				{name: "denied", output: privateOutput, err: errors.New("Forbidden: " + privateOutput), reject: true},
+				{name: "empty", reject: true},
+				{name: "malformed", output: privateOutput, reject: true},
+				{name: "no type", output: `[]`, reject: true},
+				{name: "null type", output: `[null]`, reject: true},
+				{name: "empty type", output: `[""]`, reject: true},
+				{name: "multiple types", output: `["Opaque","kubernetes.io/service-account-token"]`, reject: true},
+				{name: "object", output: `{"type":"Opaque","data":{"dummy":"` + privateOutput + `"}}`, reject: true},
+			} {
+				t.Run(mount+"/"+policy.name+"/"+lookup.name, func(t *testing.T) {
+					var logs bytes.Buffer
+					logger := logrus.New()
+					logger.SetOutput(&logs)
+					manager, fake := newTestManager(t, Options{Namespace: "task-space", ServiceAccount: policy.serviceAccount, Logger: logger})
+					request := testRequest()
+					request.Placement.AttachmentID = manager.Namespace()
+					request.DisableServiceAccountToken = policy.disable
+					pod := podJSON(t, manager, request, func(manifest map[string]any) {
+						spec := manifest["spec"].(map[string]any)
+						spec["volumes"] = append(spec["volumes"].([]any), json.RawMessage(volume))
+					})
+					lookedUp := false
+					fake.respond = func(ctx context.Context, args []string, _ []byte, stdout, stderr io.Writer) error {
+						if slices.Contains(args, "secret") {
+							lookedUp = true
+							want := []string{"get", "secret", "-n", "task-space", "runtime-settings", "-o", "jsonpath-as-json={.type}"}
+							if !slices.Equal(args, want) {
+								t.Fatalf("Secret lookup = %q, want %q", args, want)
+							}
+							if _, bounded := ctx.Deadline(); !bounded {
+								t.Fatal("Secret lookup has no deadline")
+							}
+							_, _ = io.WriteString(stdout, lookup.output)
+							_, _ = io.WriteString(stderr, privateOutput)
+							return lookup.err
+						}
+						_, err := io.WriteString(stdout, pod)
+						return err
+					}
+					err := manager.Validate(context.Background(), request.Name, request, nil)
+					noToken := policy.name != "off"
+					if lookedUp != noToken {
+						t.Errorf("Secret lookup = %v, want %v", lookedUp, noToken)
+					}
+					if (err != nil) != (noToken && lookup.reject) {
+						t.Fatalf("Secret validation = %v, reject = %v", err, noToken && lookup.reject)
+					}
+					if strings.Contains(logs.String(), privateOutput) || err != nil && strings.Contains(err.Error(), privateOutput) || lookup.err != nil && errors.Is(err, lookup.err) {
+						t.Fatal("Secret lookup exposed private output or its error cause")
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestValidateSecretLookupBounds(t *testing.T) {
+	for _, bound := range []string{"deadline", "output"} {
+		t.Run(bound, func(t *testing.T) {
+			options := Options{}
+			if bound == "deadline" {
+				options.ReadyTimeout = time.Millisecond
+			}
+			manager, fake := newTestManager(t, options)
+			request := testRequest()
+			pod := podJSON(t, manager, request, func(manifest map[string]any) {
+				spec := manifest["spec"].(map[string]any)
+				spec["volumes"] = append(spec["volumes"].([]any), map[string]any{
+					"name": "settings", "secret": map[string]any{"secretName": "runtime-settings"},
+				})
+			})
+			fake.respond = func(ctx context.Context, args []string, _ []byte, stdout, _ io.Writer) error {
+				if slices.Contains(args, "secret") {
+					if bound == "deadline" {
+						<-ctx.Done()
+						return nil
+					}
+					_, err := io.WriteString(stdout, `["`+strings.Repeat("x", maxExecOutput)+`"]`)
+					return err
+				}
+				_, err := io.WriteString(stdout, pod)
+				return err
+			}
+			if err := manager.Validate(context.Background(), request.Name, request, nil); err == nil {
+				t.Fatal("Secret lookup accepted output beyond its bound")
+			}
+		})
 	}
 }
 

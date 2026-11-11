@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"github.com/hyscale-lab/aries/pkg/bridge/target"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/deployment"
+	"github.com/hyscale-lab/aries/pkg/replay"
 	"github.com/hyscale-lab/aries/pkg/runner"
 )
 
@@ -25,27 +27,112 @@ type targetExporter interface {
 	ExportBridgeTarget() (core.BridgeTarget, error)
 }
 
+const sourceSchemaVersion = 1
+
+type sourceMetadata struct {
+	Backend, RuntimeID, RuntimeName, SandboxID, TargetRuntimeID string
+	RunID                                                       string            `json:"run_id"`
+	SchemaVersion                                               int               `json:"schema_version"`
+	BenchmarkType                                               string            `json:"benchmark_type,omitempty"`
+	TaskID                                                      string            `json:"task_id,omitempty"`
+	Image                                                       string            `json:"image,omitempty"`
+	BenchmarkRevisions                                          map[string]string `json:"benchmark_revisions,omitempty"`
+	HarnessCompletedAt                                          string            `json:"harness_completed_at,omitempty"`
+	ToolCallsBytes                                              *int64            `json:"tool_calls_bytes,omitempty"`
+	ToolCallsSHA256                                             string            `json:"tool_calls_sha256,omitempty"`
+	ReplayReady                                                 bool              `json:"replay_ready"`
+}
+
 // Session is one sandbox's immutable bridge access and evidence owner.
 type Session struct {
-	mu                                       sync.Mutex
-	service                                  *Service
-	outputRoot                               string
-	started, stopped                         bool
-	descriptor                               core.BridgeTarget
-	local, remote, helper                    string
-	registered, exposed, released, collected bool
-	manifest                                 []*v1.Artifact
-	evidenceErr                              error
+	mu                                        sync.Mutex
+	service                                   *Service
+	outputRoot                                string
+	started, stopped                          bool
+	descriptor                                core.BridgeTarget
+	local, remote, helper                     string
+	registered, exposed, released, collected  bool
+	manifest                                  []*v1.Artifact
+	evidenceErr                               error
+	metadata                                  sourceMetadata
+	occurrenceImage                           string
+	sourceBound, taskBound, metadataFinalized bool
 }
 
 var _ runner.ToolBridge = (*Session)(nil)
 
+func (s *Session) RecordSource(logicalID, image string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.started || !s.service.options.CaptureReplay {
+		return
+	}
+	s.metadata.TaskID, s.metadata.Image = logicalID, image
+	s.sourceBound = logicalID != "" && image != ""
+}
+func (s *Session) RecordTask(image string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.started || !s.service.options.CaptureReplay {
+		return
+	}
+	s.occurrenceImage, s.taskBound = image, image != ""
+}
 func (s *Session) record() error {
-	b, err := json.MarshalIndent(struct{ Backend, RuntimeID, RuntimeName, SandboxID, TargetRuntimeID string }{s.service.options.Launch.RuntimeBackend, s.service.runtimeID, s.service.runtimeName, s.descriptor.SandboxID, s.descriptor.RuntimeID}, "", "  ")
+	s.metadata.Backend = s.service.options.Launch.RuntimeBackend
+	s.metadata.RuntimeID = s.service.runtimeID
+	s.metadata.RuntimeName = s.service.runtimeName
+	s.metadata.SandboxID = s.descriptor.SandboxID
+	s.metadata.TargetRuntimeID = s.descriptor.RuntimeID
+	s.metadata.RunID = s.descriptor.RunID
+	s.metadata.SchemaVersion = sourceSchemaVersion
+	s.metadata.BenchmarkType = s.service.options.BenchmarkType
+	s.metadata.BenchmarkRevisions = maps.Clone(s.service.options.BenchmarkRevisions)
+	var metadata any = s.metadata
+	if !s.service.options.CaptureReplay {
+		metadata = struct{ Backend, RuntimeID, RuntimeName, SandboxID, TargetRuntimeID string }{s.metadata.Backend, s.metadata.RuntimeID, s.metadata.RuntimeName, s.metadata.SandboxID, s.metadata.TargetRuntimeID}
+	}
+	b, err := json.MarshalIndent(metadata, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(s.local, "runtime.json"), b, 0600)
+	file, err := os.CreateTemp(s.local, ".runtime-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(file.Name())
+	if _, err = file.Write(b); err != nil {
+		return errors.Join(err, file.Close())
+	}
+	if err = file.Sync(); err != nil {
+		return errors.Join(err, file.Close())
+	}
+	if err = file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(file.Name(), filepath.Join(s.local, "runtime.json"))
+}
+func (s *Session) CompleteHarness(ctx context.Context) error {
+	if !s.service.options.CaptureReplay || s.service.transport != "grpc" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.exposed || s.stopped {
+		return errors.New("bridge session cannot record harness completion")
+	}
+	completed, err := s.service.client.CompleteSandbox(ctx, s.request())
+	if err != nil {
+		return err
+	}
+	if completed == nil || completed.SandboxId != s.descriptor.SandboxID {
+		return errors.New("bridge completion identity differs")
+	}
+	if _, err = time.Parse(time.RFC3339Nano, completed.CompletedAt); err != nil {
+		return fmt.Errorf("invalid bridge completion timestamp: %w", err)
+	}
+	s.metadata.HarnessCompletedAt = completed.CompletedAt
+	return nil
 }
 func (s *Session) Start(ctx context.Context, sandbox runner.Sandbox) (core.ToolEndpoint, error) {
 	s.mu.Lock()
@@ -198,6 +285,45 @@ func (s *Session) Stop(ctx context.Context) error {
 			}
 		}
 		s.collected = true
+	}
+	if s.service.options.CaptureReplay && s.exposed && s.collected && !s.metadataFinalized {
+		var manifest *v1.Artifact
+		for _, entry := range s.manifest {
+			if entry.Name == "tool-calls.jsonl" {
+				manifest = entry
+				break
+			}
+		}
+		if manifest == nil {
+			return errors.Join(errors.New("bridge tool-call evidence is missing"), s.removeHelper())
+		}
+		collected, err := finalizeArtifacts(s.local, s.service.transport, []string{"tool-calls.jsonl"})
+		if err != nil {
+			return errors.Join(err, s.removeHelper())
+		}
+		if collected[0].Size != manifest.Size || collected[0].SHA256 != manifest.Sha256 {
+			return errors.Join(errors.New("collected tool-call evidence differs from manifest"), s.removeHelper())
+		}
+		s.metadata.ToolCallsBytes = &collected[0].Size
+		s.metadata.ToolCallsSHA256 = collected[0].SHA256
+		auditReady := true
+		if s.service.transport == "grpc" {
+			auditErr := replay.LiveAuditError(filepath.Join(s.local, "tool-calls.jsonl"))
+			if auditErr != nil && !errors.Is(auditErr, replay.ErrExecResponseTooLarge) {
+				return errors.Join(auditErr, s.removeHelper())
+			}
+			auditReady = auditErr == nil
+		}
+		s.metadata.ReplayReady = auditReady && s.service.transport == "grpc" && s.sourceBound && s.taskBound && s.metadata.Image == s.occurrenceImage && s.metadata.HarnessCompletedAt != "" && s.service.options.BenchmarkType != "" && len(s.service.options.BenchmarkRevisions) != 0
+		for _, revision := range s.service.options.BenchmarkRevisions {
+			if revision == "" {
+				s.metadata.ReplayReady = false
+			}
+		}
+		if err := s.record(); err != nil {
+			return errors.Join(err, s.removeHelper())
+		}
+		s.metadataFinalized = true
 	}
 	return s.removeHelper()
 }

@@ -47,6 +47,12 @@ export DEEPSEEK_API_KEY=...   # judge, and (for this profile) the harness model
 ./bin/aries profiles/openclaw-drb-smoke1-sglang.json
 ```
 
+Deep Research Bench replay uses one earlier `hermes-grpc` task occurrence.
+It repeats sandbox calls but does not collect a new report, call RACE or FACT,
+or contact a judge. The replay result labels the source evaluation as reused;
+it does not grade the replay sandbox. See
+[replay configuration](../configuration.md#sandbox-call-replay).
+
 ### Harness task prompt
 
 Deep Research Bench is designed to evaluate research agents. Its

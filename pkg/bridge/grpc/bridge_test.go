@@ -3,10 +3,12 @@ package grpc
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -17,6 +19,7 @@ import (
 	sandboxv1 "github.com/hyscale-lab/aries/pkg/bridge/grpc/v1"
 	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgekit"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -74,11 +77,176 @@ func TestExecRunsBashInTheSandboxWorkdir(t *testing.T) {
 	if len(argv) != 4 || argv[1] != "-l" {
 		t.Fatalf("record argv = %#v", records[1]["argv"])
 	}
-	// Command output never enters the audit; only byte counts.
+	// Exec output does not use the legacy stdout/stderr fields.
 	for _, forbidden := range []string{"stdout", "stderr", "truncated"} {
 		if _, present := records[1][forbidden]; present {
 			t.Fatalf("record carries %q", forbidden)
 		}
+	}
+}
+
+func TestExecResponseKeepsBinaryBytesWhenRecording(t *testing.T) {
+	binary := []byte{'a', 0xff, 'b'}
+	executor := newFakeExecutor(nil)
+	executor.stdout = binary
+	executor.stderr = []byte("error text")
+	manager, client, endpoint := startBridge(t, executor, Options{CaptureReplay: true, OmitRawLog: true})
+	if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "true"}); err != nil {
+		t.Fatal(err)
+	}
+	stop(t, manager)
+	record := readToolCalls(t, endpoint.LogPaths[0])[0]
+	encoded, ok := record["response_stdout_base64"].(string)
+	if !ok {
+		t.Fatalf("binary output missing: %+v", record)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil || !bytes.Equal(decoded, binary) || record["response_stderr"] != "error text" {
+		t.Fatalf("binary output = %q, error = %v, record = %+v", decoded, err, record)
+	}
+}
+
+func TestExecResponseKeepsFullBoundedText(t *testing.T) {
+	executor := newFakeExecutor(nil)
+	executor.stdout = bytes.Repeat([]byte{'<'}, defaultOutputLimit)
+	executor.stderr = executor.stdout
+	manager, client, endpoint := startBridge(t, executor, Options{CaptureReplay: true, OmitRawLog: true})
+	if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "true"}); err != nil {
+		t.Fatal(err)
+	}
+	stop(t, manager)
+	record := readToolCalls(t, endpoint.LogPaths[0])[0]
+	if record["response_debug"] != true || record["replay_error"] != nil || record["response_stdout"] != string(executor.stdout) || record["response_stderr"] != string(executor.stderr) {
+		t.Fatal("bounded UTF-8 output lost from audit")
+	}
+}
+
+func TestExecResponseChecksBoundAfterIdentity(t *testing.T) {
+	const responseStreamCount = 2 // Exec has stdout and stderr.
+	baselineManager, baselineClient, baselineEndpoint := startBridge(t, newFakeExecutor(nil), Options{CaptureReplay: true, OmitRawLog: true})
+	if _, err := baselineClient.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "true"}); err != nil {
+		t.Fatal(err)
+	}
+	stop(t, baselineManager)
+	baseline, err := os.ReadFile(baselineEndpoint.LogPaths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := newFakeExecutor(nil)
+	perStream := (2*MaxMessageBytes - len(baseline) - len(executor.ContainerName())) / (responseStreamCount * len(`\u0000`))
+	if perStream > defaultOutputLimit {
+		t.Fatalf("test output exceeds Exec limit: %d", perStream)
+	}
+	executor.stdout = bytes.Repeat([]byte{0}, perStream)
+	executor.stderr = executor.stdout
+	manager, client, endpoint := startBridge(t, executor, Options{CaptureReplay: true, OmitRawLog: true})
+	if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "true"}); err != nil {
+		t.Fatal(err)
+	}
+	stop(t, manager)
+	log, err := os.ReadFile(endpoint.LogPaths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(log) > 2*MaxMessageBytes {
+		t.Fatalf("final audit line exceeds replay limit: %d", len(log))
+	}
+	record := readToolCalls(t, endpoint.LogPaths[0])[0]
+	if record["replay_error"] != "response-debug-too-large" || record["response_debug"] != nil {
+		t.Fatalf("identity pushed response past replay limit: %+v", record)
+	}
+}
+
+func TestExecResponseMarksOversizedAuditUnreplayable(t *testing.T) {
+	executor := newFakeExecutor(nil)
+	executor.stdout = bytes.Repeat([]byte{0}, MaxMessageBytes/len(`\u0000`)+1)
+	executor.stderr = executor.stdout
+	manager, client, endpoint := startBridge(t, executor, Options{CaptureReplay: true, OmitRawLog: true})
+	response, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "true"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(response.GetStdout(), executor.stdout) || !bytes.Equal(response.GetStderr(), executor.stderr) {
+		t.Fatal("audit overflow changed the Exec response")
+	}
+	stop(t, manager)
+	record := readToolCalls(t, endpoint.LogPaths[0])[0]
+	if record["replay_error"] != "response-debug-too-large" || record["response_debug"] != nil || record["response_stdout"] != nil {
+		t.Fatalf("oversized response was accepted: %+v", record)
+	}
+}
+
+func TestBoundDebugResponseRejectsBeforeExpandedAllocation(t *testing.T) {
+	output := strings.Repeat("\x00", defaultOutputLimit)
+	record := toolCallRecord{
+		ToolCallRecord: bridgekit.ToolCallRecord{ToolCallID: testToolCallID, StdoutBytes: int64(len(output))},
+		ResponseDebug:  true, ResponseStdout: output, ResponseStderr: output,
+		ResponseSHA256: bridgekit.CommandHash(output), GRPCCode: codes.OK.String(),
+	}
+	// Do not run in parallel: the allocation counter belongs to the process.
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	record.boundDebugResponse()
+	runtime.ReadMemStats(&after)
+	allocated := after.TotalAlloc - before.TotalAlloc
+	t.Logf("size check allocated %d bytes", allocated)
+	// One retained stream is ample space for fixed metadata bookkeeping.
+	if allocated > uint64(defaultOutputLimit) {
+		t.Fatalf("size check allocated %d bytes for an oversized escaped response; limit = %d", allocated, defaultOutputLimit)
+	}
+	if record.ResponseDebug || record.ResponseStdout != "" || record.ResponseStderr != "" || record.ReplayError != "response-debug-too-large" {
+		t.Fatal("oversized response was retained")
+	}
+	if record.ToolCallID != testToolCallID || record.StdoutBytes != int64(len(output)) || record.ResponseSHA256 != bridgekit.CommandHash(output) || record.GRPCCode != codes.OK.String() {
+		t.Fatal("size check changed response metadata")
+	}
+}
+
+func TestBoundDebugResponseEncodedBoundary(t *testing.T) {
+	for name, text := range map[string]string{
+		"plain HTML":             "<>&plain",
+		"short escapes":          "\"\\\b\f\n\r\t",
+		"control characters":     "\x00\x01\x1f",
+		"Unicode":                "α  �",
+		"base64 padding":         "a",
+		"base64 without padding": "abc",
+	} {
+		t.Run(name, func(t *testing.T) {
+			record := toolCallRecord{
+				ToolCallRecord: bridgekit.ToolCallRecord{
+					SandboxID: "sandbox", ContainerID: "container", ContainerName: "name",
+					RunID: "run", TaskID: "task", ToolCallID: testToolCallID,
+					Command: "echo \"text\"", Argv: []string{"bash", "-c", "echo \"text\""},
+					Environment: []string{"HOME"}, Stdin: "input\n", Error: "error\ttext",
+				},
+				ResponseDebug: true, ResponseStdout: text, ResponseStderr: text,
+				ResponseStdoutBase64: []byte(text), ResponseStderrBase64: []byte(text),
+				ResponseSHA256: bridgekit.CommandHash(text), GRPCCode: codes.OK.String(),
+			}
+			encoded, err := bridgekit.MarshalJSONLine(&record)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stampBytes := len(time.RFC3339Nano) + len(strconv.FormatUint(^uint64(0), replaySequenceBase))
+			remaining := 2*MaxMessageBytes - stampBytes - len(encoded)
+			// Each NUL adds six JSON bytes; plain '<' uses one with HTML escaping off.
+			record.ResponseStdout += strings.Repeat("\x00", remaining/len(`\u0000`)) + strings.Repeat("<", remaining%len(`\u0000`))
+			atLimit := record
+			atLimit.boundDebugResponse()
+			if !atLimit.ResponseDebug || atLimit.ReplayError != "" || atLimit.ResponseStdout != record.ResponseStdout || atLimit.ResponseStderr != text || !bytes.Equal(atLimit.ResponseStdoutBase64, []byte(text)) || !bytes.Equal(atLimit.ResponseStderrBase64, []byte(text)) {
+				t.Fatal("response at the encoded limit was changed")
+			}
+			pastLimit := record
+			pastLimit.ResponseStderr += "x"
+			pastLimit.boundDebugResponse()
+			if pastLimit.ResponseDebug || pastLimit.ResponseStdout != "" || pastLimit.ResponseStderr != "" || pastLimit.ResponseStdoutBase64 != nil || pastLimit.ResponseStderrBase64 != nil || pastLimit.ReplayError != "response-debug-too-large" {
+				t.Fatal("response one encoded byte past the limit was retained")
+			}
+			if pastLimit.ToolCallID != record.ToolCallID || pastLimit.Command != record.Command || pastLimit.ResponseSHA256 != record.ResponseSHA256 {
+				t.Fatal("overflow changed retained metadata")
+			}
+		})
 	}
 }
 
@@ -167,12 +335,69 @@ func TestOutputBeyondTheLimitTruncates(t *testing.T) {
 	}
 }
 
+func TestReplayOutcomeUsesReturnedExecBytes(t *testing.T) {
+	executor := newFakeExecutor(nil)
+	executor.exitCode = 7
+	executor.stdout = bytes.Repeat([]byte("a"), defaultOutputLimit+1)
+	manager, client, endpoint := startBridge(t, executor, Options{CaptureReplay: true, OmitRawLog: true})
+	for _, length := range []int{defaultOutputLimit + 1, defaultOutputLimit + 2} {
+		executor.stdout = bytes.Repeat([]byte("a"), length)
+		response, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "print"})
+		if err != nil || len(response.GetStdout()) != defaultOutputLimit || !response.GetTruncated() {
+			t.Fatalf("truncated output = %v, %v", response, err)
+		}
+	}
+	executor.stdout[0] = 'b'
+	if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "print"}); err != nil {
+		t.Fatal(err)
+	}
+	stop(t, manager)
+	records := readToolCalls(t, endpoint.LogPaths[0])
+	if len(records) != 3 || records[0]["response_sha256"] == nil || records[0]["response_sha256"] != records[1]["response_sha256"] || records[0]["response_sha256"] == records[2]["response_sha256"] {
+		t.Fatalf("truncated output fingerprints: %#v", records)
+	}
+	if records[0]["stdout_bytes"] == records[1]["stdout_bytes"] || records[0]["response_bytes"] != records[1]["response_bytes"] {
+		t.Fatalf("produced counts changed the outcome: %#v", records)
+	}
+	if records[0]["grpc_code"] != codes.OK.String() || records[0]["exit_code"] != float64(executor.exitCode) {
+		t.Fatalf("nonzero command exit changed RPC status: %#v", records[0])
+	}
+}
+
+func TestReplayOutcomeCapturesExecExitAndReason(t *testing.T) {
+	executor := newFakeExecutor(nil)
+	manager, client, endpoint := startBridge(t, executor, Options{CaptureReplay: true, OmitRawLog: true})
+	for _, exit := range []int{0, 0, 7, 255} {
+		executor.exitCode = exit
+		if _, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "print"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	executor.execErr = errors.New("sandbox failed")
+	if response, err := client.Exec(context.Background(), &sandboxv1.ExecRequest{Script: "print"}); err != nil || response.GetReason() != sandboxv1.Reason_REASON_SANDBOX_ERROR {
+		t.Fatalf("sandbox failure response = %v, %v", response, err)
+	}
+	stop(t, manager)
+	records := readToolCalls(t, endpoint.LogPaths[0])
+	if len(records) != 5 || records[0]["response_sha256"] == nil || records[0]["response_sha256"] != records[1]["response_sha256"] || records[1]["response_sha256"] == records[2]["response_sha256"] || records[3]["response_sha256"] == records[4]["response_sha256"] {
+		t.Fatalf("exit and reason fingerprints: %#v", records)
+	}
+	if records[3]["exit_code"] != records[4]["exit_code"] || records[3]["response_bytes"] != records[4]["response_bytes"] {
+		t.Fatalf("reason comparison changed exit or response length: %#v", records)
+	}
+	for _, record := range records {
+		if record["grpc_code"] != codes.OK.String() {
+			t.Fatalf("command failure changed gRPC status: %#v", record)
+		}
+	}
+}
+
 // The transport cap must never fire before truncation does. Both streams can
 // be full at once, so the cap has to clear twice the bound plus framing.
 func TestTruncationBindsBeforeTheTransportCap(t *testing.T) {
 	worstCaseReply := 2 * defaultOutputLimit
-	if margin := maxMessageBytes - worstCaseReply; margin < defaultOutputLimit {
-		t.Fatalf("maxMessageBytes = %d leaves only %d bytes above two truncated streams", maxMessageBytes, margin)
+	if margin := MaxMessageBytes - worstCaseReply; margin < defaultOutputLimit {
+		t.Fatalf("MaxMessageBytes = %d leaves only %d bytes above two truncated streams", MaxMessageBytes, margin)
 	}
 }
 
@@ -237,6 +462,36 @@ func TestFailedAuditRefusesEveryRPC(t *testing.T) {
 	}
 }
 
+func TestMalformedReplaySourceSequenceIsRefusedBeforeSandboxDispatch(t *testing.T) {
+	const sourceSequenceKey = "aries-replay-source-sequence"
+	executor := newFakeExecutor(fstest.MapFS{"app/f": &fstest.MapFile{Data: []byte("x")}})
+	manager, client, _ := startBridge(t, executor, Options{})
+	for name, values := range map[string][]string{
+		"duplicate":   {"1", "1"},
+		"zero":        {"0"},
+		"negative":    {"-1"},
+		"not decimal": {"not-a-sequence"},
+		"overflow":    {"18446744073709551616"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			for _, value := range values {
+				ctx = metadata.AppendToOutgoingContext(ctx, sourceSequenceKey, value)
+			}
+			if _, err := client.Exec(ctx, &sandboxv1.ExecRequest{Script: "true"}); status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("malformed replay Exec metadata accepted: %v", err)
+			}
+			if _, err := client.Stat(ctx, &sandboxv1.StatRequest{Path: "/app/f"}); status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("malformed replay Stat metadata accepted: %v", err)
+			}
+		})
+	}
+	if commands, _, fileOps := executor.snapshot(); len(commands) != 0 || fileOps != 0 {
+		t.Fatalf("malformed replay metadata reached sandbox: %d commands, %d file operations", len(commands), fileOps)
+	}
+	stop(t, manager)
+}
+
 // testToolCallID is a tool call id of the form Hermes sends.
 const testToolCallID = "call_1"
 
@@ -271,6 +526,9 @@ func TestRecordsCarryTheToolCallID(t *testing.T) {
 		id, present := record["tool_call_id"]
 		if want := ids[index/rpcs]; want == "" && present || want != "" && id != want {
 			t.Fatalf("record %d tool_call_id = %v (present %t), want %q", index, id, present, want)
+		}
+		if _, present := record["replay_source_sequence"]; present {
+			t.Fatalf("live record %d has replay-only correlation", index)
 		}
 	}
 }
@@ -517,4 +775,66 @@ func decodeRawGRPCRecords(t *testing.T, content []byte) []map[string]string {
 		records = append(records, record)
 	}
 	return records
+}
+
+func TestReplayEvidenceRequiresCapture(t *testing.T) {
+	const body = "one\ntwo\n"
+	const invalidUTF8Byte byte = 0xff // This byte cannot start a valid UTF-8 sequence.
+	for _, capture := range []bool{false, true} {
+		t.Run(strconv.FormatBool(capture), func(t *testing.T) {
+			executor := newFakeExecutor(fstest.MapFS{"app/file": {Data: []byte(body), Mode: 0600}})
+			executor.stdout = []byte("output")
+			manager, client, endpoint := startBridge(t, executor, Options{CaptureReplay: capture, OmitRawLog: true})
+			ctx := context.Background()
+			if _, err := client.Exec(ctx, &sandboxv1.ExecRequest{Script: "cat", Stdin: []byte("input")}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := client.Exec(ctx, &sandboxv1.ExecRequest{Script: "cat", Stdin: []byte{invalidUTF8Byte}}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := client.Exec(ctx, &sandboxv1.ExecRequest{Script: "cat", Stdin: make([]byte, bridgekit.MaxRecordedInputBytes+1)}); status.Code(err) != codes.ResourceExhausted {
+				t.Fatal(err)
+			}
+			if _, err := client.Stat(ctx, &sandboxv1.StatRequest{Path: "/app/file"}); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := readFile(client, &sandboxv1.ReadFileRequest{Path: "/app/file"}); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := readWindow(client, &sandboxv1.ReadLinesRequest{Path: "/app/file", FirstLine: 1, MaxLines: 1}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := writeFile(client, "/app/written", int64(len(body)), []byte(body)); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := readFile(client, &sandboxv1.ReadFileRequest{Path: "/app/missing"}); status.Code(err) != codes.NotFound {
+				t.Fatal(err)
+			}
+			stop(t, manager)
+			records := readToolCalls(t, endpoint.LogPaths[0])
+			const calls = 8 // Three Exec calls and five file calls must each have an audit record.
+			if len(records) != calls {
+				t.Fatalf("records=%d, want %d", len(records), calls)
+			}
+			for _, record := range records {
+				if capture {
+					if record["response_sha256"] == nil || record["response_bytes"] == nil || record["grpc_code"] == nil {
+						t.Fatalf("missing replay outcome: %v", record)
+					}
+				} else {
+					for _, field := range []string{"response_sha256", "response_bytes", "grpc_code", "replay_error", "response_debug", "response_stdout", "response_stderr", "response_stdout_base64", "response_stderr_base64", "replay_source_sequence"} {
+						if _, ok := record[field]; ok {
+							t.Fatalf("ordinary audit has %s", field)
+						}
+					}
+				}
+			}
+			if records[0]["command"] != "cat" || records[0]["stdin"] != "input" || records[0]["stdout_bytes"] != float64(len(executor.stdout)) || records[0]["exit_code"] != float64(0) {
+				t.Fatalf("baseline audit lost: %v", records[0])
+			}
+			if capture && (records[0]["response_stdout"] != "output" || records[1]["replay_error"] != "stdin-omitted" || records[2]["grpc_code"] != codes.ResourceExhausted.String() || records[len(records)-1]["grpc_code"] != codes.NotFound.String()) {
+				t.Fatalf("capture lost success or error details: %v", records)
+			}
+		})
+	}
 }

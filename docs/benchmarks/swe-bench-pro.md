@@ -72,6 +72,14 @@ the normal ARIES command semantics.
 
 ## Isolation and evaluation
 
+A replay of a `hermes-grpc` source still prepares the task sandbox and
+attempts to confirm caller stop and bridge revocation. Check both isolation
+fields in [replay results](../run-results.md#sandbox-call-replay-results).
+It does not capture a new patch,
+start a fresh evaluation sandbox, or run the upstream verifier. Its recorded
+source grade remains labeled reused. See
+[replay configuration](../configuration.md#sandbox-call-replay).
+
 ARIES follows the upstream evaluator. Before granting harness access, it resets
 the repository to the base commit and removes the history that contains the gold
 revision; it leaves the rest of the image as published. After harness stop and

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -40,13 +41,27 @@ func main() {
 type useCase func(context.Context, string, io.Writer, app.Dependencies) error
 
 func dispatch(ctx context.Context, args []string, stdout io.Writer, dependencies app.Dependencies, run, setup useCase) error {
+	usage := errors.New("usage: aries [--record-for-replay] PROFILE.json | aries setup PROFILE.json")
+	var positional []string
+	for _, arg := range args {
+		if arg == "--record-for-replay" {
+			if dependencies.RecordForReplay {
+				return usage
+			}
+			dependencies.RecordForReplay = true
+		} else if strings.HasPrefix(arg, "-") {
+			return usage
+		} else {
+			positional = append(positional, arg)
+		}
+	}
 	switch {
-	case len(args) == 1:
-		return run(ctx, args[0], stdout, dependencies)
-	case len(args) == 2 && args[0] == "setup":
-		return setup(ctx, args[1], stdout, dependencies)
+	case len(positional) == 1:
+		return run(ctx, positional[0], stdout, dependencies)
+	case len(positional) == 2 && positional[0] == "setup" && !dependencies.RecordForReplay:
+		return setup(ctx, positional[1], stdout, dependencies)
 	default:
-		return errors.New("usage: aries PROFILE.json | aries setup PROFILE.json")
+		return usage
 	}
 }
 

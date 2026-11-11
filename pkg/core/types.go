@@ -211,6 +211,7 @@ type HarnessResult struct {
 type IsolationResult struct {
 	Status         string `json:"status"`
 	HarnessStopped bool   `json:"harness_stopped"`
+	CallerStopped  bool   `json:"caller_stopped,omitempty"`
 	BridgeRevoked  bool   `json:"bridge_revoked"`
 	Error          string `json:"error,omitempty"`
 }
@@ -224,6 +225,46 @@ type Evaluation struct {
 	Duration       time.Duration `json:"duration"`
 	LogPaths       []string      `json:"log_paths,omitempty"`
 	Error          string        `json:"error,omitempty"`
+	Reused         bool          `json:"reused,omitempty"`
+	SourceRunID    string        `json:"source_run_id,omitempty"`
+	SourceTaskID   string        `json:"source_task_id,omitempty"`
+}
+
+// ReplayCallTiming compares one replayed call with its source start offset.
+type ReplayCallTiming struct {
+	SourceSequence uint64 `json:"source_sequence"`
+	DriftNS        int64  `json:"drift_ns"`
+}
+
+// ReplayTiming reports diagnostic call-start drift, not response equality.
+type ReplayTiming struct {
+	Status string             `json:"status"`
+	Basis  string             `json:"basis,omitempty"`
+	Calls  []ReplayCallTiming `json:"calls,omitempty"`
+	Reason string             `json:"reason,omitempty"`
+}
+
+// ReplayCallResponse compares one replayed response hash with its source hash.
+type ReplayCallResponse struct {
+	SourceSequence uint64 `json:"source_sequence"`
+	Status         string `json:"status"`
+	ExpectedSHA256 string `json:"expected_sha256"`
+	ActualSHA256   string `json:"actual_sha256"`
+}
+
+// ReplayResponses reports response equality separately from the reused grade.
+type ReplayResponses struct {
+	Status string               `json:"status"`
+	Calls  []ReplayCallResponse `json:"calls,omitempty"`
+	Reason string               `json:"reason,omitempty"`
+}
+
+// ReplayResult records sandbox-call execution separately from the source grade.
+type ReplayResult struct {
+	Status    string           `json:"status"`
+	Error     string           `json:"error,omitempty"`
+	Timing    *ReplayTiming    `json:"timing,omitempty"`
+	Responses *ReplayResponses `json:"responses,omitempty"`
 }
 
 // ObserverResult records observer-only evidence composed outside the Runner.
@@ -247,6 +288,7 @@ type TaskResult struct {
 	TaskID       string          `json:"task_id"`
 	ToolLogPaths []string        `json:"tool_log_paths,omitempty"`
 	Harness      HarnessResult   `json:"harness"`
+	Replay       *ReplayResult   `json:"replay,omitempty"`
 	Isolation    IsolationResult `json:"isolation"`
 	Evaluation   Evaluation      `json:"evaluation"`
 	Observer     ObserverResult  `json:"observer"`

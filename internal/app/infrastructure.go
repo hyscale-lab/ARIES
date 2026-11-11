@@ -48,7 +48,7 @@ func runWithInfrastructure(ctx context.Context, cfg config.Config, runID, output
 		report.Error = "run infrastructure wiring is required"
 		return result, errors.New(report.Error)
 	}
-	infra, err := wiring.NewInfrastructure(cfg, runID, outputRoot, logger)
+	infra, err := wiring.NewInfrastructure(cfg, runID, outputRoot, wiring.recordForReplay || cfg.Replay != nil, logger)
 	if err != nil {
 		report.Error = err.Error()
 		return result, err
@@ -149,6 +149,7 @@ func runWithInfrastructure(ctx context.Context, cfg config.Config, runID, output
 	}
 	report.StartupDuration = time.Since(started)
 	wiring.NewSandbox = infra.NewSandbox
+	wiring.ReplayPlacement = placement
 	wiring.NewBridge = func(_ config.Config, root string, _ *logrus.Logger) (runner.ToolBridge, error) {
 		return service.NewSession(root)
 	}

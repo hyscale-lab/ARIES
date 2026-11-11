@@ -21,6 +21,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	BridgeControl_RegisterSandbox_FullMethodName = "/aries.bridge.control.v1.BridgeControl/RegisterSandbox"
 	BridgeControl_GetSandbox_FullMethodName      = "/aries.bridge.control.v1.BridgeControl/GetSandbox"
+	BridgeControl_CompleteSandbox_FullMethodName = "/aries.bridge.control.v1.BridgeControl/CompleteSandbox"
 	BridgeControl_ReleaseSandbox_FullMethodName  = "/aries.bridge.control.v1.BridgeControl/ReleaseSandbox"
 )
 
@@ -30,6 +31,7 @@ const (
 type BridgeControlClient interface {
 	RegisterSandbox(ctx context.Context, in *RegisterSandboxRequest, opts ...grpc.CallOption) (*SandboxAccess, error)
 	GetSandbox(ctx context.Context, in *SandboxRequest, opts ...grpc.CallOption) (*SandboxAccess, error)
+	CompleteSandbox(ctx context.Context, in *SandboxRequest, opts ...grpc.CallOption) (*Completion, error)
 	ReleaseSandbox(ctx context.Context, in *SandboxRequest, opts ...grpc.CallOption) (*SandboxAccess, error)
 }
 
@@ -61,6 +63,16 @@ func (c *bridgeControlClient) GetSandbox(ctx context.Context, in *SandboxRequest
 	return out, nil
 }
 
+func (c *bridgeControlClient) CompleteSandbox(ctx context.Context, in *SandboxRequest, opts ...grpc.CallOption) (*Completion, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Completion)
+	err := c.cc.Invoke(ctx, BridgeControl_CompleteSandbox_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *bridgeControlClient) ReleaseSandbox(ctx context.Context, in *SandboxRequest, opts ...grpc.CallOption) (*SandboxAccess, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SandboxAccess)
@@ -77,6 +89,7 @@ func (c *bridgeControlClient) ReleaseSandbox(ctx context.Context, in *SandboxReq
 type BridgeControlServer interface {
 	RegisterSandbox(context.Context, *RegisterSandboxRequest) (*SandboxAccess, error)
 	GetSandbox(context.Context, *SandboxRequest) (*SandboxAccess, error)
+	CompleteSandbox(context.Context, *SandboxRequest) (*Completion, error)
 	ReleaseSandbox(context.Context, *SandboxRequest) (*SandboxAccess, error)
 	mustEmbedUnimplementedBridgeControlServer()
 }
@@ -93,6 +106,9 @@ func (UnimplementedBridgeControlServer) RegisterSandbox(context.Context, *Regist
 }
 func (UnimplementedBridgeControlServer) GetSandbox(context.Context, *SandboxRequest) (*SandboxAccess, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetSandbox not implemented")
+}
+func (UnimplementedBridgeControlServer) CompleteSandbox(context.Context, *SandboxRequest) (*Completion, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CompleteSandbox not implemented")
 }
 func (UnimplementedBridgeControlServer) ReleaseSandbox(context.Context, *SandboxRequest) (*SandboxAccess, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ReleaseSandbox not implemented")
@@ -154,6 +170,24 @@ func _BridgeControl_GetSandbox_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BridgeControl_CompleteSandbox_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SandboxRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BridgeControlServer).CompleteSandbox(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BridgeControl_CompleteSandbox_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BridgeControlServer).CompleteSandbox(ctx, req.(*SandboxRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _BridgeControl_ReleaseSandbox_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SandboxRequest)
 	if err := dec(in); err != nil {
@@ -186,6 +220,10 @@ var BridgeControl_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetSandbox",
 			Handler:    _BridgeControl_GetSandbox_Handler,
+		},
+		{
+			MethodName: "CompleteSandbox",
+			Handler:    _BridgeControl_CompleteSandbox_Handler,
 		},
 		{
 			MethodName: "ReleaseSandbox",

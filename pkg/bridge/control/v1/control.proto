@@ -5,6 +5,7 @@ option go_package = "github.com/hyscale-lab/aries/pkg/bridge/control/v1;controlv
 service BridgeControl {
   rpc RegisterSandbox(RegisterSandboxRequest) returns (SandboxAccess);
   rpc GetSandbox(SandboxRequest) returns (SandboxAccess);
+  rpc CompleteSandbox(SandboxRequest) returns (Completion);
   rpc ReleaseSandbox(SandboxRequest) returns (SandboxAccess);
 }
 enum State { STATE_UNSPECIFIED = 0; REGISTERING = 1; READY = 2; RELEASING = 3; RELEASED = 4; }
@@ -18,6 +19,7 @@ message Target {
 message Metadata { string task_id = 1; }
 message RegisterSandboxRequest { string sandbox_id = 1; Target target = 2; Metadata metadata = 3; }
 message SandboxRequest { string sandbox_id = 1; }
+message Completion { string sandbox_id = 1; string completed_at = 2; }
 message Endpoint {
   reserved 1, 5;
   reserved "host", "host_key";

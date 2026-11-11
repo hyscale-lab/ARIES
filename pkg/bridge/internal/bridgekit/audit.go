@@ -115,7 +115,7 @@ func NewAuditWriter(structured, raw *AuditFile) *AuditWriter {
 	writer := &AuditWriter{
 		structured: structured, raw: raw,
 		wake: make(chan struct{}, 1), done: make(chan struct{}),
-		marshal: marshalJSONLine, now: time.Now,
+		marshal: MarshalJSONLine, now: time.Now,
 	}
 	go writer.run()
 	return writer
@@ -164,7 +164,8 @@ func (writer *AuditWriter) Enqueue(structured Record, raw RawRecord) {
 	writer.signal()
 }
 
-func marshalJSONLine(value any) ([]byte, error) {
+// MarshalJSONLine uses the same encoding as the structured audit writer.
+func MarshalJSONLine(value any) ([]byte, error) {
 	var output bytes.Buffer
 	encoder := json.NewEncoder(&output)
 	encoder.SetEscapeHTML(false)

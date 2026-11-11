@@ -32,6 +32,9 @@ func SetupSWEAtlas(ctx context.Context, cfg config.Config) error {
 }
 
 func sweatlasModels(cfg config.Config) (judge core.ModelConfig, judgeDisabled bool) {
+	if cfg.Replay != nil {
+		return core.ModelConfig{}, true
+	}
 	judgeCfg := cfg.Benchmark.Judge
 	if judgeCfg.Enabled != nil && !*judgeCfg.Enabled {
 		return core.ModelConfig{}, true

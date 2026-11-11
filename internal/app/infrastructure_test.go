@@ -68,7 +68,10 @@ func (b *infrastructureBridge) RuntimeName() string { return "bridge-name" }
 func runCommandForTest(ctx context.Context, path string, out io.Writer, deps Dependencies) error {
 	w := deps.Wiring
 	if w.NewInfrastructure == nil {
-		deps.Wiring.NewInfrastructure = func(cfg config.Config, runID, root string, log *logrus.Logger) (*RunInfrastructure, error) {
+		deps.Wiring.NewInfrastructure = func(cfg config.Config, runID, root string, captureReplay bool, log *logrus.Logger) (*RunInfrastructure, error) {
+			if captureReplay != (deps.RecordForReplay || cfg.Replay != nil) {
+				return nil, errors.New("incorrect effective replay capture mode")
+			}
 			sandboxFactory := w.NewSandbox
 			if sandboxFactory == nil {
 				sandboxFactory = func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
@@ -119,7 +122,7 @@ func TestInfrastructureFinalizesBeforePersistenceAndPreservesFailures(t *testing
 			if err := os.Chmod(root, 0o700); err != nil {
 				t.Fatal(err)
 			}
-			w := Wiring{NewInfrastructure: func(config.Config, string, string, *logrus.Logger) (*RunInfrastructure, error) {
+			w := Wiring{NewInfrastructure: func(config.Config, string, string, bool, *logrus.Logger) (*RunInfrastructure, error) {
 				return &RunInfrastructure{Environment: env, Resources: resources, NetworkPolicy: "shared-egress", NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
 					return SandboxInstance{}, nil
 				}, NewBridge: func(core.RuntimePlacement) (SharedBridge, error) { return bridge, nil }, Close: func() error { events = append(events, "transport-close"); return nil }}, nil
@@ -162,7 +165,7 @@ func TestInfrastructureFinalizesBeforePersistenceAndPreservesFailures(t *testing
 func TestInfrastructureObserverFailureDoesNotPreventTasks(t *testing.T) {
 	ran := false
 	source := &infrastructureResources{failure: errors.New("observer failed")}
-	w := Wiring{NewInfrastructure: func(config.Config, string, string, *logrus.Logger) (*RunInfrastructure, error) {
+	w := Wiring{NewInfrastructure: func(config.Config, string, string, bool, *logrus.Logger) (*RunInfrastructure, error) {
 		return &RunInfrastructure{Environment: &infrastructureEnvironment{}, Resources: source, NetworkPolicy: "shared-egress", NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
 			return SandboxInstance{}, nil
 		}, NewBridge: func(core.RuntimePlacement) (SharedBridge, error) { return &infrastructureBridge{}, nil }}, nil
@@ -180,7 +183,7 @@ func TestInfrastructureObserverFailureDoesNotPreventTasks(t *testing.T) {
 }
 
 func TestTaskFailureDoesNotBecomeInfrastructureFailure(t *testing.T) {
-	w := Wiring{NewInfrastructure: func(config.Config, string, string, *logrus.Logger) (*RunInfrastructure, error) {
+	w := Wiring{NewInfrastructure: func(config.Config, string, string, bool, *logrus.Logger) (*RunInfrastructure, error) {
 		return &RunInfrastructure{Environment: &infrastructureEnvironment{}, Resources: &infrastructureResources{}, NetworkPolicy: "shared-egress", NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
 			return SandboxInstance{}, nil
 		}, NewBridge: func(core.RuntimePlacement) (SharedBridge, error) { return &infrastructureBridge{}, nil }}, nil

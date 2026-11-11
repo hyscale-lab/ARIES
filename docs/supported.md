@@ -29,6 +29,7 @@ This page summarizes capabilities and limitations. Use the
 | Tool sandbox and deployment | **Apptainer** 1.5 or newer — unprivileged instances for hosts without Docker, such as HPC clusters; harness, sandbox and bridge all on Apptainer, one task at a time | [Apptainer placement](configuration.md#apptainer-placement), [Apptainer implementation](implementation/apptainer.md) |
 | Tool bridge | **OpenClaw SSH** and **Hermes SSH** — managed Docker container, Kubernetes pod, or a process in an Apptainer run's namespace; harness-specific SSH adapters | [SSH bridge implementation](implementation/ssh-bridges.md) |
 | Tool bridge | **Hermes gRPC** — same managed Docker container or Kubernetes pod; typed `Exec` and file procedures through the ARIES Hermes plugin; not on Apptainer | [gRPC bridge implementation](implementation/grpc-bridge.md) |
+| Sandbox-call replay | **Hermes gRPC** — one recorded occurrence or a complete run through private occurrence callers; Docker or Kubernetes placement, with source grades reused | [Replay configuration](configuration.md#sandbox-call-replay), [replay results](run-results.md#sandbox-call-replay-results) |
 | Model service | **DeepSeek** — external endpoint | [Model backends](configuration.md#model-backends) |
 | Model service | **SGLang** — external endpoint or one ARIES-managed host process per run | [Model backends](configuration.md#model-backends) |
 | Model service | **OpenAI-compatible server** — external only, including vLLM, llama.cpp, gateways, and hosted endpoints | [Model backends](configuration.md#model-backends) |
@@ -44,6 +45,29 @@ judge settings, and credential requirements are documented in the
 guides above.
 
 ## Current limitations
+
+- Sandbox-call replay accepts a replay-ready `hermes-grpc` occurrence or complete
+  recorded run. It executes every source occurrence once with bounded concurrency,
+  including repeated tasks and occurrences from source loops. It does not support
+  SSH, new loop iterations, arrival schedules, or Toolathlon.
+  It needs no harness, model key, judge, or fresh verifier. Its source grade is
+  historical evidence: matching bridge responses do not prove matching final
+  sandbox state. Live source recording requires the CLI flag `--record-for-replay`,
+  Hermes gRPC, and provenance for every selected task. Recording supports multiple
+  tasks, repeated task IDs, and finite timed loops, with a separate source per
+  occurrence. Recording still rejects arrival schedules. Replay uses one common
+  operation timeline, but does not reproduce sandbox lifecycle timing, the original
+  live-sandbox count, or original resource contention. Late readiness does not reset
+  the timeline. Equal source starts are valid and produce `aries.log` warnings.
+  Shared scheduling and timing comparison require synchronized UTC wall clocks
+  for the app, callers, and bridge. Timing reports its shared-origin or local basis;
+  shared-origin drift includes cross-occurrence displacement and staging delay.
+  Hash-only and timing drift remain nonfatal; strict response checks still fail.
+  Ownership, sanitization, isolation, revocation, and confirmed
+  removal checks remain required. An oversized captured response fails its recording task before
+  evaluation. Replay execution
+  captures comparison evidence without that flag. See the
+  [replay limits](configuration.md#sandbox-call-replay).
 
 - Each bridge type supports its corresponding harness: OpenClaw uses
   `openclaw-ssh`, and Hermes uses `hermes-ssh` or `hermes-grpc`. Crossed pairs

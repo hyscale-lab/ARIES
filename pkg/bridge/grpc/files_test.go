@@ -77,7 +77,7 @@ func TestFileProceduresMoveBytesThroughTheSandbox(t *testing.T) {
 // left out of the audit, but its size and digest are kept and Stop confirms.
 func TestFileContentLargerThanTheRetainedBoundStreams(t *testing.T) {
 	executor := newFakeExecutor(nil)
-	manager, client, endpoint := startBridge(t, executor, Options{})
+	manager, client, endpoint := startBridge(t, executor, Options{CaptureReplay: true})
 	line := []byte(strings.Repeat("x", 99) + "\n")
 	body := bytes.Repeat(line, bridgekit.MaxRecordedInputBytes/len(line)+1)
 
@@ -95,7 +95,7 @@ func TestFileContentLargerThanTheRetainedBoundStreams(t *testing.T) {
 	stop(t, manager)
 	digest := sha256.Sum256(body)
 	record := readToolCalls(t, endpoint.LogPaths[0])[0]
-	if record["stdin_encoding"] != "size-omitted" || record["stdin_bytes"] != float64(len(body)) || record["sha256"] != hex.EncodeToString(digest[:]) {
+	if record["stdin_encoding"] != "size-omitted" || record["stdin_bytes"] != float64(len(body)) || record["sha256"] != hex.EncodeToString(digest[:]) || record["replay_error"] != "write-content-omitted" {
 		t.Fatalf("record = %v", record)
 	}
 	if stdin := record["stdin"].(string); !strings.Contains(stdin, strconv.Itoa(len(body))) || len(stdin) > len(line) {
@@ -215,7 +215,7 @@ func TestToolCallRecordsFollowTheSSHRules(t *testing.T) {
 		written = append(written, time.Now())
 		return nil
 	}
-	manager, client, endpoint := startBridge(t, executor, Options{OmitRawLog: true})
+	manager, client, endpoint := startBridge(t, executor, Options{CaptureReplay: true, OmitRawLog: true})
 	ctx := context.Background()
 	binary := []byte{0, 1, 2, 0xff}
 	sent := time.Now()
@@ -280,9 +280,25 @@ func TestToolCallRecordsFollowTheSSHRules(t *testing.T) {
 				t.Fatalf("record %d carries %q", index, forbidden)
 			}
 		}
+		if encoding, _ := records[index]["stdin_encoding"].(string); encoding != "utf-8" {
+			if records[index]["replay_error"] == nil {
+				t.Fatalf("record %d omitted input without replay_error: %#v", index, records[index])
+			}
+		} else if records[index]["replay_error"] != nil {
+			t.Fatalf("record %d retained input but has replay_error: %#v", index, records[index])
+		}
 	}
 	sandboxEntries := slices.Concat(executor.entered, written)
 	for index, record := range records {
+		if digest, ok := record["response_sha256"].(string); !ok || len(digest) != sha256.Size*2 {
+			t.Fatalf("record %d response_sha256 = %v", index, record["response_sha256"])
+		}
+		if size, ok := record["response_bytes"].(float64); !ok || size <= 0 {
+			t.Fatalf("record %d response_bytes = %v", index, record["response_bytes"])
+		}
+		if record["grpc_code"] != codes.OK.String() {
+			t.Fatalf("record %d grpc_code = %v, want OK", index, record["grpc_code"])
+		}
 		started := recordStartedAt(t, record)
 		if started.Before(sent) {
 			t.Fatalf("record %d started_at %v is before the send at %v", index, started, sent)
@@ -298,6 +314,169 @@ func TestToolCallRecordsFollowTheSSHRules(t *testing.T) {
 				t.Fatalf("a record holds read content: %#v", record)
 			}
 		}
+	}
+}
+
+func TestReplayOutcomeCapturesFileResponses(t *testing.T) {
+	body := bytes.Repeat([]byte("read body\n"), chunkBytes/len("read body\n")+1)
+	executor := newFakeExecutor(fstest.MapFS{
+		"app/file": &fstest.MapFile{Data: body, Mode: 0o600},
+	})
+	manager, client, endpoint := startBridge(t, executor, Options{CaptureReplay: true, OmitRawLog: true})
+	ctx := context.Background()
+	for _, readLimit := range []int{len(body), len("read body\n")} {
+		executor.readLimit = readLimit
+		if _, _, err := readFile(client, &sandboxv1.ReadFileRequest{Path: "/app/file"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := readWindow(client, &sandboxv1.ReadLinesRequest{Path: "/app/file", FirstLine: 1, MaxLines: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := readFile(client, &sandboxv1.ReadFileRequest{Path: "/app/file", MaxBytes: int64(len(body) - 1)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := readWindow(client, &sandboxv1.ReadLinesRequest{Path: "/app/file", FirstLine: 1, MaxLines: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Stat(ctx, &sandboxv1.StatRequest{Path: "/app/file"}); err != nil {
+		t.Fatal(err)
+	}
+	executor.files["app/file"] = &fstest.MapFile{Data: body, Mode: 0o644}
+	if _, err := client.Stat(ctx, &sandboxv1.StatRequest{Path: "/app/file"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeFile(client, "/app/new", int64(len("text")), []byte("text")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeFile(client, "/app/new", int64(len("text")), []byte("text")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeFile(client, "/app/new", int64(len("text")), []byte("text")); err != nil {
+		t.Fatal(err)
+	}
+	stop(t, manager)
+	records := readToolCalls(t, endpoint.LogPaths[0])
+	if len(records) != 11 {
+		t.Fatalf("records = %d, want 11", len(records))
+	}
+	check := func(first, second int, equal bool) {
+		t.Helper()
+		left, right := records[first]["response_sha256"], records[second]["response_sha256"]
+		if left == nil || right == nil || (left == right) != equal {
+			t.Fatalf("record %d and %d fingerprints: %v, %v; equal want %v", first, second, left, right, equal)
+		}
+	}
+	check(0, 2, true)  // Identical file bytes with different target read sizes.
+	check(1, 3, true)  // Identical line windows with different target read sizes.
+	check(0, 4, false) // A changed read header and body.
+	check(1, 5, false) // A changed line summary and window.
+	check(6, 7, false) // A changed file mode.
+	check(8, 9, false) // Created and replaced have different outcomes.
+	check(9, 10, true)
+	for index, record := range records {
+		if record["grpc_code"] != codes.OK.String() || record["response_bytes"] == nil {
+			t.Fatalf("record %d lacks complete outcome: %#v", index, record)
+		}
+	}
+}
+
+func TestReplayOutcomeIncludesReadMetadataWithoutChangingTheBody(t *testing.T) {
+	const firstLine = "one\n"
+	executor := newFakeExecutor(fstest.MapFS{"app/file": &fstest.MapFile{Data: []byte(firstLine + "two\n"), Mode: 0o644}})
+	manager, client, endpoint := startBridge(t, executor, Options{CaptureReplay: true, OmitRawLog: true})
+	read := func(want string) {
+		t.Helper()
+		body, _, err := readFile(client, &sandboxv1.ReadFileRequest{Path: "/app/file", MaxBytes: int64(len(firstLine))})
+		if err != nil || string(body) != want {
+			t.Fatalf("ReadFile = %q, %v", body, err)
+		}
+		body, _, err = readWindow(client, &sandboxv1.ReadLinesRequest{Path: "/app/file", FirstLine: 1, MaxLines: 1})
+		if err != nil || string(body) != want {
+			t.Fatalf("ReadLines = %q, %v", body, err)
+		}
+	}
+	read(firstLine)
+	executor.files["app/file"] = &fstest.MapFile{Data: []byte(firstLine + "two\nthree\n"), Mode: 0o644}
+	read(firstLine)
+	executor.files["app/file"] = &fstest.MapFile{Data: []byte("two\n" + "two\nthree\n"), Mode: 0o644}
+	read("two\n")
+	stop(t, manager)
+	records := readToolCalls(t, endpoint.LogPaths[0])
+	if len(records) != 6 || records[0]["response_sha256"] == records[2]["response_sha256"] || records[1]["response_sha256"] == records[3]["response_sha256"] {
+		t.Fatalf("header or summary missing from fingerprint: %#v", records)
+	}
+	for _, pair := range [][2]int{{2, 4}, {3, 5}} {
+		if records[pair[0]]["response_sha256"] == records[pair[1]]["response_sha256"] || records[pair[0]]["response_bytes"] != records[pair[1]]["response_bytes"] {
+			t.Fatalf("equal-metadata changed body not fingerprinted: %#v, %#v", records[pair[0]], records[pair[1]])
+		}
+	}
+}
+
+func TestReplayOutcomeCapturesGRPCFailures(t *testing.T) {
+	executor := newFakeExecutor(fstest.MapFS{"app/dir": &fstest.MapFile{Mode: fs.ModeDir | 0o755}})
+	manager, client, endpoint := startBridge(t, executor, Options{CaptureReplay: true, OmitRawLog: true})
+	ctx := context.Background()
+	_, _, missing := readFile(client, &sandboxv1.ReadFileRequest{Path: "/app/missing"})
+	_, _, directory := readFile(client, &sandboxv1.ReadFileRequest{Path: "/app/dir"})
+	_, _, invalidWindow := readWindow(client, &sandboxv1.ReadLinesRequest{Path: "/app/dir"})
+	_, _, invalidPath := readWindow(client, &sandboxv1.ReadLinesRequest{Path: "relative", FirstLine: 1, MaxLines: 1})
+	for _, test := range []struct {
+		err  error
+		code codes.Code
+	}{
+		{missing, codes.NotFound}, {directory, codes.FailedPrecondition},
+		{invalidWindow, codes.InvalidArgument}, {invalidPath, codes.InvalidArgument},
+	} {
+		if status.Code(test.err) != test.code {
+			t.Fatalf("status = %v, want %v", test.err, test.code)
+		}
+	}
+	_, _ = client.Stat(ctx, &sandboxv1.StatRequest{Path: "relative"})
+	stop(t, manager)
+	records := readToolCalls(t, endpoint.LogPaths[0])
+	for index, code := range []codes.Code{codes.NotFound, codes.FailedPrecondition, codes.InvalidArgument, codes.InvalidArgument, codes.InvalidArgument} {
+		if records[index]["grpc_code"] != code.String() || records[index]["response_sha256"] == nil {
+			t.Fatalf("record %d failure outcome: %#v", index, records[index])
+		}
+	}
+	if records[0]["response_sha256"] == records[1]["response_sha256"] || records[2]["response_sha256"] == records[3]["response_sha256"] {
+		t.Fatalf("different error codes or messages have the same fingerprint: %#v", records)
+	}
+}
+
+func TestReplayOutcomeMarksWritesWithMissingInputs(t *testing.T) {
+	executor := newFakeExecutor(fstest.MapFS{"app/dir": &fstest.MapFile{Mode: fs.ModeDir | 0o755}})
+	manager, client, endpoint := startBridge(t, executor, Options{CaptureReplay: true, OmitRawLog: true})
+	text := []byte("exact text")
+	if _, err := writeFile(client, "/app/text", int64(len(text)), text); err != nil {
+		t.Fatal(err)
+	}
+	binary := []byte{'x', 0, 'y'}
+	if _, err := writeFile(client, "/app/binary", int64(len(binary)), binary); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeFile(client, "/app/dir", int64(len(text)), text); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("failed write = %v", err)
+	}
+	if _, err := writeFile(client, "/app/short", int64(len(text)+1), text); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("partial write = %v", err)
+	}
+	stop(t, manager)
+	records := readToolCalls(t, endpoint.LogPaths[0])
+	if len(records) != 4 || records[0]["stdin"] != string(text) || records[0]["replay_error"] != nil {
+		t.Fatalf("retained text = %#v", records)
+	}
+	if records[1]["replay_error"] != "write-content-omitted" || records[1]["stdin_encoding"] != "binary-omitted" {
+		t.Fatalf("binary write = %#v", records[1])
+	}
+	for _, record := range records[2:] {
+		if record["replay_error"] != "write-size-omitted" || record["response_sha256"] == nil {
+			t.Fatalf("failed write lacks size or response: %#v", record)
+		}
+	}
+	if records[2]["grpc_code"] != codes.FailedPrecondition.String() || records[3]["grpc_code"] != codes.InvalidArgument.String() {
+		t.Fatalf("write failure gRPC codes: %#v", records)
 	}
 }
 
