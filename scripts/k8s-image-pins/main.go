@@ -6,39 +6,48 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/hyscale-lab/aries/pkg/config"
 	hermesharness "github.com/hyscale-lab/aries/pkg/harness/hermes"
 )
 
 func main() {
-	dockerfile := flag.String("hermes-dockerfile", "", "write the Hermes recipe to this path")
+	context := flag.String("hermes-context", "", "write the Hermes recipe and its build context to this directory")
 	flag.Parse()
-	if err := run(*dockerfile); err != nil {
+	if err := run(*context); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
 // run prints one KEY=value line per pin. Values never contain a newline.
-func run(dockerfile string) error {
+func run(context string) error {
 	versions, err := config.LoadVersions("configs/versions.json")
 	if err != nil {
 		return err
 	}
 	pin := versions.Hermes.OTelPlugin
 	plugin := hermesharness.OTelPlugin{RepositoryURL: pin.RepositoryURL, Version: pin.Version, Revision: pin.Revision}
-	image, err := hermesharness.LocalImage(versions.Hermes.Image, plugin)
+	image, err := hermesharness.LocalImage(versions.Hermes.Image, plugin, versions.Hermes.GRPCIO)
 	if err != nil {
 		return err
 	}
-	args, err := hermesharness.OTelBuildArgs(versions.Hermes.Image, plugin)
+	args, err := hermesharness.ImageBuildArgs(versions.Hermes.Image, plugin, versions.Hermes.GRPCIO)
 	if err != nil {
 		return err
 	}
-	if dockerfile != "" {
-		if err := os.WriteFile(dockerfile, []byte(hermesharness.OTelDockerfile), 0o644); err != nil {
-			return err
+	if context != "" {
+		files := hermesharness.ImageContext()
+		files["Dockerfile"] = []byte(hermesharness.ImageDockerfile)
+		for name, content := range files {
+			path := filepath.Join(context, name)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				return err
+			}
+			if err := os.WriteFile(path, content, 0o644); err != nil {
+				return err
+			}
 		}
 	}
 	fmt.Printf("BRIDGE_IMAGE=%s\n", versions.Bridge.Image)
@@ -46,5 +55,6 @@ func run(dockerfile string) error {
 	fmt.Printf("HERMES_IMAGE=%s\n", image)
 	fmt.Printf("HERMES_BASE=%s\n", args["BASE"])
 	fmt.Printf("HERMES_OTEL_PLUGIN=%s\n", args["OTEL_PLUGIN"])
+	fmt.Printf("HERMES_GRPCIO=%s\n", args["GRPCIO"])
 	return nil
 }

@@ -455,15 +455,16 @@ type BridgeConfig struct {
 	Deployment DeploymentConfig `json:"deployment,omitempty"`
 	Mode       string           `json:"mode,omitempty"`
 	Type       string           `json:"type"`
-	// RetainRawLog keeps the bridge's byte-level ssh_raw.log. It defaults to
-	// false because that log is the largest artifact a run writes and captures
-	// raw wire commands, request payloads, and binary stdin; profiles that need
-	// that forensic record must opt in by setting it true.
+	// RetainRawLog keeps the bridge's byte-level <transport>_raw.log
+	// (ssh_raw.log or grpc_raw.log). It defaults to false because that log is
+	// the largest artifact a run writes and captures raw wire commands, request
+	// payloads, and binary stdin; profiles that need that forensic record must
+	// opt in by setting it true.
 	RetainRawLog *bool `json:"retain_raw_log,omitempty"`
 }
 
-// RetainBridgeRawLog reports whether ssh_raw.log should be written, defaulting
-// to false when a profile does not mention it.
+// RetainBridgeRawLog reports whether <transport>_raw.log should be written,
+// defaulting to false when a profile does not mention it.
 func (c BridgeConfig) RetainBridgeRawLog() bool {
 	return c.RetainRawLog != nil && *c.RetainRawLog
 }
@@ -548,6 +549,9 @@ type OpenClawVersions struct {
 type HermesVersions struct {
 	Image      string                   `json:"image"`
 	OTelPlugin HermesOTelPluginVersions `json:"otel_plugin"`
+	// GRPCIO is the grpcio release the ARIES Hermes image installs for the
+	// ARIES Hermes plugin.
+	GRPCIO string `json:"grpcio"`
 }
 
 type HermesOTelPluginVersions struct {
@@ -823,7 +827,7 @@ func (c *Config) validate() error {
 		return errors.New("Codex requires runtime.backend openai or sglang with Responses API support")
 	}
 	// Codex's executor staging and per-call exec have run only on Docker.
-	if c.Harness.Type == "codex" && (c.Harness.Deployment.Backend == "kubernetes" || c.Sandbox.Deployment.Backend == "kubernetes" || c.Bridge.Deployment.Backend == "kubernetes") {
+	if c.Harness.Type == "codex" && (c.Harness.Deployment.Backend != "docker" || c.Sandbox.Deployment.Backend != "docker" || c.Bridge.Deployment.Backend != "docker") {
 		return errors.New("Codex is supported only with the docker deployment backend")
 	}
 	if err := c.Model.validateGeneration(); err != nil {
@@ -1420,6 +1424,9 @@ func (c Versions) validate() error {
 		if !validPluginVersion(plugin.Version) {
 			return errors.New("hermes.otel_plugin.version must be a dotted release number")
 		}
+	}
+	if c.Hermes.GRPCIO != "" && !validPluginVersion(c.Hermes.GRPCIO) {
+		return errors.New("hermes.grpcio must be a dotted release number")
 	}
 	if c.Codex != (CodexVersions{}) {
 		if err := c.Codex.validate(); err != nil {

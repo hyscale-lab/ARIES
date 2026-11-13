@@ -61,14 +61,14 @@ reachable inside a harness container.
 | Consumer | Supplied value | Resolution owner |
 | --- | --- | --- |
 | Runner | Bridge gRPC control address | Bridge deployment |
-| Harness | Sandbox-specific SSH endpoint | Bridge deployment, using the actual listener port |
+| Harness | Sandbox-specific SSH or gRPC tool endpoint | Bridge deployment, using the actual listener port |
 | Harness | Task service URLs such as `SearchURL` | Sandbox task environment |
 | Bridge | Immutable sandbox execution binding and configured backend access | Execution-provider wiring and registration |
 
 Each local listener reports its bound port. Deployment resolves the advertised
 host and port, which may differ from the bind address. Provider substitution tests
 exercise a DNS host and remapped port. Docker publishes control on host loopback
-and returns a peer-reachable bridge address for each dynamic SSH listener. It
+and returns a peer-reachable bridge address for each dynamic tool listener. It
 builds search URLs using each sandbox's unique runtime service name, avoiding a
 shared fixed alias.
 
@@ -97,7 +97,9 @@ The reference composition is local Docker on one daemon. Bridge runtime placemen
 and sandbox execution are separately injected, and both must use the same
 provider. Backend endpoints and socket mounts come from provider wiring. A
 [Kubernetes provider](../implementation/kubernetes.md) implements the same
-contracts on pods for a narrower set of runs.
+contracts on pods for a narrower set of runs, and an
+[Apptainer provider](../implementation/apptainer.md) implements them on
+unprivileged instances, one task at a time, for hosts without Docker.
 
 Deployment requests still include container-oriented resource settings, host
 mounts, network aliases and image-volume policy. The sandbox assumes Linux,

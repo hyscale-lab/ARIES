@@ -35,7 +35,8 @@
       "repository_url": "https://github.com/briancaffey/hermes-otel",
       "version": "1.19.0",
       "revision": "9a0aed646611023c4d4aec5b7897a72511559956"
-    }
+    },
+    "grpcio": "1.81.1"
   },
   "codex": {
     "image": "docker.io/library/debian:12.12-slim",

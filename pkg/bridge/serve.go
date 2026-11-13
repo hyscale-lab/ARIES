@@ -2,8 +2,6 @@ package bridge
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"net"
@@ -15,35 +13,27 @@ import (
 	"github.com/hyscale-lab/aries/pkg/bridge/control"
 	v1 "github.com/hyscale-lab/aries/pkg/bridge/control/v1"
 	"github.com/hyscale-lab/aries/pkg/bridge/target"
-	"golang.org/x/crypto/ssh"
 	"google.golang.org/grpc"
 )
 
 type ServeOptions struct {
 	Config    LaunchConfig
 	Backend   target.Backend
-	NewNative func(ssh.Signer, string, string) (NativeServer, error)
+	NewNative func(string, string) (NativeServer, error)
 }
 
-// Serve owns the run service's host signer and independent native sandbox access.
+// Serve owns the run service's independent native sandbox access.
 func Serve(ctx context.Context, options ServeOptions) error { return serve(ctx, options, nil) }
 func serve(ctx context.Context, options ServeOptions, listener net.Listener) error {
-	if options.Config.RunID == "" || options.Backend == nil || options.NewNative == nil {
+	transport := transportOf(options.Config.BridgeType)
+	if options.Config.RunID == "" || options.Backend == nil || options.NewNative == nil || transport == "" {
 		if listener != nil {
 			listener.Close()
 		}
-		return errors.New("bridge requires run identity, backend and native factory")
-	}
-	_, key, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return err
-	}
-	signer, err := ssh.NewSignerFromKey(key)
-	if err != nil {
-		return err
+		return errors.New("bridge requires run identity, backend, native factory and transport")
 	}
 	service, err := control.NewServer(control.Config{NewSandbox: func(request *v1.RegisterSandboxRequest) control.Sandbox {
-		return &nativeSandbox{options: options, request: request, signer: signer, root: filepath.Join(options.Config.OutputDir, request.SandboxId)}
+		return &nativeSandbox{options: options, request: request, transport: transport, root: filepath.Join(options.Config.OutputDir, request.SandboxId)}
 	}})
 	if err != nil {
 		return err
@@ -73,13 +63,13 @@ func serve(ctx context.Context, options ServeOptions, listener net.Listener) err
 
 // This object belongs to one control entry; no second assignment registry exists.
 type nativeSandbox struct {
-	options  ServeOptions
-	request  *v1.RegisterSandboxRequest
-	signer   ssh.Signer
-	native   NativeServer
-	borrowed *target.Borrowed
-	root     string
-	ready    bool
+	options   ServeOptions
+	request   *v1.RegisterSandboxRequest
+	transport string
+	native    NativeServer
+	borrowed  *target.Borrowed
+	root      string
+	ready     bool
 }
 
 func (s *nativeSandbox) Register(ctx context.Context) (*v1.Endpoint, error) {
@@ -89,7 +79,7 @@ func (s *nativeSandbox) Register(ctx context.Context) (*v1.Endpoint, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.native, err = s.options.NewNative(s.signer, s.request.SandboxId, s.root)
+	s.native, err = s.options.NewNative(s.request.SandboxId, s.root)
 	if err != nil {
 		return nil, err
 	}
@@ -119,11 +109,11 @@ func (s *nativeSandbox) Release(ctx context.Context) ([]*v1.Artifact, error) {
 	}
 	names := []string{"tool-calls.jsonl"}
 	if s.options.Config.RetainRawLog {
-		names = append(names, "ssh_raw.log")
+		names = append(names, rawLogName(s.transport))
 	}
 	result := make([]*v1.Artifact, 0, len(names))
 	for _, name := range names {
-		entries, err := finalizeArtifacts(s.root, []string{name})
+		entries, err := finalizeArtifacts(s.root, s.transport, []string{name})
 		if errors.Is(err, os.ErrNotExist) && !s.ready {
 			result = append(result, &v1.Artifact{Name: name, Status: "absent"})
 			continue
@@ -137,6 +127,5 @@ func (s *nativeSandbox) Release(ctx context.Context) ([]*v1.Artifact, error) {
 	// The control entry retains only the immutable request and terminal manifest.
 	s.native = nil
 	s.borrowed = nil
-	s.signer = nil
 	return result, nil
 }

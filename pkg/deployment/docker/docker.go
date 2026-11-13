@@ -36,6 +36,7 @@ type dockerClient interface {
 	ContainerCreate(context.Context, client.ContainerCreateOptions) (client.ContainerCreateResult, error)
 	CopyToContainer(context.Context, string, client.CopyToContainerOptions) (client.CopyToContainerResult, error)
 	CopyFromContainer(context.Context, string, client.CopyFromContainerOptions) (client.CopyFromContainerResult, error)
+	ContainerStatPath(context.Context, string, client.ContainerStatPathOptions) (client.ContainerStatPathResult, error)
 	ContainerStart(context.Context, string, client.ContainerStartOptions) (client.ContainerStartResult, error)
 	ContainerInspect(context.Context, string, client.ContainerInspectOptions) (client.ContainerInspectResult, error)
 	ExecCreate(context.Context, string, client.ExecCreateOptions) (client.ExecCreateResult, error)
@@ -295,10 +296,8 @@ func (manager *Manager) UploadArchive(ctx context.Context, id, destination strin
 
 func (manager *Manager) DownloadArchive(ctx context.Context, id, path string) (io.ReadCloser, deployment.FileInfo, error) {
 	result, err := manager.client.CopyFromContainer(ctx, id, client.CopyFromContainerOptions{SourcePath: path})
-	if errdefs.IsNotFound(err) {
-		if _, inspectErr := manager.client.ContainerInspect(ctx, id, client.ContainerInspectOptions{}); inspectErr == nil {
-			return nil, deployment.FileInfo{}, fmt.Errorf("deployment archive: %w: %w", runner.ErrNotFound, err)
-		}
+	if manager.missingPath(ctx, id, err) {
+		return nil, deployment.FileInfo{}, fmt.Errorf("deployment archive: %w: %w", runner.ErrNotFound, err)
 	}
 	if err != nil {
 		return nil, deployment.FileInfo{}, err

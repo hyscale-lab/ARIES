@@ -3,7 +3,9 @@
 **Docker harnesses and sandboxes use the same local daemon**, with a separate
 managed Docker bridge and shared network per run. Runner stays on the host. Remote Docker
 servers and mixed deployment backends are unsupported. **Kubernetes** places the
-same three components as pods in one namespace, for a narrower set of runs. See the
+same three components as pods in one namespace, for a narrower set of runs. On hosts
+without Docker, harness, sandbox and bridge can all run on
+[Apptainer](implementation/apptainer.md). See the
 [deployment configuration](configuration.md#deployment-configuration).
 
 This page summarizes capabilities and limitations. Use the
@@ -25,7 +27,9 @@ This page summarizes capabilities and limitations. Use the
 | Benchmark | **Toolathlon** — tool-use tasks over MCP servers that are local, public, or backed by Toolathlon's self-hosted applications (Canvas, poste.io, WooCommerce), and, given your account credentials, by third-party services; the `k8s` tasks are not supported | [Benchmark guide](benchmarks/toolathlon.md) |
 | Tool sandbox and deployment | **Docker** — local containers managed through the Moby Go SDK | [Deployment configuration](configuration.md#deployment-configuration), [Docker implementation](implementation/docker.md) |
 | Tool sandbox and deployment | **Kubernetes** — one pod per runtime, driven through `kubectl`; Terminal-Bench 2, SWE-bench Pro and Deep Research Bench with OpenClaw or Hermes in text mode | [Kubernetes deployment](configuration.md#kubernetes-deployment), [Kubernetes implementation](implementation/kubernetes.md), [cluster setup](../k8s/README.md) |
-| Tool bridge | **OpenClaw SSH**, **Hermes SSH**, and **Codex SSH** (Docker only) — managed Docker container or Kubernetes pod; harness-specific SSH adapters | [SSH bridge implementation](implementation/ssh-bridges.md) |
+| Tool sandbox and deployment | **Apptainer** 1.5 or newer — unprivileged instances for hosts without Docker, such as HPC clusters; harness, sandbox and bridge all on Apptainer, one task at a time | [Apptainer placement](configuration.md#apptainer-placement), [Apptainer implementation](implementation/apptainer.md) |
+| Tool bridge | **OpenClaw SSH** and **Hermes SSH** — managed Docker container, Kubernetes pod, or a process in an Apptainer run’s namespace; **Codex SSH** — Docker only | [SSH bridge implementation](implementation/ssh-bridges.md) |
+| Tool bridge | **Hermes gRPC** — managed Docker container or Kubernetes pod; typed `Exec` and file procedures through the ARIES Hermes plugin; not on Apptainer | [gRPC bridge implementation](implementation/grpc-bridge.md) |
 | Model service | **DeepSeek** — external endpoint | [Model backends](configuration.md#model-backends) |
 | Model service | **SGLang** — external endpoint or one ARIES-managed host process per run | [Model backends](configuration.md#model-backends) |
 | Model service | **OpenAI-compatible server** — external only, including vLLM, llama.cpp, gateways, and hosted endpoints | [Model backends](configuration.md#model-backends) |
@@ -42,12 +46,16 @@ guides above.
 
 ## Current limitations
 
-- Each SSH bridge supports its corresponding harness. Crossed pairs are rejected
-  before execution. Hermes requires `/bin/bash` in the task image; its bridge
+- Each bridge type supports its corresponding harness: OpenClaw uses
+  `openclaw-ssh`, Codex uses `codex-ssh` (Docker only), and Hermes uses `hermes-ssh` or `hermes-grpc`. Crossed pairs
+  are rejected before execution. One run uses one transport. OpenClaw over gRPC
+  is not implemented. Hermes requires `/bin/bash` in the task image; its SSH bridge
   rejects Hermes's private `~/.hermes` file synchronization. OpenClaw requires
-  `bin/aries-ssh-client` beside `bin/aries`; Codex requires `bin/aries-codex-ssh`.
-  All bridges require the matched Docker bridge image built with
-  `make bridge-image`.
+  `bin/aries-ssh-client` beside `bin/aries`; Codex requires `bin/aries-codex-ssh`. Both Hermes transports use the
+  ARIES Hermes image, which contains the in-process gRPC plugin. With Docker or
+  Kubernetes placement, all bridges require the matched bridge image built with
+  `make bridge-image`; on Apptainer the bridge runs `bin/aries-bridge`, which
+  `make build` builds beside `bin/aries`, and `hermes-grpc` is refused.
 - On the Kubernetes backend, a task that executes as a non-root user, as
   SWE-bench Pro does, needs `setpriv` from `util-linux` in its image and a root container
   user for per-command UID/GID switching. The upstream SWE-bench Pro images
@@ -69,6 +77,11 @@ guides above.
   server-specific extension.
 - SWE-bench Pro has additional image-architecture, isolation, and licensing
   requirements; consult its [benchmark guide](benchmarks/swe-bench-pro.md).
+- Apptainer runs execute one task at a time, cannot enforce CPU or memory limits
+  without cgroups v2, measure resources from `/proc` rather than a cgroup (memory
+  excludes the page cache), and run the bridge as a process rather than a container. Package installs inside the sandbox need a
+  user-installed `fakeroot`. SWE-bench Pro is refused, because its commands run as a
+  non-root user; see the [Apptainer implementation](implementation/apptainer.md#limits).
 - Toolathlon's application-backed tasks need Toolathlon's own Canvas,
   poste.io and WooCommerce deployments running on the Docker host; consult its
   [benchmark guide](benchmarks/toolathlon.md).
@@ -78,21 +91,24 @@ guides above.
 
 ## Roadmap
 
-Deployment providers beyond Docker and Kubernetes are unimplemented. Shared bridge lifecycle and
+Deployment providers beyond Docker, Kubernetes and Apptainer are unimplemented. Shared bridge lifecycle and
 deployment contracts accept explicit runtime placement and access settings;
 a new provider must implement their execution, connectivity, and cleanup semantics
 and be selected in composition wiring.
 
 The [bridge service](design/bridge.md) hosts independent sessions with one sandbox
-ID each and deployment-resolved endpoints. gRPC control and SSH clients are
-unauthenticated; one service host key is retained for the SSH handshake.
+ID each and deployment-resolved endpoints. gRPC control and the SSH and gRPC
+transports are unauthenticated; one service host key is retained for the SSH handshake.
 
 E2B lifecycle semantics and a future E2B-compatible harness protocol are separate
-from the internal gRPC control transport. No E2B wire compatibility is implemented
-or verified. Current harness tool traffic retains its native SSH protocol; the
-existing control API registers, looks up and releases borrowed sandbox access.
+from the internal gRPC control plane. No E2B wire compatibility is implemented
+or verified. Harness tool traffic uses SSH or the ARIES gRPC transport, whose
+messages have the ARIES shape, not the E2B shape. The existing control API
+registers, looks up and releases borrowed sandbox access.
 
 See the [deployment contract](design/deployment.md),
 [Docker implementation](implementation/docker.md),
 [Kubernetes implementation](implementation/kubernetes.md),
-[SSH bridge implementation](implementation/ssh-bridges.md) for current boundaries.
+[Apptainer implementation](implementation/apptainer.md),
+[SSH bridge implementation](implementation/ssh-bridges.md), and
+[gRPC bridge implementation](implementation/grpc-bridge.md) for current boundaries.

@@ -342,10 +342,10 @@ func TestDockerSandboxUsesInheritedImageWorkdir(t *testing.T) {
 		}
 	})
 	const workdir = "/image-default/project"
-	if err := deploymentdocker.BuildImage(ctx, "", base, "FROM "+fixtureImage+"\nENV PROJECT_DIR="+workdir+"\nWORKDIR ${PROJECT_DIR}\n", nil); err != nil {
+	if err := deploymentdocker.BuildImage(ctx, "", base, "FROM "+fixtureImage+"\nENV PROJECT_DIR="+workdir+"\nWORKDIR ${PROJECT_DIR}\n", nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := deploymentdocker.BuildImage(ctx, "", image, "FROM "+base+"\n", nil); err != nil {
+	if err := deploymentdocker.BuildImage(ctx, "", image, "FROM "+base+"\n", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	manager, err := newIntegrationManager(t, "inherited-workdir", Options{OutputDir: t.TempDir()})

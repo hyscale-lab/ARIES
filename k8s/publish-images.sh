@@ -74,7 +74,8 @@ case "$host" in *.*|*:*|localhost) ;; *) host=docker.io ;; esac
 logged_in() {
   local config=${DOCKER_CONFIG:-$HOME/.docker}/config.json servers="" store=""
   [ -f "$config" ] || return 1
-  servers=$(sed -n 's/^ *"\([^"]*\)": *[{"].*/\1/p' "$config")
+  # The config can be a single line, so match keys anywhere on a line.
+  servers=$(grep -oE '"[^"]+"[[:space:]]*:[[:space:]]*[{"]' "$config" | sed 's/^"\([^"]*\)".*/\1/')
   store=$(sed -n 's/.*"credsStore": *"\([^"]*\)".*/\1/p' "$config")
   if [ -n "$store" ] && command -v "docker-credential-$store" >/dev/null; then
     servers="$servers
@@ -100,7 +101,7 @@ run() {
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-pins=$(cd "$root" && go run ./scripts/k8s-image-pins -hermes-dockerfile "$work/Dockerfile.hermes")
+pins=$(cd "$root" && go run ./scripts/k8s-image-pins -hermes-context "$work/hermes")
 while IFS='=' read -r key value; do
   case "$key" in
     BRIDGE_IMAGE) bridge_image=$value ;;
@@ -108,6 +109,7 @@ while IFS='=' read -r key value; do
     HERMES_IMAGE) hermes_image=$value ;;
     HERMES_BASE) hermes_base=$value ;;
     HERMES_OTEL_PLUGIN) hermes_otel_plugin=$value ;;
+    HERMES_GRPCIO) hermes_grpcio=$value ;;
   esac
 done <<<"$pins"
 
@@ -141,9 +143,9 @@ fi
 
 if [ "$build_hermes" = true ]; then
   echo "==> Building $registry/aries-hermes:$hermes_tag on $hermes_base for $platform"
-  mkdir -p "$work/hermes"
-  run docker buildx build --platform "$platform" -f "$work/Dockerfile.hermes" \
+  run docker buildx build --platform "$platform" -f "$work/hermes/Dockerfile" \
     --build-arg "BASE=$hermes_base" --build-arg "OTEL_PLUGIN=$hermes_otel_plugin" \
+    --build-arg "GRPCIO=$hermes_grpcio" \
     -t "$registry/aries-hermes:$hermes_tag" --push "$work/hermes"
 fi
 

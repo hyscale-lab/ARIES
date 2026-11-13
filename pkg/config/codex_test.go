@@ -78,18 +78,26 @@ func TestDecodeCodexSubagentsAndReasoningEffort(t *testing.T) {
 	}
 }
 
-func TestDecodeCodexRejectsKubernetes(t *testing.T) {
-	input := strings.NewReplacer(
-		`"type":"codex",`, `"type":"codex","deployment":{"backend":"kubernetes"},`,
-		`"sandbox":{"type":"docker"}`, `"sandbox":{"deployment":{"backend":"kubernetes"}}`,
-		`"bridge":{"type":"codex-ssh"}`, `"bridge":{"type":"codex-ssh","deployment":{"backend":"kubernetes"}}`,
-	).Replace(codexProfileJSON())
-	if _, err := Decode(strings.NewReader(input)); err == nil || !strings.Contains(err.Error(), "Codex is supported only with the docker deployment backend") {
-		t.Fatalf("Decode() error = %v", err)
-	}
-	hermes := strings.NewReplacer(`"type":"codex","codex":{"executable":"../.cache/codex/0.157.1/codex"}`, `"type":"hermes"`, `"codex-ssh"`, `"hermes-ssh"`, `"backend":"openai"`, `"backend":"deepseek"`).Replace(input)
-	if _, err := Decode(strings.NewReader(hermes)); err != nil && strings.Contains(err.Error(), "docker deployment backend") {
-		t.Fatalf("guard applied to another harness: %v", err)
+func TestDecodeCodexRejectsNonDocker(t *testing.T) {
+	for _, backend := range []string{"kubernetes", "apptainer"} {
+		t.Run(backend, func(t *testing.T) {
+			input := strings.NewReplacer(
+				`"type":"codex",`, `"type":"codex","deployment":{"backend":"kubernetes"},`,
+				`"sandbox":{"type":"docker"}`, `"sandbox":{"deployment":{"backend":"kubernetes"}}`,
+				`"bridge":{"type":"codex-ssh"}`, `"bridge":{"type":"codex-ssh","deployment":{"backend":"kubernetes"}}`,
+			).Replace(codexProfileJSON())
+			input = strings.ReplaceAll(input, "kubernetes", backend)
+			if backend == "apptainer" {
+				input = strings.ReplaceAll(input, `"backend":"apptainer"`, `"backend":"apptainer","apptainer":{"state_dir":"/tmp/aries-state","image_dir":"/tmp/aries-images","unenforced_limits":true}`)
+			}
+			if _, err := Decode(strings.NewReader(input)); err == nil || !strings.Contains(err.Error(), "Codex is supported only with the docker deployment backend") {
+				t.Fatalf("Decode() error = %v", err)
+			}
+			hermes := strings.NewReplacer(`"type":"codex","codex":{"executable":"../.cache/codex/0.157.1/codex"}`, `"type":"hermes"`, `"codex-ssh"`, `"hermes-ssh"`, `"backend":"openai"`, `"backend":"deepseek"`).Replace(input)
+			if _, err := Decode(strings.NewReader(hermes)); err != nil && strings.Contains(err.Error(), "docker deployment backend") {
+				t.Fatalf("guard applied to another harness: %v", err)
+			}
+		})
 	}
 }
 

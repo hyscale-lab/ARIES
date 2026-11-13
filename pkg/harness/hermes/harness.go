@@ -49,15 +49,21 @@ const (
 	ModeVoiceTranscribe = "voice-transcribe"
 )
 
+var gatewayEntrypoint = []string{"/bin/sh"}
+
 // gatewayCommand replaces the upstream entrypoint so ARIES owns when the agent
 // starts. It first aligns the staged runtime with the unprivileged `hermes`
 // UID: the archive already carries that ownership, but the Engine's copy API
 // resets it to root, and the start command is the one place that runs as root
-// after the copy and before readiness.
-var (
-	gatewayEntrypoint = []string{"/bin/sh"}
-	gatewayCommand    = []string{"-c", fmt.Sprintf("chown -R %d:%d %s && exec "+gatewayLauncherPath, runtimeUID, runtimeGID, stagedRoot)}
-)
+// after the copy and before readiness. With KeepRoot nothing drops to that
+// user, and a deployment that needs KeepRoot may have no such UID in its user
+// namespace, so the command only starts the launcher.
+func gatewayCommand(keepRoot bool) []string {
+	if keepRoot {
+		return []string{"-c", "exec " + gatewayLauncherPath}
+	}
+	return []string{"-c", fmt.Sprintf("chown -R %d:%d %s && exec "+gatewayLauncherPath, runtimeUID, runtimeGID, stagedRoot)}
+}
 
 // Options are the host-local inputs to one upstream Hermes container.
 type Options struct {
@@ -69,6 +75,14 @@ type Options struct {
 	// Compaction and ExtraBody render optional native config blocks.
 	Compaction *CompactionSettings
 	ExtraBody  []byte
+	// KeepRoot keeps Hermes running as the runtime's root instead of dropping
+	// to its hermes user, through the image's documented opt-outs: the CLI
+	// shim's HERMES_DOCKER_EXEC_AS_ROOT and the gateway's
+	// HERMES_ALLOW_ROOT_GATEWAY. A deployment that cannot switch users, such
+	// as Apptainer without subordinate IDs, needs it; there, root is the
+	// invoking user. The gateway's warning, root-owned files breaking later
+	// non-root runs, does not apply to a fresh runtime per task.
+	KeepRoot bool
 }
 
 type VoiceTranscribeOptions struct {
@@ -200,16 +214,24 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		return fmt.Errorf("Hermes %w", err)
 	}
 
+	grpcTarget := ""
+	if request.Endpoint.Protocol == "grpc" {
+		grpcTarget = request.Endpoint.Address
+	}
 	configuration, err := renderConfig(request.Model, renderSettings{
 		maxTurns: manager.options.MaxTurns, webSearchEnabled: manager.options.Common.WebSearchEnabled, extractEnabled: extractEnabled,
 		subagentsEnabled: manager.options.Common.SubagentsEnabled, maxConcurrentSubagents: manager.options.Common.MaxConcurrentSubagents,
 		compaction: manager.options.Compaction, extraBody: manager.options.ExtraBody, mcpServers: mcpServers,
-		noSandboxTools: request.NoSandboxTools,
+		noSandboxTools: request.NoSandboxTools, grpcTarget: grpcTarget,
 	}, voiceSTT)
 	if err != nil {
 		return err
 	}
-	terminal, err := renderTerminal(request.Endpoint.Workdir, manager.options.TerminalTimeout)
+	backend := "ssh"
+	if request.Endpoint.Protocol == "grpc" {
+		backend = "aries"
+	}
+	terminal, err := renderTerminal(backend, request.Endpoint.Workdir, manager.options.TerminalTimeout)
 	if err != nil {
 		return err
 	}
@@ -217,6 +239,9 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	environment, err := containerEnvironment(request.Endpoint, request.Endpoint.Workdir, manager.options.TerminalTimeout, manager.options.Common.WebSearchEnabled, request.Connectivity.SearchURL, request.RunID, request.TaskID)
 	if err != nil {
 		return err
+	}
+	if manager.options.KeepRoot {
+		environment = append(environment, "HERMES_DOCKER_EXEC_AS_ROOT=1", "HERMES_ALLOW_ROOT_GATEWAY=1")
 	}
 	credentials := harness.NewCredentials("Hermes")
 	defer func() {
@@ -266,7 +291,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 		Workdir:    workspaceRoot,
 		Env:        environment,
 		Entrypoint: append([]string(nil), gatewayEntrypoint...),
-		Args:       append([]string(nil), gatewayCommand...),
+		Args:       gatewayCommand(manager.options.KeepRoot),
 		Labels: map[string]string{
 			"aries.managed": "true", "aries.kind": "hermes-harness",
 			"aries.component": "harness",

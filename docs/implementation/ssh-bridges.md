@@ -4,6 +4,8 @@ The managed bridges implement the [ToolBridge contract](../design/bridge.md).
 They accept unauthenticated SSH clients and forward accepted commands through
 the sandbox streaming capability; Docker execution is supplied by the sandbox
 deployment through the Moby SDK.
+The `hermes-grpc` bridge type uses the gRPC transport instead; see
+[gRPC bridge](grpc-bridge.md).
 
 The [native-serving contract](../../pkg/bridge/bridge.go) separates protocol
 serving from the managed controller. One [SSH engine](../../pkg/bridge/ssh/bridge.go)
@@ -22,7 +24,9 @@ The client owns OpenClaw's invocation/configuration subset and does not import
 the server's command grammar. Shared SSH serving and root bridge lifecycle do not
 import this harness-specific client. The server dialect is authoritative for
 command acceptance. Refused commands produce server-side rejection evidence
-without executing in the sandbox. Hermes uses its image's native OpenSSH.
+without executing in the sandbox. After the audit latches an error, the bridge
+refuses every new exec request, because it can no longer record the command;
+the client then exits 255. Hermes uses its image's native OpenSSH.
 
 The bridge runs the SSH server; `aries-ssh-client` is the separate client inside
 the OpenClaw harness. Its argument parser recognizes the pinned invocation
@@ -79,8 +83,8 @@ in `workspace_home` when present.
 
 The Hermes dialect shares the SSH engine with OpenClaw while retaining its
 different command grammar and request policy. Hermes
-runs OpenSSH itself, so this bridge stages no client helper and supplies no
-client command. ARIES sets no `TERMINAL_SSH_KEY` and stages no client identity.
+runs OpenSSH itself, so this bridge stages no SSH client binary and supplies
+no client command. ARIES sets no `TERMINAL_SSH_KEY` and stages no client identity.
 The pinned Hermes implementation adds `-i` only when a key path is configured.
 Hermes retains its native
 `StrictHostKeyChecking=accept-new` and offers no way to preload a known-hosts

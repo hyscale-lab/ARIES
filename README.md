@@ -89,10 +89,10 @@ implementations:
 
 | Role or service | Implementation |
 | --- | --- |
-| Agent harness | OpenClaw (text and realtime voice modes); Hermes (text); Codex (text) |
+| Agent harness | OpenClaw (text and realtime voice modes); Hermes (text and voice-transcribe modes, with an in-process gRPC plugin in the ARIES Hermes image); Codex (text) |
 | Benchmark | Terminal-Bench 2; Deep Research Bench; SWE-Atlas QA; the 731-task public SWE-bench Pro split; Toolathlon |
-| Tool sandbox | Shared Docker deployment through the Moby Go SDK; Kubernetes pods through `kubectl` |
-| Tool bridge | One managed SSH service per run, with OpenClaw, Hermes, or Codex dialect and independent sandbox sessions |
+| Tool sandbox | Shared Docker deployment through the Moby Go SDK; Kubernetes pods through `kubectl`; unprivileged Apptainer instances, for hosts without Docker |
+| Tool bridge | One managed service per run with independent sandbox sessions; SSH with an OpenClaw, Hermes, or Codex dialect, or gRPC for Hermes |
 | Model service | External DeepSeek; external OpenAI-compatible servers such as vLLM; external or ARIES-managed SGLang |
 
 See [Supported implementations](docs/supported.md) for ownership,
@@ -115,6 +115,11 @@ make bridge-image
 ./bin/aries profiles/openclaw-tb2-fix-git-deepseek.json
 ```
 
+`make bridge-image` builds `bin/aries`, `bin/aries-bridge`, and
+`bin/aries-ssh-client`, then builds the bridge image. Keep
+`bin/aries-ssh-client` beside `bin/aries` for OpenClaw. Hermes uses the
+ARIES Hermes image for both SSH and its in-process gRPC plugin.
+
 Before a run, ARIES idempotently prepares the pinned benchmark checkout and
 required container images. `aries setup PROFILE.json` is available to prewarm
 those inputs; it does not start a managed runtime, load model weights, or
@@ -125,7 +130,8 @@ The DeepSeek example requires an API key and can incur charges. The
 run, SGLang alternatives, result inspection, and troubleshooting.
 
 To run on a Kubernetes cluster built with Invitro's setup scripts, see
-[`k8s/`](k8s/README.md).
+[`k8s/`](k8s/README.md). To run where a normal user cannot run Docker, such as an
+HPC cluster, see [Apptainer placement](docs/configuration.md#apptainer-placement).
 
 For repository-level software-engineering tasks, see the
 [SWE-bench Pro guide](docs/benchmarks/swe-bench-pro.md). Its setup additionally

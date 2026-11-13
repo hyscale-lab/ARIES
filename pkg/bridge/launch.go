@@ -25,3 +25,15 @@ type LaunchConfig struct {
 	OutputDir       string            `json:"output_dir"`
 	RetainRawLog    bool              `json:"retain_raw_log"`
 }
+
+// transportOf names the run's transport for a bridge type, or "" for an unknown type.
+func transportOf(bridgeType string) string {
+	switch bridgeType {
+	case "hermes-ssh", "openclaw-ssh":
+		return "ssh"
+	case "hermes-grpc":
+		return "grpc"
+	}
+	return ""
+}
+func rawLogName(transport string) string { return transport + "_raw.log" }

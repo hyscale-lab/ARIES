@@ -734,6 +734,26 @@ func TestDecodeVersionsValidatesHermesOTelPluginPin(t *testing.T) {
 	}
 }
 
+// The grpcio pin is a release number, because the image recipe installs
+// exactly that release.
+func TestDecodeVersionsValidatesHermesGRPCIOPin(t *testing.T) {
+	withPin := func(pin string) string {
+		return strings.Replace(validVersions, `"hermes":{"image":"docker.io/nousresearch/hermes-agent:v2026.8.31"}`, `"hermes":{"image":"docker.io/nousresearch/hermes-agent:v2026.8.31","grpcio":"`+pin+`"}`, 1)
+	}
+	versions, err := DecodeVersions(strings.NewReader(withPin("1.81.1")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if versions.Hermes.GRPCIO != "1.81.1" {
+		t.Fatalf("grpcio = %q", versions.Hermes.GRPCIO)
+	}
+	for _, pin := range []string{"1", "1.81.1+local", ">=1.81", "latest"} {
+		if _, err := DecodeVersions(strings.NewReader(withPin(pin))); err == nil {
+			t.Fatalf("invalid grpcio pin %q was accepted", pin)
+		}
+	}
+}
+
 func TestDecodeVersionsValidation(t *testing.T) {
 	if _, err := DecodeVersions(strings.NewReader(validVersions)); err != nil {
 		t.Fatal(err)

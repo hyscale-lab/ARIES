@@ -42,7 +42,7 @@ flowchart LR
     R -. "port-forward: gRPC control" .-> B
     R -. "pod metrics" .-> PROM
     H -- "model requests" --> M
-    H -- "SSH tool calls" --> B
+    H -- "SSH or gRPC tool calls" --> B
     B -- "kubectl exec" --> S
     NP -.- S
 ```
@@ -58,7 +58,7 @@ ingress.
 | --- | --- | --- |
 | Sandbox pod | One per task occurrence, plus fresh evaluation sandboxes | Runner and bridge, through `kubectl exec` |
 | Harness pod | One per task occurrence | Runner, through a port-forward to its gateway |
-| Bridge pod | One per run | Runner (gRPC control, port-forward); harness pods (SSH, pod address) |
+| Bridge pod | One per run | Runner (gRPC control, port-forward); harness pods (SSH or gRPC, pod address) |
 
 Harness, sandbox and bridge must all select the Kubernetes backend and the same
 namespace. The bridge pod execs into sandbox pods and harness pods dial the
@@ -104,7 +104,11 @@ outside the image's filesystem.
 Three consequences are explicit provider constraints:
 
 - **Images need `/bin/sh`.** Sandbox images also need `tar` and `stat` for file
-  transfer. Per-command user switching requires `setpriv` from `util-linux`.
+  transfer, and `cat`, `readlink`, `chmod` and `wc` for the typed file
+  operations. GNU coreutils and BusyBox both supply them. A write through a
+  dangling symlink needs a `readlink -f` that resolves a missing last
+  component: GNU coreutils, or BusyBox 1.32 or later. Per-command user
+  switching requires `setpriv` from `util-linux`.
 - **An unset entrypoint is not preserved.** The cluster API does not report an
   image's entrypoint, so a request without one runs its arguments directly.
   OpenClaw relies on this and its launcher does not need the image entrypoint.
@@ -149,13 +153,31 @@ differently, such as on Alpine, which does not install `util-linux` by default.
 Archives move as tar streams over exec. Pod logs are a single interleaved
 stream, so they arrive on stdout only.
 
+[Typed file operations](../../pkg/deployment/kubernetes/files.go) give a
+borrowed bridge target stat, read and atomic write of one file, with the same
+results as on Docker. Paths under `/proc`, `/sys`, `/dev` and tmpfs mounts are
+the exceptions: Docker's archive API cannot see them, and here `stat` reports
+size 0 for a `/proc` file; see [gRPC limits](grpc-bridge.md#limits). Each
+operation is a short POSIX script over `kubectl exec`, because exec is the
+bridge's only access to the pod. The scripts test their
+conditions with `[ -e ]`, `[ -d ]`, `[ -r ]` and `[ -w ]` and report through
+their own exit codes, with `LC_ALL=C`; stderr text is only a fallback. Stat and
+read act as the container user, as other commands without a user do. That is
+root on every current benchmark image, so reads match Docker's. A read prints
+the stat line and then runs `cat` only for a regular file. A directory, the root
+included, gives its info and an empty stream. A write acts as the exec user
+through `setpriv`: one exec checks access and creates the missing parents, one
+streams the content into a dot-named temporary file, and one renames it into
+place only when the file has exactly the expected size. Cancellation and the
+remaining parents behave as on Docker.
+
 ## Addresses
 
 `Address` resolves what the Runner dials. Outside the cluster it is a
 `kubectl port-forward` on a reserved loopback port, restarted on that same port
 if kubectl loses its connection. When the Runner itself runs in a pod it is the
 target's pod address. `TaskAddress` is always the pod address, which is how
-harness pods reach the bridge's per-sandbox SSH listeners.
+harness pods reach the bridge's per-sandbox SSH or gRPC listeners.
 
 ## Network isolation
 
@@ -177,8 +199,8 @@ cannot be reached by another task. The bridge needs none, because exec goes
 through the API server. Leaving the CIDRs unset only widens what a
 network-allowed task may dial out to.
 
-The run environment owns one more policy, on the bridge pod. Its SSH listeners
-accept clients without authentication, so the policy admits only pods in the
+The run environment owns one more policy, on the bridge pod. Its SSH and gRPC
+tool listeners accept clients without authentication, so the policy admits only pods in the
 namespace that are not sandboxes. The reported run policy is
 `per-sandbox-policy`.
 
@@ -259,8 +281,12 @@ only in which images must be published beforehand:
 | --- | --- | --- | --- |
 | Task sandbox | Public, pinned by the benchmark | Both harnesses | No |
 | OpenClaw harness | Public upstream image, used unchanged | OpenClaw | No |
-| Hermes harness | Upstream image plus `hermes-otel`, built by ARIES | Hermes | Yes |
+| Hermes harness | Derived ARIES Hermes image | Hermes | Yes |
 | Bridge | Built by ARIES; needs `kubectl` on this backend | Both harnesses | Yes |
+
+The ARIES Hermes image adds `hermes-otel`, `grpcio` and the ARIES Hermes
+plugin. Its build applies the seam patch. The image serves both Hermes
+transports.
 
 An OpenClaw run therefore needs only the bridge image published, and a Hermes
 run needs the bridge and the derived Hermes image. Each deployment block's

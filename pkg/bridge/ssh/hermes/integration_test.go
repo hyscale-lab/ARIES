@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/hyscale-lab/aries/internal/testutil/dockerroute"
 	"io"
+	"io/fs"
 	"net"
 	"os"
 	"os/exec"
@@ -20,8 +21,10 @@ import (
 	"time"
 
 	"github.com/containerd/errdefs"
+	"github.com/hyscale-lab/aries/pkg/bridge/internal/bridgekit"
 	bridgessh "github.com/hyscale-lab/aries/pkg/bridge/ssh"
 	"github.com/hyscale-lab/aries/pkg/bridge/ssh/internal/testfixture"
+	"github.com/hyscale-lab/aries/pkg/bridge/target"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
 	dockerdeployment "github.com/hyscale-lab/aries/pkg/deployment/docker"
@@ -95,9 +98,10 @@ print("TOOL " + (result if isinstance(result, str) else json.dumps(result)))
 `
 
 type integrationSandbox struct {
-	mu       sync.Mutex
-	commands []core.Command
-	workdir  string
+	target.Executor // file operations are unused by SSH
+	mu              sync.Mutex
+	commands        []core.Command
+	workdir         string
 }
 
 func (sandbox *integrationSandbox) Connectivity() core.HarnessConnectivity {
@@ -278,7 +282,7 @@ func TestUpstreamHermesDrivesTheBridgeWithoutPatches(t *testing.T) {
 		// the bridge may run, so any other path — a future tar, scp, or mkdir
 		// file-sync leak included — fails here.
 		switch item.Path {
-		case remoteShellPath:
+		case bridgekit.RemoteShellPath:
 			sawAgentCommand = true
 		case bootstrapShell:
 			if len(item.Args) != 2 || item.Args[0] != "-c" || (item.Args[1] != connectionProbePayload && item.Args[1] != remoteHomePayload) {
@@ -375,7 +379,7 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 	manager := testfixture.New(t, bridgessh.Options{Dialect: Dialect{}, OutputDir: outputDir, CleanupTimeout: 5 * time.Second, ResolveListen: func(ctx context.Context) (core.BridgeListen, error) {
 		return dockerroute.Listen(ctx, sandbox.Connectivity().Placement.AttachmentID)
 	}})
-	endpoint, err := manager.StartTarget(ctx, sandbox)
+	endpoint, err := manager.StartTarget(ctx, sandboxTarget{sandbox})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -482,7 +486,7 @@ func TestBridgeExecMutatesTheEvaluatorSandbox(t *testing.T) {
 			t.Fatalf("exec record %d identity = %#v", index, record)
 		}
 	}
-	if execs[2]["stdin"] != "streamed-input" || execs[2]["stdin_encoding"] != "utf-8" || execs[2]["workdir"] != "/work" || execs[2]["path"] != remoteShellPath {
+	if execs[2]["stdin"] != "streamed-input" || execs[2]["stdin_encoding"] != "utf-8" || execs[2]["workdir"] != "/work" || execs[2]["path"] != bridgekit.RemoteShellPath {
 		t.Fatalf("agent record = %#v", execs[2])
 	}
 	// Every request Hermes sent must appear, including the env request OpenSSH
@@ -532,4 +536,18 @@ func integrationDeployment(t *testing.T) *dockerdeployment.Manager {
 	}
 	t.Cleanup(func() { _ = deployment.Close() })
 	return deployment
+}
+
+// sandboxTarget passes a task sandbox to an SSH bridge, which never uses file
+// operations.
+type sandboxTarget struct{ *tasksandbox.Sandbox }
+
+func (sandboxTarget) StatFile(context.Context, string) (fs.FileInfo, error) {
+	return nil, errors.ErrUnsupported
+}
+func (sandboxTarget) OpenFile(context.Context, string) (io.ReadCloser, fs.FileInfo, error) {
+	return nil, nil, errors.ErrUnsupported
+}
+func (sandboxTarget) WriteFile(context.Context, string, io.Reader, int64) (bool, error) {
+	return false, errors.ErrUnsupported
 }

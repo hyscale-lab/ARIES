@@ -118,8 +118,10 @@ func TestBenchmarkDispatchersFailClosed(t *testing.T) {
 	}
 }
 
-// Each bridge implements exactly one harness's SSH grammar, so a crossed pair
-// must be refused before the run starts rather than at the first tool call.
+// One run-shared bridge serves several harness instances at a time, all of one
+// harness type: `openclaw-ssh` serves only OpenClaw, and `hermes-ssh` or
+// `hermes-grpc` serves only Hermes. Thus a crossed pair must be refused before
+// the run starts rather than at the first tool call.
 func TestValidateComponentsRequiresPairedHarnessAndBridge(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -134,6 +136,9 @@ func TestValidateComponentsRequiresPairedHarnessAndBridge(t *testing.T) {
 		{name: "openclaw with hermes bridge", harness: "openclaw", bridge: "hermes-ssh", wantErr: true},
 		{name: "codex with hermes bridge", harness: "codex", bridge: "hermes-ssh", wantErr: true},
 		{name: "openclaw with codex bridge", harness: "openclaw", bridge: "codex-ssh", wantErr: true},
+		{name: "hermes gRPC pair", harness: "hermes", bridge: "hermes-grpc"},
+		{name: "openclaw with hermes gRPC bridge", harness: "openclaw", bridge: "hermes-grpc", wantErr: true},
+		{name: "codex with hermes gRPC bridge", harness: "codex", bridge: "hermes-grpc", wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := config.Config{
@@ -179,6 +184,44 @@ func TestCodexHarnessConstructionUsesSelectedNativeVersion(t *testing.T) {
 	cfg.Versions.Codex.Version = "0.156.1"
 	if _, err := newHarness(cfg, t.TempDir(), nil, nil); err == nil || !strings.Contains(err.Error(), "version") {
 		t.Fatalf("unsupported native version was accepted: %v", err)
+	}
+}
+
+// Every checked-in profile must pass the component preflight, not only load.
+func TestCheckedInProfilesPassComponentValidation(t *testing.T) {
+	root := filepath.Join("..", "..", "profiles")
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() || filepath.Ext(path) != ".json" || strings.HasSuffix(path, "-overrides.json") {
+			return err
+		}
+		t.Run(strings.TrimPrefix(path, root+string(filepath.Separator)), func(t *testing.T) {
+			cfg, err := config.Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := validateComponents(cfg); err != nil {
+				t.Fatal(err)
+			}
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The run builds its bridge for every bridge type that preflight accepts.
+func TestNewSharedBridgeAcceptsTheHermesGRPCBridge(t *testing.T) {
+	cfg, err := config.Load(filepath.Join("..", "..", "profiles", "hermes-tb2-fix-git-grpc-deepseek.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bridge, err := newSharedBridge(cfg, "run-1", t.TempDir(), core.RuntimePlacement{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bridge.Stop(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }
 

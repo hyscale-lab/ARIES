@@ -22,7 +22,7 @@ func validEndpoint() core.ToolEndpoint {
 }
 
 func TestRenderTerminalNamesTheSandboxWorkdir(t *testing.T) {
-	rendered, err := renderTerminal("/workspace/dumps/workspace", 180)
+	rendered, err := renderTerminal("ssh", "/workspace/dumps/workspace", 180)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,12 +32,26 @@ func TestRenderTerminalNamesTheSandboxWorkdir(t *testing.T) {
 		t.Fatalf("terminal = %#v, want %#v", terminal, want)
 	}
 	for _, workdir := range []string{"", "relative", "/app/", "/a b", "/a/../b", "/a;b"} {
-		if _, err := renderTerminal(workdir, 180); err == nil {
+		if _, err := renderTerminal("ssh", workdir, 180); err == nil {
 			t.Fatalf("accepted workdir %q", workdir)
 		}
 	}
-	if _, err := renderTerminal("/app", 0); err == nil {
+	if _, err := renderTerminal("ssh", "/app", 0); err == nil {
 		t.Fatal("accepted a zero terminal timeout")
+	}
+}
+
+// The gRPC endpoint selects the ARIES plugin backend in config.yaml, which the
+// Gateway treats as authoritative.
+func TestRenderTerminalSelectsTheAriesBackend(t *testing.T) {
+	rendered, err := renderTerminal("aries", "/app", 180)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminal := decodeConfigYAML(t, rendered)["terminal"]
+	want := map[string]any{"backend": "aries", "cwd": "/app", "timeout": 180}
+	if !reflect.DeepEqual(terminal, want) {
+		t.Fatalf("terminal = %#v, want %#v", terminal, want)
 	}
 }
 
@@ -400,6 +414,25 @@ func TestGatewayLauncherExportsKeyAndAvoidsToolsetsFlag(t *testing.T) {
 	}
 }
 
+// The SSH launcher must not change with the gRPC support.
+func TestGatewayLauncherForSSHIsUnchanged(t *testing.T) {
+	want := `#!/bin/sh
+set -eu
+if [ ! -f /run/aries/hermes/model.key ]; then
+  echo "ARIES: Hermes model key is missing" >&2
+  exit 1
+fi
+DEEPSEEK_API_KEY="$(cat /run/aries/hermes/model.key)"
+export DEEPSEEK_API_KEY
+API_SERVER_KEY="$(cat /run/aries/gateway.key)"
+export API_SERVER_KEY
+exec hermes gateway run --no-supervise --external-supervisor
+`
+	if script := string(gatewayLauncherScript("DEEPSEEK_API_KEY", false)); script != want {
+		t.Fatalf("SSH launcher changed:\n%s", script)
+	}
+}
+
 func TestGatewayLauncherExportsExtractKeyWhenEnabled(t *testing.T) {
 	script := string(gatewayLauncherScript("DEEPSEEK_API_KEY", true))
 	for _, want := range []string{
@@ -522,6 +555,99 @@ func TestRenderConfig_NoSandboxToolsLeavesOnlyMCPAndWeb(t *testing.T) {
 		if _, ok := config["web"]; ok != test.web {
 			t.Fatalf("web selection = %#v", config["web"])
 		}
+	}
+}
+
+func validGRPCEndpoint() core.ToolEndpoint {
+	return core.ToolEndpoint{
+		Protocol: "grpc", Address: "172.17.0.1:41234", Username: "aries",
+	}
+}
+
+// The gRPC endpoint selects the ARIES plugin backend without an SSH target.
+// The plugin reads its target from its config entry.
+func TestContainerEnvironmentSelectsTheAriesBackendUnderGRPC(t *testing.T) {
+	environment, err := containerEnvironment(validGRPCEndpoint(), "/aries/workspace", 180, false, "", "run-1", "fix-git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"HERMES_HOME":                                stateContainerPath,
+		"TERMINAL_ENV":                               "aries",
+		"API_SERVER_HOST":                            "0.0.0.0",
+		"API_SERVER_PORT":                            "8642",
+		"HERMES_YOLO_MODE":                           "true",
+		"TERMINAL_CWD":                               "/aries/workspace",
+		"TERMINAL_TIMEOUT":                           "180",
+		"ARIES_RUN_ID":                               "run-1",
+		"ARIES_TASK_ID":                              "fix-git",
+		"HERMES_WRITE_SAFE_ROOT":                     "",
+		"HERMES_OTEL_DASHBOARD_LIVE":                 "true",
+		"HERMES_OTEL_DASHBOARD_LIVE_MAX_SPANS":       "10000",
+		"HERMES_OTEL_DASHBOARD_LIVE_RETENTION_HOURS": "0",
+		"HERMES_OTEL_CONTENT_CAPTURE":                "off",
+	}
+	got := map[string]string{}
+	for _, entry := range environment {
+		name, value, _ := strings.Cut(entry, "=")
+		got[name] = value
+	}
+	if len(got) != len(want) {
+		t.Fatalf("environment=%v", environment)
+	}
+	for name, value := range want {
+		if got[name] != value {
+			t.Fatalf("%s=%q, want %q", name, got[name], value)
+		}
+	}
+}
+
+func TestContainerEnvironmentRejectsUnusableGRPCEndpoints(t *testing.T) {
+	cases := map[string]func(*core.ToolEndpoint){
+		"staged client command": func(e *core.ToolEndpoint) { e.ClientCommand = "/usr/bin/ssh" },
+		"staged client source":  func(e *core.ToolEndpoint) { e.ClientSourceFile = "/tmp/client" },
+		"username":              func(e *core.ToolEndpoint) { e.Username = "root" },
+		"unknown protocol":      func(e *core.ToolEndpoint) { e.Protocol = "quic" },
+		"address":               func(e *core.ToolEndpoint) { e.Address = "no-port" },
+	}
+	for name, mutate := range cases {
+		endpoint := validGRPCEndpoint()
+		mutate(&endpoint)
+		if _, err := containerEnvironment(endpoint, "/aries/workspace", 180, false, "", "run-1", "fix-git"); err == nil {
+			t.Fatalf("%s: invalid endpoint was accepted", name)
+		}
+	}
+}
+
+// The gRPC launcher uses the plugin baked into the image and stages no client.
+// The SSH launcher remains unchanged.
+func TestGatewayLauncherDoesNotCheckAStagedClient(t *testing.T) {
+	launcher := string(gatewayLauncherScript("DEEPSEEK_API_KEY", false))
+	for _, unwanted := range []string{"seam", "python3", "plugins/aries", "gRPC client"} {
+		if strings.Contains(launcher, unwanted) {
+			t.Fatalf("gRPC launcher contains %q:\n%s", unwanted, launcher)
+		}
+	}
+}
+
+// The gRPC route lists the plugin in plugins.enabled. Hermes also auto-loads
+// it on the SSH route, as a bundled backend, but the backend stays ssh there
+// (TestARIESHermesImageKeepsTheSSHRouteOnTheShell).
+func TestRenderConfigEnablesThePluginOnlyForTheAriesBackend(t *testing.T) {
+	settings := baseSettings()
+	settings.grpcTarget = validGRPCEndpoint().Address
+	config := decodeConfigYAML(t, []byte(mustRender(t, validModel(), settings)))
+	plugins := config["plugins"].(map[string]any)
+	if got := plugins["enabled"]; !reflect.DeepEqual(got, []any{otelPluginName, "aries"}) {
+		t.Fatalf("enabled plugins = %#v", got)
+	}
+	want := map[string]any{"aries": map[string]any{"settings": map[string]any{"grpc_target": validGRPCEndpoint().Address}}}
+	if got := plugins["entries"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("plugin entries = %#v, want %#v", got, want)
+	}
+	sshConfig := decodeConfigYAML(t, []byte(mustRender(t, validModel(), baseSettings())))
+	if entries, ok := sshConfig["plugins"].(map[string]any)["entries"]; ok {
+		t.Fatalf("SSH plugin has entries = %#v", entries)
 	}
 }
 
