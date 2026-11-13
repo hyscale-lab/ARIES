@@ -6,10 +6,12 @@ import (
 	v1 "github.com/hyscale-lab/aries/pkg/bridge/control/v1"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/deployment"
+	"github.com/hyscale-lab/aries/pkg/runner"
 	"google.golang.org/grpc"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -180,5 +182,49 @@ func TestClientHelperStagingAndSessionCleanup(t *testing.T) {
 	_ = os.Symlink(source, link)
 	if err := stageClientHelper(link, s.helper); err == nil {
 		t.Fatal("symlink source accepted")
+	}
+}
+
+type recordingStaging struct {
+	removeErr error
+	removes   int
+	released  func() bool
+	order     []bool
+}
+
+func (s *recordingStaging) Stage(context.Context, runner.Sandbox, core.BridgeTarget) error {
+	return nil
+}
+func (s *recordingStaging) Remove(context.Context, runner.Sandbox, core.BridgeTarget) error {
+	s.removes++
+	s.order = append(s.order, s.released())
+	return s.removeErr
+}
+
+func TestSandboxStagingIsRemovedOnlyAfterConfirmedRelease(t *testing.T) {
+	s, r, c := fixtureSession(t)
+	staging := &recordingStaging{removeErr: errors.New("remove failed")}
+	staging.released = func() bool { return c.calls > 0 }
+	s.service.options.Staging, s.staged = staging, true
+	c.access.State = v1.State_RELEASING
+	if err := s.Stop(context.Background()); err == nil || staging.removes != 0 {
+		t.Fatalf("staging removed before release was confirmed: %v removes=%d", err, staging.removes)
+	}
+	c.access.State = v1.State_RELEASED
+	if err := s.Stop(context.Background()); err == nil || !strings.Contains(err.Error(), "remove failed") {
+		t.Fatalf("failed staging removal accepted: %v", err)
+	}
+	if r.downloads != 0 {
+		t.Fatal("evidence collected before staging removal")
+	}
+	staging.removeErr = nil
+	if err := s.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if staging.removes != 2 || !slices.Equal(staging.order, []bool{true, true}) || s.staged {
+		t.Fatalf("removes=%d order=%v staged=%v", staging.removes, staging.order, s.staged)
+	}
+	if err := s.Stop(context.Background()); err != nil || staging.removes != 2 {
+		t.Fatalf("repeated Stop removed again: %v removes=%d", err, staging.removes)
 	}
 }

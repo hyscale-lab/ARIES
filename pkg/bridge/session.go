@@ -32,7 +32,9 @@ type Session struct {
 	outputRoot                               string
 	started, stopped                         bool
 	descriptor                               core.BridgeTarget
+	sandbox                                  runner.Sandbox
 	local, remote, helper                    string
+	staged                                   bool
 	registered, exposed, released, collected bool
 	manifest                                 []*v1.Artifact
 	evidenceErr                              error
@@ -85,6 +87,14 @@ func (s *Session) Start(ctx context.Context, sandbox runner.Sandbox) (core.ToolE
 	}
 	if err = s.record(); err != nil {
 		return endpoint, err
+	}
+	if staging := s.service.options.Staging; staging != nil {
+		// Staging precedes registration, and ownership of its removal is
+		// retained from the first attempt so a failed upload is still cleaned.
+		s.sandbox, s.staged = sandbox, true
+		if err = staging.Stage(ctx, sandbox, d); err != nil {
+			return endpoint, fmt.Errorf("stage native executor: %w", err)
+		}
 	}
 	s.registered = true // Retain cleanup ownership even if the response is lost.
 	access, err := s.registerSandbox(ctx, control.Registration(d))
@@ -141,7 +151,7 @@ func (s *Session) Stop(ctx context.Context) error {
 	defer s.mu.Unlock()
 	s.stopped = true
 	if s.evidenceErr != nil {
-		return errors.Join(s.evidenceErr, s.removeHelper())
+		return errors.Join(s.evidenceErr, s.removeStaging(ctx), s.removeHelper())
 	}
 	if s.registered && !s.released {
 		a, err := s.service.client.ReleaseSandbox(ctx, s.request())
@@ -153,7 +163,7 @@ func (s *Session) Stop(ctx context.Context) error {
 			s.released = true
 			if s.exposed {
 				s.evidenceErr = errors.New("bridge exited without finalized evidence")
-				return errors.Join(s.evidenceErr, s.removeHelper())
+				return errors.Join(s.evidenceErr, s.removeStaging(ctx), s.removeHelper())
 			}
 			s.collected = true
 		} else {
@@ -169,6 +179,14 @@ func (s *Session) Stop(ctx context.Context) error {
 				s.collected = true
 			}
 		}
+	}
+	// Access is closed once release is confirmed, so the executor can leave
+	// the sandbox before evaluation; evidence collection follows either way.
+	if s.registered && !s.released {
+		return errors.New("bridge release was not confirmed")
+	}
+	if err := s.removeStaging(ctx); err != nil {
+		return err
 	}
 	if s.released && !s.collected {
 		expected := map[string]bool{"tool-calls.jsonl": false}
@@ -201,6 +219,20 @@ func (s *Session) Stop(ctx context.Context) error {
 	}
 	return s.removeHelper()
 }
+
+// removeStaging runs once access is closed. Failure retains ownership so a
+// later Stop retries; success leaves no executor files in the evaluated sandbox.
+func (s *Session) removeStaging(ctx context.Context) error {
+	if !s.staged {
+		return nil
+	}
+	if err := s.service.options.Staging.Remove(ctx, s.sandbox, s.descriptor); err != nil {
+		return fmt.Errorf("remove native executor staging: %w", err)
+	}
+	s.staged = false
+	return nil
+}
+
 func (s *Session) removeHelper() error {
 	if s.helper != "" {
 		if err := os.Remove(s.helper); err != nil && !errors.Is(err, os.ErrNotExist) {

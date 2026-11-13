@@ -6,7 +6,18 @@ import (
 
 	"github.com/hyscale-lab/aries/pkg/bridge/target"
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/runner"
 )
+
+// SandboxStaging places a native executor into the live sandbox before the
+// session exposes access, and removes it with confirmed absence after access is
+// released. It is optional and selected by composition for a protocol whose
+// executor is not part of the task image (Codex's exec-server). The session
+// owns ordering and retries; staging owns only the sandbox-side files.
+type SandboxStaging interface {
+	Stage(context.Context, runner.Sandbox, core.BridgeTarget) error
+	Remove(context.Context, runner.Sandbox, core.BridgeTarget) error
+}
 
 // NativeServer serves one task occurrence's native tool protocol. It receives
 // borrowed execution authority, never sandbox lifecycle or verifier ownership.

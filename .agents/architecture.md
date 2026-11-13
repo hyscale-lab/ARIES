@@ -23,7 +23,8 @@
 - Shared harness, bridge, and SSH lifecycle must not import native harnesses,
   dialects, or clients. Wiring injects factories and endpoint/client-staging policy.
   Dialects own grammar/workspace rules; harnesses own native config, readiness,
-  protocols, and results. The OpenClaw forwarding client must not import server grammar.
+  protocols, and results. Harness-side SSH clients (the OpenClaw client and
+  `pkg/harness/codex/executor`) must not import server grammar. Wiring injects Codex's sandbox staging, removed only after confirmed release.
 - Use explicit dependencies, concrete helpers, `context.Context` for external
   work, and Logrus lifecycle logs. Reuse native APIs and standard/existing
   libraries; add dependencies only for missing capabilities, rather than writing

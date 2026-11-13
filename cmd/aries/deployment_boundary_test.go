@@ -8,6 +8,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	bridgecodex "github.com/hyscale-lab/aries/pkg/bridge/ssh/codex"
+	"github.com/hyscale-lab/aries/pkg/harness/codex/executor"
 )
 
 // Components consume the same neutral deployment contract. Keeping provider
@@ -96,7 +99,7 @@ func openclawClientImport(path string) bool {
 }
 
 func dialectImport(path string) bool {
-	for _, dialect := range []string{"openclaw", "hermes"} {
+	for _, dialect := range []string{"openclaw", "hermes", "codex"} {
 		prefix := "github.com/hyscale-lab/aries/pkg/bridge/ssh/" + dialect
 		if path == prefix || strings.HasPrefix(path, prefix+"/") {
 			return true
@@ -197,5 +200,31 @@ func TestCommandUsesWiringForConcreteConstruction(t *testing.T) {
 				t.Errorf("%s imports deployment provider %s; use internal/app/wiring", path, imported)
 			}
 		}
+	}
+}
+
+// The Codex executor runs in the harness container, outside the bridge, and
+// must forward calls without importing any server dialect.
+func TestCodexExecutorDoesNotImportServerDialects(t *testing.T) {
+	if !dialectImport("github.com/hyscale-lab/aries/pkg/bridge/ssh/codex") {
+		t.Fatal("Codex dialect import accepted")
+	}
+	for _, component := range []string{"pkg/harness/codex/executor", "cmd/aries-codex-ssh"} {
+		root := filepath.Join("..", "..", filepath.FromSlash(component))
+		for path, imports := range productionImports(t, root, true) {
+			for _, imported := range imports {
+				if dialectImport(imported) {
+					t.Errorf("%s imports server dialect %s; the executor must forward calls unchanged", path, imported)
+				}
+			}
+		}
+	}
+}
+
+// The harness-side executor and the bridge dialect live on opposite sides of
+// the boundary, so only this test, which may import both, keeps them in step.
+func TestCodexExecutorAndDialectAgreeOnRemoteCommand(t *testing.T) {
+	if executor.RemoteCommand != bridgecodex.RemoteCommand {
+		t.Fatalf("executor sends %q, dialect accepts %q", executor.RemoteCommand, bridgecodex.RemoteCommand)
 	}
 }

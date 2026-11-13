@@ -12,8 +12,9 @@ import (
 // want_reply stay the last two keys.
 type toolCallRecord struct {
 	bridgekit.ToolCallRecord
-	RequestType string `json:"request_type"`
-	WantReply   bool   `json:"want_reply"`
+	StdinTruncated bool   `json:"stdin_truncated,omitempty"`
+	RequestType    string `json:"request_type"`
+	WantReply      bool   `json:"want_reply"`
 }
 
 type rawSSHRecord struct {
