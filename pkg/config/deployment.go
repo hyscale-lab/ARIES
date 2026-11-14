@@ -31,7 +31,8 @@ type KubernetesDeploymentConfig struct {
 	// and must be the same for harness, sandbox and bridge.
 	Namespace string `json:"namespace,omitempty"`
 	// NodeSelector pins pods to nodes carrying every listed label, such as
-	// Invitro's loader-nodetype=worker. Empty leaves pods unpinned.
+	// aries/role=worker, which k8s/create-cluster.sh sets on the workers.
+	// Empty leaves pods unpinned.
 	NodeSelector map[string]string `json:"node_selector,omitempty"`
 	// PodCIDR and ServiceCIDR name the cluster's own networks, which a
 	// network-allowed sandbox is kept off. They apply to sandbox.deployment.

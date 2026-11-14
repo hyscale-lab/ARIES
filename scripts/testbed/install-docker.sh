@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installs a Docker engine on a Kubernetes node of an Invitro-built cluster, so
+# Installs a Docker engine on a Kubernetes node of a vHive-built cluster, so
 # Docker runs can execute on the same hardware as Kubernetes runs and be
 # measured by the same cAdvisor.
 #
@@ -11,10 +11,11 @@
 # dockerd at the containerd already running; Docker keeps its containers in its
 # own containerd namespace, apart from the kubelet's.
 #
-# Docker 29 needs a newer runc than vHive installs (1.1.4), so the release's
-# runc replaces the node's at /usr/local/sbin/runc, the old one kept beside it.
-# Docker and Kubernetes containers on the node then run under the same runc,
-# which keeps the two backends comparable. Running containers are unaffected;
+# When the release's runc differs from the node's, it replaces the node's at
+# /usr/local/sbin/runc, the old one kept beside it: Docker 29 needed a newer
+# runc than vHive v1.8.2 installed (1.1.4). Docker and Kubernetes containers on
+# the node then run under the same runc, which keeps the two backends
+# comparable. Running containers are unaffected;
 # runc is only invoked to create, exec into or stop one. Safe to run again.
 set -euo pipefail
 
@@ -66,7 +67,7 @@ getent group docker >/dev/null || groupadd --system docker
 cat >/etc/systemd/system/docker.service <<UNIT
 [Unit]
 Description=Docker engine for ARIES Docker runs, on the node's containerd
-After=network-online.target
+After=network-online.target containerd.service
 Wants=network-online.target
 
 [Service]

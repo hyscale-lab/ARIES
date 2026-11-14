@@ -27,7 +27,7 @@ turbo_control() {
 }
 
 # policies lists the cpufreq policies of online CPUs; an offline CPU's, such as
-# a hyper-thread sibling Invitro's setup turns off, cannot be read or set.
+# a hyper-thread sibling quiet-node.sh turns off, cannot be read or set.
 policies() {
   local policy
   for policy in "$cpus"/cpufreq/policy*; do

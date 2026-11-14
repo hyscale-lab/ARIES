@@ -6,7 +6,7 @@
 # scripts/k8s-image-pins, so they match what ARIES requests; the bridge's tag
 # also carries the last commit that changed it, which must be clean. The bridge is built
 # on bridge.kubernetes_base_image, whose kubectl follows the Kubernetes version
-# the pinned Invitro checkout installs; no cluster access is needed. Log in to
+# the vHive k8s/create-cluster.sh pins installs; no cluster access is needed. Log in to
 # the registry with `docker login` first.
 set -euo pipefail
 
@@ -136,7 +136,7 @@ if [ "$build_bridge" = true ]; then
   if [ -n "$kube_version" ]; then
     case "$kube_version" in
       [0-9]*.[0-9]*.[0-9]*) ;;
-      *) echo "--kube-version must look like 1.34.3" >&2; exit 1 ;;
+      *) echo "--kube-version must look like 1.35.3" >&2; exit 1 ;;
     esac
     base=alpine/k8s:$kube_version
   fi

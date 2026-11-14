@@ -1,4 +1,4 @@
-.PHONY: build test test-race lint integration run setup microbench k8s-cluster k8s-images k8s-clean k8s-prune charts-lint charts-template
+.PHONY: build test test-race lint integration run setup microbench k8s-cluster k8s-images k8s-clean charts-lint charts-template
 
 PROFILE ?= profiles/openclaw-tb2-fix-git-deepseek.json
 
@@ -67,8 +67,8 @@ microbench:
 bridge-image: build
 	go run ./scripts/build-bridge-image
 
-# Build a cluster with Invitro's setup and apply ARIES to it. NODES lists SSH
-# targets: the master, the runner (Invitro's loader node), then the workers.
+# Build a cluster with vHive's setup tool and apply ARIES to it. NODES lists SSH
+# targets: the master, the runner, then the workers.
 #   make k8s-cluster NODES="user@master user@runner user@worker1"
 k8s-cluster:
 	./k8s/create-cluster.sh $(K8S_FLAGS) $(NODES)
@@ -76,7 +76,7 @@ k8s-cluster:
 # Build the bridge and Hermes images for the cluster and push them. REGISTRY is
 # a repository prefix; log in with docker login first.
 #   make k8s-images REGISTRY=docker.io/user
-#   make k8s-images REGISTRY=docker.io/user K8S_IMAGES_FLAGS="--kube-version 1.34.3"
+#   make k8s-images REGISTRY=docker.io/user K8S_IMAGES_FLAGS="--kube-version 1.35.3"
 k8s-images:
 	./k8s/publish-images.sh $(K8S_IMAGES_FLAGS) $(REGISTRY)
 
@@ -89,12 +89,6 @@ k8s-clean:
 	kubectl -n $(NAMESPACE) delete pods,services,networkpolicies \
 	  -l app.kubernetes.io/managed-by=aries --ignore-not-found --wait
 
-# Remove what Invitro installs for its serverless experiments and ARIES does not
-# use: Knative, Istio, MetalLB, vHive's registry and the pushgateway. Needs
-# cluster-admin access. K8S_PRUNE_FLAGS="--dry-run" lists it without changing it.
-#   make k8s-prune K8S_PRUNE_FLAGS="--dry-run"
-k8s-prune:
-	./k8s/prune-invitro.sh $(K8S_PRUNE_FLAGS)
 
 # Render the chart without a cluster. Catches template errors and, with
 # --dry-run, schema problems that only show up once values are merged.

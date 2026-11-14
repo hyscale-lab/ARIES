@@ -11,7 +11,7 @@ bootstrap, the Helm chart and the runner host are covered in
 ## Placement
 
 The Runner is a host process, not a pod. It reaches the cluster only through the
-`kubectl` binary and the context that resolves, from Invitro's loader node or
+`kubectl` binary and the context that resolves, from the cluster's runner node or
 from any machine with a route to the API server. Every runtime is one pod in a
 single namespace:
 
@@ -323,7 +323,7 @@ ones.
   answer means nothing is collecting, not that the pods are idle.
 - **A reachable address.** `k8s/apply-aries.sh` prints the Prometheus Service's
   cluster address. A cluster node reaches it directly, which is why the runner
-  on Invitro's loader node needs no port-forward. A runner outside the cluster
+  on the cluster's runner node needs no port-forward. A runner outside the cluster
   would need its own route to Prometheus.
 
 ### Freshness

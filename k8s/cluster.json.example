@@ -6,7 +6,7 @@
   "ssh_key": "",
   "ssh_options": ["-o", "ConnectTimeout=15"],
   "deploy_prometheus": true,
-  "prune_invitro": true,
   "kubelet_housekeeping_interval": "1s",
-  "node_setup": ""
+  "testbed": true,
+  "vhive_dir": ""
 }

@@ -266,7 +266,7 @@ from the version catalog. Runner stages the separate `aries-ssh-client` binary
 directly into the OpenClaw harness; the bridge container does not need that client.
 For the Kubernetes backend, `make k8s-images` builds the bridge on
 `bridge.kubernetes_base_image` instead, which supplies `kubectl`; bump it with
-the Kubernetes version the pinned Invitro installs. On that backend the
+the Kubernetes version the vHive pinned in `k8s/create-cluster.sh` installs. On that backend the
 requested tag also carries the last commit that changed the bridge, such as
 `aries-bridge:v1-0123456789ab`, so a cluster never runs a bridge built from
 other code and commits that leave the bridge alone keep the tag; see
@@ -311,7 +311,7 @@ all select this backend and the same namespace; mixed compositions are rejected.
 | Field | Applies to | Meaning |
 | --- | --- | --- |
 | `namespace` | all | Namespace for every pod and policy. Defaults to `aries`; must match across the three blocks. |
-| `node_selector` | all | Labels a node must carry to host the pods, for example `{"loader-nodetype": "worker"}`. Unset leaves pods unpinned. |
+| `node_selector` | all | Labels a node must carry to host the pods, for example `{"aries/role": "worker"}`, which `k8s/create-cluster.sh` sets on its workers. Unset leaves pods unpinned. |
 | `pod_cidr`, `service_cidr` | sandbox | Cluster networks a network-allowed sandbox is kept off. Unset leaves that egress open. |
 | `prometheus_url` | sandbox | Prometheus server that pod resource measurements are read from, reachable from where ARIES runs. Unset records measurements as unsupported. |
 | `service_account` | bridge | Account the bridge pod uses to exec into sandbox pods. Defaults to `aries-bridge`. |

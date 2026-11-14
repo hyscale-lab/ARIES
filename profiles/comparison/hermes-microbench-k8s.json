@@ -23,7 +23,7 @@
       "kubernetes": {
         "namespace": "aries",
         "node_selector": {
-          "loader-nodetype": "worker"
+          "aries/role": "worker"
         },
         "images": {
           "aries-local/hermes": "ghcr.io/hyscale-lab/aries-hermes"
@@ -36,10 +36,10 @@
       "backend": "kubernetes",
       "kubernetes": {
         "namespace": "aries",
-        "pod_cidr": "10.168.0.0/16",
+        "pod_cidr": "192.168.0.0/16",
         "service_cidr": "10.96.0.0/12",
         "node_selector": {
-          "loader-nodetype": "worker"
+          "aries/role": "worker"
         },
         "prometheus_url": "http://prometheus.local:9090"
       }
@@ -55,7 +55,7 @@
           "aries-bridge": "ghcr.io/hyscale-lab/aries-bridge"
         },
         "node_selector": {
-          "loader-nodetype": "worker"
+          "aries/role": "worker"
         }
       }
     },

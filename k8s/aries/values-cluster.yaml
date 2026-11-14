@@ -1,4 +1,4 @@
-# A remote kubeadm cluster, such as one built with Invitro's scripts/setup.
+# A remote kubeadm cluster, such as one k8s/create-cluster.sh builds.
 #
 # Harness pods dial the bridge pod's own address, so the agent's SSH hop is
 # pod-to-pod and the runner host needs no route into the pod network.

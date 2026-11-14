@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Applies ARIES to an existing Kubernetes cluster.
 #
-# ARIES does not bootstrap clusters. Build one with Invitro's scripts/setup
-# (https://github.com/vhive-serverless/invitro), then run this from a machine
-# whose kubectl and helm reach it as a cluster admin, such as the master node.
+# k8s/create-cluster.sh builds a cluster and runs this on its master; any
+# cluster works, run from a machine whose kubectl and helm reach it as a
+# cluster admin, such as the master node.
 #
-# It installs the ARIES chart (service accounts and RBAC only), and optionally
-# removes Invitro's unused serverless components, overlays the monitoring stack
-# and writes a namespaced kubeconfig for the runner.
+# It installs the ARIES chart (service accounts, RBAC and the cAdvisor
+# DaemonSet), and optionally the monitoring stack and a namespaced kubeconfig
+# for the runner.
 set -euo pipefail
 
 namespace=aries
@@ -18,7 +18,8 @@ monitoring_release=prometheus
 monitoring_namespace=monitoring
 runner_kubeconfig=""
 account=aries
-prune=false
+# The kube-prometheus-stack chart --monitoring installs.
+monitoring_chart_version=${MONITORING_CHART_VERSION:-72.6.2}
 
 usage() {
   cat <<'USAGE'
@@ -26,14 +27,15 @@ Usage: k8s/apply-aries.sh [options]
 
   --namespace NAME           namespace for ARIES pods (default: aries)
   --values FILE              extra chart values file; repeatable, later files win
-  --monitoring               overlay the existing kube-prometheus-stack release
-  --monitoring-release NAME  that release's name (default: prometheus)
-  --monitoring-namespace NS  that release's namespace (default: monitoring)
+  --monitoring               install or upgrade kube-prometheus-stack with ARIES's
+                             values, on the node labelled aries/role=monitoring
+  --monitoring-release NAME  its release name (default: prometheus)
+  --monitoring-namespace NS  its namespace (default: monitoring)
   --runner-kubeconfig PATH   write a kubeconfig limited to the ARIES namespace
   --runner-account NAME      the chart's runner ServiceAccount (default: aries)
-  --prune-invitro            first remove Knative, Istio, MetalLB and the other
-                             Invitro components ARIES does not use
   -h, --help                 show this help
+
+MONITORING_CHART_VERSION overrides the kube-prometheus-stack chart version.
 USAGE
 }
 
@@ -46,7 +48,6 @@ while [ $# -gt 0 ]; do
     --monitoring-namespace) monitoring_namespace=$2; shift 2 ;;
     --runner-kubeconfig) runner_kubeconfig=$2; shift 2 ;;
     --runner-account) account=$2; shift 2 ;;
-    --prune-invitro) prune=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -60,27 +61,19 @@ done
 kubectl auth can-i create namespaces >/dev/null 2>&1 ||
   { echo "kubectl must reach the cluster as an admin; the chart creates a namespace and Roles" >&2; exit 1; }
 
-if [ "$prune" = true ]; then
-  "$here/prune-invitro.sh" --monitoring-namespace "$monitoring_namespace"
-fi
-
 echo "==> Installing the ARIES chart as $namespace/$release"
 helm upgrade --install "$release" "$here/aries" \
   --namespace "$namespace" --create-namespace \
   -f "$here/aries/values-cluster.yaml" ${values[@]+"${values[@]}"} --wait --timeout 5m
 
 if [ "$monitoring" = true ]; then
-  # The chart column reads kube-prometheus-stack-<version>; keep that version so
-  # the upgrade changes values only.
-  chart=$(helm list -n "$monitoring_namespace" --filter "^${monitoring_release}\$" --no-headers | awk '{print $(NF-1)}')
-  case "$chart" in
-    kube-prometheus-stack-*) version=${chart#kube-prometheus-stack-} ;;
-    *) echo "no kube-prometheus-stack release $monitoring_namespace/$monitoring_release found" >&2; exit 1 ;;
-  esac
-  echo "==> Overlaying $monitoring_namespace/$monitoring_release (kube-prometheus-stack $version)"
-  helm upgrade "$monitoring_release" prometheus-community/kube-prometheus-stack \
-    --namespace "$monitoring_namespace" --version "$version" --reuse-values \
-    -f "$here/monitoring/values-aries.yaml" --wait --timeout 10m
+  kubectl get nodes -l aries/role=monitoring -o name | grep -q . ||
+    { echo "no node is labelled aries/role=monitoring to hold the monitoring stack" >&2; exit 1; }
+  echo "==> Installing $monitoring_namespace/$monitoring_release (kube-prometheus-stack $monitoring_chart_version)"
+  helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update >/dev/null
+  helm upgrade --install "$monitoring_release" prometheus-community/kube-prometheus-stack \
+    --namespace "$monitoring_namespace" --create-namespace --version "$monitoring_chart_version" \
+    -f "$here/monitoring/values-aries.yaml" --wait --timeout 15m
 fi
 
 if [ -n "$runner_kubeconfig" ]; then

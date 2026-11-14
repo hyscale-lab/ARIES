@@ -1,6 +1,7 @@
-# ARIES overlay for an existing kube-prometheus-stack release, such as the one
-# Invitro's scripts/setup installs. Apply it with `k8s/apply-aries.sh
-# --monitoring`, which upgrades the release in place and keeps its other values.
+# ARIES's values for kube-prometheus-stack, which `k8s/apply-aries.sh
+# --monitoring` installs. The stack runs on the node labelled
+# aries/role=monitoring, which k8s/create-cluster.sh sets on the runner, so it
+# never shares a measured worker's CPU.
 
 # cAdvisor is the scrape that matters for ARIES: it carries the per-pod CPU,
 # memory and throttling series the dashboard plots. One second resolves a tool
@@ -12,14 +13,37 @@
 # from kubelet_housekeeping_interval in cluster.json.
 kubelet:
   serviceMonitor:
-    # Invitro sets one interval for every kubelet endpoint, and the chart lets
-    # that override cAdvisorInterval. Clearing it is what makes the line below
-    # take effect; the other endpoints fall back to the global scrape interval.
-    interval: ""
     cAdvisor: true
     cAdvisorInterval: 1s
 
+prometheus:
+  prometheusSpec:
+    scrapeInterval: 15s
+    nodeSelector:
+      aries/role: monitoring
+    # The ARIES chart's cAdvisor PodMonitor carries no label of this release,
+    # so Prometheus must select monitors from every release.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+
+prometheusOperator:
+  nodeSelector:
+    aries/role: monitoring
+  admissionWebhooks:
+    deployment:
+      nodeSelector:
+        aries/role: monitoring
+    patch:
+      nodeSelector:
+        aries/role: monitoring
+
+kube-state-metrics:
+  nodeSelector:
+    aries/role: monitoring
+
 grafana:
+  nodeSelector:
+    aries/role: monitoring
   sidecar:
     dashboards:
       enabled: true
@@ -29,3 +53,18 @@ grafana:
       folderAnnotation: grafana_folder
       provider:
         foldersFromFilesStructure: true
+
+# ARIES reads measurements, not alerts.
+alertmanager:
+  enabled: false
+
+# kubeadm binds these control-plane endpoints to the loopback address, where
+# Prometheus cannot scrape them; ARIES does not use them.
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false

@@ -22,7 +22,7 @@
       "kubernetes": {
         "namespace": "aries",
         "node_selector": {
-          "loader-nodetype": "worker"
+          "aries/role": "worker"
         }
       }
     }
@@ -32,10 +32,10 @@
       "backend": "kubernetes",
       "kubernetes": {
         "namespace": "aries",
-        "pod_cidr": "10.168.0.0/16",
+        "pod_cidr": "192.168.0.0/16",
         "service_cidr": "10.96.0.0/12",
         "node_selector": {
-          "loader-nodetype": "worker"
+          "aries/role": "worker"
         }
       }
     }
@@ -50,7 +50,7 @@
           "aries-bridge": "ghcr.io/hyscale-lab/aries-bridge"
         },
         "node_selector": {
-          "loader-nodetype": "worker"
+          "aries/role": "worker"
         }
       }
     },

@@ -550,7 +550,7 @@ type BridgeVersions struct {
 
 	// KubernetesBaseImage is the base k8s/publish-images.sh builds the
 	// Kubernetes bridge on. It supplies kubectl, so its version follows the
-	// Kubernetes version the pinned Invitro checkout installs.
+	// Kubernetes version the vHive k8s/create-cluster.sh pins installs.
 	KubernetesBaseImage string `json:"kubernetes_base_image,omitempty"`
 }
 

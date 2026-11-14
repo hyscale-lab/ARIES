@@ -1,47 +1,41 @@
 # ARIES on Kubernetes
 
-ARIES does not bootstrap clusters. Build one with
-[Invitro's `scripts/setup`](https://github.com/vhive-serverless/invitro/tree/main/scripts/setup),
-then apply ARIES on top with the script in this directory. For how ARIES places
-its components on a cluster, and what that provider does not support, see
+`create-cluster.sh` builds a cluster with [vHive's setup tool](https://github.com/vhive-serverless/vHive/tree/main/scripts),
+with Kubernetes and its pod network only, and applies ARIES to it. `apply-aries.sh`
+applies ARIES to any other cluster. For how ARIES places its components on a
+cluster, and what that provider does not support, see
 [the Kubernetes implementation](../docs/implementation/kubernetes.md).
 
 ```
 k8s/
-  create-cluster.sh     # runs Invitro's setup, then apply-aries.sh, in one go
+  create-cluster.sh     # builds the cluster with vHive's setup tool, then runs apply-aries.sh
   apply-aries.sh        # applies everything below to an existing cluster
-  prune-invitro.sh      # removes the Invitro components ARIES does not use
   publish-images.sh     # builds and pushes the bridge and Hermes images
-  aries/                # the ARIES chart: runner and bridge RBAC, dashboard
-  monitoring/           # values overlay for an existing kube-prometheus-stack
+  aries/                # the ARIES chart: runner and bridge RBAC, cAdvisor, dashboard
+  monitoring/           # ARIES's values for kube-prometheus-stack
 ```
 
 ## What ARIES needs from the cluster
 
-| Requirement | Invitro's setup |
+| Requirement | A `create-cluster.sh` cluster |
 | --- | --- |
 | A CNI that enforces NetworkPolicy | Calico |
-| containerd | Yes |
-| `kubectl` and `helm` on the machine that applies ARIES | On the master node; `helm` is installed with Prometheus |
-| kube-prometheus-stack, only for the Grafana dashboard | Optional (`DEPLOY_PROMETHEUS`) |
-
-Invitro also installs components for its own serverless experiments, which
-ARIES does not use. `create-cluster.sh` removes them unless told to keep them;
-see [Removing Invitro's unused components](#removing-invitros-unused-components).
+| containerd | Yes, as a systemd service |
+| `kubectl` and `helm` on the machine that applies ARIES | On the master node; `helm` at a pinned version |
+| kube-prometheus-stack, for pod measurements and the dashboard | With `--prometheus`, on the runner |
 
 ## Quick start: build the cluster and apply ARIES with one command
 
-`create-cluster.sh` builds the cluster and applies ARIES in one go. Steps 1 and
-2 below do the same separately, for when you need to run them one at a time.
-
-From your own machine, with passwordless SSH to every node:
+From your own machine, with passwordless SSH and `sudo` on every node (Ubuntu,
+as vHive's setup tool requires):
 
 ```sh
-k8s/create-cluster.sh --prometheus user@master user@runner user@worker1 user@worker2
+k8s/create-cluster.sh --prometheus --testbed user@master user@runner user@worker1 user@worker2
 ```
 
-As in Invitro, the first node is the control plane and the second is the loader
-node; the rest are workers.
+The first node is the control plane. The second, the runner, joins the cluster,
+holds the monitoring stack and receives the ARIES runner; the rest are workers,
+where ARIES puts harness, sandbox and bridge pods.
 
 Or keep the nodes and settings in a file. Copy `cluster.json.example` to the
 gitignored `cluster.json`, fill it in, and run the script with no arguments:
@@ -53,44 +47,58 @@ k8s/create-cluster.sh
 
 | Key | Meaning |
 | --- | --- |
-| `master`, `runner`, `workers` | SSH targets. `runner` is Invitro's loader node |
+| `master`, `runner`, `workers` | SSH targets |
 | `runner_dir` | Directory under the runner's home that receives ARIES; default `aries` |
-| `ssh_key`, `ssh_options` | Identity file and extra `ssh` options, applied to every connection including Invitro's |
+| `ssh_key`, `ssh_options` | Identity file and extra `ssh` options, applied to every connection |
 | `deploy_prometheus` | Same as `--prometheus` |
-| `prune_invitro` | `false` is the same as `--keep-invitro`; removing is the default |
 | `kubelet_housekeeping_interval` | Same as `--housekeeping`; `1s` gives one-second pod measurements |
-| `node_setup` | Same as `--node-setup` |
+| `testbed` | Same as `--testbed` |
+| `vhive_dir` | Same as `--vhive-dir` |
 
 `--config FILE` names another file, and command-line options win over the file.
 
 The script:
 
-1. checks out Invitro at the revision pinned at the top of the script into
-   `.cache/invitro` and runs its `create_multinode_cluster` against the nodes;
-2. copies the committed `k8s/` tree to the master and runs `apply-aries.sh`
+1. copies `scripts/testbed/` to every node and installs vHive at the commit
+   pinned at the top of the script on every node, with
+   `setup_tool --k8s-only --containerd-service setup_node stock-only`: containerd,
+   runc, the CNI plugins and the Kubernetes packages, but no Knative CLI. It
+   then quiets each node for timing with `scripts/testbed/quiet-node.sh` (SMT,
+   transparent huge pages, NUMA balancing and swap off) and turns turbo off;
+2. runs `kubeadm init` on the master through
+   `setup_tool --k8s-only --init-only create_multinode_cluster stock-only`, and
+   joins the runner and workers with a fresh token;
+3. installs Calico with `setup_tool --k8s-only setup_master_node stock-only` and
+   waits for every node; labels the runner `aries/role=monitoring` and the
+   workers `aries/role=worker`;
+4. sets the kubelet housekeeping interval, if asked;
+5. installs Helm at a pinned version, checked against its published checksum,
+   copies the committed `k8s/` tree to the master and runs `apply-aries.sh`
    there;
-3. builds `bin/aries`, `bin/aries-ssh-client` and `bin/aries-replay` for the loader node and stages
-   them with `profiles/`, `configs/` and a namespaced kubeconfig under `~/aries`.
+6. with `--testbed`, pins the CPU clock on the runner and workers and installs
+   Docker on the workers (`scripts/testbed/`), for Docker runs on the same
+   nodes;
+7. builds `bin/aries`, `bin/aries-ssh-client` and `bin/aries-replay` for the runner and
+   stages them with `profiles/`, `configs/` and a namespaced kubeconfig under `~/aries`.
+
+Every step skips what is already done, so a run that failed part-way can be
+run again.
 
 | Option | Effect |
 | --- | --- |
-| `--prometheus` | Sets Invitro's `DEPLOY_PROMETHEUS` and applies the ARIES monitoring overlay |
-| `--node-setup FILE` | Uses your own Invitro `node_setup.json`; needed when the nodes' internal addresses are not Invitro's default `10.0.1.x` layout |
-| `--keep-invitro` | Keeps Invitro's unused components, which are otherwise removed before ARIES is applied |
-| `--housekeeping DUR` | Sets the kubelet's `--housekeeping-interval` on every node and restarts it. Invitro leaves the 10-second default, which caps how fine pod measurements can be |
+| `--prometheus` | Installs kube-prometheus-stack with ARIES's values, on the runner |
+| `--housekeeping DUR` | Sets the kubelet's `--housekeeping-interval` on every node and restarts it. The kubelet's 10-second default caps how fine pod measurements can be |
+| `--testbed` | Pins the CPU clock on the runner and workers and installs Docker on the workers |
+| `--vhive-dir DIR` | Installs vHive from this local checkout's `HEAD`, copied to the nodes, instead of fetching the pinned commit |
 | `--skip-cluster` | The cluster exists already; only apply ARIES and restage the runner |
 | `--no-runner` | Do not build or stage the runner |
 
-ARIES holds no copy of Invitro's scripts: only the pinned revision, which
-`INVITRO_REVISION` overrides. The two steps below are what the script runs, for
-doing them by hand.
+`VHIVE_REPO` and `VHIVE_REVISION` override the vHive the nodes fetch, and
+`HELM_VERSION` the Helm. vHive's setup tool keeps its logs on each node in
+`~/aries-setup-node.log` and, on the master, `~/aries-create-cluster.log` and
+`~/aries-master-node.log`.
 
-## 1. Build the cluster
-
-Follow Invitro's instructions for `create_multinode_cluster`. Set
-`"DEPLOY_PROMETHEUS": true` in its `setup.json` if you want the dashboard.
-
-## 2. Apply ARIES
+## Apply ARIES to an existing cluster
 
 On the master node, or anywhere `kubectl` and `helm` reach the cluster as an
 admin, from an ARIES checkout:
@@ -101,9 +109,8 @@ k8s/apply-aries.sh --monitoring --runner-kubeconfig ~/aries-kubeconfig
 
 | Option | Effect |
 | --- | --- |
-| *(none)* | Installs the chart into namespace `aries`: the runner's and the bridge's service accounts and Roles, and the dashboard ConfigMap |
-| `--monitoring` | Upgrades the existing kube-prometheus-stack release in place with [`monitoring/values-aries.yaml`](monitoring/values-aries.yaml): cAdvisor scraped every second instead of Invitro's 15, and the Grafana sidecar reading dashboards from every namespace |
-| `--prune-invitro` | First runs `prune-invitro.sh`, below |
+| *(none)* | Installs the chart into namespace `aries`: the runner's and the bridge's service accounts and Roles, the cAdvisor DaemonSet and the dashboard ConfigMap |
+| `--monitoring` | Installs or upgrades kube-prometheus-stack (chart 72.6.2, `MONITORING_CHART_VERSION` overrides it) with [`monitoring/values-aries.yaml`](monitoring/values-aries.yaml): on the node labelled `aries/role=monitoring`, cAdvisor scraped every second, monitors selected from every release, and the Grafana sidecar reading dashboards from every namespace |
 | `--runner-kubeconfig PATH` | Writes a kubeconfig for the chart's `aries` ServiceAccount, so the runner holds the namespaced Role rather than cluster-admin |
 | `--values FILE` | Extra chart values, such as a `secret.yaml` for a private registry |
 | `--namespace NAME` | A namespace other than `aries`; set the same one in the profile |
@@ -118,35 +125,6 @@ Prometheus scrapes for the pod measurements ARIES records (see
 Set `cadvisor.enabled: false` to leave it out; measurements then fail rather
 than read as idle. ARIES creates the harness, sandbox and bridge pods for each
 run and removes them afterwards.
-
-## Removing Invitro's unused components
-
-`prune-invitro.sh` frees the cluster of what Invitro installs for running
-serverless functions. `create-cluster.sh` runs it by default, through
-`apply-aries.sh --prune-invitro`; `apply-aries.sh` on its own leaves the
-cluster's components alone unless given that option. To run it
-on its own where `kubectl` reaches the cluster as an admin, use `make k8s-prune`;
-`make k8s-prune K8S_PRUNE_FLAGS="--dry-run"` lists what it would remove without
-changing anything.
-
-| Removed | What Invitro uses it for |
-| --- | --- |
-| Knative Serving and Eventing (`knative-serving`, `knative-eventing`) | Running the loader's functions |
-| Istio (`istio-system`) | Knative's ingress |
-| MetalLB (`metallb-system`) | Load-balancer addresses for Istio's gateway |
-| vHive's image registry (`registry`) and its volume | Caching function images |
-| The `prometheus-pushgateway` release and the Knative dashboards | Loader metrics |
-
-It removes their admission webhooks first, so pod creation never calls a
-webhook that has gone, then the namespaces, then what they left elsewhere: the
-root certificate Istio copies into every namespace, and their cluster-wide roles
-and custom resource definitions. Those are found by each component's labels, as
-many Knative Eventing roles do not carry its name, and by name for MetalLB,
-which labels nothing. Calico, containerd, metrics-server and
-kube-prometheus-stack stay. The registry's data stays on the node's disk.
-
-Afterwards the cluster can no longer run Invitro's own experiments. It is safe
-to run again.
 
 ## 3. Publish the images the cluster pulls
 
@@ -173,8 +151,8 @@ and pushes them under the tags ARIES requests:
 
 - **`<registry>/aries-bridge`** is `aries-bridge` on
   `bridge.kubernetes_base_image` from `configs/versions.json`, an `alpine/k8s`
-  image whose `kubectl` matches the Kubernetes version the pinned Invitro
-  installs. The script needs no cluster access. For a cluster on another
+  image whose `kubectl` matches the Kubernetes version the vHive pinned in
+  `create-cluster.sh` installs (1.35.3). The script needs no cluster access. For a cluster on another
   version, add `K8S_IMAGES_FLAGS="--kube-version <version>"` with the version
   `apply-aries.sh` printed.
 
@@ -223,11 +201,12 @@ three blocks must select the same backend and namespace:
   `sandbox.deployment.kubernetes` so the Recorder can read pod measurements.
   `create-cluster.sh` writes it into the profiles it stages on the runner. It is
   the Service's cluster address, so it only works from a cluster node, which
-  Invitro's loader node is.
+  the runner is.
 - **`images`:** map each locally built image to your registry. A key without a
   tag maps the repository and keeps the requested tag.
-- **`node_selector`:** add `"node_selector": {"loader-nodetype": "worker"}` to
-  each block to keep ARIES pods on Invitro's worker nodes.
+- **`node_selector`:** the profiles set `"node_selector": {"aries/role": "worker"}`
+  in each block, which keeps ARIES pods on the workers `create-cluster.sh`
+  labels; on another cluster, label its workers so or change the selector.
 
 See [deployment configuration](../docs/configuration.md#kubernetes-deployment)
 for every field.
