@@ -61,11 +61,8 @@ done
 kubectl auth can-i create namespaces >/dev/null 2>&1 ||
   { echo "kubectl must reach the cluster as an admin; the chart creates a namespace and Roles" >&2; exit 1; }
 
-echo "==> Installing the ARIES chart as $namespace/$release"
-helm upgrade --install "$release" "$here/aries" \
-  --namespace "$namespace" --create-namespace \
-  -f "$here/aries/values-cluster.yaml" ${values[@]+"${values[@]}"} --wait --timeout 5m
-
+# The monitoring stack goes first: the chart creates its cAdvisor PodMonitor
+# only when the PodMonitor resource type, which the stack installs, exists.
 if [ "$monitoring" = true ]; then
   kubectl get nodes -l aries/role=monitoring -o name | grep -q . ||
     { echo "no node is labelled aries/role=monitoring to hold the monitoring stack" >&2; exit 1; }
@@ -75,6 +72,12 @@ if [ "$monitoring" = true ]; then
     --namespace "$monitoring_namespace" --create-namespace --version "$monitoring_chart_version" \
     -f "$here/monitoring/values-aries.yaml" --wait --timeout 15m
 fi
+
+echo "==> Installing the ARIES chart as $namespace/$release"
+helm upgrade --install "$release" "$here/aries" \
+  --namespace "$namespace" --create-namespace \
+  -f "$here/aries/values-cluster.yaml" ${values[@]+"${values[@]}"} --wait --timeout 5m
+
 
 if [ -n "$runner_kubeconfig" ]; then
   # The chart's runner ServiceAccount holds only the namespaced Role, so the

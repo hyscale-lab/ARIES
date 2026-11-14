@@ -209,10 +209,10 @@ if [ "$skip_cluster" = false ]; then
     for node in "${nodes[@]}"; do
       remote "$node" "cat > ~/vhive.bundle" <"$bundle"
     done
-    source_command="git clone -q ~/vhive.bundle ~/vhive"
+    source_command="git clone -q --no-checkout ~/vhive.bundle ~/vhive"
   else
     echo "==> Using vHive $VHIVE_REVISION from $VHIVE_REPO"
-    source_command="git clone -q $(printf %q "$VHIVE_REPO") ~/vhive"
+    source_command="git clone -q --no-checkout $(printf %q "$VHIVE_REPO") ~/vhive"
   fi
 
   echo "==> Installing every node with vHive's setup tool"
@@ -226,7 +226,7 @@ if [ "$skip_cluster" = false ]; then
       git -C ~/vhive checkout -q --detach $VHIVE_REVISION ||
         { echo 'vHive $VHIVE_REVISION is not in the source; push it there or use --vhive-dir' >&2; exit 1; }
       cd ~/vhive/scripts
-      ./install_go.sh >/dev/null
+      ./install_go.sh > ~/aries-install-go.log 2>&1 || { tail -20 ~/aries-install-go.log >&2; exit 1; }
       source /etc/profile
       go build -o setup_tool
       ./setup_tool --k8s-only --containerd-service setup_node stock-only > ~/aries-setup-node.log 2>&1 ||
