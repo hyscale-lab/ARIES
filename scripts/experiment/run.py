@@ -621,8 +621,9 @@ def collect_once(directory, meta, state):
 
 
 def cmd_collect(args):
-    meta, state = open_campaign(args.campaign)
     while True:
+        # Read afresh each round: resume may have changed meta.json meanwhile.
+        meta, state = open_campaign(args.campaign)
         done = collect_once(args.campaign, meta, state)
         if not args.watch or done:
             return
