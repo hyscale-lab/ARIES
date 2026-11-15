@@ -1,0 +1,328 @@
+figure,harness,setup,task,measure,value
+stages,hermes,native,mb-noop,Sandbox start and register,0
+stages,hermes,native,mb-noop,Harness start,8.034
+stages,hermes,native,mb-noop,Model (replayed),2.713
+stages,hermes,native,mb-noop,Tools and harness logic,3.688
+stages,hermes,native,mb-noop,Stop and evaluate,0.164
+stages,hermes,native,mb-noop,Cleanup,0.211
+stages,hermes,docker,mb-noop,Sandbox start and register,0.304
+stages,hermes,docker,mb-noop,Harness start,8.001
+stages,hermes,docker,mb-noop,Model (replayed),2.714
+stages,hermes,docker,mb-noop,Tools and harness logic,5.421
+stages,hermes,docker,mb-noop,Stop and evaluate,0.507
+stages,hermes,docker,mb-noop,Cleanup,0.115
+stages,hermes,k8s,mb-noop,Sandbox start and register,2.316
+stages,hermes,k8s,mb-noop,Harness start,10.426
+stages,hermes,k8s,mb-noop,Model (replayed),2.714
+stages,hermes,k8s,mb-noop,Tools and harness logic,4.864
+stages,hermes,k8s,mb-noop,Stop and evaluate,2.28
+stages,hermes,k8s,mb-noop,Cleanup,6.187
+stages,hermes,native,mb-ten-calls,Sandbox start and register,0
+stages,hermes,native,mb-ten-calls,Harness start,8.018
+stages,hermes,native,mb-ten-calls,Model (replayed),17.32
+stages,hermes,native,mb-ten-calls,Tools and harness logic,4.983
+stages,hermes,native,mb-ten-calls,Stop and evaluate,0.169
+stages,hermes,native,mb-ten-calls,Cleanup,0.247
+stages,hermes,docker,mb-ten-calls,Sandbox start and register,0.296
+stages,hermes,docker,mb-ten-calls,Harness start,8.005
+stages,hermes,docker,mb-ten-calls,Model (replayed),17.321
+stages,hermes,docker,mb-ten-calls,Tools and harness logic,6.622
+stages,hermes,docker,mb-ten-calls,Stop and evaluate,0.543
+stages,hermes,docker,mb-ten-calls,Cleanup,0.116
+stages,hermes,k8s,mb-ten-calls,Sandbox start and register,2.487
+stages,hermes,k8s,mb-ten-calls,Harness start,10.431
+stages,hermes,k8s,mb-ten-calls,Model (replayed),17.32
+stages,hermes,k8s,mb-ten-calls,Tools and harness logic,7.1
+stages,hermes,k8s,mb-ten-calls,Stop and evaluate,1.841
+stages,hermes,k8s,mb-ten-calls,Cleanup,6.188
+stages,hermes,native,mb-cpu,Sandbox start and register,0
+stages,hermes,native,mb-cpu,Harness start,8.031
+stages,hermes,native,mb-cpu,Model (replayed),4.846
+stages,hermes,native,mb-cpu,Tools and harness logic,6.883
+stages,hermes,native,mb-cpu,Stop and evaluate,0.166
+stages,hermes,native,mb-cpu,Cleanup,0.265
+stages,hermes,docker,mb-cpu,Sandbox start and register,0.302
+stages,hermes,docker,mb-cpu,Harness start,7.999
+stages,hermes,docker,mb-cpu,Model (replayed),4.846
+stages,hermes,docker,mb-cpu,Tools and harness logic,8.568
+stages,hermes,docker,mb-cpu,Stop and evaluate,0.522
+stages,hermes,docker,mb-cpu,Cleanup,0.114
+stages,hermes,k8s,mb-cpu,Sandbox start and register,2.491
+stages,hermes,k8s,mb-cpu,Harness start,10.429
+stages,hermes,k8s,mb-cpu,Model (replayed),4.846
+stages,hermes,k8s,mb-cpu,Tools and harness logic,8.169
+stages,hermes,k8s,mb-cpu,Stop and evaluate,1.964
+stages,hermes,k8s,mb-cpu,Cleanup,6.194
+stages,openclaw,native,mb-noop,Sandbox start and register,0
+stages,openclaw,native,mb-noop,Harness start,25.2
+stages,openclaw,native,mb-noop,Model (replayed),1.932
+stages,openclaw,native,mb-noop,Tools and harness logic,3.237
+stages,openclaw,native,mb-noop,Stop and evaluate,0.156
+stages,openclaw,native,mb-noop,Cleanup,0.221
+stages,openclaw,docker,mb-noop,Sandbox start and register,0.365
+stages,openclaw,docker,mb-noop,Harness start,27.96
+stages,openclaw,docker,mb-noop,Model (replayed),1.933
+stages,openclaw,docker,mb-noop,Tools and harness logic,2.415
+stages,openclaw,docker,mb-noop,Stop and evaluate,0.859
+stages,openclaw,docker,mb-noop,Cleanup,0.113
+stages,openclaw,k8s,mb-noop,Sandbox start and register,2.436
+stages,openclaw,k8s,mb-noop,Harness start,28.612
+stages,openclaw,k8s,mb-noop,Model (replayed),1.932
+stages,openclaw,k8s,mb-noop,Tools and harness logic,2.586
+stages,openclaw,k8s,mb-noop,Stop and evaluate,2.152
+stages,openclaw,k8s,mb-noop,Cleanup,6.191
+stages,openclaw,native,mb-ten-calls,Sandbox start and register,0
+stages,openclaw,native,mb-ten-calls,Harness start,25.265
+stages,openclaw,native,mb-ten-calls,Model (replayed),13.88
+stages,openclaw,native,mb-ten-calls,Tools and harness logic,4.525
+stages,openclaw,native,mb-ten-calls,Stop and evaluate,0.161
+stages,openclaw,native,mb-ten-calls,Cleanup,0.208
+stages,openclaw,docker,mb-ten-calls,Sandbox start and register,0.362
+stages,openclaw,docker,mb-ten-calls,Harness start,28.048
+stages,openclaw,docker,mb-ten-calls,Model (replayed),13.88
+stages,openclaw,docker,mb-ten-calls,Tools and harness logic,4.622
+stages,openclaw,docker,mb-ten-calls,Stop and evaluate,1.031
+stages,openclaw,docker,mb-ten-calls,Cleanup,0.111
+stages,openclaw,k8s,mb-ten-calls,Sandbox start and register,2.603
+stages,openclaw,k8s,mb-ten-calls,Harness start,28.659
+stages,openclaw,k8s,mb-ten-calls,Model (replayed),13.881
+stages,openclaw,k8s,mb-ten-calls,Tools and harness logic,5.703
+stages,openclaw,k8s,mb-ten-calls,Stop and evaluate,2.401
+stages,openclaw,k8s,mb-ten-calls,Cleanup,6.187
+stages,openclaw,native,mb-cpu,Sandbox start and register,0
+stages,openclaw,native,mb-cpu,Harness start,25.142
+stages,openclaw,native,mb-cpu,Model (replayed),3.528
+stages,openclaw,native,mb-cpu,Tools and harness logic,7.229
+stages,openclaw,native,mb-cpu,Stop and evaluate,0.161
+stages,openclaw,native,mb-cpu,Cleanup,0.204
+stages,openclaw,docker,mb-cpu,Sandbox start and register,0.372
+stages,openclaw,docker,mb-cpu,Harness start,27.956
+stages,openclaw,docker,mb-cpu,Model (replayed),3.529
+stages,openclaw,docker,mb-cpu,Tools and harness logic,6.467
+stages,openclaw,docker,mb-cpu,Stop and evaluate,1.027
+stages,openclaw,docker,mb-cpu,Cleanup,0.122
+stages,openclaw,k8s,mb-cpu,Sandbox start and register,2.607
+stages,openclaw,k8s,mb-cpu,Harness start,28.676
+stages,openclaw,k8s,mb-cpu,Model (replayed),3.529
+stages,openclaw,k8s,mb-cpu,Tools and harness logic,6.414
+stages,openclaw,k8s,mb-cpu,Stop and evaluate,2.395
+stages,openclaw,k8s,mb-cpu,Cleanup,6.193
+task-time,hermes,native,mb-noop,task_s,14.861
+task-time,hermes,docker,mb-noop,task_s,17.072
+task-time,hermes,k8s,mb-noop,task_s,28.702
+task-time,hermes,native,mb-one-call,task_s,16.726
+task-time,hermes,docker,mb-one-call,task_s,18.77
+task-time,hermes,k8s,mb-one-call,task_s,30.992
+task-time,hermes,native,mb-ten-calls,task_s,30.782
+task-time,hermes,docker,mb-ten-calls,task_s,32.899
+task-time,hermes,k8s,mb-ten-calls,task_s,45.02
+task-time,hermes,native,mb-cpu,task_s,20.252
+task-time,hermes,docker,mb-cpu,task_s,22.364
+task-time,hermes,k8s,mb-cpu,task_s,34.005
+task-time,hermes,native,mb-output,task_s,16.747
+task-time,hermes,docker,mb-output,task_s,18.772
+task-time,hermes,k8s,mb-output,task_s,30.982
+task-time,openclaw,native,mb-noop,task_s,30.748
+task-time,openclaw,docker,mb-noop,task_s,33.643
+task-time,openclaw,k8s,mb-noop,task_s,43.837
+task-time,openclaw,native,mb-one-call,task_s,30.811
+task-time,openclaw,docker,mb-one-call,task_s,34.005
+task-time,openclaw,k8s,mb-one-call,task_s,45.021
+task-time,openclaw,native,mb-ten-calls,task_s,44.042
+task-time,openclaw,docker,mb-ten-calls,task_s,48.074
+task-time,openclaw,k8s,mb-ten-calls,task_s,59.049
+task-time,openclaw,native,mb-cpu,task_s,36.212
+task-time,openclaw,docker,mb-cpu,task_s,39.43
+task-time,openclaw,k8s,mb-cpu,task_s,50.029
+task-time,openclaw,native,mb-output,task_s,31.74
+task-time,openclaw,docker,mb-output,task_s,34.935
+task-time,openclaw,k8s,mb-output,task_s,46.017
+tool-call,hermes,native,mb-ten-calls,bridge_ms,
+tool-call,hermes,docker,mb-ten-calls,bridge_ms,14.0
+tool-call,hermes,k8s,mb-ten-calls,bridge_ms,26.656
+tool-call,openclaw,native,mb-ten-calls,bridge_ms,
+tool-call,openclaw,docker,mb-ten-calls,bridge_ms,24.756
+tool-call,openclaw,k8s,mb-ten-calls,bridge_ms,49.049
+tool-call,openclaw,native,mb-ten-calls,harness_ms,81.2
+tool-call,openclaw,docker,mb-ten-calls,harness_ms,96.5
+tool-call,openclaw,k8s,mb-ten-calls,harness_ms,144.6
+cpu-seconds,hermes,docker,mb-noop,harness_cpu_s,15.076
+cpu-seconds,hermes,docker,mb-one-call,harness_cpu_s,15.938
+cpu-seconds,hermes,docker,mb-ten-calls,harness_cpu_s,16.783
+cpu-seconds,hermes,docker,mb-cpu,harness_cpu_s,15.551
+cpu-seconds,hermes,docker,mb-output,harness_cpu_s,15.693
+cpu-seconds,hermes,k8s,mb-noop,harness_cpu_s,16.301
+cpu-seconds,hermes,k8s,mb-one-call,harness_cpu_s,16.281
+cpu-seconds,hermes,k8s,mb-ten-calls,harness_cpu_s,17.509
+cpu-seconds,hermes,k8s,mb-cpu,harness_cpu_s,16.088
+cpu-seconds,hermes,k8s,mb-output,harness_cpu_s,16.128
+cpu-seconds,hermes,native,mb-noop,harness_cpu_s,14.505
+cpu-seconds,hermes,native,mb-one-call,harness_cpu_s,14.796
+cpu-seconds,hermes,native,mb-ten-calls,harness_cpu_s,15.975
+cpu-seconds,hermes,native,mb-cpu,harness_cpu_s,14.931
+cpu-seconds,hermes,native,mb-output,harness_cpu_s,14.879
+cpu-seconds,openclaw,docker,mb-noop,harness_cpu_s,56.546
+cpu-seconds,openclaw,docker,mb-one-call,harness_cpu_s,56.849
+cpu-seconds,openclaw,docker,mb-ten-calls,harness_cpu_s,60.329
+cpu-seconds,openclaw,docker,mb-cpu,harness_cpu_s,58.469
+cpu-seconds,openclaw,docker,mb-output,harness_cpu_s,57.569
+cpu-seconds,openclaw,k8s,mb-noop,harness_cpu_s,41.65
+cpu-seconds,openclaw,k8s,mb-one-call,harness_cpu_s,41.848
+cpu-seconds,openclaw,k8s,mb-ten-calls,harness_cpu_s,46.203
+cpu-seconds,openclaw,k8s,mb-cpu,harness_cpu_s,43.487
+cpu-seconds,openclaw,k8s,mb-output,harness_cpu_s,42.646
+cpu-seconds,openclaw,native,mb-noop,harness_cpu_s,39.444
+cpu-seconds,openclaw,native,mb-one-call,harness_cpu_s,39.675
+cpu-seconds,openclaw,native,mb-ten-calls,harness_cpu_s,42.941
+cpu-seconds,openclaw,native,mb-cpu,harness_cpu_s,41.249
+cpu-seconds,openclaw,native,mb-output,harness_cpu_s,40.445
+cpu-peak,hermes,docker,mb-noop,harness_cpu_peak_cores,1.566
+cpu-peak,hermes,docker,mb-one-call,harness_cpu_peak_cores,1.648
+cpu-peak,hermes,docker,mb-ten-calls,harness_cpu_peak_cores,1.536
+cpu-peak,hermes,docker,mb-cpu,harness_cpu_peak_cores,1.603
+cpu-peak,hermes,docker,mb-output,harness_cpu_peak_cores,1.542
+cpu-peak,hermes,k8s,mb-noop,harness_cpu_peak_cores,1.557
+cpu-peak,hermes,k8s,mb-one-call,harness_cpu_peak_cores,1.555
+cpu-peak,hermes,k8s,mb-ten-calls,harness_cpu_peak_cores,1.547
+cpu-peak,hermes,k8s,mb-cpu,harness_cpu_peak_cores,1.571
+cpu-peak,hermes,k8s,mb-output,harness_cpu_peak_cores,1.533
+cpu-peak,hermes,native,mb-noop,harness_cpu_peak_cores,1.535
+cpu-peak,hermes,native,mb-one-call,harness_cpu_peak_cores,1.591
+cpu-peak,hermes,native,mb-ten-calls,harness_cpu_peak_cores,1.565
+cpu-peak,hermes,native,mb-cpu,harness_cpu_peak_cores,1.663
+cpu-peak,hermes,native,mb-output,harness_cpu_peak_cores,1.535
+cpu-peak,openclaw,docker,mb-noop,harness_cpu_peak_cores,2.057
+cpu-peak,openclaw,docker,mb-one-call,harness_cpu_peak_cores,2.053
+cpu-peak,openclaw,docker,mb-ten-calls,harness_cpu_peak_cores,2.054
+cpu-peak,openclaw,docker,mb-cpu,harness_cpu_peak_cores,2.044
+cpu-peak,openclaw,docker,mb-output,harness_cpu_peak_cores,2.05
+cpu-peak,openclaw,k8s,mb-noop,harness_cpu_peak_cores,1.79
+cpu-peak,openclaw,k8s,mb-one-call,harness_cpu_peak_cores,1.779
+cpu-peak,openclaw,k8s,mb-ten-calls,harness_cpu_peak_cores,1.803
+cpu-peak,openclaw,k8s,mb-cpu,harness_cpu_peak_cores,1.794
+cpu-peak,openclaw,k8s,mb-output,harness_cpu_peak_cores,1.731
+cpu-peak,openclaw,native,mb-noop,harness_cpu_peak_cores,1.797
+cpu-peak,openclaw,native,mb-one-call,harness_cpu_peak_cores,1.73
+cpu-peak,openclaw,native,mb-ten-calls,harness_cpu_peak_cores,1.75
+cpu-peak,openclaw,native,mb-cpu,harness_cpu_peak_cores,1.823
+cpu-peak,openclaw,native,mb-output,harness_cpu_peak_cores,1.745
+cpu-seconds,hermes,docker,mb-noop,sandbox_cpu_s,0.336
+cpu-seconds,hermes,docker,mb-one-call,sandbox_cpu_s,0.509
+cpu-seconds,hermes,docker,mb-ten-calls,sandbox_cpu_s,0.918
+cpu-seconds,hermes,docker,mb-cpu,sandbox_cpu_s,3.788
+cpu-seconds,hermes,docker,mb-output,sandbox_cpu_s,0.513
+cpu-seconds,hermes,k8s,mb-noop,sandbox_cpu_s,0.187
+cpu-seconds,hermes,k8s,mb-one-call,sandbox_cpu_s,0.24
+cpu-seconds,hermes,k8s,mb-ten-calls,sandbox_cpu_s,0.372
+cpu-seconds,hermes,k8s,mb-cpu,sandbox_cpu_s,3.448
+cpu-seconds,hermes,k8s,mb-output,sandbox_cpu_s,0.246
+cpu-seconds,hermes,native,mb-noop,sandbox_cpu_s,0.146
+cpu-seconds,hermes,native,mb-one-call,sandbox_cpu_s,0.294
+cpu-seconds,hermes,native,mb-ten-calls,sandbox_cpu_s,0.707
+cpu-seconds,hermes,native,mb-cpu,sandbox_cpu_s,3.576
+cpu-seconds,hermes,native,mb-output,sandbox_cpu_s,0.297
+cpu-seconds,openclaw,docker,mb-noop,sandbox_cpu_s,0.204
+cpu-seconds,openclaw,docker,mb-one-call,sandbox_cpu_s,0.32
+cpu-seconds,openclaw,docker,mb-ten-calls,sandbox_cpu_s,1.029
+cpu-seconds,openclaw,docker,mb-cpu,sandbox_cpu_s,4.056
+cpu-seconds,openclaw,docker,mb-output,sandbox_cpu_s,0.324
+cpu-seconds,openclaw,k8s,mb-noop,sandbox_cpu_s,0.141
+cpu-seconds,openclaw,k8s,mb-one-call,sandbox_cpu_s,0.17
+cpu-seconds,openclaw,k8s,mb-ten-calls,sandbox_cpu_s,0.334
+cpu-seconds,openclaw,k8s,mb-cpu,sandbox_cpu_s,3.432
+cpu-seconds,openclaw,k8s,mb-output,sandbox_cpu_s,0.173
+cpu-seconds,openclaw,native,mb-noop,sandbox_cpu_s,0.046
+cpu-seconds,openclaw,native,mb-one-call,sandbox_cpu_s,0.088
+cpu-seconds,openclaw,native,mb-ten-calls,sandbox_cpu_s,0.473
+cpu-seconds,openclaw,native,mb-cpu,sandbox_cpu_s,3.726
+cpu-seconds,openclaw,native,mb-output,sandbox_cpu_s,0.092
+cpu-peak,hermes,docker,mb-noop,sandbox_cpu_peak_cores,0.195
+cpu-peak,hermes,docker,mb-one-call,sandbox_cpu_peak_cores,0.143
+cpu-peak,hermes,docker,mb-ten-calls,sandbox_cpu_peak_cores,0.211
+cpu-peak,hermes,docker,mb-cpu,sandbox_cpu_peak_cores,1.001
+cpu-peak,hermes,docker,mb-output,sandbox_cpu_peak_cores,0.172
+cpu-peak,hermes,k8s,mb-noop,sandbox_cpu_peak_cores,0.065
+cpu-peak,hermes,k8s,mb-one-call,sandbox_cpu_peak_cores,0.065
+cpu-peak,hermes,k8s,mb-ten-calls,sandbox_cpu_peak_cores,0.069
+cpu-peak,hermes,k8s,mb-cpu,sandbox_cpu_peak_cores,1.0
+cpu-peak,hermes,k8s,mb-output,sandbox_cpu_peak_cores,0.064
+cpu-peak,hermes,native,mb-noop,sandbox_cpu_peak_cores,0.081
+cpu-peak,hermes,native,mb-one-call,sandbox_cpu_peak_cores,0.084
+cpu-peak,hermes,native,mb-ten-calls,sandbox_cpu_peak_cores,0.077
+cpu-peak,hermes,native,mb-cpu,sandbox_cpu_peak_cores,1.0
+cpu-peak,hermes,native,mb-output,sandbox_cpu_peak_cores,0.099
+cpu-peak,openclaw,docker,mb-noop,sandbox_cpu_peak_cores,0.138
+cpu-peak,openclaw,docker,mb-one-call,sandbox_cpu_peak_cores,0.113
+cpu-peak,openclaw,docker,mb-ten-calls,sandbox_cpu_peak_cores,0.099
+cpu-peak,openclaw,docker,mb-cpu,sandbox_cpu_peak_cores,1.0
+cpu-peak,openclaw,docker,mb-output,sandbox_cpu_peak_cores,0.14
+cpu-peak,openclaw,k8s,mb-noop,sandbox_cpu_peak_cores,0.045
+cpu-peak,openclaw,k8s,mb-one-call,sandbox_cpu_peak_cores,0.056
+cpu-peak,openclaw,k8s,mb-ten-calls,sandbox_cpu_peak_cores,0.059
+cpu-peak,openclaw,k8s,mb-cpu,sandbox_cpu_peak_cores,1.001
+cpu-peak,openclaw,k8s,mb-output,sandbox_cpu_peak_cores,0.069
+cpu-peak,openclaw,native,mb-noop,sandbox_cpu_peak_cores,0.0
+cpu-peak,openclaw,native,mb-one-call,sandbox_cpu_peak_cores,0.043
+cpu-peak,openclaw,native,mb-ten-calls,sandbox_cpu_peak_cores,0.053
+cpu-peak,openclaw,native,mb-cpu,sandbox_cpu_peak_cores,1.0
+cpu-peak,openclaw,native,mb-output,sandbox_cpu_peak_cores,0.042
+memory,hermes,native,mb-noop,harness_memory_peak_mib,265.863
+memory,hermes,docker,mb-noop,harness_memory_peak_mib,263.879
+memory,hermes,k8s,mb-noop,harness_memory_peak_mib,260.844
+memory,hermes,native,mb-one-call,harness_memory_peak_mib,242.719
+memory,hermes,docker,mb-one-call,harness_memory_peak_mib,254.281
+memory,hermes,k8s,mb-one-call,harness_memory_peak_mib,268.195
+memory,hermes,native,mb-ten-calls,harness_memory_peak_mib,262.602
+memory,hermes,docker,mb-ten-calls,harness_memory_peak_mib,263.996
+memory,hermes,k8s,mb-ten-calls,harness_memory_peak_mib,266.344
+memory,hermes,native,mb-cpu,harness_memory_peak_mib,244.305
+memory,hermes,docker,mb-cpu,harness_memory_peak_mib,275.129
+memory,hermes,k8s,mb-cpu,harness_memory_peak_mib,268.414
+memory,hermes,native,mb-output,harness_memory_peak_mib,271.875
+memory,hermes,docker,mb-output,harness_memory_peak_mib,262.215
+memory,hermes,k8s,mb-output,harness_memory_peak_mib,266.973
+memory,openclaw,native,mb-noop,harness_memory_peak_mib,708.449
+memory,openclaw,docker,mb-noop,harness_memory_peak_mib,712.801
+memory,openclaw,k8s,mb-noop,harness_memory_peak_mib,712.18
+memory,openclaw,native,mb-one-call,harness_memory_peak_mib,711.711
+memory,openclaw,docker,mb-one-call,harness_memory_peak_mib,715.641
+memory,openclaw,k8s,mb-one-call,harness_memory_peak_mib,719.98
+memory,openclaw,native,mb-ten-calls,harness_memory_peak_mib,800.961
+memory,openclaw,docker,mb-ten-calls,harness_memory_peak_mib,774.504
+memory,openclaw,k8s,mb-ten-calls,harness_memory_peak_mib,773.387
+memory,openclaw,native,mb-cpu,harness_memory_peak_mib,776.559
+memory,openclaw,docker,mb-cpu,harness_memory_peak_mib,776.488
+memory,openclaw,k8s,mb-cpu,harness_memory_peak_mib,763.695
+memory,openclaw,native,mb-output,harness_memory_peak_mib,777.258
+memory,openclaw,docker,mb-output,harness_memory_peak_mib,772.363
+memory,openclaw,k8s,mb-output,harness_memory_peak_mib,793.07
+memory,hermes,docker,mb-noop,sandbox_memory_peak_mib,0.645
+memory,hermes,docker,mb-one-call,sandbox_memory_peak_mib,4.375
+memory,hermes,docker,mb-ten-calls,sandbox_memory_peak_mib,1.391
+memory,hermes,docker,mb-cpu,sandbox_memory_peak_mib,8.66
+memory,hermes,docker,mb-output,sandbox_memory_peak_mib,4.43
+memory,hermes,k8s,mb-noop,sandbox_memory_peak_mib,1.055
+memory,hermes,k8s,mb-one-call,sandbox_memory_peak_mib,0.609
+memory,hermes,k8s,mb-ten-calls,sandbox_memory_peak_mib,0.719
+memory,hermes,k8s,mb-cpu,sandbox_memory_peak_mib,8.559
+memory,hermes,k8s,mb-output,sandbox_memory_peak_mib,2.039
+memory,hermes,native,mb-noop,sandbox_memory_peak_mib,0.664
+memory,hermes,native,mb-one-call,sandbox_memory_peak_mib,0.703
+memory,hermes,native,mb-ten-calls,sandbox_memory_peak_mib,0.875
+memory,hermes,native,mb-cpu,sandbox_memory_peak_mib,8.508
+memory,hermes,native,mb-output,sandbox_memory_peak_mib,0.734
+memory,openclaw,docker,mb-noop,sandbox_memory_peak_mib,0.707
+memory,openclaw,docker,mb-one-call,sandbox_memory_peak_mib,0.633
+memory,openclaw,docker,mb-ten-calls,sandbox_memory_peak_mib,4.824
+memory,openclaw,docker,mb-cpu,sandbox_memory_peak_mib,8.418
+memory,openclaw,docker,mb-output,sandbox_memory_peak_mib,0.637
+memory,openclaw,k8s,mb-noop,sandbox_memory_peak_mib,0.824
+memory,openclaw,k8s,mb-one-call,sandbox_memory_peak_mib,0.945
+memory,openclaw,k8s,mb-ten-calls,sandbox_memory_peak_mib,0.891
+memory,openclaw,k8s,mb-cpu,sandbox_memory_peak_mib,8.012
+memory,openclaw,k8s,mb-output,sandbox_memory_peak_mib,0.844
+memory,openclaw,native,mb-noop,sandbox_memory_peak_mib,0.48
+memory,openclaw,native,mb-one-call,sandbox_memory_peak_mib,0.559
+memory,openclaw,native,mb-ten-calls,sandbox_memory_peak_mib,0.566
+memory,openclaw,native,mb-cpu,sandbox_memory_peak_mib,8.379
+memory,openclaw,native,mb-output,sandbox_memory_peak_mib,0.566

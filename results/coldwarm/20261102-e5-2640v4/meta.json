@@ -1,0 +1,52 @@
+{
+  "experiment": "coldwarm",
+  "campaign": "20261102-e5-2640v4",
+  "spec": "experiments/coldwarm/experiment.json",
+  "aries_commit": "259b587 (Docker and Kubernetes runs); 16f8779 (native Hermes); f8f26b4 (native OpenClaw)",
+  "aries_dirty": false,
+  "bridge_revision": null,
+  "bridge_image": "aries-bridge:v1, loaded onto the node as aries-local/aries-bridge",
+  "vhive_revision": "v1.8.2, through Invitro 49c90dfd (the cluster predates scripts/experiment)",
+  "kubernetes_base_image": "alpine/k8s:1.34.3",
+  "prometheus": null,
+  "started_at": "2026-11-01T03:03:07Z",
+  "finished_at": "2026-11-05T15:30:00Z",
+  "recordings": {
+    "source": "recorded on 1 November 2026 (cold run only), replayed in every run",
+    "sha256": {
+      "hermes": "7f67b3565ad2c66d2c4e81131a4dc910a68337796490a6720393c7951096a06c",
+      "openclaw": "83ee02da0649376891727f3ff0785b9a84e73dac5f693cd5fcc6ce1c61541a27"
+    }
+  },
+  "note": "Migrated from .cache/coldwarm-v3 after the fact: the runs were made by hand-written chains before scripts/experiment existed. The ARIES runs were remeasured on 2 November with the early harness start; native OpenClaw ran on 1 November and native Hermes on 5 November, after its tool spans were kept. CPU clock pinned at 2.4 GHz.",
+  "workers": {
+    "hp123": {
+      "cpu": "Intel(R) Xeon(R) CPU E5-2640 v4 @ 2.40GHz",
+      "cpus": "unknown",
+      "smt": "off",
+      "turbo": "off",
+      "kubelet": "v1.34.3",
+      "kernel": "unknown",
+      "memory_gib": "unknown",
+      "docker": "unknown",
+      "hostname": "hp123",
+      "harnesses": [
+        "openclaw"
+      ]
+    },
+    "hp131": {
+      "cpu": "Intel(R) Xeon(R) CPU E5-2640 v4 @ 2.40GHz",
+      "cpus": "unknown",
+      "smt": "off",
+      "turbo": "off",
+      "kubelet": "v1.34.3",
+      "kernel": "unknown",
+      "memory_gib": "unknown",
+      "docker": "unknown",
+      "hostname": "hp131",
+      "harnesses": [
+        "hermes"
+      ]
+    }
+  }
+}

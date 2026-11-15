@@ -1,0 +1,325 @@
+figure,harness,task,setup,measure,value
+end-to-end,hermes,mb-noop,native,"cold: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-noop,native,cold: Harness start,8.049
+end-to-end,hermes,mb-noop,native,cold: Model (replayed),1.215
+end-to-end,hermes,mb-noop,native,cold: Tool execution,0.0
+end-to-end,hermes,mb-noop,native,cold: Harness logic,5.39
+end-to-end,hermes,mb-noop,native,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-noop,native,warm: Harness start,0.0
+end-to-end,hermes,mb-noop,native,warm: Model (replayed),1.215
+end-to-end,hermes,mb-noop,native,warm: Tool execution,0.0
+end-to-end,hermes,mb-noop,native,warm: Harness logic,0.207
+end-to-end,hermes,mb-noop,docker,"cold: Sandbox, bridge and harness container",0.021
+end-to-end,hermes,mb-noop,docker,cold: Harness start,8.012
+end-to-end,hermes,mb-noop,docker,cold: Model (replayed),1.215
+end-to-end,hermes,mb-noop,docker,cold: Tool execution,0.0
+end-to-end,hermes,mb-noop,docker,cold: Harness logic,5.1
+end-to-end,hermes,mb-noop,docker,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-noop,docker,warm: Harness start,0.0
+end-to-end,hermes,mb-noop,docker,warm: Model (replayed),1.215
+end-to-end,hermes,mb-noop,docker,warm: Tool execution,0.0
+end-to-end,hermes,mb-noop,docker,warm: Harness logic,0.198
+end-to-end,hermes,mb-noop,k8s,"cold: Sandbox, bridge and harness container",1.73
+end-to-end,hermes,mb-noop,k8s,cold: Harness start,8.941
+end-to-end,hermes,mb-noop,k8s,cold: Model (replayed),1.215
+end-to-end,hermes,mb-noop,k8s,cold: Tool execution,0.0
+end-to-end,hermes,mb-noop,k8s,cold: Harness logic,4.518
+end-to-end,hermes,mb-noop,k8s,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-noop,k8s,warm: Harness start,0.0
+end-to-end,hermes,mb-noop,k8s,warm: Model (replayed),1.215
+end-to-end,hermes,mb-noop,k8s,warm: Tool execution,0.0
+end-to-end,hermes,mb-noop,k8s,warm: Harness logic,0.21
+end-to-end,hermes,mb-one-call,native,"cold: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-one-call,native,cold: Harness start,8.044
+end-to-end,hermes,mb-one-call,native,cold: Model (replayed),2.447
+end-to-end,hermes,mb-one-call,native,cold: Tool execution,0.511
+end-to-end,hermes,mb-one-call,native,cold: Harness logic,5.466
+end-to-end,hermes,mb-one-call,native,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-one-call,native,warm: Harness start,0.0
+end-to-end,hermes,mb-one-call,native,warm: Model (replayed),2.446
+end-to-end,hermes,mb-one-call,native,warm: Tool execution,0.111
+end-to-end,hermes,mb-one-call,native,warm: Harness logic,0.269
+end-to-end,hermes,mb-one-call,docker,"cold: Sandbox, bridge and harness container",0.018
+end-to-end,hermes,mb-one-call,docker,cold: Harness start,8.013
+end-to-end,hermes,mb-one-call,docker,cold: Model (replayed),2.447
+end-to-end,hermes,mb-one-call,docker,cold: Tool execution,0.419
+end-to-end,hermes,mb-one-call,docker,cold: Harness logic,5.128
+end-to-end,hermes,mb-one-call,docker,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-one-call,docker,warm: Harness start,0.0
+end-to-end,hermes,mb-one-call,docker,warm: Model (replayed),2.446
+end-to-end,hermes,mb-one-call,docker,warm: Tool execution,0.343
+end-to-end,hermes,mb-one-call,docker,warm: Harness logic,0.244
+end-to-end,hermes,mb-one-call,k8s,"cold: Sandbox, bridge and harness container",1.735
+end-to-end,hermes,mb-one-call,k8s,cold: Harness start,8.88
+end-to-end,hermes,mb-one-call,k8s,cold: Model (replayed),2.447
+end-to-end,hermes,mb-one-call,k8s,cold: Tool execution,0.7
+end-to-end,hermes,mb-one-call,k8s,cold: Harness logic,4.65
+end-to-end,hermes,mb-one-call,k8s,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-one-call,k8s,warm: Harness start,0.0
+end-to-end,hermes,mb-one-call,k8s,warm: Model (replayed),2.447
+end-to-end,hermes,mb-one-call,k8s,warm: Tool execution,0.651
+end-to-end,hermes,mb-one-call,k8s,warm: Harness logic,0.254
+end-to-end,hermes,mb-ten-calls,native,"cold: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-ten-calls,native,cold: Harness start,8.098
+end-to-end,hermes,mb-ten-calls,native,cold: Model (replayed),12.956
+end-to-end,hermes,mb-ten-calls,native,cold: Tool execution,1.509
+end-to-end,hermes,mb-ten-calls,native,cold: Harness logic,5.669
+end-to-end,hermes,mb-ten-calls,native,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-ten-calls,native,warm: Harness start,0.0
+end-to-end,hermes,mb-ten-calls,native,warm: Model (replayed),12.956
+end-to-end,hermes,mb-ten-calls,native,warm: Tool execution,1.111
+end-to-end,hermes,mb-ten-calls,native,warm: Harness logic,0.483
+end-to-end,hermes,mb-ten-calls,docker,"cold: Sandbox, bridge and harness container",0.018
+end-to-end,hermes,mb-ten-calls,docker,cold: Harness start,8.02
+end-to-end,hermes,mb-ten-calls,docker,cold: Model (replayed),12.956
+end-to-end,hermes,mb-ten-calls,docker,cold: Tool execution,1.461
+end-to-end,hermes,mb-ten-calls,docker,cold: Harness logic,5.347
+end-to-end,hermes,mb-ten-calls,docker,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-ten-calls,docker,warm: Harness start,0.0
+end-to-end,hermes,mb-ten-calls,docker,warm: Model (replayed),12.956
+end-to-end,hermes,mb-ten-calls,docker,warm: Tool execution,1.396
+end-to-end,hermes,mb-ten-calls,docker,warm: Harness logic,0.422
+end-to-end,hermes,mb-ten-calls,k8s,"cold: Sandbox, bridge and harness container",1.725
+end-to-end,hermes,mb-ten-calls,k8s,cold: Harness start,9.309
+end-to-end,hermes,mb-ten-calls,k8s,cold: Model (replayed),12.956
+end-to-end,hermes,mb-ten-calls,k8s,cold: Tool execution,2.568
+end-to-end,hermes,mb-ten-calls,k8s,cold: Harness logic,4.412
+end-to-end,hermes,mb-ten-calls,k8s,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-ten-calls,k8s,warm: Harness start,0.0
+end-to-end,hermes,mb-ten-calls,k8s,warm: Model (replayed),12.956
+end-to-end,hermes,mb-ten-calls,k8s,warm: Tool execution,2.554
+end-to-end,hermes,mb-ten-calls,k8s,warm: Harness logic,0.442
+end-to-end,hermes,mb-cpu,native,"cold: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-cpu,native,cold: Harness start,8.104
+end-to-end,hermes,mb-cpu,native,cold: Model (replayed),2.339
+end-to-end,hermes,mb-cpu,native,cold: Tool execution,3.889
+end-to-end,hermes,mb-cpu,native,cold: Harness logic,5.428
+end-to-end,hermes,mb-cpu,native,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-cpu,native,warm: Harness start,0.0
+end-to-end,hermes,mb-cpu,native,warm: Model (replayed),2.339
+end-to-end,hermes,mb-cpu,native,warm: Tool execution,3.376
+end-to-end,hermes,mb-cpu,native,warm: Harness logic,0.275
+end-to-end,hermes,mb-cpu,docker,"cold: Sandbox, bridge and harness container",0.018
+end-to-end,hermes,mb-cpu,docker,cold: Harness start,8.123
+end-to-end,hermes,mb-cpu,docker,cold: Model (replayed),2.339
+end-to-end,hermes,mb-cpu,docker,cold: Tool execution,4.178
+end-to-end,hermes,mb-cpu,docker,cold: Harness logic,5.066
+end-to-end,hermes,mb-cpu,docker,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-cpu,docker,warm: Harness start,0.0
+end-to-end,hermes,mb-cpu,docker,warm: Model (replayed),2.339
+end-to-end,hermes,mb-cpu,docker,warm: Tool execution,3.687
+end-to-end,hermes,mb-cpu,docker,warm: Harness logic,0.241
+end-to-end,hermes,mb-cpu,k8s,"cold: Sandbox, bridge and harness container",1.728
+end-to-end,hermes,mb-cpu,k8s,cold: Harness start,8.95
+end-to-end,hermes,mb-cpu,k8s,cold: Model (replayed),2.339
+end-to-end,hermes,mb-cpu,k8s,cold: Tool execution,4.425
+end-to-end,hermes,mb-cpu,k8s,cold: Harness logic,4.525
+end-to-end,hermes,mb-cpu,k8s,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-cpu,k8s,warm: Harness start,0.0
+end-to-end,hermes,mb-cpu,k8s,warm: Model (replayed),2.339
+end-to-end,hermes,mb-cpu,k8s,warm: Tool execution,3.899
+end-to-end,hermes,mb-cpu,k8s,warm: Harness logic,0.239
+end-to-end,hermes,mb-output,native,"cold: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-output,native,cold: Harness start,8.145
+end-to-end,hermes,mb-output,native,cold: Model (replayed),3.101
+end-to-end,hermes,mb-output,native,cold: Tool execution,0.512
+end-to-end,hermes,mb-output,native,cold: Harness logic,5.402
+end-to-end,hermes,mb-output,native,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-output,native,warm: Harness start,0.0
+end-to-end,hermes,mb-output,native,warm: Model (replayed),3.101
+end-to-end,hermes,mb-output,native,warm: Tool execution,0.118
+end-to-end,hermes,mb-output,native,warm: Harness logic,0.235
+end-to-end,hermes,mb-output,docker,"cold: Sandbox, bridge and harness container",0.018
+end-to-end,hermes,mb-output,docker,cold: Harness start,8.024
+end-to-end,hermes,mb-output,docker,cold: Model (replayed),3.101
+end-to-end,hermes,mb-output,docker,cold: Tool execution,0.428
+end-to-end,hermes,mb-output,docker,cold: Harness logic,5.105
+end-to-end,hermes,mb-output,docker,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-output,docker,warm: Harness start,0.0
+end-to-end,hermes,mb-output,docker,warm: Model (replayed),3.101
+end-to-end,hermes,mb-output,docker,warm: Tool execution,0.348
+end-to-end,hermes,mb-output,docker,warm: Harness logic,0.193
+end-to-end,hermes,mb-output,k8s,"cold: Sandbox, bridge and harness container",1.726
+end-to-end,hermes,mb-output,k8s,cold: Harness start,8.572
+end-to-end,hermes,mb-output,k8s,cold: Model (replayed),3.101
+end-to-end,hermes,mb-output,k8s,cold: Tool execution,0.731
+end-to-end,hermes,mb-output,k8s,cold: Harness logic,5.005
+end-to-end,hermes,mb-output,k8s,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-output,k8s,warm: Harness start,0.0
+end-to-end,hermes,mb-output,k8s,warm: Model (replayed),3.101
+end-to-end,hermes,mb-output,k8s,warm: Tool execution,0.656
+end-to-end,hermes,mb-output,k8s,warm: Harness logic,0.23
+end-to-end,openclaw,mb-noop,native,"cold: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-noop,native,cold: Harness start,27.346
+end-to-end,openclaw,mb-noop,native,cold: Model (replayed),1.806
+end-to-end,openclaw,mb-noop,native,cold: Tool execution,0.0
+end-to-end,openclaw,mb-noop,native,cold: Harness logic,3.054
+end-to-end,openclaw,mb-noop,native,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-noop,native,warm: Harness start,0.0
+end-to-end,openclaw,mb-noop,native,warm: Model (replayed),1.805
+end-to-end,openclaw,mb-noop,native,warm: Tool execution,0.0
+end-to-end,openclaw,mb-noop,native,warm: Harness logic,1.444
+end-to-end,openclaw,mb-noop,docker,"cold: Sandbox, bridge and harness container",0.04
+end-to-end,openclaw,mb-noop,docker,cold: Harness start,30.083
+end-to-end,openclaw,mb-noop,docker,cold: Model (replayed),1.805
+end-to-end,openclaw,mb-noop,docker,cold: Tool execution,0.0
+end-to-end,openclaw,mb-noop,docker,cold: Harness logic,2.429
+end-to-end,openclaw,mb-noop,docker,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-noop,docker,warm: Harness start,0.0
+end-to-end,openclaw,mb-noop,docker,warm: Model (replayed),1.806
+end-to-end,openclaw,mb-noop,docker,warm: Tool execution,0.0
+end-to-end,openclaw,mb-noop,docker,warm: Harness logic,1.184
+end-to-end,openclaw,mb-noop,k8s,"cold: Sandbox, bridge and harness container",2.726
+end-to-end,openclaw,mb-noop,k8s,cold: Harness start,28.849
+end-to-end,openclaw,mb-noop,k8s,cold: Model (replayed),1.806
+end-to-end,openclaw,mb-noop,k8s,cold: Tool execution,0.0
+end-to-end,openclaw,mb-noop,k8s,cold: Harness logic,2.232
+end-to-end,openclaw,mb-noop,k8s,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-noop,k8s,warm: Harness start,0.0
+end-to-end,openclaw,mb-noop,k8s,warm: Model (replayed),1.806
+end-to-end,openclaw,mb-noop,k8s,warm: Tool execution,0.0
+end-to-end,openclaw,mb-noop,k8s,warm: Harness logic,1.342
+end-to-end,openclaw,mb-one-call,native,"cold: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-one-call,native,cold: Harness start,27.282
+end-to-end,openclaw,mb-one-call,native,cold: Model (replayed),2.449
+end-to-end,openclaw,mb-one-call,native,cold: Tool execution,0.259
+end-to-end,openclaw,mb-one-call,native,cold: Harness logic,3.157
+end-to-end,openclaw,mb-one-call,native,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-one-call,native,warm: Harness start,0.0
+end-to-end,openclaw,mb-one-call,native,warm: Model (replayed),2.449
+end-to-end,openclaw,mb-one-call,native,warm: Tool execution,0.221
+end-to-end,openclaw,mb-one-call,native,warm: Harness logic,1.355
+end-to-end,openclaw,mb-one-call,docker,"cold: Sandbox, bridge and harness container",0.048
+end-to-end,openclaw,mb-one-call,docker,cold: Harness start,30.086
+end-to-end,openclaw,mb-one-call,docker,cold: Model (replayed),2.449
+end-to-end,openclaw,mb-one-call,docker,cold: Tool execution,0.411
+end-to-end,openclaw,mb-one-call,docker,cold: Harness logic,2.415
+end-to-end,openclaw,mb-one-call,docker,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-one-call,docker,warm: Harness start,0.0
+end-to-end,openclaw,mb-one-call,docker,warm: Model (replayed),2.449
+end-to-end,openclaw,mb-one-call,docker,warm: Tool execution,0.312
+end-to-end,openclaw,mb-one-call,docker,warm: Harness logic,1.223
+end-to-end,openclaw,mb-one-call,k8s,"cold: Sandbox, bridge and harness container",2.729
+end-to-end,openclaw,mb-one-call,k8s,cold: Harness start,29.918
+end-to-end,openclaw,mb-one-call,k8s,cold: Model (replayed),2.448
+end-to-end,openclaw,mb-one-call,k8s,cold: Tool execution,0.588
+end-to-end,openclaw,mb-one-call,k8s,cold: Harness logic,2.301
+end-to-end,openclaw,mb-one-call,k8s,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-one-call,k8s,warm: Harness start,0.0
+end-to-end,openclaw,mb-one-call,k8s,warm: Model (replayed),2.448
+end-to-end,openclaw,mb-one-call,k8s,warm: Tool execution,0.516
+end-to-end,openclaw,mb-one-call,k8s,warm: Harness logic,1.205
+end-to-end,openclaw,mb-ten-calls,native,"cold: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-ten-calls,native,cold: Harness start,27.144
+end-to-end,openclaw,mb-ten-calls,native,cold: Model (replayed),14.9
+end-to-end,openclaw,mb-ten-calls,native,cold: Tool execution,1.248
+end-to-end,openclaw,mb-ten-calls,native,cold: Harness logic,3.305
+end-to-end,openclaw,mb-ten-calls,native,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-ten-calls,native,warm: Harness start,0.0
+end-to-end,openclaw,mb-ten-calls,native,warm: Model (replayed),14.9
+end-to-end,openclaw,mb-ten-calls,native,warm: Tool execution,1.063
+end-to-end,openclaw,mb-ten-calls,native,warm: Harness logic,1.518
+end-to-end,openclaw,mb-ten-calls,docker,"cold: Sandbox, bridge and harness container",0.049
+end-to-end,openclaw,mb-ten-calls,docker,cold: Harness start,30.273
+end-to-end,openclaw,mb-ten-calls,docker,cold: Model (replayed),14.901
+end-to-end,openclaw,mb-ten-calls,docker,cold: Tool execution,2.074
+end-to-end,openclaw,mb-ten-calls,docker,cold: Harness logic,2.623
+end-to-end,openclaw,mb-ten-calls,docker,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-ten-calls,docker,warm: Harness start,0.0
+end-to-end,openclaw,mb-ten-calls,docker,warm: Model (replayed),14.9
+end-to-end,openclaw,mb-ten-calls,docker,warm: Tool execution,1.831
+end-to-end,openclaw,mb-ten-calls,docker,warm: Harness logic,1.592
+end-to-end,openclaw,mb-ten-calls,k8s,"cold: Sandbox, bridge and harness container",2.727
+end-to-end,openclaw,mb-ten-calls,k8s,cold: Harness start,28.913
+end-to-end,openclaw,mb-ten-calls,k8s,cold: Model (replayed),14.9
+end-to-end,openclaw,mb-ten-calls,k8s,cold: Tool execution,3.496
+end-to-end,openclaw,mb-ten-calls,k8s,cold: Harness logic,2.439
+end-to-end,openclaw,mb-ten-calls,k8s,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-ten-calls,k8s,warm: Harness start,0.0
+end-to-end,openclaw,mb-ten-calls,k8s,warm: Model (replayed),14.9
+end-to-end,openclaw,mb-ten-calls,k8s,warm: Tool execution,3.139
+end-to-end,openclaw,mb-ten-calls,k8s,warm: Harness logic,1.562
+end-to-end,openclaw,mb-cpu,native,"cold: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-cpu,native,cold: Harness start,27.213
+end-to-end,openclaw,mb-cpu,native,cold: Model (replayed),2.82
+end-to-end,openclaw,mb-cpu,native,cold: Tool execution,3.743
+end-to-end,openclaw,mb-cpu,native,cold: Harness logic,3.193
+end-to-end,openclaw,mb-cpu,native,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-cpu,native,warm: Harness start,0.0
+end-to-end,openclaw,mb-cpu,native,warm: Model (replayed),2.82
+end-to-end,openclaw,mb-cpu,native,warm: Tool execution,3.345
+end-to-end,openclaw,mb-cpu,native,warm: Harness logic,1.572
+end-to-end,openclaw,mb-cpu,docker,"cold: Sandbox, bridge and harness container",0.047
+end-to-end,openclaw,mb-cpu,docker,cold: Harness start,30.162
+end-to-end,openclaw,mb-cpu,docker,cold: Model (replayed),2.82
+end-to-end,openclaw,mb-cpu,docker,cold: Tool execution,3.876
+end-to-end,openclaw,mb-cpu,docker,cold: Harness logic,2.458
+end-to-end,openclaw,mb-cpu,docker,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-cpu,docker,warm: Harness start,0.0
+end-to-end,openclaw,mb-cpu,docker,warm: Model (replayed),2.82
+end-to-end,openclaw,mb-cpu,docker,warm: Tool execution,3.521
+end-to-end,openclaw,mb-cpu,docker,warm: Harness logic,1.276
+end-to-end,openclaw,mb-cpu,k8s,"cold: Sandbox, bridge and harness container",2.73
+end-to-end,openclaw,mb-cpu,k8s,cold: Harness start,28.948
+end-to-end,openclaw,mb-cpu,k8s,cold: Model (replayed),2.82
+end-to-end,openclaw,mb-cpu,k8s,cold: Tool execution,4.038
+end-to-end,openclaw,mb-cpu,k8s,cold: Harness logic,2.303
+end-to-end,openclaw,mb-cpu,k8s,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-cpu,k8s,warm: Harness start,0.0
+end-to-end,openclaw,mb-cpu,k8s,warm: Model (replayed),2.82
+end-to-end,openclaw,mb-cpu,k8s,warm: Tool execution,3.713
+end-to-end,openclaw,mb-cpu,k8s,warm: Harness logic,1.428
+end-to-end,openclaw,mb-output,native,"cold: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-output,native,cold: Harness start,27.173
+end-to-end,openclaw,mb-output,native,cold: Model (replayed),2.277
+end-to-end,openclaw,mb-output,native,cold: Tool execution,0.36
+end-to-end,openclaw,mb-output,native,cold: Harness logic,3.168
+end-to-end,openclaw,mb-output,native,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-output,native,warm: Harness start,0.0
+end-to-end,openclaw,mb-output,native,warm: Model (replayed),2.278
+end-to-end,openclaw,mb-output,native,warm: Tool execution,0.198
+end-to-end,openclaw,mb-output,native,warm: Harness logic,1.403
+end-to-end,openclaw,mb-output,docker,"cold: Sandbox, bridge and harness container",0.05
+end-to-end,openclaw,mb-output,docker,cold: Harness start,30.169
+end-to-end,openclaw,mb-output,docker,cold: Model (replayed),2.278
+end-to-end,openclaw,mb-output,docker,cold: Tool execution,0.539
+end-to-end,openclaw,mb-output,docker,cold: Harness logic,2.455
+end-to-end,openclaw,mb-output,docker,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-output,docker,warm: Harness start,0.0
+end-to-end,openclaw,mb-output,docker,warm: Model (replayed),2.278
+end-to-end,openclaw,mb-output,docker,warm: Tool execution,0.342
+end-to-end,openclaw,mb-output,docker,warm: Harness logic,1.195
+end-to-end,openclaw,mb-output,k8s,"cold: Sandbox, bridge and harness container",2.726
+end-to-end,openclaw,mb-output,k8s,cold: Harness start,28.852
+end-to-end,openclaw,mb-output,k8s,cold: Model (replayed),2.278
+end-to-end,openclaw,mb-output,k8s,cold: Tool execution,0.811
+end-to-end,openclaw,mb-output,k8s,cold: Harness logic,2.222
+end-to-end,openclaw,mb-output,k8s,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-output,k8s,warm: Harness start,0.0
+end-to-end,openclaw,mb-output,k8s,warm: Model (replayed),2.277
+end-to-end,openclaw,mb-output,k8s,warm: Tool execution,0.516
+end-to-end,openclaw,mb-output,k8s,warm: Harness logic,1.187
+after-answer,hermes,all tasks,native,Collect artifacts,0.0
+after-answer,hermes,all tasks,native,"Stop harness, revoke bridge access",0.0
+after-answer,hermes,all tasks,native,Evaluate,0.223
+after-answer,hermes,all tasks,native,Clean up,0.254
+after-answer,hermes,all tasks,docker,Collect artifacts,2.04
+after-answer,hermes,all tasks,docker,"Stop harness, revoke bridge access",0.366
+after-answer,hermes,all tasks,docker,Evaluate,0.159
+after-answer,hermes,all tasks,docker,Clean up,0.116
+after-answer,hermes,all tasks,k8s,Collect artifacts,2.234
+after-answer,hermes,all tasks,k8s,"Stop harness, revoke bridge access",1.225
+after-answer,hermes,all tasks,k8s,Evaluate,0.866
+after-answer,hermes,all tasks,k8s,Clean up,3.051
+after-answer,openclaw,all tasks,native,Collect artifacts,0.0
+after-answer,openclaw,all tasks,native,"Stop harness, revoke bridge access",0.0
+after-answer,openclaw,all tasks,native,Evaluate,0.159
+after-answer,openclaw,all tasks,native,Clean up,0.21
+after-answer,openclaw,all tasks,docker,Collect artifacts,0.011
+after-answer,openclaw,all tasks,docker,"Stop harness, revoke bridge access",0.766
+after-answer,openclaw,all tasks,docker,Evaluate,0.159
+after-answer,openclaw,all tasks,docker,Clean up,0.113
+after-answer,openclaw,all tasks,k8s,Collect artifacts,0.297
+after-answer,openclaw,all tasks,k8s,"Stop harness, revoke bridge access",1.851
+after-answer,openclaw,all tasks,k8s,Evaluate,0.862
+after-answer,openclaw,all tasks,k8s,Clean up,3.041
