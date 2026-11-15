@@ -52,6 +52,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 HARNESSES = ("openclaw", "hermes")
 SETUPS = ("docker", "k8s", "native")
 STATUSES = ("valid", "failed", "superseded")
+# Harnesses always start alongside their sandboxes, and recordings are always
+# made on Docker, so neither is a key.
+SPEC_KEYS = ("name", "description", "harnesses", "setups", "tasks", "repetitions", "warm", "record_warm",
+             "bridge_repository")
 COLUMNS = ["harness", "setup", "repetition", "mode", "variant", "status", "reason", "run_dir", "requests",
            "started", "finished", "worker"]
 REMOTE_ARIES = "aries"
@@ -90,12 +94,16 @@ def load_spec(path):
         fail("tasks must not be empty")
     if not isinstance(spec["repetitions"], int) or spec["repetitions"] < 1:
         fail("repetitions must be a positive number")
+    unknown = set(spec) - set(SPEC_KEYS)
+    if unknown:
+        fail("%s has unknown keys %s; it takes %s" % (path, ", ".join(sorted(unknown)), ", ".join(SPEC_KEYS)))
+    spec.setdefault("description", "")
     spec.setdefault("warm", False)
-    spec.setdefault("parallel_start", True)
-    spec.setdefault("record", {"backend": "docker", "warm": spec["warm"]})
+    spec.setdefault("record_warm", spec["warm"])
     spec.setdefault("bridge_repository", "")
-    if spec["record"].get("backend", "docker") != "docker":
-        fail("record.backend must be docker")
+    for key in ("warm", "record_warm"):
+        if not isinstance(spec[key], bool):
+            fail("%s must be true or false" % key)
     spec["_path"] = os.path.relpath(path, ROOT)
     spec["_dir"] = os.path.dirname(os.path.abspath(path))
     return spec
@@ -241,14 +249,12 @@ def chain_body(spec, harnesses, address, prometheus, port):
     common = "--address %s --prometheus %s" % (shlex.quote(address), shlex.quote(prometheus))
     tasks = "--tasks " + shlex.quote(",".join(spec["tasks"]))
     warm = " --warm" if spec["warm"] else ""
-    sequential = "" if spec["parallel_start"] else " --sequential"
     lines, total = [], 0
     for harness in harnesses:
-        record = spec["record"]
         lines += ["", "# ---- %s" % harness,
                   "if ! install_recording %s; then" % harness,
-                  "  step %s-record %s docker record scripts/microbench/run.sh --harness %s --backend docker --mode record%s%s %s %s --port %d || {"
-                  % (harness, harness, harness, " --warm" if record.get("warm") else "", sequential, tasks, common, port),
+                  "  step %s-record %s docker record scripts/microbench/run.sh --harness %s --backend docker --mode record%s %s %s --port %d || {"
+                  % (harness, harness, harness, " --warm" if spec["record_warm"] else "", tasks, common, port),
                   "    echo \"recording %s failed; skipping its runs\"" % harness,
                   "    harness_failed=1",
                   "  }",
@@ -265,8 +271,8 @@ def chain_body(spec, harnesses, address, prometheus, port):
                     bridge = ""
                     if setup == "k8s" and spec["bridge_repository"]:
                         bridge = " --bridge-repository " + shlex.quote(spec["bridge_repository"])
-                    command = "scripts/microbench/run.sh --harness %s --backend %s --mode replay --runs 1%s%s%s %s %s --port %d" % (
-                        harness, setup, warm, sequential, bridge, tasks, common, port)
+                    command = "scripts/microbench/run.sh --harness %s --backend %s --mode replay --runs 1%s%s %s %s --port %d" % (
+                        harness, setup, warm, bridge, tasks, common, port)
                 lines.append("  step %s %s %s %d %s" % (identifier, harness, setup, repetition, command))
                 total += 1
         lines += ["fi", "unset harness_failed"]

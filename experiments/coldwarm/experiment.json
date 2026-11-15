@@ -6,7 +6,6 @@
   "tasks": ["mb-noop", "mb-one-call", "mb-ten-calls", "mb-cpu", "mb-output"],
   "repetitions": 5,
   "warm": true,
-  "parallel_start": true,
-  "record": {"backend": "docker", "warm": true},
+  "record_warm": true,
   "bridge_repository": ""
 }

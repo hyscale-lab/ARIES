@@ -29,6 +29,26 @@ and SSH targets stay local, because they hold full agent trajectories and
 node addresses. The report can always be regenerated from a local copy of the
 raw runs.
 
+## The spec
+
+`experiment.json` takes these keys. Any other key is rejected.
+
+| Key | Meaning |
+|---|---|
+| `name` | The experiment's name. On the workers, campaigns run in `~/aries-campaigns/<name>/`. |
+| `description` | One line saying what is measured. It opens the report's Setup section. |
+| `harnesses` | The harnesses to measure, `openclaw` and `hermes`. Each gets a worker of its own; with more harnesses than workers, a worker runs them one after another. |
+| `setups` | Where tools run: `docker` (an ARIES Docker sandbox), `k8s` (an ARIES Kubernetes pod) and `native` (the harness's own Docker sandbox). Each repetition runs them in this order. `native` must come after `docker`, because the native baseline reuses an ARIES Docker run's harness configuration. |
+| `tasks` | The microbenchmark tasks each run includes, from `benchmarks/microbench/`. |
+| `repetitions` | How many times each setup runs. |
+| `warm` | `true` runs each task cold on a fresh harness and sandbox, then warm on the same ones, so every run gives both measurements. `false` runs it cold only. |
+| `record_warm` | `true` records the warm run separately from the cold one, so warm replays get the warm run's own replies. `false` records the cold run only. Defaults to `warm`. Skipped with `--recordings-from`. |
+| `bridge_repository` | Empty: Kubernetes runs pull the bridge image from the repository the profiles name. Set it to use another, such as an image loaded onto the nodes. The tag stays this checkout's bridge revision. |
+
+Two choices are fixed rather than keys. Harnesses always start alongside
+their sandboxes, as ARIES does by default. Recordings are always made on
+ARIES Docker.
+
 ## Running a campaign
 
 You need a cluster built by `k8s/create-cluster.sh` and described in
