@@ -83,7 +83,10 @@ worker, so setups are compared on the same hardware.
 A chain installs the campaign's recording, or records one first (moving any
 older recording on the node aside). It then runs every repetition, cycling
 through the setups in the order the spec lists them, so drift affects every
-setup alike. Each step is one `scripts/microbench/run.sh` or
+setup alike. Before the first measured run, each setup gets one warm-up run of the first
+task. It pulls every image the setup uses, into Docker and into the node's
+containerd, so no measured run pays for a pull. Warm-up runs are kept but
+listed as superseded. Each step is one `scripts/microbench/run.sh` or
 `scripts/baseline/<harness>_native.py` invocation with `--runs 1`. The chain
 copies the step's run and its model request log to
 `runs/<harness>/<setup>/<rep>/` and lists the run in its manifest:
@@ -110,6 +113,14 @@ their harness configuration from an ARIES Docker replay.
   sandboxes up on SIGTERM. The native baselines do not, so check for leftover
   containers after stopping one. Anything still running 90 seconds later is
   killed. The interrupted step has no result, and resume runs it again.
+- **rerun** supersedes a measured run, with a reason, and has its worker run
+  that step again once its chain has finished:
+
+  ```sh
+  python3 scripts/experiment/run.py rerun experiments/coldwarm/results/20261115-e5-2630v3 \
+    runs/hermes/k8s/1 --reason "first Kubernetes pod on the node pulled the harness image"
+  ```
+
 - **mark** records a judgement made by hand. The run stays on disk, but only
   valid runs are analysed. The mark is kept in `marks.tsv` and survives later
   collects:

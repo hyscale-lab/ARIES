@@ -9,6 +9,7 @@
     python3 scripts/experiment/run.py resume  experiments/coldwarm/results/NAME [--prepare]
     python3 scripts/experiment/run.py stop    experiments/coldwarm/results/NAME
     python3 scripts/experiment/run.py mark    experiments/coldwarm/results/NAME RUN --status STATUS --reason TEXT
+    python3 scripts/experiment/run.py rerun   experiments/coldwarm/results/NAME RUN --reason TEXT
 
 An experiment is a directory under experiments/ whose experiment.json names
 the harnesses, setups (docker, k8s, native), tasks, repetitions and whether
@@ -172,6 +173,10 @@ list_run() {
     status=failed problem=${problem:-no run result}
   elif [ -n "$problem" ]; then
     status=failed
+  elif [ "$repetition" = warmup ]; then
+    # Kept, but never analysed: it pays for what only a node's first run
+    # pays, such as pulling images into Docker and the node's containerd.
+    status=superseded problem="warm-up before measuring: pulls images, fills caches"
   fi
   if [ -n "$run_dir" ] && [ -d "$run_dir" ]; then
     dest=runs/$harness/$setup/$repetition
@@ -262,18 +267,26 @@ def chain_body(spec, harnesses, address, prometheus, port):
                   "fi",
                   "if [ -z \"${harness_failed:-}\" ]; then"]
         total += 1
+
+        def command(setup, task_list):
+            selected = "--tasks " + shlex.quote(",".join(task_list))
+            if setup == "native":
+                return "python3 scripts/baseline/%s_native.py --runs 1%s %s %s --port %d" % (harness, warm, selected, common, port)
+            bridge = ""
+            if setup == "k8s" and spec["bridge_repository"]:
+                bridge = " --bridge-repository " + shlex.quote(spec["bridge_repository"])
+            return "scripts/microbench/run.sh --harness %s --backend %s --mode replay --runs 1%s%s %s %s --port %d" % (
+                harness, setup, warm, bridge, selected, common, port)
+
+        # One unmeasured run of the first task per setup pulls every image the
+        # setup uses, whatever ARIES names them, before anything is measured.
+        for setup in spec["setups"]:
+            lines.append("  step %s-%s-warmup %s %s warmup %s" % (harness, setup, harness, setup, command(setup, spec["tasks"][:1])))
+            total += 1
         for repetition in range(1, spec["repetitions"] + 1):
             for setup in spec["setups"]:
                 identifier = "%s-%s-%d" % (harness, setup, repetition)
-                if setup == "native":
-                    command = "python3 scripts/baseline/%s_native.py --runs 1%s %s %s --port %d" % (harness, warm, tasks, common, port)
-                else:
-                    bridge = ""
-                    if setup == "k8s" and spec["bridge_repository"]:
-                        bridge = " --bridge-repository " + shlex.quote(spec["bridge_repository"])
-                    command = "scripts/microbench/run.sh --harness %s --backend %s --mode replay --runs 1%s%s %s %s --port %d" % (
-                        harness, setup, warm, bridge, tasks, common, port)
-                lines.append("  step %s %s %s %d %s" % (identifier, harness, setup, repetition, command))
+                lines.append("  step %s %s %s %d %s" % (identifier, harness, setup, repetition, command(setup, spec["tasks"])))
                 total += 1
         lines += ["fi", "unset harness_failed"]
     return "\n".join(lines), total
@@ -691,6 +704,31 @@ def cmd_stop(args):
         print("==> %s: stopped; resume reruns the interrupted step" % label)
 
 
+def cmd_rerun(args):
+    """Supersedes a run and has its worker run that step again."""
+    meta, state = open_campaign(args.campaign)
+    run = args.run.rstrip("/")
+    rows = [row for row in read_tsv(campaign_paths(args.campaign)["manifest.tsv"]) if row["run_dir"] == run]
+    if not rows:
+        fail("no run %s in the manifest; collect first" % run)
+    row = rows[0]
+    if row["repetition"] in ("record", "warmup"):
+        fail("only measured runs can be rerun")
+    label = row["worker"]
+    worker = state["workers"][label]
+    _, _, pgid = chain_paths(meta["experiment"], meta["campaign"], label)
+    if running(state, worker["target"], pgid):
+        fail("%s's chain is still running; rerun once it has finished" % label)
+    args.status = "superseded"
+    cmd_mark(args)
+    identifier = "%s-%s-%s" % (row["harness"], row["setup"], row["repetition"])
+    base = "~/%s/logs/%s/steps" % (remote_campaign(meta["experiment"], meta["campaign"]), label)
+    remote(state, worker["target"], "rm -f %s/%s.done" % (base, shlex.quote(identifier)))
+    args.prepare, args.worker = False, [label]
+    cmd_resume(args)
+    print("%s runs again as a retry of %s; collect when it is done" % (label, run))
+
+
 def cmd_mark(args):
     paths = campaign_paths(args.campaign)
     run = os.path.relpath(os.path.abspath(args.run), args.campaign) if os.path.isabs(args.run) else args.run.rstrip("/")
@@ -730,6 +768,10 @@ def main():
         if name == "resume":
             command.add_argument("--prepare", action="store_true", help="ship and build the tree again first")
             command.add_argument("--worker", action="append", help="only this worker (repeatable)")
+    rerun = commands.add_parser("rerun", help="supersede a run and run its step again")
+    rerun.add_argument("campaign")
+    rerun.add_argument("run", help="the run's path in the campaign, such as runs/hermes/k8s/1")
+    rerun.add_argument("--reason", required=True)
     mark = commands.add_parser("mark", help="set a run's status")
     mark.add_argument("campaign")
     mark.add_argument("run", help="the run's path in the campaign, such as runs/openclaw/docker/3")
@@ -739,7 +781,7 @@ def main():
     if getattr(args, "campaign", None) and args.command != "start":
         args.campaign = os.path.abspath(args.campaign)
     {"start": cmd_start, "status": cmd_status, "collect": cmd_collect, "resume": cmd_resume,
-     "stop": cmd_stop, "mark": cmd_mark}[args.command](args)
+     "stop": cmd_stop, "mark": cmd_mark, "rerun": cmd_rerun}[args.command](args)
 
 
 if __name__ == "__main__":
