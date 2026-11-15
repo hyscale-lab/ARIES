@@ -533,6 +533,9 @@ def cmd_start(args):
             remote(state, target, "cat > ~/%s/logs/%s/chain.sh && chmod +x ~/%s/logs/%s/chain.sh" % (base, label, base, label),
                    data=chain.encode())
             worker.update({"node": node, "address": address})
+            # The full name can carry the testbed's experiment and user names;
+            # it stays in state.json, which is not committed.
+            facts["hostname"] = node.split(".")[0]
             meta["workers"][label] = dict(facts, address=address, harnesses=worker["harnesses"], aries_commit=commit)
         except Exception as error:  # reported together below
             errors.append(str(error))
