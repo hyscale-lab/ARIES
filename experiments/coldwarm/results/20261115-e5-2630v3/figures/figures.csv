@@ -323,3 +323,485 @@ after-answer,openclaw,all tasks,k8s,Collect artifacts,0.572
 after-answer,openclaw,all tasks,k8s,"Stop harness, revoke bridge access",2.87
 after-answer,openclaw,all tasks,k8s,Evaluate,1.651
 after-answer,openclaw,all tasks,k8s,Clean up,3.429
+task-breakdown,hermes,mb-noop,docker,"cold: Sandbox, bridge and harness container",0.035
+task-breakdown,hermes,mb-noop,docker,cold: Harness start,10.59
+task-breakdown,hermes,mb-noop,docker,cold: Model (replayed),0.923
+task-breakdown,hermes,mb-noop,docker,cold: Tool execution,0.0
+task-breakdown,hermes,mb-noop,docker,cold: Harness logic,9.867
+task-breakdown,hermes,mb-noop,docker,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-noop,docker,warm: Harness start,0.0
+task-breakdown,hermes,mb-noop,docker,warm: Model (replayed),1.283
+task-breakdown,hermes,mb-noop,docker,warm: Tool execution,0.0
+task-breakdown,hermes,mb-noop,docker,warm: Harness logic,0.336
+task-breakdown,hermes,mb-noop,docker,after: Collect artifacts,2.713
+task-breakdown,hermes,mb-noop,docker,"after: Stop harness, revoke bridge access",0.554
+task-breakdown,hermes,mb-noop,docker,after: Evaluate,0.331
+task-breakdown,hermes,mb-noop,docker,after: Clean up,0.193
+task-breakdown,hermes,mb-noop,native,"cold: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-noop,native,cold: Harness start,10.91
+task-breakdown,hermes,mb-noop,native,cold: Model (replayed),0.923
+task-breakdown,hermes,mb-noop,native,cold: Tool execution,0.0
+task-breakdown,hermes,mb-noop,native,cold: Harness logic,10.232
+task-breakdown,hermes,mb-noop,native,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-noop,native,warm: Harness start,0.0
+task-breakdown,hermes,mb-noop,native,warm: Model (replayed),1.283
+task-breakdown,hermes,mb-noop,native,warm: Tool execution,0.0
+task-breakdown,hermes,mb-noop,native,warm: Harness logic,0.361
+task-breakdown,hermes,mb-noop,native,after: Collect artifacts,0.0
+task-breakdown,hermes,mb-noop,native,"after: Stop harness, revoke bridge access",0.0
+task-breakdown,hermes,mb-noop,native,after: Evaluate,0.431
+task-breakdown,hermes,mb-noop,native,after: Clean up,0.404
+task-breakdown,hermes,mb-noop,k8s,"cold: Sandbox, bridge and harness container",2.473
+task-breakdown,hermes,mb-noop,k8s,cold: Harness start,11.91
+task-breakdown,hermes,mb-noop,k8s,cold: Model (replayed),0.923
+task-breakdown,hermes,mb-noop,k8s,cold: Tool execution,0.0
+task-breakdown,hermes,mb-noop,k8s,cold: Harness logic,9.666
+task-breakdown,hermes,mb-noop,k8s,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-noop,k8s,warm: Harness start,0.0
+task-breakdown,hermes,mb-noop,k8s,warm: Model (replayed),1.283
+task-breakdown,hermes,mb-noop,k8s,warm: Tool execution,0.0
+task-breakdown,hermes,mb-noop,k8s,warm: Harness logic,0.359
+task-breakdown,hermes,mb-noop,k8s,after: Collect artifacts,3.063
+task-breakdown,hermes,mb-noop,k8s,"after: Stop harness, revoke bridge access",2.035
+task-breakdown,hermes,mb-noop,k8s,after: Evaluate,1.66
+task-breakdown,hermes,mb-noop,k8s,after: Clean up,3.401
+task-breakdown,openclaw,mb-noop,docker,"cold: Sandbox, bridge and harness container",0.071
+task-breakdown,openclaw,mb-noop,docker,cold: Harness start,55.398
+task-breakdown,openclaw,mb-noop,docker,cold: Model (replayed),1.187
+task-breakdown,openclaw,mb-noop,docker,cold: Tool execution,0.0
+task-breakdown,openclaw,mb-noop,docker,cold: Harness logic,3.579
+task-breakdown,openclaw,mb-noop,docker,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-noop,docker,warm: Harness start,0.0
+task-breakdown,openclaw,mb-noop,docker,warm: Model (replayed),0.735
+task-breakdown,openclaw,mb-noop,docker,warm: Tool execution,0.0
+task-breakdown,openclaw,mb-noop,docker,warm: Harness logic,1.755
+task-breakdown,openclaw,mb-noop,docker,after: Collect artifacts,0.019
+task-breakdown,openclaw,mb-noop,docker,"after: Stop harness, revoke bridge access",1.293
+task-breakdown,openclaw,mb-noop,docker,after: Evaluate,0.331
+task-breakdown,openclaw,mb-noop,docker,after: Clean up,0.178
+task-breakdown,openclaw,mb-noop,native,"cold: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-noop,native,cold: Harness start,51.311
+task-breakdown,openclaw,mb-noop,native,cold: Model (replayed),1.187
+task-breakdown,openclaw,mb-noop,native,cold: Tool execution,0.0
+task-breakdown,openclaw,mb-noop,native,cold: Harness logic,4.979
+task-breakdown,openclaw,mb-noop,native,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-noop,native,warm: Harness start,0.0
+task-breakdown,openclaw,mb-noop,native,warm: Model (replayed),0.735
+task-breakdown,openclaw,mb-noop,native,warm: Tool execution,0.0
+task-breakdown,openclaw,mb-noop,native,warm: Harness logic,2.428
+task-breakdown,openclaw,mb-noop,native,after: Collect artifacts,0.0
+task-breakdown,openclaw,mb-noop,native,"after: Stop harness, revoke bridge access",0.0
+task-breakdown,openclaw,mb-noop,native,after: Evaluate,0.335
+task-breakdown,openclaw,mb-noop,native,after: Clean up,0.401
+task-breakdown,openclaw,mb-noop,k8s,"cold: Sandbox, bridge and harness container",3.48
+task-breakdown,openclaw,mb-noop,k8s,cold: Harness start,53.418
+task-breakdown,openclaw,mb-noop,k8s,cold: Model (replayed),1.187
+task-breakdown,openclaw,mb-noop,k8s,cold: Tool execution,0.0
+task-breakdown,openclaw,mb-noop,k8s,cold: Harness logic,3.419
+task-breakdown,openclaw,mb-noop,k8s,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-noop,k8s,warm: Harness start,0.0
+task-breakdown,openclaw,mb-noop,k8s,warm: Model (replayed),0.735
+task-breakdown,openclaw,mb-noop,k8s,warm: Tool execution,0.0
+task-breakdown,openclaw,mb-noop,k8s,warm: Harness logic,1.666
+task-breakdown,openclaw,mb-noop,k8s,after: Collect artifacts,0.566
+task-breakdown,openclaw,mb-noop,k8s,"after: Stop harness, revoke bridge access",2.664
+task-breakdown,openclaw,mb-noop,k8s,after: Evaluate,1.649
+task-breakdown,openclaw,mb-noop,k8s,after: Clean up,3.506
+task-breakdown,hermes,mb-one-call,docker,"cold: Sandbox, bridge and harness container",0.046
+task-breakdown,hermes,mb-one-call,docker,cold: Harness start,10.814
+task-breakdown,hermes,mb-one-call,docker,cold: Model (replayed),2.403
+task-breakdown,hermes,mb-one-call,docker,cold: Tool execution,0.857
+task-breakdown,hermes,mb-one-call,docker,cold: Harness logic,9.734
+task-breakdown,hermes,mb-one-call,docker,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-one-call,docker,warm: Harness start,0.0
+task-breakdown,hermes,mb-one-call,docker,warm: Model (replayed),2.07
+task-breakdown,hermes,mb-one-call,docker,warm: Tool execution,0.767
+task-breakdown,hermes,mb-one-call,docker,warm: Harness logic,0.416
+task-breakdown,hermes,mb-one-call,docker,after: Collect artifacts,2.77
+task-breakdown,hermes,mb-one-call,docker,"after: Stop harness, revoke bridge access",0.575
+task-breakdown,hermes,mb-one-call,docker,after: Evaluate,0.331
+task-breakdown,hermes,mb-one-call,docker,after: Clean up,0.197
+task-breakdown,hermes,mb-one-call,native,"cold: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-one-call,native,cold: Harness start,10.93
+task-breakdown,hermes,mb-one-call,native,cold: Model (replayed),2.404
+task-breakdown,hermes,mb-one-call,native,cold: Tool execution,0.953
+task-breakdown,hermes,mb-one-call,native,cold: Harness logic,10.366
+task-breakdown,hermes,mb-one-call,native,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-one-call,native,warm: Harness start,0.0
+task-breakdown,hermes,mb-one-call,native,warm: Model (replayed),2.07
+task-breakdown,hermes,mb-one-call,native,warm: Tool execution,0.174
+task-breakdown,hermes,mb-one-call,native,warm: Harness logic,0.426
+task-breakdown,hermes,mb-one-call,native,after: Collect artifacts,0.0
+task-breakdown,hermes,mb-one-call,native,"after: Stop harness, revoke bridge access",0.0
+task-breakdown,hermes,mb-one-call,native,after: Evaluate,0.477
+task-breakdown,hermes,mb-one-call,native,after: Clean up,0.43
+task-breakdown,hermes,mb-one-call,k8s,"cold: Sandbox, bridge and harness container",2.288
+task-breakdown,hermes,mb-one-call,k8s,cold: Harness start,12.142
+task-breakdown,hermes,mb-one-call,k8s,cold: Model (replayed),2.403
+task-breakdown,hermes,mb-one-call,k8s,cold: Tool execution,1.201
+task-breakdown,hermes,mb-one-call,k8s,cold: Harness logic,9.739
+task-breakdown,hermes,mb-one-call,k8s,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-one-call,k8s,warm: Harness start,0.0
+task-breakdown,hermes,mb-one-call,k8s,warm: Model (replayed),2.07
+task-breakdown,hermes,mb-one-call,k8s,warm: Tool execution,1.141
+task-breakdown,hermes,mb-one-call,k8s,warm: Harness logic,0.394
+task-breakdown,hermes,mb-one-call,k8s,after: Collect artifacts,3.085
+task-breakdown,hermes,mb-one-call,k8s,"after: Stop harness, revoke bridge access",1.738
+task-breakdown,hermes,mb-one-call,k8s,after: Evaluate,1.66
+task-breakdown,hermes,mb-one-call,k8s,after: Clean up,3.544
+task-breakdown,openclaw,mb-one-call,docker,"cold: Sandbox, bridge and harness container",0.094
+task-breakdown,openclaw,mb-one-call,docker,cold: Harness start,56.51
+task-breakdown,openclaw,mb-one-call,docker,cold: Model (replayed),2.354
+task-breakdown,openclaw,mb-one-call,docker,cold: Tool execution,0.873
+task-breakdown,openclaw,mb-one-call,docker,cold: Harness logic,3.189
+task-breakdown,openclaw,mb-one-call,docker,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-one-call,docker,warm: Harness start,0.0
+task-breakdown,openclaw,mb-one-call,docker,warm: Model (replayed),2.454
+task-breakdown,openclaw,mb-one-call,docker,warm: Tool execution,0.633
+task-breakdown,openclaw,mb-one-call,docker,warm: Harness logic,1.68
+task-breakdown,openclaw,mb-one-call,docker,after: Collect artifacts,0.019
+task-breakdown,openclaw,mb-one-call,docker,"after: Stop harness, revoke bridge access",1.53
+task-breakdown,openclaw,mb-one-call,docker,after: Evaluate,0.331
+task-breakdown,openclaw,mb-one-call,docker,after: Clean up,0.183
+task-breakdown,openclaw,mb-one-call,native,"cold: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-one-call,native,cold: Harness start,51.472
+task-breakdown,openclaw,mb-one-call,native,cold: Model (replayed),2.354
+task-breakdown,openclaw,mb-one-call,native,cold: Tool execution,0.555
+task-breakdown,openclaw,mb-one-call,native,cold: Harness logic,4.814
+task-breakdown,openclaw,mb-one-call,native,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-one-call,native,warm: Harness start,0.0
+task-breakdown,openclaw,mb-one-call,native,warm: Model (replayed),2.454
+task-breakdown,openclaw,mb-one-call,native,warm: Tool execution,0.292
+task-breakdown,openclaw,mb-one-call,native,warm: Harness logic,2.245
+task-breakdown,openclaw,mb-one-call,native,after: Collect artifacts,0.0
+task-breakdown,openclaw,mb-one-call,native,"after: Stop harness, revoke bridge access",0.0
+task-breakdown,openclaw,mb-one-call,native,after: Evaluate,0.335
+task-breakdown,openclaw,mb-one-call,native,after: Clean up,0.396
+task-breakdown,openclaw,mb-one-call,k8s,"cold: Sandbox, bridge and harness container",3.48
+task-breakdown,openclaw,mb-one-call,k8s,cold: Harness start,53.75
+task-breakdown,openclaw,mb-one-call,k8s,cold: Model (replayed),2.354
+task-breakdown,openclaw,mb-one-call,k8s,cold: Tool execution,1.2
+task-breakdown,openclaw,mb-one-call,k8s,cold: Harness logic,3.175
+task-breakdown,openclaw,mb-one-call,k8s,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-one-call,k8s,warm: Harness start,0.0
+task-breakdown,openclaw,mb-one-call,k8s,warm: Model (replayed),2.454
+task-breakdown,openclaw,mb-one-call,k8s,warm: Tool execution,0.977
+task-breakdown,openclaw,mb-one-call,k8s,warm: Harness logic,1.897
+task-breakdown,openclaw,mb-one-call,k8s,after: Collect artifacts,0.561
+task-breakdown,openclaw,mb-one-call,k8s,"after: Stop harness, revoke bridge access",2.85
+task-breakdown,openclaw,mb-one-call,k8s,after: Evaluate,1.653
+task-breakdown,openclaw,mb-one-call,k8s,after: Clean up,3.623
+task-tool-calls,hermes,mb-one-call,docker,"cold: Through ARIES, not split: the bridge also ran the harness's set-up (ms)",857.1
+task-tool-calls,hermes,mb-one-call,docker,warm: Bridge running its commands (ms),427.4
+task-tool-calls,hermes,mb-one-call,docker,"warm: Transport: harness, bridge and sandbox (ms)",339.7
+task-tool-calls,hermes,mb-one-call,native,cold: Native call (no bridge) (ms),953.3
+task-tool-calls,hermes,mb-one-call,native,warm: Native call (no bridge) (ms),173.8
+task-tool-calls,hermes,mb-one-call,k8s,"cold: Through ARIES, not split: the bridge also ran the harness's set-up (ms)",1201.0
+task-tool-calls,hermes,mb-one-call,k8s,warm: Bridge running its commands (ms),847.6
+task-tool-calls,hermes,mb-one-call,k8s,"warm: Transport: harness, bridge and sandbox (ms)",293.6
+task-tool-calls,openclaw,mb-one-call,docker,cold: Bridge running its commands (ms),301.6
+task-tool-calls,openclaw,mb-one-call,docker,"cold: Transport: harness, bridge and sandbox (ms)",571.4
+task-tool-calls,openclaw,mb-one-call,docker,warm: Bridge running its commands (ms),300.4
+task-tool-calls,openclaw,mb-one-call,docker,"warm: Transport: harness, bridge and sandbox (ms)",332.8
+task-tool-calls,openclaw,mb-one-call,native,cold: Native call (no bridge) (ms),555.0
+task-tool-calls,openclaw,mb-one-call,native,warm: Native call (no bridge) (ms),292.2
+task-tool-calls,openclaw,mb-one-call,k8s,cold: Bridge running its commands (ms),621.8
+task-tool-calls,openclaw,mb-one-call,k8s,"cold: Transport: harness, bridge and sandbox (ms)",577.8
+task-tool-calls,openclaw,mb-one-call,k8s,warm: Bridge running its commands (ms),620.6
+task-tool-calls,openclaw,mb-one-call,k8s,"warm: Transport: harness, bridge and sandbox (ms)",356.4
+task-breakdown,hermes,mb-ten-calls,docker,"cold: Sandbox, bridge and harness container",0.038
+task-breakdown,hermes,mb-ten-calls,docker,cold: Harness start,10.701
+task-breakdown,hermes,mb-ten-calls,docker,cold: Model (replayed),13.932
+task-breakdown,hermes,mb-ten-calls,docker,cold: Tool execution,3.226
+task-breakdown,hermes,mb-ten-calls,docker,cold: Harness logic,10.165
+task-breakdown,hermes,mb-ten-calls,docker,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-ten-calls,docker,warm: Harness start,0.0
+task-breakdown,hermes,mb-ten-calls,docker,warm: Model (replayed),13.723
+task-breakdown,hermes,mb-ten-calls,docker,warm: Tool execution,3.142
+task-breakdown,hermes,mb-ten-calls,docker,warm: Harness logic,0.787
+task-breakdown,hermes,mb-ten-calls,docker,after: Collect artifacts,2.721
+task-breakdown,hermes,mb-ten-calls,docker,"after: Stop harness, revoke bridge access",0.567
+task-breakdown,hermes,mb-ten-calls,docker,after: Evaluate,0.334
+task-breakdown,hermes,mb-ten-calls,docker,after: Clean up,0.183
+task-breakdown,hermes,mb-ten-calls,native,"cold: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-ten-calls,native,cold: Harness start,10.819
+task-breakdown,hermes,mb-ten-calls,native,cold: Model (replayed),13.932
+task-breakdown,hermes,mb-ten-calls,native,cold: Tool execution,2.513
+task-breakdown,hermes,mb-ten-calls,native,cold: Harness logic,10.642
+task-breakdown,hermes,mb-ten-calls,native,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-ten-calls,native,warm: Harness start,0.0
+task-breakdown,hermes,mb-ten-calls,native,warm: Model (replayed),13.722
+task-breakdown,hermes,mb-ten-calls,native,warm: Tool execution,1.737
+task-breakdown,hermes,mb-ten-calls,native,warm: Harness logic,0.777
+task-breakdown,hermes,mb-ten-calls,native,after: Collect artifacts,0.0
+task-breakdown,hermes,mb-ten-calls,native,"after: Stop harness, revoke bridge access",0.0
+task-breakdown,hermes,mb-ten-calls,native,after: Evaluate,0.478
+task-breakdown,hermes,mb-ten-calls,native,after: Clean up,0.453
+task-breakdown,hermes,mb-ten-calls,k8s,"cold: Sandbox, bridge and harness container",2.28
+task-breakdown,hermes,mb-ten-calls,k8s,cold: Harness start,12.481
+task-breakdown,hermes,mb-ten-calls,k8s,cold: Model (replayed),13.932
+task-breakdown,hermes,mb-ten-calls,k8s,cold: Tool execution,4.338
+task-breakdown,hermes,mb-ten-calls,k8s,cold: Harness logic,9.592
+task-breakdown,hermes,mb-ten-calls,k8s,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-ten-calls,k8s,warm: Harness start,0.0
+task-breakdown,hermes,mb-ten-calls,k8s,warm: Model (replayed),13.722
+task-breakdown,hermes,mb-ten-calls,k8s,warm: Tool execution,4.325
+task-breakdown,hermes,mb-ten-calls,k8s,warm: Harness logic,0.785
+task-breakdown,hermes,mb-ten-calls,k8s,after: Collect artifacts,3.084
+task-breakdown,hermes,mb-ten-calls,k8s,"after: Stop harness, revoke bridge access",1.704
+task-breakdown,hermes,mb-ten-calls,k8s,after: Evaluate,1.668
+task-breakdown,hermes,mb-ten-calls,k8s,after: Clean up,3.381
+task-breakdown,openclaw,mb-ten-calls,docker,"cold: Sandbox, bridge and harness container",0.1
+task-breakdown,openclaw,mb-ten-calls,docker,cold: Harness start,56.11
+task-breakdown,openclaw,mb-ten-calls,docker,cold: Model (replayed),14.9
+task-breakdown,openclaw,mb-ten-calls,docker,cold: Tool execution,4.433
+task-breakdown,openclaw,mb-ten-calls,docker,cold: Harness logic,3.806
+task-breakdown,openclaw,mb-ten-calls,docker,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-ten-calls,docker,warm: Harness start,0.0
+task-breakdown,openclaw,mb-ten-calls,docker,warm: Model (replayed),15.788
+task-breakdown,openclaw,mb-ten-calls,docker,warm: Tool execution,3.9
+task-breakdown,openclaw,mb-ten-calls,docker,warm: Harness logic,2.686
+task-breakdown,openclaw,mb-ten-calls,docker,after: Collect artifacts,0.021
+task-breakdown,openclaw,mb-ten-calls,docker,"after: Stop harness, revoke bridge access",1.608
+task-breakdown,openclaw,mb-ten-calls,docker,after: Evaluate,0.335
+task-breakdown,openclaw,mb-ten-calls,docker,after: Clean up,0.182
+task-breakdown,openclaw,mb-ten-calls,native,"cold: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-ten-calls,native,cold: Harness start,50.819
+task-breakdown,openclaw,mb-ten-calls,native,cold: Model (replayed),14.9
+task-breakdown,openclaw,mb-ten-calls,native,cold: Tool execution,2.679
+task-breakdown,openclaw,mb-ten-calls,native,cold: Harness logic,5.436
+task-breakdown,openclaw,mb-ten-calls,native,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-ten-calls,native,warm: Harness start,0.0
+task-breakdown,openclaw,mb-ten-calls,native,warm: Model (replayed),15.788
+task-breakdown,openclaw,mb-ten-calls,native,warm: Tool execution,2.146
+task-breakdown,openclaw,mb-ten-calls,native,warm: Harness logic,3.227
+task-breakdown,openclaw,mb-ten-calls,native,after: Collect artifacts,0.0
+task-breakdown,openclaw,mb-ten-calls,native,"after: Stop harness, revoke bridge access",0.0
+task-breakdown,openclaw,mb-ten-calls,native,after: Evaluate,0.339
+task-breakdown,openclaw,mb-ten-calls,native,after: Clean up,0.341
+task-breakdown,openclaw,mb-ten-calls,k8s,"cold: Sandbox, bridge and harness container",3.413
+task-breakdown,openclaw,mb-ten-calls,k8s,cold: Harness start,53.842
+task-breakdown,openclaw,mb-ten-calls,k8s,cold: Model (replayed),14.9
+task-breakdown,openclaw,mb-ten-calls,k8s,cold: Tool execution,6.648
+task-breakdown,openclaw,mb-ten-calls,k8s,cold: Harness logic,3.624
+task-breakdown,openclaw,mb-ten-calls,k8s,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-ten-calls,k8s,warm: Harness start,0.0
+task-breakdown,openclaw,mb-ten-calls,k8s,warm: Model (replayed),15.789
+task-breakdown,openclaw,mb-ten-calls,k8s,warm: Tool execution,6.105
+task-breakdown,openclaw,mb-ten-calls,k8s,warm: Harness logic,2.57
+task-breakdown,openclaw,mb-ten-calls,k8s,after: Collect artifacts,0.586
+task-breakdown,openclaw,mb-ten-calls,k8s,"after: Stop harness, revoke bridge access",2.808
+task-breakdown,openclaw,mb-ten-calls,k8s,after: Evaluate,1.654
+task-breakdown,openclaw,mb-ten-calls,k8s,after: Clean up,3.453
+task-tool-calls,hermes,mb-ten-calls,docker,"cold: Through ARIES, not split: the bridge also ran the harness's set-up (ms)",322.6
+task-tool-calls,hermes,mb-ten-calls,docker,warm: Bridge running its commands (ms),141.5
+task-tool-calls,hermes,mb-ten-calls,docker,"warm: Transport: harness, bridge and sandbox (ms)",172.7
+task-tool-calls,hermes,mb-ten-calls,native,cold: Native call (no bridge) (ms),251.3
+task-tool-calls,hermes,mb-ten-calls,native,warm: Native call (no bridge) (ms),173.7
+task-tool-calls,hermes,mb-ten-calls,k8s,"cold: Through ARIES, not split: the bridge also ran the harness's set-up (ms)",433.8
+task-tool-calls,hermes,mb-ten-calls,k8s,warm: Bridge running its commands (ms),280.1
+task-tool-calls,hermes,mb-ten-calls,k8s,"warm: Transport: harness, bridge and sandbox (ms)",152.5
+task-tool-calls,openclaw,mb-ten-calls,docker,cold: Bridge running its commands (ms),209.8
+task-tool-calls,openclaw,mb-ten-calls,docker,"cold: Transport: harness, bridge and sandbox (ms)",233.4
+task-tool-calls,openclaw,mb-ten-calls,docker,warm: Bridge running its commands (ms),209.3
+task-tool-calls,openclaw,mb-ten-calls,docker,"warm: Transport: harness, bridge and sandbox (ms)",180.7
+task-tool-calls,openclaw,mb-ten-calls,native,cold: Native call (no bridge) (ms),267.9
+task-tool-calls,openclaw,mb-ten-calls,native,warm: Native call (no bridge) (ms),214.6
+task-tool-calls,openclaw,mb-ten-calls,k8s,cold: Bridge running its commands (ms),433.8
+task-tool-calls,openclaw,mb-ten-calls,k8s,"cold: Transport: harness, bridge and sandbox (ms)",231.0
+task-tool-calls,openclaw,mb-ten-calls,k8s,warm: Bridge running its commands (ms),434.0
+task-tool-calls,openclaw,mb-ten-calls,k8s,"warm: Transport: harness, bridge and sandbox (ms)",176.5
+task-breakdown,hermes,mb-cpu,docker,"cold: Sandbox, bridge and harness container",0.043
+task-breakdown,hermes,mb-cpu,docker,cold: Harness start,10.641
+task-breakdown,hermes,mb-cpu,docker,cold: Model (replayed),2.656
+task-breakdown,hermes,mb-cpu,docker,cold: Tool execution,4.55
+task-breakdown,hermes,mb-cpu,docker,cold: Harness logic,9.839
+task-breakdown,hermes,mb-cpu,docker,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-cpu,docker,warm: Harness start,0.0
+task-breakdown,hermes,mb-cpu,docker,warm: Model (replayed),2.717
+task-breakdown,hermes,mb-cpu,docker,warm: Tool execution,4.568
+task-breakdown,hermes,mb-cpu,docker,warm: Harness logic,0.442
+task-breakdown,hermes,mb-cpu,docker,after: Collect artifacts,2.699
+task-breakdown,hermes,mb-cpu,docker,"after: Stop harness, revoke bridge access",0.567
+task-breakdown,hermes,mb-cpu,docker,after: Evaluate,0.328
+task-breakdown,hermes,mb-cpu,docker,after: Clean up,0.183
+task-breakdown,hermes,mb-cpu,native,"cold: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-cpu,native,cold: Harness start,10.974
+task-breakdown,hermes,mb-cpu,native,cold: Model (replayed),2.656
+task-breakdown,hermes,mb-cpu,native,cold: Tool execution,4.771
+task-breakdown,hermes,mb-cpu,native,cold: Harness logic,10.334
+task-breakdown,hermes,mb-cpu,native,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-cpu,native,warm: Harness start,0.0
+task-breakdown,hermes,mb-cpu,native,warm: Model (replayed),2.716
+task-breakdown,hermes,mb-cpu,native,warm: Tool execution,3.983
+task-breakdown,hermes,mb-cpu,native,warm: Harness logic,0.372
+task-breakdown,hermes,mb-cpu,native,after: Collect artifacts,0.0
+task-breakdown,hermes,mb-cpu,native,"after: Stop harness, revoke bridge access",0.0
+task-breakdown,hermes,mb-cpu,native,after: Evaluate,0.478
+task-breakdown,hermes,mb-cpu,native,after: Clean up,0.458
+task-breakdown,hermes,mb-cpu,k8s,"cold: Sandbox, bridge and harness container",2.289
+task-breakdown,hermes,mb-cpu,k8s,cold: Harness start,12.047
+task-breakdown,hermes,mb-cpu,k8s,cold: Model (replayed),2.656
+task-breakdown,hermes,mb-cpu,k8s,cold: Tool execution,5.133
+task-breakdown,hermes,mb-cpu,k8s,cold: Harness logic,9.655
+task-breakdown,hermes,mb-cpu,k8s,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-cpu,k8s,warm: Harness start,0.0
+task-breakdown,hermes,mb-cpu,k8s,warm: Model (replayed),2.716
+task-breakdown,hermes,mb-cpu,k8s,warm: Tool execution,4.856
+task-breakdown,hermes,mb-cpu,k8s,warm: Harness logic,0.428
+task-breakdown,hermes,mb-cpu,k8s,after: Collect artifacts,3.064
+task-breakdown,hermes,mb-cpu,k8s,"after: Stop harness, revoke bridge access",1.779
+task-breakdown,hermes,mb-cpu,k8s,after: Evaluate,1.666
+task-breakdown,hermes,mb-cpu,k8s,after: Clean up,3.416
+task-breakdown,openclaw,mb-cpu,docker,"cold: Sandbox, bridge and harness container",0.102
+task-breakdown,openclaw,mb-cpu,docker,cold: Harness start,56.338
+task-breakdown,openclaw,mb-cpu,docker,cold: Model (replayed),4.901
+task-breakdown,openclaw,mb-cpu,docker,cold: Tool execution,4.617
+task-breakdown,openclaw,mb-cpu,docker,cold: Harness logic,3.423
+task-breakdown,openclaw,mb-cpu,docker,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-cpu,docker,warm: Harness start,0.0
+task-breakdown,openclaw,mb-cpu,docker,warm: Model (replayed),3.856
+task-breakdown,openclaw,mb-cpu,docker,warm: Tool execution,4.36
+task-breakdown,openclaw,mb-cpu,docker,warm: Harness logic,2.001
+task-breakdown,openclaw,mb-cpu,docker,after: Collect artifacts,0.02
+task-breakdown,openclaw,mb-cpu,docker,"after: Stop harness, revoke bridge access",1.648
+task-breakdown,openclaw,mb-cpu,docker,after: Evaluate,0.334
+task-breakdown,openclaw,mb-cpu,docker,after: Clean up,0.177
+task-breakdown,openclaw,mb-cpu,native,"cold: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-cpu,native,cold: Harness start,51.613
+task-breakdown,openclaw,mb-cpu,native,cold: Model (replayed),4.901
+task-breakdown,openclaw,mb-cpu,native,cold: Tool execution,4.327
+task-breakdown,openclaw,mb-cpu,native,cold: Harness logic,5.348
+task-breakdown,openclaw,mb-cpu,native,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-cpu,native,warm: Harness start,0.0
+task-breakdown,openclaw,mb-cpu,native,warm: Model (replayed),3.856
+task-breakdown,openclaw,mb-cpu,native,warm: Tool execution,3.976
+task-breakdown,openclaw,mb-cpu,native,warm: Harness logic,2.777
+task-breakdown,openclaw,mb-cpu,native,after: Collect artifacts,0.0
+task-breakdown,openclaw,mb-cpu,native,"after: Stop harness, revoke bridge access",0.0
+task-breakdown,openclaw,mb-cpu,native,after: Evaluate,0.347
+task-breakdown,openclaw,mb-cpu,native,after: Clean up,0.358
+task-breakdown,openclaw,mb-cpu,k8s,"cold: Sandbox, bridge and harness container",3.235
+task-breakdown,openclaw,mb-cpu,k8s,cold: Harness start,53.039
+task-breakdown,openclaw,mb-cpu,k8s,cold: Model (replayed),4.901
+task-breakdown,openclaw,mb-cpu,k8s,cold: Tool execution,5.009
+task-breakdown,openclaw,mb-cpu,k8s,cold: Harness logic,3.605
+task-breakdown,openclaw,mb-cpu,k8s,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-cpu,k8s,warm: Harness start,0.0
+task-breakdown,openclaw,mb-cpu,k8s,warm: Model (replayed),3.856
+task-breakdown,openclaw,mb-cpu,k8s,warm: Tool execution,4.618
+task-breakdown,openclaw,mb-cpu,k8s,warm: Harness logic,2.115
+task-breakdown,openclaw,mb-cpu,k8s,after: Collect artifacts,0.579
+task-breakdown,openclaw,mb-cpu,k8s,"after: Stop harness, revoke bridge access",3.075
+task-breakdown,openclaw,mb-cpu,k8s,after: Evaluate,1.652
+task-breakdown,openclaw,mb-cpu,k8s,after: Clean up,3.281
+task-tool-calls,hermes,mb-cpu,docker,"cold: Through ARIES, not split: the bridge also ran the harness's set-up (ms)",4549.9
+task-tool-calls,hermes,mb-cpu,docker,warm: Bridge running its commands (ms),4156.6
+task-tool-calls,hermes,mb-cpu,docker,"warm: Transport: harness, bridge and sandbox (ms)",411.2
+task-tool-calls,hermes,mb-cpu,native,cold: Native call (no bridge) (ms),4771.3
+task-tool-calls,hermes,mb-cpu,native,warm: Native call (no bridge) (ms),3983.4
+task-tool-calls,hermes,mb-cpu,k8s,"cold: Through ARIES, not split: the bridge also ran the harness's set-up (ms)",5133.3
+task-tool-calls,hermes,mb-cpu,k8s,warm: Bridge running its commands (ms),4464.6
+task-tool-calls,hermes,mb-cpu,k8s,"warm: Transport: harness, bridge and sandbox (ms)",391.2
+task-tool-calls,openclaw,mb-cpu,docker,cold: Bridge running its commands (ms),3936.8
+task-tool-calls,openclaw,mb-cpu,docker,"cold: Transport: harness, bridge and sandbox (ms)",679.8
+task-tool-calls,openclaw,mb-cpu,docker,warm: Bridge running its commands (ms),4007.0
+task-tool-calls,openclaw,mb-cpu,docker,"warm: Transport: harness, bridge and sandbox (ms)",352.8
+task-tool-calls,openclaw,mb-cpu,native,cold: Native call (no bridge) (ms),4327.4
+task-tool-calls,openclaw,mb-cpu,native,warm: Native call (no bridge) (ms),3975.8
+task-tool-calls,openclaw,mb-cpu,k8s,cold: Bridge running its commands (ms),4323.4
+task-tool-calls,openclaw,mb-cpu,k8s,"cold: Transport: harness, bridge and sandbox (ms)",685.4
+task-tool-calls,openclaw,mb-cpu,k8s,warm: Bridge running its commands (ms),4309.0
+task-tool-calls,openclaw,mb-cpu,k8s,"warm: Transport: harness, bridge and sandbox (ms)",309.2
+task-breakdown,hermes,mb-output,docker,"cold: Sandbox, bridge and harness container",0.044
+task-breakdown,hermes,mb-output,docker,cold: Harness start,10.293
+task-breakdown,hermes,mb-output,docker,cold: Model (replayed),2.326
+task-breakdown,hermes,mb-output,docker,cold: Tool execution,0.882
+task-breakdown,hermes,mb-output,docker,cold: Harness logic,9.867
+task-breakdown,hermes,mb-output,docker,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-output,docker,warm: Harness start,0.0
+task-breakdown,hermes,mb-output,docker,warm: Model (replayed),2.391
+task-breakdown,hermes,mb-output,docker,warm: Tool execution,0.775
+task-breakdown,hermes,mb-output,docker,warm: Harness logic,0.39
+task-breakdown,hermes,mb-output,docker,after: Collect artifacts,2.755
+task-breakdown,hermes,mb-output,docker,"after: Stop harness, revoke bridge access",0.563
+task-breakdown,hermes,mb-output,docker,after: Evaluate,0.331
+task-breakdown,hermes,mb-output,docker,after: Clean up,0.193
+task-breakdown,hermes,mb-output,native,"cold: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-output,native,cold: Harness start,10.804
+task-breakdown,hermes,mb-output,native,cold: Model (replayed),2.326
+task-breakdown,hermes,mb-output,native,cold: Tool execution,1.003
+task-breakdown,hermes,mb-output,native,cold: Harness logic,10.335
+task-breakdown,hermes,mb-output,native,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-output,native,warm: Harness start,0.0
+task-breakdown,hermes,mb-output,native,warm: Model (replayed),2.391
+task-breakdown,hermes,mb-output,native,warm: Tool execution,0.192
+task-breakdown,hermes,mb-output,native,warm: Harness logic,0.395
+task-breakdown,hermes,mb-output,native,after: Collect artifacts,0.0
+task-breakdown,hermes,mb-output,native,"after: Stop harness, revoke bridge access",0.0
+task-breakdown,hermes,mb-output,native,after: Evaluate,0.477
+task-breakdown,hermes,mb-output,native,after: Clean up,0.481
+task-breakdown,hermes,mb-output,k8s,"cold: Sandbox, bridge and harness container",2.414
+task-breakdown,hermes,mb-output,k8s,cold: Harness start,12.011
+task-breakdown,hermes,mb-output,k8s,cold: Model (replayed),2.325
+task-breakdown,hermes,mb-output,k8s,cold: Tool execution,1.233
+task-breakdown,hermes,mb-output,k8s,cold: Harness logic,9.72
+task-breakdown,hermes,mb-output,k8s,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-output,k8s,warm: Harness start,0.0
+task-breakdown,hermes,mb-output,k8s,warm: Model (replayed),2.392
+task-breakdown,hermes,mb-output,k8s,warm: Tool execution,1.155
+task-breakdown,hermes,mb-output,k8s,warm: Harness logic,0.379
+task-breakdown,hermes,mb-output,k8s,after: Collect artifacts,3.051
+task-breakdown,hermes,mb-output,k8s,"after: Stop harness, revoke bridge access",1.849
+task-breakdown,hermes,mb-output,k8s,after: Evaluate,1.66
+task-breakdown,hermes,mb-output,k8s,after: Clean up,3.361
+task-breakdown,openclaw,mb-output,docker,"cold: Sandbox, bridge and harness container",0.097
+task-breakdown,openclaw,mb-output,docker,cold: Harness start,56.79
+task-breakdown,openclaw,mb-output,docker,cold: Model (replayed),2.965
+task-breakdown,openclaw,mb-output,docker,cold: Tool execution,1.145
+task-breakdown,openclaw,mb-output,docker,cold: Harness logic,3.504
+task-breakdown,openclaw,mb-output,docker,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-output,docker,warm: Harness start,0.0
+task-breakdown,openclaw,mb-output,docker,warm: Model (replayed),3.081
+task-breakdown,openclaw,mb-output,docker,warm: Tool execution,0.737
+task-breakdown,openclaw,mb-output,docker,warm: Harness logic,1.728
+task-breakdown,openclaw,mb-output,docker,after: Collect artifacts,0.021
+task-breakdown,openclaw,mb-output,docker,"after: Stop harness, revoke bridge access",1.501
+task-breakdown,openclaw,mb-output,docker,after: Evaluate,0.336
+task-breakdown,openclaw,mb-output,docker,after: Clean up,0.184
+task-breakdown,openclaw,mb-output,native,"cold: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-output,native,cold: Harness start,51.208
+task-breakdown,openclaw,mb-output,native,cold: Model (replayed),2.965
+task-breakdown,openclaw,mb-output,native,cold: Tool execution,0.795
+task-breakdown,openclaw,mb-output,native,cold: Harness logic,4.943
+task-breakdown,openclaw,mb-output,native,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-output,native,warm: Harness start,0.0
+task-breakdown,openclaw,mb-output,native,warm: Model (replayed),3.08
+task-breakdown,openclaw,mb-output,native,warm: Tool execution,0.433
+task-breakdown,openclaw,mb-output,native,warm: Harness logic,2.238
+task-breakdown,openclaw,mb-output,native,after: Collect artifacts,0.0
+task-breakdown,openclaw,mb-output,native,"after: Stop harness, revoke bridge access",0.0
+task-breakdown,openclaw,mb-output,native,after: Evaluate,0.34
+task-breakdown,openclaw,mb-output,native,after: Clean up,0.418
+task-breakdown,openclaw,mb-output,k8s,"cold: Sandbox, bridge and harness container",3.417
+task-breakdown,openclaw,mb-output,k8s,cold: Harness start,53.896
+task-breakdown,openclaw,mb-output,k8s,cold: Model (replayed),2.965
+task-breakdown,openclaw,mb-output,k8s,cold: Tool execution,1.472
+task-breakdown,openclaw,mb-output,k8s,cold: Harness logic,2.921
+task-breakdown,openclaw,mb-output,k8s,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-output,k8s,warm: Harness start,0.0
+task-breakdown,openclaw,mb-output,k8s,warm: Model (replayed),3.081
+task-breakdown,openclaw,mb-output,k8s,warm: Tool execution,1.06
+task-breakdown,openclaw,mb-output,k8s,warm: Harness logic,1.848
+task-breakdown,openclaw,mb-output,k8s,after: Collect artifacts,0.567
+task-breakdown,openclaw,mb-output,k8s,"after: Stop harness, revoke bridge access",2.954
+task-breakdown,openclaw,mb-output,k8s,after: Evaluate,1.648
+task-breakdown,openclaw,mb-output,k8s,after: Clean up,3.282
+task-tool-calls,hermes,mb-output,docker,"cold: Through ARIES, not split: the bridge also ran the harness's set-up (ms)",882.4
+task-tool-calls,hermes,mb-output,docker,warm: Bridge running its commands (ms),429.2
+task-tool-calls,hermes,mb-output,docker,"warm: Transport: harness, bridge and sandbox (ms)",346.2
+task-tool-calls,hermes,mb-output,native,cold: Native call (no bridge) (ms),1002.7
+task-tool-calls,hermes,mb-output,native,warm: Native call (no bridge) (ms),191.7
+task-tool-calls,hermes,mb-output,k8s,"cold: Through ARIES, not split: the bridge also ran the harness's set-up (ms)",1232.7
+task-tool-calls,hermes,mb-output,k8s,warm: Bridge running its commands (ms),847.8
+task-tool-calls,hermes,mb-output,k8s,"warm: Transport: harness, bridge and sandbox (ms)",307.1

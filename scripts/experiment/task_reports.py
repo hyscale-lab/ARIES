@@ -34,12 +34,26 @@ def per_call(row, measure, total, calls):
     return seconds * 1000 / count if count and seconds is not None else None
 
 
+def split_known(row, measure):
+    """Whether every command the bridge ran belongs to an agent tool call.
+    A cold run that ran more commands than its warm run also ran the
+    harness's own set-up through the bridge, such as Hermes's first-use
+    checks, so its bridge time cannot be divided over the agent's calls."""
+    if measure != "cold" or row.get("warm_tool_calls") is None:
+        return True
+    return (row.get("cold_tool_calls") or 0) <= row["warm_tool_calls"]
+
+
+def bridge_per_call(row, measure):
+    return per_call(row, measure, "tool_s", "harness_tool_calls") if split_known(row, measure) else None
+
+
 def transport(row, measure):
     """Per agent tool call, the harness-timed execution beyond the time the
     bridge spent running commands for it: the round trips between harness,
     bridge and sandbox."""
     harness = per_call(row, measure, "tool_exec_s", "harness_tool_calls")
-    bridge = per_call(row, measure, "tool_s", "harness_tool_calls")
+    bridge = bridge_per_call(row, measure)
     return harness - bridge if harness is not None and bridge is not None else None
 
 
@@ -56,7 +70,7 @@ DERIVED = {
 for _measure in ("cold", "warm"):
     DERIVED[_measure + "_harness_overhead_s"] = lambda r, m=_measure: overhead(r, m)
     DERIVED[_measure + "_harness_ms_per_call"] = lambda r, m=_measure: per_call(r, m, "tool_exec_s", "harness_tool_calls")
-    DERIVED[_measure + "_bridge_ms_per_call"] = lambda r, m=_measure: per_call(r, m, "tool_s", "harness_tool_calls")
+    DERIVED[_measure + "_bridge_ms_per_call"] = lambda r, m=_measure: bridge_per_call(r, m)
     DERIVED[_measure + "_transport_ms_per_call"] = lambda r, m=_measure: transport(r, m)
 
 # (key, label, unit); a None key starts a group, with the label as its name.
@@ -179,6 +193,18 @@ def repetitions(rows_by_setup, warm):
     return out
 
 
+def figures(campaign, task):
+    """Links the task's figures that scripts/microbench/plot_coldwarm.py drew."""
+    out = []
+    for name, title, alt in (
+            ("breakdown", "Time breakdown", "Cold and warm stages, and what follows the answer, per setup"),
+            ("tool-calls", "Cost of a tool call", "Each agent tool call: the bridge's commands and the transport")):
+        path = "figures/tasks/%s-%s.png" % (task, name)
+        if os.path.exists(os.path.join(campaign, path)):
+            out += ["### %s" % title, "", "![%s](../%s)" % (alt, path), ""]
+    return (["## Figures", "", "PDFs are beside the PNGs in `../figures/tasks/`.", ""] + out) if out else []
+
+
 def write(campaign, tasks, spec, descriptions):
     """Writes tasks/<task>.md for every task and returns their paths,
     relative to the campaign."""
@@ -209,8 +235,11 @@ def write(campaign, tasks, spec, descriptions):
                 "- **Tool calls:** the bridge runs more commands than the agent makes calls, because the harness "
                 "also runs its own, such as OpenClaw's workspace sync, so its time is divided by the agent's calls. "
                 "**Transport** is the harness-timed time per call minus the bridge's: the round trips between "
-                "harness, bridge and sandbox. Native runs have no bridge.",
+                "harness, bridge and sandbox. Native runs have no bridge. A cold run that ran more bridge commands "
+                "than its warm run also ran the harness's own set-up through the bridge, outside any agent call, so "
+                "its bridge share and transport are left out (–).",
                 ""]
+        out += figures(campaign, task)
         for harness, label in HARNESSES:
             rows = [row for row in mine if row["harness"] == harness]
             if not rows:

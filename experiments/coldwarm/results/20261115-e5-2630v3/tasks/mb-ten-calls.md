@@ -9,7 +9,19 @@ Means ± standard deviation over the valid runs, in seconds unless marked; the l
 - **Start-up:** the phases before the first request. The harness starts while the sandbox starts, so the *alongside* phases overlap the harness start, and start-up is less than their sum.
 - **Run:** model time is how long a request offering tools was open. Tool execution is timed by the harness, the same way in every setup: Hermes's tool spans, or OpenClaw's session log from the tool-calling reply to the tool's result. Harness logic is the rest of the run: the harness's own work.
 - **Harness overhead:** the harness's own time, beside the model and the tools. Cold, it is the harness start plus the cold run's harness logic; warm, the warm run's harness logic.
-- **Tool calls:** the bridge runs more commands than the agent makes calls, because the harness also runs its own, such as OpenClaw's workspace sync, so its time is divided by the agent's calls. **Transport** is the harness-timed time per call minus the bridge's: the round trips between harness, bridge and sandbox. Native runs have no bridge.
+- **Tool calls:** the bridge runs more commands than the agent makes calls, because the harness also runs its own, such as OpenClaw's workspace sync, so its time is divided by the agent's calls. **Transport** is the harness-timed time per call minus the bridge's: the round trips between harness, bridge and sandbox. Native runs have no bridge. A cold run that ran more bridge commands than its warm run also ran the harness's own set-up through the bridge, outside any agent call, so its bridge share and transport are left out (–).
+
+## Figures
+
+PDFs are beside the PNGs in `../figures/tasks/`.
+
+### Time breakdown
+
+![Cold and warm stages, and what follows the answer, per setup](../figures/tasks/mb-ten-calls-breakdown.png)
+
+### Cost of a tool call
+
+![Each agent tool call: the bridge's commands and the transport](../figures/tasks/mb-ten-calls-tool-calls.png)
 
 ## OpenClaw
 
@@ -124,8 +136,6 @@ Runs: Native 5, ARIES Docker 5, ARIES K8s 5.
 | Agent tool calls | 10.0 ± 0.0 | 10.0 ± 0.0 | 10.0 ± 0.0 | +0.0 | +0.0 |
 | Commands the bridge ran for them | – | 64.0 ± 0.0 | 64.0 ± 0.0 | – | – |
 | Per call, as the harness timed it | 251 ± 4 | 323 ± 3 | 434 ± 6 | +71 | +182 |
-| Per call, the bridge running its commands | – | 184 ± 2 | 366 ± 2 | – | – |
-| Per call, transport between harness and sandbox | – | 139 ± 4 | 68 ± 7 | – | – |
 | ***Tool calls, warm run*** | | | | | |
 | Agent tool calls | 10.0 ± 0.0 | 10.0 ± 0.0 | 10.0 ± 0.0 | +0.0 | +0.0 |
 | Commands the bridge ran for them | – | 50.0 ± 0.0 | 50.0 ± 0.0 | – | – |

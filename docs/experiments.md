@@ -17,6 +17,7 @@ experiments/<experiment>/              one experiment
     report.md                          generated, high level: setup, stages, figures, results, overhead, notes
     tasks/<task>.md                    generated, fine grained: every phase, overhead, tool calls, resources
     figures/                           generated PNG, PDF and figures.csv
+    figures/tasks/                     generated per-task figures, shown in tasks/<task>.md
     analysis/                          generated tasks.csv and analysis.md
     runs/<harness>/<setup>/<rep>/      raw runs with their request logs (ignored)
     recordings/                        model recordings and their decoded reports (ignored)
@@ -155,7 +156,10 @@ For warm experiments, it then draws the figures with
   from `###` down, never in `report.md`.
 
 `tasks/<task>.md` holds one task's fine-grained metrics for each harness, as
-mean ± standard deviation with each ARIES setup's difference from native:
+mean ± standard deviation with each ARIES setup's difference from native.
+It opens with two figures from `figures/tasks/`: the task's cold and warm
+stages with what follows the answer, and, when the agent called tools, the
+cost of one call split into the bridge's commands and the transport. Then:
 
 - every start-up phase;
 - the cold and warm runs split into model, tool execution and harness logic;
