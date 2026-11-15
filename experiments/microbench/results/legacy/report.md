@@ -1,6 +1,6 @@
 # Tool sandbox comparison: microbenchmark results
 
-*Legacy result: written by hand before experiments were run with `scripts/experiment/`. Its runs, recordings and per-run analysis were not kept in this layout. The cold and warm experiment that followed is `results/coldwarm/20261102-e5-2640v4/`.*
+*Legacy result: written by hand before experiments were run with `scripts/experiment/`. Its runs, recordings and per-run analysis were not kept in this layout. The cold and warm experiment that followed is `experiments/coldwarm/results/20261102-e5-2640v4/`.*
 
 ## Setup
 

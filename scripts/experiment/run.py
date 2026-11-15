@@ -2,18 +2,19 @@
 """Runs an experiment campaign on a cluster and copies its results back.
 
     python3 scripts/experiment/run.py start experiments/coldwarm [--campaign NAME]
-        [--cluster k8s/cluster.json] [--recordings-from results/coldwarm/OLD]
+        [--cluster k8s/cluster.json] [--recordings-from experiments/coldwarm/results/OLD]
         [--prometheus URL] [--allow-dirty] [--dry-run]
-    python3 scripts/experiment/run.py status  results/coldwarm/NAME
-    python3 scripts/experiment/run.py collect results/coldwarm/NAME [--watch SECONDS]
-    python3 scripts/experiment/run.py resume  results/coldwarm/NAME [--prepare]
-    python3 scripts/experiment/run.py stop    results/coldwarm/NAME
-    python3 scripts/experiment/run.py mark    results/coldwarm/NAME RUN --status STATUS --reason TEXT
+    python3 scripts/experiment/run.py status  experiments/coldwarm/results/NAME
+    python3 scripts/experiment/run.py collect experiments/coldwarm/results/NAME [--watch SECONDS]
+    python3 scripts/experiment/run.py resume  experiments/coldwarm/results/NAME [--prepare]
+    python3 scripts/experiment/run.py stop    experiments/coldwarm/results/NAME
+    python3 scripts/experiment/run.py mark    experiments/coldwarm/results/NAME RUN --status STATUS --reason TEXT
 
 An experiment is a directory under experiments/ whose experiment.json names
 the harnesses, setups (docker, k8s, native), tasks, repetitions and whether
 each task also runs warm. A campaign is one execution of it, in
-results/<experiment>/<campaign>/ (docs/experiments.md describes the layout).
+experiments/<experiment>/results/<campaign>/, beside the spec (docs/experiments.md
+describes the layout).
 
 start runs on this machine. It ships the committed tree to the cluster's
 workers (from k8s/cluster.json) with the tasks packed here, builds ARIES there, and
@@ -96,6 +97,7 @@ def load_spec(path):
     if spec["record"].get("backend", "docker") != "docker":
         fail("record.backend must be docker")
     spec["_path"] = os.path.relpath(path, ROOT)
+    spec["_dir"] = os.path.dirname(os.path.abspath(path))
     return spec
 
 
@@ -419,7 +421,7 @@ def cmd_start(args):
     if dirty and not args.allow_dirty and not args.dry_run:
         fail("the working tree has uncommitted changes, which the nodes would not get; commit them or pass --allow-dirty")
     campaign = args.campaign or datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M")
-    directory = os.path.join(ROOT, "results", spec["name"], campaign)
+    directory = os.path.join(spec["_dir"], "results", campaign)
     if os.path.exists(directory) and not args.dry_run:
         fail("%s exists; use resume, or another --campaign" % os.path.relpath(directory, ROOT))
     recordings = {}

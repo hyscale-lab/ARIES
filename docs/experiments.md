@@ -5,22 +5,22 @@ An **experiment** is a measurement defined once and run many times. A
 provenance, its runs, its analysis and its report together.
 
 ```text
-experiments/<experiment>/          what to measure (committed)
-  experiment.json                  harnesses, setups, tasks, repetitions, warm
-  README.md                        purpose and how to run it
-results/<experiment>/<campaign>/   one execution
-  meta.json                        commits, bridge image, nodes and hardware, recordings, times
-  experiment.json                  the spec as it was run
-  manifest.tsv                     every run, with status and reason
-  marks.tsv                        status changes made by hand (run.py mark)
-  notes.md                         interpretation, written by hand
-  report.md                        generated: setup, counts, figures, stage tables, notes
-  figures/                         generated PNG, PDF and figures.csv
-  analysis/                        generated tasks.csv and analysis.md
-  runs/<harness>/<setup>/<rep>/    raw runs with their request logs (ignored)
-  recordings/                      model recordings and their decoded reports (ignored)
-  logs/                            chain scripts, chain and step logs, worker manifests (ignored)
-  state.json                       SSH targets for this campaign (ignored)
+experiments/<experiment>/              one experiment
+  experiment.json                      what to measure: harnesses, setups, tasks, repetitions, warm
+  README.md                            purpose and how to run it
+  results/<campaign>/                  one execution
+    meta.json                          commits, bridge image, nodes and hardware, recordings, times
+    experiment.json                    the spec as it was run
+    manifest.tsv                       every run, with status and reason
+    marks.tsv                          status changes made by hand (run.py mark)
+    notes.md                           interpretation, written by hand
+    report.md                          generated: setup, counts, figures, stage tables, notes
+    figures/                           generated PNG, PDF and figures.csv
+    analysis/                          generated tasks.csv and analysis.md
+    runs/<harness>/<setup>/<rep>/      raw runs with their request logs (ignored)
+    recordings/                        model recordings and their decoded reports (ignored)
+    logs/                              chain scripts, chain and step logs, worker manifests (ignored)
+    state.json                         SSH targets for this campaign (ignored)
 ```
 
 Git tracks the spec, `meta.json`, the manifest, the marks, the notes, the
@@ -38,9 +38,9 @@ You need a cluster built by `k8s/create-cluster.sh` and described in
 ```sh
 python3 scripts/experiment/run.py start experiments/coldwarm --dry-run
 python3 scripts/experiment/run.py start experiments/coldwarm --campaign 20261115-e5-2630v3
-python3 scripts/experiment/run.py status results/coldwarm/20261115-e5-2630v3
-python3 scripts/experiment/run.py collect results/coldwarm/20261115-e5-2630v3 --watch 300
-python3 scripts/experiment/report.py results/coldwarm/20261115-e5-2630v3
+python3 scripts/experiment/run.py status experiments/coldwarm/results/20261115-e5-2630v3
+python3 scripts/experiment/run.py collect experiments/coldwarm/results/20261115-e5-2630v3 --watch 300
+python3 scripts/experiment/report.py experiments/coldwarm/results/20261115-e5-2630v3
 ```
 
 `start` does the following:
@@ -92,7 +92,7 @@ their harness configuration from an ARIES Docker replay.
   collects:
 
   ```sh
-  python3 scripts/experiment/run.py mark results/coldwarm/20261115-e5-2630v3 \
+  python3 scripts/experiment/run.py mark experiments/coldwarm/results/20261115-e5-2630v3 \
     runs/hermes/k8s/2 --status superseded --reason "cAdvisor pod restarted mid-run"
   ```
 
@@ -126,7 +126,7 @@ recordings:
 
 ```sh
 python3 scripts/experiment/run.py start experiments/coldwarm \
-  --recordings-from results/coldwarm/20261102-e5-2640v4
+  --recordings-from experiments/coldwarm/results/20261102-e5-2640v4
 ```
 
 `meta.json` keeps each recording's SHA-256, so the reports show whether two
@@ -134,11 +134,11 @@ campaigns replayed the same model output.
 
 ## Existing results
 
-- [`results/coldwarm/20261102-e5-2640v4`](../results/coldwarm/20261102-e5-2640v4/report.md):
+- [`experiments/coldwarm/results/20261102-e5-2640v4`](../experiments/coldwarm/results/20261102-e5-2640v4/report.md):
   the first cold and warm campaign (Xeon E5-2640 v4, Kubernetes 1.34 on an
   Invitro-built cluster). It was migrated into this layout after the fact, so
   its `meta.json` was reconstructed and names the commits of each part.
-- [`results/microbench/legacy`](../results/microbench/legacy/report.md): the
+- [`experiments/microbench/results/legacy`](../experiments/microbench/results/legacy/report.md): the
   first comparison, written by hand before this layout existed. Only its
   report and figures are kept.
 

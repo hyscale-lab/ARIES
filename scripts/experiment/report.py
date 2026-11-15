@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Analyses a campaign's valid runs and writes its report.
 
-    python3 scripts/experiment/report.py results/coldwarm/NAME [--no-plots]
+    python3 scripts/experiment/report.py experiments/coldwarm/results/NAME [--no-plots]
 
 Reads the campaign's manifest.tsv (scripts/experiment/run.py), keeps the runs
 whose status is valid, and writes:

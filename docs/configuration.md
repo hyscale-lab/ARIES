@@ -102,7 +102,7 @@ fails when a task changes without the pin. That file is otherwise a copy of
 
 Measurements are run as experiment campaigns with `scripts/experiment/run.py`.
 It drives the tools below on every worker, keeps each campaign's runs,
-provenance and report under `results/`, and lets you resume and mark runs (see
+provenance and report in `experiments/<experiment>/results/`, and lets you resume and mark runs (see
 [experiments](experiments.md)). The rest of this section describes those tools,
 which you can also run by hand on one node.
 

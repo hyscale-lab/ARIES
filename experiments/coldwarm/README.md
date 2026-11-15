@@ -18,11 +18,11 @@ both measurements. Each harness and the sandbox get 2 CPUs and 4 GiB
 
 ```sh
 python3 scripts/experiment/run.py start experiments/coldwarm --campaign <date>-<hardware>
-python3 scripts/experiment/run.py collect results/coldwarm/<campaign> --watch 300
-python3 scripts/experiment/report.py results/coldwarm/<campaign>
+python3 scripts/experiment/run.py collect experiments/coldwarm/results/<campaign> --watch 300
+python3 scripts/experiment/report.py experiments/coldwarm/results/<campaign>
 ```
 
 On a cluster with two workers, the two harnesses run in parallel. Each takes
 about two hours for 5 repetitions. See [docs/experiments.md](../../docs/experiments.md)
 for the campaign layout, resuming and marking runs. Campaigns are in
-`results/coldwarm/`.
+[`results/`](results/).

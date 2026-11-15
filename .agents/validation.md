@@ -16,12 +16,13 @@
   confirmed isolation, task cleanup/errors, and shared infrastructure observation
   and cleanup/errors. Exit status alone is insufficient.
 - Run tool-sandbox measurements as campaigns: `scripts/experiment/run.py` with an
-  `experiments/<name>/experiment.json` spec, writing to `results/<experiment>/<campaign>/`.
-  Commit the spec, `meta.json`, `manifest.tsv`, `marks.tsv`, `notes.md`, `report.md`,
-  `figures/` and `analysis/`; keep `runs/`, `recordings/`, `logs/` and `state.json` ignored.
-  Regenerate `report.md` with `scripts/experiment/report.py` instead of editing it, and put
-  interpretation in `notes.md`. Exclude runs with `run.py mark` and a reason instead of
-  deleting them, and never mix campaigns.
+  `experiments/<name>/experiment.json` spec, writing to
+  `experiments/<name>/results/<campaign>/`. Commit the spec, `meta.json`, `manifest.tsv`,
+  `marks.tsv`, `notes.md`, `report.md`, `figures/` and `analysis/`; keep `runs/`,
+  `recordings/`, `logs/` and `state.json` ignored. Regenerate `report.md` with
+  `scripts/experiment/report.py` instead of editing it, and put interpretation in
+  `notes.md`. Exclude runs with `run.py mark` and a reason instead of deleting them,
+  and never mix campaigns.
 - After runtime work, check for leaked containers, networks, processes, listeners,
   and credential files. Scan private artifacts without printing secrets.
 - Keep credentials, datasets, and run artifacts ignored. Report actual evidence

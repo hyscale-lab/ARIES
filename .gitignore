@@ -31,11 +31,11 @@ go.work.sum
 # and analysis in Git (docs/experiments.md). Raw runs hold full agent
 # trajectories, recordings the model's replies, and logs and state.json the
 # nodes' SSH targets, so they stay local.
-results/*/*/runs/
-results/*/*/recordings/
-results/*/*/logs/
-results/*/*/state.json
-results/*/*/analysis/analyze-manifest.tsv
+experiments/*/results/*/runs/
+experiments/*/results/*/recordings/
+experiments/*/results/*/logs/
+experiments/*/results/*/state.json
+experiments/*/results/*/analysis/analyze-manifest.tsv
 
 # ARIES-local inputs and generated state
 .omx/
