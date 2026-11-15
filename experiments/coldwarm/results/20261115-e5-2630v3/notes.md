@@ -11,6 +11,43 @@ run recorded separately. Every replayed request was answered from its
 recording. Model time therefore matches across setups within this campaign,
 but not with the earlier campaign's recordings.
 
+### Cold and warm recordings
+
+Each harness has one recording that holds both runs. A request is keyed by
+its conversation, turn and offered tools, and the cold run made each key's
+first occurrence and the warm run its second. Hermes's background requests,
+which offer no tools, come twice per run, so they are occurrences 1–2 cold
+and 3–4 warm. The decoded `recordings/<harness>.md` labels every call.
+
+The two runs were separate calls to the live model, and the agent acted the
+same in both:
+- **Replies:** the answer text and tool calls are identical, except one
+  OpenClaw `mb-cpu` call that asked for a 300 s timeout cold and 120 s warm.
+  The command was the same, and no command came near either limit.
+- **Reasoning text** differs in 4 OpenClaw and 4 Hermes calls. The agents
+  never act on it.
+- **Requests** differ only in identifiers. OpenClaw's system prompt names the
+  session, which ARIES calls `…-warmup-1` for the cold pass. Hermes's later
+  turns carry earlier replies back, with their reasoning and tool-call IDs.
+- **Tokens:** the warm run hit DeepSeek's prompt cache a little more:
+
+  | | Cold prompt (cached) | Warm prompt (cached) | Cold output | Warm output |
+  |---|---|---|---|---|
+  | OpenClaw | 202.5k (169.5k) | 200.7k (175.2k) | 1,620 | 1,232 |
+  | Hermes | 122.1k (105.1k) | 123.3k (112.6k) | 755 | 853 |
+
+- **Timing:** the median time to the first chunk is 476 ms cold against 487 ms
+  warm for OpenClaw, and 408 against 420 ms for Hermes. Total streaming time
+  across every call is 26.3 against 25.9 s for OpenClaw, and 33.7 against
+  35.7 s for Hermes.
+
+Replay therefore gives cold and warm runs the same agent actions, so their
+tool execution and harness logic compare directly. Each replays its own
+recorded timing, so model time can differ by up to about 2 s per harness over
+all tasks. The reports keep model time separate for this reason.
+
+### Runs left out
+
 Three runs are kept but left out of the analysis:
 - **OpenClaw's first recording** failed because the harness did not report
   ready within ARIES's 45 s start deadline. The deadline was raised to 120 s
