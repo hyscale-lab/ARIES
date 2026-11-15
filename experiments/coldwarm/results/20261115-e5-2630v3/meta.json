@@ -1,0 +1,56 @@
+{
+  "experiment": "coldwarm",
+  "campaign": "20261115-e5-2630v3",
+  "spec": "experiments/coldwarm/experiment.json",
+  "aries_commit": "88279641d3bce1d4065752e73e53fd480dd6fb21",
+  "aries_dirty": false,
+  "bridge_revision": "ae286e55f01f",
+  "bridge_image": "aries-bridge:v1-ae286e55f01f",
+  "vhive_revision": "9826bb9c2af97d6478498df64879e8c30b21d31d",
+  "kubernetes_base_image": "alpine/k8s:1.35.3",
+  "prometheus": "http://10.98.10.44:9090",
+  "started_at": "2026-11-15T03:10:02Z",
+  "finished_at": "2026-11-15T05:30:24Z",
+  "recordings": {
+    "source": "recorded in this campaign",
+    "sha256": {
+      "hermes": "d21fee03969c1291ea88393143df38bf0adaa719342475c6fab8632e26b70796",
+      "openclaw": "cd8832d5087cc4883a56be869dc2a3b0382fd7cede2e3dcd622f0ba17e6ffd44"
+    }
+  },
+  "workers": {
+    "pc822": {
+      "hostname": "node-002",
+      "cpu": "Intel(R) Xeon(R) CPU E5-2630 v3 @ 2.40GHz",
+      "cpus": "16",
+      "memory_gib": "62.8",
+      "kernel": "6.8.0-149-generic",
+      "kubelet": "v1.35.3",
+      "docker": "29.8.2",
+      "smt": "off",
+      "turbo": "off",
+      "address": "10.0.1.3",
+      "harnesses": [
+        "openclaw"
+      ],
+      "aries_commit": "20aab7060d59480a6bed1185821ded9000acd37a"
+    },
+    "pc778": {
+      "hostname": "node-003",
+      "cpu": "Intel(R) Xeon(R) CPU E5-2630 v3 @ 2.40GHz",
+      "cpus": "16",
+      "memory_gib": "62.8",
+      "kernel": "6.8.0-149-generic",
+      "kubelet": "v1.35.3",
+      "docker": "29.8.2",
+      "smt": "off",
+      "turbo": "off",
+      "address": "10.0.1.4",
+      "harnesses": [
+        "hermes"
+      ],
+      "aries_commit": "88279641d3bce1d4065752e73e53fd480dd6fb21"
+    }
+  },
+  "note": "OpenClaw's first recording on pc822 failed: the harness did not report ready within the 45 s start deadline. pc822 was rebuilt at the commit that raises it to 120 s and OpenClaw recorded again; Hermes on pc778 ran throughout at the campaign's starting commit, where its 8 s start was within the deadline."
+}

@@ -630,8 +630,8 @@ def collect_once(directory, meta, state):
     meta["recordings"]["sha256"] = {os.path.basename(path)[:-len(".jsonl")]: checksum(path)
                                     for path in sorted(glob.glob(os.path.join(directory, "recordings", "*.jsonl")))}
     done = all(chain_finished(os.path.join(directory, "logs", label, "chain.log")) for label in state["workers"])
-    if done and not meta.get("finished_at"):
-        meta["finished_at"] = max((row["finished"] for row in rows if row.get("finished")), default=now())
+    # A rerun after the chains first finished moves the finish time on.
+    meta["finished_at"] = max((row["finished"] for row in rows if row.get("finished")), default=now()) if done else None
     write_json(campaign_paths(directory)["meta.json"], meta)
     counts = {}
     for row in rows:

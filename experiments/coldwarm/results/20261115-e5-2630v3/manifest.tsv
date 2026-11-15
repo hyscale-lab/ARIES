@@ -1,0 +1,36 @@
+harness	setup	repetition	mode	variant	status	reason	run_dir	requests	started	finished	worker
+openclaw	docker	record	record	warm-parallel	superseded	retried: aries exit 1	runs/openclaw/docker/record	runs/openclaw/docker/record/requests.jsonl	2026-11-15T03:10:51Z	2026-11-15T03:16:20Z	pc822
+hermes	docker	record	record	warm-parallel	valid		runs/hermes/docker/record	runs/hermes/docker/record/requests.jsonl	2026-11-15T03:10:55Z	2026-11-15T03:17:09Z	pc778
+hermes	docker	1	replay	warm-parallel	valid		runs/hermes/docker/1	runs/hermes/docker/1/requests.jsonl	2026-11-15T03:17:09Z	2026-11-15T03:20:17Z	pc778
+hermes	k8s	1	replay	warm-parallel	superseded	first Kubernetes pod on the node pulled the harness image (101 s); rerun with the image cached	runs/hermes/k8s/1	runs/hermes/k8s/1/requests.jsonl	2026-11-15T03:20:17Z	2026-11-15T03:26:45Z	pc778
+hermes	native	1	replay	warm-sequential	valid		runs/hermes/native/1	runs/hermes/native/1/requests.jsonl	2026-11-15T03:26:45Z	2026-11-15T03:30:02Z	pc778
+openclaw	docker	record	record	warm-parallel	valid		runs/openclaw/docker/record-2	runs/openclaw/docker/record-2/requests.jsonl	2026-11-15T03:28:42Z	2026-11-15T03:35:14Z	pc822
+hermes	docker	2	replay	warm-parallel	valid		runs/hermes/docker/2	runs/hermes/docker/2/requests.jsonl	2026-11-15T03:30:02Z	2026-11-15T03:33:12Z	pc778
+hermes	k8s	2	replay	warm-parallel	valid		runs/hermes/k8s/2	runs/hermes/k8s/2/requests.jsonl	2026-11-15T03:33:12Z	2026-11-15T03:37:26Z	pc778
+openclaw	docker	1	replay	warm-parallel	valid		runs/openclaw/docker/1	runs/openclaw/docker/1/requests.jsonl	2026-11-15T03:35:14Z	2026-11-15T03:41:47Z	pc822
+hermes	native	2	replay	warm-sequential	valid		runs/hermes/native/2	runs/hermes/native/2/requests.jsonl	2026-11-15T03:37:26Z	2026-11-15T03:40:43Z	pc778
+hermes	docker	3	replay	warm-parallel	valid		runs/hermes/docker/3	runs/hermes/docker/3/requests.jsonl	2026-11-15T03:40:43Z	2026-11-15T03:43:53Z	pc778
+openclaw	k8s	1	replay	warm-parallel	superseded	first Kubernetes pod on the node pulled the harness image (47 s); rerun with the image cached	runs/openclaw/k8s/1	runs/openclaw/k8s/1/requests.jsonl	2026-11-15T03:41:47Z	2026-11-15T03:50:42Z	pc822
+hermes	k8s	3	replay	warm-parallel	valid		runs/hermes/k8s/3	runs/hermes/k8s/3/requests.jsonl	2026-11-15T03:43:53Z	2026-11-15T03:48:06Z	pc778
+hermes	native	3	replay	warm-sequential	valid		runs/hermes/native/3	runs/hermes/native/3/requests.jsonl	2026-11-15T03:48:06Z	2026-11-15T03:51:20Z	pc778
+openclaw	native	1	replay	warm-sequential	valid		runs/openclaw/native/1	runs/openclaw/native/1/requests.jsonl	2026-11-15T03:50:43Z	2026-11-15T03:57:30Z	pc822
+hermes	docker	4	replay	warm-parallel	valid		runs/hermes/docker/4	runs/hermes/docker/4/requests.jsonl	2026-11-15T03:51:20Z	2026-11-15T03:54:29Z	pc778
+hermes	k8s	4	replay	warm-parallel	valid		runs/hermes/k8s/4	runs/hermes/k8s/4/requests.jsonl	2026-11-15T03:54:29Z	2026-11-15T03:58:45Z	pc778
+openclaw	docker	2	replay	warm-parallel	valid		runs/openclaw/docker/2	runs/openclaw/docker/2/requests.jsonl	2026-11-15T03:57:30Z	2026-11-15T04:04:06Z	pc822
+hermes	native	4	replay	warm-sequential	valid		runs/hermes/native/4	runs/hermes/native/4/requests.jsonl	2026-11-15T03:58:46Z	2026-11-15T04:02:00Z	pc778
+hermes	docker	5	replay	warm-parallel	valid		runs/hermes/docker/5	runs/hermes/docker/5/requests.jsonl	2026-11-15T04:02:00Z	2026-11-15T04:05:10Z	pc778
+openclaw	k8s	2	replay	warm-parallel	valid		runs/openclaw/k8s/2	runs/openclaw/k8s/2/requests.jsonl	2026-11-15T04:04:06Z	2026-11-15T04:11:31Z	pc822
+hermes	k8s	5	replay	warm-parallel	valid		runs/hermes/k8s/5	runs/hermes/k8s/5/requests.jsonl	2026-11-15T04:05:10Z	2026-11-15T04:09:25Z	pc778
+hermes	native	5	replay	warm-sequential	valid		runs/hermes/native/5	runs/hermes/native/5/requests.jsonl	2026-11-15T04:09:25Z	2026-11-15T04:12:42Z	pc778
+openclaw	native	2	replay	warm-sequential	valid		runs/openclaw/native/2	runs/openclaw/native/2/requests.jsonl	2026-11-15T04:11:31Z	2026-11-15T04:17:58Z	pc822
+openclaw	docker	3	replay	warm-parallel	valid		runs/openclaw/docker/3	runs/openclaw/docker/3/requests.jsonl	2026-11-15T04:17:58Z	2026-11-15T04:24:33Z	pc822
+openclaw	k8s	3	replay	warm-parallel	valid		runs/openclaw/k8s/3	runs/openclaw/k8s/3/requests.jsonl	2026-11-15T04:24:33Z	2026-11-15T04:31:59Z	pc822
+openclaw	native	3	replay	warm-sequential	valid		runs/openclaw/native/3	runs/openclaw/native/3/requests.jsonl	2026-11-15T04:31:59Z	2026-11-15T04:38:25Z	pc822
+openclaw	docker	4	replay	warm-parallel	valid		runs/openclaw/docker/4	runs/openclaw/docker/4/requests.jsonl	2026-11-15T04:38:25Z	2026-11-15T04:44:57Z	pc822
+openclaw	k8s	4	replay	warm-parallel	valid		runs/openclaw/k8s/4	runs/openclaw/k8s/4/requests.jsonl	2026-11-15T04:44:57Z	2026-11-15T04:52:23Z	pc822
+openclaw	native	4	replay	warm-sequential	valid		runs/openclaw/native/4	runs/openclaw/native/4/requests.jsonl	2026-11-15T04:52:23Z	2026-11-15T04:58:42Z	pc822
+hermes	k8s	1	replay	warm-parallel	valid		runs/hermes/k8s/1-2	runs/hermes/k8s/1-2/requests.jsonl	2026-11-15T04:52:33Z	2026-11-15T04:56:47Z	pc778
+openclaw	docker	5	replay	warm-parallel	valid		runs/openclaw/docker/5	runs/openclaw/docker/5/requests.jsonl	2026-11-15T04:58:42Z	2026-11-15T05:05:16Z	pc822
+openclaw	k8s	5	replay	warm-parallel	valid		runs/openclaw/k8s/5	runs/openclaw/k8s/5/requests.jsonl	2026-11-15T05:05:16Z	2026-11-15T05:12:42Z	pc822
+openclaw	native	5	replay	warm-sequential	valid		runs/openclaw/native/5	runs/openclaw/native/5/requests.jsonl	2026-11-15T05:12:42Z	2026-11-15T05:19:06Z	pc822
+openclaw	k8s	1	replay	warm-parallel	valid		runs/openclaw/k8s/1-2	runs/openclaw/k8s/1-2/requests.jsonl	2026-11-15T05:22:53Z	2026-11-15T05:30:24Z	pc822

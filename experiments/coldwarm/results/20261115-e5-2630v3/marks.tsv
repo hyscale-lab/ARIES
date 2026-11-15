@@ -1,0 +1,3 @@
+run_dir	status	reason	marked
+runs/hermes/k8s/1	superseded	first Kubernetes pod on the node pulled the harness image (101 s); rerun with the image cached	2026-11-15T04:52:23Z
+runs/openclaw/k8s/1	superseded	first Kubernetes pod on the node pulled the harness image (47 s); rerun with the image cached	2026-11-15T05:22:43Z
