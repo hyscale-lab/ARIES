@@ -181,11 +181,12 @@ def setup_section(meta, spec):
         out.append("| Note | %s |" % meta["note"])
     workers = meta.get("workers") or {}
     if workers:
-        out += ["", "| Worker | Harnesses | CPU | CPUs | Memory (GiB) | SMT | Turbo | Kernel | Kubelet | Docker |",
-                "|---|---|---|---|---|---|---|---|---|---|"]
+        out += ["", "| Worker | Harnesses | ARIES commit | CPU | CPUs | Memory (GiB) | SMT | Turbo | Kernel | Kubelet | Docker |",
+                "|---|---|---|---|---|---|---|---|---|---|---|"]
         for label, facts in sorted(workers.items()):
-            out.append("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |" % (
-                label, ", ".join(facts.get("harnesses", [])), facts.get("cpu", "?"), facts.get("cpus", "?"),
+            commit = facts.get("aries_commit") or meta.get("aries_commit") or "?"
+            out.append("| %s | %s | `%s` | %s | %s | %s | %s | %s | %s | %s | %s |" % (
+                label, ", ".join(facts.get("harnesses", [])), commit[:12], facts.get("cpu", "?"), facts.get("cpus", "?"),
                 facts.get("memory_gib", "?"), facts.get("smt", "?"), facts.get("turbo", "?"), facts.get("kernel", "?"),
                 facts.get("kubelet", "?"), facts.get("docker", "?")))
     return out

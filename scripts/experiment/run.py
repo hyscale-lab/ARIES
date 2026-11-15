@@ -520,7 +520,7 @@ def cmd_start(args):
             remote(state, target, "cat > ~/%s/logs/%s/chain.sh && chmod +x ~/%s/logs/%s/chain.sh" % (base, label, base, label),
                    data=chain.encode())
             worker.update({"node": node, "address": address})
-            meta["workers"][label] = dict(facts, address=address, harnesses=worker["harnesses"])
+            meta["workers"][label] = dict(facts, address=address, harnesses=worker["harnesses"], aries_commit=commit)
         except Exception as error:  # reported together below
             errors.append(str(error))
 
@@ -631,12 +631,28 @@ def cmd_collect(args):
 
 def cmd_resume(args):
     meta, state = open_campaign(args.campaign)
+    workers = {label: worker for label, worker in state["workers"].items() if not args.worker or label in args.worker}
+    if args.worker and set(args.worker) - set(workers):
+        fail("no worker %s; the campaign's workers are %s" % (", ".join(sorted(set(args.worker) - set(workers))),
+                                                             ", ".join(state["workers"])))
     if args.prepare:
+        if git("status", "--porcelain", "--untracked-files=no"):
+            fail("the working tree has uncommitted changes, which the nodes would not get; commit them first")
+        commit = git("rev-parse", "HEAD")
+        revision = subprocess.run([os.path.join(ROOT, "scripts", "bridge-revision.sh")], check=True,
+                                  stdout=subprocess.PIPE, cwd=ROOT).stdout.decode().strip()
+        if revision != meta["bridge_revision"]:
+            fail("this checkout's bridge revision is %s, but the campaign runs %s" % (revision, meta["bridge_revision"]))
         tasks = packed_tasks()
-        for label, worker in state["workers"].items():
+        for label, worker in workers.items():
+            print("==> %s: shipping %s and building" % (label, commit[:12]), flush=True)
             with open(os.path.join(args.campaign, "logs", label + "-prepare.log"), "a") as log:
-                prepare_worker(state, label, worker["target"], meta["bridge_revision"], tasks, log)
-    for label, worker in state["workers"].items():
+                prepare_worker(state, label, worker["target"], revision, tasks, log)
+            # A worker prepared again runs a later commit than the campaign
+            # started at; the report names it.
+            meta["workers"].setdefault(label, {})["aries_commit"] = commit
+        write_json(campaign_paths(args.campaign)["meta.json"], meta)
+    for label, worker in workers.items():
         base = remote_campaign(meta["experiment"], meta["campaign"])
         chain = os.path.join(args.campaign, "logs", label + "-chain.sh")
         if os.path.exists(chain):
@@ -704,6 +720,7 @@ def main():
             command.add_argument("--watch", type=int, default=0, metavar="SECONDS", help="repeat until every chain is done")
         if name == "resume":
             command.add_argument("--prepare", action="store_true", help="ship and build the tree again first")
+            command.add_argument("--worker", action="append", help="only this worker (repeatable)")
     mark = commands.add_parser("mark", help="set a run's status")
     mark.add_argument("campaign")
     mark.add_argument("run", help="the run's path in the campaign, such as runs/openclaw/docker/3")

@@ -22,8 +22,10 @@ import (
 
 const (
 	DefaultCleanupTimeout = 30 * time.Second
-	DefaultStartTimeout   = 45 * time.Second
-	DefaultAgentTimeout   = 20 * time.Minute
+	// OpenClaw takes about 30 s to report ready on a 2.4 GHz Broadwell core
+	// with turbo off, and more than 45 s on Haswell; the deadline leaves room.
+	DefaultStartTimeout = 120 * time.Second
+	DefaultAgentTimeout = 20 * time.Minute
 )
 
 // RuntimeOptions contains only inputs common to all native harness managers.

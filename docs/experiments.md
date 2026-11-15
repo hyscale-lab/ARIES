@@ -102,7 +102,9 @@ their harness configuration from an ARIES Docker replay.
   and failed or interrupted steps run again. A retry is stored beside the
   first attempt, for example as `runs/openclaw/k8s/3-2`. When the retry is
   valid, `collect` marks the earlier attempt **superseded**.
-  `resume --prepare` ships and builds the tree again first.
+  `resume --prepare` ships and builds the tree again first. Add `--worker <name>`
+  to touch only that worker, leaving the others' running chains alone. A
+  re-prepared worker's commit is kept in `meta.json` and shown in the report.
 - **stop** terminates each chain's process group. ARIES cleans its
   sandboxes up on SIGTERM. The native baselines do not, so check for leftover
   containers after stopping one. Anything still running 90 seconds later is
