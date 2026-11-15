@@ -127,9 +127,15 @@ def harness_tool_seconds(task_dir, window):
 
 
 def harness_tool_calls(task_dir, window):
-    """Tool calls as the harness saw them, from OpenClaw's session log: each
-    tool result records how long the call took on the harness's side. The same
-    log exists with and without ARIES, so this compares all deployments alike."""
+    """The agent's tool calls as the harness saw them, in milliseconds: Hermes's
+    tool spans, or else each tool result in OpenClaw's session log, which
+    records how long the call took on the harness's side. The same records exist
+    with and without ARIES, so this compares all deployments alike."""
+    spans_path = os.path.join(task_dir, "harness", "telemetry", "otel-spans.jsonl")
+    if os.path.exists(spans_path):
+        return [(span["end_time_unix_nano"] - span["start_time_unix_nano"]) / 1e6
+                for span in read_jsonl(spans_path) if span.get("name", "").startswith("tool.")
+                and window[0] <= span["start_time_unix_nano"] / 1e9 <= window[1]]
     durations = []
     for path in glob.glob(os.path.join(task_dir, "harness", "telemetry", "*.jsonl")):
         if "trajectory" in os.path.basename(path):

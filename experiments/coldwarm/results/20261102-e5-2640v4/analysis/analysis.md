@@ -27,8 +27,8 @@ Means over replayed runs; times in seconds, CPU in percent of one core.
 | cleanup_s | 0.26 | 0.11 | 3.06 | +2.95 |
 | cold_tool_mean_ms |  | 143.74 | 164.85 | +21.11 |
 | warm_tool_mean_ms |  | 245.83 | 262.40 | +16.57 |
-| cold_harness_tool_mean_ms |  |  |  |  |
-| warm_harness_tool_mean_ms |  |  |  |  |
+| cold_harness_tool_mean_ms | 3889.24 | 4178.44 | 4425.09 | +246.65 |
+| warm_harness_tool_mean_ms | 3376.32 | 3686.79 | 3898.66 | +211.87 |
 | sandbox_cpu_mean | 27.44 | 26.73 | 21.85 | -4.88 |
 | sandbox_cpu_peak | 100.08 | 100.10 | 100.06 | -0.04 |
 | harness_cpu_peak | 155.62 | 158.26 | 156.41 | -1.85 |
@@ -95,8 +95,8 @@ Means over replayed runs; times in seconds, CPU in percent of one core.
 | cleanup_s | 0.26 | 0.11 | 3.06 | +2.95 |
 | cold_tool_mean_ms |  | 14.71 | 31.79 | +17.07 |
 | warm_tool_mean_ms |  | 14.73 | 31.83 | +17.10 |
-| cold_harness_tool_mean_ms |  |  |  |  |
-| warm_harness_tool_mean_ms |  |  |  |  |
+| cold_harness_tool_mean_ms | 510.89 | 419.24 | 700.25 | +281.01 |
+| warm_harness_tool_mean_ms | 111.12 | 343.10 | 651.41 | +308.30 |
 | sandbox_cpu_mean | 1.00 | 2.96 | 1.00 | -1.96 |
 | sandbox_cpu_peak | 6.45 | 21.01 | 6.64 | -14.37 |
 | harness_cpu_peak | 156.65 | 159.04 | 151.86 | -7.18 |
@@ -129,8 +129,8 @@ Means over replayed runs; times in seconds, CPU in percent of one core.
 | cleanup_s | 0.26 | 0.12 | 3.06 | +2.94 |
 | cold_tool_mean_ms |  | 14.77 | 32.11 | +17.34 |
 | warm_tool_mean_ms |  | 14.77 | 32.07 | +17.30 |
-| cold_harness_tool_mean_ms |  |  |  |  |
-| warm_harness_tool_mean_ms |  |  |  |  |
+| cold_harness_tool_mean_ms | 512.41 | 428.12 | 731.43 | +303.31 |
+| warm_harness_tool_mean_ms | 118.04 | 348.23 | 656.48 | +308.25 |
 | sandbox_cpu_mean | 0.46 | 2.62 | 0.96 | -1.66 |
 | sandbox_cpu_peak | 4.52 | 21.72 | 6.47 | -15.24 |
 | harness_cpu_peak | 162.05 | 165.04 | 154.57 | -10.47 |
@@ -163,8 +163,8 @@ Means over replayed runs; times in seconds, CPU in percent of one core.
 | cleanup_s | 0.27 | 0.12 | 3.07 | +2.95 |
 | cold_tool_mean_ms |  | 14.08 | 29.90 | +15.82 |
 | warm_tool_mean_ms |  | 13.89 | 29.36 | +15.47 |
-| cold_harness_tool_mean_ms |  |  |  |  |
-| warm_harness_tool_mean_ms |  |  |  |  |
+| cold_harness_tool_mean_ms | 150.89 | 146.13 | 256.75 | +110.62 |
+| warm_harness_tool_mean_ms | 111.09 | 139.64 | 255.39 | +115.75 |
 | sandbox_cpu_mean | 1.72 | 2.98 | 1.05 | -1.93 |
 | sandbox_cpu_peak | 9.63 | 20.21 | 7.34 | -12.87 |
 | harness_cpu_peak | 162.25 | 156.77 | 199.75 | +42.98 |

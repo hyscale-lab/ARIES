@@ -14,7 +14,8 @@ experiments/<experiment>/              one experiment
     manifest.tsv                       every run, with status and reason
     marks.tsv                          status changes made by hand (run.py mark)
     notes.md                           interpretation, written by hand
-    report.md                          generated: setup, counts, figures, stage tables, notes
+    report.md                          generated, high level: setup, stages, figures, results, overhead, notes
+    tasks/<task>.md                    generated, fine grained: every phase, overhead, tool calls, resources
     figures/                           generated PNG, PDF and figures.csv
     analysis/                          generated tasks.csv and analysis.md
     runs/<harness>/<setup>/<rep>/      raw runs with their request logs (ignored)
@@ -128,15 +129,32 @@ For warm experiments, it then draws the figures with
 `scripts/microbench/plot_coldwarm.py` and decodes each recording with
 `scripts/microbench/decode_recordings.py`.
 
-`report.md` covers:
+`report.md` is the high-level report, laid out like the original summary:
 
-- the setup and provenance, from `meta.json`;
-- run counts by status, and the runs left out;
+- the setup: setups, controls (hardware, resources, model replay, resource
+  measurement) and tasks;
+- the stages of a task;
 - the figures;
-- the per-task stage tables, the start-up table and the after-answer table,
-  computed from `analysis/tasks.csv`;
+- the results: cold and warm latency per task, and each ARIES setup's
+  overhead against native (start-up, cold and warm latency, cost per tool
+  call, warm harness logic);
+- links to the per-task reports, the run counts and the runs left out;
+- the provenance, from `meta.json`;
 - `notes.md`, copied in verbatim. Write interpretation there, with headings
   from `###` down, never in `report.md`.
+
+`tasks/<task>.md` holds one task's fine-grained metrics for each harness, as
+mean ± standard deviation with each ARIES setup's difference from native:
+
+- every start-up phase;
+- the cold and warm runs split into model, tool execution and harness logic;
+- the harness's overhead (its start and logic);
+- tool calls: the agent's calls, the commands the bridge ran for them, and
+  per call the harness-timed cost, the bridge's share and the transport
+  between them;
+- what follows the answer;
+- CPU and memory;
+- the cold and warm latency of every repetition.
 
 Rerun `report.py` after every `collect` or `mark`.
 

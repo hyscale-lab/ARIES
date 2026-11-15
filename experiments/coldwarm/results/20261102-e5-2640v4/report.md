@@ -6,26 +6,98 @@
 
 Cold and warm end-to-end latency of the microbenchmark tasks for each harness, with tools run natively, in an ARIES Docker sandbox and in an ARIES Kubernetes pod, the model held constant by record and replay.
 
-| | |
+| Setup | How tools run |
 |---|---|
-| Experiment spec | `experiments/coldwarm/experiment.json` |
-| ARIES commit | `259b587 (Docker and Kubernetes runs); 16f8779 (native Hermes); f8f26b4 (native OpenClaw)` |
-| Bridge image | `aries-bridge:v1, loaded onto the node as aries-local/aries-bridge` |
-| vHive setup tool | `v1.8.2, through Invitro 49c90dfd (the cluster predates scripts/experiment)` |
-| Started, finished | 2026-11-01T03:03:07Z, 2026-11-05T15:30:00Z |
-| Harnesses | openclaw, hermes |
-| Setups | docker, k8s, native |
-| Tasks | `mb-noop`, `mb-one-call`, `mb-ten-calls`, `mb-cpu`, `mb-output` |
-| Repetitions | 5, each task run cold then warm |
-| Recordings | recorded on 1 November 2026 (cold run only), replayed in every run |
-| Recording `hermes` | sha256 `7f67b3565ad2c66d` |
-| Recording `openclaw` | sha256 `83ee02da06493768` |
-| Note | Migrated from .cache/coldwarm-v3 after the fact: the runs were made by hand-written chains before scripts/experiment existed. The ARIES runs were remeasured on 2 November with the early harness start; native OpenClaw ran on 1 November and native Hermes on 5 November, after its tool spans were kept. CPU clock pinned at 2.4 GHz. |
+| **Native** | The harness's own Docker sandbox, with no ARIES involved: the baseline. |
+| **ARIES Docker** | ARIES creates the sandbox as a Docker container; the harness reaches it through ARIES's tool bridge. |
+| **ARIES K8s** | The same, with the harness, sandbox and bridge as Kubernetes pods. |
 
-| Worker | Harnesses | CPU | CPUs | Memory (GiB) | SMT | Turbo | Kernel | Kubelet | Docker |
-|---|---|---|---|---|---|---|---|---|---|
-| hp123 | openclaw | Intel(R) Xeon(R) CPU E5-2640 v4 @ 2.40GHz | unknown | unknown | off | off | unknown | v1.34.3 | unknown |
-| hp131 | hermes | Intel(R) Xeon(R) CPU E5-2640 v4 @ 2.40GHz | unknown | unknown | off | off | unknown | v1.34.3 | unknown |
+**Controls**
+- **Hardware:** Intel(R) Xeon(R) CPU E5-2640 v4 @ 2.40GHz, unknown CPUs, SMT off, turbo off. Each harness runs on a worker of its own, and every setup of a harness on that worker.
+- **Resources:** harness: 2 CPUs, 4096 MiB; sandbox: 2 CPUs, 4096 MiB.
+- **Model:** each harness's replies were recorded once and replayed with their original timing, so model time is the same in every setup.
+- **Resource measurement:** CPU and memory come from cAdvisor through Prometheus, sampled every second, the same way in every setup.
+- **Runs:** 5 repetitions of every setup, each task run cold and then warm on the same harness and sandbox.
+
+| Task | The agent | Isolates |
+|---|---|---|
+| `mb-noop` | replies without using a tool | harness, model and lifecycle cost |
+| `mb-one-call` | runs `touch /tmp/mb-one` | one tool round trip |
+| `mb-ten-calls` | runs ten `echo` commands, one tool call each, the first overwriting the file | the cost per call |
+| `mb-cpu` | runs a fixed 3,000,000-step SHA-256 chain | a CPU-bound call, about 2.5 s on a 2.4 GHz core |
+| `mb-output` | prints 66,399 bytes of `base64` | output carried back through the bridge |
+
+## Stages of a task
+
+- **Cold** is the first request on a fresh harness and sandbox, from the first start-up step to the answer:
+  - **Start-up:** the sandbox and its bridge endpoint are reserved, the harness's container or pod is created and the harness started, while the sandbox starts and the bridge binds it.
+  - **Harness start:** launching the harness and waiting until it reports ready, usually most of start-up.
+  - **Model:** how long the agent waited on the (replayed) model.
+  - **Tool execution:** the tool calls as the harness timed them, the trip to the sandbox included.
+  - **Harness logic:** the rest, the harness's own work. With the harness start, it is the harness's overhead.
+- **Warm** is the same task again on the running harness and sandbox: model, tool execution and harness logic.
+- **After the answer**, which the user does not wait for: collecting the harness's artifacts, stopping it, evaluating and cleaning up.
+
+## Figures
+
+PDFs and every plotted number (`figures.csv`) are beside the PNGs in `figures/`.
+
+### End-to-end time, cold and warm
+
+![Cold and warm end-to-end time per setup and task](figures/end-to-end.png)
+
+### After the answer
+
+![Time after the answer per setup](figures/after-answer.png)
+
+## Results
+
+Means over valid runs, in seconds. Each task's full breakdown is in its own report (below).
+
+### OpenClaw
+
+| Task | Native cold | ARIES Docker cold | ARIES K8s cold | Native warm | ARIES Docker warm | ARIES K8s warm |
+|---|---|---|---|---|---|---|
+| [`mb-noop`](tasks/mb-noop.md) | 32.20 | 34.36 | 35.61 | 3.25 | 2.99 | 3.15 |
+| [`mb-one-call`](tasks/mb-one-call.md) | 33.15 | 35.41 | 37.99 | 4.02 | 3.98 | 4.17 |
+| [`mb-ten-calls`](tasks/mb-ten-calls.md) | 46.60 | 49.92 | 52.48 | 17.48 | 18.32 | 19.60 |
+| [`mb-cpu`](tasks/mb-cpu.md) | 36.97 | 39.36 | 40.84 | 7.74 | 7.62 | 7.96 |
+| [`mb-output`](tasks/mb-output.md) | 32.98 | 35.49 | 36.89 | 3.88 | 3.82 | 3.98 |
+
+### Hermes
+
+| Task | Native cold | ARIES Docker cold | ARIES K8s cold | Native warm | ARIES Docker warm | ARIES K8s warm |
+|---|---|---|---|---|---|---|
+| [`mb-noop`](tasks/mb-noop.md) | 14.65 | 14.35 | 16.40 | 1.42 | 1.41 | 1.42 |
+| [`mb-one-call`](tasks/mb-one-call.md) | 16.47 | 16.03 | 18.41 | 2.83 | 3.03 | 3.35 |
+| [`mb-ten-calls`](tasks/mb-ten-calls.md) | 28.23 | 27.80 | 30.97 | 14.55 | 14.77 | 15.95 |
+| [`mb-cpu`](tasks/mb-cpu.md) | 19.76 | 19.72 | 21.97 | 5.99 | 6.27 | 6.48 |
+| [`mb-output`](tasks/mb-output.md) | 17.16 | 16.68 | 19.14 | 3.45 | 3.64 | 3.99 |
+
+### Overhead against native
+
+Each ARIES setup's mean minus native's, averaged over the tasks. Per tool call is the warm `mb-ten-calls` run's harness-timed tool execution divided by its calls.
+
+| Harness | Setup | Start-up | Cold latency | Warm latency | Per tool call (ms) | Warm harness logic |
+|---|---|---|---|---|---|---|
+| OpenClaw | Native | 27.23 |  |  | 106 | 1.46 |
+| OpenClaw | ARIES Docker | +2.97 | +2.53 | +0.07 | 183 | 1.29 |
+| OpenClaw | ARIES K8s | +4.59 | +4.38 | +0.50 | 314 | 1.34 |
+| Hermes | Native | 8.09 |  |  | 111 | 0.29 |
+| Hermes | ARIES Docker | -0.03 | -0.34 | +0.18 | 140 | 0.26 |
+| Hermes | ARIES K8s | +2.57 | +2.12 | +0.59 | 255 | 0.28 |
+
+The native row's start-up column is native's own start-up; the other rows are differences from it. Per tool call and warm harness logic are absolute values in every row.
+
+## Per-task reports
+
+Every start-up phase, the cold and warm runs split into model, tool execution and harness logic, the harness's overhead, each tool call as the harness and the bridge timed it, what follows the answer, CPU and memory, and every repetition:
+
+- [`mb-noop`](tasks/mb-noop.md)
+- [`mb-one-call`](tasks/mb-one-call.md)
+- [`mb-ten-calls`](tasks/mb-ten-calls.md)
+- [`mb-cpu`](tasks/mb-cpu.md)
+- [`mb-output`](tasks/mb-output.md)
 
 ## Runs
 
@@ -42,83 +114,28 @@ Runs per harness and setup, by status. Only valid runs are analysed.
 
 Model requests not answered from the recording: 0.
 
-## Figures
+## Provenance
 
-PDFs and every plotted number (`figures.csv`) are beside the PNGs in `figures/`.
+| | |
+|---|---|
+| Experiment spec | `experiments/coldwarm/experiment.json` |
+| ARIES commit | `259b587 (Docker and Kubernetes runs); 16f8779 (native Hermes); f8f26b4 (native OpenClaw)` |
+| Bridge image | `aries-bridge:v1, loaded onto the node as aries-local/aries-bridge` |
+| vHive setup tool | `v1.8.2, through Invitro 49c90dfd (the cluster predates scripts/experiment)` |
+| Started, finished | 2026-11-01T03:03:07Z, 2026-11-05T15:30:00Z |
+| Harnesses | openclaw, hermes |
+| Setups | docker, k8s, native |
+| Tasks | `mb-noop`, `mb-one-call`, `mb-ten-calls`, `mb-cpu`, `mb-output` |
+| Repetitions | 5, each task run cold then warm |
+| Recordings | recorded on 1 November 2026 (cold run only), replayed in every run |
+| Recording `hermes` | sha256 `7f67b3565ad2c66d` |
+| Recording `openclaw` | sha256 `83ee02da06493768` |
+| Note | Migrated from .cache/coldwarm-v3 after the fact: the runs were made by hand-written chains before scripts/experiment existed. The ARIES runs were remeasured on 2 November with the early harness start; native OpenClaw ran on 1 November and native Hermes on 5 November, after its tool spans were kept. CPU clock pinned at 2.4 GHz. |
 
-### End-to-end time, cold and warm
-
-![Cold and warm end-to-end time per setup and task](figures/end-to-end.png)
-
-### After the answer
-
-![Time after the answer per setup](figures/after-answer.png)
-
-## Stage breakdown
-
-Means over valid runs, in seconds; the number of runs is beside each setup. Cold runs from the first start-up step to the first answer; warm is the same task again on the running harness and sandbox. "Sandbox, bridge, container" is the start-up not spent starting the harness. Tool execution is timed by the harness, the same way in every setup; harness logic is the rest of the run beside model time.
-
-### OpenClaw
-
-| Task | Setup | Cold: sandbox, bridge, container | Cold: harness start | Cold: model | Cold: tool execution | Cold: harness logic | **Cold total** | Warm: model | Warm: tool execution | Warm: harness logic | **Warm total** |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| `mb-noop` | Native (5) | 0.00 | 27.35 | 1.81 | 0.00 | 3.05 | **32.20** | 1.81 | 0.00 | 1.44 | **3.25** |
-|  | ARIES Docker (5) | 0.04 | 30.08 | 1.81 | 0.00 | 2.43 | **34.36** | 1.81 | 0.00 | 1.18 | **2.99** |
-|  | ARIES K8s (5) | 2.73 | 28.85 | 1.81 | 0.00 | 2.23 | **35.61** | 1.81 | 0.00 | 1.34 | **3.15** |
-| `mb-one-call` | Native (5) | 0.00 | 27.28 | 2.45 | 0.26 | 3.16 | **33.15** | 2.45 | 0.22 | 1.35 | **4.02** |
-|  | ARIES Docker (5) | 0.05 | 30.09 | 2.45 | 0.41 | 2.41 | **35.41** | 2.45 | 0.31 | 1.22 | **3.98** |
-|  | ARIES K8s (5) | 2.73 | 29.92 | 2.45 | 0.59 | 2.30 | **37.99** | 2.45 | 0.52 | 1.21 | **4.17** |
-| `mb-ten-calls` | Native (5) | 0.00 | 27.14 | 14.90 | 1.25 | 3.31 | **46.60** | 14.90 | 1.06 | 1.52 | **17.48** |
-|  | ARIES Docker (5) | 0.05 | 30.27 | 14.90 | 2.07 | 2.62 | **49.92** | 14.90 | 1.83 | 1.59 | **18.32** |
-|  | ARIES K8s (5) | 2.73 | 28.91 | 14.90 | 3.50 | 2.44 | **52.48** | 14.90 | 3.14 | 1.56 | **19.60** |
-| `mb-cpu` | Native (5) | 0.00 | 27.21 | 2.82 | 3.74 | 3.19 | **36.97** | 2.82 | 3.35 | 1.57 | **7.74** |
-|  | ARIES Docker (5) | 0.05 | 30.16 | 2.82 | 3.88 | 2.46 | **39.36** | 2.82 | 3.52 | 1.28 | **7.62** |
-|  | ARIES K8s (5) | 2.73 | 28.95 | 2.82 | 4.04 | 2.30 | **40.84** | 2.82 | 3.71 | 1.43 | **7.96** |
-| `mb-output` | Native (5) | 0.00 | 27.17 | 2.28 | 0.36 | 3.17 | **32.98** | 2.28 | 0.20 | 1.40 | **3.88** |
-|  | ARIES Docker (5) | 0.05 | 30.17 | 2.28 | 0.54 | 2.46 | **35.49** | 2.28 | 0.34 | 1.20 | **3.82** |
-|  | ARIES K8s (5) | 2.73 | 28.85 | 2.28 | 0.81 | 2.22 | **36.89** | 2.28 | 0.52 | 1.19 | **3.98** |
-
-### Hermes
-
-| Task | Setup | Cold: sandbox, bridge, container | Cold: harness start | Cold: model | Cold: tool execution | Cold: harness logic | **Cold total** | Warm: model | Warm: tool execution | Warm: harness logic | **Warm total** |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| `mb-noop` | Native (5) | 0.00 | 8.05 | 1.21 | 0.00 | 5.39 | **14.65** | 1.21 | 0.00 | 0.21 | **1.42** |
-|  | ARIES Docker (5) | 0.02 | 8.01 | 1.21 | 0.00 | 5.10 | **14.35** | 1.22 | 0.00 | 0.20 | **1.41** |
-|  | ARIES K8s (5) | 1.73 | 8.94 | 1.21 | 0.00 | 4.52 | **16.40** | 1.21 | 0.00 | 0.21 | **1.42** |
-| `mb-one-call` | Native (5) | 0.00 | 8.04 | 2.45 | 0.51 | 5.47 | **16.47** | 2.45 | 0.11 | 0.27 | **2.83** |
-|  | ARIES Docker (5) | 0.02 | 8.01 | 2.45 | 0.42 | 5.13 | **16.03** | 2.45 | 0.34 | 0.24 | **3.03** |
-|  | ARIES K8s (5) | 1.73 | 8.88 | 2.45 | 0.70 | 4.65 | **18.41** | 2.45 | 0.65 | 0.25 | **3.35** |
-| `mb-ten-calls` | Native (5) | 0.00 | 8.10 | 12.96 | 1.51 | 5.67 | **28.23** | 12.96 | 1.11 | 0.48 | **14.55** |
-|  | ARIES Docker (5) | 0.02 | 8.02 | 12.96 | 1.46 | 5.35 | **27.80** | 12.96 | 1.40 | 0.42 | **14.77** |
-|  | ARIES K8s (5) | 1.72 | 9.31 | 12.96 | 2.57 | 4.41 | **30.97** | 12.96 | 2.55 | 0.44 | **15.95** |
-| `mb-cpu` | Native (5) | 0.00 | 8.10 | 2.34 | 3.89 | 5.43 | **19.76** | 2.34 | 3.38 | 0.28 | **5.99** |
-|  | ARIES Docker (5) | 0.02 | 8.12 | 2.34 | 4.18 | 5.07 | **19.72** | 2.34 | 3.69 | 0.24 | **6.27** |
-|  | ARIES K8s (5) | 1.73 | 8.95 | 2.34 | 4.43 | 4.52 | **21.97** | 2.34 | 3.90 | 0.24 | **6.48** |
-| `mb-output` | Native (5) | 0.00 | 8.14 | 3.10 | 0.51 | 5.40 | **17.16** | 3.10 | 0.12 | 0.23 | **3.45** |
-|  | ARIES Docker (5) | 0.02 | 8.02 | 3.10 | 0.43 | 5.11 | **16.68** | 3.10 | 0.35 | 0.19 | **3.64** |
-|  | ARIES K8s (5) | 1.73 | 8.57 | 3.10 | 0.73 | 5.01 | **19.14** | 3.10 | 0.66 | 0.23 | **3.99** |
-
-### Start-up stages
-
-| Stage | OpenClaw: Native | OpenClaw: ARIES Docker | OpenClaw: ARIES K8s | Hermes: Native | Hermes: ARIES Docker | Hermes: ARIES K8s |
-|---|---|---|---|---|---|---|
-| Sandbox reservation (`sandbox_reserve`) |  | 0.00 | 0.15 |  | 0.00 | 0.15 |
-| Bridge reservation (`bridge_reserve`) |  | 0.02 | 0.08 |  | 0.00 | 0.07 |
-| Harness container or pod creation (`harness_prepare`) |  | 0.03 | 2.50 |  | 0.02 | 1.52 |
-| Harness start, until ready (`harness_start`) | 27.23 | 30.15 | 29.10 | 8.09 | 8.04 | 8.93 |
-| *Alongside:* sandbox start, preparation and bridge binding | 0.00 | 0.05 | 2.73 | 0.00 | 0.02 | 1.73 |
-| **Start-up to the first request** | 27.23 | 30.20 | 31.82 | 8.09 | 8.06 | 10.66 |
-
-### After the answer (mean over all tasks)
-
-| Harness | Setup | Collect artifacts | Stop harness, revoke bridge access | Evaluate | Clean up | **Total** |
-|---|---|---|---|---|---|---|
-| OpenClaw | Native |  |  | 0.16 | 0.21 | **0.37** |
-| OpenClaw | ARIES Docker | 0.01 | 0.77 | 0.16 | 0.11 | **1.05** |
-| OpenClaw | ARIES K8s | 0.30 | 1.85 | 0.86 | 3.04 | **6.05** |
-| Hermes | Native |  |  | 0.22 | 0.25 | **0.48** |
-| Hermes | ARIES Docker | 2.04 | 0.37 | 0.16 | 0.12 | **2.68** |
-| Hermes | ARIES K8s | 2.23 | 1.22 | 0.87 | 3.05 | **7.38** |
+| Worker | Harnesses | ARIES commit | CPU | CPUs | Memory (GiB) | SMT | Turbo | Kernel | Kubelet | Docker |
+|---|---|---|---|---|---|---|---|---|---|---|
+| hp123 | openclaw | `259b587 (Doc` | Intel(R) Xeon(R) CPU E5-2640 v4 @ 2.40GHz | unknown | unknown | off | off | unknown | v1.34.3 | unknown |
+| hp131 | hermes | `259b587 (Doc` | Intel(R) Xeon(R) CPU E5-2640 v4 @ 2.40GHz | unknown | unknown | off | off | unknown | v1.34.3 | unknown |
 
 The full per-variant analysis is in `analysis/analysis.md`, one row per task run in `analysis/tasks.csv`.
 
