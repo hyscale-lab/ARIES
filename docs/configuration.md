@@ -100,6 +100,12 @@ on the tasks' contents, and `configs/microbench-versions.json` pins it; a test
 fails when a task changes without the pin. That file is otherwise a copy of
 `configs/versions.json`, which another test keeps in step.
 
+Measurements are run as experiment campaigns with `scripts/experiment/run.py`.
+It drives the tools below on every worker, keeps each campaign's runs,
+provenance and report under `results/`, and lets you resume and mark runs (see
+[experiments](experiments.md)). The rest of this section describes those tools,
+which you can also run by hand on one node.
+
 The profiles point the model at `aries-replay` and Prometheus through the
 placeholders `replay.local` and `prometheus.local`.
 `scripts/microbench/run.sh` fills them in, starts `aries-replay`, and runs a
@@ -176,11 +182,16 @@ runs on. `--tasks` runs a subset. The native baselines,
 `analyze.py` reports the cold run, the first request on a fresh harness and
 sandbox, from the first start-up step to its response, and with `--warm` the
 warm run, the same task again on the same harness and sandbox. It splits the
-cold start-up into provisioning and harness preparation and start, and each
-run into model time, tool execution as the bridge measured it, and the rest,
-which is the harness's own work plus the transport between harness, bridge and
-sandbox. It writes one row per task run to `tasks.csv` and prints medians with
-the Kubernetes minus Docker difference.
+cold start-up into provisioning and harness preparation and start. It splits
+each run into three parts:
+
+- **model time:** how long a request offering tools was open;
+- **tool execution:** as the harness timed it, from Hermes's tool spans or
+  OpenClaw's session log, the transport to the sandbox included;
+- **harness logic:** the rest.
+
+It writes one row per task run to `tasks.csv` and prints means, with the
+Kubernetes minus Docker difference.
 
 ### Paper-reproduction profiles
 

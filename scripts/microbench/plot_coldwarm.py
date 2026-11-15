@@ -138,7 +138,7 @@ def plot_end_to_end(rows, out, table, record):
             axis.set_yticklabels([label for _, _, label in bars])
             axis.set_title("%s · %s" % (harness_label, task), loc="left")
             if r == len(HARNESSES) - 1 and c == len(TASKS) // 2:
-                axis.set_xlabel("seconds (mean of 5 runs)")
+                axis.set_xlabel("seconds (mean over runs)")
     # The panels share the y-axis, so it is inverted once for all of them.
     axes[0][0].invert_yaxis()
     stage_legend(figure, E2E_STAGES, 1.04)

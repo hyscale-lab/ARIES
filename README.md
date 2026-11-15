@@ -125,7 +125,10 @@ The DeepSeek example requires an API key and can incur charges. The
 run, SGLang alternatives, result inspection, and troubleshooting.
 
 To build a Kubernetes cluster with vHive's setup tool and run on it, see
-[`k8s/`](k8s/README.md).
+[`k8s/`](k8s/README.md). Tool-sandbox measurements, such as the cold and warm
+comparison in [`experiments/`](experiments/coldwarm/README.md), run as
+campaigns whose provenance, run status and reports are kept under `results/`
+(see [experiments](docs/experiments.md)).
 
 For repository-level software-engineering tasks, see the
 [SWE-bench Pro guide](docs/benchmarks/swe-bench-pro.md). Its setup additionally

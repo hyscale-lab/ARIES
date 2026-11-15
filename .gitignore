@@ -27,6 +27,16 @@ go.work.sum
 # env file
 .env
 
+# Experiment campaigns keep their spec, meta, manifest, notes, report, figures
+# and analysis in Git (docs/experiments.md). Raw runs hold full agent
+# trajectories, recordings the model's replies, and logs and state.json the
+# nodes' SSH targets, so they stay local.
+results/*/*/runs/
+results/*/*/recordings/
+results/*/*/logs/
+results/*/*/state.json
+results/*/*/analysis/analyze-manifest.tsv
+
 # ARIES-local inputs and generated state
 .omx/
 .cache/

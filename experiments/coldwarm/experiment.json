@@ -1,0 +1,12 @@
+{
+  "name": "coldwarm",
+  "description": "Cold and warm end-to-end latency of the microbenchmark tasks for each harness, with tools run natively, in an ARIES Docker sandbox and in an ARIES Kubernetes pod, the model held constant by record and replay.",
+  "harnesses": ["openclaw", "hermes"],
+  "setups": ["docker", "k8s", "native"],
+  "tasks": ["mb-noop", "mb-one-call", "mb-ten-calls", "mb-cpu", "mb-output"],
+  "repetitions": 5,
+  "warm": true,
+  "parallel_start": true,
+  "record": {"backend": "docker", "warm": true},
+  "bridge_repository": ""
+}
