@@ -598,6 +598,16 @@ def cmd_status(args):
             label, ",".join(worker["harnesses"]), lines[1], lines[0], lines[2], "running" if alive else "stopped", lines[3]))
 
 
+def chain_finished(log):
+    """Whether a worker's chain has finished: a resumed chain appends to the
+    same log, so only its last start or done marker counts."""
+    if not os.path.exists(log):
+        return False
+    with open(log) as handle:
+        markers = [line for line in handle if line.startswith("######## start") or line.startswith("######## done")]
+    return bool(markers) and markers[-1].startswith("######## done")
+
+
 def collect_once(directory, meta, state):
     for label, worker in state["workers"].items():
         base = remote_campaign(meta["experiment"], meta["campaign"])
@@ -606,9 +616,7 @@ def collect_once(directory, meta, state):
     rows = merge_manifest(directory)
     meta["recordings"]["sha256"] = {os.path.basename(path)[:-len(".jsonl")]: checksum(path)
                                     for path in sorted(glob.glob(os.path.join(directory, "recordings", "*.jsonl")))}
-    done = all(os.path.exists(os.path.join(directory, "logs", label, "chain.log"))
-               and "######## done" in open(os.path.join(directory, "logs", label, "chain.log")).read()
-               for label in state["workers"])
+    done = all(chain_finished(os.path.join(directory, "logs", label, "chain.log")) for label in state["workers"])
     if done and not meta.get("finished_at"):
         meta["finished_at"] = max((row["finished"] for row in rows if row.get("finished")), default=now())
     write_json(campaign_paths(directory)["meta.json"], meta)
