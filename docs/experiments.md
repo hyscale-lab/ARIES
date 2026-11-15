@@ -45,9 +45,10 @@ python3 scripts/experiment/report.py results/coldwarm/20261115-e5-2630v3
 
 `start` does the following:
 
-1. Ships `git archive HEAD` to each worker that will run a harness, and runs
-   `make build` (stamped with this checkout's bridge revision) and
-   `make microbench` there.
+1. Packs the microbenchmark tasks here (packing needs Git history, which the
+   workers' copy lacks). Then ships them and `git archive HEAD` to each
+   worker that will run a harness, and runs `make build` there, stamped with
+   this checkout's bridge revision.
 2. Copies the cluster's kubeconfig and, when the campaign must record, the
    model key. Both go through a pipe and are written with mode 600.
 3. Reads each worker's Kubernetes node name and internal address, and the

@@ -16,7 +16,7 @@ each task also runs warm. A campaign is one execution of it, in
 results/<experiment>/<campaign>/ (docs/experiments.md describes the layout).
 
 start runs on this machine. It ships the committed tree to the cluster's
-workers (from k8s/cluster.json), builds ARIES and packs the tasks there, and
+workers (from k8s/cluster.json) with the tasks packed here, builds ARIES there, and
 starts one chain per worker in the background: each harness runs on a worker
 of its own, and all setups of a harness on the same worker, so setups are
 compared on the same hardware. A chain records the harness's model replies
@@ -43,6 +43,7 @@ import os
 import shlex
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -120,8 +121,9 @@ def remote(state, target, command, data=None, check=True):
     result = subprocess.run(ssh_command(state) + [target, command], input=data, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, stdin=None if data is not None else subprocess.DEVNULL)
     if check and result.returncode != 0:
-        raise RuntimeError("%s: %s failed (exit %d): %s" % (
-            target, command.split("\n")[0][:80], result.returncode, result.stderr.decode(errors="replace").strip()))
+        output = (result.stdout + result.stderr).decode(errors="replace").strip().splitlines()
+        raise RuntimeError("%s: %s failed (exit %d):\n    %s" % (
+            target, command.strip().split("\n")[0][:80], result.returncode, "\n    ".join(output[-15:])))
     return result.stdout.decode(errors="replace")
 
 
@@ -385,13 +387,27 @@ else echo unknown; fi
     return dict(zip(keys, (line.strip() for line in lines)))
 
 
-def prepare_worker(state, label, target, revision, log):
-    """Ships the committed tree, builds ARIES and packs the tasks."""
+def packed_tasks():
+    """The microbenchmark tasks packed here, as a tar of the checkout the
+    profiles run from: packing reads Git history, which the shipped tree
+    lacks."""
+    with tempfile.TemporaryDirectory() as work:
+        destination = os.path.join(work, "microbench")
+        subprocess.run([os.path.join(ROOT, "scripts", "microbench", "pack.sh"), destination], check=True,
+                       stdout=subprocess.DEVNULL)
+        return subprocess.run(["tar", "-C", work, "-cf", "-", "microbench"], check=True, stdout=subprocess.PIPE,
+                              env=dict(os.environ, COPYFILE_DISABLE="1")).stdout
+
+
+def prepare_worker(state, label, target, revision, tasks, log):
+    """Ships the committed tree and the packed tasks, and builds ARIES."""
     archive = subprocess.run(["git", "-C", ROOT, "archive", "HEAD"], check=True, stdout=subprocess.PIPE).stdout
     log.write(remote(state, target, "mkdir -p ~/%s && cd ~/%s && tar -xf -" % (REMOTE_ARIES, REMOTE_ARIES), data=archive))
-    # The checkout has no Git history, so the bridge revision, which tags the
-    # Kubernetes bridge image the runner requests, is passed in.
-    log.write(remote(state, target, "source /etc/profile; cd ~/%s && make build REVISION=%s && make microbench 2>&1"
+    log.write(remote(state, target, "cd ~/%s && mkdir -p .cache && rm -rf .cache/microbench && tar -xf - -C .cache"
+                     % REMOTE_ARIES, data=tasks))
+    # The checkout has no Git history either, so the bridge revision, which
+    # tags the Kubernetes bridge image the runner requests, is passed in.
+    log.write(remote(state, target, "source /etc/profile; cd ~/%s && make build REVISION=%s 2>&1"
                      % (REMOTE_ARIES, shlex.quote(revision))))
 
 
@@ -438,6 +454,7 @@ def cmd_start(args):
             fail("no Prometheus service on the cluster; pass --prometheus")
         prometheus = "http://%s:%d" % (address, port)
 
+    tasks = packed_tasks()
     os.makedirs(os.path.join(directory, "logs"))
     os.makedirs(os.path.join(directory, "recordings"))
     for harness, path in recordings.items():
@@ -466,7 +483,7 @@ def cmd_start(args):
         try:
             with open(os.path.join(directory, "logs", label + "-prepare.log"), "w") as log:
                 print("==> %s: shipping %s and building" % (label, commit[:12]), flush=True)
-                prepare_worker(state, label, target, revision, log)
+                prepare_worker(state, label, target, revision, tasks, log)
             facts = node_facts(state, target)
             node = facts["hostname"]
             address = remote(state, state["master"], "kubectl get node %s -o jsonpath='{.status.addresses[?(@.type==\"InternalIP\")].address}'"
@@ -607,9 +624,10 @@ def cmd_collect(args):
 def cmd_resume(args):
     meta, state = open_campaign(args.campaign)
     if args.prepare:
+        tasks = packed_tasks()
         for label, worker in state["workers"].items():
             with open(os.path.join(args.campaign, "logs", label + "-prepare.log"), "a") as log:
-                prepare_worker(state, label, worker["target"], meta["bridge_revision"], log)
+                prepare_worker(state, label, worker["target"], meta["bridge_revision"], tasks, log)
     for label, worker in state["workers"].items():
         base = remote_campaign(meta["experiment"], meta["campaign"])
         chain = os.path.join(args.campaign, "logs", label + "-chain.sh")
