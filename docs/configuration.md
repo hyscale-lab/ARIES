@@ -461,8 +461,8 @@ OpenClaw realtime agent consultations. `harness.realtime.reasoning_effort` remai
 the separate Talk setting. Configure judge reasoning independently under
 `benchmark.judge.reasoning_effort`; FACT settings remain unchanged.
 
-Both harnesses currently use Chat Completions. GPT-6 Luna supports tool calls on
-that API only with `none`; reasoning with tools requires Responses API support.
+OpenClaw and Hermes currently use Chat Completions. GPT-6 Luna supports tool calls
+on that API only with `none`; reasoning with tools requires Responses API support.
 See the [OpenAI model documentation](https://developers.openai.com/api/docs/models/gpt-6-luna)
 and [DeepSeek thinking guide](https://api-docs.deepseek.com/guides/thinking_mode/).
 
@@ -769,9 +769,9 @@ start/end times. An image without the plugin leaves no spans file.
 
 ### Hermes context window, compaction, and request extra body
 
-Three optional profile blocks reach the rendered Hermes `config.yaml`. Each is
-Hermes-only and is rejected under another harness. A profile without them
-renders the same file as before.
+Three optional profile blocks reach the rendered Hermes `config.yaml`.
+Compaction and extra body are Hermes-only; generation fields have
+harness-specific support. Omitting these settings preserves native defaults.
 
 - `model.context_length`, `model.max_tokens`, and `model.temperature` set the
   window Hermes's compressor reasons about and the request sampling.
@@ -841,6 +841,81 @@ covered by this execution path. The rendered `config.yaml` under
 `<run>/<task>/harness/` shows the selected settings.
 The Gateway reads `agent.max_turns`; `agent_timeout_seconds` in the overrides
 file also bounds the wall-clock wait for the run.
+
+### DeepSeek Harness (DSH)
+
+The [DSH profile](../profiles/dsh-tb2-fix-git-deepseek.json) uses the same
+[DeepSeek credential setup](#external-deepseek):
+
+```sh
+./bin/aries setup profiles/dsh-tb2-fix-git-deepseek.json
+./bin/aries profiles/dsh-tb2-fix-git-deepseek.json
+```
+
+DSH supports text-agent mode and native subagents on Docker only. Kubernetes
+and Apptainer placement are not supported. It is paired with
+`bridge.type: "dsh-ssh"`; a crossed harness/bridge pair is rejected before
+execution. The task image must provide Linux glibc, `sh`, `tar`, and Bash.
+
+`aries setup` builds the DSH harness and bridge images using the pinned
+`dsh.image` and `dsh.version` in `configs/versions.json`. The bridge image
+includes the helper archive required inside task containers; `make bridge-image`
+alone does not prepare it. See the
+[DSH SSH bridge](implementation/ssh-bridges.md#dsh-ssh-bridge) for details.
+
+`harness.subagents.enabled` defaults to true; false removes delegation tools.
+`model.context_length` and `model.max_tokens` override DSH's model metadata;
+choose values supported by the served model. With the native DeepSeek provider,
+`model.reasoning_effort` accepts `off`/`none`, `low`, `high`, or `max`.
+Omitting these model settings preserves DSH's native defaults.
+
+The following fragment illustrates the supported settings.
+
+```json
+{
+  "harness": {
+    "type": "dsh",
+    "subagents": {
+      "enabled": true
+    }
+  },
+  "bridge": {
+    "type": "dsh-ssh"
+  },
+  "runtime": {
+    "backend": "deepseek",
+    "mode": "external"
+  },
+  "model": {
+    "base_url": "https://api.deepseek.com",
+    "api_key_env": "DEEPSEEK_API_KEY",
+    "id": "deepseek-flash",
+    "context_length": 262144,
+    "max_tokens": 32768,
+    "reasoning_effort": "high"
+  }
+}
+```
+
+With `runtime.backend: "deepseek"`, DSH uses DeepSeek's Anthropic-compatible
+Messages API. ARIES converts `model.base_url` values `https://api.deepseek.com`
+and `https://api.deepseek.com/v1` to `https://api.deepseek.com/anthropic` in
+DSH's configuration. DSH then sends requests to
+`https://api.deepseek.com/anthropic/v1/messages`, using the DeepSeek model and
+API key. Custom DeepSeek base URLs are passed through unchanged and must
+support the Messages API: for example, `https://proxy.example/anthropic`
+must serve `POST /anthropic/v1/messages`.
+
+For an OpenAI-compatible local model server, use `runtime.backend: "openai"`
+or `"sglang"` with `runtime.mode: "external"`. Set `model.base_url` to a
+Docker-reachable `/v1` endpoint and `model.id` to the server's model ID. Omit
+`model.reasoning_effort`, which this DSH integration supports only for DeepSeek.
+
+Artifacts land under `<run>/<task>/harness/`: the redacted `config.json`,
+headless output in `events.jsonl`, `stderr.log`, timing in `outcome.json`, and
+native root/child trajectories under `sessions/`. See the
+[implementation](implementation/harnesses.md#deepseek-harness-dsh) for private
+state, task-container isolation and evidence limits.
 
 ### Realtime OpenClaw mode
 

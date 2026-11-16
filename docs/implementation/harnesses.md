@@ -256,6 +256,60 @@ endpoint's `ClientSourceFile`; this path is unchanged. The Hermes harness
 accepts a gRPC endpoint only for user `aries`, with no client command or client
 source file.
 
+## DeepSeek Harness (DSH)
+
+DSH is the third supported harness and runs the released headless CLI in a
+local image built from the pinned Node base with DSH and its native SSH
+providers installed. The base image and package version come from `dsh.image`
+and `dsh.version` in `configs/versions.json`. It supports text-agent mode and
+native subagents.
+
+[`dsh.Manager`](../../pkg/harness/dsh/harness.go) composes the shared
+`harness.Runtime` and sends the benchmark instruction unchanged on stdin to one
+native headless invocation per task occurrence. The rendered configuration
+requires the native filesystem, subprocess, shell and code-execution services
+to activate before the benchmark turn starts.
+
+The native `fs-ssh`, `subprocess-ssh` and `sandbox-ssh` providers replace their
+local counterparts. ARIES installs Node.js and DSH's helper programs under
+`/tmp/aries-dsh-runtime` inside the task sandbox, outside the task workdir.
+The paired `dsh-ssh` bridge forwards native control and Unix socket streams
+into that exact sandbox; commands and file operations execute there.
+
+The native sandbox policy is `danger-full-access` with approvals disabled;
+ARIES's separate task container provides filesystem and process isolation.
+
+Each task has a private HOME, configuration, CLI profile state and session
+directory under `/run/aries/dsh` in the separate harness container. The model
+key is staged separately and exported by the launcher. OpenSSH reads
+`/root/.ssh/config` independently of `HOME`; its known-hosts file contains the
+run bridge's scanned public key. No client key or password is used.
+
+Completion requires exit zero, a final root turn ending as `completed` without
+truncation, a `final` event whose text is not blank, and no pending root tool
+calls. Stop uses the shared runtime's ownership and cleanup gates.
+
+Background children of completed commands and Bash jobs with an acknowledged
+handoff remain in the task sandbox through harness teardown. Active foreground
+commands and explicitly cancelled jobs retain native termination behavior.
+ARIES removes the harness and revokes bridge access before evaluation; sandbox
+removal cleans up surviving work. See the
+[DSH SSH bridge](ssh-bridges.md#dsh-ssh-bridge) for process and output handoff.
+
+Private artifacts retain `config.json`, `instruction.txt`, `events.jsonl`,
+`stderr.log`, timing in `outcome.json`, and native root/child JSONL files under
+`sessions/`. Persistence uses `compression: none` for readable, redacted
+sessions containing request context, full tool calls/results, and the final
+answer through harness completion. Headless events are a bounded projection;
+SSH audit records describe transport operations and distinguish retained from
+omitted input.
+
+CLI stdout/stderr and each session file are capped at 16 MiB; the complete
+session archive is capped at 64 MiB, including metadata and skipped entries.
+Exceeding a bound fails the harness with an evidence error and preserves
+already-collected artifacts. CLI output overflow also terminates that exec
+through deployment's existing cancellation path.
+
 ## Model Context Protocol (`MCP`)
 
 ARIES supports configuring Model Context Protocol (`MCP`) servers for agent harnesses via `harness.mcp_servers`.

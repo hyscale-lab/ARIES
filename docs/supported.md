@@ -19,6 +19,7 @@ This page summarizes capabilities and limitations. Use the
 | --- | --- | --- |
 | Agent harness | **OpenClaw** — text, realtime, and voice-transcribe modes; web tools and configurable subagent spawning | [Harness configuration](configuration.md), [realtime mode](configuration.md#realtime-openclaw-mode), [voice guide](voice_mode.md) |
 | Agent harness | **Hermes** — text and voice-transcribe modes through its native Gateway; web tools, context compaction, and custom request bodies for compatible backends | [Hermes configuration](configuration.md#hermes-context-window-compaction-and-request-extra-body), [voice guide](voice_mode.md) |
+| Agent harness | **DeepSeek Harness (DSH)** — native headless CLI and matching SSH providers on Docker | [DSH configuration](configuration.md#deepseek-harness-dsh) |
 | Benchmark | **Terminal-Bench 2** — verifier-based terminal tasks | [Quick start](quick-start.md) |
 | Benchmark | **Deep Research Bench** — open-ended research reports with RACE grading and optional FACT citation checking; grading can be disabled | [Benchmark guide](benchmarks/deep-research-bench.md) |
 | Benchmark | **SWE-Atlas QA** — codebase Q&A with host-side rubric grading; grading can be disabled; only the QA track is implemented | [Benchmark guide](benchmarks/swe-atlas-qa.md) |
@@ -28,13 +29,15 @@ This page summarizes capabilities and limitations. Use the
 | Tool sandbox and deployment | **Kubernetes** — one pod per runtime, driven through `kubectl`; Terminal-Bench 2, SWE-bench Pro and Deep Research Bench with OpenClaw or Hermes in text mode | [Kubernetes deployment](configuration.md#kubernetes-deployment), [Kubernetes implementation](implementation/kubernetes.md), [cluster setup](../k8s/README.md) |
 | Tool sandbox and deployment | **Apptainer** 1.5 or newer — unprivileged instances for hosts without Docker, such as HPC clusters; harness, sandbox and bridge all on Apptainer, one task at a time | [Apptainer placement](configuration.md#apptainer-placement), [Apptainer implementation](implementation/apptainer.md) |
 | Tool bridge | **OpenClaw SSH** and **Hermes SSH** — managed Docker container, Kubernetes pod, or a process in an Apptainer run's namespace; harness-specific SSH adapters | [SSH bridge implementation](implementation/ssh-bridges.md) |
+| Tool bridge | **DSH SSH** — managed Docker container with the native helper archive | [DSH SSH implementation](implementation/ssh-bridges.md#dsh-ssh-bridge) |
 | Tool bridge | **Hermes gRPC** — same managed Docker container or Kubernetes pod; typed `Exec` and file procedures through the ARIES Hermes plugin; not on Apptainer | [gRPC bridge implementation](implementation/grpc-bridge.md) |
 | Model service | **DeepSeek** — external endpoint | [Model backends](configuration.md#model-backends) |
 | Model service | **SGLang** — external endpoint or one ARIES-managed host process per run | [Model backends](configuration.md#model-backends) |
 | Model service | **OpenAI-compatible server** — external only, including vLLM, llama.cpp, gateways, and hosted endpoints | [Model backends](configuration.md#model-backends) |
 
-Both harnesses and [LLM judges](configuration.md#judge-model-settings) support explicit
+OpenClaw, Hermes and [LLM judges](configuration.md#judge-model-settings) support explicit
 [model reasoning effort](configuration.md#reasoning-effort).
+DSH supports explicit reasoning through its native DeepSeek provider.
 Available efforts and tool support depend on the model and API.
 
 Image and dataset revisions are pinned in [versions.json](../configs/versions.json).
@@ -52,9 +55,16 @@ guides above.
   rejects Hermes's private `~/.hermes` file synchronization. OpenClaw requires
   `bin/aries-ssh-client` beside `bin/aries`. Both Hermes transports use the
   ARIES Hermes image, which contains the in-process gRPC plugin. With Docker or
-  Kubernetes placement, all bridges require the matched bridge image built with
+  Kubernetes placement, these bridges require the matched bridge image built with
   `make bridge-image`; on Apptainer the bridge runs `bin/aries-bridge`, which
   `make build` builds beside `bin/aries`, and `hermes-grpc` is refused.
+- DSH supports agent mode and native subagents on Docker only; Kubernetes and
+  Apptainer placement are not supported. Its helper requires
+  Linux glibc, Bash and `tar`; the task workdir must be absolute and must
+  neither contain nor be inside `/tmp/aries-dsh-runtime`. DSH setup builds a
+  separate `dsh-ssh` bridge image carrying the native helper archive;
+  `make bridge-image` alone does not prepare it.
+  See [DSH configuration](configuration.md#deepseek-harness-dsh).
 - On the Kubernetes backend, a task that executes as a non-root user, as
   SWE-bench Pro does, needs `setpriv` from `util-linux` in its image and a root container
   user for per-command UID/GID switching. The upstream SWE-bench Pro images

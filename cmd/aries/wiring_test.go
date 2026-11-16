@@ -119,7 +119,7 @@ func TestBenchmarkDispatchersFailClosed(t *testing.T) {
 
 // One run-shared bridge serves several harness instances at a time, all of one
 // harness type: `openclaw-ssh` serves only OpenClaw, and `hermes-ssh` or
-// `hermes-grpc` serves only Hermes. Thus a crossed pair must be refused before
+// `hermes-grpc` serves only Hermes; `dsh-ssh` serves DSH. A crossed pair is refused before
 // the run starts rather than at the first tool call.
 func TestValidateComponentsRequiresPairedHarnessAndBridge(t *testing.T) {
 	for _, tc := range []struct {
@@ -131,9 +131,13 @@ func TestValidateComponentsRequiresPairedHarnessAndBridge(t *testing.T) {
 		{name: "openclaw pair", harness: "openclaw", bridge: "openclaw-ssh"},
 		{name: "hermes pair", harness: "hermes", bridge: "hermes-ssh"},
 		{name: "hermes gRPC pair", harness: "hermes", bridge: "hermes-grpc"},
+		{name: "dsh pair", harness: "dsh", bridge: "dsh-ssh"},
 		{name: "hermes with openclaw bridge", harness: "hermes", bridge: "openclaw-ssh", wantErr: true},
 		{name: "openclaw with hermes bridge", harness: "openclaw", bridge: "hermes-ssh", wantErr: true},
 		{name: "openclaw with hermes gRPC bridge", harness: "openclaw", bridge: "hermes-grpc", wantErr: true},
+		{name: "openclaw with dsh bridge", harness: "openclaw", bridge: "dsh-ssh", wantErr: true},
+		{name: "dsh with openclaw bridge", harness: "dsh", bridge: "openclaw-ssh", wantErr: true},
+		{name: "dsh with hermes gRPC bridge", harness: "dsh", bridge: "hermes-grpc", wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := config.Config{

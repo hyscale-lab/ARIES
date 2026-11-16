@@ -31,6 +31,14 @@ func loopbackListen(context.Context) (core.BridgeListen, error) {
 	return core.BridgeListen{BindHost: "127.0.0.1"}, nil
 }
 
+// LatchAuditErrorForTest lets external contracts use production dialects while
+// injecting an audit failure without exposing a production control API.
+func LatchAuditErrorForTest(manager *Manager, err error) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	manager.active.audit.Latch(err)
+}
+
 // Lifecycle fixtures use a deliberately synthetic JSON dialect; actual native
 // grammar and transport contracts are exercised with the production adapters.
 type testDialect struct{}

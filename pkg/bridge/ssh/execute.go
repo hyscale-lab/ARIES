@@ -29,20 +29,32 @@ func (counter *byteCounter) Write(content []byte) (int, error) {
 func (counter *byteCounter) count() int64 { return counter.n.Load() }
 
 type recordedInput struct {
-	reader   io.Reader
-	mu       sync.Mutex
-	n        int64
-	data     bytes.Buffer
-	overflow bool
+	reader    io.Reader
+	mu        sync.Mutex
+	n         int64
+	data      bytes.Buffer
+	overflow  bool
+	streaming bool
 }
 
 func (input *recordedInput) Read(content []byte) (int, error) {
 	n, err := input.reader.Read(content)
 	if n > 0 {
 		input.mu.Lock()
+		if input.streaming && input.overflow {
+			input.n += int64(n)
+			input.mu.Unlock()
+			return n, err
+		}
 		remaining := bridgekit.MaxRecordedInputBytes - input.data.Len()
 		if n > remaining {
 			input.n += int64(n)
+			if input.streaming {
+				_, _ = input.data.Write(content[:remaining])
+				input.overflow = true
+				input.mu.Unlock()
+				return n, err
+			}
 			input.data.Reset()
 			input.overflow = true
 			input.mu.Unlock()
@@ -75,7 +87,7 @@ func (input *recordedInput) record(retainedRaw bool) (int64, string, string, []b
 
 func (session *bridgeSession) execute(ctx context.Context, channel gossh.Channel, prepared Prepared, audit requestAudit) int {
 	started := time.Now()
-	stdin := &recordedInput{reader: channel}
+	stdin := &recordedInput{reader: channel, streaming: session.dialect.Policy().StreamingInput}
 	stdout := &byteCounter{writer: channel}
 	stderr := &byteCounter{writer: channel.Stderr()}
 	var result core.CommandResult
@@ -98,9 +110,16 @@ func (session *bridgeSession) execute(ctx context.Context, channel gossh.Channel
 		exitCode = 255
 	}
 	stdinBytes, stdinContent, stdinEncoding, rawStdin, stdinOverflow := stdin.record(session.audit.RetainsRaw())
-	if stdinOverflow {
+	if stdinOverflow && !stdin.streaming {
 		session.audit.Latch(fmt.Errorf("retain SSH stdin: input exceeds %d bytes", bridgekit.MaxRecordedInputBytes))
 		return exitCode
+	}
+	if stdinOverflow {
+		stdinEncoding = "truncated-prefix"
+		stdinContent = fmt.Sprintf("[stream input truncated; %d total bytes; input bytes not retained]", stdinBytes)
+		if session.audit.RetainsRaw() {
+			stdinContent = fmt.Sprintf("[stream input truncated; %d total bytes; %d prefix bytes retained in ssh_raw.log]", stdinBytes, len(rawStdin))
+		}
 	}
 	session.writeRecord(toolCallRecord{ToolCallRecord: bridgekit.ToolCallRecord{
 		ContainerID: session.sandbox.ContainerID(), ContainerName: session.sandbox.ContainerName(),

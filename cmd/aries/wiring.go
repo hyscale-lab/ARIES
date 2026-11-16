@@ -70,19 +70,19 @@ func validateComponents(cfg config.Config) error {
 	switch cfg.Harness.Type {
 	case "openclaw":
 	case "hermes":
+	case "dsh":
 	default:
 		return fmt.Errorf("unsupported harness type %q", cfg.Harness.Type)
 	}
 	switch cfg.Bridge.Type {
 	case "openclaw-ssh":
 	case "hermes-ssh":
-	case "hermes-grpc":
+	case "dsh-ssh", "hermes-grpc":
 	default:
 		return fmt.Errorf("unsupported bridge type %q", cfg.Bridge.Type)
 	}
-	// Each bridge serves one harness, so the pair is checked here rather than
-	// left to fail at the first tool call.
-	if (cfg.Harness.Type == "hermes") != (cfg.Bridge.Type == "hermes-ssh" || cfg.Bridge.Type == "hermes-grpc") {
+	// Each bridge serves one harness; Hermes additionally supports gRPC.
+	if cfg.Bridge.Type != cfg.Harness.Type+"-ssh" && !(cfg.Harness.Type == "hermes" && cfg.Bridge.Type == "hermes-grpc") {
 		return fmt.Errorf("harness type %q requires its paired bridge, not %q", cfg.Harness.Type, cfg.Bridge.Type)
 	}
 	return nil
@@ -149,6 +149,8 @@ func newHarness(cfg config.Config, outputRoot string, lookup func(string) ([]byt
 		return harnesswiring.NewOpenClaw(cfg, outputRoot, lookup, logger, transport)
 	case "hermes":
 		return harnesswiring.NewHermes(cfg, outputRoot, lookup, logger, transport)
+	case "dsh":
+		return harnesswiring.NewDSH(cfg, outputRoot, lookup, logger, transport)
 	default:
 		return app.HarnessInstance{}, errors.Join(fmt.Errorf("unsupported harness type %q", cfg.Harness.Type), transport.Close())
 	}
@@ -187,7 +189,7 @@ func newSharedBridge(cfg config.Config, runID, outputRoot string, placement core
 		return nil, err
 	}
 	switch cfg.Bridge.Type {
-	case "openclaw-ssh", "hermes-ssh", "hermes-grpc":
+	case "openclaw-ssh", "hermes-ssh", "hermes-grpc", "dsh-ssh":
 	default:
 		return nil, fmt.Errorf("unsupported bridge type %q", cfg.Bridge.Type)
 	}
@@ -198,7 +200,14 @@ func newSharedBridge(cfg config.Config, runID, outputRoot string, placement core
 	if err != nil {
 		return nil, fmt.Errorf("construct bridge deployment: %w", err)
 	}
-	launch := bridgewiring.Launch(cfg.Versions.Bridge.Image)
+	bridgeImage := cfg.Versions.Bridge.Image
+	if cfg.Bridge.Type == "dsh-ssh" {
+		_, bridgeImage, err = harnesswiring.DSHBridgeImages(cfg)
+		if err != nil {
+			return nil, errors.Join(err, runtime.Close())
+		}
+	}
+	launch := bridgewiring.Launch(bridgeImage)
 	launch.RuntimeBackend = cfg.Bridge.Deployment.Backend
 	launch.ResourceMetrics = "unsupported"
 	switch cfg.Bridge.Deployment.Backend {
@@ -247,6 +256,22 @@ func prepareBridge(ctx context.Context, cfg config.Config) error {
 	if err := validateDeployment(&cfg); err != nil {
 		return err
 	}
+	if cfg.Bridge.Type == "dsh-ssh" {
+		base, err := cfg.Versions.HarnessImage("dsh")
+		if err != nil {
+			return err
+		}
+		if err := pullImages(ctx, cfg, []string{base}); err != nil {
+			return err
+		}
+		if err := buildHarnessImage(ctx, cfg); err != nil {
+			return err
+		}
+		cfg.Versions.Bridge.BaseImage, cfg.Versions.Bridge.Image, err = harnesswiring.DSHBridgeImages(cfg)
+		if err != nil {
+			return err
+		}
+	}
 	switch cfg.Bridge.Deployment.Backend {
 	case "docker":
 		return deploymentwiring.PrepareDockerBridge(ctx, cfg)
@@ -290,6 +315,20 @@ func loadBenchmark(ctx context.Context, cfg config.Config, outputRoot string, ta
 }
 
 func validateDeployment(cfg *config.Config) error {
+	if cfg.Harness.Type == "dsh" {
+		for _, component := range []struct {
+			path    string
+			backend string
+		}{
+			{"harness.deployment", cfg.Harness.Deployment.Backend},
+			{"sandbox.deployment", cfg.Sandbox.Deployment.Backend},
+			{"bridge.deployment", cfg.Bridge.Deployment.Backend},
+		} {
+			if component.backend != "" && component.backend != "docker" {
+				return fmt.Errorf("%s: DSH requires the docker backend, got %q", component.path, component.backend)
+			}
+		}
+	}
 	if err := cfg.NormalizeDeployment(); err != nil {
 		return err
 	}
@@ -372,11 +411,10 @@ func apptainerImages(cfg config.Config, images []string) []string {
 	return kept
 }
 
-// buildHarnessImage builds the image the harness runs when it is derived from
-// the pinned one: Hermes runs its pinned image plus hermes-otel. It uses the
-// daemon pullImages prepared the base on.
+// buildHarnessImage prepares derived native runtimes on the selected daemon:
+// Hermes adds hermes-otel; DSH installs its released CLI and matching helpers.
 func buildHarnessImage(ctx context.Context, cfg config.Config) error {
-	if cfg.Harness.Type != "hermes" {
+	if cfg.Harness.Type != "hermes" && cfg.Harness.Type != "dsh" {
 		return nil
 	}
 	if err := validateDeployment(&cfg); err != nil {
@@ -384,6 +422,11 @@ func buildHarnessImage(ctx context.Context, cfg config.Config) error {
 	}
 	switch cfg.Sandbox.Deployment.Backend {
 	case "docker":
+		if cfg.Harness.Type == "dsh" {
+			return harnesswiring.PrepareDSHImage(ctx, cfg, func(ctx context.Context, image, recipe string, files map[string][]byte, args map[string]string) error {
+				return deploymentwiring.BuildDockerImage(ctx, cfg.Harness.Deployment, image, recipe, files, args)
+			})
+		}
 		return harnesswiring.PrepareHermesImage(ctx, cfg, func(ctx context.Context, image, dockerfile string, files map[string][]byte, buildArgs map[string]string) error {
 			return deploymentwiring.BuildDockerImage(ctx, cfg.Sandbox.Deployment, image, dockerfile, files, buildArgs)
 		})

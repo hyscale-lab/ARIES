@@ -11,8 +11,8 @@ and [lifecycle](architecture.md#task-lifecycle).
 | ToolBridge | Grant temporary access to one exact sandbox; confirm revocation. |
 
 - Keep implementations independent; a paired bridge may consume a narrow sandbox
-  capability. Pair OpenClaw with `openclaw-ssh` and Hermes with `hermes-ssh`
-  or `hermes-grpc`; one transport serves a run.
+  capability. Pair OpenClaw with `openclaw-ssh`, Hermes with `hermes-ssh` or
+  `hermes-grpc`, and DSH with `dsh-ssh`; one transport serves a run.
   Configure harness-generated per-user state (such as default `HOME`) outside
   the task workdir; preserve explicit native per-call overrides.
 - Preserve shell bodies and native protocol semantics; adapt provider-owned path
@@ -30,10 +30,14 @@ and [lifecycle](architecture.md#task-lifecycle).
   sandbox lifecycle. Use plaintext unauthenticated gRPC and unauthenticated SSH,
   one in-memory service host key, and no client-key staging; preserve
   target/ownership checks.
-- Retain tool-operation deadlines and bounded evidence collection. Revocation
+- Retain tool-operation deadlines and bounded evidence collection. Refuse new
+  sandbox requests after audit failure, including SSH stream-local channels;
+  evidence must distinguish retained and omitted input. Revocation
   closes access, joins handlers, and finalizes evidence; keep replay inputs private.
   Tool errors alone must not fail revocation. Harness completion is authoritative
-  for completed calls; leave sandbox processes intact for evaluation. Apply the [cancellation/cleanup distinction](design.md).
+  for completed calls; leave sandbox processes intact for evaluation. DSH teardown
+  must retain process/output ownership until handoff succeeds and preserve explicit
+  job cancellation. Apply the [cancellation/cleanup distinction](design.md).
 - Preserve benchmark pins, candidate sanitization, verifier privacy, required checks,
   and score meaning. Follow upstream evaluation, including fresh-sandbox methods
   where required; see [benchmark contracts](../docs/design/benchmark.md).
