@@ -32,6 +32,36 @@ func TestDeploymentPreflightRejectsUnsupportedBackends(t *testing.T) {
 	}
 }
 
+func TestDSHRejectsNonDockerDeploymentsBeforeImagePreparation(t *testing.T) {
+	for _, component := range []string{"harness", "sandbox", "bridge"} {
+		for _, backend := range []string{"kubernetes", "apptainer"} {
+			t.Run(component+"/"+backend, func(t *testing.T) {
+				cfg := config.Config{
+					Benchmark: config.BenchmarkConfig{Type: "terminalbench2"},
+					Harness:   config.HarnessConfig{Type: "dsh"},
+					Bridge:    config.BridgeConfig{Type: "dsh-ssh"},
+					Versions:  config.Versions{Bridge: config.BridgeVersions{Image: "aries-bridge:v1"}},
+				}
+				if err := json.Unmarshal([]byte(`{"`+component+`":{"deployment":{"backend":"`+backend+`"}}}`), &cfg); err != nil {
+					t.Fatal(err)
+				}
+				for _, check := range []struct {
+					name string
+					run  func() error
+				}{
+					{"components", func() error { return validateComponents(cfg) }},
+					{"image preparation", func() error { return buildHarnessImage(context.Background(), cfg) }},
+				} {
+					err := check.run()
+					if err == nil || !strings.Contains(err.Error(), component+".deployment: DSH requires the docker backend") {
+						t.Fatalf("%s: error = %v", check.name, err)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestUnsupportedBackendsStopRunAndSetupBeforeSideEffects(t *testing.T) {
 	for _, component := range []string{"harness", "sandbox", "bridge"} {
 		for _, command := range []struct {

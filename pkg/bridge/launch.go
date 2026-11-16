@@ -29,7 +29,7 @@ type LaunchConfig struct {
 // transportOf names the run's transport for a bridge type, or "" for an unknown type.
 func transportOf(bridgeType string) string {
 	switch bridgeType {
-	case "hermes-ssh", "openclaw-ssh":
+	case "hermes-ssh", "openclaw-ssh", "dsh-ssh":
 		return "ssh"
 	case "hermes-grpc":
 		return "grpc"

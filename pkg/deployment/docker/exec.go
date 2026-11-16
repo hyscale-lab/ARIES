@@ -102,16 +102,25 @@ func (s *execution) ExecStream(ctx context.Context, command core.Command, stdin 
 	// the command exits before consuming all input.
 	go func() {
 		if stdin != nil {
-			written, _ := io.Copy(attached.Conn, io.LimitReader(stdin, maxExecInput+1))
-			if written > maxExecInput {
+			input := stdin
+			if !command.StreamProtocol {
+				input = io.LimitReader(stdin, maxExecInput+1)
+			}
+			written, _ := io.Copy(attached.Conn, input)
+			if !command.StreamProtocol && written > maxExecInput {
 				cancel(fmt.Errorf("Docker exec stdin exceeds %d bytes", maxExecInput))
 			}
 		}
 		_ = attached.CloseWrite()
 	}()
+	stdoutWriter, stderrWriter := stdout, stderr
+	if !command.StreamProtocol {
+		stdoutWriter = &limitedWriter{writer: stdout, limit: outputLimit}
+		stderrWriter = &limitedWriter{writer: stderr, limit: outputLimit}
+	}
 	_, err = stdcopy.StdCopy(
-		&limitedWriter{writer: stdout, limit: outputLimit},
-		&limitedWriter{writer: stderr, limit: outputLimit},
+		stdoutWriter,
+		stderrWriter,
 		attached.Reader,
 	)
 	attached.Close()

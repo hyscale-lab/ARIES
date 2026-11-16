@@ -8,6 +8,7 @@ import (
 	managed "github.com/hyscale-lab/aries/pkg/bridge"
 	grpcbridge "github.com/hyscale-lab/aries/pkg/bridge/grpc"
 	sshbridge "github.com/hyscale-lab/aries/pkg/bridge/ssh"
+	"github.com/hyscale-lab/aries/pkg/bridge/ssh/dsh"
 	"github.com/hyscale-lab/aries/pkg/bridge/ssh/hermes"
 	"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw"
 	"github.com/hyscale-lab/aries/pkg/bridge/target"
@@ -79,6 +80,13 @@ func newNative(c managed.LaunchConfig, logger *logrus.Logger) (func(string, stri
 			return sshbridge.New(options)
 		case "openclaw-ssh":
 			return openclaw.New(options)
+		case "dsh-ssh":
+			options.Dialect = dsh.Dialect{}
+			manager, err := sshbridge.New(options)
+			if err != nil {
+				return nil, err
+			}
+			return &dsh.Manager{Manager: manager}, nil
 		case "hermes-grpc":
 			return grpcbridge.New(grpcbridge.Options{SandboxID: sandboxID, ResolveListen: options.ResolveListen, OutputDir: outputDir, Logger: logger, OmitRawLog: options.OmitRawLog})
 		default:

@@ -68,6 +68,10 @@ func renderRawSSHRecord(record rawSSHRecord) ([]byte, error) {
 	bridgekit.WriteRawField(&output, "payload_bytes", fmt.Sprint(record.PayloadBytes))
 	bridgekit.WriteRawBytesField(&output, "payload", record.Payload)
 	bridgekit.WriteRawField(&output, "stdin_bytes", fmt.Sprint(record.StdinBytes))
+	if int64(len(record.Stdin)) < record.StdinBytes {
+		bridgekit.WriteRawField(&output, "stdin_retained_bytes", fmt.Sprint(len(record.Stdin)))
+		bridgekit.WriteRawField(&output, "stdin_truncated", "true")
+	}
 	bridgekit.WriteRawBytesField(&output, "stdin", record.Stdin)
 	output.WriteString("--- ARIES SSH CALL END ---\n")
 	return output.Bytes(), nil

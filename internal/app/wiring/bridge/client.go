@@ -13,7 +13,7 @@ import (
 func ClientConfig(bridgeType, helperDir string) (managed.ClientConfig, error) {
 	client := managed.ClientConfig{}
 	switch bridgeType {
-	case "hermes-ssh", "hermes-grpc":
+	case "hermes-ssh", "hermes-grpc", "dsh-ssh":
 		return client, nil
 	case "openclaw-ssh":
 		client.Command = "/opt/aries/bin/aries-ssh-client"

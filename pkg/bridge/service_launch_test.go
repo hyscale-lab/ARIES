@@ -282,7 +282,7 @@ func TestSessionMismatchDoesNotRemoveSharedRuntime(t *testing.T) {
 }
 
 // runTransports is the transport each bridge type gives its run.
-var runTransports = map[string]string{"hermes-ssh": "ssh", "openclaw-ssh": "ssh", "hermes-grpc": "grpc"}
+var runTransports = map[string]string{"hermes-ssh": "ssh", "openclaw-ssh": "ssh", "dsh-ssh": "ssh", "hermes-grpc": "grpc"}
 
 func TestSessionAcceptsOnlyTheRunTransport(t *testing.T) {
 	for bridgeType, transport := range runTransports {
