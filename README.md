@@ -89,10 +89,10 @@ implementations:
 
 | Role or service | Implementation |
 | --- | --- |
-| Agent harness | OpenClaw (text and realtime voice modes); Hermes (text and voice-transcribe modes, with an in-process gRPC plugin in the ARIES Hermes image) |
+| Agent harness | OpenClaw (text and realtime voice modes); Hermes (text and voice-transcribe modes, with an in-process gRPC plugin in the ARIES Hermes image); Codex (text) |
 | Benchmark | Terminal-Bench 2; Deep Research Bench; SWE-Atlas QA; the 731-task public SWE-bench Pro split; Toolathlon |
 | Tool sandbox | Shared Docker deployment through the Moby Go SDK; Kubernetes pods through `kubectl`; unprivileged Apptainer instances, for hosts without Docker |
-| Tool bridge | One managed service per run with independent sandbox sessions; SSH with an OpenClaw or Hermes dialect, or gRPC for Hermes |
+| Tool bridge | One managed service per run with independent sandbox sessions; SSH with an OpenClaw, Hermes, or Codex dialect, or gRPC for Hermes |
 | Model service | External DeepSeek; external OpenAI-compatible servers such as vLLM; external or ARIES-managed SGLang |
 
 See [Supported implementations](docs/supported.md) for ownership,

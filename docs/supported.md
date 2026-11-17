@@ -19,6 +19,7 @@ This page summarizes capabilities and limitations. Use the
 | --- | --- | --- |
 | Agent harness | **OpenClaw** — text, realtime, and voice-transcribe modes; web tools and configurable subagent spawning | [Harness configuration](configuration.md), [realtime mode](configuration.md#realtime-openclaw-mode), [voice guide](voice_mode.md) |
 | Agent harness | **Hermes** — text and voice-transcribe modes through its native Gateway; web tools, context compaction, and custom request bodies for compatible backends | [Hermes configuration](configuration.md#hermes-context-window-compaction-and-request-extra-body), [voice guide](voice_mode.md) |
+| Agent harness | **Codex** — text only; unmodified CLI `0.157.1` with its native remote executor; Responses API model servers | [Codex guide](codex.md), [harness implementation](implementation/harnesses.md#codex) |
 | Benchmark | **Terminal-Bench 2** — verifier-based terminal tasks | [Quick start](quick-start.md) |
 | Benchmark | **Deep Research Bench** — open-ended research reports with RACE grading and optional FACT citation checking; grading can be disabled | [Benchmark guide](benchmarks/deep-research-bench.md) |
 | Benchmark | **SWE-Atlas QA** — codebase Q&A with host-side rubric grading; grading can be disabled; only the QA track is implemented | [Benchmark guide](benchmarks/swe-atlas-qa.md) |
@@ -27,13 +28,13 @@ This page summarizes capabilities and limitations. Use the
 | Tool sandbox and deployment | **Docker** — local containers managed through the Moby Go SDK | [Deployment configuration](configuration.md#deployment-configuration), [Docker implementation](implementation/docker.md) |
 | Tool sandbox and deployment | **Kubernetes** — one pod per runtime, driven through `kubectl`; Terminal-Bench 2, SWE-bench Pro and Deep Research Bench with OpenClaw or Hermes in text mode | [Kubernetes deployment](configuration.md#kubernetes-deployment), [Kubernetes implementation](implementation/kubernetes.md), [cluster setup](../k8s/README.md) |
 | Tool sandbox and deployment | **Apptainer** 1.5 or newer — unprivileged instances for hosts without Docker, such as HPC clusters; harness, sandbox and bridge all on Apptainer, one task at a time | [Apptainer placement](configuration.md#apptainer-placement), [Apptainer implementation](implementation/apptainer.md) |
-| Tool bridge | **OpenClaw SSH** and **Hermes SSH** — managed Docker container, Kubernetes pod, or a process in an Apptainer run's namespace; harness-specific SSH adapters | [SSH bridge implementation](implementation/ssh-bridges.md) |
-| Tool bridge | **Hermes gRPC** — same managed Docker container or Kubernetes pod; typed `Exec` and file procedures through the ARIES Hermes plugin; not on Apptainer | [gRPC bridge implementation](implementation/grpc-bridge.md) |
+| Tool bridge | **OpenClaw SSH** and **Hermes SSH** — managed Docker container, Kubernetes pod, or a process in an Apptainer run’s namespace; **Codex SSH** — Docker only | [SSH bridge implementation](implementation/ssh-bridges.md) |
+| Tool bridge | **Hermes gRPC** — managed Docker container or Kubernetes pod; typed `Exec` and file procedures through the ARIES Hermes plugin; not on Apptainer | [gRPC bridge implementation](implementation/grpc-bridge.md) |
 | Model service | **DeepSeek** — external endpoint | [Model backends](configuration.md#model-backends) |
 | Model service | **SGLang** — external endpoint or one ARIES-managed host process per run | [Model backends](configuration.md#model-backends) |
 | Model service | **OpenAI-compatible server** — external only, including vLLM, llama.cpp, gateways, and hosted endpoints | [Model backends](configuration.md#model-backends) |
 
-Both harnesses and [LLM judges](configuration.md#judge-model-settings) support explicit
+All three harnesses and [LLM judges](configuration.md#judge-model-settings) support explicit
 [model reasoning effort](configuration.md#reasoning-effort).
 Available efforts and tool support depend on the model and API.
 
@@ -46,11 +47,11 @@ guides above.
 ## Current limitations
 
 - Each bridge type supports its corresponding harness: OpenClaw uses
-  `openclaw-ssh`, and Hermes uses `hermes-ssh` or `hermes-grpc`. Crossed pairs
+  `openclaw-ssh`, Codex uses `codex-ssh` (Docker only), and Hermes uses `hermes-ssh` or `hermes-grpc`. Crossed pairs
   are rejected before execution. One run uses one transport. OpenClaw over gRPC
   is not implemented. Hermes requires `/bin/bash` in the task image; its SSH bridge
   rejects Hermes's private `~/.hermes` file synchronization. OpenClaw requires
-  `bin/aries-ssh-client` beside `bin/aries`. Both Hermes transports use the
+  `bin/aries-ssh-client` beside `bin/aries`; Codex requires `bin/aries-codex-ssh`. Both Hermes transports use the
   ARIES Hermes image, which contains the in-process gRPC plugin. With Docker or
   Kubernetes placement, all bridges require the matched bridge image built with
   `make bridge-image`; on Apptainer the bridge runs `bin/aries-bridge`, which
@@ -62,6 +63,12 @@ guides above.
   Images need `/bin/sh`, and the bridge and derived Hermes images must be
   published to a registry the cluster pulls from; `make k8s-images` does that. See the
   [Kubernetes implementation](implementation/kubernetes.md).
+- Codex requires an `openai` or `sglang` endpoint implementing streaming
+  `/v1/responses` with tool calls; `/v1/models` discovery does not establish
+  that. Chat Completions-only endpoints, including native DeepSeek, cannot serve
+  it. Codex accepts `model.context_length`, `model.reasoning_effort`, and
+  `harness.subagents`, but no other generation, voice, web, MCP, or compaction
+  settings.
 - Realtime mode is OpenClaw-only and needs a separate TTS credential. See the
   [realtime setup](configuration.md#realtime-openclaw-mode).
 - External model servers are operated separately from ARIES. ARIES does not

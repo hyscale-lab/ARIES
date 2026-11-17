@@ -165,10 +165,15 @@ its record keeps only the byte count and sha256. See
 and HTML characters such as `&&`, `<`, and `>` appear literally, while quotes,
 backslashes, and newlines retain required JSON escaping. Printable stdin stays
 inline; binary or control-bearing stdin is replaced by a concise
-`binary-omitted` marker and exact byte count, with lossless bytes retained only
-in the raw log. Structured lifecycle logs and tool-call records continue to
-omit environment values and stdout/stderr bodies. Both transports use these
-rules. gRPC records also have `sha256`, `truncated`, and the read window fields
+`binary-omitted` marker and exact byte count, with the retained bytes kept only
+in the transport’s raw log. SSH stdin is always relayed in full, but both SSH files retain at most
+16 MiB of it per record: a longer stream keeps that prefix in each, with its exact
+`stdin_bytes` and `stdin_truncated: true`, so neither file is then a complete
+input record. If the cut splits a multibyte character, only that partial
+character is left out of the readable `tool-calls.jsonl` text.
+Structured lifecycle logs and tool-call records continue to
+omit environment values and stdout/stderr bodies for both transports.
+gRPC records also have `sha256`, `truncated`, and the read window fields
 `max_bytes`, `first_line`, `max_lines`, `max_line_bytes`, and `total_lines`, and
 keep written file content as `stdin`; see
 [gRPC evidence](implementation/grpc-bridge.md#evidence). The `operation_class`
