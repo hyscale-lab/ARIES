@@ -1,0 +1,128 @@
+{
+  "name": "codex-sbpro-subset70-deepseek-flash",
+  "versions_file": "../../configs/versions.json",
+  "overrides_file": "no-limits-overrides.json",
+  "execution": {
+    "concurrency": 1
+  },
+  "benchmark": {
+    "type": "swebenchpro",
+    "root": ".cache/swe-bench-pro",
+    "tasks": [
+      "instance_internetarchive__openlibrary-1351c59fd43689753de1fca32c78d539a116ffc1-v29f82c9cf21d57b242f8d8b0e541525d259e2d63",
+      "instance_NodeBB__NodeBB-a917210c5b2c20637094545401f85783905c074c-vf2cf3cbd463b7ad942381f1c6d077626485a1e9e",
+      "instance_element-hq__element-web-18c03daa865d3c5b10e52b669cd50be34c67b2e5-vnan",
+      "instance_gravitational__teleport-bb69574e02bd62e5ccd3cebb25e1c992641afb2a",
+      "instance_ansible__ansible-189fcb37f973f0b1d52b555728208eeb9a6fce83-v906c969b551b346ef54a2c0b41e04f632b7b73c2",
+      "instance_gravitational__teleport-3ff75e29fb2153a2637fe7f83e49dc04b1c99c9f",
+      "instance_qutebrowser__qutebrowser-3d01c201b8aa54dd71d4f801b1dd12feb4c0a08a-v5fc38aaf22415ab0b70567368332beee7955b367",
+      "instance_ansible__ansible-949c503f2ef4b2c5d668af0492a5c0db1ab86140-v0f01c69f1e2528b935359cfe578530722bca2c59",
+      "instance_element-hq__element-web-f3534b42df3dcfe36dc48bddbf14034085af6d30-vnan",
+      "instance_tutao__tutanota-40e94dee2bcec2b63f362da283123e9df1874cc1-vc4e41fd0029957297843cb9dec4a25c7c756f029",
+      "instance_qutebrowser__qutebrowser-fea33d607fde83cf505b228238cf365936437a63-v9f8e9d96c85c85a605e382f1510bd08563afc566",
+      "instance_flipt-io__flipt-524f277313606f8cd29b299617d6565c01642e15",
+      "instance_qutebrowser__qutebrowser-96b997802e942937e81d2b8a32d08f00d3f4bc4e-v5fc38aaf22415ab0b70567368332beee7955b367",
+      "instance_internetarchive__openlibrary-3c48b4bb782189e0858e6c3fc7956046cf3e1cfb-v2d9a6c849c60ed19fd0858ce9e40b7cc8e097e59",
+      "instance_future-architect__vuls-e1fab805afcfc92a2a615371d0ec1e667503c254-v264a82e2f4818e30f5a25e4da53b27ba119f62b5",
+      "instance_protonmail__webclients-32ff10999a06455cb2147f6873d627456924ae13",
+      "instance_element-hq__element-web-9bf77963ee5e036d54b2a3ca202fbf6378464a5e-vnan",
+      "instance_flipt-io__flipt-9d25c18b79bc7829a6fb08ec9e8793d5d17e2868",
+      "instance_navidrome__navidrome-d0dceae0943b8df16e579c2d9437e11760a0626a",
+      "instance_protonmail__webclients-c6f65d205c401350a226bb005f42fac1754b0b5b",
+      "instance_qutebrowser__qutebrowser-52708364b5f91e198defb022d1a5b4b3ebd9b563-v2ef375ac784985212b1805e1d0431dc8f1b3c171",
+      "instance_future-architect__vuls-7eb77f5b5127c847481bcf600b4dca2b7a85cf3e",
+      "instance_navidrome__navidrome-55bff343cdaad1f04496f724eda4b55d422d7f17",
+      "instance_ansible__ansible-1c06c46cc14324df35ac4f39a45fb3ccd602195d-v0f01c69f1e2528b935359cfe578530722bca2c59",
+      "instance_ansible__ansible-395e5e20fab9cad517243372fa3c3c5d9e09ab2a-v7eee2454f617569fd6889f2211f75bc02a35f9f8",
+      "instance_qutebrowser__qutebrowser-a84ecfb80a00f8ab7e341372560458e3f9cfffa2-v2ef375ac784985212b1805e1d0431dc8f1b3c171",
+      "instance_future-architect__vuls-be7b9114cc9545e68fb0ee7bc63d7ec53d1a00ad",
+      "instance_flipt-io__flipt-756f00f79ba8abf9fe53f3c6c818123b42eb7355",
+      "instance_internetarchive__openlibrary-b4f7c185ae5f1824ac7f3a18e8adf6a4b468459c-v08d8e8889ec945ab821fb156c04c7d2e2810debb",
+      "instance_navidrome__navidrome-8d56ec898e776e7e53e352cb9b25677975787ffc",
+      "instance_flipt-io__flipt-b2170346dc37cf42fda1386cd630f24821ad2ac5",
+      "instance_qutebrowser__qutebrowser-f631cd4422744160d9dcf7a0455da532ce973315-v35616345bb8052ea303186706cec663146f0f184",
+      "instance_future-architect__vuls-50580f6e98eeb36f53f27222f7f4fdfea0b21e8d",
+      "instance_internetarchive__openlibrary-0d13e6b4bf80bced6c0946b969b9a1b6963f6bce-v76304ecdb3a5954fcf13feb710e8c40fcf24b73c",
+      "instance_tutao__tutanota-1e516e989b3c0221f4af6b297d9c0e4c43e4adc3-vbc0d9ba8f0071fbe982809910959a6ff8884dbbf",
+      "instance_qutebrowser__qutebrowser-e57b6e0eeeb656eb2c84d6547d5a0a7333ecee85-v2ef375ac784985212b1805e1d0431dc8f1b3c171",
+      "instance_ansible__ansible-d30fc6c0b359f631130b0e979d9a78a7b3747d48-v1055803c3a812189a1133297f7f5468579283f86",
+      "instance_element-hq__element-web-53a9b6447bd7e6110ee4a63e2ec0322c250f08d1-vnan",
+      "instance_internetarchive__openlibrary-0a90f9f0256e4f933523e9842799e39f95ae29ce-v76304ecdb3a5954fcf13feb710e8c40fcf24b73c",
+      "instance_gravitational__teleport-288c5519ce0dec9622361a5e5d6cd36aa2d9e348",
+      "instance_gravitational__teleport-e6d86299a855687b21970504fbf06f52a8f80c74-vce94f93ad1030e3136852817f2423c1b3ac37bc4",
+      "instance_internetarchive__openlibrary-f343c08f89c772f7ba6c0246f384b9e6c3dc0add-v08d8e8889ec945ab821fb156c04c7d2e2810debb",
+      "instance_flipt-io__flipt-65581fef4aa807540cb933753d085feb0d7e736f",
+      "instance_NodeBB__NodeBB-9c576a0758690f45a6ca03b5884c601e473bf2c1-vd59a5728dfc977f44533186ace531248c2917516",
+      "instance_flipt-io__flipt-e5fe37c379e1eec2dd3492c5737c0be761050b26",
+      "instance_flipt-io__flipt-72d06db14d58692bfb4d07b1aa745a37b35956f3",
+      "instance_gravitational__teleport-fb0ab2b9b771377a689fd0d0374777c251e58bbf",
+      "instance_navidrome__navidrome-b3980532237e57ab15b2b93c49d5cd5b2d050013",
+      "instance_internetarchive__openlibrary-111347e9583372e8ef91c82e0612ea437ae3a9c9-v2d9a6c849c60ed19fd0858ce9e40b7cc8e097e59",
+      "instance_internetarchive__openlibrary-03095f2680f7516fca35a58e665bf2a41f006273-v8717e18970bcdc4e0d2cea3b1527752b21e74866",
+      "instance_flipt-io__flipt-518ec324b66a07fdd95464a5e9ca5fe7681ad8f9",
+      "instance_internetarchive__openlibrary-72321288ea790a3ace9e36f1c05b68c93f7eec43-v0f5aece3601a5b4419f7ccec1dbda2071be28ee4",
+      "instance_internetarchive__openlibrary-62d2243131a9c7e6aee00d1e9c5660fd5b594e89-v0f5aece3601a5b4419f7ccec1dbda2071be28ee4",
+      "instance_protonmail__webclients-8afd9ce04c8dde9e150e1c2b50d32e7ee2efa3e7",
+      "instance_element-hq__element-web-404c412bcb694f04ba0c4d5479541203d701bca0-vnan",
+      "instance_ansible__ansible-a1569ea4ca6af5480cf0b7b3135f5e12add28a44-v0f01c69f1e2528b935359cfe578530722bca2c59",
+      "instance_qutebrowser__qutebrowser-2e961080a85d660148937ee8f0f6b3445a8f2c01-v363c8a7e5ccdf6968fc7ab84a2053ac78036691d",
+      "instance_navidrome__navidrome-5e549255201e622c911621a7b770477b1f5a89be",
+      "instance_ansible__ansible-ea04e0048dbb3b63f876aad7020e1de8eee9f362-v1055803c3a812189a1133297f7f5468579283f86",
+      "instance_gravitational__teleport-c335534e02de143508ebebc7341021d7f8656e8f",
+      "instance_internetarchive__openlibrary-bb152d23c004f3d68986877143bb0f83531fe401-ve8c8d62a2b60610a3c4631f5f23ed866bada9818",
+      "instance_navidrome__navidrome-812dc2090f20ac4f8ac271b6ed95be5889d1a3ca",
+      "instance_internetarchive__openlibrary-d8162c226a9d576f094dc1830c4c1ffd0be2dd17-v76304ecdb3a5954fcf13feb710e8c40fcf24b73c",
+      "instance_element-hq__element-web-72a8f8f03b1a01bb70ef8a5bb61759416991b32c-vnan",
+      "instance_future-architect__vuls-8659668177f1feb65963db7a967347a79c5f9c40",
+      "instance_element-hq__element-web-aeabf3b18896ac1eb7ae9757e66ce886120f8309-vnan",
+      "instance_ansible__ansible-5260527c4a71bfed99d803e687dd19619423b134-vba6da65a0f3baefda7a058ebbd0a8dcafb8512f5",
+      "instance_qutebrowser__qutebrowser-ed19d7f58b2664bb310c7cb6b52c5b9a06ea60b2-v059c6fdc75567943479b23ebca7c07b5e9a7f34c",
+      "instance_qutebrowser__qutebrowser-0b621cb0ce2b54d3f93d8d41d8ff4257888a87e5-v2ef375ac784985212b1805e1d0431dc8f1b3c171",
+      "instance_protonmail__webclients-01ea5214d11e0df8b7170d91bafd34f23cb0f2b1"
+    ]
+  },
+  "harness": {
+    "type": "codex",
+    "deployment": {
+      "backend": "docker",
+      "docker": {
+        "socket": "/var/run/docker.sock"
+      }
+    },
+    "mode": "agent",
+    "codex": {
+      "executable": "../../.cache/codex/0.157.1/codex"
+    },
+    "subagents": {
+      "enabled": true,
+      "max_concurrent": 5
+    }
+  },
+  "sandbox": {
+    "deployment": {
+      "backend": "docker",
+      "docker": {
+        "socket": "/var/run/docker.sock"
+      }
+    }
+  },
+  "bridge": {
+    "deployment": {
+      "backend": "docker"
+    },
+    "type": "codex-ssh",
+    "mode": "managed"
+  },
+  "runtime": {
+    "backend": "openai",
+    "mode": "external"
+  },
+  "model": {
+    "base_url": "http://responses-proxy.local:8000/v1",
+    "api_key_env": "MODEL_API_KEY",
+    "id": "deepseek-flash",
+    "context_length": 1000000,
+    "reasoning_effort": "xhigh"
+  },
+  "output_dir": "runs"
+}

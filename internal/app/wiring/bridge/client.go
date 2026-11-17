@@ -17,6 +17,8 @@ func ClientConfig(bridgeType, helperDir string) (managed.ClientConfig, error) {
 		return client, nil
 	case "openclaw-ssh":
 		client.Command = "/opt/aries/bin/aries-ssh-client"
+	case "codex-ssh":
+		client.Command = "/run/aries/codex/aries-codex-ssh"
 	default:
 		return client, errors.New("unsupported harness bridge")
 	}
