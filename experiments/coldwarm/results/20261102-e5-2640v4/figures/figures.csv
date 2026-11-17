@@ -407,6 +407,24 @@ task-breakdown,openclaw,mb-noop,k8s,after: Collect artifacts,0.297
 task-breakdown,openclaw,mb-noop,k8s,"after: Stop harness, revoke bridge access",1.739
 task-breakdown,openclaw,mb-noop,k8s,after: Evaluate,0.863
 task-breakdown,openclaw,mb-noop,k8s,after: Clean up,2.943
+task-resources,hermes,mb-noop,native,"Harness CPU peak (cores), repetition 4.0",1.61
+task-resources,hermes,mb-noop,docker,"Harness CPU peak (cores), repetition 2.0",1.56
+task-resources,hermes,mb-noop,k8s,"Harness CPU peak (cores), repetition 1.0",1.46
+task-resources,hermes,mb-noop,native,"Sandbox CPU peak (cores), repetition 4.0",0.12
+task-resources,hermes,mb-noop,docker,"Sandbox CPU peak (cores), repetition 2.0",0.3
+task-resources,hermes,mb-noop,k8s,"Sandbox CPU peak (cores), repetition 1.0",0.06
+task-resources,hermes,mb-noop,native,"Harness memory peak (MiB), repetition 4.0",268.79
+task-resources,hermes,mb-noop,docker,"Harness memory peak (MiB), repetition 2.0",280.27
+task-resources,hermes,mb-noop,k8s,"Harness memory peak (MiB), repetition 1.0",259.65
+task-resources,openclaw,mb-noop,native,"Harness CPU peak (cores), repetition 1.0",1.67
+task-resources,openclaw,mb-noop,docker,"Harness CPU peak (cores), repetition 1.0",2.06
+task-resources,openclaw,mb-noop,k8s,"Harness CPU peak (cores), repetition 5.0",1.79
+task-resources,openclaw,mb-noop,native,"Sandbox CPU peak (cores), repetition 1.0",0.0
+task-resources,openclaw,mb-noop,docker,"Sandbox CPU peak (cores), repetition 1.0",0.12
+task-resources,openclaw,mb-noop,k8s,"Sandbox CPU peak (cores), repetition 5.0",0.07
+task-resources,openclaw,mb-noop,native,"Harness memory peak (MiB), repetition 1.0",762.1
+task-resources,openclaw,mb-noop,docker,"Harness memory peak (MiB), repetition 1.0",794.92
+task-resources,openclaw,mb-noop,k8s,"Harness memory peak (MiB), repetition 5.0",708.99
 task-breakdown,hermes,mb-one-call,docker,"cold: Sandbox, bridge and harness container",0.018
 task-breakdown,hermes,mb-one-call,docker,cold: Harness start,8.013
 task-breakdown,hermes,mb-one-call,docker,cold: Model (replayed),2.447
@@ -491,24 +509,24 @@ task-breakdown,openclaw,mb-one-call,k8s,after: Collect artifacts,0.298
 task-breakdown,openclaw,mb-one-call,k8s,"after: Stop harness, revoke bridge access",1.832
 task-breakdown,openclaw,mb-one-call,k8s,after: Evaluate,0.858
 task-breakdown,openclaw,mb-one-call,k8s,after: Clean up,3.069
-task-tool-calls,hermes,mb-one-call,docker,"cold: Through ARIES, not split: the bridge also ran the harness's set-up (ms)",419.2
-task-tool-calls,hermes,mb-one-call,docker,warm: Bridge running its commands (ms),206.2
-task-tool-calls,hermes,mb-one-call,docker,"warm: Transport: harness, bridge and sandbox (ms)",136.9
-task-tool-calls,hermes,mb-one-call,k8s,"cold: Through ARIES, not split: the bridge also ran the harness's set-up (ms)",700.3
-task-tool-calls,hermes,mb-one-call,k8s,warm: Bridge running its commands (ms),445.6
-task-tool-calls,hermes,mb-one-call,k8s,"warm: Transport: harness, bridge and sandbox (ms)",205.8
-task-tool-calls,hermes,mb-one-call,native,cold: Native call (no bridge) (ms),510.9
-task-tool-calls,hermes,mb-one-call,native,warm: Native call (no bridge) (ms),111.1
-task-tool-calls,openclaw,mb-one-call,native,cold: Native call (no bridge) (ms),259.4
-task-tool-calls,openclaw,mb-one-call,native,warm: Native call (no bridge) (ms),220.8
-task-tool-calls,openclaw,mb-one-call,docker,cold: Bridge running its commands (ms),140.6
-task-tool-calls,openclaw,mb-one-call,docker,"cold: Transport: harness, bridge and sandbox (ms)",270.4
-task-tool-calls,openclaw,mb-one-call,docker,warm: Bridge running its commands (ms),145.6
-task-tool-calls,openclaw,mb-one-call,docker,"warm: Transport: harness, bridge and sandbox (ms)",166.2
-task-tool-calls,openclaw,mb-one-call,k8s,cold: Bridge running its commands (ms),323.0
-task-tool-calls,openclaw,mb-one-call,k8s,"cold: Transport: harness, bridge and sandbox (ms)",265.4
-task-tool-calls,openclaw,mb-one-call,k8s,warm: Bridge running its commands (ms),330.0
-task-tool-calls,openclaw,mb-one-call,k8s,"warm: Transport: harness, bridge and sandbox (ms)",186.2
+task-resources,hermes,mb-one-call,native,"Harness CPU peak (cores), repetition 1.0",1.63
+task-resources,hermes,mb-one-call,docker,"Harness CPU peak (cores), repetition 2.0",1.52
+task-resources,hermes,mb-one-call,k8s,"Harness CPU peak (cores), repetition 4.0",1.45
+task-resources,hermes,mb-one-call,native,"Sandbox CPU peak (cores), repetition 1.0",0.06
+task-resources,hermes,mb-one-call,docker,"Sandbox CPU peak (cores), repetition 2.0",0.09
+task-resources,hermes,mb-one-call,k8s,"Sandbox CPU peak (cores), repetition 4.0",0.04
+task-resources,hermes,mb-one-call,native,"Harness memory peak (MiB), repetition 1.0",242.73
+task-resources,hermes,mb-one-call,docker,"Harness memory peak (MiB), repetition 2.0",248.23
+task-resources,hermes,mb-one-call,k8s,"Harness memory peak (MiB), repetition 4.0",267.51
+task-resources,openclaw,mb-one-call,native,"Harness CPU peak (cores), repetition 5.0",1.72
+task-resources,openclaw,mb-one-call,docker,"Harness CPU peak (cores), repetition 4.0",2.1
+task-resources,openclaw,mb-one-call,k8s,"Harness CPU peak (cores), repetition 5.0",1.78
+task-resources,openclaw,mb-one-call,native,"Sandbox CPU peak (cores), repetition 5.0",0.05
+task-resources,openclaw,mb-one-call,docker,"Sandbox CPU peak (cores), repetition 4.0",0.13
+task-resources,openclaw,mb-one-call,k8s,"Sandbox CPU peak (cores), repetition 5.0",0.1
+task-resources,openclaw,mb-one-call,native,"Harness memory peak (MiB), repetition 5.0",1052.84
+task-resources,openclaw,mb-one-call,docker,"Harness memory peak (MiB), repetition 4.0",847.02
+task-resources,openclaw,mb-one-call,k8s,"Harness memory peak (MiB), repetition 5.0",764.98
 task-breakdown,hermes,mb-ten-calls,docker,"cold: Sandbox, bridge and harness container",0.018
 task-breakdown,hermes,mb-ten-calls,docker,cold: Harness start,8.02
 task-breakdown,hermes,mb-ten-calls,docker,cold: Model (replayed),12.956
@@ -593,24 +611,24 @@ task-breakdown,openclaw,mb-ten-calls,k8s,after: Collect artifacts,0.297
 task-breakdown,openclaw,mb-ten-calls,k8s,"after: Stop harness, revoke bridge access",1.766
 task-breakdown,openclaw,mb-ten-calls,k8s,after: Evaluate,0.865
 task-breakdown,openclaw,mb-ten-calls,k8s,after: Clean up,3.06
-task-tool-calls,hermes,mb-ten-calls,docker,"cold: Through ARIES, not split: the bridge also ran the harness's set-up (ms)",146.1
-task-tool-calls,hermes,mb-ten-calls,docker,warm: Bridge running its commands (ms),69.4
-task-tool-calls,hermes,mb-ten-calls,docker,"warm: Transport: harness, bridge and sandbox (ms)",70.2
-task-tool-calls,hermes,mb-ten-calls,k8s,"cold: Through ARIES, not split: the bridge also ran the harness's set-up (ms)",256.8
-task-tool-calls,hermes,mb-ten-calls,k8s,warm: Bridge running its commands (ms),146.8
-task-tool-calls,hermes,mb-ten-calls,k8s,"warm: Transport: harness, bridge and sandbox (ms)",108.6
-task-tool-calls,hermes,mb-ten-calls,native,cold: Native call (no bridge) (ms),150.9
-task-tool-calls,hermes,mb-ten-calls,native,warm: Native call (no bridge) (ms),111.1
-task-tool-calls,openclaw,mb-ten-calls,native,cold: Native call (no bridge) (ms),124.8
-task-tool-calls,openclaw,mb-ten-calls,native,warm: Native call (no bridge) (ms),106.3
-task-tool-calls,openclaw,mb-ten-calls,docker,cold: Bridge running its commands (ms),101.4
-task-tool-calls,openclaw,mb-ten-calls,docker,"cold: Transport: harness, bridge and sandbox (ms)",106.0
-task-tool-calls,openclaw,mb-ten-calls,docker,warm: Bridge running its commands (ms),101.9
-task-tool-calls,openclaw,mb-ten-calls,docker,"warm: Transport: harness, bridge and sandbox (ms)",81.1
-task-tool-calls,openclaw,mb-ten-calls,k8s,cold: Bridge running its commands (ms),230.6
-task-tool-calls,openclaw,mb-ten-calls,k8s,"cold: Transport: harness, bridge and sandbox (ms)",119.0
-task-tool-calls,openclaw,mb-ten-calls,k8s,warm: Bridge running its commands (ms),228.7
-task-tool-calls,openclaw,mb-ten-calls,k8s,"warm: Transport: harness, bridge and sandbox (ms)",85.1
+task-resources,hermes,mb-ten-calls,native,"Harness CPU peak (cores), repetition 1.0",1.63
+task-resources,hermes,mb-ten-calls,docker,"Harness CPU peak (cores), repetition 1.0",1.63
+task-resources,hermes,mb-ten-calls,k8s,"Harness CPU peak (cores), repetition 3.0",1.49
+task-resources,hermes,mb-ten-calls,native,"Sandbox CPU peak (cores), repetition 1.0",0.07
+task-resources,hermes,mb-ten-calls,docker,"Sandbox CPU peak (cores), repetition 1.0",0.15
+task-resources,hermes,mb-ten-calls,k8s,"Sandbox CPU peak (cores), repetition 3.0",0.06
+task-resources,hermes,mb-ten-calls,native,"Harness memory peak (MiB), repetition 1.0",281.83
+task-resources,hermes,mb-ten-calls,docker,"Harness memory peak (MiB), repetition 1.0",256.59
+task-resources,hermes,mb-ten-calls,k8s,"Harness memory peak (MiB), repetition 3.0",274.79
+task-resources,openclaw,mb-ten-calls,native,"Harness CPU peak (cores), repetition 5.0",1.75
+task-resources,openclaw,mb-ten-calls,docker,"Harness CPU peak (cores), repetition 1.0",2.07
+task-resources,openclaw,mb-ten-calls,k8s,"Harness CPU peak (cores), repetition 3.0",1.8
+task-resources,openclaw,mb-ten-calls,native,"Sandbox CPU peak (cores), repetition 5.0",0.06
+task-resources,openclaw,mb-ten-calls,docker,"Sandbox CPU peak (cores), repetition 1.0",0.14
+task-resources,openclaw,mb-ten-calls,k8s,"Sandbox CPU peak (cores), repetition 3.0",0.07
+task-resources,openclaw,mb-ten-calls,native,"Harness memory peak (MiB), repetition 5.0",804.05
+task-resources,openclaw,mb-ten-calls,docker,"Harness memory peak (MiB), repetition 1.0",1163.49
+task-resources,openclaw,mb-ten-calls,k8s,"Harness memory peak (MiB), repetition 3.0",772.29
 task-breakdown,hermes,mb-cpu,docker,"cold: Sandbox, bridge and harness container",0.018
 task-breakdown,hermes,mb-cpu,docker,cold: Harness start,8.123
 task-breakdown,hermes,mb-cpu,docker,cold: Model (replayed),2.339
@@ -695,24 +713,24 @@ task-breakdown,openclaw,mb-cpu,k8s,after: Collect artifacts,0.297
 task-breakdown,openclaw,mb-cpu,k8s,"after: Stop harness, revoke bridge access",2.002
 task-breakdown,openclaw,mb-cpu,k8s,after: Evaluate,0.861
 task-breakdown,openclaw,mb-cpu,k8s,after: Clean up,3.069
-task-tool-calls,hermes,mb-cpu,docker,"cold: Through ARIES, not split: the bridge also ran the harness's set-up (ms)",4178.4
-task-tool-calls,hermes,mb-cpu,docker,warm: Bridge running its commands (ms),3441.6
-task-tool-calls,hermes,mb-cpu,docker,"warm: Transport: harness, bridge and sandbox (ms)",245.2
-task-tool-calls,hermes,mb-cpu,k8s,"cold: Through ARIES, not split: the bridge also ran the harness's set-up (ms)",4425.1
-task-tool-calls,hermes,mb-cpu,k8s,warm: Bridge running its commands (ms),3673.6
-task-tool-calls,hermes,mb-cpu,k8s,"warm: Transport: harness, bridge and sandbox (ms)",225.1
-task-tool-calls,hermes,mb-cpu,native,cold: Native call (no bridge) (ms),3889.2
-task-tool-calls,hermes,mb-cpu,native,warm: Native call (no bridge) (ms),3376.3
-task-tool-calls,openclaw,mb-cpu,native,cold: Native call (no bridge) (ms),3742.6
-task-tool-calls,openclaw,mb-cpu,native,warm: Native call (no bridge) (ms),3345.4
-task-tool-calls,openclaw,mb-cpu,docker,cold: Bridge running its commands (ms),3579.4
-task-tool-calls,openclaw,mb-cpu,docker,"cold: Transport: harness, bridge and sandbox (ms)",296.2
-task-tool-calls,openclaw,mb-cpu,docker,warm: Bridge running its commands (ms),3387.2
-task-tool-calls,openclaw,mb-cpu,docker,"warm: Transport: harness, bridge and sandbox (ms)",133.6
-task-tool-calls,openclaw,mb-cpu,k8s,cold: Bridge running its commands (ms),3687.4
-task-tool-calls,openclaw,mb-cpu,k8s,"cold: Transport: harness, bridge and sandbox (ms)",351.0
-task-tool-calls,openclaw,mb-cpu,k8s,warm: Bridge running its commands (ms),3578.8
-task-tool-calls,openclaw,mb-cpu,k8s,"warm: Transport: harness, bridge and sandbox (ms)",134.6
+task-resources,hermes,mb-cpu,native,"Harness CPU peak (cores), repetition 2.0",1.65
+task-resources,hermes,mb-cpu,docker,"Harness CPU peak (cores), repetition 1.0",1.54
+task-resources,hermes,mb-cpu,k8s,"Harness CPU peak (cores), repetition 5.0",1.63
+task-resources,hermes,mb-cpu,native,"Sandbox CPU peak (cores), repetition 2.0",1.0
+task-resources,hermes,mb-cpu,docker,"Sandbox CPU peak (cores), repetition 1.0",1.0
+task-resources,hermes,mb-cpu,k8s,"Sandbox CPU peak (cores), repetition 5.0",1.0
+task-resources,hermes,mb-cpu,native,"Harness memory peak (MiB), repetition 2.0",279.45
+task-resources,hermes,mb-cpu,docker,"Harness memory peak (MiB), repetition 1.0",262.45
+task-resources,hermes,mb-cpu,k8s,"Harness memory peak (MiB), repetition 5.0",247.7
+task-resources,openclaw,mb-cpu,native,"Harness CPU peak (cores), repetition 4.0",1.81
+task-resources,openclaw,mb-cpu,docker,"Harness CPU peak (cores), repetition 4.0",2.06
+task-resources,openclaw,mb-cpu,k8s,"Harness CPU peak (cores), repetition 3.0",1.69
+task-resources,openclaw,mb-cpu,native,"Sandbox CPU peak (cores), repetition 4.0",1.0
+task-resources,openclaw,mb-cpu,docker,"Sandbox CPU peak (cores), repetition 4.0",1.0
+task-resources,openclaw,mb-cpu,k8s,"Sandbox CPU peak (cores), repetition 3.0",1.0
+task-resources,openclaw,mb-cpu,native,"Harness memory peak (MiB), repetition 4.0",770.63
+task-resources,openclaw,mb-cpu,docker,"Harness memory peak (MiB), repetition 4.0",845.95
+task-resources,openclaw,mb-cpu,k8s,"Harness memory peak (MiB), repetition 3.0",757.0
 task-breakdown,hermes,mb-output,docker,"cold: Sandbox, bridge and harness container",0.018
 task-breakdown,hermes,mb-output,docker,cold: Harness start,8.024
 task-breakdown,hermes,mb-output,docker,cold: Model (replayed),3.101
@@ -797,11 +815,21 @@ task-breakdown,openclaw,mb-output,k8s,after: Collect artifacts,0.297
 task-breakdown,openclaw,mb-output,k8s,"after: Stop harness, revoke bridge access",1.914
 task-breakdown,openclaw,mb-output,k8s,after: Evaluate,0.863
 task-breakdown,openclaw,mb-output,k8s,after: Clean up,3.064
-task-tool-calls,hermes,mb-output,docker,"cold: Through ARIES, not split: the bridge also ran the harness's set-up (ms)",428.1
-task-tool-calls,hermes,mb-output,docker,warm: Bridge running its commands (ms),206.8
-task-tool-calls,hermes,mb-output,docker,"warm: Transport: harness, bridge and sandbox (ms)",141.4
-task-tool-calls,hermes,mb-output,k8s,"cold: Through ARIES, not split: the bridge also ran the harness's set-up (ms)",731.4
-task-tool-calls,hermes,mb-output,k8s,warm: Bridge running its commands (ms),449.0
-task-tool-calls,hermes,mb-output,k8s,"warm: Transport: harness, bridge and sandbox (ms)",207.5
-task-tool-calls,hermes,mb-output,native,cold: Native call (no bridge) (ms),512.4
-task-tool-calls,hermes,mb-output,native,warm: Native call (no bridge) (ms),118.0
+task-resources,hermes,mb-output,native,"Harness CPU peak (cores), repetition 3.0",1.65
+task-resources,hermes,mb-output,docker,"Harness CPU peak (cores), repetition 2.0",1.51
+task-resources,hermes,mb-output,k8s,"Harness CPU peak (cores), repetition 2.0",1.59
+task-resources,hermes,mb-output,native,"Sandbox CPU peak (cores), repetition 3.0",0.04
+task-resources,hermes,mb-output,docker,"Sandbox CPU peak (cores), repetition 2.0",0.27
+task-resources,hermes,mb-output,k8s,"Sandbox CPU peak (cores), repetition 2.0",0.05
+task-resources,hermes,mb-output,native,"Harness memory peak (MiB), repetition 3.0",243.26
+task-resources,hermes,mb-output,docker,"Harness memory peak (MiB), repetition 2.0",252.25
+task-resources,hermes,mb-output,k8s,"Harness memory peak (MiB), repetition 2.0",259.5
+task-resources,openclaw,mb-output,native,"Harness CPU peak (cores), repetition 1.0",1.74
+task-resources,openclaw,mb-output,docker,"Harness CPU peak (cores), repetition 5.0",2.05
+task-resources,openclaw,mb-output,k8s,"Harness CPU peak (cores), repetition 3.0",2.54
+task-resources,openclaw,mb-output,native,"Sandbox CPU peak (cores), repetition 1.0",0.03
+task-resources,openclaw,mb-output,docker,"Sandbox CPU peak (cores), repetition 5.0",0.12
+task-resources,openclaw,mb-output,k8s,"Sandbox CPU peak (cores), repetition 3.0",0.04
+task-resources,openclaw,mb-output,native,"Harness memory peak (MiB), repetition 1.0",803.16
+task-resources,openclaw,mb-output,docker,"Harness memory peak (MiB), repetition 5.0",854.13
+task-resources,openclaw,mb-output,k8s,"Harness memory peak (MiB), repetition 3.0",771.24

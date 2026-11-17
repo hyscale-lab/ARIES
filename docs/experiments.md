@@ -157,9 +157,15 @@ For warm experiments, it then draws the figures with
 
 `tasks/<task>.md` holds one task's fine-grained metrics for each harness, as
 mean ± standard deviation with each ARIES setup's difference from native.
-It opens with two figures from `figures/tasks/`: the task's cold and warm
-stages with what follows the answer, and, when the agent called tools, the
-cost of one call split into the bridge's commands and the transport. Then:
+It opens with figures from `figures/tasks/`:
+
+- the task's cold and warm stages, with what follows the answer;
+- harness CPU, sandbox CPU and harness memory over time for each setup's run
+  with the median cold latency, timed from the start of the cold run. These are
+  drawn from the raw runs' `monitor/resources.jsonl`, so they need a local
+  copy of the runs.
+
+Then:
 
 - every start-up phase;
 - the cold and warm runs split into model, tool execution and harness logic;

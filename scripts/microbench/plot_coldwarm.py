@@ -10,19 +10,23 @@ writes, as PNG and PDF, to OUT_DIR:
   end-to-end     cold and warm latency for every setup, split into stages
   after-answer   what follows the answer: collection, stop, evaluation, cleanup
   tasks/<task>-breakdown    one task: cold and warm stages, and what follows the answer
-  tasks/<task>-tool-calls   one task: each agent tool call's cost, split into the bridge
-                            running its commands and the transport around them
+  tasks/<task>-resources    one task: harness and sandbox CPU and harness memory over
+                            time, per setup, for the run with the median cold latency
 
 and figures.csv, every plotted number. Uses plot.py's palette and styling.
+The resource figures read each run's monitor/resources.jsonl through the
+analyze-manifest.tsv beside TASKS_CSV, and are skipped without it.
 """
 
 import csv
+import json
 import os
 import sys
 from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from plot import HARNESSES, INK, SETUPS, STAGES, SURFACE, TASKS, number, plt, save, style  # noqa: E402
+from plot import (CPU_LIMIT, HARNESSES, INK, INK_2, MUTED, SETUP_COLOR, SETUPS, STAGES, SURFACE, TASKS,  # noqa: E402
+                  cpu_rate, number, parse_time, plt, samples, save, setup_legend, style, task_name)
 
 E2E_STAGES = [
     ("Sandbox, bridge and harness container", STAGES[0][1]),
@@ -165,32 +169,6 @@ def plot_after(rows, out, table, record):
     save(figure, out, "after-answer", record)
 
 
-CALL_STAGES = [
-    ("Bridge running its commands", STAGES[0][1]),
-    ("Transport: harness, bridge and sandbox", STAGES[1][1]),
-    ("Native call (no bridge)", STAGES[3][1]),
-    ("Through ARIES, not split: the bridge also ran the harness's set-up", "#b8b7b1"),
-]
-
-
-def call_values(row, measure):
-    """One agent tool call in milliseconds, in CALL_STAGES order; None when
-    the run made no call."""
-    calls = row.get(measure + "_harness_tool_calls")
-    harness = row.get(measure + "_tool_exec_s")
-    if not calls or harness is None:
-        return None
-    whole = harness * 1000 / calls
-    if row["backend"] == "native":
-        return [0, 0, whole, 0]
-    if measure == "cold" and (row.get("cold_tool_calls") or 0) > (row.get("warm_tool_calls") or float("inf")):
-        # More commands cold than warm: the harness's own set-up also went
-        # through the bridge, outside any agent call (see task_reports.py).
-        return [0, 0, 0, whole]
-    bridge = (row.get(measure + "_tool_s") or 0) * 1000 / calls
-    return [bridge, whole - bridge, 0, 0]
-
-
 def stacked_panel(axis, per, bars, stages, unit, fmt):
     """Horizontal stacked bars at bars' positions, from per-run stage lists;
     returns the longest bar."""
@@ -224,8 +202,7 @@ def segment_labels(axis, per, bars, stages, limit, fmt):
 
 
 def plot_task(rows, task, out, table, record):
-    """One task's figures: its stages, cold and warm, with what follows the
-    answer; and, when the agent called tools, what each call cost."""
+    """One task's stages, cold and warm, with what follows the answer."""
     mine = [row for row in rows if row["task"] == task]
     if not mine:
         return
@@ -270,53 +247,135 @@ def plot_task(rows, task, out, table, record):
                       bbox_to_anchor=(0.5, top + 0.035), handlelength=1, handleheight=1, columnspacing=1.4)
     save(figure, out, task + "-breakdown", record)
 
-    bars = [(i * 2.4 + j, (backend, measure), "%s · %s" % (name, measure))
-            for i, (backend, name) in enumerate(SETUPS) for j, measure in enumerate(("cold", "warm"))]
-    pers = {}
+
+MEMORY_LIMIT_MIB = 4096
+
+
+def load_entries(tasks_csv):
+    """The analysed runs, with their directories, from the manifest that
+    report.py writes beside tasks.csv; empty without it."""
+    path = os.path.join(os.path.dirname(os.path.abspath(tasks_csv)), "analyze-manifest.tsv")
+    if not os.path.exists(path):
+        return []
+    with open(path) as handle:
+        entries = [entry for entry in csv.DictReader(handle, delimiter="\t") if entry["mode"] == "replay"]
+    for entry in entries:
+        entry["dir"] = os.path.normpath(os.path.join(os.path.dirname(path), entry["run_dir"]))
+    return entries
+
+
+def median_run(rows, harness, backend, task):
+    """The repetition with the median cold latency."""
+    candidates = sorted((row["cold_latency_s"], row["repetition"]) for row in rows
+                        if (row["harness"], row["backend"], row["task"]) == (harness, backend, task)
+                        and row.get("cold_latency_s") is not None)
+    return candidates[len(candidates) // 2][1] if candidates else None
+
+
+def memory_mib(containers, origin):
+    """Memory per one-second bin, the bin's highest sample per container,
+    summed over the component's containers."""
+    bins = defaultdict(float)
+    for values in containers.values():
+        per_bin = defaultdict(float)
+        for sample in values:
+            second = int((sample["t"] - origin) // 1)
+            per_bin[second] = max(per_bin[second], sample["memory_usage_bytes"] / 2**20)
+        for second, value in per_bin.items():
+            bins[second] += value
+    seconds = sorted(bins)
+    return [second + 0.5 for second in seconds], [bins[second] for second in seconds]
+
+
+def resource_series(entry, task):
+    """One run's series for a task, timed from the start of the cold run, and
+    when its warm run started."""
+    with open(os.path.join(entry["dir"], "run-result.json")) as handle:
+        result = json.load(handle)
+    record = next((t for t in result.get("tasks", []) if task_name(t["task_id"]) == task), None)
+    if record is None:
+        return None
+    phases = {phase["name"]: phase for phase in record.get("phases", [])}
+    cold = phases.get("harness_warmup") or phases.get("harness_run")
+    if cold is None:
+        return None
+    origin = parse_time(cold["started_at"])
+    warm = parse_time(phases["harness_run"]["started_at"]) - origin if "harness_warmup" in phases else None
+    by_component = samples(os.path.join(entry["dir"], record["task_id"], "monitor", "resources.jsonl"))
+    return {"harness_cpu": cpu_rate(by_component.get("harness", {}), origin),
+            "sandbox_cpu": cpu_rate(by_component.get("sandbox", {}), origin),
+            "harness_memory": memory_mib(by_component.get("harness", {}), origin),
+            "warm": warm}
+
+
+RESOURCE_PANELS = [
+    ("harness_cpu", "Harness CPU", "CPU, cores", CPU_LIMIT, "2-CPU limit"),
+    ("sandbox_cpu", "Sandbox CPU", "CPU, cores", CPU_LIMIT, "2-CPU limit"),
+    ("harness_memory", "Harness memory", "memory, MiB", None, None),
+]
+
+
+def plot_resources(rows, entries, task, out, table, record):
+    """One task's resource use over time, per setup: the run with the median
+    cold latency, aligned at the start of its cold run."""
+    series = {}
     for harness, _ in HARNESSES:
-        per = defaultdict(list)
-        for row in mine:
-            if row["harness"] != harness:
-                continue
-            for measure in ("cold", "warm"):
-                values = call_values(row, measure)
-                if values is not None:
-                    per[(row["backend"], measure)].append(values)
-        pers[harness] = per
-    if not any(pers.values()):
+        for backend, _ in SETUPS:
+            repetition = median_run(rows, harness, backend, task)
+            entry = next((e for e in entries if (e["harness"], e["backend"], number(e["repetition"])) ==
+                          (harness, backend, repetition)), None)
+            if entry and os.path.exists(os.path.join(entry["dir"], "run-result.json")):
+                found = resource_series(entry, task)
+                if found:
+                    series[(harness, backend)] = (repetition, found)
+    if not series:
         return
-    figure, axes = plt.subplots(1, len(HARNESSES), figsize=(13, 3.2), sharey=True)
+    figure, axes = plt.subplots(len(RESOURCE_PANELS), len(HARNESSES), figsize=(13, 7.4), sharex="col", sharey="row")
     for c, (harness, harness_label) in enumerate(HARNESSES):
-        axis = axes[c]
-        style(axis)
-        per = pers[harness]
-        for (backend, measure), runs in per.items():
-            for (stage, _), value in zip(CALL_STAGES, (mean(column) for column in zip(*runs))):
-                if value:
-                    table.append(["task-tool-calls", harness, task, backend, measure + ": " + stage + " (ms)",
-                                  round(value, 1)])
-        limit = stacked_panel(axis, per, bars, CALL_STAGES, " ms", "%.0f") * 1.22 or 1
-        segment_labels(axis, per, bars, CALL_STAGES, limit, "%.0f")
-        axis.set_xlim(0, limit)
-        axis.set_yticks([y for y, _, _ in bars])
-        axis.set_yticklabels([label for _, _, label in bars])
-        axis.set_title("%s · %s" % (harness_label, task), loc="left")
-        axis.set_xlabel("milliseconds per agent tool call (mean over runs)")
-    axes[0].invert_yaxis()
-    used = [stage for i, stage in enumerate(CALL_STAGES)
-            if any(any(runs[i] for runs in per_runs) for per in pers.values() for per_runs in per.values())]
-    handles = [plt.Rectangle((0, 0), 1, 1, color=color) for _, color in used]
-    figure.legend(handles, [stage for stage, _ in used], loc="upper center", ncol=2 if len(used) > 3 else len(used),
-                  bbox_to_anchor=(0.5, 1.14 if len(used) > 3 else 1.08), handlelength=1, handleheight=1,
-                  columnspacing=1.4)
-    figure.tight_layout()
-    save(figure, out, task + "-tool-calls", record)
+        for r, (key, title, ylabel, limit, limit_label) in enumerate(RESOURCE_PANELS):
+            axis = axes[r][c]
+            style(axis, "y")
+            for backend, _ in SETUPS:
+                if (harness, backend) not in series:
+                    continue
+                repetition, found = series[(harness, backend)]
+                times, values = found[key]
+                axis.plot(times, values, color=SETUP_COLOR[backend], linewidth=1.3)
+                if found["warm"] is not None:
+                    axis.axvline(found["warm"], color=SETUP_COLOR[backend], linewidth=0.8, linestyle=(0, (1, 2)))
+                if values:
+                    unit = " (MiB)" if key == "harness_memory" else " (cores)"
+                    table.append(["task-resources", harness, task, backend,
+                                  "%s peak%s, repetition %s" % (title, unit, repetition), round(max(values), 2)])
+            axis.axvline(0, color=MUTED, linewidth=0.9)
+            if limit:
+                axis.axhline(limit, color=MUTED, linewidth=0.8, linestyle=(0, (3, 3)))
+            axis.set_title("%s · %s: %s" % (harness_label, task, title), loc="left")
+            if c == 0:
+                axis.set_ylabel(ylabel)
+            if r == len(RESOURCE_PANELS) - 1:
+                axis.set_xlabel("seconds from the start of the cold run (run with the median cold latency)")
+        top = axes[0][c]
+        top.text(0, 1.0, " cold run starts", transform=top.get_xaxis_transform(), fontsize=7, color=INK_2, va="top")
+    for r, (key, _, _, limit, limit_label) in enumerate(RESOURCE_PANELS):
+        if limit:
+            axes[r][0].set_ylim(0, limit * 1.2)
+            axes[r][0].text(0.01, limit, limit_label, transform=axes[r][0].get_yaxis_transform(), fontsize=7,
+                            color=INK_2, va="bottom")
+        else:
+            axes[r][0].set_ylim(bottom=0)
+    figure.tight_layout(h_pad=2)
+    setup_legend(figure, 1.06)
+    figure.text(0.5, 1.005, "Grey line: the cold run starts. Dotted lines: the warm run starts, in each setup's colour.",
+                ha="center", va="bottom", fontsize=7.5, color=INK_2)
+    save(figure, out, task + "-resources", record)
 
 
 def main():
     if len(sys.argv) != 3:
         sys.exit(__doc__)
     rows = load(sys.argv[1])
+    entries = load_entries(sys.argv[1])
     out = sys.argv[2]
     os.makedirs(out, exist_ok=True)
     table, record = [], []
@@ -326,6 +385,8 @@ def main():
     os.makedirs(tasks, exist_ok=True)
     for task in TASKS:
         plot_task(rows, task, tasks, table, record)
+        if entries:
+            plot_resources(rows, entries, task, tasks, table, record)
     with open(os.path.join(out, "figures.csv"), "w", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(["figure", "harness", "task", "setup", "measure", "value"])

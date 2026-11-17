@@ -248,6 +248,50 @@ Three runs are kept but left out of the analysis:
   None of this adds to the user's wait, but it limits how quickly a worker
   takes the next task.
 
+### Why OpenClaw starts slowly
+
+A separate test timed the stock OpenClaw image (`2026.7.1`) on its own, with the
+campaign's limits (2 CPUs, 4 GiB), the campaign's rendered configuration and
+`openclaw gateway run`, as the native baseline starts it. It ran on a later
+cluster of the same node type (E5-2630 v3), three times per variant. Readiness
+was read from the gateway's own log, so only the probe variants ran a probe.
+The first log line marks the end of OpenClaw's start-up checks (its doctor).
+
+| Variant | First log line (s) | Ready (s) | CPU until ready (s) |
+|---|---|---|---|
+| Stock, no probe | 47.1 ± 0.6 | 50.0 ± 0.7 | 63.5 ± 1.0 |
+| ARIES's probe (every 100 ms) | 50.4 ± 0.4 | 53.5 ± 0.4 | 90.9 ± 0.7 |
+| Native baseline's probe (every 250 ms) | 49.1 ± 0.7 | 52.4 ± 1.0 | 81.5 ± 1.5 |
+| Plugin already installed | 9.7 ± 0.1 | 11.9 ± 0.1 | 17.7 ± 0.3 |
+| 8 CPUs | 46.4 ± 0.9 | 49.0 ± 0.7 | 63.5 ± 0.6 |
+| No `DEEPSEEK_API_KEY` | 9.4 ± 0.1 | never | – |
+| No network | – | never | – |
+
+- **The doctor installs the DeepSeek provider plugin on every start.** With
+  `DEEPSEEK_API_KEY` set, it downloads `@openclaw/deepseek-provider` with npm
+  from the public registry into the configuration directory. ARIES and the
+  native baseline give each harness a fresh one, so every start installs it
+  again. This costs about 38 s and 46 CPU-s, three quarters of the start.
+- **The install needs the network.** Without it, the doctor's npm request to
+  `registry.npmjs.org` fails and the gateway never becomes ready. Every
+  OpenClaw start therefore depends on the registry being reachable, and
+  installs whichever plugin version is current that day.
+- **It is serial work, not the CPU cap.** Eight CPUs start no faster than two.
+- **The rest of the start** is about 7 s of command-line loading and other
+  doctor checks, and 2–3 s for the gateway itself.
+- **The readiness probes slow the start.** ARIES's probe starts a `node`
+  process in the container every 100 ms, adding 3.5 s and 27 CPU-s. The
+  native baseline's probe, every 250 ms, adds 2.4 s and 18 CPU-s. This
+  accounts for much of the start-up gap between ARIES and native above, and
+  inflates the native start too.
+- **Without the key** the plugin is not installed, but the gateway stops after
+  logging that it is starting. Why it never becomes ready was not examined.
+
+Possible changes, not yet made: an OpenClaw image with the plugin pinned and
+preinstalled, shared by ARIES and the native baseline, and a cheaper readiness
+probe, used the same way by both. Either changes OpenClaw's harness start in
+every setup, so the campaign would need to run again.
+
 ### Compared with the E5-2640 v4 campaign
 
 The same setups and tasks ran on Broadwell nodes under Kubernetes 1.34

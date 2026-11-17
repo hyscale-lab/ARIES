@@ -198,10 +198,15 @@ def figures(campaign, task):
     out = []
     for name, title, alt in (
             ("breakdown", "Time breakdown", "Cold and warm stages, and what follows the answer, per setup"),
-            ("tool-calls", "Cost of a tool call", "Each agent tool call: the bridge's commands and the transport")):
+            ("resources", "Resources over time",
+             "Harness and sandbox CPU and harness memory over time, per setup, for the median run")):
         path = "figures/tasks/%s-%s.png" % (task, name)
         if os.path.exists(os.path.join(campaign, path)):
             out += ["### %s" % title, "", "![%s](../%s)" % (alt, path), ""]
+    if out and os.path.exists(os.path.join(campaign, "figures/tasks/%s-resources.png" % task)):
+        out[-2:-2] = ["Each setup's run with the median cold latency, timed from the start of its cold run, so "
+                      "start-up is to the left of zero. CPU is the rate of the container's CPU counter over one-second "
+                      "bins.", ""]
     return (["## Figures", "", "PDFs are beside the PNGs in `../figures/tasks/`.", ""] + out) if out else []
 
 
@@ -232,12 +237,23 @@ def write(campaign, tasks, spec, descriptions):
                 "work.",
                 "- **Harness overhead:** the harness's own time, beside the model and the tools. Cold, it is the "
                 "harness start plus the cold run's harness logic; warm, the warm run's harness logic.",
-                "- **Tool calls:** the bridge runs more commands than the agent makes calls, because the harness "
-                "also runs its own, such as OpenClaw's workspace sync, so its time is divided by the agent's calls. "
-                "**Transport** is the harness-timed time per call minus the bridge's: the round trips between "
-                "harness, bridge and sandbox. Native runs have no bridge. A cold run that ran more bridge commands "
-                "than its warm run also ran the harness's own set-up through the bridge, outside any agent call, so "
-                "its bridge share and transport are left out (–).",
+                "- **Tool calls:** what one agent tool call costs, from the agent's side. Natively the harness "
+                "runs the command in its own container; through ARIES the request goes harness → bridge → sandbox "
+                "and back.",
+                "  - *Per call, as the harness timed it:* the whole call, by the harness's own clock. It is timed the "
+                "same way in every setup, so compare setups on this row.",
+                "  - *Commands the bridge ran:* every request the bridge served in the sandbox. One agent call is "
+                "several: OpenClaw syncs its workspace before each command, and Hermes opens a terminal session "
+                "(connection checks, environment, a shell snapshot) before its first command.",
+                "  - *Per call, the bridge running its commands:* the bridge's time running all of them, divided by "
+                "the agent's calls.",
+                "  - *Per call, transport:* the whole call minus the bridge's share: requests travelling between "
+                "harness, bridge and sandbox, and any gaps between the bridge's commands. It is a remainder, not a "
+                "network measurement.",
+                "  - Native runs have no bridge, so only the whole call is shown.",
+                "  - **–** in a cold run: the bridge ran more commands cold than warm, because the harness also set "
+                "itself up through the bridge before any agent call (Hermes opens a terminal session when the agent "
+                "starts). Those commands belong to no call, so the bridge share and transport are left out.",
                 ""]
         out += figures(campaign, task)
         for harness, label in HARNESSES:
