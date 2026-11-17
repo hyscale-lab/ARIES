@@ -178,7 +178,7 @@ Run the complete [trace sanity check](#5-replayer-components) and reject any sou
 
 ## 7. Checks and limits
 
-See the [current replay limitations](../replay-limitations.md) for supported workload boundaries, capture limits, fidelity limits, and proposed fail-fast policy.
+See the [current replay limitations](../replay-limitations.md) for supported workload boundaries, capture limits, and fidelity limits. Proposed policy changes remain [deferred](#10-open-questions-and-deferred-features).
 
 Replay schedules RPCs from recorded `started_at` offsets and permits overlapping calls (`pkg/bridge/grpc/replay.go:181-197`; `pkg/bridge/grpc/caller.go:52-92`). It does not reproduce sandbox startup, preparation, idle lifetime, or removal timing. Thus the original number of simultaneously live sandboxes and the original resource contention are not guaranteed. Fresh sandbox preparation and sanitization remain required. The [lifecycle](#6-lifecycle-and-results) still requires positive caller isolation for replay or positive harness isolation for live runs. Positive bridge revocation and confirmed sandbox removal remain required (`pkg/runner/runner.go:413-432,471-488,514-549`; `docs/design.md:131-164`).
 
@@ -206,10 +206,12 @@ A fresh evaluation, cached model-judge verdict after input comparison, and autom
 
 ### 9.1 Profile branches
 
-Live source recording is a CLI intent, not a profile field. Both
-`aries PROFILE --record-for-replay` and `aries --record-for-replay PROFILE`
-enable it. Reject the flag on setup and replay profiles, duplicate or unknown
-flags, and extra positional arguments. Preserve a single profile named `setup`.
+Live source recording is a CLI intent, not a profile field. Use
+`aries --record-for-replay PROFILE`; flags must precede positional arguments.
+Go's standard flag syntax applies: one or two dashes, explicit boolean values,
+and the last duplicate value wins. `--` ends flag parsing. Reject enabled
+recording on setup and replay profiles, unknown flags, and extra positional
+arguments. Preserve a single profile named `setup`.
 Require Hermes gRPC and source provenance for every resolved selected task before
 sandbox or model-runtime execution. Recording supports multiple logical tasks,
 repeated task IDs, and finite timed loops. A selector can expand; retain every
@@ -262,6 +264,18 @@ The first version [reuses the source evaluation](#8-reused-evaluation-in-the-fir
 
 1. What long-term rule applies to an older source `Exec` audit without captured stdout or stderr? Today Runner logs `source output unavailable` on SHA-only drift and continues (`pkg/bridge/grpc/replay.go:277-285`; `pkg/replay/responses.go:140-160`). Recording and replay gRPC runs retain bounded output; that capture rule is settled (`pkg/bridge/grpc/bridge.go:438-447`; `pkg/bridge/grpc/audit.go:85-109`).
 **Recording-intent decision.** Use the CLI-only `--record-for-replay` flag for live source recording. Do not add a profile field. Ordinary runs keep baseline evidence; replay execution captures comparison evidence automatically.
+
+**Proposed fail-fast policy, not implemented.** Reject known unrepresentable
+recording input before dispatch when possible; report capture loss when known.
+Preserve actual RPC results and side effects, and always confirm cleanup.
+Current recording checks cover encoded `Exec` overflow, not full parser eligibility;
+in replay, capture loss alone can leave successful execution with reduced evidence.
+Fatal SHA-only drift, unavailable diagnostics, timing thresholds, or stopping future
+occurrences on response mismatch need explicit contract decisions. Expected recorded
+non-OK outcomes are not unexpected failures. Early stop cannot undo started calls
+or prove background-command termination; retain incomplete-work evidence and bounded
+cleanup for every admitted occurrence. Missing required capture must fail, but
+that cannot detect unobserved state differences or make reused grades fresh.
 
 **Deferred features, not first-version policy questions.** SSH replay, Toolathlon MCP replay, prepared sandbox snapshots, monotonic recorded offsets, fresh grading, and a private format for omitted request payloads are outside this version. The gRPC caller and parser, source evaluation reuse, and bounded opt-in live `Exec` capture are implemented (`pkg/bridge/grpc/replay.go:44-193`; `pkg/bridge/grpc/caller.go:17-220`; `pkg/runner/runner.go:430-514`; `pkg/bridge/grpc/bridge.go:438-447`).
 

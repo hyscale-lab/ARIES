@@ -3,10 +3,10 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"io"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -26,13 +26,19 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if code, entered, err := runInOwnNamespace(ctx, os.Args[1:]); entered {
+	dependencies := app.Dependencies{Logger: logger, Wiring: commandWiring()}
+	positional, err := parseArgs(os.Args[1:], &dependencies.RecordForReplay)
+	if err != nil {
+		logger.WithError(err).Error("aries failed")
+		os.Exit(1)
+	}
+	if code, entered, err := runInOwnNamespace(ctx, os.Args[1:], positional, deploymentwiring.RunApptainerInNamespace); entered {
 		if err != nil {
 			logger.WithError(err).Error("aries failed")
 		}
 		os.Exit(code)
 	}
-	if err := dispatch(ctx, os.Args[1:], os.Stdout, app.Dependencies{Logger: logger, Wiring: commandWiring()}, app.Run, app.Setup); err != nil {
+	if err := dispatch(ctx, positional, os.Stdout, dependencies, app.Run, app.Setup); err != nil {
 		logger.WithError(err).Error("aries failed")
 		os.Exit(1)
 	}
@@ -40,26 +46,22 @@ func main() {
 
 type useCase func(context.Context, string, io.Writer, app.Dependencies) error
 
+func parseArgs(args []string, recordForReplay *bool) ([]string, error) {
+	flags := flag.NewFlagSet("aries", flag.ContinueOnError)
+	flags.BoolVar(recordForReplay, "record-for-replay", *recordForReplay, "record sandbox calls for replay")
+	if err := flags.Parse(args); err != nil {
+		return nil, err
+	}
+	return flags.Args(), nil
+}
+
 func dispatch(ctx context.Context, args []string, stdout io.Writer, dependencies app.Dependencies, run, setup useCase) error {
 	usage := errors.New("usage: aries [--record-for-replay] PROFILE.json | aries setup PROFILE.json")
-	var positional []string
-	for _, arg := range args {
-		if arg == "--record-for-replay" {
-			if dependencies.RecordForReplay {
-				return usage
-			}
-			dependencies.RecordForReplay = true
-		} else if strings.HasPrefix(arg, "-") {
-			return usage
-		} else {
-			positional = append(positional, arg)
-		}
-	}
 	switch {
-	case len(positional) == 1:
-		return run(ctx, positional[0], stdout, dependencies)
-	case len(positional) == 2 && positional[0] == "setup" && !dependencies.RecordForReplay:
-		return setup(ctx, positional[1], stdout, dependencies)
+	case len(args) == 1:
+		return run(ctx, args[0], stdout, dependencies)
+	case len(args) == 2 && args[0] == "setup" && !dependencies.RecordForReplay:
+		return setup(ctx, args[1], stdout, dependencies)
 	default:
 		return usage
 	}
@@ -68,15 +70,15 @@ func dispatch(ctx context.Context, args []string, stdout io.Writer, dependencies
 // runInOwnNamespace runs an Apptainer profile in a private network namespace:
 // the run's services listen on its loopback, which no other user of a shared
 // host can reach. It reports false for anything else, which runs as before.
-func runInOwnNamespace(ctx context.Context, args []string) (int, bool, error) {
-	if len(args) != 1 || os.Getenv("ARIES_RUN_NAMESPACE") != "" || !apptainerProfile(args[0]) {
+func runInOwnNamespace(ctx context.Context, args, positional []string, enter func(context.Context, []string) (int, error)) (int, bool, error) {
+	if len(positional) != 1 || os.Getenv("ARIES_RUN_NAMESPACE") != "" || !apptainerProfile(positional[0]) {
 		return 0, false, nil
 	}
 	executable, err := os.Executable()
 	if err != nil {
 		return 1, true, err
 	}
-	code, err := deploymentwiring.RunApptainerInNamespace(ctx, append([]string{executable}, args...))
+	code, err := enter(ctx, append([]string{executable}, args...))
 	if err != nil && code == 0 {
 		code = 1
 	}

@@ -138,53 +138,31 @@ use [external SGLang](configuration.md#external-sglang) instead.
 Source recording is CLI-only and opt-in. For a live Hermes gRPC source run:
 
 ```sh
-./bin/aries profiles/hermes-tb2-fix-git-grpc-deepseek.json --record-for-replay
+./bin/aries --record-for-replay profiles/hermes-tb2-fix-git-grpc-deepseek.json
 ```
 
-You can also put `--record-for-replay` before the profile. The command uses the
-same model credential and can incur API charges. Recording supports multiple
-logical tasks, repeated task IDs, and finite timed loops. Each occurrence keeps
-its own source provenance and evidence. Recording still rejects arrival schedules.
-The flag is not valid with setup or a replay profile. Ordinary runs retain the
-baseline audit, without replay-specific output. Run paths stay under `output_dir`.
-Recording does not guarantee that every call and timing value permits replay.
+Put flags before the profile. This live run uses the model credential and can
+incur API charges. The enabled recording flag is invalid with setup or a replay
+profile. Recording can still produce an incompatible source; check the
+[recording requirements](configuration.md#cli-recording-intent).
 
 ## Replay a recorded task
 
-After a live `hermes-grpc` run with `--record-for-replay`, you can repeat its recorded sandbox calls
-without a model key or harness. Build the bridge image, copy the live profile,
-keep its benchmark, sandbox, and bridge settings, and replace its `model`,
-`harness`, and `runtime` blocks with `replay.source` and
-`replay.deployment`. Set `benchmark.tasks` to the source logical task IDs needed
-for validation. Set `replay.source` to one task-occurrence directory or the complete
-source run directory. A run directory selects every recorded occurrence, including
-repeated IDs and loop-produced occurrences, once. The source path resolves relative
-to the new profile file, not the working directory. Remove live loop and arrival
-settings; the source defines the finite workload. `execution.concurrency` bounds
-active occurrence runtimes. Follow the [replay profile example](configuration.md#sandbox-call-replay).
+Create a replay profile from the [configuration example](configuration.md#sandbox-call-replay).
+Replay needs no model key, harness, or recording flag.
 
 ```sh
 make bridge-image
 ./bin/aries profiles/REPLACE_WITH_REPLAY_PROFILE.json
 ```
 
-Use a live run recorded with the current gRPC response checks. A replay run
-reports call matching and positive cleanup separately from its inherited
-source grade. Recording runs and replay execution retain bounded `Exec` output
-in their private bridge audits. Replay needs no recording flag. A replay logs changed output through `aries.log` and
-stderr; hash-only drift does not stop it. Keep these artifacts private.
-An oversized captured audit response fails its recording task before evaluation.
-Replay does not run a fresh verifier or model judge. Review the
-[replay results](run-results.md#sandbox-call-replay-results) before you
-compare grades: equal responses do not prove equal final sandbox state.
-
-Multiple occurrences use one call-start timeline. Equal source starts are valid
-and produce warnings in the run's `aries.log`. Shared scheduling requires
-synchronized UTC host clocks; late preparation, private plan staging, and network
-delay can delay calls. Replay does not reproduce sandbox lifecycle timing, the
-original live-sandbox count, or resource contention. Empty traces create no calls.
-Inputs omitted by the capture limits remain unsupported. See the
-[payload and evidence limits](configuration.md#sandbox-call-replay).
+Keep source artifacts, bridge audits, `aries.log`, and stderr private. Oversized
+captured output fails its recording task before evaluation. Replay reuses a
+historical grade; it does not run a fresh verifier or judge. Check
+[replay results](run-results.md#sandbox-call-replay-results) before comparing grades:
+matching responses do not prove equal final sandbox state. See the
+[replay design](design/replayer.md) for the mechanism and
+[limits](replay-limitations.md) for capture and timing restrictions.
 
 ## Inspect the result
 

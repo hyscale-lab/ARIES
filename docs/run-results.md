@@ -107,24 +107,20 @@ Inspect those files in the source run. A successful replay confirms strict
 response checks; inspect `replay.responses` for hash equality. It does not
 prove equal final sandbox state or provide a fresh grade.
 
-`tasks[0].replay.timing.status` is `available` only when a finalized replay
-bridge audit matches every source audit sequence. Its `calls` list has
-`source_sequence` and signed `drift_ns` for each source call. With
-`basis: "shared_replay_origin"`, drift is the observed bridge `started_at`
-minus the common scheduled UTC replay origin, minus the global source offset.
-Thus a delayed occurrence keeps its displacement even when its local call gaps
-match. Staging delay, late readiness, and UTC clock skew can contribute to drift.
-The app, callers, and replay bridge need synchronized wall clocks for this comparison.
-With `basis: "occurrence_first_start"`, no shared epoch was established; offsets
-remain relative to the earliest bridge start in that occurrence. Single-occurrence
-selections keep this earlier behavior. Empty traces have no per-call drift.
-Positive drift means a later start on the stated basis. Source sequences remain
-occurrence-local: use the evaluation's source run and task IDs with each sequence,
-not an invented global sequence or `tool_call_id`. If correlation is missing,
-duplicated, or unrepresentable, timing is `unavailable` with a `reason` and no
-inferred per-call values. This diagnostic does not change replay response matching,
-isolation status, or the reused grade. Timing is read only after confirmed
-caller stop and bridge revocation. Reading it never starts an unused clock.
+`tasks[0].replay.timing.status` is `available` when evidence identifies every
+source call. Each `calls` entry has an occurrence-local `source_sequence` and
+signed `drift_ns`; positive drift means a later start. The `basis` is:
+
+- `shared_replay_origin`: observed bridge start minus the common scheduled UTC
+  origin and global source offset. This retains cross-occurrence delay.
+- `occurrence_first_start`: offsets relative to that occurrence's earliest
+  observed bridge start, without a shared epoch.
+
+Shared comparison needs synchronized app, caller, and replay bridge clocks.
+Empty traces have no per-call drift. Missing, duplicate, or unrepresentable
+correlation gives `unavailable` with a `reason`, not inferred values. Timing is
+nonfatal and does not change response matching, isolation, or the reused grade.
+See the [timing mechanism](design/replayer.md#5-replayer-components).
 
 `tasks[0].replay.responses.status` is `available` after confirmed caller stop
 and bridge revocation when the private replay audit identifies every source
@@ -139,22 +135,9 @@ output is absent, the log says `source output unavailable`. Non-UTF-8 output
 uses labeled base64. Response text stays out of `run-result.json` and caller
 errors. Treat `aries.log` as private.
 
-The source occurrence directory contains the private
-`bridge/tool-calls.jsonl` and `bridge/runtime.json`; its parent run contains
-`run-result.json`. A source with missing input, canceled or refused calls,
-missing response checks, a changed log digest, or a missing matching source
-evaluation fails whole-run preflight before any task sandbox starts. Admission
-also rejects evidence changed after preflight. Replay uses one common call-start
-timeline and preserves each source's final post-call wait, but not initial setup
-waits or sandbox lifecycle timing. For multiple occurrences, the first ready
-caller with recorded calls starts the shared clock. Empty plans do not arm it;
-a single selected occurrence keeps local timing after readiness. Later readiness
-does not reset the timeline. Actual start times can drift due to bounded admission,
-private plan staging, network, and bridge scheduling. Equal source start timestamps
-are accepted without a launch-order guarantee and produce warnings in `aries.log`.
-Replay does not reproduce the original live-sandbox count or resource contention.
-Source artifacts remain in their source run; replay outputs are separate. See
-[replay configuration](configuration.md#sandbox-call-replay).
+See the [replay design](design/replayer.md#5-replayer-components) for source
+validation, scheduling, and evidence collection, and the
+[configuration reference](configuration.md#sandbox-call-replay) for profiles.
 
 ## Measurement availability
 
@@ -255,10 +238,8 @@ With `--record-for-replay`, a live `hermes-grpc` task records
 bounded `Exec` output in its private `bridge/tool-calls.jsonl`. Replay execution
 retains this evidence automatically. Ordinary live runs omit replay-only response
 fields; they still keep baseline command, input, file-window, status, and byte-count
-audits. SSH audit records do not retain response text. See
-[replay configuration](configuration.md#sandbox-call-replay) for call 15 and
-binary-output inspection. This text can contain task-supplied or private data; do not publish
-the audit or `aries.log` without review. If encoded output exceeds the
+audits. SSH audit records do not retain response text. Captured output can contain
+private data; do not publish the audit or `aries.log` without review. If encoded output exceeds the
 128 MiB replay line bound, the recording task fails after confirmed bridge stop,
 skips evaluation, and is not replay-ready. An aggregate audit failure keeps
 isolation unconfirmed and evaluation blocked for all live runs. gRPC records also have `sha256`, `truncated`, and the read window fields
@@ -271,6 +252,16 @@ values differ by transport: gRPC uses the
 keeps the classes of its dialect. Only gRPC
 records can have `tool_call_id`, the id of the harness tool call that the
 sandbox call serves. It is absent when the id is not known.
+
+Inspect source call 15 and its replay output with these commands. Set
+`source_dir` and `replay_dir` to the respective task occurrence directories.
+`response_debug: true` marks captured output, including an empty response;
+invalid UTF-8 uses the base64 fields. Keep command output private.
+
+```sh
+jq 'select(.sequence == 15) | {sequence, response_debug, response_stdout, response_stderr, response_stdout_base64, response_stderr_base64}' "$source_dir/bridge/tool-calls.jsonl"
+jq 'select(.replay_source_sequence == 15) | {sequence, replay_source_sequence, response_debug, response_stdout, response_stderr, response_stdout_base64, response_stderr_base64}' "$replay_dir/bridge/tool-calls.jsonl"
+```
 
 Both bridge logs identify the `sandbox_id` and a sequence number local to that
 sandbox's writer, with run/task and exact backend runtime metadata. In

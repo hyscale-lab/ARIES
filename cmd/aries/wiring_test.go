@@ -61,7 +61,7 @@ func TestValidateComponentsAllowsOnlyReplayGRPCAndPrivateRoute(t *testing.T) {
 	}
 }
 
-func TestDispatchAcceptsOnlyExactCommandGrammar(t *testing.T) {
+func TestDispatchUsesNativeFlags(t *testing.T) {
 	runErr := errors.New("run")
 	setupErr := errors.New("setup")
 	for _, tc := range []struct {
@@ -72,17 +72,26 @@ func TestDispatchAcceptsOnlyExactCommandGrammar(t *testing.T) {
 		wantErr       error
 		wantProfile   string
 		wantRecording bool
+		wantParseErr  string
 	}{
 		{name: "run", args: []string{"profile.json"}, wantRun: 1, wantErr: runErr, wantProfile: "profile.json"},
 		{name: "setup", args: []string{"setup", "profile.json"}, wantSetup: 1, wantErr: setupErr, wantProfile: "profile.json"},
-		{name: "record after profile", args: []string{"profile.json", "--record-for-replay"}, wantRun: 1, wantErr: runErr, wantProfile: "profile.json", wantRecording: true},
+		{name: "record after profile", args: []string{"profile.json", "--record-for-replay"}},
 		{name: "record before profile", args: []string{"--record-for-replay", "profile.json"}, wantRun: 1, wantErr: runErr, wantProfile: "profile.json", wantRecording: true},
-		{name: "record after profile named setup", args: []string{"setup", "--record-for-replay"}, wantRun: 1, wantErr: runErr, wantProfile: "setup", wantRecording: true},
+		{name: "single dash", args: []string{"-record-for-replay", "profile.json"}, wantRun: 1, wantErr: runErr, wantProfile: "profile.json", wantRecording: true},
+		{name: "explicit true", args: []string{"--record-for-replay=true", "profile.json"}, wantRun: 1, wantErr: runErr, wantProfile: "profile.json", wantRecording: true},
+		{name: "explicit false", args: []string{"--record-for-replay=false", "profile.json"}, wantRun: 1, wantErr: runErr, wantProfile: "profile.json"},
+		{name: "last duplicate wins", args: []string{"--record-for-replay", "-record-for-replay=false", "profile.json"}, wantRun: 1, wantErr: runErr, wantProfile: "profile.json"},
+		{name: "duplicate true", args: []string{"--record-for-replay", "--record-for-replay", "profile.json"}, wantRun: 1, wantErr: runErr, wantProfile: "profile.json", wantRecording: true},
+		{name: "terminator", args: []string{"--", "-profile.json"}, wantRun: 1, wantErr: runErr, wantProfile: "-profile.json"},
+		{name: "setup after false", args: []string{"--record-for-replay=false", "setup", "profile.json"}, wantSetup: 1, wantErr: setupErr, wantProfile: "profile.json"},
+		{name: "record after profile named setup", args: []string{"setup", "--record-for-replay"}, wantSetup: 1, wantErr: setupErr, wantProfile: "--record-for-replay"},
 		{name: "record profile named setup", args: []string{"--record-for-replay", "setup"}, wantRun: 1, wantErr: runErr, wantProfile: "setup", wantRecording: true},
 		{name: "empty"},
 		{name: "flag only", args: []string{"--record-for-replay"}},
-		{name: "duplicate flag", args: []string{"--record-for-replay", "profile.json", "--record-for-replay"}},
-		{name: "unknown flag", args: []string{"--unknown"}},
+		{name: "flag after positional", args: []string{"--record-for-replay", "profile.json", "--record-for-replay"}},
+		{name: "invalid boolean", args: []string{"--record-for-replay=invalid", "profile.json"}, wantParseErr: "invalid boolean value"},
+		{name: "unknown flag", args: []string{"--unknown"}, wantParseErr: "flag provided but not defined"},
 		{name: "unknown flag with profile", args: []string{"profile.json", "--unknown"}},
 		{name: "setup recording", args: []string{"setup", "profile.json", "--record-for-replay"}},
 		{name: "recording setup", args: []string{"--record-for-replay", "setup", "profile.json"}},
@@ -107,15 +116,55 @@ func TestDispatchAcceptsOnlyExactCommandGrammar(t *testing.T) {
 				profile = got
 				return setupErr
 			}
-			err := dispatch(context.Background(), tc.args, &bytes.Buffer{}, app.Dependencies{}, run, setup)
+			var dependencies app.Dependencies
+			positional, err := parseArgs(tc.args, &dependencies.RecordForReplay)
+			if err == nil {
+				err = dispatch(context.Background(), positional, &bytes.Buffer{}, dependencies, run, setup)
+			}
 			if runCalls != tc.wantRun || setupCalls != tc.wantSetup || (tc.wantErr != nil && !errors.Is(err, tc.wantErr)) {
 				t.Fatalf("run=%d setup=%d err=%v", runCalls, setupCalls, err)
+			}
+			if tc.wantParseErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantParseErr) {
+					t.Fatalf("parse error=%v, want %q", err, tc.wantParseErr)
+				}
+				return
 			}
 			if tc.wantErr == nil && (err == nil || err.Error() != "usage: aries [--record-for-replay] PROFILE.json | aries setup PROFILE.json") {
 				t.Fatalf("grammar err=%v", err)
 			}
 			if tc.wantProfile != "" && profile != tc.wantProfile {
 				t.Fatalf("profile=%q", profile)
+			}
+		})
+	}
+}
+
+func TestNativeFlagsKeepApptainerNamespace(t *testing.T) {
+	t.Setenv("ARIES_RUN_NAMESPACE", "")
+	profile := filepath.Join("..", "..", "profiles", "apptainer", "hermes-tb2-fix-git-apptainer.json")
+	if !apptainerProfile(profile) {
+		t.Fatal("test profile does not select Apptainer")
+	}
+	for _, args := range [][]string{
+		{profile},
+		{"--", profile},
+		{"--record-for-replay=false", profile},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			var entered []string
+			enter := func(_ context.Context, argv []string) (int, error) {
+				entered = argv
+				return 0, nil
+			}
+			var recordForReplay bool
+			positional, err := parseArgs(args, &recordForReplay)
+			if err != nil {
+				t.Fatal(err)
+			}
+			code, selected, err := runInOwnNamespace(context.Background(), args, positional, enter)
+			if err != nil || !selected || code != 0 || len(entered) == 0 || !reflect.DeepEqual(entered[1:], args) {
+				t.Fatalf("code=%d selected=%v argv=%q err=%v", code, selected, entered, err)
 			}
 		})
 	}

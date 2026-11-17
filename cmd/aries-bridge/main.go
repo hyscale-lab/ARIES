@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -22,22 +23,27 @@ func main() {
 	}
 }
 func run() error {
-	if len(os.Args) == 3 && os.Args[1] == "replay" {
+	flags := flag.NewFlagSet("aries-bridge", flag.ContinueOnError)
+	if err := flags.Parse(os.Args[1:]); err != nil {
+		return err
+	}
+	args := flags.Args()
+	if len(args) == 2 && args[0] == "replay" {
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 		defer cancel()
-		return managed.RunChild(ctx, os.Args[2])
+		return managed.RunChild(ctx, args[1])
 	}
-	if len(os.Args) != 2 {
-		return fmt.Errorf("usage: aries-bridge config.json")
+	if len(args) != 1 {
+		return fmt.Errorf("usage: aries-bridge config.json | aries-bridge replay config.json")
 	}
-	info, err := os.Lstat(os.Args[1])
+	info, err := os.Lstat(args[0])
 	if err != nil {
 		return err
 	}
 	if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || info.Size() > 1<<20 {
 		return fmt.Errorf("invalid private bridge launch configuration")
 	}
-	data, err := os.ReadFile(os.Args[1])
+	data, err := os.ReadFile(args[0])
 	if err != nil {
 		return err
 	}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,6 +40,37 @@ func TestReplayModeRequiresPrivateConfiguration(t *testing.T) {
 			os.Args = []string{"aries-bridge", "replay", test.path}
 			if err := run(); err == nil || !strings.Contains(err.Error(), "invalid private replay caller file") {
 				t.Fatalf("unsafe replay configuration passed private-file validation: %v", err)
+			}
+		})
+	}
+}
+
+func TestBridgeUsesNativeFlags(t *testing.T) {
+	oldArgs := os.Args
+	t.Cleanup(func() { os.Args = oldArgs })
+	t.Chdir(t.TempDir())
+	for _, test := range []struct {
+		name     string
+		args     []string
+		wantErr  error
+		wantText string
+	}{
+		{name: "server terminator", args: []string{"--", "-missing.json"}, wantErr: os.ErrNotExist},
+		{name: "replay terminator", args: []string{"--", "replay", "missing.json"}, wantErr: os.ErrNotExist},
+		{name: "stop at positional", args: []string{"replay", "--unknown"}, wantErr: os.ErrNotExist},
+		{name: "unknown flag", args: []string{"--unknown"}, wantText: "flag provided but not defined"},
+		{name: "empty", wantText: "usage:"},
+		{name: "extra argument", args: []string{"config.json", "extra"}, wantText: "usage:"},
+		{name: "replay extra argument", args: []string{"replay", "config.json", "extra"}, wantText: "usage:"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			os.Args = append([]string{"aries-bridge"}, test.args...)
+			err := run()
+			if test.wantErr != nil && !errors.Is(err, test.wantErr) {
+				t.Fatalf("error=%v, want %v", err, test.wantErr)
+			}
+			if test.wantText != "" && (err == nil || !strings.Contains(err.Error(), test.wantText)) {
+				t.Fatalf("error=%v, want %q", err, test.wantText)
 			}
 		})
 	}

@@ -35,35 +35,23 @@ or inheritance layer. Never put credential values in profile JSON.
 
 ## CLI recording intent
 
-An ordinary run keeps the baseline audit and does not add replay response evidence:
+An ordinary run keeps the baseline audit. To record a live source for later replay:
 
 ```sh
-./bin/aries PROFILE.json
-```
-
-To record a live source for later replay, use either order:
-
-```sh
-./bin/aries PROFILE.json --record-for-replay
 ./bin/aries --record-for-replay PROFILE.json
 ```
 
-This flag changes no profile JSON. It requires `hermes-grpc` and source provenance
-from every selected task and the pinned benchmark revisions. ARIES validates the
-resolved catalog before sandbox or model-runtime execution. Recording supports
-multiple logical tasks, repeated task IDs, selectors that resolve to several
-tasks, and finite timed loops. Each occurrence has a separate source directory
-and finalized trace. A loop stops admission at its deadline and finishes admitted
-work. Arrival schedules remain unsupported while recording; ordinary live runs
-are unchanged. Recording can still produce an incompatible trace; replay loading
-checks call inputs, outcomes, and timing before sandbox creation. Replay selects
-one source occurrence or every recorded occurrence in a complete run.
+Flags must precede positional arguments. Go's standard flag syntax applies:
+one or two dashes, explicit boolean values, and the last duplicate value wins.
+Use `--` or a `./` path prefix for a profile name that starts with a dash.
+Unknown flags and extra positional arguments are rejected.
 
-The flag is not valid with `aries setup PROFILE.json` or a replay profile.
-Duplicate flags, unknown flags, and extra positional arguments are rejected.
-A single profile named `setup` still runs as a profile. `output_dir` and the run
-directory layout do not change. There is no separate output flag or new mandatory evidence file.
-Replay execution automatically retains comparison evidence without this flag.
+Recording requires `hermes-grpc` and source provenance for every selected task.
+It supports multiple tasks, repeated IDs, selector expansion, and finite timed loops,
+but not arrival schedules. The enabled flag is invalid with setup or a replay profile.
+Recording does not guarantee a replay-compatible trace. Profile JSON, `output_dir`,
+and ordinary live audits do not change. Replay retains comparison evidence without
+this flag. See the [capture contract](design/replayer.md#4-capture-contract).
 
 ## Resource and timeout overrides
 
@@ -391,30 +379,14 @@ new profile file:
 ```
 
 This is not a complete profile. Replace `SOURCE_RUN` with the source run
-directory. To replay the complete run, set `source` to `../runs/SOURCE_RUN`.
-The source occurrence must contain `bridge/tool-calls.jsonl` and
-`bridge/runtime.json`; its parent must contain `run-result.json` with a
-matching evaluation. These three files are the only first-version source
-artifacts. The bridge log must contain complete request inputs and response
-checks. The runtime file must bind the complete log and identify the same
-benchmark, task, image reference, and pinned revisions. Old runs without this
-evidence cannot be replayed. Keep all source artifacts private. The structured
-log omits binary or control-bearing input and write bodies above 16 MiB.
-Failed writes can lack the declared size. Any such call rejects the whole
-source. The optional raw log does not restore omitted input for replay, and
-it is not a first-version replay source artifact.
-
-Recording metadata stores `run_id`, which must match the parent result even
-for an empty call log. Earlier nonempty sources without this field remain
-valid only when every call proves that run binding. An earlier empty source
-without a verifiable run binding is rejected before sandbox creation.
-Whole-run preflight validates every indexed occurrence before any task sandbox
-starts. It checks the caller's 512 MiB encoded-plan bound, including global
-offsets and the serialized UTC replay origin. Admission reloads one bounded plan
-and rejects changed runtime metadata, call logs, or parent results. Each recorded
-`Exec` workdir must match the
-selected workdir, when explicit, and the resolved bridge endpoint workdir
-before the caller starts. Replay keeps the recorded command arguments.
+directory; use `../runs/SOURCE_RUN` to select the complete run. Each source
+occurrence needs private `bridge/tool-calls.jsonl` and `bridge/runtime.json`
+files, plus a matching evaluation in its parent `run-result.json`. Benchmark,
+logical task, image reference, pinned revisions, and recorded `Exec` workdirs
+must match. Changed, incomplete, or incompatible sources fail validation.
+Binary or control-bearing request bodies and writes above 16 MiB are not replay
+inputs; raw logs cannot restore them. Keep source artifacts private. See
+[source validation](design/replayer.md#5-replayer-components).
 
 `replay.deployment` places a separate caller runtime in the pinned bridge
 image. For Docker, the caller, bridge, and sandbox must use the same local
@@ -424,87 +396,34 @@ bridge or sandbox settings. The caller reaches the private gRPC bridge and
 must not publish its unauthenticated endpoint or mount host paths. The
 first version supports `hermes-grpc` only, not SSH or Toolathlon.
 
-`benchmark.tasks` selects the catalog for source validation, not the number of
-replay executions. Replay executes each source occurrence once, including
-repeated logical IDs and occurrences from source loops. It retains zero-call
-occurrences and their source grades. `execution.concurrency` bounds admitted
-runtime owners; queued work does not allocate a sandbox in advance. Replay
-profiles forbid
-`execution.loop_duration`, `execution.arrivals_file`, and
-`execution.arrival_rate_per_min`. It also forbids a live model, harness, or
-model runtime. Replay does not load a model credential, start a harness, run
-a model judge, or call the benchmark verifier. It retains the source
-evaluation as a labeled historical grade, not a grade of the new sandbox.
-A strict bridge response difference stops later calls and fails replay even when the
-source reward is positive. A changed response SHA-256 alone is diagnostic and
-does not stop later calls.
-The byte count, gRPC code, `Exec` exit code, and successful `WriteFile` byte
-count remain strict. Equal responses do not prove equal final sandbox state. See [replay results](run-results.md#sandbox-call-replay-results).
+`benchmark.tasks` supplies the source-validation catalog; it does not filter or
+multiply occurrences. Replay executes each selected occurrence once, including
+repeated IDs, loop-produced occurrences, and empty traces. `execution.concurrency`
+bounds active occurrence owners. Replay forbids `execution.loop_duration`,
+`execution.arrivals_file`, `execution.arrival_rate_per_min`, and live model,
+harness, or model-runtime settings. No verifier or judge runs: the source grade
+is historical, not a new sandbox grade. Matching responses do not prove equal
+final state. See [replay results](run-results.md#sandbox-call-replay-results).
 
-A live `hermes-grpc` task with `--record-for-replay`, and every replay task,
-retains bounded `Exec` output in its private `bridge/tool-calls.jsonl`.
-Ordinary live audits omit the replay-only response fields and completion metadata. This does not enable
-`bridge.retain_raw_log` or capture request bodies. The audit includes exact UTF-8
-`response_stdout` and `response_stderr`; non-UTF-8 output uses lossless
-`response_stdout_base64` or `response_stderr_base64`. Empty output has
-`response_debug: true` with no text field. The replay audit uses
-`replay_source_sequence` to name the matching source audit `sequence`.
-Inspect source call 15 and its replay call with:
+Recording and replay retain bounded `Exec` output in private bridge audits.
+This does not enable raw logging or restore omitted request bodies. Audits,
+`aries.log`, and stderr can contain private task data; review them before sharing.
+An encoded response above the 128 MiB record bound fails its recording task
+without evaluation. Combined audit overflow at 256 MiB leaves bridge stop
+unconfirmed and evaluation blocked. See the
+[capture contract](design/replayer.md#4-capture-contract) and
+[inspection commands](run-results.md#bridge-evidence).
 
-```sh
-jq 'select(.sequence == 15) | {sequence, response_debug, response_stdout, response_stderr, response_stdout_base64, response_stderr_base64}' "$source_dir/bridge/tool-calls.jsonl"
-jq 'select(.replay_source_sequence == 15) | {sequence, replay_source_sequence, response_debug, response_stdout, response_stderr, response_stdout_base64, response_stderr_base64}' "$replay_dir/bridge/tool-calls.jsonl"
-```
-
-Set `source_dir` and `replay_dir` to the respective task occurrence directories.
-Output can contain task-supplied or private data. Keep both audit files private.
-Each reply stays within the existing output bound. If JSON encoding exceeds the
-128 MiB replay audit line bound, the record has
-`replay_error: "response-debug-too-large"`. After confirmed bridge revocation,
-the recording task fails without evaluation, and its source is not replay-ready.
-If the combined 256 MiB audit limit fails, bridge stop is unconfirmed and
-evaluation remains blocked. Independent tasks continue.
-The original response hash, byte count, and gRPC code do not
-change. After caller stop and bridge revocation, `aries.log` and stderr show
-per-call expected and actual hashes on drift. For `Exec`, they also show
-labeled captured stdout and stderr for `Exec`. Non-UTF-8 output
-uses labeled base64. If the source audit has no captured `Exec` output, the
-log says `source output unavailable`. File-call drift logs contain hashes but
-no response text. Treat `aries.log` as private. Output text does not enter
-`run-result.json` or caller errors.
-
-The replay caller uses the task's positive agent timeout, or the positive
-`agent_timeout_seconds` override when present. If both are absent or zero,
-the default is 20 minutes. A negative timeout is rejected. The first call
-starts after sandbox preparation, bridge access, and caller readiness.
-For multiple selected occurrences, the first ready caller with recorded calls
-starts one UTC replay clock. Later callers reuse it, with offsets from the earliest
-recorded `started_at` in the selected workload. Empty plans neither arm nor wait
-for that clock. A single selected occurrence keeps local timing after readiness.
-Late readiness does not move the common origin; overdue calls start as soon as
-possible. Equal source starts can launch in any order and produce warnings in
-`aries.log`. The app, callers, and replay bridge require synchronized UTC wall
-clocks for shared scheduling and timing comparison. Source bridge clocks must also
-be stable and synchronized. Private plan staging, clock skew, and network delay
-can move actual bridge starts; these differences remain diagnostic.
-The caller also keeps the
-recorded wait after the last call. Replay does not reproduce sandbox lifecycle
-timing, the original live-sandbox count, or original resource contention.
-Positive caller stop, bridge revocation, and confirmed sandbox removal remain
-required. Source artifacts stay unchanged; replay writes a separate run directory.
-Network delay can shift the bridge's actual
-start time. After confirmed caller stop and bridge revocation, ARIES pairs
-private bridge audit records by the source audit sequence. This replay-only
-identifier is separate from `tool_call_id` and stays local to its source occurrence.
-The timing result names its `basis`. With `shared_replay_origin`, signed `drift_ns`
-compares observed bridge starts against the common scheduled UTC epoch plus each
-global source offset. It retains cross-occurrence displacement, including lateness
-and staging delay. With `occurrence_first_start`, no shared epoch was established;
-comparison keeps the earlier occurrence-local normalization. Positive drift means
-a later start on that basis. Empty traces create no calls or clock. Missing,
-duplicate, or unrepresentable correlation makes timing unavailable. Timing drift
-does not change response matching or the inherited evaluation. See
-[replay results](run-results.md#sandbox-call-replay-results).
+Each replay call uses the positive `agent_timeout_seconds` override, otherwise
+the task's positive agent timeout, otherwise 20 minutes. Negative timeouts fail.
+Shared scheduling and timing comparison need synchronized UTC clocks on the app,
+callers, and replay bridge; source bridge clocks must be stable and synchronized.
+Readiness, staging, clock skew, and network delay can change actual starts.
+Replay does not reproduce sandbox lifecycle timing, original live-sandbox counts,
+or resource contention. Caller stop, bridge revocation, and sandbox removal must
+still be confirmed. Source artifacts stay unchanged; replay writes a separate run.
+See the [scheduler](design/replayer.md#5-replayer-components) and
+[timing result fields](run-results.md#sandbox-call-replay-results).
 
 ## Replay task arrivals
 
