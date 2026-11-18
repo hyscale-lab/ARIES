@@ -207,6 +207,7 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	configuration, err := renderConfig(request.Model, request.Endpoint, manager.options.Common.Mode, request.Connectivity.SearchURL, manager.options.Common.WebSearchEnabled, extractEnabled, manager.options.Common.SubagentsEnabled, manager.options.Common.MaxConcurrentSubagents, MCPOptions{
 		Servers:        mcpServers,
 		NoSandboxTools: request.NoSandboxTools,
+		SkillDirs:      harness.PluginSkillDirs(manager.options.Common.Plugins),
 	})
 	if err != nil {
 		return err
@@ -282,6 +283,15 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	if err := active.Artifacts.Write("openclaw.json", configuration); err != nil {
 		return fail(fmt.Errorf("retain rendered OpenClaw config: %w", err))
 	}
+	if plugins := manager.options.Common.Plugins; len(plugins) > 0 {
+		record, err := harness.PluginRecord(plugins)
+		if err == nil {
+			err = active.Artifacts.Write("plugins.json", record)
+		}
+		if err != nil {
+			return fail(fmt.Errorf("retain OpenClaw plugin record: %w", err))
+		}
+	}
 	archive, err := manager.runtimeArchive(active, configuration)
 	if err != nil {
 		return fail(err)
@@ -290,6 +300,9 @@ func (manager *Manager) Start(ctx context.Context, request core.HarnessRequest) 
 	secrets := active.Credentials.Secrets()
 	if err := manager.runtime.Start(ctx, active.Occurrence, active.DeploymentRequest, archive, secrets); err != nil {
 		return fail(err)
+	}
+	if err := harness.CheckPluginCommands(ctx, manager.runtime.Options.Deployment, active.ID, manager.options.Common.Plugins); err != nil {
+		return fail(fmt.Errorf("OpenClaw %w", err))
 	}
 	readyCtx, cancel := context.WithTimeout(ctx, manager.runtime.Options.StartTimeout)
 	err = manager.waitReady(readyCtx, active)
@@ -762,6 +775,11 @@ func (manager *Manager) runtimeArchive(active *session, configuration []byte) ([
 		{Name: "opt/aries/bin", Mode: 0o755, UID: 1000, GID: 1000},
 		{Name: "home/node/.openclaw", Mode: 0o700, UID: 1000, GID: 1000},
 		{Name: "home/node/.openclaw/.aries", Mode: 0o700, UID: 1000, GID: 1000},
+	}
+	pluginDirectories, pluginFiles := harness.PluginArchive(manager.options.Common.Plugins, 1000, 1000)
+	directories = append(directories, pluginDirectories...)
+	for name, file := range pluginFiles {
+		files[name] = file
 	}
 	return harness.StageArchive(directories, files)
 }

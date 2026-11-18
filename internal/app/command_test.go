@@ -176,8 +176,8 @@ func failingRunWiring(runtime ModelRuntime, events *[]string, runErr error) Wiri
 			*events = append(*events, "run")
 			return nil, runErr
 		}),
-		BuildHarnessImage: func(context.Context, config.Config) error { return nil },
-		PullImages:        func(context.Context, config.Config, []string) error { return nil },
+		PrepareHarness: func(context.Context, config.Config) error { return nil },
+		PullImages:     func(context.Context, config.Config, []string) error { return nil },
 
 		NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
 			return HarnessInstance{}, nil
@@ -251,8 +251,8 @@ func TestRunForwardsFreshPreparedGPUIndicesToEveryOccurrence(t *testing.T) {
 				},
 			}, nil
 		},
-		BuildHarnessImage: func(context.Context, config.Config) error { return nil },
-		PullImages:        func(context.Context, config.Config, []string) error { return nil },
+		PrepareHarness: func(context.Context, config.Config) error { return nil },
+		PullImages:     func(context.Context, config.Config, []string) error { return nil },
 
 		NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
 			return HarnessInstance{Harness: &stubHarness{}, Close: func() error { return nil }}, nil
@@ -333,8 +333,8 @@ func TestUnsupportedComponentsAreRejectedImmediatelyOnRunAndSetup(t *testing.T) 
 						effects++
 						return nil, nil
 					}),
-					BuildHarnessImage: func(context.Context, config.Config) error { return nil },
-					PullImages:        func(context.Context, config.Config, []string) error { effects++; return nil },
+					PrepareHarness: func(context.Context, config.Config) error { return nil },
+					PullImages:     func(context.Context, config.Config, []string) error { effects++; return nil },
 
 					NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
 						effects++
@@ -488,7 +488,7 @@ func TestRuntimeExitCancelsAndDrainsRun(t *testing.T) {
 	}, func(config.Config, string, string, string, func(string) ([]byte, bool)) (runner.Benchmark, error) {
 		constructed++
 		return &oneTaskBenchmark{}, nil
-	}), BuildHarnessImage: func(context.Context, config.Config) error { return nil }, PullImages: func(context.Context, config.Config, []string) error {
+	}), PrepareHarness: func(context.Context, config.Config) error { return nil }, PullImages: func(context.Context, config.Config, []string) error {
 		return nil
 	}, NewHarness: func(config.Config, string, func(string) ([]byte, bool), *logrus.Logger) (HarnessInstance, error) {
 		return HarnessInstance{Harness: h, Close: func() error { return nil }}, nil

@@ -1,0 +1,6 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "aries-probe",
+  "version": "0.0.1",
+  "description": "ARIES test plugin: one skill and one stdio MCP server that returns a marker."
+}
