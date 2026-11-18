@@ -3,7 +3,9 @@
 package apptainer
 
 // These tests run real Apptainer instances. Build them where Go is installed
-// and run the binary on the target host, which needs only apptainer:
+// and run the binary on the target host, which needs apptainer, and for
+// TestRealTaskNamespacesServeOnePortApart also slirp4netns, nsenter and cat on
+// PATH and unprivileged user namespaces:
 //
 //	go test -c -tags apptainer -o apptainer.test ./pkg/deployment/apptainer
 //	ARIES_APPTAINER_TEST_IMAGE=/path/to/debian.sif ./apptainer.test -test.v -test.run Real
@@ -32,6 +34,12 @@ const awkwardValue = "yes it's \"q\" $HOME \\ `x` *"
 
 func newRealManager(t *testing.T) *Manager {
 	t.Helper()
+	return newRealManagerIn(t, t.TempDir())
+}
+
+// newRealManagerIn is newRealManager with the state directory given.
+func newRealManagerIn(t *testing.T, stateDir string) *Manager {
+	t.Helper()
 	sif := os.Getenv("ARIES_APPTAINER_TEST_IMAGE")
 	if sif == "" {
 		t.Skip("ARIES_APPTAINER_TEST_IMAGE names no SIF image")
@@ -40,7 +48,7 @@ func newRealManager(t *testing.T) *Manager {
 	if err := PullImages(context.Background(), images, []string{realImage}, map[string]string{realImage: sif}); err != nil {
 		t.Fatalf("unpack the test image: %v", err)
 	}
-	manager, err := New(Options{StateDir: t.TempDir(), ImageDir: images})
+	manager, err := New(Options{StateDir: stateDir, ImageDir: images})
 	if err != nil {
 		t.Fatal(err)
 	}

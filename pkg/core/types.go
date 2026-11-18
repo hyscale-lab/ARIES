@@ -167,6 +167,11 @@ type HarnessConnectivity struct {
 	// MCPServers are the task's in-sandbox MCP servers at the addresses
 	// resolved for this placement; the harness adds them to its own.
 	MCPServers []MCPServerConfig `json:"mcp_servers,omitempty"`
+	// ModelBaseURL, when set, is the run's model base URL as reachable from
+	// this placement, which Runner gives the harness in place of its own: a
+	// managed model server on Runner's loopback is elsewhere for a harness in
+	// a network namespace of its own.
+	ModelBaseURL string `json:"model_base_url,omitempty"`
 }
 
 // HarnessRequest contains task-local runtime inputs supplied before Run.
