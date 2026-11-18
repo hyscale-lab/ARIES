@@ -90,46 +90,28 @@ The `tasks[0]` examples below show only the first result.
 Unconfirmed replay cleanup stops new admission. A successful cleanup retry can set
 `cleanup.status` to `succeeded`, but the task's `error` retains the original failure.
 
-`tasks[0].evaluation.reused` marks the source occurrence's recorded
-evaluation. `evaluation.source_run_id` and `evaluation.source_task_id` name
-its source run and occurrence. Its status, score, reward, and error are
-historical values. Replay does not run a new verifier, model judge, or FACT
-check. It does not copy source `evaluation/` artifacts into the replay run.
-Inspect those files in the source run. A successful replay confirms strict
-response checks; inspect `replay.responses` for hash equality. It does not
-prove equal final sandbox state or provide a fresh grade.
+`tasks[0].evaluation.reused` marks historical status, score, reward, and error.
+`evaluation.source_run_id` and `evaluation.source_task_id` identify the source.
+Read its `evaluation/` artifacts there; replay does not copy them or re-evaluate.
+Successful replay confirms strict response checks, not equal final sandbox state.
+Use `replay.responses` for hash equality. See
+[result limits](replay-limitations.md#fidelity-and-result-limits).
 
-`tasks[0].replay.timing.status` is `available` when evidence identifies every
-source call. Each `calls` entry has an occurrence-local `source_sequence` and
-signed `drift_ns`; positive drift means a later start. The `basis` is:
+`tasks[0].replay.timing.status` is `available` or `unavailable` with a `reason`.
+Each `calls` entry has an occurrence-local `source_sequence` and signed `drift_ns`;
+positive means late. `basis` is `shared_replay_origin` for the common scheduled
+clock or `occurrence_first_start` for the occurrence's first observed call.
+Empty traces have no per-call drift. Timing drift is nonfatal.
+See [timing calculations and clock requirements](design/replayer.md#5-replayer-components)
+before comparing measurements.
 
-- `shared_replay_origin`: observed bridge start minus the common scheduled UTC
-  origin and global source offset. This retains cross-occurrence delay.
-- `occurrence_first_start`: offsets relative to that occurrence's earliest
-  observed bridge start, without a shared epoch.
-
-Shared comparison needs synchronized app, caller, and replay bridge clocks.
-Empty traces have no per-call drift. Missing, duplicate, or unrepresentable
-correlation gives `unavailable` with a `reason`, not inferred values. Timing is
-nonfatal and does not change response matching, isolation, or the reused grade.
-See the [timing mechanism](design/replayer.md#5-replayer-components).
-
-`tasks[0].replay.responses.status` is `available` after confirmed caller stop
-and bridge revocation when the private replay audit identifies every source
-call. Its `calls` list records `source_sequence`, `expected_sha256`,
-`actual_sha256`, and `matched` or `drifted` status. Missing or ambiguous audit
-evidence makes the summary `unavailable` with a reason. Hash-only drift
-does not fail replay. Strict byte count, gRPC code, `Exec` exit code, and
-successful `WriteFile` byte count still fail replay. A reused grade does not
-show response equality. `aries.log` and stderr show per-call hashes on drift
-and captured `Exec` output. If the source
-output is absent, the log says `source output unavailable`. Non-UTF-8 output
-uses labeled base64. Response text stays out of `run-result.json` and caller
-errors. Treat `aries.log` as private.
-
-See the [replay design](design/replayer.md#5-replayer-components) for source
-validation, scheduling, and evidence collection, and the
-[configuration reference](configuration.md#sandbox-call-replay) for profiles.
+`tasks[0].replay.responses.status` is `available` or `unavailable` with a `reason`.
+Each `calls` entry identifies `source_sequence` and records `expected_sha256`,
+`actual_sha256`, and `matched` or `drifted` status.
+Hash-only drift does not fail replay; see the
+[response checks](design/replayer.md#5-replayer-components).
+Changed `Exec` output appears in private `aries.log` and stderr,
+not `run-result.json`.
 
 ## Measurement availability
 
@@ -224,14 +206,9 @@ in the transport’s raw log. SSH stdin is always relayed in full, but both SSH 
 `stdin_bytes` and `stdin_truncated: true`, so neither file is then a complete
 input record. If the cut splits a multibyte character, only that partial
 character is left out of the readable `tool-calls.jsonl` text.
-Structured lifecycle logs and tool-call records omit dedicated environment-value fields,
-but captured `Exec` output can contain environment values printed by a command.
-With `--record-for-replay`, a live `hermes-grpc` task records
-bounded `Exec` output in its private `bridge/tool-calls.jsonl`. Replay execution
-retains this evidence automatically. Ordinary live runs omit replay-only response
-fields; they still keep baseline command, input, file-window, status, and byte-count
-audits. SSH audit records do not retain response text. Captured output can contain
-private data; do not publish the audit or `aries.log` without review. See
+Lifecycle logs omit dedicated environment-value fields, but command output can expose credentials.
+`bridge/tool-calls.jsonl` retains `Exec` output for recorded Hermes gRPC runs and replay,
+not ordinary live or SSH runs. Keep audits and output private; see
 [capture limits](replay-limitations.md#size-and-capture-bounds).
 gRPC records also have `sha256`, `truncated`, and the read window fields
 `max_bytes`, `first_line`, `max_lines`, `max_line_bytes`, and `total_lines`, and
@@ -244,16 +221,6 @@ keeps the classes of its dialect. Only gRPC
 records can have `tool_call_id`, the id of the harness tool call that the
 sandbox call serves. It is absent when the id is not known.
 
-Inspect source call 15 and its replay output with these commands. Set
-`source_dir` and `replay_dir` to the respective task occurrence directories.
-`response_debug: true` marks captured output, including an empty response;
-invalid UTF-8 uses the base64 fields. Keep command output private.
-
-```sh
-jq 'select(.sequence == 15) | {sequence, response_debug, response_stdout, response_stderr, response_stdout_base64, response_stderr_base64}' "$source_dir/bridge/tool-calls.jsonl"
-jq 'select(.replay_source_sequence == 15) | {sequence, replay_source_sequence, response_debug, response_stdout, response_stderr, response_stdout_base64, response_stderr_base64}' "$replay_dir/bridge/tool-calls.jsonl"
-```
-
 Both bridge logs identify the `sandbox_id` and a sequence number local to that
 sandbox's writer, with run/task and exact backend runtime metadata. In
 `tool-calls.jsonl`, `started_at` is the time the bridge started the call, and
@@ -264,12 +231,10 @@ and logs even though the service container is shared. Releasing one sandbox
 closes its bridge access and finalizes its evidence without stopping the service
 or other sessions. `bridge/runtime.json` records that sandbox's binding;
 `infrastructure/bridge/runtime.json` records the shared service runtime.
-For ordinary live runs, the per-task runtime file has only `Backend`, `RuntimeID`,
-`RuntimeName`, `SandboxID`, and `TargetRuntimeID`. It omits replay schema,
-provenance, completion, digest, and readiness fields, rather than writing empty
-values. Recording adds those fields to the same file. A `replay_ready` marker
-confirms metadata and audit finalization, not full call or timing compatibility;
-the replay loader can still reject the source.
+Ordinary live `bridge/runtime.json` contains only `Backend`, `RuntimeID`,
+`RuntimeName`, `SandboxID`, and `TargetRuntimeID`. Recording adds replay metadata.
+`replay_ready` confirms metadata and audit finalization, not call or timing
+compatibility; the replay loader can still reject the source.
 
 Each OpenClaw task directory contains the exact placeholder-only rendered
 `harness/openclaw.json`, OpenClaw logs and telemetry when available, replayable

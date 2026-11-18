@@ -152,7 +152,6 @@ Create a replay profile from the [configuration example](configuration.md#sandbo
 Replay needs no model key, harness, or recording flag.
 
 ```sh
-make bridge-image
 ./bin/aries profiles/REPLACE_WITH_REPLAY_PROFILE.json
 ```
 

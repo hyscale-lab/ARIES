@@ -270,15 +270,12 @@ or the request disables its token. Validation rejects token automounting, explic
 type `kubernetes.io/service-account-token`. Ordinary Secret types and other
 projections remain allowed.
 
-For each referenced Secret under this policy, ARIES requests only its type through
-`kubectl get secret -n NAMESPACE NAME -o 'jsonpath-as-json={.type}'`. The lookup has
-a deadline and an output bound. Missing or denied lookups and malformed output
-fail validation. Lookup output and error causes do not enter logs or errors.
-The Runner's Kubernetes credentials need `get` permission for these Secrets in
-the pod's namespace. Kubernetes grants this permission for the whole Secret, not
-one field; ARIES reads only the type from kubectl output. Operators can restrict
-permission to the referenced names with `resourceNames`. The chart does not grant
-this access. ARIES does not grant permissions or list Secrets.
+For direct or projected Secret volumes under this policy, validation checks each
+Secret's type. Missing, denied, or invalid lookup results fail validation.
+The Runner's Kubernetes credentials need `get` permission for those Secrets.
+This grants access to the whole Secret, not one field; use `resourceNames`
+to restrict access. The chart does not grant it. Generated replay pods use
+`emptyDir`; neither those volumes nor `imagePullSecrets` need Secret lookups.
 
 Only the bridge pod mounts a service account. Its Role allows `get pods` and
 `pods/exec` in the namespace, and before executing it confirms the target is a

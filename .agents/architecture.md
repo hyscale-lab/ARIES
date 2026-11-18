@@ -49,9 +49,7 @@ verifier inputs benchmark-private. Give every occurrence fresh mutable benchmark
 state and runtime owners, including repeated task IDs. Runner explicitly revokes
 sessions; use fresh bounded cleanup contexts after cancellation. No assignment
 leases or controller-liveness supervision. Record every selected occurrence,
-including repeats and timed-loop admissions. Replay one source occurrence or the
-complete finite recorded set. Use one shared `started_at` operation timeline and
-warn on equal starts. Do not claim sandbox lifecycle timing fidelity. See
-[replay design](../docs/design/replayer.md).
+including repeats and timed-loop admissions. Do not claim sandbox lifecycle timing
+fidelity. See [replay design](../docs/design/replayer.md).
 
 Details: [design](../docs/design.md), [contracts](components.md).

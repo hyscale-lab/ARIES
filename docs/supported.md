@@ -30,7 +30,7 @@ This page summarizes capabilities and limitations. Use the
 | Tool sandbox and deployment | **Apptainer** 1.5 or newer — unprivileged instances for hosts without Docker, such as HPC clusters; harness, sandbox and bridge all on Apptainer, one task at a time | [Apptainer placement](configuration.md#apptainer-placement), [Apptainer implementation](implementation/apptainer.md) |
 | Tool bridge | **OpenClaw SSH** and **Hermes SSH** — managed Docker container, Kubernetes pod, or a process in an Apptainer run’s namespace; **Codex SSH** — Docker only | [SSH bridge implementation](implementation/ssh-bridges.md) |
 | Tool bridge | **Hermes gRPC** — managed Docker container or Kubernetes pod; typed `Exec` and file procedures through the ARIES Hermes plugin; not on Apptainer | [gRPC bridge implementation](implementation/grpc-bridge.md) |
-| Sandbox-call replay | **Hermes gRPC** — one recorded occurrence or a complete run through private occurrence callers; Docker or Kubernetes placement, with source grades reused | [Replay configuration](configuration.md#sandbox-call-replay), [replay results](run-results.md#sandbox-call-replay-results) |
+| Sandbox-call replay | **Hermes gRPC** — one recorded occurrence or a complete run on Docker or Kubernetes | [Replay configuration](configuration.md#sandbox-call-replay), [replay results](run-results.md#sandbox-call-replay-results) |
 | Model service | **DeepSeek** — external endpoint | [Model backends](configuration.md#model-backends) |
 | Model service | **SGLang** — external endpoint or one ARIES-managed host process per run | [Model backends](configuration.md#model-backends) |
 | Model service | **OpenAI-compatible server** — external only, including vLLM, llama.cpp, gateways, and hosted endpoints | [Model backends](configuration.md#model-backends) |
@@ -47,9 +47,8 @@ guides above.
 
 ## Current limitations
 
-- Sandbox-call replay requires a recorded `hermes-grpc` source on Docker or
-  Kubernetes. Reused grades are historical; confirmed isolation and cleanup remain
-  required. See [replay limits](replay-limitations.md).
+- Replay reuses historical grades; confirmed isolation and cleanup remain required.
+  See [replay limits](replay-limitations.md).
 
 - Each bridge type supports its corresponding harness: OpenClaw uses
   `openclaw-ssh`, Codex uses `codex-ssh` (Docker only), and Hermes uses `hermes-ssh` or `hermes-grpc`. Crossed pairs

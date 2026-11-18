@@ -47,11 +47,9 @@ Use `--` or a `./` path prefix for a profile name that starts with a dash.
 Unknown flags and extra positional arguments are rejected.
 
 Recording requires `hermes-grpc` and source provenance for every selected task.
-It supports multiple tasks, repeated IDs, selector expansion, and finite timed loops,
-but not arrival schedules. The enabled flag is invalid with setup or a replay profile.
-Recording does not guarantee a replay-compatible trace. Profile JSON, `output_dir`,
-and ordinary live audits do not change. Replay retains comparison evidence without
-this flag. See the [capture contract](design/replayer.md#4-capture-contract).
+The enabled flag is invalid with setup, replay profiles, or arrival schedules.
+Recording does not guarantee a replay-compatible trace. Replay needs no recording flag.
+See the [capture contract](design/replayer.md#4-capture-contract).
 
 ## Resource and timeout overrides
 
@@ -378,13 +376,10 @@ new profile file:
 }
 ```
 
-This is not a complete profile. Replace `SOURCE_RUN` with the source run
-directory; use `../runs/SOURCE_RUN` to select the complete run. Each source
-occurrence needs private `bridge/tool-calls.jsonl` and `bridge/runtime.json`
-files, plus a matching evaluation in its parent `run-result.json`. Benchmark,
-logical task, image reference, pinned revisions, and recorded `Exec` workdirs
-must match. Changed, incomplete, or incompatible sources fail validation.
-Keep source artifacts private. See [source limits](replay-limitations.md#workload-and-source-limits).
+Replace `SOURCE_RUN` with the source run directory; use `../runs/SOURCE_RUN`
+to select the complete run. Each occurrence needs private `bridge/tool-calls.jsonl`
+and `bridge/runtime.json` files, plus a matching evaluation in its parent `run-result.json`.
+See [source validation requirements](replay-limitations.md#workload-and-source-limits).
 
 `replay.deployment` places a separate caller runtime in the pinned bridge
 image. For Docker, the caller, bridge, and sandbox must use the same local
@@ -405,7 +400,7 @@ final state. See [replay results](run-results.md#sandbox-call-replay-results).
 
 Audits, `aries.log`, and stderr can contain private task data; review them before sharing.
 See [capture limits](replay-limitations.md#size-and-capture-bounds) and
-[inspection commands](run-results.md#bridge-evidence).
+[bridge evidence](run-results.md#bridge-evidence).
 
 Each replay call uses the positive `agent_timeout_seconds` override, otherwise
 the task's positive agent timeout, otherwise 20 minutes. Negative timeouts fail.
