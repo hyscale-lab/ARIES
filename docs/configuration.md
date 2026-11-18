@@ -384,9 +384,7 @@ occurrence needs private `bridge/tool-calls.jsonl` and `bridge/runtime.json`
 files, plus a matching evaluation in its parent `run-result.json`. Benchmark,
 logical task, image reference, pinned revisions, and recorded `Exec` workdirs
 must match. Changed, incomplete, or incompatible sources fail validation.
-Binary or control-bearing request bodies and writes above 16 MiB are not replay
-inputs; raw logs cannot restore them. Keep source artifacts private. See
-[source validation](design/replayer.md#5-replayer-components).
+Keep source artifacts private. See [source limits](replay-limitations.md#workload-and-source-limits).
 
 `replay.deployment` places a separate caller runtime in the pinned bridge
 image. For Docker, the caller, bridge, and sandbox must use the same local
@@ -405,25 +403,15 @@ harness, or model-runtime settings. No verifier or judge runs: the source grade
 is historical, not a new sandbox grade. Matching responses do not prove equal
 final state. See [replay results](run-results.md#sandbox-call-replay-results).
 
-Recording and replay retain bounded `Exec` output in private bridge audits.
-This does not enable raw logging or restore omitted request bodies. Audits,
-`aries.log`, and stderr can contain private task data; review them before sharing.
-An encoded response above the 128 MiB record bound fails its recording task
-without evaluation. Combined audit overflow at 256 MiB leaves bridge stop
-unconfirmed and evaluation blocked. See the
-[capture contract](design/replayer.md#4-capture-contract) and
+Audits, `aries.log`, and stderr can contain private task data; review them before sharing.
+See [capture limits](replay-limitations.md#size-and-capture-bounds) and
 [inspection commands](run-results.md#bridge-evidence).
 
 Each replay call uses the positive `agent_timeout_seconds` override, otherwise
 the task's positive agent timeout, otherwise 20 minutes. Negative timeouts fail.
-Shared scheduling and timing comparison need synchronized UTC clocks on the app,
-callers, and replay bridge; source bridge clocks must be stable and synchronized.
-Readiness, staging, clock skew, and network delay can change actual starts.
-Replay does not reproduce sandbox lifecycle timing, original live-sandbox counts,
-or resource contention. Caller stop, bridge revocation, and sandbox removal must
-still be confirmed. Source artifacts stay unchanged; replay writes a separate run.
-See the [scheduler](design/replayer.md#5-replayer-components) and
-[timing result fields](run-results.md#sandbox-call-replay-results).
+Shared timing requires synchronized clocks. Caller stop, bridge revocation, and
+sandbox removal must be confirmed. Source artifacts stay unchanged; replay writes
+a separate run. See [timing limits](replay-limitations.md#fidelity-and-result-limits).
 
 ## Replay task arrivals
 

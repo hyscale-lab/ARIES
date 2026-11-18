@@ -47,16 +47,9 @@ guides above.
 
 ## Current limitations
 
-- Sandbox-call replay supports a recorded `hermes-grpc` occurrence or complete
-  run, including repeated tasks and finite source loops. SSH, Toolathlon, new
-  loop iterations, arrival schedules, and Apptainer are unsupported. Recording
-  requires `--record-for-replay` before the profile and rejects arrival schedules.
-  Reused grades are historical; matching responses do not prove equal sandbox
-  state. Replay does not reproduce lifecycle timing, live-sandbox counts, or
-  resource contention. Shared timing requires synchronized clocks. Hash-only and
-  timing drift are nonfatal; strict response differences fail replay. Isolation
-  and confirmed cleanup remain required. See the
-  [replay limits](design/replayer.md#7-checks-and-limits).
+- Sandbox-call replay requires a recorded `hermes-grpc` source on Docker or
+  Kubernetes. Reused grades are historical; confirmed isolation and cleanup remain
+  required. See [replay limits](replay-limitations.md).
 
 - Each bridge type supports its corresponding harness: OpenClaw uses
   `openclaw-ssh`, Codex uses `codex-ssh` (Docker only), and Hermes uses `hermes-ssh` or `hermes-grpc`. Crossed pairs

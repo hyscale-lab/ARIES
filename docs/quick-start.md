@@ -156,13 +156,10 @@ make bridge-image
 ./bin/aries profiles/REPLACE_WITH_REPLAY_PROFILE.json
 ```
 
-Keep source artifacts, bridge audits, `aries.log`, and stderr private. Oversized
-captured output fails its recording task before evaluation. Replay reuses a
-historical grade; it does not run a fresh verifier or judge. Check
-[replay results](run-results.md#sandbox-call-replay-results) before comparing grades:
-matching responses do not prove equal final sandbox state. See the
-[replay design](design/replayer.md) for the mechanism and
-[limits](replay-limitations.md) for capture and timing restrictions.
+Keep source artifacts, bridge audits, `aries.log`, and stderr private. Replay reuses
+a historical grade; it does not run a fresh verifier or judge. Check
+[replay results](run-results.md#sandbox-call-replay-results) and
+[replay limits](replay-limitations.md) before comparing grades.
 
 ## Inspect the result
 

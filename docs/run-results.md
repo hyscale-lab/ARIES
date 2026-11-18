@@ -92,11 +92,8 @@ a replay mismatch does not hide a failed stop or failed bridge revocation.
 The task's `error` combines failures; an inherited reward does not override
 replay or isolation failure.
 
-If replay cleanup remains unconfirmed, ARIES stops new admission but lets admitted
-occurrences finish. ARIES retains the resource owners for bounded cleanup retries
-after those occurrences finish. A successful retry can set `cleanup.status` to
-`succeeded`. The task's `error` retains the original failure. An ordinary response
-mismatch does not stop admission when cleanup is confirmed.
+Unconfirmed replay cleanup stops new admission. A successful cleanup retry can set
+`cleanup.status` to `succeeded`, but the task's `error` retains the original failure.
 
 `tasks[0].evaluation.reused` marks the source occurrence's recorded
 evaluation. `evaluation.source_run_id` and `evaluation.source_task_id` name
@@ -239,10 +236,9 @@ bounded `Exec` output in its private `bridge/tool-calls.jsonl`. Replay execution
 retains this evidence automatically. Ordinary live runs omit replay-only response
 fields; they still keep baseline command, input, file-window, status, and byte-count
 audits. SSH audit records do not retain response text. Captured output can contain
-private data; do not publish the audit or `aries.log` without review. If encoded output exceeds the
-128 MiB replay line bound, the recording task fails after confirmed bridge stop,
-skips evaluation, and is not replay-ready. An aggregate audit failure keeps
-isolation unconfirmed and evaluation blocked for all live runs. gRPC records also have `sha256`, `truncated`, and the read window fields
+private data; do not publish the audit or `aries.log` without review. See
+[capture limits](replay-limitations.md#size-and-capture-bounds).
+gRPC records also have `sha256`, `truncated`, and the read window fields
 `max_bytes`, `first_line`, `max_lines`, `max_line_bytes`, and `total_lines`, and
 keep written file content as `stdin`; see
 [gRPC evidence](implementation/grpc-bridge.md#evidence). The `operation_class`
