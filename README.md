@@ -123,7 +123,9 @@ ARIES Hermes image for both SSH and its in-process gRPC plugin.
 Before a run, ARIES idempotently prepares the pinned benchmark checkout and
 required container images. `aries setup PROFILE.json` is available to prewarm
 those inputs; it does not start a managed runtime, load model weights, or
-contact an external model endpoint.
+contact an external model endpoint. If a run's `aries` process stops without
+cleaning up, as after a kill, `aries cleanup PROFILE.json RUN_ID` removes what
+that run left; see [after a crash](docs/run-results.md#after-a-crash).
 
 The DeepSeek example requires an API key and can incur charges. The
 [Quick start](docs/quick-start.md) covers secure credential setup, the first

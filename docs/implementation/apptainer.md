@@ -15,7 +15,9 @@ Harness, sandbox and bridge all select `apptainer` with one shared
 configuration. A normal user cannot give an Apptainer instance its own network,
 so `aries PROFILE` first re-executes itself in a new user and network namespace
 that maps the invoking user to itself. `slirp4netns` gives the namespace
-internet access but no route to the host's loopback. Runner, the bridge and
+internet access but no route to the host's loopback. It exits with the `aries`
+process outside the namespace, which alone holds its exit pipe, even when that
+process is killed. Runner, the bridge and
 every instance share the loopback of the namespace; nothing in it can be reached from
 outside, which keeps the unauthenticated control and SSH ports private on a host
 shared with other users. Services are addressed at `127.0.0.1`, so a run
@@ -165,11 +167,12 @@ record. An instance with no record, or whose PID differs from its record, is
 never stopped. The bridge process is stopped by process group and its directory
 removed. The namespace ends with the run's last process.
 
-As on the other backends, a Runner that crashes leaves its runtimes for an
-operator to clean up, and the bridge process keeps running, which also keeps the
-namespace. Every runtime's `Stop` works from its record on disk, so a later process
-that calls it does remove them; a PID that now names another process is not
-signaled. ARIES has no command that does this yet.
+As on the other backends, a Runner that crashes leaves its runtimes behind, and
+the bridge process keeps running, which also keeps the namespace. Every
+runtime's `Stop` works from its record on disk, so a later process removes them;
+a PID that now names another process is not signaled. `aries cleanup` finds the
+run's instances and bridge by their records in `state_dir` and stops them, the
+bridge last (see [after a crash](../run-results.md#after-a-crash)).
 
 ## Running on a PBS cluster
 

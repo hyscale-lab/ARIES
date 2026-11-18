@@ -186,6 +186,16 @@ func (r *Runtime) Start(ctx context.Context) error {
 	if err := command.Start(); err != nil {
 		return errors.Join(fmt.Errorf("start managed SGLang: %w", err), stdout.Close(), stderr.Close())
 	}
+	// The group outlives ARIES if it is killed; the record lets `aries cleanup`
+	// find it. A server that cannot be recorded is not left running.
+	if err := writeProcessRecord(artifactDir, command.Process.Pid); err != nil {
+		killErr := r.signalGroup(command.Process.Pid, syscall.SIGKILL)
+		if errors.Is(killErr, syscall.ESRCH) {
+			killErr = nil
+		}
+		_ = command.Wait()
+		return errors.Join(fmt.Errorf("record managed SGLang process: %w", err), killErr, stdout.Close(), stderr.Close())
+	}
 	r.command, r.stdout, r.stderr = command, stdout, stderr
 	go r.wait()
 	return nil

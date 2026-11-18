@@ -2,12 +2,31 @@
 package runtime
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/hyscale-lab/aries/internal/app"
 	runtimesglang "github.com/hyscale-lab/aries/internal/modelruntime/sglang"
 	"github.com/hyscale-lab/aries/pkg/config"
 )
+
+// ManagedSGLangLeftovers lists the managed SGLang server a run left running,
+// if the profile has ARIES start one. It is stopped as a normal run stops it,
+// with the profile's stop_timeout before SIGKILL.
+func ManagedSGLangLeftovers(cfg config.Config, outputRoot string) ([]app.Leftover, error) {
+	if cfg.Runtime.Backend != "sglang" || cfg.Runtime.Mode != "managed" {
+		return nil, nil
+	}
+	pid, running, err := runtimesglang.RecordedServer(outputRoot)
+	if err != nil || !running {
+		return nil, err
+	}
+	grace := cfg.Runtime.Config.StopTimeout
+	return []app.Leftover{{
+		Kind: "model server", Name: fmt.Sprintf("SGLang process group %d", pid),
+		Remove: func(ctx context.Context) error { return runtimesglang.StopRecordedServer(ctx, outputRoot, grace) },
+	}}, nil
+}
 
 // NewSGLang validates native configuration and prepares a managed runtime.
 // Construction starts no process and creates no output artifacts.

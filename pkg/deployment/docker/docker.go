@@ -46,6 +46,8 @@ type dockerClient interface {
 	ContainerStop(context.Context, string, client.ContainerStopOptions) (client.ContainerStopResult, error)
 	ContainerKill(context.Context, string, client.ContainerKillOptions) (client.ContainerKillResult, error)
 	ContainerRemove(context.Context, string, client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
+	ContainerList(context.Context, client.ContainerListOptions) (client.ContainerListResult, error)
+	NetworkList(context.Context, client.NetworkListOptions) (client.NetworkListResult, error)
 }
 
 // Options configures a per-harness Docker transport.

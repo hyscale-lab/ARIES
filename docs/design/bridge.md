@@ -173,7 +173,8 @@ revocation, including errors returned during cancellation. Handler-join timeouts
 and evidence-finalization failures still prevent confirmed release.
 The live sandbox, including benchmark services and background work, remains
 available to evaluation. There are no leases, heartbeats, renewal RPCs, or
-controller-liveness watchdogs; abrupt Runner crashes may need operator cleanup.
+controller-liveness watchdogs; after an abrupt Runner crash, `aries cleanup`
+removes what the run left (see [after a crash](../run-results.md#after-a-crash)).
 
 After task scheduling and cleanup finish, the application stops service admission,
 retries outstanding session cleanup, removes the bridge runtime, finalizes its
