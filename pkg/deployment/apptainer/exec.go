@@ -73,6 +73,10 @@ func (manager *Manager) ExecStream(ctx context.Context, id string, command core.
 	if err != nil {
 		return failure(), err
 	}
+	enter, err := manager.enter(current.Attachment)
+	if err != nil {
+		return failure(), err
+	}
 	outputLimit := command.OutputLimitBytes
 	if outputLimit == 0 {
 		outputLimit = maxExecOutput
@@ -112,7 +116,7 @@ func (manager *Manager) ExecStream(ctx context.Context, id string, command core.
 	stdoutWriter := &limitedWriter{writer: stdout, limit: outputLimit, onExceed: exceeded}
 	stderrWriter := &limitedWriter{writer: stderr, limit: outputLimit, onExceed: exceeded}
 	trailer := newExitTrailer(stderrWriter, token)
-	runErr := manager.apptainer.Run(execCtx, stdin, stdoutWriter, trailer, args...)
+	runErr := manager.apptainer.Run(execCtx, enter, stdin, stdoutWriter, trailer, args...)
 
 	if execCtx.Err() != nil {
 		return failure(), context.Cause(execCtx)
@@ -180,10 +184,15 @@ func (manager *Manager) UploadArchive(ctx context.Context, id, destination strin
 	if destination == "" || !strings.HasPrefix(destination, "/") || strings.ContainsRune(destination, 0) {
 		return errors.New("deployment upload destination must be absolute")
 	}
-	if _, _, err := manager.loadRecord(id); err != nil {
+	current, _, err := manager.loadRecord(id)
+	if err != nil {
 		return err
 	}
-	if _, err := manager.run(ctx, archive, append(execPrefix(id, "/"), "tar", "-x", "-o", "-f", "-", "-C", destination)...); err != nil {
+	enter, err := manager.enter(current.Attachment)
+	if err != nil {
+		return err
+	}
+	if _, err := manager.runIn(ctx, enter, archive, append(execPrefix(id, "/"), "tar", "-x", "-o", "-f", "-", "-C", destination)...); err != nil {
 		return fmt.Errorf("extract archive in Apptainer instance: %w", err)
 	}
 	return nil
@@ -210,11 +219,19 @@ func (manager *Manager) DownloadArchive(ctx context.Context, id, source string) 
 	if err != nil {
 		return nil, deployment.FileInfo{}, err
 	}
+	current, _, err := manager.loadRecord(id)
+	if err != nil {
+		return nil, deployment.FileInfo{}, err
+	}
+	enter, err := manager.enter(current.Attachment)
+	if err != nil {
+		return nil, deployment.FileInfo{}, err
+	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	reader, writer := io.Pipe()
 	go func() {
 		var stderr bytes.Buffer
-		err := manager.apptainer.Run(streamCtx, nil, writer, &stderr, append(execPrefix(id, "/"), "tar", "-c", "-f", "-", "-C", path.Dir(source), path.Base(source))...)
+		err := manager.apptainer.Run(streamCtx, enter, nil, writer, &stderr, append(execPrefix(id, "/"), "tar", "-c", "-f", "-", "-C", path.Dir(source), path.Base(source))...)
 		if err != nil {
 			err = fmt.Errorf("archive Apptainer instance path: %w: %s", err, strings.TrimSpace(stderr.String()))
 		}

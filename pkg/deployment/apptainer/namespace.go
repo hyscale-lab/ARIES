@@ -23,11 +23,20 @@ const (
 	slirpReadyWait  = 30 * time.Second
 	// slirpDNS is slirp4netns's forwarder to the host's name servers.
 	slirpDNS = "10.0.2.3"
+	// runNetwork is the subnet slirp4netns gives the run namespace, its
+	// default.
+	runNetwork = "10.0.2.0/24"
+	// runGuest is the run namespace's own address on its tap0, which
+	// slirp4netns --configure gives it in runNetwork. A task reaches it through
+	// its own slirp4netns, which connects from the run namespace.
+	runGuest = "10.0.2.100"
 )
 
 // RunNamespaceDNS returns the name server instances should use: slirp4netns's
 // forwarder inside a run namespace, which reaches the host's name servers even
-// when they listen on the host's loopback, and nothing elsewhere.
+// when they listen on the host's loopback, and nothing elsewhere. Instances in
+// a task namespace reach it through the task's own slirp4netns, whose network
+// is another.
 func RunNamespaceDNS() []string {
 	if _, err := currentRunNamespace(); err != nil {
 		return nil
@@ -40,9 +49,9 @@ func RunNamespaceDNS() []string {
 // inside behaves as for a normal user, and slirp4netns gives it internet
 // access but not the host's loopback. Nothing in it can be reached from
 // outside: the run's control and SSH ports, which have no authentication, stay
-// private on a host shared with other users. Apptainer cannot exec into an
-// instance from outside the namespace that started it, so the whole run,
-// Runner and bridge included, lives inside.
+// private on a host shared with other users. Runner and the bridge live
+// inside; each task's runtimes live in a task namespace nested in it, which
+// nsenter enters and cat holds, so both must be on PATH.
 func RunInNamespace(ctx context.Context, argv []string, slirpPath string) (int, error) {
 	if len(argv) == 0 {
 		return -1, errors.New("run namespace requires a command")
@@ -53,6 +62,11 @@ func RunInNamespace(ctx context.Context, argv []string, slirpPath string) (int, 
 	slirp, err := exec.LookPath(slirpPath)
 	if err != nil {
 		return -1, fmt.Errorf("the Apptainer run namespace needs slirp4netns for internet access: %w", err)
+	}
+	for _, program := range []string{"nsenter", "cat"} {
+		if _, err := exec.LookPath(program); err != nil {
+			return -1, fmt.Errorf("an Apptainer run needs %s to give each task a network namespace of its own: %w", program, err)
+		}
 	}
 	parentNetwork, err := os.Readlink("/proc/self/ns/net")
 	if err != nil {

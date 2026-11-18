@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/hyscale-lab/aries/internal/app"
 	benchmarkwiring "github.com/hyscale-lab/aries/internal/app/wiring/benchmark"
@@ -40,10 +43,21 @@ func validateComponents(cfg config.Config) error {
 	if err := validateDeployment(&cfg); err != nil {
 		return err
 	}
-	// Every runtime of an Apptainer run shares one loopback, so two tasks'
-	// fixed service ports would collide.
-	if cfg.Sandbox.Deployment.Backend == "apptainer" && cfg.Execution.Concurrency > 1 {
-		return errors.New("an Apptainer run executes one task at a time; set execution.concurrency to 1")
+	// Nothing in an Apptainer run reaches the host's loopback, so an external
+	// model server there is out of reach. A managed one runs in the run's own
+	// namespace, whose loopback the tasks reach through their gateway.
+	if cfg.Sandbox.Deployment.Backend == "apptainer" && cfg.Runtime.Mode != "managed" && loopbackURL(cfg.Model.BaseURL) {
+		return errors.New("an Apptainer run cannot reach an external model server on loopback; set model.base_url to an address the run and its tasks can reach, such as the node's")
+	}
+	if cfg.Sandbox.Deployment.Backend == "apptainer" {
+		if err := deploymentwiring.CheckApptainerModelAddress(cfg.Model.BaseURL, cfg.Runtime.Mode == "managed"); err != nil {
+			return err
+		}
+		// Refused here, before setup prepares anything, rather than when the
+		// first task starts.
+		if err := deploymentwiring.CheckApptainerStateDir(cfg.Sandbox.Deployment); err != nil {
+			return err
+		}
 	}
 	// Apptainer runs every command as the instance's root, and SWE-bench Pro
 	// runs the agent's commands as UID 65532.
@@ -86,6 +100,22 @@ func validateComponents(cfg config.Config) error {
 		return fmt.Errorf("harness type %q requires its paired bridge, not %q", cfg.Harness.Type, cfg.Bridge.Type)
 	}
 	return nil
+}
+
+// loopbackURL reports whether a URL names a loopback host, or the unspecified
+// address, which connects to loopback. localhost may carry the trailing dot of
+// its fully qualified form.
+func loopbackURL(raw string) bool {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	host := parsed.Hostname()
+	if strings.EqualFold(strings.TrimSuffix(host, "."), "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && (ip.IsLoopback() || ip.IsUnspecified())
 }
 
 func prepareBackend(cfg config.Config, outputDir string) (app.PreparedBackend, error) {
@@ -452,7 +482,7 @@ func newInfrastructure(cfg config.Config, runID, outputRoot string, logger *logr
 		if err != nil {
 			return nil, err
 		}
-		environment := owner.NewRunEnvironment(runID)
+		environment := owner.NewRunEnvironment(runID, cfg.Model.BaseURL)
 		resources, err := deploymentwiring.NewApptainerRunResources(cfg.Bridge.Deployment, runID)
 		if err != nil {
 			return nil, errors.Join(err, owner.Close())

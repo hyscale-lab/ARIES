@@ -27,7 +27,7 @@ This page summarizes capabilities and limitations. Use the
 | Benchmark | **Toolathlon** — tool-use tasks over MCP servers that are local, public, or backed by Toolathlon's self-hosted applications (Canvas, poste.io, WooCommerce), and, given your account credentials, by third-party services; the `k8s` tasks are not supported | [Benchmark guide](benchmarks/toolathlon.md) |
 | Tool sandbox and deployment | **Docker** — local containers managed through the Moby Go SDK | [Deployment configuration](configuration.md#deployment-configuration), [Docker implementation](implementation/docker.md) |
 | Tool sandbox and deployment | **Kubernetes** — one pod per runtime, driven through `kubectl`; Terminal-Bench 2, SWE-bench Pro and Deep Research Bench with OpenClaw or Hermes in text mode | [Kubernetes deployment](configuration.md#kubernetes-deployment), [Kubernetes implementation](implementation/kubernetes.md), [cluster setup](../k8s/README.md) |
-| Tool sandbox and deployment | **Apptainer** 1.5 or newer — unprivileged instances for hosts without Docker, such as HPC clusters; harness, sandbox and bridge all on Apptainer, one task at a time | [Apptainer placement](configuration.md#apptainer-placement), [Apptainer implementation](implementation/apptainer.md) |
+| Tool sandbox and deployment | **Apptainer** 1.5 or newer — unprivileged instances for hosts without Docker, such as HPC clusters; harness, sandbox and bridge all on Apptainer, each task in a network namespace of its own | [Apptainer placement](configuration.md#apptainer-placement), [Apptainer implementation](implementation/apptainer.md) |
 | Tool bridge | **OpenClaw SSH** and **Hermes SSH** — managed Docker container, Kubernetes pod, or a process in an Apptainer run’s namespace; **Codex SSH** — Docker only | [SSH bridge implementation](implementation/ssh-bridges.md) |
 | Tool bridge | **Hermes gRPC** — managed Docker container or Kubernetes pod; typed `Exec` and file procedures through the ARIES Hermes plugin; not on Apptainer | [gRPC bridge implementation](implementation/grpc-bridge.md) |
 | Model service | **DeepSeek** — external endpoint | [Model backends](configuration.md#model-backends) |
@@ -77,9 +77,14 @@ guides above.
   server-specific extension.
 - SWE-bench Pro has additional image-architecture, isolation, and licensing
   requirements; consult its [benchmark guide](benchmarks/swe-bench-pro.md).
-- Apptainer runs execute one task at a time, cannot enforce CPU or memory limits
-  without cgroups v2, measure resources from `/proc` rather than a cgroup (memory
-  excludes the page cache), and run the bridge as a process rather than a container. Package installs inside the sandbox need a
+- Apptainer runs cannot enforce CPU or memory limits without cgroups v2, so
+  tasks that run at once share the host's CPU and memory without a bound per
+  task; they measure resources from `/proc` rather than a cgroup (memory
+  excludes the page cache), and run the bridge as a process rather than a container.
+  An external model server must be at an address that both Runner and the tasks
+  can reach, such as the node's or a public endpoint, not the host's loopback; a
+  managed SGLang server on the run's `127.0.0.1` is reached by the tasks over
+  `http` through their gateway. Package installs inside the sandbox need a
   user-installed `fakeroot`. SWE-bench Pro is refused, because its commands run as a
   non-root user; see the [Apptainer implementation](implementation/apptainer.md#limits).
 - Toolathlon's application-backed tasks need Toolathlon's own Canvas,

@@ -253,6 +253,11 @@ func (r *Runner) runTask(ctx context.Context, task core.Task) (core.TaskResult, 
 		OutputDir:    r.outputDir,
 	}
 	request.NoSandboxTools = task.NoSandboxTools
+	// The harness reaches the model where its placement says, which may not be
+	// where Runner does.
+	if request.Connectivity.ModelBaseURL != "" {
+		request.Model.BaseURL = request.Connectivity.ModelBaseURL
+	}
 	err = r.harness.Start(ctx, request)
 	// Start may fail after allocating task-local resources. Stop is idempotent,
 	// so every Start attempt must be followed by a positive stop confirmation

@@ -23,22 +23,25 @@ import (
 const testImage = "example.test/task:1"
 
 // fakeApptainer keeps a table of instances and answers each invocation as
-// apptainer would, unless respond handles it first.
+// apptainer would, unless respond handles it first. entered holds each call's
+// nsenter command, beside calls.
 type fakeApptainer struct {
 	mu        sync.Mutex
 	calls     [][]string
+	entered   [][]string
 	instances map[string]instanceInfo
 	nextPID   int
 	respond   func(ctx context.Context, args []string, stdin []byte, stdout, stderr io.Writer) (bool, error)
 }
 
-func (f *fakeApptainer) Run(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, args ...string) error {
+func (f *fakeApptainer) Run(ctx context.Context, enter []string, stdin io.Reader, stdout, stderr io.Writer, args ...string) error {
 	var input []byte
 	if stdin != nil {
 		input, _ = io.ReadAll(stdin)
 	}
 	f.mu.Lock()
 	f.calls = append(f.calls, slices.Clone(args))
+	f.entered = append(f.entered, slices.Clone(enter))
 	respond := f.respond
 	f.mu.Unlock()
 	if respond != nil {
@@ -125,14 +128,16 @@ func (e exitError) ExitCode() int { return int(e) }
 type fakeProcesses struct {
 	mu       sync.Mutex
 	launches [][]string
+	entered  [][]string
 	alive    map[int]bool
 	signals  []syscall.Signal
 }
 
-func (p *fakeProcesses) Launch(args []string, _, _ *os.File) (int, error) {
+func (p *fakeProcesses) Launch(enter []string, args []string, _, _ *os.File) (int, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.launches = append(p.launches, slices.Clone(args))
+	p.entered = append(p.entered, slices.Clone(enter))
 	pid := 4200 + len(p.launches)
 	p.alive[pid] = true
 	return pid, nil
@@ -152,9 +157,27 @@ func (p *fakeProcesses) signal(pgid int, signal syscall.Signal) error {
 	return nil
 }
 
+// shortTempDir returns a new private directory whose path is short enough for
+// the Unix sockets of task namespaces, which must fit 107 bytes: under
+// os.TempDir() when that is short, and under /tmp otherwise. t.TempDir's paths
+// carry the test's name.
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	parent := os.TempDir()
+	if len(parent) > 32 {
+		parent = "/tmp"
+	}
+	dir, err := os.MkdirTemp(parent, "ans")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 func newTestManager(t *testing.T, options Options) (*Manager, *fakeApptainer, *fakeProcesses) {
 	t.Helper()
-	options.StateDir = filepath.Join(t.TempDir(), "state")
+	options.StateDir = filepath.Join(shortTempDir(t), "state")
 	options.ImageDir = t.TempDir()
 	manager, err := New(options)
 	if err != nil {
