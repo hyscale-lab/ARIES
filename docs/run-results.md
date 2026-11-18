@@ -80,17 +80,12 @@ resource samples under the `evaluation-sandbox` component in
 
 ## Sandbox-call replay results
 
-A replay run has one result per selected source occurrence, including zero-call
-occurrences. Logical task IDs can repeat. Fresh execution identities belong to the
-new run, even when local execution-ID strings match source occurrence IDs. The fields below show the first result; inspect every
-entry in `tasks` for a complete run. Read `tasks[0].replay.status` and
-`tasks[0].replay.error` for call execution. Read
-`tasks[0].isolation.caller_stopped` and
-`tasks[0].isolation.bridge_revoked` for positive isolation confirmation.
-Read `tasks[0].cleanup` for sandbox removal. These outcomes remain separate:
-a replay mismatch does not hide a failed stop or failed bridge revocation.
-The task's `error` combines failures; an inherited reward does not override
-replay or isolation failure.
+Inspect every entry in `tasks`, including empty traces and repeated logical IDs.
+Execution IDs belong to the new run; source IDs appear under `evaluation`.
+Use `replay.status` and `replay.error` for execution, `isolation.caller_stopped`
+and `isolation.bridge_revoked` for isolation, and `cleanup` for sandbox removal.
+The task's `error` combines failures; inherited rewards do not override them.
+The `tasks[0]` examples below show only the first result.
 
 Unconfirmed replay cleanup stops new admission. A successful cleanup retry can set
 `cleanup.status` to `succeeded`, but the task's `error` retains the original failure.
