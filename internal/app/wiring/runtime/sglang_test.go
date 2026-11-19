@@ -40,6 +40,41 @@ func TestPrepareBackendPreservesExplicitGPUOrderAndOwnership(t *testing.T) {
 	}
 }
 
+func TestManagedSGLangOnApptainerListensWhereTheTaskGatewayLeads(t *testing.T) {
+	executable := filepath.Join(t.TempDir(), "python")
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		backend, host string
+		refused       bool
+	}{
+		"all addresses":         {"apptainer", "0.0.0.0", false},
+		"IPv4 loopback":         {"apptainer", "127.0.0.1", false},
+		"IPv6 loopback":         {"apptainer", "::1", true},
+		"localhost":             {"apptainer", "localhost", true},
+		"IPv6 loopback, Docker": {"docker", "::1", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			native := filepath.Join(root, "native.yaml")
+			content := strings.Replace(nativeForWiring, "host: 0.0.0.0", "host: "+tc.host, 1)
+			if err := os.WriteFile(native, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg := config.Config{
+				Runtime: config.RuntimeConfig{Backend: "sglang", Mode: "managed", Config: config.RuntimeConfigValues{ResolvedFile: native, Executable: executable}},
+				Model:   config.ProfileModel{ID: "Qwen/Qwen3-8B", BaseURL: "http://127.0.0.1:30000/v1", APIKeyEnv: "KEY"},
+				Sandbox: config.SandboxConfig{Deployment: config.DeploymentConfig{Backend: tc.backend}},
+			}
+			_, err := NewSGLang(cfg, filepath.Join(root, "output"))
+			if tc.refused != (err != nil) || tc.refused && !strings.Contains(err.Error(), "listening on "+tc.host) {
+				t.Fatalf("NewSGLang with host %s on %s = %v, want refused %v", tc.host, tc.backend, err, tc.refused)
+			}
+		})
+	}
+}
+
 func TestPrepareBackendRejectsManagedSGLangGPUCountMismatch(t *testing.T) {
 	root := t.TempDir()
 	native := filepath.Join(root, "native.yaml")

@@ -18,10 +18,12 @@
 // they would be visible to every user of the host, and apptainer's --env-file
 // does not preserve every value (1.5.0 turned a quote in "it's" into "\'").
 //
-// A normal user cannot give an instance its own network, so every instance of
-// a run shares the network namespace of the process that starts it. Services
-// are therefore addressed on loopback, and the run must provide a private
-// namespace for its processes; this package does not create one.
+// A normal user cannot give an instance its own network, so an instance shares
+// the network namespace of the process that starts it. The run must provide a
+// private namespace for its processes. Within it, each task's runtimes get a
+// namespace of their own, which this package creates (see taskNamespace), so
+// tasks running at once can use the same ports; a task's services are
+// addressed on its loopback.
 package apptainer
 
 import (
@@ -72,15 +74,17 @@ const (
 // runtime that exists.
 var errMissing = errors.New("Apptainer runtime has no ARIES record")
 
-// commandRunner runs one apptainer invocation to completion.
+// commandRunner runs one apptainer invocation to completion, through enter
+// when it is given: the nsenter command for a runtime's task namespace.
 type commandRunner interface {
-	Run(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, args ...string) error
+	Run(ctx context.Context, enter []string, stdin io.Reader, stdout, stderr io.Writer, args ...string) error
 }
 
 // launcher starts one long-lived apptainer invocation in its own process
-// group, with its output appended to the given files, and returns its PID.
+// group, through enter when it is given, with its output appended to the given
+// files, and returns its PID.
 type launcher interface {
-	Launch(args []string, stdout, stderr *os.File) (int, error)
+	Launch(enter []string, args []string, stdout, stderr *os.File) (int, error)
 }
 
 // Options configures one Apptainer transport.
@@ -195,6 +199,10 @@ func (manager *Manager) Create(ctx context.Context, request deployment.Request) 
 	if info, err := os.Stat(rootfs); err != nil || !info.IsDir() {
 		return "", fmt.Errorf("Apptainer image %q is not prepared at %s; run aries setup first", request.Image, rootfs)
 	}
+	enter, err := manager.enter(request.Placement.AttachmentID)
+	if err != nil {
+		return "", err
+	}
 	// As with Docker, a runtime that names no workdir uses its image's.
 	workdir := request.Workdir
 	if workdir == "" {
@@ -248,7 +256,7 @@ func (manager *Manager) Create(ctx context.Context, request deployment.Request) 
 		args = append(args, "--bind", spec)
 	}
 	args = append(args, rootfs, created.Name)
-	if _, startErr := manager.run(ctx, nil, args...); startErr != nil {
+	if _, startErr := manager.runIn(ctx, enter, nil, args...); startErr != nil {
 		return manager.recoverCreate(ctx, created, fmt.Errorf("start Apptainer instance: %w", startErr))
 	}
 	instance, found, err := manager.instance(ctx, created.Name)
@@ -265,7 +273,7 @@ func (manager *Manager) Create(ctx context.Context, request deployment.Request) 
 	if err := manager.saveRecord(created); err != nil {
 		return created.Name, err
 	}
-	if err := manager.startFaked(ctx, created.Name); err != nil {
+	if err := manager.startFaked(ctx, created.Name, enter); err != nil {
 		return created.Name, err
 	}
 	return created.Name, nil
@@ -346,7 +354,11 @@ func (manager *Manager) Validate(ctx context.Context, id string, request deploym
 		}
 	}
 	if request.NoNewPrivileges {
-		status, err := manager.run(ctx, nil, append(execPrefix(id, "/"), "cat", "/proc/self/status")...)
+		enter, err := manager.enter(current.Attachment)
+		if err != nil {
+			return err
+		}
+		status, err := manager.runIn(ctx, enter, nil, append(execPrefix(id, "/"), "cat", "/proc/self/status")...)
 		if err != nil {
 			return fmt.Errorf("inspect deployment privileges: %w", err)
 		}
@@ -386,6 +398,10 @@ func (manager *Manager) Start(ctx context.Context, id string) error {
 	} else if !found {
 		return fmt.Errorf("deployment instance %s is not running", id)
 	}
+	enter, err := manager.enter(current.Attachment)
+	if err != nil {
+		return err
+	}
 	directory := manager.runtimeDir(id)
 	args := append(execPrefix(id, current.Workdir), "/bin/sh", "-c", startShell, "aries-start", shareTarget+"/"+environmentFile)
 	if current.EntrypointSet {
@@ -404,7 +420,7 @@ func (manager *Manager) Start(ctx context.Context, id string) error {
 		return fmt.Errorf("open deployment log: %w", err)
 	}
 	defer stderr.Close()
-	pid, err := manager.launcher.Launch(args, stdout, stderr)
+	pid, err := manager.launcher.Launch(enter, args, stdout, stderr)
 	if err != nil {
 		return fmt.Errorf("start deployment command: %w", err)
 	}
@@ -492,9 +508,10 @@ func (manager *Manager) LogsStream(_ context.Context, id string, stdout, stderr 
 	return errors.Join(errs...)
 }
 
-// Address returns the loopback address of the runtime's published service.
-// Every instance of the run shares the network namespace of the run's
-// processes, so the service listens there directly.
+// Address returns where Runner reaches the runtime's published service. A
+// runtime in a task namespace is reached at the task's own loopback address in
+// the run namespace, from which slirp4netns forwards the port into the task;
+// any other runtime shares Runner's namespace and listens on its loopback.
 func (manager *Manager) Address(ctx context.Context, id string, port int) (string, error) {
 	if port <= 0 || port > 65535 {
 		return "", errors.New("deployment service port is invalid")
@@ -511,11 +528,18 @@ func (manager *Manager) Address(ctx context.Context, id string, port int) (strin
 	} else if !found {
 		return "", errors.New("deployment service runtime is not running")
 	}
+	if name, inTask := taskNamespaceName(current.Attachment); inTask {
+		namespace, err := loadTaskNamespace(manager.options.StateDir, name)
+		if err != nil {
+			return "", err
+		}
+		return forwardPort(ctx, manager.options.StateDir, namespace, port)
+	}
 	return net.JoinHostPort(loopbackHost, strconv.Itoa(port)), nil
 }
 
-// TaskAddress resolves a port of a running runtime for other runtimes of the
-// run, which share its loopback.
+// TaskAddress resolves a port of a running runtime for the other runtimes of
+// its task, which share its namespace's loopback.
 func (manager *Manager) TaskAddress(ctx context.Context, id string, port int) (string, error) {
 	if port < 1 || port > 65535 {
 		return "", errors.New("invalid task service port")
@@ -866,10 +890,17 @@ func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
-// run executes apptainer and returns its stdout. Failures carry its stderr.
+// run executes apptainer in this process's namespace and returns its stdout.
+// Failures carry its stderr.
 func (manager *Manager) run(ctx context.Context, stdin io.Reader, args ...string) ([]byte, error) {
+	return manager.runIn(ctx, nil, stdin, args...)
+}
+
+// runIn executes apptainer through enter, the nsenter command for a task
+// namespace, or directly when enter is empty.
+func (manager *Manager) runIn(ctx context.Context, enter []string, stdin io.Reader, args ...string) ([]byte, error) {
 	var stdout, stderr bytes.Buffer
-	if err := manager.apptainer.Run(ctx, stdin, &stdout, &stderr, args...); err != nil {
+	if err := manager.apptainer.Run(ctx, enter, stdin, &stdout, &stderr, args...); err != nil {
 		return stdout.Bytes(), fmt.Errorf("apptainer %s: %w: %s", strings.Join(args[:min(2, len(args))], " "), err, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.Bytes(), nil
@@ -877,8 +908,9 @@ func (manager *Manager) run(ctx context.Context, stdin io.Reader, args ...string
 
 type execApptainer struct{ path string }
 
-func (a execApptainer) Run(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, args ...string) error {
-	command := exec.CommandContext(ctx, a.path, args...)
+func (a execApptainer) Run(ctx context.Context, enter []string, stdin io.Reader, stdout, stderr io.Writer, args ...string) error {
+	program, argv := entered(enter, a.path, args)
+	command := exec.CommandContext(ctx, program, argv...)
 	command.Stdout, command.Stderr = stdout, stderr
 	// Bound the wait for output pipes after cancellation kills apptainer.
 	command.WaitDelay = 5 * time.Second
@@ -905,8 +937,10 @@ type execLauncher struct{ path string }
 
 // Launch starts apptainer in a new process group, so Stop can signal the
 // command together with everything it started, and reaps it when it exits.
-func (l execLauncher) Launch(args []string, stdout, stderr *os.File) (int, error) {
-	command := exec.Command(l.path, args...)
+// nsenter becomes apptainer, so the PID is apptainer's either way.
+func (l execLauncher) Launch(enter []string, args []string, stdout, stderr *os.File) (int, error) {
+	program, argv := entered(enter, l.path, args)
+	command := exec.Command(program, argv...)
 	command.Stdout, command.Stderr = stdout, stderr
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := command.Start(); err != nil {
