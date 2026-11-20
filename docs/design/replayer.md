@@ -123,6 +123,10 @@ Only the parser and caller know the transport. The scheduler consumes call offse
 
 ## 6. Lifecycle and results
 
+Managed caller creation, launch data transfer, runtime validation, runtime
+start, and readiness share one startup deadline. Plan staging and cleanup have
+their own bounds.
+
 For live runs, `runner.New` requires an `AgentHarness`. Runner calls its `Start`, `Run`, and `Stop` after bridge start. It evaluates only after positive harness stop and bridge revocation. Recording runs also check the bounded gRPC response audit (`pkg/runner/runner.go:59-95,270-365`). Its benchmark interface takes the task and sandbox, not harness output (`pkg/runner/interfaces.go:17-37`). Replay uses a narrow caller path in the same bridge-access slot. It does not run an agent or add a fifth Runner role. The [profile branch](#9-profile-integration) selects replay, and `runner.NewReplay` constructs its path without an agent harness (`pkg/runner/runner.go:97-120`). The [reused evaluation rule](#8-reused-evaluation-in-the-first-version) replaces the verifier call for replay.
 
 When recording, Runner calls `CompleteHarness` only after a confirmed stop and still revokes the bridge if completion recording fails (`pkg/runner/runner.go:316-335`). Runner construction requires bridge `RecordSource`, `RecordTask`, and `CompleteHarness` methods only for recording. The app checks this contract before it records source metadata or starts task resources. Ordinary runs do not require these methods.
@@ -196,6 +200,13 @@ A strict profile selects exactly one execution mode. A live profile has top-leve
 `replay.source` names one task-occurrence directory or a complete run directory. A task directory selects only that occurrence. A run directory selects every occurrence indexed by its `run-result.json`, without skipping incomplete sources. A relative path resolves from the replay profile file's directory, not the process working directory (`pkg/config/config.go:598-607`). Each occurrence directory contains `bridge/tool-calls.jsonl` for sandbox calls and `bridge/runtime.json` for the finalized log binding, completion marker, and task identity. The parent run directory holds `run-result.json` with each source evaluation. Whole-run preflight validates all selected sources before task sandbox creation. Admission reloads one bounded payload plan and rejects changes to its runtime metadata, call log, or parent result (`pkg/bridge/grpc/replay_sources.go`; `pkg/bridge/grpc/replay.go`). The source evaluation is not a call or timing input.
 
 Historical sources recorded before the capture extension lack response checks, finalized log binding, and the bridge completion marker. The loader rejects them rather than silently upgrading them. A current live Hermes gRPC run with `--record-for-replay` can produce replay-ready evidence when its bounded capture and completion checks succeed. Source runtime IDs identify the earlier run and do not become new sandbox or bridge IDs (`pkg/bridge/grpc/replay.go:78-111,234-320`; `pkg/bridge/session.go:283-320`; [capture contract](#4-capture-contract)).
+
+Recording stores the execution occurrence in `bridge/runtime.json` as
+`occurrence_id`, separately from the logical `task_id`. Preflight and admission
+reload match the recorded occurrence to its entry in the parent `run-result.json`.
+An older finalized trace can omit `occurrence_id` only if its call log is nonempty
+and every call identifies the selected occurrence. An empty trace needs the
+metadata ID because it has no calls to prove the binding.
 
 ### 9.3 Starting-state checks and application flow
 

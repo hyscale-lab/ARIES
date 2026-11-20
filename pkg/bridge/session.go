@@ -35,6 +35,7 @@ type sourceMetadata struct {
 	SchemaVersion                                               int               `json:"schema_version"`
 	BenchmarkType                                               string            `json:"benchmark_type,omitempty"`
 	TaskID                                                      string            `json:"task_id,omitempty"`
+	OccurrenceID                                                string            `json:"occurrence_id"`
 	Image                                                       string            `json:"image,omitempty"`
 	BenchmarkRevisions                                          map[string]string `json:"benchmark_revisions,omitempty"`
 	HarnessCompletedAt                                          string            `json:"harness_completed_at,omitempty"`
@@ -87,6 +88,7 @@ func (s *Session) record() error {
 	s.metadata.SandboxID = s.descriptor.SandboxID
 	s.metadata.TargetRuntimeID = s.descriptor.RuntimeID
 	s.metadata.RunID = s.descriptor.RunID
+	s.metadata.OccurrenceID = s.descriptor.TaskID
 	s.metadata.SchemaVersion = sourceSchemaVersion
 	s.metadata.BenchmarkType = s.service.options.BenchmarkType
 	s.metadata.BenchmarkRevisions = maps.Clone(s.service.options.BenchmarkRevisions)

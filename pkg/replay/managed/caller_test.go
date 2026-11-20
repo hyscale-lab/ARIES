@@ -47,6 +47,65 @@ type fakeRuntime struct {
 	resultReady   <-chan struct{}
 	planUploads   int
 	upload        func(context.Context, string) error
+	create        func(context.Context) error
+}
+
+func TestReplayCallerSharesStartupDeadline(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		cancel bool
+	}{
+		{name: "deadline from create through readiness"},
+		{name: "parent cancellation during create", cancel: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				started := time.Now()
+				deadline := started.Add(startTimeout)
+				checkDeadline := func(stage string, ctx context.Context) {
+					got, bounded := ctx.Deadline()
+					if !bounded || !got.Equal(deadline) {
+						t.Errorf("%s deadline = %v, bounded=%t, want %v", stage, got, bounded, deadline)
+					}
+				}
+				const createDelay = startTimeout - pollInterval
+				runtime := &fakeRuntime{files: make(map[string][]byte), readyDelay: startTimeout + pollInterval}
+				runtime.create = func(ctx context.Context) error {
+					checkDeadline("create", ctx)
+					if test.cancel {
+						cancel()
+						<-ctx.Done()
+						return ctx.Err()
+					}
+					<-time.After(createDelay)
+					return nil
+				}
+				runtime.upload = func(ctx context.Context, name string) error {
+					checkDeadline(name, ctx)
+					return nil
+				}
+				placement := core.RuntimePlacement{AttachmentID: "task-network"}
+				caller, err := New(Options{Runtime: runtime, Image: "aries-bridge:v1", Backend: "docker", BridgeBackend: "docker", BridgePlacement: placement})
+				if err != nil {
+					t.Fatal(err)
+				}
+				err = caller.Start(ctx, core.ToolEndpoint{Protocol: "grpc", Address: "10.0.0.1:8443"}, core.HarnessConnectivity{Placement: placement}, "run", "task")
+				wantErr, wantWait := error(context.DeadlineExceeded), startTimeout
+				if test.cancel {
+					wantErr, wantWait = context.Canceled, 0
+				}
+				if !errors.Is(err, wantErr) || time.Since(started) != wantWait {
+					t.Errorf("startup returned %v after %s, want %v after %s", err, time.Since(started), wantErr, wantWait)
+				}
+				const oneRemoval = 1
+				if err := caller.Stop(context.Background()); err != nil || runtime.stops != oneRemoval || !runtime.stopBounded {
+					t.Fatalf("cleanup after startup failure: error=%v, stops=%d, bounded=%t", err, runtime.stops, runtime.stopBounded)
+				}
+			})
+		})
+	}
 }
 
 func TestReplayCallerBoundsPlanStaging(t *testing.T) {
@@ -157,11 +216,14 @@ func (runtime *fakeRuntime) UploadArchive(ctx context.Context, _, _ string, sour
 	return errors.New("staging failed")
 }
 
-func (runtime *fakeRuntime) Create(_ context.Context, request deployment.Request) (string, error) {
+func (runtime *fakeRuntime) Create(ctx context.Context, request deployment.Request) (string, error) {
 	runtime.creates++
 	runtime.request = request
 	if runtime.emptyID {
 		return "", runtime.createErr
+	}
+	if runtime.create != nil {
+		return "owned-caller", runtime.create(ctx)
 	}
 	return "owned-caller", runtime.createErr
 }

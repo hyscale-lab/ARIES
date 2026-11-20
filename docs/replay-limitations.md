@@ -24,9 +24,9 @@ The limits below describe current behavior, not the
   Incomplete, changed, rejected, canceled, or failed-write evidence rejects the source.
   Complete admitted non-write failures and nonzero `Exec` exits can be valid expectations.
 - Old sources without finalized capture evidence are invalid. Older nonempty
-  sources can omit metadata `run_id` only if every call proves the run binding;
-  empty sources cannot. Missing captured `Exec` output alone need not invalidate
-  complete response checks.
+  sources can omit metadata `run_id` or `occurrence_id` only if every call
+  proves the missing binding. Empty sources require both IDs in the metadata.
+  Missing captured `Exec` output alone need not invalidate complete response checks.
 - Only `Exec`, `Stat`, `ReadFile`, `ReadLines`, and `WriteFile` are supported.
   `Exec` requires the recorded canonical Bash argv and matching shell-neutral workdir.
   Binary or control-bearing request bodies are unsupported, even with raw logs.

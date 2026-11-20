@@ -36,6 +36,7 @@ type replaySourceMetadata struct {
 	SandboxID          string            `json:"SandboxID"`
 	BenchmarkType      string            `json:"benchmark_type"`
 	TaskID             string            `json:"task_id"`
+	OccurrenceID       json.RawMessage   `json:"occurrence_id"`
 	Image              string            `json:"image"`
 	BenchmarkRevisions map[string]string `json:"benchmark_revisions"`
 	HarnessCompletedAt string            `json:"harness_completed_at"`
@@ -153,25 +154,35 @@ func loadReplaySourceContext(ctx context.Context, sourceDir string, task core.Ta
 	if plan.SourceTaskID == "" {
 		return replay.Plan{}, errors.New("replay source has no matching evaluation")
 	}
+	if metadata.OccurrenceID != nil {
+		var recordedID string
+		if err := json.Unmarshal(metadata.OccurrenceID, &recordedID); err != nil || recordedID != plan.SourceTaskID {
+			return replay.Plan{}, errors.New("replay source occurrence binding differs from parent result")
+		}
+	} else if len(log) == 0 {
+		// Older traces must prove the binding with their call records.
+		return replay.Plan{}, errors.New("replay source occurrence binding is missing")
+	}
 	plan.SourceRunID = result.RunID
 
 	var first, latest time.Time
-	lines := bytes.Split(log, []byte{'\n'})
-	starts := make(map[uint64]time.Time, len(lines)-1)
-	for index, line := range lines[:len(lines)-1] {
+	starts := make(map[uint64]time.Time)
+	for line := range bytes.Lines(log) {
 		if err := ctx.Err(); err != nil {
 			return replay.Plan{}, err
 		}
+		line = line[:len(line)-1]
+		number := len(plan.Calls) + 1
 		if len(line) == 0 || len(line) > 2*MaxMessageBytes {
-			return replay.Plan{}, fmt.Errorf("replay call %d has invalid length", index+1)
+			return replay.Plan{}, fmt.Errorf("replay call %d has invalid length", number)
 		}
 		var record toolCallRecord
 		if err := json.Unmarshal(line, &record); err != nil {
-			return replay.Plan{}, fmt.Errorf("decode replay call %d: %w", index+1, err)
+			return replay.Plan{}, fmt.Errorf("decode replay call %d: %w", number, err)
 		}
-		call, started, stamped, err := parseReplayCall(record, line, uint64(index+1), plan.SourceRunID, plan.SourceTaskID, metadata.SandboxID)
+		call, started, stamped, err := parseReplayCall(record, line, uint64(number), plan.SourceRunID, plan.SourceTaskID, metadata.SandboxID)
 		if err != nil {
-			return replay.Plan{}, fmt.Errorf("replay call %d: %w", index+1, err)
+			return replay.Plan{}, fmt.Errorf("replay call %d: %w", number, err)
 		}
 		starts[record.Sequence] = started
 		if len(plan.Calls) == 0 || started.Before(first) {

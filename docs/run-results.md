@@ -81,7 +81,8 @@ resource samples under the `evaluation-sandbox` component in
 ## Sandbox-call replay results
 
 Inspect every entry in `tasks`, including empty traces and repeated logical IDs.
-Execution IDs belong to the new run; source IDs appear under `evaluation`.
+Execution IDs belong to the new run. Source IDs for reused grades appear under
+`evaluation`.
 Use `replay.status` and `replay.error` for execution, `isolation.caller_stopped`
 and `isolation.bridge_revoked` for isolation, and `cleanup` for sandbox removal.
 The task's `error` combines failures; inherited rewards do not override them.
@@ -89,6 +90,10 @@ The `tasks[0]` examples below show only the first result.
 
 Unconfirmed replay cleanup stops new admission. A successful cleanup retry can set
 `cleanup.status` to `succeeded`, but the task's `error` retains the original failure.
+
+If construction fails after admission, the task result records the new execution
+ID, `replay.source_run_id`, `replay.source_task_id`, and the error. It reports no
+reused grade or successful task cleanup.
 
 `tasks[0].evaluation.reused` marks historical status, score, reward, and error.
 `evaluation.source_run_id` and `evaluation.source_task_id` identify the source.
@@ -232,7 +237,8 @@ closes its bridge access and finalizes its evidence without stopping the service
 or other sessions. `bridge/runtime.json` records that sandbox's binding;
 `infrastructure/bridge/runtime.json` records the shared service runtime.
 Ordinary live `bridge/runtime.json` contains only `Backend`, `RuntimeID`,
-`RuntimeName`, `SandboxID`, and `TargetRuntimeID`. Recording adds replay metadata.
+`RuntimeName`, `SandboxID`, and `TargetRuntimeID`. Recording adds replay metadata,
+including `occurrence_id` for the execution and `task_id` for the logical task.
 `replay_ready` confirms metadata and audit finalization, not call or timing
 compatibility; the replay loader can still reject the source.
 

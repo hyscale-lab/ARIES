@@ -383,9 +383,24 @@ func runWithReplayInfrastructure(ctx context.Context, cfg config.Config, runID, 
 					occurrenceWiring.LoadReplaySource = func(ctx context.Context, _ config.Config, _ core.Task) (replay.Plan, error) {
 						return selection.Load(ctx, index)
 					}
-					experiment, err := buildTaskExperiment(cfg, core.ModelConfig{}, nil, runID, outputRoot, selection.Occurrences[index].LogicalTaskID, occurrence.executionID, nil, logger, catalog, occurrenceWiring)
+					source := selection.Occurrences[index]
+					experiment, err := buildTaskExperiment(cfg, core.ModelConfig{}, nil, runID, outputRoot, source.LogicalTaskID, occurrence.executionID, nil, logger, catalog, occurrenceWiring)
 					if err != nil {
-						return core.RunResult{}, err
+						task := core.TaskResult{
+							TaskID: occurrence.executionID,
+							Error:  err.Error(),
+							Replay: &core.ReplayResult{
+								Status: core.StatusFailed, Error: err.Error(),
+								SourceRunID: selection.SourceRunID, SourceTaskID: source.SourceTaskID,
+							},
+							Harness:    core.HarnessResult{Status: core.StatusNotStarted},
+							Isolation:  core.IsolationResult{Status: core.StatusNotStarted},
+							Evaluation: core.Evaluation{Status: core.StatusNotRun},
+							Observer:   core.ObserverResult{Status: core.StatusNotEnabled},
+							Cleanup:    core.CleanupResult{Status: core.StatusNotNeeded},
+						}
+						tasks := []core.TaskResult{task}
+						return core.RunResult{Tasks: tasks, Summary: core.RunSummary{Tasks: len(tasks)}}, err
 					}
 					result, err := experiment.Run(taskCtx)
 					if errors.Is(err, errReplayCleanupUnconfirmed) {

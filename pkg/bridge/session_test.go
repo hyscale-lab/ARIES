@@ -132,6 +132,7 @@ func TestSessionFinalizesReplaySourceOnlyWithCompletionAndMatchingImage(t *testi
 				SchemaVersion      int               `json:"schema_version"`
 				BenchmarkType      string            `json:"benchmark_type"`
 				TaskID             string            `json:"task_id"`
+				OccurrenceID       string            `json:"occurrence_id"`
 				Image              string            `json:"image"`
 				BenchmarkRevisions map[string]string `json:"benchmark_revisions"`
 				HarnessCompletedAt string            `json:"harness_completed_at"`
@@ -145,6 +146,9 @@ func TestSessionFinalizesReplaySourceOnlyWithCompletionAndMatchingImage(t *testi
 			}
 			if err := json.Unmarshal(data, &metadata); err != nil {
 				t.Fatal(err)
+			}
+			if metadata.OccurrenceID != s.descriptor.TaskID {
+				t.Fatalf("runtime occurrence ID = %q, want %q", metadata.OccurrenceID, s.descriptor.TaskID)
 			}
 			if metadata.RunID != s.descriptor.RunID || metadata.SchemaVersion != sourceSchemaVersion || metadata.TaskID != logicalID || metadata.Image != image || metadata.BenchmarkType != "terminalbench2" || metadata.BenchmarkRevisions["revision"] != benchmarkRevision || metadata.ReplayReady != test.ready || metadata.RuntimeID != "runtime" || metadata.RuntimeName != "bridge-runtime-name" || metadata.SandboxID != "sandbox" || metadata.TargetRuntimeID != "target-runtime" {
 				t.Fatalf("runtime metadata = %+v", metadata)

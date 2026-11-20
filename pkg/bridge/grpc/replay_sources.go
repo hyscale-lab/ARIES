@@ -34,6 +34,7 @@ type ReplayOccurrence struct {
 // ReplaySelection retains compact source evidence, not request payload plans.
 // StartedAt is the earliest recorded call start, not a replay scheduling epoch.
 type ReplaySelection struct {
+	SourceRunID  string
 	Occurrences  []ReplayOccurrence
 	StartedAt    time.Time
 	sources      []replaySelectedSource
@@ -115,7 +116,7 @@ func preflightReplaySource(ctx context.Context, sourceDir string, tasks []core.T
 	if err != nil {
 		return nil, err
 	}
-	selection := &ReplaySelection{benchmark: benchmarkType, revisions: maps.Clone(revisions), maxPlanBytes: maxPlanBytes}
+	selection := &ReplaySelection{SourceRunID: result.RunID, benchmark: benchmarkType, revisions: maps.Clone(revisions), maxPlanBytes: maxPlanBytes}
 	seen := make(map[string]bool, len(result.Tasks))
 	hasCalls := false
 	for _, candidate := range result.Tasks {

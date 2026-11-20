@@ -217,6 +217,7 @@ func writeFiniteReplaySource(t *testing.T, logicalIDs []string, zeroCalls bool, 
 		const sourceSchemaVersion = 1
 		writeJSON(filepath.Join(dir, "runtime.json"), map[string]any{
 			"schema_version": sourceSchemaVersion, "run_id": finiteSourceRun, "replay_ready": true, "SandboxID": id,
+			"occurrence_id":  id,
 			"benchmark_type": "terminalbench2", "task_id": logicalID, "image": finiteImage,
 			"benchmark_revisions": map[string]string{"revision": finiteRevision}, "harness_completed_at": at.Format(time.RFC3339Nano),
 			"tool_calls_bytes": len(log), "tool_calls_sha256": hex.EncodeToString(digest[:]),
@@ -1435,6 +1436,53 @@ func TestReplayRunDrainsAdmittedPeersAfterCleanupUncertainty(t *testing.T) {
 				}
 			})
 		})
+	}
+}
+
+func TestReplayRunRecordsAdmittedConstructionFailure(t *testing.T) {
+	const concurrency = 1
+	const failedExecutionID = "b-001"
+	source, tasks, expected := writeFiniteReplaySource(t, []string{"a", "b"}, false)
+	failedSourceID := expected[len(expected)-1].TaskID
+	wiring := finiteReplayWiring(tasks)
+	fail := errors.New("construct sandbox failed")
+	var runRoot string
+	wiring.NewSandbox = func(_ config.Config, root, _, taskID string, _ []int, _ *logrus.Logger) (SandboxInstance, error) {
+		runRoot = root
+		if taskID != failedExecutionID {
+			t.Errorf("construction execution ID = %q, want %q", taskID, failedExecutionID)
+		}
+		return SandboxInstance{}, fail
+	}
+	wiring.NewReplayCaller = func(config.Config, core.RuntimePlacement, time.Duration, *logrus.Logger) (runner.ReplayCaller, error) {
+		t.Error("sandbox construction failure did not stop caller construction")
+		return nil, fail
+	}
+	profile := finiteReplayProfile(t, filepath.Join(source, failedSourceID), concurrency)
+	err := runCommandForTest(context.Background(), profile, io.Discard, Dependencies{Wiring: wiring})
+	if !errors.Is(err, fail) {
+		t.Fatalf("lost construction error: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(runRoot, runResultName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result core.RunResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatal(err)
+	}
+	const oneTask = 1
+	if len(result.Tasks) != oneTask || result.Summary != (core.RunSummary{Tasks: oneTask}) {
+		t.Fatalf("admitted failure did not count as one task: %+v", result)
+	}
+	task := result.Tasks[0]
+	if task.TaskID != failedExecutionID || task.Error != fail.Error() || task.Replay == nil ||
+		task.Replay.Status != core.StatusFailed || task.Replay.Error != fail.Error() ||
+		task.Replay.SourceRunID != finiteSourceRun || task.Replay.SourceTaskID != failedSourceID {
+		t.Fatalf("missing construction failure or source identity: %+v, replay=%+v", task, task.Replay)
+	}
+	if task.Evaluation.Status != core.StatusNotRun || task.Evaluation.Reused || task.Cleanup.Status != core.StatusNotNeeded {
+		t.Fatalf("unstarted replay reported work or cleanup: %+v", task)
 	}
 }
 

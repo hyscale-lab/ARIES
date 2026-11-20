@@ -96,6 +96,8 @@ func (caller *Caller) Start(ctx context.Context, endpoint core.ToolEndpoint, con
 		Placement: connectivity.Placement, DisableServiceAccountToken: true,
 		Labels: map[string]string{"aries.managed": "true", "aries.component": "replay-caller", "aries.kind": "replay-caller", "aries.run": runID, "aries.task": taskID},
 	}
+	ctx, cancel := context.WithTimeout(ctx, startTimeout)
+	defer cancel()
 	caller.id, err = caller.options.Runtime.Create(ctx, request)
 	if errors.Is(err, deployment.ErrAllocationUnconfirmed) {
 		caller.allocationErr = err
@@ -120,24 +122,22 @@ func (caller *Caller) Start(ctx context.Context, endpoint core.ToolEndpoint, con
 	if err := caller.options.Runtime.Start(ctx, caller.id); err != nil {
 		return fmt.Errorf("start replay caller runtime: %w", err)
 	}
-	readyCtx, cancel := context.WithTimeout(ctx, startTimeout)
-	defer cancel()
 	for {
-		if _, err := caller.download(readyCtx, readyFile); err == nil {
+		if _, err := caller.download(ctx, readyFile); err == nil {
 			return nil
 		} else if !errors.Is(err, runner.ErrNotFound) {
 			return fmt.Errorf("check replay caller readiness: %w", err)
 		}
-		if data, err := caller.download(readyCtx, resultFile); err == nil {
+		if data, err := caller.download(ctx, resultFile); err == nil {
 			return fmt.Errorf("replay caller cannot reach private bridge: %s", data)
 		} else if !errors.Is(err, runner.ErrNotFound) {
 			return fmt.Errorf("check replay caller startup: %w", err)
 		}
-		running, err := caller.options.Runtime.Running(readyCtx, caller.id)
+		running, err := caller.options.Runtime.Running(ctx, caller.id)
 		if err != nil || !running {
 			return errors.Join(errors.New("replay caller exited before bridge readiness"), err)
 		}
-		if err := poll(readyCtx); err != nil {
+		if err := poll(ctx); err != nil {
 			return fmt.Errorf("wait for replay caller readiness: %w", err)
 		}
 	}

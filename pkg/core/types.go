@@ -261,10 +261,12 @@ type ReplayResponses struct {
 
 // ReplayResult records sandbox-call execution separately from the source grade.
 type ReplayResult struct {
-	Status    string           `json:"status"`
-	Error     string           `json:"error,omitempty"`
-	Timing    *ReplayTiming    `json:"timing,omitempty"`
-	Responses *ReplayResponses `json:"responses,omitempty"`
+	Status       string           `json:"status"`
+	Error        string           `json:"error,omitempty"`
+	SourceRunID  string           `json:"source_run_id,omitempty"`
+	SourceTaskID string           `json:"source_task_id,omitempty"`
+	Timing       *ReplayTiming    `json:"timing,omitempty"`
+	Responses    *ReplayResponses `json:"responses,omitempty"`
 }
 
 // ObserverResult records observer-only evidence composed outside the Runner.

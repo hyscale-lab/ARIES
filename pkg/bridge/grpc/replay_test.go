@@ -71,6 +71,7 @@ func writeReplaySource(t *testing.T, records []toolCallRecord, completed time.Ti
 	metadata := map[string]any{
 		"schema_version": 1, "run_id": replayRunID, "replay_ready": true, "SandboxID": replaySandboxID,
 		"benchmark_type": replayBenchmark, "task_id": replayLogicalID, "image": replayImage,
+		"occurrence_id":       replayTaskID,
 		"benchmark_revisions": replayRevisions, "harness_completed_at": bridgekit.FormatTime(completed),
 		"tool_calls_bytes": len(log), "tool_calls_sha256": hex.EncodeToString(digest[:]),
 	}
@@ -123,6 +124,41 @@ func TestLoadReplaySourceOrdersCallsAndPreservesEvaluation(t *testing.T) {
 	}
 	if len(plan.Calls) != 2 || plan.Calls[0].Operation != "Exec" || plan.Calls[0].Sequence != early.Sequence || plan.Calls[0].StartOffset != 0 || plan.Calls[0].Script != early.Command || plan.Calls[1].Operation != "Stat" || plan.Calls[1].Sequence != late.Sequence || plan.Calls[1].StartOffset != startGap || plan.FinalWait != finalWait {
 		t.Fatalf("call plan = %+v", plan)
+	}
+}
+
+func TestLoadReplaySourceRejectsIncompleteAndEmptyLines(t *testing.T) {
+	start, err := time.Parse(time.RFC3339Nano, replaySourceTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const firstSequence = 1
+	for _, test := range []struct {
+		name   string
+		change func([]byte) []byte
+		want   string
+	}{
+		{name: "incomplete", change: func(log []byte) []byte { return bytes.TrimSuffix(log, []byte{'\n'}) }, want: "ends with an incomplete line"},
+		{name: "blank second line", change: func(log []byte) []byte { return append(log, '\n') }, want: "call 2 has invalid length"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source := writeReplaySource(t, []toolCallRecord{replayRecord(start, start, firstSequence)}, start, core.Evaluation{Status: core.StatusSucceeded})
+			path := filepath.Join(source, "bridge", "tool-calls.jsonl")
+			log, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			log = test.change(log)
+			if err := os.WriteFile(path, log, replayFileMode); err != nil {
+				t.Fatal(err)
+			}
+			digest := sha256.Sum256(log)
+			updateReplayMetadata(t, source, "tool_calls_bytes", len(log))
+			updateReplayMetadata(t, source, "tool_calls_sha256", hex.EncodeToString(digest[:]))
+			if _, err := LoadReplaySource(source, replayTask, replayBenchmark, replayRevisions); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("load error = %v, want %q", err, test.want)
+			}
+		})
 	}
 }
 
@@ -300,6 +336,7 @@ func TestLoadReplaySourceRejectsIncompleteEvidenceAndWrongTask(t *testing.T) {
 		"missing completion": func(source string) { updateReplayMetadata(t, source, "harness_completed_at", "") },
 		"wrong benchmark":    func(source string) { updateReplayMetadata(t, source, "benchmark_type", "other") },
 		"wrong logical task": func(source string) { updateReplayMetadata(t, source, "task_id", "other") },
+		"wrong occurrence":   func(source string) { updateReplayMetadata(t, source, "occurrence_id", "other") },
 		"wrong image":        func(source string) { updateReplayMetadata(t, source, "image", "other:tag") },
 		"wrong revision": func(source string) {
 			updateReplayMetadata(t, source, "benchmark_revisions", map[string]string{"revision": "other"})
@@ -508,6 +545,7 @@ func TestPreflightReplaySourceRejectsInvalidFinalOccurrence(t *testing.T) {
 			}
 		},
 		"mismatched occurrence": func(run string) {
+			updateReplayMetadata(t, filepath.Join(run, finalID), "occurrence_id", nil)
 			rewriteReplayRecord(t, filepath.Join(run, finalID), func(record map[string]any) { record["task_id"] = replayTaskID })
 		},
 		"mismatched logical task": func(run string) { updateReplayMetadata(t, filepath.Join(run, finalID), "task_id", "unknown") },
@@ -576,6 +614,40 @@ func TestReplaySelectionRejectsChangedFinalizedEvidence(t *testing.T) {
 	}
 }
 
+func TestReplaySourceRejectsUnboundEmptyOccurrence(t *testing.T) {
+	start, err := time.Parse(time.RFC3339Nano, replaySourceTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const secondOccurrenceID = "task-002"
+	for _, test := range []struct {
+		name string
+		id   any
+	}{
+		{name: "different occurrence", id: secondOccurrenceID},
+		{name: "previous metadata without occurrence ID"},
+		{name: "blank occurrence ID", id: ""},
+		{name: "null occurrence ID", id: json.RawMessage("null")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			run := writeReplayRun(t, []replayOccurrenceFixture{{id: replayTaskID, task: replayTask}, {id: secondOccurrenceID, task: replayTask}}, start)
+			selection, err := PreflightReplaySource(ctx, run, []core.Task{replayTask}, replayBenchmark, replayRevisions, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			updateReplayMetadata(t, filepath.Join(run, replayTaskID), "occurrence_id", test.id)
+			const firstOccurrence = 0
+			if _, err := selection.Load(ctx, firstOccurrence); err == nil || !strings.Contains(err.Error(), "occurrence binding") {
+				t.Errorf("admission did not check the occurrence binding: %v", err)
+			}
+			if selection, err := PreflightReplaySource(ctx, run, []core.Task{replayTask}, replayBenchmark, replayRevisions, nil); err == nil || !strings.Contains(err.Error(), "occurrence binding") || selection != nil {
+				t.Errorf("preflight accepted an unbound occurrence: %+v, %v", selection, err)
+			}
+		})
+	}
+}
+
 func TestPreflightReplaySourceEmptyAndLegacySources(t *testing.T) {
 	start, err := time.Parse(time.RFC3339Nano, replaySourceTime)
 	if err != nil {
@@ -597,6 +669,7 @@ func TestPreflightReplaySourceEmptyAndLegacySources(t *testing.T) {
 		}
 	}
 	source := writeReplaySource(t, []toolCallRecord{replayRecord(start, start, 1)}, start, core.Evaluation{Status: core.StatusSucceeded})
+	updateReplayMetadata(t, source, "occurrence_id", nil)
 	updateReplayMetadata(t, source, "run_id", nil)
 	before := make(map[string][]byte)
 	for _, path := range []string{filepath.Join(source, "bridge", "runtime.json"), filepath.Join(source, "bridge", "tool-calls.jsonl"), filepath.Join(filepath.Dir(source), "run-result.json")} {
@@ -649,6 +722,7 @@ func TestPreflightReplaySourceUsesRecordedGlobalTimeBounds(t *testing.T) {
 			second := replayRecord(later, later, 1)
 			second.TaskID = laterOccurrenceID
 			secondSource := writeReplaySource(t, []toolCallRecord{second}, later, core.Evaluation{Status: core.StatusSucceeded})
+			updateReplayMetadata(t, secondSource, "occurrence_id", laterOccurrenceID)
 			run := filepath.Dir(firstSource)
 			if err := os.Rename(secondSource, filepath.Join(run, laterOccurrenceID)); err != nil {
 				t.Fatal(err)
@@ -829,6 +903,7 @@ func writeReplayRun(t *testing.T, inputs []replayOccurrenceFixture, completed ti
 		}
 		evaluation := core.Evaluation{Status: core.StatusFailed}
 		source := writeReplaySource(t, records, completed, evaluation)
+		updateReplayMetadata(t, source, "occurrence_id", input.id)
 		updateReplayMetadata(t, source, "task_id", input.task.ID)
 		updateReplayMetadata(t, source, "image", input.task.Environment.Image)
 		if err := os.Rename(source, filepath.Join(run, input.id)); err != nil {
