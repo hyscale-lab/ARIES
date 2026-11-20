@@ -27,11 +27,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	dependencies := app.Dependencies{Logger: logger, Wiring: commandWiring()}
-	positional, err := parseArgs(os.Args[1:], &dependencies.RecordForReplay)
-	if err != nil {
-		logger.WithError(err).Error("aries failed")
-		os.Exit(1)
-	}
+	flag.BoolVar(&dependencies.RecordForReplay, "record-for-replay", false, "record sandbox calls for replay")
+	flag.Parse()
+	positional := flag.Args()
 	if code, entered, err := runInOwnNamespace(ctx, os.Args[1:], positional, deploymentwiring.RunApptainerInNamespace); entered {
 		if err != nil {
 			logger.WithError(err).Error("aries failed")
@@ -45,15 +43,6 @@ func main() {
 }
 
 type useCase func(context.Context, string, io.Writer, app.Dependencies) error
-
-func parseArgs(args []string, recordForReplay *bool) ([]string, error) {
-	flags := flag.NewFlagSet("aries", flag.ContinueOnError)
-	flags.BoolVar(recordForReplay, "record-for-replay", *recordForReplay, "record sandbox calls for replay")
-	if err := flags.Parse(args); err != nil {
-		return nil, err
-	}
-	return flags.Args(), nil
-}
 
 func dispatch(ctx context.Context, args []string, stdout io.Writer, dependencies app.Dependencies, run, setup useCase) error {
 	usage := errors.New("usage: aries [--record-for-replay] PROFILE.json | aries setup PROFILE.json")

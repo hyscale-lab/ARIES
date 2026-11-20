@@ -44,7 +44,11 @@ An ordinary run keeps the baseline audit. To record a live source for later repl
 Flags must precede positional arguments. Go's standard flag syntax applies:
 one or two dashes, explicit boolean values, and the last duplicate value wins.
 Use `--` or a `./` path prefix for a profile name that starts with a dash.
-Unknown flags and extra positional arguments are rejected.
+
+Use `./bin/aries --help` to list the top-level flags and exit with status `0`.
+An unknown leading flag or an invalid flag value exits with status `2`.
+Invalid command forms report usage and exit with status `1`.
+This includes a flag after the profile or enabled recording with `setup`.
 
 Recording requires `hermes-grpc` and source provenance for every selected task.
 The enabled flag is invalid with setup, replay profiles, or arrival schedules.
