@@ -8,8 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"unicode/utf8"
 
 	"github.com/hyscale-lab/aries/pkg/core"
@@ -21,47 +19,25 @@ var ErrExecResponseTooLarge = errors.New("Exec response exceeds replay audit lin
 // LiveAuditError checks the finalized gRPC audit for output that could not fit
 // in one replay record. It fails closed if the private audit is not intact.
 func LiveAuditError(path string) error {
-	root, err := os.OpenRoot(filepath.Dir(path))
-	if err != nil {
-		return fmt.Errorf("open live bridge audit directory: %w", err)
-	}
-	defer root.Close()
-	name := filepath.Base(path)
-	info, err := root.Lstat(name)
-	if err != nil {
-		return fmt.Errorf("stat live bridge audit: %w", err)
-	}
-	if !info.Mode().IsRegular() || info.Mode().Perm() != privateTimingFileMode || info.Size() < 0 || info.Size() > maxTimingAuditBytes {
-		return errors.New("live bridge audit is not a bounded private file")
-	}
-	file, err := root.Open(name)
-	if err != nil {
-		return fmt.Errorf("open live bridge audit: %w", err)
-	}
-	defer file.Close()
-	opened, err := file.Stat()
-	if err != nil || !os.SameFile(info, opened) || opened.Size() != info.Size() {
-		return errors.New("live bridge audit changed before reading")
-	}
-	decoder := json.NewDecoder(io.LimitReader(file, maxTimingAuditBytes+1))
 	var overflow bool
-	for {
-		var record struct {
-			ReplayError string `json:"replay_error"`
-		}
-		if err := decoder.Decode(&record); err != nil {
-			if err == io.EOF {
-				break
+	err := readPrivateAudit(path, true, func(decoder *json.Decoder) error {
+		for {
+			var record struct {
+				ReplayError string `json:"replay_error"`
 			}
-			return fmt.Errorf("decode live bridge audit: %w", err)
+			if err := decoder.Decode(&record); err != nil {
+				if err == io.EOF {
+					return nil
+				}
+				return fmt.Errorf("decode live bridge audit: %w", err)
+			}
+			if record.ReplayError == "response-debug-too-large" {
+				overflow = true
+			}
 		}
-		if record.ReplayError == "response-debug-too-large" {
-			overflow = true
-		}
-	}
-	closed, err := file.Stat()
-	if err != nil || !os.SameFile(info, closed) || closed.Size() != info.Size() {
-		return errors.New("live bridge audit changed while reading")
+	})
+	if err != nil {
+		return err
 	}
 	if overflow {
 		return ErrExecResponseTooLarge
@@ -77,25 +53,6 @@ func ReadResponses(path string, plan Plan, logger *logrus.Logger) core.ReplayRes
 	if path == "" {
 		return unavailable("replay bridge audit is missing")
 	}
-	root, err := os.OpenRoot(filepath.Dir(path))
-	if err != nil {
-		return unavailable("replay bridge audit is unavailable")
-	}
-	defer root.Close()
-	name := filepath.Base(path)
-	info, err := root.Lstat(name)
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != privateTimingFileMode || info.Size() < 0 || info.Size() > maxTimingAuditBytes {
-		return unavailable("replay bridge audit is not a bounded private file")
-	}
-	file, err := root.Open(name)
-	if err != nil {
-		return unavailable("replay bridge audit is unavailable")
-	}
-	defer file.Close()
-	opened, err := file.Stat()
-	if err != nil || !os.SameFile(info, opened) || opened.Mode().Perm() != info.Mode().Perm() || opened.Size() != info.Size() {
-		return unavailable("replay bridge audit changed before reading")
-	}
 	type auditResponse struct {
 		SourceSequence uint64 `json:"replay_source_sequence"`
 		OperationClass string `json:"operation_class"`
@@ -106,24 +63,25 @@ func ReadResponses(path string, plan Plan, logger *logrus.Logger) core.ReplayRes
 		StdoutBase64   []byte `json:"response_stdout_base64"`
 		StderrBase64   []byte `json:"response_stderr_base64"`
 	}
-	records := make(map[uint64]auditResponse, len(plan.Calls))
-	decoder := json.NewDecoder(io.LimitReader(file, maxTimingAuditBytes+1))
-	for {
-		var record auditResponse
-		if err := decoder.Decode(&record); err != nil {
-			if err == io.EOF {
-				break
+	var records map[uint64]auditResponse
+	err := readPrivateAudit(path, false, func(decoder *json.Decoder) error {
+		records = make(map[uint64]auditResponse, len(plan.Calls))
+		for {
+			var record auditResponse
+			if err := decoder.Decode(&record); err != nil {
+				if err == io.EOF {
+					return nil
+				}
+				return errors.New("replay bridge audit has an invalid record")
 			}
-			return unavailable("replay bridge audit has an invalid record")
+			if record.SourceSequence == 0 || records[record.SourceSequence].SourceSequence != 0 || len(records) >= len(plan.Calls) {
+				return errors.New("replay bridge audit has extra or duplicate calls")
+			}
+			records[record.SourceSequence] = record
 		}
-		if record.SourceSequence == 0 || records[record.SourceSequence].SourceSequence != 0 || len(records) >= len(plan.Calls) {
-			return unavailable("replay bridge audit has extra or duplicate calls")
-		}
-		records[record.SourceSequence] = record
-	}
-	closed, err := file.Stat()
-	if err != nil || !os.SameFile(info, closed) || closed.Mode().Perm() != info.Mode().Perm() || closed.Size() != info.Size() {
-		return unavailable("replay bridge audit changed while reading")
+	})
+	if err != nil {
+		return unavailable(err.Error())
 	}
 	responses := core.ReplayResponses{Status: "available"}
 	for _, call := range plan.Calls {

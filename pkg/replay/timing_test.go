@@ -216,6 +216,28 @@ func TestReadTimingRejectsUnsafeAudit(t *testing.T) {
 	}
 }
 
+func TestAuditPermissionRecheck(t *testing.T) {
+	const readOnlyMode = 0o400
+	file, err := os.Open(writeTimingAudit(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !auditUnchanged(file, info) {
+		t.Fatal("recheck rejected unchanged audit")
+	}
+	if err := file.Chmod(readOnlyMode); err != nil {
+		t.Fatal(err)
+	}
+	if auditUnchanged(file, info) {
+		t.Fatal("recheck accepted changed audit permissions")
+	}
+}
+
 func TestReadTimingMarksMissingAndDuplicateCorrelationUnavailable(t *testing.T) {
 	const firstSourceSequence uint64 = 1
 	const secondSourceSequence uint64 = 2
