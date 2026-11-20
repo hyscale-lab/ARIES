@@ -217,18 +217,13 @@ func (caller *Caller) Stop(ctx context.Context) error {
 }
 
 func (caller *Caller) upload(ctx context.Context, name string, data []byte) error {
-	var buffer bytes.Buffer
-	archive := tar.NewWriter(&buffer)
-	if err := archive.WriteHeader(&tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0600, Size: int64(len(data))}); err != nil {
+	const privateFileMode = 0o600
+	archive, err := harness.StageArchive(nil, map[string]harness.ArchiveFile{name: {Content: data, Mode: privateFileMode}})
+	if err != nil {
 		return err
 	}
-	if _, err := archive.Write(data); err != nil {
-		return err
-	}
-	if err := archive.Close(); err != nil {
-		return err
-	}
-	return caller.options.Runtime.UploadArchive(ctx, caller.id, workdir, &buffer)
+	defer clear(archive)
+	return caller.options.Runtime.UploadArchive(ctx, caller.id, workdir, bytes.NewReader(archive))
 }
 
 func (caller *Caller) download(ctx context.Context, name string) ([]byte, error) {

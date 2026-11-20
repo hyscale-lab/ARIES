@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -177,22 +178,32 @@ func TestReplayCallerBoundsPlanStaging(t *testing.T) {
 	}
 }
 
-func (runtime *fakeRuntime) UploadArchive(ctx context.Context, _, _ string, source io.Reader) error {
+func (runtime *fakeRuntime) UploadArchive(ctx context.Context, _, destination string, source io.Reader) error {
+	if destination != "/tmp" {
+		return fmt.Errorf("upload destination = %q, want /tmp", destination)
+	}
 	archive := tar.NewReader(source)
 	header, err := archive.Next()
 	if err != nil {
 		return err
+	}
+	const wantPrivateMode = 0o600
+	if header.Typeflag != tar.TypeReg || header.Mode != wantPrivateMode {
+		return fmt.Errorf("upload %q has type %q and mode %#o, want a regular file with mode %#o", header.Name, header.Typeflag, header.Mode, wantPrivateMode)
 	}
 	if runtime.upload != nil {
 		if err := runtime.upload(ctx, header.Name); err != nil {
 			return err
 		}
 	}
+	data, err := io.ReadAll(archive)
+	if err != nil {
+		return err
+	}
+	if _, err := archive.Next(); err != io.EOF {
+		return fmt.Errorf("upload %q must contain one file; next entry error = %v", header.Name, err)
+	}
 	if runtime.files != nil {
-		data, err := io.ReadAll(archive)
-		if err != nil {
-			return err
-		}
 		runtime.files[header.Name] = data
 		if header.Name == planFile {
 			runtime.planUploads++
@@ -203,10 +214,6 @@ func (runtime *fakeRuntime) UploadArchive(ctx context.Context, _, _ string, sour
 		return nil
 	}
 	if header.Name == launchFile {
-		data, err := io.ReadAll(archive)
-		if err != nil {
-			return err
-		}
 		var launch childLaunch
 		if err := json.Unmarshal(data, &launch); err != nil {
 			return err
@@ -376,6 +383,20 @@ func TestReplayCallerAllowsChildStartupAndResultTransfer(t *testing.T) {
 		}
 		if elapsed := time.Since(started); elapsed != stagingDelay+runtime.resultDelay {
 			t.Fatalf("caller returned after %s, want %s", elapsed, stagingDelay+runtime.resultDelay)
+		}
+		wantPlan, err := json.Marshal(plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		const wantLaunch = `{"endpoint":"10.0.0.1:8443","call_timeout":1000000000}`
+		for name, want := range map[string]string{
+			"aries-replay-launch.json": wantLaunch,
+			"aries-replay-plan.json":   string(wantPlan),
+			"aries-replay-plan.ready":  "",
+		} {
+			if got, ok := runtime.files[name]; !ok || string(got) != want {
+				t.Errorf("staged %s = %q, present=%t, want %q", name, got, ok, want)
+			}
 		}
 	})
 }
