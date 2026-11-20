@@ -48,6 +48,8 @@ Load the selected catalog once per run; keep shared metadata immutable and
 verifier inputs benchmark-private. Give every occurrence fresh mutable benchmark
 state and runtime owners, including repeated task IDs. Runner explicitly revokes
 sessions; use fresh bounded cleanup contexts after cancellation. No assignment
-leases or controller-liveness supervision.
+leases or controller-liveness supervision. Record every selected occurrence,
+including repeats and timed-loop admissions. Do not claim sandbox lifecycle timing
+fidelity. See [replay design](../docs/design/replayer.md).
 
 Details: [design](../docs/design.md), [contracts](components.md).

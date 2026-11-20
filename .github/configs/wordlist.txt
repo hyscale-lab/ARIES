@@ -7,10 +7,12 @@ api
 argv
 aries
 automattic's
+automounting
 asr
 backend
 backends
 backoff
+base64
 basenames
 bursty
 cadvisor
@@ -71,6 +73,7 @@ lifecycle
 liveness
 llm
 logrus
+lookups
 loopback
 MCP
 metadata
@@ -82,6 +85,7 @@ natively
 NativeServer
 NCSpeech
 noncanonical
+nonfatal
 nousresearch
 npm
 NSCC
@@ -126,6 +130,7 @@ relicense
 renderer
 renderers
 replayable
+replayer
 resubmission
 roadmap
 RPCs
@@ -179,6 +184,7 @@ tts
 tty
 uid
 Unparseable
+unrepresentable
 unscored
 untracked
 untrusted

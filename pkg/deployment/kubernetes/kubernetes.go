@@ -268,18 +268,64 @@ func (manager *Manager) Validate(ctx context.Context, id string, request deploym
 	if pod.Spec.HostNetwork || pod.Spec.HostPID || pod.Spec.HostIPC {
 		return errors.New("deployment must not share host namespaces")
 	}
+	noToken := manager.options.ServiceAccount == "" || request.DisableServiceAccountToken
 	for _, volume := range pod.Spec.Volumes {
 		if volume.HostPath != nil {
 			return errors.New("deployment has a host mount beyond requested paths")
 		}
+		if !noToken {
+			continue
+		}
+		if volume.Secret != nil {
+			if err := manager.validateMountedSecret(ctx, volume.Secret.SecretName); err != nil {
+				return err
+			}
+		}
+		if volume.Projected != nil {
+			for _, source := range volume.Projected.Sources {
+				if source.ServiceAccountToken != nil {
+					return errors.New("deployment must not mount a service account token")
+				}
+				if source.Secret != nil {
+					if err := manager.validateMountedSecret(ctx, source.Secret.Name); err != nil {
+						return err
+					}
+				}
+			}
+		}
 	}
-	if manager.options.ServiceAccount == "" && (pod.Spec.AutomountServiceAccountToken == nil || *pod.Spec.AutomountServiceAccountToken) {
+	if noToken && (pod.Spec.AutomountServiceAccountToken == nil || *pod.Spec.AutomountServiceAccountToken) {
 		return errors.New("deployment must not mount a service account token")
 	}
 	for _, secret := range secrets {
 		if len(secret) > 0 && bytes.Contains(raw, secret) {
 			return errors.New("deployment secret entered Kubernetes metadata")
 		}
+	}
+	return nil
+}
+
+// validateMountedSecret reads only the referenced Secret's type. Lookup errors
+// omit command output and causes, which can contain private data.
+func (manager *Manager) validateMountedSecret(ctx context.Context, name string) error {
+	if !validSubdomain(name) {
+		return errors.New("deployment has an invalid Secret reference")
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, manager.options.ReadyTimeout)
+	defer cancel()
+	var output bytes.Buffer
+	err := manager.kubectl.Run(lookupCtx, nil, &limitedWriter{writer: &output, limit: maxExecOutput, onExceed: cancel}, io.Discard,
+		"get", "secret", "-n", manager.options.Namespace, name, "-o", "jsonpath-as-json={.type}")
+	if err != nil || lookupCtx.Err() != nil {
+		return errors.New("inspect Kubernetes Secret type failed")
+	}
+	var types []string
+	const singleType = 1
+	if json.Unmarshal(output.Bytes(), &types) != nil || len(types) != singleType || strings.TrimSpace(types[0]) == "" {
+		return errors.New("decode Kubernetes Secret type failed")
+	}
+	if types[0] == "kubernetes.io/service-account-token" {
+		return errors.New("deployment must not mount a service account token")
 	}
 	return nil
 }

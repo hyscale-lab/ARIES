@@ -3,15 +3,21 @@ package runner
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/replay"
 	"github.com/sirupsen/logrus"
 )
 
@@ -227,6 +233,7 @@ func (f *fakeSandbox) Download(context.Context, string, string) error { return n
 type fakeBridge struct {
 	mu         sync.Mutex
 	log        *callLog
+	workdir    string
 	startErr   error
 	stopErrors []error
 	stops      int
@@ -242,7 +249,7 @@ func (f *fakeBridge) Start(ctx context.Context, _ Sandbox) (core.ToolEndpoint, e
 		f.log.addRollback("bridge.rollback", ctx)
 		return core.ToolEndpoint{}, f.startErr
 	}
-	return core.ToolEndpoint{Protocol: "fake", Address: "task", LogPaths: []string{"/runs/tool-calls.jsonl"}}, nil
+	return core.ToolEndpoint{Protocol: "fake", Address: "task", Workdir: f.workdir, LogPaths: []string{"/runs/tool-calls.jsonl"}}, nil
 }
 
 func (f *fakeBridge) Stop(ctx context.Context) error {
@@ -361,6 +368,238 @@ func newRig(t *testing.T, tasks int) *rig {
 		t.Fatalf("New() error = %v", err)
 	}
 	return &rig{log: log, benchmark: benchmark, factory: factory, bridge: bridge, harness: harness, runner: runner}
+}
+
+type markedAuditBridge struct {
+	*fakeBridge
+	paths []string
+}
+
+func (b *markedAuditBridge) Start(ctx context.Context, sandbox Sandbox) (core.ToolEndpoint, error) {
+	endpoint, err := b.fakeBridge.Start(ctx, sandbox)
+	if err != nil {
+		return endpoint, err
+	}
+	endpoint.Protocol = "grpc"
+	endpoint.LogPaths = nil
+	if b.paths != nil {
+		endpoint.LogPaths = []string{b.paths[b.stopCount()]}
+	}
+	return endpoint, nil
+}
+
+func TestRunnerMissingAuditPathRejectsRecordingOnly(t *testing.T) {
+	const oneTask = 1
+	for _, recording := range []bool{false, true} {
+		t.Run(fmt.Sprint(recording), func(t *testing.T) {
+			rig := newRig(t, oneTask)
+			rig.runner.recordForReplay = recording
+			rig.runner.bridge = &markedAuditBridge{fakeBridge: rig.bridge}
+			result, err := rig.runner.Run(context.Background())
+			if recording {
+				if err == nil || !strings.Contains(err.Error(), "check live bridge audit: missing structured audit path") {
+					t.Fatalf("recording accepted a missing audit path: %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("ordinary run rejected a missing audit path: %v", err)
+			}
+			task := result.Tasks[0]
+			if task.Isolation.Status != core.StatusConfirmed || !task.Isolation.HarnessStopped || !task.Isolation.BridgeRevoked || task.Cleanup.Status != core.StatusSucceeded {
+				t.Fatalf("isolation or cleanup failed: %+v", task)
+			}
+			wantEvaluation := core.StatusSucceeded
+			if recording {
+				wantEvaluation = core.StatusNotRun
+			}
+			if task.Evaluation.Status != wantEvaluation || slices.Contains(rig.log.snapshot(), "benchmark.evaluate") == recording {
+				t.Fatalf("evaluation crossed the audit boundary: task=%+v calls=%v", task, rig.log.snapshot())
+			}
+			wantCalls := []string{"benchmark.tasks", "sandbox.start", "benchmark.prepare", "bridge.start", "harness.start", "harness.run", "harness.stop", "bridge.stop"}
+			if !recording {
+				wantCalls = append(wantCalls, "benchmark.evaluate")
+			}
+			wantCalls = append(wantCalls, "sandbox.stop")
+			if got := rig.log.snapshot(); !reflect.DeepEqual(got, wantCalls) {
+				t.Fatalf("calls = %v, want %v", got, wantCalls)
+			}
+		})
+	}
+}
+
+func TestRunnerOversizedExecAuditSkipsEvaluationAfterRevocationAndContinues(t *testing.T) {
+	rig := newRig(t, 2)
+	rig.runner.recordForReplay = true
+	root := t.TempDir()
+	oversized := filepath.Join(root, "oversized.jsonl")
+	ordinary := filepath.Join(root, "ordinary.jsonl")
+	if err := os.WriteFile(oversized, []byte("{\"replay_error\":\"response-debug-too-large\"}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ordinary, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rig.runner.bridge = &markedAuditBridge{fakeBridge: rig.bridge, paths: []string{oversized, ordinary}}
+	result, err := rig.runner.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "audit") {
+		t.Fatalf("oversized audit accepted: %v", err)
+	}
+	if len(result.Tasks) != len(rig.benchmark.tasks) || result.Tasks[0].Evaluation.Status != core.StatusNotRun || result.Tasks[0].Isolation.Status != core.StatusConfirmed || result.Tasks[0].Cleanup.Status != core.StatusSucceeded || result.Tasks[1].Evaluation.Status != core.StatusSucceeded {
+		t.Fatalf("task results = %+v", result.Tasks)
+	}
+	if rig.bridge.stopCount() != len(rig.benchmark.tasks) || rig.factory.stopCount() != len(rig.benchmark.tasks) || rig.benchmark.evaluations != 1 {
+		t.Fatalf("stops and evaluations = %d, %d, %d", rig.bridge.stopCount(), rig.factory.stopCount(), rig.benchmark.evaluations)
+	}
+}
+
+func TestRunnerCombinedAuditOverflowBlocksIsolationAndContinues(t *testing.T) {
+	rig := newRig(t, 2)
+	rig.bridge.stopErrors = []error{errors.New("combined audit exceeds limit"), nil}
+	result, err := rig.runner.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "combined audit") {
+		t.Fatalf("audit overflow accepted: %v", err)
+	}
+	if len(result.Tasks) != len(rig.benchmark.tasks) || result.Tasks[0].Isolation.Status != core.StatusBlockedIsolation || result.Tasks[0].Isolation.BridgeRevoked || result.Tasks[0].Evaluation.Status != core.StatusBlockedIsolation || result.Tasks[0].Cleanup.Status != core.StatusSucceeded || result.Tasks[1].Evaluation.Status != core.StatusSucceeded || rig.factory.stopCount() != len(rig.benchmark.tasks) || rig.benchmark.evaluations != 1 {
+		t.Fatalf("overflow and sibling results = %+v", result.Tasks)
+	}
+}
+
+type completionBridge struct {
+	*fakeBridge
+	err  error
+	wait bool
+}
+
+func (b *completionBridge) CompleteHarness(ctx context.Context) error {
+	b.log.add("bridge.complete", ctx)
+	if b.wait {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return b.err
+}
+
+func TestRunnerCompletionTimeoutKeepsFreshRevocationBudget(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const oneTask = 1 // One task is enough to check all isolation stages.
+		rig := newRig(t, oneTask)
+		rig.runner.recordForReplay = true
+		rig.runner.bridge = &completionBridge{fakeBridge: rig.bridge, wait: true}
+		rig.log.setHook("harness.stop", func() { time.Sleep(fakeRollbackTimeout) })
+		var completionStarted time.Time
+		var completionDuration time.Duration
+		rig.log.setHook("bridge.complete", func() { completionStarted = time.Now() })
+		rig.log.setHook("bridge.stop", func() { completionDuration = time.Since(completionStarted) })
+
+		result, err := rig.runner.Run(context.Background())
+		assertBoundedLiveContext(t, rig.log, "bridge.complete")
+		assertBoundedLiveContext(t, rig.log, "bridge.stop")
+		assertBoundedLiveContext(t, rig.log, "sandbox.stop")
+		if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(result.Tasks[0].Error, "record harness completion: context deadline exceeded") {
+			t.Fatalf("completion timeout evidence lost: result=%+v error=%v", result, err)
+		}
+		if completionDuration != rig.runner.cleanupTimeout {
+			t.Fatalf("completion budget = %v, want %v", completionDuration, rig.runner.cleanupTimeout)
+		}
+		task := result.Tasks[0]
+		if task.Isolation.Status != core.StatusConfirmed || !task.Isolation.HarnessStopped || !task.Isolation.BridgeRevoked || task.Evaluation.Status != core.StatusSucceeded || task.Cleanup.Status != core.StatusSucceeded {
+			t.Fatalf("task result = %+v", task)
+		}
+		wantCalls := []string{
+			"benchmark.tasks", "sandbox.start", "benchmark.prepare", "bridge.start", "harness.start", "harness.run",
+			"harness.stop", "bridge.complete", "bridge.stop", "benchmark.evaluate", "sandbox.stop",
+		}
+		if got := rig.log.snapshot(); !reflect.DeepEqual(got, wantCalls) {
+			t.Fatalf("calls = %v, want %v", got, wantCalls)
+		}
+	})
+}
+
+func TestRunnerCompletionAfterConfirmedHarnessStop(t *testing.T) {
+	const oneTask = 1 // One task is enough to check completion and isolation.
+	for _, test := range []struct {
+		name        string
+		stopError   error
+		signalError error
+		bridgeError error
+		cancel      bool
+		wantSignal  bool
+	}{
+		{name: "confirmed stop", wantSignal: true},
+		{name: "unconfirmed stop", stopError: errInjected},
+		{name: "failed signal", signalError: errInjected, wantSignal: true},
+		{name: "failed signal and revocation", signalError: errInjected, bridgeError: errInjected, wantSignal: true},
+		{name: "cancelled signal", signalError: errInjected, cancel: true, wantSignal: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rig := newRig(t, oneTask)
+			rig.runner.recordForReplay = true
+			rig.harness.stopErrors = []error{test.stopError}
+			rig.bridge.stopErrors = []error{test.bridgeError}
+			rig.runner.bridge = &completionBridge{fakeBridge: rig.bridge, err: test.signalError}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if test.cancel {
+				rig.log.setHook("bridge.complete", cancel)
+			}
+			result, err := rig.runner.Run(ctx)
+			if (err != nil) != (test.stopError != nil || test.signalError != nil || test.bridgeError != nil) {
+				t.Fatalf("Run() error = %v", err)
+			}
+			if test.cancel && !errors.Is(err, context.Canceled) {
+				t.Fatalf("Run() error = %v, want cancellation", err)
+			}
+			calls := rig.log.snapshot()
+			stop := slices.Index(calls, "harness.stop")
+			signal := slices.Index(calls, "bridge.complete")
+			release := slices.Index(calls, "bridge.stop")
+			if stop < 0 || release <= stop || (signal >= 0) != test.wantSignal || (signal >= 0 && (signal <= stop || signal >= release)) {
+				t.Fatalf("completion and release order = %v", calls)
+			}
+			if test.signalError != nil && test.bridgeError == nil && rig.bridge.stopCount() != oneTask {
+				t.Fatalf("bridge release calls = %d", rig.bridge.stopCount())
+			}
+			task := result.Tasks[0]
+			if test.signalError != nil && (!errors.Is(err, test.signalError) || !strings.Contains(task.Error, "record harness completion: "+test.signalError.Error())) {
+				t.Fatalf("completion error evidence lost: task=%+v error=%v", task, err)
+			}
+			if task.Isolation.HarnessStopped != (test.stopError == nil) || task.Isolation.BridgeRevoked != (test.bridgeError == nil) {
+				t.Fatalf("isolation confirmations = %+v", task.Isolation)
+			}
+			if test.stopError != nil || test.bridgeError != nil {
+				if task.Isolation.Status != core.StatusBlockedIsolation || task.Evaluation.Status != core.StatusBlockedIsolation || slices.Contains(calls, "benchmark.evaluate") {
+					t.Fatalf("evaluation passed an unconfirmed isolation gate: %+v", task)
+				}
+			} else if task.Isolation.Status != core.StatusConfirmed || slices.Index(calls, "benchmark.evaluate") <= release {
+				t.Fatalf("evaluation did not follow confirmed revocation: task=%+v calls=%v", task, calls)
+			}
+			assertBoundedLiveContext(t, rig.log, "bridge.stop")
+			assertBoundedLiveContext(t, rig.log, "sandbox.stop")
+		})
+	}
+}
+
+type sourceBridge struct {
+	*fakeBridge
+	image string
+}
+
+func (b *sourceBridge) RecordTask(image string) {
+	b.image = image
+	b.log.add("bridge.record-task", nil)
+}
+
+func TestRunnerRecordsOccurrenceImageBeforeBridgeStart(t *testing.T) {
+	rig := newRig(t, 1)
+	rig.runner.recordForReplay = true
+	bridge := &sourceBridge{fakeBridge: rig.bridge}
+	rig.runner.bridge = bridge
+	if _, err := rig.runner.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	calls := rig.log.snapshot()
+	if bridge.image != rig.benchmark.tasks[0].Environment.Image || slices.Index(calls, "bridge.record-task") != slices.Index(calls, "bridge.start")-1 {
+		t.Fatalf("occurrence image = %q; calls = %v", bridge.image, calls)
+	}
 }
 
 func TestRunnerSuccessOrdering(t *testing.T) {
@@ -1022,6 +1261,534 @@ func TestRunnerHasNoLifecycleStateBetweenRuns(t *testing.T) {
 	}
 }
 
+type panicReplayEvaluation struct{ *fakeBenchmark }
+
+func (*panicReplayEvaluation) Evaluate(context.Context, core.Task, Sandbox, EvaluationSandboxes) (core.Evaluation, error) {
+	panic("replay invoked benchmark verifier")
+}
+
+func TestReplayRejectsBadSourceBeforeStartingSandbox(t *testing.T) {
+	rig := newRig(t, 1)
+	caller := &fakeReplayCaller{log: rig.log}
+	runner, err := NewReplay(&panicReplayEvaluation{rig.benchmark}, rig.factory, rig.bridge, caller, func(ctx context.Context) (replay.Plan, error) {
+		rig.log.add("replay.load", ctx)
+		return replay.Plan{}, errors.New("invalid replay source")
+	}, Options{RunID: "replay-run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runner.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "replay source") {
+		t.Fatalf("Run() error = %v, want rejected source", err)
+	}
+	if got := rig.log.snapshot(); !reflect.DeepEqual(got, []string{"benchmark.tasks", "replay.load"}) {
+		t.Fatalf("bad source lifecycle = %v", got)
+	}
+	if len(result.Tasks) != 1 || result.Tasks[0].Evaluation.Status != core.StatusNotRun {
+		t.Fatalf("bad source result = %+v", result)
+	}
+}
+
+type timingFinalizingBridge struct {
+	*fakeBridge
+	path string
+	data []byte
+}
+
+func (bridge *timingFinalizingBridge) Start(ctx context.Context, sandbox Sandbox) (core.ToolEndpoint, error) {
+	endpoint, err := bridge.fakeBridge.Start(ctx, sandbox)
+	endpoint.LogPaths = []string{bridge.path}
+	return endpoint, err
+}
+
+func (bridge *timingFinalizingBridge) Stop(ctx context.Context) error {
+	if err := bridge.fakeBridge.Stop(ctx); err != nil {
+		return err
+	}
+	data := bridge.data
+	if data == nil {
+		const firstSourceSequence = 1
+		data = fmt.Appendf(nil, "{\"replay_source_sequence\":%d,\"started_at\":%q}\n", firstSourceSequence, time.Now().UTC().Format(time.RFC3339Nano))
+	}
+	return os.WriteFile(bridge.path, data, 0o600)
+}
+
+func TestReplayCallerStopKeepsFreshRevocationBudget(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		rig, _, _ := newReplayRig(t, core.Evaluation{Status: core.StatusSucceeded})
+		rig.runner.bridge = &timingFinalizingBridge{
+			fakeBridge: rig.bridge,
+			path:       filepath.Join(t.TempDir(), "tool-calls.jsonl"),
+			data:       []byte{},
+		}
+		rig.log.setHook("caller.stop", func() { time.Sleep(rig.runner.cleanupTimeout - fakeRollbackTimeout) })
+		const bridgeWork = fakeRollbackTimeout + fakeRollbackTimeout
+		rig.log.setHook("bridge.stop", func() { time.Sleep(bridgeWork) })
+
+		result, err := rig.runner.Run(context.Background())
+		if err != nil {
+			t.Fatalf("delayed caller stop consumed bridge revocation budget: %v", err)
+		}
+		task := result.Tasks[0]
+		if task.Isolation.Status != core.StatusConfirmed || !task.Isolation.CallerStopped || !task.Isolation.BridgeRevoked || task.Cleanup.Status != core.StatusSucceeded {
+			t.Fatalf("isolation or cleanup failed: %+v", task)
+		}
+		if task.Replay.Timing.Status != "available" || task.Replay.Responses.Status != "available" || !task.Evaluation.Reused {
+			t.Fatalf("finalized replay evidence is unavailable: %+v", task)
+		}
+		wantCalls := []string{"benchmark.tasks", "replay.load", "sandbox.start", "benchmark.prepare", "bridge.start", "caller.start", "caller.run", "caller.stop", "bridge.stop", "sandbox.stop"}
+		if got := rig.log.snapshot(); !slices.Equal(got, wantCalls) {
+			t.Fatalf("replay lifecycle = %v, want %v", got, wantCalls)
+		}
+		for _, name := range []string{"caller.stop", "bridge.stop", "sandbox.stop"} {
+			assertBoundedLiveContext(t, rig.log, name)
+		}
+	})
+}
+
+func TestReplayCallerStopTimeoutStillRevokesBridge(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		rig, caller, _ := newReplayRig(t, core.Evaluation{Status: core.StatusSucceeded})
+		rig.log.setHook("caller.stop", func() {
+			if caller.stops == 0 {
+				time.Sleep(rig.runner.cleanupTimeout + fakeRollbackTimeout)
+			}
+		})
+		result, err := rig.runner.Run(context.Background())
+		task := result.Tasks[0]
+		if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(task.Error, "confirm replay caller stopped: context deadline exceeded") {
+			t.Fatalf("caller stop timeout evidence lost: task=%+v error=%v", task, err)
+		}
+		if task.Isolation.Status != core.StatusBlockedIsolation || task.Isolation.CallerStopped || !task.Isolation.BridgeRevoked || task.Cleanup.Status != core.StatusSucceeded || !task.Evaluation.Reused {
+			t.Fatalf("isolation and cleanup outcomes = %+v", task)
+		}
+		if task.Replay.Timing.Reason != "replay caller stop is unconfirmed" || task.Replay.Responses.Reason != "replay caller stop is unconfirmed" {
+			t.Fatalf("diagnostics crossed unconfirmed caller stop: %+v", task.Replay)
+		}
+		wantCalls := []string{"benchmark.tasks", "replay.load", "sandbox.start", "benchmark.prepare", "bridge.start", "caller.start", "caller.run", "caller.stop", "bridge.stop", "caller.stop", "sandbox.stop"}
+		if got := rig.log.snapshot(); !slices.Equal(got, wantCalls) {
+			t.Fatalf("replay lifecycle = %v, want %v", got, wantCalls)
+		}
+		for _, name := range []string{"caller.stop", "bridge.stop", "sandbox.stop"} {
+			assertBoundedLiveContext(t, rig.log, name)
+		}
+	})
+}
+
+func TestReplayReadsDriftOnlyAfterConfirmedBridgeStop(t *testing.T) {
+	const firstSourceSequence = 1
+	rig := newRig(t, firstSourceSequence)
+	bridge := &timingFinalizingBridge{fakeBridge: rig.bridge, path: filepath.Join(t.TempDir(), "tool-calls.jsonl")}
+	caller := &fakeReplayCaller{log: rig.log}
+	plan := replay.Plan{Calls: []replay.Call{{Sequence: firstSourceSequence}}, SourceRunID: replaySourceRunID, SourceTaskID: replaySourceTaskID, Evaluation: core.Evaluation{Status: core.StatusSucceeded}}
+	engine, err := NewReplay(&panicReplayEvaluation{rig.benchmark}, rig.factory, bridge, caller,
+		func(context.Context) (replay.Plan, error) { return plan, nil }, Options{RunID: "replay-run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := engine.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Tasks) != firstSourceSequence || result.Tasks[0].Replay.Timing == nil {
+		t.Fatalf("timing not reported after bridge stop: %+v", result)
+	}
+	timing := result.Tasks[0].Replay.Timing
+	if timing.Status != "available" || len(timing.Calls) != firstSourceSequence || timing.Calls[0].SourceSequence != firstSourceSequence || timing.Calls[0].DriftNS != 0 {
+		t.Fatalf("timing report = %+v", timing)
+	}
+	if got := rig.log.snapshot(); !slices.Contains(got, "bridge.stop") || got[len(got)-1] != "sandbox.stop" {
+		t.Fatalf("replay cleanup order = %v", got)
+	}
+}
+
+func TestReplayReportsHashDriftAfterIsolationWithoutResultText(t *testing.T) {
+	const sourceSequence uint64 = 1
+	const sourceText = "source git hash aaa"
+	const replayText = "replay git hash bbb"
+	const sourceHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const replayHash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	rig := newRig(t, int(sourceSequence))
+	bridge := &timingFinalizingBridge{fakeBridge: rig.bridge, path: filepath.Join(t.TempDir(), "tool-calls.jsonl")}
+	bridge.data = fmt.Appendf(nil, "{\"replay_source_sequence\":%d,\"started_at\":%q,\"operation_class\":\"exec\",\"response_sha256\":%q,\"response_debug\":true,\"response_stdout\":%q}\n", sourceSequence, time.Now().UTC().Format(time.RFC3339Nano), replayHash, replayText)
+	var logs bytes.Buffer
+	logger := logrus.New()
+	logger.SetOutput(&logs)
+	plan := replay.Plan{Calls: []replay.Call{{Sequence: sourceSequence, Operation: "Exec", ResponseSHA256: sourceHash, ResponseDebug: true, ResponseStdout: []byte(sourceText)}}, SourceRunID: replaySourceRunID, SourceTaskID: replaySourceTaskID, Evaluation: core.Evaluation{Status: core.StatusSucceeded, Reward: float64(sourceSequence)}}
+	engine, err := NewReplay(&panicReplayEvaluation{rig.benchmark}, rig.factory, bridge, &fakeReplayCaller{log: rig.log}, func(context.Context) (replay.Plan, error) { return plan, nil }, Options{RunID: "replay-run", Logger: logger})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := engine.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := result.Tasks[0]
+	if task.Replay.Status != core.StatusSucceeded || task.Replay.Responses == nil || task.Replay.Responses.Status != "available" || len(task.Replay.Responses.Calls) != int(sourceSequence) || task.Replay.Responses.Calls[0].Status != "drifted" || !task.Evaluation.Reused || task.Isolation.Status != core.StatusConfirmed {
+		t.Fatalf("hash drift changed replay outcome: %+v", task)
+	}
+	if !strings.Contains(logs.String(), sourceText) || !strings.Contains(logs.String(), replayText) || !strings.Contains(logs.String(), sourceHash) || !strings.Contains(logs.String(), replayHash) {
+		t.Fatalf("drift log does not show source and replay output and hashes: %s", logs.String())
+	}
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := string(data)
+	if strings.Contains(encoded, sourceText) || strings.Contains(encoded, replayText) {
+		t.Fatalf("response text entered structured result: %s", encoded)
+	}
+}
+
+func TestReplayWarnsEqualStartsInRunLogWithoutPayloads(t *testing.T) {
+	const firstSequence uint64 = 1
+	const tiedSequence = firstSequence + 1
+	const lastSequence = tiedSequence + 1
+	const tieOffset = time.Second
+	const sourceTime = "2026-11-05T12:00:00Z"
+	const tiedTime = "2026-11-05T12:00:01Z"
+	const privateCommand = "command-must-not-be-logged"
+	const privateOutput = "output-must-not-be-logged"
+	const privateCredential = "credential-must-not-be-logged"
+	const oneWarning = 1
+	rig, caller, plan := newReplayRig(t, core.Evaluation{Status: core.StatusSucceeded},
+		replay.Call{Sequence: firstSequence},
+		replay.Call{Sequence: lastSequence, StartOffset: tieOffset, Script: privateCommand, Body: []byte(privateCredential)},
+		replay.Call{Sequence: tiedSequence, StartOffset: tieOffset, ResponseStdout: []byte(privateOutput)},
+	)
+	start, err := time.Parse(time.RFC3339Nano, sourceTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.StartedAt = start
+	path := filepath.Join(t.TempDir(), "aries.log")
+	log, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = log.Close() })
+	logger := logrus.New()
+	logger.SetOutput(log)
+	logger.SetFormatter(&logrus.JSONFormatter{})
+	engine, err := NewReplay(&panicReplayEvaluation{rig.benchmark}, rig.factory, rig.bridge, caller,
+		func(context.Context) (replay.Plan, error) { return plan, nil }, Options{RunID: "replay-run", Logger: logger})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := engine.Run(context.Background())
+	if err != nil || result.Tasks[0].Replay.Status != core.StatusSucceeded {
+		t.Fatalf("tied replay failed: result=%+v error=%v", result, err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	warnings := 0
+	for _, line := range bytes.Split(bytes.TrimSpace(data), []byte{'\n'}) {
+		var entry struct {
+			Level          string        `json:"level"`
+			Message        string        `json:"msg"`
+			TaskID         string        `json:"task_id"`
+			SourceRunID    string        `json:"source_run_id"`
+			SourceTaskID   string        `json:"source_task_id"`
+			SourceSequence uint64        `json:"source_sequence"`
+			TiedSequence   uint64        `json:"tied_source_sequence"`
+			StartOffset    time.Duration `json:"start_offset_ns"`
+			StartedAt      string        `json:"started_at"`
+		}
+		if err := json.Unmarshal(line, &entry); err != nil {
+			t.Fatal(err)
+		}
+		if entry.Level != logrus.WarnLevel.String() {
+			continue
+		}
+		warnings++
+		if entry.Message != "replay calls have equal start timestamps" || entry.TaskID != rig.benchmark.tasks[0].ID || entry.SourceRunID != replaySourceRunID || entry.SourceTaskID != replaySourceTaskID || entry.SourceSequence != tiedSequence || entry.TiedSequence != lastSequence || entry.StartOffset != tieOffset || entry.StartedAt != tiedTime {
+			t.Fatalf("tie warning lacks source identity or time: %s", line)
+		}
+	}
+	if warnings != oneWarning {
+		t.Fatalf("run log has %d tie warnings, want %d: %s", warnings, oneWarning, data)
+	}
+	for _, private := range []string{privateCommand, privateOutput, privateCredential} {
+		if bytes.Contains(data, []byte(private)) {
+			t.Fatalf("private payload entered tie warning: %s", data)
+		}
+	}
+}
+
+func TestReplayMissingDriftKeepsMatchAndSourceGrade(t *testing.T) {
+	const firstSourceSequence = 1
+	rig := newRig(t, firstSourceSequence)
+	bridge := &timingFinalizingBridge{
+		fakeBridge: rig.bridge,
+		path:       filepath.Join(t.TempDir(), "tool-calls.jsonl"),
+		data:       []byte(`{"started_at":"2026-11-05T12:00:00Z"}` + "\n"),
+	}
+	caller := &fakeReplayCaller{log: rig.log}
+	plan := replay.Plan{Calls: []replay.Call{{Sequence: firstSourceSequence}}, SourceRunID: replaySourceRunID, SourceTaskID: replaySourceTaskID,
+		Evaluation: core.Evaluation{Status: core.StatusSucceeded, Reward: firstSourceSequence}}
+	engine, err := NewReplay(&panicReplayEvaluation{rig.benchmark}, rig.factory, bridge, caller,
+		func(context.Context) (replay.Plan, error) { return plan, nil }, Options{RunID: "replay-run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := engine.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := result.Tasks[0]
+	if task.Replay.Status != core.StatusSucceeded || task.Replay.Timing == nil || task.Replay.Timing.Status != "unavailable" || task.Replay.Timing.Reason == "" || task.Isolation.Status != core.StatusConfirmed || !task.Evaluation.Reused || task.Evaluation.Reward != firstSourceSequence {
+		t.Fatalf("missing timing changed replay outcome: %+v", task)
+	}
+}
+
+type fakeReplayCaller struct {
+	log        *callLog
+	startErr   error
+	runErr     error
+	stopErrors []error
+	stops      int
+	plan       replay.Plan
+	endpoint   core.ToolEndpoint
+	placement  core.HarnessConnectivity
+	runID      string
+	taskID     string
+}
+
+func (f *fakeReplayCaller) Start(ctx context.Context, endpoint core.ToolEndpoint, placement core.HarnessConnectivity, runID, taskID string) error {
+	f.log.add("caller.start", ctx)
+	f.endpoint, f.placement, f.runID, f.taskID = endpoint, placement, runID, taskID
+	return errors.Join(ctx.Err(), f.startErr)
+}
+
+func (f *fakeReplayCaller) Run(ctx context.Context, plan replay.Plan) error {
+	f.log.add("caller.run", ctx)
+	f.plan = plan
+	return errors.Join(ctx.Err(), f.runErr)
+}
+
+func (f *fakeReplayCaller) Stop(ctx context.Context) error {
+	f.log.add("caller.stop", ctx)
+	err := indexedError(f.stopErrors, f.stops)
+	f.stops++
+	return errors.Join(ctx.Err(), err)
+}
+
+const replaySourceRunID = "source-run"
+const replaySourceTaskID = "logical-task-001"
+
+func newReplayRig(t *testing.T, evaluation core.Evaluation, calls ...replay.Call) (*rig, *fakeReplayCaller, replay.Plan) {
+	t.Helper()
+	rig := newRig(t, 1)
+	caller := &fakeReplayCaller{log: rig.log}
+	plan := replay.Plan{Calls: calls, SourceRunID: replaySourceRunID, SourceTaskID: replaySourceTaskID, Evaluation: evaluation}
+	runner, err := NewReplay(&panicReplayEvaluation{rig.benchmark}, rig.factory, rig.bridge, caller, func(ctx context.Context) (replay.Plan, error) {
+		rig.log.add("replay.load", ctx)
+		return plan, ctx.Err()
+	}, Options{RunID: "replay-run", CleanupTimeout: time.Second, Logger: logrus.New()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rig.runner = runner
+	return rig, caller, plan
+}
+
+func TestReplayRejectsTaskCountBeforeSourceOrSandbox(t *testing.T) {
+	for _, multiple := range []bool{false, true} {
+		t.Run(fmt.Sprint(multiple), func(t *testing.T) {
+			rig, _, _ := newReplayRig(t, core.Evaluation{Status: core.StatusSucceeded})
+			if multiple {
+				rig.benchmark.tasks = append(rig.benchmark.tasks, rig.benchmark.tasks...)
+			} else {
+				rig.benchmark.tasks = nil
+			}
+			result, err := rig.runner.Run(context.Background())
+			if err == nil || !strings.Contains(err.Error(), "replay requires exactly one task") {
+				t.Fatalf("replay accepted %d tasks: %v", len(rig.benchmark.tasks), err)
+			}
+			if len(result.Tasks) != 0 || !reflect.DeepEqual(rig.log.snapshot(), []string{"benchmark.tasks"}) {
+				t.Fatalf("invalid task count started replay: result=%+v calls=%v", result, rig.log.snapshot())
+			}
+		})
+	}
+}
+
+func TestReplayChecksResolvedExecWorkdirBeforeCallerStart(t *testing.T) {
+	const recordedWorkdir = "/app"
+	const sourceSequence = 1
+	for _, workdir := range []string{recordedWorkdir, "/other"} {
+		t.Run(workdir, func(t *testing.T) {
+			// The caller returns the same success for both workdirs.
+			rig, caller, plan := newReplayRig(t, core.Evaluation{Status: core.StatusSucceeded}, replay.Call{
+				Operation: "Exec", Sequence: sourceSequence, Script: "touch relative-file", Workdir: recordedWorkdir,
+			})
+			rig.bridge.workdir = workdir
+			result, err := rig.runner.Run(context.Background())
+			task := result.Tasks[0]
+			if workdir == recordedWorkdir {
+				if err != nil || task.Replay.Status != core.StatusSucceeded || !reflect.DeepEqual(caller.plan, plan) {
+					t.Fatalf("same workdir replay = %+v, caller plan = %+v, %v", task, caller.plan, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "workdir") || task.Replay.Status != core.StatusFailed || task.Cleanup.Status != core.StatusSucceeded {
+				t.Fatalf("changed workdir replay = %+v, %v", task, err)
+			}
+			want := []string{"benchmark.tasks", "replay.load", "sandbox.start", "benchmark.prepare", "bridge.start", "bridge.stop", "sandbox.stop"}
+			if got := rig.log.snapshot(); !reflect.DeepEqual(got, want) {
+				t.Fatalf("changed workdir lifecycle = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+func TestReplayEmptyTracePreservesSourceEvaluationWithoutVerifier(t *testing.T) {
+	const sourceScore = 0.75
+	// A source reward of 1 is historical evidence, not a fresh sandbox grade.
+	source := core.Evaluation{Status: core.StatusSucceeded, Score: sourceScore, Reward: 1}
+	rig, caller, plan := newReplayRig(t, source)
+	result, err := rig.runner.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCalls := []string{"benchmark.tasks", "replay.load", "sandbox.start", "benchmark.prepare", "bridge.start", "caller.start", "caller.run", "caller.stop", "bridge.stop", "sandbox.stop"}
+	if got := rig.log.snapshot(); !reflect.DeepEqual(got, wantCalls) {
+		t.Fatalf("replay lifecycle = %v, want %v", got, wantCalls)
+	}
+	task := result.Tasks[0]
+	if task.Replay.Status != core.StatusSucceeded || task.Isolation.Status != core.StatusConfirmed || !task.Isolation.CallerStopped || !task.Isolation.BridgeRevoked || task.Cleanup.Status != core.StatusSucceeded {
+		t.Fatalf("replay outcomes = %+v", task)
+	}
+	if !task.Evaluation.Reused || task.Evaluation.SourceRunID != replaySourceRunID || task.Evaluation.SourceTaskID != replaySourceTaskID || task.Evaluation.Score != sourceScore || task.Evaluation.Reward != source.Reward || task.Evaluation.Status != source.Status {
+		t.Fatalf("reused evaluation = %+v", task.Evaluation)
+	}
+	if result.Summary.EvaluationsRun != 0 || result.Summary.EvaluationsSucceeded != 0 || result.Summary.EvaluationsFailed != 0 || task.Harness.Status != core.StatusNotStarted {
+		t.Fatalf("replay counted as live work: task=%+v summary=%+v", task, result.Summary)
+	}
+	if !reflect.DeepEqual(caller.plan, plan) || caller.endpoint.Address != "task" || caller.placement.Placement.AttachmentID != "occurrence-network" || caller.runID != "replay-run" || caller.taskID != rig.benchmark.tasks[0].ID {
+		t.Fatalf("caller inputs = %+v", caller)
+	}
+}
+
+func TestReplayMismatchDoesNotInheritSourceSuccess(t *testing.T) {
+	// The source reward of 1 cannot make a mismatched replay succeed.
+	const firstReplaySequence = 1 // The first recorded call has sequence 1.
+	call := replay.Call{Sequence: firstReplaySequence, Operation: "Stat", Path: "/target"}
+	rig, caller, _ := newReplayRig(t, core.Evaluation{Status: core.StatusSucceeded, Reward: 1}, call)
+	caller.runErr = errors.New("response mismatch")
+	result, err := rig.runner.Run(context.Background())
+	if !errors.Is(err, caller.runErr) {
+		t.Fatalf("Run() error = %v, want replay mismatch", err)
+	}
+	task := result.Tasks[0]
+	if task.Replay.Status != core.StatusFailed || task.Replay.Error != caller.runErr.Error() || task.Isolation.Status != core.StatusConfirmed || !task.Evaluation.Reused || task.Evaluation.Reward != 1 || result.Summary.EvaluationsRun != 0 {
+		t.Fatalf("mismatch and source grade were merged: task=%+v summary=%+v", task, result.Summary)
+	}
+	if !reflect.DeepEqual(caller.plan.Calls, []replay.Call{call}) {
+		t.Fatalf("caller did not receive the validated request: %+v", caller.plan.Calls)
+	}
+	if got := rig.log.snapshot(); !reflect.DeepEqual(got, []string{"benchmark.tasks", "replay.load", "sandbox.start", "benchmark.prepare", "bridge.start", "caller.start", "caller.run", "caller.stop", "bridge.stop", "sandbox.stop"}) {
+		t.Fatalf("mismatched replay lifecycle = %v", got)
+	}
+}
+
+func TestReplaySourceFailureRemainsLabeled(t *testing.T) {
+	const sourceScore = 0.25
+	rig, _, _ := newReplayRig(t, core.Evaluation{Status: core.StatusFailed, Score: sourceScore, Error: "source verdict"})
+	result, err := rig.runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v, want successful replay", err)
+	}
+	task := result.Tasks[0]
+	if task.Replay.Status != core.StatusSucceeded || task.Evaluation.Status != core.StatusFailed || task.Evaluation.Score != sourceScore || task.Evaluation.Error != "source verdict" || !task.Evaluation.Reused || task.Evaluation.SourceRunID != replaySourceRunID || task.Evaluation.SourceTaskID != replaySourceTaskID || result.Summary.EvaluationsFailed != 0 {
+		t.Fatalf("source failure was treated as a replay grade: task=%+v summary=%+v", task, result.Summary)
+	}
+}
+
+func TestReplayIsolationFailureStillCleansUp(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		callerStops []error
+		bridgeStops []error
+		wantCaller  bool
+		wantBridge  bool
+		wantCalls   []string
+	}{
+		{"caller stop", []error{errInjected, nil}, nil, false, true, []string{"caller.stop", "bridge.stop", "caller.stop", "sandbox.stop"}},
+		{"bridge revoke", nil, []error{errInjected, nil}, true, false, []string{"caller.stop", "bridge.stop", "bridge.stop", "sandbox.stop"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rig, caller, _ := newReplayRig(t, core.Evaluation{Status: core.StatusSucceeded, Reward: 1})
+			caller.stopErrors = test.callerStops
+			rig.bridge.stopErrors = test.bridgeStops
+			result, err := rig.runner.Run(context.Background())
+			if !errors.Is(err, errInjected) {
+				t.Fatalf("Run() error = %v, want isolation failure", err)
+			}
+			task := result.Tasks[0]
+			if task.Isolation.Status != core.StatusBlockedIsolation || task.Isolation.CallerStopped != test.wantCaller || task.Isolation.BridgeRevoked != test.wantBridge || task.Cleanup.Status != core.StatusSucceeded || task.Replay.Status != core.StatusSucceeded || task.Replay.Timing == nil || task.Replay.Timing.Status != "unavailable" || task.Replay.Timing.Reason == "" || !task.Evaluation.Reused {
+				t.Fatalf("isolation and cleanup outcomes = %+v", task)
+			}
+			calls := rig.log.snapshot()
+			if !slices.Equal(calls[len(calls)-len(test.wantCalls):], test.wantCalls) {
+				t.Fatalf("gate and cleanup order = %v, want ending %v", calls, test.wantCalls)
+			}
+			for _, name := range []string{"caller.stop", "bridge.stop", "sandbox.stop"} {
+				assertBoundedLiveContext(t, rig.log, name)
+			}
+		})
+	}
+}
+
+func TestReplayCallerStartFailureStillConfirmsStopBeforeBridge(t *testing.T) {
+	rig, caller, _ := newReplayRig(t, core.Evaluation{Status: core.StatusSucceeded})
+	caller.startErr = errInjected
+	result, err := rig.runner.Run(context.Background())
+	if !errors.Is(err, errInjected) {
+		t.Fatalf("Run() error = %v, want caller start failure", err)
+	}
+	task := result.Tasks[0]
+	if task.Replay.Status != core.StatusFailed || task.Isolation.Status != core.StatusConfirmed || task.Cleanup.Status != core.StatusSucceeded {
+		t.Fatalf("caller start and isolation outcomes = %+v", task)
+	}
+	if got := rig.log.snapshot(); !reflect.DeepEqual(got, []string{"benchmark.tasks", "replay.load", "sandbox.start", "benchmark.prepare", "bridge.start", "caller.start", "caller.stop", "bridge.stop", "sandbox.stop"}) {
+		t.Fatalf("caller start failure lifecycle = %v", got)
+	}
+}
+
+func TestReplayCancellationUsesFreshBoundedCleanup(t *testing.T) {
+	rig, _, _ := newReplayRig(t, core.Evaluation{Status: core.StatusSucceeded})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rig.log.setHook("caller.run", cancel)
+	result, err := rig.runner.Run(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() error = %v, want cancellation", err)
+	}
+	task := result.Tasks[0]
+	if task.Replay.Status != core.StatusCanceled || task.Isolation.Status != core.StatusConfirmed || task.Cleanup.Status != core.StatusSucceeded {
+		t.Fatalf("cancelled replay outcomes = %+v", task)
+	}
+	for _, name := range []string{"caller.stop", "bridge.stop", "sandbox.stop"} {
+		assertBoundedLiveContext(t, rig.log, name)
+	}
+}
+
+func TestReplayKeepsCleanupFailureSeparateFromMismatchAndGrade(t *testing.T) {
+	rig, caller, _ := newReplayRig(t, core.Evaluation{Status: core.StatusSucceeded, Reward: 1})
+	caller.runErr = errors.New("response mismatch")
+	rig.factory.stopErrors = []error{errInjected}
+	result, err := rig.runner.Run(context.Background())
+	if !errors.Is(err, caller.runErr) || !errors.Is(err, errInjected) {
+		t.Fatalf("Run() error = %v, want replay and cleanup failures", err)
+	}
+	task := result.Tasks[0]
+	if task.Replay.Status != core.StatusFailed || task.Isolation.Status != core.StatusConfirmed || task.Cleanup.Status != core.StatusFailed || !task.Evaluation.Reused || task.Evaluation.Reward != 1 || result.Summary.CleanupFailed != 1 || result.Summary.EvaluationsRun != 0 {
+		t.Fatalf("replay, isolation, cleanup, and grade outcomes = %+v; summary=%+v", task, result.Summary)
+	}
+}
+
 func TestNewRejectsMissingRoles(t *testing.T) {
 	rig := newRig(t, 0)
 	tests := []struct {
@@ -1049,5 +1816,40 @@ func TestNewRejectsMissingRunID(t *testing.T) {
 	rig := newRig(t, 0)
 	if _, err := New(rig.benchmark, rig.harness, rig.factory, rig.bridge, Options{}); err == nil || !strings.Contains(err.Error(), "run ID") {
 		t.Fatalf("New() error = %v, want missing run ID", err)
+	}
+}
+
+func TestRunnerOrdinaryRunSkipsReplayChecksButKeepsIsolation(t *testing.T) {
+	const oneTask = 1 // One task is enough to check completion and evaluation.
+	for _, bridgeFailure := range []bool{false, true} {
+		t.Run(fmt.Sprint(bridgeFailure), func(t *testing.T) {
+			rig := newRig(t, oneTask)
+			if bridgeFailure {
+				rig.bridge.stopErrors = []error{errInjected}
+			}
+			rig.runner.bridge = &completionBridge{fakeBridge: rig.bridge, err: errors.New("replay completion failed")}
+			result, err := rig.runner.Run(context.Background())
+			if (err != nil) != bridgeFailure || slices.Contains(rig.log.snapshot(), "bridge.complete") {
+				t.Fatalf("ordinary run used replay completion: error=%v calls=%v", err, rig.log.snapshot())
+			}
+			task := result.Tasks[0]
+			if bridgeFailure {
+				if task.Evaluation.Status != core.StatusBlockedIsolation {
+					t.Fatalf("isolation weakened: %+v", task)
+				}
+			} else if task.Evaluation.Status != core.StatusSucceeded {
+				t.Fatalf("ordinary evaluation skipped: %+v", task)
+			}
+		})
+	}
+	rig := newRig(t, oneTask)
+	path := filepath.Join(t.TempDir(), "tool-calls.jsonl")
+	if err := os.WriteFile(path, []byte("{\"replay_error\":\"response-debug-too-large\"}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	rig.runner.bridge = &markedAuditBridge{fakeBridge: rig.bridge, paths: []string{path}}
+	result, err := rig.runner.Run(context.Background())
+	if err != nil || result.Tasks[0].Evaluation.Status != core.StatusSucceeded {
+		t.Fatalf("ordinary run used replay audit check: result=%+v error=%v", result, err)
 	}
 }

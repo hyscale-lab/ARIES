@@ -133,6 +133,33 @@ See [managed SGLang configuration](configuration.md#managed-sglang) for GPU
 selection, model changes, and timeout rules. If you already operate a server,
 use [external SGLang](configuration.md#external-sglang) instead.
 
+## Record a source task
+
+Source recording is CLI-only and opt-in. For a live Hermes gRPC source run:
+
+```sh
+./bin/aries --record-for-replay profiles/hermes-tb2-fix-git-grpc-deepseek.json
+```
+
+Put flags before the profile. This live run uses the model credential and can
+incur API charges. The enabled recording flag is invalid with setup or a replay
+profile. Recording can still produce an incompatible source; check the
+[recording requirements](configuration.md#cli-recording-intent).
+
+## Replay a recorded task
+
+Create a replay profile from the [configuration example](configuration.md#sandbox-call-replay).
+Replay needs no model key, harness, or recording flag.
+
+```sh
+./bin/aries profiles/REPLACE_WITH_REPLAY_PROFILE.json
+```
+
+Keep source artifacts, bridge audits, `aries.log`, and stderr private. Replay reuses
+a historical grade; it does not run a fresh verifier or judge. Check
+[replay results](run-results.md#sandbox-call-replay-results) and
+[replay limits](replay-limitations.md) before comparing grades.
+
 ## Inspect the result
 
 Results are saved under `runs/`, in a directory named with the run timestamp and

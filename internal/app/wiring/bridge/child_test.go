@@ -1,21 +1,27 @@
 package bridge
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"net"
+	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	managed "github.com/hyscale-lab/aries/pkg/bridge"
 	grpcbridge "github.com/hyscale-lab/aries/pkg/bridge/grpc"
+	sandboxv1 "github.com/hyscale-lab/aries/pkg/bridge/grpc/v1"
 	sshbridge "github.com/hyscale-lab/aries/pkg/bridge/ssh"
 	"github.com/hyscale-lab/aries/pkg/bridge/ssh/openclaw"
 	"github.com/hyscale-lab/aries/pkg/bridge/target"
 	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/crypto/ssh"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 // childTarget accepts every command. OpenClaw reads the canonical workspace
@@ -112,5 +118,44 @@ func TestChildSelectsTheNativeServerOfTheBridgeType(t *testing.T) {
 	}
 	if _, err := child("sandbox", t.TempDir()); err == nil {
 		t.Fatal("bridge type without native server accepted")
+	}
+}
+
+func TestChildPropagatesReplayCapture(t *testing.T) {
+	for _, capture := range []bool{false, true} {
+		t.Run(strconv.FormatBool(capture), func(t *testing.T) {
+			config := managed.LaunchConfig{BridgeType: "hermes-grpc", Listen: core.BridgeListen{BindHost: "127.0.0.1"}, CaptureReplay: capture}
+			child, err := newNative(config, logrus.New())
+			if err != nil {
+				t.Fatal(err)
+			}
+			native, err := child("sandbox", t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			endpoint, err := native.StartTarget(context.Background(), childTarget{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = native.Stop(context.Background()) })
+			connection, err := grpc.NewClient(endpoint.Address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer connection.Close()
+			if _, err := sandboxv1.NewSandboxClient(connection).Exec(context.Background(), &sandboxv1.ExecRequest{Script: "pwd"}); err != nil {
+				t.Fatal(err)
+			}
+			if err := native.Stop(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			audit, err := os.ReadFile(endpoint.LogPaths[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Contains(audit, []byte(`"response_stdout"`)) != capture {
+				t.Fatalf("capture=%v, audit=%s", capture, audit)
+			}
+		})
 	}
 }

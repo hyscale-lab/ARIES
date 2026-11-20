@@ -5,6 +5,9 @@ package bridge_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,13 +26,18 @@ import (
 	sandboxv1 "github.com/hyscale-lab/aries/pkg/bridge/grpc/v1"
 	"github.com/hyscale-lab/aries/pkg/config"
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/deployment"
 	docker "github.com/hyscale-lab/aries/pkg/deployment/docker"
+	"github.com/hyscale-lab/aries/pkg/replay"
+	replaymanaged "github.com/hyscale-lab/aries/pkg/replay/managed"
 	"github.com/hyscale-lab/aries/pkg/runner"
 	tasksandbox "github.com/hyscale-lab/aries/pkg/sandbox"
 	"github.com/moby/moby/client"
 	"golang.org/x/crypto/ssh"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/proto"
 )
 
 const managedFixtureImage = "docker.io/library/debian:12-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241"
@@ -384,6 +392,112 @@ func TestManagedBridgeRuntimeMatrix(t *testing.T) {
 		})
 	}
 }
+
+type replayDiagnosticRuntime struct {
+	deployment.Runtime
+	id string
+}
+
+func (runtime *replayDiagnosticRuntime) Create(ctx context.Context, request deployment.Request) (string, error) {
+	id, err := runtime.Runtime.Create(ctx, request)
+	runtime.id = id
+	return id, err
+}
+
+func TestManagedReplayCallerUsesDockerTaskNetwork(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	api, err := client.New(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		t.Skipf("Docker client unavailable: %v", err)
+	}
+	defer api.Close()
+	versions, err := config.LoadVersions(filepath.Join(managedRoot(t), "configs", "versions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, image := range []string{versions.Bridge.Image, managedFixtureImage} {
+		if _, err := api.ImageInspect(ctx, image); err != nil {
+			t.Skipf("pinned integration image %q unavailable: %v", image, err)
+		}
+	}
+	fixture := newManagedFixture(t, "hermes-grpc")
+	session := fixture.newSession(t, "replay")
+	dockerRuntime, err := docker.New(docker.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &replayDiagnosticRuntime{Runtime: dockerRuntime}
+	placement := session.sandbox.Connectivity().Placement
+	caller, err := replaymanaged.New(replaymanaged.Options{
+		Runtime: runtime, Image: versions.Bridge.Image, Backend: "docker", BridgeBackend: "docker",
+		BridgePlacement: placement, CallTimeout: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanup, done := context.WithTimeout(context.Background(), 30*time.Second)
+		defer done()
+		if err := caller.Stop(cleanup); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := caller.Start(ctx, session.endpoint, session.sandbox.Connectivity(), "managed-integration", "repeated-task"); err != nil {
+		const maxFailureLogBytes = 4 << 10
+		logs, logErr := runtime.Logs(ctx, runtime.id, maxFailureLogBytes)
+		t.Fatalf("replay caller start: %v; logs: %q; log error: %v", err, logs, logErr)
+	}
+	callerContainer, err := api.ContainerInspect(ctx, runtime.id, client.ContainerInspectOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachment := fixture.environment.NetworkName()
+	const privateNetworkCount = 1
+	if runtime.id == fixture.service.RuntimeID() || runtime.id == session.sandbox.ContainerID() || len(callerContainer.Container.NetworkSettings.Networks) != privateNetworkCount || callerContainer.Container.NetworkSettings.Networks[attachment] == nil || len(callerContainer.Container.Mounts) != 0 || len(callerContainer.Container.HostConfig.PortBindings) != 0 {
+		t.Fatalf("replay caller lacks a separate private runtime: %+v", callerContainer.Container)
+	}
+	const sourceSequence = 1
+	const replayPath = "/work/replay-marker"
+	const replayBody = "managed replay payload"
+	response, err := (proto.MarshalOptions{Deterministic: true}).Marshal(&sandboxv1.WriteFileResponse{Created: true, BytesWritten: int64(len(replayBody))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fingerprint := sha256.New()
+	var responseBytes int64
+	for _, field := range [][]byte{[]byte("aries.grpc.outcome.v1"), []byte(sandboxv1.Sandbox_WriteFile_FullMethodName), response, []byte(codes.OK.String()), nil} {
+		var prefix [binary.MaxVarintLen64]byte
+		length := binary.PutUvarint(prefix[:], uint64(len(field)))
+		_, _ = fingerprint.Write(prefix[:length])
+		_, _ = fingerprint.Write(field)
+		responseBytes += int64(length + len(field))
+	}
+	plan := replay.Plan{Calls: []replay.Call{{Sequence: sourceSequence, Operation: "WriteFile", Path: replayPath, Body: []byte(replayBody), ResponseCode: codes.OK.String(), ResponseSHA256: hex.EncodeToString(fingerprint.Sum(nil)), ResponseBytes: responseBytes}}}
+	if err := caller.Run(ctx, plan); err != nil {
+		t.Fatal(err)
+	}
+	written, err := session.sandbox.Exec(ctx, core.Command{Path: "/bin/cat", Args: []string{replayPath}})
+	if err != nil || written.ExitCode != 0 || written.Stdout != replayBody {
+		t.Fatalf("managed replay did not write the staged body: result=%+v error=%v", written, err)
+	}
+	if err := caller.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.ContainerInspect(ctx, runtime.id, client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
+		t.Fatalf("replay caller removal not confirmed: %v", err)
+	}
+	if err := session.session.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.sandboxes.Stop(ctx, session.sandbox); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.ContainerInspect(ctx, session.sandbox.ContainerID(), client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
+		t.Fatalf("replay sandbox removal not confirmed: %v", err)
+	}
+}
+
 func TestManagedContainerCrashReportsMissingEvidence(t *testing.T) {
 	f := newManagedFixture(t, "openclaw-ssh")
 	s := f.newSession(t, "crash")

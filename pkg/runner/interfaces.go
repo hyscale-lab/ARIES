@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"github.com/hyscale-lab/aries/pkg/core"
+	"github.com/hyscale-lab/aries/pkg/replay"
 )
 
 // ErrNotFound is returned (wrapped) by Sandbox.Download when the requested
@@ -34,6 +35,14 @@ type EvaluationSandboxes interface {
 type AgentHarness interface {
 	Start(context.Context, core.HarnessRequest) error
 	Run(context.Context, string) (core.HarnessResult, error)
+	Stop(context.Context) error
+}
+
+// ReplayCaller owns one task-local replay process. Start confirms readiness;
+// Stop confirms that the process can no longer use the bridge.
+type ReplayCaller interface {
+	Start(context.Context, core.ToolEndpoint, core.HarnessConnectivity, string, string) error
+	Run(context.Context, replay.Plan) error
 	Stop(context.Context) error
 }
 

@@ -19,6 +19,10 @@
   and cleanup/errors. Exit status alone is insufficient.
 - After runtime work, check for leaked containers, networks, processes, listeners,
   and credential files. Scan private artifacts without printing secrets.
+- With `--record-for-replay`, check the private Hermes gRPC audit before live
+  evaluation. Aggregate audit failure leaves revocation unconfirmed; block live
+  evaluation and report cleanup truthfully. See
+  [capture failure rules](../docs/replay-limitations.md#size-and-capture-bounds).
 - Keep credentials, datasets, and run artifacts ignored. Report actual evidence
   and validation gaps.
 
