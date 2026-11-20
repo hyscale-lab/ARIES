@@ -1687,6 +1687,7 @@ func TestReplayTaskBindsLogicalCatalogTaskAndLiveTimeout(t *testing.T) {
 				return &replayTaskBenchmark{task: task}, nil
 			}}
 			caller := &stubReplayCaller{}
+			loadingAllowed := false
 			wiring := Wiring{
 				NewSandbox: func(config.Config, string, string, string, []int, *logrus.Logger) (SandboxInstance, error) {
 					return SandboxInstance{Sandbox: &stubToolSandbox{}, Resources: &stubResources{}}, nil
@@ -1701,14 +1702,14 @@ func TestReplayTaskBindsLogicalCatalogTaskAndLiveTimeout(t *testing.T) {
 					}
 					return caller, nil
 				},
-				LoadReplaySource: func(_ context.Context, loaded config.Config, selected core.Task) (replay.Plan, error) {
-					if loaded.Replay.Source != cfg.Replay.Source || !reflect.DeepEqual(selected, task) {
-						t.Fatalf("replay source selected wrong logical task: %+v", selected)
-					}
-					return replay.Plan{}, failure
-				},
 			}
-			experiment, err := buildTaskExperiment(cfg, core.ModelConfig{}, nil, "run", t.TempDir(), tc.taskID, "logical-001", nil, nil, catalog, wiring)
+			loadSource := func(context.Context) (replay.Plan, error) {
+				if !loadingAllowed {
+					t.Fatal("source loaded during construction")
+				}
+				return replay.Plan{}, failure
+			}
+			experiment, err := buildReplayTaskExperiment(cfg, "run", t.TempDir(), tc.taskID, "logical-001", nil, catalog, wiring, loadSource)
 			if tc.want < 0 {
 				if !errors.Is(err, invalidTimeout) || experiment != nil {
 					t.Fatalf("negative timeout accepted: experiment = %v, error = %v", experiment, err)
@@ -1718,6 +1719,7 @@ func TestReplayTaskBindsLogicalCatalogTaskAndLiveTimeout(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			loadingAllowed = true
 			if _, err := experiment.Run(context.Background()); !errors.Is(err, failure) {
 				t.Fatalf("replay source error = %v, want %v", err, failure)
 			}

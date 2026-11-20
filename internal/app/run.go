@@ -52,7 +52,6 @@ type Wiring struct {
 	NewBridge             func(config.Config, string, *logrus.Logger) (runner.ToolBridge, error)
 	NewReplayCaller       func(config.Config, core.RuntimePlacement, time.Duration, *logrus.Logger) (runner.ReplayCaller, error)
 	PreflightReplaySource func(context.Context, config.Config, []core.Task, *logrus.Entry) (*bridgegrpc.ReplaySelection, error)
-	LoadReplaySource      func(context.Context, config.Config, core.Task) (replay.Plan, error)
 	ReplayPlacement       core.RuntimePlacement
 }
 
@@ -379,12 +378,11 @@ func runWithReplayInfrastructure(ctx context.Context, cfg config.Config, runID, 
 			result, runErr := runProfile(ctx, cfg.Name, runID, taskIDs, cfg.Execution.Concurrency, 0, nil,
 				func(taskCtx context.Context, occurrence taskOccurrence) (core.RunResult, error) {
 					index := occurrence.index
-					occurrenceWiring := taskWiring
-					occurrenceWiring.LoadReplaySource = func(ctx context.Context, _ config.Config, _ core.Task) (replay.Plan, error) {
+					loadSource := func(ctx context.Context) (replay.Plan, error) {
 						return selection.Load(ctx, index)
 					}
 					source := selection.Occurrences[index]
-					experiment, err := buildTaskExperiment(cfg, core.ModelConfig{}, nil, runID, outputRoot, source.LogicalTaskID, occurrence.executionID, nil, logger, catalog, occurrenceWiring)
+					experiment, err := buildReplayTaskExperiment(cfg, runID, outputRoot, source.LogicalTaskID, occurrence.executionID, logger, catalog, taskWiring, loadSource)
 					if err != nil {
 						task := core.TaskResult{
 							TaskID: occurrence.executionID,
@@ -520,9 +518,6 @@ func resolveOutputRoot(root, runID string) (string, error) {
 }
 
 func buildTaskExperiment(cfg config.Config, model core.ModelConfig, effectiveGPUIndices []int, runID, outputRoot, logicalID, occurrenceID string, apiKeyLookup func(string) ([]byte, bool), logger *logrus.Logger, catalog PreparedBenchmark, wiring Wiring) (*experiment, error) {
-	if cfg.Replay != nil {
-		return buildReplayTaskExperiment(cfg, runID, outputRoot, logicalID, occurrenceID, logger, catalog, wiring)
-	}
 	if logger == nil {
 		logger = logrus.StandardLogger()
 	}
@@ -571,8 +566,8 @@ func buildTaskExperiment(cfg config.Config, model core.ModelConfig, effectiveGPU
 	return &experiment{runner: benchmarkRunner, recorder: recorder, close: func() error { return closeOccurrenceClients(sandbox.Close, harness.Close) }}, nil
 }
 
-func buildReplayTaskExperiment(cfg config.Config, runID, outputRoot, logicalID, occurrenceID string, logger *logrus.Logger, catalog PreparedBenchmark, wiring Wiring) (*experiment, error) {
-	if catalog.NewOccurrence == nil || wiring.NewSandbox == nil || wiring.NewBridge == nil || wiring.NewReplayCaller == nil || wiring.LoadReplaySource == nil {
+func buildReplayTaskExperiment(cfg config.Config, runID, outputRoot, logicalID, occurrenceID string, logger *logrus.Logger, catalog PreparedBenchmark, wiring Wiring, loadSource func(context.Context) (replay.Plan, error)) (*experiment, error) {
+	if catalog.NewOccurrence == nil || wiring.NewSandbox == nil || wiring.NewBridge == nil || wiring.NewReplayCaller == nil || loadSource == nil {
 		return nil, errors.New("replay component wiring is incomplete")
 	}
 	var selected core.Task
@@ -617,11 +612,7 @@ func buildReplayTaskExperiment(cfg config.Config, runID, outputRoot, logicalID, 
 		defer cancel()
 		return caller.Stop(cleanupCtx)
 	}
-	benchmarkRunner, err := runner.NewReplay(benchmark, sandbox.Sandbox, bridge, caller,
-		func(ctx context.Context) (replay.Plan, error) {
-			plan, err := wiring.LoadReplaySource(ctx, cfg, selected)
-			return plan, err
-		},
+	benchmarkRunner, err := runner.NewReplay(benchmark, sandbox.Sandbox, bridge, caller, loadSource,
 		runner.Options{Name: cfg.Name, RunID: runID, OutputDir: outputRoot, Logger: logger,
 			RuntimeOverrides: runner.RuntimeOverrides{AgentSandboxResources: runner.ResourceOverrides{
 				CPU: cfg.Overrides.AgentSandboxResources.CPU, MemoryMB: cfg.Overrides.AgentSandboxResources.MemoryMB,
