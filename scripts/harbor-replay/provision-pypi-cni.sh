@@ -9,6 +9,7 @@ chain=ZB183PYPI
 name=zbvideo183
 tls_hosts=(pypi.org files.pythonhosted.org)
 http_hosts=()
+github_addresses=()
 case "${3:-video}" in
     video) ;;
     compcert)
@@ -17,6 +18,19 @@ case "${3:-video}" in
         chain=ZB189COMP
         name=zbcomp189
         tls_hosts=(github.com)
+        # The host and guest resolver return different regional frontends.
+        # Require an authenticated response for this exact public repository
+        # from each additional address before allowing it on this bridge.
+        for octet in 112 113 114; do
+            for last in 3 4; do
+                candidate=140.82.$octet.$last
+                if curl --noproxy '*' --fail --silent --show-error --max-time 6 \
+                    --resolve "github.com:443:$candidate" --output /dev/null \
+                    'https://github.com/AbsInt/CompCert.git/info/refs?service=git-upload-pack'; then
+                    github_addresses+=("$candidate")
+                fi
+            done
+        done
         http_hosts=(archive.ubuntu.com security.ubuntu.com)
         ;;
     *) echo "Unknown validation network profile" >&2; exit 2 ;;
@@ -68,6 +82,11 @@ if ! "${ipt[@]}" -S "$chain" &>/dev/null; then
     fi
     "${ipt[@]}" -A "$chain" -j DROP
 fi
+for address in "${github_addresses[@]}"; do
+    if ! "${ipt[@]}" -C "$chain" -d "$address" -p tcp --dport 443 -j RETURN 2>/dev/null; then
+        "${ipt[@]}" -I "$chain" 1 -d "$address" -p tcp --dport 443 -j RETURN
+    fi
+done
 if ! "${ipt[@]}" -C PREROUTING "${jump[@]}" 2>/dev/null; then
     "${ipt[@]}" -I PREROUTING 1 "${jump[@]}"
 fi
