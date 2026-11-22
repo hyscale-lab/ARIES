@@ -71,6 +71,10 @@ func runParallel(ctx context.Context, h Hooks, r *Recording, events []Event, fir
 		wg.Wait()
 		runErr = errors.Join(runErr, h.Boundary(ctx, "post-tool", first.Step))
 	}()
+	var processJoins []func() error
+	if h.FinishObservedProcess != nil {
+		h.deferProcessJoin = func(join func() error) { processJoins = append(processJoins, join) }
+	}
 	sourceReplies := map[uint64]Event{}
 	for _, e := range events[n:] {
 		sourceReplies[e.Sequence] = e
@@ -136,6 +140,13 @@ func runParallel(ctx context.Context, h Hooks, r *Recording, events []Event, fir
 				return err
 			}
 			finished++
+		}
+	}
+	// A late terminal poll in this diagnostic can add a join. Preserve the
+	// recorded dispatch schedule of every original sibling before joining.
+	for _, join := range processJoins {
+		if err := join(); err != nil {
+			return err
 		}
 	}
 	return nil

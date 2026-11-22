@@ -15,6 +15,7 @@ import (
 // Hooks stay on the host. Boundary returns only after the VM is running again.
 // Its own freeze receipts identify the exact pause/resume bounds.
 type Hooks struct {
+	deferProcessJoin      func(func() error)
 	WasRetained           func(int) bool
 	FinishObservedProcess func(context.Context, replay.Call) (core.CommandResult, error)
 	DiagnosticVideoImages bool

@@ -20,18 +20,25 @@ func recordProcessDrift(ctx context.Context, h Hooks, call replay.Call, source R
 		if err := emit(h, event); err != nil {
 			return err
 		}
-		last, err := h.FinishObservedProcess(ctx, call)
-		event.StatusBasis = "additional_join_after_source_poll"
-		event.Exit = &last.ExitCode
-		event.Stdout, event.Stderr = last.Stdout, last.Stderr
-		event.StdoutSHA, event.StderrSHA = digest([]byte(last.Stdout)), digest([]byte(last.Stderr))
-		if e := errors.Join(err, emit(h, event)); e != nil {
-			return e
+		join := func() error {
+			last, err := h.FinishObservedProcess(ctx, call)
+			event.StatusBasis = "additional_join_after_source_poll"
+			event.Exit = &last.ExitCode
+			event.Stdout, event.Stderr = last.Stdout, last.Stderr
+			event.StdoutSHA, event.StderrSHA = digest([]byte(last.Stdout)), digest([]byte(last.Stderr))
+			if e := errors.Join(err, emit(h, event)); e != nil {
+				return e
+			}
+			if int32(last.ExitCode) == call.ExitCode {
+				return nil
+			}
+			return fmt.Errorf("step %d observed terminal exit %d, recorded %d", source.Step, last.ExitCode, call.ExitCode)
 		}
-		if int32(last.ExitCode) == call.ExitCode {
+		if h.deferProcessJoin != nil {
+			h.deferProcessJoin(join)
 			return nil
 		}
-		return fmt.Errorf("step %d observed terminal exit %d, recorded %d", source.Step, last.ExitCode, call.ExitCode)
+		return join()
 	}
 	return fmt.Errorf("step %d live terminal exit %d, recorded %d", source.Step, first.ExitCode, call.ExitCode)
 }
