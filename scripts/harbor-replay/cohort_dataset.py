@@ -18,7 +18,7 @@ def network_args(cni, network_prefix):
     cni = cni.resolve(strict=True)
     config = json.loads((cni / "conf/10-video.conflist").read_bytes())
     name = config["name"]
-    if not re.fullmatch(network_prefix + r"(182|183|189|191|198|201|203)", name):
+    if not re.fullmatch(network_prefix + r"(182|183|189|191|198|200|201|203)", name):
         raise ValueError("unexpected worker CNI network")
     if digest(cni / "SHA256SUMS") != CNI_SHA:
         raise ValueError("unexpected CNI plugin digest list")

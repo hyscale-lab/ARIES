@@ -13,7 +13,7 @@ github_addresses=()
 private_dns=false
 dns_unit=
 case "${3:-video}" in
-    video|video-amd182|video-amd183|video-amd189|video-amd191|video-amd198|video-amd201|video-amd203)
+    video|video-amd182|video-amd183|video-amd189|video-amd191|video-amd198|video-amd200|video-amd201|video-amd203)
         node=183
         if [[ ${3:-video} == video-amd* ]]; then node=${3#video-amd}; fi
         bridge=zbvid$node
@@ -21,7 +21,7 @@ case "${3:-video}" in
         chain=ZB${node}PYPI
         name=zbvideo$node
         ;;
-    dataset|dataset-amd182|dataset-amd183|dataset-amd189|dataset-amd191|dataset-amd198|dataset-amd201|dataset-amd203)
+    dataset|dataset-amd182|dataset-amd183|dataset-amd189|dataset-amd191|dataset-amd198|dataset-amd200|dataset-amd201|dataset-amd203)
         private_dns=true
         node=189
         if [[ ${3:-video} == dataset-amd* ]]; then node=${3#dataset-amd}; fi
@@ -42,7 +42,7 @@ case "${3:-video}" in
         dns_unit=zb-inference-dns-amd182
         tls_hosts=(huggingface.co us.aws.cdn.hf.co cas-server.xethub.hf.co transfer.xethub.hf.co pypi.org files.pythonhosted.org)
         ;;
-    compcert-opam|compcert-opam-amd182|compcert-opam-amd183|compcert-opam-amd189|compcert-opam-amd191|compcert-opam-amd198|compcert-opam-amd201|compcert-opam-amd203)
+    compcert-opam|compcert-opam-amd182|compcert-opam-amd183|compcert-opam-amd189|compcert-opam-amd191|compcert-opam-amd198|compcert-opam-amd200|compcert-opam-amd201|compcert-opam-amd203)
         private_dns=true
         node=189
         if [[ ${3:-video} == compcert-opam-amd* ]]; then node=${3#compcert-opam-amd}; fi
