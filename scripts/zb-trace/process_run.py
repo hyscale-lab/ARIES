@@ -107,14 +107,20 @@ def reconcile(raw, output, meta):
             raise ValueError("tracing missed a required boundary")
     elif meta["status"]=="validated":
         raise ValueError("measurement admission requires traced boundaries")
+    sample_rows=[]
     for receipt,tags in sampled:
+        by_state={}
         cross=Counter()
         for row in tags:
             state=row["state"]
             if state=="resident":
                 state=("snapshot_unavailable" if row["gfn"] not in originals else
                        "matches_snapshot" if row["digest"]==originals[row["gfn"]] else "differs_from_snapshot")
-            cross[row["guest_flag_class"],state]+=1
+            key=(row["guest_flag_class"],state)
+            cross[key]+=1
+            by_state.setdefault(key,[]).append(row["gfn"])
+        for (label,state),gfns in sorted(by_state.items()):
+            sample_rows.append(dict(monotonic_ns=receipt["monotonic_ns"],guest_class=label,state=state,gfns=gfns))
         receipt["sample_cross_tab"]=[dict(guest_flag_class=k[0],state=k[1],pages=v) for k,v in sorted(cross.items())]
     if output.exists():
         raise FileExistsError(output)
@@ -128,6 +134,8 @@ def reconcile(raw, output, meta):
         write(stage/"windows.jsonl",windows)
         write(stage/"freezes.jsonl",freezes)
         write(stage/"classes.jsonl",classes)
+        if sample_rows:
+            write(stage/"sampled-pages.jsonl",sample_rows)
         stage.rename(output)
 
 
