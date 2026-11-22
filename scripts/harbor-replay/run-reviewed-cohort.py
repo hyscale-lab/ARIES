@@ -19,10 +19,14 @@ def main():
         raise ValueError('unexpected unit')
     work=a.runtime.resolve(strict=True);asset=a.assets.resolve(strict=True)
     socket='/run/'+a.unit+'/containerd.sock'
-    env=dict(os.environ,ZB_CHECKPOINT_NAMESPACE_DIR=str(work/'checkpoints/aries'),ZB_VMM_CENSUS='1')
+    env=dict(os.environ,ZB_VMM_CENSUS='1')
     base=['-namespace','aries','-socket',socket,'-checkpoint-dir',str(work/'checkpoints'),
           '-shim-dir',str(work/'shim'),'-io-dir','/run/'+a.unit+'/aries-io']
-    if a.variant in ('v3','v4'):base.append('-native-checkpoint')
+    if a.variant in ('v3','v4'):
+        env.pop('ZB_CHECKPOINT_NAMESPACE_DIR',None)
+        base.append('-native-checkpoint')
+    else:
+        env['ZB_CHECKPOINT_NAMESPACE_DIR']=str(work/'checkpoints/aries')
     entries=json.loads(a.manifest.read_text())
     for entry in entries:
         task=entry['task'];trial=entry['trial_id']
