@@ -22,7 +22,9 @@ def main():
     cli.add_argument("cache", type=Path)
     cli.add_argument("receipts", type=Path)
     cli.add_argument("output", type=Path)
+    cli.add_argument("--exclude-manifest", type=Path, help="omit earlier published trial IDs")
     a = cli.parse_args()
+    prior = {r["trial_id"] for r in json.loads(a.exclude_manifest.read_bytes())} if a.exclude_manifest else set()
     repo = Path(__file__).resolve().parents[2]
     replay = repo / "scripts/harbor-replay"
     bound = json.loads((repo / "pkg/replay/harbor/reviewed.json").read_bytes())
@@ -51,6 +53,8 @@ def main():
             continue
         for item in spec["trials"]:
             trial = item["trial"]
+            if trial in prior:
+                continue
             suffix = "-guest-codec" if task == "code-from-image" else ""
             reference = a.receipts / f"{task}-{trial}{suffix}.json"
             if not reference.exists():
@@ -87,6 +91,7 @@ def main():
             entries.append({"task":task, "trial_id":trial, "receipt":receipt,
                             "reference_receipt":str(Path("receipts")/reference.name),
                             "unobserved_external_actions":receipt.get("external_actions",[]),
+                            "fidelity_scope":"guest_calls_external_responses_unavailable" if receipt.get("external_actions") else "guest_calls",
                             "original_guest_post_checks":checks, "boundary_attribution":boundaries(target/"trajectory.json")})
     (output/"manifest.json").write_text(json.dumps(entries,indent=2)+"\n")
     (output/"pending.json").write_text(json.dumps(pending,indent=2)+"\n")
