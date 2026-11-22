@@ -246,11 +246,14 @@ def plot_task(rows, task, out, table, record):
     axes[0][0].invert_yaxis()
     axes[1][0].invert_yaxis()
     figure.tight_layout(h_pad=4)
+    # The gap between the rows is fixed in inches, so the legend's offset is
+    # too: 0.035 of the 6.4-inch figure drawn for three setups.
+    offset = 0.035 * 6.4 / figure.get_figheight()
     for row_axes, names in ((axes[0], E2E_STAGES), (axes[1], AFTER_STAGES)):
         top = row_axes[0].get_position().y1
         figure.legend([plt.Rectangle((0, 0), 1, 1, color=color) for _, color in names],
                       [stage for stage, _ in names], loc="lower center", ncol=len(names),
-                      bbox_to_anchor=(0.5, top + 0.035), handlelength=1, handleheight=1, columnspacing=1.4)
+                      bbox_to_anchor=(0.5, top + offset), handlelength=1, handleheight=1, columnspacing=1.4)
     save(figure, out, task + "-breakdown", record)
 
 
@@ -371,7 +374,9 @@ def plot_resources(rows, entries, task, out, table, record):
         else:
             axes[r][0].set_ylim(bottom=0)
     figure.tight_layout(h_pad=2)
-    setup_legend(figure, 1.06)
+    # The legend holds four setups a row; each further row sits higher, clear
+    # of the note beneath it.
+    setup_legend(figure, 1.06 + 0.04 * ((len(SETUPS) - 1) // 4))
     figure.text(0.5, 1.005, "Grey line: the cold run starts. Dotted lines: the warm run starts, in each setup's colour.",
                 ha="center", va="bottom", fontsize=7.5, color=INK_2)
     save(figure, out, task + "-resources", record)

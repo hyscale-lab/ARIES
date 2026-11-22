@@ -1,7 +1,7 @@
 # Sandbox backends: report
 
-2026-11-22. Phases 0 and 1 are done; Phase 2 (OpenSandbox) is on hold, and
-Phases 3 (CubeSandbox) and 4 (the campaign) have not started.
+2026-11-23. Phases 0, 1 and 4 (the cold and warm campaign) are done. Phase 2
+(OpenSandbox) is on hold, and Phase 3 (CubeSandbox) has not started.
 
 ## Summary
 
@@ -13,6 +13,12 @@ Phases 3 (CubeSandbox) and 4 (the campaign) have not started.
 - **A warm pool brings a later start down to 1.8 s on every runtime,** hiding
   Kata's VM boot. Its first claim is cold, and pooled sandboxes are less
   isolated than per-task ones (see [Warm pools](#warm-pools)).
+- **End to end, the sandbox setup hardly matters.** In the cold and warm
+  campaign, every setup's cold latency is within about 1 s of the plain pod's,
+  because the sandbox starts while the harness does (12 s for Hermes, 56 s for
+  OpenClaw). A warm pool's faster start therefore never reaches the user.
+  gVisor and Kata cost time per tool call instead: 60–70 ms for OpenClaw and
+  140–150 ms for Hermes (see [Phase 4](#phase-4-cold-and-warm-campaign)).
 - **gVisor and Kata must be measured at pod level.** cAdvisor reports zero or
   nothing for their container, so a per-container reading shows a busy
   sandbox as idle.
@@ -149,8 +155,9 @@ The figures' numbers are in `phase1/tasks.tsv`;
 - **Cleanup** is longest for runc, whose `sleep` waits out the 1 s grace
   period; a warm-pool claim's foreground delete adds its claim and Sandbox.
 - **mb-cpu's pooled gVisor and Kata peaks above 100%** come from a few
-  samples; their busy median is 128% and 114%, against 100% for runc. They are
-  not yet explained.
+  samples; their busy median is 128% and 114%, against 100% for runc. The
+  campaign (Phase 4) finds such peaks in every setup, the plain pod included,
+  so they come from one-second sampling, not from pooling.
 
 ### Measuring gVisor and Kata
 
@@ -221,6 +228,52 @@ request per call; or adding stdin and byte-safe output to execd upstream.
 Either also needs the sandbox on a different deployment backend from the
 harness and bridge.
 
+## Phase 4: cold and warm campaign
+
+The campaign [`results/20261122-e5-2630v3`](results/20261122-e5-2630v3/report.md)
+measures end-to-end time the way [`coldwarm`](../coldwarm/README.md) does,
+over seven setups:
+- the plain pod, as the baseline;
+- agent-sandbox under runc, gVisor and Kata;
+- a warm pool of one under each runtime.
+
+It replays the coldwarm 20261115-e5-2630v3 recordings with 5 repetitions,
+each task run cold and then warm, OpenClaw on one worker and Hermes on the
+other. All 70 measured runs succeeded, and all 350 task runs were solved. Its
+[notes](results/20261122-e5-2630v3/notes.md) give the full interpretation.
+
+![Cold and warm end-to-end time per setup and task](results/20261122-e5-2630v3/figures/end-to-end.png)
+
+- **Cold latency:** every setup is within about 1 s of the plain pod, most of
+  them within noise. The harness start dominates cold start-up, and every
+  sandbox start finishes inside it, Kata's 6.5 s included.
+- **Warm pools:** a pool brings a sandbox start down to 1.8 s on every runtime
+  once its pod is ready. Each run creates its own pool, so the run's first
+  task claims a pod that is still starting: 2.8 s under runc and gVisor, 8.7 s
+  under Kata. Neither saving is visible end to end. Under Kata the pool's
+  replacement VM boots beside the harness and lengthens OpenClaw's harness
+  start by up to 2 s.
+- **Tool calls:** this is where gVisor and Kata cost time, by the same amount
+  in plain, agent-sandbox and pooled pods. Each call is 60–70 ms slower for
+  OpenClaw and 140–150 ms slower for Hermes, which makes 5 sandbox commands
+  per call against OpenClaw's 4. Warm `mb-ten-calls` is 0.5 s slower for
+  OpenClaw and 1.5 s slower for Hermes.
+- **agent-sandbox under runc:** it matches the plain pod within noise, so the
+  controller costs nothing measurable.
+- **After the answer:**
+  - Evaluation is 0.3 s slower under gVisor and Kata, because the verifier
+    runs in the sandbox.
+  - Clean-up is about 1.2 s faster under gVisor and Kata (2.0–2.3 s) than
+    under runc. Under runc it takes 3.3 s for the plain pod, 3.6–4.0 s for
+    agent-sandbox and 4.6 s for the warm pool, as in Phase 1, where runc's
+    `sleep` waits out the grace period.
+- **Resources:**
+  - Sandbox peak memory is about 1 MiB under runc, 17 MiB under gVisor and
+    318 MiB under Kata.
+  - In `mb-cpu`, sandbox CPU peaks above one core appear in every setup, the
+    plain pod included, with wide spread between repetitions. They come from
+    one-second sampling of the CPU counter, not from pooling.
+
 ## Code changes
 
 | Area | Files |
@@ -235,16 +288,15 @@ harness and bridge.
 | Tests | `pkg/config/deployment_test.go`, `pkg/deployment/kubernetes/{kubernetes,environment,warmpool}_test.go` |
 | Cluster | `scripts/testbed/install-sandbox-runtimes.sh`; `k8s/sandbox-runtimes.yaml`; `k8s/create-cluster.sh --sandbox-runtimes` and the `standalone` and `sandbox_runtimes` keys; `k8s/aries/templates/rbac.yaml`; `k8s/cluster.json.example` |
 | Runs | `scripts/microbench/run.sh --runtime-class`, `--agent-sandbox`, `--warm-pool N` |
+| Campaigns | `scripts/microbench/setups.py`, the setups a campaign can compare; `scripts/experiment/run.py`, `report.py`, `task_reports.py`, `scripts/microbench/plot.py` and `plot_coldwarm.py` take them from it; `experiments/sandbox/experiment.json` |
 | Docs | `docs/configuration.md`, `docs/supported.md`, `docs/implementation/kubernetes.md`, `k8s/README.md` |
 
 ## Open items
 
-- Commit these changes, and publish a bridge image for that commit
-  (`make k8s-images`); pooled runs need it.
+- Publish a bridge image for this branch (`make k8s-images`). Pooled runs
+  need it; the campaign used one built from its commit and loaded onto the
+  workers (`bridge_repository`).
 - Phase 3, CubeSandbox: needs agreement to run the harness and the sandbox on
   different deployment backends.
-- Phase 4, a campaign over the setups that pass, with repetitions: it needs the
-  campaign scripts to accept the new setup names, and should explain the
-  pooled mb-cpu peaks above 100%.
-- Clean up the OpenSandbox server on `node-002`, the CubeSandbox services on
+- Remove the stopped OpenSandbox server on `node-002`, the CubeSandbox services on
   the standalone node, and the probe namespace `aries-probe`.

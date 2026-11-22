@@ -1,0 +1,1947 @@
+figure,harness,task,setup,measure,value
+end-to-end,hermes,mb-noop,k8s,"cold: Sandbox, bridge and harness container",2.459
+end-to-end,hermes,mb-noop,k8s,cold: Harness start,12.034
+end-to-end,hermes,mb-noop,k8s,cold: Model (replayed),0.923
+end-to-end,hermes,mb-noop,k8s,cold: Tool execution,0.0
+end-to-end,hermes,mb-noop,k8s,cold: Harness logic,9.802
+end-to-end,hermes,mb-noop,k8s,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-noop,k8s,warm: Harness start,0.0
+end-to-end,hermes,mb-noop,k8s,warm: Model (replayed),1.283
+end-to-end,hermes,mb-noop,k8s,warm: Tool execution,0.0
+end-to-end,hermes,mb-noop,k8s,warm: Harness logic,0.359
+end-to-end,hermes,mb-noop,k8s-agent-sandbox,"cold: Sandbox, bridge and harness container",2.277
+end-to-end,hermes,mb-noop,k8s-agent-sandbox,cold: Harness start,12.05
+end-to-end,hermes,mb-noop,k8s-agent-sandbox,cold: Model (replayed),0.923
+end-to-end,hermes,mb-noop,k8s-agent-sandbox,cold: Tool execution,0.0
+end-to-end,hermes,mb-noop,k8s-agent-sandbox,cold: Harness logic,9.424
+end-to-end,hermes,mb-noop,k8s-agent-sandbox,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-noop,k8s-agent-sandbox,warm: Harness start,0.0
+end-to-end,hermes,mb-noop,k8s-agent-sandbox,warm: Model (replayed),1.283
+end-to-end,hermes,mb-noop,k8s-agent-sandbox,warm: Tool execution,0.0
+end-to-end,hermes,mb-noop,k8s-agent-sandbox,warm: Harness logic,0.358
+end-to-end,hermes,mb-noop,k8s-agent-sandbox-gvisor,"cold: Sandbox, bridge and harness container",2.236
+end-to-end,hermes,mb-noop,k8s-agent-sandbox-gvisor,cold: Harness start,11.988
+end-to-end,hermes,mb-noop,k8s-agent-sandbox-gvisor,cold: Model (replayed),0.923
+end-to-end,hermes,mb-noop,k8s-agent-sandbox-gvisor,cold: Tool execution,0.0
+end-to-end,hermes,mb-noop,k8s-agent-sandbox-gvisor,cold: Harness logic,9.72
+end-to-end,hermes,mb-noop,k8s-agent-sandbox-gvisor,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-noop,k8s-agent-sandbox-gvisor,warm: Harness start,0.0
+end-to-end,hermes,mb-noop,k8s-agent-sandbox-gvisor,warm: Model (replayed),1.283
+end-to-end,hermes,mb-noop,k8s-agent-sandbox-gvisor,warm: Tool execution,0.0
+end-to-end,hermes,mb-noop,k8s-agent-sandbox-gvisor,warm: Harness logic,0.36
+end-to-end,hermes,mb-noop,k8s-agent-sandbox-kata,"cold: Sandbox, bridge and harness container",2.256
+end-to-end,hermes,mb-noop,k8s-agent-sandbox-kata,cold: Harness start,12.257
+end-to-end,hermes,mb-noop,k8s-agent-sandbox-kata,cold: Model (replayed),0.923
+end-to-end,hermes,mb-noop,k8s-agent-sandbox-kata,cold: Tool execution,0.0
+end-to-end,hermes,mb-noop,k8s-agent-sandbox-kata,cold: Harness logic,9.284
+end-to-end,hermes,mb-noop,k8s-agent-sandbox-kata,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-noop,k8s-agent-sandbox-kata,warm: Harness start,0.0
+end-to-end,hermes,mb-noop,k8s-agent-sandbox-kata,warm: Model (replayed),1.283
+end-to-end,hermes,mb-noop,k8s-agent-sandbox-kata,warm: Tool execution,0.0
+end-to-end,hermes,mb-noop,k8s-agent-sandbox-kata,warm: Harness logic,0.359
+end-to-end,hermes,mb-noop,k8s-warm-pool,"cold: Sandbox, bridge and harness container",2.091
+end-to-end,hermes,mb-noop,k8s-warm-pool,cold: Harness start,12.329
+end-to-end,hermes,mb-noop,k8s-warm-pool,cold: Model (replayed),0.923
+end-to-end,hermes,mb-noop,k8s-warm-pool,cold: Tool execution,0.0
+end-to-end,hermes,mb-noop,k8s-warm-pool,cold: Harness logic,9.707
+end-to-end,hermes,mb-noop,k8s-warm-pool,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-noop,k8s-warm-pool,warm: Harness start,0.0
+end-to-end,hermes,mb-noop,k8s-warm-pool,warm: Model (replayed),1.283
+end-to-end,hermes,mb-noop,k8s-warm-pool,warm: Tool execution,0.0
+end-to-end,hermes,mb-noop,k8s-warm-pool,warm: Harness logic,0.359
+end-to-end,hermes,mb-noop,k8s-warm-pool-gvisor,"cold: Sandbox, bridge and harness container",2.086
+end-to-end,hermes,mb-noop,k8s-warm-pool-gvisor,cold: Harness start,12.131
+end-to-end,hermes,mb-noop,k8s-warm-pool-gvisor,cold: Model (replayed),0.922
+end-to-end,hermes,mb-noop,k8s-warm-pool-gvisor,cold: Tool execution,0.0
+end-to-end,hermes,mb-noop,k8s-warm-pool-gvisor,cold: Harness logic,9.914
+end-to-end,hermes,mb-noop,k8s-warm-pool-gvisor,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-noop,k8s-warm-pool-gvisor,warm: Harness start,0.0
+end-to-end,hermes,mb-noop,k8s-warm-pool-gvisor,warm: Model (replayed),1.283
+end-to-end,hermes,mb-noop,k8s-warm-pool-gvisor,warm: Tool execution,0.0
+end-to-end,hermes,mb-noop,k8s-warm-pool-gvisor,warm: Harness logic,0.364
+end-to-end,hermes,mb-noop,k8s-warm-pool-kata,"cold: Sandbox, bridge and harness container",2.076
+end-to-end,hermes,mb-noop,k8s-warm-pool-kata,cold: Harness start,12.215
+end-to-end,hermes,mb-noop,k8s-warm-pool-kata,cold: Model (replayed),0.922
+end-to-end,hermes,mb-noop,k8s-warm-pool-kata,cold: Tool execution,0.0
+end-to-end,hermes,mb-noop,k8s-warm-pool-kata,cold: Harness logic,9.588
+end-to-end,hermes,mb-noop,k8s-warm-pool-kata,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-noop,k8s-warm-pool-kata,warm: Harness start,0.0
+end-to-end,hermes,mb-noop,k8s-warm-pool-kata,warm: Model (replayed),1.283
+end-to-end,hermes,mb-noop,k8s-warm-pool-kata,warm: Tool execution,0.0
+end-to-end,hermes,mb-noop,k8s-warm-pool-kata,warm: Harness logic,0.36
+end-to-end,hermes,mb-one-call,k8s,"cold: Sandbox, bridge and harness container",2.33
+end-to-end,hermes,mb-one-call,k8s,cold: Harness start,12.236
+end-to-end,hermes,mb-one-call,k8s,cold: Model (replayed),2.403
+end-to-end,hermes,mb-one-call,k8s,cold: Tool execution,1.232
+end-to-end,hermes,mb-one-call,k8s,cold: Harness logic,9.612
+end-to-end,hermes,mb-one-call,k8s,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-one-call,k8s,warm: Harness start,0.0
+end-to-end,hermes,mb-one-call,k8s,warm: Model (replayed),2.07
+end-to-end,hermes,mb-one-call,k8s,warm: Tool execution,1.167
+end-to-end,hermes,mb-one-call,k8s,warm: Harness logic,0.397
+end-to-end,hermes,mb-one-call,k8s-agent-sandbox,"cold: Sandbox, bridge and harness container",2.072
+end-to-end,hermes,mb-one-call,k8s-agent-sandbox,cold: Harness start,11.853
+end-to-end,hermes,mb-one-call,k8s-agent-sandbox,cold: Model (replayed),2.404
+end-to-end,hermes,mb-one-call,k8s-agent-sandbox,cold: Tool execution,1.217
+end-to-end,hermes,mb-one-call,k8s-agent-sandbox,cold: Harness logic,9.662
+end-to-end,hermes,mb-one-call,k8s-agent-sandbox,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-one-call,k8s-agent-sandbox,warm: Harness start,0.0
+end-to-end,hermes,mb-one-call,k8s-agent-sandbox,warm: Model (replayed),2.07
+end-to-end,hermes,mb-one-call,k8s-agent-sandbox,warm: Tool execution,1.149
+end-to-end,hermes,mb-one-call,k8s-agent-sandbox,warm: Harness logic,0.392
+end-to-end,hermes,mb-one-call,k8s-agent-sandbox-gvisor,"cold: Sandbox, bridge and harness container",2.25
+end-to-end,hermes,mb-one-call,k8s-agent-sandbox-gvisor,cold: Harness start,12.495
+end-to-end,hermes,mb-one-call,k8s-agent-sandbox-gvisor,cold: Model (replayed),2.404
+end-to-end,hermes,mb-one-call,k8s-agent-sandbox-gvisor,cold: Tool execution,1.644
+end-to-end,hermes,mb-one-call,k8s-agent-sandbox-gvisor,cold: Harness logic,9.817
+end-to-end,hermes,mb-one-call,k8s-agent-sandbox-gvisor,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-one-call,k8s-agent-sandbox-gvisor,warm: Harness start,0.0
+end-to-end,hermes,mb-one-call,k8s-agent-sandbox-gvisor,warm: Model (replayed),2.07
+end-to-end,hermes,mb-one-call,k8s-agent-sandbox-gvisor,warm: Tool execution,1.637
+end-to-end,hermes,mb-one-call,k8s-agent-sandbox-gvisor,warm: Harness logic,0.417
+end-to-end,hermes,mb-one-call,k8s-agent-sandbox-kata,"cold: Sandbox, bridge and harness container",2.238
+end-to-end,hermes,mb-one-call,k8s-agent-sandbox-kata,cold: Harness start,12.199
+end-to-end,hermes,mb-one-call,k8s-agent-sandbox-kata,cold: Model (replayed),2.403
+end-to-end,hermes,mb-one-call,k8s-agent-sandbox-kata,cold: Tool execution,1.523
+end-to-end,hermes,mb-one-call,k8s-agent-sandbox-kata,cold: Harness logic,9.842
+end-to-end,hermes,mb-one-call,k8s-agent-sandbox-kata,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-one-call,k8s-agent-sandbox-kata,warm: Harness start,0.0
+end-to-end,hermes,mb-one-call,k8s-agent-sandbox-kata,warm: Model (replayed),2.07
+end-to-end,hermes,mb-one-call,k8s-agent-sandbox-kata,warm: Tool execution,1.45
+end-to-end,hermes,mb-one-call,k8s-agent-sandbox-kata,warm: Harness logic,0.405
+end-to-end,hermes,mb-one-call,k8s-warm-pool,"cold: Sandbox, bridge and harness container",2.083
+end-to-end,hermes,mb-one-call,k8s-warm-pool,cold: Harness start,12.311
+end-to-end,hermes,mb-one-call,k8s-warm-pool,cold: Model (replayed),2.403
+end-to-end,hermes,mb-one-call,k8s-warm-pool,cold: Tool execution,1.287
+end-to-end,hermes,mb-one-call,k8s-warm-pool,cold: Harness logic,9.457
+end-to-end,hermes,mb-one-call,k8s-warm-pool,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-one-call,k8s-warm-pool,warm: Harness start,0.0
+end-to-end,hermes,mb-one-call,k8s-warm-pool,warm: Model (replayed),2.07
+end-to-end,hermes,mb-one-call,k8s-warm-pool,warm: Tool execution,1.218
+end-to-end,hermes,mb-one-call,k8s-warm-pool,warm: Harness logic,0.377
+end-to-end,hermes,mb-one-call,k8s-warm-pool-gvisor,"cold: Sandbox, bridge and harness container",2.073
+end-to-end,hermes,mb-one-call,k8s-warm-pool-gvisor,cold: Harness start,12.358
+end-to-end,hermes,mb-one-call,k8s-warm-pool-gvisor,cold: Model (replayed),2.403
+end-to-end,hermes,mb-one-call,k8s-warm-pool-gvisor,cold: Tool execution,1.716
+end-to-end,hermes,mb-one-call,k8s-warm-pool-gvisor,cold: Harness logic,9.883
+end-to-end,hermes,mb-one-call,k8s-warm-pool-gvisor,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-one-call,k8s-warm-pool-gvisor,warm: Harness start,0.0
+end-to-end,hermes,mb-one-call,k8s-warm-pool-gvisor,warm: Model (replayed),2.07
+end-to-end,hermes,mb-one-call,k8s-warm-pool-gvisor,warm: Tool execution,1.644
+end-to-end,hermes,mb-one-call,k8s-warm-pool-gvisor,warm: Harness logic,0.412
+end-to-end,hermes,mb-one-call,k8s-warm-pool-kata,"cold: Sandbox, bridge and harness container",2.067
+end-to-end,hermes,mb-one-call,k8s-warm-pool-kata,cold: Harness start,12.055
+end-to-end,hermes,mb-one-call,k8s-warm-pool-kata,cold: Model (replayed),2.403
+end-to-end,hermes,mb-one-call,k8s-warm-pool-kata,cold: Tool execution,1.541
+end-to-end,hermes,mb-one-call,k8s-warm-pool-kata,cold: Harness logic,9.928
+end-to-end,hermes,mb-one-call,k8s-warm-pool-kata,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-one-call,k8s-warm-pool-kata,warm: Harness start,0.0
+end-to-end,hermes,mb-one-call,k8s-warm-pool-kata,warm: Model (replayed),2.07
+end-to-end,hermes,mb-one-call,k8s-warm-pool-kata,warm: Tool execution,1.46
+end-to-end,hermes,mb-one-call,k8s-warm-pool-kata,warm: Harness logic,0.39
+end-to-end,hermes,mb-ten-calls,k8s,"cold: Sandbox, bridge and harness container",2.212
+end-to-end,hermes,mb-ten-calls,k8s,cold: Harness start,12.264
+end-to-end,hermes,mb-ten-calls,k8s,cold: Model (replayed),13.932
+end-to-end,hermes,mb-ten-calls,k8s,cold: Tool execution,4.354
+end-to-end,hermes,mb-ten-calls,k8s,cold: Harness logic,9.886
+end-to-end,hermes,mb-ten-calls,k8s,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-ten-calls,k8s,warm: Harness start,0.0
+end-to-end,hermes,mb-ten-calls,k8s,warm: Model (replayed),13.723
+end-to-end,hermes,mb-ten-calls,k8s,warm: Tool execution,4.319
+end-to-end,hermes,mb-ten-calls,k8s,warm: Harness logic,0.801
+end-to-end,hermes,mb-ten-calls,k8s-agent-sandbox,"cold: Sandbox, bridge and harness container",2.081
+end-to-end,hermes,mb-ten-calls,k8s-agent-sandbox,cold: Harness start,12.007
+end-to-end,hermes,mb-ten-calls,k8s-agent-sandbox,cold: Model (replayed),13.932
+end-to-end,hermes,mb-ten-calls,k8s-agent-sandbox,cold: Tool execution,4.364
+end-to-end,hermes,mb-ten-calls,k8s-agent-sandbox,cold: Harness logic,9.809
+end-to-end,hermes,mb-ten-calls,k8s-agent-sandbox,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-ten-calls,k8s-agent-sandbox,warm: Harness start,0.0
+end-to-end,hermes,mb-ten-calls,k8s-agent-sandbox,warm: Model (replayed),13.722
+end-to-end,hermes,mb-ten-calls,k8s-agent-sandbox,warm: Tool execution,4.359
+end-to-end,hermes,mb-ten-calls,k8s-agent-sandbox,warm: Harness logic,0.797
+end-to-end,hermes,mb-ten-calls,k8s-agent-sandbox-gvisor,"cold: Sandbox, bridge and harness container",2.256
+end-to-end,hermes,mb-ten-calls,k8s-agent-sandbox-gvisor,cold: Harness start,11.782
+end-to-end,hermes,mb-ten-calls,k8s-agent-sandbox-gvisor,cold: Model (replayed),13.932
+end-to-end,hermes,mb-ten-calls,k8s-agent-sandbox-gvisor,cold: Tool execution,5.949
+end-to-end,hermes,mb-ten-calls,k8s-agent-sandbox-gvisor,cold: Harness logic,10.497
+end-to-end,hermes,mb-ten-calls,k8s-agent-sandbox-gvisor,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-ten-calls,k8s-agent-sandbox-gvisor,warm: Harness start,0.0
+end-to-end,hermes,mb-ten-calls,k8s-agent-sandbox-gvisor,warm: Model (replayed),13.722
+end-to-end,hermes,mb-ten-calls,k8s-agent-sandbox-gvisor,warm: Tool execution,5.854
+end-to-end,hermes,mb-ten-calls,k8s-agent-sandbox-gvisor,warm: Harness logic,0.82
+end-to-end,hermes,mb-ten-calls,k8s-agent-sandbox-kata,"cold: Sandbox, bridge and harness container",2.131
+end-to-end,hermes,mb-ten-calls,k8s-agent-sandbox-kata,cold: Harness start,12.23
+end-to-end,hermes,mb-ten-calls,k8s-agent-sandbox-kata,cold: Model (replayed),13.932
+end-to-end,hermes,mb-ten-calls,k8s-agent-sandbox-kata,cold: Tool execution,5.785
+end-to-end,hermes,mb-ten-calls,k8s-agent-sandbox-kata,cold: Harness logic,10.301
+end-to-end,hermes,mb-ten-calls,k8s-agent-sandbox-kata,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-ten-calls,k8s-agent-sandbox-kata,warm: Harness start,0.0
+end-to-end,hermes,mb-ten-calls,k8s-agent-sandbox-kata,warm: Model (replayed),13.722
+end-to-end,hermes,mb-ten-calls,k8s-agent-sandbox-kata,warm: Tool execution,5.748
+end-to-end,hermes,mb-ten-calls,k8s-agent-sandbox-kata,warm: Harness logic,0.774
+end-to-end,hermes,mb-ten-calls,k8s-warm-pool,"cold: Sandbox, bridge and harness container",2.078
+end-to-end,hermes,mb-ten-calls,k8s-warm-pool,cold: Harness start,11.706
+end-to-end,hermes,mb-ten-calls,k8s-warm-pool,cold: Model (replayed),13.933
+end-to-end,hermes,mb-ten-calls,k8s-warm-pool,cold: Tool execution,4.317
+end-to-end,hermes,mb-ten-calls,k8s-warm-pool,cold: Harness logic,9.895
+end-to-end,hermes,mb-ten-calls,k8s-warm-pool,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-ten-calls,k8s-warm-pool,warm: Harness start,0.0
+end-to-end,hermes,mb-ten-calls,k8s-warm-pool,warm: Model (replayed),13.722
+end-to-end,hermes,mb-ten-calls,k8s-warm-pool,warm: Tool execution,4.336
+end-to-end,hermes,mb-ten-calls,k8s-warm-pool,warm: Harness logic,0.798
+end-to-end,hermes,mb-ten-calls,k8s-warm-pool-gvisor,"cold: Sandbox, bridge and harness container",2.063
+end-to-end,hermes,mb-ten-calls,k8s-warm-pool-gvisor,cold: Harness start,11.94
+end-to-end,hermes,mb-ten-calls,k8s-warm-pool-gvisor,cold: Model (replayed),13.932
+end-to-end,hermes,mb-ten-calls,k8s-warm-pool-gvisor,cold: Tool execution,5.993
+end-to-end,hermes,mb-ten-calls,k8s-warm-pool-gvisor,cold: Harness logic,10.318
+end-to-end,hermes,mb-ten-calls,k8s-warm-pool-gvisor,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-ten-calls,k8s-warm-pool-gvisor,warm: Harness start,0.0
+end-to-end,hermes,mb-ten-calls,k8s-warm-pool-gvisor,warm: Model (replayed),13.722
+end-to-end,hermes,mb-ten-calls,k8s-warm-pool-gvisor,warm: Tool execution,5.878
+end-to-end,hermes,mb-ten-calls,k8s-warm-pool-gvisor,warm: Harness logic,0.807
+end-to-end,hermes,mb-ten-calls,k8s-warm-pool-kata,"cold: Sandbox, bridge and harness container",2.066
+end-to-end,hermes,mb-ten-calls,k8s-warm-pool-kata,cold: Harness start,12.425
+end-to-end,hermes,mb-ten-calls,k8s-warm-pool-kata,cold: Model (replayed),13.931
+end-to-end,hermes,mb-ten-calls,k8s-warm-pool-kata,cold: Tool execution,5.788
+end-to-end,hermes,mb-ten-calls,k8s-warm-pool-kata,cold: Harness logic,10.075
+end-to-end,hermes,mb-ten-calls,k8s-warm-pool-kata,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-ten-calls,k8s-warm-pool-kata,warm: Harness start,0.0
+end-to-end,hermes,mb-ten-calls,k8s-warm-pool-kata,warm: Model (replayed),13.723
+end-to-end,hermes,mb-ten-calls,k8s-warm-pool-kata,warm: Tool execution,5.749
+end-to-end,hermes,mb-ten-calls,k8s-warm-pool-kata,warm: Harness logic,0.83
+end-to-end,hermes,mb-cpu,k8s,"cold: Sandbox, bridge and harness container",2.272
+end-to-end,hermes,mb-cpu,k8s,cold: Harness start,12.035
+end-to-end,hermes,mb-cpu,k8s,cold: Model (replayed),2.656
+end-to-end,hermes,mb-cpu,k8s,cold: Tool execution,5.106
+end-to-end,hermes,mb-cpu,k8s,cold: Harness logic,9.503
+end-to-end,hermes,mb-cpu,k8s,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-cpu,k8s,warm: Harness start,0.0
+end-to-end,hermes,mb-cpu,k8s,warm: Model (replayed),2.716
+end-to-end,hermes,mb-cpu,k8s,warm: Tool execution,4.918
+end-to-end,hermes,mb-cpu,k8s,warm: Harness logic,0.388
+end-to-end,hermes,mb-cpu,k8s-agent-sandbox,"cold: Sandbox, bridge and harness container",2.084
+end-to-end,hermes,mb-cpu,k8s-agent-sandbox,cold: Harness start,12.205
+end-to-end,hermes,mb-cpu,k8s-agent-sandbox,cold: Model (replayed),2.656
+end-to-end,hermes,mb-cpu,k8s-agent-sandbox,cold: Tool execution,4.973
+end-to-end,hermes,mb-cpu,k8s-agent-sandbox,cold: Harness logic,9.766
+end-to-end,hermes,mb-cpu,k8s-agent-sandbox,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-cpu,k8s-agent-sandbox,warm: Harness start,0.0
+end-to-end,hermes,mb-cpu,k8s-agent-sandbox,warm: Model (replayed),2.717
+end-to-end,hermes,mb-cpu,k8s-agent-sandbox,warm: Tool execution,4.827
+end-to-end,hermes,mb-cpu,k8s-agent-sandbox,warm: Harness logic,0.385
+end-to-end,hermes,mb-cpu,k8s-agent-sandbox-gvisor,"cold: Sandbox, bridge and harness container",2.254
+end-to-end,hermes,mb-cpu,k8s-agent-sandbox-gvisor,cold: Harness start,12.353
+end-to-end,hermes,mb-cpu,k8s-agent-sandbox-gvisor,cold: Model (replayed),2.656
+end-to-end,hermes,mb-cpu,k8s-agent-sandbox-gvisor,cold: Tool execution,5.315
+end-to-end,hermes,mb-cpu,k8s-agent-sandbox-gvisor,cold: Harness logic,9.702
+end-to-end,hermes,mb-cpu,k8s-agent-sandbox-gvisor,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-cpu,k8s-agent-sandbox-gvisor,warm: Harness start,0.0
+end-to-end,hermes,mb-cpu,k8s-agent-sandbox-gvisor,warm: Model (replayed),2.716
+end-to-end,hermes,mb-cpu,k8s-agent-sandbox-gvisor,warm: Tool execution,5.248
+end-to-end,hermes,mb-cpu,k8s-agent-sandbox-gvisor,warm: Harness logic,0.387
+end-to-end,hermes,mb-cpu,k8s-agent-sandbox-kata,"cold: Sandbox, bridge and harness container",2.442
+end-to-end,hermes,mb-cpu,k8s-agent-sandbox-kata,cold: Harness start,12.692
+end-to-end,hermes,mb-cpu,k8s-agent-sandbox-kata,cold: Model (replayed),2.656
+end-to-end,hermes,mb-cpu,k8s-agent-sandbox-kata,cold: Tool execution,5.502
+end-to-end,hermes,mb-cpu,k8s-agent-sandbox-kata,cold: Harness logic,9.199
+end-to-end,hermes,mb-cpu,k8s-agent-sandbox-kata,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-cpu,k8s-agent-sandbox-kata,warm: Harness start,0.0
+end-to-end,hermes,mb-cpu,k8s-agent-sandbox-kata,warm: Model (replayed),2.716
+end-to-end,hermes,mb-cpu,k8s-agent-sandbox-kata,warm: Tool execution,5.29
+end-to-end,hermes,mb-cpu,k8s-agent-sandbox-kata,warm: Harness logic,0.391
+end-to-end,hermes,mb-cpu,k8s-warm-pool,"cold: Sandbox, bridge and harness container",2.099
+end-to-end,hermes,mb-cpu,k8s-warm-pool,cold: Harness start,12.164
+end-to-end,hermes,mb-cpu,k8s-warm-pool,cold: Model (replayed),2.656
+end-to-end,hermes,mb-cpu,k8s-warm-pool,cold: Tool execution,4.998
+end-to-end,hermes,mb-cpu,k8s-warm-pool,cold: Harness logic,9.994
+end-to-end,hermes,mb-cpu,k8s-warm-pool,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-cpu,k8s-warm-pool,warm: Harness start,0.0
+end-to-end,hermes,mb-cpu,k8s-warm-pool,warm: Model (replayed),2.716
+end-to-end,hermes,mb-cpu,k8s-warm-pool,warm: Tool execution,4.959
+end-to-end,hermes,mb-cpu,k8s-warm-pool,warm: Harness logic,0.405
+end-to-end,hermes,mb-cpu,k8s-warm-pool-gvisor,"cold: Sandbox, bridge and harness container",2.065
+end-to-end,hermes,mb-cpu,k8s-warm-pool-gvisor,cold: Harness start,12.202
+end-to-end,hermes,mb-cpu,k8s-warm-pool-gvisor,cold: Model (replayed),2.656
+end-to-end,hermes,mb-cpu,k8s-warm-pool-gvisor,cold: Tool execution,5.433
+end-to-end,hermes,mb-cpu,k8s-warm-pool-gvisor,cold: Harness logic,9.705
+end-to-end,hermes,mb-cpu,k8s-warm-pool-gvisor,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-cpu,k8s-warm-pool-gvisor,warm: Harness start,0.0
+end-to-end,hermes,mb-cpu,k8s-warm-pool-gvisor,warm: Model (replayed),2.717
+end-to-end,hermes,mb-cpu,k8s-warm-pool-gvisor,warm: Tool execution,5.404
+end-to-end,hermes,mb-cpu,k8s-warm-pool-gvisor,warm: Harness logic,0.401
+end-to-end,hermes,mb-cpu,k8s-warm-pool-kata,"cold: Sandbox, bridge and harness container",2.07
+end-to-end,hermes,mb-cpu,k8s-warm-pool-kata,cold: Harness start,12.734
+end-to-end,hermes,mb-cpu,k8s-warm-pool-kata,cold: Model (replayed),2.656
+end-to-end,hermes,mb-cpu,k8s-warm-pool-kata,cold: Tool execution,5.591
+end-to-end,hermes,mb-cpu,k8s-warm-pool-kata,cold: Harness logic,9.753
+end-to-end,hermes,mb-cpu,k8s-warm-pool-kata,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-cpu,k8s-warm-pool-kata,warm: Harness start,0.0
+end-to-end,hermes,mb-cpu,k8s-warm-pool-kata,warm: Model (replayed),2.716
+end-to-end,hermes,mb-cpu,k8s-warm-pool-kata,warm: Tool execution,5.3
+end-to-end,hermes,mb-cpu,k8s-warm-pool-kata,warm: Harness logic,0.392
+end-to-end,hermes,mb-output,k8s,"cold: Sandbox, bridge and harness container",2.331
+end-to-end,hermes,mb-output,k8s,cold: Harness start,11.99
+end-to-end,hermes,mb-output,k8s,cold: Model (replayed),2.325
+end-to-end,hermes,mb-output,k8s,cold: Tool execution,1.241
+end-to-end,hermes,mb-output,k8s,cold: Harness logic,9.49
+end-to-end,hermes,mb-output,k8s,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-output,k8s,warm: Harness start,0.0
+end-to-end,hermes,mb-output,k8s,warm: Model (replayed),2.391
+end-to-end,hermes,mb-output,k8s,warm: Tool execution,1.162
+end-to-end,hermes,mb-output,k8s,warm: Harness logic,0.374
+end-to-end,hermes,mb-output,k8s-agent-sandbox,"cold: Sandbox, bridge and harness container",2.08
+end-to-end,hermes,mb-output,k8s-agent-sandbox,cold: Harness start,11.86
+end-to-end,hermes,mb-output,k8s-agent-sandbox,cold: Model (replayed),2.325
+end-to-end,hermes,mb-output,k8s-agent-sandbox,cold: Tool execution,1.26
+end-to-end,hermes,mb-output,k8s-agent-sandbox,cold: Harness logic,9.441
+end-to-end,hermes,mb-output,k8s-agent-sandbox,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-output,k8s-agent-sandbox,warm: Harness start,0.0
+end-to-end,hermes,mb-output,k8s-agent-sandbox,warm: Model (replayed),2.391
+end-to-end,hermes,mb-output,k8s-agent-sandbox,warm: Tool execution,1.16
+end-to-end,hermes,mb-output,k8s-agent-sandbox,warm: Harness logic,0.4
+end-to-end,hermes,mb-output,k8s-agent-sandbox-gvisor,"cold: Sandbox, bridge and harness container",2.192
+end-to-end,hermes,mb-output,k8s-agent-sandbox-gvisor,cold: Harness start,11.888
+end-to-end,hermes,mb-output,k8s-agent-sandbox-gvisor,cold: Model (replayed),2.325
+end-to-end,hermes,mb-output,k8s-agent-sandbox-gvisor,cold: Tool execution,1.74
+end-to-end,hermes,mb-output,k8s-agent-sandbox-gvisor,cold: Harness logic,9.703
+end-to-end,hermes,mb-output,k8s-agent-sandbox-gvisor,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-output,k8s-agent-sandbox-gvisor,warm: Harness start,0.0
+end-to-end,hermes,mb-output,k8s-agent-sandbox-gvisor,warm: Model (replayed),2.391
+end-to-end,hermes,mb-output,k8s-agent-sandbox-gvisor,warm: Tool execution,1.62
+end-to-end,hermes,mb-output,k8s-agent-sandbox-gvisor,warm: Harness logic,0.393
+end-to-end,hermes,mb-output,k8s-agent-sandbox-kata,"cold: Sandbox, bridge and harness container",2.249
+end-to-end,hermes,mb-output,k8s-agent-sandbox-kata,cold: Harness start,12.22
+end-to-end,hermes,mb-output,k8s-agent-sandbox-kata,cold: Model (replayed),2.326
+end-to-end,hermes,mb-output,k8s-agent-sandbox-kata,cold: Tool execution,1.551
+end-to-end,hermes,mb-output,k8s-agent-sandbox-kata,cold: Harness logic,9.772
+end-to-end,hermes,mb-output,k8s-agent-sandbox-kata,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-output,k8s-agent-sandbox-kata,warm: Harness start,0.0
+end-to-end,hermes,mb-output,k8s-agent-sandbox-kata,warm: Model (replayed),2.391
+end-to-end,hermes,mb-output,k8s-agent-sandbox-kata,warm: Tool execution,1.469
+end-to-end,hermes,mb-output,k8s-agent-sandbox-kata,warm: Harness logic,0.372
+end-to-end,hermes,mb-output,k8s-warm-pool,"cold: Sandbox, bridge and harness container",2.083
+end-to-end,hermes,mb-output,k8s-warm-pool,cold: Harness start,12.258
+end-to-end,hermes,mb-output,k8s-warm-pool,cold: Model (replayed),2.325
+end-to-end,hermes,mb-output,k8s-warm-pool,cold: Tool execution,1.285
+end-to-end,hermes,mb-output,k8s-warm-pool,cold: Harness logic,9.612
+end-to-end,hermes,mb-output,k8s-warm-pool,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-output,k8s-warm-pool,warm: Harness start,0.0
+end-to-end,hermes,mb-output,k8s-warm-pool,warm: Model (replayed),2.391
+end-to-end,hermes,mb-output,k8s-warm-pool,warm: Tool execution,1.263
+end-to-end,hermes,mb-output,k8s-warm-pool,warm: Harness logic,0.43
+end-to-end,hermes,mb-output,k8s-warm-pool-gvisor,"cold: Sandbox, bridge and harness container",2.071
+end-to-end,hermes,mb-output,k8s-warm-pool-gvisor,cold: Harness start,12.817
+end-to-end,hermes,mb-output,k8s-warm-pool-gvisor,cold: Model (replayed),2.326
+end-to-end,hermes,mb-output,k8s-warm-pool-gvisor,cold: Tool execution,1.711
+end-to-end,hermes,mb-output,k8s-warm-pool-gvisor,cold: Harness logic,9.754
+end-to-end,hermes,mb-output,k8s-warm-pool-gvisor,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-output,k8s-warm-pool-gvisor,warm: Harness start,0.0
+end-to-end,hermes,mb-output,k8s-warm-pool-gvisor,warm: Model (replayed),2.391
+end-to-end,hermes,mb-output,k8s-warm-pool-gvisor,warm: Tool execution,1.62
+end-to-end,hermes,mb-output,k8s-warm-pool-gvisor,warm: Harness logic,0.385
+end-to-end,hermes,mb-output,k8s-warm-pool-kata,"cold: Sandbox, bridge and harness container",2.073
+end-to-end,hermes,mb-output,k8s-warm-pool-kata,cold: Harness start,12.296
+end-to-end,hermes,mb-output,k8s-warm-pool-kata,cold: Model (replayed),2.325
+end-to-end,hermes,mb-output,k8s-warm-pool-kata,cold: Tool execution,1.572
+end-to-end,hermes,mb-output,k8s-warm-pool-kata,cold: Harness logic,9.515
+end-to-end,hermes,mb-output,k8s-warm-pool-kata,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,hermes,mb-output,k8s-warm-pool-kata,warm: Harness start,0.0
+end-to-end,hermes,mb-output,k8s-warm-pool-kata,warm: Model (replayed),2.391
+end-to-end,hermes,mb-output,k8s-warm-pool-kata,warm: Tool execution,1.475
+end-to-end,hermes,mb-output,k8s-warm-pool-kata,warm: Harness logic,0.387
+end-to-end,openclaw,mb-noop,k8s,"cold: Sandbox, bridge and harness container",3.459
+end-to-end,openclaw,mb-noop,k8s,cold: Harness start,56.385
+end-to-end,openclaw,mb-noop,k8s,cold: Model (replayed),1.187
+end-to-end,openclaw,mb-noop,k8s,cold: Tool execution,0.0
+end-to-end,openclaw,mb-noop,k8s,cold: Harness logic,3.273
+end-to-end,openclaw,mb-noop,k8s,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-noop,k8s,warm: Harness start,0.0
+end-to-end,openclaw,mb-noop,k8s,warm: Model (replayed),0.735
+end-to-end,openclaw,mb-noop,k8s,warm: Tool execution,0.0
+end-to-end,openclaw,mb-noop,k8s,warm: Harness logic,1.582
+end-to-end,openclaw,mb-noop,k8s-agent-sandbox,"cold: Sandbox, bridge and harness container",3.289
+end-to-end,openclaw,mb-noop,k8s-agent-sandbox,cold: Harness start,56.865
+end-to-end,openclaw,mb-noop,k8s-agent-sandbox,cold: Model (replayed),1.187
+end-to-end,openclaw,mb-noop,k8s-agent-sandbox,cold: Tool execution,0.0
+end-to-end,openclaw,mb-noop,k8s-agent-sandbox,cold: Harness logic,3.061
+end-to-end,openclaw,mb-noop,k8s-agent-sandbox,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-noop,k8s-agent-sandbox,warm: Harness start,0.0
+end-to-end,openclaw,mb-noop,k8s-agent-sandbox,warm: Model (replayed),0.735
+end-to-end,openclaw,mb-noop,k8s-agent-sandbox,warm: Tool execution,0.0
+end-to-end,openclaw,mb-noop,k8s-agent-sandbox,warm: Harness logic,1.765
+end-to-end,openclaw,mb-noop,k8s-agent-sandbox-gvisor,"cold: Sandbox, bridge and harness container",3.273
+end-to-end,openclaw,mb-noop,k8s-agent-sandbox-gvisor,cold: Harness start,55.839
+end-to-end,openclaw,mb-noop,k8s-agent-sandbox-gvisor,cold: Model (replayed),1.187
+end-to-end,openclaw,mb-noop,k8s-agent-sandbox-gvisor,cold: Tool execution,0.0
+end-to-end,openclaw,mb-noop,k8s-agent-sandbox-gvisor,cold: Harness logic,3.461
+end-to-end,openclaw,mb-noop,k8s-agent-sandbox-gvisor,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-noop,k8s-agent-sandbox-gvisor,warm: Harness start,0.0
+end-to-end,openclaw,mb-noop,k8s-agent-sandbox-gvisor,warm: Model (replayed),0.735
+end-to-end,openclaw,mb-noop,k8s-agent-sandbox-gvisor,warm: Tool execution,0.0
+end-to-end,openclaw,mb-noop,k8s-agent-sandbox-gvisor,warm: Harness logic,1.863
+end-to-end,openclaw,mb-noop,k8s-agent-sandbox-kata,"cold: Sandbox, bridge and harness container",3.266
+end-to-end,openclaw,mb-noop,k8s-agent-sandbox-kata,cold: Harness start,57.105
+end-to-end,openclaw,mb-noop,k8s-agent-sandbox-kata,cold: Model (replayed),1.187
+end-to-end,openclaw,mb-noop,k8s-agent-sandbox-kata,cold: Tool execution,0.0
+end-to-end,openclaw,mb-noop,k8s-agent-sandbox-kata,cold: Harness logic,3.457
+end-to-end,openclaw,mb-noop,k8s-agent-sandbox-kata,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-noop,k8s-agent-sandbox-kata,warm: Harness start,0.0
+end-to-end,openclaw,mb-noop,k8s-agent-sandbox-kata,warm: Model (replayed),0.735
+end-to-end,openclaw,mb-noop,k8s-agent-sandbox-kata,warm: Tool execution,0.0
+end-to-end,openclaw,mb-noop,k8s-agent-sandbox-kata,warm: Harness logic,1.86
+end-to-end,openclaw,mb-noop,k8s-warm-pool,"cold: Sandbox, bridge and harness container",3.127
+end-to-end,openclaw,mb-noop,k8s-warm-pool,cold: Harness start,57.313
+end-to-end,openclaw,mb-noop,k8s-warm-pool,cold: Model (replayed),1.186
+end-to-end,openclaw,mb-noop,k8s-warm-pool,cold: Tool execution,0.0
+end-to-end,openclaw,mb-noop,k8s-warm-pool,cold: Harness logic,3.43
+end-to-end,openclaw,mb-noop,k8s-warm-pool,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-noop,k8s-warm-pool,warm: Harness start,0.0
+end-to-end,openclaw,mb-noop,k8s-warm-pool,warm: Model (replayed),0.735
+end-to-end,openclaw,mb-noop,k8s-warm-pool,warm: Tool execution,0.0
+end-to-end,openclaw,mb-noop,k8s-warm-pool,warm: Harness logic,1.829
+end-to-end,openclaw,mb-noop,k8s-warm-pool-gvisor,"cold: Sandbox, bridge and harness container",3.105
+end-to-end,openclaw,mb-noop,k8s-warm-pool-gvisor,cold: Harness start,57.596
+end-to-end,openclaw,mb-noop,k8s-warm-pool-gvisor,cold: Model (replayed),1.187
+end-to-end,openclaw,mb-noop,k8s-warm-pool-gvisor,cold: Tool execution,0.0
+end-to-end,openclaw,mb-noop,k8s-warm-pool-gvisor,cold: Harness logic,3.435
+end-to-end,openclaw,mb-noop,k8s-warm-pool-gvisor,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-noop,k8s-warm-pool-gvisor,warm: Harness start,0.0
+end-to-end,openclaw,mb-noop,k8s-warm-pool-gvisor,warm: Model (replayed),0.735
+end-to-end,openclaw,mb-noop,k8s-warm-pool-gvisor,warm: Tool execution,0.0
+end-to-end,openclaw,mb-noop,k8s-warm-pool-gvisor,warm: Harness logic,1.898
+end-to-end,openclaw,mb-noop,k8s-warm-pool-kata,"cold: Sandbox, bridge and harness container",3.102
+end-to-end,openclaw,mb-noop,k8s-warm-pool-kata,cold: Harness start,58.411
+end-to-end,openclaw,mb-noop,k8s-warm-pool-kata,cold: Model (replayed),1.186
+end-to-end,openclaw,mb-noop,k8s-warm-pool-kata,cold: Tool execution,0.0
+end-to-end,openclaw,mb-noop,k8s-warm-pool-kata,cold: Harness logic,3.645
+end-to-end,openclaw,mb-noop,k8s-warm-pool-kata,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-noop,k8s-warm-pool-kata,warm: Harness start,0.0
+end-to-end,openclaw,mb-noop,k8s-warm-pool-kata,warm: Model (replayed),0.735
+end-to-end,openclaw,mb-noop,k8s-warm-pool-kata,warm: Tool execution,0.0
+end-to-end,openclaw,mb-noop,k8s-warm-pool-kata,warm: Harness logic,1.666
+end-to-end,openclaw,mb-one-call,k8s,"cold: Sandbox, bridge and harness container",3.403
+end-to-end,openclaw,mb-one-call,k8s,cold: Harness start,56.756
+end-to-end,openclaw,mb-one-call,k8s,cold: Model (replayed),2.354
+end-to-end,openclaw,mb-one-call,k8s,cold: Tool execution,1.198
+end-to-end,openclaw,mb-one-call,k8s,cold: Harness logic,3.194
+end-to-end,openclaw,mb-one-call,k8s,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-one-call,k8s,warm: Harness start,0.0
+end-to-end,openclaw,mb-one-call,k8s,warm: Model (replayed),2.454
+end-to-end,openclaw,mb-one-call,k8s,warm: Tool execution,1.006
+end-to-end,openclaw,mb-one-call,k8s,warm: Harness logic,1.948
+end-to-end,openclaw,mb-one-call,k8s-agent-sandbox,"cold: Sandbox, bridge and harness container",3.227
+end-to-end,openclaw,mb-one-call,k8s-agent-sandbox,cold: Harness start,56.695
+end-to-end,openclaw,mb-one-call,k8s-agent-sandbox,cold: Model (replayed),2.354
+end-to-end,openclaw,mb-one-call,k8s-agent-sandbox,cold: Tool execution,1.31
+end-to-end,openclaw,mb-one-call,k8s-agent-sandbox,cold: Harness logic,3.463
+end-to-end,openclaw,mb-one-call,k8s-agent-sandbox,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-one-call,k8s-agent-sandbox,warm: Harness start,0.0
+end-to-end,openclaw,mb-one-call,k8s-agent-sandbox,warm: Model (replayed),2.454
+end-to-end,openclaw,mb-one-call,k8s-agent-sandbox,warm: Tool execution,0.99
+end-to-end,openclaw,mb-one-call,k8s-agent-sandbox,warm: Harness logic,2.138
+end-to-end,openclaw,mb-one-call,k8s-agent-sandbox-gvisor,"cold: Sandbox, bridge and harness container",3.275
+end-to-end,openclaw,mb-one-call,k8s-agent-sandbox-gvisor,cold: Harness start,56.244
+end-to-end,openclaw,mb-one-call,k8s-agent-sandbox-gvisor,cold: Model (replayed),2.354
+end-to-end,openclaw,mb-one-call,k8s-agent-sandbox-gvisor,cold: Tool execution,1.312
+end-to-end,openclaw,mb-one-call,k8s-agent-sandbox-gvisor,cold: Harness logic,3.47
+end-to-end,openclaw,mb-one-call,k8s-agent-sandbox-gvisor,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-one-call,k8s-agent-sandbox-gvisor,warm: Harness start,0.0
+end-to-end,openclaw,mb-one-call,k8s-agent-sandbox-gvisor,warm: Model (replayed),2.455
+end-to-end,openclaw,mb-one-call,k8s-agent-sandbox-gvisor,warm: Tool execution,1.082
+end-to-end,openclaw,mb-one-call,k8s-agent-sandbox-gvisor,warm: Harness logic,1.88
+end-to-end,openclaw,mb-one-call,k8s-agent-sandbox-kata,"cold: Sandbox, bridge and harness container",3.267
+end-to-end,openclaw,mb-one-call,k8s-agent-sandbox-kata,cold: Harness start,56.456
+end-to-end,openclaw,mb-one-call,k8s-agent-sandbox-kata,cold: Model (replayed),2.354
+end-to-end,openclaw,mb-one-call,k8s-agent-sandbox-kata,cold: Tool execution,1.297
+end-to-end,openclaw,mb-one-call,k8s-agent-sandbox-kata,cold: Harness logic,3.32
+end-to-end,openclaw,mb-one-call,k8s-agent-sandbox-kata,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-one-call,k8s-agent-sandbox-kata,warm: Harness start,0.0
+end-to-end,openclaw,mb-one-call,k8s-agent-sandbox-kata,warm: Model (replayed),2.454
+end-to-end,openclaw,mb-one-call,k8s-agent-sandbox-kata,warm: Tool execution,1.09
+end-to-end,openclaw,mb-one-call,k8s-agent-sandbox-kata,warm: Harness logic,2.102
+end-to-end,openclaw,mb-one-call,k8s-warm-pool,"cold: Sandbox, bridge and harness container",3.109
+end-to-end,openclaw,mb-one-call,k8s-warm-pool,cold: Harness start,56.978
+end-to-end,openclaw,mb-one-call,k8s-warm-pool,cold: Model (replayed),2.354
+end-to-end,openclaw,mb-one-call,k8s-warm-pool,cold: Tool execution,1.204
+end-to-end,openclaw,mb-one-call,k8s-warm-pool,cold: Harness logic,3.604
+end-to-end,openclaw,mb-one-call,k8s-warm-pool,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-one-call,k8s-warm-pool,warm: Harness start,0.0
+end-to-end,openclaw,mb-one-call,k8s-warm-pool,warm: Model (replayed),2.455
+end-to-end,openclaw,mb-one-call,k8s-warm-pool,warm: Tool execution,0.996
+end-to-end,openclaw,mb-one-call,k8s-warm-pool,warm: Harness logic,2.032
+end-to-end,openclaw,mb-one-call,k8s-warm-pool-gvisor,"cold: Sandbox, bridge and harness container",3.099
+end-to-end,openclaw,mb-one-call,k8s-warm-pool-gvisor,cold: Harness start,56.87
+end-to-end,openclaw,mb-one-call,k8s-warm-pool-gvisor,cold: Model (replayed),2.354
+end-to-end,openclaw,mb-one-call,k8s-warm-pool-gvisor,cold: Tool execution,1.291
+end-to-end,openclaw,mb-one-call,k8s-warm-pool-gvisor,cold: Harness logic,3.555
+end-to-end,openclaw,mb-one-call,k8s-warm-pool-gvisor,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-one-call,k8s-warm-pool-gvisor,warm: Harness start,0.0
+end-to-end,openclaw,mb-one-call,k8s-warm-pool-gvisor,warm: Model (replayed),2.455
+end-to-end,openclaw,mb-one-call,k8s-warm-pool-gvisor,warm: Tool execution,1.101
+end-to-end,openclaw,mb-one-call,k8s-warm-pool-gvisor,warm: Harness logic,1.897
+end-to-end,openclaw,mb-one-call,k8s-warm-pool-kata,"cold: Sandbox, bridge and harness container",3.1
+end-to-end,openclaw,mb-one-call,k8s-warm-pool-kata,cold: Harness start,57.121
+end-to-end,openclaw,mb-one-call,k8s-warm-pool-kata,cold: Model (replayed),2.354
+end-to-end,openclaw,mb-one-call,k8s-warm-pool-kata,cold: Tool execution,1.304
+end-to-end,openclaw,mb-one-call,k8s-warm-pool-kata,cold: Harness logic,3.699
+end-to-end,openclaw,mb-one-call,k8s-warm-pool-kata,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-one-call,k8s-warm-pool-kata,warm: Harness start,0.0
+end-to-end,openclaw,mb-one-call,k8s-warm-pool-kata,warm: Model (replayed),2.455
+end-to-end,openclaw,mb-one-call,k8s-warm-pool-kata,warm: Tool execution,1.091
+end-to-end,openclaw,mb-one-call,k8s-warm-pool-kata,warm: Harness logic,1.826
+end-to-end,openclaw,mb-ten-calls,k8s,"cold: Sandbox, bridge and harness container",3.401
+end-to-end,openclaw,mb-ten-calls,k8s,cold: Harness start,56.604
+end-to-end,openclaw,mb-ten-calls,k8s,cold: Model (replayed),14.9
+end-to-end,openclaw,mb-ten-calls,k8s,cold: Tool execution,6.829
+end-to-end,openclaw,mb-ten-calls,k8s,cold: Harness logic,3.859
+end-to-end,openclaw,mb-ten-calls,k8s,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-ten-calls,k8s,warm: Harness start,0.0
+end-to-end,openclaw,mb-ten-calls,k8s,warm: Model (replayed),15.788
+end-to-end,openclaw,mb-ten-calls,k8s,warm: Tool execution,6.083
+end-to-end,openclaw,mb-ten-calls,k8s,warm: Harness logic,2.706
+end-to-end,openclaw,mb-ten-calls,k8s-agent-sandbox,"cold: Sandbox, bridge and harness container",2.983
+end-to-end,openclaw,mb-ten-calls,k8s-agent-sandbox,cold: Harness start,56.264
+end-to-end,openclaw,mb-ten-calls,k8s-agent-sandbox,cold: Model (replayed),14.899
+end-to-end,openclaw,mb-ten-calls,k8s-agent-sandbox,cold: Tool execution,6.668
+end-to-end,openclaw,mb-ten-calls,k8s-agent-sandbox,cold: Harness logic,3.959
+end-to-end,openclaw,mb-ten-calls,k8s-agent-sandbox,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-ten-calls,k8s-agent-sandbox,warm: Harness start,0.0
+end-to-end,openclaw,mb-ten-calls,k8s-agent-sandbox,warm: Model (replayed),15.789
+end-to-end,openclaw,mb-ten-calls,k8s-agent-sandbox,warm: Tool execution,6.14
+end-to-end,openclaw,mb-ten-calls,k8s-agent-sandbox,warm: Harness logic,2.541
+end-to-end,openclaw,mb-ten-calls,k8s-agent-sandbox-gvisor,"cold: Sandbox, bridge and harness container",3.272
+end-to-end,openclaw,mb-ten-calls,k8s-agent-sandbox-gvisor,cold: Harness start,56.277
+end-to-end,openclaw,mb-ten-calls,k8s-agent-sandbox-gvisor,cold: Model (replayed),14.901
+end-to-end,openclaw,mb-ten-calls,k8s-agent-sandbox-gvisor,cold: Tool execution,7.384
+end-to-end,openclaw,mb-ten-calls,k8s-agent-sandbox-gvisor,cold: Harness logic,3.845
+end-to-end,openclaw,mb-ten-calls,k8s-agent-sandbox-gvisor,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-ten-calls,k8s-agent-sandbox-gvisor,warm: Harness start,0.0
+end-to-end,openclaw,mb-ten-calls,k8s-agent-sandbox-gvisor,warm: Model (replayed),15.788
+end-to-end,openclaw,mb-ten-calls,k8s-agent-sandbox-gvisor,warm: Tool execution,6.677
+end-to-end,openclaw,mb-ten-calls,k8s-agent-sandbox-gvisor,warm: Harness logic,2.546
+end-to-end,openclaw,mb-ten-calls,k8s-agent-sandbox-kata,"cold: Sandbox, bridge and harness container",3.267
+end-to-end,openclaw,mb-ten-calls,k8s-agent-sandbox-kata,cold: Harness start,56.726
+end-to-end,openclaw,mb-ten-calls,k8s-agent-sandbox-kata,cold: Model (replayed),14.9
+end-to-end,openclaw,mb-ten-calls,k8s-agent-sandbox-kata,cold: Tool execution,7.45
+end-to-end,openclaw,mb-ten-calls,k8s-agent-sandbox-kata,cold: Harness logic,3.751
+end-to-end,openclaw,mb-ten-calls,k8s-agent-sandbox-kata,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-ten-calls,k8s-agent-sandbox-kata,warm: Harness start,0.0
+end-to-end,openclaw,mb-ten-calls,k8s-agent-sandbox-kata,warm: Model (replayed),15.788
+end-to-end,openclaw,mb-ten-calls,k8s-agent-sandbox-kata,warm: Tool execution,6.796
+end-to-end,openclaw,mb-ten-calls,k8s-agent-sandbox-kata,warm: Harness logic,2.583
+end-to-end,openclaw,mb-ten-calls,k8s-warm-pool,"cold: Sandbox, bridge and harness container",3.113
+end-to-end,openclaw,mb-ten-calls,k8s-warm-pool,cold: Harness start,56.838
+end-to-end,openclaw,mb-ten-calls,k8s-warm-pool,cold: Model (replayed),14.9
+end-to-end,openclaw,mb-ten-calls,k8s-warm-pool,cold: Tool execution,6.755
+end-to-end,openclaw,mb-ten-calls,k8s-warm-pool,cold: Harness logic,3.688
+end-to-end,openclaw,mb-ten-calls,k8s-warm-pool,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-ten-calls,k8s-warm-pool,warm: Harness start,0.0
+end-to-end,openclaw,mb-ten-calls,k8s-warm-pool,warm: Model (replayed),15.788
+end-to-end,openclaw,mb-ten-calls,k8s-warm-pool,warm: Tool execution,6.109
+end-to-end,openclaw,mb-ten-calls,k8s-warm-pool,warm: Harness logic,2.735
+end-to-end,openclaw,mb-ten-calls,k8s-warm-pool-gvisor,"cold: Sandbox, bridge and harness container",3.096
+end-to-end,openclaw,mb-ten-calls,k8s-warm-pool-gvisor,cold: Harness start,56.024
+end-to-end,openclaw,mb-ten-calls,k8s-warm-pool-gvisor,cold: Model (replayed),14.9
+end-to-end,openclaw,mb-ten-calls,k8s-warm-pool-gvisor,cold: Tool execution,7.407
+end-to-end,openclaw,mb-ten-calls,k8s-warm-pool-gvisor,cold: Harness logic,3.889
+end-to-end,openclaw,mb-ten-calls,k8s-warm-pool-gvisor,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-ten-calls,k8s-warm-pool-gvisor,warm: Harness start,0.0
+end-to-end,openclaw,mb-ten-calls,k8s-warm-pool-gvisor,warm: Model (replayed),15.788
+end-to-end,openclaw,mb-ten-calls,k8s-warm-pool-gvisor,warm: Tool execution,6.736
+end-to-end,openclaw,mb-ten-calls,k8s-warm-pool-gvisor,warm: Harness logic,2.567
+end-to-end,openclaw,mb-ten-calls,k8s-warm-pool-kata,"cold: Sandbox, bridge and harness container",3.089
+end-to-end,openclaw,mb-ten-calls,k8s-warm-pool-kata,cold: Harness start,56.975
+end-to-end,openclaw,mb-ten-calls,k8s-warm-pool-kata,cold: Model (replayed),14.899
+end-to-end,openclaw,mb-ten-calls,k8s-warm-pool-kata,cold: Tool execution,7.5
+end-to-end,openclaw,mb-ten-calls,k8s-warm-pool-kata,cold: Harness logic,3.573
+end-to-end,openclaw,mb-ten-calls,k8s-warm-pool-kata,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-ten-calls,k8s-warm-pool-kata,warm: Harness start,0.0
+end-to-end,openclaw,mb-ten-calls,k8s-warm-pool-kata,warm: Model (replayed),15.788
+end-to-end,openclaw,mb-ten-calls,k8s-warm-pool-kata,warm: Tool execution,6.812
+end-to-end,openclaw,mb-ten-calls,k8s-warm-pool-kata,warm: Harness logic,2.689
+end-to-end,openclaw,mb-cpu,k8s,"cold: Sandbox, bridge and harness container",3.406
+end-to-end,openclaw,mb-cpu,k8s,cold: Harness start,56.411
+end-to-end,openclaw,mb-cpu,k8s,cold: Model (replayed),4.901
+end-to-end,openclaw,mb-cpu,k8s,cold: Tool execution,5.171
+end-to-end,openclaw,mb-cpu,k8s,cold: Harness logic,3.641
+end-to-end,openclaw,mb-cpu,k8s,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-cpu,k8s,warm: Harness start,0.0
+end-to-end,openclaw,mb-cpu,k8s,warm: Model (replayed),3.856
+end-to-end,openclaw,mb-cpu,k8s,warm: Tool execution,4.571
+end-to-end,openclaw,mb-cpu,k8s,warm: Harness logic,2.125
+end-to-end,openclaw,mb-cpu,k8s-agent-sandbox,"cold: Sandbox, bridge and harness container",3.04
+end-to-end,openclaw,mb-cpu,k8s-agent-sandbox,cold: Harness start,56.923
+end-to-end,openclaw,mb-cpu,k8s-agent-sandbox,cold: Model (replayed),4.901
+end-to-end,openclaw,mb-cpu,k8s-agent-sandbox,cold: Tool execution,4.96
+end-to-end,openclaw,mb-cpu,k8s-agent-sandbox,cold: Harness logic,3.5
+end-to-end,openclaw,mb-cpu,k8s-agent-sandbox,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-cpu,k8s-agent-sandbox,warm: Harness start,0.0
+end-to-end,openclaw,mb-cpu,k8s-agent-sandbox,warm: Model (replayed),3.856
+end-to-end,openclaw,mb-cpu,k8s-agent-sandbox,warm: Tool execution,4.537
+end-to-end,openclaw,mb-cpu,k8s-agent-sandbox,warm: Harness logic,2.163
+end-to-end,openclaw,mb-cpu,k8s-agent-sandbox-gvisor,"cold: Sandbox, bridge and harness container",3.273
+end-to-end,openclaw,mb-cpu,k8s-agent-sandbox-gvisor,cold: Harness start,56.541
+end-to-end,openclaw,mb-cpu,k8s-agent-sandbox-gvisor,cold: Model (replayed),4.902
+end-to-end,openclaw,mb-cpu,k8s-agent-sandbox-gvisor,cold: Tool execution,5.256
+end-to-end,openclaw,mb-cpu,k8s-agent-sandbox-gvisor,cold: Harness logic,3.646
+end-to-end,openclaw,mb-cpu,k8s-agent-sandbox-gvisor,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-cpu,k8s-agent-sandbox-gvisor,warm: Harness start,0.0
+end-to-end,openclaw,mb-cpu,k8s-agent-sandbox-gvisor,warm: Model (replayed),3.856
+end-to-end,openclaw,mb-cpu,k8s-agent-sandbox-gvisor,warm: Tool execution,4.653
+end-to-end,openclaw,mb-cpu,k8s-agent-sandbox-gvisor,warm: Harness logic,2.258
+end-to-end,openclaw,mb-cpu,k8s-agent-sandbox-kata,"cold: Sandbox, bridge and harness container",3.267
+end-to-end,openclaw,mb-cpu,k8s-agent-sandbox-kata,cold: Harness start,56.986
+end-to-end,openclaw,mb-cpu,k8s-agent-sandbox-kata,cold: Model (replayed),4.901
+end-to-end,openclaw,mb-cpu,k8s-agent-sandbox-kata,cold: Tool execution,5.4
+end-to-end,openclaw,mb-cpu,k8s-agent-sandbox-kata,cold: Harness logic,3.604
+end-to-end,openclaw,mb-cpu,k8s-agent-sandbox-kata,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-cpu,k8s-agent-sandbox-kata,warm: Harness start,0.0
+end-to-end,openclaw,mb-cpu,k8s-agent-sandbox-kata,warm: Model (replayed),3.856
+end-to-end,openclaw,mb-cpu,k8s-agent-sandbox-kata,warm: Tool execution,4.805
+end-to-end,openclaw,mb-cpu,k8s-agent-sandbox-kata,warm: Harness logic,2.13
+end-to-end,openclaw,mb-cpu,k8s-warm-pool,"cold: Sandbox, bridge and harness container",3.106
+end-to-end,openclaw,mb-cpu,k8s-warm-pool,cold: Harness start,57.904
+end-to-end,openclaw,mb-cpu,k8s-warm-pool,cold: Model (replayed),4.902
+end-to-end,openclaw,mb-cpu,k8s-warm-pool,cold: Tool execution,5.043
+end-to-end,openclaw,mb-cpu,k8s-warm-pool,cold: Harness logic,3.371
+end-to-end,openclaw,mb-cpu,k8s-warm-pool,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-cpu,k8s-warm-pool,warm: Harness start,0.0
+end-to-end,openclaw,mb-cpu,k8s-warm-pool,warm: Model (replayed),3.856
+end-to-end,openclaw,mb-cpu,k8s-warm-pool,warm: Tool execution,4.532
+end-to-end,openclaw,mb-cpu,k8s-warm-pool,warm: Harness logic,2.431
+end-to-end,openclaw,mb-cpu,k8s-warm-pool-gvisor,"cold: Sandbox, bridge and harness container",3.102
+end-to-end,openclaw,mb-cpu,k8s-warm-pool-gvisor,cold: Harness start,56.671
+end-to-end,openclaw,mb-cpu,k8s-warm-pool-gvisor,cold: Model (replayed),4.901
+end-to-end,openclaw,mb-cpu,k8s-warm-pool-gvisor,cold: Tool execution,5.192
+end-to-end,openclaw,mb-cpu,k8s-warm-pool-gvisor,cold: Harness logic,3.429
+end-to-end,openclaw,mb-cpu,k8s-warm-pool-gvisor,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-cpu,k8s-warm-pool-gvisor,warm: Harness start,0.0
+end-to-end,openclaw,mb-cpu,k8s-warm-pool-gvisor,warm: Model (replayed),3.856
+end-to-end,openclaw,mb-cpu,k8s-warm-pool-gvisor,warm: Tool execution,4.675
+end-to-end,openclaw,mb-cpu,k8s-warm-pool-gvisor,warm: Harness logic,2.371
+end-to-end,openclaw,mb-cpu,k8s-warm-pool-kata,"cold: Sandbox, bridge and harness container",3.094
+end-to-end,openclaw,mb-cpu,k8s-warm-pool-kata,cold: Harness start,57.76
+end-to-end,openclaw,mb-cpu,k8s-warm-pool-kata,cold: Model (replayed),4.902
+end-to-end,openclaw,mb-cpu,k8s-warm-pool-kata,cold: Tool execution,5.578
+end-to-end,openclaw,mb-cpu,k8s-warm-pool-kata,cold: Harness logic,4.035
+end-to-end,openclaw,mb-cpu,k8s-warm-pool-kata,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-cpu,k8s-warm-pool-kata,warm: Harness start,0.0
+end-to-end,openclaw,mb-cpu,k8s-warm-pool-kata,warm: Model (replayed),3.856
+end-to-end,openclaw,mb-cpu,k8s-warm-pool-kata,warm: Tool execution,4.853
+end-to-end,openclaw,mb-cpu,k8s-warm-pool-kata,warm: Harness logic,2.166
+end-to-end,openclaw,mb-output,k8s,"cold: Sandbox, bridge and harness container",3.4
+end-to-end,openclaw,mb-output,k8s,cold: Harness start,56.615
+end-to-end,openclaw,mb-output,k8s,cold: Model (replayed),2.965
+end-to-end,openclaw,mb-output,k8s,cold: Tool execution,1.551
+end-to-end,openclaw,mb-output,k8s,cold: Harness logic,3.374
+end-to-end,openclaw,mb-output,k8s,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-output,k8s,warm: Harness start,0.0
+end-to-end,openclaw,mb-output,k8s,warm: Model (replayed),3.081
+end-to-end,openclaw,mb-output,k8s,warm: Tool execution,1.051
+end-to-end,openclaw,mb-output,k8s,warm: Harness logic,2.07
+end-to-end,openclaw,mb-output,k8s-agent-sandbox,"cold: Sandbox, bridge and harness container",3.163
+end-to-end,openclaw,mb-output,k8s-agent-sandbox,cold: Harness start,56.83
+end-to-end,openclaw,mb-output,k8s-agent-sandbox,cold: Model (replayed),2.965
+end-to-end,openclaw,mb-output,k8s-agent-sandbox,cold: Tool execution,1.494
+end-to-end,openclaw,mb-output,k8s-agent-sandbox,cold: Harness logic,3.523
+end-to-end,openclaw,mb-output,k8s-agent-sandbox,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-output,k8s-agent-sandbox,warm: Harness start,0.0
+end-to-end,openclaw,mb-output,k8s-agent-sandbox,warm: Model (replayed),3.08
+end-to-end,openclaw,mb-output,k8s-agent-sandbox,warm: Tool execution,1.057
+end-to-end,openclaw,mb-output,k8s-agent-sandbox,warm: Harness logic,1.891
+end-to-end,openclaw,mb-output,k8s-agent-sandbox-gvisor,"cold: Sandbox, bridge and harness container",3.27
+end-to-end,openclaw,mb-output,k8s-agent-sandbox-gvisor,cold: Harness start,57.101
+end-to-end,openclaw,mb-output,k8s-agent-sandbox-gvisor,cold: Model (replayed),2.965
+end-to-end,openclaw,mb-output,k8s-agent-sandbox-gvisor,cold: Tool execution,1.585
+end-to-end,openclaw,mb-output,k8s-agent-sandbox-gvisor,cold: Harness logic,3.249
+end-to-end,openclaw,mb-output,k8s-agent-sandbox-gvisor,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-output,k8s-agent-sandbox-gvisor,warm: Harness start,0.0
+end-to-end,openclaw,mb-output,k8s-agent-sandbox-gvisor,warm: Model (replayed),3.081
+end-to-end,openclaw,mb-output,k8s-agent-sandbox-gvisor,warm: Tool execution,1.169
+end-to-end,openclaw,mb-output,k8s-agent-sandbox-gvisor,warm: Harness logic,1.883
+end-to-end,openclaw,mb-output,k8s-agent-sandbox-kata,"cold: Sandbox, bridge and harness container",3.27
+end-to-end,openclaw,mb-output,k8s-agent-sandbox-kata,cold: Harness start,56.513
+end-to-end,openclaw,mb-output,k8s-agent-sandbox-kata,cold: Model (replayed),2.966
+end-to-end,openclaw,mb-output,k8s-agent-sandbox-kata,cold: Tool execution,1.794
+end-to-end,openclaw,mb-output,k8s-agent-sandbox-kata,cold: Harness logic,3.305
+end-to-end,openclaw,mb-output,k8s-agent-sandbox-kata,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-output,k8s-agent-sandbox-kata,warm: Harness start,0.0
+end-to-end,openclaw,mb-output,k8s-agent-sandbox-kata,warm: Model (replayed),3.081
+end-to-end,openclaw,mb-output,k8s-agent-sandbox-kata,warm: Tool execution,1.159
+end-to-end,openclaw,mb-output,k8s-agent-sandbox-kata,warm: Harness logic,2.2
+end-to-end,openclaw,mb-output,k8s-warm-pool,"cold: Sandbox, bridge and harness container",3.112
+end-to-end,openclaw,mb-output,k8s-warm-pool,cold: Harness start,56.533
+end-to-end,openclaw,mb-output,k8s-warm-pool,cold: Model (replayed),2.965
+end-to-end,openclaw,mb-output,k8s-warm-pool,cold: Tool execution,1.476
+end-to-end,openclaw,mb-output,k8s-warm-pool,cold: Harness logic,3.668
+end-to-end,openclaw,mb-output,k8s-warm-pool,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-output,k8s-warm-pool,warm: Harness start,0.0
+end-to-end,openclaw,mb-output,k8s-warm-pool,warm: Model (replayed),3.081
+end-to-end,openclaw,mb-output,k8s-warm-pool,warm: Tool execution,1.057
+end-to-end,openclaw,mb-output,k8s-warm-pool,warm: Harness logic,1.897
+end-to-end,openclaw,mb-output,k8s-warm-pool-gvisor,"cold: Sandbox, bridge and harness container",3.105
+end-to-end,openclaw,mb-output,k8s-warm-pool-gvisor,cold: Harness start,57.896
+end-to-end,openclaw,mb-output,k8s-warm-pool-gvisor,cold: Model (replayed),2.965
+end-to-end,openclaw,mb-output,k8s-warm-pool-gvisor,cold: Tool execution,1.662
+end-to-end,openclaw,mb-output,k8s-warm-pool-gvisor,cold: Harness logic,3.586
+end-to-end,openclaw,mb-output,k8s-warm-pool-gvisor,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-output,k8s-warm-pool-gvisor,warm: Harness start,0.0
+end-to-end,openclaw,mb-output,k8s-warm-pool-gvisor,warm: Model (replayed),3.081
+end-to-end,openclaw,mb-output,k8s-warm-pool-gvisor,warm: Tool execution,1.171
+end-to-end,openclaw,mb-output,k8s-warm-pool-gvisor,warm: Harness logic,1.89
+end-to-end,openclaw,mb-output,k8s-warm-pool-kata,"cold: Sandbox, bridge and harness container",3.096
+end-to-end,openclaw,mb-output,k8s-warm-pool-kata,cold: Harness start,57.352
+end-to-end,openclaw,mb-output,k8s-warm-pool-kata,cold: Model (replayed),2.965
+end-to-end,openclaw,mb-output,k8s-warm-pool-kata,cold: Tool execution,1.652
+end-to-end,openclaw,mb-output,k8s-warm-pool-kata,cold: Harness logic,3.541
+end-to-end,openclaw,mb-output,k8s-warm-pool-kata,"warm: Sandbox, bridge and harness container",0.0
+end-to-end,openclaw,mb-output,k8s-warm-pool-kata,warm: Harness start,0.0
+end-to-end,openclaw,mb-output,k8s-warm-pool-kata,warm: Model (replayed),3.08
+end-to-end,openclaw,mb-output,k8s-warm-pool-kata,warm: Tool execution,1.145
+end-to-end,openclaw,mb-output,k8s-warm-pool-kata,warm: Harness logic,2.143
+after-answer,hermes,all tasks,k8s,Collect artifacts,3.086
+after-answer,hermes,all tasks,k8s,"Stop harness, revoke bridge access",1.841
+after-answer,hermes,all tasks,k8s,Evaluate,1.675
+after-answer,hermes,all tasks,k8s,Clean up,3.481
+after-answer,hermes,all tasks,k8s-agent-sandbox,Collect artifacts,3.098
+after-answer,hermes,all tasks,k8s-agent-sandbox,"Stop harness, revoke bridge access",1.886
+after-answer,hermes,all tasks,k8s-agent-sandbox,Evaluate,1.676
+after-answer,hermes,all tasks,k8s-agent-sandbox,Clean up,3.907
+after-answer,hermes,all tasks,k8s-agent-sandbox-gvisor,Collect artifacts,3.109
+after-answer,hermes,all tasks,k8s-agent-sandbox-gvisor,"Stop harness, revoke bridge access",1.916
+after-answer,hermes,all tasks,k8s-agent-sandbox-gvisor,Evaluate,1.968
+after-answer,hermes,all tasks,k8s-agent-sandbox-gvisor,Clean up,2.097
+after-answer,hermes,all tasks,k8s-agent-sandbox-kata,Collect artifacts,3.108
+after-answer,hermes,all tasks,k8s-agent-sandbox-kata,"Stop harness, revoke bridge access",1.927
+after-answer,hermes,all tasks,k8s-agent-sandbox-kata,Evaluate,1.964
+after-answer,hermes,all tasks,k8s-agent-sandbox-kata,Clean up,2.095
+after-answer,hermes,all tasks,k8s-warm-pool,Collect artifacts,3.131
+after-answer,hermes,all tasks,k8s-warm-pool,"Stop harness, revoke bridge access",1.889
+after-answer,hermes,all tasks,k8s-warm-pool,Evaluate,1.676
+after-answer,hermes,all tasks,k8s-warm-pool,Clean up,4.539
+after-answer,hermes,all tasks,k8s-warm-pool-gvisor,Collect artifacts,3.117
+after-answer,hermes,all tasks,k8s-warm-pool-gvisor,"Stop harness, revoke bridge access",1.999
+after-answer,hermes,all tasks,k8s-warm-pool-gvisor,Evaluate,1.975
+after-answer,hermes,all tasks,k8s-warm-pool-gvisor,Clean up,2.242
+after-answer,hermes,all tasks,k8s-warm-pool-kata,Collect artifacts,3.114
+after-answer,hermes,all tasks,k8s-warm-pool-kata,"Stop harness, revoke bridge access",1.855
+after-answer,hermes,all tasks,k8s-warm-pool-kata,Evaluate,1.966
+after-answer,hermes,all tasks,k8s-warm-pool-kata,Clean up,2.314
+after-answer,openclaw,all tasks,k8s,Collect artifacts,0.57
+after-answer,openclaw,all tasks,k8s,"Stop harness, revoke bridge access",2.849
+after-answer,openclaw,all tasks,k8s,Evaluate,1.652
+after-answer,openclaw,all tasks,k8s,Clean up,3.349
+after-answer,openclaw,all tasks,k8s-agent-sandbox,Collect artifacts,0.572
+after-answer,openclaw,all tasks,k8s-agent-sandbox,"Stop harness, revoke bridge access",2.927
+after-answer,openclaw,all tasks,k8s-agent-sandbox,Evaluate,1.655
+after-answer,openclaw,all tasks,k8s-agent-sandbox,Clean up,3.649
+after-answer,openclaw,all tasks,k8s-agent-sandbox-gvisor,Collect artifacts,0.574
+after-answer,openclaw,all tasks,k8s-agent-sandbox-gvisor,"Stop harness, revoke bridge access",2.718
+after-answer,openclaw,all tasks,k8s-agent-sandbox-gvisor,Evaluate,1.938
+after-answer,openclaw,all tasks,k8s-agent-sandbox-gvisor,Clean up,2.053
+after-answer,openclaw,all tasks,k8s-agent-sandbox-kata,Collect artifacts,0.575
+after-answer,openclaw,all tasks,k8s-agent-sandbox-kata,"Stop harness, revoke bridge access",2.8
+after-answer,openclaw,all tasks,k8s-agent-sandbox-kata,Evaluate,1.96
+after-answer,openclaw,all tasks,k8s-agent-sandbox-kata,Clean up,2.055
+after-answer,openclaw,all tasks,k8s-warm-pool,Collect artifacts,0.571
+after-answer,openclaw,all tasks,k8s-warm-pool,"Stop harness, revoke bridge access",2.837
+after-answer,openclaw,all tasks,k8s-warm-pool,Evaluate,1.659
+after-answer,openclaw,all tasks,k8s-warm-pool,Clean up,4.563
+after-answer,openclaw,all tasks,k8s-warm-pool-gvisor,Collect artifacts,0.571
+after-answer,openclaw,all tasks,k8s-warm-pool-gvisor,"Stop harness, revoke bridge access",2.755
+after-answer,openclaw,all tasks,k8s-warm-pool-gvisor,Evaluate,1.945
+after-answer,openclaw,all tasks,k8s-warm-pool-gvisor,Clean up,2.238
+after-answer,openclaw,all tasks,k8s-warm-pool-kata,Collect artifacts,0.573
+after-answer,openclaw,all tasks,k8s-warm-pool-kata,"Stop harness, revoke bridge access",2.739
+after-answer,openclaw,all tasks,k8s-warm-pool-kata,Evaluate,1.966
+after-answer,openclaw,all tasks,k8s-warm-pool-kata,Clean up,2.338
+task-breakdown,hermes,mb-noop,k8s,"cold: Sandbox, bridge and harness container",2.459
+task-breakdown,hermes,mb-noop,k8s,cold: Harness start,12.034
+task-breakdown,hermes,mb-noop,k8s,cold: Model (replayed),0.923
+task-breakdown,hermes,mb-noop,k8s,cold: Tool execution,0.0
+task-breakdown,hermes,mb-noop,k8s,cold: Harness logic,9.802
+task-breakdown,hermes,mb-noop,k8s,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-noop,k8s,warm: Harness start,0.0
+task-breakdown,hermes,mb-noop,k8s,warm: Model (replayed),1.283
+task-breakdown,hermes,mb-noop,k8s,warm: Tool execution,0.0
+task-breakdown,hermes,mb-noop,k8s,warm: Harness logic,0.359
+task-breakdown,hermes,mb-noop,k8s,after: Collect artifacts,3.054
+task-breakdown,hermes,mb-noop,k8s,"after: Stop harness, revoke bridge access",1.991
+task-breakdown,hermes,mb-noop,k8s,after: Evaluate,1.666
+task-breakdown,hermes,mb-noop,k8s,after: Clean up,3.334
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox,"cold: Sandbox, bridge and harness container",2.277
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox,cold: Harness start,12.05
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox,cold: Model (replayed),0.923
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox,cold: Tool execution,0.0
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox,cold: Harness logic,9.424
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox,warm: Harness start,0.0
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox,warm: Model (replayed),1.283
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox,warm: Tool execution,0.0
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox,warm: Harness logic,0.358
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox,after: Collect artifacts,3.106
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox,"after: Stop harness, revoke bridge access",1.907
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox,after: Evaluate,1.669
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox,after: Clean up,3.977
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox-gvisor,"cold: Sandbox, bridge and harness container",2.236
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox-gvisor,cold: Harness start,11.988
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox-gvisor,cold: Model (replayed),0.923
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox-gvisor,cold: Tool execution,0.0
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox-gvisor,cold: Harness logic,9.72
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox-gvisor,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox-gvisor,warm: Harness start,0.0
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox-gvisor,warm: Model (replayed),1.283
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox-gvisor,warm: Tool execution,0.0
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox-gvisor,warm: Harness logic,0.36
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox-gvisor,after: Collect artifacts,3.113
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox-gvisor,"after: Stop harness, revoke bridge access",1.86
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox-gvisor,after: Evaluate,1.946
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox-gvisor,after: Clean up,2.111
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox-kata,"cold: Sandbox, bridge and harness container",2.256
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox-kata,cold: Harness start,12.257
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox-kata,cold: Model (replayed),0.923
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox-kata,cold: Tool execution,0.0
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox-kata,cold: Harness logic,9.284
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox-kata,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox-kata,warm: Harness start,0.0
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox-kata,warm: Model (replayed),1.283
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox-kata,warm: Tool execution,0.0
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox-kata,warm: Harness logic,0.359
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox-kata,after: Collect artifacts,3.109
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox-kata,"after: Stop harness, revoke bridge access",1.84
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox-kata,after: Evaluate,1.953
+task-breakdown,hermes,mb-noop,k8s-agent-sandbox-kata,after: Clean up,2.116
+task-breakdown,hermes,mb-noop,k8s-warm-pool,"cold: Sandbox, bridge and harness container",2.091
+task-breakdown,hermes,mb-noop,k8s-warm-pool,cold: Harness start,12.329
+task-breakdown,hermes,mb-noop,k8s-warm-pool,cold: Model (replayed),0.923
+task-breakdown,hermes,mb-noop,k8s-warm-pool,cold: Tool execution,0.0
+task-breakdown,hermes,mb-noop,k8s-warm-pool,cold: Harness logic,9.707
+task-breakdown,hermes,mb-noop,k8s-warm-pool,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-noop,k8s-warm-pool,warm: Harness start,0.0
+task-breakdown,hermes,mb-noop,k8s-warm-pool,warm: Model (replayed),1.283
+task-breakdown,hermes,mb-noop,k8s-warm-pool,warm: Tool execution,0.0
+task-breakdown,hermes,mb-noop,k8s-warm-pool,warm: Harness logic,0.359
+task-breakdown,hermes,mb-noop,k8s-warm-pool,after: Collect artifacts,3.102
+task-breakdown,hermes,mb-noop,k8s-warm-pool,"after: Stop harness, revoke bridge access",1.95
+task-breakdown,hermes,mb-noop,k8s-warm-pool,after: Evaluate,1.674
+task-breakdown,hermes,mb-noop,k8s-warm-pool,after: Clean up,4.565
+task-breakdown,hermes,mb-noop,k8s-warm-pool-gvisor,"cold: Sandbox, bridge and harness container",2.086
+task-breakdown,hermes,mb-noop,k8s-warm-pool-gvisor,cold: Harness start,12.131
+task-breakdown,hermes,mb-noop,k8s-warm-pool-gvisor,cold: Model (replayed),0.922
+task-breakdown,hermes,mb-noop,k8s-warm-pool-gvisor,cold: Tool execution,0.0
+task-breakdown,hermes,mb-noop,k8s-warm-pool-gvisor,cold: Harness logic,9.914
+task-breakdown,hermes,mb-noop,k8s-warm-pool-gvisor,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-noop,k8s-warm-pool-gvisor,warm: Harness start,0.0
+task-breakdown,hermes,mb-noop,k8s-warm-pool-gvisor,warm: Model (replayed),1.283
+task-breakdown,hermes,mb-noop,k8s-warm-pool-gvisor,warm: Tool execution,0.0
+task-breakdown,hermes,mb-noop,k8s-warm-pool-gvisor,warm: Harness logic,0.364
+task-breakdown,hermes,mb-noop,k8s-warm-pool-gvisor,after: Collect artifacts,3.126
+task-breakdown,hermes,mb-noop,k8s-warm-pool-gvisor,"after: Stop harness, revoke bridge access",1.929
+task-breakdown,hermes,mb-noop,k8s-warm-pool-gvisor,after: Evaluate,1.963
+task-breakdown,hermes,mb-noop,k8s-warm-pool-gvisor,after: Clean up,2.268
+task-breakdown,hermes,mb-noop,k8s-warm-pool-kata,"cold: Sandbox, bridge and harness container",2.076
+task-breakdown,hermes,mb-noop,k8s-warm-pool-kata,cold: Harness start,12.215
+task-breakdown,hermes,mb-noop,k8s-warm-pool-kata,cold: Model (replayed),0.922
+task-breakdown,hermes,mb-noop,k8s-warm-pool-kata,cold: Tool execution,0.0
+task-breakdown,hermes,mb-noop,k8s-warm-pool-kata,cold: Harness logic,9.588
+task-breakdown,hermes,mb-noop,k8s-warm-pool-kata,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-noop,k8s-warm-pool-kata,warm: Harness start,0.0
+task-breakdown,hermes,mb-noop,k8s-warm-pool-kata,warm: Model (replayed),1.283
+task-breakdown,hermes,mb-noop,k8s-warm-pool-kata,warm: Tool execution,0.0
+task-breakdown,hermes,mb-noop,k8s-warm-pool-kata,warm: Harness logic,0.36
+task-breakdown,hermes,mb-noop,k8s-warm-pool-kata,after: Collect artifacts,3.129
+task-breakdown,hermes,mb-noop,k8s-warm-pool-kata,"after: Stop harness, revoke bridge access",1.969
+task-breakdown,hermes,mb-noop,k8s-warm-pool-kata,after: Evaluate,1.953
+task-breakdown,hermes,mb-noop,k8s-warm-pool-kata,after: Clean up,2.276
+task-breakdown,openclaw,mb-noop,k8s,"cold: Sandbox, bridge and harness container",3.459
+task-breakdown,openclaw,mb-noop,k8s,cold: Harness start,56.385
+task-breakdown,openclaw,mb-noop,k8s,cold: Model (replayed),1.187
+task-breakdown,openclaw,mb-noop,k8s,cold: Tool execution,0.0
+task-breakdown,openclaw,mb-noop,k8s,cold: Harness logic,3.273
+task-breakdown,openclaw,mb-noop,k8s,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-noop,k8s,warm: Harness start,0.0
+task-breakdown,openclaw,mb-noop,k8s,warm: Model (replayed),0.735
+task-breakdown,openclaw,mb-noop,k8s,warm: Tool execution,0.0
+task-breakdown,openclaw,mb-noop,k8s,warm: Harness logic,1.582
+task-breakdown,openclaw,mb-noop,k8s,after: Collect artifacts,0.568
+task-breakdown,openclaw,mb-noop,k8s,"after: Stop harness, revoke bridge access",2.631
+task-breakdown,openclaw,mb-noop,k8s,after: Evaluate,1.646
+task-breakdown,openclaw,mb-noop,k8s,after: Clean up,3.291
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox,"cold: Sandbox, bridge and harness container",3.289
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox,cold: Harness start,56.865
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox,cold: Model (replayed),1.187
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox,cold: Tool execution,0.0
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox,cold: Harness logic,3.061
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox,warm: Harness start,0.0
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox,warm: Model (replayed),0.735
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox,warm: Tool execution,0.0
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox,warm: Harness logic,1.765
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox,after: Collect artifacts,0.565
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox,"after: Stop harness, revoke bridge access",2.639
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox,after: Evaluate,1.651
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox,after: Clean up,3.604
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox-gvisor,"cold: Sandbox, bridge and harness container",3.273
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox-gvisor,cold: Harness start,55.839
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox-gvisor,cold: Model (replayed),1.187
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox-gvisor,cold: Tool execution,0.0
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox-gvisor,cold: Harness logic,3.461
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox-gvisor,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox-gvisor,warm: Harness start,0.0
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox-gvisor,warm: Model (replayed),0.735
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox-gvisor,warm: Tool execution,0.0
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox-gvisor,warm: Harness logic,1.863
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox-gvisor,after: Collect artifacts,0.57
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox-gvisor,"after: Stop harness, revoke bridge access",2.419
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox-gvisor,after: Evaluate,1.933
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox-gvisor,after: Clean up,1.999
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox-kata,"cold: Sandbox, bridge and harness container",3.266
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox-kata,cold: Harness start,57.105
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox-kata,cold: Model (replayed),1.187
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox-kata,cold: Tool execution,0.0
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox-kata,cold: Harness logic,3.457
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox-kata,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox-kata,warm: Harness start,0.0
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox-kata,warm: Model (replayed),0.735
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox-kata,warm: Tool execution,0.0
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox-kata,warm: Harness logic,1.86
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox-kata,after: Collect artifacts,0.564
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox-kata,"after: Stop harness, revoke bridge access",2.652
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox-kata,after: Evaluate,1.958
+task-breakdown,openclaw,mb-noop,k8s-agent-sandbox-kata,after: Clean up,2.098
+task-breakdown,openclaw,mb-noop,k8s-warm-pool,"cold: Sandbox, bridge and harness container",3.127
+task-breakdown,openclaw,mb-noop,k8s-warm-pool,cold: Harness start,57.313
+task-breakdown,openclaw,mb-noop,k8s-warm-pool,cold: Model (replayed),1.186
+task-breakdown,openclaw,mb-noop,k8s-warm-pool,cold: Tool execution,0.0
+task-breakdown,openclaw,mb-noop,k8s-warm-pool,cold: Harness logic,3.43
+task-breakdown,openclaw,mb-noop,k8s-warm-pool,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-noop,k8s-warm-pool,warm: Harness start,0.0
+task-breakdown,openclaw,mb-noop,k8s-warm-pool,warm: Model (replayed),0.735
+task-breakdown,openclaw,mb-noop,k8s-warm-pool,warm: Tool execution,0.0
+task-breakdown,openclaw,mb-noop,k8s-warm-pool,warm: Harness logic,1.829
+task-breakdown,openclaw,mb-noop,k8s-warm-pool,after: Collect artifacts,0.563
+task-breakdown,openclaw,mb-noop,k8s-warm-pool,"after: Stop harness, revoke bridge access",2.706
+task-breakdown,openclaw,mb-noop,k8s-warm-pool,after: Evaluate,1.654
+task-breakdown,openclaw,mb-noop,k8s-warm-pool,after: Clean up,4.577
+task-breakdown,openclaw,mb-noop,k8s-warm-pool-gvisor,"cold: Sandbox, bridge and harness container",3.105
+task-breakdown,openclaw,mb-noop,k8s-warm-pool-gvisor,cold: Harness start,57.596
+task-breakdown,openclaw,mb-noop,k8s-warm-pool-gvisor,cold: Model (replayed),1.187
+task-breakdown,openclaw,mb-noop,k8s-warm-pool-gvisor,cold: Tool execution,0.0
+task-breakdown,openclaw,mb-noop,k8s-warm-pool-gvisor,cold: Harness logic,3.435
+task-breakdown,openclaw,mb-noop,k8s-warm-pool-gvisor,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-noop,k8s-warm-pool-gvisor,warm: Harness start,0.0
+task-breakdown,openclaw,mb-noop,k8s-warm-pool-gvisor,warm: Model (replayed),0.735
+task-breakdown,openclaw,mb-noop,k8s-warm-pool-gvisor,warm: Tool execution,0.0
+task-breakdown,openclaw,mb-noop,k8s-warm-pool-gvisor,warm: Harness logic,1.898
+task-breakdown,openclaw,mb-noop,k8s-warm-pool-gvisor,after: Collect artifacts,0.564
+task-breakdown,openclaw,mb-noop,k8s-warm-pool-gvisor,"after: Stop harness, revoke bridge access",2.491
+task-breakdown,openclaw,mb-noop,k8s-warm-pool-gvisor,after: Evaluate,1.937
+task-breakdown,openclaw,mb-noop,k8s-warm-pool-gvisor,after: Clean up,2.16
+task-breakdown,openclaw,mb-noop,k8s-warm-pool-kata,"cold: Sandbox, bridge and harness container",3.102
+task-breakdown,openclaw,mb-noop,k8s-warm-pool-kata,cold: Harness start,58.411
+task-breakdown,openclaw,mb-noop,k8s-warm-pool-kata,cold: Model (replayed),1.186
+task-breakdown,openclaw,mb-noop,k8s-warm-pool-kata,cold: Tool execution,0.0
+task-breakdown,openclaw,mb-noop,k8s-warm-pool-kata,cold: Harness logic,3.645
+task-breakdown,openclaw,mb-noop,k8s-warm-pool-kata,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-noop,k8s-warm-pool-kata,warm: Harness start,0.0
+task-breakdown,openclaw,mb-noop,k8s-warm-pool-kata,warm: Model (replayed),0.735
+task-breakdown,openclaw,mb-noop,k8s-warm-pool-kata,warm: Tool execution,0.0
+task-breakdown,openclaw,mb-noop,k8s-warm-pool-kata,warm: Harness logic,1.666
+task-breakdown,openclaw,mb-noop,k8s-warm-pool-kata,after: Collect artifacts,0.566
+task-breakdown,openclaw,mb-noop,k8s-warm-pool-kata,"after: Stop harness, revoke bridge access",2.774
+task-breakdown,openclaw,mb-noop,k8s-warm-pool-kata,after: Evaluate,1.958
+task-breakdown,openclaw,mb-noop,k8s-warm-pool-kata,after: Clean up,2.26
+task-resources,hermes,mb-noop,k8s,"Harness CPU peak (cores), repetition 4.0",1.66
+task-resources,hermes,mb-noop,k8s-agent-sandbox,"Harness CPU peak (cores), repetition 1.0",1.85
+task-resources,hermes,mb-noop,k8s-agent-sandbox-gvisor,"Harness CPU peak (cores), repetition 4.0",1.55
+task-resources,hermes,mb-noop,k8s-agent-sandbox-kata,"Harness CPU peak (cores), repetition 2.0",1.79
+task-resources,hermes,mb-noop,k8s-warm-pool,"Harness CPU peak (cores), repetition 3.0",1.75
+task-resources,hermes,mb-noop,k8s-warm-pool-gvisor,"Harness CPU peak (cores), repetition 5.0",1.82
+task-resources,hermes,mb-noop,k8s-warm-pool-kata,"Harness CPU peak (cores), repetition 3.0",1.95
+task-resources,hermes,mb-noop,k8s,"Sandbox CPU peak (cores), repetition 4.0",0.09
+task-resources,hermes,mb-noop,k8s-agent-sandbox,"Sandbox CPU peak (cores), repetition 1.0",0.12
+task-resources,hermes,mb-noop,k8s-agent-sandbox-gvisor,"Sandbox CPU peak (cores), repetition 4.0",0.65
+task-resources,hermes,mb-noop,k8s-agent-sandbox-kata,"Sandbox CPU peak (cores), repetition 2.0",0.53
+task-resources,hermes,mb-noop,k8s-warm-pool,"Sandbox CPU peak (cores), repetition 3.0",0.11
+task-resources,hermes,mb-noop,k8s-warm-pool-gvisor,"Sandbox CPU peak (cores), repetition 5.0",0.48
+task-resources,hermes,mb-noop,k8s-warm-pool-kata,"Sandbox CPU peak (cores), repetition 3.0",0.54
+task-resources,hermes,mb-noop,k8s,"Harness memory peak (MiB), repetition 4.0",270.53
+task-resources,hermes,mb-noop,k8s-agent-sandbox,"Harness memory peak (MiB), repetition 1.0",260.76
+task-resources,hermes,mb-noop,k8s-agent-sandbox-gvisor,"Harness memory peak (MiB), repetition 4.0",269.54
+task-resources,hermes,mb-noop,k8s-agent-sandbox-kata,"Harness memory peak (MiB), repetition 2.0",266.47
+task-resources,hermes,mb-noop,k8s-warm-pool,"Harness memory peak (MiB), repetition 3.0",275.73
+task-resources,hermes,mb-noop,k8s-warm-pool-gvisor,"Harness memory peak (MiB), repetition 5.0",277.31
+task-resources,hermes,mb-noop,k8s-warm-pool-kata,"Harness memory peak (MiB), repetition 3.0",274.96
+task-resources,openclaw,mb-noop,k8s,"Harness CPU peak (cores), repetition 1.0",2.58
+task-resources,openclaw,mb-noop,k8s-agent-sandbox,"Harness CPU peak (cores), repetition 3.0",2.46
+task-resources,openclaw,mb-noop,k8s-agent-sandbox-gvisor,"Harness CPU peak (cores), repetition 3.0",4.05
+task-resources,openclaw,mb-noop,k8s-agent-sandbox-kata,"Harness CPU peak (cores), repetition 5.0",1.8
+task-resources,openclaw,mb-noop,k8s-warm-pool,"Harness CPU peak (cores), repetition 2.0",3.83
+task-resources,openclaw,mb-noop,k8s-warm-pool-gvisor,"Harness CPU peak (cores), repetition 2.0",1.89
+task-resources,openclaw,mb-noop,k8s-warm-pool-kata,"Harness CPU peak (cores), repetition 2.0",2.03
+task-resources,openclaw,mb-noop,k8s,"Sandbox CPU peak (cores), repetition 1.0",0.07
+task-resources,openclaw,mb-noop,k8s-agent-sandbox,"Sandbox CPU peak (cores), repetition 3.0",0.1
+task-resources,openclaw,mb-noop,k8s-agent-sandbox-gvisor,"Sandbox CPU peak (cores), repetition 3.0",0.26
+task-resources,openclaw,mb-noop,k8s-agent-sandbox-kata,"Sandbox CPU peak (cores), repetition 5.0",0.57
+task-resources,openclaw,mb-noop,k8s-warm-pool,"Sandbox CPU peak (cores), repetition 2.0",0.11
+task-resources,openclaw,mb-noop,k8s-warm-pool-gvisor,"Sandbox CPU peak (cores), repetition 2.0",0.23
+task-resources,openclaw,mb-noop,k8s-warm-pool-kata,"Sandbox CPU peak (cores), repetition 2.0",0.57
+task-resources,openclaw,mb-noop,k8s,"Harness memory peak (MiB), repetition 1.0",840.73
+task-resources,openclaw,mb-noop,k8s-agent-sandbox,"Harness memory peak (MiB), repetition 3.0",793.65
+task-resources,openclaw,mb-noop,k8s-agent-sandbox-gvisor,"Harness memory peak (MiB), repetition 3.0",830.96
+task-resources,openclaw,mb-noop,k8s-agent-sandbox-kata,"Harness memory peak (MiB), repetition 5.0",784.78
+task-resources,openclaw,mb-noop,k8s-warm-pool,"Harness memory peak (MiB), repetition 2.0",785.55
+task-resources,openclaw,mb-noop,k8s-warm-pool-gvisor,"Harness memory peak (MiB), repetition 2.0",787.77
+task-resources,openclaw,mb-noop,k8s-warm-pool-kata,"Harness memory peak (MiB), repetition 2.0",818.16
+task-breakdown,hermes,mb-one-call,k8s,"cold: Sandbox, bridge and harness container",2.33
+task-breakdown,hermes,mb-one-call,k8s,cold: Harness start,12.236
+task-breakdown,hermes,mb-one-call,k8s,cold: Model (replayed),2.403
+task-breakdown,hermes,mb-one-call,k8s,cold: Tool execution,1.232
+task-breakdown,hermes,mb-one-call,k8s,cold: Harness logic,9.612
+task-breakdown,hermes,mb-one-call,k8s,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-one-call,k8s,warm: Harness start,0.0
+task-breakdown,hermes,mb-one-call,k8s,warm: Model (replayed),2.07
+task-breakdown,hermes,mb-one-call,k8s,warm: Tool execution,1.167
+task-breakdown,hermes,mb-one-call,k8s,warm: Harness logic,0.397
+task-breakdown,hermes,mb-one-call,k8s,after: Collect artifacts,3.129
+task-breakdown,hermes,mb-one-call,k8s,"after: Stop harness, revoke bridge access",1.609
+task-breakdown,hermes,mb-one-call,k8s,after: Evaluate,1.673
+task-breakdown,hermes,mb-one-call,k8s,after: Clean up,3.653
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox,"cold: Sandbox, bridge and harness container",2.072
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox,cold: Harness start,11.853
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox,cold: Model (replayed),2.404
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox,cold: Tool execution,1.217
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox,cold: Harness logic,9.662
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox,warm: Harness start,0.0
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox,warm: Model (replayed),2.07
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox,warm: Tool execution,1.149
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox,warm: Harness logic,0.392
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox,after: Collect artifacts,3.158
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox,"after: Stop harness, revoke bridge access",1.772
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox,after: Evaluate,1.68
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox,after: Clean up,3.958
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox-gvisor,"cold: Sandbox, bridge and harness container",2.25
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox-gvisor,cold: Harness start,12.495
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox-gvisor,cold: Model (replayed),2.404
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox-gvisor,cold: Tool execution,1.644
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox-gvisor,cold: Harness logic,9.817
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox-gvisor,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox-gvisor,warm: Harness start,0.0
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox-gvisor,warm: Model (replayed),2.07
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox-gvisor,warm: Tool execution,1.637
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox-gvisor,warm: Harness logic,0.417
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox-gvisor,after: Collect artifacts,3.125
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox-gvisor,"after: Stop harness, revoke bridge access",1.869
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox-gvisor,after: Evaluate,1.946
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox-gvisor,after: Clean up,2.105
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox-kata,"cold: Sandbox, bridge and harness container",2.238
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox-kata,cold: Harness start,12.199
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox-kata,cold: Model (replayed),2.403
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox-kata,cold: Tool execution,1.523
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox-kata,cold: Harness logic,9.842
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox-kata,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox-kata,warm: Harness start,0.0
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox-kata,warm: Model (replayed),2.07
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox-kata,warm: Tool execution,1.45
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox-kata,warm: Harness logic,0.405
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox-kata,after: Collect artifacts,3.09
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox-kata,"after: Stop harness, revoke bridge access",1.816
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox-kata,after: Evaluate,1.966
+task-breakdown,hermes,mb-one-call,k8s-agent-sandbox-kata,after: Clean up,2.086
+task-breakdown,hermes,mb-one-call,k8s-warm-pool,"cold: Sandbox, bridge and harness container",2.083
+task-breakdown,hermes,mb-one-call,k8s-warm-pool,cold: Harness start,12.311
+task-breakdown,hermes,mb-one-call,k8s-warm-pool,cold: Model (replayed),2.403
+task-breakdown,hermes,mb-one-call,k8s-warm-pool,cold: Tool execution,1.287
+task-breakdown,hermes,mb-one-call,k8s-warm-pool,cold: Harness logic,9.457
+task-breakdown,hermes,mb-one-call,k8s-warm-pool,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-one-call,k8s-warm-pool,warm: Harness start,0.0
+task-breakdown,hermes,mb-one-call,k8s-warm-pool,warm: Model (replayed),2.07
+task-breakdown,hermes,mb-one-call,k8s-warm-pool,warm: Tool execution,1.218
+task-breakdown,hermes,mb-one-call,k8s-warm-pool,warm: Harness logic,0.377
+task-breakdown,hermes,mb-one-call,k8s-warm-pool,after: Collect artifacts,3.09
+task-breakdown,hermes,mb-one-call,k8s-warm-pool,"after: Stop harness, revoke bridge access",1.859
+task-breakdown,hermes,mb-one-call,k8s-warm-pool,after: Evaluate,1.674
+task-breakdown,hermes,mb-one-call,k8s-warm-pool,after: Clean up,4.577
+task-breakdown,hermes,mb-one-call,k8s-warm-pool-gvisor,"cold: Sandbox, bridge and harness container",2.073
+task-breakdown,hermes,mb-one-call,k8s-warm-pool-gvisor,cold: Harness start,12.358
+task-breakdown,hermes,mb-one-call,k8s-warm-pool-gvisor,cold: Model (replayed),2.403
+task-breakdown,hermes,mb-one-call,k8s-warm-pool-gvisor,cold: Tool execution,1.716
+task-breakdown,hermes,mb-one-call,k8s-warm-pool-gvisor,cold: Harness logic,9.883
+task-breakdown,hermes,mb-one-call,k8s-warm-pool-gvisor,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-one-call,k8s-warm-pool-gvisor,warm: Harness start,0.0
+task-breakdown,hermes,mb-one-call,k8s-warm-pool-gvisor,warm: Model (replayed),2.07
+task-breakdown,hermes,mb-one-call,k8s-warm-pool-gvisor,warm: Tool execution,1.644
+task-breakdown,hermes,mb-one-call,k8s-warm-pool-gvisor,warm: Harness logic,0.412
+task-breakdown,hermes,mb-one-call,k8s-warm-pool-gvisor,after: Collect artifacts,3.059
+task-breakdown,hermes,mb-one-call,k8s-warm-pool-gvisor,"after: Stop harness, revoke bridge access",2.126
+task-breakdown,hermes,mb-one-call,k8s-warm-pool-gvisor,after: Evaluate,1.964
+task-breakdown,hermes,mb-one-call,k8s-warm-pool-gvisor,after: Clean up,2.27
+task-breakdown,hermes,mb-one-call,k8s-warm-pool-kata,"cold: Sandbox, bridge and harness container",2.067
+task-breakdown,hermes,mb-one-call,k8s-warm-pool-kata,cold: Harness start,12.055
+task-breakdown,hermes,mb-one-call,k8s-warm-pool-kata,cold: Model (replayed),2.403
+task-breakdown,hermes,mb-one-call,k8s-warm-pool-kata,cold: Tool execution,1.541
+task-breakdown,hermes,mb-one-call,k8s-warm-pool-kata,cold: Harness logic,9.928
+task-breakdown,hermes,mb-one-call,k8s-warm-pool-kata,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-one-call,k8s-warm-pool-kata,warm: Harness start,0.0
+task-breakdown,hermes,mb-one-call,k8s-warm-pool-kata,warm: Model (replayed),2.07
+task-breakdown,hermes,mb-one-call,k8s-warm-pool-kata,warm: Tool execution,1.46
+task-breakdown,hermes,mb-one-call,k8s-warm-pool-kata,warm: Harness logic,0.39
+task-breakdown,hermes,mb-one-call,k8s-warm-pool-kata,after: Collect artifacts,3.128
+task-breakdown,hermes,mb-one-call,k8s-warm-pool-kata,"after: Stop harness, revoke bridge access",1.773
+task-breakdown,hermes,mb-one-call,k8s-warm-pool-kata,after: Evaluate,1.954
+task-breakdown,hermes,mb-one-call,k8s-warm-pool-kata,after: Clean up,2.418
+task-breakdown,openclaw,mb-one-call,k8s,"cold: Sandbox, bridge and harness container",3.403
+task-breakdown,openclaw,mb-one-call,k8s,cold: Harness start,56.756
+task-breakdown,openclaw,mb-one-call,k8s,cold: Model (replayed),2.354
+task-breakdown,openclaw,mb-one-call,k8s,cold: Tool execution,1.198
+task-breakdown,openclaw,mb-one-call,k8s,cold: Harness logic,3.194
+task-breakdown,openclaw,mb-one-call,k8s,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-one-call,k8s,warm: Harness start,0.0
+task-breakdown,openclaw,mb-one-call,k8s,warm: Model (replayed),2.454
+task-breakdown,openclaw,mb-one-call,k8s,warm: Tool execution,1.006
+task-breakdown,openclaw,mb-one-call,k8s,warm: Harness logic,1.948
+task-breakdown,openclaw,mb-one-call,k8s,after: Collect artifacts,0.563
+task-breakdown,openclaw,mb-one-call,k8s,"after: Stop harness, revoke bridge access",2.76
+task-breakdown,openclaw,mb-one-call,k8s,after: Evaluate,1.649
+task-breakdown,openclaw,mb-one-call,k8s,after: Clean up,3.422
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox,"cold: Sandbox, bridge and harness container",3.227
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox,cold: Harness start,56.695
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox,cold: Model (replayed),2.354
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox,cold: Tool execution,1.31
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox,cold: Harness logic,3.463
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox,warm: Harness start,0.0
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox,warm: Model (replayed),2.454
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox,warm: Tool execution,0.99
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox,warm: Harness logic,2.138
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox,after: Collect artifacts,0.567
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox,"after: Stop harness, revoke bridge access",3.001
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox,after: Evaluate,1.651
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox,after: Clean up,3.701
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox-gvisor,"cold: Sandbox, bridge and harness container",3.275
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox-gvisor,cold: Harness start,56.244
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox-gvisor,cold: Model (replayed),2.354
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox-gvisor,cold: Tool execution,1.312
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox-gvisor,cold: Harness logic,3.47
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox-gvisor,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox-gvisor,warm: Harness start,0.0
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox-gvisor,warm: Model (replayed),2.455
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox-gvisor,warm: Tool execution,1.082
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox-gvisor,warm: Harness logic,1.88
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox-gvisor,after: Collect artifacts,0.577
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox-gvisor,"after: Stop harness, revoke bridge access",2.861
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox-gvisor,after: Evaluate,1.921
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox-gvisor,after: Clean up,2.072
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox-kata,"cold: Sandbox, bridge and harness container",3.267
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox-kata,cold: Harness start,56.456
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox-kata,cold: Model (replayed),2.354
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox-kata,cold: Tool execution,1.297
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox-kata,cold: Harness logic,3.32
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox-kata,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox-kata,warm: Harness start,0.0
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox-kata,warm: Model (replayed),2.454
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox-kata,warm: Tool execution,1.09
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox-kata,warm: Harness logic,2.102
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox-kata,after: Collect artifacts,0.579
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox-kata,"after: Stop harness, revoke bridge access",3.119
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox-kata,after: Evaluate,1.953
+task-breakdown,openclaw,mb-one-call,k8s-agent-sandbox-kata,after: Clean up,2.101
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool,"cold: Sandbox, bridge and harness container",3.109
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool,cold: Harness start,56.978
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool,cold: Model (replayed),2.354
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool,cold: Tool execution,1.204
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool,cold: Harness logic,3.604
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool,warm: Harness start,0.0
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool,warm: Model (replayed),2.455
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool,warm: Tool execution,0.996
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool,warm: Harness logic,2.032
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool,after: Collect artifacts,0.567
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool,"after: Stop harness, revoke bridge access",2.798
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool,after: Evaluate,1.662
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool,after: Clean up,4.563
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool-gvisor,"cold: Sandbox, bridge and harness container",3.099
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool-gvisor,cold: Harness start,56.87
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool-gvisor,cold: Model (replayed),2.354
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool-gvisor,cold: Tool execution,1.291
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool-gvisor,cold: Harness logic,3.555
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool-gvisor,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool-gvisor,warm: Harness start,0.0
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool-gvisor,warm: Model (replayed),2.455
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool-gvisor,warm: Tool execution,1.101
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool-gvisor,warm: Harness logic,1.897
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool-gvisor,after: Collect artifacts,0.565
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool-gvisor,"after: Stop harness, revoke bridge access",2.491
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool-gvisor,after: Evaluate,1.935
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool-gvisor,after: Clean up,2.289
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool-kata,"cold: Sandbox, bridge and harness container",3.1
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool-kata,cold: Harness start,57.121
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool-kata,cold: Model (replayed),2.354
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool-kata,cold: Tool execution,1.304
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool-kata,cold: Harness logic,3.699
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool-kata,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool-kata,warm: Harness start,0.0
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool-kata,warm: Model (replayed),2.455
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool-kata,warm: Tool execution,1.091
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool-kata,warm: Harness logic,1.826
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool-kata,after: Collect artifacts,0.568
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool-kata,"after: Stop harness, revoke bridge access",2.576
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool-kata,after: Evaluate,1.961
+task-breakdown,openclaw,mb-one-call,k8s-warm-pool-kata,after: Clean up,2.265
+task-resources,hermes,mb-one-call,k8s,"Harness CPU peak (cores), repetition 3.0",1.86
+task-resources,hermes,mb-one-call,k8s-agent-sandbox,"Harness CPU peak (cores), repetition 2.0",1.59
+task-resources,hermes,mb-one-call,k8s-agent-sandbox-gvisor,"Harness CPU peak (cores), repetition 5.0",1.8
+task-resources,hermes,mb-one-call,k8s-agent-sandbox-kata,"Harness CPU peak (cores), repetition 5.0",2.61
+task-resources,hermes,mb-one-call,k8s-warm-pool,"Harness CPU peak (cores), repetition 3.0",2.14
+task-resources,hermes,mb-one-call,k8s-warm-pool-gvisor,"Harness CPU peak (cores), repetition 2.0",1.81
+task-resources,hermes,mb-one-call,k8s-warm-pool-kata,"Harness CPU peak (cores), repetition 1.0",1.64
+task-resources,hermes,mb-one-call,k8s,"Sandbox CPU peak (cores), repetition 3.0",0.09
+task-resources,hermes,mb-one-call,k8s-agent-sandbox,"Sandbox CPU peak (cores), repetition 2.0",0.14
+task-resources,hermes,mb-one-call,k8s-agent-sandbox-gvisor,"Sandbox CPU peak (cores), repetition 5.0",0.45
+task-resources,hermes,mb-one-call,k8s-agent-sandbox-kata,"Sandbox CPU peak (cores), repetition 5.0",0.65
+task-resources,hermes,mb-one-call,k8s-warm-pool,"Sandbox CPU peak (cores), repetition 3.0",0.1
+task-resources,hermes,mb-one-call,k8s-warm-pool-gvisor,"Sandbox CPU peak (cores), repetition 2.0",0.38
+task-resources,hermes,mb-one-call,k8s-warm-pool-kata,"Sandbox CPU peak (cores), repetition 1.0",0.43
+task-resources,hermes,mb-one-call,k8s,"Harness memory peak (MiB), repetition 3.0",268.33
+task-resources,hermes,mb-one-call,k8s-agent-sandbox,"Harness memory peak (MiB), repetition 2.0",268.55
+task-resources,hermes,mb-one-call,k8s-agent-sandbox-gvisor,"Harness memory peak (MiB), repetition 5.0",270.54
+task-resources,hermes,mb-one-call,k8s-agent-sandbox-kata,"Harness memory peak (MiB), repetition 5.0",271.97
+task-resources,hermes,mb-one-call,k8s-warm-pool,"Harness memory peak (MiB), repetition 3.0",268.77
+task-resources,hermes,mb-one-call,k8s-warm-pool-gvisor,"Harness memory peak (MiB), repetition 2.0",270.45
+task-resources,hermes,mb-one-call,k8s-warm-pool-kata,"Harness memory peak (MiB), repetition 1.0",270.55
+task-resources,openclaw,mb-one-call,k8s,"Harness CPU peak (cores), repetition 4.0",1.77
+task-resources,openclaw,mb-one-call,k8s-agent-sandbox,"Harness CPU peak (cores), repetition 3.0",2.0
+task-resources,openclaw,mb-one-call,k8s-agent-sandbox-gvisor,"Harness CPU peak (cores), repetition 4.0",1.96
+task-resources,openclaw,mb-one-call,k8s-agent-sandbox-kata,"Harness CPU peak (cores), repetition 3.0",1.77
+task-resources,openclaw,mb-one-call,k8s-warm-pool,"Harness CPU peak (cores), repetition 1.0",1.91
+task-resources,openclaw,mb-one-call,k8s-warm-pool-gvisor,"Harness CPU peak (cores), repetition 4.0",1.8
+task-resources,openclaw,mb-one-call,k8s-warm-pool-kata,"Harness CPU peak (cores), repetition 5.0",1.96
+task-resources,openclaw,mb-one-call,k8s,"Sandbox CPU peak (cores), repetition 4.0",0.1
+task-resources,openclaw,mb-one-call,k8s-agent-sandbox,"Sandbox CPU peak (cores), repetition 3.0",0.06
+task-resources,openclaw,mb-one-call,k8s-agent-sandbox-gvisor,"Sandbox CPU peak (cores), repetition 4.0",0.31
+task-resources,openclaw,mb-one-call,k8s-agent-sandbox-kata,"Sandbox CPU peak (cores), repetition 3.0",0.37
+task-resources,openclaw,mb-one-call,k8s-warm-pool,"Sandbox CPU peak (cores), repetition 1.0",0.12
+task-resources,openclaw,mb-one-call,k8s-warm-pool-gvisor,"Sandbox CPU peak (cores), repetition 4.0",0.28
+task-resources,openclaw,mb-one-call,k8s-warm-pool-kata,"Sandbox CPU peak (cores), repetition 5.0",0.49
+task-resources,openclaw,mb-one-call,k8s,"Harness memory peak (MiB), repetition 4.0",1053.6
+task-resources,openclaw,mb-one-call,k8s-agent-sandbox,"Harness memory peak (MiB), repetition 3.0",708.9
+task-resources,openclaw,mb-one-call,k8s-agent-sandbox-gvisor,"Harness memory peak (MiB), repetition 4.0",793.91
+task-resources,openclaw,mb-one-call,k8s-agent-sandbox-kata,"Harness memory peak (MiB), repetition 3.0",1084.33
+task-resources,openclaw,mb-one-call,k8s-warm-pool,"Harness memory peak (MiB), repetition 1.0",937.74
+task-resources,openclaw,mb-one-call,k8s-warm-pool-gvisor,"Harness memory peak (MiB), repetition 4.0",1168.92
+task-resources,openclaw,mb-one-call,k8s-warm-pool-kata,"Harness memory peak (MiB), repetition 5.0",1092.83
+task-breakdown,hermes,mb-ten-calls,k8s,"cold: Sandbox, bridge and harness container",2.212
+task-breakdown,hermes,mb-ten-calls,k8s,cold: Harness start,12.264
+task-breakdown,hermes,mb-ten-calls,k8s,cold: Model (replayed),13.932
+task-breakdown,hermes,mb-ten-calls,k8s,cold: Tool execution,4.354
+task-breakdown,hermes,mb-ten-calls,k8s,cold: Harness logic,9.886
+task-breakdown,hermes,mb-ten-calls,k8s,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-ten-calls,k8s,warm: Harness start,0.0
+task-breakdown,hermes,mb-ten-calls,k8s,warm: Model (replayed),13.723
+task-breakdown,hermes,mb-ten-calls,k8s,warm: Tool execution,4.319
+task-breakdown,hermes,mb-ten-calls,k8s,warm: Harness logic,0.801
+task-breakdown,hermes,mb-ten-calls,k8s,after: Collect artifacts,3.058
+task-breakdown,hermes,mb-ten-calls,k8s,"after: Stop harness, revoke bridge access",1.83
+task-breakdown,hermes,mb-ten-calls,k8s,after: Evaluate,1.672
+task-breakdown,hermes,mb-ten-calls,k8s,after: Clean up,3.383
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox,"cold: Sandbox, bridge and harness container",2.081
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox,cold: Harness start,12.007
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox,cold: Model (replayed),13.932
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox,cold: Tool execution,4.364
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox,cold: Harness logic,9.809
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox,warm: Harness start,0.0
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox,warm: Model (replayed),13.722
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox,warm: Tool execution,4.359
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox,warm: Harness logic,0.797
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox,after: Collect artifacts,3.086
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox,"after: Stop harness, revoke bridge access",1.905
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox,after: Evaluate,1.678
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox,after: Clean up,3.948
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox-gvisor,"cold: Sandbox, bridge and harness container",2.256
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox-gvisor,cold: Harness start,11.782
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox-gvisor,cold: Model (replayed),13.932
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox-gvisor,cold: Tool execution,5.949
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox-gvisor,cold: Harness logic,10.497
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox-gvisor,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox-gvisor,warm: Harness start,0.0
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox-gvisor,warm: Model (replayed),13.722
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox-gvisor,warm: Tool execution,5.854
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox-gvisor,warm: Harness logic,0.82
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox-gvisor,after: Collect artifacts,3.129
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox-gvisor,"after: Stop harness, revoke bridge access",1.903
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox-gvisor,after: Evaluate,1.982
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox-gvisor,after: Clean up,2.072
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox-kata,"cold: Sandbox, bridge and harness container",2.131
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox-kata,cold: Harness start,12.23
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox-kata,cold: Model (replayed),13.932
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox-kata,cold: Tool execution,5.785
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox-kata,cold: Harness logic,10.301
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox-kata,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox-kata,warm: Harness start,0.0
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox-kata,warm: Model (replayed),13.722
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox-kata,warm: Tool execution,5.748
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox-kata,warm: Harness logic,0.774
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox-kata,after: Collect artifacts,3.084
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox-kata,"after: Stop harness, revoke bridge access",2.208
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox-kata,after: Evaluate,1.956
+task-breakdown,hermes,mb-ten-calls,k8s-agent-sandbox-kata,after: Clean up,2.106
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool,"cold: Sandbox, bridge and harness container",2.078
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool,cold: Harness start,11.706
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool,cold: Model (replayed),13.933
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool,cold: Tool execution,4.317
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool,cold: Harness logic,9.895
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool,warm: Harness start,0.0
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool,warm: Model (replayed),13.722
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool,warm: Tool execution,4.336
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool,warm: Harness logic,0.798
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool,after: Collect artifacts,3.205
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool,"after: Stop harness, revoke bridge access",1.931
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool,after: Evaluate,1.674
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool,after: Clean up,4.495
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool-gvisor,"cold: Sandbox, bridge and harness container",2.063
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool-gvisor,cold: Harness start,11.94
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool-gvisor,cold: Model (replayed),13.932
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool-gvisor,cold: Tool execution,5.993
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool-gvisor,cold: Harness logic,10.318
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool-gvisor,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool-gvisor,warm: Harness start,0.0
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool-gvisor,warm: Model (replayed),13.722
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool-gvisor,warm: Tool execution,5.878
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool-gvisor,warm: Harness logic,0.807
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool-gvisor,after: Collect artifacts,3.119
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool-gvisor,"after: Stop harness, revoke bridge access",2.159
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool-gvisor,after: Evaluate,1.987
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool-gvisor,after: Clean up,2.181
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool-kata,"cold: Sandbox, bridge and harness container",2.066
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool-kata,cold: Harness start,12.425
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool-kata,cold: Model (replayed),13.931
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool-kata,cold: Tool execution,5.788
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool-kata,cold: Harness logic,10.075
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool-kata,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool-kata,warm: Harness start,0.0
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool-kata,warm: Model (replayed),13.723
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool-kata,warm: Tool execution,5.749
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool-kata,warm: Harness logic,0.83
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool-kata,after: Collect artifacts,3.11
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool-kata,"after: Stop harness, revoke bridge access",1.854
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool-kata,after: Evaluate,1.984
+task-breakdown,hermes,mb-ten-calls,k8s-warm-pool-kata,after: Clean up,2.362
+task-breakdown,openclaw,mb-ten-calls,k8s,"cold: Sandbox, bridge and harness container",3.401
+task-breakdown,openclaw,mb-ten-calls,k8s,cold: Harness start,56.604
+task-breakdown,openclaw,mb-ten-calls,k8s,cold: Model (replayed),14.9
+task-breakdown,openclaw,mb-ten-calls,k8s,cold: Tool execution,6.829
+task-breakdown,openclaw,mb-ten-calls,k8s,cold: Harness logic,3.859
+task-breakdown,openclaw,mb-ten-calls,k8s,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-ten-calls,k8s,warm: Harness start,0.0
+task-breakdown,openclaw,mb-ten-calls,k8s,warm: Model (replayed),15.788
+task-breakdown,openclaw,mb-ten-calls,k8s,warm: Tool execution,6.083
+task-breakdown,openclaw,mb-ten-calls,k8s,warm: Harness logic,2.706
+task-breakdown,openclaw,mb-ten-calls,k8s,after: Collect artifacts,0.582
+task-breakdown,openclaw,mb-ten-calls,k8s,"after: Stop harness, revoke bridge access",2.996
+task-breakdown,openclaw,mb-ten-calls,k8s,after: Evaluate,1.657
+task-breakdown,openclaw,mb-ten-calls,k8s,after: Clean up,3.412
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox,"cold: Sandbox, bridge and harness container",2.983
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox,cold: Harness start,56.264
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox,cold: Model (replayed),14.899
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox,cold: Tool execution,6.668
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox,cold: Harness logic,3.959
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox,warm: Harness start,0.0
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox,warm: Model (replayed),15.789
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox,warm: Tool execution,6.14
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox,warm: Harness logic,2.541
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox,after: Collect artifacts,0.586
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox,"after: Stop harness, revoke bridge access",3.041
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox,after: Evaluate,1.656
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox,after: Clean up,3.635
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox-gvisor,"cold: Sandbox, bridge and harness container",3.272
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox-gvisor,cold: Harness start,56.277
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox-gvisor,cold: Model (replayed),14.901
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox-gvisor,cold: Tool execution,7.384
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox-gvisor,cold: Harness logic,3.845
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox-gvisor,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox-gvisor,warm: Harness start,0.0
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox-gvisor,warm: Model (replayed),15.788
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox-gvisor,warm: Tool execution,6.677
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox-gvisor,warm: Harness logic,2.546
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox-gvisor,after: Collect artifacts,0.581
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox-gvisor,"after: Stop harness, revoke bridge access",2.753
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox-gvisor,after: Evaluate,1.95
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox-gvisor,after: Clean up,2.032
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox-kata,"cold: Sandbox, bridge and harness container",3.267
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox-kata,cold: Harness start,56.726
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox-kata,cold: Model (replayed),14.9
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox-kata,cold: Tool execution,7.45
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox-kata,cold: Harness logic,3.751
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox-kata,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox-kata,warm: Harness start,0.0
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox-kata,warm: Model (replayed),15.788
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox-kata,warm: Tool execution,6.796
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox-kata,warm: Harness logic,2.583
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox-kata,after: Collect artifacts,0.587
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox-kata,"after: Stop harness, revoke bridge access",2.638
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox-kata,after: Evaluate,1.96
+task-breakdown,openclaw,mb-ten-calls,k8s-agent-sandbox-kata,after: Clean up,1.965
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool,"cold: Sandbox, bridge and harness container",3.113
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool,cold: Harness start,56.838
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool,cold: Model (replayed),14.9
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool,cold: Tool execution,6.755
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool,cold: Harness logic,3.688
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool,warm: Harness start,0.0
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool,warm: Model (replayed),15.788
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool,warm: Tool execution,6.109
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool,warm: Harness logic,2.735
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool,after: Collect artifacts,0.585
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool,"after: Stop harness, revoke bridge access",3.11
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool,after: Evaluate,1.658
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool,after: Clean up,4.557
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool-gvisor,"cold: Sandbox, bridge and harness container",3.096
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool-gvisor,cold: Harness start,56.024
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool-gvisor,cold: Model (replayed),14.9
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool-gvisor,cold: Tool execution,7.407
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool-gvisor,cold: Harness logic,3.889
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool-gvisor,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool-gvisor,warm: Harness start,0.0
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool-gvisor,warm: Model (replayed),15.788
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool-gvisor,warm: Tool execution,6.736
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool-gvisor,warm: Harness logic,2.567
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool-gvisor,after: Collect artifacts,0.588
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool-gvisor,"after: Stop harness, revoke bridge access",3.021
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool-gvisor,after: Evaluate,1.954
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool-gvisor,after: Clean up,2.26
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool-kata,"cold: Sandbox, bridge and harness container",3.089
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool-kata,cold: Harness start,56.975
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool-kata,cold: Model (replayed),14.899
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool-kata,cold: Tool execution,7.5
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool-kata,cold: Harness logic,3.573
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool-kata,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool-kata,warm: Harness start,0.0
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool-kata,warm: Model (replayed),15.788
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool-kata,warm: Tool execution,6.812
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool-kata,warm: Harness logic,2.689
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool-kata,after: Collect artifacts,0.587
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool-kata,"after: Stop harness, revoke bridge access",2.762
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool-kata,after: Evaluate,1.975
+task-breakdown,openclaw,mb-ten-calls,k8s-warm-pool-kata,after: Clean up,2.387
+task-resources,hermes,mb-ten-calls,k8s,"Harness CPU peak (cores), repetition 4.0",1.58
+task-resources,hermes,mb-ten-calls,k8s-agent-sandbox,"Harness CPU peak (cores), repetition 2.0",1.87
+task-resources,hermes,mb-ten-calls,k8s-agent-sandbox-gvisor,"Harness CPU peak (cores), repetition 2.0",1.75
+task-resources,hermes,mb-ten-calls,k8s-agent-sandbox-kata,"Harness CPU peak (cores), repetition 5.0",1.62
+task-resources,hermes,mb-ten-calls,k8s-warm-pool,"Harness CPU peak (cores), repetition 1.0",4.64
+task-resources,hermes,mb-ten-calls,k8s-warm-pool-gvisor,"Harness CPU peak (cores), repetition 4.0",2.77
+task-resources,hermes,mb-ten-calls,k8s-warm-pool-kata,"Harness CPU peak (cores), repetition 1.0",1.82
+task-resources,hermes,mb-ten-calls,k8s,"Sandbox CPU peak (cores), repetition 4.0",0.08
+task-resources,hermes,mb-ten-calls,k8s-agent-sandbox,"Sandbox CPU peak (cores), repetition 2.0",0.11
+task-resources,hermes,mb-ten-calls,k8s-agent-sandbox-gvisor,"Sandbox CPU peak (cores), repetition 2.0",0.42
+task-resources,hermes,mb-ten-calls,k8s-agent-sandbox-kata,"Sandbox CPU peak (cores), repetition 5.0",0.58
+task-resources,hermes,mb-ten-calls,k8s-warm-pool,"Sandbox CPU peak (cores), repetition 1.0",0.28
+task-resources,hermes,mb-ten-calls,k8s-warm-pool-gvisor,"Sandbox CPU peak (cores), repetition 4.0",0.36
+task-resources,hermes,mb-ten-calls,k8s-warm-pool-kata,"Sandbox CPU peak (cores), repetition 1.0",0.37
+task-resources,hermes,mb-ten-calls,k8s,"Harness memory peak (MiB), repetition 4.0",268.93
+task-resources,hermes,mb-ten-calls,k8s-agent-sandbox,"Harness memory peak (MiB), repetition 2.0",280.45
+task-resources,hermes,mb-ten-calls,k8s-agent-sandbox-gvisor,"Harness memory peak (MiB), repetition 2.0",275.3
+task-resources,hermes,mb-ten-calls,k8s-agent-sandbox-kata,"Harness memory peak (MiB), repetition 5.0",278.8
+task-resources,hermes,mb-ten-calls,k8s-warm-pool,"Harness memory peak (MiB), repetition 1.0",277.86
+task-resources,hermes,mb-ten-calls,k8s-warm-pool-gvisor,"Harness memory peak (MiB), repetition 4.0",274.88
+task-resources,hermes,mb-ten-calls,k8s-warm-pool-kata,"Harness memory peak (MiB), repetition 1.0",277.7
+task-resources,openclaw,mb-ten-calls,k8s,"Harness CPU peak (cores), repetition 5.0",1.98
+task-resources,openclaw,mb-ten-calls,k8s-agent-sandbox,"Harness CPU peak (cores), repetition 2.0",1.85
+task-resources,openclaw,mb-ten-calls,k8s-agent-sandbox-gvisor,"Harness CPU peak (cores), repetition 2.0",1.86
+task-resources,openclaw,mb-ten-calls,k8s-agent-sandbox-kata,"Harness CPU peak (cores), repetition 1.0",1.86
+task-resources,openclaw,mb-ten-calls,k8s-warm-pool,"Harness CPU peak (cores), repetition 3.0",1.96
+task-resources,openclaw,mb-ten-calls,k8s-warm-pool-gvisor,"Harness CPU peak (cores), repetition 5.0",2.18
+task-resources,openclaw,mb-ten-calls,k8s-warm-pool-kata,"Harness CPU peak (cores), repetition 4.0",1.9
+task-resources,openclaw,mb-ten-calls,k8s,"Sandbox CPU peak (cores), repetition 5.0",0.11
+task-resources,openclaw,mb-ten-calls,k8s-agent-sandbox,"Sandbox CPU peak (cores), repetition 2.0",0.12
+task-resources,openclaw,mb-ten-calls,k8s-agent-sandbox-gvisor,"Sandbox CPU peak (cores), repetition 2.0",0.33
+task-resources,openclaw,mb-ten-calls,k8s-agent-sandbox-kata,"Sandbox CPU peak (cores), repetition 1.0",0.49
+task-resources,openclaw,mb-ten-calls,k8s-warm-pool,"Sandbox CPU peak (cores), repetition 3.0",0.15
+task-resources,openclaw,mb-ten-calls,k8s-warm-pool-gvisor,"Sandbox CPU peak (cores), repetition 5.0",0.45
+task-resources,openclaw,mb-ten-calls,k8s-warm-pool-kata,"Sandbox CPU peak (cores), repetition 4.0",0.59
+task-resources,openclaw,mb-ten-calls,k8s,"Harness memory peak (MiB), repetition 5.0",913.86
+task-resources,openclaw,mb-ten-calls,k8s-agent-sandbox,"Harness memory peak (MiB), repetition 2.0",857.77
+task-resources,openclaw,mb-ten-calls,k8s-agent-sandbox-gvisor,"Harness memory peak (MiB), repetition 2.0",971.93
+task-resources,openclaw,mb-ten-calls,k8s-agent-sandbox-kata,"Harness memory peak (MiB), repetition 1.0",787.16
+task-resources,openclaw,mb-ten-calls,k8s-warm-pool,"Harness memory peak (MiB), repetition 3.0",781.21
+task-resources,openclaw,mb-ten-calls,k8s-warm-pool-gvisor,"Harness memory peak (MiB), repetition 5.0",849.99
+task-resources,openclaw,mb-ten-calls,k8s-warm-pool-kata,"Harness memory peak (MiB), repetition 4.0",1150.83
+task-breakdown,hermes,mb-cpu,k8s,"cold: Sandbox, bridge and harness container",2.272
+task-breakdown,hermes,mb-cpu,k8s,cold: Harness start,12.035
+task-breakdown,hermes,mb-cpu,k8s,cold: Model (replayed),2.656
+task-breakdown,hermes,mb-cpu,k8s,cold: Tool execution,5.106
+task-breakdown,hermes,mb-cpu,k8s,cold: Harness logic,9.503
+task-breakdown,hermes,mb-cpu,k8s,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-cpu,k8s,warm: Harness start,0.0
+task-breakdown,hermes,mb-cpu,k8s,warm: Model (replayed),2.716
+task-breakdown,hermes,mb-cpu,k8s,warm: Tool execution,4.918
+task-breakdown,hermes,mb-cpu,k8s,warm: Harness logic,0.388
+task-breakdown,hermes,mb-cpu,k8s,after: Collect artifacts,3.072
+task-breakdown,hermes,mb-cpu,k8s,"after: Stop harness, revoke bridge access",1.946
+task-breakdown,hermes,mb-cpu,k8s,after: Evaluate,1.683
+task-breakdown,hermes,mb-cpu,k8s,after: Clean up,3.458
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox,"cold: Sandbox, bridge and harness container",2.084
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox,cold: Harness start,12.205
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox,cold: Model (replayed),2.656
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox,cold: Tool execution,4.973
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox,cold: Harness logic,9.766
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox,warm: Harness start,0.0
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox,warm: Model (replayed),2.717
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox,warm: Tool execution,4.827
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox,warm: Harness logic,0.385
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox,after: Collect artifacts,3.076
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox,"after: Stop harness, revoke bridge access",1.89
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox,after: Evaluate,1.675
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox,after: Clean up,3.965
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox-gvisor,"cold: Sandbox, bridge and harness container",2.254
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox-gvisor,cold: Harness start,12.353
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox-gvisor,cold: Model (replayed),2.656
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox-gvisor,cold: Tool execution,5.315
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox-gvisor,cold: Harness logic,9.702
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox-gvisor,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox-gvisor,warm: Harness start,0.0
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox-gvisor,warm: Model (replayed),2.716
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox-gvisor,warm: Tool execution,5.248
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox-gvisor,warm: Harness logic,0.387
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox-gvisor,after: Collect artifacts,3.12
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox-gvisor,"after: Stop harness, revoke bridge access",2.005
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox-gvisor,after: Evaluate,1.988
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox-gvisor,after: Clean up,2.119
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox-kata,"cold: Sandbox, bridge and harness container",2.442
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox-kata,cold: Harness start,12.692
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox-kata,cold: Model (replayed),2.656
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox-kata,cold: Tool execution,5.502
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox-kata,cold: Harness logic,9.199
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox-kata,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox-kata,warm: Harness start,0.0
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox-kata,warm: Model (replayed),2.716
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox-kata,warm: Tool execution,5.29
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox-kata,warm: Harness logic,0.391
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox-kata,after: Collect artifacts,3.181
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox-kata,"after: Stop harness, revoke bridge access",1.88
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox-kata,after: Evaluate,1.969
+task-breakdown,hermes,mb-cpu,k8s-agent-sandbox-kata,after: Clean up,2.086
+task-breakdown,hermes,mb-cpu,k8s-warm-pool,"cold: Sandbox, bridge and harness container",2.099
+task-breakdown,hermes,mb-cpu,k8s-warm-pool,cold: Harness start,12.164
+task-breakdown,hermes,mb-cpu,k8s-warm-pool,cold: Model (replayed),2.656
+task-breakdown,hermes,mb-cpu,k8s-warm-pool,cold: Tool execution,4.998
+task-breakdown,hermes,mb-cpu,k8s-warm-pool,cold: Harness logic,9.994
+task-breakdown,hermes,mb-cpu,k8s-warm-pool,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-cpu,k8s-warm-pool,warm: Harness start,0.0
+task-breakdown,hermes,mb-cpu,k8s-warm-pool,warm: Model (replayed),2.716
+task-breakdown,hermes,mb-cpu,k8s-warm-pool,warm: Tool execution,4.959
+task-breakdown,hermes,mb-cpu,k8s-warm-pool,warm: Harness logic,0.405
+task-breakdown,hermes,mb-cpu,k8s-warm-pool,after: Collect artifacts,3.124
+task-breakdown,hermes,mb-cpu,k8s-warm-pool,"after: Stop harness, revoke bridge access",1.878
+task-breakdown,hermes,mb-cpu,k8s-warm-pool,after: Evaluate,1.679
+task-breakdown,hermes,mb-cpu,k8s-warm-pool,after: Clean up,4.556
+task-breakdown,hermes,mb-cpu,k8s-warm-pool-gvisor,"cold: Sandbox, bridge and harness container",2.065
+task-breakdown,hermes,mb-cpu,k8s-warm-pool-gvisor,cold: Harness start,12.202
+task-breakdown,hermes,mb-cpu,k8s-warm-pool-gvisor,cold: Model (replayed),2.656
+task-breakdown,hermes,mb-cpu,k8s-warm-pool-gvisor,cold: Tool execution,5.433
+task-breakdown,hermes,mb-cpu,k8s-warm-pool-gvisor,cold: Harness logic,9.705
+task-breakdown,hermes,mb-cpu,k8s-warm-pool-gvisor,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-cpu,k8s-warm-pool-gvisor,warm: Harness start,0.0
+task-breakdown,hermes,mb-cpu,k8s-warm-pool-gvisor,warm: Model (replayed),2.717
+task-breakdown,hermes,mb-cpu,k8s-warm-pool-gvisor,warm: Tool execution,5.404
+task-breakdown,hermes,mb-cpu,k8s-warm-pool-gvisor,warm: Harness logic,0.401
+task-breakdown,hermes,mb-cpu,k8s-warm-pool-gvisor,after: Collect artifacts,3.099
+task-breakdown,hermes,mb-cpu,k8s-warm-pool-gvisor,"after: Stop harness, revoke bridge access",1.891
+task-breakdown,hermes,mb-cpu,k8s-warm-pool-gvisor,after: Evaluate,1.991
+task-breakdown,hermes,mb-cpu,k8s-warm-pool-gvisor,after: Clean up,2.238
+task-breakdown,hermes,mb-cpu,k8s-warm-pool-kata,"cold: Sandbox, bridge and harness container",2.07
+task-breakdown,hermes,mb-cpu,k8s-warm-pool-kata,cold: Harness start,12.734
+task-breakdown,hermes,mb-cpu,k8s-warm-pool-kata,cold: Model (replayed),2.656
+task-breakdown,hermes,mb-cpu,k8s-warm-pool-kata,cold: Tool execution,5.591
+task-breakdown,hermes,mb-cpu,k8s-warm-pool-kata,cold: Harness logic,9.753
+task-breakdown,hermes,mb-cpu,k8s-warm-pool-kata,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-cpu,k8s-warm-pool-kata,warm: Harness start,0.0
+task-breakdown,hermes,mb-cpu,k8s-warm-pool-kata,warm: Model (replayed),2.716
+task-breakdown,hermes,mb-cpu,k8s-warm-pool-kata,warm: Tool execution,5.3
+task-breakdown,hermes,mb-cpu,k8s-warm-pool-kata,warm: Harness logic,0.392
+task-breakdown,hermes,mb-cpu,k8s-warm-pool-kata,after: Collect artifacts,3.07
+task-breakdown,hermes,mb-cpu,k8s-warm-pool-kata,"after: Stop harness, revoke bridge access",1.896
+task-breakdown,hermes,mb-cpu,k8s-warm-pool-kata,after: Evaluate,1.97
+task-breakdown,hermes,mb-cpu,k8s-warm-pool-kata,after: Clean up,2.256
+task-breakdown,openclaw,mb-cpu,k8s,"cold: Sandbox, bridge and harness container",3.406
+task-breakdown,openclaw,mb-cpu,k8s,cold: Harness start,56.411
+task-breakdown,openclaw,mb-cpu,k8s,cold: Model (replayed),4.901
+task-breakdown,openclaw,mb-cpu,k8s,cold: Tool execution,5.171
+task-breakdown,openclaw,mb-cpu,k8s,cold: Harness logic,3.641
+task-breakdown,openclaw,mb-cpu,k8s,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-cpu,k8s,warm: Harness start,0.0
+task-breakdown,openclaw,mb-cpu,k8s,warm: Model (replayed),3.856
+task-breakdown,openclaw,mb-cpu,k8s,warm: Tool execution,4.571
+task-breakdown,openclaw,mb-cpu,k8s,warm: Harness logic,2.125
+task-breakdown,openclaw,mb-cpu,k8s,after: Collect artifacts,0.568
+task-breakdown,openclaw,mb-cpu,k8s,"after: Stop harness, revoke bridge access",2.752
+task-breakdown,openclaw,mb-cpu,k8s,after: Evaluate,1.655
+task-breakdown,openclaw,mb-cpu,k8s,after: Clean up,3.282
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox,"cold: Sandbox, bridge and harness container",3.04
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox,cold: Harness start,56.923
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox,cold: Model (replayed),4.901
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox,cold: Tool execution,4.96
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox,cold: Harness logic,3.5
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox,warm: Harness start,0.0
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox,warm: Model (replayed),3.856
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox,warm: Tool execution,4.537
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox,warm: Harness logic,2.163
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox,after: Collect artifacts,0.566
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox,"after: Stop harness, revoke bridge access",2.998
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox,after: Evaluate,1.654
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox,after: Clean up,3.726
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox-gvisor,"cold: Sandbox, bridge and harness container",3.273
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox-gvisor,cold: Harness start,56.541
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox-gvisor,cold: Model (replayed),4.902
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox-gvisor,cold: Tool execution,5.256
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox-gvisor,cold: Harness logic,3.646
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox-gvisor,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox-gvisor,warm: Harness start,0.0
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox-gvisor,warm: Model (replayed),3.856
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox-gvisor,warm: Tool execution,4.653
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox-gvisor,warm: Harness logic,2.258
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox-gvisor,after: Collect artifacts,0.567
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox-gvisor,"after: Stop harness, revoke bridge access",2.784
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox-gvisor,after: Evaluate,1.95
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox-gvisor,after: Clean up,2.041
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox-kata,"cold: Sandbox, bridge and harness container",3.267
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox-kata,cold: Harness start,56.986
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox-kata,cold: Model (replayed),4.901
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox-kata,cold: Tool execution,5.4
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox-kata,cold: Harness logic,3.604
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox-kata,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox-kata,warm: Harness start,0.0
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox-kata,warm: Model (replayed),3.856
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox-kata,warm: Tool execution,4.805
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox-kata,warm: Harness logic,2.13
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox-kata,after: Collect artifacts,0.57
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox-kata,"after: Stop harness, revoke bridge access",2.949
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox-kata,after: Evaluate,1.969
+task-breakdown,openclaw,mb-cpu,k8s-agent-sandbox-kata,after: Clean up,2.081
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool,"cold: Sandbox, bridge and harness container",3.106
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool,cold: Harness start,57.904
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool,cold: Model (replayed),4.902
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool,cold: Tool execution,5.043
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool,cold: Harness logic,3.371
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool,warm: Harness start,0.0
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool,warm: Model (replayed),3.856
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool,warm: Tool execution,4.532
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool,warm: Harness logic,2.431
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool,after: Collect artifacts,0.57
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool,"after: Stop harness, revoke bridge access",2.826
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool,after: Evaluate,1.664
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool,after: Clean up,4.559
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool-gvisor,"cold: Sandbox, bridge and harness container",3.102
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool-gvisor,cold: Harness start,56.671
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool-gvisor,cold: Model (replayed),4.901
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool-gvisor,cold: Tool execution,5.192
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool-gvisor,cold: Harness logic,3.429
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool-gvisor,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool-gvisor,warm: Harness start,0.0
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool-gvisor,warm: Model (replayed),3.856
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool-gvisor,warm: Tool execution,4.675
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool-gvisor,warm: Harness logic,2.371
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool-gvisor,after: Collect artifacts,0.567
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool-gvisor,"after: Stop harness, revoke bridge access",3.012
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool-gvisor,after: Evaluate,1.954
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool-gvisor,after: Clean up,2.209
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool-kata,"cold: Sandbox, bridge and harness container",3.094
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool-kata,cold: Harness start,57.76
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool-kata,cold: Model (replayed),4.902
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool-kata,cold: Tool execution,5.578
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool-kata,cold: Harness logic,4.035
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool-kata,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool-kata,warm: Harness start,0.0
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool-kata,warm: Model (replayed),3.856
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool-kata,warm: Tool execution,4.853
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool-kata,warm: Harness logic,2.166
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool-kata,after: Collect artifacts,0.571
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool-kata,"after: Stop harness, revoke bridge access",2.918
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool-kata,after: Evaluate,1.964
+task-breakdown,openclaw,mb-cpu,k8s-warm-pool-kata,after: Clean up,2.248
+task-resources,hermes,mb-cpu,k8s,"Harness CPU peak (cores), repetition 2.0",1.74
+task-resources,hermes,mb-cpu,k8s-agent-sandbox,"Harness CPU peak (cores), repetition 3.0",1.6
+task-resources,hermes,mb-cpu,k8s-agent-sandbox-gvisor,"Harness CPU peak (cores), repetition 3.0",1.74
+task-resources,hermes,mb-cpu,k8s-agent-sandbox-kata,"Harness CPU peak (cores), repetition 1.0",1.88
+task-resources,hermes,mb-cpu,k8s-warm-pool,"Harness CPU peak (cores), repetition 1.0",1.62
+task-resources,hermes,mb-cpu,k8s-warm-pool-gvisor,"Harness CPU peak (cores), repetition 4.0",1.79
+task-resources,hermes,mb-cpu,k8s-warm-pool-kata,"Harness CPU peak (cores), repetition 5.0",1.53
+task-resources,hermes,mb-cpu,k8s,"Sandbox CPU peak (cores), repetition 2.0",1.15
+task-resources,hermes,mb-cpu,k8s-agent-sandbox,"Sandbox CPU peak (cores), repetition 3.0",1.0
+task-resources,hermes,mb-cpu,k8s-agent-sandbox-gvisor,"Sandbox CPU peak (cores), repetition 3.0",1.7
+task-resources,hermes,mb-cpu,k8s-agent-sandbox-kata,"Sandbox CPU peak (cores), repetition 1.0",1.04
+task-resources,hermes,mb-cpu,k8s-warm-pool,"Sandbox CPU peak (cores), repetition 1.0",1.02
+task-resources,hermes,mb-cpu,k8s-warm-pool-gvisor,"Sandbox CPU peak (cores), repetition 4.0",1.16
+task-resources,hermes,mb-cpu,k8s-warm-pool-kata,"Sandbox CPU peak (cores), repetition 5.0",1.03
+task-resources,hermes,mb-cpu,k8s,"Harness memory peak (MiB), repetition 2.0",263.93
+task-resources,hermes,mb-cpu,k8s-agent-sandbox,"Harness memory peak (MiB), repetition 3.0",265.61
+task-resources,hermes,mb-cpu,k8s-agent-sandbox-gvisor,"Harness memory peak (MiB), repetition 3.0",268.12
+task-resources,hermes,mb-cpu,k8s-agent-sandbox-kata,"Harness memory peak (MiB), repetition 1.0",270.17
+task-resources,hermes,mb-cpu,k8s-warm-pool,"Harness memory peak (MiB), repetition 1.0",269.77
+task-resources,hermes,mb-cpu,k8s-warm-pool-gvisor,"Harness memory peak (MiB), repetition 4.0",269.96
+task-resources,hermes,mb-cpu,k8s-warm-pool-kata,"Harness memory peak (MiB), repetition 5.0",270.2
+task-resources,openclaw,mb-cpu,k8s,"Harness CPU peak (cores), repetition 3.0",4.19
+task-resources,openclaw,mb-cpu,k8s-agent-sandbox,"Harness CPU peak (cores), repetition 4.0",3.58
+task-resources,openclaw,mb-cpu,k8s-agent-sandbox-gvisor,"Harness CPU peak (cores), repetition 1.0",3.11
+task-resources,openclaw,mb-cpu,k8s-agent-sandbox-kata,"Harness CPU peak (cores), repetition 1.0",1.73
+task-resources,openclaw,mb-cpu,k8s-warm-pool,"Harness CPU peak (cores), repetition 2.0",4.61
+task-resources,openclaw,mb-cpu,k8s-warm-pool-gvisor,"Harness CPU peak (cores), repetition 3.0",3.66
+task-resources,openclaw,mb-cpu,k8s-warm-pool-kata,"Harness CPU peak (cores), repetition 4.0",2.37
+task-resources,openclaw,mb-cpu,k8s,"Sandbox CPU peak (cores), repetition 3.0",1.0
+task-resources,openclaw,mb-cpu,k8s-agent-sandbox,"Sandbox CPU peak (cores), repetition 4.0",1.0
+task-resources,openclaw,mb-cpu,k8s-agent-sandbox-gvisor,"Sandbox CPU peak (cores), repetition 1.0",1.39
+task-resources,openclaw,mb-cpu,k8s-agent-sandbox-kata,"Sandbox CPU peak (cores), repetition 1.0",1.0
+task-resources,openclaw,mb-cpu,k8s-warm-pool,"Sandbox CPU peak (cores), repetition 2.0",2.76
+task-resources,openclaw,mb-cpu,k8s-warm-pool-gvisor,"Sandbox CPU peak (cores), repetition 3.0",1.04
+task-resources,openclaw,mb-cpu,k8s-warm-pool-kata,"Sandbox CPU peak (cores), repetition 4.0",1.41
+task-resources,openclaw,mb-cpu,k8s,"Harness memory peak (MiB), repetition 3.0",1160.9
+task-resources,openclaw,mb-cpu,k8s-agent-sandbox,"Harness memory peak (MiB), repetition 4.0",1124.66
+task-resources,openclaw,mb-cpu,k8s-agent-sandbox-gvisor,"Harness memory peak (MiB), repetition 1.0",776.36
+task-resources,openclaw,mb-cpu,k8s-agent-sandbox-kata,"Harness memory peak (MiB), repetition 1.0",1116.17
+task-resources,openclaw,mb-cpu,k8s-warm-pool,"Harness memory peak (MiB), repetition 2.0",967.82
+task-resources,openclaw,mb-cpu,k8s-warm-pool-gvisor,"Harness memory peak (MiB), repetition 3.0",1191.56
+task-resources,openclaw,mb-cpu,k8s-warm-pool-kata,"Harness memory peak (MiB), repetition 4.0",879.34
+task-breakdown,hermes,mb-output,k8s,"cold: Sandbox, bridge and harness container",2.331
+task-breakdown,hermes,mb-output,k8s,cold: Harness start,11.99
+task-breakdown,hermes,mb-output,k8s,cold: Model (replayed),2.325
+task-breakdown,hermes,mb-output,k8s,cold: Tool execution,1.241
+task-breakdown,hermes,mb-output,k8s,cold: Harness logic,9.49
+task-breakdown,hermes,mb-output,k8s,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-output,k8s,warm: Harness start,0.0
+task-breakdown,hermes,mb-output,k8s,warm: Model (replayed),2.391
+task-breakdown,hermes,mb-output,k8s,warm: Tool execution,1.162
+task-breakdown,hermes,mb-output,k8s,warm: Harness logic,0.374
+task-breakdown,hermes,mb-output,k8s,after: Collect artifacts,3.114
+task-breakdown,hermes,mb-output,k8s,"after: Stop harness, revoke bridge access",1.828
+task-breakdown,hermes,mb-output,k8s,after: Evaluate,1.68
+task-breakdown,hermes,mb-output,k8s,after: Clean up,3.579
+task-breakdown,hermes,mb-output,k8s-agent-sandbox,"cold: Sandbox, bridge and harness container",2.08
+task-breakdown,hermes,mb-output,k8s-agent-sandbox,cold: Harness start,11.86
+task-breakdown,hermes,mb-output,k8s-agent-sandbox,cold: Model (replayed),2.325
+task-breakdown,hermes,mb-output,k8s-agent-sandbox,cold: Tool execution,1.26
+task-breakdown,hermes,mb-output,k8s-agent-sandbox,cold: Harness logic,9.441
+task-breakdown,hermes,mb-output,k8s-agent-sandbox,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-output,k8s-agent-sandbox,warm: Harness start,0.0
+task-breakdown,hermes,mb-output,k8s-agent-sandbox,warm: Model (replayed),2.391
+task-breakdown,hermes,mb-output,k8s-agent-sandbox,warm: Tool execution,1.16
+task-breakdown,hermes,mb-output,k8s-agent-sandbox,warm: Harness logic,0.4
+task-breakdown,hermes,mb-output,k8s-agent-sandbox,after: Collect artifacts,3.065
+task-breakdown,hermes,mb-output,k8s-agent-sandbox,"after: Stop harness, revoke bridge access",1.955
+task-breakdown,hermes,mb-output,k8s-agent-sandbox,after: Evaluate,1.675
+task-breakdown,hermes,mb-output,k8s-agent-sandbox,after: Clean up,3.69
+task-breakdown,hermes,mb-output,k8s-agent-sandbox-gvisor,"cold: Sandbox, bridge and harness container",2.192
+task-breakdown,hermes,mb-output,k8s-agent-sandbox-gvisor,cold: Harness start,11.888
+task-breakdown,hermes,mb-output,k8s-agent-sandbox-gvisor,cold: Model (replayed),2.325
+task-breakdown,hermes,mb-output,k8s-agent-sandbox-gvisor,cold: Tool execution,1.74
+task-breakdown,hermes,mb-output,k8s-agent-sandbox-gvisor,cold: Harness logic,9.703
+task-breakdown,hermes,mb-output,k8s-agent-sandbox-gvisor,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-output,k8s-agent-sandbox-gvisor,warm: Harness start,0.0
+task-breakdown,hermes,mb-output,k8s-agent-sandbox-gvisor,warm: Model (replayed),2.391
+task-breakdown,hermes,mb-output,k8s-agent-sandbox-gvisor,warm: Tool execution,1.62
+task-breakdown,hermes,mb-output,k8s-agent-sandbox-gvisor,warm: Harness logic,0.393
+task-breakdown,hermes,mb-output,k8s-agent-sandbox-gvisor,after: Collect artifacts,3.059
+task-breakdown,hermes,mb-output,k8s-agent-sandbox-gvisor,"after: Stop harness, revoke bridge access",1.943
+task-breakdown,hermes,mb-output,k8s-agent-sandbox-gvisor,after: Evaluate,1.979
+task-breakdown,hermes,mb-output,k8s-agent-sandbox-gvisor,after: Clean up,2.076
+task-breakdown,hermes,mb-output,k8s-agent-sandbox-kata,"cold: Sandbox, bridge and harness container",2.249
+task-breakdown,hermes,mb-output,k8s-agent-sandbox-kata,cold: Harness start,12.22
+task-breakdown,hermes,mb-output,k8s-agent-sandbox-kata,cold: Model (replayed),2.326
+task-breakdown,hermes,mb-output,k8s-agent-sandbox-kata,cold: Tool execution,1.551
+task-breakdown,hermes,mb-output,k8s-agent-sandbox-kata,cold: Harness logic,9.772
+task-breakdown,hermes,mb-output,k8s-agent-sandbox-kata,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-output,k8s-agent-sandbox-kata,warm: Harness start,0.0
+task-breakdown,hermes,mb-output,k8s-agent-sandbox-kata,warm: Model (replayed),2.391
+task-breakdown,hermes,mb-output,k8s-agent-sandbox-kata,warm: Tool execution,1.469
+task-breakdown,hermes,mb-output,k8s-agent-sandbox-kata,warm: Harness logic,0.372
+task-breakdown,hermes,mb-output,k8s-agent-sandbox-kata,after: Collect artifacts,3.076
+task-breakdown,hermes,mb-output,k8s-agent-sandbox-kata,"after: Stop harness, revoke bridge access",1.893
+task-breakdown,hermes,mb-output,k8s-agent-sandbox-kata,after: Evaluate,1.976
+task-breakdown,hermes,mb-output,k8s-agent-sandbox-kata,after: Clean up,2.082
+task-breakdown,hermes,mb-output,k8s-warm-pool,"cold: Sandbox, bridge and harness container",2.083
+task-breakdown,hermes,mb-output,k8s-warm-pool,cold: Harness start,12.258
+task-breakdown,hermes,mb-output,k8s-warm-pool,cold: Model (replayed),2.325
+task-breakdown,hermes,mb-output,k8s-warm-pool,cold: Tool execution,1.285
+task-breakdown,hermes,mb-output,k8s-warm-pool,cold: Harness logic,9.612
+task-breakdown,hermes,mb-output,k8s-warm-pool,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-output,k8s-warm-pool,warm: Harness start,0.0
+task-breakdown,hermes,mb-output,k8s-warm-pool,warm: Model (replayed),2.391
+task-breakdown,hermes,mb-output,k8s-warm-pool,warm: Tool execution,1.263
+task-breakdown,hermes,mb-output,k8s-warm-pool,warm: Harness logic,0.43
+task-breakdown,hermes,mb-output,k8s-warm-pool,after: Collect artifacts,3.132
+task-breakdown,hermes,mb-output,k8s-warm-pool,"after: Stop harness, revoke bridge access",1.827
+task-breakdown,hermes,mb-output,k8s-warm-pool,after: Evaluate,1.68
+task-breakdown,hermes,mb-output,k8s-warm-pool,after: Clean up,4.503
+task-breakdown,hermes,mb-output,k8s-warm-pool-gvisor,"cold: Sandbox, bridge and harness container",2.071
+task-breakdown,hermes,mb-output,k8s-warm-pool-gvisor,cold: Harness start,12.817
+task-breakdown,hermes,mb-output,k8s-warm-pool-gvisor,cold: Model (replayed),2.326
+task-breakdown,hermes,mb-output,k8s-warm-pool-gvisor,cold: Tool execution,1.711
+task-breakdown,hermes,mb-output,k8s-warm-pool-gvisor,cold: Harness logic,9.754
+task-breakdown,hermes,mb-output,k8s-warm-pool-gvisor,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-output,k8s-warm-pool-gvisor,warm: Harness start,0.0
+task-breakdown,hermes,mb-output,k8s-warm-pool-gvisor,warm: Model (replayed),2.391
+task-breakdown,hermes,mb-output,k8s-warm-pool-gvisor,warm: Tool execution,1.62
+task-breakdown,hermes,mb-output,k8s-warm-pool-gvisor,warm: Harness logic,0.385
+task-breakdown,hermes,mb-output,k8s-warm-pool-gvisor,after: Collect artifacts,3.18
+task-breakdown,hermes,mb-output,k8s-warm-pool-gvisor,"after: Stop harness, revoke bridge access",1.891
+task-breakdown,hermes,mb-output,k8s-warm-pool-gvisor,after: Evaluate,1.971
+task-breakdown,hermes,mb-output,k8s-warm-pool-gvisor,after: Clean up,2.252
+task-breakdown,hermes,mb-output,k8s-warm-pool-kata,"cold: Sandbox, bridge and harness container",2.073
+task-breakdown,hermes,mb-output,k8s-warm-pool-kata,cold: Harness start,12.296
+task-breakdown,hermes,mb-output,k8s-warm-pool-kata,cold: Model (replayed),2.325
+task-breakdown,hermes,mb-output,k8s-warm-pool-kata,cold: Tool execution,1.572
+task-breakdown,hermes,mb-output,k8s-warm-pool-kata,cold: Harness logic,9.515
+task-breakdown,hermes,mb-output,k8s-warm-pool-kata,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,hermes,mb-output,k8s-warm-pool-kata,warm: Harness start,0.0
+task-breakdown,hermes,mb-output,k8s-warm-pool-kata,warm: Model (replayed),2.391
+task-breakdown,hermes,mb-output,k8s-warm-pool-kata,warm: Tool execution,1.475
+task-breakdown,hermes,mb-output,k8s-warm-pool-kata,warm: Harness logic,0.387
+task-breakdown,hermes,mb-output,k8s-warm-pool-kata,after: Collect artifacts,3.132
+task-breakdown,hermes,mb-output,k8s-warm-pool-kata,"after: Stop harness, revoke bridge access",1.784
+task-breakdown,hermes,mb-output,k8s-warm-pool-kata,after: Evaluate,1.969
+task-breakdown,hermes,mb-output,k8s-warm-pool-kata,after: Clean up,2.256
+task-breakdown,openclaw,mb-output,k8s,"cold: Sandbox, bridge and harness container",3.4
+task-breakdown,openclaw,mb-output,k8s,cold: Harness start,56.615
+task-breakdown,openclaw,mb-output,k8s,cold: Model (replayed),2.965
+task-breakdown,openclaw,mb-output,k8s,cold: Tool execution,1.551
+task-breakdown,openclaw,mb-output,k8s,cold: Harness logic,3.374
+task-breakdown,openclaw,mb-output,k8s,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-output,k8s,warm: Harness start,0.0
+task-breakdown,openclaw,mb-output,k8s,warm: Model (replayed),3.081
+task-breakdown,openclaw,mb-output,k8s,warm: Tool execution,1.051
+task-breakdown,openclaw,mb-output,k8s,warm: Harness logic,2.07
+task-breakdown,openclaw,mb-output,k8s,after: Collect artifacts,0.568
+task-breakdown,openclaw,mb-output,k8s,"after: Stop harness, revoke bridge access",3.106
+task-breakdown,openclaw,mb-output,k8s,after: Evaluate,1.654
+task-breakdown,openclaw,mb-output,k8s,after: Clean up,3.339
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox,"cold: Sandbox, bridge and harness container",3.163
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox,cold: Harness start,56.83
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox,cold: Model (replayed),2.965
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox,cold: Tool execution,1.494
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox,cold: Harness logic,3.523
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox,warm: Harness start,0.0
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox,warm: Model (replayed),3.08
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox,warm: Tool execution,1.057
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox,warm: Harness logic,1.891
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox,after: Collect artifacts,0.574
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox,"after: Stop harness, revoke bridge access",2.952
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox,after: Evaluate,1.662
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox,after: Clean up,3.577
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox-gvisor,"cold: Sandbox, bridge and harness container",3.27
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox-gvisor,cold: Harness start,57.101
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox-gvisor,cold: Model (replayed),2.965
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox-gvisor,cold: Tool execution,1.585
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox-gvisor,cold: Harness logic,3.249
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox-gvisor,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox-gvisor,warm: Harness start,0.0
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox-gvisor,warm: Model (replayed),3.081
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox-gvisor,warm: Tool execution,1.169
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox-gvisor,warm: Harness logic,1.883
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox-gvisor,after: Collect artifacts,0.573
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox-gvisor,"after: Stop harness, revoke bridge access",2.776
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox-gvisor,after: Evaluate,1.936
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox-gvisor,after: Clean up,2.12
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox-kata,"cold: Sandbox, bridge and harness container",3.27
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox-kata,cold: Harness start,56.513
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox-kata,cold: Model (replayed),2.966
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox-kata,cold: Tool execution,1.794
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox-kata,cold: Harness logic,3.305
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox-kata,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox-kata,warm: Harness start,0.0
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox-kata,warm: Model (replayed),3.081
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox-kata,warm: Tool execution,1.159
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox-kata,warm: Harness logic,2.2
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox-kata,after: Collect artifacts,0.573
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox-kata,"after: Stop harness, revoke bridge access",2.643
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox-kata,after: Evaluate,1.959
+task-breakdown,openclaw,mb-output,k8s-agent-sandbox-kata,after: Clean up,2.031
+task-breakdown,openclaw,mb-output,k8s-warm-pool,"cold: Sandbox, bridge and harness container",3.112
+task-breakdown,openclaw,mb-output,k8s-warm-pool,cold: Harness start,56.533
+task-breakdown,openclaw,mb-output,k8s-warm-pool,cold: Model (replayed),2.965
+task-breakdown,openclaw,mb-output,k8s-warm-pool,cold: Tool execution,1.476
+task-breakdown,openclaw,mb-output,k8s-warm-pool,cold: Harness logic,3.668
+task-breakdown,openclaw,mb-output,k8s-warm-pool,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-output,k8s-warm-pool,warm: Harness start,0.0
+task-breakdown,openclaw,mb-output,k8s-warm-pool,warm: Model (replayed),3.081
+task-breakdown,openclaw,mb-output,k8s-warm-pool,warm: Tool execution,1.057
+task-breakdown,openclaw,mb-output,k8s-warm-pool,warm: Harness logic,1.897
+task-breakdown,openclaw,mb-output,k8s-warm-pool,after: Collect artifacts,0.569
+task-breakdown,openclaw,mb-output,k8s-warm-pool,"after: Stop harness, revoke bridge access",2.744
+task-breakdown,openclaw,mb-output,k8s-warm-pool,after: Evaluate,1.659
+task-breakdown,openclaw,mb-output,k8s-warm-pool,after: Clean up,4.562
+task-breakdown,openclaw,mb-output,k8s-warm-pool-gvisor,"cold: Sandbox, bridge and harness container",3.105
+task-breakdown,openclaw,mb-output,k8s-warm-pool-gvisor,cold: Harness start,57.896
+task-breakdown,openclaw,mb-output,k8s-warm-pool-gvisor,cold: Model (replayed),2.965
+task-breakdown,openclaw,mb-output,k8s-warm-pool-gvisor,cold: Tool execution,1.662
+task-breakdown,openclaw,mb-output,k8s-warm-pool-gvisor,cold: Harness logic,3.586
+task-breakdown,openclaw,mb-output,k8s-warm-pool-gvisor,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-output,k8s-warm-pool-gvisor,warm: Harness start,0.0
+task-breakdown,openclaw,mb-output,k8s-warm-pool-gvisor,warm: Model (replayed),3.081
+task-breakdown,openclaw,mb-output,k8s-warm-pool-gvisor,warm: Tool execution,1.171
+task-breakdown,openclaw,mb-output,k8s-warm-pool-gvisor,warm: Harness logic,1.89
+task-breakdown,openclaw,mb-output,k8s-warm-pool-gvisor,after: Collect artifacts,0.574
+task-breakdown,openclaw,mb-output,k8s-warm-pool-gvisor,"after: Stop harness, revoke bridge access",2.761
+task-breakdown,openclaw,mb-output,k8s-warm-pool-gvisor,after: Evaluate,1.945
+task-breakdown,openclaw,mb-output,k8s-warm-pool-gvisor,after: Clean up,2.273
+task-breakdown,openclaw,mb-output,k8s-warm-pool-kata,"cold: Sandbox, bridge and harness container",3.096
+task-breakdown,openclaw,mb-output,k8s-warm-pool-kata,cold: Harness start,57.352
+task-breakdown,openclaw,mb-output,k8s-warm-pool-kata,cold: Model (replayed),2.965
+task-breakdown,openclaw,mb-output,k8s-warm-pool-kata,cold: Tool execution,1.652
+task-breakdown,openclaw,mb-output,k8s-warm-pool-kata,cold: Harness logic,3.541
+task-breakdown,openclaw,mb-output,k8s-warm-pool-kata,"warm: Sandbox, bridge and harness container",0.0
+task-breakdown,openclaw,mb-output,k8s-warm-pool-kata,warm: Harness start,0.0
+task-breakdown,openclaw,mb-output,k8s-warm-pool-kata,warm: Model (replayed),3.08
+task-breakdown,openclaw,mb-output,k8s-warm-pool-kata,warm: Tool execution,1.145
+task-breakdown,openclaw,mb-output,k8s-warm-pool-kata,warm: Harness logic,2.143
+task-breakdown,openclaw,mb-output,k8s-warm-pool-kata,after: Collect artifacts,0.573
+task-breakdown,openclaw,mb-output,k8s-warm-pool-kata,"after: Stop harness, revoke bridge access",2.664
+task-breakdown,openclaw,mb-output,k8s-warm-pool-kata,after: Evaluate,1.97
+task-breakdown,openclaw,mb-output,k8s-warm-pool-kata,after: Clean up,2.531
+task-resources,hermes,mb-output,k8s,"Harness CPU peak (cores), repetition 5.0",1.75
+task-resources,hermes,mb-output,k8s-agent-sandbox,"Harness CPU peak (cores), repetition 1.0",1.77
+task-resources,hermes,mb-output,k8s-agent-sandbox-gvisor,"Harness CPU peak (cores), repetition 4.0",1.74
+task-resources,hermes,mb-output,k8s-agent-sandbox-kata,"Harness CPU peak (cores), repetition 5.0",1.85
+task-resources,hermes,mb-output,k8s-warm-pool,"Harness CPU peak (cores), repetition 5.0",1.53
+task-resources,hermes,mb-output,k8s-warm-pool-gvisor,"Harness CPU peak (cores), repetition 4.0",1.57
+task-resources,hermes,mb-output,k8s-warm-pool-kata,"Harness CPU peak (cores), repetition 3.0",2.96
+task-resources,hermes,mb-output,k8s,"Sandbox CPU peak (cores), repetition 5.0",0.1
+task-resources,hermes,mb-output,k8s-agent-sandbox,"Sandbox CPU peak (cores), repetition 1.0",0.12
+task-resources,hermes,mb-output,k8s-agent-sandbox-gvisor,"Sandbox CPU peak (cores), repetition 4.0",0.37
+task-resources,hermes,mb-output,k8s-agent-sandbox-kata,"Sandbox CPU peak (cores), repetition 5.0",0.67
+task-resources,hermes,mb-output,k8s-warm-pool,"Sandbox CPU peak (cores), repetition 5.0",0.08
+task-resources,hermes,mb-output,k8s-warm-pool-gvisor,"Sandbox CPU peak (cores), repetition 4.0",0.42
+task-resources,hermes,mb-output,k8s-warm-pool-kata,"Sandbox CPU peak (cores), repetition 3.0",0.61
+task-resources,hermes,mb-output,k8s,"Harness memory peak (MiB), repetition 5.0",272.13
+task-resources,hermes,mb-output,k8s-agent-sandbox,"Harness memory peak (MiB), repetition 1.0",271.5
+task-resources,hermes,mb-output,k8s-agent-sandbox-gvisor,"Harness memory peak (MiB), repetition 4.0",266.59
+task-resources,hermes,mb-output,k8s-agent-sandbox-kata,"Harness memory peak (MiB), repetition 5.0",273.07
+task-resources,hermes,mb-output,k8s-warm-pool,"Harness memory peak (MiB), repetition 5.0",273.06
+task-resources,hermes,mb-output,k8s-warm-pool-gvisor,"Harness memory peak (MiB), repetition 4.0",268.95
+task-resources,hermes,mb-output,k8s-warm-pool-kata,"Harness memory peak (MiB), repetition 3.0",247.61
+task-resources,openclaw,mb-output,k8s,"Harness CPU peak (cores), repetition 1.0",2.81
+task-resources,openclaw,mb-output,k8s-agent-sandbox,"Harness CPU peak (cores), repetition 5.0",1.78
+task-resources,openclaw,mb-output,k8s-agent-sandbox-gvisor,"Harness CPU peak (cores), repetition 2.0",1.99
+task-resources,openclaw,mb-output,k8s-agent-sandbox-kata,"Harness CPU peak (cores), repetition 2.0",3.86
+task-resources,openclaw,mb-output,k8s-warm-pool,"Harness CPU peak (cores), repetition 5.0",1.76
+task-resources,openclaw,mb-output,k8s-warm-pool-gvisor,"Harness CPU peak (cores), repetition 4.0",1.94
+task-resources,openclaw,mb-output,k8s-warm-pool-kata,"Harness CPU peak (cores), repetition 3.0",1.83
+task-resources,openclaw,mb-output,k8s,"Sandbox CPU peak (cores), repetition 1.0",0.12
+task-resources,openclaw,mb-output,k8s-agent-sandbox,"Sandbox CPU peak (cores), repetition 5.0",0.11
+task-resources,openclaw,mb-output,k8s-agent-sandbox-gvisor,"Sandbox CPU peak (cores), repetition 2.0",0.32
+task-resources,openclaw,mb-output,k8s-agent-sandbox-kata,"Sandbox CPU peak (cores), repetition 2.0",0.56
+task-resources,openclaw,mb-output,k8s-warm-pool,"Sandbox CPU peak (cores), repetition 5.0",0.07
+task-resources,openclaw,mb-output,k8s-warm-pool-gvisor,"Sandbox CPU peak (cores), repetition 4.0",0.35
+task-resources,openclaw,mb-output,k8s-warm-pool-kata,"Sandbox CPU peak (cores), repetition 3.0",0.4
+task-resources,openclaw,mb-output,k8s,"Harness memory peak (MiB), repetition 1.0",851.86
+task-resources,openclaw,mb-output,k8s-agent-sandbox,"Harness memory peak (MiB), repetition 5.0",1192.5
+task-resources,openclaw,mb-output,k8s-agent-sandbox-gvisor,"Harness memory peak (MiB), repetition 2.0",1220.04
+task-resources,openclaw,mb-output,k8s-agent-sandbox-kata,"Harness memory peak (MiB), repetition 2.0",855.27
+task-resources,openclaw,mb-output,k8s-warm-pool,"Harness memory peak (MiB), repetition 5.0",1211.47
+task-resources,openclaw,mb-output,k8s-warm-pool-gvisor,"Harness memory peak (MiB), repetition 4.0",1298.3
+task-resources,openclaw,mb-output,k8s-warm-pool-kata,"Harness memory peak (MiB), repetition 3.0",1281.68
