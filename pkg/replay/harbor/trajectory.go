@@ -152,7 +152,7 @@ func parse(w workload, trial string, atif, rollout []byte) (*Recording, error) {
 		r.Steps = append(r.Steps, s.Step)
 		for _, c := range s.Tools {
 			result := s.Observation.Results[0]
-			if c.ID == "" || calls[c.ID].step != 0 || c.ID != result.ID || (c.Name != "exec_command" && c.Name != "update_plan") {
+			if c.ID == "" || calls[c.ID].step != 0 || c.ID != result.ID || (c.Name != "exec_command" && c.Name != "update_plan" && (w.Task != "code-from-image" || c.Name != "view_image")) {
 				return nil, fmt.Errorf("unsupported or ambiguous call at step %d", s.ID)
 			}
 			calls[c.ID] = indexedCall{s.ID, c, result.Content}
@@ -171,10 +171,11 @@ func parse(w workload, trial string, atif, rollout []byte) (*Recording, error) {
 			Time    time.Time `json:"timestamp"`
 			Type    string    `json:"type"`
 			Payload struct {
-				Type, Role, Name, Arguments, Output string
-				CallID                              string `json:"call_id"`
-				Cwd                                 string `json:"cwd"`
-				SessionID                           string `json:"session_id"`
+				Type, Role, Name, Arguments string
+				Output                      json.RawMessage
+				CallID                      string `json:"call_id"`
+				Cwd                         string `json:"cwd"`
+				SessionID                   string `json:"session_id"`
 			}
 		}
 		if err := json.Unmarshal(sc.Bytes(), &raw); err != nil {
@@ -227,7 +228,7 @@ func parse(w workload, trial string, atif, rollout []byte) (*Recording, error) {
 			started[active] = true
 			e.Step = c.step
 			e.Kind = p.Name
-			if p.Name == "exec_command" {
+			if p.Name != "update_plan" {
 				call, err := guestCall(c, cwd, r.Plan.StartedAt, raw.Time, uint64(len(r.Plan.Calls)+1))
 				if err != nil {
 					return nil, err
@@ -236,11 +237,11 @@ func parse(w workload, trial string, atif, rollout []byte) (*Recording, error) {
 				e.Sequence = call.Sequence
 			}
 		case "function_call_output":
-			if active == "" || p.CallID != active || p.Output != calls[active].output {
+			if active == "" || p.CallID != active || !matchesReply(calls[active], p.Output) {
 				return nil, fmt.Errorf("reply binding mismatch at line %d", line)
 			}
 			e.Step = lastStep
-			if activeTool == "exec_command" {
+			if activeTool != "update_plan" {
 				e.Basis = "replaced_by_live_guest_reply"
 				e.Wait = 0
 				e.Sequence = uint64(len(r.Plan.Calls))
@@ -275,6 +276,9 @@ func equalJSON(a, b []byte) bool {
 }
 
 func guestCall(c indexedCall, defaultDir string, origin, ts time.Time, sequence uint64) (replay.Call, error) {
+	if c.call.Name == "view_image" {
+		return imageCall(c, origin, ts, sequence)
+	}
 	var args struct {
 		Cmd          string `json:"cmd"`
 		Workdir      string `json:"workdir"`
@@ -288,6 +292,18 @@ func guestCall(c indexedCall, defaultDir string, origin, ts time.Time, sequence 
 	}
 	if args.Workdir == "" {
 		args.Workdir = defaultDir
+	}
+	// A pure heredoc patch in this occurrence was intercepted by Codex and
+	// returned the native patch tool's nested envelope instead of a shell status.
+	if c.call.ID == "call_5ZxflhqiRQR6xuFjOuy848zb" {
+		const responseHeader = "Wall time: 0.0000 seconds\nOutput:\nExit code: 0\nWall time: 0 seconds\nOutput:\n"
+		body, ok := strings.CutPrefix(c.output, responseHeader)
+		patch, opened := strings.CutPrefix(args.Cmd, "apply_patch <<'PATCH'\n")
+		patch, closed := strings.CutSuffix(patch, "\nPATCH")
+		if !ok || !opened || !closed || args.Workdir != "/app" {
+			return replay.Call{}, errors.New("unexpected source patch delivery")
+		}
+		return replay.Call{Operation: "ApplyPatch", Sequence: sequence, StartOffset: ts.Sub(origin), ToolCallID: c.call.ID, Script: args.Cmd, Workdir: args.Workdir, Body: []byte(patch), ResponseStdout: []byte(body)}, nil
 	}
 	header, body, found := strings.Cut(c.output, "\nOutput:\n")
 	match := exitHeader.FindStringSubmatch(header)

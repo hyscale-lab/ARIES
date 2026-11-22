@@ -23,6 +23,8 @@ type Hooks struct {
 
 type Receipt struct {
 	Event            string `json:"event"`
+	Operation        string `json:"operation,omitempty"`
+	StatusBasis      string `json:"status_basis,omitempty"`
 	Time             int64  `json:"monotonic_ns"`
 	Step             int    `json:"step_id,omitempty"`
 	Line             int    `json:"rollout_line,omitempty"`
@@ -121,10 +123,14 @@ func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
 		if err := emit(h, receipt); err != nil {
 			return err
 		}
-		if e.Kind != "exec_command" {
+		if e.Kind != "exec_command" && e.Kind != "view_image" {
 			continue
 		}
 		call := r.Plan.Calls[e.Sequence-1]
+		receipt.Operation = call.Operation
+		if call.Operation == "ViewImage" {
+			receipt.StatusBasis = "recorded_high_detail_image_attachment"
+		}
 		if err := h.Boundary(ctx, "pre-tool", e.Step); err != nil {
 			return err
 		}

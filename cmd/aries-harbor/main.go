@@ -96,8 +96,8 @@ func command(ctx context.Context) error {
 	if *image != r.Image {
 		return fmt.Errorf("trial %s requires image %s", r.Trial, r.Image)
 	}
-	if r.Task != "fix-git" && (*codexTools == "" || *osTools == "") {
-		return errors.New("this task requires -codex-tools and -os-tools for the source guest environment")
+	if r.Task != "fix-git" && (*codexTools == "" || (taskSetups[r.Task].packagesSHA != "" && *osTools == "")) {
+		return errors.New("missing pinned guest tool bundle for this task")
 	}
 	if (*sampler == "") != (*samples == "") {
 		return errors.New("provide -sampler and -samples together")
@@ -237,8 +237,21 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 	}
 	h := harbor.Hooks{
 		IntraTool: intraTool,
-		Record: func(e harbor.Receipt) error { return log.Encode(e) },
+		Record:    func(e harbor.Receipt) error { return log.Encode(e) },
 		Exec: func(ctx context.Context, call replay.Call) (core.CommandResult, error) {
+			if call.Operation == "ApplyPatch" {
+				const binary = "/root/.nvm/versions/node/v22.23.2/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
+				return m.Exec(ctx, id, core.Command{Path: binary, Args: []string{"--codex-run-as-apply-patch", string(call.Body)}, Dir: call.Workdir})
+			}
+			if call.Operation == "ViewImage" {
+				imageBytes, err := m.Exec(ctx, id, core.Command{Path: "/bin/cat", Args: []string{call.Path}})
+				if err != nil || imageBytes.ExitCode != 0 {
+					return imageBytes, err
+				}
+				wire, err := harbor.ImageReply([]byte(imageBytes.Stdout))
+				imageBytes.Stdout = string(wire)
+				return imageBytes, err
+			}
 			return m.Exec(ctx, id, core.Command{Path: "/bin/bash", Args: []string{"-lc", call.Script}, Dir: call.Workdir})
 		},
 		Boundary: func(ctx context.Context, phase string, step int) error {

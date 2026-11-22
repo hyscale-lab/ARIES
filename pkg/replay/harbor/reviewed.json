@@ -135,5 +135,43 @@
     "vcpus": 2,
     "memory_mib": 4096,
     "storage_mib": 10240
+  },
+  {
+    "task": "code-from-image",
+    "workdir": "/app",
+    "image": "docker.io/alexgshaw/code-from-image@sha256:2be9cdb746ed18c1b2b1404032efae0b2235a1b8fc479ef17730c95409d89f76",
+    "effects": [
+      "Read the supplied PNG through the live guest and retain its exact recorded view_image response, then run local Python SHA-256 calculations and write output.txt"
+    ],
+    "trials": [
+      {
+        "trial": "804132f2-e002-4674-893d-3ecded958fab",
+        "trajectory_sha256": "31c6d2dbd02d5e61141035e41c1454dfca9dbb031d813b010b5b92f9c830ea6a",
+        "rollout_sha256": "d47031796dc41892c80355f112caa7f862ad21f8cf9a7acd08bb77b2ca16e921"
+      },
+      {
+        "trial": "a0996b7e-c58c-434d-82e5-9d4abfed37b1",
+        "trajectory_sha256": "b41c1b156e75f1777ed202c669ce49c294f0323c2bf2cfeb8b6d7702ed8cef0d",
+        "rollout_sha256": "90a957a0674516ae37b373c534a4897443eb6a28c22140710dd1a41aa27f6ecb"
+      },
+      {
+        "trial": "b2a5095a-5282-4ce7-a499-5ad5c4812a13",
+        "trajectory_sha256": "3ece4796de115346d69d8272391273e8b4532c718a34ad8df4ad4b9660be63fe",
+        "rollout_sha256": "c92ffe5852cb20af7b46af1e312c05f02eea3fa935eba9724edfca973805e966"
+      },
+      {
+        "trial": "b5a207a3-f92c-441c-881e-0d55b639f07c",
+        "trajectory_sha256": "be118d62554a827e512bc1dfdc3d13131a129e3a89fc2e77a02d253a4b10593a",
+        "rollout_sha256": "45b84dde934af6092306fd85e116f9825234ff089557585418c8bd4c5a9687d0"
+      },
+      {
+        "trial": "c3e7094c-916b-45c3-a2fd-58d242eac9d9",
+        "trajectory_sha256": "a96fe27d5289281074ad13133538765dbb464ed485460a933ee3b976bf675574",
+        "rollout_sha256": "e4bb140ede2154e76dc45143c9914e6488e111aef6733ba9d2e5562041899345"
+      }
+    ],
+    "vcpus": 1,
+    "memory_mib": 2048,
+    "storage_mib": 10240
   }
 ]

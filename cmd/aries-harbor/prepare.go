@@ -23,6 +23,9 @@ type taskSetup struct {
 }
 
 var taskSetups = map[string]taskSetup{
+	"code-from-image": {output: "output.txt", initialCheck: `test ! -e output.txt
+command -v python
+python --version`, inputCheck: `echo 'f4d0330407b363a9ef03d563e5c2ffd24aa76345f997613741f9fc0935354305  code.png' | sha256sum -c -`},
 	"overfull-hbox": {packagesSHA: "a63ab01c6a16caeec664ffbc10890ce597e05948b0a378434f5c48b9266a8f9a", output: "input.tex", initialCheck: `echo '7bf7dbe58dbbfb08b6a652c547daa09a57cdbccc0fd18141b4968756061326a3  input.tex' | sha256sum -c -
 test ! -e main.pdf && test ! -e main.log
 pdflatex --version | head -1`, inputCheck: `sha256sum -c <<'ARIESSHA'
@@ -81,24 +84,25 @@ func prepareTask(ctx context.Context, m *vhive.Manager, id string, r *harbor.Rec
 	if !ok {
 		return "", nil, fmt.Errorf("no ready-state definition for %s", r.Task)
 	}
-	const pkgDir = "/tmp/aries-guest-offline-packages"
-	if _, err := checked(ctx, m, id, core.Command{Path: "/bin/mkdir", Args: []string{pkgDir}}); err != nil {
-		return "", nil, err
-	}
-	if err := uploadPinned(ctx, m, id, packages, task.packagesSHA, pkgDir); err != nil {
-		return "", nil, err
-	}
-	const install = `set -eu
-export DEBIAN_FRONTEND=noninteractive
-apt-get -o Dir::Etc::sourcelist=/dev/null -o Dir::Etc::sourceparts=- --no-install-recommends -y install /tmp/aries-guest-offline-packages/*.deb
-rm -f -- ./*.deb
-cd /tmp
-rmdir aries-guest-offline-packages`
-	if _, err := checked(ctx, m, id, core.Command{Path: "/bin/sh", Args: []string{"-c", install}, Dir: pkgDir}); err != nil {
-		return "", nil, err
+	if task.packagesSHA != "" {
+		if err := installPackages(ctx, m, id, packages, task.packagesSHA); err != nil {
+			return "", nil, err
+		}
 	}
 	if err := uploadPinned(ctx, m, id, tools, codexPrefixSHA, "/"); err != nil {
 		return "", nil, err
+	}
+	if r.Task == "code-from-image" {
+		// This Python base image has only one copy of codex-path in its recorded PATH.
+		_, err := checked(ctx, m, id, core.Command{Path: "/bin/sh", Args: []string{"-c", `set -eu
+cat > /etc/profile.d/zz-aries-image-path.sh <<'ARIESPATH'
+case "$PATH" in
+    *codex-path:*codex-path:*) export PATH="${PATH#*:}" ;;
+esac
+ARIESPATH`}})
+		if err != nil {
+			return "", nil, err
+		}
 	}
 	initial := task.initialCheck
 	if initial == "" {
@@ -113,15 +117,37 @@ rmdir aries-guest-offline-packages`
 		allocation = strings.TrimSpace(out)
 	}
 	state := "set -eu\n" + initial + "\n" + task.inputCheck + `
-command -v node codex rg python3 git patch perl
+command -v node codex rg python3
 test "$(node --version)" = v22.23.2
-rg --version | head -1
-dpkg-query -W python3 git patch perl-base`
+rg --version | head -1`
+	if task.packagesSHA != "" {
+		state += "\ncommand -v git patch perl\ndpkg-query -W python3 git patch perl-base"
+	}
 	out, err := checked(ctx, m, id, core.Command{Path: "/bin/bash", Args: []string{"-lc", state}, Dir: r.Workdir})
 	if err != nil {
 		return "", nil, err
 	}
 	return "source_task_ready", map[string]string{"codex_prefix_sha256": codexPrefixSHA, "ubuntu_packages_sha256": task.packagesSHA, "checks": out, "recorded_temp_allocation": allocation}, nil
+}
+
+func installPackages(ctx context.Context, m *vhive.Manager, id, packages, sha string) error {
+	const pkgDir = "/tmp/aries-guest-offline-packages"
+	if _, err := checked(ctx, m, id, core.Command{Path: "/bin/mkdir", Args: []string{pkgDir}}); err != nil {
+		return err
+	}
+	if err := uploadPinned(ctx, m, id, packages, sha, pkgDir); err != nil {
+		return err
+	}
+	const install = `set -eu
+export DEBIAN_FRONTEND=noninteractive
+apt-get -o Dir::Etc::sourcelist=/dev/null -o Dir::Etc::sourceparts=- --no-install-recommends -y install /tmp/aries-guest-offline-packages/*.deb
+rm -f -- ./*.deb
+cd /tmp
+rmdir aries-guest-offline-packages`
+	if _, err := checked(ctx, m, id, core.Command{Path: "/bin/sh", Args: []string{"-c", install}, Dir: pkgDir}); err != nil {
+		return err
+	}
+	return nil
 }
 
 // This source session refers to the original random name literally in four

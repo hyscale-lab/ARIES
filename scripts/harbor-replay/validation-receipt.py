@@ -37,6 +37,9 @@ def summarize(log, trajectory, host, task, revision, binary_sha):
             row = {k: e[k] for k in ("step_id", "sequence", "rollout_line", "exit_code",
                    "expected_exit_code", "stdout_sha256", "stderr_sha256", "source_output_sha256",
                    "output_comparison")}
+            row["operation"] = e.get("operation", "Exec")
+            if "status_basis" in e:
+                row["status_basis"] = e["status_basis"]
             row["dispatch_monotonic_ns"] = dispatch[e["sequence"]]["monotonic_ns"]
             row["reply_monotonic_ns"] = e["monotonic_ns"]
             row["duration_ns"] = row["reply_monotonic_ns"] - row["dispatch_monotonic_ns"]

@@ -48,3 +48,12 @@ call. For that trial a hashed guest helper allocates the original unique
 0700 directory when the original template is requested. The other trial
 retains the original native mktemp behavior. Its subsequent commands read
 their dynamic directory through a temporary file as recorded.
+
+Code-from-image uses its original Python image and `-codex-tools` without
+Ubuntu package additions. The live image operation reads the reviewed file
+from the guest, validates and decodes its PNG, then serializes the same
+high-detail image attachment recorded in the native session. Each of the five
+source attachments contains the same 95,041 bytes as the task image. For the
+one intercepted pure patch command, the source response has the native
+patch envelope. Its original patch argument is dispatched through the
+official fixed patch-only mode in the guest.
