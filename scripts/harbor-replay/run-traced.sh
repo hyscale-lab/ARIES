@@ -12,7 +12,7 @@ shift 3
 umask 077
 mkdir "$run_dir"
 export ZB_SLOT_EVENTS="$run_dir/slots.log"
-export ZB_TRACE_OUT="$run_dir/boundaries.jsonl"
+export ZB_TRACE_OUT="$run_dir/idle.jsonl"
 bpftrace -q -B line "$scripts/kvm-slots.bt" >"$ZB_SLOT_EVENTS" 2>"$run_dir/bpf.stderr" &
 capture=$!
 finish() {
