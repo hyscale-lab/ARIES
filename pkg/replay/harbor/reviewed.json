@@ -395,5 +395,29 @@
       "write_stdin"
     ],
     "needs_network": true
+  },
+  {
+    "task": "financial-document-processor",
+    "workdir": "/app",
+    "image": "docker.io/alexgshaw/financial-document-processor@sha256:ef6c9cfaaf14cdd200163008a188d5baa9f626f3bfb8d3e7d6f30c08518e6251",
+    "effects": [
+      "Inspect synthetic invoices with local PDF and JPEG tools; sort the originals and verify a summary CSV."
+    ],
+    "trials": [
+      {
+        "trial": "d4ff7d0e-f752-43e3-bb83-77a67b32a3d0",
+        "trajectory_sha256": "bf930d219575202d4d521a8310517fdba977fd822a8ab37ec65253ea583c29f8",
+        "rollout_sha256": "e3a0249980f38649ed9e440d0dd5e4dddf48a09fb5788050800d25aa1bb332dd"
+      }
+    ],
+    "vcpus": 1,
+    "memory_mib": 4096,
+    "storage_mib": 10240,
+    "tools": [
+      "exec_command",
+      "view_image",
+      "update_plan"
+    ],
+    "needs_network": true
   }
 ]

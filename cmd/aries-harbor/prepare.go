@@ -23,6 +23,7 @@ type taskSetup struct {
 }
 
 var taskSetups = map[string]taskSetup{
+	financialTask:      financialSetup,
 	sparqlTask:         sparqlSetup,
 	"compile-compcert": compilerSetup,
 	kvTask:             kvSetup,
@@ -229,6 +230,9 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 		return err
 	}
 	cmd := "set -eu\ntest -s " + task.output + "\nsha256sum " + task.output + "\n" + task.inputCheck
+	if r.Task == financialTask {
+		cmd += financialFinalCheck
+	}
 	if r.Task == kvTask {
 		cmd += kvFinalCheck
 	}
@@ -270,6 +274,9 @@ with urllib.request.urlopen("https://pypi.org/simple/toml/",timeout=10) as respo
 		return err
 	}
 	python, probe := "/usr/local/bin/python", pypiProbe
+	if task == financialTask {
+		python = "/usr/bin/python3"
+	}
 	if task == "compile-compcert" {
 		python, probe = "/usr/bin/python3", compilerNetworkProbe
 	}
