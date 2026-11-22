@@ -9,7 +9,7 @@ from cohort_sparql import CNI_SUMS, CODEX_TOOLS, OS_TOOLS
 
 GRPC = "kv-store-grpc"
 FINANCIAL = "financial-document-processor"
-TASKS = {GRPC, FINANCIAL}
+TASKS = {GRPC, FINANCIAL, "hf-model-inference"}
 PYTHON_ARCHIVE = "7f8a93c102db3ce25dae68cc485877f8ec9f79edb42a7c4518c96a1153b78682"
 IMAGE_HELPER_FILE = "aries-harbor-image"
 NETWORK_SUBNETS = {"pypi": 233, "financeapt": 234}
@@ -101,7 +101,7 @@ def signed_apt_evidence(ready, final, profile):
     return {"snapshot": snapshot, "package_versions": packages}
 
 
-def verify(log, receipt, reference, network=None, financial_apt=None):
+def verify(log, receipt, reference, network=None, financial_apt=None, hf=None):
     events = events_from(log)
     phases = ("create_start", "snapshot_start", "snapshot_complete", "restore_start", "restore_complete",
               "session_start", "session_end", "removed")
@@ -138,18 +138,24 @@ def verify(log, receipt, reference, network=None, financial_apt=None):
     connectivity = [e for e in events if e["event"] == "validated_guest_network"]
     if [e["phase"] for e in connectivity] != ["before_snapshot", "after_restore"]:
         raise ValueError("PyPI reachability evidence is incomplete")
-    for e in connectivity:
-        guest = e["network"]
-        if (guest["pypi_status"] != 200 or not guest["pypi_addresses"] or
-                not any(len(fields) >= 2 and fields[1] == "00000000" for fields in
-                        map(str.split, guest["route"].splitlines()[1:])) or
-                not any(line.startswith("nameserver ") for line in guest["resolv_conf"].splitlines())):
-            raise ValueError("guest PyPI DNS, route, or TLS evidence differs")
+    if hf is None:
+        for e in connectivity:
+            guest = e["network"]
+            if (guest["pypi_status"] != 200 or not guest["pypi_addresses"] or
+                    not any(len(fields) >= 2 and fields[1] == "00000000" for fields in
+                            map(str.split, guest["route"].splitlines()[1:])) or
+                    not any(line.startswith("nameserver ") for line in guest["resolv_conf"].splitlines())):
+                raise ValueError("guest PyPI DNS, route, or TLS evidence differs")
     states = {}
     for event, key in (("source_task_ready", "state"), ("final_task_state", "checks")):
         actual, = [e[key] for e in events if e["event"] == event]
         validated, = [e[key] for e in receipt["source_setup_and_final_state"] if e["event"] == event]
-        if actual != validated:
+        if hf is not None and event == "source_task_ready":
+            common = lambda state: {k: v for k, v in state.items() if k != "checks"}
+            matched = common(actual) == common(validated)
+        else:
+            matched = actual == validated
+        if not matched:
             raise ValueError(f"{event} differs from the native validation")
         states[event] = actual
     checks = {"trial": receipt["trial_id"], "guest_calls": len(calls), "wire_identical_images": images,
@@ -160,4 +166,9 @@ def verify(log, receipt, reference, network=None, financial_apt=None):
         if receipt["task"] != FINANCIAL or not re.fullmatch(r"zbfinanceapt[1-9][0-9]{1,2}", first["cni_network"]):
             raise ValueError("signed Ubuntu evidence lacks its dedicated network")
         checks["signed_ubuntu_archive"] = signed_apt_evidence(states["source_task_ready"], states["final_task_state"], financial_apt)
+    if hf is not None:
+        import cohort_hf
+        if receipt["task"] != cohort_hf.TASK or not re.fullmatch(r"zb(hfm|inference)[1-9][0-9]{1,2}", first["cni_network"]):
+            raise ValueError("inference digest evidence lacks its dedicated network")
+        checks["inference"] = cohort_hf.evidence(states["source_task_ready"], states["final_task_state"], connectivity, hf)
     return checks

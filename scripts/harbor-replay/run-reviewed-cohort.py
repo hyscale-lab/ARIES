@@ -11,7 +11,7 @@ import subprocess
 from cohort_image_circuit import IMAGE_HELPER, TASKS, digest as file_digest, verify
 
 
-PYPI_TASKS = {'kv-store-grpc', 'financial-document-processor'}
+PYPI_TASKS = {'kv-store-grpc', 'financial-document-processor', 'hf-model-inference'}
 SOURCE_DEPENDENCY_TASKS = {'sparql-university', 'torch-tensor-parallelism'}
 
 
@@ -26,6 +26,7 @@ def main():
     cli.add_argument('--dataset-cni',type=Path,help='private token dataset network profile')
     cli.add_argument('--pypi-cni',type=Path,help='private gRPC and financial PyPI network profile')
     cli.add_argument('--financeapt-cni',type=Path,help='private signed-snapshot financial network profile')
+    cli.add_argument('--hf-cni',type=Path,help='private inference model and dependency network profile')
     a=cli.parse_args()
     if not re.fullmatch(r'fcmod-zepbound-[a-z0-9-]+',a.unit):
         raise ValueError('unexpected unit')
@@ -55,9 +56,16 @@ def main():
             import cohort_pypi
             receipt=cohort_pypi.load_receipt(asset,entry)
             financial_apt=entry.get('financial_apt')
-            profile='financeapt' if financial_apt is not None else 'pypi'
-            cni=a.financeapt_cni if financial_apt is not None else a.pypi_cni
-            pypi_args=cohort_pypi.replay_args(asset,task,cni,profile)
+            hf=entry.get('hf')
+            if task == 'hf-model-inference':
+                import cohort_hf
+                if hf is None:
+                    raise ValueError('inference trial is missing its source-bound artifact inventory')
+                pypi_args=cohort_hf.replay_args(asset,a.hf_cni)
+            elif financial_apt is not None:
+                pypi_args=cohort_pypi.replay_args(asset,task,a.financeapt_cni,'financeapt')
+            else:
+                pypi_args=cohort_pypi.replay_args(asset,task,a.pypi_cni)
             pypi_network=pypi_args[pypi_args.index('-cni-network')+1]
         else:
             receipt=entry['receipt']
@@ -93,7 +101,7 @@ def main():
                     if task in SOURCE_DEPENDENCY_TASKS:
                         cohort_sparql.verify(events,receipt)
                     if task in PYPI_TASKS:
-                        cohort_pypi.verify(events,receipt,entry['reference_boundaries'],pypi_network,financial_apt)
+                        cohort_pypi.verify(events,receipt,entry['reference_boundaries'],pypi_network,financial_apt,hf)
                     continue
             raise FileExistsError(f'inspect incomplete attempt before retry: {first}')
         args=[str(asset/'tracer/run-traced.sh'),str(cmd),str(asset/'tracer'),str(first),*direct,*base,
@@ -136,7 +144,7 @@ def main():
             elif task in SOURCE_DEPENDENCY_TASKS:
                 checks=cohort_sparql.verify(first/'events.jsonl',receipt)
             elif task in PYPI_TASKS:
-                checks=cohort_pypi.verify(first/'events.jsonl',receipt,entry['reference_boundaries'],pypi_network,financial_apt)
+                checks=cohort_pypi.verify(first/'events.jsonl',receipt,entry['reference_boundaries'],pypi_network,financial_apt,hf)
             if checks is not None:
                 (first/'fidelity-checks.json').write_text(json.dumps(checks,indent=2)+'\n')
         except Exception:

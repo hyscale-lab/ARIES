@@ -32,14 +32,21 @@ case "${3:-video}" in
         dns_unit=zb-token-dns-amd$node
         tls_hosts=(huggingface.co us.aws.cdn.hf.co pypi.org files.pythonhosted.org)
         ;;
-    inference-amd182)
+    inference-amd182|hf-amd182|hf-amd183|hf-amd189|hf-amd191|hf-amd198|hf-amd200|hf-amd201|hf-amd203)
         private_dns=true
-        node=182
-        bridge=zbhf182
-        subnet=10.232.182.0/28
-        chain=ZB182HF
-        name=zbinference182
-        dns_unit=zb-inference-dns-amd182
+        node=${3##*amd}
+        bridge=zbhfm$node
+        subnet=10.235.$node.0/28
+        chain=ZB${node}HF235
+        name=zbhfm$node
+        dns_unit=zb-hf-dns-amd$node
+        if [[ $3 == inference-amd182 ]]; then
+            bridge=zbhf182
+            subnet=10.232.182.0/28
+            chain=ZB182HF
+            name=zbinference182
+            dns_unit=zb-inference-dns-amd182
+        fi
         tls_hosts=(huggingface.co us.aws.cdn.hf.co cas-server.xethub.hf.co transfer.xethub.hf.co pypi.org files.pythonhosted.org)
         ;;
     compcert-opam|compcert-opam-amd182|compcert-opam-amd183|compcert-opam-amd189|compcert-opam-amd191|compcert-opam-amd198|compcert-opam-amd200|compcert-opam-amd201|compcert-opam-amd203)

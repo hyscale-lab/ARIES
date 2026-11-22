@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import shutil
 
+import cohort_hf
 from cohort_image_circuit import IMAGE_HELPER, digest
 from cohort_pypi import (CNI_SUMS, CODEX_TOOLS, FINANCIAL, GRPC, IMAGE_HELPER_FILE, OS_TOOLS,
                          PYTHON_ARCHIVE, TASKS, boundaries, events_from, pinned, receipt_path, verify)
@@ -25,7 +26,9 @@ def main():
     cli.add_argument("cache", type=Path)
     cli.add_argument("receipts", type=Path)
     cli.add_argument("output", type=Path)
-    cli.add_argument("--financeapt", action="store_true", help="package only signed-snapshot financial trials")
+    profile = cli.add_mutually_exclusive_group()
+    profile.add_argument("--financeapt", action="store_true", help="package only signed-snapshot financial trials")
+    profile.add_argument("--hf", action="store_true", help="package only model-inference trials")
     cli.add_argument("--validation-log", type=Path, action="append", required=True,
                      help="original live diagnostic JSONL named by a validated receipt digest (repeatable)")
     args = cli.parse_args()
@@ -34,13 +37,18 @@ def main():
     replay = repo / "scripts/harbor-replay"
     bound = json.loads((repo / "pkg/replay/harbor/reviewed.json").read_bytes())
     apt = json.loads((repo / "cmd/aries-harbor/financial_apt.json").read_bytes())
+    hf_path = args.cache / "hf-fixture/environment.tar.gz"
+    if args.hf:
+        hf_trials = json.loads((repo / "cmd/aries-harbor/hf_trials.json").read_bytes())
+        hf_environment = cohort_hf.source_environment(hf_path)
     logs = {digest(p): p for p in args.validation_log}
-    adapters = {digest(p): p for prefix in ("aries-kv*", "aries-fin*") for p in args.cache.glob(prefix)
+    prefixes = ("aries-hf*",) if args.hf else ("aries-kv*", "aries-fin*")
+    adapters = {digest(p): p for prefix in prefixes for p in args.cache.glob(prefix)
                 if p.is_file()}
     ready, pending = [], []
     for reviewed in bound:
         task = reviewed["task"]
-        if task not in TASKS:
+        if task not in TASKS or args.hf != (task == cohort_hf.TASK):
             continue
         if not reviewed["needs_network"]:
             raise ValueError(f"{task} lacks source-bound network requirements")
@@ -56,7 +64,8 @@ def main():
                 continue
             receipt_bytes = path.read_bytes()
             receipt = json.loads(receipt_bytes)
-            if not receipt["session_completed"] or not receipt["all_observed_tool_exits_match"]:
+            if (not receipt["session_completed"] or not receipt["all_observed_tool_exits_match"] or
+                    receipt.get("diagnostic_process_drift") or receipt.get("diagnostic_video_images")):
                 pending.append(dict(ident, reason="successful original live fidelity unavailable"))
                 continue
             log = logs.get(receipt["diagnostic_log_sha256"])
@@ -68,7 +77,8 @@ def main():
                 if any(receipt[k] != expected for k, expected in aliases.items()):
                     raise ValueError(f"reviewed identity differs from the native receipt for {trial}")
             reference = boundaries(events_from(log))
-            checks = verify(log, receipt, reference, financial_apt=financial_apt)
+            hf = dict(hf_trials[trial], **hf_environment) if args.hf else None
+            checks = verify(log, receipt, reference, financial_apt=financial_apt, hf=hf)
             initial, = [e["state"] for e in receipt["source_setup_and_final_state"] if e["event"] == "source_task_ready"]
             if initial["codex_prefix_sha256"] != CODEX_TOOLS:
                 raise ValueError(f"source Codex tool archive differs for {trial}")
@@ -79,7 +89,7 @@ def main():
             sha = receipt["adapter_binary_sha256"]
             if sha not in adapters:
                 raise FileNotFoundError(f"source-validated adapter missing for {trial}: {sha}")
-            ready.append((ident, path, hashlib.sha256(receipt_bytes).hexdigest(), receipt, reference, checks, financial_apt))
+            ready.append((ident, path, hashlib.sha256(receipt_bytes).hexdigest(), receipt, reference, checks, financial_apt, hf))
     if not ready:
         raise ValueError("no reviewed trial has a successful receipt and matching native log")
 
@@ -94,6 +104,10 @@ def main():
     if FINANCIAL in cases:
         install(args.cache / "sparql/sparql-university-packages.tar.gz", out / f"{FINANCIAL}-debs.tar.gz", OS_TOOLS)
         install(args.cache / IMAGE_HELPER_FILE, out / IMAGE_HELPER_FILE, IMAGE_HELPER)
+    if cohort_hf.TASK in cases:
+        install(hf_path, out / cohort_hf.ENVIRONMENT, cohort_hf.ENVIRONMENT_SHA)
+        for filename in ("cohort_hf.py", "provision-pypi-cni.sh"):
+            install(replay / filename, out / filename)
     cni = args.cache / "cni"
     cni_sums = pinned(cni / "SHA256SUMS", CNI_SUMS)
     install(cni_sums, out / "cni/SHA256SUMS", CNI_SUMS)
@@ -106,7 +120,7 @@ def main():
         install(replay / filename, out / filename)
 
     manifest = []
-    for ident, path, receipt_sha, receipt, reference, checks, financial_apt in ready:
+    for ident, path, receipt_sha, receipt, reference, checks, financial_apt, hf in ready:
         task, trial = ident["task"], ident["trial_id"]
         sha = receipt["adapter_binary_sha256"]
         adapter = out / "adapters" / sha
@@ -120,6 +134,8 @@ def main():
                         native_fidelity_checks=checks, unobserved_external_actions=receipt["external_actions"])
         if financial_apt is not None:
             measured["financial_apt"] = financial_apt
+        if hf is not None:
+            measured["hf"] = hf
         manifest.append(measured)
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     (out / "pending.json").write_text(json.dumps(pending, indent=2) + "\n")
