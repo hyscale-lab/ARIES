@@ -63,6 +63,21 @@ def make(sources, inventory, reviewed, outputs):
                 row["live_guest_calls"] = len(r["tools"])
             elif attempts:
                 row["state"] = "live_attempt_incomplete_or_divergent"
+                for attempt in attempts:
+                    diagnostic = json.loads(attempt.read_bytes())
+                    if not diagnostic.get("diagnostic_process_drift"):
+                        continue
+                    final_state = any(e["event"] == "final_task_state" for e in diagnostic.get("source_setup_and_final_state", []))
+                    completed = diagnostic.get("session_completed") and final_state
+                    row.setdefault("process_diagnostics", []).append({
+                        "receipt": str(attempt.relative_to(outputs)),
+                        "guest_replies": len(diagnostic.get("tools", [])),
+                        "completed_with_final_state": bool(completed),
+                        "additional_process_observations": len(diagnostic.get("additional_process_observations", [])),
+                    })
+                    if completed:
+                        row["state"] = ("completed_guest_calls_process_timing_diverged"
+                                        if not diagnostic["all_observed_tool_exits_match"] else "completed_in_diagnostic_mode")
             elif row["reviewed_dispatch"]:
                 row["state"] = "source_bound_awaiting_validation"
             elif (task, ident) in exclusions:
