@@ -86,3 +86,29 @@ scoped firewall rule can be removed with
 `provision-pypi-cni.sh PRIVATE_CNI_DIRECTORY remove`. The CNI binary versions
 are containernetworking/plugins v1.9.1 and awslabs/tc-redirect-tap
 34bf829e9a5c as pinned by firecracker-containerd.
+
+The SPARQL runner preserves recorded native web-search completion events
+and their source gaps as host boundaries. Their start timestamps and results
+are absent from the original recordings. Guest pip and direct PyPI requests
+use the original commands and a dedicated network. The prepared guest checks
+the source graph and query hashes, keeps RDFLib absent at session start, and
+checks the live package report against the reviewed version and wheel hashes.
+
+Build the offline OS tool archive with
+`prepare-os-tools.py sparql-university CACHE/sparql/sparql-university-packages.tar.gz`.
+`prepare-sparql-cohort.py CACHE RECEIPTS NEW_BUNDLE` packages successful live
+fidelity trials with their exact source pairs, adapters, packages, tracer and
+CNI binaries. The cache needs the private logs under `sparql/` and the original
+source pairs under `sources/sparql-university/`. Keep the bundle private when
+copying it to a worker. Unvalidated trials remain in `pending.json`.
+
+On the selected study worker, verify the bundle's `SHA256SUMS`, load the
+reviewed OCI digest into the runtime namespace and run
+`provision-sparql-cni.sh BUNDLE/cni install amdNNN` with that worker's physical
+label. Run `run-reviewed-cohort.py` with `BUNDLE/manifest.json` and
+`--sparql-cni BUNDLE/cni`. The runner checks stage integrity and verifies
+the replay's guest statuses, external boundaries, HTTPS probes, final query,
+and dependency bytes. The CNI traffic scope is the site's DNS resolver and
+TLS service endpoints for PyPI, the public bootstrap and the raw GitHub
+helper. Remove that scope with
+`provision-sparql-cni.sh BUNDLE/cni remove amdNNN` when finished.

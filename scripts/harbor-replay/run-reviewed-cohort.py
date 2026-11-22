@@ -16,6 +16,7 @@ def main():
     cli.add_argument('runtime',type=Path);cli.add_argument('unit')
     cli.add_argument('assets',type=Path);cli.add_argument('variant',choices=('v1','v2','v3','v4'))
     cli.add_argument('manifest',type=Path)
+    cli.add_argument('--sparql-cni',type=Path,help='private pre-provisioned SPARQL network profile')
     a=cli.parse_args()
     if not re.fullmatch(r'fcmod-zepbound-[a-z0-9-]+',a.unit):
         raise ValueError('unexpected unit')
@@ -32,8 +33,10 @@ def main():
     entries=json.loads(a.manifest.read_text())
     for entry in entries:
         task=entry['task'];trial=entry['trial_id']
-        if task not in {'constraints-scheduling','regex-log','overfull-hbox',*TASKS} or not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',trial):
+        if task not in {'constraints-scheduling','regex-log','overfull-hbox','sparql-university',*TASKS} or not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',trial):
             raise ValueError('unexpected trial')
+        if task == 'sparql-university':
+            import cohort_sparql
         receipt=entry['receipt']
         if not (receipt['session_completed'] and receipt['all_observed_tool_exits_match'] and receipt['trial_id']==trial and receipt['task']==task):
             raise ValueError('missing successful source-specific fidelity evidence')
@@ -58,6 +61,8 @@ def main():
                 if done and (first/'driver.exit').is_file() and (first/'driver.exit').read_text().strip()=='0':
                     if task in TASKS:
                         verify(first,receipt)
+                    if task == 'sparql-university':
+                        cohort_sparql.verify(events,receipt)
                     continue
             raise FileExistsError(f'inspect incomplete attempt before retry: {first}')
         args=[str(asset/'tracer/run-traced.sh'),str(cmd),str(asset/'tracer'),str(first),*direct,*base,
@@ -74,6 +79,8 @@ def main():
                 if file_digest(archive)!=sha:
                     raise ValueError('Debian patch archive differs from the native validation')
                 args.extend(['-os-tools',str(archive)])
+        elif task == 'sparql-university':
+            args.extend(cohort_sparql.replay_args(asset,a.sparql_cni))
         elif task not in TASKS:
             args.extend(['-os-tools',str(asset/(task+'-debs.tar.gz'))])
         rc=subprocess.run(args,env=env).returncode
@@ -81,6 +88,9 @@ def main():
         if rc:raise RuntimeError(f'{trial} exited {rc}')
         if task in TASKS:
             checks=verify(first,receipt)
+            (first/'fidelity-checks.json').write_text(json.dumps(checks,indent=2)+'\n')
+        elif task == 'sparql-university':
+            checks=cohort_sparql.verify(first/'events.jsonl',receipt)
             (first/'fidelity-checks.json').write_text(json.dumps(checks,indent=2)+'\n')
 
 

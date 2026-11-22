@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
-# Configure only the amd198 private SPARQL validation bridge and its dependency egress.
+# Configure one private study worker SPARQL bridge and its dependency egress.
 set -euo pipefail
 base=$(realpath "$1")
 action=${2:-install}
-bridge=zbsparql198
-subnet=10.231.198.0/28
-chain=ZB198SPARQL
-name=zbsparql198
+# CloudLab can assign a short hostname unrelated to the physical worker label.
+worker=${3:-amd198}
+[[ "$worker" =~ ^amd([1-9][0-9]{1,2})$ ]]
+octet=${BASH_REMATCH[1]}
+((octet <= 254))
+bridge=zbsparql$octet
+subnet=10.231.$octet.0/28
+chain=ZB${octet}SPARQL
+name=$bridge
 ipt=(sudo -n iptables -w -t mangle)
 jump=(-i "$bridge" -s "$subnet" -m comment --comment "$name" -j "$chain")
 if [[ "$action" == remove ]]; then
