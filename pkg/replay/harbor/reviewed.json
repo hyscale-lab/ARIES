@@ -509,5 +509,30 @@
       "write_stdin"
     ],
     "needs_network": true
+  },
+  {
+    "task": "hf-model-inference",
+    "workdir": "/app",
+    "image": "docker.io/alexgshaw/hf-model-inference@sha256:0ef475aebda8abb8cbf3a1d97aee8ac4b09ca9720550e25a4a46a47930cd3bad",
+    "effects": [
+      "Fetch the public SST-2 sentiment model, start a local inference service and validate its predictions"
+    ],
+    "trials": [
+      {
+        "trial": "071ce48d-3de4-4c02-9e42-3eb64933acd2",
+        "trajectory_sha256": "652d78a21d09a028af77b3216f5a800d7f382621d448909836accfff82a4ca32",
+        "rollout_sha256": "8496b45b1c2f29ab652968e5268e166420d6092c923afc52bb1cf994290cfeda"
+      }
+    ],
+    "vcpus": 1,
+    "memory_mib": 2048,
+    "storage_mib": 10240,
+    "tools": [
+      "exec_command",
+      "update_plan",
+      "web_search_call",
+      "write_stdin"
+    ],
+    "needs_network": true
   }
 ]

@@ -29,6 +29,7 @@ var taskSetups = map[string]taskSetup{
 	torchTask:          torchSetup,
 	"compile-compcert": compilerSetup,
 	kvTask:             kvSetup,
+	hfTask:             hfSetup,
 	"video-processing": {output: "output.toml", initialCheck: videoInitialCheck,
 		inputCheck: `echo '69ac53c9b4302225e3bdf5b94970e29dade7d800ba07109c2691604b2cac69ad  example_video.mp4' | sha256sum -c -`},
 	"circuit-fibsqrt": {output: "gates.txt", initialCheck: `echo '032786f94f16605767c62bb61ce4dbba7ab7d3f1046712c975f01c9a04b6ad29  gates.txt' | sha256sum -c -
@@ -122,6 +123,11 @@ func prepareTask(ctx context.Context, m *vhive.Manager, id string, r *harbor.Rec
 			return "", nil, err
 		}
 	}
+	if r.Task == hfTask {
+		if err := uploadPinned(ctx, m, id, packages, hfEnvironmentSHA, "/"); err != nil {
+			return "", nil, err
+		}
+	}
 	if task.packagesSHA != "" {
 		if err := installPackages(ctx, m, id, packages, task.packagesSHA); err != nil {
 			return "", nil, err
@@ -130,7 +136,7 @@ func prepareTask(ctx context.Context, m *vhive.Manager, id string, r *harbor.Rec
 	if err := uploadPinned(ctx, m, id, tools, codexPrefixSHA, "/"); err != nil {
 		return "", nil, err
 	}
-	if r.Task == datasetTask || r.Task == "code-from-image" || r.Task == "circuit-fibsqrt" || r.Task == "video-processing" {
+	if r.Task == hfTask || r.Task == datasetTask || r.Task == "code-from-image" || r.Task == "circuit-fibsqrt" || r.Task == "video-processing" {
 		// This Python base image has only one copy of codex-path in its recorded PATH.
 		_, err := checked(ctx, m, id, core.Command{Path: "/bin/sh", Args: []string{"-c", `set -eu
 cat > /etc/profile.d/zz-aries-image-path.sh <<'ARIESPATH'
@@ -178,6 +184,9 @@ rg --version | head -1`
 		pkgField = "ubuntu_packages_sha256"
 	}
 	details := map[string]string{"codex_prefix_sha256": codexPrefixSHA, pkgField: task.packagesSHA, "checks": out, "recorded_temp_allocation": allocation}
+	if r.Task == hfTask {
+		details["inference_environment_sha256"] = hfEnvironmentSHA
+	}
 	if r.Task == sparqlTask {
 		pip, err := prepareSparql(ctx, m, id, r.Trial)
 		if err != nil {
@@ -249,6 +258,9 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 		return err
 	}
 	cmd := "set -eu\ntest -s " + task.output + "\nsha256sum " + task.output + "\n" + task.inputCheck
+	if r.Task == hfTask {
+		cmd += hfFinal
+	}
 	if r.Task == financialTask {
 		cmd += financialFinalCheck
 	}
@@ -303,6 +315,9 @@ with urllib.request.urlopen("https://pypi.org/simple/toml/",timeout=10) as respo
 		return err
 	}
 	python, probe := "/usr/local/bin/python", pypiProbe
+	if task == hfTask {
+		probe = hfNetworkProbe
+	}
 	if task == financialTask {
 		python = "/usr/bin/python3"
 	}

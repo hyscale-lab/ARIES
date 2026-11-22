@@ -25,6 +25,16 @@ case "${3:-video}" in
         dns_unit=zb-token-dns-amd$node
         tls_hosts=(huggingface.co us.aws.cdn.hf.co pypi.org files.pythonhosted.org)
         ;;
+    inference-amd182)
+        dataset_profile=true
+        node=182
+        bridge=zbhf182
+        subnet=10.232.182.0/28
+        chain=ZB182HF
+        name=zbinference182
+        dns_unit=zb-inference-dns-amd182
+        tls_hosts=(huggingface.co us.aws.cdn.hf.co cas-server.xethub.hf.co transfer.xethub.hf.co pypi.org files.pythonhosted.org)
+        ;;
     compcert)
         bridge=zbcc189
         subnet=10.231.189.0/28
