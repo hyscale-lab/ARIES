@@ -6,9 +6,15 @@ import json
 from pathlib import Path
 
 
-def summarize(log, host, task, revision, binary_sha):
+def summarize(log, trajectory, host, task, revision, binary_sha):
     events = [json.loads(line) for line in log.read_bytes().splitlines()]
     first = events[0]
+    original = trajectory.read_bytes()
+    if hashlib.sha256(original).hexdigest() != first["trajectory_sha256"]:
+        raise ValueError("ATIF input differs from the native diagnostic")
+    expected_steps = [step["step_id"] for step in json.loads(original)["steps"]
+                      for call in step.get("tool_calls", [])
+                      if call["function_name"] != "update_plan"]
     dispatch = {}
     waits = collections.Counter()
     lifecycle = {}
@@ -37,7 +43,9 @@ def summarize(log, host, task, revision, binary_sha):
             replies.append(row)
 
     last = next((e for e in reversed(events) if e["event"] == "tool_reply"), {})
-    full = "session_end" in lifecycle and last and len(dispatch) == len(replies)
+    observed_steps = [row["step_id"] for row in replies]
+    full = ("session_end" in lifecycle and "removed" in lifecycle
+            and observed_steps == expected_steps and len(dispatch) == len(replies))
     exit_match = all(e["exit_code"] == e["expected_exit_code"] for e in replies)
     # Durable outcome and final guest checks appear in the last recorded tool.
     # Keep the final returned streams as evidence of what checks actually ran.
@@ -48,7 +56,7 @@ def summarize(log, host, task, revision, binary_sha):
         "task": task, "host": host, "configuration": "v1", "adapter_revision": revision,
         "adapter_binary_sha256": binary_sha, "diagnostic_log_sha256": hashlib.sha256(log.read_bytes()).hexdigest(),
         "observer": first["observer"], "session_completed": bool(full),
-        "all_observed_tool_exits_match": exit_match, "lifecycle_monotonic_ns": lifecycle,
+        "expected_step_ids": expected_steps, "all_observed_tool_exits_match": exit_match, "lifecycle_monotonic_ns": lifecycle,
         "modeled_wait_ns_by_basis": dict(waits), "source_setup_and_final_state": ready, "tools": replies,
         "final_tool_stdout": last.get("stdout", ""), "final_tool_stderr": last.get("stderr", ""),
     }
@@ -58,12 +66,13 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("log", type=Path)
     p.add_argument("output", type=Path)
+    p.add_argument("--trajectory", type=Path, required=True)
     p.add_argument("--host", required=True)
     p.add_argument("--task", required=True)
     p.add_argument("--revision", required=True)
     p.add_argument("--binary-sha256", required=True)
     a = p.parse_args()
-    data = summarize(a.log, a.host, a.task, a.revision, a.binary_sha256)
+    data = summarize(a.log, a.trajectory, a.host, a.task, a.revision, a.binary_sha256)
     with a.output.open("x") as out:
         json.dump(data, out, indent=2)
         out.write("\n")
