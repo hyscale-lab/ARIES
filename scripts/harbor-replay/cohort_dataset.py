@@ -32,11 +32,13 @@ def replay_args(asset, receipt, cni):
     args = ["-cni-network", name, "-cni-conf-dir", str(cni / "conf"),
             "-cni-cache-dir", str(cni / "cache"), "-cni-bin-dir", str(cni / "bin")]
     ready, = [e["state"] for e in receipt["source_setup_and_final_state"] if e["event"] == "source_task_ready"]
-    if sha := ready.get("debian_curl_archive_sha256"):
-        path = asset / "curl-debs.tar.gz"
-        if digest(path) != sha:
-            raise ValueError("Debian curl archive differs from the live validation")
-        args.extend(["-os-tools",str(path)])
+    for field, name in (("debian_curl_archive_sha256","curl-debs.tar.gz"),
+                        ("debian_patch_archive_sha256","circuit-patch-debs.tar.gz")):
+        if sha := ready.get(field):
+            path = asset / name
+            if digest(path) != sha:
+                raise ValueError(f"{name} differs from the live validation")
+            args.extend(["-os-tools",str(path)])
     return args
 
 

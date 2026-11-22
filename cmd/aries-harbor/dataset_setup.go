@@ -119,3 +119,7 @@ for name, expected in json.loads(sys.argv[1]).items():
 `, string(raw)}})
 	return err
 }
+
+// Steps 10 and 15 of this original locate /usr/bin/patch and list the
+// transient harness directory; the source does not publish its plugin files.
+const datasetPatchDiscoveryTrial = "a3571ce0-b75f-4df8-b0c9-9907d1ff73be"
