@@ -24,6 +24,7 @@ type taskSetup struct {
 
 var taskSetups = map[string]taskSetup{
 	datasetTask:        datasetSetup,
+	markerTask:         markerSetup,
 	financialTask:      financialSetup,
 	sparqlTask:         sparqlSetup,
 	torchTask:          torchSetup,
@@ -58,6 +59,11 @@ const debianPatchTrial = "99c36c5d-aba5-476b-93b2-d08a39c7a353"
 // The circuit invokes GNU patch, and video trial 07e979df locates it in PATH.
 func sourceSetup(r *harbor.Recording) (taskSetup, bool) {
 	task, ok := taskSetups[r.Task]
+	if r.Task == markerTask {
+		profile, bound := markerTrials[r.Trial]
+		ok = bound
+		task.initialCheck = markerReady(profile.stamp)
+	}
 	if r.Task == hfTask {
 		_, ok = hfTrials[r.Trial]
 		task.initialCheck += hfSourceSetup(r.Trial)
@@ -277,6 +283,9 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 	if r.Task == hfTask {
 		cmd += hfFinalCheck(r.Trial)
 	}
+	if r.Task == markerTask {
+		cmd += markerFinal(r.Trial)
+	}
 	if r.Task == financialTask {
 		cmd += financialFinalCheck
 		if profile, ok := financialAptTrials[r.Trial]; ok {
@@ -341,6 +350,12 @@ with urllib.request.urlopen("https://pypi.org/simple/toml/",timeout=10) as respo
 	python, probe := "/usr/local/bin/python", pypiProbe
 	if task == hfTask {
 		probe = hfNetworkProbe
+	}
+	if task == markerTask {
+		python = "/usr/bin/python3"
+		probe = fmt.Sprintf(`import json,urllib.request
+with urllib.request.urlopen("https://snapshot.ubuntu.com/ubuntu/%s/dists/noble/InRelease",timeout=15) as r:
+    print(json.dumps({"dependencies":{"snapshot.ubuntu.com":{"status":r.status}}}))`,markerTrials[recording.Trial].stamp)
 	}
 	if task == financialTask {
 		python = "/usr/bin/python3"

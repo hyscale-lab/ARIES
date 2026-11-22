@@ -615,5 +615,35 @@
       "write_stdin"
     ],
     "needs_network": true
+  },
+  {
+    "task": "dna-assembly",
+    "workdir": "/app",
+    "image": "docker.io/alexgshaw/dna-assembly@sha256:d1adf6835f1dd91205ba70e452c699d0aea601010038e5617f370716efb50569",
+    "effects": [
+      "Run the original local fluorescent-tag fixture analysis against the pinned input and install its recorded Ubuntu tool package. Check the final file digest against the fixed original patch."
+    ],
+    "trials": [
+      {
+        "trial": "ddf7548f-de77-4e90-aa31-ae1f86311601",
+        "trajectory_sha256": "a375d18d7adcd1f01c3cea8ca8b17efc46ecb949a862f50de4459cde64b89cb6",
+        "rollout_sha256": "5dba243b021cce7d03ca8a232fa664aeb344c4ada6d6420f60fb5cc3059b32c7"
+      },
+      {
+        "trial": "8968e176-fa1f-4d6a-8e5a-3ebd7cc0b8de",
+        "trajectory_sha256": "8221b64c2fa5302d1a021f999e5a8df41b6c4d8bcabf2954eed1d6697f2c2823",
+        "rollout_sha256": "f5bc79c6f4249b8e0586733ff38efc64b826c9308aac6109b3b97eb044439f31"
+      }
+    ],
+    "vcpus": 1,
+    "memory_mib": 2048,
+    "storage_mib": 10240,
+    "tools": [
+      "exec_command",
+      "write_stdin",
+      "update_plan",
+      "web_search_call"
+    ],
+    "needs_network": true
   }
 ]
