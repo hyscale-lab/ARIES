@@ -17,7 +17,7 @@ def make(sources, inventory, reviewed, outputs):
         "git-leak-recovery": "Review each original command and any synthetic recovered secret before admitting a live credential-remediation workflow.",
         "fix-code-vulnerability": "Original command sequence lacks a review isolating defensive code edits from vulnerability reproduction.",
         "filter-js-from-html": "Original command sequence lacks a review isolating defensive filtering from executable attack tests.",
-        "protein-assembly": "Fluorescent fusion work awaits source-specific review of substrates, original calls, and external dependencies.",
+        "protein-assembly": "Offline assay and public-endpoint metadata review is complete. Supplied components and exact fetched archive payloads still require review before native execution. See protein-assembly-source-review.json.",
         "dna-assembly": "Fluorescent and tag marker assembly awaits source-specific review of substrates, original calls, and external dependencies.",
     }
     rows = []
