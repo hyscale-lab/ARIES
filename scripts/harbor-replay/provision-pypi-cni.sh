@@ -35,14 +35,15 @@ case "${3:-video}" in
         dns_unit=zb-inference-dns-amd182
         tls_hosts=(huggingface.co us.aws.cdn.hf.co cas-server.xethub.hf.co transfer.xethub.hf.co pypi.org files.pythonhosted.org)
         ;;
-    compcert-opam)
+    compcert-opam|compcert-opam-amd182|compcert-opam-amd183|compcert-opam-amd189|compcert-opam-amd191|compcert-opam-amd198|compcert-opam-amd201|compcert-opam-amd203)
         private_dns=true
         node=189
-        bridge=zbopam189
-        subnet=10.233.189.0/28
-        chain=ZB189OPAM
-        name=zbopam189
-        dns_unit=zb-opam-dns-amd189
+        if [[ ${3:-video} == compcert-opam-amd* ]]; then node=${3#compcert-opam-amd}; fi
+        bridge=zbopam$node
+        subnet=10.233.$node.0/28
+        chain=ZB${node}OPAM
+        name=zbopam$node
+        dns_unit=zb-opam-dns-amd$node
         tls_hosts=(github.com raw.githubusercontent.com opam.ocaml.org archive.ubuntu.com security.ubuntu.com)
         http_hosts=(archive.ubuntu.com security.ubuntu.com)
         ;;
