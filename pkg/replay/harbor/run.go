@@ -23,6 +23,7 @@ type Hooks struct {
 
 type Receipt struct {
 	Event            string `json:"event"`
+	SessionID        int    `json:"source_process_session_id,omitempty"`
 	Operation        string `json:"operation,omitempty"`
 	StatusBasis      string `json:"status_basis,omitempty"`
 	Time             int64  `json:"monotonic_ns"`
@@ -123,11 +124,15 @@ func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
 		if err := emit(h, receipt); err != nil {
 			return err
 		}
-		if e.Kind != "exec_command" && e.Kind != "view_image" {
+		if e.Kind != "exec_command" && e.Kind != "view_image" && e.Kind != "write_stdin" {
 			continue
 		}
 		call := r.Plan.Calls[e.Sequence-1]
 		receipt.Operation = call.Operation
+		if call.SessionID != 0 {
+			receipt.SessionID = call.SessionID
+			receipt.StatusBasis = "live_process_status_or_exit"
+		}
 		if call.Operation == "ViewImage" {
 			receipt.StatusBasis = "recorded_high_detail_image_attachment"
 		}

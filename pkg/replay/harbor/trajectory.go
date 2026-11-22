@@ -117,6 +117,7 @@ func Load(atif, rollout []byte) (*Recording, error) {
 	return nil, errors.New("source bytes do not match a reviewed Harbor trial")
 }
 
+var runningHeader = regexp.MustCompile(`(?m)^Process running with session ID ([0-9]+)\r?$`)
 var exitHeader = regexp.MustCompile(`(?m)^Process exited with code ([0-9]+)\r?$`)
 
 type indexedCall struct {
@@ -152,7 +153,7 @@ func parse(w workload, trial string, atif, rollout []byte) (*Recording, error) {
 		r.Steps = append(r.Steps, s.Step)
 		for _, c := range s.Tools {
 			result := s.Observation.Results[0]
-			if c.ID == "" || calls[c.ID].step != 0 || c.ID != result.ID || (c.Name != "exec_command" && c.Name != "update_plan" && (w.Task != "code-from-image" || c.Name != "view_image")) {
+			if c.ID == "" || calls[c.ID].step != 0 || c.ID != result.ID || (c.Name != "exec_command" && c.Name != "update_plan" && (w.Task != "code-from-image" || c.Name != "view_image") && (w.Task != "circuit-fibsqrt" || c.Name != "write_stdin")) {
 				return nil, fmt.Errorf("unsupported or ambiguous call at step %d", s.ID)
 			}
 			calls[c.ID] = indexedCall{s.ID, c, result.Content}
@@ -264,6 +265,26 @@ func parse(w workload, trial string, atif, rollout []byte) (*Recording, error) {
 	if !sessionBound || !complete || r.Plan.StartedAt.IsZero() || active != "" || len(started) != len(calls) || len(r.Plan.Calls) == 0 {
 		return nil, errors.New("incomplete or unbound source occurrence")
 	}
+	pending := map[int]bool{}
+	for _, c := range r.Plan.Calls {
+		if c.Operation == "StartProcess" {
+			if pending[c.SessionID] {
+				return nil, errors.New("source session reused before exit")
+			}
+			pending[c.SessionID] = true
+		}
+		if c.Operation == "PollProcess" {
+			if !pending[c.SessionID] {
+				return nil, errors.New("source polls an unknown session")
+			}
+			if c.ExitCode != ProcessRunning {
+				delete(pending, c.SessionID)
+			}
+		}
+	}
+	if len(pending) != 0 {
+		return nil, errors.New("source includes unconsumed session handles")
+	}
 	return r, nil
 }
 
@@ -276,6 +297,9 @@ func equalJSON(a, b []byte) bool {
 }
 
 func guestCall(c indexedCall, defaultDir string, origin, ts time.Time, sequence uint64) (replay.Call, error) {
+	if c.call.Name == "write_stdin" {
+		return processPoll(c, origin, ts, sequence)
+	}
 	if c.call.Name == "view_image" {
 		return imageCall(c, origin, ts, sequence)
 	}
@@ -306,6 +330,13 @@ func guestCall(c indexedCall, defaultDir string, origin, ts time.Time, sequence 
 		return replay.Call{Operation: "ApplyPatch", Sequence: sequence, StartOffset: ts.Sub(origin), ToolCallID: c.call.ID, Script: args.Cmd, Workdir: args.Workdir, Body: []byte(patch), ResponseStdout: []byte(body)}, nil
 	}
 	header, body, found := strings.Cut(c.output, "\nOutput:\n")
+	if state := runningHeader.FindStringSubmatch(header); len(state) == 2 && found && args.Cmd != "" && path.IsAbs(args.Workdir) && args.YieldMs > 0 {
+		id, err := strconv.Atoi(state[1])
+		if err != nil || id == 0 {
+			return replay.Call{}, errors.New("invalid running session ID")
+		}
+		return replay.Call{Operation: "StartProcess", SessionID: id, YieldTime: time.Duration(args.YieldMs) * time.Millisecond, Sequence: sequence, StartOffset: ts.Sub(origin), ToolCallID: c.call.ID, Script: args.Cmd, Workdir: args.Workdir, Login: true, ExitCode: ProcessRunning, ResponseStdout: []byte(body)}, nil
+	}
 	match := exitHeader.FindStringSubmatch(header)
 	if !found || len(match) != 2 || args.Cmd == "" || !path.IsAbs(args.Workdir) {
 		return replay.Call{}, fmt.Errorf("step %d has no completed foreground exec or workdir", c.step)
@@ -315,4 +346,37 @@ func guestCall(c indexedCall, defaultDir string, origin, ts time.Time, sequence 
 		return replay.Call{}, err
 	}
 	return replay.Call{Operation: "Exec", Sequence: sequence, StartOffset: ts.Sub(origin), ToolCallID: c.call.ID, Script: args.Cmd, Workdir: args.Workdir, Login: true, ExitCode: int32(exit), ResponseStdout: []byte(body)}, nil
+}
+
+func processPoll(c indexedCall, origin, ts time.Time, sequence uint64) (replay.Call, error) {
+	var args struct {
+		SessionID int    `json:"session_id"`
+		Chars     string `json:"chars"`
+		MaxTokens int    `json:"max_output_tokens"`
+		YieldMs   int    `json:"yield_time_ms"`
+	}
+	d := json.NewDecoder(bytes.NewReader(c.call.Args))
+	d.DisallowUnknownFields()
+	if err := d.Decode(&args); err != nil || args.SessionID <= 0 || args.Chars != "" || args.YieldMs <= 0 {
+		return replay.Call{}, errors.New("only empty, bounded native process polls are reviewed")
+	}
+	header, body, ok := strings.Cut(c.output, "\nOutput:\n")
+	if !ok {
+		return replay.Call{}, errors.New("missing poll observation")
+	}
+	call := replay.Call{Operation: "PollProcess", SessionID: args.SessionID, YieldTime: time.Duration(max(5000, args.YieldMs)) * time.Millisecond, Sequence: sequence, StartOffset: ts.Sub(origin), ToolCallID: c.call.ID, ResponseStdout: []byte(body)}
+	if running := runningHeader.FindStringSubmatch(header); len(running) == 2 && running[1] == strconv.Itoa(args.SessionID) {
+		call.ExitCode = ProcessRunning
+		return call, nil
+	}
+	exit := exitHeader.FindStringSubmatch(header)
+	if len(exit) != 2 {
+		return replay.Call{}, errors.New("missing terminal or correct running poll status")
+	}
+	n, err := strconv.ParseInt(exit[1], 10, 32)
+	if err != nil {
+		return replay.Call{}, err
+	}
+	call.ExitCode = int32(n)
+	return call, nil
 }

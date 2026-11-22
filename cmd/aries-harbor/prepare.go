@@ -23,6 +23,9 @@ type taskSetup struct {
 }
 
 var taskSetups = map[string]taskSetup{
+	"circuit-fibsqrt": {output: "gates.txt", initialCheck: `echo '032786f94f16605767c62bb61ce4dbba7ab7d3f1046712c975f01c9a04b6ad29  gates.txt' | sha256sum -c -
+test ! -e sim
+gcc --version | head -1`, inputCheck: `echo '700645ac6156cdc88ec1e210f7c7d8d9969bb42aec969c410597e8efca796173  sim.c' | sha256sum -c -`},
 	"code-from-image": {output: "output.txt", initialCheck: `test ! -e output.txt
 command -v python
 python --version`, inputCheck: `echo 'f4d0330407b363a9ef03d563e5c2ffd24aa76345f997613741f9fc0935354305  code.png' | sha256sum -c -`},
@@ -92,7 +95,7 @@ func prepareTask(ctx context.Context, m *vhive.Manager, id string, r *harbor.Rec
 	if err := uploadPinned(ctx, m, id, tools, codexPrefixSHA, "/"); err != nil {
 		return "", nil, err
 	}
-	if r.Task == "code-from-image" {
+	if r.Task == "code-from-image" || r.Task == "circuit-fibsqrt" {
 		// This Python base image has only one copy of codex-path in its recorded PATH.
 		_, err := checked(ctx, m, id, core.Command{Path: "/bin/sh", Args: []string{"-c", `set -eu
 cat > /etc/profile.d/zz-aries-image-path.sh <<'ARIESPATH'

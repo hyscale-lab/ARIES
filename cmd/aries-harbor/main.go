@@ -10,6 +10,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -235,10 +236,17 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 			return err
 		}
 	}
+	sessions := harbor.NewProcessSessions(ctx, func(ctx context.Context, call replay.Call, stdout, stderr io.Writer) (core.CommandResult, error) {
+		return m.ExecStream(ctx, id, core.Command{Path: "/bin/bash", Args: []string{"-lc", call.Script}, Dir: call.Workdir}, nil, stdout, stderr)
+	})
+	defer sessions.Close()
 	h := harbor.Hooks{
 		IntraTool: intraTool,
 		Record:    func(e harbor.Receipt) error { return log.Encode(e) },
 		Exec: func(ctx context.Context, call replay.Call) (core.CommandResult, error) {
+			if call.Operation == "StartProcess" || call.Operation == "PollProcess" {
+				return sessions.Execute(ctx, call)
+			}
 			if call.Operation == "ApplyPatch" {
 				const binary = "/root/.nvm/versions/node/v22.23.2/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
 				return m.Exec(ctx, id, core.Command{Path: binary, Args: []string{"--codex-run-as-apply-patch", string(call.Body)}, Dir: call.Workdir})

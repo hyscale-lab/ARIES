@@ -57,3 +57,13 @@ source attachments contains the same 95,041 bytes as the task image. For the
 one intercepted pure patch command, the source response has the native
 patch envelope. Its original patch argument is dispatched through the
 official fixed patch-only mode in the guest.
+
+Two reviewed circuit-fibsqrt sessions yield while their real guest compile or
+verification process is still running. ARIES streams both output channels
+while inferred model time elapses, returns each chunk once, and binds later
+empty write_stdin polls to that same live process. The initial yield starts
+at host dispatch and includes guest transport setup. A live process running
+at a yield is encoded as protocol status -1. Polls use the source harness's
+five-second minimum, established by the repeated 5.00-second observations
+at a requested 1000 ms. A process completing earlier or later than the
+recorded state is retained as divergence.

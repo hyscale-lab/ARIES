@@ -173,5 +173,28 @@
     "vcpus": 1,
     "memory_mib": 2048,
     "storage_mib": 10240
+  },
+  {
+    "task": "circuit-fibsqrt",
+    "workdir": "/app",
+    "image": "docker.io/alexgshaw/circuit-fibsqrt@sha256:29783439f529eaed2145592f15af7a2281161528860392a382c825489030ae3a",
+    "effects": [
+      "Generate combinational logic in gates.txt, compile supplied local simulator and validate Fibonacci/square-root outputs with persistent, polled guest processes"
+    ],
+    "trials": [
+      {
+        "trial": "4bb52b55-6168-4724-8bb5-208e4d8ceb41",
+        "trajectory_sha256": "b167d7ff032bf48a877d3651abdc4e46cbede494652e0c7be21992cf2b325518",
+        "rollout_sha256": "6dca30e99358df93d00a2fbed7cff856f748907b838974586348d4dc82d073fa"
+      },
+      {
+        "trial": "b43d6be8-70d4-44fb-97a6-358b6bb55b3f",
+        "trajectory_sha256": "181c06bcdefb2144c887e8aef3fbdad816e80704ef3f4918b7d55fcaf088274b",
+        "rollout_sha256": "9f687584373a176a0eb84c079c8cbfd1fd0b60fdaaaec77c923879bb8e3aea15"
+      }
+    ],
+    "vcpus": 1,
+    "memory_mib": 2048,
+    "storage_mib": 10240
   }
 ]
