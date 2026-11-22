@@ -4,9 +4,33 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
+
+
+def worker_driver(assets, unit, entries, temporary):
+    driver=assets/"run-reviewed-cohort.py"
+    tasks={entry["task"] for entry in entries}
+    if unit!="fcmod-zepbound-amd200" or not tasks.intersection({"count-dataset-tokens","video-processing"}):
+        return driver, {}
+    helper=assets/"cohort_dataset.py"
+    old=helper.read_bytes()
+    old_nodes=b"(182|183|189|191|198|201|203)"
+    new_nodes=b"(182|183|189|191|198|200|201|203)"
+    if new_nodes in old:
+        return driver, {}
+    # Sealed packages predate amd200 in the original worker list. Keep every
+    # semantic check and the original bytes, updating only the exact name list.
+    if old.count(old_nodes)!=1:
+        raise ValueError("unrecognized worker allowlist")
+    for module in assets.glob("*.py"):
+        shutil.copyfile(module,temporary/module.name)
+    updated=old.replace(old_nodes,new_nodes)
+    (temporary/helper.name).write_bytes(updated)
+    return temporary/driver.name, dict(module=helper.name,source_sha256=hashlib.sha256(old).hexdigest(),
+                                       deployed_sha256=hashlib.sha256(updated).hexdigest(),added_worker="amd200")
 
 
 def main():
@@ -27,6 +51,9 @@ def main():
     status.parent.mkdir(exist_ok=True)
     failed=0
     with tempfile.TemporaryDirectory(prefix="aries-reviewed-") as tmp, status.open("a") as out:
+        driver, amendment=worker_driver(a.assets,a.unit,entries,Path(tmp))
+        if amendment:
+            lineage["worker_profile_amendment"]=amendment
         selection=Path(tmp)/"trial.json"
         for entry in entries:
             selection.write_text(json.dumps([entry])+"\n")
