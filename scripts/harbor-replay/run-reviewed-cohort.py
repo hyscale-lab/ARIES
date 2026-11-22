@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a fixed cohort of previously validated regex, calendar and TeX recordings."""
+"""Run a fixed cohort of previously validated Harbor recordings."""
 import argparse
 import hashlib
 import json
@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import re
 import subprocess
+
+from cohort_image_circuit import IMAGE_HELPER, TASKS, digest as file_digest, verify
 
 
 def main():
@@ -30,7 +32,7 @@ def main():
     entries=json.loads(a.manifest.read_text())
     for entry in entries:
         task=entry['task'];trial=entry['trial_id']
-        if task not in ('constraints-scheduling','regex-log','overfull-hbox') or not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',trial):
+        if task not in {'constraints-scheduling','regex-log','overfull-hbox',*TASKS} or not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',trial):
             raise ValueError('unexpected trial')
         receipt=entry['receipt']
         if not (receipt['session_completed'] and receipt['all_observed_tool_exits_match'] and receipt['trial_id']==trial and receipt['task']==task):
@@ -53,14 +55,26 @@ def main():
             if events.exists():
                 try: done=json.loads(events.read_text().splitlines()[-1]).get('event')=='removed'
                 except (ValueError,IndexError): done=False
-                if done and (first/'driver.exit').read_text().strip()=='0':continue
+                if done and (first/'driver.exit').is_file() and (first/'driver.exit').read_text().strip()=='0':
+                    if task in TASKS:
+                        verify(first,receipt)
+                    continue
             raise FileExistsError(f'inspect incomplete attempt before retry: {first}')
         args=[str(asset/'tracer/run-traced.sh'),str(cmd),str(asset/'tracer'),str(first),*direct,*base,
-              '-image',receipt['image'],'-codex-tools',str(asset/'codex-harbor-tools.tar.gz'),
-              '-os-tools',str(asset/(task+'-debs.tar.gz'))]
+              '-image',receipt['image'],'-codex-tools',str(asset/'codex-harbor-tools.tar.gz')]
+        if task == 'code-from-image':
+            helper = asset/'aries-harbor-image'
+            if file_digest(helper) != IMAGE_HELPER:
+                raise ValueError('source-validated guest image helper differs')
+            args.extend(['-image-helper',str(helper)])
+        elif task not in TASKS:
+            args.extend(['-os-tools',str(asset/(task+'-debs.tar.gz'))])
         rc=subprocess.run(args,env=env).returncode
         (first/'driver.exit').write_text(str(rc)+'\n')
         if rc:raise RuntimeError(f'{trial} exited {rc}')
+        if task in TASKS:
+            checks=verify(first,receipt)
+            (first/'fidelity-checks.json').write_text(json.dumps(checks,indent=2)+'\n')
 
 
 if __name__=='__main__':
