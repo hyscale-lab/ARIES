@@ -34,6 +34,8 @@ func command(ctx context.Context) error {
 	rollout := flag.String("rollout", "", "original Codex rollout JSONL")
 	image := flag.String("image", "", "prepared benchmark image in containerd (empty prints the source timeline only)")
 	observer := flag.String("observer", "", "synchronous host trace executable; empty selects uninstrumented replay")
+	sampler := flag.String("sampler", "", "host sample_vmm.py")
+	samples := flag.String("samples", "", "new one-second VMM samples JSONL")
 	log := flag.String("log", "", "new private JSONL run log")
 	storage := flag.Int("storage-mib", 10240, "devmapper disk capacity")
 	var o vhive.Options
@@ -61,15 +63,18 @@ func command(ctx context.Context) error {
 	if *image == "" {
 		return json.NewEncoder(os.Stdout).Encode(r)
 	}
+	if (*sampler == "") != (*samples == "") {
+		return errors.New("provide -sampler and -samples together")
+	}
 	f, err := os.OpenFile(*log, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	return native(ctx, o, r, *image, *observer, *storage, json.NewEncoder(f))
+	return native(ctx, o, r, *image, *observer, *sampler, *samples, *storage, json.NewEncoder(f))
 }
 
-func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer string, storage int, log *json.Encoder) (retErr error) {
+func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples string, storage int, log *json.Encoder) (retErr error) {
 	m, err := vhive.New(o)
 	if err != nil {
 		return err
@@ -129,6 +134,16 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 	socket, err := m.VMMSocket(ctx, id)
 	if err != nil {
 		return err
+	}
+	if sampler != "" {
+		stop, err := startSampler(ctx, sampler, socket, samples)
+		if err != nil {
+			return err
+		}
+		defer func() { retErr = errors.Join(retErr, stop()) }()
+		if err = lifecycle("sampler_ready"); err != nil {
+			return err
+		}
 	}
 	h := harbor.Hooks{
 		Record: func(e harbor.Receipt) error { return log.Encode(e) },
