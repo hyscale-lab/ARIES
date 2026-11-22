@@ -277,3 +277,20 @@ func confirmMemoryProcesses(processes []checkpointProcess) error {
 	}
 	return nil
 }
+
+// VMMSocket resolves the native control socket of the currently live VM.
+// Capture callers must re-resolve it after each snapshot restore.
+func (m *Manager) VMMSocket(ctx context.Context, id string) (string, error) {
+	control, err := m.vmControl()
+	if err != nil {
+		return "", err
+	}
+	info, err := control.GetVMInfo(m.ctx(ctx), &proto.GetVMInfoRequest{VMID: id})
+	if err != nil {
+		return "", err
+	}
+	if info.SocketPath == "" {
+		return "", errors.New("VM has no control socket")
+	}
+	return info.SocketPath, nil
+}

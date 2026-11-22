@@ -1,0 +1,27 @@
+[
+  {
+    "trial": "02a77c58-1e9a-4cfb-a332-da5a752e0cfc",
+    "trajectory_sha256": "ec22ca5398af7061a1b51261a7abefdb3775e3422682232fccdaa8494dd22a4f",
+    "rollout_sha256": "8193dbe7464cf2822e736a524689e69c18ca905db0703c8fc0ee2b716d12e818"
+  },
+  {
+    "trial": "1761aadb-1aa4-42aa-a911-a92a07711d38",
+    "trajectory_sha256": "73608b4222f8f0bc9108b568194a8847c0090afd8149283b86586898980c5c29",
+    "rollout_sha256": "6586ecb47c9cf1c161ea053354f165f46b27bfd255092a68eb76f1fe00c015e0"
+  },
+  {
+    "trial": "1966b12e-293a-43f9-b9dd-3f41b18972ed",
+    "trajectory_sha256": "576b34392c6aa9fdbfea03f6f3802f47e83aea26aa4cf333762ac1a19e7d78fe",
+    "rollout_sha256": "4e2331ae4b01c6e41b85f137f855f2683a502f91c366e336af626956c2ff59a1"
+  },
+  {
+    "trial": "db5b8820-57ae-43d3-a0a6-68efc08e3be0",
+    "trajectory_sha256": "a6e1f77a2a804eb8f4d11575a04237785863b3fb4884c76e741e9d227167949b",
+    "rollout_sha256": "a0b4cd59207357552f3e228790aca96cf6d5ca7dd468d62daeb76b69e3a0e8d6"
+  },
+  {
+    "trial": "fd59d5ea-5f2f-4c8f-a9c9-aa0c6e9e7033",
+    "trajectory_sha256": "a580ebc44b2aaf67d8fab14fae0e6c408f7473b8249fc17f042de3e5311ccdd0",
+    "rollout_sha256": "e0e1e2a48d93e36793349acc1f01e995fc05b67f84489a507500e8e2d185e798"
+  }
+]
