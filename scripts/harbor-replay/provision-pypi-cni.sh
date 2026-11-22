@@ -32,6 +32,9 @@ esac
 ipt=(sudo -n iptables -w -t mangle)
 jump=(-i "$bridge" -s "$subnet" -m comment --comment "$name" -j "$chain")
 if [[ "$action" == remove ]]; then
+    if [[ ${3:-video} == dataset ]] && sudo -n systemctl is-active --quiet zb-token-dns-amd189; then
+        sudo -n systemctl stop zb-token-dns-amd189
+    fi
     if "${ipt[@]}" -C PREROUTING "${jump[@]}" 2>/dev/null; then
         "${ipt[@]}" -D PREROUTING "${jump[@]}"
         "${ipt[@]}" -F "$chain"
@@ -60,6 +63,7 @@ mkdir -p "$base"/{conf,ipam,cache}
 (cd "$base/bin"; sha256sum -c ../SHA256SUMS)
 resolver=$(awk '$1=="nameserver" && $2 !~ /^127\./ && $2 !~ /:/ {print $2;exit}' /run/systemd/resolve/resolv.conf)
 test -n "$resolver"
+if [[ ${3:-video} == dataset ]]; then resolver=10.232.189.1; fi
 printf 'nameserver %s\n' "$resolver" > "$base/resolv.conf"
 python3 - "$base" "$subnet" "$bridge" "$name" <<'PY'
 import ipaddress, json, pathlib, subprocess, sys
@@ -95,7 +99,19 @@ for host in sys.argv[2:]:
             continue
     if host not in hosts: raise RuntimeError(f"no validated public TLS address for {host}")
 path.write_text(json.dumps(hosts,sort_keys=True)+"\n")
+(path.parent.parent/"dns.hosts").write_text("".join(f"{addr} {host}\n" for host, addr in sorted(hosts.items())))
 PYTLS
+    # The platform mounts /etc/hosts read-only. Resolve service records on this
+    # dedicated bridge and return NXDOMAIN for names outside the approved set.
+    test -x /usr/sbin/dnsmasq
+    if sudo -n systemctl is-active --quiet zb-token-dns-amd189; then
+        sudo -n systemctl kill --signal=HUP zb-token-dns-amd189
+    else
+        sudo -n systemd-run --unit=zb-token-dns-amd189 --property=Restart=no \
+            /usr/sbin/dnsmasq --keep-in-foreground --conf-file=/dev/null --no-hosts --no-resolv \
+            --bind-dynamic --interface="$bridge" --except-interface=lo --listen-address="$resolver" \
+            --addn-hosts="$base/dns.hosts" --local=/#/ --pid-file="$base/dns.pid"
+    fi
 fi
 if ! "${ipt[@]}" -S "$chain" &>/dev/null; then
     "${ipt[@]}" -N "$chain"
@@ -114,6 +130,13 @@ if [[ ${3:-video} == dataset ]]; then
     mapfile -t verified < <(python3 -c 'import json,sys;print("\n".join(sorted(set(json.load(open(sys.argv[1])).values()))))' "$base/conf/dataset-hosts.json")
 else
     verified=("${github_addresses[@]}")
+fi
+if [[ ${3:-video} == dataset ]]; then
+    for protocol in udp tcp; do
+        if ! "${ipt[@]}" -C "$chain" -d "$resolver" -p "$protocol" --dport 53 -j RETURN 2>/dev/null; then
+            "${ipt[@]}" -I "$chain" 1 -d "$resolver" -p "$protocol" --dport 53 -j RETURN
+        fi
+    done
 fi
 for address in "${verified[@]}"; do
     if ! "${ipt[@]}" -C "$chain" -d "$address" -p tcp --dport 443 -j RETURN 2>/dev/null; then

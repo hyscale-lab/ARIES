@@ -89,8 +89,8 @@ for item in json.loads(Path("/tmp/aries-dataset-install.json").read_text())["ins
 PYFINAL`
 
 // Host CNI resolves and TLS-verifies these four service names, and allows each
-// selected address on the private bridge. Pin the same endpoints in the guest
-// so regional DNS differences cannot select an address outside its scoped rules.
+// selected address on the private bridge. Verify its private DNS view from
+// the live guest before using public package or dataset services.
 func prepareDatasetEndpoints(ctx context.Context, m *vhive.Manager, id, conf string) error {
 	raw, err := os.ReadFile(filepath.Join(conf, "dataset-hosts.json"))
 	if err != nil {
@@ -104,16 +104,18 @@ func prepareDatasetEndpoints(ctx context.Context, m *vhive.Manager, id, conf str
 	if len(addresses) != len(expected) {
 		return errors.New("unexpected dataset endpoint count")
 	}
-	entries := ""
+
 	for _, name := range expected {
 		addr := addresses[name]
 		if !addr.Is4() || !addr.IsGlobalUnicast() || addr.IsPrivate() {
 			return fmt.Errorf("invalid dataset endpoint for %s", name)
 		}
-		entries += addr.String() + " " + name + "\n"
+
 	}
-	_, err = checked(ctx, m, id, core.Command{Path: "/usr/local/bin/python", Args: []string{"-c", `import sys
-with open("/etc/hosts","a") as f: f.write("\n"+sys.argv[1])
-`, entries}})
+	_, err = checked(ctx, m, id, core.Command{Path: "/usr/local/bin/python", Args: []string{"-c", `import json,socket,sys
+for name, expected in json.loads(sys.argv[1]).items():
+    seen = {a[4][0] for a in socket.getaddrinfo(name,443,socket.AF_INET,socket.SOCK_STREAM)}
+    assert seen == {expected}, (name, expected, seen)
+`, string(raw)}})
 	return err
 }
