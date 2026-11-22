@@ -12,25 +12,19 @@ http_hosts=()
 github_addresses=()
 case "${3:-video}" in
     video) ;;
+    dataset)
+        bridge=zbtok189
+        subnet=10.232.189.0/28
+        chain=ZB189TOK
+        name=zbtoken189
+        tls_hosts=(huggingface.co us.aws.cdn.hf.co pypi.org files.pythonhosted.org)
+        ;;
     compcert)
         bridge=zbcc189
         subnet=10.231.189.0/28
         chain=ZB189COMP
         name=zbcomp189
         tls_hosts=(github.com)
-        # The host and guest resolver return different regional frontends.
-        # Require an authenticated response for this exact public repository
-        # from each additional address before allowing it on this bridge.
-        for octet in 112 113 114; do
-            for last in 3 4; do
-                candidate=140.82.$octet.$last
-                if curl --noproxy '*' --fail --silent --show-error --max-time 6 \
-                    --resolve "github.com:443:$candidate" --output /dev/null \
-                    'https://github.com/AbsInt/CompCert.git/info/refs?service=git-upload-pack'; then
-                    github_addresses+=("$candidate")
-                fi
-            done
-        done
         http_hosts=(archive.ubuntu.com security.ubuntu.com)
         ;;
     *) echo "Unknown validation network profile" >&2; exit 2 ;;
@@ -46,6 +40,21 @@ if [[ "$action" == remove ]]; then
     exit 0
 fi
 test "$action" = install
+if [[ ${3:-video} == compcert ]]; then
+        # The host and guest resolver return different regional frontends.
+        # Require an authenticated response for this exact public repository
+        # from each additional address before allowing it on this bridge.
+        for octet in 112 113 114; do
+            for last in 3 4; do
+                candidate=140.82.$octet.$last
+                if curl --noproxy '*' --fail --silent --show-error --max-time 6 \
+                    --resolve "github.com:443:$candidate" --output /dev/null \
+                    'https://github.com/AbsInt/CompCert.git/info/refs?service=git-upload-pack'; then
+                    github_addresses+=("$candidate")
+                fi
+            done
+        done
+fi
 test "$(sysctl -n net.ipv4.ip_forward)" = 1
 mkdir -p "$base"/{conf,ipam,cache}
 (cd "$base/bin"; sha256sum -c ../SHA256SUMS)
@@ -69,6 +78,25 @@ config={"cniVersion":"1.0.0","name":name,"plugins":[{"type":"bridge","bridge":br
             "resolvConf":str(base/"resolv.conf")}},{"type":"firewall"},{"type":"tc-redirect-tap"},{"type":"loopback"}]}
 (base/"conf"/"10-video.conflist").write_text(json.dumps(config,indent=2)+"\n")
 PY
+if [[ ${3:-video} == dataset ]]; then
+    python3 - "$base/conf/dataset-hosts.json" "${tls_hosts[@]}" <<'PYTLS'
+import ipaddress,json,pathlib,socket,ssl,sys
+path=pathlib.Path(sys.argv[1]); hosts={}
+for host in sys.argv[2:]:
+    addresses=sorted({a[4][0] for a in socket.getaddrinfo(host,443,socket.AF_INET,socket.SOCK_STREAM)})
+    for ip in addresses:
+        if not ipaddress.ip_address(ip).is_global: raise ValueError(host)
+        try:
+            with socket.create_connection((ip,443),timeout=5) as conn:
+                with ssl.create_default_context().wrap_socket(conn,server_hostname=host):
+                    hosts[host]=ip
+                    break
+        except OSError:
+            continue
+    if host not in hosts: raise RuntimeError(f"no validated public TLS address for {host}")
+path.write_text(json.dumps(hosts,sort_keys=True)+"\n")
+PYTLS
+fi
 if ! "${ipt[@]}" -S "$chain" &>/dev/null; then
     "${ipt[@]}" -N "$chain"
     for protocol in udp tcp; do "${ipt[@]}" -A "$chain" -d "$resolver" -p "$protocol" --dport 53 -j RETURN; done
@@ -82,7 +110,12 @@ if ! "${ipt[@]}" -S "$chain" &>/dev/null; then
     fi
     "${ipt[@]}" -A "$chain" -j DROP
 fi
-for address in "${github_addresses[@]}"; do
+if [[ ${3:-video} == dataset ]]; then
+    mapfile -t verified < <(python3 -c 'import json,sys;print("\n".join(sorted(set(json.load(open(sys.argv[1])).values()))))' "$base/conf/dataset-hosts.json")
+else
+    verified=("${github_addresses[@]}")
+fi
+for address in "${verified[@]}"; do
     if ! "${ipt[@]}" -C "$chain" -d "$address" -p tcp --dport 443 -j RETURN 2>/dev/null; then
         "${ipt[@]}" -I "$chain" 1 -d "$address" -p tcp --dport 443 -j RETURN
     fi

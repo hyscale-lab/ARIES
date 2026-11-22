@@ -23,6 +23,7 @@ type taskSetup struct {
 }
 
 var taskSetups = map[string]taskSetup{
+	datasetTask:        datasetSetup,
 	financialTask:      financialSetup,
 	sparqlTask:         sparqlSetup,
 	"compile-compcert": compilerSetup,
@@ -122,7 +123,7 @@ func prepareTask(ctx context.Context, m *vhive.Manager, id string, r *harbor.Rec
 	if err := uploadPinned(ctx, m, id, tools, codexPrefixSHA, "/"); err != nil {
 		return "", nil, err
 	}
-	if r.Task == "code-from-image" || r.Task == "circuit-fibsqrt" || r.Task == "video-processing" {
+	if r.Task == datasetTask || r.Task == "code-from-image" || r.Task == "circuit-fibsqrt" || r.Task == "video-processing" {
 		// This Python base image has only one copy of codex-path in its recorded PATH.
 		_, err := checked(ctx, m, id, core.Command{Path: "/bin/sh", Args: []string{"-c", `set -eu
 cat > /etc/profile.d/zz-aries-image-path.sh <<'ARIESPATH'
@@ -243,6 +244,9 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 		}
 		cmd += check
 	}
+	if r.Task == datasetTask {
+		cmd += datasetFinal
+	}
 	if r.Task == "compile-compcert" {
 		cmd += "\n" + compilerResult
 	}
@@ -276,6 +280,9 @@ with urllib.request.urlopen("https://pypi.org/simple/toml/",timeout=10) as respo
 	python, probe := "/usr/local/bin/python", pypiProbe
 	if task == financialTask {
 		python = "/usr/bin/python3"
+	}
+	if task == datasetTask {
+		probe = datasetNetworkProbe
 	}
 	if task == "compile-compcert" {
 		python, probe = "/usr/bin/python3", compilerNetworkProbe

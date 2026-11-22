@@ -216,6 +216,11 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 	if err != nil {
 		return err
 	}
+	if r.Task == datasetTask {
+		if err = prepareDatasetEndpoints(ctx, m, id, o.CNIConfDir); err != nil {
+			return err
+		}
+	}
 	event, state, err := prepareTask(ctx, m, id, r, codexTools, osTools)
 	prepEnd, clockErr := harbor.Clock()
 	if err != nil || clockErr != nil {

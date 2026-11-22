@@ -419,5 +419,30 @@
       "update_plan"
     ],
     "needs_network": true
+  },
+  {
+    "task": "count-dataset-tokens",
+    "workdir": "/app",
+    "image": "docker.io/alexgshaw/count-dataset-tokens@sha256:9c513c4ba342bd95be501f6f5eadd4806a2b18749c87c251615825100130232d",
+    "effects": [
+      "Read public data/tokenizer metadata, download the pinned metadata parquet and tokenizer files, install the historical tokenization libraries, and write the aggregate count. Dataset content is only parsed and tokenized."
+    ],
+    "trials": [
+      {
+        "trial": "fc1cd637-cc25-45bc-9e02-901bd1e07801",
+        "trajectory_sha256": "9979197bf0e171d431c2fe08c7f904ec723369ab67ffc3d310fc695c4e10e5a2",
+        "rollout_sha256": "c9f2f5bb81f9de8e560b2ab1732cd923c5cea578702f1832fc301d2020240766"
+      }
+    ],
+    "vcpus": 1,
+    "memory_mib": 2048,
+    "storage_mib": 10240,
+    "tools": [
+      "exec_command",
+      "update_plan",
+      "write_stdin",
+      "web_search_call"
+    ],
+    "needs_network": true
   }
 ]
