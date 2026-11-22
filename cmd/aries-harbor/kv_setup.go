@@ -32,7 +32,7 @@ var kvArtifactDigests = map[string][2]string{
 
 func kvFinalCheck(trial string) string {
 	hashes := kvArtifactDigests[trial]
-	return fmt.Sprintf("\necho '%s  kv-store.proto' | sha256sum -c -\necho '%s  server.py' | sha256sum -c -\n", hashes[0], hashes[1]) + kvServiceCheck
+	return fmt.Sprintf("\necho '%s  kv-store.proto' | sha256sum -c -\necho '%s  server.py' | sha256sum -c -\n", hashes[0], hashes[1]) + fmt.Sprintf(kvServiceCheck, trial == "720d990f-65c3-4e3a-8613-c813937dd7d4")
 }
 
 const kvServiceCheck = `
@@ -51,6 +51,12 @@ found = {w["metadata"]["name"].lower().replace("_","-"):w["download_info"]["arch
 assert found == expected, found
 with grpc.insecure_channel("127.0.0.1:5328") as channel:
     stub = kv_store_pb2_grpc.KVStoreStub(channel)
-    assert stub.GetVal(kv_store_pb2.GetValRequest(key="startup-healthcheck"), timeout=5).val == 0
+    returns_zero = "%t" == "true"
+    try:
+        reply = stub.GetVal(kv_store_pb2.GetValRequest(key="startup-healthcheck"), timeout=5)
+    except grpc.RpcError as error:
+        assert not returns_zero and error.code() == grpc.StatusCode.NOT_FOUND, error
+    else:
+        assert returns_zero and reply.val == 0, reply
 print("Four recorded wheel digests verified; restored guest service answered GetVal")
 PYREPORT`
