@@ -158,6 +158,9 @@ func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
 		if err = errors.Join(err, captureErr, h.Record(receipt)); err != nil {
 			return err
 		}
+		if call.Operation == "ViewImage" && out.Stdout != string(call.ResponseStdout) {
+			return fmt.Errorf("step %d image attachment differs from the source", e.Step)
+		}
 		if int32(out.ExitCode) != call.ExitCode {
 			return fmt.Errorf("step %d live exit %d, recorded %d", e.Step, out.ExitCode, call.ExitCode)
 		}

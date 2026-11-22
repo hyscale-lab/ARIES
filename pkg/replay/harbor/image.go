@@ -5,7 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"image/png"
+
 	"strings"
 	"time"
 
@@ -20,19 +20,6 @@ type imageItem struct {
 
 const dataPNG = "data:image/png;base64,"
 const originalPNG = "f4d0330407b363a9ef03d563e5c2ffd24aa76345f997613741f9fc0935354305"
-
-// ImageReply forms the original high-detail response from bytes actually
-// returned by the guest, after validating the reviewed PNG dimensions.
-func ImageReply(data []byte) ([]byte, error) {
-	config, err := png.DecodeConfig(bytes.NewReader(data))
-	if err != nil || config.Width != 1160 || config.Height != 804 || len(data) > 1<<20 || digest(data) != originalPNG {
-		return nil, errors.New("unexpected reviewed PNG dimensions or size")
-	}
-	if _, err := png.Decode(bytes.NewReader(data)); err != nil {
-		return nil, err
-	}
-	return json.Marshal([]imageItem{{Type: "input_image", ImageURL: dataPNG + base64.StdEncoding.EncodeToString(data), Detail: "high"}})
-}
 
 func recordedImage(c indexedCall) (imageItem, error) {
 	url, ok := strings.CutPrefix(c.output, "[{'type': 'input_image', 'image_url': '")
@@ -76,5 +63,5 @@ func imageCall(c indexedCall, origin, ts time.Time, seq uint64) (replay.Call, er
 		return replay.Call{}, err
 	}
 	wire, err := json.Marshal([]imageItem{item})
-	return replay.Call{Operation: "ViewImage", Path: args.Path, Sequence: seq, StartOffset: ts.Sub(origin), ToolCallID: c.call.ID, ResponseStdout: wire}, err
+	return replay.Call{Operation: "ViewImage", ImageWidth: 1160, ImageHeight: 804, Path: args.Path, Sequence: seq, StartOffset: ts.Sub(origin), ToolCallID: c.call.ID, ResponseStdout: wire}, err
 }

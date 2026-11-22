@@ -1,0 +1,9 @@
+[package]
+name = "aries-harbor-image"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+base64 = "=0.22.1"
+image = { version = "=0.25.9", default-features = false, features = ["jpeg", "png"] }

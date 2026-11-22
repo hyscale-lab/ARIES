@@ -12,6 +12,8 @@ import (
 
 // Call is one recorded sandbox request and its expected logical outcome.
 type Call struct {
+	ImageWidth     int           `json:"image_width,omitempty"`
+	ImageHeight    int           `json:"image_height,omitempty"`
 	SessionID      int           `json:"session_id,omitempty"`
 	YieldTime      time.Duration `json:"yield_time,omitempty"`
 	Operation      string        `json:"operation"`

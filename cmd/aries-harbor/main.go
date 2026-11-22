@@ -47,6 +47,7 @@ func command(ctx context.Context) error {
 	intraInterval := flag.Duration("intra-tool-interval", time.Second, "running interval between extra trace captures")
 	intraWindows := flag.Int("intra-tool-windows", 3, "maximum extra captures for the selected tool")
 	codexTools := flag.String("codex-tools", "", "pinned original Codex and Node guest prefix archive")
+	imageHelper := flag.String("image-helper", "", "pinned static in-guest PNG/JPEG codec")
 	osTools := flag.String("os-tools", "", "pinned task-specific offline Ubuntu package archive")
 	rg := flag.String("ripgrep", "", "Codex 0.151.0 Linux x64 bundled rg for guest preparation")
 	probe := flag.String("guest-probe", "", "optional guest telemetry executable for diagnostic runs")
@@ -97,6 +98,9 @@ func command(ctx context.Context) error {
 	if *image != r.Image {
 		return fmt.Errorf("trial %s requires image %s", r.Trial, r.Image)
 	}
+	if r.Task == "code-from-image" && *imageHelper == "" {
+		return errors.New("this task requires the pinned in-guest -image-helper")
+	}
 	if r.Task != "fix-git" && (*codexTools == "" || (taskSetups[r.Task].packagesSHA != "" && *osTools == "")) {
 		return errors.New("missing pinned guest tool bundle for this task")
 	}
@@ -118,10 +122,10 @@ func command(ctx context.Context) error {
 		return err
 	}
 	defer f.Close()
-	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *storage, intraTool, json.NewEncoder(f))
+	return native(ctx, o, r, *image, *observer, *sampler, *samples, *rg, *probe, *codexTools, *osTools, *imageHelper, *storage, intraTool, json.NewEncoder(f))
 }
 
-func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools string, storage int, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
+func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, observer, sampler, samples, rg, probe, codexTools, osTools, imageHelper string, storage int, intraTool *harbor.IntraToolOptions, log *json.Encoder) (retErr error) {
 	m, err := vhive.New(o)
 	if err != nil {
 		return err
@@ -162,6 +166,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 	for _, helper := range []struct{ name, path, expected string }{
 		{"rg", rg, "e62198eb19b136b88c330af83647b5a962cb99b6b1f066758568f12de1974849"},
 		{"zb-guest", probe, ""},
+		{"aries-harbor-image", imageHelper, "b06faaf4f96c04e41d6808ee8e38317ea1fd19c68b20693b2045c8fe7e712bc9"},
 	} {
 		if helper.path == "" {
 			continue
@@ -252,13 +257,7 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 				return m.Exec(ctx, id, core.Command{Path: binary, Args: []string{"--codex-run-as-apply-patch", string(call.Body)}, Dir: call.Workdir})
 			}
 			if call.Operation == "ViewImage" {
-				imageBytes, err := m.Exec(ctx, id, core.Command{Path: "/bin/cat", Args: []string{call.Path}})
-				if err != nil || imageBytes.ExitCode != 0 {
-					return imageBytes, err
-				}
-				wire, err := harbor.ImageReply([]byte(imageBytes.Stdout))
-				imageBytes.Stdout = string(wire)
-				return imageBytes, err
+				return m.Exec(ctx, id, core.Command{Path: "/usr/local/bin/aries-harbor-image", Args: []string{call.Path, fmt.Sprint(call.ImageWidth), fmt.Sprint(call.ImageHeight)}})
 			}
 			return m.Exec(ctx, id, core.Command{Path: "/bin/bash", Args: []string{"-lc", call.Script}, Dir: call.Workdir})
 		},

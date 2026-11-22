@@ -67,3 +67,11 @@ at a yield is encoded as protocol status -1. Polls use the source harness's
 five-second minimum, established by the repeated 5.00-second observations
 at a requested 1000 ms. A process completing earlier or later than the
 recorded state is retained as divergence.
+
+Measured image runs require `-image-helper` built by
+`scripts/harbor-image/build.sh` from the ARIES root with Rust 1.95.0 and the
+musl target. The static helper uses Codex 0.151.0's pinned image crate and
+returns the complete high-detail attachment after reading and decoding it
+inside the guest. ARIES verifies the resulting wire bytes at the original
+tool boundary. Earlier diagnostics on revision 1f2a2d1 read the PNG in the
+guest and decoded it on the host. Their logs identify that revision.
