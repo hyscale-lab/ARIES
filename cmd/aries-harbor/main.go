@@ -60,6 +60,10 @@ func command(ctx context.Context) error {
 	flag.BoolVar(&o.GuestTaskV3, "guest-task-v3", true, "containerd-v2 stack with guest task v3 and framed streams")
 	flag.BoolVar(&o.NativeCheckpoint, "native-checkpoint", false, "optimized native checkpoint and restore API")
 	flag.BoolVar(&o.NativeReportingOnly, "native-reporting-only", false, "zero-target free-page reporting on the native DAMON-disabled control")
+	flag.StringVar(&o.CNINetwork, "cni-network", "", "task-specific guest network")
+	flag.StringVar(&o.CNIConfDir, "cni-conf-dir", "", "task-specific CNI configuration directory")
+	flag.StringVar(&o.CNICacheDir, "cni-cache-dir", "", "task-specific CNI cache directory")
+	cniBin := flag.String("cni-bin-dir", "", "task-specific CNI binary directory")
 	flag.StringVar(&o.Socket, "socket", "", "containerd socket")
 	flag.StringVar(&o.Namespace, "namespace", "aries", "containerd namespace")
 	flag.StringVar(&o.CheckpointDir, "checkpoint-dir", "", "private host checkpoint directory")
@@ -98,7 +102,20 @@ func command(ctx context.Context) error {
 	if *image != r.Image {
 		return fmt.Errorf("trial %s requires image %s", r.Trial, r.Image)
 	}
-	if r.Task == "code-from-image" && *imageHelper == "" {
+	if r.NeedsNetwork != (o.CNINetwork != "") {
+		return fmt.Errorf("source %s requires guest network enabled=%t", r.Trial, r.NeedsNetwork)
+	}
+	if *cniBin != "" {
+		o.CNIBinPaths = []string{*cniBin}
+	}
+	needsImage := false
+	for _, c := range r.Plan.Calls {
+		if c.Operation == "ViewImage" {
+			needsImage = true
+			break
+		}
+	}
+	if needsImage && *imageHelper == "" {
 		return errors.New("this task requires the pinned in-guest -image-helper")
 	}
 	if r.Task != "fix-git" && (*codexTools == "" || (taskSetups[r.Task].packagesSHA != "" && *osTools == "")) {
@@ -137,12 +154,12 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 		if err != nil {
 			return err
 		}
-		return log.Encode(map[string]any{"event": phase, "monotonic_ns": t, "runtime_id": name, "task": r.Task, "trial_id": r.Trial, "job_id": r.Job, "row_id": r.Row, "image": image, "trajectory_sha256": r.TrajectoryHash, "rollout_sha256": r.RolloutHash, "observer": observer, "memory_mib": o.MemoryMB, "storage_mib": storage, "vcpus": o.VCPUs})
+		return log.Encode(map[string]any{"event": phase, "monotonic_ns": t, "runtime_id": name, "task": r.Task, "cni_network": o.CNINetwork, "trial_id": r.Trial, "job_id": r.Job, "row_id": r.Row, "image": image, "trajectory_sha256": r.TrajectoryHash, "rollout_sha256": r.RolloutHash, "observer": observer, "memory_mib": o.MemoryMB, "storage_mib": storage, "vcpus": o.VCPUs})
 	}
 	if err = lifecycle("create_start"); err != nil {
 		return err
 	}
-	req := deployment.Request{Name: name, Image: image, StorageMB: storage, Workdir: r.Workdir, Entrypoint: []string{"/bin/sleep"}, Args: []string{"infinity"}, Labels: map[string]string{"aries.managed": "true", "aries.component": "sandbox", "aries.kind": "task-container", "aries.run": name, "aries.task": r.Task}}
+	req := deployment.Request{Name: name, AllowNetwork: r.NeedsNetwork, Image: image, StorageMB: storage, Workdir: r.Workdir, Entrypoint: []string{"/bin/sleep"}, Args: []string{"infinity"}, Labels: map[string]string{"aries.managed": "true", "aries.component": "sandbox", "aries.kind": "task-container", "aries.run": name, "aries.task": r.Task}}
 	id, err := m.Create(ctx, req)
 	if id != "" {
 		defer func() {
@@ -206,6 +223,11 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 	if err = log.Encode(map[string]any{"event": event, "begin_monotonic_ns": prepBegin, "end_monotonic_ns": prepEnd, "state": state}); err != nil {
 		return err
 	}
+	if r.NeedsNetwork {
+		if err = networkEvidence(ctx, m, id, "before_snapshot", log); err != nil {
+			return err
+		}
+	}
 	if err = m.Start(ctx, id); err != nil {
 		return err
 	}
@@ -226,6 +248,11 @@ func native(ctx context.Context, o vhive.Options, r *harbor.Recording, image, ob
 	}
 	if err = lifecycle("restore_complete"); err != nil {
 		return err
+	}
+	if r.NeedsNetwork {
+		if err = networkEvidence(ctx, m, id, "after_restore", log); err != nil {
+			return err
+		}
 	}
 	socket, err := m.VMMSocket(ctx, id)
 	if err != nil {

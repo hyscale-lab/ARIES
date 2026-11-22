@@ -23,6 +23,11 @@ type taskSetup struct {
 }
 
 var taskSetups = map[string]taskSetup{
+	"video-processing": {output: "output.toml", initialCheck: `test ! -e output.toml
+test ! -e jump_analyzer.py
+python -c 'import cv2,numpy; print(cv2.__version__,numpy.__version__)'
+printf '%s\n' 'export PIP_REPORT=/tmp/aries-reviewed-pip-install.json' > /etc/profile.d/zz-aries-pip.sh`,
+		inputCheck: `echo '69ac53c9b4302225e3bdf5b94970e29dade7d800ba07109c2691604b2cac69ad  example_video.mp4' | sha256sum -c -`},
 	"circuit-fibsqrt": {output: "gates.txt", initialCheck: `echo '032786f94f16605767c62bb61ce4dbba7ab7d3f1046712c975f01c9a04b6ad29  gates.txt' | sha256sum -c -
 test ! -e sim
 gcc --version | head -1`, inputCheck: `echo '700645ac6156cdc88ec1e210f7c7d8d9969bb42aec969c410597e8efca796173  sim.c' | sha256sum -c -`},
@@ -95,7 +100,7 @@ func prepareTask(ctx context.Context, m *vhive.Manager, id string, r *harbor.Rec
 	if err := uploadPinned(ctx, m, id, tools, codexPrefixSHA, "/"); err != nil {
 		return "", nil, err
 	}
-	if r.Task == "code-from-image" || r.Task == "circuit-fibsqrt" {
+	if r.Task == "code-from-image" || r.Task == "circuit-fibsqrt" || r.Task == "video-processing" {
 		// This Python base image has only one copy of codex-path in its recorded PATH.
 		_, err := checked(ctx, m, id, core.Command{Path: "/bin/sh", Args: []string{"-c", `set -eu
 cat > /etc/profile.d/zz-aries-image-path.sh <<'ARIESPATH'
@@ -186,10 +191,37 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 		return err
 	}
 	cmd := "set -eu\ntest -s " + task.output + "\nsha256sum " + task.output + "\n" + task.inputCheck
+	if r.Task == "video-processing" {
+		cmd += `
+python - <<'PYREPORT'
+import json
+from pathlib import Path
+records = json.loads(Path('/tmp/aries-reviewed-pip-install.json').read_text())['install']
+for item in records:
+    print(json.dumps({'name':item['metadata']['name'],'version':item['metadata']['version'],'download':item['download_info']},sort_keys=True))
+PYREPORT`
+	}
 	out, err := checked(ctx, m, id, core.Command{Path: "/bin/bash", Args: []string{"-lc", cmd}, Dir: r.Workdir})
 	end, clockErr := harbor.Clock()
 	if err != nil || clockErr != nil {
 		return errors.Join(err, clockErr)
 	}
 	return log.Encode(map[string]any{"event": "final_task_state", "checks": strings.TrimSpace(out), "begin_monotonic_ns": begin, "end_monotonic_ns": end})
+}
+
+func networkEvidence(ctx context.Context, m *vhive.Manager, id, phase string, log *json.Encoder) error {
+	const probe = `import json, socket, urllib.request
+from pathlib import Path
+with urllib.request.urlopen("https://pypi.org/simple/toml/",timeout=10) as response:
+    print(json.dumps({"route":Path("/proc/net/route").read_text(),"resolv_conf":Path("/etc/resolv.conf").read_text(),"pypi_addresses":sorted({a[4][0] for a in socket.getaddrinfo("pypi.org",443)}),"pypi_status":response.status}))`
+	begin, err := harbor.Clock()
+	if err != nil {
+		return err
+	}
+	out, err := checked(ctx, m, id, core.Command{Path: "/usr/local/bin/python", Args: []string{"-c", probe}})
+	end, clockErr := harbor.Clock()
+	if err != nil || clockErr != nil || !json.Valid([]byte(out)) {
+		return errors.Join(errors.New("public dependency route/DNS/TLS readback failed"), err, clockErr)
+	}
+	return log.Encode(map[string]any{"event": "validated_guest_network", "phase": phase, "begin_monotonic_ns": begin, "end_monotonic_ns": end, "network": json.RawMessage(out)})
 }

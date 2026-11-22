@@ -35,7 +35,11 @@
     ],
     "vcpus": 1,
     "memory_mib": 2048,
-    "storage_mib": 10240
+    "storage_mib": 10240,
+    "tools": [
+      "exec_command",
+      "update_plan"
+    ]
   },
   {
     "task": "regex-log",
@@ -73,7 +77,11 @@
     ],
     "vcpus": 1,
     "memory_mib": 2048,
-    "storage_mib": 10240
+    "storage_mib": 10240,
+    "tools": [
+      "exec_command",
+      "update_plan"
+    ]
   },
   {
     "task": "constraints-scheduling",
@@ -111,7 +119,11 @@
     ],
     "vcpus": 1,
     "memory_mib": 2048,
-    "storage_mib": 10240
+    "storage_mib": 10240,
+    "tools": [
+      "exec_command",
+      "update_plan"
+    ]
   },
   {
     "task": "overfull-hbox",
@@ -149,7 +161,12 @@
     ],
     "vcpus": 2,
     "memory_mib": 4096,
-    "storage_mib": 10240
+    "storage_mib": 10240,
+    "tools": [
+      "exec_command",
+      "update_plan",
+      "write_stdin"
+    ]
   },
   {
     "task": "code-from-image",
@@ -187,7 +204,12 @@
     ],
     "vcpus": 1,
     "memory_mib": 2048,
-    "storage_mib": 10240
+    "storage_mib": 10240,
+    "tools": [
+      "exec_command",
+      "update_plan",
+      "view_image"
+    ]
   },
   {
     "task": "circuit-fibsqrt",
@@ -210,6 +232,36 @@
     ],
     "vcpus": 1,
     "memory_mib": 2048,
-    "storage_mib": 10240
+    "storage_mib": 10240,
+    "tools": [
+      "exec_command",
+      "update_plan",
+      "write_stdin"
+    ]
+  },
+  {
+    "task": "video-processing",
+    "workdir": "/app",
+    "image": "docker.io/alexgshaw/video-processing@sha256:a2c0f39e3ab04e67ac6e49cad9167bb0d987babe32511768c01aa0c6905a875f",
+    "effects": [
+      "Inspect the supplied athletics video, render and view local frames, implement and test takeoff/landing detection, and install the public toml dependency via pip"
+    ],
+    "trials": [
+      {
+        "trial": "361ad8a6-2016-443b-b0c0-22e63f2598c4",
+        "trajectory_sha256": "7f9533788424db2f105a8361d77daeed0f3e194d55d67ddf1ae1768983859f9d",
+        "rollout_sha256": "a3a330fe21c1403f621cb70d1409e5e2a412c68a602174f52cbd3ae401caeff9"
+      }
+    ],
+    "vcpus": 1,
+    "memory_mib": 2048,
+    "storage_mib": 10240,
+    "tools": [
+      "exec_command",
+      "update_plan",
+      "view_image",
+      "write_stdin"
+    ],
+    "needs_network": true
   }
 ]

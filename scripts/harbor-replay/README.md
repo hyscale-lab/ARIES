@@ -75,3 +75,14 @@ returns the complete high-detail attachment after reading and decoding it
 inside the guest. ARIES verifies the resulting wire bytes at the original
 tool boundary. Earlier diagnostics on revision 1f2a2d1 read the PNG in the
 guest and decoded it on the host. Their logs identify that revision.
+
+The reviewed video-processing occurrence installs toml inside its original
+guest. Supply an isolated v1 daemon and the CNI network, configuration,
+binary and cache directory flags. Guest DNS, route and HTTPS reachability
+are verified around restore, and the final pip report records the resolved
+distribution URL and checksum. The amd183 validation profile uses a dedicated
+bridge, private CNI state, PyPI TLS endpoints and the site's resolver. Its
+scoped firewall rule can be removed with
+`provision-pypi-cni.sh PRIVATE_CNI_DIRECTORY remove`. The CNI binary versions
+are containernetworking/plugins v1.9.1 and awslabs/tc-redirect-tap
+34bf829e9a5c as pinned by firecracker-containerd.

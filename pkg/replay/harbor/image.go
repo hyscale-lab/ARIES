@@ -5,6 +5,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"image"
+	_ "image/jpeg"
+	_ "image/png"
+	"path"
 
 	"strings"
 	"time"
@@ -18,21 +22,17 @@ type imageItem struct {
 	Detail   string `json:"detail"`
 }
 
-const dataPNG = "data:image/png;base64,"
-const originalPNG = "f4d0330407b363a9ef03d563e5c2ffd24aa76345f997613741f9fc0935354305"
-
 func recordedImage(c indexedCall) (imageItem, error) {
 	url, ok := strings.CutPrefix(c.output, "[{'type': 'input_image', 'image_url': '")
 	if !ok {
 		return imageItem{}, errors.New("unexpected ATIF image attachment")
 	}
 	url, ok = strings.CutSuffix(url, "', 'detail': 'high'}]")
-	if !ok || !strings.HasPrefix(url, dataPNG) {
+	if !ok || (!strings.HasPrefix(url, "data:image/png;base64,") && !strings.HasPrefix(url, "data:image/jpeg;base64,")) {
 		return imageItem{}, errors.New("unexpected image MIME or detail")
 	}
-	raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(url, dataPNG))
-	if err != nil || digest(raw) != originalPNG {
-		return imageItem{}, errors.New("unexpected source image bytes")
+	if len(url) > 12<<20 {
+		return imageItem{}, errors.New("source attachment exceeds supported size")
 	}
 	return imageItem{Type: "input_image", ImageURL: url, Detail: "high"}, nil
 }
@@ -55,13 +55,18 @@ func imageCall(c indexedCall, origin, ts time.Time, seq uint64) (replay.Call, er
 	}
 	d := json.NewDecoder(bytes.NewReader(c.call.Args))
 	d.DisallowUnknownFields()
-	if err := d.Decode(&args); err != nil || args.Path != "/app/code.png" {
+	if err := d.Decode(&args); err != nil || path.Clean(args.Path) != args.Path || (!strings.HasPrefix(args.Path, "/app/") && !strings.HasPrefix(args.Path, "/tmp/")) {
 		return replay.Call{}, errors.New("unexpected reviewed image path")
 	}
 	item, err := recordedImage(c)
 	if err != nil {
 		return replay.Call{}, err
 	}
+	prefix, encoded, _ := strings.Cut(item.ImageURL, ",")
+	cfg, format, err := image.DecodeConfig(base64.NewDecoder(base64.StdEncoding, strings.NewReader(encoded)))
+	if err != nil || prefix != "data:image/"+format+";base64" || cfg.Width < 1 || cfg.Height < 1 || cfg.Width > 4096 || cfg.Height > 4096 {
+		return replay.Call{}, errors.New("invalid original image attachment")
+	}
 	wire, err := json.Marshal([]imageItem{item})
-	return replay.Call{Operation: "ViewImage", ImageWidth: 1160, ImageHeight: 804, Path: args.Path, Sequence: seq, StartOffset: ts.Sub(origin), ToolCallID: c.call.ID, ResponseStdout: wire}, err
+	return replay.Call{Operation: "ViewImage", ImageWidth: cfg.Width, ImageHeight: cfg.Height, Path: args.Path, Sequence: seq, StartOffset: ts.Sub(origin), ToolCallID: c.call.ID, ResponseStdout: wire}, err
 }
