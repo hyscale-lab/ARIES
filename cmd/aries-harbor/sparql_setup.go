@@ -2,12 +2,9 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 
-	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/deployment/vhive"
 )
 
@@ -24,19 +21,14 @@ python3 --version
 curl --version | head -1`,
 }
 
-type sparqlWheel struct {
-	Version string `json:"version"`
-	SHA256  string `json:"sha256"`
-}
+var sparqlPyparsing = replayWheel{"3.3.2", "850ba148bd908d7e2411587e247a1e4f0327839c40e2e5e6d05a007ecc69911d"}
 
-var sparqlPyparsing = sparqlWheel{"3.3.2", "850ba148bd908d7e2411587e247a1e4f0327839c40e2e5e6d05a007ecc69911d"}
-
-var sparqlRDFLib = map[string]sparqlWheel{
+var sparqlRDFLib = map[string]replayWheel{
 	"rdflib":    {"7.1.4", "72f4adb1990fa5241abd22ddaf36d7cafa5d91d9ff2ba13f3086d339b213d997"},
 	"pyparsing": sparqlPyparsing,
 }
 
-var sparqlRDFLibAndPydantic = map[string]sparqlWheel{
+var sparqlRDFLibAndPydantic = map[string]replayWheel{
 	"annotated-types":   {"0.8.0", "f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0"},
 	"pydantic":          {"2.13.5", "346a034f080da3755d8e9cb5e00e8b07de1d39e4f6e2c87d8ab7cafa0b269a73"},
 	"pydantic-core":     {"2.46.5", "0fc5be0abd4a407e200d844b404e33639a554e7bd0d448e7b9ae181be4789ac2"},
@@ -48,7 +40,7 @@ var sparqlRDFLibAndPydantic = map[string]sparqlWheel{
 
 type sparqlTrialState struct {
 	querySHA  string
-	installed map[string]sparqlWheel
+	installed map[string]replayWheel
 	downloads []string
 }
 
@@ -80,24 +72,7 @@ func prepareSparql(ctx context.Context, m *vhive.Manager, id, trial string) (str
 	if len(state.installed) == 0 {
 		return "", nil
 	}
-	constraints := make([]string, 0, len(state.installed))
-	for name, wheel := range state.installed {
-		constraints = append(constraints, name+"=="+wheel.Version)
-	}
-	sort.Strings(constraints)
-	setup := `set -eu
-test ! -e /etc/pip.conf
-test ! -e /tmp/aries-sparql-pip-report.json
-cat > /etc/aries-sparql-constraints.txt <<'ARIESCONSTRAINTS'
-` + strings.Join(constraints, "\n") + `
-ARIESCONSTRAINTS
-cat > /etc/pip.conf <<'ARIESPIP'
-[install]
-constraint = /etc/aries-sparql-constraints.txt
-report = /tmp/aries-sparql-pip-report.json
-ARIESPIP
-sha256sum /etc/pip.conf /etc/aries-sparql-constraints.txt`
-	return checked(ctx, m, id, core.Command{Path: "/bin/sh", Args: []string{"-c", setup}})
+	return preparePipConstraints(ctx, m, id, "sparql", state.installed)
 }
 
 func sparqlOutputCheck(trial string) (string, error) {
@@ -109,27 +84,12 @@ func sparqlOutputCheck(trial string) (string, error) {
 	if len(state.installed) == 0 {
 		return check, nil
 	}
-	items, err := json.Marshal(state.installed)
+	report, err := pipReportCheck("sparql", state.installed, "files.pythonhosted.org")
 	if err != nil {
 		return "", err
 	}
-	return check + "\nsha256sum " + strings.Join(state.downloads, " ") + "\npython3 - '" + string(items) + "' <<'PYREPORT'\n" + sparqlReportCheck + "\nPYREPORT", nil
+	return check + "\nsha256sum " + strings.Join(state.downloads, " ") + report, nil
 }
-
-const sparqlReportCheck = `import json, sys, urllib.parse
-from pathlib import Path
-expected = json.loads(sys.argv[1])
-installed = {}
-for item in json.loads(Path('/tmp/aries-sparql-pip-report.json').read_text())['install']:
-    meta, download = item['metadata'], item['download_info']
-    name = meta['name'].lower().replace('_', '-')
-    url = urllib.parse.urlparse(download['url'])
-    if name in installed or url.scheme != 'https' or url.hostname != 'files.pythonhosted.org':
-        raise ValueError(f'unexpected wheel {name} from {download["url"]}')
-    installed[name] = {'version': meta['version'], 'sha256': download['archive_info']['hashes']['sha256']}
-    print(json.dumps({'name': name, **installed[name], 'url': download['url']}, sort_keys=True))
-if installed != expected:
-    raise ValueError(f'installed wheels differ from the checked source selections: {installed}')`
 
 const sparqlNetworkProbe = `import json, socket, urllib.request
 from pathlib import Path

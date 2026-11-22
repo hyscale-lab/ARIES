@@ -444,5 +444,30 @@
       "web_search_call"
     ],
     "needs_network": true
+  },
+  {
+    "task": "torch-tensor-parallelism",
+    "workdir": "/app",
+    "image": "docker.io/alexgshaw/torch-tensor-parallelism@sha256:c50ac169e11465f41b49749fe87e4487f24d31a0c39c0906cd3242cc5499c690",
+    "effects": [
+      "Write and validate local tensor-parallel linear layers, install public CPU PyTorch wheels and execute local CPU Gloo collectives"
+    ],
+    "trials": [
+      {
+        "trial": "9765e0a0-be12-40c4-9d2c-99654498a31f",
+        "trajectory_sha256": "a1bba03ac1d036e57930b417d4b9713b90964b94c83ef49832f58a9496552aec",
+        "rollout_sha256": "b011213c8fbe93eb6dddc4498f6b17e721134f5f0d4ce570afc8bd26c033b20e"
+      }
+    ],
+    "vcpus": 1,
+    "memory_mib": 8192,
+    "storage_mib": 10240,
+    "tools": [
+      "exec_command",
+      "update_plan",
+      "web_search_call",
+      "write_stdin"
+    ],
+    "needs_network": true
   }
 ]

@@ -26,6 +26,7 @@ var taskSetups = map[string]taskSetup{
 	datasetTask:        datasetSetup,
 	financialTask:      financialSetup,
 	sparqlTask:         sparqlSetup,
+	torchTask:          torchSetup,
 	"compile-compcert": compilerSetup,
 	kvTask:             kvSetup,
 	"video-processing": {output: "output.toml", initialCheck: videoInitialCheck,
@@ -174,6 +175,13 @@ rg --version | head -1`
 		}
 		details["pip_configuration"] = strings.TrimSpace(pip)
 	}
+	if r.Task == torchTask {
+		pip, err := preparePipConstraints(ctx, m, id, "torch", torchCPUWheels)
+		if err != nil {
+			return "", nil, err
+		}
+		details["pip_configuration"] = strings.TrimSpace(pip)
+	}
 	return "source_task_ready", details, nil
 }
 
@@ -244,6 +252,13 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 		}
 		cmd += check
 	}
+	if r.Task == torchTask {
+		check, err := torchOutputCheck()
+		if err != nil {
+			return err
+		}
+		cmd += check
+	}
 	if r.Task == datasetTask {
 		cmd += datasetFinal
 	}
@@ -289,6 +304,9 @@ with urllib.request.urlopen("https://pypi.org/simple/toml/",timeout=10) as respo
 	}
 	if task == sparqlTask {
 		python, probe = "/usr/bin/python3", sparqlNetworkProbe
+	}
+	if task == torchTask {
+		python, probe = "/usr/bin/python3", torchNetworkProbe
 	}
 	out, err := checked(ctx, m, id, core.Command{Path: python, Args: []string{"-c", probe}})
 	end, clockErr := harbor.Clock()
