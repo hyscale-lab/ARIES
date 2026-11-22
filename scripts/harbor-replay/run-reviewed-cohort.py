@@ -11,6 +11,9 @@ import subprocess
 from cohort_image_circuit import IMAGE_HELPER, TASKS, digest as file_digest, verify
 
 
+PYPI_TASKS = {'kv-store-grpc', 'financial-document-processor'}
+
+
 def main():
     cli=argparse.ArgumentParser(description=__doc__)
     cli.add_argument('runtime',type=Path);cli.add_argument('unit')
@@ -18,6 +21,7 @@ def main():
     cli.add_argument('manifest',type=Path)
     cli.add_argument('--sparql-cni',type=Path,help='private pre-provisioned SPARQL network profile')
     cli.add_argument('--dataset-cni',type=Path,help='private token dataset network profile')
+    cli.add_argument('--pypi-cni',type=Path,help='private gRPC and financial PyPI network profile')
     a=cli.parse_args()
     if not re.fullmatch(r'fcmod-zepbound-[a-z0-9-]+',a.unit):
         raise ValueError('unexpected unit')
@@ -34,13 +38,19 @@ def main():
     entries=json.loads(a.manifest.read_text())
     for entry in entries:
         task=entry['task'];trial=entry['trial_id']
-        if task not in {'constraints-scheduling','regex-log','overfull-hbox','sparql-university','count-dataset-tokens',*TASKS} or not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',trial):
+        if task not in {'constraints-scheduling','regex-log','overfull-hbox','sparql-university','count-dataset-tokens',*TASKS,*PYPI_TASKS} or not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',trial):
             raise ValueError('unexpected trial')
         if task == 'count-dataset-tokens':
             import cohort_dataset
         if task == 'sparql-university':
             import cohort_sparql
-        receipt=entry['receipt']
+        if task in PYPI_TASKS:
+            import cohort_pypi
+            receipt=cohort_pypi.load_receipt(asset,entry)
+            pypi_args=cohort_pypi.replay_args(asset,task,a.pypi_cni)
+            pypi_network=pypi_args[pypi_args.index('-cni-network')+1]
+        else:
+            receipt=entry['receipt']
         if not (receipt['session_completed'] and receipt['all_observed_tool_exits_match'] and receipt['trial_id']==trial and receipt['task']==task):
             raise ValueError('missing successful source-specific fidelity evidence')
         folder=asset/'sources'/task/trial
@@ -68,6 +78,8 @@ def main():
                         cohort_dataset.verify(first, receipt)
                     if task == 'sparql-university':
                         cohort_sparql.verify(events,receipt)
+                    if task in PYPI_TASKS:
+                        cohort_pypi.verify(events,receipt,entry['reference_boundaries'],pypi_network)
                     continue
             raise FileExistsError(f'inspect incomplete attempt before retry: {first}')
         args=[str(asset/'tracer/run-traced.sh'),str(cmd),str(asset/'tracer'),str(first),*direct,*base,
@@ -88,6 +100,8 @@ def main():
             args.extend(cohort_dataset.replay_args(asset,receipt,a.dataset_cni))
         elif task == 'sparql-university':
             args.extend(cohort_sparql.replay_args(asset,a.sparql_cni))
+        elif task in PYPI_TASKS:
+            args.extend(pypi_args)
         elif task not in TASKS:
             args.extend(['-os-tools',str(asset/(task+'-debs.tar.gz'))])
         rc=subprocess.run(args,env=env).returncode
@@ -101,6 +115,9 @@ def main():
             (first/'fidelity-checks.json').write_text(json.dumps(checks,indent=2)+'\n')
         elif task == 'sparql-university':
             checks=cohort_sparql.verify(first/'events.jsonl',receipt)
+            (first/'fidelity-checks.json').write_text(json.dumps(checks,indent=2)+'\n')
+        elif task in PYPI_TASKS:
+            checks=cohort_pypi.verify(first/'events.jsonl',receipt,entry['reference_boundaries'],pypi_network)
             (first/'fidelity-checks.json').write_text(json.dumps(checks,indent=2)+'\n')
 
 

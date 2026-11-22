@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Configure a private SPARQL or CPU Torch dependency network on one study worker.
+# Configure a private source dependency network on one study worker.
 set -euo pipefail
 base=$(realpath "$1")
 action=${2:-install}
@@ -17,6 +17,10 @@ case "$profile" in
     torch)
         subnet=10.232.$octet.0/28
         hosts=(bootstrap.pypa.io pypi.org files.pythonhosted.org download.pytorch.org download-r2.pytorch.org)
+        ;;
+    pypi)
+        subnet=10.233.$octet.0/28
+        hosts=(pypi.org files.pythonhosted.org)
         ;;
     *) exit 2 ;;
 esac
