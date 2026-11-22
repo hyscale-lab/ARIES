@@ -11,6 +11,11 @@ cp --sparse=always --reflink=auto "$source_image" "$staging/image"
 chmod u+w "$staging/image"
 regular_maps=${ZB_REGULAR_MAPS:-0}
 [[ "$regular_maps" =~ ^[01]$ ]]
+pfn_count=${ZB_GUEST_PFN_COUNT:-524288}
+[[ "$pfn_count" =~ ^[1-9][0-9]{0,6}$ ]] && (( pfn_count <= 2097152 )) || {
+    echo 'ZB_GUEST_PFN_COUNT must be an integer from 1 through 2097152' >&2
+    exit 2
+}
 cat > "$staging/unit" <<EOF
 [Unit]
 Description=Private guest memory telemetry
@@ -19,7 +24,7 @@ After=local-fs.target
 
 [Service]
 Environment=ZB_REGULAR_MAPS=$regular_maps
-ExecStart=/usr/local/bin/zb-guest serve --host-vsock --pfn-count 524288
+ExecStart=/usr/local/bin/zb-guest serve --host-vsock --pfn-count $pfn_count
 
 [Install]
 WantedBy=firecracker.target
