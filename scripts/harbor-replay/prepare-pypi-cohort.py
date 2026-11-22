@@ -25,6 +25,7 @@ def main():
     cli.add_argument("cache", type=Path)
     cli.add_argument("receipts", type=Path)
     cli.add_argument("output", type=Path)
+    cli.add_argument("--financeapt", action="store_true", help="package only signed-snapshot financial trials")
     cli.add_argument("--validation-log", type=Path, action="append", required=True,
                      help="original live diagnostic JSONL named by a validated receipt digest (repeatable)")
     args = cli.parse_args()
@@ -32,8 +33,9 @@ def main():
     repo = Path(__file__).resolve().parents[2]
     replay = repo / "scripts/harbor-replay"
     bound = json.loads((repo / "pkg/replay/harbor/reviewed.json").read_bytes())
+    apt = json.loads((repo / "cmd/aries-harbor/financial_apt.json").read_bytes())
     logs = {digest(p): p for p in args.validation_log}
-    adapters = {digest(p): p for prefix in ("aries-kv*", "aries-financial*") for p in args.cache.glob(prefix)
+    adapters = {digest(p): p for prefix in ("aries-kv*", "aries-fin*") for p in args.cache.glob(prefix)
                 if p.is_file()}
     ready, pending = [], []
     for reviewed in bound:
@@ -44,6 +46,9 @@ def main():
             raise ValueError(f"{task} lacks source-bound network requirements")
         for entry in reviewed["trials"]:
             trial = entry["trial"]
+            financial_apt = apt.get(trial)
+            if args.financeapt != (financial_apt is not None):
+                continue
             ident = dict(task=task, trial_id=trial)
             path = args.receipts / receipt_path(task, trial).name
             if not path.is_file():
@@ -63,7 +68,7 @@ def main():
                 if any(receipt[k] != expected for k, expected in aliases.items()):
                     raise ValueError(f"reviewed identity differs from the native receipt for {trial}")
             reference = boundaries(events_from(log))
-            checks = verify(log, receipt, reference)
+            checks = verify(log, receipt, reference, financial_apt=financial_apt)
             initial, = [e["state"] for e in receipt["source_setup_and_final_state"] if e["event"] == "source_task_ready"]
             if initial["codex_prefix_sha256"] != CODEX_TOOLS:
                 raise ValueError(f"source Codex tool archive differs for {trial}")
@@ -74,7 +79,7 @@ def main():
             sha = receipt["adapter_binary_sha256"]
             if sha not in adapters:
                 raise FileNotFoundError(f"source-validated adapter missing for {trial}: {sha}")
-            ready.append((ident, path, hashlib.sha256(receipt_bytes).hexdigest(), receipt, reference, checks))
+            ready.append((ident, path, hashlib.sha256(receipt_bytes).hexdigest(), receipt, reference, checks, financial_apt))
     if not ready:
         raise ValueError("no reviewed trial has a successful receipt and matching native log")
 
@@ -101,7 +106,7 @@ def main():
         install(replay / filename, out / filename)
 
     manifest = []
-    for ident, path, receipt_sha, receipt, reference, checks in ready:
+    for ident, path, receipt_sha, receipt, reference, checks, financial_apt in ready:
         task, trial = ident["task"], ident["trial_id"]
         sha = receipt["adapter_binary_sha256"]
         adapter = out / "adapters" / sha
@@ -111,8 +116,11 @@ def main():
         for filename, key in (("trajectory.json", "trajectory_sha256"), ("rollout.jsonl", "rollout_sha256")):
             install(args.cache / relative / filename, out / relative / filename, receipt[key])
         install(path, out / receipt_path(task, trial), receipt_sha)
-        manifest.append(dict(ident, receipt_sha256=receipt_sha, reference_boundaries=reference,
-                             native_fidelity_checks=checks, unobserved_external_actions=receipt["external_actions"]))
+        measured = dict(ident, receipt_sha256=receipt_sha, reference_boundaries=reference,
+                        native_fidelity_checks=checks, unobserved_external_actions=receipt["external_actions"])
+        if financial_apt is not None:
+            measured["financial_apt"] = financial_apt
+        manifest.append(measured)
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     (out / "pending.json").write_text(json.dumps(pending, indent=2) + "\n")
     (out / "runs").mkdir()

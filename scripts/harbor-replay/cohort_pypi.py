@@ -12,6 +12,7 @@ FINANCIAL = "financial-document-processor"
 TASKS = {GRPC, FINANCIAL}
 PYTHON_ARCHIVE = "7f8a93c102db3ce25dae68cc485877f8ec9f79edb42a7c4518c96a1153b78682"
 IMAGE_HELPER_FILE = "aries-harbor-image"
+NETWORK_SUBNETS = {"pypi": 233, "financeapt": 234}
 
 
 def receipt_path(task, trial):
@@ -33,21 +34,22 @@ def load_receipt(asset, entry):
     return receipt
 
 
-def network_args(cni):
+def network_args(cni, profile):
     if cni is None:
-        raise ValueError("gRPC and financial replays require a private --pypi-cni profile")
+        raise ValueError(f"this replay requires a private --{profile}-cni profile")
     cni = cni.resolve(strict=True)
-    config = json.loads((cni / "conf/10-pypi.conflist").read_bytes())
+    network = NETWORK_SUBNETS[profile]
+    config = json.loads((cni / f"conf/10-{profile}.conflist").read_bytes())
     name = config["name"]
-    match = re.fullmatch(r"zbpypi([1-9][0-9]{1,2})", name)
+    match = re.fullmatch(fr"zb{profile}([1-9][0-9]{{1,2}})", name)
     if match is None or int(match[1]) > 254 or config["cniVersion"] != "1.0.0":
-        raise ValueError("unexpected PyPI CNI profile name")
+        raise ValueError(f"unexpected {profile} CNI profile name")
     bridge, firewall, redirect, loopback = config["plugins"]
     ipam = bridge["ipam"]
     if ([p["type"] for p in (bridge, firewall, redirect, loopback)] !=
             ["bridge", "firewall", "tc-redirect-tap", "loopback"] or
             not bridge["ipMasq"] or not bridge["isDefaultGateway"] or bridge["bridge"] != name or
-            ipam["subnet"] != f"10.233.{match[1]}.0/28" or ipam["type"] != "host-local" or
+            ipam["subnet"] != f"10.{network}.{match[1]}.0/28" or ipam["type"] != "host-local" or
             Path(ipam["dataDir"]) != cni / "ipam" or Path(ipam["resolvConf"]) != cni / "resolv.conf"):
         raise ValueError("unexpected PyPI CNI scope or plugin configuration")
     for row in pinned(cni / "SHA256SUMS", CNI_SUMS).read_text().splitlines():
@@ -57,9 +59,11 @@ def network_args(cni):
             "-cni-cache-dir", str(cni / "cache"), "-cni-bin-dir", str(cni / "bin")]
 
 
-def replay_args(asset, task, cni):
+def replay_args(asset, task, cni, profile="pypi"):
+    if profile == "financeapt" and task != FINANCIAL:
+        raise ValueError("signed Ubuntu snapshots are scoped to their financial trials")
     pinned(asset / "codex-harbor-tools.tar.gz", CODEX_TOOLS)
-    args = network_args(cni)
+    args = network_args(cni, profile)
     if task == GRPC:
         return [*args, "-os-tools", str(pinned(asset / "kv-python.tar.gz", PYTHON_ARCHIVE))]
     if task == FINANCIAL:
@@ -84,7 +88,20 @@ def boundaries(events):
     }
 
 
-def verify(log, receipt, reference, network=None):
+def signed_apt_evidence(ready, final, profile):
+    snapshot = profile["snapshot"]
+    packages = profile["packages"]
+    if not re.fullmatch(r"[0-9]{8}T[0-9]{6}Z", snapshot) or not packages:
+        raise ValueError("invalid source date or package inventory")
+    lines = ready["checks"].splitlines()
+    expected = {f"URIs: https://snapshot.ubuntu.com/ubuntu/{snapshot}/",
+                "Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg"}
+    if not expected <= set(lines) or f"Verified {len(packages)} source-observed APT package versions" not in final.splitlines():
+        raise ValueError("signed Ubuntu archive or package-version checks differ")
+    return {"snapshot": snapshot, "package_versions": packages}
+
+
+def verify(log, receipt, reference, network=None, financial_apt=None):
     events = events_from(log)
     phases = ("create_start", "snapshot_start", "snapshot_complete", "restore_start", "restore_complete",
               "session_start", "session_end", "removed")
@@ -128,12 +145,19 @@ def verify(log, receipt, reference, network=None):
                         map(str.split, guest["route"].splitlines()[1:])) or
                 not any(line.startswith("nameserver ") for line in guest["resolv_conf"].splitlines())):
             raise ValueError("guest PyPI DNS, route, or TLS evidence differs")
+    states = {}
     for event, key in (("source_task_ready", "state"), ("final_task_state", "checks")):
         actual, = [e[key] for e in events if e["event"] == event]
         validated, = [e[key] for e in receipt["source_setup_and_final_state"] if e["event"] == event]
         if actual != validated:
             raise ValueError(f"{event} differs from the native validation")
-    return {"trial": receipt["trial_id"], "guest_calls": len(calls), "wire_identical_images": images,
+        states[event] = actual
+    checks = {"trial": receipt["trial_id"], "guest_calls": len(calls), "wire_identical_images": images,
             "external_and_rejected_boundaries": reference["external"], "cni_network": first["cni_network"],
             "pypi_http_status": {e["phase"]: e["network"]["pypi_status"] for e in connectivity},
-            "final_checks": actual}
+            "final_checks": states["final_task_state"]}
+    if financial_apt is not None:
+        if receipt["task"] != FINANCIAL or not re.fullmatch(r"zbfinanceapt[1-9][0-9]{1,2}", first["cni_network"]):
+            raise ValueError("signed Ubuntu evidence lacks its dedicated network")
+        checks["signed_ubuntu_archive"] = signed_apt_evidence(states["source_task_ready"], states["final_task_state"], financial_apt)
+    return checks

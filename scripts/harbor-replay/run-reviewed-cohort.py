@@ -24,6 +24,7 @@ def main():
     cli.add_argument('--torch-cni',type=Path,help='private pre-provisioned CPU Torch network profile')
     cli.add_argument('--dataset-cni',type=Path,help='private token dataset network profile')
     cli.add_argument('--pypi-cni',type=Path,help='private gRPC and financial PyPI network profile')
+    cli.add_argument('--financeapt-cni',type=Path,help='private signed-snapshot financial network profile')
     a=cli.parse_args()
     if not re.fullmatch(r'fcmod-zepbound-[a-z0-9-]+',a.unit):
         raise ValueError('unexpected unit')
@@ -50,7 +51,10 @@ def main():
         if task in PYPI_TASKS:
             import cohort_pypi
             receipt=cohort_pypi.load_receipt(asset,entry)
-            pypi_args=cohort_pypi.replay_args(asset,task,a.pypi_cni)
+            financial_apt=entry.get('financial_apt')
+            profile='financeapt' if financial_apt is not None else 'pypi'
+            cni=a.financeapt_cni if financial_apt is not None else a.pypi_cni
+            pypi_args=cohort_pypi.replay_args(asset,task,cni,profile)
             pypi_network=pypi_args[pypi_args.index('-cni-network')+1]
         else:
             receipt=entry['receipt']
@@ -84,7 +88,7 @@ def main():
                     if task in SOURCE_DEPENDENCY_TASKS:
                         cohort_sparql.verify(events,receipt)
                     if task in PYPI_TASKS:
-                        cohort_pypi.verify(events,receipt,entry['reference_boundaries'],pypi_network)
+                        cohort_pypi.verify(events,receipt,entry['reference_boundaries'],pypi_network,financial_apt)
                     continue
             raise FileExistsError(f'inspect incomplete attempt before retry: {first}')
         args=[str(asset/'tracer/run-traced.sh'),str(cmd),str(asset/'tracer'),str(first),*direct,*base,
@@ -122,7 +126,7 @@ def main():
             checks=cohort_sparql.verify(first/'events.jsonl',receipt)
             (first/'fidelity-checks.json').write_text(json.dumps(checks,indent=2)+'\n')
         elif task in PYPI_TASKS:
-            checks=cohort_pypi.verify(first/'events.jsonl',receipt,entry['reference_boundaries'],pypi_network)
+            checks=cohort_pypi.verify(first/'events.jsonl',receipt,entry['reference_boundaries'],pypi_network,financial_apt)
             (first/'fidelity-checks.json').write_text(json.dumps(checks,indent=2)+'\n')
 
 
