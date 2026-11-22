@@ -67,6 +67,13 @@ def main():
             if file_digest(helper) != IMAGE_HELPER:
                 raise ValueError('source-validated guest image helper differs')
             args.extend(['-image-helper',str(helper)])
+        elif task == 'circuit-fibsqrt':
+            ready, = [e['state'] for e in receipt['source_setup_and_final_state'] if e['event']=='source_task_ready']
+            if sha := ready.get('debian_patch_archive_sha256'):
+                archive=asset/'circuit-patch-debs.tar.gz'
+                if file_digest(archive)!=sha:
+                    raise ValueError('Debian patch archive differs from the native validation')
+                args.extend(['-os-tools',str(archive)])
         elif task not in TASKS:
             args.extend(['-os-tools',str(asset/(task+'-debs.tar.gz'))])
         rc=subprocess.run(args,env=env).returncode

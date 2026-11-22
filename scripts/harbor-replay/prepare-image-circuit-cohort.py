@@ -61,6 +61,13 @@ def main():
             receipt = json.loads(reference.read_bytes())
             if not (receipt["task"] == task and receipt["trial_id"] == trial and receipt["session_completed"] and receipt["all_observed_tool_exits_match"]):
                 raise ValueError(f"incomplete source receipt: {reference}")
+            ready, = [e["state"] for e in receipt["source_setup_and_final_state"] if e["event"] == "source_task_ready"]
+            patch_sha = ready.get("debian_patch_archive_sha256")
+            if patch_sha:
+                pkg = a.cache / "circuit-patch-debs.tar.gz"
+                if digest(pkg) != patch_sha:
+                    raise ValueError("reviewed Debian patch archive digest mismatch")
+                install(pkg,output / pkg.name)
             binary_sha = receipt["adapter_binary_sha256"]
             adapter = output / "adapters" / binary_sha
             if not adapter.exists():
@@ -81,6 +88,7 @@ def main():
                 checks = verify(temporary,receipt)
             entries.append({"task":task, "trial_id":trial, "receipt":receipt,
                             "reference_receipt":str(Path("receipts")/reference.name),
+                            "unobserved_external_actions":receipt.get("external_actions",[]),
                             "original_guest_post_checks":checks, "boundary_attribution":boundaries(target/"trajectory.json")})
     (output/"manifest.json").write_text(json.dumps(entries,indent=2)+"\n")
     (output/"pending.json").write_text(json.dumps(pending,indent=2)+"\n")
