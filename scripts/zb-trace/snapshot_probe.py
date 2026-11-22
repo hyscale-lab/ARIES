@@ -1,4 +1,4 @@
-"""Diagnostic page content equality for a single verified zero-based guest RAM slot."""
+"""Diagnostic page content equality for the verified KVM RAM slots of a restored VM."""
 import hashlib
 import os
 from pathlib import Path
@@ -10,22 +10,39 @@ PRESENT = 1 << 63
 PFN_MASK = (1 << 55)-1
 
 
-def selected(slot, count):
-    if slot["guest_phys_addr"] != 0 or slot["memory_size"]%PAGE or os.sysconf("SC_PAGE_SIZE")!=PAGE:
-        raise ValueError("sample requires one zero-based slot and 4 KiB pages")
-    pages=slot["memory_size"]//PAGE
-    return sorted(random.Random(693587).sample(range(pages), min(pages,count)))
+def selected(slots, count):
+    """Return (guest frame number, host address, packed file offset) for uniformly sampled RAM."""
+    if not slots or not 1 <= count <= 8192 or os.sysconf("SC_PAGE_SIZE") != PAGE:
+        raise ValueError("unsupported snapshot sample bounds")
+    layout = sorted(slots, key=lambda s:s["guest_phys_addr"])
+    total = previous_end = 0
+    for slot in layout:
+        base, size = slot["guest_phys_addr"], slot["memory_size"]
+        if base < previous_end or size<=0 or any(v%PAGE for v in (base,size,slot["userspace_addr"])):
+            raise ValueError("overlapping or unaligned guest RAM slot")
+        previous_end = base + size
+        total += size//PAGE
+    # Firecracker's file restore packs RAM regions contiguously, in guest address order.
+    # The x86 MMIO gap and non-RAM KVM slots do not occupy image bytes.
+    indices = sorted(random.Random(693587).sample(range(total),min(total,count)))
+    region = start = 0
+    rows = []
+    for ordinal in indices:
+        offset = ordinal*PAGE
+        while offset >= start + layout[region]["memory_size"]:
+            start += layout[region]["memory_size"]
+            region += 1
+        slot = layout[region]
+        within = offset-start
+        rows.append(((slot["guest_phys_addr"]+within)//PAGE,slot["userspace_addr"]+within,offset))
+    return rows
 
 
 def sample_live(pid, slots, count):
-    if len(slots)!=1 or not 1 <= count <= 8192:
-        raise ValueError("unsupported sample bounds")
-    slot, = slots
     root=Path("/proc")/str(pid)
     rows=[]
     with (root/"mem").open("rb",buffering=0) as mem, (root/"pagemap").open("rb",buffering=0) as pm:
-        for gfn in selected(slot,count):
-            addr=slot["userspace_addr"]+PAGE*gfn
+        for gfn,addr,_ in selected(slots,count):
             offset=addr//PAGE*8
             entry,=struct.unpack("=Q",os.pread(pm.fileno(),8,offset))
             row={"gfn":gfn}
@@ -45,12 +62,12 @@ def sample_live(pid, slots, count):
 
 
 def sample_snapshot(path, slots, count):
-    if len(slots)!=1 or Path(path).stat().st_size!=slots[0]["memory_size"]:
-        raise ValueError("snapshot file does not match single packed memory slot")
+    if Path(path).stat().st_size!=sum(slot["memory_size"] for slot in slots):
+        raise ValueError("snapshot file does not match packed RAM size")
     with open(path,"rb",buffering=0) as f:
         rows=[]
-        for gfn in selected(slots[0],count):
-            data=os.pread(f.fileno(),PAGE,PAGE*gfn)
+        for gfn,_,offset in selected(slots,count):
+            data=os.pread(f.fileno(),PAGE,offset)
             if len(data)!=PAGE:
                 raise OSError("short snapshot page")
             rows.append(dict(gfn=gfn,digest=hashlib.sha256(data).hexdigest()))
