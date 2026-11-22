@@ -65,6 +65,9 @@ type Options struct {
 	// NativeCheckpoint selects CheckpointVM and native artifact restore on the
 	// optimized firecracker-containerd runtime.
 	NativeCheckpoint bool
+	// NativeReportingOnly requests a zero-target reporting balloon on the
+	// optimized runtime for the matched DAMON-disabled control.
+	NativeReportingOnly bool
 	// RestoreMemorySocket selects a caller-owned native UFFD memory backend.
 	// The caller must serve the current checkpoint through VMM teardown. Empty uses File.
 	// This research-only option is not exposed through profiles or borrowed bridges.
@@ -151,6 +154,9 @@ func New(options Options) (*Manager, error) {
 }
 
 func validateOptions(o Options) error {
+	if o.NativeReportingOnly && !o.NativeCheckpoint {
+		return errors.New("native reporting control requires native checkpoints")
+	}
 	if o.NativeCheckpoint && (o.IdleMode != "checkpoint" || o.RestoreMemorySocket != "") {
 		return errors.New("native checkpoints require checkpoint mode and File-backed restore")
 	}
@@ -255,6 +261,9 @@ func (m *Manager) vmRequest(r deployment.Request) *proto.CreateVMRequest {
 		MachineCfg: &proto.FirecrackerMachineConfiguration{VcpuCount: cpu, MemSizeMib: memory},
 		// Explicit StopVM owns teardown, including partial task creation.
 		ExitAfterAllTasksDeleted: false,
+	}
+	if m.options.NativeReportingOnly {
+		request.BalloonDevice = nativeReportingBalloon()
 	}
 	if r.AllowNetwork {
 		request.NetworkInterfaces = []*proto.FirecrackerNetworkInterface{{CNIConfig: &proto.CNIConfiguration{NetworkName: m.options.CNINetwork, InterfaceName: "veth0", BinPath: m.options.CNIBinPaths, ConfDir: m.options.CNIConfDir, CacheDir: m.options.CNICacheDir}}}

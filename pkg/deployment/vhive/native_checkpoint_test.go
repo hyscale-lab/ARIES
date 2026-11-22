@@ -41,3 +41,14 @@ func TestNativeCheckpointWireCompatibility(t *testing.T) {
 		t.Fatalf("unexpected native restore directory encoding %x", restore.ProtoReflect().GetUnknown())
 	}
 }
+
+func TestNativeReportingBalloonWireCompatibility(t *testing.T) {
+	balloon := nativeReportingBalloon()
+	if balloon.AmountMib != 0 || balloon.DeflateOnOom || balloon.StatsPollingIntervals != 1 {
+		t.Fatalf("unexpected reporting balloon settings: %v", balloon)
+	}
+	want := protowire.AppendVarint(protowire.AppendTag(nil, 4, protowire.VarintType), 1)
+	if !bytes.Equal(balloon.ProtoReflect().GetUnknown(), want) {
+		t.Fatalf("unexpected free-page reporting encoding %x", balloon.ProtoReflect().GetUnknown())
+	}
+}

@@ -23,6 +23,14 @@ import (
 // The older vHive client bindings already cover the common VM controls. These
 // are the two added wire fields in damon-virtio-pmem's proto/firecracker.proto.
 const nativeCheckpointDirectoryField = 22
+const freePageReportingField = 4
+
+func nativeReportingBalloon() *proto.FirecrackerBalloonDevice {
+	balloon := &proto.FirecrackerBalloonDevice{StatsPollingIntervals: 1}
+	field := protowire.AppendTag(nil, freePageReportingField, protowire.VarintType)
+	balloon.ProtoReflect().SetUnknown(protowire.AppendVarint(field, 1))
+	return balloon
+}
 
 var checkpointVMDescriptor = sync.OnceValues(func() (protoreflect.MessageDescriptor, error) {
 	file, err := protodesc.NewFile(&descriptorpb.FileDescriptorProto{

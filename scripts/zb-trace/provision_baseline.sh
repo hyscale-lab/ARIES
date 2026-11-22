@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Start one study worker from the already built common kernel/root and stack binaries.
-# Usage: provision_baseline.sh STACK_DIR UNIT RUNTIME_PROFILE v1|v2|v3|v4
+# Usage: provision_baseline.sh STACK_DIR UNIT RUNTIME_PROFILE v1|v2|v3|v4|native-v2
 set -euo pipefail
 stack=$(realpath "$1")
 unit=$2
 profile=$(realpath "$3")
 variant=$4
 [[ "$unit" =~ ^fcmod-zepbound-[a-z0-9-]+$ ]]
-[[ "$variant" =~ ^v[1-4]$ ]]
+[[ "$variant" =~ ^(v[1-4]|native-v2)$ ]]
 work="$stack/runtime"
 bin="$work/bin"
 socket="/run/$unit/containerd.sock"
@@ -71,11 +71,13 @@ variant = sys.argv[3]
 if variant == "v2":
     config["free_page_reporting"] = True
     config["kernel_args"] += " page_reporting.page_reporting_order=9"
-if variant in ("v3", "v4"):
+if variant in ("v3", "v4", "native-v2"):
     with (work / "common-rootfs.ext4").open("rb") as image:
         config["root_drive_sha256"] = hashlib.file_digest(image, "sha256").hexdigest()
     config["root_drive_use_pmem"] = variant == "v4"
-    config["guest_reclamation"] = {"Enabled": True}
+    config["guest_reclamation"] = {"Enabled": variant != "native-v2"}
+    if variant == "native-v2":
+        config["kernel_args"] += " damon_reclaim.enabled=N page_reporting.page_reporting_order=9"
     config["smt_enabled"] = False
 config.update(
     firecracker_binary_path=str(work / "bin/firecracker"),
