@@ -50,3 +50,17 @@ func TestExternalWebActionRequiresTheSourceArguments(t *testing.T) {
 		t.Fatalf("matching recorded omission rejected: %v", err)
 	}
 }
+
+func TestFindInPageBindsAnATIFProjectionWithoutTheNativePattern(t *testing.T) {
+	web := &webSource{seen: map[string]bool{}, actions: []indexedWebAction{
+		{9, json.RawMessage(`{"action_type":"find_in_page","url":"https://example.com"}`)},
+	}}
+	bad := []byte(`{"type":"response_item","payload":{"type":"web_search_call","id":"ws_3","status":"completed","action":{"type":"find_in_page","url":"https://example.com"}}}`)
+	if _, _, err := web.bind(bad); err == nil || web.done() {
+		t.Fatal("incomplete native find action was accepted")
+	}
+	good := []byte(`{"type":"response_item","payload":{"type":"web_search_call","id":"ws_3","status":"completed","action":{"type":"find_in_page","url":"https://example.com","pattern":"example"}}}`)
+	if step, id, err := web.bind(good); err != nil || step != 9 || id != "ws_3" || !web.done() {
+		t.Fatalf("matching find completed action rejected: %d %s %v", step, id, err)
+	}
+}

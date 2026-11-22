@@ -207,7 +207,7 @@ rg --version | head -1`
 		details["pip_configuration"] = strings.TrimSpace(pip)
 	}
 	if r.Task == torchTask {
-		pip, err := preparePipConstraints(ctx, m, id, "torch", torchCPUWheels, torchWheelCache)
+		pip, err := prepareTorch(ctx, m, id, r.Trial)
 		if err != nil {
 			return "", nil, err
 		}
@@ -294,7 +294,7 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 		cmd += check
 	}
 	if r.Task == torchTask {
-		check, err := torchOutputCheck()
+		check, err := torchOutputCheck(r.Trial)
 		if err != nil {
 			return err
 		}

@@ -72,7 +72,7 @@ func (w *webSource) bind(line []byte) (step int, id string, err error) {
 	if err := json.Unmarshal(item.Action["type"], &kind); err != nil {
 		return 0, "", err
 	}
-	if kind != "search" && kind != "open_page" {
+	if kind != "search" && kind != "open_page" && kind != "find_in_page" {
 		return 0, "", fmt.Errorf("unsupported external action type %q", kind)
 	}
 	if _, duplicate := item.Action["action_type"]; duplicate {
@@ -80,11 +80,25 @@ func (w *webSource) bind(line []byte) (step int, id string, err error) {
 	}
 	item.Action["action_type"] = item.Action["type"]
 	delete(item.Action, "type")
+	match := w.actions[w.next]
+	if kind == "find_in_page" {
+		var pattern string
+		if err := json.Unmarshal(item.Action["pattern"], &pattern); err != nil || pattern == "" {
+			return 0, "", errors.New("missing native find-in-page pattern")
+		}
+		var projected map[string]json.RawMessage
+		if err := json.Unmarshal(match.args, &projected); err != nil {
+			return 0, "", err
+		}
+		if _, included := projected["pattern"]; !included {
+			// ATIF v1.7 retains the URL and omits the native search pattern.
+			delete(item.Action, "pattern")
+		}
+	}
 	args, err := json.Marshal(item.Action)
 	if err != nil {
 		return 0, "", err
 	}
-	match := w.actions[w.next]
 	if !equalJSON(args, match.args) {
 		return 0, "", fmt.Errorf("external web action differs from ATIF step %d", match.step)
 	}

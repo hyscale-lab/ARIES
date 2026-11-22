@@ -535,9 +535,29 @@
     ],
     "trials": [
       {
+        "trial": "4b588047-22af-4dc2-a705-6b8d24ff88fe",
+        "trajectory_sha256": "320991f94c9f9f85009d3db2d53001955e11eb330eaaba8d62c0a17c51c3967a",
+        "rollout_sha256": "3bf97cb76dbba0b923e8282f71eb0a5e746f00e7a9d2cd2d594d5a4ce99ca796"
+      },
+      {
         "trial": "9765e0a0-be12-40c4-9d2c-99654498a31f",
         "trajectory_sha256": "a1bba03ac1d036e57930b417d4b9713b90964b94c83ef49832f58a9496552aec",
         "rollout_sha256": "b011213c8fbe93eb6dddc4498f6b17e721134f5f0d4ce570afc8bd26c033b20e"
+      },
+      {
+        "trial": "a51a05f5-7fcb-420e-949b-e8cca7666a24",
+        "trajectory_sha256": "e721c99e47172d709c9f49eefc352c8d4df23ba7c2a4141912c9b65209bb1b96",
+        "rollout_sha256": "86625d9af82c213fb5309e76f63e9e0385b1d1bfc07cddd23a6d19179af230fe"
+      },
+      {
+        "trial": "ce62b3a5-602c-44c7-b13e-6537dca35d1d",
+        "trajectory_sha256": "ec8fb9e726ce5c56c7f4e9fa4e4f81560cc8c7e2b9f682facde9995474965ad1",
+        "rollout_sha256": "9d4da32f4c450e0b74ffb0a1e93f2c4f1fff28c807b3b584be16702fa690b5e7"
+      },
+      {
+        "trial": "e047ddea-bb8c-43c0-b71e-e625a611565f",
+        "trajectory_sha256": "efa966202630de3919fdfc7a99f1b71e5cf573d4a6f237eeafda76fd2e935868",
+        "rollout_sha256": "81b6ed16a13d41079f21cbf5ad3d8a3842a46a174a6ba3d6457f7b8eb3863ad7"
       }
     ],
     "vcpus": 1,

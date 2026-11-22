@@ -80,7 +80,7 @@ func prepareSparql(ctx context.Context, m *vhive.Manager, id, trial string) (str
 			return "", err
 		}
 	}
-	return preparePipConstraints(ctx, m, id, "sparql", state.installed, "")
+	return preparePipConstraints(ctx, m, id, "sparql", state.installed, "", nil)
 }
 
 func sparqlOutputCheck(trial string) (string, error) {

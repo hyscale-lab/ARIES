@@ -16,10 +16,14 @@ type replayWheel struct {
 	SHA256  string `json:"sha256"`
 }
 
-func preparePipConstraints(ctx context.Context, m *vhive.Manager, id, tag string, wheels map[string]replayWheel, cacheDir string) (string, error) {
+func preparePipConstraints(ctx context.Context, m *vhive.Manager, id, tag string, wheels map[string]replayWheel, cacheDir string, links map[string]string) (string, error) {
 	constraints := make([]string, 0, len(wheels))
 	for name, wheel := range wheels {
-		constraints = append(constraints, name+"=="+wheel.Version)
+		constraint := name + "==" + wheel.Version
+		if url, ok := links[name]; ok {
+			constraint = name + " @ " + url + "#sha256=" + wheel.SHA256
+		}
+		constraints = append(constraints, constraint)
 	}
 	sort.Strings(constraints)
 	cacheCheck, cacheOption := "", ""
@@ -50,8 +54,18 @@ func pipReportCheck(tag string, installed map[string]replayWheel, cacheDir strin
 	return fmt.Sprintf("\npython3 - '/tmp/aries-%s-pip-report.json' '%s' '%s' '%s' <<'PYREPORT'\n%s\nPYREPORT", tag, items, strings.Join(hosts, ","), cacheDir, checkPipReport), nil
 }
 
-const checkPipReport = `import hashlib, json, sys, urllib.parse
+const wheelCacheCheck = `import hashlib
 from pathlib import Path
+
+def hash_cached_wheel(cache_dir, url):
+    # CacheControl stores this URL's original HTTP body under its SHA-224 key.
+    key = hashlib.sha224(url.encode()).hexdigest()
+    path = (Path(cache_dir) / 'http-v2').joinpath(*key[:5], key + '.body')
+    with path.open('rb') as cached:
+        return hashlib.file_digest(cached, 'sha256').hexdigest()
+`
+
+const checkPipReport = wheelCacheCheck + `import json, sys, urllib.parse
 expected = json.loads(sys.argv[2])
 hosts = set(sys.argv[3].split(','))
 cache_dir = sys.argv[4]
@@ -67,11 +81,7 @@ for item in json.loads(Path(sys.argv[1]).read_text())['install']:
     if not sha:
         if not cache_dir:
             raise ValueError(f'no pip report digest for {name}')
-        # CacheControl stores this URL's original HTTP body under its SHA-224 key.
-        key = hashlib.sha224(download['url'].encode()).hexdigest()
-        path = (Path(cache_dir) / 'http-v2').joinpath(*key[:5], key + '.body')
-        with path.open('rb') as cached:
-            sha = hashlib.file_digest(cached, 'sha256').hexdigest()
+        sha = hash_cached_wheel(cache_dir, download['url'])
         evidence['sha256_source'] = 'retained_http_body'
     installed[name] = {'version': meta['version'], 'sha256': sha}
     print(json.dumps({'name': name, **installed[name], 'url': download['url'], **evidence}, sort_keys=True))
