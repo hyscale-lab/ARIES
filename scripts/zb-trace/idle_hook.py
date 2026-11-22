@@ -14,6 +14,7 @@ import sys
 import time
 
 from idle import IdleObserver, start_identity
+from vmm_census import census
 
 
 PHASES = ("session-start", "pre-tool", "post-tool", "session-end")
@@ -151,6 +152,11 @@ def frozen_capture(api, observer, phase, step, event):
         freeze["pause_ack_ns"] = time.monotonic_ns()
         if phase != "session-start":
             event["window"] = observer.collect()
+        if os.environ.get("ZB_VMM_CENSUS") == "1":
+            snapshot = None
+            if root := os.environ.get("ZB_CHECKPOINT_NAMESPACE_DIR"):
+                snapshot = Path(root) / event["runtime"] / "memory"
+            event["vmm_census"] = census(api.identity[0], event["ram_slots"], event["other_kvm_slots"], snapshot)
         if phase != "session-end":
             event["arm"] = observer.arm(step if phase == "pre-tool" else None)
     finally:
