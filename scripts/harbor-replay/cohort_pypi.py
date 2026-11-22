@@ -108,6 +108,8 @@ def verify(log, receipt, reference, network=None, financial_apt=None, hf=None):
     if [e["event"] for e in events if e["event"] in phases] != list(phases) or events[-1]["event"] != "removed":
         raise ValueError("PyPI replay lifecycle is incomplete")
     first = events[0]
+    if first.get("diagnostic_process_drift") or receipt.get("diagnostic_process_drift"):
+        raise ValueError("process timing diagnostics cannot provide a primary measurement")
     fields = ("task", "trial_id", "job_id", "row_id", "image", "trajectory_sha256", "rollout_sha256",
               "memory_mib", "storage_mib", "vcpus")
     if (any(first[k] != receipt[k] for k in fields) or not first["cni_network"] or
