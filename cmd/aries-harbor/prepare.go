@@ -23,8 +23,9 @@ type taskSetup struct {
 }
 
 var taskSetups = map[string]taskSetup{
-	sparqlTask: sparqlSetup,
-	kvTask:     kvSetup,
+	sparqlTask:         sparqlSetup,
+	"compile-compcert": compilerSetup,
+	kvTask:             kvSetup,
 	"video-processing": {output: "output.toml", initialCheck: videoInitialCheck,
 		inputCheck: `echo '69ac53c9b4302225e3bdf5b94970e29dade7d800ba07109c2691604b2cac69ad  example_video.mp4' | sha256sum -c -`},
 	"circuit-fibsqrt": {output: "gates.txt", initialCheck: `echo '032786f94f16605767c62bb61ce4dbba7ab7d3f1046712c975f01c9a04b6ad29  gates.txt' | sha256sum -c -
@@ -235,6 +236,9 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 		}
 		cmd += check
 	}
+	if r.Task == "compile-compcert" {
+		cmd += "\n" + compilerResult
+	}
 	if r.Task == "video-processing" {
 		cmd += `
 python - <<'PYREPORT'
@@ -263,6 +267,9 @@ with urllib.request.urlopen("https://pypi.org/simple/toml/",timeout=10) as respo
 		return err
 	}
 	python, probe := "/usr/local/bin/python", pypiProbe
+	if task == "compile-compcert" {
+		python, probe = "/usr/bin/python3", compilerNetworkProbe
+	}
 	if task == sparqlTask {
 		python, probe = "/usr/bin/python3", sparqlNetworkProbe
 	}
