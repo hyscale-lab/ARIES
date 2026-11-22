@@ -7,6 +7,17 @@ var hfSetup = taskSetup{
 	output: "app.py",
 	initialCheck: `test ! -e /app/app.py && test ! -e /app/model_cache
 test "$(python --version)" = 'Python 3.13.15'
+# Overlaying the official interpreter leaves the published image’s old pip metadata.
+python - <<'PIPBASE'
+from email.parser import Parser
+from pathlib import Path
+import shutil
+old = Path("/usr/local/lib/python3.13/site-packages/pip-25.3.dist-info")
+if old.exists():
+    m = Parser().parsestr((old/"METADATA").read_text())
+    assert m["Name"] == "pip" and m["Version"] == "25.3"
+    shutil.rmtree(old)
+PIPBASE
 python -m pip install --no-index --no-deps --force-reinstall /tmp/aries-hf-setup/*.whl
 python - <<'PYCHECK'
 import json, re
@@ -16,7 +27,9 @@ manifest = json.loads(Path("/tmp/aries-hf-setup/wheels.json").read_text())
 norm = lambda key: re.sub("[-_.]+", "-", key).lower()
 expected = {norm(w["name"]): w["version"] for w in manifest["wheels"]}
 expected.update(manifest["image_package"])
-actual = {norm(d.metadata["Name"]): d.version for d in distributions()}
+installed = [(norm(d.metadata["Name"]), d.version) for d in distributions()]
+actual = dict(installed)
+assert len(actual) == len(installed), installed
 assert actual == expected, (actual.items() - expected.items(), expected.items() - actual.items())
 print(json.dumps(actual, sort_keys=True))
 PYCHECK
