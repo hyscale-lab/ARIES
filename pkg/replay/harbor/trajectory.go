@@ -63,11 +63,14 @@ type Event struct {
 }
 
 type workload struct {
-	Task    string   `json:"task"`
-	Workdir string   `json:"workdir"`
-	Image   string   `json:"image"`
-	Effects []string `json:"effects"`
-	Trials  []struct {
+	VCPUs      int      `json:"vcpus"`
+	MemoryMiB  int      `json:"memory_mib"`
+	StorageMiB int      `json:"storage_mib"`
+	Task       string   `json:"task"`
+	Workdir    string   `json:"workdir"`
+	Image      string   `json:"image"`
+	Effects    []string `json:"effects"`
+	Trials     []struct {
 		Trial      string
 		Trajectory string `json:"trajectory_sha256"`
 		Rollout    string `json:"rollout_sha256"`
@@ -75,6 +78,9 @@ type workload struct {
 }
 
 type Recording struct {
+	VCPUs           int         `json:"vcpus"`
+	MemoryMiB       int         `json:"memory_mib"`
+	StorageMiB      int         `json:"storage_mib"`
 	Task            string      `json:"task"`
 	Workdir         string      `json:"workdir"`
 	Image           string      `json:"image"`
@@ -135,7 +141,7 @@ func parse(w workload, trial string, atif, rollout []byte) (*Recording, error) {
 	if t.Schema != "ATIF-v1.7" || t.Session == "" || t.Agent.Name != "codex" || t.Agent.Model != "gpt-6-astra" {
 		return nil, errors.New("unexpected ATIF identity")
 	}
-	r := &Recording{Task: w.Task, Workdir: w.Workdir, Image: w.Image, ReviewedEffects: w.Effects, Trial: trial, Job: Job, Row: Row, Session: t.Session, Model: t.Agent.Model, TrajectoryHash: digest(atif), RolloutHash: digest(rollout)}
+	r := &Recording{VCPUs: w.VCPUs, MemoryMiB: w.MemoryMiB, StorageMiB: w.StorageMiB, Task: w.Task, Workdir: w.Workdir, Image: w.Image, ReviewedEffects: w.Effects, Trial: trial, Job: Job, Row: Row, Session: t.Session, Model: t.Agent.Model, TrajectoryHash: digest(atif), RolloutHash: digest(rollout)}
 	r.Plan.SourceRunID = Job
 	r.Plan.SourceTaskID = trial
 	calls := map[string]indexedCall{}

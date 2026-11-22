@@ -37,7 +37,7 @@ def assemble(task, output):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("task", choices=("regex-log", "constraints-scheduling"))
+    parser.add_argument("task", choices=("regex-log", "constraints-scheduling", "overfull-hbox"))
     parser.add_argument("output", type=Path)
     args = parser.parse_args()
     assemble(args.task, args.output)

@@ -19,10 +19,16 @@ import (
 const codexPrefixSHA = "1a698641a7ced85512aab1fd6f9277494561ffe18172240f7e7593825dbb6aab"
 
 type taskSetup struct {
-	packagesSHA, output, inputCheck string
+	packagesSHA, output, inputCheck, initialCheck string
 }
 
 var taskSetups = map[string]taskSetup{
+	"overfull-hbox": {packagesSHA: "a63ab01c6a16caeec664ffbc10890ce597e05948b0a378434f5c48b9266a8f9a", output: "input.tex", initialCheck: `echo '7bf7dbe58dbbfb08b6a652c547daa09a57cdbccc0fd18141b4968756061326a3  input.tex' | sha256sum -c -
+test ! -e main.pdf && test ! -e main.log
+pdflatex --version | head -1`, inputCheck: `sha256sum -c <<'ARIESSHA'
+6c07d3203fdc3fc54317fafeee9d19b576418c9de2e142a599814b2f6cb32b2f  main.tex
+bc8f7cf4b41914be036e6d4666e1550971d39b2f23b7e69e3e975f4bdb387be6  synonyms.txt
+ARIESSHA`},
 	"regex-log": {packagesSHA: "16323fa3c8382539929ca3829342150e9bb50f07379dfe89d6394c092f0c2f4b", output: "regex.txt"},
 	"constraints-scheduling": {packagesSHA: "c5ec5579c923cc5a150ad21c262ebbf52c7f7183f6121ef452035cbad0c6d2bc", output: "meeting_scheduled.ics", inputCheck: `sha256sum -c <<'ARIESSHA'
 5a5d45804bffd339c2479d49e76fe817b38244d14d389afe1de583443808ecbc  alice_calendar.ics
@@ -94,7 +100,19 @@ rmdir aries-guest-offline-packages`
 	if err := uploadPinned(ctx, m, id, tools, codexPrefixSHA, "/"); err != nil {
 		return "", nil, err
 	}
-	state := "set -eu\ntest ! -e " + task.output + "\n" + task.inputCheck + `
+	initial := task.initialCheck
+	if initial == "" {
+		initial = "test ! -e " + task.output
+	}
+	allocation := ""
+	if r.Trial == "337f0b12-666b-4f8f-bd8e-1eec7ab2de7f" {
+		out, err := checked(ctx, m, id, core.Command{Path: "/bin/sh", Args: []string{"-c", installRecordedTempAllocation}})
+		if err != nil {
+			return "", nil, err
+		}
+		allocation = strings.TrimSpace(out)
+	}
+	state := "set -eu\n" + initial + "\n" + task.inputCheck + `
 command -v node codex rg python3 git patch perl
 test "$(node --version)" = v22.23.2
 rg --version | head -1
@@ -103,8 +121,27 @@ dpkg-query -W python3 git patch perl-base`
 	if err != nil {
 		return "", nil, err
 	}
-	return "source_task_ready", map[string]string{"codex_prefix_sha256": codexPrefixSHA, "ubuntu_packages_sha256": task.packagesSHA, "checks": out}, nil
+	return "source_task_ready", map[string]string{"codex_prefix_sha256": codexPrefixSHA, "ubuntu_packages_sha256": task.packagesSHA, "checks": out, "recorded_temp_allocation": allocation}, nil
 }
+
+// This source session refers to the original random name literally in four
+// later steps. Allocate its recorded unused directory on the original call.
+const installRecordedTempAllocation = `set -eu
+test ! -e /tmp/latex-synonyms.eqOYqu
+test ! -e /usr/local/bin/mktemp
+cat > /usr/local/bin/mktemp <<'ARIESMKTEMP'
+#!/bin/sh
+if [ "$#" -eq 2 ] && [ "$1" = "-d" ] && [ "$2" = "/tmp/latex-synonyms.XXXXXX" ]; then
+    umask 077
+    mkdir -m 700 -- /tmp/latex-synonyms.eqOYqu || exit 1
+    printf '%s\n' /tmp/latex-synonyms.eqOYqu
+else
+    exec /usr/bin/mktemp "$@"
+fi
+ARIESMKTEMP
+chmod 0755 /usr/local/bin/mktemp
+sha256sum /usr/local/bin/mktemp
+printf '%s\n' '/tmp/latex-synonyms.XXXXXX -> /tmp/latex-synonyms.eqOYqu'`
 
 func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harbor.Recording, log *json.Encoder) error {
 	task := taskSetups[r.Task]

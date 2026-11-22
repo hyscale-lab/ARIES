@@ -32,7 +32,10 @@
         "trajectory_sha256": "a580ebc44b2aaf67d8fab14fae0e6c408f7473b8249fc17f042de3e5311ccdd0",
         "rollout_sha256": "e0e1e2a48d93e36793349acc1f01e995fc05b67f84489a507500e8e2d185e798"
       }
-    ]
+    ],
+    "vcpus": 1,
+    "memory_mib": 2048,
+    "storage_mib": 10240
   },
   {
     "task": "regex-log",
@@ -67,7 +70,10 @@
         "trajectory_sha256": "92d888e9e26ab294bdde346a3b0ac8d8312146aa9f395979d34e673e6806abc2",
         "rollout_sha256": "3b35dcb6ac42afc43871d8897552b5d01896f6913791d32d3f651d4e122b5eb1"
       }
-    ]
+    ],
+    "vcpus": 1,
+    "memory_mib": 2048,
+    "storage_mib": 10240
   },
   {
     "task": "constraints-scheduling",
@@ -102,6 +108,32 @@
         "trajectory_sha256": "ec5178278a446b1ca9a2108fde048e65f2205fd178cc34379699c61782e879a4",
         "rollout_sha256": "b7fdb788b696b7602785faaa7a91497de3a8110a3fcb74a47cadf0861ddef989"
       }
-    ]
+    ],
+    "vcpus": 1,
+    "memory_mib": 2048,
+    "storage_mib": 10240
+  },
+  {
+    "task": "overfull-hbox",
+    "workdir": "/app",
+    "image": "docker.io/alexgshaw/overfull-hbox@sha256:7dca952bb6736194a736b5110945f48842eafa8551e24468f1dddeed0daee799",
+    "effects": [
+      "Compile the supplied local TeX document, inspect line warnings, apply only source synonym edits, verify protected inputs and compile the final document"
+    ],
+    "trials": [
+      {
+        "trial": "337f0b12-666b-4f8f-bd8e-1eec7ab2de7f",
+        "trajectory_sha256": "ea702379860a42d18dbfb7b3d5d6515a875403b87e7584149179aaee7d822718",
+        "rollout_sha256": "fd745567efc979ada4ed85ef407a51922fdd5b6d0d569ef42ab99cc9e8f7fa58"
+      },
+      {
+        "trial": "808e6179-3685-4dc0-8feb-13fef0856f67",
+        "trajectory_sha256": "ef3167b40b472bfd8e789c7c10aa962c78bcb831609d8cce7e0f73fb406e9f8a",
+        "rollout_sha256": "bf9f8c32624bc2828d9d6039f261fe1806817fd50984ecf0dba4a05f4c9ff817"
+      }
+    ],
+    "vcpus": 2,
+    "memory_mib": 4096,
+    "storage_mib": 10240
   }
 ]

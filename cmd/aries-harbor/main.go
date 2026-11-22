@@ -49,7 +49,7 @@ func command(ctx context.Context) error {
 	sampler := flag.String("sampler", "", "host sample_vmm.py")
 	samples := flag.String("samples", "", "new one-second VMM samples JSONL")
 	log := flag.String("log", "", "new private JSONL run log")
-	storage := flag.Int("storage-mib", 10240, "devmapper disk capacity")
+	storage := flag.Int("storage-mib", 0, "devmapper disk capacity")
 	var o vhive.Options
 	o.IdleMode = "checkpoint"
 	flag.BoolVar(&o.GuestTaskV3, "guest-task-v3", true, "containerd-v2 stack with guest task v3 and framed streams")
@@ -60,8 +60,8 @@ func command(ctx context.Context) error {
 	flag.StringVar(&o.CheckpointDir, "checkpoint-dir", "", "private host checkpoint directory")
 	flag.StringVar(&o.ShimDir, "shim-dir", "", "shim metadata directory")
 	flag.StringVar(&o.IODir, "io-dir", "", "runtime FIFO directory")
-	flag.IntVar(&o.VCPUs, "vcpus", 1, "guest CPUs")
-	flag.IntVar(&o.MemoryMB, "memory-mib", 2048, "guest memory")
+	flag.IntVar(&o.VCPUs, "vcpus", 0, "guest CPUs")
+	flag.IntVar(&o.MemoryMB, "memory-mib", 0, "guest memory")
 	flag.Parse()
 	t, err := os.ReadFile(*atif)
 	if err != nil {
@@ -77,6 +77,18 @@ func command(ctx context.Context) error {
 	}
 	if *image == "" {
 		return json.NewEncoder(os.Stdout).Encode(r)
+	}
+	if o.VCPUs == 0 {
+		o.VCPUs = r.VCPUs
+	}
+	if o.MemoryMB == 0 {
+		o.MemoryMB = r.MemoryMiB
+	}
+	if *storage == 0 {
+		*storage = r.StorageMiB
+	}
+	if o.VCPUs != r.VCPUs || o.MemoryMB != r.MemoryMiB || *storage != r.StorageMiB {
+		return fmt.Errorf("trial %s requires %d vCPUs, %d MiB memory and %d MiB storage", r.Trial, r.VCPUs, r.MemoryMiB, r.StorageMiB)
 	}
 	if *image != r.Image {
 		return fmt.Errorf("trial %s requires image %s", r.Trial, r.Image)
