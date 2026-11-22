@@ -50,3 +50,57 @@ func TestProcessResumesAndReturnsEachStreamOnce(t *testing.T) {
 		t.Fatal("consumed session still active")
 	}
 }
+
+func TestDiagnosticPollRetainsEarlyCompletionAndConsumesOutputOnce(t *testing.T) {
+	sessions := NewProcessSessions(t.Context(), func(_ context.Context, _ replay.Call, stdout, _ io.Writer) (core.CommandResult, error) {
+		fmt.Fprint(stdout, "finished")
+		return core.CommandResult{ExitCode: 0}, nil
+	})
+	defer sessions.Close()
+	call := replay.Call{Operation: "StartProcess", SessionID: 12, YieldTime: time.Second, ExitCode: ProcessRunning}
+	early, err := sessions.ObserveDrift(t.Context(), call)
+	if err != nil || early.ExitCode != 0 || early.Stdout != "finished" || !sessions.WasRetained(12) {
+		t.Fatal(early, err)
+	}
+	call.Operation = "PollProcess"
+	again, err := sessions.ObserveDrift(t.Context(), call)
+	if err != nil || again.ExitCode != 0 || again.Stdout != "" {
+		t.Fatal(again, err)
+	}
+	call.ExitCode = 0
+	last, err := sessions.ObserveDrift(t.Context(), call)
+	if err != nil || last.ExitCode != 0 || sessions.WasRetained(12) {
+		t.Fatal(last, err)
+	}
+}
+
+func TestDiagnosticTerminalJoinReadsActualRemainingOutput(t *testing.T) {
+	release := make(chan struct{})
+	sessions := NewProcessSessions(t.Context(), func(ctx context.Context, _ replay.Call, stdout, _ io.Writer) (core.CommandResult, error) {
+		select {
+		case <-ctx.Done():
+			return core.CommandResult{}, ctx.Err()
+		case <-release:
+		}
+		fmt.Fprint(stdout, "last")
+		return core.CommandResult{ExitCode: 4}, nil
+	})
+	defer sessions.Close()
+	call := replay.Call{Operation: "StartProcess", SessionID: 13, ExitCode: ProcessRunning, YieldTime: time.Millisecond}
+	if out, e := sessions.ObserveDrift(t.Context(), call); e != nil || out.ExitCode != ProcessRunning {
+		t.Fatal(out, e)
+	}
+	call.Operation = "PollProcess"
+	call.ExitCode = 4
+	if out, e := sessions.ObserveDrift(t.Context(), call); e != nil || out.ExitCode != ProcessRunning {
+		t.Fatal(out, e)
+	}
+	close(release)
+	last, e := sessions.FinishObservedProcess(t.Context(), call)
+	if e != nil || last.ExitCode != 4 || last.Stdout != "last" {
+		t.Fatal(last, e)
+	}
+	if _, e := sessions.ObserveDrift(t.Context(), call); e == nil {
+		t.Fatal("consumed handle still exists")
+	}
+}

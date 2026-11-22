@@ -51,6 +51,8 @@ def main():
             pypi_network=pypi_args[pypi_args.index('-cni-network')+1]
         else:
             receipt=entry['receipt']
+        if receipt.get('diagnostic_process_drift') or receipt.get('diagnostic_video_images'):
+            raise ValueError('diagnostic replay cannot qualify for a primary measurement')
         if not (receipt['session_completed'] and receipt['all_observed_tool_exits_match'] and receipt['trial_id']==trial and receipt['task']==task):
             raise ValueError('missing successful source-specific fidelity evidence')
         folder=asset/'sources'/task/trial

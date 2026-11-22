@@ -43,6 +43,7 @@ type guestProcess struct {
 	done           chan struct{}
 	result         core.CommandResult
 	err            error
+	retained       bool
 }
 
 // ProcessSessions owns live foreground processes that returned a native
@@ -64,6 +65,33 @@ func NewProcessSessions(ctx context.Context, run GuestStream) *ProcessSessions {
 func (s *ProcessSessions) Close() { s.cancel(); s.wg.Wait() }
 
 func (s *ProcessSessions) Execute(ctx context.Context, call replay.Call) (core.CommandResult, error) {
+	return s.execute(ctx, call, false, false)
+}
+
+// ObserveDrift keeps a completed process visible to subsequent original empty
+// polls. Its terminal status is real, and only newly buffered output is read.
+func (s *ProcessSessions) ObserveDrift(ctx context.Context, call replay.Call) (core.CommandResult, error) {
+	return s.execute(ctx, call, true, false)
+}
+
+func (s *ProcessSessions) WasRetained(id int) bool {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	p := s.active[id]
+	return p != nil && p.retained
+}
+
+// FinishObservedProcess joins an already-running command after an original
+// terminal poll yielded. This extra diagnostic observation is recorded apart
+// from the original reply, so the disagreement remains visible.
+func (s *ProcessSessions) FinishObservedProcess(ctx context.Context, call replay.Call) (core.CommandResult, error) {
+	if call.Operation != "PollProcess" || call.ExitCode == ProcessRunning {
+		return core.CommandResult{}, errors.New("expected an original terminal process poll")
+	}
+	return s.execute(ctx, call, true, true)
+}
+
+func (s *ProcessSessions) execute(ctx context.Context, call replay.Call, retain, join bool) (core.CommandResult, error) {
 	s.lock.Lock()
 	p := s.active[call.SessionID]
 	switch call.Operation {
@@ -90,13 +118,17 @@ func (s *ProcessSessions) Execute(ctx context.Context, call replay.Call) (core.C
 		return core.CommandResult{}, errors.New("unexpected process session operation")
 	}
 	s.lock.Unlock()
-	timer := time.NewTimer(call.YieldTime)
-	defer timer.Stop()
+	var timeout <-chan time.Time
+	if !join {
+		timer := time.NewTimer(call.YieldTime)
+		defer timer.Stop()
+		timeout = timer.C
+	}
 	select {
 	case <-ctx.Done():
 		return core.CommandResult{}, context.Cause(ctx)
 	case <-p.done:
-	case <-timer.C:
+	case <-timeout:
 	}
 	out := core.CommandResult{ExitCode: ProcessRunning}
 	var err error
@@ -105,7 +137,11 @@ func (s *ProcessSessions) Execute(ctx context.Context, call replay.Call) (core.C
 		out = p.result
 		err = p.err
 		s.lock.Lock()
-		delete(s.active, call.SessionID)
+		if retain && call.ExitCode == ProcessRunning && err == nil {
+			p.retained = true
+		} else {
+			delete(s.active, call.SessionID)
+		}
 		s.lock.Unlock()
 	default:
 	}

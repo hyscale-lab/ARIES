@@ -15,6 +15,8 @@ import (
 // Hooks stay on the host. Boundary returns only after the VM is running again.
 // Its own freeze receipts identify the exact pause/resume bounds.
 type Hooks struct {
+	WasRetained           func(int) bool
+	FinishObservedProcess func(context.Context, replay.Call) (core.CommandResult, error)
 	DiagnosticVideoImages bool
 	Exec                  func(context.Context, replay.Call) (core.CommandResult, error)
 	Boundary              func(context.Context, string, int) error
@@ -128,7 +130,7 @@ func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
 			continue
 		}
 		call := r.Plan.Calls[e.Sequence-1]
-		receipt = toolReceipt(receipt, call)
+		receipt = toolReceipt(h, receipt, call)
 		if err := h.Boundary(ctx, "pre-tool", e.Step); err != nil {
 			return err
 		}
@@ -138,7 +140,7 @@ func Run(ctx context.Context, r *Recording, h Hooks) (runErr error) {
 		}
 		out, replyTime, err := h.executeTool(ctx, call, receipt)
 		captureErr := h.Boundary(ctx, "post-tool", e.Step)
-		if err := recordReply(h, call, receipt, out, replyTime, errors.Join(err, captureErr)); err != nil {
+		if err := recordReply(ctx, h, call, receipt, out, replyTime, errors.Join(err, captureErr)); err != nil {
 			return err
 		}
 	}
@@ -172,11 +174,14 @@ func recordSourceEvent(ctx context.Context, h Hooks, e Event) (Receipt, error) {
 
 	return receipt, nil
 }
-func toolReceipt(receipt Receipt, call replay.Call) Receipt {
+func toolReceipt(h Hooks, receipt Receipt, call replay.Call) Receipt {
 	receipt.Operation = call.Operation
 	if call.SessionID != 0 {
 		receipt.SessionID = call.SessionID
 		receipt.StatusBasis = "live_process_status_or_exit"
+		if call.Operation == "PollProcess" && h.WasRetained != nil && h.WasRetained(call.SessionID) {
+			receipt.StatusBasis = "retained_terminal_status_empty_poll"
+		}
 	}
 	if call.Operation == "ViewImage" {
 		receipt.StatusBasis = "recorded_high_detail_image_attachment"
@@ -184,7 +189,7 @@ func toolReceipt(receipt Receipt, call replay.Call) Receipt {
 
 	return receipt
 }
-func recordReply(h Hooks, call replay.Call, receipt Receipt, out core.CommandResult, replyTime int64, callErr error) error {
+func recordReply(ctx context.Context, h Hooks, call replay.Call, receipt Receipt, out core.CommandResult, replyTime int64, callErr error) error {
 	receipt.Event = "tool_reply"
 	receipt.Time = replyTime
 	receipt.OutputComparison = compareOutput(call.ResponseStdout, out)
@@ -205,6 +210,9 @@ func recordReply(h Hooks, call replay.Call, receipt Receipt, out core.CommandRes
 		return fmt.Errorf("step %d image attachment differs from the source", receipt.Step)
 	}
 	if int32(out.ExitCode) != call.ExitCode {
+		if h.FinishObservedProcess != nil && call.SessionID != 0 {
+			return recordProcessDrift(ctx, h, call, receipt, out)
+		}
 		return fmt.Errorf("step %d live exit %d, recorded %d", receipt.Step, out.ExitCode, call.ExitCode)
 	}
 	return nil

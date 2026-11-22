@@ -50,6 +50,7 @@ func validateParallelGroups(r *Recording) error {
 
 type parallelReply struct {
 	request Event
+	receipt Receipt
 	output  core.CommandResult
 	mono    int64
 	err     error
@@ -79,7 +80,7 @@ func runParallel(ctx context.Context, h Hooks, r *Recording, events []Event, fir
 	next, finished := 0, 0
 	dispatch := func(e Event, receipt Receipt) error {
 		call := r.Plan.Calls[e.Sequence-1]
-		receipt = toolReceipt(receipt, call)
+		receipt = toolReceipt(h, receipt, call)
 		receipt.Event = "tool_dispatch"
 		if err := emit(h, receipt); err != nil {
 			return err
@@ -89,7 +90,7 @@ func runParallel(ctx context.Context, h Hooks, r *Recording, events []Event, fir
 			defer wg.Done()
 			out, err := h.Exec(work, call)
 			at, clockErr := Clock()
-			done <- parallelReply{e, out, at, errors.Join(err, clockErr)}
+			done <- parallelReply{e, receipt, out, at, errors.Join(err, clockErr)}
 		}()
 		return nil
 	}
@@ -126,8 +127,8 @@ func runParallel(ctx context.Context, h Hooks, r *Recording, events []Event, fir
 			}
 			e := outcome.request
 			call := r.Plan.Calls[e.Sequence-1]
-			receipt := toolReceipt(Receipt{Line: e.Line, Step: e.Step, Sequence: e.Sequence, ParallelSize: n, Basis: e.Basis}, call)
-			if err := recordReply(h, call, receipt, outcome.output, outcome.mono, outcome.err); err != nil {
+			receipt := outcome.receipt
+			if err := recordReply(ctx, h, call, receipt, outcome.output, outcome.mono, outcome.err); err != nil {
 				return err
 			}
 			reply := sourceReplies[e.Sequence]

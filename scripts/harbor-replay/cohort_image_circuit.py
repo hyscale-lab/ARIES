@@ -48,6 +48,8 @@ def verify(run, receipt, *, sorted_final=False):
     if not events or events[-1]["event"] != "removed" or not any(e["event"] == "session_end" for e in events):
         raise ValueError("incomplete native session")
     first = events[0]
+    if any(first.get(k) or receipt.get(k) for k in ("diagnostic_process_drift","diagnostic_video_images")):
+        raise ValueError("diagnostic replay cannot qualify for a primary measurement")
     for key in ("task", "trial_id", "job_id", "row_id", "image", "trajectory_sha256", "rollout_sha256", "memory_mib", "storage_mib", "vcpus"):
         if first[key] != receipt[key]:
             raise ValueError(f"run identity mismatch for {key}")
