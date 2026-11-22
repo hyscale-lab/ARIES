@@ -1,6 +1,7 @@
 package main
 
 const torchTask = "torch-tensor-parallelism"
+const torchWheelCache = "/tmp/aries-torch-wheel-cache"
 
 var torchSetup = taskSetup{
 	// The reviewed Torch and SPARQL images have the same Ubuntu package state.
@@ -29,7 +30,7 @@ var torchCPUWheels = map[string]replayWheel{
 }
 
 func torchOutputCheck() (string, error) {
-	report, err := pipReportCheck("torch", torchCPUWheels, "download.pytorch.org", "download-r2.pytorch.org", "files.pythonhosted.org")
+	report, err := pipReportCheck("torch", torchCPUWheels, torchWheelCache, "download.pytorch.org", "download-r2.pytorch.org", "files.pythonhosted.org")
 	if err != nil {
 		return "", err
 	}

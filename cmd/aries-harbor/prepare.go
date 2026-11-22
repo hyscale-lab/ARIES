@@ -195,7 +195,7 @@ rg --version | head -1`
 		details["pip_configuration"] = strings.TrimSpace(pip)
 	}
 	if r.Task == torchTask {
-		pip, err := preparePipConstraints(ctx, m, id, "torch", torchCPUWheels)
+		pip, err := preparePipConstraints(ctx, m, id, "torch", torchCPUWheels, torchWheelCache)
 		if err != nil {
 			return "", nil, err
 		}

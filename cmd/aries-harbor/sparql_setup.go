@@ -80,7 +80,7 @@ func prepareSparql(ctx context.Context, m *vhive.Manager, id, trial string) (str
 			return "", err
 		}
 	}
-	return preparePipConstraints(ctx, m, id, "sparql", state.installed)
+	return preparePipConstraints(ctx, m, id, "sparql", state.installed, "")
 }
 
 func sparqlOutputCheck(trial string) (string, error) {
@@ -92,7 +92,7 @@ func sparqlOutputCheck(trial string) (string, error) {
 	if len(state.installed) == 0 {
 		return check, nil
 	}
-	report, err := pipReportCheck("sparql", state.installed, "files.pythonhosted.org")
+	report, err := pipReportCheck("sparql", state.installed, "", "files.pythonhosted.org")
 	if err != nil {
 		return "", err
 	}
