@@ -22,6 +22,7 @@ def main():
     cli.add_argument('manifest',type=Path)
     cli.add_argument('--sparql-cni',type=Path,help='private pre-provisioned SPARQL network profile')
     cli.add_argument('--torch-cni',type=Path,help='private pre-provisioned CPU Torch network profile')
+    cli.add_argument('--video-cni',type=Path,help='private video dependency network profile')
     cli.add_argument('--dataset-cni',type=Path,help='private token dataset network profile')
     cli.add_argument('--pypi-cni',type=Path,help='private gRPC and financial PyPI network profile')
     cli.add_argument('--financeapt-cni',type=Path,help='private signed-snapshot financial network profile')
@@ -41,10 +42,12 @@ def main():
     entries=json.loads(a.manifest.read_text())
     for entry in entries:
         task=entry['task'];trial=entry['trial_id']
-        if task not in {'constraints-scheduling','regex-log','overfull-hbox','count-dataset-tokens',*TASKS,*PYPI_TASKS,*SOURCE_DEPENDENCY_TASKS} or not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',trial):
+        if task not in {'constraints-scheduling','regex-log','overfull-hbox','count-dataset-tokens','video-processing',*TASKS,*PYPI_TASKS,*SOURCE_DEPENDENCY_TASKS} or not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',trial):
             raise ValueError('unexpected trial')
         if task == 'count-dataset-tokens':
             import cohort_dataset
+        if task == 'video-processing':
+            import cohort_video
         if task in SOURCE_DEPENDENCY_TASKS:
             import cohort_sparql
             cni=a.sparql_cni if task == 'sparql-university' else a.torch_cni
@@ -85,6 +88,8 @@ def main():
                         verify(first,receipt)
                     if task == 'count-dataset-tokens':
                         cohort_dataset.verify(first, receipt)
+                    if task == 'video-processing':
+                        cohort_video.verify(first, receipt)
                     if task in SOURCE_DEPENDENCY_TASKS:
                         cohort_sparql.verify(events,receipt)
                     if task in PYPI_TASKS:
@@ -107,6 +112,8 @@ def main():
                 args.extend(['-os-tools',str(archive)])
         elif task == 'count-dataset-tokens':
             args.extend(cohort_dataset.replay_args(asset,receipt,a.dataset_cni))
+        elif task == 'video-processing':
+            args.extend(cohort_video.replay_args(asset,receipt,a.video_cni))
         elif task in SOURCE_DEPENDENCY_TASKS:
             args.extend(cohort_sparql.replay_args(asset,cni,task))
         elif task in PYPI_TASKS:
@@ -124,6 +131,8 @@ def main():
                 checks=verify(first,receipt)
             elif task == 'count-dataset-tokens':
                 checks=cohort_dataset.verify(first,receipt)
+            elif task == 'video-processing':
+                checks=cohort_video.verify(first,receipt)
             elif task in SOURCE_DEPENDENCY_TASKS:
                 checks=cohort_sparql.verify(first/'events.jsonl',receipt)
             elif task in PYPI_TASKS:

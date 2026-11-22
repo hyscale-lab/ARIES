@@ -10,7 +10,7 @@ def verify(raw, receipt, variant, node, binary, hook):
     ref=json.loads(receipt.read_text())
     ev=[json.loads(line) for line in (raw/'events.jsonl').read_text().splitlines()]
     create,=[e for e in ev if e['event']=='create_start']
-    assert ref['session_completed'] and ref['all_observed_tool_exits_match'] and ref['task'] in ('overfull-hbox','regex-log','constraints-scheduling','code-from-image','circuit-fibsqrt','count-dataset-tokens')
+    assert ref['session_completed'] and ref['all_observed_tool_exits_match'] and ref['task'] in ('overfull-hbox','regex-log','constraints-scheduling','code-from-image','circuit-fibsqrt','count-dataset-tokens','video-processing')
     assert ref['task']==create['task']
     assert ev[-1]['event']=='removed' and create['trial_id']==ref['trial_id'] and create['job_id']==ref['job_id']
     for k in ('image','trajectory_sha256','rollout_sha256','memory_mib','storage_mib','vcpus'):
@@ -19,6 +19,9 @@ def verify(raw, receipt, variant, node, binary, hook):
     if ref['task'] in {'code-from-image','circuit-fibsqrt'}:
         from cohort_image_circuit import verify as verify_guest_evidence
         verify_guest_evidence(raw,ref)
+    elif ref['task'] == 'video-processing':
+        from cohort_video import verify as verify_video
+        verify_video(raw, ref)
     elif ref['task'] == 'count-dataset-tokens':
         from cohort_dataset import verify as verify_dataset
         verify_dataset(raw,ref)

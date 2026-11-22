@@ -12,25 +12,29 @@ REVISIONS = {"dataset": "a82400884621626d41bef89b7604f8054e7e00e0",
              "tokenizer": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306"}
 
 
-def replay_args(asset, receipt, cni):
+def network_args(cni, network_prefix):
     if cni is None:
-        raise ValueError("token count requires --dataset-cni with a provisioned private worker bridge")
+        raise ValueError("a provisioned private worker bridge is required")
     cni = cni.resolve(strict=True)
     config = json.loads((cni / "conf/10-video.conflist").read_bytes())
     name = config["name"]
-    if not re.fullmatch(r"zbtoken(182|183|189|191|198|201|203)", name):
-        raise ValueError("unexpected dataset CNI network")
+    if not re.fullmatch(network_prefix + r"(182|183|189|191|198|201|203)", name):
+        raise ValueError("unexpected worker CNI network")
     if digest(cni / "SHA256SUMS") != CNI_SHA:
         raise ValueError("unexpected CNI plugin digest list")
     for line in (cni / "SHA256SUMS").read_text().splitlines():
         expected, binary = line.split()
         if digest(cni / "bin" / binary) != expected:
             raise ValueError(f"CNI plugin bytes differ: {binary}")
+    return ["-cni-network", name, "-cni-conf-dir", str(cni / "conf"),
+            "-cni-cache-dir", str(cni / "cache"), "-cni-bin-dir", str(cni / "bin")]
+
+
+def replay_args(asset, receipt, cni):
+    args = network_args(cni, "zbtoken")
     hosts = json.loads((cni / "conf/dataset-hosts.json").read_bytes())
     if set(hosts) != ENDPOINTS or not all(ipaddress.ip_address(v).is_global for v in hosts.values()):
         raise ValueError("unexpected dataset endpoints")
-    args = ["-cni-network", name, "-cni-conf-dir", str(cni / "conf"),
-            "-cni-cache-dir", str(cni / "cache"), "-cni-bin-dir", str(cni / "bin")]
     ready, = [e["state"] for e in receipt["source_setup_and_final_state"] if e["event"] == "source_task_ready"]
     for field, name in (("debian_curl_archive_sha256","curl-debs.tar.gz"),
                         ("debian_patch_archive_sha256","circuit-patch-debs.tar.gz")):

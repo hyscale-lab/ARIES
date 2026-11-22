@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package source-matched image/circuit or token-count recordings with validated native runners."""
+"""Package source-matched image, circuit, token-count or video recordings with validated native runners."""
 import argparse
 import json
 import os
@@ -23,9 +23,13 @@ def main():
     cli.add_argument("receipts", type=Path)
     cli.add_argument("output", type=Path)
     cli.add_argument("--exclude-manifest", type=Path, help="omit earlier published trial IDs")
-    cli.add_argument("--dataset", action="store_true", help="package validated token-count recordings and the exact CNI binaries")
+    task_group = cli.add_mutually_exclusive_group()
+    task_group.add_argument("--dataset", action="store_true", help="package validated token-count recordings")
+    task_group.add_argument("--video", action="store_true", help="package strict video recordings with byte-identical guest frames")
     a = cli.parse_args()
     selected = {"count-dataset-tokens"} if a.dataset else TASKS
+    if a.video:
+        selected = {"video-processing"}
     prior = {r["trial_id"] for r in json.loads(a.exclude_manifest.read_bytes())} if a.exclude_manifest else set()
     repo = Path(__file__).resolve().parents[2]
     replay = repo / "scripts/harbor-replay"
@@ -43,15 +47,21 @@ def main():
     for name in ["run-reviewed-cohort.py", "cohort_image_circuit.py"]:
         install(replay / name, output / name)
     helpers = [("codex-harbor-tools.tar.gz", "1a698641a7ced85512aab1fd6f9277494561ffe18172240f7e7593825dbb6aab")]
-    if a.dataset:
-        from cohort_dataset import CNI_SHA, verify as verify_dataset
+    validate = verify
+    if a.dataset or a.video:
+        from cohort_dataset import CNI_SHA
+        if a.dataset:
+            from cohort_dataset import verify as validate
+        else:
+            from cohort_video import verify as validate
+            install(replay / "cohort_video.py", output / "cohort_video.py")
         for name in ("cohort_dataset.py", "provision-pypi-cni.sh"):
             install(replay / name, output / name)
         helpers.append(("cni/SHA256SUMS", CNI_SHA))
         for line in (a.cache / "cni/SHA256SUMS").read_text().splitlines():
             sha, plugin = line.split()
             helpers.append(("cni/bin/" + plugin, sha))
-    else:
+    if not a.dataset:
         helpers.append(("aries-harbor-image", IMAGE_HELPER))
     for name, expected in helpers:
         if digest(a.cache / name) != expected:
@@ -73,6 +83,9 @@ def main():
                 pending.append({"task": task, "trial_id": trial, "reason": "unavailable matching native fidelity receipt"})
                 continue
             receipt = json.loads(reference.read_bytes())
+            if receipt.get("diagnostic_video_images") or receipt.get("diagnostic_process_drift"):
+                pending.append({"task": task, "trial_id": trial, "reason": "diagnostic receipt only"})
+                continue
             if not (receipt["task"] == task and receipt["trial_id"] == trial and receipt["session_completed"] and receipt["all_observed_tool_exits_match"]):
                 raise ValueError(f"incomplete source receipt: {reference}")
             ready, = [e["state"] for e in receipt["source_setup_and_final_state"] if e["event"] == "source_task_ready"]
@@ -104,7 +117,7 @@ def main():
             with tempfile.TemporaryDirectory() as folder_name:
                 temporary = Path(folder_name)
                 os.symlink(raw.resolve(), temporary/"events.jsonl")
-                checks = verify_dataset(temporary,receipt) if a.dataset else verify(temporary,receipt)
+                checks = validate(temporary, receipt)
             entries.append({"task":task, "trial_id":trial, "receipt":receipt,
                             "reference_receipt":str(Path("receipts")/reference.name),
                             "unobserved_external_actions":receipt.get("external_actions",[]),
