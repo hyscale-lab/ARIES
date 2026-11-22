@@ -112,3 +112,37 @@ and dependency bytes. The CNI traffic scope is the site's DNS resolver and
 TLS service endpoints for PyPI, the public bootstrap and the raw GitHub
 helper. Remove that scope with
 `provision-sparql-cni.sh BUNDLE/cni remove amdNNN` when finished.
+
+## Token counting and compiler builds
+
+The token-count replay checks the original Hugging Face dataset and tokenizer
+revisions before checkpoint and after restore. Its guest runs the original
+package installs and tokenization commands. The final receipt preserves the
+answer file digest, token total and downloaded wheel URLs and SHA-256 hashes.
+
+Build a cohort from completed native validation receipts with
+`prepare-image-circuit-cohort.py --dataset CACHE RECEIPTS BUNDLE`.
+Its manifest identifies each source pair, validated binary and unavailable
+external response. On the assigned worker, copy `BUNDLE/cni` to a dedicated
+writable CNI directory, with dnsmasq available at `/usr/sbin/dnsmasq`. Run
+`provision-pypi-cni.sh CNI_DIR install dataset-amdNNN` from revision 186bad7
+or later. Then run
+`run-reviewed-cohort.py RUNTIME UNIT BUNDLE VARIANT BUNDLE/manifest.json --dataset-cni CNI_DIR`.
+The bridge provides private DNS and TLS access for four public dependency
+hosts. The before/after probes record the guest's resolved addresses and the
+two immutable Hub revision identifiers.
+
+Four CompCert sources install Coq, Dune and Menhir through OPAM. Their
+release manifest records the upstream archive URL, the official OPAM cache
+URL, the archive checksum and the metadata bytes inspected for each source
+release. The live guest reads OPAM metadata, executes the original install
+and build, and records its resolved switch and cache hashes. The direct Coq
+source trial uses its original Git clone instead. The current Ubuntu mirror
+and OPAM index can have newer metadata than the recorded session.
+
+For an uninstrumented timing investigation, `-diagnostic-process-drift`
+retains an early real exit for later empty source polls. If a source
+terminal poll finds a still-running process, the original reply records
+that disagreement. The runner separately joins the process and records the
+actual terminal status and remaining stream bytes. The primary cohort
+verifier rejects these diagnostic receipts.
