@@ -23,10 +23,7 @@ type taskSetup struct {
 }
 
 var taskSetups = map[string]taskSetup{
-	"video-processing": {output: "output.toml", initialCheck: `test ! -e output.toml
-test ! -e jump_analyzer.py
-python -c 'import cv2,numpy; print(cv2.__version__,numpy.__version__)'
-printf '%s\n' 'export PIP_REPORT=/tmp/aries-reviewed-pip-install.json' > /etc/profile.d/zz-aries-pip.sh`,
+	"video-processing": {output: "output.toml", initialCheck: videoInitialCheck,
 		inputCheck: `echo '69ac53c9b4302225e3bdf5b94970e29dade7d800ba07109c2691604b2cac69ad  example_video.mp4' | sha256sum -c -`},
 	"circuit-fibsqrt": {output: "gates.txt", initialCheck: `echo '032786f94f16605767c62bb61ce4dbba7ab7d3f1046712c975f01c9a04b6ad29  gates.txt' | sha256sum -c -
 test ! -e sim
