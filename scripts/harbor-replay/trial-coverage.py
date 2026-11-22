@@ -74,6 +74,9 @@ def make(sources, inventory, reviewed, outputs):
                         "guest_replies": len(diagnostic.get("tools", [])),
                         "completed_with_final_state": bool(completed),
                         "additional_process_observations": len(diagnostic.get("additional_process_observations", [])),
+                        "diagnostic_opam_log": diagnostic.get("diagnostic_opam_log", False),
+                        "mapped_opam_reads": sum(e["event"] == "diagnostic_opam_log_read"
+                                                 for e in diagnostic.get("opam_log_identity_observations", [])),
                     })
                     if completed:
                         row["state"] = ("completed_guest_calls_process_timing_diverged"
