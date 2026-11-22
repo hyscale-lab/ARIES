@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/hyscale-lab/aries/pkg/core"
 	"github.com/hyscale-lab/aries/pkg/deployment/vhive"
 )
 
@@ -71,6 +72,12 @@ func prepareSparql(ctx context.Context, m *vhive.Manager, id, trial string) (str
 	}
 	if len(state.installed) == 0 {
 		return "", nil
+	}
+	if trial == "28b314c3-2ea7-47d2-983b-9ea71befe578" {
+		// Two original listings depend on these names in the harness layout.
+		if _, err := checked(ctx, m, id, core.Command{Path: "/bin/mkdir", Args: []string{"-m", "0755", "-p", "/tmp/codex-home/.tmp"}}); err != nil {
+			return "", err
+		}
 	}
 	return preparePipConstraints(ctx, m, id, "sparql", state.installed)
 }
