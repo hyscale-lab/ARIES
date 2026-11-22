@@ -122,7 +122,8 @@ func command(ctx context.Context) error {
 		return errors.New("OPAM log identity mapping requires the uninstrumented BF3 process diagnostic")
 	}
 	if *processDrift {
-		allowed := r.Task == "compile-compcert" || r.Task == "video-processing" || r.Task == "circuit-fibsqrt" || r.Task == datasetTask
+		torchPoll := r.Task == torchTask && (r.Trial == "e047ddea-bb8c-43c0-b71e-e625a611565f" || r.Trial == "ce62b3a5-602c-44c7-b13e-6537dca35d1d")
+		allowed := torchPoll || r.Task == "compile-compcert" || r.Task == "video-processing" || r.Task == "circuit-fibsqrt" || r.Task == datasetTask
 		if !allowed || *observer != "" || *sampler != "" || *probe != "" || *intraStep != 0 {
 			return errors.New("process drift diagnostics require a reviewed uninstrumented recording")
 		}

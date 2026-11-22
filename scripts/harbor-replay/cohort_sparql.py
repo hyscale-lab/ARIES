@@ -49,6 +49,8 @@ def verify(log, receipt):
     expected_tls = dict.fromkeys(TLS_HOSTS[task], 200)
     if not events or events[-1]["event"] != "removed" or not any(e["event"] == "session_end" for e in events):
         raise ValueError(f"incomplete {task} replay")
+    if events[0].get("diagnostic_process_drift"):
+        raise ValueError("process timing diagnostics cannot enter a primary cohort")
     for key in ("task", "trial_id", "job_id", "row_id", "image", "trajectory_sha256", "rollout_sha256", "memory_mib", "storage_mib", "vcpus"):
         if events[0][key] != receipt[key]:
             raise ValueError(f"{task} identity mismatch for {key}")
