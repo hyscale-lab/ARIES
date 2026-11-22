@@ -2,6 +2,7 @@
 import argparse
 import json
 from pathlib import Path
+import tempfile
 
 
 def make(sources, inventory, reviewed, outputs):
@@ -87,6 +88,7 @@ if __name__ == "__main__":
         p.add_argument(key, type=Path)
     a = p.parse_args()
     out = make(*(json.loads(path.read_text()) for path in (a.sources, a.inventory, a.reviewed)), a.outputs)
-    tmp = a.outputs / "coverage.json.tmp"
-    tmp.write_text(json.dumps(out, indent=2)+"\n")
-    tmp.replace(a.outputs / "coverage.json")
+    with tempfile.NamedTemporaryFile(dir=a.outputs, prefix=".coverage-", mode="w", delete=False) as stream:
+        json.dump(out, stream, indent=2)
+        stream.write("\n")
+    Path(stream.name).replace(a.outputs / "coverage.json")
