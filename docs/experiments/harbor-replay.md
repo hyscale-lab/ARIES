@@ -31,3 +31,12 @@ The adapter uses the ARIES [replay plan and call structures](../../pkg/replay/pl
 The host invokes an observer executable synchronously with `PHASE RUNTIME_ID STEP SOCKET_PATH`. Session start and end use step 0. A pre-tool phase can partition the preceding wait, while post-tool captures the tool interval. Each hook must resume the VM before returning. It owns pause and resume timestamps and initial arming. The separate host sampler starts before session origin and supplies one verified PSS sample before tool admission. A replay without an observer produces tool timing and execution evidence only. Native events and tool receipts use host CLOCK_MONOTONIC nanoseconds. Replay status compares expected and live exit codes, with recorded nonzero outcomes accepted. Private receipts retain live stdout and stderr separately. Source truncation and unavailable mixed-stream order limit exact output comparisons. The comparison ignores trailing newlines. Inspect dynamic Git commit IDs and timestamps when interpreting remaining differences.
 
 Run the deterministic scheduling checks and vHive provider tests with `go test ./pkg/replay/... ./cmd/aries-harbor ./pkg/deployment/vhive`. The private fixture exercises real shell state in a temporary directory using authored commands. Native measurements require the worker and a compatible snapshot restore.
+
+For a measured run, [run-traced.sh](../../scripts/harbor-replay/run-traced.sh) starts the KVM slot observer, waits for readiness, invokes the replay with the idle hook and sampler, and collects the named run files under a new directory. Set `ZB_VMM_CENSUS=1` to include the slot-attributed VMA census. For legacy file-backed snapshots, set `ZB_CHECKPOINT_NAMESPACE_DIR` to the operator's checkpoint directory followed by the namespace. Pass the same ordinary replay arguments after the first three wrapper arguments.
+
+```sh
+scripts/harbor-replay/run-traced.sh ./bin/aries-harbor scripts/zb-trace /path/to/new-run \
+    -trajectory trajectory.json -rollout rollout.jsonl -ripgrep ./rg \
+    -image "$BENCHMARK_IMAGE" -socket "$CONTAINERD_SOCKET" \
+    -checkpoint-dir "$CHECKPOINT_DIR" -shim-dir "$SHIM_DIR" -io-dir "$IO_DIR"
+```
