@@ -91,4 +91,6 @@ if __name__ == "__main__":
     with tempfile.NamedTemporaryFile(dir=a.outputs, prefix=".coverage-", mode="w", delete=False) as stream:
         json.dump(out, stream, indent=2)
         stream.write("\n")
-    Path(stream.name).replace(a.outputs / "coverage.json")
+    temporary = Path(stream.name)
+    temporary.chmod(0o644)
+    temporary.replace(a.outputs / "coverage.json")
