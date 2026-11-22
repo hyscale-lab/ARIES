@@ -11,7 +11,7 @@ import subprocess
 from cohort_image_circuit import IMAGE_HELPER, TASKS, digest as file_digest, verify
 
 
-PYPI_TASKS = {'kv-store-grpc', 'financial-document-processor', 'hf-model-inference'}
+PYPI_TASKS = {'kv-store-grpc', 'financial-document-processor', 'hf-model-inference', 'dna-assembly'}
 SOURCE_DEPENDENCY_TASKS = {'sparql-university', 'torch-tensor-parallelism'}
 
 
@@ -26,6 +26,7 @@ def main():
     cli.add_argument('--dataset-cni',type=Path,help='private token dataset network profile')
     cli.add_argument('--pypi-cni',type=Path,help='private gRPC and financial PyPI network profile')
     cli.add_argument('--financeapt-cni',type=Path,help='private signed-snapshot financial network profile')
+    cli.add_argument('--marker-cni',type=Path,help='private signed archive network for the marker fixture')
     cli.add_argument('--hf-cni',type=Path,help='private inference model and dependency network profile')
     a=cli.parse_args()
     if not re.fullmatch(r'fcmod-zepbound-[a-z0-9-]+',a.unit):
@@ -62,6 +63,8 @@ def main():
                 if hf is None:
                     raise ValueError('inference trial is missing its source-bound artifact inventory')
                 pypi_args=cohort_hf.replay_args(asset,a.hf_cni)
+            elif task == cohort_pypi.MARKER:
+                pypi_args=cohort_pypi.replay_args(asset,task,a.marker_cni,'marker')
             elif financial_apt is not None:
                 pypi_args=cohort_pypi.replay_args(asset,task,a.financeapt_cni,'financeapt')
             else:

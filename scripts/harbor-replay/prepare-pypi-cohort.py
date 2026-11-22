@@ -8,7 +8,7 @@ import shutil
 
 import cohort_hf
 from cohort_image_circuit import IMAGE_HELPER, digest
-from cohort_pypi import (CNI_SUMS, CODEX_TOOLS, FINANCIAL, GRPC, IMAGE_HELPER_FILE, OS_TOOLS,
+from cohort_pypi import (CNI_SUMS, CODEX_TOOLS, FINANCIAL, GRPC, MARKER, IMAGE_HELPER_FILE, OS_TOOLS,
                          PYTHON_ARCHIVE, TASKS, boundaries, events_from, pinned, receipt_path, verify)
 
 
@@ -28,6 +28,7 @@ def main():
     cli.add_argument("output", type=Path)
     profile = cli.add_mutually_exclusive_group()
     profile.add_argument("--financeapt", action="store_true", help="package only signed-snapshot financial trials")
+    profile.add_argument("--marker", action="store_true", help="package the pinned fluorescent marker fixture")
     profile.add_argument("--hf", action="store_true", help="package only model-inference trials")
     cli.add_argument("--validation-log", type=Path, action="append", required=True,
                      help="original live diagnostic JSONL named by a validated receipt digest (repeatable)")
@@ -45,10 +46,12 @@ def main():
     prefixes = ("aries-hf*",) if args.hf else ("aries-kv*", "aries-fin*")
     adapters = {digest(p): p for prefix in prefixes for p in args.cache.glob(prefix)
                 if p.is_file()}
+    if args.marker:
+        adapters = {digest(p): p for p in args.cache.glob("aries-marker-*") if p.is_file()}
     ready, pending = [], []
     for reviewed in bound:
         task = reviewed["task"]
-        if task not in TASKS or args.hf != (task == cohort_hf.TASK):
+        if task not in TASKS or args.hf != (task == cohort_hf.TASK) or args.marker != (task == MARKER):
             continue
         if not reviewed["needs_network"]:
             raise ValueError(f"{task} lacks source-bound network requirements")
@@ -79,7 +82,8 @@ def main():
             reference = boundaries(events_from(log))
             hf = dict(hf_trials[trial], **hf_environment) if args.hf else None
             checks = verify(log, receipt, reference, financial_apt=financial_apt, hf=hf)
-            initial, = [e["state"] for e in receipt["source_setup_and_final_state"] if e["event"] == "source_task_ready"]
+            states = events_from(log) if task == MARKER else receipt["source_setup_and_final_state"]
+            initial, = [e["state"] for e in states if e["event"] == "source_task_ready"]
             if initial["codex_prefix_sha256"] != CODEX_TOOLS:
                 raise ValueError(f"source Codex tool archive differs for {trial}")
             if task == GRPC and receipt.get("python_archive_sha256", PYTHON_ARCHIVE) != PYTHON_ARCHIVE:
@@ -99,6 +103,9 @@ def main():
         raise FileExistsError(f"bundle path must be empty: {out}")
     install(args.cache / "codex-harbor-tools.tar.gz", out / "codex-harbor-tools.tar.gz", CODEX_TOOLS)
     cases = {ident["task"] for ident, *_ in ready}
+    if MARKER in cases:
+        install(args.cache / "sparql/sparql-university-packages.tar.gz", out / f"{MARKER}-debs.tar.gz", OS_TOOLS)
+        install(replay / "cohort_marker.py", out / "cohort_marker.py")
     if GRPC in cases:
         install(args.cache / "kv-fixture/kv-python.tar.gz", out / "kv-python.tar.gz", PYTHON_ARCHIVE)
     if FINANCIAL in cases:

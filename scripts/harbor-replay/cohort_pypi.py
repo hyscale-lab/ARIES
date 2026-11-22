@@ -9,10 +9,11 @@ from cohort_sparql import CNI_SUMS, CODEX_TOOLS, OS_TOOLS
 
 GRPC = "kv-store-grpc"
 FINANCIAL = "financial-document-processor"
-TASKS = {GRPC, FINANCIAL, "hf-model-inference"}
+MARKER = "dna-assembly"
+TASKS = {GRPC, FINANCIAL, "hf-model-inference", MARKER}
 PYTHON_ARCHIVE = "7f8a93c102db3ce25dae68cc485877f8ec9f79edb42a7c4518c96a1153b78682"
 IMAGE_HELPER_FILE = "aries-harbor-image"
-NETWORK_SUBNETS = {"pypi": 233, "financeapt": 234}
+NETWORK_SUBNETS = {"pypi": 233, "financeapt": 234, "marker": 237}
 
 
 def receipt_path(task, trial):
@@ -64,6 +65,8 @@ def replay_args(asset, task, cni, profile="pypi"):
         raise ValueError("signed Ubuntu snapshots are scoped to their financial trials")
     pinned(asset / "codex-harbor-tools.tar.gz", CODEX_TOOLS)
     args = network_args(cni, profile)
+    if task == MARKER and profile == "marker":
+        return [*args, "-os-tools", str(pinned(asset / f"{task}-debs.tar.gz", OS_TOOLS))]
     if task == GRPC:
         return [*args, "-os-tools", str(pinned(asset / "kv-python.tar.gz", PYTHON_ARCHIVE))]
     if task == FINANCIAL:
@@ -138,6 +141,9 @@ def verify(log, receipt, reference, network=None, financial_apt=None, hf=None):
     connectivity = [e for e in events if e["event"] == "validated_guest_network"]
     if [e["phase"] for e in connectivity] != ["before_snapshot", "after_restore"]:
         raise ValueError("PyPI reachability evidence is incomplete")
+    if receipt["task"] == MARKER:
+        import cohort_marker
+        return cohort_marker.evidence(events, receipt, connectivity, reference, len(calls))
     if hf is None:
         for e in connectivity:
             guest = e["network"]
