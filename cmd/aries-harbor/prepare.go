@@ -355,7 +355,7 @@ with urllib.request.urlopen("https://pypi.org/simple/toml/",timeout=10) as respo
 		python = "/usr/bin/python3"
 		probe = fmt.Sprintf(`import json,urllib.request
 with urllib.request.urlopen("https://snapshot.ubuntu.com/ubuntu/%s/dists/noble/InRelease",timeout=15) as r:
-    print(json.dumps({"dependencies":{"snapshot.ubuntu.com":{"status":r.status}}}))`,markerTrials[recording.Trial].stamp)
+    print(json.dumps({"dependencies":{"snapshot.ubuntu.com":{"status":r.status}}}))`, markerTrials[recording.Trial].stamp)
 	}
 	if task == financialTask {
 		python = "/usr/bin/python3"

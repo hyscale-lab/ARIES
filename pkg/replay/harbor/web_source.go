@@ -68,6 +68,14 @@ func (w *webSource) bind(line []byte) (step int, id string, err error) {
 		!strings.HasPrefix(item.ID, "ws_") || len(item.ID) == 3 || w.seen[item.ID] {
 		return 0, "", errors.New("incomplete or duplicate native external web action")
 	}
+	match := w.actions[w.next]
+	// Some completed host-only calls have no recorded action. Only pair those
+	// with the exact empty-type projection, without inferring a search or URL.
+	if item.Action == nil && equalJSON(match.args, []byte(`{"action_type":""}`)) {
+		w.seen[item.ID] = true
+		w.next++
+		return match.step, item.ID, nil
+	}
 	var kind string
 	if err := json.Unmarshal(item.Action["type"], &kind); err != nil {
 		return 0, "", err
@@ -80,7 +88,6 @@ func (w *webSource) bind(line []byte) (step int, id string, err error) {
 	}
 	item.Action["action_type"] = item.Action["type"]
 	delete(item.Action, "type")
-	match := w.actions[w.next]
 	if kind == "find_in_page" {
 		var pattern string
 		if err := json.Unmarshal(item.Action["pattern"], &pattern); err != nil || pattern == "" {

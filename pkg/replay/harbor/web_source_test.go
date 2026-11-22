@@ -64,3 +64,19 @@ func TestFindInPageBindsAnATIFProjectionWithoutTheNativePattern(t *testing.T) {
 		t.Fatalf("matching find completed action rejected: %d %s %v", step, id, err)
 	}
 }
+
+func TestExternalCompletionWithUnrecordedAction(t *testing.T) {
+	line := []byte(`{"type":"response_item","payload":{"type":"web_search_call","id":"ws_missing","status":"completed"}}`)
+	for _, item := range []struct {
+		args   string
+		accept bool
+	}{
+		{`{"action_type":""}`, true}, {`{"action_type":"search"}`, false}, {`{"action_type":"","url":"unknown"}`, false},
+	} {
+		web := &webSource{seen: map[string]bool{}, actions: []indexedWebAction{{16, json.RawMessage(item.args)}}}
+		step, _, err := web.bind(line)
+		if (err == nil) != item.accept || web.done() != item.accept || (item.accept && step != 16) {
+			t.Fatalf("wrong binding for %s: step %d, err %v", item.args, step, err)
+		}
+	}
+}

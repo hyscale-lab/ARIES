@@ -21,7 +21,7 @@ func markerReady(stamp string) string {
 test ! -e primers.fasta
 apt-get update -qq
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc make >/dev/null
-! command -v oligotm
+test -z "$(command -v oligotm)"
 apt-cache policy primer3 | grep -F 'Candidate: 2.6.1-4'
 command -v gcc make curl git python3`
 }
