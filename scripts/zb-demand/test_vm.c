@@ -55,6 +55,17 @@ int main(int argc, char **argv)
     require(hva != MAP_FAILED, "map untouched private file");
     unsigned char residency = 0;
     require(mincore(hva, page, &residency) == 0, "measure cache residency");
+    uint64_t pagemap = 0;
+    int pm = open("/proc/self/pagemap", O_RDONLY | O_CLOEXEC);
+    require(pm >= 0, "open calibration pagemap");
+    off_t entry = (uintptr_t)hva / page * sizeof(pagemap);
+    require(pread(pm, &pagemap, sizeof(pagemap), entry) == sizeof(pagemap),
+            "read initial pagemap entry");
+    close(pm);
+    if (pagemap >> 63) {
+        fprintf(stderr, "calibration requires an untouched host mapping\n");
+        return 1;
+    }
     struct kvm_userspace_memory_region region = {
         .slot = 0,
         .guest_phys_addr = 0,
@@ -76,7 +87,8 @@ int main(int argc, char **argv)
         return 1;
     }
     printf("{\"mode\":\"%s\",\"pid\":%d,\"hva\":%" PRIuPTR
-           ",\"guest_phys_addr\":0,\"cache_resident_before\":%u,\"guest_write_observed\":true}\n",
+           ",\"guest_phys_addr\":0,\"host_pte_present_before\":false,"
+           "\"cache_resident_before\":%u,\"guest_write_observed\":true}\n",
            argv[1], getpid(), (uintptr_t)hva, residency & 1);
     return 0;
 }

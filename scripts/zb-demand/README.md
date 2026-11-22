@@ -57,6 +57,7 @@ the BPF listener is running. The VM uses the stock KVM API and a private
 file that is unlinked after open. Its guest touches GPA zero and then writes
 one byte in the same page. The program verifies the observed write and
 outputs the PID, registered HVA, and pre-run cache residency from mincore.
+The fixture verifies the host mapping has no present PTE before either run.
 
 ```sh
 cc -Wall -Wextra -Werror -O2 -o /tmp/zb-demand-test-vm scripts/zb-demand/test_vm.c
