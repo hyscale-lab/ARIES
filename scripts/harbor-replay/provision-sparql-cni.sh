@@ -15,7 +15,7 @@ case "$profile" in
         hosts=(bootstrap.pypa.io pypi.org files.pythonhosted.org raw.githubusercontent.com)
         ;;
     torch)
-        subnet=10.232.$octet.0/28
+        subnet=10.236.$octet.0/28
         hosts=(bootstrap.pypa.io pypi.org files.pythonhosted.org download.pytorch.org download-r2.pytorch.org)
         ;;
     financeapt)
