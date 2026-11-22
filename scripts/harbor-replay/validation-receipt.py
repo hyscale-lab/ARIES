@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 
-def summarize(log, trajectory, host, task, revision, binary_sha):
+def summarize(log, trajectory, host, task, revision, binary_sha, configuration="v1"):
     events = [json.loads(line) for line in log.read_bytes().splitlines()]
     first = events[0]
     original = trajectory.read_bytes()
@@ -82,7 +82,7 @@ def summarize(log, trajectory, host, task, revision, binary_sha):
         "schema": "aries.harbor.replay-validation.v1",
         **{k: first[k] for k in ("row_id", "job_id", "trial_id", "image", "trajectory_sha256",
                                  "rollout_sha256", "memory_mib", "storage_mib", "vcpus")},
-        "task": task, "host": host, "configuration": "v1", "adapter_revision": revision,
+        "task": task, "host": host, "configuration": configuration, "adapter_revision": revision,
         "adapter_binary_sha256": binary_sha, "diagnostic_log_sha256": hashlib.sha256(log.read_bytes()).hexdigest(),
         "observer": first["observer"], "session_completed": bool(full),
         "guest_network_checks": network, "external_completion_events": external_observed,
@@ -101,8 +101,9 @@ if __name__ == "__main__":
     p.add_argument("--task", required=True)
     p.add_argument("--revision", required=True)
     p.add_argument("--binary-sha256", required=True)
+    p.add_argument("--configuration", choices=("v1","v2","v3","v4"), default="v1")
     a = p.parse_args()
-    data = summarize(a.log, a.trajectory, a.host, a.task, a.revision, a.binary_sha256)
+    data = summarize(a.log, a.trajectory, a.host, a.task, a.revision, a.binary_sha256, a.configuration)
     with a.output.open("x") as out:
         json.dump(data, out, indent=2)
         out.write("\n")
