@@ -55,9 +55,15 @@ ARIESSHA`},
 const debianPatchTrial = "99c36c5d-aba5-476b-93b2-d08a39c7a353"
 
 // Debian Bookworm's signed Packages index identifies patch_2.7.6-7_amd64.deb.
-// Only this original circuit session invokes GNU patch to apply local gate diffs.
+// The circuit invokes GNU patch, and video trial 07e979df locates it in PATH.
 func sourceSetup(r *harbor.Recording) (taskSetup, bool) {
 	task, ok := taskSetups[r.Task]
+	if r.Trial == financialMuPDFTrial {
+		task.initialCheck = strings.Replace(task.initialCheck, "21:28:16Z", "22:40:09Z", 1)
+	}
+	if r.Trial == "d3bd8729-d595-4aa1-86c6-7efbfc31d835" {
+		task.initialCheck = strings.Replace(task.initialCheck, "21:28:16Z", "22:07:09Z", 1) + financialTempAllocation
+	}
 	if r.Trial == videoPatchTrial {
 		task.initialCheck += "\n" + videoPatchAlias
 	}
@@ -66,7 +72,10 @@ func sourceSetup(r *harbor.Recording) (taskSetup, bool) {
 		task.packagesField = "debian_curl_archive_sha256"
 		task.initialCheck += "\ncommand -v curl\ndpkg-query -W curl libcurl4"
 	}
-	if r.Trial == debianPatchTrial {
+	if r.Trial == videoHarnessTrial {
+		task.initialCheck += "\n" + videoHarnessDirectory
+	}
+	if r.Trial == debianPatchTrial || r.Trial == videoHarnessTrial {
 		task.packagesField = "debian_patch_archive_sha256"
 		task.packagesSHA = "2d1665bc3a472a5e895657f41612ecf4e40e4349757d6481a19420b57b8146d0"
 		task.initialCheck += "\ntest \"$(command -v patch)\" = /usr/bin/patch\ndpkg-query -W patch"
@@ -263,6 +272,11 @@ func captureTaskOutput(ctx context.Context, m *vhive.Manager, id string, r *harb
 	}
 	if r.Task == financialTask {
 		cmd += financialFinalCheck
+		if r.Trial == financialMuPDFTrial {
+			cmd += "\n/tmp/document-processing-env/bin/python -c 'from importlib.metadata import version; assert version(\"PyMuPDF\") == \"1.28.2\"'\n"
+		} else {
+			cmd += financialPypdfCheck
+		}
 	}
 	if r.Task == kvTask {
 		cmd += kvFinalCheck(r.Trial)

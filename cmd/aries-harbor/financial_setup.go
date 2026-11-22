@@ -39,10 +39,34 @@ print("17 original-sized, hash-verified files restored under their recorded name
 FINANCIAL`,
 }
 
+const financialMuPDFTrial = "3e740f93-fb59-47e8-9033-bcadb10a87dd"
+
+const financialTempAllocation = `
+# Only one source uses this prefix and later consumes its recorded path literally.
+setup_dir=/usr/local/lib/python3.12/dist-packages
+test -d "$setup_dir"
+test ! -e /tmp/document-sort-9_0og0zq
+cat > "$setup_dir/aries_document_temp.py" <<'TEMP'
+import os
+import tempfile
+
+_original = tempfile.mkdtemp
+def _recorded(*args, **kwargs):
+    if not args and kwargs == {"prefix":"document-sort-", "dir":"/tmp"}:
+        path = "/tmp/document-sort-9_0og0zq"
+        if not os.path.lexists(path):
+            os.mkdir(path, 0o700)
+            return path
+    return _original(*args, **kwargs)
+tempfile.mkdtemp = _recorded
+TEMP
+echo 'import aries_document_temp' > "$setup_dir/aries_document_temp.pth"
+python3 -c 'import tempfile; assert tempfile.mkdtemp.__module__ == "aries_document_temp"' `
+
 var financialFinalCheck = `
 echo 'b1b30b37c3e038f91ac5e06d5f75e2df0b53f8565305e7b8ba9919e0559bfb00  invoices/summary.csv' | sha256sum -c -
 python3 - <<'FINANCIAL'
-import email, hashlib, json
+import hashlib, json
 from pathlib import Path
 root = Path("/app")
 items = json.loads('''` + financialInputs + `''')
@@ -51,6 +75,13 @@ for r in items:
     paths = [root/folder/r["recorded"] for folder in ("invoices","other")]
     f, = [p for p in paths if p.is_file() and not p.is_symlink()]
     assert hashlib.sha256(f.read_bytes()).hexdigest() == r["sha256"]
+print("Verified all 17 document hashes after sorting")
+FINANCIAL`
+
+const financialPypdfCheck = `
+python3 - <<'FINANCIAL'
+import email
+from pathlib import Path
 metadata = {}
 for p in Path("/root/.cache/uv").rglob("*.dist-info/METADATA"):
     m = email.message_from_bytes(p.read_bytes())
@@ -58,6 +89,5 @@ for p in Path("/root/.cache/uv").rglob("*.dist-info/METADATA"):
     if name in ("pypdf","pillow"):
         metadata.setdefault(name,set()).add(m["Version"])
 assert set(metadata)=={"pypdf","pillow"}, metadata
-print(json.dumps({k:sorted(v) for k,v in metadata.items()}, sort_keys=True))
-print("Verified all 17 document hashes after sorting")
+print(sorted((k,sorted(v)) for k,v in metadata.items()))
 FINANCIAL`

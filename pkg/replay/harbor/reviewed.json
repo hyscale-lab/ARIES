@@ -428,6 +428,16 @@
         "trial": "d4ff7d0e-f752-43e3-bb83-77a67b32a3d0",
         "trajectory_sha256": "bf930d219575202d4d521a8310517fdba977fd822a8ab37ec65253ea583c29f8",
         "rollout_sha256": "e3a0249980f38649ed9e440d0dd5e4dddf48a09fb5788050800d25aa1bb332dd"
+      },
+      {
+        "trial": "3e740f93-fb59-47e8-9033-bcadb10a87dd",
+        "trajectory_sha256": "077b2f797a162d64584451ce0560c943c05bc18f55e0665371ed3a230d001040",
+        "rollout_sha256": "d2a6754610fb860f9732f120cedafca7e9850767a84ad0ba2a063d775afb3156"
+      },
+      {
+        "trial": "d3bd8729-d595-4aa1-86c6-7efbfc31d835",
+        "trajectory_sha256": "16655595e3d2fcf09491250b5692aaec0afb2fa6b2782f4985b4bba5fa74655e",
+        "rollout_sha256": "39a5ae90b820087be3b614e9df9721662c191fa74945be519f5334b3d19f67c6"
       }
     ],
     "vcpus": 1,
@@ -435,8 +445,9 @@
     "storage_mib": 10240,
     "tools": [
       "exec_command",
+      "update_plan",
       "view_image",
-      "update_plan"
+      "write_stdin"
     ],
     "needs_network": true
   },
